@@ -2,15 +2,27 @@ import { mkdtemp, readFile, readdir, rm, writeFile, symlink } from 'node:fs/prom
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   DiagnosticDelivery,
   decodeDiagnosticBatch,
   diagnosticsEndpoint,
 } from '../src/support/delivery.js';
 import { SessionJournal } from '../src/support/session-journal.js';
+vi.mock('node:fs/promises', async (original) => ({
+  ...(await original<typeof import('node:fs/promises')>()),
+}));
+import * as filesystem from 'node:fs/promises';
+interface DiskState {
+  consent: boolean;
+  credentials: { installationId: string; enrollmentSecret: string };
+  queue: unknown[];
+  acknowledged: number;
+  sessions: Record<string, { from: number; queued: number }>;
+}
 const paths: string[] = [];
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(paths.splice(0).map((p) => rm(p, { recursive: true, force: true })));
 });
 async function directory() {
@@ -36,7 +48,7 @@ function service() {
       return Response.json({
         installationId: data.enrollmentId,
         token: 'test-token',
-        expiresAt: Date.now() + 86400_000,
+        expiresAt: Date.now() + 30 * 86400_000,
       });
     }
     if (init?.method === 'DELETE') {
@@ -232,7 +244,7 @@ describe('consented diagnostic outbox', () => {
         return Response.json({
           installationId: data.enrollmentId,
           token: 'test-token',
-          expiresAt: Date.now() + 86400_000,
+          expiresAt: Date.now() + 30 * 86400_000,
         });
       }
       uploads++;
@@ -298,6 +310,237 @@ describe('consented diagnostic outbox', () => {
     expect(delivery.status().omissionReasons).toHaveProperty(
       'memory_budget_recoverable_from_local_journal',
     );
+    await delivery.close();
+    await journal.close();
+  });
+  it('serializes rapid consent changes and coalesces durable revocation fences', async () => {
+    const dir = await directory();
+    const journal = new SessionJournal(dir);
+    const delivery = await new DiagnosticDelivery(dir, journal).initialize(false);
+    await Promise.all([delivery.consent(true), delivery.consent(false), delivery.consent(false)]);
+    expect(delivery.status().consent).toBe(false);
+    let disk = JSON.parse(
+      await readFile(join(dir, 'diagnostic-outbox/state.json'), 'utf8'),
+    ) as DiskState;
+    expect(disk).toMatchObject({ consent: false, credentials: null });
+    for (let i = 0; i < 70; i++) await delivery.consent(false);
+    expect(
+      (await readdir(join(dir, 'diagnostic-outbox'))).filter((n) => n.endsWith('.flag')),
+    ).toHaveLength(1);
+    await delivery.consent(true);
+    disk = JSON.parse(
+      await readFile(join(dir, 'diagnostic-outbox/state.json'), 'utf8'),
+    ) as DiskState;
+    expect(disk.consent).toBe(true);
+    expect(disk.credentials.installationId).toBeTypeOf('string');
+    expect(delivery.status().consent).toBe(true);
+    expect(
+      (await readdir(join(dir, 'diagnostic-outbox'))).filter((n) => n.endsWith('.flag')),
+    ).toHaveLength(0);
+    await delivery.close();
+    await journal.close();
+  });
+  it('keeps an acknowledged batch durable when the receipt manifest commit fails', async () => {
+    const dir = await directory();
+    const journal = new SessionJournal(dir);
+    const remote = service();
+    let now = Date.now();
+    const delivery = await new DiagnosticDelivery(dir, journal, {
+      endpoint: 'https://diagnostics.example',
+      fetch: remote.fetcher,
+      now: () => now,
+    }).initialize(false);
+    await delivery.consent(true);
+    journal.record('operation_result', { result: 'must-survive-receipt-commit-failure' });
+    await journal.flush();
+    const internal = delivery as unknown as {
+      save(): Promise<void>;
+      state: { acknowledged: number };
+    };
+    const save = internal.save.bind(delivery);
+    let failed = false;
+    const spy = vi.spyOn(internal, 'save').mockImplementation(async () => {
+      if (internal.state.acknowledged && !failed) {
+        failed = true;
+        throw new Error('injected receipt manifest I/O failure');
+      }
+      await save();
+    });
+    await delivery.tick();
+    expect(failed).toBe(true);
+    expect(delivery.status()).toMatchObject({ acknowledged: 0, queuedBatches: 1 });
+    const disk = JSON.parse(
+      await readFile(join(dir, 'diagnostic-outbox/state.json'), 'utf8'),
+    ) as DiskState;
+    expect(disk.queue).toHaveLength(1);
+    expect(disk.acknowledged).toBe(0);
+    spy.mockRestore();
+    now += 86400_000;
+    await delivery.tick();
+    expect(remote.batches.size).toBe(1);
+    expect(delivery.status()).toMatchObject({ acknowledged: 1, queuedBatches: 0 });
+    await delivery.close();
+    await journal.close();
+  });
+  it('does not resume old consent after a withdrawal manifest write fails and the process restarts', async () => {
+    const dir = await directory();
+    const journal = new SessionJournal(dir);
+    let delivery = await new DiagnosticDelivery(dir, journal).initialize(false);
+    await delivery.consent(true);
+    const internal = delivery as unknown as { save(): Promise<void> };
+    const spy = vi.spyOn(internal, 'save').mockRejectedValue(new Error('disk failure'));
+    await expect(delivery.consent(false)).rejects.toThrow('disk failure');
+    expect(delivery.status().consent).toBe(false);
+    spy.mockRestore();
+    await delivery.close();
+    delivery = await new DiagnosticDelivery(dir, journal).initialize(false);
+    expect(delivery.status()).toMatchObject({
+      consent: false,
+      queuedBatches: 0,
+      deletionPending: 1,
+    });
+    const disk = JSON.parse(
+      await readFile(join(dir, 'diagnostic-outbox/state.json'), 'utf8'),
+    ) as DiskState;
+    expect(disk).toMatchObject({ consent: false, credentials: null });
+    await delivery.close();
+    await journal.close();
+  });
+  it('withdraws during a blocked batch manifest commit without negative pending bytes or restart upload', async () => {
+    const dir = await directory();
+    const journal = new SessionJournal(dir);
+    let delivery = await new DiagnosticDelivery(dir, journal).initialize(false);
+    await delivery.consent(true);
+    journal.record('operation_result', { result: 'concurrent-withdrawal' });
+    await journal.flush();
+    let entered!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((r) => {
+      entered = r;
+    });
+    const barrier = new Promise<void>((r) => {
+      release = r;
+    });
+    const internal = delivery as unknown as { save(): Promise<void> };
+    const save = internal.save.bind(delivery);
+    const spy = vi.spyOn(internal, 'save').mockImplementationOnce(async () => {
+      entered();
+      await barrier;
+      await save();
+    });
+    const ticking = delivery.tick();
+    await started;
+    const withdrawing = delivery.consent(false);
+    expect(delivery.status().consent).toBe(false);
+    release();
+    await Promise.all([ticking, withdrawing]);
+    spy.mockRestore();
+    expect(delivery.status()).toMatchObject({ consent: false, pendingBytes: 0, queuedBatches: 0 });
+    await delivery.close();
+    delivery = await new DiagnosticDelivery(dir, journal).initialize(false);
+    expect(delivery.status()).toMatchObject({ consent: false, queuedBatches: 0 });
+    expect(
+      (await readdir(join(dir, 'diagnostic-outbox'))).filter((n) => n.endsWith('.gz')),
+    ).toEqual([]);
+    await delivery.close();
+    await journal.close();
+  });
+  it('retires completed source cursors instead of failing after 128 restarts', async () => {
+    const dir = await directory();
+    const journal = new SessionJournal(dir);
+    let delivery = await new DiagnosticDelivery(dir, journal).initialize(false);
+    await delivery.consent(true);
+    await delivery.close();
+    const path = join(dir, 'diagnostic-outbox/state.json');
+    const disk = JSON.parse(await readFile(path, 'utf8')) as DiskState;
+    disk.sessions = Object.fromEntries(
+      Array.from({ length: 128 }, (_, i) => [
+        `10000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+        { from: 0, queued: 0 },
+      ]),
+    );
+    await writeFile(path, JSON.stringify(disk));
+    delivery = await new DiagnosticDelivery(dir, journal).initialize(false);
+    journal.record('operation_result', { result: 'after-128-restarts' });
+    await journal.flush();
+    await delivery.tick();
+    expect(delivery.status().queuedBatches).toBeGreaterThan(0);
+    const after = JSON.parse(await readFile(path, 'utf8')) as DiskState;
+    expect(Object.keys(after.sessions)).toEqual([journal.sessionId]);
+    await delivery.close();
+    await journal.close();
+  });
+  it('bounds chunked enrollment receipts and rejects invalid durable credentials', async () => {
+    const dir = await directory();
+    const journal = new SessionJournal(dir);
+    const delivery = await new DiagnosticDelivery(dir, journal, {
+      endpoint: 'https://diagnostics.example',
+      fetch: () =>
+        Promise.resolve(
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(new Uint8Array(8193));
+                controller.close();
+              },
+            }),
+          ),
+        ),
+    }).initialize(false);
+    await delivery.consent(true);
+    journal.record('operation_result', { result: 'retained-despite-hostile-response' });
+    await journal.flush();
+    await delivery.tick();
+    expect(delivery.status()).toMatchObject({
+      acknowledged: 0,
+      queuedBatches: 1,
+      error: 'receipt_size_budget',
+    });
+    await delivery.close();
+    const path = join(dir, 'diagnostic-outbox/state.json');
+    const disk = JSON.parse(await readFile(path, 'utf8')) as DiskState;
+    disk.credentials.enrollmentSecret = 'invalid';
+    await writeFile(path, JSON.stringify(disk));
+    await expect(new DiagnosticDelivery(dir, journal).initialize(false)).rejects.toThrow();
+    await journal.close();
+  });
+  it('withdraws while compressed batch fsync is blocked and never commits those bytes', async () => {
+    const dir = await directory();
+    const journal = new SessionJournal(dir);
+    const delivery = await new DiagnosticDelivery(dir, journal).initialize(false);
+    await delivery.consent(true);
+    journal.record('operation_result', { result: 'withdraw-during-fsync' });
+    await journal.flush();
+    let entered!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((r) => {
+      entered = r;
+    });
+    const barrier = new Promise<void>((r) => {
+      release = r;
+    });
+    const open = filesystem.open;
+    vi.spyOn(filesystem, 'open').mockImplementation(async (...args) => {
+      const file = await open(...args);
+      if (String(args[0]).endsWith('.gz')) {
+        const sync = file.sync.bind(file);
+        vi.spyOn(file, 'sync').mockImplementationOnce(async () => {
+          entered();
+          await barrier;
+          await sync();
+        });
+      }
+      return file;
+    });
+    const ticking = delivery.tick();
+    await started;
+    const withdrawing = delivery.consent(false);
+    release();
+    await Promise.all([ticking, withdrawing]);
+    expect(delivery.status()).toMatchObject({ consent: false, pendingBytes: 0, queuedBatches: 0 });
+    expect(
+      (await readdir(join(dir, 'diagnostic-outbox'))).filter((n) => n.endsWith('.gz')),
+    ).toEqual([]);
     await delivery.close();
     await journal.close();
   });

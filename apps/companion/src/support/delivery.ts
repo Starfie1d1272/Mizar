@@ -1,5 +1,6 @@
+import { z } from 'zod';
 import { constants } from 'node:fs';
-import { lstat, mkdir, open, readdir, rename, unlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, open, readdir, rename, unlink } from 'node:fs/promises';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -47,6 +48,89 @@ interface State {
   nextAttemptAt: number;
   failures: number;
 }
+const identifier = z.string().uuid();
+const counter = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
+const credentialsSchema = z
+  .object({
+    installationId: identifier,
+    enrollmentSecret: z.string().regex(/^[a-f0-9]{64}$/),
+    token: z
+      .string()
+      .max(2048)
+      .regex(/^[\x21-\x7e]+$/)
+      .optional(),
+    expiresAt: counter.optional(),
+  })
+  .passthrough();
+const stateSchema = z
+  .object({
+    version: z.literal(1),
+    consent: z.boolean(),
+    consentAt: z.iso.datetime().nullable(),
+    credentials: credentialsSchema.nullable(),
+    withdrawals: z.array(credentialsSchema).max(DELIVERY_LIMITS.tombstones),
+    sessions: z.record(
+      identifier,
+      z.object({ from: counter, queued: counter }).refine((v) => v.queued >= v.from),
+    ),
+    queue: z
+      .array(
+        z.object({
+          id: z.string().regex(/^[a-f0-9]{64}$/),
+          bytes: z.number().int().min(1).max(DELIVERY_LIMITS.compressedBytes),
+          index: z.object({
+            schema: z.literal('mizar-technical-diagnostics/1'),
+            events: z.number().int().min(1).max(DELIVERY_LIMITS.events),
+            expandedBytes: z.number().int().min(1).max(DELIVERY_LIMITS.expandedBytes),
+            stages: z.array(z.string().regex(/^[a-z][a-z0-9_]{0,63}$/)).max(32),
+          }),
+        }),
+      )
+      .max(DELIVERY_LIMITS.batches),
+    omitted: counter,
+    omissionReasons: z.record(z.string().max(96), counter),
+    acknowledged: counter,
+    nextAttemptAt: z.number().min(0).max(Number.MAX_SAFE_INTEGER),
+    failures: counter,
+  })
+  .passthrough()
+  .refine(
+    (v) =>
+      Object.keys(v.sessions).length <= DELIVERY_LIMITS.sessions &&
+      v.queue.reduce((n, b) => n + b.bytes, 0) <= DELIVERY_LIMITS.queueBytes &&
+      (!v.consent || v.credentials !== null),
+  );
+async function responseJson(response: Response, signal: AbortSignal): Promise<unknown> {
+  const limit = 8192;
+  if (Number(response.headers.get('content-length')) > limit || !response.body) {
+    void response.body?.cancel().catch(() => undefined);
+    throw new Error('receipt_size_or_body');
+  }
+  const reader = response.body.getReader() as ReadableStreamDefaultReader<Uint8Array>;
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    for (;;) {
+      let aborted: () => void = () => {};
+      const item = await Promise.race([
+        reader.read(),
+        new Promise<never>((_resolve, reject) => {
+          aborted = () => reject(new Error('receipt_timeout'));
+          if (signal.aborted) aborted();
+          else signal.addEventListener('abort', aborted, { once: true });
+        }),
+      ]).finally(() => signal.removeEventListener('abort', aborted));
+      if (item.done) break;
+      bytes += item.value.length;
+      if (bytes > limit) throw new Error('receipt_size_budget');
+      chunks.push(item.value);
+    }
+    return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
+  } catch (error) {
+    void reader.cancel().catch(() => undefined);
+    throw error;
+  }
+}
 const initial = (): State => ({
   version: 1,
   consent: false,
@@ -63,8 +147,6 @@ const initial = (): State => ({
 });
 const checksum = (value: Uint8Array | string) => createHash('sha256').update(value).digest('hex');
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT';
-const validId = (value: unknown): value is string =>
-  typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 export function diagnosticsEndpoint(value: string | undefined, test = false): string | undefined {
   if (!value) return undefined;
   const url = new URL(value);
@@ -135,6 +217,9 @@ export class DiagnosticDelivery {
   private unsubscribe: (() => void) | undefined;
   private closed = false;
   private epoch = 0;
+  private requestedConsent = false;
+  private revocationFenced = false;
+  private readonly fences = new Map<string, Promise<void>>();
   private error: string | null = null;
   private readonly endpoint: string | undefined;
   private readonly fetcher: typeof fetch;
@@ -159,37 +244,42 @@ export class DiagnosticDelivery {
     await mkdir(this.queueDirectory, { recursive: true, mode: 0o700 });
     await safePath(this.queueDirectory);
     try {
-      const value = JSON.parse(
-        (
-          await secureRead(this.queueDirectory, 'state.json', DELIVERY_LIMITS.manifestBytes)
-        ).toString(),
+      this.state = stateSchema.parse(
+        JSON.parse(
+          (
+            await secureRead(this.queueDirectory, 'state.json', DELIVERY_LIMITS.manifestBytes)
+          ).toString(),
+        ),
       ) as State;
-      if (
-        value.version !== 1 ||
-        typeof value.consent !== 'boolean' ||
-        !Array.isArray(value.queue) ||
-        !Array.isArray(value.withdrawals) ||
-        !value.sessions ||
-        value.queue.length > DELIVERY_LIMITS.batches ||
-        value.withdrawals.length > DELIVERY_LIMITS.tombstones ||
-        Object.keys(value.sessions).length > DELIVERY_LIMITS.sessions ||
-        !value.queue.every(
-          (v) =>
-            validId(v.id) &&
-            Number.isSafeInteger(v.bytes) &&
-            v.bytes > 0 &&
-            v.bytes <= DELIVERY_LIMITS.compressedBytes,
-        ) ||
-        value.queue.reduce((n, v) => n + v.bytes, 0) > DELIVERY_LIMITS.queueBytes
-      )
-        throw new Error('invalid_delivery_state');
-      this.state = value;
     } catch (error) {
       if (!missing(error)) {
         this.error = 'state_unreadable';
         throw error;
       }
     }
+    const entries = await readdir(this.queueDirectory, { withFileTypes: true });
+    for (const entry of entries)
+      if (/^consent-revoked-[a-f0-9-]{36}\.flag$/.test(entry.name)) {
+        await secureRead(this.queueDirectory, entry.name, 16);
+        if (this.fences.size >= 64) throw new Error('revocation_marker_budget');
+        this.fences.set(entry.name, Promise.resolve());
+      }
+    if (this.fences.size) {
+      this.revocationFenced = true;
+      if (
+        this.state.credentials &&
+        !this.state.withdrawals.some(
+          (v) => v.installationId === this.state.credentials!.installationId,
+        )
+      )
+        this.state.withdrawals.push(this.state.credentials);
+      this.state.consent = false;
+      this.state.credentials = null;
+      this.state.sessions = {};
+      this.state.queue = [];
+      await this.save();
+    }
+    this.requestedConsent = this.state.consent;
     // Bytes not referenced by the atomic manifest were never eligible for upload.
     for (const entry of await readdir(this.queueDirectory, { withFileTypes: true }))
       if (
@@ -200,6 +290,7 @@ export class DiagnosticDelivery {
         await unlink(join(this.queueDirectory, entry.name));
     this.unsubscribe = this.journal.subscribe((line) => this.observe(line));
     if (this.state.consent) {
+      await this.recover();
       this.registerSession(0);
       await this.save();
       await this.recover();
@@ -218,14 +309,17 @@ export class DiagnosticDelivery {
     if (
       !this.state.sessions[this.journal.sessionId] &&
       Object.keys(this.state.sessions).length >= DELIVERY_LIMITS.sessions
-    )
-      throw new Error('session_budget');
+    ) {
+      this.error = 'session_budget_waiting_for_capacity';
+      this.recoveryNeeded = true;
+      return;
+    }
     this.state.sessions[this.journal.sessionId] ??= { from, queued: from };
   }
   status() {
     return {
       configured: Boolean(this.endpoint),
-      consent: this.state.consent,
+      consent: this.consentActive(),
       consentAt: this.state.consentAt,
       queuedBatches: this.state.queue.length,
       queuedBytes: this.state.queue.reduce((n, v) => n + v.bytes, 0),
@@ -274,21 +368,52 @@ export class DiagnosticDelivery {
     });
     await rename(temporary, join(this.queueDirectory, 'state.json'));
   }
+  private consentActive() {
+    return this.state.consent && this.requestedConsent && !this.revocationFenced;
+  }
+  private async createFence(name: string) {
+    try {
+      await safePath(this.queueDirectory);
+      const file = await open(
+        join(this.queueDirectory, name),
+        constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0),
+        0o600,
+      );
+      try {
+        await file.writeFile('revoked');
+        await file.sync();
+      } finally {
+        await file.close();
+      }
+    } catch (error) {
+      // If even a tiny fence cannot be made durable, removing the old consent
+      // manifest is the last fail-closed option. Never report success here.
+      await unlink(join(this.queueDirectory, 'state.json')).catch(() => undefined);
+      throw error;
+    }
+  }
   async consent(enabled: boolean) {
-    // Revocation takes effect before any await, including while network I/O is in flight.
-    const prior = this.state.credentials;
+    const epoch = ++this.epoch;
+    this.requestedConsent = enabled;
+    this.abort?.abort();
+    const olderFences = [...this.fences.entries()];
+    let fence = Promise.resolve();
     if (!enabled) {
-      this.epoch++;
-      this.abort?.abort();
-      this.state.consent = false;
-      this.pending = [];
-      this.pendingBytes = 0;
+      this.revocationFenced = true;
+      const name = `consent-revoked-${randomUUID()}.flag`;
+      fence = this.createFence(name);
+      this.fences.set(
+        name,
+        fence.catch(() => undefined),
+      );
     }
     return this.transaction(async () => {
+      if (enabled && epoch !== this.epoch) return this.status();
       if (enabled) {
-        if (this.state.consent) return this.status();
+        if (this.state.consent && !this.revocationFenced) return this.status();
         if (this.state.withdrawals.length >= DELIVERY_LIMITS.tombstones)
           throw new Error('withdrawal_sync_required');
+        const previous = structuredClone(this.state);
         this.state.consent = true;
         this.state.consentAt = new Date(this.now()).toISOString();
         this.state.credentials = {
@@ -297,22 +422,54 @@ export class DiagnosticDelivery {
         };
         this.state.sessions = {};
         this.registerSession(this.journal.health().sequence);
+        try {
+          await this.save();
+        } catch (error) {
+          this.state = previous;
+          if (epoch === this.epoch) this.requestedConsent = false;
+          throw error;
+        }
+        // Remove only fences already present at THIS enable request. A later
+        // revocation has a distinct name, so an older enable cannot erase it.
+        for (const [name, created] of olderFences) {
+          await created;
+          await unlink(join(this.queueDirectory, name)).catch((error) => {
+            if (!missing(error)) throw error;
+          });
+          this.fences.delete(name);
+        }
+        if (epoch === this.epoch) this.revocationFenced = this.fences.size > 0;
       } else {
+        await fence;
+        const prior = this.state.credentials;
+        this.state.consent = false;
         if (prior && !this.state.withdrawals.some((v) => v.installationId === prior.installationId))
           this.state.withdrawals.push(prior);
         this.state.credentials = null;
         this.state.sessions = {};
+        this.pending = [];
+        this.pendingBytes = 0;
+        const removed = this.state.queue.splice(0);
+        this.state.nextAttemptAt = 0;
+        this.state.failures = 0;
+        await this.save();
+        // The manifest now durably says off. Keep this request's fence and
+        // remove only older markers; a later request must retain its own fence.
+        for (const [name, created] of olderFences) {
+          await created;
+          await unlink(join(this.queueDirectory, name)).catch((error) => {
+            if (!missing(error)) throw error;
+          });
+          this.fences.delete(name);
+        }
+        for (const batch of removed)
+          await unlink(join(this.queueDirectory, `${batch.id}.gz`)).catch((error) => {
+            if (!missing(error)) throw error;
+          });
       }
-      const removed = enabled ? [] : this.state.queue.splice(0);
-      this.state.nextAttemptAt = 0;
-      this.state.failures = 0;
-      await this.save();
-      for (const batch of removed)
-        await unlink(join(this.queueDirectory, `${batch.id}.gz`)).catch((error) => {
-          if (!missing(error)) throw error;
-        });
       this.journal.record('diagnostic_consent', {
-        enabled,
+        enabled: this.consentActive(),
+        requested: enabled,
         revision: CONSENT,
         result: 'persisted',
         deletionPending: this.state.withdrawals.length,
@@ -325,7 +482,7 @@ export class DiagnosticDelivery {
     this.state.omissionReasons[reason] = (this.state.omissionReasons[reason] ?? 0) + count;
   }
   private observe(line: string, recovering = false) {
-    if (!this.state.consent || this.closed || (this.recoveryNeeded && !recovering)) return;
+    if (!this.consentActive() || this.closed || (this.recoveryNeeded && !recovering)) return;
     // Journal supplies an immutable, already-redacted durable record.
     const value = JSON.parse(line) as { startupSessionId: string; sequence: number; stage: string };
     if (
@@ -398,10 +555,18 @@ export class DiagnosticDelivery {
           return;
       }
     }
+    await this.persist();
+    for (const id of Object.keys(this.state.sessions)) {
+      if (id === this.journal.sessionId || this.pending.some((v) => v.sessionId === id)) continue;
+      delete this.state.sessions[id];
+    }
+    this.registerSession(0);
+    await this.save();
     this.recoveryNeeded = this.journal.health().sequence !== startedSequence;
   }
   private async persist() {
-    if (!this.state.consent) return;
+    if (!this.consentActive()) return;
+    const epoch = this.epoch;
     while (this.pending.length) {
       const selected: typeof this.pending = [];
       let bytes = 128;
@@ -449,7 +614,7 @@ export class DiagnosticDelivery {
         );
         compressed = await compress(raw);
       }
-      if (!this.state.consent) return;
+      if (!this.consentActive() || epoch !== this.epoch) return;
       if (
         compressed.length > DELIVERY_LIMITS.compressedBytes ||
         raw.length > DELIVERY_LIMITS.expandedBytes
@@ -472,14 +637,29 @@ export class DiagnosticDelivery {
       await safePath(this.queueDirectory, `${id}.gz`).catch((error) => {
         if (!missing(error)) throw error;
       });
-      await writeFile(path, compressed, { flag: 'wx', mode: 0o600 }).catch((error) => {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      });
-      const file = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+      let file: Awaited<ReturnType<typeof open>> | undefined;
       try {
+        file = await open(
+          path,
+          constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0),
+          0o600,
+        );
+        await file.writeFile(compressed);
         await file.sync();
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        if (
+          checksum(
+            await secureRead(this.queueDirectory, `${id}.gz`, DELIVERY_LIMITS.compressedBytes),
+          ) !== id
+        )
+          throw new Error('existing_batch_integrity', { cause: error });
       } finally {
-        await file.close();
+        await file?.close();
+      }
+      if (!this.consentActive() || epoch !== this.epoch) {
+        await unlink(path).catch(() => undefined);
+        return;
       }
       const batch: Batch = {
         id,
@@ -529,16 +709,18 @@ export class DiagnosticDelivery {
       }),
     });
     if (!response.ok) throw new Error(`enrollment_http_${response.status}`);
-    const data = (await response.json()) as {
+    const data = (await responseJson(response, signal)) as {
       installationId: string;
       token: string;
       expiresAt: number;
     };
     if (
       data.installationId !== value.installationId ||
+      !credentialsSchema.safeParse({ ...value, token: data.token, expiresAt: data.expiresAt })
+        .success ||
       typeof data.token !== 'string' ||
-      data.token.length > 2048 ||
-      !Number.isSafeInteger(data.expiresAt)
+      !Number.isSafeInteger(data.expiresAt) ||
+      data.expiresAt <= this.now()
     )
       throw new Error('invalid_enrollment_ack');
     value.token = data.token;
@@ -570,7 +752,7 @@ export class DiagnosticDelivery {
           signal,
           headers: { authorization: `Bearer ${bearer}` },
         });
-        const ack = (await response.json()) as {
+        const ack = (await responseJson(response, signal)) as {
           installationId: string;
           revoked: boolean;
           deletion: string;
@@ -583,13 +765,17 @@ export class DiagnosticDelivery {
         )
           throw new Error('withdrawal_pending');
         await this.transaction(async () => {
-          this.state.withdrawals = this.state.withdrawals.filter(
-            (v) => v.installationId !== item.installationId,
-          );
-          await this.save();
+          const previous = this.state.withdrawals;
+          this.state.withdrawals = previous.filter((v) => v.installationId !== item.installationId);
+          try {
+            await this.save();
+          } catch (error) {
+            this.state.withdrawals = previous;
+            throw error;
+          }
         });
       }
-      if (!this.state.consent || !this.state.credentials || epoch !== this.epoch) return;
+      if (!this.consentActive() || !this.state.credentials || epoch !== this.epoch) return;
       const identity = this.state.credentials;
       const bearer = await this.credentials(identity, signal);
       await this.transaction(() => this.save());
@@ -601,7 +787,7 @@ export class DiagnosticDelivery {
         DELIVERY_LIMITS.compressedBytes,
       );
       if (checksum(bytes) !== batch.id) throw new Error('batch_integrity_failed');
-      if (!this.state.consent || epoch !== this.epoch) return;
+      if (!this.consentActive() || epoch !== this.epoch) return;
       const response = await this.fetcher(`${this.endpoint}/v1/diagnostics/batches/${batch.id}`, {
         method: 'PUT',
         redirect: 'error',
@@ -614,7 +800,11 @@ export class DiagnosticDelivery {
         },
         body: new Uint8Array(bytes),
       });
-      const ack = (await response.json()) as { batchId: string; sha256: string; accepted: boolean };
+      const ack = (await responseJson(response, signal)) as {
+        batchId: string;
+        sha256: string;
+        accepted: boolean;
+      };
       if (
         !response.ok ||
         ack.batchId !== batch.id ||
@@ -623,13 +813,19 @@ export class DiagnosticDelivery {
       )
         throw new Error(`upload_unconfirmed_${response.status}`);
       await this.transaction(async () => {
-        if (epoch !== this.epoch || !this.state.consent) return;
+        if (epoch !== this.epoch || !this.consentActive()) return;
+        const previous = structuredClone(this.state);
         this.state.queue = this.state.queue.filter((v) => v.id !== batch.id);
         this.state.acknowledged++;
         this.state.failures = 0;
         this.state.nextAttemptAt = 0;
         this.error = null;
-        await this.save();
+        try {
+          await this.save();
+        } catch (error) {
+          this.state = previous;
+          throw error;
+        }
         await unlink(join(this.queueDirectory, `${batch.id}.gz`));
       });
     } catch (error) {
