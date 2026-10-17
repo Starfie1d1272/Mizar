@@ -1,8 +1,10 @@
 # 普通观众 GOTV 研究原型
 
-**本分支没有实现可登录完美 GOTV 的无画面客户端。** 已交付的是协议证据探针、可运行的增量事件解码器及下一次实测方案。接入普通观众身份、持续在线收数仍未实证；所有程序报告保留 `INCONCLUSIVE`，不会用退出码、ConnectOK 或离线事件数代替接入证明。
+**本分支没有实现可登录完美 GOTV 的无画面客户端。** 已交付的是协议证据探针、内存握手/密码/通道组件、可编译 SDK 桥接、增量事件解码器及实测方案。接入普通观众身份、持续在线收数仍未实证；所有程序报告保留 `INCONCLUSIVE`，不会用退出码、ConnectOK 或离线事件数代替接入证明。
 
 独立研究分支；不修改 #408/#409，不接入生产 HUD、Core 或遥测自动编排。`follow.ts` 复用了 #408 的增长文件读取实现，解码器通过 `@mizar/telemetry-cstv/viewer-research` 暴露标量事件，原始第三方解析器仍只在适配器包中使用。新增的纯内存握手组件与逐地址证据见 [HANDSHAKE-EVIDENCE.md](HANDSHAKE-EVIDENCE.md)。协议设计见 [DESIGN.md](DESIGN.md)，用户本机步骤见 [WINDOWS-TEST.md](WINDOWS-TEST.md)，原始结果和取证来源见 [EVIDENCE.md](EVIDENCE.md)。
+
+第三轮核心进展见 [密码与 SDK 证据](PASSWORD-EVIDENCE.md) 和 [通道证据](CHANNEL-EVIDENCE.md)：已实现密码变换的保守 bytes 子集、GNS 内层 tag 1..4/LZ4/UBitVar，SDK 桥接编译及生命周期测试通过。这些组件尚未组合成完整在线客户端；初始化门禁仍关闭。
 
 ## 云端运行
 

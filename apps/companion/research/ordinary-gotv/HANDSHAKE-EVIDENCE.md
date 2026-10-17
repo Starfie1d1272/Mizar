@@ -2,6 +2,8 @@
 
 本轮继续推进最终的轻量无画面客户端，**没有把官方可渲染客户端 record → Demo 解析当作最终实现**。新增 `handshake.py` 是连接报文/票据生命周期/sign-on 的可独立测试部分，仍无 socket、Steam SDK 提供方、GNS 认证加密和完整 netchannel，不能接入完美。本轮没有用户登录、真实票据或真实普通观众流量。
 
+后续第三轮已实现密码变换子集、可编译 SDK 桥和通道格式，见 [PASSWORD-EVIDENCE.md](PASSWORD-EVIDENCE.md) / [CHANNEL-EVIDENCE.md](CHANNEL-EVIDENCE.md)。下文保留第二轮取证时的边界，当前完整缺口以第三轮状态表为准。
+
 ## 二进制精确身份与版本解释
 
 [二进制身份](evidence/binary-identity.json) 保存实际 Valve 内容下载文件的 SHA-256、PE COFF timestamp、机器类型及 RSDS 候选；它不声称做了 Authenticode 验证。

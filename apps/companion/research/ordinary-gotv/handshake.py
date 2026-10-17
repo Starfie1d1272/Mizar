@@ -116,8 +116,9 @@ def connect_payload(*, host_version, challenge: Challenge, auth_steam: bytes,
     """C2S_CONNECT_Message protobuf only; transport framing is a separate layer.
 
     encrypted_password must be the actual 96-byte transformed password, or None
-    only if that authorized source requires no password. Transformation is not
-    implemented here. This does not clear or repurpose relay flags.
+    only if that authorized source requires no password. Transformation is
+    implemented in password.transform_password for the documented bytes subset.
+    This does not clear or repurpose relay flags.
     """
     if challenge.auth_protocol != 3 or not 8 < len(auth_steam) <= 2048:
         raise ProbeError('auth-payload-size-or-protocol')

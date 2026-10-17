@@ -124,3 +124,9 @@ REA_GHIDRA_STARTUP_TIMEOUT_MS=600000 \
 审阅复现了 events ENOSPC 后 finally 重写同一队列、二次异常跳过 close/report。现改为写前移出批次、失败后不再重试；清理/关闭/报告独立保护，不覆盖首因。报告写盘失败时仍向 stderr 输出固定分类与 errno，明确 reportWritten=false，不含原异常文本或路径。
 
 [定向原始输出](evidence/write-failure-regression.txt)：新增 5 项原 CLI 的故障注入测试，覆盖 pull/最终刷新失败、cancel/close/report 同时失败、解析首因加最终写入失败、仅报告失败；加既有回归共 9 项通过。合成句柄只验证错误控制流，不是实际磁盘耗尽或在线证据。
+
+## 第三轮：协议核心增量
+
+写盘修复提交 `032c1526e693e3367f2c46faaa1e7513ed851295` 的 GitHub 检查全部通过；[第三次真实 Demo 回归](evidence/offline-verification-phase3.json) 仍为 7592 行等价，正常取消保留 cancelled。
+
+密码 helper/常量、SDK 编译和生命周期证据见 [PASSWORD-EVIDENCE.md](PASSWORD-EVIDENCE.md)；网络通道头部、GNS 分层与 LZ4/UBitVar 证据见 [CHANNEL-EVIDENCE.md](CHANNEL-EVIDENCE.md)。这些文件提供精确版本、可重放查询和实际 oracle 结果；尚无真实普通观众会话。
