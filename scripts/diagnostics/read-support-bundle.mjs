@@ -18,8 +18,14 @@ let timeline = [];
 const failures = [];
 const fragments = new Map();
 for (const file of bundle.fullLogs.files) {
-  if (!['read', 'incomplete_last_line'].includes(file.status)) {
-    failures.push({ name: file.name, status: file.status });
+  if (!['read', 'incomplete_last_line', 'incomplete_snapshot'].includes(file.status)) {
+    failures.push({
+      name: file.name,
+      status: file.status,
+      error: file.error,
+      durability: file.durability,
+      scope: file.scope,
+    });
     continue;
   }
   const parts = file.volumes.map((volume, index) => {
@@ -39,8 +45,14 @@ for (const file of bundle.fullLogs.files) {
   });
   const bytes = Buffer.concat(parts);
   if (hash(bytes) !== file.sha256) throw new Error(`File integrity failure: ${file.name}`);
-  if (file.status === 'incomplete_last_line')
-    failures.push({ name: file.name, status: file.status });
+  if (file.status === 'incomplete_last_line' || file.status === 'incomplete_snapshot')
+    failures.push({
+      name: file.name,
+      status: file.status,
+      error: file.error,
+      durability: file.durability,
+      scope: file.scope,
+    });
   if (file.format === 'obs-log-text/1') {
     const offset = Number(file.utcOffsetMinutes);
     const origin = Date.parse(file.sessionStartedAt);
@@ -131,6 +143,8 @@ for (const file of bundle.fullLogs.files) {
       file: file.name,
       ...event,
       startupSessionId: session,
+      sourceDurability: file.durability ?? 'session-log',
+      sourceScope: file.scope,
       ...(validSource
         ? {
             time: source.time,
@@ -170,13 +184,28 @@ const time = (event) => {
   const value = Date.parse(event.recordedAt ?? event.timestamp ?? event.time);
   return Number.isFinite(value) ? value : typeof event.time === 'number' ? event.time : 0;
 };
-const sourceRecords = new Set();
-timeline = timeline.filter((event) => {
-  if (!event.sourceRecordId) return true;
-  if (sourceRecords.has(event.sourceRecordId)) return false;
-  sourceRecords.add(event.sourceRecordId);
-  return true;
-});
+// Keep the broad original local record ahead of any cloud-filtered retained
+// copy or unconfirmed memory duplicate. The archive itself preserves every copy.
+const priority = (event) =>
+  ({ 'session-log': 0, 'durable-pending': 1, 'durable-outbox': 2, 'memory-only': 3 })[
+    event.sourceDurability ?? 'session-log'
+  ] ?? 4;
+const unique = new Map();
+const unkeyed = [];
+for (const event of timeline) {
+  const identity = event.sourceRecordId
+    ? `source:${event.sourceRecordId}`
+    : event.startupSessionId && Number.isSafeInteger(event.sequence)
+      ? `journal:${event.startupSessionId}:${event.sequence}:${event.reconstructed ? 'reconstructed' : 'original'}`
+      : null;
+  if (!identity) {
+    unkeyed.push(event);
+    continue;
+  }
+  const previous = unique.get(identity);
+  if (!previous || priority(event) < priority(previous)) unique.set(identity, event);
+}
+timeline = [...unkeyed, ...unique.values()];
 timeline.sort(
   (a, b) =>
     time(a) - time(b) ||
