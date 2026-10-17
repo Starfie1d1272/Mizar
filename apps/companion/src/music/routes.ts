@@ -1,4 +1,4 @@
-import { errorEvidence } from '../updates/diagnostics.js';
+import { diagnosticValue } from '../support/session-journal.js';
 import type { FastifyInstance } from 'fastify';
 import { musicConfigSchema, MUSIC_GROUPS, type MusicGroup } from '@mizar/protocol/music';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
@@ -71,7 +71,7 @@ export function registerMusicRoutes(
           stage: 'music_operation',
           result: 'failure',
           reason: error instanceof Error ? error.message : 'music_unknown',
-          error: errorEvidence(error),
+          error: diagnosticValue(error),
         },
         '音乐操作失败',
       );
@@ -111,7 +111,7 @@ export function registerMusicRoutes(
           stage: 'music_operation',
           result: 'failure',
           reason: error instanceof Error ? error.message : 'music_unknown',
-          error: errorEvidence(error),
+          error: diagnosticValue(error),
         },
         '音乐操作失败',
       );
@@ -136,7 +136,7 @@ export function registerMusicRoutes(
           stage: 'music_operation',
           result: 'failure',
           reason: error instanceof Error ? error.message : 'music_unknown',
-          error: errorEvidence(error),
+          error: diagnosticValue(error),
         },
         '音乐操作失败',
       );

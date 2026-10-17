@@ -4,7 +4,6 @@ import { MusicStore } from './music/store.js';
 import { MusicDirector } from './music/director.js';
 import { ObsMusicProvider } from './music/obs-provider.js';
 import { registerMusicRoutes } from './music/routes.js';
-import { errorEvidence } from './updates/diagnostics.js';
 import {
   DemoTestController,
   readDemoTestRecovery,
@@ -121,6 +120,7 @@ export interface CompanionAppOptions {
   readonly updates?: UpdateManager;
   readonly steamAvatars?: SteamAvatars;
   readonly supportLogsDirectory?: string;
+  readonly supportJournal?: SessionJournal;
   readonly productRuntime?: {
     readonly appVersion?: string;
     readonly artifactSha256: string;
@@ -316,7 +316,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         {
           event: 'demo-test',
           stage: 'recovery_output_quarantine',
-          diagnostic: errorEvidence(error),
+          diagnostic: diagnosticValue(error),
         },
         'Demo test quarantine failed',
       ),
@@ -374,13 +374,15 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         programRuntime.getSnapshot().current.programSource.lastAccepted?.receivedMonotonicMs ?? 0;
       return Math.max(performance.now(), lastReceived);
     });
-  const sessionJournal = options.supportLogsDirectory
-    ? new SessionJournal(options.supportLogsDirectory, {
-        appVersion: options.productRuntime?.appVersion ?? null,
-        gitSha: options.productRuntime?.gitSha ?? null,
-        artifactSha256: options.productRuntime?.artifactSha256 ?? null,
-      })
-    : undefined;
+  const sessionJournal =
+    options.supportJournal ??
+    (options.supportLogsDirectory
+      ? new SessionJournal(options.supportLogsDirectory, {
+          appVersion: options.productRuntime?.appVersion ?? null,
+          gitSha: options.productRuntime?.gitSha ?? null,
+          artifactSha256: options.productRuntime?.artifactSha256 ?? null,
+        })
+      : undefined);
   const app = Fastify({
     logger: sessionJournal
       ? {
@@ -830,7 +832,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
                 stage: 'resource_cache_verify',
                 result: 'failure',
                 packId,
-                diagnostic: { error: errorEvidence(error) },
+                diagnostic: { error: diagnosticValue(error) },
               },
               '官方素材缓存验证失败。',
             ),
@@ -852,7 +854,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             event: 'resource',
             stage: 'resource_store_open',
             result: 'failure',
-            diagnostic: { error: errorEvidence(error) },
+            diagnostic: { error: diagnosticValue(error) },
           },
           '官方素材缓存不可用；保留原 Full 资源路径。',
         );

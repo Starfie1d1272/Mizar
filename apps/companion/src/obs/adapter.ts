@@ -1,4 +1,4 @@
-import { errorEvidence } from '../updates/diagnostics.js';
+import { diagnosticValue } from '../support/session-journal.js';
 import { spawn } from 'node:child_process';
 import { dirname } from 'node:path';
 import { OBSWebSocket } from 'obs-websocket-js';
@@ -45,7 +45,7 @@ export function obsErrorEvidence(error: unknown, password = ''): unknown {
       return Object.fromEntries(Object.entries(value).map(([key, field]) => [key, redact(field)]));
     return value;
   };
-  return redact(errorEvidence(error));
+  return redact(diagnosticValue(error, '', new Set(), password ? [password] : []));
 }
 
 export interface ObsStatus {

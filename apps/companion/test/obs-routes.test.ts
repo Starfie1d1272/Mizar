@@ -1,3 +1,4 @@
+import { obsErrorEvidence } from '../src/obs/adapter.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -33,4 +34,24 @@ it('keeps the OBS WebSocket password out of local status and refuses cross-origi
     await app.close();
     await rm(root, { recursive: true, force: true });
   }
+});
+
+it('retains the entire OBS failure chain while replacing a known password precisely before generic redaction', () => {
+  const password = 'private password with spaces';
+  let error: Error = Object.assign(new Error('leaf path=C:\\OBS\\plugin.dll osCode=5'), {
+    code: 'EACCES',
+  });
+  for (let depth = 0; depth < 12; depth++)
+    error = new Error(
+      `stage=${depth} password=${password}; context remains; ${'detail '.repeat(800)}`,
+      { cause: error },
+    );
+  const evidence = obsErrorEvidence(error, password);
+  const text = JSON.stringify(evidence);
+  expect(text).toContain('plugin.dll');
+  expect(text).toContain('EACCES');
+  expect(text).toContain('context remains');
+  expect(text).not.toContain(password);
+  expect(text).not.toContain('password with spaces');
+  expect(Buffer.byteLength(text)).toBeGreaterThan(32 * 1024);
 });

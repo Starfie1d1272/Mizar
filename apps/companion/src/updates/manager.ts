@@ -1,4 +1,4 @@
-import { errorEvidence } from './diagnostics.js';
+import { diagnosticValue } from '../support/session-journal.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import {
@@ -126,7 +126,7 @@ export class UpdateManager {
     this.failureDetails = this.failureDetails.slice(-6);
     this.options.log?.(stage, safeCode(error), this.candidate?.version, {
       operationId: this.operationId,
-      error: errorEvidence(error),
+      error: diagnosticValue(error),
       ...(durationMs === undefined ? {} : { durationMs }),
     });
   }

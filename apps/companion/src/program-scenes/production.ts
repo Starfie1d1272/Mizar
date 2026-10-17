@@ -1,4 +1,4 @@
-import { errorEvidence } from '../updates/diagnostics.js';
+import { diagnosticValue } from '../support/session-journal.js';
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import type { ProgramSceneController } from './controller.js';
@@ -80,7 +80,7 @@ export function registerProductionRoutes(
           stage,
           result: 'failure',
           action: body?.action,
-          diagnostic: { operationId, error: errorEvidence(error) },
+          diagnostic: { operationId, error: diagnosticValue(error) },
         },
         'Production operation failed',
       );

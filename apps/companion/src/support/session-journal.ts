@@ -1,3 +1,4 @@
+import { BOX_READ_TOKEN } from '../updates/contract.js';
 import { atomicJson, safePath } from '../resource-store/files.js';
 import { constants } from 'node:fs';
 import { randomUUID, createHash } from 'node:crypto';
@@ -13,7 +14,12 @@ export const SESSION_LIMITS = {
 const credential =
   /^(?:authorization|proxy-authorization|cookie|set-cookie|.*(?:password|passwd|token|secret|credential)|api[_-]?key|stream[_-]?key|device[_-]?code|user[_-]?code|pairing[_-]?code)$/i;
 /** Preserve technical context; replace credential values, never whole events. */
-export function diagnosticValue(value: unknown, key = '', seen = new Set<object>()): unknown {
+export function diagnosticValue(
+  value: unknown,
+  key = '',
+  seen = new Set<object>(),
+  secrets: readonly string[] = [],
+): unknown {
   if (credential.test(key)) return '[redacted]';
   if (value instanceof Error) {
     if (seen.has(value)) return '[circular error]';
@@ -28,6 +34,7 @@ export function diagnosticValue(value: unknown, key = '', seen = new Set<object>
       { ...fields, name: value.name, message: value.message, stack: value.stack },
       key,
       seen,
+      secrets,
     );
     seen.delete(value);
     return result;
@@ -45,15 +52,18 @@ export function diagnosticValue(value: unknown, key = '', seen = new Set<object>
       sha256: createHash('sha256').update(value).digest('hex'),
     };
   if (typeof value === 'string') {
-    if (/^\s*[{[]/.test(value)) {
+    let cleanText = value.replaceAll(BOX_READ_TOKEN, '[redacted]');
+    for (const secret of secrets)
+      if (secret) cleanText = cleanText.replaceAll(secret, '[redacted]');
+    if (/^\s*[{[]/.test(cleanText)) {
       try {
-        return JSON.stringify(diagnosticValue(JSON.parse(value), key, seen));
+        return JSON.stringify(diagnosticValue(JSON.parse(cleanText), key, seen, secrets));
       } catch {
         /* A plain error or partial record remains text. */
       }
     }
-    return value
-      .replace(/\b(?:https?|wss?|rtmps?|ftp):\/\/[^\s"'<>]+/gi, (text) => {
+    return cleanText
+      .replace(/\b[a-z][a-z0-9+.-]{0,31}:\/\/[^\s"'<>]+/gi, (text) => {
         try {
           const url = new URL(text);
           if (url.username || url.password) {
@@ -86,11 +96,11 @@ export function diagnosticValue(value: unknown, key = '', seen = new Set<object>
   if (seen.has(value)) return '[circular]';
   seen.add(value);
   const result = Array.isArray(value)
-    ? value.map((v) => diagnosticValue(v, '', seen))
+    ? value.map((v) => diagnosticValue(v, '', seen, secrets))
     : Object.fromEntries(
         Object.entries(value).map(([k, v]) => [
           k,
-          diagnosticValue(v, k === 'key' && /stream/i.test(key) ? 'streamKey' : k, seen),
+          diagnosticValue(v, k === 'key' && /stream/i.test(key) ? 'streamKey' : k, seen, secrets),
         ]),
       );
   seen.delete(value);
