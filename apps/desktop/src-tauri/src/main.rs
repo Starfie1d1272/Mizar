@@ -2441,7 +2441,7 @@ fn run_desktop(
                     let state = cleanup_host.state::<Mutex<managed_cs2::ManagedCs2>>();
                     let mut cs2 = state.lock().map_err(|_| "CS2 配置状态不可用。")?;
                     let activity = cleanup_host.state::<cs2_activity::Activity>();
-                    let _activity = activity.begin(2);
+                    let _activity = activity.begin(if cs2.has_external() { 3 } else { 2 });
                     production_exit::finish_then_restore(
                         || {
                             // --stop already completed the same safe transaction before
