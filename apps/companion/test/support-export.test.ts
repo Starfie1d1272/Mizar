@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import type { MusicConfig, MusicTrack } from '@mizar/protocol/music';
 import { gunzipSync } from 'node:zlib';
 import { createHash } from 'node:crypto';
@@ -814,6 +815,7 @@ type FullArchive = {
   sessionLogHealth: { writeFailures: number };
   fullLogs: {
     range: unknown;
+    fragmentedDetails: unknown;
     files: {
       name: string;
       status: string;
@@ -1157,6 +1159,64 @@ it('keeps the control response when session writes fail and exports the failure 
     expect(events.some((event) => event.writeFailuresBefore > 0)).toBe(true);
   } finally {
     blocked.mockRestore();
+    await app.close();
+  }
+});
+
+it('exports newly named native stages without projection and detects missing long-error fragments in a selected interval', async () => {
+  const dir = await directory();
+  const message = 'outer cause; ' + '技术原因'.repeat(3000) + '; leaf=EACCES';
+  const event = (part: number, time: string, text: string) => ({
+    startupSessionId: 'native-session',
+    time,
+    stage: 'new_native_failure_stage',
+    result: 'failure',
+    error: JSON.stringify({ detailId: 'native-detail-id', part, parts: 2, text }),
+  });
+  await writeFile(
+    join(dir, 'desktop.1.ndjson'),
+    JSON.stringify(event(1, '2026-01-01T00:00:00.000Z', message.slice(0, 6000))) + '\n',
+  );
+  await writeFile(
+    join(dir, 'desktop.ndjson'),
+    JSON.stringify(event(2, '2026-01-01T00:00:01.000Z', message.slice(6000))) + '\n',
+  );
+  const app = buildApp({ supportLogsDirectory: dir });
+  try {
+    const response = await app.inject(request);
+    const bundle = response.json<FullArchive>();
+    expect(bundle.fullLogs.fragmentedDetails).toContainEqual({
+      id: 'native-detail-id',
+      expected: 2,
+      included: 2,
+      complete: true,
+    });
+    const events = unpack(bundle, 'desktop.');
+    expect(events.filter((event) => event.stage === 'new_native_failure_stage')).toHaveLength(2);
+    const path = join(dir, 'export.json');
+    await writeFile(path, response.body);
+    const output = execFileSync(
+      process.execPath,
+      ['scripts/diagnostics/read-support-bundle.mjs', path],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    const reconstructed = output
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { reconstructedDetail?: string })
+      .find((event) => event.reconstructedDetail !== undefined);
+    expect(reconstructed?.reconstructedDetail).toBe(message);
+    const interval = await app.inject({
+      ...request,
+      payload: { from: '2026-01-01T00:00:00.500Z', to: '2026-01-01T00:00:02.000Z' },
+    });
+    expect(interval.json<FullArchive>().fullLogs.fragmentedDetails).toContainEqual({
+      id: 'native-detail-id',
+      expected: 2,
+      included: 1,
+      complete: false,
+    });
+  } finally {
     await app.close();
   }
 });

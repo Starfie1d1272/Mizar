@@ -127,16 +127,6 @@ fn redact_value(value: Value) -> Value {
     }
 }
 
-fn bounded(text: &str) -> String {
-    if text.len() <= MESSAGE_LIMIT {
-        return text.into();
-    }
-    let mut end = MESSAGE_LIMIT;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{} [truncated]", &text[..end])
-}
 
 impl DesktopLog {
     pub fn new(root: &Path, state_override: Option<PathBuf>) -> io::Result<Self> {
@@ -199,7 +189,25 @@ impl DesktopLog {
             log.page_loads = log.page_loads.saturating_add(1);
 
         }
-        Self::write_entry(&log, stage, result, detail)
+        if let Some(detail) = detail {
+            let clean = serde_json::from_str::<Value>(detail).map(redact_value).map(|value| value.to_string()).unwrap_or_else(|_| detail.to_owned());
+            if clean.len() > MESSAGE_LIMIT {
+                let mut chunks = Vec::new();
+                let mut start = 0;
+                while start < clean.len() {
+                    let mut end = (start + MESSAGE_LIMIT).min(clean.len());
+                    while !clean.is_char_boundary(end) { end -= 1; }
+                    chunks.push(&clean[start..end]);
+                    start = end;
+                }
+                let detail_id = format!("{:x}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos());
+                for (index, text) in chunks.iter().enumerate() {
+                    Self::write_entry(&log, stage, result, Some(&json!({"detailId":detail_id,"part":index + 1,"parts":chunks.len(),"text":text}).to_string()))?;
+                }
+                return Ok(());
+            }
+            Self::write_entry(&log, stage, result, Some(&clean))
+        } else { Self::write_entry(&log, stage, result, None) }
     }
 
     fn write_entry(
@@ -217,7 +225,7 @@ impl DesktopLog {
                 "error"
             } else {
                 "detail"
-            }] = json!(bounded(&serde_json::from_str::<Value>(detail).map(redact_value).map(|value| value.to_string()).unwrap_or_else(|_| detail.to_owned())));
+            }] = json!(serde_json::from_str::<Value>(detail).map(redact_value).map(|value| value.to_string()).unwrap_or_else(|_| detail.to_owned()));
         }
         if stage == "main_page_load" && result == "success" {
             entry["occurrences"] = json!(1);
@@ -258,8 +266,8 @@ impl DesktopLog {
         }
     }
 
-    pub fn native_outcome<T: std::fmt::Debug, E: std::fmt::Debug>(&self, command: &str, result: &Result<T, E>) {
-        self.event("native_command", if result.is_ok() { "success" } else { "failure" }, Some(&json!({"command":command,"outcome":format!("{result:?}")}).to_string()));
+    pub fn native_outcome<T: std::fmt::Debug, E: std::fmt::Debug>(&self, command: &str, operation_id: Option<&str>, result: &Result<T, E>) {
+        self.event("native_command", if result.is_ok() { "success" } else { "failure" }, Some(&json!({"command":command,"operationId":operation_id,"outcome":format!("{result:?}")}).to_string()));
     }
 
     pub fn install_panic_hook(&self) {
@@ -308,11 +316,21 @@ mod tests {
         log.event("native_command", "begin", Some(&json!({"command":"start_demo_test", "token":"private-token", "password":"private-password", "arguments":["-applaunch","730","-worldwide"],"width":1920}).to_string()));
         for _ in 0..40 { log.event("main_page_load", "success", None); }
         let failed: Result<(), String> = Err("restore_stage: PermissionDenied osCode=5".into());
-        log.native_outcome("finish_workspace", &failed);
+        log.native_outcome("finish_workspace", Some("fixture-operation"), &failed);
+        let long_cause = format!("{}; leaf=PermissionDenied osCode=5", "cause-chain;".repeat(4000));
+        log.event("long_failure", "failure", Some(&long_cause));
         let directory = log.directory.clone();
         drop(log);
         let _restarted = DesktopLog::new(&root, None).unwrap();
         let text = fs::read_to_string(directory.join("desktop.1.ndjson")).unwrap();
+        let mut parts: Vec<Value> = text.lines().filter_map(|line| {
+            let event: Value = serde_json::from_str(line).ok()?;
+            if event["stage"] != "long_failure" { return None; }
+            serde_json::from_str(event["error"].as_str()?).ok()
+        }).collect();
+        parts.sort_by_key(|part| part["part"].as_u64());
+        assert_eq!(parts.len() as u64, parts[0]["parts"].as_u64().unwrap());
+        assert_eq!(parts.iter().map(|part| part["text"].as_str().unwrap()).collect::<String>(), long_cause);
         assert!(!text.contains("private-token"));
         assert!(!text.contains("private-password"));
         let events: Vec<Value> = text.lines().map(|line| serde_json::from_str(line).unwrap()).collect();

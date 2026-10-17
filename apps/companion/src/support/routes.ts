@@ -1,4 +1,6 @@
-import { fullLogArchive } from './archive.js';
+import { Readable } from 'node:stream';
+import { finished } from 'node:stream/promises';
+import { encodeSupportBundle, fullLogArchive } from './archive.js';
 import {
   collectObsNativeEvidence,
   failedObsNativeEvidence,
@@ -233,6 +235,7 @@ export function registerSupportRoutes(
         return reply.code(403).send({ error: 'support_origin_forbidden' });
       if (exporting) return reply.code(429).send({ error: 'support_export_busy' });
       exporting = true;
+      let streaming = false;
       try {
         await options.flushBusinessLog?.();
         const [logs, obs, nativeObs] = await Promise.all([
@@ -457,16 +460,25 @@ export function registerSupportRoutes(
           logs,
           attachments: { obsLogs: obsLogAttachments },
         };
-        const json = JSON.stringify(bundle, null, 2);
-        if (Buffer.byteLength(json) > SUPPORT_BUNDLE_MAX_BYTES)
-          throw new Error('support_bundle_limit');
+        let jsonBytes = 0;
+        for await (const chunk of encodeSupportBundle(bundle)) {
+          jsonBytes += Buffer.byteLength(chunk);
+          if (jsonBytes > SUPPORT_BUNDLE_MAX_BYTES) throw new Error('support_bundle_limit');
+        }
+        const stream = Readable.from(encodeSupportBundle(bundle));
+        streaming = true;
+        void finished(stream)
+          .catch(() => undefined)
+          .finally(() => {
+            exporting = false;
+          });
         return reply
           .type('application/json; charset=utf-8')
           .header(
             'content-disposition',
             `attachment; filename="mizar-support-${exportedAt.replaceAll(':', '-')}.json"`,
           )
-          .send(json);
+          .send(stream);
       } catch (error) {
         request.log.error({ err: error, stage: 'support_export' }, '诊断导出失败');
         return reply.code(503).send({
@@ -474,7 +486,7 @@ export function registerSupportRoutes(
           message: '诊断包暂时无法生成；若记录较多，请缩小导出时间范围后重试。',
         });
       } finally {
-        exporting = false;
+        if (!streaming) exporting = false;
       }
     },
   );

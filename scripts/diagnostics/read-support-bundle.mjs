@@ -16,6 +16,7 @@ if (bundle.schema !== 'mizar-support-bundle/1' || !Array.isArray(bundle.fullLogs
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const timeline = [];
 const failures = [];
+const fragments = new Map();
 for (const file of bundle.fullLogs.files) {
   if (!['read', 'incomplete_last_line'].includes(file.status)) {
     failures.push({ name: file.name, status: file.status });
@@ -54,9 +55,49 @@ for (const file of bundle.fullLogs.files) {
     } catch {
       event = { stage: 'unstructured_or_partial_record', text: line };
     }
+    const rawDetail = event.error ?? event.detail;
+    if (typeof rawDetail === 'string') {
+      try {
+        const detail = JSON.parse(rawDetail);
+        if (
+          typeof detail.detailId === 'string' &&
+          Number.isInteger(detail.part) &&
+          Number.isInteger(detail.parts)
+        ) {
+          const group = fragments.get(detail.detailId) ?? {
+            event: { file: file.name, ...event },
+            expected: detail.parts,
+            parts: new Map(),
+          };
+          group.parts.set(detail.part, detail.text);
+          fragments.set(detail.detailId, group);
+        }
+      } catch {
+        /* Non-JSON native details remain in the timeline. */
+      }
+    }
     session = event.startupSessionId ?? session;
     timeline.push({ file: file.name, ...event, startupSessionId: session });
   }
+}
+for (const [id, group] of fragments) {
+  if (
+    group.parts.size !== group.expected ||
+    [...group.parts.keys()].some((index) => index < 1 || index > group.expected)
+  ) {
+    failures.push({
+      detailId: id,
+      status: 'missing_detail_parts',
+      expected: group.expected,
+      included: group.parts.size,
+    });
+    continue;
+  }
+  const text = [...group.parts.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([, text]) => text)
+    .join('');
+  timeline.push({ ...group.event, reconstructedDetail: text, detailId: id, reconstructed: true });
 }
 const time = (event) => {
   const value = Date.parse(event.recordedAt ?? event.timestamp ?? event.time);

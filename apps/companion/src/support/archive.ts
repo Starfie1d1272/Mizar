@@ -1,3 +1,4 @@
+import { setImmediate as yieldIO } from 'node:timers/promises';
 import { safePath } from '../resource-store/files.js';
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
@@ -32,6 +33,7 @@ export async function fullLogArchive(
   directory: string | undefined,
   range: { from?: string; to?: string; sessionId?: string } = {},
 ) {
+  const fragments = new Map<string, { id: string; expected: number; parts: Set<number> }>();
   const sessions = new Map<
     string,
     {
@@ -119,51 +121,77 @@ export async function fullLogArchive(
       }
       // Parse structured records before redaction to preserve valid NDJSON and replace whole credential values.
       let currentSession: unknown;
-      const text = source
-        .subarray(0, file.readBytes)
-        .toString('utf8')
-        .split('\n')
-        .map((line) => {
-          try {
-            const event = JSON.parse(line) as Record<string, unknown>;
-            const stamp = event.time ?? event.timestamp;
-            const time =
-              typeof stamp === 'number' && Number.isFinite(stamp) && stamp > 0 && stamp < 1e14
-                ? new Date(stamp).toISOString()
-                : stamp;
-            if (typeof event.startupSessionId === 'string') currentSession = event.startupSessionId;
-            const id = event.startupSessionId ?? currentSession;
-            if (
-              typeof time === 'string' &&
-              ((range.from && time < range.from) || (range.to && time > range.to))
-            )
-              return '';
-            if (range.sessionId && typeof id === 'string' && id !== range.sessionId) return '';
-            if (typeof id === 'string') {
-              const session = sessions.get(id) ?? {
-                sessionId: id,
-                first: null,
-                last: null,
-                events: 0,
-                sequence: [],
-                ended: false,
+      const lines = source.subarray(0, file.readBytes).toString('utf8').split('\n');
+      const processLine = (line: string) => {
+        try {
+          const event = JSON.parse(line) as Record<string, unknown>;
+          const stamp = event.time ?? event.timestamp;
+          const time =
+            typeof stamp === 'number' && Number.isFinite(stamp) && stamp > 0 && stamp < 1e14
+              ? new Date(stamp).toISOString()
+              : stamp;
+          if (typeof event.startupSessionId === 'string') currentSession = event.startupSessionId;
+          const id = event.startupSessionId ?? currentSession;
+          if (
+            typeof time === 'string' &&
+            ((range.from && time < range.from) || (range.to && time > range.to))
+          )
+            return '';
+          if (range.sessionId && typeof id === 'string' && id !== range.sessionId) return '';
+          const rawDetail = event.error ?? event.detail;
+          if (typeof rawDetail === 'string') {
+            try {
+              const detail = JSON.parse(rawDetail) as {
+                detailId?: unknown;
+                part?: unknown;
+                parts?: unknown;
               };
-              if (typeof time === 'string') {
-                session.first =
-                  session.first === null || time < session.first ? time : session.first;
-                session.last = session.last === null || time > session.last ? time : session.last;
+              if (
+                typeof detail.detailId === 'string' &&
+                typeof detail.part === 'number' &&
+                typeof detail.parts === 'number'
+              ) {
+                const group = fragments.get(detail.detailId) ?? {
+                  id: detail.detailId,
+                  expected: detail.parts,
+                  parts: new Set<number>(),
+                };
+                group.parts.add(detail.part);
+                fragments.set(group.id, group);
               }
-              session.events++;
-              if (typeof event.sequence === 'number') session.sequence.push(event.sequence);
-              if (event.stage === 'session_end') session.ended = true;
-              sessions.set(id, session);
+            } catch {
+              /* Ordinary native details need no fragment index. */
             }
-            return JSON.stringify(diagnosticValue(event));
-          } catch {
-            return diagnosticValue(line) as string;
           }
-        })
-        .join('\n');
+          if (typeof id === 'string') {
+            const session = sessions.get(id) ?? {
+              sessionId: id,
+              first: null,
+              last: null,
+              events: 0,
+              sequence: [],
+              ended: false,
+            };
+            if (typeof time === 'string') {
+              session.first = session.first === null || time < session.first ? time : session.first;
+              session.last = session.last === null || time > session.last ? time : session.last;
+            }
+            session.events++;
+            if (typeof event.sequence === 'number') session.sequence.push(event.sequence);
+            if (event.stage === 'session_end') session.ended = true;
+            sessions.set(id, session);
+          }
+          return JSON.stringify(diagnosticValue(event));
+        } catch {
+          return diagnosticValue(line) as string;
+        }
+      };
+      const processed: string[] = [];
+      for (let index = 0; index < lines.length; index++) {
+        processed.push(processLine(lines[index]!));
+        if (index % 128 === 0) await yieldIO();
+      }
+      const text = processed.join('\n');
       const bytes = Buffer.from(text);
       file.sha256 = createHash('sha256').update(bytes).digest('hex');
       for (let start = 0; start < bytes.length; start += VOLUME_BYTES) {
@@ -191,6 +219,18 @@ export async function fullLogArchive(
   return {
     status: 'available',
     range,
+    rangePolicy:
+      'Timestamped records are filtered; business/retention snapshots and unscoped legacy text remain attached.',
+    fragmentedDetails: [...fragments.values()].map((group) => ({
+      id: group.id,
+      expected: group.expected,
+      included: group.parts.size,
+      complete:
+        group.parts.size === group.expected &&
+        Array.from({ length: group.expected }, (_, index) => index + 1).every((index) =>
+          group.parts.has(index),
+        ),
+    })),
     sessions: [...sessions.values()].map(({ sequence, ...session }) => {
       const ordered = [...new Set(sequence)].sort((a, b) => a - b);
       const first = ordered[0] ?? null;
@@ -216,4 +256,26 @@ export async function fullLogArchive(
       'Retention/rotation may remove earlier records; unclosed sessions or sequence gaps are incomplete. Power loss may lose pending/OS-buffered records. Legacy versions did not collect all controls.',
     files,
   };
+}
+
+/** Stream the archive a volume at a time; large exports must yield to live ingress. */
+export async function* encodeSupportBundle(bundle: {
+  fullLogs: Awaited<ReturnType<typeof fullLogArchive>>;
+  [key: string]: unknown;
+}): AsyncGenerator<string> {
+  const { fullLogs, ...header } = bundle;
+  yield JSON.stringify(header).slice(0, -1) + ',"fullLogs":';
+  const { files, ...metadata } = fullLogs;
+  yield JSON.stringify(metadata).slice(0, -1) + ',"files":[';
+  for (let index = 0; index < files.length; index++) {
+    const { volumes, ...file } = files[index]!;
+    yield (index ? ',' : '') + JSON.stringify(file).slice(0, -1) + ',"volumes":[';
+    for (let part = 0; part < volumes.length; part++) {
+      yield (part ? ',' : '') + JSON.stringify(volumes[part]);
+      await yieldIO();
+    }
+    yield ']}';
+    await yieldIO();
+  }
+  yield ']}}';
 }
