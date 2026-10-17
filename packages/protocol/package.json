@@ -69,6 +69,10 @@
     "./music": {
       "types": "./dist/music.d.ts",
       "import": "./dist/music.js"
+    },
+    "./orchestration": {
+      "types": "./dist/orchestration.d.ts",
+      "import": "./dist/orchestration.js"
     }
   },
   "scripts": {

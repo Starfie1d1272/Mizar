@@ -1,3 +1,4 @@
+import { CameraSettings } from '../orchestration/CameraSettings';
 import { DiagnosticDeliverySettings } from '../debug/DiagnosticDeliverySettings';
 import { MusicSettings } from '../music/MusicSettings';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -221,7 +222,13 @@ export function Settings({ tab }: { tab: string }) {
       </Button>
     </details>
   ) : null;
-  if (tab === 'music') return <MusicSettings />;
+  if (tab === 'music')
+    return (
+      <>
+        <MusicSettings />
+        <CameraSettings />
+      </>
+    );
 
   return (
     <>

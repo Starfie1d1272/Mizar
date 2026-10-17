@@ -1,3 +1,4 @@
+import { CameraControls } from '../orchestration/CameraControls';
 import { MusicControls } from '../music/MusicControls';
 import { ObsOutputControls } from './ObsOutputControls';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
@@ -296,6 +297,7 @@ export function WorkspaceLeft() {
         />
         <ProductionStatus compact matchId={payload?.matchContext.summary?.matchId ?? null} />
         <MusicControls compact />
+        <CameraControls />
       </div>
       <ObsConfidence />
     </main>

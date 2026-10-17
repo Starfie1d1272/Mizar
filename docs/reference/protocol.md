@@ -236,3 +236,7 @@ RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对�
 本机诊断导出 `POST /debug/support-bundle` 接受可选 ISO 时间 `from/to` 与可选索引焦点 `focusSessionId`，默认全保留范围；完整日志、压缩分卷、预算和完整性语义统一见[架构](architecture.md)。`POST /debug/control-event` 只允许本机可信 Origin，最多 64 KiB，接收 Mizar 浏览器操作证据，不具备控制或文件读取能力。
 
 `fullLogs.files` 中 `format: obs-log-text/1` 为已关联 Mizar 的 OBS 日志原文经凭据替换后的分卷，采用同一 SHA-256 完整性契约；附带来源会话 UTC 起点与本地时区偏移。`nativeObs` 和 `attachments.obsLogs` 仍是技术事件索引，不能代替原文或证明画面正常。候选选择、预算、拒绝与缺失状态见架构；浏览器不能提交 OBS 文件路径。
+
+## 本机地图编排控制
+
+`GET /local/v1/orchestration` 读取私有预设与请求状态；`POST /operator/orchestration` 接收 configure、connect、disconnect、resume、hold、skip、audition。仅回环模式及允许来源可写，恢复/试播绑定当前上下文与连接代际。JSON 上限 256 KiB，严格结构由 `@mizar/protocol/orchestration` 和 Companion 路由共同校验。不接受任意 Provider 地址、控制台命令或文件路径；queued 只表示网关入队。具体语义及 RC 验收见[地图自动编排](orchestration.md)。
