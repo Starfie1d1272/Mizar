@@ -12,7 +12,7 @@ export const SESSION_LIMITS = {
   pendingBytes: 2 * 1024 * 1024,
 };
 const credential =
-  /^(?:authorization|proxy-authorization|cookie|set-cookie|.*(?:password|passwd|token|secret|credential)|api[_-]?key|stream[_-]?key|device[_-]?code|user[_-]?code|pairing[_-]?code)$/i;
+  /^(?:authorization|proxy-authorization|cookie|set-cookie|.*(?:password|passwd|token|secret|credential)|api[_-]?key|stream[_-]?key|device[_-]?code|user[_-]?code|pairing[_-]?code|ticket)$/i;
 /** Preserve technical context; replace credential values, never whole events. */
 export function diagnosticValue(
   value: unknown,
@@ -20,6 +20,19 @@ export function diagnosticValue(
   seen = new Set<object>(),
   secrets: readonly string[] = [],
 ): unknown {
+  if (
+    key === 'ticket' &&
+    typeof value === 'string' &&
+    /^\[redacted-ticket:[a-f0-9]{64}\]$/.test(value)
+  )
+    return value;
+  // A Host exit ticket is a capability, not a business identifier. Its random UUID may be linked by digest only.
+  if (
+    key === 'ticket' &&
+    typeof value === 'string' &&
+    /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(value)
+  )
+    return `[redacted-ticket:${createHash('sha256').update(value).digest('hex')}]`;
   if (credential.test(key)) return '[redacted]';
   if (value instanceof Error) {
     if (seen.has(value)) return '[circular error]';
@@ -88,7 +101,7 @@ export function diagnosticValue(
       .replace(/\b(Bearer|Basic)\s+[^\s"',}]+/gi, '$1 [redacted]')
       .replace(/rh_mizar_[a-zA-Z0-9_-]+/g, '[redacted]')
       .replace(
-        /((?:password|passwd|access[_-]?token|refresh[_-]?token|token|secret|credential|api[_-]?key|stream[_-]?key)["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}&?#]+)/gi,
+        /((?:password|passwd|access[_-]?token|refresh[_-]?token|token|secret|credential|api[_-]?key|stream[_-]?key|ticket)["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}&?#]+)/gi,
         '$1[redacted]',
       );
   }

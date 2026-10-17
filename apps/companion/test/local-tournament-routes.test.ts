@@ -1,4 +1,5 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { gunzipSync } from 'node:zlib';
+import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -154,12 +155,13 @@ interface ExitQualification {
 }
 
 it('uses only a private Host acknowledgement to recycle the last match after accepted GSI, and invalidates stale qualifications', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'mizar-local-host-exit-'));
+  const directory = await mkdtemp(join(await realpath(tmpdir()), 'mizar-local-host-exit-'));
   const app = buildApp({
     localTournamentPath: join(directory, 'local.json'),
     matchManifestPath: join(directory, 'context.json'),
     productRuntime: exitProduct,
     gsiToken: 'exit-gsi',
+    supportLogsDirectory: join(directory, 'logs'),
   });
   const headers = { origin: 'http://127.0.0.1:3000' };
   const privateHeaders = { 'x-runtime-token': exitProduct.controlToken };
@@ -257,6 +259,51 @@ it('uses only a private Host acknowledgement to recycle the last match after acc
     ).toBe(403);
     const first = await prepare();
     expect(first.matchId).toBe(matchId);
+    const support = await app.inject({
+      method: 'POST',
+      url: '/debug/support-bundle',
+      headers,
+      payload: {},
+    });
+    expect(support.statusCode).toBe(200);
+    const files = support.json<{
+      fullLogs: { files: { name: string; status: string; volumes: { gzipBase64: string }[] }[] };
+    }>().fullLogs.files;
+    const raw = files
+      .filter((file) => file.name.startsWith('session.ndjson') && file.status === 'read')
+      .map((file) =>
+        Buffer.concat(
+          file.volumes.map((volume) => gunzipSync(Buffer.from(volume.gzipBase64, 'base64'))),
+        ).toString('utf8'),
+      )
+      .join('\n');
+    expect(raw).not.toContain(first.ticket);
+    expect(raw).not.toContain(exitProduct.controlToken);
+    expect(raw).toContain(first.matchId);
+    expect(raw).toContain(first.contextRevision);
+    const events = raw
+      .split('\n')
+      .filter(Boolean)
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            stage: string;
+            evidence: {
+              route?: string;
+              result?: { qualification?: { ticket?: string; matchId?: string } };
+            };
+          },
+      );
+    const prepared = events.find(
+      (event) =>
+        event.stage === 'operation_result' &&
+        event.evidence.route === '/operator/runtime/local-match-exit' &&
+        event.evidence.result?.qualification?.matchId === matchId,
+    );
+    expect(prepared?.evidence.result?.qualification?.ticket).toMatch(
+      /^\[redacted-ticket:[a-f0-9]{64}\]$/,
+    );
+
     expect((await trash()).statusCode).toBe(409);
     expect((await confirm({ ...first, matchId: 'different-match' })).statusCode).toBe(409);
     expect((await confirm(first)).statusCode).toBe(200);
