@@ -119,6 +119,11 @@ export function registerRivalHubConnectionRoutes(
         .catch(() => undefined);
   }, 10_000);
   timer.unref();
+  const libraryTimer = setInterval(() => {
+    if (options.connection.view().paired) void options.connection.library().catch(() => undefined);
+  }, 60_000);
+  libraryTimer.unref();
+  app.addHook('onClose', () => clearInterval(libraryTimer));
   app.addHook('onClose', () => clearInterval(timer));
   const observedLineupReady = () => {
     const snapshot = options.currentSnapshot();
@@ -212,13 +217,8 @@ export function registerRivalHubConnectionRoutes(
   app.get('/local/v1/rivalhub-schedule', async (request, reply) => {
     if (!options.connection.view().paired)
       return reply.code(404).send({ message: '尚未连接赛事。' });
-    const now = new Date();
-    const from = new Date(now.getTime() - 24 * 3600_000).toISOString();
-    const to = new Date(now.getTime() + 14 * 24 * 3600_000).toISOString();
     try {
-      return reply
-        .header('cache-control', 'no-store')
-        .send(await options.connection.schedule(from, to));
+      return reply.header('cache-control', 'no-store').send(await options.connection.library());
     } catch (error) {
       request.log.error({ err: error }, 'RivalHub operation failed');
       return reply.code(502).send({ message: '赛事赛程暂时无法获取。' });

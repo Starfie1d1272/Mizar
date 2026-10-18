@@ -20,7 +20,6 @@ PowerShell 用 `$env:GSI_TOKEN = "mizar-local-preview"`。示例令牌仅用于�
 | 路径                      | 用途                                 |
 | ------------------------- | ------------------------------------ |
 | `/`                       | 准备中心                             |
-| `/preview`                | 节目预览；`?scene=bp` 打开 BP 工作台 |
 | `/operator/hud`           | HUD 编辑器                           |
 | `/workspace`              | 浏览器工作台预览                     |
 | `/operator`               | 制作控制                             |

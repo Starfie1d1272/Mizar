@@ -1,0 +1,9 @@
+{
+  "identifier": "review",
+  "description": "Only the dedicated review window may close itself.",
+  "windows": ["tool-review"],
+  "remote": {
+    "urls": ["http://127.0.0.1:3000/workspace/review*"]
+  },
+  "permissions": ["allow-close-review"]
+}

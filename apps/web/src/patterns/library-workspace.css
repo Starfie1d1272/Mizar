@@ -1,0 +1,88 @@
+.library-workspace {
+  display: grid;
+  grid-template-columns: minmax(calc(var(--mizar-layout-target) * 8), 0.3fr) minmax(0, 1fr);
+  gap: calc(var(--mizar-layout-padding) * 2);
+  align-items: stretch;
+  min-height: 0;
+  height: calc(var(--mizar-layout-target) * 23);
+}
+.library-browser,
+.library-detail {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.library-browser {
+  gap: var(--mizar-layout-padding);
+  border-right: var(--mizar-line-border) solid var(--mizar-border-default);
+  padding-right: calc(var(--mizar-layout-padding) * 2);
+}
+.library-detail-heading,
+.library-detail-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--mizar-layout-gap);
+  padding-block: var(--mizar-layout-gap);
+  flex: none;
+}
+.library-detail-heading {
+  min-height: calc(
+    var(--mizar-layout-target) + var(--mizar-layout-compact) / 2 + var(--mizar-layout-gap) * 2 +
+      var(--mizar-line-border)
+  );
+  border-bottom: var(--mizar-line-border) solid var(--mizar-border-default);
+}
+.library-detail-actions {
+  border-top: var(--mizar-line-border) solid var(--mizar-border-default);
+}
+.library-detail-heading > :first-child,
+.library-detail-actions > :first-child {
+  margin-right: auto;
+}
+.library-detail-body,
+.library-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  align-content: start;
+  gap: var(--mizar-layout-padding);
+}
+.library-list {
+  gap: var(--mizar-layout-compact);
+}
+.library-list .mizar-button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: start;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.library-list [aria-pressed='true'] {
+  background: var(--mizar-bg-selected);
+  border-color: var(--mizar-accent-primary);
+}
+.library-list small {
+  color: var(--mizar-fg-secondary);
+}
+@media (max-width: 1100px) {
+  .library-workspace {
+    grid-template-columns: minmax(0, 1fr);
+    height: auto;
+  }
+}
+.library-source-status {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--mizar-layout-gap);
+  color: var(--mizar-fg-muted);
+  padding-block: var(--mizar-layout-gap);
+}
+.library-browser-actions {
+  padding-bottom: var(--mizar-layout-padding);
+  display: grid;
+  gap: var(--mizar-layout-compact);
+}

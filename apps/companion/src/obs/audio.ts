@@ -26,7 +26,7 @@ export async function checkObsAudio(obs: ObsRpc): Promise<ObsFinding[]> {
       {
         code: 'audio_missing',
         message:
-          '当前 OBS 场景集合没有游戏或麦克风音频来源。可点击“添加默认桌面音频与麦克风”，再检查混音器与直播音轨；使用自定义设备时请在 OBS 中添加音频来源。',
+          '当前 OBS 场景集合没有音频来源。停止输出后会自动添加默认桌面音频与麦克风；未完成时可重试自动配置，实际设备与音轨请在 OBS 中核对。',
       },
     ];
   const findings: ObsFinding[] = [];
@@ -80,7 +80,7 @@ export async function checkObsAudio(obs: ObsRpc): Promise<ObsFinding[]> {
   return findings;
 }
 
-/** Explicit operator action; never enables capture as a side effect of scene repair. */
+/** Adds managed defaults only when no unrelated audio sources could be duplicated. */
 export async function setupObsAudio(obs: ObsRpc, baseUrl: string): Promise<void> {
   const [stream, record, collection] = await Promise.all([
     obs.call('GetStreamStatus'),
@@ -132,4 +132,34 @@ export async function setupObsAudio(obs: ObsRpc, baseUrl: string): Promise<void>
       }
     }
   }
+}
+
+/** Automatic preparation preserves existing custom/global/game-capture audio. */
+export async function ensureObsAudio(obs: ObsRpc, baseUrl: string): Promise<ObsFinding[]> {
+  const inputs = (await obs.call('GetInputList')).inputs as Input[];
+  const customAudio = inputs.some(
+    (input) =>
+      AUDIO_KINDS.has(input.inputKind) &&
+      !MANAGED.some((managed) => managed.name === input.inputName),
+  );
+  let gameAudio = false;
+  for (const input of inputs.filter((item) => item.inputKind === 'game_capture')) {
+    const settings = (await obs.call('GetInputSettings', { inputName: input.inputName }))
+      .inputSettings as Record<string, unknown>;
+    if (settings.capture_audio === true) gameAudio = true;
+  }
+  if (customAudio || gameAudio) return checkObsAudio(obs);
+  if (
+    MANAGED.some((managed) =>
+      inputs.some((input) => input.inputName === managed.name && input.inputKind !== managed.kind),
+    )
+  )
+    return [
+      {
+        code: 'audio_source_conflict',
+        message: 'Mizar 默认音频来源名称已被其他类型占用，请在 OBS 重命名冲突来源后重试自动配置。',
+      },
+    ];
+  await setupObsAudio(obs, baseUrl);
+  return checkObsAudio(obs);
 }

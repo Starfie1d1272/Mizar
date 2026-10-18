@@ -1,0 +1,28 @@
+.session-context {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--mizar-layout-gap);
+  padding: var(--mizar-layout-gap) calc(var(--mizar-layout-padding) * 2);
+  border-bottom: var(--mizar-line-border) solid var(--mizar-border-default);
+  background: var(--mizar-bg-surface);
+  font-size: var(--mizar-type-size-small);
+  color: var(--mizar-fg-secondary);
+}
+.session-context > strong {
+  max-width: 35%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--mizar-fg-primary);
+  font-size: var(--mizar-type-size-body);
+}
+.session-context__outputs {
+  display: flex;
+  gap: var(--mizar-layout-padding);
+  margin-left: auto;
+}
+.session-context > [role='alert'] {
+  flex-basis: 100%;
+  color: var(--mizar-status-danger);
+}

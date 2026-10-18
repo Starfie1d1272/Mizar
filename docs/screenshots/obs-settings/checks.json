@@ -1,0 +1,8 @@
+{
+  "viewport": [
+    2560,
+    1440
+  ],
+  "errors": [],
+  "source": "Actual UI with mocked OBS and native IPC. All operator requests intercepted, no real launch/configuration/output changes."
+}

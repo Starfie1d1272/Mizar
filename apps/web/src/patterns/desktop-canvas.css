@@ -1,0 +1,32 @@
+.desktop-canvas {
+  width: 100%;
+  height: 100dvh;
+  overflow: hidden;
+  background: var(--mizar-bg-canvas);
+}
+.desktop-canvas__canvas {
+  overflow: hidden;
+  position: relative;
+}
+.desktop-canvas__canvas > .product-shell {
+  min-height: 0;
+  height: 100%;
+}
+.desktop-canvas__canvas .product-sidebar {
+  height: 100%;
+}
+.desktop-canvas__canvas .product-content {
+  overflow: auto;
+  min-height: 0;
+}
+.desktop-canvas__canvas > .mizar-tool-shell {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+.desktop-canvas__canvas #tool-content {
+  overflow: auto;
+  min-height: 0;
+}
+.desktop-canvas__canvas > .mizar-tool-shell[data-context='true'] {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}

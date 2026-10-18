@@ -15,7 +15,7 @@ import {
 
 import { HudPresetFiles } from './HudPresetFiles';
 import { HudWidgetInspector } from './HudWidgetInspector';
-import { activePresetId, resourceFor, resourceList } from './hud-console-drafts';
+import { activePresetId, resourceList } from './hud-console-drafts';
 import type { HudWorkspace } from './hud-console-state';
 
 const ANCHOR_LABELS: Record<(typeof HUD_ANCHORS)[number], string> = {
@@ -74,7 +74,6 @@ export interface HudConsoleWorkspaceProps {
   readonly onSubmitMutation: (kind: HudWorkspace, saveAs: boolean) => void;
   readonly onDiscard: (kind: HudWorkspace) => void;
   readonly onReset: (kind: HudWorkspace) => void;
-  readonly onActivate: () => void;
   readonly onImportPresetFile: (file: File) => void;
   readonly onExportPresetFile: () => void;
 }
@@ -85,10 +84,6 @@ function isBuiltin(id: string): boolean {
 
 function widgetLabel(id: HudWidgetId): string {
   return HUD_WIDGET_LABELS[id];
-}
-
-function resourceName(resource: HudPreset | HudLayout | HudTheme | undefined): string {
-  return resource?.name ?? '未找到资源';
 }
 
 export function HudConsoleWorkspaces({
@@ -129,14 +124,10 @@ export function HudConsoleWorkspaces({
   onSubmitMutation,
   onDiscard,
   onReset,
-  onActivate,
   onImportPresetFile,
   onExportPresetFile,
 }: HudConsoleWorkspaceProps) {
   const activePresetResourceId = activePresetId(configDocument);
-  const activePresetName = resourceName(
-    resourceFor(configDocument, 'preset', activePresetResourceId),
-  );
   const previewMatchesPresetReferences =
     selectedLayoutId === presetDraft.layoutId && selectedThemeId === presetDraft.themeId;
   const activationLabel = hasDirtyDraft
@@ -144,10 +135,10 @@ export function HudConsoleWorkspaces({
     : !previewMatchesPresetReferences
       ? '预览内容与此预设不一致'
       : selectedPresetId !== activePresetResourceId
-        ? '尚未启用'
+        ? '尚未应用'
         : activationStale
-          ? '有已保存但未启用的更改'
-          : '已启用';
+          ? '已保存，尚未应用'
+          : '已应用';
 
   function renderResourceActions(kind: HudWorkspace, dirty: boolean, id: string) {
     const invalid =
@@ -157,6 +148,7 @@ export function HudConsoleWorkspaces({
     return (
       <div className="hud-console__actions">
         <Button
+          variant={isBuiltin(id) ? 'secondary' : 'primary'}
           disabled={busy || !editorReady || isBuiltin(id) || invalid}
           onClick={() => onSubmitMutation(kind, false)}
           type="button"
@@ -164,6 +156,7 @@ export function HudConsoleWorkspaces({
           保存
         </Button>
         <Button
+          variant={isBuiltin(id) ? 'primary' : 'secondary'}
           disabled={busy || !editorReady || invalid}
           onClick={() => onSubmitMutation(kind, true)}
           type="button"
@@ -187,40 +180,7 @@ export function HudConsoleWorkspaces({
   if (workspace === 'preset') {
     return (
       <section className="hud-console__workspace" aria-label="HUD 预设编辑">
-        <div className="hud-console__workspace-heading">
-          <div>
-            <span className="hud-console__kicker">预设</span>
-            <h2>管理播出预设</h2>
-          </div>
-        </div>
-        <div className="hud-console__preset-status" aria-label="HUD 预设状态">
-          <div>
-            <span>当前启用</span>
-            <strong>{activePresetName}</strong>
-          </div>
-          <div>
-            <span>当前编辑</span>
-            <strong>{presetDraft.name.trim() || '未命名预设'}</strong>
-          </div>
-          <span
-            className={
-              activationLabel === '已启用'
-                ? 'hud-console__badge'
-                : 'hud-console__badge hud-console__badge--warning'
-            }
-          >
-            {activationLabel}
-          </span>
-        </div>
-        <HudPresetFiles
-          disabled={busy || !editorReady || hasDirtyDraft}
-          exportDisabled={!previewMatchesPresetReferences}
-          onImport={onImportPresetFile}
-          onExport={onExportPresetFile}
-        />
-        <p className="hud-console__hint">
-          先保存更改再分享或导入。导入会创建新副本，启用后才会上屏。
-        </p>
+        <span className="hud-console__badge">{activationLabel}</span>
         <label className="hud-console__field">
           预设
           <select
@@ -297,16 +257,17 @@ export function HudConsoleWorkspaces({
             }
           />
         )}
+        <details>
+          <summary>导入与导出预设</summary>
+          <HudPresetFiles
+            disabled={busy || !editorReady || hasDirtyDraft}
+            exportDisabled={!previewMatchesPresetReferences}
+            onImport={onImportPresetFile}
+            onExport={onExportPresetFile}
+          />
+          <p className="hud-console__hint">导入创建新副本；先保存，再分享或明确启用。</p>
+        </details>
         {renderResourceActions('preset', presetDirty, selectedPresetId)}
-        <Button
-          className="hud-console__primary-action"
-          disabled={busy || !editorReady || hasDirtyDraft || !previewMatchesPresetReferences}
-          onClick={onActivate}
-          type="button"
-        >
-          启用当前预设
-        </Button>
-        <p className="hud-console__hint">保存预设后，点击“启用当前预设”上屏。</p>
       </section>
     );
   }
@@ -322,50 +283,6 @@ export function HudConsoleWorkspaces({
           <span className="hud-console__workspace-state">
             {layoutDirty ? '有未保存更改' : `1920 × 1080 · ${HUD_GRID_SIZE}px 网格`}
           </span>
-        </div>
-        <label className="hud-console__field">
-          布局
-          <select
-            value={selectedLayoutId}
-            onChange={(event) => onSelectResource('layout', event.target.value)}
-          >
-            {resourceList(configDocument, 'layout').map((resource) => (
-              <option key={resource.id} value={resource.id}>
-                {resource.name}
-                {isBuiltin(resource.id) ? ' · 内置只读' : ''}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="hud-console__field">
-          名称
-          <input
-            aria-invalid={layoutNameError !== null}
-            disabled={!editorReady}
-            value={layoutDraft.name}
-            onChange={(event) => onLayoutDraftChange({ ...layoutDraft, name: event.target.value })}
-          />
-        </label>
-        {layoutNameError !== null ? (
-          <p className="hud-console__field-error" role="alert">
-            {layoutNameError}
-          </p>
-        ) : null}
-        <div className="hud-console__widget-list" aria-label="可编辑组件">
-          {HUD_WIDGET_REGISTRY.filter(
-            (widget) => widget.rendererAvailability === 'implemented',
-          ).map(({ id }) => (
-            <Button
-              aria-label={`选择${widgetLabel(id)}`}
-              className={selectedWidgetId === id ? 'is-selected' : undefined}
-              key={id}
-              onClick={() => onSelectWidget(id)}
-              type="button"
-            >
-              <span>{widgetLabel(id)}</span>
-              <small>{layoutDraft.widgets[id].visible ? '显示' : '隐藏'}</small>
-            </Button>
-          ))}
         </div>
         {selectedWidgetId === null || selectedPlacement === null || selectedBox === null ? (
           <div className="hud-console__inspector hud-console__inspector--empty">
@@ -461,6 +378,28 @@ export function HudConsoleWorkspaces({
             ) : null}
           </div>
         )}
+        <details
+          key={selectedWidgetId === null ? 'choose' : 'selected'}
+          open={selectedWidgetId === null}
+        >
+          <summary>{selectedWidgetId === null ? '组件列表' : '选择其他组件'}</summary>
+          <div className="hud-console__widget-list" aria-label="可编辑组件">
+            {HUD_WIDGET_REGISTRY.filter(
+              (widget) => widget.rendererAvailability === 'implemented',
+            ).map(({ id }) => (
+              <Button
+                aria-label={`选择${widgetLabel(id)}`}
+                className={selectedWidgetId === id ? 'is-selected' : undefined}
+                key={id}
+                onClick={() => onSelectWidget(id)}
+                type="button"
+              >
+                <span>{widgetLabel(id)}</span>
+                <small>{layoutDraft.widgets[id].visible ? '显示' : '隐藏'}</small>
+              </Button>
+            ))}
+          </div>
+        </details>
         <div className="hud-console__guide-controls">
           <label className="hud-console__check">
             <input
@@ -495,6 +434,45 @@ export function HudConsoleWorkspaces({
             吸附到网格
           </label>
         </div>
+        <details
+          key={layoutNameError ? 'invalid-name' : 'resource'}
+          open={layoutNameError !== null}
+        >
+          <summary>布局资源与名称</summary>
+          <label className="hud-console__field">
+            布局
+            <select
+              value={selectedLayoutId}
+              onChange={(event) => onSelectResource('layout', event.target.value)}
+            >
+              {resourceList(configDocument, 'layout').map((resource) => (
+                <option key={resource.id} value={resource.id}>
+                  {resource.name}
+                  {isBuiltin(resource.id) ? ' · 内置只读' : ''}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="hud-console__field">
+            名称
+            <input
+              aria-invalid={layoutNameError !== null}
+              disabled={!editorReady}
+              value={layoutDraft.name}
+              onChange={(event) =>
+                onLayoutDraftChange({ ...layoutDraft, name: event.target.value })
+              }
+            />
+          </label>
+          {layoutNameError !== null ? (
+            <p className="hud-console__field-error" role="alert">
+              {layoutNameError}
+            </p>
+          ) : null}
+        </details>
+        {isBuiltin(selectedLayoutId) ? (
+          <p className="hud-console__hint">内置布局，修改后请另存为副本。</p>
+        ) : null}
         {renderResourceActions('layout', layoutDirty, selectedLayoutId)}
       </section>
     );

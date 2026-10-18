@@ -232,7 +232,7 @@ test('normal UI exports retained operations and producer/renderer performance th
     expect(summary).not.toContain('fullLogs');
     expect(supportRequests).toBe(requestsBeforeCopy);
     const opening = page.waitForEvent('popup');
-    await page.getByRole('button', { name: '导出诊断包', exact: true }).click();
+    await page.getByRole('alert').getByRole('button', { name: '导出诊断包', exact: true }).click();
     const diagnostics = await opening;
     await expect(diagnostics.getByRole('heading', { name: '运行诊断', exact: true })).toBeVisible();
     const fullDownload = diagnostics.waitForEvent('download');

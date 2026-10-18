@@ -9,7 +9,8 @@
     "tool-hud",
     "tool-bp",
     "tool-diagnostics",
-    "tool-preview"
+    "tool-preview",
+    "tool-review"
   ],
   "remote": {
     "urls": ["http://127.0.0.1:3000/*"]

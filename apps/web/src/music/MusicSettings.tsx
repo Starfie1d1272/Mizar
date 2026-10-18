@@ -63,7 +63,9 @@ async function localFile(url: string, file: File, type: string) {
 }
 export function MusicSettings() {
   const current = useLocalRead<MusicView>('/local/v1/music', 2000);
+  const [selectedGroup, setSelectedGroup] = useState<MusicGroup>('waiting');
   const [draft, setConfig] = useState<MusicConfig | null>(null);
+  const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [messageAt, setMessageAt] = useState<MusicGroup | 'import' | 'save'>('import');
@@ -71,6 +73,8 @@ export function MusicSettings() {
   const config = draft ?? current?.config ?? null;
   const change = (group: MusicGroup, patch: Partial<MusicConfig['groups'][MusicGroup]>) => {
     controlEvidence('music_draft', 'change', { group, patch });
+    setDirty(true);
+    setMessage('');
     setConfig((c) => {
       const base = c ?? config;
       return base
@@ -82,9 +86,9 @@ export function MusicSettings() {
     run: () => Promise<void>,
     at: MusicGroup | 'import' | 'save' = 'import',
   ) => {
+    if (busy) return;
     setMessageAt(at);
     setFailed(false);
-    if (busy) return;
     setBusy(true);
     setMessage('');
     try {
@@ -98,12 +102,25 @@ export function MusicSettings() {
   };
   return (
     <>
-      <Panel>
-        <h2>播放与导入</h2>
-        <p>
-          由 OBS 播放本地音频。默认启用，未选曲时保持静音。游戏声音与麦克风继续使用 OBS 原混音。
-        </p>
-        <MusicControls />
+      <Panel className="music-settings-playback">
+        <div className="music-settings-playback-intro">
+          <h2>当前播放</h2>
+          <p>由 OBS 播放。这里的操作立即生效；调整播放音量也会保存到对应场景。</p>
+        </div>
+        <MusicControls
+          volumeDisabled={busy || dirty}
+          onVolumeChange={(group, volume) => {
+            setConfig((previous) =>
+              previous
+                ? {
+                    ...previous,
+                    groups: { ...previous.groups, [group]: { ...previous.groups[group], volume } },
+                  }
+                : null,
+            );
+          }}
+        />
+        {dirty ? <p>请先保存场景配置，再调整当前播放音量。</p> : null}
         {current?.storage && (!current.storage.ready || current.storage.failed) ? (
           <StatusBanner tone="danger">
             音乐存储未就绪，原配置未加载。请检查数据目录权限或状态文件后重新检查。
@@ -120,24 +137,28 @@ export function MusicSettings() {
             </Button>
           </StatusBanner>
         ) : null}
-        <Field
-          label="一键导入音乐包"
-          message="选择含 music.json 和相对路径音频的 ZIP（最大 128 MiB）。验证成功后替换七组配置。"
-          type="file"
-          accept=".zip"
-          disabled={busy}
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            e.target.value = '';
-            if (file)
-              void action(async () => {
-                const result = await localFile('/operator/music/import', file, 'application/zip');
-                setConfig(result.config);
-                setMessage('音乐包已导入并保存。');
-              });
-          }}
-        />
-        <p>只选择你有权直播或录制使用的音乐。文件仅保存在本机，不联网下载或分享。</p>
+        <details className="music-settings-import">
+          <summary>导入音乐包</summary>
+          <Field
+            label="一键导入音乐包"
+            message="选择含 music.json 和相对路径音频的 ZIP（最大 128 MiB）。验证成功后替换七组配置。"
+            type="file"
+            accept=".zip"
+            disabled={busy}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = '';
+              if (file)
+                void action(async () => {
+                  const result = await localFile('/operator/music/import', file, 'application/zip');
+                  setConfig(result.config);
+                  setDirty(false);
+                  setMessage('音乐包已导入并保存。');
+                });
+            }}
+          />
+          <p>只选择你有权直播或录制使用的音乐。文件仅保存在本机，不联网下载或分享。</p>
+        </details>
       </Panel>
       {message && messageAt === 'import' ? (
         <StatusBanner tone={failed ? 'danger' : 'info'}>{message}</StatusBanner>
@@ -146,27 +167,94 @@ export function MusicSettings() {
         <p role="status">等待本机音乐服务，请确认 Companion 已配置 OBS。</p>
       ) : (
         <>
-          <div className="settings-grid">
+          <div className="music-settings-save">
+            <span role="status">{dirty ? '有未保存修改' : '配置已保存'}</span>
+            <Button
+              variant="primary"
+              loading={busy}
+              disabled={busy || !dirty}
+              onClick={() =>
+                void action(async () => {
+                  await command('/operator/music', { action: 'configure', config });
+                  setDirty(false);
+                  setMessage('音乐配置已保存。');
+                }, 'save')
+              }
+            >
+              保存音乐配置
+            </Button>
+            {message && messageAt === 'save' ? (
+              <StatusBanner tone={failed ? 'danger' : 'info'}>{message}</StatusBanner>
+            ) : null}
+          </div>
+          <div className="music-settings-workspace">
+            <nav className="music-settings-groups" aria-label="音乐场景">
+              {MUSIC_GROUPS.map((group) => (
+                <Button
+                  key={group}
+                  aria-pressed={selectedGroup === group}
+                  onClick={() => setSelectedGroup(group)}
+                >
+                  {MUSIC_LABELS[group]}
+                  <span>
+                    {config.groups[group].tracks.length
+                      ? `${config.groups[group].tracks.length} 首`
+                      : '静音'}
+                  </span>
+                </Button>
+              ))}
+            </nav>
             {MUSIC_GROUPS.map((group) => {
               const spec = config.groups[group];
               const playlist = group === 'waiting' || group === 'technical';
               return (
-                <Panel className="settings-card" key={group}>
-                  <h3>{MUSIC_LABELS[group]}</h3>
-                  <Checkbox
-                    checked={spec.enabled}
-                    disabled={busy}
-                    onChange={(e) => change(group, { enabled: e.target.checked })}
-                    label="启用"
-                  />
+                <Panel className="settings-card" key={group} hidden={selectedGroup !== group}>
+                  <div className="music-settings-group-heading">
+                    <h3>{MUSIC_LABELS[group]}</h3>
+                    <Checkbox
+                      checked={spec.enabled}
+                      disabled={busy}
+                      onChange={(e) => change(group, { enabled: e.target.checked })}
+                      label="启用"
+                    />
+                  </div>
                   {group === 'waiting' ? <p>赛前、BP、热身与图间共用，不因画面切换重播。</p> : null}
-                  <p>
-                    {spec.tracks.length
-                      ? spec.tracks.map((t) => t.name).join('、')
-                      : '尚未选曲 · 静音'}
-                  </p>
+                  {spec.tracks.length ? (
+                    <ol
+                      className="music-settings-tracks"
+                      aria-label={MUSIC_LABELS[group] + '曲目列表'}
+                    >
+                      {spec.tracks.map((track, index) => (
+                        <li key={track.id + ':' + index}>
+                          <span className="music-settings-track-index">
+                            {String(index + 1).padStart(2, '0')}
+                          </span>
+                          <strong>{track.name}</strong>
+                          <Button
+                            disabled={busy}
+                            aria-label={'移除 ' + track.name}
+                            onClick={() =>
+                              change(group, { tracks: spec.tracks.filter((_, i) => i !== index) })
+                            }
+                          >
+                            移除
+                          </Button>
+                        </li>
+                      ))}
+                    </ol>
+                  ) : (
+                    <div className="music-settings-empty">
+                      <strong>尚未选曲 · 静音</strong>
+                      <p>选择本地音频后保存，系统按节目编排播放。未选曲时保持静音。</p>
+                    </div>
+                  )}
                   <Field
                     label={playlist ? '选择本地曲目' : '选择本地主题'}
+                    message={
+                      playlist
+                        ? '可多选；重新选择会替换本组列表。支持 MP3、WAV、OGG、FLAC、M4A，每首最大 32 MiB。'
+                        : '本场景使用一首主题；重新选择会替换原曲目。'
+                    }
                     type="file"
                     accept=".wav,.mp3,.ogg,.flac,.m4a"
                     multiple={playlist}
@@ -194,7 +282,8 @@ export function MusicSettings() {
                     <StatusBanner tone={failed ? 'danger' : 'info'}>{message}</StatusBanner>
                   ) : null}
                   <Field
-                    label="音量"
+                    label={`场景音量 · ${Math.round(spec.volume * 100)}%`}
+                    message="保存后生效；若本场景正在播放，也会更新当前音量。"
                     type="range"
                     min="0"
                     max="1"
@@ -274,24 +363,6 @@ export function MusicSettings() {
                 </Panel>
               );
             })}
-          </div>
-          <div className="preparation-actions">
-            <Button
-              variant="primary"
-              loading={busy}
-              disabled={busy}
-              onClick={() =>
-                void action(async () => {
-                  await command('/operator/music', { action: 'configure', config });
-                  setMessage('音乐配置已保存。');
-                }, 'save')
-              }
-            >
-              保存音乐配置
-            </Button>
-            {message && messageAt === 'save' ? (
-              <StatusBanner tone={failed ? 'danger' : 'info'}>{message}</StatusBanner>
-            ) : null}
           </div>
         </>
       )}

@@ -43,7 +43,7 @@ export function RosterCapture({
   if (autoCandidate && selectedCandidate === null) setSelectedCandidate(autoCandidate);
   const candidate = selectedCandidate ?? autoCandidate ?? null;
   const isShown = shown || Boolean(autoCandidate);
-  if (create && !candidate && !shown) return null;
+
   return (
     <Panel className="preparation-capture">
       <Button
@@ -59,7 +59,7 @@ export function RosterCapture({
       >
         {create ? '从当前服务器创建比赛' : '从当前服务器识别首发'}
       </Button>
-      {!result?.candidate && !create ? <p>等待当前服务器提供完整、可信的 5v5 名单。</p> : null}
+      {!result?.candidate ? <p>等待当前服务器提供完整、可信的 5v5 名单。</p> : null}
       {isShown && candidate ? (
         <>
           <div className="preparation-columns">
