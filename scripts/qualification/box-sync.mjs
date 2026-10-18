@@ -19,6 +19,7 @@ import { RESOURCE_ASSET_NAMES as resourceNames } from '../../packages/resource-p
 import { LIMITS } from '../../packages/resource-pack-contract/index.mjs';
 import { resourceAssetInventory } from '../ci/resource-release.mjs';
 import { apiRequest, multipartUpload } from './box-upload.mjs';
+import { curlMultipartUpload } from './box-curl-upload.mjs';
 
 const { fetch, AbortSignal, FormData } = globalThis;
 
@@ -1161,7 +1162,12 @@ async function main() {
     await appendFile(process.env.GITHUB_OUTPUT, `prerelease=${prerelease}\n`);
   if (prerelease) return '预发布版本：Box Stable、Downloads、Updates 与 Archive 保持原样。';
   const box =
-    mode === 'verify-downloads' ? undefined : new BoxClient(process.env.MIZAR_BOX_REPO_TOKEN);
+    mode === 'verify-downloads'
+      ? undefined
+      : new BoxClient(
+          process.env.MIZAR_BOX_REPO_TOKEN,
+          process.env.BOX_UPLOAD_TRANSPORT === 'curl' ? curlMultipartUpload : multipartUpload,
+        );
   if (mode === 'probe') return probe(box);
   const resolveIdentity = cacheReleaseIdentities(releaseIdentity);
   const identity = await resolveIdentity(tag);
