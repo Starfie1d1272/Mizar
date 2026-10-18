@@ -406,7 +406,8 @@ function DebugContent({
   const map = recordValue(runtime, 'map');
   const recorder = data.recorderHealth;
   const mapName = stringValue(map, 'name') ?? '未建立';
-  const statusTone = data.freshness === 'fresh' ? 'signal' : 'warning';
+  const statusTone =
+    data.freshness === 'fresh' ? 'signal' : data.freshness === 'stale' ? 'warning' : 'neutral';
   const deliveryFailed = data.deliveryHealth.some(
     (health) => (numberValue(health, 'failed') ?? 0) > 0,
   );
@@ -422,28 +423,6 @@ function DebugContent({
           value={freshnessLabel(data.freshness)}
         />
         <DebugMetric label="当前地图" note="播出数据来源" value={mapName} />
-        <DebugMetric
-          label="数据来源"
-          note="CS2 游戏状态集成"
-          value={data.raw.current === null ? '等待 GSI 输入' : 'GSI'}
-        />
-        <DebugMetric
-          label="采集记录"
-          note="详细信息见高级技术信息"
-          value={recorderStateLabel(stringValue(recorder, 'state'))}
-        />
-        <DebugMetric
-          label="状态投递"
-          tone={deliveryFailed ? 'warning' : 'neutral'}
-          note="详细投递记录见高级技术信息"
-          value={
-            deliveryFailed
-              ? '有投递失败记录'
-              : data.deliveryHealth.length === 0
-                ? '尚无消费者'
-                : '投递正常'
-          }
-        />
         <DebugMetric
           label="OBS 浏览器源"
           note={
@@ -461,25 +440,50 @@ function DebugContent({
                 : `已连接 ${hosts.active.obs} 个通道`
           }
         />
-        <DebugMetric
-          label="普通浏览器"
-          note="按本地实时通道连接数统计"
-          value={
-            hosts === null
-              ? '暂不可用'
-              : hosts.active.browser === 0
-                ? '未连接'
-                : `已连接 ${hosts.active.browser} 个通道`
-          }
-        />
-        <DebugMetric
-          label="未识别连接"
-          note="浏览器未提供可识别标识时会归入此项"
-          value={hosts === null ? '暂不可用' : `${hosts.active.unknown} 个通道`}
-        />
       </section>
       <details className="debug-advanced">
         <summary>高级技术信息</summary>
+        <section className="debug-metrics" aria-label="技术指标">
+          {' '}
+          <DebugMetric
+            label="数据来源"
+            note="CS2 游戏状态集成"
+            value={data.raw.current === null ? '等待 GSI 输入' : 'GSI'}
+          />
+          <DebugMetric
+            label="采集记录"
+            note="详细信息见高级技术信息"
+            value={recorderStateLabel(stringValue(recorder, 'state'))}
+          />
+          <DebugMetric
+            label="状态投递"
+            tone={deliveryFailed ? 'warning' : 'neutral'}
+            note="详细投递记录见高级技术信息"
+            value={
+              deliveryFailed
+                ? '有投递失败记录'
+                : data.deliveryHealth.length === 0
+                  ? '尚无消费者'
+                  : '投递正常'
+            }
+          />
+          <DebugMetric
+            label="普通浏览器"
+            note="按本地实时通道连接数统计"
+            value={
+              hosts === null
+                ? '暂不可用'
+                : hosts.active.browser === 0
+                  ? '未连接'
+                  : `已连接 ${hosts.active.browser} 个通道`
+            }
+          />
+          <DebugMetric
+            label="未识别连接"
+            note="浏览器未提供可识别标识时会归入此项"
+            value={hosts === null ? '暂不可用' : `${hosts.active.unknown} 个通道`}
+          />
+        </section>
         <section className="debug-evidence-grid" aria-label="当前证据">
           <DebugEvidencePanel
             eyebrow="01 / 接收入口"
