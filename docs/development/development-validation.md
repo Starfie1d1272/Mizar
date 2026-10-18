@@ -44,7 +44,7 @@ pnpm --filter @mizar/rivalhub... --fail-if-no-match run build
 pnpm --filter @mizar/companion... --fail-if-no-match run build
 ```
 
-首次执行的验证必须在独立工作树中冻结安装，每个入口前清空所有 `dist` 和 `.tsbuildinfo`，分别运行构建、类型、lint、unit、样例与验收准备，不能先全量构建再声称其它入口独立成功。
+新增或修改构建图、工具链或入口前置依赖，或任务明确要求验证干净环境下的入口独立性时，必须在独立工作树中冻结安装，每个入口前清空该工作树内所有 `dist` 和 `.tsbuildinfo`，分别运行构建、类型、lint、unit、样例与验收准备，不能先全量构建再声称其它入口独立成功。普通任务按改动面选择验证，无需重复这套入口独立性验证，也不清空当前工作树的产物。
 
 ## 验证层次
 
