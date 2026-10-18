@@ -1,3 +1,8 @@
+import { verifyIsolatedPack } from './orchestration/isolated-pack.js';
+import { CameraDirector } from './orchestration/director.js';
+import { OrchestrationStore } from './orchestration/store.js';
+import { MulnxProvider } from './orchestration/provider.js';
+import { registerOrchestrationRoutes } from './orchestration/routes.js';
 import { registerDiagnosticDelivery } from './support/delivery-routes.js';
 import { checkLocalWebOrigin } from './local-web/origin-policy.js';
 import { SessionJournal, diagnosticValue } from './support/session-journal.js';
@@ -168,6 +173,7 @@ export interface CompanionAppOptions {
   readonly hudConfigPath?: string;
   readonly hudConfigStore?: HudConfigStore;
   readonly obsConfigPath?: string;
+  readonly mulnxCamPacksRoot?: string;
   readonly readObsCaptureEvidence?: () => Promise<ObsNativeEvidence>;
   readonly qualificationRunId?: string;
   readonly qualificationScenarioPath?: string;
@@ -661,6 +667,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             ),
         );
   let musicDirector: MusicDirector | undefined;
+  let cameraDirector: CameraDirector | undefined;
   const sceneController = new ProgramSceneController(
     projectionCoordinator,
     bpSession,
@@ -670,8 +677,16 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           obsAdapter.switchScene(id, {
             ...options,
             onStarted: () => {
-              if (id === 'matchup' && options.valid?.() !== false)
-                musicDirector?.opening(`opening:${sceneController.get().preparing?.revision}`);
+              if (id === 'matchup' && options.valid?.() !== false) {
+                const sound = cameraDirector?.store.map(
+                  projectionCoordinator.getCurrent().program.map.name,
+                )?.openingSound;
+                musicDirector?.opening(
+                  `opening:${sceneController.get().preparing?.revision}`,
+                  sound ?? undefined,
+                );
+                cameraDirector?.opening();
+              }
             },
           }),
     obsAdapter === undefined ? undefined : (options) => obsAdapter.switchToWaitingForExit(options),
@@ -868,6 +883,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       matchContextController?.getActiveBinding() != null,
     scenes: sceneController,
     beforeEnter: () => demoTest?.openFormalBoundary(),
+    beforeFinish: () => cameraDirector?.finishProduction(),
     finishTrial: async () => {
       await demoTest?.finish();
     },
@@ -1037,11 +1053,55 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       }),
     );
     registerMusicRoutes(app, musicStore, musicDirector, localWebTransport.getOriginPolicy());
+    const cameraStore = new OrchestrationStore(
+      join(dirname(options.obsConfigPath), 'orchestration'),
+      (stage, evidence) => sessionJournal?.record(stage, evidence),
+    );
+    const cameraEvidence = (stage: string, evidence: unknown) =>
+      sessionJournal?.record(stage, evidence);
+    cameraDirector = new CameraDirector(
+      cameraStore,
+      new MulnxProvider(cameraEvidence),
+      () => ({
+        program: projectionCoordinator.getCurrent().program,
+        active: sceneController.get().active,
+        production:
+          production.get().mode !== 'preparation' &&
+          projectionCoordinator.getCurrent().operator.matchContext.origin !== 'fixture',
+        manual: director.get().mode === 'manual',
+      }),
+      cameraEvidence,
+      undefined,
+      undefined,
+      (pack) => verifyIsolatedPack(options.mulnxCamPacksRoot, pack),
+      options.productRuntime !== undefined,
+    );
+    app.addHook('onReady', async () => {
+      await cameraStore
+        .load()
+        .catch((error) =>
+          app.log.error(
+            { stage: 'camera_load', err: error, result: 'failure' },
+            '运镜预设加载失败',
+          ),
+        );
+    });
+    registerOrchestrationRoutes(
+      app,
+      cameraDirector,
+      musicStore,
+      localWebTransport.getOriginPolicy(),
+      {
+        controlToken: options.productRuntime?.controlToken,
+        configure: production.configureCameraSession,
+      },
+    );
   }
   sceneController.attachDirector(director);
   const directorTimer = setInterval(() => {
     void director.tick().catch(() => director.hold());
     void musicDirector?.tick();
+    cameraDirector?.tick();
   }, 100);
   directorTimer.unref();
   registerBpWorkspaceRoutes(app, {
@@ -1623,6 +1683,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     clearInterval(directorTimer);
     presentationUnsubscribe();
     objectiveReferenceUnsubscribe?.();
+    cameraDirector?.close();
     await musicDirector?.close();
     await obsAdapter?.close();
     await Promise.all([

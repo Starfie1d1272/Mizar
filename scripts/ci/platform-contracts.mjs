@@ -26,6 +26,7 @@ export function platformTestFiles(platform = process.platform) {
     'apps/companion/test/support-export.test.ts',
     'scripts/diagnostics/archive-snapshot.test.mjs',
     'apps/companion/test/obs-native-evidence.test.ts',
+    'apps/companion/test/orchestration-pack.test.ts',
     ...(platform === 'win32' ? ['scripts/qualification/gsi-discovery.test.mjs'] : []),
   ];
 }

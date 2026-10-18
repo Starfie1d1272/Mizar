@@ -13,6 +13,7 @@ export function registerProductionRoutes(
     scenes: ProgramSceneController;
     release: () => Promise<void>;
     beforeEnter?: () => void;
+    beforeFinish?: () => void;
     finishTrial?: () => Promise<void>;
   },
 ) {
@@ -55,6 +56,7 @@ export function registerProductionRoutes(
       } else if (body?.action === 'hide') {
         if (mode === 'live') mode = 'hidden';
       } else {
+        options.beforeFinish?.();
         if (trialPending) {
           stage = 'production_safe_scene';
           await options.finishTrial?.();
@@ -109,6 +111,20 @@ export function registerProductionRoutes(
   });
   return {
     get: view,
+    configureCameraSession: (expectedRevision: string, commit: () => void) => {
+      if (
+        expectedRevision !== revision ||
+        mode !== 'preparation' ||
+        busy ||
+        shuttingDown ||
+        updatePending ||
+        trialPending ||
+        options.scenes.get().preparing !== undefined
+      )
+        throw new Error('camera_production_changed');
+      // Synchronous commit shares this lifecycle owner; no separate preparation authority.
+      commit();
+    },
     isTrialPending: () => trialPending,
     reserveTrialOperation: (allowShutdownCleanup = false) => {
       if (!trialPending || busy || (shuttingDown && !allowShutdownCleanup) || updatePending)
