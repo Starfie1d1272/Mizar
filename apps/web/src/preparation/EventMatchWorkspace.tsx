@@ -126,7 +126,7 @@ export function EventMatchWorkspace({
             setEditingMatch(false);
           }}
         >
-          {event ? '在此赛事追加下一场' : '创建本地 BO 比赛'}
+          {event ? '在此赛事追加下一场' : '创建本地比赛'}
         </Button>
       </section>
       <section className="event-match-detail">
