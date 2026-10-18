@@ -122,3 +122,5 @@ Promotion 对同次已成功资格任务的产品和验收证据并行下载到�
 Release Host 的原有 `cargo test --profile release --locked` 在 exact-source build 成功后作为独立支路，与三个安装／便携验证支路并行；汇总签发必须等待 Host 测试及全部验证成功。该支路仅复用 release profile 缓存，由 Cargo 核对源码，不拿 CI profile 二进制替代 release 产品。独立的手动 [Release Host benchmark](../../.github/workflows/release-host-benchmark.yml) 运行相同 Windows release 测试命令，固定本次工作流源码，不构建签发候选、不发布、不保存分支缓存；新增 runner 排队及缓存传输必须纳入墙钟比较。
 
 固定旧版本的组装、Core 准备、解压与证明核验实验已退出日常 CI；其原始结果、来源和摘要保存在[历史实验归档](https://github.com/Starfie1d1272/Mizar/tree/archive/2026-10-17/evidence-index)。归档记录不能代替当前版本的资格验收，原固定候选过期后也不重建冒充原样本。
+
+Box Sync 手动恢复可选择 `transport=curl`，使用托管环境已有 curl 进行一次上传；自动同步保持 native。两种传输共用原文件回执、摘要回读和最后发布指针的顺序，均不自动重试有副作用的上传。临时上传地址通过标准输入交给 curl，不进入命令参数或日志；不跟随重定向，保留 HTTPS 校验与总时限。

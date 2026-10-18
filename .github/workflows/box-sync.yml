@@ -13,6 +13,11 @@ on:
         type: choice
         default: sync
         options: [sync, probe, verify-downloads, rollback-downloads]
+      transport:
+        description: 上传传输（手动恢复可选 curl）
+        type: choice
+        default: native
+        options: [native, curl]
 permissions:
   contents: read
   actions: read
@@ -37,6 +42,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           MIZAR_BOX_REPO_TOKEN: ${{ secrets.MIZAR_BOX_REPO_TOKEN }}
           RELEASE_TAG: ${{ inputs.tag }}
+          BOX_UPLOAD_TRANSPORT: ${{ inputs.transport || 'native' }}
           BOX_SYNC_MODE: ${{ inputs.mode || 'sync' }}
         run: node scripts/qualification/box-sync.mjs
       - name: Record complete qualification trigger through Box verification timing

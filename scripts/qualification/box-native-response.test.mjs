@@ -1,3 +1,5 @@
+import process from 'node:process';
+import { curlMultipartUpload } from './box-curl-upload.mjs';
 import { execFileSync } from 'node:child_process';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -49,7 +51,12 @@ beforeAll(async () => {
     const count = (counts.get(path) ?? 0) + 1;
     counts.set(path, count);
     req.resume();
-    if (path === '/disconnect' && (count === 1 || req.method === 'POST')) {
+    if (path === '/curl-redirect') {
+      res.writeHead(302, { Location: '/curl-success' });
+      res.end();
+    } else if (path === '/curl-success') {
+      res.end('[{"name":"test.bin"}]');
+    } else if (path === '/disconnect' && (count === 1 || req.method === 'POST')) {
       res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': '100' });
       res.write('{"repo_name":');
       globalThis.setTimeout(() => res.destroy(), 30);
@@ -108,6 +115,30 @@ function shortDeadline() {
 }
 
 describe('Box native HTTPS response boundaries', () => {
+  it('uses the alternate curl transport with verified TLS and without redirects or retries', async () => {
+    const previous = process.env.CURL_CA_BUNDLE;
+    process.env.CURL_CA_BUNDLE = join(certificateDirectory, 'cert.pem');
+    try {
+      const upload = (path) => {
+        const body = new globalThis.FormData();
+        body.set('file', new globalThis.Blob([Buffer.alloc(1024 * 1024 + 1)]), 'test.bin');
+        return curlMultipartUpload(new URL(path, localOrigin), {
+          body,
+          signal: AbortSignal.timeout(5000),
+        });
+      };
+      const response = await upload('/curl-success');
+      expect(await response.json()).toEqual([{ name: 'test.bin' }]);
+      expect((await upload('/curl-redirect')).status).toBe(302);
+      expect(counts.get('/curl-success')).toBe(1);
+      await expect(upload('/large')).rejects.toThrow();
+      expect(counts.get('/large')).toBe(1);
+    } finally {
+      if (previous === undefined) delete process.env.CURL_CA_BUNDLE;
+      else process.env.CURL_CA_BUNDLE = previous;
+    }
+  });
+
   it('retries a real successful-body disconnect with its native transient code', async () => {
     await expect(client('/disconnect').api('repo-info')).resolves.toEqual({ repo_name: 'Mizar' });
     expect(counts.get('/disconnect')).toBe(2);
