@@ -1,5 +1,7 @@
 # PR #413：rebase main 后的 2K 页面复核
 
+比赛库随后已统一为共用组件；相关页面请改看[最新本地／RivalHub 对照](../shared-match-library/README.md)。本组保留统一前的拍摄状态。
+
 本组为 **2560×1440、16:9、完整视口** Chromium 截图，拍摄于 2026-10-19（北京时间）。源码为 `51498aa771131007038f4149fbc52c37b4f1b063`，基于最新 main `88c7a18af1abd0459f3918e1110b65b1a4267334`。同组补图保留原尺寸；长设置页通过滚动补拍，没有拼接成长图。
 
 [逐图浏览](index.html) · [来源、尺寸与 SHA-256](provenance.json) · [PR #413](https://github.com/Starfie1d1272/Mizar/pull/413)

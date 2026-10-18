@@ -1,0 +1,69 @@
+{
+  "sourceCommit": "9b19497349d5b3d7aa5f7f03e03421a77aff8628",
+  "capturedAt": "2026-10-18T17:04:38.602979+00:00",
+  "viewport": {
+    "width": 2560,
+    "height": 1440,
+    "deviceScaleFactor": 1
+  },
+  "fullPage": false,
+  "reducedMotion": "reduce",
+  "source": "真实 Chromium 组件与 Companion 本地创建／编辑接口；两场比赛属同一赛事。网站授权、赛程缓存、刷新失败与载入响应为验收边界模拟，刻意复用相同比赛文档以独立比较展示。没有连接真实网站、CS2 或 OBS。",
+  "recipe": "MIZAR_LIBRARY_SCREENSHOTS=docs/screenshots/shared-match-library pnpm exec playwright test --config=playwright.acceptance.config.ts tests/acceptance/local-tournament.spec.ts",
+  "entries": [
+    {
+      "file": "01-local.png",
+      "label": "本地比赛：候选详情",
+      "size": [
+        2560,
+        1440
+      ],
+      "sha256": "f13fa5e2e921f714983936d95cac02ba2fdf315b87f1f4ebb0f2b7adf872d5b4"
+    },
+    {
+      "file": "02-website.png",
+      "label": "RivalHub：同一比赛详情",
+      "size": [
+        2560,
+        1440
+      ],
+      "sha256": "83c14ccf9fe503e33a40225147cf1fb19cdf58262865df24799888e864b002df"
+    },
+    {
+      "file": "03-website-browse.png",
+      "label": "RivalHub：浏览下一场，未载入",
+      "size": [
+        2560,
+        1440
+      ],
+      "sha256": "5a400d84bdd5143d82775862e1c0583780f5107c4b67c7c646df349c9e3eafa8"
+    },
+    {
+      "file": "04-website-cache-missing.png",
+      "label": "RivalHub：完整缓存缺失与刷新失败",
+      "size": [
+        2560,
+        1440
+      ],
+      "sha256": "a5188c0b539b19f0c979dfc2a9e267f78be53dc5f62511e03c0c9ebe312c0dfd"
+    },
+    {
+      "file": "05-local-edit.png",
+      "label": "本地候选：切换来源后草稿仍保留",
+      "size": [
+        2560,
+        1440
+      ],
+      "sha256": "2c2dc2a5c77ec945c0d9cb5a5254140a79613bdbaedeebcae1699d69d5c0fbe3"
+    },
+    {
+      "file": "06-local-create.png",
+      "label": "本地比赛：在当前赛事追加下一场",
+      "size": [
+        2560,
+        1440
+      ],
+      "sha256": "edf65ee835bcbc6e8bf799f66f926f811619ada57ad0f2f317b9beb3d52081d3"
+    }
+  ]
+}
