@@ -1,3 +1,4 @@
+import { diagnosticValue } from '../support/session-journal.js';
 import type { FastifyInstance } from 'fastify';
 import { DEFAULT_LOCAL_BP_MAP_POOL, LOCAL_BP_MAP_CATALOG } from '@mizar/core/projection';
 import { bpWorkspaceSchema, localBpDraftSchema } from '@mizar/protocol/bp';
@@ -131,6 +132,11 @@ export function registerBpWorkspaceRoutes(
         message: '比赛上下文已更新，请核对后再保存。',
       });
     const activeBinding = options.controller.getActiveBinding();
+    if (activeBinding && localAuthoringMode(activeBinding) !== 'standalone')
+      return reply.code(409).send({
+        error: 'bp_website_readonly',
+        message: '网站比赛的 BP 请在网站修改，Mizar 会自动同步。',
+      });
     const eventRules =
       activeBinding === undefined
         ? undefined
@@ -168,7 +174,11 @@ export function registerBpWorkspaceRoutes(
         else await options.localTournamentStore.saveMatch(document);
         options.controller.activateLocalDocument(document);
         return { ok: true, message: '本地 BP 已保存。' };
-      } catch {
+      } catch (error) {
+        request.log.warn(
+          { stage: 'control_failure', error: diagnosticValue(error) },
+          'Product control failed',
+        );
         return reply.code(400).send({ error: 'bp_save_failed', message: '本地 BP 保存失败。' });
       }
     }

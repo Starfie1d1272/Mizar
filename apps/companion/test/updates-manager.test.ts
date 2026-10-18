@@ -172,3 +172,23 @@ describe('controlled update lifecycle', () => {
     expect(manager.status().phase).toBe('available');
   });
 });
+
+it('logs the original long update cause chain while keeping public failure details bounded', async () => {
+  const diagnostics: unknown[] = [];
+  const { manager } = await setup({
+    log: (_stage, _code, _version, diagnostic) => diagnostics.push(diagnostic),
+  });
+  let error: Error = Object.assign(new Error('disk path=resources/setup.exe denied'), {
+    code: 'EACCES',
+  });
+  for (let depth = 0; depth < 10; depth++)
+    error = new Error(`stage-${depth} ${'technical detail '.repeat(400)}`, { cause: error });
+  manager.failure('download', error);
+  const log = JSON.stringify(diagnostics);
+  expect(log).toContain('resources/setup.exe');
+  expect(log).toContain('EACCES');
+  expect(Buffer.byteLength(log)).toBeGreaterThan(32 * 1024);
+  expect(Buffer.byteLength(JSON.stringify(manager.status().failureDetails))).toBeLessThan(
+    32 * 1024,
+  );
+});

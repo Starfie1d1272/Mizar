@@ -1,0 +1,9 @@
+{
+  "viewport": [
+    2560,
+    1440
+  ],
+  "source": "Actual application during browser acceptance; OBS HTTP state and mutations simulated. No real microphone, OBS scene or streaming output was changed.",
+  "workflow": "Fill WebSocket credentials, click save-and-test once, observe preparation and completion; output-active state defers automatic setup, and stopping resumes it.",
+  "backend": "13 tests across OBS reconcile/routes/outputs passed, including creation, audio idempotence, output rejection, custom audio preservation, audio name conflict and game audio preservation."
+}

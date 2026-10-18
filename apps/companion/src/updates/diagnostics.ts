@@ -1,5 +1,25 @@
 import { BOX_READ_TOKEN } from './contract.js';
 
+/** Fixed transport codes only; never treat arbitrary exception fields as diagnostics. */
+export function diagnosticNetworkCode(value: unknown): string | undefined {
+  return typeof value === 'string' &&
+    [
+      'ECONNREFUSED',
+      'ECONNRESET',
+      'ENOTFOUND',
+      'EHOSTUNREACH',
+      'ENETUNREACH',
+      'ETIMEDOUT',
+      'EPIPE',
+      'UND_ERR_CONNECT_TIMEOUT',
+      'UND_ERR_HEADERS_TIMEOUT',
+      'UND_ERR_BODY_TIMEOUT',
+      'UND_ERR_SOCKET',
+    ].includes(value)
+    ? value
+    : undefined;
+}
+
 export function redactDiagnosticText(value: string): string {
   const clean = value
     .replaceAll(BOX_READ_TOKEN, '[redacted]')
@@ -69,6 +89,7 @@ export function errorEvidence(error: unknown): unknown {
     seen.add(value);
     const fields = value as Error & {
       code?: unknown;
+      rootCauseCode?: unknown;
       status?: unknown;
       statusCode?: unknown;
       source?: unknown;
@@ -82,6 +103,9 @@ export function errorEvidence(error: unknown): unknown {
     // Keep the wrapper's stack and safe issue metadata instead of copying this header.
     const stack = !schemaError && typeof fields.stack === 'string' ? fields.stack : undefined;
     return {
+      ...(diagnosticNetworkCode(fields.rootCauseCode)
+        ? { rootCauseCode: diagnosticNetworkCode(fields.rootCauseCode) }
+        : {}),
       name: redactDiagnosticText(typeof original.name === 'string' ? original.name : 'Error'),
       message: redactDiagnosticText(
         schemaError

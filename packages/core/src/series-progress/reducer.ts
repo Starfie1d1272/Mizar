@@ -436,7 +436,10 @@ function addRound(
 
   const proofIsValid = validSideProof(sideProof, event.sourceGeneration, event.mapEpoch);
   const winnerEntryId =
-    proofIsValid && sideProof !== null && event.winnerSide !== 'unknown'
+    proofIsValid &&
+    sideProof !== null &&
+    sideProof.displayOnly !== true &&
+    event.winnerSide !== 'unknown'
       ? entrantForSide(sideProof, event.winnerSide) === 'a'
         ? progress.entrants.a.entryId
         : entrantForSide(sideProof, event.winnerSide) === 'b'
@@ -538,6 +541,23 @@ function endMap(
         'side_mapping_unproven',
         'error',
         'map_ended 时没有同一 mapEpoch/source generation 的 canonical side proof。',
+        map.mapOrder,
+        event.mapEpoch,
+      ),
+    );
+  }
+  if (sideProof.displayOnly === true) {
+    const maps = progress.maps.map((candidate) =>
+      candidate.mapOrder === map.mapOrder
+        ? { ...candidate, status: 'completed' as const, finalScore: null, winnerEntryId: null }
+        : candidate,
+    );
+    return addIssue(
+      recomputeScore(progress, maps),
+      issue(
+        'result_pending_review',
+        'warning',
+        '已观察本图结束，人员差异仍待核对；只接续展示，正式比分与胜者尚未确认。',
         map.mapOrder,
         event.mapEpoch,
       ),
@@ -936,6 +956,76 @@ export function refreshSeriesProgressMetadata(
       },
     },
   };
+}
+
+/** Adopt explicit upstream completion only into unknown results of the same frozen plan. */
+export function reconcileSeriesProgressResults(
+  progress: SeriesProgress,
+  context: MatchContext,
+): SeriesProgress {
+  if (!isSeriesProgressCheckpointCompatible(makeSeriesProgressCheckpoint(progress), context))
+    return progress;
+  let next = progress;
+  for (const slot of progress.maps.slice().sort((a, b) => a.mapOrder - b.mapOrder)) {
+    const map = next.maps.find((candidate) => candidate.mapOrder === slot.mapOrder)!;
+    const upstream = context.maps.find((candidate) => candidate.mapId === map.mapId);
+    if (upstream?.completedAt == null) continue;
+    const score = finalScoreFromContext(upstream);
+    if (score === null || score.a === score.b) continue;
+    const knownWins = (entryId: string) =>
+      map.roundHistory.rounds.filter((round) => round.winnerEntryId === entryId).length;
+    const conflict =
+      knownWins(next.entrants.a.entryId) > score.a ||
+      knownWins(next.entrants.b.entryId) > score.b ||
+      map.status === 'not_played' ||
+      (map.finalScore !== null && (map.finalScore.a !== score.a || map.finalScore.b !== score.b));
+    if (conflict) {
+      next = addIssue(
+        next,
+        issue(
+          'context_result_conflict',
+          'warning',
+          `网站第 ${map.mapOrder} 图已确认结果与本地冻结事实冲突，保留本地记录，请核对网站赛果。`,
+          map.mapOrder,
+          map.executionMapEpoch,
+        ),
+      );
+      continue;
+    }
+    // A newer agreeing website result resolves only this result conflict.
+    const issues = next.issues.filter(
+      (item) => item.code !== 'context_result_conflict' || item.mapOrder !== map.mapOrder,
+    );
+    if (issues.length !== next.issues.length) next = { ...next, issues };
+    if (map.finalScore !== null) continue;
+    // Never fill a later result across an unresolved earlier slot.
+    if (
+      next.maps.some(
+        (previous) => previous.mapOrder < map.mapOrder && previous.status !== 'completed',
+      ) ||
+      next.issues.some(
+        (item) =>
+          item.code === 'context_result_conflict' &&
+          item.mapOrder !== null &&
+          item.mapOrder < map.mapOrder,
+      )
+    )
+      continue;
+    next = recomputeScore(
+      next,
+      next.maps.map((candidate) =>
+        candidate.mapOrder === map.mapOrder
+          ? {
+              ...candidate,
+              status: 'completed' as const,
+              finalScore: score,
+              winnerEntryId: winnerForScore(score, next.entrants),
+            }
+          : candidate,
+      ),
+    );
+  }
+  return next;
 }
 
 export function syncSeriesProgress(

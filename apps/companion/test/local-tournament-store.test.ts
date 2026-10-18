@@ -110,3 +110,41 @@ it('atomically recycles selected matches, preserves shared assets and restores f
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+it('creates and binds a named event with only names and format, preserving an explicitly selected event', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-local-event-name-'));
+  try {
+    const store = new LocalTournamentStore(join(directory, 'store.json'));
+    const first = await store.createMatch({
+      teamA: 'A',
+      teamB: 'B',
+      format: 'bo3',
+      mapPool: DEFAULT_LOCAL_BP_MAP_POOL,
+      eventName: '  秋季校园联赛  ',
+    });
+    expect(first.competition?.name).toBe('秋季校园联赛');
+    expect(store.getSnapshot().events[0]?.matchIds).toContain(first.matchId);
+    const second = await store.createMatch({
+      teamA: 'C',
+      teamB: 'D',
+      format: 'bo1',
+      mapPool: DEFAULT_LOCAL_BP_MAP_POOL,
+      eventId: first.competition!.competitionId,
+      eventName: '不得改名',
+    });
+    expect(second.competition?.name).toBe('秋季校园联赛');
+    expect(store.getSnapshot().events).toHaveLength(1);
+    await expect(
+      store.createMatch({
+        teamA: 'A',
+        teamB: 'B',
+        format: 'bo3',
+        mapPool: DEFAULT_LOCAL_BP_MAP_POOL,
+        eventName: 'x'.repeat(129),
+      }),
+    ).rejects.toThrow();
+    expect(store.getSnapshot().matches).toHaveLength(2);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

@@ -1,7 +1,6 @@
 import { useLocalRead } from './preparation/client';
 import type { OverlayPolicy } from './preparation/desktop-overlay';
 import { ToolShell } from './patterns';
-import { ProgramPreviewTool } from './preparation/ProgramPreview';
 import { PreparationPage } from './preparation/PreparationPage';
 import { BpPage } from './bp/BpPage';
 import { OperatorShell } from './operator/OperatorShell';
@@ -25,7 +24,12 @@ import { ProgramPage } from './program/ProgramPage';
 import { getHudEditorFixture, HUD_EDITOR_DEFAULT_FIXTURE_ID } from './program/fixtures/index.js';
 import { ProgramScenePage } from './program/ProgramScenePage';
 import { programSceneForPath } from '@mizar/protocol/program-scenes';
-import { WorkspaceDock, WorkspaceLeft, WorkspacePreview } from './workspace/WorkspacePage';
+import {
+  WorkspaceDock,
+  WorkspaceLeft,
+  WorkspacePreview,
+  WorkspaceReview,
+} from './workspace/WorkspacePage';
 import { useProgramScenes } from './workspace/client';
 import { HudConsolePage } from './operator/HudConsolePage';
 import { useHudConfigClient } from './realtime/hud-config-client';
@@ -65,7 +69,7 @@ export const surfaceDefinitions = [
   },
   {
     id: 'bp',
-    path: '/preview?scene=bp',
+    path: '/matches#match-bp',
     title: 'BP 制作',
     description: '本地 BP 编写、比赛上下文和 Veto 播出控制。',
     realtimeChannel: null,
@@ -401,7 +405,8 @@ function DebugContent({
   const map = recordValue(runtime, 'map');
   const recorder = data.recorderHealth;
   const mapName = stringValue(map, 'name') ?? '未建立';
-  const statusTone = data.freshness === 'fresh' ? 'signal' : 'warning';
+  const statusTone =
+    data.freshness === 'fresh' ? 'signal' : data.freshness === 'stale' ? 'warning' : 'neutral';
   const deliveryFailed = data.deliveryHealth.some(
     (health) => (numberValue(health, 'failed') ?? 0) > 0,
   );
@@ -417,28 +422,6 @@ function DebugContent({
           value={freshnessLabel(data.freshness)}
         />
         <DebugMetric label="当前地图" note="播出数据来源" value={mapName} />
-        <DebugMetric
-          label="数据来源"
-          note="CS2 游戏状态集成"
-          value={data.raw.current === null ? '等待 GSI 输入' : 'GSI'}
-        />
-        <DebugMetric
-          label="采集记录"
-          note="详细信息见高级技术信息"
-          value={recorderStateLabel(stringValue(recorder, 'state'))}
-        />
-        <DebugMetric
-          label="状态投递"
-          tone={deliveryFailed ? 'warning' : 'neutral'}
-          note="详细投递记录见高级技术信息"
-          value={
-            deliveryFailed
-              ? '有投递失败记录'
-              : data.deliveryHealth.length === 0
-                ? '尚无消费者'
-                : '投递正常'
-          }
-        />
         <DebugMetric
           label="OBS 浏览器源"
           note={
@@ -456,25 +439,50 @@ function DebugContent({
                 : `已连接 ${hosts.active.obs} 个通道`
           }
         />
-        <DebugMetric
-          label="普通浏览器"
-          note="按本地实时通道连接数统计"
-          value={
-            hosts === null
-              ? '暂不可用'
-              : hosts.active.browser === 0
-                ? '未连接'
-                : `已连接 ${hosts.active.browser} 个通道`
-          }
-        />
-        <DebugMetric
-          label="未识别连接"
-          note="浏览器未提供可识别标识时会归入此项"
-          value={hosts === null ? '暂不可用' : `${hosts.active.unknown} 个通道`}
-        />
       </section>
       <details className="debug-advanced">
         <summary>高级技术信息</summary>
+        <section className="debug-metrics" aria-label="技术指标">
+          {' '}
+          <DebugMetric
+            label="数据来源"
+            note="CS2 游戏状态集成"
+            value={data.raw.current === null ? '等待 GSI 输入' : 'GSI'}
+          />
+          <DebugMetric
+            label="采集记录"
+            note="详细信息见高级技术信息"
+            value={recorderStateLabel(stringValue(recorder, 'state'))}
+          />
+          <DebugMetric
+            label="状态投递"
+            tone={deliveryFailed ? 'warning' : 'neutral'}
+            note="详细投递记录见高级技术信息"
+            value={
+              deliveryFailed
+                ? '有投递失败记录'
+                : data.deliveryHealth.length === 0
+                  ? '尚无消费者'
+                  : '投递正常'
+            }
+          />
+          <DebugMetric
+            label="普通浏览器"
+            note="按本地实时通道连接数统计"
+            value={
+              hosts === null
+                ? '暂不可用'
+                : hosts.active.browser === 0
+                  ? '未连接'
+                  : `已连接 ${hosts.active.browser} 个通道`
+            }
+          />
+          <DebugMetric
+            label="未识别连接"
+            note="浏览器未提供可识别标识时会归入此项"
+            value={hosts === null ? '暂不可用' : `${hosts.active.unknown} 个通道`}
+          />
+        </section>
         <section className="debug-evidence-grid" aria-label="当前证据">
           <DebugEvidencePanel
             eyebrow="01 / 接收入口"
@@ -607,7 +615,7 @@ export function DebugPage() {
 
 export function App() {
   const pathname = window.location.pathname;
-  if (['/', '/operator', '/matches', '/picture', '/settings'].includes(pathname))
+  if (['/', '/operator', '/matches', '/resources', '/picture', '/settings'].includes(pathname))
     return <PreparationPage />;
   if (pathname === '/qualification')
     return (
@@ -648,9 +656,9 @@ export function App() {
     );
   }
 
-  if (pathname === '/preview') return <ProgramPreviewTool />;
   if (pathname === '/program/bp') return <BpPage />;
   if (pathname === '/workspace') return <WorkspacePreview />;
+  if (pathname === '/workspace/review') return <WorkspaceReview />;
   if (pathname === '/workspace/left') return <WorkspaceLeft />;
   if (pathname === '/workspace/dock') return <WorkspaceDock />;
   const programScene = programSceneForPath(pathname);
@@ -661,7 +669,7 @@ export function App() {
     return <ProgramScenePage sceneId="gameplay" />;
   if (programScene && programScene.id !== 'gameplay' && programScene.id !== 'bp')
     return <ProgramScenePage sceneId={programScene.id} />;
-  if (pathname === '/operator/bp') return <LegacyBpPreviewRedirect />;
+  if (pathname === '/operator/bp') return <LegacyBpRedirect />;
   const surface = surfaceForPath(pathname);
   if (surface === undefined)
     return (
@@ -683,11 +691,9 @@ export function App() {
   return <SurfacePage surface={surface} />;
 }
 
-function LegacyBpPreviewRedirect() {
+function LegacyBpRedirect() {
   useEffect(() => {
-    const query = new URLSearchParams(window.location.search);
-    query.set('scene', 'bp');
-    window.location.replace(`/preview?${query}`);
+    window.location.replace('/matches#match-bp');
   }, []);
-  return null;
+  return <p>正在打开比赛资料…</p>;
 }

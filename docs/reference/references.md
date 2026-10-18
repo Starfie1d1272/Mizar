@@ -12,6 +12,7 @@ Mizar 借鉴开源社区的 HUD、雷达和制播经验。以下列出设计与�
 | [Lexogrine HUD Manager](https://github.com/lexogrine/hud-manager)、[CS2 React HUD](https://github.com/lexogrine/cs2-react-hud) | HUD 管理与组件组织 | 分别核对管理器与开源 HUD 许可，通过适配器衔接外部契约 |
 | [JTs-Hud](https://github.com/JohnTimmermann/JTs-Hud)、[M3MONs/CS2-HUD](https://github.com/M3MONs/CS2-HUD) | 安装、画布、雷达与预览 | 复用既有比赛信息与本地服务 |
 | [SHUD](https://github.com/fyflo/SHUD)、[MulNX](https://github.com/Co1Swet/MulNX_CS2) | 制作外壳与高级摄像机 | 基础能力使用公开观战数据，增强能力按接入条件评估 |
+| [OBS WebSocket](https://github.com/obsproject/obs-websocket/blob/master/docs/generated/protocol.md) / [obs-websocket-js](https://github.com/obs-websocket-community-projects/obs-websocket-js) | 自有媒体源、UUID、媒体状态与显式播放动作 | 复用既有客户端依赖，实际声音与音轨单独验收；不复制第三方音乐 |
 | [Excel2OBS](https://github.com/loseisbest/Excel2OBS) | BP 图卡展示 | BP 资料由统一比赛文档提供 |
 | [MatchZy](https://github.com/shobhit-pathak/MatchZy) / [CounterStrikeSharp](https://github.com/roflmuffin/CounterStrikeSharp) | 服务器事件 | 服务器事件可作为基础 GSI 的补充 |
 | [CS2 Insight Agent](https://github.com/DrEAmSs59/CS2-insight-agent) | 启动前持久备份、异常恢复、读回核验与设置入口 | 针对在线观战独立实现有限配置备份与恢复 |

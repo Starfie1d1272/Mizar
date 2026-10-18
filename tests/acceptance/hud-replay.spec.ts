@@ -31,6 +31,7 @@ async function selectReplayEvent(
   sequenceRegion: Locator,
   event: ReplayEventFixture,
 ): Promise<void> {
+  await page.getByText('回放事件与序列', { exact: true }).click();
   await page.getByLabel('语义事件', { exact: true }).selectOption(event.id);
   await expect(sequenceRegion).toHaveAttribute('data-replay-cursor', String(event.sequence), {
     timeout: REPLAY_SEEK_TIMEOUT,

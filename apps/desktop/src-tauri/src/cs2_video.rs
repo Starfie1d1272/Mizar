@@ -285,6 +285,49 @@ pub fn restore(
     Ok(output)
 }
 
+/// Explicit backup import owns only recognized video settings. Preserve every
+/// unrelated token, including comments; resolve duplicate owned keys from the
+/// selected, unambiguous backup rather than choosing a current duplicate.
+pub fn compatible_restore(backup: &str, current: &str) -> Result<String, String> {
+    let (before, _) = fields(backup)?;
+    let known = quality_preset(Quality::VeryHigh);
+    let desired: BTreeMap<_, _> = before.iter().filter(|(key, _)| known.contains_key(*key))
+        .map(|(key, value)| (key.clone(), value.value.clone())).collect();
+    for key in ["setting.defaultres", "setting.defaultresheight", "setting.fullscreen"] {
+        if !desired.contains_key(key) { return Err("备份缺少必要画面设置，请选择完整的视频配置备份。".into()); }
+    }
+    for (key, value) in &desired {
+        let number: i32 = value.parse().map_err(|_| "备份中的画面设置不是有效数值。")?;
+        if number < -1 || number > 32768 || (key.starts_with("setting.defaultres") && number <= 0) {
+            return Err("备份中的画面设置超出有效范围。".into());
+        }
+    }
+    let ts = tokens(current)?;
+    if ts.len() < 3 || ts[0].value != "video.cfg" || !ts[0].quoted || ts[1].quoted || ts[1].value != "{"
+        || ts.last().unwrap().quoted || ts.last().unwrap().value != "}" || (ts.len()-3)%2 != 0 {
+        return Err("当前视频配置结构无法识别，请保留原件后检查。".into());
+    }
+    let mut edits = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for pair in ts[2..ts.len()-1].chunks_exact(2) {
+        let (key, value) = (&pair[0], &pair[1]);
+        if !key.quoted || !value.quoted { return Err("当前视频配置包含嵌套结构，请先检查原件。".into()); }
+        if let Some(replacement) = desired.get(&key.value) {
+            if seen.insert(key.value.clone()) { edits.push((value.start, value.end, format!("\"{replacement}\""))); }
+            else { edits.push((key.start, value.end, String::new())); }
+        }
+    }
+    let newline = if current.contains("\r\n") { "\r\n" } else { "\n" };
+    let mut added = String::new();
+    for (key, value) in desired { if !seen.contains(&key) { added.push_str(&format!("\t\"{key}\"\t\"{value}\"{newline}")); } }
+    let close = ts.last().unwrap().start;
+    edits.push((close, close, added));
+    edits.sort_by_key(|edit| std::cmp::Reverse(edit.0));
+    let mut output = current.to_string();
+    for (start, end, value) in edits { output.replace_range(start..end, &value); }
+    Ok(output)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

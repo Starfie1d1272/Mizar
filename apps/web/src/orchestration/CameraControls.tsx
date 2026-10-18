@@ -1,0 +1,114 @@
+import { useState } from 'react';
+import type { OrchestrationView } from '@mizar/protocol/orchestration';
+import { Button, StatusPill } from '../ui';
+import { command, useLocalRead } from '../preparation/client';
+
+export function CameraControls({
+  setup = false,
+  workspace = false,
+}: {
+  setup?: boolean;
+  workspace?: boolean;
+}) {
+  const view = useLocalRead<OrchestrationView>('/local/v1/orchestration', 1000);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  if (!view || (!setup && !workspace && !view.preset.maps.length))
+    return workspace ? (
+      <p className="workspace-camera-empty">运镜状态暂不可用，请检查本地服务。</p>
+    ) : null;
+  const s = view.status;
+  const send = async (action: string) => {
+    setBusy(true);
+    setError('');
+    try {
+      await command('/operator/orchestration', {
+        action,
+        ...(action === 'resume'
+          ? { expected: { context: s.context, connection: s.connection } }
+          : {}),
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '运镜操作未完成');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div
+      className={workspace ? 'workspace-camera-controls' : 'music-controls'}
+      aria-label="自动运镜"
+    >
+      {workspace ? (
+        <div className="workspace-camera-summary">
+          <StatusPill tone={s.held ? 'warning' : 'info'}>
+            {s.held ? '人工保持' : '自动运镜'}
+          </StatusPill>
+          <strong>{s.map ?? '地图待确认'}</strong>
+          <span title={s.pack ?? undefined}>{s.pack ?? '未配运镜包'}</span>
+        </div>
+      ) : null}
+      <span
+        className="music-controls__track"
+        title={error || s.message}
+        role={workspace && error ? 'alert' : undefined}
+      >
+        {workspace && error ? (
+          error
+        ) : (
+          <>
+            {workspace ? '本次请求' : `运镜 · ${s.held ? '人工' : '自动'}`}
+            {s.current ? ` · ${s.current}` : ''} ·{' '}
+            {s.control.state === 'blocked' ? '原生交接待确认' : s.message}
+          </>
+        )}
+      </span>
+      {setup ? (
+        <span>
+          {s.map ?? '地图待确认'} · {s.pack ?? '未配运镜包'} ·{' '}
+          {s.isolated ? '隔离文件已验证' : '需准备隔离包'}
+        </span>
+      ) : null}
+      {setup ? (
+        <Button
+          disabled={busy || (!s.connected && s.control.state === 'blocked')}
+          onClick={() => void send(s.connected ? 'disconnect' : 'connect')}
+        >
+          {s.connected ? '断开 MulNX' : '连接 MulNX'}
+        </Button>
+      ) : null}
+      {!s.held || s.current ? (
+        <>
+          <Button
+            disabled={busy}
+            onClick={() => void send('hold')}
+            title="请求清空 MulNX 全部运镜槽；实际停止需在游戏内确认；不会关闭其他包的自动列表"
+          >
+            接管运镜
+          </Button>
+          <Button disabled={busy || !s.connected || !s.current} onClick={() => void send('skip')}>
+            跳过本次
+          </Button>
+        </>
+      ) : null}
+      {s.held ? (
+        <Button
+          variant="primary"
+          disabled={
+            busy ||
+            !s.connected ||
+            !view.ready ||
+            !s.pack ||
+            !s.isolated ||
+            s.control.state === 'blocked'
+          }
+          title={`确认游戏内当前地图 ${s.map ?? '未知'}，活动包 ${s.pack ?? '未配置'}，并允许清空全部运镜槽`}
+          onClick={() => void send('resume')}
+        >
+          {workspace ? '确认运镜包并恢复自动' : '确认活动隔离包并启用自动'}
+        </Button>
+      ) : null}
+      {error && !workspace ? <span role="alert">{error}</span> : null}
+    </div>
+  );
+}

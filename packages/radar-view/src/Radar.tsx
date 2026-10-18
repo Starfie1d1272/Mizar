@@ -145,7 +145,7 @@ export function RadarView({
     };
     const unsubscribe = client?.subscribe(accept);
     accept();
-    const render = (now: number) => {
+    const render = () => {
       if (disposed) return;
       if (lastPresentationRevision !== currentPresentationRevision.current) {
         lastPresentationRevision = currentPresentationRevision.current;
@@ -157,6 +157,9 @@ export function RadarView({
       }
       if (client) accept();
       else clearChangedPausedBoundary(currentSnapshot.current);
+      // Input callbacks use performance.now(). RAF's frame timestamp may be
+      // older than a newly accepted sample when the browser is busy.
+      let now = performance.now();
       if (
         !client &&
         lastStatic !== currentSnapshot.current &&
@@ -483,7 +486,10 @@ export function RadarView({
         }
         for (const exit of model.exits.values()) {
           if (exit.marker.phase === 'effect' && exit.marker.source.kind === 'inferno') {
-            drawInferno(exit.marker, Math.max(0, (exit.until - now) / exit.durationMs));
+            drawInferno(
+              exit.marker,
+              Math.min(1, Math.max(0, (exit.until - now) / exit.durationMs)),
+            );
           }
         }
 
@@ -566,7 +572,7 @@ export function RadarView({
         }
         for (const exit of model.exits.values()) {
           if (exit.marker.phase === 'effect' && exit.marker.source.kind === 'smoke') {
-            drawSmoke(exit.marker, Math.max(0, (exit.until - now) / exit.durationMs));
+            drawSmoke(exit.marker, Math.min(1, Math.max(0, (exit.until - now) / exit.durationMs)));
           }
         }
         const drawTrail = (
@@ -598,7 +604,7 @@ export function RadarView({
         };
         for (const exit of model.exits.values()) {
           if (!exit.marker.positionAvailable) continue;
-          const alpha = Math.max(0, (exit.until - now) / exit.durationMs);
+          const alpha = Math.min(1, Math.max(0, (exit.until - now) / exit.durationMs));
           drawTrail(exit.marker, alpha);
           const exitPoint = pointAt(exit.marker.target);
           if (exitPoint === null) continue;
@@ -852,6 +858,11 @@ export function RadarView({
         }
       }
       ctx.restore();
+      // Completion is distinct from accepting a source frame: drawing can throw.
+      setData(
+        'radarDrawnSequence',
+        String(model.snapshot?.sampleSequence ?? model.snapshot?.sequence ?? ''),
+      );
       if (!payload) {
         // Safe fail-closed presentation without disruptive center placeholder
       }
@@ -875,6 +886,8 @@ export function RadarView({
       aria-label="比赛雷达"
       className={['mizar-radar-view', className].filter(Boolean).join(' ')}
       ref={canvas}
+      data-radar-paused={paused}
+      data-radar-source={client ? 'client' : 'snapshot'}
     />
   );
 }

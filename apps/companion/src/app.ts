@@ -1,4 +1,18 @@
-import { errorEvidence } from './updates/diagnostics.js';
+import { verifyIsolatedPack } from './orchestration/isolated-pack.js';
+import { CameraDirector } from './orchestration/director.js';
+import { MulnxTool } from './orchestration/tool.js';
+import { OrchestrationStore } from './orchestration/store.js';
+import { MulnxProvider } from './orchestration/provider.js';
+import { registerOrchestrationRoutes } from './orchestration/routes.js';
+import { registerDiagnosticDelivery } from './support/delivery-routes.js';
+import { checkLocalWebOrigin } from './local-web/origin-policy.js';
+import { SessionJournal, diagnosticValue } from './support/session-journal.js';
+import { PerformanceWindow, selectedGsiContext } from './support/performance-window.js';
+import { NativeSource } from './support/native-source.js';
+import { MusicStore } from './music/store.js';
+import { MusicDirector } from './music/director.js';
+import { ObsMusicProvider } from './music/obs-provider.js';
+import { registerMusicRoutes } from './music/routes.js';
 import {
   DemoTestController,
   readDemoTestRecovery,
@@ -57,6 +71,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 
 import { DebugEvidenceStore, type DebugRuntimeClock } from './runtime/debug-state.js';
 import { registerSupportRoutes } from './support/routes.js';
+import { BusinessJournal } from './support/business-journal.js';
 import type { LatestWinsConsumerHealth } from './runtime/latest-wins.js';
 import { createProgramRuntime, type ProgramRuntime } from './runtime/program-runtime.js';
 import type { SeriesProgressCheckpointStore } from '@mizar/core/series-progress';
@@ -114,6 +129,7 @@ export interface CompanionAppOptions {
   readonly updates?: UpdateManager;
   readonly steamAvatars?: SteamAvatars;
   readonly supportLogsDirectory?: string;
+  readonly supportJournal?: SessionJournal;
   readonly productRuntime?: {
     readonly appVersion?: string;
     readonly artifactSha256: string;
@@ -147,6 +163,8 @@ export interface CompanionAppOptions {
   readonly debugClock?: DebugRuntimeClock;
   readonly deliveryConsumers?: readonly DeliveryHealthSource[];
   readonly cstvSources?: CstvSourceManagers;
+  readonly diagnosticsEndpoint?: string;
+  readonly diagnosticsFetch?: typeof fetch;
   readonly onAcceptedRaw?: AcceptedRawSink;
   readonly onObservation?: ObservationSink;
   readonly onGsiDiagnostics?: GsiDiagnosticsSink;
@@ -156,6 +174,8 @@ export interface CompanionAppOptions {
   readonly hudConfigPath?: string;
   readonly hudConfigStore?: HudConfigStore;
   readonly obsConfigPath?: string;
+  readonly mulnxCamPacksRoot?: string;
+  readonly mulnxBundle?: string;
   readonly readObsCaptureEvidence?: () => Promise<ObsNativeEvidence>;
   readonly qualificationRunId?: string;
   readonly qualificationScenarioPath?: string;
@@ -217,31 +237,36 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   const debugClock = options.debugClock ?? { nowMonotonicMs: () => performance.now() };
   const deliveryConsumers = options.deliveryConsumers ?? [];
   let outputBinding = options.matchContextBinding;
+  let businessJournal: BusinessJournal | undefined;
   const outputService: OutputService = new OutputService({
     ...(options.reliableOutboxPath === undefined
       ? {}
       : {
-          outbox: new ReliableOutbox(options.reliableOutboxPath, (recovery, error) => {
-            // Raw cause stays in the local log; support export applies its existing redaction.
-            const evidence = {
-              event: 'outbox',
-              stage: 'outbox_load',
-              err: outboxLocalError(error),
-              recovery: recovery ?? null,
-              result:
-                recovery === undefined
-                  ? 'failure'
-                  : recovery.code === 'outbox_recovered'
-                    ? 'success'
-                    : 'unconfirmed',
-            };
-            if (recovery === undefined)
-              app.log.error(evidence, '发送队列无法安全恢复；原始文件保留。');
-            else {
-              app.log.warn(evidence, recovery.message);
-              recordRuntimeDiagnostic(`output-${recovery.code}`, 'projection', false);
-            }
-          }),
+          outbox: new ReliableOutbox(
+            options.reliableOutboxPath,
+            (recovery, error) => {
+              // Raw cause stays in the local log; support export applies its existing redaction.
+              const evidence = {
+                event: 'outbox',
+                stage: 'outbox_load',
+                err: outboxLocalError(error),
+                recovery: recovery ?? null,
+                result:
+                  recovery === undefined
+                    ? 'failure'
+                    : recovery.code === 'outbox_recovered'
+                      ? 'success'
+                      : 'unconfirmed',
+              };
+              if (recovery === undefined)
+                app.log.error(evidence, '发送队列无法安全恢复；原始文件保留。');
+              else {
+                app.log.warn(evidence, recovery.message);
+                recordRuntimeDiagnostic(`output-${recovery.code}`, 'projection', false);
+              }
+            },
+            (record, reason) => businessJournal?.reliable(record, reason),
+          ),
         }),
     ...(options.rivalhubConnection !== undefined
       ? {
@@ -296,6 +321,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       return projectionCoordinator.refresh();
     },
     onDiagnostic: (code) => recordRuntimeDiagnostic(`output-${code}`, 'projection', false),
+    onBusinessEvidence: (stage, evidence) => businessJournal?.write(stage, evidence),
   });
   if (demoRecovery)
     void outputService.setQuarantined(true).catch((error) =>
@@ -303,7 +329,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         {
           event: 'demo-test',
           stage: 'recovery_output_quarantine',
-          diagnostic: errorEvidence(error),
+          diagnostic: diagnosticValue(error),
         },
         'Demo test quarantine failed',
       ),
@@ -361,10 +387,139 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         programRuntime.getSnapshot().current.programSource.lastAccepted?.receivedMonotonicMs ?? 0;
       return Math.max(performance.now(), lastReceived);
     });
+  const sessionJournal =
+    options.supportJournal ??
+    (options.supportLogsDirectory
+      ? new SessionJournal(options.supportLogsDirectory, {
+          appVersion: options.productRuntime?.appVersion ?? null,
+          gitSha: options.productRuntime?.gitSha ?? null,
+          artifactSha256: options.productRuntime?.artifactSha256 ?? null,
+        })
+      : undefined);
   const app = Fastify({
-    logger: options.logger ?? false,
+    logger: sessionJournal
+      ? {
+          stream: {
+            write: (line: string) => {
+              sessionJournal.write(line);
+              if (options.logger) process.stdout.write(line);
+            },
+          },
+        }
+      : (options.logger ?? false),
     logController: new Fastify.LogController({ disableRequestLogging: true }),
     requestTimeout: GSI_REQUEST_TIMEOUT_MS,
+  });
+  const performanceContext = sessionJournal
+    ? new PerformanceWindow(
+        sessionJournal,
+        () => debugClock.nowMonotonicMs(),
+        options.supportLogsDirectory,
+      )
+    : undefined;
+  const nativeSource =
+    options.supportLogsDirectory && sessionJournal
+      ? new NativeSource(options.supportLogsDirectory, sessionJournal)
+      : undefined;
+  app.addHook('onReady', () => {
+    nativeSource?.start();
+  });
+  if (options.supportLogsDirectory !== undefined) {
+    businessJournal = new BusinessJournal(
+      options.supportLogsDirectory,
+      () =>
+        app.log.warn(
+          { event: 'business', stage: 'business_log_write_failed', result: 'failure' },
+          '业务诊断日志写入失败',
+        ),
+      options.productRuntime?.appVersion,
+      (entry) => sessionJournal?.record('business_evidence', entry),
+    );
+  }
+  const browserOperationId = (value: unknown): string | null =>
+    typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value)
+      ? value
+      : null;
+  app.addHook('onRequest', (request, _reply, done) => {
+    if (sessionJournal)
+      sessionJournal.withRequest(
+        {
+          requestId: request.id,
+          browserOperationId: browserOperationId(request.headers['x-mizar-operation-id']),
+          taskId: browserOperationId(request.headers['x-mizar-task-id']),
+          parentOperationId: browserOperationId(request.headers['x-mizar-parent-operation-id']),
+          trigger:
+            request.headers['x-mizar-trigger'] === 'user'
+              ? 'user'
+              : request.headers['x-mizar-trigger'] === 'system'
+                ? 'system'
+                : 'unattributed',
+        },
+        done,
+      );
+    else done();
+  });
+  const isControl = (url: string, method: string) =>
+    method !== 'GET' && /^(?:\/operator\/|\/runtime\/)/.test(url);
+  const controlState = () => ({
+    production: production.get(),
+    program: sceneController.get(),
+    runtime: debugEvidenceStore.getSupportSummary(debugClock.nowMonotonicMs()),
+    hud: hudConfigStore.getState().document,
+    match: matchContextController?.getActiveBinding() ?? null,
+  });
+  app.addHook('onRequest', (request, _reply, done) => {
+    if (isControl(request.url, request.method))
+      sessionJournal?.record('operation_received', {
+        requestId: request.id,
+        browserOperationId: browserOperationId(request.headers['x-mizar-operation-id']),
+        method: request.method,
+        route: request.routeOptions.url,
+        before: controlState(),
+      });
+    done();
+  });
+  app.addHook('preHandler', (request, _reply, done) => {
+    if (isControl(request.url, request.method))
+      sessionJournal?.record('operation_begin', {
+        requestId: request.id,
+        browserOperationId: browserOperationId(request.headers['x-mizar-operation-id']),
+        method: request.method,
+        route: request.routeOptions.url,
+        parameters: diagnosticValue(request.body),
+        filename: request.headers['x-mizar-filename'],
+      });
+    done();
+  });
+  app.addHook('onSend', (request, reply, payload, done) => {
+    if (isControl(request.url, request.method)) {
+      let result: unknown = payload;
+      if (typeof payload === 'string') {
+        try {
+          result = JSON.parse(payload);
+        } catch {
+          result = { bytes: Buffer.byteLength(payload) };
+        }
+      }
+      sessionJournal?.record('operation_result', {
+        requestId: request.id,
+        browserOperationId: browserOperationId(request.headers['x-mizar-operation-id']),
+        method: request.method,
+        route: request.routeOptions.url,
+        httpStatus: reply.statusCode,
+        result,
+        after: controlState(),
+      });
+    }
+    done(null, payload);
+  });
+  options.rivalhubConnection?.setBusinessEvidenceHandler?.((stage, evidence) => {
+    if (stage === 'business_live' || stage === 'original_error')
+      sessionJournal?.record(
+        stage === 'business_live' ? 'website_live_evidence' : 'website_original_error',
+        evidence,
+      );
+    businessJournal?.write(stage, evidence);
   });
   app.addHook('onResponse', async (request, reply) => {
     if (
@@ -381,6 +536,13 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       );
   });
   app.addHook('onError', async (request, _reply, error) => {
+    sessionJournal?.record('request_error', {
+      requestId: request.id,
+      browserOperationId: browserOperationId(request.headers['x-mizar-operation-id']),
+      method: request.method,
+      route: request.routeOptions.url,
+      error,
+    });
     request.log.error({ err: error, route: request.routeOptions.url }, 'Local operation failed');
   });
   registerStaticHost(app, {
@@ -452,6 +614,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     },
     logger: app.log,
     onDiagnostic: (diagnostic: LocalWebSocketDiagnostic) => {
+      sessionJournal?.record('local_transport', diagnostic);
       if (diagnostic.code === 'ws_closed' || diagnostic.code === 'ws_connected') return;
       app.log.debug(
         {
@@ -505,10 +668,29 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
               'OBS request failed',
             ),
         );
+  let musicDirector: MusicDirector | undefined;
+  let cameraDirector: CameraDirector | undefined;
   const sceneController = new ProgramSceneController(
     projectionCoordinator,
     bpSession,
-    obsAdapter === undefined ? undefined : (id, options) => obsAdapter.switchScene(id, options),
+    obsAdapter === undefined
+      ? undefined
+      : (id, options) =>
+          obsAdapter.switchScene(id, {
+            ...options,
+            onStarted: () => {
+              if (id === 'matchup' && options.valid?.() !== false) {
+                const sound = cameraDirector?.store.map(
+                  projectionCoordinator.getCurrent().program.map.name,
+                )?.openingSound;
+                musicDirector?.opening(
+                  `opening:${sceneController.get().preparing?.revision}`,
+                  sound ?? undefined,
+                );
+                cameraDirector?.opening();
+              }
+            },
+          }),
     obsAdapter === undefined ? undefined : (options) => obsAdapter.switchToWaitingForExit(options),
   );
   if (options.steamAvatars) {
@@ -574,41 +756,82 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             programCueCoordinator.afterRuntimeMutation();
           },
         });
+  let performanceWindowStart = performance.now();
+  let processing = { count: 0, totalMs: 0, maxMs: 0 };
+  let latestInput: TelemetryObservation['receive'] | null = null;
+  let latestRawInput: { sequence: number; receivedAt: string; receivedMonotonicMs: number } | null =
+    null;
+  let slowProcessingCount = 0;
+  const slowProcessing: { time: string; sequence: number; durationMs: number }[] = [];
   const dispatchObservation = (
     observation: TelemetryObservation,
     sampleStageBinding?: { mapOrder: number },
   ): void => {
-    const source = programRuntime.getCurrentState().programSource;
-    const lastAccepted = source.lastAccepted;
-    if (
-      lastAccepted !== undefined &&
-      observation.receive.receivedMonotonicMs - lastAccepted.receivedMonotonicMs >
-        programRuntime.getSnapshot().continuityPolicy.staleAfterMs
-    ) {
+    const processingStarted = performance.now();
+    latestInput = observation.receive;
+    try {
+      const source = programRuntime.getCurrentState().programSource;
+      const lastAccepted = source.lastAccepted;
+      if (
+        lastAccepted !== undefined &&
+        observation.receive.receivedMonotonicMs - lastAccepted.receivedMonotonicMs >
+          programRuntime.getSnapshot().continuityPolicy.staleAfterMs
+      ) {
+        outputService.beforeRuntimeMutation();
+        const changed = programRuntime.advanceProgramSourceGeneration({
+          monotonicMs: observation.receive.receivedMonotonicMs,
+          utc: observation.receive.receivedAt,
+        });
+        const continuityBundle = projectionCoordinator.afterRuntimeMutation(changed);
+        outputService.afterRuntimeMutation(changed, continuityBundle, outputBinding);
+        programCueCoordinator.afterRuntimeMutation(changed);
+      }
       outputService.beforeRuntimeMutation();
-      const changed = programRuntime.advanceProgramSourceGeneration({
-        monotonicMs: observation.receive.receivedMonotonicMs,
-        utc: observation.receive.receivedAt,
+      const result = programRuntime.acceptObservation(observation);
+      if (result.disposition.kind === 'ignored')
+        performanceContext?.trigger('observation_ignored', {
+          receive: observation.receive,
+          disposition: result.disposition,
+        });
+      if (sampleStageBinding) {
+        programRuntime.executeOperatorCommand({
+          kind: 'bind-current-map-execution-to-series-map',
+          mapOrder: sampleStageBinding.mapOrder,
+          reason: `Rivals 示例第 ${sampleStageBinding.mapOrder} 图执行绑定`,
+        });
+      }
+      const bundle = projectionCoordinator.afterRuntimeMutation(result);
+      outputService.afterRuntimeMutation(result, bundle, outputBinding);
+      programCueCoordinator.afterRuntimeMutation(result);
+      debugEvidenceStore.recordNormalizedObservation(observation);
+      debugEvidenceStore.recordRuntime(programRuntime.getSnapshot());
+      demoTest?.observationAccepted();
+    } catch (error) {
+      sessionJournal?.record('observation_failure', { error, receive: observation.receive });
+      performanceContext?.trigger('observation_failure', {
+        receive: observation.receive,
+        error: diagnosticValue(error),
       });
-      const continuityBundle = projectionCoordinator.afterRuntimeMutation(changed);
-      outputService.afterRuntimeMutation(changed, continuityBundle, outputBinding);
-      programCueCoordinator.afterRuntimeMutation(changed);
+      throw error;
+    } finally {
+      const durationMs = performance.now() - processingStarted;
+      processing.count++;
+      processing.totalMs += durationMs;
+      processing.maxMs = Math.max(processing.maxMs, durationMs);
+      if (durationMs >= 50) {
+        performanceContext?.trigger('slow_observation', {
+          sequence: observation.receive.sequence,
+          durationMs,
+        });
+        slowProcessingCount++;
+        slowProcessing.push({
+          time: new Date().toISOString(),
+          sequence: observation.receive.sequence,
+          durationMs,
+        });
+        if (slowProcessing.length > 8) slowProcessing.shift();
+      }
     }
-    outputService.beforeRuntimeMutation();
-    const result = programRuntime.acceptObservation(observation);
-    if (sampleStageBinding) {
-      programRuntime.executeOperatorCommand({
-        kind: 'bind-current-map-execution-to-series-map',
-        mapOrder: sampleStageBinding.mapOrder,
-        reason: `Rivals 示例第 ${sampleStageBinding.mapOrder} 图执行绑定`,
-      });
-    }
-    const bundle = projectionCoordinator.afterRuntimeMutation(result);
-    outputService.afterRuntimeMutation(result, bundle, outputBinding);
-    programCueCoordinator.afterRuntimeMutation(result);
-    debugEvidenceStore.recordNormalizedObservation(observation);
-    debugEvidenceStore.recordRuntime(programRuntime.getSnapshot());
-    demoTest?.observationAccepted();
   };
 
   const rehearsal =
@@ -662,6 +885,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       matchContextController?.getActiveBinding() != null,
     scenes: sceneController,
     beforeEnter: () => demoTest?.openFormalBoundary(),
+    beforeFinish: () => cameraDirector?.finishProduction(),
     finishTrial: async () => {
       await demoTest?.finish();
     },
@@ -715,7 +939,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
                 stage: 'resource_cache_verify',
                 result: 'failure',
                 packId,
-                diagnostic: { error: errorEvidence(error) },
+                diagnostic: { error: diagnosticValue(error) },
               },
               '官方素材缓存验证失败。',
             ),
@@ -737,7 +961,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             event: 'resource',
             stage: 'resource_store_open',
             result: 'failure',
-            diagnostic: { error: errorEvidence(error) },
+            diagnostic: { error: diagnosticValue(error) },
           },
           '官方素材缓存不可用；保留原 Full 资源路径。',
         );
@@ -774,6 +998,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   });
   const presentation = new ProgramPresentationStore();
   const presentationUnsubscribe = projectionCoordinator.subscribePresentation((bundle) => {
+    businessJournal?.runtime(
+      bundle,
+      matchContextController?.getActiveBinding() ?? options.matchContextBinding,
+      programRuntime.getCurrentState().programTelemetry,
+    );
     guidance.update(
       bundle,
       matchContextController?.getActiveBinding() ?? options.matchContextBinding,
@@ -801,9 +1030,92 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     bpSession,
     () => production.get().mode !== 'preparation',
   );
+  if (obsConfigStore && options.obsConfigPath) {
+    const musicStore = new MusicStore(
+      join(dirname(options.obsConfigPath), 'music'),
+      (stage, evidence) => sessionJournal?.record(stage, evidence),
+    );
+    app.addHook('onReady', async () => {
+      await musicStore.load().catch((error) => {
+        app.log.error({ stage: 'music_load', err: error, result: 'failure' }, '音乐配置加载失败');
+        musicStore.failure = true;
+      });
+    });
+    musicDirector = new MusicDirector(
+      musicStore,
+      new ObsMusicProvider(obsConfigStore, (stage, evidence) =>
+        sessionJournal?.record(stage, evidence),
+      ),
+      () => ({
+        program: projectionCoordinator.getCurrent().program,
+        active: sceneController.get().active,
+        production:
+          production.get().mode !== 'preparation' &&
+          projectionCoordinator.getCurrent().operator.matchContext.origin !== 'fixture',
+      }),
+    );
+    registerMusicRoutes(app, musicStore, musicDirector, localWebTransport.getOriginPolicy());
+    const cameraStore = new OrchestrationStore(
+      join(dirname(options.obsConfigPath), 'orchestration'),
+      (stage, evidence) => sessionJournal?.record(stage, evidence),
+    );
+    const cameraEvidence = (stage: string, evidence: unknown) =>
+      sessionJournal?.record(stage, evidence);
+    const mulnxTool = options.mulnxBundle
+      ? new MulnxTool(
+          join(dirname(options.obsConfigPath), 'mulnx'),
+          options.mulnxBundle,
+          cameraEvidence,
+        )
+      : undefined;
+    cameraDirector = new CameraDirector(
+      cameraStore,
+      new MulnxProvider(cameraEvidence),
+      () => ({
+        program: projectionCoordinator.getCurrent().program,
+        active: sceneController.get().active,
+        production:
+          production.get().mode !== 'preparation' &&
+          projectionCoordinator.getCurrent().operator.matchContext.origin !== 'fixture',
+        manual: director.get().mode === 'manual',
+      }),
+      cameraEvidence,
+      undefined,
+      undefined,
+      (pack) => verifyIsolatedPack(options.mulnxCamPacksRoot ?? mulnxTool?.camPacksRoot, pack),
+      options.productRuntime !== undefined,
+    );
+    app.addHook('onReady', async () => {
+      await mulnxTool
+        ?.load()
+        .catch((error) => app.log.error({ stage: 'mulnx_load', err: error }, 'MulNX 加载失败'));
+      await cameraStore
+        .load()
+        .catch((error) =>
+          app.log.error(
+            { stage: 'camera_load', err: error, result: 'failure' },
+            '运镜预设加载失败',
+          ),
+        );
+    });
+    registerOrchestrationRoutes(
+      app,
+      cameraDirector,
+      musicStore,
+      localWebTransport.getOriginPolicy(),
+      {
+        controlToken: options.productRuntime?.controlToken,
+        configure: production.configureCameraSession,
+        canPrepare: () => production.get().mode === 'preparation',
+      },
+      mulnxTool,
+    );
+  }
   sceneController.attachDirector(director);
   const directorTimer = setInterval(() => {
     void director.tick().catch(() => director.hold());
+    void musicDirector?.tick();
+    cameraDirector?.tick();
   }, 100);
   directorTimer.unref();
   registerBpWorkspaceRoutes(app, {
@@ -938,6 +1250,20 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   app.addHook('onReady', async () => {
     outputService.setCurrent(projectionCoordinator.getCurrent(), outputBinding);
     await outputService.start();
+    businessJournal?.runtime(
+      projectionCoordinator.getCurrent(),
+      outputBinding,
+      programRuntime.getCurrentState().programTelemetry,
+    );
+    for (const record of outputService.getReliableRecords())
+      businessJournal?.reliable(record, 'restored');
+    await businessJournal?.flush();
+    sessionJournal?.record('configuration_snapshot', {
+      ...controlState(),
+      obs: await obsConfigStore
+        ?.read()
+        .catch((error: unknown) => ({ readError: diagnosticValue(error) })),
+    });
   });
   app.get('/local/v1/live-snapshot', (request, reply) => {
     outputService.setCurrent(projectionCoordinator.getCurrent(), outputBinding);
@@ -1035,8 +1361,125 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     }),
   );
 
+  const recordPerformanceWindow = (reason: string) => {
+    if (!sessionJournal) return;
+    const now = performance.now();
+    const channels = (['program', 'radar', 'operator', 'assist'] as const).map((channel) => {
+      const publisher = projectionCoordinator.getPublisher(channel);
+      const current = publisher.getCurrent();
+      return {
+        channel,
+        channelSeq: current?.channelSeq ?? null,
+        cursor: current?.cursor ?? null,
+        subscribers: publisher.getHealth?.() ?? null,
+      };
+    });
+    sessionJournal.record('runtime_performance_window', {
+      reason,
+      windowMs: now - performanceWindowStart,
+      schedulerDelayMs:
+        reason === 'interval' ? Math.max(0, now - performanceWindowStart - 15000) : null,
+      input: {
+        raw: latestRawInput,
+        normalized: latestInput,
+        ageMs: latestInput
+          ? Math.max(0, debugClock.nowMonotonicMs() - latestInput.receivedMonotonicMs)
+          : null,
+      },
+      processing: {
+        ...processing,
+        meanMs: processing.count ? processing.totalMs / processing.count : null,
+        scope:
+          'synchronous observation acceptance, runtime mutation and projection/output scheduling; excludes upstream adapter and asynchronous delivery',
+      },
+      slowProcessing: {
+        count: slowProcessingCount,
+        omittedSamples: Math.max(0, slowProcessingCount - slowProcessing.length),
+        samples: slowProcessing.splice(0),
+      },
+      runtime: debugEvidenceStore.getSupportSummary(debugClock.nowMonotonicMs()),
+      recorder: currentRecorder().getHealth(),
+      delivery: deliveryConsumers.map((consumer) => consumer.getHealth()),
+      channels,
+      anomalyContext: performanceContext?.health() ?? null,
+      nativeSource: nativeSource?.health() ?? null,
+      cstv: {
+        program: cstvSources.program.getHealth(),
+        lookahead: cstvSources.lookahead.getHealth(),
+      },
+      scope:
+        'producer publish and local send counters do not prove pixels rendered or OBS capture latency',
+    });
+    processing = { count: 0, totalMs: 0, maxMs: 0 };
+    slowProcessingCount = 0;
+    performanceWindowStart = now;
+  };
+  const performanceTimer = sessionJournal
+    ? setInterval(() => recordPerformanceWindow('interval'), 15000)
+    : undefined;
+  performanceTimer?.unref();
+  let inputGapReported = false;
+  const contextTimer = performanceContext
+    ? setInterval(() => {
+        performanceContext.tick();
+        const now = debugClock.nowMonotonicMs();
+        // Input silence is evidence, not proof that rendering or the game froze.
+        if (
+          latestRawInput &&
+          !inputGapReported &&
+          now - latestRawInput.receivedMonotonicMs >= 1000
+        ) {
+          inputGapReported = true;
+          performanceContext.trigger('input_silence', {
+            lastRaw: latestRawInput,
+            ageMs: now - latestRawInput.receivedMonotonicMs,
+            interpretation: 'source stopped sending; may be normal game/menu inactivity',
+          });
+        }
+      }, 1000)
+    : undefined;
+  contextTimer?.unref();
   app.get('/debug/hosts', () => localWebTransport.getHostDiagnostics());
 
+  app.post('/debug/control-event', { bodyLimit: 64 * 1024 }, async (request, reply) => {
+    if (
+      !checkLocalWebOrigin(localWebTransport.getOriginPolicy(), request.headers.origin).allowed ||
+      localWebTransport.getOriginPolicy().mode !== 'loopback'
+    )
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    sessionJournal?.record('browser_control', request.body);
+    const body = request.body as { operation?: string; time?: string; browserDocumentId?: string };
+    if (
+      body &&
+      ['browser_error', 'browser_unhandled_rejection', 'browser_performance'].includes(
+        body.operation ?? '',
+      ) &&
+      (body.operation !== 'browser_performance' ||
+        (body as { evidence?: { anomalyCount?: number } }).evidence?.anomalyCount)
+    )
+      performanceContext?.trigger('browser_anomaly', {
+        operation: body.operation,
+        observedAt: body.time,
+        browserDocumentId: body.browserDocumentId,
+        contextCapturedAt: new Date().toISOString(),
+        originalEvidence: (body as { evidence?: unknown }).evidence,
+      });
+    return reply.code(204).send();
+  });
+  const diagnosticDelivery = registerDiagnosticDelivery(app, {
+    ...(options.supportLogsDirectory ? { directory: options.supportLogsDirectory } : {}),
+    ...(sessionJournal ? { journal: sessionJournal } : {}),
+    originPolicy: localWebTransport.getOriginPolicy(),
+    ...(options.diagnosticsEndpoint ? { endpoint: options.diagnosticsEndpoint } : {}),
+    ...(options.diagnosticsFetch ? { fetch: options.diagnosticsFetch } : {}),
+    onReport: () => {
+      recordPerformanceWindow('problem_report');
+      performanceContext?.trigger('problem_report', {
+        interpretation:
+          'context begins at report receipt; past untriggered buffers are unavailable',
+      });
+    },
+  });
   registerSupportRoutes(app, {
     originPolicy: localWebTransport.getOriginPolicy(),
     ...(options.supportLogsDirectory === undefined
@@ -1044,6 +1487,24 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       : { logsDirectory: options.supportLogsDirectory }),
     ...(options.productRuntime === undefined ? {} : { artifact: options.productRuntime }),
     runtimeSummary: () => debugEvidenceStore.getSupportSummary(debugClock.nowMonotonicMs()),
+    flushBusinessLog: async () => {
+      await nativeSource?.poll();
+      recordPerformanceWindow('export');
+      await performanceContext?.flush();
+      await businessJournal?.flush();
+      await sessionJournal?.flush();
+    },
+    sessionLogHealth: () =>
+      sessionJournal
+        ? { ...sessionJournal.health(), performanceContext: performanceContext?.health() ?? null }
+        : null,
+    pendingPerformanceEvidence: () => performanceContext?.exportMemory() ?? [],
+    pendingJournalEvidence: () => sessionJournal?.pendingEvidence() ?? [],
+    retainedDiagnosticBatches: () => diagnosticDelivery.retainedBatches(),
+    beginPerformanceExport: () =>
+      performanceContext?.beginExport() ?? Promise.resolve(async () => {}),
+    ...(businessJournal ? { businessLogHealth: () => businessJournal.getHealth() } : {}),
+    businessLogStatus: () => businessJournal?.getStatus() ?? 'not_configured',
     recorder: () => currentRecorder().getHealth(),
     delivery: () => deliveryConsumers.map((consumer) => consumer.getHealth()),
     hosts: () => localWebTransport.getHostDiagnostics(),
@@ -1070,6 +1531,36 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         ? {}
         : { sequenceSource: options.gsiSequenceSource }),
       onAcceptedRaw: (input) => {
+        if (
+          latestRawInput &&
+          input.receivedMonotonicMs - latestRawInput.receivedMonotonicMs >= 1000
+        )
+          performanceContext?.trigger('input_resumed_after_gap', {
+            previous: latestRawInput,
+            sequence: input.sequence,
+            gapMs: input.receivedMonotonicMs - latestRawInput.receivedMonotonicMs,
+          });
+        inputGapReported = false;
+        latestRawInput = {
+          sequence: input.sequence,
+          receivedAt: input.receivedAt,
+          receivedMonotonicMs: input.receivedMonotonicMs,
+        };
+        if (performanceContext?.shouldSample(input.receivedMonotonicMs))
+          performanceContext.sample({
+            time: input.receivedAt,
+            monotonicMs: input.receivedMonotonicMs,
+            sequence: input.sequence,
+            evidence: {
+              input: selectedGsiContext(input.payload),
+              normalizedBeforeCurrentRaw: latestInput,
+              runtimeBeforeCurrentRaw: programRuntime.getCurrentState().programSource,
+              publicationBeforeCurrentRaw: (['program', 'radar'] as const).map((channel) => {
+                const current = projectionCoordinator.getPublisher(channel).getCurrent();
+                return { channel, channelSeq: current?.channelSeq, cursor: current?.cursor };
+              }),
+            },
+          });
         debugEvidenceStore.recordAcceptedRaw(input);
         options.onAcceptedRaw?.(input);
       },
@@ -1082,7 +1573,13 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         debugEvidenceStore.recordGsiDiagnostics(diagnostics);
         options.onGsiDiagnostics?.(diagnostics);
       },
-      onRuntimeDiagnostic: (code) => {
+      onRuntimeDiagnostic: (code, failure) => {
+        sessionJournal?.record('telemetry_failure', { code, ...failure });
+        performanceContext?.trigger('telemetry_diagnostic', {
+          code,
+          receive: failure.receive,
+          error: diagnosticValue(failure.error),
+        });
         recordRuntimeDiagnostic(code, 'telemetry');
       },
     });
@@ -1194,9 +1691,14 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   });
 
   app.addHook('onClose', async () => {
+    clearInterval(performanceTimer);
+    clearInterval(contextTimer);
+    recordPerformanceWindow('close');
     clearInterval(directorTimer);
     presentationUnsubscribe();
     objectiveReferenceUnsubscribe?.();
+    cameraDirector?.close();
+    await musicDirector?.close();
     await obsAdapter?.close();
     await Promise.all([
       cstvSources.program.stop(),
@@ -1209,6 +1711,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     await localWebTransport.close();
     await hudConfigStore.flush();
     await currentRecorder().finalize();
+    await businessJournal?.close();
+    await nativeSource?.close();
+    await performanceContext?.close();
+    await sessionJournal?.close();
+    await diagnosticDelivery.close();
   });
 
   return app;

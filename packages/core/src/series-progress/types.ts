@@ -18,6 +18,7 @@ export type SeriesProgressIssueCode =
   | 'side_mapping_unproven'
   | 'final_score_unavailable'
   | 'final_score_conflict'
+  | 'result_pending_review'
   | 'round_number_unavailable'
   | 'round_history_partial'
   | 'round_history_cap'
@@ -93,6 +94,8 @@ export interface SeriesProgress {
 }
 
 export interface SeriesSideProof {
+  /** Account differences permit observed completion, never a confirmed winner or score. */
+  readonly displayOnly?: boolean;
   readonly sourceGeneration: number;
   readonly mapEpoch: number;
   readonly a: SourceSide;

@@ -1,3 +1,4 @@
+import { diagnosticValue } from '../support/session-journal.js';
 import { errorEvidence } from '../updates/diagnostics.js';
 import { rosterCandidate, mergeObservedStarters } from './roster-capture.js';
 import type { ProjectionCoordinator } from '../projections/projection-coordinator.js';
@@ -9,6 +10,7 @@ import type { MatchContextController } from './controller.js';
 import { LocalTournamentStore } from './local-tournament-store.js';
 import { localDocumentBindingManifest } from './local-document-adapter.js';
 import { localBo3BpRulesSchema } from '@mizar/protocol/bp';
+import { parseMatchDocumentV1 } from '@mizar/protocol/context';
 
 function canMutate(policy: LocalWebOriginPolicy, origin: string | undefined): boolean {
   return policy.mode === 'loopback' && checkLocalWebOrigin(policy, origin).allowed;
@@ -181,7 +183,11 @@ export function registerLocalTournamentRoutes(
           if (canActivate()) controller.activateLocalDocument(updated);
         }
         return { ok: true };
-      } catch {
+      } catch (error) {
+        request.log.warn(
+          { stage: 'control_failure', error: diagnosticValue(error) },
+          'Product control failed',
+        );
         return reply
           .code(409)
           .send({ message: '名单保存未完成，请刷新当前比赛与服务器名单后重试。' });
@@ -200,6 +206,7 @@ export function registerLocalTournamentRoutes(
       !(body.teamAId === undefined || typeof body.teamAId === 'string') ||
       !(body.teamBId === undefined || typeof body.teamBId === 'string') ||
       !['bo1', 'bo3', 'bo5'].includes(String(body.format)) ||
+      !(body.eventName === undefined || typeof body.eventName === 'string') ||
       !(body.eventId === undefined || typeof body.eventId === 'string')
     )
       return reply.code(400).send({ error: 'local_match_invalid' });
@@ -211,11 +218,16 @@ export function registerLocalTournamentRoutes(
         ...(body.teamBId === undefined ? {} : { teamBId: body.teamBId }),
         format: body.format as 'bo1' | 'bo3' | 'bo5',
         ...(body.eventId === undefined ? {} : { eventId: body.eventId }),
+        ...(body.eventName === undefined ? {} : { eventName: body.eventName }),
         mapPool: DEFAULT_LOCAL_BP_MAP_POOL,
       });
       controller.activateLocalDocument(document);
       return { ok: true, matchId: document.matchId };
-    } catch {
+    } catch (error) {
+      request.log.warn(
+        { stage: 'control_failure', error: diagnosticValue(error) },
+        'Product control failed',
+      );
       return reply.code(400).send({ error: 'local_match_create_failed' });
     }
   });
@@ -230,7 +242,11 @@ export function registerLocalTournamentRoutes(
       const document = await store.selectMatch(body.matchId);
       controller.activateLocalDocument(document);
       return { ok: true };
-    } catch {
+    } catch (error) {
+      request.log.warn(
+        { stage: 'control_failure', error: diagnosticValue(error) },
+        'Product control failed',
+      );
       return reply.code(404).send({ error: 'local_match_not_found' });
     }
   });
@@ -267,6 +283,10 @@ export function registerLocalTournamentRoutes(
         }
         return { ok: true };
       } catch (error) {
+        request.log.warn(
+          { stage: 'control_failure', error: diagnosticValue(error) },
+          'Product control failed',
+        );
         const code = error instanceof Error ? error.message : '';
         const known: Record<string, { status: number; message: string }> = {
           local_match_in_use: {
@@ -324,10 +344,60 @@ export function registerLocalTournamentRoutes(
       const document = await store.saveMatch(body.document);
       controller.activateLocalDocument(document);
       return { ok: true };
-    } catch {
+    } catch (error) {
+      request.log.warn(
+        { stage: 'control_failure', error: diagnosticValue(error) },
+        'Product control failed',
+      );
       return reply.code(400).send({ error: 'local_match_save_failed' });
     }
   });
+
+  // Library authoring never selects a match or updates the active provider snapshot.
+  app.post<{ Params: { matchId: string } }>(
+    '/operator/local-match/:matchId/save',
+    { bodyLimit: 262_144 },
+    async (request, reply) => {
+      if (!canMutate(originPolicy, request.headers.origin))
+        return reply.code(403).send({ error: 'operator_origin_forbidden' });
+      const target = store
+        .getSnapshot()
+        .matches.find((match) => match.matchId === request.params.matchId);
+      if (!target) return reply.code(404).send({ error: 'local_match_not_found' });
+      const body = object(request.body);
+      const proposed = object(body?.document);
+      if (!body || !proposed || proposed.matchId !== target.matchId)
+        return reply.code(400).send({ error: 'local_match_invalid' });
+      let expected: string;
+      try {
+        expected = JSON.stringify(parseMatchDocumentV1(body.expectedDocument));
+      } catch {
+        return reply.code(400).send({ error: 'local_match_invalid' });
+      }
+      const canCommit = () =>
+        controller.getActiveBinding()?.context.matchId !== target.matchId &&
+        JSON.stringify(
+          store.getSnapshot().matches.find((match) => match.matchId === target.matchId),
+        ) === expected;
+      if (!canCommit()) return reply.code(409).send({ error: 'local_match_conflict' });
+      try {
+        // Only editable authoring fields; scores, BP, maps and event identity remain authoritative.
+        const document = parseMatchDocumentV1({
+          ...target,
+          format: proposed.format,
+          stageLabel: proposed.stageLabel,
+          roundLabel: proposed.roundLabel,
+          scheduledAt: proposed.scheduledAt,
+          entrants: proposed.entrants,
+        });
+        localDocumentBindingManifest(document);
+        await store.saveMatch(document, canCommit);
+        return { ok: true, matchId: target.matchId };
+      } catch {
+        return reply.code(canCommit() ? 400 : 409).send({ error: 'local_match_save_failed' });
+      }
+    },
+  );
 
   app.post('/operator/local-event/save', { bodyLimit: 8192 }, async (request, reply) => {
     if (!canMutate(originPolicy, request.headers.origin))
@@ -366,7 +436,11 @@ export function registerLocalTournamentRoutes(
       )
         controller.activateLocalDocument(selected);
       return { ok: true };
-    } catch {
+    } catch (error) {
+      request.log.warn(
+        { stage: 'control_failure', error: diagnosticValue(error) },
+        'Product control failed',
+      );
       return reply.code(400).send({ error: 'local_event_save_failed' });
     }
   });
@@ -384,7 +458,11 @@ export function registerLocalTournamentRoutes(
     try {
       await store.reorder(body.eventId, body.matchIds);
       return { ok: true };
-    } catch {
+    } catch (error) {
+      request.log.warn(
+        { stage: 'control_failure', error: diagnosticValue(error) },
+        'Product control failed',
+      );
       return reply.code(400).send({ error: 'local_schedule_invalid' });
     }
   });

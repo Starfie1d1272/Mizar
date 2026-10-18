@@ -411,5 +411,160 @@ it('fails closed when remote server returns 403 indicating authority loss', asyn
   );
   await expect(connection.sendLive(snapshot)).rejects.toThrow('rivalhub_live_unavailable');
   expect(connection.view().activeSourceMatchId).toBeNull();
-  expect(connection.view().activeDeviceName).toBe('另一台制播设备');
+  expect(connection.view().activeDeviceName).toBeNull(); // A 403 does not prove another device owns the source.
+});
+
+it('watches matched formal executions, needs fresh receiver acceptance, and respects stop and another device', async () => {
+  let now = 100;
+  const clock = vi.spyOn(performance, 'now').mockImplementation(() => now);
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-sync-health-'));
+  temporary.push(directory);
+  const path = join(directory, 'connection.json');
+  await writeFile(
+    path,
+    JSON.stringify({
+      baseUrl: OFFICIAL_RIVALHUB_URL,
+      credential: 'test',
+      installationId: 'test',
+      competitionId: 'competition',
+      displayName: 'test',
+    }),
+  );
+  let liveResult = 'accepted';
+  let otherDevice = false;
+  let liveRequests = 0;
+  let releaseFails = false;
+  const connection = new RivalHubConnection(path, (url) => {
+    const requestUrl = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+    const operation = requestUrl.split('/').at(-1);
+    if (operation === 'release' && releaseFails) return Promise.reject(new TypeError('offline'));
+    if (operation === 'claim')
+      return Promise.resolve(
+        Response.json({
+          claimed: !otherDevice,
+          authorityRevision: 1,
+          activeDeviceName: otherDevice ? '另一制播机' : undefined,
+        }),
+      );
+    if (operation === 'live') {
+      liveRequests++;
+      if (liveResult === 'network') return Promise.reject(new TypeError('offline'));
+      return Promise.resolve(
+        Response.json({ accepted: liveResult === 'accepted', reason: 'delivery_dropped' }),
+      );
+    }
+    return Promise.resolve(new Response(null, { status: 204 }));
+  });
+  const snapshot = {
+    matchId: 'match',
+    competitionId: 'competition',
+    cursor: {
+      producerInstanceId: 'producer',
+      liveSessionId: 'session',
+      programSourceGeneration: 1,
+      mapEpoch: 1,
+    },
+    map: { phase: 'live', mapId: 'map-1' },
+    capability: { identity: 'matched', canonicalTeams: true, lineupComplete: true },
+    players: [],
+  } as unknown as LiveSnapshotV1;
+  const start = (value: LiveSnapshotV1) =>
+    connection.sendReliable(
+      { kind: 'map_started', matchId: value.matchId, cursor: value.cursor } as ReliableEventV1,
+      value,
+    );
+  try {
+    await connection.load();
+    for (const candidate of [
+      null,
+      { ...snapshot, map: { ...snapshot.map, phase: 'warmup' } },
+      { ...snapshot, map: { ...snapshot.map, mapId: null } },
+    ]) {
+      expect(connection.syncHealth(candidate, true).status).toBe('inactive');
+      now += 60_000;
+      expect(connection.syncHealth(candidate, true).status).toBe('inactive');
+    }
+    expect(connection.syncHealth(snapshot, false).status).toBe('inactive');
+    expect(connection.syncHealth(snapshot, true).status).toBe('waiting');
+    now += 15_001;
+    const missing = connection.syncHealth(snapshot, true);
+    expect(missing).toMatchObject({
+      status: 'attention',
+      reason: 'source_unavailable',
+    });
+    expect(typeof missing.incidentId).toBe('string');
+    expect(connection.syncHealth(snapshot, false).status).toBe('inactive');
+    expect(connection.syncHealth(snapshot, true).incidentId).toBe(missing.incidentId);
+    await connection.claim(snapshot, 'rev', false);
+    await expect(connection.sendLive(snapshot)).rejects.toThrow('rivalhub_map_start_pending');
+    expect(connection.syncHealth(snapshot, true)).toMatchObject({
+      status: 'attention',
+      reason: 'map_start_pending',
+      incidentId: missing.incidentId,
+    });
+    await start(snapshot);
+    expect(connection.syncHealth(snapshot, true).status).toBe('attention');
+    await connection.sendLive(snapshot);
+    expect(connection.syncHealth(snapshot, true)).toMatchObject({
+      status: 'healthy',
+      incidentId: null,
+    });
+    now += 16_000;
+    liveResult = 'network';
+    await connection.sendLive(snapshot);
+    const broken = connection.syncHealth(snapshot, true);
+    expect(broken).toMatchObject({ status: 'attention', reason: 'network_failed' });
+    expect(broken.incidentId).not.toBe(missing.incidentId);
+    const before = liveRequests;
+    await connection.sendLive(snapshot);
+    expect(liveRequests).toBe(before); // finite backoff; no old frame queue
+    connection.retryLive();
+    liveResult = 'drop';
+    await connection.sendLive(snapshot);
+    expect(connection.syncHealth(snapshot, true).status).toBe('attention');
+    liveResult = 'accepted';
+    await connection.sendLive(snapshot);
+    expect(connection.syncHealth(snapshot, true).status).toBe('healthy');
+    const next = { ...snapshot, cursor: { ...snapshot.cursor, mapEpoch: 2 } };
+    expect(connection.syncHealth(next, true).status).toBe('waiting');
+    now += 15_001;
+    expect(connection.syncHealth(next, true).status).toBe('attention');
+    // Reclaiming and a reliable ACK are not receiver recovery, even in the same map.
+    await connection.claim(next, 'rev', false);
+    await start(snapshot);
+    expect(connection.syncHealth(next, true).status).toBe('attention');
+    await expect(connection.sendLive(next)).rejects.toThrow('rivalhub_map_start_pending');
+    connection.stopSync('match');
+    releaseFails = true;
+    await expect(connection.release()).rejects.toThrow();
+    const stoppedRequests = liveRequests;
+    expect(await start(next)).toBe('retry');
+    await connection.sendLive(next);
+    expect(liveRequests).toBe(stoppedRequests);
+    releaseFails = false;
+    await connection.release();
+    expect(connection.syncHealth(next, true).status).toBe('stopped');
+    otherDevice = true;
+    await connection.claim(next, 'rev', false);
+    // Explicitly stopped remains stopped until this machine actually reclaims.
+    expect(connection.syncHealth(next, true).status).toBe('stopped');
+    otherDevice = false;
+    await connection.claim(next, 'rev', false);
+    otherDevice = true;
+    await connection.claim(next, 'rev', false);
+    now += 60_000;
+    expect(connection.syncHealth(next, true)).toMatchObject({
+      status: 'other_device',
+      deviceName: '另一制播机',
+    });
+    const anotherMatch = { ...next, matchId: 'match-b' };
+    expect(connection.syncHealth(anotherMatch, true).status).toBe('waiting');
+    now += 16_000;
+    expect(connection.syncHealth(anotherMatch, true)).toMatchObject({
+      status: 'attention',
+      reason: 'source_unavailable',
+    });
+  } finally {
+    clock.mockRestore();
+  }
 });

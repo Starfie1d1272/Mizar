@@ -1,6 +1,7 @@
+import { RivalHubMatchLibrary, type WebsiteSchedule } from './RivalHubMatchLibrary';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { switchToRivalhubBp, useBpWorkspace } from '../bp/client';
-import { Button, Panel, Select, StatusBanner, StatusPill } from '../ui/primitives';
+import { Button, Panel, StatusBanner, StatusPill } from '../ui/primitives';
 import { openRivalHubAuthorization } from '../preparation/client';
 import { RivalHubSyncControls } from './RivalHubSyncControls';
 
@@ -11,19 +12,10 @@ type Connection = {
   activeSourceMatchId: string | null;
   activeDeviceName: string | null;
   pairing?: 'idle' | 'pending';
+  refreshError?: string | null;
 };
 
-type Schedule = {
-  competition: { name: string };
-  matches: {
-    matchId: string;
-    scheduledAt: string | null;
-    entrantA: { name: string };
-    entrantB: { name: string };
-    format: string;
-    stageLabel?: string | null;
-  }[];
-};
+type Schedule = WebsiteSchedule;
 
 export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches' | 'settings' }) {
   const [connection, setConnection] = useState<Connection | null>(null);
@@ -194,9 +186,12 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
     }
   }
 
+  const Container = mode === 'settings' ? Panel : 'section';
   return (
-    <Panel className="operator-rivalhub-panel" aria-label="RivalHub 赛事连接与准备">
-      {mode === 'settings' ? <RivalHubSyncControls /> : null}
+    <Container
+      className={mode === 'settings' ? 'operator-rivalhub-panel' : 'rivalhub-library-source'}
+      aria-label="RivalHub 赛事连接与准备"
+    >
       {connection === null ? (
         <p role="status">{loadError ? '赛事连接尚未读取' : '正在读取赛事连接…'}</p>
       ) : !connection.paired || (mode === 'settings' && rePairing) ? (
@@ -213,7 +208,7 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
             <div className="operator-rivalhub-header">
               <div>
                 <h2>连接 RivalHub 赛事</h2>
-                <p>在 RivalHub 登录并确认授权，完成后会自动连接。</p>
+                <p>在 RivalHub 登录并确认授权，完成后会自动连接，再到比赛库选择本场。</p>
               </div>
             </div>
             <div className="operator-rivalhub-form">
@@ -243,64 +238,74 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
         )
       ) : (
         <>
-          <div className="operator-rivalhub-header">
-            <div>
-              <h2>{schedule?.competition?.name ?? '已连接赛事'}</h2>
-              <p>
-                {connection.displayName} · {schedule?.competition?.name ?? '赛事已连接'}
-              </p>
-            </div>
-            <StatusPill tone="success">已连接</StatusPill>
-          </div>
-
           {mode === 'settings' ? (
             <>
-              <Button onClick={() => setRePairing(true)}>重新连接 / 更换赛事</Button>
-              <Button
-                onClick={() => {
-                  void fetch('/operator/rivalhub/disconnect', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: '{}',
-                  })
-                    .then((response) => {
-                      if (!response.ok) throw new Error('断开未完成，请重试。');
-                      return refresh();
-                    })
-                    .catch((error: Error) => setError(error.message));
-                }}
-              >
-                断开 RivalHub
-              </Button>
+              <div className="operator-rivalhub-header">
+                <div>
+                  <h2>{schedule?.competition?.name ?? '已连接赛事'}</h2>
+                  <p>
+                    {connection.displayName} · {schedule?.competition?.name ?? '赛事已连接'}
+                  </p>
+                </div>
+                <StatusPill tone={loadError || connection.refreshError ? 'warning' : 'success'}>
+                  {loadError || connection.refreshError ? '已授权 · 同步异常' : '已授权'}
+                </StatusPill>
+              </div>
+            </>
+          ) : null}
+          {mode === 'settings' ? (
+            <>
+              <div className="preparation-actions">
+                <Button
+                  variant="primary"
+                  onClick={() => {
+                    window.location.href = '/resources?source=website';
+                  }}
+                >
+                  去比赛库
+                </Button>
+              </div>
+              <RivalHubSyncControls />
+              <details>
+                <summary>连接管理</summary>
+                <div className="preparation-actions">
+                  <Button onClick={() => setRePairing(true)}>重新授权 / 更换连接</Button>
+                  <Button
+                    onClick={() => {
+                      void fetch('/operator/rivalhub/disconnect', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: '{}',
+                      })
+                        .then((response) => {
+                          if (!response.ok) throw new Error('断开未完成，请重试。');
+                          return refresh();
+                        })
+                        .catch((error: Error) => setError(error.message));
+                    }}
+                  >
+                    断开 RivalHub
+                  </Button>
+                </div>
+              </details>
             </>
           ) : null}
           {mode === 'matches' ? (
             <>
               {schedule === null ? (
                 <p role="status">{loadError ? '赛程未能加载' : '正在加载近期比赛…'}</p>
-              ) : schedule.matches.length > 0 ? (
-                <Select
-                  label="选择比赛"
-                  defaultValue=""
-                  onChange={(e) => void handleSelectMatch(e.target.value)}
-                  disabled={selecting}
-                >
-                  <option value="">查看近期赛程（请选择比赛）</option>
-                  {schedule.matches.map((match) => (
-                    <option key={match.matchId} value={match.matchId}>
-                      {match.scheduledAt
-                        ? new Date(match.scheduledAt).toLocaleString('zh-CN')
-                        : '待排期'}{' '}
-                      · {match.entrantA.name} vs {match.entrantB.name} ·{' '}
-                      {match.format.toUpperCase()}
-                    </option>
-                  ))}
-                </Select>
               ) : (
-                <p className="operator-rivalhub-empty">近期暂无比赛</p>
+                <RivalHubMatchLibrary
+                  schedule={schedule}
+                  selecting={selecting}
+                  activeMatchId={connection.activeMatchId}
+                  refreshing={refreshing}
+                  onRefresh={() => void refresh()}
+                  onSelect={(id) => void handleSelectMatch(id)}
+                />
               )}
 
-              {bpWorkspace?.pendingRivalhub && !connection.activeMatchId ? (
+              {bpWorkspace?.pendingRivalhub ? (
                 <div className="operator-rivalhub-candidate">
                   <div className="operator-rivalhub-candidate-info">
                     <small>待确认比赛候选</small>
@@ -328,7 +333,7 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
         </>
       )}
 
-      {mode === 'matches' || loadError ? (
+      {(mode === 'matches' && !schedule) || (mode === 'settings' && loadError) ? (
         <Button
           aria-label="刷新比赛"
           disabled={refreshing}
@@ -338,6 +343,9 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
           刷新比赛
         </Button>
       ) : null}
+      {mode === 'matches' && connection?.refreshError ? (
+        <StatusBanner tone="warning">{connection.refreshError}</StatusBanner>
+      ) : null}
       {loadError ? (
         <StatusBanner tone="warning">
           {loadError}
@@ -346,6 +354,6 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
       ) : null}
       {error ? <StatusBanner tone="danger">{error}</StatusBanner> : null}
       {message ? <StatusBanner tone="info">{message}</StatusBanner> : null}
-    </Panel>
+    </Container>
   );
 }

@@ -7,6 +7,8 @@ import { parseReliableEventV1, type ReliableEventV1 } from '@mizar/protocol/outp
 import { describe, expect, it, vi } from 'vitest';
 
 import { ReliableOutbox } from '../src/output/reliable-outbox.js';
+import { BusinessJournal } from '../src/support/business-journal.js';
+import { readBusinessHistory } from '../src/support/business-history.js';
 
 vi.mock('node:fs/promises', async (importOriginal) => ({
   ...(await importOriginal<typeof import('node:fs/promises')>()),
@@ -59,11 +61,26 @@ describe('bounded reliable output', () => {
     const dir = await mkdtemp(join(tmpdir(), 'mizar-outbox-'));
     try {
       const path = join(dir, 'outbox.json');
-      const first = new ReliableOutbox(path);
+      vi.stubEnv('MIZAR_APP_VERSION', '1.3.4');
+      const journal = new BusinessJournal(dir, () => {});
+      const first = new ReliableOutbox(path, undefined, (record, reason) =>
+        journal.reliable(record, reason),
+      );
       const at = new Date('2026-09-28T00:00:00.000Z');
       expect(await first.enqueue(event('event-one'), at)).toBe(true);
       expect(await first.enqueue(event('event-one'), at)).toBe(false);
       let calls = 0;
+      await first.flush({
+        now: at,
+        isCurrent: () => true,
+        canSend: () => false,
+        sink: {
+          send: () => {
+            throw new Error('guard must prevent send');
+          },
+        },
+      });
+      expect(first.getRecords()[0]?.attempts).toBe(0);
       await first.flush({
         now: at,
         isCurrent: () => true,
@@ -75,8 +92,14 @@ describe('bounded reliable output', () => {
         },
       });
       expect(first.getRecords()[0]).toMatchObject({ status: 'pending', attempts: 1 });
-      const recovered = new ReliableOutbox(path);
+      await journal.close();
+      vi.stubEnv('MIZAR_APP_VERSION', '1.3.5');
+      const restartedJournal = new BusinessJournal(dir, () => {});
+      const recovered = new ReliableOutbox(path, undefined, (record, reason) =>
+        restartedJournal.reliable(record, reason),
+      );
       await recovered.load();
+      for (const record of recovered.getRecords()) restartedJournal.reliable(record, 'restored');
       await recovered.flush({
         now: new Date('2026-09-28T00:00:00.500Z'),
         isCurrent: () => true,
@@ -99,8 +122,51 @@ describe('bounded reliable output', () => {
         },
       });
       expect(calls).toBe(2);
+      await restartedJournal.flush();
+      const history = readBusinessHistory(dir)
+        .groups.flatMap((g) => g.events)
+        .filter((entry) => entry.stage === 'business_delivery');
+      expect(history.map((entry) => entry.evidence.reason)).toEqual([
+        'queued',
+        'send_guard_blocked',
+        'retry_unknown',
+        'restored',
+        'receiver_accepted',
+      ]);
+      expect(history.find((e) => e.evidence.reason === 'restored')?.evidence).toMatchObject({
+        generatedVersion: '1.3.4',
+        restoredVersion: '1.3.5',
+        originalObservedAt: '2026-09-28T00:00:00.000Z',
+        sentAt: null,
+        acknowledgedAt: null,
+      });
+      expect(history.at(-1)?.evidence).toMatchObject({
+        generatedVersion: '1.3.4',
+        status: 'accepted',
+        attempts: 2,
+        mapEpoch: 3,
+        sourceGeneration: 2,
+        receiveSequence: 9,
+      });
+      await recovered.enqueue(event('event-two'), at);
+      await recovered.flush({
+        now: new Date('2026-09-28T00:00:02.000Z'),
+        isCurrent: () => true,
+        sink: { send: () => Promise.resolve('rejected' as const) },
+      });
+      await restartedJournal.flush();
+      const rejection = readBusinessHistory(dir)
+        .groups.flatMap((g) => g.events)
+        .filter((e) => e.stage === 'business_delivery')
+        .at(-1)?.evidence;
+      expect(rejection).toMatchObject({
+        status: 'rejected',
+        attempts: 1,
+        reason: 'delivery_rejected_unknown',
+      });
       expect(recovered.getRecords()[0]?.status).toBe('accepted');
     } finally {
+      vi.unstubAllEnvs();
       await rm(dir, { recursive: true, force: true });
     }
   });

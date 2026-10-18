@@ -1,5 +1,7 @@
+import { flushPerformanceJournal } from './performance-journal';
+import { flushControlSnapshots, sendControlEvidence } from './control-journal';
 import { useState } from 'react';
-import { Button, Panel, StatusBanner } from '../ui';
+import { Field, Button, Panel, StatusBanner } from '../ui';
 import { desktopInvoke } from '../workspace/client';
 
 type CollectedStatus = { collectionStatus: 'available' | 'failed' | 'timeout'; value: unknown };
@@ -95,6 +97,8 @@ function supportGsi(value: unknown) {
 }
 
 export function SupportExport() {
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ error: boolean; message: string } | null>(null);
 
@@ -102,18 +106,31 @@ export function SupportExport() {
     if (busy) return;
     setBusy(true);
     setResult(null);
+    let stage: 'collect' | 'generate' | 'save' = 'collect';
     try {
       const desktop = Boolean(window.__TAURI_INTERNALS__);
-      const [gsi, cs2] = desktop
+      const [gsi, cs2, consoleStatus] = desktop
         ? await Promise.all([
             boundedStatus(desktopInvoke('gsi_status')),
             boundedStatus(desktopInvoke('cs2_host_status')),
+            boundedStatus(desktopInvoke('cs2_console_status')),
           ])
-        : [null, null];
+        : [null, null, null];
+      if (consoleStatus)
+        await sendControlEvidence(
+          'cs2_console_export_snapshot',
+          consoleStatus.collectionStatus === 'available' ? 'result' : 'failure',
+          { ...consoleStatus, deadlineMs: 8000 },
+        );
+      await flushControlSnapshots();
+      await flushPerformanceJournal();
+      stage = 'generate';
       const response = await fetch('/debug/support-bundle', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          ...(from ? { from: new Date(from).toISOString() } : {}),
+          ...(to ? { to: new Date(to).toISOString() } : {}),
           desktop: desktop
             ? {
                 gsi:
@@ -131,22 +148,21 @@ export function SupportExport() {
             : null,
         }),
         cache: 'no-store',
-        signal: AbortSignal.timeout(15_000),
+        signal: AbortSignal.timeout(120_000),
       });
-      if (!response.ok) throw new Error('export_failed');
+      if (!response.ok) throw new Error(`export_http_${response.status}`);
       const text = await response.text();
       if (
-        new TextEncoder().encode(text).length > 1024 * 1024 ||
+        new TextEncoder().encode(text).length > 256 * 1024 * 1024 ||
         (JSON.parse(text) as { schema?: string }).schema !== 'mizar-support-bundle/1'
       )
         throw new Error('invalid_bundle');
+      stage = 'save';
       if (desktop) {
         const saved = await desktopInvoke<boolean>('save_support_bundle', { contents: text });
         setResult({
           error: false,
-          message: saved
-            ? '诊断包已保存，可将文件附在问题反馈中。'
-            : '已取消保存。可以随时重新导出。',
+          message: saved ? '诊断包已保存，请私下交付维护者。' : '已取消保存。可以随时重新导出。',
         });
       } else {
         const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
@@ -159,14 +175,23 @@ export function SupportExport() {
         window.setTimeout(() => URL.revokeObjectURL(url), 1000);
         setResult({
           error: false,
-          message: '已发起下载。请在浏览器下载列表中确认文件后，再附在问题反馈中。',
+          message: '已发起下载。请在浏览器下载列表中确认文件后，再私下交付维护者。',
         });
       }
-    } catch {
+    } catch (error) {
+      const code = error instanceof Error ? error.message : '';
       setResult({
         error: true,
         message:
-          '诊断包未能导出。请确认 Mizar 本地服务正在运行，并检查保存位置是否可写，然后重试。',
+          stage === 'save'
+            ? '诊断包已生成，但未能保存。请检查保存位置后重新导出。'
+            : code.startsWith('export_http_')
+              ? `本地服务未能生成诊断包（HTTP ${code.slice(12)}），请稍后重试。`
+              : code === 'invalid_bundle'
+                ? '诊断包内容不完整或超过大小限制，请缩短导出时间范围后重试。'
+                : stage === 'generate'
+                  ? '诊断包生成请求未完成，请检查本地服务连接后重试。'
+                  : '诊断信息收集未完成，请稍后重试。',
       });
     } finally {
       setBusy(false);
@@ -176,7 +201,10 @@ export function SupportExport() {
   return (
     <Panel>
       <h2>问题反馈</h2>
-      <p>导出运行状态与错误记录，反馈时附上版本、发生时间和操作步骤。</p>
+      <p>
+        诊断包包含操作记录、比赛账号信息（含名单和 Steam64）及相关 OBS
+        日志。人工导出不会自动上传；技术诊断回传需另行同意。请私下交付维护者，反馈时附上版本、时间和操作步骤。
+      </p>
       <p>
         <a
           href="https://github.com/Starfie1d1272/Mizar/issues/new?template=bug-report.yml"
@@ -196,7 +224,23 @@ export function SupportExport() {
           在 GitHub 反馈问题
         </a>
       </p>
+      <details>
+        <summary>导出时间范围</summary>
+        <Field
+          label="开始时间（留空包含全部保留记录）"
+          type="datetime-local"
+          value={from}
+          onChange={(e) => setFrom(e.target.value)}
+        />
+        <Field
+          label="结束时间（留空至导出时）"
+          type="datetime-local"
+          value={to}
+          onChange={(e) => setTo(e.target.value)}
+        />
+      </details>
       <Button
+        variant="primary"
         loading={busy}
         onClick={() => void exportBundle()}
         aria-label={busy ? '正在生成诊断包' : '导出诊断包'}

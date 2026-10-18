@@ -1,3 +1,5 @@
+import { browserErrorEvidence, controlEvidence, nativeSnapshot } from '../debug/control-journal';
+import type { ControlTask } from '../debug/control-task';
 import { useEffect, useState } from 'react';
 import {
   programSceneStateSchema,
@@ -68,11 +70,66 @@ export class HostWindowControlError extends Error {}
 export async function desktopInvoke<T>(
   command: string,
   args?: Record<string, unknown>,
+  task?: ControlTask,
 ): Promise<T> {
   if (!window.__TAURI_INTERNALS__) return Promise.reject(new Error('此操作需要桌面工作区。'));
+  const operationId = crypto.randomUUID();
+  const observe =
+    !/^(?:gsi_status|cs2_host_status|cs2_config_status|cs2_console_status|workspace_exit_status|read_obs_configuration_context|save_support_bundle)$/.test(
+      command,
+    );
+  if (observe)
+    controlEvidence(command, 'begin', {
+      taskId: task?.taskId ?? null,
+      parentOperationId: task?.operationId ?? null,
+      trigger: task?.trigger ?? 'unattributed',
+      operationId,
+      args,
+    });
   try {
-    return await window.__TAURI_INTERNALS__.invoke<T>(command, args);
+    const result = await window.__TAURI_INTERNALS__.invoke<T>(command, {
+      ...args,
+      diagnosticOperationId: operationId,
+      ...(task
+        ? {
+            diagnosticTaskId: task.taskId,
+            diagnosticParentOperationId: task.operationId,
+            diagnosticTrigger: task.trigger,
+          }
+        : {}),
+    });
+    if (observe)
+      controlEvidence(command, 'result', {
+        taskId: task?.taskId ?? null,
+        parentOperationId: task?.operationId ?? null,
+        trigger: task?.trigger ?? 'unattributed',
+        operationId,
+        result,
+      });
+    if (!observe && command !== 'save_support_bundle') {
+      nativeSnapshot(command, result);
+      if (task) task.event('native_snapshot', { command, operationId, result });
+    }
+    return result;
   } catch (error) {
+    if (!observe && task)
+      task.event('native_snapshot_failure', {
+        command,
+        operationId,
+        error: browserErrorEvidence(error),
+      });
+    if (!observe && command !== 'save_support_bundle')
+      nativeSnapshot(command, {
+        error: browserErrorEvidence(error),
+      });
+    if (observe)
+      controlEvidence(command, 'failure', {
+        taskId: task?.taskId ?? null,
+        parentOperationId: task?.operationId ?? null,
+        trigger: task?.trigger ?? 'unattributed',
+        operationId,
+        error: browserErrorEvidence(error),
+      });
     if (
       error &&
       typeof error === 'object' &&
@@ -81,11 +138,13 @@ export async function desktopInvoke<T>(
       'message' in error &&
       typeof error.message === 'string'
     ) {
-      throw new HostWindowControlError(error.message);
+      throw new HostWindowControlError(error.message, { cause: error });
     }
     // Tauri commands returning Result<T, String> reject with a string.
     throw error instanceof Error
       ? error
-      : new Error(typeof error === 'string' && error.trim() ? error : '桌面操作失败，请重试。');
+      : new Error(typeof error === 'string' && error.trim() ? error : '桌面操作失败，请重试。', {
+          cause: error,
+        });
   }
 }

@@ -68,7 +68,7 @@ export function makeResourceDescriptor(pack, manifest, parameters) {
   const policy = {
     packVersion: pack.manifest.packVersion,
     sourceSha: pack.manifest.source.gitSha,
-    coreVersion: core.appVersion.replace(/-rc\.\d+$/, ''),
+    coreVersion: core.appVersion.replace(/-(?:alpha|beta|rc)\.[1-9]\d*$/, ''),
     minimumSequence: publication.sequence,
   };
   // Also check actual Core compatibility; makePublication checks only the lower bound.
@@ -111,7 +111,14 @@ export async function prepareResourceCandidate(
 ) {
   const core = coreIdentity(manifest);
   requireValue(Number.isSafeInteger(sequence) && sequence > 0, '资源序号必须是正整数');
-  const pack = await buildOfficialPack(root, { packVersion, sourceSha: core.gitSha });
+  const compatibility = core.appVersion.startsWith('2.')
+    ? { minimumCoreVersion: '2.0.0', maximumCoreVersionExclusive: '3.0.0' }
+    : {};
+  const pack = await buildOfficialPack(root, {
+    packVersion,
+    sourceSha: core.gitSha,
+    ...compatibility,
+  });
   const issuedAt = new Date(Math.floor(now / 1000) * 1000).toISOString().replace('.000Z', 'Z');
   const expiresAt = new Date(Math.floor(now / 1000) * 1000 + 90 * 86400000)
     .toISOString()
@@ -205,7 +212,7 @@ export async function readResourceCandidate(folder, manifest) {
   const archiveName = `Mizar-official-epl-default-${entry.policy.packVersion}.zip`;
   const archiveBytes = await boundedRead(join(folder, archiveName), LIMITS.archiveBytes);
   const pack = verifyPackBytes(archiveBytes, {
-    coreVersion: manifest.appVersion.replace(/-rc\.\d+$/, ''),
+    coreVersion: manifest.appVersion.replace(/-(?:alpha|beta|rc)\.[1-9]\d*$/, ''),
   });
   const expected = makeResourceDescriptor(pack, manifest, {
     ...(catalog.authorization ?? entry.publication),

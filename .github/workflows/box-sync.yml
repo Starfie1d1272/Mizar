@@ -13,6 +13,11 @@ on:
         type: choice
         default: sync
         options: [sync, probe, verify-downloads, rollback-downloads]
+      transport:
+        description: 上传传输（手动恢复可选 curl）
+        type: choice
+        default: native
+        options: [native, curl]
 permissions:
   contents: read
   actions: read
@@ -30,19 +35,23 @@ jobs:
           ref: main
           persist-credentials: false
       - name: 同步与校验云盘
+        id: mirror
         env:
           # 跨境往返可能超过 Node 默认的 250 毫秒地址选择等待时间。
           NODE_OPTIONS: --network-family-autoselection-attempt-timeout=2000
           GH_TOKEN: ${{ github.token }}
           MIZAR_BOX_REPO_TOKEN: ${{ secrets.MIZAR_BOX_REPO_TOKEN }}
           RELEASE_TAG: ${{ inputs.tag }}
+          BOX_UPLOAD_TRANSPORT: ${{ inputs.transport || 'native' }}
           BOX_SYNC_MODE: ${{ inputs.mode || 'sync' }}
         run: node scripts/qualification/box-sync.mjs
       - name: Record complete qualification trigger through Box verification timing
+        if: steps.mirror.outputs.prerelease == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/qualification/release-timings.mjs box release-timings.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - if: steps.mirror.outputs.prerelease == 'false'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-timings-${{ github.run_id }}-${{ github.run_attempt }}
           path: release-timings.json

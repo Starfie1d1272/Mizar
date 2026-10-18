@@ -4,6 +4,7 @@ export {
   isSeriesProgressCheckpointCompatible,
   makeSeriesProgressCheckpoint,
   refreshSeriesProgressMetadata,
+  reconcileSeriesProgressResults,
   syncSeriesProgress,
   safeAbsoluteRoundWins,
 } from './reducer.js';

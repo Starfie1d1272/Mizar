@@ -19,6 +19,7 @@ import { RESOURCE_ASSET_NAMES as resourceNames } from '../../packages/resource-p
 import { LIMITS } from '../../packages/resource-pack-contract/index.mjs';
 import { resourceAssetInventory } from '../ci/resource-release.mjs';
 import { apiRequest, multipartUpload } from './box-upload.mjs';
+import { curlMultipartUpload } from './box-curl-upload.mjs';
 
 const { fetch, AbortSignal, FormData } = globalThis;
 
@@ -51,7 +52,7 @@ export function promotionTag(run, jobs) {
     .filter(
       (job) => job.run_id === run.id && job.status === 'completed' && job.conclusion === 'success',
     )
-    .map((job) => /^发布 Mizar (v\d+\.\d+\.\d+(?:-rc\.\d+)?)$/.exec(job.name))
+    .map((job) => /^发布 Mizar (v\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.[1-9]\d*)?)$/.exec(job.name))
     .filter(Boolean);
   requireValue(candidates.length === 1, '无法确定唯一晋级标签；请手动指定标签重试');
   return candidates[0][1];
@@ -169,6 +170,7 @@ const networkCodes = new Set([
 function safeNetworkCode(error) {
   if (error?.name === 'TimeoutError' || error?.name === 'AbortError') return 'timeout';
   const code = error?.cause?.code || error?.code;
+  if (code === 'BOX_RESPONSE_LIMIT') return 'response_limit';
   return networkCodes.has(code) ? code : 'network';
 }
 function directoryCategory(path) {
@@ -197,28 +199,46 @@ async function boxStage(stage, action) {
 }
 async function checkedFetch(url, options = {}, timeout = 120000, transport = fetch) {
   // Error text and response bodies may contain temporary upload URLs or credentials.
-  let response;
-  const readOnlyBox = (options.method ?? 'GET') === 'GET' && new URL(url).origin === origin;
+  const readOnlyBox =
+    ['GET', 'HEAD'].includes((options.method ?? 'GET').toUpperCase()) &&
+    new URL(url).origin === origin;
+  const temporaryStatuses = new Set([408, 429, 500, 502, 503, 504]);
+  const retry = async (attempt, reason) => {
+    console.log(`Box 只读请求暂态失败（${reason}），${attempt + 1}s 后重试 ${attempt + 1}/2`);
+    await new Promise((resolve) => globalThis.setTimeout(resolve, (attempt + 1) * 1000));
+  };
   for (let attempt = 0; ; attempt++) {
     const signal = AbortSignal.timeout(timeout);
+    let response;
     try {
       response = await transport(url, { ...options, signal });
-      break;
     } catch (error) {
       const code = safeNetworkCode(error);
-      if (readOnlyBox && code === 'UND_ERR_CONNECT_TIMEOUT' && !signal.aborted && attempt < 2) {
-        console.log(`Box 只读连接超时，${attempt + 1}s 后重试 ${attempt + 1}/2`);
-        await new Promise((resolve) => globalThis.setTimeout(resolve, (attempt + 1) * 1000));
+      if (
+        readOnlyBox &&
+        (networkCodes.has(code) || (code === 'timeout' && signal.aborted)) &&
+        attempt < 2
+      ) {
+        await retry(attempt, code);
         continue;
       }
       throw new MirrorError(
-        `网络请求失败或超时（${code}，请求上限${timeout}ms）；保留现有文件，可重试同一版本`,
+        `网络请求失败或超时（${code}，每次请求上限${timeout}ms，已尝试${attempt + 1}次）；保留现有文件，可重试同一版本`,
       );
     }
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      if (readOnlyBox && temporaryStatuses.has(response.status) && attempt < 2) {
+        await retry(attempt, `HTTP ${response.status}`);
+        continue;
+      }
+      throw new MirrorError(
+        `远端请求失败（HTTP ${response.status}，已尝试${attempt + 1}次）；保留现有文件`,
+        response.status,
+      );
+    }
+    return response;
   }
-  if (!response.ok)
-    throw new MirrorError(`远端请求失败（HTTP ${response.status}）；保留现有文件`, response.status);
-  return response;
 }
 
 export class BoxClient {
@@ -1137,10 +1157,17 @@ async function main() {
     const { jobs } = await github(`actions/runs/${run.id}/jobs?per_page=100`);
     tag = promotionTag(run, jobs);
   }
-  if (mode === 'sync' && /^v\d+\.\d+\.\d+-rc\.\d+$/.test(tag ?? ''))
-    return '候选版本：Stable 与 Archive 保持原样。';
+  const prerelease = /^v\d+\.\d+\.\d+-(?:alpha|beta|rc)\.[1-9]\d*$/.test(tag ?? '');
+  if (process.env.GITHUB_OUTPUT)
+    await appendFile(process.env.GITHUB_OUTPUT, `prerelease=${prerelease}\n`);
+  if (prerelease) return '预发布版本：Box Stable、Downloads、Updates 与 Archive 保持原样。';
   const box =
-    mode === 'verify-downloads' ? undefined : new BoxClient(process.env.MIZAR_BOX_REPO_TOKEN);
+    mode === 'verify-downloads'
+      ? undefined
+      : new BoxClient(
+          process.env.MIZAR_BOX_REPO_TOKEN,
+          process.env.BOX_UPLOAD_TRANSPORT === 'curl' ? curlMultipartUpload : multipartUpload,
+        );
   if (mode === 'probe') return probe(box);
   const resolveIdentity = cacheReleaseIdentities(releaseIdentity);
   const identity = await resolveIdentity(tag);

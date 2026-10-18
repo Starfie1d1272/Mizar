@@ -1,3 +1,7 @@
+import type { RetainedDiagnosticBatch } from './delivery.js';
+import { Readable } from 'node:stream';
+import { finished } from 'node:stream/promises';
+import { encodeSupportBundle, fullLogArchive } from './archive.js';
 import {
   collectObsNativeEvidence,
   failedObsNativeEvidence,
@@ -13,9 +17,11 @@ import { obsSceneName } from '../obs/desired-state.js';
 import type { DebugEvidenceStore } from '../runtime/debug-state.js';
 import type { LatestWinsConsumerHealth } from '../runtime/latest-wins.js';
 import type { RecorderHealth } from '../telemetry/capture-recorder.js';
-import { choice, count, digest, readSupportLogs, record } from './logs.js';
+import type { BusinessJournal } from './business-journal.js';
+import { readBusinessHistory } from './business-history.js';
+import { choice, count, digest, readSupportLogs, record, recorderCodes } from './logs.js';
 
-export const SUPPORT_BUNDLE_MAX_BYTES = 1024 * 1024;
+export const SUPPORT_BUNDLE_MAX_BYTES = 256 * 1024 * 1024;
 const findingCodes = [
   'configuration_unchecked',
   'configuration_check_failed',
@@ -133,6 +139,14 @@ export function registerSupportRoutes(
     readonly logsDirectory?: string;
     readonly artifact?: { readonly gitSha: string; readonly artifactSha256: string };
     readonly runtimeSummary: () => ReturnType<DebugEvidenceStore['getSupportSummary']>;
+    readonly sessionLogHealth?: () => unknown;
+    readonly pendingJournalEvidence?: () => readonly string[];
+    readonly retainedDiagnosticBatches?: () => Promise<readonly RetainedDiagnosticBatch[]>;
+    readonly pendingPerformanceEvidence?: () => readonly unknown[];
+    readonly beginPerformanceExport?: () => Promise<() => Promise<void>>;
+    readonly flushBusinessLog?: () => Promise<void>;
+    readonly businessLogHealth?: () => ReturnType<BusinessJournal['getHealth']>;
+    readonly businessLogStatus?: () => 'available' | 'write_failed' | 'not_configured';
     readonly recorder: () => RecorderHealth;
     readonly delivery: () => readonly LatestWinsConsumerHealth[];
     readonly hosts: () => LocalWebHostDiagnostics;
@@ -157,6 +171,9 @@ export function registerSupportRoutes(
           type: 'object',
           additionalProperties: false,
           properties: {
+            from: { type: 'string', format: 'date-time' },
+            to: { type: 'string', format: 'date-time' },
+            focusSessionId: { type: 'string', maxLength: 128 },
             desktop: {
               type: ['object', 'null'],
               additionalProperties: false,
@@ -223,7 +240,11 @@ export function registerSupportRoutes(
         return reply.code(403).send({ error: 'support_origin_forbidden' });
       if (exporting) return reply.code(429).send({ error: 'support_export_busy' });
       exporting = true;
+      let streaming = false;
+      let releasePerformance: (() => Promise<void>) | undefined;
       try {
+        await options.flushBusinessLog?.();
+        releasePerformance = await options.beginPerformanceExport?.();
         const [logs, obs, nativeObs] = await Promise.all([
           readSupportLogs(options.logsDirectory, 160 * 1024),
           options.obs().catch(() => undefined),
@@ -235,7 +256,11 @@ export function registerSupportRoutes(
             )
             .catch(failedObsNativeEvidence),
         ]);
-        const { logAttachments: obsLogAttachments = [], ...nativeSummary } = nativeObs;
+        const {
+          logAttachments: obsLogAttachments = [],
+          relatedLogFiles: obsRelatedLogFiles = [],
+          ...nativeSummary
+        } = nativeObs;
         const program = options.program?.();
         const context = options.programContext?.();
         const desktop = record(record(request.body).desktop);
@@ -246,8 +271,54 @@ export function registerSupportRoutes(
         const hosts = options.hosts();
         const exportedAt = new Date().toISOString();
         const gitSha = digest(options.artifact?.gitSha, 40);
+        const businessHistory = readBusinessHistory(options.logsDirectory);
+        const businessHealth = options.businessLogHealth?.();
         const bundle = {
           schema: 'mizar-support-bundle/1',
+          fullLogs: await fullLogArchive(
+            options.logsDirectory,
+            {
+              ...(typeof record(request.body).from === 'string'
+                ? { from: new Date(record(request.body).from as string).toISOString() }
+                : {}),
+              ...(typeof record(request.body).to === 'string'
+                ? { to: new Date(record(request.body).to as string).toISOString() }
+                : {}),
+              ...(typeof record(request.body).focusSessionId === 'string'
+                ? { focusSessionId: record(request.body).focusSessionId as string }
+                : {}),
+            },
+            options.pendingPerformanceEvidence?.(),
+            {
+              journalMemory: options.pendingJournalEvidence?.() ?? [],
+              outbox: (await options.retainedDiagnosticBatches?.()) ?? [],
+            },
+          ).then((archive) => ({
+            ...archive,
+            productLogStatus: archive.status,
+            status: obsRelatedLogFiles.length ? 'available' : archive.status,
+            files: [...archive.files, ...obsRelatedLogFiles],
+          })),
+          sessionLogHealth: options.sessionLogHealth?.() ?? null,
+          businessHistory: {
+            ...businessHistory,
+            manifest: {
+              ...businessHistory.manifest,
+              ...businessHealth,
+              writeFailures: Math.max(
+                businessHistory.manifest.writeFailures,
+                businessHealth?.writeFailures ?? 0,
+              ),
+              committedWriteFailures: businessHistory.manifest.writeFailures,
+              committedDroppedPendingEvents: businessHistory.manifest.droppedPendingEvents,
+              committedCoalescedEvents: businessHistory.manifest.coalescedEvents,
+              uncommittedWriteFailures: Math.max(
+                0,
+                (businessHealth?.writeFailures ?? 0) - businessHistory.manifest.writeFailures,
+              ),
+              currentWriteStatus: options.businessLogStatus?.() ?? 'not_configured',
+            },
+          },
           manifest: {
             exportedAt,
             gitSha,
@@ -265,17 +336,24 @@ export function registerSupportRoutes(
             },
             limits: {
               bundleBytes: SUPPORT_BUNDLE_MAX_BYTES,
-              files: 16,
-              eventsPerFile: 32,
-              tailBytesPerFile: 65536,
-              headerBytesPerFile: 4096,
+              summaryIndex: {
+                files: 20,
+                eventsPerFile: 32,
+                tailBytesPerFile: 65536,
+                headerBytesPerFile: 4096,
+              },
+              fullLogs: { encoding: 'gzip-base64', volumeBytes: 1024 * 1024 },
             },
-            logPolicy: 'allowlisted-events; bounded-redacted-error-causes-and-technical-paths',
-            sessionPolicy: 'salted-per-export-sha256',
+            logPolicy: 'full-retained-product-logs-gzip-volumes; summaries-are-indexes',
+            relatedObsLogs:
+              'whole credential-redacted text only for fixed recent OBS sources with Mizar source markers; gzip/SHA-256 files; source age/count/byte/deadline limits and rejected sources remain explicit in nativeObs and file states; later appends are outside the snapshot',
+            browserCollection:
+              'locally delivered renderer events; per-document delivery failures are reported on later successful delivery; loss while offline or after a document closes may be unknown',
+            sessionPolicy: 'full-log-and-business-identifiers-stable; summary-log-session-salted',
           },
           summary: [
-            '本文件是有界诊断摘要，可用于提交 Mizar 问题；不包含原始遥测、选手资料或凭据；异常可能包含必要技术路径，用户目录名已脱敏。',
-            '日志保留阶段、结果、错误码及有界脱敏的异常消息、原因链和堆栈。session 只在本文件内关联。',
+            '本文件包含本机产品操作、相关配置、技术路径、比赛及账号信息。凭据值被替换；不自动上传，请私下交付维护者。',
+            'fullLogs 为保留期内完整产品日志的压缩分卷；logs 与 businessHistory 是索引。原始会话编号支持跨进程关联。',
             'missing 表示未找到文件，unreadable 表示读取失败；truncated 表示仅包含部分历史，omittedLines 包含未知或超限记录。',
             'desktop 状态来自导出时浏览器调用本机 Host；collectionStatus 区分成功、失败与超时。null 表示未知，不能据此推断 CS2 或 GSI 安装失败。',
             'nativeObs 只读取本机 OBS 配置、近期日志和进程元数据；配置来自已保存文件，不等同于当前节目画面。日志成功不证明当前画面正常，进程时间关联不证明实际 hook PID；缺失或未知均不能判为黑屏根因。',
@@ -306,6 +384,7 @@ export function registerSupportRoutes(
                 }
               : null,
             runtime: options.runtimeSummary(),
+            businessLog: options.businessLogStatus?.() ?? 'not_configured',
             gsi: {
               ingressConfigured: options.gsiConfigured,
               source: 'desktop-host-via-browser',
@@ -391,6 +470,7 @@ export function registerSupportRoutes(
               frameCount: count(recorder.frameCount),
               droppedFrames: count(recorder.droppedFrames),
               incomplete: bool(recorder.incomplete),
+              lastErrorCode: choice(recorder.lastErrorCode, recorderCodes),
             },
             delivery: options
               .delivery()
@@ -408,23 +488,34 @@ export function registerSupportRoutes(
           logs,
           attachments: { obsLogs: obsLogAttachments },
         };
-        const json = JSON.stringify(bundle, null, 2);
-        if (Buffer.byteLength(json) > SUPPORT_BUNDLE_MAX_BYTES)
-          throw new Error('support_bundle_limit');
+        let jsonBytes = 0;
+        for await (const chunk of encodeSupportBundle(bundle)) {
+          jsonBytes += Buffer.byteLength(chunk);
+          if (jsonBytes > SUPPORT_BUNDLE_MAX_BYTES) throw new Error('support_bundle_limit');
+        }
+        const stream = Readable.from(encodeSupportBundle(bundle));
+        streaming = true;
+        void finished(stream)
+          .catch(() => undefined)
+          .finally(() => {
+            exporting = false;
+          });
         return reply
           .type('application/json; charset=utf-8')
           .header(
             'content-disposition',
             `attachment; filename="mizar-support-${exportedAt.replaceAll(':', '-')}.json"`,
           )
-          .send(json);
-      } catch {
+          .send(stream);
+      } catch (error) {
+        request.log.error({ err: error, stage: 'support_export' }, '诊断导出失败');
         return reply.code(503).send({
           error: 'support_export_unavailable',
-          message: '诊断包暂时无法生成，请稍后重试。',
+          message: '诊断包暂时无法生成；若记录较多，请缩小导出时间范围后重试。',
         });
       } finally {
-        exporting = false;
+        await releasePerformance?.();
+        if (!streaming) exporting = false;
       }
     },
   );

@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const versionPattern =
-  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:alpha|beta|rc)\.(0|[1-9]\d*))?$/;
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:alpha|beta|rc)\.[1-9]\d*)?$/;
 
 // Deliberately bounded authoring format, rather than a general Markdown renderer.
 // The same parsed release feeds GitHub Markdown and the signed plain-text notes.
@@ -101,13 +101,17 @@ export function githubReleaseNotes(notes, { sourceSha, qualificationRunId }) {
   const repo = 'https://github.com/Starfie1d1272/Mizar';
   const tag = `v${notes.version}`;
   const box = 'https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/?p=/Downloads';
-  const installer = /^\d+\.\d+\.\d+$/.test(notes.version) ? 'WebInstaller' : 'Setup';
+  const stable = /^\d+\.\d+\.\d+$/.test(notes.version);
   const download = `${repo}/releases/download/${tag}/Mizar-${tag}-Windows-x64`;
+  const downloads = stable
+    ? `**Windows 安装器**：[Box 国内优先](${box}) · [GitHub 兜底](${download}-WebInstaller.exe)\n\n` +
+      `**完整离线 ZIP**：[Box 国内优先](${box}) · [GitHub 兜底](${download}.zip)\n\n` +
+      `Box 同步可能稍晚，请以版本号为准。`
+    : `**完整 Windows 安装器**：[GitHub 下载](${download}-Setup.exe)\n\n` +
+      `**完整离线 ZIP**：[GitHub 下载](${download}.zip)\n\n` +
+      `预发布版本需手动下载安装；稳定更新器和轻量安装器不提供预发布渠道。`;
   return (
-    `# Mizar ${notes.version}\n\n` +
-    `**Windows 安装器**：[Box 国内优先](${box}) · [GitHub 兜底](${download}-${installer}.exe)\n\n` +
-    `**完整离线 ZIP**：[Box 国内优先](${box}) · [GitHub 兜底](${download}.zip)\n\n` +
-    `Box 同步可能稍晚，请以版本号为准。[安装与使用手册](${repo}/blob/${sourceSha}/docs/guide/quick-start.md)。\n\n` +
+    `${downloads}[安装与使用手册](${repo}/blob/${sourceSha}/docs/guide/quick-start.md)。\n\n` +
     `${notes.markdown}\n\n## 发行文件\n\n` +
     `下方 Assets 提供两种产品下载。更新与资源文件供程序校验和安装使用；验收记录保存在资格构建的 CI artifacts，NSIS 许可随对应版本保留。\n\n` +
     `安装包尚无 Windows 发布者代码签名。\n\n## 构建与校验\n\n` +

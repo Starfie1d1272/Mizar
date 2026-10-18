@@ -119,12 +119,19 @@ export function registerRivalHubConnectionRoutes(
         .catch(() => undefined);
   }, 10_000);
   timer.unref();
+  const libraryTimer = setInterval(() => {
+    if (options.connection.view().paired) void options.connection.library().catch(() => undefined);
+  }, 60_000);
+  libraryTimer.unref();
+  app.addHook('onClose', () => clearInterval(libraryTimer));
   app.addHook('onClose', () => clearInterval(timer));
   const observedLineupReady = () => {
     const snapshot = options.currentSnapshot();
     return (
       snapshot?.matchId === linkedBinding()?.context.matchId &&
-      snapshot?.capability.identity === 'matched' &&
+      (snapshot?.capability.identity === 'matched' ||
+        (snapshot?.capability.identity === 'degraded' &&
+          snapshot.capability.lineupMismatchOnly === true)) &&
       snapshot.capability.telemetryFresh &&
       snapshot.capability.contextFresh &&
       Boolean(snapshot?.cursor.liveSessionId) &&
@@ -138,6 +145,8 @@ export function registerRivalHubConnectionRoutes(
       ).size === 10
     );
   };
+  const syncExpected = () => Boolean(linkedBinding() && (!options.canClaim || options.canClaim()));
+  let sourceCommand: Promise<unknown> | null = null;
   app.post('/operator/rivalhub/refresh', { bodyLimit: 64 }, async (request, reply) => {
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ message: '本机页面来源无效。' });
@@ -149,10 +158,41 @@ export function registerRivalHubConnectionRoutes(
         .send({ message: error instanceof Error ? error.message : '刷新失败，请重试。' });
     }
   });
-  app.get('/local/v1/rivalhub-connection', (_request, reply) =>
-    reply.header('cache-control', 'no-store').send({
+  let lastSyncEvidence = '';
+  app.get('/local/v1/rivalhub-connection', (_request, reply) => {
+    const snapshot = options.currentSnapshot();
+    const expected = syncExpected();
+    const syncHealth = options.connection.syncHealth(
+      snapshot,
+      expected,
+      linkedBinding()?.context.matchId ?? null,
+    );
+    const evidence = {
+      expected,
+      syncHealth,
+      linkedMatchId: linkedBinding()?.context.matchId ?? null,
+      snapshotAvailable: snapshot !== null,
+      phase: snapshot?.map.phase ?? null,
+      mapId: snapshot?.map.mapId ?? null,
+      liveSessionId: snapshot?.cursor.liveSessionId ?? null,
+      canonicalTeams: snapshot?.capability.canonicalTeams ?? null,
+      lineupComplete: snapshot?.capability.lineupComplete ?? null,
+      observedLineupReady: observedLineupReady(),
+      receiptScope: 'ingestion acceptance only; website viewer validation/render is not observed',
+    };
+    const signature = JSON.stringify(evidence);
+    if (signature !== lastSyncEvidence) {
+      lastSyncEvidence = signature;
+      app.log.info({ diagnostic: evidence }, 'Website sync prerequisites and health changed');
+    }
+    return reply.header('cache-control', 'no-store').send({
       ...options.connection.view(),
+      syncHealth,
       activeMatchId: linkedBinding()?.context.matchId ?? null,
+      activeDeviceName:
+        options.connection.view().activeDeviceMatchId === linkedBinding()?.context.matchId
+          ? options.connection.view().activeDeviceName
+          : null,
       sourceReady: Boolean(
         linkedBinding()?.origin === 'online' &&
         (!options.canClaim || options.canClaim()) &&
@@ -172,18 +212,13 @@ export function registerRivalHubConnectionRoutes(
       websiteUrl: linkedBinding()?.manifest.match.competition?.slug
         ? `${OFFICIAL_RIVALHUB_URL}/admin/${encodeURIComponent(linkedBinding()!.manifest.match.competition!.slug)}/matches/${encodeURIComponent(linkedBinding()!.context.matchId)}`
         : null,
-    }),
-  );
+    });
+  });
   app.get('/local/v1/rivalhub-schedule', async (request, reply) => {
     if (!options.connection.view().paired)
       return reply.code(404).send({ message: '尚未连接赛事。' });
-    const now = new Date();
-    const from = new Date(now.getTime() - 24 * 3600_000).toISOString();
-    const to = new Date(now.getTime() + 14 * 24 * 3600_000).toISOString();
     try {
-      return reply
-        .header('cache-control', 'no-store')
-        .send(await options.connection.schedule(from, to));
+      return reply.header('cache-control', 'no-store').send(await options.connection.library());
     } catch (error) {
       request.log.error({ err: error }, 'RivalHub operation failed');
       return reply.code(502).send({ message: '赛事赛程暂时无法获取。' });
@@ -268,31 +303,75 @@ export function registerRivalHubConnectionRoutes(
       !binding ||
       binding.origin !== 'online' ||
       !snapshot ||
-      snapshot.matchId !== binding.context.matchId
+      snapshot.matchId !== binding.context.matchId ||
+      !observedLineupReady()
     )
       return reply.code(409).send({ message: '请先在工作区加载赛事比赛。' });
+    if (sourceCommand) return reply.code(409).send({ message: '数据源操作正在进行，请稍候。' });
     try {
-      return await options.connection.claim(
+      sourceCommand = options.connection.claim(
         snapshot,
         binding.manifest.revision,
         (request.body as { takeover?: boolean } | null)?.takeover === true,
       );
+      return await sourceCommand;
     } catch (error) {
       request.log.error({ err: error }, 'RivalHub operation failed');
       return reply
         .code(409)
         .send({ message: error instanceof Error ? error.message : '数据源切换未完成。' });
+    } finally {
+      sourceCommand = null;
     }
+  });
+  app.post('/operator/rivalhub/source/retry', { bodyLimit: 64 }, async (request, reply) => {
+    if (!allowed(request.headers.origin))
+      return reply.code(403).send({ message: '本机页面来源无效。' });
+    const view = options.connection.view();
+    const snapshot = options.currentSnapshot();
+    const binding = linkedBinding();
+    if (binding?.origin !== 'online' || snapshot?.matchId !== binding.context.matchId)
+      return reply.code(409).send({ message: '请刷新比赛资料并确认加载网站版本后重试。' });
+    if (
+      !syncExpected() ||
+      !snapshot ||
+      view.stoppedMatchId === snapshot.matchId ||
+      view.activeDeviceName ||
+      view.activeSourceMatchId !== snapshot.matchId
+    )
+      return reply.code(409).send({ message: '请先明确认领本场数据源。' });
+    if (sourceCommand) return reply.code(409).send({ message: '数据源操作正在进行，请稍候。' });
+    if (!options.connection.hasCurrentStart(snapshot)) {
+      if (!observedLineupReady())
+        return reply.code(409).send({ message: '请刷新比赛资料并等待当前十人首发后重试。' });
+      try {
+        sourceCommand = options.connection.claim(snapshot, binding.manifest.revision, false);
+        await sourceCommand;
+      } catch (error) {
+        return reply
+          .code(409)
+          .send({ message: error instanceof Error ? error.message : '重试未完成。' });
+      } finally {
+        sourceCommand = null;
+      }
+    }
+    options.connection.retryLive();
+    return { ok: true, message: '已请求重试；等待当前比赛的新数据确认网站接收。' };
   });
   app.post('/operator/rivalhub/source/release', { bodyLimit: 64 }, async (request, reply) => {
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ message: '本机页面来源无效。' });
+    if (sourceCommand) return reply.code(409).send({ message: '数据源操作正在进行，请稍候。' });
     try {
-      await options.connection.release();
+      options.connection.stopSync(linkedBinding()?.context.matchId ?? null);
+      sourceCommand = options.connection.release();
+      await sourceCommand;
       return options.connection.view();
     } catch (error) {
       request.log.error({ err: error }, 'RivalHub operation failed');
       return reply.code(502).send({ message: '数据源停止未确认，请稍后再试。' });
+    } finally {
+      sourceCommand = null;
     }
   });
 }

@@ -1,4 +1,4 @@
-import { errorEvidence } from '../updates/diagnostics.js';
+import { diagnosticValue } from '../support/session-journal.js';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { unlink } from 'node:fs/promises';
@@ -277,7 +277,7 @@ export class DemoTestController {
         operationId,
         requestId: body.requestId,
         code: 'demo_test_operation_failed',
-        error: errorEvidence(error),
+        error: diagnosticValue(error),
       });
       if (!this.marker) this.options.production.setTrialPending(false);
       return conflict(
@@ -333,7 +333,7 @@ export class DemoTestController {
       operationId: randomUUID(),
       requestId: this.marker?.requestId,
       code: 'demo_test_initial_take_failed',
-      error: errorEvidence(error),
+      error: diagnosticValue(error),
     });
   }
 }

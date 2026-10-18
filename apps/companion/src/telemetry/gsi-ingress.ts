@@ -60,7 +60,10 @@ export interface GsiIngressOptions {
   readonly onObservation?: ObservationSink;
   readonly onGsiDiagnostics?: GsiDiagnosticsSink;
   readonly clock?: GsiClock;
-  readonly onRuntimeDiagnostic?: (code: CompanionRuntimeDiagnosticCode) => void;
+  readonly onRuntimeDiagnostic?: (
+    code: CompanionRuntimeDiagnosticCode,
+    failure: { error: unknown; receive: TelemetryReceiveContext },
+  ) => void;
 }
 
 const defaultClock: GsiClock = {
@@ -101,9 +104,11 @@ function sendNoContent(reply: FastifyReply): void {
 function reportRuntimeDiagnostic(
   options: GsiIngressOptions,
   code: CompanionRuntimeDiagnosticCode,
+  error: unknown,
+  receive: TelemetryReceiveContext,
 ): void {
   try {
-    options.onRuntimeDiagnostic?.(code);
+    options.onRuntimeDiagnostic?.(code, { error, receive });
   } catch {
     // Diagnostics must never affect the accepted frame response.
   }
@@ -160,8 +165,8 @@ export function registerGsiIngress(app: FastifyInstance, options: GsiIngressOpti
             receivedMonotonicMs: receive.receivedMonotonicMs,
             payload,
           });
-      } catch {
-        reportRuntimeDiagnostic(options, 'recorder_unexpected_failure');
+      } catch (error) {
+        reportRuntimeDiagnostic(options, 'recorder_unexpected_failure', error, receiveContext);
       }
 
       try {
@@ -171,23 +176,23 @@ export function registerGsiIngress(app: FastifyInstance, options: GsiIngressOpti
           receivedMonotonicMs: receive.receivedMonotonicMs,
           payload,
         });
-      } catch {
-        reportRuntimeDiagnostic(options, 'accepted_raw_sink_failed');
+      } catch (error) {
+        reportRuntimeDiagnostic(options, 'accepted_raw_sink_failed', error, receiveContext);
       }
 
       let adapted: GsiAdaptResult;
       try {
         adapted = adaptGsiPayload(payload, receiveContext);
-      } catch {
-        reportRuntimeDiagnostic(options, 'adapter_unexpected_failure');
+      } catch (error) {
+        reportRuntimeDiagnostic(options, 'adapter_unexpected_failure', error, receiveContext);
         sendNoContent(reply);
         return;
       }
 
       try {
         options.onGsiDiagnostics?.(adapted.diagnostics);
-      } catch {
-        reportRuntimeDiagnostic(options, 'gsi_diagnostics_sink_failed');
+      } catch (error) {
+        reportRuntimeDiagnostic(options, 'gsi_diagnostics_sink_failed', error, receiveContext);
       }
 
       if (!adapted.ok) {
@@ -197,8 +202,8 @@ export function registerGsiIngress(app: FastifyInstance, options: GsiIngressOpti
 
       try {
         options.onObservation?.(adapted.observation);
-      } catch {
-        reportRuntimeDiagnostic(options, 'observation_sink_failed');
+      } catch (error) {
+        reportRuntimeDiagnostic(options, 'observation_sink_failed', error, receiveContext);
       }
 
       sendNoContent(reply);

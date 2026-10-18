@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   createSeriesProgress,
+  reconcileSeriesProgressResults,
   syncSeriesProgress,
   type SeriesProgressEvent,
+  type SeriesMapObservation,
   type SeriesSideProof,
 } from '../src/series-progress/index.js';
 import type { MatchContext } from '../src/match-context/index.js';
@@ -98,7 +100,7 @@ function proof(mapEpoch: number, a: 'CT' | 'T' = 'CT'): SeriesSideProof {
 function reduce(
   progress: ReturnType<typeof createSeriesProgress>,
   events: readonly SeriesProgressEvent[] = [],
-  currentObservation = observation('Mirage', 1),
+  currentObservation: SeriesMapObservation = observation('Mirage', 1),
   currentProof: SeriesSideProof | null = proof(currentObservation.mapEpoch),
 ) {
   return syncSeriesProgress(progress, {
@@ -198,4 +200,142 @@ describe('SeriesProgress', () => {
       expect.arrayContaining([expect.objectContaining({ code: 'operator_bind_rejected' })]),
     );
   });
+});
+
+it('observed completion advances only the adjacent planned map without awarding a result', () => {
+  const context = contextFixture();
+  const displayProof = { ...proof(1), displayOnly: true };
+  let progress = reduce(createSeriesProgress(context), [], observation('Mirage', 1), displayProof);
+  progress = reduce(
+    progress,
+    [mapEnded(1, { ct: 13, t: 6 })],
+    { ...observation('Mirage', 1, { ct: 13, t: 6 }), mapEnded: true },
+    displayProof,
+  );
+  expect(progress.maps[0]).toMatchObject({
+    status: 'completed',
+    finalScore: null,
+    winnerEntryId: null,
+  });
+  expect(progress.score).toEqual({ a: 0, b: 0 });
+  const next = reduce(progress, [], observation('Dust 2', 2), { ...proof(2), displayOnly: true });
+  expect(next.bindingState).toBe('bound');
+  expect(next.currentMapOrder).toBe(2);
+  expect(next.score).toEqual({ a: 0, b: 0 });
+  const skipped = reduce(progress, [], observation('de_inferno', 2), {
+    ...proof(2),
+    displayOnly: true,
+  });
+  expect(skipped.bindingState).toBe('needs_operator');
+  const withoutEnd = reduce(
+    createSeriesProgress(context),
+    [],
+    observation('Mirage', 1),
+    displayProof,
+  );
+  expect(
+    reduce(withoutEnd, [], observation('Dust 2', 2), { ...proof(2), displayOnly: true })
+      .bindingState,
+  ).toBe('needs_operator');
+});
+
+it('preserves frozen results and history, exposes conflicts, and clears an agreeing result conflict', () => {
+  const context = contextFixture();
+  const progress = createSeriesProgress(context);
+  const frozen = {
+    ...progress,
+    maps: progress.maps.map((map, index) =>
+      index === 0
+        ? {
+            ...map,
+            status: 'completed' as const,
+            finalScore: { a: 13, b: 9 },
+            winnerEntryId: 'a',
+          }
+        : map,
+    ),
+    score: { a: 1, b: 0 },
+  };
+  const website = {
+    ...context,
+    maps: context.maps.map((map, index) =>
+      index === 0 ? { ...map, scoreA: 3, scoreB: 13, completedAt: '2026-10-13T14:13:45Z' } : map,
+    ),
+  };
+  const conflict = reconcileSeriesProgressResults(frozen, website);
+  expect(conflict.maps).toBe(frozen.maps);
+  expect(conflict.score).toEqual({ a: 1, b: 0 });
+  expect(conflict.issues).toContainEqual(
+    expect.objectContaining({ code: 'context_result_conflict', mapOrder: 1 }),
+  );
+  const later = {
+    ...website,
+    maps: website.maps.map((map, index) =>
+      index === 1 ? { ...map, scoreA: 3, scoreB: 13, completedAt: '2026-10-13T15:04:15Z' } : map,
+    ),
+  };
+  const stillConflicted = reconcileSeriesProgressResults(conflict, later);
+  expect(stillConflicted.score).toEqual({ a: 1, b: 0 });
+  expect(stillConflicted.maps[1]?.finalScore).toBeNull();
+  const agreeing = {
+    ...website,
+    maps: website.maps.map((map, index) => (index === 0 ? { ...map, scoreA: 13, scoreB: 9 } : map)),
+  };
+  expect(reconcileSeriesProgressResults(conflict, agreeing)).toEqual(frozen);
+});
+
+it('requires explicit completion, identical identity and plan, and does not skip missing results', () => {
+  const context = contextFixture();
+  const progress = createSeriesProgress(context);
+  const scoreOnly = {
+    ...context,
+    maps: context.maps.map((map, index) => (index === 0 ? { ...map, scoreA: 13, scoreB: 3 } : map)),
+  };
+  const completed = {
+    ...scoreOnly,
+    maps: scoreOnly.maps.map((map, index) =>
+      index === 0 ? { ...map, completedAt: '2026-10-13T14:13:45Z' } : map,
+    ),
+  };
+  expect(reconcileSeriesProgressResults(progress, scoreOnly)).toBe(progress);
+  expect(reconcileSeriesProgressResults(progress, { ...completed, matchId: 'another' })).toBe(
+    progress,
+  );
+  expect(
+    reconcileSeriesProgressResults(progress, {
+      ...completed,
+      entrants: {
+        ...completed.entrants,
+        a: { ...completed.entrants.a, entryId: 'replacement' },
+      },
+    }),
+  ).toBe(progress);
+  expect(
+    reconcileSeriesProgressResults(progress, {
+      ...completed,
+      maps: completed.maps.map((map, index) =>
+        index === 0 ? { ...map, teamAStartSide: 'T' as const } : map,
+      ),
+    }),
+  ).toBe(progress);
+  const laterOnly = {
+    ...context,
+    maps: context.maps.map((map, index) =>
+      index === 1 ? { ...map, scoreA: 13, scoreB: 3, completedAt: '2026-10-13T14:13:45Z' } : map,
+    ),
+  };
+  expect(reconcileSeriesProgressResults(progress, laterOnly)).toBe(progress);
+  const completedSeries = {
+    ...completed,
+    maps: completed.maps.map((map, index) =>
+      index > 0 ? { ...map, scoreA: 13, scoreB: 3, completedAt: '2026-10-13T15:04:15Z' } : map,
+    ),
+  };
+  const result = reconcileSeriesProgressResults(progress, completedSeries);
+  expect(result.score).toEqual({ a: 2, b: 0 });
+  expect(result.maps[2]?.status).toBe('not_played');
+  expect(result.maps[2]?.finalScore).toBeNull();
+  expect(result.issues).toContainEqual(
+    expect.objectContaining({ code: 'context_result_conflict', mapOrder: 3 }),
+  );
 });

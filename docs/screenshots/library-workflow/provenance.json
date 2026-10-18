@@ -1,0 +1,20 @@
+{
+  "capturedAt": "2026-10-18T09:46:20.418731+00:00",
+  "viewport": {
+    "width": 2560,
+    "height": 1440,
+    "deviceScaleFactor": 1,
+    "fullPage": false
+  },
+  "source": "PR #413 working tree; actual app with explicitly simulated website and live roster HTTP/WebSocket data. Writes intercepted; no live website/game/OBS operations.",
+  "files": {
+    "02-cached-offline.png": "36fad9891b1573577109d33a2c473ae634830a56fb5db2b777eae42a1e5bcdf8",
+    "07-roster-saved.png": "e0c1dda4163dc6db9d15412d7ae8579f1cbd7c78c53baaac7d70269463e6d45a",
+    "05-workspace-roster.png": "aec80db066b15be9704459e32ab4f9adb6c34f70338065f48d26793996c19ae3",
+    "08-confirm-website.png": "0d2b8bf6a718c458de8c5c16926cddb780aca3640e7743bc847d35714f7a8f45",
+    "04-workspace-waiting.png": "7fd7ed0452e9e27179a04de69497ac1fadfea78248f72198a034d98194541c82",
+    "03-create-local.png": "4325da023afc6e99633cc765fc24f1dc104ba862fe9621fc1e366c08f63cd5fa",
+    "06-roster-changed.png": "d1c172b04600d9294b046926bde4f87c6c85f5ba2f27ee33439b5be69b1b6feb",
+    "01-website-library.png": "a26dbb4e0a8e76704228ca4127d06a7714b9413b563106a7182f5c5b7b3176fb"
+  }
+}

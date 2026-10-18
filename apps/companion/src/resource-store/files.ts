@@ -1,7 +1,15 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { lstat, mkdir, open, readdir, realpath, rename, unlink } from 'node:fs/promises';
-import { dirname, join, parse, relative as relativePath, resolve, sep } from 'node:path';
+import {
+  dirname,
+  isAbsolute,
+  join,
+  parse,
+  relative as relativePath,
+  resolve,
+  sep,
+} from 'node:path';
 import { ResourceStoreError, type TrustedPack } from './contract.js';
 
 export const limits = {
@@ -111,7 +119,8 @@ export async function safePath(root: string, relative = ''): Promise<string> {
       throw new ResourceStoreError('resource_path_unsafe');
   }
   const canonical = await realpath(current);
-  if (canonical !== absoluteRoot && !canonical.startsWith(absoluteRoot + sep))
+  const within = relativePath(await realpath(absoluteRoot), canonical);
+  if (within === '..' || within.startsWith('..' + sep) || isAbsolute(within))
     throw new ResourceStoreError('resource_path_unsafe');
   return current;
 }

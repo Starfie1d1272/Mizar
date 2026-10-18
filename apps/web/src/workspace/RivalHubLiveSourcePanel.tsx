@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { desktopInvoke } from './client';
-import { Button } from '../ui/primitives';
+import { Button, Dialog } from '../ui/primitives';
+import { syncHealthText, type SyncHealth } from './SyncHealthAlert';
 import { RivalHubSyncControls } from '../operator/RivalHubSyncControls';
 
 type Connection = {
@@ -12,6 +13,8 @@ type Connection = {
   activeMatchId: string | null;
   activeSourceMatchId: string | null;
   activeDeviceName: string | null;
+  stoppedMatchId?: string | null;
+  syncHealth?: SyncHealth;
 };
 
 const MAX_AUTO_CLAIM_ATTEMPTS = 5;
@@ -29,6 +32,8 @@ export function RivalHubLiveSourcePanel({
   compact?: boolean;
 }) {
   const [connection, setConnection] = useState<Connection | null>(null);
+  const [takeoverOpen, setTakeoverOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
 
   const autoClaimRef = useRef<{
     matchId: string | null;
@@ -86,6 +91,8 @@ export function RivalHubLiveSourcePanel({
         if (
           !targetMatchId ||
           next.sourceReady === false ||
+          !next.paired ||
+          next.stoppedMatchId === targetMatchId ||
           next.activeSourceMatchId === targetMatchId ||
           Boolean(next.activeDeviceName) ||
           userReleasedRef.current === targetMatchId ||
@@ -138,8 +145,19 @@ export function RivalHubLiveSourcePanel({
     };
   }, [activeMatchId, onMessage]);
 
+  const run = async (operation: () => Promise<unknown>) => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    setBusy(true);
+    try {
+      await action(operation);
+    } finally {
+      inFlightRef.current = false;
+      setBusy(false);
+    }
+  };
   const handleClaim = () =>
-    action(async () => {
+    run(async () => {
       const targetMatchId = connection?.activeMatchId ?? null;
       const response = await fetch('/operator/rivalhub/source/claim', {
         method: 'POST',
@@ -164,7 +182,7 @@ export function RivalHubLiveSourcePanel({
     });
 
   const handleTakeover = () =>
-    action(async () => {
+    run(async () => {
       const response = await fetch('/operator/rivalhub/source/claim', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -178,11 +196,12 @@ export function RivalHubLiveSourcePanel({
       setConnection((old) => ({ ...old, ...next }));
       autoClaimRef.current.settled = true;
       userReleasedRef.current = null;
+      setTakeoverOpen(false);
       onMessage('已接管为本场数据源。');
     });
 
   const handleRelease = () =>
-    action(async () => {
+    run(async () => {
       userReleasedRef.current = connection?.activeMatchId ?? null;
       const response = await fetch('/operator/rivalhub/source/release', {
         method: 'POST',
@@ -221,6 +240,9 @@ export function RivalHubLiveSourcePanel({
 
   return (
     <div className="workspace-rivalhub-source" data-compact={compact} aria-label="实时数据源状态">
+      {compact && connection.syncHealth ? (
+        <span role="status">{syncHealthText(connection.syncHealth)}</span>
+      ) : null}
       {compact ? (
         <Button
           onClick={() =>
@@ -246,9 +268,7 @@ export function RivalHubLiveSourcePanel({
           {currentMatchTitle ? <small>当前比赛：{currentMatchTitle}</small> : null}
           <small>实时数据源</small>
           {isCurrentSource ? (
-            <p>
-              {connection.sourceReady === false ? '本机已认领，推送暂停' : '本机正在提供实时数据'}
-            </p>
+            <p>{syncHealthText(connection.syncHealth)}</p>
           ) : connection.activeDeviceName ? (
             <p>当前由 {connection.activeDeviceName} 提供实时数据</p>
           ) : (
@@ -259,7 +279,8 @@ export function RivalHubLiveSourcePanel({
       {isCurrentSource ? (
         <Button
           variant="secondary"
-          title={connection.sourceReady === false ? '本机已认领，推送暂停' : '本机正在提供实时数据'}
+          disabled={busy}
+          title={syncHealthText(connection.syncHealth)}
           onClick={() => void handleRelease()}
         >
           停止作为数据源
@@ -267,20 +288,38 @@ export function RivalHubLiveSourcePanel({
       ) : connection.activeDeviceName ? (
         <Button
           variant="primary"
+          disabled={busy}
           title={`当前由 ${connection.activeDeviceName} 提供实时数据`}
-          onClick={() => void handleTakeover()}
+          onClick={() => setTakeoverOpen(true)}
         >
           接管为本场数据源
         </Button>
       ) : (
         <Button
           variant="primary"
-          disabled={connection.sourceReady === false || !connection.activeMatchId}
+          disabled={busy || connection.sourceReady === false || !connection.activeMatchId}
           onClick={() => void handleClaim()}
         >
           成为本场数据源
         </Button>
       )}
+      <Dialog
+        open={takeoverOpen}
+        title="接管本场数据源"
+        onClose={() => setTakeoverOpen(false)}
+        canClose={() => !busy}
+      >
+        <p>
+          当前数据源归属：{connection.activeDeviceName}
+          。接管后由本机提供本场数据，请先与该设备的操作者确认。
+        </p>
+        <Button disabled={busy} onClick={() => setTakeoverOpen(false)}>
+          取消
+        </Button>
+        <Button disabled={busy} aria-busy={busy} onClick={() => void handleTakeover()}>
+          确认接管
+        </Button>
+      </Dialog>
     </div>
   );
 }

@@ -1,3 +1,4 @@
+import { ControlTask } from '../debug/control-task';
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
 
 import {
@@ -343,30 +344,51 @@ export interface HudConfigMutation {
 export async function mutateHudConfig(
   command: HudConfigMutation,
 ): Promise<HudConfigMutationResponse> {
-  const response = await fetch('/operator/hud-config', {
-    method: 'POST',
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(command),
+  const task = new ControlTask(`hud_${command.kind}`, 'user', {
+    expectedEditorRevision: command.expectedEditorRevision,
+    resource: command.resource,
+    sourceId: command.sourceId,
   });
-  const body: unknown = await response.json();
-  if (!response.ok) {
-    const bodyRecord =
-      typeof body === 'object' && body !== null && !Array.isArray(body)
-        ? (body as Record<string, unknown>)
-        : null;
-    const code = typeof bodyRecord?.error === 'string' ? bodyRecord.error : null;
-    const message =
-      response.status === 409
-        ? '已在另一页面更新，请先处理冲突。'
-        : response.status >= 500
-          ? 'HUD 配置暂时无法保存，请查看本机诊断日志。'
-          : typeof bodyRecord?.message === 'string'
-            ? bodyRecord.message
-            : 'HUD 操作参数无效。';
-    throw new HudConfigMutationError(response.status, message, code);
+  try {
+    const response = await fetch('/operator/hud-config', {
+      method: 'POST',
+      headers: {
+        ...task.headers(),
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(command),
+    });
+    const body: unknown = await response.json();
+    if (!response.ok) {
+      const bodyRecord =
+        typeof body === 'object' && body !== null && !Array.isArray(body)
+          ? (body as Record<string, unknown>)
+          : null;
+      const code = typeof bodyRecord?.error === 'string' ? bodyRecord.error : null;
+      const message =
+        response.status === 409
+          ? '已在另一页面更新，请先处理冲突。'
+          : response.status >= 500
+            ? 'HUD 配置暂时无法保存，请查看本机诊断日志。'
+            : typeof bodyRecord?.message === 'string'
+              ? bodyRecord.message
+              : 'HUD 操作参数无效。';
+      throw new HudConfigMutationError(response.status, message, code);
+    }
+    const parsed = parseMutationResponse(body);
+    if (parsed.command.kind !== command.kind)
+      throw new Error('HUD 操作结果与请求不一致，请检查当前配置。');
+    task.finish('confirmed', {
+      command: parsed.command,
+      editorRevision: parsed.editor.revision,
+      activeRevision: parsed.onAir.activeRevision,
+      activationStale: parsed.editor.activationStale,
+      confirmation: 'validated_resource_and_revision_response',
+    });
+    return parsed;
+  } catch (error) {
+    task.fail(error);
+    throw error;
   }
-  return parseMutationResponse(body);
 }

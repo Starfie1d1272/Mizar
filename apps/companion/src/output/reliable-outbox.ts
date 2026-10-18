@@ -212,6 +212,7 @@ export class ReliableOutbox {
   constructor(
     private readonly filePath: string,
     private readonly onRecovery?: (report: OutboxRecovery | undefined, error: unknown) => void,
+    private readonly onEvidence?: (record: ReliableOutboxRecord, reason: string) => void,
   ) {}
 
   getRecovery(): OutboxRecovery | undefined {
@@ -409,6 +410,7 @@ export class ReliableOutbox {
           continue;
         }
         if (input.canSend !== undefined && !input.canSend(record.event)) {
+          this.evidence(record, 'send_guard_blocked');
           next.push(record);
           continue;
         }
@@ -492,7 +494,30 @@ export class ReliableOutbox {
     // A failed commit never advances the in-memory queue or reports success.
     await replaceDurableJson(`${this.filePath}.last-good`, file);
     await replaceDurableJson(this.filePath, file);
+    const previous = this.records;
     this.records = records;
     this.continuity = continuity;
+    for (const record of records) {
+      if (previous.includes(record)) continue;
+      this.evidence(
+        record,
+        {
+          accepted: 'receiver_accepted',
+          rejected: 'delivery_rejected_unknown',
+          expired: 'retention_expired',
+          superseded: 'current_scope_failed',
+          pending: record.attempts === 0 ? 'queued' : 'retry_unknown',
+        }[record.status],
+      );
+    }
+  }
+
+  private evidence(record: ReliableOutboxRecord, reason: string): void {
+    // Optional diagnostics cannot fail a durable queue commit or affect delivery.
+    try {
+      this.onEvidence?.(record, reason);
+    } catch {
+      /* Keep the queue authoritative. */
+    }
   }
 }

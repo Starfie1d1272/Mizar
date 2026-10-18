@@ -2,6 +2,7 @@ import type { RuntimeReduceResult } from '@mizar/core/runtime';
 import type { LiveSnapshotV1, ReliableEventV1 } from '@mizar/protocol/output';
 
 import type { MatchContextBinding } from '../match-context/index.js';
+import { hasLineupMismatchOnly } from './lineup-mismatch.js';
 import type { ProjectionBundle } from '../projections/projection-coordinator.js';
 import { createLatestWinsConsumer, type LatestWinsConsumer } from '../runtime/latest-wins.js';
 import {
@@ -27,6 +28,7 @@ export interface OutputServiceOptions {
   readonly now?: () => Date;
   readonly authorityScope?: () => string | null;
   readonly onDiagnostic?: (code: string) => void;
+  readonly onBusinessEvidence?: (stage: string, evidence: unknown) => void;
 }
 
 /** One public-safe output boundary for local consumers and later outbound adapters. */
@@ -139,7 +141,7 @@ export class OutputService {
       program.status.context === 'fresh' &&
       program.match?.matchId === binding.context.matchId &&
       program.status.telemetry === 'fresh' &&
-      program.status.identity === 'matched' &&
+      (program.status.identity === 'matched' || hasLineupMismatchOnly(bundle, binding)) &&
       program.map.phase === 'live' &&
       program.map.name !== null &&
       program.cursor.mapEpoch > 0 &&
@@ -390,7 +392,82 @@ export class OutputService {
           sink: this.sink,
           now: this.now(),
           isCurrent: (event) => this.quarantined || this.isCurrentForRetry(event),
-          canSend: (event) => this.canSend(event),
+          canSend: (event) => {
+            const allowed = this.canSend(event);
+            if (!allowed) {
+              try {
+                const bundle = this.bundle;
+                const series = bundle?.program.series;
+                const mapOrder = series?.currentMapOrder ?? series?.roundHistory?.mapOrder ?? null;
+                const resultMap = series?.maps.find((map) => map.mapOrder === mapOrder);
+                // Explain the failed existing decision without changing its result.
+                const blockers = [
+                  ...(this.quarantined ? ['quarantined'] : []),
+                  ...(!bundle ? ['bundle_unavailable'] : []),
+                  ...(this.binding?.freshness !== 'fresh' ? ['context_not_fresh'] : []),
+                  ...(!this.isCurrentForRetry(event) ? ['scope_not_current'] : []),
+                ];
+                if (bundle && blockers.length === 0) {
+                  if (event.kind === 'map_ended') {
+                    if (bundle.program.map.phase !== 'gameover')
+                      blockers.push('map_phase_not_gameover');
+                    if (bundle.program.map.name !== event.mapName)
+                      blockers.push('map_name_changed');
+                    if (
+                      bundle.program.map.score.ct !== event.payload.scoreCT ||
+                      bundle.program.map.score.t !== event.payload.scoreT
+                    )
+                      blockers.push('map_score_changed');
+                    if (!(
+                      event.evidence.lineupMismatchOnly === true &&
+                      hasLineupMismatchOnly(bundle, this.binding)
+                    )) {
+                      if (resultMap?.status !== 'completed')
+                        blockers.push('map_result_not_completed');
+                      if (
+                        resultMap?.mapId !== event.mapId ||
+                        resultMap?.mapName !== event.mapName ||
+                        resultMap?.finalScore?.a !== event.payload.scoreA ||
+                        resultMap?.finalScore?.b !== event.payload.scoreB
+                      )
+                        blockers.push('canonical_result_changed');
+                    }
+                  }
+                  if (event.kind === 'identity_mismatch' || event.kind === 'lineup_mismatch') {
+                    if (!['mismatch', 'degraded'].includes(bundle.program.status.identity))
+                      blockers.push('mismatch_no_longer_current');
+                  } else {
+                    if (bundle.program.status.telemetry !== 'fresh')
+                      blockers.push('telemetry_not_fresh');
+                    if (
+                      bundle.program.status.identity !== 'matched' &&
+                      !hasLineupMismatchOnly(bundle, this.binding)
+                    )
+                      blockers.push('identity_not_matched');
+                  }
+                }
+                this.options.onBusinessEvidence?.('business_guard', {
+                  matchId: event.matchId,
+                  liveSessionId: event.cursor.liveSessionId,
+                  idempotencyKey: event.idempotencyKey,
+                  producerInstanceId: event.cursor.producerInstanceId,
+                  originalObservedAt: event.observedAt,
+                  reason: 'send_guard_blocked',
+                  telemetry: bundle?.program.status.telemetry,
+                  identity: bundle?.program.status.identity,
+                  context: this.binding?.freshness,
+                  mapName: bundle?.program.map.name,
+                  mapPhase: bundle?.program.map.phase,
+                  scoreCT: bundle?.program.map.score.ct,
+                  scoreT: bundle?.program.map.score.t,
+                  blockers: blockers.length ? blockers : ['final_evidence_not_current'],
+                });
+              } catch {
+                /* Optional diagnostics cannot affect guards. */
+              }
+            }
+            return allowed;
+          },
         });
     } catch {
       this.onDiagnostic?.('outbox_retry_failed');
@@ -448,6 +525,17 @@ export class OutputService {
       !this.isCurrentForRetry(event)
     )
       return false;
+    if (
+      event.kind === 'map_ended' &&
+      event.evidence.lineupMismatchOnly === true &&
+      hasLineupMismatchOnly(bundle, this.binding)
+    )
+      return (
+        bundle.program.map.phase === 'gameover' &&
+        bundle.program.map.name === event.mapName &&
+        bundle.program.map.score.ct === event.payload.scoreCT &&
+        bundle.program.map.score.t === event.payload.scoreT
+      );
     if (event.kind === 'map_ended') {
       const series = bundle.program.series;
       const mapOrder = series?.currentMapOrder ?? series?.roundHistory?.mapOrder ?? null;
@@ -473,7 +561,18 @@ export class OutputService {
         bundle.program.status.identity === 'degraded'
       );
     return (
-      bundle.program.status.identity === 'matched' && bundle.program.status.telemetry === 'fresh'
+      bundle.program.status.telemetry === 'fresh' &&
+      (bundle.program.status.identity === 'matched' ||
+        ([
+          'map_started',
+          'match_started',
+          'map_epoch_changed',
+          'source_generation_changed',
+        ].includes(event.kind) &&
+          (event.evidence.lineupMismatchOnly === true ||
+            event.kind === 'map_epoch_changed' ||
+            event.kind === 'source_generation_changed') &&
+          hasLineupMismatchOnly(bundle, this.binding)))
     );
   }
 

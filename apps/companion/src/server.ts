@@ -1,3 +1,4 @@
+import { SessionJournal, diagnosticValue } from './support/session-journal.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { SteamAvatars } from './media/steam-avatars.js';
 import { existsSync } from 'node:fs';
@@ -68,7 +69,14 @@ let httpOutputs: ReturnType<typeof configuredHttpOutputs> = {};
 let httpOutputConfigError: string | undefined;
 try {
   httpOutputs = configuredHttpOutputs(process.env);
-} catch {
+} catch (error) {
+  console.error(
+    JSON.stringify({
+      stage: 'http_output_configuration',
+      result: 'failure',
+      error: diagnosticValue(error),
+    }),
+  );
   httpOutputConfigError = 'HTTP 输出配置不完整或不安全';
 }
 
@@ -85,6 +93,13 @@ try {
     ...(lookaheadUrl === undefined ? {} : { lookaheadUrl }),
   });
 } catch (error: unknown) {
+  console.error(
+    JSON.stringify({
+      stage: 'cstv_source_configuration',
+      result: 'failure',
+      error: diagnosticValue(error),
+    }),
+  );
   cstvSourceConfigError =
     error instanceof Error ? error.message : 'CSTV source configuration invalid';
 }
@@ -95,7 +110,15 @@ function logRecorderDiagnostic(diagnostic: RecorderDiagnostic): void {
     ...(diagnostic.operation === undefined ? {} : { operation: diagnostic.operation }),
     ...(diagnostic.causeCode === undefined ? {} : { causeCode: diagnostic.causeCode }),
   };
-  console.warn(`Companion 采集记录诊断：${JSON.stringify(fields)}`);
+  console.warn(
+    JSON.stringify({
+      event: 'recorder',
+      stage: 'recorder_failure',
+      result: 'failure',
+      time: Date.now(),
+      diagnostic: fields,
+    }),
+  );
 }
 
 async function writeFinalRuntime(path: string, response: unknown): Promise<void> {
@@ -169,6 +192,11 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
     onSeriesProgressDiagnostic: ({ code }) => console.warn(`系列进度检查点诊断：${code}`),
   });
   const productInstance = process.env.MIZAR_PRODUCT_INSTANCE;
+  const diagnosticsEndpoint =
+    process.env.MIZAR_DIAGNOSTICS_ENDPOINT ??
+    (productInstance !== undefined && !qualificationMode
+      ? 'https://mizar-diagnostics.duxinyu475.workers.dev'
+      : undefined);
   const rehearsalCandidates = [
     resolve(process.cwd(), 'fixtures/epl-s24/rehearsal.generated.json'),
     resolve(process.cwd(), '../../fixtures/epl-s24/rehearsal.generated.json'),
@@ -186,6 +214,27 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
   if (productInstance !== undefined && (qualificationMode || !productArtifact || !productToken)) {
     throw new Error('便携产品运行身份不完整或模式冲突');
   }
+  const supportJournal = productInstance
+    ? new SessionJournal(resolve(captureDir, '../../logs'), {
+        appVersion: process.env.MIZAR_APP_VERSION ?? null,
+        gitSha: mizarCommit,
+        artifactSha256: productArtifact ?? null,
+      })
+    : undefined;
+  supportJournal?.record('service_configuration', {
+    host,
+    port,
+    webRoot,
+    captureDir,
+    localWebLanMode,
+    localWebAllowedOrigins,
+    liveOutputUrl: process.env.MIZAR_LIVE_OUTPUT_URL ?? null,
+    reliableOutputUrl: process.env.MIZAR_RELIABLE_OUTPUT_URL ?? null,
+    outputTokenConfigured: Boolean(process.env.MIZAR_OUTPUT_TOKEN),
+    programCstvUrl: programCstvUrl ?? null,
+    lookaheadCstvUrl: process.env.LOOKAHEAD_CSTV_URL ?? null,
+    gsiTokenConfigured: Boolean(gsiToken),
+  });
   let updates: UpdateManager | undefined;
   if (
     productInstance &&
@@ -199,14 +248,16 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
       version: process.env.MIZAR_APP_VERSION,
       currentContentDigest: productArtifact!,
       installed: process.env.MIZAR_DISTRIBUTION === 'installed',
-      log: (stage, code, version, diagnostic) =>
-        console.info(
-          JSON.stringify({ event: 'update', time: Date.now(), stage, code, version, diagnostic }),
-        ),
+      log: (stage, code, version, diagnostic) => {
+        const entry = { event: 'update', time: Date.now(), stage, code, version, diagnostic };
+        supportJournal?.record('update_stage', entry);
+        console.info(JSON.stringify(entry));
+      },
     });
     await updates.load();
   }
   const app = buildApp({
+    ...(supportJournal ? { supportJournal } : {}),
     resources: {
       root: defaultResourceRoot(),
       // This optional pin is inside the authenticated Core bundle, not mirror metadata.
@@ -252,6 +303,7 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
             stop: () => shutdown('product-stop'),
           },
         }),
+    ...(diagnosticsEndpoint ? { diagnosticsEndpoint } : {}),
     logger: true,
     gsiToken,
     recorder,
@@ -283,6 +335,12 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
     hudConfigPath,
     hudConfigStore,
     obsConfigPath: join(captureDir, '..', 'obs.json'),
+    ...(process.env.MIZAR_BUNDLE_ROOT
+      ? { mulnxBundle: join(process.env.MIZAR_BUNDLE_ROOT, 'resources/mulnx') }
+      : {}),
+    ...(process.env.MIZAR_MULNX_CAM_PACKS_ROOT
+      ? { mulnxCamPacksRoot: process.env.MIZAR_MULNX_CAM_PACKS_ROOT }
+      : {}),
     ...(qualificationMode
       ? {
           qualificationRunId,

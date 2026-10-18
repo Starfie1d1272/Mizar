@@ -1,0 +1,15 @@
+{
+  "viewport": {
+    "width": 2560,
+    "height": 1440
+  },
+  "fullPage": false,
+  "errors": [
+    {
+      "message": "WebSocket is already in CLOSING or CLOSED state.",
+      "stack": "",
+      "url": "http://127.0.0.1:4173/program"
+    }
+  ],
+  "source": "Actual application. Local workflow uses isolated real Companion APIs in acceptance test. Website and HUD screenshots use simulated read data. No production website writes or CS2/OBS integration."
+}

@@ -1,0 +1,131 @@
+{
+  "geometry": [
+    {
+      "name": "01-home",
+      "path": "/",
+      "width": 2560,
+      "height": 1440,
+      "scrollWidth": 2560,
+      "scrollHeight": 1440,
+      "text": "跳到主要内容\nMIZAR\n本场\n比赛库\nHUD 与画面\n设置\nMizar · 制播工作台\n准备\nFalcons vs Natus Vincere\nBO3\nOBS · 未连接\n直播 · 待确认\n录像 · 待确认\n本场准备\n打开直播工作台\nESL Pro League Season 24 · BO3\n示例比赛\nFalcons\nVS · BO3\nNatus Vincere\n\n瑞士轮 · 第 4 轮 · 2–1 组 · 第 4 轮 · Falcons vs Natus Vincere · 2026/10/7 03:00:00\n\nBP · 9 步\n名单 · 首发 5 / 5 人\n地图 · 已确定 3 图（inferno · anubis · mirage）\n查看比赛资料\n切换比赛\n退出示例\n01 · 比赛\n比赛资料\n双方、名单与赛程 →\n02 · 地图\n地图禁选\n编写 BP 与播出控制 →\n03 · 画面\nHUD 与包装\n选择、编辑与启用 →\n开播检查\n1 项待处理\n✓ 比赛资料\n✓ 比赛画面\n✓"
+    },
+    {
+      "name": "02-library",
+      "path": "/resources",
+      "width": 2560,
+      "height": 1440,
+      "scrollWidth": 2560,
+      "scrollHeight": 1440,
+      "text": "跳到主要内容\nMIZAR\n本场\n比赛库\nHUD 与画面\n设置\nMizar · 制播工作台\n准备\nFalcons vs Natus Vincere\nBO3\nOBS · 未连接\n直播 · 待确认\n录像 · 待确认\n返回本场\n比赛库\n打开直播工作台\n浏览赛事\n本地赛事 · 2 场\n独立比赛（无关联赛事）\n编辑赛事品牌与默认规则\n南京大学 vs 东南大学\nBO3 · 候选，尚未载入\n复旦大学 vs 上海交通大学\nBO3 · 候选，尚未载入\n在此赛事追加下一场\n候选比赛\n编辑比赛\n本地赛事\n待进行\n南京大学 vs 东南大学\n\n高校邀请赛 · 总决赛 · 决赛日 · 第一场 · BO3\n\n计划开始\n待安排\n南京大学\n首发\nAurora\nEcho\nNova\nOrbit\nPolaris\n替补\n\n暂无替补。\n\nSteam 身份\n东南大学\n首发\nAtlas\nComet\nLunar\nMeteor\nZenith\n替补\n\n暂无替补。\n\nSteam 身份\n地图与禁选资料\n浏览不会切换本场\n确认载入为本场\n回收站与本"
+    },
+    {
+      "name": "03-match",
+      "path": "/matches",
+      "width": 2560,
+      "height": 1440,
+      "scrollWidth": 2560,
+      "scrollHeight": 1440,
+      "text": "跳到主要内容\nMIZAR\n本场\n比赛库\nHUD 与画面\n设置\nMizar · 制播工作台\n准备\nFalcons vs Natus Vincere\nBO3\nOBS · 未连接\n直播 · 待确认\n录像 · 待确认\n返回本场\n比赛资料\n打开直播工作台\n比赛资料\n队伍与名单\n地图与 BP\n切换比赛\nRivalHub 赛事快照 · 示例比赛\nESL Pro League Season 24\n进行中\nFalcons vs Natus Vincere\n\n瑞士轮 · 第 4 轮 · 2–1 组 · 第 4 轮 · BO3\n\n计划开始\n2026/10/07 03:00（北京时间）\n系列比分\n0 : 0\n补充资料"
+    },
+    {
+      "name": "04-roster",
+      "path": "/matches?tab=roster",
+      "width": 2560,
+      "height": 1440,
+      "scrollWidth": 2560,
+      "scrollHeight": 1440,
+      "text": "跳到主要内容\nMIZAR\n本场\n比赛库\nHUD 与画面\n设置\nMizar · 制播工作台\n准备\nFalcons vs Natus Vincere\nBO3\nOBS · 未连接\n直播 · 待确认\n录像 · 待确认\n返回本场\n比赛资料\n打开直播工作台\n比赛资料\n队伍与名单\n地图与 BP\n切换比赛\nRivalHub 赛事快照 · 示例比赛\nFalcons\n首发\nkyousuke\nTeSeS\nNiKo\nkarrigan\nm0NESY\n替补\n\n暂无替补。\n\nSteam 身份\nNatus Vincere\n首发\niM\nmakazze\nw0nderful\nAleksib\nb1t\n替补\n\n暂无替补。\n\nSteam 身份"
+    },
+    {
+      "name": "05-hud-directory",
+      "path": "/picture",
+      "width": 2560,
+      "height": 1440,
+      "scrollWidth": 2560,
+      "scrollHeight": 1440,
+      "text": "跳到主要内容\nMIZAR\n本场\n比赛库\nHUD 与画面\n设置\nMizar · 制播工作台\n准备\nFalcons vs Natus Vincere\nBO3\nOBS · 未连接\n直播 · 待确认\n录像 · 待确认\n返回本场\n播出画面\n打开直播工作台\nHUD 预设\n节目预览\n本机 HUD\n\n内置风格参考 · 非本场画面；自定义预设按组件风格显示参考，实际配置请在编辑器检查。\n\nMizar 默认预设 · 内置只读 · 当前启用\n布局与外观\n编辑 Mizar 默认预设\n类 EWC · 内置只读 · 未启用\n布局与外观\n编辑 类 EWC\n类 IEM · 内置只读 · 未启用\n布局与外观\n编辑 类 IEM\n类 Perfect World · 内置只读 · 未启用\n布局与外观\n编辑 类 Perfect World\n类ESL · 内置只读 · 未启用\n布局与外观\n编辑 类ESL"
+    },
+    {
+      "name": "06-hud-editor",
+      "path": "/operator/hud",
+      "width": 2560,
+      "height": 1440,
+      "scrollWidth": 2560,
+      "scrollHeight": 1440,
+      "text": "跳到工具内容\nMizar\nHUD 编辑器\n准备\nFalcons vs Natus Vincere\nBO3\nOBS · 未连接\n直播 · 待确认\n录像 · 待确认\n返回本场\n正在编辑 · Mizar 默认预设\n已保存资源\n正式播出 · Mizar 默认预设\n播出配置已确认\n启用当前预设\n预览背景\n游戏画面\n纯色底板\n全屏预览\n来源\n静态样例\n实景回放\n实时比赛\n回放来源\nEPL · Inferno · 实景回放\nEPL · Inferno · 开局\nEPL · Inferno · 决胜回合\n历史回归 · Ancient · 第 3 回合\n历史回归 · Ancient · 第 11 回合拆弹\n回放示例，非本场事实\nFalcons\n12\nROUND 19\n0:11\nNatus Vincere\n6\nSMOKE\n0\nFLASH\n0\nHE\n0\nFIRE\n0\nkyousuke\nDEAD\n18\n11\n$5,550\n6\nTeSeS\nDEAD\n12\n11\n$4,000\n7\nNiKo\n16\n16\n10\n$7,"
+    },
+    {
+      "name": "07-bp",
+      "path": "/operator/bp",
+      "width": 2560,
+      "height": 1440,
+      "scrollWidth": 2560,
+      "scrollHeight": 1440,
+      "text": "跳到工具内容\nMizar\nBP 工作台\n准备\nFalcons vs Natus Vincere\nBO3\nOBS · 未连接\n直播 · 待确认\n录像 · 待确认\n返回本场\n来源：示例比赛\nBP 状态\n示例比赛\n\nBP 已就绪\n\n当前比赛 · BO3\nESL Pro League Season 24 · 瑞士轮 · 第 4 轮 · 2–1 组\nFalcons\nVS\nNatus Vincere\nBP 已就绪\n播放 BP\n收起 BP\n\n场景测试 · 内置演示数据\nOBS Browser Source · /program/bp · 1920 × 1080\nBP 画面\nBP 画面检查 · 只读\nBP 尚未播放 · 播放后在此检查画面\n\n左侧播放 / 收起影响正式播出，此处只读取同一 BP 状态。"
+    },
+    {
+      "name": "08-game",
+      "path": "/settings",
+      "width": 2560,
+      "height": 1440,
+      "scrollWidth": 2560,
+      "scrollHeight": 1440,
+      "text": "跳到主要内容\nMIZAR\n本场\n比赛库\nHUD 与画面\n设置\nMizar · 制播工作台\n准备\nFalcons vs Natus Vincere\nBO3\nOBS · 未连接\n直播 · 待确认\n录像 · 待确认\n返回本场\n游戏设置\n打开直播工作台\nCS2 与 GSI\nOBS\n音乐与运镜\nRivalHub\n高级\n游戏连接\n尚未检测 GSI\n\n新写入的 GSI 将在下次启动 CS2 时加载；若游戏已运行，请重启。收到实际数据后，总览会更新游戏数据状态。\n\nCS2 窗口状态待确认\n\n请在 Mizar 桌面应用中检测并安装 GSI。\n\n详细信息\nCS2 启动设置\n\n保存下次启动使用的画质与帧率，在页面顶部启动游戏并打开工作台。\n\n请在 Mizar 桌面应用中设置并启动 CS2。\n\n启动方式与配置恢复\nSteam 头像（可选）\n\n自动补全缺少的选手头像，赛事提供的头像优先。\n\n尚未配置密钥 · 本机缓存 0 个头像\n\nSteam Web API Key（可选，推荐填写）\n密钥仅保存在本机；不填写也能"
+    },
+    {
+      "name": "09-obs",
+      "path": "/settings?tab=obs",
+      "width": 2560,
+      "height": 1440,
+      "scrollWidth": 2560,
+      "scrollHeight": 1440,
+      "text": "跳到主要内容\nMIZAR\n本场\n比赛库\nHUD 与画面\n设置\nMizar · 制播工作台\n准备\nFalcons vs Natus Vincere\nBO3\nOBS · 未连接\n直播 · 待确认\n录像 · 待确认\n返回本场\nOBS 连接\n打开直播工作台\nCS2 与 GSI\nOBS\n音乐与运镜\nRivalHub\n高级\nOBS 连接与配置\n未连接\nOBS 拒绝连接。请打开 OBS，启用 WebSocket 服务器并核对端口，再保存并测试连接。场景配置尚未确认。\n打开 OBS\n\n在 OBS「工具 → WebSocket 服务器设置」中启用服务器。\n\n打开 OBS\nWebSocket 连接设置\n连接控制\n\n填写 OBS 提供的端口与密码。\n\nWebSocket 端口\nWebSocket 密码\n保存并测试\n检查画面\n等待节目场景\n推流 · 无法确认\n录制 · 无法确认\n\n修复前停止推流与录制。检查通过后，在 OBS 中核对游戏画面、音频电平和直播输出音轨，并录制试听。\n\n添加默认桌面音频与麦克风\n此操"
+    },
+    {
+      "name": "10-music",
+      "path": "/settings?tab=music",
+      "width": 2560,
+      "height": 1440,
+      "scrollWidth": 2560,
+      "scrollHeight": 1440,
+      "text": "跳到主要内容\nMIZAR\n本场\n比赛库\nHUD 与画面\n设置\nMizar · 制播工作台\n准备\nFalcons vs Natus Vincere\nBO3\nOBS · 未连接\n直播 · 待确认\n录像 · 待确认\n返回本场\n音乐与运镜\n打开直播工作台\nCS2 与 GSI\nOBS\n音乐与运镜\nRivalHub\n高级\n音乐\n运镜\n播放与导入\n\n由 OBS 播放本地音频。默认启用，未选曲时保持静音。游戏声音与麦克风继续使用 OBS 原混音。\n\n音乐 · 静音\n停止音乐\n下一首\n一键导入音乐包\n选择含 music.json 和相对路径音频的 ZIP（最大 128 MiB）。验证成功后替换七组配置。\n\n只选择你有权直播或录制使用的音乐。文件仅保存在本机，不联网下载或分享。\n\n等待音乐\n静音\n战术暂停\n静音\n技术暂停\n静音\n中场\n静音\n单图胜利\n静音\n整场胜利\n静音\n开场短音效\n静音\n等待音乐\n启用\n\n赛前、BP、热身与图间共用，不因画面切换重播。\n\n尚未选曲 · 静音\n\n选择本地曲目\n音量\n高级设置\n"
+    },
+    {
+      "name": "11-camera",
+      "path": "/settings?tab=music&section=camera",
+      "width": 2560,
+      "height": 1440,
+      "scrollWidth": 2560,
+      "scrollHeight": 1440,
+      "text": "跳到主要内容\nMIZAR\n本场\n比赛库\nHUD 与画面\n设置\nMizar · 制播工作台\n准备\nFalcons vs Natus Vincere\nBO3\nOBS · 未连接\n直播 · 待确认\n录像 · 待确认\n返回本场\n音乐与运镜\n打开直播工作台\nCS2 与 GSI\nOBS\n音乐与运镜\nRivalHub\n高级\n音乐\n运镜\n地图自动编排\n运镜 · 人工 · 请确认当前地图与活动运镜包，再启用自动。\nde_inferno · 未配运镜包 · 需准备隔离包\n连接 MulNX\n接管运镜\n跳过本次\n浏览器联调\n游戏内筛选\n\n先在 MulNX 载入本图专用隔离包。开场音效跟随实际开场画面；阶段音乐沿用上方配置。\n\n预设名称\n添加地图保存预设\n导入与导出\n联调说明"
+    },
+    {
+      "name": "12-platform",
+      "path": "/settings?tab=rivalhub",
+      "width": 2560,
+      "height": 1440,
+      "scrollWidth": 2560,
+      "scrollHeight": 1440,
+      "text": "跳到主要内容\nMIZAR\n本场\n比赛库\nHUD 与画面\n设置\nMizar · 制播工作台\n准备\nFalcons vs Natus Vincere\nBO3\nOBS · 未连接\n直播 · 待确认\n录像 · 待确认\n返回本场\n赛事平台\n打开直播工作台\nCS2 与 GSI\nOBS\n音乐与运镜\nRivalHub\n高级\n连接 RivalHub 赛事\n\n在 RivalHub 登录并确认授权，完成后会自动连接。\n\n连接 RivalHub"
+    },
+    {
+      "name": "13-maintenance",
+      "path": "/settings?tab=advanced",
+      "width": 2560,
+      "height": 1440,
+      "scrollWidth": 2560,
+      "scrollHeight": 1440,
+      "text": "跳到主要内容\nMIZAR\n本场\n比赛库\nHUD 与画面\n设置\nMizar · 制播工作台\n准备\nFalcons vs Natus Vincere\nBO3\nOBS · 未连接\n直播 · 待确认\n录像 · 待确认\n返回本场\n高级设置\n打开直播工作台\nCS2 与 GSI\nOBS\n音乐与运镜\nRivalHub\n高级\n应用更新\n检查更新\n\n请在桌面应用中检查更新。\n\n示例素材\n\nEPL 官方示例 · 暂无独立缓存\n\n当前版本\n未激活\n详情\n刷新\n运行信息\n\n核对当前安装的 Mizar 版本与构建来源。\n\n版本号\n开发环境或版本信息不可用\nCommit\n不可用\n诊断与支持\n\n自动发送诊断：暂不可用\n\n仍可导出本机诊断报告。\n\n暂时无法发送，诊断记录保留在本机。\n诊断详情\n标记本场问题\n\n导出版本、运行状态和最近启动记录，便于定位问题。\n\n运行诊断 / 导出诊断包"
+    },
+    {
+      "name": "14-workspace",
+      "path": "/workspace",
+      "width": 2560,
+      "height": 1440,
+      "scrollWidth": 2560,
+      "scrollHeight": 1440,
+      "text": "MIZAR\n等待比赛数据\n比赛雷达\nINFERNO\n等待 GSI 数据\n\n地图底图 · 实时位置尚不可用\n\n检查游戏连接\nESL Pro League Season 24 · BO3\n比赛资料\nFalcons\n– : –\nNatus Vincere\n\n当前视角 · 等待观战数据\n\n比赛数据已中断\n检查游戏连接\nOBS 无法确认\nBilibili 未设置\n比赛进行中\n制作任务与详情 →\n音乐 · 静音\n停止\n下一首\nOBS 预览暂不可用\n检查连接\nCS2 游戏画面\n比赛中\n准备中\n恢复自动\n赛前等待\n对阵\nBP\n比赛中\n半场\n单图结果\n图间\n整场结果\n热身画面\n赛前等待\n游戏画面\n下一场景\n半场\n运镜\n配置运镜\n人工保持\nde_inferno\n未配运镜包\n本次请求 · 请确认当前地图与活动运镜包，再启用自动。\n接管运镜\n跳过本次\n观战 · 本机\n返回游戏\nBP 工作台\n复制隐藏命令\n复制恢复命令\n\n复制后在 CS2 控制台执行\n\n雷达\n其他 HUD\nOBS · 未连接\nOBS 配置\n直播待"
+    }
+  ],
+  "errors": []
+}

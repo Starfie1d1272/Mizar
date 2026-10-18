@@ -79,7 +79,7 @@ export function RivalHubSyncControls() {
         </Button>
       ) : null}
       {connection.lastRefreshAt ? (
-        <small>上次同步：{new Date(connection.lastRefreshAt).toLocaleTimeString('zh-CN')}</small>
+        <small>资料刷新：{new Date(connection.lastRefreshAt).toLocaleTimeString('zh-CN')}</small>
       ) : null}
       {error || connection.refreshError ? (
         <StatusBanner tone="danger">{error || connection.refreshError}</StatusBanner>

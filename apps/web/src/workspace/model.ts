@@ -103,6 +103,18 @@ export function workspaceIssues(operator: OperatorPayload | null): WorkspaceIssu
           },
     );
   }
+  const resultConflict = operator.seriesProgress?.issues.find(
+    (issue) => issue.code === 'context_result_conflict' && issue.mapOrder !== null,
+  );
+  if (resultConflict)
+    issues.push({
+      id: 'result-conflict',
+      summary: `第 ${resultConflict.mapOrder} 图赛果冲突`,
+      detail:
+        '网站已确认赛果与本地冻结记录不同，已保留本地事实。请在网站本场工作台核对赛果；刷新不会覆盖已有比分。',
+      action: '核对网站赛果',
+      path: '/matches?tab=maps',
+    });
   const unfinished = operator.seriesProgress?.maps.find((map) => map.status === 'current');
   const resultBlocked =
     unfinished &&
@@ -177,7 +189,7 @@ export function workspaceIssues(operator: OperatorPayload | null): WorkspaceIssu
   else if (identityCodes.has('unexpected_human_steam64') && !rosterIncomplete && !steam64Missing)
     issues.push({
       id: 'steam64',
-      summary: '选手 Steam64 不匹配',
+      summary: authority === 'rivalhub' ? '上场账号与网站名单不一致' : '上场账号与名单不一致',
       detail: `观测到的选手 Steam64 不在本场名单中。先核对比赛与服务器是否正确，再确认替补或名单变化。${rosterRecovery}`,
       action: rosterAction,
       path: '/matches?tab=roster',

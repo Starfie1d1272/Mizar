@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Button, Checkbox, Panel, StatusBanner } from '../ui';
 import { desktopInvoke } from '../workspace/client';
 import './updates.css';
@@ -65,7 +65,7 @@ async function sendAction(action: string, enabled?: boolean): Promise<UpdateStat
     );
   return value;
 }
-export function UpdateSettings() {
+export function UpdateSettings({ children }: { children?: ReactNode }) {
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [requested, setRequested] = useState(false);
@@ -200,25 +200,37 @@ export function UpdateSettings() {
       setError('下载页面未能打开。');
     }
   };
-  const copyDiagnostics = async () => {
+  const copyUpdateSummary = async () => {
     try {
-      const response = await fetch('/debug/support-bundle', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ desktop: null }),
-        signal: AbortSignal.timeout(15_000),
-      });
-      if (!response.ok) throw new Error('export_failed');
-      const text = await response.text();
-      if (
-        new TextEncoder().encode(text).length > 256 * 1024 ||
-        (JSON.parse(text) as { schema?: string }).schema !== 'mizar-support-bundle/1'
-      )
-        throw new Error('export_too_large');
-      await navigator.clipboard.writeText(text);
-      setDiagnosticFeedback('诊断信息已复制，包含脱敏原因与相关输出。');
+      await navigator.clipboard.writeText(
+        JSON.stringify(
+          {
+            schema: 'mizar-update-summary/1',
+            time: new Date().toISOString(),
+            currentVersion: status?.currentVersion ?? null,
+            candidateVersion: status?.candidate?.version ?? null,
+            distribution: status?.distribution ?? null,
+            phase: status?.phase ?? null,
+            error: status?.error ?? null,
+            lastResult: status?.lastResult ?? null,
+            failureDetails:
+              status?.failureDetails?.map(
+                ({ stage, stageLabel, summary, nextStep, operationId }) => ({
+                  stage,
+                  stageLabel,
+                  summary,
+                  nextStep,
+                  operationId,
+                }),
+              ) ?? [],
+          },
+          null,
+          2,
+        ),
+      );
+      setDiagnosticFeedback('更新摘要已复制。完整操作记录请导出诊断包后私下交付维护者。');
     } catch {
-      setDiagnosticFeedback('诊断复制未完成，请打开诊断页面导出。');
+      setDiagnosticFeedback('更新摘要未能复制，请导出诊断包。');
     }
   };
   const phase = status?.phase;
@@ -241,7 +253,7 @@ export function UpdateSettings() {
       ? failures[status.error] || '更新未完成，原因未知。请导出诊断定位原因。'
       : '');
   return (
-    <Panel className="settings-card settings-card--wide settings-update">
+    <Panel className="settings-card settings-update">
       <div className="settings-update-header">
         <div>
           <h2>应用更新</h2>
@@ -257,7 +269,10 @@ export function UpdateSettings() {
       {status?.candidate ? (
         <div className="settings-update-release">
           <h3>v{status.candidate.version}</h3>
-          <div className="settings-update-notes">{status.candidate.notes}</div>
+          <details>
+            <summary>更新说明</summary>
+            <div className="settings-update-notes">{status.candidate.notes}</div>
+          </details>
         </div>
       ) : phase === 'current' ? (
         <p>已是最新版本。</p>
@@ -288,7 +303,7 @@ export function UpdateSettings() {
       {failure ? (
         <StatusBanner tone="danger">
           <p>{failure}</p>
-          <Button onClick={() => void copyDiagnostics()}>复制诊断信息</Button>
+          <Button onClick={() => void copyUpdateSummary()}>复制更新摘要</Button>
           <Button
             onClick={() =>
               void openTool('diagnostics').catch(() =>
@@ -359,6 +374,7 @@ export function UpdateSettings() {
           </details>
         ) : null}
       </div>
+      {children}
     </Panel>
   );
 }

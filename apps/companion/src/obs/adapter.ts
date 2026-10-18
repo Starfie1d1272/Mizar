@@ -1,4 +1,4 @@
-import { errorEvidence } from '../updates/diagnostics.js';
+import { diagnosticValue } from '../support/session-journal.js';
 import { spawn } from 'node:child_process';
 import { dirname } from 'node:path';
 import { OBSWebSocket } from 'obs-websocket-js';
@@ -12,7 +12,7 @@ import {
   isObsProcessRunning,
   type ObsConfig,
 } from './config.js';
-import { checkObsAudio, setupObsAudio } from './audio.js';
+import { checkObsAudio, ensureObsAudio, setupObsAudio } from './audio.js';
 import {
   ObsExitSafetyError,
   checkObsConfiguration,
@@ -45,7 +45,7 @@ export function obsErrorEvidence(error: unknown, password = ''): unknown {
       return Object.fromEntries(Object.entries(value).map(([key, field]) => [key, redact(field)]));
     return value;
   };
-  return redact(errorEvidence(error));
+  return redact(diagnosticValue(error, '', new Set(), password ? [password] : []));
 }
 
 export interface ObsStatus {
@@ -340,12 +340,24 @@ export class ObsAdapter {
       return this.findings;
     });
   }
-  ensure(): Promise<readonly ObsFinding[]> {
+  ensure(activeScene: () => ProgramSceneId = () => 'waiting'): Promise<readonly ObsFinding[]> {
     return this.configurationMutation(async () => {
       this.findings = await this.withObs(async (obs) => {
-        const visual = await ensureObsConfiguration(obs, this.browserBaseUrl);
-        return this.configurationFindings(obs, visual);
-      }, 12_000);
+        const visual = await ensureObsConfiguration(obs, this.browserBaseUrl, activeScene);
+        if (
+          visual.some((item) =>
+            [
+              'collection_missing',
+              'collection_inactive',
+              'scene_missing',
+              'source_kind_conflict',
+            ].includes(item.code),
+          )
+        )
+          return visual;
+        const audio = await ensureObsAudio(obs, this.browserBaseUrl);
+        return [...visual, ...audio];
+      }, 30_000);
       return this.findings;
     });
   }

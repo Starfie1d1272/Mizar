@@ -15,8 +15,6 @@ export const RADAR_PRESENTATION = Object.freeze({
   correctionSmoothingMs: 80,
   maxExtrapolationMs: 100,
   utilityVelocityEpsilon: 0.01,
-  smokeStationaryWorldThreshold: 6,
-  smokeStationarySamples: 2,
   teleportBaseWorld: 160,
   teleportSpeedWorldPerSecond: 1100,
   sampleGapMs: 500,
@@ -99,8 +97,6 @@ export interface GrenadeMarker extends Motion {
   phase: RadarUtilityPhase;
   phaseStartedAt: number;
   iconUrl: string | null;
-  previousPosition: Vector;
-  stationarySampleCount: number;
   positionAvailable: boolean;
 }
 export interface GrenadeExit {
@@ -294,14 +290,9 @@ export function isActiveSmoke(g: Parameters<typeof radarUtilityPhase>[0]): boole
   return g.kind === 'smoke' && radarUtilityPhase(g) === 'effect';
 }
 
-function worldDisplacement(before: Vector, after: Vector): number {
-  return Math.hypot(after.x - before.x, after.y - before.y, (after.z ?? 0) - (before.z ?? 0));
-}
-
 function transitionSmokePhase(
   previousPhase: RadarUtilityPhase,
   source: Grenade,
-  stationarySampleCount: number,
 ): RadarUtilityPhase {
   if (previousPhase === 'terminal') return 'terminal';
   if (
@@ -310,11 +301,9 @@ function transitionSmokePhase(
   )
     return 'terminal';
   if (previousPhase === 'effect') return 'effect';
-  if (
-    (source.effectTimeSeconds !== null && source.effectTimeSeconds > 0) ||
-    stationarySampleCount >= RADAR_PRESENTATION.smokeStationarySamples
-  )
-    return 'effect';
+  // Small per-sample displacement can occur in flight, especially at high cadence.
+  // Only positive effect time establishes the stationary smoke anchor.
+  if (source.effectTimeSeconds !== null && source.effectTimeSeconds > 0) return 'effect';
   return 'projectile';
 }
 
@@ -592,7 +581,7 @@ export class RadarPresentation {
         (source.position !== null || snapshot.payload.retainEffectAnchors)
       ) {
         currentGrenades.add(id);
-        const phase = transitionSmokePhase(old.phase, source, 0);
+        const phase = transitionSmokePhase(old.phase, source);
         if (phase !== old.phase) this.beginExit(id, old, now);
         const activeExit = this.exits.get(id);
         if (activeExit && activeExit.marker.phase === phase) this.exits.delete(id);
@@ -603,7 +592,6 @@ export class RadarPresentation {
           phase,
           iconUrl: grenadeIcon(source.kind, smokeSide),
           trail: [],
-          stationarySampleCount: 0,
           positionAvailable: phase === 'effect' ? old.positionAvailable : false,
         });
         continue;
@@ -617,7 +605,7 @@ export class RadarPresentation {
         }
         if (snapshot.payload.retainEffectAnchors && sameSmokeLifecycle(old, source)) {
           currentGrenades.add(id);
-          const phase = transitionSmokePhase(old.phase, source, 0);
+          const phase = transitionSmokePhase(old.phase, source);
           if (old.phase !== phase && old.phase !== 'projectile') this.beginExit(id, old, now);
           const activeExit = this.exits.get(id);
           if (activeExit && activeExit.marker.phase === phase) this.exits.delete(id);
@@ -626,7 +614,6 @@ export class RadarPresentation {
             source,
             phase,
             phaseStartedAt: old.phase === phase ? old.phaseStartedAt : now,
-            stationarySampleCount: 0,
             // An established smoke is stationary presentation truth. Real captures can
             // omit one grenade position sample; retain the last trusted spatial anchor
             // instead of blinking the mature effect off for that frame.
@@ -653,18 +640,8 @@ export class RadarPresentation {
         old.positionAvailable &&
         !discontinuous(old, world, point, now, geometry.unitRadius, sampleGapMs) &&
         !lifetimeRestarted(old.source, source);
-      const stationarySampleCount =
-        snapshot.payload.retainEffectAnchors &&
-        source.kind === 'smoke' &&
-        motionContinuous &&
-        old.phase === 'projectile' &&
-        source.effectTimeSeconds !== null &&
-        worldDisplacement(old.previousPosition, world) <=
-          RADAR_PRESENTATION.smokeStationaryWorldThreshold * geometry.unitRadius
-          ? old.stationarySampleCount + 1
-          : 0;
       const phase = smokeLifecycleContinuous
-        ? transitionSmokePhase(old.phase, source, stationarySampleCount)
+        ? transitionSmokePhase(old.phase, source)
         : radarUtilityPhase(source);
       const phaseContinuous =
         old !== undefined &&
@@ -722,8 +699,6 @@ export class RadarPresentation {
               : now,
         iconUrl: grenadeIcon(source.kind, side),
         trail,
-        previousPosition: world,
-        stationarySampleCount: phase === 'projectile' ? stationarySampleCount : 0,
         positionAvailable: true,
         target: point,
         targetAngle: 0,

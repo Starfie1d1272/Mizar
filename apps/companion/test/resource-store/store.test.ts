@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PreparePack, StoreOptions, TrustedPack } from '../../src/resource-store/contract.js';
-import { checkDescriptor, verifiedRead } from '../../src/resource-store/files.js';
+import { checkDescriptor, safePath, verifiedRead } from '../../src/resource-store/files.js';
 import { ResourceStore } from '../../src/resource-store/store.js';
 
 const packId = 'official:epl-default';
@@ -168,4 +168,18 @@ describe('Resource Store', () => {
       ),
     ).rejects.toThrow('resource_integrity_failed');
   });
+});
+
+it('accepts canonical directory spelling and Windows case aliases while retaining ancestor link checks', async () => {
+  const { root } = await setup();
+  const mixed = join(root, 'MixedCase');
+  await mkdir(mixed);
+  await writeFile(join(mixed, 'settings.json'), '{}');
+  const spelling = process.platform === 'win32' ? join(root, 'mixedcase') : join(mixed, '.');
+  expect(await safePath(spelling)).toBe(spelling);
+  expect(await safePath(spelling, 'settings.json')).toBe(join(spelling, 'settings.json'));
+  await expect(safePath(spelling, '../settings.json')).rejects.toThrow('resource_path_invalid');
+  const link = join(root, 'directory-link');
+  await symlink(mixed, link, process.platform === 'win32' ? 'junction' : 'dir');
+  await expect(safePath(link, 'settings.json')).rejects.toThrow('resource_path_unsafe');
 });

@@ -65,48 +65,7 @@ export function createOnlineManifestSource(
               response.status === 404 ? 'not_found' : 'unavailable',
               response.status,
             );
-          const size = Number(response.headers.get('content-length') ?? '0');
-          if (size > 1_000_000)
-            throw new SourceLoadError(
-              'RivalHub Manifest 响应过大。',
-              undefined,
-              'invalid_response',
-            );
-          if (!response.body)
-            throw new SourceLoadError(
-              'RivalHub Manifest 响应为空。',
-              undefined,
-              'invalid_response',
-            );
-          const reader = (response.body as ReadableStream<Uint8Array>).getReader();
-          const chunks: Uint8Array[] = [];
-          let bytes = 0;
-          try {
-            for (;;) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              bytes += value.byteLength;
-              if (bytes > 1_000_000)
-                throw new SourceLoadError(
-                  'RivalHub Manifest 响应过大。',
-                  undefined,
-                  'invalid_response',
-                );
-              chunks.push(value);
-            }
-          } finally {
-            await reader.cancel().catch(() => undefined);
-          }
-          const body = Buffer.concat(chunks).toString('utf8');
-          try {
-            return JSON.parse(body) as unknown;
-          } catch (error) {
-            throw new SourceLoadError(
-              'RivalHub Manifest 格式无法读取。',
-              error,
-              'invalid_response',
-            );
-          }
+          return await readOnlineManifestResponse(response);
         } catch (error: unknown) {
           if (error instanceof SourceLoadError) throw error;
           if (attempt === retries)
@@ -123,4 +82,34 @@ export function createOnlineManifestSource(
       throw new SourceLoadError('RivalHub Manifest 暂时不可用。');
     },
   };
+}
+
+/** Shared bounded JSON reader for single-match responses, including browsing refreshes. */
+export async function readOnlineManifestResponse(response: Response): Promise<unknown> {
+  const size = Number(response.headers.get('content-length') ?? '0');
+  if (size > 1_000_000)
+    throw new SourceLoadError('RivalHub Manifest 响应过大。', undefined, 'invalid_response');
+  if (!response.body)
+    throw new SourceLoadError('RivalHub Manifest 响应为空。', undefined, 'invalid_response');
+  const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > 1_000_000)
+        throw new SourceLoadError('RivalHub Manifest 响应过大。', undefined, 'invalid_response');
+      chunks.push(value);
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  const body = Buffer.concat(chunks).toString('utf8');
+  try {
+    return JSON.parse(body) as unknown;
+  } catch (error) {
+    throw new SourceLoadError('RivalHub Manifest 格式无法读取。', error, 'invalid_response');
+  }
 }

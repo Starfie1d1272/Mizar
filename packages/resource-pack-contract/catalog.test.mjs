@@ -21,10 +21,10 @@ const core = {
   archive: 'Mizar-v1.1.0-Windows-x64.zip',
   archiveSha256: 'a'.repeat(64),
 };
-function candidate() {
+function candidate(coreIdentity = core) {
   // Canonical structural data only; no claimed signing or trusted policy.
   const descriptor = createResourceDescriptor({
-    core,
+    core: coreIdentity,
     packVersion: '1.0.0',
     archive: {
       name: 'Mizar-official-epl-default-1.0.0.zip',
@@ -95,13 +95,18 @@ describe('original Qualification descriptor and Promotion catalog client boundar
       }),
     ).toThrow('必须先认证');
   });
-  it('v2 separates current Core authorization from immutable original Qualification and Promotion while v1 remains strict', () => {
-    const original = candidate();
+  it.each(['', '-alpha.1', '-beta.2', '-rc.3'])('v2 exact %s identities', (suffix) => {
+    const originalCore = {
+      ...core,
+      appVersion: `1.1.0${suffix}`,
+      archive: `Mizar-v1.1.0${suffix}-Windows-x64.zip`,
+    };
+    const original = candidate(originalCore);
     const nextCore = {
       ...core,
-      appVersion: '1.2.0',
+      appVersion: `1.2.0${suffix}`,
       gitSha: 'e'.repeat(40),
-      archive: 'Mizar-v1.2.0-Windows-x64-Core.zip',
+      archive: `Mizar-v1.2.0${suffix}-Windows-x64-Core.zip`,
     };
     const originalPublication = original.catalog.resources[0].publication;
     const descriptor = createResourceDescriptor({
@@ -116,7 +121,7 @@ describe('original Qualification descriptor and Promotion catalog client boundar
         sourceSha,
         publication: {
           promotionSha: sourceSha,
-          releaseVersion: core.appVersion,
+          releaseVersion: originalCore.appVersion,
           sha256: originalPublication.sha256,
           sequence: 7,
           issuedAt: originalPublication.issuedAt,

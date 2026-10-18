@@ -69,7 +69,7 @@ export function matchMaps(match: Pick<MatchDocumentV1, 'maps' | 'veto' | 'entran
             ? '决胜图'
             : picker
               ? `${Object.values(match.entrants).find((t) => t.entryId === picker)?.name ?? '队伍待确认'} 选图`
-              : '选图待确认',
+              : '选图方未记录',
         score:
           map && map.scoreA !== null && map.scoreB !== null
             ? `${map.scoreA} : ${map.scoreB}`

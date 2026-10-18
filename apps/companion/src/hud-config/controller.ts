@@ -1,3 +1,4 @@
+import { diagnosticValue } from '../support/session-journal.js';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
@@ -121,7 +122,11 @@ export function registerHudConfigRoutes(
         return reply.code(200).send(mutationResponse(state));
       }
       return reply.code(400).send({ error: 'invalid_hud_config_command' });
-    } catch (error: unknown) {
+    } catch (error) {
+      request.log.warn(
+        { stage: 'control_failure', error: diagnosticValue(error) },
+        'Product control failed',
+      );
       if (error instanceof HudConfigEditorConflictError) {
         return reply.code(409).send({
           error: 'hud_config_editor_conflict',

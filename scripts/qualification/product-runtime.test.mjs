@@ -7,12 +7,14 @@ import { createServer } from 'node:http';
 import { setTimeout as delay } from 'node:timers/promises';
 import { writableRoot, runProduct, stopProduct, PRODUCT_REPOSITORY } from './product-runtime.mjs';
 
+import { verifyPromotion } from './verify-promotion.mjs';
+
 const roots = [];
 afterEach(async () => {
   vi.unstubAllEnvs();
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
 });
-async function fixture({ extraFiles = [] } = {}) {
+async function fixture({ extraFiles = [], appVersion = '1.0.0-rc.27' } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'broadcast portable '));
   roots.push(root);
   const files = [
@@ -38,7 +40,8 @@ async function fixture({ extraFiles = [] } = {}) {
     desktopHost: 'tauri2',
     platform: 'win32-x64',
     gitSha: 'a'.repeat(40),
-    appVersion: '1.0.0-rc.27',
+    appVersion,
+    desktopBuildProfile: 'release',
     artifactSha256: hash(files.map((name) => `${name}\0${hash('fixture')}\n`).join('')),
   };
   const json = JSON.stringify(artifact);
@@ -138,3 +141,46 @@ describe('portable process lifecycle', () => {
     expect(stages.filter((entry) => entry.stage === 'companion_exit')).toHaveLength(2);
   }, 15000);
 });
+
+it.each(['alpha.1', 'beta.2', 'rc.3'])(
+  'promotion keeps exact tag/source/payload/binary identity for %s',
+  async (suffix) => {
+    const appVersion = `2.0.0-${suffix}`;
+    const { root, artifact } = await fixture({ appVersion });
+    const product = await mkdtemp(join(tmpdir(), 'mizar-promotion-'));
+    roots.push(product);
+    const extracted = join(product, 'extracted');
+    await mkdir(extracted);
+    const { rename } = await import('node:fs/promises');
+    await rename(root, join(extracted, 'payload'));
+    const archive = `Mizar-v${appVersion}-Windows-x64.zip`;
+    // Structural fixture only: verifyPromotion receives an already extracted payload.
+    const bytes = 'fixture archive';
+    const digest = createHash('sha256').update(bytes).digest('hex');
+    const manifest = {
+      appVersion,
+      gitSha: artifact.gitSha,
+      archive,
+      archiveSha256: digest,
+      contentDigest: artifact.artifactSha256,
+      desktopBuildProfile: 'release',
+      developmentOnly: false,
+    };
+    await writeFile(join(product, 'release-manifest.json'), JSON.stringify(manifest));
+    await writeFile(join(product, archive), bytes);
+    await writeFile(join(product, `${archive}.sha256`), `${digest}  ${archive}`);
+    const input = {
+      product,
+      extracted,
+      tag: `v${appVersion}`,
+      sourceSha: artifact.gitSha,
+      binaryVersion: appVersion,
+    };
+    expect((await verifyPromotion(input)).appVersion).toBe(appVersion);
+    await expect(verifyPromotion({ ...input, tag: 'v2.0.0' })).rejects.toThrow('标签');
+    await expect(verifyPromotion({ ...input, sourceSha: 'b'.repeat(40) })).rejects.toThrow('来源');
+    await expect(verifyPromotion({ ...input, binaryVersion: '2.0.0' })).rejects.toThrow('EXE');
+    await writeFile(join(extracted, 'payload/Mizar.exe'), 'changed');
+    await expect(verifyPromotion(input)).rejects.toThrow('校验失败');
+  },
+);

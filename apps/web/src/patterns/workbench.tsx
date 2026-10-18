@@ -2,9 +2,19 @@ import type { ReactNode } from 'react';
 import { Panel } from '../ui/index.js';
 import './patterns.css';
 
-export function Workbench({ preview, inspector }: { preview: ReactNode; inspector: ReactNode }) {
+export function Workbench({
+  preview,
+  inspector,
+  layout = 'columns',
+  className = '',
+}: {
+  preview: ReactNode;
+  inspector: ReactNode;
+  layout?: 'columns' | 'canvas';
+  className?: string;
+}) {
   return (
-    <div className="mizar-workbench">
+    <div className={`mizar-workbench ${className}`} data-layout={layout}>
       {preview}
       {inspector}
     </div>

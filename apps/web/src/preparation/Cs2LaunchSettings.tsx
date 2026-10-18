@@ -1,14 +1,11 @@
 import { useState } from 'react';
 import { Button, Panel, Select, StatusBanner } from '../ui';
 import { desktopInvoke } from '../workspace/client';
-import { useLocalRead, type Production } from './client';
 
 import { useCs2Status, type Cs2ConfigStatus } from './cs2-status';
-import { Cs2Recovery } from './Cs2Recovery';
 
 export function Cs2LaunchSettings() {
   const desktop = Boolean(window.__TAURI_INTERNALS__);
-  const production = useLocalRead<Production>(desktop ? '/local/v1/production' : null);
   const { status, phase, refresh, error: statusError } = useCs2Status();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -52,7 +49,7 @@ export function Cs2LaunchSettings() {
   return (
     <Panel className="settings-card">
       <h2>CS2 启动设置</h2>
-      <p>保存下次启动使用的画质与帧率，在页面顶部启动游戏并打开工作台。</p>
+      <p>画质与帧率在下次由 Mizar 启动游戏时生效；接入已有游戏不会覆盖其设置。</p>
       {desktop ? (
         <form
           onSubmit={(event) => {
@@ -125,7 +122,7 @@ export function Cs2LaunchSettings() {
         <p>请在 Mizar 桌面应用中设置并启动 CS2。</p>
       )}
       <details className="settings-details">
-        <summary>启动方式与配置恢复</summary>
+        <summary>启动方式说明</summary>
         <p>无边框窗口 · 分辨率适配工作台</p>
         <p>首次先安装 GSI，并在 OBS 启用 WebSocket 服务器、连接并检查场景。</p>
         <p>
@@ -144,22 +141,6 @@ export function Cs2LaunchSettings() {
         </div>
         <p>退出工作台或退出 Mizar 时关闭本次游戏并恢复原设置；隐藏工作区保留游戏。</p>
       </details>
-      {desktop ? (
-        <section aria-label="配置与恢复">
-          <h3>配置与恢复</h3>
-          <Cs2Recovery production={production} />
-          {status &&
-          !phase &&
-          !statusError &&
-          !status.pending &&
-          !status.spectatorRecoveryPending &&
-          !status.demoCleanupPending &&
-          !status.canPreserve &&
-          !status.message ? (
-            <p>目前没有待恢复的配置。</p>
-          ) : null}
-        </section>
-      ) : null}
       {error || statusError ? (
         <StatusBanner tone="danger">{error || statusError}</StatusBanner>
       ) : null}

@@ -3,11 +3,21 @@ import { createHash, randomBytes } from 'node:crypto';
 import { constants } from 'node:fs';
 import { lstat, open } from 'node:fs/promises';
 import { join } from 'node:path';
+import { BUSINESS_LOG_FILES, businessEvidence } from './business-journal.js';
 
 export const SUPPORT_LOG_READ_BYTES = 64 * 1024;
 export const SUPPORT_LOG_EVENTS = 32;
 const HEADER_BYTES = 4096;
 const names = ['desktop.ndjson', 'supervisor.ndjson', 'companion.log', 'companion.stderr.log'];
+export const recorderCodes = [
+  'recorder_not_configured',
+  'recorder_start_failed',
+  'recorder_encode_failed',
+  'recorder_overflow',
+  'recorder_writer_failed',
+  'recorder_finalize_timeout',
+  'recorder_finalize_failed',
+];
 const stages = new Set([
   'demo_test',
   'process_start',
@@ -320,6 +330,15 @@ function outboxErrorEvidence(value: unknown, depth = 0): unknown {
 
 /** Project known events; exception evidence is explicitly redacted and bounded. */
 function projectEvent(entry: Record<string, unknown>, session: string | null) {
+  const recorder = entry.event === 'recorder' && entry.stage === 'recorder_failure';
+  const business =
+    entry.event === 'business' &&
+    [
+      'business_session',
+      'business_runtime',
+      'business_delivery',
+      'business_log_write_failed',
+    ].includes(String(entry.stage));
   const outbox =
     (entry.event === 'outbox' && entry.stage === 'outbox_load') ||
     record(entry.err).code === 'outbox_recovery_failed';
@@ -336,7 +355,8 @@ function projectEvent(entry: Record<string, unknown>, session: string | null) {
       entry.stage,
     );
   const stage =
-    typeof entry.stage === 'string' && (stages.has(entry.stage) || update || live || demo || outbox)
+    typeof entry.stage === 'string' &&
+    (stages.has(entry.stage) || update || live || demo || outbox || business || recorder)
       ? entry.stage
       : null;
   const diagnostic = record(entry.diagnostic);
@@ -354,6 +374,36 @@ function projectEvent(entry: Record<string, unknown>, session: string | null) {
   const demoEvidence = demo ? diagnostic : nativeDemo;
   const osError = /\(os error (\d{1,6})\)/.exec(error);
   return {
+    ...(recorder
+      ? {
+          recorder: {
+            code: choice(diagnostic.code, recorderCodes),
+            operation: choice(diagnostic.operation, [
+              'open',
+              'encode',
+              'write',
+              'truncate',
+              'sync',
+              'close',
+              'manifest',
+              'rename',
+            ]),
+            causeCode: choice(diagnostic.causeCode, [
+              'EACCES',
+              'EPERM',
+              'ENOSPC',
+              'EIO',
+              'ENOENT',
+              'EMFILE',
+              'ENFILE',
+              'EBUSY',
+              'EEXIST',
+              'EROFS',
+            ]),
+          },
+        }
+      : {}),
+    ...(business ? { business: businessEvidence(entry.evidence) } : {}),
     ...(demo || stage === 'demo_test'
       ? {
           demoCode: identifier(demoEvidence.code),
@@ -389,17 +439,19 @@ function projectEvent(entry: Record<string, unknown>, session: string | null) {
           recoveredRecords: count(record(entry.recovery).recoveredRecords),
         }
       : {}),
-    ...(outbox
-      ? { localDiagnostic: boundDiagnostic(outboxErrorEvidence(entry.err), 8 * 1024) }
-      : (update || live) && diagnostic.error !== undefined
-        ? {
-            localDiagnostic: boundDiagnostic(
-              obsOutput ? obsOutputEvidence(diagnostic.error) : errorEvidence(diagnostic.error),
-              8 * 1024,
-            ),
-          }
-        : {}),
-    ...(outbox
+    ...(business || recorder
+      ? {}
+      : outbox
+        ? { localDiagnostic: boundDiagnostic(outboxErrorEvidence(entry.err), 8 * 1024) }
+        : (update || live) && diagnostic.error !== undefined
+          ? {
+              localDiagnostic: boundDiagnostic(
+                obsOutput ? obsOutputEvidence(diagnostic.error) : errorEvidence(diagnostic.error),
+                8 * 1024,
+              ),
+            }
+          : {}),
+    ...(business || recorder || outbox
       ? {}
       : spectator
         ? { localDiagnostic: boundDiagnostic(spectator, 8 * 1024) }
@@ -561,12 +613,15 @@ async function readLog(directory: string, name: string, salt: string) {
 export async function readSupportLogs(directory: string | undefined, maxBytes = 192 * 1024) {
   if (directory === undefined) return [];
   const salt = randomBytes(32).toString('hex');
-  const files = names.flatMap((name) => [
-    name,
-    ...[1, 2, 3].map((index) =>
-      name === 'desktop.ndjson' ? `desktop.${index}.ndjson` : `${name}.${index}`,
-    ),
-  ]);
+  const files = [
+    ...names.flatMap((name) => [
+      name,
+      ...[1, 2, 3].map((index) =>
+        name === 'desktop.ndjson' ? `desktop.${index}.ndjson` : `${name}.${index}`,
+      ),
+    ]),
+    ...BUSINESS_LOG_FILES,
+  ];
   // Sequential bounded reads avoid burst allocation or an unbounded file traversal.
   const results = [];
   for (const name of files) {

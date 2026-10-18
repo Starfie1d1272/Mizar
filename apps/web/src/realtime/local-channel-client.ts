@@ -1,3 +1,4 @@
+import { recordChannelConsumption } from '../debug/performance-journal';
 import { createSnapshotAcceptance, type SnapshotAcceptance } from '@mizar/protocol/acceptance';
 import type { LocalSnapshotChannel } from '@mizar/protocol/version';
 
@@ -144,7 +145,20 @@ export class LocalChannelClient<C extends LocalSnapshotChannel> {
     };
     socket.onmessage = (event) => {
       if (!this.isCurrent(generation, socket)) return;
-      this.handleMessage(generation, socket, event.data);
+      const started = performance.now();
+      const previous = this.store.getSnapshot().current;
+      try {
+        this.handleMessage(generation, socket, event.data);
+      } finally {
+        const result = this.store.getSnapshot();
+        recordChannelConsumption(
+          this.channel,
+          performance.now() - started,
+          result.state,
+          result.current,
+          result.current !== previous,
+        );
+      }
     };
     socket.onerror = () => {
       // The browser emits close after a failed connection. Waiting for close keeps
