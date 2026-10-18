@@ -65,6 +65,10 @@ class LiveTest(unittest.TestCase):
         payload = client_info(server_count=7, send_table_crc=0x12345678, account_id=123)
         self.assertEqual(scalar(fields(payload), 1, 5), b'\x78\x56\x34\x12')
         self.assertEqual(scalar(fields(payload), 3), 0)
+        full_tables = fields(client_info(server_count=7, account_id=123))
+        self.assertEqual(scalar(full_tables, 1, 5), bytes(4))
+        self.assertEqual(scalar(full_tables, 2), 7)
+        self.assertEqual(scalar(full_tables, 5), 123)
 
     def test_serializer_references_packed_and_unpacked(self):
         d = LiveDecoder(lambda _: None)

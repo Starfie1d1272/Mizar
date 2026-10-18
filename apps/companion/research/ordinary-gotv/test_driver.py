@@ -2,7 +2,7 @@
 import io
 import struct
 import unittest
-from channel import encode_message, join_messages, reliable_frame
+from channel import encode_message, join_messages, reliable_frame, decode_frame, messages
 from driver import ObserverDriver, DriverError, SampleWriter
 from handshake import blob, number, initial_challenge_request
 from replay import replay
@@ -48,6 +48,14 @@ class DriverTest(unittest.TestCase):
         port.incoming.append((b'\xff\xff\xff\xffB\0' + b'0' * 10, False))
         driver.step(14)
         self.assertEqual(driver.phase, 'channel')
+        self.assertIsNone(driver.decoder.server)
+        self.assertEqual(len(port.sent), 3)
+        self.assertEqual(port.sent[-1][1], 8)
+        ack = decode_frame(port.sent[-1][0], gns_reliable=True)
+        self.assertEqual(ack.reliable_tick_hint, 0)
+        decoded, _ = messages(ack.body)
+        self.assertEqual([(m.message_id, m.body) for m in decoded],
+                         [(7, bytes.fromhex('08 02 10 ff ff ff ff 0f 18 00'))])
         return driver, port, output, sample
 
     def test_actual_driver_chain_stops_at_new_and_capture_replays(self):
@@ -59,7 +67,7 @@ class DriverTest(unittest.TestCase):
         port.incoming.append((reliable_frame(body, 0), True))
         driver.step(20)
         self.assertEqual((driver.phase, driver.reason), ('blocked', 'client-initialization-required'))
-        self.assertEqual(len(port.sent), 2)  # q and connect only, no fake readiness ACK.
+        self.assertEqual(len(port.sent), 3)  # q, connect, CONNECTED; no unimplemented NEW ACK.
         self.assertEqual(output[0]['weapon'], 'weapon_awp')
         self.assertEqual(driver.report()['online_success'], 'INCONCLUSIVE')
         self.assertNotIn('SYNTHETIC', str(driver.report()))

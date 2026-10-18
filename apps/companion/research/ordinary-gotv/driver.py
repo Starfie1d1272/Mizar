@@ -14,7 +14,7 @@ from pathlib import Path
 import struct
 import sys
 import time
-from channel import decode_frame, messages, UnreliableOrder
+from channel import decode_frame, messages, UnreliableOrder, encode_message, reliable_frame
 from handshake import (SignonSequence, connect_inner_message, connect_payload,
                        initial_challenge_request, parse_challenge_body, parse_connection_inner, uint)
 from live import LiveDecoder
@@ -119,6 +119,12 @@ class ObserverDriver:
             if response['addon_name_bytes']:
                 self.phase, self.reason = 'blocked', 'addon-initialization-required'
                 return
+            # Official Connect queues CONNECTED/-1 before ServerInfo; otherwise
+            # both peers wait. A fresh channel's reliable tick context is zero.
+            message_id, payload = self.signon.acknowledgement()
+            encoded, _ = encode_message(message_id, payload)
+            self.port.send(reliable_frame(encoded, 0), 8)
+            self.stages.append({'stage': 'sent-signon', 'value': 2, 'elapsed_ms': now_ms - self.start_ms})
             self.phase, self.deadline = 'channel', now_ms + 15000
             self.stages.append({'stage': self.phase, 'elapsed_ms': now_ms - self.start_ms})
             self._challenge = None

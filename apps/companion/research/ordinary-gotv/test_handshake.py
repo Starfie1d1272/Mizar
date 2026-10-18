@@ -65,8 +65,9 @@ class HandshakeTest(unittest.TestCase):
         # Schema literal oracle: enum field 1 = NEW, uint32 field 2 = 17, field 3 = 0.
         self.assertEqual(signon_payload(3, 17), bytes.fromhex('08 03 10 11 18 00'))
         sequence = SignonSequence()
-        with self.assertRaisesRegex(ValueError, 'serverinfo-missing'):
-            sequence.acknowledgement()
+        self.assertEqual(sequence.acknowledgement(),
+                         (7, bytes.fromhex('08 02 10 ff ff ff ff 0f 18 00')))
+        self.assertIsNone(sequence.spawn_count)
         sequence.server_info(17)
         with self.assertRaisesRegex(ValueError, 'skipped-signon'):
             sequence.receive(signon_payload(4, 17))

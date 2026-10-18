@@ -189,8 +189,14 @@ class SignonSequence:
         return {'received_state': state, 'online_success': 'INCONCLUSIVE'}
 
     def acknowledgement(self):
-        if self.closed or self.spawn_count is None:
-            raise ProbeError('closed-or-serverinfo-missing')
+        if self.closed:
+            raise ProbeError('connection-closed')
+        # engine2 Connect sends CONNECTED with -1 before ServerInfo exists.
+        # The server waits for this acknowledgement before sending that info.
+        if self.state == 2 and self.spawn_count is None:
+            return 7, signon_payload(2, 0xffffffff)
+        if self.spawn_count is None:
+            raise ProbeError('serverinfo-missing')
         if self.initialization_blocked:
             raise ProbeError('client-initialization-not-implemented')
         return 7, signon_payload(self.state, self.spawn_count)

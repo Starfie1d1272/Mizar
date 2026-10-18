@@ -34,11 +34,13 @@ def int32(value):
     return value - 0x100000000 if value & 0x80000000 else value
 
 
-def client_info(*, server_count, send_table_crc, account_id):
-    """Encoding only. CRC must come from a verified initializer, never a placeholder.
+def client_info(*, server_count, account_id, send_table_crc=0):
+    """Ordinary-client info. Zero CRC requests the complete send-table path.
 
-    The driver deliberately does not call this until that initializer exists.
-    is_hltv=false is the ordinary-client field, not a relay-authorization bypass.
+    engine2 05ff20 sends the cached CRC or zero; 120fa0 takes the full-table
+    branch for zero. Nonzero values require a matching real cached schema.
+    is_hltv=false retains ordinary-client identity. See INITIALIZATION-EVIDENCE.
+    The driver still waits for the remaining initialization implementation.
     """
     return b'\x0d' + uint(send_table_crc).to_bytes(4, 'little') + number(2, server_count) + number(3, 0) + number(5, account_id)
 
@@ -58,7 +60,7 @@ class LiveDecoder:
 
     def blockers(self):
         # Presence is not initialization. This API offers no caller-controlled ready flag.
-        return ['client-send-table-crc', 'serializer-field-decoders',
+        return ['serializer-field-decoders',
                 'string-table-callbacks-and-baselines', 'session-manifest-and-spawn-groups',
                 'entity-full-snapshot']
 

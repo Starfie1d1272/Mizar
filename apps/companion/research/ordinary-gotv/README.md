@@ -4,7 +4,7 @@
 
 独立研究分支；不修改 #408/#409，不接入生产 HUD、Core 或遥测自动编排。`follow.ts` 复用了 #408 的增长文件读取实现，解码器通过 `@mizar/telemetry-cstv/viewer-research` 暴露标量事件，原始第三方解析器仍只在适配器包中使用。新增的纯内存握手组件与逐地址证据见 [HANDSHAKE-EVIDENCE.md](HANDSHAKE-EVIDENCE.md)。协议设计见 [DESIGN.md](DESIGN.md)，用户本机步骤见 [WINDOWS-TEST.md](WINDOWS-TEST.md)，原始结果和取证来源见 [EVIDENCE.md](EVIDENCE.md)。
 
-第三轮核心进展见 [密码与 SDK 证据](PASSWORD-EVIDENCE.md) 和 [通道证据](CHANNEL-EVIDENCE.md)：已实现密码变换的保守 bytes 子集、GNS 内层 tag 1..4/LZ4/UBitVar，SDK 桥接编译及生命周期测试通过。这些组件尚未组合成完整在线客户端；初始化门禁仍关闭。
+第三轮核心进展见 [密码与 SDK 证据](PASSWORD-EVIDENCE.md) 和 [通道证据](CHANNEL-EVIDENCE.md)：已实现密码变换的保守 bytes 子集、GNS 内层 tag 1..4/LZ4/UBitVar，SDK 桥接编译及生命周期测试通过。SDK、握手和通道已接入同一驱动；连接响应后发送 CONNECTED 应答，请求 ServerInfo。NEW 后续初始化仍在实现，见 [初始化对照](INITIALIZATION-EVIDENCE.md)。
 
 ## 云端运行
 
