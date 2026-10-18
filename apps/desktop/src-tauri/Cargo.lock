@@ -1794,7 +1794,9 @@ name = "mizar-desktop"
 version = "1.4.0"
 dependencies = [
  "chrono",
+ "regex",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-macros",

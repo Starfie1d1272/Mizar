@@ -1,5 +1,6 @@
+import { DIAGNOSTIC_CONSENT_REVISION } from '@mizar/protocol/version';
 import type { FastifyInstance } from 'fastify';
-import { DiagnosticDelivery } from './delivery.js';
+import { DiagnosticDelivery, type RetainedDiagnosticBatch } from './delivery.js';
 import { diagnosticValue, type SessionJournal } from './session-journal.js';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 
@@ -84,7 +85,12 @@ export function registerDiagnosticDelivery(
   );
   app.post('/operator/diagnostics/consent', { bodyLimit: 1024 }, async (request, reply) => {
     const body = request.body as { enabled?: unknown; revision?: unknown } | null;
-    if (!body || typeof body.enabled !== 'boolean' || body.revision !== 'technical-diagnostics-v1')
+    if (
+      !body ||
+      typeof body.enabled !== 'boolean' ||
+      (body.revision !== DIAGNOSTIC_CONSENT_REVISION &&
+        (body.enabled || body.revision !== 'technical-diagnostics-v1'))
+    )
       return reply.code(400).send({ message: '请先阅读技术诊断回传说明。' });
     if (!ready || !delivery)
       return reply.code(503).send({ message: '诊断待传队列尚不可用；当前不会回传。' });
@@ -152,6 +158,13 @@ export function registerDiagnosticDelivery(
   });
   return {
     status,
+    async retainedBatches(): Promise<RetainedDiagnosticBatch[]> {
+      await initializing;
+      if (!options.directory) return [];
+      if (!ready || !delivery)
+        return [{ id: null, sourceBytes: 0, error: failure ?? 'queue_not_ready' }];
+      return delivery.retainedBatches();
+    },
     async close() {
       closing = true;
       ready = false;

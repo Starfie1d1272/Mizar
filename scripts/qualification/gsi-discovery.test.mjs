@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { cp, readFile, realpath, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { cp, realpath, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -49,7 +49,9 @@ async function library() {
 }
 
 describe.skipIf(process.platform !== 'win32')('Windows Steam directory discovery', () => {
-  // This lifecycle intentionally launches several real Windows PowerShell processes.
+  // Run each complete lifecycle in one real PowerShell process. Repeated cold
+  // starts consumed the timeout and blocked Vitest cleanup on Windows runners.
+  // Keep the existing process/test deadlines and all filesystem assertions.
   it(
     'automatically prepares only owned GSI, preserves its token, and refuses unknown senders',
     { timeout: 20_000 },
@@ -70,31 +72,39 @@ describe.skipIf(process.platform !== 'win32')('Windows Steam directory discovery
       const canonical = join(cfg, 'gamestate_integration_mizar.cfg');
       const duplicate = join(cfg, 'gamestate_integration_other.cfg');
       const ensure = join(resources, 'scripts/ensure-gsi.ps1');
-      const prepare = () =>
-        run(
-          `$env:MIZAR_STATE_ROOT=${quote(state)}; $env:STEAMROOT=${quote(root)}; & ${quote(ensure)} -Product`,
-          true,
-        );
-      await writeFile(duplicate, '"uri" "http://localhost:3000/"');
-      expect(prepare).toThrow();
-      expect(await readFile(duplicate, 'utf8')).toContain('3000');
-      await rm(duplicate);
-      await writeFile(canonical, 'operator-owned');
-      expect(prepare).toThrow();
-      expect(await readFile(canonical, 'utf8')).toBe('operator-owned');
-      await rm(canonical);
-      prepare();
-      const installed = await readFile(canonical, 'utf8');
-      const record = await readFile(join(state, 'data/gsi-install/install.json'), 'utf8');
-      prepare();
-      expect(await readFile(canonical, 'utf8')).toBe(installed);
-      expect(await readFile(join(state, 'data/gsi-install/install.json'), 'utf8')).toBe(record);
-      await rm(canonical);
-      prepare();
-      expect(await readFile(canonical, 'utf8')).toBe(installed);
-      await writeFile(canonical, 'operator-edited');
-      expect(prepare).toThrow();
-      expect(await readFile(canonical, 'utf8')).toBe('operator-edited');
+      const result = run(
+        `
+        $env:MIZAR_STATE_ROOT=${quote(state)}; $env:STEAMROOT=${quote(root)};
+        $cfg=${quote(canonical)}; $duplicate=${quote(duplicate)};
+        $record=${quote(join(state, 'data/gsi-install/install.json'))};
+        $utf8=New-Object System.Text.UTF8Encoding($false);
+        function Put($path,$text) { [IO.File]::WriteAllText($path,$text,$utf8) }
+        function Prepare($expected) {
+          # Match a fresh process for the inherited native/script exit status.
+          $global:LASTEXITCODE=0;
+          & ${quote(ensure)} -Product | Out-Null;
+          if (($LASTEXITCODE -eq 0) -ne $expected) { throw "unexpected prepare exit: $LASTEXITCODE" }
+        }
+        Put $duplicate '"uri" "http://localhost:3000/"';
+        Prepare $false;
+        if ([IO.File]::ReadAllText($duplicate) -ne '"uri" "http://localhost:3000/"') { throw 'unknown sender changed' }
+        Remove-Item -LiteralPath $duplicate;
+        Put $cfg 'operator-owned'; Prepare $false;
+        if ([IO.File]::ReadAllText($cfg) -ne 'operator-owned') { throw 'unknown canonical changed' }
+        Remove-Item -LiteralPath $cfg;
+        Prepare $true;
+        $installed=[IO.File]::ReadAllText($cfg); $originalRecord=[IO.File]::ReadAllText($record);
+        Prepare $true;
+        if ([IO.File]::ReadAllText($cfg) -ne $installed -or [IO.File]::ReadAllText($record) -ne $originalRecord) { throw 'idempotent install changed bytes or token' }
+        Remove-Item -LiteralPath $cfg; Prepare $true;
+        if ([IO.File]::ReadAllText($cfg) -ne $installed) { throw 'restore changed original config' }
+        Put $cfg 'operator-edited'; Prepare $false;
+        if ([IO.File]::ReadAllText($cfg) -ne 'operator-edited') { throw 'operator edit overwritten' }
+        'GSI_PREPARE_LIFECYCLE_PASS'; exit 0;
+      `,
+        true,
+      );
+      expect(result).toBe('GSI_PREPARE_LIFECYCLE_PASS');
     },
   );
   it(
@@ -111,33 +121,30 @@ describe.skipIf(process.platform !== 'win32')('Windows Steam directory discovery
       await writeFile(canonical, 'canonical');
       await writeFile(duplicate, '"uri" "http://localhost:3000/"');
       await writeFile(other, '"uri" "http://localhost:4000/"');
-      const invoke = (source) =>
-        run(`. ${quote(common)}; $script:QualificationStateRoot=${quote(state)}; ${source}`);
-      const suspend = `Suspend-GsiEndpointConflicts -CfgDirectory ${quote(cfg)} -CanonicalCfgPath ${quote(canonical)}`;
-      const restore = `Restore-GsiEndpointConflicts -CfgDirectory ${quote(cfg)}`;
-      invoke(`${suspend}; ${suspend}`); // Idempotent: the original backup survives a retry.
-      const { readFile, access } = await import('node:fs/promises');
-      await expect(access(duplicate)).rejects.toThrow();
-      expect(await readFile(other, 'utf8')).toContain('4000');
-      expect(await readFile(canonical, 'utf8')).toBe('canonical');
-      await writeFile(duplicate, 'new sender from another application');
-      expect(invoke(`try { ${restore}; 'unexpected success' } catch { 'preserved' }`)).toBe(
-        'preserved',
-      );
-      expect(await readFile(duplicate, 'utf8')).toBe('new sender from another application');
-      await rm(duplicate);
-      invoke(`${restore}; ${restore}`);
-      expect(await readFile(duplicate, 'utf8')).toBe('"uri" "http://localhost:3000/"');
-      // Simulate interruption after journaling but before the original was removed.
-      invoke(`${suspend}; ${restore}; ${suspend}`);
-      await expect(access(duplicate)).rejects.toThrow();
-      const journal = JSON.parse(await readFile(join(state, 'conflicts.json'), 'utf8'));
-      await writeFile(journal.entries[0].backupPath, 'corrupted backup');
-      expect(invoke(`try { ${restore}; 'unexpected success' } catch { 'preserved' }`)).toBe(
-        'preserved',
-      );
-      await expect(access(duplicate)).rejects.toThrow();
-      expect(await readFile(other, 'utf8')).toContain('4000');
+      const result = run(`
+        . ${quote(common)}; $script:QualificationStateRoot=${quote(state)};
+        $canonical=${quote(canonical)}; $duplicate=${quote(duplicate)}; $other=${quote(other)};
+        function Suspend { Suspend-GsiEndpointConflicts -CfgDirectory ${quote(cfg)} -CanonicalCfgPath $canonical }
+        function Restore { Restore-GsiEndpointConflicts -CfgDirectory ${quote(cfg)} }
+        Suspend; Suspend;
+        if (Test-Path -LiteralPath $duplicate) { throw 'duplicate not suspended' }
+        if ([IO.File]::ReadAllText($other) -ne '"uri" "http://localhost:4000/"') { throw 'other endpoint changed' }
+        if ([IO.File]::ReadAllText($canonical) -ne 'canonical') { throw 'canonical changed' }
+        [IO.File]::WriteAllText($duplicate,'new sender from another application');
+        $refused=$false; try { Restore } catch { $refused=$true }
+        if (-not $refused -or [IO.File]::ReadAllText($duplicate) -ne 'new sender from another application') { throw 'new sender not preserved' }
+        Remove-Item -LiteralPath $duplicate; Restore; Restore;
+        if ([IO.File]::ReadAllText($duplicate) -ne '"uri" "http://localhost:3000/"') { throw 'original sender not restored' }
+        Suspend; Restore; Suspend;
+        if (Test-Path -LiteralPath $duplicate) { throw 'duplicate not suspended after recovery' }
+        $journal=Get-Content -LiteralPath ${quote(join(state, 'conflicts.json'))} -Raw | ConvertFrom-Json;
+        [IO.File]::WriteAllText($journal.entries[0].backupPath,'corrupted backup');
+        $refused=$false; try { Restore } catch { $refused=$true }
+        if (-not $refused -or (Test-Path -LiteralPath $duplicate)) { throw 'corrupt backup restored' }
+        if ([IO.File]::ReadAllText($other) -ne '"uri" "http://localhost:4000/"') { throw 'other endpoint changed during restore' }
+        'GSI_REPAIR_LIFECYCLE_PASS';
+      `);
+      expect(result.split(/\r?\n/).at(-1)).toBe('GSI_REPAIR_LIFECYCLE_PASS');
     },
   );
 });
