@@ -8,6 +8,11 @@ on:
       tag:
         description: 正式版本标签（同步时必填，例如 v1.0.0）
         type: string
+      runner:
+        description: 执行环境（上传链路异常时可切换验证）
+        type: choice
+        default: ubuntu-24.04
+        options: [ubuntu-24.04, windows-2025]
       mode:
         description: 同步正式分发、只读验收用户入口，或恢复旧入口
         type: choice
@@ -22,7 +27,7 @@ concurrency:
 jobs:
   sync:
     if: github.repository == 'Starfie1d1272/Mizar' && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.path == '.github/workflows/release-promotion.yml' && github.event.workflow_run.event == 'workflow_dispatch'))
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner == 'windows-2025' && 'windows-2025' || 'ubuntu-24.04' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
