@@ -1,7 +1,10 @@
 import { ObsSettings } from './ObsSettings';
 import { CameraSettings } from '../orchestration/CameraSettings';
 import { Cs2ConsoleSettings } from '../debug/Cs2ConsoleSettings';
-import { DiagnosticDeliverySettings } from '../debug/DiagnosticDeliverySettings';
+import {
+  DiagnosticDeliverySettings,
+  DiagnosticProblemReport,
+} from '../debug/DiagnosticDeliverySettings';
 import { MusicSettings } from '../music/MusicSettings';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Panel, StatusBanner, StatusPill } from '../ui';
@@ -198,47 +201,45 @@ export function Settings({ tab }: { tab: string }) {
       {tab === 'rivalhub' ? (
         <RivalHubPreparationPanel mode="settings" />
       ) : tab === 'advanced' ? (
-        <div className="settings-grid">
-          <UpdateSettings />
-          <ResourceSettings />
-          <Panel className="settings-card">
-            <h2>运行信息</h2>
-            <p>核对当前安装的 Mizar 版本与构建来源。</p>
-            <dl className="settings-identity">
-              <div>
-                <dt>版本号</dt>
-                <dd>
-                  {product?.product?.appVersion
-                    ? `v${product.product.appVersion}`
-                    : '开发环境或版本信息不可用'}
-                </dd>
-              </div>
-              <div>
-                <dt>Commit</dt>
-                <dd>
-                  <code title={product?.product?.gitSha}>
-                    {product?.product?.gitSha?.slice(0, 12) ?? '不可用'}
-                  </code>
-                </dd>
-              </div>
-            </dl>
-            {product?.product?.artifactSha256 ? (
+        <div className="settings-grid advanced-settings-layout">
+          <div className="advanced-settings-column">
+            <UpdateSettings>
               <details className="settings-details">
-                <summary>产品包校验信息</summary>
-                <code>{product.product.artifactSha256}</code>
+                <summary>构建详情</summary>
+                <dl className="settings-identity">
+                  <div>
+                    <dt>Commit</dt>
+                    <dd>
+                      <code>{product?.product?.gitSha ?? '不可用'}</code>
+                    </dd>
+                  </div>
+                  {product?.product?.artifactSha256 ? (
+                    <div>
+                      <dt>产品包校验信息</dt>
+                      <dd>
+                        <code>{product.product.artifactSha256}</code>
+                      </dd>
+                    </div>
+                  ) : null}
+                </dl>
               </details>
-            ) : null}
-          </Panel>
-          <Panel className="settings-card">
+            </UpdateSettings>
+            <ResourceSettings />
+          </div>
+          <Panel className="settings-card advanced-settings-support">
             <h2>诊断与支持</h2>
-            <DiagnosticDeliverySettings />
-            <Cs2ConsoleSettings />
-            <p>导出版本、运行状态和最近启动记录，便于定位问题。</p>
+            <p>遇到问题时，先记录发生时间，再导出诊断包交给维护者。</p>
             <div className="preparation-actions">
-              <Button onClick={() => void action(() => openTool('diagnostics'))}>
-                运行诊断 / 导出诊断包
+              <Button variant="primary" onClick={() => void action(() => openTool('diagnostics'))}>
+                导出诊断包
               </Button>
             </div>
+            <DiagnosticProblemReport />
+            <section className="advanced-settings-section">
+              <h3>自动发送诊断</h3>
+              <DiagnosticDeliverySettings showProblemReport={false} />
+            </section>
+            <Cs2ConsoleSettings />
           </Panel>
         </div>
       ) : tab === 'obs' ? (

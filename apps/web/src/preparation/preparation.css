@@ -1375,3 +1375,29 @@
 .preparation .obs-settings .settings-card {
   gap: var(--mizar-layout-compact);
 }
+
+.advanced-settings-column {
+  display: grid;
+  gap: var(--mizar-layout-padding);
+  min-width: 0;
+}
+.advanced-settings-section {
+  display: grid;
+  gap: var(--mizar-layout-gap);
+  border-top: var(--mizar-line-border) solid var(--mizar-border-default);
+  padding-top: var(--mizar-layout-padding);
+}
+.advanced-settings-section h3 {
+  margin: 0;
+  font-size: var(--mizar-type-size-readable);
+}
+.advanced-settings-section > div {
+  display: grid;
+  gap: var(--mizar-layout-gap);
+}
+.advanced-settings-layout .settings-identity {
+  overflow-wrap: anywhere;
+}
+.advanced-settings-section > div > button {
+  justify-self: start;
+}

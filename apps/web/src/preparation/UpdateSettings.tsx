@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Button, Checkbox, Panel, StatusBanner } from '../ui';
 import { desktopInvoke } from '../workspace/client';
 import './updates.css';
@@ -65,7 +65,7 @@ async function sendAction(action: string, enabled?: boolean): Promise<UpdateStat
     );
   return value;
 }
-export function UpdateSettings() {
+export function UpdateSettings({ children }: { children?: ReactNode }) {
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [requested, setRequested] = useState(false);
@@ -253,7 +253,7 @@ export function UpdateSettings() {
       ? failures[status.error] || '更新未完成，原因未知。请导出诊断定位原因。'
       : '');
   return (
-    <Panel className="settings-card settings-card--wide settings-update">
+    <Panel className="settings-card settings-update">
       <div className="settings-update-header">
         <div>
           <h2>应用更新</h2>
@@ -269,7 +269,10 @@ export function UpdateSettings() {
       {status?.candidate ? (
         <div className="settings-update-release">
           <h3>v{status.candidate.version}</h3>
-          <div className="settings-update-notes">{status.candidate.notes}</div>
+          <details>
+            <summary>更新说明</summary>
+            <div className="settings-update-notes">{status.candidate.notes}</div>
+          </details>
         </div>
       ) : phase === 'current' ? (
         <p>已是最新版本。</p>
@@ -371,6 +374,7 @@ export function UpdateSettings() {
           </details>
         ) : null}
       </div>
+      {children}
     </Panel>
   );
 }
