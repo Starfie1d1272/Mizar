@@ -51,17 +51,15 @@ export async function command(path: string, body: unknown = {}, task?: ControlTa
   if (!response.ok) throw new Error(result.message ?? '操作未完成，请刷新后重试。');
   return result;
 }
-export type Tool = 'hud' | 'bp' | 'diagnostics' | 'preview';
+export type Tool = 'hud' | 'bp' | 'diagnostics';
 const toolPaths = {
   hud: '/operator/hud',
   bp: '/matches#match-bp',
   diagnostics: '/debug',
-  preview: '/picture',
 };
 export async function openTool(tool: Tool, presetId?: string) {
   if (window.__TAURI_INTERNALS__) {
-    if (tool === 'bp' || tool === 'preview')
-      await desktopInvoke('open_main', { path: toolPaths[tool] });
+    if (tool === 'bp') await desktopInvoke('open_main', { path: toolPaths[tool] });
     else await desktopInvoke('open_tool', { tool, presetId });
   } else {
     const path =

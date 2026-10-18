@@ -194,7 +194,6 @@
 }
 .preparation-dashboard > .production-status,
 .preparation-dashboard > .preparation-demo-test,
-.preparation-dashboard > .preparation-rehearsal-stage,
 .preparation-tool-strip {
   grid-column: 1 / -1;
 }
@@ -503,71 +502,18 @@
   align-items: center;
   gap: var(--mizar-layout-padding);
 }
-.preparation-rehearsal-stage {
-  display: grid;
-  gap: var(--mizar-layout-padding);
-}
-.preparation-rehearsal-stage-buttons {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--mizar-layout-compact);
-}
 .preparation-task-note {
   font-size: var(--mizar-type-size-small);
   color: var(--mizar-fg-muted);
   margin: 0;
 }
 
-.program-preview-panel .preparation-scenes {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--mizar-layout-gap);
-}
-.program-preview-options {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: end;
-  gap: var(--mizar-layout-gap);
-}
-.program-preview-options > * {
-  flex: 0 1 220px;
-  min-width: 140px;
-}
-.program-preview-panel .preparation-program-preview {
-  max-width: calc(var(--mizar-layout-target) * 22 * 16 / 9);
-  margin-inline: auto;
-}
-
-.program-preview-workspace[data-scene='bp'] {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
-  align-items: start;
-  gap: var(--mizar-layout-gap);
-}
 .bp-workspace-controls {
   display: grid;
   gap: var(--mizar-layout-gap);
   min-width: 0;
 }
-.program-preview-workspace .bp-demo-options {
-  grid-template-columns: minmax(0, 1fr);
-}
-@media (max-width: 900px) {
-  .program-preview-workspace[data-scene='bp'] {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
 
-.program-preview-playback {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--mizar-layout-gap);
-  margin-block: var(--mizar-layout-gap);
-}
-.program-preview-playback span {
-  color: var(--mizar-fg-muted);
-}
 .program-preview-error {
   position: absolute;
   inset: auto 0 0;
@@ -576,8 +522,7 @@
   color: var(--mizar-fg-primary);
 }
 
-.preparation[data-page='/picture'],
-.preparation--preview {
+.preparation[data-page='/picture'] {
   max-width: 2160px;
 }
 .preparation-heading {
@@ -593,35 +538,11 @@
 .preparation-match h2 {
   font-size: var(--mizar-type-size-heading);
 }
-.preparation .preparation-rehearsal-stage {
-  border-bottom: var(--mizar-line-border) solid var(--mizar-border-default);
-}
-.preparation .preparation-rehearsal-stage:not([open]) {
-  display: block;
-}
-.preparation .preparation-rehearsal-stage > summary {
-  color: var(--mizar-fg-secondary);
-}
 .preparation .production-status {
   border-inline: 0;
   border-radius: 0;
   padding-inline: 0;
   background: transparent;
-}
-.preparation-schedule-selector {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--mizar-layout-gap);
-  align-items: center;
-}
-.preparation-schedule-selector select {
-  font: inherit;
-  min-width: 0;
-  background: var(--mizar-bg-canvas);
-  color: var(--mizar-fg-primary);
-  border: var(--mizar-line-border) solid var(--mizar-border-default);
-  padding: var(--mizar-layout-compact);
-  max-width: 100%;
 }
 .preparation-facts {
   gap: calc(var(--mizar-layout-padding) * 1.5);
@@ -629,31 +550,6 @@
 .preparation-roster li {
   padding-block: var(--mizar-layout-compact);
   border-bottom: var(--mizar-line-border) solid var(--mizar-border-default);
-}
-.program-preview-panel .preparation-scenes {
-  padding-bottom: var(--mizar-layout-gap);
-  border-bottom: var(--mizar-line-border) solid var(--mizar-border-default);
-}
-.program-preview-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: end;
-  justify-content: space-between;
-  gap: var(--mizar-layout-padding);
-}
-.program-preview-options {
-  flex: 0 1 auto;
-}
-.program-preview-panel .program-preview-workspace {
-  min-width: 0;
-}
-.program-preview-panel .program-preview-workspace > [hidden] {
-  display: none;
-}
-.preparation--preview .program-preview-panel {
-  background: transparent;
-  border: 0;
-  padding: 0;
 }
 
 .match-document-summary h2 {
@@ -1010,13 +906,10 @@
 .preparation-quick-tools h2 {
   margin-bottom: var(--mizar-layout-padding);
 }
-.preparation-quick-tools :is(.preparation-actions, .preparation-quick-trials) {
+.preparation-quick-tools .preparation-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--mizar-layout-gap);
-}
-.preparation-quick-trials {
-  margin-top: var(--mizar-layout-gap);
 }
 .preparation-quick-tools .mizar-button {
   width: 100%;

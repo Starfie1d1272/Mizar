@@ -23,7 +23,7 @@ import { Button, Dialog, Panel, StatusBanner, StatusPill } from '../ui';
 import { LocalOverlayControls } from './LocalOverlayControls';
 import { LocalMatchControls } from './LocalMatchControls';
 import { useLocalTournament } from './tournament';
-import { command, openTool, productionAction, useLocalRead, type Production } from './client';
+import { openTool, productionAction, useLocalRead, type Production } from './client';
 import { Settings } from './Settings';
 import { UpdateNotification } from './UpdateNotification';
 import { SpectatorHudCommands } from './SpectatorHudCommands';
@@ -49,21 +49,6 @@ const tabs = {
     ['advanced', '高级'],
   ],
 } as const;
-
-export interface RivalsRehearsalView {
-  loaded: boolean;
-  focusMatchId: string | null;
-  selectedMatchId: string | null;
-  stageIndex: number;
-  stages: { label: string; scene: string }[];
-  provenance: {
-    competitionSource: string;
-    capturedAt: string;
-    gameplaySource: string;
-    gameplayRelationship: string;
-    missingLogoEntryId: string | null;
-  } | null;
-}
 
 function TeamBadge({ name, logoUrl }: { readonly name: string; readonly logoUrl: string | null }) {
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
@@ -108,30 +93,6 @@ export function PreparationPage() {
   const rivalhub = useLocalRead<{ paired: boolean; displayName?: string | null }>(
     '/local/v1/rivalhub-connection',
   );
-  const rehearsal = useLocalRead<RivalsRehearsalView>(
-    import.meta.env.DEV || import.meta.env.VITE_QUALIFICATION === '1'
-      ? '/local/v1/rivals-rehearsal'
-      : null,
-  );
-
-  const hasSampleCapability =
-    (import.meta.env.DEV || import.meta.env.VITE_QUALIFICATION === '1') && rehearsal !== null;
-  const rehearsalSchedule = useLocalRead<{
-    competition: { name: string };
-    matches: {
-      matchId: string;
-      scheduledAt: string | null;
-      entrantA: { name: string };
-      entrantB: { name: string };
-      format: string;
-      stageLabel?: string | null;
-    }[];
-  }>(
-    envelope?.source === 'fixture' && rehearsal?.loaded
-      ? '/local/v1/rivals-rehearsal/schedule'
-      : null,
-  );
-
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [demoOpen, setDemoOpen] = useState(() =>
@@ -140,7 +101,6 @@ export function PreparationPage() {
   const [librarySource, setLibrarySource] = useState<'local' | 'website'>(() =>
     new URLSearchParams(window.location.search).get('source') === 'website' ? 'website' : 'local',
   );
-  const [sampleOpen, setSampleOpen] = useState(false);
 
   async function action(run: () => Promise<unknown>) {
     if (busy) return;
@@ -172,7 +132,6 @@ export function PreparationPage() {
         [
           ['hud', 'HUD 编辑器'],
           ['bp', '地图与禁选'],
-          ['preview', '节目预览'],
           ['diagnostics', '运行诊断'],
         ] as const
       ).map(([tool, label]) => (
@@ -180,6 +139,7 @@ export function PreparationPage() {
           {label}
         </Button>
       ))}
+      <Button onClick={() => setDemoOpen(true)}>Demo 试播</Button>
     </div>
   );
 
@@ -263,13 +223,7 @@ export function PreparationPage() {
                     >
                       选择已有比赛
                     </Button>
-                    <Button
-                      onClick={() => {
-                        setDemoOpen(true);
-                      }}
-                    >
-                      创建 Demo 测试比赛
-                    </Button>
+
                     {rivalhub?.paired ? (
                       <Button
                         variant="secondary"
@@ -362,20 +316,6 @@ export function PreparationPage() {
                   >
                     切换比赛
                   </Button>
-                  {hasSampleCapability && envelope?.source === 'fixture' ? (
-                    <Button
-                      variant="secondary"
-                      disabled={busy}
-                      onClick={() =>
-                        void action(async () => {
-                          await command('/operator/rivals-rehearsal/stop');
-                          window.location.reload();
-                        })
-                      }
-                    >
-                      退出示例
-                    </Button>
-                  ) : null}
                 </div>
               </Panel>
             )}
@@ -556,12 +496,6 @@ export function PreparationPage() {
               <Panel className="preparation-quick-tools">
                 <h2>工具与试播</h2>
                 {tools}
-                <div className="preparation-quick-trials">
-                  <Button onClick={() => setDemoOpen(true)}>Demo 试播</Button>
-                  {hasSampleCapability ? (
-                    <Button onClick={() => setSampleOpen(true)}>示例体验</Button>
-                  ) : null}
-                </div>
               </Panel>
             </div>
             <Dialog
@@ -572,128 +506,7 @@ export function PreparationPage() {
             >
               <DemoTestPanel forceExpanded={demoOpen} />
             </Dialog>
-            <Dialog title="示例体验" open={sampleOpen} onClose={() => setSampleOpen(false)}>
-              {hasSampleCapability && rehearsal?.loaded && envelope?.source === 'fixture' ? (
-                <div className="preparation-rehearsal-stage">
-                  <div className="preparation-task-header">
-                    <div>
-                      {rehearsal.selectedMatchId === rehearsal.focusMatchId ? (
-                        <p>
-                          当前阶段：{rehearsal.stages[rehearsal.stageIndex]?.label ?? '赛前等待'}
-                        </p>
-                      ) : (
-                        <p>返回初始示例比赛后，可切换阶段。</p>
-                      )}
-                    </div>
-                  </div>
-                  {envelope?.source === 'fixture' &&
-                  rehearsal?.loaded &&
-                  rehearsalSchedule?.matches ? (
-                    <div className="preparation-schedule-selector">
-                      <label htmlFor="rehearsal-match-select">切换示例比赛：</label>
-                      <select
-                        id="rehearsal-match-select"
-                        value={rehearsal.selectedMatchId ?? ''}
-                        disabled={busy}
-                        onChange={(e) => {
-                          const matchId = e.target.value;
-                          void action(async () => {
-                            await command('/operator/rivals-rehearsal/select', { matchId });
-                            window.location.reload();
-                          });
-                        }}
-                      >
-                        {rehearsalSchedule.matches.map((m) => (
-                          <option key={m.matchId} value={m.matchId}>
-                            {m.matchId === rehearsal.focusMatchId ? '初始示例 · ' : ''}
-                            {m.entrantA.name} vs {m.entrantB.name} · {m.format.toUpperCase()}
-                            {m.stageLabel ? ` (${m.stageLabel})` : ''}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  ) : null}
-                  {rehearsal.selectedMatchId === rehearsal.focusMatchId ? (
-                    <>
-                      <div className="preparation-actions">
-                        {([-1, 1] as const).map((offset) => (
-                          <Button
-                            key={offset}
-                            disabled={
-                              busy ||
-                              rehearsal.stageIndex + offset < 0 ||
-                              rehearsal.stageIndex + offset >= rehearsal.stages.length
-                            }
-                            onClick={() =>
-                              void action(() =>
-                                command('/operator/rivals-rehearsal/stage', {
-                                  index: rehearsal.stageIndex + offset,
-                                }),
-                              )
-                            }
-                          >
-                            {offset < 0 ? '上一步' : '下一步'}
-                          </Button>
-                        ))}
-                      </div>
-                      <details>
-                        <summary>跳转阶段</summary>
-                        <div className="preparation-rehearsal-stage-buttons">
-                          {rehearsal.stages.map((stage, idx) => (
-                            <Button
-                              key={stage.label}
-                              aria-pressed={rehearsal.stageIndex === idx}
-                              variant={rehearsal.stageIndex === idx ? 'primary' : 'secondary'}
-                              disabled={busy}
-                              onClick={() =>
-                                void action(async () => {
-                                  await command('/operator/rivals-rehearsal/stage', { index: idx });
-                                })
-                              }
-                            >
-                              {stage.label}
-                            </Button>
-                          ))}
-                        </div>
-                      </details>
-                    </>
-                  ) : null}
-                  <div className="preparation-actions">
-                    <Button onClick={() => void action(() => openTool('preview'))}>
-                      查看节目画面
-                    </Button>
-                    <Button
-                      disabled={busy}
-                      onClick={() =>
-                        void action(async () => {
-                          await command('/operator/rivals-rehearsal/stop');
-                          window.location.reload();
-                        })
-                      }
-                    >
-                      退出示例
-                    </Button>
-                  </div>
-                </div>
-              ) : null}
-              {!(rehearsal?.loaded && envelope?.source === 'fixture') ? (
-                <>
-                  <p>加载内置比赛，体验准备流程、节目画面与比赛阶段切换，无需准备本地 Demo。</p>
-                  <Button
-                    disabled={busy}
-                    variant="primary"
-                    onClick={() =>
-                      void action(async () => {
-                        await command('/operator/rivals-rehearsal/load');
-                        window.location.reload();
-                      })
-                    }
-                  >
-                    加载示例比赛
-                  </Button>
-                </>
-              ) : null}
-            </Dialog>
+
             <SpectatorWorkflow capabilities={capabilities} production={production} />
             {match && production && production.mode !== 'preparation' ? (
               <ProductionStatus matchId={match.matchId} />
@@ -748,34 +561,6 @@ export function PreparationPage() {
               <summary>切换比赛</summary>
               {!match ? (
                 <p>只需队名与赛制即可创建本地比赛；进入现场并连接服务器后，可识别十人名单。</p>
-              ) : null}
-              {hasSampleCapability && rehearsal?.loaded && rehearsalSchedule?.matches ? (
-                <>
-                  <h2>{rehearsalSchedule.competition.name} · 示例赛程</h2>
-                  <div className="preparation-schedule-selector">
-                    <label htmlFor="rehearsal-match-select-tab">切换示例比赛：</label>
-                    <select
-                      id="rehearsal-match-select-tab"
-                      value={rehearsal.selectedMatchId ?? ''}
-                      disabled={busy}
-                      onChange={(e) => {
-                        const matchId = e.target.value;
-                        void action(async () => {
-                          await command('/operator/rivals-rehearsal/select', { matchId });
-                          window.location.reload();
-                        });
-                      }}
-                    >
-                      {rehearsalSchedule.matches.map((m) => (
-                        <option key={m.matchId} value={m.matchId}>
-                          {m.matchId === rehearsal.focusMatchId ? '初始示例 · ' : ''}
-                          {m.entrantA.name} vs {m.entrantB.name} · {m.format.toUpperCase()}
-                          {m.stageLabel ? ` (${m.stageLabel})` : ''}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </>
               ) : null}
               <h2 id="local-match">本地比赛</h2>
               <LocalMatchControls action={action} />

@@ -1,7 +1,6 @@
 import { useLocalRead } from './preparation/client';
 import type { OverlayPolicy } from './preparation/desktop-overlay';
 import { ToolShell } from './patterns';
-import { ProgramPreviewTool } from './preparation/ProgramPreview';
 import { PreparationPage } from './preparation/PreparationPage';
 import { BpPage } from './bp/BpPage';
 import { OperatorShell } from './operator/OperatorShell';
@@ -70,7 +69,7 @@ export const surfaceDefinitions = [
   },
   {
     id: 'bp',
-    path: '/preview?scene=bp',
+    path: '/matches#match-bp',
     title: 'BP 制作',
     description: '本地 BP 编写、比赛上下文和 Veto 播出控制。',
     realtimeChannel: null,
@@ -657,7 +656,6 @@ export function App() {
     );
   }
 
-  if (pathname === '/preview') return <ProgramPreviewTool />;
   if (pathname === '/program/bp') return <BpPage />;
   if (pathname === '/workspace') return <WorkspacePreview />;
   if (pathname === '/workspace/review') return <WorkspaceReview />;

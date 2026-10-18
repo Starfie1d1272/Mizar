@@ -1554,7 +1554,6 @@ async fn open_tool(app: tauri::AppHandle, tool: String, preset_id: Option<String
         "hud" => ("tool-hud", "HUD 工作台", "/operator/hud"),
         "bp" => ("tool-bp", "正式 BP 控制", "/operator/bp"),
         "diagnostics" => ("tool-diagnostics", "运行诊断", "/debug"),
-        "preview" => ("tool-preview", "节目预览", "/preview"),
         "review" => ("tool-review", "本场核对", "/workspace/review"),
         _ => return Err("工具无法识别。".into()),
     };
