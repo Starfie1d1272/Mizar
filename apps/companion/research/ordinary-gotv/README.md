@@ -6,6 +6,12 @@
 
 第三轮核心进展见 [密码与 SDK 证据](PASSWORD-EVIDENCE.md) 和 [通道证据](CHANNEL-EVIDENCE.md)：已实现密码变换的保守 bytes 子集、GNS 内层 tag 1..4/LZ4/UBitVar，SDK 桥接编译及生命周期测试通过。SDK、握手和通道已接入同一驱动；连接响应后发送 CONNECTED 应答，请求 ServerInfo。NEW 后续初始化仍在实现，见 [初始化对照](INITIALIZATION-EVIDENCE.md)。
 
+## 网络包到实体解析器
+
+`parser_stream.py` 将已解封的 Source 2 消息接到既有 `cs2parser` 公共 `DemoReader` 流接口：复用实体、字符串表、基线和回合派生逻辑。普通包保持原始字节及事件刷新边界；完整 serializer/class 数据转换为解析器输入头。收到缓存标记而没有完整 schema 时明确报错。转换输出是本地适配格式。
+
+固定公开 Demo 的 185932 个原始 packet 实测恢复 4402 次开火、224 次击杀和各 30 次回合开始/结束；事件顺序、武器、玩家/攻击者 Steam64 和游戏规则状态摘要与直接解析完全一致，见 `evidence/parser-stream-offline.json`。此次以 Demo 自带真实 schema 初始化，跳过 49 个文件 checkpoint；尚待接入在线全表接收和初始化状态机。时钟映射单独验证，流结束保持 `incomplete`。
+
 ## 云端运行
 
 需要仓库指定的 Node/pnpm、Python 3.11+。从仓库根目录运行；云环境先 `source /workspace/.onboarding/activate.sh`。
