@@ -111,7 +111,14 @@ export async function prepareResourceCandidate(
 ) {
   const core = coreIdentity(manifest);
   requireValue(Number.isSafeInteger(sequence) && sequence > 0, '资源序号必须是正整数');
-  const pack = await buildOfficialPack(root, { packVersion, sourceSha: core.gitSha });
+  const compatibility = core.appVersion.startsWith('2.')
+    ? { minimumCoreVersion: '2.0.0', maximumCoreVersionExclusive: '3.0.0' }
+    : {};
+  const pack = await buildOfficialPack(root, {
+    packVersion,
+    sourceSha: core.gitSha,
+    ...compatibility,
+  });
   const issuedAt = new Date(Math.floor(now / 1000) * 1000).toISOString().replace('.000Z', 'Z');
   const expiresAt = new Date(Math.floor(now / 1000) * 1000 + 90 * 86400000)
     .toISOString()
