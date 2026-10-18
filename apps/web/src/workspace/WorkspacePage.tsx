@@ -1,3 +1,4 @@
+import { DesktopCanvas } from '../patterns/DesktopCanvas';
 import { CameraControls } from '../orchestration/CameraControls';
 import { MusicControls } from '../music/MusicControls';
 import { ObsOutputControls } from './ObsOutputControls';
@@ -221,7 +222,7 @@ function ObsConfidence() {
   );
 }
 
-export function WorkspaceLeft() {
+function WorkspaceLeftContent() {
   const radar = useLocalChannelClient('radar');
   const operator = useLocalChannelClient('operator');
   const program = useLocalChannelClient('program');
@@ -297,14 +298,13 @@ export function WorkspaceLeft() {
         />
         <ProductionStatus compact matchId={payload?.matchContext.summary?.matchId ?? null} />
         <MusicControls compact />
-        <CameraControls />
       </div>
       <ObsConfidence />
     </main>
   );
 }
 
-export function WorkspaceDock() {
+function WorkspaceDockContent() {
   const sceneState = useProgramScenes();
   const { snapshot: bp } = useBpSession();
   const obs = useObsStatus();
@@ -439,6 +439,17 @@ export function WorkspaceDock() {
             </strong>
           </div>
         </div>
+      </section>
+      <section className="workspace-camera" aria-label="运镜控制">
+        <div className="workspace-section-heading">
+          <strong>运镜</strong>
+          <Button
+            onClick={() => void action(() => openPreparation('/settings?tab=music&section=camera'))}
+          >
+            配置运镜
+          </Button>
+        </div>
+        <CameraControls workspace />
       </section>
       <section className="workspace-spectator" aria-label="观战控制">
         <div className="workspace-section-heading">
@@ -582,6 +593,7 @@ export function WorkspaceDock() {
       </footer>
       <Dialog
         open={detailsOpen}
+        modal={false}
         title={exit?.message ? '退出工作台需要处理' : '操作未完成'}
         onClose={() => setDetailsOpen(false)}
       >
@@ -610,12 +622,30 @@ export function WorkspaceDock() {
   );
 }
 
+export function WorkspaceLeft() {
+  return (
+    <DesktopCanvas kind="left">
+      <WorkspaceLeftContent />
+    </DesktopCanvas>
+  );
+}
+
+export function WorkspaceDock() {
+  return (
+    <DesktopCanvas kind="dock">
+      <WorkspaceDockContent />
+    </DesktopCanvas>
+  );
+}
+
 export function WorkspacePreview() {
   return (
-    <div className="workspace-preview">
-      <WorkspaceLeft />
-      <div className="workspace-preview__game">CS2 游戏画面</div>
-      <WorkspaceDock />
-    </div>
+    <DesktopCanvas kind="preview">
+      <div className="workspace-preview">
+        <WorkspaceLeftContent />
+        <div className="workspace-preview__game">CS2 游戏画面</div>
+        <WorkspaceDockContent />
+      </div>
+    </DesktopCanvas>
   );
 }

@@ -66,6 +66,7 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
     (name) => verifyIsolatedPack(packRoot, name),
     true,
   );
+  let routeAvailable = true;
   let preparationRevision = '';
   registerOrchestrationRoutes(
     app,
@@ -90,6 +91,10 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
   await context.route(
     /\/(?:local\/v1\/(?:orchestration|production)|operator\/orchestration)$/,
     async (route) => {
+      if (!routeAvailable) {
+        await route.fulfill({ status: 503, json: { error: 'fixture_closed' } });
+        return;
+      }
       const request = route.request();
       const response = await app.inject({
         method: request.method() as 'GET' | 'POST',
@@ -105,7 +110,7 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
     },
   );
   try {
-    await page.goto('/settings?tab=music');
+    await page.goto('/settings?tab=music&section=camera');
     await page.getByRole('button', { name: '添加地图', exact: true }).click();
     await page.getByLabel('地图', { exact: true }).fill(program.map.name!);
     await page.getByLabel('MulNX 活动包名称').fill(pack.name);
@@ -207,6 +212,7 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
     ).toBe(true);
     expect(evidence.some((e) => e.stage === 'camera_invalidate')).toBe(true);
   } finally {
+    routeAvailable = false;
     await context.unrouteAll({ behavior: 'wait' });
     director.close();
     await app.close();
@@ -346,7 +352,7 @@ test('Host handoff binds the selected external instance and detaches without man
       },
     }),
   );
-  await page.goto('/settings?tab=music');
+  await page.goto('/settings?tab=music&section=camera');
   await page.getByText('MulNX 游戏交接', { exact: true }).click();
   await page.getByRole('button', { name: '检查游戏实例', exact: true }).click();
   await expect(page.getByText(/PID 4212 · 外部进程/)).toBeVisible();

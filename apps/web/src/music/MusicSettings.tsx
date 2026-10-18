@@ -63,6 +63,7 @@ async function localFile(url: string, file: File, type: string) {
 }
 export function MusicSettings() {
   const current = useLocalRead<MusicView>('/local/v1/music', 2000);
+  const [selectedGroup, setSelectedGroup] = useState<MusicGroup>('waiting');
   const [draft, setConfig] = useState<MusicConfig | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
@@ -146,12 +147,28 @@ export function MusicSettings() {
         <p role="status">等待本机音乐服务，请确认 Companion 已配置 OBS。</p>
       ) : (
         <>
-          <div className="settings-grid">
+          <div className="music-settings-workspace">
+            <nav className="music-settings-groups" aria-label="音乐场景">
+              {MUSIC_GROUPS.map((group) => (
+                <Button
+                  key={group}
+                  aria-pressed={selectedGroup === group}
+                  onClick={() => setSelectedGroup(group)}
+                >
+                  {MUSIC_LABELS[group]}
+                  <span>
+                    {config.groups[group].tracks.length
+                      ? `${config.groups[group].tracks.length} 首`
+                      : '静音'}
+                  </span>
+                </Button>
+              ))}
+            </nav>
             {MUSIC_GROUPS.map((group) => {
               const spec = config.groups[group];
               const playlist = group === 'waiting' || group === 'technical';
               return (
-                <Panel className="settings-card" key={group}>
+                <Panel className="settings-card" key={group} hidden={selectedGroup !== group}>
                   <h3>{MUSIC_LABELS[group]}</h3>
                   <Checkbox
                     checked={spec.enabled}

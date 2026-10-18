@@ -302,3 +302,11 @@
   color: var(--mizar-fg-secondary);
   font-size: var(--mizar-type-size-small);
 }
+.product-page {
+  padding: calc(var(--mizar-layout-padding) * 2);
+}
+.product-content > .session-context {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}

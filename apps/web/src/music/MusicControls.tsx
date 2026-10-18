@@ -51,7 +51,7 @@ export function MusicControls({ compact = false }: { compact?: boolean }) {
       {status.bgm ? (
         <Field
           label={compact ? '' : '音乐音量'}
-          aria-label={compact ? '' : '音乐音量'}
+          aria-label="音乐音量"
           type="range"
           min="0"
           max="1"
@@ -66,7 +66,7 @@ export function MusicControls({ compact = false }: { compact?: boolean }) {
           }}
         />
       ) : null}
-      <Button aria-label="停止音乐" onClick={() => void send({ action: 'stop' })}>
+      <Button disabled={busy} aria-label="停止音乐" onClick={() => void send({ action: 'stop' })}>
         {compact ? '停止' : '停止音乐'}
       </Button>
       <Button

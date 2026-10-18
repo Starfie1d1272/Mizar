@@ -207,7 +207,7 @@ export function PreparationPage() {
                   ? '播出画面'
                   : path === '/settings'
                     ? (settingsTitle[tab] ?? '设置')
-                    : '总览'}
+                    : '本场准备'}
             </h1>
           </div>
           <Button
@@ -406,7 +406,31 @@ export function PreparationPage() {
               </Panel>
             )}
 
-            <SpectatorWorkflow capabilities={capabilities} production={production} />
+            {match ? (
+              <nav className="preparation-task-links" aria-label="本场准备任务">
+                <a href="/matches">
+                  <small>01 · 比赛</small>
+                  <strong>比赛资料</strong>
+                  <span>双方、名单与赛程 →</span>
+                </a>
+                <a
+                  href="/preview?scene=bp"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    void action(() => openTool('bp'));
+                  }}
+                >
+                  <small>02 · 地图</small>
+                  <strong>地图禁选</strong>
+                  <span>编写 BP 与播出控制 →</span>
+                </a>
+                <a href="/picture?tab=hud">
+                  <small>03 · 画面</small>
+                  <strong>HUD 与包装</strong>
+                  <span>选择、编辑与启用 →</span>
+                </a>
+              </nav>
+            ) : null}
             {match ? (
               <div className="preparation-overview">
                 <Panel>
@@ -484,6 +508,7 @@ export function PreparationPage() {
                 </Panel>
               </div>
             ) : null}
+            <SpectatorWorkflow capabilities={capabilities} production={production} />
             <DemoTestPanel />
             <div className="preparation-tool-strip">
               <span>常用工具</span>

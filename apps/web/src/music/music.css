@@ -29,3 +29,30 @@
 .music-controls--compact .mizar-button {
   flex-shrink: 0;
 }
+.music-settings-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 3fr);
+  gap: var(--mizar-layout-padding);
+  margin-block: var(--mizar-layout-padding);
+  align-items: start;
+}
+.music-settings-groups {
+  display: grid;
+  gap: var(--mizar-layout-compact);
+}
+.music-settings-groups .mizar-button {
+  display: flex;
+  justify-content: space-between;
+  min-height: calc(var(--mizar-layout-target) + var(--mizar-layout-compact));
+}
+.music-settings-groups span {
+  font-size: var(--mizar-type-size-small);
+  color: var(--mizar-fg-muted);
+}
+.music-settings-groups [aria-pressed='true'] {
+  background: var(--mizar-bg-selected);
+  border-color: var(--mizar-accent-primary);
+}
+.music-settings-workspace > [hidden] {
+  display: none;
+}

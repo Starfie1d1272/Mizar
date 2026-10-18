@@ -74,6 +74,23 @@ test('saves real local choices, imports atomically, persists manual stop through
       .first()
       .setInputFiles({ name: '合成等待.mp3', mimeType: 'audio/mpeg', buffer: mp3 });
     await expect(page.getByText('曲目已选，请保存音乐配置。')).toBeVisible();
+    await page
+      .getByRole('navigation', { name: '自动制播配置' })
+      .getByRole('button', { name: '运镜', exact: true })
+      .click();
+    await page
+      .getByRole('navigation', { name: '自动制播配置' })
+      .getByRole('button', { name: '音乐', exact: true })
+      .click();
+    await page
+      .getByRole('navigation', { name: '音乐场景' })
+      .getByRole('button', { name: /技术暂停/ })
+      .click();
+    await page
+      .getByRole('navigation', { name: '音乐场景' })
+      .getByRole('button', { name: /等待音乐/ })
+      .click();
+    await expect(page.getByText('合成等待.mp3', { exact: true }).first()).toBeVisible();
     await page.getByRole('button', { name: '保存音乐配置', exact: true }).click();
     await expect(page.getByText('音乐配置已保存。')).toBeVisible();
     expect(service.store.state.config.groups.waiting.tracks[0]?.name).toBe('合成等待.mp3');

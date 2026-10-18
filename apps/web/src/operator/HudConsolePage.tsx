@@ -1,3 +1,4 @@
+import { SessionContext } from '../preparation/SessionContext';
 import { downloadHudPresetFile, readHudPresetFile } from './hud-preset-file';
 import { Button, Select } from '../ui';
 import { ToolShell } from '../patterns';
@@ -858,11 +859,10 @@ export function HudConsolePage() {
   };
 
   return (
-    <ToolShell title="HUD 编辑器">
+    <ToolShell title="HUD 编辑器" context={<SessionContext returnToWorkspace />}>
       <main className="hud-console" data-surface="hud-console">
         <header className="hud-console__header">
           <div>
-            <p className="hud-console__eyebrow">Mizar</p>
             <h1>HUD 编辑器</h1>
             <p className="hud-console__intro">调整预设与布局，预览确认后启用。</p>
           </div>

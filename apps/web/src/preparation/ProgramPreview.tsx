@@ -1,3 +1,4 @@
+import { SessionContext } from '../preparation/SessionContext';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useBpSession } from '../bp/client';
 import { ScenePreviewViewport, type PreviewFrame } from './ScenePreviewViewport';
@@ -168,7 +169,7 @@ export function ProgramPreview({ standalone = false }: { standalone?: boolean })
 
 export function ProgramPreviewTool() {
   return (
-    <ToolShell title="节目预览">
+    <ToolShell title="节目预览" context={<SessionContext returnToWorkspace />}>
       <main className="preparation preparation--preview">
         <ProgramPreview standalone />
       </main>

@@ -28,6 +28,9 @@ function statusReadReason(error: unknown) {
 }
 
 export function Settings({ tab }: { tab: string }) {
+  const [automationTab, setAutomationTab] = useState<'music' | 'camera'>(() =>
+    new URLSearchParams(window.location.search).get('section') === 'camera' ? 'camera' : 'music',
+  );
   const obs = useObsStatus();
   const program = useLocalRead<ProgramSceneState>('/local/v1/program-scenes', 3000);
   const evidence = obs?.programEvidence;
@@ -226,8 +229,26 @@ export function Settings({ tab }: { tab: string }) {
   if (tab === 'music')
     return (
       <>
-        <MusicSettings />
-        <CameraSettings />
+        <nav className="preparation-tabs" aria-label="自动制播配置">
+          <Button
+            aria-pressed={automationTab === 'music'}
+            onClick={() => setAutomationTab('music')}
+          >
+            音乐
+          </Button>
+          <Button
+            aria-pressed={automationTab === 'camera'}
+            onClick={() => setAutomationTab('camera')}
+          >
+            运镜
+          </Button>
+        </nav>
+        <div hidden={automationTab !== 'music'}>
+          <MusicSettings />
+        </div>
+        <div hidden={automationTab !== 'camera'}>
+          <CameraSettings />
+        </div>
       </>
     );
 

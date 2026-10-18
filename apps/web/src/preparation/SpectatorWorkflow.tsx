@@ -15,7 +15,7 @@ export function SpectatorWorkflow({
   const obs = capabilities?.find((item) => item.label === 'OBS');
   return (
     <Panel className="spectator-workflow">
-      <details open={production?.mode === 'preparation' && !gameData?.ready}>
+      <details>
         <summary>
           开播流程 ·{' '}
           {gameData?.ready

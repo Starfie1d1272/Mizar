@@ -92,7 +92,7 @@ export function DemoTestPanel() {
   }, [desktop, trial?.phase, trial?.requestId, game?.running, busy, run]);
 
   return (
-    <Panel id="demo-test" className="preparation-demo-test">
+    <Panel id="demo-test" className="preparation-demo-test" data-expanded={shown}>
       <h2>Demo 试播</h2>
       {!shown ? (
         <Button disabled={!desktop} onClick={() => setExpanded(true)}>

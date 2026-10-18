@@ -7,6 +7,7 @@ test('plays real game background with live HUD and seeks both to the recorded C4
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await page.route(/^https?:\/\/(?!127\.0\.0\.1|localhost)/, (route) => route.abort());
+  await page.setViewportSize({ width: 2560, height: 1440 });
   await page.goto('/operator/hud');
   await expect(page.getByLabel('预览来源')).toHaveValue('replay');
   await expect(page.getByLabel('回放来源', { exact: true })).toHaveValue('epl-inferno-video');
@@ -17,6 +18,13 @@ test('plays real game background with live HUD and seeks both to the recorded C4
     .poll(() => video.evaluate((element: HTMLVideoElement) => element.readyState))
     .toBeGreaterThan(1);
   await expect(page.locator('[data-avatar-present="true"]')).toHaveCount(10);
+  // The nested HUD must fit its container after the desktop itself scales to 2K.
+  const frame = (await page.locator('.hud-console__canvas-frame').boundingBox())!;
+  const canvas = (await page.getByLabel('节目 HUD 预览画布', { exact: true }).boundingBox())!;
+  expect(Math.abs(canvas.width - frame.width)).toBeLessThan(4);
+  expect(Math.abs(canvas.height - frame.height)).toBeLessThan(4);
+  expect(canvas.y + canvas.height).toBeLessThanOrEqual(1440);
+
   const logos = page.locator('.match-header__team-logo');
   await expect(logos).toHaveCount(2);
   await expect
