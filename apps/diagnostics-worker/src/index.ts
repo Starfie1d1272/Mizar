@@ -49,22 +49,24 @@ const sql = (env: Env, query: string, ...values: (string | number | null | Array
   env.DIAGNOSTICS_DB.prepare(query).bind(...values);
 const binaryId = (value: string) =>
   Uint8Array.from(value.replaceAll('-', '').match(/../g)!, (byte) => parseInt(byte, 16)).buffer;
-async function permitRow(env: Env, payload: string) {
-  return sql(
+interface PermitRow {
+  installation_hex: string;
+  installation_created_at: number;
+  consent_revision: string;
+  issued_at: number;
+  payload_created_at: number;
+  retire_at: number;
+  wire_hex: string;
+}
+const permitStatement = (env: Env, payload: string) =>
+  sql(
     env,
     `SELECT lower(hex(installation_id)) AS installation_hex, installation_created_at, consent_revision,
     issued_at, payload_created_at, retire_at, lower(hex(wire_sha256)) AS wire_hex FROM upload_permits WHERE payload_sha256=?`,
     binaryId(payload),
-  ).first<{
-    installation_hex: string;
-    installation_created_at: number;
-    consent_revision: string;
-    issued_at: number;
-    payload_created_at: number;
-    retire_at: number;
-    wire_hex: string;
-  }>();
-}
+  );
+const permitRow = (env: Env, payload: string) => permitStatement(env, payload).first<PermitRow>();
+
 const budget = (value: string) => (/^\d{1,12}$/.test(value) ? Number(value) : 0);
 async function withinDatabaseBudget(env: Env) {
   const probe = await sql(env, 'SELECT 1').run();
@@ -298,13 +300,10 @@ interface BatchRow {
   expires_at: number;
   metadata: string;
 }
+const batchStatement = (env: Env, installation: string, id: string) =>
+  sql(env, 'SELECT * FROM batches WHERE installation_id=? AND id=?', installation, id);
 const batchRow = (env: Env, installation: string, id: string) =>
-  sql(
-    env,
-    'SELECT * FROM batches WHERE installation_id=? AND id=?',
-    installation,
-    id,
-  ).first<BatchRow>();
+  batchStatement(env, installation, id).first<BatchRow>();
 const accepted = (id: string) => json({ batchId: id, sha256: id, accepted: true });
 async function enroll(request: Request, env: Env, now: number) {
   const value = JSON.parse(new TextDecoder().decode(await bounded(request.body, 512))) as Record<
@@ -412,7 +411,11 @@ async function upload(request: Request, env: Env, id: string, installation: stri
   )
     return json({ error: 'invalid_batch_permit' }, 400);
   if (sealed.permit.expiresAt <= now) return json({ error: 'batch_retention_expired' }, 410);
-  const firstPermit = await permitRow(env, sealed.permit.payloadSha256);
+  const preflight = await env.DIAGNOSTICS_DB.batch<unknown>([
+    permitStatement(env, sealed.permit.payloadSha256),
+    batchStatement(env, installation, id),
+  ]);
+  const firstPermit = preflight[0]?.results[0] as PermitRow | undefined;
   if (
     !firstPermit ||
     firstPermit.installation_hex !== installation.replaceAll('-', '') ||
@@ -429,11 +432,12 @@ async function upload(request: Request, env: Env, id: string, installation: stri
     !budget(env.INSTALLATION_DAILY_BATCHES)
   )
     return json({ error: 'installation_capacity' }, 429);
-  const existing = await batchRow(env, installation, id);
+  const existing = preflight[1]?.results[0] as BatchRow | undefined;
   if (existing && existing.expires_at <= now)
     return json({ error: 'batch_retention_expired' }, 410);
   if (existing?.state === 'ready') return accepted(id);
-  if (!(await withinDatabaseBudget(env))) return json({ error: 'index_allocation_budget' }, 503);
+  if (!(preflight[1]!.meta.size_after < budget(env.DATABASE_BYTES)))
+    return json({ error: 'index_allocation_budget' }, 503);
   const boundPermit = await sql(
     env,
     `UPDATE upload_permits SET wire_sha256=? WHERE payload_sha256=? AND wire_sha256 IS NULL
@@ -453,7 +457,7 @@ async function upload(request: Request, env: Env, id: string, installation: stri
   const day = Math.floor(now / DAY);
   const objectKey = `v1/${installation}/${day}/${id}.gz`;
   // D1 batch is one transaction. A rejected reservation mutates no quota.
-  const reserved = await env.DIAGNOSTICS_DB.batch([
+  const reserved = await env.DIAGNOSTICS_DB.batch<unknown>([
     sql(env, 'INSERT OR IGNORE INTO daily(day) VALUES(?)', day),
     sql(
       env,
@@ -509,11 +513,12 @@ async function upload(request: Request, env: Env, id: string, installation: stri
       id,
       owner,
     ),
+    batchStatement(env, installation, id),
   ]);
   if (!reserved[1]?.meta.changes) return json({ error: 'capacity_or_concurrent_reservation' }, 429);
   let row: BatchRow | null = null;
   try {
-    row = await batchRow(env, installation, id);
+    row = (reserved[4]?.results[0] as BatchRow | undefined) ?? null;
     if (!row || row.owner !== owner) return json({ error: 'reservation_unconfirmed' }, 503);
     // Never overwrite an acknowledged/retried object and reset its original retention clock.
     const object = await env.DIAGNOSTICS_BUCKET.head(row.object_key);
@@ -542,7 +547,7 @@ async function upload(request: Request, env: Env, id: string, installation: stri
       return json({ error: 'installation_revoked_or_batch_expired' }, 410);
     }
     const storedIndex = metadata(row.metadata)!;
-    await env.DIAGNOSTICS_DB.batch([
+    const finalized = await env.DIAGNOSTICS_DB.batch<unknown>([
       sql(
         env,
         `INSERT INTO sessions(installation_id,session_id,first_received_at,last_received_at,source_from,source_to,version,events,failures,failure_kinds,source_time_unknown,batches,bytes,expires_at)
@@ -581,8 +586,9 @@ async function upload(request: Request, env: Env, id: string, installation: stri
         owner,
         installation,
       ),
+      batchStatement(env, installation, id),
     ]);
-    const committed = await batchRow(env, installation, id);
+    const committed = finalized[2]?.results[0] as BatchRow | undefined;
     if (committed && committed.owner !== owner)
       return json({ error: 'concurrent_owner_pending' }, 409);
     if (committed?.state !== 'ready') {
@@ -611,17 +617,16 @@ async function upload(request: Request, env: Env, id: string, installation: stri
     // Every owner stops issuing object writes before closing its durable count.
     // A crashed owner remains explicitly uncertain; a retry can restore delivery
     // without pretending the earlier writer ceased to exist.
-    await sql(
-      env,
-      'UPDATE batches SET writers=writers-1 WHERE installation_id=? AND id=? AND writers>0',
-      installation,
-      id,
-    ).run();
-    const identity = await sql(
-      env,
-      'SELECT revoked_at FROM installations WHERE id=?',
-      installation,
-    ).first<{ revoked_at: number | null }>();
+    const closed = await env.DIAGNOSTICS_DB.batch<unknown>([
+      sql(
+        env,
+        'UPDATE batches SET writers=writers-1 WHERE installation_id=? AND id=? AND writers>0',
+        installation,
+        id,
+      ),
+      sql(env, 'SELECT revoked_at FROM installations WHERE id=?', installation),
+    ]);
+    const identity = closed[1]?.results[0] as { revoked_at: number | null } | undefined;
     if (!identity || identity.revoked_at !== null) {
       const stored = row ?? (await batchRow(env, installation, id));
       if (stored) await env.DIAGNOSTICS_BUCKET.delete(stored.object_key);
