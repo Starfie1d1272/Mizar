@@ -32,9 +32,9 @@ def varint(data, pos):
     raise ProbeError('overflow-varint')
 
 
-def fields(data):
+def fields(data, *, limit=65535):
     """Bounded protobuf wire inspection; bytes fields stay opaque and are never printed."""
-    if len(data) > 65535:
+    if type(limit) is not int or not 0 < limit <= 4 * 1024**2 or len(data) > limit:
         raise ProbeError('payload-limit')
     pos, result = 0, {}
     while pos < len(data):

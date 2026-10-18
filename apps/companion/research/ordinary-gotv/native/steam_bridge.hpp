@@ -18,6 +18,11 @@ class SteamBridge final : private Port {
   SteamBridge& operator=(const SteamBridge&) = delete;
 
   Session& session() { return session_; }
+  std::uint64_t remote_steam_id() {
+    SteamNetConnectionInfo_t info{};
+    return transport_ready() && sockets_.GetConnectionInfo(session_.connection(), &info) && trusted(info)
+      ? info.m_identityRemote.GetSteamID64() : 0;
+  }
   // Single-threaded host calls at >10 Hz. Do not mix with ManualDispatch.
   void pump(std::uint64_t monotonic_ms) {
     // Expire before dispatch: an already queued success must not revive a timeout.

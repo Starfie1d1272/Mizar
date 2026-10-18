@@ -46,7 +46,10 @@ class Bits:
         if size > MAX_BYTES or self.pos + size * 8 > self.end:
             raise ProbeError('channel-body-boundary')
         if self.pos & 7:
-            return bytes(self.read(8) for _ in range(size))
+            start, shift = self.pos // 8, self.pos & 7
+            self.pos += size * 8
+            value = int.from_bytes(self.data[start:start + size + 1], 'little') >> shift
+            return (value & ((1 << (size * 8)) - 1)).to_bytes(size, 'little')
         start = self.pos // 8
         self.pos += size * 8
         return self.data[start:start + size]
@@ -176,6 +179,36 @@ def encode_message(message_id, body):
     count = 6 + extra + len(data) * 8
     packed = header | (int.from_bytes(data, 'little') << (6 + extra))
     return packed.to_bytes((count + 7) // 8, 'little'), count
+
+
+def join_messages(encoded):
+    """Concatenate exact bit spans; pad only the final byte, never each message."""
+    output, used = bytearray(), 0
+    for data, count in encoded:
+        if not isinstance(data, bytes) or type(count) is not int or count <= 0 or len(data) != (count + 7) // 8:
+            raise ProbeError('message-bit-span')
+        if used + count > MAX_BYTES * 8:
+            raise ProbeError('channel-byte-budget')
+        offset, shift = used // 8, used & 7
+        output.extend(bytes((used + count + 7) // 8 - len(output)))
+        for index, byte in enumerate(data):
+            if index == len(data) - 1 and count & 7:
+                byte &= (1 << (count & 7)) - 1
+            output[offset + index] |= (byte << shift) & 255
+            if shift and offset + index + 1 < len(output):
+                output[offset + index + 1] |= byte >> (8 - shift)
+        used += count
+    return bytes(output), used
+
+
+def unreliable_frame(message_bytes, sequence, acknowledgement, history_raw):
+    """Explicit Source 2 header fields. No invented timings, scheduler or SNP ACK."""
+    if not isinstance(message_bytes, bytes) or len(message_bytes) > MAX_BYTES - 17:
+        raise ProbeError('channel-byte-budget')
+    if len(history_raw) != 3:
+        raise ProbeError('channel-history-count')
+    history = b''.join(uint(value, 16).to_bytes(2, 'little') for value in history_raw)
+    return b'\x02' + encode_varint(uint(sequence)) + encode_varint(uint(acknowledgement)) + history + message_bytes
 
 
 class UnreliableOrder:
