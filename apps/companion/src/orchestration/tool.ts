@@ -10,6 +10,7 @@ import {
   fileSha256,
   latestMulnxRelease,
   SEVEN_ZIP,
+  upstreamNotice,
   type MulnxRelease,
 } from './tool-release.js';
 
@@ -140,7 +141,8 @@ export class MulnxTool {
     try {
       const archive = join(stage, 'MulNX.7z');
       const bundled = (await readJson(this.bundle, 'release.json')) as { release?: MulnxRelease };
-      if (bundled?.release?.sha256 === release.sha256) {
+      const usingBundle = bundled?.release?.sha256 === release.sha256;
+      if (usingBundle) {
         const source = await safePath(this.bundle, 'MulNX.7z');
         await copyFile(source, archive);
         if (
@@ -151,6 +153,23 @@ export class MulnxTool {
       } else await downloadVerified(release.url, archive, release.sha256, release.size);
       const unpacked = join(stage, 'unpacked');
       const extracted = await extractMulnx(extractor, archive, unpacked);
+      const notices = join(extracted.root, 'Mizar-Upstream-Notices');
+      await mkdir(notices);
+      const copies = await Promise.allSettled(
+        ['LICENSE.txt', 'COPYRIGHT.md', 'SECURITY.md'].map(async (name) => {
+          const content = usingBundle
+            ? await readFile(await safePath(this.bundle, `MulNX-${name}`))
+            : await upstreamNotice(name, release.tag);
+          await writeFile(join(notices, name), content, { flag: 'wx' });
+        }),
+      );
+      const failed = copies.find((result) => result.status === 'rejected');
+      if (failed?.status === 'rejected') throw failed.reason;
+      await writeFile(
+        join(notices, 'SOURCES.txt'),
+        `MulNX ${release.tag}\nhttps://github.com/Co1Swet/MulNX_CS2/tree/${release.tag}\nhttps://github.com/Co1Swet/MulNX_CS2/archive/refs/tags/${release.tag}.zip\n`,
+        { flag: 'wx' },
+      );
       const packsRoot = join(extracted.root, 'CS2OBTool/CameraSystem/CamPacks');
       const packs: InstalledTool['packs'] = [];
       const entries = await readdir(packsRoot, { withFileTypes: true });
