@@ -217,8 +217,10 @@ class UnreliableOrder:
     Reject signed-boundary/wrap cases pending exact initialization/wrap evidence.
     GNS reliable order/fragmentation remain the SDK's responsibility.
     """
-    def __init__(self):
-        self.last = None
+    def __init__(self, initial=None):
+        if initial is not None and (type(initial) is not int or not 0 <= initial <= 0x7fffffff):
+            raise ProbeError('unsupported-sequence-domain')
+        self.last = initial
 
     def accept(self, frame):
         if frame.reliable or type(frame.sequence) is not int or not 0 <= frame.sequence <= 0x7fffffff:

@@ -12,6 +12,7 @@ using namespace mizar::observer;
 namespace {
 std::unique_ptr<SteamBridge> bridge;
 bool initialized = false;
+int boot_failure = 0, init_result = -1;
 bool valid(void* handle) { return bridge && bridge.get() == handle; }
 void shutdown() {
   bridge.reset(); // Cancel ticket, close connection, unregister callbacks first.
@@ -22,28 +23,38 @@ void shutdown() {
 // Initialization may legitimately fail for App 730. Never substitute Spacewar or
 // anonymous server credentials. Host must already have a legitimate app context.
 OBS_API void* observer_create(const char* endpoint, std::uint64_t now_ms) noexcept {
-  if (initialized || bridge || !endpoint) return nullptr;
+  boot_failure = 0; init_result = -1;
+  if (initialized || bridge || !endpoint) { boot_failure = 1; return nullptr; }
   try {
-    SteamNetworkingIPAddr address{};
-    if (!address.ParseString(endpoint) || !address.m_port) return nullptr;
     SteamErrMsg error{}; // Never expose SDK diagnostic text (may contain local data).
-    if (SteamAPI_InitEx(&error) != k_ESteamAPIInitResult_OK) return nullptr;
+    init_result = static_cast<int>(SteamAPI_InitEx(&error));
+    if (init_result != k_ESteamAPIInitResult_OK) { boot_failure = 2; return nullptr; }
     initialized = true;
     auto* user = SteamUser(); auto* utils = SteamUtils(); auto* sockets = SteamNetworkingSockets();
-    if (!user || !utils || !sockets || utils->GetAppID() != 730 || !user->BLoggedOn()) {
+    if (!user || !utils || !sockets) { boot_failure = 3; shutdown(); return nullptr; }
+    if (utils->GetAppID() != 730 || !user->BLoggedOn()) {
+      boot_failure = utils->GetAppID() != 730 ? 4 : 5;
+      shutdown(); return nullptr;
+    }
+    SteamNetworkingIPAddr address{};
+    if (!SteamAPI_SteamNetworkingIPAddr_ParseString(&address, endpoint) || !address.m_port) {
+      boot_failure = 6;
       shutdown(); return nullptr;
     }
     bridge = std::make_unique<SteamBridge>(*user, *utils, *sockets, address);
     bridge->session().start(now_ms);
     return bridge.get();
-  } catch (...) { shutdown(); return nullptr; }
+  } catch (...) { boot_failure = 7; shutdown(); return nullptr; }
 }
+OBS_API int observer_boot_failure() noexcept { return boot_failure; }
+OBS_API int observer_init_result() noexcept { return init_result; }
 OBS_API int observer_state(void* handle) noexcept {
   return valid(handle) ? static_cast<int>(bridge->session().state()) : static_cast<int>(State::closed);
 }
 OBS_API int observer_failure(void* handle) noexcept {
   return valid(handle) ? static_cast<int>(bridge->session().failure()) : static_cast<int>(Failure::context);
 }
+OBS_API int observer_abi_version() noexcept { return 1; }
 OBS_API void observer_pump(void* handle, std::uint64_t now_ms) noexcept {
   if (!valid(handle)) return;
   try { bridge->pump(now_ms); } catch (...) { bridge->session().close(Failure::consumer); }
@@ -65,9 +76,10 @@ OBS_API const std::uint8_t* observer_auth(void* handle, std::uint32_t* size) noe
   try { const auto bytes = bridge->session().auth_steam(); *size = static_cast<std::uint32_t>(bytes.size()); return bytes.data(); }
   catch (...) { return nullptr; }
 }
-OBS_API int observer_send(void* handle, const std::uint8_t* bytes, std::uint32_t size, int reliable) noexcept {
-  if (!valid(handle) || !bytes || !size || (reliable != 0 && reliable != 1)) return 0;
-  return bridge->send({bytes, size}, reliable ? k_nSteamNetworkingSend_Reliable : k_nSteamNetworkingSend_Unreliable) == k_EResultOK;
+OBS_API int observer_send(void* handle, const std::uint8_t* bytes, std::uint32_t size, int flags) noexcept {
+  if (!valid(handle) || !bytes || !size ||
+      (flags != k_nSteamNetworkingSend_UnreliableNoDelay && flags != k_nSteamNetworkingSend_Reliable)) return 0;
+  return bridge->send({bytes, size}, flags) == k_EResultOK;
 }
 OBS_API int observer_receive(void* handle, std::uint8_t* output, std::uint32_t capacity, int* reliable) noexcept {
   if (!valid(handle) || !output || !capacity || !reliable) return -1;

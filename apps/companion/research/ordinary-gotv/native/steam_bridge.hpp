@@ -3,6 +3,7 @@
 // Host must supply legitimate, initialized App 730 user interfaces and keep them alive.
 #include "session.hpp"
 #include <steam_api.h>
+#include <steam_api_flat.h>
 #include <functional>
 
 namespace mizar::observer {
@@ -21,7 +22,7 @@ class SteamBridge final : private Port {
   std::uint64_t remote_steam_id() {
     SteamNetConnectionInfo_t info{};
     return transport_ready() && sockets_.GetConnectionInfo(session_.connection(), &info) && trusted(info)
-      ? info.m_identityRemote.GetSteamID64() : 0;
+      ? SteamAPI_SteamNetworkingIdentity_GetSteamID64(&info.m_identityRemote) : 0;
   }
   // Single-threaded host calls at >10 Hz. Do not mix with ManualDispatch.
   void pump(std::uint64_t monotonic_ms) {
@@ -40,7 +41,7 @@ class SteamBridge final : private Port {
     const int count = sockets_.ReceiveMessagesOnConnection(session_.connection(), &message, 1);
     if (count < 0) { session_.close(Failure::disconnected); return count; }
     if (!message) return count;
-    struct Release { SteamNetworkingMessage_t* p; ~Release() { p->Release(); } } release{message};
+    struct Release { SteamNetworkingMessage_t* p; ~Release() { SteamAPI_SteamNetworkingMessage_t_Release(p); } } release{message};
     if (message->m_cbSize < 0) { session_.close(Failure::disconnected); return -1; }
     try {
       consume({static_cast<const std::uint8_t*>(message->m_pData), static_cast<std::size_t>(message->m_cbSize)},
@@ -67,7 +68,7 @@ class SteamBridge final : private Port {
     const auto status = sockets_.GetAuthenticationStatus(nullptr);
     if (status == k_ESteamNetworkingAvailability_Current) {
       SteamNetworkingIdentity identity{};
-      return sockets_.GetIdentity(&identity) && identity.GetSteamID64() == own_steam_id() && own_steam_id() != 0
+      return sockets_.GetIdentity(&identity) && SteamAPI_SteamNetworkingIdentity_GetSteamID64(&identity) == own_steam_id() && own_steam_id() != 0
         ? Availability::current : Availability::failed;
     }
     if (status == k_ESteamNetworkingAvailability_Failed || status == k_ESteamNetworkingAvailability_CannotTry)
@@ -85,10 +86,10 @@ class SteamBridge final : private Port {
   void close_connection(std::uint32_t handle) noexcept override {
     sockets_.CloseConnection(handle, 1000, "observer-session-ended", false);
   }
-  static bool trusted(const SteamNetConnectionInfo_t& info) {
+  static bool trusted(SteamNetConnectionInfo_t& info) {
     return info.m_eState == k_ESteamNetworkingConnectionState_Connected &&
       !(info.m_nFlags & (k_nSteamNetworkConnectionInfoFlags_Unauthenticated | k_nSteamNetworkConnectionInfoFlags_Unencrypted)) &&
-      info.m_identityRemote.GetSteamID64() != 0;
+      SteamAPI_SteamNetworkingIdentity_GetSteamID64(&info.m_identityRemote) != 0;
   }
   void on_ticket(GetAuthSessionTicketResponse_t* callback) {
     session_.ticket_callback(callback->m_hAuthTicket, static_cast<int>(callback->m_eResult));

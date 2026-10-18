@@ -182,6 +182,7 @@ class LiveDecoder:
         tick = event_tick if event_tick is not None else self.tick
         self.emit({'kind': name, 'tick': tick,
                    'tick_source': 'event.server_tick' if event_tick is not None else 'net_Tick' if tick is not None else None,
+                   'net_tick': self.tick, 'event_server_tick': event_tick,
                    'weapon': weapon, 'map': self.server['map'] if self.server else None,
                    'tick_interval': self.server['tick_interval'] if self.server else None,
                    'actor': None, 'target': None, 'warmup': None, 'round': None,

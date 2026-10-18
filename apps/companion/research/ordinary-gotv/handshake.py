@@ -211,6 +211,16 @@ def connect_inner_message(payload: bytes):
     return message
 
 
+def initial_challenge_request():
+    """engine2 057620 initializes number=0; 057370 writes this first q/context.
+
+    Exact first-attempt subset. No GNS outer header or Source 1 challenge request.
+    Send on the authenticated GNS connection with UnreliableNoDelay (flags=5).
+    Retries/reservation contexts are deliberately not synthesized here.
+    """
+    return b'\xff\xff\xff\xffqconnect0x00000000\0'
+
+
 def parse_connection_inner(message: bytes):
     """Validated-transport caller supplies plaintext inner S2C_CONNECTION (0x42)."""
     from wire import varint
