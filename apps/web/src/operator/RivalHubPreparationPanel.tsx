@@ -186,8 +186,12 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
     }
   }
 
+  const Container = mode === 'settings' ? Panel : 'section';
   return (
-    <Panel className="operator-rivalhub-panel" aria-label="RivalHub 赛事连接与准备">
+    <Container
+      className={mode === 'settings' ? 'operator-rivalhub-panel' : 'rivalhub-library-source'}
+      aria-label="RivalHub 赛事连接与准备"
+    >
       {connection === null ? (
         <p role="status">{loadError ? '赛事连接尚未读取' : '正在读取赛事连接…'}</p>
       ) : !connection.paired || (mode === 'settings' && rePairing) ? (
@@ -234,18 +238,21 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
         )
       ) : (
         <>
-          <div className="operator-rivalhub-header">
-            <div>
-              <h2>{schedule?.competition?.name ?? '已连接赛事'}</h2>
-              <p>
-                {connection.displayName} · {schedule?.competition?.name ?? '赛事已连接'}
-              </p>
-            </div>
-            <StatusPill tone={loadError || connection.refreshError ? 'warning' : 'success'}>
-              {loadError || connection.refreshError ? '已授权 · 同步异常' : '已授权'}
-            </StatusPill>
-          </div>
-
+          {mode === 'settings' ? (
+            <>
+              <div className="operator-rivalhub-header">
+                <div>
+                  <h2>{schedule?.competition?.name ?? '已连接赛事'}</h2>
+                  <p>
+                    {connection.displayName} · {schedule?.competition?.name ?? '赛事已连接'}
+                  </p>
+                </div>
+                <StatusPill tone={loadError || connection.refreshError ? 'warning' : 'success'}>
+                  {loadError || connection.refreshError ? '已授权 · 同步异常' : '已授权'}
+                </StatusPill>
+              </div>
+            </>
+          ) : null}
           {mode === 'settings' ? (
             <>
               <div className="preparation-actions">
@@ -291,6 +298,9 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
                 <RivalHubMatchLibrary
                   schedule={schedule}
                   selecting={selecting}
+                  activeMatchId={connection.activeMatchId}
+                  refreshing={refreshing}
+                  onRefresh={() => void refresh()}
                   onSelect={(id) => void handleSelectMatch(id)}
                 />
               )}
@@ -323,7 +333,7 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
         </>
       )}
 
-      {mode === 'matches' || loadError ? (
+      {(mode === 'matches' && !schedule) || (mode === 'settings' && loadError) ? (
         <Button
           aria-label="刷新比赛"
           disabled={refreshing}
@@ -333,6 +343,9 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
           刷新比赛
         </Button>
       ) : null}
+      {mode === 'matches' && connection?.refreshError ? (
+        <StatusBanner tone="warning">{connection.refreshError}</StatusBanner>
+      ) : null}
       {loadError ? (
         <StatusBanner tone="warning">
           {loadError}
@@ -341,6 +354,6 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
       ) : null}
       {error ? <StatusBanner tone="danger">{error}</StatusBanner> : null}
       {message ? <StatusBanner tone="info">{message}</StatusBanner> : null}
-    </Panel>
+    </Container>
   );
 }

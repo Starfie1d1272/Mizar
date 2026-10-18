@@ -13,9 +13,11 @@ const dateLabel = (value: string | null) =>
 export function MatchDocumentView({
   document: match,
   section,
+  rosterCounts = false,
 }: {
   document: MatchDocumentV1;
   section: MatchSection;
+  rosterCounts?: boolean;
 }) {
   if (section === 'details')
     return (
@@ -88,7 +90,12 @@ export function MatchDocumentView({
               ) : (
                 [true, false].map((starter) => (
                   <section key={String(starter)}>
-                    <h3>{starter ? '首发' : '替补'}</h3>
+                    <h3>
+                      {starter ? '首发' : '替补'}
+                      {rosterCounts
+                        ? ` · ${team.players.filter((player) => player.isStarter === starter).length} 人`
+                        : ''}
+                    </h3>
                     <ul className="preparation-roster">
                       {team.players
                         .filter((player) => player.isStarter === starter)

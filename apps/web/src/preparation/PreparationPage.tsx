@@ -516,12 +516,14 @@ export function PreparationPage() {
           <>
             <div className="preparation-library-sources" aria-label="比赛库来源">
               <Button
+                variant={librarySource === 'local' ? 'primary' : 'secondary'}
                 aria-pressed={librarySource === 'local'}
                 onClick={() => setLibrarySource('local')}
               >
                 本地赛事
               </Button>
               <Button
+                variant={librarySource === 'website' ? 'primary' : 'secondary'}
                 aria-pressed={librarySource === 'website'}
                 onClick={() => setLibrarySource('website')}
               >
