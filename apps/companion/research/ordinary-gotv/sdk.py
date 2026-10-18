@@ -56,6 +56,10 @@ class NativePort:
     def state(self):
         return self.lib.observer_state(self.handle)
 
+    @property
+    def failure(self):
+        return self.lib.observer_failure(self.handle)
+
     def pump(self, now_ms):
         self.lib.observer_pump(self.handle, now_ms)
 

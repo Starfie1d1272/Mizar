@@ -7,6 +7,7 @@ Requests full schema at NEW and initializes the event-only network world before 
 """
 import argparse
 import getpass
+import hashlib
 import ipaddress
 import json
 import os
@@ -41,6 +42,7 @@ class ObserverDriver:
         self.port, self.host_version = port, host_version
         self._password = password  # Ownership transferred; wiped on connect/close.
         self._challenge = None
+        self.challenge_metadata = None
         self._account_id = None
         self._new_sent = False
         self.parser, self.emit = parser, emit
@@ -127,7 +129,14 @@ class ObserverDriver:
         if self.phase == 'challenge':
             if reliable or not data.startswith(b'\xff\xff\xff\xffA'):
                 raise DriverError('unexpected-challenge-message')
-            challenge = parse_challenge_body(data[5:])
+            body = data[5:]
+            if 20 <= len(body) <= 2400:
+                _, auth, key_size, peer, secure = struct.unpack_from('<IIHQB', body)
+                self.challenge_metadata = {'auth_protocol': auth, 'key_size': key_size,
+                    'secure_flag': secure, 'server_identity_matches': peer == self.port.remote_id(),
+                    'context_bytes': len(body) - 19,
+                    'context_sha256': hashlib.sha256(body[19:]).hexdigest()}
+            challenge = parse_challenge_body(body)
             if challenge.server_steam_id != self.port.remote_id() or not challenge.server_steam_id:
                 raise DriverError('challenge-peer-mismatch')
             if challenge.context != b'connect0x00000000':
@@ -265,6 +274,9 @@ class ObserverDriver:
     def report(self):
         span = None if self.first_channel_ms is None else self.last_channel_ms - self.first_channel_ms
         return {'phase': self.phase, 'reason': self.reason, 'received_messages': self.received,
+                'host_version': self.host_version, 'native_state': self.port.state,
+                'native_failure': getattr(self.port, 'failure', None),
+                'challenge_metadata': self.challenge_metadata,
                 'channel_frames': self.channel_frames, 'channel_bytes': self.channel_bytes,
                 'channel_receive_span_ms': span, 'received_signon_state': self.signon.state,
                 'stages': self.stages,

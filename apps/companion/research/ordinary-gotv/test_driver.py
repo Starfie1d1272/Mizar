@@ -33,6 +33,8 @@ class DriverTest(unittest.TestCase):
         port.incoming.append((b'\xff\xff\xff\xffA' + struct.pack('<IIHQB', 0, 3, 0, 456, 1) + b'connect0x00000000\0', False))
         driver.step(12)
         self.assertTrue(port.ticket_requested)
+        self.assertEqual(driver.report()['challenge_metadata']['auth_protocol'], 3)
+        self.assertTrue(driver.report()['challenge_metadata']['server_identity_matches'])
         self.assertEqual(len(port.sent), 1)  # No auth/connect before SDK callback gate.
         port.state = 5
         driver.step(13)
