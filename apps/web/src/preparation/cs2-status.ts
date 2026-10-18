@@ -11,8 +11,6 @@ export interface Cs2ConfigStatus {
   preserveSettings?: boolean;
   pending: boolean;
   running: boolean;
-  borrowed?: boolean;
-  externalDetached?: boolean;
   message: string | null;
   busy?: boolean;
   phase?: 'idle' | 'starting' | 'checking' | 'restoring' | 'uncertain' | 'running' | 'pending';
@@ -66,7 +64,7 @@ export function cs2OperationLabel(phase: Cs2ConfigStatus['phase']) {
 export interface WorkspaceExitStatus {
   windowMessage?: string | null;
   busy: boolean;
-  stage: 'checking' | 'production' | 'restoration' | 'detachment' | 'presentation' | '';
+  stage: 'checking' | 'production' | 'restoration' | 'presentation' | '';
   message: string | null;
 }
 /** Read-only Host feedback: survives navigation and hidden workspace windows. */
@@ -99,9 +97,7 @@ export function workspaceExitLabel(stage: WorkspaceExitStatus['stage']) {
     ? '确认制作与试播状态'
     : stage === 'production'
       ? '安全切场与数据源释放'
-      : stage === 'detachment'
-        ? '解除外部游戏借用'
-        : stage === 'restoration'
-          ? '关闭游戏与恢复设置'
-          : '返回准备中心';
+      : stage === 'restoration'
+        ? '关闭游戏与恢复设置'
+        : '返回准备中心';
 }

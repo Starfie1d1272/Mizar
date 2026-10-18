@@ -163,7 +163,6 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
       </StatusBanner>
     );
   if (
-    !status?.borrowed &&
     !status?.pending &&
     !status?.spectatorRecoveryPending &&
     !status?.demoCleanupPending &&
@@ -197,29 +196,23 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
             ? cs2OperationLabel(phase)
             : exit?.windowMessage
               ? '窗口控制需要处理'
-              : status?.borrowed
-                ? status.running
-                  ? '已借用外部 CS2'
-                  : '借用实例已失效'
-                : status?.externalDetached
-                  ? '游戏借用已结束'
-                  : status?.pending
-                    ? uncertain
-                      ? '正在等待 Steam 启动 CS2'
-                      : status.running
-                        ? status.preserveSettings
-                          ? 'CS2 正在运行，已保持原游戏设置'
-                          : 'CS2 正在运行，原配置已备份'
-                        : status.preserveSettings
-                          ? '等待清理本次启动记录'
-                          : 'CS2 原配置尚未恢复'
-                    : status?.spectatorRecoveryPending
-                      ? '观战原值尚未恢复'
-                      : status?.demoCleanupPending
-                        ? '原设置已恢复，试播文件待清理'
-                        : status?.canPreserve
-                          ? '未应用游戏设置，原始配置已备份'
-                          : '原设置已恢复'}
+              : status?.pending
+                ? uncertain
+                  ? '正在等待 Steam 启动 CS2'
+                  : status.running
+                    ? status.preserveSettings
+                      ? 'CS2 正在运行，已保持原游戏设置'
+                      : 'CS2 正在运行，原配置已备份'
+                    : status.preserveSettings
+                      ? '等待清理本次启动记录'
+                      : 'CS2 原配置尚未恢复'
+                : status?.spectatorRecoveryPending
+                  ? '观战原值尚未恢复'
+                  : status?.demoCleanupPending
+                    ? '原设置已恢复，试播文件待清理'
+                    : status?.canPreserve
+                      ? '未应用游戏设置，原始配置已备份'
+                      : '原设置已恢复'}
         </strong>
         {exit?.windowMessage ? <p role="alert">{exit.windowMessage}</p> : null}
         {status?.canPreserve ? (
@@ -227,10 +220,6 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
             {status.message} 保持原设置继续时，不应用自动画质、帧率和游戏窗口布局，本机 HUD
             覆盖停用。
           </p>
-        ) : null}
-        {status?.externalDetached ? <p>{status.message}</p> : null}
-        {status?.borrowed ? (
-          <p>退出工作台只解除借用，外部游戏由原启动方退出；不会恢复或覆盖其设置。</p>
         ) : null}
         {status?.pending ? (
           <p>
@@ -274,19 +263,6 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
           </p>
         ) : null}
         <div className="preparation-actions">
-          {status?.borrowed && production ? (
-            <Button
-              disabled={busy || Boolean(phase)}
-              onClick={() =>
-                void run(
-                  (task) => productionAction('finish', production, false, task),
-                  '已解除借用，外部游戏保持不变。',
-                )
-              }
-            >
-              结束制作并解除借用
-            </Button>
-          ) : null}
           {status?.canPreserve && production ? (
             <Button
               disabled={busy || Boolean(phase)}

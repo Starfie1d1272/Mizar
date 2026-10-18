@@ -1,4 +1,3 @@
-import { CameraControls } from '../orchestration/CameraControls';
 import { MusicControls } from '../music/MusicControls';
 import { ObsOutputControls } from './ObsOutputControls';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
@@ -297,7 +296,6 @@ export function WorkspaceLeft() {
         />
         <ProductionStatus compact matchId={payload?.matchContext.summary?.matchId ?? null} />
         <MusicControls compact />
-        <CameraControls />
       </div>
       <ObsConfidence />
     </main>
@@ -548,11 +546,9 @@ export function WorkspaceDock() {
           <small className="workspace-exit-help">
             {exit?.busy
               ? workspaceExitLabel(exit.stage)
-              : cs2?.borrowed
-                ? '解除借用，游戏保持运行'
-                : cs2?.preserveSettings
-                  ? '关闭本次游戏，保留游戏设置'
-                  : '关闭游戏并恢复配置'}
+              : cs2?.preserveSettings
+                ? '关闭本次游戏，保留游戏设置'
+                : '关闭游戏并恢复配置'}
           </small>
           <Button
             disabled={busy}

@@ -16,7 +16,6 @@ import { audioBytes, readMusicPack } from './archive.js';
 const playbackSchema = z
   .object({
     key: z.string().max(2000),
-    scope: z.string().max(4000).optional(),
     group: z.enum(MUSIC_GROUPS),
     track: musicTrackSchema,
     finished: z.boolean(),
