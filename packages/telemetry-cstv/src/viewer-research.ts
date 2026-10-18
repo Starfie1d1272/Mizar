@@ -25,7 +25,17 @@ export class ViewerResearchError extends Error {
   }
 }
 
-export function viewerDecoder(emit: (event: ViewerEvent) => void) {
+export interface ViewerParserCheckpoint {
+  sequence: number;
+  schemaFields: number;
+  stringTables: number;
+  serverInfo: boolean;
+}
+
+export function viewerDecoder(
+  emit: (event: ViewerEvent) => void,
+  processed?: (checkpoint: ViewerParserCheckpoint) => void,
+) {
   const parser = new DemoReader();
   let map: string | null = null;
   let interval: number | null = null;
@@ -33,6 +43,32 @@ export function viewerDecoder(emit: (event: ViewerEvent) => void) {
   let lastCursor = -Infinity;
   let lastSeenTick = -Infinity;
   let continuityFailure: ViewerResearchError | undefined;
+  let stringTables = 0;
+  let checkpointSequence = 0;
+  parser.on('createstringtable', (table) => {
+    if (table) stringTables++;
+  });
+  parser.on('clearallstringtables', () => {
+    stringTables = 0;
+  });
+  if (processed)
+    parser.on('DEM_CustomData', (marker) => {
+      const sequence = marker.callback_index;
+      if (
+        !Number.isSafeInteger(sequence) ||
+        sequence !== checkpointSequence + 1 ||
+        marker.data?.length
+      ) {
+        throw new Error('viewer-checkpoint-order');
+      }
+      checkpointSequence = sequence!;
+      processed({
+        sequence: checkpointSequence,
+        schemaFields: Object.keys(parser.propIdToName ?? {}).length,
+        stringTables,
+        serverInfo: map !== null && interval !== null,
+      });
+    });
   const observeTick = (tick: number) => {
     if (continuityFailure) throw continuityFailure;
     if (!Number.isSafeInteger(tick) || tick < lastSeenTick) {

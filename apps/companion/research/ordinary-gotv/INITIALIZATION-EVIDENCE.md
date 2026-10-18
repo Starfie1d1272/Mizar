@@ -8,7 +8,7 @@
 
 因此等待 ServerInfo 后才允许首次 CONNECTED 应答会形成循环等待。驱动现已在连接响应后、ServerInfo 尚未到达时发送该 CONNECTED 应答；未知 spawn count 仅在这一阶段使用 `0xffffffff`，其后仍核对 ServerInfo 的真实 server_count。
 
-可靠通道使用 tag 1、初始 tick 上下文零及 GNS flags=8。networksystem 构造路径 `0x1800bba50` 在 `0x1800bbf4b` 将 `+0x8dbc/+0x8dc0` 同时清零；`0x1800be510` 在发送前复制上下文，`0x1800be6e0` 写入可靠帧并设置 SDK flags=8。驱动测试核对在 ServerInfo 为空时已发送准确的 CONNECTED/-1 消息，NEW 尚未实现的应答仍保持关闭。
+可靠通道使用 tag 1、初始 tick 上下文零及 GNS flags=8。networksystem 构造路径 `0x1800bba50` 在 `0x1800bbf4b` 将 `+0x8dbc/+0x8dc0` 同时清零；`0x1800be510` 在发送前复制上下文，`0x1800be6e0` 写入可靠帧并设置 SDK flags=8。驱动测试核对在 ServerInfo 为空时已发送准确的 CONNECTED/-1 消息，NEW 的后续实现见本文末节。
 
 ## 零 CRC 的完整表路径
 
@@ -20,12 +20,30 @@
 
 `0x180061460` 在 NEW 阶段安装并调用已有字符串表回调，发送 ClientInfo，再发送 NEW 应答。服务器收到该应答后才提供下一阶段的表/sign-on 数据。初始化应按各阶段实际输入推进，完整实体快照不能无条件作为首次 CONNECTED 应答的前提。
 
-本轮修改复用既有握手与 LiveDecoder 边界测试，27 项通过。尚需实现后续表/实体处理并完成普通观众连接；这些检查没有连接真实服务器。
+本轮修改复用既有握手与 LiveDecoder 边界测试，27 项通过。后续表/实体处理已在下述解析进程接入；普通观众在线连接仍待实测。
 
 ## SpawnGroup manifest 与当前 Windows 构建
 
 同一官方 engine2 的 `0x180082da0` 处理 Load、`0x180083690` 处理 ManifestUpdate；manifest 经 `0x1803f7d40` 解出资源名。外壳为 1 bit 压缩标志、24 bit 字节长度；压缩内容使用 LZSS。内层先保存三个 uint16 计数及扩展名/目录字典，随后按目录索引、名称和扩展名索引组成资源项。`resource_manifest.py` 独立实现有界格式读取；资源名仅保存在内存，不作为文件路径执行。
 
-既有公开 Demo 的 8 个实际 SpawnGroup 包解出 47 项资源名，覆盖压缩、未压缩及空资源列表；[记录](evidence/resource-manifest-offline.json) 包含输入摘要和数量。LiveDecoder 保存各组及后续 manifest 片段。加载完成消息仍由后续世界初始化负责，不能把资源名解码当作场景已加载。
+既有公开 Demo 的 8 个实际 SpawnGroup 包解出 47 项资源名，覆盖压缩、未压缩及空资源列表；[记录](evidence/resource-manifest-offline.json) 包含输入摘要和数量。LiveDecoder 保存各组及后续 manifest 片段。事件接收器按后述逻辑世界注册生成加载完成消息；它不创建图形场景。
 
 当前 SDK 桥已使用固定 Valve Proton SDK 1.65 头文件、官方 CS2 `steam_api64.dll` 的导入符号和 LLVM MinGW 交叉编译为 Windows x64 DLL，13 个当前 C ABI 导出均存在，包括启动失败码。[构建记录](evidence/windows-native-build.json) 包含工具、大小和 SHA-256；Windows 原生启动与在线持续接收尚待执行。
+
+## 普通客户端 NEW 请求全表
+
+驱动现从 SDK 认证结果前缀读取自身 Steam account ID，在已收到 ServerInfo 的 NEW 路径，依次发送 ClientInfo（消息 20、CRC 0、普通客户端角色）及 NEW 应答（消息 7）。这对应 `0x18005ff20` / `0x180061460` 的请求完整表顺序。已有字符串表需等待解析进程消费对应包的回调检查点，再进入下一阶段。
+
+复用了驱动链路测试，检查实际发送顺序、真实 SDK 身份低 32 位映射、零 CRC、服务器计数及 PRESPAWN 不重复 NEW；27 项测试通过。此次未连接服务器。
+
+## 本地解析进程与无画面世界初始化
+
+`parser_bridge.py` 通过有界管道连接 `parser_worker.mjs` 和既有实体解析器。每包追加本地 Demo CustomData 检查点；该标记仅用于进程间同步，不发送至服务器。检查点由解析器处理完此前输入后发出，报告实际 schema 字段数、字符串表数和 ServerInfo 状态。最多四包未确认输入，积压时暂停从 SDK 队列取包，继续泵回调与消费解析输出。
+
+PRESPAWN 应答需要真实 schema、ClassInfo 和已完成检查点。`0x1800c5a00` / `0x1800c4a30` 的服务器顺序表明：PRESPAWN 应答后推进 SPAWN，SPAWN 应答后才激活客户端。驱动因此先完成事件解析所需的世界身份注册，再应答 SPAWN。世界组按 owner/parent 依赖顺序登记，等待 manifest 片段完整，处理创建 tick 与卸载，然后发送消息 13（LoadCompleted）；保存游戏世界仍需额外状态源。
+
+这里的世界注册服务于事件解码，不加载或渲染地图美术资源。是否充分覆盖完美在线源，需要实际持续流验证。记录中的逻辑状态 FULL 与在线成功分别报告。
+
+固定公开录像通过实际 Node 子进程消费 185932 包、185932 个顺序检查点，最终 22889 个 schema 字段及 2 个字符串表，事件计数与前次一致。独立驱动验证使用该录像真实 schema、8 个世界组及合成 sign-on，依次发出 CONNECTED、ClientInfo、NEW、PRESPAWN、8 个 LoadCompleted、SPAWN、FULL；网络端口为合成输入。这次联调还发现并修正 schema 字符串池合法空占位被拒绝的问题。
+
+当前下一步是在线 tick/基线确认与实际普通观众接入验证。原始游戏二进制及反编译正文保留在研究环境；提交仅包含实现和证据摘要。

@@ -151,8 +151,8 @@ class SignonSequence:
     """Conservative normal-network subset, starting after validated S2C_CONNECTION.
 
     No replay/local exceptions. Tracks received states, not a successful session.
-    NEW/SPAWN deliberately cannot be acknowledged until their missing client-side
-    initialization is implemented. FULL never sets an online-success flag.
+    NEW requires its ClientInfo transition; SPAWN requires event-parser and
+    network-world initialization. FULL is tracked separately from online success.
     """
     def __init__(self):
         self.state = 2
@@ -187,6 +187,20 @@ class SignonSequence:
         if state == 7:
             self.closed = True
         return {'received_state': state, 'online_success': 'INCONCLUSIVE'}
+
+    def finish_new(self):
+        # Driver calls only after its actual ClientInfo send, with installed
+        # processed callbacks and a real ServerInfo count.
+        if self.closed or self.state != 3 or self.spawn_count is None:
+            raise ProbeError('new-initialization-order')
+        if not self.initialization_blocked:
+            raise ProbeError('new-initialization-already-completed')
+        self.initialization_blocked = False
+
+    def finish_spawn(self):
+        if self.closed or self.state != 5 or self.spawn_count is None:
+            raise ProbeError('spawn-initialization-order')
+        self.initialization_blocked = False
 
     def acknowledgement(self):
         if self.closed:

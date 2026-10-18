@@ -3,7 +3,7 @@
 
 Native SDK authentication -> actual first q -> validated challenge -> callback-gated
 user ticket -> known-password connect -> channel receive -> live message consumer.
-Stops at missing initialization; no synthetic NEW/SPAWN acknowledgement is sent.
+Requests full schema at NEW and initializes the event-only network world before SPAWN.
 """
 import argparse
 import getpass
@@ -16,8 +16,8 @@ import sys
 import time
 from channel import decode_frame, messages, UnreliableOrder, encode_message, reliable_frame
 from handshake import (SignonSequence, connect_inner_message, connect_payload,
-                       initial_challenge_request, parse_challenge_body, parse_connection_inner, uint)
-from live import LiveDecoder
+                       initial_challenge_request, parse_challenge_body, parse_connection_inner, uint, number)
+from live import LiveDecoder, client_info
 from password import transform_password
 from wire import ProbeError
 
@@ -34,14 +34,21 @@ class ObserverDriver:
     Tests use a clearly synthetic port. No success flag can be set by either port.
     Configured source version must match the source, not merely this binary sample.
     """
-    def __init__(self, port, *, host_version, password, emit, capture=None, now_ms=0):
+    def __init__(self, port, *, host_version, password, emit, capture=None, now_ms=0, parser=None):
         uint(host_version)
         if not host_version or not isinstance(password, bytearray) or len(password) > 95 or 0 in password:
             raise DriverError('configuration-boundary')
         self.port, self.host_version = port, host_version
         self._password = password  # Ownership transferred; wiped on connect/close.
         self._challenge = None
-        self.decoder, self.signon = LiveDecoder(emit), SignonSequence()
+        self._account_id = None
+        self._new_sent = False
+        self.parser, self.emit = parser, emit
+        self._parser_sequence = 0
+        self._prespawn_sent = False
+        self._spawn_sent = False
+        self._full_sent = False
+        self.decoder, self.signon = LiveDecoder((lambda _: None) if parser else emit), SignonSequence()
         self.order = UnreliableOrder(initial=0)
         self.capture = capture
         self.phase, self.reason = 'transport', None
@@ -79,7 +86,13 @@ class ObserverDriver:
             self.port.with_auth(self._send_connect)
             self.phase, self.deadline = 'connection', now_ms + 15000
             self.stages.append({'stage': self.phase, 'elapsed_ms': now_ms - self.start_ms})
+        if self.parser is not None:
+            self.parser.poll(self.emit)
         for _ in range(128):  # Bound work per callback pump; do not starve deadlines.
+            if self.parser is not None:
+                processed = self.parser.checkpoint['sequence'] if self.parser.checkpoint else 0
+                if self._parser_sequence - processed >= 4:
+                    break  # Leave transport messages queued while the parser catches up.
             message = self.port.receive()
             if message is None:
                 break
@@ -87,9 +100,16 @@ class ObserverDriver:
             self.receive(*message, now_ms)
             if self.done:
                 break
+        if self.parser is not None and not self.done:
+            self.parser.poll(self.emit)
+            self._advance_initialization(now_ms)
 
     def _send_connect(self, auth):
         try:
+            # SDK Session prefixes its own authenticated Steam64, not the peer's.
+            self._account_id = int.from_bytes(auth[:8], 'little') & 0xffffffff
+            if not self._account_id:
+                raise DriverError('local-account-id-missing')
             payload = connect_payload(host_version=self.host_version, challenge=self._challenge,
                 auth_steam=auth, player_name='Mizar observer',
                 encrypted_password=transform_password(bytes(self._password), self._challenge.number),
@@ -152,8 +172,69 @@ class ObserverDriver:
                 self.decoder.consume(message.message_id, message.body)
                 if message.message_id == 40:
                     self.signon.server_info(self.decoder.server['server_count'])
-        if self.signon.state >= 3:
-            self.phase, self.reason = 'blocked', 'client-initialization-required'
+        if self.parser is not None:
+            self._parser_sequence = self.parser.submit(frame.body)
+        self._advance_initialization(now_ms)
+
+    def _advance_initialization(self, now_ms):
+        checkpoint = self.parser.checkpoint if self.parser else None
+        if self.parser and (not checkpoint or checkpoint['sequence'] < self._parser_sequence):
+            return
+        if self.signon.state == 3 and not self._new_sent:
+            if self.decoder.server is None:
+                raise DriverError('new-before-serverinfo')
+            # Empty-table NEW can request the full schema immediately. Existing
+            # tables need their callbacks consumed before this transition.
+            if self.decoder.tables and (not checkpoint or checkpoint['stringTables'] != len(self.decoder.tables)):
+                self.phase, self.reason = 'blocked', 'new-string-table-callbacks-required'
+                return
+            info = client_info(server_count=self.signon.spawn_count,
+                               account_id=self._account_id, send_table_crc=0)
+            encoded, _ = encode_message(20, info)
+            self.port.send(reliable_frame(encoded, 0), 8)
+            self.signon.finish_new()
+            message_id, payload = self.signon.acknowledgement()
+            encoded, _ = encode_message(message_id, payload)
+            self.port.send(reliable_frame(encoded, 0), 8)
+            self._new_sent = True
+            self.stages.append({'stage': 'sent-client-info-and-new',
+                                'elapsed_ms': now_ms - self.start_ms})
+        elif self.signon.state == 4 and not self._prespawn_sent:
+            if (not checkpoint or not checkpoint['serverInfo'] or checkpoint['schemaFields'] == 0
+                or not self.decoder.classes):
+                self.phase, self.reason = 'blocked', 'prespawn-initialization-required'
+                return
+            message_id, payload = self.signon.acknowledgement()
+            encoded, _ = encode_message(message_id, payload)
+            self.port.send(reliable_frame(encoded, 0), 8)
+            self._prespawn_sent = True
+            self.stages.append({'stage': 'sent-prespawn', 'elapsed_ms': now_ms - self.start_ms})
+        if self.signon.state in (4, 5, 6) and checkpoint and checkpoint['schemaFields'] > 0:
+            for handle in self.decoder.ready_world_groups():
+                encoded, _ = encode_message(13, number(1, handle))
+                self.port.send(reliable_frame(encoded, 0), 8)
+                self.stages.append({'stage': 'sent-world-ready', 'elapsed_ms': now_ms - self.start_ms})
+        if self.signon.state == 5 and not self._spawn_sent:
+            if not checkpoint or not checkpoint['schemaFields'] or not self._prespawn_sent:
+                raise DriverError('spawn-before-parser-initialization')
+            if set(self.decoder.spawn_groups) != self.decoder.ready_spawn_groups:
+                return
+            self.signon.finish_spawn()
+            message_id, payload = self.signon.acknowledgement()
+            encoded, _ = encode_message(message_id, payload)
+            self.port.send(reliable_frame(encoded, 0), 8)
+            self._spawn_sent = True
+            self.stages.append({'stage': 'sent-spawn', 'elapsed_ms': now_ms - self.start_ms})
+        if self.signon.state == 6 and not self._full_sent:
+            if not self._spawn_sent:
+                raise DriverError('full-before-spawn-acknowledgement')
+            message_id, payload = self.signon.acknowledgement()
+            encoded, _ = encode_message(message_id, payload)
+            self.port.send(reliable_frame(encoded, 0), 8)
+            self._full_sent = True
+            self.stages.append({'stage': 'received-full', 'elapsed_ms': now_ms - self.start_ms})
+        if self.signon.state == 7:
+            self.phase, self.reason = 'blocked', 'changelevel-new-instance-required'
 
     def report(self):
         span = None if self.first_channel_ms is None else self.last_channel_ms - self.first_channel_ms
@@ -161,13 +242,17 @@ class ObserverDriver:
                 'channel_frames': self.channel_frames, 'channel_bytes': self.channel_bytes,
                 'channel_receive_span_ms': span, 'received_signon_state': self.signon.state,
                 'stages': self.stages,
-                'net_message_counts': self.decoder.counts, 'initialization_blockers': self.decoder.blockers(),
+                'parser_checkpoint': self.parser.checkpoint if self.parser else None,
+                'net_message_counts': self.decoder.counts,
+                'initialization_blockers': ([] if self._full_sent else
+                    [self.reason or 'signon-in-progress']),
                 'ordinary_viewer_handshake': 'INCONCLUSIVE', 'live_continuous_receipt': 'INCONCLUSIVE',
                 'online_success': 'INCONCLUSIVE'}
 
     def close(self):
         self._password[:] = bytes(len(self._password))
         self._challenge = None
+        self._account_id = None
         self.port.close()
 
 
@@ -191,6 +276,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--native', type=Path, required=True)
     ap.add_argument('--steam-api', type=Path)
+    ap.add_argument('--node', default='node', help='Node runtime for the existing entity parser')
     ap.add_argument('--host-version', type=int, required=True)
     ap.add_argument('--output', type=Path, required=True)
     ap.add_argument('--seconds', type=int, default=300, choices=range(1, 14401), metavar='1..14400')
@@ -215,7 +301,7 @@ def main():
         password[:] = bytes(len(password))
         raise SystemExit('configuration-boundary')
     args.output.mkdir(mode=0o700)
-    driver = native = events = samples = None
+    driver = native = events = samples = parser = None
     report, failure = {'online_success': 'INCONCLUSIVE', 'offset_seconds': args.offset}, None
     finalization = []
     def clock(): return time.monotonic_ns() // 1000000
@@ -223,10 +309,12 @@ def main():
         from sdk import NativePort, NativeStartError
         events = private_file(args.output / 'events.jsonl', 'w')
         samples = private_file(args.output / 'channel.frames', 'wb')
+        from parser_bridge import ParserBridge
+        parser = ParserBridge(args.node)
         native = NativePort(args.native, endpoint, clock(), steam_api=args.steam_api)
         del endpoint
         driver = ObserverDriver(native, host_version=args.host_version, password=password,
-            emit=lambda event: events.write(json.dumps(event) + '\n'), capture=SampleWriter(samples), now_ms=clock())
+            emit=lambda event: events.write(json.dumps(event) + '\n'), capture=SampleWriter(samples), now_ms=clock(), parser=parser)
         stop = clock() + args.seconds * 1000
         while not driver.done and clock() < stop:
             driver.step(clock())
@@ -236,7 +324,7 @@ def main():
         report.update(driver.report())
     except BaseException as error:
         # Never print exception text/tracebacks: SDK/source/password data may be present.
-        failure = str(error) if type(error) is DriverError else 'interrupted' if isinstance(error, KeyboardInterrupt) else 'operation-failed-details-omitted'
+        failure = str(error) if isinstance(error, (DriverError, ProbeError)) else 'interrupted' if isinstance(error, KeyboardInterrupt) else 'operation-failed-details-omitted'
         if type(error).__name__ == 'NativeStartError':
             failure = 'native-start-failed'
             report['native_boot_code'], report['steam_init_result'] = error.boot_code, error.init_result
@@ -246,6 +334,7 @@ def main():
     finally:
         password[:] = bytes(len(password))
         for stage, action in [('close-session', driver.close if driver else native.close if native else None),
+                              ('close-parser', parser.close if parser else None),
                               ('close-events', events.close if events else None),
                               ('close-samples', samples.close if samples else None)]:
             if action:

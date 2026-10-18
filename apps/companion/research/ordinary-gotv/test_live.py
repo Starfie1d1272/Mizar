@@ -69,11 +69,26 @@ class LiveTest(unittest.TestCase):
         self.assertEqual(scalar(full_tables, 1, 5), bytes(4))
         self.assertEqual(scalar(full_tables, 2), 7)
         self.assertEqual(scalar(full_tables, 5), 123)
+        # The event-only world keeps parent identities and waits for complete
+        # manifests; it never executes a resource path or loads a save game.
+        child = blob(1, b'child') + number(4, 2) + number(18, 1)
+        d.consume(8, child)
+        self.assertEqual(d.ready_world_groups(), [])
+        d.consume(8, blob(1, b'de_test') + number(4, 1) + number(11, 1))
+        self.assertEqual(d.ready_world_groups(), [])
+        d.consume(9, number(1, 1) + number(3, 0))
+        self.assertEqual(d.ready_world_groups(), [1, 2])
+        self.assertEqual(d.ready_world_groups(), [])
+        d.consume(12, number(1, 2))
+        self.assertNotIn(2, d.ready_spawn_groups)
+        d.consume(8, blob(1, b'saved') + number(4, 3) + number(9, 1))
+        with self.assertRaisesRegex(ValueError, 'savegame-world'):
+            d.ready_world_groups()
 
     def test_serializer_references_packed_and_unpacked(self):
         d = LiveDecoder(lambda _: None)
         for indices in (number(3, 0), blob(3, b'\0')):
-            data = blob(1, number(1, 0) + number(2, 0) + indices) + blob(2, b'Test') + blob(3, b'')
+            data = blob(1, number(1, 0) + number(2, 0) + indices) + blob(2, b'Test') + blob(2, b'') + blob(3, b'')
             d.consume(41, data)
             self.assertEqual(d.serializers, {('Test', 0)})
         with self.assertRaisesRegex(ValueError, 'serializer-field-boundary'):

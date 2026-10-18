@@ -18,7 +18,7 @@ class Port:
     def receive(self): return self.incoming.pop(0) if self.incoming else None
     def send(self, data, flags): self.sent.append((data, flags))
     def request_ticket(self): self.ticket_requested = True; self.state = 4
-    def with_auth(self, consume): return consume(bytes(8) + b'SYNTHETIC-NOT-A-TICKET')
+    def with_auth(self, consume): return consume(struct.pack('<Q', 76561198000000123) + b'SYNTHETIC-NOT-A-TICKET')
     def close(self): self.closed += 1; self.state = 6
 
 
@@ -42,7 +42,7 @@ class DriverTest(unittest.TestCase):
         self.assertEqual(len(data) - pos, size)
         f = fields(data[pos:])
         self.assertEqual(len(scalar(f, 6, 2)), 96)
-        self.assertEqual(scalar(f, 8, 2), bytes(8) + b'SYNTHETIC-NOT-A-TICKET')
+        self.assertEqual(scalar(f, 8, 2), struct.pack('<Q', 76561198000000123) + b'SYNTHETIC-NOT-A-TICKET')
         self.assertEqual(password, bytes(len(password)))
         self.assertEqual(sample.getvalue(), b'MZRCS2\x01\0')  # No handshake/credentials captured.
         port.incoming.append((b'\xff\xff\xff\xffB\0' + b'0' * 10, False))
@@ -58,7 +58,7 @@ class DriverTest(unittest.TestCase):
                          [(7, bytes.fromhex('08 02 10 ff ff ff ff 0f 18 00'))])
         return driver, port, output, sample
 
-    def test_actual_driver_chain_stops_at_new_and_capture_replays(self):
+    def test_driver_requests_full_schema_at_new_and_capture_replays(self):
         driver, port, output, sample = self.ready()
         info = number(1, 14191) + number(2, 7) + b'\x6d' + struct.pack('<f', 1 / 64) + blob(15, b'de_test')
         descriptor = blob(1, number(1, 17) + blob(2, b'weapon_fire') + blob(3, number(1, 1) + blob(2, b'weapon')))
@@ -66,8 +66,18 @@ class DriverTest(unittest.TestCase):
         body, _ = join_messages([encode_message(n, b) for n, b in [(40, info), (205, descriptor), (207, event), (7, number(1, 3) + number(2, 7))]])
         port.incoming.append((reliable_frame(body, 0), True))
         driver.step(20)
-        self.assertEqual((driver.phase, driver.reason), ('blocked', 'client-initialization-required'))
-        self.assertEqual(len(port.sent), 3)  # q, connect, CONNECTED; no unimplemented NEW ACK.
+        self.assertEqual((driver.phase, driver.reason), ('channel', None))
+        self.assertEqual(len(port.sent), 5)  # q, connect, CONNECTED, ClientInfo, NEW.
+        info_messages, _ = messages(decode_frame(port.sent[-2][0], gns_reliable=True).body)
+        self.assertEqual(info_messages[0].message_id, 20)
+        info_fields = fields(info_messages[0].body)
+        self.assertEqual(scalar(info_fields, 1, 5), bytes(4))
+        self.assertEqual(scalar(info_fields, 2), 7)
+        self.assertEqual(scalar(info_fields, 3), 0)
+        self.assertEqual(scalar(info_fields, 5), 76561198000000123 & 0xffffffff)
+        ack_messages, _ = messages(decode_frame(port.sent[-1][0], gns_reliable=True).body)
+        self.assertEqual((ack_messages[0].message_id, ack_messages[0].body),
+                         (7, bytes.fromhex('08 03 10 07 18 00')))
         self.assertEqual(output[0]['weapon'], 'weapon_awp')
         self.assertEqual(driver.report()['online_success'], 'INCONCLUSIVE')
         self.assertNotIn('SYNTHETIC', str(driver.report()))
@@ -76,6 +86,13 @@ class DriverTest(unittest.TestCase):
         report = replay(sample, replayed.append)
         self.assertEqual(output, replayed)
         self.assertEqual(report['frames'], 1)
+        # Further traffic must not repeat NEW. PRESPAWN stays explicit until
+        # schema/entity initialization is wired to the existing parser.
+        body, _ = join_messages([encode_message(7, number(1, 4) + number(2, 7))])
+        port.incoming.append((reliable_frame(body, 0), True))
+        driver.step(21)
+        self.assertEqual((driver.phase, driver.reason), ('blocked', 'prespawn-initialization-required'))
+        self.assertEqual(len(port.sent), 5)
         driver.close()
         self.assertEqual(port.closed, 1)
 

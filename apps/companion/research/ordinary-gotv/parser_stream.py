@@ -23,6 +23,7 @@ class ParserStream:
         self.tick = -1
         self.have_serializers = False
         self.have_classes = False
+        self.sequence = 0
         self.write(MAGIC)
 
     def _observe(self, message_id, body):
@@ -95,3 +96,11 @@ class ParserStream:
                 self._observe(m.message_id, m.body)
                 pending.append(encode_message(m.message_id, m.body))
         flush()
+
+    def checkpoint(self):
+        """Local-only marker acknowledged after prior frames are parsed in order."""
+        self.sequence += 1
+        if self.sequence > 0x7fffffff:
+            raise ProbeError('parser-checkpoint-limit')
+        self.write(frame(10, self.tick, b'\x08' + encode_varint(self.sequence)))
+        return self.sequence
