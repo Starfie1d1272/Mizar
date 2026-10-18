@@ -1,6 +1,6 @@
 {
-  "sourceCommit": "9b19497349d5b3d7aa5f7f03e03421a77aff8628",
-  "capturedAt": "2026-10-18T17:04:38.602979+00:00",
+  "sourceCommit": "01f7a46d93ccd90021739e65f628836baa247799",
+  "capturedAt": "2026-10-18T17:06:36.794062+00:00",
   "viewport": {
     "width": 2560,
     "height": 1440,
@@ -18,7 +18,7 @@
         2560,
         1440
       ],
-      "sha256": "f13fa5e2e921f714983936d95cac02ba2fdf315b87f1f4ebb0f2b7adf872d5b4"
+      "sha256": "85b58a41d2076c8ab62e496a33090a28538a9325ba136c653a80a05f5f4a3734"
     },
     {
       "file": "02-website.png",
@@ -27,7 +27,7 @@
         2560,
         1440
       ],
-      "sha256": "83c14ccf9fe503e33a40225147cf1fb19cdf58262865df24799888e864b002df"
+      "sha256": "d5468128bdf94b1d5bb5547625c5d628d9636c7efaf554e5397c2c6d6f33f9f5"
     },
     {
       "file": "03-website-browse.png",
@@ -36,7 +36,7 @@
         2560,
         1440
       ],
-      "sha256": "5a400d84bdd5143d82775862e1c0583780f5107c4b67c7c646df349c9e3eafa8"
+      "sha256": "7927041d9291c1f2bd33b9698f9c4737adfc5d329c3c11f4f4b3a6cd38a67978"
     },
     {
       "file": "04-website-cache-missing.png",
@@ -45,7 +45,7 @@
         2560,
         1440
       ],
-      "sha256": "a5188c0b539b19f0c979dfc2a9e267f78be53dc5f62511e03c0c9ebe312c0dfd"
+      "sha256": "e041024333facd1c8153b9d6ef89a687c5e8b4589609475bf69667311c07111b"
     },
     {
       "file": "05-local-edit.png",
@@ -54,7 +54,7 @@
         2560,
         1440
       ],
-      "sha256": "2c2dc2a5c77ec945c0d9cb5a5254140a79613bdbaedeebcae1699d69d5c0fbe3"
+      "sha256": "c42251906eb6c43570534950a5b2d5d19f5c6f60c65dc80cf288fbf3ec89d5f9"
     },
     {
       "file": "06-local-create.png",
@@ -63,7 +63,8 @@
         2560,
         1440
       ],
-      "sha256": "edf65ee835bcbc6e8bf799f66f926f811619ada57ad0f2f317b9beb3d52081d3"
+      "sha256": "5ef5bb1257e5b350ccbbc8ef6c472afd938d8153e81e990d0d496ee8bc673126"
     }
-  ]
+  ],
+  "sidebarSpacing": "共用左栏操作区底部留白16逻辑像素（2K下约21物理像素）；右侧载入栏保持原位置。"
 }
