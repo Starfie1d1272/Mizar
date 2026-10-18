@@ -291,3 +291,24 @@ const isReason = (value: unknown): value is string =>
       'request_aborted',
     ].includes(value) ||
     /^http_[1-5]\d{2}$/.test(value));
+
+/** One fault predicate for retained business history and diagnostic search indexes. */
+export function businessEvidenceHasFailure(value: unknown): boolean {
+  const evidence = object(value);
+  return (
+    evidence.status === 'rejected' ||
+    evidence.identity === 'mismatch' ||
+    evidence.binding === 'needs_operator' ||
+    (Array.isArray(evidence.blockers) && evidence.blockers.length > 0) ||
+    (typeof evidence.reason === 'string' &&
+      ![
+        'queued',
+        'restored',
+        'receiver_accepted',
+        'claim_accepted',
+        'contiguous',
+        'baseline',
+        'request_started',
+      ].includes(evidence.reason))
+  );
+}

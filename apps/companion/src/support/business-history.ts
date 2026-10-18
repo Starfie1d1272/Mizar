@@ -4,6 +4,7 @@ import { open, mkdir, lstat, unlink, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   businessEvidence,
+  businessEvidenceHasFailure,
   businessId,
   businessVersion,
   utc,
@@ -76,21 +77,7 @@ const empty = (): Archive => ({
   coalescedEvents: 0,
   droppedPendingEvents: 0,
 });
-const failure = (e: Entry) =>
-  e.evidence.status === 'rejected' ||
-  e.evidence.identity === 'mismatch' ||
-  e.evidence.binding === 'needs_operator' ||
-  e.evidence.blockers.length > 0 ||
-  (e.evidence.reason !== null &&
-    ![
-      'queued',
-      'restored',
-      'receiver_accepted',
-      'claim_accepted',
-      'contiguous',
-      'baseline',
-      'request_started',
-    ].includes(e.evidence.reason));
+const failure = (e: Entry) => businessEvidenceHasFailure(e.evidence);
 
 /** Fixed path, bounded read, no traversal or configuration/remote payload copying. */
 function load(directory: string): {

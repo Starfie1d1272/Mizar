@@ -1,5 +1,5 @@
 import { flushPerformanceJournal } from './performance-journal';
-import { flushControlSnapshots } from './control-journal';
+import { flushControlSnapshots, sendControlEvidence } from './control-journal';
 import { useState } from 'react';
 import { Field, Button, Panel, StatusBanner } from '../ui';
 import { desktopInvoke } from '../workspace/client';
@@ -108,12 +108,19 @@ export function SupportExport() {
     setResult(null);
     try {
       const desktop = Boolean(window.__TAURI_INTERNALS__);
-      const [gsi, cs2] = desktop
+      const [gsi, cs2, consoleStatus] = desktop
         ? await Promise.all([
             boundedStatus(desktopInvoke('gsi_status')),
             boundedStatus(desktopInvoke('cs2_host_status')),
+            boundedStatus(desktopInvoke('cs2_console_status')),
           ])
-        : [null, null];
+        : [null, null, null];
+      if (consoleStatus)
+        await sendControlEvidence(
+          'cs2_console_export_snapshot',
+          consoleStatus.collectionStatus === 'available' ? 'result' : 'failure',
+          { ...consoleStatus, deadlineMs: 8000 },
+        );
       await flushControlSnapshots();
       await flushPerformanceJournal();
       const response = await fetch('/debug/support-bundle', {

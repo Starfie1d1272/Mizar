@@ -1,0 +1,205 @@
+{
+  "scope": "Public synthetic Rust cs2_console::tests::exports_public_fixture_to_the_node_pipeline output and actual buildApp runtime snapshot from a 16-player synthetic replay; identifiers/times normalized. Frequency scaling is a model, not a field capture. Native producer and reader are qualified independently on real Windows by diagnostics:console:qualify. Runtime context and native health use the actual spool-enabled public probe closing snapshots; scaled counter values model serialization volume, not measured per-interval behavior.",
+  "consoleEntry": {
+    "appVersion": "0.0.0",
+    "arch": "x86_64",
+    "artifactSha256": null,
+    "detail": "{\"binding\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"rawFileIncluded\":false,\"records\":[{\"capturedAt\":\"2026-10-17T00:00:00.001Z\",\"channel\":\"RenderSystem\",\"failureKind\":null,\"part\":1,\"parts\":1,\"result\":\"observed\",\"sourceAfterUtc\":\"2026-10-17T00:00:00.000Z\",\"sourceBytes\":49,\"sourceOffset\":43,\"sourceRecordId\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"text\":\"[RenderSystem] Created device for public fixture\"},{\"capturedAt\":\"2026-10-17T00:00:00.001Z\",\"channel\":\"RenderSystem\",\"failureKind\":\"graphics_device_lost\",\"part\":1,\"parts\":1,\"result\":\"failure\",\"sourceAfterUtc\":\"2026-10-17T00:00:00.000Z\",\"sourceBytes\":118,\"sourceOffset\":92,\"sourceRecordId\":\"2222222222222222222222222222222222222222222222222222222222222222\",\"text\":\"[RenderSystem] Error: device lost DXGI_ERROR_DEVICE_REMOVED token=[redacted] cause=original-device-removal\"}],\"source\":\"owned-cs2-technical-console\"}",
+    "gitSha": null,
+    "operationId": null,
+    "os": "linux",
+    "pid": 129950,
+    "result": "observed",
+    "schemaVersion": 1,
+    "stage": "cs2_console_records",
+    "startupSessionId": "public-capacity-native",
+    "taskId": null,
+    "time": "2026-10-17T00:00:00.001Z",
+    "trigger": "system"
+  },
+  "runtime": {
+    "reason": "interval",
+    "windowMs": 15011.444341,
+    "schedulerDelayMs": 11.44434100000035,
+    "input": {
+      "raw": {
+        "sequence": 39228,
+        "receivedAt": "2026-10-17T18:20:06.966Z",
+        "receivedMonotonicMs": 1961400
+      },
+      "normalized": {
+        "sequence": 39228,
+        "receivedAt": "2026-10-17T18:20:06.966Z",
+        "receivedMonotonicMs": 1961400
+      },
+      "ageMs": 50
+    },
+    "processing": {
+      "count": 39229,
+      "totalMs": 3100.398184000098,
+      "maxMs": 14.74588000000017,
+      "meanMs": 0.0790333218792245,
+      "scope": "synchronous observation acceptance, runtime mutation and projection/output scheduling; excludes upstream adapter and asynchronous delivery"
+    },
+    "slowProcessing": {
+      "count": 0,
+      "omittedSamples": 0,
+      "samples": []
+    },
+    "runtime": {
+      "freshness": "fresh",
+      "lastDisposition": {
+        "kind": "accepted",
+        "reason": "contiguous"
+      },
+      "recentTransitions": [],
+      "recentRuntimeDiagnosticCount": 0,
+      "recentRuntimeDiagnostics": [],
+      "gsiDiagnostics": {
+        "count": 0,
+        "suppressedCount": 0,
+        "recent": []
+      }
+    },
+    "recorder": {
+      "state": "degraded",
+      "pendingFrames": 0,
+      "pendingBytes": 0,
+      "maxPendingFrames": 128,
+      "maxPendingBytes": 2097152,
+      "frameCount": 0,
+      "droppedFrames": 39229,
+      "incomplete": true,
+      "lastErrorCode": "recorder_not_configured"
+    },
+    "delivery": [],
+    "channels": [
+      {
+        "channel": "program",
+        "channelSeq": 39231,
+        "cursor": {
+          "producerInstanceId": "6fc65c42-7029-4757-871a-4b431fad27eb",
+          "liveSessionId": "56585efc-c656-4b48-ba4b-21f01844b079",
+          "runtimeSeq": 39229,
+          "programSourceGeneration": 0,
+          "programReceiveSequence": 39228,
+          "mapEpoch": 1
+        },
+        "subscribers": []
+      },
+      {
+        "channel": "radar",
+        "channelSeq": 39231,
+        "cursor": {
+          "producerInstanceId": "6fc65c42-7029-4757-871a-4b431fad27eb",
+          "liveSessionId": "56585efc-c656-4b48-ba4b-21f01844b079",
+          "runtimeSeq": 39229,
+          "programSourceGeneration": 0,
+          "programReceiveSequence": 39228,
+          "mapEpoch": 1
+        },
+        "subscribers": []
+      },
+      {
+        "channel": "operator",
+        "channelSeq": 39231,
+        "cursor": {
+          "producerInstanceId": "6fc65c42-7029-4757-871a-4b431fad27eb",
+          "liveSessionId": "56585efc-c656-4b48-ba4b-21f01844b079",
+          "runtimeSeq": 39229,
+          "programSourceGeneration": 0,
+          "programReceiveSequence": 39228,
+          "mapEpoch": 1
+        },
+        "subscribers": []
+      },
+      {
+        "channel": "assist",
+        "channelSeq": 39231,
+        "cursor": {
+          "producerInstanceId": "6fc65c42-7029-4757-871a-4b431fad27eb",
+          "liveSessionId": "56585efc-c656-4b48-ba4b-21f01844b079",
+          "runtimeSeq": 39229,
+          "programSourceGeneration": 0,
+          "programReceiveSequence": 39228,
+          "mapEpoch": 1
+        },
+        "subscribers": []
+      }
+    ],
+    "anomalyContext": {
+      "ringSamples": 121,
+      "ringBytes": 432161,
+      "pendingBytes": 0,
+      "pendingRecords": 0,
+      "spool": {
+        "files": 0,
+        "pendingFiles": 0,
+        "exportPinnedFiles": 0,
+        "unreadableFiles": 0,
+        "sourceErrors": [],
+        "bytes": 0,
+        "expandedBytes": 0,
+        "limits": {
+          "expandedPacketBytes": 1048576,
+          "packetFileBytes": 1572864,
+          "diskBytes": 67108864,
+          "expandedDiskBytes": 268435456,
+          "files": 4096
+        }
+      },
+      "writeFailures": 0,
+      "writeError": null,
+      "coverage": {
+        "oversizedSamples": 0,
+        "ringBudgetEvictions": 0,
+        "omittedRecords": 0,
+        "omittedContextSamples": 0
+      },
+      "active": null,
+      "limits": {
+        "sampleMs": 250,
+        "preMs": 30000,
+        "postMs": 10000,
+        "maximumPostMs": 30000,
+        "ringBytes": 1048576,
+        "sampleBytes": 12288,
+        "chunkBytes": 131072,
+        "pendingBytes": 2097152
+      }
+    },
+    "nativeSource": {
+      "copied": 9720,
+      "invalidRecords": 0,
+      "gaps": 0,
+      "failures": 0,
+      "error": null,
+      "backlogBytes": 0,
+      "trackedFiles": 1,
+      "cursorSemantics": "at-least-once; stable sourceRecordId permits replay deduplication",
+      "limits": {
+        "pollMs": 1000,
+        "readBytes": 262144,
+        "lineBytes": 131072,
+        "groupBytes": 196608,
+        "sourceBytes": 26214400,
+        "cursorBytes": 8192
+      }
+    },
+    "cstv": {
+      "program": {
+        "role": "program",
+        "state": "disabled",
+        "generation": 0,
+        "reconnectAttempt": 0
+      },
+      "lookahead": {
+        "role": "lookahead",
+        "state": "disabled",
+        "generation": 0,
+        "reconnectAttempt": 0
+      }
+    },
+    "scope": "producer publish and local send counters do not prove pixels rendered or OBS capture latency"
+  }
+}

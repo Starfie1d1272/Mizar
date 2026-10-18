@@ -1,3 +1,16 @@
+import {
+  DIAGNOSTIC_PERMIT_BYTES,
+  DIAGNOSTIC_AUTOMATIC_LIFETIME_MS,
+  diagnosticInstallationId,
+  diagnosticInstallationCreatedAt,
+  diagnosticGzipCreatedAt,
+  diagnosticAutomaticTimeReason,
+  stampDiagnosticGzip,
+  diagnosticPermit,
+  sealDiagnosticGzip,
+} from '@mizar/protocol/diagnostics-upload';
+import { diagnosticConsoleEvidence, diagnosticEnvelope, diagnosticSourceUtc } from './envelope.js';
+import { DIAGNOSTIC_CONSENT_REVISION } from '@mizar/protocol/version';
 import { z } from 'zod';
 import { constants } from 'node:fs';
 import { lstat, mkdir, open, readdir, rename, unlink } from 'node:fs/promises';
@@ -12,17 +25,19 @@ import { diagnosticValue, SESSION_LIMITS, type SessionJournal } from './session-
 const compress = promisify(gzip);
 const decompress = promisify(gunzip);
 export const DELIVERY_LIMITS = {
-  expandedBytes: 512 * 1024,
-  compressedBytes: 128 * 1024,
-  queueBytes: 32 * 1024 * 1024,
-  batches: 256,
-  manifestBytes: 256 * 1024,
-  pendingBytes: 2 * 1024 * 1024,
-  events: 512,
+  expandedBytes: 4 * 1024 * 1024,
+  compressedBytes: 512 * 1024,
+  queueBytes: 64 * 1024 * 1024,
+  batches: 2048,
+  manifestBytes: 2 * 1024 * 1024,
+  pendingBytes: 8 * 1024 * 1024,
+  events: 4096,
   sessions: 128,
   tombstones: 8,
+  collectMs: 20 * 60_000,
+  pollMs: 5000,
 };
-const CONSENT = 'technical-diagnostics-v1';
+const CONSENT = DIAGNOSTIC_CONSENT_REVISION;
 interface Credentials {
   installationId: string;
   enrollmentSecret: string;
@@ -33,15 +48,39 @@ interface Credentials {
 interface Batch {
   id: string;
   bytes: number;
-  index: { schema: string; events: number; expandedBytes: number; stages: string[] };
+  serverExpired?: boolean;
+  unavailableReason?: string;
+  sealed?: boolean;
+  index: {
+    schema: string;
+    events: number;
+    expandedBytes: number;
+    stages: string[];
+    sessionId?: string;
+    from?: string | null;
+    to?: string | null;
+    version?: string | null;
+    failures?: number;
+    failureKinds?: string[];
+    sourceTimeUnknownRecords?: number;
+  };
+}
+export interface RetainedDiagnosticBatch {
+  id: string | null;
+  sourceBytes: number;
+  automaticDelivery?: { blocked: boolean; reason?: string };
+  gzip?: Buffer;
+  error?: unknown;
 }
 interface State {
   version: 1;
+  consentPolicy: 1 | 2 | 3;
   consent: boolean;
   paused: boolean;
   consentAt: string | null;
   credentials: Credentials | null;
   withdrawals: Credentials[];
+  retiredIdentities: Credentials[];
   sessions: Record<string, { from: number; queued: number }>;
   queue: Batch[];
   omitted: number;
@@ -68,11 +107,13 @@ const credentialsSchema = z
 const stateSchema = z
   .object({
     version: z.literal(1),
+    consentPolicy: z.union([z.literal(1), z.literal(2), z.literal(3)]).default(1),
     consent: z.boolean(),
     paused: z.boolean().default(false),
     consentAt: z.iso.datetime().nullable(),
     credentials: credentialsSchema.nullable(),
     withdrawals: z.array(credentialsSchema).max(DELIVERY_LIMITS.tombstones),
+    retiredIdentities: z.array(credentialsSchema).max(DELIVERY_LIMITS.tombstones).default([]),
     sessions: z.record(
       identifier,
       z.object({ from: counter, queued: counter }).refine((v) => v.queued >= v.from),
@@ -82,11 +123,38 @@ const stateSchema = z
         z.object({
           id: z.string().regex(/^[a-f0-9]{64}$/),
           bytes: z.number().int().min(1).max(DELIVERY_LIMITS.compressedBytes),
+          serverExpired: z.boolean().optional(),
+          unavailableReason: z
+            .enum([
+              'installation_lease_closed',
+              'consent_policy_changed',
+              'server_retention_expired',
+              'batch_retention_expired',
+              'automatic_window_expired',
+              'payload_clock_future',
+              'payload_creation_time_missing',
+            ])
+            .optional(),
+          sealed: z.boolean().optional(),
           index: z.object({
             schema: z.literal('mizar-technical-diagnostics/1'),
             events: z.number().int().min(1).max(DELIVERY_LIMITS.events),
             expandedBytes: z.number().int().min(1).max(DELIVERY_LIMITS.expandedBytes),
             stages: z.array(z.string().regex(/^[a-z][a-z0-9_]{0,63}$/)).max(32),
+            sessionId: identifier.optional(),
+            from: z.iso.datetime().nullable().optional(),
+            to: z.iso.datetime().nullable().optional(),
+            version: z
+              .string()
+              .regex(/^[a-zA-Z0-9.+_-]{1,64}$/)
+              .nullable()
+              .optional(),
+            failures: counter.optional(),
+            failureKinds: z
+              .array(z.string().regex(/^[a-z_]{1,32}$/))
+              .max(16)
+              .optional(),
+            sourceTimeUnknownRecords: counter.optional(),
           }),
         }),
       )
@@ -101,7 +169,12 @@ const stateSchema = z
   .refine(
     (v) =>
       Object.keys(v.sessions).length <= DELIVERY_LIMITS.sessions &&
-      v.queue.reduce((n, b) => n + b.bytes, 0) <= DELIVERY_LIMITS.queueBytes &&
+      v.withdrawals.length +
+        v.retiredIdentities.length +
+        (v.credentials && (v.credentials.enrollmentAttempted || v.credentials.token) ? 1 : 0) <=
+        DELIVERY_LIMITS.tombstones &&
+      v.queue.reduce((n, b) => n + b.bytes, 0) <=
+        DELIVERY_LIMITS.queueBytes + DELIVERY_LIMITS.batches * DIAGNOSTIC_PERMIT_BYTES &&
       (!v.consent || v.credentials !== null),
   );
 async function responseJson(response: Response, signal: AbortSignal): Promise<unknown> {
@@ -137,11 +210,13 @@ async function responseJson(response: Response, signal: AbortSignal): Promise<un
 }
 const initial = (): State => ({
   version: 1,
+  consentPolicy: 3,
   consent: false,
   paused: false,
   consentAt: null,
   credentials: null,
   withdrawals: [],
+  retiredIdentities: [],
   sessions: {},
   queue: [],
   omitted: 0,
@@ -175,22 +250,88 @@ function cloudValue(value: unknown, key = ''): unknown {
     return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, cloudValue(v, k)]));
   return value;
 }
+function cloudBrowserPerformance(
+  value: unknown,
+  observedAt: unknown,
+  consentAt: string | null,
+): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const evidence = { ...(value as Record<string, unknown>) };
+  const anomalies = Array.isArray(evidence.anomalies) ? evidence.anomalies : [];
+  const kept = anomalies.filter((item) => {
+    const time = diagnosticSourceUtc((item as { time?: unknown } | null)?.time);
+    return time && consentAt && time >= consentAt;
+  });
+  const source = diagnosticSourceUtc(observedAt);
+  const span = evidence.windowMs;
+  const crossing =
+    !source ||
+    !consentAt ||
+    typeof span !== 'number' ||
+    !Number.isFinite(span) ||
+    span < 0 ||
+    Date.parse(source) - span < Date.parse(consentAt) ||
+    kept.length !== anomalies.length;
+  evidence.anomalies = kept;
+  if (crossing) {
+    for (const field of ['frames', 'longTasks', 'channels']) delete evidence[field];
+    evidence.anomalyCount = kept.length;
+    evidence.omittedAnomalySamples = null;
+  }
+  evidence.cloudCoverage = {
+    excludedPreConsentOrUnknownTimeAnomalies: anomalies.length - kept.length,
+    aggregateWindowExcluded: crossing,
+    scope: crossing
+      ? 'known post-consent anomaly records and current surfaces only; original aggregate/omitted sample times unavailable, local evidence retained'
+      : 'source window and anomaly UTC after consent',
+  };
+  return evidence;
+}
 function cloudRecord(line: string, consentAt: string | null): unknown {
   const value = JSON.parse(line) as {
     stage?: string;
     evidence?: {
       samples?: { time?: string }[];
-      entries?: { entry?: { time?: string; stage?: string } }[];
+      entries?: { entry?: { time?: string; stage?: string; detail?: unknown } }[];
       sourceRecord?: { time?: string };
       [key: string]: unknown;
     };
   };
   if (value.stage?.startsWith('performance_anomaly_') && value.evidence?.sourceRecord) {
-    const sourceTime = Date.parse(value.evidence.sourceRecord.time ?? '');
-    const since = Date.parse(consentAt ?? '');
-    if (!Number.isFinite(sourceTime) || !Number.isFinite(since) || sourceTime < since) {
+    const sourceTime = diagnosticSourceUtc(value.evidence.sourceRecord.time);
+    if (!sourceTime || !consentAt || sourceTime < consentAt) {
       value.stage = 'diagnostic_source_excluded';
       value.evidence = { reason: 'recovered_source_before_consent_or_unknown_time' };
+    }
+  }
+  if (value.stage === 'browser_control' && value.evidence?.operation === 'browser_performance')
+    value.evidence.evidence = cloudBrowserPerformance(
+      value.evidence.evidence,
+      value.evidence.time,
+      consentAt,
+    );
+  if (['browser_control', 'business_evidence', 'update_stage'].includes(value.stage ?? '')) {
+    const source = diagnosticEnvelope(value).times;
+    if (!consentAt || !source.length || source.some((time) => time < consentAt)) {
+      value.stage = 'diagnostic_source_excluded';
+      value.evidence = { reason: 'deferred_source_before_consent_or_unknown_time' };
+    }
+  }
+  if (value.stage?.startsWith('performance_anomaly_') && value.evidence?.correlation) {
+    const correlation = value.evidence.correlation as Record<string, unknown>;
+    if (correlation.operation === 'browser_performance')
+      correlation.originalEvidence = cloudBrowserPerformance(
+        correlation.originalEvidence,
+        correlation.observedAt,
+        consentAt,
+      );
+    if (typeof correlation.operation === 'string' && correlation.operation.startsWith('browser_')) {
+      const source = diagnosticSourceUtc(correlation.observedAt);
+      if (!source || !consentAt || source < consentAt)
+        value.evidence.correlation = {
+          sourceEvidenceExcluded: true,
+          reason: 'browser_source_before_consent_or_unknown_time',
+        };
     }
   }
   if (value.stage === 'performance_anomaly_samples' && Array.isArray(value.evidence?.samples)) {
@@ -198,7 +339,8 @@ function cloudRecord(line: string, consentAt: string | null): unknown {
     const since = consentAt ? Date.parse(consentAt) : NaN;
     value.evidence.samples = original.filter((sample) => {
       if (!sample || typeof sample !== 'object') return false;
-      const time = typeof sample.time === 'string' ? Date.parse(sample.time) : NaN;
+      const source = diagnosticSourceUtc(sample.time);
+      const time = source ? Date.parse(source) : NaN;
       return Number.isFinite(since) && Number.isFinite(time) && time >= since;
     });
     value.evidence.cloudCoverage = {
@@ -210,10 +352,49 @@ function cloudRecord(line: string, consentAt: string | null): unknown {
   if (value.stage === 'native_host_records' && Array.isArray(value.evidence?.entries)) {
     const original = value.evidence.entries;
     const since = consentAt ? Date.parse(consentAt) : NaN;
-    value.evidence.entries = original.filter((record) => {
+    const filteredConsole = original.map((record) => {
+      const entry = record?.entry;
+      if (entry?.stage !== 'cs2_console_records') return record;
+      const detail = diagnosticConsoleEvidence(entry);
+      const records = Array.isArray(detail?.records) ? detail.records : [];
+      const kept = records.filter((value: unknown) => {
+        if (!value || typeof value !== 'object') return false;
+        const item = value as Record<string, unknown>;
+        const after = diagnosticSourceUtc(item.sourceAfterUtc);
+        const captured = diagnosticSourceUtc(item.capturedAt);
+        const host = diagnosticSourceUtc(entry.time);
+        return (
+          Number.isFinite(since) &&
+          after !== null &&
+          captured !== null &&
+          host !== null &&
+          Date.parse(after) >= since &&
+          after <= captured &&
+          captured <= host
+        );
+      });
+      return {
+        ...record,
+        entry: {
+          ...entry,
+          detail: JSON.stringify({
+            ...(detail ?? { source: 'owned-cs2-technical-console', rawFileIncluded: false }),
+            records: kept,
+            cloudCoverage: {
+              excludedPreConsentUnknownOrInvalidSourceRecords: records.length - kept.length,
+              sourceEnvelopeValid: detail !== null,
+              scope:
+                'source write interval, never Host poll time, controls console consent; full local source retained',
+            },
+          }),
+        },
+      };
+    });
+    value.evidence.entries = filteredConsole.filter((record) => {
       const entry = record?.entry;
       if (!entry || typeof entry !== 'object' || typeof entry.time !== 'string') return false;
-      const time = Date.parse(entry.time);
+      const source = diagnosticSourceUtc(entry.time);
+      const time = source ? Date.parse(source) : NaN;
       return (
         Number.isFinite(since) &&
         Number.isFinite(time) &&
@@ -265,6 +446,40 @@ export async function decodeDiagnosticBatch(bytes: Buffer) {
     throw new Error('invalid_diagnostics_batch');
   return value;
 }
+function transportReceiptError(operation: string, status: number, receipt: unknown) {
+  const code =
+    receipt && typeof receipt === 'object' ? (receipt as { error?: unknown }).error : undefined;
+  const reason =
+    typeof code === 'string' && /^[a-z][a-z0-9_]{0,95}$/.test(code) ? code : 'receipt_invalid';
+  return Object.assign(
+    new Error(`${operation}_unconfirmed_${status}`, { cause: new Error(reason) }),
+    { status, reason },
+  );
+}
+function batchMetadata(sessionId: string, events: unknown[]) {
+  const records = events as {
+    time?: unknown;
+    appVersion?: unknown;
+    stage?: string;
+    evidence?: { sourceRecord?: { time?: unknown } };
+  }[];
+  const envelopes = records.map(diagnosticEnvelope);
+  const times = envelopes.flatMap((value) => value.times).sort();
+  const version = records.find(
+    (value) =>
+      typeof value.appVersion === 'string' && /^[a-zA-Z0-9.+_-]{1,64}$/.test(value.appVersion),
+  )?.appVersion;
+  return {
+    sessionId,
+    from: times[0] ?? null,
+    to: times.at(-1) ?? null,
+    version: typeof version === 'string' ? version : null,
+    failures: envelopes.filter((value) => value.failureKinds.length > 0).length,
+    failureKinds: [...new Set(envelopes.flatMap((value) => value.failureKinds))].sort(),
+    sourceTimeUnknownRecords: envelopes.filter((value) => value.sourceTimeUnknown).length,
+  };
+}
+
 /** One local outbox. Queue references and source cursors commit together, before upload. */
 export class DiagnosticDelivery {
   private state = initial();
@@ -288,6 +503,9 @@ export class DiagnosticDelivery {
   private readonly fetcher: typeof fetch;
   private readonly now: () => number;
   private readonly queueDirectory: string;
+  private nextCollectionAt: number;
+  private collectionScheduled = false;
+  private sourceRevision = 0;
   constructor(
     private readonly directory: string,
     private readonly journal: SessionJournal,
@@ -301,6 +519,7 @@ export class DiagnosticDelivery {
     this.endpoint = diagnosticsEndpoint(options.endpoint, options.allowTestEndpoint);
     this.fetcher = options.fetch ?? fetch;
     this.now = options.now ?? Date.now;
+    this.nextCollectionAt = this.now() + DELIVERY_LIMITS.collectMs;
     this.queueDirectory = join(directory, 'diagnostic-outbox');
   }
   async initialize(startTimer = true) {
@@ -322,13 +541,35 @@ export class DiagnosticDelivery {
     }
     const entries = await readdir(this.queueDirectory, { withFileTypes: true });
     for (const entry of entries)
-      if (/^consent-revoked-[a-f0-9-]{36}\.flag$/.test(entry.name)) {
+      if (/^consent-(?:policy-)?revoked-[a-f0-9-]{36}\.flag$/.test(entry.name)) {
         await secureRead(this.queueDirectory, entry.name, 16);
         if (this.fences.size >= 64) throw new Error('revocation_marker_budget');
         this.fences.set(entry.name, Promise.resolve());
       }
+    // Finite automatic delivery and rotating identities require the current
+    // explicit disclosure. Earlier policies never silently migrate consent.
+    if (
+      this.state.consent &&
+      (this.state.consentPolicy !== 3 ||
+        diagnosticInstallationCreatedAt(this.state.credentials?.installationId ?? '') === null)
+    ) {
+      const name = `consent-policy-revoked-${randomUUID()}.flag`;
+      await this.createFence(name);
+      this.fences.set(name, Promise.resolve());
+      this.error = 'consent_policy_changed';
+    }
     if (this.fences.size) {
       this.revocationFenced = true;
+      const preserveCopies = ![...this.fences.keys()].some((name) =>
+        name.startsWith('consent-revoked-'),
+      );
+      if (preserveCopies) this.error = 'consent_policy_changed';
+      for (const retired of this.state.retiredIdentities)
+        if (
+          !this.state.withdrawals.some((value) => value.installationId === retired.installationId)
+        )
+          this.state.withdrawals.push(retired);
+      this.state.retiredIdentities = [];
       if (
         this.state.credentials &&
         (this.state.credentials.enrollmentAttempted || this.state.credentials.token) &&
@@ -340,7 +581,15 @@ export class DiagnosticDelivery {
       this.state.consent = false;
       this.state.credentials = null;
       this.state.sessions = {};
-      this.state.queue = [];
+      if (preserveCopies) {
+        for (const batch of this.state.queue) {
+          if (!batch.serverExpired) this.omitted('consent_policy_changed', batch.index.events);
+          batch.serverExpired = true;
+          batch.unavailableReason = 'consent_policy_changed';
+        }
+      } else this.state.queue = [];
+      this.state.failures = 0;
+      this.state.nextAttemptAt = 0;
       await this.save();
     }
     this.requestedConsent = this.state.consent;
@@ -353,7 +602,10 @@ export class DiagnosticDelivery {
         !this.state.queue.some((v) => `${v.id}.gz` === entry.name)
       )
         await unlink(join(this.queueDirectory, entry.name));
-    this.unsubscribe = this.journal.subscribe((line) => this.observe(line));
+    this.unsubscribe = this.journal.subscribe((line) => {
+      this.sourceRevision++;
+      this.observe(line);
+    });
     if (this.state.consent) {
       await this.recover();
       this.registerSession(0);
@@ -362,10 +614,10 @@ export class DiagnosticDelivery {
     }
     if (startTimer) {
       this.timer = setInterval(() => {
-        void this.tick().catch(() => {
+        void this.tick(false).catch(() => {
           this.error = 'delivery_failed';
         });
-      }, 60_000);
+      }, DELIVERY_LIMITS.pollMs);
       this.timer.unref();
     }
     return this;
@@ -388,12 +640,14 @@ export class DiagnosticDelivery {
       paused: this.requestedPause,
       consentAt: this.state.consentAt,
       queuedBatches: this.state.queue.length,
+      blockedBatches: this.state.queue.filter((value) => value.serverExpired).length,
       queuedBytes: this.state.queue.reduce((n, v) => n + v.bytes, 0),
       pendingBytes: this.pendingBytes,
       omitted: this.state.omitted,
       omissionReasons: this.state.omissionReasons,
       acknowledged: this.state.acknowledged,
       deletionPending: this.state.withdrawals.length,
+      retiredIdentityCount: this.state.retiredIdentities.length,
       nextAttemptAt: this.state.nextAttemptAt,
       failures: this.state.failures,
       error: this.error,
@@ -477,13 +731,17 @@ export class DiagnosticDelivery {
       if (enabled && epoch !== this.epoch) return this.status();
       if (enabled) {
         if (this.state.consent && !this.revocationFenced) return this.status();
-        if (this.state.withdrawals.length >= DELIVERY_LIMITS.tombstones)
+        if (
+          this.state.withdrawals.length + this.state.retiredIdentities.length >=
+          DELIVERY_LIMITS.tombstones
+        )
           throw new Error('withdrawal_sync_required');
         const previous = structuredClone(this.state);
         this.state.consent = true;
+        this.state.consentPolicy = 3;
         this.state.consentAt = new Date(this.now()).toISOString();
         this.state.credentials = {
-          installationId: randomUUID(),
+          installationId: diagnosticInstallationId(this.now(), randomBytes(16)),
           enrollmentSecret: randomBytes(32).toString('hex'),
         };
         this.state.sessions = {};
@@ -508,6 +766,12 @@ export class DiagnosticDelivery {
       } else {
         await fence;
         const prior = this.state.credentials;
+        for (const retired of this.state.retiredIdentities)
+          if (
+            !this.state.withdrawals.some((value) => value.installationId === retired.installationId)
+          )
+            this.state.withdrawals.push(retired);
+        this.state.retiredIdentities = [];
         this.state.consent = false;
         if (
           prior &&
@@ -609,13 +873,38 @@ export class DiagnosticDelivery {
     if (this.pendingBytes + bytes > DELIVERY_LIMITS.pendingBytes) {
       this.omitted('memory_budget_recoverable_from_local_journal');
       this.recoveryNeeded = true;
-      return;
+      return false;
     }
     this.pending.push({ line, sessionId: value.startupSessionId, sequence: value.sequence });
     this.pendingBytes += bytes;
+    if (value.stage === 'problem_report')
+      this.nextCollectionAt = Math.min(this.nextCollectionAt, this.now() + 15_000);
+    if (
+      !recovering &&
+      !this.collectionScheduled &&
+      this.pendingBytes >= DELIVERY_LIMITS.pendingBytes * 0.75
+    ) {
+      this.collectionScheduled = true;
+      void this.transaction(async () => {
+        await this.persist();
+        this.nextCollectionAt = this.now() + DELIVERY_LIMITS.collectMs;
+      })
+        .catch(() => {
+          this.error = 'queue_write_unconfirmed';
+        })
+        .finally(() => {
+          this.collectionScheduled = false;
+        });
+    }
   }
   private async recover() {
+    if (!this.consentActive() || this.closed) return;
+    // A live commit must not overtake an older record in the disk snapshot.
+    // Keep live notifications behind recovery until a complete scan is stable.
+    this.recoveryNeeded = true;
+    const startedRevision = this.sourceRevision;
     const startedSequence = this.journal.health().sequence;
+    let sourceUnavailable = false;
     // Fixed Mizar log names only; source rotation remains governed by SessionJournal.
     for (let i = SESSION_LIMITS.segments - 1; i >= 0; i--) {
       const name = i ? `session.ndjson.${i}` : 'session.ndjson';
@@ -629,45 +918,73 @@ export class DiagnosticDelivery {
       } catch (error) {
         if (missing(error)) continue;
         this.error = 'journal_unreadable';
+        sourceUnavailable = true;
         continue;
       }
       let count = 0;
-      for (const line of bytes.toString('utf8').split('\n')) {
+      // A concurrent append can be visible before its final newline. Only
+      // complete journal records are eligible. An active tail may still commit;
+      // a rotated segment is sealed and its truncated tail cannot be completed.
+      const completeBytes = bytes.lastIndexOf(10) + 1;
+      for (const line of bytes.subarray(0, completeBytes).toString('utf8').split('\n')) {
         if (!line) continue;
         try {
-          this.observe(line + '\n', true);
+          if (this.observe(line + '\n', true) === false) return;
         } catch {
           this.omitted('unreadable_journal_record');
         }
         if (++count % 32 === 0) await yieldIO();
-        if (this.pendingBytes > DELIVERY_LIMITS.pendingBytes / 2) await this.persist();
+        if (this.pendingBytes > DELIVERY_LIMITS.pendingBytes / 2 && !(await this.persist())) return;
         if (
+          this.state.queue.length >= DELIVERY_LIMITS.batches ||
           this.state.queue.reduce((n, v) => n + v.bytes, 0) >
-          DELIVERY_LIMITS.queueBytes - DELIVERY_LIMITS.compressedBytes
-        )
+            DELIVERY_LIMITS.queueBytes - DELIVERY_LIMITS.compressedBytes
+        ) {
+          // Capacity may stop recovery before reaching the unqueued tail in a
+          // later segment. Keep scanning eligible source records after ACKs
+          // release space, including when this process has just restarted.
+          this.recoveryNeeded = true;
           return;
+        }
+      }
+      if (completeBytes < bytes.length) {
+        if (i === 0) return;
+        // Preserve the original file for export and report the damaged record,
+        // but do not let a sealed crash fragment block later healthy segments.
+        this.omitted('truncated_sealed_journal_record');
       }
     }
-    await this.persist();
+    // A stable source clock does not mean the scan completed. Capacity or
+    // unreadable source can leave an unadmitted tail; keep its cursors and the
+    // recovery flag until both scanning and prefix persistence succeed.
+    if (!(await this.persist()) || sourceUnavailable) return;
     for (const id of Object.keys(this.state.sessions)) {
       if (id === this.journal.sessionId || this.pending.some((v) => v.sessionId === id)) continue;
       delete this.state.sessions[id];
     }
     this.registerSession(0);
     await this.save();
-    this.recoveryNeeded = this.journal.health().sequence !== startedSequence;
+    // A record may have its sequence allocated before this scan but commit
+    // after the file snapshot. Observe durable notifications as well as new
+    // allocations so that this tail is picked up on the next bounded scan.
+    this.recoveryNeeded =
+      this.sourceRevision !== startedRevision || this.journal.health().sequence !== startedSequence;
   }
-  private async persist() {
-    if (!this.consentActive()) return;
+  private async persist(): Promise<boolean> {
+    if (!this.consentActive()) return false;
     const epoch = this.epoch;
-    while (this.pending.length) {
+    // Bound this collection to its admitted prefix. New committed records may
+    // arrive during compression/fsync; keep them for the next scheduled batch.
+    let remaining = this.pending.length;
+    while (remaining > 0) {
       const selected: typeof this.pending = [];
       let bytes = 128;
-      for (const item of this.pending) {
+      for (const item of this.pending.slice(0, remaining)) {
         const length = Buffer.byteLength(item.line);
         if (
           selected.length &&
-          (bytes + length > DELIVERY_LIMITS.expandedBytes ||
+          (item.sessionId !== selected[0]!.sessionId ||
+            bytes + length > DELIVERY_LIMITS.expandedBytes ||
             selected.length >= DELIVERY_LIMITS.events)
         )
           break;
@@ -686,10 +1003,10 @@ export class DiagnosticDelivery {
           events,
         }),
       );
-      let compressed = await compress(raw);
+      let compressed = Buffer.from(stampDiagnosticGzip(await compress(raw), this.now()));
       while (
         selected.length > 1 &&
-        (compressed.length > DELIVERY_LIMITS.compressedBytes ||
+        (compressed.length > DELIVERY_LIMITS.compressedBytes - DIAGNOSTIC_PERMIT_BYTES ||
           raw.length > DELIVERY_LIMITS.expandedBytes)
       ) {
         selected.splice(Math.ceil(selected.length / 2));
@@ -705,25 +1022,31 @@ export class DiagnosticDelivery {
             events,
           }),
         );
-        compressed = await compress(raw);
+        compressed = Buffer.from(stampDiagnosticGzip(await compress(raw), this.now()));
       }
-      if (!this.consentActive() || epoch !== this.epoch) return;
+      if (!this.consentActive() || epoch !== this.epoch) return false;
       if (
-        compressed.length > DELIVERY_LIMITS.compressedBytes ||
+        compressed.length > DELIVERY_LIMITS.compressedBytes - DIAGNOSTIC_PERMIT_BYTES ||
         raw.length > DELIVERY_LIMITS.expandedBytes
       ) {
         this.omitted('batch_size_budget', selected.length);
         this.pending.splice(0, selected.length);
+        remaining -= selected.length;
         this.pendingBytes -= selected.reduce((n, v) => n + Buffer.byteLength(v.line), 0);
         continue;
       }
       if (
         this.state.queue.length >= DELIVERY_LIMITS.batches ||
-        this.state.queue.reduce((n, v) => n + v.bytes, 0) + compressed.length >
+        this.state.queue.reduce(
+          (n, v) => n + v.bytes + (v.sealed ? 0 : DIAGNOSTIC_PERMIT_BYTES),
+          0,
+        ) +
+          compressed.length +
+          DIAGNOSTIC_PERMIT_BYTES >
           DELIVERY_LIMITS.queueBytes
       ) {
         this.error = 'queue_budget_local_journal_retained';
-        return;
+        return false;
       }
       const id = checksum(compressed);
       const path = join(this.queueDirectory, `${id}.gz`);
@@ -752,7 +1075,7 @@ export class DiagnosticDelivery {
       }
       if (!this.consentActive() || epoch !== this.epoch) {
         await unlink(path).catch(() => undefined);
-        return;
+        return false;
       }
       const batch: Batch = {
         id,
@@ -762,6 +1085,7 @@ export class DiagnosticDelivery {
           events: events.length,
           expandedBytes: raw.length,
           stages: [...new Set(events.map((v) => (v as { stage: string }).stage))].slice(0, 32),
+          ...batchMetadata(selected[0]!.sessionId, events),
         },
       };
       const oldCursors = structuredClone(this.state.sessions);
@@ -781,14 +1105,20 @@ export class DiagnosticDelivery {
         this.state.sessions = oldCursors;
         this.state.queue = oldQueue;
         if (!oldQueue.some((v) => v.id === id)) await unlink(path).catch(() => undefined);
+        if (error instanceof Error && error.message === 'manifest_budget') {
+          this.error = 'manifest_budget_local_journal_retained';
+          return false;
+        }
         throw error;
       }
       this.pending.splice(0, selected.length);
+      remaining -= selected.length;
       this.pendingBytes -= selected.reduce((n, v) => n + Buffer.byteLength(v.line), 0);
       await yieldIO();
     }
+    return true;
   }
-  private async credentials(value: Credentials, signal: AbortSignal) {
+  private async credentials(value: Credentials, signal: AbortSignal, deletion = false) {
     if (value.token && (value.expiresAt ?? 0) > this.now() + 60_000) return value.token;
     value.enrollmentAttempted = true;
     await this.transaction(() => this.save());
@@ -802,10 +1132,26 @@ export class DiagnosticDelivery {
         consent: CONSENT,
         enrollmentId: value.installationId,
         enrollmentSecret: value.enrollmentSecret,
+        deletion,
       }),
     });
-    if (!response.ok) throw new Error(`enrollment_http_${response.status}`);
-    const data = (await responseJson(response, signal)) as {
+    const responseData = await responseJson(response, signal);
+    if (!response.ok) throw transportReceiptError('enrollment', response.status, responseData);
+    const closed = responseData as {
+      installationId?: unknown;
+      closed?: unknown;
+      revoked?: unknown;
+      deletion?: unknown;
+    };
+    if (
+      deletion &&
+      closed.installationId === value.installationId &&
+      closed.closed === true &&
+      closed.revoked === true &&
+      closed.deletion === 'complete'
+    )
+      return null;
+    const data = responseData as {
       installationId: string;
       token: string;
       expiresAt: number;
@@ -823,11 +1169,84 @@ export class DiagnosticDelivery {
     value.expiresAt = data.expiresAt;
     return data.token;
   }
-  async tick() {
+  private async renewExpiredInstallation() {
+    // Keep deletion ownership for the old identity's remaining ninety-day index.
+    // Past its maximum index age, ask the server to confirm closure; do not infer
+    // completion from local time when a crashed writer might still be pending.
+    const aged = this.state.retiredIdentities.filter((value) => {
+      const created = diagnosticInstallationCreatedAt(value.installationId);
+      return created !== null && created + 2 * DIAGNOSTIC_AUTOMATIC_LIFETIME_MS <= this.now();
+    });
+    if (aged.length) {
+      const previous = structuredClone(this.state);
+      for (const identity of aged)
+        if (
+          !this.state.withdrawals.some((value) => value.installationId === identity.installationId)
+        )
+          this.state.withdrawals.push(identity);
+      this.state.retiredIdentities = this.state.retiredIdentities.filter(
+        (value) => !aged.includes(value),
+      );
+      try {
+        await this.save();
+      } catch (error) {
+        this.state = previous;
+        throw error;
+      }
+    }
+    const identity = this.state.credentials;
+    if (!this.consentActive() || !identity) return;
+    const birth = diagnosticInstallationCreatedAt(identity.installationId);
+    if (birth !== null && birth + DIAGNOSTIC_AUTOMATIC_LIFETIME_MS > this.now()) return;
+    if (
+      this.state.retiredIdentities.length + this.state.withdrawals.length >=
+      DELIVERY_LIMITS.tombstones - 1
+    ) {
+      this.error = 'retired_identity_sync_required';
+      return;
+    }
+    const previous = structuredClone(this.state);
+    if (identity.enrollmentAttempted || identity.token) this.state.retiredIdentities.push(identity);
+    let retained = 0;
+    for (const batch of this.state.queue)
+      if (!batch.serverExpired) {
+        batch.serverExpired = true;
+        batch.unavailableReason = 'installation_lease_closed';
+        this.omitted('installation_lease_closed', batch.index.events);
+        retained++;
+      }
+    this.state.credentials = {
+      installationId: diagnosticInstallationId(this.now(), randomBytes(16)),
+      enrollmentSecret: randomBytes(32).toString('hex'),
+    };
+    this.state.nextAttemptAt = 0;
+    this.state.failures = 0;
+    try {
+      await this.save();
+    } catch (error) {
+      this.state = previous;
+      throw error;
+    }
+    this.journal.record('diagnostic_installation_renewed', {
+      previousInstallationId: identity.installationId,
+      installationId: this.state.credentials.installationId,
+      retainedBatches: retained,
+      reason: 'installation_lease_closed',
+      oldCopies: 'retained locally for manual export; not acknowledged or re-signed',
+    });
+  }
+  async tick(forceCollection = true) {
     await this.transaction(async () => {
-      await this.persist();
+      await this.renewExpiredInstallation();
+      const collecting = forceCollection || this.now() >= this.nextCollectionAt;
+      if (collecting) {
+        await this.persist();
+        this.nextCollectionAt = this.now() + DELIVERY_LIMITS.collectMs;
+      }
       if (this.recoveryNeeded) await this.recover();
-      await this.persist();
+      // persist() freezes the admitted prefix; a second pass here would turn
+      // records arriving during gzip/fsync into an immediate tiny extra batch.
+      // recover() already persists its own recovered prefix when needed.
     });
     if (!this.endpoint || this.closed || this.now() < this.state.nextAttemptAt) return;
     this.sending ??= this.send().finally(() => {
@@ -841,25 +1260,27 @@ export class DiagnosticDelivery {
     const signal = AbortSignal.any([this.abort.signal, AbortSignal.timeout(15_000)]);
     try {
       for (const item of [...this.state.withdrawals]) {
-        const bearer = await this.credentials(item, signal);
-        const response = await this.fetcher(`${this.endpoint}/v1/diagnostics/installation`, {
-          method: 'DELETE',
-          redirect: 'error',
-          signal,
-          headers: { authorization: `Bearer ${bearer}` },
-        });
-        const ack = (await responseJson(response, signal)) as {
-          installationId: string;
-          revoked: boolean;
-          deletion: string;
-        };
-        if (
-          !response.ok ||
-          ack.installationId !== item.installationId ||
-          ack.revoked !== true ||
-          ack.deletion !== 'complete'
-        )
-          throw new Error('withdrawal_pending');
+        const bearer = await this.credentials(item, signal, true);
+        if (bearer !== null) {
+          const response = await this.fetcher(`${this.endpoint}/v1/diagnostics/installation`, {
+            method: 'DELETE',
+            redirect: 'error',
+            signal,
+            headers: { authorization: `Bearer ${bearer}` },
+          });
+          const ack = (await responseJson(response, signal)) as {
+            installationId: string;
+            revoked: boolean;
+            deletion: string;
+          };
+          if (
+            !response.ok ||
+            ack.installationId !== item.installationId ||
+            ack.revoked !== true ||
+            ack.deletion !== 'complete'
+          )
+            throw new Error('withdrawal_pending');
+        }
         await this.transaction(async () => {
           const previous = this.state.withdrawals;
           this.state.withdrawals = previous.filter((v) => v.installationId !== item.installationId);
@@ -880,15 +1301,93 @@ export class DiagnosticDelivery {
         return;
       const identity = this.state.credentials;
       const bearer = await this.credentials(identity, signal);
+      if (bearer === null) throw new Error('unexpected_closed_enrollment');
       await this.transaction(() => this.save());
-      const batch = this.state.queue[0];
-      if (!batch) return;
-      const bytes = await secureRead(
+      const selectedBatch = this.state.queue.find((value) => !value.serverExpired);
+      if (!selectedBatch) return;
+      let batch: Batch = selectedBatch;
+      let bytes = await secureRead(
         this.queueDirectory,
         `${batch.id}.gz`,
         DELIVERY_LIMITS.compressedBytes,
       );
       if (checksum(bytes) !== batch.id) throw new Error('batch_integrity_failed');
+      if (!batch.sealed) {
+        const creationTime = diagnosticGzipCreatedAt(bytes);
+        const localReason = diagnosticAutomaticTimeReason(creationTime, this.now());
+        if (localReason) {
+          await this.retainExpiredBatch(batch, epoch, localReason);
+          return;
+        }
+        const response = await this.fetcher(`${this.endpoint}/v1/diagnostics/permits/${batch.id}`, {
+          method: 'POST',
+          redirect: 'error',
+          signal,
+          headers: {
+            authorization: `Bearer ${bearer}`,
+            'x-diagnostics-created-at': String(creationTime),
+          },
+        });
+        const receipt = await responseJson(response, signal);
+        const permit = diagnosticPermit(receipt);
+        if (
+          response.status === 410 &&
+          [
+            'batch_retention_expired',
+            'automatic_window_expired',
+            'payload_clock_future',
+            'payload_creation_time_missing',
+          ].includes((receipt as { error?: string }).error ?? '')
+        ) {
+          await this.retainExpiredBatch(batch, epoch, (receipt as { error: string }).error);
+          return;
+        }
+        if (!response.ok) throw transportReceiptError('permit', response.status, receipt);
+        if (
+          !permit ||
+          permit.installationId !== identity.installationId ||
+          permit.payloadSha256 !== batch.id
+        )
+          throw new Error('invalid_batch_permit');
+        const sealed = Buffer.from(sealDiagnosticGzip(bytes, permit));
+        const oldBatch = batch;
+        const newBatch = { ...batch, id: checksum(sealed), bytes: sealed.length, sealed: true };
+        await this.transaction(async () => {
+          if (!this.consentActive() || this.requestedPause || epoch !== this.epoch) return;
+          const name = `${newBatch.id}.gz`;
+          await safePath(this.queueDirectory, name).catch((error) => {
+            if (!missing(error)) throw error;
+          });
+          const file = await open(
+            join(this.queueDirectory, name),
+            constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0),
+            0o600,
+          );
+          try {
+            await file.writeFile(sealed);
+            await file.sync();
+          } catch (error) {
+            await file.close();
+            await unlink(join(this.queueDirectory, name)).catch(() => undefined);
+            throw error;
+          } finally {
+            await file.close();
+          }
+          const previous = this.state.queue;
+          this.state.queue = previous.map((item) => (item.id === oldBatch.id ? newBatch : item));
+          try {
+            await this.save();
+          } catch (error) {
+            this.state.queue = previous;
+            await unlink(join(this.queueDirectory, name)).catch(() => undefined);
+            throw error;
+          }
+          batch = newBatch;
+          bytes = sealed;
+          await unlink(join(this.queueDirectory, `${oldBatch.id}.gz`));
+        });
+      }
+
       if (!this.consentActive() || this.requestedPause || epoch !== this.epoch) return;
       const response = await this.fetcher(`${this.endpoint}/v1/diagnostics/batches/${batch.id}`, {
         method: 'PUT',
@@ -906,14 +1405,20 @@ export class DiagnosticDelivery {
         batchId: string;
         sha256: string;
         accepted: boolean;
+        error?: unknown;
       };
+      if (response.status === 410 && ack.error === 'batch_retention_expired') {
+        await this.retainExpiredBatch(batch, epoch);
+        return;
+      }
+
       if (
         !response.ok ||
         ack.batchId !== batch.id ||
         ack.sha256 !== batch.id ||
         ack.accepted !== true
       )
-        throw new Error(`upload_unconfirmed_${response.status}`);
+        throw transportReceiptError('upload', response.status, ack);
       await this.transaction(async () => {
         if (epoch !== this.epoch || !this.consentActive()) return;
         const previous = structuredClone(this.state);
@@ -939,11 +1444,55 @@ export class DiagnosticDelivery {
           Math.min(6 * 3600_000, 30_000 * 2 ** Math.min(this.state.failures - 1, 10)) *
             (0.8 + (randomBytes(1)[0]! / 255) * 0.4);
         this.error = error instanceof Error ? error.message : 'delivery_failed';
+        this.journal.record('diagnostic_transport_failure', {
+          error: diagnosticValue(error, '', new Set(), [
+            this.state.credentials?.enrollmentSecret ?? '',
+            this.state.credentials?.token ?? '',
+            ...[...this.state.withdrawals, ...this.state.retiredIdentities].flatMap((value) => [
+              value.enrollmentSecret,
+              value.token ?? '',
+            ]),
+          ]),
+          failures: this.state.failures,
+          nextAttemptAt: this.state.nextAttemptAt,
+          queue: 'retained; no server acknowledgment',
+        });
         await this.save();
       });
     } finally {
       this.abort = undefined;
     }
+  }
+  private async retainExpiredBatch(
+    batch: Batch,
+    epoch: number,
+    reason = 'server_retention_expired',
+  ) {
+    await this.transaction(async () => {
+      if (epoch !== this.epoch || !this.consentActive()) return;
+      const previous = structuredClone(this.state);
+      const retained = this.state.queue.find((value) => value.id === batch.id);
+      if (!retained || retained.serverExpired) return;
+      retained.serverExpired = true;
+      retained.unavailableReason = reason;
+      this.omitted(reason, batch.index.events);
+      try {
+        await this.save();
+      } catch (error) {
+        this.state = previous;
+        throw error;
+      }
+      this.error =
+        reason === 'server_retention_expired'
+          ? 'server_retention_expired_local_copy_retained'
+          : `${reason}_local_copy_retained`;
+      this.journal.record('diagnostic_cloud_expired', {
+        batchId: batch.id,
+        events: batch.index.events,
+        reason,
+        localCopy: 'retained; not acknowledged or evicted',
+      });
+    });
   }
   async close() {
     this.closed = true;
@@ -952,5 +1501,41 @@ export class DiagnosticDelivery {
     this.abort?.abort();
     await this.sending;
     await this.transaction(() => this.persist());
+  }
+  /** Explicit manual export only. Copies immutable bodies while ACK/deletion is
+   * serialized; never exports the credential manifest. At most queueBytes of gzip. */
+  retainedBatches(): Promise<RetainedDiagnosticBatch[]> {
+    return this.transaction(async () => {
+      const snapshots: RetainedDiagnosticBatch[] = [];
+      try {
+        await this.persist();
+      } catch (error) {
+        snapshots.push({ id: null, sourceBytes: 0, error: diagnosticValue(error) });
+      }
+      for (const batch of this.state.queue) {
+        const automaticDelivery = {
+          blocked: batch.serverExpired === true,
+          ...(batch.unavailableReason ? { reason: batch.unavailableReason } : {}),
+        };
+        try {
+          const gzip = await secureRead(
+            this.queueDirectory,
+            `${batch.id}.gz`,
+            DELIVERY_LIMITS.compressedBytes,
+          );
+          if (checksum(gzip) !== batch.id) throw new Error('batch_integrity_failed');
+          snapshots.push({ id: batch.id, sourceBytes: gzip.length, automaticDelivery, gzip });
+        } catch (error) {
+          snapshots.push({
+            id: batch.id,
+            sourceBytes: batch.bytes,
+            automaticDelivery,
+            error: diagnosticValue(error),
+          });
+        }
+        await yieldIO();
+      }
+      return snapshots;
+    });
   }
 }

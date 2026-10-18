@@ -119,6 +119,24 @@ fn credential_key(key: &str) -> bool {
     ["password", "passwd", "token", "secret", "credential", "authorization", "cookie", "streamkey", "apikey"].iter().any(|word| key.contains(word))
 }
 
+/// Preserve technical context while removing credentials embedded in text.
+pub(crate) fn redact_text(text: &str) -> String {
+    use regex::Regex;
+    use std::sync::LazyLock;
+    static BEARER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?i)\b(Bearer|Basic)\s+[^\s\"',}]+"#).unwrap());
+    static COOKIE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?im)(\b(?:Cookie|Set-Cookie)\s*:\s*)[^\r\n]*").unwrap());
+    static FIELD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?i)\b((?:[a-z0-9_-]*(?:password|passwd|token|secret|credential)|authorization|cookie|set-cookie|api[_-]?key|stream[_-]?key|ticket)[\"']?\s*[:=]\s*)(?:\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|[^\s,;}&?#]+)"#).unwrap());
+    static USERINFO: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?i)([a-z][a-z0-9+.-]{0,31}://)[^/\s\"'<>@]+@"#).unwrap());
+    static RTMP: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?i)(rtmps?://[^/\s\"'<>]+/(?:[^/\s\"'<>]+/)+)[^/\s\"'<>?#]+"#).unwrap());
+    static LOGIN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"rh_mizar_[a-zA-Z0-9_-]+").unwrap());
+    let text = BEARER.replace_all(text, "$1 [redacted]");
+    let text = COOKIE.replace_all(&text, "$1[redacted]");
+    let text = FIELD.replace_all(&text, "$1[redacted]");
+    let text = USERINFO.replace_all(&text, "$1[redacted]@");
+    let text = RTMP.replace_all(&text, "$1[redacted]");
+    LOGIN.replace_all(&text, "[redacted]").into_owned()
+}
+
 fn redact_value(value: Value) -> Value {
     match value {
         Value::Object(fields) => Value::Object(fields.into_iter().map(|(key, value)| {
@@ -133,9 +151,10 @@ fn redact_value(value: Value) -> Value {
                         format!("{key}={}", if credential_key(key) || ["code", "key", "auth"].contains(&key) { "[redacted]" } else { value })
                     } else { part.to_owned() }
                 }).collect::<Vec<_>>().join("&");
-                json!(format!("{path}?{query}"))
-            } else { json!(text) }
+                json!(redact_text(&format!("{path}?{query}")))
+            } else { json!(redact_text(&text)) }
         },
+        Value::String(text) => json!(redact_text(&text)),
         other => other,
     }
 }
@@ -193,6 +212,12 @@ impl DesktopLog {
     }
 
     fn write(&self, stage: &str, result: &str, detail: Option<&str>) -> io::Result<()> {
+        self.write_mode(stage, result, detail, false)
+    }
+    pub fn committed_event(&self, stage: &str, result: &str, detail: Option<&str>) -> io::Result<()> {
+        self.write_mode(stage, result, detail, true)
+    }
+    fn write_mode(&self, stage: &str, result: &str, detail: Option<&str>, durable: bool) -> io::Result<()> {
         let mut log = self
             .inner
             .lock()
@@ -203,7 +228,7 @@ impl DesktopLog {
 
         }
         if let Some(detail) = detail {
-            let clean = serde_json::from_str::<Value>(detail).map(redact_value).map(|value| value.to_string()).unwrap_or_else(|_| detail.to_owned());
+            let clean = serde_json::from_str::<Value>(detail).map(redact_value).map(|value| value.to_string()).unwrap_or_else(|_| redact_text(detail));
             if clean.len() > MESSAGE_LIMIT {
                 let mut chunks = Vec::new();
                 let mut start = 0;
@@ -215,12 +240,12 @@ impl DesktopLog {
                 }
                 let detail_id = format!("{:x}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos());
                 for (index, text) in chunks.iter().enumerate() {
-                    Self::write_entry(&log, stage, result, Some(&json!({"detailId":detail_id,"part":index + 1,"parts":chunks.len(),"text":text}).to_string()))?;
+                    Self::write_entry(&log, stage, result, Some(&json!({"detailId":detail_id,"part":index + 1,"parts":chunks.len(),"text":text}).to_string()), durable)?;
                 }
                 return Ok(());
             }
-            Self::write_entry(&log, stage, result, Some(&clean))
-        } else { Self::write_entry(&log, stage, result, None) }
+            Self::write_entry(&log, stage, result, Some(&clean), durable)
+        } else { Self::write_entry(&log, stage, result, None, durable) }
     }
 
     fn write_entry(
@@ -228,6 +253,7 @@ impl DesktopLog {
         stage: &str,
         result: &str,
         detail: Option<&str>,
+        durable: bool,
     ) -> io::Result<()> {
         let mut entry = log.identity.clone();
         entry["trigger"] = json!("system");
@@ -246,7 +272,7 @@ impl DesktopLog {
                 "error"
             } else {
                 "detail"
-            }] = json!(serde_json::from_str::<Value>(detail).map(redact_value).map(|value| value.to_string()).unwrap_or_else(|_| detail.to_owned()));
+            }] = json!(serde_json::from_str::<Value>(detail).map(redact_value).map(|value| value.to_string()).unwrap_or_else(|_| redact_text(detail)));
         }
         if stage == "main_page_load" && result == "success" {
             entry["occurrences"] = json!(1);
@@ -259,7 +285,9 @@ impl DesktopLog {
         }
         let mut file = OpenOptions::new().create(true).append(true).open(current)?;
         file.write_all(&bytes)?;
-        file.flush()
+        file.flush()?;
+        if durable { file.sync_data()?; }
+        Ok(())
     }
 
     /// Scope synchronous native work only; async/spawned work must enter its own scope.
@@ -320,6 +348,7 @@ impl DesktopLog {
                         current.name(),
                         std::backtrace::Backtrace::force_capture()
                     )),
+                    false,
                 );
             }
             previous(info);
@@ -377,6 +406,10 @@ mod tests {
 
     #[test]
     fn persists_every_control_stage_and_precise_redaction_across_restart() {
+        let raw = "stage=launch cause=EACCES token=PRIVATE_TEXT_TOKEN\n[GSI] Error: original-cause Cookie: first=PRIVATE_COOKIE; second=PRIVATE_SECOND_COOKIE\nheaders={\"Cookie\":\"session=PRIVATE_JSON_COOKIE;other=PRIVATE_JSON_SECOND\"} after=preserved\nurl=https://user:PRIVATE_URL_PASSWORD@example.test/path?token=PRIVATE_QUERY_TOKEN";
+        let clean = redact_text(raw);
+        for secret in ["PRIVATE_TEXT_TOKEN", "PRIVATE_COOKIE", "PRIVATE_SECOND_COOKIE", "PRIVATE_JSON_COOKIE", "PRIVATE_JSON_SECOND", "PRIVATE_URL_PASSWORD", "PRIVATE_QUERY_TOKEN"] { assert!(!clean.contains(secret), "credential escaped: {secret}"); }
+        for context in ["stage=launch", "cause=EACCES", "original-cause", "after=preserved", "example.test/path"] { assert!(clean.contains(context), "context lost: {context}"); }
         let root = root("control-evidence");
         let log = DesktopLog::new(&root, None).unwrap();
         log.event("native_command", "begin", Some(&json!({"command":"start_demo_test", "token":"private-token", "password":"private-password", "arguments":["-applaunch","730","-worldwide"],"width":1920}).to_string()));

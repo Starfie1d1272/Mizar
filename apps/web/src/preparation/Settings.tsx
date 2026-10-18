@@ -1,4 +1,5 @@
 import { CameraSettings } from '../orchestration/CameraSettings';
+import { Cs2ConsoleSettings } from '../debug/Cs2ConsoleSettings';
 import { DiagnosticDeliverySettings } from '../debug/DiagnosticDeliverySettings';
 import { MusicSettings } from '../music/MusicSettings';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -269,6 +270,7 @@ export function Settings({ tab }: { tab: string }) {
           <Panel className="settings-card">
             <h2>诊断与支持</h2>
             <DiagnosticDeliverySettings />
+            <Cs2ConsoleSettings />
             <p>导出版本、运行状态和最近启动记录，便于定位问题。</p>
             <div className="preparation-actions">
               <Button onClick={() => void action(() => openTool('diagnostics'))}>

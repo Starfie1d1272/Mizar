@@ -24,6 +24,7 @@ export function platformTestFiles(platform = process.platform) {
     'apps/companion/test/hud-config-store.test.ts',
     'apps/companion/test/reliable-outbox.test.ts',
     'apps/companion/test/support-export.test.ts',
+    'scripts/diagnostics/archive-snapshot.test.mjs',
     'apps/companion/test/obs-native-evidence.test.ts',
     'apps/companion/test/orchestration-pack.test.ts',
     ...(platform === 'win32' ? ['scripts/qualification/gsi-discovery.test.mjs'] : []),
@@ -81,6 +82,10 @@ export async function runPlatformContracts(
         resolve(root, 'node_modules/vitest/vitest.mjs'),
         'run',
         '--config=vitest.config.ts',
+        // Windows child-process and durable-filesystem consumers compete for
+        // the same runner resources. Serialize files while retaining every
+        // test and its existing deadline; the report still requires each once.
+        ...(process.platform === 'win32' ? ['--no-file-parallelism'] : []),
         ...files,
         '--reporter=default',
         '--reporter=json',
