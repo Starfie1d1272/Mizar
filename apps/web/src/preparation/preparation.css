@@ -1087,3 +1087,89 @@
   width: 100%;
   min-height: calc(var(--mizar-layout-target) * 1.5);
 }
+
+.preparation-task-title {
+  display: grid;
+  gap: var(--mizar-layout-compact);
+}
+.preparation-task-title strong {
+  display: flex;
+  align-items: center;
+  gap: var(--mizar-layout-gap);
+}
+.preparation-task-summary {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: var(--mizar-layout-gap);
+}
+.preparation-task-summary b {
+  font-size: var(--mizar-type-size-small);
+  font-weight: 600;
+}
+.preparation-task-summary p {
+  margin: 0;
+  font-size: var(--mizar-type-size-small);
+  color: var(--mizar-fg-muted);
+}
+.preparation-task-roster {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--mizar-layout-gap);
+}
+.preparation-task-roster > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.preparation-task-roster b {
+  flex-shrink: 0;
+}
+.preparation-task-maps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--mizar-layout-compact);
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.preparation-task-maps li {
+  display: flex;
+  gap: var(--mizar-layout-compact);
+  padding: var(--mizar-layout-compact) var(--mizar-layout-gap);
+  background: var(--mizar-bg-canvas);
+  border-radius: var(--mizar-shape-control);
+  font-size: var(--mizar-type-size-small);
+}
+.preparation-task-preset {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.preparation-task-reference {
+  position: relative;
+  margin: 0;
+  height: calc(var(--mizar-layout-target) * 2.75);
+  background: var(--mizar-bg-canvas);
+  overflow: hidden;
+  border-radius: var(--mizar-shape-control);
+}
+.preparation-task-reference img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.preparation-task-reference figcaption {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  padding: var(--mizar-layout-compact);
+  font-size: var(--mizar-type-size-small);
+  background: var(--mizar-bg-canvas);
+  color: var(--mizar-fg-muted);
+}
+.preparation-task-links .preparation-task-entry {
+  border-top: var(--mizar-line-border) solid var(--mizar-border-default);
+  padding-top: var(--mizar-layout-gap);
+  color: var(--mizar-fg-primary);
+}

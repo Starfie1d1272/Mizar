@@ -1,3 +1,5 @@
+import { useHudConfigClient } from '../realtime/hud-config-client';
+import { hudStyleReference } from './hud-style-reference';
 import { EventMatchWorkspace } from './EventMatchWorkspace';
 import { HudPresetDirectory } from './HudPresetDirectory';
 import './production.css';
@@ -95,6 +97,7 @@ export function PreparationPage() {
     '';
   const envelope = useLocalRead<ContextEnvelope<MatchDocumentV1>>('/local/v1/match-document');
   const match = envelope?.document;
+  const onAirHud = useHudConfigClient(path === '/');
   const matchGuidance = useLocalRead<ProductionGuidance>(
     path === '/matches' && (envelope?.source === 'rivalhub' || envelope?.source === 'cache')
       ? '/local/v1/production-guidance'
@@ -336,8 +339,6 @@ export function PreparationPage() {
                 </h2>
                 <p>
                   {[
-                    match.stageLabel,
-                    matchRound(match),
                     match.matchLabel,
                     match.scheduledAt
                       ? new Date(match.scheduledAt).toLocaleString('zh-CN', {
@@ -349,17 +350,6 @@ export function PreparationPage() {
                     .filter(Boolean)
                     .join(' · ')}
                 </p>
-                <div className="preparation-match__summary">
-                  <span>BP · {match.veto.length > 0 ? `${match.veto.length} 步` : '暂无记录'}</span>
-                  <span>
-                    名单 · 首发 {match.entrants.a.players.filter((p) => p.isStarter).length} /{' '}
-                    {match.entrants.b.players.filter((p) => p.isStarter).length} 人
-                  </span>
-                  <span>
-                    地图 · 已确定 {match.maps.length} 图（
-                    {match.maps.map((m) => m.mapName.replace(/^de_/, '')).join(' · ')}）
-                  </span>
-                </div>
                 <div className="preparation-actions">
                   <Button
                     variant="secondary"
@@ -398,9 +388,33 @@ export function PreparationPage() {
             {match ? (
               <nav className="preparation-task-links" aria-label="本场准备任务">
                 <a href="/matches">
-                  <small>01 · 比赛</small>
-                  <strong>比赛资料</strong>
-                  <span>双方、名单与赛程 →</span>
+                  <div className="preparation-task-title">
+                    <strong>
+                      <small>01</small> 比赛资料
+                    </strong>
+                    <span>核对双方名单与赛程</span>
+                  </div>
+                  <div className="preparation-task-summary">
+                    {(['a', 'b'] as const).map((side) => (
+                      <div className="preparation-task-roster" key={side}>
+                        <span title={match.entrants[side].name}>{match.entrants[side].name}</span>
+                        <b>
+                          {match.entrants[side].players.length
+                            ? `首发 ${match.entrants[side].players.filter((p) => p.isStarter).length} 人`
+                            : '名单待填写'}
+                        </b>
+                      </div>
+                    ))}
+                    <p>
+                      {[match.stageLabel, matchRound(match)]
+                        .filter(
+                          (label, index) =>
+                            label && (index === 0 || !match.stageLabel?.includes(label)),
+                        )
+                        .join(' · ') || '阶段与轮次待填写'}
+                    </p>
+                  </div>
+                  <span className="preparation-task-entry">查看比赛资料 →</span>
                 </a>
                 <a
                   href="/operator/bp"
@@ -409,14 +423,63 @@ export function PreparationPage() {
                     void action(() => openTool('bp'));
                   }}
                 >
-                  <small>02 · 地图</small>
-                  <strong>地图禁选</strong>
-                  <span>编写 BP 与播出控制 →</span>
+                  <div className="preparation-task-title">
+                    <strong>
+                      <small>02</small> 地图禁选
+                    </strong>
+                    <span>{match.format.toUpperCase()} · 地图与 BP 播出</span>
+                  </div>
+                  <div className="preparation-task-summary">
+                    <b>
+                      {match.veto.length ? `已有 ${match.veto.length} 步 BP 记录` : '尚未录入 BP'}
+                    </b>
+                    {match.maps.length ? (
+                      <ol className="preparation-task-maps">
+                        {match.maps.map((map, index) => (
+                          <li key={index}>
+                            <small>{index + 1}</small>
+                            {map.mapName.replace(/^de_/, '')}
+                          </li>
+                        ))}
+                      </ol>
+                    ) : (
+                      <p>地图待确定，录入后在此查看。</p>
+                    )}
+                  </div>
+                  <span className="preparation-task-entry">打开 BP 工作台 →</span>
                 </a>
                 <a href="/picture?tab=hud">
-                  <small>03 · 画面</small>
-                  <strong>HUD 与包装</strong>
-                  <span>选择、编辑与启用 →</span>
+                  <div className="preparation-task-title">
+                    <strong>
+                      <small>03</small> HUD 与包装
+                    </strong>
+                    <span>选择风格与调整布局</span>
+                  </div>
+                  <div className="preparation-task-summary">
+                    {onAirHud.status === 'ready' ? (
+                      <>
+                        <b className="preparation-task-preset" title={onAirHud.current.preset.name}>
+                          已启用 · {onAirHud.current.preset.name}
+                        </b>
+                        <figure className="preparation-task-reference">
+                          <img
+                            src={hudStyleReference(
+                              onAirHud.current.widgets['top-score-bar'].variant,
+                            )}
+                            alt=""
+                          />
+                          <figcaption>风格参考 · 非本场画面</figcaption>
+                        </figure>
+                      </>
+                    ) : (
+                      <p>
+                        {onAirHud.status === 'loading'
+                          ? '正在读取启用预设…'
+                          : '暂时无法确认启用预设，请检查连接。'}
+                      </p>
+                    )}
+                  </div>
+                  <span className="preparation-task-entry">选择与编辑 →</span>
                 </a>
               </nav>
             ) : null}
