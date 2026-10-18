@@ -228,7 +228,7 @@ export function PreparationPage() {
                       <Button
                         variant="secondary"
                         onClick={() => {
-                          window.location.href = '/resources';
+                          window.location.href = '/resources?source=website';
                         }}
                       >
                         从 RivalHub 选择比赛

@@ -300,6 +300,7 @@ test('picture selection previews without activation, then applies explicitly and
     await expect(page.getByRole('button', { name: '已应用', exact: true })).toBeDisabled();
     await expect(page.getByRole('button', { name: '类 EWC', exact: true })).toBeEnabled();
     await expect(page.locator('.picture-preview .hud-console__canvas-logical')).toBeVisible();
+    await expect(page.locator('.picture-preview-caption')).toContainText('示例数据 · 非本场');
     await capture('01-open');
     const initial = (await app.inject({ url: '/local/v1/hud-config' })).json<unknown>();
     await page.getByRole('button', { name: '类 EWC', exact: true }).click();
@@ -320,6 +321,7 @@ test('picture selection previews without activation, then applies explicitly and
     await capture('03-matchup-same-area');
     await page.getByRole('button', { name: 'BP', exact: true }).click();
     await expect(page.getByText('本场暂无完整 BP。现场将按已有比赛资料继续编排。')).toBeVisible();
+    await expect(page.locator('.picture-preview-caption')).not.toContainText('示例数据');
     await capture('04-no-bp');
     await page.getByRole('button', { name: '比赛中', exact: true }).click();
     await page.getByRole('button', { name: '应用', exact: true }).click();
@@ -367,6 +369,23 @@ test('picture selection previews without activation, then applies explicitly and
         path: 'docs/screenshots/hud-workflow/06-adjust-editor.png',
         fullPage: false,
       });
+    // A saved revision must not be described as already on air in the directory.
+    await editor.getByRole('button', { name: '预设', exact: true }).click();
+    await editor.getByLabel('名称', { exact: true }).fill('目录版本验收');
+    await editor.getByRole('button', { name: '另存为', exact: true }).click();
+    await expect(editor.getByText('已另存为「目录版本验收」。', { exact: true })).toBeVisible();
+    await editor.getByRole('button', { name: '应用', exact: true }).click();
+    await expect(editor.getByText('当前预设已启用。', { exact: true })).toBeVisible();
+    await editor.getByLabel('名称', { exact: true }).fill('目录版本验收 · 修订');
+    await editor.getByRole('button', { name: '保存', exact: true }).click();
+    await expect(editor.getByText('已保存。', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '目录版本验收 · 修订', exact: false }).click();
+    await expect(page.getByText('有更新待应用', { exact: true })).toBeVisible();
+    await expect(page.locator('.picture-active')).toContainText('目录版本验收');
+    await expect(page.locator('.picture-active')).not.toContainText('修订');
+    await page.getByRole('button', { name: '应用', exact: true }).click();
+    await expect(page.getByText('有更新待应用', { exact: true })).toHaveCount(0);
+    await expect(page.locator('.picture-active')).toContainText('目录版本验收 · 修订');
     await editor.close();
     offline = true;
     await expect(page.getByText('连接未就绪，暂不能应用。')).toBeVisible();

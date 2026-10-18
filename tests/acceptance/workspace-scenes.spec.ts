@@ -12,7 +12,11 @@ import {
   OFFICIAL_RIVALHUB_URL,
 } from '../../apps/companion/src/match-context/rivalhub-connection.js';
 import { buildApp } from '../../apps/companion/src/app.js';
-import { toMatchContext, type BroadcastManifest } from '../../packages/rivalhub/src/index.js';
+import {
+  toMatchContext,
+  toMatchDocumentV1,
+  type BroadcastManifest,
+} from '../../packages/rivalhub/src/index.js';
 import { mapOperatorProjection } from '../../apps/companion/src/local-protocol/operator-wire.js';
 import { mapProgramProjection } from '../../apps/companion/src/local-protocol/program-wire.js';
 import { workspaceLiveRosterAlert } from '../../apps/web/src/workspace/live-roster-model.js';
@@ -644,4 +648,93 @@ test('online account differences alert once, preserve unknown identities and rea
     await coordinator.close();
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test('filtered roster warning keeps the remaining issue action and target together', async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 2560, height: 1440 });
+  const artifact = JSON.parse(
+    readFileSync(
+      'apps/web/src/program/fixtures/generated/epl-program-fixtures.generated.json',
+      'utf8',
+    ),
+  ) as {
+    fixtures: Record<
+      string,
+      { snapshot: import('../../packages/protocol/src/program.js').ProgramSnapshot }
+    >;
+  };
+  const program = artifact.fixtures['epl-live']!.snapshot;
+  program.payload.map.phase = 'live';
+  const operator = JSON.parse(
+    readFileSync('tests/acceptance/fixtures/preflight-operator.json', 'utf8'),
+  ) as import('../../packages/protocol/src/operator.js').OperatorSnapshot;
+  operator.payload.identity.state = 'degraded';
+  operator.payload.identity.issues = [
+    {
+      code: 'unexpected_human_steam64',
+      severity: 'warning',
+      message: '上场账号与网站名单不同',
+      sourcePlayerId: null,
+      steam64: null,
+      canonicalPlayerId: null,
+      affectsExpectedLineup: null,
+      entryId: null,
+      observedSide: null,
+      mapSide: null,
+    },
+  ];
+  operator.payload.matchContext.sourceFailure = 'network';
+  const document = JSON.parse(
+    JSON.stringify(toMatchDocumentV1(sampleManifest())),
+  ) as WireMatchDocument;
+  document.matchId = program.payload.match!.matchId;
+  for (const [key, side] of [
+    ['a', 'CT'],
+    ['b', 'T'],
+  ] as const) {
+    document.entrants[key].players = program.payload.players
+      .filter((p) => p.side === side)
+      .map((p, i) => ({
+        playerId: p.sourcePlayerId,
+        steam64: key === 'a' && i === 0 ? '76561198000000000' : p.sourcePlayerId,
+        displayName: p.displayName ?? '网站选手',
+        isStarter: true,
+        avatarUrl: null,
+      }));
+  }
+  await page.routeWebSocket('**/local/v1/operator', (ws) => ws.send(JSON.stringify(operator)));
+  await page.routeWebSocket('**/local/v1/program', (ws) => ws.send(JSON.stringify(program)));
+  await page.route('**/local/v1/match-document', (route) =>
+    route.fulfill({ json: { document, source: 'rivalhub' } }),
+  );
+  await page.route('**/local/v1/rivalhub-connection', (route) =>
+    route.fulfill({
+      json: {
+        paired: true,
+        activeMatchId: document.matchId,
+        activeSourceMatchId: null,
+        sourceReady: false,
+      },
+    }),
+  );
+  let refreshes = 0;
+  await page.route('**/operator/rivalhub/refresh', (route) => {
+    refreshes++;
+    return route.fulfill({ json: { ok: true } });
+  });
+  await page.goto('/workspace');
+  const dialog = page.getByRole('dialog', { name: '本场上场选手／账号与网站首发不一致' });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+  const attention = page.locator('.workspace-attention');
+  await expect(attention).toContainText('网站比赛资料更新失败');
+  await expect(attention.getByRole('button', { name: '重试更新资料', exact: true })).toBeVisible();
+  await attention.getByRole('button', { name: '重试更新资料', exact: true }).click();
+  await expect.poll(() => refreshes).toBe(1);
+  await page.screenshot({
+    path: testInfo.outputPath('filtered-issue-action-2k.png'),
+    fullPage: false,
+  });
 });

@@ -136,7 +136,10 @@ export function HudPresetDirectory({
               ? `HUD · ${selected?.name ?? '预设不可用'}`
               : PROGRAM_SCENES.find((item) => item.id === scene)?.title}
           </span>
-          <span>仅预览 · 切换场景不影响播出</span>
+          <span>
+            {scene === 'gameplay' ? '示例数据 · 非本场 · ' : ''}
+            仅预览 · 切换场景不影响播出
+          </span>
         </div>
       </div>
       <aside className="picture-preset-panel" aria-label="选择 HUD 预设">
@@ -163,7 +166,7 @@ export function HudPresetDirectory({
             >
               <span>{preset.name}</span>
               {onAir.status === 'ready' && onAir.current.preset.id === preset.id ? (
-                <small>已应用</small>
+                <small>{editor.activationStale ? '有更新待应用' : '已应用'}</small>
               ) : null}
             </Button>
           ))}

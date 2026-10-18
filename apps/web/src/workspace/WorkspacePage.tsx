@@ -215,7 +215,9 @@ function ContextPanel({
             </Button>
             {attentionIssues.length > 1 ? ` · 共 ${attentionIssues.length} 项` : ''}
           </span>
-          <Button onClick={() => void openIssue(attentionIssues[0]!)}>{issues[0]!.action}</Button>
+          <Button onClick={() => void openIssue(attentionIssues[0]!)}>
+            {attentionIssues[0]!.action}
+          </Button>
           {issues.length > 1 ? <Button onClick={() => setIssuesOpen(true)}>全部问题</Button> : null}
         </div>
       ) : null}
