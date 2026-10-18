@@ -5,9 +5,11 @@ export function ObsCaptureGuidance({
   diagnostic,
   busy,
   onCheck,
+  expanded = false,
 }: {
   diagnostic: ObsCaptureDiagnostic | null | undefined;
   busy: boolean;
+  expanded?: boolean;
   onCheck: () => void;
 }) {
   if (diagnostic?.state !== 'needs_attention') return null;
@@ -27,7 +29,7 @@ export function ObsCaptureGuidance({
   return (
     <>
       <StatusBanner tone="warning">{message}</StatusBanner>
-      <details className="obs-setup__help">
+      <details className="obs-setup__help" open={expanded}>
         <summary>处理捕获问题</summary>
         {diagnostic.reason === 'access_denied' ? (
           <p>

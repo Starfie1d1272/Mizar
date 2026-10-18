@@ -160,7 +160,6 @@ test('OBS capture guidance uses real production routes without GET Origin and ap
         (headers) => headers.origin === undefined && headers['sec-fetch-site'] === 'same-origin',
       ),
     ).toBe(true);
-    await page.getByText('处理捕获问题', { exact: true }).click();
     await expect(page.getByText(/最近日志报告捕获文件被占用，占用程序未知/)).toBeVisible();
     await page.setViewportSize({ width: 1366, height: 768 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
@@ -197,7 +196,6 @@ test('OBS capture guidance uses real production routes without GET Origin and ap
     });
     // The next real poll reflects new pending state; it must not resurrect the recovered lock.
     await expect(page.getByText('OBS 游戏挂钩尚未就绪。', { exact: true })).toBeVisible();
-    await page.getByText('处理捕获问题', { exact: true }).click();
     await expect(page.getByText(/最近日志报告捕获文件被占用/)).toHaveCount(0);
     await expect(page.getByText(/临时添加「窗口采集」/)).toBeVisible();
     await page.screenshot({
