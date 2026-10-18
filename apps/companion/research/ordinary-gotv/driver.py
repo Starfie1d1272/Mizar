@@ -50,7 +50,9 @@ class ObserverDriver:
         self._prespawn_sent = False
         self._spawn_sent = False
         self._full_sent = False
-        self._pending_entity_ticks = []
+        self._recovery_pending = False
+        self._recovery_requests = 0
+        self._baseline_ack_count = 0
         self._processed_entity_tick = None
         self._ack_tick = None
         self._last_receipt_ms = now_ms
@@ -191,7 +193,7 @@ class ObserverDriver:
             if any(message.message_id == 55 for message in decoded):
                 if self.decoder.tick is None:
                     raise DriverError('entity-packet-without-tick')
-                self._pending_entity_ticks.append((self._parser_sequence, self.decoder.tick))
+
         self._advance_initialization(now_ms)
 
     def _advance_initialization(self, now_ms):
@@ -258,8 +260,32 @@ class ObserverDriver:
         checkpoint = self.parser.checkpoint if self.parser else None
         if checkpoint is None:
             return
-        while self._pending_entity_ticks and self._pending_entity_ticks[0][0] <= checkpoint['sequence']:
-            _, self._processed_entity_tick = self._pending_entity_ticks.pop(0)
+        if not self._full_sent:
+            return
+        baseline_acks = []
+        for receipt in self.parser.pop_receipts():
+            if receipt['sequence'] > checkpoint['sequence']:
+                raise DriverError('receipt-before-parser-checkpoint')
+            if receipt['type'] == 'recovery':
+                self._recovery_pending = True
+                self._processed_entity_tick = None
+                baseline_acks.clear()
+            else:
+                self._recovery_pending = False
+                self._processed_entity_tick = receipt['tick']
+                if receipt['baselineAck'] is not None:
+                    baseline_acks.append((receipt['tick'], receipt['baselineAck']))
+        if self._recovery_pending:
+            if self._ack_tick != 0xffffffff:
+                encoded, _ = encode_message(4, number(1, 0xffffffff))
+                self.port.send(reliable_frame(encoded, 0), 8)
+                self._ack_tick = 0xffffffff
+                self._recovery_requests += 1
+            return
+        for tick, bank in baseline_acks:
+            encoded, _ = encode_message(23, number(1, tick) + number(2, bank))
+            self.port.send(reliable_frame(encoded, 0), 8)
+            self._baseline_ack_count += 1
         if (not self._full_sent or self._processed_entity_tick is None
             or self._ack_tick == self._processed_entity_tick
             or now_ms - self._last_receipt_ms < 100):
@@ -281,8 +307,10 @@ class ObserverDriver:
                 'channel_receive_span_ms': span, 'received_signon_state': self.signon.state,
                 'stages': self.stages,
                 'parser_checkpoint': self.parser.checkpoint if self.parser else None,
+                'parser_failure': getattr(self.parser, 'failure_details', None),
                 'last_processed_entity_tick': self._processed_entity_tick,
                 'last_acknowledged_entity_tick': self._ack_tick,
+                'full_update_requests': self._recovery_requests, 'baseline_ack_count': self._baseline_ack_count,
                 'net_message_counts': self.decoder.counts,
                 'initialization_blockers': ([] if self._full_sent else
                     [self.reason or 'signon-in-progress']),

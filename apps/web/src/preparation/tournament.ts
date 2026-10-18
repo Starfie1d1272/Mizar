@@ -1,16 +1,20 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { LocalTournamentView } from '../workspace/LocalTournamentEditor';
 export function useLocalTournament() {
-  const [view, setView] = useState<LocalTournamentView | null>(null);
+  const [read, setRead] = useState<{
+    view: LocalTournamentView | null;
+    status: 'loading' | 'ready' | 'stale' | 'error';
+  }>({ view: null, status: 'loading' });
   const refresh = useCallback(async () => {
     try {
       const response = await fetch('/local/v1/tournament', {
         cache: 'no-store',
         signal: AbortSignal.timeout(2000),
       });
-      if (response.ok) setView((await response.json()) as LocalTournamentView);
+      if (!response.ok) throw new Error('tournament_unavailable');
+      setRead({ view: (await response.json()) as LocalTournamentView, status: 'ready' });
     } catch {
-      setView(null);
+      setRead((current) => ({ ...current, status: current.view ? 'stale' : 'error' }));
     }
   }, []);
   useEffect(() => {
@@ -26,5 +30,5 @@ export function useLocalTournament() {
       clearTimeout(timer);
     };
   }, [refresh]);
-  return { view, refresh };
+  return { ...read, refresh };
 }

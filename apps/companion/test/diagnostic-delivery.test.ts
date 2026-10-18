@@ -1,5 +1,7 @@
-import { mkdtemp, readFile, readdir, rm, writeFile, symlink } from 'node:fs/promises';
+import { DIAGNOSTIC_BODY_LIFETIME_MS } from '@mizar/protocol/diagnostics-upload';
+import { appendFile, mkdtemp, readFile, readdir, rm, writeFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { constants } from 'node:fs';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -8,7 +10,7 @@ import {
   decodeDiagnosticBatch,
   diagnosticsEndpoint,
 } from '../src/support/delivery.js';
-import { SessionJournal } from '../src/support/session-journal.js';
+import { SESSION_LIMITS, SessionJournal } from '../src/support/session-journal.js';
 vi.mock('node:fs/promises', async (original) => ({
   ...(await original<typeof import('node:fs/promises')>()),
 }));
@@ -31,12 +33,13 @@ async function directory() {
   return p;
 }
 const secret = '1'.repeat(64);
-function service() {
+function service(clock = Date.now) {
   const batches = new Map<string, Uint8Array>();
   const calls: string[] = [];
   let offline = false;
   let loseAcknowledgment = false;
   let revoked = false;
+  let installation = '';
   const fetcher: typeof fetch = async (input, init) => {
     if (offline) throw new TypeError('offline');
     const url = new URL(
@@ -45,10 +48,28 @@ function service() {
     calls.push(`${init?.method} ${url.pathname}`);
     if (url.pathname.endsWith('/enroll')) {
       const data = JSON.parse(init?.body as string) as { enrollmentId: string };
+      installation = data.enrollmentId;
       return Response.json({
         installationId: data.enrollmentId,
         token: 'test-token',
         expiresAt: Date.now() + 30 * 86400_000,
+      });
+    }
+    if (url.pathname.includes('/permits/')) {
+      const issuedAt = clock();
+      return Response.json({
+        schema: 'mizar-diagnostic-permit/2',
+        installationCreatedAt: 0,
+        consentRevision: 'technical-diagnostics-v3',
+        installationId:
+          installation ||
+          (JSON.parse(await readFile(currentState(), 'utf8')) as DiskState).credentials
+            .installationId,
+        payloadSha256: url.pathname.split('/').at(-1),
+        payloadCreatedAt: Number(new Headers(init?.headers).get('x-diagnostics-created-at')),
+        issuedAt,
+        expiresAt: issuedAt + DIAGNOSTIC_BODY_LIFETIME_MS,
+        signature: 'a'.repeat(43),
       });
     }
     if (init?.method === 'DELETE') {
@@ -85,6 +106,114 @@ function service() {
   };
 }
 describe('consented diagnostic outbox', () => {
+  it('rolls back failed identity renewal and confirms retired closure after restart instead of inferring it from time', async () => {
+    const dir = await directory();
+    const path = join(dir, 'diagnostic-outbox/state.json');
+    const born = Date.now();
+    let now = born;
+    let online = true;
+    let failClosure = true;
+    const remote = service(() => now);
+    remote.setState(path);
+    const fetcher: typeof fetch = async (input, init) => {
+      if (!online) throw new TypeError('public offline test');
+      const url = new URL(input instanceof Request ? input.url : input.toString());
+      if (url.pathname.endsWith('/enroll')) {
+        const data = JSON.parse(init?.body as string) as {
+          enrollmentId: string;
+          deletion?: boolean;
+        };
+        if (data.deletion) {
+          if (failClosure)
+            return Response.json({
+              installationId: 'wrong-identity',
+              closed: true,
+              revoked: true,
+              deletion: 'complete',
+            });
+          return Response.json({
+            installationId: data.enrollmentId,
+            closed: true,
+            revoked: true,
+            deletion: 'complete',
+          });
+        }
+      }
+      return remote.fetcher(input, init);
+    };
+    const options = { endpoint: 'https://diagnostics.example', fetch: fetcher, now: () => now };
+    let journal = new SessionJournal(dir);
+    let delivery = await new DiagnosticDelivery(dir, journal, options).initialize(false);
+    const state = async () =>
+      JSON.parse(await readFile(path, 'utf8')) as {
+        credentials: { installationId: string };
+        queue: { id: string; serverExpired?: boolean }[];
+        withdrawals: { installationId: string }[];
+        retiredIdentities: { installationId: string }[];
+      };
+    try {
+      await delivery.consent(true);
+      journal.record('normal_operation', { result: 'first identity enrolled' });
+      await journal.flush();
+      await delivery.tick();
+      online = false;
+      journal.record('normal_operation', { result: 'retained original' });
+      await journal.flush();
+      await delivery.tick();
+      const before = await state();
+      const original = await readFile(join(dir, `diagnostic-outbox/${before.queue[0]!.id}.gz`));
+      now = born + 90 * 86400_000 + 1000;
+      const failed = vi
+        .spyOn(filesystem, 'rename')
+        .mockImplementationOnce((...args) =>
+          Promise.reject(
+            Object.assign(
+              new Error(
+                args[1] === path
+                  ? 'public renewal manifest EIO'
+                  : 'unexpected rename before renewal',
+              ),
+              { code: 'EIO' },
+            ),
+          ),
+        );
+      await expect(delivery.tick()).rejects.toThrow('renewal manifest EIO');
+      failed.mockRestore();
+      expect((await state()).credentials.installationId).toBe(before.credentials.installationId);
+      expect((await state()).queue[0]).toEqual(before.queue[0]);
+      await delivery.tick();
+      expect((await state()).credentials.installationId).not.toBe(
+        before.credentials.installationId,
+      );
+      expect(await readFile(join(dir, `diagnostic-outbox/${before.queue[0]!.id}.gz`))).toEqual(
+        original,
+      );
+      await delivery.close();
+      await journal.close();
+      now = born + 181 * 86400_000;
+      journal = new SessionJournal(dir);
+      delivery = await new DiagnosticDelivery(dir, journal, options).initialize(false);
+      online = true;
+      await delivery.tick();
+      expect((await state()).withdrawals).toContainEqual(
+        expect.objectContaining({ installationId: before.credentials.installationId }),
+      );
+      expect(delivery.status().deletionPending).toBeGreaterThan(0);
+      failClosure = false;
+      now += 86400_000;
+      await delivery.tick();
+      expect((await state()).withdrawals).not.toContainEqual(
+        expect.objectContaining({ installationId: before.credentials.installationId }),
+      );
+      expect(delivery.status().deletionPending).toBe(0);
+      expect(await readFile(join(dir, `diagnostic-outbox/${before.queue[0]!.id}.gz`))).toEqual(
+        original,
+      );
+    } finally {
+      await delivery.close();
+      await journal.close();
+    }
+  });
   it('defaults off, does not backfill pre-consent history, and preserves technical context without credentials', async () => {
     const dir = await directory();
     const journal = new SessionJournal(dir);
@@ -174,9 +303,187 @@ describe('consented diagnostic outbox', () => {
     await delivery.close();
     await journal.close();
   });
+  it.each(['during-scan', 'allocated-before-scan', 'partial-append'])(
+    'recovers older records before a live commit %s without advancing past either',
+    async (mode) => {
+      const dir = await directory();
+      const journal = new SessionJournal(dir);
+      let delivery = await new DiagnosticDelivery(dir, journal).initialize(false);
+      await delivery.consent(true);
+      await journal.flush();
+      await delivery.close();
+      journal.record('operation_result', { result: 'before-recovery' });
+      await journal.flush();
+      let releaseRead = () => {};
+      let enteredRead = () => {};
+      let releaseWrite = () => {};
+      let enteredWrite = () => {};
+      const readGate = new Promise<void>((resolve) => {
+        releaseRead = resolve;
+      });
+      const readStarted = new Promise<void>((resolve) => {
+        enteredRead = resolve;
+      });
+      const writeGate = new Promise<void>((resolve) => {
+        releaseWrite = resolve;
+      });
+      const writeStarted = new Promise<void>((resolve) => {
+        enteredWrite = resolve;
+      });
+      const originalOpen = filesystem.open;
+      let readsUntilBlocked = mode === 'allocated-before-scan' ? 2 : 1;
+      const spy = vi.spyOn(filesystem, 'open').mockImplementation(async (...args) => {
+        const file = await originalOpen(...args);
+        if (String(args[0]) !== join(dir, 'session.ndjson') || typeof args[1] !== 'number')
+          return file;
+        if (!(args[1] & constants.O_WRONLY) && --readsUntilBlocked === 0) {
+          const read = file.readFile.bind(file);
+          vi.spyOn(file, 'readFile').mockImplementation(async () => {
+            const snapshot = await read();
+            enteredRead();
+            await readGate;
+            return snapshot;
+          });
+        } else if (args[1] & constants.O_WRONLY && mode !== 'during-scan') {
+          const write = file.writeFile.bind(file);
+          vi.spyOn(file, 'writeFile').mockImplementation(async (data, options) => {
+            if (typeof data === 'string' && data.includes('during-recovery')) {
+              const split = mode === 'partial-append' ? Math.floor(data.length / 2) : 0;
+              if (split) await write(data.slice(0, split), options);
+              enteredWrite();
+              await writeGate;
+              return write(data.slice(split), options);
+            }
+            return write(data, options);
+          });
+        }
+        return file;
+      });
+      try {
+        if (mode !== 'during-scan') {
+          journal.record('operation_result', { result: 'during-recovery' });
+          await writeStarted;
+        }
+        delivery = new DiagnosticDelivery(dir, journal);
+        const initializing = delivery.initialize(false);
+        await readStarted;
+        if (mode === 'during-scan')
+          journal.record('operation_result', { result: 'during-recovery' });
+        releaseWrite();
+        await journal.flush();
+        releaseRead();
+        await initializing;
+        await delivery.tick();
+        const results: string[] = [];
+        for (const name of (await readdir(join(dir, 'diagnostic-outbox'))).filter((name) =>
+          name.endsWith('.gz'),
+        )) {
+          const batch = await decodeDiagnosticBatch(
+            await readFile(join(dir, 'diagnostic-outbox', name)),
+          );
+          for (const event of batch.events as { stage: string; evidence: { result: string } }[])
+            if (event.stage === 'operation_result') results.push(event.evidence.result);
+        }
+        expect(results.sort()).toEqual(['before-recovery', 'during-recovery']);
+        expect(delivery.status().omissionReasons).toEqual({});
+      } finally {
+        releaseRead();
+        releaseWrite();
+        spy.mockRestore();
+        await journal.close();
+        await delivery.close();
+      }
+    },
+  );
+  it('recovers healthy records after a crash-truncated tail is sealed by real journal rotation', async () => {
+    const dir = await directory();
+    let journal = new SessionJournal(dir);
+    let delivery = await new DiagnosticDelivery(dir, journal).initialize(false);
+    await delivery.consent(true);
+    await journal.flush();
+    await delivery.close();
+    // Real admitted records fill most of the production 8 MiB segment. Inject
+    // a crash's unfinished append within the writer's 2 MiB admission budget.
+    for (let index = 0; index < 7; index++) {
+      journal.record('sealed_prefix', { index, text: 'x'.repeat(1024 * 1024) });
+      await journal.flush();
+    }
+    await journal.close();
+    const active = join(dir, 'session.ndjson');
+    const prefix = await readFile(active);
+    const tailBytes = SESSION_LIMITS.segmentBytes - 1 - prefix.length;
+    expect(tailBytes).toBeGreaterThan(0);
+    expect(tailBytes).toBeLessThan(SESSION_LIMITS.pendingBytes);
+    await appendFile(active, '{"stage":"interrupted_append","text":"'.padEnd(tailBytes, 'x'));
+    const damaged = await readFile(active);
+    expect(damaged.at(-1)).not.toBe(10);
+    journal = new SessionJournal(dir);
+    // The actual startup append must rotate the nearly full crash segment.
+    await journal.flush();
+    const sealed = join(dir, 'session.ndjson.1');
+    expect((await readFile(sealed)).equals(damaged)).toBe(true);
+    journal.record('recovery_healthy', { index: 0 });
+    await journal.flush();
+    delivery = await new DiagnosticDelivery(dir, journal).initialize(false);
+    try {
+      await delivery.tick();
+      let damageReportedInBatch = false;
+      const events = async () => {
+        const result: { stage: string; evidence: { index?: number } }[] = [];
+        for (const name of (await readdir(join(dir, 'diagnostic-outbox'))).filter((name) =>
+          name.endsWith('.gz'),
+        )) {
+          const batch = await decodeDiagnosticBatch(
+            await readFile(join(dir, 'diagnostic-outbox', name)),
+          );
+          const coverage = (batch as { coverage?: { reasons?: Record<string, number> } }).coverage;
+          damageReportedInBatch ||= (coverage?.reasons?.truncated_sealed_journal_record ?? 0) > 0;
+          result.push(...(batch.events as typeof result));
+        }
+        return result;
+      };
+      expect((await events()).filter((event) => event.stage === 'recovery_healthy')).toHaveLength(
+        1,
+      );
+      expect(delivery.status().pendingBytes).toBe(0);
+      journal.record('recovery_healthy', { index: 1 });
+      await journal.flush();
+      expect(delivery.status().pendingBytes).toBeGreaterThan(0);
+      await delivery.tick();
+      await delivery.close();
+      await journal.close();
+      journal = new SessionJournal(dir);
+      await journal.flush();
+      delivery = await new DiagnosticDelivery(dir, journal).initialize(false);
+      journal.record('recovery_healthy', { index: 2 });
+      await journal.flush();
+      await delivery.tick();
+      const recovered = await events();
+      for (const [stage, expected] of [
+        ['sealed_prefix', [0, 1, 2, 3, 4, 5, 6]],
+        ['recovery_healthy', [0, 1, 2]],
+      ] as const)
+        expect(
+          recovered
+            .filter((event) => event.stage === stage)
+            .map((event) => event.evidence.index)
+            .sort(),
+        ).toEqual(expected);
+      expect(delivery.status().omissionReasons.truncated_sealed_journal_record).toBeGreaterThan(0);
+      expect(damageReportedInBatch).toBe(true);
+      const saved = JSON.parse(
+        await readFile(join(dir, 'diagnostic-outbox/state.json'), 'utf8'),
+      ) as { omissionReasons: Record<string, number> };
+      expect(saved.omissionReasons.truncated_sealed_journal_record).toBeGreaterThan(0);
+      expect((await readFile(sealed)).equals(damaged)).toBe(true);
+    } finally {
+      await delivery.close();
+      await journal.close();
+    }
+  });
   it('keeps offline batches across restart, recovers source journal records and retries an identical accepted batch after lost acknowledgment', async () => {
     const dir = await directory();
-    const remote = service();
+    const remote = service(() => now);
     let now = Date.now();
     const options = {
       endpoint: 'https://diagnostics.example',
@@ -272,7 +579,18 @@ describe('consented diagnostic outbox', () => {
     await journal.close();
     expect(() => diagnosticsEndpoint('http://example.com')).toThrow();
     expect(() => diagnosticsEndpoint('https://user:pass@example.com')).toThrow();
-    await expect(decodeDiagnosticBatch(gzipSync(Buffer.alloc(1024 * 1024, 65)))).rejects.toThrow();
+    await expect(
+      decodeDiagnosticBatch(
+        gzipSync(
+          Buffer.from(
+            JSON.stringify({
+              schema: 'mizar-technical-diagnostics/1',
+              events: [{ text: 'a'.repeat(5 * 1024 * 1024) }],
+            }),
+          ),
+        ),
+      ),
+    ).rejects.toMatchObject({ code: 'ERR_BUFFER_TOO_LARGE' });
     const bad = await directory();
     await writeFile(join(bad, 'outside.json'), '{}');
     await import('node:fs/promises').then((fs) => fs.mkdir(join(bad, 'diagnostic-outbox')));
@@ -291,6 +609,7 @@ describe('consented diagnostic outbox', () => {
     let mode: 'false-ack' | 'block' = 'false-ack';
     let entered!: () => void;
     const started = new Promise<void>((r) => (entered = r));
+    let installation = '';
     const fetcher: typeof fetch = async (input, init) => {
       if (
         (input instanceof Request ? input.url : input instanceof URL ? input.href : input).endsWith(
@@ -298,10 +617,28 @@ describe('consented diagnostic outbox', () => {
         )
       ) {
         const data = JSON.parse(init?.body as string) as { enrollmentId: string };
+        installation = data.enrollmentId;
         return Response.json({
           installationId: data.enrollmentId,
           token: 'test-token',
           expiresAt: Date.now() + 30 * 86400_000,
+        });
+      }
+      const path = new URL(
+        input instanceof Request ? input.url : input instanceof URL ? input.href : input,
+      ).pathname;
+      if (path.includes('/permits/')) {
+        const issuedAt = Date.now();
+        return Response.json({
+          schema: 'mizar-diagnostic-permit/2',
+          installationCreatedAt: 0,
+          consentRevision: 'technical-diagnostics-v3',
+          installationId: installation,
+          payloadSha256: path.split('/').at(-1),
+          payloadCreatedAt: Number(new Headers(init?.headers).get('x-diagnostics-created-at')),
+          issuedAt,
+          expiresAt: issuedAt + DIAGNOSTIC_BODY_LIFETIME_MS,
+          signature: 'a'.repeat(43),
         });
       }
       uploads++;
@@ -341,35 +678,369 @@ describe('consented diagnostic outbox', () => {
     await delivery.close();
     await journal.close();
   });
-  it('recovers a saturated memory window from retained journal records without silently advancing past them', async () => {
+  it.each(['outbox_io', 'manifest'] as const)(
+    'recovers a saturated memory window after %s blockage without silently advancing past retained records',
+    async (mode) => {
+      const dir = await directory();
+      const journal = new SessionJournal(dir);
+      const delivery = await new DiagnosticDelivery(dir, journal).initialize(false);
+      await delivery.consent(true);
+      // Block the actual outbox write while the independent journal continues,
+      // so background threshold collection cannot drain away the saturation.
+      let blocked = true;
+      const originalOpen = filesystem.open;
+      const intercept = vi.spyOn(filesystem, 'open').mockImplementation(async (...args) => {
+        if (blocked && mode === 'outbox_io' && String(args[0]).endsWith('.gz'))
+          throw Object.assign(new Error('synthetic outbox busy'), { code: 'EBUSY' });
+        if (blocked && mode === 'manifest' && String(args[0]).endsWith('state.json.tmp'))
+          throw new Error('manifest_budget');
+        return originalOpen(...args);
+      });
+      for (let i = 0; i < 2304; i++) {
+        journal.record('load_fixture', { index: i, text: 'x'.repeat(4096) });
+        if (i % 64 === 63) await journal.flush();
+      }
+      await journal.flush();
+      if (mode === 'outbox_io')
+        await expect(delivery.tick()).rejects.toThrow('synthetic outbox busy');
+      else {
+        await delivery.tick();
+        expect(delivery.status().error).toBe('manifest_budget_local_journal_retained');
+      }
+      blocked = false;
+      await delivery.tick();
+      const files = (await readdir(join(dir, 'diagnostic-outbox'))).filter((v) =>
+        v.endsWith('.gz'),
+      );
+      const indices: number[] = [];
+      for (const file of files) {
+        const decoded = await decodeDiagnosticBatch(
+          await readFile(join(dir, 'diagnostic-outbox', file)),
+        );
+        for (const event of decoded.events ?? []) {
+          const item = event as { stage: string; evidence: { index?: number } };
+          if (item.stage === 'load_fixture') indices.push(item.evidence.index!);
+        }
+      }
+      expect(indices.sort((a, b) => a - b)).toEqual(Array.from({ length: 2304 }, (_, i) => i));
+      expect(delivery.status().omissionReasons).toHaveProperty(
+        'memory_budget_recoverable_from_local_journal',
+      );
+      intercept.mockRestore();
+      await delivery.close();
+      await journal.close();
+    },
+  );
+  it.each(['threshold', 'scheduled'] as const)(
+    'freezes a %s collection before real disk IO while preserving later records for the next batch',
+    async (mode) => {
+      const dir = await directory();
+      const journal = new SessionJournal(dir);
+      let now = Date.now();
+      const delivery = await new DiagnosticDelivery(dir, journal, { now: () => now }).initialize(
+        false,
+      );
+      await delivery.consent(true);
+      let release: () => void = () => {};
+      let entered: () => void = () => {};
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const originalOpen = filesystem.open;
+      let blocked = true;
+      const spy = vi.spyOn(filesystem, 'open').mockImplementation(async (...args) => {
+        if (blocked && String(args[0]).endsWith('.gz')) {
+          blocked = false;
+          entered();
+          await gate;
+        }
+        return originalOpen(...args);
+      });
+      try {
+        const prefixCount = mode === 'threshold' ? 256 : 32;
+        for (let i = 0; i < prefixCount; i++) {
+          journal.record('collection_prefix', { index: i, text: 'x'.repeat(24576) });
+          if (i % 8 === 7) await journal.flush();
+        }
+        let collection: Promise<void> | undefined;
+        if (mode === 'scheduled') {
+          now += 20 * 60_000;
+          collection = delivery.tick(false);
+        }
+        await started;
+        for (let i = 0; i < 10; i++) journal.record('collection_later', { index: i });
+        await journal.flush();
+        release();
+        // The pause transaction joins the in-progress threshold collection without
+        // forcing a second collection or using a timing/retry assertion.
+        await delivery.pause(true);
+        await collection;
+        expect(delivery.status().queuedBatches).toBe(mode === 'threshold' ? 2 : 1);
+        expect(delivery.status().pendingBytes).toBeGreaterThan(0);
+        const first = (await readdir(join(dir, 'diagnostic-outbox'))).find((v) =>
+          v.endsWith('.gz'),
+        )!;
+        const initial = await decodeDiagnosticBatch(
+          await readFile(join(dir, 'diagnostic-outbox', first)),
+        );
+        expect(
+          initial.events?.some(
+            (value) => (value as { stage: string }).stage === 'collection_later',
+          ),
+        ).toBe(false);
+        await delivery.tick();
+        const indices: number[] = [];
+        let prefix = 0;
+        for (const file of (await readdir(join(dir, 'diagnostic-outbox'))).filter((v) =>
+          v.endsWith('.gz'),
+        )) {
+          const decoded = await decodeDiagnosticBatch(
+            await readFile(join(dir, 'diagnostic-outbox', file)),
+          );
+          for (const value of decoded.events ?? []) {
+            const item = value as { stage: string; evidence: { index: number } };
+            if (item.stage === 'collection_later') indices.push(item.evidence.index);
+            if (item.stage === 'collection_prefix') prefix++;
+          }
+        }
+        expect(prefix).toBe(prefixCount);
+        expect(indices.sort((a, b) => a - b)).toEqual(Array.from({ length: 10 }, (_, i) => i));
+        expect(delivery.status().omitted).toBe(0);
+      } finally {
+        release();
+        spy.mockRestore();
+        await delivery.close();
+        await journal.close();
+      }
+    },
+  );
+  it('collects normal operation batches every twenty minutes while draining existing batches on the short poll', async () => {
     const dir = await directory();
     const journal = new SessionJournal(dir);
-    const delivery = await new DiagnosticDelivery(dir, journal).initialize(false);
-    await delivery.consent(true);
-    for (let i = 0; i < 640; i++) {
-      journal.record('load_fixture', { index: i, text: 'x'.repeat(4096) });
-      if (i % 64 === 63) await journal.flush();
-    }
-    await journal.flush();
-    await delivery.tick();
-    const files = (await readdir(join(dir, 'diagnostic-outbox'))).filter((v) => v.endsWith('.gz'));
-    const indices: number[] = [];
-    for (const file of files) {
-      const decoded = await decodeDiagnosticBatch(
-        await readFile(join(dir, 'diagnostic-outbox', file)),
-      );
-      for (const event of decoded.events ?? []) {
-        const item = event as { stage: string; evidence: { index?: number } };
-        if (item.stage === 'load_fixture') indices.push(item.evidence.index!);
+    const remote = service(() => now);
+    remote.setState(join(dir, 'diagnostic-outbox', 'state.json'));
+    let now = Date.now();
+    const delivery = await new DiagnosticDelivery(dir, journal, {
+      endpoint: 'https://diagnostics.example',
+      fetch: remote.fetcher,
+      now: () => now,
+    }).initialize(false);
+    try {
+      await delivery.consent(true);
+      for (let minute = 1; minute <= 20; minute++) {
+        for (let operation = 0; operation < 300; operation++)
+          journal.record('normal_operation', { minute, operation });
+        await journal.flush();
+        now += 60_000;
+        await delivery.tick(false);
+        expect(remote.batches.size).toBe(Math.floor(minute / 20));
       }
+      await delivery.tick(false);
+      const records = [];
+      for (const batch of remote.batches.values())
+        records.push(...((await decodeDiagnosticBatch(Buffer.from(batch))).events ?? []));
+      expect(
+        records.filter((value) => (value as { stage: string }).stage === 'normal_operation'),
+      ).toHaveLength(6000);
+      expect(delivery.status().omitted).toBe(0);
+    } finally {
+      await delivery.close();
+      await journal.close();
     }
-    expect(indices.sort((a, b) => a - b)).toEqual(Array.from({ length: 640 }, (_, i) => i));
-    expect(delivery.status().omissionReasons).toHaveProperty(
-      'memory_budget_recoverable_from_local_journal',
-    );
-    await delivery.close();
-    await journal.close();
   });
+  it.each(['permit', 'upload'])(
+    'retains a server-expired body at %s across restart while continuing to send new evidence',
+    async (expiryStage) => {
+      const dir = await directory();
+      let journal = new SessionJournal(dir);
+      const remote = service();
+      let expiredId: string | undefined;
+      const fetcher: typeof fetch = async (input, init) => {
+        const path = new URL(input instanceof Request ? input.url : input.toString()).pathname;
+        if (expiryStage === 'upload' ? init?.method === 'PUT' : path.includes('/permits/')) {
+          expiredId ??= path.split('/').at(-1)!;
+          if (path.endsWith(expiredId))
+            return Response.json({ error: 'batch_retention_expired' }, { status: 410 });
+        }
+        return remote.fetcher(input, init);
+      };
+      let delivery = await new DiagnosticDelivery(dir, journal, {
+        endpoint: 'https://diagnostics.example',
+        fetch: fetcher,
+      }).initialize(false);
+      try {
+        await delivery.consent(true);
+        journal.record('old_operation_failure', {
+          error: new Error('original retained expired cause'),
+        });
+        await journal.flush();
+        await delivery.tick();
+        expect(delivery.status()).toMatchObject({
+          acknowledged: 0,
+          queuedBatches: 1,
+          blockedBatches: 1,
+        });
+        await delivery.close();
+        await journal.close();
+        journal = new SessionJournal(dir);
+        delivery = await new DiagnosticDelivery(dir, journal, {
+          endpoint: 'https://diagnostics.example',
+          fetch: fetcher,
+        }).initialize(false);
+        journal.record('new_operation', { result: 'confirmed' });
+        await journal.flush();
+        await delivery.tick();
+        for (let poll = 0; poll < 6 && delivery.status().queuedBatches > 1; poll++)
+          await delivery.tick();
+        expect(delivery.status()).toMatchObject({ queuedBatches: 1, blockedBatches: 1 });
+        expect(delivery.status().acknowledged).toBeGreaterThan(0);
+        expect(
+          JSON.stringify(
+            await decodeDiagnosticBatch(
+              await readFile(join(dir, 'diagnostic-outbox', `${expiredId}.gz`)),
+            ),
+          ),
+        ).toContain('original retained expired cause');
+        expect(
+          JSON.stringify(
+            await Promise.all(
+              [...remote.batches.values()].map((value) =>
+                decodeDiagnosticBatch(Buffer.from(value)),
+              ),
+            ),
+          ),
+        ).toContain('new_operation');
+      } finally {
+        await delivery.close();
+        await journal.close();
+      }
+    },
+  );
+  it('collects a committed problem marker within fifteen seconds without forcing normal batches early', async () => {
+    const dir = await directory();
+    const journal = new SessionJournal(dir);
+    const remote = service(() => now);
+    let now = Date.now();
+    const delivery = await new DiagnosticDelivery(dir, journal, {
+      endpoint: 'https://diagnostics.example',
+      fetch: remote.fetcher,
+      now: () => now,
+    }).initialize(false);
+    try {
+      await delivery.consent(true);
+      await journal.recordCommitted('problem_report', { category: 'hud' });
+      now += 14999;
+      await delivery.tick(false);
+      expect(remote.batches.size).toBe(0);
+      now++;
+      await delivery.tick(false);
+      expect(remote.batches.size).toBe(1);
+      expect(
+        JSON.stringify(await decodeDiagnosticBatch(Buffer.from([...remote.batches.values()][0]!))),
+      ).toContain('problem_report');
+    } finally {
+      await delivery.close();
+      await journal.close();
+    }
+  });
+  it.each([1, 2])(
+    'requires fresh consent for finite retention and durably fences previous policy %s',
+    async (policy) => {
+      const dir = await directory();
+      const journal = new SessionJournal(dir);
+      const previous = await new DiagnosticDelivery(dir, journal).initialize(false);
+      await previous.consent(true);
+      journal.record('normal_operation', {
+        result: 'full unacknowledged evidence before policy change',
+      });
+      await journal.flush();
+      await previous.tick();
+      await previous.close();
+      await journal.close();
+      const path = join(dir, 'diagnostic-outbox', 'state.json');
+      const state = JSON.parse(await readFile(path, 'utf8')) as {
+        consentPolicy: number;
+        queue: { id: string }[];
+        credentials: { installationId: string; token?: string; expiresAt?: number };
+        nextAttemptAt: number;
+        failures: number;
+      };
+      const oldInstallation = state.credentials.installationId;
+      state.consentPolicy = policy;
+      state.credentials.token = 'test-token';
+      state.credentials.expiresAt = Date.now() + 86400_000;
+      state.nextAttemptAt = Date.now() + 6 * 3600_000;
+      state.failures = 12;
+      await writeFile(path, JSON.stringify(state));
+      let nextJournal = new SessionJournal(dir);
+      const remote = service();
+      remote.setState(path);
+      let next = await new DiagnosticDelivery(dir, nextJournal, {
+        endpoint: 'https://diagnostics.example.test',
+        fetch: remote.fetcher,
+      }).initialize(false);
+      try {
+        expect(next.status()).toMatchObject({
+          consent: false,
+          error: 'consent_policy_changed',
+          queuedBatches: state.queue.length,
+          blockedBatches: state.queue.length,
+        });
+        expect(
+          (await readdir(join(dir, 'diagnostic-outbox'))).some((name) =>
+            name.startsWith('consent-policy-revoked-'),
+          ),
+        ).toBe(true);
+        const originalCopies = await Promise.all(
+          state.queue.map((x) => readFile(join(dir, `diagnostic-outbox/${x.id}.gz`))),
+        );
+        expect(originalCopies.length).toBeGreaterThan(0);
+        await next.close();
+        await nextJournal.close();
+        nextJournal = new SessionJournal(dir);
+        next = await new DiagnosticDelivery(dir, nextJournal, {
+          endpoint: 'https://diagnostics.example.test',
+          fetch: remote.fetcher,
+        }).initialize(false);
+        const retained = await next.retainedBatches();
+        for (let i = 0; i < state.queue.length; i++) {
+          const copy = retained.find((x) => x.id === state.queue[i]!.id)!;
+          expect(copy.gzip).toEqual(originalCopies[i]);
+          expect(copy.automaticDelivery).toEqual({
+            blocked: true,
+            reason: 'consent_policy_changed',
+          });
+        }
+        expect(JSON.stringify(await decodeDiagnosticBatch(retained[0]!.gzip!))).toContain(
+          'full unacknowledged evidence before policy change',
+        );
+        await next.tick();
+        expect(remote.calls).toEqual(['DELETE /v1/diagnostics/installation']);
+        expect(remote.revoked()).toBe(true);
+        await next.consent(true);
+        const renewed = JSON.parse(await readFile(path, 'utf8')) as {
+          consentPolicy: number;
+          credentials: { installationId: string };
+        };
+        expect(renewed.consentPolicy).toBe(3);
+        expect(renewed.credentials.installationId).not.toBe(oldInstallation);
+        await nextJournal.flush();
+        await next.tick();
+        for (const item of state.queue) {
+          expect(remote.batches.has(item.id)).toBe(false);
+          expect(
+            (await next.retainedBatches()).find((x) => x.id === item.id)?.automaticDelivery,
+          ).toEqual({ blocked: true, reason: 'consent_policy_changed' });
+        }
+      } finally {
+        await next.close();
+        await nextJournal.close();
+      }
+    },
+  );
   it('serializes rapid consent changes and coalesces durable revocation fences', async () => {
     const dir = await directory();
     const journal = new SessionJournal(dir);
@@ -400,7 +1071,7 @@ describe('consented diagnostic outbox', () => {
   it('keeps an acknowledged batch durable when the receipt manifest commit fails', async () => {
     const dir = await directory();
     const journal = new SessionJournal(dir);
-    const remote = service();
+    const remote = service(() => now);
     let now = Date.now();
     const delivery = await new DiagnosticDelivery(dir, journal, {
       endpoint: 'https://diagnostics.example',
@@ -432,10 +1103,22 @@ describe('consented diagnostic outbox', () => {
     expect(disk.queue).toHaveLength(1);
     expect(disk.acknowledged).toBe(0);
     spy.mockRestore();
+    await journal.flush();
     now += 86400_000;
     await delivery.tick();
     expect(remote.batches.size).toBe(1);
-    expect(delivery.status()).toMatchObject({ acknowledged: 1, queuedBatches: 0 });
+    expect(delivery.status()).toMatchObject({ acknowledged: 1, queuedBatches: 1 });
+    await delivery.tick();
+    expect(delivery.status()).toMatchObject({ acknowledged: 2, queuedBatches: 0 });
+    const events = (
+      await Promise.all(
+        [...remote.batches.values()].map((value) => decodeDiagnosticBatch(Buffer.from(value))),
+      )
+    ).flatMap((value) => value.events ?? []);
+    expect(
+      events.filter((value) => (value as { stage: string }).stage === 'operation_result'),
+    ).toHaveLength(1);
+    expect(JSON.stringify(events)).toContain('injected receipt manifest I/O failure');
     await delivery.close();
     await journal.close();
   });

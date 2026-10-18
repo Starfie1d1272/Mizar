@@ -95,6 +95,8 @@ OBS 支持采证按固定本机目录分块扫描近期会话，摘要保留分�
 
 `POST /operator/obs/output` 仅允许本机回环模式与可信 Origin，接收严格的 `{output: "stream" | "record", action: "start" | "stop", expectedRevision}`；修订号使用该输出最近快照的 UUID。不接受 Toggle 或任意 RPC。同一输出只允许一个在途操作，配置、场景修复、音频配置与启停互斥；冲突、过期、未连接及结果未确认返回 `409` 与稳定错误码。RPC 成功后仍等待事件／查询核实实际输出；超时不自动重发，重连只读取状态。OBS 拒绝码按有限类别提示：忙碌、输出未启用并需检查配置、状态已变化或其它明确拒绝；未收到可确认结果时仍为结果未确认，不从超时推断配置缺失。原始拒绝码与原因经现有脱敏 cause 链记录，不直接回显 OBS 原文。命令只使用 OBS 已保存设置，不改变制作生命周期；退出工作台不会隐式停止输出。
 
+POST /operator/obs/ensure 在输出停止时自动创建／启用 Mizar 集合、补齐场景、按当前编排选择初始节目并准备默认音频；返回最终 findings。已有自定义音频或游戏捕获音频时只检查，名称冲突不覆盖。初始化请求超时边界为 30 秒，浏览器请求边界为 40 秒；失败不撤销已成功的步骤，重试按现状补齐。
+
 `POST /operator/obs/audio-setup` 在 OBS 输出停止且当前集合为 Mizar 时，显式添加默认桌面音频与麦克风到 Mizar 场景。已有自定义来源不自动替换；静音、音量、音轨与场景音频检查通过既有 OBS findings 返回。设备选择与实际试听在 OBS 完成。
 
 ## 本地实时通道
@@ -236,3 +238,21 @@ RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对�
 本机诊断导出 `POST /debug/support-bundle` 接受可选 ISO 时间 `from/to` 与可选索引焦点 `focusSessionId`，默认全保留范围；完整日志、压缩分卷、预算和完整性语义统一见[架构](architecture.md)。`POST /debug/control-event` 只允许本机可信 Origin，最多 64 KiB，接收 Mizar 浏览器操作证据，不具备控制或文件读取能力。
 
 `fullLogs.files` 中 `format: obs-log-text/1` 为已关联 Mizar 的 OBS 日志原文经凭据替换后的分卷，采用同一 SHA-256 完整性契约；附带来源会话 UTC 起点与本地时区偏移。`nativeObs` 和 `attachments.obsLogs` 仍是技术事件索引，不能代替原文或证明画面正常。候选选择、预算、拒绝与缺失状态见架构；浏览器不能提交 OBS 文件路径。
+
+## 本机地图编排控制
+
+`GET /local/v1/orchestration` 读取私有预设与请求状态；`POST /operator/orchestration` 接收 configure、connect、disconnect、resume、hold、skip、audition、browser。仅回环模式及允许来源可写，恢复/试播绑定当前上下文与连接代际。JSON 上限 256 KiB，严格结构由 `@mizar/protocol/orchestration` 和 Companion 路由共同校验。不接受任意 Provider 地址、控制台命令或文件路径；`isolated` 仅表示专用包磁盘文件符合隔离要求，不代表游戏内活动包；queued 只表示网关入队。具体语义及 `2.0.0-alpha.1` 验收见[地图自动编排](orchestration.md)。
+
+桌面 `attach_external_cs2` 仅允许准备中心调用，参数为所选 PID、创建标识和制作修订；可执行路径由 Host 既有安装发现读取。`cs2_config_status` 的 `borrowed` 表示仍持有外部借用意图，`externalDetached` 表示已解除；`running` 只描述本次可用实例，均不代替全机 CS2 停机证明。借用不写受管事务；退出沿用 `finish_workspace` 安全制作收尾后解除，失败保留待重试状态。实际边界见[地图自动编排](orchestration.md)。
+
+`status.control` 区分 browser/native 与 ready/blocked，只是本机控制许可，不是上游执行事实。`browser` 操作携带 `expectedRevision`，在制作生命周期负责者确认准备阶段、非忙碌/试播/更新后同步切换并保持人工。产品服务启动默认 native/blocked，独立开发浏览器服务默认 browser/ready。
+
+`POST /operator/runtime/camera-session` 只接受既有 `x-runtime-token`，拒绝浏览器 Origin 和非回环模式。Host 使用 host-start 注册启动标识并锁定旧原生会话；begin 在当前制作修订的准备阶段生成新租约；pulse 仅延长同 Host/借用代际、尚未失效的六秒期限；invalidate 锁定对应代际。Host 每两秒检查原句柄与唯一性后续约；超时/重启/实例失效/收尾后 connect、resume、audition 和自动调度均拒绝旧许可，必须完成制作后重新交接。旧代际 invalidate 不撤销新代际或浏览器模式。租约标识不作为认证秘密，实际授权仍是运行时令牌，网页不持有它。
+
+### RivalHub 比赛库缓存
+
+`GET /local/v1/rivalhub-schedule` 返回已授权赛事前后各 14 天赛程及 `library` 浏览资料：按 matchId 索引的完整比赛文档、`checkedAt`、`updatedAt`、整体 `syncedAt`、刷新状态与错误说明。后台最多每分钟启动一轮刷新，最多三场并发，首轮取得赛程后即可返回，详情随后填充。提供方 `/api/mizar/match` 支持 ETag / If-None-Match；304 只推进核对时间，200 重新校验和比较单场内容后更新。赛程列表无变化也检查单场，避免漏掉名单、队标或 BP 更新。
+
+缓存按网站地址、授权赛事和安装身份隔离、原子持久化；重启恢复重新校验提供方原文和赛事/比赛标识。网络或单场失败保留已验证内容并明确标记，成功赛程中已移除的比赛不继续出现在库内。浏览缓存不作为正式节目新鲜度依据，不激活比赛；载入仍走在线候选核对与显式确认。连接解除或更换后旧请求不能将旧赛事资料返回给新连接。
+
+`POST /operator/local-match/create` 可选 `eventName` 用于未指定 `eventId` 时自动创建赛事（去除首尾空白、1–128 字）；已有 `eventId` 保留原赛事身份与名称。

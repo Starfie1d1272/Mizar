@@ -1,4 +1,5 @@
 """Bounded local parser subprocess. Only validated channel bodies enter this pipe."""
+from collections import deque
 import json
 from pathlib import Path
 import queue
@@ -9,15 +10,18 @@ from wire import ProbeError
 
 
 class ParserBridge:
-    def __init__(self, node='node'):
+    def __init__(self, node='node', worker=None):
         self._input = queue.Queue(maxsize=4)
         self._output = queue.Queue(maxsize=4096)
         self._failure = None
+        self.failure_details = None
         self._closed = False
         self._parts = []
         self.sequence = 0
         self.checkpoint = None
-        worker = Path(__file__).with_name('parser_worker.mjs')
+        self._pending_controls = []
+        self._receipts = deque()
+        worker = Path(worker) if worker is not None else Path(__file__).with_name('parser_worker.mjs')
         self.process = subprocess.Popen([node, str(worker)], stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
         self.stream = ParserStream(self._parts.append)
@@ -52,7 +56,12 @@ class ParserBridge:
                 if len(line) > 65536 or not line.endswith(b'\n'):
                     raise ValueError('parser-record-size')
                 row = json.loads(line)
-                if not isinstance(row, dict) or row.get('type') not in ('event', 'checkpoint'):
+                if isinstance(row, dict) and row.get('type') == 'error':
+                    self.failure_details = {key: str(row.get(key, ''))[:limit] for key, limit in [('name', 128), ('message', 2048), ('stack', 8192)]}
+                    detail = row.get('message')
+                    self._failure = 'parser-error: ' + (detail[:2048] if isinstance(detail, str) else 'missing error detail')
+                    return
+                if not isinstance(row, dict) or row.get('type') not in ('event', 'checkpoint', 'receipt', 'recovery'):
                     raise ValueError('parser-terminal-record')
                 self._output.put_nowait(row)
         except Exception:
@@ -91,6 +100,18 @@ class ParserBridge:
                 if not isinstance(row.get('event'), dict):
                     raise ProbeError('parser-event-shape')
                 emit(row['event'])
+            elif row['type'] in ('receipt', 'recovery'):
+                if type(row.get('tick')) is not int or not 0 <= row['tick'] <= 0x7fffffff:
+                    raise ProbeError('parser-control-tick')
+                if row['type'] == 'receipt':
+                    value = row.get('baselineAck')
+                    if value is not None and (type(value) is not int or value not in (0, 1)):
+                        raise ProbeError('parser-baseline-receipt')
+                elif type(row.get('deltaFrom')) is not int or not 0 <= row['deltaFrom'] < row['tick']:
+                    raise ProbeError('parser-recovery-reference')
+                if len(self._pending_controls) + len(self._receipts) >= 4096:
+                    raise ProbeError('parser-control-budget')
+                self._pending_controls.append(row)
             else:
                 previous = self.checkpoint['sequence'] if self.checkpoint else 0
                 if (type(row.get('sequence')) is not int or row['sequence'] != previous + 1
@@ -99,7 +120,14 @@ class ParserBridge:
                     or type(row.get('stringTables')) is not int or row['stringTables'] < 0
                     or type(row.get('serverInfo')) is not bool):
                     raise ProbeError('parser-checkpoint-shape')
+                self._receipts.extend({**control, 'sequence': row['sequence']} for control in self._pending_controls)
+                self._pending_controls.clear()
                 self.checkpoint = row
+
+    def pop_receipts(self):
+        result = list(self._receipts)
+        self._receipts.clear()
+        return result
 
     def close(self):
         if self._closed:

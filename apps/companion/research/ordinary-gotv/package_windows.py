@@ -25,6 +25,7 @@ def main():
     ap.add_argument('--runtimes', type=Path, required=True)
     ap.add_argument('--native', type=Path, required=True)
     ap.add_argument('--parser-bundle', type=Path, required=True)
+    ap.add_argument('--parser-source', type=Path, required=True)
     ap.add_argument('--output', type=Path, required=True)
     ap.add_argument('--source-sha', required=True)
     args = ap.parse_args()
@@ -70,6 +71,10 @@ def main():
     shutil.copytree(root / 'native', source / 'native')
     shutil.copytree(parser / 'dist', source / 'cs2parser-dist')
     shutil.copyfile(parser / 'package.json', source / 'cs2parser-package.json')
+    shutil.copytree(args.parser_source / 'src', source / 'cs2parser-source/src')
+    shutil.copyfile(args.parser_source / 'LICENSE', source / 'cs2parser-source/LICENSE')
+    shutil.copyfile(args.parser_source / 'package.json', source / 'cs2parser-source/package.json')
+    shutil.copyfile(root / 'cs2parser-online.patch', source / 'cs2parser-online.patch')
     (out / 'Start.cmd').write_bytes(b'@echo off\r\ncd /d "%~dp0"\r\n"runtime\\python\\python.exe" "client\\launcher.py"\r\npause\r\n')
     (out / 'README.txt').write_text('''Mizar 普通 GOTV 观众测试客户端
 
@@ -79,7 +84,7 @@ def main():
 无需安装 Python、Node 或额外游戏组件；使用本机 CS2 已有 steam_api64.dll。
 
 当前构建用于验证普通观众接入、初始化和持续事件输出。云端已验证编译、录像解析及合成网络状态；Windows 实际运行与完美在线互操作待验证。
-在线实例基线切换、丢包 delta 恢复仍在研究。先在测试赛使用。
+在线实例基线、PVS 更新和缺帧全量恢复已加入研究实现，并通过离线数据与合成传输验证。完美在线互操作仍待集中验证。
 报告中的 FULL 是协议状态；成功验收还需连续收数、实际事件与游戏对照。
 只分享 report.json 即可；channel.frames 和 events.jsonl 默认保留本机。
 
@@ -88,7 +93,7 @@ cs2parser 2.7.2（MPL-2.0）：https://github.com/osztenkurden/cs2parser/tree/de
 Node.js 24.22.0：https://nodejs.org/dist/v24.22.0/
 Python 3.14.8：https://www.python.org/ftp/python/3.14.8/
 SDK 头文件来源：ValveSoftware/Proton，bc896217ffcd67f892f952b010f898fe7bd0f0a1，steamworks_sdk_165。
-第三方许可证及原始解析器分发文件保存在 licenses 和 source 目录。
+第三方许可证、解析器修改源码及补丁保存在 licenses 和 source 目录。
 ''', encoding='utf8')
     files = {p.relative_to(out).as_posix(): digest(p) for p in sorted(out.rglob('*')) if p.is_file()}
     (out / 'manifest.json').write_text(json.dumps({'schema': 'mizar-observer-research/1',

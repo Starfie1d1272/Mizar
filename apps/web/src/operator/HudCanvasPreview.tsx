@@ -70,7 +70,7 @@ export function HudCanvasPreview({
     const frame = frameRef.current;
     if (frame === null) return;
     const updateScale = () => {
-      const width = frame.getBoundingClientRect().width || HUD_CANVAS_WIDTH;
+      const width = frame.clientWidth || HUD_CANVAS_WIDTH;
       setScale(width / HUD_CANVAS_WIDTH);
     };
     updateScale();

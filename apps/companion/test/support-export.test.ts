@@ -1,3 +1,5 @@
+import { DiagnosticDelivery } from '../src/support/delivery.js';
+import { fullLogArchive } from '../src/support/archive.js';
 import { execFileSync } from 'node:child_process';
 import type { MusicConfig, MusicTrack } from '@mizar/protocol/music';
 import { gunzipSync } from 'node:zlib';
@@ -863,6 +865,7 @@ type FullArchive = {
       name: string;
       status: string;
       durability?: string;
+      automaticDelivery?: { blocked: boolean; reason?: string };
       sha256?: string;
       volumes: { index: number; bytes: number; sha256: string; gzipBase64: string }[];
     }[];
@@ -1661,5 +1664,240 @@ it('focuses the Host session across restarts while retaining cross-process evide
     expect(new Set(native.map((record) => record.sourceRecordId)).size).toBe(2);
   } finally {
     await restarted.close();
+  }
+});
+
+async function readRetainedTimeline(body: string, directory: string) {
+  const path = join(directory, 'public-retained-export.json');
+  await writeFile(path, body);
+  return execFileSync(process.execPath, ['scripts/diagnostics/read-support-bundle.mjs', path], {
+    encoding: 'utf8',
+    maxBuffer: 8 * 1024 * 1024,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+}
+
+it('exports full unacknowledged outbox evidence over the production HTTP route after restart and source rotation', async () => {
+  const dir = await directory();
+  const journal = new SessionJournal(dir);
+  let now = Date.now();
+  const delivery = await new DiagnosticDelivery(dir, journal, { now: () => now }).initialize(false);
+  await delivery.consent(true);
+  journal.record('workspace_exit_failure', {
+    phase: 'restore_window',
+    actualArguments: ['-applaunch', '730', '-worldwide'],
+    privateChat: 'synthetic-local-original-context',
+    before: { workspace: 'active' },
+    after: { workspace: 'waiting' },
+    error: new Error('outer password=PRIVATE-RETAINED-PASSWORD', {
+      cause: Object.assign(new Error('original retained restore denied'), { code: 'EACCES' }),
+    }),
+  });
+  await journal.flush();
+  await delivery.tick();
+  const overlapping = await fullLogArchive(dir, {}, [], {
+    outbox: await delivery.retainedBatches(),
+  });
+  const originalTimeline = await readRetainedTimeline(
+    JSON.stringify({ schema: 'mizar-support-bundle/1', fullLogs: overlapping }),
+    dir,
+  );
+  const originalEvents = originalTimeline
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as { stage?: string; sourceDurability?: string });
+  expect(originalEvents.filter((event) => event.stage === 'workspace_exit_failure')).toMatchObject([
+    { sourceDurability: 'session-log' },
+  ]);
+  expect(originalTimeline).toContain('synthetic-local-original-context');
+  now += 90 * 86400_000 + 1000;
+  await delivery.tick();
+  await delivery.close();
+  await journal.close();
+  const state = JSON.parse(await readFile(join(dir, 'diagnostic-outbox/state.json'), 'utf8')) as {
+    credentials: { enrollmentSecret: string };
+    queue: { id: string }[];
+  };
+  expect(state.queue.length).toBeGreaterThan(0);
+  // The original producer history has legitimately aged out; the full unacknowledged copy remains.
+  for (const name of await filesystem.readdir(dir))
+    if (/^session\.ndjson(?:\.\d+)?$/.test(name)) await filesystem.unlink(join(dir, name));
+  const app = buildApp({ supportLogsDirectory: dir });
+  try {
+    const address = await app.listen({ host: '127.0.0.1', port: 0 });
+    const response = await fetch(address + '/debug/support-bundle', {
+      method: 'POST',
+      headers: { ...request.headers, 'content-type': 'application/json' },
+      body: '{}',
+    });
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).not.toContain(state.credentials.enrollmentSecret);
+    const archive = JSON.parse(body) as FullArchive;
+    expect(
+      archive.fullLogs.files.some(
+        (file) =>
+          file.name.startsWith('diagnostic-outbox/') &&
+          file.status === 'read' &&
+          file.durability === 'durable-outbox' &&
+          file.automaticDelivery?.reason === 'installation_lease_closed',
+      ),
+    ).toBe(true);
+    const timeline = await readRetainedTimeline(body, dir);
+    for (const value of [
+      'original retained restore denied',
+      'EACCES',
+      '-worldwide',
+      'restore_window',
+      'waiting',
+      'durable-outbox',
+    ])
+      expect(timeline).toContain(value);
+    expect(timeline).not.toContain('PRIVATE-RETAINED-PASSWORD');
+    expect(timeline).not.toContain(state.credentials.enrollmentSecret);
+  } finally {
+    await app.close();
+  }
+});
+
+it('exports unconfirmed journal memory with its full error chain and prefers the broader original after recovery', async () => {
+  const dir = await directory();
+  const originalOpen = filesystem.open;
+  let blocked = true;
+  vi.spyOn(filesystem, 'open').mockImplementation(async (...args) => {
+    const handle = await originalOpen(...args);
+    if (String(args[0]) === join(dir, 'session.ndjson')) {
+      const write = handle.writeFile.bind(handle);
+      vi.spyOn(handle, 'writeFile').mockImplementation(async (data, options) => {
+        if (blocked) {
+          if (typeof data === 'string') await write(data.slice(0, 64), options);
+          throw Object.assign(new Error('synthetic journal append EBUSY'), { code: 'EBUSY' });
+        }
+        await write(data, options);
+      });
+    }
+    return handle;
+  });
+  const journal = new SessionJournal(dir);
+  try {
+    journal.record('music_config_failure', {
+      phase: 'write',
+      before: { track: 'valid.mp3' },
+      error: new Error('outer', {
+        cause: Object.assign(new Error('full original file failure'), { code: 'EACCES' }),
+      }),
+      privateChat: 'local-original-context',
+    });
+    await journal.flush();
+    const memory = journal.pendingEvidence();
+    expect(memory.some((line) => line.includes('music_config_failure'))).toBe(true);
+    const pending = await fullLogArchive(dir, {}, [], { journalMemory: memory });
+    const pendingTimeline = await readRetainedTimeline(
+      JSON.stringify({ schema: 'mizar-support-bundle/1', fullLogs: pending }),
+      dir,
+    );
+    for (const value of [
+      'music_config_failure',
+      'full original file failure',
+      'EACCES',
+      'valid.mp3',
+      'memory-only',
+    ])
+      expect(pendingTimeline).toContain(value);
+    blocked = false;
+    await journal.flush();
+    expect(journal.health()).toMatchObject({
+      pendingRecords: 0,
+      pendingBytes: 0,
+      writeError: null,
+    });
+    const durable = await fullLogArchive(dir, {}, [], { journalMemory: memory });
+    const recovered = await readRetainedTimeline(
+      JSON.stringify({ schema: 'mizar-support-bundle/1', fullLogs: durable }),
+      dir,
+    );
+    const events = recovered
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { stage?: string; sourceDurability?: string });
+    expect(events.filter((event) => event.stage === 'music_config_failure')).toMatchObject([
+      { sourceDurability: 'session-log' },
+    ]);
+  } finally {
+    blocked = false;
+    await journal.close();
+  }
+});
+
+it('retains an in-range Host failure in a mixed copied console group after raw Host logs rotate, through real HTTP export and the production reader', async () => {
+  const dir = await directory();
+  const { NativeSource } = await import('../src/support/native-source.js');
+  const fixture = JSON.parse(
+    await readFile(
+      new URL('../../../scripts/diagnostics/fixtures/capacity-producers.json', import.meta.url),
+      'utf8',
+    ),
+  ) as { consoleEntry: Record<string, unknown> & { detail: string } };
+  const consoleDetail = JSON.parse(fixture.consoleEntry.detail) as {
+    records: Record<string, unknown>[];
+  };
+  for (const record of consoleDetail.records) {
+    record.sourceAfterUtc = '2026-10-17T09:59:00.000Z';
+    record.capturedAt = '2026-10-17T09:59:30.000Z';
+  }
+  const common = { schemaVersion: 1, startupSessionId: 'mixed-range-host' };
+  const entries = [
+    {
+      ...fixture.consoleEntry,
+      ...common,
+      time: '2026-10-17T10:02:00.000Z',
+      sequence: 1,
+      detail: JSON.stringify(consoleDetail),
+    },
+    {
+      ...common,
+      time: '2026-10-17T10:00:30.000Z',
+      sequence: 2,
+      stage: 'workspace_exit',
+      result: 'failure',
+      detail: JSON.stringify({
+        phase: 'presentation',
+        cause: 'original mixed Host restore denied',
+        os_code: 5,
+      }),
+    },
+  ];
+  await writeFile(
+    join(dir, 'desktop.ndjson'),
+    entries.map((x) => JSON.stringify(x) + '\n').join(''),
+  );
+  const journal = new SessionJournal(dir);
+  const source = new NativeSource(dir, journal);
+  await source.poll();
+  await source.close();
+  await journal.close();
+  // Confirm the real producer actually mixed these stages in one group.
+  const copied = (await readFile(join(dir, 'session.ndjson'), 'utf8'))
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as { stage: string; evidence?: { entries?: unknown[] } })
+    .find((x) => x.stage === 'native_host_records');
+  expect(copied?.evidence?.entries).toHaveLength(2);
+  await filesystem.unlink(join(dir, 'desktop.ndjson'));
+  const app = buildApp({ supportLogsDirectory: dir });
+  try {
+    const address = await app.listen({ host: '127.0.0.1', port: 0 });
+    const response = await fetch(address + '/debug/support-bundle', {
+      method: 'POST',
+      headers: { ...request.headers, 'content-type': 'application/json' },
+      body: JSON.stringify({ from: '2026-10-17T10:00:00.000Z', to: '2026-10-17T10:01:00.000Z' }),
+    });
+    expect(response.status).toBe(200);
+    const timeline = await readRetainedTimeline(await response.text(), dir);
+    expect(timeline).toContain('original mixed Host restore denied');
+    expect(timeline).toContain('2026-10-17T10:00:30.000Z');
+    expect(timeline).toContain('workspace_exit');
+  } finally {
+    await app.close();
   }
 });

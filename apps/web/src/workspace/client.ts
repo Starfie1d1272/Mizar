@@ -75,7 +75,7 @@ export async function desktopInvoke<T>(
   if (!window.__TAURI_INTERNALS__) return Promise.reject(new Error('此操作需要桌面工作区。'));
   const operationId = crypto.randomUUID();
   const observe =
-    !/^(?:gsi_status|cs2_host_status|cs2_config_status|workspace_exit_status|read_obs_configuration_context|save_support_bundle)$/.test(
+    !/^(?:gsi_status|cs2_host_status|cs2_config_status|cs2_console_status|workspace_exit_status|read_obs_configuration_context|save_support_bundle)$/.test(
       command,
     );
   if (observe)

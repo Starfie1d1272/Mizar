@@ -1,3 +1,4 @@
+import { DIAGNOSTIC_CONSENT_REVISION } from '@mizar/protocol/version';
 import { useState } from 'react';
 import { Button, Field, Select, StatusBanner } from '../ui';
 import { command, useLocalRead } from '../preparation/client';
@@ -10,6 +11,7 @@ interface DeliveryStatus {
   queuedBytes: number;
   acknowledged: number;
   deletionPending: number;
+  blockedBatches?: number;
   omitted?: number;
   error?: string | null;
 }
@@ -70,7 +72,11 @@ export function DiagnosticProblemReport() {
     </details>
   );
 }
-export function DiagnosticDeliverySettings() {
+export function DiagnosticDeliverySettings({
+  showProblemReport = true,
+}: {
+  showProblemReport?: boolean;
+}) {
   const [refresh, setRefresh] = useState(0);
   const value = useLocalRead<DeliveryStatus>('/local/v1/diagnostics/delivery', 5000, refresh);
   const [accepted, setAccepted] = useState(false);
@@ -83,7 +89,7 @@ export function DiagnosticDeliverySettings() {
     try {
       await command('/operator/diagnostics/consent', {
         enabled,
-        revision: 'technical-diagnostics-v1',
+        revision: DIAGNOSTIC_CONSENT_REVISION,
       });
       setAccepted(false);
       setRefresh((v) => v + 1);
@@ -116,6 +122,11 @@ export function DiagnosticDeliverySettings() {
         {unavailable ? '暂不可用' : !value.consent ? '关闭' : value.paused ? '已暂停' : '已开启'}
       </p>
       {unavailable ? <p>仍可导出本机诊断报告。</p> : null}
+      {value?.blockedBatches ? (
+        <StatusBanner tone="warning">
+          有 {value.blockedBatches} 批诊断无法继续自动发送，本机副本仍保留，可手动导出。
+        </StatusBanner>
+      ) : null}
       {value?.consent ? (
         <>
           <Button disabled={busy || unavailable} onClick={() => void pause(!value.paused)}>
@@ -134,7 +145,7 @@ export function DiagnosticDeliverySettings() {
           <summary>开启自动发送诊断</summary>
           <p>
             将操作、错误、运行状态和相关配置发送至维护者管理的 Cloudflare
-            服务，帮助排查问题。可能包含机器、路径、赛事和选手标识，并非匿名数据；密码和令牌等凭据会脱敏，不发送音视频或私人聊天。诊断正文保留七天，可随时暂停，或关闭并请求删除。
+            服务，帮助排查问题。可能包含机器、路径、赛事和选手标识，并非匿名数据；密码和令牌等凭据会脱敏，不发送音视频或私人聊天。诊断正文自每批接收许可签发起最多保留七天，可识别的会话检索索引保留九十天；可随时暂停，或关闭并请求删除。每批自动发送及安装身份有效期为九十天，到期的未确认副本留在本机，可手动导出；安装身份自动更新。重复上传摘要最多保留九十天，旧安装登记在相关正文和索引清除后删除，正常情况下最迟约一百八十天。清理未完成时会明确保留待处理状态。
           </p>
           <Field
             label="我已阅读并同意发送诊断"
@@ -166,7 +177,7 @@ export function DiagnosticDeliverySettings() {
           </p>
         ) : null}
       </details>
-      <DiagnosticProblemReport />
+      {showProblemReport ? <DiagnosticProblemReport /> : null}
     </div>
   );
 }

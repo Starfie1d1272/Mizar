@@ -9,7 +9,8 @@
     "tool-hud",
     "tool-bp",
     "tool-diagnostics",
-    "tool-preview"
+    "tool-preview",
+    "tool-review"
   ],
   "remote": {
     "urls": ["http://127.0.0.1:3000/*"]
@@ -22,6 +23,9 @@
     "allow-select-obs-executable",
     "allow-launch-obs",
     "allow-cs2-config-status",
+    "allow-mulnx-handoff-status",
+    "allow-open-mulnx-browser",
+    "allow-launch-mulnx",
     "allow-start-managed-cs2",
     "allow-finish-managed-cs2",
     "allow-workspace-exit-status",

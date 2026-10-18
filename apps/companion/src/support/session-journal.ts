@@ -171,6 +171,7 @@ export class SessionJournal {
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
   private writeError: unknown = null;
   private inflightRecords = 0;
+  private inflightLines: string[] = [];
   private repair: { ino: number; dev: number; offset: number } | undefined;
   private size = -1;
   private initialized = false;
@@ -296,6 +297,7 @@ export class SessionJournal {
           bytes += entry.bytes;
         } while (this.pending.length && bytes + this.pending[0]!.bytes <= 256 * 1024);
         this.inflightRecords = batch.length;
+        this.inflightLines = batch.map((entry) => entry.line);
         try {
           await this.append(
             batch.map((entry) => entry.line).join(''),
@@ -330,6 +332,7 @@ export class SessionJournal {
           break;
         } finally {
           this.inflightRecords = 0;
+          this.inflightLines = [];
         }
       }
     } finally {
@@ -341,6 +344,34 @@ export class SessionJournal {
         }, 1000);
         this.retryTimer.unref();
       }
+    }
+  }
+  /** Windows append-only handles cannot truncate. Open a separate writable
+   * handle only for rollback, and prove it is the same owned producer inode. */
+  private async rollbackAppend(
+    path: string,
+    identity: { ino: number; dev: number },
+    offset: number,
+  ) {
+    await safePath(this.directory);
+    const file = await open(path, constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0));
+    try {
+      await safePath(this.directory);
+      const named = await lstat(path);
+      const actual = await file.stat();
+      if (
+        !actual.isFile() ||
+        actual.nlink !== 1 ||
+        named.isSymbolicLink() ||
+        actual.ino !== identity.ino ||
+        actual.dev !== identity.dev ||
+        named.ino !== actual.ino ||
+        named.dev !== actual.dev
+      )
+        throw new Error('session_rollback_file_changed');
+      await file.truncate(offset);
+    } finally {
+      await file.close();
     }
   }
   private async append(line: string, bytes: number, sync = false) {
@@ -375,7 +406,7 @@ export class SessionJournal {
       let appendStart = opened.size;
       if (this.repair) {
         if (this.repair.ino === opened.ino && this.repair.dev === opened.dev) {
-          await fd.truncate(this.repair.offset);
+          await this.rollbackAppend(path, opened, this.repair.offset);
           appendStart = this.repair.offset;
         }
         this.repair = undefined;
@@ -386,7 +417,7 @@ export class SessionJournal {
         this.size = appendStart + bytes;
       } catch (error) {
         try {
-          await fd.truncate(appendStart);
+          await this.rollbackAppend(path, opened, appendStart);
           this.size = appendStart;
         } catch (rollback) {
           this.repair = { ino: opened.ino, dev: opened.dev, offset: appendStart };
@@ -491,6 +522,9 @@ export class SessionJournal {
       rejectedAfterClose: this.rejectedAfterClose,
       retention: this.retention,
     };
+  }
+  pendingEvidence(): readonly string[] {
+    return [...this.inflightLines, ...this.pending.map((entry) => entry.line)];
   }
   close() {
     if (!this.closing) {

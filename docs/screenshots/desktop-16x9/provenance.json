@@ -1,0 +1,35 @@
+{
+  "capturedAt": "2026-10-18T08:49:36.296593+00:00",
+  "viewport": {
+    "width": 2560,
+    "height": 1440,
+    "deviceScaleFactor": 1,
+    "fullPage": false
+  },
+  "baseline": "f9a9787",
+  "source": "PR #413 working tree; exact changes accompany these images in the same commit",
+  "limitations": [
+    "Windows native layout and focus not exercised",
+    "No live CS2 / OBS / MulNX connection",
+    "EPL sample and locally authored demonstration matches"
+  ],
+  "files": {
+    "01-home.png": "6553734e73c9695dab48485e81d81e39aac98244d2b6940cad3df7dd42e3dfa4",
+    "02-library.png": "87db01489e516f7e23c54da4d7269f65e2da455d5b356944b573a8e7f4ef763a",
+    "03-match.png": "e43ba1663acccd8c51206cc2040c425c3889c89f6e2896bcda7c70a838cdb478",
+    "04-roster.png": "715748ca39c9bd0e0cacb1d2a6254a5edb3584840aba19bacbf53c5719eeafdb",
+    "05-hud-directory.png": "a3443e57c02e5ea002775f57e14d76eaf24c25e71c6c8a2be982a2387c46bae5",
+    "06-hud-editor.png": "28e5b4f244bdbef67fe56284241dac3a90b9add77245d987b4a546ec68143728",
+    "07-bp.png": "ab7de34ea0a45ccebec4c951d12f203a17650b8ef06b755ef436f7d87469a80f",
+    "08-game.png": "309017f4ddb3aa512821e0cbc137d9bc21d12ea0ffaa41ff03b62d18943737ae",
+    "09-obs.png": "97fadddce4e9c2b4ede6e5754487f386954dc44d6d7d44ffcd2c2a184a53490d",
+    "10-music.png": "18b0cce49b1a0160b35a659a59b3e6747ed23d5490cc4a92343251d4135e7189",
+    "11-camera.png": "f359febb79efa8d3702179e3feeff55c0a75a09063ae175f0a6c55ae695f38fb",
+    "12-platform.png": "d0e63bcd37db034542a464f8a3367635b3ab67aa62eda2481000597d58ba6f48",
+    "13-maintenance.png": "5a7ff5e4e9add8353ec8f9a911762427e28be582238d73ab4e31c5ec20b9e49a",
+    "14-workspace.png": "ef0d5daab3a28080037e98d222536f81579999d21344c02816d5df016f721d57",
+    "15-maps.png": "ea0fb2d1b3e6452508870745590c33aaa7d477f5f1cb6cb53d4aac19d060c9c0",
+    "16-candidate-edit.png": "dc7f70cb71105d163a38539587a01e91b11530db5c106d46c8dba68ec57712eb"
+  },
+  "homeRevision": "2026-10-18：首页任务卡片展示真实资料摘要；HUD 参考图不叠加说明文字。三种分辨率与异常状态自查通过。"
+}

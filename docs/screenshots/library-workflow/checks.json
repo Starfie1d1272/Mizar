@@ -1,0 +1,67 @@
+{
+  "viewport": {
+    "width": 2560,
+    "height": 1440
+  },
+  "fullPage": false,
+  "errors": [],
+  "bounds": {
+    "x": 16,
+    "y": 431.140625,
+    "width": 608,
+    "height": 634.46875
+  },
+  "scaling": [
+    {
+      "width": 1920,
+      "height": 1080,
+      "box": {
+        "x": 12,
+        "y": 536.609375,
+        "width": 456,
+        "height": 262.59375
+      }
+    },
+    {
+      "width": 3840,
+      "height": 2160,
+      "box": {
+        "x": 24,
+        "y": 1073.21875,
+        "width": 912,
+        "height": 525.1875
+      }
+    },
+    {
+      "width": 2560,
+      "height": 1440,
+      "box": {
+        "x": 16,
+        "y": 717.53125,
+        "width": 608,
+        "height": 348.078125
+      }
+    }
+  ],
+  "submitted": {
+    "candidateRevision": "review-2",
+    "expectedContextRevision": "context-1",
+    "expectedSourceGeneration": 1,
+    "expectedMapEpoch": 1,
+    "ctEntrant": "",
+    "teamA": "",
+    "teamB": "",
+    "format": "bo3"
+  },
+  "states": [
+    "website",
+    "offline",
+    "create",
+    "waiting",
+    "roster",
+    "changed",
+    "saved",
+    "website-confirmation"
+  ],
+  "source": "Actual app; website and live roster HTTP/WebSocket data simulated; writes intercepted, no real website or tournament modifications."
+}

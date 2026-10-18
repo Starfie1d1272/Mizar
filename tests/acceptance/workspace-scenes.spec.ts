@@ -12,7 +12,11 @@ import {
   OFFICIAL_RIVALHUB_URL,
 } from '../../apps/companion/src/match-context/rivalhub-connection.js';
 import { buildApp } from '../../apps/companion/src/app.js';
-import { toMatchContext, type BroadcastManifest } from '../../packages/rivalhub/src/index.js';
+import {
+  toMatchContext,
+  toMatchDocumentV1,
+  type BroadcastManifest,
+} from '../../packages/rivalhub/src/index.js';
 import { mapOperatorProjection } from '../../apps/companion/src/local-protocol/operator-wire.js';
 import { mapProgramProjection } from '../../apps/companion/src/local-protocol/program-wire.js';
 import { workspaceLiveRosterAlert } from '../../apps/web/src/workspace/live-roster-model.js';
@@ -180,7 +184,20 @@ test('manual current-map confirmation reaches the real owner, rejects an expired
     await expect(page.getByRole('region', { name: '当前比赛与制作状态' })).toContainText(
       '当前图尚未确认为第 3 图',
     );
-    await page.goto('/matches?tab=maps');
+    const revision = (await app.inject('/local/v1/production')).json<{ revision: string }>()
+      .revision;
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/operator/production',
+          headers: { origin: 'http://127.0.0.1:3000' },
+          payload: { action: 'enter', expectedRevision: revision },
+        })
+      ).statusCode,
+    ).toBe(200);
+    await page.goto('/matches?tab=details');
+    await page.getByText('现场地图对应（异常时处理）', { exact: true }).click();
     const panel = page.getByRole('region', { name: '确认当前地图所属场次' });
     await expect(panel.getByRole('button', { name: '确认当前是第 3 图' })).toBeEnabled();
     expect(
@@ -481,14 +498,11 @@ test('online account differences alert once, preserve unknown identities and rea
     await expect(dialog).toContainText('卡油兔克');
     await expect(dialog).toContainText('网站实时同步仍在进行');
     await expect(dialog).not.toContainText('7656119');
-    expect(await dialog.evaluate((element) => element.matches(':modal'))).toBe(false);
+    expect(await dialog.evaluate((element) => element.matches(':modal'))).toBe(true);
     for (const viewport of [
-      { width: 480, height: 1080 },
-      { width: 384, height: 864 },
-      { width: 320, height: 720 },
-      { width: 640, height: 1440 },
-      { width: 512, height: 1152 },
-      { width: 427, height: 960 },
+      { width: 1920, height: 1080 },
+      { width: 2560, height: 1440 },
+      { width: 3840, height: 2160 },
     ]) {
       await page.setViewportSize(viewport);
       const bounds = await dialog.boundingBox();
@@ -498,7 +512,7 @@ test('online account differences alert once, preserve unknown identities and rea
       expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width);
       expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height);
     }
-    await page.setViewportSize({ width: 480, height: 1080 });
+    await page.setViewportSize({ width: 2560, height: 1440 });
     await page.screenshot({ path: testInfo.outputPath('live-roster-alert.png') });
     await dialog.getByRole('button', { name: '关闭', exact: true }).click();
     await push(changed);
@@ -525,7 +539,7 @@ test('online account differences alert once, preserve unknown identities and rea
     await outsideControl.focus();
     await push(nextDifference);
     await expect(dialog).toBeVisible();
-    await expect(outsideControl).toBeFocused();
+    await expect(outsideControl).not.toBeFocused();
     await dialog.getByRole('button', { name: '关闭', exact: true }).click();
     await push(starters);
     await expect(page.getByRole('button', { name: '查看人员差异' })).not.toBeVisible();
@@ -564,8 +578,8 @@ test('online account differences alert once, preserve unknown identities and rea
     const outside = page.getByRole('button', { name: '比赛资料', exact: true });
     await outside.focus();
     await expect(syncDialog).toBeVisible();
-    await expect(outside).toBeFocused();
-    expect(await syncDialog.evaluate((element) => element.matches(':modal'))).toBe(false);
+    await expect(outside).not.toBeFocused();
+    expect(await syncDialog.evaluate((element) => element.matches(':modal'))).toBe(true);
     await expect(syncDialog.getByRole('link', { name: '打开网站本场工作台' })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath('sync-health-matched.png') });
     await syncDialog.getByRole('button', { name: '关闭', exact: true }).click();
@@ -634,4 +648,93 @@ test('online account differences alert once, preserve unknown identities and rea
     await coordinator.close();
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test('filtered roster warning keeps the remaining issue action and target together', async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 2560, height: 1440 });
+  const artifact = JSON.parse(
+    readFileSync(
+      'apps/web/src/program/fixtures/generated/epl-program-fixtures.generated.json',
+      'utf8',
+    ),
+  ) as {
+    fixtures: Record<
+      string,
+      { snapshot: import('../../packages/protocol/src/program.js').ProgramSnapshot }
+    >;
+  };
+  const program = artifact.fixtures['epl-live']!.snapshot;
+  program.payload.map.phase = 'live';
+  const operator = JSON.parse(
+    readFileSync('tests/acceptance/fixtures/preflight-operator.json', 'utf8'),
+  ) as import('../../packages/protocol/src/operator.js').OperatorSnapshot;
+  operator.payload.identity.state = 'degraded';
+  operator.payload.identity.issues = [
+    {
+      code: 'unexpected_human_steam64',
+      severity: 'warning',
+      message: '上场账号与网站名单不同',
+      sourcePlayerId: null,
+      steam64: null,
+      canonicalPlayerId: null,
+      affectsExpectedLineup: null,
+      entryId: null,
+      observedSide: null,
+      mapSide: null,
+    },
+  ];
+  operator.payload.matchContext.sourceFailure = 'network';
+  const document = JSON.parse(
+    JSON.stringify(toMatchDocumentV1(sampleManifest())),
+  ) as WireMatchDocument;
+  document.matchId = program.payload.match!.matchId;
+  for (const [key, side] of [
+    ['a', 'CT'],
+    ['b', 'T'],
+  ] as const) {
+    document.entrants[key].players = program.payload.players
+      .filter((p) => p.side === side)
+      .map((p, i) => ({
+        playerId: p.sourcePlayerId,
+        steam64: key === 'a' && i === 0 ? '76561198000000000' : p.sourcePlayerId,
+        displayName: p.displayName ?? '网站选手',
+        isStarter: true,
+        avatarUrl: null,
+      }));
+  }
+  await page.routeWebSocket('**/local/v1/operator', (ws) => ws.send(JSON.stringify(operator)));
+  await page.routeWebSocket('**/local/v1/program', (ws) => ws.send(JSON.stringify(program)));
+  await page.route('**/local/v1/match-document', (route) =>
+    route.fulfill({ json: { document, source: 'rivalhub' } }),
+  );
+  await page.route('**/local/v1/rivalhub-connection', (route) =>
+    route.fulfill({
+      json: {
+        paired: true,
+        activeMatchId: document.matchId,
+        activeSourceMatchId: null,
+        sourceReady: false,
+      },
+    }),
+  );
+  let refreshes = 0;
+  await page.route('**/operator/rivalhub/refresh', (route) => {
+    refreshes++;
+    return route.fulfill({ json: { ok: true } });
+  });
+  await page.goto('/workspace');
+  const dialog = page.getByRole('dialog', { name: '本场上场选手／账号与网站首发不一致' });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+  const attention = page.locator('.workspace-attention');
+  await expect(attention).toContainText('网站比赛资料更新失败');
+  await expect(attention.getByRole('button', { name: '重试更新资料', exact: true })).toBeVisible();
+  await attention.getByRole('button', { name: '重试更新资料', exact: true }).click();
+  await expect.poll(() => refreshes).toBe(1);
+  await page.screenshot({
+    path: testInfo.outputPath('filtered-issue-action-2k.png'),
+    fullPage: false,
+  });
 });

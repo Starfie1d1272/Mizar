@@ -66,7 +66,7 @@ test('saves real local choices, imports atomically, persists manual stop through
   try {
     await page.goto('/settings?tab=music');
     await expect(
-      page.getByRole('heading', { name: '节目音乐', exact: true, level: 1 }),
+      page.getByRole('heading', { name: '音乐与运镜', exact: true, level: 1 }),
     ).toBeVisible();
     await expect(page.getByText('尚未选曲 · 静音', { exact: true })).toHaveCount(7);
     await page
@@ -74,9 +74,35 @@ test('saves real local choices, imports atomically, persists manual stop through
       .first()
       .setInputFiles({ name: '合成等待.mp3', mimeType: 'audio/mpeg', buffer: mp3 });
     await expect(page.getByText('曲目已选，请保存音乐配置。')).toBeVisible();
+    await page
+      .getByRole('navigation', { name: '自动制播配置' })
+      .getByRole('button', { name: '运镜', exact: true })
+      .click();
+    await page
+      .getByRole('navigation', { name: '自动制播配置' })
+      .getByRole('button', { name: '音乐', exact: true })
+      .click();
+    await page
+      .getByRole('navigation', { name: '音乐场景' })
+      .getByRole('button', { name: /技术暂停/ })
+      .click();
+    await page
+      .getByRole('navigation', { name: '音乐场景' })
+      .getByRole('button', { name: /等待音乐/ })
+      .click();
+    await expect(page.getByText('合成等待.mp3', { exact: true }).first()).toBeVisible();
     await page.getByRole('button', { name: '保存音乐配置', exact: true }).click();
     await expect(page.getByText('音乐配置已保存。')).toBeVisible();
     expect(service.store.state.config.groups.waiting.tracks[0]?.name).toBe('合成等待.mp3');
+    await expect(page.getByRole('button', { name: '保存音乐配置', exact: true })).toBeDisabled();
+    await page.getByRole('button', { name: '移除 合成等待.mp3', exact: true }).click();
+    await expect(page.getByText('有未保存修改', { exact: true })).toBeVisible();
+    expect(service.store.state.config.groups.waiting.tracks).toHaveLength(1);
+    await page.reload();
+    await expect(page.getByRole('list', { name: '等待音乐曲目列表' })).toContainText(
+      '合成等待.mp3',
+    );
+
     service.store.failure = true;
     service.store.ready = false;
     await page.reload();
@@ -176,6 +202,7 @@ test('saves real local choices, imports atomically, persists manual stop through
       'music.json': Buffer.from(JSON.stringify(musicManifest())),
       'audio/等待.wav': musicWav(1),
     });
+    await page.getByText('导入音乐包', { exact: true }).click();
     await page
       .getByLabel('一键导入音乐包', { exact: true })
       .setInputFiles({ name: 'synthetic-music.zip', mimeType: 'application/zip', buffer: pack });

@@ -4,6 +4,7 @@ packages:
 
 allowBuilds:
   esbuild: true
+  workerd: true
 
 catalog:
   '@eslint/js': 10.0.1

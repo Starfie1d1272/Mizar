@@ -68,7 +68,7 @@ export function ResourceSettings() {
       ) : resources === null ? (
         <StatusBanner tone="warning">暂时无法查询，请刷新。</StatusBanner>
       ) : resources.length === 0 ? (
-        <p>暂无独立缓存。</p>
+        <p>暂无独立缓存；随包素材是否可用尚未检查。</p>
       ) : (
         resources.map((resource) => (
           <div key={resource.packId}>
@@ -97,7 +97,7 @@ export function ResourceSettings() {
         ))
       )}
       <details className="settings-details">
-        <summary>详情</summary>
+        <summary>缓存详情与处理方法</summary>
         {resources
           ?.filter((resource) => resource.failure)
           .map((resource) => (
@@ -119,7 +119,7 @@ export function ResourceSettings() {
             setRefresh((value) => value + 1);
           }}
         >
-          刷新
+          刷新状态
         </Button>
       </div>
     </Panel>

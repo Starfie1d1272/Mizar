@@ -1,3 +1,5 @@
+import { DesktopCanvas } from '../patterns/DesktopCanvas';
+import { SessionContext } from '../preparation/SessionContext';
 import type { ReactNode } from 'react';
 import './operator-shell.css';
 
@@ -41,58 +43,42 @@ export function OperatorShell({
   readonly children: ReactNode;
 }) {
   return (
-    <div className="product-shell mizar-surface">
-      <a className="product-skip" href="#product-content">
-        跳到主要内容
-      </a>
-      <aside className="product-sidebar">
-        <a className="product-brand" href="/">
-          <img className="product-brand__mark" src="/brand/mizar-mark.svg" alt="" />
-          <span>MIZAR</span>
+    <DesktopCanvas kind="product">
+      <div className="product-shell mizar-surface">
+        <a className="product-skip" href="#product-content">
+          跳到主要内容
         </a>
-        <nav aria-label="制作导航">
-          <small>制作中心</small>
-          {[
-            ['/', '总览'],
-            ['/matches', '比赛资料'],
-            ['/picture', '播出画面'],
-          ].map(([path, label]) => (
-            <a key={path} href={path} aria-current={active === path ? 'page' : undefined}>
-              <NavigationIcon path={path ?? '/'} />
-              {label}
-            </a>
-          ))}
-        </nav>
-        <nav aria-label="连接与设置">
-          <small>连接与设置</small>
-          {(
-            [
-              ['gsi', '游戏设置'],
-              ['obs', 'OBS 连接'],
-              ['music', '节目音乐'],
-              ['rivalhub', '赛事平台'],
-              ['advanced', '高级设置'],
-            ] as const
-          ).map(([tab, label]) => (
-            <a
-              key={tab}
-              href={`/settings?tab=${tab}`}
-              aria-current={
-                active === '/settings' &&
-                (new URLSearchParams(window.location.search).get('tab') ?? 'gsi') === tab
-                  ? 'page'
-                  : undefined
-              }
-            >
-              {label}
-            </a>
-          ))}
-        </nav>
-        <footer>Mizar · 制播工作台</footer>
-      </aside>
-      <div className="product-content" id="product-content">
-        {children}
+        <aside className="product-sidebar">
+          <a className="product-brand" href="/">
+            <img className="product-brand__mark" src="/brand/mizar-mark.svg" alt="" />
+            <span>MIZAR</span>
+          </a>
+          <nav aria-label="制作导航">
+            {[
+              ['/', '本场'],
+              ['/resources', '比赛库'],
+              ['/picture', 'HUD 与画面'],
+              ['/settings', '设置'],
+            ].map(([path, label]) => (
+              <a
+                key={path}
+                href={path}
+                aria-current={
+                  active === path || (path === '/' && active === '/matches') ? 'page' : undefined
+                }
+              >
+                <NavigationIcon path={path ?? '/'} />
+                {label}
+              </a>
+            ))}
+          </nav>
+          <footer>Mizar · 制播工作台</footer>
+        </aside>
+        <div className="product-content" id="product-content">
+          <SessionContext returnToWorkspace={active !== '/'} />
+          <div className="product-page">{children}</div>
+        </div>
       </div>
-    </div>
+    </DesktopCanvas>
   );
 }

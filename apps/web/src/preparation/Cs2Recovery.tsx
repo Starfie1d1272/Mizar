@@ -129,7 +129,13 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
                 }, '')
               }
             >
-              {exit.busy ? '正在退出…' : uncertain ? '恢复配置并重试退出' : '重试退出工作台'}
+              {exit.busy
+                ? '正在退出…'
+                : uncertain
+                  ? '恢复配置并重试退出'
+                  : exit.stage === 'restoration' && status && !status.running
+                    ? '重试恢复设置'
+                    : '重试退出工作台'}
             </Button>
             <Button
               onClick={() =>
@@ -163,6 +169,7 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
       </StatusBanner>
     );
   if (
+    !status?.borrowed &&
     !status?.pending &&
     !status?.spectatorRecoveryPending &&
     !status?.demoCleanupPending &&
@@ -196,23 +203,29 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
             ? cs2OperationLabel(phase)
             : exit?.windowMessage
               ? '窗口控制需要处理'
-              : status?.pending
-                ? uncertain
-                  ? '正在等待 Steam 启动 CS2'
-                  : status.running
-                    ? status.preserveSettings
-                      ? 'CS2 正在运行，已保持原游戏设置'
-                      : 'CS2 正在运行，原配置已备份'
-                    : status.preserveSettings
-                      ? '等待清理本次启动记录'
-                      : 'CS2 原配置尚未恢复'
-                : status?.spectatorRecoveryPending
-                  ? '观战原值尚未恢复'
-                  : status?.demoCleanupPending
-                    ? '原设置已恢复，试播文件待清理'
-                    : status?.canPreserve
-                      ? '未应用游戏设置，原始配置已备份'
-                      : '原设置已恢复'}
+              : status?.borrowed
+                ? status.running
+                  ? '已借用外部 CS2'
+                  : '借用实例已失效'
+                : status?.externalDetached
+                  ? '游戏借用已结束'
+                  : status?.pending
+                    ? uncertain
+                      ? '正在等待 Steam 启动 CS2'
+                      : status.running
+                        ? status.preserveSettings
+                          ? 'CS2 正在运行，已保持原游戏设置'
+                          : 'CS2 正在运行，原配置已备份'
+                        : status.preserveSettings
+                          ? '等待清理本次启动记录'
+                          : 'CS2 原配置尚未恢复'
+                    : status?.spectatorRecoveryPending
+                      ? '观战原值尚未恢复'
+                      : status?.demoCleanupPending
+                        ? '原设置已恢复，试播文件待清理'
+                        : status?.canPreserve
+                          ? '未应用游戏设置，原始配置已备份'
+                          : '原设置已恢复'}
         </strong>
         {exit?.windowMessage ? <p role="alert">{exit.windowMessage}</p> : null}
         {status?.canPreserve ? (
@@ -221,6 +234,8 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
             覆盖停用。
           </p>
         ) : null}
+        {status?.externalDetached ? <p>{status.message}</p> : null}
+        {status?.borrowed ? <p>结束本次制作后，外部 CS2 将保持运行，设置不变。</p> : null}
         {status?.pending ? (
           <p>
             {status.message ||
@@ -263,6 +278,19 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
           </p>
         ) : null}
         <div className="preparation-actions">
+          {status?.borrowed && production ? (
+            <Button
+              disabled={busy || Boolean(phase)}
+              onClick={() =>
+                void run(
+                  (task) => productionAction('finish', production, false, task),
+                  '已解除借用，外部游戏保持不变。',
+                )
+              }
+            >
+              结束本次制作
+            </Button>
+          ) : null}
           {status?.canPreserve && production ? (
             <Button
               disabled={busy || Boolean(phase)}
@@ -288,7 +316,7 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
                 )
               }
             >
-              打开直播工作台
+              返回工作台
             </Button>
           ) : null}
           {status?.demoCleanupPending ? (
@@ -351,16 +379,18 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
                     : '恢复配置备份'}
             </Button>
           ) : null}
-          <Button
-            disabled={busy || Boolean(phase)}
-            onClick={() =>
-              void desktopInvoke('open_cs2_backup').catch((reason: unknown) =>
-                setFeedback(reason instanceof Error ? reason.message : '备份目录无法打开。'),
-              )
-            }
-          >
-            打开备份目录
-          </Button>
+          {!status?.borrowed ? (
+            <Button
+              disabled={busy || Boolean(phase)}
+              onClick={() =>
+                void desktopInvoke('open_cs2_backup').catch((reason: unknown) =>
+                  setFeedback(reason instanceof Error ? reason.message : '备份目录无法打开。'),
+                )
+              }
+            >
+              打开备份目录
+            </Button>
+          ) : null}
         </div>
         {feedback ? <p role="status">{feedback}</p> : null}
       </div>

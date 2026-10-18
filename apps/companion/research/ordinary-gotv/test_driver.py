@@ -102,9 +102,14 @@ class DriverTest(unittest.TestCase):
         driver, port, _, _ = self.ready()
         class Parser:
             checkpoint = {'sequence': 0}
+            controls = []
+            def pop_receipts(self):
+                ready = [r for r in self.controls if r['sequence'] <= self.checkpoint['sequence']]
+                self.controls = [r for r in self.controls if r not in ready]
+                return ready
         driver.parser = Parser()
         driver._full_sent = True
-        driver._pending_entity_ticks = [(1, 100)]
+        driver.parser.controls = [{'type': 'receipt', 'sequence': 1, 'tick': 100, 'baselineAck': None}]
         driver.decoder.tick = 200  # A raw receive tick is not a parsed snapshot.
         driver._send_processed_tick(200)
         self.assertEqual(len(port.sent), 3)
@@ -112,12 +117,27 @@ class DriverTest(unittest.TestCase):
         driver._send_processed_tick(200)
         decoded, _ = messages(decode_frame(port.sent[-1][0], gns_reliable=True).body)
         self.assertEqual((decoded[0].message_id, scalar(fields(decoded[0].body), 1)), (4, 100))
-        driver._pending_entity_ticks = [(2, 101)]
+        driver.parser.controls = [{'type': 'receipt', 'sequence': 2, 'tick': 101, 'baselineAck': None}]
         driver.parser.checkpoint = {'sequence': 2}
         driver._send_processed_tick(250)
         self.assertEqual(len(port.sent), 4)
         driver._send_processed_tick(300)
         self.assertEqual(driver.report()['last_acknowledged_entity_tick'], 101)
+        driver.parser.controls = [{'type': 'recovery', 'sequence': 3, 'tick': 103, 'deltaFrom': 102}]
+        driver.parser.checkpoint = {'sequence': 3}
+        driver._send_processed_tick(400)
+        decoded, _ = messages(decode_frame(port.sent[-1][0], gns_reliable=True).body)
+        self.assertEqual(scalar(fields(decoded[0].body), 1), 0xffffffff)
+        size = len(port.sent)
+        driver._send_processed_tick(500)
+        self.assertEqual(len(port.sent), size)
+        driver.parser.controls = [{'type': 'receipt', 'sequence': 4, 'tick': 110, 'baselineAck': 1}]
+        driver.parser.checkpoint = {'sequence': 4}
+        driver._send_processed_tick(600)
+        decoded, _ = messages(decode_frame(port.sent[-2][0], gns_reliable=True).body)
+        self.assertEqual((decoded[0].message_id, scalar(fields(decoded[0].body), 1), scalar(fields(decoded[0].body), 2)), (23, 110, 1))
+        self.assertEqual(driver.report()['full_update_requests'], 1)
+        self.assertEqual(driver.report()['last_acknowledged_entity_tick'], 110)
         driver.close()
 
     def test_wrong_peer_context_and_timeouts_do_not_request_ticket(self):

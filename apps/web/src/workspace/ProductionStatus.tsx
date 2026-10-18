@@ -28,11 +28,11 @@ export function ProductionStatus({
           obs.findings.length > 0 ||
           obs.captureDiagnostic?.state === 'needs_attention'
           ? '需检查'
-          : '正常'
+          : '直播中'
         : '未推流';
   const platformText = !guidance
     ? '无法确认'
-    : ({ live: '正常', offline: '未开播', unknown: '无法确认', unconfigured: '未设置' } as const)[
+    : ({ live: '已开播', offline: '未开播', unknown: '无法确认', unconfigured: '未设置' } as const)[
         guidance.bilibili
       ];
   const reminder =
@@ -47,8 +47,8 @@ export function ProductionStatus({
       aria-label="当前任务与直播状态"
     >
       <div className="production-status__signals" aria-label="直播状态">
-        <span data-tone={obsText === '正常' ? 'success' : 'muted'}>OBS {obsText}</span>
-        <span data-tone={platformText === '正常' ? 'success' : 'muted'}>
+        <span data-tone={obsText === '直播中' ? 'success' : 'muted'}>OBS {obsText}</span>
+        <span data-tone={platformText === '已开播' ? 'success' : 'muted'}>
           Bilibili {platformText}
         </span>
       </div>

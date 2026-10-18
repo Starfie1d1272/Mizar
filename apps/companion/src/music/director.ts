@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { MusicGroup, MusicStatus } from '@mizar/protocol/music';
+import type { MusicGroup, MusicStatus, MusicTrack } from '@mizar/protocol/music';
 import type { ObsRpc } from '../obs/reconcile.js';
 import {
   musicCue,
@@ -32,7 +32,12 @@ export class MusicDirector {
   private inFlight = false;
   private closed = false;
   private heldOverride: boolean | null = null;
-  private pendingOpening: { key: string; expires: number } | null = null;
+  private pendingOpening: {
+    key: string;
+    expires: number;
+    scope: string;
+    track?: MusicTrack;
+  } | null = null;
   private fades: Partial<Record<MusicLayer, Fade>> = {};
   private expectedStops = new Map<MusicLayer, string>();
   private appliedVolumes = new Map<MusicLayer, number>();
@@ -112,8 +117,17 @@ export class MusicDirector {
     if (persistenceError)
       throw new Error('music_hold_persistence_failed', { cause: persistenceError });
   }
+  private openingScope() {
+    const p = this.truth().program;
+    return JSON.stringify([
+      musicMapKey(p),
+      p.cursor.producerInstanceId,
+      p.cursor.liveSessionId,
+      p.cursor.programSourceGeneration,
+    ]);
+  }
   /** Only called by an actual, current Take start. Never reconstructed from scene snapshots. */
-  opening(key: string) {
+  opening(key: string, track?: MusicTrack) {
     const t = this.truth();
     if (
       this.closed ||
@@ -124,7 +138,12 @@ export class MusicDirector {
     )
       return;
     if (this.store.state.consumed.includes(key)) return;
-    this.pendingOpening = { key, expires: this.now() + 1000 };
+    this.pendingOpening = {
+      key,
+      expires: this.now() + 1000,
+      scope: this.openingScope(),
+      ...(track ? { track } : {}),
+    };
   }
   private choose(group: MusicGroup, key: string, previous?: string) {
     const spec = this.store.state.config.groups[group];
@@ -155,6 +174,7 @@ export class MusicDirector {
     // Invalidate synchronously even while an OBS request is awaiting its reply.
     const preliminary = JSON.stringify([
       truth.production,
+      this.openingScope(),
       musicSafe(truth.program),
       truth.program.status.telemetry,
       map,
@@ -233,12 +253,23 @@ export class MusicDirector {
         // Observe both existing layers before changing a cue or attributing a stop to the system.
         if (await this.observeManualControls(obs, valid)) return;
         await this.layer(obs, 'bgm', cue, valid, configChanged, reconnect);
-        if (opening && opening.expires >= this.now() && valid() && !this.isHeld()) {
+        if (
+          opening &&
+          opening.scope === this.openingScope() &&
+          opening.expires >= this.now() &&
+          valid() &&
+          !this.isHeld()
+        ) {
           await this.store.consume(opening.key); // At-most-once across uncertain RPCs / process restarts.
           await this.layer(
             obs,
             'stinger',
-            { group: 'opening', key: opening.key },
+            {
+              group: 'opening',
+              key: opening.key,
+              scope: opening.scope,
+              ...(opening.track ? { track: opening.track } : {}),
+            },
             valid,
             configChanged,
             reconnect,
@@ -253,7 +284,12 @@ export class MusicDirector {
           await this.layer(
             obs,
             'stinger',
-            safe && stinger && !stinger.finished ? { group: 'opening', key: stinger.key } : null,
+            safe &&
+              stinger &&
+              !stinger.finished &&
+              (!stinger.scope || stinger.scope === this.openingScope())
+              ? { group: 'opening', key: stinger.key, track: stinger.track }
+              : null,
             valid,
             configChanged,
             reconnect,
@@ -357,7 +393,7 @@ export class MusicDirector {
     };
     let saved = this.store.state[layer];
     const spec = cue ? this.store.state.config.groups[cue.group] : null;
-    const enabled = Boolean(cue && spec?.enabled && spec.tracks.length);
+    const enabled = Boolean(cue && spec?.enabled && (cue.track || spec.tracks.length));
     const previousUuid = this.store.state.sources[layer];
     const name = await ownedMusicInput(obs, this.store, layer, enabled, valid, reconnect);
     if (cue && previousUuid !== this.store.state.sources[layer]) this.failed.delete(cue.key);
@@ -428,7 +464,7 @@ export class MusicDirector {
     const matching =
       saved?.key === cue!.key &&
       saved.group === cue!.group &&
-      spec!.tracks.some(
+      (cue!.track ? [cue!.track] : spec!.tracks).some(
         (t) =>
           t.id === saved!.track.id &&
           t.startMs === saved!.track.startMs &&
@@ -559,7 +595,8 @@ export class MusicDirector {
         };
       if (await this.fade(obs, layer, valid)) return;
     }
-    const track = this.choose(cue!.group, cue!.key, matching ? saved?.track.id : undefined);
+    const track =
+      cue!.track ?? this.choose(cue!.group, cue!.key, matching ? saved?.track.id : undefined);
     if (!track) {
       this.status.message = '本组曲目均无法播放，保持静音。请检查音频文件或重新选曲。';
       markStatus(null);
@@ -570,6 +607,7 @@ export class MusicDirector {
       saved = {
         group: cue!.group,
         key: cue!.key,
+        ...(cue!.scope ? { scope: cue!.scope } : {}),
         track,
         finished: false,
         suspended: false,
@@ -581,6 +619,7 @@ export class MusicDirector {
     saved = {
       group: cue!.group,
       key: cue!.key,
+      ...(cue!.scope ? { scope: cue!.scope } : {}),
       track,
       finished: false,
       suspended: true,

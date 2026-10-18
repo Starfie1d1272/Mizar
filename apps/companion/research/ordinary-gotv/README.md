@@ -1,6 +1,6 @@
 # 普通观众 GOTV 研究原型
 
-**本分支没有实现可登录完美 GOTV 的无画面客户端。** 已交付的是协议证据探针、内存握手/密码/通道组件、可编译 SDK 桥接、增量事件解码器及实测方案。接入普通观众身份、持续在线收数仍未实证；所有程序报告保留 `INCONCLUSIVE`，不会用退出码、ConnectOK 或离线事件数代替接入证明。
+本分支提供 Windows 便携式普通观众研究客户端：SDK 连接、握手、无画面初始化、增量事件解析与诊断输出已串联。离线录像、合成传输和 Windows 构建均有证据；完美在线互操作留待集中实测。程序报告分别记录协议状态、解析进度和验证来源。
 
 独立研究分支；不修改 #408/#409，不接入生产 HUD、Core 或遥测自动编排。`follow.ts` 复用了 #408 的增长文件读取实现，解码器通过 `@mizar/telemetry-cstv/viewer-research` 暴露标量事件，原始第三方解析器仍只在适配器包中使用。新增的纯内存握手组件与逐地址证据见 [HANDSHAKE-EVIDENCE.md](HANDSHAKE-EVIDENCE.md)。协议设计见 [DESIGN.md](DESIGN.md)，用户本机步骤见 [WINDOWS-TEST.md](WINDOWS-TEST.md)，原始结果和取证来源见 [EVIDENCE.md](EVIDENCE.md)。
 
@@ -64,3 +64,9 @@ pnpm architecture:check
 ## Windows CI 测试包
 
 `Observer Research Package` 工作流在本研究 PR 变更后构建 Windows x64 原生桥、单文件解析器和便携 Python/Node 运行环境，并上传七天有效的测试制品。下载后解压运行 `Start.cmd`；仅使用本机 CS2 的 Steam API，填写当前授权测试源。包内 `manifest.json` 保存精确提交与文件摘要。构建完成和脚本启动检查分别记录，实际普通观众连接与持续事件输出由新测试赛验证。
+
+## 普通观众实体状态
+
+研究包在固定 `cs2parser` 2.7.2 源码上应用 `cs2parser-online.patch`，只启用独立的 `ordinaryViewer` 路径；生产依赖锁定不变。处理双实体基线、备用类基线、PVS 更新、非传输实体集合与缺帧恢复。回执在解析完成且本地检查点确认后发送；缺少依赖帧时暂停派生事件、请求完整状态，再恢复输出。
+
+`build_parser.mjs <固定提交的干净源码目录> <输出文件>` 应用补丁并构建。便携包携带修改源码与 MPL-2.0 许可证。`verify_online_entities.mts <补丁后源码目录>` 通过现有 Companion 的 tsx 执行，覆盖实际二进制实体消息中的基线切换、实体重入、PVS 和恢复顺序。

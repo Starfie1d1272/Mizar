@@ -52,7 +52,9 @@ export function assertPublishedAssets(release, ref, identity, expected) {
 
 export function assertPublication(publication, manifestBytes, manifest) {
   requireValue(
-    publication.schemaVersion === 'mizar.update-publication.v1' &&
+    /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(manifest.version) &&
+      manifest.channel === 'stable' &&
+      publication.schemaVersion === 'mizar.update-publication.v1' &&
       publication.repository === repository &&
       publication.version === manifest.version &&
       publication.gitSha === manifest.gitSha &&

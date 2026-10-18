@@ -217,25 +217,34 @@ describe('signed content retained across compatible Core authorization', () => {
     // dates, source and Promotion signature remain byte-for-byte unchanged.
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(now + 2 * 86400000);
-    const authorization = await authorize(newCore, origin(), now + 2 * 86400000);
-    const zip = vi.fn(async () => {
-      throw new Error('resource ZIP must not be requested');
-    });
-    const opened = await open(newCore);
-    const result = await installOfficialPack({
-      store: opened,
-      authorization,
-      loadInputs: zip,
-      tufCachePath: join(root, 'trust'),
-    });
-    expect(zip).not.toHaveBeenCalled();
-    expect(result.sourceSha).toBe(sourceSha);
-    expect(result.promotionSha).toBe(oldPromotion);
-    expect(getResourceAuthorization(authorization).core.gitSha).toBe(newCore.gitSha);
-    expect(getResourceAuthorization(authorization).originAssets['resource-publication.json']).toBe(
-      'https://github.com/Starfie1d1272/Mizar/releases/download/v1.1.0/resource-publication.json',
-    );
-    await store.close();
+    for (const suffix of ['', '-alpha.1', '-beta.2', '-rc.3']) {
+      const core = {
+        ...newCore,
+        appVersion: `1.2.0${suffix}`,
+        archive: `Mizar-v1.2.0${suffix}-Windows-x64-Core.zip`,
+      };
+      const authorization = await authorize(core, origin(), now + 2 * 86400000);
+      const zip = vi.fn(async () => {
+        throw new Error('resource ZIP must not be requested');
+      });
+      const opened = await open(core);
+      const result = await installOfficialPack({
+        store: opened,
+        authorization,
+        loadInputs: zip,
+        tufCachePath: join(root, 'trust'),
+      });
+      expect(zip).not.toHaveBeenCalled();
+      expect(result.sourceSha).toBe(sourceSha);
+      expect(result.promotionSha).toBe(oldPromotion);
+      expect(getResourceAuthorization(authorization).core.gitSha).toBe(core.gitSha);
+      expect(
+        getResourceAuthorization(authorization).originAssets['resource-publication.json'],
+      ).toBe(
+        'https://github.com/Starfie1d1272/Mizar/releases/download/v1.1.0/resource-publication.json',
+      );
+      await store.close();
+    }
     const oldStore = await open(oldCore);
     expect(oldStore.getStatus('official:epl-default').phase).toBe('ready');
     const path = join(root, 'store', sha256(Buffer.from('official:epl-default')), 'versions');

@@ -7,12 +7,12 @@ import { checkObsBeforeLaunch, useLocalRead } from './client';
 import { useCs2Status } from './cs2-status';
 import type { DemoTestView, SelectedDemo } from './demo-test';
 
-export function DemoTestPanel() {
+export function DemoTestPanel({ forceExpanded = false }: { forceExpanded?: boolean }) {
   const trial = useLocalRead<DemoTestView>('/local/v1/demo-test', 1000);
   const [expanded, setExpanded] = useState(() =>
     new URLSearchParams(window.location.search).has('demoTest'),
   );
-  const shown = expanded || trial?.active === true;
+  const shown = forceExpanded || expanded || trial?.active === true;
   const editor = useHudConfigEditorClient(shown);
   const { status: game } = useCs2Status();
   const [selected, setSelected] = useState<SelectedDemo | null>(null);
@@ -28,7 +28,8 @@ export function DemoTestPanel() {
   const desktop = Boolean(window.__TAURI_INTERNALS__);
 
   useEffect(() => {
-    if (expanded && !trial?.active) form.current?.querySelector('input')?.focus();
+    if (expanded && !trial?.active)
+      form.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
   }, [expanded, trial?.active]);
 
   const run = useCallback(async (action: () => Promise<unknown>) => {
@@ -91,9 +92,10 @@ export function DemoTestPanel() {
     void run(() => desktopInvoke('enter_demo_test', { requestId }));
   }, [desktop, trial?.phase, trial?.requestId, game?.running, busy, run]);
 
+  const Container = forceExpanded ? 'div' : Panel;
   return (
-    <Panel id="demo-test" className="preparation-demo-test">
-      <h2>Demo 试播</h2>
+    <Container id="demo-test" className="preparation-demo-test" data-expanded={shown}>
+      {!forceExpanded ? <h2>Demo 试播</h2> : null}
       {!shown ? (
         <Button disabled={!desktop} onClick={() => setExpanded(true)}>
           准备 Demo 试播
@@ -112,35 +114,39 @@ export function DemoTestPanel() {
                 ? trial.dataReady
                   ? '已收到新鲜游戏数据，可检查 HUD。'
                   : '游戏已运行，等待有效观战数据。'
-                : '试播数据已隔离，等待关闭游戏并恢复配置。'}
+                : '请先退出 CS2，再重试恢复。'}
           </p>
           {trial.phase === 'starting' || (trial.phase === 'playing' && !trial.dataReady) ? (
             <p>游戏运行不代表 Demo 已加载，请在 CS2 检查播放画面。</p>
           ) : trial.phase === 'playing' ? (
             <p>试播保持手动编排，可检查 HUD、场景与 OBS 音画。</p>
           ) : (
-            <p>恢复完成后才能开始正式制作；请退出 CS2 后重试。</p>
+            <p>恢复完成后即可开始正式比赛。</p>
           )}
-          {trial.phase === 'playing' || (trial.phase === 'starting' && game?.running) ? (
+          <div className="preparation-actions">
+            {trial.phase === 'playing' || (trial.phase === 'starting' && game?.running) ? (
+              <Button
+                variant="primary"
+                disabled={busy || !desktop}
+                onClick={() =>
+                  void run(() => desktopInvoke('enter_demo_test', { requestId: trial.requestId }))
+                }
+              >
+                返回试播工作台
+              </Button>
+            ) : null}
             <Button
               disabled={busy || !desktop}
               onClick={() =>
-                void run(() => desktopInvoke('enter_demo_test', { requestId: trial.requestId }))
+                void run(() => desktopInvoke('finish_demo_test', { requestId: trial.requestId }))
               }
             >
-              打开试播工作台
+              {trial.phase === 'recovery' || trial.phase === 'stopping'
+                ? '重试恢复'
+                : '结束试播并恢复设置'}
             </Button>
-          ) : null}
-          <Button
-            disabled={busy || !desktop}
-            onClick={() =>
-              void run(() => desktopInvoke('finish_demo_test', { requestId: trial.requestId }))
-            }
-          >
-            {trial.phase === 'recovery' || trial.phase === 'stopping'
-              ? '重试结束并恢复'
-              : '结束试播并恢复设置'}
-          </Button>
+          </div>
+          <p>关闭此窗口不会结束试播。</p>
         </>
       ) : (
         <form
@@ -150,35 +156,6 @@ export function DemoTestPanel() {
             void start();
           }}
         >
-          <Field
-            label="队伍 A"
-            value={teamAName}
-            maxLength={100}
-            required
-            disabled={busy}
-            onChange={(event) => setTeamAName(event.target.value)}
-          />
-          <Field
-            label="队伍 B"
-            value={teamBName}
-            maxLength={100}
-            required
-            disabled={busy}
-            onChange={(event) => setTeamBName(event.target.value)}
-          />
-          <p>BO1 · 试播资料不入比赛库</p>
-          <Select
-            label="试播 HUD"
-            value={activePreset}
-            disabled={busy || editor.status !== 'ready'}
-            onChange={(event) => setPreset(event.target.value)}
-          >
-            {[...getBuiltinPresets(), ...(editor.document?.customPresets ?? [])].map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name}
-              </option>
-            ))}
-          </Select>
           <Button
             disabled={busy || !desktop}
             onClick={() =>
@@ -191,10 +168,45 @@ export function DemoTestPanel() {
             选择本地 Demo
           </Button>
           <p>{selected?.name ?? '尚未选择 .dem 文件'}</p>
+          <p>默认沿用当前 HUD，使用“队伍 A / 队伍 B”作为试播队名。</p>
+          <details>
+            <summary>调整队名与 HUD</summary>
+            <Field
+              label="队伍 A"
+              value={teamAName}
+              maxLength={100}
+              required
+              disabled={busy}
+              onChange={(event) => setTeamAName(event.target.value)}
+            />
+            <Field
+              label="队伍 B"
+              value={teamBName}
+              maxLength={100}
+              required
+              disabled={busy}
+              onChange={(event) => setTeamBName(event.target.value)}
+            />
+            <p>BO1 · 试播资料不入比赛库</p>
+            <Select
+              label="试播 HUD"
+              value={activePreset}
+              disabled={busy || editor.status !== 'ready'}
+              onChange={(event) => setPreset(event.target.value)}
+            >
+              {[...getBuiltinPresets(), ...(editor.document?.customPresets ?? [])].map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </Select>
+            <p>更换 HUD 后，该样式在试播结束后仍会保留。</p>
+          </details>
+
           {game?.running || game?.pending ? (
             <p>请先退出当前 CS2 并恢复设置，再开始试播。</p>
           ) : (
-            <p>请先停止 OBS 推流；所选 HUD 在试播后保留。</p>
+            <p>开始前会检查 OBS；正在推流时请先停止。</p>
           )}
           <Button type="submit" variant="primary" disabled={startDisabled}>
             启动 Demo 试播
@@ -215,6 +227,6 @@ export function DemoTestPanel() {
       {!desktop ? <p>请在 Mizar 桌面准备中心选择并启动本地 Demo。</p> : null}
       {message ? <StatusBanner tone="danger">{message}</StatusBanner> : null}
       {shown && editor.error ? <StatusBanner tone="warning">{editor.error}</StatusBanner> : null}
-    </Panel>
+    </Container>
   );
 }

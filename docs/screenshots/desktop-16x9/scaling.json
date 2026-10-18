@@ -1,0 +1,140 @@
+[
+  {
+    "width": 1920,
+    "height": 1080,
+    "boxes": {
+      ".workspace-left": {
+        "x": 0,
+        "y": 0,
+        "width": 480,
+        "height": 1080,
+        "scrollWidth": 480,
+        "clientWidth": 480,
+        "scrollHeight": 1080,
+        "clientHeight": 1080
+      },
+      ".workspace-preview__game": {
+        "x": 480,
+        "y": 0,
+        "width": 1440,
+        "height": 810,
+        "scrollWidth": 1440,
+        "clientWidth": 1440,
+        "scrollHeight": 810,
+        "clientHeight": 810
+      },
+      ".workspace-confidence": {
+        "x": 0,
+        "y": 810,
+        "width": 480,
+        "height": 270,
+        "scrollWidth": 480,
+        "clientWidth": 480,
+        "scrollHeight": 270,
+        "clientHeight": 270
+      },
+      ".workspace-dock": {
+        "x": 480,
+        "y": 810,
+        "width": 1440,
+        "height": 270,
+        "scrollWidth": 1440,
+        "clientWidth": 1440,
+        "scrollHeight": 270,
+        "clientHeight": 270
+      }
+    }
+  },
+  {
+    "width": 2560,
+    "height": 1440,
+    "boxes": {
+      ".workspace-left": {
+        "x": 0,
+        "y": 0,
+        "width": 640,
+        "height": 1440,
+        "scrollWidth": 480,
+        "clientWidth": 480,
+        "scrollHeight": 1080,
+        "clientHeight": 1080
+      },
+      ".workspace-preview__game": {
+        "x": 640,
+        "y": 0,
+        "width": 1920,
+        "height": 1080,
+        "scrollWidth": 1440,
+        "clientWidth": 1440,
+        "scrollHeight": 810,
+        "clientHeight": 810
+      },
+      ".workspace-confidence": {
+        "x": 0,
+        "y": 1080,
+        "width": 640,
+        "height": 360,
+        "scrollWidth": 480,
+        "clientWidth": 480,
+        "scrollHeight": 270,
+        "clientHeight": 270
+      },
+      ".workspace-dock": {
+        "x": 640,
+        "y": 1080,
+        "width": 1920,
+        "height": 360,
+        "scrollWidth": 1440,
+        "clientWidth": 1440,
+        "scrollHeight": 270,
+        "clientHeight": 270
+      }
+    }
+  },
+  {
+    "width": 3840,
+    "height": 2160,
+    "boxes": {
+      ".workspace-left": {
+        "x": 0,
+        "y": 0,
+        "width": 960,
+        "height": 2160,
+        "scrollWidth": 480,
+        "clientWidth": 480,
+        "scrollHeight": 1080,
+        "clientHeight": 1080
+      },
+      ".workspace-preview__game": {
+        "x": 960,
+        "y": 0,
+        "width": 2880,
+        "height": 1620,
+        "scrollWidth": 1440,
+        "clientWidth": 1440,
+        "scrollHeight": 810,
+        "clientHeight": 810
+      },
+      ".workspace-confidence": {
+        "x": 0,
+        "y": 1620,
+        "width": 960,
+        "height": 540,
+        "scrollWidth": 480,
+        "clientWidth": 480,
+        "scrollHeight": 270,
+        "clientHeight": 270
+      },
+      ".workspace-dock": {
+        "x": 960,
+        "y": 1620,
+        "width": 2880,
+        "height": 540,
+        "scrollWidth": 1440,
+        "clientWidth": 1440,
+        "scrollHeight": 270,
+        "clientHeight": 270
+      }
+    }
+  }
+]

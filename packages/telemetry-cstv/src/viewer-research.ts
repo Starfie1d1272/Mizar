@@ -35,6 +35,7 @@ export interface ViewerParserCheckpoint {
 export function viewerDecoder(
   emit: (event: ViewerEvent) => void,
   processed?: (checkpoint: ViewerParserCheckpoint) => void,
+  researchOptions: Record<string, unknown> = {},
 ) {
   const parser = new DemoReader();
   let map: string | null = null;
@@ -133,7 +134,7 @@ export function viewerDecoder(
   parser.gameEvents.on('round_end', () => send('round_end'));
   return {
     parse: (input: ReadableStream<Uint8Array>) =>
-      parser.parseDemo(input, { entities: EntityMode.ALL }),
+      parser.parseDemo(input, { entities: EntityMode.ALL, ...researchOptions }),
     cancel: () => parser.cancel(),
   };
 }

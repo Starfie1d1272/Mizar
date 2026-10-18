@@ -701,3 +701,34 @@ it('guards resume permission after playback persistence while keeping telemetry 
     if (!newerStop) expect(r.director.get().bgm?.group).toBe('tactical');
   }
 });
+it('plays a map opening override through the existing stinger layer without restarting it on polls', async () => {
+  const r = await rig();
+  await r.step();
+  r.director.opening('map-opening', r.tracks[1]);
+  await r.step();
+  expect(r.store.state.stinger?.track.id).toBe(r.tracks[1]!.id);
+  const starts = r.obs.restarts();
+  await r.step();
+  await r.step();
+  expect(r.obs.restarts()).toBe(starts);
+  expect(r.store.state.stinger?.track.id).toBe(r.tracks[1]!.id);
+  r.director.opening('map-opening', r.tracks[1]);
+  await r.step();
+  expect(r.obs.restarts()).toBe(starts);
+});
+it('drops an opening queued for another map and stops an old map stinger without replay', async () => {
+  const r = await rig();
+  await r.step();
+  r.director.opening('stale-map', r.tracks[1]);
+  r.truth.program.cursor.mapEpoch++;
+  await r.step();
+  expect(r.obs.restarts()).toBe(1);
+  r.director.opening('current-map', r.tracks[1]);
+  await r.step();
+  expect(r.obs.restarts()).toBe(2);
+  r.truth.program.cursor.mapEpoch++;
+  await r.step();
+  expect(r.store.state.stinger?.finished).toBe(true);
+  await r.step();
+  expect(r.obs.restarts()).toBe(2);
+});

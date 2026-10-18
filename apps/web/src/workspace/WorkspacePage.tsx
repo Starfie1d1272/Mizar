@@ -1,3 +1,8 @@
+import { ReviewDialog, closeReviewWindow } from './ReviewDialog';
+import { PreflightReview } from './PreflightReview';
+import { RosterCapture } from '../preparation/RosterCapture';
+import { DesktopCanvas } from '../patterns/DesktopCanvas';
+import { CameraControls } from '../orchestration/CameraControls';
 import { MusicControls } from '../music/MusicControls';
 import { ObsOutputControls } from './ObsOutputControls';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
@@ -84,7 +89,12 @@ function ContextPanel({
     connection,
     programCursor,
   );
-  const [issuesOpen, setIssuesOpen] = useState(false);
+  const [captureOpen, setCaptureOpen] = useState(false);
+  const [issuesOpen, setIssuesOpen] = useState(
+    () =>
+      window.location.pathname === '/workspace/review' &&
+      new URLSearchParams(window.location.search).get('kind') === 'issues',
+  );
   const [issueError, setIssueError] = useState<{ key: string; message: string } | null>(null);
   const attentionIssues = rosterAlert
     ? issues.filter((issue) => issue.id !== 'steam64' && issue.id !== 'roster')
@@ -131,34 +141,68 @@ function ContextPanel({
         </small>
       )}
       <p className="workspace-pov">当前视角 · {pov ?? '等待观战数据'}</p>
-      <SyncHealthAlert
-        health={connection?.syncHealth}
-        isSource={Boolean(
-          connection?.activeMatchId && connection.activeSourceMatchId === connection.activeMatchId,
-        )}
+      {operator?.matchContext.rosterAuthority !== 'rivalhub' ? (
+        <>
+          <Button onClick={() => setCaptureOpen(true)}>
+            {match ? '识别服务器首发' : '从服务器创建本地比赛'}
+          </Button>
+          <Dialog
+            open={captureOpen}
+            title={match ? '核对现场首发' : '从服务器创建本地比赛'}
+            modal={false}
+            className="workspace-recovery workspace-roster-capture"
+            onClose={() => setCaptureOpen(false)}
+          >
+            <p>连接服务器并进入观战后，核对双方十人名单，再确认保存。</p>
+            <RosterCapture
+              key={match?.matchId ?? 'empty'}
+              create={!match}
+              autoOpen
+              {...(match ? { names: { a: match.entryAName, b: match.entryBName } } : {})}
+            />
+          </Dialog>
+        </>
+      ) : null}
+      <PreflightReview
+        operator={operator}
+        program={program}
+        cursor={programCursor}
+        connection={connection}
         onOpen={openPreparation}
       />
-      <LiveRosterAlert
-        alert={rosterAlert}
-        suppressAutomatic={connection?.syncHealth?.status === 'attention'}
-        recovered={
-          operator?.runtime.telemetryFreshness === 'fresh' &&
-          operator.identity.state === 'matched' &&
-          operator.activeLineup.state === 'complete' &&
-          operator.activeLineup.retainedCount === 0 &&
-          !operator.identity.issues.some((issue) => issue.code === 'lineup_differs_from_expected')
-        }
-        onReview={() =>
-          void openIssue({
-            id: 'live-roster',
-            summary: '上场选手／账号与网站首发不一致',
-            detail: '',
-            action: '核对网站名单',
-            path: '/matches?tab=roster',
-          })
-        }
-        error={visibleIssueError}
-      />
+      {program?.map.phase !== 'warmup' ? (
+        <SyncHealthAlert
+          health={connection?.syncHealth}
+          isSource={Boolean(
+            connection?.activeMatchId &&
+            connection.activeSourceMatchId === connection.activeMatchId,
+          )}
+          onOpen={openPreparation}
+        />
+      ) : null}
+      {program?.map.phase !== 'warmup' ? (
+        <LiveRosterAlert
+          alert={rosterAlert}
+          suppressAutomatic={connection?.syncHealth?.status === 'attention'}
+          recovered={
+            operator?.runtime.telemetryFreshness === 'fresh' &&
+            operator.identity.state === 'matched' &&
+            operator.activeLineup.state === 'complete' &&
+            operator.activeLineup.retainedCount === 0 &&
+            !operator.identity.issues.some((issue) => issue.code === 'lineup_differs_from_expected')
+          }
+          onReview={() =>
+            void openIssue({
+              id: 'live-roster',
+              summary: '上场选手／账号与网站首发不一致',
+              detail: '',
+              action: '核对网站名单',
+              path: '/matches?tab=roster',
+            })
+          }
+          error={visibleIssueError}
+        />
+      ) : null}
       {attentionIssues.length > 0 ? (
         <div className="workspace-attention" data-multiple={attentionIssues.length > 1}>
           <span role="status" title={attentionIssues.map((issue) => issue.summary).join('；')}>
@@ -171,14 +215,19 @@ function ContextPanel({
             </Button>
             {attentionIssues.length > 1 ? ` · 共 ${attentionIssues.length} 项` : ''}
           </span>
-          <Button onClick={() => void openIssue(attentionIssues[0]!)}>{issues[0]!.action}</Button>
+          <Button onClick={() => void openIssue(attentionIssues[0]!)}>
+            {attentionIssues[0]!.action}
+          </Button>
           {issues.length > 1 ? <Button onClick={() => setIssuesOpen(true)}>全部问题</Button> : null}
         </div>
       ) : null}
       {visibleIssueError && issues.length > 0 ? <p role="alert">{visibleIssueError}</p> : null}
-      <Dialog
+      <ReviewDialog
+        kind="issues"
         open={issuesOpen && issues.length > 0}
         title="本场需要处理"
+        modal={false}
+        className="workspace-recovery"
         onClose={() => setIssuesOpen(false)}
       >
         {issues.map((issue) => (
@@ -189,7 +238,7 @@ function ContextPanel({
           </section>
         ))}
         {visibleIssueError ? <p role="alert">{visibleIssueError}</p> : null}
-      </Dialog>
+      </ReviewDialog>
     </section>
   );
 }
@@ -220,7 +269,7 @@ function ObsConfidence() {
   );
 }
 
-export function WorkspaceLeft() {
+function WorkspaceLeftContent() {
   const radar = useLocalChannelClient('radar');
   const operator = useLocalChannelClient('operator');
   const program = useLocalChannelClient('program');
@@ -302,7 +351,7 @@ export function WorkspaceLeft() {
   );
 }
 
-export function WorkspaceDock() {
+function WorkspaceDockContent() {
   const sceneState = useProgramScenes();
   const { snapshot: bp } = useBpSession();
   const obs = useObsStatus();
@@ -359,8 +408,11 @@ export function WorkspaceDock() {
   const connected = obs?.connection === 'connected';
   const next = PROGRAM_SCENES.find((scene) => scene.id === sceneState?.director?.next);
   const nextFrame = useMemo(
-    () => (next ? { key: next.id, scene: next.id, src: next.path, immediate: true } : null),
-    [next],
+    () =>
+      mode === 'auto' && next
+        ? { key: next.id, scene: next.id, src: next.path, immediate: true }
+        : null,
+    [next, mode],
   );
   return (
     <main className="workspace-dock mizar-surface" aria-label="现场控制底栏">
@@ -430,13 +482,34 @@ export function WorkspaceDock() {
           </Select>
           {nextFrame ? <ScenePreviewViewport frame={nextFrame} onSettled={previewSettled} /> : null}
           <div>
-            <small>下一场景</small>
+            <small>{mode === 'manual' || mode === 'blocked' ? '自动推进已暂停' : '下一场景'}</small>
             <strong>
-              {next?.title ??
-                (sceneState?.director?.nextStatus === 'complete' ? '本场结束' : '待确认')}
+              {mode === 'manual'
+                ? '恢复自动后继续编排'
+                : mode === 'blocked'
+                  ? '处理问题后恢复自动'
+                  : (next?.title ??
+                    (sceneState?.director?.nextStatus === 'complete' ? '本场结束' : '待确认'))}
             </strong>
+            {mode === 'auto' && sceneState?.director?.nextReason ? (
+              <small>{sceneState.director.nextReason}</small>
+            ) : null}
+            {mode === 'blocked' && sceneState?.director?.reason ? (
+              <small>{sceneState.director.reason}</small>
+            ) : null}
           </div>
         </div>
+      </section>
+      <section className="workspace-camera" aria-label="运镜控制">
+        <div className="workspace-section-heading">
+          <strong>运镜</strong>
+          <Button
+            onClick={() => void action(() => openPreparation('/settings?tab=music&section=camera'))}
+          >
+            配置运镜
+          </Button>
+        </div>
+        <CameraControls workspace />
       </section>
       <section className="workspace-spectator" aria-label="观战控制">
         <div className="workspace-section-heading">
@@ -444,7 +517,13 @@ export function WorkspaceDock() {
             <Button
               className="workspace-window-warning"
               aria-label="窗口控制需要处理"
-              onClick={() => setDetailsOpen(true)}
+              onClick={() => {
+                if (exit?.message && window.__TAURI_INTERNALS__) {
+                  void desktopInvoke('open_tool', { tool: 'review', presetId: 'exit' }).catch(() =>
+                    setDetailsOpen(true),
+                  );
+                } else setDetailsOpen(true);
+              }}
             >
               窗口告警
             </Button>
@@ -464,7 +543,7 @@ export function WorkspaceDock() {
             返回游戏
           </Button>
           <Button disabled={busy} onClick={() => void action(() => openTool('bp'))}>
-            BP 工作台
+            地图资料
           </Button>
           {bp && bp.state !== 'hidden' && bp.projection ? (
             <span>
@@ -529,7 +608,13 @@ export function WorkspaceDock() {
         {visibleError ? (
           <button
             className="workspace-error"
-            onClick={() => setDetailsOpen(true)}
+            onClick={() => {
+              if (exit?.message && window.__TAURI_INTERNALS__) {
+                void desktopInvoke('open_tool', { tool: 'review', presetId: 'exit' }).catch(() =>
+                  setDetailsOpen(true),
+                );
+              } else setDetailsOpen(true);
+            }}
             title={visibleError}
             aria-label="查看错误详情"
           >
@@ -546,9 +631,11 @@ export function WorkspaceDock() {
           <small className="workspace-exit-help">
             {exit?.busy
               ? workspaceExitLabel(exit.stage)
-              : cs2?.preserveSettings
-                ? '关闭本次游戏，保留游戏设置'
-                : '关闭游戏并恢复配置'}
+              : cs2?.borrowed
+                ? '解除借用，游戏保持运行'
+                : cs2?.preserveSettings
+                  ? '关闭本次游戏，保留游戏设置'
+                  : '关闭游戏并恢复配置'}
           </small>
           <Button
             disabled={busy}
@@ -578,6 +665,7 @@ export function WorkspaceDock() {
       </footer>
       <Dialog
         open={detailsOpen}
+        modal={false}
         title={exit?.message ? '退出工作台需要处理' : '操作未完成'}
         onClose={() => setDetailsOpen(false)}
       >
@@ -606,12 +694,92 @@ export function WorkspaceDock() {
   );
 }
 
+export function WorkspaceLeft() {
+  return (
+    <DesktopCanvas kind="left">
+      <WorkspaceLeftContent />
+    </DesktopCanvas>
+  );
+}
+
+export function WorkspaceDock() {
+  return (
+    <DesktopCanvas kind="dock">
+      <WorkspaceDockContent />
+    </DesktopCanvas>
+  );
+}
+
 export function WorkspacePreview() {
   return (
-    <div className="workspace-preview">
-      <WorkspaceLeft />
-      <div className="workspace-preview__game">CS2 游戏画面</div>
-      <WorkspaceDock />
+    <DesktopCanvas kind="preview">
+      <div className="workspace-preview">
+        <WorkspaceLeftContent />
+        <div className="workspace-preview__game">CS2 游戏画面</div>
+        <WorkspaceDockContent />
+      </div>
+    </DesktopCanvas>
+  );
+}
+
+function ExitReview() {
+  const exit = useWorkspaceExitStatus();
+  const [error, setError] = useState('');
+  return (
+    <div className="workspace-review-native">
+      <Dialog
+        open
+        modal={false}
+        title="退出工作台需要处理"
+        className="workspace-review-dialog"
+        onClose={() => void closeReviewWindow().catch((reason) => setError(String(reason)))}
+      >
+        <p>
+          {exit
+            ? (exit.message ??
+              (exit.busy
+                ? '正在处理，请等待结果。'
+                : '退出异常已处理，请返回准备中心查看当前状态。'))
+            : '正在读取退出结果…'}
+        </p>
+        {exit?.message ? (
+          <p>
+            {workspaceExitLabel(exit.stage)}尚未完成。请返回准备中心处理，备份和处理记录仍保留。
+          </p>
+        ) : null}
+        <div className="preparation-actions">
+          <Button
+            variant="primary"
+            onClick={() =>
+              void openPreparation('/')
+                .then(() => closeReviewWindow())
+                .catch((reason) => setError(String(reason)))
+            }
+          >
+            返回准备中心处理
+          </Button>
+          <Button
+            onClick={() => void openTool('diagnostics').catch((reason) => setError(String(reason)))}
+          >
+            运行诊断
+          </Button>
+        </div>
+        {error ? <p role="alert">{error}</p> : null}
+      </Dialog>
+    </div>
+  );
+}
+
+export function WorkspaceReview() {
+  if (new URLSearchParams(window.location.search).get('kind') === 'exit') return <ExitReview />;
+  return (
+    <div className="workspace-review-native">
+      <WorkspaceLeftContent />
+      <section className="workspace-review-empty">
+        <h1>本场核对</h1>
+        <p>当前没有需要处理的提醒，或数据仍在加载。</p>
+        <Button onClick={() => void closeReviewWindow()}>关闭窗口</Button>
+      </section>
     </div>
   );
 }

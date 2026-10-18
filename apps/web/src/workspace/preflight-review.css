@@ -1,0 +1,101 @@
+.preflight-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--mizar-layout-compact);
+}
+.preflight-intro {
+  color: var(--mizar-fg-muted);
+}
+.preflight-check {
+  padding-block: var(--mizar-layout-compact);
+  border-top: var(--mizar-line-border) solid var(--mizar-border-default);
+}
+.preflight-check h3 {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--mizar-layout-compact);
+  margin: 0 0 var(--mizar-layout-compact);
+}
+.preflight-check h3 small {
+  color: var(--mizar-fg-muted);
+  font-weight: normal;
+}
+.preflight-check[data-attention='true'] h3 small {
+  color: var(--mizar-status-warning);
+}
+.preflight-check p {
+  margin-block: var(--mizar-layout-compact);
+}
+.preflight-check label {
+  display: flex;
+  gap: var(--mizar-layout-compact);
+  margin-block: var(--mizar-layout-compact);
+  align-items: start;
+}
+.preflight-check input {
+  flex-shrink: 0;
+}
+.preflight-check details {
+  margin-top: var(--mizar-layout-compact);
+}
+.preflight-rosters {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--mizar-layout-gap);
+}
+.preflight-rosters ul {
+  padding-left: var(--mizar-layout-padding);
+  overflow-wrap: anywhere;
+}
+.preflight-next {
+  padding: var(--mizar-layout-compact);
+  background: var(--mizar-bg-surface);
+}
+.workspace-preflight footer {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--mizar-layout-compact);
+}
+
+.mizar-dialog.workspace-review-dialog {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  width: 900px;
+  max-width: none;
+  zoom: min(calc(100vw / 2560px), calc(100vh / 1440px));
+  max-height: 1260px;
+  height: fit-content;
+  overflow-y: auto;
+  z-index: 30;
+  font-size: 16px;
+}
+.workspace-review-native .workspace-left {
+  display: none;
+}
+body:has(.workspace-review-native) .mizar-dialog.workspace-review-dialog {
+  width: 940px;
+  max-height: 1100px;
+  zoom: min(calc(100vw / 1000px), calc(100vh / 1160px));
+}
+.workspace-review-empty {
+  padding: var(--mizar-layout-padding);
+}
+
+.preflight-check > small {
+  display: block;
+  margin-top: var(--mizar-layout-compact);
+  color: var(--mizar-fg-muted);
+}
+.workspace-review-native {
+  position: fixed;
+  inset: 0;
+  background: var(--mizar-bg-canvas);
+  color: var(--mizar-fg-primary);
+}
+body:has(.workspace-review-dialog[open]) .workspace-review-empty {
+  display: none;
+}
+.workspace-review-empty h1 {
+  font-size: var(--mizar-type-size-title);
+}

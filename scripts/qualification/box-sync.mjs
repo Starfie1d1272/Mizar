@@ -19,6 +19,7 @@ import { RESOURCE_ASSET_NAMES as resourceNames } from '../../packages/resource-p
 import { LIMITS } from '../../packages/resource-pack-contract/index.mjs';
 import { resourceAssetInventory } from '../ci/resource-release.mjs';
 import { apiRequest, multipartUpload } from './box-upload.mjs';
+import { curlMultipartUpload } from './box-curl-upload.mjs';
 
 const { fetch, AbortSignal, FormData } = globalThis;
 
@@ -51,7 +52,7 @@ export function promotionTag(run, jobs) {
     .filter(
       (job) => job.run_id === run.id && job.status === 'completed' && job.conclusion === 'success',
     )
-    .map((job) => /^发布 Mizar (v\d+\.\d+\.\d+(?:-rc\.\d+)?)$/.exec(job.name))
+    .map((job) => /^发布 Mizar (v\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.[1-9]\d*)?)$/.exec(job.name))
     .filter(Boolean);
   requireValue(candidates.length === 1, '无法确定唯一晋级标签；请手动指定标签重试');
   return candidates[0][1];
@@ -1156,10 +1157,17 @@ async function main() {
     const { jobs } = await github(`actions/runs/${run.id}/jobs?per_page=100`);
     tag = promotionTag(run, jobs);
   }
-  if (mode === 'sync' && /^v\d+\.\d+\.\d+-rc\.\d+$/.test(tag ?? ''))
-    return '候选版本：Stable 与 Archive 保持原样。';
+  const prerelease = /^v\d+\.\d+\.\d+-(?:alpha|beta|rc)\.[1-9]\d*$/.test(tag ?? '');
+  if (process.env.GITHUB_OUTPUT)
+    await appendFile(process.env.GITHUB_OUTPUT, `prerelease=${prerelease}\n`);
+  if (prerelease) return '预发布版本：Box Stable、Downloads、Updates 与 Archive 保持原样。';
   const box =
-    mode === 'verify-downloads' ? undefined : new BoxClient(process.env.MIZAR_BOX_REPO_TOKEN);
+    mode === 'verify-downloads'
+      ? undefined
+      : new BoxClient(
+          process.env.MIZAR_BOX_REPO_TOKEN,
+          process.env.BOX_UPLOAD_TRANSPORT === 'curl' ? curlMultipartUpload : multipartUpload,
+        );
   if (mode === 'probe') return probe(box);
   const resolveIdentity = cacheReleaseIdentities(releaseIdentity);
   const identity = await resolveIdentity(tag);

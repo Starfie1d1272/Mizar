@@ -10,6 +10,10 @@ Box 文件上传使用原生 HTTPS 和完整 multipart 请求体，沿用十分�
 
 应用版本遵循 `MAJOR.MINOR.PATCH`；正式标签为 `v<应用版本>`，有风险的新能力可按需要使用 `-alpha.N`、`-beta.N`、`-rc.N` 预发布版本。不要为每次小修改单独发布一个 RC，也不能因为改动小就省略必要的验收。
 
+发布基础设施接受纯稳定版本及 `alpha.N`、`beta.N`、`rc.N`，数字不带前导零，预发布序号 `N` 为正整数（从 `.1` 开始）。所有预发布沿用 main 的 Qualification / Promotion 门禁，精确标签、源码、二进制版本和原始签名必须一致；GitHub 标记为 prerelease 且 `latest=false`，不生成 Stable 更新清单、发布确认或索引，也不写入 Box Stable、Downloads、Updates 或 Archive。Box 自动与手动触发均显式报告预发布跳过，后续稳定版计时及其 artifact 上传一起跳过；不将缺失计时证据改判为成功。资源兼容性使用去掉预发布后缀的 Core 版本，授权仍绑定完整版本及原始资产。
+
+预发布与稳定版均解压核验 Core，并通过隔离 SDK 验证 Full/Core 清单、ZIP、Setup 与资源包的真实签名；稳定版另验证更新清单和客户端 Core 选择。预发布只从对应 tag 人工下载完整 Setup 或 ZIP；稳定更新器仍只选择纯稳定版本，`channel: stable` 与 WebInstaller 的稳定限定不变。本轮不提供自动预发布渠道、独立应用身份或并存配置；安装版沿用现有安装和用户数据位置，升级、回退及数据兼容性须按目标版本验收，不承诺可与稳定版并存。脚本与 CI 检查不能替代 Windows / CS2 / OBS 实机证据。
+
 | 变化  | 版本选择原则                                                               |
 | ----- | -------------------------------------------------------------------------- |
 | Patch | 与已有公开契约兼容的缺陷、安全或小型展示修正                               |
@@ -118,3 +122,5 @@ Promotion 对同次已成功资格任务的产品和验收证据并行下载到�
 Release Host 的原有 `cargo test --profile release --locked` 在 exact-source build 成功后作为独立支路，与三个安装／便携验证支路并行；汇总签发必须等待 Host 测试及全部验证成功。该支路仅复用 release profile 缓存，由 Cargo 核对源码，不拿 CI profile 二进制替代 release 产品。独立的手动 [Release Host benchmark](../../.github/workflows/release-host-benchmark.yml) 运行相同 Windows release 测试命令，固定本次工作流源码，不构建签发候选、不发布、不保存分支缓存；新增 runner 排队及缓存传输必须纳入墙钟比较。
 
 固定旧版本的组装、Core 准备、解压与证明核验实验已退出日常 CI；其原始结果、来源和摘要保存在[历史实验归档](https://github.com/Starfie1d1272/Mizar/tree/archive/2026-10-17/evidence-index)。归档记录不能代替当前版本的资格验收，原固定候选过期后也不重建冒充原样本。
+
+Box Sync 手动恢复可选择 `transport=curl`，使用托管环境已有 curl 进行一次上传；自动同步保持 native。两种传输共用原文件回执、摘要回读和最后发布指针的顺序，均不自动重试有副作用的上传。临时上传地址通过标准输入交给 curl，不进入命令参数或日志；不跟随重定向，保留 HTTPS 校验与总时限。

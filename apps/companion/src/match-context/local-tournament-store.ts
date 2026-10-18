@@ -240,6 +240,7 @@ export class LocalTournamentStore {
   async createMatch(
     input: {
       readonly eventId?: string;
+      readonly eventName?: string;
       readonly teamA: string;
       readonly teamB: string;
       readonly teamAId?: string;
@@ -252,6 +253,11 @@ export class LocalTournamentStore {
     canCommit?: () => boolean,
   ): Promise<MatchDocumentV1> {
     return this.queue.run(async () => {
+      if (
+        input.eventName !== undefined &&
+        (!input.eventName.trim() || input.eventName.trim().length > 128)
+      )
+        throw new Error('local_event_name_invalid');
       const teamA = input.teamA.trim();
       const teamB = input.teamB.trim();
       if (
@@ -265,7 +271,7 @@ export class LocalTournamentStore {
         input.eventId === undefined
           ? ({
               eventId: randomUUID(),
-              name: '本地赛事',
+              name: input.eventName?.trim() ?? '本地赛事',
               logoUrl: null,
               themeColor: null,
               mapPool: input.mapPool,

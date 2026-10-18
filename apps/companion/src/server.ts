@@ -192,6 +192,11 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
     onSeriesProgressDiagnostic: ({ code }) => console.warn(`系列进度检查点诊断：${code}`),
   });
   const productInstance = process.env.MIZAR_PRODUCT_INSTANCE;
+  const diagnosticsEndpoint =
+    process.env.MIZAR_DIAGNOSTICS_ENDPOINT ??
+    (productInstance !== undefined && !qualificationMode
+      ? 'https://mizar-diagnostics.duxinyu475.workers.dev'
+      : undefined);
   const rehearsalCandidates = [
     resolve(process.cwd(), 'fixtures/epl-s24/rehearsal.generated.json'),
     resolve(process.cwd(), '../../fixtures/epl-s24/rehearsal.generated.json'),
@@ -298,9 +303,7 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
             stop: () => shutdown('product-stop'),
           },
         }),
-    ...(process.env.MIZAR_DIAGNOSTICS_ENDPOINT
-      ? { diagnosticsEndpoint: process.env.MIZAR_DIAGNOSTICS_ENDPOINT }
-      : {}),
+    ...(diagnosticsEndpoint ? { diagnosticsEndpoint } : {}),
     logger: true,
     gsiToken,
     recorder,
@@ -332,6 +335,12 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
     hudConfigPath,
     hudConfigStore,
     obsConfigPath: join(captureDir, '..', 'obs.json'),
+    ...(process.env.MIZAR_BUNDLE_ROOT
+      ? { mulnxBundle: join(process.env.MIZAR_BUNDLE_ROOT, 'resources/mulnx') }
+      : {}),
+    ...(process.env.MIZAR_MULNX_CAM_PACKS_ROOT
+      ? { mulnxCamPacksRoot: process.env.MIZAR_MULNX_CAM_PACKS_ROOT }
+      : {}),
     ...(qualificationMode
       ? {
           qualificationRunId,

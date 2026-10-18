@@ -1,0 +1,70 @@
+{
+  "sourceCommit": "01f7a46d93ccd90021739e65f628836baa247799",
+  "capturedAt": "2026-10-18T17:06:36.794062+00:00",
+  "viewport": {
+    "width": 2560,
+    "height": 1440,
+    "deviceScaleFactor": 1
+  },
+  "fullPage": false,
+  "reducedMotion": "reduce",
+  "source": "真实 Chromium 组件与 Companion 本地创建／编辑接口；两场比赛属同一赛事。网站授权、赛程缓存、刷新失败与载入响应为验收边界模拟，刻意复用相同比赛文档以独立比较展示。没有连接真实网站、CS2 或 OBS。",
+  "recipe": "MIZAR_LIBRARY_SCREENSHOTS=docs/screenshots/shared-match-library pnpm exec playwright test --config=playwright.acceptance.config.ts tests/acceptance/local-tournament.spec.ts",
+  "entries": [
+    {
+      "file": "01-local.png",
+      "label": "本地比赛：候选详情",
+      "size": [
+        2560,
+        1440
+      ],
+      "sha256": "85b58a41d2076c8ab62e496a33090a28538a9325ba136c653a80a05f5f4a3734"
+    },
+    {
+      "file": "02-website.png",
+      "label": "RivalHub：同一比赛详情",
+      "size": [
+        2560,
+        1440
+      ],
+      "sha256": "d5468128bdf94b1d5bb5547625c5d628d9636c7efaf554e5397c2c6d6f33f9f5"
+    },
+    {
+      "file": "03-website-browse.png",
+      "label": "RivalHub：浏览下一场，未载入",
+      "size": [
+        2560,
+        1440
+      ],
+      "sha256": "7927041d9291c1f2bd33b9698f9c4737adfc5d329c3c11f4f4b3a6cd38a67978"
+    },
+    {
+      "file": "04-website-cache-missing.png",
+      "label": "RivalHub：完整缓存缺失与刷新失败",
+      "size": [
+        2560,
+        1440
+      ],
+      "sha256": "e041024333facd1c8153b9d6ef89a687c5e8b4589609475bf69667311c07111b"
+    },
+    {
+      "file": "05-local-edit.png",
+      "label": "本地候选：切换来源后草稿仍保留",
+      "size": [
+        2560,
+        1440
+      ],
+      "sha256": "c42251906eb6c43570534950a5b2d5d19f5c6f60c65dc80cf288fbf3ec89d5f9"
+    },
+    {
+      "file": "06-local-create.png",
+      "label": "本地比赛：在当前赛事追加下一场",
+      "size": [
+        2560,
+        1440
+      ],
+      "sha256": "5ef5bb1257e5b350ccbbc8ef6c472afd938d8153e81e990d0d496ee8bc673126"
+    }
+  ],
+  "sidebarSpacing": "共用左栏操作区底部留白16逻辑像素（2K下约21物理像素）；右侧载入栏保持原位置。"
+}

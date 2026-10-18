@@ -1,5 +1,6 @@
 import { diagnosticValue } from '../support/session-journal.js';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
+import { RivalHubLibrary } from './rivalhub-library.js';
 import { readFile, rename, writeFile, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
@@ -482,7 +483,7 @@ export class RivalHubConnection {
         signal:
           init.signal ?? AbortSignal.timeout(operation === 'live' ? 4000 : CONTROL_TIMEOUT_MS),
       });
-      if (!response.ok) {
+      if (!response.ok && response.status !== 304) {
         await response.body?.cancel();
         this.onDiagnostic(operation, new Error(`RivalHub HTTP ${response.status}`));
       }
@@ -642,6 +643,48 @@ export class RivalHubConnection {
         acquiredAt: this.monotonicNow(),
       };
     return result.value;
+  }
+
+  private browsingLibrary: { installation: Installation; value: RivalHubLibrary } | null = null;
+  async library() {
+    const installation = this.installation;
+    if (!installation) throw new Error('请先连接 RivalHub。');
+    if (this.browsingLibrary?.installation !== installation) {
+      const scope = createHash('sha256')
+        .update(
+          JSON.stringify([
+            installation.baseUrl,
+            installation.competitionId,
+            installation.installationId,
+          ]),
+        )
+        .digest('hex');
+      const current = () => {
+        if (this.installation !== installation) throw new Error('赛事连接已变化。');
+      };
+      this.browsingLibrary = {
+        installation,
+        value: new RivalHubLibrary(
+          `${this.path}.${scope}.library.json`,
+          installation.competitionId,
+          async (from, to) => {
+            current();
+            const result = await this.schedule(from, to);
+            current();
+            return result;
+          },
+          async (operation, init) => {
+            current();
+            const result = await this.request(operation, init);
+            current();
+            return result;
+          },
+        ),
+      };
+    }
+    const result = await this.browsingLibrary.value.view();
+    if (this.installation !== installation) throw new Error('赛事连接已变化。');
+    return result;
   }
 
   matchSource(matchId: string) {

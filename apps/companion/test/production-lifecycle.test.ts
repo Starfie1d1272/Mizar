@@ -120,11 +120,12 @@ it('requires only match context, preserves match through hide/resume/finish, and
 
 it('normal Host shutdown uses safe waiting/release and refuses entry until process stops', async () => {
   const calls: string[] = [];
+  let safe = false;
   const scenes = {
     get: () => ({ revision: 'scene', active: 'waiting' }),
     selectWaitingForExit: () => {
       calls.push('waiting');
-      return Promise.resolve({ ok: true });
+      return Promise.resolve(safe ? { ok: true } : { ok: false, message: 'waiting unconfirmed' });
     },
   } as unknown as ProgramSceneController;
   const app = Fastify();
@@ -132,6 +133,9 @@ it('normal Host shutdown uses safe waiting/release and refuses entry until proce
     originPolicy: createLocalWebOriginPolicy(),
     hasContext: () => true,
     scenes,
+    beforeFinish: () => {
+      calls.push('camera-hold');
+    },
     release: () => {
       calls.push('release');
       return Promise.resolve();
@@ -146,13 +150,17 @@ it('normal Host shutdown uses safe waiting/release and refuses entry until proce
     });
   try {
     await send('enter');
+    expect((await send('finish')).statusCode).toBe(409);
+    expect(calls.splice(0)).toEqual(['camera-hold', 'waiting']);
+    expect(lifecycle.get().mode).toBe('live');
+    safe = true;
     expect((await send('shutdown')).statusCode).toBe(200);
-    expect(calls).toEqual(['waiting', 'release']);
+    expect(calls).toEqual(['camera-hold', 'waiting', 'release']);
     expect(lifecycle.get()).toMatchObject({ mode: 'preparation', canEnter: false });
     expect((await send('enter')).statusCode).toBe(409);
     // Game restoration can fail after safety committed; another exit retries.
     expect((await send('shutdown')).statusCode).toBe(200);
-    expect(calls).toEqual(['waiting', 'release', 'release']);
+    expect(calls).toEqual(['camera-hold', 'waiting', 'release', 'camera-hold', 'release']);
   } finally {
     await app.close();
   }
