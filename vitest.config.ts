@@ -34,6 +34,7 @@ export default defineConfig({
       'packages/**/*.test.ts',
       'packages/**/*.test.mjs',
       'scripts/**/*.test.mjs',
+      'tests/diagnostics/**/*.test.ts',
     ],
   },
 });

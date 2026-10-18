@@ -125,6 +125,7 @@ export class UpdateManager {
     } else this.failureDetails.push(updateFailure(stage, error, this.operationId));
     this.failureDetails = this.failureDetails.slice(-6);
     this.options.log?.(stage, safeCode(error), this.candidate?.version, {
+      result: 'failure',
       operationId: this.operationId,
       error: diagnosticValue(error),
       ...(durationMs === undefined ? {} : { durationMs }),

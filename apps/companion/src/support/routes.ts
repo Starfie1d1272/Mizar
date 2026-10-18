@@ -1,3 +1,4 @@
+import type { RetainedDiagnosticBatch } from './delivery.js';
 import { Readable } from 'node:stream';
 import { finished } from 'node:stream/promises';
 import { encodeSupportBundle, fullLogArchive } from './archive.js';
@@ -139,6 +140,8 @@ export function registerSupportRoutes(
     readonly artifact?: { readonly gitSha: string; readonly artifactSha256: string };
     readonly runtimeSummary: () => ReturnType<DebugEvidenceStore['getSupportSummary']>;
     readonly sessionLogHealth?: () => unknown;
+    readonly pendingJournalEvidence?: () => readonly string[];
+    readonly retainedDiagnosticBatches?: () => Promise<readonly RetainedDiagnosticBatch[]>;
     readonly pendingPerformanceEvidence?: () => readonly unknown[];
     readonly beginPerformanceExport?: () => Promise<() => Promise<void>>;
     readonly flushBusinessLog?: () => Promise<void>;
@@ -286,6 +289,10 @@ export function registerSupportRoutes(
                 : {}),
             },
             options.pendingPerformanceEvidence?.(),
+            {
+              journalMemory: options.pendingJournalEvidence?.() ?? [],
+              outbox: (await options.retainedDiagnosticBatches?.()) ?? [],
+            },
           ).then((archive) => ({
             ...archive,
             productLogStatus: archive.status,

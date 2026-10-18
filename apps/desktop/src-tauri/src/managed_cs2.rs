@@ -560,6 +560,19 @@ impl WorkspaceProcess {
         unsafe { WaitForSingleObject(self.process.0, 0) == 258 }
     }
 }
+pub fn verified_session_process(
+    value: &Value,
+    log: &crate::startup_log::DesktopLog,
+) -> Result<Option<WorkspaceProcess>, String> {
+    let Some(process) = owned_process(value, log)? else {
+        return Ok(None);
+    };
+    Ok(Some(WorkspaceProcess {
+        process,
+        pid: value["pid"].as_u64().ok_or("CS2 进程记录缺失。")? as u32,
+        created: value["created"].as_u64().ok_or("CS2 进程记录缺失。")?,
+    }))
+}
 impl ManagedCs2 {
     pub fn new(log: crate::startup_log::DesktopLog) -> Self {
         Self {
@@ -605,14 +618,7 @@ impl ManagedCs2 {
         let Some(value) = self.store.load()? else {
             return Ok(None);
         };
-        let Some(process) = owned_process(&value, &self.log)? else {
-            return Ok(None);
-        };
-        Ok(Some(WorkspaceProcess {
-            process,
-            pid: value["pid"].as_u64().ok_or("CS2 进程记录缺失。")? as u32,
-            created: value["created"].as_u64().ok_or("CS2 进程记录缺失。")?,
-        }))
+        verified_session_process(&value, &self.log)
     }
     pub fn status(&self) -> Result<Value, String> {
         let pending = self.store.load()?;
@@ -872,6 +878,15 @@ impl ManagedCs2 {
                 return Err(error);
             }
         }
+        match crate::cs2_console::prepare(&self.log, &executable) {
+            Ok(Some(prepared)) => journal["consoleDiagnostics"] = prepared,
+            Ok(None) => (),
+            Err(error) => {
+                self.log.event("cs2_console_prepare", "failure", Some(&json!({"error":error,"condebugRequested":false,"gameLaunchContinues":true}).to_string()));
+                journal["consoleDiagnosticsWarning"] =
+                    json!({"code":"source_prepare_failed","error":error});
+            }
+        }
         self.store.save(&journal)?;
         let launch: Result<bool, String> = (|| {
             // Recheck the same process and current account before committing a
@@ -916,6 +931,21 @@ impl ManagedCs2 {
             } else {
                 command.args(["-applaunch", "730"]);
             }
+            if journal["consoleDiagnostics"]["version"] == 1 {
+                match crate::cs2_console::settings(&self.log) {
+                    Ok(config)
+                        if config["enabled"] == true
+                            && config["generation"]
+                                == journal["consoleDiagnostics"]["generation"] =>
+                    {
+                        command.arg("-condebug");
+                    }
+                    result => {
+                        self.log.event("cs2_console_prepare", "interrupted", Some(&json!({"reason":"consent_changed_before_launch","current":format!("{result:?}"),"condebugRequested":false}).to_string()));
+                        journal["consoleDiagnostics"] = Value::Null;
+                    }
+                }
+            }
             if demo.is_some() {
                 command.args([
                     "+exec",
@@ -927,7 +957,9 @@ impl ManagedCs2 {
             self.log.event("cs2_launch_arguments", "begin", Some(&json!({
                 "program": command.get_program().to_string_lossy(),
                 "arguments": command.get_args().map(|arg| arg.to_string_lossy().to_string()).collect::<Vec<_>>(),
-                "preserveSettings": size.is_none(), "runtime":"unverified"
+                "preserveSettings": size.is_none(), "runtime":"unverified",
+                "argumentsScope":"requested-steam-command",
+                "steamInheritedArguments":"unobserved", "actualGameArguments":"unobserved"
             }).to_string()));
             // Commit the ambiguous-launch marker only after all checks and
             // argument validation, immediately before sending the Steam request.
@@ -1151,8 +1183,17 @@ mod tests {
         assert!(external.child.try_wait().unwrap().is_none());
         managed.finish().unwrap();
         let mut tracker = crate::windows_host::GameTracker::default();
-        tracker.alignment_failure = Some(crate::windows_host::AlignmentFailure { stage: "position", api: Some("SetWindowPos"), last_error: Some(5) });
-        tracker.group_failure = Some(crate::workspace_group::Failure { stage: "raise", api: "SetWindowPos", last_error: Some(5), target: "game" });
+        tracker.alignment_failure = Some(crate::windows_host::AlignmentFailure {
+            stage: "position",
+            api: Some("SetWindowPos"),
+            last_error: Some(5),
+        });
+        tracker.group_failure = Some(crate::workspace_group::Failure {
+            stage: "raise",
+            api: "SetWindowPos",
+            last_error: Some(5),
+            target: "game",
+        });
         assert!(!tracker.finish_session_feedback(&managed).unwrap());
         assert!(tracker.window_message().is_some());
         assert!(managed.confirm_game_stopped().is_err());
@@ -1169,10 +1210,6 @@ mod tests {
         assert_eq!(tracker.window_message(), None);
         assert!(!tracker.managed);
     }
-
-
-
-
 
     #[test]
     fn process_ownership_requires_pid_creation_time_and_executable() {
@@ -1234,7 +1271,11 @@ mod tests {
         assert!(managed.store.load().unwrap().is_some());
         assert!(managed.finish().is_err());
         let mut tracker = crate::windows_host::GameTracker::default();
-        tracker.alignment_failure = Some(crate::windows_host::AlignmentFailure { stage: "position", api: Some("SetWindowPos"), last_error: Some(5) });
+        tracker.alignment_failure = Some(crate::windows_host::AlignmentFailure {
+            stage: "position",
+            api: Some("SetWindowPos"),
+            last_error: Some(5),
+        });
         assert!(!tracker.finish_session_feedback(&managed).unwrap());
         assert!(tracker.window_message().is_some());
         assert_ne!(std::fs::read(&video).unwrap(), original);
@@ -1244,12 +1285,14 @@ mod tests {
         assert!(tracker.finish_session_feedback(&managed).unwrap());
         assert_eq!(tracker.window_message(), None);
         // A damaged core record leaves restoration unknown, even with no game.
-        tracker.alignment_failure = Some(crate::windows_host::AlignmentFailure { stage: "position", api: Some("SetWindowPos"), last_error: Some(5) });
+        tracker.alignment_failure = Some(crate::windows_host::AlignmentFailure {
+            stage: "position",
+            api: Some("SetWindowPos"),
+            last_error: Some(5),
+        });
         std::fs::write(managed.store.backup_directory().join("pending.json"), b"{").unwrap();
         assert!(tracker.finish_session_feedback(&managed).is_err());
         assert!(tracker.window_message().is_some());
         std::fs::remove_dir_all(root).unwrap();
     }
-
-
 }

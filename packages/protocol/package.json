@@ -69,6 +69,10 @@
     "./music": {
       "types": "./dist/music.d.ts",
       "import": "./dist/music.js"
+    },
+    "./diagnostics-upload": {
+      "types": "./dist/diagnostics-upload.d.ts",
+      "import": "./dist/diagnostics-upload.js"
     }
   },
   "scripts": {
