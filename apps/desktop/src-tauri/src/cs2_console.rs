@@ -725,6 +725,31 @@ fn decode(bytes: &[u8], mode: &str) -> Result<String, ()> {
         .collect();
     String::from_utf16(&words).map_err(|_| ())
 }
+// CS2 -condebug prefixes file lines with MM/DD HH:MM:SS. Only remove a
+// structurally valid engine prefix for classification; the retained evidence
+// keeps the original line and its independently observed UTC interval.
+fn console_body(line: &str) -> &str {
+    let bytes = line.as_bytes();
+    if bytes.len() >= 15
+        && [(2, b'/'), (5, b' '), (8, b':'), (11, b':'), (14, b' ')]
+            .iter()
+            .all(|(i, b)| bytes[*i] == *b)
+        && [0, 1, 3, 4, 6, 7, 9, 10, 12, 13]
+            .iter()
+            .all(|i| bytes[*i].is_ascii_digit())
+    {
+        let pair = |i: usize| (bytes[i] - b'0') * 10 + bytes[i + 1] - b'0';
+        if (1..=12).contains(&pair(0))
+            && (1..=31).contains(&pair(3))
+            && pair(6) < 24
+            && pair(9) < 60
+            && pair(12) < 60
+        {
+            return &line[15..];
+        }
+    }
+    line
+}
 enum Category<'a> {
     Chat,
     Unknown,
@@ -747,13 +772,23 @@ fn category(line: &str) -> Category<'_> {
     {
         return Category::Chat;
     }
-    let line = line.trim_start();
+    let line = console_body(line.trim_start());
     let Some(rest) = line.strip_prefix('[') else {
         return Category::Unknown;
     };
     let Some((channel, body)) = rest.split_once(']') else {
         return Category::Unknown;
     };
+    if channel == "Client"
+        && [
+            "Ignoring CSVCMsg_UserCommands_t: Missing command to delta from",
+            "Ignoring CSVCMsg_UserCommands_t with no command data",
+        ]
+        .iter()
+        .any(|prefix| body.trim_start().starts_with(prefix))
+    {
+        return Category::Technical(channel);
+    }
     if [
         "Networking",
         "NetworkSystem",
@@ -1073,14 +1108,14 @@ mod tests {
         change(&log, true).unwrap();
         let launch = journal(&log, &executable);
         let mut capture = Capture::new(&log, &launch).unwrap();
-        append(&source, b"[RenderSystem] Created device successfully\n[Networking] Error: connection failed cause=EACCES token=PRIVATE_CONSOLE_CREDENTIAL\n[ALL] player PRIVATE_CHAT\n[Networking] say_team PRIVATE_TEAM_CHAT\n[RenderSystem] PRIVATE_UNKNOWN_PAYLOAD\n\xff\n[GSI] HTTP POST pending");
+        append(&source, b"[RenderSystem] Created device successfully\n08/06 05:12:46 [Client] Ignoring CSVCMsg_UserCommands_t: Missing command to delta from\n[Client] Ignoring CSVCMsg_UserCommands_t with no command data\n[Networking] Error: connection failed cause=EACCES token=PRIVATE_CONSOLE_CREDENTIAL\n[ALL] player PRIVATE_CHAT\n[Networking] say_team PRIVATE_TEAM_CHAT\n[RenderSystem] PRIVATE_UNKNOWN_PAYLOAD\n\xff\n[GSI] HTTP POST pending");
         let health = capture.poll(&log, &|| true).unwrap();
-        assert_eq!(health["technical"], 2);
+        assert_eq!(health["technical"], 4);
         assert_eq!(health["chat"], 2);
         assert_eq!(health["unknown"], 1);
         assert_eq!(health["invalid"], 1);
         let first = records(&log);
-        assert_eq!(first.len(), 2);
+        assert_eq!(first.len(), 4);
         let text = serde_json::to_string(&first).unwrap();
         for absent in [
             "PRE_SESSION_PRIVATE",
@@ -1092,6 +1127,18 @@ mod tests {
             assert!(!text.contains(absent), "{absent}");
         }
         assert!(text.contains("EACCES"));
+        assert!(text.contains("08/06 05:12:46 [Client] Ignoring CSVCMsg_UserCommands_t: Missing command to delta from"));
+        assert!(text.contains("Ignoring CSVCMsg_UserCommands_t with no command data"));
+        assert!(matches!(
+            category("08/06 05:12:46 [ALL] private chat"),
+            Category::Chat
+        ));
+        assert!(matches!(
+            category(
+                "99/99 99:99:99 [Client] Ignoring CSVCMsg_UserCommands_t with no command data"
+            ),
+            Category::Unknown
+        ));
         assert!(text.contains("Created device successfully"));
         assert!(text.contains("[redacted]"));
         assert!(first
@@ -1100,9 +1147,9 @@ mod tests {
         drop(capture);
         let mut restarted = Capture::new(&log, &launch).unwrap();
         append(&source, b" completed\n");
-        assert_eq!(restarted.poll(&log, &|| true).unwrap()["technical"], 3);
+        assert_eq!(restarted.poll(&log, &|| true).unwrap()["technical"], 5);
         let all = records(&log);
-        assert_eq!(all.len(), 3);
+        assert_eq!(all.len(), 5);
         assert_eq!(
             all.iter()
                 .filter(|value| value["sourceRecordId"] == first[0]["sourceRecordId"])
