@@ -21,3 +21,11 @@
 `0x180061460` 在 NEW 阶段安装并调用已有字符串表回调，发送 ClientInfo，再发送 NEW 应答。服务器收到该应答后才提供下一阶段的表/sign-on 数据。初始化应按各阶段实际输入推进，完整实体快照不能无条件作为首次 CONNECTED 应答的前提。
 
 本轮修改复用既有握手与 LiveDecoder 边界测试，27 项通过。尚需实现后续表/实体处理并完成普通观众连接；这些检查没有连接真实服务器。
+
+## SpawnGroup manifest 与当前 Windows 构建
+
+同一官方 engine2 的 `0x180082da0` 处理 Load、`0x180083690` 处理 ManifestUpdate；manifest 经 `0x1803f7d40` 解出资源名。外壳为 1 bit 压缩标志、24 bit 字节长度；压缩内容使用 LZSS。内层先保存三个 uint16 计数及扩展名/目录字典，随后按目录索引、名称和扩展名索引组成资源项。`resource_manifest.py` 独立实现有界格式读取；资源名仅保存在内存，不作为文件路径执行。
+
+既有公开 Demo 的 8 个实际 SpawnGroup 包解出 47 项资源名，覆盖压缩、未压缩及空资源列表；[记录](evidence/resource-manifest-offline.json) 包含输入摘要和数量。LiveDecoder 保存各组及后续 manifest 片段。加载完成消息仍由后续世界初始化负责，不能把资源名解码当作场景已加载。
+
+当前 SDK 桥已使用固定 Valve Proton SDK 1.65 头文件、官方 CS2 `steam_api64.dll` 的导入符号和 LLVM MinGW 交叉编译为 Windows x64 DLL，13 个当前 C ABI 导出均存在，包括启动失败码。[构建记录](evidence/windows-native-build.json) 包含工具、大小和 SHA-256；Windows 原生启动与在线持续接收尚待执行。

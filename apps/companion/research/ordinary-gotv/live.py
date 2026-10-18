@@ -7,6 +7,7 @@ import math
 import struct
 from handshake import number, uint
 from wire import fields, scalar, varint, ProbeError
+from resource_manifest import decode_resource_manifest
 
 EVENTS = {'weapon_fire', 'player_death', 'round_start', 'round_end'}
 
@@ -57,6 +58,18 @@ class LiveDecoder:
         self.entity_packets = 0
         self.counts = {}
         self.unresolved_events = 0
+        self.spawn_groups = {}
+        self.manifest_name_bytes = 0
+        self.manifest_resources = 0
+
+    def _manifest_fragment(self, payload):
+        items = decode_resource_manifest(payload)
+        names = sum(len(value.encode('utf8')) for item in items for value in item.values())
+        if self.manifest_name_bytes + names > 4 * 1024**2 or self.manifest_resources + len(items) > 16384:
+            raise ProbeError('spawn-group-session-manifest-budget')
+        self.manifest_name_bytes += names
+        self.manifest_resources += len(items)
+        return items
 
     def blockers(self):
         # Presence is not initialization. This API offers no caller-controlled ready flag.
@@ -66,7 +79,7 @@ class LiveDecoder:
 
     def consume(self, message_id, body):
         self.counts[message_id] = self.counts.get(message_id, 0) + 1
-        if message_id not in (4, 40, 41, 42, 44, 45, 51, 55, 205, 207):
+        if message_id not in (4, 8, 9, 40, 41, 42, 44, 45, 51, 55, 205, 207):
             return
         f = fields(body, limit=4 * 1024**2)
         if message_id == 4:
@@ -74,6 +87,30 @@ class LiveDecoder:
             if tick is None or tick > 0x7fffffff or (self.tick is not None and tick < self.tick):
                 raise ProbeError('live-tick-regressed-or-missing')
             self.tick = tick
+        elif message_id == 8:
+            handle = scalar(f, 4)
+            if handle is None or not 0 < handle <= 0xffffffff:
+                raise ProbeError('spawn-group-handle')
+            if handle in self.spawn_groups:
+                raise ProbeError('spawn-group-duplicate-load')
+            if len(self.spawn_groups) >= 1024:
+                raise ProbeError('spawn-group-count-budget')
+            self.spawn_groups[handle] = {
+                'world': text(scalar(f, 1, 2), 4096),
+                'flags': scalar(f, 9),
+                'creation_sequence': scalar(f, 16),
+                'manifest_incomplete': bool(scalar(f, 11)),
+                'manifest_fragments': [self._manifest_fragment(scalar(f, 8, 2) or b'')],
+            }
+        elif message_id == 9:
+            group = self.spawn_groups.get(scalar(f, 1))
+            if group is None or not group['manifest_incomplete']:
+                raise ProbeError('spawn-group-manifest-update-order')
+            if len(group['manifest_fragments']) >= 1024:
+                raise ProbeError('spawn-group-fragment-budget')
+            fragment = self._manifest_fragment(scalar(f, 2, 2) or b'')
+            group['manifest_fragments'].append(fragment)
+            group['manifest_incomplete'] = bool(scalar(f, 3))
         elif message_id == 40:
             count, protocol = scalar(f, 2), scalar(f, 1)
             interval = scalar(f, 13, 5)
