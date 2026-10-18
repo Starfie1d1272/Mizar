@@ -241,3 +241,50 @@ test('OBS capture guidance uses real production routes without GET Origin and ap
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('exit recovery distinguishes stopped games from borrowed games and renders the dedicated alert', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 2560, height: 1440 });
+  await page.addInitScript(() => {
+    Object.assign(window, {
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string) => {
+          await Promise.resolve();
+          const borrowed = new URLSearchParams(location.search).has('borrowed');
+          if (command === 'cs2_config_status')
+            return {
+              pending: !borrowed,
+              running: borrowed,
+              borrowed,
+              busy: false,
+              phase: borrowed ? 'running' : 'pending',
+              message: null,
+            };
+          if (command === 'workspace_exit_status')
+            return {
+              busy: false,
+              stage: borrowed ? '' : 'restoration',
+              message: borrowed ? null : '游戏已关闭，但设置恢复失败，备份仍保留。',
+            };
+          return {};
+        },
+      },
+    });
+  });
+  await page.route('**/local/v1/production', (route) =>
+    route.fulfill({ json: { mode: 'preparation', revision: 'review', canEnter: false } }),
+  );
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: '重试恢复设置', exact: true })).toBeVisible();
+  await page.goto('/?borrowed=1');
+  await expect(page.getByRole('button', { name: '结束本次制作', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '返回工作台', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '打开备份目录', exact: true })).toHaveCount(0);
+  await page.goto('/workspace/review?kind=exit');
+  await expect(page.getByRole('dialog', { name: '退出工作台需要处理' })).toBeVisible();
+  await expect(
+    page.getByText('游戏已关闭，但设置恢复失败，备份仍保留。', { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole('button', { name: '返回准备中心处理' })).toBeVisible();
+});

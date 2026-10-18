@@ -129,7 +129,13 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
                 }, '')
               }
             >
-              {exit.busy ? '正在退出…' : uncertain ? '恢复配置并重试退出' : '重试退出工作台'}
+              {exit.busy
+                ? '正在退出…'
+                : uncertain
+                  ? '恢复配置并重试退出'
+                  : exit.stage === 'restoration' && status && !status.running
+                    ? '重试恢复设置'
+                    : '重试退出工作台'}
             </Button>
             <Button
               onClick={() =>
@@ -229,9 +235,7 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
           </p>
         ) : null}
         {status?.externalDetached ? <p>{status.message}</p> : null}
-        {status?.borrowed ? (
-          <p>退出工作台只解除借用，外部游戏由原启动方退出；不会恢复或覆盖其设置。</p>
-        ) : null}
+        {status?.borrowed ? <p>结束本次制作后，外部 CS2 将保持运行，设置不变。</p> : null}
         {status?.pending ? (
           <p>
             {status.message ||
@@ -284,7 +288,7 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
                 )
               }
             >
-              结束制作并解除借用
+              结束本次制作
             </Button>
           ) : null}
           {status?.canPreserve && production ? (
@@ -312,7 +316,7 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
                 )
               }
             >
-              打开直播工作台
+              返回工作台
             </Button>
           ) : null}
           {status?.demoCleanupPending ? (
@@ -375,16 +379,18 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
                     : '恢复配置备份'}
             </Button>
           ) : null}
-          <Button
-            disabled={busy || Boolean(phase)}
-            onClick={() =>
-              void desktopInvoke('open_cs2_backup').catch((reason: unknown) =>
-                setFeedback(reason instanceof Error ? reason.message : '备份目录无法打开。'),
-              )
-            }
-          >
-            打开备份目录
-          </Button>
+          {!status?.borrowed ? (
+            <Button
+              disabled={busy || Boolean(phase)}
+              onClick={() =>
+                void desktopInvoke('open_cs2_backup').catch((reason: unknown) =>
+                  setFeedback(reason instanceof Error ? reason.message : '备份目录无法打开。'),
+                )
+              }
+            >
+              打开备份目录
+            </Button>
+          ) : null}
         </div>
         {feedback ? <p role="status">{feedback}</p> : null}
       </div>

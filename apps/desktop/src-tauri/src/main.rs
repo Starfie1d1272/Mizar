@@ -913,6 +913,9 @@ async fn finish_workspace(
     if result.is_err() {
         // Keep the original local failure; never replace it with window errors.
         let _ = open_main(app.clone(), None, None);
+        if let Err(window_error) = open_tool(app.clone(), "review".into(), Some("exit".into()), None).await {
+            command_log.event("workspace_exit_alert", "failure", Some(&window_error));
+        }
     }
     // Preserve the command result too; callers must not announce false success.
     result
@@ -1546,7 +1549,11 @@ async fn open_tool(app: tauri::AppHandle, tool: String, preset_id: Option<String
     let native_operation_id = diagnostic_operation_id.clone();
     let diagnostic_result: Result<(), String> = async move {
     // Diagnostics must remain available while an exit is blocked or in progress.
-    if tool != "diagnostics" {
+    let exit_review = tool == "review" && preset_id.as_deref() == Some("exit");
+    if exit_review && app.state::<production_exit::WorkspaceExit>().status().message.is_none() {
+        return Err("当前没有待处理的退出异常。".into());
+    }
+    if tool != "diagnostics" && !exit_review {
         app.state::<production_exit::ExitGate>().check()?;
     }
     app.state::<updates::PendingUpdate>().check()?;
@@ -1560,9 +1567,9 @@ async fn open_tool(app: tauri::AppHandle, tool: String, preset_id: Option<String
     let mut target = format!("{BASE}{path}").parse::<tauri::Url>()
         .map_err(|error| command_log.preserve_error("open_tool", native_operation_id.as_deref(), &error, "工具地址无法识别。"))?;
     if tool == "review" {
-        if !app.state::<HostState>().visible.load(Ordering::Relaxed) { return Err("工作台已隐藏，请返回工作台后重新打开核对窗口。".into()); }
+        if !exit_review && !app.state::<HostState>().visible.load(Ordering::Relaxed) { return Err("工作台已隐藏，请返回工作台后重新打开核对窗口。".into()); }
         let kind = preset_id.as_deref().unwrap_or("preflight");
-        if !matches!(kind, "preflight" | "roster" | "sync" | "issues") { return Err("核对页面无法识别。".into()); }
+        if !matches!(kind, "preflight" | "roster" | "sync" | "issues" | "exit") { return Err("核对页面无法识别。".into()); }
         target.query_pairs_mut().append_pair("kind", kind);
     }
     if tool == "hud" {

@@ -515,7 +515,13 @@ function WorkspaceDockContent() {
             <Button
               className="workspace-window-warning"
               aria-label="窗口控制需要处理"
-              onClick={() => setDetailsOpen(true)}
+              onClick={() => {
+                if (exit?.message && window.__TAURI_INTERNALS__) {
+                  void desktopInvoke('open_tool', { tool: 'review', presetId: 'exit' }).catch(() =>
+                    setDetailsOpen(true),
+                  );
+                } else setDetailsOpen(true);
+              }}
             >
               窗口告警
             </Button>
@@ -600,7 +606,13 @@ function WorkspaceDockContent() {
         {visibleError ? (
           <button
             className="workspace-error"
-            onClick={() => setDetailsOpen(true)}
+            onClick={() => {
+              if (exit?.message && window.__TAURI_INTERNALS__) {
+                void desktopInvoke('open_tool', { tool: 'review', presetId: 'exit' }).catch(() =>
+                  setDetailsOpen(true),
+                );
+              } else setDetailsOpen(true);
+            }}
             title={visibleError}
             aria-label="查看错误详情"
           >
@@ -708,7 +720,56 @@ export function WorkspacePreview() {
   );
 }
 
+function ExitReview() {
+  const exit = useWorkspaceExitStatus();
+  const [error, setError] = useState('');
+  return (
+    <div className="workspace-review-native">
+      <Dialog
+        open
+        modal={false}
+        title="退出工作台需要处理"
+        className="workspace-review-dialog"
+        onClose={() => void closeReviewWindow().catch((reason) => setError(String(reason)))}
+      >
+        <p>
+          {exit
+            ? (exit.message ??
+              (exit.busy
+                ? '正在处理，请等待结果。'
+                : '退出异常已处理，请返回准备中心查看当前状态。'))
+            : '正在读取退出结果…'}
+        </p>
+        {exit?.message ? (
+          <p>
+            {workspaceExitLabel(exit.stage)}尚未完成。请返回准备中心处理，备份和处理记录仍保留。
+          </p>
+        ) : null}
+        <div className="preparation-actions">
+          <Button
+            variant="primary"
+            onClick={() =>
+              void openPreparation('/')
+                .then(() => closeReviewWindow())
+                .catch((reason) => setError(String(reason)))
+            }
+          >
+            返回准备中心处理
+          </Button>
+          <Button
+            onClick={() => void openTool('diagnostics').catch((reason) => setError(String(reason)))}
+          >
+            运行诊断
+          </Button>
+        </div>
+        {error ? <p role="alert">{error}</p> : null}
+      </Dialog>
+    </div>
+  );
+}
+
 export function WorkspaceReview() {
+  if (new URLSearchParams(window.location.search).get('kind') === 'exit') return <ExitReview />;
   return (
     <div className="workspace-review-native">
       <WorkspaceLeftContent />
