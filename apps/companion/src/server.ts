@@ -192,6 +192,11 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
     onSeriesProgressDiagnostic: ({ code }) => console.warn(`系列进度检查点诊断：${code}`),
   });
   const productInstance = process.env.MIZAR_PRODUCT_INSTANCE;
+  const diagnosticsEndpoint =
+    process.env.MIZAR_DIAGNOSTICS_ENDPOINT ??
+    (productInstance !== undefined && !qualificationMode
+      ? 'https://mizar-diagnostics.duxinyu475.workers.dev'
+      : undefined);
   const rehearsalCandidates = [
     resolve(process.cwd(), 'fixtures/epl-s24/rehearsal.generated.json'),
     resolve(process.cwd(), '../../fixtures/epl-s24/rehearsal.generated.json'),
@@ -298,9 +303,7 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
             stop: () => shutdown('product-stop'),
           },
         }),
-    ...(process.env.MIZAR_DIAGNOSTICS_ENDPOINT
-      ? { diagnosticsEndpoint: process.env.MIZAR_DIAGNOSTICS_ENDPOINT }
-      : {}),
+    ...(diagnosticsEndpoint ? { diagnosticsEndpoint } : {}),
     logger: true,
     gsiToken,
     recorder,
