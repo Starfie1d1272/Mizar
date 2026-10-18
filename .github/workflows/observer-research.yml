@@ -50,8 +50,8 @@ jobs:
             Invoke-WebRequest -Uri $item[0] -OutFile $path -TimeoutSec 180
             if ((Get-FileHash $path -Algorithm SHA256).Hash.ToLowerInvariant() -ne $item[2]) { throw 'Pinned input digest mismatch' }
           }
-          New-Item -ItemType Directory -Force "$root/sdk" | Out-Null
-          tar -xzf "$root/sdk.tar.gz" -C "$root/sdk" --strip-components=3 'Proton-bc896217ffcd67f892f952b010f898fe7bd0f0a1/lsteamclient/steamworks_sdk_165'
+          New-Item -ItemType Directory -Force "$root/sdk/steam" | Out-Null
+          tar -xzf "$root/sdk.tar.gz" -C "$root/sdk/steam" --strip-components=3 'Proton-bc896217ffcd67f892f952b010f898fe7bd0f0a1/lsteamclient/steamworks_sdk_165'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Compile the native bridge with the Windows toolchain
         shell: cmd
@@ -59,7 +59,7 @@ jobs:
           for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
           lib /nologo /machine:x64 /def:apps\companion\research\ordinary-gotv\native\steam_api64.def /out:.agent-tmp\observer-build\steam_api64.lib
           if errorlevel 1 exit /b %errorlevel%
-          cl /nologo /std:c++20 /EHsc /O2 /MT /LD /I.agent-tmp\observer-build\sdk apps\companion\research\ordinary-gotv\native\sdk_host.cpp /Fo.agent-tmp\observer-build\sdk_host.obj /link .agent-tmp\observer-build\steam_api64.lib /OUT:.agent-tmp\observer-build\mizar_observer.dll
+          cl /nologo /std:c++20 /EHsc /O2 /MT /LD /I.agent-tmp\observer-build\sdk /I.agent-tmp\observer-build\sdk\steam apps\companion\research\ordinary-gotv\native\sdk_host.cpp /Fo.agent-tmp\observer-build\sdk_host.obj /link .agent-tmp\observer-build\steam_api64.lib /OUT:.agent-tmp\observer-build\mizar_observer.dll
           if errorlevel 1 exit /b %errorlevel%
           dumpbin /exports .agent-tmp\observer-build\mizar_observer.dll > .agent-tmp\observer-build\exports.txt
       - name: Assemble portable client and verify bundled runtimes
