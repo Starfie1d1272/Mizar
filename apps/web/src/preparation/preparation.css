@@ -1357,3 +1357,13 @@
   width: min(880px, calc(100vw - 48px));
   max-width: none;
 }
+
+.preparation .game-settings-connection {
+  gap: var(--mizar-layout-compact);
+}
+.game-settings-signals {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--mizar-layout-padding);
+  padding-block: var(--mizar-layout-compact);
+}

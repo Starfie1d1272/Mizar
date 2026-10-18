@@ -4,7 +4,7 @@ import { obsCommand, readObsConfigurationContext, useObsStatus } from '../worksp
 import { StatusBanner } from '../ui';
 
 /** Preparation owns bounded setup requests; Host and Companion own all configuration. */
-export function AutomaticPreparation() {
+export function AutomaticPreparation({ showGsiMessage = true }: { showGsiMessage?: boolean }) {
   const obs = useObsStatus();
   const ensured = useRef<string | null>(null);
   const [gsiMessage, setGsiMessage] = useState('');
@@ -69,7 +69,7 @@ export function AutomaticPreparation() {
       {configurationMessage ? (
         <StatusBanner tone="info">{configurationMessage}</StatusBanner>
       ) : null}
-      {gsiMessage ? <StatusBanner tone="info">{gsiMessage}</StatusBanner> : null}
+      {gsiMessage && showGsiMessage ? <StatusBanner tone="info">{gsiMessage}</StatusBanner> : null}
       {obsMessage && (obs?.connection !== 'connected' || obs.findings.length > 0) ? (
         <StatusBanner tone="warning">{obsMessage}</StatusBanner>
       ) : null}

@@ -52,7 +52,7 @@ export function Cs2LaunchSettings() {
   return (
     <Panel className="settings-card">
       <h2>CS2 启动设置</h2>
-      <p>保存下次启动使用的画质与帧率，在页面顶部启动游戏并打开工作台。</p>
+      <p>画质与帧率在下次由 Mizar 启动游戏时生效；接入已有游戏不会覆盖其设置。</p>
       {desktop ? (
         <form
           onSubmit={(event) => {
@@ -144,7 +144,15 @@ export function Cs2LaunchSettings() {
         </div>
         <p>退出工作台或退出 Mizar 时关闭本次游戏并恢复原设置；隐藏工作区保留游戏。</p>
       </details>
-      {desktop ? (
+      {desktop &&
+      (status?.pending ||
+        status?.spectatorRecoveryPending ||
+        status?.demoCleanupPending ||
+        status?.canPreserve ||
+        status?.message ||
+        status?.borrowed ||
+        phase ||
+        statusError) ? (
         <section aria-label="配置与恢复">
           <h3>配置与恢复</h3>
           <Cs2Recovery production={production} />

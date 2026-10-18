@@ -46,68 +46,71 @@ export function SteamAvatarSettings() {
       <p>
         {status?.configured ? '已配置密钥' : '尚未配置密钥'} · 本机缓存 {status?.cached ?? 0} 个头像
       </p>
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          void save('configure');
-        }}
-      >
-        <Field
-          label="Steam Web API Key（可选，推荐填写）"
-          type="password"
-          autoComplete="off"
-          value={key}
-          disabled={busy}
-          placeholder={status?.configured ? '••••••••••••' : '输入 32 位密钥'}
-          onChange={(event) => setKey(event.target.value)}
-          message={
-            status?.configured
-              ? '已配置。输入新密钥后更新，留空保留当前密钥。'
-              : '密钥仅保存在本机；不填写也能正常使用 HUD。'
-          }
-        />
-        <div className="preparation-actions">
-          <Button type="submit" variant="primary" disabled={busy || !key.trim()}>
-            {busy ? '保存中…' : status?.configured ? '更新密钥' : '保存密钥'}
-          </Button>
-          <Button
-            disabled={busy || !status?.configured}
-            onClick={() => void save('configure', true)}
-          >
-            停用在线获取
-          </Button>
-          <Button disabled={busy || !status?.cached} onClick={() => void save('clear')}>
-            清除头像缓存
-          </Button>
-        </div>
-      </form>
-      <p>
-        <a
-          href="https://steamcommunity.com/dev/apikey"
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={(event) => {
-            if (!window.__TAURI_INTERNALS__) return;
+      <details>
+        <summary>{status?.configured ? '修改头像配置' : '配置 Steam 头像'}</summary>
+        <form
+          onSubmit={(event) => {
             event.preventDefault();
-            void desktopInvoke('open_steam_api_key').catch(() =>
-              setMessage('浏览器未能打开，请手动访问 https://steamcommunity.com/dev/apikey。'),
-            );
+            void save('configure');
           }}
         >
-          获取 Steam Web API Key（Steam 官方）
-        </a>
-      </p>
-      <details>
-        <summary>申请与填写说明</summary>
-        <ol>
-          <li>在浏览器中登录 Steam，按官方页面提示申请或查看已有 Key。</li>
-          <li>
-            申请页的域名（Domain Name）建议填写 <code>localhost</code>
-            ，表示在本机使用，不需要购买或配置域名。
-          </li>
-          <li>复制 32 位 Key 到下方输入框并保存，当前选手的备用头像会自动加载。</li>
-        </ol>
-        <p>若 Steam 提示账号暂不能申请，可跳过此项，不影响 HUD 使用。</p>
+          <Field
+            label="Steam Web API Key（可选，推荐填写）"
+            type="password"
+            autoComplete="off"
+            value={key}
+            disabled={busy}
+            placeholder={status?.configured ? '••••••••••••' : '输入 32 位密钥'}
+            onChange={(event) => setKey(event.target.value)}
+            message={
+              status?.configured
+                ? '已配置。输入新密钥后更新，留空保留当前密钥。'
+                : '密钥仅保存在本机；不填写也能正常使用 HUD。'
+            }
+          />
+          <div className="preparation-actions">
+            <Button type="submit" variant="primary" disabled={busy || !key.trim()}>
+              {busy ? '保存中…' : status?.configured ? '更新密钥' : '保存密钥'}
+            </Button>
+            <Button
+              disabled={busy || !status?.configured}
+              onClick={() => void save('configure', true)}
+            >
+              停用在线获取
+            </Button>
+            <Button disabled={busy || !status?.cached} onClick={() => void save('clear')}>
+              清除头像缓存
+            </Button>
+          </div>
+        </form>
+        <p>
+          <a
+            href="https://steamcommunity.com/dev/apikey"
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(event) => {
+              if (!window.__TAURI_INTERNALS__) return;
+              event.preventDefault();
+              void desktopInvoke('open_steam_api_key').catch(() =>
+                setMessage('浏览器未能打开，请手动访问 https://steamcommunity.com/dev/apikey。'),
+              );
+            }}
+          >
+            获取 Steam Web API Key（Steam 官方）
+          </a>
+        </p>
+        <details>
+          <summary>申请与填写说明</summary>
+          <ol>
+            <li>在浏览器中登录 Steam，按官方页面提示申请或查看已有 Key。</li>
+            <li>
+              申请页的域名（Domain Name）建议填写 <code>localhost</code>
+              ，表示在本机使用，不需要购买或配置域名。
+            </li>
+            <li>复制 32 位 Key 到下方输入框并保存，当前选手的备用头像会自动加载。</li>
+          </ol>
+          <p>若 Steam 提示账号暂不能申请，可跳过此项，不影响 HUD 使用。</p>
+        </details>
       </details>
       {status?.configured && status.unavailable ? (
         <StatusBanner tone="warning">

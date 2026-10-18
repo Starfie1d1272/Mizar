@@ -200,7 +200,7 @@ export function PreparationPage() {
   return (
     <OperatorShell active={path}>
       <main className="preparation" data-page={path}>
-        <AutomaticPreparation />
+        <AutomaticPreparation showGsiMessage={!(path === '/settings' && tab === 'gsi')} />
         <UpdateNotification />
         <header className="preparation-heading">
           <div>
@@ -221,11 +221,7 @@ export function PreparationPage() {
             disabled={busy || Boolean(exit?.busy) || !production?.canEnter}
             onClick={() => production && void action(() => productionAction('enter', production))}
           >
-            {production?.mode === 'hidden' || production?.mode === 'live'
-              ? '打开直播工作台'
-              : window.__TAURI_INTERNALS__
-                ? '启动游戏并打开工作台'
-                : '打开直播工作台'}
+            打开直播工作台
           </Button>
         </header>
 

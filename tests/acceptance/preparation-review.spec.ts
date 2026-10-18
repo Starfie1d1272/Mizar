@@ -45,7 +45,7 @@ test('uncertain Steam launch recovery stays visible after navigation and require
   await page.goto('/');
   await expect(page.getByText('正在等待 Steam 启动 CS2', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '恢复配置备份' })).toBeDisabled();
-  await page.getByRole('link', { name: '游戏设置', exact: true }).click();
+  await page.getByRole('link', { name: '设置', exact: true }).click();
   await expect(page.getByText('正在等待 Steam 启动 CS2', { exact: true })).toBeVisible();
   await page.reload();
   await expect(page.getByRole('button', { name: '恢复配置备份' })).toBeDisabled();
