@@ -26,7 +26,7 @@ python3 apps/companion/research/ordinary-gotv/verify_live.py \
 
 编译退出 0。离线验证退出 **1**，原始结果在 `evidence/live-oracle-phase4-wip.json`：185932 个 packet、weapon_fire 4402、player_death 224；round_start/end 未产生，AWP 计数 0，因此 **counts_match=false**，不能说全部通过。事件 tick 均来自 event.server_tick，未借用 Demo tick 或 reliable hint。
 
-待核对：CS2 的 round 事件可能走独立消息或实体派生；武器原名可能带前缀，当前 verifier 只数 `awp`；不要未经读取就假定原因。实际描述符包含 type=9，初稿保留非负 int32 type，仅解读 type=1 的 weapon，尚需测试未知类型/缺字段行为。旧慢速重复验证进程（exec session 94321）已发送 SIGTERM，保留已完成快速运行的失败报告。快速运行 session 28954 已结束。
+待核对：CS2 的 round 事件可能走独立消息或实体派生；武器原名可能带前缀，当前 verifier 只数 `awp`；不要未经读取就假定原因。实际描述符包含 type=9，初稿保留非负 int32 type，仅解读 type=1 的 weapon，尚需测试未知类型/缺字段行为。旧慢速重复验证进程（exec session 94321）也已自行结束，退出 1、结果与快速运行一致；尝试终止时进程已不存在。快速运行 session 28954 已结束。无验证命令留在后台。
 
 ## 本轮静态发现与保存位置
 
