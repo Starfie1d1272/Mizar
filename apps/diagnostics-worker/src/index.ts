@@ -75,16 +75,32 @@ async function hash(bytes: Uint8Array) {
     .map((value) => value.toString(16).padStart(2, '0'))
     .join('');
 }
+// The isolate only uses the two environment signing secrets. Bound the cache
+// across rotations/test environments; changing a secret always imports a new key.
+const macKeys = new Map<string, Promise<CryptoKey>>();
 async function mac(secret: string, value: string) {
-  const key = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  );
+  let pending = macKeys.get(secret);
+  if (!pending) {
+    if (macKeys.size >= 2) macKeys.clear();
+    pending = crypto.subtle.importKey(
+      'raw',
+      encoder.encode(secret),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign'],
+    );
+    macKeys.set(secret, pending);
+  }
+  let key: CryptoKey;
+  try {
+    key = await pending;
+  } catch (error) {
+    if (macKeys.get(secret) === pending) macKeys.delete(secret);
+    throw error;
+  }
   return new Uint8Array(await crypto.subtle.sign('HMAC', key, encoder.encode(value)));
 }
+
 const base64 = (bytes: Uint8Array) =>
   btoa(String.fromCharCode(...bytes))
     .replaceAll('+', '-')
@@ -418,23 +434,27 @@ async function upload(request: Request, env: Env, id: string, installation: stri
     return json({ error: 'batch_retention_expired' }, 410);
   if (existing?.state === 'ready') return accepted(id);
   if (!(await withinDatabaseBudget(env))) return json({ error: 'index_allocation_budget' }, 503);
-  await sql(
+  const boundPermit = await sql(
     env,
-    'UPDATE upload_permits SET wire_sha256=? WHERE payload_sha256=? AND wire_sha256 IS NULL',
+    `UPDATE upload_permits SET wire_sha256=? WHERE payload_sha256=? AND wire_sha256 IS NULL
+    RETURNING lower(hex(wire_sha256)) AS wire_hex`,
     binaryId(id),
     binaryId(sealed.permit.payloadSha256),
-  ).run();
-  if ((await permitRow(env, sealed.permit.payloadSha256))?.wire_hex !== id)
-    return json({ error: 'payload_encoding_conflict' }, 409);
+  ).first<{ wire_hex: string }>();
+  // A concurrent writer or retry can already have bound it. Re-read that case
+  // while the common first binding uses the atomic UPDATE result directly.
+  const wireHex =
+    boundPermit?.wire_hex ?? (await permitRow(env, sealed.permit.payloadSha256))?.wire_hex;
+  if (wireHex !== id) return json({ error: 'payload_encoding_conflict' }, 409);
 
   if (existing && (existing.state === 'deleting' || existing.writers >= 8))
     return json({ error: 'batch_pending' }, 409);
   const owner = crypto.randomUUID();
   const day = Math.floor(now / DAY);
   const objectKey = `v1/${installation}/${day}/${id}.gz`;
-  await sql(env, 'INSERT OR IGNORE INTO daily(day) VALUES(?)', day).run();
   // D1 batch is one transaction. A rejected reservation mutates no quota.
   const reserved = await env.DIAGNOSTICS_DB.batch([
+    sql(env, 'INSERT OR IGNORE INTO daily(day) VALUES(?)', day),
     sql(
       env,
       `INSERT INTO batches(installation_id,id,object_key,owner,state,bytes,received_at,expires_at,metadata)
@@ -490,7 +510,7 @@ async function upload(request: Request, env: Env, id: string, installation: stri
       owner,
     ),
   ]);
-  if (!reserved[0]?.meta.changes) return json({ error: 'capacity_or_concurrent_reservation' }, 429);
+  if (!reserved[1]?.meta.changes) return json({ error: 'capacity_or_concurrent_reservation' }, 429);
   let row: BatchRow | null = null;
   try {
     row = await batchRow(env, installation, id);
