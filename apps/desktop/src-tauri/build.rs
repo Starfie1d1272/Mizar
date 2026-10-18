@@ -13,6 +13,7 @@ fn main() {
             "cs2_config_status",
             "mulnx_handoff_status",
             "open_mulnx_browser",
+            "launch_mulnx",
             "start_managed_cs2",
             "attach_external_cs2",
             "finish_managed_cs2",

@@ -432,6 +432,18 @@ pub fn prepare_external_entry(log: &DesktopLog, expected_revision: &str) -> Resu
 }
 
 /// Existing private runtime identity; browsers cannot renew a native lease.
+pub fn prepare_mulnx(log: &DesktopLog, cs2: &std::path::Path) -> Result<serde_json::Value, String> {
+    let token = runtime_token(log)?;
+    let body = serde_json::json!({"cs2Path": cs2.to_string_lossy()}).to_string();
+    let (code, value) = request_with_identity(log, "POST", "/operator/runtime/mulnx-prepare", &body,
+        Instant::now() + Duration::from_secs(240), Some(&token))?;
+    if code != 200 {
+        log.event("mulnx_prepare", "failure", Some(&format!("http={code}; response={value}")));
+        return Err(value["message"].as_str().unwrap_or("MulNX 准备失败，请重试。").into());
+    }
+    Ok(value)
+}
+
 pub fn camera_session(log: &DesktopLog, action: &str, lease: Option<&str>, revision: Option<&str>) -> Result<serde_json::Value, String> {
     let token = runtime_token(log)?;
     let mut body = serde_json::json!({"action": action, "host": log.session_id});

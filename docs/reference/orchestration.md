@@ -1,6 +1,6 @@
 # 地图自动编排与 MulNX
 
-自动编排由 Companion 消费既有 `ProgramProjection`、Program 场景与实际 OBS 开场 Take，MulNX 负责游戏内摄像机。此功能可选，默认未连接、人工模式、空预设；不分发镜头、歌曲或 MulNX 二进制。设置 → **音乐与运镜** 编辑预设，现场提供接管和跳过。普通 GSI、HUD、OBS 和节目音乐不依赖 MulNX。
+自动编排由 Companion 消费既有 `ProgramProjection`、Program 场景与实际 OBS 开场 Take，MulNX 负责游戏内摄像机。此功能可选，默认未连接、人工模式、空预设；正式候选附带构建时最新的 MulNX 官方发行包及原有运镜资源；歌曲由使用者导入。设置 → **音乐与运镜** 编辑预设，现场提供接管和跳过。普通 GSI、HUD、OBS 和节目音乐不依赖 MulNX。
 
 ## 固定上游核对
 
@@ -15,7 +15,7 @@
 | [停止](https://github.com/Co1Swet/MulNX_CS2/blob/6dbc5ae99515740b82d01913972835cd723646e8/source/MulNXExtensions/CS2/Feature/View/CameraSystem/CamPlayScheduler/CamPlayScheduler.cpp) | `CamPlay/ClearForce` 清空全部槽；无已停止/完成回执 | 接管、时限和失效时请求清空，显示停止结果未确认，不伪造 completed |
 | 就绪、完成、身份与撤销 | 未见稳定的版本/就绪、活动包、关联 started/completed/failed、Provider 身份、带期限命令或按请求撤销协议；监听仍只传端口 | 无自动能力推断；无自动重连、重试或离线队列；重连后重新确认 |
 
-Mizar 只连接固定 `ws://127.0.0.1:55202`，本机 HTTP 接口拒绝跨站来源及 LAN 模式，不接受任意地址或控制台命令。回环连接不能证明上游只监听本机，也不提供上游鉴权或游戏实例身份。仅在获授权的离线/赛事环境、已人工配置的受支持 MulNX 中联调；本功能不启动 MulNX、不注入游戏；Host 仅可显式借用已启动的 CS2，不将其变为受管进程。
+Mizar 只连接固定 `ws://127.0.0.1:55202`，本机 HTTP 接口拒绝跨站来源及 LAN 模式，不接受任意地址或控制台命令。回环连接不能证明上游只监听本机，也不提供上游鉴权或游戏实例身份。仅在获授权的离线/赛事环境、已人工配置的受支持 MulNX 中联调；Host 可从准备中心打开受管目录中的 MulNX 官方启动器，由上游启动游戏；随后显式借用 CS2。
 
 ## 触发与控制
 
@@ -42,17 +42,19 @@ Mizar 只连接固定 `ws://127.0.0.1:55202`，本机 HTTP 接口拒绝跨站来
 
 ## 专用隔离包与本机入口
 
-`prepare-pack` 工具仅复制操作者提供的 `CamMacros`、`Campaths` 到新建的 `Mizar_<随机标识>` 包，不覆盖原包、不安装资源。专用包元数据固定为 JSON 格式的 YAML：三个自动列表均为空，包切换快捷键关闭。工具拒绝符号链接、硬链接与过大的资源树；失败副本不会生成可验证的元数据。原包许可证和第三方资源使用条件由资源提供方保留，本项目不分发副本。
+`prepare-pack` 工具仅复制操作者提供的 `CamMacros`、`Campaths` 到新建的 `Mizar_<随机标识>` 包，不覆盖原包。专用包元数据固定为 JSON 格式的 YAML：三个自动列表均为空，包切换快捷键关闭。工具拒绝符号链接、硬链接与过大的资源树；失败副本不会生成可验证的元数据。原包许可证和第三方资源使用条件由资源提供方保留，随包保留上游许可证、资源署名和源码链接。
 
-在 **MulNX 启动、加载包之前**准备隔离包。试用包根目录 PowerShell 示例（路径换成自己的目录）：
+### 内置发行与独立更新
 
-```powershell
-& .\resources\runtime\node.exe .\resources\app\dist\orchestration\prepare-pack.js 'D:\MulNX\CS2OBTool\CameraSystem\CamPacks\Mtp' 'D:\MulNX\CS2OBTool\CameraSystem\CamPacks'
-$env:MIZAR_MULNX_CAM_PACKS_ROOT = 'D:\MulNX\CS2OBTool\CameraSystem\CamPacks'
-.\Mizar.exe
-```
+Mizar 与 MulNX 独立管理版本。每次正式候选构建解析上游最新公开 Release（包含 Beta），打包原始归档、校验摘要、来源和许可文件；候选的内容摘要固定这次实际打包的字节。
 
-先在没有 CS2 运行时完成 Mizar 的游戏安装位置、GSI 与 OBS 配置，再通过 MulNX 启动 CS2，让本次 GSI 配置随游戏加载。将工具输出的 `name` 填入本图“MulNX 活动包名称”。源代码环境也可在构建后运行 `node apps/companion/dist/orchestration/prepare-pack.js <原包目录> <CamPacks目录>`。Mizar 从受信任的启动环境读取根目录，网页不接受任意文件路径；启用、试播和每轮调度都会检查包元数据。缺少根目录、文件不符或列表不为空时禁止发镜头；运行期间不符立即回到人工。未增加通用 YAML 解析依赖，只有工具生成的精确格式通过。**MulNX 保存/改写包后，即使列表仍为空，也可能验证失败；退出 MulNX 后重新复制成新隔离包并重新载入、更新预设。** 不在已载入的同名包上改文件来冒充内存已更新。
+准备中心提供“检查更新”和“更新并打开 MulNX”。启动前查询上游，按摘要安装新版，检查启动器、工具与运镜包布局，再打开官方启动器。兼容判断基于现有接口和文件布局，不按 Mizar 版本锁定 MulNX tag。上游改变接口时需更新适配实现。
+
+运行时版本存放在本机数据目录的 mulnx 子目录。每版完整解压到新目录，验证成功后原子切换当前版本；下载、校验或解压失败保留原版本。网页只发起操作，CS2 安装位置由原生 Host 的既有 GSI 检查确定。原生 Host 在启动前重新检查游戏进程和受管路径。上游的启动参数及平台检查继续保留。
+
+每个原始运镜包生成一个独立调度副本，三个自动列表为空，包名由原始包名稳定生成。更新 MulNX 保留单独存放的 Mizar 编排预设；新版本同名资源仍对应原隔离包名。打开 MulNX 后，在游戏内选择对应隔离包，再借用游戏进入工作台、连接和试播。
+
+外部安装仍可使用 prepare-pack 工具和 MIZAR_MULNX_CAM_PACKS_ROOT。文件验证要求元数据与工具生成内容一致；MulNX 改写后重新准备副本再载入。
 
 文件验证只证明磁盘前提。上游仍无活动包和内存列表读回，故操作者必须在游戏内选中刚载入的唯一包；启用和试播按钮都明确要求确认。不要再切回带自动列表的原包；在人工模式跨回合观察无额外镜头后再启用。若不能确认实际加载状态，则停止联调，不能声称只有 Mizar 在调度。
 

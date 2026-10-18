@@ -81,7 +81,15 @@ export interface OrchestrationStatus {
   current: string | null;
   message: string;
 }
+export interface MulnxToolView {
+  installed: string | null;
+  latest: string | null;
+  busy: boolean;
+  message: string;
+  packs: { name: string; sourceName: string }[];
+}
 export interface OrchestrationView {
+  tool?: MulnxToolView;
   preset: OrchestrationPreset;
   ready: boolean;
   status: OrchestrationStatus;

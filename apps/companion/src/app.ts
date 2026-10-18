@@ -1,5 +1,6 @@
 import { verifyIsolatedPack } from './orchestration/isolated-pack.js';
 import { CameraDirector } from './orchestration/director.js';
+import { MulnxTool } from './orchestration/tool.js';
 import { OrchestrationStore } from './orchestration/store.js';
 import { MulnxProvider } from './orchestration/provider.js';
 import { registerOrchestrationRoutes } from './orchestration/routes.js';
@@ -174,6 +175,7 @@ export interface CompanionAppOptions {
   readonly hudConfigStore?: HudConfigStore;
   readonly obsConfigPath?: string;
   readonly mulnxCamPacksRoot?: string;
+  readonly mulnxBundle?: string;
   readonly readObsCaptureEvidence?: () => Promise<ObsNativeEvidence>;
   readonly qualificationRunId?: string;
   readonly qualificationScenarioPath?: string;
@@ -1059,6 +1061,13 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     );
     const cameraEvidence = (stage: string, evidence: unknown) =>
       sessionJournal?.record(stage, evidence);
+    const mulnxTool = options.mulnxBundle
+      ? new MulnxTool(
+          join(dirname(options.obsConfigPath), 'mulnx'),
+          options.mulnxBundle,
+          cameraEvidence,
+        )
+      : undefined;
     cameraDirector = new CameraDirector(
       cameraStore,
       new MulnxProvider(cameraEvidence),
@@ -1073,10 +1082,13 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       cameraEvidence,
       undefined,
       undefined,
-      (pack) => verifyIsolatedPack(options.mulnxCamPacksRoot, pack),
+      (pack) => verifyIsolatedPack(options.mulnxCamPacksRoot ?? mulnxTool?.camPacksRoot, pack),
       options.productRuntime !== undefined,
     );
     app.addHook('onReady', async () => {
+      await mulnxTool
+        ?.load()
+        .catch((error) => app.log.error({ stage: 'mulnx_load', err: error }, 'MulNX 加载失败'));
       await cameraStore
         .load()
         .catch((error) =>
@@ -1094,7 +1106,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       {
         controlToken: options.productRuntime?.controlToken,
         configure: production.configureCameraSession,
+        canPrepare: () => production.get().mode === 'preparation',
       },
+      mulnxTool,
     );
   }
   sceneController.attachDirector(director);
