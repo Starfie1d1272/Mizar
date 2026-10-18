@@ -34,7 +34,7 @@ jobs:
       - name: Measure diagnostic capacity with local R2 and D1
         run: |
           mkdir -p .agent-tmp
-          pnpm diagnostics:capacity .agent-tmp/diagnostics-capacity.json
+          pnpm diagnostics:capacity "$GITHUB_WORKSPACE/.agent-tmp/diagnostics-capacity.json"
 
       - name: Upload capacity report
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
