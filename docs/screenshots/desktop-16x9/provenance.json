@@ -1,0 +1,116 @@
+{
+  "records": [
+    {
+      "file": "01-preparation.png",
+      "title": "本场准备",
+      "sha256": "98c4ea948eedc181f79b70003a037252e7edb64800665debfba7e366024cec99",
+      "codeCommit": "405167b7a390608544569cea786fd90fd0c40d79",
+      "resolution": [2560, 1440],
+      "source": "Chromium 全屏视口；仓库 EPL 样例；HUD 同源实景回放；BP 为内置 BO3 演示；无 Windows/CS2/OBS 实机"
+    },
+    {
+      "file": "02-matches.png",
+      "title": "比赛资料",
+      "sha256": "e5f919f55f2eac372bb24be1604e00c9708f7b1530491850c0916a6d4a2fe1f8",
+      "codeCommit": "405167b7a390608544569cea786fd90fd0c40d79",
+      "resolution": [2560, 1440],
+      "source": "Chromium 全屏视口；仓库 EPL 样例；HUD 同源实景回放；BP 为内置 BO3 演示；无 Windows/CS2/OBS 实机"
+    },
+    {
+      "file": "03-roster.png",
+      "title": "队伍与名单",
+      "sha256": "f77efff26b2010dabf25254bd990cee5ab70bd7b43d42eab28e44e77abad22cf",
+      "codeCommit": "405167b7a390608544569cea786fd90fd0c40d79",
+      "resolution": [2560, 1440],
+      "source": "Chromium 全屏视口；仓库 EPL 样例；HUD 同源实景回放；BP 为内置 BO3 演示；无 Windows/CS2/OBS 实机"
+    },
+    {
+      "file": "04-maps.png",
+      "title": "地图与 BP",
+      "sha256": "e5dbea85794e153f945b177664cd219dbe51343fe898df70a65215ab1430b799",
+      "codeCommit": "405167b7a390608544569cea786fd90fd0c40d79",
+      "resolution": [2560, 1440],
+      "source": "Chromium 全屏视口；仓库 EPL 样例；HUD 同源实景回放；BP 为内置 BO3 演示；无 Windows/CS2/OBS 实机"
+    },
+    {
+      "file": "05-picture.png",
+      "title": "播出画面",
+      "sha256": "d00bca4d19c2e60f3f9c4e6552eb0a723702d2f37e39092f40b78f3b94801416",
+      "codeCommit": "405167b7a390608544569cea786fd90fd0c40d79",
+      "resolution": [2560, 1440],
+      "source": "Chromium 全屏视口；仓库 EPL 样例；HUD 同源实景回放；BP 为内置 BO3 演示；无 Windows/CS2/OBS 实机"
+    },
+    {
+      "file": "06-hud.png",
+      "title": "HUD 编辑器",
+      "sha256": "ddd2180d407f61ef8e2499a3fbb471d1ff591766adb5e50a1e3a580c9bccd9e3",
+      "codeCommit": "405167b7a390608544569cea786fd90fd0c40d79",
+      "resolution": [2560, 1440],
+      "source": "Chromium 全屏视口；仓库 EPL 样例；HUD 同源实景回放；BP 为内置 BO3 演示；无 Windows/CS2/OBS 实机"
+    },
+    {
+      "file": "07-bp.png",
+      "title": "BP 工作台",
+      "sha256": "83ef3ebcf927cbbc52e09d13352dfd65237fe9ae3b6f1e979dfacf386e453003",
+      "codeCommit": "405167b7a390608544569cea786fd90fd0c40d79",
+      "resolution": [2560, 1440],
+      "source": "Chromium 全屏视口；仓库 EPL 样例；HUD 同源实景回放；BP 为内置 BO3 演示；无 Windows/CS2/OBS 实机"
+    },
+    {
+      "file": "08-game.png",
+      "title": "游戏设置",
+      "sha256": "03e977effae018c3c056225e15d60550297f64beea3c584b629d3151ca3dc7e0",
+      "codeCommit": "405167b7a390608544569cea786fd90fd0c40d79",
+      "resolution": [2560, 1440],
+      "source": "Chromium 全屏视口；仓库 EPL 样例；HUD 同源实景回放；BP 为内置 BO3 演示；无 Windows/CS2/OBS 实机"
+    },
+    {
+      "file": "09-obs.png",
+      "title": "OBS 连接",
+      "sha256": "f917eee9555640070b35cd69524d65ae4e1b20d8da066bb78f7125ab35fdc892",
+      "codeCommit": "405167b7a390608544569cea786fd90fd0c40d79",
+      "resolution": [2560, 1440],
+      "source": "Chromium 全屏视口；仓库 EPL 样例；HUD 同源实景回放；BP 为内置 BO3 演示；无 Windows/CS2/OBS 实机"
+    },
+    {
+      "file": "10-music.png",
+      "title": "音乐配置",
+      "sha256": "63db050b9ff11e705ed449dbc568bcdc534a17a98fb783ea8c4c249f51356b45",
+      "codeCommit": "405167b7a390608544569cea786fd90fd0c40d79",
+      "resolution": [2560, 1440],
+      "source": "Chromium 全屏视口；仓库 EPL 样例；HUD 同源实景回放；BP 为内置 BO3 演示；无 Windows/CS2/OBS 实机"
+    },
+    {
+      "file": "11-camera.png",
+      "title": "运镜配置",
+      "sha256": "a5f08ef9ca6320893a63ab928304194653b3a481369836a2c788681fb35bbfaf",
+      "codeCommit": "405167b7a390608544569cea786fd90fd0c40d79",
+      "resolution": [2560, 1440],
+      "source": "Chromium 全屏视口；仓库 EPL 样例；HUD 同源实景回放；BP 为内置 BO3 演示；无 Windows/CS2/OBS 实机"
+    },
+    {
+      "file": "12-platform.png",
+      "title": "赛事平台",
+      "sha256": "1591c30692adfcd8d6293e4bf9f3278c8b00a6666ba4b0fcb3a7b8b492571368",
+      "codeCommit": "405167b7a390608544569cea786fd90fd0c40d79",
+      "resolution": [2560, 1440],
+      "source": "Chromium 全屏视口；仓库 EPL 样例；HUD 同源实景回放；BP 为内置 BO3 演示；无 Windows/CS2/OBS 实机"
+    },
+    {
+      "file": "13-advanced.png",
+      "title": "高级设置",
+      "sha256": "05e83e459e95b7b532b45368563d5ee545c576978fd9ca12bfee11f1d34d2f91",
+      "codeCommit": "405167b7a390608544569cea786fd90fd0c40d79",
+      "resolution": [2560, 1440],
+      "source": "Chromium 全屏视口；仓库 EPL 样例；HUD 同源实景回放；BP 为内置 BO3 演示；无 Windows/CS2/OBS 实机"
+    },
+    {
+      "file": "14-workspace.png",
+      "title": "现场工作台",
+      "sha256": "753021fdb797a2d2ad55e343aee92d13a9085b2853d94f037c71a67c39e8de02",
+      "codeCommit": "acea69535aaf77dfaaa54cc545d87461aa2f9d6c",
+      "resolution": [2560, 1440],
+      "source": "Chromium 全屏视口；仓库 EPL 样例；HUD 同源实景回放；BP 为内置 BO3 演示；无 Windows/CS2/OBS 实机"
+    }
+  ]
+}
