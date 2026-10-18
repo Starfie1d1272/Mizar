@@ -580,7 +580,7 @@
 .workspace-camera-controls {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--mizar-layout-compact);
+  gap: calc(var(--mizar-layout-compact) / 2);
   min-width: 0;
 }
 .workspace-camera-summary,
@@ -591,7 +591,7 @@
 .workspace-camera-summary {
   display: grid;
   grid-template-columns: 1fr auto;
-  gap: var(--mizar-layout-compact);
+  gap: calc(var(--mizar-layout-compact) / 2);
 }
 .workspace-camera-summary > span:last-child {
   grid-column: 1 / -1;
@@ -603,9 +603,8 @@
   white-space: normal;
   overflow-wrap: anywhere;
   font-size: var(--mizar-type-size-small);
-  min-height: calc(var(--mizar-layout-target) * 1.5);
-  max-height: calc(var(--mizar-layout-target) * 2);
-  overflow: auto;
+  height: calc(var(--mizar-layout-target) + var(--mizar-layout-compact) / 2);
+  overflow: hidden;
 }
 .workspace-camera-empty {
   color: var(--mizar-fg-muted);

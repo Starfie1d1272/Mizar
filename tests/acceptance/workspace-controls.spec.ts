@@ -165,6 +165,25 @@ test('workspace exit outcome survives a closed dock and failure allows a single 
 test('16:9 workspace scales the native regions and keeps scene controls inside the dock', async ({
   page,
 }) => {
+  // Display stress fixture: connected manual camera exposes every persistent action.
+  await page.route('**/local/v1/orchestration', (route) =>
+    route.fulfill({
+      json: {
+        ready: true,
+        preset: { maps: [] },
+        status: {
+          held: true,
+          connected: true,
+          isolated: true,
+          map: 'de_inferno',
+          pack: '本场隔离运镜包',
+          current: '回合开场',
+          message: '请确认当前地图与活动运镜包，再启用自动。',
+          control: { state: 'ready' },
+        },
+      },
+    }),
+  );
   await page.goto('/workspace');
   for (const [width, height] of [
     [1920, 1080],
@@ -180,6 +199,11 @@ test('16:9 workspace scales the native regions and keeps scene controls inside t
     expect(bounds.y).toBeCloseTo((height! * 3) / 4, 0);
     expect(bounds.width).toBeCloseTo((width! * 3) / 4, 0);
     expect(bounds.height).toBeCloseTo(height! / 4, 0);
+    const resume = (await page
+      .getByRole('button', { name: '确认运镜包并恢复自动' })
+      .boundingBox())!;
+    const footer = (await page.locator('.workspace-message').boundingBox())!;
+    expect(resume.y + resume.height).toBeLessThanOrEqual(footer.y);
     const buttons = page.getByLabel('手动切换场景').getByRole('button');
     await expect(buttons).toHaveCount(8);
     for (const button of await buttons.all()) {

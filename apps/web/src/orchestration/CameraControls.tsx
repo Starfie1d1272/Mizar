@@ -48,10 +48,20 @@ export function CameraControls({
           <span title={s.pack ?? undefined}>{s.pack ?? '未配运镜包'}</span>
         </div>
       ) : null}
-      <span className="music-controls__track">
-        {workspace ? '本次请求' : `运镜 · ${s.held ? '人工' : '自动'}`}
-        {s.current ? ` · ${s.current}` : ''} ·{' '}
-        {s.control.state === 'blocked' ? '原生交接待确认' : s.message}
+      <span
+        className="music-controls__track"
+        title={error || s.message}
+        role={workspace && error ? 'alert' : undefined}
+      >
+        {workspace && error ? (
+          error
+        ) : (
+          <>
+            {workspace ? '本次请求' : `运镜 · ${s.held ? '人工' : '自动'}`}
+            {s.current ? ` · ${s.current}` : ''} ·{' '}
+            {s.control.state === 'blocked' ? '原生交接待确认' : s.message}
+          </>
+        )}
       </span>
       {setup ? (
         <span>
@@ -86,7 +96,7 @@ export function CameraControls({
           {workspace ? '确认运镜包并恢复自动' : '确认活动隔离包并启用自动'}
         </Button>
       ) : null}
-      {error ? <span role="alert">{error}</span> : null}
+      {error && !workspace ? <span role="alert">{error}</span> : null}
     </div>
   );
 }
