@@ -94,6 +94,15 @@ test('saves real local choices, imports atomically, persists manual stop through
     await page.getByRole('button', { name: '保存音乐配置', exact: true }).click();
     await expect(page.getByText('音乐配置已保存。')).toBeVisible();
     expect(service.store.state.config.groups.waiting.tracks[0]?.name).toBe('合成等待.mp3');
+    await expect(page.getByRole('button', { name: '保存音乐配置', exact: true })).toBeDisabled();
+    await page.getByRole('button', { name: '移除 合成等待.mp3', exact: true }).click();
+    await expect(page.getByText('有未保存修改', { exact: true })).toBeVisible();
+    expect(service.store.state.config.groups.waiting.tracks).toHaveLength(1);
+    await page.reload();
+    await expect(page.getByRole('list', { name: '等待音乐曲目列表' })).toContainText(
+      '合成等待.mp3',
+    );
+
     service.store.failure = true;
     service.store.ready = false;
     await page.reload();
@@ -193,6 +202,7 @@ test('saves real local choices, imports atomically, persists manual stop through
       'music.json': Buffer.from(JSON.stringify(musicManifest())),
       'audio/等待.wav': musicWav(1),
     });
+    await page.getByText('导入音乐包', { exact: true }).click();
     await page
       .getByLabel('一键导入音乐包', { exact: true })
       .setInputFiles({ name: 'synthetic-music.zip', mimeType: 'application/zip', buffer: pack });
