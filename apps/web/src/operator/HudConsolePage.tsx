@@ -950,7 +950,7 @@ export function HudConsolePage() {
           </div>
           <div>
             <strong>
-              正式播出 ·{' '}
+              当前播出配置 ·{' '}
               {onAir.status === 'ready'
                 ? onAir.current.preset.name
                 : onAir.status === 'loading'

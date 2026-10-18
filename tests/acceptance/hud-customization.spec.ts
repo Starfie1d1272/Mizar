@@ -156,7 +156,6 @@ test('HUD settings preview → save → disk reload → activate → Program', a
     await page.getByLabel('呈现方案', { exact: true }).selectOption('minimal');
     await expect(page.locator('.focused-player__media img')).toHaveCount(0);
     await expect(page.locator('.focused-player__metrics')).toHaveCount(0);
-    await page.emulateMedia({ reducedMotion: 'reduce' });
     await expect(page.getByRole('checkbox', { name: '显示 K/A/D/ADR', exact: true })).toHaveCount(
       0,
     );
@@ -252,6 +251,122 @@ test('HUD settings preview → save → disk reload → activate → Program', a
     );
   } finally {
     await context.unrouteAll({ behavior: 'wait' });
+    await app.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('picture selection previews without activation, then applies explicitly and opens the selected editor', async ({
+  page,
+  context,
+}) => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-picture-selection-'));
+  const app = buildApp({
+    hudConfigStore: new HudConfigStore({ filePath: join(directory, 'hud.json') }),
+  });
+  let mutations = 0;
+  let offline = false;
+  await context.route(
+    /\/(?:operator|local\/v1)\/hud-config$|\/debug\/control-event$/,
+    async (route) => {
+      const request = route.request();
+      const pathname = new URL(request.url()).pathname;
+      if (offline && pathname.endsWith('/hud-config'))
+        return route.fulfill({ status: 503, json: { error: 'offline' } });
+      if (pathname === '/operator/hud-config' && request.method() === 'POST') mutations++;
+      const response = await app.inject({
+        method: request.method() as 'GET' | 'POST',
+        url: pathname,
+        headers: request.headers(),
+        ...(request.postData() ? { payload: request.postData()! } : {}),
+      });
+      await route.fulfill({
+        status: response.statusCode,
+        headers: response.headers as Record<string, string>,
+        body: response.body,
+      });
+    },
+  );
+  const capture = async (name: string) => {
+    if (!process.env.MIZAR_CAPTURE_HUD) return;
+    await import('node:fs/promises').then((fs) =>
+      fs.mkdir('docs/screenshots/hud-workflow', { recursive: true }),
+    );
+    await page.screenshot({ path: `docs/screenshots/hud-workflow/${name}.png`, fullPage: false });
+  };
+  try {
+    await page.setViewportSize({ width: 2560, height: 1440 });
+    await page.goto('/picture');
+    await expect(page.getByRole('button', { name: '已应用', exact: true })).toBeDisabled();
+    await expect(page.getByRole('button', { name: '类 EWC', exact: true })).toBeEnabled();
+    await expect(page.locator('.picture-preview .hud-console__canvas-logical')).toBeVisible();
+    await capture('01-open');
+    const initial = (await app.inject({ url: '/local/v1/hud-config' })).json<unknown>();
+    await page.getByRole('button', { name: '类 EWC', exact: true }).click();
+    await expect(page.getByRole('button', { name: '应用', exact: true })).toBeEnabled();
+    await expect(page.locator('.picture-active')).toContainText('Mizar 默认预设');
+    await expect(page.locator('.picture-preview-caption')).toContainText('类 EWC');
+    expect((await app.inject({ url: '/local/v1/hud-config' })).json()).toEqual(initial);
+    expect(mutations).toBe(0);
+    await capture('02-select-preview');
+    await page.getByRole('button', { name: '对阵', exact: true }).click();
+    await expect(page.frameLocator('iframe[title="节目场景预览"]').locator('body')).toContainText(
+      'VS',
+    );
+    expect(mutations).toBe(0);
+    await expect(
+      page.frameLocator('iframe[title="节目场景预览"]').locator('.intro-body'),
+    ).toHaveCSS('opacity', '1');
+    await capture('03-matchup-same-area');
+    await page.getByRole('button', { name: 'BP', exact: true }).click();
+    await expect(page.getByText('本场暂无完整 BP。现场将按已有比赛资料继续编排。')).toBeVisible();
+    await capture('04-no-bp');
+    await page.getByRole('button', { name: '比赛中', exact: true }).click();
+    await page.getByRole('button', { name: '应用', exact: true }).click();
+    await expect(page.getByText('已应用「类 EWC」。', { exact: true })).toBeVisible();
+    expect(mutations).toBe(1);
+    expect(
+      (await app.inject({ url: '/local/v1/hud-config' })).json<{ resolved: HudResolvedPreset }>()
+        .resolved.preset.name,
+    ).toBe('类 EWC');
+    await capture('05-applied');
+    for (const [width, height] of [
+      [1920, 1080],
+      [3840, 2160],
+      [2560, 1440],
+    ]) {
+      await page.setViewportSize({ width, height });
+      const box = await page.locator('.picture-preview').boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.y + box!.height).toBeLessThanOrEqual(height);
+      expect(box!.width / box!.height).toBeCloseTo(16 / 9, 1);
+      await expect(page.locator('.picture-preview-caption')).toBeInViewport();
+      await expect(page.getByRole('button', { name: '调整此预设', exact: true })).toBeInViewport();
+    }
+    const popup = context.waitForEvent('page');
+    await page.getByRole('button', { name: '调整此预设', exact: true }).click();
+    const editor = await popup;
+    await editor.setViewportSize({ width: 2560, height: 1440 });
+    await expect(editor.getByText('正在编辑 · 类 EWC', { exact: true })).toBeVisible();
+    // The acceptance host defaults to visual fixtures; opt this popup into the isolated Companion.
+    await editor.goto(`${editor.url()}&hud-config=companion`);
+    await expect(editor.getByText('播出配置已确认', { exact: true })).toBeVisible();
+    await editor.getByRole('combobox', { name: '预览来源', exact: true }).selectOption('fixture');
+    await editor.getByRole('button', { name: '布局', exact: true }).click();
+    await expect(
+      editor.locator('.hud-console__canvas-logical .match-header').first(),
+    ).toBeVisible();
+    if (process.env.MIZAR_CAPTURE_HUD)
+      await editor.screenshot({
+        path: 'docs/screenshots/hud-workflow/06-adjust-editor.png',
+        fullPage: false,
+      });
+    await editor.close();
+    offline = true;
+    await expect(page.getByText('连接未就绪，暂不能应用。')).toBeVisible();
+    await expect(page.getByRole('button', { name: '应用', exact: true })).toBeDisabled();
+    await capture('07-disconnected');
+  } finally {
     await app.close();
     await rm(directory, { recursive: true, force: true });
   }

@@ -26,7 +26,6 @@ import { useLocalTournament } from './tournament';
 import { command, openTool, productionAction, useLocalRead, type Production } from './client';
 import { Settings } from './Settings';
 import { UpdateNotification } from './UpdateNotification';
-import { ProgramPreview } from './ProgramPreview';
 import { SpectatorHudCommands } from './SpectatorHudCommands';
 import { Cs2Recovery } from './Cs2Recovery';
 import { useWorkspaceExitStatus } from './cs2-status';
@@ -39,8 +38,7 @@ const tabs = {
     ['roster', '队伍与名单'],
   ],
   '/picture': [
-    ['hud', 'HUD 预设'],
-    ['program', '节目预览'],
+    ['hud', '画面预览'],
     ['overlay', '本机 HUD'],
   ],
   '/settings': [
@@ -809,11 +807,7 @@ export function PreparationPage() {
             ) : null}
           </>
         ) : path === '/picture' ? (
-          tab === 'program' ? (
-            <>
-              <ProgramPreview />
-            </>
-          ) : tab === 'hud' ? (
+          tab === 'hud' ? (
             <HudPresetDirectory action={action} />
           ) : (
             <div className="preparation-overlay-workspace">

@@ -56,11 +56,12 @@ const toolPaths = {
   hud: '/operator/hud',
   bp: '/matches#match-bp',
   diagnostics: '/debug',
-  preview: '/preview',
+  preview: '/picture',
 };
 export async function openTool(tool: Tool, presetId?: string) {
   if (window.__TAURI_INTERNALS__) {
-    if (tool === 'bp') await desktopInvoke('open_main', { path: '/matches#match-bp' });
+    if (tool === 'bp' || tool === 'preview')
+      await desktopInvoke('open_main', { path: toolPaths[tool] });
     else await desktopInvoke('open_tool', { tool, presetId });
   } else {
     const path =
