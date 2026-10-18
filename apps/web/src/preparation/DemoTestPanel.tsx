@@ -7,12 +7,12 @@ import { checkObsBeforeLaunch, useLocalRead } from './client';
 import { useCs2Status } from './cs2-status';
 import type { DemoTestView, SelectedDemo } from './demo-test';
 
-export function DemoTestPanel() {
+export function DemoTestPanel({ forceExpanded = false }: { forceExpanded?: boolean }) {
   const trial = useLocalRead<DemoTestView>('/local/v1/demo-test', 1000);
   const [expanded, setExpanded] = useState(() =>
     new URLSearchParams(window.location.search).has('demoTest'),
   );
-  const shown = expanded || trial?.active === true;
+  const shown = forceExpanded || expanded || trial?.active === true;
   const editor = useHudConfigEditorClient(shown);
   const { status: game } = useCs2Status();
   const [selected, setSelected] = useState<SelectedDemo | null>(null);
