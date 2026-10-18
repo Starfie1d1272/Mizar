@@ -387,8 +387,11 @@ function WorkspaceDockContent() {
   const connected = obs?.connection === 'connected';
   const next = PROGRAM_SCENES.find((scene) => scene.id === sceneState?.director?.next);
   const nextFrame = useMemo(
-    () => (next ? { key: next.id, scene: next.id, src: next.path, immediate: true } : null),
-    [next],
+    () =>
+      mode === 'auto' && next
+        ? { key: next.id, scene: next.id, src: next.path, immediate: true }
+        : null,
+    [next, mode],
   );
   return (
     <main className="workspace-dock mizar-surface" aria-label="现场控制底栏">
@@ -458,11 +461,21 @@ function WorkspaceDockContent() {
           </Select>
           {nextFrame ? <ScenePreviewViewport frame={nextFrame} onSettled={previewSettled} /> : null}
           <div>
-            <small>下一场景</small>
+            <small>{mode === 'manual' || mode === 'blocked' ? '自动推进已暂停' : '下一场景'}</small>
             <strong>
-              {next?.title ??
-                (sceneState?.director?.nextStatus === 'complete' ? '本场结束' : '待确认')}
+              {mode === 'manual'
+                ? '恢复自动后继续编排'
+                : mode === 'blocked'
+                  ? '处理问题后恢复自动'
+                  : (next?.title ??
+                    (sceneState?.director?.nextStatus === 'complete' ? '本场结束' : '待确认'))}
             </strong>
+            {mode === 'auto' && sceneState?.director?.nextReason ? (
+              <small>{sceneState.director.nextReason}</small>
+            ) : null}
+            {mode === 'blocked' && sceneState?.director?.reason ? (
+              <small>{sceneState.director.reason}</small>
+            ) : null}
           </div>
         </div>
       </section>

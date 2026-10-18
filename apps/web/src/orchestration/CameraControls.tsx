@@ -77,19 +77,31 @@ export function CameraControls({
           {s.connected ? '断开 MulNX' : '连接 MulNX'}
         </Button>
       ) : null}
-      <Button
-        disabled={busy}
-        onClick={() => void send('hold')}
-        title="请求清空 MulNX 全部运镜槽；实际停止需在游戏内确认；不会关闭其他包的自动列表"
-      >
-        接管运镜
-      </Button>
-      <Button disabled={busy || !s.connected || !s.current} onClick={() => void send('skip')}>
-        跳过本次
-      </Button>
-      {s.held && s.connected ? (
+      {!s.held ? (
+        <>
+          <Button
+            disabled={busy}
+            onClick={() => void send('hold')}
+            title="请求清空 MulNX 全部运镜槽；实际停止需在游戏内确认；不会关闭其他包的自动列表"
+          >
+            接管运镜
+          </Button>
+          <Button disabled={busy || !s.connected || !s.current} onClick={() => void send('skip')}>
+            跳过本次
+          </Button>
+        </>
+      ) : null}
+      {s.held ? (
         <Button
-          disabled={busy || !view.ready || !s.pack || !s.isolated || s.control.state === 'blocked'}
+          variant="primary"
+          disabled={
+            busy ||
+            !s.connected ||
+            !view.ready ||
+            !s.pack ||
+            !s.isolated ||
+            s.control.state === 'blocked'
+          }
           title={`确认游戏内当前地图 ${s.map ?? '未知'}，活动包 ${s.pack ?? '未配置'}，并允许清空全部运镜槽`}
           onClick={() => void send('resume')}
         >
