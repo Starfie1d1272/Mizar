@@ -12,6 +12,7 @@ type Connection = {
   activeSourceMatchId: string | null;
   activeDeviceName: string | null;
   pairing?: 'idle' | 'pending';
+  refreshError?: string | null;
 };
 
 type Schedule = WebsiteSchedule;
@@ -187,7 +188,6 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
 
   return (
     <Panel className="operator-rivalhub-panel" aria-label="RivalHub 赛事连接与准备">
-      {mode === 'settings' ? <RivalHubSyncControls /> : null}
       {connection === null ? (
         <p role="status">{loadError ? '赛事连接尚未读取' : '正在读取赛事连接…'}</p>
       ) : !connection.paired || (mode === 'settings' && rePairing) ? (
@@ -204,7 +204,7 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
             <div className="operator-rivalhub-header">
               <div>
                 <h2>连接 RivalHub 赛事</h2>
-                <p>在 RivalHub 登录并确认授权，完成后会自动连接。</p>
+                <p>在 RivalHub 登录并确认授权，完成后会自动连接，再到比赛库选择本场。</p>
               </div>
             </div>
             <div className="operator-rivalhub-form">
@@ -241,28 +241,46 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
                 {connection.displayName} · {schedule?.competition?.name ?? '赛事已连接'}
               </p>
             </div>
-            <StatusPill tone="success">已连接</StatusPill>
+            <StatusPill tone={loadError || connection.refreshError ? 'warning' : 'success'}>
+              {loadError || connection.refreshError ? '已授权 · 同步异常' : '已授权'}
+            </StatusPill>
           </div>
 
           {mode === 'settings' ? (
             <>
-              <Button onClick={() => setRePairing(true)}>重新连接 / 更换赛事</Button>
-              <Button
-                onClick={() => {
-                  void fetch('/operator/rivalhub/disconnect', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: '{}',
-                  })
-                    .then((response) => {
-                      if (!response.ok) throw new Error('断开未完成，请重试。');
-                      return refresh();
-                    })
-                    .catch((error: Error) => setError(error.message));
-                }}
-              >
-                断开 RivalHub
-              </Button>
+              <div className="preparation-actions">
+                <Button
+                  variant="primary"
+                  onClick={() => {
+                    window.location.href = '/resources?source=website';
+                  }}
+                >
+                  去比赛库
+                </Button>
+              </div>
+              <RivalHubSyncControls />
+              <details>
+                <summary>连接管理</summary>
+                <div className="preparation-actions">
+                  <Button onClick={() => setRePairing(true)}>重新授权 / 更换连接</Button>
+                  <Button
+                    onClick={() => {
+                      void fetch('/operator/rivalhub/disconnect', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: '{}',
+                      })
+                        .then((response) => {
+                          if (!response.ok) throw new Error('断开未完成，请重试。');
+                          return refresh();
+                        })
+                        .catch((error: Error) => setError(error.message));
+                    }}
+                  >
+                    断开 RivalHub
+                  </Button>
+                </div>
+              </details>
             </>
           ) : null}
           {mode === 'matches' ? (

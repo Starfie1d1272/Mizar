@@ -137,7 +137,9 @@ export function PreparationPage() {
   const [demoOpen, setDemoOpen] = useState(() =>
     new URLSearchParams(window.location.search).has('demoTest'),
   );
-  const [librarySource, setLibrarySource] = useState<'local' | 'website'>('local');
+  const [librarySource, setLibrarySource] = useState<'local' | 'website'>(() =>
+    new URLSearchParams(window.location.search).get('source') === 'website' ? 'website' : 'local',
+  );
   const [sampleOpen, setSampleOpen] = useState(false);
 
   async function action(run: () => Promise<unknown>) {
