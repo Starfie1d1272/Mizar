@@ -288,3 +288,63 @@ test('exit recovery distinguishes stopped games from borrowed games and renders 
   ).toBeVisible();
   await expect(page.getByRole('button', { name: '返回准备中心处理' })).toBeVisible();
 });
+
+test('selected backup requires target confirmation and cancellation never applies settings', async ({
+  page,
+}) => {
+  const applied: unknown[] = [];
+  await page.exposeFunction('backupFixture', (command: string, args?: Record<string, unknown>) => {
+    if (command === 'manage_cs2_backup') {
+      if (args?.action === 'select')
+        return {
+          selectionId: 'backup-fixture',
+          nickname: '测试解说',
+          avatar: null,
+          sourceName: 'cs2_video.txt',
+          targetPath: 'D:\\Steam\\userdata\\fixture\\730\\local\\cfg\\cs2_video.txt',
+          includesFrameRate: true,
+        };
+      if (args?.action === 'apply') applied.push(args);
+      return null;
+    }
+    if (command === 'cs2_config_status')
+      return { pending: false, running: false, busy: false, phase: 'idle' };
+    if (command === 'gsi_status')
+      return { detected: true, installed: true, issues: [], conflictFiles: [] };
+    if (command === 'cs2_host_status') return { found: true, managed: false };
+    return {};
+  });
+  await page.addInitScript(() =>
+    Object.assign(window, {
+      __TAURI_INTERNALS__: {
+        invoke: (command: string, args?: Record<string, unknown>) =>
+          (
+            window as unknown as {
+              backupFixture: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+            }
+          ).backupFixture(command, args),
+      },
+    }),
+  );
+  await page.goto('/settings?tab=gsi');
+  await page.getByText('游戏设置备份', { exact: true }).click();
+  await page.getByRole('button', { name: '选择备份恢复', exact: true }).click();
+  const restore = page.getByRole('button', { name: '恢复所选设置', exact: true });
+  await expect(restore).toBeDisabled();
+  await expect(page.getByText('测试解说', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '取消', exact: true }).click();
+  expect(applied).toHaveLength(0);
+  await expect(restore).toHaveCount(0);
+  await page.getByRole('button', { name: '选择备份恢复', exact: true }).click();
+  await page.getByRole('checkbox', { name: '恢复到 测试解说 的上述配置' }).check();
+  await expect(restore).toBeEnabled();
+  await mkdir('.agent-tmp/test-evidence', { recursive: true });
+  await page
+    .locator('details')
+    .filter({ has: page.getByRole('button', { name: '恢复所选设置', exact: true }) })
+    .screenshot({ path: '.agent-tmp/test-evidence/backup-import-preview.png' });
+  await restore.click();
+  await expect(page.getByText('设置已恢复，恢复前的原件已保存。', { exact: true })).toBeVisible();
+  expect(applied).toHaveLength(1);
+  expect(applied[0]).toMatchObject({ action: 'apply', selectionId: 'backup-fixture' });
+});
