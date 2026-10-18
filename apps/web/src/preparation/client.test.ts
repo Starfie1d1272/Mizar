@@ -33,7 +33,7 @@ afterEach(() => {
 });
 
 function setup(
-  failure?: 'launch' | 'production' | 'restore' | 'presentation' | 'network',
+  failure?: 'launch' | 'production' | 'restore' | 'presentation' | 'network' | 'trial',
   actualMode = 'preparation',
   newlyStarted = true,
   running = true,
@@ -78,7 +78,9 @@ function setup(
       if (failure === 'network' && path === '/operator/production')
         return Promise.reject(new Error('网络中断'));
       if (path === '/local/v1/demo-test')
-        return Promise.resolve(new Response(JSON.stringify({ active: false, phase: 'idle' })));
+        return Promise.resolve(
+          new Response(JSON.stringify({ active: failure === 'trial', phase: 'idle' })),
+        );
       if (path === '/local/v1/production')
         return Promise.resolve(new Response(JSON.stringify({ ...preparation, mode: actualMode })));
       return Promise.resolve(
@@ -94,6 +96,47 @@ function setup(
 }
 
 describe('managed CS2 production entry and cleanup', () => {
+  it('explicit external entry binds the selected identity and never calls managed launch or cleanup', async () => {
+    const calls = setup(undefined, 'preparation', false);
+    await productionAction('enter', preparation, false, undefined, {
+      pid: 42,
+      created: '134000000000000000',
+    });
+    expect(calls).toContain('attach_external_cs2');
+    expect(calls).not.toContain('start_managed_cs2');
+    expect(calls).not.toContain('finish_managed_cs2');
+    expect(nativeArgs.find((v) => v.command === 'attach_external_cs2')?.args).toMatchObject({
+      pid: 42,
+      created: '134000000000000000',
+      expectedRevision: 'one',
+    });
+    expect(calls.indexOf('attach_external_cs2')).toBeLessThan(
+      calls.indexOf('/operator/production'),
+    );
+    expect(calls.indexOf('/operator/production')).toBeLessThan(calls.indexOf('present_production'));
+  });
+  it('does not redirect an explicit external selection into an existing Demo session', async () => {
+    const calls = setup('trial');
+    await expect(
+      productionAction('enter', preparation, false, undefined, {
+        pid: 42,
+        created: '134000000000000000',
+      }),
+    ).rejects.toThrow('请先结束 Demo');
+    expect(calls).not.toContain('enter_demo_test');
+    expect(calls).not.toContain('attach_external_cs2');
+  });
+  it('external presentation failure preserves the instance and provides detach guidance', async () => {
+    setup('presentation', 'live', false);
+    await expect(
+      productionAction('enter', preparation, false, undefined, {
+        pid: 42,
+        created: '134000000000000000',
+      }),
+    ).rejects.toThrow('外部游戏已保留');
+    expect(nativeArgs.map((v) => v.command)).not.toContain('finish_managed_cs2');
+  });
+
   it('cancels the entry intent when navigation changes during Steam startup', async () => {
     vi.useFakeTimers();
     const calls = setup(undefined, 'preparation', true, false);
