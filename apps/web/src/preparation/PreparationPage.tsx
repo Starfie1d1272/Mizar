@@ -614,29 +614,71 @@ export function PreparationPage() {
                     </div>
                   ) : null}
                   {rehearsal.selectedMatchId === rehearsal.focusMatchId ? (
-                    <div className="preparation-rehearsal-stage-buttons">
-                      {rehearsal.stages.map((stage, idx) => (
-                        <Button
-                          key={stage.label}
-                          aria-pressed={rehearsal.stageIndex === idx}
-                          variant={rehearsal.stageIndex === idx ? 'primary' : 'secondary'}
-                          disabled={busy}
-                          onClick={() =>
-                            void action(async () => {
-                              await command('/operator/rivals-rehearsal/stage', { index: idx });
-                            })
-                          }
-                        >
-                          {stage.label}
-                        </Button>
-                      ))}
-                    </div>
+                    <>
+                      <div className="preparation-actions">
+                        {([-1, 1] as const).map((offset) => (
+                          <Button
+                            key={offset}
+                            disabled={
+                              busy ||
+                              rehearsal.stageIndex + offset < 0 ||
+                              rehearsal.stageIndex + offset >= rehearsal.stages.length
+                            }
+                            onClick={() =>
+                              void action(() =>
+                                command('/operator/rivals-rehearsal/stage', {
+                                  index: rehearsal.stageIndex + offset,
+                                }),
+                              )
+                            }
+                          >
+                            {offset < 0 ? '上一步' : '下一步'}
+                          </Button>
+                        ))}
+                      </div>
+                      <details>
+                        <summary>跳转阶段</summary>
+                        <div className="preparation-rehearsal-stage-buttons">
+                          {rehearsal.stages.map((stage, idx) => (
+                            <Button
+                              key={stage.label}
+                              aria-pressed={rehearsal.stageIndex === idx}
+                              variant={rehearsal.stageIndex === idx ? 'primary' : 'secondary'}
+                              disabled={busy}
+                              onClick={() =>
+                                void action(async () => {
+                                  await command('/operator/rivals-rehearsal/stage', { index: idx });
+                                })
+                              }
+                            >
+                              {stage.label}
+                            </Button>
+                          ))}
+                        </div>
+                      </details>
+                    </>
                   ) : null}
+                  <div className="preparation-actions">
+                    <Button onClick={() => void action(() => openTool('preview'))}>
+                      查看节目画面
+                    </Button>
+                    <Button
+                      disabled={busy}
+                      onClick={() =>
+                        void action(async () => {
+                          await command('/operator/rivals-rehearsal/stop');
+                          window.location.reload();
+                        })
+                      }
+                    >
+                      退出示例
+                    </Button>
+                  </div>
                 </div>
               ) : null}
               {!(rehearsal?.loaded && envelope?.source === 'fixture') ? (
                 <>
-                  <p>加载内置比赛，体验准备流程、节目画面与比赛阶段切换。</p>
+                  <p>加载内置比赛，体验准备流程、节目画面与比赛阶段切换，无需准备本地 Demo。</p>
                   <Button
                     disabled={busy}
                     variant="primary"
