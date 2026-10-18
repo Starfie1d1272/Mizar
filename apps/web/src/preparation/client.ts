@@ -110,20 +110,23 @@ export async function checkObsBeforeLaunch(requireStoppedOutput = false, task?: 
   return true;
 }
 
+export type ExternalGameIdentity = { pid: number; created: string };
+
 export async function productionAction(
   action: 'enter' | 'hide' | 'finish',
   state: Production,
   preserveSettings = false,
   parentTask?: ControlTask,
+  external?: ExternalGameIdentity,
 ) {
   const task = new ControlTask(
     `production_${action}`,
     'user',
-    { ...state, preserveSettings },
+    { ...state, preserveSettings, ...(external ? { external } : {}) },
     parentTask,
   );
   try {
-    await performProductionAction(action, state, preserveSettings, task);
+    await performProductionAction(action, state, preserveSettings, task, external);
     return task.result;
   } catch (error) {
     task.fail(error);
@@ -135,6 +138,7 @@ async function performProductionAction(
   state: Production,
   preserveSettings: boolean,
   task: ControlTask,
+  external?: ExternalGameIdentity,
 ) {
   controlEvidence('production_action', 'dispatch', {
     taskId: task.taskId,
@@ -159,6 +163,7 @@ async function performProductionAction(
     if (!response.ok) throw new Error('试播状态未确认，请检查本地服务后重试。');
     const trial = (await response.json()) as DemoTestView;
     if (trial.active) {
+      if (external) throw new Error('请先结束 Demo 试播，再选择外部游戏。');
       if (action === 'finish')
         await desktopInvoke('finish_demo_test', { requestId: trial.requestId }, task);
       else await desktopInvoke('enter_demo_test', { requestId: trial.requestId }, task);
@@ -172,13 +177,19 @@ async function performProductionAction(
     return;
   }
   let newlyStarted = false;
+  let borrowed = Boolean(external);
   if (action === 'enter' && window.__TAURI_INTERNALS__) {
     newlyStarted = await desktopInvoke<boolean>(
-      'start_managed_cs2',
-      preserveSettings ? { preserveSettings: true } : undefined,
+      external ? 'attach_external_cs2' : 'start_managed_cs2',
+      external
+        ? { ...external, expectedRevision: state.revision }
+        : preserveSettings
+          ? { preserveSettings: true }
+          : undefined,
       task,
     );
     let gameStatus = await desktopInvoke<Cs2ConfigStatus>('cs2_config_status', undefined, task);
+    borrowed = gameStatus.borrowed ?? borrowed;
     // Preserve this one entry intent while the native command lock is free.
     // Recovery/cancel remains available; navigation cancels only entry intent.
     while (!gameStatus.running) {
@@ -218,9 +229,9 @@ async function performProductionAction(
       .then(async (response) => (response.ok ? ((await response.json()) as Production) : null))
       .catch(() => null);
     const detail = reason instanceof Error ? reason.message : '操作未完成。';
-    const game = newlyStarted ? 'CS2 已启动' : '受管理的 CS2 已保留';
+    const game = borrowed ? '外部游戏已保留' : newlyStarted ? 'CS2 已启动' : '受管理的 CS2 已保留';
     throw new Error(
-      `${game}，${actual?.mode === 'live' ? '制作已开始，但工作台尚未打开' : actual?.mode === 'preparation' ? '工作台尚未进入' : '制作状态待确认'}。重试打开工作台，或退出本次游戏并恢复设置。${detail}`,
+      `${game}，${actual?.mode === 'live' ? '制作已开始，但工作台尚未打开' : actual?.mode === 'preparation' ? '工作台尚未进入' : '制作状态待确认'}。重试打开工作台，或${borrowed ? '退出工作台解除借用，外部游戏保持运行' : '退出本次游戏并恢复设置'}。${detail}`,
       { cause: reason },
     );
   }
