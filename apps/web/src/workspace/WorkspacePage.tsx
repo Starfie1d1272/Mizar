@@ -503,7 +503,7 @@ function WorkspaceDockContent() {
             返回游戏
           </Button>
           <Button disabled={busy} onClick={() => void action(() => openTool('bp'))}>
-            BP 工作台
+            地图资料
           </Button>
           {bp && bp.state !== 'hidden' && bp.projection ? (
             <span>

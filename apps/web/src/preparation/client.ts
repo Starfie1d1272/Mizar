@@ -54,13 +54,15 @@ export async function command(path: string, body: unknown = {}, task?: ControlTa
 export type Tool = 'hud' | 'bp' | 'diagnostics' | 'preview';
 const toolPaths = {
   hud: '/operator/hud',
-  bp: '/operator/bp',
+  bp: '/matches#match-bp',
   diagnostics: '/debug',
   preview: '/preview',
 };
 export async function openTool(tool: Tool, presetId?: string) {
-  if (window.__TAURI_INTERNALS__) await desktopInvoke('open_tool', { tool, presetId });
-  else {
+  if (window.__TAURI_INTERNALS__) {
+    if (tool === 'bp') await desktopInvoke('open_main', { path: '/matches#match-bp' });
+    else await desktopInvoke('open_tool', { tool, presetId });
+  } else {
     const path =
       tool === 'hud' && presetId
         ? `${toolPaths.hud}?preset=${encodeURIComponent(presetId)}`

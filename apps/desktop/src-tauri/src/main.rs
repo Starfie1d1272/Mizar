@@ -1290,6 +1290,7 @@ fn main_path_allowed(path: &str) -> bool {
         "/resources",
         "/matches?tab=roster",
         "/matches?tab=maps",
+        "/matches#match-bp",
         "/picture",
         "/picture?tab=overlay",
         "/settings",

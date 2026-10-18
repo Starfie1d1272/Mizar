@@ -1,10 +1,11 @@
+import { SeriesBindingControls } from './SeriesBindingControls';
+import { MatchBpSection } from './MatchBpSection';
 import { useHudConfigClient } from '../realtime/hud-config-client';
 import { hudStyleReference } from './hud-style-reference';
 import { EventMatchWorkspace } from './EventMatchWorkspace';
 import { HudPresetDirectory } from './HudPresetDirectory';
 import './production.css';
 import { AutomaticPreparation } from './AutomaticPreparation';
-import { SeriesBindingControls } from './SeriesBindingControls';
 import { DemoTestPanel } from './DemoTestPanel';
 import { matchRound } from './match-presentation';
 import { ProductionStatus } from '../workspace/ProductionStatus';
@@ -16,7 +17,7 @@ import { useEffect, useState } from 'react';
 import { OperatorShell } from '../operator/OperatorShell';
 import { RivalHubPreparationPanel } from '../operator/RivalHubPreparationPanel';
 import { RivalHubSyncControls } from '../operator/RivalHubSyncControls';
-import { desktopInvoke, useProgramScenes } from '../workspace/client';
+import { desktopInvoke } from '../workspace/client';
 import { LocalTournamentEditor } from '../workspace/LocalTournamentEditor';
 import { Button, Dialog, Panel, StatusBanner, StatusPill } from '../ui';
 import { LocalOverlayControls } from './LocalOverlayControls';
@@ -36,7 +37,6 @@ const tabs = {
   '/matches': [
     ['details', '比赛资料'],
     ['roster', '队伍与名单'],
-    ['maps', '地图与 BP'],
   ],
   '/picture': [
     ['hud', 'HUD 预设'],
@@ -105,7 +105,6 @@ export function PreparationPage() {
   );
   const { view, refresh, status: libraryStatus } = useLocalTournament();
   const local = envelope?.source === 'local' && view?.activeLocalMatchId === match?.matchId;
-  const scenes = useProgramScenes();
   const exit = useWorkspaceExitStatus();
   const production = useLocalRead<Production>('/local/v1/production');
   const rivalhub = useLocalRead<{ paired: boolean; displayName?: string | null }>(
@@ -172,7 +171,7 @@ export function PreparationPage() {
       {(
         [
           ['hud', 'HUD 编辑器'],
-          ['bp', 'BP 工作台'],
+          ['bp', '地图与禁选'],
           ['preview', '节目预览'],
           ['diagnostics', '运行诊断'],
         ] as const
@@ -417,17 +416,17 @@ export function PreparationPage() {
                   <span className="preparation-task-entry">查看比赛资料 →</span>
                 </a>
                 <a
-                  href="/operator/bp"
+                  href="/matches#match-bp"
                   onClick={(event) => {
                     event.preventDefault();
-                    void action(() => openTool('bp'));
+                    window.location.href = '/matches#match-bp';
                   }}
                 >
                   <div className="preparation-task-title">
                     <strong>
                       <small>02</small> 地图禁选
                     </strong>
-                    <span>{match.format.toUpperCase()} · 地图与 BP 播出</span>
+                    <span>{match.format.toUpperCase()} · 地图与禁选资料</span>
                   </div>
                   <div className="preparation-task-summary">
                     <b>
@@ -446,7 +445,7 @@ export function PreparationPage() {
                       <p>地图待确定，录入后在此查看。</p>
                     )}
                   </div>
-                  <span className="preparation-task-entry">打开 BP 工作台 →</span>
+                  <span className="preparation-task-entry">查看地图与禁选 →</span>
                 </a>
                 <a href="/picture?tab=hud">
                   <div className="preparation-task-title">
@@ -747,13 +746,19 @@ export function PreparationPage() {
                     现场首发可在工作台连接服务器后识别；这里维护队伍资料与完整名单。
                   </StatusBanner>
                 ) : null}
-                <LocalTournamentEditor
-                  document={match}
-                  section={tab as MatchSection}
-                  view={view}
-                  refresh={refresh}
-                  action={action}
-                />
+                {tab === 'details' ? (
+                  <MatchDocumentView document={match} section="details" />
+                ) : null}
+                <details open={tab === 'roster'}>
+                  <summary>{tab === 'roster' ? '编辑队伍与名单' : '编辑比赛资料'}</summary>
+                  <LocalTournamentEditor
+                    document={match}
+                    section={tab as MatchSection}
+                    view={view}
+                    refresh={refresh}
+                    action={action}
+                  />
+                </details>
               </>
             ) : match ? (
               <>
@@ -786,25 +791,21 @@ export function PreparationPage() {
                     </a>
                   ) : null}
                 </div>
-                {tab !== 'maps' ? (
-                  <MatchDocumentView document={match} section={tab as MatchSection} />
-                ) : null}
+                <MatchDocumentView document={match} section={tab as MatchSection} />
               </>
             ) : null}
-            {tab === 'maps' && match ? (
-              <>
-                <MatchDocumentView document={match} section="maps" />
+            {tab === 'details' && match ? (
+              <MatchBpSection
+                document={match}
+                local={local}
+                contextRevision={view?.contextRevision}
+              />
+            ) : null}
+            {tab === 'details' && production && production.mode !== 'preparation' ? (
+              <details>
+                <summary>现场地图对应（异常时处理）</summary>
                 <SeriesBindingControls />
-                <Panel>
-                  <h2>BP 制作</h2>
-                  <p>
-                    {scenes?.available.includes('bp')
-                      ? 'BP 已就绪'
-                      : (scenes?.blocked.bp ?? '等待 BP 数据')}
-                  </p>
-                  <Button onClick={() => void action(() => openTool('bp'))}>打开 BP 工作台</Button>
-                </Panel>
-              </>
+              </details>
             ) : null}
           </>
         ) : path === '/picture' ? (

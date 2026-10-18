@@ -1,6 +1,5 @@
 import type { MatchDocumentV1 } from '@mizar/protocol/context';
-import { Button, Panel, StatusPill } from '../ui';
-import { openTool } from './client';
+import { Panel, StatusPill } from '../ui';
 import { getMapThumbnail } from '@mizar/cs2-assets';
 import { mapLabel, matchMaps, matchRound, sideChoice } from './match-presentation';
 
@@ -132,7 +131,7 @@ export function MatchDocumentView({
       <Panel>
         <div className="preparation-match__meta">
           <h2>比赛地图</h2>
-          <Button onClick={() => void openTool('bp')}>打开 BP 工作台</Button>
+          <span>{match.format.toUpperCase()}</span>
         </div>
         <p>
           {match.entrants.a.name} vs {match.entrants.b.name}
@@ -184,57 +183,66 @@ export function MatchDocumentView({
           <p>等待地图确定</p>
         )}
       </Panel>
-      <Panel>
-        <div className="preparation-match__meta">
-          <h2>禁选过程</h2>
-          <span>
-            {match.veto.length} 步 · {match.format.toUpperCase()}
-          </span>
-        </div>
-        {match.veto.length ? (
-          <ol className="match-veto-list" aria-label="BP 步骤">
-            {[...match.veto]
-              .sort((a, b) => a.stepOrder - b.stepOrder)
-              .map((step) => {
-                const team = Object.values(match.entrants).find((t) => t.entryId === step.entryId);
-                const choice = sideChoice(match, step);
-                const image = getMapThumbnail(step.mapName);
-                return (
-                  <li key={step.stepOrder}>
-                    <span className="match-veto-number">{step.stepOrder}</span>
-                    {image ? <img src={image.outputPath} alt="" /> : <span />}
-                    <span className="match-veto-action">
-                      {
-                        { ban: '禁用', pick: '选图', side_pick: '选边', decider: '决胜图' }[
-                          step.actionType
-                        ]
-                      }
-                    </span>
-                    <div className="match-veto-description">
-                      <strong>{mapLabel(step.mapName)}</strong>
-                      <span>
-                        {step.actionType === 'decider' ? '剩余地图' : (team?.name ?? '队伍待确认')}
-                      </span>
-                    </div>
-                    {choice ? (
-                      <span className="match-veto-side">
-                        {choice.name} 选 {choice.side} 开局
-                      </span>
-                    ) : null}
-                  </li>
-                );
-              })}
-          </ol>
-        ) : (
-          <p>等待禁选记录</p>
-        )}
-        {match.mapPool.length ? (
-          <details className="match-map-pool">
-            <summary>赛事地图池 · {match.mapPool.length} 张</summary>
-            <p>{match.mapPool.map(mapLabel).join(' · ')}</p>
-          </details>
-        ) : null}
-      </Panel>
+      {match.veto.length > 0 ? (
+        <details className="match-veto-disclosure">
+          <summary>查看禁选过程 · {match.veto.length} 步</summary>
+          <Panel>
+            <div className="preparation-match__meta">
+              <h2>禁选过程</h2>
+              <span>
+                {match.veto.length} 步 · {match.format.toUpperCase()}
+              </span>
+            </div>
+            {match.veto.length ? (
+              <ol className="match-veto-list" aria-label="BP 步骤">
+                {[...match.veto]
+                  .sort((a, b) => a.stepOrder - b.stepOrder)
+                  .map((step) => {
+                    const team = Object.values(match.entrants).find(
+                      (t) => t.entryId === step.entryId,
+                    );
+                    const choice = sideChoice(match, step);
+                    const image = getMapThumbnail(step.mapName);
+                    return (
+                      <li key={step.stepOrder}>
+                        <span className="match-veto-number">{step.stepOrder}</span>
+                        {image ? <img src={image.outputPath} alt="" /> : <span />}
+                        <span className="match-veto-action">
+                          {
+                            { ban: '禁用', pick: '选图', side_pick: '选边', decider: '决胜图' }[
+                              step.actionType
+                            ]
+                          }
+                        </span>
+                        <div className="match-veto-description">
+                          <strong>{mapLabel(step.mapName)}</strong>
+                          <span>
+                            {step.actionType === 'decider'
+                              ? '剩余地图'
+                              : (team?.name ?? '队伍待确认')}
+                          </span>
+                        </div>
+                        {choice ? (
+                          <span className="match-veto-side">
+                            {choice.name} 选 {choice.side} 开局
+                          </span>
+                        ) : null}
+                      </li>
+                    );
+                  })}
+              </ol>
+            ) : (
+              <p>等待禁选记录</p>
+            )}
+            {match.mapPool.length ? (
+              <details className="match-map-pool">
+                <summary>赛事地图池 · {match.mapPool.length} 张</summary>
+                <p>{match.mapPool.map(mapLabel).join(' · ')}</p>
+              </details>
+            ) : null}
+          </Panel>
+        </details>
+      ) : null}
     </div>
   );
 }

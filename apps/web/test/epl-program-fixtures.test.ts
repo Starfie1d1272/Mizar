@@ -1,3 +1,4 @@
+import { buildMatchHeaderPresentation } from '../src/program/widgets/match-header/presentation';
 import { describe, expect, it } from 'vitest';
 import {
   HUD_EDITOR_DEFAULT_FIXTURE_ID,
@@ -31,4 +32,20 @@ describe('EPL editor samples', () => {
       ]);
     }
   });
+});
+
+it('keeps HUD map names without inventing picker or starting side when only map order is known', () => {
+  const snapshot = structuredClone(getHudEditorFixture('epl-live')!);
+  const series = snapshot.payload.series!;
+  for (const map of series.maps) {
+    map.selection = { kind: 'unknown' };
+    map.teamAStartSide = null;
+  }
+  const maps = buildMatchHeaderPresentation(snapshot.payload).seriesMaps!;
+  expect(maps.map((map) => map.mapKey)).toEqual(['de_inferno', 'de_anubis', 'de_mirage']);
+  expect(
+    maps.every(
+      (map) => map.picker === null && map.pickerStartSide === null && map.selectionText === '',
+    ),
+  ).toBe(true);
 });

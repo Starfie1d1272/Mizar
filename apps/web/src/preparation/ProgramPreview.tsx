@@ -2,7 +2,6 @@ import { SessionContext } from '../preparation/SessionContext';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useBpSession } from '../bp/client';
 import { ScenePreviewViewport, type PreviewFrame } from './ScenePreviewViewport';
-import { BpWorkspaceControls } from '../bp/BpPage';
 import { PROGRAM_SCENES, type ProgramSceneId } from '@mizar/protocol/program-scenes';
 import { Button, Panel, Select } from '../ui';
 import { ToolShell } from '../patterns';
@@ -155,10 +154,6 @@ export function ProgramPreview({ standalone = false }: { standalone?: boolean })
       </div>
       <div className="program-preview-workspace" data-scene={demo ? 'demo' : preview}>
         <ScenePreviewViewport frame={frame} onSettled={onSettled} />
-        <div hidden={preview !== 'bp' || demo !== null}>
-          <p>操作将同步到 BP 播出画面。</p>
-          <BpWorkspaceControls />
-        </div>
       </div>
       {standalone ? null : (
         <Button onClick={() => void openTool('preview')}>打开独立节目预览</Button>

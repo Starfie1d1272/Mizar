@@ -5,6 +5,7 @@ import { join } from 'node:path';
 
 import type { MatchDocumentV1 } from '@mizar/protocol/context';
 import type { BpWorkspace } from '@mizar/protocol/bp';
+import { toMatchContext, type BroadcastManifest } from '@mizar/rivalhub';
 import { DEFAULT_LOCAL_BP_MAP_POOL } from '@mizar/core/projection';
 import { expect, it } from 'vitest';
 
@@ -505,6 +506,47 @@ it('candidate edits preserve production and reject stale or active writes', asyn
     expect(
       (await app.inject({ method: 'POST', url: candidateUrl, headers, payload })).statusCode,
     ).toBe(409);
+  } finally {
+    await app.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+it('rejects local BP overrides for website matches without changing the website binding', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-website-readonly-'));
+  const manifest = JSON.parse(
+    await readFile(
+      new URL(
+        '../../../packages/rivalhub/test/fixtures/broadcast-manifest-v1.valid.json',
+        import.meta.url,
+      ),
+      'utf8',
+    ),
+  ) as BroadcastManifest;
+  const app = buildApp({
+    matchManifestPath: join(directory, 'match.json'),
+    matchContextBinding: {
+      manifest,
+      context: toMatchContext(manifest),
+      origin: 'online',
+      freshness: 'fresh',
+      diagnostics: [],
+    },
+  });
+  try {
+    await app.ready();
+    const before = (await app.inject({ url: '/local/v1/bp-workspace' })).json<BpWorkspace>();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/operator/bp-local-save',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: { expectedContextRevision: before.contextRevision, draft: before.authoringDraft },
+    });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ error: 'bp_website_readonly' });
+    expect((await app.inject({ url: '/local/v1/bp-workspace' })).json<BpWorkspace>()).toEqual(
+      before,
+    );
   } finally {
     await app.close();
     await rm(directory, { recursive: true, force: true });

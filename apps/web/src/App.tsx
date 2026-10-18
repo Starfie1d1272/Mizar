@@ -1,10 +1,9 @@
 import { useLocalRead } from './preparation/client';
 import type { OverlayPolicy } from './preparation/desktop-overlay';
 import { ToolShell } from './patterns';
-import { SessionContext } from './preparation/SessionContext';
 import { ProgramPreviewTool } from './preparation/ProgramPreview';
 import { PreparationPage } from './preparation/PreparationPage';
-import { BpPage, BpWorkbench } from './bp/BpPage';
+import { BpPage } from './bp/BpPage';
 import { OperatorShell } from './operator/OperatorShell';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 
@@ -662,12 +661,7 @@ export function App() {
     return <ProgramScenePage sceneId="gameplay" />;
   if (programScene && programScene.id !== 'gameplay' && programScene.id !== 'bp')
     return <ProgramScenePage sceneId={programScene.id} />;
-  if (pathname === '/operator/bp')
-    return (
-      <ToolShell title="BP 工作台" context={<SessionContext returnToWorkspace />}>
-        <BpWorkbench />
-      </ToolShell>
-    );
+  if (pathname === '/operator/bp') return <LegacyBpRedirect />;
   const surface = surfaceForPath(pathname);
   if (surface === undefined)
     return (
@@ -687,4 +681,11 @@ export function App() {
   if (surface.id === 'program') return <ProgramRoute />;
   if (surface.id === 'hud') return <HudConsolePage />;
   return <SurfacePage surface={surface} />;
+}
+
+function LegacyBpRedirect() {
+  useEffect(() => {
+    window.location.replace('/matches#match-bp');
+  }, []);
+  return <p>正在打开比赛资料…</p>;
 }
