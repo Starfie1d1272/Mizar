@@ -334,7 +334,7 @@ test('picture selection previews without activation, then applies explicitly and
       [1920, 1080],
       [3840, 2160],
       [2560, 1440],
-    ]) {
+    ] as const) {
       await page.setViewportSize({ width, height });
       await expect
         .poll(async () => {

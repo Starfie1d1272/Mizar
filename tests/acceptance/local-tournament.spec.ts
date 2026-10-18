@@ -39,6 +39,7 @@ test('Preparation flow creates and edits a local match before BP', async ({ page
     await expect(page.locator('.workspace-local-match select').last()).toContainText(
       '甲队 vs 乙队',
     );
+    await page.getByText('编辑比赛资料', { exact: true }).click();
     await expect(page.getByRole('button', { name: '保存比赛资料' })).toBeVisible();
     await page.getByLabel('阶段名称').fill('决赛');
     await page.getByRole('button', { name: '保存比赛资料' }).click();
@@ -52,6 +53,7 @@ test('Preparation flow creates and edits a local match before BP', async ({ page
     await page.getByRole('button', { name: '编辑赛事品牌与默认规则' }).click();
     await expect(page.getByLabel('赛事名称')).toHaveValue('验收赛事');
     await page.goto('/matches');
+    await page.getByText('编辑比赛资料', { exact: true }).click();
     await expect(page.getByLabel('阶段名称')).toHaveValue('决赛');
     const bp = await app.inject({ url: '/local/v1/bp-workspace' });
     expect(bp.json<{ readiness: string }>().readiness).toBe('missing');

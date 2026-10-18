@@ -77,7 +77,7 @@ export function CameraControls({
           {s.connected ? '断开 MulNX' : '连接 MulNX'}
         </Button>
       ) : null}
-      {!s.held ? (
+      {!s.held || s.current ? (
         <>
           <Button
             disabled={busy}

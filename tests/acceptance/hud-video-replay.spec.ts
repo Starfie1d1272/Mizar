@@ -53,6 +53,7 @@ test('plays real game background with live HUD and seeks both to the recorded C4
         },
     );
   const planted = events.find((event) => event.kind === 'bomb-planted')!;
+  await page.getByText('回放事件与序列', { exact: true }).click();
   await page.getByLabel('语义事件', { exact: true }).selectOption(planted.id);
   await expect(replay).toHaveAttribute('data-replay-cursor', String(planted.sequence));
   await expect

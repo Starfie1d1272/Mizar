@@ -180,7 +180,20 @@ test('manual current-map confirmation reaches the real owner, rejects an expired
     await expect(page.getByRole('region', { name: '当前比赛与制作状态' })).toContainText(
       '当前图尚未确认为第 3 图',
     );
-    await page.goto('/matches?tab=maps');
+    const revision = (await app.inject('/local/v1/production')).json<{ revision: string }>()
+      .revision;
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/operator/production',
+          headers: { origin: 'http://127.0.0.1:3000' },
+          payload: { action: 'enter', expectedRevision: revision },
+        })
+      ).statusCode,
+    ).toBe(200);
+    await page.goto('/matches?tab=details');
+    await page.getByText('现场地图对应（异常时处理）', { exact: true }).click();
     const panel = page.getByRole('region', { name: '确认当前地图所属场次' });
     await expect(panel.getByRole('button', { name: '确认当前是第 3 图' })).toBeEnabled();
     expect(

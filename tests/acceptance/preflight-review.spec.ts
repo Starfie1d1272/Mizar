@@ -73,16 +73,22 @@ test('preflight reviews current ten-player evidence, actual auto state, disconne
       },
     }),
   );
-  let scenes: ProgramSceneState;
-  await page.route('**/local/v1/program-scenes', async (route) => {
-    if (!scenes) scenes = programSceneStateSchema.parse(await (await route.fetch()).json());
-    scenes.director = {
-      ...scenes.director,
-      mode: scenes.director!.mode === 'auto' ? 'auto' : 'manual',
-      warmupScene: scenes.director!.warmupScene ?? 'waiting',
-    };
-    await route.fulfill({ json: scenes });
+  const scenes: ProgramSceneState = programSceneStateSchema.parse({
+    schemaVersion: 'mizar.program-scenes.v1',
+    active: 'waiting',
+    revision: 'preflight-review-1',
+    available: ['waiting', 'gameplay'],
+    blocked: {},
+    director: {
+      mode: 'manual',
+      next: null,
+      reason: null,
+      warmupScene: 'waiting',
+      introDurationMs: 0,
+      sceneElapsedMs: 0,
+    },
   });
+  await page.route('**/local/v1/program-scenes', (route) => route.fulfill({ json: scenes }));
   const commands: Record<string, unknown>[] = [];
   await page.route('**/operator/program-director', async (route) => {
     const body = route.request().postDataJSON() as {

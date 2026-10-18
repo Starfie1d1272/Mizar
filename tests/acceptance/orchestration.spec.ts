@@ -365,7 +365,7 @@ test('Host handoff binds the selected external instance and detaches without man
   await page.getByRole('button', { name: '借用此游戏并进入工作台', exact: true }).click();
   await expect.poll(() => calls.includes('present_production')).toBe(true);
   await expect(page.getByText('已借用外部 CS2', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: '结束制作并解除借用', exact: true }).click();
+  await page.getByRole('button', { name: '结束本次制作', exact: true }).click();
   await expect.poll(() => calls.includes('finish_workspace')).toBe(true);
   expect(borrowed).toBe(false);
   expect(calls).not.toContain('start_managed_cs2');
