@@ -1363,7 +1363,22 @@
 }
 .game-settings-signals {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--mizar-layout-padding);
   padding-block: var(--mizar-layout-compact);
+}
+
+.game-settings-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--mizar-layout-padding);
+}
+.game-settings-current,
+.game-settings-preferences {
+  display: grid;
+  gap: var(--mizar-layout-padding);
+}
+.game-settings-connection section:empty {
+  display: none;
 }

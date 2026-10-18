@@ -9,6 +9,8 @@ import { desktopInvoke } from '../workspace/client';
 import { beginObsConfiguration, obsCommand, useObsStatus } from '../workspace/obs-client';
 import { RivalHubPreparationPanel } from '../operator/RivalHubPreparationPanel';
 import { openTool, useLocalRead } from './client';
+import { Cs2Recovery } from './Cs2Recovery';
+import type { Production } from './client';
 import { Cs2LaunchSettings } from './Cs2LaunchSettings';
 import { SteamAvatarSettings } from './SteamAvatarSettings';
 import { UpdateSettings } from './UpdateSettings';
@@ -30,6 +32,9 @@ function statusReadReason(error: unknown) {
 export function Settings({ tab }: { tab: string }) {
   const [automationTab, setAutomationTab] = useState<'music' | 'camera'>(() =>
     new URLSearchParams(window.location.search).get('section') === 'camera' ? 'camera' : 'music',
+  );
+  const production = useLocalRead<Production>(
+    window.__TAURI_INTERNALS__ ? '/local/v1/production' : null,
   );
   const readiness =
     useLocalRead<{ label: string; ready: boolean; reason: string }[]>('/local/v1/readiness');
@@ -658,103 +663,114 @@ export function Settings({ tab }: { tab: string }) {
           </details>
         </div>
       ) : (
-        <div className="settings-grid">
-          <Panel className="settings-card settings-card--wide game-settings-connection">
-            <div className="preparation-check-heading">
-              <h2>游戏连接</h2>
-              <StatusPill
-                tone={
-                  gsiPhase === 'failed' || gsi?.readFailed || gsi?.conflict
-                    ? 'warning'
-                    : gsiPhase === 'ready' && gsi?.installed
-                      ? 'success'
-                      : 'info'
-                }
-              >
-                {gsiPhase === 'unknown'
-                  ? '尚未检测 GSI'
-                  : gsiPhase === 'checking'
-                    ? '正在检测 GSI'
-                    : gsiPhase === 'failed' || gsi?.readFailed
-                      ? '无法检查 GSI'
-                      : gsi?.conflict
-                        ? '需检查'
-                        : gsi?.installed
-                          ? 'GSI 文件已配置'
-                          : '待安装 GSI'}
-              </StatusPill>
-            </div>
-            <div className="game-settings-signals">
-              <p>
-                {cs2Phase === 'unknown'
-                  ? 'CS2 窗口状态待确认'
-                  : cs2Phase === 'checking'
-                    ? '正在检测 CS2 窗口'
-                    : cs2Phase === 'failed'
-                      ? '无法读取 CS2 窗口状态'
-                      : cs2?.found
-                        ? cs2.managed
-                          ? 'CS2 窗口已就绪'
-                          : '已检测到 CS2，打开工作台后安排窗口'
-                        : '等待 CS2 窗口'}
-              </p>
-              <p role="status">
-                {!gameData
-                  ? '游戏数据 · 状态待确认'
-                  : gameData.ready
-                    ? '游戏数据 · 已收到'
-                    : `游戏数据 · ${gameData.reason}`}
-              </p>
-            </div>
-            {cs2?.message ? <p role="alert">{cs2.message}</p> : null}
-            {gsiError ? (
-              <StatusBanner tone="warning">
-                GSI 读取失败：{gsiError} 点击「重新检查 CS2 与
-                GSI」重查；详细原因见高级设置中的诊断与支持。
-              </StatusBanner>
-            ) : null}
-            {cs2Error ? (
-              <StatusBanner tone="warning">
-                CS2 窗口读取失败：{cs2Error} 点击「重新检查 CS2 与
-                GSI」重查；详细原因见高级设置中的诊断与支持。
-              </StatusBanner>
-            ) : null}
-            {gsi?.issues?.map((issue) => (
-              <StatusBanner key={issue.code} tone={gsi.readFailed ? 'danger' : 'warning'}>
-                {issue.message}
-              </StatusBanner>
-            ))}
-            {gsi?.endpointConflict ? (
-              <>
+        <div className="game-settings-layout">
+          <div className="game-settings-current">
+            <Panel className="settings-card game-settings-connection">
+              <div className="preparation-check-heading">
+                <h2>游戏连接</h2>
+                <StatusPill
+                  tone={
+                    gsiPhase === 'failed' || gsi?.readFailed || gsi?.conflict
+                      ? 'warning'
+                      : gsiPhase === 'ready' && gsi?.installed
+                        ? 'success'
+                        : 'info'
+                  }
+                >
+                  {gsiPhase === 'unknown'
+                    ? '尚未检测 GSI'
+                    : gsiPhase === 'checking'
+                      ? '正在检测 GSI'
+                      : gsiPhase === 'failed' || gsi?.readFailed
+                        ? '无法检查 GSI'
+                        : gsi?.conflict
+                          ? '需检查'
+                          : gsi?.installed
+                            ? 'GSI 文件已配置'
+                            : '待安装 GSI'}
+                </StatusPill>
+              </div>
+              <div className="game-settings-signals">
                 <p>
-                  点击「一键安装 / 修复 GSI」，自动备份并停用这些重复配置；可通过「恢复原 GSI
-                  配置」撤销。其他接收地址的配置会保留。
+                  {cs2Phase === 'unknown'
+                    ? 'CS2 窗口状态待确认'
+                    : cs2Phase === 'checking'
+                      ? '正在检测 CS2 窗口'
+                      : cs2Phase === 'failed'
+                        ? '无法读取 CS2 窗口状态'
+                        : cs2?.found
+                          ? cs2.managed
+                            ? 'CS2 窗口已就绪'
+                            : '已检测到 CS2，打开工作台后安排窗口'
+                          : '等待 CS2 窗口'}
                 </p>
-              </>
-            ) : null}
-            {!window.__TAURI_INTERNALS__ ? (
-              <p>请在 Mizar 桌面应用中检测并安装 GSI。</p>
-            ) : (
-              <>
-                <div className="preparation-actions">
-                  <Button
-                    variant={
-                      gsiPhase !== 'ready' || gsi?.readFailed || cs2Phase === 'failed'
-                        ? 'primary'
-                        : 'secondary'
-                    }
-                    disabled={busy}
-                    onClick={() => void action(refreshGsi)}
-                  >
-                    重新检查 CS2 与 GSI
-                  </Button>
-                  {!gsi?.installed || gsi?.conflict ? gsiInstallButton : null}
-                </div>
+                <p role="status">
+                  {!gameData
+                    ? '游戏数据 · 状态待确认'
+                    : gameData.ready
+                      ? '游戏数据 · 已收到'
+                      : `游戏数据 · ${gameData.reason}`}
+                </p>
+              </div>
+              {cs2?.message ? <p role="alert">{cs2.message}</p> : null}
+              {gsiError ? (
+                <StatusBanner tone="warning">
+                  GSI 读取失败：{gsiError} 点击「重新检查 CS2 与
+                  GSI」重查；详细原因见高级设置中的诊断与支持。
+                </StatusBanner>
+              ) : null}
+              {cs2Error ? (
+                <StatusBanner tone="warning">
+                  CS2 窗口读取失败：{cs2Error} 点击「重新检查 CS2 与
+                  GSI」重查；详细原因见高级设置中的诊断与支持。
+                </StatusBanner>
+              ) : null}
+              {gsi?.issues?.map((issue) => (
+                <StatusBanner key={issue.code} tone={gsi.readFailed ? 'danger' : 'warning'}>
+                  {issue.message}
+                </StatusBanner>
+              ))}
+              {gsi?.endpointConflict ? (
+                <>
+                  <p>
+                    点击「一键安装 / 修复 GSI」，自动备份并停用这些重复配置；可通过「恢复原 GSI
+                    配置」撤销。其他接收地址的配置会保留。
+                  </p>
+                </>
+              ) : null}
+              {!window.__TAURI_INTERNALS__ ? (
+                <p>请在 Mizar 桌面应用中检测并安装 GSI。</p>
+              ) : (
+                <>
+                  <div className="preparation-actions">
+                    <Button
+                      variant={
+                        gsiPhase !== 'ready' || gsi?.readFailed || cs2Phase === 'failed'
+                          ? 'primary'
+                          : 'secondary'
+                      }
+                      disabled={busy}
+                      onClick={() => void action(refreshGsi)}
+                    >
+                      重新检查 CS2 与 GSI
+                    </Button>
+                    {!gsi?.installed || gsi?.conflict ? gsiInstallButton : null}
+                  </div>
+                </>
+              )}
+              <section aria-label="配置与恢复">
+                <Cs2Recovery production={production} />
+              </section>
+            </Panel>
+            <Panel className="settings-card game-settings-maintenance">
+              <h2>安装位置与维护</h2>
+              <p>安装位置、GSI 配置与游戏设置备份在这里分别管理。</p>
+              {window.__TAURI_INTERNALS__ ? (
                 <details
                   key={String(Boolean(gsi && !gsi.detected))}
                   open={Boolean(gsi && !gsi.detected)}
                 >
-                  <summary>安装位置与维护</summary>
+                  <summary>安装位置与 GSI 维护</summary>
                   <p>更换安装位置前，先恢复当前 GSI 配置。新写入的配置在下次启动 CS2 时加载。</p>
                   <div className="preparation-actions">
                     {gsi?.installed && !gsi.conflict ? gsiInstallButton : null}
@@ -814,34 +830,54 @@ export function Settings({ tab }: { tab: string }) {
                     </Button>
                   </div>
                 </details>
-              </>
-            )}
-            <details>
-              <summary>配置详情{gsi?.endpointConflict ? ' · 重复文件' : ''}</summary>
-              {gsi?.endpointConflict ? (
-                <ul className="settings-conflict-files">
-                  {gsi.conflictFiles.map((path) => (
-                    <li key={path}>
-                      <code>{path}</code>
-                    </li>
-                  ))}
-                </ul>
+              ) : (
+                <p>请在桌面应用中管理安装位置与配置。</p>
+              )}{' '}
+              <details>
+                <summary>配置详情{gsi?.endpointConflict ? ' · 重复文件' : ''}</summary>
+                {gsi?.endpointConflict ? (
+                  <ul className="settings-conflict-files">
+                    {gsi.conflictFiles.map((path) => (
+                      <li key={path}>
+                        <code>{path}</code>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                <p>
+                  支持选择 CS2 安装根目录、game\bin\win64 文件夹或
+                  cs2.exe。更换安装位置前，请先恢复当前 GSI
+                  配置；受管理游戏退出并恢复设置后才能更换。
+                </p>
+                <p className="settings-conflict-files">
+                  {gsi?.cfgPath ??
+                    (gsiPhase === 'ready' && !gsi?.readFailed
+                      ? '尚未发现配置目录'
+                      : '配置目录待确认')}
+                </p>
+                {gsi ? <p>安装候选数量：{gsi.candidateCount ?? 0}</p> : null}
+              </details>
+              {window.__TAURI_INTERNALS__ ? (
+                <details>
+                  <summary>游戏设置备份</summary>
+                  <p>
+                    游戏设置备份用于恢复 Mizar 启动前的画质、帧率与观战设置，与 GSI
+                    接收配置不同。需要恢复时，上方游戏连接区域会显示处理入口。
+                  </p>
+                  <Button
+                    disabled={busy}
+                    onClick={() => void action(() => desktopInvoke('open_cs2_backup'))}
+                  >
+                    打开游戏设置备份目录
+                  </Button>
+                </details>
               ) : null}
-              <p>
-                支持选择 CS2 安装根目录、game\bin\win64 文件夹或
-                cs2.exe。更换安装位置前，请先恢复当前 GSI 配置；受管理游戏退出并恢复设置后才能更换。
-              </p>
-              <p className="settings-conflict-files">
-                {gsi?.cfgPath ??
-                  (gsiPhase === 'ready' && !gsi?.readFailed
-                    ? '尚未发现配置目录'
-                    : '配置目录待确认')}
-              </p>
-              {gsi ? <p>安装候选数量：{gsi.candidateCount ?? 0}</p> : null}
-            </details>
-          </Panel>
-          <Cs2LaunchSettings />
-          <SteamAvatarSettings />
+            </Panel>
+          </div>
+          <div className="game-settings-preferences">
+            <Cs2LaunchSettings />
+            <SteamAvatarSettings />
+          </div>
         </div>
       )}
       {message ? <StatusBanner tone="info">{message}</StatusBanner> : null}
