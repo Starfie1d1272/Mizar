@@ -564,7 +564,12 @@ export function PreparationPage() {
                 </div>
               </Panel>
             </div>
-            <Dialog title="Demo 试播" open={demoOpen} onClose={() => setDemoOpen(false)}>
+            <Dialog
+              className="demo-test-dialog"
+              title="Demo 试播"
+              open={demoOpen}
+              onClose={() => setDemoOpen(false)}
+            >
               <DemoTestPanel forceExpanded={demoOpen} />
             </Dialog>
             <Dialog title="示例体验" open={sampleOpen} onClose={() => setSampleOpen(false)}>

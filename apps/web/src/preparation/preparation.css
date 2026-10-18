@@ -1401,3 +1401,15 @@
 .advanced-settings-section > div > button {
   justify-self: start;
 }
+
+.demo-test-dialog {
+  width: min(calc(var(--mizar-layout-padding) * 36), 90vw);
+}
+.preparation-demo-test form,
+.preparation-demo-test details[open] {
+  display: grid;
+  gap: var(--mizar-layout-gap);
+}
+.preparation-demo-test form > button {
+  justify-self: start;
+}
