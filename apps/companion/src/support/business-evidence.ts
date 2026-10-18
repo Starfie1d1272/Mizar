@@ -228,7 +228,7 @@ export function businessEvidence(value: unknown) {
 export const businessVersion = () => version(process.env.MIZAR_APP_VERSION) ?? 'unknown';
 export const version = (value: unknown) =>
   typeof value === 'string' &&
-  /^(?:unknown|[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}(?:-rc\.[0-9]+)?)$/.test(value)
+  /^(?:unknown|[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}(?:-(?:alpha|beta|rc)\.[0-9]+)?)$/.test(value)
     ? value
     : null;
 export const utc = (value: unknown) =>
