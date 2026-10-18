@@ -67,3 +67,5 @@ PRESPAWN 应答需要真实 schema、ClassInfo 和已完成检查点。`0x1800c5
 完整帧分片由 `0x18004ca50` 按 tick 和连续 section 组装，`0x180137a50` 序列化 PacketEntities 后压缩；压缩上界 `32+n+n/6` 及解压入口 `0x1804091f0` 对应 raw Snappy。RTTI 确认解码对象为 `CSVCMsg_PacketEntities`。研究路径处理消息 70，校验顺序、长度和 tick 后才交给实体解析；已落后的背景快照跳过。三片真实 Snappy 数据、缺片和 tick 错配有合成覆盖；完整驱动验证仅在第三片完成后发送恢复回执，见 `evidence/online-split-recovery.json`。
 
 新版完整录像的事件语义摘要为 `ed3a9bb727159935b770f93aa9f143d873c0c97193ae45fcfbf5da70f324fdb4`，与原参考一致，覆盖事件顺序、武器、玩家/攻击者 Steam64、热身和回合状态；不仅比较事件数量。
+
+NEW 前的字符串表检查现在计入全部已处理创建回调，包括事件解析器不消费数据的资源表。此前检查点只计两张相关表，与接收端统计所有表的口径不一致。增加 NEW 前的未使用表并清理后继续真实 schema 的集成验证通过；初始化快照共处理十二张表，见 `evidence/online-table-callback.json`。

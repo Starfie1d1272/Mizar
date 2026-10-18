@@ -46,8 +46,9 @@ export function viewerDecoder(
   let continuityFailure: ViewerResearchError | undefined;
   let stringTables = 0;
   let checkpointSequence = 0;
-  parser.on('createstringtable', (table) => {
-    if (table) stringTables++;
+  parser.on('createstringtable', () => {
+    // Count processed creation callbacks, including tables unused by this decoder.
+    stringTables++;
   });
   parser.on('clearallstringtables', () => {
     stringTables = 0;
