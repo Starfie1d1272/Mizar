@@ -170,7 +170,9 @@ export function HudConsolePage() {
     requestedPresetId !== null &&
     resourceFor(configDocument, 'preset', requestedPresetId) === undefined;
   const initialDocument = fixtureDocument;
-  const [workspace, setWorkspace] = useState<HudWorkspace>('preset');
+  const [workspace, setWorkspace] = useState<HudWorkspace>(() =>
+    requestedPresetId ? 'layout' : 'preset',
+  );
   const [mapBackground, setMapBackground] = useState(true);
   const reviewFrameRef = useRef<HTMLDivElement>(null);
   const [selectedPresetId, setSelectedPresetId] = useState(() => activePresetId(initialDocument));
@@ -586,7 +588,10 @@ export function HudConsolePage() {
   useEffect(() => {
     const select = (event: Event) => {
       const id: unknown = (event as CustomEvent<unknown>).detail;
-      if (typeof id === 'string') selectResource('preset', id);
+      if (typeof id === 'string') {
+        selectResource('preset', id);
+        setWorkspace('layout');
+      }
     };
     window.addEventListener('mizar:hud-select-preset', select);
     return () => window.removeEventListener('mizar:hud-select-preset', select);
@@ -945,7 +950,7 @@ export function HudConsolePage() {
                   ? '连接异常，最近保存快照'
                   : hasDirtyDraft
                     ? '未保存修改'
-                    : '已保存资源'}
+                    : '已保存'}
             </span>
           </div>
           <div>
@@ -958,7 +963,7 @@ export function HudConsolePage() {
                   : '无法确认'}
             </strong>
             {onAir.status === 'ready' ? (
-              <span>{activationStale ? '有保存尚未应用' : '播出配置已确认'}</span>
+              <span>{activationStale ? '已保存，尚未应用' : '已应用'}</span>
             ) : (
               <span role={onAir.status === 'error' ? 'alert' : 'status'}>
                 {onAir.activeRevision
@@ -978,7 +983,7 @@ export function HudConsolePage() {
               void activateSelectedPreset();
             }}
           >
-            启用当前预设
+            应用
           </Button>
         </section>
         <Workbench
@@ -1155,22 +1160,6 @@ export function HudConsolePage() {
                     >
                       重播
                     </Button>
-                    <Button
-                      aria-label="上一个语义事件"
-                      disabled={replaySession === null || replayState.isSeeking}
-                      onClick={() => stepReplayEvent(-1)}
-                      type="button"
-                    >
-                      上一事件
-                    </Button>
-                    <Button
-                      aria-label="下一个语义事件"
-                      disabled={replaySession === null || replayState.isSeeking}
-                      onClick={() => stepReplayEvent(1)}
-                      type="button"
-                    >
-                      下一事件
-                    </Button>
                   </div>
                   <label className="hud-console__replay-scrubber">
                     回放进度
@@ -1192,35 +1181,58 @@ export function HudConsolePage() {
                       )}
                     />
                   </label>
-                  <label className="hud-console__replay-event-select">
-                    语义事件
-                    <select
-                      aria-label="语义事件"
-                      disabled={replaySession === null || replayState.isSeeking || replayLoading}
-                      onChange={(event) => {
-                        if (event.target.value) {
-                          setPendingReplayIndex(null);
-                          void replaySession?.seekEvent(event.target.value);
-                        }
-                      }}
-                      value={currentReplayEvent?.id ?? ''}
-                    >
-                      <option value="">当前窗口无事件</option>
-                      {replayFixture?.events.map((event) => (
-                        <option key={event.id} value={event.id}>
-                          {event.sequence} · {event.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                  <details className="hud-console__replay-details">
+                    <summary>回放事件与序列</summary>
+                    <div className="hud-console__replay-actions">
+                      <Button
+                        aria-label="上一个语义事件"
+                        disabled={replaySession === null || replayState.isSeeking}
+                        onClick={() => stepReplayEvent(-1)}
+                        type="button"
+                      >
+                        上一事件
+                      </Button>
+                      <Button
+                        aria-label="下一个语义事件"
+                        disabled={replaySession === null || replayState.isSeeking}
+                        onClick={() => stepReplayEvent(1)}
+                        type="button"
+                      >
+                        下一事件
+                      </Button>
+                    </div>
+                    <label className="hud-console__replay-event-select">
+                      语义事件
+                      <select
+                        aria-label="语义事件"
+                        disabled={replaySession === null || replayState.isSeeking || replayLoading}
+                        onChange={(event) => {
+                          if (event.target.value) {
+                            setPendingReplayIndex(null);
+                            void replaySession?.seekEvent(event.target.value);
+                          }
+                        }}
+                        value={currentReplayEvent?.id ?? ''}
+                      >
+                        <option value="">当前窗口无事件</option>
+                        {replayFixture?.events.map((event) => (
+                          <option key={event.id} value={event.id}>
+                            {event.sequence} · {event.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <p>
+                      序列 {replayFrame?.cursor.sequence ?? '—'} ·{' '}
+                      {currentReplayEvent?.label ?? '当前窗口无语义事件'}
+                    </p>
+                  </details>
                   <div className="hud-console__replay-readout" aria-live="polite">
                     <span>
                       {replayFrame === null
                         ? '00:00.000'
                         : replayTimeLabel(replayFrame.cursor.scheduledElapsedUs)}
                     </span>
-                    <span>序列 {replayFrame?.cursor.sequence ?? '—'}</span>
-                    <span>{currentReplayEvent?.label ?? '当前窗口无语义事件'}</span>
                     {replayState.isSeeking ? <span>正在重建回放前缀…</span> : null}
                     {replayLoadError !== null ? (
                       <>

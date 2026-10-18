@@ -173,7 +173,7 @@ test('HUD settings preview → save → disk reload → activate → Program', a
 
     await page.getByRole('button', { name: '保存', exact: true }).click();
     await expect(page.getByText('已保存。', { exact: true })).toBeVisible();
-    await page.getByRole('button', { name: '启用当前预设', exact: true }).click();
+    await page.getByRole('button', { name: '应用', exact: true }).click();
     await expect(page.getByText('当前预设已启用。', { exact: true })).toBeVisible();
     const resolved = store.getState().resolved;
     expect(resolved.widgets['focused-player'].variant).toBe('minimal');
@@ -336,6 +336,12 @@ test('picture selection previews without activation, then applies explicitly and
       [2560, 1440],
     ]) {
       await page.setViewportSize({ width, height });
+      await expect
+        .poll(async () => {
+          const box = await page.locator('.picture-preview').boundingBox();
+          return box ? box.y + box.height : Infinity;
+        })
+        .toBeLessThanOrEqual(height);
       const box = await page.locator('.picture-preview').boundingBox();
       expect(box).not.toBeNull();
       expect(box!.y + box!.height).toBeLessThanOrEqual(height);
@@ -350,7 +356,7 @@ test('picture selection previews without activation, then applies explicitly and
     await expect(editor.getByText('正在编辑 · 类 EWC', { exact: true })).toBeVisible();
     // The acceptance host defaults to visual fixtures; opt this popup into the isolated Companion.
     await editor.goto(`${editor.url()}&hud-config=companion`);
-    await expect(editor.getByText('播出配置已确认', { exact: true })).toBeVisible();
+    await expect(editor.getByText('已应用', { exact: true }).first()).toBeVisible();
     await editor.getByRole('combobox', { name: '预览来源', exact: true }).selectOption('fixture');
     await editor.getByRole('button', { name: '布局', exact: true }).click();
     await expect(
