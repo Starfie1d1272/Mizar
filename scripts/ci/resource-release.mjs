@@ -68,7 +68,7 @@ export function makeResourceDescriptor(pack, manifest, parameters) {
   const policy = {
     packVersion: pack.manifest.packVersion,
     sourceSha: pack.manifest.source.gitSha,
-    coreVersion: core.appVersion.replace(/-rc\.\d+$/, ''),
+    coreVersion: core.appVersion.replace(/-(?:alpha|beta|rc)\.[1-9]\d*$/, ''),
     minimumSequence: publication.sequence,
   };
   // Also check actual Core compatibility; makePublication checks only the lower bound.
@@ -205,7 +205,7 @@ export async function readResourceCandidate(folder, manifest) {
   const archiveName = `Mizar-official-epl-default-${entry.policy.packVersion}.zip`;
   const archiveBytes = await boundedRead(join(folder, archiveName), LIMITS.archiveBytes);
   const pack = verifyPackBytes(archiveBytes, {
-    coreVersion: manifest.appVersion.replace(/-rc\.\d+$/, ''),
+    coreVersion: manifest.appVersion.replace(/-(?:alpha|beta|rc)\.[1-9]\d*$/, ''),
   });
   const expected = makeResourceDescriptor(pack, manifest, {
     ...(catalog.authorization ?? entry.publication),

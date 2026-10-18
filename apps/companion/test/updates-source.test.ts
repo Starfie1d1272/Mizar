@@ -5,7 +5,8 @@ import { Verifier, toSignedEntity, toTrustMaterial } from '@sigstore/verify';
 import type { Bundle, BundleVerifier } from 'sigstore';
 import { describe, expect, it, vi } from 'vitest';
 import { UPDATE_WORKFLOW, PUBLICATION_WORKFLOW } from '../src/updates/contract.js';
-import { verifyAttestation } from '../src/updates/source.js';
+import { StableSource, verifyAttestation } from '../src/updates/source.js';
+import { updateManifestSchema, updatePublicationSchema } from '../src/updates/contract.js';
 
 vi.mock('sigstore', () => ({ createVerifier: vi.fn() }));
 
@@ -65,4 +66,33 @@ describe('actual qualified Release provenance', () => {
       verifyAttestation(bytes, 'distribution-manifest.json', changed, verifier),
     ).toThrow();
   });
+});
+
+it('filters mixed and mislabeled prereleases before any update asset download', async () => {
+  const stable = {
+    tag_name: 'v1.5.0',
+    draft: false,
+    prerelease: false,
+    published_at: '2026-10-17T00:00:00Z',
+    assets: [],
+  };
+  const rejected = [
+    ...['alpha.1', 'beta.2', 'rc.3'].flatMap((suffix) =>
+      [true, false].map((prerelease) => ({ ...stable, tag_name: `v2.0.0-${suffix}`, prerelease })),
+    ),
+    { ...stable, tag_name: 'v3.0.0', prerelease: true },
+    { ...stable, tag_name: 'v4.0.0', draft: true },
+  ];
+  const fetcher = vi.fn(() => Promise.resolve(new Response(JSON.stringify([...rejected, stable]))));
+  const source = new StableSource('unused-cache', fetcher, 'github');
+  expect((await source.latest(new AbortController().signal))?.tag_name).toBe('v1.5.0');
+  fetcher.mockImplementation(() => Promise.resolve(new Response(JSON.stringify(rejected))));
+  expect(await source.latest(new AbortController().signal)).toBeNull();
+  expect(fetcher).toHaveBeenCalledTimes(2);
+  for (const suffix of ['alpha.1', 'beta.2', 'rc.3']) {
+    expect(updateManifestSchema.shape.version.safeParse(`2.0.0-${suffix}`).success).toBe(false);
+    expect(updatePublicationSchema.shape.version.safeParse(`2.0.0-${suffix}`).success).toBe(false);
+    expect(updateManifestSchema.shape.channel.safeParse(suffix.split('.')[0]).success).toBe(false);
+  }
+  expect(updateManifestSchema.shape.channel.safeParse('stable').success).toBe(true);
 });
