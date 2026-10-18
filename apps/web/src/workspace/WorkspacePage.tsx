@@ -1,3 +1,4 @@
+import { RosterCapture } from '../preparation/RosterCapture';
 import { DesktopCanvas } from '../patterns/DesktopCanvas';
 import { CameraControls } from '../orchestration/CameraControls';
 import { MusicControls } from '../music/MusicControls';
@@ -86,6 +87,7 @@ function ContextPanel({
     connection,
     programCursor,
   );
+  const [captureOpen, setCaptureOpen] = useState(false);
   const [issuesOpen, setIssuesOpen] = useState(false);
   const [issueError, setIssueError] = useState<{ key: string; message: string } | null>(null);
   const attentionIssues = rosterAlert
@@ -133,6 +135,28 @@ function ContextPanel({
         </small>
       )}
       <p className="workspace-pov">当前视角 · {pov ?? '等待观战数据'}</p>
+      {operator?.matchContext.rosterAuthority !== 'rivalhub' ? (
+        <>
+          <Button onClick={() => setCaptureOpen(true)}>
+            {match ? '识别服务器首发' : '从服务器创建本地比赛'}
+          </Button>
+          <Dialog
+            open={captureOpen}
+            title={match ? '核对现场首发' : '从服务器创建本地比赛'}
+            modal={false}
+            className="workspace-recovery workspace-roster-capture"
+            onClose={() => setCaptureOpen(false)}
+          >
+            <p>连接服务器并进入观战后，核对双方十人名单，再确认保存。</p>
+            <RosterCapture
+              key={match?.matchId ?? 'empty'}
+              create={!match}
+              autoOpen
+              {...(match ? { names: { a: match.entryAName, b: match.entryBName } } : {})}
+            />
+          </Dialog>
+        </>
+      ) : null}
       <SyncHealthAlert
         health={connection?.syncHealth}
         isSource={Boolean(

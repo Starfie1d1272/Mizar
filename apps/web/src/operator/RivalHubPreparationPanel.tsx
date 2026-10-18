@@ -1,6 +1,7 @@
+import { RivalHubMatchLibrary, type WebsiteSchedule } from './RivalHubMatchLibrary';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { switchToRivalhubBp, useBpWorkspace } from '../bp/client';
-import { Button, Panel, Select, StatusBanner, StatusPill } from '../ui/primitives';
+import { Button, Panel, StatusBanner, StatusPill } from '../ui/primitives';
 import { openRivalHubAuthorization } from '../preparation/client';
 import { RivalHubSyncControls } from './RivalHubSyncControls';
 
@@ -13,17 +14,7 @@ type Connection = {
   pairing?: 'idle' | 'pending';
 };
 
-type Schedule = {
-  competition: { name: string };
-  matches: {
-    matchId: string;
-    scheduledAt: string | null;
-    entrantA: { name: string };
-    entrantB: { name: string };
-    format: string;
-    stageLabel?: string | null;
-  }[];
-};
+type Schedule = WebsiteSchedule;
 
 export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches' | 'settings' }) {
   const [connection, setConnection] = useState<Connection | null>(null);
@@ -278,29 +269,15 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
             <>
               {schedule === null ? (
                 <p role="status">{loadError ? '赛程未能加载' : '正在加载近期比赛…'}</p>
-              ) : schedule.matches.length > 0 ? (
-                <Select
-                  label="选择比赛"
-                  defaultValue=""
-                  onChange={(e) => void handleSelectMatch(e.target.value)}
-                  disabled={selecting}
-                >
-                  <option value="">查看近期赛程（请选择比赛）</option>
-                  {schedule.matches.map((match) => (
-                    <option key={match.matchId} value={match.matchId}>
-                      {match.scheduledAt
-                        ? new Date(match.scheduledAt).toLocaleString('zh-CN')
-                        : '待排期'}{' '}
-                      · {match.entrantA.name} vs {match.entrantB.name} ·{' '}
-                      {match.format.toUpperCase()}
-                    </option>
-                  ))}
-                </Select>
               ) : (
-                <p className="operator-rivalhub-empty">近期暂无比赛</p>
+                <RivalHubMatchLibrary
+                  schedule={schedule}
+                  selecting={selecting}
+                  onSelect={(id) => void handleSelectMatch(id)}
+                />
               )}
 
-              {bpWorkspace?.pendingRivalhub && !connection.activeMatchId ? (
+              {bpWorkspace?.pendingRivalhub ? (
                 <div className="operator-rivalhub-candidate">
                   <div className="operator-rivalhub-candidate-info">
                     <small>待确认比赛候选</small>

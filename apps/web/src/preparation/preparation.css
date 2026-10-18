@@ -1165,3 +1165,87 @@
   padding-top: var(--mizar-layout-gap);
   color: var(--mizar-fg-primary);
 }
+
+.preparation-library-sources {
+  display: flex;
+  gap: var(--mizar-layout-compact);
+  margin-bottom: var(--mizar-layout-gap);
+}
+.website-library-status {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--mizar-layout-gap);
+  color: var(--mizar-fg-muted);
+  padding-block: var(--mizar-layout-gap);
+}
+.website-library-columns {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  gap: var(--mizar-layout-padding);
+  min-height: 550px;
+}
+.website-library-columns > aside {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mizar-layout-compact);
+  max-height: 650px;
+  overflow-y: auto;
+}
+.website-library-columns > aside button {
+  display: grid;
+  text-align: left;
+  justify-content: stretch;
+  gap: var(--mizar-layout-compact);
+  padding: var(--mizar-layout-gap);
+  white-space: normal;
+}
+.website-library-columns > aside button[aria-pressed='true'] {
+  outline: 2px solid var(--mizar-accent-primary);
+  outline-offset: -2px;
+}
+.website-library-columns > section {
+  min-width: 0;
+  padding: var(--mizar-layout-padding);
+  border: 1px solid var(--mizar-border-default);
+  border-radius: var(--mizar-shape-panel);
+}
+.website-library-rosters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--mizar-layout-padding);
+}
+.website-library-rosters ul {
+  list-style: none;
+  padding: 0;
+  max-height: 280px;
+  overflow-y: auto;
+}
+.website-library-rosters li {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--mizar-layout-compact);
+  padding-block: var(--mizar-layout-compact);
+  border-bottom: 1px solid var(--mizar-border-default);
+}
+.website-library-columns footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--mizar-layout-gap);
+  margin-top: var(--mizar-layout-padding);
+}
+
+.workspace-local-match form {
+  align-items: start;
+}
+.workspace-local-match form > details,
+.workspace-local-match form > p {
+  grid-column: 1 / -1;
+}
+.workspace-local-match form > label {
+  align-content: start;
+}
+.preparation-library-sources button[aria-pressed='true'] {
+  background: var(--mizar-accent-primary);
+  color: var(--mizar-fg-on-accent);
+}

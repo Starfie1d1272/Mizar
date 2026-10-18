@@ -132,7 +132,7 @@ export function EventMatchWorkspace({
       <section className="event-match-detail">
         {creating ? (
           <Panel>
-            <h2>{event ? `追加到 ${event.name}` : '快速建立本地比赛'}</h2>
+            <h2>创建本地比赛</h2>
             <LocalMatchControls
               key={eventId}
               mode="create"

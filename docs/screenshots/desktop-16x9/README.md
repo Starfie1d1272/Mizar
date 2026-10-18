@@ -6,6 +6,8 @@
 
 [缩放实测](scaling.json) · [页面尺寸与运行错误记录](geometry.json) · [文件摘要](provenance.json)
 
+[比赛库与现场首发的最新 8 种状态](../library-workflow/README.md)
+
 ## 本场准备
 
 ![本场准备](01-home.png)

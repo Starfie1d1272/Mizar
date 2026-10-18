@@ -206,6 +206,7 @@ export function registerLocalTournamentRoutes(
       !(body.teamAId === undefined || typeof body.teamAId === 'string') ||
       !(body.teamBId === undefined || typeof body.teamBId === 'string') ||
       !['bo1', 'bo3', 'bo5'].includes(String(body.format)) ||
+      !(body.eventName === undefined || typeof body.eventName === 'string') ||
       !(body.eventId === undefined || typeof body.eventId === 'string')
     )
       return reply.code(400).send({ error: 'local_match_invalid' });
@@ -217,6 +218,7 @@ export function registerLocalTournamentRoutes(
         ...(body.teamBId === undefined ? {} : { teamBId: body.teamBId }),
         format: body.format as 'bo1' | 'bo3' | 'bo5',
         ...(body.eventId === undefined ? {} : { eventId: body.eventId }),
+        ...(body.eventName === undefined ? {} : { eventName: body.eventName }),
         mapPool: DEFAULT_LOCAL_BP_MAP_POOL,
       });
       controller.activateLocalDocument(document);

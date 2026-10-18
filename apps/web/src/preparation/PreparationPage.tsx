@@ -23,7 +23,6 @@ import { LocalOverlayControls } from './LocalOverlayControls';
 import { LocalMatchControls } from './LocalMatchControls';
 import { useLocalTournament } from './tournament';
 import { command, openTool, productionAction, useLocalRead, type Production } from './client';
-import { RosterCapture, type RosterCandidate } from './RosterCapture';
 import { Settings } from './Settings';
 import { UpdateNotification } from './UpdateNotification';
 import { ProgramPreview } from './ProgramPreview';
@@ -141,6 +140,7 @@ export function PreparationPage() {
   const [demoOpen, setDemoOpen] = useState(() =>
     new URLSearchParams(window.location.search).has('demoTest'),
   );
+  const [librarySource, setLibrarySource] = useState<'local' | 'website'>('local');
   const [sampleOpen, setSampleOpen] = useState(false);
 
   async function action(run: () => Promise<unknown>) {
@@ -294,7 +294,7 @@ export function PreparationPage() {
                         连接 RivalHub
                       </Button>
                     )}
-                    <CurrentServerMatchEntry />
+
                     <Button
                       variant="secondary"
                       onClick={() => {
@@ -659,29 +659,42 @@ export function PreparationPage() {
           </div>
         ) : path === '/resources' ? (
           <>
-            {libraryStatus !== 'ready' ? (
-              <StatusBanner tone="warning">
-                {libraryStatus === 'loading'
-                  ? '正在读取比赛库…'
-                  : '比赛库读取失败，保留最近资料与草稿；连接恢复前暂停保存和载入。'}
-              </StatusBanner>
-            ) : null}
-            {view ? (
-              <EventMatchWorkspace
-                view={view}
-                refresh={refresh}
-                action={action}
-                canWrite={libraryStatus === 'ready'}
-              />
-            ) : null}
-            <details>
-              <summary>回收站与本地管理</summary>
-              <LocalMatchControls mode="select" action={action} />
-            </details>
-            <details>
-              <summary>RivalHub 比赛</summary>
-              <RivalHubPreparationPanel mode="matches" />
-            </details>
+            <div className="preparation-library-sources" aria-label="比赛库来源">
+              <Button
+                aria-pressed={librarySource === 'local'}
+                onClick={() => setLibrarySource('local')}
+              >
+                本地赛事
+              </Button>
+              <Button
+                aria-pressed={librarySource === 'website'}
+                onClick={() => setLibrarySource('website')}
+              >
+                RivalHub 赛事
+              </Button>
+            </div>
+            <div hidden={librarySource !== 'local'}>
+              {libraryStatus !== 'ready' ? (
+                <StatusBanner tone="warning">
+                  {libraryStatus === 'loading'
+                    ? '正在读取比赛库…'
+                    : '比赛库读取失败，保留最近资料与草稿；连接恢复前暂停保存和载入。'}
+                </StatusBanner>
+              ) : null}
+              {view ? (
+                <EventMatchWorkspace
+                  view={view}
+                  refresh={refresh}
+                  action={action}
+                  canWrite={libraryStatus === 'ready'}
+                />
+              ) : null}
+              <details>
+                <summary>回收站与本地管理</summary>
+                <LocalMatchControls mode="select" action={action} />
+              </details>
+            </div>
+            {librarySource === 'website' ? <RivalHubPreparationPanel mode="matches" /> : null}
           </>
         ) : path === '/matches' ? (
           <>
@@ -692,7 +705,7 @@ export function PreparationPage() {
             >
               <summary>切换比赛</summary>
               {!match ? (
-                <RosterCapture create autoOpen={createFromServer} onSaved={() => void refresh()} />
+                <p>只需队名与赛制即可创建本地比赛；进入现场并连接服务器后，可识别十人名单。</p>
               ) : null}
               {hasSampleCapability && rehearsal?.loaded && rehearsalSchedule?.matches ? (
                 <>
@@ -730,10 +743,9 @@ export function PreparationPage() {
             {match && local ? (
               <>
                 {tab === 'roster' ? (
-                  <RosterCapture
-                    names={{ a: match.entrants.a.name, b: match.entrants.b.name }}
-                    onSaved={() => void refresh()}
-                  />
+                  <StatusBanner tone="info">
+                    现场首发可在工作台连接服务器后识别；这里维护队伍资料与完整名单。
+                  </StatusBanner>
                 ) : null}
                 <LocalTournamentEditor
                   document={match}
@@ -822,18 +834,4 @@ export function PreparationPage() {
       </main>
     </OperatorShell>
   );
-}
-
-function CurrentServerMatchEntry() {
-  const result = useLocalRead<{ candidate: RosterCandidate | null }>('/local/v1/roster-candidate');
-  return result?.candidate ? (
-    <Button
-      variant="secondary"
-      onClick={() => {
-        window.location.href = '/matches?tab=roster&createFromServer=1';
-      }}
-    >
-      从当前服务器创建比赛
-    </Button>
-  ) : null;
 }

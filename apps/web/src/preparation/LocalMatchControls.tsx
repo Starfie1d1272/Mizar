@@ -23,6 +23,7 @@ export function LocalMatchControls({
   const [a, setA] = useState({ name: '', id: '' });
   const [b, setB] = useState({ name: '', id: '' });
   const [eventId, setEventId] = useState(initialEventId);
+  const [eventName, setEventName] = useState('');
   const [format, setFormat] = useState('bo3');
   const [confirmation, setConfirmation] = useState<{ matchId: string; name: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -90,7 +91,11 @@ export function LocalMatchControls({
                 ...(a.id ? { teamAId: a.id } : {}),
                 ...(b.id ? { teamBId: b.id } : {}),
                 format,
-                ...(eventId ? { eventId } : {}),
+                ...(eventId
+                  ? { eventId }
+                  : eventName.trim()
+                    ? { eventName: eventName.trim() }
+                    : {}),
               });
               onSelected?.();
               setA({ name: '', id: '' });
@@ -99,18 +104,6 @@ export function LocalMatchControls({
             });
           }}
         >
-          <Select
-            label="创建比赛所属赛事"
-            value={eventId}
-            onChange={(event) => setEventId(event.target.value)}
-          >
-            <option value="">创建新本地赛事</option>
-            {view?.events.map((event) => (
-              <option key={event.eventId} value={event.eventId}>
-                {event.name}
-              </option>
-            ))}
-          </Select>
           {[
             { label: '队伍 A', value: a, set: setA, other: b.id },
             { label: '队伍 B', value: b, set: setB, other: a.id },
@@ -155,6 +148,34 @@ export function LocalMatchControls({
               </option>
             ))}
           </Select>
+          <details>
+            <summary>赛事归属（选填）</summary>
+            <Select
+              label="创建比赛所属赛事"
+              value={eventId}
+              onChange={(event) => setEventId(event.target.value)}
+            >
+              <option value="">创建新本地赛事</option>
+              {view?.events.map((event) => (
+                <option key={event.eventId} value={event.eventId}>
+                  {event.name}
+                </option>
+              ))}
+            </Select>
+            {!eventId ? (
+              <Field
+                label="新赛事名称"
+                maxLength={128}
+                placeholder="例如：秋季校园联赛"
+                value={eventName}
+                onChange={(event) => setEventName(event.target.value)}
+              />
+            ) : null}
+            <p>填写新名称会自动创建赛事并关联本场；留空使用“本地赛事”。</p>
+          </details>
+          <p>
+            填写双方队名和赛制即可创建。进入工作台，等双方十名选手进服且观战数据就绪后，可从游戏识别首发，核对后保存。队标和替补名单可稍后补充。
+          </p>
           <Button
             type="submit"
             variant="primary"

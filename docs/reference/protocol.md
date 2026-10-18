@@ -246,3 +246,11 @@ RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对�
 `status.control` 区分 browser/native 与 ready/blocked，只是本机控制许可，不是上游执行事实。`browser` 操作携带 `expectedRevision`，在制作生命周期负责者确认准备阶段、非忙碌/试播/更新后同步切换并保持人工。产品服务启动默认 native/blocked，独立开发浏览器服务默认 browser/ready。
 
 `POST /operator/runtime/camera-session` 只接受既有 `x-runtime-token`，拒绝浏览器 Origin 和非回环模式。Host 使用 host-start 注册启动标识并锁定旧原生会话；begin 在当前制作修订的准备阶段生成新租约；pulse 仅延长同 Host/借用代际、尚未失效的六秒期限；invalidate 锁定对应代际。Host 每两秒检查原句柄与唯一性后续约；超时/重启/实例失效/收尾后 connect、resume、audition 和自动调度均拒绝旧许可，必须完成制作后重新交接。旧代际 invalidate 不撤销新代际或浏览器模式。租约标识不作为认证秘密，实际授权仍是运行时令牌，网页不持有它。
+
+### RivalHub 比赛库缓存
+
+`GET /local/v1/rivalhub-schedule` 返回已授权赛事前后各 14 天赛程及 `library` 浏览资料：按 matchId 索引的完整比赛文档、`checkedAt`、`updatedAt`、整体 `syncedAt`、刷新状态与错误说明。后台最多每分钟启动一轮刷新，最多三场并发，首轮取得赛程后即可返回，详情随后填充。提供方 `/api/mizar/match` 支持 ETag / If-None-Match；304 只推进核对时间，200 重新校验和比较单场内容后更新。赛程列表无变化也检查单场，避免漏掉名单、队标或 BP 更新。
+
+缓存按网站地址、授权赛事和安装身份隔离、原子持久化；重启恢复重新校验提供方原文和赛事/比赛标识。网络或单场失败保留已验证内容并明确标记，成功赛程中已移除的比赛不继续出现在库内。浏览缓存不作为正式节目新鲜度依据，不激活比赛；载入仍走在线候选核对与显式确认。连接解除或更换后旧请求不能将旧赛事资料返回给新连接。
+
+`POST /operator/local-match/create` 可选 `eventName` 用于未指定 `eventId` 时自动创建赛事（去除首尾空白、1–128 字）；已有 `eventId` 保留原赛事身份与名称。
