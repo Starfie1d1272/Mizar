@@ -1159,15 +1159,7 @@
   height: 100%;
   object-fit: contain;
 }
-.preparation-task-reference figcaption {
-  position: absolute;
-  bottom: 0;
-  right: 0;
-  padding: var(--mizar-layout-compact);
-  font-size: var(--mizar-type-size-small);
-  background: var(--mizar-bg-canvas);
-  color: var(--mizar-fg-muted);
-}
+
 .preparation-task-links .preparation-task-entry {
   border-top: var(--mizar-line-border) solid var(--mizar-border-default);
   padding-top: var(--mizar-layout-gap);

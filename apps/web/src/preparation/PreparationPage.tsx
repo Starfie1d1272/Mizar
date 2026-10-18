@@ -466,9 +466,8 @@ export function PreparationPage() {
                             src={hudStyleReference(
                               onAirHud.current.widgets['top-score-bar'].variant,
                             )}
-                            alt=""
+                            alt="HUD 风格参考"
                           />
-                          <figcaption>风格参考 · 非本场画面</figcaption>
                         </figure>
                       </>
                     ) : (
