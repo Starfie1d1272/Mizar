@@ -12,6 +12,7 @@ import { desktopInvoke } from '../workspace/client';
 import { RivalHubPreparationPanel } from '../operator/RivalHubPreparationPanel';
 import { openTool, useLocalRead } from './client';
 import { Cs2Recovery } from './Cs2Recovery';
+import { Cs2BackupImport } from './Cs2BackupImport';
 import type { Production } from './client';
 import { Cs2LaunchSettings } from './Cs2LaunchSettings';
 import { SteamAvatarSettings } from './SteamAvatarSettings';
@@ -442,6 +443,7 @@ export function Settings({ tab }: { tab: string }) {
               {window.__TAURI_INTERNALS__ ? (
                 <details>
                   <summary>游戏设置备份</summary>
+                  <Cs2BackupImport />
                   <p>
                     游戏设置备份用于恢复 Mizar 启动前的画质、帧率与观战设置，与 GSI
                     接收配置不同。需要恢复时，上方游戏连接区域会显示处理入口。

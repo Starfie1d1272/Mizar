@@ -547,6 +547,7 @@ pub struct ManagedCs2 {
     message: Option<String>,
     launch_observation: Option<Value>,
     can_preserve: bool,
+    selected_backup: Option<Value>,
     external: Option<ExternalSession>,
     // Keep window preservation after detach until a new managed launch is accepted.
     external_preservation: bool,
@@ -595,6 +596,7 @@ impl ManagedCs2 {
             message: None,
             launch_observation: None,
             can_preserve: false,
+            selected_backup: None,
             external: None,
             external_preservation: false,
         }
@@ -751,6 +753,11 @@ impl ManagedCs2 {
         if confirm_steam_cancelled && crate::cs2_session::unconfirmed_launch(&value) {
             value["launchCancelled"] = json!(true);
             self.store.save(&value)?;
+        }
+        if value["version"] == 4 {
+            let (_, video, steam) = discover(&self.log)?;
+            if value["video"] != json!(std::fs::canonicalize(&video).map_err(|e| crate::cs2_session::io_error("恢复目标无法确认。", &e))?) { return Err("请登录原目标 Steam 账号后重试恢复。".into()); }
+            steam.validate(&self.log)?;
         }
         // Preserve Demo quarantine until all core cleanup has completed.
         let had_spectator = self.store.spectator_pending();
@@ -1140,6 +1147,85 @@ impl ManagedCs2 {
     pub fn backup_directory(&self) -> PathBuf {
         self.store.backup_directory()
     }
+    fn require_backup_idle(&self) -> Result<(), String> {
+        if self.has_external() || self.store.load()?.is_some() || self.store.spectator_pending()
+            || self.store.playback_cleanup_pending()
+            || crate::demo_test::requires_recovery(&self.log, None) {
+            return Err("请先结束工作台并完成上次配置恢复。".into());
+        }
+        if any_cs2_running(&self.log)? { return Err("请先退出 CS2，再选择恢复备份。".into()); }
+        Ok(())
+    }
+    pub fn cancel_selected_backup(&mut self) { self.selected_backup = None; }
+    pub fn select_backup(&mut self, source: &std::path::Path) -> Result<Value, String> {
+        self.selected_backup = None;
+        self.require_backup_idle()?;
+        let (executable, video, steam) = discover(&self.log)?;
+        let source = std::fs::canonicalize(source).map_err(|e| crate::cs2_session::io_error("备份路径无法读取。", &e))?;
+        let backup = backup_text(&source, 128*1024)?;
+        let original = backup_text(&video, 128*1024)?;
+        crate::cs2_video::compatible_restore(&backup, &original)?;
+        let account_id = (76561197960265728u64 + u64::from(steam.account)).to_string();
+        let steam_root = steam.process.executable.parent().ok_or("Steam 目录不可用。")?;
+        let users = backup_text(&steam_root.join("config/loginusers.vdf"), 1024*1024)?;
+        let nickname = crate::cs2_frame_rate::field(&users, &["users", &account_id, "PersonaName"])?
+            .map(|v| v.value).filter(|v| !v.trim().is_empty()).ok_or("当前 Steam 昵称无法读取，请重新登录 Steam 后再试。")?;
+        let avatar = backup_avatar(&steam_root.join(format!("config/avatarcache/{account_id}.png")));
+        let mut frame = None;
+        // Only a named snapshot offers a sibling convars file. A loose .bak
+        // never silently selects an unrelated live convars file beside it.
+        if source.file_name().is_some_and(|n| n == "cs2_video.txt") {
+            let candidate = source.with_file_name("cs2_machine_convars.vcfg");
+            match std::fs::symlink_metadata(&candidate) {
+                Ok(_) => {
+                    let selected = backup_text(&candidate, 256*1024)?;
+                    let before = backup_text(&video.with_file_name("cs2_machine_convars.vcfg"), 256*1024)?;
+                    crate::cs2_frame_rate::compatible_restore(&selected, &before)?;
+                    frame = Some(json!({"source":candidate,"backup":selected,"original":before}));
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+                Err(e) => return Err(crate::cs2_session::io_error("备份中的帧率文件无法读取。", &e)),
+            }
+        }
+        steam.validate(&self.log)?;
+        let id = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| "系统时间不可用。")?.as_nanos().to_string();
+        let preview = json!({"selectionId":id,"nickname":nickname,"avatar":avatar,
+            "sourceName":source.file_name().map(|n|n.to_string_lossy().to_string()),
+            "targetPath":video,"includesFrameRate":frame.is_some()});
+        self.selected_backup = Some(json!({"id":id,"source":source,"backup":backup,"original":original,
+            "video":video,"executable":executable,"account":steam.account,"frame":frame}));
+        Ok(preview)
+    }
+    pub fn apply_selected_backup(&mut self, id: &str) -> Result<(), String> {
+        self.require_backup_idle()?;
+        let selection = self.selected_backup.as_ref().ok_or("请先选择备份并核对目标账号。")?;
+        if selection["id"] != id { return Err("备份选择已变化，请重新核对。".into()); }
+        let (executable,video,steam) = discover(&self.log)?;
+        if selection["account"].as_u64() != Some(u64::from(steam.account))
+            || selection["video"] != json!(video) || selection["executable"] != json!(executable) {
+            return Err("Steam 账号或配置位置已变化，请重新选择备份。".into());
+        }
+        let backup = selection["backup"].as_str().ok_or("备份内容缺失。")?;
+        let original = selection["original"].as_str().ok_or("当前配置记录缺失。")?;
+        let source = std::path::Path::new(selection["source"].as_str().ok_or("备份路径缺失。")?);
+        if backup_text(source,128*1024)? != backup { return Err("所选备份已变化，请重新选择。".into()); }
+        let frame = if selection["frame"].is_object() {
+            let v = &selection["frame"];
+            let selected = v["backup"].as_str().ok_or("帧率备份缺失。")?;
+            if backup_text(std::path::Path::new(v["source"].as_str().ok_or("帧率备份路径缺失。")?),256*1024)? != selected {
+                return Err("帧率备份已变化，请重新选择。".into());
+            }
+            Some((v["original"].as_str().ok_or("原始帧率记录缺失。")?,selected))
+        } else { None };
+        steam.validate(&self.log)?;
+        if any_cs2_running(&self.log)? { return Err("CS2 已启动，请退出游戏后重试。".into()); }
+        self.store.import_selected_backup(&video,&executable,backup,original,frame)?;
+        self.selected_backup = None;
+        self.can_preserve = false;
+        self.message = Some("所选设置已恢复，恢复前的原件已保存。".into());
+        Ok(())
+    }
     pub fn restore_backup(&mut self, confirm_steam_cancelled: bool) -> Result<(), String> {
         if self.has_external() { return Err("请先退出工作台解除借用；不会向外部游戏写回配置。".into()); }
         let result = self.recover(confirm_steam_cancelled).and_then(|_| {
@@ -1464,4 +1550,29 @@ mod tests {
         assert!(tracker.window_message().is_some());
         std::fs::remove_dir_all(root).unwrap();
     }
+}
+
+fn backup_text(path: &std::path::Path, limit: usize) -> Result<String, String> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|e| crate::cs2_session::io_error("配置文件无法读取。", &e))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > limit as u64 {
+        return Err("配置文件类型或大小不支持。".into());
+    }
+    let value = std::fs::read_to_string(path).map_err(|e| crate::cs2_session::io_error("配置内容无法读取。", &e))?;
+    if value.len() > limit { return Err("配置内容过大。".into()); }
+    Ok(value)
+}
+fn backup_avatar(path: &std::path::Path) -> Option<String> {
+    let metadata = std::fs::symlink_metadata(path).ok()?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 256*1024 { return None; }
+    let bytes = std::fs::read(path).ok()?;
+    if bytes.len() > 256*1024 || !bytes.starts_with(b"\x89PNG\r\n\x1a\n") { return None; }
+    const B64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut encoded = String::from("data:image/png;base64,");
+    for group in bytes.chunks(3) {
+        let n = (u32::from(group[0])<<16) | (u32::from(*group.get(1).unwrap_or(&0))<<8) | u32::from(*group.get(2).unwrap_or(&0));
+        encoded.push(B64[((n>>18)&63)as usize]as char); encoded.push(B64[((n>>12)&63)as usize]as char);
+        encoded.push(if group.len()>1 { B64[((n>>6)&63)as usize]as char } else { '=' });
+        encoded.push(if group.len()>2 { B64[(n&63)as usize]as char } else { '=' });
+    }
+    Some(encoded)
 }

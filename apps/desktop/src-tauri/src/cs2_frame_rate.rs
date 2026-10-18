@@ -239,6 +239,25 @@ fn patch_convars(text: &str, limit: u16) -> Result<String, String> {
     Ok(result)
 }
 
+/// Explicit import restores only fps_max and retains its decimal spelling.
+pub fn compatible_restore(backup: &str, current: &str) -> Result<String, String> {
+    let before = fps_field(backup)?;
+    let entries = scalar_section(current, &["config", "convars"])?;
+    let mut edits = Vec::new();
+    let mut found = false;
+    for (key, value) in entries {
+        if key.value.eq_ignore_ascii_case("fps_max") {
+            if found { edits.push((key.start, value.end, String::new())); }
+            else { edits.push((value.start, value.end, format!("\"{}\"", before.value))); found = true; }
+        }
+    }
+    if !found { return Err("当前配置缺少 fps_max，请先运行一次 CS2。".into()); }
+    edits.sort_by_key(|edit| std::cmp::Reverse(edit.0));
+    let mut output = current.to_string();
+    for (start, end, value) in edits { output.replace_range(start..end, &value); }
+    Ok(output)
+}
+
 struct ConfigScript {
     applied: String,
     includes: Vec<(String, bool)>,

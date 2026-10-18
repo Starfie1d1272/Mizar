@@ -1209,6 +1209,46 @@ async fn restore_cs2_backup(
 }
 
 #[tauri::command]
+async fn manage_cs2_backup(
+    window: tauri::WebviewWindow, app: tauri::AppHandle, action: String,
+    selection_id: Option<String>, diagnostic_operation_id: Option<String>,
+) -> Result<Option<serde_json::Value>, String> {
+    if window.label() != "main" { return Err("请在制作中心恢复游戏设置。".into()); }
+    let log = app.state::<DesktopLog>().inner().clone();
+    let command_log = log.clone();
+    let operation = diagnostic_operation_id.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        app.state::<production_exit::ExitGate>().check()?;
+        app.state::<updates::PendingUpdate>().check()?;
+        let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+        if action == "select" {
+            // Retire prior approval before opening the modal native chooser.
+            state.lock().map_err(|_| "恢复状态不可用。")?.cancel_selected_backup();
+            let Some(file) = app.dialog().file().add_filter("CS2 配置备份", &["txt", "bak"]).blocking_pick_file() else { return Ok(None); };
+            let path = file.into_path().map_err(|e| command_log.preserve_error("manage_cs2_backup",operation.as_deref(),&e,"备份路径无法读取。"))?;
+            app.state::<production_exit::ExitGate>().check()?;
+            app.state::<updates::PendingUpdate>().check()?;
+            return state.lock().map_err(|_| "恢复状态不可用。")?.select_backup(&path).map(Some);
+        }
+        let mut cs2 = state.lock().map_err(|_| "恢复状态不可用。")?;
+        match action.as_str() {
+            "cancel" => cs2.cancel_selected_backup(),
+            "apply" => {
+                let activity = app.state::<cs2_activity::Activity>();
+                let _activity = activity.begin(2);
+                cs2.apply_selected_backup(selection_id.as_deref().ok_or("请先核对备份。")?)?;
+            }
+            _ => return Err("备份操作无效。".into()),
+        }
+        Ok(None)
+    }).await.map_err(|e| log.preserve_error("manage_cs2_backup",diagnostic_operation_id.as_deref(),&e,"备份操作未完成。"))?;
+    // The full selected file stays inside Host. Log the operation outcome rather
+    // than duplicating avatar image bytes in the native diagnostic stream.
+    log.native_outcome("manage_cs2_backup",diagnostic_operation_id.as_deref(), &result.as_ref().map(|_| ()));
+    result
+}
+
+#[tauri::command]
 async fn open_cs2_backup(app: tauri::AppHandle, diagnostic_operation_id: Option<String>) -> Result<(), String> {
     let diagnostic_log = app.state::<DesktopLog>().inner().clone();
     let command_log = diagnostic_log.clone();
@@ -2171,6 +2211,7 @@ fn run_desktop(
             finish_demo_test,
             restore_cs2_backup,
             open_cs2_backup,
+            manage_cs2_backup,
             set_cs2_preferences,
             cs2_console_status,
             set_cs2_console_capture,

@@ -1239,3 +1239,21 @@
 .preparation-demo-test form > button {
   justify-self: start;
 }
+
+.cs2-backup-import,
+.cs2-backup-preview {
+  display: grid;
+  gap: var(--mizar-layout-compact);
+  min-width: 0;
+}
+.cs2-backup-account {
+  display: flex;
+  align-items: center;
+  gap: var(--mizar-layout-compact);
+}
+.cs2-backup-account img {
+  width: calc(var(--mizar-layout-padding) * 3);
+  height: calc(var(--mizar-layout-padding) * 3);
+  object-fit: cover;
+  border-radius: var(--mizar-shape-control);
+}
