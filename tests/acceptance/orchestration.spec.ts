@@ -207,6 +207,7 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
     ).toBe(true);
     expect(evidence.some((e) => e.stage === 'camera_invalidate')).toBe(true);
   } finally {
+    await context.unrouteAll({ behavior: 'wait' });
     director.close();
     await app.close();
     await rm(root, { recursive: true, force: true });
