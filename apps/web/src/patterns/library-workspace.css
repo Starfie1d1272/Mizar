@@ -82,6 +82,7 @@
   padding-block: var(--mizar-layout-gap);
 }
 .library-browser-actions {
+  padding-bottom: var(--mizar-layout-padding);
   display: grid;
   gap: var(--mizar-layout-compact);
 }
