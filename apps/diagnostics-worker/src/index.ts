@@ -521,15 +521,16 @@ async function upload(request: Request, env: Env, id: string, installation: stri
     row = (reserved[4]?.results[0] as BatchRow | undefined) ?? null;
     if (!row || row.owner !== owner) return json({ error: 'reservation_unconfirmed' }, 503);
     // Never overwrite an acknowledged/retried object and reset its original retention clock.
-    const object = await env.DIAGNOSTICS_BUCKET.head(row.object_key);
-    if (object && (object.size !== bytes.length || object.customMetadata?.sha256 !== id))
+    const created = await env.DIAGNOSTICS_BUCKET.put(row.object_key, bytes, {
+      onlyIf: { etagDoesNotMatch: '*' },
+      httpMetadata: { contentType: 'application/gzip' },
+      customMetadata: { sha256: id, installation, expiresAt: String(row.expires_at) },
+    });
+    // A successful conditional write already supplies the object metadata. Only
+    // retries/competing writers need a HEAD; the existing retention clock stays intact.
+    const object = created ?? (await env.DIAGNOSTICS_BUCKET.head(row.object_key));
+    if (!object || object.size !== bytes.length || object.customMetadata?.sha256 !== id)
       throw new Error('existing_object_integrity');
-    if (!object)
-      await env.DIAGNOSTICS_BUCKET.put(row.object_key, bytes, {
-        onlyIf: { etagDoesNotMatch: '*' },
-        httpMetadata: { contentType: 'application/gzip' },
-        customMetadata: { sha256: id, installation, expiresAt: String(row.expires_at) },
-      });
     const revoked = await sql(
       env,
       'SELECT revoked_at FROM installations WHERE id=?',
