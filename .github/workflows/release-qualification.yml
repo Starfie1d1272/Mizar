@@ -473,18 +473,18 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Assembled product identity mismatch' }
           node scripts/qualification/update-manifest.mjs $env:QUALIFICATION_BUILD_ROOT
           if ($LASTEXITCODE -ne 0) { throw 'Stable update manifest generation failed' }
+          $coreManifest = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'core-release-manifest.json') -Raw | ConvertFrom-Json
+          $coreExtract = Join-Path $env:RUNNER_TEMP 'final Core candidate'
+          & ./scripts/qualification/extract-windows-shell.ps1 -Archive (Join-Path $env:QUALIFICATION_BUILD_ROOT $coreManifest.archive) -Destination $coreExtract -Native
+          $cores = @(Get-ChildItem -LiteralPath $coreExtract -Directory)
+          if ($cores.Count -ne 1) { throw 'Qualified Core extraction is ambiguous' }
+          node scripts/qualification/verify-core-candidate.mjs $env:QUALIFICATION_BUILD_ROOT $cores[0].FullName $env:SOURCE_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'Final Core qualification identity failed' }
           if ($manifest.appVersion -match '^\d+\.\d+\.\d+$') {
-            $coreManifest = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'core-release-manifest.json') -Raw | ConvertFrom-Json
-            $coreExtract = Join-Path $env:RUNNER_TEMP 'final Core candidate'
-            & ./scripts/qualification/extract-windows-shell.ps1 -Archive (Join-Path $env:QUALIFICATION_BUILD_ROOT $coreManifest.archive) -Destination $coreExtract -Native
-            $cores = @(Get-ChildItem -LiteralPath $coreExtract -Directory)
-            if ($cores.Count -ne 1) { throw 'Qualified Core extraction is ambiguous' }
-            node scripts/qualification/verify-core-candidate.mjs $env:QUALIFICATION_BUILD_ROOT $cores[0].FullName $env:SOURCE_SHA
-            if ($LASTEXITCODE -ne 0) { throw 'Final Core qualification identity failed' }
             ./scripts/web-installer/build.ps1 -ProductDirectory $env:QUALIFICATION_BUILD_ROOT -CoreDirectory $cores[0].FullName -OutputDirectory $env:QUALIFICATION_BUILD_ROOT -Qualification
             if ($LASTEXITCODE) { throw 'Qualified native installer build failed' }
-            "QUALIFIED_CORE_DIRECTORY=$($cores[0].FullName)" >> $env:GITHUB_ENV
           }
+          "QUALIFIED_CORE_DIRECTORY=$($cores[0].FullName)" >> $env:GITHUB_ENV
           $buildTimings = Join-Path $env:RUNNER_TEMP 'build-evidence/build-timings.json'
           if (!(Test-Path -LiteralPath $buildTimings -PathType Leaf)) { throw 'Build measurement evidence is missing' }
           $metrics = Get-Content -LiteralPath $buildTimings -Raw | ConvertFrom-Json
