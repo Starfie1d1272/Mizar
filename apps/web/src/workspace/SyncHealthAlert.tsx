@@ -1,5 +1,6 @@
+import { ReviewDialog } from './ReviewDialog';
 import { useRef, useState } from 'react';
-import { Button, Dialog, StatusBanner } from '../ui';
+import { Button, StatusBanner } from '../ui';
 import { command } from '../preparation/client';
 import { RivalHubSyncControls } from '../operator/RivalHubSyncControls';
 import { SupportExport } from '../debug/SupportExport';
@@ -47,7 +48,7 @@ type AlertProps = {
   onOpen: (path: string) => Promise<void>;
 };
 
-/** Passive operator alert: no Host activation and no Program rendering. */
+/** A website incident opens the centered review window; Program output is unchanged. */
 export function SyncHealthAlert(props: AlertProps) {
   const [dismissed, setDismissed] = useState<string | null>(null);
   const health = props.health;
@@ -102,7 +103,8 @@ function SyncHealthIncident({
       <StatusBanner tone="warning">
         <Button onClick={() => setReviewing(true)}>网站同步需处理</Button>
       </StatusBanner>
-      <Dialog
+      <ReviewDialog
+        kind="sync"
         open={reviewing || Boolean(health.incidentId && !dismissed)}
         modal={false}
         className="workspace-live-roster-alert"
@@ -141,7 +143,7 @@ function SyncHealthIncident({
           <SupportExport />
         </details>
         {feedback ? <p role="status">{feedback}</p> : null}
-      </Dialog>
+      </ReviewDialog>
     </>
   );
 }

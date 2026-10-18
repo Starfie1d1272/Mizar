@@ -1,3 +1,5 @@
+import { ReviewDialog, closeReviewWindow } from './ReviewDialog';
+import { PreflightReview } from './PreflightReview';
 import { RosterCapture } from '../preparation/RosterCapture';
 import { DesktopCanvas } from '../patterns/DesktopCanvas';
 import { CameraControls } from '../orchestration/CameraControls';
@@ -88,7 +90,11 @@ function ContextPanel({
     programCursor,
   );
   const [captureOpen, setCaptureOpen] = useState(false);
-  const [issuesOpen, setIssuesOpen] = useState(false);
+  const [issuesOpen, setIssuesOpen] = useState(
+    () =>
+      window.location.pathname === '/workspace/review' &&
+      new URLSearchParams(window.location.search).get('kind') === 'issues',
+  );
   const [issueError, setIssueError] = useState<{ key: string; message: string } | null>(null);
   const attentionIssues = rosterAlert
     ? issues.filter((issue) => issue.id !== 'steam64' && issue.id !== 'roster')
@@ -157,34 +163,46 @@ function ContextPanel({
           </Dialog>
         </>
       ) : null}
-      <SyncHealthAlert
-        health={connection?.syncHealth}
-        isSource={Boolean(
-          connection?.activeMatchId && connection.activeSourceMatchId === connection.activeMatchId,
-        )}
+      <PreflightReview
+        operator={operator}
+        program={program}
+        cursor={programCursor}
+        connection={connection}
         onOpen={openPreparation}
       />
-      <LiveRosterAlert
-        alert={rosterAlert}
-        suppressAutomatic={connection?.syncHealth?.status === 'attention'}
-        recovered={
-          operator?.runtime.telemetryFreshness === 'fresh' &&
-          operator.identity.state === 'matched' &&
-          operator.activeLineup.state === 'complete' &&
-          operator.activeLineup.retainedCount === 0 &&
-          !operator.identity.issues.some((issue) => issue.code === 'lineup_differs_from_expected')
-        }
-        onReview={() =>
-          void openIssue({
-            id: 'live-roster',
-            summary: '上场选手／账号与网站首发不一致',
-            detail: '',
-            action: '核对网站名单',
-            path: '/matches?tab=roster',
-          })
-        }
-        error={visibleIssueError}
-      />
+      {program?.map.phase !== 'warmup' ? (
+        <SyncHealthAlert
+          health={connection?.syncHealth}
+          isSource={Boolean(
+            connection?.activeMatchId &&
+            connection.activeSourceMatchId === connection.activeMatchId,
+          )}
+          onOpen={openPreparation}
+        />
+      ) : null}
+      {program?.map.phase !== 'warmup' ? (
+        <LiveRosterAlert
+          alert={rosterAlert}
+          suppressAutomatic={connection?.syncHealth?.status === 'attention'}
+          recovered={
+            operator?.runtime.telemetryFreshness === 'fresh' &&
+            operator.identity.state === 'matched' &&
+            operator.activeLineup.state === 'complete' &&
+            operator.activeLineup.retainedCount === 0 &&
+            !operator.identity.issues.some((issue) => issue.code === 'lineup_differs_from_expected')
+          }
+          onReview={() =>
+            void openIssue({
+              id: 'live-roster',
+              summary: '上场选手／账号与网站首发不一致',
+              detail: '',
+              action: '核对网站名单',
+              path: '/matches?tab=roster',
+            })
+          }
+          error={visibleIssueError}
+        />
+      ) : null}
       {attentionIssues.length > 0 ? (
         <div className="workspace-attention" data-multiple={attentionIssues.length > 1}>
           <span role="status" title={attentionIssues.map((issue) => issue.summary).join('；')}>
@@ -202,7 +220,8 @@ function ContextPanel({
         </div>
       ) : null}
       {visibleIssueError && issues.length > 0 ? <p role="alert">{visibleIssueError}</p> : null}
-      <Dialog
+      <ReviewDialog
+        kind="issues"
         open={issuesOpen && issues.length > 0}
         title="本场需要处理"
         modal={false}
@@ -217,7 +236,7 @@ function ContextPanel({
           </section>
         ))}
         {visibleIssueError ? <p role="alert">{visibleIssueError}</p> : null}
-      </Dialog>
+      </ReviewDialog>
     </section>
   );
 }
@@ -686,5 +705,18 @@ export function WorkspacePreview() {
         <WorkspaceDockContent />
       </div>
     </DesktopCanvas>
+  );
+}
+
+export function WorkspaceReview() {
+  return (
+    <div className="workspace-review-native">
+      <WorkspaceLeftContent />
+      <section className="workspace-review-empty">
+        <h1>本场核对</h1>
+        <p>当前没有需要处理的提醒，或数据仍在加载。</p>
+        <Button onClick={() => void closeReviewWindow()}>关闭窗口</Button>
+      </section>
+    </div>
   );
 }

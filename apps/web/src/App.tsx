@@ -25,7 +25,12 @@ import { ProgramPage } from './program/ProgramPage';
 import { getHudEditorFixture, HUD_EDITOR_DEFAULT_FIXTURE_ID } from './program/fixtures/index.js';
 import { ProgramScenePage } from './program/ProgramScenePage';
 import { programSceneForPath } from '@mizar/protocol/program-scenes';
-import { WorkspaceDock, WorkspaceLeft, WorkspacePreview } from './workspace/WorkspacePage';
+import {
+  WorkspaceDock,
+  WorkspaceLeft,
+  WorkspacePreview,
+  WorkspaceReview,
+} from './workspace/WorkspacePage';
 import { useProgramScenes } from './workspace/client';
 import { HudConsolePage } from './operator/HudConsolePage';
 import { useHudConfigClient } from './realtime/hud-config-client';
@@ -651,6 +656,7 @@ export function App() {
   if (pathname === '/preview') return <ProgramPreviewTool />;
   if (pathname === '/program/bp') return <BpPage />;
   if (pathname === '/workspace') return <WorkspacePreview />;
+  if (pathname === '/workspace/review') return <WorkspaceReview />;
   if (pathname === '/workspace/left') return <WorkspaceLeft />;
   if (pathname === '/workspace/dock') return <WorkspaceDock />;
   const programScene = programSceneForPath(pathname);

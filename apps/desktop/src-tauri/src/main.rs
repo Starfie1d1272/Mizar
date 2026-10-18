@@ -413,7 +413,7 @@ fn attempt_game_focus(app: &tauri::AppHandle, request: workspace_focus::Request)
 fn restore_cs2_focus(window: tauri::WebviewWindow, app: tauri::AppHandle, diagnostic_operation_id: Option<String>) -> bool {
     let diagnostic_log = app.state::<DesktopLog>().inner().clone();
     let diagnostic_result: bool = (|| {
-    if !matches!(window.label(), "workspace-left" | "workspace-dock") { return false; }
+    if !matches!(window.label(), "workspace-left" | "workspace-dock" | "tool-review") { return false; }
     let Ok(hwnd) = window.hwnd() else { return false; };
     let source = hwnd.0 as isize;
     if windows_host::foreground() != source { return false; }
@@ -1279,6 +1279,7 @@ fn hide_workspace(app: &tauri::AppHandle) -> Result<(), String> {
             format!("{title}未能隐藏，请在准备中心重试退出工作台。")
         })
     });
+    if let Some(review) = app.get_webview_window("tool-review") { let _ = review.destroy(); }
     present_overlay(app, None);
     result
 }
@@ -1510,6 +1511,34 @@ fn ensure_live_windows(app: &tauri::AppHandle) -> Result<(), String> {
     result
 }
 
+// Review windows are centered on the workspace monitor, independently of the left panel.
+fn present_review(app: &tauri::AppHandle, window: &tauri::WebviewWindow) -> Result<(), String> {
+    let monitor = app.get_webview_window("workspace-left")
+        .and_then(|panel| panel.current_monitor().ok().flatten())
+        .or_else(|| window.primary_monitor().ok().flatten())
+        .ok_or_else(|| "无法确定工作台所在屏幕。".to_string())?;
+    let size = monitor.size();
+    let origin = monitor.position();
+    let scale = (size.width as f64 / 2560.0).min(size.height as f64 / 1440.0);
+    let width = (1000.0 * scale).round() as u32;
+    let height = (1160.0 * scale).round() as u32;
+    window.set_size(tauri::PhysicalSize::new(width, height)).map_err(|e| e.to_string())?;
+    let outer = window.outer_size().map_err(|e| e.to_string())?;
+    window.set_position(tauri::PhysicalPosition::new(
+        origin.x + (size.width as i32 - outer.width as i32) / 2,
+        origin.y + (size.height as i32 - outer.height as i32) / 2,
+    )).map_err(|e| e.to_string())?;
+    window.unminimize().map_err(|e| e.to_string())?;
+    window_presentation::set_visible(window, true).map_err(|e| e.to_string())?;
+    window.set_focus().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn close_review(window: tauri::WebviewWindow) -> Result<(), String> {
+    if window.label() != "tool-review" { return Err("只能关闭当前核对窗口。".into()); }
+    window.destroy().map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn open_tool(app: tauri::AppHandle, tool: String, preset_id: Option<String>, diagnostic_operation_id: Option<String>) -> Result<(), String> {
     let diagnostic_log = app.state::<DesktopLog>().inner().clone();
@@ -1526,10 +1555,17 @@ async fn open_tool(app: tauri::AppHandle, tool: String, preset_id: Option<String
         "bp" => ("tool-bp", "正式 BP 控制", "/operator/bp"),
         "diagnostics" => ("tool-diagnostics", "运行诊断", "/debug"),
         "preview" => ("tool-preview", "节目预览", "/preview"),
+        "review" => ("tool-review", "本场核对", "/workspace/review"),
         _ => return Err("工具无法识别。".into()),
     };
     let mut target = format!("{BASE}{path}").parse::<tauri::Url>()
         .map_err(|error| command_log.preserve_error("open_tool", native_operation_id.as_deref(), &error, "工具地址无法识别。"))?;
+    if tool == "review" {
+        if !app.state::<HostState>().visible.load(Ordering::Relaxed) { return Err("工作台已隐藏，请返回工作台后重新打开核对窗口。".into()); }
+        let kind = preset_id.as_deref().unwrap_or("preflight");
+        if !matches!(kind, "preflight" | "roster" | "sync" | "issues") { return Err("核对页面无法识别。".into()); }
+        target.query_pairs_mut().append_pair("kind", kind);
+    }
     if tool == "hud" {
         if let Some(id) = preset_id.as_deref() {
             if id.is_empty() || id.len() > 256 { return Err("HUD 预设标识无效。".into()); }
@@ -1544,21 +1580,24 @@ async fn open_tool(app: tauri::AppHandle, tool: String, preset_id: Option<String
                 window.eval(&format!("window.dispatchEvent(new CustomEvent('mizar:hud-select-preset', {{detail:{detail}}}));"))
                     .map_err(|error| command_log.preserve_error("open_tool", native_operation_id.as_deref(), &error, "HUD 预设未能打开。"))?;
             }
-        } else {
+        } else if tool != "review" || window.url().ok().as_ref() != Some(&target) {
             window.navigate(target.clone())
                 .map_err(|error| command_log.preserve_error("open_tool", native_operation_id.as_deref(), &error, "工具窗口未能恢复。"))?;
         }
+        if tool == "review" { return present_review(&app, &window); }
         let _ = window.unminimize();
         let _ = window_presentation::set_visible(&window, true);
         let _ = window.set_focus();
         return Ok(());
     }
-    WebviewWindowBuilder::new(&app, label, WebviewUrl::External(target))
+    let window = WebviewWindowBuilder::new(&app, label, WebviewUrl::External(target))
+        .visible(tool != "review")
         .title(format!("Mizar · {title}"))
         .inner_size(1280.0, 800.0)
         .on_navigation(trusted_navigation)
         .build()
         .map_err(|error| command_log.preserve_error("open_tool", native_operation_id.as_deref(), &error, "工具窗口未能打开。"))?;
+    if tool == "review" { present_review(&app, &window)?; }
     Ok(())
 
     }.await;
@@ -2132,6 +2171,7 @@ fn run_desktop(
             open_main,
             present_production,
             open_tool,
+            close_review,
             open_rivalhub_authorization,
             open_steam_api_key,
             open_issue_report,
@@ -2442,6 +2482,7 @@ fn run_desktop(
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 match window.label() {
+                    "tool-review" => { let _ = window.destroy(); }
                     "workspace-left" | "workspace-dock" => {
                         let _ = hide_workspace(window.app_handle());
                         if let Some(dock) = window.app_handle().get_webview_window("workspace-dock")

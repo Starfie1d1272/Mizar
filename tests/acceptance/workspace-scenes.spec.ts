@@ -481,14 +481,11 @@ test('online account differences alert once, preserve unknown identities and rea
     await expect(dialog).toContainText('卡油兔克');
     await expect(dialog).toContainText('网站实时同步仍在进行');
     await expect(dialog).not.toContainText('7656119');
-    expect(await dialog.evaluate((element) => element.matches(':modal'))).toBe(false);
+    expect(await dialog.evaluate((element) => element.matches(':modal'))).toBe(true);
     for (const viewport of [
-      { width: 480, height: 1080 },
-      { width: 384, height: 864 },
-      { width: 320, height: 720 },
-      { width: 640, height: 1440 },
-      { width: 512, height: 1152 },
-      { width: 427, height: 960 },
+      { width: 1920, height: 1080 },
+      { width: 2560, height: 1440 },
+      { width: 3840, height: 2160 },
     ]) {
       await page.setViewportSize(viewport);
       const bounds = await dialog.boundingBox();
@@ -498,7 +495,7 @@ test('online account differences alert once, preserve unknown identities and rea
       expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width);
       expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height);
     }
-    await page.setViewportSize({ width: 480, height: 1080 });
+    await page.setViewportSize({ width: 2560, height: 1440 });
     await page.screenshot({ path: testInfo.outputPath('live-roster-alert.png') });
     await dialog.getByRole('button', { name: '关闭', exact: true }).click();
     await push(changed);
@@ -525,7 +522,7 @@ test('online account differences alert once, preserve unknown identities and rea
     await outsideControl.focus();
     await push(nextDifference);
     await expect(dialog).toBeVisible();
-    await expect(outsideControl).toBeFocused();
+    await expect(outsideControl).not.toBeFocused();
     await dialog.getByRole('button', { name: '关闭', exact: true }).click();
     await push(starters);
     await expect(page.getByRole('button', { name: '查看人员差异' })).not.toBeVisible();
@@ -564,8 +561,8 @@ test('online account differences alert once, preserve unknown identities and rea
     const outside = page.getByRole('button', { name: '比赛资料', exact: true });
     await outside.focus();
     await expect(syncDialog).toBeVisible();
-    await expect(outside).toBeFocused();
-    expect(await syncDialog.evaluate((element) => element.matches(':modal'))).toBe(false);
+    await expect(outside).not.toBeFocused();
+    expect(await syncDialog.evaluate((element) => element.matches(':modal'))).toBe(true);
     await expect(syncDialog.getByRole('link', { name: '打开网站本场工作台' })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath('sync-health-matched.png') });
     await syncDialog.getByRole('button', { name: '关闭', exact: true }).click();

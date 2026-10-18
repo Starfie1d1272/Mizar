@@ -2,10 +2,12 @@ import { useState } from 'react';
 import { Button, StatusBanner } from '../ui';
 import './spectator-controls.css';
 
+export const HIDE_SPECTATOR_HUD_COMMAND = 'cl_draw_only_deathnotices 1';
+
 const commands = [
   {
     label: '隐藏原生 HUD，保留击杀提示',
-    command: 'cl_draw_only_deathnotices 1',
+    command: HIDE_SPECTATOR_HUD_COMMAND,
     copy: '复制隐藏命令',
   },
   { label: '恢复 CS2 原生 HUD', command: 'cl_draw_only_deathnotices 0', copy: '复制恢复命令' },
