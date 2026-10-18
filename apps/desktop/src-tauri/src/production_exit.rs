@@ -420,52 +420,6 @@ pub fn finish_managed_game(
     )
 }
 
-/// Switching to an external instance is explicit, preparation-only and disconnects old camera intent.
-pub fn prepare_external_entry(log: &DesktopLog, expected_revision: &str) -> Result<(), String> {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let (code, view) = request(log, "GET", "/local/v1/production", "", deadline)?;
-    if code != 200 || view["mode"] != "preparation" || view["revision"].as_str() != Some(expected_revision) {
-        return Err("制作状态已变化，请回到准备中心重新选择外部游戏。".into());
-    }
-    disconnect_camera(log)?;
-    invalidate_local_match_exit(log)
-}
-
-/// Existing private runtime identity; browsers cannot renew a native lease.
-pub fn prepare_mulnx(log: &DesktopLog, cs2: &std::path::Path) -> Result<serde_json::Value, String> {
-    let token = runtime_token(log)?;
-    let body = serde_json::json!({"cs2Path": cs2.to_string_lossy()}).to_string();
-    let (code, value) = request_with_identity(log, "POST", "/operator/runtime/mulnx-prepare", &body,
-        Instant::now() + Duration::from_secs(240), Some(&token))?;
-    if code != 200 {
-        log.event("mulnx_prepare", "failure", Some(&format!("http={code}; response={value}")));
-        return Err(value["message"].as_str().unwrap_or("MulNX 准备失败，请重试。").into());
-    }
-    Ok(value)
-}
-
-pub fn camera_session(log: &DesktopLog, action: &str, lease: Option<&str>, revision: Option<&str>) -> Result<serde_json::Value, String> {
-    let token = runtime_token(log)?;
-    let mut body = serde_json::json!({"action": action, "host": log.session_id});
-    if let Some(lease) = lease { body["lease"] = lease.into(); }
-    if let Some(revision) = revision { body["expectedRevision"] = revision.into(); }
-    let (code, value) = request_with_identity(log, "POST", "/operator/runtime/camera-session", &body.to_string(),
-        Instant::now() + Duration::from_secs(2), Some(&token))?;
-    if code != 200 || value["ok"] != true {
-        return Err("原生运镜会话已失效；请结束制作后重新借用。".into());
-    }
-    Ok(value)
-}
-
-pub fn disconnect_camera(log: &DesktopLog) -> Result<(), String> {
-    let (code, camera) = request(log, "POST", "/operator/orchestration", r#"{"action":"disconnect"}"#,
-        Instant::now() + Duration::from_secs(2))?;
-    if code != 200 || camera["status"]["held"] != true || camera["status"]["connected"] != false {
-        return Err("旧运镜连接未能隔离，请检查本地服务；执行及停止均未确认。".into());
-    }
-    Ok(())
-}
-
 pub fn finish_companion(log: &DesktopLog) -> Result<(), String> {
     finish_production(log, "shutdown")
 }

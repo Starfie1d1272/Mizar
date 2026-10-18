@@ -1,4 +1,3 @@
-import { CameraSettings } from '../orchestration/CameraSettings';
 import { Cs2ConsoleSettings } from '../debug/Cs2ConsoleSettings';
 import { DiagnosticDeliverySettings } from '../debug/DiagnosticDeliverySettings';
 import { MusicSettings } from '../music/MusicSettings';
@@ -223,13 +222,7 @@ export function Settings({ tab }: { tab: string }) {
       </Button>
     </details>
   ) : null;
-  if (tab === 'music')
-    return (
-      <>
-        <MusicSettings />
-        <CameraSettings />
-      </>
-    );
+  if (tab === 'music') return <MusicSettings />;
 
   return (
     <>

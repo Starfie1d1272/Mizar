@@ -1,6 +1,6 @@
 import type { ProgramProjection } from '@mizar/core/projection';
 import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
-import type { MusicGroup, MusicTrack } from '@mizar/protocol/music';
+import type { MusicGroup } from '@mizar/protocol/music';
 import { isRegulationHalftime } from '../program-scenes/presentation.js';
 
 export interface MusicTruth {
@@ -11,8 +11,6 @@ export interface MusicTruth {
 export interface MusicCue {
   group: MusicGroup;
   key: string;
-  track?: MusicTrack;
-  scope?: string;
 }
 export function musicMapKey(p: ProgramProjection) {
   return JSON.stringify([

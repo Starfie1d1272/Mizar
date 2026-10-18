@@ -23,7 +23,6 @@ import { QUALIFICATION_NODE_VERSION } from './runtime-config.mjs';
 import { copyNodeRuntime, pruneDevelopmentFiles } from './portable-files.mjs';
 import { createBuildTimer } from './build-timings.mjs';
 import { readAppVersion, windowsBundleName } from './app-version.mjs';
-import { stageMulnxBundle } from './mulnx-bundle.mjs';
 
 const REPOSITORY = 'Starfie1d1272/Mizar';
 const QUALIFICATION_SCHEMA_VERSION = qualificationContract.schemaVersion;
@@ -483,8 +482,6 @@ async function main() {
       options.allowDirty ||
       options.skipNodeRuntime ||
       process.platform !== 'win32';
-    if (!developmentOnly)
-      await timed('mulnx-bundle', () => stageMulnxBundle(rootDir, join(resourcesDir, 'mulnx')));
     if (process.platform === 'win32' && !options.skipNodeRuntime) {
       const desktopDir = join(rootDir, 'apps', 'desktop', 'src-tauri');
       await timed('desktop-cargo-build', () =>
