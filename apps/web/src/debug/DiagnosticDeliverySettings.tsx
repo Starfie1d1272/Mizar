@@ -72,7 +72,11 @@ export function DiagnosticProblemReport() {
     </details>
   );
 }
-export function DiagnosticDeliverySettings() {
+export function DiagnosticDeliverySettings({
+  showProblemReport = true,
+}: {
+  showProblemReport?: boolean;
+}) {
   const [refresh, setRefresh] = useState(0);
   const value = useLocalRead<DeliveryStatus>('/local/v1/diagnostics/delivery', 5000, refresh);
   const [accepted, setAccepted] = useState(false);
@@ -173,7 +177,7 @@ export function DiagnosticDeliverySettings() {
           </p>
         ) : null}
       </details>
-      <DiagnosticProblemReport />
+      {showProblemReport ? <DiagnosticProblemReport /> : null}
     </div>
   );
 }

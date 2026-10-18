@@ -132,6 +132,11 @@ export function registerBpWorkspaceRoutes(
         message: '比赛上下文已更新，请核对后再保存。',
       });
     const activeBinding = options.controller.getActiveBinding();
+    if (activeBinding && localAuthoringMode(activeBinding) !== 'standalone')
+      return reply.code(409).send({
+        error: 'bp_website_readonly',
+        message: '网站比赛的 BP 请在网站修改，Mizar 会自动同步。',
+      });
     const eventRules =
       activeBinding === undefined
         ? undefined

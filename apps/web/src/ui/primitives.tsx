@@ -189,6 +189,7 @@ export function Dialog({
   className,
   canClose,
   modal = true,
+  showCloseButton = true,
 }: {
   open: boolean;
   title: string;
@@ -198,6 +199,7 @@ export function Dialog({
   canClose?: () => boolean;
   /** Passive operator alerts must not move focus from the game or lock the workspace. */
   modal?: boolean;
+  showCloseButton?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const id = useId();
@@ -242,16 +244,18 @@ export function Dialog({
     >
       <h2 id={id}>{title}</h2>
       {children}
-      <Button
-        onClick={() => {
-          if (!canClose || canClose()) {
-            if (modal) ref.current?.close();
-            else onClose();
-          }
-        }}
-      >
-        关闭
-      </Button>
+      {showCloseButton ? (
+        <Button
+          onClick={() => {
+            if (!canClose || canClose()) {
+              if (modal) ref.current?.close();
+              else onClose();
+            }
+          }}
+        >
+          关闭
+        </Button>
+      ) : null}
     </dialog>
   );
 }

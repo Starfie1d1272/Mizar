@@ -1,0 +1,28 @@
+{
+  "viewport": [
+    2560,
+    1440
+  ],
+  "errors": [],
+  "geometry": {
+    "game": {
+      "x": 640,
+      "y": 0,
+      "width": 1920,
+      "height": 1080
+    },
+    "dock": {
+      "x": 640,
+      "y": 1080,
+      "width": 1920,
+      "height": 360
+    },
+    "leftTop": {
+      "x": 0,
+      "y": 0,
+      "width": 640,
+      "height": 1080
+    }
+  },
+  "source": "Current application; scene/director, music and camera read states simulated for 02/03 only. CS2 and OBS unavailable. No control command sent."
+}

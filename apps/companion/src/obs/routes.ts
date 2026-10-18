@@ -121,7 +121,7 @@ export function registerObsRoutes(
           );
           const findings =
             action === 'ensure'
-              ? await options.adapter.ensure()
+              ? await options.adapter.ensure(options.activeScene)
               : action === 'repair'
                 ? await options.adapter.repair(options.activeScene)
                 : await options.adapter.check();

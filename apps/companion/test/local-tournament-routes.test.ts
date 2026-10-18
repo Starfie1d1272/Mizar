@@ -5,6 +5,7 @@ import { join } from 'node:path';
 
 import type { MatchDocumentV1 } from '@mizar/protocol/context';
 import type { BpWorkspace } from '@mizar/protocol/bp';
+import { toMatchContext, type BroadcastManifest } from '@mizar/rivalhub';
 import { DEFAULT_LOCAL_BP_MAP_POOL } from '@mizar/core/projection';
 import { expect, it } from 'vitest';
 
@@ -415,6 +416,137 @@ it('does not reuse Host exit qualifications after restarting with a restored loc
     expect(fresh.contextRevision).not.toBe(old.contextRevision);
     expect((await host({ action: 'confirm', qualification: fresh })).statusCode).toBe(200);
     expect((await trash()).statusCode).toBe(200);
+  } finally {
+    await app.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+it('candidate edits preserve production and reject stale or active writes', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-candidate-'));
+  const app = buildApp({
+    matchManifestPath: join(directory, 'match.json'),
+    localTournamentPath: join(directory, 'library.json'),
+  });
+  const headers = { origin: 'http://127.0.0.1:3000' };
+  try {
+    await app.ready();
+    const created = await app.inject({
+      method: 'POST',
+      url: '/operator/local-match/create',
+      headers,
+      payload: { teamA: 'A', teamB: 'B', format: 'bo3' },
+    });
+    expect(created.statusCode).toBe(200);
+    const { matchId } = created.json<{ matchId: string }>();
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/operator/local-match/create',
+          headers,
+          payload: { teamA: 'NJU C', teamB: 'NJU D', format: 'bo1' },
+        })
+      ).statusCode,
+    ).toBe(200);
+    const before = (await app.inject('/local/v1/tournament')).json<TournamentView>();
+    const activeDocument = (await app.inject('/local/v1/match-document')).body;
+    const production = (await app.inject('/local/v1/production')).body;
+    const candidate = before.matches.find((item) => item.matchId === matchId)!;
+    const candidateUrl = `/operator/local-match/${matchId}/save`;
+    const payload = {
+      expectedDocument: candidate,
+      document: { ...candidate, stageLabel: 'Candidate edited', scoreA: 99, maps: [] },
+    };
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: candidateUrl,
+          headers: { origin: 'https://untrusted.example' },
+          payload,
+        })
+      ).statusCode,
+    ).toBe(403);
+    const saves = await Promise.all(
+      ['Candidate edited', 'Concurrent editor'].map((stageLabel) =>
+        app.inject({
+          method: 'POST',
+          url: candidateUrl,
+          headers,
+          payload: { ...payload, document: { ...payload.document, stageLabel } },
+        }),
+      ),
+    );
+    expect(saves.map((response) => response.statusCode).sort()).toEqual([200, 409]);
+    const after = (await app.inject('/local/v1/tournament')).json<TournamentView>();
+    expect(after.selectedMatchId).toBe(before.selectedMatchId);
+    expect(after.contextRevision).toBe(before.contextRevision);
+    expect((await app.inject('/local/v1/match-document')).body).toBe(activeDocument);
+    expect((await app.inject('/local/v1/production')).body).toBe(production);
+    const edited = after.matches.find((item) => item.matchId === matchId)!;
+    expect(['Candidate edited', 'Concurrent editor']).toContain(edited.stageLabel);
+    expect(edited.scoreA).toBe(candidate.scoreA);
+    expect(edited.maps).toEqual(candidate.maps);
+    expect(edited.veto).toEqual(candidate.veto);
+    const active = after.matches.find((item) => item.matchId === after.selectedMatchId)!;
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: `/operator/local-match/${active.matchId}/save`,
+          headers,
+          payload: {
+            expectedDocument: active,
+            document: { ...active, stageLabel: 'Reject active' },
+          },
+        })
+      ).statusCode,
+    ).toBe(409);
+    expect(
+      (await app.inject({ method: 'POST', url: candidateUrl, headers, payload })).statusCode,
+    ).toBe(409);
+  } finally {
+    await app.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+it('rejects local BP overrides for website matches without changing the website binding', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-website-readonly-'));
+  const manifest = JSON.parse(
+    await readFile(
+      new URL(
+        '../../../packages/rivalhub/test/fixtures/broadcast-manifest-v1.valid.json',
+        import.meta.url,
+      ),
+      'utf8',
+    ),
+  ) as BroadcastManifest;
+  const app = buildApp({
+    matchManifestPath: join(directory, 'match.json'),
+    matchContextBinding: {
+      manifest,
+      context: toMatchContext(manifest),
+      origin: 'online',
+      freshness: 'fresh',
+      diagnostics: [],
+    },
+  });
+  try {
+    await app.ready();
+    const before = (await app.inject({ url: '/local/v1/bp-workspace' })).json<BpWorkspace>();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/operator/bp-local-save',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: { expectedContextRevision: before.contextRevision, draft: before.authoringDraft },
+    });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ error: 'bp_website_readonly' });
+    expect((await app.inject({ url: '/local/v1/bp-workspace' })).json<BpWorkspace>()).toEqual(
+      before,
+    );
   } finally {
     await app.close();
     await rm(directory, { recursive: true, force: true });

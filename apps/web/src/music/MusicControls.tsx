@@ -1,6 +1,6 @@
 import './music.css';
 import { useState } from 'react';
-import type { MusicConfig, MusicStatus } from '@mizar/protocol/music';
+import type { MusicConfig, MusicGroup, MusicStatus } from '@mizar/protocol/music';
 import { Button, Field } from '../ui';
 import { useLocalRead, command } from '../preparation/client';
 
@@ -18,7 +18,15 @@ export const MUSIC_LABELS = {
   matchVictory: '整场胜利',
   opening: '开场短音效',
 } as const;
-export function MusicControls({ compact = false }: { compact?: boolean }) {
+export function MusicControls({
+  compact = false,
+  volumeDisabled = false,
+  onVolumeChange,
+}: {
+  compact?: boolean;
+  volumeDisabled?: boolean;
+  onVolumeChange?: (group: MusicGroup, volume: number) => void;
+}) {
   const view = useLocalRead<MusicView>('/local/v1/music', 1000);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -27,6 +35,8 @@ export function MusicControls({ compact = false }: { compact?: boolean }) {
     setError('');
     try {
       await command('/operator/music', body);
+      if (body.action === 'volume')
+        onVolumeChange?.(body.group as MusicGroup, body.volume as number);
     } catch {
       setError('音乐操作未完成，请检查本机服务与 OBS 后重试。');
     } finally {
@@ -50,8 +60,9 @@ export function MusicControls({ compact = false }: { compact?: boolean }) {
       </span>
       {status.bgm ? (
         <Field
-          label={compact ? '' : '音乐音量'}
-          aria-label={compact ? '' : '音乐音量'}
+          label={compact ? '' : '当前播放音量'}
+          aria-label="音乐音量"
+          disabled={busy || volumeDisabled}
           type="range"
           min="0"
           max="1"
@@ -66,7 +77,7 @@ export function MusicControls({ compact = false }: { compact?: boolean }) {
           }}
         />
       ) : null}
-      <Button aria-label="停止音乐" onClick={() => void send({ action: 'stop' })}>
+      <Button disabled={busy} aria-label="停止音乐" onClick={() => void send({ action: 'stop' })}>
         {compact ? '停止' : '停止音乐'}
       </Button>
       <Button

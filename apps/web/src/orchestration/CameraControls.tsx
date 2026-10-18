@@ -1,13 +1,22 @@
 import { useState } from 'react';
 import type { OrchestrationView } from '@mizar/protocol/orchestration';
-import { Button } from '../ui';
+import { Button, StatusPill } from '../ui';
 import { command, useLocalRead } from '../preparation/client';
 
-export function CameraControls({ setup = false }: { setup?: boolean }) {
+export function CameraControls({
+  setup = false,
+  workspace = false,
+}: {
+  setup?: boolean;
+  workspace?: boolean;
+}) {
   const view = useLocalRead<OrchestrationView>('/local/v1/orchestration', 1000);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  if (!view || (!setup && !view.preset.maps.length)) return null;
+  if (!view || (!setup && !workspace && !view.preset.maps.length))
+    return workspace ? (
+      <p className="workspace-camera-empty">运镜状态暂不可用，请检查本地服务。</p>
+    ) : null;
   const s = view.status;
   const send = async (action: string) => {
     setBusy(true);
@@ -26,11 +35,33 @@ export function CameraControls({ setup = false }: { setup?: boolean }) {
     }
   };
   return (
-    <div className="music-controls" aria-label="自动运镜">
-      <span className="music-controls__track">
-        运镜 · {s.held ? '人工' : '自动'}
-        {s.current ? ` · ${s.current}` : ''} ·{' '}
-        {s.control.state === 'blocked' ? '原生交接待确认' : s.message}
+    <div
+      className={workspace ? 'workspace-camera-controls' : 'music-controls'}
+      aria-label="自动运镜"
+    >
+      {workspace ? (
+        <div className="workspace-camera-summary">
+          <StatusPill tone={s.held ? 'warning' : 'info'}>
+            {s.held ? '人工保持' : '自动运镜'}
+          </StatusPill>
+          <strong>{s.map ?? '地图待确认'}</strong>
+          <span title={s.pack ?? undefined}>{s.pack ?? '未配运镜包'}</span>
+        </div>
+      ) : null}
+      <span
+        className="music-controls__track"
+        title={error || s.message}
+        role={workspace && error ? 'alert' : undefined}
+      >
+        {workspace && error ? (
+          error
+        ) : (
+          <>
+            {workspace ? '本次请求' : `运镜 · ${s.held ? '人工' : '自动'}`}
+            {s.current ? ` · ${s.current}` : ''} ·{' '}
+            {s.control.state === 'blocked' ? '原生交接待确认' : s.message}
+          </>
+        )}
       </span>
       {setup ? (
         <span>
@@ -46,25 +77,38 @@ export function CameraControls({ setup = false }: { setup?: boolean }) {
           {s.connected ? '断开 MulNX' : '连接 MulNX'}
         </Button>
       ) : null}
-      <Button
-        onClick={() => void send('hold')}
-        title="请求清空 MulNX 全部运镜槽；实际停止需在游戏内确认；不会关闭其他包的自动列表"
-      >
-        接管运镜
-      </Button>
-      <Button disabled={busy || !s.connected || !s.current} onClick={() => void send('skip')}>
-        跳过本次
-      </Button>
-      {s.held && s.connected ? (
+      {!s.held || s.current ? (
+        <>
+          <Button
+            disabled={busy}
+            onClick={() => void send('hold')}
+            title="请求清空 MulNX 全部运镜槽；实际停止需在游戏内确认；不会关闭其他包的自动列表"
+          >
+            接管运镜
+          </Button>
+          <Button disabled={busy || !s.connected || !s.current} onClick={() => void send('skip')}>
+            跳过本次
+          </Button>
+        </>
+      ) : null}
+      {s.held ? (
         <Button
-          disabled={busy || !view.ready || !s.pack || !s.isolated || s.control.state === 'blocked'}
+          variant="primary"
+          disabled={
+            busy ||
+            !s.connected ||
+            !view.ready ||
+            !s.pack ||
+            !s.isolated ||
+            s.control.state === 'blocked'
+          }
           title={`确认游戏内当前地图 ${s.map ?? '未知'}，活动包 ${s.pack ?? '未配置'}，并允许清空全部运镜槽`}
           onClick={() => void send('resume')}
         >
-          确认活动隔离包并启用自动
+          {workspace ? '确认运镜包并恢复自动' : '确认活动隔离包并启用自动'}
         </Button>
       ) : null}
-      {error ? <span role="alert">{error}</span> : null}
+      {error && !workspace ? <span role="alert">{error}</span> : null}
     </div>
   );
 }

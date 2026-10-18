@@ -4,7 +4,6 @@ import type { Production } from './client';
 
 export function SpectatorWorkflow({
   capabilities,
-  production,
 }: {
   capabilities: readonly { label: string; ready: boolean; reason: string }[] | null;
   production: Production | null;
@@ -15,7 +14,7 @@ export function SpectatorWorkflow({
   const obs = capabilities?.find((item) => item.label === 'OBS');
   return (
     <Panel className="spectator-workflow">
-      <details open={production?.mode === 'preparation' && !gameData?.ready}>
+      <details>
         <summary>
           开播流程 ·{' '}
           {gameData?.ready
@@ -38,13 +37,7 @@ export function SpectatorWorkflow({
           </li>
           <li>
             <strong>{status?.running ? 'CS2 已启动' : '从 Mizar 启动游戏'}</strong>
-            <span>
-              点击右上角「
-              {production?.mode === 'preparation' && window.__TAURI_INTERNALS__
-                ? '启动游戏并打开工作台'
-                : '打开直播工作台'}
-              」。
-            </span>
+            <span>点击右上角「打开直播工作台」，按当前游戏状态启动或接入 CS2。</span>
           </li>
           <li>
             <strong>{gameData?.ready ? '已收到游戏数据' : '连接本场 GOTV'}</strong>

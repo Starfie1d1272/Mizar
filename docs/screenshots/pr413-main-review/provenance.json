@@ -1,0 +1,683 @@
+{
+  "capturedAt": "2026-10-18T16:40:39.005Z",
+  "sourceCommit": "51498aa771131007038f4149fbc52c37b4f1b063",
+  "note": "2026-10-19 北京时间；2560×1440 完整视口、deviceScaleFactor=1；补图逐张覆盖原图，未裁切或合成。原生 IPC、OBS 与网站模拟范围逐图记录。",
+  "errors": [],
+  "entries": [
+    {
+      "file": "01-home-empty.png",
+      "label": "空本场：RivalHub 定向入口",
+      "url": "http://127.0.0.1:4180/",
+      "source": "当前比赛为空；配对状态为模拟；比赛库使用真实本地接口",
+      "geometry": {
+        "width": 2560,
+        "height": 1440,
+        "scrollWidth": 2560,
+        "scrollHeight": 1440,
+        "panels": []
+      },
+      "sha256": "af60e1e14193984af8680d4c0bdd61f729546adf8cbcb9c43c87502d7116f8b0",
+      "imageSize": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "file": "02-website-library.png",
+      "label": "网站缓存比赛库",
+      "url": "http://127.0.0.1:4180/resources?source=website",
+      "source": "模拟网站授权与缓存响应；本地创建的比赛文档作为演示缓存",
+      "geometry": {
+        "width": 2560,
+        "height": 1440,
+        "scrollWidth": 2560,
+        "scrollHeight": 1440,
+        "panels": []
+      },
+      "sha256": "dc001b00009531fd4611d740eaa364fa20d2fc3e73085d9bb18d80ecd5e7d830",
+      "imageSize": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "file": "03-home-selected.png",
+      "label": "本场准备",
+      "url": "http://127.0.0.1:4180/",
+      "source": "真实本地 Companion 接口；本地创建的演示比赛；OBS 未连接",
+      "geometry": {
+        "width": 2560,
+        "height": 1440,
+        "scrollWidth": 2560,
+        "scrollHeight": 1440,
+        "panels": []
+      },
+      "sha256": "5e1e4687650dea40620490d813ce506e1e5c53c89743d48da352b6a773ec30ac",
+      "imageSize": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "file": "04-local-library.png",
+      "label": "本地比赛库",
+      "url": "http://127.0.0.1:4180/resources",
+      "source": "真实本地 Companion 接口；本地创建的演示比赛；OBS 未连接",
+      "geometry": {
+        "width": 2560,
+        "height": 1440,
+        "scrollWidth": 2560,
+        "scrollHeight": 1440,
+        "panels": []
+      },
+      "sha256": "6e40c0494d2b88b03314926fe8c80b0ea4c56ced96e16939274a86df2e6768f3",
+      "imageSize": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "file": "05-candidate.png",
+      "label": "候选比赛",
+      "url": "http://127.0.0.1:4180/resources?resource=146a3c13-6071-42a4-892b-df811feb291d",
+      "source": "真实本地 Companion 接口；本地创建的演示比赛；OBS 未连接",
+      "geometry": {
+        "width": 2560,
+        "height": 1440,
+        "scrollWidth": 2560,
+        "scrollHeight": 1440,
+        "panels": []
+      },
+      "sha256": "d810af0f128093452b2af7e1709617590387844853216aa145e9bac7850afa3f",
+      "imageSize": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "file": "06-candidate-edit.png",
+      "label": "候选比赛编辑",
+      "url": "http://127.0.0.1:4180/resources?resource=146a3c13-6071-42a4-892b-df811feb291d",
+      "source": "真实候选保存接口；未切换当前本场",
+      "geometry": {
+        "width": 2560,
+        "height": 1440,
+        "scrollWidth": 2560,
+        "scrollHeight": 1440,
+        "panels": []
+      },
+      "sha256": "3b2873b00b00d63fcee844d23dad2d3417a9e3fc7c36696c5b3a2191706663c5",
+      "imageSize": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "file": "07-match.png",
+      "label": "比赛资料与地图 BP",
+      "url": "http://127.0.0.1:4180/matches",
+      "source": "真实本地 Companion 接口；本地创建的演示比赛；OBS 未连接",
+      "geometry": {
+        "width": 2560,
+        "height": 1440,
+        "scrollWidth": 2560,
+        "scrollHeight": 1440,
+        "panels": []
+      },
+      "sha256": "b14df65cdd9dc5062ef8897ea7f9b2d575bda1c646aabc35e85d13b6db47eb29",
+      "imageSize": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "file": "08-map-results.png",
+      "label": "只记录地图结果",
+      "url": "http://127.0.0.1:4180/matches",
+      "source": "真实本地 BP 工作区与地图编辑对话框",
+      "geometry": {
+        "width": 2560,
+        "height": 1440,
+        "scrollWidth": 2560,
+        "scrollHeight": 1440,
+        "panels": []
+      },
+      "sha256": "87db968f172576c8abf93e0d24fc0d683637023836e63c54a498a52f22eefe3f",
+      "imageSize": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "file": "10-full-bp.png",
+      "label": "完整 BP 编辑",
+      "url": "http://127.0.0.1:4180/matches",
+      "source": "真实本地 BP 工作区与编辑器",
+      "geometry": {
+        "width": 2560,
+        "height": 1440,
+        "scrollWidth": 2560,
+        "scrollHeight": 1440,
+        "panels": []
+      },
+      "sha256": "6e4bb31de701660c7ee9783d3e475faf33bad992486d461cf0e6e2a55b38cc66",
+      "imageSize": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "file": "11-roster.png",
+      "label": "队伍与名单",
+      "url": "http://127.0.0.1:4180/matches?tab=roster",
+      "source": "真实本地 Companion 接口；本地创建的演示比赛；OBS 未连接",
+      "geometry": {
+        "width": 2560,
+        "height": 1440,
+        "scrollWidth": 2560,
+        "scrollHeight": 1440,
+        "panels": []
+      },
+      "sha256": "aa0687a4fe2d8ac961c3a31c1cb9ddd7d002603f87e30e9c23e59202106f5bb4",
+      "imageSize": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "file": "12-hud-directory.png",
+      "label": "HUD 目录与示例来源",
+      "url": "http://127.0.0.1:4180/picture",
+      "source": "真实本地 Companion 接口；本地创建的演示比赛；OBS 未连接",
+      "geometry": {
+        "width": 2560,
+        "height": 1440,
+        "scrollWidth": 2560,
+        "scrollHeight": 1440,
+        "panels": []
+      },
+      "sha256": "ceff4b98d494f73fd202d865c4257f74adf908a57d009a79f2ff9a6c34574e1a",
+      "imageSize": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "file": "13-hud-pending.png",
+      "label": "HUD 已保存新版本待应用",
+      "url": "http://127.0.0.1:4180/picture",
+      "source": "真实 HudConfigStore：另存、应用、修改保存；当前播出保留旧版本",
+      "geometry": {
+        "width": 2560,
+        "height": 1440,
+        "scrollWidth": 2560,
+        "scrollHeight": 1440,
+        "panels": []
+      },
+      "sha256": "d993e8d3676fde6ef10ec0b29742664c54434819ac36dfe9dd0e64fbcee4d84d",
+      "imageSize": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "file": "14-hud-applied.png",
+      "label": "HUD 应用后的状态",
+      "url": "http://127.0.0.1:4180/picture",
+      "source": "真实应用接口已确认播出快照更新",
+      "geometry": {
+        "width": 2560,
+        "height": 1440,
+        "scrollWidth": 2560,
+        "scrollHeight": 1440,
+        "panels": []
+      },
+      "sha256": "945b52a941fd39d65e687d29a152a4a04654c7f9c1804cdec0007ecac196fdb1",
+      "imageSize": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "file": "15-hud-bp.png",
+      "label": "HUD 目录中的本场 BP 来源",
+      "url": "http://127.0.0.1:4180/picture",
+      "source": "本场无完整 BP，显示真实空态；不标为示例",
+      "geometry": {
+        "width": 2560,
+        "height": 1440,
+        "scrollWidth": 2560,
+        "scrollHeight": 1440,
+        "panels": []
+      },
+      "sha256": "f4d4fc8761735d31af37eb2d696fa76731da084573db294b662165eec1582295",
+      "imageSize": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "file": "16-hud-editor.png",
+      "label": "HUD 编辑器",
+      "url": "http://127.0.0.1:4180/operator/hud?hud-config=companion&mode=fixture",
+      "source": "真实 HUD 配置接口；仓库 EPL HUD 示例回放",
+      "geometry": {
+        "width": 2560,
+        "height": 1440,
+        "scrollWidth": 2560,
+        "scrollHeight": 1440,
+        "panels": []
+      },
+      "sha256": "50ad266018aabd47bdb0eafecda10c4acf0d81881492cc4425266463aea21248",
+      "imageSize": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "file": "17-local-overlay.png",
+      "label": "本机 HUD 与原生命令",
+      "url": "http://127.0.0.1:4180/picture?tab=overlay",
+      "source": "真实本地 Companion 接口；本地创建的演示比赛；OBS 未连接",
+      "geometry": {
+        "width": 2560,
+        "height": 1440,
+        "scrollWidth": 2560,
+        "scrollHeight": 1440,
+        "panels": []
+      },
+      "sha256": "b76b400217fb5df397d3f7ea3e3a26e126fcf675b0d52f3ca37ea24a55cd223a",
+      "imageSize": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "file": "18-game.png",
+      "label": "游戏连接与下次启动偏好",
+      "url": "http://127.0.0.1:4180/settings?tab=gsi&native=1",
+      "source": "原生 GSI/游戏状态使用模拟 IPC；配置界面为真实组件",
+      "geometry": {
+        "width": 2560,
+        "height": 1440,
+        "scrollWidth": 2560,
+        "scrollHeight": 1440,
+        "panels": []
+      },
+      "sha256": "8c4a329586ad8e8321369d53b0b90362612b4c98f28067c2f2fdf57a2001467b",
+      "imageSize": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "file": "19-obs-disconnected.png",
+      "label": "OBS 首次连接",
+      "url": "http://127.0.0.1:4180/settings?tab=obs",
+      "source": "模拟 OBS 未连接；真实设置组件",
+      "geometry": {
+        "width": 2560,
+        "height": 1440,
+        "scrollWidth": 2560,
+        "scrollHeight": 1440,
+        "panels": []
+      },
+      "sha256": "2cefc002264d6a0ddd93b58efd726f1499657b173a9dd8b34b229aa2ec4f0353",
+      "imageSize": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "file": "20-obs-ready.png",
+      "label": "OBS 自动准备完成",
+      "url": "http://127.0.0.1:4180/settings?tab=obs",
+      "source": "模拟 OBS 连接/配置检查状态；不代表真实捕获与音频通过",
+      "geometry": {
+        "width": 2560,
+        "height": 1440,
+        "scrollWidth": 2560,
+        "scrollHeight": 1440,
+        "panels": []
+      },
+      "sha256": "0f6fe342feb7ab853c8f50ebb015e36898981ddedf9bcee191cd90dcf24eb93e",
+      "imageSize": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "file": "21-obs-deferred.png",
+      "label": "输出中暂缓自动准备",
+      "url": "http://127.0.0.1:4180/settings?tab=obs",
+      "source": "模拟输出中与音频缺失；真实自动准备暂缓界面",
+      "geometry": {
+        "width": 2560,
+        "height": 1440,
+        "scrollWidth": 2560,
+        "scrollHeight": 1440,
+        "panels": []
+      },
+      "sha256": "4e9ca86c42995ea2ff8262c0dc1fc64f527494d4ca7b8db733e61881830ad8f0",
+      "imageSize": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "file": "22-music.png",
+      "label": "音乐七组配置",
+      "url": "http://127.0.0.1:4180/settings?tab=music",
+      "source": "真实本地 Companion 接口；本地创建的演示比赛；OBS 未连接",
+      "geometry": {
+        "width": 2560,
+        "height": 1440,
+        "scrollWidth": 2560,
+        "scrollHeight": 1440,
+        "panels": []
+      },
+      "sha256": "d64280fdfff84e60f74b1fb98ffe4a162fa37ea1e161b3e50c729d1a8895588d",
+      "imageSize": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "file": "23-camera.png",
+      "label": "MulNX 更新与运镜包选择",
+      "url": "http://127.0.0.1:4180/settings?tab=music&section=camera&native=1",
+      "source": "真实编排配置；MulNX 安装版本/包目录及原生 IPC 使用模拟状态",
+      "geometry": {
+        "width": 2560,
+        "height": 1440,
+        "scrollWidth": 2560,
+        "scrollHeight": 1440,
+        "panels": []
+      },
+      "sha256": "4919f9d0caa6c6971c6f04dc7a7f159cc1fb43eaa7836653149bad2428ff8fe3",
+      "imageSize": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "file": "24-platform.png",
+      "label": "赛事平台与同步",
+      "url": "http://127.0.0.1:4180/settings?tab=rivalhub",
+      "source": "模拟授权/缓存与真实平台设置组件",
+      "geometry": {
+        "width": 2560,
+        "height": 1440,
+        "scrollWidth": 2560,
+        "scrollHeight": 1440,
+        "panels": []
+      },
+      "sha256": "487e8773d6bb464f3205dd97e17b71c0223e9fe7ef8b9d78ec4444e55a0d8882",
+      "imageSize": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "file": "25-advanced.png",
+      "label": "高级设置与诊断",
+      "url": "http://127.0.0.1:4180/settings?tab=advanced",
+      "source": "真实本地 Companion 接口；本地创建的演示比赛；OBS 未连接",
+      "geometry": {
+        "width": 2560,
+        "height": 1440,
+        "scrollWidth": 2560,
+        "scrollHeight": 1440,
+        "panels": []
+      },
+      "sha256": "29b4b5d9bce43dcb7eb6324bb6984d853f962a2bbb66c3139fb3fb71f7eef911",
+      "imageSize": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "file": "26-demo.png",
+      "label": "Demo 试播",
+      "url": "http://127.0.0.1:4180/?demoTest=1",
+      "source": "真实本地 Companion 接口；本地创建的演示比赛；OBS 未连接",
+      "geometry": {
+        "width": 2560,
+        "height": 1440,
+        "scrollWidth": 2560,
+        "scrollHeight": 1440,
+        "panels": []
+      },
+      "sha256": "05cb558169ec840c7efec7fd0afa508b40e6666d48daf5635d030e5cbbe1b60b",
+      "imageSize": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "file": "27-diagnostics.png",
+      "label": "诊断与导出",
+      "url": "http://127.0.0.1:4180/debug",
+      "source": "真实本地 Companion 接口；本地创建的演示比赛；OBS 未连接",
+      "geometry": {
+        "width": 2560,
+        "height": 1440,
+        "scrollWidth": 2560,
+        "scrollHeight": 1440,
+        "panels": []
+      },
+      "sha256": "bd3f1aa5feb26cebce1a4123c0e9bec1d522c71b86de2e6a757cff96de47e9c0",
+      "imageSize": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "file": "28-website-match.png",
+      "label": "网站比赛 BP 只读",
+      "url": "http://127.0.0.1:4180/matches",
+      "source": "模拟网站来源；文档为本地创建的演示比赛；真实只读界面",
+      "geometry": {
+        "width": 2560,
+        "height": 1440,
+        "scrollWidth": 2560,
+        "scrollHeight": 1440,
+        "panels": []
+      },
+      "sha256": "652fae13e428c258a16aaca7c9e7c0ace9b58b7608343c66394cfe2bba45ffdf",
+      "imageSize": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "file": "29-workspace.png",
+      "label": "现场工作台与直播事实状态",
+      "url": "http://127.0.0.1:4180/workspace",
+      "source": "仓库 EPL Program/Operator 样例；模拟 OBS 直播/Bilibili 开播；游戏占位、无真实 OBS 画面",
+      "geometry": {
+        "width": 2560,
+        "height": 1440,
+        "scrollWidth": 2560,
+        "scrollHeight": 1440,
+        "panels": [
+          {
+            "class": "workspace-left mizar-surface",
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 1440
+          },
+          {
+            "class": "workspace-preview__game",
+            "x": 640,
+            "y": 0,
+            "width": 1920,
+            "height": 1080
+          },
+          {
+            "class": "workspace-dock mizar-surface",
+            "x": 640,
+            "y": 1080,
+            "width": 1920,
+            "height": 360
+          }
+        ]
+      },
+      "sha256": "75f5851436ad85adcb010a499c8aeff31fa1a61d8151f2e9a2af43990f3d39b1",
+      "imageSize": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "file": "30-recovery-uncertain.png",
+      "label": "Steam 启动待确认",
+      "url": "http://127.0.0.1:4180/?native=1&recovery=uncertain",
+      "source": "原生 IPC 故障模拟；真实恢复组件",
+      "geometry": {
+        "width": 2560,
+        "height": 1440,
+        "scrollWidth": 2560,
+        "scrollHeight": 1440,
+        "panels": []
+      },
+      "sha256": "a968daa0016c5948c6b2ebe87e6119ba9e0c98a04148a315625d446a0388e639",
+      "imageSize": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "file": "31-recovery-failed.png",
+      "label": "退出后设置恢复失败",
+      "url": "http://127.0.0.1:4180/?native=1&recovery=failed",
+      "source": "原生 IPC 故障模拟；真实恢复组件",
+      "geometry": {
+        "width": 2560,
+        "height": 1440,
+        "scrollWidth": 2560,
+        "scrollHeight": 1440,
+        "panels": []
+      },
+      "sha256": "9b35d638934c9db0e57dc88047ad63bd757da07d317b93a6d8a0a8a96cee458c",
+      "imageSize": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "file": "32-exit-review.png",
+      "label": "退出失败核对窗口内容",
+      "url": "http://127.0.0.1:4180/workspace/review?kind=exit&native=1&recovery=failed",
+      "source": "2K 浏览器展示原生窗口的同一页面；IPC 故障模拟；不证明 Windows 焦点",
+      "geometry": {
+        "width": 2560,
+        "height": 1440,
+        "scrollWidth": 2560,
+        "scrollHeight": 1440,
+        "panels": []
+      },
+      "sha256": "c1133ef98186451c21e32d852f4f2d609c206dfbb088546e0c3ea6622a6ca654",
+      "imageSize": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "file": "33-preflight.png",
+      "label": "赛前核对窗口内容",
+      "url": "http://127.0.0.1:4180/workspace/review?kind=preflight",
+      "source": "仓库 EPL Program/Operator 样例；模拟 OBS 与配对状态；不证明原生焦点",
+      "geometry": {
+        "width": 2560,
+        "height": 1440,
+        "scrollWidth": 2560,
+        "scrollHeight": 1440,
+        "panels": [
+          {
+            "class": "workspace-left mizar-surface",
+            "x": 0,
+            "y": 0,
+            "width": 0,
+            "height": 0
+          }
+        ]
+      },
+      "sha256": "2e80fd771935effe9d59729120ef31e8495e009839ee6ff2b37f341a4e30808a",
+      "imageSize": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "file": "34-filtered-issue-action.png",
+      "label": "过滤名单问题后的异常操作",
+      "url": "/workspace",
+      "source": "定向浏览器回归：仓库 Program/Operator 样例，模拟网站名单差异与资料刷新失败；断言按钮名称及真实请求目标一致",
+      "geometry": {
+        "width": 2560,
+        "height": 1440
+      },
+      "sha256": "96a87b7d9545bf510364e63789112b70992bd04653ee0e3ccc3e11ed0f0fd02f",
+      "imageSize": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "file": "35-music-lower.png",
+      "label": "音乐配置下半页",
+      "url": "http://127.0.0.1:4180/settings?tab=music",
+      "source": "真实音乐配置接口；页面滚动至下半部分",
+      "geometry": {
+        "width": 2560,
+        "height": 1440,
+        "scrollWidth": 2560,
+        "scrollHeight": 1440,
+        "panels": []
+      },
+      "sha256": "bb4c726ae593b44acee6e0dd99f826ba4ce1f81a9b22db8dd357371172e7d473",
+      "imageSize": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "file": "36-camera-lower.png",
+      "label": "运镜配置下半页",
+      "url": "http://127.0.0.1:4180/settings?tab=music&section=camera&native=1",
+      "source": "真实编排配置；MulNX 包列表与 IPC 为模拟；页面滚动至下半部分",
+      "geometry": {
+        "width": 2560,
+        "height": 1440,
+        "scrollWidth": 2560,
+        "scrollHeight": 1440,
+        "panels": []
+      },
+      "sha256": "246ecf9465f63b52c0e945b577f7cb0a75a41d9cbbd0831488c2f09831ebb752",
+      "imageSize": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "file": "37-local-create.png",
+      "label": "创建本地比赛",
+      "url": "http://127.0.0.1:4180/resources",
+      "source": "真实本地比赛库与创建表单；赛事选填、名单后补",
+      "geometry": {
+        "width": 2560,
+        "height": 1440,
+        "scrollWidth": 2560,
+        "scrollHeight": 1440,
+        "panels": []
+      },
+      "sha256": "4cb0158ac28b355bdecaa6fb1c1efb9a9a5518d809fa4257838cb765e51b2c4b",
+      "imageSize": [
+        2560,
+        1440
+      ]
+    }
+  ]
+}

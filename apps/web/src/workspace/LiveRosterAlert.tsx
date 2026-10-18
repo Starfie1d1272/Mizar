@@ -1,5 +1,6 @@
+import { ReviewDialog } from './ReviewDialog';
 import { useState } from 'react';
-import { Button, Dialog, StatusBanner } from '../ui';
+import { Button, StatusBanner } from '../ui';
 import type { LiveRosterAlert as Alert, LiveRosterDifference } from './live-roster-model';
 
 function Player({ player }: { player: LiveRosterDifference }) {
@@ -18,7 +19,7 @@ function Player({ player }: { player: LiveRosterDifference }) {
   );
 }
 
-/** This stays in the operator window. It does not activate Host windows or change OBS. */
+/** Opens a focused, centered review window without changing OBS. */
 export function LiveRosterAlert({
   alert,
   onReview,
@@ -47,7 +48,8 @@ export function LiveRosterAlert({
         <Button onClick={() => setRequested(true)}>查看人员差异</Button>
         <Button onClick={onReview}>核对网站名单</Button>
       </StatusBanner>
-      <Dialog
+      <ReviewDialog
+        kind="roster"
         open={open}
         modal={false}
         className="workspace-live-roster-alert"
@@ -83,7 +85,7 @@ export function LiveRosterAlert({
           核对网站名单
         </Button>
         {error ? <p role="alert">{error}</p> : null}
-      </Dialog>
+      </ReviewDialog>
     </>
   );
 }

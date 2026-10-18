@@ -1,5 +1,11 @@
-import { AutomaticPreparation } from './AutomaticPreparation';
 import { SeriesBindingControls } from './SeriesBindingControls';
+import { MatchBpSection } from './MatchBpSection';
+import { useHudConfigClient } from '../realtime/hud-config-client';
+import { hudStyleReference } from './hud-style-reference';
+import { EventMatchWorkspace } from './EventMatchWorkspace';
+import { HudPresetDirectory } from './HudPresetDirectory';
+import './production.css';
+import { AutomaticPreparation } from './AutomaticPreparation';
 import { DemoTestPanel } from './DemoTestPanel';
 import { matchRound } from './match-presentation';
 import { ProductionStatus } from '../workspace/ProductionStatus';
@@ -8,22 +14,18 @@ import type { MatchDocumentV1 } from '@mizar/protocol/context';
 import type { ProductionGuidance } from '@mizar/protocol/program-scenes';
 import { MatchDocumentView, type MatchSection } from './MatchDocumentView';
 import { useEffect, useState } from 'react';
-import { HUD_WIDGET_REGISTRY } from '@mizar/hud-config';
 import { OperatorShell } from '../operator/OperatorShell';
 import { RivalHubPreparationPanel } from '../operator/RivalHubPreparationPanel';
 import { RivalHubSyncControls } from '../operator/RivalHubSyncControls';
-import { useHudConfigClient } from '../realtime/hud-config-client';
-import { desktopInvoke, useProgramScenes } from '../workspace/client';
+import { desktopInvoke } from '../workspace/client';
 import { LocalTournamentEditor } from '../workspace/LocalTournamentEditor';
-import { Button, Panel, StatusBanner, StatusPill } from '../ui';
+import { Button, Dialog, Panel, StatusBanner, StatusPill } from '../ui';
 import { LocalOverlayControls } from './LocalOverlayControls';
 import { LocalMatchControls } from './LocalMatchControls';
 import { useLocalTournament } from './tournament';
-import { command, openTool, productionAction, useLocalRead, type Production } from './client';
-import { RosterCapture, type RosterCandidate } from './RosterCapture';
+import { openTool, productionAction, useLocalRead, type Production } from './client';
 import { Settings } from './Settings';
 import { UpdateNotification } from './UpdateNotification';
-import { ProgramPreview } from './ProgramPreview';
 import { SpectatorHudCommands } from './SpectatorHudCommands';
 import { Cs2Recovery } from './Cs2Recovery';
 import { useWorkspaceExitStatus } from './cs2-status';
@@ -34,11 +36,9 @@ const tabs = {
   '/matches': [
     ['details', '比赛资料'],
     ['roster', '队伍与名单'],
-    ['maps', '地图与 BP'],
   ],
   '/picture': [
-    ['program', '节目'],
-    ['hud', 'HUD'],
+    ['hud', '画面预览'],
     ['overlay', '本机 HUD'],
   ],
   '/settings': [
@@ -49,21 +49,6 @@ const tabs = {
     ['advanced', '高级'],
   ],
 } as const;
-
-export interface RivalsRehearsalView {
-  loaded: boolean;
-  focusMatchId: string | null;
-  selectedMatchId: string | null;
-  stageIndex: number;
-  stages: { label: string; scene: string }[];
-  provenance: {
-    competitionSource: string;
-    capturedAt: string;
-    gameplaySource: string;
-    gameplayRelationship: string;
-    missingLogoEntryId: string | null;
-  } | null;
-}
 
 function TeamBadge({ name, logoUrl }: { readonly name: string; readonly logoUrl: string | null }) {
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
@@ -94,47 +79,28 @@ export function PreparationPage() {
     '';
   const envelope = useLocalRead<ContextEnvelope<MatchDocumentV1>>('/local/v1/match-document');
   const match = envelope?.document;
+  const onAirHud = useHudConfigClient(path === '/');
   const matchGuidance = useLocalRead<ProductionGuidance>(
     path === '/matches' && (envelope?.source === 'rivalhub' || envelope?.source === 'cache')
       ? '/local/v1/production-guidance'
       : null,
     5000,
   );
-  const { view, refresh } = useLocalTournament();
+  const { view, refresh, status: libraryStatus } = useLocalTournament();
   const local = envelope?.source === 'local' && view?.activeLocalMatchId === match?.matchId;
-  const scenes = useProgramScenes();
   const exit = useWorkspaceExitStatus();
-  const hud = useHudConfigClient();
   const production = useLocalRead<Production>('/local/v1/production');
   const rivalhub = useLocalRead<{ paired: boolean; displayName?: string | null }>(
     '/local/v1/rivalhub-connection',
   );
-  const rehearsal = useLocalRead<RivalsRehearsalView>(
-    import.meta.env.DEV || import.meta.env.VITE_QUALIFICATION === '1'
-      ? '/local/v1/rivals-rehearsal'
-      : null,
-  );
-
-  const hasSampleCapability =
-    (import.meta.env.DEV || import.meta.env.VITE_QUALIFICATION === '1') && rehearsal !== null;
-  const rehearsalSchedule = useLocalRead<{
-    competition: { name: string };
-    matches: {
-      matchId: string;
-      scheduledAt: string | null;
-      entrantA: { name: string };
-      entrantB: { name: string };
-      format: string;
-      stageLabel?: string | null;
-    }[];
-  }>(
-    envelope?.source === 'fixture' && rehearsal?.loaded
-      ? '/local/v1/rivals-rehearsal/schedule'
-      : null,
-  );
-
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const [demoOpen, setDemoOpen] = useState(() =>
+    new URLSearchParams(window.location.search).has('demoTest'),
+  );
+  const [librarySource, setLibrarySource] = useState<'local' | 'website'>(() =>
+    new URLSearchParams(window.location.search).get('source') === 'website' ? 'website' : 'local',
+  );
 
   async function action(run: () => Promise<unknown>) {
     if (busy) return;
@@ -165,8 +131,7 @@ export function PreparationPage() {
       {(
         [
           ['hud', 'HUD 编辑器'],
-          ['bp', 'BP 工作台'],
-          ['preview', '节目预览'],
+          ['bp', '地图与禁选'],
           ['diagnostics', '运行诊断'],
         ] as const
       ).map(([tool, label]) => (
@@ -174,6 +139,7 @@ export function PreparationPage() {
           {label}
         </Button>
       ))}
+      <Button onClick={() => setDemoOpen(true)}>Demo 试播</Button>
     </div>
   );
 
@@ -196,18 +162,20 @@ export function PreparationPage() {
   return (
     <OperatorShell active={path}>
       <main className="preparation" data-page={path}>
-        <AutomaticPreparation />
+        <AutomaticPreparation showGsiMessage={!(path === '/settings' && tab === 'gsi')} />
         <UpdateNotification />
         <header className="preparation-heading">
           <div>
             <h1>
-              {path === '/matches'
-                ? '比赛资料'
-                : path === '/picture'
-                  ? '播出画面'
-                  : path === '/settings'
-                    ? (settingsTitle[tab] ?? '设置')
-                    : '总览'}
+              {path === '/resources'
+                ? '比赛库'
+                : path === '/matches'
+                  ? '比赛资料'
+                  : path === '/picture'
+                    ? '播出画面'
+                    : path === '/settings'
+                      ? (settingsTitle[tab] ?? '设置')
+                      : '本场准备'}
             </h1>
           </div>
           <Button
@@ -215,17 +183,13 @@ export function PreparationPage() {
             disabled={busy || Boolean(exit?.busy) || !production?.canEnter}
             onClick={() => production && void action(() => productionAction('enter', production))}
           >
-            {production?.mode === 'hidden' || production?.mode === 'live'
-              ? '打开直播工作台'
-              : window.__TAURI_INTERNALS__
-                ? '启动游戏并打开工作台'
-                : '打开直播工作台'}
+            打开直播工作台
           </Button>
         </header>
 
         {!(path === '/settings' && tab === 'gsi') ? <Cs2Recovery production={production} /> : null}
         {message ? <StatusBanner tone="danger">{message}</StatusBanner> : null}
-        {options && path !== '/settings' ? (
+        {options ? (
           <nav className="preparation-tabs" aria-label="页面分区">
             {options.map(([key, label]) => (
               <a
@@ -254,23 +218,17 @@ export function PreparationPage() {
                     <Button
                       variant="primary"
                       onClick={() => {
-                        window.location.href = '/matches?select=1';
+                        window.location.href = '/resources';
                       }}
                     >
                       选择已有比赛
                     </Button>
-                    <Button
-                      onClick={() => {
-                        window.location.href = '/?demoTest=1#demo-test';
-                      }}
-                    >
-                      创建 Demo 测试比赛
-                    </Button>
+
                     {rivalhub?.paired ? (
                       <Button
                         variant="secondary"
                         onClick={() => {
-                          window.location.href = '/matches?select=1';
+                          window.location.href = '/resources?source=website';
                         }}
                       >
                         从 RivalHub 选择比赛
@@ -285,7 +243,7 @@ export function PreparationPage() {
                         连接 RivalHub
                       </Button>
                     )}
-                    <CurrentServerMatchEntry />
+
                     <Button
                       variant="secondary"
                       onClick={() => {
@@ -295,23 +253,6 @@ export function PreparationPage() {
                       创建本地比赛
                     </Button>
                   </div>
-                  {hasSampleCapability ? (
-                    <details className="preparation-sample-entry">
-                      <summary>体验示例</summary>
-                      <Button
-                        variant="secondary"
-                        disabled={busy}
-                        onClick={() =>
-                          void action(async () => {
-                            await command('/operator/rivals-rehearsal/load');
-                            window.location.reload();
-                          })
-                        }
-                      >
-                        加载示例比赛
-                      </Button>
-                    </details>
-                  ) : null}
                 </div>
                 <div className="preparation-task-art" aria-hidden="true">
                   <img src="/brand/mizar-mark.svg" alt="" />
@@ -347,8 +288,6 @@ export function PreparationPage() {
                 </h2>
                 <p>
                   {[
-                    match.stageLabel,
-                    matchRound(match),
                     match.matchLabel,
                     match.scheduledAt
                       ? new Date(match.scheduledAt).toLocaleString('zh-CN', {
@@ -360,17 +299,6 @@ export function PreparationPage() {
                     .filter(Boolean)
                     .join(' · ')}
                 </p>
-                <div className="preparation-match__summary">
-                  <span>BP · {match.veto.length > 0 ? `${match.veto.length} 步` : '暂无记录'}</span>
-                  <span>
-                    名单 · 首发 {match.entrants.a.players.filter((p) => p.isStarter).length} /{' '}
-                    {match.entrants.b.players.filter((p) => p.isStarter).length} 人
-                  </span>
-                  <span>
-                    地图 · 已确定 {match.maps.length} 图（
-                    {match.maps.map((m) => m.mapName.replace(/^de_/, '')).join(' · ')}）
-                  </span>
-                </div>
                 <div className="preparation-actions">
                   <Button
                     variant="secondary"
@@ -383,32 +311,114 @@ export function PreparationPage() {
                   <Button
                     variant="secondary"
                     onClick={() => {
-                      window.location.href = '/matches?select=1';
+                      window.location.href = '/resources';
                     }}
                   >
                     切换比赛
                   </Button>
-                  {hasSampleCapability && envelope?.source === 'fixture' ? (
-                    <Button
-                      variant="secondary"
-                      disabled={busy}
-                      onClick={() =>
-                        void action(async () => {
-                          await command('/operator/rivals-rehearsal/stop');
-                          window.location.reload();
-                        })
-                      }
-                    >
-                      退出示例
-                    </Button>
-                  ) : null}
                 </div>
               </Panel>
             )}
 
-            <SpectatorWorkflow capabilities={capabilities} production={production} />
             {match ? (
-              <div className="preparation-overview">
+              <nav className="preparation-task-links" aria-label="本场准备任务">
+                <a href="/matches">
+                  <div className="preparation-task-title">
+                    <strong>
+                      <small>01</small> 比赛资料
+                    </strong>
+                    <span>核对双方名单与赛程</span>
+                  </div>
+                  <div className="preparation-task-summary">
+                    {(['a', 'b'] as const).map((side) => (
+                      <div className="preparation-task-roster" key={side}>
+                        <span title={match.entrants[side].name}>{match.entrants[side].name}</span>
+                        <b>
+                          {match.entrants[side].players.length
+                            ? `首发 ${match.entrants[side].players.filter((p) => p.isStarter).length} 人`
+                            : '名单待填写'}
+                        </b>
+                      </div>
+                    ))}
+                    <p>
+                      {[match.stageLabel, matchRound(match)]
+                        .filter(
+                          (label, index) =>
+                            label && (index === 0 || !match.stageLabel?.includes(label)),
+                        )
+                        .join(' · ') || '阶段与轮次待填写'}
+                    </p>
+                  </div>
+                  <span className="preparation-task-entry">查看比赛资料 →</span>
+                </a>
+                <a
+                  href="/matches#match-bp"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    window.location.href = '/matches#match-bp';
+                  }}
+                >
+                  <div className="preparation-task-title">
+                    <strong>
+                      <small>02</small> 地图禁选
+                    </strong>
+                    <span>{match.format.toUpperCase()} · 地图与禁选资料</span>
+                  </div>
+                  <div className="preparation-task-summary">
+                    <b>
+                      {match.veto.length ? `已有 ${match.veto.length} 步 BP 记录` : '尚未录入 BP'}
+                    </b>
+                    {match.maps.length ? (
+                      <ol className="preparation-task-maps">
+                        {match.maps.map((map, index) => (
+                          <li key={index}>
+                            <small>{index + 1}</small>
+                            {map.mapName.replace(/^de_/, '')}
+                          </li>
+                        ))}
+                      </ol>
+                    ) : (
+                      <p>地图待确定，录入后在此查看。</p>
+                    )}
+                  </div>
+                  <span className="preparation-task-entry">查看地图与禁选 →</span>
+                </a>
+                <a href="/picture?tab=hud">
+                  <div className="preparation-task-title">
+                    <strong>
+                      <small>03</small> HUD 与包装
+                    </strong>
+                    <span>选择风格与调整布局</span>
+                  </div>
+                  <div className="preparation-task-summary">
+                    {onAirHud.status === 'ready' ? (
+                      <>
+                        <b className="preparation-task-preset" title={onAirHud.current.preset.name}>
+                          已启用 · {onAirHud.current.preset.name}
+                        </b>
+                        <figure className="preparation-task-reference">
+                          <img
+                            src={hudStyleReference(
+                              onAirHud.current.widgets['top-score-bar'].variant,
+                            )}
+                            alt="HUD 风格参考"
+                          />
+                        </figure>
+                      </>
+                    ) : (
+                      <p>
+                        {onAirHud.status === 'loading'
+                          ? '正在读取启用预设…'
+                          : '暂时无法确认启用预设，请检查连接。'}
+                      </p>
+                    )}
+                  </div>
+                  <span className="preparation-task-entry">选择与编辑 →</span>
+                </a>
+              </nav>
+            ) : null}
+            <div className="preparation-overview">
+              {match ? (
                 <Panel>
                   <div className="preparation-check-heading">
                     <h2>开播检查</h2>
@@ -482,77 +492,67 @@ export function PreparationPage() {
                     </details>
                   ) : null}
                 </Panel>
-              </div>
-            ) : null}
-            <DemoTestPanel />
-            <div className="preparation-tool-strip">
-              <span>常用工具</span>
-              {tools}
+              ) : null}
+              <Panel className="preparation-quick-tools">
+                <h2>工具与试播</h2>
+                {tools}
+              </Panel>
             </div>
+            <Dialog
+              className="demo-test-dialog"
+              title="Demo 试播"
+              open={demoOpen}
+              onClose={() => setDemoOpen(false)}
+            >
+              <DemoTestPanel forceExpanded={demoOpen} />
+            </Dialog>
+
+            <SpectatorWorkflow capabilities={capabilities} production={production} />
             {match && production && production.mode !== 'preparation' ? (
               <ProductionStatus matchId={match.matchId} />
             ) : null}
-            {hasSampleCapability && rehearsal?.loaded && envelope?.source === 'fixture' ? (
-              <details className="preparation-rehearsal-stage">
-                <summary>示例体验</summary>
-                <div className="preparation-task-header">
-                  <div>
-                    {rehearsal.selectedMatchId === rehearsal.focusMatchId ? (
-                      <p>当前阶段：{rehearsal.stages[rehearsal.stageIndex]?.label ?? '赛前等待'}</p>
-                    ) : (
-                      <p>返回初始示例比赛后，可切换阶段。</p>
-                    )}
-                  </div>
-                </div>
-                {envelope?.source === 'fixture' &&
-                rehearsal?.loaded &&
-                rehearsalSchedule?.matches ? (
-                  <div className="preparation-schedule-selector">
-                    <label htmlFor="rehearsal-match-select">切换示例比赛：</label>
-                    <select
-                      id="rehearsal-match-select"
-                      value={rehearsal.selectedMatchId ?? ''}
-                      disabled={busy}
-                      onChange={(e) => {
-                        const matchId = e.target.value;
-                        void action(async () => {
-                          await command('/operator/rivals-rehearsal/select', { matchId });
-                          window.location.reload();
-                        });
-                      }}
-                    >
-                      {rehearsalSchedule.matches.map((m) => (
-                        <option key={m.matchId} value={m.matchId}>
-                          {m.matchId === rehearsal.focusMatchId ? '初始示例 · ' : ''}
-                          {m.entrantA.name} vs {m.entrantB.name} · {m.format.toUpperCase()}
-                          {m.stageLabel ? ` (${m.stageLabel})` : ''}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                ) : null}
-                {rehearsal.selectedMatchId === rehearsal.focusMatchId ? (
-                  <div className="preparation-rehearsal-stage-buttons">
-                    {rehearsal.stages.map((stage, idx) => (
-                      <Button
-                        key={stage.label}
-                        aria-pressed={rehearsal.stageIndex === idx}
-                        variant={rehearsal.stageIndex === idx ? 'primary' : 'secondary'}
-                        disabled={busy}
-                        onClick={() =>
-                          void action(async () => {
-                            await command('/operator/rivals-rehearsal/stage', { index: idx });
-                          })
-                        }
-                      >
-                        {stage.label}
-                      </Button>
-                    ))}
-                  </div>
-                ) : null}
-              </details>
-            ) : null}
           </div>
+        ) : path === '/resources' ? (
+          <>
+            <div className="preparation-library-sources" aria-label="比赛库来源">
+              <Button
+                variant={librarySource === 'local' ? 'primary' : 'secondary'}
+                aria-pressed={librarySource === 'local'}
+                onClick={() => setLibrarySource('local')}
+              >
+                本地赛事
+              </Button>
+              <Button
+                variant={librarySource === 'website' ? 'primary' : 'secondary'}
+                aria-pressed={librarySource === 'website'}
+                onClick={() => setLibrarySource('website')}
+              >
+                RivalHub 赛事
+              </Button>
+            </div>
+            <div hidden={librarySource !== 'local'}>
+              {libraryStatus !== 'ready' ? (
+                <StatusBanner tone="warning">
+                  {libraryStatus === 'loading'
+                    ? '正在读取比赛库…'
+                    : '比赛库读取失败，保留最近资料与草稿；连接恢复前暂停保存和载入。'}
+                </StatusBanner>
+              ) : null}
+              {view ? (
+                <EventMatchWorkspace
+                  view={view}
+                  refresh={refresh}
+                  action={action}
+                  canWrite={libraryStatus === 'ready'}
+                />
+              ) : null}
+              <details>
+                <summary>回收站与本地管理</summary>
+                <LocalMatchControls mode="select" action={action} />
+              </details>
+            </div>
+            {librarySource === 'website' ? <RivalHubPreparationPanel mode="matches" /> : null}
+          </>
         ) : path === '/matches' ? (
           <>
             <RivalHubSyncControls />
@@ -562,35 +562,7 @@ export function PreparationPage() {
             >
               <summary>切换比赛</summary>
               {!match ? (
-                <RosterCapture create autoOpen={createFromServer} onSaved={() => void refresh()} />
-              ) : null}
-              {hasSampleCapability && rehearsal?.loaded && rehearsalSchedule?.matches ? (
-                <>
-                  <h2>{rehearsalSchedule.competition.name} · 示例赛程</h2>
-                  <div className="preparation-schedule-selector">
-                    <label htmlFor="rehearsal-match-select-tab">切换示例比赛：</label>
-                    <select
-                      id="rehearsal-match-select-tab"
-                      value={rehearsal.selectedMatchId ?? ''}
-                      disabled={busy}
-                      onChange={(e) => {
-                        const matchId = e.target.value;
-                        void action(async () => {
-                          await command('/operator/rivals-rehearsal/select', { matchId });
-                          window.location.reload();
-                        });
-                      }}
-                    >
-                      {rehearsalSchedule.matches.map((m) => (
-                        <option key={m.matchId} value={m.matchId}>
-                          {m.matchId === rehearsal.focusMatchId ? '初始示例 · ' : ''}
-                          {m.entrantA.name} vs {m.entrantB.name} · {m.format.toUpperCase()}
-                          {m.stageLabel ? ` (${m.stageLabel})` : ''}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </>
+                <p>只需队名与赛制即可创建本地比赛；进入现场并连接服务器后，可识别十人名单。</p>
               ) : null}
               <h2 id="local-match">本地比赛</h2>
               <LocalMatchControls action={action} />
@@ -600,18 +572,23 @@ export function PreparationPage() {
             {match && local ? (
               <>
                 {tab === 'roster' ? (
-                  <RosterCapture
-                    names={{ a: match.entrants.a.name, b: match.entrants.b.name }}
-                    onSaved={() => void refresh()}
-                  />
+                  <StatusBanner tone="info">
+                    现场首发可在工作台连接服务器后识别；这里维护队伍资料与完整名单。
+                  </StatusBanner>
                 ) : null}
-                <LocalTournamentEditor
-                  document={match}
-                  section={tab as MatchSection}
-                  view={view}
-                  refresh={refresh}
-                  action={action}
-                />
+                {tab === 'details' ? (
+                  <MatchDocumentView document={match} section="details" />
+                ) : null}
+                <details open={tab === 'roster'}>
+                  <summary>{tab === 'roster' ? '编辑队伍与名单' : '编辑比赛资料'}</summary>
+                  <LocalTournamentEditor
+                    document={match}
+                    section={tab as MatchSection}
+                    view={view}
+                    refresh={refresh}
+                    action={action}
+                  />
+                </details>
               </>
             ) : match ? (
               <>
@@ -644,48 +621,26 @@ export function PreparationPage() {
                     </a>
                   ) : null}
                 </div>
-                {tab !== 'maps' ? (
-                  <MatchDocumentView document={match} section={tab as MatchSection} />
-                ) : null}
+                <MatchDocumentView document={match} section={tab as MatchSection} />
               </>
             ) : null}
-            {tab === 'maps' && match ? (
-              <>
-                <MatchDocumentView document={match} section="maps" />
+            {tab === 'details' && match ? (
+              <MatchBpSection
+                document={match}
+                local={local}
+                contextRevision={view?.contextRevision}
+              />
+            ) : null}
+            {tab === 'details' && production && production.mode !== 'preparation' ? (
+              <details>
+                <summary>现场地图对应（异常时处理）</summary>
                 <SeriesBindingControls />
-                <Panel>
-                  <h2>BP 制作</h2>
-                  <p>
-                    {scenes?.available.includes('bp')
-                      ? 'BP 已就绪'
-                      : (scenes?.blocked.bp ?? '等待 BP 数据')}
-                  </p>
-                  <Button onClick={() => void action(() => openTool('bp'))}>打开 BP 工作台</Button>
-                </Panel>
-              </>
+              </details>
             ) : null}
           </>
         ) : path === '/picture' ? (
-          tab === 'program' ? (
-            <>
-              <ProgramPreview />
-            </>
-          ) : tab === 'hud' ? (
-            <Panel>
-              <h2>{hud.current.preset.name}</h2>
-              <p>布局 · {hud.current.layout.name}</p>
-              <p>外观 · {hud.current.theme.name}</p>
-              <p>
-                {HUD_WIDGET_REGISTRY.filter(
-                  (widget) =>
-                    hud.current.layout.widgets[widget.id].visible &&
-                    widget.rendererAvailability === 'implemented',
-                )
-                  .map((widget) => widget.label)
-                  .join(' · ')}
-              </p>
-              <Button onClick={() => void action(() => openTool('hud'))}>打开 HUD 编辑器</Button>
-            </Panel>
+          tab === 'hud' ? (
+            <HudPresetDirectory action={action} />
           ) : (
             <div className="preparation-overlay-workspace">
               <Panel className="preparation-overlay-display">
@@ -706,18 +661,4 @@ export function PreparationPage() {
       </main>
     </OperatorShell>
   );
-}
-
-function CurrentServerMatchEntry() {
-  const result = useLocalRead<{ candidate: RosterCandidate | null }>('/local/v1/roster-candidate');
-  return result?.candidate ? (
-    <Button
-      variant="secondary"
-      onClick={() => {
-        window.location.href = '/matches?tab=roster&createFromServer=1';
-      }}
-    >
-      从当前服务器创建比赛
-    </Button>
-  ) : null;
 }

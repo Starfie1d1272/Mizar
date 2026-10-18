@@ -5,7 +5,7 @@ import {
   OBS_WIDTH,
   obsDesiredScenes,
 } from './desired-state.js';
-import type { ProgramTransition } from '@mizar/protocol/program-scenes';
+import type { ProgramSceneId, ProgramTransition } from '@mizar/protocol/program-scenes';
 
 export interface ObsRpc {
   call(type: string, data?: Record<string, unknown>): Promise<Record<string, unknown>>;
@@ -525,14 +525,27 @@ function desiredSceneName(id: Parameters<typeof import('./desired-state.js').obs
 }
 
 /** Restore owned scenes only in the active Mizar collection; never take over another collection. */
-export async function ensureObsConfiguration(obs: ObsRpc, baseUrl: string): Promise<ObsFinding[]> {
+export async function ensureObsConfiguration(
+  obs: ObsRpc,
+  baseUrl: string,
+  activeScene: () => ProgramSceneId = () => 'waiting',
+): Promise<ObsFinding[]> {
   const findings = await checkObsConfiguration(obs, baseUrl);
+  if (findings.some((finding) => finding.code === 'source_kind_conflict')) return findings;
   if (
-    findings.some((finding) =>
-      ['collection_missing', 'collection_inactive', 'source_kind_conflict'].includes(finding.code),
-    )
-  )
-    return findings;
+    findings.some((finding) => ['collection_missing', 'collection_inactive'].includes(finding.code))
+  ) {
+    const repaired = await repairObsConfiguration(obs, baseUrl);
+    if (
+      !repaired.some((item) =>
+        ['scene_missing', 'source_kind_conflict', 'transition_missing'].includes(item.code),
+      )
+    ) {
+      if (await outputActive(obs)) throw new Error('OBS 正在输出，暂不切换节目。');
+      await switchObsScene(obs, activeScene());
+    }
+    return repaired;
+  }
   const repairable = new Set([
     'scene_missing',
     'source_missing',

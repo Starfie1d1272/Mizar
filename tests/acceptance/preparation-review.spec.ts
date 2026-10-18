@@ -45,7 +45,7 @@ test('uncertain Steam launch recovery stays visible after navigation and require
   await page.goto('/');
   await expect(page.getByText('正在等待 Steam 启动 CS2', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '恢复配置备份' })).toBeDisabled();
-  await page.getByRole('link', { name: '游戏设置', exact: true }).click();
+  await page.getByRole('link', { name: '设置', exact: true }).click();
   await expect(page.getByText('正在等待 Steam 启动 CS2', { exact: true })).toBeVisible();
   await page.reload();
   await expect(page.getByRole('button', { name: '恢复配置备份' })).toBeDisabled();
@@ -160,7 +160,6 @@ test('OBS capture guidance uses real production routes without GET Origin and ap
         (headers) => headers.origin === undefined && headers['sec-fetch-site'] === 'same-origin',
       ),
     ).toBe(true);
-    await page.getByText('处理捕获问题', { exact: true }).click();
     await expect(page.getByText(/最近日志报告捕获文件被占用，占用程序未知/)).toBeVisible();
     await page.setViewportSize({ width: 1366, height: 768 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
@@ -197,7 +196,6 @@ test('OBS capture guidance uses real production routes without GET Origin and ap
     });
     // The next real poll reflects new pending state; it must not resurrect the recovered lock.
     await expect(page.getByText('OBS 游戏挂钩尚未就绪。', { exact: true })).toBeVisible();
-    await page.getByText('处理捕获问题', { exact: true }).click();
     await expect(page.getByText(/最近日志报告捕获文件被占用/)).toHaveCount(0);
     await expect(page.getByText(/临时添加「窗口采集」/)).toBeVisible();
     await page.screenshot({
@@ -242,4 +240,51 @@ test('OBS capture guidance uses real production routes without GET Origin and ap
     recovery.mock.restore();
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('exit recovery distinguishes stopped games from borrowed games and renders the dedicated alert', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 2560, height: 1440 });
+  await page.addInitScript(() => {
+    Object.assign(window, {
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string) => {
+          await Promise.resolve();
+          const borrowed = new URLSearchParams(location.search).has('borrowed');
+          if (command === 'cs2_config_status')
+            return {
+              pending: !borrowed,
+              running: borrowed,
+              borrowed,
+              busy: false,
+              phase: borrowed ? 'running' : 'pending',
+              message: null,
+            };
+          if (command === 'workspace_exit_status')
+            return {
+              busy: false,
+              stage: borrowed ? '' : 'restoration',
+              message: borrowed ? null : '游戏已关闭，但设置恢复失败，备份仍保留。',
+            };
+          return {};
+        },
+      },
+    });
+  });
+  await page.route('**/local/v1/production', (route) =>
+    route.fulfill({ json: { mode: 'preparation', revision: 'review', canEnter: false } }),
+  );
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: '重试恢复设置', exact: true })).toBeVisible();
+  await page.goto('/?borrowed=1');
+  await expect(page.getByRole('button', { name: '结束本次制作', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '返回工作台', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '打开备份目录', exact: true })).toHaveCount(0);
+  await page.goto('/workspace/review?kind=exit');
+  await expect(page.getByRole('dialog', { name: '退出工作台需要处理' })).toBeVisible();
+  await expect(
+    page.getByText('游戏已关闭，但设置恢复失败，备份仍保留。', { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole('button', { name: '返回准备中心处理' })).toBeVisible();
 });

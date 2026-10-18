@@ -161,3 +161,72 @@ test('workspace exit outcome survives a closed dock and failure allows a single 
   release();
   await expect(result).toHaveCount(0);
 });
+
+test('16:9 workspace scales the native regions and keeps scene controls inside the dock', async ({
+  page,
+}) => {
+  // Display stress fixture: connected manual camera exposes every persistent action.
+  await page.route('**/local/v1/orchestration', (route) =>
+    route.fulfill({
+      json: {
+        ready: true,
+        preset: { maps: [] },
+        status: {
+          held: true,
+          connected: true,
+          isolated: true,
+          map: 'de_inferno',
+          pack: '本场隔离运镜包',
+          current: '回合开场',
+          message: '请确认当前地图与活动运镜包，再启用自动。',
+          control: { state: 'ready' },
+        },
+      },
+    }),
+  );
+  await page.goto('/workspace');
+  for (const [width, height] of [
+    [1920, 1080],
+    [2560, 1440],
+    [3840, 2160],
+  ]) {
+    await page.setViewportSize({ width: width!, height: height! });
+    const left = page.getByRole('main', { name: '现场工作区', exact: true });
+    const dock = page.getByRole('main', { name: '现场控制底栏', exact: true });
+    await expect.poll(async () => (await left.boundingBox())?.width).toBeCloseTo(width! / 4, 0);
+    const bounds = (await dock.boundingBox())!;
+    expect(bounds.x).toBeCloseTo(width! / 4, 0);
+    expect(bounds.y).toBeCloseTo((height! * 3) / 4, 0);
+    expect(bounds.width).toBeCloseTo((width! * 3) / 4, 0);
+    expect(bounds.height).toBeCloseTo(height! / 4, 0);
+    const resume = (await page
+      .getByRole('button', { name: '确认运镜包并恢复自动' })
+      .boundingBox())!;
+    const footer = (await page.locator('.workspace-message').boundingBox())!;
+    expect(resume.y + resume.height).toBeLessThanOrEqual(footer.y);
+    const buttons = page.getByLabel('手动切换场景').getByRole('button');
+    await expect(buttons).toHaveCount(8);
+    for (const button of await buttons.all()) {
+      const rect = (await button.boundingBox())!;
+      expect(rect.y).toBeGreaterThanOrEqual(bounds.y);
+      expect(rect.y + rect.height).toBeLessThanOrEqual(bounds.y + bounds.height);
+      expect(rect.height).toBeGreaterThanOrEqual((32 * width!) / 1920);
+    }
+  }
+  // CSS dimensions after 150% Windows scaling, plus native 2K/4K windows.
+  for (const viewport of [
+    { width: 960, height: 180 },
+    { width: 1920, height: 360 },
+    { width: 2880, height: 540 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto('/workspace/dock');
+    const dock = page.getByRole('main', { name: '现场控制底栏', exact: true });
+    await expect.poll(async () => (await dock.boundingBox())?.width).toBeCloseTo(viewport.width, 0);
+    expect((await dock.boundingBox())!.height).toBeCloseTo(viewport.height, 0);
+    const exit = (await page
+      .getByRole('button', { name: '退出工作台', exact: true })
+      .boundingBox())!;
+    expect(exit.y + exit.height).toBeLessThanOrEqual(viewport.height + 1);
+  }
+});

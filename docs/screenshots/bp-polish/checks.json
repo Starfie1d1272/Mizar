@@ -1,0 +1,9 @@
+{
+  "viewport": {
+    "width": 2560,
+    "height": 1440
+  },
+  "fullPage": false,
+  "errors": [],
+  "source": "Actual app; BP read endpoints simulated from repository sample. No playback command sent."
+}
