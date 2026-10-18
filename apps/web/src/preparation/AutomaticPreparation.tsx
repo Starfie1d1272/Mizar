@@ -1,6 +1,7 @@
+import { prepareObs } from '../workspace/obs-preparation';
 import { useEffect, useRef, useState } from 'react';
 import { desktopInvoke } from '../workspace/client';
-import { obsCommand, readObsConfigurationContext, useObsStatus } from '../workspace/obs-client';
+import { readObsConfigurationContext, useObsStatus } from '../workspace/obs-client';
 import { StatusBanner } from '../ui';
 
 /** Preparation owns bounded setup requests; Host and Companion own all configuration. */
@@ -57,12 +58,16 @@ export function AutomaticPreparation({ showGsiMessage = true }: { showGsiMessage
       ensured.current = null;
       return;
     }
+    if (obs.streaming || obs.recording) {
+      ensured.current = null;
+      return;
+    }
     const signature = JSON.stringify([obs.video, obs.findings]);
-    if (ensured.current === signature || obs.streaming || obs.recording) return;
+    if (ensured.current === signature) return;
     ensured.current = signature;
-    void obsCommand('ensure')
+    void prepareObs()
       .then(() => setObsMessage(''))
-      .catch(() => setObsMessage('Mizar 场景自动配置未完成，请在 OBS 设置中查看诊断并修复。'));
+      .catch(() => setObsMessage('OBS 自动配置未完成，请在 OBS 设置中查看原因并重试。'));
   }, [obs]);
   return (
     <>

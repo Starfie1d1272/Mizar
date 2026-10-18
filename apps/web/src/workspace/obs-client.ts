@@ -46,6 +46,12 @@ export function useObsStatus(): ObsStatus | null {
       setValue((current) => (current ? { ...current, captureDiagnostic: diagnostic } : current));
     };
     window.addEventListener('mizar:obs-capture-checked', checked);
+    const configured = (event: Event) => {
+      const findings = (event as CustomEvent<ObsStatus['findings']>).detail;
+      revision++;
+      setValue((current) => (current ? { ...current, findings } : current));
+    };
+    window.addEventListener('mizar:obs-configured', configured);
     let timer: ReturnType<typeof setTimeout>;
     async function poll() {
       const requestRevision = revision;
@@ -67,6 +73,7 @@ export function useObsStatus(): ObsStatus | null {
     return () => {
       active = false;
       window.removeEventListener('mizar:obs-capture-checked', checked);
+      window.removeEventListener('mizar:obs-configured', configured);
       clearTimeout(timer);
     };
   }, []);
@@ -96,15 +103,22 @@ async function performObsCommand(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(
-      ['ensure', 'repair', 'check', 'audio-setup'].includes(action) ? 15_000 : 6000,
+      action === 'ensure'
+        ? 40_000
+        : ['repair', 'check', 'audio-setup'].includes(action)
+          ? 15_000
+          : 6000,
     ),
   });
   const value = (await response.json().catch(() => null)) as {
     message?: string;
     executablePath?: string;
     captureDiagnostic?: ObsCaptureDiagnostic;
+    findings?: ObsStatus['findings'];
   } | null;
   if (!response.ok) throw new Error(value?.message ?? 'OBS 操作未完成，请检查连接与配置。');
+  if (value?.findings)
+    window.dispatchEvent(new CustomEvent('mizar:obs-configured', { detail: value.findings }));
   if (value?.captureDiagnostic)
     window.dispatchEvent(
       new CustomEvent('mizar:obs-capture-checked', { detail: value.captureDiagnostic }),

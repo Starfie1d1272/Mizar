@@ -1,3 +1,4 @@
+import { prepareObs, useObsPreparation } from '../workspace/obs-preparation';
 import { useEffect, useRef, useState } from 'react';
 import type { ProgramSceneState } from '@mizar/protocol/program-scenes';
 import { Button, Field, Panel, StatusBanner, StatusPill } from '../ui';
@@ -87,6 +88,22 @@ export function ObsSettings() {
     };
   }, []);
 
+  const preparation = useObsPreparation();
+  const preparing = preparation.phase === 'running';
+  const audioFindings =
+    obs?.findings.filter(
+      (item) => item.code.startsWith('audio_') || item.code === 'game_audio_missing',
+    ) ?? [];
+  const audioUnchecked = obs?.findings.some((item) =>
+    [
+      'collection_missing',
+      'collection_inactive',
+      'scene_missing',
+      'configuration_unchecked',
+      'configuration_check_failed',
+      'source_kind_conflict',
+    ].includes(item.code),
+  );
   const connected = obs?.connection === 'connected';
   const outputActive = connected && (obs.streaming || obs.recording);
   async function action(run: () => Promise<unknown>) {
@@ -107,7 +124,7 @@ export function ObsSettings() {
     <details>
       <summary>OBS 路径</summary>
       <Button
-        disabled={busy}
+        disabled={busy || preparing}
         onClick={() =>
           void action(async () => {
             const path = await desktopInvoke<string | null>('select_obs_executable');
@@ -134,11 +151,25 @@ export function ObsSettings() {
           <span>直播 · {connected ? (obs.streaming ? '进行中' : '未开始') : '待确认'}</span>
           <span>录制 · {connected ? (obs.recording ? '进行中' : '未开始') : '待确认'}</span>
         </div>
-        <Button disabled={busy} onClick={() => void action(() => obsCommand('open'))}>
+        <Button disabled={busy || preparing} onClick={() => void action(() => obsCommand('open'))}>
           打开 OBS
         </Button>
       </div>
       {message ? <StatusBanner tone={failed ? 'danger' : 'info'}>{message}</StatusBanner> : null}
+      {preparing ? (
+        <StatusBanner tone="info">{preparation.message} 无需逐项点击配置。</StatusBanner>
+      ) : null}
+      {connected && !preparing && preparation.phase === 'failed' ? (
+        <StatusBanner tone="warning">
+          {preparation.message}
+          <Button disabled={busy || outputActive} onClick={() => void action(prepareObs)}>
+            重试自动配置
+          </Button>
+        </StatusBanner>
+      ) : null}
+      {connected && outputActive && obs.findings.length > 0 ? (
+        <StatusBanner tone="info">正在直播或录制，自动配置暂缓；停止输出后继续处理。</StatusBanner>
+      ) : null}
       <div className="obs-settings-columns">
         <div className="obs-settings-column">
           <Panel className="settings-card">
@@ -193,7 +224,7 @@ export function ObsSettings() {
                   onChange={(e) => setPassword(e.target.value)}
                   {...(obs?.passwordConfigured ? { message: '已保存密码，留空保持不变' } : {})}
                 />
-                <Button type="submit" variant="primary" loading={busy}>
+                <Button type="submit" variant="primary" loading={busy || preparing}>
                   保存并测试
                 </Button>
               </form>
@@ -201,7 +232,7 @@ export function ObsSettings() {
                 <details>
                   <summary>已保存密码</summary>
                   <Button
-                    disabled={busy}
+                    disabled={busy || preparing}
                     onClick={() =>
                       void action(async () => {
                         await obsCommand('configure', { port, password: '' });
@@ -219,26 +250,45 @@ export function ObsSettings() {
           </Panel>
           <Panel className="settings-card">
             <h2>音频配置</h2>
-            <p>在 OBS 核对桌面音频与麦克风电平、设备和输出音轨，并录制试听。</p>
-            <details>
-              <summary>需要添加音频来源</summary>
+            <p>缺少来源时自动添加默认桌面音频与麦克风；已有音频来源会保留并检查。</p>
+            {!connected ? (
+              <p>连接后自动检查音频。</p>
+            ) : preparing ? (
+              <p>正在自动准备，请稍候。</p>
+            ) : audioUnchecked ? (
+              <p>等待场景准备完成后检查音频。</p>
+            ) : audioFindings.length ? (
+              audioFindings.map((finding) => (
+                <StatusBanner key={finding.code} tone="warning">
+                  {finding.message}
+                </StatusBanner>
+              ))
+            ) : (
+              <p>音频配置检查通过。请在 OBS 核对实际设备、电平和输出音轨，并录制试听。</p>
+            )}
+            <details key={String(audioFindings.length > 0)} open={audioFindings.length > 0}>
+              <summary>{audioFindings.length ? '处理音频问题' : '音频维护'}</summary>
               {outputActive ? <p>正在直播或录制，请停止输出后再添加来源。</p> : null}
               <Button
-                disabled={busy || obs?.connection !== 'connected' || obs.streaming || obs.recording}
+                disabled={
+                  busy ||
+                  preparing ||
+                  obs?.connection !== 'connected' ||
+                  obs.streaming ||
+                  obs.recording
+                }
                 onClick={() =>
                   void action(async () => {
-                    await obsCommand('audio-setup');
-                    await obsCommand('check');
-                    setMessage(
-                      '已添加系统默认桌面音频与麦克风。请在 OBS 选择实际设备，检查静音、直播音轨并录制试听。',
-                    );
+                    await prepareObs();
+                    setMessage('已重新处理自动配置，请核对音频检查结果。');
                   })
                 }
               >
-                添加默认桌面音频与麦克风
+                重试音频自动配置
               </Button>
               <small>
-                此操作会在 Mizar 场景中采集系统声音和默认麦克风；自定义设备在 OBS 来源属性中选择。
+                已有自定义或游戏捕获音频时，不重复添加默认采集；请在 OBS
+                中处理具体设备、静音和音轨问题。
               </small>
             </details>
           </Panel>
@@ -247,7 +297,7 @@ export function ObsSettings() {
           <div className="obs-settings-check-heading">
             <h2 id="obs-configuration-title">节目检查</h2>
             <Button
-              disabled={busy || !connected}
+              disabled={busy || preparing || !connected}
               onClick={() =>
                 void action(async () => {
                   await obsCommand('check');
@@ -280,7 +330,7 @@ export function ObsSettings() {
                   <ObsCaptureGuidance
                     expanded
                     diagnostic={obs.captureDiagnostic}
-                    busy={busy}
+                    busy={busy || preparing}
                     onCheck={() =>
                       void action(async () => {
                         await obsCommand('check');
@@ -362,7 +412,7 @@ export function ObsSettings() {
                       </>
                     ) : null}
                   </details>
-                  {programIssue && !obs.findings.length ? null : (
+                  {preparing || (programIssue && !obs.findings.length) ? null : (
                     <StatusBanner tone={obs.findings.length ? 'warning' : 'success'}>
                       {(obs.streaming || obs.recording) && obs.findings.length > 0
                         ? 'OBS 正在输出，当前配置问题请在停止推流与录制后处理。'
@@ -371,7 +421,7 @@ export function ObsSettings() {
                           : obs.findings.some((item) => item.code === 'source_kind_conflict')
                             ? 'Mizar 来源名称与自定义来源冲突，请先在 OBS 重命名冲突来源。'
                             : sceneRepairNeeded
-                              ? 'Mizar 场景配置待恢复，一次修复后自动复查。'
+                              ? 'Mizar 场景尚未就绪，自动处理后会复查；未完成时可重试。'
                               : obs.findings.some((item) => item.code === 'video_settings')
                                 ? '请在 OBS「设置 → 视频」将画布和输出设为 1920×1080，常用 FPS 设为 60。返回后自动检查。'
                                 : obs.findings.some((item) => item.code === 'transition_missing')
@@ -381,22 +431,19 @@ export function ObsSettings() {
                                     : 'Mizar 配置检查通过，请核对实际音画。'}
                     </StatusBanner>
                   )}
-                  {sceneRepairNeeded && !sceneRepairBlocked ? (
+                  {sceneRepairNeeded && !sceneRepairBlocked && !preparing ? (
                     <Button
                       variant="primary"
-                      loading={busy}
-                      disabled={busy || obs.streaming || obs.recording}
+                      loading={busy || preparing}
+                      disabled={busy || preparing || obs.streaming || obs.recording}
                       onClick={() =>
                         void action(async () => {
-                          await obsCommand('repair');
-                          await obsCommand('check');
+                          await prepareObs();
                           setMessage('修复已执行，已重新检查；剩余步骤见当前提示。');
                         })
                       }
                     >
-                      {obs.findings.some((item) => item.code === 'collection_missing')
-                        ? '创建并启用 Mizar 场景集合'
-                        : '一键修复 Mizar 场景'}
+                      重试场景自动配置
                     </Button>
                   ) : null}
                   {obs.findings.length ? (
@@ -434,7 +481,7 @@ export function ObsSettings() {
             窗口是否保留由当前实例与输出状态决定。
           </p>
           <Button
-            disabled={busy}
+            disabled={busy || preparing}
             onClick={() =>
               void action(async () => {
                 const session = configuration.current;

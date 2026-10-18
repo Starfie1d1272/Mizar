@@ -1,6 +1,12 @@
 import { expect, it, vi } from 'vitest';
+import { ensureObsAudio } from '../src/obs/audio.js';
 import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
-import { OBS_COLLECTION, obsDesiredScenes } from '../src/obs/desired-state.js';
+import {
+  OBS_COLLECTION,
+  OBS_CAPTURE_INPUT,
+  obsSceneName,
+  obsDesiredScenes,
+} from '../src/obs/desired-state.js';
 import {
   checkObsConfiguration,
   repairObsConfiguration,
@@ -247,5 +253,79 @@ it('does not take over a collection changed between automatic detection and repa
   });
   obs.calls = [];
   expect((await ensureObsConfiguration(obs, baseUrl))[0]?.code).toBe('collection_inactive');
+  expect(obs.calls.filter((type) => /^(Set|Create|Remove)/.test(type))).toEqual([]);
+});
+
+it('automatically prepares a new collection and default audio, without duplicating them on recheck', async () => {
+  const obs = new FakeObs();
+  await ensureObsConfiguration(obs, baseUrl);
+  expect(obs.collection).toBe(OBS_COLLECTION);
+  expect(obs.currentScene).toBe(obsSceneName('waiting'));
+  expect(await ensureObsAudio(obs, baseUrl)).toEqual([]);
+  expect(obs.inputs.get('Mizar · Desktop Audio')?.kind).toBe('wasapi_output_capture');
+  expect(obs.inputs.get('Mizar · Microphone')?.kind).toBe('wasapi_input_capture');
+  for (const scene of obsDesiredScenes(baseUrl)) {
+    expect(
+      obs.scenes
+        .get(scene.sceneName)
+        ?.filter((item) => item.sourceName.startsWith('Mizar · Desktop Audio')),
+    ).toHaveLength(1);
+    expect(
+      obs.scenes
+        .get(scene.sceneName)
+        ?.filter((item) => item.sourceName.startsWith('Mizar · Microphone')),
+    ).toHaveLength(1);
+  }
+  obs.calls = [];
+  await ensureObsConfiguration(obs, baseUrl);
+  await ensureObsAudio(obs, baseUrl);
+  expect(obs.calls.filter((type) => /^(Set|Create|Remove)/.test(type))).toEqual([]);
+});
+
+it('does not configure a new collection or audio while OBS is outputting', async () => {
+  const obs = new FakeObs();
+  obs.outputActive = true;
+  await expect(ensureObsConfiguration(obs, baseUrl)).rejects.toThrow('正在输出');
+  expect(obs.collection).toBe('User Collection');
+  expect(obs.calls.filter((type) => /^(Set|Create|Remove)/.test(type))).toEqual([]);
+  obs.outputActive = false;
+  await ensureObsConfiguration(obs, baseUrl);
+  obs.outputActive = true;
+  obs.calls = [];
+  await expect(ensureObsAudio(obs, baseUrl)).rejects.toThrow('正在输出');
+  expect(obs.calls.filter((type) => /^(Set|Create|Remove)/.test(type))).toEqual([]);
+});
+
+it('preserves custom audio and reports gaps instead of adding duplicate capture', async () => {
+  const obs = new FakeObs();
+  await ensureObsConfiguration(obs, baseUrl);
+  obs.inputs.set('My microphone', {
+    kind: 'wasapi_input_capture',
+    settings: { device_id: 'custom' },
+  });
+  obs.calls = [];
+  const findings = await ensureObsAudio(obs, baseUrl);
+  expect(findings.some((item) => item.code === 'game_audio_missing')).toBe(true);
+  expect(obs.inputs.has('Mizar · Desktop Audio')).toBe(false);
+  expect(obs.calls.filter((type) => /^(Set|Create|Remove)/.test(type))).toEqual([]);
+});
+
+it('reports an audio name collision and leaves the existing source untouched', async () => {
+  const obs = new FakeObs();
+  await ensureObsConfiguration(obs, baseUrl);
+  obs.inputs.set('Mizar · Microphone', { kind: 'image_source', settings: {} });
+  obs.calls = [];
+  expect((await ensureObsAudio(obs, baseUrl))[0]?.code).toBe('audio_source_conflict');
+  expect(obs.calls.filter((type) => /^(Set|Create|Remove)/.test(type))).toEqual([]);
+});
+
+it('does not duplicate game-capture audio with default desktop capture', async () => {
+  const obs = new FakeObs();
+  await ensureObsConfiguration(obs, baseUrl);
+  obs.inputs.get(OBS_CAPTURE_INPUT)!.settings.capture_audio = true;
+  obs.calls = [];
+  await ensureObsAudio(obs, baseUrl);
+  expect(obs.inputs.has('Mizar · Desktop Audio')).toBe(false);
+  expect(obs.inputs.get(OBS_CAPTURE_INPUT)!.settings.capture_audio).toBe(true);
   expect(obs.calls.filter((type) => /^(Set|Create|Remove)/.test(type))).toEqual([]);
 });

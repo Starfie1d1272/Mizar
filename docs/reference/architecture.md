@@ -165,7 +165,7 @@ OBS 音乐适配通过持久连接核对媒体状态；仅操作随机安装名�
 
 Companion 的 OBS 模块持有唯一输出控制状态，通过持续的 Outputs 订阅和重连快照观察直播、录像与外部手动操作；快照不能覆盖读取期间的新事件，旧连接回调不能写入新代际。人工开始／停止使用明确请求，不依赖本地切换布尔值。每类输出的在途保护跨窗口生效，并与配置修改和修复互斥；请求回执与实际完成分别判断，超时后核实状态，不自动重放命令。网页只消费本机输出视图和提交有限意图，桌面、Core 与自动节目编排不持有输出控制权。
 
-OBS 由 Companion 检查和修复，只管理 Mizar 自有场景；推流或录制期间不修复场景集合，不自动改全局输出设置。桌面只处理窗口和本机覆盖显隐，不复制节目状态。Companion 解析 OBS 启动路径，桌面 Host 在服务 Runtime Job 外启动独立 OBS，退出 Mizar 不连带终止 OBS。HTTP 服务就绪后，Companion 有界串行重试刷新当前 Mizar 集合内名称、类型与本机节目 URL 都匹配的 Browser Source，每个源每次服务启动最多成功刷新一次；不切换集合、场景或输出设置，关闭时取消重试。此刷新可恢复 OBS 先启动及服务重启时加载失败的页面，不能替代实际画面核对；理由见 [ADR-0024](https://github.com/Starfie1d1272/Mizar/blob/3b187e168ad755ede595eb8371bfaf5933c044fa/docs/decisions/0024-independent-obs-process.md)。
+OBS 由 Companion 检查和修复，只管理 Mizar 自有场景。连接后的自动准备可在输出停止时创建或切换到 Mizar 集合，补齐场景并准备默认音频，其他集合保留；已有自定义或游戏捕获音频只检查，不重复采集。页面共享自动准备请求进度并合并并发请求，准备完成与实际可播状态仍以 Companion findings 和 OBS 实际音画为准；推流或录制期间不修复场景集合，不自动改全局输出设置。桌面只处理窗口和本机覆盖显隐，不复制节目状态。Companion 解析 OBS 启动路径，桌面 Host 在服务 Runtime Job 外启动独立 OBS，退出 Mizar 不连带终止 OBS。HTTP 服务就绪后，Companion 有界串行重试刷新当前 Mizar 集合内名称、类型与本机节目 URL 都匹配的 Browser Source，每个源每次服务启动最多成功刷新一次；不切换集合、场景或输出设置，关闭时取消重试。此刷新可恢复 OBS 先启动及服务重启时加载失败的页面，不能替代实际画面核对；理由见 [ADR-0024](https://github.com/Starfie1d1272/Mizar/blob/3b187e168ad755ede595eb8371bfaf5933c044fa/docs/decisions/0024-independent-obs-process.md)。
 
 制作提示从现有状态生成；B 站查询有缓存、超时和并发上限，只服务本机状态提示，不进入公开输出或节目切换门禁。实现见 [ADR-0019](https://github.com/Starfie1d1272/Mizar/blob/3b187e168ad755ede595eb8371bfaf5933c044fa/docs/decisions/0019-production-guidance-and-platform-status.md)。
 
