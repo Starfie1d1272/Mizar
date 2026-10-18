@@ -48,6 +48,10 @@ class ObserverDriver:
         self._prespawn_sent = False
         self._spawn_sent = False
         self._full_sent = False
+        self._pending_entity_ticks = []
+        self._processed_entity_tick = None
+        self._ack_tick = None
+        self._last_receipt_ms = now_ms
         self.decoder, self.signon = LiveDecoder((lambda _: None) if parser else emit), SignonSequence()
         self.order = UnreliableOrder(initial=0)
         self.capture = capture
@@ -103,6 +107,7 @@ class ObserverDriver:
         if self.parser is not None and not self.done:
             self.parser.poll(self.emit)
             self._advance_initialization(now_ms)
+            self._send_processed_tick(now_ms)
 
     def _send_connect(self, auth):
         try:
@@ -174,6 +179,10 @@ class ObserverDriver:
                     self.signon.server_info(self.decoder.server['server_count'])
         if self.parser is not None:
             self._parser_sequence = self.parser.submit(frame.body)
+            if any(message.message_id == 55 for message in decoded):
+                if self.decoder.tick is None:
+                    raise DriverError('entity-packet-without-tick')
+                self._pending_entity_ticks.append((self._parser_sequence, self.decoder.tick))
         self._advance_initialization(now_ms)
 
     def _advance_initialization(self, now_ms):
@@ -236,6 +245,23 @@ class ObserverDriver:
         if self.signon.state == 7:
             self.phase, self.reason = 'blocked', 'changelevel-new-instance-required'
 
+    def _send_processed_tick(self, now_ms):
+        checkpoint = self.parser.checkpoint if self.parser else None
+        if checkpoint is None:
+            return
+        while self._pending_entity_ticks and self._pending_entity_ticks[0][0] <= checkpoint['sequence']:
+            _, self._processed_entity_tick = self._pending_entity_ticks.pop(0)
+        if (not self._full_sent or self._processed_entity_tick is None
+            or self._ack_tick == self._processed_entity_tick
+            or now_ms - self._last_receipt_ms < 100):
+            return
+        # Only acknowledge entity packets consumed by the actual parser. Never
+        # echo a raw network tick while the entity parser is still behind.
+        encoded, _ = encode_message(4, number(1, self._processed_entity_tick))
+        self.port.send(reliable_frame(encoded, 0), 8)
+        self._ack_tick = self._processed_entity_tick
+        self._last_receipt_ms = now_ms
+
     def report(self):
         span = None if self.first_channel_ms is None else self.last_channel_ms - self.first_channel_ms
         return {'phase': self.phase, 'reason': self.reason, 'received_messages': self.received,
@@ -243,6 +269,8 @@ class ObserverDriver:
                 'channel_receive_span_ms': span, 'received_signon_state': self.signon.state,
                 'stages': self.stages,
                 'parser_checkpoint': self.parser.checkpoint if self.parser else None,
+                'last_processed_entity_tick': self._processed_entity_tick,
+                'last_acknowledged_entity_tick': self._ack_tick,
                 'net_message_counts': self.decoder.counts,
                 'initialization_blockers': ([] if self._full_sent else
                     [self.reason or 'signon-in-progress']),

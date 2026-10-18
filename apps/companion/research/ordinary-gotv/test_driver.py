@@ -96,6 +96,28 @@ class DriverTest(unittest.TestCase):
         driver.close()
         self.assertEqual(port.closed, 1)
 
+    def test_tick_receipt_waits_for_processed_entities_and_is_rate_bounded(self):
+        driver, port, _, _ = self.ready()
+        class Parser:
+            checkpoint = {'sequence': 0}
+        driver.parser = Parser()
+        driver._full_sent = True
+        driver._pending_entity_ticks = [(1, 100)]
+        driver.decoder.tick = 200  # A raw receive tick is not a parsed snapshot.
+        driver._send_processed_tick(200)
+        self.assertEqual(len(port.sent), 3)
+        driver.parser.checkpoint = {'sequence': 1}
+        driver._send_processed_tick(200)
+        decoded, _ = messages(decode_frame(port.sent[-1][0], gns_reliable=True).body)
+        self.assertEqual((decoded[0].message_id, scalar(fields(decoded[0].body), 1)), (4, 100))
+        driver._pending_entity_ticks = [(2, 101)]
+        driver.parser.checkpoint = {'sequence': 2}
+        driver._send_processed_tick(250)
+        self.assertEqual(len(port.sent), 4)
+        driver._send_processed_tick(300)
+        self.assertEqual(driver.report()['last_acknowledged_entity_tick'], 101)
+        driver.close()
+
     def test_wrong_peer_context_and_timeouts_do_not_request_ticket(self):
         for server, context, expected in [(999, b'connect0x00000000', 'peer-mismatch'), (456, b'wrong', 'context-mismatch')]:
             port = Port()

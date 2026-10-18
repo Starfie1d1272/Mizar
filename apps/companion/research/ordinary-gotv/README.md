@@ -60,3 +60,7 @@ pnpm architecture:check
 `verify.py` 是 Linux 云端验证器：真实公开录像被人为分段写入，先保留后续数据，确认第一批事件已输出，再继续写入；比较完整/增量结果，检查停止、截断、空文件和非法文件。**这只是文件持续读取，不是完美持续收数。** `test_wire.py` 的包全部合成，专门验证脱敏、格式边界及避免误判，不能充当任何服务器的流量。
 
 可选独立 oracle：在隔离 Python 环境安装 `demoparser2==0.42.0`，按 [EVIDENCE.md](EVIDENCE.md) 导出四种事件，再给 `verify.py` 加 `--oracle-dir`。此依赖不加入 Mizar。
+
+## Windows CI 测试包
+
+`Observer Research Package` 工作流在本研究 PR 变更后构建 Windows x64 原生桥、单文件解析器和便携 Python/Node 运行环境，并上传七天有效的测试制品。下载后解压运行 `Start.cmd`；仅使用本机 CS2 的 Steam API，填写当前授权测试源。包内 `manifest.json` 保存精确提交与文件摘要。构建完成和脚本启动检查分别记录，实际普通观众连接与持续事件输出由新测试赛验证。
