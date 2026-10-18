@@ -181,6 +181,8 @@ function ContextPanel({
       <Dialog
         open={issuesOpen && issues.length > 0}
         title="本场需要处理"
+        modal={false}
+        className="workspace-recovery"
         onClose={() => setIssuesOpen(false)}
       >
         {issues.map((issue) => (

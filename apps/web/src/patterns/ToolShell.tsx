@@ -6,15 +6,21 @@ import './tool-shell.css';
 export function ToolShell({
   title,
   context,
+  fill = false,
   children,
 }: {
   title: string;
+  fill?: boolean;
   context?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <DesktopCanvas kind="product">
-      <div className="product-shell mizar-tool-shell mizar-surface" data-context={Boolean(context)}>
+      <div
+        className="product-shell mizar-tool-shell mizar-surface"
+        data-context={Boolean(context)}
+        data-fill={fill}
+      >
         <a className="mizar-tool-skip" href="#tool-content">
           跳到工具内容
         </a>

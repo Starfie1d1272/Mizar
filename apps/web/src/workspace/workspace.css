@@ -634,3 +634,15 @@
   grid-column: 2;
   grid-row: 1;
 }
+
+.workspace-recovery {
+  position: fixed;
+  inset: auto auto 26% var(--mizar-layout-gap);
+  margin: 0;
+  width: calc(25% - var(--mizar-layout-gap) * 2);
+  max-height: 42%;
+  overflow-y: auto;
+}
+.desktop-canvas[data-kind='left'] .workspace-recovery {
+  width: calc(100% - var(--mizar-layout-gap) * 2);
+}

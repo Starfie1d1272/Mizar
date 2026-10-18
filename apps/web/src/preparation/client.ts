@@ -54,13 +54,27 @@ export async function command(path: string, body: unknown = {}, task?: ControlTa
 export type Tool = 'hud' | 'bp' | 'diagnostics' | 'preview';
 const toolPaths = {
   hud: '/operator/hud',
-  bp: '/preview?scene=bp',
+  bp: '/operator/bp',
   diagnostics: '/debug',
   preview: '/preview',
 };
-export async function openTool(tool: Tool) {
-  if (window.__TAURI_INTERNALS__) await desktopInvoke('open_tool', { tool });
-  else window.open(toolPaths[tool], `mizar-${tool === 'bp' ? 'preview' : tool}`);
+export async function openTool(tool: Tool, presetId?: string) {
+  if (window.__TAURI_INTERNALS__) await desktopInvoke('open_tool', { tool, presetId });
+  else {
+    const path =
+      tool === 'hud' && presetId
+        ? `${toolPaths.hud}?preset=${encodeURIComponent(presetId)}`
+        : toolPaths[tool];
+    if (tool === 'hud') {
+      const editor = window.open('', 'mizar-hud');
+      if (!editor) throw new Error('请允许打开 HUD 编辑器窗口。');
+      if (editor.location.pathname === '/operator/hud') {
+        if (presetId)
+          editor.dispatchEvent(new CustomEvent('mizar:hud-select-preset', { detail: presetId }));
+        editor.focus();
+      } else editor.location.assign(path);
+    } else window.open(path, `mizar-${tool}`);
+  }
 }
 export async function openRivalHubAuthorization(url: string, popup?: Window | null) {
   if (window.__TAURI_INTERNALS__) await desktopInvoke('open_rivalhub_authorization', { url });

@@ -6,12 +6,23 @@ import { desktopInvoke } from '../workspace/client';
 
 export function LocalMatchControls({
   action,
+  mode = 'both',
+  onSelected,
+  onCancel,
+  initialEventId = '',
+  beforeApply,
 }: {
+  readonly mode?: 'create' | 'select' | 'both';
+  readonly onSelected?: () => void;
+  readonly onCancel?: () => void;
+  readonly initialEventId?: string;
+  readonly beforeApply?: () => boolean;
   readonly action: (run: () => Promise<unknown>) => Promise<void>;
 }) {
-  const { view, refresh } = useLocalTournament();
+  const { view, refresh, status } = useLocalTournament();
   const [a, setA] = useState({ name: '', id: '' });
   const [b, setB] = useState({ name: '', id: '' });
+  const [eventId, setEventId] = useState(initialEventId);
   const [format, setFormat] = useState('bo3');
   const [confirmation, setConfirmation] = useState<{ matchId: string; name: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -67,75 +78,95 @@ export function LocalMatchControls({
           移入回收站
         </Button>
       </Dialog>
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          void action(async () => {
-            await command('/operator/local-match/create', {
-              teamA: a.name,
-              teamB: b.name,
-              ...(a.id ? { teamAId: a.id } : {}),
-              ...(b.id ? { teamBId: b.id } : {}),
-              format,
+      {mode !== 'select' ? (
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (status !== 'ready' || (beforeApply && !beforeApply())) return;
+            void action(async () => {
+              await command('/operator/local-match/create', {
+                teamA: a.name,
+                teamB: b.name,
+                ...(a.id ? { teamAId: a.id } : {}),
+                ...(b.id ? { teamBId: b.id } : {}),
+                format,
+                ...(eventId ? { eventId } : {}),
+              });
+              onSelected?.();
+              setA({ name: '', id: '' });
+              setB({ name: '', id: '' });
+              await refresh();
             });
-            setA({ name: '', id: '' });
-            setB({ name: '', id: '' });
-            await refresh();
-          });
-        }}
-      >
-        {[
-          { label: '队伍 A', value: a, set: setA, other: b.id },
-          { label: '队伍 B', value: b, set: setB, other: a.id },
-        ].map(({ label, value, set, other }) => (
-          <div key={label}>
-            <Field
-              label={label}
-              required
-              value={value.name}
-              onChange={(event) => set({ name: event.target.value, id: '' })}
-              placeholder="搜索已有队伍，或输入新队名"
-            />
-            {value.id ? (
-              <p>
-                将复用已保存的队标与名单。
-                <Button onClick={() => set({ ...value, id: '' })}>改为新队伍</Button>
-              </p>
-            ) : value.name.trim() ? (
-              <div className="preparation-team-results">
-                {view?.teams
-                  .filter((team) =>
-                    team.name.toLocaleLowerCase().includes(value.name.trim().toLocaleLowerCase()),
-                  )
-                  .slice(0, 8)
-                  .map((team) => (
-                    <Button
-                      key={team.teamId}
-                      disabled={team.teamId === other}
-                      onClick={() => set({ name: team.name, id: team.teamId })}
-                    >
-                      复用 {team.name}
-                    </Button>
-                  ))}
-              </div>
-            ) : null}
-          </div>
-        ))}
-        <Select label="赛制" value={format} onChange={(event) => setFormat(event.target.value)}>
-          {['bo1', 'bo3', 'bo5'].map((bo) => (
-            <option key={bo} value={bo}>
-              {bo.toUpperCase()}
-            </option>
-          ))}
-        </Select>
-        <Button
-          type="submit"
-          variant="primary"
-          disabled={!a.name.trim() || !b.name.trim() || (!!a.id && a.id === b.id)}
+          }}
         >
-          创建本地比赛
-        </Button>
-      </form>
+          <Select
+            label="创建比赛所属赛事"
+            value={eventId}
+            onChange={(event) => setEventId(event.target.value)}
+          >
+            <option value="">创建新本地赛事</option>
+            {view?.events.map((event) => (
+              <option key={event.eventId} value={event.eventId}>
+                {event.name}
+              </option>
+            ))}
+          </Select>
+          {[
+            { label: '队伍 A', value: a, set: setA, other: b.id },
+            { label: '队伍 B', value: b, set: setB, other: a.id },
+          ].map(({ label, value, set, other }) => (
+            <div key={label}>
+              <Field
+                label={label}
+                required
+                value={value.name}
+                onChange={(event) => set({ name: event.target.value, id: '' })}
+                placeholder="搜索已有队伍，或输入新队名"
+              />
+              {value.id ? (
+                <p>
+                  将复用已保存的队标与名单。
+                  <Button onClick={() => set({ ...value, id: '' })}>改为新队伍</Button>
+                </p>
+              ) : value.name.trim() ? (
+                <div className="preparation-team-results">
+                  {view?.teams
+                    .filter((team) =>
+                      team.name.toLocaleLowerCase().includes(value.name.trim().toLocaleLowerCase()),
+                    )
+                    .slice(0, 8)
+                    .map((team) => (
+                      <Button
+                        key={team.teamId}
+                        disabled={team.teamId === other}
+                        onClick={() => set({ name: team.name, id: team.teamId })}
+                      >
+                        复用 {team.name}
+                      </Button>
+                    ))}
+                </div>
+              ) : null}
+            </div>
+          ))}
+          <Select label="赛制" value={format} onChange={(event) => setFormat(event.target.value)}>
+            {['bo1', 'bo3', 'bo5'].map((bo) => (
+              <option key={bo} value={bo}>
+                {bo.toUpperCase()}
+              </option>
+            ))}
+          </Select>
+          <Button
+            type="submit"
+            variant="primary"
+            disabled={
+              status !== 'ready' || !a.name.trim() || !b.name.trim() || (!!a.id && a.id === b.id)
+            }
+          >
+            创建本地比赛
+          </Button>
+          {onCancel ? <Button onClick={onCancel}>取消创建</Button> : null}
+        </form>
+      ) : null}
       <details>
         <summary>管理本地比赛</summary>
         <p>正在使用的比赛需先结束制作。游戏退出确认后，可解除当前选择并回收，包括最后一场比赛。</p>
@@ -196,7 +227,7 @@ export function LocalMatchControls({
         ))}
         {!view?.trashedMatches?.length ? <p>回收站为空。</p> : null}
       </details>
-      {view?.matches.length ? (
+      {mode !== 'create' && view?.matches.length ? (
         <Select
           label="已保存比赛"
           value={view.activeLocalMatchId ?? ''}

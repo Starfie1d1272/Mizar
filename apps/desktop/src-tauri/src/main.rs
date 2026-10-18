@@ -1287,6 +1287,7 @@ fn main_path_allowed(path: &str) -> bool {
     [
         "/",
         "/matches",
+        "/resources",
         "/matches?tab=roster",
         "/matches?tab=maps",
         "/picture",
@@ -1509,7 +1510,7 @@ fn ensure_live_windows(app: &tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn open_tool(app: tauri::AppHandle, tool: String, diagnostic_operation_id: Option<String>) -> Result<(), String> {
+async fn open_tool(app: tauri::AppHandle, tool: String, preset_id: Option<String>, diagnostic_operation_id: Option<String>) -> Result<(), String> {
     let diagnostic_log = app.state::<DesktopLog>().inner().clone();
     let command_log = diagnostic_log.clone();
     let native_operation_id = diagnostic_operation_id.clone();
@@ -1521,25 +1522,37 @@ async fn open_tool(app: tauri::AppHandle, tool: String, diagnostic_operation_id:
     app.state::<updates::PendingUpdate>().check()?;
     let (label, title, path) = match tool.as_str() {
         "hud" => ("tool-hud", "HUD 工作台", "/operator/hud"),
-        "bp" => ("tool-preview", "节目预览", "/preview?scene=bp"),
+        "bp" => ("tool-bp", "正式 BP 控制", "/operator/bp"),
         "diagnostics" => ("tool-diagnostics", "运行诊断", "/debug"),
         "preview" => ("tool-preview", "节目预览", "/preview"),
         _ => return Err("工具无法识别。".into()),
     };
+    let mut target = format!("{BASE}{path}").parse::<tauri::Url>()
+        .map_err(|error| command_log.preserve_error("open_tool", native_operation_id.as_deref(), &error, "工具地址无法识别。"))?;
+    if tool == "hud" {
+        if let Some(id) = preset_id.as_deref() {
+            if id.is_empty() || id.len() > 256 { return Err("HUD 预设标识无效。".into()); }
+            target.query_pairs_mut().append_pair("preset", id);
+        }
+    }
     if let Some(window) = app.get_webview_window(label) {
-        window
-            .navigate(
-                format!("{BASE}{path}")
-                    .parse()
-                    .map_err(|error| command_log.preserve_error("open_tool", native_operation_id.as_deref(), &error, "工具地址无法识别。"))?,
-            )
-            .map_err(|error| command_log.preserve_error("open_tool", native_operation_id.as_deref(), &error, "工具窗口未能恢复。"))?;
+        if tool == "hud" {
+            if let Some(id) = preset_id.as_deref() {
+                let detail = serde_json::to_string(id)
+                    .map_err(|error| command_log.preserve_error("open_tool", native_operation_id.as_deref(), &error, "HUD 预设标识无效。"))?;
+                window.eval(&format!("window.dispatchEvent(new CustomEvent('mizar:hud-select-preset', {{detail:{detail}}}));"))
+                    .map_err(|error| command_log.preserve_error("open_tool", native_operation_id.as_deref(), &error, "HUD 预设未能打开。"))?;
+            }
+        } else {
+            window.navigate(target.clone())
+                .map_err(|error| command_log.preserve_error("open_tool", native_operation_id.as_deref(), &error, "工具窗口未能恢复。"))?;
+        }
         let _ = window.unminimize();
         let _ = window_presentation::set_visible(&window, true);
         let _ = window.set_focus();
         return Ok(());
     }
-    WebviewWindowBuilder::new(&app, label, local_url(path))
+    WebviewWindowBuilder::new(&app, label, WebviewUrl::External(target))
         .title(format!("Mizar · {title}"))
         .inner_size(1280.0, 800.0)
         .on_navigation(trusted_navigation)

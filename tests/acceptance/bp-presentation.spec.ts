@@ -101,7 +101,7 @@ test('local BP authoring compiles to MatchContext and survives restart', async (
   let app = buildAppWithManualBpClock(bpClock, { matchManifestPath: manifestPath });
   await routeCompanionApi(context, () => app);
   try {
-    await page.goto('/preview?scene=bp');
+    await page.goto('/operator/bp');
     await expect(page.locator('.bp-source-badge')).toHaveAttribute('data-source', 'none');
     expect(JSON.parse((await app.inject({ url: '/local/v1/bp-workspace' })).body)).toMatchObject({
       schemaVersion: 'mizar.bp-workspace.v5',
@@ -150,7 +150,7 @@ test('local BP authoring compiles to MatchContext and survives restart', async (
 
     await page.getByRole('button', { name: '保存本地 BP', exact: true }).click();
     await expect(page.locator('.bp-source-badge')).toHaveAttribute('data-source', 'local');
-    await expect(page.getByRole('heading', { name: '本地 BP 已保存' })).toBeVisible();
+    await expect(page.getByRole('status').filter({ hasText: 'BP 已就绪' })).toBeVisible();
     const localWorkspace = await app.inject({ url: '/local/v1/bp-workspace' });
     expect(JSON.parse(localWorkspace.body)).toMatchObject({ source: 'local', readiness: 'ready' });
 
@@ -158,8 +158,8 @@ test('local BP authoring compiles to MatchContext and survives restart', async (
     app = buildAppWithManualBpClock(bpClock, { matchManifestPath: manifestPath });
     await page.setViewportSize({ width: 1280, height: 900 });
     await expect(page.locator('.bp-source-badge')).toHaveAttribute('data-source', 'cache');
-    await expect(page.getByRole('heading', { name: '本地 BP 已保存' })).toBeVisible();
-    await expect(page.locator('.bp-local-summary')).toContainText("Team D'avenir 本地长队");
+    await expect(page.getByRole('status').filter({ hasText: 'BP 已就绪' })).toBeVisible();
+    await expect(page.locator('.bp-current-match')).toContainText("Team D'avenir 本地长队");
     await expect(
       page.getByRole('complementary', { name: '播出控制' }).getByRole('button', {
         name: '编辑本地 BP',
@@ -182,7 +182,7 @@ test('local BP authoring compiles to MatchContext and survives restart', async (
     await expect(program.locator('.bp-scene')).toHaveCount(0);
     await page
       .getByRole('dialog', { name: '编辑比赛 BP' })
-      .getByRole('button', { name: '关闭', exact: true })
+      .getByRole('button', { name: '取消编辑', exact: true })
       .click();
     await page.getByRole('button', { name: '播放 BP', exact: true }).click();
     await expect(program.locator('.bp-card[data-visible=true]')).toHaveCount(1);

@@ -33,7 +33,7 @@ export function DesktopCanvas({
     return () => observer.disconnect();
   }, [size]);
   return (
-    <div className="desktop-canvas" ref={host}>
+    <div className="desktop-canvas" data-kind={kind} ref={host}>
       <div className="desktop-canvas__canvas" style={{ ...size, zoom: scale }}>
         {children}
       </div>

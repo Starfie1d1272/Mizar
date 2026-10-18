@@ -1,3 +1,6 @@
+import { EventMatchWorkspace } from './EventMatchWorkspace';
+import { HudPresetDirectory } from './HudPresetDirectory';
+import './production.css';
 import { AutomaticPreparation } from './AutomaticPreparation';
 import { SeriesBindingControls } from './SeriesBindingControls';
 import { DemoTestPanel } from './DemoTestPanel';
@@ -8,11 +11,9 @@ import type { MatchDocumentV1 } from '@mizar/protocol/context';
 import type { ProductionGuidance } from '@mizar/protocol/program-scenes';
 import { MatchDocumentView, type MatchSection } from './MatchDocumentView';
 import { useEffect, useState } from 'react';
-import { HUD_WIDGET_REGISTRY } from '@mizar/hud-config';
 import { OperatorShell } from '../operator/OperatorShell';
 import { RivalHubPreparationPanel } from '../operator/RivalHubPreparationPanel';
 import { RivalHubSyncControls } from '../operator/RivalHubSyncControls';
-import { useHudConfigClient } from '../realtime/hud-config-client';
 import { desktopInvoke, useProgramScenes } from '../workspace/client';
 import { LocalTournamentEditor } from '../workspace/LocalTournamentEditor';
 import { Button, Panel, StatusBanner, StatusPill } from '../ui';
@@ -37,8 +38,8 @@ const tabs = {
     ['maps', '地图与 BP'],
   ],
   '/picture': [
-    ['program', '节目'],
-    ['hud', 'HUD'],
+    ['hud', 'HUD 预设'],
+    ['program', '节目预览'],
     ['overlay', '本机 HUD'],
   ],
   '/settings': [
@@ -100,11 +101,10 @@ export function PreparationPage() {
       : null,
     5000,
   );
-  const { view, refresh } = useLocalTournament();
+  const { view, refresh, status: libraryStatus } = useLocalTournament();
   const local = envelope?.source === 'local' && view?.activeLocalMatchId === match?.matchId;
   const scenes = useProgramScenes();
   const exit = useWorkspaceExitStatus();
-  const hud = useHudConfigClient();
   const production = useLocalRead<Production>('/local/v1/production');
   const rivalhub = useLocalRead<{ paired: boolean; displayName?: string | null }>(
     '/local/v1/rivalhub-connection',
@@ -201,13 +201,15 @@ export function PreparationPage() {
         <header className="preparation-heading">
           <div>
             <h1>
-              {path === '/matches'
-                ? '比赛资料'
-                : path === '/picture'
-                  ? '播出画面'
-                  : path === '/settings'
-                    ? (settingsTitle[tab] ?? '设置')
-                    : '本场准备'}
+              {path === '/resources'
+                ? '比赛库'
+                : path === '/matches'
+                  ? '比赛资料'
+                  : path === '/picture'
+                    ? '播出画面'
+                    : path === '/settings'
+                      ? (settingsTitle[tab] ?? '设置')
+                      : '本场准备'}
             </h1>
           </div>
           <Button
@@ -225,7 +227,7 @@ export function PreparationPage() {
 
         {!(path === '/settings' && tab === 'gsi') ? <Cs2Recovery production={production} /> : null}
         {message ? <StatusBanner tone="danger">{message}</StatusBanner> : null}
-        {options && path !== '/settings' ? (
+        {options ? (
           <nav className="preparation-tabs" aria-label="页面分区">
             {options.map(([key, label]) => (
               <a
@@ -254,7 +256,7 @@ export function PreparationPage() {
                     <Button
                       variant="primary"
                       onClick={() => {
-                        window.location.href = '/matches?select=1';
+                        window.location.href = '/resources';
                       }}
                     >
                       选择已有比赛
@@ -270,7 +272,7 @@ export function PreparationPage() {
                       <Button
                         variant="secondary"
                         onClick={() => {
-                          window.location.href = '/matches?select=1';
+                          window.location.href = '/resources';
                         }}
                       >
                         从 RivalHub 选择比赛
@@ -383,7 +385,7 @@ export function PreparationPage() {
                   <Button
                     variant="secondary"
                     onClick={() => {
-                      window.location.href = '/matches?select=1';
+                      window.location.href = '/resources';
                     }}
                   >
                     切换比赛
@@ -509,7 +511,13 @@ export function PreparationPage() {
               </div>
             ) : null}
             <SpectatorWorkflow capabilities={capabilities} production={production} />
-            <DemoTestPanel />
+            <details
+              className="preparation-secondary"
+              open={new URLSearchParams(window.location.search).has('demoTest')}
+            >
+              <summary>Demo 试播</summary>
+              <DemoTestPanel />
+            </details>
             <div className="preparation-tool-strip">
               <span>常用工具</span>
               {tools}
@@ -578,6 +586,32 @@ export function PreparationPage() {
               </details>
             ) : null}
           </div>
+        ) : path === '/resources' ? (
+          <>
+            {libraryStatus !== 'ready' ? (
+              <StatusBanner tone="warning">
+                {libraryStatus === 'loading'
+                  ? '正在读取比赛库…'
+                  : '比赛库读取失败，保留最近资料与草稿；连接恢复前暂停保存和载入。'}
+              </StatusBanner>
+            ) : null}
+            {view ? (
+              <EventMatchWorkspace
+                view={view}
+                refresh={refresh}
+                action={action}
+                canWrite={libraryStatus === 'ready'}
+              />
+            ) : null}
+            <details>
+              <summary>回收站与本地管理</summary>
+              <LocalMatchControls mode="select" action={action} />
+            </details>
+            <details>
+              <summary>RivalHub 比赛</summary>
+              <RivalHubPreparationPanel mode="matches" />
+            </details>
+          </>
         ) : path === '/matches' ? (
           <>
             <RivalHubSyncControls />
@@ -696,21 +730,7 @@ export function PreparationPage() {
               <ProgramPreview />
             </>
           ) : tab === 'hud' ? (
-            <Panel>
-              <h2>{hud.current.preset.name}</h2>
-              <p>布局 · {hud.current.layout.name}</p>
-              <p>外观 · {hud.current.theme.name}</p>
-              <p>
-                {HUD_WIDGET_REGISTRY.filter(
-                  (widget) =>
-                    hud.current.layout.widgets[widget.id].visible &&
-                    widget.rendererAvailability === 'implemented',
-                )
-                  .map((widget) => widget.label)
-                  .join(' · ')}
-              </p>
-              <Button onClick={() => void action(() => openTool('hud'))}>打开 HUD 编辑器</Button>
-            </Panel>
+            <HudPresetDirectory action={action} />
           ) : (
             <div className="preparation-overlay-workspace">
               <Panel className="preparation-overlay-display">
