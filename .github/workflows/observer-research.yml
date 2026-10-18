@@ -34,7 +34,7 @@ jobs:
           pnpm --filter @mizar/telemetry-cstv... --fail-if-no-match run build
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           New-Item -ItemType Directory -Force .agent-tmp/observer-build | Out-Null
-          node --input-type=module -e "import {createRequire} from 'node:module'; const r=createRequire(import.meta.url); const er=createRequire(r.resolve('tsx/package.json')); await er('esbuild').build({entryPoints:['apps/companion/research/ordinary-gotv/parser_worker.mjs'],bundle:true,platform:'node',format:'esm',outfile:'.agent-tmp/observer-build/parser_worker.mjs'});"
+          node --input-type=module -e "import {createRequire} from 'node:module'; const r=createRequire(new URL('./apps/companion/package.json',import.meta.url)); const er=createRequire(r.resolve('tsx/package.json')); await er('esbuild').build({entryPoints:['apps/companion/research/ordinary-gotv/parser_worker.mjs'],bundle:true,platform:'node',format:'esm',outfile:'.agent-tmp/observer-build/parser_worker.mjs'});"
       - name: Fetch pinned official SDK headers and portable runtimes
         shell: pwsh
         run: |
