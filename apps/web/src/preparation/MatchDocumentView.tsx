@@ -1,5 +1,6 @@
 import type { MatchDocumentV1 } from '@mizar/protocol/context';
-import { Panel, StatusPill } from '../ui';
+import { Button, Panel, StatusPill } from '../ui';
+import { openTool } from './client';
 import { getMapThumbnail } from '@mizar/cs2-assets';
 import { mapLabel, matchMaps, matchRound, sideChoice } from './match-presentation';
 
@@ -131,7 +132,7 @@ export function MatchDocumentView({
       <Panel>
         <div className="preparation-match__meta">
           <h2>比赛地图</h2>
-          <span className="match-format">{match.format.toUpperCase()}</span>
+          <Button onClick={() => void openTool('bp')}>打开 BP 工作台</Button>
         </div>
         <p>
           {match.entrants.a.name} vs {match.entrants.b.name}
@@ -184,7 +185,12 @@ export function MatchDocumentView({
         )}
       </Panel>
       <Panel>
-        <h2>禁选过程</h2>
+        <div className="preparation-match__meta">
+          <h2>禁选过程</h2>
+          <span>
+            {match.veto.length} 步 · {match.format.toUpperCase()}
+          </span>
+        </div>
         {match.veto.length ? (
           <ol className="match-veto-list" aria-label="BP 步骤">
             {[...match.veto]

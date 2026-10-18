@@ -1,5 +1,8 @@
 import { useRef, useState } from 'react';
-import { Dialog } from '../ui';
+import { Dialog, Panel } from '../ui';
+import { getMapThumbnail } from '@mizar/cs2-assets';
+import { mapLabel } from '../preparation/match-presentation';
+import type { BpProjection } from '@mizar/protocol/bp';
 import { ScenePreviewViewport } from '../preparation/ScenePreviewViewport';
 import { RivalHubSyncControls } from '../operator/RivalHubSyncControls';
 import { BpControls } from './BpControls';
@@ -44,6 +47,52 @@ export function BpPage() {
   return <BpPresentation snapshot={snapshot} animate={animate} />;
 }
 
+function BpResultSummary({ projection }: { projection: BpProjection }) {
+  return (
+    <Panel className="bp-result-summary">
+      <h2>比赛地图 · {projection.format.toUpperCase()}</h2>
+      <div className="bp-result-maps">
+        {projection.cards
+          .filter((card) => card.kind !== 'ban')
+          .map((card, index) => {
+            const image = getMapThumbnail(card.mapName);
+            return (
+              <article key={card.mapName}>
+                {image ? <img src={image.outputPath} alt="" /> : null}
+                <div>
+                  <small>
+                    图 {index + 1} ·{' '}
+                    {card.kind === 'decider'
+                      ? '决胜图'
+                      : `${projection.entrants[card.entrant!].name} 选图`}
+                  </small>
+                  <h3>{mapLabel(card.mapName)}</h3>
+                  <p>
+                    {card.sideChoice
+                      ? `${projection.entrants[card.sideChoice.entrant].name} · ${card.sideChoice.side} 开局`
+                      : '开局阵营待定'}
+                  </p>
+                </div>
+              </article>
+            );
+          })}
+      </div>
+      <details className="bp-result-veto" open>
+        <summary>禁选结果 · {projection.cards.length} 张地图</summary>
+        <ol>
+          {projection.cards.map((card) => (
+            <li key={card.mapName}>
+              <span>{card.kind === 'ban' ? '禁用' : card.kind === 'pick' ? '选图' : '决胜图'}</span>
+              <strong>{mapLabel(card.mapName)}</strong>
+              <small>{card.entrant ? projection.entrants[card.entrant].name : '剩余地图'}</small>
+            </li>
+          ))}
+        </ol>
+      </details>
+    </Panel>
+  );
+}
+
 /** Editing and formal playback share a task; the adjacent preview remains read-only. */
 export function BpWorkbench() {
   const { snapshot } = useBpSession();
@@ -51,18 +100,49 @@ export function BpWorkbench() {
   return (
     <div className="bp-workbench">
       <BpWorkspaceControls />
-      <section className="bp-workbench-preview" aria-label="BP 画面检查，只读">
-        <h2>BP 画面检查 · 只读</h2>
-        <div className="bp-workbench-frame">
-          <ScenePreviewViewport
-            frame={{ key: 'bp', scene: 'bp', src: '/program/bp?preview=1', immediate: true }}
-            onSettled={() => {}}
-          />
-          {hidden ? (
-            <div className="bp-workbench-empty">BP 尚未播放 · 播放后在此检查画面</div>
-          ) : null}
-        </div>
-        <p>左侧播放 / 收起影响正式播出，此处只读取同一 BP 状态。</p>
+      <section className="bp-workbench-preview" aria-label="BP 结果与播出画面">
+        {hidden ? (
+          <>
+            <header className="bp-review-heading">
+              <h2>播出前核对</h2>
+              <span>{snapshot ? '尚未播放' : '状态待确认'}</span>
+            </header>
+            {snapshot?.projection ? (
+              <BpResultSummary projection={snapshot.projection} />
+            ) : (
+              <Panel className="bp-result-empty">
+                <h2>{snapshot ? '先完成本场禁选' : 'BP 状态暂不可用'}</h2>
+                <p>
+                  {snapshot
+                    ? '填写禁用地图、选图和开局阵营，保存后在这里核对结果。'
+                    : '正在读取制作服务，请检查连接后重试。'}
+                </p>
+                <p>网站比赛会同步已有 BP；本地比赛可从左侧填写。</p>
+              </Panel>
+            )}
+            <p>核对无误后点击“播放 BP”；播放期间，这里显示同一播出画面。</p>
+          </>
+        ) : (
+          <>
+            <header className="bp-review-heading">
+              <h2>BP 播出画面</h2>
+              <span>
+                {snapshot.state === 'revealing'
+                  ? '正在播放动画'
+                  : snapshot.state === 'hiding'
+                    ? '正在收起'
+                    : '完整画面 · 保持显示'}
+              </span>
+            </header>
+            <div className="bp-workbench-frame">
+              <ScenePreviewViewport
+                frame={{ key: 'bp', scene: 'bp', src: '/program/bp?preview=1', immediate: true }}
+                onSettled={() => {}}
+              />
+            </div>
+            <p>此处只读；左侧“收起 BP”会收起正式播出画面。</p>
+          </>
+        )}
       </section>
     </div>
   );
@@ -158,7 +238,7 @@ export function BpWorkspaceControls() {
         来源：{source}
       </span>
       <aside className="bp-control-panel" aria-label="播出控制">
-        <h2>BP 状态</h2>
+        <h2>本场 BP</h2>
         {demoSummary ? (
           <section className="bp-demo-active" aria-label="当前 BP 演示">
             <strong>演示模式</strong>
@@ -178,14 +258,6 @@ export function BpWorkspaceControls() {
         ) : (
           <>
             <div className="bp-source-status">
-              <strong>
-                {workspace
-                  ? sourceLabel(workspace.source)
-                  : loading
-                    ? '正在读取比赛'
-                    : '制作服务断开'}
-              </strong>
-              <p>{status}</p>
               {workspace?.source === 'cache' ? (
                 <small>当前使用本机缓存中的比赛上下文。</small>
               ) : null}
@@ -213,7 +285,13 @@ export function BpWorkspaceControls() {
           data-state={demoActive !== null ? 'ready' : (workspace?.readiness ?? 'unbound')}
           role="status"
         >
-          {status}
+          {snapshot && snapshot.state !== 'hidden'
+            ? snapshot.state === 'revealing'
+              ? 'BP 动画播放中'
+              : snapshot.state === 'hiding'
+                ? '正在收起 BP'
+                : 'BP 已完整展示'
+            : status}
         </div>
         <div className="bp-control-actions">
           <BpControls
@@ -330,10 +408,10 @@ export function BpWorkspaceControls() {
         </Dialog>
       ) : null}
 
-      <footer className="bp-technical-info">
-        <strong>OBS Browser Source · /program/bp · 1920 × 1080</strong>
-        <span>BP 画面</span>
-      </footer>
+      <details className="bp-technical-info">
+        <summary>OBS 接入地址</summary>
+        <p>/program/bp · 1920 × 1080</p>
+      </details>
     </div>
   );
 }

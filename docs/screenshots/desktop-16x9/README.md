@@ -8,6 +8,8 @@
 
 [比赛库与现场首发的最新 8 种状态](../library-workflow/README.md)
 
+[地图与 BP 最新五种状态](../bp-polish/README.md)
+
 ## 本场准备
 
 ![本场准备](01-home.png)

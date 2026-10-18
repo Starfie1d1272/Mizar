@@ -1,0 +1,16 @@
+{
+  "capturedAt": "2026-10-18T09:53:34.039934+00:00",
+  "viewport": {
+    "width": 2560,
+    "height": 1440,
+    "fullPage": false
+  },
+  "source": "Actual application with EPL sample; simulated BP read endpoints; no formal playback writes.",
+  "files": {
+    "03-empty.png": "1fc4baa2b0749472ad00ecab2d089bd1c3ea86cf0bbdc501d5ebfade79f243e2",
+    "04-editing.png": "0c6fb2aa9a3445d9da57cd3d6828febfda5c9296ea5462d076805ee37508218e",
+    "02-ready.png": "4ac458ae6a631c24ccbced9789975a07a63d6565939989dd7488ff771ff36f89",
+    "01-maps.png": "58a9fbf56c4e1134d8a74da6a850745a1891ab50397b1b19b30b1ed3ffe8b1ff",
+    "05-playing.png": "8117b2d08d534165f97ddddd3e148eaf229512fe9c7822860ab6fbf900814bd5"
+  }
+}

@@ -1139,3 +1139,101 @@
   color: var(--mizar-fg-secondary);
   pointer-events: none;
 }
+
+.bp-workbench {
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.6fr);
+  gap: var(--mizar-layout-padding);
+  padding: var(--mizar-layout-padding);
+}
+.bp-workbench .bp-control-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mizar-layout-padding);
+}
+.bp-workbench .bp-source-status:empty {
+  display: none;
+}
+.bp-workbench .bp-current-match {
+  gap: var(--mizar-layout-padding);
+}
+.bp-workbench .bp-current-teams {
+  font-size: var(--mizar-type-size-heading);
+}
+.bp-review-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--mizar-layout-padding);
+}
+.bp-review-heading h2 {
+  margin: 0 0 var(--mizar-layout-padding);
+}
+.bp-review-heading span,
+.bp-workbench-preview > p,
+.bp-result-summary small {
+  color: var(--mizar-fg-secondary);
+}
+.bp-result-maps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--mizar-layout-gap);
+}
+.bp-result-maps article {
+  overflow: hidden;
+  background: var(--mizar-bg-canvas);
+  border: var(--mizar-line-border) solid var(--mizar-border-default);
+  border-radius: var(--mizar-shape-panel);
+}
+.bp-result-maps img {
+  width: 100%;
+  aspect-ratio: 16 / 8;
+  object-fit: cover;
+  display: block;
+}
+.bp-result-maps article > div {
+  padding: var(--mizar-layout-padding);
+}
+.bp-result-maps h3 {
+  margin-block: var(--mizar-layout-gap);
+}
+.bp-result-maps p {
+  margin-bottom: 0;
+  color: var(--mizar-fg-secondary);
+}
+.bp-result-veto {
+  margin-top: var(--mizar-layout-padding);
+}
+.bp-result-veto summary {
+  cursor: pointer;
+}
+.bp-result-veto ol {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--mizar-layout-gap);
+  list-style-position: inside;
+  padding: 0;
+}
+.bp-result-veto li {
+  padding: var(--mizar-layout-gap);
+  border-bottom: var(--mizar-line-border) solid var(--mizar-border-default);
+}
+.bp-result-veto li span {
+  margin-inline: var(--mizar-layout-gap);
+  color: var(--mizar-fg-secondary);
+}
+.bp-result-veto li small {
+  display: block;
+  margin-top: var(--mizar-layout-compact);
+}
+.bp-result-empty {
+  min-height: 280px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: calc(var(--mizar-layout-padding) * 2);
+}
+@media (max-width: 1000px) {
+  .bp-workbench {
+    grid-template-columns: 1fr;
+  }
+}

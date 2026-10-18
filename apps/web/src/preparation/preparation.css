@@ -1249,3 +1249,45 @@
   background: var(--mizar-accent-primary);
   color: var(--mizar-fg-on-accent);
 }
+
+/* Keep map order and veto evidence in the same preparation viewport. */
+.match-map-workspace {
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  align-items: start;
+}
+.match-map-workspace .match-map-grid {
+  grid-template-columns: 1fr;
+}
+.match-map-workspace .match-map-card {
+  display: grid;
+  grid-template-columns: 160px minmax(0, 1fr);
+}
+.match-map-workspace .match-map-image {
+  height: 100%;
+  min-height: 128px;
+  aspect-ratio: auto;
+}
+.match-map-workspace .match-veto-list li {
+  grid-template-columns: 20px 40px 56px minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--mizar-layout-gap);
+  padding-block: var(--mizar-layout-compact);
+}
+.match-map-workspace .match-veto-list img {
+  width: 40px;
+}
+.match-map-workspace .match-veto-side {
+  grid-column: auto;
+  text-align: left;
+}
+@media (max-width: 900px) {
+  .match-map-workspace {
+    grid-template-columns: 1fr;
+  }
+}
+.match-map-workspace .match-veto-description {
+  gap: 0;
+  line-height: 1.35;
+}
+.match-map-workspace .match-veto-list li {
+  padding-block: calc(var(--mizar-layout-compact) / 2);
+}
