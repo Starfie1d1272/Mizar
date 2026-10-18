@@ -12,6 +12,7 @@ mod demo_test;
 mod desktop_worker;
 mod geometry;
 mod managed_cs2;
+mod mulnx_launch;
 mod obs_configuration;
 mod powershell;
 mod production_exit;
@@ -600,6 +601,18 @@ async fn cs2_config_status(app: tauri::AppHandle) -> Result<serde_json::Value, S
     })
     .await
     .map_err(|_| "CS2 配置状态不可用。".to_string())?
+}
+
+#[tauri::command]
+async fn launch_mulnx(window: tauri::WebviewWindow, app: tauri::AppHandle,
+    diagnostic_operation_id: Option<String>) -> Result<(), String> {
+    if window.label() != "main" { return Err("请在准备中心打开 MulNX。".into()); }
+    let log = app.state::<DesktopLog>().inner().clone();
+    let evidence = log.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || mulnx_launch::launch(&app, &log))
+        .await.unwrap_or_else(|error| Err(format!("MulNX 启动任务失败：{error}")));
+    evidence.native_outcome("launch_mulnx", diagnostic_operation_id.as_deref(), &result);
+    result
 }
 
 #[tauri::command]
@@ -2086,6 +2099,7 @@ fn run_desktop(
             read_obs_configuration_context,
             cs2_config_status,
             mulnx_handoff_status,
+            launch_mulnx,
             open_mulnx_browser,
             start_managed_cs2,
             attach_external_cs2,

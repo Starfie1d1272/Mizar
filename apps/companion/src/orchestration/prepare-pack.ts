@@ -5,11 +5,12 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isolatedMetadata, verifyIsolatedPack } from './isolated-pack.js';
 
-/** Create a separate pack; never modify a user's original pack or import bundled resources. */
-export async function prepareIsolatedPack(source: string, root: string) {
+/** Create a separate scheduling pack while preserving the original resources. */
+export async function prepareIsolatedPack(source: string, root: string, stableName?: string) {
   const from = await realpath(source),
     to = await realpath(root);
-  const name = `Mizar_${randomBytes(12).toString('hex')}`;
+  const name = stableName ?? `Mizar_${randomBytes(12).toString('hex')}`;
+  if (!/^Mizar_[a-f0-9]{24}$/.test(name)) throw new Error('pack_name_invalid');
   const target = join(to, name);
   await mkdir(target); // Exclusive; partial copies never get valid metadata.
   let files = 0,
@@ -28,7 +29,15 @@ export async function prepareIsolatedPack(source: string, root: string) {
     } else throw new Error('pack_unsafe_entry');
   };
   // These are MulNX's resource directories; no original automatic triggers are copied.
-  for (const dir of ['CamMacros', 'Campaths']) await copy(join(from, dir), join(target, dir), 0);
+  for (const dir of ['CamMacros', 'Campaths']) {
+    const input = join(from, dir);
+    const stat = await lstat(input).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+      throw error;
+    });
+    if (stat) await copy(input, join(target, dir), 0);
+    else await mkdir(join(target, dir));
+  }
   await writeFile(join(target, `${name}.yaml`), isolatedMetadata(name), { flag: 'wx' });
   if (!verifyIsolatedPack(to, name)) throw new Error('pack_verification_failed');
   return { name, files, bytes };

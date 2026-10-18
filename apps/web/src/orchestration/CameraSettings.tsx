@@ -11,6 +11,7 @@ import {
 import { Button, Field, Panel, Select, StatusBanner } from '../ui';
 import { command, useLocalRead } from '../preparation/client';
 import { MUSIC_LABELS, type MusicView } from '../music/MusicControls';
+import { MulnxToolControls } from './MulnxToolControls';
 import { MulnxHandoff } from './MulnxHandoff';
 import { CameraControls } from './CameraControls';
 
@@ -90,6 +91,7 @@ export function CameraSettings() {
     <Panel>
       <h2>地图自动编排</h2>
       <CameraControls setup />
+      <MulnxToolControls tool={current?.tool} />
       <MulnxHandoff />
       <details>
         <summary>游戏内筛选</summary>
@@ -159,11 +161,29 @@ export function CameraSettings() {
                   value={map.map}
                   onChange={(e) => update(index, { map: e.target.value })}
                 />
-                <Field
-                  label="MulNX 活动包名称"
-                  value={map.pack}
-                  onChange={(e) => update(index, { pack: e.target.value })}
-                />
+                {current?.tool?.packs.length ? (
+                  <Select
+                    label="运镜包"
+                    value={map.pack}
+                    onChange={(e) => update(index, { pack: e.target.value })}
+                  >
+                    <option value="">选择运镜包</option>
+                    {map.pack && !current.tool.packs.some((p) => p.name === map.pack) ? (
+                      <option value={map.pack}>{map.pack}</option>
+                    ) : null}
+                    {current.tool.packs.map((p) => (
+                      <option key={p.name} value={p.name}>
+                        {p.sourceName}
+                      </option>
+                    ))}
+                  </Select>
+                ) : (
+                  <Field
+                    label="MulNX 活动包名称"
+                    value={map.pack}
+                    onChange={(e) => update(index, { pack: e.target.value })}
+                  />
+                )}
                 <Shot
                   label="开场宏"
                   shot={map.opening}
@@ -316,10 +336,8 @@ export function CameraSettings() {
           <details>
             <summary>联调说明</summary>
             <p>
-              先用 prepare-pack 工具复制自有运镜包，再设置
-              MIZAR_MULNX_CAM_PACKS_ROOT。文件验证要求回合自动列表为空；MulNX
-              改写文件后须重新准备隔离包。连接与入队不能证明游戏已执行。每次换图或重连后，在游戏内确认地图、活动包和视角，再启用自动。接管及镜头时限会请求清空全部
-              MulNX 运镜槽，实际停止需在游戏内核对；此操作不会关闭上游自动列表。
+              打开 MulNX 后，在游戏内载入所选隔离包，再连接并试播。每次换图或重连后重新确认。
+              外部安装可使用 prepare-pack 工具准备资源。
             </p>
           </details>
         </>

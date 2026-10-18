@@ -4,12 +4,14 @@ import { z } from 'zod';
 import { orchestrationPresetSchema, CAMERA_STAGES } from '@mizar/protocol/orchestration';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 import type { MusicStore } from '../music/store.js';
+import type { MulnxTool } from './tool.js';
 import type { CameraDirector } from './director.js';
 
 const expectedSchema = z
   .object({ context: z.string().max(4000), connection: z.number().int() })
   .strict();
 const commandSchema = z.discriminatedUnion('action', [
+  z.strictObject({ action: z.literal('check-tool') }),
   z.strictObject({ action: z.literal('browser'), expectedRevision: z.string().max(128) }),
   z
     .object({
@@ -42,7 +44,9 @@ export function registerOrchestrationRoutes(
   session?: {
     controlToken: string | undefined;
     configure: (revision: string, commit: () => void) => void;
+    canPrepare?: () => boolean;
   },
+  tool?: MulnxTool,
 ) {
   const allowed = (origin: string | undefined) =>
     policy.mode === 'loopback' && checkLocalWebOrigin(policy, origin).allowed;
@@ -50,6 +54,7 @@ export function registerOrchestrationRoutes(
     preset: director.store.preset,
     ready: director.store.ready,
     status: director.get(),
+    ...(tool ? { tool: tool.view() } : {}),
   });
   app.get('/local/v1/orchestration', (request, reply) => {
     if (
@@ -92,12 +97,55 @@ export function registerOrchestrationRoutes(
       return reply.code(409).send({ error: 'camera_native_session_invalid' });
     }
   });
+  app.post('/operator/runtime/mulnx-prepare', { bodyLimit: 4096 }, async (request, reply) => {
+    const expected = Buffer.from(session?.controlToken ?? '');
+    const supplied = Buffer.from(
+      typeof request.headers['x-runtime-token'] === 'string'
+        ? request.headers['x-runtime-token']
+        : '',
+    );
+    if (
+      policy.mode !== 'loopback' ||
+      request.headers.origin !== undefined ||
+      !expected.length ||
+      expected.length !== supplied.length ||
+      !timingSafeEqual(expected, supplied)
+    )
+      return reply.code(403).send({ error: 'runtime-control-denied' });
+    try {
+      if (!tool || !session?.canPrepare?.()) throw new Error('mulnx_preparation_required');
+      const body = z
+        .strictObject({
+          cs2Path: z
+            .string()
+            .min(1)
+            .max(2048)
+            .regex(/^[A-Za-z]:\\.*\\cs2\.exe$/i),
+        })
+        .parse(request.body);
+      director.hold('正在准备 MulNX');
+      return await tool.prepare(body.cs2Path);
+    } catch (error) {
+      request.log.error(
+        { stage: 'mulnx_prepare', err: error, result: 'failure' },
+        'MulNX 准备失败',
+      );
+      return reply.code(409).send({
+        error: 'mulnx_prepare_failed',
+        message: error instanceof Error ? error.message : 'MulNX 准备失败',
+        requestId: request.id,
+      });
+    }
+  });
   app.post('/operator/orchestration', { bodyLimit: 256 * 1024 }, async (request, reply) => {
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
     try {
       const body = commandSchema.parse(request.body);
-      if (body.action === 'browser') {
+      if (body.action === 'check-tool') {
+        if (!tool) throw new Error('mulnx_bundle_unavailable');
+        await tool.check();
+      } else if (body.action === 'browser') {
         if (!session) throw new Error('camera_production_unavailable');
         session.configure(body.expectedRevision, () => director.useBrowser());
       } else if (body.action === 'audition') {
