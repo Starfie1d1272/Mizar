@@ -138,8 +138,16 @@ export class CameraDirector {
     const cue = musicCue(t, String(this.pauseId));
     if (cue && cue.group !== 'waiting') return { key: cue.key, stage: cue.group };
     if (p.map.phase === 'warmup') return { key: 'warmup', stage: 'warmup' };
-    if (p.map.phase === 'live' && p.clock?.phase === 'freezetime' && p.map.roundNumber !== null)
-      return { key: `round:${p.map.roundNumber}`, stage: 'round' };
+    if (p.map.phase === 'live' && p.map.roundNumber !== null) {
+      const roundKey = `round:${p.map.roundNumber}`;
+      // A round-start shot may follow players out of spawn. Only an already
+      // running shot carries this edge into live play; live never creates a cue.
+      if (
+        p.clock?.phase === 'freezetime' ||
+        (p.clock?.phase === 'live' && this.current?.edge === roundKey)
+      )
+        return { key: roundKey, stage: 'round' };
+    }
     return { key: '', stage: '' };
   }
   get(): OrchestrationStatus {
@@ -206,14 +214,7 @@ export class CameraDirector {
     const edge = this.edge(t);
     if (t.program.map.phase === 'live' && t.program.clock?.phase !== 'freezetime')
       this.highestRound = Math.max(this.highestRound, t.program.map.roundNumber ?? -1);
-    if (
-      this.current &&
-      (this.now() >= this.current.until ||
-        this.current.edge !== edge.key ||
-        (t.program.map.phase === 'live' &&
-          t.program.clock?.phase === 'freezetime' &&
-          (t.program.clock.endsInSeconds ?? 0) <= 5))
-    )
+    if (this.current && (this.now() >= this.current.until || this.current.edge !== edge.key))
       this.stop('镜头窗口已结束，已请求清空；停止结果未确认。');
     if (this.handoff && (this.now() >= this.handoff.until || this.handoff.edge !== edge.key))
       this.handoff = null;
@@ -228,8 +229,8 @@ export class CameraDirector {
       const round = t.program.map.roundNumber!;
       if (round <= this.highestRound) return;
       this.highestRound = round;
-      // Opening owns round zero. Never launch a late shot near the live boundary.
-      if (round === 0 || (t.program.clock?.endsInSeconds ?? 0) <= 5) return;
+      // Opening owns round zero. Unknown/expired freezes do not create a cue.
+      if (round === 0 || (t.program.clock?.endsInSeconds ?? 0) <= 0) return;
       const candidates =
         map.rounds.length > 1
           ? map.rounds.filter((s) => s.macro !== this.previousMacro)
@@ -313,11 +314,10 @@ export class CameraDirector {
     // Only dispatch can retain one bounded transition behind an in-flight clear.
     if (this.current || this.request === 'submitted') return false;
     if (t.program.map.phase === null) return false;
-    let maxMs = shot.maxMs;
+    const maxMs = shot.maxMs;
     if (t.program.map.phase === 'live' && !musicPause(t.program)) {
-      if (t.program.clock?.phase !== 'freezetime' || (t.program.clock.endsInSeconds ?? 0) <= 5)
+      if (t.program.clock?.phase !== 'freezetime' || (t.program.clock.endsInSeconds ?? 0) <= 0)
         return false;
-      maxMs = Math.min(maxMs, (t.program.clock.endsInSeconds! - 5) * 1000);
     }
     const revision = ++this.revision;
     this.current = { key, macro: shot.macro, until: this.now() + maxMs, edge };
