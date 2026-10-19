@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -156,6 +156,35 @@ describe('ProgramRuntime SeriesProgress composition', () => {
 
       expect(restored?.score).toEqual({ a: 1, b: 0 });
       expect(restored?.maps[0]?.status).toBe('completed');
+
+      const diagnostics: { code: string; error: unknown }[] = [];
+      const onDiagnostic = (code: string, error: unknown) => diagnostics.push({ code, error });
+      const healthy = new JsonSeriesProgressCheckpointStore({ filePath: checkpointPath });
+      const checkpoint = healthy.load()!;
+      const broken = new JsonSeriesProgressCheckpointStore({
+        filePath: directory,
+        onDiagnostic,
+      });
+      expect(broken.load()).toBeUndefined();
+      expect(diagnostics.at(-1)).toMatchObject({
+        code: 'checkpoint_read_failed',
+        error: { code: 'EISDIR' },
+      });
+      await broken.save(checkpoint);
+      await broken.flush();
+      expect(diagnostics.at(-1)?.code).toBe('checkpoint_write_failed');
+      expect(diagnostics.at(-1)?.error).toBeInstanceOf(Error);
+      expect(healthy.load()).toEqual(checkpoint);
+
+      await writeFile(checkpointPath, '{broken', 'utf8');
+      const malformed = new JsonSeriesProgressCheckpointStore({
+        filePath: checkpointPath,
+        onDiagnostic,
+      });
+      expect(malformed.load()).toBeUndefined();
+      expect(diagnostics.at(-1)?.code).toBe('checkpoint_invalid');
+      expect(diagnostics.at(-1)?.error).toBeInstanceOf(SyntaxError);
+      await expect(readFile(checkpointPath, 'utf8')).resolves.toBe('{broken');
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

@@ -13,6 +13,7 @@ export interface SeriesProgressCheckpointStoreOptions {
   readonly filePath: string;
   readonly onDiagnostic?: (
     code: 'checkpoint_invalid' | 'checkpoint_read_failed' | 'checkpoint_write_failed',
+    error: unknown,
   ) => void;
 }
 
@@ -33,19 +34,22 @@ export class JsonSeriesProgressCheckpointStore implements SeriesProgressCheckpoi
       contents = readFileSync(this.filePath, 'utf8');
     } catch (error: unknown) {
       if (isNodeError(error) && error.code === 'ENOENT') return undefined;
-      this.onDiagnostic?.('checkpoint_read_failed');
+      this.onDiagnostic?.('checkpoint_read_failed', error);
       return undefined;
     }
 
     let parsed: unknown;
     try {
       parsed = JSON.parse(contents) as unknown;
-    } catch {
-      this.onDiagnostic?.('checkpoint_invalid');
+    } catch (error: unknown) {
+      this.onDiagnostic?.('checkpoint_invalid', error);
       return undefined;
     }
     if (!isSeriesProgressCheckpoint(parsed)) {
-      this.onDiagnostic?.('checkpoint_invalid');
+      this.onDiagnostic?.(
+        'checkpoint_invalid',
+        new Error('Series progress checkpoint schema mismatch'),
+      );
       return undefined;
     }
     return parsed;
@@ -55,8 +59,8 @@ export class JsonSeriesProgressCheckpointStore implements SeriesProgressCheckpoi
     return this.commitQueue.run(async () => {
       try {
         await replaceDurableJson(this.filePath, checkpoint);
-      } catch {
-        this.onDiagnostic?.('checkpoint_write_failed');
+      } catch (error: unknown) {
+        this.onDiagnostic?.('checkpoint_write_failed', error);
       }
     });
   }

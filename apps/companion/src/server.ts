@@ -173,7 +173,15 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
 
   const seriesProgressCheckpointStore = new JsonSeriesProgressCheckpointStore({
     filePath: seriesProgressCheckpointPath,
-    onDiagnostic: (code) => console.warn(`系列进度检查点诊断：${code}`),
+    onDiagnostic: (code, error) =>
+      console.warn(
+        JSON.stringify({
+          event: 'series_progress_checkpoint',
+          code,
+          path: seriesProgressCheckpointPath,
+          error: diagnosticValue(error),
+        }),
+      ),
   });
   const rivalhubConnection = new RivalHubConnection(
     join(captureDir, '..', 'rivalhub-connection.json'),
@@ -183,7 +191,15 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
   await steamAvatars.load();
   const hudConfigStore = new HudConfigStore({
     filePath: hudConfigPath,
-    onDiagnostic: (code) => console.warn(`HUD 配置诊断：${code}`),
+    onDiagnostic: (code, error) =>
+      console.warn(
+        JSON.stringify({
+          event: 'hud_config',
+          code,
+          path: hudConfigPath,
+          error: diagnosticValue(error),
+        }),
+      ),
   });
   await hudConfigStore.load();
   const programRuntime = createProgramRuntime(producerInstanceId, {

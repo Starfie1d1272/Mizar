@@ -1,6 +1,6 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import {
   createHudPresetPack,
@@ -79,10 +79,26 @@ describe('HudConfigStore', () => {
     const malformed = '{"schemaVersion":999,"customPresets":[]}\n';
     await writeFile(filePath, malformed, 'utf8');
 
-    const store = new HudConfigStore({ filePath });
+    const diagnostics: { code: string; error: unknown }[] = [];
+    const onDiagnostic = (code: string, error: unknown) => diagnostics.push({ code, error });
+    const store = new HudConfigStore({ filePath, onDiagnostic });
     await store.load();
 
     expect(store.getState().resolved.preset.id).toBe('builtin:mizar-default-preset');
     await expect(readFile(filePath, 'utf8')).resolves.toBe(malformed);
+    expect(diagnostics.at(-1)).toMatchObject({ code: 'hud_config_invalid' });
+    expect(diagnostics.at(-1)?.error).toBeInstanceOf(Error);
+
+    await writeFile(filePath, '{broken', 'utf8');
+    await store.load();
+    expect(diagnostics.at(-1)?.error).toBeInstanceOf(SyntaxError);
+    await expect(readFile(filePath, 'utf8')).resolves.toBe('{broken');
+
+    const unreadable = new HudConfigStore({ filePath: dirname(filePath), onDiagnostic });
+    await unreadable.load();
+    expect(diagnostics.at(-1)).toMatchObject({
+      code: 'hud_config_read_failed',
+      error: { code: 'EISDIR' },
+    });
   });
 });
