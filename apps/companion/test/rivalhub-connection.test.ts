@@ -568,3 +568,42 @@ it('watches matched formal executions, needs fresh receiver acceptance, and resp
     clock.mockRestore();
   }
 });
+
+it('reports connection load failures without exposing credential excerpts', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-rivalhub-load-'));
+  temporary.push(directory);
+  const path = join(directory, 'connection.json');
+  const secret = 'PRIVATE-CREDENTIAL-CANARY';
+  const events: { stage: string; error: unknown }[] = [];
+  const connection = new RivalHubConnection(path);
+  connection.setDiagnosticHandler((stage, error) => events.push({ stage, error }));
+  await connection.load();
+  expect(events).toEqual([]);
+  for (const [raw, stage] of [
+    [secret, 'connection_parse'],
+    ['{"credential":"' + secret + '",oops}', 'connection_parse'],
+    ['null', 'connection_validate'],
+    [
+      JSON.stringify({
+        credential: secret,
+        installationId: 'i',
+        competitionId: 'c',
+        baseUrl: secret,
+      }),
+      'connection_validate',
+    ],
+  ]) {
+    await writeFile(path, raw!);
+    await connection.load();
+    const last = events.at(-1)!;
+    expect(last.stage).toBe(stage);
+    expect(last.error).toBeInstanceOf(Error);
+    expect(String(last.error) + (last.error as Error).stack).not.toContain(secret);
+    expect(connection.view().paired).toBe(false);
+  }
+  const unreadable = new RivalHubConnection(directory);
+  unreadable.setDiagnosticHandler((stage, error) => events.push({ stage, error }));
+  await unreadable.load();
+  expect(events.at(-1)?.stage).toBe('connection_read');
+  expect(events.at(-1)?.error).toMatchObject({ code: 'EISDIR' });
+});

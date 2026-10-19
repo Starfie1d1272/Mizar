@@ -400,16 +400,43 @@ export class RivalHubConnection {
   ) {}
 
   async load(): Promise<void> {
+    let stage = 'connection_read';
     try {
-      const parsed = JSON.parse(await readFile(this.path, 'utf8')) as Installation;
+      const raw = await readFile(this.path, 'utf8');
+      stage = 'connection_parse';
+      let parsed: Installation;
+      try {
+        parsed = JSON.parse(raw) as Installation;
+      } catch (error) {
+        // SyntaxError can quote the credential file before its key is known.
+        if (error instanceof SyntaxError) {
+          error.message = error.message.replace(/"[\s\S]*"/g, '"[redacted credential excerpt]"');
+          if (error.stack)
+            error.stack = error.stack.replace(/"[^\n]*"/g, '"[redacted credential excerpt]"');
+        }
+        throw error;
+      }
+      stage = 'connection_validate';
       if (
-        typeof parsed.credential === 'string' &&
-        typeof parsed.installationId === 'string' &&
-        typeof parsed.competitionId === 'string'
+        !parsed ||
+        typeof parsed.credential !== 'string' ||
+        typeof parsed.installationId !== 'string' ||
+        typeof parsed.competitionId !== 'string'
       )
-        this.installation = { ...parsed, baseUrl: normalizeBaseUrl(parsed.baseUrl) };
-    } catch {
-      /* Missing or invalid connection is an unpaired local mode. */
+        throw new Error('RivalHub connection setting has an invalid format');
+      let baseUrl: string;
+      try {
+        baseUrl = normalizeBaseUrl(parsed.baseUrl);
+      } catch {
+        // A malformed URL exception may echo credential-bearing input.
+        throw new Error('RivalHub connection setting has an invalid base URL');
+      }
+      this.installation = { ...parsed, baseUrl };
+    } catch (error) {
+      if (stage === 'connection_read' && (error as NodeJS.ErrnoException)?.code === 'ENOENT')
+        return;
+      this.onDiagnostic(stage, error);
+      this.originalError(stage, error);
     }
   }
 

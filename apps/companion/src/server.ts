@@ -186,6 +186,11 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
   const rivalhubConnection = new RivalHubConnection(
     join(captureDir, '..', 'rivalhub-connection.json'),
   );
+  rivalhubConnection.setDiagnosticHandler((stage, error) =>
+    console.warn(
+      JSON.stringify({ event: 'rivalhub_connection_load', stage, error: diagnosticValue(error) }),
+    ),
+  );
   await rivalhubConnection.load();
   const steamAvatars = new SteamAvatars(
     join(captureDir, '..', 'steam-avatars'),
