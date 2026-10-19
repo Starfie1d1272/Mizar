@@ -68,8 +68,9 @@ export class SteamAvatars {
   async load(): Promise<void> {
     let stage = 'key_read';
     try {
-      if ((await stat(join(this.directory, 'key.json'))).size > 1024)
-        throw new Error('Steam avatar key setting exceeds 1024 bytes');
+      const keyFile = await stat(join(this.directory, 'key.json'));
+      if (!keyFile.isFile()) throw new Error('Steam avatar key setting is not a regular file');
+      if (keyFile.size > 1024) throw new Error('Steam avatar key setting exceeds 1024 bytes');
       const raw = await readFile(join(this.directory, 'key.json'), 'utf8');
       stage = 'key_parse';
       let parsed: unknown;
@@ -104,8 +105,9 @@ export class SteamAvatars {
     }
     stage = 'cache_read';
     try {
-      if ((await stat(join(this.directory, 'index.json'))).size > 64_000)
-        throw new Error('Steam avatar cache index exceeds 64000 bytes');
+      const indexFile = await stat(join(this.directory, 'index.json'));
+      if (!indexFile.isFile()) throw new Error('Steam avatar cache index is not a regular file');
+      if (indexFile.size > 64_000) throw new Error('Steam avatar cache index exceeds 64000 bytes');
       const raw = await readFile(join(this.directory, 'index.json'), 'utf8');
       stage = 'cache_parse';
       const entries: unknown = JSON.parse(raw);

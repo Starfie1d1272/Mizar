@@ -44,7 +44,10 @@ it('retains avatar load failure stages without logging credential excerpts or re
     await mkdir(join(root, 'key.json'));
     events.length = 0;
     await create().load();
-    expect(events[0]).toMatchObject({ stage: 'key_read', evidence: { error: { code: 'EISDIR' } } });
+    expect(events[0]).toMatchObject({
+      stage: 'key_read',
+      evidence: { error: { message: 'Steam avatar key setting is not a regular file' } },
+    });
   } finally {
     await rm(root, { recursive: true, force: true });
   }
