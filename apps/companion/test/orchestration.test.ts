@@ -12,6 +12,7 @@ import { registerOrchestrationRoutes } from '../src/orchestration/routes.js';
 import { MusicStore } from '../src/music/store.js';
 import { registerProductionRoutes } from '../src/program-scenes/production.js';
 import type { ProgramSceneController } from '../src/program-scenes/controller.js';
+import { DemoTestController, readDemoTestRecovery } from '../src/demo-test/controller.js';
 import { musicProgram } from './music-fixtures.js';
 
 const cleanup: (() => Promise<unknown>)[] = [];
@@ -38,6 +39,7 @@ async function rig(nativeRequired = false) {
   });
   await store.save({ ...store.preset, maps: [map] });
   const truth = {
+    demoAudition: undefined as boolean | undefined,
     program,
     active: 'waiting' as 'waiting' | 'gameplay' | 'halftime' | 'matchup',
     production: true,
@@ -748,4 +750,86 @@ it('healthy native renewals preserve manual hold across rounds without restoring
     control: { mode: 'native', state: 'ready' },
   });
   expect(r.calls.filter((c) => c.type === 'CamMacro/Play')).toHaveLength(1);
+});
+
+it('isolates external Demo camera leases and restores manual-only recovery after restart', async () => {
+  const r = await nativeRig();
+  const requestId = 'ca05aade-2287-42be-9320-87abae5ac312';
+  const markerPath = join(r.root, 'demo-test.json');
+  let dataReady = false;
+  let quarantined = false;
+  let restored = 0;
+  const options = {
+    markerPath,
+    recovery: undefined,
+    dataReady: () => dataReady,
+    diagnostic: () => {},
+    context: { beginTemporary: async () => {}, endTemporary: () => {} },
+    runtime: { flushSeriesProgressCheckpoint: async () => {}, resetSession: () => {} },
+    scenes: { get: () => ({ revision: 'scene' }), select: async () => ({ ok: true }) },
+    production: r.production,
+    obs: async () => ({ connection: 'connected', streaming: false }),
+    quarantineOutput: (value: boolean) => {
+      quarantined = value;
+    },
+    refresh: () => {},
+    restoreFormal: async () => {
+      restored++;
+    },
+    hold: () => {},
+  } as unknown as ConstructorParameters<typeof DemoTestController>[0];
+  const trial = new DemoTestController(options);
+  expect(
+    (await trial.command({ action: 'begin', requestId, gameOwnership: 'external' })).code,
+  ).toBe(200);
+  expect(quarantined).toBe(true);
+  expect(trial.canAcceptGsi()).toBe(false);
+  expect(() => trial.configureCameraSession('stale', () => {})).toThrow(
+    'demo_camera_session_changed',
+  );
+  let configured = false;
+  trial.configureCameraSession(requestId, () => {
+    configured = true;
+  });
+  expect(configured).toBe(true);
+  expect(trial.canUseCamera('connect')).toBe(true);
+  expect(trial.canUseCamera('audition')).toBe(false);
+  expect((await trial.command({ action: 'playing', requestId })).code).toBe(200);
+  dataReady = true;
+  expect(trial.canUseCamera('audition')).toBe(true);
+  expect(trial.canAcceptGsi()).toBe(true);
+  for (const action of ['resume', 'configure', 'browser'])
+    expect(trial.canUseCamera(action)).toBe(false);
+  expect(() => trial.configureCameraSession(requestId, () => {})).toThrow();
+  const recovery = readDemoTestRecovery(markerPath);
+  expect(recovery?.gameOwnership).toBe('external');
+  const restarted = new DemoTestController({ ...options, recovery });
+  await restarted.recover();
+  expect(restarted.canAcceptGsi()).toBe(false);
+  expect(restarted.canUseCamera('connect')).toBe(false);
+  expect(restarted.canUseCamera('disconnect')).toBe(true);
+  expect((await restarted.command({ action: 'complete', requestId })).code).toBe(200);
+  expect(restored).toBe(1);
+  expect(quarantined).toBe(false);
+  expect(restarted.canAcceptGsi()).toBe(false);
+  expect(readDemoTestRecovery(markerPath)).toBeUndefined();
+  restarted.openFormalBoundary();
+  expect(restarted.canAcceptGsi()).toBe(true);
+});
+
+it('auditions isolated Demo data without formal series binding and never enables automatic cues', async () => {
+  const r = await rig();
+  r.truth.manual = true;
+  r.truth.demoAudition = true;
+  r.truth.program.series!.bindingState = 'unbound';
+  await r.director.command('connect');
+  r.director.tick();
+  const { context, connection } = r.director.get();
+  await expect(r.director.command('resume', { context, connection })).rejects.toThrow();
+  r.director.audition(r.store.preset.maps[0]!.opening!, { context, connection });
+  expect(r.director.get().held).toBe(true);
+  expect(r.calls.some((call) => call.type === 'CamMacro/Play')).toBe(true);
+  r.truth.demoAudition = false;
+  r.director.tick();
+  expect(() => r.director.audition(r.store.preset.maps[0]!.opening!, r.director.get())).toThrow();
 });

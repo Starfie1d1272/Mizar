@@ -6,6 +6,8 @@ import type { OrchestrationStore } from './store.js';
 
 export interface CameraTruth extends MusicTruth {
   manual: boolean;
+  /** Present only during an isolated external Demo trial; true requires fresh map/player data. */
+  demoAudition?: boolean | undefined;
 }
 /** Consume authoritative projections; never become a second match / timing authority. */
 export class CameraDirector {
@@ -125,8 +127,7 @@ export class CameraDirector {
     return (
       this.nativeReady() &&
       t.production &&
-      !t.manual &&
-      musicSafe(t.program) &&
+      (t.demoAudition === undefined ? !t.manual && musicSafe(t.program) : t.demoAudition) &&
       t.program.status.telemetry === 'fresh'
     );
   }
@@ -399,6 +400,7 @@ export class CameraDirector {
     } else {
       if (
         this.closed ||
+        this.truth().demoAudition !== undefined ||
         this.seen.size >= 1024 ||
         this.request === 'submitted' ||
         !expected ||

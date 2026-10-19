@@ -17,6 +17,7 @@ const markerSchema = z.object({
   requestId: z.uuid(),
   teamAName: z.string().min(1).max(128),
   teamBName: z.string().min(1).max(128),
+  gameOwnership: z.literal('external').optional(),
 });
 type Marker = z.infer<typeof markerSchema>;
 export type DemoTestView = {
@@ -26,6 +27,7 @@ export type DemoTestView = {
   teamAName: string;
   teamBName: string;
   dataReady: boolean;
+  gameOwnership?: 'external';
 };
 
 /** Read before runtime/projection composition: even an unreadable marker fails closed. */
@@ -86,6 +88,7 @@ const commandSchema = z.discriminatedUnion('action', [
       requestId: z.uuid(),
       teamAName: z.string().trim().min(1).max(128).optional(),
       teamBName: z.string().trim().min(1).max(128).optional(),
+      gameOwnership: z.literal('external').optional(),
     })
     .strict(),
   z
@@ -134,7 +137,30 @@ export class DemoTestController {
       teamAName: this.marker?.teamAName ?? 'A',
       teamBName: this.marker?.teamBName ?? 'B',
       dataReady: this.phase === 'playing' && this.options.dataReady(),
+      ...(this.marker?.gameOwnership ? { gameOwnership: this.marker.gameOwnership } : {}),
     };
+  }
+  configureCameraSession(requestId: string, commit: () => void): void {
+    if (
+      this.busy ||
+      this.phase !== 'starting' ||
+      this.marker?.gameOwnership !== 'external' ||
+      this.marker.requestId !== requestId ||
+      !this.options.production.reserveTrialOperation()
+    )
+      throw new Error('demo_camera_session_changed');
+    try {
+      commit();
+    } finally {
+      this.options.production.releaseTrialOperation();
+    }
+  }
+  canUseCamera(action: unknown): boolean {
+    if (this.marker?.gameOwnership !== 'external' || typeof action !== 'string') return false;
+    if (['disconnect', 'hold'].includes(action)) return true;
+    if (this.busy || !['starting', 'playing'].includes(this.phase)) return false;
+    if (['connect', 'skip'].includes(action)) return true;
+    return action === 'audition' && this.phase === 'playing' && this.options.dataReady();
   }
   canAcceptGsi(): boolean {
     return this.marker ? this.phase === 'playing' : !this.dropFormalGsi;
@@ -205,6 +231,7 @@ export class DemoTestController {
           requestId: body.requestId,
           teamAName: body.teamAName ?? 'A',
           teamBName: body.teamBName ?? 'B',
+          ...(body.gameOwnership ? { gameOwnership: body.gameOwnership } : {}),
         };
         const document = trialDocument(marker);
         if (this.options.canBegin?.() === false)
@@ -246,8 +273,8 @@ export class DemoTestController {
         if (body.action === 'cancel' && this.phase !== 'starting')
           return conflict('demo_test_already_playing', '播放已开始，请先结束试播。');
         if (body.action === 'complete' && this.phase !== 'recovery' && !this.waitingConfirmed)
-          return conflict('demo_test_recovery_required', '请先切换等待画面并退出受管 CS2。');
-        // Host calls complete only after managed CS2 exit and video restoration.
+          return conflict('demo_test_recovery_required', '请先结束试播并切换等待画面。');
+        // Host completes after owned-game restoration or external-game detachment preparation.
         this.dropFormalGsi = true;
         if (!this.restored) {
           stage = 'formal_restore';

@@ -642,6 +642,7 @@ async fn attach_external_cs2(
     pid: u32,
     created: String,
     expected_revision: String,
+    demo_trial: Option<bool>,
     diagnostic_operation_id: Option<String>,
     diagnostic_task_id: Option<String>,
     diagnostic_trigger: Option<String>,
@@ -673,8 +674,15 @@ async fn attach_external_cs2(
         app.state::<updates::PendingUpdate>().check()?;
         production_exit::prepare_external_entry(&log, &expected_revision)?;
         cs2.attach_external(pid, created, &executable)?;
+        let trial_id = if demo_trial == Some(true) {
+            let id = demo_test::new_request_id(&log)?;
+            demo_test::begin_external(&log, &id)?;
+            Some(id)
+        } else { None };
         let lease = production_exit::camera_session(&log, "host-start", None, None)
-            .and_then(|_| production_exit::camera_session(&log, "begin", None, Some(&expected_revision)))
+            .and_then(|_| production_exit::camera_session(&log,
+                if trial_id.is_some() { "begin-demo" } else { "begin" }, None,
+                Some(trial_id.as_deref().unwrap_or(&expected_revision))))
             .and_then(|value| value["lease"].as_str().map(str::to_owned).ok_or("原生运镜会话未确认。".into()));
         match lease {
             Ok(lease) => cs2.bind_external_camera(lease),
@@ -682,6 +690,11 @@ async fn attach_external_cs2(
         }
         if let Ok(mut tracker) = app.state::<HostState>().tracker.lock() {
             tracker.preserve_settings = true;
+        }
+        if let Some(id) = trial_id {
+            demo_test::request(&log, "playing", &id, None)?;
+            drop(cs2);
+            present_production_inner(&app, true)?;
         }
         Ok(false) // No game was launched or acquired as an owned process.
     })).await.map_err(|_| "外部游戏交接未完成，请重新检查实例。".to_string())?;
