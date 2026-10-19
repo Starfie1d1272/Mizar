@@ -558,7 +558,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     options.hudConfigStore ??
     new HudConfigStore({
       ...(options.hudConfigPath === undefined ? {} : { filePath: options.hudConfigPath }),
-      onDiagnostic: (code) => app.log.warn({ code }, 'Companion HUD 配置诊断'),
+      onDiagnostic: (code, error) =>
+        app.log.warn(
+          { code, error: diagnosticValue(error), path: options.hudConfigPath },
+          'Companion HUD 配置诊断',
+        ),
     });
   let runtimeDegraded = false;
   const emittedRuntimeDiagnostics = new Set<string>();

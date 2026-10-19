@@ -29,7 +29,7 @@ export type HudResource = HudPreset | HudLayout | HudTheme;
 
 export interface HudConfigStoreOptions {
   readonly filePath?: string;
-  readonly onDiagnostic?: (code: string) => void;
+  readonly onDiagnostic?: (code: string, error: unknown) => void;
 }
 
 export class HudConfigEditorConflictError extends Error {
@@ -160,7 +160,7 @@ function createState(document: HudConfigDocument, persistenceError: string | nul
 
 export class HudConfigStore {
   private readonly filePath: string | undefined;
-  private readonly onDiagnostic: (code: string) => void;
+  private readonly onDiagnostic: (code: string, error: unknown) => void;
   private readonly commits = new SerialCommitQueue();
   private document = createDefaultHudConfigDocument();
   private loaded = false;
@@ -176,13 +176,22 @@ export class HudConfigStore {
       this.loaded = true;
       return;
     }
+    let stage: 'read' | 'parse' = 'read';
     try {
       const raw = await readFile(this.filePath, 'utf8');
+      stage = 'parse';
       this.document = parseHudConfigDocument(JSON.parse(raw) as unknown);
       this.persistenceError = null;
       this.loaded = true;
     } catch (error: unknown) {
-      this.onDiagnostic(isMissingFile(error) ? 'hud_config_missing' : 'hud_config_invalid');
+      this.onDiagnostic(
+        isMissingFile(error)
+          ? 'hud_config_missing'
+          : stage === 'read'
+            ? 'hud_config_read_failed'
+            : 'hud_config_invalid',
+        error,
+      );
       this.loaded = true;
       // A running Companion keeps its last-known-valid document. On first boot
       // that document is the current built-in default; the malformed file is
@@ -329,7 +338,7 @@ export class HudConfigStore {
         this.persistenceError = null;
       } catch (error: unknown) {
         this.persistenceError = error instanceof Error ? error.message : String(error);
-        this.onDiagnostic('hud_config_persist_failed');
+        this.onDiagnostic('hud_config_persist_failed', error);
         throw new HudConfigPersistenceError(error);
       }
       return { ...this.getState(), command };
