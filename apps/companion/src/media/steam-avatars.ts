@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { diagnosticValue } from '../support/session-journal.js';
 import type { FastifyInstance } from 'fastify';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 
@@ -59,28 +60,59 @@ export class SteamAvatars {
   constructor(
     private readonly directory: string,
     private readonly fetchImpl: typeof fetch = fetch,
+    private readonly diagnostic: (stage: string, evidence: unknown) => void = () => {},
   ) {}
   onChanged(callback: () => void): void {
     this.changed = callback;
   }
   async load(): Promise<void> {
+    let stage = 'key_read';
     try {
-      if ((await stat(join(this.directory, 'key.json'))).size > 1024)
-        throw new Error('invalid-setting');
-      const secret = record(
-        JSON.parse(await readFile(join(this.directory, 'key.json'), 'utf8')) as unknown,
-      );
-      if (typeof secret.key === 'string' && /^[a-f0-9]{32}$/i.test(secret.key))
-        this.key = secret.key;
-    } catch {
-      /* Optional setting. */
+      const keyFile = await stat(join(this.directory, 'key.json'));
+      if (!keyFile.isFile()) throw new Error('Steam avatar key setting is not a regular file');
+      if (keyFile.size > 1024) throw new Error('Steam avatar key setting exceeds 1024 bytes');
+      const raw = await readFile(join(this.directory, 'key.json'), 'utf8');
+      stage = 'key_parse';
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch (error) {
+        // JSON syntax messages may echo the credential file. Preserve parser
+        // reason/position and stack while removing its quoted source excerpt.
+        if (error instanceof SyntaxError) {
+          error.message = error.message.replace(/"[\s\S]*"/g, '"[redacted credential excerpt]"');
+          if (error.stack)
+            error.stack = error.stack.replace(/"[^\n]*"/g, '"[redacted credential excerpt]"');
+        }
+        throw error;
+      }
+      const secret = record(parsed);
+      stage = 'key_validate';
+      if (
+        typeof secret.key !== 'string' ||
+        (secret.key !== '' && !/^[a-f0-9]{32}$/i.test(secret.key))
+      )
+        throw new Error('Steam avatar key setting has an invalid format');
+      this.key = secret.key;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+        this.unavailable = true;
+        this.diagnostic(stage, {
+          path: join(this.directory, 'key.json'),
+          error: diagnosticValue(error),
+        });
+      }
     }
+    stage = 'cache_read';
     try {
-      if ((await stat(join(this.directory, 'index.json'))).size > 64_000) return;
-      const entries: unknown = JSON.parse(
-        await readFile(join(this.directory, 'index.json'), 'utf8'),
-      );
-      if (!Array.isArray(entries)) return;
+      const indexFile = await stat(join(this.directory, 'index.json'));
+      if (!indexFile.isFile()) throw new Error('Steam avatar cache index is not a regular file');
+      if (indexFile.size > 64_000) throw new Error('Steam avatar cache index exceeds 64000 bytes');
+      const raw = await readFile(join(this.directory, 'index.json'), 'utf8');
+      stage = 'cache_parse';
+      const entries: unknown = JSON.parse(raw);
+      stage = 'cache_validate';
+      if (!Array.isArray(entries)) throw new Error('Steam avatar cache index must be an array');
       for (const value of (entries as unknown[]).slice(-LIMIT)) {
         if (!Array.isArray(value)) continue;
         const [id, raw] = value as unknown[];
@@ -102,8 +134,14 @@ export class SteamAvatars {
         )
           this.entries.set(id, { filename: entry.filename, fetchedAt: entry.fetchedAt });
       }
-    } catch {
-      /* A missing cache never blocks startup. */
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+        this.unavailable = true;
+        this.diagnostic(stage, {
+          path: join(this.directory, 'index.json'),
+          error: diagnosticValue(error),
+        });
+      }
     }
   }
   view() {
