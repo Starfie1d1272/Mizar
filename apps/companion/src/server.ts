@@ -187,7 +187,12 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
     join(captureDir, '..', 'rivalhub-connection.json'),
   );
   await rivalhubConnection.load();
-  const steamAvatars = new SteamAvatars(join(captureDir, '..', 'steam-avatars'));
+  const steamAvatars = new SteamAvatars(
+    join(captureDir, '..', 'steam-avatars'),
+    undefined,
+    (stage, evidence) =>
+      console.warn(JSON.stringify({ event: 'steam_avatar_load', stage, evidence })),
+  );
   await steamAvatars.load();
   const hudConfigStore = new HudConfigStore({
     filePath: hudConfigPath,
