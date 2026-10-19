@@ -162,13 +162,13 @@ describe('ProgramRuntime SeriesProgress composition', () => {
       const healthy = new JsonSeriesProgressCheckpointStore({ filePath: checkpointPath });
       const checkpoint = healthy.load()!;
       const broken = new JsonSeriesProgressCheckpointStore({
-        filePath: join(checkpointPath, 'child.json'),
+        filePath: directory,
         onDiagnostic,
       });
       expect(broken.load()).toBeUndefined();
       expect(diagnostics.at(-1)).toMatchObject({
         code: 'checkpoint_read_failed',
-        error: { code: 'ENOTDIR' },
+        error: { code: 'EISDIR' },
       });
       await broken.save(checkpoint);
       await broken.flush();

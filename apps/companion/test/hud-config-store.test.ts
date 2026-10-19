@@ -1,6 +1,6 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import {
   createHudPresetPack,
@@ -94,11 +94,11 @@ describe('HudConfigStore', () => {
     expect(diagnostics.at(-1)?.error).toBeInstanceOf(SyntaxError);
     await expect(readFile(filePath, 'utf8')).resolves.toBe('{broken');
 
-    const unreadable = new HudConfigStore({ filePath: join(filePath, 'child.json'), onDiagnostic });
+    const unreadable = new HudConfigStore({ filePath: dirname(filePath), onDiagnostic });
     await unreadable.load();
     expect(diagnostics.at(-1)).toMatchObject({
       code: 'hud_config_read_failed',
-      error: { code: 'ENOTDIR' },
+      error: { code: 'EISDIR' },
     });
   });
 });
