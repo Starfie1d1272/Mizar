@@ -120,7 +120,7 @@ async function rig(nativeRequired = false) {
     },
   };
 }
-it('only new safe rounds draw once, avoid immediate repeats, and clear before live or deadline', async () => {
+it('new round shots draw once, continue into live play and clear at their deadline', async () => {
   const r = await rig();
   await r.resume();
   await r.round(0);
@@ -132,6 +132,8 @@ it('only new safe rounds draw once, avoid immediate repeats, and clear before li
   await r.tick();
   expect(r.calls).toHaveLength(1);
   await r.live();
+  expect(r.calls).toHaveLength(1);
+  await r.advance(6001);
   expect(r.calls.at(-1)).toEqual({ type: 'CamPlay/ClearForce' });
   await r.round(1);
   await r.tick();
@@ -142,13 +144,17 @@ it('only new safe rounds draw once, avoid immediate repeats, and clear before li
   await r.round(2);
   expect(r.calls.at(-1)).toEqual({ type: 'CamMacro/Play', macro: 'B' });
   await r.round(2, 4);
-  expect(r.calls.at(-1)).toEqual({ type: 'CamPlay/ClearForce' });
+  expect(r.calls.at(-1)).toEqual({ type: 'CamMacro/Play', macro: 'B' });
   await r.live();
+  expect(r.calls.at(-1)).toEqual({ type: 'CamMacro/Play', macro: 'B' });
+  await r.advance(6001);
+  expect(r.calls.at(-1)).toEqual({ type: 'CamPlay/ClearForce' });
   const count = r.calls.length;
   await r.round(1);
   await r.live();
   await r.round(3, 4);
-  expect(r.calls).toHaveLength(count);
+  expect(r.calls).toHaveLength(count + 1);
+  expect(r.calls.at(-1)).toEqual({ type: 'CamMacro/Play', macro: 'A' });
 });
 it('hold, skip, manual scene control and resume consume current edges without catch-up', async () => {
   const r = await rig();
