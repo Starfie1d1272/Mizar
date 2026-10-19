@@ -34,6 +34,7 @@ const host = z.string().min(1).max(80);
 const nativeSchema = z.discriminatedUnion('action', [
   z.strictObject({ action: z.literal('host-start'), host }),
   z.strictObject({ action: z.literal('begin'), host, expectedRevision: z.string().max(128) }),
+  z.strictObject({ action: z.literal('begin-demo'), host, requestId: z.uuid() }),
   z.strictObject({ action: z.enum(['pulse', 'invalidate']), host, lease: z.uuid() }),
 ]);
 export function registerOrchestrationRoutes(
@@ -44,6 +45,7 @@ export function registerOrchestrationRoutes(
   session?: {
     controlToken: string | undefined;
     configure: (revision: string, commit: () => void) => void;
+    configureDemo?: (requestId: string, commit: () => void) => void;
     canPrepare?: () => boolean;
   },
   tool?: MulnxTool,
@@ -86,7 +88,12 @@ export function registerOrchestrationRoutes(
         session!.configure(body.expectedRevision, () => {
           lease = director.beginNative(body.host);
         });
-      else if (body.action === 'pulse') director.pulseNative(body.host, body.lease);
+      else if (body.action === 'begin-demo') {
+        if (!session?.configureDemo) throw new Error('demo_camera_unavailable');
+        session.configureDemo(body.requestId, () => {
+          lease = director.beginNative(body.host);
+        });
+      } else if (body.action === 'pulse') director.pulseNative(body.host, body.lease);
       else director.revokeNative(body.host, body.lease);
       return { ok: true, ...(lease ? { lease } : {}) };
     } catch (error) {

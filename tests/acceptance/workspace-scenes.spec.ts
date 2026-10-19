@@ -255,6 +255,9 @@ test('manual current-map confirmation reaches the real owner, rejects an expired
       '当前图尚未确认',
     );
   } finally {
+    // Stop UI polling and drain its route callbacks before closing the owned server.
+    await page.close();
+    await context.unrouteAll({ behavior: 'wait' });
     await app.close();
     await rm(directory, { recursive: true, force: true });
   }
@@ -644,6 +647,9 @@ test('online account differences alert once, preserve unknown identities and rea
     for (const name of ['sync-health-matched.png', 'sync-health-interrupted.png'])
       await copyFile(testInfo.outputPath(name), join(evidence, name));
   } finally {
+    // Stop UI polling and drain its route callbacks before closing the owned server.
+    await page.close();
+    await context.unrouteAll({ behavior: 'wait' });
     await app.close();
     await coordinator.close();
     await rm(directory, { recursive: true, force: true });

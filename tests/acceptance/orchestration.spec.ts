@@ -1,4 +1,4 @@
-import { mkdtemp, rm, readFile, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, mkdir, writeFile, copyFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { gunzipSync } from 'node:zlib';
@@ -370,4 +370,70 @@ test('Host handoff binds the selected external instance and detaches without man
   expect(borrowed).toBe(false);
   expect(calls).not.toContain('start_managed_cs2');
   expect(calls).not.toContain('finish_managed_cs2');
+});
+
+test('starts external camera audition without selecting a formal match', async ({
+  page,
+  context,
+}, testInfo) => {
+  await context.route('**/local/v1/production', (route) =>
+    route.fulfill({
+      json: {
+        mode: 'preparation',
+        revision: 'demo-ready',
+        canEnter: false,
+      },
+    }),
+  );
+  await page.addInitScript(() => {
+    const calls: { command: string; args: unknown }[] = [];
+    Object.assign(window, {
+      cameraHandoffCalls: calls,
+      __TAURI_INTERNALS__: {
+        invoke: (command: string, args: unknown) => {
+          calls.push({ command, args });
+          if (command === 'mulnx_handoff_status')
+            return Promise.resolve({
+              processes: [
+                {
+                  pid: 42,
+                  created: '123456789',
+                  executable: 'C:\\CS2\\game\\bin\\win64\\cs2.exe',
+                  managed: false,
+                },
+              ],
+            });
+          return Promise.resolve(false);
+        },
+      },
+    });
+  });
+  await page.goto('/settings?tab=music&section=camera');
+  await page.getByText('MulNX 游戏交接', { exact: true }).click();
+  await page.getByRole('button', { name: '检查游戏实例', exact: true }).click();
+  await expect(
+    page.getByRole('button', { name: '借用此游戏并进入工作台', exact: true }),
+  ).toBeDisabled();
+  const trial = page.getByRole('button', { name: '运镜试播', exact: true });
+  await expect(trial).toBeEnabled();
+  await page.screenshot({ path: testInfo.outputPath('external-demo-handoff.png'), fullPage: true });
+  const evidence = '.agent-tmp/test-evidence/mulnx-demo';
+  await mkdir(evidence, { recursive: true });
+  await copyFile(
+    testInfo.outputPath('external-demo-handoff.png'),
+    join(evidence, 'external-demo-handoff.png'),
+  );
+  await trial.click();
+  const calls = await page.evaluate(
+    () => (window as unknown as { cameraHandoffCalls: unknown[] }).cameraHandoffCalls,
+  );
+  expect(calls).toContainEqual({
+    command: 'attach_external_cs2',
+    args: expect.objectContaining({
+      pid: 42,
+      created: '123456789',
+      expectedRevision: 'demo-ready',
+      demoTrial: true,
+    }),
+  });
 });

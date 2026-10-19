@@ -47,11 +47,18 @@ export function MulnxHandoff() {
         {error ? <StatusBanner tone="danger">{error}</StatusBanner> : null}
       </details>
     );
-  async function run(open: boolean, external?: ExternalGameIdentity) {
+  async function run(open: boolean, external?: ExternalGameIdentity, demoTrial = false) {
     setBusy(true);
     setError('');
     try {
-      if (external && production)
+      if (external && production && demoTrial)
+        await desktopInvoke('attach_external_cs2', {
+          pid: external.pid,
+          created: external.created,
+          expectedRevision: production.revision,
+          demoTrial: true,
+        });
+      else if (external && production)
         await productionAction('enter', production, false, undefined, external);
       else if (open) await desktopInvoke('open_mulnx_browser');
       else
@@ -67,10 +74,7 @@ export function MulnxHandoff() {
   return (
     <details>
       <summary>MulNX 游戏交接</summary>
-      <p>
-        先配好 GSI 与 OBS，再通过 MulNX 启动游戏。借用时保持原设置和窗口，本机 HUD
-        覆盖停用；退出工作台只解除借用。
-      </p>
+      <p>通过 MulNX 打开游戏。加载 Demo 后可直接试播运镜；结束后游戏保持运行。</p>
       <Button disabled={busy} onClick={() => void run(false)}>
         检查游戏实例
       </Button>
@@ -85,21 +89,24 @@ export function MulnxHandoff() {
           <br />
           {p.executable}
           {!p.managed ? (
-            <Button
-              disabled={busy || !production?.canEnter || production.mode !== 'preparation'}
-              onClick={() => void run(false, { pid: p.pid, created: p.created })}
-            >
-              借用此游戏并进入工作台
-            </Button>
+            <>
+              <Button
+                disabled={busy || !production?.canEnter || production.mode !== 'preparation'}
+                onClick={() => void run(false, { pid: p.pid, created: p.created })}
+              >
+                借用此游戏并进入工作台
+              </Button>
+              <Button
+                disabled={busy || !production || production.mode !== 'preparation'}
+                onClick={() => void run(false, { pid: p.pid, created: p.created }, true)}
+              >
+                运镜试播
+              </Button>
+            </>
           ) : null}
         </p>
       ))}
-      {processes?.length ? (
-        <p>
-          进程检查不代表 MulNX
-          已就绪或活动包已验证。交接会断开旧运镜连接；进入后需重新连接并确认隔离包。
-        </p>
-      ) : null}
+      {processes?.length ? <p>进入后连接 MulNX，并确认游戏中已加载的运镜包。</p> : null}
       {error ? <StatusBanner tone="danger">{error}</StatusBanner> : null}
     </details>
   );

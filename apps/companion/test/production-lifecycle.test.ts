@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -259,3 +259,80 @@ it.each(['stream', 'record'] as const)(
     }
   },
 );
+
+it('keeps recovered external Demo sessions cleanup-only at the real HTTP boundary', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mizar-external-demo-'));
+  const requestId = 'ba05aade-2287-42be-9320-87abae5ac312';
+  await writeFile(
+    join(root, 'demo-test.json'),
+    JSON.stringify({
+      version: 'mizar.demo-test.v1',
+      requestId,
+      teamAName: 'A',
+      teamBName: 'B',
+      gameOwnership: 'external',
+    }),
+  );
+  const app = buildApp({
+    obsConfigPath: join(root, 'obs.json'),
+    localTournamentPath: join(root, 'local.json'),
+    matchManifestPath: join(root, 'match.json'),
+    productRuntime: {
+      artifactSha256: 'a'.repeat(64),
+      gitSha: 'b'.repeat(40),
+      instanceId: 'demo-recovery',
+      controlToken: 'c'.repeat(64),
+      stop: () => {},
+    },
+  });
+  try {
+    for (const action of ['resume', 'connect', 'configure', 'audition']) {
+      const result = await app.inject({
+        method: 'POST',
+        url: '/operator/orchestration',
+        headers: { origin: 'http://127.0.0.1:3000' },
+        payload: { action },
+      });
+      expect(result.statusCode).toBe(409);
+      expect(result.json<{ error: string }>().error).toBe('demo_camera_manual_only');
+    }
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/operator/orchestration',
+          headers: { origin: 'http://127.0.0.1:3000' },
+          payload: { action: 'disconnect' },
+        })
+      ).statusCode,
+    ).toBe(200);
+    const body = { action: 'begin-demo', host: 'demo-host', requestId };
+    expect(
+      (await app.inject({ method: 'POST', url: '/operator/runtime/camera-session', payload: body }))
+        .statusCode,
+    ).toBe(403);
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/operator/runtime/camera-session',
+          headers: { 'x-runtime-token': 'c'.repeat(64) },
+          payload: body,
+        })
+      ).statusCode,
+    ).toBe(409);
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/operator/local-match/create',
+          headers: { origin: 'http://127.0.0.1:3000' },
+          payload: { teamA: 'Changed', teamB: 'B', format: 'bo1' },
+        })
+      ).statusCode,
+    ).toBe(409);
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

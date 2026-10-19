@@ -1082,6 +1082,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           production.get().mode !== 'preparation' &&
           projectionCoordinator.getCurrent().operator.matchContext.origin !== 'fixture',
         manual: director.get().mode === 'manual',
+        demoAudition:
+          demoTest.get().gameOwnership === 'external'
+            ? demoTest.canUseCamera('audition')
+            : undefined,
       }),
       cameraEvidence,
       undefined,
@@ -1110,6 +1114,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       {
         controlToken: options.productRuntime?.controlToken,
         configure: production.configureCameraSession,
+        configureDemo: (requestId, commit) => demoTest.configureCameraSession(requestId, commit),
         canPrepare: () => production.get().mode === 'preparation',
       },
       mulnxTool,
@@ -1222,18 +1227,28 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     if (
       [
         '/operator/runtime/demo-test',
+        '/operator/runtime/camera-session',
         '/operator/runtime/stop',
         '/operator/production',
         '/operator/program-scene',
       ].includes(path)
     )
       return;
+    if (path === '/operator/orchestration') return;
     // Trial presentation is manual. Keep all match, platform, update and resource mutations excluded.
     return reply
       .code(409)
       .send({ error: 'demo_test_active', message: '请先结束试播并完成 CS2 恢复。' });
   });
   app.addHook('preHandler', async (request, reply) => {
+    if (
+      (production.isTrialPending() || demoTest.get().active) &&
+      request.url.split('?')[0] === '/operator/orchestration' &&
+      !demoTest.canUseCamera((request.body as { action?: unknown } | null)?.action)
+    )
+      return reply
+        .code(409)
+        .send({ error: 'demo_camera_manual_only', message: '请在 Demo 试播中手动试播运镜。' });
     if (demoTest?.get().active !== true || request.url.split('?')[0] !== '/operator/program-scene')
       return;
     const body = request.body as { sceneId?: unknown } | null;

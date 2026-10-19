@@ -448,7 +448,9 @@ pub fn camera_session(log: &DesktopLog, action: &str, lease: Option<&str>, revis
     let token = runtime_token(log)?;
     let mut body = serde_json::json!({"action": action, "host": log.session_id});
     if let Some(lease) = lease { body["lease"] = lease.into(); }
-    if let Some(revision) = revision { body["expectedRevision"] = revision.into(); }
+    if let Some(revision) = revision {
+        body[if action == "begin-demo" { "requestId" } else { "expectedRevision" }] = revision.into();
+    }
     let (code, value) = request_with_identity(log, "POST", "/operator/runtime/camera-session", &body.to_string(),
         Instant::now() + Duration::from_secs(2), Some(&token))?;
     if code != 200 || value["ok"] != true {

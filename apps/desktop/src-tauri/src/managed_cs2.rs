@@ -1285,11 +1285,35 @@ impl ManagedCs2 {
         Ok(self.store.load()?.is_none() && !any_cs2_running(&self.log)?)
     }
 
-    pub fn finish(&mut self) -> Result<(), String> {
+    fn detach_external(&mut self) -> bool {
         if let Some(external) = self.external.take() {
-            // No owned journal is ever created. Releasing a query handle cannot terminate a game.
             self.log.event("external_game_detach", "success", Some(&json!({"pid":external.pid,"created":external.created.to_string(),"gameStopped":false}).to_string()));
             self.message = Some("已解除游戏借用；外部游戏及设置保持不变。".into());
+            return true;
+        }
+        false
+    }
+    pub fn finish(&mut self) -> Result<(), String> {
+        let trial_state = if crate::demo_test::requires_recovery(&self.log, None) {
+            crate::demo_test::status(&self.log)?
+        } else { Value::Null };
+        if trial_state["active"] == true && trial_state["gameOwnership"] == "external" {
+            if self.store.load()?.is_some() || self.store.spectator_pending() || self.store.playback_cleanup_pending() {
+                return Err("请先完成受管游戏的配置恢复。".into());
+            }
+            // The trial owns isolated match data, never the externally launched game.
+            // Keep the handle until OBS and formal-context restoration both succeed.
+            crate::production_exit::disconnect_camera(&self.log)?;
+            let trial = crate::demo_test::quarantine(&self.log)?;
+            self.invalidate_external();
+            crate::demo_test::complete(&self.log, trial.as_deref())?;
+            self.external_preservation = true;
+            self.detach_external();
+            self.message = Some("试播已结束，游戏保持运行。".into());
+            return Ok(());
+        }
+        if self.detach_external() {
+            // No owned journal is ever created. Releasing a query handle cannot terminate a game.
             return Ok(());
         }
         let journal = self.store.load()?;
