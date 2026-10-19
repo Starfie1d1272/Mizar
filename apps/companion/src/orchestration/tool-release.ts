@@ -42,8 +42,8 @@ export async function publicJson(url: string): Promise<unknown> {
 }
 
 /** Latest published upstream build, including public beta releases; no Mizar-version pin. */
-export async function latestMulnxRelease(): Promise<MulnxRelease> {
-  const data = await publicJson(
+export async function latestMulnxRelease(readMetadata = publicJson): Promise<MulnxRelease> {
+  const data = await readMetadata(
     `https://api.github.com/repos/${MULNX_REPOSITORY}/releases?per_page=20`,
   );
   const releases = z
@@ -227,8 +227,8 @@ export async function extractMulnx(extractor: string, archive: string, destinati
   return { root, files: count, bytes };
 }
 
-export async function upstreamNotice(path: string, tag: string) {
-  const data = (await publicJson(
+export async function upstreamNotice(path: string, tag: string, readMetadata = publicJson) {
+  const data = (await readMetadata(
     `https://api.github.com/repos/${MULNX_REPOSITORY}/contents/${path}?ref=${encodeURIComponent(tag)}`,
   )) as { encoding?: string; content?: string };
   if (data.encoding !== 'base64' || typeof data.content !== 'string')
