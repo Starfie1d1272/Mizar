@@ -766,15 +766,16 @@ it('isolates external Demo camera leases and restores manual-only recovery after
     diagnostic: () => {},
     context: { beginTemporary: async () => {}, endTemporary: () => {} },
     runtime: { flushSeriesProgressCheckpoint: async () => {}, resetSession: () => {} },
-    scenes: { get: () => ({ revision: 'scene' }), select: async () => ({ ok: true }) },
+    scenes: { get: () => ({ revision: 'scene' }), select: () => Promise.resolve({ ok: true }) },
     production: r.production,
-    obs: async () => ({ connection: 'connected', streaming: false }),
+    obs: () => Promise.resolve({ connection: 'connected', streaming: false }),
     quarantineOutput: (value: boolean) => {
       quarantined = value;
     },
     refresh: () => {},
-    restoreFormal: async () => {
+    restoreFormal: () => {
       restored++;
+      return Promise.resolve();
     },
     hold: () => {},
   } as unknown as ConstructorParameters<typeof DemoTestController>[0];

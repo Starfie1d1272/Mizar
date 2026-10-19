@@ -294,7 +294,7 @@ it('keeps recovered external Demo sessions cleanup-only at the real HTTP boundar
         payload: { action },
       });
       expect(result.statusCode).toBe(409);
-      expect(result.json().error).toBe('demo_camera_manual_only');
+      expect(result.json<{ error: string }>().error).toBe('demo_camera_manual_only');
     }
     expect(
       (
