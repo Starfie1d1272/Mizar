@@ -144,7 +144,7 @@ export function startObserverProcess<R extends GameEventSourceRole>(
     child.stdout.destroy();
     child.kill();
   });
-  child.stdin.end(configuration, () => configuration.fill(0));
+  child.stdin.write(configuration, () => configuration.fill(0));
   const reading = consumeObserverOutput(child.stdout, manager).then((output) => {
     if (output.status === 'failed' && !exited) child.kill('SIGKILL');
     return output;
@@ -181,8 +181,12 @@ export function startObserverProcess<R extends GameEventSourceRole>(
         stoppingRequested = true;
         clearTimeout(startupTimer);
         await manager.stop();
-        if (!exited) child.kill('SIGTERM');
+        if (!exited) child.stdin.end();
         await waitForExit();
+        if (!exited) {
+          child.kill('SIGTERM');
+          await waitForExit();
+        }
         if (!exited) {
           child.kill('SIGKILL');
           await waitForExit();

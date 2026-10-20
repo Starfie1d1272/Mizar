@@ -23,7 +23,7 @@ describe('explicit observer process composition', () => {
       expect(processOwner.manager.getHealth().state).toBe('live');
       expect(processOwner.manager.getRecentGameEvents()[0]?.cursor.role).toBe('lookahead');
       expect(await processOwner.stop()).toEqual({ exited: true });
-      expect(await processOwner.closed).toMatchObject({ cancelled: true, failed: false });
+      expect(await processOwner.closed).toMatchObject({ cancelled: true, failed: false, code: 2 });
       expect(processOwner.manager.getHealth().state).toBe('stopped');
     } finally {
       await processOwner.stop();
