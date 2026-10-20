@@ -35,6 +35,14 @@ describe('explicit observer process composition', () => {
       const result = await processOwner.closed;
       expect(result.failed).toBe(true);
       expect(result.code).toBe(7);
+      expect(result.terminal).toMatchObject({
+        report: 'received',
+        reason: 'native-start-failed',
+        nativeBootCode: 2,
+        steamInitResult: 1,
+        finalizationFailures: ['close-session'],
+      });
+      expect(JSON.stringify(result)).not.toContain(options.endpoint);
       expect(JSON.stringify(result)).not.toContain(options.password);
       expect(processOwner.manager.getHealth().state).toBe('reconnecting');
     } finally {
@@ -46,12 +54,28 @@ describe('explicit observer process composition', () => {
     async (endpoint) => {
       const processOwner = startObserverProcess({ ...options, endpoint });
       try {
-        expect(await processOwner.closed).toMatchObject({ failed: true, ready: false });
+        const result = await processOwner.closed;
+        expect(result).toMatchObject({ failed: true, ready: false });
+        if (endpoint === '127.0.0.4:27020') expect(result.terminal.report).toBe('over-budget');
       } finally {
         expect(await processOwner.stop()).toEqual({ exited: true });
       }
     },
   );
+  it('does not hide cleanup failure behind user cancellation', async () => {
+    const owner = startObserverProcess({ ...options, endpoint: '127.0.0.5:27020' });
+    try {
+      await expect.poll(() => owner.manager.getHealth().state).toBe('live');
+      await owner.stop();
+      expect(await owner.closed).toMatchObject({
+        cancelled: true,
+        failed: true,
+        terminal: { report: 'received', finalizationFailures: ['close-session'] },
+      });
+    } finally {
+      await owner.stop();
+    }
+  });
   it('bounds startup readiness without claiming a live source', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const processOwner = startObserverProcess(options);

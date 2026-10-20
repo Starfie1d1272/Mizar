@@ -7,8 +7,10 @@ const args = process.argv.slice(2);
 const arg = (name) => args[args.indexOf(name) + 1];
 import { createInterface } from 'node:readline';
 const inputLines = createInterface({ input: process.stdin });
+let cleanupFailure = false;
 for await (const text of inputLines) {
   const input = JSON.parse(text);
+  cleanupFailure = input.endpoint === '127.0.0.5:27020';
   if (
     process.argv.some(
       (value) =>
@@ -17,8 +19,30 @@ for await (const text of inputLines) {
     )
   )
     process.exit(90);
-  if (input.endpoint === '127.0.0.2:27020') process.exit(7);
-  if (input.endpoint === '127.0.0.4:27020') process.exit(2);
+  if (input.endpoint === '127.0.0.2:27020') {
+    process.stderr.write(
+      JSON.stringify({
+        online_success: 'INCONCLUSIVE',
+        outcome: 'failed',
+        reason: 'native-start-failed',
+        native_boot_code: 2,
+        steam_init_result: 1,
+        finalization_failures: ['close-session', input.password],
+        privateInput: input,
+      }),
+    );
+    process.exitCode = 7;
+    inputLines.close();
+    process.stdin.destroy();
+    break;
+  }
+  if (input.endpoint === '127.0.0.4:27020') {
+    process.stderr.write('x'.repeat(65537));
+    process.exitCode = 2;
+    inputLines.close();
+    process.stdin.destroy();
+    break;
+  }
   if (input.endpoint === '127.0.0.3:27020') {
     process.stdout.write('{bad}\n');
     setInterval(() => {}, 1000);
@@ -41,4 +65,14 @@ for await (const text of inputLines) {
   process.stdout.write(JSON.stringify(cursor) + '\n');
   process.stdout.write(JSON.stringify({ ...event, source, world: 1 }) + '\n');
 }
-process.exit(2);
+if (cleanupFailure) {
+  process.stderr.write(
+    JSON.stringify({
+      online_success: 'INCONCLUSIVE',
+      outcome: 'failed',
+      reason: 'owner-stopped',
+      finalization_failures: ['close-session'],
+    }),
+  );
+}
+process.exitCode ??= 2;

@@ -22,6 +22,60 @@ export interface ObserverProcessOptions<R extends GameEventSourceRole> {
   readonly seconds?: number;
 }
 
+/** Keep stable terminal evidence, never arbitrary child text or configuration. */
+function terminalEvidence(bytes: Buffer, overflow: boolean) {
+  if (overflow) return { report: 'over-budget' as const };
+  try {
+    const value: unknown = JSON.parse(bytes.toString('utf8'));
+    if (typeof value !== 'object' || value === null || Array.isArray(value))
+      return { report: 'unavailable' as const };
+    const row = value as Record<string, unknown>;
+    if (
+      row.online_success !== 'INCONCLUSIVE' ||
+      !['failed', 'incomplete'].includes(String(row.outcome))
+    )
+      return { report: 'unavailable' as const };
+    const reasons = [
+      'owner-stopped',
+      'duration-limit-incomplete',
+      'native-start-failed',
+      'operation-failed-details-omitted',
+      'interrupted',
+      'addon-initialization-required',
+      'new-string-table-callbacks-required',
+      'prespawn-initialization-required',
+    ];
+    const integer = (v: unknown) =>
+      typeof v === 'number' && Number.isSafeInteger(v) ? v : undefined;
+    return {
+      report: 'received' as const,
+      outcome: row.outcome as 'failed' | 'incomplete',
+      reason:
+        typeof row.reason === 'string' && reasons.includes(row.reason)
+          ? row.reason
+          : 'unclassified',
+      nativeBootCode: integer(row.native_boot_code),
+      steamInitResult: integer(row.steam_init_result),
+      remoteEndReason: integer(row.remote_end_reason),
+      finalizationFailures: Array.isArray(row.finalization_failures)
+        ? row.finalization_failures.filter(
+            (v): v is string =>
+              typeof v === 'string' &&
+              [
+                'close-session',
+                'close-parser',
+                'close-events',
+                'close-samples',
+                'write-report',
+              ].includes(v),
+          )
+        : [],
+    };
+  } catch {
+    return { report: 'unavailable' as const };
+  }
+}
+
 /** Explicit composition only. Importing this module never starts Steam or a process. */
 export function startObserverProcess<R extends GameEventSourceRole>(
   options: ObserverProcessOptions<R>,
@@ -134,7 +188,20 @@ export function startObserverProcess<R extends GameEventSourceRole>(
     });
   });
   // Neither raw stderr nor connection configuration is retained in application diagnostics.
-  child.stderr.on('data', () => {});
+  let stderr = Buffer.alloc(0);
+  let stderrOverflow = false;
+  child.stderr.on('data', (chunk: Buffer) => {
+    if (stderrOverflow) return;
+    if (stderr.length + chunk.length > 64 * 1024) {
+      stderr.fill(0);
+      stderr = Buffer.alloc(0);
+      stderrOverflow = true;
+      return;
+    }
+    const next = Buffer.concat([stderr, chunk]);
+    stderr.fill(0);
+    stderr = next;
+  });
   const configuration = Buffer.from(
     JSON.stringify({ endpoint: options.endpoint, password: options.password }) + '\n',
   );
@@ -152,14 +219,19 @@ export function startObserverProcess<R extends GameEventSourceRole>(
   const closed = Promise.all([exit, reading]).then(([code, output]) => {
     unsubscribe();
     clearTimeout(startupTimer);
+    const terminal = terminalEvidence(stderr, stderrOverflow);
+    stderr.fill(0);
+    stderr = Buffer.alloc(0);
     return {
+      terminal,
       code,
       output,
       ready,
       startupTimedOut,
       cancelled: stoppingRequested,
       failed:
-        !stoppingRequested && (!ready || inputFailed || code !== 2 || output.status === 'failed'),
+        (terminal.report === 'received' && terminal.outcome === 'failed') ||
+        (!stoppingRequested && (!ready || inputFailed || code !== 2 || output.status === 'failed')),
     };
   });
   let stopping: Promise<{ exited: boolean }> | undefined;
