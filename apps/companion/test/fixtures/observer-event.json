@@ -1,0 +1,39 @@
+{
+  "kind": "weapon_fire",
+  "type": "raw-event",
+  "name": "weapon_fire",
+  "fields": {
+    "userid": 0,
+    "weapon": "ak47",
+    "silenced": false
+  },
+  "players": {
+    "userid": {
+      "domain": "player-controller-slot",
+      "slot": 0,
+      "steamId": "76561198000000123",
+      "userId": 42,
+      "controller": {
+        "index": 1,
+        "serial": 1
+      }
+    }
+  },
+  "committedTick": 99,
+  "tick": 100,
+  "tickInterval": 0.015625,
+  "map": "de_test",
+  "warmup": null,
+  "round": null,
+  "weapon": "ak47",
+  "actor": "76561198000000123",
+  "target": null,
+  "source": "ahead:fixture",
+  "channel": 1,
+  "world": 2,
+  "sequence": 8,
+  "descriptorGeneration": 1,
+  "eventServerTick": null,
+  "networkTick": -1,
+  "identityResolved": true
+}

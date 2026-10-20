@@ -1,6 +1,9 @@
 import type { RoleScopedGameEventObservation, GameEventSourceRole } from '@mizar/core/game-events';
 import {
   createCstvLiveSession,
+  normalizeObserverGameEvent,
+  SUPPORTED_CSTV_GAME_EVENT_NAMES,
+  type ObserverSourceIdentity,
   type CstvDiagnostic,
   type CstvDiagnosticCode,
   type CstvLiveSession,
@@ -46,6 +49,7 @@ export interface CstvSourceManagerOptions<R extends GameEventSourceRole = GameEv
   readonly role: R;
   readonly url?: string;
   readonly parserSessionFactory?: CstvParserSessionFactory;
+  readonly observerIdentity?: ObserverSourceIdentity;
   readonly clock?: CstvObservationClock;
   readonly scheduler?: CstvScheduler;
 }
@@ -121,22 +125,40 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
   private lastEventObservedAt: string | undefined;
   private lastErrorCode: CstvDiagnosticCode | undefined;
   private lastTerminalStatus: CstvSessionTerminalStatus | undefined;
+  private observerIdentity: ObserverSourceIdentity | undefined;
+  private observerAttached = true;
+  private observerSequence = 0;
+  private observerKinds = new Set<string>();
+  private observerEventSequence = 0;
+  private observerMap: string | undefined;
+  private observerTicksPerSecond: number | undefined;
   private started = false;
   private stopRequested = false;
 
   constructor(options: CstvSourceManagerOptions<R>) {
     this.role = options.role;
+    this.observerIdentity =
+      options.observerIdentity === undefined ? undefined : { ...options.observerIdentity };
     this.url = options.url;
     this.parserSessionFactory = options.parserSessionFactory;
     this.clock = options.clock;
     this.scheduler = options.scheduler ?? defaultScheduler;
-    this.state = this.url === undefined ? 'disabled' : 'stopped';
+    this.state =
+      this.url === undefined && this.observerIdentity === undefined ? 'disabled' : 'stopped';
   }
 
   start(): void {
-    if (this.url === undefined || this.started || this.stopRequested) return;
+    if (
+      (this.url === undefined && this.observerIdentity === undefined) ||
+      this.started ||
+      this.stopRequested
+    )
+      return;
     this.started = true;
-    this.connect();
+    if (this.observerIdentity !== undefined) {
+      this.state = 'connecting';
+      this.notifySnapshotChanged();
+    } else this.connect();
   }
 
   async stop(): Promise<void> {
@@ -147,7 +169,7 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
       this.reconnectTimer = undefined;
       this.reconnectScheduled = false;
     }
-    if (this.url !== undefined) {
+    if (this.url !== undefined || this.observerIdentity !== undefined) {
       this.state = 'stopped';
       this.notifySnapshotChanged();
     }
@@ -212,6 +234,142 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
   ): () => void {
     this.liveGameEventListeners.add(listener);
     return () => this.liveGameEventListeners.delete(listener);
+  }
+
+  /** The local process owner supplies attachment identity; wire records cannot replace it. */
+  attachObserver(identity: ObserverSourceIdentity): void {
+    if (this.observerIdentity === undefined || this.stopRequested) return;
+    validateObserverIdentity(this.role, identity);
+    this.observerIdentity = { ...identity };
+    this.observerAttached = true;
+    this.observerSequence = 0;
+    this.observerKinds.clear();
+    this.resetObserverContinuity();
+  }
+
+  disconnectObserver(): void {
+    if (this.observerIdentity === undefined || this.stopRequested) return;
+    this.observerAttached = false;
+    this.resetObserverContinuity();
+    this.state = 'reconnecting';
+    this.recordDiagnostic({ code: 'session-run-failed' });
+  }
+
+  private resetObserverContinuity(): void {
+    this.generation += 1;
+    this.observerEventSequence = 0;
+    this.observerMap = undefined;
+    this.observerTicksPerSecond = undefined;
+    this.recentGameEvents.length = 0;
+    this.tailTick = undefined;
+    this.lastEventTick = undefined;
+    this.lastEventSequence = undefined;
+    this.lastEventObservedAt = undefined;
+    this.lastSync = undefined;
+    this.state = 'connecting';
+    this.notifySnapshotChanged();
+  }
+
+  /** Consume bounded, parsed local observer output, not arbitrary network messages. */
+  consumeObserverRecord(input: unknown): void {
+    if (
+      !this.started ||
+      !this.observerAttached ||
+      this.stopRequested ||
+      this.observerIdentity === undefined ||
+      typeof input !== 'object' ||
+      input === null ||
+      Array.isArray(input)
+    )
+      return;
+    const row = input as Record<string, unknown>;
+    if (
+      row.kind !== 'cursor' &&
+      row.kind !== 'discontinuity' &&
+      !SUPPORTED_CSTV_GAME_EVENT_NAMES.some((name) => name === row.kind)
+    )
+      return;
+    const owner = this.observerIdentity;
+    if (
+      row.source !== owner.source ||
+      row.channel !== owner.channel ||
+      typeof row.world !== 'number' ||
+      !Number.isSafeInteger(row.world) ||
+      row.world < owner.world ||
+      typeof row.sequence !== 'number' ||
+      !Number.isSafeInteger(row.sequence) ||
+      row.sequence < 1 ||
+      row.sequence < this.observerSequence ||
+      typeof row.kind !== 'string'
+    )
+      return;
+    if (row.world !== owner.world && row.kind !== 'discontinuity') return;
+    if (row.sequence > this.observerSequence) {
+      this.observerSequence = row.sequence;
+      this.observerKinds.clear();
+    }
+    if (this.observerKinds.has(row.kind)) return;
+    this.observerKinds.add(row.kind);
+    if (row.kind === 'discontinuity') {
+      this.observerIdentity = { ...owner, world: row.world };
+      this.resetObserverContinuity();
+      return;
+    }
+    if (row.world !== owner.world) return;
+    if (row.kind === 'cursor') {
+      if (
+        typeof row.tick !== 'number' ||
+        !Number.isSafeInteger(row.tick) ||
+        row.tick < 1 ||
+        typeof row.tickInterval !== 'number' ||
+        !Number.isFinite(row.tickInterval) ||
+        row.tickInterval <= 0 ||
+        !Number.isFinite(1 / row.tickInterval) ||
+        typeof row.map !== 'string' ||
+        row.map.length === 0 ||
+        row.map.length > 256
+      )
+        return;
+      this.observerMap = row.map;
+      this.observerTicksPerSecond = 1 / row.tickInterval;
+      this.tailTick = row.tick;
+      this.state = 'live';
+      this.lastErrorCode = undefined;
+      this.notifySnapshotChanged();
+      return;
+    }
+    if (
+      row.type !== 'raw-event' ||
+      this.state !== 'live' ||
+      typeof row.tick !== 'number' ||
+      row.map !== this.observerMap
+    )
+      return;
+    const sample = this.clock?.now() ?? {
+      observedAt: new Date().toISOString(),
+      observedMonotonicMs: performance.now(),
+    };
+    try {
+      const observation = normalizeObserverGameEvent(row, owner, {
+        cursor: {
+          kind: 'cs2-cstv',
+          role: this.role,
+          generation: this.generation,
+          sequence: this.observerEventSequence,
+          tick: row.tick,
+          observedAt: sample.observedAt,
+          observedMonotonicMs: sample.observedMonotonicMs,
+          ...(this.observerMap === undefined ? {} : { mapName: this.observerMap }),
+          ...(this.observerTicksPerSecond === undefined
+            ? {}
+            : { ticksPerSecond: this.observerTicksPerSecond }),
+        },
+      }) as RoleScopedGameEventObservation<R>;
+      this.observerEventSequence += 1;
+      this.handleObservation(this.generation, observation);
+    } catch {
+      this.recordDiagnostic({ code: 'normalization-failed' });
+    }
   }
 
   private connect(): void {
@@ -392,6 +550,7 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
 export function createCstvSourceManager<R extends GameEventSourceRole>(
   options: CstvSourceManagerOptions<R>,
 ): CstvSourceManager<R> {
+  if (options.observerIdentity !== undefined) throw new Error('Use the observer source factory');
   if (options.url !== undefined && !isValidHttpUrl(options.url)) {
     throw new Error('CSTV source URL must be a valid http(s) URL');
   }
@@ -429,4 +588,42 @@ export function createCstvSourceManagers(options: {
       ...shared,
     }),
   };
+}
+
+export interface ObserverSourceManager<R extends GameEventSourceRole> extends CstvSourceManager<R> {
+  attachObserver(identity: ObserverSourceIdentity): void;
+  disconnectObserver(): void;
+  consumeObserverRecord(input: unknown): void;
+}
+
+function validateObserverIdentity(
+  role: GameEventSourceRole,
+  identity: ObserverSourceIdentity,
+): void {
+  if (
+    (identity.role !== 'ahead' && identity.role !== 'delayed') ||
+    (identity.role === 'ahead' ? 'lookahead' : 'program') !== role ||
+    !identity.source.startsWith(`${identity.role}:`) ||
+    identity.source.length > 128 ||
+    !Number.isSafeInteger(identity.channel) ||
+    identity.channel < 0 ||
+    !Number.isSafeInteger(identity.world) ||
+    identity.world < 0
+  ) {
+    throw new Error('Invalid observer source identity');
+  }
+}
+
+/** Reuse the existing event/health owner; transport process lifecycle stays outside it. */
+export function createObserverSourceManager<R extends GameEventSourceRole>(options: {
+  readonly role: R;
+  readonly identity: ObserverSourceIdentity;
+  readonly clock?: CstvObservationClock;
+}): ObserverSourceManager<R> {
+  validateObserverIdentity(options.role, options.identity);
+  return new DefaultCstvSourceManager({
+    role: options.role,
+    observerIdentity: options.identity,
+    ...(options.clock === undefined ? {} : { clock: options.clock }),
+  });
 }
