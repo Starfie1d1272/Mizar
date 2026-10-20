@@ -1,5 +1,8 @@
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
+import { createDisabledRecorder } from '../src/telemetry/capture-recorder.js';
+import { buildApp } from '../src/app.js';
+import { createCstvSourceManager } from '../src/telemetry/cstv-source-manager.js';
 import { startObserverProcess } from '../src/telemetry/observer-process.js';
 const driver = fileURLToPath(new URL('./fixtures/observer-child.mjs', import.meta.url));
 const options = {
@@ -16,16 +19,26 @@ const options = {
   password: 'synthetic-only',
 };
 describe('explicit observer process composition', () => {
-  it('reads the owned child and stops it without late delivery', async () => {
+  it('joins the owned child through actual Companion shutdown without late delivery', async () => {
     const processOwner = startObserverProcess(options);
+    const app = buildApp({
+      logger: false,
+      cstvSources: {
+        program: createCstvSourceManager({ role: 'program' }),
+        lookahead: processOwner.source,
+      },
+    });
     try {
+      await app.ready();
       await expect.poll(() => processOwner.manager.getRecentGameEvents().length).toBe(1);
       expect(processOwner.manager.getHealth().state).toBe('live');
       expect(processOwner.manager.getRecentGameEvents()[0]?.cursor.role).toBe('lookahead');
-      expect(await processOwner.stop()).toEqual({ exited: true });
+      await app.close();
       expect(await processOwner.closed).toMatchObject({ cancelled: true, failed: false, code: 2 });
-      expect(processOwner.manager.getHealth().state).toBe('stopped');
+      expect(processOwner.source.getHealth().state).toBe('stopped');
+      expect(processOwner.source.getSnapshot()).toEqual(processOwner.manager.getSnapshot());
     } finally {
+      await app.close();
       await processOwner.stop();
     }
   });
@@ -62,11 +75,23 @@ describe('explicit observer process composition', () => {
       }
     },
   );
-  it('does not hide cleanup failure behind user cancellation', async () => {
+  it('reports cleanup failure after the actual app finishes its remaining finalizers', async () => {
     const owner = startObserverProcess({ ...options, endpoint: '127.0.0.5:27020' });
+    const recorder = createDisabledRecorder('recorder_not_configured');
+    const finalized = vi.spyOn(recorder, 'finalize');
+    const app = buildApp({
+      logger: false,
+      recorder,
+      cstvSources: {
+        program: createCstvSourceManager({ role: 'program' }),
+        lookahead: owner.source,
+      },
+    });
     try {
+      await app.ready();
       await expect.poll(() => owner.manager.getHealth().state).toBe('live');
-      await owner.stop();
+      await expect(app.close()).rejects.toThrow('Companion source or consumer shutdown failed');
+      expect(finalized).toHaveBeenCalledOnce();
       expect(await owner.closed).toMatchObject({
         cancelled: true,
         failed: true,

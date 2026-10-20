@@ -1719,7 +1719,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     cameraDirector?.close();
     await musicDirector?.close();
     await obsAdapter?.close();
-    await Promise.all([
+    const sourceCleanup = await Promise.allSettled([
       cstvSources.program.stop(),
       cstvSources.lookahead.stop(),
       ...deliveryConsumers.map((consumer) => consumer.close()),
@@ -1735,6 +1735,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     await performanceContext?.close();
     await sessionJournal?.close();
     await diagnosticDelivery.close();
+    const sourceFailures = sourceCleanup
+      .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+      .map((result) => result.reason as unknown);
+    if (sourceFailures.length > 0)
+      throw new AggregateError(sourceFailures, 'Companion source or consumer shutdown failed');
   });
 
   return app;

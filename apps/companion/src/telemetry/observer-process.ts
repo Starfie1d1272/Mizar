@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { isAbsolute, dirname } from 'node:path';
 import { isIP } from 'node:net';
 import type { GameEventSourceRole } from '@mizar/core/game-events';
-import { createObserverSourceManager } from './cstv-source-manager.js';
+import { createObserverSourceManager, type CstvSourceManager } from './cstv-source-manager.js';
 import { consumeObserverOutput } from './observer-output.js';
 
 /** Runtime paths come from the local installed artifact owner, never match metadata. */
@@ -245,7 +245,7 @@ export function startObserverProcess<R extends GameEventSourceRole>(
     ]);
     if (timer !== undefined) clearTimeout(timer);
   };
-  return {
+  const owner = {
     manager,
     closed,
     stop(): Promise<{ exited: boolean }> {
@@ -268,4 +268,24 @@ export function startObserverProcess<R extends GameEventSourceRole>(
       return stopping;
     },
   };
+  // Companion's existing shutdown contract calls source.stop(), not an extra
+  // transport-owner hook. Keep the same data owner while joining child cleanup.
+  const source: CstvSourceManager<R> = {
+    role: manager.role,
+    start: () => manager.start(),
+    stop: async () => {
+      const result = await owner.stop();
+      if (!result.exited) throw new Error('Observer process did not exit');
+      const terminal = await owner.closed;
+      if (terminal.failed)
+        throw new Error('Observer process ended with failure', { cause: terminal.terminal });
+    },
+    getHealth: () => manager.getHealth(),
+    getRecentGameEvents: () => manager.getRecentGameEvents(),
+    getRecentDiagnostics: () => manager.getRecentDiagnostics(),
+    getSnapshot: () => manager.getSnapshot(),
+    subscribe: (listener) => manager.subscribe(listener),
+    subscribeLiveGameEvents: (listener) => manager.subscribeLiveGameEvents(listener),
+  };
+  return { ...owner, source };
 }
