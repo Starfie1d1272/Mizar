@@ -105,7 +105,7 @@ export function githubReleaseNotes(notes, { sourceSha, qualificationRunId }) {
   const download = `${repo}/releases/download/${tag}/Mizar-${tag}-Windows-x64`;
   const downloads = stable
     ? `**Windows 安装器**：[Box 国内优先](${box}) · [GitHub 兜底](${download}-WebInstaller.exe)\n\n` +
-      `**完整离线 ZIP**：[Box 国内优先](${box}) · [GitHub 兜底](${download}.zip)\n\n` +
+      `**完整离线 ZIP**：[GitHub 下载](${download}.zip)\n\n` +
       `Box 同步可能稍晚，请以版本号为准。`
     : `**完整 Windows 安装器**：[GitHub 下载](${download}-Setup.exe)\n\n` +
       `**完整离线 ZIP**：[GitHub 下载](${download}.zip)\n\n` +
