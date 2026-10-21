@@ -286,6 +286,8 @@ export class BoxClient {
     });
   }
   async list(path) {
+    // This directory is the verified public share; do not send a repository token.
+    if (path === downloadsFolder) return readPublicDownloadDirectory();
     const result = await this.api('dir', path);
     requireValue(Array.isArray(result.dirent_list), '云盘目录返回格式错误');
     return result.dirent_list;
@@ -532,30 +534,49 @@ export async function syncUserDownloads({
   await accept({ bootstrap });
 }
 
-// Anonymous access is a separate acceptance boundary, never inferred from the upload token.
-export async function verifyPublicDownloads({ bootstrap }) {
-  requireValue(bootstrap?.identity, '匿名验收缺少原文件身份');
+// One public directory reader serves migration inventory and anonymous acceptance.
+// It cannot list private folders or authorize a write; every retired file still
+// requires its original signed release identity and authenticated full-byte readback.
+export async function readPublicDownloadDirectory() {
   const listing = await (
     await checkedFetch(
       'https://box.nju.edu.cn/api/v2.1/share-links/91dec4c27e5d47f38fcf/dirents/?path=%2FDownloads%2F',
-      { redirect: 'error' },
+      { redirect: 'error', cache: 'no-store' },
     )
   ).json();
-  const files = [bootstrap.identity];
   requireValue(
     listing.dir_path === downloadsFolder + '/' &&
       Array.isArray(listing.dirent_list) &&
-      listing.dirent_list.length === 1 &&
-      files.every(
-        (f) =>
-          listing.dirent_list.filter(
-            (e) =>
-              e.is_dir === false &&
-              e.file_name === f.name &&
-              e.file_path === '/Downloads/' + f.name &&
-              e.size === f.size,
-          ).length === 1,
-      ),
+      listing.dirent_list.length <= 100,
+    '公开下载目录身份不一致',
+  );
+  const names = new Set();
+  return listing.dirent_list.map((entry) => {
+    requireValue(
+      typeof entry.file_name === 'string' &&
+        entry.file_name.length > 0 &&
+        !/[\\/]/.test(entry.file_name) &&
+        !names.has(entry.file_name) &&
+        entry.is_dir === false &&
+        entry.file_path === '/Downloads/' + entry.file_name &&
+        Number.isSafeInteger(entry.size) &&
+        entry.size >= 0,
+      '公开下载目录存在无效或重复文件',
+    );
+    names.add(entry.file_name);
+    return { name: entry.file_name, size: entry.size, type: 'file' };
+  });
+}
+
+// Anonymous access is a separate acceptance boundary, never inferred from the upload token.
+export async function verifyPublicDownloads({ bootstrap }) {
+  requireValue(bootstrap?.identity, '匿名验收缺少原文件身份');
+  const listing = await readPublicDownloadDirectory();
+  const files = [bootstrap.identity];
+  requireValue(
+    listing.length === 1 &&
+      listing[0].name === bootstrap.identity.name &&
+      listing[0].size === bootstrap.identity.size,
     '匿名用户入口未就绪或文件不一致',
   );
   for (const identity of files) {
