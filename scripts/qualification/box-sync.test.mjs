@@ -232,3 +232,71 @@ it('anonymous acceptance needs only the exact bootstrap and checks every byte', 
     vi.resetModules();
   }
 });
+
+it('lists only the fixed public Downloads without a token or privileged directory request', async () => {
+  const f = fixture();
+  const fetcher = vi.fn(async (_url, options) => {
+    expect(options.headers).toBeUndefined();
+    expect(options.redirect).toBe('error');
+    return new Response(
+      JSON.stringify({
+        dir_path: '/Stable/Downloads/',
+        dirent_list: [
+          {
+            is_dir: false,
+            file_name: f.full.bootstrap.name,
+            file_path: '/Downloads/' + f.full.bootstrap.name,
+            size: f.full.bootstrap.size,
+          },
+        ],
+      }),
+    );
+  });
+  vi.stubGlobal('fetch', fetcher);
+  vi.resetModules();
+  try {
+    const { BoxClient } = await import('./box-sync.mjs');
+    const privateTransport = vi.fn(() => {
+      throw Error('private API must not be called');
+    });
+    const box = new BoxClient('fixture-private-token', undefined, privateTransport);
+    await expect(box.list('/Stable/Downloads')).resolves.toEqual([
+      { name: f.full.bootstrap.name, size: f.full.bootstrap.size, type: 'file' },
+    ]);
+    expect(privateTransport).not.toHaveBeenCalled();
+    expect(String(fetcher.mock.calls[0][0])).toBe(
+      'https://box.nju.edu.cn/api/v2.1/share-links/91dec4c27e5d47f38fcf/dirents/?path=%2FDownloads%2F',
+    );
+  } finally {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  }
+});
+
+it.each(['wrong directory', 'duplicate name', 'path escape'])(
+  'rejects public listing %s before migration',
+  async (kind) => {
+    const entry = {
+      is_dir: false,
+      file_name: 'file.exe',
+      file_path: '/Downloads/file.exe',
+      size: 2,
+    };
+    const listing = { dir_path: '/Stable/Downloads/', dirent_list: [entry] };
+    if (kind === 'wrong directory') listing.dir_path = '/Other/';
+    if (kind === 'duplicate name') listing.dirent_list.push({ ...entry });
+    if (kind === 'path escape') entry.file_name = '../file.exe';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify(listing))),
+    );
+    vi.resetModules();
+    try {
+      const { readPublicDownloadDirectory } = await import('./box-sync.mjs');
+      await expect(readPublicDownloadDirectory()).rejects.toThrow();
+    } finally {
+      vi.unstubAllGlobals();
+      vi.resetModules();
+    }
+  },
+);
