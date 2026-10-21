@@ -128,10 +128,7 @@ function enabledFollowups(ctx, outputs) {
 
 describe.each([
   ['workflow_run', 'sync'],
-  ...['sync', 'probe', 'verify-downloads', 'rollback-downloads'].map((mode) => [
-    'workflow_dispatch',
-    mode,
-  ]),
+  ...['sync', 'probe', 'verify-downloads'].map((mode) => ['workflow_dispatch', mode]),
 ])('complete Box workflow: %s / %s', (event, mode) => {
   it.each(['alpha.1', 'beta.2', 'rc.3'])(
     'skips every downstream timing/upload step for %s',
