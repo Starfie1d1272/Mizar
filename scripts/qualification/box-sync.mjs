@@ -463,128 +463,89 @@ async function syncPackage({ box, identity, bytes, resolveIdentity }, folder, pa
   return `同步成功：${folder.slice(1)} 已保留一个经过校验的正式分发包；Archive 保留回滚版本。`;
 }
 
-export async function syncStable(options) {
-  return syncPackage(options, '/Stable', setupPattern);
-}
 export async function syncBootstrap(options) {
   return syncPackage(options, downloadsFolder, bootstrapPattern);
 }
-// Only published identities may leave the legacy public root. Keep every rollback byte in Archive.
+
+// Retire redundant distributions without deleting the only copy or trusting filenames.
+// Resolve and verify every source/destination before changing the public directory.
+async function planFullDownloadRetirement(box, version, resolveIdentity) {
+  const plans = [];
+  const archive = await box.list('/Archive');
+  for (const folder of ['/Stable', downloadsFolder]) {
+    const entries = await box.list(folder);
+    requireValue(
+      new Set(entries.map((entry) => entry.name)).size === entries.length,
+      '分发目录存在重复文件',
+    );
+    for (const entry of entries) {
+      if (folder === '/Stable' && entry.type === 'dir' && entry.name === 'Downloads') continue;
+      const match =
+        setupPattern.exec(entry.name) ||
+        offlinePattern.exec(entry.name) ||
+        bootstrapPattern.exec(entry.name);
+      requireValue(entry.type === 'file' && match, '分发目录存在未知内容，保留原文件');
+      const previousVersion = match[1];
+      requireValue(
+        previousVersion === version || older(previousVersion, version),
+        '已有更新版本，拒绝降级同步',
+      );
+      if (folder === downloadsFolder && bootstrapPattern.test(entry.name)) continue;
+      const release = await resolveIdentity('v' + previousVersion);
+      const identity = offlinePattern.test(entry.name)
+        ? release.offline
+        : bootstrapPattern.test(entry.name)
+          ? release.bootstrap
+          : release;
+      requireValue(identity?.name === entry.name, '待归档文件缺少原发行身份');
+      await verifyRemote(box, folder + '/' + entry.name, identity);
+      const existing = archive.find((row) => row.name === entry.name);
+      if (existing) {
+        requireValue(existing.type === 'file', '归档目标不是文件');
+        await verifyRemote(box, '/Archive/' + entry.name, identity);
+      }
+      plans.push({ folder, identity, existing: Boolean(existing) });
+    }
+  }
+  return async () => {
+    for (const { folder, identity, existing } of plans) {
+      if (existing) {
+        await verifyRemote(box, '/Archive/' + identity.name, identity);
+        await box.remove(folder + '/' + identity.name);
+      } else await box.move(folder, '/Archive', identity.name);
+      await verifyRemote(box, '/Archive/' + identity.name, identity);
+    }
+  };
+}
+
 export async function syncUserDownloads({
   box,
-  offline,
   bootstrap,
   resolveIdentity,
   accept = verifyPublicDownloads,
 }) {
-  requireValue(
-    bootstrap?.identity &&
-      offline?.identity &&
-      bootstrap.identity.version === offline.identity.version &&
-      bootstrap.identity.gitSha === offline.identity.gitSha &&
-      bootstrap.identity.releaseId === offline.identity.releaseId,
-    '用户下载必须同源同版',
-  );
-  const stable = await box.list('/Stable');
-  const legacy = stable.filter((e) => bootstrapPattern.test(e.name));
-  const root = await box.list('/');
-  const hasPointer =
-    root.some((e) => e.name === 'Updates' && e.type === 'dir') &&
-    (await box.list('/Updates')).some((e) => e.name === 'latest.json' && e.type === 'file');
-  const full = legacy.length > 0 || !stable.some((e) => e.name === 'Downloads') || !hasPointer;
-  const archive = await box.list('/Archive');
-  const verified = [];
-  for (const entry of legacy) {
-    requireValue(entry.type === 'file', '旧轻量入口不是文件');
-    const version = bootstrapPattern.exec(entry.name)[1];
-    requireValue(
-      version === bootstrap.identity.version || older(version, bootstrap.identity.version),
-      '已有更新版本，拒绝迁移',
-    );
-    const identity =
-      version === bootstrap.identity.version
-        ? bootstrap.identity
-        : (await resolveIdentity('v' + version)).bootstrap;
-    requireValue(identity?.name === entry.name, '旧轻量入口缺少原发行身份');
-    await verifyRemote(box, '/Stable/' + entry.name, identity);
-    if (archive.some((e) => e.name === entry.name))
-      await verifyRemote(box, '/Archive/' + entry.name, identity);
-    verified.push(identity);
-  }
+  requireValue(bootstrap?.identity && bootstrap.bytes, '用户下载缺少轻量安装器');
   await ensureDownloads(box);
-  const before = await box.list(downloadsFolder);
-  requireValue(
-    new Set(before.map((e) => e.name)).size === before.length &&
-      before.every((e) => {
-        const version = (bootstrapPattern.exec(e.name) || offlinePattern.exec(e.name))?.[1];
-        return (
-          e.type === 'file' &&
-          version &&
-          (version === bootstrap.identity.version || older(version, bootstrap.identity.version))
-        );
-      }),
-    '用户下载目录存在未知文件或更新版本',
-  );
-  // One-time relocation uses the already supported atomic move, not an assumed copy API.
-  const hasLegacyZip =
-    root.some((e) => e.name === 'Offline' && e.type === 'dir') &&
-    (await box.list('/Offline')).some((e) => e.name === offline.identity.name && e.type === 'file');
-  let relocated = false;
-  if (
-    hasLegacyZip &&
-    !(await box.list(downloadsFolder)).some((e) => e.name === offline.identity.name)
-  ) {
-    await verifyRemote(box, '/Offline/' + offline.identity.name, offline.identity);
-    await box.move('/Offline', downloadsFolder, offline.identity.name);
-    relocated = true;
-  }
-  try {
-    await syncBootstrap({ box, ...bootstrap });
-    await syncPackage({ box, ...offline }, downloadsFolder, offlinePattern);
-    const entries = await box.list(downloadsFolder);
-    requireValue(
-      entries.length === 2 &&
-        entries.every(
-          (e) =>
-            e.type === 'file' && [bootstrap.identity.name, offline.identity.name].includes(e.name),
-        ),
-      '用户下载入口必须只有轻量 EXE 和完整 ZIP',
-    );
-    await accept({ offline, bootstrap, full });
-  } catch (error) {
-    // Restore a relocated original on failed anonymous acceptance. Never replace an unknown destination.
-    if (relocated && !(await box.list('/Offline')).some((e) => e.name === offline.identity.name)) {
-      await verifyRemote(box, downloadsFolder + '/' + offline.identity.name, offline.identity);
-      await box.move(downloadsFolder, '/Offline', offline.identity.name);
-      await verifyRemote(box, '/Offline/' + offline.identity.name, offline.identity);
-    }
-    throw error;
-  }
-  for (const previous of verified) {
-    if (archive.some((e) => e.name === previous.name)) {
-      await verifyRemote(box, '/Archive/' + previous.name, previous);
-      await box.remove('/Stable/' + previous.name);
-    } else {
-      await box.move('/Stable', '/Archive', previous.name);
-      await verifyRemote(box, '/Archive/' + previous.name, previous);
-    }
-  }
+  const retire = await planFullDownloadRetirement(box, bootstrap.identity.version, resolveIdentity);
+  await syncBootstrap({ box, ...bootstrap });
+  await retire();
+  await accept({ bootstrap });
 }
 
 // Anonymous access is a separate acceptance boundary, never inferred from the upload token.
-export async function verifyPublicDownloads({ offline, bootstrap, full = true }) {
-  requireValue(offline?.identity && bootstrap?.identity, '匿名验收缺少原文件身份');
+export async function verifyPublicDownloads({ bootstrap }) {
+  requireValue(bootstrap?.identity, '匿名验收缺少原文件身份');
   const listing = await (
     await checkedFetch(
       'https://box.nju.edu.cn/api/v2.1/share-links/91dec4c27e5d47f38fcf/dirents/?path=%2FDownloads%2F',
       { redirect: 'error' },
     )
   ).json();
-  const files = [bootstrap.identity, offline.identity];
+  const files = [bootstrap.identity];
   requireValue(
     listing.dir_path === downloadsFolder + '/' &&
       Array.isArray(listing.dirent_list) &&
-      listing.dirent_list.length === 2 &&
+      listing.dirent_list.length === 1 &&
       files.every(
         (f) =>
           listing.dirent_list.filter(
@@ -615,7 +576,6 @@ export async function verifyPublicDownloads({ offline, bootstrap, full = true })
       response = await fetch(url, {
         redirect: 'manual',
         signal: AbortSignal.timeout(600000),
-        ...(!full && identity === offline.identity ? { headers: { Range: 'bytes=0-0' } } : {}),
       });
       if ([301, 302, 303, 307, 308].includes(response.status)) {
         const location = response.headers.get('location');
@@ -627,22 +587,6 @@ export async function verifyPublicDownloads({ offline, bootstrap, full = true })
       break;
     }
     requireValue(response?.ok && response.body, '匿名下载未完成');
-    if (!full && identity === offline.identity) {
-      requireValue(
-        (response.status === 206 &&
-          response.headers.get('content-range') === `bytes 0-0/${identity.size}`) ||
-          (response.status === 200 &&
-            Number(response.headers.get('content-length')) === identity.size),
-        '匿名 ZIP 下载响应无效',
-      );
-      const reader = response.body.getReader();
-      try {
-        requireValue(!(await reader.read()).done, '匿名 ZIP 下载为空');
-      } finally {
-        await reader.cancel();
-      }
-      continue;
-    }
     const hash = createHash('sha256');
     let size = 0;
     for await (const chunk of response.body) {
@@ -655,49 +599,7 @@ export async function verifyPublicDownloads({ offline, bootstrap, full = true })
       '匿名下载原字节不一致',
     );
   }
-  return full
-    ? '匿名验收成功：用户入口只有轻量 EXE 和完整离线 ZIP，下载原字节一致。'
-    : '匿名验收成功：目录及下载入口可达，轻量 EXE 原字节一致；ZIP 原字节由同步校验确认。';
-}
-
-export async function rollbackDownloads({ box, identity, offline, bootstrap }) {
-  requireValue(
-    bootstrap?.identity &&
-      bootstrap.bytes &&
-      offline?.identity &&
-      bootstrap.identity.version === identity.version &&
-      offline.identity.version === identity.version &&
-      bootstrap.identity.gitSha === identity.gitSha &&
-      offline.identity.gitSha === identity.gitSha &&
-      bootstrap.identity.releaseId === identity.releaseId &&
-      offline.identity.releaseId === identity.releaseId &&
-      bootstrap.bytes.length === bootstrap.identity.size &&
-      digest(bootstrap.bytes) === bootstrap.identity.sha256,
-    '恢复旧入口必须使用同版原签分发身份',
-  );
-  await box.initialize();
-  await verifyRemote(box, '/Stable/' + identity.name, identity);
-  const root = await box.list('/');
-  const hasOffline = root.some((e) => e.name === 'Offline' && e.type === 'dir');
-  if (!hasOffline) await box.api('dir', '/Offline', 'POST', { operation: 'mkdir' });
-  if (!(await box.list('/Offline')).some((e) => e.name === offline.identity.name)) {
-    await verifyRemote(box, downloadsFolder + '/' + offline.identity.name, offline.identity);
-    await box.move(downloadsFolder, '/Offline', offline.identity.name);
-  }
-  await verifyRemote(box, '/Offline/' + offline.identity.name, offline.identity);
-  const entries = await box.list('/Stable');
-  requireValue(
-    entries.every(
-      (e) =>
-        (e.type === 'dir' && e.name === 'Downloads') ||
-        (e.type === 'file' && [identity.name, bootstrap.identity.name].includes(e.name)),
-    ),
-    '旧入口存在其他版本或未知内容，停止恢复',
-  );
-  if (!entries.some((e) => e.name === bootstrap.identity.name))
-    await box.upload('/Stable', bootstrap.identity.name, bootstrap.bytes);
-  await verifyRemote(box, '/Stable/' + bootstrap.identity.name, bootstrap.identity);
-  return '旧公开入口已恢复原轻量 EXE；Full 兼容后端与 Offline ZIP 已核验；Downloads 目录及 Archive 保留，更新指针不变。';
+  return '匿名验收成功：用户入口仅提供轻量 EXE，下载原字节一致；完整离线 ZIP 由 GitHub 提供。';
 }
 
 export async function syncResourceFiles({
@@ -820,39 +722,28 @@ export async function syncRuntimeFiles({ box, version, files }) {
     await verifyRemote(box, folder + '/' + file.name, file);
   }
 }
-export async function syncOffline(options) {
-  return syncPackage(options, '/Offline', offlinePattern);
-}
-
 export async function syncStableRelease({
   box,
   identity,
-  bytes,
   resolveIdentity,
-  offline,
   bootstrap,
   resources,
   updateIndex,
   runtime,
   resourceReuseVersion,
+  accept,
 }) {
   requireValue(
-    offline?.identity && offline.bytes && offline.resolveIdentity,
-    '缺少同源完整离线 ZIP',
+    bootstrap?.identity && runtime?.length && resources?.length && updateIndex,
+    '拆分分发必须提供轻量安装器、Core 与已签更新清单；旧版本请从 GitHub 获取',
   );
   requireValue(
-    offline.identity.version === identity.version &&
-      offline.identity.gitSha === identity.gitSha &&
-      offline.identity.releaseId === identity.releaseId,
-    '安装器与离线 ZIP 必须属于同源同版正式发行',
-  );
-  if (bootstrap)
-    requireValue(
+    !older(identity.version, '1.6.0') &&
       bootstrap.identity.version === identity.version &&
-        bootstrap.identity.gitSha === identity.gitSha &&
-        bootstrap.identity.releaseId === identity.releaseId,
-      '轻量安装器必须是同源同版正式原资产',
-    );
+      bootstrap.identity.gitSha === identity.gitSha &&
+      bootstrap.identity.releaseId === identity.releaseId,
+    '仅同步同源同版的 1.6.0 及以后拆分发行',
+  );
   await box.initialize();
   // Wait for every writer before reporting failure. No failed sibling may publish the pointer.
   const settle = async (tasks) => {
@@ -861,18 +752,7 @@ export async function syncStableRelease({
     if (failed) throw failed.reason;
     return results.map((result) => result.value);
   };
-  const distribution = async () => {
-    if (!bootstrap) {
-      await syncOffline({ box, ...offline });
-      return syncStable({ box, identity, bytes, resolveIdentity });
-    }
-    // Both operations read Stable. Finish Full verification and archival before
-    // mutating its user Downloads, including the existing legacy migration path.
-    const result = await syncStable({ box, identity, bytes, resolveIdentity });
-    await syncUserDownloads({ box, offline, bootstrap, resolveIdentity });
-    return result;
-  };
-  const [, , result] = await settle([
+  await settle([
     runtime ? syncRuntimeFiles({ box, version: identity.version, files: runtime }) : undefined,
     resources
       ? syncResourceFiles({
@@ -883,15 +763,12 @@ export async function syncStableRelease({
           reuseVersion: resourceReuseVersion,
         })
       : undefined,
-    distribution(),
+    syncUserDownloads({ box, bootstrap, resolveIdentity, accept }),
   ]);
-  if (!updateIndex) return result; // Historical releases have no update metadata.
   // A pointer is published only after upload/hash verification and complete
   // archival. Failed cleanup never advertises a new update to clients.
   const readbacks = [
-    [`/Stable/${identity.name}`, identity],
-    [`${bootstrap ? downloadsFolder : '/Offline'}/${offline.identity.name}`, offline.identity],
-    ...(bootstrap ? [[`${downloadsFolder}/${bootstrap.identity.name}`, bootstrap.identity]] : []),
+    [`${downloadsFolder}/${bootstrap.identity.name}`, bootstrap.identity],
     ...(resources ?? []).map((file) => [`/Resources/v${identity.version}/${file.name}`, file]),
     ...(runtime ?? []).map((file) => [`/Runtime/v${identity.version}/${file.name}`, file]),
   ];
@@ -912,13 +789,13 @@ export async function syncStableRelease({
   if (entries.some((e) => e.name === 'latest.json')) {
     const previous = await box.hash('/Updates/latest.json');
     if (previous.sha256 === indexIdentity.sha256 && previous.size === indexIdentity.size)
-      return result;
+      return '拆分分发已核验，更新清单保持一致。';
   }
   // Seafile replace=1 publishes one complete file after its upload completes;
   // the signature and original manifest travel in this one atomic envelope.
   await box.upload('/Updates', 'latest.json', updateIndex, true);
   await verifyRemote(box, '/Updates/latest.json', indexIdentity);
-  return `${result} Updates 最新清单已发布并核对。`;
+  return '同步成功：拆分分发与历史归档已核验，Updates 最新清单已发布并核对。';
 }
 
 export async function probe(box) {
@@ -1139,10 +1016,7 @@ export function cacheReleaseIdentities(resolveIdentity) {
 
 async function main() {
   const mode = process.env.BOX_SYNC_MODE || 'sync';
-  requireValue(
-    ['sync', 'probe', 'verify-downloads', 'rollback-downloads'].includes(mode),
-    '未知镜像操作',
-  );
+  requireValue(['sync', 'probe', 'verify-downloads'].includes(mode), '未知镜像操作');
   let tag = process.env.RELEASE_TAG;
   if (process.env.GITHUB_EVENT_NAME === 'workflow_run') {
     const event = JSON.parse(await readFile(process.env.GITHUB_EVENT_PATH, 'utf8'));
@@ -1174,13 +1048,12 @@ async function main() {
   const downloads = {
     box,
     identity,
-    offline: { identity: identity.offline },
     bootstrap: identity.bootstrap
       ? { identity: identity.bootstrap, bytes: identity.bootstrap.data }
       : undefined,
   };
   if (mode === 'verify-downloads') return verifyPublicDownloads(downloads);
-  if (mode === 'rollback-downloads') return rollbackDownloads(downloads);
+  requireValue(mode === 'sync', '不支持该同步模式');
 
   requireValue(
     identity.asset.browser_download_url ===
@@ -1188,10 +1061,10 @@ async function main() {
     '安装包地址不一致',
   );
   const release = identity.release;
-  const [bytes, offlineBytes] = await Promise.all([
-    downloadReleaseAsset(release, tag, identity.name, identity.size),
-    downloadReleaseAsset(release, tag, identity.offline.name, identity.offline.size),
-  ]);
+  requireValue(
+    identity.runtime && identity.bootstrap && !older(identity.version, '1.6.0'),
+    '仅同步 1.6.0 及以后的拆分发行',
+  );
   const metadata = release.assets.filter((a) =>
     [
       'update-manifest.json',
@@ -1343,14 +1216,8 @@ async function main() {
   return syncStableRelease({
     box,
     identity,
-    bytes,
     runtime: identity.runtime,
     resolveIdentity,
-    offline: {
-      identity: identity.offline,
-      bytes: offlineBytes,
-      resolveIdentity: async (tag) => (await resolveIdentity(tag)).offline,
-    },
     bootstrap: identity.bootstrap
       ? {
           identity: identity.bootstrap,
