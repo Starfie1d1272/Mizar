@@ -15,6 +15,7 @@ const stories = {
 };
 for (const [name, story] of Object.entries(stories)) {
   test(`${name}: render, interaction and WCAG 2.2 a11y`, async () => {
+    if (name === 'LibraryLongSchedule') await page.viewport(1440, 1080);
     await story.run();
     const result = await axe.run(document.body, {
       runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa'] },

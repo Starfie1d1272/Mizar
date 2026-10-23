@@ -50,6 +50,7 @@
   gap: var(--mizar-layout-padding);
 }
 .library-list {
+  grid-auto-rows: max-content;
   gap: var(--mizar-layout-compact);
 }
 .library-list .mizar-button {

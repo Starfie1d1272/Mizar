@@ -1,0 +1,214 @@
+{
+  "source": "https://match.starfie1d.top/2026-nju-major/matches",
+  "capturedAt": "2026-10-23T12:56:00+08:00",
+  "note": "公开页面缓存快照，仅用于23场比赛的布局回归，不作为实时赛务状态。已结束场次日期为公开页显示时间。",
+  "items": [
+    {
+      "id": "279a6c0a-a148-4cef-9067-16fc8bc18421",
+      "title": "萝莉祈祷中 vs Team Hyloo",
+      "summary": "10-10 21:52 · BO1 · PLAY-IN",
+      "status": "候选，尚未载入",
+      "scheduledAt": "2026-10-10T21:52:00+08:00",
+      "format": "bo1",
+      "stageLabel": "PLAY-IN"
+    },
+    {
+      "id": "d060e607-09e3-433b-8560-754ef197693e",
+      "title": "Legend ever die vs 伏特先锋",
+      "summary": "10-11 15:55 · BO1 · PLAY-IN",
+      "status": "候选，尚未载入",
+      "scheduledAt": "2026-10-11T15:55:00+08:00",
+      "format": "bo1",
+      "stageLabel": "PLAY-IN"
+    },
+    {
+      "id": "797f4f94-2651-4312-8386-49ad27c16551",
+      "title": "NJU Clan vs tytyloo",
+      "summary": "10-11 16:57 · BO1 · PLAY-IN",
+      "status": "候选，尚未载入",
+      "scheduledAt": "2026-10-11T16:57:00+08:00",
+      "format": "bo1",
+      "stageLabel": "PLAY-IN"
+    },
+    {
+      "id": "b5422fb7-1e24-4660-8631-76ff22da1569",
+      "title": "控大喷菇队 vs Frezzing clan",
+      "summary": "10-11 20:40 · BO1 · PLAY-IN",
+      "status": "候选，尚未载入",
+      "scheduledAt": "2026-10-11T20:40:00+08:00",
+      "format": "bo1",
+      "stageLabel": "PLAY-IN"
+    },
+    {
+      "id": "7678bf0e-0c9d-43bd-968e-cf009e3a9256",
+      "title": "奶龙帮Nailoong Clan vs 区区区区区",
+      "summary": "10-11 20:44 · BO1 · PLAY-IN",
+      "status": "候选，尚未载入",
+      "scheduledAt": "2026-10-11T20:44:00+08:00",
+      "format": "bo1",
+      "stageLabel": "PLAY-IN"
+    },
+    {
+      "id": "e58f9e56-103e-46a4-93a0-28762663cd3a",
+      "title": "惊天五条区 vs 星辰十字军",
+      "summary": "10-11 21:24 · BO1 · PLAY-IN",
+      "status": "候选，尚未载入",
+      "scheduledAt": "2026-10-11T21:24:00+08:00",
+      "format": "bo1",
+      "stageLabel": "PLAY-IN"
+    },
+    {
+      "id": "649c8370-1a89-43da-8190-9dbf5f3e20d9",
+      "title": "NJU Clan vs 伏特先锋",
+      "summary": "10-15 20:33 · BO1 · PLAY-IN",
+      "status": "候选，尚未载入",
+      "scheduledAt": "2026-10-15T20:33:00+08:00",
+      "format": "bo1",
+      "stageLabel": "PLAY-IN"
+    },
+    {
+      "id": "43d4ff5b-91f8-4185-851f-07ef18d3903e",
+      "title": "惊天五条区 vs 区区区区区",
+      "summary": "10-16 22:18 · BO1 · PLAY-IN",
+      "status": "候选，尚未载入",
+      "scheduledAt": "2026-10-16T22:18:00+08:00",
+      "format": "bo1",
+      "stageLabel": "PLAY-IN"
+    },
+    {
+      "id": "3fbf781e-9e35-4105-aef7-452b449372a1",
+      "title": "控大喷菇队 vs 星辰十字军",
+      "summary": "10-16 22:36 · BO1 · PLAY-IN",
+      "status": "候选，尚未载入",
+      "scheduledAt": "2026-10-16T22:36:00+08:00",
+      "format": "bo1",
+      "stageLabel": "PLAY-IN"
+    },
+    {
+      "id": "d30799d5-6c93-4eeb-a228-7e7bcfefc7bc",
+      "title": "Frezzing clan vs Team Hyloo",
+      "summary": "10-16 22:41 · BO1 · PLAY-IN",
+      "status": "候选，尚未载入",
+      "scheduledAt": "2026-10-16T22:41:00+08:00",
+      "format": "bo1",
+      "stageLabel": "PLAY-IN"
+    },
+    {
+      "id": "278d89e7-6441-45d4-bdeb-dd9f90186e59",
+      "title": "萝莉祈祷中 vs tytyloo",
+      "summary": "10-17 13:59 · BO1 · PLAY-IN",
+      "status": "候选，尚未载入",
+      "scheduledAt": "2026-10-17T13:59:00+08:00",
+      "format": "bo1",
+      "stageLabel": "PLAY-IN"
+    },
+    {
+      "id": "0f485650-c87a-4e8b-8ea1-c69f6b88d075",
+      "title": "奶龙帮Nailoong Clan vs Legend ever die",
+      "summary": "10-17 15:43 · BO1 · PLAY-IN",
+      "status": "候选，尚未载入",
+      "scheduledAt": "2026-10-17T15:43:00+08:00",
+      "format": "bo1",
+      "stageLabel": "PLAY-IN"
+    },
+    {
+      "id": "ba9f1cf6-c379-4dfe-95a1-15ba68577eb9",
+      "title": "tytyloo vs Frezzing clan",
+      "summary": "10-17 20:59 · BO1 · PLAY-IN",
+      "status": "候选，尚未载入",
+      "scheduledAt": "2026-10-17T20:59:00+08:00",
+      "format": "bo1",
+      "stageLabel": "PLAY-IN"
+    },
+    {
+      "id": "9e293d9d-7676-4666-a9e4-d98a834422c4",
+      "title": "控大喷菇队 vs NJU Clan",
+      "summary": "10-17 22:05 · BO1 · PLAY-IN",
+      "status": "候选，尚未载入",
+      "scheduledAt": "2026-10-17T22:05:00+08:00",
+      "format": "bo1",
+      "stageLabel": "PLAY-IN"
+    },
+    {
+      "id": "56d7044b-d35a-44e3-a8d1-85ec2d955802",
+      "title": "惊天五条区 vs 奶龙帮Nailoong Clan",
+      "summary": "10-18 20:55 · BO1 · PLAY-IN",
+      "status": "候选，尚未载入",
+      "scheduledAt": "2026-10-18T20:55:00+08:00",
+      "format": "bo1",
+      "stageLabel": "PLAY-IN"
+    },
+    {
+      "id": "57b708a0-cb5b-4838-bc0f-7119d4e0e243",
+      "title": "宗宗粉丝后援会 vs 萝莉祈祷中",
+      "summary": "10-23 19:00 · BO3 · STAGE1",
+      "status": "候选，尚未载入",
+      "scheduledAt": "2026-10-23T19:00:00+08:00",
+      "format": "bo3",
+      "stageLabel": "STAGE1"
+    },
+    {
+      "id": "2465d02d-db20-493a-bcfc-82ce67c46a22",
+      "title": "冰清玉洁 vs 梁小花也有major梦",
+      "summary": "10-23 19:30 · BO3 · STAGE1",
+      "status": "候选，尚未载入",
+      "scheduledAt": "2026-10-23T19:30:00+08:00",
+      "format": "bo3",
+      "stageLabel": "STAGE1"
+    },
+    {
+      "id": "1993d10c-ee2d-4ac9-9137-abf8eddd2797",
+      "title": "Fruity Robo vs 奶龙帮Nailoong Clan",
+      "summary": "10-23 20:00 · BO3 · STAGE1",
+      "status": "候选，尚未载入",
+      "scheduledAt": "2026-10-23T20:00:00+08:00",
+      "format": "bo3",
+      "stageLabel": "STAGE1"
+    },
+    {
+      "id": "9a8348f3-ce6b-42df-813e-ccaed9345b9d",
+      "title": "Team VAC vs Malouz",
+      "summary": "10-23 20:30 · BO3 · STAGE1",
+      "status": "候选，尚未载入",
+      "scheduledAt": "2026-10-23T20:30:00+08:00",
+      "format": "bo3",
+      "stageLabel": "STAGE1"
+    },
+    {
+      "id": "5a5a09f2-13aa-4e2b-9e37-875c7b80e3cc",
+      "title": "独行の浪子 vs Legend ever die",
+      "summary": "10-24 15:00 · BO3 · STAGE1",
+      "status": "候选，尚未载入",
+      "scheduledAt": "2026-10-24T15:00:00+08:00",
+      "format": "bo3",
+      "stageLabel": "STAGE1"
+    },
+    {
+      "id": "1ecfdaf2-e2cd-4b08-a9d6-43c3af08b69c",
+      "title": "Outsiders vs 星辰十字军",
+      "summary": "10-24 20:00 · BO3 · STAGE1",
+      "status": "候选，尚未载入",
+      "scheduledAt": "2026-10-24T20:00:00+08:00",
+      "format": "bo3",
+      "stageLabel": "STAGE1"
+    },
+    {
+      "id": "b868002a-3685-452c-a3f1-b5c4bae4a92b",
+      "title": "张逸飞能飞 vs NJU Clan",
+      "summary": "10-24 20:00 · BO3 · STAGE1",
+      "status": "候选，尚未载入",
+      "scheduledAt": "2026-10-24T20:00:00+08:00",
+      "format": "bo3",
+      "stageLabel": "STAGE1"
+    },
+    {
+      "id": "4b0c595c-1ad8-4de6-9c1e-c00052c67b4a",
+      "title": "witality vs tytyloo",
+      "summary": "10-24 21:00 · BO3 · STAGE1",
+      "status": "候选，尚未载入",
+      "scheduledAt": "2026-10-24T21:00:00+08:00",
+      "format": "bo3",
+      "stageLabel": "STAGE1"
+    }
+  ]
+}
