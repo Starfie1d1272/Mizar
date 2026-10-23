@@ -32,6 +32,7 @@ export class ProgramChat {
         this.seen.clear();
         this.binding = reset.binding;
         this.scopeAt = now;
+        return true;
       } catch {
         /* Malformed or stale producers cannot reset the active view. */
       }
@@ -68,6 +69,7 @@ export class ProgramChat {
         expiresAt: new Date(captured + 15000).toISOString(),
       },
     ].slice(-3);
+    return true;
   }
   view(cursor: ProgramSnapshot['cursor'], fresh: boolean): NonNullable<ProgramPayload['allChat']> {
     const scope = JSON.stringify([

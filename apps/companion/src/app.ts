@@ -422,9 +422,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   const programChat = new ProgramChat();
   const nativeSource =
     options.supportLogsDirectory && sessionJournal
-      ? new NativeSource(options.supportLogsDirectory, sessionJournal, (record) =>
-          programChat.ingest(record),
-        )
+      ? new NativeSource(options.supportLogsDirectory, sessionJournal, (record) => {
+          if (programChat.ingest(record)) projectionCoordinator.refresh();
+        })
       : undefined;
   app.addHook('onReady', () => {
     nativeSource?.start();
