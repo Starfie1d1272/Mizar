@@ -3,6 +3,8 @@ import type { FastifyInstance } from 'fastify';
 import { DiagnosticDelivery, type RetainedDiagnosticBatch } from './delivery.js';
 import { diagnosticValue, type SessionJournal } from './session-journal.js';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
+import { fullLogArchive } from './archive.js';
+import { IncidentStore } from './incident-store.js';
 
 export function registerDiagnosticDelivery(
   app: FastifyInstance,
@@ -20,6 +22,7 @@ export function registerDiagnosticDelivery(
   let ready = false;
   let closing = false;
   let initializing = Promise.resolve();
+  const incidents = options.directory ? new IncidentStore(options.directory) : undefined;
   const status = () => ({
     available: ready,
     error: failure,
@@ -145,7 +148,21 @@ export function registerDiagnosticDelivery(
       });
       options.onReport?.(report);
       await options.journal.flush();
-      return { recorded: true, sequence, ...report, cloud: delivery?.status() ?? null };
+      if (!incidents) throw new Error('incident_directory_unavailable');
+      const incident = await incidents.capture(async () => ({
+        schema: 'mizar-incident/1',
+        capturedAt: new Date().toISOString(),
+        report: { ...report, sequence },
+        files: (await fullLogArchive(options.directory, {}, [], { includeIncidents: false })).files,
+      }));
+      return {
+        recorded: true,
+        evidenceRetained: true,
+        incident,
+        sequence,
+        ...report,
+        cloud: delivery?.status() ?? null,
+      };
     } catch (error) {
       request.log.error(
         { phase: 'problem_report', error: diagnosticValue(error) },
@@ -153,7 +170,7 @@ export function registerDiagnosticDelivery(
       );
       return reply
         .code(503)
-        .send({ message: '问题标记未确认写入；请保留发生时间并检查本机状态目录。' });
+        .send({ message: '问题现场未确认完整保存；请立即导出诊断包，并检查本机状态目录和空间。' });
     }
   });
   return {

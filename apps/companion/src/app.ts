@@ -1235,6 +1235,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         '/operator/runtime/stop',
         '/operator/production',
         '/operator/program-scene',
+        // Local evidence capture does not mutate trial or formal match state.
+        '/operator/diagnostics/report',
       ].includes(path)
     )
       return;
