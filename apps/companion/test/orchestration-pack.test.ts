@@ -10,6 +10,7 @@ it('accepts the native extended drive path while refusing UNC, relative paths an
   const path = 'D:\\Steam\\Counter-Strike Global Offensive\\game\\bin\\win64\\cs2.exe';
   expect(nativeCs2PathSchema.parse(path)).toBe(path);
   expect(nativeCs2PathSchema.parse('\\\\?\\' + path)).toBe(path);
+  expect(nativeCs2PathSchema.parse(path.replaceAll('\\', '/'))).toBe(path);
   for (const invalid of ['..\\cs2.exe', '\\\\server\\share\\cs2.exe', 'D:\\game\\other.exe'])
     expect(nativeCs2PathSchema.safeParse(invalid).success).toBe(false);
 });

@@ -1,4 +1,5 @@
 import { timingSafeEqual } from 'node:crypto';
+import { win32 } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { orchestrationPresetSchema, CAMERA_STAGES } from '@mizar/protocol/orchestration';
@@ -11,7 +12,7 @@ export const nativeCs2PathSchema = z
   .string()
   .min(1)
   .max(2048)
-  .transform((path) => (path.startsWith('\\\\?\\') ? path.slice(4) : path))
+  .transform((path) => win32.normalize(path.startsWith('\\\\?\\') ? path.slice(4) : path))
   .pipe(z.string().regex(/^[A-Za-z]:\\.*\\cs2\.exe$/i));
 
 const expectedSchema = z

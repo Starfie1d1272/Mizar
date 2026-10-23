@@ -26,7 +26,7 @@ pub fn launch(app: &tauri::AppHandle, log: &DesktopLog) -> Result<(), String> {
     }
     let cfg = PathBuf::from(gsi["cfgPath"].as_str().ok_or("CS2 安装位置未确认。")?);
     let executable = cfg.parent().and_then(Path::parent).and_then(Path::parent)
-        .ok_or("CS2 安装位置无效。")?.join("bin/win64/cs2.exe");
+        .ok_or("CS2 安装位置无效。")?.join("bin").join("win64").join("cs2.exe");
     if !executable.is_file() { return Err("所选 CS2 程序不存在。".into()); }
     let prepared = production_exit::prepare_mulnx(log, &executable)?;
     let launcher = PathBuf::from(prepared["launcher"].as_str().ok_or("MulNX 启动路径缺失。")?);
