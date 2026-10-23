@@ -25,6 +25,10 @@ export function MulnxToolControls({ tool }: { tool: MulnxToolView | undefined })
   return (
     <div>
       <p>
+        启动前请先退出完美世界竞技平台、其他竞技平台和游戏，再在 MulNX 完成环境检查。仅用于离线 Demo
+        或已授权观战。
+      </p>
+      <p>
         MulNX · {tool.installed ?? '首次启动时准备'}
         {tool.latest && tool.latest !== tool.installed ? ` · 可更新至 ${tool.latest}` : ''}
       </p>

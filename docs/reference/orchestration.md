@@ -6,14 +6,14 @@
 
 2026-10-17 核对上游 main [`6dbc5ae99515740b82d01913972835cd723646e8`](https://github.com/Co1Swet/MulNX_CS2/commit/6dbc5ae99515740b82d01913972835cd723646e8)；最新公开发行版 [Beta15](https://github.com/Co1Swet/MulNX_CS2/releases/tag/Beta15)，2026-10-15 发布，tag 解引用为 `3df7e2124f04ae60e9265275c1315a789bb084cd`。下表涉及的网关、宏、包和播放调度四个源码文件在 Beta15 与该 main 之间无差异。本次没有运行上游二进制，不以 main 源码代替 Beta15 游戏内兼容证明。
 
-| 能力 | 固定源码结论 | 本次处理 |
-| --- | --- | --- |
-| [WebSocket 网关](https://github.com/Co1Swet/MulNX_CS2/blob/6dbc5ae99515740b82d01913972835cd723646e8/source/MulNXExtensions/WebSocketManager/WebSocketManager.cpp) | `type`、`payload` 均为字符串；异常格式化已修复。仍返回 `已投入消息总线<原始请求>`，不等待执行，无请求 ID | 仅精确匹配本连接当前请求；裸 HSI 和其他文本不作执行回执。状态区分 submitted / queued / rejected / unknown，execution 始终 unconfirmed |
-| [宏播放](https://github.com/Co1Swet/MulNX_CS2/blob/6dbc5ae99515740b82d01913972835cd723646e8/source/MulNXExtensions/CS2/Feature/View/CameraSystem/CamMacroManager/CamMacroManager.cpp) | `CamMacro/Play` 对外注册；缺失宏没有关联执行失败回执 | 双层字符串编码，只发送预设中非空宏名 |
-| [包选择](https://github.com/Co1Swet/MulNX_CS2/blob/6dbc5ae99515740b82d01913972835cd723646e8/source/MulNXExtensions/CS2/Feature/View/CameraSystem/CamPackManager/CamPackManager.cpp) | `CamPack/Apply` 已有外部转换器，区别于 #214 的 10-13 审计；找不到包直接返回，仍没有活动包读回 | **不串联 Apply ACK → Play**；在游戏内选包，Mizar 显示预设期望包名，由操作者确认 |
-| 回合自动列表 | `Game/NewRound` 无条件随机播放活动包的 `OnNewRound`，不受 `shortcutEnable` 控制；上游 Mtp 带 `[begin]` | 启用与试播均要求专用隔离包文件验证、人工确认游戏内已载入该包；不会对原包宣称独占调度 |
-| [停止](https://github.com/Co1Swet/MulNX_CS2/blob/6dbc5ae99515740b82d01913972835cd723646e8/source/MulNXExtensions/CS2/Feature/View/CameraSystem/CamPlayScheduler/CamPlayScheduler.cpp) | `CamPlay/ClearForce` 清空全部槽；无已停止/完成回执 | 接管、时限和失效时请求清空，显示停止结果未确认，不伪造 completed |
-| 就绪、完成、身份与撤销 | 未见稳定的版本/就绪、活动包、关联 started/completed/failed、Provider 身份、带期限命令或按请求撤销协议；监听仍只传端口 | 无自动能力推断；无自动重连、重试或离线队列；重连后重新确认 |
+| 能力                                                                                                                                                                                  | 固定源码结论                                                                                                          | 本次处理                                                                                                                              |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| [WebSocket 网关](https://github.com/Co1Swet/MulNX_CS2/blob/6dbc5ae99515740b82d01913972835cd723646e8/source/MulNXExtensions/WebSocketManager/WebSocketManager.cpp)                     | `type`、`payload` 均为字符串；异常格式化已修复。仍返回 `已投入消息总线<原始请求>`，不等待执行，无请求 ID              | 仅精确匹配本连接当前请求；裸 HSI 和其他文本不作执行回执。状态区分 submitted / queued / rejected / unknown，execution 始终 unconfirmed |
+| [宏播放](https://github.com/Co1Swet/MulNX_CS2/blob/6dbc5ae99515740b82d01913972835cd723646e8/source/MulNXExtensions/CS2/Feature/View/CameraSystem/CamMacroManager/CamMacroManager.cpp) | `CamMacro/Play` 对外注册；缺失宏没有关联执行失败回执                                                                  | 双层字符串编码，只发送预设中非空宏名                                                                                                  |
+| [包选择](https://github.com/Co1Swet/MulNX_CS2/blob/6dbc5ae99515740b82d01913972835cd723646e8/source/MulNXExtensions/CS2/Feature/View/CameraSystem/CamPackManager/CamPackManager.cpp)   | `CamPack/Apply` 已有外部转换器，区别于 #214 的 10-13 审计；找不到包直接返回，仍没有活动包读回                         | **不串联 Apply ACK → Play**；在游戏内选包，Mizar 显示预设期望包名，由操作者确认                                                       |
+| 回合自动列表                                                                                                                                                                          | `Game/NewRound` 无条件随机播放活动包的 `OnNewRound`，不受 `shortcutEnable` 控制；上游 Mtp 带 `[begin]`                | 启用与试播均要求专用隔离包文件验证、人工确认游戏内已载入该包；不会对原包宣称独占调度                                                  |
+| [停止](https://github.com/Co1Swet/MulNX_CS2/blob/6dbc5ae99515740b82d01913972835cd723646e8/source/MulNXExtensions/CS2/Feature/View/CameraSystem/CamPlayScheduler/CamPlayScheduler.cpp) | `CamPlay/ClearForce` 清空全部槽；无已停止/完成回执                                                                    | 接管、时限和失效时请求清空，显示停止结果未确认，不伪造 completed                                                                      |
+| 就绪、完成、身份与撤销                                                                                                                                                                | 未见稳定的版本/就绪、活动包、关联 started/completed/failed、Provider 身份、带期限命令或按请求撤销协议；监听仍只传端口 | 无自动能力推断；无自动重连、重试或离线队列；重连后重新确认                                                                            |
 
 Mizar 只连接固定 `ws://127.0.0.1:55202`，本机 HTTP 接口拒绝跨站来源及 LAN 模式，不接受任意地址或控制台命令。回环连接不能证明上游只监听本机，也不提供上游鉴权或游戏实例身份。仅在获授权的离线/赛事环境、已人工配置的受支持 MulNX 中联调；Host 可从准备中心打开受管目录中的 MulNX 官方启动器，由上游启动游戏；随后显式借用 CS2。
 
@@ -85,13 +85,13 @@ Companion 持有独立的原生控制许可，不复制比赛事实。Host 启�
 
 2026-10-17 再次核对 main 与发行接口未变。本轮未联系上游作者。以下为后续协作所需语义，不向现有 MulNX 假发这些命令：
 
-| 必需语义 | 最小数据与判定 |
-| --- | --- |
+| 必需语义       | 最小数据与判定                                                                                                                                     |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 就绪与实际实例 | 协议版本、服务器会话随机标识、真实游戏实例标识（PID/创建时间）、当前地图执行标识；明确数据是否仍有效。Mizar 必须能关联 Host 所选实例，端口相同不够 |
-| 实际调度归属 | 活动包名、**已加载到内存**的包修订/摘要、自动回合列表及当前控制方；切包、列表或控制方变化须推送失效。仅磁盘文件或 Apply 的入队回执不够 |
-| 关联执行回执 | 每条命令带唯一请求 ID、服务器/地图代际、截止期限；分开返回 received/queued 与 started/completed/failed，包含宏不存在、实例不符、过期等失败原因 |
-| 停止与撤销屏障 | 接管/取消须清除对应代际的待执行与运行镜头，返回实际停止屏障；游戏线程恢复时先拒绝过期/旧代际命令，再处理新任务。清空请求的入队不能替代屏障 |
-| 断连与人工让渡 | 控制租约或等价失效规则；断连、换图、人工接管使旧自动意图无效，旧请求不因重连复活。上游自身 `OnNewRound` 也应服从同一控制归属 |
+| 实际调度归属   | 活动包名、**已加载到内存**的包修订/摘要、自动回合列表及当前控制方；切包、列表或控制方变化须推送失效。仅磁盘文件或 Apply 的入队回执不够             |
+| 关联执行回执   | 每条命令带唯一请求 ID、服务器/地图代际、截止期限；分开返回 received/queued 与 started/completed/failed，包含宏不存在、实例不符、过期等失败原因     |
+| 停止与撤销屏障 | 接管/取消须清除对应代际的待执行与运行镜头，返回实际停止屏障；游戏线程恢复时先拒绝过期/旧代际命令，再处理新任务。清空请求的入队不能替代屏障         |
+| 断连与人工让渡 | 控制租约或等价失效规则；断连、换图、人工接管使旧自动意图无效，旧请求不因重连复活。上游自身 `OnNewRound` 也应服从同一控制归属                       |
 
 这些能力到位并实测前，状态保持 `execution: unconfirmed`；实际镜头同步、可靠停止与旧队列撤销仍是缺口。命令排序、拒绝迟到任务必须在最终执行方实现，Mizar 不能用新的本地计时器伪造。
 
@@ -109,3 +109,5 @@ Companion 持有独立的原生控制许可，不复制比赛事实。Host 启�
 8. 导出候选 JSON，重启核对；再导入回草稿，确认保存前无影响；损坏 JSON、缺失音频和错误地图保持原预设。将通过的候选与游戏/OBS 录制、诊断包一起交回，未验证内容不设默认。
 
 尚需上游/后续工作：关联执行/完成/失败/停止事件、活动包与资源查询、能力与可信游戏实例身份、队列期限/撤销、可靠控制让渡，以及官方启动器的自动启动契约（本轮仅显式借用已启动游戏）。安装器、注入、HSI 正式事件归一化和运镜引擎均不在本次范围。
+
+默认启动方式可在设置 → 游戏连接 → CS2 启动设置选择并保存。选择 MulNX 后，打开工作台会先打开官方启动器并转到运镜交接页；先退出完美世界竞技平台及其他冲突程序，在官方启动器完成环境检查并启动游戏，然后明确借用该实例。已有游戏和恢复事务继续沿用原有门禁；不启用上游 autoLaunch，不自动将外部游戏改为受管，也不自动关闭外部游戏。旧配置默认沿用 Steam 启动。

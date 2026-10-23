@@ -1166,18 +1166,20 @@ async fn set_cs2_preferences(
     app: tauri::AppHandle,
     quality_preset: String,
     frame_rate_limit: u16,
+    prefer_mulnx: Option<bool>,
     diagnostic_operation_id: Option<String>,
 ) -> Result<(), String> {
     let diagnostic_log = app.state::<DesktopLog>().inner().clone();
     let command_log = diagnostic_log.clone();
     let native_operation_id = diagnostic_operation_id.clone();
     let diagnostic_result: Result<(), String> = async move {
-    let preferences = cs2_preferences::Preferences::new(&quality_preset, frame_rate_limit)?;
+    let mut preferences = cs2_preferences::Preferences::new(&quality_preset, frame_rate_limit)?;
     tauri::async_runtime::spawn_blocking({ let command_log = command_log.clone(); let native_operation_id = native_operation_id.clone(); move || {
         let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
         let mut cs2 = state.lock().map_err(|error| command_log.preserve_error("set_cs2_preferences", native_operation_id.as_deref(), &error, "CS2 配置状态不可用。"))?;
         let activity = app.state::<cs2_activity::Activity>();
         let _activity = activity.begin(3);
+        preferences.prefer_mulnx = prefer_mulnx.unwrap_or(cs2.status()?["preferMulnx"].as_bool().unwrap_or(false));
         cs2.preferences(preferences)
     } })
     .await

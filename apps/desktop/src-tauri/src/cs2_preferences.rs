@@ -31,12 +31,14 @@ impl Quality {
 pub struct Preferences {
     pub quality: Quality,
     pub frame_rate_limit: u16,
+    pub prefer_mulnx: bool,
 }
 impl Default for Preferences {
     fn default() -> Self {
         Self {
             quality: Quality::VeryHigh,
             frame_rate_limit: 60,
+            prefer_mulnx: false,
         }
     }
 }
@@ -48,6 +50,7 @@ impl Preferences {
         Ok(Self {
             quality: Quality::parse(quality)?,
             frame_rate_limit,
+            prefer_mulnx: false,
         })
     }
     pub fn from_json(value: &Value) -> Result<Self, String> {
@@ -56,7 +59,12 @@ impl Preferences {
                 .as_u64()
                 .and_then(|v| u16::try_from(v).ok())
                 .ok_or("CS2 帧率设置无法读取。")?;
-            Self::new(quality, limit)
+            let mut preferences = Self::new(quality, limit)?;
+            preferences.prefer_mulnx = match value.get("preferMulnx") {
+                None => false,
+                Some(value) => value.as_bool().ok_or("CS2 启动方式无法读取。")?,
+            };
+            Ok(preferences)
         } else if let Some(preserve) = value["preserveQuality"].as_bool() {
             Ok(Self {
                 quality: if preserve {
@@ -71,6 +79,22 @@ impl Preferences {
         }
     }
     pub fn json(self) -> Value {
-        json!({"qualityPreset": self.quality.name(), "frameRateLimit": self.frame_rate_limit})
+        json!({"qualityPreset": self.quality.name(), "frameRateLimit": self.frame_rate_limit, "preferMulnx": self.prefer_mulnx})
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn launch_choice_survives_restart_and_legacy_keeps_steam() {
+        let legacy = json!({"qualityPreset":"high","frameRateLimit":30});
+        let mut choice = Preferences::from_json(&legacy).unwrap();
+        assert!(!choice.prefer_mulnx);
+        choice.prefer_mulnx = true;
+        assert_eq!(Preferences::from_json(&choice.json()).unwrap(), choice);
+        let mut invalid = legacy;
+        invalid["preferMulnx"] = json!("true");
+        assert!(Preferences::from_json(&invalid).is_err());
     }
 }

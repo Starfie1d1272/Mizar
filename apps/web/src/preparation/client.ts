@@ -194,6 +194,19 @@ async function performProductionAction(
   let newlyStarted = false;
   let borrowed = Boolean(external);
   if (action === 'enter' && window.__TAURI_INTERNALS__) {
+    if (!external) {
+      const launch = await desktopInvoke<{
+        preferMulnx?: boolean;
+        running: boolean;
+        pending: boolean;
+      }>('cs2_config_status');
+      if (launch.preferMulnx && !launch.running && !launch.pending) {
+        await desktopInvoke('launch_mulnx', undefined, task);
+        task.finish('confirmed', { confirmation: 'mulnx_launcher_opened' });
+        window.location.assign('/settings?tab=music&section=camera');
+        return;
+      }
+    }
     newlyStarted = await desktopInvoke<boolean>(
       external ? 'attach_external_cs2' : 'start_managed_cs2',
       external

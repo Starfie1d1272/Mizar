@@ -13,7 +13,7 @@ export function Cs2LaunchSettings() {
   const qualityLabels = { 'very-high': '最高', high: '高', medium: '中', preserve: '保留原画质' };
   const [draft, setDraft] = useState<Pick<
     Cs2ConfigStatus,
-    'qualityPreset' | 'frameRateLimit'
+    'qualityPreset' | 'frameRateLimit' | 'preferMulnx'
   > | null>(null);
   const [saved, setSaved] = useState(false);
   const preferences = draft ?? status;
@@ -21,7 +21,8 @@ export function Cs2LaunchSettings() {
     draft &&
     status &&
     (draft.qualityPreset !== status.qualityPreset ||
-      draft.frameRateLimit !== status.frameRateLimit),
+      draft.frameRateLimit !== status.frameRateLimit ||
+      draft.preferMulnx !== status.preferMulnx),
   );
   function edit(next: NonNullable<typeof draft>) {
     setDraft(next);
@@ -37,6 +38,7 @@ export function Cs2LaunchSettings() {
       await desktopInvoke('set_cs2_preferences', {
         qualityPreset: preferences.qualityPreset,
         frameRateLimit: preferences.frameRateLimit,
+        preferMulnx: preferences.preferMulnx ?? false,
       });
       setSaved(true);
       refresh();
@@ -59,12 +61,25 @@ export function Cs2LaunchSettings() {
         >
           <div className="settings-fields">
             <Select
+              label="默认启动方式"
+              value={preferences?.preferMulnx ? 'mulnx' : 'steam'}
+              disabled={disabled}
+              onChange={(event) => {
+                if (preferences)
+                  edit({ ...preferences, preferMulnx: event.target.value === 'mulnx' });
+              }}
+            >
+              <option value="steam">Steam 普通启动</option>
+              <option value="mulnx">MulNX 官方启动器</option>
+            </Select>
+            <Select
               label="游戏画质"
               value={preferences?.qualityPreset ?? 'very-high'}
               disabled={disabled}
               onChange={(event) => {
                 if (preferences)
                   edit({
+                    preferMulnx: preferences.preferMulnx ?? false,
                     qualityPreset: event.target.value as Cs2ConfigStatus['qualityPreset'],
                     frameRateLimit: preferences.frameRateLimit,
                   });
@@ -83,6 +98,7 @@ export function Cs2LaunchSettings() {
               onChange={(event) => {
                 if (preferences)
                   edit({
+                    preferMulnx: preferences.preferMulnx ?? false,
                     qualityPreset: preferences.qualityPreset,
                     frameRateLimit: Number(event.target.value) as Cs2ConfigStatus['frameRateLimit'],
                   });
@@ -93,6 +109,12 @@ export function Cs2LaunchSettings() {
               <option value={0}>不限帧（可能导致雷达卡顿）</option>
             </Select>
           </div>
+          {preferences?.preferMulnx ? (
+            <p>
+              先关闭完美世界竞技平台及其他游戏，在官方 MulNX 完成环境检查并启动 CS2，再从“运镜 →
+              MulNX 游戏交接”选择游戏实例。仅用于离线 Demo 或已授权观战。
+            </p>
+          ) : null}
           {status?.spectatorWarning ? (
             <StatusBanner tone="warning">{status.spectatorWarning}</StatusBanner>
           ) : null}
