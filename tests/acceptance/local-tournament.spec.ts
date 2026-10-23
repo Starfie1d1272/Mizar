@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import type { MatchDocumentV1 } from '../../packages/protocol/src/context.js';
 import { buildApp } from '../../apps/companion/src/app.js';
 import { expect, test } from './companion-isolation.js';
-import websiteSchedule from '../../apps/web/src/patterns/library-schedule.fixture.json';
+import websiteSchedule from '../../apps/web/src/patterns/library-schedule.fixture.json' with { type: 'json' };
 
 test('Preparation flow creates and edits a local match before BP', async ({ page, context }) => {
   const directory = await mkdtemp(join(tmpdir(), 'mizar-local-ui-'));
@@ -256,7 +256,7 @@ test('local and website libraries share match details while browsing and loading
 test('website schedule keeps all 23 multi-line match choices readable and selectable', async ({
   page,
   context,
-}, testInfo) => {
+}) => {
   const directory = await mkdtemp(join(tmpdir(), 'mizar-library-layout-'));
   const app = buildApp({
     matchManifestPath: join(directory, 'match.json'),
