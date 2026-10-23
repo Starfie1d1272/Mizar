@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { chmod, mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { inspect } from 'node:util';
 import { expect, it, vi } from 'vitest';
 import Fastify from 'fastify';
 import { registerStaticHost } from '../../src/local-web/static-host.js';
@@ -11,6 +12,46 @@ import { registerProductionRoutes } from '../../src/program-scenes/production.js
 import { createLocalWebOriginPolicy } from '../../src/local-web/origin-policy.js';
 import type { ProjectionCoordinator } from '../../src/projections/projection-coordinator.js';
 import type { BpSession } from '../../src/bp/controller.js';
+import { buildApp } from '../../src/app.js';
+
+it('preserves the original filesystem failure for required installer resources with logging disabled', async () => {
+  const root = await mkdtemp(join(await realpath(tmpdir()), 'mizar-resource-failure-'));
+  const blocked = join(root, 'not-a-directory');
+  await writeFile(blocked, 'preserve-existing-file');
+  const app = buildApp({ resources: { root: join(blocked, 'assets'), required: true } });
+  try {
+    const error = await app.ready().then(
+      () => undefined,
+      (failure: unknown) => failure,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe('resource_store_open_failed');
+    const cause = (error as Error).cause as NodeJS.ErrnoException;
+    expect(cause.code).toBe('ENOTDIR');
+    expect(cause.syscall).toBe('mkdir');
+    const diagnostic = inspect(error, { depth: 8, customInspect: false, getters: false });
+    expect(diagnostic).toContain('resource_store_open_failed');
+    expect(diagnostic).toContain('ENOTDIR');
+    expect(diagnostic).toContain('mkdir');
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it('retains normal Companion fallback when the optional resource store cannot open', async () => {
+  const root = await mkdtemp(join(await realpath(tmpdir()), 'mizar-resource-fallback-'));
+  const blocked = join(root, 'not-a-directory');
+  await writeFile(blocked, 'preserve-existing-file');
+  const app = buildApp({ resources: { root: join(blocked, 'assets') } });
+  try {
+    await app.ready();
+    expect(app.getDecorator<() => ResourceStore | undefined>('getResourceStore')()).toBeUndefined();
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 it('holds production, scene and Host-update exclusion for the entire asynchronous activation', async () => {
   const app = Fastify();

@@ -58,7 +58,7 @@ try {
   const stateRoot = writableRoot(coreRoot);
   const tufCachePath = join(stateRoot, 'updates', 'trust');
   app = buildApp({
-    resources: { root: defaultResourceRoot() },
+    resources: { root: defaultResourceRoot(), required: true },
     productRuntime: {
       appVersion: artifact.appVersion,
       gitSha: artifact.gitSha,
