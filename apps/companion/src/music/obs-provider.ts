@@ -212,14 +212,38 @@ export async function ownedMusicInput(
     )) {
       assertCurrent();
       const items = (await obs.call('GetSceneItemList', { sceneName: scene.sceneName }))
-        .sceneItems as { sourceName: string }[];
-      if (!items.some((i) => i.sourceName === name)) {
+        .sceneItems as { sourceName: string; sourceUuid: string; sceneItemId: number }[];
+      const owned = items.filter((i) => i.sourceUuid === store.state.sources[layer]);
+      if (!owned.length) {
         assertCurrent();
-        await obs.call('CreateSceneItem', {
+        const result = await obs.call('CreateSceneItem', {
           sceneName: scene.sceneName,
           sourceUuid: store.state.sources[layer],
-          sceneItemEnabled: true,
+          sceneItemEnabled: false,
         });
+        owned.push({
+          sourceName: name,
+          sourceUuid: store.state.sources[layer]!,
+          sceneItemId: result.sceneItemId as number,
+        });
+      }
+      for (const item of owned) {
+        assertCurrent();
+        // A media source can decode embedded album art as video. Keep the item
+        // active for audio, but give its video no area in the broadcast canvas.
+        await obs.call('SetSceneItemTransform', {
+          sceneName: scene.sceneName,
+          sceneItemId: item.sceneItemId,
+          sceneItemTransform: { boundsType: 'OBS_BOUNDS_NONE', scaleX: 0, scaleY: 0 },
+        });
+        if (!items.some((i) => i.sceneItemId === item.sceneItemId)) {
+          assertCurrent();
+          await obs.call('SetSceneItemEnabled', {
+            sceneName: scene.sceneName,
+            sceneItemId: item.sceneItemId,
+            sceneItemEnabled: true,
+          });
+        }
       }
     }
   }
