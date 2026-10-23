@@ -256,6 +256,10 @@
   flex-basis: 26px;
   position: relative;
 }
+.hud-widget-design[data-hud-design='perfectworld'] .all-chat {
+  /* The 60px summary, inset by 6px, protrudes 40px above its 26px slot. */
+  bottom: calc(100% + 40px + 12px);
+}
 .shanghai-summary {
   position: absolute;
   bottom: 6px;
