@@ -354,12 +354,14 @@ fn anchor(file: &mut File, offset: u64) -> io::Result<String> {
     file.read_exact(&mut bytes)?;
     Ok(digest(bytes))
 }
-/// Called before the Steam request, after discovery. No pre-session text is copied.
+/// Called before the Steam request, after discovery. Pre-session text is never exported.
 pub fn prepare(log: &DesktopLog, executable: &Path) -> Result<Option<Value>, String> {
     let config = settings(log)?;
     if config["enabled"] != true {
         return Ok(None);
     }
+    preserve_previous_console(log, executable)
+        .map_err(|error| format!("raw_console_preservation_failed: {error}"))?;
     let after = utc();
     let (id, offset, encoding, anchor) = match checked(&path(executable)?) {
         Ok((mut file, id)) => {
@@ -379,6 +381,75 @@ pub fn prepare(log: &DesktopLog, executable: &Path) -> Result<Option<Value>, Str
     Ok(Some(
         json!({"version":1,"generation":config["generation"],"identity":id,"offset":offset,"encoding":encoding,"anchor":anchor,"sourceAfterUtc":after}),
     ))
+}
+
+// Raw engine output remains local and outside diagnostic exports. Content-addressed
+// copies survive the engine truncating console.log on the next managed launch.
+fn preserve_previous_console(log: &DesktopLog, executable: &Path) -> io::Result<()> {
+    use std::io::Write;
+    const FILE_LIMIT: u64 = 512 * 1024 * 1024;
+    const TOTAL_LIMIT: u64 = 2 * 1024 * 1024 * 1024;
+    let (mut source, source_identity) = match checked(&path(executable).map_err(io::Error::other)?) {
+        Ok(value) => value,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let before = source.metadata()?;
+    if before.len() == 0 { return Ok(()); }
+    if before.len() > FILE_LIMIT { return Err(io::Error::other("raw_console_file_budget")); }
+    let directory = log.state_root.join("console-history");
+    parents(&directory.join("probe")) .or_else(|error| {
+        if error.kind() != io::ErrorKind::NotFound { return Err(error); }
+        fs::create_dir(&directory)?;
+        parents(&directory.join("probe"))
+    })?;
+    let temporary = directory.join(format!(".capture-{}-{}", std::process::id(), Utc::now().timestamp_nanos_opt().unwrap_or_default()));
+    let result = (|| {
+        let mut output = OpenOptions::new().write(true).create_new(true).open(&temporary)?;
+        let mut hasher = Sha256::new();
+        let mut buffer = [0u8; 64 * 1024];
+        let mut copied = 0u64;
+        loop {
+            let count = source.read(&mut buffer)?;
+            if count == 0 { break; }
+            copied += count as u64;
+            if copied > FILE_LIMIT { return Err(io::Error::other("raw_console_file_budget")); }
+            output.write_all(&buffer[..count])?;
+            hasher.update(&buffer[..count]);
+        }
+        let after = source.metadata()?;
+        if copied != before.len() || after.len() != before.len() || after.modified()? != before.modified()? || identity(&source)? != source_identity {
+            return Err(io::Error::other("raw_console_changed_during_capture"));
+        }
+        let target = directory.join(format!("{:x}.log", hasher.finalize()));
+        if target.exists() {
+            let (mut existing, _) = checked(&target)?;
+            let mut hash = Sha256::new();
+            loop { let count=existing.read(&mut buffer)?; if count==0 {break;} hash.update(&buffer[..count]); }
+            if format!("{:x}.log",hash.finalize()) != target.file_name().unwrap().to_string_lossy() {
+                return Err(io::Error::other("raw_console_existing_copy_corrupt"));
+            }
+            return Ok(());
+        }
+        let mut total = copied;
+        let mut count = 0;
+        for entry in fs::read_dir(&directory)? {
+            let entry=entry?;
+            if entry.path() == temporary {continue;}
+            let metadata=fs::symlink_metadata(entry.path())?;
+            if !metadata.is_file() || !plain(&metadata) { return Err(io::Error::other("raw_console_history_unsafe")); }
+            count += 1;
+            total += metadata.len();
+        }
+        if count >= 16 || total > TOTAL_LIMIT {return Err(io::Error::other("raw_console_history_budget"));}
+        output.sync_all()?;
+        drop(output);
+        // Hard-link commits without replacing an existing file on either platform.
+        fs::hard_link(&temporary, &target)?;
+        Ok(())
+    })();
+    let cleanup = fs::remove_file(&temporary);
+    result.and(cleanup)
 }
 
 /// The caller must prove the actual PID, creation time and executable before constructing.
@@ -1044,6 +1115,46 @@ pub fn run_worker(log: DesktopLog, running: std::sync::Arc<std::sync::atomic::At
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn raw_history_survives_engine_truncation_and_new_host_session() {
+        let (root, log, executable) = setup("raw-history");
+        let source = path(&executable).unwrap();
+        fs::write(&source, b"original console\n[ALL] local-only text\n").unwrap();
+        change(&log, true).unwrap();
+        prepare(&log, &executable).unwrap();
+        prepare(&log, &executable).unwrap();
+        assert_eq!(fs::read_dir(log.state_root.join("console-history")).unwrap().count(), 1);
+        fs::write(&source, b"next match console\n").unwrap();
+        let reopened = DesktopLog::new(&root, None).unwrap();
+        prepare(&reopened, &executable).unwrap();
+        let copies: Vec<_> = fs::read_dir(log.state_root.join("console-history")).unwrap().map(|entry| fs::read(entry.unwrap().path()).unwrap()).collect();
+        assert_eq!(copies.len(), 2);
+        assert!(copies.contains(&b"original console\n[ALL] local-only text\n".to_vec()));
+        assert!(copies.contains(&b"next match console\n".to_vec()));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn raw_history_refuses_full_or_corrupt_history_without_touching_source() {
+        let (root, log, executable) = setup("raw-history-full");
+        change(&log, true).unwrap();
+        let source = path(&executable).unwrap();
+        for index in 0..16 {
+            fs::write(&source, format!("match {index}\n")).unwrap();
+            prepare(&log, &executable).unwrap();
+        }
+        fs::write(&source, b"next unarchived match\n").unwrap();
+        assert!(prepare(&log, &executable).unwrap_err().contains("raw_console_history_budget"));
+        assert_eq!(fs::read(&source).unwrap(), b"next unarchived match\n");
+        assert_eq!(fs::read_dir(log.state_root.join("console-history")).unwrap().count(), 16);
+        let first = log.state_root.join("console-history").join(format!("{}.log", digest(b"match 0\n")));
+        fs::write(first, b"corrupted copy").unwrap();
+        fs::write(&source, b"match 0\n").unwrap();
+        assert!(prepare(&log, &executable).unwrap_err().contains("raw_console_existing_copy_corrupt"));
+        assert_eq!(fs::read(&source).unwrap(), b"match 0\n");
+        fs::remove_dir_all(root).unwrap();
+    }
 
     fn setup(name: &str) -> (PathBuf, DesktopLog, PathBuf) {
         let root = std::env::temp_dir().join(format!(
