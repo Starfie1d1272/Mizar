@@ -7,6 +7,13 @@ import type { MusicStore } from '../music/store.js';
 import type { MulnxTool } from './tool.js';
 import type { CameraDirector } from './director.js';
 
+export const nativeCs2PathSchema = z
+  .string()
+  .min(1)
+  .max(2048)
+  .transform((path) => (path.startsWith('\\\\?\\') ? path.slice(4) : path))
+  .pipe(z.string().regex(/^[A-Za-z]:\\.*\\cs2\.exe$/i));
+
 const expectedSchema = z
   .object({ context: z.string().max(4000), connection: z.number().int() })
   .strict();
@@ -123,11 +130,7 @@ export function registerOrchestrationRoutes(
       if (!tool || !session?.canPrepare?.()) throw new Error('mulnx_preparation_required');
       const body = z
         .strictObject({
-          cs2Path: z
-            .string()
-            .min(1)
-            .max(2048)
-            .regex(/^[A-Za-z]:\\.*\\cs2\.exe$/i),
+          cs2Path: nativeCs2PathSchema,
           consoleCapture: z.boolean().default(false),
         })
         .parse(request.body);
@@ -140,7 +143,12 @@ export function registerOrchestrationRoutes(
       );
       return reply.code(409).send({
         error: 'mulnx_prepare_failed',
-        message: error instanceof Error ? error.message : 'MulNX 准备失败',
+        message:
+          error instanceof z.ZodError
+            ? 'CS2 安装位置无效，请重新检查游戏安装位置。'
+            : error instanceof Error
+              ? error.message
+              : 'MulNX 准备失败',
         requestId: request.id,
       });
     }
