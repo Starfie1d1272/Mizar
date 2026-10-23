@@ -123,6 +123,7 @@ import {
 export interface CompanionAppOptions {
   readonly resources?: {
     readonly root: string;
+    readonly required?: boolean;
     readonly policy?: ResourceTrustPolicy;
     readonly cacheHistory?: readonly ResourceTrustPolicy[];
   };
@@ -969,6 +970,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           },
           '官方素材缓存不可用；保留原 Full 资源路径。',
         );
+        if (options.resources?.required) {
+          throw new Error('resource_store_open_failed', { cause: error });
+        }
       }
     });
     app.addHook('onClose', async () => {
