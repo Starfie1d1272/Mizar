@@ -3,7 +3,11 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { expect, it } from 'vitest';
 import { PlayerRail } from '../src/program/widgets/player-rails/PlayerRail';
 import { getProgramFixture } from '../src/program/fixtures';
-import { getHudWidgetDescriptor } from '@mizar/hud-config';
+import {
+  getHudWidgetDescriptor,
+  getBuiltinResolvedPreset,
+  placementToBox,
+} from '@mizar/hud-config';
 it('allows ALL chat to be hidden without hiding the player rail and exposes its switch on the right only', () => {
   const snapshot = structuredClone(getProgramFixture('live-canonical')!);
   snapshot.payload.allChat = [
@@ -17,6 +21,9 @@ it('allows ALL chat to be hidden without hiding the player rail and exposes its 
   const render = (showAllChat: boolean, widgetId: 'team-t-rail' | 'team-ct-rail' = 'team-t-rail') =>
     renderToStaticMarkup(
       createElement(PlayerRail, {
+        resolvedPreset: getBuiltinResolvedPreset(),
+        placement: getBuiltinResolvedPreset().layout.widgets[widgetId],
+        box: placementToBox(widgetId, getBuiltinResolvedPreset().layout.widgets[widgetId]),
         snapshot,
         widgetId,
         settings: { variant: 'default', settings: { showAllChat } },
