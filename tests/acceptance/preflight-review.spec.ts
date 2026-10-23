@@ -124,6 +124,27 @@ test('preflight reviews current ten-player evidence, actual auto state, disconne
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
     'cl_draw_only_deathnotices 1',
   );
+  // Independent channels can deliver the same frame at different times. A
+  // dismissed review must stay dismissed when alignment returns.
+  const receiveSequence = operator.payload.runtime.lastAccepted!.receiveSequence;
+  operator.payload.runtime.lastAccepted!.receiveSequence = receiveSequence + 1;
+  publish();
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+  await expect(dialog).not.toBeVisible();
+  operator.payload.runtime.lastAccepted!.receiveSequence = receiveSequence;
+  publish();
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+  await expect(dialog).not.toBeVisible();
   await page.getByRole('button', { name: '赛前核对', exact: true }).click();
   await expect(dialog).toBeVisible();
   if (await dialog.getByRole('button', { name: '恢复自动编排', exact: true }).isVisible()) {
