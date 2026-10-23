@@ -14,7 +14,9 @@
         "demo-test",
         "demo-test-workspace",
         "workspace-exit",
-        "obs-configuration"
+        "obs-configuration",
+        "console-status",
+        "console-settings"
       ]
     }
   },

@@ -11,6 +11,8 @@ fn main() {
             "finish_obs_configuration",
             "read_obs_configuration_context",
             "cs2_config_status",
+            "cs2_console_status",
+            "set_cs2_console_capture",
             "mulnx_handoff_status",
             "open_mulnx_browser",
             "launch_mulnx",
