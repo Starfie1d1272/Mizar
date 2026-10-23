@@ -171,6 +171,34 @@ async function rig() {
     },
   };
 }
+it('keeps pre-game waiting music across fresh menu GSI and BP, but stops for stale data and live play', async () => {
+  const r = await rig();
+  r.truth.program.map.name = null;
+  r.truth.program.map.phase = null;
+  r.truth.program.series!.bindingState = 'unbound';
+  r.truth.program.status.telemetry = 'awaiting';
+  await r.step();
+  expect(r.director.get().bgm?.group).toBe('waiting');
+  const starts = r.obs.restarts();
+  r.truth.program.status.telemetry = 'fresh';
+  r.truth.program.status.identity = 'resolving';
+  await r.step();
+  r.truth.active = 'bp';
+  await r.step();
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_PLAYING');
+  expect(r.obs.restarts()).toBe(starts);
+  r.truth.program.status.telemetry = 'stale';
+  await r.step();
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
+  r.truth.program.status.telemetry = 'fresh';
+  r.truth.program.status.identity = 'matched';
+  r.truth.program.series!.bindingState = 'bound';
+  r.truth.program.map.name = 'de_mirage';
+  r.truth.program.map.phase = 'live';
+  await r.step();
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
+  await r.director.close();
+});
 it('shares waiting across pictures and maps, loops without immediate repeats, then respects a persisted manual stop', async () => {
   const r = await rig();
   await r.step();

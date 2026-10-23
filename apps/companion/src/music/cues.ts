@@ -50,7 +50,8 @@ export function musicCue(truth: MusicTruth, pauseId: string | null): MusicCue | 
   const waiting = { group: 'waiting', key: `waiting:${match}` } as const;
   // A selected pre-game match need not have a game execution bound yet.
   if (
-    p.status.telemetry === 'awaiting' &&
+    (p.status.telemetry === 'awaiting' ||
+      (p.status.telemetry === 'fresh' && p.map.name === null)) &&
     p.map.phase === null &&
     ['waiting', 'bp'].includes(active)
   )

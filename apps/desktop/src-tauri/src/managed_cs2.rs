@@ -163,6 +163,7 @@ extern "system" {
     fn OpenProcess(access: u32, inherit: i32, pid: u32) -> Handle;
     fn CloseHandle(handle: Handle) -> i32;
     fn GetLastError() -> u32;
+    fn GetProcessId(process: Handle) -> u32;
     fn GetProcessTimes(
         handle: Handle,
         created: *mut FileTime,
@@ -249,25 +250,41 @@ fn identity(
     let mut kernel = FileTime::default();
     let mut user = FileTime::default();
     if unsafe { GetProcessTimes(process.0, &mut created, &mut exit, &mut kernel, &mut user) } == 0 {
-        return Err(win32_failure(
+        return Err(identity_failure(
             log,
+            process,
             "GetProcessTimes",
             "无法确认进程创建时间。",
+            None,
         ));
     }
     let mut buffer = vec![0u16; 32768];
     let mut len = buffer.len() as u32;
     if unsafe { QueryFullProcessImageNameW(process.0, 0, buffer.as_mut_ptr(), &mut len) } == 0 {
-        return Err(win32_failure(
+        return Err(identity_failure(
             log,
+            process,
             "QueryFullProcessImageNameW",
             "无法确认进程程序路径。",
+            Some(((created.high as u64) << 32) | created.low as u64),
         ));
     }
     Ok((
         ((created.high as u64) << 32) | created.low as u64,
         PathBuf::from(String::from_utf16_lossy(&buffer[..len as usize])),
     ))
+}
+fn identity_failure(log: &crate::startup_log::DesktopLog, process: &Process, api: &str, message: &str, created: Option<u64>) -> String {
+    // Preserve the failing API's error before any diagnostic observation changes it.
+    let code = unsafe { GetLastError() };
+    let pid = unsafe { GetProcessId(process.0) };
+    let waited = unsafe { WaitForSingleObject(process.0, 0) };
+    log.event("cs2_launch", "failure", Some(&format!(
+        "source=Win32; phase=process_identity; api={api}; code={code}; targetPid={}; targetCreated={created:?}; targetWaitResult={waited}; cause={}",
+        if pid == 0 { "unknown".into() } else { pid.to_string() },
+        std::io::Error::from_raw_os_error(code as i32)
+    )));
+    message.into()
 }
 fn win32_failure(log: &crate::startup_log::DesktopLog, api: &str, message: &str) -> String {
     let code = unsafe { GetLastError() };
