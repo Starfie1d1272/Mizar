@@ -995,6 +995,12 @@ impl ManagedCs2 {
             Ok(Some(prepared)) => journal["consoleDiagnostics"] = prepared,
             Ok(None) => (),
             Err(error) => {
+                if error.starts_with("raw_console_preservation_failed:") {
+                    self.log.event("cs2_console_prepare", "failure", Some(&json!({"error":error,"condebugRequested":false,"gameLaunchContinues":false}).to_string()));
+                    journal["consoleDiagnosticsWarning"] = json!({"code":"raw_preservation_failed","error":error});
+                    self.store.save(&journal)?;
+                    return Err(format!("上一场原始控制台尚未安全保存，已停止启动 CS2。请归档 console-history 或检查磁盘后重试。{error}"));
+                }
                 self.log.event("cs2_console_prepare", "failure", Some(&json!({"error":error,"condebugRequested":false,"gameLaunchContinues":true}).to_string()));
                 journal["consoleDiagnosticsWarning"] =
                     json!({"code":"source_prepare_failed","error":error});
