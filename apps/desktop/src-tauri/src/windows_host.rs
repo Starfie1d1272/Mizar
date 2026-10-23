@@ -389,10 +389,17 @@ impl GameTracker {
         }
         let client = client_rect(window.hwnd);
         let dpi = unsafe { GetDpiForWindow(window.hwnd) };
+        let recovered = alignment_geometry_recovered(self.last_client, self.last_dpi, client, dpi);
         if client != self.last_client || dpi != self.last_dpi {
             self.last_client = client;
             self.last_dpi = dpi;
             if self.managed {
+                return self.apply_locked_layout();
+            }
+            // A failed DPI/client query can outlive the startup retry window.
+            // Re-arm only when unavailable geometry becomes valid, not on user resizing.
+            if !self.preserve_settings && self.alignment_failure.is_some() && recovered {
+                self.alignment_retries = 30;
                 return self.apply_locked_layout();
             }
         }
@@ -416,5 +423,23 @@ impl GameTracker {
                 && SetForegroundWindow(window.hwnd) != 0
                 && GetForegroundWindow() == window.hwnd
         })
+    }
+}
+
+fn alignment_geometry_recovered(previous: Option<Rect>, previous_dpi: u32, current: Option<Rect>, dpi: u32) -> bool {
+    (previous.is_none() || previous_dpi == 0) && current.is_some() && dpi != 0
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+    #[test]
+    fn unavailable_geometry_can_recover_after_alignment_retries_are_exhausted() {
+        let valid = Some(Rect {x:0,y:0,width:1280,height:720});
+        assert!(alignment_geometry_recovered(valid, 0, valid, 144));
+        assert!(alignment_geometry_recovered(None, 144, valid, 144));
+        assert!(!alignment_geometry_recovered(None, 0, None, 0));
+        assert!(!alignment_geometry_recovered(valid, 144, valid, 144));
+        assert!(!alignment_geometry_recovered(valid, 144, Some(Rect {x:10,y:10,width:800,height:600}), 144));
     }
 }
