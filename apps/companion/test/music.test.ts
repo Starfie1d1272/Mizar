@@ -19,6 +19,9 @@ class MediaObs implements ObsRpc {
     { uuid: string; state: string; file: string; volume: number; muted: boolean; cursor: number }
   >();
   disconnected = false;
+  restartOpeningReads = 0;
+  restartState = 'OBS_MEDIA_STATE_OPENING';
+  private openingReads = -1;
   private inputGeneration = 0;
   intercept: ((type: string) => Promise<void>) | undefined;
   async call(type: string, data: Record<string, unknown> = {}) {
@@ -60,8 +63,11 @@ class MediaObs implements ObsRpc {
       return { inputUuid: uuid };
     }
     if (!input) throw new Error(`Unexpected input for ${type}`);
-    if (type === 'GetMediaInputStatus')
+    if (type === 'GetMediaInputStatus') {
+      if (this.openingReads >= 0 && this.openingReads-- === 0)
+        input.state = 'OBS_MEDIA_STATE_PLAYING';
       return { mediaState: input.state, mediaCursor: input.cursor, mediaDuration: 10000 };
+    }
     if (type === 'GetInputMute') return { inputMuted: input.muted };
     if (type === 'GetInputVolume') return { inputVolumeMul: input.volume };
     if (type === 'GetInputSettings') return { inputSettings: { local_file: input.file } };
@@ -69,13 +75,21 @@ class MediaObs implements ObsRpc {
       input.file = String((data.inputSettings as { local_file: string }).local_file);
     else if (type === 'SetInputVolume') input.volume = Number(data.inputVolumeMul);
     else if (type === 'SetInputMute') input.muted = Boolean(data.inputMuted);
-    else if (type === 'SetMediaInputCursor') input.cursor = Number(data.mediaCursor);
-    else if (type === 'TriggerMediaInputAction') {
+    else if (type === 'SetMediaInputCursor') {
+      if (!['OBS_MEDIA_STATE_PLAYING', 'OBS_MEDIA_STATE_PAUSED'].includes(input.state))
+        throw new Error('OBS 604: media input must be playing or paused');
+      input.cursor = Number(data.mediaCursor);
+    } else if (type === 'TriggerMediaInputAction') {
       input.state =
         data.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART'
           ? 'OBS_MEDIA_STATE_PLAYING'
           : 'OBS_MEDIA_STATE_STOPPED';
       input.cursor = 0;
+      this.openingReads = -1;
+      if (input.state === 'OBS_MEDIA_STATE_PLAYING' && this.restartOpeningReads) {
+        input.state = this.restartState;
+        this.openingReads = this.restartOpeningReads;
+      }
     } else throw new Error(`Unexpected RPC ${type}`);
     return {};
   }
@@ -593,6 +607,77 @@ it('fades incrementally without blocking an urgent stop and restores only system
   r.store.hold = persistHold;
   await r.step();
   expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
+});
+
+it('waits for OBS media readiness before restoring a muted track cursor and fade', async () => {
+  const r = await rig();
+  const config = structuredClone(r.store.state.config);
+  config.groups.waiting.fadeInMs = 1000;
+  await r.store.configure(config);
+  await r.step();
+  await r.step(1000);
+  r.obs.bgm().cursor = 2400;
+  r.obs.bgm().muted = true;
+  await r.step();
+  expect(r.store.state.held).toBe(true);
+  await r.step();
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
+  r.obs.restartOpeningReads = 2;
+  await r.director.command('resume');
+  expect(r.obs.restarts()).toBe(2);
+  expect(r.obs.bgm().cursor).toBe(2400);
+  expect(r.store.state.held).toBe(false);
+  await r.step(1000);
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_PLAYING');
+  expect(r.obs.bgm().volume).toBeCloseTo(0.5);
+  expect(r.store.state.held).toBe(false);
+});
+
+it('waits through the previous ended state without restarting a looping track repeatedly', async () => {
+  const r = await rig();
+  await r.step();
+  r.obs.bgm().state = 'OBS_MEDIA_STATE_ENDED';
+  r.obs.restartOpeningReads = 2;
+  r.obs.restartState = 'OBS_MEDIA_STATE_ENDED';
+  await r.step();
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_PLAYING');
+  await r.step();
+  expect(r.obs.restarts()).toBe(2);
+  expect(r.store.state.held).toBe(false);
+});
+
+it('cancels cursor restoration when a newer stop arrives while OBS is opening media', async () => {
+  const r = await rig();
+  await r.step();
+  r.obs.bgm().cursor = 2400;
+  r.obs.bgm().muted = true;
+  await r.step();
+  await r.step();
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
+  r.obs.restartOpeningReads = 2;
+  let release!: () => void, reached!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const reading = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  r.obs.intercept = async (type) => {
+    if (type === 'GetMediaInputStatus' && r.obs.bgm().state === 'OBS_MEDIA_STATE_OPENING') {
+      reached();
+      await blocked;
+    }
+  };
+  const resume = r.director.command('resume');
+  await reading;
+  await r.director.command('stop');
+  release();
+  await resume;
+  r.obs.intercept = undefined;
+  await r.step();
+  expect(r.store.state.held).toBe(true);
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
+  expect(r.obs.calls.filter((c) => c.type === 'SetMediaInputCursor')).toHaveLength(0);
 });
 
 const obsManualControls = [
