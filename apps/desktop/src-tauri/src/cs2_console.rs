@@ -659,6 +659,10 @@ impl Capture {
                 continue;
             };
             let line = line.trim_start_matches('\u{feff}').trim_end_matches('\r');
+            if public_chat_boundary(line) && owned() {
+                self.active(log)?;
+                log.committed_event("program_all_chat_reset", "observed", Some(&json!({"binding":self.binding,"capturedAt":captured_at}).to_string())).map_err(failure)?;
+            }
             let channel = match category(line) {
                 Category::Chat => {
                     increment(&mut self.cursor, "chat");
@@ -774,6 +778,11 @@ fn public_chat(line: &str) -> Option<(String, String)> {
     let sender=clean(sender); let text=clean(text);
     if sender.is_empty() || text.is_empty() || sender.chars().count()>128 || text.chars().count()>512 {return None;}
     Some((sender, text))
+}
+
+fn public_chat_boundary(line: &str) -> bool {
+    let body=console_body(line.trim_start()).trim_start();
+    ["[Demo] Requesting playback of ", "[HostStateManager] HostStateRequest::Start(", "[HostStateManager] Host activate:", "Loading map \""].iter().any(|prefix|body.starts_with(prefix))
 }
 fn newline(bytes: &[u8], mode: &str) -> Option<(usize, usize)> {
     if mode == "utf8" {
@@ -1135,6 +1144,9 @@ mod tests {
 
     #[test]
     fn only_explicit_all_lines_enter_public_chat() {
+        assert!(public_chat_boundary("10/24 01:21:36 [Demo] Requesting playback of 'local.dem'"));
+        assert!(public_chat_boundary("[HostStateManager] HostStateRequest::Start(HSR_GAME)"));
+        assert!(!public_chat_boundary("[Client] warning Loading map irrelevant"));
         assert_eq!(public_chat("10/24 01:21:36  [ALL] m0NESY\u{200e}： HFHF"), Some(("m0NESY\u{200e}".into(),"HFHF".into())));
         assert_eq!(public_chat("[ALL] b1t: hfhf"),Some(("b1t".into(),"hfhf".into())));
         for line in ["[TEAM] name: secret", "[Client] warning [ALL] name: text", "[ALL] missing separator", "privatechat name: secret"] { assert_eq!(public_chat(line),None); }
