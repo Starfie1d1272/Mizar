@@ -46,7 +46,57 @@ if (Test-Path -LiteralPath $script:InstallStatePath -PathType Leaf) {
     } else {
         if ($Cs2Root) { Stop-Cs2Discovery 'restore-before-selection' }
         if (-not (Test-Path -LiteralPath $existingCfgPath -PathType Leaf) -or
-            (Get-FileHash -LiteralPath $existingCfgPath -Algorithm SHA256).Hash.ToLowerInvariant() -ne [string]$existing.cfgFingerprint) { Stop-Cs2Discovery 'gsi-file-changed' }
+            (Get-FileHash -LiteralPath $existingCfgPath -Algorithm SHA256).Hash.ToLowerInvariant() -ne [string]$existing.cfgFingerprint) {
+            if (-not $Product -or $Automatic -or $existingCfgName -ine $MIZAR_GSI_CFG_NAME) { Stop-Cs2Discovery 'gsi-file-changed' }
+            # Explicit repair owns only the recorded Mizar sender. Keep the original
+            # restore contract and token; never compose destructive restore + install.
+            $resolvedPath = Join-Path (Resolve-CfgDirectory) $MIZAR_GSI_CFG_NAME
+            if ($resolvedPath -ine $existingCfgPath -or $existing.schemaVersion -ne 1 -or
+                [string]$existing.gsiToken -notmatch '^[a-f0-9]{64}$' -or
+                [string]$existing.cfgFingerprint -notmatch '^[a-f0-9]{64}$') { Stop-Cs2Discovery 'record-unreadable' }
+            $tokenPath = Join-Path $script:StateRoot 'data\gsi-token.txt'
+            if (-not (Test-Path -LiteralPath $tokenPath -PathType Leaf) -or
+                (Get-Content -LiteralPath $tokenPath -Raw -Encoding UTF8).Trim() -cne [string]$existing.gsiToken) { Stop-Cs2Discovery 'record-unreadable' }
+            if ([bool]$existing.hadExistingConfig) {
+                $expectedBackup = Join-Path $script:QualificationStateRoot "$MIZAR_GSI_CFG_NAME.original"
+                if ([string]$existing.backupPath -ine $expectedBackup -or
+                    -not (Test-Path -LiteralPath $expectedBackup -PathType Leaf)) { Stop-Cs2Discovery 'record-unreadable' }
+            }
+            # Archive outside gsi-install so a later explicit restore retains the
+            # pre-repair user edits and record as well as the initial installation backup.
+            $archive = Join-Path (Join-Path $script:StateRoot 'data\gsi-repairs') ([Guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Force -Path $archive | Out-Null
+            Copy-Item -LiteralPath $script:InstallStatePath -Destination (Join-Path $archive 'install.json')
+            $wasPresent = Test-Path -LiteralPath $existingCfgPath
+            $beforeHash = $null
+            if ($wasPresent) {
+                $beforeHash = (Get-FileHash -LiteralPath $existingCfgPath -Algorithm SHA256).Hash
+                $copy = Join-Path $archive "$MIZAR_GSI_CFG_NAME.before-repair"
+                Copy-Item -LiteralPath $existingCfgPath -Destination $copy
+                if ((Get-FileHash -LiteralPath $copy -Algorithm SHA256).Hash -ne $beforeHash) { throw 'GSI 修复备份校验失败，现有配置保留' }
+            }
+            $template = Get-Content -LiteralPath (Join-Path $script:BundleRoot 'config\gamestate_integration_mizar.cfg.template') -Raw -Encoding UTF8
+            $materialized = $template.Replace('REPLACE_WITH_GSI_TOKEN', [string]$existing.gsiToken)
+            $pendingCfg = $existingCfgPath + '.mizar-repair-' + [Guid]::NewGuid().ToString('N')
+            $pendingRecord = $script:InstallStatePath + '.repair-pending'
+            try {
+                Write-Utf8NoBom -Path $pendingCfg -Content $materialized
+                $existing.cfgFingerprint = (Get-FileHash -LiteralPath $pendingCfg -Algorithm SHA256).Hash.ToLowerInvariant()
+                Write-JsonFile -Path $pendingRecord -Value $existing
+                if ($wasPresent) {
+                    if (-not (Test-Path -LiteralPath $existingCfgPath -PathType Leaf) -or
+                        (Get-FileHash -LiteralPath $existingCfgPath -Algorithm SHA256).Hash -ne $beforeHash) { throw 'GSI 配置在修复期间发生变化，现有配置与备份保留' }
+                    [IO.File]::Replace($pendingCfg, $existingCfgPath, [NullString]::Value)
+                } else { [IO.File]::Move($pendingCfg, $existingCfgPath) }
+                [IO.File]::Replace($pendingRecord, $script:InstallStatePath, [NullString]::Value)
+                if ((Get-FileHash -LiteralPath $existingCfgPath -Algorithm SHA256).Hash.ToLowerInvariant() -ne [string]$existing.cfgFingerprint) { throw 'GSI 修复后校验失败，修复备份已保留' }
+                Write-Output "Mizar GSI 已修复，修复前文件与安装记录保存在：$archive"
+            } finally {
+                foreach ($pending in @($pendingCfg, $pendingRecord)) {
+                    if (Test-Path -LiteralPath $pending -PathType Leaf) { Remove-Item -LiteralPath $pending -Force }
+                }
+            }
+        }
         if ($existingCfgName -ieq $MIZAR_GSI_CFG_NAME) {
             $existingCfgDirectory = Split-Path -Parent $existingCfgPath
             $legacyCfgPath = Join-Path $existingCfgDirectory $LEGACY_GSI_CFG_NAME

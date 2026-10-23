@@ -147,4 +147,69 @@ describe.skipIf(process.platform !== 'win32')('Windows Steam directory discovery
       expect(result.split(/\r?\n/).at(-1)).toBe('GSI_REPAIR_LIFECYCLE_PASS');
     },
   );
+  it(
+    'explicit repair rebuilds missing or edited owned GSI while preserving original backups and tokens',
+    { timeout: 20_000 },
+    async () => {
+      const root = await library();
+      const resources = join(root, 'product/resources');
+      await cp(resolve(import.meta.dirname, 'bundle'), join(resources, 'scripts'), {
+        recursive: true,
+      });
+      await mkdir(join(resources, 'config'), { recursive: true });
+      await cp(
+        resolve(import.meta.dirname, '../../config/gamestate_integration_mizar.cfg.example'),
+        join(resources, 'config/gamestate_integration_mizar.cfg.template'),
+      );
+      const state = join(root, 'state');
+      const cfg = join(root, 'steamapps/common/Counter-Strike Global Offensive/game/csgo/cfg');
+      const canonical = join(cfg, 'gamestate_integration_mizar.cfg');
+      const other = join(cfg, 'gamestate_integration_other.cfg');
+      await writeFile(canonical, 'original sender');
+      await writeFile(other, '"uri" "http://localhost:4000/"');
+      const install = join(resources, 'scripts/install-gsi.ps1');
+      const restore = join(resources, 'scripts/restore-gsi.ps1');
+      const result = run(
+        `
+        $env:MIZAR_STATE_ROOT=${quote(state)}; $env:STEAMROOT=${quote(root)};
+        $cfg=${quote(canonical)}; $record=${quote(join(state, 'data/gsi-install/install.json'))};
+        $repairs=${quote(join(state, 'data/gsi-repairs'))};
+        $utf8=New-Object System.Text.UTF8Encoding($false);
+        function Put($path,$text) { [IO.File]::WriteAllText($path,$text,$utf8) }
+        function Install($expected) {
+          $global:LASTEXITCODE=0; & ${quote(install)} -Product | Out-Null;
+          if (($LASTEXITCODE -eq 0) -ne $expected) { throw "unexpected install exit: $LASTEXITCODE" }
+        }
+        Install $true;
+        $installed=[IO.File]::ReadAllText($cfg); $initial=Get-Content -LiteralPath $record -Raw | ConvertFrom-Json;
+        $token=$initial.gsiToken; $backup=$initial.backupPath;
+        Put $cfg 'operator-edited'; Install $true;
+        $current=Get-Content -LiteralPath $record -Raw | ConvertFrom-Json;
+        if ([IO.File]::ReadAllText($cfg) -ne $installed -or $current.gsiToken -ne $token -or $current.backupPath -ne $backup) { throw 'repair changed installed identity or token' }
+        if ([IO.File]::ReadAllText($backup) -ne 'original sender') { throw 'original backup replaced' }
+        $editedBackup=@(Get-ChildItem -LiteralPath $repairs -Recurse -Filter '*.before-repair');
+        if ($editedBackup.Count -ne 1 -or [IO.File]::ReadAllText($editedBackup[0].FullName) -ne 'operator-edited') { throw 'repair lost operator edit' }
+        Remove-Item -LiteralPath $cfg; Install $true;
+        if ([IO.File]::ReadAllText($cfg) -ne $installed) { throw 'missing sender not repaired' }
+        $count=@(Get-ChildItem -LiteralPath $repairs -Directory).Count; Install $true;
+        if (@(Get-ChildItem -LiteralPath $repairs -Directory).Count -ne $count) { throw 'unchanged repair created duplicate backups' }
+        if ([IO.File]::ReadAllText(${quote(other)}) -ne '"uri" "http://localhost:4000/"') { throw 'unrelated sender changed' }
+        # Token mismatch and missing initial backup fail before modifying edited bytes.
+        Put $cfg 'second operator edit';
+        $tokenPath=${quote(join(state, 'data/gsi-token.txt'))}; Put $tokenPath ('b' * 64); Install $false;
+        if ([IO.File]::ReadAllText($cfg) -ne 'second operator edit') { throw 'invalid identity changed config' }
+        Put $tokenPath $token;
+        $savedBackup=[IO.File]::ReadAllText($backup); Remove-Item -LiteralPath $backup; Install $false;
+        if ([IO.File]::ReadAllText($cfg) -ne 'second operator edit') { throw 'missing original backup changed config' }
+        Put $backup $savedBackup; Install $true;
+        $global:LASTEXITCODE=0; & ${quote(restore)} -Product | Out-Null;
+        if ($LASTEXITCODE -ne 0 -or [IO.File]::ReadAllText($cfg) -ne 'original sender') { throw 'restore lost initial sender' }
+        if ([IO.File]::ReadAllText($editedBackup[0].FullName) -ne 'operator-edited') { throw 'restore removed repair archive' }
+        'GSI_EXPLICIT_REPAIR_PASS'; exit 0;
+      `,
+        true,
+      );
+      expect(result.split(/\r?\n/).at(-1)).toBe('GSI_EXPLICIT_REPAIR_PASS');
+    },
+  );
 });

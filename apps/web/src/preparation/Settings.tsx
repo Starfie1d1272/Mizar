@@ -168,7 +168,7 @@ export function Settings({ tab }: { tab: string }) {
         })
       }
     >
-      一键安装 / 修复 GSI
+      {gsi?.conflict ? '修复 GSI' : '安装 GSI'}
     </Button>
   );
   if (tab === 'music')
@@ -316,7 +316,7 @@ export function Settings({ tab }: { tab: string }) {
               {gsi?.endpointConflict ? (
                 <>
                   <p>
-                    点击「一键安装 / 修复 GSI」，自动备份并停用这些重复配置；可通过「恢复原 GSI
+                    点击「修复 GSI」，自动备份并停用这些重复配置；可通过「恢复原 GSI
                     配置」撤销。其他接收地址的配置会保留。
                   </p>
                 </>
