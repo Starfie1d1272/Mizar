@@ -387,6 +387,7 @@ pub fn prepare(log: &DesktopLog, executable: &Path) -> Result<Option<Value>, Str
 // copies survive the engine truncating console.log on the next managed launch.
 fn preserve_previous_console(log: &DesktopLog, executable: &Path) -> io::Result<()> {
     use std::io::Write;
+
     const FILE_LIMIT: u64 = 512 * 1024 * 1024;
     const TOTAL_LIMIT: u64 = 2 * 1024 * 1024 * 1024;
     let (mut source, source_identity) = match checked(&path(executable).map_err(io::Error::other)?) {
@@ -661,6 +662,13 @@ impl Capture {
             let channel = match category(line) {
                 Category::Chat => {
                     increment(&mut self.cursor, "chat");
+                    if let Some((sender, text)) = public_chat(line) {
+                        let after = self.cursor["observations"].as_array().and_then(|values| values.iter().rev().find(|value| value["offset"].as_u64().is_some_and(|offset| offset <= source_offset))).map(|value| value["after"].clone()).unwrap_or_else(|| self.cursor["sourceAfterUtc"].clone());
+                        if owned() {
+                            self.active(log)?;
+                            log.committed_event("program_all_chat", "observed", Some(&json!({"binding":self.binding,"id":digest(format!("{}:{id}:{source_offset}",self.binding)),"sourceAfterUtc":after,"capturedAt":captured_at,"sender":sender,"text":text}).to_string())).map_err(failure)?;
+                        }
+                    }
                     continue;
                 }
                 Category::Unknown => {
@@ -757,6 +765,15 @@ impl Capture {
 }
 fn increment(value: &mut Value, field: &str) {
     value[field] = json!(value[field].as_u64().unwrap_or(0).saturating_add(1));
+}
+
+fn public_chat(line: &str) -> Option<(String, String)> {
+    let body = console_body(line.trim_start()).trim_start().strip_prefix("[ALL] ")?;
+    let (sender, text) = body.split_once('：').or_else(|| body.split_once(": "))?;
+    let clean = |text: &str| text.chars().filter(|c| !c.is_control() && !matches!(*c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')).collect::<String>().trim().to_owned();
+    let sender=clean(sender); let text=clean(text);
+    if sender.is_empty() || text.is_empty() || sender.chars().count()>128 || text.chars().count()>512 {return None;}
+    Some((sender, text))
 }
 fn newline(bytes: &[u8], mode: &str) -> Option<(usize, usize)> {
     if mode == "utf8" {
@@ -1115,6 +1132,34 @@ pub fn run_worker(log: DesktopLog, running: std::sync::Arc<std::sync::atomic::At
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn only_explicit_all_lines_enter_public_chat() {
+        assert_eq!(public_chat("10/24 01:21:36  [ALL] m0NESY\u{200e}： HFHF"), Some(("m0NESY\u{200e}".into(),"HFHF".into())));
+        assert_eq!(public_chat("[ALL] b1t: hfhf"),Some(("b1t".into(),"hfhf".into())));
+        for line in ["[TEAM] name: secret", "[Client] warning [ALL] name: text", "[ALL] missing separator", "privatechat name: secret"] { assert_eq!(public_chat(line),None); }
+    }
+
+    #[test]
+    fn public_chat_producer_uses_owned_capture_and_never_persists_team_text() {
+        let (root, log, executable) = setup("all-chat-producer");
+        change(&log, true).unwrap();
+        let launch = journal(&log, &executable);
+        let mut capture = Capture::new(&log, &launch).unwrap();
+        append(&path(&executable).unwrap(), b"[ALL] Player: PUBLIC_ONLY\n[TEAM] Player: PRIVATE_TEAM_ONLY\n");
+        capture.poll(&log, &|| true).unwrap();
+        capture.poll(&log, &|| true).unwrap();
+        let text=fs::read_to_string(log.directory.join("desktop.ndjson")).unwrap();
+        assert!(!text.contains("PRIVATE_TEAM_ONLY"));
+        let public:Vec<Value>=text.lines().map(|line|serde_json::from_str::<Value>(line).unwrap()).filter(|event|event["stage"]=="program_all_chat").collect();
+        assert_eq!(public.len(),1);
+        let detail:Value=serde_json::from_str(public[0]["detail"].as_str().unwrap()).unwrap();
+        assert_eq!(detail["text"],"PUBLIC_ONLY");
+        assert_eq!(detail["sender"],"Player");
+        assert!(detail["sourceAfterUtc"].is_string());
+        assert!(detail["capturedAt"].is_string());
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn raw_history_survives_engine_truncation_and_new_host_session() {

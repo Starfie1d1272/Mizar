@@ -215,6 +215,19 @@ export const bombDamageSchema = z.object({
     .max(10),
 });
 export const programPayloadSchema = z.object({
+  allChat: z
+    .array(
+      z
+        .object({
+          id: z.string().max(96),
+          sender: z.string().min(1).max(128),
+          text: z.string().min(1).max(512),
+          expiresAt: z.string().datetime(),
+        })
+        .strict(),
+    )
+    .max(3)
+    .optional(),
   bombDamage: bombDamageSchema,
   status: z.object({
     telemetry: z.enum(['awaiting', 'fresh', 'stale']),
