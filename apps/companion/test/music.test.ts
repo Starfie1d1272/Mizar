@@ -8,6 +8,7 @@ import { MUSIC_GROUPS } from '@mizar/protocol/music';
 import type { ObsRpc } from '../src/obs/reconcile.js';
 import { MusicStore } from '../src/music/store.js';
 import { MusicDirector } from '../src/music/director.js';
+import { ownedMusicInput } from '../src/music/obs-provider.js';
 import type { MusicTruth } from '../src/music/cues.js';
 import { musicWav } from './music-fixtures.js';
 
@@ -38,7 +39,14 @@ class MediaObs implements ObsRpc {
       };
     if (type === 'GetSceneList') return { scenes: [{ sceneName: 'Mizar · 赛前等待' }] };
     if (type === 'GetSceneItemList')
-      return { sceneItems: [...this.inputs.keys()].map((sourceName) => ({ sourceName })) };
+      return {
+        sceneItems: [...this.inputs].map(([sourceName, input], sceneItemId) => ({
+          sourceName,
+          sourceUuid: input.uuid,
+          sceneItemId,
+        })),
+      };
+    if (type === 'SetSceneItemTransform') return {};
     if (type === 'CreateInput') {
       const uuid = `uuid-${this.inputGeneration++}`;
       this.inputs.set(String(data.inputName), {
@@ -153,6 +161,18 @@ it('shares waiting across pictures and maps, loops without immediate repeats, th
   const r = await rig();
   await r.step();
   expect(r.obs.restarts()).toBe(1);
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_PLAYING');
+  expect(r.obs.bgm().muted).toBe(false);
+  expect(r.obs.calls.filter((c) => c.type === 'SetSceneItemTransform')).toEqual([
+    {
+      type: 'SetSceneItemTransform',
+      data: {
+        sceneName: 'Mizar · 赛前等待',
+        sceneItemId: 0,
+        sceneItemTransform: { boundsType: 'OBS_BOUNDS_NONE', scaleX: 0, scaleY: 0 },
+      },
+    },
+  ]);
   for (const active of ['bp', 'waiting', 'intermap'] as const) {
     r.truth.active = active;
     await r.step();
@@ -182,6 +202,57 @@ it('shares waiting across pictures and maps, loops without immediate repeats, th
   await after.tick();
   expect(r.obs.bgm().file).not.toBe(prior);
   expect(JSON.stringify(after.get())).not.toContain(r.directory);
+});
+it('suppresses music video on reconnect and before enabling new scene attachments without touching foreign items', async () => {
+  const r = await rig();
+  await r.step();
+  const sourceUuid = r.store.state.sources.bgm!;
+  const name = [...r.obs.inputs.keys()][0]!;
+  const calls: { type: string; data: Record<string, unknown> }[] = [];
+  let existing = true;
+  const rpc: ObsRpc = {
+    async call(type, data = {}) {
+      calls.push({ type, data });
+      if (type === 'GetSceneItemList')
+        return {
+          sceneItems: [
+            { sourceName: 'Game Capture', sourceUuid: 'game', sceneItemId: 10 },
+            ...(existing ? [{ sourceName: name, sourceUuid, sceneItemId: 20 }] : []),
+          ],
+        };
+      if (type === 'CreateSceneItem') return { sceneItemId: 30 };
+      if (type === 'SetSceneItemTransform' || type === 'SetSceneItemEnabled') return {};
+      return r.obs.call(type, data);
+    },
+  };
+  await ownedMusicInput(rpc, r.store, 'bgm', true, () => true);
+  expect(
+    calls.filter((c) => c.type === 'SetSceneItemTransform').map((c) => c.data.sceneItemId),
+  ).toEqual([20]);
+  expect(calls.some((c) => c.type === 'SetSceneItemEnabled')).toBe(false);
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_PLAYING');
+  calls.length = 0;
+  existing = false;
+  await ownedMusicInput(rpc, r.store, 'bgm', true, () => true);
+  expect(calls.filter((c) => c.type.startsWith('Set') || c.type === 'CreateSceneItem')).toEqual([
+    {
+      type: 'CreateSceneItem',
+      data: { sceneName: 'Mizar · 赛前等待', sourceUuid, sceneItemEnabled: false },
+    },
+    {
+      type: 'SetSceneItemTransform',
+      data: {
+        sceneName: 'Mizar · 赛前等待',
+        sceneItemId: 30,
+        sceneItemTransform: { boundsType: 'OBS_BOUNDS_NONE', scaleX: 0, scaleY: 0 },
+      },
+    },
+    {
+      type: 'SetSceneItemEnabled',
+      data: { sceneName: 'Mizar · 赛前等待', sceneItemId: 30, sceneItemEnabled: true },
+    },
+  ]);
+  expect(r.obs.restarts()).toBe(1);
 });
 it('distinguishes tactical / technical pauses, preserves the same pause across relabelling and reconnect, and gives halftime precedence', async () => {
   const r = await rig();
@@ -341,7 +412,14 @@ it('keeps OBS manual stop / mute and cancels a late start when formal play resum
   expect(
     r.obs.calls
       .filter((c) => /^Set|Trigger/.test(c.type))
-      .every((c) => [...r.obs.inputs.values()].some((i) => i.uuid === c.data.inputUuid)),
+      .every((c) =>
+        c.type.startsWith('SetSceneItem')
+          ? c.data.sceneName === 'Mizar · 赛前等待' &&
+            Number.isInteger(c.data.sceneItemId) &&
+            Number(c.data.sceneItemId) >= 0 &&
+            Number(c.data.sceneItemId) < r.obs.inputs.size
+          : [...r.obs.inputs.values()].some((i) => i.uuid === c.data.inputUuid),
+      ),
   ).toBe(true);
   const disk = await readFile(join(r.directory, 'state.json'), 'utf8');
   expect(disk).not.toContain(r.directory);
