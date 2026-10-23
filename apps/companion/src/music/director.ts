@@ -373,6 +373,37 @@ export class MusicDirector {
     }
     return false;
   }
+  private async waitAfterRestart(
+    obs: ObsRpc,
+    layer: MusicLayer,
+    inputUuid: string,
+    cursorMs: number,
+    valid: () => boolean,
+  ) {
+    const deadline = Date.now() + 2000;
+    while (valid()) {
+      const media = await obs.call('GetMediaInputStatus', { inputUuid });
+      const mute = await obs.call('GetInputMute', { inputUuid });
+      if (!valid()) throw new Error('music_cancelled');
+      if (mute.inputMuted === true || media.mediaState === 'OBS_MEDIA_STATE_PAUSED') {
+        await this.holdForObsControl();
+        return false;
+      }
+      if (media.mediaState === 'OBS_MEDIA_STATE_PLAYING') {
+        const volume = await obs.call('GetInputVolume', { inputUuid });
+        if (!valid()) throw new Error('music_cancelled');
+        if (this.manualControlObserved(layer, media.mediaState, false, volume.inputVolumeMul)) {
+          await this.holdForObsControl();
+          return false;
+        }
+        if (cursorMs) await obs.call('SetMediaInputCursor', { inputUuid, mediaCursor: cursorMs });
+        return true;
+      }
+      if (Date.now() >= deadline) throw new Error('music_media_start_timeout');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error('music_cancelled');
+  }
   private async layer(
     obs: ObsRpc,
     layer: MusicLayer,
@@ -504,13 +535,13 @@ export class MusicDirector {
             ...args,
             inputVolumeMul: spec!.fadeInMs ? 0 : spec!.volume,
           });
+          this.appliedVolumes.set(layer, spec!.fadeInMs ? 0 : spec!.volume);
           await call('TriggerMediaInputAction', {
             ...args,
             mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART',
           });
-          if (saved.cursorMs)
-            await call('SetMediaInputCursor', { ...args, mediaCursor: saved.cursorMs });
-          this.appliedVolumes.set(layer, spec!.fadeInMs ? 0 : spec!.volume);
+          if (!(await this.waitAfterRestart(obs, layer, args.inputUuid, saved.cursorMs, valid)))
+            return;
           this.fades[layer] = {
             name,
             inputUuid: args.inputUuid,
@@ -635,6 +666,7 @@ export class MusicDirector {
       mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP',
     });
     await call('SetInputVolume', { ...args, inputVolumeMul: spec!.fadeInMs ? 0 : spec!.volume });
+    this.appliedVolumes.set(layer, spec!.fadeInMs ? 0 : spec!.volume);
     await call('SetInputSettings', {
       ...args,
       overlay: true,
@@ -651,12 +683,11 @@ export class MusicDirector {
       ...args,
       mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART',
     });
-    if (track.startMs) await call('SetMediaInputCursor', { ...args, mediaCursor: track.startMs });
+    if (!(await this.waitAfterRestart(obs, layer, args.inputUuid, track.startMs, valid))) return;
     await this.store.update((s) => {
       if (s[layer]?.key === saved.key && s[layer]?.track.id === saved.track.id)
         s[layer] = { ...saved, suspended: false };
     });
-    this.appliedVolumes.set(layer, spec!.fadeInMs ? 0 : spec!.volume);
     this.fades[layer] = {
       name,
       inputUuid: args.inputUuid,
