@@ -412,7 +412,14 @@ it('keeps OBS manual stop / mute and cancels a late start when formal play resum
   expect(
     r.obs.calls
       .filter((c) => /^Set|Trigger/.test(c.type))
-      .every((c) => [...r.obs.inputs.values()].some((i) => i.uuid === c.data.inputUuid)),
+      .every((c) =>
+        c.type.startsWith('SetSceneItem')
+          ? c.data.sceneName === 'Mizar · 赛前等待' &&
+            Number.isInteger(c.data.sceneItemId) &&
+            Number(c.data.sceneItemId) >= 0 &&
+            Number(c.data.sceneItemId) < r.obs.inputs.size
+          : [...r.obs.inputs.values()].some((i) => i.uuid === c.data.inputUuid),
+      ),
   ).toBe(true);
   const disk = await readFile(join(r.directory, 'state.json'), 'utf8');
   expect(disk).not.toContain(r.directory);
