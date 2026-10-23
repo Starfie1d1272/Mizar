@@ -9,6 +9,38 @@ const cursor = {
   mapEpoch: 1,
 };
 afterEach(() => vi.useRealTimers());
+it('clears same-map reconnects even when the Program cursor does not change', () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-10-24T00:00:00Z'));
+  const chat = new ProgramChat();
+  chat.view(cursor, true);
+  vi.advanceTimersByTime(1000);
+  const event = (id: string, after: string) => ({
+    stage: 'program_all_chat',
+    detail: JSON.stringify({
+      binding: 'game',
+      id,
+      sender: 'name',
+      text: id,
+      sourceAfterUtc: after,
+      capturedAt: new Date().toISOString(),
+    }),
+  });
+  const oldTime = new Date().toISOString();
+  chat.ingest(event('old', oldTime));
+  expect(chat.view(cursor, true)).toHaveLength(1);
+  vi.advanceTimersByTime(1000);
+  chat.ingest({
+    stage: 'program_all_chat_reset',
+    detail: JSON.stringify({ binding: 'game', capturedAt: new Date().toISOString() }),
+  });
+  expect(chat.view(cursor, true)).toEqual([]);
+  chat.ingest(event('late-old', oldTime));
+  expect(chat.view(cursor, true)).toEqual([]);
+  vi.advanceTimersByTime(1);
+  chat.ingest(event('new', new Date().toISOString()));
+  expect(chat.view(cursor, true).map((message) => message.text)).toEqual(['new']);
+});
 it('publishes bounded fresh public text and clears it on map, reconnect, session and staleness boundaries', () => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date('2026-10-24T00:00:00Z'));

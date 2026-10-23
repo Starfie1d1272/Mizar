@@ -19,6 +19,24 @@ export class ProgramChat {
   private items: NonNullable<ProgramPayload['allChat']> = [];
   private seen = new Set<string>();
   ingest(record: { stage: string; [key: string]: unknown }) {
+    if (record.stage === 'program_all_chat_reset' && typeof record.detail === 'string') {
+      try {
+        const reset = z
+          .object({ binding: z.string().min(1).max(256), capturedAt: z.string().datetime() })
+          .strict()
+          .parse(JSON.parse(record.detail));
+        const captured = Date.parse(reset.capturedAt),
+          now = Date.now();
+        if (captured < this.scopeAt || captured > now + 1000 || now - captured > 5000) return;
+        this.items = [];
+        this.seen.clear();
+        this.binding = reset.binding;
+        this.scopeAt = now;
+      } catch {
+        /* Malformed or stale producers cannot reset the active view. */
+      }
+      return;
+    }
     if (record.stage !== 'program_all_chat' || typeof record.detail !== 'string') return;
     let parsed: ReturnType<typeof entry.safeParse>;
     try {
