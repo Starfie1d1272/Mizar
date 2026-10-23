@@ -43,6 +43,7 @@ export class NativeSource {
   constructor(
     private readonly directory: string,
     private readonly journal: SessionJournal,
+    private readonly onRecord?: (record: NativeRecord) => void,
   ) {}
 
   start(): void {
@@ -245,6 +246,7 @@ export class NativeSource {
           entries: committed,
         });
         this.copied += committed.length;
+        for (const record of committed) this.onRecord?.(record.entry);
         groupBytes = 0;
       };
       let start = 0;

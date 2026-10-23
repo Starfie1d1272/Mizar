@@ -9,6 +9,7 @@ import { checkLocalWebOrigin } from './local-web/origin-policy.js';
 import { SessionJournal, diagnosticValue } from './support/session-journal.js';
 import { PerformanceWindow, selectedGsiContext } from './support/performance-window.js';
 import { NativeSource } from './support/native-source.js';
+import { ProgramChat } from './projections/program-chat.js';
 import { MusicStore } from './music/store.js';
 import { MusicDirector } from './music/director.js';
 import { ObsMusicProvider } from './music/obs-provider.js';
@@ -418,9 +419,12 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         options.supportLogsDirectory,
       )
     : undefined;
+  const programChat = new ProgramChat();
   const nativeSource =
     options.supportLogsDirectory && sessionJournal
-      ? new NativeSource(options.supportLogsDirectory, sessionJournal)
+      ? new NativeSource(options.supportLogsDirectory, sessionJournal, (record) =>
+          programChat.ingest(record),
+        )
       : undefined;
   app.addHook('onReady', () => {
     nativeSource?.start();
@@ -584,6 +588,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   const projectionCoordinator =
     options.projectionCoordinator ??
     createProjectionCoordinator({
+      programChat: (cursor, fresh) => programChat.view(cursor, fresh),
       ...(options.steamAvatars ? { avatars: options.steamAvatars } : {}),
       programRuntime,
       cstvSources,

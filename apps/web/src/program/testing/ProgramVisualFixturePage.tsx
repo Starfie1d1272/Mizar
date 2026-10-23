@@ -14,14 +14,42 @@ import { getDefaultHudCompositeFixture } from '../fixtures/default-hud-composite
 export function ProgramVisualFixturePage({ fixtureId }: { readonly fixtureId: string }) {
   const compositeFixture = getDefaultHudCompositeFixture(fixtureId);
   const isIntegrated = fixtureId === 'program-radar-integrated';
-  const snapshot =
+  const chatStyle = fixtureId.startsWith('all-chat-') ? fixtureId.slice('all-chat-'.length) : null;
+  const sourceSnapshot =
     compositeFixture?.snapshot ??
-    (isIntegrated ? getProgramFixture('live-canonical') : getProgramFixture(fixtureId));
+    (isIntegrated || chatStyle
+      ? getProgramFixture('live-canonical')
+      : getProgramFixture(fixtureId));
+  const snapshot =
+    sourceSnapshot && chatStyle
+      ? {
+          ...sourceSnapshot,
+          payload: {
+            ...sourceSnapshot.payload,
+            allChat: [
+              {
+                id: 'public-synthetic-1',
+                sender: 'm0NESY',
+                text: 'HFHF',
+                expiresAt: '2099-01-01T00:00:00.000Z',
+              },
+              {
+                id: 'public-synthetic-2',
+                sender: '很长的测试选手名称 Player',
+                text: '这是一条用于检查换行与可读性的公共聊天。Good luck, have fun!',
+                expiresAt: '2099-01-01T00:00:00.000Z',
+              },
+            ],
+          },
+        }
+      : sourceSnapshot;
   if (snapshot === null) {
     return <ProgramVisualFixtureNotFound fixtureId={fixtureId} />;
   }
 
-  const basePreset = getBuiltinResolvedPreset();
+  const basePreset = getBuiltinResolvedPreset(
+    chatStyle && chatStyle !== 'current' ? `builtin:${chatStyle}-preset` : undefined,
+  );
   const showRadar = compositeFixture !== null || isIntegrated;
   const resolvedPreset = showRadar
     ? basePreset
@@ -45,7 +73,7 @@ export function ProgramVisualFixturePage({ fixtureId }: { readonly fixtureId: st
       <div
         style={{ display: 'contents' }}
         data-program-fixture-kind={
-          compositeFixture?.provenance ??
+          (chatStyle ? 'synthetic' : compositeFixture?.provenance) ??
           (isIntegrated ? 'real-derived' : getProgramFixtureProvenance(fixtureId)?.kind)
         }
         data-program-fixture-id={fixtureId}
@@ -60,7 +88,7 @@ export function ProgramVisualFixturePage({ fixtureId }: { readonly fixtureId: st
               resolvedPreset={resolvedPreset}
               snapshot={snapshot}
             />
-            {compositeFixture === null ? (
+            {compositeFixture === null && !chatStyle ? (
               <ProgramFoundationProbe fixtureId={fixtureId} snapshot={snapshot} />
             ) : null}
           </>

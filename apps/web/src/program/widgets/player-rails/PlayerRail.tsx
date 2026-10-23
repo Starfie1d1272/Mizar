@@ -4,6 +4,7 @@ import type { HudWidgetRendererProps } from '../../hud-renderer-registry';
 import { PlayerCard } from './PlayerCard';
 import { buildPlayerRailsPresentation } from './presentation';
 import { TeamSummary } from './TeamSummary';
+import { AllChat } from './AllChat';
 
 export function PlayerRail({
   design = 'current',
@@ -47,6 +48,11 @@ export function PlayerRail({
     : null;
   return (
     <section
+      data-all-chat-host={
+        physicalSide === 'right' &&
+        Boolean(snapshot.payload.allChat?.length) &&
+        snapshot.payload.status.telemetry === 'fresh'
+      }
       aria-label={`${physicalSide === 'left' ? '左' : '右'}选手栏`}
       className={`player-rail player-rail--${physicalSide} player-rail--${side.toLowerCase()}`}
       data-entrant={rail.entrantKey ?? 'unbound'}
@@ -54,6 +60,9 @@ export function PlayerRail({
       data-physical-side={physicalSide}
       data-player-rail-phase={presentation.phase}
     >
+      {physicalSide === 'right' && snapshot.payload.status.telemetry === 'fresh' ? (
+        <AllChat design={design} messages={snapshot.payload.allChat ?? []} />
+      ) : null}
       <div className="player-rail__summary-slot" data-team-summary-slot="true">
         {options.showTeamSummary ? (
           <TeamSummary

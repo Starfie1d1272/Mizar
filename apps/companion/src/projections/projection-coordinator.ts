@@ -63,6 +63,10 @@ export interface ProjectionPublishers {
 }
 
 export interface ProjectionCoordinatorOptions {
+  readonly programChat?: (
+    cursor: ProgramSnapshot['cursor'],
+    fresh: boolean,
+  ) => NonNullable<ProgramSnapshot['payload']['allChat']>;
   /** Step replay publishes each cursor immediately, then explicitly drains predictions. */
   readonly predictionPublishCoalescing?: boolean;
   readonly avatars?: { get(id: string): string | null; request(ids: readonly string[]): void };
@@ -150,6 +154,7 @@ function report(
 export class ProjectionCoordinator {
   private readonly predictionPublishCoalescing: boolean;
   private readonly avatars: ProjectionCoordinatorOptions['avatars'];
+  private readonly programChat: ProjectionCoordinatorOptions['programChat'];
   private readonly bombDamageResources = new BombDamageResources(() => this.refresh());
   private readonly presentationListeners = new Set<(bundle: ProjectionBundle) => void>();
 
@@ -191,6 +196,7 @@ export class ProjectionCoordinator {
   private closed = false;
 
   constructor(options: ProjectionCoordinatorOptions) {
+    this.programChat = options.programChat;
     this.predictionPublishCoalescing = options.predictionPublishCoalescing ?? true;
     this.avatars = options.avatars;
     this.programRuntime = options.programRuntime;
@@ -610,7 +616,12 @@ export class ProjectionCoordinator {
         channel: 'program',
         schemaVersion: PROGRAM_SCHEMA_VERSION,
         cursor: program.cursor,
-        payload: mapProgramProjection(program),
+        payload: {
+          ...mapProgramProjection(program),
+          ...(this.programChat
+            ? { allChat: this.programChat(program.cursor, program.status.telemetry === 'fresh') }
+            : {}),
+        },
       }),
     );
     this.publishChannel('radar', () =>
