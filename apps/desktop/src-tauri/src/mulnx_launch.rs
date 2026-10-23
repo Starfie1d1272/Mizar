@@ -39,6 +39,9 @@ pub fn launch(app: &tauri::AppHandle, log: &DesktopLog) -> Result<(), String> {
     app.state::<updates::PendingUpdate>().check()?;
     no_game()?;
     let verb: Vec<u16> = "open\0".encode_utf16().collect();
+    // The official launcher can start the engine later. Preserve the prior raw
+    // file before giving it control; this grants no ownership of that game.
+    crate::cs2_console::prepare(log, &executable)?;
     let target: Vec<u16> = format!("{}\0", launcher.display()).encode_utf16().collect();
     let directory: Vec<u16> = format!("{}\0", launcher.parent().ok_or("MulNX 目录无效。")?.display()).encode_utf16().collect();
     let result = unsafe { ShellExecuteW(0, verb.as_ptr(), target.as_ptr(), std::ptr::null(), directory.as_ptr(), 1) };

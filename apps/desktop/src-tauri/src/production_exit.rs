@@ -434,7 +434,8 @@ pub fn prepare_external_entry(log: &DesktopLog, expected_revision: &str) -> Resu
 /// Existing private runtime identity; browsers cannot renew a native lease.
 pub fn prepare_mulnx(log: &DesktopLog, cs2: &std::path::Path) -> Result<serde_json::Value, String> {
     let token = runtime_token(log)?;
-    let body = serde_json::json!({"cs2Path": cs2.to_string_lossy()}).to_string();
+    let console_capture = crate::cs2_console::settings(log)?["enabled"] == true;
+    let body = serde_json::json!({"cs2Path": cs2.to_string_lossy(),"consoleCapture":console_capture}).to_string();
     let (code, value) = request_with_identity(log, "POST", "/operator/runtime/mulnx-prepare", &body,
         Instant::now() + Duration::from_secs(240), Some(&token))?;
     if code != 200 {

@@ -2341,7 +2341,8 @@ fn run_desktop(
             let worker_running = host.state::<HostState>().running.clone();
             let console_running = worker_running.clone();
             let console_log = setup_log.clone();
-            let console_thread = thread::spawn(move || cs2_console::run_worker(console_log, console_running));
+            let console_host = host.clone();
+            let console_thread = thread::spawn(move || cs2_console::run_worker(console_log, console_running, console_host));
             *setup_console_worker.lock().map_err(|_| "技术日志线程状态不可用。")? = Some(console_thread);
             let worker_tracker = host.state::<HostState>().tracker.clone();
             let worker_visible = host.state::<HostState>().visible.clone();

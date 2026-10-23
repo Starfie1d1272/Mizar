@@ -128,10 +128,11 @@ export function registerOrchestrationRoutes(
             .min(1)
             .max(2048)
             .regex(/^[A-Za-z]:\\.*\\cs2\.exe$/i),
+          consoleCapture: z.boolean().default(false),
         })
         .parse(request.body);
       director.hold('正在准备 MulNX');
-      return await tool.prepare(body.cs2Path);
+      return await tool.prepare(body.cs2Path, body.consoleCapture);
     } catch (error) {
       request.log.error(
         { stage: 'mulnx_prepare', err: error, result: 'failure' },

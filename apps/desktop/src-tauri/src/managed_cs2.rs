@@ -579,6 +579,7 @@ pub struct WorkspaceProcess {
     pub created: u64,
 }
 struct ExternalSession {
+    console_source: Value,
     camera_lease: Option<String>,
     invalidated: bool,
     isolation_pending: bool,
@@ -671,7 +672,9 @@ impl ManagedCs2 {
             || !actual_executable.to_string_lossy().eq_ignore_ascii_case(&executable.to_string_lossy())
             || unsafe { WaitForSingleObject(process.0, 0) } != 258
         { return Err("游戏身份或安装位置不匹配，请重新检查。".into()); }
-        self.external = Some(ExternalSession { camera_lease: None, invalidated: false, isolation_pending: false, process: Arc::new(process), pid, created });
+        let console = crate::cs2_console::boundary(&self.log, &actual_executable)?;
+        let console_source = json!({"executable":actual_executable.to_string_lossy(),"launchTime":crate::cs2_console::utc(),"pid":pid,"created":created.to_string(),"consoleDiagnostics":console,"ownership":"external"});
+        self.external = Some(ExternalSession { console_source, camera_lease: None, invalidated: false, isolation_pending: false, process: Arc::new(process), pid, created });
         self.external_preservation = true;
         self.can_preserve = false;
         self.message = Some("已借用外部游戏；保持原设置和窗口，退出工作台不会关闭它。".into());
@@ -688,6 +691,19 @@ impl ManagedCs2 {
             return Ok(None);
         };
         verified_session_process(&value, &self.log)
+    }
+    /// Read-only diagnostics context follows the explicit current attachment.
+    /// This context is never written to SessionStore and grants no shutdown right.
+    pub fn console_source(&self) -> Result<Option<(Value, WorkspaceProcess)>, String> {
+        let Some(process) = self.workspace_process()? else { return Ok(None); };
+        let context = if let Some(external) = &self.external {
+            if cs2_pids(&self.log)? != vec![external.pid] { return Ok(None); }
+            external.console_source.clone()
+        } else {
+            let Some(journal) = self.store.load()? else { return Ok(None); };
+            journal
+        };
+        Ok(Some((context, process)))
     }
     /// Inspection only: do not adopt a process, write a session, restore config or close a game.
     pub fn mulnx_handoff_status(&self) -> Result<Value, String> {
@@ -1470,6 +1486,10 @@ mod tests {
         let borrowed_process = managed.workspace_process().unwrap().unwrap();
         assert!(borrowed_process.is_running());
         assert!(!borrowed_process.owned);
+        let (source, source_process) = managed.console_source().unwrap().unwrap();
+        assert_eq!(source["ownership"], "external");
+        assert_eq!(source_process.pid, external.child.id());
+        assert!(!source_process.owned);
         drop(borrowed_process);
         assert_eq!(managed.status().unwrap()["borrowed"], true);
         assert_eq!(managed.status().unwrap()["pending"], false);

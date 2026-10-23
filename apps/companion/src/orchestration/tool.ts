@@ -19,6 +19,22 @@ interface InstalledTool {
   directory: string;
   packs: { name: string; sourceName: string }[];
 }
+/** Preserve the official launch options; refuse unfamiliar YAML instead of
+ * silently enabling capture without an effective engine flag. */
+export function consoleLaunchOptions(source: string): string {
+  const lines = [...source.matchAll(/^launchOptions\s*:\s*(.*)$/gm)];
+  if (lines.length !== 1) throw new Error('mulnx_launcher_config_unsupported');
+  const raw = lines[0]![1]!.trim();
+  const value: unknown = raw.startsWith('"')
+    ? JSON.parse(raw)
+    : raw.startsWith("'") && raw.endsWith("'")
+      ? raw.slice(1, -1).replaceAll("''", "'")
+      : raw;
+  if (typeof value !== 'string' || /[\r\n#]/.test(value) || (value && !value.startsWith('-')))
+    throw new Error('mulnx_launcher_config_unsupported');
+  const options = /(?:^|\s)-condebug(?:\s|$)/i.test(value) ? value : `${value} -condebug`.trim();
+  return source.replace(/^launchOptions\s*:.*$/m, `launchOptions: ${JSON.stringify(options)}`);
+}
 /** Distribution state is independent of the Mizar application and camera presets. */
 export class MulnxTool {
   private installed: InstalledTool | undefined;
@@ -101,7 +117,7 @@ export class MulnxTool {
       return this.view();
     });
   }
-  prepare(cs2Path: string) {
+  prepare(cs2Path: string, consoleCapture = false) {
     return this.run('mulnx_prepare', async () => {
       // Called only by the authenticated native host after its process and install checks.
       const release = await latestMulnxRelease();
@@ -109,12 +125,12 @@ export class MulnxTool {
       if (!this.installed || this.installed.release.sha256 !== release.sha256)
         await this.install(release, cs2Path);
       const root = join(this.directory, this.installed!.directory, 'MulNX');
-      await this.configureLauncher(root, cs2Path);
+      await this.configureLauncher(root, cs2Path, consoleCapture);
       const launcher = await safePath(root, 'CS2Injector/CS2Injector.exe');
       return { launcher, version: this.installed!.release.tag };
     });
   }
-  private async configureLauncher(root: string, cs2Path: string) {
+  private async configureLauncher(root: string, cs2Path: string, consoleCapture = false) {
     const config = await safePath(root, 'CS2Injector/CS2BootLoader/Config/config.yaml');
     const stat = await lstat(config);
     if (stat.size > 64 * 1024) throw new Error('mulnx_launcher_config_invalid');
@@ -122,7 +138,8 @@ export class MulnxTool {
     if ((original.match(/^path\s*:/gm) ?? []).length !== 1)
       throw new Error('mulnx_launcher_config_unsupported');
     // JSON strings are YAML strings; retain upstream launch options and platform checks.
-    const updated = original.replace(/^path\s*:.*$/m, `path: ${JSON.stringify(cs2Path)}`);
+    const withPath = original.replace(/^path\s*:.*$/m, `path: ${JSON.stringify(cs2Path)}`);
+    const updated = consoleCapture ? consoleLaunchOptions(withPath) : withPath;
     const temporary = `${config}.${randomUUID()}.tmp`;
     try {
       await writeFile(temporary, updated, { flag: 'wx' });

@@ -62,7 +62,7 @@ export function Cs2ConsoleSettings() {
         ? '正在观察技术日志'
         : phase === 'unavailable'
           ? '暂时无法读取，原因已保存到诊断报告'
-          : '等待受管游戏日志';
+          : '等待已确认游戏的日志';
   async function save() {
     if (!status || busy || !dirty) return;
     const task = new ControlTask('cs2_console_capture_consent', 'user', {
@@ -99,7 +99,7 @@ export function Cs2ConsoleSettings() {
       <summary>CS2 技术日志（高级）</summary>
       <p>
         默认关闭。开启后，仅在 Mizar
-        核实本次受管游戏身份时保存已识别的技术行，跳过旧内容、聊天和未知行。
+        核实本次受管或明确借用的游戏身份后保存已识别的技术行，跳过旧内容、聊天和未知行。
       </p>
       <p>
         游戏会另外写入本机 console.log，可能包含聊天并持续增长。关闭仅停止 Mizar
@@ -113,7 +113,7 @@ export function Cs2ConsoleSettings() {
       >
         <Field
           type="checkbox"
-          label="允许记录受管 CS2 技术日志"
+          label="允许记录本次 CS2 技术日志"
           checked={enabled}
           disabled={!status || busy}
           onChange={(event) => {
@@ -133,7 +133,7 @@ export function Cs2ConsoleSettings() {
         {saved ? (
           <StatusBanner tone="success">
             {status?.enabled
-              ? '已保存。首次开启需下次由 Mizar 启动游戏后生效。'
+              ? '已保存。受管启动或明确交接后生效；游戏需启用控制台日志。'
               : '已停止 Mizar 读取。'}
           </StatusBanner>
         ) : null}
