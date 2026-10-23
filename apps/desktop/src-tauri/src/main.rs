@@ -688,6 +688,7 @@ async fn attach_external_cs2(
             Ok(lease) => cs2.bind_external_camera(lease),
             Err(error) => { cs2.invalidate_external(); return Err(error); }
         }
+          if let Some(id) = &trial_id { cs2.bind_external_demo(id.clone()); }
         if let Ok(mut tracker) = app.state::<HostState>().tracker.lock() {
             tracker.preserve_settings = true;
         }
