@@ -7,6 +7,9 @@ import { SessionJournal } from '../src/support/session-journal.js';
 import { DiagnosticDelivery } from '../src/support/delivery.js';
 import { registerDiagnosticDelivery } from '../src/support/delivery-routes.js';
 import { buildApp } from '../src/app.js';
+import { fullLogArchive } from '../src/support/archive.js';
+import { IncidentStore } from '../src/support/incident-store.js';
+import { gunzipSync } from 'node:zlib';
 const roots: string[] = [];
 const apps: ReturnType<typeof buildApp>[] = [];
 afterEach(async () => {
@@ -15,6 +18,81 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((v) => rm(v, { recursive: true, force: true })));
 });
 const headers = { origin: 'http://127.0.0.1:3000' };
+it('retains marked fault bodies through real rotation and process-owner restart without cloud consent', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-mark-retention-'));
+  roots.push(directory);
+  const journal = new SessionJournal(directory);
+  const app = Fastify();
+  registerDiagnosticDelivery(app, {
+    directory,
+    journal,
+    originPolicy: {
+      mode: 'loopback',
+      bindHost: '127.0.0.1',
+      allowedOrigins: ['http://127.0.0.1:3000'],
+    },
+  });
+  try {
+    await journal.recordCommitted('window_failure', {
+      operationId: 'keep-this-fault',
+      rawCode: 5,
+      phase: 'QueryFullProcessImageNameW',
+      synthetic: true,
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/operator/diagnostics/report',
+      headers,
+      payload: { category: 'hud', observedAt: new Date().toISOString() },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ recorded: true, evidenceRetained: true });
+    const padding = 'rotation-pressure-'.repeat(15000);
+    for (let i = 0; i < 360; i++) await journal.recordCommitted('pressure', { i, padding });
+    await journal.close();
+    await app.close();
+    const reopened = new SessionJournal(directory);
+    await reopened.close();
+    const archive = await fullLogArchive(directory);
+    const text = (prefix: boolean) =>
+      archive.files
+        .filter((f) => f.name.startsWith('marked-incidents/') === prefix)
+        .flatMap((f) =>
+          f.volumes.map((v) => gunzipSync(Buffer.from(v.gzipBase64, 'base64')).toString()),
+        )
+        .join('');
+    expect(text(false)).not.toContain('keep-this-fault');
+    expect(text(true)).toContain('keep-this-fault');
+    expect(text(true)).toContain('QueryFullProcessImageNameW');
+    expect(text(true)).toContain('"rawCode":5');
+    expect(text(true)).toContain('"stage":"problem_report"');
+    expect(
+      archive.files.some(
+        (f) => f.name.startsWith('marked-incidents/') && f.status === 'unreadable',
+      ),
+    ).toBe(false);
+  } finally {
+    await app.close();
+    await journal.close();
+  }
+}, 60_000);
+
+it('does not acknowledge a marked scene when its durable snapshot fails', async () => {
+  const { app, directory } = await setup();
+  vi.spyOn(IncidentStore.prototype, 'capture').mockRejectedValueOnce(
+    Object.assign(new Error('incident disk full'), { code: 'ENOSPC' }),
+  );
+  const response = await app.inject({
+    method: 'POST',
+    url: '/operator/diagnostics/report',
+    headers,
+    payload: { category: 'hud', observedAt: new Date().toISOString() },
+  });
+  expect(response.statusCode).toBe(503);
+  expect(response.json<{ recorded?: boolean }>().recorded).not.toBe(true);
+  await app.close();
+  expect(await readFile(join(directory, 'session.ndjson'), 'utf8')).toContain('incident disk full');
+});
 async function setup() {
   const directory = await mkdtemp(join(tmpdir(), 'mizar-delivery-routes-'));
   roots.push(directory);

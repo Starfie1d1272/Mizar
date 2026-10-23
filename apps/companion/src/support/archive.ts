@@ -4,13 +4,15 @@ import { createHash } from 'node:crypto';
 import { constants, type Stats } from 'node:fs';
 import { lstat, open } from 'node:fs/promises';
 import { join, resolve, parse } from 'node:path';
-import { gzip } from 'node:zlib';
+import { gzip, gunzip } from 'node:zlib';
 import { promisify } from 'node:util';
 import { diagnosticValue, SESSION_LIMITS } from './session-journal.js';
 import { PerformanceSpool } from './performance-spool.js';
 import { decodeDiagnosticBatch, type RetainedDiagnosticBatch } from './delivery.js';
 import { diagnosticConsoleEvidence, diagnosticSourceUtc } from './envelope.js';
+import { IncidentStore } from './incident-store.js';
 const compress = promisify(gzip);
+const decompress = promisify(gunzip);
 const VOLUME_BYTES = 1024 * 1024;
 const FILE_BYTES = 25 * 1024 * 1024;
 export interface ArchivedLogFile {
@@ -64,7 +66,11 @@ export async function fullLogArchive(
   directory: string | undefined,
   range: { from?: string; to?: string; focusSessionId?: string } = {},
   memoryPerformance: readonly unknown[] = [],
-  extra: { journalMemory?: readonly string[]; outbox?: readonly RetainedDiagnosticBatch[] } = {},
+  extra: {
+    journalMemory?: readonly string[];
+    outbox?: readonly RetainedDiagnosticBatch[];
+    includeIncidents?: boolean;
+  } = {},
 ) {
   const fragments = new Map<string, { id: string; expected: number; parts: Set<number> }>();
   const sessions = new Map<
@@ -452,6 +458,91 @@ export async function fullLogArchive(
       readBytes: 0,
       volumes: [],
     });
+  }
+  if (extra.includeIncidents !== false) {
+    const incidents = new IncidentStore(directory);
+    try {
+      for (const name of await incidents.names()) {
+        try {
+          const snapshot = await incidents.read(name);
+          for (const retained of snapshot.files) {
+            if (
+              typeof retained.name !== 'string' ||
+              !/^[a-zA-Z0-9_./-]+$/.test(retained.name) ||
+              retained.name.split('/').includes('..')
+            )
+              throw new Error('incident_source_name_invalid');
+            const file = {
+              ...retained,
+              name: `marked-incidents/${name}/${retained.name}`,
+              scope:
+                'frozen evidence at explicit problem mark; independent of ordinary log rotation',
+            };
+            if (
+              retained.status !== 'read' &&
+              retained.status !== 'incomplete_last_line' &&
+              retained.status !== 'incomplete_snapshot'
+            ) {
+              files.push(file);
+              continue;
+            }
+            if (!Array.isArray(retained.volumes) || retained.volumes.length > 25)
+              throw new Error('incident_volume_budget');
+            const chunks: Buffer[] = [];
+            for (const [index, volume] of retained.volumes.entries()) {
+              const bytes = await decompress(Buffer.from(volume.gzipBase64, 'base64'), {
+                maxOutputLength: VOLUME_BYTES,
+              });
+              if (
+                volume.index !== index ||
+                bytes.length !== volume.bytes ||
+                createHash('sha256').update(bytes).digest('hex') !== volume.sha256
+              )
+                throw new Error('incident_volume_integrity');
+              chunks.push(bytes);
+            }
+            const bytes = Buffer.concat(chunks);
+            if (createHash('sha256').update(bytes).digest('hex') !== retained.sha256)
+              throw new Error('incident_file_integrity');
+            const lines = bytes
+              .toString('utf8')
+              .split('\n')
+              .map((line) => {
+                if (!line) return '';
+                try {
+                  const event = JSON.parse(line) as Record<string, unknown>;
+                  if (!includeRecord(event)) return null;
+                  indexRecord(event, sourceTime(event), file.name);
+                  return JSON.stringify(diagnosticValue(event));
+                } catch {
+                  /* Unstructured producer text remains attached. */
+                }
+                return diagnosticValue(line) as string;
+              })
+              .filter((line) => line !== null);
+            files.push({ ...file, ...(await encodeLogVolumes(Buffer.from(lines.join('\n')))) });
+          }
+        } catch (error) {
+          files.push({
+            name: `marked-incidents/${name}`,
+            status: 'unreadable',
+            sourceBytes: 0,
+            readBytes: 0,
+            volumes: [],
+            error: diagnosticValue(error),
+          });
+        }
+      }
+    } catch (error) {
+      files.push({
+        name: 'marked-incidents',
+        status: 'unreadable',
+        sourceBytes: 0,
+        readBytes: 0,
+        volumes: [],
+        error: diagnosticValue(error),
+      });
+    }
   }
   return {
     status: 'available',
