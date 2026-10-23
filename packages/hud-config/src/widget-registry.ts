@@ -36,6 +36,7 @@ export const playerRailSettingsSchema = z.strictObject({
   showLoadout: z.boolean().default(true),
   showUtility: z.boolean().default(true),
   showTeamSummary: z.boolean().default(true),
+  showAllChat: z.boolean().default(true),
   showBombPrediction: z.boolean().default(true),
   deadInformation: z.enum(['stats', 'minimal']).default('stats'),
 });
@@ -90,6 +91,7 @@ function widgetContract(id: HudWidgetId) {
     showLoadout: '显示武器与装备',
     showUtility: '显示道具',
     showTeamSummary: '显示队伍汇总',
+    showAllChat: '显示 ALL 公共聊天（右侧）',
     showBombPrediction: 'C4 伤害预测',
     showMedia: '显示头像与观察位',
     showMetrics: '显示 K/A/D/ADR',
@@ -115,45 +117,47 @@ function widgetContract(id: HudWidgetId) {
     ...(styled ? HUD_BROADCAST_STYLES : []),
   ];
   const defaults = schema.parse({});
-  const editorControls: HudEditorControl[] = Object.keys(defaults).map((path) =>
-    path === 'zoomMode'
-      ? {
-          path,
-          label: '雷达视野',
-          type: 'select',
-          variants,
-          options: [
-            { value: 'full-map', label: '完整地图' },
-            { value: 'auto', label: '自动聚焦存活选手' },
-          ],
-        }
-      : path === 'deadInformation'
+  const editorControls: HudEditorControl[] = Object.keys(defaults)
+    .filter((path) => path !== 'showAllChat' || id === 'team-t-rail')
+    .map((path) =>
+      path === 'zoomMode'
         ? {
             path,
-            label: '死亡态信息',
+            label: '雷达视野',
             type: 'select',
             variants,
             options: [
-              { value: 'stats', label: '统计信息' },
-              { value: 'minimal', label: '仅身份与死亡状态' },
+              { value: 'full-map', label: '完整地图' },
+              { value: 'auto', label: '自动聚焦存活选手' },
             ],
           }
-        : {
-            path,
-            label: labels[path]!,
-            type: 'boolean',
-            variants:
-              id === 'focused-player' && path !== 'showReserveAmmo'
-                ? variants.filter((variant) => variant !== 'minimal')
-                : (id === 'top-score-bar' &&
-                      ['showSeriesWins', 'showAliveMatchup'].includes(path)) ||
-                    ((id === 'team-ct-rail' || id === 'team-t-rail') && path === 'showTeamName')
-                  ? variants.filter((variant) => variant !== 'perfectworld')
-                  : id === 'focused-player' && path === 'showReserveAmmo'
-                    ? variants.filter((variant) => variant !== 'esl')
-                    : variants,
-          },
-  );
+        : path === 'deadInformation'
+          ? {
+              path,
+              label: '死亡态信息',
+              type: 'select',
+              variants,
+              options: [
+                { value: 'stats', label: '统计信息' },
+                { value: 'minimal', label: '仅身份与死亡状态' },
+              ],
+            }
+          : {
+              path,
+              label: labels[path]!,
+              type: 'boolean',
+              variants:
+                id === 'focused-player' && path !== 'showReserveAmmo'
+                  ? variants.filter((variant) => variant !== 'minimal')
+                  : (id === 'top-score-bar' &&
+                        ['showSeriesWins', 'showAliveMatchup'].includes(path)) ||
+                      ((id === 'team-ct-rail' || id === 'team-t-rail') && path === 'showTeamName')
+                    ? variants.filter((variant) => variant !== 'perfectworld')
+                    : id === 'focused-player' && path === 'showReserveAmmo'
+                      ? variants.filter((variant) => variant !== 'esl')
+                      : variants,
+            },
+    );
   const settingsSchemaByVariant: Record<string, (value: unknown) => Record<string, unknown>> = {
     default: (value) => schema.parse(value),
   };

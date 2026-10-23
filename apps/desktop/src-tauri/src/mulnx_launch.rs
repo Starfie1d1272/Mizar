@@ -26,7 +26,7 @@ pub fn launch(app: &tauri::AppHandle, log: &DesktopLog) -> Result<(), String> {
     }
     let cfg = PathBuf::from(gsi["cfgPath"].as_str().ok_or("CS2 安装位置未确认。")?);
     let executable = cfg.parent().and_then(Path::parent).and_then(Path::parent)
-        .ok_or("CS2 安装位置无效。")?.join("bin/win64/cs2.exe");
+        .ok_or("CS2 安装位置无效。")?.join("bin").join("win64").join("cs2.exe");
     if !executable.is_file() { return Err("所选 CS2 程序不存在。".into()); }
     let prepared = production_exit::prepare_mulnx(log, &executable)?;
     let launcher = PathBuf::from(prepared["launcher"].as_str().ok_or("MulNX 启动路径缺失。")?);
@@ -39,6 +39,9 @@ pub fn launch(app: &tauri::AppHandle, log: &DesktopLog) -> Result<(), String> {
     app.state::<updates::PendingUpdate>().check()?;
     no_game()?;
     let verb: Vec<u16> = "open\0".encode_utf16().collect();
+    // The official launcher can start the engine later. Preserve the prior raw
+    // file before giving it control; this grants no ownership of that game.
+    crate::cs2_console::prepare(log, &executable)?;
     let target: Vec<u16> = format!("{}\0", launcher.display()).encode_utf16().collect();
     let directory: Vec<u16> = format!("{}\0", launcher.parent().ok_or("MulNX 目录无效。")?.display()).encode_utf16().collect();
     let result = unsafe { ShellExecuteW(0, verb.as_ptr(), target.as_ptr(), std::ptr::null(), directory.as_ptr(), 1) };

@@ -688,12 +688,16 @@ async fn attach_external_cs2(
             Ok(lease) => cs2.bind_external_camera(lease),
             Err(error) => { cs2.invalidate_external(); return Err(error); }
         }
+          if let Some(id) = &trial_id { cs2.bind_external_demo(id.clone()); }
         if let Ok(mut tracker) = app.state::<HostState>().tracker.lock() {
             tracker.preserve_settings = true;
         }
         if let Some(id) = trial_id {
             demo_test::request(&log, "playing", &id, None)?;
             drop(cs2);
+              // Presentation requires an idle host operation. The verified
+              // attachment and lease are committed before opening its windows.
+              drop(_activity);
             present_production_inner(&app, true)?;
         }
         Ok(false) // No game was launched or acquired as an owned process.
@@ -1166,18 +1170,20 @@ async fn set_cs2_preferences(
     app: tauri::AppHandle,
     quality_preset: String,
     frame_rate_limit: u16,
+    prefer_mulnx: Option<bool>,
     diagnostic_operation_id: Option<String>,
 ) -> Result<(), String> {
     let diagnostic_log = app.state::<DesktopLog>().inner().clone();
     let command_log = diagnostic_log.clone();
     let native_operation_id = diagnostic_operation_id.clone();
     let diagnostic_result: Result<(), String> = async move {
-    let preferences = cs2_preferences::Preferences::new(&quality_preset, frame_rate_limit)?;
+    let mut preferences = cs2_preferences::Preferences::new(&quality_preset, frame_rate_limit)?;
     tauri::async_runtime::spawn_blocking({ let command_log = command_log.clone(); let native_operation_id = native_operation_id.clone(); move || {
         let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
         let mut cs2 = state.lock().map_err(|error| command_log.preserve_error("set_cs2_preferences", native_operation_id.as_deref(), &error, "CS2 配置状态不可用。"))?;
         let activity = app.state::<cs2_activity::Activity>();
         let _activity = activity.begin(3);
+        preferences.prefer_mulnx = prefer_mulnx.unwrap_or(cs2.status()?["preferMulnx"].as_bool().unwrap_or(false));
         cs2.preferences(preferences)
     } })
     .await
@@ -2339,7 +2345,8 @@ fn run_desktop(
             let worker_running = host.state::<HostState>().running.clone();
             let console_running = worker_running.clone();
             let console_log = setup_log.clone();
-            let console_thread = thread::spawn(move || cs2_console::run_worker(console_log, console_running));
+            let console_host = host.clone();
+            let console_thread = thread::spawn(move || cs2_console::run_worker(console_log, console_running, console_host));
             *setup_console_worker.lock().map_err(|_| "技术日志线程状态不可用。")? = Some(console_thread);
             let worker_tracker = host.state::<HostState>().tracker.clone();
             let worker_visible = host.state::<HostState>().visible.clone();

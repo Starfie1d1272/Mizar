@@ -4,13 +4,13 @@ HUD 的结构、组件设置、布局、外观与比赛数据分离；技术归�
 
 ## 内置风格
 
-| 风格 | 主要表达 | 定义入口 |
-| --- | --- | --- |
-| Mizar 默认 | [Mizar Pulse](mizar-pulse.md) 的深壳、冷白读数与蓝色强调 | `default-theme.ts` 与默认布局 |
-| 类 EWC | 斜切构图与分层战斗信息 | `presets/ewc.ts` |
-| 类 IEM | 深色卡片、方形外侧头像与紧凑信息 | `presets/iem.ts` |
-| 类 Perfect World | 矩形生命带、状态附加面板与上海参考构图 | `presets/perfectworld.ts` |
-| 类 ESL | 荧光绿强调、独立字体与纹理 | `presets/esl.ts` |
+| 风格             | 主要表达                                                 | 定义入口                      |
+| ---------------- | -------------------------------------------------------- | ----------------------------- |
+| Mizar 默认       | [Mizar Pulse](mizar-pulse.md) 的深壳、冷白读数与蓝色强调 | `default-theme.ts` 与默认布局 |
+| 类 EWC           | 斜切构图与分层战斗信息                                   | `presets/ewc.ts`              |
+| 类 IEM           | 深色卡片、方形外侧头像与紧凑信息                         | `presets/iem.ts`              |
+| 类 Perfect World | 矩形生命带、状态附加面板与上海参考构图                   | `presets/perfectworld.ts`     |
+| 类 ESL           | 荧光绿强调、独立字体与纹理                               | `presets/esl.ts`              |
 
 定义位于 [packages/hud-config/src](../../packages/hud-config/src)，对应渲染样式位于 [apps/web/src/program/designs](../../apps/web/src/program/designs)。四套参考是 HUD 风格，完整默认节目包装由 Pulse 提供。参考来源与取舍见[历史审查](https://github.com/Starfie1d1272/Mizar/tree/70ec10084c13e2b634f0c12749a8ebe4c1c25c5f/docs/archive/design)，许可见[第三方说明](../../THIRD-PARTY-NOTICES.md)。
 
@@ -54,3 +54,5 @@ EWC 存活卡在文字下保留按参考周期和连接关系拟合的 60° 矢�
 选手卡在当前存活且护甲可信时显示低甲数值，零甲、高甲、未知或死亡不残留数字；阈值由共享 [presentation](../../apps/web/src/program/widgets/player-rails/presentation.ts) 维护。数字放在原装备槽内，不改变卡片外框；左右镜像由物理侧决定。Perfect World 的 C4 辅助条必须有明确阵营到参赛方映射，未知时不默认归到右队。
 
 雷达飞行轨迹保留最早可信观测到当前观测的完整已发生路径，所有外观使用连续虚线。共享雷达按固定点数预算优先压缩直线中间点，保留首尾和主要折返点；不补造出手点或落点。数据不连续、缺失位置、楼层切换或生命周期结束时清理，地图坐标、裁剪与缩放仍由原有几何负责。
+
+ALL 公共聊天开关复用 HUD 编辑器的组件内容设置：选择右选手栏，切换‘显示 ALL 公共聊天（右侧）’并保存预设。五套风格均生效；左选手栏不显示这个开关，关闭后卡片不占位，重新开启只展示仍有效的当前 Program 消息。

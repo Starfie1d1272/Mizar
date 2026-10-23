@@ -579,6 +579,8 @@ pub struct WorkspaceProcess {
     pub created: u64,
 }
 struct ExternalSession {
+    console_source: Value,
+    demo_request_id: Option<String>,
     camera_lease: Option<String>,
     invalidated: bool,
     isolation_pending: bool,
@@ -671,7 +673,9 @@ impl ManagedCs2 {
             || !actual_executable.to_string_lossy().eq_ignore_ascii_case(&executable.to_string_lossy())
             || unsafe { WaitForSingleObject(process.0, 0) } != 258
         { return Err("游戏身份或安装位置不匹配，请重新检查。".into()); }
-        self.external = Some(ExternalSession { camera_lease: None, invalidated: false, isolation_pending: false, process: Arc::new(process), pid, created });
+        let console = crate::cs2_console::boundary(&self.log, &actual_executable)?;
+        let console_source = json!({"executable":actual_executable.to_string_lossy(),"launchTime":crate::cs2_console::utc(),"pid":pid,"created":created.to_string(),"consoleDiagnostics":console,"ownership":"external"});
+        self.external = Some(ExternalSession { console_source, demo_request_id: None, camera_lease: None, invalidated: false, isolation_pending: false, process: Arc::new(process), pid, created });
         self.external_preservation = true;
         self.can_preserve = false;
         self.message = Some("已借用外部游戏；保持原设置和窗口，退出工作台不会关闭它。".into());
@@ -688,6 +692,19 @@ impl ManagedCs2 {
             return Ok(None);
         };
         verified_session_process(&value, &self.log)
+    }
+    /// Read-only diagnostics context follows the explicit current attachment.
+    /// This context is never written to SessionStore and grants no shutdown right.
+    pub fn console_source(&self) -> Result<Option<(Value, WorkspaceProcess)>, String> {
+        let Some(process) = self.workspace_process()? else { return Ok(None); };
+        let context = if let Some(external) = &self.external {
+            if cs2_pids(&self.log)? != vec![external.pid] { return Ok(None); }
+            external.console_source.clone()
+        } else {
+            let Some(journal) = self.store.load()? else { return Ok(None); };
+            journal
+        };
+        Ok(Some((context, process)))
     }
     /// Inspection only: do not adopt a process, write a session, restore config or close a game.
     pub fn mulnx_handoff_status(&self) -> Result<Value, String> {
@@ -717,7 +734,7 @@ impl ManagedCs2 {
         let running = owned_running || (borrowed && self.workspace_process()?.is_some());
         let preferences = self.store.preferences()?;
         Ok(
-            json!({"qualityPreset": preferences.quality.name(), "frameRateLimit":preferences.frame_rate_limit, "spectatorRecoveryPending": self.store.spectator_pending() && pending.is_none(), "demoCleanupPending": self.store.playback_cleanup_pending() && pending.is_none(), "spectatorWarning":self.store.spectator_warning().or_else(|| pending.as_ref().and_then(|value| value["spectatorWarning"].as_str()).map(str::to_string)), "canPreserve": self.can_preserve && pending.is_none(), "preserveSettings": borrowed || pending.as_ref().is_some_and(|v| v["preserveSettings"] == true), "pending":pending.is_some(), "borrowed":borrowed, "externalDetached":self.external_preservation && !borrowed, "running":running, "message":self.message, "busy":false, "phase": if pending.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch) {"uncertain"} else if running {"running"} else if pending.is_some() {"pending"} else {"idle"}}),
+            json!({"qualityPreset": preferences.quality.name(), "preferMulnx":preferences.prefer_mulnx, "frameRateLimit":preferences.frame_rate_limit, "spectatorRecoveryPending": self.store.spectator_pending() && pending.is_none(), "demoCleanupPending": self.store.playback_cleanup_pending() && pending.is_none(), "spectatorWarning":self.store.spectator_warning().or_else(|| pending.as_ref().and_then(|value| value["spectatorWarning"].as_str()).map(str::to_string)), "canPreserve": self.can_preserve && pending.is_none(), "preserveSettings": borrowed || pending.as_ref().is_some_and(|v| v["preserveSettings"] == true), "pending":pending.is_some(), "borrowed":borrowed, "externalDetached":self.external_preservation && !borrowed, "running":running, "message":self.message, "busy":false, "phase": if pending.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch) {"uncertain"} else if running {"running"} else if pending.is_some() {"pending"} else {"idle"}}),
         )
     }
     pub fn preferences(
@@ -831,6 +848,9 @@ impl ManagedCs2 {
     pub fn bind_external_camera(&mut self, lease: String) {
         if let Some(external) = &mut self.external { external.camera_lease = Some(lease); }
     }
+    pub fn bind_external_demo(&mut self, request_id: String) {
+        if let Some(external) = &mut self.external { external.demo_request_id = Some(request_id); }
+    }
     pub fn external_camera_lease(&self) -> Option<&str> {
         self.external.as_ref().filter(|external| !external.invalidated || external.isolation_pending)
             .and_then(|external| external.camera_lease.as_deref())
@@ -902,6 +922,14 @@ impl ManagedCs2 {
             .is_some_and(|v| v.get("demoTestRequestId").is_some()))
     }
     pub fn validate_demo_running(&mut self, request_id: &str) -> Result<(), String> {
+        if let Some(external) = &self.external {
+            if !external.invalidated && external.demo_request_id.as_deref() == Some(request_id)
+                && cs2_pids(&self.log)? == vec![external.pid]
+                && self.workspace_process()?.is_some_and(|process| process.is_running()) {
+                return Ok(());
+            }
+            return Err("外部 Demo 试播或游戏实例已变化，请重新交接。".into());
+        }
         self.recover(false)?;
         let journal = self.store.load()?.ok_or("Demo 游戏启动记录已失效。")?;
         if journal["demoTestRequestId"].as_str() != Some(request_id)
@@ -1465,11 +1493,19 @@ mod tests {
         std::fs::remove_file(managed.store.backup_directory().join("pending.json")).unwrap();
         managed.attach_external(external.child.id(), created, &actual_path).unwrap();
         managed.bind_external_camera("first-lease".into());
+        let trial_id = crate::demo_test::request_id().unwrap();
+        managed.bind_external_demo(trial_id.clone());
+        assert!(managed.validate_demo_running(&trial_id).is_ok());
+        assert!(managed.validate_demo_running(&crate::demo_test::request_id().unwrap()).is_err());
         assert_eq!(managed.external_camera_lease(), Some("first-lease"));
         assert!(managed.preserve_settings());
         let borrowed_process = managed.workspace_process().unwrap().unwrap();
         assert!(borrowed_process.is_running());
         assert!(!borrowed_process.owned);
+        let (source, source_process) = managed.console_source().unwrap().unwrap();
+        assert_eq!(source["ownership"], "external");
+        assert_eq!(source_process.pid, external.child.id());
+        assert!(!source_process.owned);
         drop(borrowed_process);
         assert_eq!(managed.status().unwrap()["borrowed"], true);
         assert_eq!(managed.status().unwrap()["pending"], false);

@@ -14,7 +14,7 @@ const CURSOR: &str = "console-cursor.json";
 pub const READ_BYTES: usize = 256 * 1024;
 const LINE_BYTES: usize = 16 * 1024;
 const STATE_BYTES: usize = 8192;
-fn utc() -> String {
+pub(crate) fn utc() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 fn digest(bytes: impl AsRef<[u8]>) -> String {
@@ -356,12 +356,19 @@ fn anchor(file: &mut File, offset: u64) -> io::Result<String> {
 }
 /// Called before the Steam request, after discovery. Pre-session text is never exported.
 pub fn prepare(log: &DesktopLog, executable: &Path) -> Result<Option<Value>, String> {
+    if settings(log)?["enabled"] == true {
+        preserve_previous_console(log, executable)
+            .map_err(|error| format!("raw_console_preservation_failed: {error}"))?;
+    }
+    boundary(log, executable)
+}
+/// A newly authorized borrowed source starts at the current file boundary.
+/// It never creates a managed lifecycle journal or reads pre-attachment chat.
+pub fn boundary(log: &DesktopLog, executable: &Path) -> Result<Option<Value>, String> {
     let config = settings(log)?;
     if config["enabled"] != true {
         return Ok(None);
     }
-    preserve_previous_console(log, executable)
-        .map_err(|error| format!("raw_console_preservation_failed: {error}"))?;
     let after = utc();
     let (id, offset, encoding, anchor) = match checked(&path(executable)?) {
         Ok((mut file, id)) => {
@@ -484,7 +491,7 @@ impl Capture {
         let initial = if journal["consoleDiagnostics"]["generation"] == config["generation"] {
             journal["consoleDiagnostics"].clone()
         } else {
-            prepare(log, &executable)?.ok_or("CS2 技术日志读取已关闭。")?
+            boundary(log, &executable)?.ok_or("CS2 技术日志读取已关闭。")?
         };
         let mut cursor = json!({"version":1,"binding":binding,"generation":generation,"identity":initial["identity"],"offset":initial["offset"],"encoding":initial["encoding"],"anchor":initial["anchor"],"sourceAfterUtc":initial["sourceAfterUtc"],"discarding":false,"observations":[],"technical":0,"unknown":0,"chat":0,"invalid":0,"gaps":0});
         if let Some(saved) = read_state(&state_directory(log).join(CURSOR))? {
@@ -1036,7 +1043,8 @@ pub fn status(log: &DesktopLog) -> Result<Value, String> {
     Ok(config)
 }
 #[cfg(windows)]
-pub fn run_worker(log: DesktopLog, running: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+pub fn run_worker(log: DesktopLog, running: std::sync::Arc<std::sync::atomic::AtomicBool>, app: tauri::AppHandle) {
+    use tauri::Manager;
     use std::{
         sync::atomic::Ordering,
         thread,
@@ -1052,14 +1060,12 @@ pub fn run_worker(log: DesktopLog, running: std::sync::Arc<std::sync::atomic::At
                 capture = None;
                 return Ok(json!({"phase":"disabled"}));
             }
-            let Some(journal) =
-                crate::cs2_session::SessionStore::new(log.state_root.clone()).load()?
-            else {
-                capture = None;
-                return Ok(json!({"phase":"waiting_for_managed_launch"}));
+            let source = {
+                let state = app.state::<std::sync::Mutex<crate::managed_cs2::ManagedCs2>>();
+                let Ok(cs2) = state.try_lock() else { return Ok(json!({"phase":"source_busy"})); };
+                cs2.console_source()?
             };
-            let Some(process) = crate::managed_cs2::verified_session_process(&journal, &log)?
-            else {
+            let Some((journal, process)) = source else {
                 let had_capture = capture.take().is_some();
                 return Ok(
                     json!({"phase":"owned_process_unavailable","tail":"not read without current process proof","capturePreviouslyActive":had_capture}),
@@ -1082,7 +1088,11 @@ pub fn run_worker(log: DesktopLog, running: std::sync::Arc<std::sync::atomic::At
                 .as_mut()
                 .ok_or("CS2 技术日志读取状态缺失。")?
                 .poll(&log, &|| {
-                    process.is_running() && running.load(Ordering::Acquire)
+                    process.is_running() && running.load(Ordering::Acquire) && {
+                        let state = app.state::<std::sync::Mutex<crate::managed_cs2::ManagedCs2>>();
+                        state.try_lock().ok().and_then(|cs2| cs2.console_source().ok().flatten().map(|(_, process)| process))
+                            .is_some_and(|current| current.pid == process.pid && current.created == process.created && current.is_running())
+                    }
                 })
         })();
         let (mut snapshot, signature, failed) = match result {
