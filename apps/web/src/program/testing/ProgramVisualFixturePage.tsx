@@ -14,11 +14,17 @@ import { getDefaultHudCompositeFixture } from '../fixtures/default-hud-composite
 export function ProgramVisualFixturePage({ fixtureId }: { readonly fixtureId: string }) {
   const compositeFixture = getDefaultHudCompositeFixture(fixtureId);
   const isIntegrated = fixtureId === 'program-radar-integrated';
-  const chatStyle = fixtureId.startsWith('all-chat-') ? fixtureId.slice('all-chat-'.length) : null;
+  const chatStyle = fixtureId.startsWith('all-chat-')
+    ? fixtureId.slice('all-chat-'.length).replace(/-freezetime$/, '')
+    : null;
   const sourceSnapshot =
     compositeFixture?.snapshot ??
     (isIntegrated || chatStyle
-      ? getProgramFixture('live-canonical')
+      ? getProgramFixture(
+          chatStyle && fixtureId.endsWith('-freezetime')
+            ? 'player-rails-freezetime'
+            : 'live-canonical',
+        )
       : getProgramFixture(fixtureId));
   const snapshot =
     sourceSnapshot && chatStyle
