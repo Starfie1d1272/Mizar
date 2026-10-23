@@ -152,8 +152,9 @@ function ReviewSession({ operator, program, cursor, connection, onOpen }: Props)
     const timer = setTimeout(
       () => {
         setAutomaticIncident(incident);
-        if (!incident) setDismissed('');
-        else if (dismissed !== incident) setOpened(true);
+        // The two snapshot channels can briefly be unaligned between deliveries.
+        // That absence of evidence is not a new incident or a dismissal reset.
+        if (incident && dismissed !== incident) setOpened(true);
       },
       incident.startsWith('website:') ? 1500 : 0,
     );
