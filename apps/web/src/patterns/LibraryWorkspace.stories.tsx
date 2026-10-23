@@ -3,6 +3,7 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 import { expect, userEvent, within } from 'storybook/test';
 import { Button, Select, StatusBanner } from '../ui/index.js';
 import { LibraryWorkspace } from './LibraryWorkspace';
+import scheduleFixture from './library-schedule.fixture.json';
 
 const meta = { title: '组合组件/比赛浏览', component: Example } satisfies Meta<typeof Example>;
 export default meta;
@@ -16,11 +17,20 @@ const items = [
     status: '候选，尚未载入',
   },
 ];
-function Example({ empty = false, failed = false }: { empty?: boolean; failed?: boolean }) {
-  const [selected, setSelected] = useState('first');
+function Example({
+  empty = false,
+  failed = false,
+  crowded = false,
+}: {
+  empty?: boolean;
+  failed?: boolean;
+  crowded?: boolean;
+}) {
+  const entries = crowded ? scheduleFixture.items : items;
+  const [selected, setSelected] = useState(entries[0]!.id);
   return (
     <LibraryWorkspace
-      items={empty ? [] : items}
+      items={empty ? [] : entries}
       selectedId={selected}
       onSelect={setSelected}
       browserHeader={
@@ -44,7 +54,7 @@ function Example({ empty = false, failed = false }: { empty?: boolean; failed?: 
       {failed ? (
         <StatusBanner tone="warning">资料刷新失败，请重试；已载入资料保持不变。</StatusBanner>
       ) : null}
-      <h2>{empty ? '选择比赛查看详情' : items.find((item) => item.id === selected)?.title}</h2>
+      <h2>{empty ? '选择比赛查看详情' : entries.find((item) => item.id === selected)?.title}</h2>
       <p>名单、地图与禁选资料在这里查看。</p>
     </LibraryWorkspace>
   );
@@ -64,3 +74,34 @@ export const LibraryBrowse: Story = {
 };
 export const LibraryEmpty: Story = { render: () => <Example empty /> };
 export const LibraryRefreshFailed: Story = { render: () => <Example failed /> };
+
+export const LibraryLongSchedule: Story = {
+  render: () => (
+    <div style={{ minWidth: 1280 }}>
+      <Example crowded />
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const list = canvas.getByLabelText('赛事赛程');
+    const matches = within(list).getAllByRole('button');
+    await expect(matches).toHaveLength(23);
+    // Every line belongs inside its own hit target, even when the schedule scrolls.
+    for (const match of matches) {
+      const bounds = match.getBoundingClientRect();
+      for (const line of Array.from(match.children)) {
+        const textBounds = line.getBoundingClientRect();
+        await expect(textBounds.top).toBeGreaterThanOrEqual(bounds.top);
+        await expect(textBounds.bottom).toBeLessThanOrEqual(bounds.bottom);
+      }
+    }
+    await expect(list.scrollHeight).toBeGreaterThan(list.clientHeight);
+    const last = matches.at(-1)!;
+    last.focus();
+    await userEvent.keyboard('{Enter}');
+    await expect(last).toHaveAttribute('aria-pressed', 'true');
+    await expect(
+      canvas.getByRole('heading', { name: scheduleFixture.items.at(-1)!.title }),
+    ).toBeVisible();
+  },
+};

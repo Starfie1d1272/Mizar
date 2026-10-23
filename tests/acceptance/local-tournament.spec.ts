@@ -1,10 +1,11 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { MatchDocumentV1 } from '../../packages/protocol/src/context.js';
 import { buildApp } from '../../apps/companion/src/app.js';
 import { expect, test } from './companion-isolation.js';
+import websiteSchedule from '../../apps/web/src/patterns/library-schedule.fixture.json';
 
 test('Preparation flow creates and edits a local match before BP', async ({ page, context }) => {
   const directory = await mkdtemp(join(tmpdir(), 'mizar-local-ui-'));
@@ -246,6 +247,106 @@ test('local and website libraries share match details while browsing and loading
     await browser.getByRole('button', { name: '在此赛事追加下一场', exact: true }).click();
     await expect(detail.getByRole('heading', { name: '创建本地比赛', exact: true })).toBeVisible();
     await capture('06-local-create');
+  } finally {
+    await app.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('website schedule keeps all 23 multi-line match choices readable and selectable', async ({
+  page,
+  context,
+}, testInfo) => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-library-layout-'));
+  const app = buildApp({
+    matchManifestPath: join(directory, 'match.json'),
+    localTournamentPath: join(directory, 'tournament.json'),
+  });
+  try {
+    await app.ready();
+    const evidenceDirectory = join(process.cwd(), '.agent-tmp/test-evidence/library-layout');
+    await mkdir(evidenceDirectory, { recursive: true });
+    await context.route(
+      (url) => url.pathname.startsWith('/local/v1/') || url.pathname.startsWith('/operator/'),
+      async (route) => {
+        const request = route.request();
+        const path = new URL(request.url()).pathname;
+        if (path === '/local/v1/rivalhub-connection')
+          return route.fulfill({
+            json: {
+              paired: true,
+              displayName: '布局验证',
+              activeMatchId: null,
+              activeSourceMatchId: null,
+            },
+          });
+        if (path === '/local/v1/rivalhub-schedule')
+          return route.fulfill({
+            json: {
+              competition: { name: '2026 NJU Major 炸鸡杯' },
+              matches: websiteSchedule.items.map((item) => ({
+                matchId: item.id,
+                scheduledAt: item.scheduledAt,
+                format: item.format,
+                stageLabel: item.stageLabel,
+                entrantA: { name: item.title.split(' vs ')[0] },
+                entrantB: { name: item.title.split(' vs ')[1] },
+              })),
+              library: { entries: {}, syncedAt: null, refreshing: true, error: null },
+            },
+          });
+        const response = await app.inject({
+          method: request.method() as 'GET' | 'POST',
+          url: path,
+          headers: request.headers(),
+          ...(request.postData() ? { payload: request.postData()! } : {}),
+        });
+        return route.fulfill({
+          status: response.statusCode,
+          body: response.body,
+          contentType: String(response.headers['content-type'] ?? 'application/json'),
+        });
+      },
+    );
+    for (const viewport of [
+      { width: 1280, height: 720 },
+      { width: 1920, height: 1080 },
+      { width: 2560, height: 1440 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await page.goto('/resources');
+      await page.getByRole('button', { name: 'RivalHub 赛事', exact: true }).click();
+      const list = page.getByLabel('赛事赛程');
+      const buttons = list.getByRole('button');
+      await expect(buttons).toHaveCount(23);
+      await page.evaluate(() => document.fonts.ready);
+      const overflow = await buttons.evaluateAll((rows) =>
+        rows.flatMap((row) => {
+          const box = row.getBoundingClientRect();
+          return Array.from(row.children)
+            .filter((line) => {
+              const text = line.getBoundingClientRect();
+              return text.top < box.top - 1 || text.bottom > box.bottom + 1;
+            })
+            .map((line) => line.textContent);
+        }),
+      );
+      expect(overflow).toEqual([]);
+      await page.screenshot({
+        path: join(evidenceDirectory, `website-schedule-${viewport.width}.png`),
+        fullPage: false,
+      });
+      const last = buttons.last();
+      await last.focus();
+      await page.keyboard.press('Enter');
+      await expect(last).toHaveAttribute('aria-pressed', 'true');
+      await expect(
+        page
+          .getByRole('region', { name: '比赛详情', exact: true })
+          .getByRole('heading', { name: websiteSchedule.items.at(-1)!.title, exact: true }),
+      ).toBeVisible();
+      await expect(page.getByRole('button', { name: '刷新比赛', exact: true })).toBeVisible();
+    }
   } finally {
     await app.close();
     await rm(directory, { recursive: true, force: true });

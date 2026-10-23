@@ -2,7 +2,11 @@
 
 本文件维护各版本的用户变更与升级说明。正式发布记录及原始资产见 [GitHub Releases](https://github.com/Starfie1d1272/Mizar/releases)。
 
-## [Unreleased]
+## [1.6.1]
+
+### 修复
+
+- 修复比赛库在场次较多时列表行高被压缩、队名和状态重叠的问题。本地与 RivalHub 比赛列表均保留完整条目高度并正常滚动。
 
 ### 分发
 
