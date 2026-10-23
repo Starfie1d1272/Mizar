@@ -694,6 +694,9 @@ async fn attach_external_cs2(
         if let Some(id) = trial_id {
             demo_test::request(&log, "playing", &id, None)?;
             drop(cs2);
+              // Presentation requires an idle host operation. The verified
+              // attachment and lease are committed before opening its windows.
+              drop(_activity);
             present_production_inner(&app, true)?;
         }
         Ok(false) // No game was launched or acquired as an owned process.
