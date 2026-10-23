@@ -1,0 +1,7 @@
+{
+  "identifier": "console-settings",
+  "description": "Only the preparation window may change managed CS2 console capture consent.",
+  "windows": ["main"],
+  "remote": { "urls": ["http://127.0.0.1:3000/*"] },
+  "permissions": ["allow-set-cs2-console-capture"]
+}
