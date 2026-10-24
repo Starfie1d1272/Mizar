@@ -24,6 +24,8 @@ export interface ObserverProcessOptions<R extends GameEventSourceRole> {
   readonly endpoint: string;
   readonly password: string;
   readonly seconds?: number;
+  readonly launcher?: string;
+  readonly job?: string;
 }
 
 /** Keep stable terminal evidence, never arbitrary child text or configuration. */
@@ -128,6 +130,9 @@ function startObserverAttempt<R extends GameEventSourceRole>(
     !Number.isInteger(options.hostVersion) ||
     options.hostVersion < 1 ||
     options.hostVersion > 0xffffffff ||
+    (options.launcher !== undefined &&
+      (!isAbsolute(options.launcher) ||
+        !/^Local\\MizarObserver-[a-zA-Z0-9-]+$/.test(options.job ?? ''))) ||
     (seconds !== undefined && (!Number.isSafeInteger(seconds) || seconds < 1)) ||
     ![
       options.python,
@@ -188,13 +193,17 @@ function startObserverAttempt<R extends GameEventSourceRole>(
     '--output',
     options.outputDirectory,
   ];
-  const child = spawn(options.python, args, {
-    cwd: dirname(options.driver),
-    env,
-    shell: false,
-    windowsHide: true,
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
+  const child = spawn(
+    options.launcher ?? options.python,
+    options.launcher ? ['--observer-process', options.job!, options.python, ...args] : args,
+    {
+      cwd: dirname(options.driver),
+      env,
+      shell: false,
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    },
+  );
   let ready = false;
   let startupTimedOut = false;
   const startupTimer = setTimeout(() => {

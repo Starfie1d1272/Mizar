@@ -1,3 +1,7 @@
+import {
+  registerWorkspaceObserver,
+  type WorkspaceObserver,
+} from './telemetry/observer-workspace.js';
 import { verifyIsolatedPack } from './orchestration/isolated-pack.js';
 import { CameraDirector } from './orchestration/director.js';
 import { MulnxTool } from './orchestration/tool.js';
@@ -165,6 +169,7 @@ export interface CompanionAppOptions {
   readonly debugClock?: DebugRuntimeClock;
   readonly deliveryConsumers?: readonly DeliveryHealthSource[];
   readonly cstvSources?: CstvSourceManagers;
+  readonly workspaceObserver?: WorkspaceObserver;
   readonly diagnosticsEndpoint?: string;
   readonly diagnosticsFetch?: typeof fetch;
   readonly onAcceptedRaw?: AcceptedRawSink;
@@ -336,7 +341,12 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         'Demo test quarantine failed',
       ),
     );
-  const cstvSources = options.cstvSources ?? createCstvSourceManagers({});
+  const baseSources = options.cstvSources ?? createCstvSourceManagers({});
+  const cstvSources = {
+    ...baseSources,
+    ...(options.workspaceObserver ? { lookahead: options.workspaceObserver.source } : {}),
+  };
+
   const objectiveReferenceSource = options.objectiveReferenceSource;
   const objectiveReferenceUnsubscribe =
     objectiveReferenceSource === undefined ||
@@ -1227,6 +1237,16 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     hold: () => director.hold(),
   });
   registerDemoTestRoutes(app, demoTest, options.productRuntime?.controlToken);
+  if (options.workspaceObserver && options.productRuntime)
+    registerWorkspaceObserver(
+      app,
+      options.workspaceObserver,
+      options.productRuntime.controlToken,
+      () =>
+        production.get().mode !== 'preparation' &&
+        !production.isTrialPending() &&
+        !demoTest.get().active,
+    );
   app.addHook('onRequest', async (request, reply) => {
     if (['GET', 'HEAD'].includes(request.method)) return;
     const path = request.url.split('?')[0];
@@ -1239,6 +1259,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       [
         '/operator/runtime/demo-test',
         '/operator/runtime/camera-session',
+        '/operator/runtime/observer',
         '/operator/runtime/stop',
         '/operator/production',
         '/operator/program-scene',

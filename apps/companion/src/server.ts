@@ -4,6 +4,7 @@ import { SteamAvatars } from './media/steam-avatars.js';
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import type { ResourceTrustPolicy } from '@mizar/resource-pack-contract/runtime';
+import { installedWorkspaceObserver } from './telemetry/observer-workspace.js';
 import { defaultResourceRoot } from './resource-store/store.js';
 import { version as osVersion } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -282,7 +283,20 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
     });
     await updates.load();
   }
+  const workspaceObserver =
+    process.env.MIZAR_BUNDLE_ROOT &&
+    process.env.MIZAR_OBSERVER_HOST &&
+    process.env.MIZAR_OBSERVER_JOB
+      ? installedWorkspaceObserver(
+          process.env.MIZAR_BUNDLE_ROOT,
+          resolve(captureDir, '../..'),
+          process.env.MIZAR_OBSERVER_HOST,
+          process.env.MIZAR_OBSERVER_JOB,
+          cstvSourceConfig?.lookahead,
+        )
+      : undefined;
   const app = buildApp({
+    ...(workspaceObserver ? { workspaceObserver } : {}),
     ...(supportJournal ? { supportJournal } : {}),
     resources: {
       root: defaultResourceRoot(),

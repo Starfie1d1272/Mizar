@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod observer_job;
+mod observer_workspace;
 mod cs2_activity;
 mod cs2_diagnostics;
 mod cs2_console;
@@ -117,7 +119,9 @@ fn supervisor(root: &Path, argument: &str, startup: Option<&DesktopLog>) -> Resu
         command
             .env("MIZAR_STARTUP_SESSION_ID", &log.session_id)
             .env("MIZAR_STATE_ROOT", &log.state_root)
-            .env("MIZAR_DESKTOP_SUPERVISED", "1");
+            .env("MIZAR_DESKTOP_SUPERVISED", "1")
+            .env("MIZAR_OBSERVER_JOB", observer_job::name(&log.session_id))
+            .env("MIZAR_OBSERVER_HOST", std::env::current_exe().map_err(|e| e.to_string())?);
     }
     command
         .spawn()
@@ -850,6 +854,7 @@ async fn finish_workspace(
         let feedback = host.state::<production_exit::WorkspaceExit>();
         let log = host.state::<DesktopLog>();
         let managed = host.state::<Mutex<managed_cs2::ManagedCs2>>();
+        log.step("workspace_exit_observer", || observer_workspace::stop(&log))?;
         let mut cs2 = log.step("workspace_exit_lock", || managed.lock().map_err(|error| command_log.preserve_error("finish_workspace", native_operation_id.as_deref(), &error, "CS2 配置状态不可用。")))?;
         let activity = host.state::<cs2_activity::Activity>();
         // Open the visible recovery owner before any potentially slow cleanup.
@@ -2219,6 +2224,7 @@ fn run_desktop(
             mulnx_handoff_status,
             launch_mulnx,
             open_mulnx_browser,
+            observer_workspace::observer_command,
             start_managed_cs2,
             attach_external_cs2,
             finish_managed_cs2,
@@ -2360,6 +2366,7 @@ fn run_desktop(
                             host.state::<Mutex<managed_cs2::ManagedCs2>>().try_lock()
                         {
                             cs2.poll();
+                            observer_workspace::pulse(&host, &cs2);
                             if let Some(lease) = cs2.external_camera_lease().map(str::to_owned) {
                                 let log = host.state::<DesktopLog>();
                                 let invalid = cs2.external_isolation_pending();
@@ -2707,6 +2714,7 @@ fn start_gui(root: &Path, log: &DesktopLog) -> Result<(), String> {
     let update_stage = Arc::new(Mutex::new(None));
     let scope = log.step("shutdown_scope", || shutdown_scope(root))?;
     let exit_signal = log.step("shutdown_signal", || ExitSignal::new(&scope))?;
+    let _observer_job = log.step("observer_job", || observer_job::create(&log.session_id))?;
     let job = Arc::new(log.step("runtime_job", RuntimeJob::new)?);
     let mut child = log.step("runtime_spawn", || {
         supervisor(root, "--no-browser", Some(log))
@@ -2785,6 +2793,11 @@ fn start_gui(root: &Path, log: &DesktopLog) -> Result<(), String> {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|arg| arg == "--observer-process") {
+        std::process::exit(observer_job::run(&args[1..]).unwrap_or_else(|error| {
+            eprintln!("observer_owner: {error}"); 1
+        }));
+    }
     if args == ["--app-version"] {
         println!("{}", env!("CARGO_PKG_VERSION"));
         return;
