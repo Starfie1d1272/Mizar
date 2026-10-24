@@ -1,4 +1,7 @@
 import { fileURLToPath } from 'node:url';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { createDisabledRecorder } from '../src/telemetry/capture-recorder.js';
 import { buildApp } from '../src/app.js';
@@ -118,11 +121,34 @@ describe('explicit observer process composition', () => {
       await processOwner.stop();
     }
   });
+  it('accepts numeric host updates without imposing a session duration', async () => {
+    const temporary = mkdtempSync(join(tmpdir(), 'mizar-observer-contract-'));
+    const child = startObserverProcess({
+      ...options,
+      hostVersion: 14193,
+      endpoint: '127.0.0.10:27020',
+      outputDirectory: join(temporary, 'run'),
+    });
+    try {
+      expect(await child.closed).toMatchObject({
+        code: 0,
+        failed: false,
+        terminal: {
+          report: 'received',
+          drainCompleted: true,
+          cleanupCompleted: true,
+        },
+      });
+    } finally {
+      await child.stop();
+      rmSync(temporary, { recursive: true, force: true });
+    }
+  });
   it('rejects unbounded or unsupported connection data before launch', () => {
     expect(() => startObserverProcess({ ...options, password: 'x'.repeat(96) })).toThrow(
       'Invalid observer launch configuration',
     );
     expect(() => startObserverProcess({ ...options, endpoint: 'example.com:27020' })).toThrow();
-    expect(() => startObserverProcess({ ...options, hostVersion: 14193 })).toThrow();
+    expect(() => startObserverProcess({ ...options, hostVersion: 0 })).toThrow();
   });
 });

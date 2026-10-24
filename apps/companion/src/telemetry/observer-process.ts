@@ -35,7 +35,13 @@ function terminalEvidence(bytes: Buffer, overflow: boolean) {
       return { report: 'unavailable' as const };
     const row = value as Record<string, unknown>;
     if (
-      row.online_success !== 'INCONCLUSIVE' ||
+      !(
+        row.online_success === 'INCONCLUSIVE' ||
+        (row.schema === 'cs2-observer-report/1' &&
+          typeof row.reachedFull === 'boolean' &&
+          typeof row.drainCompleted === 'boolean' &&
+          typeof row.cleanupCompleted === 'boolean')
+      ) ||
       !['failed', 'incomplete', 'closed'].includes(String(row.outcome))
     )
       return { report: 'unavailable' as const };
@@ -52,6 +58,10 @@ function terminalEvidence(bytes: Buffer, overflow: boolean) {
       'phase-timeout',
       'native-session-closed',
       'source-hltv-stop',
+      'source-drain-timeout',
+      'source-drain-native-failed',
+      'output-backpressure',
+      'output-closed',
     ];
     const integer = (v: unknown) =>
       typeof v === 'number' && Number.isSafeInteger(v) ? v : undefined;
@@ -65,6 +75,9 @@ function terminalEvidence(bytes: Buffer, overflow: boolean) {
       nativeBootCode: integer(row.native_boot_code),
       steamInitResult: integer(row.steam_init_result),
       remoteEndReason: integer(row.remote_end_reason),
+      drainCompleted: typeof row.drainCompleted === 'boolean' ? row.drainCompleted : undefined,
+      cleanupCompleted:
+        typeof row.cleanupCompleted === 'boolean' ? row.cleanupCompleted : undefined,
       finalizationFailures: Array.isArray(row.finalization_failures)
         ? row.finalization_failures.filter(
             (v): v is string =>
@@ -74,6 +87,8 @@ function terminalEvidence(bytes: Buffer, overflow: boolean) {
                 'close-parser',
                 'close-events',
                 'close-samples',
+                'close-output',
+                'close-input',
                 'write-report',
               ].includes(v),
           )
@@ -99,7 +114,7 @@ function startObserverAttempt<R extends GameEventSourceRole>(
   const colon = options.endpoint.lastIndexOf(':');
   const host = options.endpoint.slice(0, colon).replace(/^\[|\]$/g, '');
   const port = options.endpoint.slice(colon + 1);
-  const seconds = options.seconds ?? 14_400;
+  const seconds = options.seconds;
   if (
     colon < 1 ||
     isIP(host) === 0 ||
@@ -110,10 +125,10 @@ function startObserverAttempt<R extends GameEventSourceRole>(
     !Array.from(options.password).every(
       (char) => char.charCodeAt(0) > 0 && char.charCodeAt(0) <= 127,
     ) ||
-    ![14191, 14192].includes(options.hostVersion) ||
-    !Number.isInteger(seconds) ||
-    seconds < 1 ||
-    seconds > 14_400 ||
+    !Number.isInteger(options.hostVersion) ||
+    options.hostVersion < 1 ||
+    options.hostVersion > 0xffffffff ||
+    (seconds !== undefined && (!Number.isSafeInteger(seconds) || seconds < 1)) ||
     ![
       options.python,
       options.driver,
@@ -169,8 +184,7 @@ function startObserverAttempt<R extends GameEventSourceRole>(
     sourceId,
     '--host-version',
     String(options.hostVersion),
-    '--seconds',
-    String(seconds),
+    ...(seconds === undefined ? [] : ['--seconds', String(seconds)]),
     '--output',
     options.outputDirectory,
   ];
@@ -250,7 +264,10 @@ function startObserverAttempt<R extends GameEventSourceRole>(
       startupTimedOut,
       cancelled: stoppingRequested,
       failed:
-        (terminal.report === 'received' && terminal.outcome === 'failed') ||
+        (terminal.report === 'received' &&
+          (terminal.outcome === 'failed' ||
+            terminal.cleanupCompleted === false ||
+            (terminal.outcome === 'closed' && terminal.drainCompleted === false))) ||
         (!stoppingRequested &&
           (!ready ||
             inputFailed ||
@@ -266,12 +283,12 @@ function startObserverAttempt<R extends GameEventSourceRole>(
     };
   });
   let stopping: Promise<{ exited: boolean }> | undefined;
-  const waitForExit = async (): Promise<void> => {
+  const waitForExit = async (timeout = 1500): Promise<void> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([
       exit,
       new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, 3000);
+        timer = setTimeout(resolve, timeout);
       }),
     ]);
     if (timer !== undefined) clearTimeout(timer);
@@ -286,7 +303,8 @@ function startObserverAttempt<R extends GameEventSourceRole>(
         if (keepManager) manager.disconnectObserver();
         else await manager.stop();
         if (!exited) child.stdin.end();
-        await waitForExit();
+        // Allow the component's bounded parser/output finalizers to finish first.
+        await waitForExit(12_000);
         if (!exited) {
           child.kill('SIGTERM');
           await waitForExit();

@@ -64,7 +64,10 @@ for await (const text of inputLines) {
     process.stderr.write('Synthetic SDK diagnostic before the final report\n');
     process.stderr.write(
       JSON.stringify({
-        online_success: 'INCONCLUSIVE',
+        schema: 'cs2-observer-report/1',
+        reachedFull: true,
+        drainCompleted: outcome === 'closed',
+        cleanupCompleted: true,
         outcome,
         reason,
         remote_end_reason: remote,
