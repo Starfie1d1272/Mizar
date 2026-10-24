@@ -57,7 +57,7 @@ describe('explicit observer process composition', () => {
       });
       expect(JSON.stringify(result)).not.toContain(options.endpoint);
       expect(JSON.stringify(result)).not.toContain(options.password);
-      expect(processOwner.manager.getHealth().state).toBe('reconnecting');
+      expect(processOwner.manager.getHealth().state).toBe('stopped');
     } finally {
       await processOwner.stop();
     }
@@ -106,10 +106,12 @@ describe('explicit observer process composition', () => {
     const processOwner = startObserverProcess(options);
     try {
       vi.advanceTimersByTime(30_000);
+      await processOwner.stop();
       expect(await processOwner.closed).toMatchObject({
-        failed: true,
+        cancelled: true,
         ready: false,
         startupTimedOut: true,
+        attemptCount: 1,
       });
     } finally {
       vi.useRealTimers();
@@ -121,6 +123,6 @@ describe('explicit observer process composition', () => {
       'Invalid observer launch configuration',
     );
     expect(() => startObserverProcess({ ...options, endpoint: 'example.com:27020' })).toThrow();
-    expect(() => startObserverProcess({ ...options, hostVersion: 14192 })).toThrow();
+    expect(() => startObserverProcess({ ...options, hostVersion: 14193 })).toThrow();
   });
 });
