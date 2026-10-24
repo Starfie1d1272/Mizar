@@ -3,7 +3,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { it, expect, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
-  view: { version: '1.0.0', active: false, health: { state: 'disabled' } },
+  view: { version: '1.0.0', active: false, failed: false, health: { state: 'disabled' } },
   native: vi.fn(),
 }));
 vi.mock('../src/preparation/client', () => ({ useLocalRead: () => mocks.view }));
@@ -54,6 +54,10 @@ it('connects and stops from the workbench, retaining an actionable local error',
     mocks.native.mockRejectedValue(new Error('请检查 Steam 后重试。'));
     await click('停止观察器');
     expect(container.querySelector('[role="alert"]')!.textContent).toBe('请检查 Steam 后重试。');
+    mocks.view = { ...mocks.view, active: false, failed: true, health: { state: 'stopped' } };
+    act(() => root.render(<ObserverControls />));
+    expect(container.textContent).toContain('需要处理');
+    expect(container.textContent).toContain('连接早源');
   } finally {
     act(() => root.unmount());
     container.remove();

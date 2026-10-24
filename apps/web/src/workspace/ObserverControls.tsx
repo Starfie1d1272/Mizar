@@ -8,6 +8,7 @@ export function ObserverControls() {
     version: string;
     active: boolean;
     health: { state: string };
+    failed?: boolean;
     terminal?: { outcome?: string; reason?: string };
   }>('/local/v1/observer', 1000);
   const [open, setOpen] = useState(false);
@@ -42,7 +43,7 @@ export function ObserverControls() {
     failed: '需要处理',
   };
   const connectionError =
-    !view.active && view.terminal?.outcome === 'failed'
+    !view.active && (view.failed || view.terminal?.outcome === 'failed')
       ? '连接需要处理。请核对 Steam 登录、授权地址和当前 CS2 版本后重新连接；详细阶段见运行诊断。'
       : '';
   return (

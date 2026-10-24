@@ -36,6 +36,38 @@ async function fixture(run: (observer: WorkspaceObserver, app: FastifyInstance) 
   }
 }
 describe('workbench observer ownership', () => {
+  it('reports output failure after joining the child and permits a fresh connection', () =>
+    fixture(async (observer) => {
+      await observer.start(driver, '127.0.0.3:27020', 'synthetic-only');
+      await expect.poll(() => observer.view().active).toBe(false);
+      expect(observer.view().failed).toBe(true);
+      await observer.start(driver, '127.0.0.1:27020', 'synthetic-only');
+      await expect.poll(() => observer.source.getHealth().state).toBe('live');
+      expect(observer.view().failed).toBe(false);
+    }));
+  it('keeps connection preparation within production eligibility', () =>
+    fixture(async (observer) => {
+      const app = Fastify();
+      registerWorkspaceObserver(app, observer, 'synthetic-capability', () => false);
+      try {
+        const response = await app.inject({
+          method: 'POST',
+          url: '/operator/runtime/observer',
+          headers: { 'x-runtime-token': 'synthetic-capability' },
+          payload: {
+            action: 'start',
+            executable: driver,
+            job: 'Local\\MizarObserver-test',
+            endpoint: '127.0.0.1:27020',
+            password: 'synthetic-only',
+          },
+        });
+        expect(response.statusCode).toBe(409);
+        expect(observer.view().active).toBe(false);
+      } finally {
+        await app.close();
+      }
+    }));
   it('starts, delivers privately, stops and starts a fresh source through native commands', () =>
     fixture(async (observer, app) => {
       const events: unknown[] = [];

@@ -25,6 +25,8 @@ export class WorkspaceObserver {
   private watchdog: ReturnType<typeof setInterval>;
   private closing = false;
   private terminal: Awaited<Owner['closed']>['terminal'] | undefined;
+  private failed = false;
+  private launched = false;
   private generationBase = 0;
   private event(event: ReturnType<CstvSourceManager<'lookahead'>['getRecentGameEvents']>[number]) {
     return {
@@ -81,6 +83,7 @@ export class WorkspaceObserver {
       version: OBSERVER_VERSION,
       active: this.owner !== undefined,
       health: this.health(),
+      failed: this.failed,
       ...(this.terminal ? { terminal: this.terminal } : {}),
     };
   }
@@ -102,6 +105,8 @@ export class WorkspaceObserver {
         password,
       });
       this.terminal = undefined;
+      this.failed = false;
+      this.launched = true;
       const owner = this.owner;
       void owner.closed
         .then(() =>
@@ -130,13 +135,14 @@ export class WorkspaceObserver {
   private async stopCurrent() {
     const owner = this.owner;
     if (!owner) {
-      await this.current.stop();
+      if (!this.launched) await this.current.stop();
       return;
     }
     const stopped = await owner.stop();
     if (!stopped.exited) throw new Error('observer_process_stop_timeout');
     const result = await owner.closed;
     this.terminal = result.terminal;
+    this.failed = result.failed;
     this.owner = undefined;
     this.unsubscribe.forEach((f) => f());
     this.unsubscribe = [];
@@ -230,7 +236,9 @@ export function registerWorkspaceObserver(
   token: string,
   canStart: () => boolean = () => true,
 ) {
-  app.get('/local/v1/observer', () => observer.view());
+  app.get('/local/v1/observer', (_request, reply) =>
+    reply.header('cache-control', 'no-store').send(observer.view()),
+  );
   const command = z.discriminatedUnion('action', [
     z.strictObject({
       action: z.literal('start'),
