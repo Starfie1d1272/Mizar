@@ -19,6 +19,15 @@ interface InstalledTool {
   directory: string;
   packs: { name: string; sourceName: string }[];
 }
+const releaseSchema = z.object({
+  id: z.number().int().positive(),
+  assetId: z.number().int().positive(),
+  tag: z.string().regex(/^[\w.+-]{1,100}$/),
+  publishedAt: z.string(),
+  url: z.string(),
+  size: z.number().int().positive(),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+});
 /** Preserve the official launch options; refuse unfamiliar YAML instead of
  * silently enabling capture without an effective engine flag. */
 export function consoleLaunchOptions(source: string): string {
@@ -66,15 +75,7 @@ export class MulnxTool {
       const data = z
         .object({
           directory: z.string().regex(/^release-[a-f0-9]{64}-[a-f0-9-]{36}$/),
-          release: z.object({
-            id: z.number().int().positive(),
-            assetId: z.number().int().positive(),
-            tag: z.string().regex(/^[\w.+-]{1,100}$/),
-            publishedAt: z.string(),
-            url: z.string(),
-            size: z.number().int().positive(),
-            sha256: z.string().regex(/^[a-f0-9]{64}$/),
-          }),
+          release: releaseSchema,
           packs: z
             .array(
               z.object({
@@ -117,17 +118,27 @@ export class MulnxTool {
       return this.view();
     });
   }
-  prepare(cs2Path: string, consoleCapture = false) {
+  prepare(cs2Path: string, consoleCapture = false, update = false) {
     return this.run('mulnx_prepare', async () => {
       // Called only by the authenticated native host after its process and install checks.
-      const release = await latestMulnxRelease();
-      this.latest = release;
+      // Entry uses prepared local bytes. The explicit update action owns network discovery.
+      const release = update
+        ? await latestMulnxRelease()
+        : (this.installed?.release ??
+          z.object({ release: releaseSchema }).parse(await readJson(this.bundle, 'release.json'))
+            .release);
       if (!this.installed || this.installed.release.sha256 !== release.sha256)
         await this.install(release, cs2Path);
       const root = join(this.directory, this.installed!.directory, 'MulNX');
       await this.configureLauncher(root, cs2Path, consoleCapture);
       const launcher = await safePath(root, 'CS2Injector/CS2Injector.exe');
-      return { launcher, version: this.installed!.release.tag };
+      const launchProtocol = await readFile(join(root, 'CS2Injector/launch-protocol.txt'), 'utf8')
+        .then((value) => (value.trim() === '1' ? 1 : null))
+        .catch((error: NodeJS.ErrnoException) => {
+          if (error.code === 'ENOENT') return null;
+          throw error;
+        });
+      return { launcher, version: this.installed!.release.tag, launchProtocol };
     });
   }
   private async configureLauncher(root: string, cs2Path: string, consoleCapture = false) {

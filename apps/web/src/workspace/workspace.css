@@ -76,6 +76,63 @@
   gap: var(--mizar-layout-compact);
   overflow: hidden;
 }
+
+.workspace-left__top:has(.workspace-observer-assist) {
+  grid-template-rows: auto minmax(0, 1fr) auto auto auto auto;
+}
+.workspace-observer-assist {
+  padding: var(--mizar-layout-padding);
+  border-bottom: var(--mizar-line-border) solid var(--mizar-border-default);
+  min-width: 0;
+}
+.workspace-observer-assist p {
+  color: var(--mizar-fg-muted);
+  font-size: var(--mizar-type-size-small);
+}
+.observer-hints {
+  display: grid;
+  gap: var(--mizar-layout-compact);
+  list-style: none;
+  max-height: calc(var(--mizar-layout-target) * 5);
+  overflow-y: auto;
+  margin: var(--mizar-layout-compact) 0 0;
+  padding: 0;
+}
+.observer-hints li {
+  display: grid;
+  gap: var(--mizar-layout-compact);
+  padding-inline-start: var(--mizar-layout-compact);
+  border-inline-start: var(--mizar-line-focus) solid var(--mizar-accent-primary);
+}
+.observer-hints li[data-occurred='true'] {
+  border-inline-start-color: var(--mizar-border-default);
+  color: var(--mizar-fg-muted);
+}
+.observer-hints__time {
+  font-variant-numeric: tabular-nums;
+  color: var(--mizar-fg-link);
+}
+.observer-hints__players {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto minmax(0, 1fr);
+  gap: var(--mizar-layout-compact);
+  align-items: baseline;
+  min-width: 0;
+}
+.observer-hints__players > strong,
+.observer-hints__players > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.observer-hints__players small {
+  white-space: nowrap;
+}
+.observer-hints__players kbd {
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  color: var(--mizar-fg-secondary);
+}
 .workspace-radar__picture {
   position: relative;
   aspect-ratio: 1;

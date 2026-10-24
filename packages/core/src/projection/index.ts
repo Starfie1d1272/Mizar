@@ -3,7 +3,7 @@ export {
   getProgramSafeRuntimeFreshness,
   selectProgramSafeRuntimeView,
 } from './program-safe-runtime.js';
-export { projectObserverAssist } from './observer-assist.js';
+export { projectObserverAssist, ObserverHintTimeline } from './observer-assist.js';
 export { projectProgram, projectSeries } from './program.js';
 export { observedPlayerDisplayName, livePlayerDisplayName } from './player-display-name.js';
 export { derivePlayerLifeState } from './player-life-state.js';

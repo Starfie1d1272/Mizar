@@ -225,3 +225,30 @@ describe('ProjectionCoordinator', () => {
     },
   );
 });
+
+it('publishes assist refreshes independently of Program and public radar snapshots', async () => {
+  const runtime = createProgramRuntime('assist-isolation');
+  const coordinator = createProjectionCoordinator({
+    programRuntime: runtime,
+    cstvSources: createCstvSourceManagers({}),
+    observerSettings: () => ({
+      enabled: true,
+      expectedDelaySeconds: 120,
+      leadSeconds: 7,
+      displaySeconds: 10,
+    }),
+  });
+  try {
+    const program = coordinator.getPublisher('program').getCurrent();
+    const radar = coordinator.getPublisher('radar').getCurrent();
+    const before = coordinator.getPublisher('assist').getCurrent()!.channelSeq;
+    coordinator.resetAssist();
+    coordinator.refreshAssist();
+    expect(coordinator.getPublisher('program').getCurrent()).toBe(program);
+    expect(coordinator.getPublisher('radar').getCurrent()).toBe(radar);
+    expect(coordinator.getPublisher('assist').getCurrent()!.channelSeq).toBeGreaterThan(before);
+    expect(JSON.stringify(program)).not.toContain('observer');
+  } finally {
+    await coordinator.close();
+  }
+});

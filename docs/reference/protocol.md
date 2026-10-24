@@ -56,6 +56,12 @@ RivalHub 资料先经过结构与语义校验，阻断错误不进入 Core。比
 
 `GET /local/v1/observer` 提供组件版本、连接活动状态与来源健康。工作台通过原生 `observer_command` 提交连接和停止意图，Host 核对当前游戏实例后调用 `POST /operator/runtime/observer`；该接口使用本次运行的私有能力，接受启动、停止和游戏会话续约。入口、运行时、Steam API 及输出路径由安装与运行数据目录推导。连接密码经 stdin 传递，状态响应只含运行摘要。观察器事件进入 Lookahead 来源，消费边界沿用正式节目与私有辅助的独立投影。
 
+`GET /local/v1/observer-assist` 返回已保存的偏好、当前连接端点摘要与修订号。受信任本机 Origin 通过 `POST /operator/observer-assist` 保存设置或当前连接。密码仅随本次服务会话保存在内存，比赛切换清除本场连接。
+
+私有 `assist` 通道使用 schema 2；开启时携带来源状态、时间参数、测得延迟与最多六条击杀提示，包含当前 Program 昵称、唯一观战槽位、倒计时与已发生状态。关闭时沿用基础辅助载荷。Program、雷达和公开输出继续使用各自契约。
+
+Host 的 `prepare` / `start-configured` 绑定游戏实例、Desktop Job 和配置修订。节目连接与 HUD 命令复用 MulNX 的 `Game/Command/NoReport` 队列，payload 使用其填充器要求的 JSON 字符串。精确网关回执证明入队，游戏数据与本机控制台查询分别负责节目连接、HUD 值的读回。
+
 ## 公开实时输出
 
 本机 Program 快照的可选 `payload.allChat` 仅包含当前受管游戏中明确标记 `[ALL]` 的公开聊天，最多三条，每条含稳定标识、发送者、文本与过期时间。它属于本机播出展示，不进入赛事结果、可靠事件、网站 LIVE 或 Lookahead。制作实例、现场会话、Program 数据源代际、地图执行或数据新鲜度变化时清空；同进程同地图重新播放或加载仍按明确的引擎播放/加载边界清空，不依赖地图编号一定改变。不读取 TEAM、私聊、未知时间区间及积压旧消息。前端只按文本节点展示，并自行按过期时间收起，不依赖下一帧到达。

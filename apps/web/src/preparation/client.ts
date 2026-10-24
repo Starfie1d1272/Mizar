@@ -1,3 +1,4 @@
+import { flushObserverPreparation } from './observer-preparation';
 import { ControlTask } from '../debug/control-task';
 import { controlEvidence } from '../debug/control-journal';
 import type { Cs2ConfigStatus } from './cs2-status';
@@ -191,8 +192,10 @@ async function performProductionAction(
     task.finish('blocked', { reason: 'preflight_requires_attention' });
     return;
   }
+  const observerEnabled = action === 'enter' && (await flushObserverPreparation());
   let newlyStarted = false;
   let borrowed = Boolean(external);
+  let selectedExternal = external;
   if (action === 'enter' && window.__TAURI_INTERNALS__) {
     if (!external) {
       const launch = await desktopInvoke<{
@@ -201,16 +204,22 @@ async function performProductionAction(
         pending: boolean;
       }>('cs2_config_status');
       if (launch.preferMulnx && !launch.running && !launch.pending) {
-        await desktopInvoke('launch_mulnx', undefined, task);
-        task.finish('confirmed', { confirmation: 'mulnx_launcher_opened' });
-        window.location.assign('/settings?tab=music&section=camera');
-        return;
+        selectedExternal = await desktopInvoke<ExternalGameIdentity>(
+          'launch_mulnx',
+          { automatic: true },
+          task,
+        );
+        if (window.location.href !== entryLocation) {
+          task.finish('cancelled', { reason: 'navigation_changed', game: selectedExternal });
+          return;
+        }
+        borrowed = true;
       }
     }
     newlyStarted = await desktopInvoke<boolean>(
-      external ? 'attach_external_cs2' : 'start_managed_cs2',
-      external
-        ? { ...external, expectedRevision: state.revision }
+      selectedExternal ? 'attach_external_cs2' : 'start_managed_cs2',
+      selectedExternal
+        ? { ...selectedExternal, expectedRevision: state.revision }
         : preserveSettings
           ? { preserveSettings: true }
           : undefined,
@@ -245,6 +254,8 @@ async function performProductionAction(
     await command('/operator/production', { action, expectedRevision: state.revision }, task);
     if (window.__TAURI_INTERNALS__) {
       await desktopInvoke('present_production', { live: action === 'enter' }, task);
+      if (observerEnabled)
+        await desktopInvoke('observer_command', { action: 'start-configured' }, task);
     } else window.location.assign(action === 'enter' ? '/workspace' : '/');
     task.finish('confirmed', { confirmation: 'production_command_ack_and_presentation', action });
   } catch (reason) {

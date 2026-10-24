@@ -6,6 +6,8 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { createCstvSourceManager, type CstvSourceManager } from './cstv-source-manager.js';
 import { startObserverProcess, type ObserverProcessOptions } from './observer-process.js';
+import type { ObserverSettingsStore } from './observer-settings.js';
+import { sendObserverGameCommand, observerConnectCommand } from './observer-game-control.js';
 
 export const OBSERVER_VERSION = '1.0.0';
 const SOURCE_SHA = '4b07fd0ddfb775d8fa1548bddfd98dc78c7fce93';
@@ -235,11 +237,26 @@ export function registerWorkspaceObserver(
   observer: WorkspaceObserver,
   token: string,
   canStart: () => boolean = () => true,
+  settings?: ObserverSettingsStore,
 ) {
+  let configured = '';
   app.get('/local/v1/observer', (_request, reply) =>
     reply.header('cache-control', 'no-store').send(observer.view()),
   );
   const command = z.discriminatedUnion('action', [
+    z.strictObject({
+      action: z.literal('prepare'),
+      game: z.string().max(80),
+      job: z.string().max(100),
+    }),
+    z.strictObject({
+      action: z.literal('start-configured'),
+      executable: z.string().max(2048),
+      job: z.string().max(100),
+      game: z.string().max(80),
+      revision: z.uuid(),
+      hudOriginal: z.union([z.literal(0), z.literal(1)]).optional(),
+    }),
     z.strictObject({
       action: z.literal('start'),
       executable: z.string().max(2048),
@@ -267,24 +284,63 @@ export function registerWorkspaceObserver(
     if (!parsed.success) return reply.code(400).send({ error: 'observer_command_invalid' });
     try {
       const body = parsed.data;
-      if (body.action === 'start' && !canStart())
+      if (['start', 'start-configured', 'prepare'].includes(body.action) && !canStart())
         return reply.code(409).send({ message: '请进入正式制播工作台后连接早源。' });
+      if (body.action === 'prepare') {
+        if (!settings?.settings.enabled) return { ok: true, enabled: false };
+        const connection = settings.configured();
+        if (!connection)
+          return reply.code(409).send({ message: '请在准备中心填写本场授权的观战连接。' });
+        return {
+          ok: true,
+          enabled: true,
+          revision: settings.revision,
+          hideGameHud: settings.settings.hideGameHud,
+          reuse:
+            observer.view().active &&
+            configured === [body.game, body.job, settings.revision].join(':'),
+          connection: {
+            earlyEndpoint: connection.earlyEndpoint,
+            programEndpoint: connection.programEndpoint,
+          },
+        };
+      }
+      if (body.action === 'start-configured') {
+        const connection = settings?.configured();
+        if (!settings?.settings.enabled) return { ok: true, enabled: false };
+        if (!connection || settings.revision !== body.revision)
+          throw new Error('observer_configuration_changed');
+        if (settings.settings.hideGameHud && body.hudOriginal === undefined)
+          throw new Error('observer_hud_snapshot_required');
+        await observer.stop();
+        await sendObserverGameCommand(
+          observerConnectCommand(connection, settings.settings.hideGameHud),
+        );
+        await observer.start(
+          body.executable,
+          connection.earlyEndpoint,
+          connection.password,
+          body.job,
+        );
+        configured = [body.game, body.job, body.revision].join(':');
+        return { ok: true, enabled: true, ...observer.view() };
+      }
       if (body.action === 'start')
         await observer.start(body.executable, body.endpoint, body.password, body.job);
       else if (body.action === 'stop') await observer.stop();
       else observer.pulse();
-      return { ok: true, ...observer.view() };
+      return { ok: true, enabled: settings?.settings.enabled ?? true, ...observer.view() };
     } catch (error) {
       request.log.error(
         {
           stage: 'observer_workspace',
-          code: error instanceof Error ? error.message : 'observer_failed',
+          err: error,
         },
         '观察辅助操作需要重试',
       );
       return reply
         .code(409)
-        .send({ message: '请检查观察器组件、CS2 安装与 Steam 状态后重试；详细阶段见运行诊断。' });
+        .send({ message: '请确认 MulNX 已在当前游戏中就绪，并核对观战连接；详细阶段见运行诊断。' });
     }
   });
 }

@@ -1,4 +1,4 @@
-import { ObserverControls } from './ObserverControls';
+import { ObserverHints } from './ObserverHints';
 import { ReviewDialog, closeReviewWindow } from './ReviewDialog';
 import { PreflightReview } from './PreflightReview';
 import { RosterCapture } from '../preparation/RosterCapture';
@@ -337,6 +337,7 @@ function WorkspaceLeftContent() {
             )}
           </div>
         </section>
+        <ObserverHints />
         <ContextPanel
           operator={payload}
           programCursor={
@@ -511,7 +512,6 @@ function WorkspaceDockContent() {
           </Button>
         </div>
         <CameraControls workspace />
-        <ObserverControls />
       </section>
       <section className="workspace-spectator" aria-label="观战控制">
         <div className="workspace-section-heading">

@@ -33,17 +33,25 @@ afterEach(() => {
 });
 
 function setup(
-  failure?: 'launch' | 'production' | 'restore' | 'presentation' | 'network' | 'trial',
+  failure?: 'launch' | 'mulnx' | 'production' | 'restore' | 'presentation' | 'network' | 'trial',
   actualMode = 'preparation',
   newlyStarted = true,
   running = true,
-  gameStates: { running?: boolean; pending?: boolean; busy?: boolean }[] = [],
+  gameStates: {
+    running?: boolean;
+    pending?: boolean;
+    busy?: boolean;
+    preferMulnx?: boolean;
+  }[] = [],
+  observerEnabled = false,
 ) {
   const calls: string[] = [];
   const invoke = vi.fn((command: string) => {
     calls.push(command);
     if (failure === 'launch' && command === 'start_managed_cs2')
       return Promise.reject(new Error('请先退出已打开的 CS2'));
+    if (failure === 'mulnx' && command === 'launch_mulnx')
+      return Promise.reject(new Error('请先关闭冲突程序：完美世界竞技平台'));
     if (failure === 'restore' && command === 'finish_managed_cs2')
       return Promise.reject(new Error('等待 CS2 退出后恢复'));
     if (failure === 'presentation' && command === 'present_production')
@@ -57,9 +65,11 @@ function setup(
               pending: true,
               phase: running ? 'running' : 'uncertain',
             })
-          : command === 'start_managed_cs2'
-            ? newlyStarted
-            : undefined,
+          : command === 'launch_mulnx'
+            ? { pid: 42, created: '134000000000000000' }
+            : command === 'start_managed_cs2'
+              ? newlyStarted
+              : undefined,
     );
   });
   window.__TAURI_INTERNALS__ = {
@@ -77,6 +87,10 @@ function setup(
       else requests.push({ path, headers: new Headers(init?.headers) });
       if (failure === 'network' && path === '/operator/production')
         return Promise.reject(new Error('网络中断'));
+      if (path === '/local/v1/observer-assist')
+        return Promise.resolve(
+          new Response(JSON.stringify({ settings: { enabled: observerEnabled } })),
+        );
       if (path === '/local/v1/demo-test')
         return Promise.resolve(
           new Response(JSON.stringify({ active: failure === 'trial', phase: 'idle' })),
@@ -96,6 +110,47 @@ function setup(
 }
 
 describe('managed CS2 production entry and cleanup', () => {
+  it('starts configured private assistance after committing production and presenting the workbench', async () => {
+    const calls = setup(undefined, 'preparation', true, true, [], true);
+    await productionAction('enter', preparation);
+    expect(calls.indexOf('observer_command')).toBeGreaterThan(calls.indexOf('present_production'));
+    expect(calls.indexOf('observer_command')).toBeGreaterThan(
+      calls.indexOf('/operator/production'),
+    );
+    expect(nativeArgs.find((v) => v.command === 'observer_command')?.args).toMatchObject({
+      action: 'start-configured',
+    });
+  });
+  it('continues the same entry through verified MulNX launch and attachment without launcher navigation', async () => {
+    const calls = setup(undefined, 'preparation', false, true, [
+      { preferMulnx: true, running: false, pending: false },
+    ]);
+    await productionAction('enter', preparation);
+    expect(nativeArgs.find((v) => v.command === 'launch_mulnx')?.args).toMatchObject({
+      automatic: true,
+    });
+    expect(nativeArgs.find((v) => v.command === 'attach_external_cs2')?.args).toMatchObject({
+      pid: 42,
+      created: '134000000000000000',
+      expectedRevision: 'one',
+    });
+    expect(calls).not.toContain('start_managed_cs2');
+    expect(calls.indexOf('launch_mulnx')).toBeLessThan(calls.indexOf('attach_external_cs2'));
+    expect(calls.indexOf('attach_external_cs2')).toBeLessThan(
+      calls.indexOf('/operator/production'),
+    );
+    expect(calls).toContain('present_production');
+    expect(window.location.pathname).toBe('/');
+  });
+  it('does not attach, enter production or fall back to Steam after a MulNX environment rejection', async () => {
+    const calls = setup('mulnx', 'preparation', false, false, [
+      { preferMulnx: true, running: false, pending: false },
+    ]);
+    await expect(productionAction('enter', preparation)).rejects.toThrow('请先关闭冲突程序');
+    expect(calls).not.toContain('attach_external_cs2');
+    expect(calls).not.toContain('start_managed_cs2');
+    expect(calls).not.toContain('/operator/production');
+  });
   it('explicit external entry binds the selected identity and never calls managed launch or cleanup', async () => {
     const calls = setup(undefined, 'preparation', false);
     await productionAction('enter', preparation, false, undefined, {

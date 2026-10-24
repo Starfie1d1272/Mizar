@@ -2,6 +2,7 @@ import {
   registerWorkspaceObserver,
   type WorkspaceObserver,
 } from './telemetry/observer-workspace.js';
+import { ObserverSettingsStore, registerObserverSettings } from './telemetry/observer-settings.js';
 import { verifyIsolatedPack } from './orchestration/isolated-pack.js';
 import { CameraDirector } from './orchestration/director.js';
 import { MulnxTool } from './orchestration/tool.js';
@@ -170,6 +171,7 @@ export interface CompanionAppOptions {
   readonly deliveryConsumers?: readonly DeliveryHealthSource[];
   readonly cstvSources?: CstvSourceManagers;
   readonly workspaceObserver?: WorkspaceObserver;
+  readonly observerSettingsPath?: string;
   readonly diagnosticsEndpoint?: string;
   readonly diagnosticsFetch?: typeof fetch;
   readonly onAcceptedRaw?: AcceptedRawSink;
@@ -430,6 +432,18 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       )
     : undefined;
   const programChat = new ProgramChat();
+  const observerSettings = new ObserverSettingsStore(options.observerSettingsPath);
+  let observerEligible = () => false;
+  app.addHook('onReady', async () => {
+    try {
+      await observerSettings.load();
+    } catch (error) {
+      app.log.error(
+        { stage: 'observer_settings_load', err: error },
+        '观察辅助设置需要重新保存，基础制播继续就绪',
+      );
+    }
+  });
   const nativeSource =
     options.supportLogsDirectory && sessionJournal
       ? new NativeSource(options.supportLogsDirectory, sessionJournal, (record) => {
@@ -595,9 +609,14 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       degradeRuntime ? `Companion ${source} 路径已降级` : `Companion ${source} 路径记录可恢复诊断`,
     );
   };
+  let observerMatchId: string | null | undefined;
   const projectionCoordinator =
     options.projectionCoordinator ??
     createProjectionCoordinator({
+      observerSettings: () => ({
+        ...observerSettings.settings,
+        enabled: observerSettings.settings.enabled && observerEligible(),
+      }),
       programChat: (cursor, fresh) => programChat.view(cursor, fresh),
       ...(options.steamAvatars ? { avatars: options.steamAvatars } : {}),
       programRuntime,
@@ -610,7 +629,13 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         : { nowMonotonicMs: projectionNowMonotonicMs }),
       onDiagnostic: ({ code }) =>
         recordRuntimeDiagnostic(code, 'projection', projectionDiagnosticDegradesRuntime(code)),
-      onProjection: (bundle) => outputService.setCurrent(bundle, outputBinding),
+      onProjection: (bundle) => {
+        const matchId = bundle.program.match?.matchId ?? null;
+        if (observerMatchId !== undefined && observerMatchId !== matchId)
+          observerSettings.clearConnection();
+        observerMatchId = matchId;
+        outputService.setCurrent(bundle, outputBinding);
+      },
     });
   const programCueCoordinator =
     options.programCueCoordinator ??
@@ -1237,15 +1262,30 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     hold: () => director.hold(),
   });
   registerDemoTestRoutes(app, demoTest, options.productRuntime?.controlToken);
+  observerEligible = () =>
+    production.get().mode !== 'preparation' &&
+    !production.isTrialPending() &&
+    !demoTest.get().active;
+  registerObserverSettings(app, observerSettings, localWebTransport.getOriginPolicy());
+  const observerSettingsUnsubscribe = observerSettings.subscribe((kind) => {
+    projectionCoordinator.resetAssist();
+    if (kind === 'connection' || !observerSettings.settings.enabled)
+      void options.workspaceObserver
+        ?.stop()
+        .catch((error: unknown) =>
+          app.log.error({ stage: 'observer_settings_stop', err: error }, '观察辅助收尾需要重试'),
+        );
+  });
+  app.addHook('onClose', () => {
+    observerSettingsUnsubscribe();
+  });
   if (options.workspaceObserver && options.productRuntime)
     registerWorkspaceObserver(
       app,
       options.workspaceObserver,
       options.productRuntime.controlToken,
-      () =>
-        production.get().mode !== 'preparation' &&
-        !production.isTrialPending() &&
-        !demoTest.get().active,
+      observerEligible,
+      observerSettings,
     );
   app.addHook('onRequest', async (request, reply) => {
     if (['GET', 'HEAD'].includes(request.method)) return;

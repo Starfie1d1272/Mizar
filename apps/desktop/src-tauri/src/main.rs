@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod observer_hud;
 mod observer_job;
 mod observer_workspace;
 mod cs2_activity;
@@ -601,7 +602,10 @@ async fn cs2_config_status(app: tauri::AppHandle) -> Result<serde_json::Value, S
             })),
             Err(_) => Err("CS2 配置状态不可用。".into()),
         };
-        result
+        result.map(|mut value| {
+            value["observerHudPending"] = observer_hud::pending(&app.state::<DesktopLog>()).into();
+            value
+        })
     })
     .await
     .map_err(|_| "CS2 配置状态不可用。".to_string())?
@@ -609,11 +613,11 @@ async fn cs2_config_status(app: tauri::AppHandle) -> Result<serde_json::Value, S
 
 #[tauri::command]
 async fn launch_mulnx(window: tauri::WebviewWindow, app: tauri::AppHandle,
-    diagnostic_operation_id: Option<String>) -> Result<(), String> {
+    automatic: Option<bool>, diagnostic_operation_id: Option<String>) -> Result<serde_json::Value, String> {
     if window.label() != "main" { return Err("请在准备中心打开 MulNX。".into()); }
     let log = app.state::<DesktopLog>().inner().clone();
     let evidence = log.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || mulnx_launch::launch(&app, &log))
+    let result = tauri::async_runtime::spawn_blocking(move || mulnx_launch::launch(&app, &log, automatic.unwrap_or(false)))
         .await.unwrap_or_else(|error| Err(format!("MulNX 启动任务失败：{error}")));
     evidence.native_outcome("launch_mulnx", diagnostic_operation_id.as_deref(), &result);
     result
@@ -2640,6 +2644,9 @@ fn run_desktop(
                     let mut cs2 = state.lock().map_err(|_| "CS2 配置状态不可用。")?;
                     let activity = cleanup_host.state::<cs2_activity::Activity>();
                     let _activity = activity.begin(if cs2.has_external() { 3 } else { 2 });
+                    if cleanup_host.state::<production_exit::VerifiedStop>().complete() {
+                        observer_hud::restore(&cleanup_host.state::<DesktopLog>())?;
+                    } else { observer_workspace::stop(&cleanup_host.state::<DesktopLog>())?; }
                     production_exit::finish_then_restore(
                         || {
                             // --stop already completed the same safe transaction before
@@ -2731,6 +2738,7 @@ fn start_gui(root: &Path, log: &DesktopLog) -> Result<(), String> {
         log.step("runtime_ready", || {
             wait_for_runtime(root, &mut child, Some(log))
         })?;
+        if let Err(error) = observer_hud::restore(log) { log.event("observer_hud_recovery", "failure", Some(&error)); }
         let version = log.step("webview2_preflight", webview_preflight)?;
         log.event("webview2_version", "success", Some(&version));
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

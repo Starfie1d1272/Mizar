@@ -4,7 +4,7 @@ use std::{sync::{Mutex, atomic::{AtomicBool, Ordering}}, time::{Instant, Duratio
 use tauri::Manager;
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 
-fn request(log: &DesktopLog, body: serde_json::Value) -> Result<(), String> {
+fn request(log: &DesktopLog, body: serde_json::Value) -> Result<serde_json::Value, String> {
     let token = production_exit::runtime_token(log)?;
     let timeout = if body["action"] == "pulse" { 1 } else { 18 };
     let (code, value) = production_exit::request_with_identity(log, "POST", "/operator/runtime/observer",
@@ -12,29 +12,36 @@ fn request(log: &DesktopLog, body: serde_json::Value) -> Result<(), String> {
     if code != 200 || value["ok"] != true {
         return Err(value["message"].as_str().unwrap_or("请检查本地服务后重试观察辅助连接。").into());
     }
-    Ok(())
+    Ok(value)
 }
 
+pub fn active() -> bool { ACTIVE.load(Ordering::Acquire) }
+
 pub fn stop(log: &DesktopLog) -> Result<(), String> {
+    let hud = crate::observer_hud::restore(log);
     if ACTIVE.load(Ordering::Acquire) {
         request(log, serde_json::json!({"action":"stop"}))?;
         ACTIVE.store(false, Ordering::Release);
     }
-    Ok(())
+    hud
 }
 
 pub fn pulse(app: &tauri::AppHandle, cs2: &managed_cs2::ManagedCs2) {
     if !ACTIVE.load(Ordering::Acquire) { return; }
     let log = app.state::<DesktopLog>();
     let valid = cs2.workspace_process().ok().flatten().is_some_and(|game| game.is_running());
-    let result = if valid { request(&log, serde_json::json!({"action":"pulse"})) } else { stop(&log) };
+    let result = if valid {
+        request(&log, serde_json::json!({"action":"pulse"})).and_then(|value| {
+            if value["enabled"] == false { stop(&log) } else { Ok(()) }
+        })
+    } else { stop(&log) };
     if let Err(error) = result { log.event("observer_lease", "failure", Some(&error)); }
 }
 
 #[tauri::command]
 pub async fn observer_command(window: tauri::WebviewWindow, app: tauri::AppHandle,
     action: String, endpoint: Option<String>, password: Option<String>) -> Result<(), String> {
-    if !["workspace-left", "workspace-dock"].contains(&window.label()) {
+    if !["main", "workspace-left", "workspace-dock"].contains(&window.label()) {
         return Err("请在制播工作台操作观察辅助。".into());
     }
     tauri::async_runtime::spawn_blocking(move || {
@@ -42,11 +49,13 @@ pub async fn observer_command(window: tauri::WebviewWindow, app: tauri::AppHandl
         log.event("observer_workspace", "begin", Some(&format!("action={action}")));
         let result = (|| {
             if action == "stop" {
+                // Stop the owned observer even when the game's HUD readback needs recovery.
+                let hud = crate::observer_hud::restore(&log);
                 request(&log, serde_json::json!({"action":"stop"}))?;
                 ACTIVE.store(false, Ordering::Release);
-                return Ok(());
+                return hud;
             }
-            if action != "start" { return Err("请选择连接或停止观察辅助。".into()); }
+            if action != "start" && action != "start-configured" { return Err("请选择连接或停止观察辅助。".into()); }
             app.state::<production_exit::ExitGate>().check()?;
             app.state::<crate::updates::PendingUpdate>().check()?;
             if !app.state::<crate::HostState>().visible.load(Ordering::Acquire) {
@@ -57,6 +66,24 @@ pub async fn observer_command(window: tauri::WebviewWindow, app: tauri::AppHandl
             let (context, game) = cs2.console_source()?.ok_or("请先从工作台启动或接入 CS2。")?;
             if !game.is_running() { return Err("请先启动 CS2，再连接观察辅助。".into()); }
             let executable = context["executable"].as_str().ok_or("请确认 CS2 安装位置。")?;
+            if action == "start-configured" {
+                let job = observer_job::name(&log.session_id);
+                let game_key = format!("{}-{}", game.pid, game.created);
+                let preparation = request(&log, serde_json::json!({"action":"prepare","game":game_key,"job":job}))?;
+                if preparation["enabled"] != true { return Ok(()); }
+                if preparation["reuse"] == true { ACTIVE.store(true, Ordering::Release); return Ok(()); }
+                let mut body = serde_json::json!({"action":"start-configured","executable":executable,
+                    "game":game_key,"job":job,"revision":preparation["revision"]});
+                if preparation["hideGameHud"] == true {
+                    body["hudOriginal"] = crate::observer_hud::snapshot(&log, std::path::Path::new(executable), &game)?.into();
+                } else { crate::observer_hud::restore(&log)?; }
+                if let Err(error) = request(&log, body) {
+                    if let Err(restore) = crate::observer_hud::restore(&log) { log.event("observer_hud_restore", "failure", Some(&restore)); }
+                    return Err(error);
+                }
+                ACTIVE.store(true, Ordering::Release);
+                return Ok(());
+            }
             request(&log, serde_json::json!({"action":"start", "executable":executable,
                 "job":observer_job::name(&log.session_id),
                 "endpoint":endpoint.ok_or("请填写授权的 GOTV 地址。")?, "password":password.unwrap_or_default()}))?;

@@ -296,6 +296,7 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
         )
       : undefined;
   const app = buildApp({
+    observerSettingsPath: join(captureDir, '../observer-assist.json'),
     ...(workspaceObserver ? { workspaceObserver } : {}),
     ...(supportJournal ? { supportJournal } : {}),
     resources: {

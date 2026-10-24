@@ -1,3 +1,4 @@
+import { ObserverSettingsPanel, ObserverConnectionPreparation } from './ObserverSettings';
 import { ObsSettings } from './ObsSettings';
 import { CameraSettings } from '../orchestration/CameraSettings';
 import { Cs2ConsoleSettings } from '../debug/Cs2ConsoleSettings';
@@ -171,6 +172,15 @@ export function Settings({ tab }: { tab: string }) {
       {gsi?.conflict ? '修复 GSI' : '安装 GSI'}
     </Button>
   );
+  if (tab === 'observer')
+    return (
+      <>
+        <ObserverSettingsPanel />
+        <ObserverConnectionPreparation
+          live={production?.mode === 'live' || production?.mode === 'hidden'}
+        />
+      </>
+    );
   if (tab === 'music')
     return (
       <>

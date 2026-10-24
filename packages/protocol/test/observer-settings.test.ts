@@ -1,0 +1,38 @@
+import { expect, it } from 'vitest';
+import {
+  DEFAULT_OBSERVER_SETTINGS,
+  observerSettingsSchema,
+  parseObserverConnection,
+} from '../src/assist.js';
+it('starts with the private feature off and editable 120/7/10 timing', () => {
+  expect(DEFAULT_OBSERVER_SETTINGS).toMatchObject({
+    enabled: false,
+    expectedDelaySeconds: 120,
+    leadSeconds: 7,
+    displaySeconds: 10,
+  });
+  expect(
+    observerSettingsSchema.safeParse({
+      ...DEFAULT_OBSERVER_SETTINGS,
+      leadSeconds: 30,
+      expectedDelaySeconds: 10,
+    }).success,
+  ).toBe(false);
+});
+it('parses one authorized connection with adjacent or explicit Program endpoint', () => {
+  expect(parseObserverConnection('connect 127.0.0.1:27025;password 1')).toEqual({
+    earlyEndpoint: '127.0.0.1:27025',
+    programEndpoint: '127.0.0.1:27026',
+    password: '1',
+  });
+  expect(
+    parseObserverConnection('127.0.0.1:27025;password " a "', '127.0.0.2:28000').password,
+  ).toBe(' a ');
+  for (const input of [
+    '127.0.0.1:65535',
+    '999.0.0.1:27025',
+    '127.0.0.1:27025;password 1;quit',
+    'connect example.com:27025',
+  ])
+    expect(() => parseObserverConnection(input)).toThrow();
+});
