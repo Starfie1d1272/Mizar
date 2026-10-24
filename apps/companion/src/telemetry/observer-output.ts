@@ -31,19 +31,24 @@ export async function consumeObserverOutput<R extends GameEventSourceRole>(
     }
     for await (const value of stream) {
       const chunk: unknown = value;
-      if (!(chunk instanceof Uint8Array) || chunk.byteLength > MAX_LINE_BYTES) {
-        throw new Error('Observer input budget');
-      }
-      pending = Buffer.concat([pending, chunk]);
+      if (!(chunk instanceof Uint8Array)) throw new Error('Observer input type');
+      let start = 0;
       let end: number;
-      while ((end = pending.indexOf(10)) !== -1) {
-        consume(pending.subarray(0, end));
-        pending = pending.subarray(end + 1);
+      while ((end = chunk.indexOf(10, start)) !== -1) {
+        const part = chunk.subarray(start, end);
+        if (pending.byteLength + part.byteLength + 1 > MAX_LINE_BYTES)
+          throw new Error('Observer record budget');
+        consume(pending.length ? Buffer.concat([pending, part]) : part);
+        pending = Buffer.alloc(0);
+        start = end + 1;
       }
-      if (pending.byteLength > MAX_LINE_BYTES) throw new Error('Observer record budget');
+      const tail = chunk.subarray(start);
+      if (pending.byteLength + tail.byteLength >= MAX_LINE_BYTES)
+        throw new Error('Observer record budget');
+      pending = Buffer.concat([pending, tail]);
     }
     if (signal?.aborted) return { status: 'cancelled', parsedRecords };
-    consume(pending);
+    if (pending.length) throw new Error('Observer truncated record');
     return { status: 'ended', parsedRecords };
   } catch {
     stream.destroy();

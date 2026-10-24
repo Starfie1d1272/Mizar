@@ -2,6 +2,7 @@ import type { RoleScopedGameEventObservation, GameEventSourceRole } from '@mizar
 import {
   createCstvLiveSession,
   normalizeObserverGameEvent,
+  observerEventTick,
   SUPPORTED_CSTV_GAME_EVENT_NAMES,
   type ObserverSourceIdentity,
   type CstvDiagnostic,
@@ -338,13 +339,7 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
       this.notifySnapshotChanged();
       return;
     }
-    if (
-      row.type !== 'raw-event' ||
-      this.state !== 'live' ||
-      typeof row.tick !== 'number' ||
-      row.map !== this.observerMap
-    )
-      return;
+    if (row.type !== 'raw-event' || this.state !== 'live' || row.map !== this.observerMap) return;
     const sample = this.clock?.now() ?? {
       observedAt: new Date().toISOString(),
       observedMonotonicMs: performance.now(),
@@ -356,7 +351,7 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
           role: this.role,
           generation: this.generation,
           sequence: this.observerEventSequence,
-          tick: row.tick,
+          tick: observerEventTick(row),
           observedAt: sample.observedAt,
           observedMonotonicMs: sample.observedMonotonicMs,
           ...(this.observerMap === undefined ? {} : { mapName: this.observerMap }),

@@ -19,5 +19,5 @@ export type {
   CstvSessionTerminalStatus,
   CstvSyncMetadata,
 } from './types.js';
-export { normalizeObserverGameEvent } from './normalize/observer.js';
+export { normalizeObserverGameEvent, observerEventTick } from './normalize/observer.js';
 export type { ObserverSourceIdentity } from './normalize/observer.js';

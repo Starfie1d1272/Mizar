@@ -27,6 +27,7 @@ export function normalizeObserverGameEvent(
   context: GameEventNormalizationContext,
 ): GameEventObservation {
   const row = record(input);
+  const tick = observerEventTick(row);
   const role = owner.role === 'ahead' ? 'lookahead' : 'program';
   if (
     row.type !== 'raw-event' ||
@@ -35,13 +36,12 @@ export function normalizeObserverGameEvent(
     row.channel !== owner.channel ||
     row.world !== owner.world ||
     context.cursor.role !== role ||
-    row.tick !== context.cursor.tick ||
+    tick !== context.cursor.tick ||
     typeof row.sequence !== 'number' ||
     !Number.isSafeInteger(row.sequence) ||
     row.sequence < 1 ||
-    typeof row.tick !== 'number' ||
-    !Number.isSafeInteger(row.tick) ||
-    row.tick < 1 ||
+    !Number.isSafeInteger(tick) ||
+    tick < 1 ||
     typeof row.committedTick !== 'number' ||
     !Number.isSafeInteger(row.committedTick) ||
     row.committedTick < 1 ||
@@ -77,7 +77,7 @@ export function normalizeObserverGameEvent(
       identity.userId <= 0 ||
       identity.userId > 0x7fffffff ||
       typeof identity.steamId !== 'string' ||
-      !/^7656119\d{10}$/.test(identity.steamId)
+      !isIndividualSteamId(identity.steamId)
     )
       continue;
     const controller = record(identity.controller);
@@ -93,4 +93,26 @@ export function normalizeObserverGameEvent(
     fields[playerKey] = { steamId: identity.steamId };
   }
   return normalizeGameEvent(row.name as CstvGameEventName, fields, context);
+}
+
+/** Validate the public individual account bit fields without losing uint64 precision. */
+function isIndividualSteamId(value: string): boolean {
+  if (!/^[1-9]\d{0,19}$/.test(value)) return false;
+  const id = BigInt(value);
+  return (
+    id <= 0xffffffffffffffffn &&
+    id >> 56n === 1n &&
+    ((id >> 52n) & 15n) === 1n &&
+    ((id >> 32n) & 0xfffffn) <= 4n &&
+    (id & 0xffffffffn) !== 0n
+  );
+}
+
+/** Event time comes from the source event, with explicit transport context as fallback. */
+export function observerEventTick(input: unknown): number {
+  const row = record(input);
+  const tick = row.eventServerTick ?? row.tick;
+  if (typeof tick !== 'number' || !Number.isSafeInteger(tick) || tick < 1)
+    throw new Error('Invalid observer event tick');
+  return tick;
 }

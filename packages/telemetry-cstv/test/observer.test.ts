@@ -59,6 +59,23 @@ describe('ordinary observer event adaptation', () => {
       expect(() => normalizeObserverGameEvent(row, owner, context)).toThrow();
     },
   );
+  it.each(['76561200000000000', '76561202255233023'])(
+    'accepts valid public individual identity %s beyond the old decimal prefix',
+    (steamId) => {
+      const row = fixture();
+      row.players.userid.steamId = steamId;
+      const event = normalizeObserverGameEvent(row, owner, context);
+      if (event.kind !== 'weapon-fire') throw new Error('Wrong event');
+      expect(event.player.sourcePlayerId).toBe(steamId);
+    },
+  );
+  it('uses eventServerTick when the transport context is zero', () => {
+    const row = { ...fixture(), tick: 0, eventServerTick: 100 };
+    expect(normalizeObserverGameEvent(row, owner, context).cursor.tick).toBe(100);
+    expect(() =>
+      normalizeObserverGameEvent({ ...row, eventServerTick: -1 }, owner, context),
+    ).toThrow();
+  });
   it('never admits ahead evidence into program', () => {
     expect(() =>
       normalizeObserverGameEvent(fixture(), owner, {

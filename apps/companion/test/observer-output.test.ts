@@ -32,16 +32,29 @@ describe('owned observer output pipe', () => {
     expect(states).toContain('live');
     expect(target.getHealth().state).toBe('reconnecting');
   });
-  it.each([Buffer.from('{broken}\n'), Buffer.from([0xff, 10]), Buffer.alloc(65537, 32)])(
-    'fails closed on malformed or oversized bytes',
-    async (bytes) => {
-      const target = manager();
-      const result = await consumeObserverOutput(Readable.from([bytes]), target);
-      expect(result.status).toBe('failed');
-      expect(result.parsedRecords).toBe(0);
-      expect(target.getHealth().state).toBe('reconnecting');
-    },
-  );
+  it.each([
+    Buffer.from('{broken}\n'),
+    Buffer.from([0xff, 10]),
+    Buffer.alloc(65537, 32),
+    Buffer.from(JSON.stringify(cursor)),
+  ])('fails closed on malformed or oversized bytes', async (bytes) => {
+    const target = manager();
+    const result = await consumeObserverOutput(Readable.from([bytes]), target);
+    expect(result.status).toBe('failed');
+    expect(result.parsedRecords).toBe(0);
+    expect(target.getHealth().state).toBe('reconnecting');
+  });
+  it('accepts a large transport chunk containing many bounded records', async () => {
+    const chunk = Buffer.from(
+      Array.from(
+        { length: 1000 },
+        (_, index) => JSON.stringify({ ...cursor, sequence: index + 1 }) + '\n',
+      ).join(''),
+    );
+    expect(chunk.length).toBeGreaterThan(65536);
+    const result = await consumeObserverOutput(Readable.from([chunk]), manager());
+    expect(result).toEqual({ status: 'ended', parsedRecords: 1000 });
+  });
   it('bounds an oversized line split into otherwise valid chunks', async () => {
     const result = await consumeObserverOutput(
       Readable.from([Buffer.alloc(40000, 32), Buffer.alloc(40000, 32)]),
