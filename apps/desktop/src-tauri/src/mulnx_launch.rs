@@ -118,7 +118,7 @@ fn parse_launch_result(bytes: &[u8], success: bool) -> Result<Value, String> {
     if bytes.len() > 16 * 1024 { return Err("MulNX 启动记录过大。".into()); }
     let result: Value = serde_json::from_slice(bytes).map_err(|_| "MulNX 启动记录不完整。")?;
     if result["protocol"] != 1 || result["ok"].as_bool() != Some(success)
-        || result["stage"].as_str().is_none()
+        || result["stage"].as_str().is_none() || result["cleanupPending"].as_bool().is_none()
         || (success && (result["stage"] != "resumed" || result["cleanupPending"] != false
             || !result["pid"].as_u64().is_some_and(|pid| pid > 0 && pid <= u32::MAX as u64)
             || result["created"].as_str().and_then(|value| value.parse::<u64>().ok()).is_none())) {
@@ -145,6 +145,10 @@ mod tests {
         assert!(parse_launch_result(success.to_string().as_bytes(), true).is_ok());
         assert!(parse_launch_result(success.to_string().as_bytes(), false).is_err());
         assert!(parse_launch_result(b"", true).is_err());
+        let mut incomplete_failure = json!({"protocol":1,"ok":false,"stage":"load"});
+        assert!(parse_launch_result(incomplete_failure.to_string().as_bytes(), false).is_err());
+        incomplete_failure["cleanupPending"] = json!(true);
+        assert!(parse_launch_result(incomplete_failure.to_string().as_bytes(), false).is_ok());
         let mut pending = success.clone();
         pending["cleanupPending"] = json!(true);
         assert!(parse_launch_result(pending.to_string().as_bytes(), true).is_err());
