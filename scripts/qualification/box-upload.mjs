@@ -3,6 +3,23 @@ import { Buffer } from 'node:buffer';
 
 const { Headers, Request, Response, performance } = globalThis;
 
+function boundConnection(outgoing) {
+  const connecting = globalThis.setTimeout(
+    () =>
+      outgoing.destroy(Object.assign(new Error('Box connection timeout'), { code: 'ETIMEDOUT' })),
+    15000,
+  );
+  const connected = () => globalThis.clearTimeout(connecting);
+  outgoing.on('socket', (socket) => {
+    if (!socket.connecting && !socket.secureConnecting) connected();
+    else socket.once('secureConnect', connected);
+  });
+  outgoing.once('close', connected);
+  outgoing.setTimeout(60000, () =>
+    outgoing.destroy(Object.assign(new Error('Box socket stalled'), { code: 'ETIMEDOUT' })),
+  );
+}
+
 // Small JSON API requests use the caller's deadline, including connection setup.
 // Do not follow redirects or replay mutations when a response is uncertain.
 export async function apiRequest(url, options, request = httpsRequest) {
@@ -37,7 +54,14 @@ export async function apiRequest(url, options, request = httpsRequest) {
         }
         if (status >= 300) {
           locallyDestroyed = true;
-          resolve(new Response(null, { status }));
+          resolve(
+            new Response(null, {
+              status,
+              headers: incoming.headers['retry-after']
+                ? { 'Retry-After': incoming.headers['retry-after'] }
+                : {},
+            }),
+          );
           incoming.destroy();
           return;
         }
@@ -65,6 +89,7 @@ export async function apiRequest(url, options, request = httpsRequest) {
         });
       },
     );
+    boundConnection(outgoing);
     outgoing.on('error', reject);
     outgoing.end(body);
   });
@@ -100,7 +125,14 @@ export async function multipartUpload(url, options, request = httpsRequest) {
           console.log(
             `Box 上传响应 HTTP ${status}（${Math.round(performance.now() - started)}ms）`,
           );
-          resolve(new Response(null, { status }));
+          resolve(
+            new Response(null, {
+              status,
+              headers: incoming.headers['retry-after']
+                ? { 'Retry-After': incoming.headers['retry-after'] }
+                : {},
+            }),
+          );
           incoming.destroy();
           return;
         }
@@ -131,6 +163,7 @@ export async function multipartUpload(url, options, request = httpsRequest) {
         });
       },
     );
+    boundConnection(outgoing);
     outgoing.on('error', reject);
     outgoing.on('finish', () => {
       console.log(
