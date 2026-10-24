@@ -6,6 +6,8 @@ import type { BpSession } from '../src/bp/controller.js';
 import { ProgramSceneController } from '../src/program-scenes/controller.js';
 import { ProgramDirector } from '../src/program-scenes/director.js';
 import { ProgramPresentationStore } from '../src/program-scenes/presentation.js';
+import type { ObsSceneSwitchOptions } from '../src/obs/reconcile.js';
+import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
 
 function sample(id = 'real-live-rich') {
   const artifact = JSON.parse(
@@ -49,7 +51,9 @@ function rig() {
     command: vi.fn(() => ({})),
     finishSceneExit: vi.fn(),
   } as unknown as BpSession;
-  const switchObs = vi.fn<() => Promise<void>>().mockResolvedValue();
+  const switchObs = vi
+    .fn<(id: ProgramSceneId, options?: ObsSceneSwitchOptions) => Promise<void>>()
+    .mockResolvedValue();
   const scenes = new ProgramSceneController(projection, bp, switchObs);
   let time = 0;
   let production = true;
@@ -89,6 +93,32 @@ function rig() {
 }
 
 describe('automatic Program choreography', () => {
+  it('re-evaluates a cancelled Take even when facts change again before its rejection', async () => {
+    const r = rig();
+    let release!: () => void;
+    r.switchObs.mockImplementationOnce(async (_id, options) => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      if (options?.signal?.aborted) throw new Error('cancelled obsolete transition');
+    });
+    const pending = r.step();
+    await Promise.resolve();
+    await Promise.resolve();
+    r.program.round = { phase: 'live', winnerSide: 'unknown' };
+    r.program.clock = { phase: 'live', endsInSeconds: 80 };
+    await r.step();
+    r.program.map.phase = 'gameover';
+    r.program.clock = { phase: 'freezetime', endsInSeconds: -1 };
+    release();
+    await pending;
+    r.program.map.phase = 'live';
+    r.program.round = { phase: 'live', winnerSide: 'unknown' };
+    r.program.clock = { phase: 'live', endsInSeconds: 70 };
+    await r.step();
+    expect(r.director.get().mode).toBe('auto');
+    expect(r.scenes.get().active).toBe('gameplay');
+  });
   it('uses final BP, full intro, then HUD; manual take stays held until explicit resume', async () => {
     const r = rig();
     await r.step();

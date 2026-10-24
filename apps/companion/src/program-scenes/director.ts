@@ -456,6 +456,7 @@ export class ProgramDirector {
         finalBp,
       );
       if (!result.ok) {
+        if ('cancelled' in result && result.cancelled) return;
         // A changed automatic choice or a consumed real freeze budget is a normal
         // cancellation. Re-evaluate current facts instead of permanently blocking.
         const current = this.projections.getCurrent().program;
