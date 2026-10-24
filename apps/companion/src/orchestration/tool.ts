@@ -19,6 +19,15 @@ interface InstalledTool {
   directory: string;
   packs: { name: string; sourceName: string }[];
 }
+const releaseSchema = z.object({
+  id: z.number().int().positive(),
+  assetId: z.number().int().positive(),
+  tag: z.string().regex(/^[\w.+-]{1,100}$/),
+  publishedAt: z.string(),
+  url: z.string(),
+  size: z.number().int().positive(),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+});
 /** Preserve the official launch options; refuse unfamiliar YAML instead of
  * silently enabling capture without an effective engine flag. */
 export function consoleLaunchOptions(source: string): string {
@@ -66,15 +75,7 @@ export class MulnxTool {
       const data = z
         .object({
           directory: z.string().regex(/^release-[a-f0-9]{64}-[a-f0-9-]{36}$/),
-          release: z.object({
-            id: z.number().int().positive(),
-            assetId: z.number().int().positive(),
-            tag: z.string().regex(/^[\w.+-]{1,100}$/),
-            publishedAt: z.string(),
-            url: z.string(),
-            size: z.number().int().positive(),
-            sha256: z.string().regex(/^[a-f0-9]{64}$/),
-          }),
+          release: releaseSchema,
           packs: z
             .array(
               z.object({
@@ -120,8 +121,28 @@ export class MulnxTool {
   prepare(cs2Path: string, consoleCapture = false) {
     return this.run('mulnx_prepare', async () => {
       // Called only by the authenticated native host after its process and install checks.
-      const release = await latestMulnxRelease();
-      this.latest = release;
+      let release: MulnxRelease;
+      try {
+        release = await latestMulnxRelease();
+        this.latest = release;
+      } catch (error) {
+        // Only metadata discovery may fall back. Installation, extraction and
+        // archive integrity errors below still fail without activating new bytes.
+        this.diagnostic('mulnx_update_check', { result: 'failure', error });
+        if (this.installed) release = this.installed.release;
+        else {
+          try {
+            release = z
+              .object({ release: releaseSchema })
+              .parse(await readJson(this.bundle, 'release.json')).release;
+          } catch {
+            throw new Error('MulNX 尚未准备完成，当前无法检查上游版本，请稍后重试。', {
+              cause: error,
+            });
+          }
+        }
+        this.message = '暂时无法检查 MulNX 更新，正在使用本机已准备的版本。';
+      }
       if (!this.installed || this.installed.release.sha256 !== release.sha256)
         await this.install(release, cs2Path);
       const root = join(this.directory, this.installed!.directory, 'MulNX');
