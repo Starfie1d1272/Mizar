@@ -2,7 +2,7 @@
 
 本文维护 Mizar 的**长期发布约束与操作原则**；具体版本的进度、验收报告、变更列表和已发布资产分别由 GitHub Milestones、PR、[Releases](https://github.com/Starfie1d1272/Mizar/releases) 持有。当前发布实现以 [CI](../../.github/workflows/ci.yml)、[Release Qualification](../../.github/workflows/release-qualification.yml)、[Release Promotion](../../.github/workflows/release-promotion.yml) 和 [Box Sync](../../.github/workflows/box-sync.yml) 为准。
 
-Box 文件上传使用原生 HTTPS 和完整 multipart 请求体，沿用十分钟总期限，不受 fetch 独立的五分钟响应头期限提前终止。记录请求体写出与响应阶段，不记录临时地址、凭据或服务器正文；上传不自动重试。中断后先核对已存在文件的原字节，缺失文件才上传；完整回读与来源验证完成后才发布更新指针。
+Box 文件上传使用原生 HTTPS 和完整 multipart 请求体，沿用十分钟总期限，不受 fetch 独立的五分钟响应头期限提前终止。记录请求体写出与响应阶段，不记录临时地址、凭据或服务器正文；上传不自动重试。中断后先核对已存在文件的原字节，缺失文件才上传；恢复公开载体时，资格包已附带的复用声明及证明必须逐字节相同才保留，不能因文件同名拒绝相同原件，也不能覆盖不同内容；完整回读与来源验证完成后才发布更新指针。
 
 性能计时区分完整工作流、首次 runner 排队和重跑排队；重试及流程间等待仍计入端到端时间，不把最新尝试的启动时间当作首次排队。GitHub 最新 job 列表可能保留上一轮成功任务，其时间仍保留在证据中；本轮排队只从本轮启动后开始的 job 计算，没有此类任务时记为未知。内部资格汇总与晋级使用同步 ZIP 解压，之后仍完整核对 payload；便携及安装验收保留 Windows 资源管理器解压。解压性能对照必须使用固定原 ZIP 与来源证明，每次核对完整 payload；额外基准不能代替普通完整 CI 或新版本十分钟发行验收。
 

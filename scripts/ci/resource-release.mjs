@@ -494,6 +494,30 @@ function lookupGithubObject(path) {
     throw new Error('发行或标签查询失败；未知状态不能触发签发或发布', { cause: error });
   }
 }
+export async function restorePublishedResourceMetadata(folder, originals) {
+  for (const name of Object.values(names)) {
+    const bytes = originals.get(name);
+    requireValue(bytes, 'Carrier is missing original resource metadata');
+    if (
+      [names.descriptor, names.descriptorQualification, names.archiveQualification].includes(name)
+    )
+      requireValue(
+        bytes.equals(await readFile(join(folder, name))),
+        'Published carrier differs from original qualification bytes',
+      );
+    else {
+      try {
+        await writeFile(join(folder, name), bytes, { flag: 'wx' });
+      } catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+        requireValue(
+          bytes.equals(await readFile(join(folder, name))),
+          'Published carrier differs from existing original metadata',
+        );
+      }
+    }
+  }
+}
 async function resolvePublishedResourceFiles(folder, manifest) {
   const candidate = await verifyQualifiedResources(folder, manifest);
   const tag = `v${manifest.appVersion}`;
@@ -501,18 +525,7 @@ async function resolvePublishedResourceFiles(folder, manifest) {
   if (release === null) return false;
   if (release.assets.some((a) => a.name === MACHINE_METADATA_NAME)) {
     const originals = await publishedCarrier(release);
-    for (const name of Object.values(names)) {
-      const bytes = originals.get(name);
-      requireValue(bytes, 'Carrier is missing original resource metadata');
-      if (
-        [names.descriptor, names.descriptorQualification, names.archiveQualification].includes(name)
-      )
-        requireValue(
-          bytes.equals(await readFile(join(folder, name))),
-          'Published carrier differs from original qualification bytes',
-        );
-      else await writeFile(join(folder, name), bytes, { flag: 'wx' });
-    }
+    await restorePublishedResourceMetadata(folder, originals);
     await verifyPublishedResourceMetadata(folder, manifest, release);
     return true;
   }

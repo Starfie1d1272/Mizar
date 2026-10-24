@@ -1,4 +1,5 @@
 import { beforeAll, afterAll, describe, expect, it } from 'vitest';
+import { Buffer } from 'node:buffer';
 import { execFileSync } from 'node:child_process';
 import { mkdtemp, readFile, writeFile, rm, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -11,7 +12,9 @@ import {
   verifyQualifiedResources,
   verifyPublishedResources,
   freezePublishedResources,
+  restorePublishedResourceMetadata,
 } from './resource-release.mjs';
+import { RESOURCE_ASSET_NAMES } from '../../packages/resource-pack-contract/catalog.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const sourceSha = execFileSync('git', ['rev-parse', 'HEAD'], {
@@ -39,6 +42,34 @@ beforeAll(async () => {
 afterAll(async () => rm(directory, { recursive: true, force: true }));
 
 describe('Release resource integration with the real official Pack', () => {
+  it('keeps original reused publication bytes when restoring an existing carrier', async () => {
+    const recovery = join(directory, 'carrier-recovery');
+    await mkdir(recovery);
+    const originals = new Map(
+      Object.values(RESOURCE_ASSET_NAMES).map((name) => [name, Buffer.from(name)]),
+    );
+    for (const key of [
+      'descriptor',
+      'descriptorQualification',
+      'archiveQualification',
+      'publication',
+      'publicationPromotion',
+    ]) {
+      const name = RESOURCE_ASSET_NAMES[key];
+      await writeFile(join(recovery, name), originals.get(name));
+    }
+    await restorePublishedResourceMetadata(recovery, originals);
+    await restorePublishedResourceMetadata(recovery, originals);
+    for (const [name, bytes] of originals)
+      expect(await readFile(join(recovery, name))).toEqual(bytes);
+    const original = originals.get(RESOURCE_ASSET_NAMES.publication);
+    await writeFile(join(recovery, RESOURCE_ASSET_NAMES.publication), 'different');
+    await expect(restorePublishedResourceMetadata(recovery, originals)).rejects.toThrow();
+    expect(await readFile(join(recovery, RESOURCE_ASSET_NAMES.publication), 'utf8')).toBe(
+      'different',
+    );
+    expect(original).not.toEqual(Buffer.from('different'));
+  });
   it('binds all 43 actual materials, canonical bytes, exact Core identity and fixed public addresses', () => {
     expect(candidate.pack.manifest.files).toHaveLength(43);
     // Includes the updated third-party notices shipped in this exact Pack.
