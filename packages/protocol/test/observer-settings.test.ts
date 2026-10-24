@@ -1,3 +1,5 @@
+import { assistSnapshotSchema, type AssistSnapshotInput } from '../src/assist.js';
+import { ASSIST_SCHEMA_VERSION, LOCAL_PROTOCOL_VERSION } from '../src/version.js';
 import { expect, it } from 'vitest';
 import {
   DEFAULT_OBSERVER_SETTINGS,
@@ -35,4 +37,23 @@ it('parses one authorized connection with adjacent or explicit Program endpoint'
     'connect example.com:27025',
   ])
     expect(() => parseObserverConnection(input)).toThrow();
+});
+
+it('keeps the typed snapshot input consistent with assist schema 2', () => {
+  const input: AssistSnapshotInput = {
+    type: 'snapshot',
+    protocolVersion: LOCAL_PROTOCOL_VERSION,
+    channel: 'assist',
+    schemaVersion: ASSIST_SCHEMA_VERSION,
+    cursor: {
+      producerInstanceId: 'test',
+      liveSessionId: null,
+      runtimeSeq: 1,
+      programSourceGeneration: 1,
+      programReceiveSequence: 1,
+      mapEpoch: 1,
+    },
+    payload: { availability: 'unavailable' },
+  };
+  expect(assistSnapshotSchema.parse({ ...input, channelSeq: 1 }).schemaVersion).toBe(2);
 });

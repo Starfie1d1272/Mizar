@@ -3,7 +3,7 @@ import { z } from 'zod';
 import {
   localSnapshotEnvelopeSchema,
   projectionCursorSchema,
-  type LocalSnapshotV1,
+  type LocalSnapshot,
 } from './shared.js';
 import { ASSIST_SCHEMA_VERSION } from './version.js';
 
@@ -109,7 +109,10 @@ export const assistSnapshotSchema = localSnapshotEnvelopeSchema.extend({
 
 export type AssistPayload = z.infer<typeof assistPayloadSchema>;
 export type AssistSnapshot = z.infer<typeof assistSnapshotSchema>;
-export type AssistSnapshotInput = Omit<LocalSnapshotV1<AssistPayload>, 'channelSeq'> & {
+export type AssistSnapshotInput = Omit<
+  LocalSnapshot<AssistPayload, typeof ASSIST_SCHEMA_VERSION>,
+  'channelSeq'
+> & {
   readonly channel: 'assist';
   readonly schemaVersion: typeof ASSIST_SCHEMA_VERSION;
 };
