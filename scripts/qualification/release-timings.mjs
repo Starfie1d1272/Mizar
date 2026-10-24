@@ -29,6 +29,12 @@ function runTiming(run, jobs, completedAt, firstAttemptJobs = run.run_attempt ==
     .map((job) => job.started_at)
     .filter(Boolean)
     .sort();
+  // GitHub retains successful jobs from previous attempts in the latest job
+  // list (and can label them with the new run_attempt). Keep them as evidence,
+  // but only a job starting in this attempt can measure its queue.
+  const attemptStarts = starts.filter(
+    (start) => Date.parse(start) >= Date.parse(run.run_started_at),
+  );
   return {
     id: run.id,
     createdAt: run.created_at,
@@ -36,7 +42,9 @@ function runTiming(run, jobs, completedAt, firstAttemptJobs = run.run_attempt ==
     durationMs: elapsed(run.created_at, completedAt),
     initialQueueMs: firstStarts.length ? elapsed(run.created_at, firstStarts[0]) : null,
     attemptQueueMs:
-      starts.length && run.run_started_at ? elapsed(run.run_started_at, starts[0]) : null,
+      attemptStarts.length && run.run_started_at
+        ? elapsed(run.run_started_at, attemptStarts[0])
+        : null,
     jobs: jobs.map(({ name, started_at, completed_at }) => ({
       name,
       startedAt: started_at,
