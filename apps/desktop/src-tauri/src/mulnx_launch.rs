@@ -1,10 +1,14 @@
 //! The native host selects the installation and opens the managed upstream launcher.
 use crate::{cs2_activity, gsi_script, managed_cs2, powershell, production_exit, startup_log::DesktopLog, updates};
-use std::{path::{Path, PathBuf}, sync::Mutex, time::Duration};
+use std::{path::{Path, PathBuf}, sync::Mutex, time::{Duration, Instant}, process::Command};
+use std::os::windows::process::CommandExt;
+use serde_json::{Value, json};
 use tauri::Manager;
 use crate::ShellExecuteW;
+static LAUNCH_GATE: Mutex<()> = Mutex::new(());
 
-pub fn launch(app: &tauri::AppHandle, log: &DesktopLog) -> Result<(), String> {
+pub fn launch(app: &tauri::AppHandle, log: &DesktopLog, automatic: bool) -> Result<Value, String> {
+    let _launch = LAUNCH_GATE.try_lock().map_err(|_| "MulNX 正在启动，请等待本次操作完成。")?;
     app.state::<production_exit::ExitGate>().check()?;
     app.state::<updates::PendingUpdate>().check()?;
     let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
@@ -16,7 +20,11 @@ pub fn launch(app: &tauri::AppHandle, log: &DesktopLog) -> Result<(), String> {
         }
         Ok(())
     };
-    no_game()?;
+    if !automatic { no_game()?; }
+    let status = managed.try_lock().map_err(|_| "CS2 正忙，请稍后重试。")?.status()?;
+    if status["pending"] == true || status["spectatorRecoveryPending"] == true || status["demoCleanupPending"] == true {
+        return Err("请先完成原有 CS2 配置恢复，再通过 MulNX 启动。".into());
+    }
     let activity = app.state::<cs2_activity::Activity>();
     let _activity = activity.begin(3);
     let output = gsi_script("gsi-status.ps1", None, Duration::from_secs(20), log)?;
@@ -28,6 +36,22 @@ pub fn launch(app: &tauri::AppHandle, log: &DesktopLog) -> Result<(), String> {
     let executable = cfg.parent().and_then(Path::parent).and_then(Path::parent)
         .ok_or("CS2 安装位置无效。")?.join("bin").join("win64").join("cs2.exe");
     if !executable.is_file() { return Err("所选 CS2 程序不存在。".into()); }
+    let results = log.state_root.join("data/mulnx-launch");
+    if automatic {
+        let actual = managed.try_lock().map_err(|_| "CS2 正忙，请稍后重试。")?.mulnx_handoff_status()?;
+        if actual["processes"].as_array().is_some_and(|processes| !processes.is_empty()) {
+            let receipt = std::fs::read(results.join("current.json")).ok()
+                .and_then(|bytes| parse_launch_result(&bytes, true).ok());
+            if let Some(receipt) = receipt {
+                if validate_game_identity(&actual, &receipt, &executable).is_ok() {
+                    log.event("mulnx_launch_reuse", "success", Some(&receipt.to_string()));
+                    return Ok(receipt);
+                }
+            }
+            return Err("已有 CS2 与本次 MulNX 启动记录不匹配，请先退出它，或从外部游戏交接入口明确选择。".into());
+        }
+    }
+    no_game()?;
     let prepared = production_exit::prepare_mulnx(log, &executable)?;
     let launcher = PathBuf::from(prepared["launcher"].as_str().ok_or("MulNX 启动路径缺失。")?);
     let root = log.state_root.join("data/mulnx").canonicalize().map_err(|e| format!("MulNX 目录无法读取：{e}"))?;
@@ -38,14 +62,107 @@ pub fn launch(app: &tauri::AppHandle, log: &DesktopLog) -> Result<(), String> {
     app.state::<production_exit::ExitGate>().check()?;
     app.state::<updates::PendingUpdate>().check()?;
     no_game()?;
+    if automatic && prepared["launchProtocol"] != 1 {
+        return Err("当前 MulNX 版本尚不支持保留环境检查的一键启动，请更新支持此接口的官方版本。".into());
+    }
     let verb: Vec<u16> = "open\0".encode_utf16().collect();
     // The official launcher can start the engine later. Preserve the prior raw
     // file before giving it control; this grants no ownership of that game.
     crate::cs2_console::prepare(log, &executable)?;
+    if automatic {
+        std::fs::create_dir_all(&results).map_err(|error| log.preserve_error("mulnx_launch", None, &error, "无法准备 MulNX 启动记录。"))?;
+        let result_path = results.join(format!("{}-{}.json", log.session_id, chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()));
+        let mut child = Command::new(&launcher).arg("--launch-result").arg(&result_path)
+            .current_dir(launcher.parent().ok_or("MulNX 目录无效。")?)
+            .creation_flags(0x08000000).spawn()
+            .map_err(|error| log.preserve_error("mulnx_launch", None, &error, "MulNX 未能启动。"))?;
+        log.event("mulnx_launch", "begin", Some(&json!({"launcherPid":child.id(),"resultPath":result_path,"version":prepared["version"]}).to_string()));
+        let deadline = Instant::now() + Duration::from_secs(120);
+        let exit = loop {
+            if let Some(exit) = child.try_wait().map_err(|error| log.preserve_error("mulnx_launch", None, &error, "MulNX 启动结果无法读取。"))? { break exit; }
+            if Instant::now() >= deadline {
+                // Do not kill an unconfirmed game or silently replay launch.
+                return Err("MulNX 启动超时；请检查游戏与启动记录，确认收尾后再重试。".into());
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        };
+        let bytes = std::fs::read(&result_path).map_err(|error| log.preserve_error("mulnx_launch", None, &error, "MulNX 未返回启动记录。"))?;
+        let result = parse_launch_result(&bytes, exit.success())?;
+        log.event("mulnx_launch", if result["ok"] == true { "success" } else { "failure" }, Some(&result.to_string()));
+        if result["ok"] != true {
+            return Err(if result["cleanupPending"] == true {
+                "MulNX 启动未完成，且本次游戏收尾待确认。请在运行诊断中核对进程状态后重试。"
+            } else if result["stage"] == "environment" {
+                "MulNX 环境检查未通过，请先关闭完美世界竞技平台等第三方游戏平台，再检查运行诊断并重试。"
+            } else {
+                "MulNX 启动失败，本次游戏已收尾。请在运行诊断中查看原始错误后重试。"
+            }.into());
+        }
+        validate_game_identity(&managed.try_lock().map_err(|_| "CS2 正忙，请稍后重试。")?.mulnx_handoff_status()?, &result, &executable)?;
+        let temporary = results.join(format!("current-{}.tmp", log.session_id));
+        if let Err(error) = std::fs::write(&temporary, &bytes)
+            .and_then(|()| std::fs::rename(&temporary, results.join("current.json"))) {
+            log.preserve_error("mulnx_launch_receipt", None, &error, ());
+        }
+        return Ok(result);
+    }
     let target: Vec<u16> = format!("{}\0", launcher.display()).encode_utf16().collect();
     let directory: Vec<u16> = format!("{}\0", launcher.parent().ok_or("MulNX 目录无效。")?.display()).encode_utf16().collect();
     let result = unsafe { ShellExecuteW(0, verb.as_ptr(), target.as_ptr(), std::ptr::null(), directory.as_ptr(), 1) };
     if result <= 32 { return Err(format!("MulNX 未能打开（系统代码 {result}）。")); }
     log.event("mulnx_launch", "success", Some(&format!("version={}", prepared["version"])));
+    Ok(Value::Null)
+}
+
+fn parse_launch_result(bytes: &[u8], success: bool) -> Result<Value, String> {
+    if bytes.len() > 16 * 1024 { return Err("MulNX 启动记录过大。".into()); }
+    let result: Value = serde_json::from_slice(bytes).map_err(|_| "MulNX 启动记录不完整。")?;
+    if result["protocol"] != 1 || result["ok"].as_bool() != Some(success)
+        || result["stage"].as_str().is_none() || result["cleanupPending"].as_bool().is_none()
+        || (success && (result["stage"] != "resumed" || result["cleanupPending"] != false
+            || !result["pid"].as_u64().is_some_and(|pid| pid > 0 && pid <= u32::MAX as u64)
+            || result["created"].as_str().and_then(|value| value.parse::<u64>().ok()).is_none())) {
+        return Err("MulNX 启动结果与实际退出状态不一致。".into());
+    }
+    Ok(result)
+}
+
+fn validate_game_identity(status: &Value, result: &Value, executable: &Path) -> Result<(), String> {
+    let processes = status["processes"].as_array().ok_or("CS2 实例状态不可用。")?;
+    if processes.len() != 1 || processes[0]["pid"] != result["pid"] || processes[0]["created"] != result["created"]
+        || !processes[0]["executable"].as_str().is_some_and(|path| path.eq_ignore_ascii_case(&executable.to_string_lossy())) {
+        return Err("MulNX 返回的 CS2 实例与本机实际进程不一致，请检查游戏状态。".into());
+    }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn rejects_stale_partial_and_mismatched_launch_results() {
+        let success = json!({"protocol":1,"ok":true,"stage":"resumed","pid":42,"created":"134000000000000000","cleanupPending":false});
+        assert!(parse_launch_result(success.to_string().as_bytes(), true).is_ok());
+        assert!(parse_launch_result(success.to_string().as_bytes(), false).is_err());
+        assert!(parse_launch_result(b"", true).is_err());
+        let mut incomplete_failure = json!({"protocol":1,"ok":false,"stage":"load"});
+        assert!(parse_launch_result(incomplete_failure.to_string().as_bytes(), false).is_err());
+        incomplete_failure["cleanupPending"] = json!(true);
+        assert!(parse_launch_result(incomplete_failure.to_string().as_bytes(), false).is_ok());
+        let mut pending = success.clone();
+        pending["cleanupPending"] = json!(true);
+        assert!(parse_launch_result(pending.to_string().as_bytes(), true).is_err());
+        let mut invalid = success.clone();
+        invalid["protocol"] = json!(2);
+        assert!(parse_launch_result(invalid.to_string().as_bytes(), true).is_err());
+        let executable = Path::new(r"D:\Steam\cs2.exe");
+        let status = json!({"processes":[{"pid":42,"created":"134000000000000000","executable":executable}]});
+        assert!(validate_game_identity(&status, &success, executable).is_ok());
+        let mut stale = status.clone();
+        stale["processes"][0]["created"] = json!("134000000000000001");
+        assert!(validate_game_identity(&stale, &success, executable).is_err());
+        let mut ambiguous = status.clone();
+        ambiguous["processes"].as_array_mut().unwrap().push(status["processes"][0].clone());
+        assert!(validate_game_identity(&ambiguous, &success, executable).is_err());
+    }
 }

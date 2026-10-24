@@ -1,10 +1,10 @@
-import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, link } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, realpath, rm, symlink, link } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { prepareIsolatedPack } from '../src/orchestration/prepare-pack.js';
 import { verifyIsolatedPack } from '../src/orchestration/isolated-pack.js';
-import { consoleLaunchOptions } from '../src/orchestration/tool.js';
+import { consoleLaunchOptions, MulnxTool } from '../src/orchestration/tool.js';
 import { nativeCs2PathSchema } from '../src/orchestration/routes.js';
 it('accepts the native extended drive path while refusing UNC, relative paths and other executables', () => {
   const path = 'D:\\Steam\\Counter-Strike Global Offensive\\game\\bin\\win64\\cs2.exe';
@@ -25,7 +25,50 @@ it('adds the consented engine log flag while preserving upstream options and env
 });
 const roots: string[] = [];
 afterEach(async () => {
+  vi.unstubAllGlobals();
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
+});
+it('prepares the installed launcher when public metadata is unavailable and preserves upstream options', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'mizar-mulnx-offline-')));
+  roots.push(root);
+  const directory = `release-${'a'.repeat(64)}-11111111-1111-4111-8111-111111111111`;
+  const injector = join(root, directory, 'MulNX/CS2Injector');
+  await mkdir(join(injector, 'CS2BootLoader/Config'), { recursive: true });
+  await writeFile(join(injector, 'CS2Injector.exe'), 'fixture, never executed');
+  await writeFile(join(injector, 'launch-protocol.txt'), '1');
+  await writeFile(
+    join(injector, 'CS2BootLoader/Config/config.yaml'),
+    'path: old\nlaunchOptions: -insecure -novid\npatternsCheckDangerous:\n  - 完美世界竞技\n',
+  );
+  await writeFile(
+    join(root, 'current.json'),
+    JSON.stringify({
+      directory,
+      packs: [],
+      release: {
+        id: 1,
+        assetId: 2,
+        tag: 'BetaFixture',
+        publishedAt: '2026-10-23T08:54:04Z',
+        url: 'https://github.com/Co1Swet/MulNX_CS2/releases/download/BetaFixture/MulNX.7z',
+        size: 1,
+        sha256: 'a'.repeat(64),
+      },
+    }),
+  );
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 403 })));
+  const diagnostics: unknown[] = [];
+  const tool = new MulnxTool(root, join(root, 'bundle'), (stage, evidence) =>
+    diagnostics.push({ stage, evidence }),
+  );
+  await tool.load();
+  const prepared = await tool.prepare('D:\\Steam\\game\\bin\\win64\\cs2.exe', true);
+  expect(prepared).toMatchObject({ version: 'BetaFixture', launchProtocol: 1 });
+  expect(await readFile(join(injector, 'CS2BootLoader/Config/config.yaml'), 'utf8')).toContain(
+    'patternsCheckDangerous:\n  - 完美世界竞技',
+  );
+  expect(tool.view().message).toContain('使用本机已准备的版本');
+  expect(diagnostics).toContainEqual(expect.objectContaining({ stage: 'mulnx_update_check' }));
 });
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'mizar-isolation-'));
