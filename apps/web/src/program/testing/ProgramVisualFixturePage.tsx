@@ -15,7 +15,7 @@ export function ProgramVisualFixturePage({ fixtureId }: { readonly fixtureId: st
   const compositeFixture = getDefaultHudCompositeFixture(fixtureId);
   const isIntegrated = fixtureId === 'program-radar-integrated';
   const chatStyle = fixtureId.startsWith('all-chat-')
-    ? fixtureId.slice('all-chat-'.length).replace(/-freezetime$/, '')
+    ? fixtureId.slice('all-chat-'.length).replace(/-(freezetime|timeout-ct|timeout-t|paused)$/, '')
     : null;
   const sourceSnapshot =
     compositeFixture?.snapshot ??
@@ -32,17 +32,37 @@ export function ProgramVisualFixturePage({ fixtureId }: { readonly fixtureId: st
           ...sourceSnapshot,
           payload: {
             ...sourceSnapshot.payload,
+            ...(fixtureId.endsWith('-timeout-ct') ||
+            fixtureId.endsWith('-timeout-t') ||
+            fixtureId.endsWith('-paused')
+              ? {
+                  clock: {
+                    ...sourceSnapshot.payload.clock!,
+                    phase: fixtureId.endsWith('-timeout-ct')
+                      ? ('timeout_ct' as const)
+                      : fixtureId.endsWith('-timeout-t')
+                        ? ('timeout_t' as const)
+                        : ('paused' as const),
+                  },
+                }
+              : {}),
             allChat: [
+              {
+                id: 'public-synthetic-3',
+                sender: '观众样例',
+                text: '技术暂停和战术暂停的三条最长消息，检查名单和历史避让。'.repeat(4),
+                expiresAt: '2099-01-01T00:00:00.000Z',
+              },
               {
                 id: 'public-synthetic-1',
                 sender: 'm0NESY',
-                text: 'HFHF',
+                text: '这是一条最长公共聊天样例，用于检查暂停卡片上方的换行与对齐。'.repeat(4),
                 expiresAt: '2099-01-01T00:00:00.000Z',
               },
               {
                 id: 'public-synthetic-2',
                 sender: '很长的测试选手名称 Player',
-                text: '这是一条用于检查换行与可读性的公共聊天。Good luck, have fun!',
+                text: '这是一条用于检查换行与可读性的公共聊天。Good luck, have fun!'.repeat(3),
                 expiresAt: '2099-01-01T00:00:00.000Z',
               },
             ],

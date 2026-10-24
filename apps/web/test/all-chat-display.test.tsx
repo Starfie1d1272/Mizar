@@ -1,3 +1,4 @@
+import { BroadcastPause } from '../src/program/widgets/broadcast-pause/BroadcastPause';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { expect, it } from 'vitest';
@@ -41,4 +42,47 @@ it('allows ALL chat to be hidden without hiding the player rail and exposes its 
   expect(
     getHudWidgetDescriptor('team-ct-rail').editorControls.some((x) => x.path === 'showAllChat'),
   ).toBe(false);
+});
+
+it('keeps pause chat opposite history, with shared visibility and expiration rules', () => {
+  for (const design of ['current', 'ewc', 'iem', 'perfectworld', 'esl'] as const) {
+    for (const phase of ['timeout_ct', 'timeout_t', 'paused'] as const) {
+      const snapshot = structuredClone(getProgramFixture('live-canonical')!);
+      snapshot.payload.clock = { ...snapshot.payload.clock!, phase };
+      snapshot.payload.allChat = [
+        {
+          id: 'pause-chat',
+          sender: '选手',
+          text: '暂停消息',
+          expiresAt: '2099-01-01T00:00:00.000Z',
+        },
+      ];
+      const preset = structuredClone(getBuiltinResolvedPreset());
+      const render = () =>
+        renderToStaticMarkup(
+          createElement(BroadcastPause, { snapshot, resolvedPreset: preset, design }),
+        );
+      const html = render();
+      expect(html).toContain('aria-label="公共聊天"');
+      const historySide = html.match(/data-pause-history-side="(left|right)"/)?.[1];
+      if (historySide)
+        expect(html).toContain(
+          `data-pause-chat-side="${historySide === 'left' ? 'right' : 'left'}"`,
+        );
+      expect(html).toContain(
+        `data-pause-chat-kind="${phase === 'paused' ? 'technical' : 'tactical'}"`,
+      );
+      preset.widgets['team-t-rail'].settings = {
+        ...preset.widgets['team-t-rail'].settings,
+        showAllChat: false,
+      };
+      expect(render()).not.toContain('aria-label="公共聊天"');
+      preset.widgets['team-t-rail'].settings = {
+        ...preset.widgets['team-t-rail'].settings,
+        showAllChat: true,
+      };
+      snapshot.payload.allChat[0]!.expiresAt = '2000-01-01T00:00:00.000Z';
+      expect(render()).not.toContain('aria-label="公共聊天"');
+    }
+  }
 });

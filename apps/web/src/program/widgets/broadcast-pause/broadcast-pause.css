@@ -4,6 +4,11 @@
 @import './pause-notice.css';
 
 .broadcast-pause {
+  --pause-card-width: 338px;
+  --pause-card-inset: 40px;
+  --pause-card-top: 556px;
+  --pause-dock-bottom: 110px;
+  --pause-dock-height: 256px;
   position: absolute;
   inset: 0;
   color: var(--mizar-hud-text-primary);
@@ -13,8 +18,8 @@
   position: absolute;
   left: 20px;
   right: 20px;
-  bottom: 110px;
-  height: 256px;
+  bottom: var(--pause-dock-bottom);
+  height: var(--pause-dock-height);
 }
 .broadcast-pause__bar,
 .broadcast-pause__body {
@@ -33,4 +38,29 @@
 }
 .broadcast-pause__history[data-pause-history-side='right'] {
   right: 40px;
+}
+
+.broadcast-pause__chat {
+  position: absolute;
+  top: var(--pause-card-top);
+  width: var(--pause-card-width);
+}
+.broadcast-pause__chat[data-pause-chat-side='left'] {
+  left: var(--pause-card-inset);
+}
+.broadcast-pause__chat[data-pause-chat-side='right'] {
+  right: var(--pause-card-inset);
+}
+.broadcast-pause__chat[data-pause-chat-kind='technical'] {
+  top: auto;
+  bottom: calc(var(--pause-dock-bottom) + var(--pause-dock-height) + 12px);
+}
+.broadcast-pause[data-broadcast-pause] .broadcast-pause__chat > .all-chat {
+  box-sizing: border-box;
+  bottom: 12px;
+}
+.broadcast-pause[data-broadcast-pause]
+  .broadcast-pause__chat[data-pause-chat-kind='technical']
+  > .all-chat {
+  bottom: 0;
 }

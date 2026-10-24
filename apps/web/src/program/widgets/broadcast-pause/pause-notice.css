@@ -1,16 +1,16 @@
 .broadcast-pause__notice {
   position: absolute;
-  top: 556px;
-  width: 338px;
+  top: var(--pause-card-top);
+  width: var(--pause-card-width);
   background: color-mix(in srgb, var(--mizar-hud-surface-strong) 94%, transparent);
   border-inline: 4px solid var(--mizar-hud-text-muted);
   border-inline-end-width: 0;
 }
 .broadcast-pause__notice[data-pause-info-side='left'] {
-  left: 40px;
+  left: var(--pause-card-inset);
 }
 .broadcast-pause__notice[data-pause-info-side='right'] {
-  right: 40px;
+  right: var(--pause-card-inset);
   border-inline-start-width: 0;
   border-inline-end-width: 4px;
 }
