@@ -481,7 +481,10 @@ export class MusicDirector {
             (this.truth().program.status.telemetry === 'fresh' &&
               this.truth().program.map.phase === 'live' &&
               ['mapVictory', 'matchVictory'].includes(saved!.group));
-          if (finished) s.consumed = [...s.consumed, saved!.key].slice(-64);
+          if (finished)
+            s.consumed = [
+              ...new Set([...s.consumed.filter((key) => key !== saved!.key), saved!.key]),
+            ].slice(-64);
           s[layer] = {
             ...saved!,
             finished: saved!.finished || finished,
@@ -580,7 +583,9 @@ export class MusicDirector {
         if (!looping(saved.group)) {
           await this.store.update((s) => {
             s[layer] = { ...saved!, finished: true };
-            s.consumed = [...s.consumed, saved!.key].slice(-64);
+            s.consumed = [
+              ...new Set([...s.consumed.filter((key) => key !== saved!.key), saved!.key]),
+            ].slice(-64);
           });
           delete this.fades[layer];
           markStatus(null);

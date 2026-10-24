@@ -205,7 +205,7 @@ export class MusicStore {
   }
   async consume(key: string) {
     await this.update((s) => {
-      s.consumed = [...s.consumed.filter((k) => k !== key), key].slice(-64);
+      s.consumed = [...new Set([...s.consumed.filter((k) => k !== key), key])].slice(-64);
     });
   }
 }

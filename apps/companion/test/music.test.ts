@@ -381,6 +381,9 @@ it('finishes map victory naturally into waiting, preempts it for live play, and 
 });
 it('layers only actual opening starts and never catches up an expired or consumed event', async () => {
   const r = await rig();
+  await r.store.update((state) => {
+    state.consumed = ['previous', 'previous'];
+  });
   await r.step();
   r.director.opening('take-1');
   await r.step();
@@ -390,6 +393,11 @@ it('layers only actual opening starts and never catches up an expired or consume
   r.director.opening('take-1');
   await r.step();
   expect(r.obs.restarts()).toBe(2);
+  const stinger = [...r.obs.inputs].find(([name]) => name.includes('Stinger'))![1];
+  stinger.state = 'OBS_MEDIA_STATE_ENDED';
+  await r.step();
+  await r.step();
+  expect(r.store.state.consumed).toEqual(['previous', 'take-1']);
   r.director.opening('take-expired');
   await r.step(2000);
   expect(r.obs.restarts()).toBe(2);
@@ -400,7 +408,8 @@ it('layers only actual opening starts and never catches up an expired or consume
   expect(r.obs.restarts()).toBe(2);
   r.truth.program.status.telemetry = 'stale';
   await r.step();
-  for (const input of r.obs.inputs.values()) expect(input.state).toBe('OBS_MEDIA_STATE_STOPPED');
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
+  expect(stinger.state).toBe('OBS_MEDIA_STATE_ENDED');
 });
 it('keeps OBS manual stop / mute and cancels a late start when formal play resumes', async () => {
   const r = await rig();
