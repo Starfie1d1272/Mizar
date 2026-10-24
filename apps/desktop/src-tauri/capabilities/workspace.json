@@ -26,6 +26,7 @@
     "allow-mulnx-handoff-status",
     "allow-open-mulnx-browser",
     "allow-launch-mulnx",
+    "allow-observer-command",
     "allow-start-managed-cs2",
     "allow-finish-managed-cs2",
     "allow-workspace-exit-status",

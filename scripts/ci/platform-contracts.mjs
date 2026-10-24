@@ -27,6 +27,9 @@ export function platformTestFiles(platform = process.platform) {
     'scripts/diagnostics/archive-snapshot.test.mjs',
     'apps/companion/test/obs-native-evidence.test.ts',
     'apps/companion/test/orchestration-pack.test.ts',
+    'apps/companion/test/observer-process.test.ts',
+    'apps/companion/test/observer-workspace.test.ts',
+    'scripts/qualification/observer-component.test.mjs',
     ...(platform === 'win32' ? ['scripts/qualification/gsi-discovery.test.mjs'] : []),
   ];
 }

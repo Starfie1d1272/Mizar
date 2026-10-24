@@ -354,6 +354,10 @@ jobs:
         # Real PowerShell/window/process fixtures share the runner's OS resources.
         # Serialize test cases without changing their internal concurrency or deadlines.
         run: cargo test --locked --profile ci --manifest-path apps/desktop/src-tauri/Cargo.toml -- --test-threads=1
+      - name: Verify observer process ownership
+        run: |
+          cargo build --locked --profile ci --manifest-path apps/desktop/src-tauri/Cargo.toml
+          node scripts/qualification/verify-observer-owner.mjs apps/desktop/src-tauri/target/ci/mizar-desktop.exe
 
       - name: Install locked Node dependencies for native console qualification
         if: matrix.lane == 'host'

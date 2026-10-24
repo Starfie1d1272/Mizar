@@ -143,7 +143,7 @@ fn request_failure(token: Option<&str>, production_summary: &'static str) -> &'s
     }
 }
 
-fn request_with_identity(
+pub(crate) fn request_with_identity(
     log: &DesktopLog,
     method: &str,
     path: &str,
@@ -277,7 +277,7 @@ const EXIT_ENDPOINT: &str = "/operator/runtime/local-match-exit";
 const EXIT_UNCONFIRMED: &str =
     "收尾已执行，但游戏退出和本场回收资格未确认。请重试结束游戏；再次失败时查看诊断。";
 
-fn runtime_token(log: &DesktopLog) -> Result<String, String> {
+pub(crate) fn runtime_token(log: &DesktopLog) -> Result<String, String> {
     let failure = "本地服务身份校验失败。请重新打开 Mizar；再次失败时查看诊断。";
     let file = std::fs::File::open(log.state_root.join("data/runtime.json"))
         .map_err(|error| io_failure(log, "runtime_read", &error, failure))?;

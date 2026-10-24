@@ -23,6 +23,7 @@ import { QUALIFICATION_NODE_VERSION } from './runtime-config.mjs';
 import { copyNodeRuntime, pruneDevelopmentFiles } from './portable-files.mjs';
 import { createBuildTimer } from './build-timings.mjs';
 import { readAppVersion, windowsBundleName } from './app-version.mjs';
+import { stageReleasedObserver } from './observer-component.mjs';
 import { stageMulnxBundle } from './mulnx-bundle.mjs';
 
 const REPOSITORY = 'Starfie1d1272/Mizar';
@@ -411,6 +412,8 @@ async function main() {
       : await timed('node-runtime', () =>
           downloadNodeRuntime(join(resourcesDir, 'runtime'), options.nodeVersion, downloadDir),
         );
+    if (process.platform === 'win32' && !options.skipNodeRuntime)
+      await timed('observer-component', () => stageReleasedObserver(resourcesDir, downloadDir));
     for (const name of [
       'start-product.ps1',
       'stop-product.ps1',

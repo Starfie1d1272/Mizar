@@ -4,6 +4,10 @@ version = "1.6.4"
 edition = "2021"
 build = "build.rs"
 
+[[example]]
+name = "observer-owner"
+path = "test-fixtures/observer-owner.rs"
+
 [dependencies]
 tauri = { version = "=2.12.1", features = ["tray-icon"] }
 tauri-runtime = "=2.12.1"

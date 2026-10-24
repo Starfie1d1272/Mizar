@@ -186,3 +186,7 @@ EWC 的 `apps/web/public/brand/hud/ewc/contour.svg` 为从用户 EWC01 参考中
 Windows 正式候选附带 [MulNX_CS2](https://github.com/Co1Swet/MulNX_CS2) 的独立官方发行归档与原有运镜资源，以及 [7-Zip](https://github.com/ip7z/7zip) 官方 7zr 解压器。MulNX 保持独立版本；Mizar 使用公开接口连接并调用其官方启动器。
 
 构建产物的 resources/mulnx 中保留上游 LICENSE、COPYRIGHT、SECURITY、运镜包署名、7-Zip 许可与精确版本源码链接。原始归档内的第三方说明继续保留。各组件与资源按其自身许可分发。
+
+## CS2 Headless Observer
+
+Windows 桌面包使用 [CS2 Headless Observer](https://github.com/Starfie1d1272/cs2-headless-observer) 的 external-node 发行包，复用随 Mizar 提供的 Node。固定版本与资产摘要见 `config/observer-component.json`。组件自有代码采用 AGPL-3.0 并附 Steamworks SDK 链接例外；组件的对应源码、第三方通知及许可位于 `resources/observer/source`，原始许可文本随包保留。

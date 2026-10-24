@@ -1,3 +1,4 @@
+import { ObserverControls } from './ObserverControls';
 import { ReviewDialog, closeReviewWindow } from './ReviewDialog';
 import { PreflightReview } from './PreflightReview';
 import { RosterCapture } from '../preparation/RosterCapture';
@@ -510,6 +511,7 @@ function WorkspaceDockContent() {
           </Button>
         </div>
         <CameraControls workspace />
+        <ObserverControls />
       </section>
       <section className="workspace-spectator" aria-label="观战控制">
         <div className="workspace-section-heading">
