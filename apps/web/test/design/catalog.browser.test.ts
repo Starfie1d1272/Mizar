@@ -61,3 +61,45 @@ test('hover changes the primary recipe in a real pointer interaction', async () 
   await button.hover();
   await expect.poll(() => getComputedStyle(button.element()).backgroundColor).not.toBe(before);
 });
+
+test('pause ALL chat aligns with timeout cards and clears the player dock in all HUD designs', async () => {
+  const { createElement } = await import('react');
+  const { createRoot } = await import('react-dom/client');
+  const { ProgramVisualFixturePage } =
+    await import('../../src/program/testing/ProgramVisualFixturePage');
+  await page.viewport(1920, 1080);
+  const container = document.createElement('div');
+  document.body.replaceChildren(container);
+  const root = createRoot(container);
+  try {
+    for (const design of ['current', 'ewc', 'iem', 'perfectworld', 'esl']) {
+      for (const phase of ['timeout-ct', 'timeout-t', 'paused']) {
+        const fixtureId = `all-chat-${design}-${phase}`;
+        root.render(createElement(ProgramVisualFixturePage, { fixtureId }));
+        await expect
+          .poll(() =>
+            container
+              .querySelector('[data-program-fixture-id]')
+              ?.getAttribute('data-program-fixture-id'),
+          )
+          .toBe(fixtureId);
+        const chat = container.querySelector('.all-chat')!.getBoundingClientRect();
+        const dock = container.querySelector('.broadcast-pause__dock')!.getBoundingClientRect();
+        expect(chat.width).toBeCloseTo(338, 0);
+        expect(chat.bottom).toBeLessThan(dock.top);
+        expect(chat.top).toBeGreaterThan(0);
+        if (phase !== 'paused') {
+          const notice = container
+            .querySelector('.broadcast-pause__notice')!
+            .getBoundingClientRect();
+          expect(chat.width).toBeCloseTo(notice.width, 0);
+          expect(chat.left).toBeCloseTo(notice.left, 0);
+          expect(notice.top - chat.bottom).toBeCloseTo(12, 0);
+        }
+      }
+    }
+  } finally {
+    root.unmount();
+    container.remove();
+  }
+});

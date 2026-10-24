@@ -9,6 +9,7 @@ import { hudDesignForVariant, type HudDesign } from '../../hud-design';
 import { buildMatchHeaderPresentation } from '../match-header/presentation';
 import { RoundHistoryPanel } from '../match-header/RoundHistoryPanel';
 import { SeriesStrip } from '../match-header/SeriesStrip';
+import { AllChat } from '../player-rails/AllChat';
 import { buildPlayerRailsPresentation } from '../player-rails/presentation';
 import { BroadcastBrand, type BroadcastBranding } from './BroadcastBrand';
 import { PauseRoster } from './PauseRoster';
@@ -68,6 +69,17 @@ export function BroadcastPause({
         </div>
       ) : null}
       <PauseNotice presentation={p} />
+      {layout['team-t-rail'].visible &&
+      right.showAllChat &&
+      snapshot.payload.status.telemetry === 'fresh' ? (
+        <div
+          className="broadcast-pause__chat"
+          data-pause-chat-side={historySide === 'left' ? 'right' : 'left'}
+          data-pause-chat-kind={p.timeoutPanel ? 'tactical' : 'technical'}
+        >
+          <AllChat design={design} messages={snapshot.payload.allChat ?? []} />
+        </div>
+      ) : null}
       {layout['round-history'].visible && p.roundHistory ? (
         <div className="broadcast-pause__history" data-pause-history-side={historySide}>
           <RoundHistoryPanel history={p.roundHistory} mode="pause" />
