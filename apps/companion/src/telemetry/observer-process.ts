@@ -1,9 +1,13 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { isAbsolute, dirname } from 'node:path';
+import { isAbsolute, dirname, join } from 'node:path';
 import { isIP } from 'node:net';
 import type { GameEventSourceRole } from '@mizar/core/game-events';
-import { createObserverSourceManager, type CstvSourceManager } from './cstv-source-manager.js';
+import {
+  createObserverSourceManager,
+  type CstvSourceManager,
+  type ObserverSourceManager,
+} from './cstv-source-manager.js';
 import { consumeObserverOutput } from './observer-output.js';
 
 /** Runtime paths come from the local installed artifact owner, never match metadata. */
@@ -26,13 +30,13 @@ export interface ObserverProcessOptions<R extends GameEventSourceRole> {
 function terminalEvidence(bytes: Buffer, overflow: boolean) {
   if (overflow) return { report: 'over-budget' as const };
   try {
-    const value: unknown = JSON.parse(bytes.toString('utf8'));
+    const value: unknown = JSON.parse(bytes.toString('utf8').trim().split(/\r?\n/).at(-1) ?? '');
     if (typeof value !== 'object' || value === null || Array.isArray(value))
       return { report: 'unavailable' as const };
     const row = value as Record<string, unknown>;
     if (
       row.online_success !== 'INCONCLUSIVE' ||
-      !['failed', 'incomplete'].includes(String(row.outcome))
+      !['failed', 'incomplete', 'closed'].includes(String(row.outcome))
     )
       return { report: 'unavailable' as const };
     const reasons = [
@@ -44,12 +48,16 @@ function terminalEvidence(bytes: Buffer, overflow: boolean) {
       'addon-initialization-required',
       'new-string-table-callbacks-required',
       'prespawn-initialization-required',
+      'initialization-timeout',
+      'phase-timeout',
+      'native-session-closed',
+      'source-hltv-stop',
     ];
     const integer = (v: unknown) =>
       typeof v === 'number' && Number.isSafeInteger(v) ? v : undefined;
     return {
       report: 'received' as const,
-      outcome: row.outcome as 'failed' | 'incomplete',
+      outcome: row.outcome as 'failed' | 'incomplete' | 'closed',
       reason:
         typeof row.reason === 'string' && reasons.includes(row.reason)
           ? row.reason
@@ -80,6 +88,14 @@ function terminalEvidence(bytes: Buffer, overflow: boolean) {
 export function startObserverProcess<R extends GameEventSourceRole>(
   options: ObserverProcessOptions<R>,
 ) {
+  return startReconnectingObserverProcess(options);
+}
+
+function startObserverAttempt<R extends GameEventSourceRole>(
+  options: ObserverProcessOptions<R>,
+  existingManager?: ObserverSourceManager<R>,
+  keepManager = false,
+) {
   const colon = options.endpoint.lastIndexOf(':');
   const host = options.endpoint.slice(0, colon).replace(/^\[|\]$/g, '');
   const port = options.endpoint.slice(colon + 1);
@@ -94,7 +110,7 @@ export function startObserverProcess<R extends GameEventSourceRole>(
     !Array.from(options.password).every(
       (char) => char.charCodeAt(0) > 0 && char.charCodeAt(0) <= 127,
     ) ||
-    options.hostVersion !== 14191 ||
+    ![14191, 14192].includes(options.hostVersion) ||
     !Number.isInteger(seconds) ||
     seconds < 1 ||
     seconds > 14_400 ||
@@ -113,10 +129,14 @@ export function startObserverProcess<R extends GameEventSourceRole>(
   }
   const role = options.role === 'lookahead' ? 'ahead' : 'delayed';
   const sourceId = randomUUID().replaceAll('-', '');
-  const manager = createObserverSourceManager({
-    role: options.role,
-    identity: { source: `${role}:${sourceId}`, role, channel: 1, world: 1 },
-  });
+  const identity = { source: `${role}:${sourceId}`, role, channel: 1, world: 1 } as const;
+  const manager =
+    existingManager ??
+    createObserverSourceManager({
+      role: options.role,
+      identity,
+    });
+  if (existingManager !== undefined) manager.attachObserver(identity);
   const env: NodeJS.ProcessEnv = { SteamAppId: '730' };
   for (const key of [
     'PATH',
@@ -231,7 +251,18 @@ export function startObserverProcess<R extends GameEventSourceRole>(
       cancelled: stoppingRequested,
       failed:
         (terminal.report === 'received' && terminal.outcome === 'failed') ||
-        (!stoppingRequested && (!ready || inputFailed || code !== 2 || output.status === 'failed')),
+        (!stoppingRequested &&
+          (!ready ||
+            inputFailed ||
+            (code !== 2 &&
+              !(
+                code === 0 &&
+                terminal.report === 'received' &&
+                terminal.outcome === 'closed' &&
+                terminal.reason === 'source-hltv-stop' &&
+                terminal.remoteEndReason === 1038
+              )) ||
+            output.status === 'failed')),
     };
   });
   let stopping: Promise<{ exited: boolean }> | undefined;
@@ -252,7 +283,8 @@ export function startObserverProcess<R extends GameEventSourceRole>(
       stopping ??= (async () => {
         stoppingRequested = true;
         clearTimeout(startupTimer);
-        await manager.stop();
+        if (keepManager) manager.disconnectObserver();
+        else await manager.stop();
         if (!exited) child.stdin.end();
         await waitForExit();
         if (!exited) {
@@ -288,4 +320,77 @@ export function startObserverProcess<R extends GameEventSourceRole>(
     subscribeLiveGameEvents: (listener) => manager.subscribeLiveGameEvents(listener),
   };
   return { ...owner, source };
+}
+
+/** Reconnect the configured authorized source; each child gets a fresh identity. */
+function startReconnectingObserverProcess<R extends GameEventSourceRole>(
+  options: ObserverProcessOptions<R>,
+) {
+  let current = startObserverAttempt(options, undefined, true);
+  const manager = current.manager;
+  let stopped = false;
+  let attemptCount = 1;
+  let wake: (() => void) | undefined;
+  const closed = (async () => {
+    while (true) {
+      const result = await current.closed;
+      const cleanup = await current.stop();
+      const cleanupFailed =
+        !cleanup.exited ||
+        (result.terminal.report === 'received' && result.terminal.finalizationFailures.length > 0);
+      if (stopped) return { ...result, attemptCount, cancelled: true, failed: cleanupFailed };
+      const terminal = result.terminal;
+      const retry =
+        !cleanupFailed &&
+        (result.startupTimedOut ||
+          (terminal.report === 'received' &&
+            terminal.outcome === 'failed' &&
+            (terminal.reason === 'initialization-timeout' ||
+              terminal.reason === 'phase-timeout' ||
+              (terminal.reason === 'native-session-closed' &&
+                (terminal.remoteEndReason === 0 || terminal.remoteEndReason === 1000)))));
+      if (!retry) {
+        await manager.stop();
+        return { ...result, attemptCount, failed: result.failed || cleanupFailed };
+      }
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(
+          resolve,
+          Math.min(15_000, 1000 * 2 ** Math.min(attemptCount - 1, 4)),
+        );
+        wake = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+      });
+      wake = undefined;
+      if (stopped) return { ...result, attemptCount, cancelled: true, failed: cleanupFailed };
+      attemptCount += 1;
+      current = startObserverAttempt(
+        { ...options, outputDirectory: join(options.outputDirectory, `retry-${attemptCount}`) },
+        manager,
+        true,
+      );
+    }
+  })();
+  let stopping: Promise<{ exited: boolean }> | undefined;
+  const stop = () =>
+    (stopping ??= (async () => {
+      stopped = true;
+      wake?.();
+      const result = await current.stop();
+      await closed;
+      await manager.stop();
+      return result;
+    })());
+  const source: CstvSourceManager<R> = {
+    ...current.source,
+    stop: async () => {
+      const result = await stop();
+      const terminal = await closed;
+      if (!result.exited || terminal.failed)
+        throw new Error('Observer source did not stop cleanly');
+    },
+  };
+  return { manager, source, closed, stop };
 }
