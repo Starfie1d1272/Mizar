@@ -4,10 +4,12 @@ import { useLocalRead } from '../preparation/client';
 import { desktopInvoke } from './client';
 
 export function ObserverControls() {
-  const view = useLocalRead<{ version: string; active: boolean; health: { state: string } }>(
-    '/local/v1/observer',
-    1000,
-  );
+  const view = useLocalRead<{
+    version: string;
+    active: boolean;
+    health: { state: string };
+    terminal?: { outcome?: string; reason?: string };
+  }>('/local/v1/observer', 1000);
   const [open, setOpen] = useState(false);
   const [endpoint, setEndpoint] = useState('');
   const [password, setPassword] = useState('');
@@ -39,12 +41,20 @@ export function ObserverControls() {
     ended: '来源结束',
     failed: '需要处理',
   };
+  const connectionError =
+    !view.active && view.terminal?.outcome === 'failed'
+      ? '连接需要处理。请核对 Steam 登录、授权地址和当前 CS2 版本后重新连接；详细阶段见运行诊断。'
+      : '';
   return (
     <>
       <div className="workspace-section-heading">
         <strong>观察辅助</strong>
         <StatusPill tone={view.health.state === 'live' ? 'success' : 'info'}>
-          {labels[view.health.state] ?? '待确认'}
+          {connectionError
+            ? '需要处理'
+            : view.terminal?.outcome === 'closed'
+              ? '来源结束'
+              : (labels[view.health.state] ?? '待确认')}
         </StatusPill>
         <Button
           disabled={busy}
@@ -54,7 +64,7 @@ export function ObserverControls() {
           {view.active ? '停止观察器' : '连接早源'}
         </Button>
       </div>
-      {error && !open ? <p role="alert">{error}</p> : null}
+      {(error || connectionError) && !open ? <p role="alert">{error || connectionError}</p> : null}
       <Dialog
         open={open}
         title="连接观察辅助早源"

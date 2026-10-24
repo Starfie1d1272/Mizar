@@ -73,7 +73,7 @@ describe('Release resource integration with the real official Pack', () => {
   it('binds all 43 actual materials, canonical bytes, exact Core identity and fixed public addresses', () => {
     expect(candidate.pack.manifest.files).toHaveLength(43);
     // Includes the updated third-party notices shipped in this exact Pack.
-    expect(candidate.pack.manifest.totalBytes).toBe(85664817);
+    expect(candidate.pack.manifest.totalBytes).toBe(85665267);
     expect(candidate.entry.policy).toEqual({
       packVersion: '1.0.0',
       sourceSha,

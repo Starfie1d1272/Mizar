@@ -1,5 +1,6 @@
 // Synthetic process tree exercises the production Windows relay and Job ownership.
 import { spawn } from 'node:child_process';
+import process from 'node:process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
