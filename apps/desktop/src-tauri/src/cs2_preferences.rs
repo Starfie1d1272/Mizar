@@ -38,7 +38,7 @@ impl Default for Preferences {
         Self {
             quality: Quality::VeryHigh,
             frame_rate_limit: 60,
-            prefer_mulnx: false,
+            prefer_mulnx: true,
         }
     }
 }
@@ -50,7 +50,7 @@ impl Preferences {
         Ok(Self {
             quality: Quality::parse(quality)?,
             frame_rate_limit,
-            prefer_mulnx: false,
+            prefer_mulnx: true,
         })
     }
     pub fn from_json(value: &Value) -> Result<Self, String> {
@@ -72,6 +72,7 @@ impl Preferences {
                 } else {
                     Quality::VeryHigh
                 },
+                prefer_mulnx: false,
                 ..Self::default()
             })
         } else {
@@ -88,6 +89,7 @@ mod tests {
     use super::*;
     #[test]
     fn launch_choice_survives_restart_and_legacy_keeps_steam() {
+        assert!(Preferences::default().prefer_mulnx);
         let legacy = json!({"qualityPreset":"high","frameRateLimit":30});
         let mut choice = Preferences::from_json(&legacy).unwrap();
         assert!(!choice.prefer_mulnx);

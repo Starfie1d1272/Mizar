@@ -605,11 +605,11 @@ async fn cs2_config_status(app: tauri::AppHandle) -> Result<serde_json::Value, S
 
 #[tauri::command]
 async fn launch_mulnx(window: tauri::WebviewWindow, app: tauri::AppHandle,
-    diagnostic_operation_id: Option<String>) -> Result<(), String> {
+    automatic: Option<bool>, diagnostic_operation_id: Option<String>) -> Result<serde_json::Value, String> {
     if window.label() != "main" { return Err("请在准备中心打开 MulNX。".into()); }
     let log = app.state::<DesktopLog>().inner().clone();
     let evidence = log.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || mulnx_launch::launch(&app, &log))
+    let result = tauri::async_runtime::spawn_blocking(move || mulnx_launch::launch(&app, &log, automatic.unwrap_or(false)))
         .await.unwrap_or_else(|error| Err(format!("MulNX 启动任务失败：{error}")));
     evidence.native_outcome("launch_mulnx", diagnostic_operation_id.as_deref(), &result);
     result

@@ -127,7 +127,13 @@ export class MulnxTool {
       const root = join(this.directory, this.installed!.directory, 'MulNX');
       await this.configureLauncher(root, cs2Path, consoleCapture);
       const launcher = await safePath(root, 'CS2Injector/CS2Injector.exe');
-      return { launcher, version: this.installed!.release.tag };
+      const launchProtocol = await readFile(join(root, 'CS2Injector/launch-protocol.txt'), 'utf8')
+        .then((value) => (value.trim() === '1' ? 1 : null))
+        .catch((error: NodeJS.ErrnoException) => {
+          if (error.code === 'ENOENT') return null;
+          throw error;
+        });
+      return { launcher, version: this.installed!.release.tag, launchProtocol };
     });
   }
   private async configureLauncher(root: string, cs2Path: string, consoleCapture = false) {
