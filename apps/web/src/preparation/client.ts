@@ -203,7 +203,7 @@ async function performProductionAction(
         running: boolean;
         pending: boolean;
       }>('cs2_config_status');
-      if (launch.preferMulnx && !launch.running && !launch.pending) {
+      if ((launch.preferMulnx || observerEnabled) && !launch.running && !launch.pending) {
         selectedExternal = await desktopInvoke<ExternalGameIdentity>(
           'launch_mulnx',
           { automatic: true },

@@ -111,8 +111,16 @@ function setup(
 
 describe('managed CS2 production entry and cleanup', () => {
   it('starts configured private assistance after committing production and presenting the workbench', async () => {
-    const calls = setup(undefined, 'preparation', true, true, [], true);
+    const calls = setup(
+      undefined,
+      'preparation',
+      false,
+      true,
+      [{ preferMulnx: false, running: false, pending: false }],
+      true,
+    );
     await productionAction('enter', preparation);
+    expect(calls).toContain('launch_mulnx');
     expect(calls.indexOf('observer_command')).toBeGreaterThan(calls.indexOf('present_production'));
     expect(calls.indexOf('observer_command')).toBeGreaterThan(
       calls.indexOf('/operator/production'),
