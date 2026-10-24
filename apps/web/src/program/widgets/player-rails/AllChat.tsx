@@ -25,9 +25,6 @@ export function AllChat({
   if (!visible.length) return null;
   return (
     <aside className="all-chat" data-all-chat={design} aria-label="公共聊天">
-      <div className="all-chat__label">
-        ALL <span>公共聊天</span>
-      </div>
       {visible.slice(-3).map((message) => (
         <p className="all-chat__message" key={message.id}>
           <b>{message.sender}</b>
