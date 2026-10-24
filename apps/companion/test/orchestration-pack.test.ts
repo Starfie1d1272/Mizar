@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, link } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, realpath, rm, symlink, link } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -29,7 +29,7 @@ afterEach(async () => {
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
 });
 it('prepares the installed launcher when public metadata is unavailable and preserves upstream options', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'mizar-mulnx-offline-'));
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'mizar-mulnx-offline-')));
   roots.push(root);
   const directory = `release-${'a'.repeat(64)}-11111111-1111-4111-8111-111111111111`;
   const injector = join(root, directory, 'MulNX/CS2Injector');
