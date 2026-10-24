@@ -312,16 +312,24 @@ export function registerWorkspaceObserver(
           throw new Error('observer_configuration_changed');
         if (settings.settings.hideGameHud && body.hudOriginal === undefined)
           throw new Error('observer_hud_snapshot_required');
+        const current = () =>
+          settings.settings.enabled && settings.revision === body.revision && canStart();
         await observer.stop();
+        if (!current()) throw new Error('observer_configuration_changed');
         await sendObserverGameCommand(
           observerConnectCommand(connection, settings.settings.hideGameHud),
         );
+        if (!current()) throw new Error('observer_configuration_changed');
         await observer.start(
           body.executable,
           connection.earlyEndpoint,
           connection.password,
           body.job,
         );
+        if (!current()) {
+          await observer.stop();
+          throw new Error('observer_configuration_changed');
+        }
         configured = [body.game, body.job, body.revision].join(':');
         return { ok: true, enabled: true, ...observer.view() };
       }

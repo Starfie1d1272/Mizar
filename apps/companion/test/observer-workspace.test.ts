@@ -1,3 +1,4 @@
+import { ObserverSettingsStore } from '../src/telemetry/observer-settings.js';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -143,3 +144,46 @@ describe('workbench observer ownership', () => {
       expect(observer.source.getHealth().state).toBe('stopped');
     }));
 });
+
+it('rechecks the enabled configuration after waiting for an earlier observer to stop', () =>
+  fixture(async (observer) => {
+    const app = Fastify(),
+      settings = new ObserverSettingsStore();
+    await settings.configure({ ...settings.settings, enabled: true, hideGameHud: false });
+    settings.setConnection({
+      earlyEndpoint: '127.0.0.1:27025',
+      programEndpoint: '127.0.0.1:27026',
+      password: 'synthetic',
+    });
+    registerWorkspaceObserver(app, observer, 'synthetic-capability', () => true, settings);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const stopped = vi.spyOn(observer, 'stop').mockImplementationOnce(() => gate);
+    const start = vi.spyOn(observer, 'start');
+    try {
+      const pending = app
+        .inject({
+          method: 'POST',
+          url: '/operator/runtime/observer',
+          headers: { 'x-runtime-token': 'synthetic-capability' },
+          payload: {
+            action: 'start-configured',
+            executable: driver,
+            game: '42-1',
+            job: 'Local\\MizarObserver-test',
+            revision: settings.revision,
+          },
+        })
+        .then((response) => response);
+      await expect.poll(() => stopped.mock.calls.length).toBe(1);
+      await settings.configure({ ...settings.settings, enabled: false });
+      release();
+      expect((await pending).statusCode).toBe(409);
+      expect(start).not.toHaveBeenCalled();
+    } finally {
+      release();
+      await app.close();
+    }
+  }));
