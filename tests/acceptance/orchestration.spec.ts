@@ -1,3 +1,4 @@
+import { DEFAULT_OBSERVER_SETTINGS } from '../../packages/protocol/src/assist.js';
 import { mkdtemp, rm, readFile, mkdir, writeFile, copyFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -237,21 +238,24 @@ test('external-game browser entry uses real production lifecycle without native 
     payload: { teamA: 'A', teamB: 'B', format: 'bo1' },
   });
   expect(created.statusCode).toBe(200);
-  await context.route(/\/(?:local\/v1\/production|operator\/production)$/, async (route) => {
-    const req = route.request();
-    if (req.method() === 'POST') actions.push((req.postDataJSON() as { action: string }).action);
-    const res = await app.inject({
-      method: req.method() as 'GET' | 'POST',
-      url: new URL(req.url()).pathname,
-      headers: req.headers(),
-      ...(req.postDataBuffer() ? { payload: req.postDataBuffer()! } : {}),
-    });
-    await route.fulfill({
-      status: res.statusCode,
-      body: res.body,
-      contentType: 'application/json',
-    });
-  });
+  await context.route(
+    /\/(?:local\/v1\/(?:production|observer-assist)|operator\/production)$/,
+    async (route) => {
+      const req = route.request();
+      if (req.method() === 'POST') actions.push((req.postDataJSON() as { action: string }).action);
+      const res = await app.inject({
+        method: req.method() as 'GET' | 'POST',
+        url: new URL(req.url()).pathname,
+        headers: req.headers(),
+        ...(req.postDataBuffer() ? { payload: req.postDataBuffer()! } : {}),
+      });
+      await route.fulfill({
+        status: res.statusCode,
+        body: res.body,
+        contentType: 'application/json',
+      });
+    },
+  );
   await context.route('**/local/v1/obs', (route) =>
     route.fulfill({ json: { connection: 'connected', findings: [], streaming: false } }),
   );
@@ -280,6 +284,9 @@ test('Host handoff binds the selected external instance and detaches without man
   const calls: string[] = [];
   let borrowed = false;
   let production = { mode: 'preparation', revision: 'external-1', canEnter: true };
+  await context.route('**/local/v1/observer-assist', (route) =>
+    route.fulfill({ json: { settings: DEFAULT_OBSERVER_SETTINGS, connection: null } }),
+  );
   await context.route('**/local/v1/production', (route) => route.fulfill({ json: production }));
   await context.route('**/local/v1/demo-test', (route) =>
     route.fulfill({ json: { active: false } }),
