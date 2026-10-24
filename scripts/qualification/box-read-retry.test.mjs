@@ -1,10 +1,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { BoxClient } from './box-sync.mjs';
+import { BoxClient, digest } from './box-sync.mjs';
+import { Buffer } from 'node:buffer';
 
+vi.mock('node:timers/promises', () => ({
+  setTimeout: (ms, value, { signal } = {}) =>
+    new Promise((resolve, reject) => {
+      signal?.throwIfAborted();
+      const abort = () => {
+        globalThis.clearTimeout(timer);
+        reject(signal.reason);
+      };
+      const timer = globalThis.setTimeout(() => {
+        signal?.removeEventListener('abort', abort);
+        resolve(value);
+      }, ms);
+      signal?.addEventListener('abort', abort, { once: true });
+    }),
+}));
 const { Response, AbortSignal, DOMException } = globalThis;
 let output;
 beforeEach(() => {
   vi.useFakeTimers();
+  vi.spyOn(Math, 'random').mockReturnValue(0.999999);
   output = vi.spyOn(console, 'log').mockImplementation(() => undefined);
 });
 afterEach(() => {
@@ -98,4 +115,139 @@ describe('Box read request recovery', () => {
     await expect(client(invalid).api('repo-info')).rejects.toThrow('无效 JSON');
     expect(invalid).toHaveBeenCalledTimes(1);
   });
+});
+
+describe('Box bounded recovery', () => {
+  it.each(['seconds', 'date'])('honors Retry-After %s', async (header) => {
+    vi.setSystemTime(new Date('2026-10-24T09:00:00Z'));
+    header = header === 'seconds' ? '3' : new Date(Date.now() + 3000).toUTCString();
+    const transport = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(null, { status: 429, headers: { 'Retry-After': header } }),
+      )
+      .mockResolvedValueOnce(ok());
+    const pending = client(transport).api('repo-info');
+    await vi.advanceTimersByTimeAsync(2999);
+    expect(transport).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(pending).resolves.toEqual({ repo_name: 'Mizar' });
+  });
+  it('stops rather than retrying before an excessive Retry-After', async () => {
+    const transport = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 503, headers: { 'Retry-After': '3600' } }));
+    await expect(client(transport).api('repo-info')).rejects.toThrow('预算');
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+  it('uses a 20-second API deadline', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    await client(vi.fn().mockResolvedValue(ok())).api('repo-info');
+    expect(timeout).toHaveBeenCalledWith(20000);
+  });
+  function uploading({ safe = true, entries = [], actual, status } = {}) {
+    const transport = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error('PRIVATE-UPLOAD'), {
+          code: 'BOX_CURL_FAILED',
+          retrySafeUpload: safe,
+          httpStatus: status,
+        }),
+      )
+      .mockResolvedValue(new Response('[{"name":"core.exe"}]'));
+    const api = vi
+      .fn()
+      .mockImplementation(async () => new Response('"https://box.nju.edu.cn/seafhttp/PRIVATE"'));
+    const box = new BoxClient('PRIVATE-TOKEN', transport, api);
+    vi.spyOn(box, 'list').mockResolvedValue(entries);
+    vi.spyOn(box, 'hash').mockResolvedValue(actual);
+    return { box, transport, api };
+  }
+  const bytes = Buffer.from('core');
+  it('retries an unsent upload only after confirming absence, with a fresh upload URL', async () => {
+    const { box, transport, api } = uploading();
+    const pending = box.upload('/Runtime/v1.6.4', 'core.exe', bytes);
+    await vi.advanceTimersByTimeAsync(1000);
+    await pending;
+    expect(box.list).toHaveBeenCalledTimes(1);
+    expect(transport).toHaveBeenCalledTimes(2);
+    expect(api).toHaveBeenCalledTimes(2);
+  });
+  it('accepts a lost acknowledgement only after matching size and SHA', async () => {
+    const { box, transport } = uploading({
+      safe: false,
+      entries: [{ name: 'core.exe', type: 'file' }],
+      actual: { size: 4, sha256: digest(bytes) },
+    });
+    await box.upload('/Runtime/v1.6.4', 'core.exe', bytes);
+    expect(box.hash).toHaveBeenCalledTimes(1);
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+  it('preserves a same-size different-content destination', async () => {
+    const { box, transport } = uploading({
+      entries: [{ name: 'core.exe', type: 'file' }],
+      actual: { size: 4, sha256: digest(Buffer.from('nope')) },
+    });
+    await expect(box.upload('/Runtime/v1.6.4', 'core.exe', bytes)).rejects.toThrow('不同内容');
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+  it.each([{ safe: false }, { safe: true, replace: true }])(
+    'does not replay uncertain/replace writes: %j',
+    async ({ safe, replace }) => {
+      const { box, transport } = uploading({ safe });
+      await expect(box.upload('/Updates', 'core.exe', bytes, replace)).rejects.toThrow();
+      expect(transport).toHaveBeenCalledTimes(1);
+    },
+  );
+  it('keeps auth failure terminal even when upload metrics look retryable', async () => {
+    const { box, transport } = uploading({ status: 403 });
+    await expect(box.upload('/Runtime/v1.6.4', 'core.exe', bytes)).rejects.toMatchObject({
+      httpStatus: 403,
+    });
+    expect(box.list).not.toHaveBeenCalled();
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+  it('caps unsent upload attempts at three', async () => {
+    const { box, transport } = uploading();
+    transport
+      .mockReset()
+      .mockRejectedValue(
+        Object.assign(new Error('PRIVATE'), { code: 'BOX_CURL_FAILED', retrySafeUpload: true }),
+      );
+    const pending = box.upload('/Runtime/v1.6.4', 'core.exe', bytes);
+    const rejected = expect(pending).rejects.toThrow();
+    await vi.advanceTimersByTimeAsync(3000);
+    await rejected;
+    expect(transport).toHaveBeenCalledTimes(3);
+  });
+});
+
+it('cancels reconciliation at the same 15-minute upload budget', async () => {
+  vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+    const controller = new globalThis.AbortController();
+    globalThis.setTimeout(() => controller.abort(new DOMException('deadline', 'TimeoutError')), ms);
+    return controller.signal;
+  });
+  const transport = vi
+    .fn()
+    .mockRejectedValue(
+      Object.assign(new Error('lost'), { code: 'BOX_CURL_FAILED', retrySafeUpload: true }),
+    );
+  const box = new BoxClient(
+    'private',
+    transport,
+    async () => new Response('"https://box.nju.edu.cn/seafhttp/private"'),
+  );
+  vi.spyOn(box, 'list').mockImplementation(
+    (_path, signal) =>
+      new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      }),
+  );
+  const pending = box.upload('/Runtime/v1.6.4', 'core.exe', Buffer.from('core'));
+  const rejected = expect(pending).rejects.toThrow('timeout');
+  await vi.advanceTimersByTimeAsync(900000);
+  await rejected;
+  expect(transport).toHaveBeenCalledTimes(1);
 });

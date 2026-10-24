@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { Buffer, Blob } from 'node:buffer';
 import { URL } from 'node:url';
@@ -171,6 +172,7 @@ function safeNetworkCode(error) {
   if (error?.name === 'TimeoutError' || error?.name === 'AbortError') return 'timeout';
   const code = error?.cause?.code || error?.code;
   if (code === 'BOX_RESPONSE_LIMIT') return 'response_limit';
+  if (code === 'BOX_CURL_FAILED') return code;
   return networkCodes.has(code) ? code : 'network';
 }
 function directoryCategory(path) {
@@ -197,18 +199,32 @@ async function boxStage(stage, action) {
     throw error;
   }
 }
+function retryAfterMs(value) {
+  if (!value) return 0;
+  if (/^\d+$/.test(value.trim())) return Number(value) * 1000;
+  const date = Date.parse(value);
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : 0;
+}
+async function retryWait(attempt, reason, deadline, retryAfter, signal) {
+  const delay = Math.max(Math.ceil(Math.random() * 1000 * 2 ** attempt), retryAfterMs(retryAfter));
+  requireValue(delay < deadline - Date.now(), '重试等待超出本次恢复预算；保留现有文件');
+  console.log(`Box 暂态失败（${reason}），${delay}ms 后重试 ${attempt + 1}/2`);
+  await sleep(delay, undefined, { signal });
+}
 async function checkedFetch(url, options = {}, timeout = 120000, transport = fetch) {
   // Error text and response bodies may contain temporary upload URLs or credentials.
   const readOnlyBox =
     ['GET', 'HEAD'].includes((options.method ?? 'GET').toUpperCase()) &&
     new URL(url).origin === origin;
   const temporaryStatuses = new Set([408, 429, 500, 502, 503, 504]);
-  const retry = async (attempt, reason) => {
-    console.log(`Box 只读请求暂态失败（${reason}），${attempt + 1}s 后重试 ${attempt + 1}/2`);
-    await new Promise((resolve) => globalThis.setTimeout(resolve, (attempt + 1) * 1000));
-  };
+  const deadline = Date.now() + timeout * (readOnlyBox ? 3 : 1) + 30000;
   for (let attempt = 0; ; attempt++) {
-    const signal = AbortSignal.timeout(timeout);
+    options.signal?.throwIfAborted();
+    requireValue(Date.now() < deadline, '请求恢复预算已用完；保留现有文件');
+    const signal = AbortSignal.any([
+      AbortSignal.timeout(Math.min(timeout, Math.max(1, deadline - Date.now()))),
+      ...(options.signal ? [options.signal] : []),
+    ]);
     let response;
     try {
       response = await transport(url, { ...options, signal });
@@ -217,19 +233,34 @@ async function checkedFetch(url, options = {}, timeout = 120000, transport = fet
       if (
         readOnlyBox &&
         (networkCodes.has(code) || (code === 'timeout' && signal.aborted)) &&
-        attempt < 2
+        attempt < 2 &&
+        !options.signal?.aborted
       ) {
-        await retry(attempt, code);
+        await retryWait(attempt, code, deadline, undefined, options.signal);
         continue;
       }
-      throw new MirrorError(
-        `网络请求失败或超时（${code}，每次请求上限${timeout}ms，已尝试${attempt + 1}次）；保留现有文件，可重试同一版本`,
+      throw Object.assign(
+        new MirrorError(
+          `网络请求失败或超时（${code}，每次请求上限${timeout}ms，已尝试${attempt + 1}次）；保留现有文件`,
+          error?.httpStatus,
+        ),
+        {
+          retrySafeUpload: error?.retrySafeUpload === true,
+          uploadOutcomeUnknown:
+            code === 'BOX_CURL_FAILED' || networkCodes.has(code) || code === 'timeout',
+        },
       );
     }
     if (!response.ok) {
       await response.body?.cancel().catch(() => undefined);
       if (readOnlyBox && temporaryStatuses.has(response.status) && attempt < 2) {
-        await retry(attempt, `HTTP ${response.status}`);
+        await retryWait(
+          attempt,
+          `HTTP ${response.status}`,
+          deadline,
+          response.headers.get('retry-after'),
+          options.signal,
+        );
         continue;
       }
       throw new MirrorError(
@@ -242,13 +273,13 @@ async function checkedFetch(url, options = {}, timeout = 120000, transport = fet
 }
 
 export class BoxClient {
-  constructor(token, uploadTransport = multipartUpload, apiTransport = apiRequest) {
+  constructor(token, uploadTransport = curlMultipartUpload, apiTransport = apiRequest) {
     requireValue(token, '未配置 MIZAR_BOX_REPO_TOKEN；在 Actions 配置后重试');
     this.token = token;
     this.uploadTransport = uploadTransport;
     this.apiTransport = apiTransport;
   }
-  async api(endpoint, path, method = 'GET', body) {
+  async api(endpoint, path, method = 'GET', body, signal) {
     const safeEndpoint = [
       'repo-info',
       'dir',
@@ -272,8 +303,9 @@ export class BoxClient {
           headers,
           redirect: 'error',
           ...(body ? { body: JSON.stringify(body) } : {}),
+          signal,
         },
-        120000,
+        20000,
         this.apiTransport,
       );
       try {
@@ -285,10 +317,10 @@ export class BoxClient {
       }
     });
   }
-  async list(path) {
+  async list(path, signal) {
     // This directory is the verified public share; do not send a repository token.
-    if (path === downloadsFolder) return readPublicDownloadDirectory();
-    const result = await this.api('dir', path);
+    if (path === downloadsFolder) return readPublicDownloadDirectory(signal);
+    const result = await this.api('dir', path, 'GET', undefined, signal);
     requireValue(Array.isArray(result.dirent_list), '云盘目录返回格式错误');
     return result.dirent_list;
   }
@@ -313,10 +345,12 @@ export class BoxClient {
     );
     return url;
   }
-  async hash(path) {
+  async hash(path, signal) {
     return boxStage(`回读/${directoryCategory(path)}`, async () => {
-      const url = this.temporaryUrl(await this.api('download-link', path));
-      const response = await checkedFetch(url, { redirect: 'error' }, 600000);
+      const url = this.temporaryUrl(
+        await this.api('download-link', path, 'GET', undefined, signal),
+      );
+      const response = await checkedFetch(url, { redirect: 'error', signal }, 600000);
       const hash = createHash('sha256');
       let size = 0;
       for await (const chunk of response.body) {
@@ -328,24 +362,53 @@ export class BoxClient {
   }
   async upload(path, name, bytes, replace = false) {
     return boxStage(`上传/${directoryCategory(path)}`, async () => {
-      const url = this.temporaryUrl(await this.api('upload-link', path));
-      url.searchParams.set('ret-json', '1');
-      const form = new FormData();
-      form.set('parent_dir', path);
-      form.set('replace', replace ? '1' : '0');
-      form.set('file', new Blob([bytes]), name);
-      const result = await (
-        await checkedFetch(
-          url,
-          { method: 'POST', body: form, redirect: 'error' },
-          600000,
-          this.uploadTransport,
-        )
-      ).json();
-      requireValue(
-        Array.isArray(result) && result.length === 1 && result[0].name === name,
-        '上传回执不一致；检查目录后重试',
-      );
+      const deadline = Date.now() + 900000;
+      const signal = AbortSignal.timeout(900000);
+      for (let attempt = 0; attempt < 3; attempt++) {
+        signal.throwIfAborted();
+        const url = this.temporaryUrl(
+          await this.api('upload-link', path, 'GET', undefined, signal),
+        );
+        url.searchParams.set('ret-json', '1');
+        const form = new FormData();
+        form.set('parent_dir', path);
+        form.set('replace', replace ? '1' : '0');
+        form.set('file', new Blob([bytes]), name);
+        try {
+          const result = await (
+            await checkedFetch(
+              url,
+              { method: 'POST', body: form, redirect: 'error', signal },
+              Math.min(600000, Math.max(1, deadline - Date.now())),
+              this.uploadTransport,
+            )
+          ).json();
+          requireValue(
+            Array.isArray(result) && result.length === 1 && result[0].name === name,
+            '上传回执不一致；检查目录后重试',
+          );
+          return;
+        } catch (error) {
+          if (!error.uploadOutcomeUnknown || error.httpStatus === 401 || error.httpStatus === 403)
+            throw error;
+          // Reconciliation is read-only and shares this upload's total budget.
+          // A completed body might still commit later: absence alone never authorizes replay.
+          const existing = (await this.list(path, signal)).filter((entry) => entry.name === name);
+          requireValue(existing.length <= 1, '上传恢复发现重名文件；保留远端内容');
+          if (existing.length) {
+            requireValue(existing[0].type === 'file', '上传恢复目标不是文件');
+            const actual = await this.hash(path + '/' + name, signal);
+            requireValue(
+              actual.size === bytes.length && actual.sha256 === digest(bytes),
+              '上传恢复发现不同内容；保留远端文件',
+            );
+            console.log('Box 上传回执丢失，远端原字节已核验，跳过重传');
+            return;
+          }
+          if (!error.retrySafeUpload || replace || attempt === 2) throw error;
+          await retryWait(attempt, '上传未发送且目标缺失', deadline, undefined, signal);
+        }
+      }
     });
   }
   async move(from, to, name) {
@@ -537,11 +600,12 @@ export async function syncUserDownloads({
 // One public directory reader serves migration inventory and anonymous acceptance.
 // It cannot list private folders or authorize a write; every retired file still
 // requires its original signed release identity and authenticated full-byte readback.
-export async function readPublicDownloadDirectory() {
+export async function readPublicDownloadDirectory(signal) {
   const listing = await (
     await checkedFetch(
       'https://box.nju.edu.cn/api/v2.1/share-links/91dec4c27e5d47f38fcf/dirents/?path=%2FDownloads%2F',
-      { redirect: 'error', cache: 'no-store' },
+      { redirect: 'error', cache: 'no-store', signal },
+      20000,
     )
   ).json();
   requireValue(
@@ -1061,7 +1125,7 @@ async function main() {
       ? undefined
       : new BoxClient(
           process.env.MIZAR_BOX_REPO_TOKEN,
-          process.env.BOX_UPLOAD_TRANSPORT === 'curl' ? curlMultipartUpload : multipartUpload,
+          process.env.BOX_UPLOAD_TRANSPORT === 'native' ? multipartUpload : curlMultipartUpload,
         );
   if (mode === 'probe') return probe(box);
   const resolveIdentity = cacheReleaseIdentities(releaseIdentity);

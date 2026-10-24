@@ -1,7 +1,9 @@
 import process from 'node:process';
 import { curlMultipartUpload } from './box-curl-upload.mjs';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Agent, createServer, request } from 'node:https';
@@ -54,6 +56,8 @@ beforeAll(async () => {
     if (path === '/curl-redirect') {
       res.writeHead(302, { Location: '/curl-success' });
       res.end();
+    } else if (path === '/curl-stall') {
+      // Read request, then deliberately never acknowledge it.
     } else if (path === '/curl-success') {
       res.end('[{"name":"test.bin"}]');
     } else if (path === '/disconnect' && (count === 1 || req.method === 'POST')) {
@@ -67,7 +71,7 @@ beforeAll(async () => {
       res.writeHead(200);
       res.end(Buffer.alloc(2 * 1024 * 1024 + 1));
     } else if (path === '/temporary' && count === 1) {
-      res.writeHead(503);
+      res.writeHead(503, { 'Retry-After': '2' });
       res.write('PRIVATE-RESPONSE');
     } else if (path === '/upload-link') {
       res.end(JSON.stringify('https://box.nju.edu.cn/seafhttp/local-test'));
@@ -115,7 +119,7 @@ function shortDeadline() {
 }
 
 describe('Box native HTTPS response boundaries', () => {
-  it('uses the alternate curl transport with verified TLS and without redirects or retries', async () => {
+  it('uses the default curl transport with verified TLS and without redirects or retries', async () => {
     const previous = process.env.CURL_CA_BUNDLE;
     process.env.CURL_CA_BUNDLE = join(certificateDirectory, 'cert.pem');
     try {
@@ -181,4 +185,77 @@ describe('Box native HTTPS response boundaries', () => {
       expect(counts.get('/upload')).toBe(1);
     },
   );
+});
+
+it.each([
+  ['unsent timeout', 28, '000', 0, true],
+  ['partial timeout', 28, '000', 1, false],
+  ['complete timeout', 28, '000', 'full', false],
+  ['certificate failure', 60, '000', 0, false],
+  ['auth failure', 28, '403', 0, false],
+])(
+  'classifies curl %s without leaking its private address',
+  async (_label, exit, http, sent, retrySafe) => {
+    const run = vi.fn((_command, args) => {
+      expect(args.slice(0, 3)).toEqual(['-q', '--config', '-']);
+      expect(args[args.indexOf('--connect-timeout') + 1]).toBe('15');
+      expect(args[args.indexOf('--speed-limit') + 1]).toBe('1024');
+      expect(args[args.indexOf('--speed-time') + 1]).toBe('60');
+      expect(args[args.indexOf('--max-time') + 1]).toBe('600');
+      expect(args.join(' ')).not.toContain('PRIVATE');
+      const child = new EventEmitter();
+      child.stdin = new PassThrough();
+      child.stdout = new PassThrough();
+      child.kill = vi.fn();
+      child.stdin.on('finish', async () => {
+        const payload = await readFile(args[args.indexOf('--data-binary') + 1].slice(1));
+        await writeFile(args[args.indexOf('--output') + 1], '');
+        child.stdout.write(
+          `${http} 0.01 0.02 0.03 0.04 0 60 ${sent === 'full' ? payload.length : sent} 0`,
+        );
+        child.emit('close', exit);
+      });
+      return child;
+    });
+    const body = new globalThis.FormData();
+    body.set('file', new globalThis.Blob(['payload']), 'test.bin');
+    await expect(
+      curlMultipartUpload(
+        'https://box.nju.edu.cn/seafhttp/PRIVATE',
+        { body, signal: AbortSignal.timeout(5000) },
+        run,
+      ),
+    ).rejects.toMatchObject({ retrySafeUpload: retrySafe });
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(console.log.mock.calls.flat().join(' ')).not.toContain('PRIVATE');
+  },
+);
+it('preserves Retry-After from a real response with an unfinished error body', async () => {
+  const response = await apiRequest(
+    'https://box.nju.edu.cn/',
+    { signal: AbortSignal.timeout(1000) },
+    localRequest('/temporary'),
+  );
+  expect(response.status).toBe(503);
+  expect(response.headers.get('retry-after')).toBe('2');
+});
+it('terminates a stalled real curl process at the caller deadline', async () => {
+  const previous = process.env.CURL_CA_BUNDLE;
+  process.env.CURL_CA_BUNDLE = join(certificateDirectory, 'cert.pem');
+  try {
+    const body = new globalThis.FormData();
+    body.set('file', new globalThis.Blob(['payload']), 'test.bin');
+    const started = Date.now();
+    await expect(
+      curlMultipartUpload(new URL('/curl-stall', localOrigin), {
+        body,
+        signal: AbortSignal.timeout(300),
+      }),
+    ).rejects.toMatchObject({ retrySafeUpload: false });
+    expect(Date.now() - started).toBeLessThan(3000);
+    expect(counts.get('/curl-stall')).toBe(1);
+  } finally {
+    if (previous === undefined) delete process.env.CURL_CA_BUNDLE;
+    else process.env.CURL_CA_BUNDLE = previous;
+  }
 });

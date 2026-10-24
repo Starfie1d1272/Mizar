@@ -160,3 +160,13 @@ it.each(['workflow_run', 'workflow_dispatch'])(
     expect(enabledFollowups(ctx, {})).toEqual([]);
   },
 );
+
+it('defaults automatic and manual uploads to curl while allowing explicit native diagnostics', () => {
+  for (const event of ['workflow_run', 'workflow_dispatch']) {
+    const ctx = context(event, 'v1.6.4', 'sync');
+    expect(evaluate(mirror.env.BOX_UPLOAD_TRANSPORT, ctx)).toBe('curl');
+  }
+  const ctx = context('workflow_dispatch', 'v1.6.4', 'sync');
+  ctx.inputs.transport = 'native';
+  expect(evaluate(mirror.env.BOX_UPLOAD_TRANSPORT, ctx)).toBe('native');
+});
