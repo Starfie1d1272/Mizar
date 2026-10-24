@@ -689,14 +689,16 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           obsAdapter.switchScene(id, {
             ...options,
             onStarted: () => {
-              if (id === 'matchup' && options.valid?.() !== false) {
+              const preparing = sceneController.get().preparing;
+              if (
+                id === 'matchup' &&
+                preparing?.target === 'matchup' &&
+                options.valid?.() !== false
+              ) {
                 const sound = cameraDirector?.store.map(
                   projectionCoordinator.getCurrent().program.map.name,
                 )?.openingSound;
-                musicDirector?.opening(
-                  `opening:${sceneController.get().preparing?.revision}`,
-                  sound ?? undefined,
-                );
+                musicDirector?.opening(`opening:${preparing.revision}`, sound ?? undefined);
                 cameraDirector?.opening();
               }
             },

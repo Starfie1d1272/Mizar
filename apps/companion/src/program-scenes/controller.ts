@@ -287,6 +287,7 @@ export class ProgramSceneController {
           await rollback();
           return {
             ok: false as const,
+            cancelled: abort.signal.aborted || !valid() || expectedRevision !== this.revision,
             message: stillBlocked ?? '自动编排请求已失效，保持当前场景。',
           };
         }
@@ -298,6 +299,7 @@ export class ProgramSceneController {
         await rollback();
         return {
           ok: false as const,
+          cancelled: abort.signal.aborted || !valid() || expectedRevision !== this.revision,
           message:
             error instanceof ObsExitSafetyError
               ? error.message
