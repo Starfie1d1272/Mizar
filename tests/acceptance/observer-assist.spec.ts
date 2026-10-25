@@ -1,3 +1,4 @@
+import { radarSnapshotSchema } from '../../packages/protocol/src/radar.js';
 import { expect, test } from './companion-isolation.js';
 import { readFileSync } from 'node:fs';
 import type { WebSocketRoute } from '@playwright/test';
@@ -10,7 +11,7 @@ import {
   LOCAL_PROTOCOL_VERSION,
 } from '../../packages/protocol/src/version.js';
 import { programSnapshotSchema } from '../../packages/protocol/src/program.js';
-test('private hints occupy the left radar section while off keeps the base workspace', async ({
+test('keeps the full-width square radar across private hint states and desktop sizes', async ({
   page,
 }, testInfo) => {
   const fixtures = JSON.parse(
@@ -37,7 +38,28 @@ test('private hints occupy the left radar section while off keeps the base works
   });
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
+  const radarFixtures = JSON.parse(
+    readFileSync(
+      'apps/web/src/program/fixtures/generated/real-radar-fixtures.generated.json',
+      'utf8',
+    ),
+  ) as { fixtures: Record<string, { samples: { snapshot: unknown }[] }> };
+  const radarFrame = radarSnapshotSchema.parse(
+    radarFixtures.fixtures['dense-utility']!.samples[0]!.snapshot,
+  );
+  program.payload.map.name = radarFrame.payload.mapName;
+  await page.routeWebSocket('**/local/v1/radar', (ws) => ws.send(JSON.stringify(radarFrame)));
+  await page.route('**/local/v1/music', (route) =>
+    route.fulfill({ json: { status: { held: true, bgm: null, stinger: null, message: null } } }),
+  );
+  await page.setViewportSize({ width: 480, height: 1080 });
   await page.goto('/workspace/left');
+  await expect(page.locator('.workspace-radar canvas')).toBeVisible();
+  const initialMap = await page.locator('.workspace-radar__picture').boundingBox();
+  expect(initialMap!.width).toBe(480);
+  expect(initialMap!.height).toBe(480);
+  await expect(page.locator('.workspace-brand')).toHaveCount(0);
+  await expect(page.getByText('比赛雷达', { exact: true })).toHaveCount(0);
   const card = page.getByRole('region', { name: '私有观察辅助' });
   await expect(card).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath('workspace-standard.png') });
@@ -70,6 +92,39 @@ test('private hints occupy the left radar section while off keeps the base works
   expect(hint).not.toBeNull();
   expect(hint!.y).toBeGreaterThanOrEqual(radar!.y + radar!.height - 1);
   await page.screenshot({ path: testInfo.outputPath('workspace-private-hints.png') });
+  expect(await page.locator('.workspace-radar__picture').boundingBox()).toEqual(initialMap);
+  await expect(page.getByText('即将发生', { exact: true })).toHaveCount(0);
+  snapshot.payload.observer!.hints = Array.from({ length: 6 }, (_, i) => ({
+    ...snapshot.payload.observer!.hints[0]!,
+    id: `layout-${i}`,
+  }));
+  snapshot.channelSeq++;
+  socket!.send(JSON.stringify(snapshot));
+  await expect(card.locator('li')).toHaveCount(6);
+  for (const viewport of [
+    { width: 480, height: 1080 },
+    { width: 640, height: 1440 },
+    { width: 960, height: 2160 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await expect
+      .poll(async () => (await page.locator('.workspace-radar__picture').boundingBox())!.width)
+      .toBe(viewport.width);
+    const fullMap = (await page.locator('.workspace-radar__picture').boundingBox())!;
+    expect(Math.abs(fullMap.height - viewport.width)).toBeLessThan(1);
+    expect(fullMap.y).toBe(0);
+    const mapCanvas = (await page.locator('.workspace-radar canvas').boundingBox())!;
+    expect(Math.abs(mapCanvas.width - mapCanvas.height)).toBeLessThan(1);
+    expect(mapCanvas.width).toBeGreaterThanOrEqual(viewport.width - 4);
+    const confidence = (await page.getByRole('region', { name: 'OBS 画面确认' }).boundingBox())!;
+    expect(confidence.y + confidence.height).toBe(viewport.height);
+    const music = (await page.getByRole('button', { name: '恢复自动音乐' }).boundingBox())!;
+    expect(music.y + music.height).toBeLessThanOrEqual(confidence.y);
+    const list = card.locator('ol');
+    expect(await list.evaluate((e) => e.scrollHeight > e.clientHeight)).toBe(true);
+  }
+  await page.setViewportSize({ width: 480, height: 1080 });
+  await page.screenshot({ path: testInfo.outputPath('workspace-private-hints-six.png') });
   snapshot.channelSeq++;
   snapshot.payload = { availability: 'unavailable' };
   socket!.send(JSON.stringify(snapshot));

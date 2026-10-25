@@ -26,20 +26,23 @@
 }
 .workspace-left__top {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto auto auto;
+  grid-template-rows: auto minmax(0, 1fr);
   min-height: 0;
   overflow: hidden;
 }
-.workspace-brand__name {
+.workspace-left__details {
   display: flex;
-  align-items: center;
-  gap: var(--mizar-layout-compact);
-  font-size: var(--mizar-type-size-title);
-  letter-spacing: var(--mizar-line-focus);
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
-.workspace-brand__name img {
-  width: var(--mizar-layout-target);
-  height: var(--mizar-layout-target);
+.workspace-left__details > * {
+  flex-shrink: 0;
+}
+.workspace-left__details > .workspace-left__context {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 .workspace-preview .workspace-left {
   height: 100%;
@@ -61,45 +64,38 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.workspace-brand,
 .workspace-context,
-.workspace-radar,
-.workspace-left__top > .production-status {
-  padding: var(--mizar-layout-padding);
+.workspace-left__details > .production-status {
+  padding: var(--mizar-layout-compact) var(--mizar-layout-padding);
   border-bottom: var(--mizar-line-border) solid var(--mizar-border-default);
   min-width: 0;
   min-height: 0;
 }
 .workspace-radar {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: var(--mizar-layout-compact);
+  width: 100%;
+  aspect-ratio: 1;
+  min-width: 0;
   overflow: hidden;
 }
-
-.workspace-left__top:has(.workspace-observer-assist) {
-  grid-template-rows: auto minmax(0, 1fr) auto auto auto auto;
-}
 .workspace-observer-assist {
-  padding: var(--mizar-layout-padding);
+  padding: var(--mizar-layout-compact) var(--mizar-layout-padding);
   border-bottom: var(--mizar-line-border) solid var(--mizar-border-default);
   min-width: 0;
 }
-.workspace-observer-assist p {
-  color: var(--mizar-fg-muted);
-  font-size: var(--mizar-type-size-small);
-}
 .observer-hints {
   display: grid;
-  gap: var(--mizar-layout-compact);
+  gap: 0;
   list-style: none;
-  max-height: calc(var(--mizar-layout-target) * 5);
+  max-height: calc(var(--mizar-layout-target) * 2);
   overflow-y: auto;
-  margin: var(--mizar-layout-compact) 0 0;
+  margin: 0;
   padding: 0;
 }
 .observer-hints li {
   display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  min-height: var(--mizar-layout-target);
   gap: var(--mizar-layout-compact);
   padding-inline-start: var(--mizar-layout-compact);
   border-inline-start: var(--mizar-line-focus) solid var(--mizar-accent-primary);
@@ -135,6 +131,7 @@
 }
 .workspace-radar__picture {
   position: relative;
+  width: 100%;
   aspect-ratio: 1;
   height: 100%;
   max-height: 100%;
@@ -279,7 +276,7 @@
 .workspace-left .mizar-status-pill {
   padding-block: calc(var(--mizar-layout-compact) / 4);
 }
-.workspace-left__top > .production-status {
+.workspace-left__details > .production-status {
   gap: calc(var(--mizar-layout-compact) / 2);
 }
 .workspace-context .workspace-section-heading > small {
@@ -666,28 +663,28 @@
 .workspace-camera-empty {
   color: var(--mizar-fg-muted);
 }
-.workspace-left__top > .music-controls--compact {
+.workspace-left__details > .music-controls--compact {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto auto;
   padding: var(--mizar-layout-gap) var(--mizar-layout-padding);
 }
-.workspace-left__top > .music-controls--compact .music-controls__track {
+.workspace-left__details > .music-controls--compact .music-controls__track {
   grid-column: 1 / -1;
   font-weight: var(--mizar-type-weight-strong);
 }
-.workspace-left__top > .music-controls--compact > [role] {
+.workspace-left__details > .music-controls--compact > [role] {
   grid-column: 1 / -1;
   white-space: normal;
   font-size: var(--mizar-type-size-small);
 }
-.workspace-left__top > .production-status {
+.workspace-left__details > .production-status {
   grid-template-columns: minmax(0, 1fr) auto;
 }
-.workspace-left__top > .production-status > strong {
+.workspace-left__details > .production-status > strong {
   grid-row: 2;
   grid-column: 1 / -1;
 }
-.workspace-left__top > .production-status > a {
+.workspace-left__details > .production-status > a {
   grid-column: 2;
   grid-row: 1;
 }

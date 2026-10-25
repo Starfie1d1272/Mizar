@@ -295,20 +295,7 @@ function WorkspaceLeftContent() {
   return (
     <main className="workspace-left mizar-surface" aria-label="现场工作区">
       <div className="workspace-left__top">
-        <header className="workspace-section-heading workspace-brand">
-          <div className="workspace-brand__name">
-            <img src="/brand/mizar-mark.svg" alt="" />
-            <strong>MIZAR</strong>
-          </div>
-          <StatusPill tone={liveRadar ? 'success' : 'warning'}>
-            {liveRadar ? '比赛数据正常' : '等待比赛数据'}
-          </StatusPill>
-        </header>
         <section className="workspace-radar" aria-label="比赛雷达">
-          <header className="workspace-section-heading">
-            <small>比赛雷达</small>
-            <span>{map?.replace(/^de_/, '').toUpperCase() ?? '地图待确认'}</span>
-          </header>
           <div className="workspace-radar__picture">
             {liveRadar ? (
               <Radar client={radar} zoomMode="full-map" />
@@ -337,16 +324,22 @@ function WorkspaceLeftContent() {
             )}
           </div>
         </section>
-        <ObserverHints />
-        <ContextPanel
-          operator={payload}
-          programCursor={
-            programState.state === 'live' ? (programState.current?.cursor ?? null) : null
-          }
-          program={programState.state === 'live' ? (programState.current?.payload ?? null) : null}
-        />
-        <ProductionStatus compact matchId={payload?.matchContext.summary?.matchId ?? null} />
-        <MusicControls compact />
+        <div className="workspace-left__details">
+          <ObserverHints />
+          <div className="workspace-left__context">
+            <ContextPanel
+              operator={payload}
+              programCursor={
+                programState.state === 'live' ? (programState.current?.cursor ?? null) : null
+              }
+              program={
+                programState.state === 'live' ? (programState.current?.payload ?? null) : null
+              }
+            />
+          </div>
+          <ProductionStatus compact matchId={payload?.matchContext.summary?.matchId ?? null} />
+          <MusicControls compact />
+        </div>
       </div>
       <ObsConfidence />
     </main>
