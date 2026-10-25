@@ -1,10 +1,20 @@
 import type { ObserverSettings, GameAutomationSettings } from '@mizar/protocol/assist';
 export type ConnectionPreparationView = {
+  revision: string;
   settings: ObserverSettings;
   gameAutomation?: GameAutomationSettings;
   connection: { earlyEndpoint: string; programEndpoint: string } | null;
   gameRunning?: boolean;
 };
+/** Refuse incomplete replies rather than silently dropping the concurrency guard. */
+export function requireConnectionRevision(value: unknown): string {
+  if (
+    typeof value !== 'string' ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
+  )
+    throw new Error('本图连接修订未确认，请重新打开连接入口后重试。');
+  return value;
+}
 export type EntryConfirmation = boolean;
 type Confirm = (view: ConnectionPreparationView, useMulnx: boolean) => Promise<EntryConfirmation>;
 let confirm: Confirm | undefined;
@@ -14,7 +24,7 @@ export function registerObserverPreparation(handler: Confirm) {
     if (confirm === handler) confirm = undefined;
   };
 }
-/** Confirm the shared match connection before starting either game route. */
+/** Explicit workbench connection confirmation; never part of game/window entry. */
 export async function flushObserverPreparation(
   useMulnx = false,
   gameRunning = false,
@@ -23,20 +33,12 @@ export async function flushObserverPreparation(
     cache: 'no-store',
     signal: AbortSignal.timeout(5000),
   });
-  if (!response.ok) throw new Error('请确认游戏与观战设置可读取后重试进入工作台。');
+  if (!response.ok) throw new Error('本场连接设置未读取，请重试。');
   const view = (await response.json()) as ConnectionPreparationView;
-  if (typeof view.settings?.enabled !== 'boolean')
-    throw new Error('请刷新准备中心后重试进入工作台。');
-  const needsConnection = view.settings.enabled || (useMulnx && view.gameAutomation?.autoConnect);
-  if (needsConnection || useMulnx) {
-    if (!confirm) throw new Error('请从准备中心打开工作台并确认本场连接。');
-    const choice = await confirm({ ...view, gameRunning }, useMulnx);
-    if (!choice) return null;
-  }
-  return (
-    view.settings.enabled ||
-    Boolean(useMulnx && (view.gameAutomation?.autoConnect || view.gameAutomation?.hideGameHud))
-  );
+  if (typeof view.settings?.enabled !== 'boolean') throw new Error('请刷新后重试本场连接。');
+  requireConnectionRevision(view.revision);
+  if (!confirm) throw new Error('本场连接入口未准备好，请刷新后重试。');
+  return (await confirm({ ...view, gameRunning }, useMulnx)) ? true : null;
 }
 
 /** Private runtime status; sourced from the existing observer owner. */

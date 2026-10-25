@@ -1,4 +1,3 @@
-import { flushObserverPreparation } from './observer-preparation';
 import { ControlTask } from '../debug/control-task';
 import { controlEvidence } from '../debug/control-journal';
 import type { Cs2ConfigStatus } from './cs2-status';
@@ -210,7 +209,7 @@ async function performProductionAction(
     task.finish('blocked', { reason: 'preflight_requires_attention' });
     return;
   }
-  let launch =
+  const launch =
     action === 'enter' && window.__TAURI_INTERNALS__
       ? await desktopInvoke<{
           preferMulnx?: boolean;
@@ -219,30 +218,10 @@ async function performProductionAction(
           observerHudPending?: boolean;
         }>('cs2_config_status')
       : null;
-  const entryFeaturesEnabled =
-    action === 'enter'
-      ? await flushObserverPreparation(launch?.preferMulnx === true, launch?.running === true)
-      : false;
-  if (entryFeaturesEnabled === null) {
-    task.finish('cancelled', { reason: 'connection_confirmation_cancelled' });
-    return;
-  }
-  if (entryFeaturesEnabled && launch) {
-    const current = await desktopInvoke<{
-      preferMulnx?: boolean;
-      running: boolean;
-      pending: boolean;
-    }>('cs2_config_status');
-    if (Boolean(current.preferMulnx) !== Boolean(launch.preferMulnx))
-      throw new Error('游戏启动方式已更新，请重新确认本场连接后进入工作台。');
-    launch = current;
-  }
   if (action === 'enter' && window.location.href !== entryLocation) {
     task.finish('cancelled', { reason: 'navigation_changed' });
     return;
   }
-  if (action === 'enter' && window.__TAURI_INTERNALS__ && launch?.preferMulnx)
-    await desktopInvoke('observer_command', { action: 'preflight' }, task);
   let newlyStarted = false;
   let borrowed = Boolean(external);
   let selectedExternal = external;
@@ -301,8 +280,6 @@ async function performProductionAction(
     if (window.__TAURI_INTERNALS__) {
       await desktopInvoke('present_production', { live: action === 'enter' }, task);
       presented = true;
-      if (entryFeaturesEnabled)
-        await desktopInvoke('observer_command', { action: 'start-configured' }, task);
     } else window.location.assign(action === 'enter' ? '/workspace' : '/');
     task.finish('confirmed', { confirmation: 'production_command_ack_and_presentation', action });
   } catch (reason) {

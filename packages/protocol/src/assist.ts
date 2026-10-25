@@ -66,7 +66,9 @@ const endpoint = z
   .refine((v) => {
     const [ip, port] = v.split(':');
     return (
-      ip!.split('.').every((n) => Number(n) <= 255) && Number(port) > 0 && Number(port) <= 65535
+      ip!.split('.').every((n) => (n === '0' || !n.startsWith('0')) && Number(n) <= 255) &&
+      Number(port) > 0 &&
+      Number(port) <= 65535
     );
   }, '请填写有效的数字 IP 和端口');
 export const observerConnectionSchema = z

@@ -4,6 +4,7 @@ import { expect, it } from 'vitest';
 import {
   DEFAULT_OBSERVER_SETTINGS,
   observerSettingsSchema,
+  observerConnectionSchema,
   parseObserverConnection,
   formatObserverConnection,
 } from '../src/assist.js';
@@ -101,4 +102,41 @@ it('accepts restricted commands in either order and round-trips the password-fir
     'connect 127.0.0.1:27025\nquit',
   ])
     expect(() => parseObserverConnection(input)).toThrow();
+});
+
+it.each(['012.0.0.1', '127.000.0.1', '127.0.00.1', '127.0.0.01'])(
+  'rejects noncanonical IPv4 %s consistently at input, advanced endpoints and formatter',
+  (ip) => {
+    const invalid = `${ip}:27025`;
+    const valid = {
+      earlyEndpoint: '127.0.0.1:27025',
+      programEndpoint: '127.0.0.1:27026',
+      password: 'synthetic',
+    };
+    for (const input of [
+      `connect ${invalid};password synthetic`,
+      `password synthetic;connect ${invalid}`,
+    ])
+      expect(() => parseObserverConnection(input)).toThrow();
+    expect(() => parseObserverConnection('127.0.0.1:28000', invalid, '127.0.0.2:28000')).toThrow();
+    expect(() => parseObserverConnection('127.0.0.1:28000', '127.0.0.2:29000', invalid)).toThrow();
+    for (const key of ['earlyEndpoint', 'programEndpoint'] as const) {
+      const connection = { ...valid, [key]: invalid };
+      expect(observerConnectionSchema.safeParse(connection).success).toBe(false);
+      expect(() => formatObserverConnection(connection)).toThrow();
+    }
+  },
+);
+it('preserves canonical IPv4 with single zero octets without rewriting addresses', () => {
+  const connection = {
+    earlyEndpoint: '0.0.0.0:27025',
+    programEndpoint: '127.0.0.1:27026',
+    password: '',
+  };
+  expect(observerConnectionSchema.parse(connection)).toEqual(connection);
+  expect(parseObserverConnection('connect 0.0.0.0:27025')).toMatchObject({
+    earlyEndpoint: '0.0.0.0:27025',
+    programEndpoint: '0.0.0.0:27026',
+  });
+  expect(formatObserverConnection(connection)).toBe('password ""; connect 127.0.0.1:27026');
 });
