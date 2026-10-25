@@ -23,6 +23,7 @@ export class MusicPreview {
   private expectedVolume = 0;
   private epoch = 0;
   private stopping = false;
+  private failureMessage: string | null = null;
   constructor(
     private readonly store: MusicStore,
     private readonly now: () => number,
@@ -78,6 +79,7 @@ export class MusicPreview {
       throw new Error('music_preview_busy');
     if (!this.store.ready || this.store.failure) throw new Error('music_preview_storage');
     this.request = r;
+    this.failureMessage = null;
     this.revision++;
     this.stopping = false;
     this.lease = now + 3000;
@@ -168,7 +170,8 @@ export class MusicPreview {
       this.request = null;
       this.status = {
         ...this.status!,
-        phase: this.status?.message === '试听已停止。' ? 'stopped' : 'failed',
+        phase: this.failureMessage ? 'failed' : 'stopped',
+        message: this.failureMessage ?? '试听已停止。',
       };
       return;
     }
@@ -328,6 +331,7 @@ export class MusicPreview {
     await call('SetInputVolume', { ...args, inputVolumeMul: this.expectedVolume });
   }
   private fail(reason: string, message: string) {
+    this.failureMessage = message;
     this.event('failed', reason);
     this.cancel(reason);
     this.status = { ...this.status!, phase: this.uuid ? 'cleanup' : 'failed', message };

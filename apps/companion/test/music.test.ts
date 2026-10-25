@@ -972,6 +972,8 @@ it('prioritizes live safety, operator stop and OBS reconnect cleanup without rep
   r.obs.disconnected = false;
   await r.step(100);
   expect(stinger(r).state).toBe('OBS_MEDIA_STATE_STOPPED');
+  expect(r.director.get().preview?.phase).toBe('stopped');
+  expect(r.director.get().preview?.message).not.toContain('未确认');
   expect(r.obs.restarts()).toBe(restarts);
   await r.director.previewRequest(audition(r));
   await r.step(100);
