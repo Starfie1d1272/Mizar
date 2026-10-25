@@ -75,6 +75,9 @@ export class ObserverHintTimeline {
     connected: boolean;
     generation: number;
     fresh: boolean;
+    freshness?: 'fresh' | 'stale' | 'unknown';
+    lastReceiveMonotonicMs?: number | null;
+    receiveAgeMs?: number | null;
     sameMap?: boolean;
     state?: string;
     lastErrorCode?: string;

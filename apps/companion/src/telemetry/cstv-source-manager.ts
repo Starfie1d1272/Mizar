@@ -27,6 +27,7 @@ export interface CstvSourceHealth<R extends GameEventSourceRole = GameEventSourc
   readonly generation: number;
   readonly reconnectAttempt: number;
   readonly lastSync?: CstvSyncMetadata;
+  readonly lastReceiveMonotonicMs?: number;
   readonly tailTick?: number;
   readonly lastEventTick?: number;
   readonly lastEventSequence?: number;
@@ -120,6 +121,7 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
   private nextGeneration = 0;
   private reconnectAttempt = 0;
   private lastSync: CstvSyncMetadata | undefined;
+  private lastReceiveMonotonicMs: number | undefined;
   private tailTick: number | undefined;
   private lastEventTick: number | undefined;
   private lastEventSequence: number | undefined;
@@ -194,6 +196,9 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
       generation: this.generation,
       reconnectAttempt: this.reconnectAttempt,
       ...(this.lastSync === undefined ? {} : { lastSync: { ...this.lastSync } }),
+      ...(this.lastReceiveMonotonicMs === undefined
+        ? {}
+        : { lastReceiveMonotonicMs: this.lastReceiveMonotonicMs }),
       ...(this.tailTick === undefined ? {} : { tailTick: this.tailTick }),
       ...(this.lastEventTick === undefined ? {} : { lastEventTick: this.lastEventTick }),
       ...(this.lastEventSequence === undefined
@@ -267,6 +272,7 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
     this.lastEventSequence = undefined;
     this.lastEventObservedAt = undefined;
     this.lastSync = undefined;
+    this.lastReceiveMonotonicMs = undefined;
     this.state = 'connecting';
     this.notifySnapshotChanged();
   }
@@ -331,6 +337,7 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
         row.map.length > 256
       )
         return;
+      this.lastReceiveMonotonicMs = this.receiveNow();
       this.observerMap = row.map;
       this.observerTicksPerSecond = 1 / row.tickInterval;
       this.tailTick = row.tick;
@@ -373,6 +380,7 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
     const generation = this.nextGeneration;
     this.generation = generation;
     this.lastSync = undefined;
+    this.lastReceiveMonotonicMs = undefined;
     this.tailTick = undefined;
     this.lastEventTick = undefined;
     this.lastEventSequence = undefined;
@@ -444,6 +452,12 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
 
   private handleSync(generation: number, sync: CstvSyncMetadata): void {
     if (!this.isCurrentGeneration(generation)) return;
+    if (
+      this.lastSync === undefined ||
+      this.lastSync.tick !== sync.tick ||
+      this.lastSync.fragment !== sync.fragment
+    )
+      this.lastReceiveMonotonicMs = this.receiveNow();
     this.lastSync = sync;
     this.reconnectAttempt = 0;
     this.lastErrorCode = undefined;
@@ -455,6 +469,7 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
     observation: RoleScopedGameEventObservation<R>,
   ): void {
     if (!this.isCurrentGeneration(generation)) return;
+    this.lastReceiveMonotonicMs = this.receiveNow();
     appendBounded(this.recentGameEvents, observation, CSTV_RECENT_GAME_EVENTS_MAX);
     this.lastEventTick = observation.cursor.tick;
     this.lastEventSequence = observation.cursor.sequence;
@@ -506,11 +521,16 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
     this.scheduleReconnect('session-cancelled');
   }
 
+  private receiveNow(): number {
+    return this.clock?.now().observedMonotonicMs ?? performance.now();
+  }
+
   private refreshTailTick(): boolean {
     if (this.activeSession === undefined || this.tailTick === this.activeSession.tailTick) {
       return false;
     }
     this.tailTick = this.activeSession.tailTick;
+    if (this.tailTick !== undefined) this.lastReceiveMonotonicMs = this.receiveNow();
     return true;
   }
 

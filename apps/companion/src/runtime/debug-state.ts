@@ -312,6 +312,7 @@ export class DebugEvidenceStore {
           'radar-wire-validation-failed',
           'operator-wire-validation-failed',
           'assist-wire-validation-failed',
+          'observer-assist-diagnostic-sink-failed',
         ].includes(code)
           ? code
           : 'other_runtime_diagnostic',

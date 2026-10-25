@@ -682,6 +682,14 @@ export class ProjectionCoordinator {
     const settings = this.observerSettings?.();
     if (!settings) return projectObserverAssist(selectProgramSafeRuntimeView(snapshot.current));
     const health = this.cstvSources.lookahead.getHealth();
+    const received = health.lastReceiveMonotonicMs;
+    const receiveAgeMs = received === undefined || received > now ? null : now - received;
+    const freshness =
+      receiveAgeMs === null
+        ? 'unknown'
+        : receiveAgeMs <= snapshot.continuityPolicy.staleAfterMs
+          ? 'fresh'
+          : 'stale';
     const result = this.observerTimeline.project(program, settings, now, {
       connected: health.state === 'live',
       state: health.state,
@@ -689,11 +697,19 @@ export class ProjectionCoordinator {
       generation: health.generation,
       sameMap:
         health.lastSync?.mapName === undefined || health.lastSync.mapName === program.map.name,
-      fresh:
-        health.lastSync?.receiveAgeSeconds === undefined ||
-        health.lastSync.receiveAgeSeconds * 1000 <= snapshot.continuityPolicy.staleAfterMs,
+      // Missing receive evidence preserves the existing compatibility boundary,
+      // while diagnostics explicitly distinguish it from measured freshness.
+      fresh: freshness !== 'stale',
+      freshness,
+      lastReceiveMonotonicMs: received ?? null,
+      receiveAgeMs,
     });
-    this.onObserverDiagnostics?.(this.observerTimeline.getDiagnostics());
+    try {
+      this.onObserverDiagnostics?.(this.observerTimeline.getDiagnostics());
+    } catch {
+      // Diagnostic sinks cannot interrupt assist or Program projection.
+      report(this.onDiagnostic, 'observer-assist-diagnostic-sink-failed');
+    }
     return result;
   }
   resetAssist(): void {

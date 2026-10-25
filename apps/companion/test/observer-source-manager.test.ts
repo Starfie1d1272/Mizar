@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import type { CstvParserSessionFactoryOptions, CstvSessionRunResult } from '@mizar/telemetry-cstv';
 import type { GameEventObservation } from '@mizar/core/game-events';
 import {
   createCstvSourceManager,
@@ -44,6 +45,7 @@ describe('observer through the existing source owner', () => {
       player: { sourceUserId: 42 },
       cursor: { role: 'lookahead' },
     });
+    expect(manager.getHealth().lastReceiveMonotonicMs).toBe(10);
     expect(manager.getHealth().lastSync).toBeUndefined(); // Never invent HTTP fragment metadata.
   });
   it('rejects duplicate and out-of-order records', () => {
@@ -62,6 +64,7 @@ describe('observer through the existing source owner', () => {
     const reset = { kind: 'discontinuity', ...identity, world: 3, sequence: 10 };
     manager.consumeObserverRecord(reset);
     expect(manager.getRecentGameEvents()).toEqual([]);
+    expect(manager.getHealth().lastReceiveMonotonicMs).toBeUndefined();
     manager.consumeObserverRecord({ ...event, sequence: 11 });
     expect(received).toHaveLength(1);
     manager.consumeObserverRecord({ ...cursor, world: 3, sequence: 10, tick: 1 });
@@ -113,4 +116,59 @@ describe('observer through the existing source owner', () => {
     manager.start();
     expect(manager.getHealth().state).toBe('disabled');
   });
+});
+
+it('timestamps actual HTTP sync/tail progress without refreshing cached upstream metadata', async () => {
+  let now = 100,
+    tail = 0;
+  let callbacks: CstvParserSessionFactoryOptions | undefined;
+  let finish!: (result: CstvSessionRunResult) => void;
+  const running = new Promise<CstvSessionRunResult>((resolve) => {
+    finish = resolve;
+  });
+  const manager = createCstvSourceManager({
+    role: 'lookahead',
+    url: 'http://127.0.0.1:27025',
+    clock: { now: () => ({ observedAt: '2026-10-25T00:00:00Z', observedMonotonicMs: now }) },
+    parserSessionFactory: (options) => {
+      callbacks = options;
+      return {
+        sync: null,
+        get tailTick() {
+          return tail;
+        },
+        start: async () => ({ status: 'ready' }),
+        run: () => running,
+        stop: () => finish({ status: 'cancelled' }),
+      };
+    },
+  });
+  manager.start();
+  try {
+    const sync = {
+      protocol: 1,
+      tick: 10,
+      ticksPerSecond: 64,
+      fragment: 1,
+      signupFragment: 0,
+      mapName: 'de_test',
+      receiveAgeSeconds: 9999,
+    };
+    callbacks!.onSync(sync);
+    expect(manager.getHealth().lastReceiveMonotonicMs).toBe(100);
+    now = 200;
+    callbacks!.onSync(sync);
+    expect(manager.getHealth().lastReceiveMonotonicMs).toBe(100);
+    now = 300;
+    tail = 20;
+    expect(manager.getHealth().lastReceiveMonotonicMs).toBe(300);
+    now = 400;
+    callbacks!.onSync({ ...sync, tick: 20, fragment: 2 });
+    expect(manager.getHealth().lastReceiveMonotonicMs).toBe(400);
+    now = 500;
+    expect(manager.getHealth().lastReceiveMonotonicMs).toBe(400);
+    expect(manager.getRecentGameEvents()).toEqual([]);
+  } finally {
+    await manager.stop();
+  }
 });
