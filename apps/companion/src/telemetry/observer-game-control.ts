@@ -1,4 +1,4 @@
-import { observerConnectionSchema, type ObserverConnection } from '@mizar/protocol/assist';
+import { formatObserverConnection, type ObserverConnection } from '@mizar/protocol/assist';
 import { fileURLToPath } from 'node:url';
 
 /** Fixed operations through MulNX's existing command queue, scoped by the native game lease. */
@@ -77,8 +77,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 }
 
 export function observerConnectCommand(connection: ObserverConnection, hideHud: boolean) {
-  const parsed = observerConnectionSchema.parse(connection);
-  return `password "${parsed.password}";connect ${parsed.programEndpoint}${hideHud ? ';cl_draw_only_deathnotices 1' : ''}`;
+  return `${formatObserverConnection(connection)}${hideHud ? ';cl_draw_only_deathnotices 1' : ''}`;
 }
 export function observerHudQuery(marker: string, value?: 0 | 1) {
   if (!/^MIZAR_HUD_[a-f0-9]{32}$/.test(marker)) throw new Error('observer_hud_marker');

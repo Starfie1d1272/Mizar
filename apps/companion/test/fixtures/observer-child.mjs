@@ -20,10 +20,98 @@ for await (const text of inputLines) {
     )
   )
     process.exit(90);
+  // A stalled pre-report initialization may never create the first leaf.
+  if (
+    input.endpoint === '127.0.0.20:27020' &&
+    !path.basename(arg('--output')).startsWith('retry-')
+  ) {
+    fs.writeFileSync(
+      path.join(path.dirname(arg('--output')), 'pre-mkdir.json'),
+      JSON.stringify({ pid: process.pid }),
+    );
+    setInterval(() => {}, 1000);
+    await new Promise(() => {});
+  }
+  // Match pinned driver: create only the unique leaf, never its ancestors.
+  try {
+    fs.mkdirSync(arg('--output'), { mode: 0o700 });
+  } catch {
+    process.stderr.write('output-directory-unavailable\n');
+    process.exit(1);
+  }
+  const validReport = (reason) =>
+    JSON.stringify({
+      schema: 'cs2-observer-report/1',
+      reachedFull: false,
+      drainCompleted: false,
+      cleanupCompleted: true,
+      outcome: 'failed',
+      reason,
+    });
+  const earlyFailures = {
+    '127.0.0.11:27020': 'output-directory-unavailable\nSynthetic interpreter shutdown diagnostic',
+    '127.0.0.12:27020': 'configuration-boundary',
+    '127.0.0.13:27020':
+      'Traceback private path and ' + input.password + '\nValueError: node-runtime-probe-failed',
+    '127.0.0.14:27020': '',
+    '127.0.0.15:27020': '{"schema":',
+    '127.0.0.16:27020': 'private unknown stderr ' + input.password,
+    '127.0.0.17:27020': JSON.stringify({
+      schema: 'cs2-observer-report/1',
+      reachedFull: false,
+      drainCompleted: false,
+      cleanupCompleted: true,
+      outcome: 'failed',
+      reason: input.password,
+    }),
+    '127.0.0.18:27020': JSON.stringify({
+      schema: 'cs2-observer-report/1',
+      reachedFull: false,
+      drainCompleted: false,
+      cleanupCompleted: true,
+      outcome: 'failed',
+      reason: 'ordered-parser-exited',
+    }),
+    '127.0.0.19:27020':
+      'output-directory-unavailable\n' +
+      JSON.stringify({
+        schema: 'cs2-observer-report/1',
+        reachedFull: false,
+        drainCompleted: false,
+        cleanupCompleted: true,
+        outcome: 'failed',
+        reason: 'native-start-failed',
+        native_boot_code: 2,
+      }),
+    '127.0.0.21:27020': validReport('native-start-failed') + '\nSynthetic shutdown diagnostic',
+    '127.0.0.22:27020': validReport('native-start-failed') + '\n{"malformed":',
+    '127.0.0.23:27020':
+      validReport('native-start-failed') + '\n' + validReport('ordered-parser-exited'),
+    '127.0.0.24:27020':
+      validReport('native-start-failed') +
+      '\n' +
+      JSON.stringify({
+        online_success: 'INCONCLUSIVE',
+        outcome: 'failed',
+        reason: input.password,
+      }) +
+      '\nprivate trailing path ' +
+      input.password,
+  };
+  if (Object.hasOwn(earlyFailures, input.endpoint)) {
+    process.stderr.write(earlyFailures[input.endpoint]);
+    process.exitCode = 1;
+    inputLines.close();
+    process.stdin.destroy();
+    break;
+  }
   if (input.endpoint === '127.0.0.2:27020') {
     process.stderr.write(
       JSON.stringify({
-        online_success: 'INCONCLUSIVE',
+        schema: 'cs2-observer-report/1',
+        reachedFull: false,
+        drainCompleted: false,
+        cleanupCompleted: true,
         outcome: 'failed',
         reason: 'native-start-failed',
         native_boot_code: 2,
@@ -50,11 +138,10 @@ for await (const text of inputLines) {
     await new Promise(() => {});
   }
   const source = arg('--source-role') + ':' + arg('--source-id');
-  const supervised = /^127\.0\.0\.(6|7|8|9|10):27020$/.test(input.endpoint);
+  const supervised = /^127\.0\.0\.(6|7|8|9|10|20):27020$/.test(input.endpoint);
   const retrying = path.basename(arg('--output')).startsWith('retry-');
   if (supervised) {
     const directory = arg('--output');
-    fs.mkdirSync(directory, { recursive: true });
     fs.writeFileSync(
       path.join(directory, 'child.json'),
       JSON.stringify({ source, pid: process.pid }),
@@ -113,7 +200,10 @@ for await (const text of inputLines) {
 if (cleanupFailure) {
   process.stderr.write(
     JSON.stringify({
-      online_success: 'INCONCLUSIVE',
+      schema: 'cs2-observer-report/1',
+      reachedFull: false,
+      drainCompleted: false,
+      cleanupCompleted: true,
       outcome: 'failed',
       reason: 'owner-stopped',
       finalization_failures: ['close-session'],

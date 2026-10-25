@@ -1,13 +1,18 @@
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDisabledRecorder } from '../src/telemetry/capture-recorder.js';
 import { buildApp } from '../src/app.js';
 import { createCstvSourceManager } from '../src/telemetry/cstv-source-manager.js';
 import { startObserverProcess } from '../src/telemetry/observer-process.js';
 const driver = fileURLToPath(new URL('./fixtures/observer-child.mjs', import.meta.url));
+const outputs: string[] = [];
+afterEach(() => {
+  for (const path of outputs.splice(0)) rmSync(path, { recursive: true, force: true });
+});
 const options = {
   role: 'lookahead' as const,
   python: process.execPath,
@@ -16,7 +21,11 @@ const options = {
   steamApi: driver,
   node: process.execPath,
   parserWorker: driver,
-  outputDirectory: driver + '.unused',
+  get outputDirectory() {
+    const path = join(tmpdir(), 'mizar-observer-' + randomUUID());
+    outputs.push(path);
+    return path;
+  },
   hostVersion: 14191,
   endpoint: '127.0.0.1:27020',
   password: 'synthetic-only',
@@ -151,4 +160,64 @@ describe('explicit observer process composition', () => {
     expect(() => startObserverProcess({ ...options, endpoint: 'example.com:27020' })).toThrow();
     expect(() => startObserverProcess({ ...options, hostVersion: 0 })).toThrow();
   });
+});
+
+it.each([
+  ['127.0.0.11:27020', 'output-directory', 'missing', 'output-directory-unavailable'],
+  ['127.0.0.12:27020', 'configuration', 'missing', 'configuration-boundary'],
+  ['127.0.0.13:27020', 'node-probe', 'missing', 'node-runtime-probe-failed'],
+  ['127.0.0.14:27020', 'eof', 'missing', undefined],
+  ['127.0.0.15:27020', 'eof', 'invalid', undefined],
+  ['127.0.0.16:27020', 'eof', 'invalid', undefined],
+  ['127.0.0.17:27020', 'session', 'received', 'unclassified'],
+  ['127.0.0.19:27020', 'native-boot', 'received', 'native-start-failed'],
+  ['127.0.0.21:27020', 'native-boot', 'received', 'native-start-failed'],
+  ['127.0.0.22:27020', 'native-boot', 'received', 'native-start-failed'],
+  ['127.0.0.23:27020', 'parser-initialization', 'received', 'ordered-parser-exited'],
+  ['127.0.0.24:27020', 'native-boot', 'received', 'native-start-failed'],
+  ['127.0.0.18:27020', 'parser-initialization', 'received', 'ordered-parser-exited'],
+])(
+  'retains bounded pre-report and terminal evidence for %s',
+  async (endpoint, stage, report, reason) => {
+    const owner = startObserverProcess({ ...options, endpoint });
+    try {
+      const result = await owner.closed;
+      expect(result).toMatchObject({ failed: true, attemptCount: 1 });
+      expect(result.terminal).toMatchObject({
+        stage,
+        report,
+        ready: false,
+        attemptCount: 1,
+        code: 1,
+        signal: null,
+      });
+      expect(result.terminal.reason).toBe(reason);
+      expect(result.attempts).toHaveLength(1);
+      expect(JSON.stringify(result)).not.toContain(options.password);
+      expect(JSON.stringify(result)).not.toContain('private unknown');
+      expect(JSON.stringify(result)).not.toContain('private path');
+      expect(JSON.stringify(result)).not.toContain('private trailing path');
+    } finally {
+      await owner.stop();
+    }
+  },
+);
+
+it('captures real spawn errno without retaining the executable path', async () => {
+  const owner = startObserverProcess({
+    ...options,
+    python: join(tmpdir(), 'PRIVATE-MISSING-OBSERVER'),
+  });
+  try {
+    const result = await owner.closed;
+    expect(result.terminal).toMatchObject({
+      stage: 'spawn',
+      spawnCode: 'ENOENT',
+      report: 'missing',
+      ready: false,
+    });
+    expect(JSON.stringify(result)).not.toContain('PRIVATE-MISSING-OBSERVER');
+  } finally {
+    await owner.stop();
+  }
 });

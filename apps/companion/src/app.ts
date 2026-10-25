@@ -1568,12 +1568,16 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       });
     },
   });
+  const unsubscribeObserverEvidence = options.workspaceObserver?.subscribeEvidence((evidence) =>
+    sessionJournal?.record('observer_attempt_terminal', evidence),
+  );
   registerSupportRoutes(app, {
     originPolicy: localWebTransport.getOriginPolicy(),
     ...(options.supportLogsDirectory === undefined
       ? {}
       : { logsDirectory: options.supportLogsDirectory }),
     ...(options.productRuntime === undefined ? {} : { artifact: options.productRuntime }),
+    observer: () => options.workspaceObserver?.view() ?? null,
     runtimeSummary: () => debugEvidenceStore.getSupportSummary(debugClock.nowMonotonicMs()),
     flushBusinessLog: async () => {
       await nativeSource?.poll();
@@ -1802,6 +1806,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     await businessJournal?.close();
     await nativeSource?.close();
     await performanceContext?.close();
+    unsubscribeObserverEvidence?.();
     await sessionJournal?.close();
     await diagnosticDelivery.close();
     const sourceFailures = sourceCleanup

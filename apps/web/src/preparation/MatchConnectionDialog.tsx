@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { parseObserverConnection } from '@mizar/protocol/assist';
+import { parseObserverConnection, formatObserverConnection } from '@mizar/protocol/assist';
 import { Button, Dialog, Field, StatusBanner } from '../ui';
 import './match-connection.css';
 import { command } from './client';
@@ -189,7 +189,7 @@ export function MatchConnectionDialog() {
           disabled={busy}
           onClick={() => {
             void navigator.clipboard
-              .writeText(`password "${connection.password}"; connect ${connection.programEndpoint}`)
+              .writeText(formatObserverConnection(connection))
               .then(() => setCopied(true))
               .catch(() => setError('复制未完成，请重试。'));
           }}
