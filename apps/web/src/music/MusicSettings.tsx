@@ -1,3 +1,4 @@
+import { useMusicPreview } from './useMusicPreview';
 import { controlEvidence, browserErrorEvidence } from '../debug/control-journal';
 import { useState } from 'react';
 import {
@@ -62,6 +63,7 @@ async function localFile(url: string, file: File, type: string) {
   return response.json() as Promise<MusicView & MusicTrack>;
 }
 export function MusicSettings() {
+  const preview = useMusicPreview();
   const current = useLocalRead<MusicView>('/local/v1/music', 2000);
   const [selectedGroup, setSelectedGroup] = useState<MusicGroup>('waiting');
   const [draft, setConfig] = useState<MusicConfig | null>(null);
@@ -73,6 +75,8 @@ export function MusicSettings() {
   const config = draft ?? current?.config ?? null;
   const change = (group: MusicGroup, patch: Partial<MusicConfig['groups'][MusicGroup]>) => {
     controlEvidence('music_draft', 'change', { group, patch });
+    if (patch.volume !== undefined) preview.volume(group, patch.volume);
+    else void preview.stop();
     setDirty(true);
     setMessage('');
     setConfig((c) => {
@@ -193,7 +197,10 @@ export function MusicSettings() {
                 <Button
                   key={group}
                   aria-pressed={selectedGroup === group}
-                  onClick={() => setSelectedGroup(group)}
+                  onClick={() => {
+                    void preview.stop();
+                    setSelectedGroup(group);
+                  }}
                 >
                   {MUSIC_LABELS[group]}
                   <span>
@@ -230,6 +237,13 @@ export function MusicSettings() {
                             {String(index + 1).padStart(2, '0')}
                           </span>
                           <strong>{track.name}</strong>
+                          <Button
+                            disabled={busy}
+                            aria-label={'试听 ' + track.name}
+                            onClick={() => void preview.start(group, spec, track)}
+                          >
+                            试听
+                          </Button>
                           <Button
                             disabled={busy}
                             aria-label={'移除 ' + track.name}
@@ -283,7 +297,7 @@ export function MusicSettings() {
                   ) : null}
                   <Field
                     label={`场景音量 · ${Math.round(spec.volume * 100)}%`}
-                    message="保存后生效；若本场景正在播放，也会更新当前音量。"
+                    message="试听使用未保存的音量和选段；保存后用于节目自动播放。"
                     type="range"
                     min="0"
                     max="1"
@@ -292,6 +306,50 @@ export function MusicSettings() {
                     disabled={busy}
                     onChange={(e) => change(group, { volume: Number(e.target.value) })}
                   />
+                  <div className="music-controls" aria-label="音乐试听">
+                    <Button
+                      disabled={
+                        busy ||
+                        !spec.tracks.length ||
+                        Boolean(
+                          current?.storage && (!current.storage.ready || current.storage.failed),
+                        )
+                      }
+                      onClick={() => void preview.start(group, spec, spec.tracks[0]!)}
+                    >
+                      试听本组
+                    </Button>
+                    <Button
+                      disabled={
+                        !preview.status || ['stopped', 'failed'].includes(preview.status.phase)
+                      }
+                      onClick={() => void preview.stop()}
+                    >
+                      停止试听
+                    </Button>
+                    <span>通过 OBS 试听，会进入直播/录制。</span>
+                  </div>
+                  {!spec.tracks.length ? <p>本组尚未选曲，选择本地音频后可试听。</p> : null}
+                  {preview.error && selectedGroup === group ? (
+                    <StatusBanner tone="danger">{preview.error}</StatusBanner>
+                  ) : null}
+                  {preview.status?.group === group ? (
+                    <StatusBanner
+                      tone={
+                        preview.status.phase === 'failed' || preview.status.phase === 'cleanup'
+                          ? 'danger'
+                          : 'info'
+                      }
+                    >
+                      {preview.status.message}
+                      {preview.status.phase === 'confirmation' ? (
+                        <>
+                          <Button onClick={() => void preview.confirm()}>确认通过 OBS 试听</Button>
+                          <Button onClick={() => void preview.stop()}>取消试听</Button>
+                        </>
+                      ) : null}
+                    </StatusBanner>
+                  ) : null}
                   <details>
                     <summary>高级设置</summary>
                     {playlist ? (

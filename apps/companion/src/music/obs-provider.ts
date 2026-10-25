@@ -147,6 +147,7 @@ export async function ownedMusicInput(
   create: boolean,
   valid: () => boolean,
   attach = true,
+  preservePlayback = false,
 ) {
   const assertCurrent = () => {
     if (!valid()) throw new Error('music_cancelled');
@@ -194,7 +195,7 @@ export async function ownedMusicInput(
     await store.update((s) => {
       s.sources[layer] = result.inputUuid as string;
       const previous = s[layer];
-      if (previous) {
+      if (previous && !preservePlayback) {
         if (looping(previous.group)) s[layer] = null;
         else {
           s[layer] = { ...previous, finished: true };

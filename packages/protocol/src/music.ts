@@ -77,4 +77,30 @@ export interface MusicStatus {
   message: string | null;
   bgm: { group: MusicGroup; track: string; volume: number } | null;
   stinger: string | null;
+  preview?: MusicPreviewStatus;
+}
+
+/** Ephemeral loopback audition. Never a music configuration or formal cue. */
+export const musicPreviewSchema = z
+  .object({
+    owner: z.string().uuid(),
+    token: z.string().uuid(),
+    operation: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    expiresAt: z.number().finite(),
+    action: z.enum(['start', 'update', 'lease', 'stop']),
+    group: z.enum(MUSIC_GROUPS),
+    track: musicTrackSchema,
+    volume: z.number().min(0).max(1),
+    fadeInMs: z.number().int().min(0).max(10_000),
+    fadeOutMs: z.number().int().min(0).max(10_000),
+    confirmed: z.boolean().default(false),
+  })
+  .strict();
+export type MusicPreviewRequest = z.infer<typeof musicPreviewSchema>;
+export interface MusicPreviewStatus {
+  owner: string;
+  token: string;
+  group: MusicGroup;
+  phase: 'requested' | 'confirmation' | 'playing' | 'stopped' | 'failed' | 'cleanup';
+  message: string;
 }

@@ -1,3 +1,4 @@
+import type { ObsRpc } from '../src/obs/reconcile.js';
 import { readFileSync } from 'node:fs';
 import { programSnapshotSchema } from '@mizar/protocol/program';
 import { crc32, deflateRawSync } from 'node:zlib';
@@ -83,4 +84,100 @@ export function musicProgram() {
   ) as { fixtures: Record<string, { snapshot: unknown }> };
   const snapshot = programSnapshotSchema.parse(artifact.fixtures['real-live-rich']!.snapshot);
   return { ...snapshot.payload, cursor: snapshot.cursor };
+}
+
+/** Protocol simulator only; it does not decode or produce audible sound. */
+export class MediaObs implements ObsRpc {
+  calls: { type: string; data: Record<string, unknown> }[] = [];
+  inputs = new Map<
+    string,
+    { uuid: string; state: string; file: string; volume: number; muted: boolean; cursor: number }
+  >();
+  disconnected = false;
+  streamActive: boolean | undefined = false;
+  recordActive: boolean | undefined = false;
+  restartOpeningReads = 0;
+  restartState = 'OBS_MEDIA_STATE_OPENING';
+  private openingReads = -1;
+  private inputGeneration = 0;
+  intercept: ((type: string) => Promise<void>) | undefined;
+  async call(type: string, data: Record<string, unknown> = {}) {
+    await this.intercept?.(type);
+    if (this.disconnected) throw new Error('offline');
+    this.calls.push({ type, data });
+    const input = data.inputUuid
+      ? [...this.inputs.values()].find((i) => i.uuid === data.inputUuid)
+      : this.inputs.get(String(data.inputName));
+    if (type === 'GetStreamStatus') return { outputActive: this.streamActive };
+    if (type === 'GetRecordStatus') return { outputActive: this.recordActive };
+    if (type === 'GetSceneCollectionList') return { currentSceneCollectionName: 'Mizar' };
+    if (type === 'GetInputList')
+      return {
+        inputs: [...this.inputs].map(([inputName, i]) => ({
+          inputName,
+          inputUuid: i.uuid,
+          inputKind: 'ffmpeg_source',
+        })),
+      };
+    if (type === 'GetSceneList') return { scenes: [{ sceneName: 'Mizar · 赛前等待' }] };
+    if (type === 'GetSceneItemList')
+      return {
+        sceneItems: [...this.inputs].map(([sourceName, input], sceneItemId) => ({
+          sourceName,
+          sourceUuid: input.uuid,
+          sceneItemId,
+        })),
+      };
+    if (type === 'SetSceneItemTransform') return {};
+    if (type === 'CreateInput') {
+      const uuid = `uuid-${this.inputGeneration++}`;
+      this.inputs.set(String(data.inputName), {
+        uuid,
+        state: 'OBS_MEDIA_STATE_STOPPED',
+        file: '',
+        volume: 1,
+        muted: false,
+        cursor: 0,
+      });
+      return { inputUuid: uuid };
+    }
+    if (!input) throw new Error(`Unexpected input for ${type}`);
+    if (type === 'GetMediaInputStatus') {
+      if (this.openingReads >= 0 && this.openingReads-- === 0)
+        input.state = 'OBS_MEDIA_STATE_PLAYING';
+      return { mediaState: input.state, mediaCursor: input.cursor, mediaDuration: 10000 };
+    }
+    if (type === 'GetInputMute') return { inputMuted: input.muted };
+    if (type === 'GetInputVolume') return { inputVolumeMul: input.volume };
+    if (type === 'GetInputSettings') return { inputSettings: { local_file: input.file } };
+    if (type === 'SetInputSettings')
+      input.file = String((data.inputSettings as { local_file: string }).local_file);
+    else if (type === 'SetInputVolume') input.volume = Number(data.inputVolumeMul);
+    else if (type === 'SetInputMute') input.muted = Boolean(data.inputMuted);
+    else if (type === 'SetMediaInputCursor') {
+      if (!['OBS_MEDIA_STATE_PLAYING', 'OBS_MEDIA_STATE_PAUSED'].includes(input.state))
+        throw new Error('OBS 604: media input must be playing or paused');
+      input.cursor = Number(data.mediaCursor);
+    } else if (type === 'TriggerMediaInputAction') {
+      input.state =
+        data.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART'
+          ? 'OBS_MEDIA_STATE_PLAYING'
+          : 'OBS_MEDIA_STATE_STOPPED';
+      input.cursor = 0;
+      this.openingReads = -1;
+      if (input.state === 'OBS_MEDIA_STATE_PLAYING' && this.restartOpeningReads) {
+        input.state = this.restartState;
+        this.openingReads = this.restartOpeningReads;
+      }
+    } else throw new Error(`Unexpected RPC ${type}`);
+    return {};
+  }
+  restarts() {
+    return this.calls.filter(
+      (c) => c.data.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART',
+    ).length;
+  }
+  bgm() {
+    return [...this.inputs].find(([name]) => name.includes('BGM'))![1];
+  }
 }

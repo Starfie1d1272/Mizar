@@ -243,3 +243,166 @@ test('saves real local choices, imports atomically, persists manual stop through
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('auditions unsaved drafts through the owned OBS protocol channel with output confirmation, independent save and cleanup', async ({
+  page,
+  context,
+}, testInfo) => {
+  // Protocol/UI evidence only: MediaObs does not decode audio and cannot prove actual listening.
+  const { MediaObs } = await import('../../apps/companion/test/music-fixtures.js');
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-preview-ui-'));
+  const journal = new SessionJournal(join(directory, 'logs'));
+  const store = new MusicStore(directory, (stage, evidence) => journal.record(stage, evidence));
+  await store.load();
+  const obs = new MediaObs();
+  obs.streamActive = true;
+  const program = musicProgram();
+  program.map.phase = null;
+  program.map.name = null;
+  program.status.telemetry = 'awaiting';
+  const director = new MusicDirector(
+    store,
+    {
+      session: (run) => run(obs, 1),
+      close: () => Promise.resolve(),
+    },
+    () => ({ program, active: 'waiting', production: false }),
+  );
+  const app = buildApp({ supportLogsDirectory: join(directory, 'logs'), supportJournal: journal });
+  registerMusicRoutes(app, store, director, {
+    mode: 'loopback',
+    bindHost: '127.0.0.1',
+    allowedOrigins: [],
+  });
+  await app.ready();
+  const timer = setInterval(() => void director.tick(), 100);
+  await context.route(
+    /\/(?:local\/v1\/music|operator\/music(?:\/(?:track|preview))?|debug\/(?:control-event|support-bundle))$/,
+    async (route) => {
+      const request = route.request();
+      const payload = request.postDataBuffer();
+      const response = await app.inject({
+        method: request.method() as 'GET' | 'POST',
+        url: new URL(request.url()).pathname,
+        headers: request.headers(),
+        ...(payload ? { payload } : {}),
+      });
+      await route.fulfill({
+        status: response.statusCode,
+        body: response.body,
+        contentType: 'application/json',
+      });
+    },
+  );
+  const input = () => [...obs.inputs.values()][0]!;
+  try {
+    await page.goto('/settings?tab=music');
+    await expect(
+      page.getByRole('button', { name: '试听本组', exact: true }).first(),
+    ).toBeDisabled();
+    await page
+      .getByLabel('选择本地曲目', { exact: true })
+      .first()
+      .setInputFiles([
+        { name: '合成一.wav', mimeType: 'audio/wav', buffer: musicWav() },
+        { name: '合成二.wav', mimeType: 'audio/wav', buffer: musicWav(1) },
+      ]);
+    await expect(page.getByText('曲目已选，请保存音乐配置。')).toBeVisible();
+    const slider = page.getByRole('slider', { name: /场景音量/ }).first();
+    await slider.fill('0.75');
+    await page.getByRole('button', { name: '试听 合成二.wav', exact: true }).click();
+    await expect(page.getByText(/OBS 正在直播、录制或状态未知/)).toBeVisible();
+    expect(store.state.sources.stinger).toBeNull();
+    expect(store.state.config.groups.waiting.tracks).toEqual([]);
+    await page.getByRole('button', { name: '确认通过 OBS 试听', exact: true }).click();
+    await expect(page.getByText('正在通过 OBS 试听，最多 15 秒。')).toBeVisible();
+    await slider.fill('1');
+    await expect.poll(() => input().volume).toBe(1);
+    expect(store.state.config.groups.waiting.volume).toBe(0.5);
+    await page.getByRole('button', { name: '保存音乐配置', exact: true }).click();
+    await expect(page.getByText('音乐配置已保存。')).toBeVisible();
+    expect(store.state.config.groups.waiting.volume).toBe(1);
+    expect(store.state.config.groups.waiting.tracks).toHaveLength(2);
+    expect(input().file).toContain(store.state.config.groups.waiting.tracks[1]!.id);
+    for (const [width, height] of [
+      [1280, 720],
+      [1920, 1080],
+      [2560, 1440],
+    ]) {
+      await page.setViewportSize({ width: width!, height: height! });
+      await page.getByText('正在通过 OBS 试听，最多 15 秒。').scrollIntoViewIfNeeded();
+      await expect(
+        page.getByRole('button', { name: '停止试听', exact: true }).first(),
+      ).toBeInViewport();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+        true,
+      );
+      const path = testInfo.outputPath(`preview-${width}.png`);
+      await page.screenshot({ path, fullPage: true });
+      await testInfo.attach(`preview-${width}-protocol-simulator`, {
+        path,
+        contentType: 'image/png',
+      });
+    }
+    const other = await context.newPage();
+    await other.goto('/settings?tab=music');
+    await other.getByRole('button', { name: '试听本组', exact: true }).first().click();
+    await expect(other.getByText('音效通道或其他窗口正在使用试听，请先停止。')).toBeVisible();
+    expect(input().state).toBe('OBS_MEDIA_STATE_PLAYING');
+    await other.close();
+    await page
+      .getByRole('navigation', { name: '音乐场景' })
+      .getByRole('button', { name: /技术暂停/ })
+      .click();
+    await expect.poll(() => input().state).toBe('OBS_MEDIA_STATE_STOPPED');
+    expect(store.state.held).toBe(false);
+    expect(store.state.consumed).toEqual([]);
+    await page
+      .getByRole('navigation', { name: '音乐场景' })
+      .getByRole('button', { name: /等待音乐/ })
+      .click();
+    obs.streamActive = false;
+    await page.getByRole('button', { name: '试听本组', exact: true }).first().click();
+    await expect(page.getByText('正在通过 OBS 试听，最多 15 秒。')).toBeVisible();
+    await page.goto('/');
+    await expect.poll(() => input().state, { timeout: 6000 }).toBe('OBS_MEDIA_STATE_STOPPED');
+    const exported = await app.inject({
+      method: 'POST',
+      url: '/debug/support-bundle',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: {},
+    });
+    expect(exported.statusCode).toBe(200);
+    const files = exported.json<{
+      fullLogs: { files: { name: string; status: string; volumes: { gzipBase64: string }[] }[] };
+    }>().fullLogs.files;
+    const events = files
+      .filter((f) => f.name.startsWith('session.ndjson') && f.status === 'read')
+      .flatMap((f) =>
+        Buffer.concat(f.volumes.map((v) => gunzipSync(Buffer.from(v.gzipBase64, 'base64'))))
+          .toString('utf8')
+          .trim()
+          .split('\n')
+          .map((line) => JSON.parse(line) as { stage: string; evidence: Record<string, unknown> }),
+      );
+    const previews = events.filter((e) => e.stage.startsWith('music_preview_'));
+    expect(previews.map((e) => e.stage)).toEqual(
+      expect.arrayContaining([
+        'music_preview_requested',
+        'music_preview_started',
+        'music_preview_stopped',
+      ]),
+    );
+    expect(previews.find((e) => e.stage === 'music_preview_requested')?.evidence).toMatchObject({
+      group: 'waiting',
+      volume: 0.75,
+      trackId: store.state.config.groups.waiting.tracks[1]!.id,
+    });
+    expect(JSON.stringify(previews)).not.toContain(directory);
+  } finally {
+    clearInterval(timer);
+    await director.close();
+    await app.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
