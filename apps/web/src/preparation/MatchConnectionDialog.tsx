@@ -2,10 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { parseObserverConnection } from '@mizar/protocol/assist';
 import { Button, Dialog, Field, StatusBanner } from '../ui';
 import './match-connection.css';
-import { command, useLocalRead } from './client';
+import { command } from './client';
 import { desktopInvoke } from '../workspace/client';
-import type { MulnxToolView } from '@mizar/protocol/orchestration';
-import { MulnxToolControls } from '../orchestration/MulnxToolControls';
 import {
   registerObserverPreparation,
   type ConnectionPreparationView,
@@ -14,13 +12,14 @@ import {
 
 type Request = {
   view: ConnectionPreparationView;
-  useMulnx: boolean;
   resolve: (accepted: EntryConfirmation) => void;
 };
-/** One per-entry confirmation feeds the game and the private observer. */
+/** A draft only becomes the shared current connection on explicit confirmation. */
 export function MatchConnectionDialog() {
   const [request, setRequest] = useState<Request | null>(null);
   const pending = useRef<Request | null>(null);
+  const operation = useRef(false);
+  const draftRevision = useRef<string | undefined>(undefined);
   const [input, setInput] = useState('');
   const [early, setEarly] = useState('');
   const [program, setProgram] = useState('');
@@ -28,57 +27,29 @@ export function MatchConnectionDialog() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
-  const [consoleRead, setConsoleRead] = useState(0);
-  const [preflightReady, setPreflightReady] = useState(false);
-  const [consoleStatus, setConsoleStatus] = useState<{
-    enabled: boolean;
-    generation: string | null;
-    runtime?: { phase?: string };
-  } | null>(null);
-  const tool = useLocalRead<{ tool?: MulnxToolView & { launchProtocol?: 1 | null } }>(
-    request?.useMulnx ? '/local/v1/orchestration' : null,
-  )?.tool;
-  useEffect(() => {
-    if (!request?.useMulnx) return;
-    let active = true;
-    void desktopInvoke('observer_command', { action: 'preflight' })
-      .then(() => {
-        if (active) setPreflightReady(true);
-      })
-      .catch(() => {
-        if (active) setPreflightReady(false);
-      });
-    void desktopInvoke<NonNullable<typeof consoleStatus>>('cs2_console_status')
-      .then((status) => {
-        if (active) setConsoleStatus(status);
-      })
-      .catch(() => {
-        if (active) {
-          setConsoleStatus(null);
-          setPreflightReady(false);
-          setError('控制台记录状态读取失败，请重新读取。');
-        }
-      });
-    return () => {
-      active = false;
-    };
-  }, [request, consoleRead]);
+  const [confirmed, setConfirmed] = useState(false);
+  const [manual, setManual] = useState(false);
   useEffect(() => {
     const unregister = registerObserverPreparation(
-      (view, useMulnx) =>
+      (view) =>
         new Promise<EntryConfirmation>((resolve) => {
+          if (operation.current) {
+            resolve(false);
+            return;
+          }
+          if (draftRevision.current !== view.revision) {
+            setInput('');
+            setEarly('');
+            setProgram('');
+            setCopied(false);
+          }
+          draftRevision.current = view.revision;
           pending.current?.resolve(false);
-          const next = { view, useMulnx, resolve };
+          const next = { view, resolve };
           pending.current = next;
-          setPreflightReady(false);
           setRequest(next);
-          setInput('');
-          setConsoleStatus(null);
-          setEarly('');
-          setProgram('');
-          setAdvanced(false);
           setError('');
-          setCopied(false);
+          setConfirmed(false);
         }),
     );
     return () => {
@@ -88,7 +59,13 @@ export function MatchConnectionDialog() {
     };
   }, []);
   const close = () => {
-    pending.current?.resolve(false);
+    if (operation.current) return;
+    if (confirmed) {
+      setInput('');
+      setEarly('');
+      setProgram('');
+    }
+    pending.current?.resolve(confirmed);
     pending.current = null;
     setRequest(null);
   };
@@ -103,164 +80,80 @@ export function MatchConnectionDialog() {
   } catch {
     /* Report validation on confirmation. */
   }
-  const confirm = async (disableHud = false) => {
-    if (busy || !request || pending.current !== request) return;
+  const confirm = async () => {
+    if (operation.current || !request || pending.current !== request) return;
+    operation.current = true;
     setBusy(true);
     setError('');
     try {
-      if (
-        (request.view.settings.enabled ||
-          (request.useMulnx && request.view.gameAutomation?.autoConnect)) &&
-        !input.trim() &&
-        !request.view.connection
-      )
-        throw new Error('请填写本场授权的观战连接。');
+      if (!input.trim() && !request.view.connection) throw new Error('请填写本场授权的观战连接。');
       if (input.trim()) {
         if (advanced && (!early.trim() || !program.trim()))
           throw new Error('请填写早源与节目源两个端点。');
-        await command('/operator/observer-assist', {
+        const saved = (await command('/operator/observer-assist', {
           action: 'connection',
+          expectedRevision: draftRevision.current,
           connection: parseObserverConnection(
             input,
             advanced ? program : undefined,
             advanced ? early : undefined,
           ),
-        });
+        })) as unknown as ConnectionPreparationView;
+        draftRevision.current = saved.revision ?? draftRevision.current;
       }
       if (pending.current !== request) return;
-      if (disableHud) {
-        const response = await fetch('/local/v1/observer-assist', {
-          cache: 'no-store',
-          signal: AbortSignal.timeout(5000),
-        });
-        if (!response.ok) throw new Error('自动操作设置未读取，请重试。');
-        const current = (await response.json()) as ConnectionPreparationView;
-        if (typeof current.gameAutomation?.autoConnect !== 'boolean')
-          throw new Error('自动操作设置未确认，请刷新后重试。');
-        if (pending.current !== request) return;
-        await command('/operator/observer-assist', {
-          action: 'configure-game',
-          settings: { ...current.gameAutomation, hideGameHud: false },
+      // Host checks current game identity, production eligibility and configuration revision.
+      if (window.__TAURI_INTERNALS__) {
+        const result = await desktopInvoke<{ useMulnx?: boolean } | null>('observer_command', {
+          action: 'start-configured',
         });
         if (pending.current !== request) return;
-      }
-      pending.current?.resolve(true);
-      pending.current = null;
-      setRequest(null);
+        setManual(result?.useMulnx !== true);
+      } else setManual(true);
+      if (pending.current !== request) return;
+      setConfirmed(true);
     } catch (error) {
       if (pending.current !== request) return;
       setError(error instanceof Error ? error.message : '请核对连接后重试。');
     } finally {
+      operation.current = false;
       setBusy(false);
     }
   };
   const endpoints = connection ?? request?.view.connection;
-  const needsUpdate = Boolean(
-    request?.useMulnx && !request.view.gameRunning && tool?.installed && tool.launchProtocol !== 1,
-  );
-  const needsHud = request?.useMulnx && request.view.gameAutomation?.hideGameHud;
-  const hudReady =
-    preflightReady ||
-    (consoleStatus?.enabled &&
-      (!request?.view.gameRunning || consoleStatus.runtime?.phase === 'reading'));
   return (
     <Dialog
       open={Boolean(request)}
-      title="确认本场观战连接"
+      title="本场观战连接"
       className="mizar-surface match-connection-dialog"
       onClose={close}
-      canClose={() => !busy}
+      canClose={() => !operation.current}
       showCloseButton={false}
     >
-      {request?.useMulnx ? (
-        <>
-          {tool ? (
-            <MulnxToolControls tool={tool} allowStop={false} />
-          ) : (
-            <p role="status">MulNX 版本暂未确认，请在运镜设置中检查更新。</p>
-          )}
-          <p>自动启动需要支持启动协议 1 的 MulNX；旧版请先更新，再进入工作台。</p>
-          {request.view.gameAutomation?.hideGameHud ? (
-            <>
-              <p>
-                自动隐藏游戏 HUD 需要本机控制台记录，并用该设置启动游戏。游戏会写入
-                console.log，可能包含聊天并持续增长。
-              </p>
-              {!hudReady ? (
-                <StatusBanner tone="warning">
-                  {request.view.gameRunning
-                    ? '请确认游戏已启用控制台记录；必要时结束本次游戏后重新启动。'
-                    : '进入前请启用本机控制台记录，或关闭自动隐藏后继续。'}
-                </StatusBanner>
-              ) : null}
-              {!consoleStatus ? (
-                <Button
-                  disabled={busy}
-                  onClick={() => {
-                    setError('');
-                    setConsoleRead((value) => value + 1);
-                  }}
-                >
-                  重新读取记录状态
-                </Button>
-              ) : null}
-              {!consoleStatus?.enabled ? (
-                <Button
-                  disabled={busy || !consoleStatus || request.view.gameRunning}
-                  onClick={() => {
-                    if (!consoleStatus) return;
-                    setBusy(true);
-                    void desktopInvoke<NonNullable<typeof consoleStatus>>(
-                      'set_cs2_console_capture',
-                      { enabled: true, expectedGeneration: consoleStatus.generation },
-                    )
-                      .then((status) => {
-                        if (pending.current === request) setConsoleStatus(status);
-                      })
-                      .catch((reason: unknown) => {
-                        if (pending.current === request)
-                          setError(
-                            reason instanceof Error ? reason.message : '记录设置未保存，请重试。',
-                          );
-                      })
-                      .finally(() => setBusy(false));
-                  }}
-                >
-                  启用本机控制台记录
-                </Button>
-              ) : null}
-              <p>“关闭自动隐藏并继续”会保存游戏偏好，保留自动连接设置；以后进入也沿用关闭状态。</p>
-              <Button disabled={busy || needsUpdate} onClick={() => void confirm(true)}>
-                关闭自动隐藏并继续
-              </Button>
-            </>
-          ) : null}
-        </>
-      ) : null}
       <Field
         label="本场观战连接"
         value={input}
         autoComplete="off"
-        disabled={busy}
+        disabled={busy || confirmed}
         onChange={(event) => {
           setInput(event.target.value);
           setCopied(false);
         }}
         placeholder="connect IP:27025;password 密码"
-        message="粘贴 27025 早源或 27026 节目源均可，自动准备对应的两路连接。已有本场连接时可留空沿用。"
+        message="粘贴早源或节目源连接。输入暂存为草稿，确认后才更新本场连接；留空仅沿用已确认的本场地址。"
       />
       <details open={advanced} onToggle={(event) => setAdvanced(event.currentTarget.open)}>
         <summary>高级设置</summary>
         <Field
           label="早源 IPv4:端口"
           value={early}
-          disabled={busy}
+          disabled={busy || confirmed}
           onChange={(event) => setEarly(event.target.value)}
         />
         <Field
           label="节目源 IPv4:端口"
           value={program}
-          disabled={busy}
+          disabled={busy || confirmed}
           onChange={(event) => setProgram(event.target.value)}
         />
         <p>用于自定义端口或不同服务器；密码沿用上方连接中的值。</p>
@@ -273,11 +166,18 @@ export function MatchConnectionDialog() {
         </p>
       ) : null}
       <p>
-        {request?.useMulnx && request.view.gameAutomation?.autoConnect
-          ? '进入工作台后自动连接节目源。'
-          : '游戏启动后，请在控制台执行节目源连接命令。'}
+        标准游戏请复制节目源命令并在控制台执行；复制不表示游戏已连接。使用第三方 HUD 时，请按 HUD
+        指引手动隐藏游戏 HUD。
       </p>
-      {connection && !(request?.useMulnx && request.view.gameAutomation?.autoConnect) ? (
+      <p>
+        MulNX 自动连接与隐藏 HUD
+        沿用已有偏好，仅对当前已验证控制资格的游戏执行。已启用的私有观察辅助由 Host 独立连接早源。
+      </p>
+      <p>
+        HUD
+        自动隐藏需要启动前已配置的本机控制台记录；请从游戏与观战设置检查，工作台不会自动开启记录。
+      </p>
+      {connection ? (
         <Button
           disabled={busy}
           onClick={() => {
@@ -290,17 +190,23 @@ export function MatchConnectionDialog() {
           {copied ? '节目源命令已复制' : '复制节目源连接命令'}
         </Button>
       ) : null}
-      {error ? <StatusBanner tone="warning">{error}</StatusBanner> : null}
+      {busy ? <p role="status">正在提交本场连接…</p> : null}
+      {confirmed ? (
+        <StatusBanner tone="success">
+          {manual
+            ? '当前游戏没有已验证的 MulNX 控制资格，请在控制台手动执行节目源命令；早源按辅助开关独立准备。'
+            : '本场连接操作已提交，请在游戏内核对节目源；命令入队不表示已经连接。'}
+        </StatusBanner>
+      ) : null}
+      {error ? (
+        <StatusBanner tone="warning">{error} 工作台和游戏保持打开，可重试本场连接。</StatusBanner>
+      ) : null}
       <div className="preparation-actions">
         <Button disabled={busy} onClick={close}>
-          取消
+          {confirmed ? '完成' : '取消'}
         </Button>
-        <Button
-          variant="primary"
-          disabled={busy || needsUpdate || Boolean(needsHud && !hudReady)}
-          onClick={() => void confirm()}
-        >
-          确认并进入工作台
+        <Button variant="primary" disabled={busy || confirmed} onClick={() => void confirm()}>
+          {error ? '重试本场连接' : '确认本场连接'}
         </Button>
       </div>
     </Dialog>

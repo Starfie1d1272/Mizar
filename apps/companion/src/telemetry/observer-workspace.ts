@@ -350,6 +350,7 @@ export function registerWorkspaceObserver(
   app.get('/local/v1/observer', (_request, reply) =>
     reply.header('cache-control', 'no-store').send({
       ...observer.view(),
+      programCommandQueued: Boolean(host && connectedGame === keys(host).connect),
       pending: pending > 0,
       error: lastError,
       retryAvailable: Boolean(
@@ -360,6 +361,7 @@ export function registerWorkspaceObserver(
   const command = z.discriminatedUnion('action', [
     z.strictObject({
       action: z.literal('prepare'),
+      expectedRevision: z.uuid().optional(),
       useMulnx: z.boolean().default(false),
       game: z.string().max(80),
       job: z.string().max(100),
@@ -403,6 +405,10 @@ export function registerWorkspaceObserver(
       if (['start', 'start-configured', 'prepare'].includes(body.action) && !canStart())
         return reply.code(409).send({ message: '请进入正式制播工作台后连接早源。' });
       if (body.action === 'prepare') {
+        if (body.expectedRevision && body.expectedRevision !== settings?.revision)
+          return reply
+            .code(409)
+            .send({ message: '本场连接或比赛已变化，请重新打开本场连接后确认。' });
         const gameControl = body.useMulnx && settings?.gameAutomation;
         if (
           !settings ||

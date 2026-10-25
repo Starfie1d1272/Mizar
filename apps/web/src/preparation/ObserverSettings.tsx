@@ -46,14 +46,6 @@ export function ObserverSettingsPanel() {
       const value = parsed.data;
       await command('/operator/observer-assist', { action: 'configure', settings: value });
       setSaved(true);
-      if (
-        value.enabled &&
-        !view?.settings.enabled &&
-        production?.mode === 'live' &&
-        window.__TAURI_INTERNALS__
-      ) {
-        await desktopInvoke('observer_command', { action: 'start-configured' });
-      }
     } catch (error) {
       setError(error instanceof Error ? error.message : '请核对设置后重试。');
     } finally {
@@ -147,12 +139,9 @@ export function GameAutomationSettingsPanel() {
     setBusy(true);
     setMessage('');
     try {
-      const ready = await flushObserverPreparation(useMulnx);
+      const ready = await flushObserverPreparation(useMulnx, cs2.status?.running);
       if (ready === null) return;
-      if (ready && cs2.status?.running) {
-        await desktopInvoke('observer_command', { action: 'start-configured' });
-        setMessage('本场连接已更新。');
-      }
+      setMessage('本场连接操作已完成，请在游戏内核对节目源。');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '请重试本场连接。');
     } finally {
@@ -163,12 +152,12 @@ export function GameAutomationSettingsPanel() {
   return (
     <Panel className="settings-card">
       <h2>游戏连接与画面准备</h2>
-      {cs2.status?.running && (view?.settings.enabled || (useMulnx && settings.autoConnect)) ? (
+      {cs2.status?.running ? (
         <Button disabled={busy} onClick={() => void changeConnection()}>
           切换本场观战连接
         </Button>
       ) : null}
-      <p>MulNX 启动方式提供自动连接和游戏 HUD 控制；本场观战连接在打开工作台前统一确认。</p>
+      <p>MulNX 启动方式提供自动连接和游戏 HUD 控制；打开工作台后填写并确认本场观战连接。</p>
       <Checkbox
         label="自动连接本场节目源"
         checked={settings.autoConnect}

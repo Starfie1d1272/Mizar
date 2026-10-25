@@ -257,6 +257,9 @@ it('routes standard observers and MulNX game automation independently', () =>
       expect(start).toHaveBeenCalledTimes(Number(scenario.enabled));
       expect(commands.send).toHaveBeenCalledTimes(Number(scenario.command));
       if (scenario.command) expect(commands.send.mock.calls[0]![0]).toContain('27026');
+      expect((await app.inject('/local/v1/observer')).json()).toMatchObject({
+        programCommandQueued: scenario.command,
+      });
       start.mockRestore();
       await app.close();
     }
@@ -376,10 +379,22 @@ it('rejects an old prepared game after a new game is prepared and rejects an old
     };
     expect((await request(payload)).statusCode).toBe(409);
     const next = await prepare('43-1');
+    const draftRevision = settings.revision;
     settings.setConnection({ ...settings.configured()!, earlyEndpoint: '127.0.0.1:27022' });
     expect((await request({ ...payload, game: '43-1', revision: next.revision })).statusCode).toBe(
       409,
     );
+    expect(
+      (
+        await request({
+          action: 'prepare',
+          game: '43-1',
+          job: 'Local\\MizarObserver-test',
+          useMulnx: true,
+          expectedRevision: draftRevision,
+        })
+      ).statusCode,
+    ).toBe(409);
     expect(commands.send).not.toHaveBeenCalled();
     expect(observer.view().active).toBe(false);
     expect((await start('43-1')).statusCode).toBe(200);

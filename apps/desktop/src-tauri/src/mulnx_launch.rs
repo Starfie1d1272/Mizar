@@ -217,6 +217,17 @@ fn controlled_game(cs2: &managed_cs2::ManagedCs2) -> Result<managed_cs2::Workspa
     Ok(game)
 }
 
+/// Automation requires the held external instance to own the live gateway.
+/// Standard and ordinary borrowed games keep the manual connection route.
+pub fn observer_control_available(cs2: &managed_cs2::ManagedCs2, log: &DesktopLog) -> bool {
+    let Ok(game) = controlled_game(cs2) else { return false; };
+    let address = std::net::SocketAddr::from(([127, 0, 0, 1], 55202));
+    if std::net::TcpStream::connect_timeout(&address, Duration::from_millis(200)).is_err() {
+        return false;
+    }
+    verify_gateway_owner(log, 55202, game.pid).is_ok()
+}
+
 /// Explicit end of MulNX control. Workbench exit intentionally never calls this.
 pub fn stop_control(app: &tauri::AppHandle, log: &DesktopLog) -> Result<Value, String> {
     let _launch = LAUNCH_GATE.try_lock().map_err(|_| "MulNX 正忙，请稍后重试。")?;

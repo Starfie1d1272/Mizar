@@ -174,7 +174,7 @@ it('distinguishes reconnecting from a terminal failure and dispatches the config
     action: 'start-configured',
   });
 });
-it('requests configured assistance when enabled during a live session', async () => {
+it('saves auxiliary preferences without confirming a connection or issuing game commands', async () => {
   window.__TAURI_INTERNALS__ = { invoke: <T,>() => Promise.resolve(undefined as T) };
   mocks.production.mode = 'live';
   mocks.runtime.pending = true;
@@ -191,9 +191,7 @@ it('requests configured assistance when enabled during a live session', async ()
       .click();
     await Promise.resolve();
   });
-  expect(mocks.native).toHaveBeenCalledExactlyOnceWith('observer_command', {
-    action: 'start-configured',
-  });
+  expect(mocks.native).not.toHaveBeenCalled();
 });
 
 it('restores a pending game HUD through its dedicated native command', async () => {

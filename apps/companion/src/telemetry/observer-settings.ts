@@ -129,7 +129,11 @@ export function registerObserverSettings(
   );
   const schema = z.discriminatedUnion('action', [
     z.strictObject({ action: z.literal('configure'), settings: observerSettingsSchema }),
-    z.strictObject({ action: z.literal('connection'), connection: observerConnectionSchema }),
+    z.strictObject({
+      action: z.literal('connection'),
+      connection: observerConnectionSchema,
+      expectedRevision: z.uuid().optional(),
+    }),
     z.strictObject({ action: z.literal('configure-game'), settings: gameAutomationSettingsSchema }),
   ]);
   app.post('/operator/observer-assist', { bodyLimit: 4096 }, async (request, reply) => {
@@ -141,7 +145,13 @@ export function registerObserverSettings(
     if (parsed.data.action === 'configure') await store.configure(parsed.data.settings);
     else if (parsed.data.action === 'configure-game')
       await store.configureGame(parsed.data.settings);
-    else store.setConnection(parsed.data.connection);
+    else {
+      if (parsed.data.expectedRevision && parsed.data.expectedRevision !== store.revision)
+        return reply
+          .code(409)
+          .send({ message: '本场连接或比赛已变化，请重新打开本场连接后确认。' });
+      store.setConnection(parsed.data.connection);
+    }
     return store.view();
   });
 }
