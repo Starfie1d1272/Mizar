@@ -572,6 +572,13 @@ it('uses actual observer cursor reception without kills and detects an open but 
     lookahead.consumeObserverRecord(cursor(15));
     sendProgram();
     expect(coordinator.getCurrent().assist.observer?.state).toBe('ready');
+    lookahead.consumeObserverRecord({ ...cursor(16), map: 'de_nuke' });
+    sendProgram();
+    expect(coordinator.getCurrent().assist.observer).toMatchObject({
+      state: 'unavailable',
+      waitingReason: 'source-map-mismatch',
+      hints: [],
+    });
     lookahead.disconnectObserver();
     expect(lookahead.getHealth().lastReceiveMonotonicMs).toBeUndefined();
   } finally {

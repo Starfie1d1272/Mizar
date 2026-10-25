@@ -683,6 +683,7 @@ export class ProjectionCoordinator {
     if (!settings) return projectObserverAssist(selectProgramSafeRuntimeView(snapshot.current));
     const health = this.cstvSources.lookahead.getHealth();
     const received = health.lastReceiveMonotonicMs;
+    const sourceMapName = health.mapName ?? health.lastSync?.mapName;
     const receiveAgeMs = received === undefined || received > now ? null : now - received;
     const freshness =
       receiveAgeMs === null
@@ -695,8 +696,7 @@ export class ProjectionCoordinator {
       state: health.state,
       ...(health.lastErrorCode ? { lastErrorCode: health.lastErrorCode } : {}),
       generation: health.generation,
-      sameMap:
-        health.lastSync?.mapName === undefined || health.lastSync.mapName === program.map.name,
+      sameMap: sourceMapName === undefined || sourceMapName === program.map.name,
       // Missing receive evidence preserves the existing compatibility boundary,
       // while diagnostics explicitly distinguish it from measured freshness.
       fresh: freshness !== 'stale',

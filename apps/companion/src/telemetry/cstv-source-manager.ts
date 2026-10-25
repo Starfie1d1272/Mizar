@@ -28,6 +28,7 @@ export interface CstvSourceHealth<R extends GameEventSourceRole = GameEventSourc
   readonly reconnectAttempt: number;
   readonly lastSync?: CstvSyncMetadata;
   readonly lastReceiveMonotonicMs?: number;
+  readonly mapName?: string;
   readonly tailTick?: number;
   readonly lastEventTick?: number;
   readonly lastEventSequence?: number;
@@ -190,11 +191,13 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
 
   getHealth(): CstvSourceHealth<R> {
     if (this.refreshTailTick()) this.notifySnapshotChanged();
+    const mapName = this.observerMap ?? this.lastSync?.mapName;
     return {
       role: this.role,
       state: this.state,
       generation: this.generation,
       reconnectAttempt: this.reconnectAttempt,
+      ...(mapName === undefined ? {} : { mapName }),
       ...(this.lastSync === undefined ? {} : { lastSync: { ...this.lastSync } }),
       ...(this.lastReceiveMonotonicMs === undefined
         ? {}
