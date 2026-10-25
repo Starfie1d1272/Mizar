@@ -2003,6 +2003,7 @@ it('exports actionable stages for each bounded observer failure category without
       ['127.0.0.16:27020', 'eof', 'invalid'],
       ['127.0.0.17:27020', 'session', 'received'],
       ['127.0.0.19:27020', 'native-boot', 'received'],
+      ['127.0.0.24:27020', 'native-boot', 'received'],
       ['127.0.0.18:27020', 'parser-initialization', 'received'],
     ] as const) {
       await observer.start(driver, endpoint, 'OBSERVER-EXPORT-SECRET');

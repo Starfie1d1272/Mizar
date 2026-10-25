@@ -74,105 +74,107 @@ function terminalEvidence(bytes: Buffer, overflow: boolean) {
     .find((line) => preReport.includes(line));
   const absentReport = () =>
     token ? { report: 'missing' as const, reason: token } : { report: 'invalid' as const };
-  try {
-    const value: unknown = JSON.parse(bytes.toString('utf8').trim().split(/\r?\n/).at(-1) ?? '');
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) return absentReport();
-    const row = value as Record<string, unknown>;
-    if (
-      !(
-        row.online_success === 'INCONCLUSIVE' ||
-        (row.schema === 'cs2-observer-report/1' &&
+  for (const line of text.split(/\r?\n/).reverse()) {
+    try {
+      const value: unknown = JSON.parse(line);
+      if (typeof value !== 'object' || value === null || Array.isArray(value)) continue;
+      const row = value as Record<string, unknown>;
+      if (
+        !(
+          row.schema === 'cs2-observer-report/1' &&
           typeof row.reachedFull === 'boolean' &&
           typeof row.drainCompleted === 'boolean' &&
-          typeof row.cleanupCompleted === 'boolean')
-      ) ||
-      !['failed', 'incomplete', 'closed'].includes(String(row.outcome))
-    )
-      return absentReport();
-    const reasons = [
-      'owner-stopped',
-      'duration-limit-incomplete',
-      'native-start-failed',
-      'operation-failed-details-omitted',
-      'interrupted',
-      'addon-initialization-required',
-      'new-string-table-callbacks-required',
-      'prespawn-initialization-required',
-      'initialization-timeout',
-      'phase-timeout',
-      'native-session-closed',
-      'source-hltv-stop',
-      'source-drain-timeout',
-      'source-drain-native-failed',
-      'output-backpressure',
-      'output-closed',
-      'configuration-boundary',
-      'ordered-parser-exited',
-      'ordered-parser-not-running',
-      'ordered-parser-protocol-version',
-      'ordered-parser-identity',
-      'ordered-parser-creation-sequence',
-      'ordered-parser-checkpoint-order',
-      'ordered-parser-checkpoint-shape',
-      'ordered-parser-input-backpressure',
-      'spawn-before-parser-initialization',
-      'receipt-before-parser-checkpoint',
-    ];
-    const integer = (v: unknown) =>
-      typeof v === 'number' && Number.isSafeInteger(v) ? v : undefined;
-    return {
-      report: 'received' as const,
-      phase:
-        typeof row.phase === 'string' &&
-        [
-          'transport',
-          'challenge',
-          'ticket',
-          'connection',
-          'channel',
-          'draining',
-          'closed',
-          'blocked',
-        ].includes(row.phase)
-          ? row.phase
-          : undefined,
-      outcome: row.outcome as 'failed' | 'incomplete' | 'closed',
-      reason:
-        typeof row.reason === 'string' &&
-        /^(?:ordered-parser-error|ordered-parser-input-failed|ordered-parser-output-failed|ordered-parser-world-reinitialization): /.test(
-          row.reason,
-        )
-          ? 'ordered-parser-error-details-omitted'
-          : typeof row.reason === 'string' && reasons.includes(row.reason)
-            ? row.reason
-            : 'unclassified',
-      nativeBootCode: integer(row.native_boot_code),
-      steamInitResult: integer(row.steam_init_result),
-      remoteEndReason: integer(row.remote_end_reason),
-      drainCompleted: typeof row.drainCompleted === 'boolean' ? row.drainCompleted : undefined,
-      cleanupCompleted:
-        typeof row.cleanupCompleted === 'boolean' ? row.cleanupCompleted : undefined,
-      finalizationFailures: Array.isArray(row.finalization_failures)
-        ? row.finalization_failures
-            .filter(
-              (v): v is string =>
-                typeof v === 'string' &&
-                [
-                  'close-session',
-                  'close-parser',
-                  'close-events',
-                  'close-samples',
-                  'close-output',
-                  'close-input',
-                  'write-report',
-                ].includes(v),
-            )
-            .slice(0, 8)
-        : [],
-    };
-  } catch {
-    return absentReport();
+          typeof row.cleanupCompleted === 'boolean'
+        ) ||
+        !['failed', 'incomplete', 'closed'].includes(String(row.outcome))
+      )
+        continue;
+      const reasons = [
+        'owner-stopped',
+        'duration-limit-incomplete',
+        'native-start-failed',
+        'operation-failed-details-omitted',
+        'interrupted',
+        'addon-initialization-required',
+        'new-string-table-callbacks-required',
+        'prespawn-initialization-required',
+        'initialization-timeout',
+        'phase-timeout',
+        'native-session-closed',
+        'source-hltv-stop',
+        'source-drain-timeout',
+        'source-drain-native-failed',
+        'output-backpressure',
+        'output-closed',
+        'configuration-boundary',
+        'ordered-parser-exited',
+        'ordered-parser-not-running',
+        'ordered-parser-protocol-version',
+        'ordered-parser-identity',
+        'ordered-parser-creation-sequence',
+        'ordered-parser-checkpoint-order',
+        'ordered-parser-checkpoint-shape',
+        'ordered-parser-input-backpressure',
+        'spawn-before-parser-initialization',
+        'receipt-before-parser-checkpoint',
+      ];
+      const integer = (v: unknown) =>
+        typeof v === 'number' && Number.isSafeInteger(v) ? v : undefined;
+      return {
+        report: 'received' as const,
+        phase:
+          typeof row.phase === 'string' &&
+          [
+            'transport',
+            'challenge',
+            'ticket',
+            'connection',
+            'channel',
+            'draining',
+            'closed',
+            'blocked',
+          ].includes(row.phase)
+            ? row.phase
+            : undefined,
+        outcome: row.outcome as 'failed' | 'incomplete' | 'closed',
+        reason:
+          typeof row.reason === 'string' &&
+          /^(?:ordered-parser-error|ordered-parser-input-failed|ordered-parser-output-failed|ordered-parser-world-reinitialization): /.test(
+            row.reason,
+          )
+            ? 'ordered-parser-error-details-omitted'
+            : typeof row.reason === 'string' && reasons.includes(row.reason)
+              ? row.reason
+              : 'unclassified',
+        nativeBootCode: integer(row.native_boot_code),
+        steamInitResult: integer(row.steam_init_result),
+        remoteEndReason: integer(row.remote_end_reason),
+        drainCompleted: typeof row.drainCompleted === 'boolean' ? row.drainCompleted : undefined,
+        cleanupCompleted:
+          typeof row.cleanupCompleted === 'boolean' ? row.cleanupCompleted : undefined,
+        finalizationFailures: Array.isArray(row.finalization_failures)
+          ? row.finalization_failures
+              .filter(
+                (v): v is string =>
+                  typeof v === 'string' &&
+                  [
+                    'close-session',
+                    'close-parser',
+                    'close-events',
+                    'close-samples',
+                    'close-output',
+                    'close-input',
+                    'write-report',
+                  ].includes(v),
+              )
+              .slice(0, 8)
+          : [],
+      };
+    } catch {
+      continue;
+    }
   }
+  return absentReport();
 }
 
 /** Explicit composition only. Importing this module never starts Steam or a process. */

@@ -54,7 +54,7 @@ describe('observer reconnection through real owned child processes', () => {
           .poll(() => test.owner.manager.getHealth().state, { timeout: 5000 })
           .toBe('live');
         expect(test.owner.manager.getHealth().generation).toBeGreaterThan(generation);
-        expect(test.owner.manager.getRecentGameEvents()).toHaveLength(1);
+        await expect.poll(() => test.owner.manager.getRecentGameEvents().length).toBe(1);
         const old = JSON.parse(await readFile(join(test.output, 'child.json'), 'utf8')) as {
           source: string;
           pid: number;

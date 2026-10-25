@@ -39,6 +39,15 @@ for await (const text of inputLines) {
     process.stderr.write('output-directory-unavailable\n');
     process.exit(1);
   }
+  const validReport = (reason) =>
+    JSON.stringify({
+      schema: 'cs2-observer-report/1',
+      reachedFull: false,
+      drainCompleted: false,
+      cleanupCompleted: true,
+      outcome: 'failed',
+      reason,
+    });
   const earlyFailures = {
     '127.0.0.11:27020': 'output-directory-unavailable\nSynthetic interpreter shutdown diagnostic',
     '127.0.0.12:27020': 'configuration-boundary',
@@ -74,6 +83,20 @@ for await (const text of inputLines) {
         reason: 'native-start-failed',
         native_boot_code: 2,
       }),
+    '127.0.0.21:27020': validReport('native-start-failed') + '\nSynthetic shutdown diagnostic',
+    '127.0.0.22:27020': validReport('native-start-failed') + '\n{"malformed":',
+    '127.0.0.23:27020':
+      validReport('native-start-failed') + '\n' + validReport('ordered-parser-exited'),
+    '127.0.0.24:27020':
+      validReport('native-start-failed') +
+      '\n' +
+      JSON.stringify({
+        online_success: 'INCONCLUSIVE',
+        outcome: 'failed',
+        reason: input.password,
+      }) +
+      '\nprivate trailing path ' +
+      input.password,
   };
   if (Object.hasOwn(earlyFailures, input.endpoint)) {
     process.stderr.write(earlyFailures[input.endpoint]);
@@ -85,7 +108,10 @@ for await (const text of inputLines) {
   if (input.endpoint === '127.0.0.2:27020') {
     process.stderr.write(
       JSON.stringify({
-        online_success: 'INCONCLUSIVE',
+        schema: 'cs2-observer-report/1',
+        reachedFull: false,
+        drainCompleted: false,
+        cleanupCompleted: true,
         outcome: 'failed',
         reason: 'native-start-failed',
         native_boot_code: 2,
@@ -174,7 +200,10 @@ for await (const text of inputLines) {
 if (cleanupFailure) {
   process.stderr.write(
     JSON.stringify({
-      online_success: 'INCONCLUSIVE',
+      schema: 'cs2-observer-report/1',
+      reachedFull: false,
+      drainCompleted: false,
+      cleanupCompleted: true,
       outcome: 'failed',
       reason: 'owner-stopped',
       finalization_failures: ['close-session'],

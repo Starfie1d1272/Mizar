@@ -171,6 +171,10 @@ it.each([
   ['127.0.0.16:27020', 'eof', 'invalid', undefined],
   ['127.0.0.17:27020', 'session', 'received', 'unclassified'],
   ['127.0.0.19:27020', 'native-boot', 'received', 'native-start-failed'],
+  ['127.0.0.21:27020', 'native-boot', 'received', 'native-start-failed'],
+  ['127.0.0.22:27020', 'native-boot', 'received', 'native-start-failed'],
+  ['127.0.0.23:27020', 'parser-initialization', 'received', 'ordered-parser-exited'],
+  ['127.0.0.24:27020', 'native-boot', 'received', 'native-start-failed'],
   ['127.0.0.18:27020', 'parser-initialization', 'received', 'ordered-parser-exited'],
 ])(
   'retains bounded pre-report and terminal evidence for %s',
@@ -192,6 +196,7 @@ it.each([
       expect(JSON.stringify(result)).not.toContain(options.password);
       expect(JSON.stringify(result)).not.toContain('private unknown');
       expect(JSON.stringify(result)).not.toContain('private path');
+      expect(JSON.stringify(result)).not.toContain('private trailing path');
     } finally {
       await owner.stop();
     }
