@@ -1268,13 +1268,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     !demoTest.get().active;
   registerObserverSettings(app, observerSettings, localWebTransport.getOriginPolicy());
   const observerSettingsUnsubscribe = observerSettings.subscribe((kind) => {
-    projectionCoordinator.resetAssist();
-    if (kind === 'connection' || !observerSettings.settings.enabled)
-      void options.workspaceObserver
-        ?.stop()
-        .catch((error: unknown) =>
-          app.log.error({ stage: 'observer_settings_stop', err: error }, '观察辅助收尾需要重试'),
-        );
+    if (kind === 'lead') projectionCoordinator.refreshAssist();
+    else if (kind !== 'game') projectionCoordinator.resetAssist();
   });
   app.addHook('onClose', () => {
     observerSettingsUnsubscribe();

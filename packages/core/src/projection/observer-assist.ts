@@ -120,6 +120,7 @@ export class ObserverHintTimeline {
       boundary !== this.boundary ||
       (this.generation !== undefined && this.generation !== source.generation)
     ) {
+      // Both pause and resume discard buffered events; resume needs fresh death anchors.
       this.clear();
       this.context = context;
       this.boundary = boundary;
@@ -211,6 +212,8 @@ export class ObserverHintTimeline {
     });
     const hints: ObserverHint[] = [];
     for (const kill of [...this.kills].sort((a, b) => a.sourceMs - b.sourceMs)) {
+      // A Program-confirmed death remains a calibration anchor, never a future hint.
+      if (kill.matched) continue;
       const due = kill.sourceMs + this.offset;
       if (
         now < due - settings.leadSeconds * 1000 ||

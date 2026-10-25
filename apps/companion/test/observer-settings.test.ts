@@ -2,7 +2,11 @@ import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify from 'fastify';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
+import { buildApp } from '../src/app.js';
+import { createProjectionCoordinator } from '../src/projections/projection-coordinator.js';
+import { createProgramRuntime } from '../src/runtime/program-runtime.js';
+import { createCstvSourceManagers } from '../src/telemetry/cstv-source-manager.js';
 import { DEFAULT_OBSERVER_SETTINGS } from '@mizar/protocol/assist';
 import {
   ObserverSettingsStore,
@@ -71,6 +75,74 @@ it('applies origin and payload validation to private settings writes', async () 
     });
     expect(response.statusCode).toBe(200);
     expect(store.settings.enabled).toBe(true);
+  } finally {
+    await app.close();
+  }
+});
+
+it('keeps equivalent saves idempotent and timing separate from Host preparation revisions', async () => {
+  const store = new ObserverSettingsStore();
+  const changes: string[] = [];
+  store.subscribe((kind) => changes.push(kind));
+  const revision = store.revision;
+  await Promise.all([
+    store.configure({ ...store.settings, leadSeconds: 10 }),
+    store.configure({ ...store.settings, leadSeconds: 10 }),
+    store.configureGame({ ...store.gameAutomation }),
+  ]);
+  expect(changes).toEqual(['lead']);
+  expect(store.revision).toBe(revision);
+  await store.configure({ ...store.settings, enabled: true });
+  expect(store.revision).not.toBe(revision);
+  const connection = {
+    earlyEndpoint: '127.0.0.1:27025',
+    programEndpoint: '127.0.0.1:27026',
+    password: 'synthetic',
+  };
+  store.setConnection(connection);
+  const connected = store.revision;
+  store.setConnection({ ...connection });
+  expect(store.revision).toBe(connected);
+  expect(changes).toEqual(['lead', 'enabled', 'connection']);
+  store.setConnection({ ...connection, password: 'changed' });
+  expect(store.revision).not.toBe(connected);
+  store.clearConnection();
+  const cleared = store.revision;
+  store.clearConnection();
+  expect(store.revision).toBe(cleared);
+});
+
+it('refreshes only the private projection for lead saves and resets alignment for changed expected delay', async () => {
+  const coordinator = createProjectionCoordinator({
+    programRuntime: createProgramRuntime('lead-settings-regression'),
+    cstvSources: createCstvSourceManagers({}),
+  });
+  const reset = vi.spyOn(coordinator, 'resetAssist');
+  const refresh = vi.spyOn(coordinator, 'refreshAssist');
+  const app = buildApp({ projectionCoordinator: coordinator });
+  const save = (leadSeconds: number, expectedDelaySeconds = 120) =>
+    app.inject({
+      method: 'POST',
+      url: '/operator/observer-assist',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: {
+        action: 'configure',
+        settings: { enabled: false, expectedDelaySeconds, leadSeconds },
+      },
+    });
+  try {
+    await app.ready();
+    reset.mockClear();
+    refresh.mockClear();
+    const program = coordinator.getPublisher('program').getCurrent();
+    expect((await save(10)).statusCode).toBe(200);
+    expect(reset).not.toHaveBeenCalled();
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(coordinator.getPublisher('program').getCurrent()).toBe(program);
+    await save(10);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    await save(10, 130);
+    expect(reset).toHaveBeenCalledTimes(1);
   } finally {
     await app.close();
   }
