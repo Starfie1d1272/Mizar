@@ -93,7 +93,7 @@ pub fn submit<T>(log: &DesktopLog, game: &Identity,
                 for _ in 0..2 { // New UI or borrowed handle has no authority to clear the disk record.
                     assert_eq!(submit(log, game, || panic!("repeat preparation"), |()| panic!("repeat send")).unwrap()["stopGuard"], "already-submitted");
                 }
-                let restarted = DesktopLog::new(&log.state_root, None).unwrap();
+                let restarted = DesktopLog::new(&log.state_root, Some(log.state_root.clone())).unwrap();
                 assert_eq!(submit(&restarted, game, || Ok(()), |()| panic!("restart send")).unwrap()["stopGuard"], "already-submitted");
                 assert_eq!(calls.get(), 1);
                 for (pid, created) in [(game.pid, game.created+1), (game.pid+1, game.created)] {
