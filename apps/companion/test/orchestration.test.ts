@@ -12,7 +12,11 @@ import { registerOrchestrationRoutes } from '../src/orchestration/routes.js';
 import { MusicStore } from '../src/music/store.js';
 import { registerProductionRoutes } from '../src/program-scenes/production.js';
 import type { ProgramSceneController } from '../src/program-scenes/controller.js';
-import { DemoTestController, readDemoTestRecovery } from '../src/demo-test/controller.js';
+import {
+  DemoTestController,
+  readDemoTestRecovery,
+  registerDemoTestRoutes,
+} from '../src/demo-test/controller.js';
 import { musicProgram } from './music-fixtures.js';
 
 const cleanup: (() => Promise<unknown>)[] = [];
@@ -327,6 +331,17 @@ it('real websocket separates ACK, rejection and unrelated broadcasts; disconnect
   await provider.connect(port);
   replyMode = 'reject';
   expect(await provider.send('CamPlay/ClearForce')).toBe('rejected');
+  expect(await provider.stopControl()).toBe('rejected');
+  expect(JSON.parse(wires.at(-1)!)).toEqual({ type: 'System/Stop', payload: '' });
+  expect(provider.connected).toBe(false);
+  await provider.connect(port);
+  replyMode = 'ack';
+  const generation = provider.generation;
+  expect(await provider.stopControl()).toBe('queued');
+  expect(provider.connected).toBe(false);
+  expect(provider.generation).toBeGreaterThan(generation);
+  expect(await provider.send('CamMacro/Play', '停止后的旧镜头')).toBe('unknown');
+  await provider.connect(port);
   replyMode = 'disconnect';
   expect(await provider.send('CamMacro/Play', '旧镜头')).toBe('unknown');
   const before = wires.length;
@@ -834,3 +849,113 @@ it('auditions isolated Demo data without formal series binding and never enables
   r.director.tick();
   expect(() => r.director.audition(r.store.preset.maps[0]!.opening!, r.director.get())).toThrow();
 });
+
+it.each(['owned', 'external'] as const)(
+  'production finish preserves an active %s Demo recovery transaction until host completion',
+  async (ownership) => {
+    const root = await mkdtemp(join(tmpdir(), 'mizar-active-demo-exit-'));
+    cleanup.push(() => rm(root, { recursive: true, force: true }));
+    const app = Fastify();
+    cleanup.push(() => app.close());
+    const markerPath = join(root, 'demo-test.json');
+    const requestId = 'ba05aade-2287-42be-9320-87abae5ac312';
+    let safe = false;
+    let scene = 'gameplay';
+    let temporary = false;
+    let quarantined = false;
+    let formalRestores = 0;
+    const scenes = {
+      get: () => ({ revision: 'scene', active: scene }),
+      select: () => {
+        if (safe) scene = 'waiting';
+        return Promise.resolve({ ok: safe, message: 'waiting unconfirmed' });
+      },
+      selectWaitingForExit: () =>
+        Promise.resolve({
+          ok: scene === 'waiting',
+          message: 'waiting unconfirmed',
+        }),
+    } as unknown as ProgramSceneController;
+    const production = registerProductionRoutes(app, {
+      originPolicy: { mode: 'loopback', bindHost: '127.0.0.1', allowedOrigins: [] },
+      hasContext: () => true,
+      scenes,
+      finishTrial: () => trial.finish(),
+      release: async () => {},
+    });
+    const trial = new DemoTestController({
+      markerPath,
+      dataReady: () => true,
+      diagnostic: () => {},
+      context: {
+        beginTemporary: () => {
+          temporary = true;
+          return Promise.resolve();
+        },
+        endTemporary: () => {
+          temporary = false;
+        },
+      },
+      runtime: { flushSeriesProgressCheckpoint: async () => {}, resetSession: () => {} },
+      scenes,
+      production,
+      obs: () => Promise.resolve({ connection: 'connected', streaming: false }),
+      quarantineOutput: (value: boolean) => {
+        quarantined = value;
+      },
+      refresh: () => {},
+      restoreFormal: () => {
+        formalRestores++;
+        return Promise.resolve();
+      },
+      hold: () => {},
+    } as unknown as ConstructorParameters<typeof DemoTestController>[0]);
+    const token = 'a'.repeat(64);
+    registerDemoTestRoutes(app, trial, token);
+    const demo = (action: string, extra = {}) =>
+      app.inject({
+        method: 'POST',
+        url: '/operator/runtime/demo-test',
+        headers: { 'x-runtime-token': token },
+        payload: { action, requestId, ...extra },
+      });
+    const finish = () =>
+      app.inject({
+        method: 'POST',
+        url: '/operator/production',
+        headers: { origin: 'http://127.0.0.1:3000' },
+        payload: { action: 'finish', expectedRevision: production.get().revision },
+      });
+    expect(
+      (await demo('begin', ownership === 'external' ? { gameOwnership: 'external' } : {}))
+        .statusCode,
+    ).toBe(200);
+    expect((await demo('playing')).statusCode).toBe(200);
+    expect(trial.get()).toMatchObject({ active: true, phase: 'playing' });
+    const marker = readDemoTestRecovery(markerPath);
+    expect(marker?.requestId).toBe(requestId);
+    expect((await finish()).statusCode).toBe(409);
+    expect(scene).toBe('gameplay');
+    expect(production.get().mode).toBe('live');
+    expect(readDemoTestRecovery(markerPath)).toEqual(marker);
+    expect(temporary && quarantined).toBe(true);
+    expect(formalRestores).toBe(0);
+    safe = true;
+    expect((await finish()).statusCode).toBe(200);
+    expect(scene).toBe('waiting');
+    expect(production.get().mode).toBe('preparation');
+    expect(trial.get().active).toBe(true);
+    expect(production.isTrialPending()).toBe(true);
+    expect(readDemoTestRecovery(markerPath)).toEqual(marker);
+    expect(temporary && quarantined).toBe(true);
+    expect(formalRestores).toBe(0);
+    // Native game cleanup/quarantine uses finish once more before complete.
+    expect((await demo('finish')).statusCode).toBe(200);
+    expect(readDemoTestRecovery(markerPath)).toEqual(marker);
+    expect((await demo('complete')).statusCode).toBe(200);
+    expect(formalRestores).toBe(1);
+    expect(temporary || quarantined).toBe(false);
+    expect(production.isTrialPending()).toBe(false);
+    expect(readDemoTestRecovery(markerPath)).toBeUndefined();
+  },
+);
