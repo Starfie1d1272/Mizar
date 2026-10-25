@@ -19,9 +19,18 @@ interface InstalledTool {
   directory: string;
   packs: { name: string; sourceName: string }[];
 }
+const releaseSchema = z.object({
+  id: z.number().int().positive(),
+  assetId: z.number().int().positive(),
+  tag: z.string().regex(/^[\w.+-]{1,100}$/),
+  publishedAt: z.string(),
+  url: z.string(),
+  size: z.number().int().positive(),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+});
 /** Preserve the official launch options; refuse unfamiliar YAML instead of
  * silently enabling capture without an effective engine flag. */
-export function consoleLaunchOptions(source: string): string {
+function launchOptionsValue(source: string): string {
   const lines = [...source.matchAll(/^launchOptions\s*:\s*(.*)$/gm)];
   if (lines.length !== 1) throw new Error('mulnx_launcher_config_unsupported');
   const raw = lines[0]![1]!.trim();
@@ -32,6 +41,10 @@ export function consoleLaunchOptions(source: string): string {
       : raw;
   if (typeof value !== 'string' || /[\r\n#]/.test(value) || (value && !value.startsWith('-')))
     throw new Error('mulnx_launcher_config_unsupported');
+  return value;
+}
+export function consoleLaunchOptions(source: string): string {
+  const value = launchOptionsValue(source);
   const options = /(?:^|\s)-condebug(?:\s|$)/i.test(value) ? value : `${value} -condebug`.trim();
   return source.replace(/^launchOptions\s*:.*$/m, `launchOptions: ${JSON.stringify(options)}`);
 }
@@ -41,6 +54,7 @@ export class MulnxTool {
   private latest: MulnxRelease | undefined;
   private pending: Promise<unknown> | undefined;
   private message = '';
+  private launchProtocol: 1 | null = null;
   constructor(
     readonly directory: string,
     readonly bundle: string,
@@ -55,6 +69,7 @@ export class MulnxTool {
     return {
       installed: this.installed?.release.tag ?? null,
       latest: this.latest?.tag ?? null,
+      launchProtocol: this.launchProtocol,
       busy: Boolean(this.pending),
       message: this.message,
       packs: this.installed?.packs ?? [],
@@ -66,15 +81,7 @@ export class MulnxTool {
       const data = z
         .object({
           directory: z.string().regex(/^release-[a-f0-9]{64}-[a-f0-9-]{36}$/),
-          release: z.object({
-            id: z.number().int().positive(),
-            assetId: z.number().int().positive(),
-            tag: z.string().regex(/^[\w.+-]{1,100}$/),
-            publishedAt: z.string(),
-            url: z.string(),
-            size: z.number().int().positive(),
-            sha256: z.string().regex(/^[a-f0-9]{64}$/),
-          }),
+          release: releaseSchema,
           packs: z
             .array(
               z.object({
@@ -87,6 +94,9 @@ export class MulnxTool {
         .parse(await readJson(this.directory, 'current.json'));
       await safePath(join(this.directory, data.directory), 'MulNX/CS2Injector/CS2Injector.exe');
       this.installed = data;
+      this.launchProtocol = await this.readLaunchProtocol(
+        join(this.directory, data.directory, 'MulNX'),
+      );
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
@@ -117,18 +127,34 @@ export class MulnxTool {
       return this.view();
     });
   }
-  prepare(cs2Path: string, consoleCapture = false) {
+  prepare(cs2Path: string, consoleCapture = false, update = false) {
     return this.run('mulnx_prepare', async () => {
       // Called only by the authenticated native host after its process and install checks.
-      const release = await latestMulnxRelease();
-      this.latest = release;
+      // Entry uses prepared local bytes. The explicit update action owns network discovery.
+      const release = update
+        ? await latestMulnxRelease()
+        : (this.installed?.release ??
+          z.object({ release: releaseSchema }).parse(await readJson(this.bundle, 'release.json'))
+            .release);
       if (!this.installed || this.installed.release.sha256 !== release.sha256)
         await this.install(release, cs2Path);
       const root = join(this.directory, this.installed!.directory, 'MulNX');
       await this.configureLauncher(root, cs2Path, consoleCapture);
       const launcher = await safePath(root, 'CS2Injector/CS2Injector.exe');
-      return { launcher, version: this.installed!.release.tag };
+      const launchProtocol = await this.readLaunchProtocol(root);
+      this.launchProtocol = launchProtocol;
+      return { launcher, version: this.installed!.release.tag, launchProtocol };
     });
+  }
+  private async readLaunchProtocol(root: string): Promise<1 | null> {
+    try {
+      const path = await safePath(root, 'CS2Injector/launch-protocol.txt');
+      if ((await lstat(path)).size > 32) return null;
+      return (await readFile(path, 'utf8')).trim() === '1' ? 1 : null;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    }
   }
   private async configureLauncher(root: string, cs2Path: string, consoleCapture = false) {
     const config = await safePath(root, 'CS2Injector/CS2BootLoader/Config/config.yaml');
@@ -139,11 +165,38 @@ export class MulnxTool {
       throw new Error('mulnx_launcher_config_unsupported');
     // JSON strings are YAML strings; retain upstream launch options and platform checks.
     const withPath = original.replace(/^path\s*:.*$/m, `path: ${JSON.stringify(cs2Path)}`);
-    const updated = consoleCapture ? consoleLaunchOptions(withPath) : withPath;
+    const ownership = join(root, 'mizar-console-options.json');
+    let owned: { original: string; managed: string } | undefined;
+    try {
+      owned = z
+        .object({ original: z.string().max(65536), managed: z.string().max(65536) })
+        .parse(await readJson(root, 'mizar-console-options.json'));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    const line = withPath.match(/^launchOptions\s*:.*$/m)?.[0];
+    let updated = withPath;
+    if (owned && line !== owned.managed && line !== owned.original)
+      throw new Error('mulnx_console_ownership_conflict');
+    if (!consoleCapture && owned) {
+      updated = withPath.replace(/^launchOptions\s*:.*$/m, owned.original);
+    } else if (consoleCapture) {
+      updated = consoleLaunchOptions(withPath);
+      const managed = updated.match(/^launchOptions\s*:.*$/m)![0];
+      if (
+        !owned &&
+        managed !== line &&
+        !/(?:^|\s)-condebug(?:\s|$)/i.test(launchOptionsValue(withPath))
+      ) {
+        // Journal before mutation: a crash cannot lose ownership of our addition.
+        await atomicJson(ownership, { original: line, managed });
+      }
+    }
     const temporary = `${config}.${randomUUID()}.tmp`;
     try {
       await writeFile(temporary, updated, { flag: 'wx' });
       await rename(temporary, config);
+      if (!consoleCapture && owned) await rm(ownership);
     } finally {
       await rm(temporary, { force: true });
     }

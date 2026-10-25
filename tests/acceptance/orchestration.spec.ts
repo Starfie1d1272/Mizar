@@ -1,3 +1,8 @@
+import {
+  emptyOrchestrationPreset,
+  type OrchestrationView,
+} from '../../packages/protocol/src/orchestration.js';
+import { DEFAULT_OBSERVER_SETTINGS } from '../../packages/protocol/src/assist.js';
 import { mkdtemp, rm, readFile, mkdir, writeFile, copyFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -237,21 +242,24 @@ test('external-game browser entry uses real production lifecycle without native 
     payload: { teamA: 'A', teamB: 'B', format: 'bo1' },
   });
   expect(created.statusCode).toBe(200);
-  await context.route(/\/(?:local\/v1\/production|operator\/production)$/, async (route) => {
-    const req = route.request();
-    if (req.method() === 'POST') actions.push((req.postDataJSON() as { action: string }).action);
-    const res = await app.inject({
-      method: req.method() as 'GET' | 'POST',
-      url: new URL(req.url()).pathname,
-      headers: req.headers(),
-      ...(req.postDataBuffer() ? { payload: req.postDataBuffer()! } : {}),
-    });
-    await route.fulfill({
-      status: res.statusCode,
-      body: res.body,
-      contentType: 'application/json',
-    });
-  });
+  await context.route(
+    /\/(?:local\/v1\/(?:production|observer-assist)|operator\/production)$/,
+    async (route) => {
+      const req = route.request();
+      if (req.method() === 'POST') actions.push((req.postDataJSON() as { action: string }).action);
+      const res = await app.inject({
+        method: req.method() as 'GET' | 'POST',
+        url: new URL(req.url()).pathname,
+        headers: req.headers(),
+        ...(req.postDataBuffer() ? { payload: req.postDataBuffer()! } : {}),
+      });
+      await route.fulfill({
+        status: res.statusCode,
+        body: res.body,
+        contentType: 'application/json',
+      });
+    },
+  );
   await context.route('**/local/v1/obs', (route) =>
     route.fulfill({ json: { connection: 'connected', findings: [], streaming: false } }),
   );
@@ -280,6 +288,9 @@ test('Host handoff binds the selected external instance and detaches without man
   const calls: string[] = [];
   let borrowed = false;
   let production = { mode: 'preparation', revision: 'external-1', canEnter: true };
+  await context.route('**/local/v1/observer-assist', (route) =>
+    route.fulfill({ json: { settings: DEFAULT_OBSERVER_SETTINGS, connection: null } }),
+  );
   await context.route('**/local/v1/production', (route) => route.fulfill({ json: production }));
   await context.route('**/local/v1/demo-test', (route) =>
     route.fulfill({ json: { active: false } }),
@@ -436,4 +447,69 @@ test('starts external camera audition without selecting a formal match', async (
       demoTrial: true,
     }),
   });
+});
+
+test('explicit MulNX stop confirms production effects, shows ownership errors, and reports queueing once', async ({
+  page,
+}) => {
+  let borrowed = false;
+  let stops = 0;
+  const view: OrchestrationView = {
+    tool: { installed: 'test', latest: null, busy: false, message: '', packs: [] },
+    preset: emptyOrchestrationPreset(),
+    ready: true,
+    status: {
+      control: { mode: 'native', state: 'blocked' },
+      connected: false,
+      connection: 0,
+      context: '',
+      map: null,
+      pack: null,
+      isolated: false,
+      held: true,
+      request: 'idle',
+      execution: 'unconfirmed',
+      current: null,
+      message: '等待本次交接',
+    },
+  };
+  await page.route('**/local/v1/orchestration', (route) => route.fulfill({ json: view }));
+  await page.exposeFunction('stopMulnx', () => {
+    stops++;
+    if (!borrowed) throw new Error('请先明确借用本场 CS2。');
+    return { result: 'queued', execution: 'unconfirmed' };
+  });
+  await page.addInitScript(() =>
+    Object.assign(window, {
+      __TAURI_INTERNALS__: {
+        invoke: (command: string, args?: { action?: string }) => {
+          if (command === 'mulnx_control' && args?.action === 'stop')
+            return (window as typeof window & { stopMulnx: () => Promise<unknown> }).stopMulnx();
+          return Promise.resolve(null);
+        },
+      },
+    }),
+  );
+  await page.goto('/settings?tab=camera');
+  await page.getByText('停止控制', { exact: true }).click();
+  const stop = page.getByRole('button', { name: '停止 MulNX 控制', exact: true });
+  const confirmation = page.getByRole('dialog', { name: '停止 MulNX 控制', exact: true });
+  await stop.click();
+  await expect(confirmation).toContainText('结束本场制作、恢复游戏 HUD');
+  await expect(confirmation).toContainText('CS2 保持运行');
+  await confirmation.getByRole('button', { name: '取消', exact: true }).click();
+  expect(stops).toBe(0);
+  await stop.click();
+  await confirmation.getByRole('button', { name: '结束制作并停止控制', exact: true }).click();
+  await expect(page.getByText('请先明确借用本场 CS2。', { exact: true })).toBeVisible();
+  expect(stops).toBe(1);
+  borrowed = true;
+  await stop.click();
+  await confirmation.getByRole('button', { name: '结束制作并停止控制', exact: true }).click();
+  await expect(
+    page.getByText('停止控制请求已入队，执行结果待确认。请返回游戏核对。'),
+  ).toBeVisible();
+  await expect(stop).toBeDisabled();
+  expect(stops).toBe(2);
+  await expect(page.getByText('DLL 已卸载', { exact: true })).toHaveCount(0);
 });

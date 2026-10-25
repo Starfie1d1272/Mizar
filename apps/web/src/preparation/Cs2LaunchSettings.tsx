@@ -61,7 +61,7 @@ export function Cs2LaunchSettings() {
         >
           <div className="settings-fields">
             <Select
-              label="默认启动方式"
+              label="游戏启动方式"
               value={preferences?.preferMulnx ? 'mulnx' : 'steam'}
               disabled={disabled}
               onChange={(event) => {
@@ -69,7 +69,7 @@ export function Cs2LaunchSettings() {
                   edit({ ...preferences, preferMulnx: event.target.value === 'mulnx' });
               }}
             >
-              <option value="steam">Steam 普通启动</option>
+              <option value="steam">标准启动（Mizar 管理）</option>
               <option value="mulnx">MulNX 官方启动器</option>
             </Select>
             <Select
@@ -111,8 +111,9 @@ export function Cs2LaunchSettings() {
           </div>
           {preferences?.preferMulnx ? (
             <p>
-              先关闭完美世界竞技平台及其他游戏，在官方 MulNX 完成环境检查并启动 CS2，再从“运镜 →
-              MulNX 游戏交接”选择游戏实例。仅用于离线 Demo 或已授权观战。
+              进入工作台时由 MulNX 自动检查环境并启动
+              CS2，无需操作启动器页面。检测到完美世界竞技平台等冲突时，先退出提示的程序再重试。需要支持一键启动的
+              MulNX 版本；仅用于离线 Demo 或已授权观战。
             </p>
           ) : null}
           {status?.spectatorWarning ? (

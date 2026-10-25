@@ -1,0 +1,18 @@
+.match-connection-dialog[open] {
+  display: grid;
+  gap: var(--mizar-layout-gap);
+  width: 100%;
+  box-sizing: border-box;
+}
+.match-connection-dialog > * {
+  min-width: 0;
+}
+.match-connection-dialog p {
+  margin: 0;
+  color: var(--mizar-fg-secondary);
+  overflow-wrap: anywhere;
+}
+.match-connection-dialog details[open] {
+  display: grid;
+  gap: var(--mizar-layout-compact);
+}

@@ -139,7 +139,7 @@ export function CameraSettings() {
           确认活动隔离包并试播
         </Button>
       </details>
-      <p>先在 MulNX 载入本图专用隔离包。开场音效跟随实际开场画面；阶段音乐沿用上方配置。</p>
+      <p>先在 MulNX 载入本图专用隔离包。开场音效跟随实际开场画面；阶段音乐在音乐设置中配置。</p>
       {current && !current.ready ? (
         <StatusBanner tone="danger">运镜预设无法读取，请检查本机数据目录后重启服务。</StatusBanner>
       ) : null}

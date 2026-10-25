@@ -225,3 +225,155 @@ describe('ProjectionCoordinator', () => {
     },
   );
 });
+
+it('publishes assist refreshes independently of Program and public radar snapshots', async () => {
+  const runtime = createProgramRuntime('assist-isolation');
+  const coordinator = createProjectionCoordinator({
+    programRuntime: runtime,
+    cstvSources: createCstvSourceManagers({}),
+    observerSettings: () => ({
+      enabled: true,
+      expectedDelaySeconds: 120,
+      leadSeconds: 7,
+    }),
+  });
+  try {
+    const program = coordinator.getPublisher('program').getCurrent();
+    const radar = coordinator.getPublisher('radar').getCurrent();
+    const before = coordinator.getPublisher('assist').getCurrent()!.channelSeq;
+    coordinator.resetAssist();
+    coordinator.refreshAssist();
+    expect(coordinator.getPublisher('program').getCurrent()).toBe(program);
+    expect(coordinator.getPublisher('radar').getCurrent()).toBe(radar);
+    expect(coordinator.getPublisher('assist').getCurrent()!.channelSeq).toBeGreaterThan(before);
+    expect(JSON.stringify(program)).not.toContain('observer');
+  } finally {
+    await coordinator.close();
+  }
+});
+
+it('keeps calibrated anchors and buffered kills when the lead window is reprojected', async () => {
+  const manifest = await readManifest();
+  const initial = matchedObservation(manifest);
+  const sources = createCstvSourceManagers({});
+  const health = sources.lookahead.getHealth();
+  const live = vi
+    .spyOn(sources.lookahead, 'getHealth')
+    .mockReturnValue({ ...health, state: 'live', generation: 1 });
+  let consume: Parameters<typeof sources.lookahead.subscribeLiveGameEvents>[0] | undefined;
+  const subscription = vi
+    .spyOn(sources.lookahead, 'subscribeLiveGameEvents')
+    .mockImplementation((listener) => {
+      consume = listener;
+      return () => {};
+    });
+  const runtime = createProgramRuntime('lead-calibration-regression');
+  let now = 0,
+    sequence = 0;
+  const settings = { enabled: true, expectedDelaySeconds: 120, leadSeconds: 7 };
+  const coordinator = createProjectionCoordinator({
+    programRuntime: runtime,
+    cstvSources: sources,
+    nowMonotonicMs: () => now,
+    observerSettings: () => settings,
+  });
+  const send = (time: number, dead: number[] = []) => {
+    now = time;
+    const players = initial.telemetry.allPlayers!.map((player, index) => ({
+      ...player,
+      observerSlot: index,
+      state: { health: dead.includes(index) ? 0 : 100 },
+    }));
+    coordinator.afterRuntimeMutation(
+      runtime.acceptObservation({
+        ...initial,
+        receive: {
+          sequence: ++sequence,
+          receivedAt: new Date(Date.parse(initial.receive.receivedAt) + now).toISOString(),
+          receivedMonotonicMs: now,
+        },
+        coverage: { ...initial.coverage, round: 'present' },
+        telemetry: {
+          ...initial.telemetry,
+          round: { phase: 'live' },
+          allPlayers: players,
+          player: players[0]!,
+        },
+      }),
+    );
+  };
+  const kill = (eventSequence: number, victim: number, time: number) => {
+    send(time);
+    consume!({
+      kind: 'player-death',
+      cursor: {
+        kind: 'cs2-cstv',
+        role: 'lookahead',
+        generation: 1,
+        sequence: eventSequence,
+        tick: (time * 64) / 1000,
+        ticksPerSecond: 64,
+        observedAt: new Date(Date.parse(initial.receive.receivedAt) + time).toISOString(),
+        observedMonotonicMs: time,
+        mapName: 'de_ancient',
+      },
+      victim: {
+        sourceUserId: victim,
+        sourcePlayerId: initial.telemetry.allPlayers![victim]!.sourcePlayerId,
+      },
+      attacker: {
+        sourceUserId: 3,
+        sourcePlayerId: initial.telemetry.allPlayers![3]!.sourcePlayerId,
+      },
+      weapon: 'ak47',
+      assistedFlash: false,
+      headshot: false,
+      penetratedObjects: 0,
+      noScope: false,
+      throughSmoke: false,
+      attackerBlind: false,
+      attackerInAir: false,
+      distance: 1,
+      damageHealth: 100,
+      damageArmor: 0,
+      hitgroup: 1,
+    });
+  };
+  try {
+    send(0);
+    kill(1, 8, 1000);
+    kill(2, 9, 2000);
+    kill(3, 7, 10000);
+    send(121000, [8]);
+    send(122000, [8, 9]);
+    expect(coordinator.getCurrent().assist.observer).toMatchObject({
+      state: 'ready',
+      measuredDelaySeconds: 120,
+      hints: [],
+    });
+    const program = coordinator.getPublisher('program').getCurrent();
+    const radar = coordinator.getPublisher('radar').getCurrent();
+    const before = coordinator.getPublisher('assist').getCurrent()!.channelSeq;
+    settings.leadSeconds = 10;
+    coordinator.refreshAssist();
+    expect(coordinator.getCurrent().assist.observer).toMatchObject({
+      state: 'ready',
+      measuredDelaySeconds: 120,
+      hints: [{ remainingSeconds: 8, victim: { observerSlot: 7 } }],
+    });
+    expect(coordinator.getPublisher('assist').getCurrent()!.channelSeq).toBeGreaterThan(before);
+    expect(coordinator.getPublisher('program').getCurrent()).toBe(program);
+    expect(coordinator.getPublisher('radar').getCurrent()).toBe(radar);
+    settings.expectedDelaySeconds = 130;
+    coordinator.resetAssist();
+    expect(coordinator.getCurrent().assist.observer).toMatchObject({
+      state: 'aligning',
+      measuredDelaySeconds: null,
+      hints: [],
+    });
+  } finally {
+    await coordinator.close();
+    live.mockRestore();
+    subscription.mockRestore();
+  }
+});

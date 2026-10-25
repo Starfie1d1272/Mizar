@@ -6,6 +6,8 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { createCstvSourceManager, type CstvSourceManager } from './cstv-source-manager.js';
 import { startObserverProcess, type ObserverProcessOptions } from './observer-process.js';
+import type { ObserverSettingsStore } from './observer-settings.js';
+import { sendObserverGameCommand, observerConnectCommand } from './observer-game-control.js';
 
 export const OBSERVER_VERSION = '1.0.0';
 const SOURCE_SHA = '4b07fd0ddfb775d8fa1548bddfd98dc78c7fce93';
@@ -24,6 +26,7 @@ export class WorkspaceObserver {
   private lease = 0;
   private watchdog: ReturnType<typeof setInterval>;
   private closing = false;
+  private intent = 0;
   private terminal: Awaited<Owner['closed']>['terminal'] | undefined;
   private failed = false;
   private launched = false;
@@ -92,11 +95,24 @@ export class WorkspaceObserver {
     this.queue = next.catch(() => {});
     return next;
   }
-  start(executable: string, endpoint: string, password: string, job?: string) {
+  start(
+    executable: string,
+    endpoint: string,
+    password: string,
+    job?: string,
+    current: () => boolean = () => true,
+  ) {
+    const intent = ++this.intent;
+    const check = () => {
+      if (this.closing || intent !== this.intent || !current())
+        throw new Error('observer_configuration_changed');
+    };
     return this.serialize(async () => {
-      if (this.closing) throw new Error('observer_workspace_closed');
+      check();
       await this.stopCurrent();
+      check();
       const options = await this.launch(executable);
+      check();
       this.generationBase += this.current.getHealth().generation + 1;
       this.owner = startObserverProcess({
         ...options,
@@ -130,6 +146,7 @@ export class WorkspaceObserver {
     this.lease = performance.now();
   }
   stop() {
+    ++this.intent;
     return this.serialize(() => this.stopCurrent());
   }
   private async stopCurrent() {
@@ -235,11 +252,127 @@ export function registerWorkspaceObserver(
   observer: WorkspaceObserver,
   token: string,
   canStart: () => boolean = () => true,
+  settings?: ObserverSettingsStore,
 ) {
+  type Host = { game: string; job: string; executable: string; useMulnx: boolean };
+  let host: Host | undefined;
+  let hostLease = 0;
+  let prepared: { identity: string; settingsRevision: string; token: string } | undefined;
+  let observerKey = '';
+  let connectedGame = '';
+  let hiddenGame = '';
+  let appliedPolicy = '';
+  let epoch = 0;
+  let pending = 0;
+  let lastError: 'observer_operation_failed' | null = null;
+  let queue = Promise.resolve();
+  const serialize = (action: () => Promise<void>) => {
+    ++pending;
+    const next = queue.then(action).finally(() => {
+      --pending;
+    });
+    queue = next.catch(() => {});
+    return next;
+  };
+  const identity = (value: { game: string; job: string; useMulnx: boolean }) =>
+    JSON.stringify([value.game, value.job, value.useMulnx]);
+  const policy = (value: { game: string; job: string; useMulnx: boolean }) =>
+    JSON.stringify([identity(value), value.useMulnx ? settings?.gameAutomation : null]);
+  const leased = () =>
+    host !== undefined &&
+    (!prepared || prepared.identity === identity(host)) &&
+    performance.now() - hostLease <= 6000;
+  const keys = (value: Host) => {
+    const connection = settings?.configured();
+    const game = JSON.stringify([value.game, value.job]);
+    return {
+      observer: JSON.stringify([
+        game,
+        value.executable,
+        connection?.earlyEndpoint,
+        connection?.password,
+      ]),
+      connect: JSON.stringify([game, connection?.programEndpoint, connection?.password]),
+      hud: game,
+    };
+  };
+  const startAssist = async (value: Host, current: () => boolean) => {
+    const connection = settings?.configured();
+    if (!settings?.settings.enabled || !connection) return;
+    const key = keys(value).observer;
+    if (observerKey === key && observer.view().active) return;
+    await observer.stop();
+    if (!current()) throw new Error('observer_configuration_changed');
+    await observer.start(
+      value.executable,
+      connection.earlyEndpoint,
+      connection.password,
+      value.job,
+      current,
+    );
+    if (!current()) {
+      await observer.stop();
+      throw new Error('observer_configuration_changed');
+    }
+    observerKey = key;
+  };
+  const unsubscribe = settings?.subscribe((kind) => {
+    if (kind === 'game' && !settings.gameAutomation.hideGameHud) hiddenGame = '';
+    if (kind === 'settings' || kind === 'lead' || kind === 'game') return;
+    const attempt = ++epoch;
+    if (kind === 'connection') host = undefined;
+    const value = host;
+    const revision = settings.revision;
+    const shouldStop = kind === 'connection' || !settings.settings.enabled;
+    void serialize(async () => {
+      // Stops already queued before a new preparation must finish first.
+      if (shouldStop) {
+        observerKey = '';
+        await observer.stop();
+      } else if (attempt === epoch && value && leased() && canStart()) {
+        await startAssist(
+          value,
+          () => attempt === epoch && settings.revision === revision && leased() && canStart(),
+        );
+        lastError = null;
+      }
+    }).catch((error: unknown) => {
+      lastError = 'observer_operation_failed';
+      app.log.error({ stage: 'observer_settings_apply', err: error }, '观察辅助操作需要重试');
+    });
+  });
+  app.addHook('onClose', async () => {
+    unsubscribe?.();
+    ++epoch;
+    host = undefined;
+    await queue;
+  });
   app.get('/local/v1/observer', (_request, reply) =>
-    reply.header('cache-control', 'no-store').send(observer.view()),
+    reply.header('cache-control', 'no-store').send({
+      ...observer.view(),
+      pending: pending > 0,
+      error: lastError,
+      retryAvailable: Boolean(
+        settings?.settings.enabled && settings.configured() && canStart() && pending === 0,
+      ),
+    }),
   );
   const command = z.discriminatedUnion('action', [
+    z.strictObject({
+      action: z.literal('prepare'),
+      useMulnx: z.boolean().default(false),
+      game: z.string().max(80),
+      job: z.string().max(100),
+    }),
+    z.strictObject({
+      action: z.literal('start-configured'),
+      useMulnx: z.boolean().default(false),
+      executable: z.string().max(2048),
+      job: z.string().max(100),
+      game: z.string().max(80),
+      revision: z.uuid(),
+      hudOriginal: z.union([z.literal(0), z.literal(1)]).optional(),
+    }),
     z.strictObject({
       action: z.literal('start'),
       executable: z.string().max(2048),
@@ -267,24 +400,137 @@ export function registerWorkspaceObserver(
     if (!parsed.success) return reply.code(400).send({ error: 'observer_command_invalid' });
     try {
       const body = parsed.data;
-      if (body.action === 'start' && !canStart())
+      if (['start', 'start-configured', 'prepare'].includes(body.action) && !canStart())
         return reply.code(409).send({ message: '请进入正式制播工作台后连接早源。' });
-      if (body.action === 'start')
-        await observer.start(body.executable, body.endpoint, body.password, body.job);
-      else if (body.action === 'stop') await observer.stop();
-      else observer.pulse();
-      return { ok: true, ...observer.view() };
+      if (body.action === 'prepare') {
+        const gameControl = body.useMulnx && settings?.gameAutomation;
+        if (
+          !settings ||
+          !(
+            settings.settings.enabled ||
+            (gameControl && (gameControl.autoConnect || gameControl.hideGameHud))
+          )
+        )
+          return { ok: true, enabled: false };
+        const connection = settings.configured();
+        if (!connection && (settings.settings.enabled || (gameControl && gameControl.autoConnect)))
+          return reply.code(409).send({ message: '请在准备中心填写本场授权的观战连接。' });
+        const key = identity(body);
+        if (
+          !prepared ||
+          prepared.identity !== key ||
+          prepared.settingsRevision !== settings.revision
+        ) {
+          prepared = { identity: key, settingsRevision: settings.revision, token: randomUUID() };
+          ++epoch;
+        }
+        const activeKeys = host ? keys(host) : null;
+        return {
+          ok: true,
+          enabled: true,
+          revision: prepared.token,
+          hideGameHud: Boolean(gameControl && gameControl.hideGameHud),
+          reuse:
+            pending === 0 &&
+            host !== undefined &&
+            identity(host) === identity(body) &&
+            activeKeys !== null &&
+            appliedPolicy === policy(body) &&
+            (!settings.settings.enabled ||
+              (observer.view().active && observerKey === activeKeys.observer)) &&
+            (!gameControl ||
+              ((!gameControl.autoConnect || connectedGame === activeKeys.connect) &&
+                (!gameControl.hideGameHud || hiddenGame === activeKeys.hud))),
+          connection: connection
+            ? {
+                earlyEndpoint: connection.earlyEndpoint,
+                programEndpoint: connection.programEndpoint,
+              }
+            : null,
+        };
+      }
+      if (body.action === 'start-configured') {
+        if (!settings) return { ok: true, enabled: false };
+        const revision = settings.revision;
+        const attempt = epoch;
+        const validPreparation = () =>
+          prepared?.token === body.revision &&
+          prepared.identity === identity(body) &&
+          prepared.settingsRevision === revision;
+        const current = () =>
+          attempt === epoch && settings.revision === revision && validPreparation() && canStart();
+        await serialize(async () => {
+          if (!current()) throw new Error('observer_configuration_changed');
+          const connection = settings.configured();
+          const gameControl = body.useMulnx ? settings.gameAutomation : null;
+          if (!connection && (settings.settings.enabled || gameControl?.autoConnect))
+            throw new Error('observer_configuration_changed');
+          const value: Host = body;
+          const key = keys(value);
+          const connect = Boolean(gameControl?.autoConnect && connectedGame !== key.connect);
+          const hide = Boolean(gameControl?.hideGameHud && hiddenGame !== key.hud);
+          if (gameControl?.hideGameHud && (connect || hide) && body.hudOriginal === undefined)
+            throw new Error('observer_hud_snapshot_required');
+          // An accepted game command is retained even if a later observer launch fails.
+          // Retrying the private source must not reconnect the on-air game.
+          if (connect && connection) {
+            await sendObserverGameCommand(
+              observerConnectCommand(connection, Boolean(gameControl?.hideGameHud)),
+            );
+            connectedGame = key.connect;
+            if (gameControl?.hideGameHud) hiddenGame = key.hud;
+          } else if (hide) {
+            await sendObserverGameCommand('cl_draw_only_deathnotices 1');
+            hiddenGame = key.hud;
+          }
+          if (!current()) throw new Error('observer_configuration_changed');
+          host = value;
+          appliedPolicy = policy(value);
+          hostLease = performance.now();
+          await startAssist(value, current);
+          lastError = null;
+        });
+      } else if (body.action === 'start') {
+        const attempt = ++epoch;
+        host = undefined;
+        await serialize(async () => {
+          if (attempt !== epoch || !canStart()) throw new Error('observer_configuration_changed');
+          await observer.start(
+            body.executable,
+            body.endpoint,
+            body.password,
+            body.job,
+            () => attempt === epoch && canStart(),
+          );
+          observerKey = '';
+          lastError = null;
+        });
+      } else if (body.action === 'stop') {
+        ++epoch;
+        host = undefined;
+        prepared = undefined;
+        await serialize(async () => {
+          observerKey = hiddenGame = appliedPolicy = '';
+          await observer.stop();
+        });
+      } else {
+        if (leased()) hostLease = performance.now();
+        else host = undefined;
+        observer.pulse();
+      }
+      return { ok: true, enabled: true, ...observer.view() };
     } catch (error) {
+      lastError = 'observer_operation_failed';
       request.log.error(
         {
           stage: 'observer_workspace',
-          code: error instanceof Error ? error.message : 'observer_failed',
+          err: error,
         },
         '观察辅助操作需要重试',
       );
       return reply
         .code(409)
-        .send({ message: '请检查观察器组件、CS2 安装与 Steam 状态后重试；详细阶段见运行诊断。' });
+        .send({ message: '请核对本场观战连接和所选启动方式的组件状态；详细阶段见运行诊断。' });
     }
   });
 }

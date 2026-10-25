@@ -3,9 +3,11 @@ import { useEffect, useState } from 'react';
 import type { OperatorPayload } from '@mizar/protocol/operator';
 import type { ProgramPayload, ProgramSnapshot } from '@mizar/protocol/program';
 import { Button, Select } from '../ui';
-import { command } from '../preparation/client';
+import { command, useLocalRead } from '../preparation/client';
 import { HIDE_SPECTATOR_HUD_COMMAND } from '../preparation/SpectatorHudCommands';
 import { desktopInvoke, useProgramScenes } from './client';
+import { useCs2Status } from '../preparation/cs2-status';
+import type { ConnectionPreparationView } from '../preparation/observer-preparation';
 import { useObsStatus } from './obs-client';
 import { syncHealthText, type SyncHealth } from './SyncHealthAlert';
 import type { LiveRosterConnection } from './live-roster-model';
@@ -41,6 +43,8 @@ export function preflightEvidence(
   return { complete, current, warmup: aligned && program?.map.phase === 'warmup' };
 }
 
+const SILENCED_MATCH_KEY = 'mizar.preflight.silenced-match.v1';
+
 type Props = {
   operator: OperatorPayload | null;
   program: ProgramPayload | null;
@@ -68,10 +72,21 @@ export function PreflightReview(props: Props) {
 
 function ReviewSession({ operator, program, cursor, connection, onOpen }: Props) {
   const scenes = useProgramScenes();
+  const cs2 = useCs2Status();
+  const automation = useLocalRead<ConnectionPreparationView>('/local/v1/observer-assist');
+  const automaticHud = Boolean(cs2.status?.preferMulnx && automation?.gameAutomation?.hideGameHud);
   const obs = useObsStatus();
   const [automaticIncident, setAutomaticIncident] = useState('');
   const [opened, setOpened] = useState(false);
   const [dismissed, setDismissed] = useState('');
+  const matchId = operator?.matchContext.summary?.matchId ?? '';
+  const [silenced, setSilenced] = useState(() => {
+    try {
+      return localStorage.getItem(SILENCED_MATCH_KEY) === matchId;
+    } catch {
+      return false;
+    }
+  });
   const completionKey = `mizar.preflight.v1:${JSON.stringify([operator?.matchContext.summary?.matchId, cursor?.producerInstanceId, cursor?.liveSessionId, operator?.activeLineup.mapEpoch])}`;
   const [acknowledged, setAcknowledged] = useState(() => {
     try {
@@ -82,11 +97,15 @@ function ReviewSession({ operator, program, cursor, connection, onOpen }: Props)
   });
   useEffect(() => {
     const changed = (event: StorageEvent) => {
+      if (event.key === SILENCED_MATCH_KEY) {
+        setSilenced(event.newValue === matchId);
+        if (event.newValue === matchId) setOpened(false);
+      }
       if (event.key === completionKey) setAcknowledged(event.newValue ?? '');
     };
     window.addEventListener('storage', changed);
     return () => window.removeEventListener('storage', changed);
-  }, [completionKey]);
+  }, [completionKey, matchId]);
   const [connectionObserved, setConnectionObserved] = useState(false);
   if (connection && !connectionObserved) setConnectionObserved(true);
   const [busy, setBusy] = useState(false);
@@ -154,20 +173,21 @@ function ReviewSession({ operator, program, cursor, connection, onOpen }: Props)
         setAutomaticIncident(incident);
         // The two snapshot channels can briefly be unaligned between deliveries.
         // That absence of evidence is not a new incident or a dismissal reset.
-        if (incident && dismissed !== incident) setOpened(true);
+        if (!silenced && incident && dismissed !== incident) setOpened(true);
       },
       incident.startsWith('website:') ? 1500 : 0,
     );
     return () => clearTimeout(timer);
-  }, [incident, dismissed]);
+  }, [incident, dismissed, silenced]);
   const open =
     isReviewWindow() ||
     (opened &&
       (preparation || (online && connectionObserved && (!connection || !connection.paired)))) ||
-    Boolean(incident && automaticIncident === incident && dismissed !== incident);
+    Boolean(!silenced && incident && automaticIncident === incident && dismissed !== incident);
   const close = () => {
     setOpened(false);
-    setDismissed(incident);
+    // A queued native close event may arrive while snapshot channels are unaligned.
+    if (incident) setDismissed(incident);
     void closeReviewWindow().catch((failure) => setError(String(failure)));
   };
   async function run(action: () => Promise<unknown>) {
@@ -324,33 +344,42 @@ function ReviewSession({ operator, program, cursor, connection, onOpen }: Props)
             </section>
             <section className="preflight-check">
               <h3>画面与声音</h3>
-              <p>复制后返回游戏，在控制台粘贴并回车。执行后核对画面，试听游戏声与解说声音。</p>
-              <Button
-                variant="primary"
-                disabled={busy}
-                onClick={() =>
-                  void run(async () => {
-                    try {
-                      await navigator.clipboard.writeText(HIDE_SPECTATOR_HUD_COMMAND);
-                    } catch {
-                      throw new Error(`复制未完成，请手动复制：${HIDE_SPECTATOR_HUD_COMMAND}`);
+              {cs2.status?.observerHudPending ? (
+                <p role="status">游戏 HUD 有待恢复记录，请在游戏与观战设置中恢复并核对实际画面。</p>
+              ) : null}
+              {automaticHud ? (
+                <p>已启用自动隐藏，请核对实际画面。返回游戏试听游戏声与解说声音。</p>
+              ) : (
+                <>
+                  <p>复制后返回游戏，在控制台粘贴并回车。执行后核对画面，试听游戏声与解说声音。</p>
+                  <Button
+                    variant="primary"
+                    disabled={busy}
+                    onClick={() =>
+                      void run(async () => {
+                        try {
+                          await navigator.clipboard.writeText(HIDE_SPECTATOR_HUD_COMMAND);
+                        } catch {
+                          throw new Error(`复制未完成，请手动复制：${HIDE_SPECTATOR_HUD_COMMAND}`);
+                        }
+                        if (window.__TAURI_INTERNALS__) {
+                          const focused = await desktopInvoke<boolean>('restore_cs2_focus');
+                          if (!focused)
+                            throw new Error(
+                              '命令已复制，尚未执行。Windows 未允许切换，请用 Alt-Tab 返回 CS2，粘贴后回车。',
+                            );
+                        }
+                        close();
+                      })
                     }
-                    if (window.__TAURI_INTERNALS__) {
-                      const focused = await desktopInvoke<boolean>('restore_cs2_focus');
-                      if (!focused)
-                        throw new Error(
-                          '命令已复制，尚未执行。Windows 未允许切换，请用 Alt-Tab 返回 CS2，粘贴后回车。',
-                        );
-                    }
-                    close();
-                  })
-                }
-              >
-                复制隐藏命令并返回游戏
-              </Button>
-              <small>
-                复制后关闭此窗口；不会代替你执行命令。需要继续核对时，从工作台重新打开。
-              </small>
+                  >
+                    复制隐藏命令并返回游戏
+                  </Button>
+                  <small>
+                    复制后关闭此窗口；不会代替你执行命令。需要继续核对时，从工作台重新打开。
+                  </small>
+                </>
+              )}
               <small>
                 {obs?.connection !== 'connected'
                   ? 'OBS 尚未连接，无法确认输出状态'
@@ -370,6 +399,21 @@ function ReviewSession({ operator, program, cursor, connection, onOpen }: Props)
         {error ? <p role="alert">{error}</p> : null}
         <footer>
           <Button onClick={close}>稍后处理</Button>
+          <Button
+            onClick={() => {
+              const next = !silenced;
+              setSilenced(next);
+              try {
+                if (next) localStorage.setItem(SILENCED_MATCH_KEY, matchId);
+                else localStorage.removeItem(SILENCED_MATCH_KEY);
+              } catch {
+                /* Keep the current window preference when storage is unavailable. */
+              }
+              if (next) close();
+            }}
+          >
+            {silenced ? '恢复本场自动提醒' : '本场比赛不再自动弹出'}
+          </Button>
           {preparation ? (
             <Button
               variant="primary"

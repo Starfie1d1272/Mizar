@@ -12,6 +12,7 @@ import {
 } from '@mizar/core/identity';
 import {
   projectObserverAssist,
+  ObserverHintTimeline,
   inspectBp,
   projectProgram,
   selectProgramSafeRuntimeView,
@@ -63,6 +64,11 @@ export interface ProjectionPublishers {
 }
 
 export interface ProjectionCoordinatorOptions {
+  readonly observerSettings?: () => {
+    enabled: boolean;
+    expectedDelaySeconds: number;
+    leadSeconds: number;
+  };
   readonly programChat?: (
     cursor: ProgramSnapshot['cursor'],
     fresh: boolean,
@@ -152,6 +158,9 @@ function report(
 }
 
 export class ProjectionCoordinator {
+  private readonly observerTimeline = new ObserverHintTimeline();
+  private readonly observerSettings: ProjectionCoordinatorOptions['observerSettings'];
+  private readonly assistTimer: ReturnType<typeof setInterval> | undefined;
   private readonly predictionPublishCoalescing: boolean;
   private readonly avatars: ProjectionCoordinatorOptions['avatars'];
   private readonly programChat: ProjectionCoordinatorOptions['programChat'];
@@ -196,6 +205,7 @@ export class ProjectionCoordinator {
   private closed = false;
 
   constructor(options: ProjectionCoordinatorOptions) {
+    this.observerSettings = options.observerSettings;
     this.programChat = options.programChat;
     this.predictionPublishCoalescing = options.predictionPublishCoalescing ?? true;
     this.avatars = options.avatars;
@@ -216,9 +226,23 @@ export class ProjectionCoordinator {
     }
     this.activeLineup = emptyActiveLineup();
     this.current = this.refresh();
+    this.assistTimer = options.observerSettings
+      ? setInterval(() => {
+          if (this.observerSettings?.().enabled) this.refreshAssist();
+        }, 200)
+      : undefined;
+    this.assistTimer?.unref();
     this.sourceUnsubscribers = [
       this.cstvSources.program.subscribe(() => this.refreshOperator()),
-      this.cstvSources.lookahead.subscribe(() => this.refreshOperator()),
+      this.cstvSources.lookahead.subscribe(() => {
+        this.refreshOperator();
+        this.refreshAssist();
+      }),
+      this.cstvSources.lookahead.subscribeLiveGameEvents((event) => {
+        if (!this.observerSettings?.().enabled) return;
+        this.observerTimeline.consume(event);
+        this.refreshAssist();
+      }),
     ];
   }
 
@@ -338,7 +362,7 @@ export class ProjectionCoordinator {
         cstvSources: this.cstvSources,
         nowMonotonicMs,
       });
-      const assist = projectObserverAssist(runtimeView);
+      const assist = this.assistance(program, nowMonotonicMs);
       this.current = { program, radar, operator, assist, identity };
       this.scheduleStaleDeadline(
         runtimeView,
@@ -503,6 +527,7 @@ export class ProjectionCoordinator {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    if (this.assistTimer) clearInterval(this.assistTimer);
     if (this.predictionPublishTimer !== undefined)
       this.scheduler.clearTimeout(this.predictionPublishTimer);
     this.bombDamageResources.close();
@@ -647,6 +672,39 @@ export class ProjectionCoordinator {
     );
   }
 
+  private assistance(program: ProgramProjection, now: number): ObserverAssistProjection {
+    const snapshot = this.programRuntime.getSnapshot();
+    const settings = this.observerSettings?.();
+    if (!settings) return projectObserverAssist(selectProgramSafeRuntimeView(snapshot.current));
+    const accepted = snapshot.current.programSource.lastAccepted;
+    const health = this.cstvSources.lookahead.getHealth();
+    return this.observerTimeline.project(program, settings, now, {
+      connected: health.state === 'live',
+      generation: health.generation,
+      fresh:
+        accepted !== undefined &&
+        now - accepted.receivedMonotonicMs <= snapshot.continuityPolicy.staleAfterMs,
+    });
+  }
+  resetAssist(): void {
+    this.observerTimeline.settingsChanged(this.nowMonotonicMs());
+    this.refreshAssist();
+  }
+  refreshAssist(): void {
+    if (this.closed || !this.current) return;
+    const assist = this.assistance(this.current.program, this.nowMonotonicMs());
+    this.current = { ...this.current, assist };
+    this.publishChannel('assist', () =>
+      this.publishers.assist.publish({
+        type: 'snapshot',
+        protocolVersion: LOCAL_PROTOCOL_VERSION,
+        channel: 'assist',
+        schemaVersion: ASSIST_SCHEMA_VERSION,
+        cursor: assist.cursor,
+        payload: mapObserverAssistProjection(assist),
+      }),
+    );
+  }
   private refreshOperator(): ProjectionBundle {
     if (this.closed || this.refreshing) return this.current;
     this.refreshing = true;

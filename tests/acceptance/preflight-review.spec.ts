@@ -212,6 +212,27 @@ test('preflight reviews current ten-player evidence, actual auto state, disconne
   ).toBeVisible();
   await expect(finish).toBeDisabled();
   await screenshot('06-stale-data');
+  await dialog.getByRole('button', { name: '本场比赛不再自动弹出' }).click();
+  await expect(dialog).not.toBeVisible();
+  await page.reload();
+  await expect(page.getByRole('button', { name: '赛前核对', exact: true })).toBeVisible();
+  await expect(dialog).not.toBeVisible();
+  await page.getByRole('button', { name: '赛前核对', exact: true }).click();
+  await expect(dialog.getByRole('button', { name: '恢复本场自动提醒' })).toBeVisible();
+  await dialog.getByRole('button', { name: '稍后处理' }).click();
+  operator.payload.activeLineup.retainedCount = 0;
+  operator.payload.runtime.telemetryFreshness = 'fresh';
+  publish();
+  await expect(dialog).not.toBeVisible();
+  const originalMatchId = operator.payload.matchContext.summary!.matchId;
+  operator.payload.matchContext.summary!.matchId = 'next-preflight-match';
+  program.payload.match!.matchId = 'next-preflight-match';
+  await page.reload();
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '本场比赛不再自动弹出' })).toBeVisible();
+  operator.payload.matchContext.summary!.matchId = originalMatchId;
+  program.payload.match!.matchId = originalMatchId;
+
   operator.payload.identity.state = 'matched';
   operator.payload.identity.issues = [];
   operator.payload.activeLineup.retainedCount = 0;
@@ -238,7 +259,13 @@ test('preflight reviews current ten-player evidence, actual auto state, disconne
     host.__TAURI_INTERNALS__ = {
       invoke: (command, args) => {
         host.reviewCommands.push({ command, args });
-        return Promise.resolve(command === 'restore_cs2_focus' ? true : null);
+        return Promise.resolve(
+          command === 'cs2_config_status'
+            ? { preferMulnx: true, observerHudPending: false, pending: false, running: true }
+            : command === 'restore_cs2_focus'
+              ? true
+              : null,
+        );
       },
     };
     localStorage.clear();
@@ -269,5 +296,42 @@ test('preflight reviews current ten-player evidence, actual auto state, disconne
       ),
     )
     .toBe(true);
+  let hideGameHud = true;
+  await page.route('**/local/v1/observer-assist', (route) =>
+    route.fulfill({
+      json: {
+        settings: { enabled: false, expectedDelaySeconds: 120, leadSeconds: 7 },
+        gameAutomation: { autoConnect: true, hideGameHud },
+        connection: null,
+      },
+    }),
+  );
+  await expect(dialog).toContainText('已启用自动隐藏，请核对实际画面');
+  await expect(dialog.getByRole('button', { name: '复制隐藏命令并返回游戏' })).toHaveCount(0);
+  await expect(dialog).not.toContainText('游戏 HUD 有待恢复记录');
+  await page.evaluate(() => {
+    const host = (
+      window as typeof window & {
+        __TAURI_INTERNALS__: {
+          invoke: <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+        };
+      }
+    ).__TAURI_INTERNALS__;
+    const invoke = host.invoke;
+    host.invoke = <T>(command: string, args?: Record<string, unknown>) =>
+      command === 'cs2_config_status'
+        ? Promise.resolve({
+            preferMulnx: true,
+            observerHudPending: true,
+            pending: false,
+            running: true,
+          } as T)
+        : invoke<T>(command, args);
+  });
+  await expect(dialog).toContainText('游戏 HUD 有待恢复记录');
+  await expect(dialog).toContainText('已启用自动隐藏，请核对实际画面');
+  await expect(dialog.getByRole('button', { name: '复制隐藏命令并返回游戏' })).toHaveCount(0);
+  hideGameHud = false;
+  await expect(dialog.getByRole('button', { name: '复制隐藏命令并返回游戏' })).toBeVisible();
   expect(errors).toEqual([]);
 });

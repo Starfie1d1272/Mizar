@@ -56,6 +56,16 @@ RivalHub 资料先经过结构与语义校验，阻断错误不进入 Core。比
 
 `GET /local/v1/observer` 提供组件版本、连接活动状态与来源健康。工作台通过原生 `observer_command` 提交连接和停止意图，Host 核对当前游戏实例后调用 `POST /operator/runtime/observer`；该接口使用本次运行的私有能力，接受启动、停止和游戏会话续约。入口、运行时、Steam API 及输出路径由安装与运行数据目录推导。连接密码经 stdin 传递，状态响应只含运行摘要。观察器事件进入 Lookahead 来源，消费边界沿用正式节目与私有辅助的独立投影。
 
+`GET /local/v1/observer-assist` 返回观察辅助 `settings`、游戏自动操作 `gameAutomation`、当前连接端点摘要与修订号。受信任本机 Origin 通过 `POST /operator/observer-assist` 通过 `configure`、`configure-game` 分别保存偏好，通过 `connection` 提交本场连接。密码仅随本次服务会话保存在内存，比赛切换清除本场连接。相同有效值再次保存不更新修订或通知消费者；提示时间只更新辅助计算：单改 `leadSeconds` 保留缓冲与已验证锚点并立即重新投影；改变 `expectedDelaySeconds` 清除旧匹配条件下的对齐，等待新锚点。`revision` 仅用于辅助启停、游戏操作与本场连接准备。
+
+私有 `assist` 通道使用 schema 2；开启时携带来源状态、时间参数、测得延迟与最多六条击杀提示，包含当前 Program 昵称、唯一观战槽位、预计发生倒计时。关闭时沿用基础辅助载荷。Program、雷达和公开输出继续使用各自契约。
+
+Host 的 `prepare` / `start-configured` 绑定游戏实例、Desktop Job 和配置修订，并由 Host 根据游戏启动偏好提交 `useMulnx`。标准路线直接启动选定的观察器；MulNX 路线按自动连接与 HUD 开关提交命令，观察器仍由独立开关决定。节目连接与 HUD 命令复用 MulNX 的 `Game/Command/NoReport` 队列，payload 使用其填充器要求的 JSON 字符串。精确网关回执证明入队，游戏数据与本机控制台查询分别负责节目连接、HUD 值的读回。
+
+`prepare` 返回的 `revision` 是绑定当前游戏实例、Desktop Job、启动方式和配置的准备令牌，Host 原样交给 `start-configured`。返回现场复用已有早源；节目连接与 HUD 操作分别按本场已接受的动作去重。仅改变早源地址、提示时间或重试辅助不重复已接受的节目连接。启动、停止与设置引发的辅助启停串行执行，连接变化、更新的准备令牌与停止使旧在途启动失效；组件加载后、真正创建进程前仍核对取消。
+
+本场 Host 续约仍有效时，关闭辅助只停止早源，重新开启复用本场来源启动；不自动重发节目连接。明确停止、切换连接或超过六秒未续约后，重新启动需 Host 再次确认。`GET /local/v1/observer` 另含 `pending`、有限错误码 `error`（当前为 `observer_operation_failed` 或 null）及 `retryAvailable`。界面结合既有 `failed`、`health`、`terminal` 区分连接中、正常重连与失败；重试沿用原生 `observer_command` 的 `start-configured`，由 Host 重新准备，无需浏览器提交路径或凭据。`retryAvailable` 表示辅助已开启、有本场连接、现场资格有效且无在途操作；即使旧租约已过期，仍可请求 Host 重新核对当前游戏，动作执行时继续校验；进程启动或命令入队不代表真实游戏连接、HUD 或节目画面已经验证。
+
 ## 公开实时输出
 
 本机 Program 快照的可选 `payload.allChat` 仅包含当前受管游戏中明确标记 `[ALL]` 的公开聊天，最多三条，每条含稳定标识、发送者、文本与过期时间。它属于本机播出展示，不进入赛事结果、可靠事件、网站 LIVE 或 Lookahead。制作实例、现场会话、Program 数据源代际、地图执行或数据新鲜度变化时清空；同进程同地图重新播放或加载仍按明确的引擎播放/加载边界清空，不依赖地图编号一定改变。不读取 TEAM、私聊、未知时间区间及积压旧消息。前端只按文本节点展示，并自行按过期时间收起，不依赖下一帧到达。
@@ -247,7 +257,7 @@ RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对�
 
 ## 本机地图编排控制
 
-`GET /local/v1/orchestration` 读取私有预设与请求状态；`POST /operator/orchestration` 接收 configure、connect、disconnect、resume、hold、skip、audition、browser。仅回环模式及允许来源可写，恢复/试播绑定当前上下文与连接代际。JSON 上限 256 KiB，严格结构由 `@mizar/protocol/orchestration` 和 Companion 路由共同校验。不接受任意 Provider 地址、控制台命令或文件路径；`isolated` 仅表示专用包磁盘文件符合隔离要求，不代表游戏内活动包；queued 只表示网关入队。具体语义及 `2.0.0-alpha.1` 验收见[地图自动编排](orchestration.md)。
+`GET /local/v1/orchestration` 读取私有预设与请求状态；`POST /operator/orchestration` 接收 configure、connect、disconnect、resume、hold、skip、audition、browser。仅回环模式及允许来源可写，恢复/试播绑定当前上下文与连接代际。JSON 上限 256 KiB，严格结构由 `@mizar/protocol/orchestration` 和 Companion 路由共同校验。不接受任意 Provider 地址、控制台命令或文件路径；`isolated` 仅表示专用包磁盘文件符合隔离要求，不代表游戏内活动包；queued 只表示网关入队。具体语义及候选实机验收见[地图自动编排](orchestration.md)。
 
 桌面 `attach_external_cs2` 仅允许准备中心调用，参数为所选 PID、创建标识和制作修订；可执行路径由 Host 既有安装发现读取。`cs2_config_status` 的 `borrowed` 表示仍持有外部借用意图，`externalDetached` 表示已解除；`running` 只描述本次可用实例，均不代替全机 CS2 停机证明。借用不写受管事务；退出沿用 `finish_workspace` 安全制作收尾后解除，失败保留待重试状态。实际边界见[地图自动编排](orchestration.md)。
 

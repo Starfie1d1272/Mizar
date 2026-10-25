@@ -133,10 +133,11 @@ export function registerOrchestrationRoutes(
         .strictObject({
           cs2Path: nativeCs2PathSchema,
           consoleCapture: z.boolean().default(false),
+          update: z.boolean().default(false),
         })
         .parse(request.body);
       director.hold('正在准备 MulNX');
-      return await tool.prepare(body.cs2Path, body.consoleCapture);
+      return await tool.prepare(body.cs2Path, body.consoleCapture, body.update);
     } catch (error) {
       request.log.error(
         { stage: 'mulnx_prepare', err: error, result: 'failure' },

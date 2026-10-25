@@ -7,6 +7,7 @@ export interface Cs2ConfigStatus {
   preferMulnx?: boolean;
   spectatorRecoveryPending?: boolean;
   demoCleanupPending?: boolean;
+  observerHudPending?: boolean;
   spectatorWarning?: string | null;
   canPreserve?: boolean;
   preserveSettings?: boolean;
