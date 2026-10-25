@@ -3,12 +3,16 @@ import type { MatchDocumentV1 } from '@mizar/protocol/context';
 import { LibraryWorkspace } from '../patterns/LibraryWorkspace';
 import { LibraryMatchDetails, libraryMatchTime } from '../preparation/LibraryMatchDetails';
 import { Button, Select, StatusBanner } from '../ui';
+import { sortWebsiteMatches } from './website-schedule-order';
 
 export type WebsiteSchedule = {
   competition: { name: string };
   matches: {
     matchId: string;
     scheduledAt: string | null;
+    status?: 'scheduled' | 'in_progress' | 'finished' | 'cancelled';
+    startedAt?: string | null;
+    completedAt?: string | null;
     entrantA: { name: string };
     entrantB: { name: string };
     format: string;
@@ -39,7 +43,8 @@ export function RivalHubMatchLibrary({
   onRefresh: () => void;
 }) {
   const [selected, setSelected] = useState<string | null>(null);
-  const match = schedule.matches.find((row) => row.matchId === selected) ?? schedule.matches[0];
+  const matches = sortWebsiteMatches(schedule.matches);
+  const match = matches.find((row) => row.matchId === selected) ?? matches[0];
   const entry = match ? schedule.library?.entries[match.matchId] : null;
   const document = entry?.document;
   return (
@@ -62,7 +67,7 @@ export function RivalHubMatchLibrary({
             </span>
           </>
         }
-        items={schedule.matches.map((row) => ({
+        items={matches.map((row) => ({
           id: row.matchId,
           title: `${row.entrantA.name} vs ${row.entrantB.name}`,
           summary: `${libraryMatchTime(row.scheduledAt)} · ${row.format.toUpperCase()}${row.stageLabel ? ` · ${row.stageLabel}` : ''}`,
