@@ -37,6 +37,7 @@ function setup(
   failure?:
     | 'launch'
     | 'mulnx'
+    | 'mulnx-unsupported'
     | 'production'
     | 'restore'
     | 'presentation'
@@ -69,6 +70,9 @@ function setup(
       return Promise.reject(new Error('自动隐藏 HUD 尚未准备'));
     if (failure === 'launch' && command === 'start_managed_cs2')
       return Promise.reject(new Error('请先退出已打开的 CS2'));
+    if (failure === 'mulnx-unsupported' && command === 'launch_mulnx')
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- Tauri Result<T, String> rejects with the native string code.
+      return Promise.reject('mulnx_manual_launch_required');
     if (failure === 'mulnx' && command === 'launch_mulnx')
       return Promise.reject(new Error('请先关闭冲突程序：完美世界竞技平台'));
     if (failure === 'restore' && command === 'finish_managed_cs2')
@@ -174,6 +178,18 @@ describe('managed CS2 production entry and cleanup', () => {
     );
     expect(calls).toContain('present_production');
     expect(window.location.pathname).toBe('/');
+  });
+  it('preserves a stable unsupported cause without attaching, launching Steam or entering production', async () => {
+    const calls = setup('mulnx-unsupported', 'preparation', false, false, [
+      { preferMulnx: true, running: false, pending: false },
+    ]);
+    await expect(productionAction('enter', preparation)).rejects.toMatchObject({
+      code: 'mulnx_manual_launch_required',
+    });
+    expect(calls).not.toContain('attach_external_cs2');
+    expect(calls).not.toContain('start_managed_cs2');
+    expect(calls).not.toContain('/operator/production');
+    expect(calls).not.toContain('set_cs2_preferences');
   });
   it('does not attach, enter production or fall back to Steam after a MulNX environment rejection', async () => {
     const calls = setup('mulnx', 'preparation', false, false, [

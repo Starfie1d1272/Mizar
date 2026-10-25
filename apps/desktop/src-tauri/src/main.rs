@@ -16,6 +16,7 @@ mod desktop_worker;
 mod geometry;
 mod managed_cs2;
 mod mulnx_launch;
+mod mulnx_stop;
 mod obs_configuration;
 mod powershell;
 mod production_exit;

@@ -22,6 +22,7 @@ export function MulnxHandoff() {
   const [processes, setProcesses] = useState<ProcessIdentity[] | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [expanded, setExpanded] = useState(() => window.location.hash === '#mulnx-launch');
   if (!window.__TAURI_INTERNALS__)
     return (
       <details>
@@ -72,9 +73,12 @@ export function MulnxHandoff() {
     }
   }
   return (
-    <details>
+    <details open={expanded} onToggle={(event) => setExpanded(event.currentTarget.open)}>
       <summary>MulNX 游戏交接</summary>
-      <p>通过 MulNX 打开游戏。加载 Demo 后可直接试播运镜；结束后游戏保持运行。</p>
+      <p>
+        在官方启动器完成环境检查并启动游戏，再检查下方实际实例，核对程序路径与创建标识后明确借用。加载
+        Demo 后也可试播运镜；结束后游戏保持运行。
+      </p>
       <Button disabled={busy} onClick={() => void run(false)}>
         检查游戏实例
       </Button>
