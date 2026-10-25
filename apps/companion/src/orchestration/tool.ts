@@ -30,7 +30,7 @@ const releaseSchema = z.object({
 });
 /** Preserve the official launch options; refuse unfamiliar YAML instead of
  * silently enabling capture without an effective engine flag. */
-export function consoleLaunchOptions(source: string): string {
+function launchOptionsValue(source: string): string {
   const lines = [...source.matchAll(/^launchOptions\s*:\s*(.*)$/gm)];
   if (lines.length !== 1) throw new Error('mulnx_launcher_config_unsupported');
   const raw = lines[0]![1]!.trim();
@@ -41,6 +41,10 @@ export function consoleLaunchOptions(source: string): string {
       : raw;
   if (typeof value !== 'string' || /[\r\n#]/.test(value) || (value && !value.startsWith('-')))
     throw new Error('mulnx_launcher_config_unsupported');
+  return value;
+}
+export function consoleLaunchOptions(source: string): string {
+  const value = launchOptionsValue(source);
   const options = /(?:^|\s)-condebug(?:\s|$)/i.test(value) ? value : `${value} -condebug`.trim();
   return source.replace(/^launchOptions\s*:.*$/m, `launchOptions: ${JSON.stringify(options)}`);
 }
@@ -179,7 +183,11 @@ export class MulnxTool {
     } else if (consoleCapture) {
       updated = consoleLaunchOptions(withPath);
       const managed = updated.match(/^launchOptions\s*:.*$/m)![0];
-      if (!owned && managed !== line && !/(?:^|[\s"'])-condebug(?:[\s"']|$)/i.test(line ?? '')) {
+      if (
+        !owned &&
+        managed !== line &&
+        !/(?:^|\s)-condebug(?:\s|$)/i.test(launchOptionsValue(withPath))
+      ) {
         // Journal before mutation: a crash cannot lose ownership of our addition.
         await atomicJson(ownership, { original: line, managed });
       }

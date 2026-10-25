@@ -898,32 +898,24 @@ async fn finish_workspace(
                 log.step("workspace_exit_restore_backup", || cs2.restore_backup(true))?;
             }
             log.step("workspace_exit_game_finish", || cs2.finish())?;
+        } else if cs2.has_external() {
+            feedback.stage("detachment");
+            let _activity = activity.begin(3);
+            // Production has safely finished. Detach without granting game-stop/recycle proof.
+            log.step("workspace_external_detach", || cs2.finish())?;
         } else {
-            production_exit::finish_then_restore(
-                || {
-                    Ok(())
-                },
-                || {
-                    if cs2.has_external() {
-                        feedback.stage("detachment");
-                        let _activity = activity.begin(3);
-                        // Production has safely finished. Detach without granting game-stop/recycle proof.
-                        return log.step("workspace_external_detach", || cs2.finish());
-                    }
-                    feedback.stage("restoration");
-                    let _activity = activity.begin(2);
-                    production_exit::finish_managed_game(&log, |requires_proof| {
-                        if confirm_steam_cancelled == Some(true) {
-                            log.step("workspace_exit_restore_backup", || cs2.restore_backup(true))?;
-                        }
-                        log.step("workspace_exit_game_finish", || cs2.finish())?;
-                        if requires_proof {
-                            log.step("workspace_exit_stop_proof", || cs2.confirm_game_stopped())?;
-                        }
-                        Ok(())
-                    })
-                },
-            )?;
+            feedback.stage("restoration");
+            let _activity = activity.begin(2);
+            production_exit::finish_managed_game(&log, |requires_proof| {
+                if confirm_steam_cancelled == Some(true) {
+                    log.step("workspace_exit_restore_backup", || cs2.restore_backup(true))?;
+                }
+                log.step("workspace_exit_game_finish", || cs2.finish())?;
+                if requires_proof {
+                    log.step("workspace_exit_stop_proof", || cs2.confirm_game_stopped())?;
+                }
+                Ok(())
+            })?;
         }
         Ok(())
         });
