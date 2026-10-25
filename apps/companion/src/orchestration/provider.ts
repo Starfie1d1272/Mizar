@@ -1,5 +1,6 @@
+import { fileURLToPath } from 'node:url';
 export type GatewayResult = 'queued' | 'rejected' | 'unknown';
-type CameraCommand = 'CamMacro/Play' | 'CamPlay/ClearForce';
+type CameraCommand = 'CamMacro/Play' | 'CamPlay/ClearForce' | 'System/Stop';
 /** Fixed audited gateway. No arbitrary commands, endpoint, reconnect, retries or offline queue. */
 export class MulnxProvider {
   private socket: WebSocket | null = null;
@@ -69,7 +70,8 @@ export class MulnxProvider {
   send(type: CameraCommand, macro = ''): Promise<GatewayResult> {
     if (!this.connected) return Promise.resolve('unknown');
     if (this.pending) {
-      if (type !== 'CamPlay/ClearForce') return Promise.resolve('unknown');
+      if (type !== 'CamPlay/ClearForce' && type !== 'System/Stop')
+        return Promise.resolve('unknown');
       this.pending.finish('unknown'); // Stop preempts a request; never waits behind playback.
     }
     const wire = JSON.stringify({
@@ -105,11 +107,31 @@ export class MulnxProvider {
       }
     });
   }
+  /** Upstream #9 only acknowledges queueing. Never retry or infer unload from disconnect. */
+  async stopControl(): Promise<GatewayResult> {
+    try {
+      return await this.send('System/Stop');
+    } finally {
+      this.close();
+    }
+  }
   close() {
     this.pending?.finish('unknown');
     const socket = this.socket;
     this.socket = null;
     this.generation++;
     socket?.close();
+  }
+}
+
+// Native-only fixed operation; no browser-provided commands or endpoints.
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  if (process.argv.slice(2).join(' ') !== '--stop-mulnx') throw new Error('mulnx_stop_arguments');
+  const provider = new MulnxProvider();
+  try {
+    await provider.connect();
+    console.log(JSON.stringify({ result: await provider.stopControl(), execution: 'unconfirmed' }));
+  } finally {
+    provider.close();
   }
 }

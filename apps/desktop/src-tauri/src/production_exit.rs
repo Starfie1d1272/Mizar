@@ -106,6 +106,24 @@ pub fn finish_then_restore(
     restore()
 }
 
+pub fn restore_then_cleanup(
+    restore: impl FnOnce() -> Result<(), String>,
+    cleanup: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    let restoration = restore();
+    let cleanup = cleanup();
+    cleanup_results(restoration, cleanup)
+}
+
+/// Both independent cleanups have already run; preserve every failure for retry/diagnostics.
+pub fn cleanup_results(first: Result<(), String>, second: Result<(), String>) -> Result<(), String> {
+    match (first, second) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+        (Err(first), Err(second)) => Err(format!("{first}\n{second}")),
+    }
+}
+
 fn io_failure(log: &DesktopLog, phase: &str, error: &std::io::Error, summary: &str) -> String {
     log.event(
         "production_finish",
@@ -518,6 +536,26 @@ mod tests {
 
 
 
+
+    #[test]
+    fn safe_production_precedes_restore_and_restore_failure_cannot_skip_cleanup() {
+        let calls = std::cell::RefCell::new(Vec::new());
+        let result = finish_then_restore(
+            || { calls.borrow_mut().push("obs-safe"); Ok(()) },
+            || restore_then_cleanup(
+                || { calls.borrow_mut().push("restore-hud"); Err("hud failed".into()) },
+                || { calls.borrow_mut().push("cleanup-game"); Err("game failed".into()) },
+            ),
+        );
+        assert_eq!(*calls.borrow(), ["obs-safe", "restore-hud", "cleanup-game"]);
+        assert_eq!(result.unwrap_err(), "hud failed\ngame failed");
+        calls.borrow_mut().clear();
+        assert!(finish_then_restore(
+            || Err("OBS still live".into()),
+            || { calls.borrow_mut().push("unsafe restore"); Ok(()) },
+        ).is_err());
+        assert!(calls.borrow().is_empty());
+    }
 
     fn qualification() -> serde_json::Value {
         serde_json::json!({"ticket": "private-ticket", "matchId": "match-7", "contextRevision": "revision-9"})
