@@ -86,7 +86,7 @@ export class MusicDirector {
       request.action === 'start' &&
       (this.pendingOpening || (this.store.state.stinger && !this.store.state.stinger.finished))
     )
-      throw new Error('music_preview_busy');
+      throw new Error('music_preview_channel_busy');
     this.preview.submit(request);
     while (this.inFlight && !this.closed) await new Promise((resolve) => setTimeout(resolve, 10));
     this.lastPoll = -Infinity;
@@ -292,6 +292,7 @@ export class MusicDirector {
         this.status.connection = 'connected';
         this.status.message = null;
         const previewOwned = this.preview.busy;
+        if (configured || opening) this.preview.programPriority();
         const p = this.truth().program;
         const previewSafe =
           !this.pendingOpening &&

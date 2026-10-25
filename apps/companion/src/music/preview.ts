@@ -93,6 +93,15 @@ export class MusicPreview {
     };
     this.event('requested', 'draft');
   }
+  programPriority() {
+    if (!this.request) return;
+    if (this.uuid) this.cancel('formal_cue');
+    else
+      this.fail(
+        'channel_busy',
+        '当前音乐正在播放或已人工接管，请先使用“停止音乐”停止当前音乐，再试听。',
+      );
+  }
   cancel(reason: string) {
     if (!this.request) return;
     this.revision++;
@@ -111,12 +120,15 @@ export class MusicPreview {
   unavailable() {
     if (!this.request || (this.stopping && this.status?.message.startsWith('试听停止未确认')))
       return;
+    const hadMedia = Boolean(this.uuid);
     this.event('failed', 'obs_disconnected');
     this.cancel('obs_disconnected');
     this.status = {
       ...this.status!,
       phase: this.uuid ? 'cleanup' : 'failed',
-      message: '试听停止未确认，请在 OBS 停止 Mizar 音效来源；重连后优先清理。',
+      message: hadMedia
+        ? '试听停止未确认，请在 OBS 停止 Mizar 音效来源；重连后优先清理。'
+        : 'OBS 连接不可用，未开始试听。请检查 OBS 连接和 Mizar 音效来源。',
     };
   }
   async reconcile(
@@ -189,6 +201,26 @@ export class MusicPreview {
     };
     const r = this.request;
     if (!this.uuid) {
+      // Both owned layers must be idle. Never mix an audition with formal music or take control
+      // of a paused/muted source; the operator can use the existing Stop music command first.
+      for (const layer of ['bgm', 'stinger'] as const) {
+        const name = await ownedMusicInput(obs, this.store, layer, false, current, false);
+        if (!name) continue;
+        const args = { inputUuid: this.store.state.sources[layer] };
+        const media = await call('GetMediaInputStatus', args);
+        const mute = await call('GetInputMute', args);
+        if (
+          active(media.mediaState) ||
+          media.mediaState === 'OBS_MEDIA_STATE_PAUSED' ||
+          mute.inputMuted === true
+        ) {
+          this.fail(
+            'channel_busy',
+            '当前音乐正在播放或已人工接管，请先使用“停止音乐”停止当前音乐，再试听。',
+          );
+          return;
+        }
+      }
       const path = await this.store.trackPath(r.track.id).catch(() => null);
       if (!path) {
         this.fail('track_unavailable', '音频文件丢失或损坏，请重新选择。');
@@ -223,7 +255,10 @@ export class MusicPreview {
         media.mediaState === 'OBS_MEDIA_STATE_PAUSED' ||
         mute.inputMuted === true
       ) {
-        this.fail('channel_busy', 'OBS 音效来源正在播放或已人工接管，请先在 OBS 检查。');
+        this.fail(
+          'channel_busy',
+          '当前音乐正在播放或已人工接管，请先使用“停止音乐”停止当前音乐，再试听。',
+        );
         return;
       }
       // Register cleanup before the first write, including uncertain RPC outcomes.

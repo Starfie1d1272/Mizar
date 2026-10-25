@@ -10,6 +10,7 @@ import type {
 export function useMusicPreview() {
   const [owner] = useState(() => crypto.randomUUID());
   const operation = useRef(0);
+  const queue = useRef<Promise<void>>(Promise.resolve());
   const intent = useRef(0);
   const responseOperation = useRef(0);
   const request = useRef<MusicPreviewRequest | null>(null);
@@ -19,31 +20,39 @@ export function useMusicPreview() {
   const send = useCallback(
     async (r: MusicPreviewRequest, action: MusicPreviewRequest['action'], keepalive = false) => {
       const body = { ...r, action, operation: ++operation.current, expiresAt: Date.now() + 4000 };
-      const response = await fetch('/operator/music/preview', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-        keepalive,
-      });
-      const result = (await response.json()) as {
-        status?: { preview?: MusicPreviewStatus };
-        message?: string;
-        error?: string;
-      };
-      if (result.error === 'music_preview_stale_operation') return;
-      if (!response.ok) throw new Error(result.message ?? '试听未完成，请检查本机服务与 OBS。');
-      if (
-        mounted.current &&
-        request.current?.token === r.token &&
-        body.operation > responseOperation.current
-      ) {
-        responseOperation.current = body.operation;
-        const preview = result.status?.preview;
-        if (preview?.token === r.token) {
-          setStatus(preview);
-          if (preview.phase === 'failed' || preview.phase === 'stopped') request.current = null;
+      const run = async () => {
+        const response = await fetch('/operator/music/preview', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+          keepalive,
+          ...(keepalive ? {} : { signal: AbortSignal.timeout(5000) }),
+        });
+        const result = (await response.json()) as {
+          status?: { preview?: MusicPreviewStatus };
+          message?: string;
+          error?: string;
+        };
+        if (result.error === 'music_preview_stale_operation') return;
+        if (!response.ok) throw new Error(result.message ?? '试听未完成，请检查本机服务与 OBS。');
+        if (
+          mounted.current &&
+          request.current?.token === r.token &&
+          body.operation > responseOperation.current
+        ) {
+          responseOperation.current = body.operation;
+          const preview = result.status?.preview;
+          if (preview?.token === r.token) {
+            setStatus(preview);
+            if (preview.phase === 'failed' || preview.phase === 'stopped') request.current = null;
+          }
         }
-      }
+      };
+      // STOP bypasses queued work. Its newer operation also invalidates requests already in transit.
+      if (action === 'stop') return run();
+      const pending = queue.current.catch(() => undefined).then(run);
+      queue.current = pending.catch(() => undefined);
+      await pending;
     },
     [],
   );

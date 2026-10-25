@@ -848,6 +848,14 @@ it('drops an opening queued for another map and stops an old map stinger without
   expect(r.obs.restarts()).toBe(2);
 });
 
+async function auditionRig() {
+  const r = await rig();
+  await r.step();
+  r.truth.production = false;
+  await r.director.command('stop');
+  await r.director.command('resume');
+  return r;
+}
 function audition(
   r: Awaited<ReturnType<typeof rig>>,
   patch: Partial<MusicPreviewRequest> = {},
@@ -873,7 +881,7 @@ function stinger(r: Awaited<ReturnType<typeof rig>>) {
 it.each([0, 0.5, 1])(
   'auditions unsaved volume %s and segments without altering formal playback/config/hold/consumption',
   async (volume) => {
-    const r = await rig();
+    const r = await auditionRig();
     await r.step();
     const before = structuredClone(r.store.state);
     const request = audition(r, { volume, track: { ...r.tracks[1]!, startMs: 1000, endMs: 2500 } });
@@ -890,13 +898,13 @@ it.each([0, 0.5, 1])(
     await r.step(100);
     expect(stinger(r).state).toBe('OBS_MEDIA_STATE_STOPPED');
     expect(r.store.state).toEqual({ ...before, sources: r.store.state.sources });
-    expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_PLAYING');
+    expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
   },
 );
 it.each(['stream', 'record', 'unknown'] as const)(
   'requires current backend output confirmation for %s, with no preview mutations until confirmed',
   async (output) => {
-    const r = await rig();
+    const r = await auditionRig();
     await r.step();
     await r.step();
     if (output === 'stream') r.obs.streamActive = true;
@@ -914,7 +922,7 @@ it.each(['stream', 'record', 'unknown'] as const)(
   },
 );
 it('expires an abandoned client lease and rejects late starts, foreign stops and simultaneous windows', async () => {
-  const r = await rig();
+  const r = await auditionRig();
   await r.step();
   const request = audition(r);
   await r.director.previewRequest(request);
@@ -930,7 +938,7 @@ it('expires an abandoned client lease and rejects late starts, foreign stops and
   );
 });
 it('caps a renewed lease at 15 seconds and applies the draft fade', async () => {
-  const r = await rig();
+  const r = await auditionRig();
   await r.step();
   const request = audition(r, { fadeInMs: 1000, fadeOutMs: 1000 });
   await r.director.previewRequest(request);
@@ -952,7 +960,7 @@ it('caps a renewed lease at 15 seconds and applies the draft fade', async () => 
   expect(r.store.state.consumed).toEqual([]);
 });
 it('prioritizes live safety, operator stop and OBS reconnect cleanup without replaying a preview', async () => {
-  const r = await rig();
+  const r = await auditionRig();
   await r.step();
   const request = audition(r);
   await r.director.previewRequest(request);
@@ -983,12 +991,17 @@ it('prioritizes live safety, operator stop and OBS reconnect cleanup without rep
   expect(r.store.state.held).toBe(true);
 });
 it('preserves manual OBS volume/mute and does not restore an old opening after preview', async () => {
-  const r = await rig();
+  const r = await auditionRig();
   await r.step();
+  r.truth.production = true;
   r.director.opening('take-once');
   await r.step();
-  await expect(r.director.previewRequest(audition(r))).rejects.toThrow('music_preview_busy');
+  await expect(r.director.previewRequest(audition(r))).rejects.toThrow(
+    'music_preview_channel_busy',
+  );
   stinger(r).state = 'OBS_MEDIA_STATE_ENDED';
+  await r.step();
+  r.truth.production = false;
   await r.step();
   const consumed = [...r.store.state.consumed];
   await r.director.previewRequest(audition(r));
@@ -1003,7 +1016,7 @@ it('preserves manual OBS volume/mute and does not restore an old opening after p
   expect(r.store.state.consumed).toEqual(consumed);
 });
 it('fails missing/corrupt tracks and unavailable storage before starting audio', async () => {
-  const r = await rig();
+  const r = await auditionRig();
   await r.step();
   await rm(join(r.directory, 'tracks', r.tracks[0]!.id));
   await r.director.previewRequest(audition(r));
@@ -1013,7 +1026,7 @@ it('fails missing/corrupt tracks and unavailable storage before starting audio',
   await expect(r.director.previewRequest(audition(r))).rejects.toThrow('music_preview_storage');
 });
 it('cancels an in-flight audition before restart, and cannot resurrect a stopped operation', async () => {
-  const r = await rig();
+  const r = await auditionRig();
   await r.step();
   const request = audition(r);
   let release!: () => void;
@@ -1041,7 +1054,7 @@ it('cancels an in-flight audition before restart, and cannot resurrect a stopped
   expect(r.store.state.held).toBe(false);
 });
 it('keeps a pre-existing hold and yields to a later real opening without consuming the audition', async () => {
-  const r = await rig();
+  const r = await auditionRig();
   await r.director.command('stop');
   const request = audition(r);
   await r.director.previewRequest(request);
@@ -1053,6 +1066,7 @@ it('keeps a pre-existing hold and yields to a later real opening without consumi
   await r.step();
   await r.director.previewRequest(audition(r));
   await r.step(100);
+  r.truth.production = true;
   r.director.opening('new-real-take');
   await r.step(100);
   expect(r.store.state.consumed).toEqual(['new-real-take']);
@@ -1061,7 +1075,7 @@ it('keeps a pre-existing hold and yields to a later real opening without consumi
 });
 
 it('does not revive an expired lease when a renewal reaches the server before the next polling tick', async () => {
-  const r = await rig();
+  const r = await auditionRig();
   await r.step();
   const request = audition(r);
   await r.director.previewRequest(request);
@@ -1075,4 +1089,84 @@ it('does not revive an expired lease when a renewal reaches the server before th
   });
   expect(stinger(r).state).toBe('OBS_MEDIA_STATE_STOPPED');
   expect(r.director.get().preview?.phase).toBe('stopped');
+});
+it('rejects an audition while formal BGM is active and permits it only after explicit stop', async () => {
+  const r = await rig();
+  await r.step();
+  await r.director.previewRequest(audition(r));
+  expect(r.director.get().preview?.message).toContain('停止音乐');
+  expect(r.store.state.sources.stinger).toBeNull();
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_PLAYING');
+  await r.director.command('stop');
+  await r.director.previewRequest(audition(r));
+  await r.step(100);
+  expect(stinger(r).state).toBe('OBS_MEDIA_STATE_PLAYING');
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
+  expect(r.store.state.held).toBe(true);
+});
+it.each(['OBS_MEDIA_STATE_PLAYING', 'OBS_MEDIA_STATE_PAUSED', 'muted'])(
+  'refuses a borrowed channel when BGM is %s even without a formal cue',
+  async (state) => {
+    const r = await auditionRig();
+    if (state === 'muted') r.obs.bgm().muted = true;
+    else r.obs.bgm().state = state;
+    await r.director.previewRequest(audition(r));
+    expect(r.director.get().preview?.message).toContain('停止音乐');
+    expect(r.store.state.sources.stinger).toBeNull();
+  },
+);
+it('verifies audition stop before a newly eligible formal BGM cue starts, without mixing or restoring hold', async () => {
+  const r = await auditionRig();
+  await r.director.previewRequest(audition(r));
+  await r.step(100);
+  const mark = r.obs.calls.length;
+  const previewUuid = r.store.state.sources.stinger;
+  const bgmUuid = r.store.state.sources.bgm;
+  r.truth.production = true;
+  await r.step(100);
+  expect(stinger(r).state).toBe('OBS_MEDIA_STATE_STOPPED');
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_PLAYING');
+  const calls = r.obs.calls.slice(mark);
+  const stop = calls.findIndex(
+    (c) =>
+      c.data.inputUuid === previewUuid &&
+      c.data.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP',
+  );
+  const verified = calls.findIndex(
+    (c, i) => i > stop && c.data.inputUuid === previewUuid && c.type === 'GetMediaInputStatus',
+  );
+  const restart = calls.findIndex(
+    (c) =>
+      c.data.inputUuid === bgmUuid &&
+      c.data.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART',
+  );
+  expect(stop).toBeGreaterThanOrEqual(0);
+  expect(verified).toBeGreaterThan(stop);
+  expect(restart).toBeGreaterThan(verified);
+  expect(r.store.state.held).toBe(false);
+});
+it('does not start a formal cue while OBS has not confirmed the audition stopped', async () => {
+  const r = await auditionRig();
+  await r.director.previewRequest(audition(r));
+  await r.step(100);
+  const restarts = r.obs.restarts();
+  r.obs.intercept = async (type) => {
+    const last = r.obs.calls.at(-1);
+    if (
+      type === 'GetMediaInputStatus' &&
+      last?.data.inputUuid === r.store.state.sources.stinger &&
+      last?.data.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP'
+    )
+      stinger(r).state = 'OBS_MEDIA_STATE_PLAYING'; // OBS acknowledges STOP but has not actually stopped.
+  };
+  r.truth.production = true;
+  await r.step(100);
+  expect(r.director.get().preview?.phase).toBe('cleanup');
+  expect(r.director.get().preview?.message).toContain('未确认');
+  expect(r.obs.restarts()).toBe(restarts);
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
+  r.obs.intercept = undefined;
+  await r.step(100);
+  expect(stinger(r).state).toBe('OBS_MEDIA_STATE_STOPPED');
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_PLAYING');
 });
