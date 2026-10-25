@@ -610,6 +610,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     );
   };
   let observerMatchId: string | null | undefined;
+  let observerDiagnosticKey = '';
+  let observerDiagnosticLoggedAt = -Infinity;
   const projectionCoordinator =
     options.projectionCoordinator ??
     createProjectionCoordinator({
@@ -621,6 +623,21 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       ...(options.steamAvatars ? { avatars: options.steamAvatars } : {}),
       programRuntime,
       cstvSources,
+      onObserverDiagnostics: (diagnostics) => {
+        debugEvidenceStore.recordObserverDiagnostics(diagnostics);
+        const key = JSON.stringify([
+          diagnostics.blocked,
+          diagnostics.lastReset,
+          diagnostics.anchors > 0,
+          diagnostics.pending > 0,
+        ]);
+        const now = debugClock.nowMonotonicMs();
+        if (key !== observerDiagnosticKey && now - observerDiagnosticLoggedAt >= 5000) {
+          observerDiagnosticKey = key;
+          observerDiagnosticLoggedAt = now;
+          sessionJournal?.record('observer_assist_state', diagnostics);
+        }
+      },
       ...(options.matchContextBinding === undefined || demoRecovery
         ? {}
         : { matchContextBinding: options.matchContextBinding }),

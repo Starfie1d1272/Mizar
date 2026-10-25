@@ -2034,3 +2034,133 @@ it('exports actionable stages for each bounded observer failure category without
     await app.close();
   }
 });
+
+it('exports bounded observer diagnostics through the ordinary support bundle without private identities', async () => {
+  const { ObserverHintTimeline } = await import('@mizar/core/projection');
+  const { DebugEvidenceStore } = await import('../src/runtime/debug-state.js');
+  const store = new DebugEvidenceStore();
+  const app = buildApp({
+    debugEvidenceStore: store,
+    supportLogsDirectory: await directory(),
+    gsiToken: 'OBSERVER-DIAGNOSTIC-SECRET',
+  });
+  await app.ready();
+  const timeline = new ObserverHintTimeline();
+  const settings = { enabled: true, expectedDelaySeconds: 120, leadSeconds: 7 };
+  const source = { connected: true, fresh: true, generation: 1 };
+  const program = {
+    cursor: {
+      producerInstanceId: 'diagnostic-fixture',
+      liveSessionId: null,
+      runtimeSeq: 1,
+      programSourceGeneration: 1,
+      programReceiveSequence: 1,
+      mapEpoch: 1,
+    },
+    status: {
+      telemetry: 'fresh' as const,
+      context: 'fresh' as const,
+      identity: 'matched' as const,
+    },
+    match: null,
+    map: { name: 'de_mirage' },
+    clock: { phase: 'live' as const },
+    coverage: { allPlayers: 'present' as const },
+    players: Array.from({ length: 10 }, (_, i) => ({
+      sourcePlayerId: `7656119999999999${i}`,
+      displayName: `PRIVATE-OBSERVER-NAME-${i}`,
+      observerSlot: i,
+      lineupEvidence: 'current' as const,
+      lifeState: 'alive' as const,
+    })),
+  };
+  const event = {
+    kind: 'player-death' as const,
+    cursor: {
+      kind: 'cs2-cstv' as const,
+      role: 'lookahead' as const,
+      generation: 1,
+      sequence: 1,
+      tick: 64,
+      ticksPerSecond: 64,
+      observedAt: '2026-10-25T00:00:01Z',
+      observedMonotonicMs: 1000,
+      mapName: 'de_mirage',
+    },
+    victim: { sourceUserId: 7, sourcePlayerId: program.players[7]!.sourcePlayerId },
+    attacker: { sourceUserId: 3, sourcePlayerId: program.players[3]!.sourcePlayerId },
+    weapon: 'ak47',
+    assistedFlash: false,
+    headshot: false,
+    penetratedObjects: 0,
+    noScope: false,
+    throughSmoke: false,
+    attackerBlind: false,
+    attackerInAir: false,
+    distance: 1,
+    damageHealth: 100,
+    damageArmor: 0,
+    hitgroup: 1,
+  };
+  const exported = async () => {
+    store.recordObserverDiagnostics(timeline.getDiagnostics());
+    const result = await app.inject(request);
+    expect(result.statusCode).toBe(200);
+    expect(result.body).not.toMatch(
+      /OBSERVER-DIAGNOSTIC-SECRET|PRIVATE-OBSERVER-NAME|7656119999999999/,
+    );
+    expect(
+      unpack(result.json<FullArchive>(), 'session.ndjson').some(
+        (entry) => entry.stage === 'observer_assist_state',
+      ),
+    ).toBe(true);
+    return result.json<{
+      snapshot: { runtime: { observerAssist: ReturnType<typeof timeline.getDiagnostics> } };
+    }>().snapshot.runtime.observerAssist;
+  };
+  try {
+    timeline.project(program, settings, 0, source);
+    expect(await exported()).toMatchObject({
+      eventCounts: {},
+      acceptedDeaths: 0,
+      anchors: 0,
+      pending: 0,
+    });
+    timeline.consume({
+      kind: 'weapon-fire',
+      cursor: { ...event.cursor, sequence: 0 },
+      player: event.attacker,
+      weapon: 'ak47',
+      silenced: false,
+    });
+    expect(await exported()).toMatchObject({
+      eventCounts: { 'weapon-fire': 1 },
+      acceptedDeaths: 0,
+      pending: 0,
+    });
+    timeline.consume({ ...event, attacker: { sourceUserId: 3 } });
+    timeline.project(program, settings, 1000, source);
+    expect(await exported()).toMatchObject({
+      eventCounts: { 'player-death': 1 },
+      discarded: { 'missing-identity': 1 },
+      pending: 0,
+    });
+    timeline.consume({ ...event, cursor: { ...event.cursor, sequence: 2 } });
+    timeline.project(program, settings, 2000, source);
+    expect(await exported()).toMatchObject({
+      acceptedDeaths: 1,
+      pending: 1,
+      anchors: 0,
+      nextDueMonotonicMs: 121000,
+      nextWindowInMs: 112000,
+    });
+    timeline.project(program, settings, 3000, { ...source, fresh: false });
+    expect(await exported()).toMatchObject({
+      blocked: 'source-stale',
+      pending: 0,
+      lastReset: { reason: 'source-stale' },
+    });
+  } finally {
+    await app.close();
+  }
+});

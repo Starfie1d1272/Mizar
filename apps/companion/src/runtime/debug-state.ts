@@ -1,3 +1,4 @@
+import type { ObserverHintTimeline } from '@mizar/core/projection';
 import {
   getProgramSourceFreshness,
   type RuntimeContinuityPolicy,
@@ -42,6 +43,7 @@ export interface DebugRuntimeClock {
 }
 
 export interface DebugRuntimeResponse {
+  readonly observerAssist?: ReturnType<ObserverHintTimeline['getDiagnostics']> | null;
   readonly producerInstanceId: string | null;
   readonly sourceGeneration: number | null;
   readonly freshness: 'awaiting' | 'fresh' | 'stale';
@@ -227,6 +229,10 @@ function redactRuntimeDiagnostics(
 }
 
 export class DebugEvidenceStore {
+  private observerAssist: ReturnType<ObserverHintTimeline['getDiagnostics']> | null = null;
+  recordObserverDiagnostics(value: ReturnType<ObserverHintTimeline['getDiagnostics']>) {
+    this.observerAssist = value;
+  }
   private currentRaw: AcceptedRawEvidence | undefined;
   private currentObservation: TelemetryObservation | undefined;
   private currentRuntime: RuntimeState | undefined;
@@ -276,6 +282,7 @@ export class DebugEvidenceStore {
   /** Support export never serializes raw telemetry, identities or the full RuntimeState. */
   getSupportSummary(nowMonotonicMs: number) {
     return {
+      observerAssist: this.observerAssist,
       freshness:
         this.currentRuntime === undefined
           ? 'awaiting'
@@ -305,6 +312,7 @@ export class DebugEvidenceStore {
           'radar-wire-validation-failed',
           'operator-wire-validation-failed',
           'assist-wire-validation-failed',
+          'observer-assist-diagnostic-sink-failed',
         ].includes(code)
           ? code
           : 'other_runtime_diagnostic',
@@ -365,6 +373,7 @@ export class DebugEvidenceStore {
           );
 
     return {
+      observerAssist: this.observerAssist,
       producerInstanceId: runtime?.producerInstanceId ?? null,
       sourceGeneration: runtime?.programSource.generation ?? null,
       freshness,
