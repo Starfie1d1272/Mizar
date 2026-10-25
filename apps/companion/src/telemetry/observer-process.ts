@@ -24,81 +24,157 @@ export interface ObserverProcessOptions<R extends GameEventSourceRole> {
   readonly endpoint: string;
   readonly password: string;
   readonly seconds?: number;
+  readonly onAttempt?: (evidence: ObserverAttemptEvidence) => void;
   readonly launcher?: string;
   readonly job?: string;
+}
+
+export interface ObserverAttemptEvidence {
+  readonly attemptId: string;
+  readonly attemptCount: number;
+  readonly stage: string;
+  readonly code: number | null;
+  readonly signal: string | null;
+  readonly spawnCode?: string | undefined;
+  readonly errnoCode?: string | undefined;
+  readonly ready: boolean;
+  readonly startupTimedOut: boolean;
+  readonly cancelled: boolean;
+  readonly stdout: { status: 'ended' | 'cancelled' | 'failed'; parsedRecords: number };
+  readonly report: 'received' | 'missing' | 'invalid' | 'over-budget';
+  readonly reason?: string | undefined;
+  readonly outcome?: 'failed' | 'incomplete' | 'closed' | undefined;
+  readonly phase?: string | undefined;
+  readonly nativeBootCode?: number | undefined;
+  readonly steamInitResult?: number | undefined;
+  readonly remoteEndReason?: number | undefined;
+  readonly drainCompleted?: boolean | undefined;
+  readonly cleanupCompleted?: boolean | undefined;
+  readonly finalizationFailures: readonly string[];
 }
 
 /** Keep stable terminal evidence, never arbitrary child text or configuration. */
 function terminalEvidence(bytes: Buffer, overflow: boolean) {
   if (overflow) return { report: 'over-budget' as const };
-  try {
-    const value: unknown = JSON.parse(bytes.toString('utf8').trim().split(/\r?\n/).at(-1) ?? '');
-    if (typeof value !== 'object' || value === null || Array.isArray(value))
-      return { report: 'unavailable' as const };
-    const row = value as Record<string, unknown>;
-    if (
-      !(
-        row.online_success === 'INCONCLUSIVE' ||
-        (row.schema === 'cs2-observer-report/1' &&
+  const text = bytes.toString('utf8').trim();
+  if (!text) return { report: 'missing' as const };
+  const preReport = [
+    'output-directory-unavailable',
+    'configuration-boundary',
+    'node-runtime-probe-invalid',
+    'node-runtime-version-invalid',
+    'node-runtime-requires-24-or-newer',
+    'node-runtime-capabilities-missing',
+    'node-runtime-not-found',
+    'node-runtime-probe-failed',
+  ];
+  const token = text
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^ValueError: /, ''))
+    .find((line) => preReport.includes(line));
+  const absentReport = () =>
+    token ? { report: 'missing' as const, reason: token } : { report: 'invalid' as const };
+  for (const line of text.split(/\r?\n/).reverse()) {
+    try {
+      const value: unknown = JSON.parse(line);
+      if (typeof value !== 'object' || value === null || Array.isArray(value)) continue;
+      const row = value as Record<string, unknown>;
+      if (
+        !(
+          row.schema === 'cs2-observer-report/1' &&
           typeof row.reachedFull === 'boolean' &&
           typeof row.drainCompleted === 'boolean' &&
-          typeof row.cleanupCompleted === 'boolean')
-      ) ||
-      !['failed', 'incomplete', 'closed'].includes(String(row.outcome))
-    )
-      return { report: 'unavailable' as const };
-    const reasons = [
-      'owner-stopped',
-      'duration-limit-incomplete',
-      'native-start-failed',
-      'operation-failed-details-omitted',
-      'interrupted',
-      'addon-initialization-required',
-      'new-string-table-callbacks-required',
-      'prespawn-initialization-required',
-      'initialization-timeout',
-      'phase-timeout',
-      'native-session-closed',
-      'source-hltv-stop',
-      'source-drain-timeout',
-      'source-drain-native-failed',
-      'output-backpressure',
-      'output-closed',
-    ];
-    const integer = (v: unknown) =>
-      typeof v === 'number' && Number.isSafeInteger(v) ? v : undefined;
-    return {
-      report: 'received' as const,
-      outcome: row.outcome as 'failed' | 'incomplete' | 'closed',
-      reason:
-        typeof row.reason === 'string' && reasons.includes(row.reason)
-          ? row.reason
-          : 'unclassified',
-      nativeBootCode: integer(row.native_boot_code),
-      steamInitResult: integer(row.steam_init_result),
-      remoteEndReason: integer(row.remote_end_reason),
-      drainCompleted: typeof row.drainCompleted === 'boolean' ? row.drainCompleted : undefined,
-      cleanupCompleted:
-        typeof row.cleanupCompleted === 'boolean' ? row.cleanupCompleted : undefined,
-      finalizationFailures: Array.isArray(row.finalization_failures)
-        ? row.finalization_failures.filter(
-            (v): v is string =>
-              typeof v === 'string' &&
-              [
-                'close-session',
-                'close-parser',
-                'close-events',
-                'close-samples',
-                'close-output',
-                'close-input',
-                'write-report',
-              ].includes(v),
+          typeof row.cleanupCompleted === 'boolean'
+        ) ||
+        !['failed', 'incomplete', 'closed'].includes(String(row.outcome))
+      )
+        continue;
+      const reasons = [
+        'owner-stopped',
+        'duration-limit-incomplete',
+        'native-start-failed',
+        'operation-failed-details-omitted',
+        'interrupted',
+        'addon-initialization-required',
+        'new-string-table-callbacks-required',
+        'prespawn-initialization-required',
+        'initialization-timeout',
+        'phase-timeout',
+        'native-session-closed',
+        'source-hltv-stop',
+        'source-drain-timeout',
+        'source-drain-native-failed',
+        'output-backpressure',
+        'output-closed',
+        'configuration-boundary',
+        'ordered-parser-exited',
+        'ordered-parser-not-running',
+        'ordered-parser-protocol-version',
+        'ordered-parser-identity',
+        'ordered-parser-creation-sequence',
+        'ordered-parser-checkpoint-order',
+        'ordered-parser-checkpoint-shape',
+        'ordered-parser-input-backpressure',
+        'spawn-before-parser-initialization',
+        'receipt-before-parser-checkpoint',
+      ];
+      const integer = (v: unknown) =>
+        typeof v === 'number' && Number.isSafeInteger(v) ? v : undefined;
+      return {
+        report: 'received' as const,
+        phase:
+          typeof row.phase === 'string' &&
+          [
+            'transport',
+            'challenge',
+            'ticket',
+            'connection',
+            'channel',
+            'draining',
+            'closed',
+            'blocked',
+          ].includes(row.phase)
+            ? row.phase
+            : undefined,
+        outcome: row.outcome as 'failed' | 'incomplete' | 'closed',
+        reason:
+          typeof row.reason === 'string' &&
+          /^(?:ordered-parser-error|ordered-parser-input-failed|ordered-parser-output-failed|ordered-parser-world-reinitialization): /.test(
+            row.reason,
           )
-        : [],
-    };
-  } catch {
-    return { report: 'unavailable' as const };
+            ? 'ordered-parser-error-details-omitted'
+            : typeof row.reason === 'string' && reasons.includes(row.reason)
+              ? row.reason
+              : 'unclassified',
+        nativeBootCode: integer(row.native_boot_code),
+        steamInitResult: integer(row.steam_init_result),
+        remoteEndReason: integer(row.remote_end_reason),
+        drainCompleted: typeof row.drainCompleted === 'boolean' ? row.drainCompleted : undefined,
+        cleanupCompleted:
+          typeof row.cleanupCompleted === 'boolean' ? row.cleanupCompleted : undefined,
+        finalizationFailures: Array.isArray(row.finalization_failures)
+          ? row.finalization_failures
+              .filter(
+                (v): v is string =>
+                  typeof v === 'string' &&
+                  [
+                    'close-session',
+                    'close-parser',
+                    'close-events',
+                    'close-samples',
+                    'close-output',
+                    'close-input',
+                    'write-report',
+                  ].includes(v),
+              )
+              .slice(0, 8)
+          : [],
+      };
+    } catch {
+      continue;
+    }
   }
+  return absentReport();
 }
 
 /** Explicit composition only. Importing this module never starts Steam or a process. */
@@ -204,6 +280,9 @@ function startObserverAttempt<R extends GameEventSourceRole>(
       stdio: ['pipe', 'pipe', 'pipe'],
     },
   );
+  const attemptId = randomUUID();
+  let spawnCode: string | undefined;
+  let exitSignal: string | null = null;
   let ready = false;
   let startupTimedOut = false;
   const startupTimer = setTimeout(() => {
@@ -221,11 +300,17 @@ function startObserverAttempt<R extends GameEventSourceRole>(
   let inputFailed = false;
   let stoppingRequested = false;
   const exit = new Promise<number | null>((resolve) => {
-    child.once('error', () => {
+    child.once('error', (error: NodeJS.ErrnoException) => {
+      spawnCode = ['ENOENT', 'EACCES', 'EPERM', 'ENOEXEC', 'ENOMEM', 'EAGAIN'].includes(
+        error.code ?? '',
+      )
+        ? error.code
+        : 'unclassified';
       inputFailed = true;
       child.stdout.destroy();
     });
-    child.once('close', (code) => {
+    child.once('close', (code, signal) => {
+      exitSignal = signal;
       exited = true;
       resolve(code);
     });
@@ -262,7 +347,54 @@ function startObserverAttempt<R extends GameEventSourceRole>(
   const closed = Promise.all([exit, reading]).then(([code, output]) => {
     unsubscribe();
     clearTimeout(startupTimer);
-    const terminal = terminalEvidence(stderr, stderrOverflow);
+    const report = terminalEvidence(stderr, stderrOverflow);
+    const reason = 'reason' in report ? report.reason : undefined;
+    const stage = spawnCode
+      ? 'spawn'
+      : reason === 'output-directory-unavailable'
+        ? 'output-directory'
+        : reason === 'configuration-boundary'
+          ? 'configuration'
+          : reason?.startsWith('node-runtime-')
+            ? 'node-probe'
+            : report.report === 'received' &&
+                (report.cleanupCompleted === false || report.finalizationFailures.length > 0)
+              ? 'cleanup'
+              : reason === 'native-start-failed'
+                ? 'native-boot'
+                : reason?.startsWith('ordered-parser-') ||
+                    reason?.includes('parser-initialization') ||
+                    reason === 'receipt-before-parser-checkpoint'
+                  ? ready
+                    ? 'parser-runtime'
+                    : 'parser-initialization'
+                  : output.status === 'failed'
+                    ? 'stdout-protocol'
+                    : startupTimedOut
+                      ? 'readiness-timeout'
+                      : stoppingRequested
+                        ? 'cancelled'
+                        : report.report === 'received' && report.phase
+                          ? report.phase
+                          : reason === 'operation-failed-details-omitted'
+                            ? 'component-initialization'
+                            : report.report === 'received'
+                              ? 'session'
+                              : 'eof';
+    const terminal: ObserverAttemptEvidence = {
+      ...report,
+      attemptId,
+      attemptCount: 1,
+      stage,
+      code,
+      signal: exitSignal,
+      ...(spawnCode ? { spawnCode } : {}),
+      ready,
+      startupTimedOut,
+      cancelled: stoppingRequested,
+      stdout: output,
+      finalizationFailures: report.report === 'received' ? report.finalizationFailures : [],
+    };
     stderr.fill(0);
     stderr = Buffer.alloc(0);
     return {
@@ -357,15 +489,25 @@ function startReconnectingObserverProcess<R extends GameEventSourceRole>(
   const manager = current.manager;
   let stopped = false;
   let attemptCount = 1;
+  const attempts: ObserverAttemptEvidence[] = [];
   let wake: (() => void) | undefined;
   const closed = (async () => {
     while (true) {
       const result = await current.closed;
+      const evidence = { ...result.terminal, attemptCount };
+      attempts.push(evidence);
+      if (attempts.length > 8) attempts.shift();
+      try {
+        options.onAttempt?.(evidence);
+      } catch {
+        console.error('observer_attempt_diagnostic_failed');
+      }
+      const summary = { ...result, terminal: evidence, attempts: [...attempts] };
       const cleanup = await current.stop();
       const cleanupFailed =
         !cleanup.exited ||
         (result.terminal.report === 'received' && result.terminal.finalizationFailures.length > 0);
-      if (stopped) return { ...result, attemptCount, cancelled: true, failed: cleanupFailed };
+      if (stopped) return { ...summary, attemptCount, cancelled: true, failed: cleanupFailed };
       const terminal = result.terminal;
       const retry =
         !cleanupFailed &&
@@ -378,7 +520,7 @@ function startReconnectingObserverProcess<R extends GameEventSourceRole>(
                 (terminal.remoteEndReason === 0 || terminal.remoteEndReason === 1000)))));
       if (!retry) {
         await manager.stop();
-        return { ...result, attemptCount, failed: result.failed || cleanupFailed };
+        return { ...summary, attemptCount, failed: result.failed || cleanupFailed };
       }
       await new Promise<void>((resolve) => {
         const timer = setTimeout(
@@ -391,10 +533,16 @@ function startReconnectingObserverProcess<R extends GameEventSourceRole>(
         };
       });
       wake = undefined;
-      if (stopped) return { ...result, attemptCount, cancelled: true, failed: cleanupFailed };
+      if (stopped) return { ...summary, attemptCount, cancelled: true, failed: cleanupFailed };
       attemptCount += 1;
       current = startObserverAttempt(
-        { ...options, outputDirectory: join(options.outputDirectory, `retry-${attemptCount}`) },
+        {
+          ...options,
+          outputDirectory: join(
+            dirname(options.outputDirectory),
+            `retry-${attemptCount}-${randomUUID()}`,
+          ),
+        },
         manager,
         true,
       );
@@ -419,5 +567,5 @@ function startReconnectingObserverProcess<R extends GameEventSourceRole>(
         throw new Error('Observer source did not stop cleanly');
     },
   };
-  return { manager, source, closed, stop };
+  return { manager, source, closed, stop, attempts: () => [...attempts] };
 }

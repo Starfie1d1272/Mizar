@@ -296,6 +296,23 @@ test('preflight reviews current ten-player evidence, actual auto state, disconne
       ),
     )
     .toBe(true);
+  // These browser checks verify dispatch of the native command; ACL enforcement is
+  // checked from real Tauri inputs separately and still requires Windows runtime evidence.
+  for (const action of ['稍后处理', '完成赛前核对']) {
+    await page.goto('/workspace/review?kind=preflight');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole('button', { name: action, exact: true })).toBeEnabled();
+    await dialog.getByRole('button', { name: action, exact: true }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          (window as typeof window & { reviewCommands: { command: string }[] }).reviewCommands.some(
+            (call) => call.command === 'close_review',
+          ),
+        ),
+      )
+      .toBe(true);
+  }
   let hideGameHud = true;
   await page.route('**/local/v1/observer-assist', (route) =>
     route.fulfill({

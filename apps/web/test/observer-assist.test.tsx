@@ -1,3 +1,7 @@
+import {
+  observerFailureReason,
+  type ObserverRuntimeView,
+} from '../src/preparation/observer-preparation';
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -290,4 +294,30 @@ it('shows an unborrowed-game stop rejection at the MulNX controls', async () => 
   });
   expect(mocks.native).toHaveBeenCalledExactlyOnceWith('mulnx_control', { action: 'stop' });
   expect(container.textContent).toContain('请先明确借用本场 CS2。');
+});
+
+it('gives specific repair guidance for known startup causes and diagnostic context for unknown failures', () => {
+  const view: ObserverRuntimeView = {
+    active: false,
+    failed: true,
+    pending: false,
+    error: null,
+    retryAvailable: true,
+    health: { state: 'failed' },
+  };
+  for (const [reason, text] of [
+    ['output-directory-unavailable', '数据目录是否可写'],
+    ['output-parent-unavailable', '数据目录是否可写'],
+    ['configuration-boundary', '未接受连接配置'],
+    ['node-runtime-probe-failed', '运行环境检查失败'],
+    ['native-start-failed', '游戏与组件状态'],
+  ] as const)
+    expect(observerFailureReason({ ...view, terminal: { reason } })).toContain(text);
+  const unknown = observerFailureReason({
+    ...view,
+    terminal: { reason: 'unclassified', stage: 'eof', attemptId: 'diagnostic-123' },
+  });
+  expect(unknown).toContain('eof');
+  expect(unknown).toContain('diagnostic-123');
+  expect(unknown).not.toContain('核对本场连接');
 });
