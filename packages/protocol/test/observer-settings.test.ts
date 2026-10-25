@@ -5,6 +5,7 @@ import {
   DEFAULT_OBSERVER_SETTINGS,
   observerSettingsSchema,
   parseObserverConnection,
+  formatObserverConnection,
 } from '../src/assist.js';
 it('starts with the private feature off and editable 120/7 timing', () => {
   expect(DEFAULT_OBSERVER_SETTINGS).toMatchObject({
@@ -61,4 +62,43 @@ it('keeps the typed snapshot input consistent with assist schema 2', () => {
     payload: { availability: 'unavailable' },
   };
   expect(assistSnapshotSchema.parse({ ...input, channelSeq: 1 }).schemaVersion).toBe(2);
+});
+
+it('accepts restricted commands in either order and round-trips the password-first formatter', () => {
+  const expected = {
+    earlyEndpoint: '127.0.0.1:27025',
+    programEndpoint: '127.0.0.1:27026',
+    password: ' a b ',
+  };
+  for (const input of [
+    ' connect "127.0.0.1:27026" ; PASSWORD " a b " ; ',
+    ' PASSWORD " a b " ; CoNnEcT 127.0.0.1:27025;',
+  ])
+    expect(parseObserverConnection(input)).toEqual(expected);
+  expect(parseObserverConnection(formatObserverConnection(expected))).toEqual(expected);
+  const custom = {
+    ...expected,
+    earlyEndpoint: '127.0.0.2:28000',
+    programEndpoint: '127.0.0.3:29000',
+  };
+  expect(
+    parseObserverConnection(
+      formatObserverConnection(custom),
+      custom.programEndpoint,
+      custom.earlyEndpoint,
+    ),
+  ).toEqual(custom);
+  for (const input of [
+    'password a; password b; connect 127.0.0.1:27025',
+    'connect 127.0.0.1:27025; connect 127.0.0.1:27026',
+    'connect 127.0.0.1:0',
+    'connect 127.0.0.1:65536',
+    'password "bad;quit";connect 127.0.0.1:27025',
+    'password "bad\\value";connect 127.0.0.1:27025',
+    'password 密码;connect 127.0.0.1:27025',
+    'password a;quit;connect 127.0.0.1:27025',
+    'connect 127.0.0.1:27025;;',
+    'connect 127.0.0.1:27025\nquit',
+  ])
+    expect(() => parseObserverConnection(input)).toThrow();
 });

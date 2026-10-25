@@ -1,16 +1,47 @@
-import { readFile, lstat } from 'node:fs/promises';
+import { readFile, lstat, mkdir, access } from 'node:fs/promises';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
+import { constants } from 'node:fs';
+import { safePath } from '../resource-store/files.js';
 import { performance } from 'node:perf_hooks';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { createCstvSourceManager, type CstvSourceManager } from './cstv-source-manager.js';
-import { startObserverProcess, type ObserverProcessOptions } from './observer-process.js';
+import {
+  startObserverProcess,
+  type ObserverProcessOptions,
+  type ObserverAttemptEvidence,
+} from './observer-process.js';
 import type { ObserverSettingsStore } from './observer-settings.js';
 import { sendObserverGameCommand, observerConnectCommand } from './observer-game-control.js';
 
 export const OBSERVER_VERSION = '1.0.0';
 const SOURCE_SHA = '4b07fd0ddfb775d8fa1548bddfd98dc78c7fce93';
+/** Create only controlled ancestors; the pinned driver owns the unique final directory. */
+export async function prepareObserverOutputParent(state: string): Promise<string> {
+  await safePath(state);
+  let parent = state;
+  for (const name of ['data', 'observer']) {
+    await safePath(parent);
+    parent = join(parent, name);
+    await mkdir(parent, { mode: 0o700 }).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'EEXIST') throw error;
+    });
+    await safePath(parent);
+  }
+  await access(parent, constants.W_OK | constants.X_OK);
+  return parent;
+}
+class ObserverPreparationError extends Error {
+  constructor(
+    readonly stage: string,
+    readonly reason: string,
+    readonly errnoCode?: string,
+  ) {
+    super(reason);
+  }
+}
+type ObserverHistory = ObserverAttemptEvidence & { sessionId: string };
 type Owner = ReturnType<typeof startObserverProcess<'lookahead'>>;
 
 /** The stable source facade keeps existing private consumers subscribed across attempts. */
@@ -27,6 +58,27 @@ export class WorkspaceObserver {
   private watchdog: ReturnType<typeof setInterval>;
   private closing = false;
   private intent = 0;
+  private readonly history: ObserverHistory[] = [];
+  private sessionId: string | undefined;
+  private evidenceListeners = new Set<(evidence: ObserverHistory) => void>();
+  subscribeEvidence(listener: (evidence: ObserverHistory) => void) {
+    this.evidenceListeners.add(listener);
+    return () => {
+      this.evidenceListeners.delete(listener);
+    };
+  }
+  private retain(evidence: ObserverAttemptEvidence, sessionId: string) {
+    const entry = { ...evidence, sessionId };
+    this.history.push(entry);
+    if (this.history.length > 8) this.history.shift();
+    this.evidenceListeners.forEach((listener) => {
+      try {
+        listener(entry);
+      } catch {
+        console.error('observer_workspace_diagnostic_failed');
+      }
+    });
+  }
   private terminal: Awaited<Owner['closed']>['terminal'] | undefined;
   private failed = false;
   private launched = false;
@@ -84,6 +136,8 @@ export class WorkspaceObserver {
   view() {
     return {
       version: OBSERVER_VERSION,
+      sessionId: this.sessionId,
+      history: [...this.history],
       active: this.owner !== undefined,
       health: this.health(),
       failed: this.failed,
@@ -111,15 +165,53 @@ export class WorkspaceObserver {
       check();
       await this.stopCurrent();
       check();
-      const options = await this.launch(executable);
-      check();
-      this.generationBase += this.current.getHealth().generation + 1;
-      this.owner = startObserverProcess({
-        ...options,
-        ...(job ? { job } : {}),
-        endpoint,
-        password,
-      });
+      this.terminal = undefined;
+      this.failed = false;
+      const sessionId = (this.sessionId = randomUUID());
+      let options: Awaited<ReturnType<typeof this.launch>>;
+      try {
+        options = await this.launch(executable);
+        check();
+        this.generationBase += this.current.getHealth().generation + 1;
+        this.owner = startObserverProcess({
+          ...options,
+          ...(job ? { job } : {}),
+          endpoint,
+          password,
+          onAttempt: (evidence) => this.retain(evidence, sessionId),
+        });
+      } catch (error) {
+        const cancelled = this.closing || intent !== this.intent || !current();
+        this.terminal = {
+          attemptId: randomUUID(),
+          attemptCount: 0,
+          stage: cancelled
+            ? 'cancelled'
+            : error instanceof ObserverPreparationError
+              ? error.stage
+              : 'preparation',
+          reason: cancelled
+            ? 'configuration-changed'
+            : error instanceof ObserverPreparationError
+              ? error.reason
+              : 'preparation-failed',
+          ...(error instanceof ObserverPreparationError && error.errnoCode
+            ? { errnoCode: error.errnoCode }
+            : {}),
+          report: 'missing',
+          code: null,
+          signal: null,
+          ready: false,
+          startupTimedOut: false,
+          cancelled,
+          stdout: { status: 'ended', parsedRecords: 0 },
+          finalizationFailures: [],
+        };
+        this.failed = !cancelled;
+        this.retain(this.terminal, sessionId);
+        this.listeners.forEach((f) => f());
+        throw error;
+      }
       this.terminal = undefined;
       this.failed = false;
       this.launched = true;
@@ -187,63 +279,89 @@ export function installedWorkspaceObserver(
   initialSource?: CstvSourceManager<'lookahead'>,
 ) {
   return new WorkspaceObserver(async (executable) => {
-    const component = join(root, 'resources/observer');
-    const manifest = z
-      .object({
-        componentVersion: z.string(),
-        sourceSha: z.string(),
-        distribution: z.string(),
-        entrypoints: z.strictObject({
-          python: z.literal('runtime/python/python.exe'),
-          driver: z.literal('client/driver.py'),
-          native: z.literal('client/cs2_observer.dll'),
-          worker: z.literal('client/parser_worker.mjs'),
-        }),
-        filesSha256: z.record(z.string(), z.string().regex(/^[a-f0-9]{64}$/)),
-      })
-      .parse(JSON.parse(await readFile(join(component, 'manifest.json'), 'utf8')) as unknown);
-    if (
-      manifest.componentVersion !== OBSERVER_VERSION ||
-      manifest.sourceSha !== SOURCE_SHA ||
-      manifest.distribution !== 'external-node'
-    )
-      throw new Error('observer_component_version');
-    for (const entry of Object.values(manifest.entrypoints)) {
+    let stage = 'component-verification';
+    try {
+      const component = join(root, 'resources/observer');
+      const manifest = z
+        .object({
+          componentVersion: z.string(),
+          sourceSha: z.string(),
+          distribution: z.string(),
+          entrypoints: z.strictObject({
+            python: z.literal('runtime/python/python.exe'),
+            driver: z.literal('client/driver.py'),
+            native: z.literal('client/cs2_observer.dll'),
+            worker: z.literal('client/parser_worker.mjs'),
+          }),
+          filesSha256: z.record(z.string(), z.string().regex(/^[a-f0-9]{64}$/)),
+        })
+        .parse(JSON.parse(await readFile(join(component, 'manifest.json'), 'utf8')) as unknown);
       if (
-        ![
-          'runtime/python/python.exe',
-          'client/driver.py',
-          'client/cs2_observer.dll',
-          'client/parser_worker.mjs',
-        ].includes(entry)
+        manifest.componentVersion !== OBSERVER_VERSION ||
+        manifest.sourceSha !== SOURCE_SHA ||
+        manifest.distribution !== 'external-node'
       )
-        throw new Error('observer_component_entrypoint');
-      const path = join(component, entry);
-      if (
-        (await lstat(path)).isSymbolicLink() ||
-        createHash('sha256')
-          .update(await readFile(path))
-          .digest('hex') !== manifest.filesSha256[entry]
+        throw new Error('observer_component_version');
+      for (const entry of Object.values(manifest.entrypoints)) {
+        if (
+          ![
+            'runtime/python/python.exe',
+            'client/driver.py',
+            'client/cs2_observer.dll',
+            'client/parser_worker.mjs',
+          ].includes(entry)
+        )
+          throw new Error('observer_component_entrypoint');
+        const path = join(component, entry);
+        if (
+          (await lstat(path)).isSymbolicLink() ||
+          createHash('sha256')
+            .update(await readFile(path))
+            .digest('hex') !== manifest.filesSha256[entry]
+        )
+          throw new Error('observer_component_hash');
+      }
+      stage = 'host-version';
+      const game = resolve(dirname(executable), '../..');
+      const info = await readFile(join(game, 'csgo/steam.inf'), 'utf8');
+      const patch = /^PatchVersion=(\d+(?:\.\d+){1,4})\s*$/m.exec(info)?.[1];
+      if (!patch) throw new Error('observer_host_version');
+      stage = 'output-parent';
+      const outputParent = await prepareObserverOutputParent(state);
+      return {
+        role: 'lookahead',
+        python: join(component, 'runtime/python/python.exe'),
+        driver: join(component, 'client/driver.py'),
+        native: join(component, 'client/cs2_observer.dll'),
+        parserWorker: join(component, 'client/parser_worker.mjs'),
+        node: process.execPath,
+        steamApi: join(dirname(executable), 'steam_api64.dll'),
+        hostVersion: Number(patch.replaceAll('.', '')),
+        outputDirectory: join(outputParent, randomUUID()),
+        launcher,
+        job,
+      };
+    } catch (error) {
+      const nativeCode = (error as NodeJS.ErrnoException)?.code;
+      const code = ['ENOENT', 'EACCES', 'EPERM', 'ENOTDIR', 'EROFS', 'ELOOP', 'ENOSPC'].includes(
+        nativeCode ?? '',
       )
-        throw new Error('observer_component_hash');
+        ? nativeCode
+        : undefined;
+      const reason =
+        error instanceof Error &&
+        [
+          'observer_component_version',
+          'observer_component_entrypoint',
+          'observer_component_hash',
+          'observer_host_version',
+        ].includes(error.message)
+          ? error.message
+          : stage === 'output-parent'
+            ? 'output-parent-unavailable'
+            : 'preparation-failed';
+      throw new ObserverPreparationError(stage, reason, code);
     }
-    const game = resolve(dirname(executable), '../..');
-    const info = await readFile(join(game, 'csgo/steam.inf'), 'utf8');
-    const patch = /^PatchVersion=(\d+(?:\.\d+){1,4})\s*$/m.exec(info)?.[1];
-    if (!patch) throw new Error('observer_host_version');
-    return {
-      role: 'lookahead',
-      python: join(component, 'runtime/python/python.exe'),
-      driver: join(component, 'client/driver.py'),
-      native: join(component, 'client/cs2_observer.dll'),
-      parserWorker: join(component, 'client/parser_worker.mjs'),
-      node: process.execPath,
-      steamApi: join(dirname(executable), 'steam_api64.dll'),
-      hostVersion: Number(patch.replaceAll('.', '')),
-      outputDirectory: join(state, 'data/observer', randomUUID()),
-      launcher,
-      job,
-    };
   }, initialSource);
 }
 

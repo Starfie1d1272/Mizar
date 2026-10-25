@@ -1,3 +1,6 @@
+import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import { WorkspaceObserver } from '../src/telemetry/observer-workspace.js';
 import { DiagnosticDelivery } from '../src/support/delivery.js';
 import { fullLogArchive } from '../src/support/archive.js';
 import { execFileSync } from 'node:child_process';
@@ -1897,6 +1900,136 @@ it('retains an in-range Host failure in a mixed copied console group after raw H
     expect(timeline).toContain('original mixed Host restore denied');
     expect(timeline).toContain('2026-10-17T10:00:30.000Z');
     expect(timeline).toContain('workspace_exit');
+  } finally {
+    await app.close();
+  }
+});
+
+it('exports observer attempt history after restart and journal rotation without child secrets', async () => {
+  const dir = await directory();
+  const driver = fileURLToPath(new URL('./fixtures/observer-child.mjs', import.meta.url));
+  const observer = new WorkspaceObserver(() =>
+    Promise.resolve({
+      role: 'lookahead',
+      python: process.execPath,
+      driver,
+      native: driver,
+      steamApi: driver,
+      node: process.execPath,
+      parserWorker: driver,
+      hostVersion: 14192,
+      outputDirectory: join(dir, randomUUID()),
+    }),
+  );
+  const previous = { ...SESSION_LIMITS };
+  Object.assign(SESSION_LIMITS, { segmentBytes: 4096, segments: 8 });
+  const app = buildApp({ supportLogsDirectory: dir, workspaceObserver: observer });
+  try {
+    await app.ready();
+    await observer.start(driver, '127.0.0.13:27020', 'OBSERVER-PRIVATE-SECRET');
+    await expect.poll(() => observer.view().active).toBe(false);
+    const first = observer.view().terminal!;
+    expect(first.stage).toBe('node-probe');
+    const firstSession = observer.view().sessionId;
+    await observer.start(driver, '127.0.0.1:27020', 'OBSERVER-PRIVATE-SECRET');
+    await expect.poll(() => observer.view().health.state).toBe('live');
+    expect(observer.view().failed).toBe(false);
+    expect(observer.view().terminal).toBeUndefined();
+    expect(observer.view().sessionId).not.toBe(firstSession);
+    // Rotate the actual product journal through its normal logger bridge.
+    for (let i = 0; i < 16; i++)
+      app.log.info({ padding: 'x'.repeat(3000) }, 'observer-rotation-fixture');
+    await observer.stop();
+    const response = await app.inject(request);
+    expect(response.statusCode).toBe(200);
+    const bundle = response.json<
+      FullArchive & { snapshot: { observer: ReturnType<WorkspaceObserver['view']> } }
+    >();
+    expect(bundle.snapshot.observer.history).toContainEqual(
+      expect.objectContaining({
+        attemptId: first.attemptId,
+        sessionId: firstSession,
+        stage: 'node-probe',
+        report: 'missing',
+      }),
+    );
+    expect(
+      unpack(bundle, 'session').some(
+        (row) =>
+          row.stage === 'observer_attempt_terminal' &&
+          JSON.stringify(row).includes(observer.view().terminal!.attemptId),
+      ),
+    ).toBe(true);
+    expect(
+      (await filesystem.readdir(dir)).some((name) => /^session\.ndjson\.\d+$/.test(name)),
+    ).toBe(true);
+    expect(JSON.stringify(bundle)).not.toContain('OBSERVER-PRIVATE-SECRET');
+    expect(JSON.stringify(unpack(bundle, 'session'))).not.toContain('OBSERVER-PRIVATE-SECRET');
+  } finally {
+    await app.close();
+    Object.assign(SESSION_LIMITS, previous);
+  }
+});
+
+it('exports actionable stages for each bounded observer failure category without test credentials', async () => {
+  const dir = await directory();
+  const driver = fileURLToPath(new URL('./fixtures/observer-child.mjs', import.meta.url));
+  let executable = process.execPath;
+  const observer = new WorkspaceObserver(() =>
+    Promise.resolve({
+      role: 'lookahead',
+      python: executable,
+      driver,
+      native: driver,
+      steamApi: driver,
+      node: process.execPath,
+      parserWorker: driver,
+      hostVersion: 14192,
+      outputDirectory: join(dir, randomUUID()),
+    }),
+  );
+  const app = buildApp({ supportLogsDirectory: dir, workspaceObserver: observer });
+  try {
+    await app.ready();
+    for (const [endpoint, stage, report] of [
+      ['127.0.0.2:27020', 'cleanup', 'received'],
+      ['127.0.0.3:27020', 'stdout-protocol', 'missing'],
+      ['127.0.0.4:27020', 'eof', 'over-budget'],
+      ['127.0.0.11:27020', 'output-directory', 'missing'],
+      ['127.0.0.12:27020', 'configuration', 'missing'],
+      ['127.0.0.13:27020', 'node-probe', 'missing'],
+      ['127.0.0.14:27020', 'eof', 'missing'],
+      ['127.0.0.15:27020', 'eof', 'invalid'],
+      ['127.0.0.16:27020', 'eof', 'invalid'],
+      ['127.0.0.17:27020', 'session', 'received'],
+      ['127.0.0.19:27020', 'native-boot', 'received'],
+      ['127.0.0.24:27020', 'native-boot', 'received'],
+      ['127.0.0.18:27020', 'parser-initialization', 'received'],
+    ] as const) {
+      await observer.start(driver, endpoint, 'OBSERVER-EXPORT-SECRET');
+      await expect.poll(() => observer.view().active).toBe(false);
+      const response = await app.inject(request);
+      expect(response.statusCode).toBe(200);
+      const bundle = response.json<
+        FullArchive & { snapshot: { observer: ReturnType<WorkspaceObserver['view']> } }
+      >();
+      expect(bundle.snapshot.observer.terminal).toMatchObject({ stage, report, ready: false });
+      const timeline = JSON.stringify(unpack(bundle, 'session'));
+      expect(timeline).toContain(bundle.snapshot.observer.terminal!.attemptId);
+      expect(JSON.stringify(bundle)).not.toContain('OBSERVER-EXPORT-SECRET');
+      expect(timeline).not.toContain('OBSERVER-EXPORT-SECRET');
+    }
+    executable = join(dir, 'private-absent-executable');
+    await observer.start(driver, '127.0.0.1:27020', 'OBSERVER-EXPORT-SECRET');
+    await expect.poll(() => observer.view().active).toBe(false);
+    const exported = (await app.inject(request)).json<{
+      snapshot: { observer: ReturnType<WorkspaceObserver['view']> };
+    }>();
+    expect(exported.snapshot.observer.terminal).toMatchObject({
+      stage: 'spawn',
+      spawnCode: 'ENOENT',
+    });
+    expect(JSON.stringify(exported.snapshot.observer)).not.toContain(executable);
   } finally {
     await app.close();
   }
