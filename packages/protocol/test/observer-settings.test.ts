@@ -8,11 +8,11 @@ import {
   parseObserverConnection,
   formatObserverConnection,
 } from '../src/assist.js';
-it('starts with the private feature off and editable 120/7 timing', () => {
+it('starts with the private feature off and editable 120/5 timing', () => {
   expect(DEFAULT_OBSERVER_SETTINGS).toMatchObject({
     enabled: false,
     expectedDelaySeconds: 120,
-    leadSeconds: 7,
+    leadSeconds: 5,
   });
   expect(
     observerSettingsSchema.safeParse({

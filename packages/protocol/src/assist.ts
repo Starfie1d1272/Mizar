@@ -49,7 +49,7 @@ export type ObserverSettings = z.infer<typeof observerSettingsSchema>;
 export const DEFAULT_OBSERVER_SETTINGS: ObserverSettings = {
   enabled: false,
   expectedDelaySeconds: 120,
-  leadSeconds: 7,
+  leadSeconds: 5,
 };
 
 export const gameAutomationSettingsSchema = z.strictObject({

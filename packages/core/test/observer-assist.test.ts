@@ -371,3 +371,14 @@ it('reports counts and explicit blocks without identity or raw event payloads', 
     Object.values(timeline.getDiagnostics().eventCounts).reduce((sum, count) => sum + count, 0),
   ).toBe(64);
 });
+
+it('opens the 120/5 estimate 115 seconds after receiving a kill', () => {
+  const timeline = new ObserverHintTimeline();
+  const fiveSeconds = { ...settings, leadSeconds: 5 };
+  timeline.project(program(1), fiveSeconds, 0, source);
+  timeline.consume(kill(1, 7, 1000));
+  expect(timeline.project(program(1), fiveSeconds, 115999, source).observer?.hints).toEqual([]);
+  expect(timeline.project(program(1), fiveSeconds, 116000, source).observer?.hints).toMatchObject([
+    { remainingSeconds: 5 },
+  ]);
+});

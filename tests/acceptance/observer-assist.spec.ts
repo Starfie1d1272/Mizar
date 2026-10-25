@@ -185,7 +185,7 @@ test('observer settings show saved timing and support keyboard operation', async
   );
   await page.goto('/settings?tab=observer');
   await expect(page.getByRole('spinbutton', { name: '两路预期延迟差（秒）' })).toHaveValue('120');
-  await expect(page.getByRole('spinbutton', { name: '提示提前时间（秒）' })).toHaveValue('7');
+  await expect(page.getByRole('spinbutton', { name: '提示提前时间（秒）' })).toHaveValue('5');
   await expect(page.getByRole('spinbutton')).toHaveCount(2);
   const toggle = page.getByRole('checkbox', { name: '启用私有观察辅助', exact: true });
   await toggle.focus();

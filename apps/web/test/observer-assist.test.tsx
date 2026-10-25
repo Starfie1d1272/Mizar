@@ -89,8 +89,8 @@ it('offers the two timing controls and saves observer preferences independently 
   act(() => root.render(<ObserverSettingsPanel />));
   expect(
     [...container.querySelectorAll<HTMLInputElement>('input[type=number]')].map((e) => e.value),
-  ).toEqual(['120', '7']);
-  expect(container.textContent).toContain('113');
+  ).toEqual(['120', '5']);
+  expect(container.textContent).toContain('115');
   await act(async () => {
     [...container.querySelectorAll('button')]
       .find((e) => e.textContent?.includes('保存观察辅助'))!

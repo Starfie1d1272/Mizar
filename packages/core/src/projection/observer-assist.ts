@@ -89,7 +89,7 @@ export class ObserverHintTimeline {
       source: { ...this.sourceHealth },
       programSource: { ...this.programSource },
       configuration: this.configuration === null ? null : { ...this.configuration },
-      lastReceivedMonotonicMs: this.lastReceivedMs,
+      lastEventReceivedMonotonicMs: this.lastReceivedMs,
       eventCounts: { ...this.eventCounts },
       acceptedDeaths: this.acceptedDeaths,
       discarded: { ...this.discarded },

@@ -5,7 +5,10 @@ import type { BroadcastManifest } from '@mizar/rivalhub';
 import { describe, expect, it, vi } from 'vitest';
 import { BombDamageResources } from '../src/projections/bomb-damage-resources.js';
 
-import { createProjectionCoordinator } from '../src/projections/projection-coordinator.js';
+import {
+  createProjectionCoordinator,
+  type ProjectionCoordinatorOptions,
+} from '../src/projections/projection-coordinator.js';
 import { createProgramRuntime } from '../src/runtime/program-runtime.js';
 import {
   createCstvSourceManagers,
@@ -273,7 +276,7 @@ it('keeps calibrated anchors and buffered kills when the lead window is reprojec
   const runtime = createProgramRuntime('lead-calibration-regression');
   let now = 0,
     sequence = 0;
-  const diagnostics = vi.fn();
+  const diagnostics = vi.fn<NonNullable<ProjectionCoordinatorOptions['onObserverDiagnostics']>>();
   const settings = { enabled: true, expectedDelaySeconds: 120, leadSeconds: 7 };
   const coordinator = createProjectionCoordinator({
     programRuntime: runtime,
@@ -495,7 +498,7 @@ it('uses actual observer cursor reception without kills and detects an open but 
   const initial = matchedObservation(await readManifest());
   let now = 0,
     sequence = 0;
-  const diagnostics = vi.fn();
+  const diagnostics = vi.fn<NonNullable<ProjectionCoordinatorOptions['onObserverDiagnostics']>>();
   const identity = {
     source: 'ahead:cursor-freshness',
     role: 'ahead' as const,
