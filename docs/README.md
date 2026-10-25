@@ -6,6 +6,7 @@
 | --- | --- |
 | 了解产品与正式版本 | [产品介绍](guide/product.md) · [GitHub Releases](https://github.com/Starfie1d1272/Mizar/releases) |
 | 安装与制作第一场比赛 | [快速开始与操作手册](guide/quick-start.md) |
+| 制作音乐和运镜内容 | [音乐包制作](reference/music.md#内容制作与交付) · [运镜预设制作](reference/orchestration.md#内容制作与交付) |
 | 查看画面和 HUD 风格 | [产品图集](screenshots/README.md) |
 | 了解适用范围 | [数据源能力](guide/data-source-capabilities.md) |
 | 了解长期方向或反馈问题 | [产品路线图](roadmap.md) · [GitHub Issues](https://github.com/Starfie1d1272/Mizar/issues) |
