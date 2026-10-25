@@ -864,17 +864,17 @@ it.each(['owned', 'external'] as const)(
     let temporary = false;
     let quarantined = false;
     let formalRestores = 0;
-    let trial!: DemoTestController;
     const scenes = {
       get: () => ({ revision: 'scene', active: scene }),
-      select: async () => {
+      select: () => {
         if (safe) scene = 'waiting';
-        return { ok: safe, message: 'waiting unconfirmed' };
+        return Promise.resolve({ ok: safe, message: 'waiting unconfirmed' });
       },
-      selectWaitingForExit: async () => ({
-        ok: scene === 'waiting',
-        message: 'waiting unconfirmed',
-      }),
+      selectWaitingForExit: () =>
+        Promise.resolve({
+          ok: scene === 'waiting',
+          message: 'waiting unconfirmed',
+        }),
     } as unknown as ProgramSceneController;
     const production = registerProductionRoutes(app, {
       originPolicy: { mode: 'loopback', bindHost: '127.0.0.1', allowedOrigins: [] },
@@ -883,13 +883,14 @@ it.each(['owned', 'external'] as const)(
       finishTrial: () => trial.finish(),
       release: async () => {},
     });
-    trial = new DemoTestController({
+    const trial = new DemoTestController({
       markerPath,
       dataReady: () => true,
       diagnostic: () => {},
       context: {
-        beginTemporary: async () => {
+        beginTemporary: () => {
           temporary = true;
+          return Promise.resolve();
         },
         endTemporary: () => {
           temporary = false;
@@ -898,13 +899,14 @@ it.each(['owned', 'external'] as const)(
       runtime: { flushSeriesProgressCheckpoint: async () => {}, resetSession: () => {} },
       scenes,
       production,
-      obs: async () => ({ connection: 'connected', streaming: false }),
+      obs: () => Promise.resolve({ connection: 'connected', streaming: false }),
       quarantineOutput: (value: boolean) => {
         quarantined = value;
       },
       refresh: () => {},
-      restoreFormal: async () => {
+      restoreFormal: () => {
         formalRestores++;
+        return Promise.resolve();
       },
       hold: () => {},
     } as unknown as ConstructorParameters<typeof DemoTestController>[0]);
