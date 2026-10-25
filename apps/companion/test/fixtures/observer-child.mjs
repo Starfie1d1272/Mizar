@@ -6,13 +6,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 const args = process.argv.slice(2);
 const arg = (name) => args[args.indexOf(name) + 1];
-// Match pinned driver: create only the unique leaf, never its ancestors.
-try {
-  fs.mkdirSync(arg('--output'), { mode: 0o700 });
-} catch {
-  process.stderr.write('output-directory-unavailable\n');
-  process.exit(1);
-}
 import { createInterface } from 'node:readline';
 const inputLines = createInterface({ input: process.stdin });
 let cleanupFailure = false;
@@ -27,6 +20,25 @@ for await (const text of inputLines) {
     )
   )
     process.exit(90);
+  // A stalled pre-report initialization may never create the first leaf.
+  if (
+    input.endpoint === '127.0.0.20:27020' &&
+    !path.basename(arg('--output')).startsWith('retry-')
+  ) {
+    fs.writeFileSync(
+      path.join(path.dirname(arg('--output')), 'pre-mkdir.json'),
+      JSON.stringify({ pid: process.pid }),
+    );
+    setInterval(() => {}, 1000);
+    await new Promise(() => {});
+  }
+  // Match pinned driver: create only the unique leaf, never its ancestors.
+  try {
+    fs.mkdirSync(arg('--output'), { mode: 0o700 });
+  } catch {
+    process.stderr.write('output-directory-unavailable\n');
+    process.exit(1);
+  }
   const earlyFailures = {
     '127.0.0.11:27020': 'output-directory-unavailable\nSynthetic interpreter shutdown diagnostic',
     '127.0.0.12:27020': 'configuration-boundary',
@@ -100,7 +112,7 @@ for await (const text of inputLines) {
     await new Promise(() => {});
   }
   const source = arg('--source-role') + ':' + arg('--source-id');
-  const supervised = /^127\.0\.0\.(6|7|8|9|10):27020$/.test(input.endpoint);
+  const supervised = /^127\.0\.0\.(6|7|8|9|10|20):27020$/.test(input.endpoint);
   const retrying = path.basename(arg('--output')).startsWith('retry-');
   if (supervised) {
     const directory = arg('--output');

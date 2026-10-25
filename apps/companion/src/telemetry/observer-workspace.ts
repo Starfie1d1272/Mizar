@@ -71,7 +71,13 @@ export class WorkspaceObserver {
     const entry = { ...evidence, sessionId };
     this.history.push(entry);
     if (this.history.length > 8) this.history.shift();
-    this.evidenceListeners.forEach((listener) => listener(entry));
+    this.evidenceListeners.forEach((listener) => {
+      try {
+        listener(entry);
+      } catch {
+        console.error('observer_workspace_diagnostic_failed');
+      }
+    });
   }
   private terminal: Awaited<Owner['closed']>['terminal'] | undefined;
   private failed = false;

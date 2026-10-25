@@ -52,9 +52,16 @@ async function fixture(
 describe('workbench observer ownership', () => {
   it('reports output failure after joining the child and permits a fresh connection', () =>
     fixture(async (observer) => {
+      const recorded: unknown[] = [];
+      observer.subscribeEvidence(() => {
+        throw new Error('diagnostic-listener-secret');
+      });
+      observer.subscribeEvidence((entry) => recorded.push(entry));
       await observer.start(driver, '127.0.0.3:27020', 'synthetic-only');
       await expect.poll(() => observer.view().active).toBe(false);
       expect(observer.view().failed).toBe(true);
+      expect(recorded).toHaveLength(1);
+      expect(JSON.stringify(recorded)).not.toContain('diagnostic-listener-secret');
       await observer.start(driver, '127.0.0.1:27020', 'synthetic-only');
       await expect.poll(() => observer.source.getHealth().state).toBe('live');
       expect(observer.view().failed).toBe(false);

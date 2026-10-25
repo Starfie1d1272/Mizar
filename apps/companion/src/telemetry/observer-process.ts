@@ -495,7 +495,11 @@ function startReconnectingObserverProcess<R extends GameEventSourceRole>(
       const evidence = { ...result.terminal, attemptCount };
       attempts.push(evidence);
       if (attempts.length > 8) attempts.shift();
-      options.onAttempt?.(evidence);
+      try {
+        options.onAttempt?.(evidence);
+      } catch {
+        console.error('observer_attempt_diagnostic_failed');
+      }
       const summary = { ...result, terminal: evidence, attempts: [...attempts] };
       const cleanup = await current.stop();
       const cleanupFailed =
@@ -530,7 +534,13 @@ function startReconnectingObserverProcess<R extends GameEventSourceRole>(
       if (stopped) return { ...summary, attemptCount, cancelled: true, failed: cleanupFailed };
       attemptCount += 1;
       current = startObserverAttempt(
-        { ...options, outputDirectory: join(options.outputDirectory, `retry-${attemptCount}`) },
+        {
+          ...options,
+          outputDirectory: join(
+            dirname(options.outputDirectory),
+            `retry-${attemptCount}-${randomUUID()}`,
+          ),
+        },
         manager,
         true,
       );
