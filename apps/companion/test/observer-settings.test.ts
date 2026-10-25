@@ -16,6 +16,11 @@ it('persists operator timing and keeps per-match connection credentials in memor
     await store.load();
     expect(store.settings).toEqual(DEFAULT_OBSERVER_SETTINGS);
     await store.configure({ ...store.settings, enabled: true, leadSeconds: 8 });
+    await store.configureGame({ autoConnect: false, hideGameHud: false });
+    const preferences = new ObserverSettingsStore(path);
+    await preferences.load();
+    expect(preferences.settings.leadSeconds).toBe(8);
+    expect(preferences.gameAutomation).toEqual({ autoConnect: false, hideGameHud: false });
     store.setConnection({
       earlyEndpoint: '127.0.0.1:27025',
       programEndpoint: '127.0.0.1:27026',
@@ -33,7 +38,7 @@ it('persists operator timing and keeps per-match connection credentials in memor
     store.clearConnection();
     expect(store.view().connection).toBeNull();
     await store.configure({ ...store.settings, enabled: false });
-    expect(store.configured()).toBeUndefined();
+    expect(store.configured()?.earlyEndpoint).toBeUndefined();
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

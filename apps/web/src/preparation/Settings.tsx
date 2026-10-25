@@ -1,4 +1,4 @@
-import { ObserverSettingsPanel, ObserverConnectionPreparation } from './ObserverSettings';
+import { ObserverSettingsPanel, GameAutomationSettingsPanel } from './ObserverSettings';
 import { ObsSettings } from './ObsSettings';
 import { CameraSettings } from '../orchestration/CameraSettings';
 import { Cs2ConsoleSettings } from '../debug/Cs2ConsoleSettings';
@@ -11,10 +11,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Panel, StatusBanner, StatusPill } from '../ui';
 import { desktopInvoke } from '../workspace/client';
 import { RivalHubPreparationPanel } from '../operator/RivalHubPreparationPanel';
-import { openTool, useLocalRead } from './client';
+import { openTool, useLocalRead, type Production } from './client';
 import { Cs2Recovery } from './Cs2Recovery';
 import { Cs2BackupImport } from './Cs2BackupImport';
-import type { Production } from './client';
 import { Cs2LaunchSettings } from './Cs2LaunchSettings';
 import { SteamAvatarSettings } from './SteamAvatarSettings';
 import { UpdateSettings } from './UpdateSettings';
@@ -33,9 +32,6 @@ function statusReadReason(error: unknown) {
 }
 
 export function Settings({ tab }: { tab: string }) {
-  const [automationTab, setAutomationTab] = useState<'music' | 'camera'>(() =>
-    new URLSearchParams(window.location.search).get('section') === 'camera' ? 'camera' : 'music',
-  );
   const production = useLocalRead<Production>(
     window.__TAURI_INTERNALS__ ? '/local/v1/production' : null,
   );
@@ -172,40 +168,9 @@ export function Settings({ tab }: { tab: string }) {
       {gsi?.conflict ? '修复 GSI' : '安装 GSI'}
     </Button>
   );
-  if (tab === 'observer')
-    return (
-      <>
-        <ObserverSettingsPanel />
-        <ObserverConnectionPreparation
-          live={production?.mode === 'live' || production?.mode === 'hidden'}
-        />
-      </>
-    );
-  if (tab === 'music')
-    return (
-      <>
-        <nav className="preparation-tabs" aria-label="自动制播配置">
-          <Button
-            aria-pressed={automationTab === 'music'}
-            onClick={() => setAutomationTab('music')}
-          >
-            音乐
-          </Button>
-          <Button
-            aria-pressed={automationTab === 'camera'}
-            onClick={() => setAutomationTab('camera')}
-          >
-            运镜
-          </Button>
-        </nav>
-        <div hidden={automationTab !== 'music'}>
-          <MusicSettings />
-        </div>
-        <div hidden={automationTab !== 'camera'}>
-          <CameraSettings />
-        </div>
-      </>
-    );
+  if (tab === 'observer') return <ObserverSettingsPanel />;
+  if (tab === 'music') return <MusicSettings />;
+  if (tab === 'camera') return <CameraSettings />;
 
   return (
     <>
@@ -470,6 +435,7 @@ export function Settings({ tab }: { tab: string }) {
           </div>
           <div className="game-settings-preferences">
             <Cs2LaunchSettings />
+            <GameAutomationSettingsPanel />
             <SteamAvatarSettings />
           </div>
         </div>

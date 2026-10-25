@@ -9,7 +9,6 @@ const mocks = vi.hoisted(() => ({
       enabled: false,
       expectedDelaySeconds: 120,
       leadSeconds: 7,
-      hideGameHud: true,
     },
     connection: null,
   },
@@ -26,10 +25,7 @@ vi.mock('../src/preparation/cs2-status', () => ({ useCs2Status: () => ({ status:
 vi.mock('../src/realtime', () => ({
   useLocalChannelClient: () => ({ subscribe: () => () => {}, getSnapshot: () => mocks.observer }),
 }));
-import {
-  ObserverSettingsPanel,
-  ObserverConnectionPreparation,
-} from '../src/preparation/ObserverSettings';
+import { ObserverSettingsPanel } from '../src/preparation/ObserverSettings';
 import { ObserverHints } from '../src/workspace/ObserverHints';
 let root: Root, container: HTMLDivElement;
 beforeEach(() => {
@@ -45,14 +41,13 @@ afterEach(() => {
   container.remove();
   delete window.__TAURI_INTERNALS__;
 });
-it('offers the two timing controls and applies the saved off setting to the running observer', async () => {
+it('offers the two timing controls and saves observer preferences independently of game controls', async () => {
   window.__TAURI_INTERNALS__ = { invoke: <T,>() => Promise.resolve(undefined as T) };
   act(() => root.render(<ObserverSettingsPanel />));
   expect(
     [...container.querySelectorAll<HTMLInputElement>('input[type=number]')].map((e) => e.value),
   ).toEqual(['120', '7']);
   expect(container.textContent).toContain('113');
-  expect(container.textContent).toContain('本机控制台记录');
   await act(async () => {
     [...container.querySelectorAll('button')]
       .find((e) => e.textContent?.includes('保存观察辅助'))!
@@ -63,14 +58,13 @@ it('offers the two timing controls and applies the saved off setting to the runn
     action: 'configure',
     settings: DEFAULT_OBSERVER_SETTINGS,
   });
-  expect(mocks.native).toHaveBeenCalledWith('observer_command', { action: 'stop' });
+  expect(mocks.native).not.toHaveBeenCalled();
 });
 it('keeps the disabled feature out of connection preparation and the workbench', () => {
   mocks.observer = { state: 'live', current: { payload: { availability: 'unavailable' } } };
   act(() =>
     root.render(
       <>
-        <ObserverConnectionPreparation />
         <ObserverHints />
       </>,
     ),

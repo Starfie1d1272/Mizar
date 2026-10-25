@@ -40,7 +40,6 @@ export const observerSettingsSchema = z
     enabled: z.boolean(),
     expectedDelaySeconds: z.number().int().min(10).max(600),
     leadSeconds: z.number().int().min(1).max(30),
-    hideGameHud: z.boolean(),
   })
   .refine((v) => v.leadSeconds < v.expectedDelaySeconds, '提前时间应小于两路延迟差');
 export type ObserverSettings = z.infer<typeof observerSettingsSchema>;
@@ -48,6 +47,15 @@ export const DEFAULT_OBSERVER_SETTINGS: ObserverSettings = {
   enabled: false,
   expectedDelaySeconds: 120,
   leadSeconds: 7,
+};
+
+export const gameAutomationSettingsSchema = z.strictObject({
+  autoConnect: z.boolean(),
+  hideGameHud: z.boolean(),
+});
+export type GameAutomationSettings = z.infer<typeof gameAutomationSettingsSchema>;
+export const DEFAULT_GAME_AUTOMATION_SETTINGS: GameAutomationSettings = {
+  autoConnect: true,
   hideGameHud: true,
 };
 
@@ -78,6 +86,7 @@ export type ObserverConnection = z.infer<typeof observerConnectionSchema>;
 export function parseObserverConnection(
   input: string,
   programEndpoint?: string,
+  earlyOverride?: string,
 ): ObserverConnection {
   const match =
     /^(?:connect\s+)?(\d{1,3}(?:\.\d{1,3}){3}:\d{1,5})(?:\s*;\s*password\s+(?:"([^";\\]*)"|([^;"\\]*)))?\s*;?\s*$/i.exec(
@@ -85,13 +94,15 @@ export function parseObserverConnection(
     );
   if (!match || input.length > 512)
     throw new Error('请粘贴 GOTV 地址或 connect 地址；password 密码');
-  const earlyEndpoint = match[1]!;
-  const colon = earlyEndpoint.lastIndexOf(':');
+  const supplied = match[1]!;
+  const colon = supplied.lastIndexOf(':');
+  const port = Number(supplied.slice(colon + 1));
+  if (!programEndpoint?.trim() && port !== 27025 && port !== 27026)
+    throw new Error('此端口请展开高级设置，分别填写早源与节目源。');
+  const earlyEndpoint = programEndpoint?.trim() ? supplied : supplied.slice(0, colon + 1) + '27025';
   return observerConnectionSchema.parse({
-    earlyEndpoint,
-    programEndpoint:
-      programEndpoint?.trim() ||
-      earlyEndpoint.slice(0, colon + 1) + String(Number(earlyEndpoint.slice(colon + 1)) + 1),
+    earlyEndpoint: earlyOverride?.trim() || earlyEndpoint,
+    programEndpoint: programEndpoint?.trim() || supplied.slice(0, colon + 1) + '27026',
     password: match[2] ?? (match[3] ?? '').trim(),
   });
 }

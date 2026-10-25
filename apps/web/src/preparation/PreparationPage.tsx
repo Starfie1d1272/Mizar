@@ -1,4 +1,3 @@
-import { ObserverConnectionPreparation } from './ObserverSettings';
 import { SeriesBindingControls } from './SeriesBindingControls';
 import { MatchBpSection } from './MatchBpSection';
 import { useHudConfigClient } from '../realtime/hud-config-client';
@@ -43,10 +42,11 @@ const tabs = {
     ['overlay', '本机 HUD'],
   ],
   '/settings': [
-    ['gsi', 'CS2 与 GSI'],
+    ['gsi', '游戏与观战'],
     ['obs', 'OBS'],
     ['observer', '观察辅助'],
-    ['music', '音乐与运镜'],
+    ['music', '音乐'],
+    ['camera', '运镜'],
     ['rivalhub', 'RivalHub'],
     ['advanced', '高级'],
   ],
@@ -68,7 +68,9 @@ function TeamBadge({ name, logoUrl }: { readonly name: string; readonly logoUrl:
 export function PreparationPage() {
   const path = window.location.pathname === '/operator' ? '/' : window.location.pathname;
   const options = tabs[path as keyof typeof tabs];
-  const requestedTab = new URLSearchParams(window.location.search).get('tab');
+  const query = new URLSearchParams(window.location.search);
+  const requestedTab =
+    query.get('tab') === 'music' && query.get('section') === 'camera' ? 'camera' : query.get('tab');
   const createFromServer =
     new URLSearchParams(window.location.search).get('createFromServer') === '1';
   const openMatchSelection =
@@ -156,7 +158,8 @@ export function PreparationPage() {
   const settingsTitle: Record<string, string> = {
     gsi: '游戏设置',
     obs: 'OBS 连接',
-    music: '音乐与运镜',
+    music: '音乐',
+    camera: '运镜',
     observer: '观察辅助',
     rivalhub: '赛事平台',
     advanced: '高级设置',
@@ -165,7 +168,6 @@ export function PreparationPage() {
   return (
     <OperatorShell active={path}>
       <main className="preparation" data-page={path}>
-        {path === '/' && match ? <ObserverConnectionPreparation /> : null}
         <AutomaticPreparation showGsiMessage={!(path === '/settings' && tab === 'gsi')} />
         <UpdateNotification />
         <header className="preparation-heading">

@@ -140,6 +140,7 @@ function ContextPanel({
       </div>
       <div className="workspace-context__actions">
         <Button onClick={() => void openPreparation('/matches')}>比赛资料</Button>
+        <Button onClick={() => void openPreparation('/settings?tab=gsi')}>本场连接</Button>
         {operator?.matchContext.rosterAuthority !== 'rivalhub' ? (
           <>
             <Button onClick={() => setCaptureOpen(true)}>

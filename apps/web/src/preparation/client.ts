@@ -192,18 +192,34 @@ async function performProductionAction(
     task.finish('blocked', { reason: 'preflight_requires_attention' });
     return;
   }
-  const observerEnabled = action === 'enter' && (await flushObserverPreparation());
+  let launch =
+    action === 'enter' && window.__TAURI_INTERNALS__
+      ? await desktopInvoke<{ preferMulnx?: boolean; running: boolean; pending: boolean }>(
+          'cs2_config_status',
+        )
+      : null;
+  const entryFeaturesEnabled =
+    action === 'enter' ? await flushObserverPreparation(launch?.preferMulnx === true) : false;
+  if (entryFeaturesEnabled === null) {
+    task.finish('cancelled', { reason: 'connection_confirmation_cancelled' });
+    return;
+  }
+  if (entryFeaturesEnabled && launch) {
+    const current = await desktopInvoke<{
+      preferMulnx?: boolean;
+      running: boolean;
+      pending: boolean;
+    }>('cs2_config_status');
+    if (Boolean(current.preferMulnx) !== Boolean(launch.preferMulnx))
+      throw new Error('游戏启动方式已更新，请重新确认本场连接后进入工作台。');
+    launch = current;
+  }
   let newlyStarted = false;
   let borrowed = Boolean(external);
   let selectedExternal = external;
   if (action === 'enter' && window.__TAURI_INTERNALS__) {
     if (!external) {
-      const launch = await desktopInvoke<{
-        preferMulnx?: boolean;
-        running: boolean;
-        pending: boolean;
-      }>('cs2_config_status');
-      if ((launch.preferMulnx || observerEnabled) && !launch.running && !launch.pending) {
+      if (launch?.preferMulnx && !launch.running && !launch.pending) {
         selectedExternal = await desktopInvoke<ExternalGameIdentity>(
           'launch_mulnx',
           { automatic: true },
@@ -254,7 +270,7 @@ async function performProductionAction(
     await command('/operator/production', { action, expectedRevision: state.revision }, task);
     if (window.__TAURI_INTERNALS__) {
       await desktopInvoke('present_production', { live: action === 'enter' }, task);
-      if (observerEnabled)
+      if (entryFeaturesEnabled)
         await desktopInvoke('observer_command', { action: 'start-configured' }, task);
     } else window.location.assign(action === 'enter' ? '/workspace' : '/');
     task.finish('confirmed', { confirmation: 'production_command_ack_and_presentation', action });

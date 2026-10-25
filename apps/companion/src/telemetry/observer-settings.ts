@@ -2,6 +2,9 @@ import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import {
   observerSettingsSchema,
+  gameAutomationSettingsSchema,
+  DEFAULT_GAME_AUTOMATION_SETTINGS,
+  type GameAutomationSettings,
   DEFAULT_OBSERVER_SETTINGS,
   observerConnectionSchema,
   type ObserverSettings,
@@ -15,6 +18,7 @@ import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/ori
 /** Persist operator preferences; the current match's credentials stay in memory. */
 export class ObserverSettingsStore {
   settings: ObserverSettings = { ...DEFAULT_OBSERVER_SETTINGS };
+  gameAutomation: GameAutomationSettings = { ...DEFAULT_GAME_AUTOMATION_SETTINGS };
   private connection: ObserverConnection | undefined;
   revision = randomUUID();
   private listeners = new Set<(kind: 'settings' | 'connection') => void>();
@@ -24,14 +28,21 @@ export class ObserverSettingsStore {
     if (!this.path) return;
     try {
       const saved: unknown = JSON.parse(await readFile(this.path, 'utf8'));
-      // Preserve the operator's preferences when loading the preview settings format.
       if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
-        const current = { ...saved } as Record<string, unknown>;
+        const record = saved as Record<string, unknown>;
+        const current = { ...((record.settings ?? record) as Record<string, unknown>) };
+        // Read the preview format while keeping each capability's current preferences.
+        const legacyHud = current.hideGameHud;
         delete current.displaySeconds;
+        delete current.hideGameHud;
         this.settings = observerSettingsSchema.parse(current);
-      } else {
-        this.settings = observerSettingsSchema.parse(saved);
-      }
+        this.gameAutomation = gameAutomationSettingsSchema.parse(
+          record.gameAutomation ?? {
+            ...DEFAULT_GAME_AUTOMATION_SETTINGS,
+            ...(typeof legacyHud === 'boolean' ? { hideGameHud: legacyHud } : {}),
+          },
+        );
+      } else this.settings = observerSettingsSchema.parse(saved);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
@@ -39,6 +50,7 @@ export class ObserverSettingsStore {
   view() {
     return {
       settings: this.settings,
+      gameAutomation: this.gameAutomation,
       revision: this.revision,
       connection: this.connection
         ? {
@@ -50,13 +62,24 @@ export class ObserverSettingsStore {
     };
   }
   configured() {
-    return this.settings.enabled ? this.connection : undefined;
+    return this.connection;
   }
   configure(settings: ObserverSettings) {
     const value = observerSettingsSchema.parse(settings);
     const next = this.writing.then(async () => {
-      if (this.path) await atomicJson(this.path, value);
+      if (this.path)
+        await atomicJson(this.path, { settings: value, gameAutomation: this.gameAutomation });
       this.settings = value;
+      this.changed();
+    });
+    this.writing = next.catch(() => {});
+    return next;
+  }
+  configureGame(value: GameAutomationSettings) {
+    const gameAutomation = gameAutomationSettingsSchema.parse(value);
+    const next = this.writing.then(async () => {
+      if (this.path) await atomicJson(this.path, { settings: this.settings, gameAutomation });
+      this.gameAutomation = gameAutomation;
       this.changed();
     });
     this.writing = next.catch(() => {});
@@ -93,6 +116,7 @@ export function registerObserverSettings(
   const schema = z.discriminatedUnion('action', [
     z.strictObject({ action: z.literal('configure'), settings: observerSettingsSchema }),
     z.strictObject({ action: z.literal('connection'), connection: observerConnectionSchema }),
+    z.strictObject({ action: z.literal('configure-game'), settings: gameAutomationSettingsSchema }),
   ]);
   app.post('/operator/observer-assist', { bodyLimit: 4096 }, async (request, reply) => {
     if (policy.mode !== 'loopback' || !checkLocalWebOrigin(policy, request.headers.origin).allowed)
@@ -101,6 +125,8 @@ export function registerObserverSettings(
     if (!parsed.success)
       return reply.code(400).send({ message: '请核对时间设置、GOTV 地址和密码格式。' });
     if (parsed.data.action === 'configure') await store.configure(parsed.data.settings);
+    else if (parsed.data.action === 'configure-game')
+      await store.configureGame(parsed.data.settings);
     else store.setConnection(parsed.data.connection);
     return store.view();
   });

@@ -68,12 +68,13 @@ pub async fn observer_command(window: tauri::WebviewWindow, app: tauri::AppHandl
             let executable = context["executable"].as_str().ok_or("请确认 CS2 安装位置。")?;
             if action == "start-configured" {
                 let job = observer_job::name(&log.session_id);
+                let use_mulnx = cs2.status()?["preferMulnx"].as_bool().unwrap_or(false);
                 let game_key = format!("{}-{}", game.pid, game.created);
-                let preparation = request(&log, serde_json::json!({"action":"prepare","game":game_key,"job":job}))?;
-                if preparation["enabled"] != true { return Ok(()); }
+                let preparation = request(&log, serde_json::json!({"action":"prepare","game":game_key,"job":job,"useMulnx":use_mulnx}))?;
+                if preparation["enabled"] != true { stop(&log)?; return Ok(()); }
                 if preparation["reuse"] == true { ACTIVE.store(true, Ordering::Release); return Ok(()); }
                 let mut body = serde_json::json!({"action":"start-configured","executable":executable,
-                    "game":game_key,"job":job,"revision":preparation["revision"]});
+                    "game":game_key,"job":job,"revision":preparation["revision"],"useMulnx":use_mulnx});
                 if preparation["hideGameHud"] == true {
                     body["hudOriginal"] = crate::observer_hud::snapshot(&log, std::path::Path::new(executable), &game)?.into();
                 } else { crate::observer_hud::restore(&log)?; }

@@ -246,11 +246,13 @@ export function registerWorkspaceObserver(
   const command = z.discriminatedUnion('action', [
     z.strictObject({
       action: z.literal('prepare'),
+      useMulnx: z.boolean().default(false),
       game: z.string().max(80),
       job: z.string().max(100),
     }),
     z.strictObject({
       action: z.literal('start-configured'),
+      useMulnx: z.boolean().default(false),
       executable: z.string().max(2048),
       job: z.string().max(100),
       game: z.string().max(80),
@@ -287,57 +289,83 @@ export function registerWorkspaceObserver(
       if (['start', 'start-configured', 'prepare'].includes(body.action) && !canStart())
         return reply.code(409).send({ message: '请进入正式制播工作台后连接早源。' });
       if (body.action === 'prepare') {
-        if (!settings?.settings.enabled) return { ok: true, enabled: false };
+        const gameControl = body.useMulnx && settings?.gameAutomation;
+        if (
+          !settings ||
+          !(
+            settings.settings.enabled ||
+            (gameControl && (gameControl.autoConnect || gameControl.hideGameHud))
+          )
+        )
+          return { ok: true, enabled: false };
         const connection = settings.configured();
-        if (!connection)
+        if (!connection && (settings.settings.enabled || (gameControl && gameControl.autoConnect)))
           return reply.code(409).send({ message: '请在准备中心填写本场授权的观战连接。' });
         return {
           ok: true,
           enabled: true,
           revision: settings.revision,
-          hideGameHud: settings.settings.hideGameHud,
+          hideGameHud: Boolean(gameControl && gameControl.hideGameHud),
           reuse:
-            observer.view().active &&
-            configured === [body.game, body.job, settings.revision].join(':'),
-          connection: {
-            earlyEndpoint: connection.earlyEndpoint,
-            programEndpoint: connection.programEndpoint,
-          },
+            (!settings.settings.enabled || observer.view().active) &&
+            configured === [body.game, body.job, settings.revision, body.useMulnx].join(':'),
+          connection: connection
+            ? {
+                earlyEndpoint: connection.earlyEndpoint,
+                programEndpoint: connection.programEndpoint,
+              }
+            : null,
         };
       }
       if (body.action === 'start-configured') {
-        const connection = settings?.configured();
-        if (!settings?.settings.enabled) return { ok: true, enabled: false };
-        if (!connection || settings.revision !== body.revision)
+        if (!settings) return { ok: true, enabled: false };
+        const connection = settings.configured();
+        const gameControl = body.useMulnx ? settings.gameAutomation : null;
+        const observerEnabled = settings.settings.enabled;
+        if (!(
+          observerEnabled ||
+          (gameControl && (gameControl.autoConnect || gameControl.hideGameHud))
+        ))
+          return { ok: true, enabled: false };
+        if (
+          settings.revision !== body.revision ||
+          (!connection && (observerEnabled || gameControl?.autoConnect))
+        )
           throw new Error('observer_configuration_changed');
-        if (settings.settings.hideGameHud && body.hudOriginal === undefined)
+        if (gameControl?.hideGameHud && body.hudOriginal === undefined)
           throw new Error('observer_hud_snapshot_required');
-        const current = () =>
-          settings.settings.enabled && settings.revision === body.revision && canStart();
+        const current = () => settings.revision === body.revision && canStart();
         await observer.stop();
         if (!current()) throw new Error('observer_configuration_changed');
-        await sendObserverGameCommand(
-          observerConnectCommand(connection, settings.settings.hideGameHud),
-        );
+        if (gameControl?.autoConnect && connection)
+          await sendObserverGameCommand(
+            observerConnectCommand(connection, gameControl.hideGameHud),
+          );
+        else if (gameControl?.hideGameHud)
+          await sendObserverGameCommand('cl_draw_only_deathnotices 1');
         if (!current()) throw new Error('observer_configuration_changed');
-        await observer.start(
-          body.executable,
-          connection.earlyEndpoint,
-          connection.password,
-          body.job,
-        );
-        if (!current()) {
-          await observer.stop();
-          throw new Error('observer_configuration_changed');
+        if (observerEnabled && connection) {
+          await observer.start(
+            body.executable,
+            connection.earlyEndpoint,
+            connection.password,
+            body.job,
+          );
+          if (!current()) {
+            await observer.stop();
+            throw new Error('observer_configuration_changed');
+          }
         }
-        configured = [body.game, body.job, body.revision].join(':');
+        configured = [body.game, body.job, body.revision, body.useMulnx].join(':');
         return { ok: true, enabled: true, ...observer.view() };
       }
       if (body.action === 'start')
         await observer.start(body.executable, body.endpoint, body.password, body.job);
-      else if (body.action === 'stop') await observer.stop();
-      else observer.pulse();
-      return { ok: true, enabled: settings?.settings.enabled ?? true, ...observer.view() };
+      else if (body.action === 'stop') {
+        configured = '';
+        await observer.stop();
+      } else observer.pulse();
+      return { ok: true, enabled: true, ...observer.view() };
     } catch (error) {
       request.log.error(
         {
@@ -348,7 +376,7 @@ export function registerWorkspaceObserver(
       );
       return reply
         .code(409)
-        .send({ message: '请确认 MulNX 已在当前游戏中就绪，并核对观战连接；详细阶段见运行诊断。' });
+        .send({ message: '请核对本场观战连接和所选启动方式的组件状态；详细阶段见运行诊断。' });
     }
   });
 }

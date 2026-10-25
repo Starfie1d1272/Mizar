@@ -65,23 +65,13 @@ test('saves real local choices, imports atomically, persists manual stop through
   );
   try {
     await page.goto('/settings?tab=music');
-    await expect(
-      page.getByRole('heading', { name: '音乐与运镜', exact: true, level: 1 }),
-    ).toBeVisible();
+    await expect(page.getByRole('heading', { name: '音乐', exact: true, level: 1 })).toBeVisible();
     await expect(page.getByText('尚未选曲 · 静音', { exact: true })).toHaveCount(7);
     await page
       .getByLabel('选择本地曲目', { exact: true })
       .first()
       .setInputFiles({ name: '合成等待.mp3', mimeType: 'audio/mpeg', buffer: mp3 });
     await expect(page.getByText('曲目已选，请保存音乐配置。')).toBeVisible();
-    await page
-      .getByRole('navigation', { name: '自动制播配置' })
-      .getByRole('button', { name: '运镜', exact: true })
-      .click();
-    await page
-      .getByRole('navigation', { name: '自动制播配置' })
-      .getByRole('button', { name: '音乐', exact: true })
-      .click();
     await page
       .getByRole('navigation', { name: '音乐场景' })
       .getByRole('button', { name: /技术暂停/ })

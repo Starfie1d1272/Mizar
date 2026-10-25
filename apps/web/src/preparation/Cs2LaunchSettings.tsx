@@ -61,7 +61,7 @@ export function Cs2LaunchSettings() {
         >
           <div className="settings-fields">
             <Select
-              label="默认启动方式"
+              label="游戏启动方式"
               value={preferences?.preferMulnx ? 'mulnx' : 'steam'}
               disabled={disabled}
               onChange={(event) => {
@@ -69,7 +69,7 @@ export function Cs2LaunchSettings() {
                   edit({ ...preferences, preferMulnx: event.target.value === 'mulnx' });
               }}
             >
-              <option value="steam">Steam 普通启动</option>
+              <option value="steam">标准启动（Mizar 管理）</option>
               <option value="mulnx">MulNX 官方启动器</option>
             </Select>
             <Select

@@ -10,6 +10,11 @@ import {
   registerWorkspaceObserver,
 } from '../src/telemetry/observer-workspace.js';
 
+const commands = vi.hoisted(() => ({ send: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('../src/telemetry/observer-game-control.js', async (original) => ({
+  ...(await original<typeof import('../src/telemetry/observer-game-control.js')>()),
+  sendObserverGameCommand: commands.send,
+}));
 const driver = fileURLToPath(new URL('./fixtures/observer-child.mjs', import.meta.url));
 async function fixture(run: (observer: WorkspaceObserver, app: FastifyInstance) => Promise<void>) {
   const outputDirectory = await mkdtemp(join(tmpdir(), 'mizar-observer-workspace-'));
@@ -149,7 +154,7 @@ it('rechecks the enabled configuration after waiting for an earlier observer to 
   fixture(async (observer) => {
     const app = Fastify(),
       settings = new ObserverSettingsStore();
-    await settings.configure({ ...settings.settings, enabled: true, hideGameHud: false });
+    await settings.configure({ ...settings.settings, enabled: true });
     settings.setConnection({
       earlyEndpoint: '127.0.0.1:27025',
       programEndpoint: '127.0.0.1:27026',
@@ -184,6 +189,47 @@ it('rechecks the enabled configuration after waiting for an earlier observer to 
       expect(start).not.toHaveBeenCalled();
     } finally {
       release();
+      await app.close();
+    }
+  }));
+
+it('routes standard observers and MulNX game automation independently', () =>
+  fixture(async (observer) => {
+    for (const scenario of [
+      { useMulnx: false, enabled: true, command: false },
+      { useMulnx: true, enabled: false, command: true },
+      { useMulnx: true, enabled: true, command: true },
+    ]) {
+      const app = Fastify();
+      const settings = new ObserverSettingsStore();
+      await settings.configure({ ...settings.settings, enabled: scenario.enabled });
+      await settings.configureGame({ autoConnect: true, hideGameHud: false });
+      settings.setConnection({
+        earlyEndpoint: '127.0.0.1:27025',
+        programEndpoint: '127.0.0.1:27026',
+        password: 'synthetic',
+      });
+      registerWorkspaceObserver(app, observer, 'synthetic-capability', () => true, settings);
+      const start = vi.spyOn(observer, 'start').mockResolvedValue();
+      commands.send.mockClear();
+      const response = await app.inject({
+        method: 'POST',
+        url: '/operator/runtime/observer',
+        headers: { 'x-runtime-token': 'synthetic-capability' },
+        payload: {
+          action: 'start-configured',
+          executable: driver,
+          game: '42-1',
+          job: 'Local\\MizarObserver-test',
+          revision: settings.revision,
+          useMulnx: scenario.useMulnx,
+        },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(start).toHaveBeenCalledTimes(Number(scenario.enabled));
+      expect(commands.send).toHaveBeenCalledTimes(Number(scenario.command));
+      if (scenario.command) expect(commands.send.mock.calls[0]![0]).toContain('27026');
+      start.mockRestore();
       await app.close();
     }
   }));

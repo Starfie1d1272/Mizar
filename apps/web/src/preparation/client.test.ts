@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { registerObserverPreparation } from './observer-preparation';
 import { productionAction, type Production } from './client';
 
 interface RecordedControl {
@@ -45,6 +46,7 @@ function setup(
   }[] = [],
   observerEnabled = false,
 ) {
+  registerObserverPreparation(() => Promise.resolve(true));
   const calls: string[] = [];
   const invoke = vi.fn((command: string) => {
     calls.push(command);
@@ -120,7 +122,8 @@ describe('managed CS2 production entry and cleanup', () => {
       true,
     );
     await productionAction('enter', preparation);
-    expect(calls).toContain('launch_mulnx');
+    expect(calls).toContain('start_managed_cs2');
+    expect(calls).not.toContain('launch_mulnx');
     expect(calls.indexOf('observer_command')).toBeGreaterThan(calls.indexOf('present_production'));
     expect(calls.indexOf('observer_command')).toBeGreaterThan(
       calls.indexOf('/operator/production'),
@@ -128,6 +131,13 @@ describe('managed CS2 production entry and cleanup', () => {
     expect(nativeArgs.find((v) => v.command === 'observer_command')?.args).toMatchObject({
       action: 'start-configured',
     });
+  });
+  it('keeps game and production unchanged when connection confirmation is cancelled', async () => {
+    const calls = setup(undefined, 'preparation', false, true, [], true);
+    registerObserverPreparation(() => Promise.resolve(false));
+    await productionAction('enter', preparation);
+    expect(calls).not.toContain('start_managed_cs2');
+    expect(calls).not.toContain('/operator/production');
   });
   it('continues the same entry through verified MulNX launch and attachment without launcher navigation', async () => {
     const calls = setup(undefined, 'preparation', false, true, [
