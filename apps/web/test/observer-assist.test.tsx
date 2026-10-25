@@ -121,6 +121,10 @@ it('shows private slots and countdowns from the assist channel, and clears on re
       payload: {
         observer: {
           state: 'ready',
+          timingBasis: 'estimated',
+          expectedDelaySeconds: 120,
+          waitingReason: null,
+          nextWindowSeconds: 0,
           leadSeconds: 7,
           hints: [
             {
@@ -318,4 +322,26 @@ it('gives specific repair guidance for known startup causes and diagnostic conte
   expect(unknown).toContain('eof');
   expect(unknown).toContain('diagnostic-123');
   expect(unknown).not.toContain('核对本场连接');
+});
+
+it('shows estimated timing and normal waiting separately from source recovery', () => {
+  mocks.view.settings.enabled = true;
+  const observer = {
+    state: 'ready',
+    timingBasis: 'estimated',
+    expectedDelaySeconds: 120,
+    waitingReason: 'waiting-event',
+    nextWindowSeconds: null as number | null,
+    hints: [],
+  };
+  mocks.observer = { state: 'live', current: { payload: { observer } } };
+  act(() => root.render(<ObserverHints />));
+  expect(container.textContent).toContain('按 120 秒估算');
+  expect(container.textContent).toContain('等待早源事件');
+  expect(container.querySelector('button')).toBeNull();
+  observer.waitingReason = 'buffering';
+  observer.nextWindowSeconds = 113;
+  act(() => root.render(<ObserverHints />));
+  expect(container.textContent).toContain('正在积累预告，约 113 秒后进入提示窗口');
+  expect(container.textContent).not.toContain('正在对齐');
 });

@@ -11,7 +11,10 @@ export const assistPayloadSchema = z.object({
   availability: z.enum(['unavailable', 'available']),
   observer: z
     .object({
-      state: z.enum(['connecting', 'aligning', 'ready', 'paused', 'unavailable']),
+      state: z.enum(['connecting', 'ready', 'paused', 'unavailable']),
+      timingBasis: z.literal('estimated'),
+      waitingReason: z.string().max(64).nullable(),
+      nextWindowSeconds: z.number().finite().nonnegative().nullable(),
       expectedDelaySeconds: z.number().finite(),
       leadSeconds: z.number().finite(),
       measuredDelaySeconds: z.number().finite().nullable(),

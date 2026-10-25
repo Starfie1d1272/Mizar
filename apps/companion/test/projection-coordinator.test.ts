@@ -348,11 +348,18 @@ it('keeps calibrated anchors and buffered kills when the lead window is reprojec
     send(122000, [8, 9]);
     expect(coordinator.getCurrent().assist.observer).toMatchObject({
       state: 'ready',
+      timingBasis: 'estimated',
+      waitingReason: 'buffering',
+      nextWindowSeconds: 1,
       measuredDelaySeconds: 120,
       hints: [],
     });
     const program = coordinator.getPublisher('program').getCurrent();
     const radar = coordinator.getPublisher('radar').getCurrent();
+    expect(coordinator.getPublisher('assist').getCurrent()!.payload.observer).toMatchObject({
+      timingBasis: 'estimated',
+      nextWindowSeconds: 1,
+    });
     const before = coordinator.getPublisher('assist').getCurrent()!.channelSeq;
     settings.leadSeconds = 10;
     coordinator.refreshAssist();
@@ -367,8 +374,48 @@ it('keeps calibrated anchors and buffered kills when the lead window is reprojec
     settings.expectedDelaySeconds = 130;
     coordinator.resetAssist();
     expect(coordinator.getCurrent().assist.observer).toMatchObject({
-      state: 'aligning',
+      state: 'ready',
       measuredDelaySeconds: null,
+      hints: [],
+    });
+    live.mockReturnValue({
+      ...health,
+      state: 'live',
+      generation: 1,
+      lastSync: {
+        protocol: 1,
+        tick: 1,
+        ticksPerSecond: 64,
+        fragment: 1,
+        signupFragment: 0,
+        mapName: 'de_ancient',
+        receiveAgeSeconds: 30,
+      },
+    });
+    coordinator.refreshAssist();
+    expect(coordinator.getCurrent().assist.observer).toMatchObject({
+      state: 'unavailable',
+      waitingReason: 'source-stale',
+      hints: [],
+    });
+    live.mockReturnValue({
+      ...health,
+      state: 'live',
+      generation: 1,
+      lastSync: {
+        protocol: 1,
+        tick: 1,
+        ticksPerSecond: 64,
+        fragment: 1,
+        signupFragment: 0,
+        mapName: 'de_nuke',
+        receiveAgeSeconds: 0,
+      },
+    });
+    coordinator.refreshAssist();
+    expect(coordinator.getCurrent().assist.observer).toMatchObject({
+      state: 'unavailable',
+      waitingReason: 'source-map-mismatch',
       hints: [],
     });
   } finally {

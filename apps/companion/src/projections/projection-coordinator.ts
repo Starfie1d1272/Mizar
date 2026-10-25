@@ -69,6 +69,9 @@ export interface ProjectionCoordinatorOptions {
     expectedDelaySeconds: number;
     leadSeconds: number;
   };
+  readonly onObserverDiagnostics?: (
+    diagnostics: ReturnType<ObserverHintTimeline['getDiagnostics']>,
+  ) => void;
   readonly programChat?: (
     cursor: ProgramSnapshot['cursor'],
     fresh: boolean,
@@ -158,6 +161,7 @@ function report(
 }
 
 export class ProjectionCoordinator {
+  private readonly onObserverDiagnostics: ProjectionCoordinatorOptions['onObserverDiagnostics'];
   private readonly observerTimeline = new ObserverHintTimeline();
   private readonly observerSettings: ProjectionCoordinatorOptions['observerSettings'];
   private readonly assistTimer: ReturnType<typeof setInterval> | undefined;
@@ -217,6 +221,7 @@ export class ProjectionCoordinator {
     this.scheduler = options.scheduler ?? defaultScheduler;
     this.onDiagnostic = options.onDiagnostic;
     this.onProjection = options.onProjection;
+    this.onObserverDiagnostics = options.onObserverDiagnostics;
     this.publishers = mergePublishers(options.publishers, options.onDiagnostic);
     this.contextBinding = options.matchContextBinding;
     if (this.contextBinding !== undefined) {
@@ -676,15 +681,20 @@ export class ProjectionCoordinator {
     const snapshot = this.programRuntime.getSnapshot();
     const settings = this.observerSettings?.();
     if (!settings) return projectObserverAssist(selectProgramSafeRuntimeView(snapshot.current));
-    const accepted = snapshot.current.programSource.lastAccepted;
     const health = this.cstvSources.lookahead.getHealth();
-    return this.observerTimeline.project(program, settings, now, {
+    const result = this.observerTimeline.project(program, settings, now, {
       connected: health.state === 'live',
+      state: health.state,
+      ...(health.lastErrorCode ? { lastErrorCode: health.lastErrorCode } : {}),
       generation: health.generation,
+      sameMap:
+        health.lastSync?.mapName === undefined || health.lastSync.mapName === program.map.name,
       fresh:
-        accepted !== undefined &&
-        now - accepted.receivedMonotonicMs <= snapshot.continuityPolicy.staleAfterMs,
+        health.lastSync?.receiveAgeSeconds === undefined ||
+        health.lastSync.receiveAgeSeconds * 1000 <= snapshot.continuityPolicy.staleAfterMs,
     });
+    this.onObserverDiagnostics?.(this.observerTimeline.getDiagnostics());
+    return result;
   }
   resetAssist(): void {
     this.observerTimeline.settingsChanged(this.nowMonotonicMs());

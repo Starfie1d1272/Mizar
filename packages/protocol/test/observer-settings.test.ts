@@ -46,7 +46,7 @@ it('parses one authorized connection with adjacent or explicit Program endpoint'
     expect(() => parseObserverConnection(input)).toThrow();
 });
 
-it('keeps the typed snapshot input consistent with assist schema 2', () => {
+it('keeps the typed snapshot input consistent with assist schema 3', () => {
   const input: AssistSnapshotInput = {
     type: 'snapshot',
     protocolVersion: LOCAL_PROTOCOL_VERSION,
@@ -62,7 +62,7 @@ it('keeps the typed snapshot input consistent with assist schema 2', () => {
     },
     payload: { availability: 'unavailable' },
   };
-  expect(assistSnapshotSchema.parse({ ...input, channelSeq: 1 }).schemaVersion).toBe(2);
+  expect(assistSnapshotSchema.parse({ ...input, channelSeq: 1 }).schemaVersion).toBe(3);
 });
 
 it('accepts restricted commands in either order and round-trips the password-first formatter', () => {
