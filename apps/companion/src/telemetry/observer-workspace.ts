@@ -323,12 +323,13 @@ export function registerWorkspaceObserver(
     if (kind === 'connection') host = undefined;
     const value = host;
     const revision = settings.revision;
+    const shouldStop = kind === 'connection' || !settings.settings.enabled;
     void serialize(async () => {
-      if (attempt !== epoch) return;
-      if (kind === 'connection' || !settings.settings.enabled) {
+      // Stops already queued before a new preparation must finish first.
+      if (shouldStop) {
         observerKey = '';
         await observer.stop();
-      } else if (value && leased() && canStart()) {
+      } else if (attempt === epoch && value && leased() && canStart()) {
         await startAssist(
           value,
           () => attempt === epoch && settings.revision === revision && leased() && canStart(),

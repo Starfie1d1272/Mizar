@@ -474,3 +474,12 @@ it('lets Host restore changed HUD preferences without restarting either connecti
     ]);
     expect(observer.source.getHealth().generation).toBe(generation);
   }));
+
+it('stops the old source even if the next preparation arrives before its queued stop runs', () =>
+  configuredFixture(async ({ observer, settings, prepare, start }) => {
+    await start();
+    settings.setConnection({ ...settings.configured()!, earlyEndpoint: '127.0.0.1:27022' });
+    expect(await prepare()).toMatchObject({ reuse: false });
+    await expect.poll(() => observer.view().active).toBe(false);
+    expect(commands.send).toHaveBeenCalledTimes(1);
+  }));
