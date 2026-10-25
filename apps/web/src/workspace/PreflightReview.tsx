@@ -75,7 +75,6 @@ function ReviewSession({ operator, program, cursor, connection, onOpen }: Props)
   const cs2 = useCs2Status();
   const automation = useLocalRead<ConnectionPreparationView>('/local/v1/observer-assist');
   const automaticHud = Boolean(cs2.status?.preferMulnx && automation?.gameAutomation?.hideGameHud);
-  const hudApplied = cs2.status?.observerHudPending === true;
   const obs = useObsStatus();
   const [automaticIncident, setAutomaticIncident] = useState('');
   const [opened, setOpened] = useState(false);
@@ -345,13 +344,13 @@ function ReviewSession({ operator, program, cursor, connection, onOpen }: Props)
             </section>
             <section className="preflight-check">
               <h3>画面与声音</h3>
-              {automaticHud && hudApplied ? (
-                <p>本场使用自动隐藏游戏 HUD。请返回游戏核对画面，试听游戏声与解说声音。</p>
+              {cs2.status?.observerHudPending ? (
+                <p role="status">游戏 HUD 有待恢复记录，请在游戏与观战设置中恢复并核对实际画面。</p>
+              ) : null}
+              {automaticHud ? (
+                <p>已启用自动隐藏，请核对实际画面。返回游戏试听游戏声与解说声音。</p>
               ) : (
                 <>
-                  {automaticHud ? (
-                    <p>自动隐藏尚未确认，请在游戏与观战设置核对；也可手动执行下方命令。</p>
-                  ) : null}
                   <p>复制后返回游戏，在控制台粘贴并回车。执行后核对画面，试听游戏声与解说声音。</p>
                   <Button
                     variant="primary"

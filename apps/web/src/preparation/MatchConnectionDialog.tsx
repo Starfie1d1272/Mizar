@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { parseObserverConnection } from '@mizar/protocol/assist';
-import { Button, Checkbox, Dialog, Field, StatusBanner } from '../ui';
+import { Button, Dialog, Field, StatusBanner } from '../ui';
 import './match-connection.css';
 import { command, useLocalRead } from './client';
 import { desktopInvoke } from '../workspace/client';
@@ -28,19 +28,26 @@ export function MatchConnectionDialog() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
-  const [skipHud, setSkipHud] = useState(false);
   const [consoleRead, setConsoleRead] = useState(0);
+  const [preflightReady, setPreflightReady] = useState(false);
   const [consoleStatus, setConsoleStatus] = useState<{
     enabled: boolean;
     generation: string | null;
     runtime?: { phase?: string };
   } | null>(null);
-  const tool = useLocalRead<{ tool?: MulnxToolView }>(
+  const tool = useLocalRead<{ tool?: MulnxToolView & { launchProtocol?: 1 | null } }>(
     request?.useMulnx ? '/local/v1/orchestration' : null,
   )?.tool;
   useEffect(() => {
     if (!request?.useMulnx) return;
     let active = true;
+    void desktopInvoke('observer_command', { action: 'preflight' })
+      .then(() => {
+        if (active) setPreflightReady(true);
+      })
+      .catch(() => {
+        if (active) setPreflightReady(false);
+      });
     void desktopInvoke<NonNullable<typeof consoleStatus>>('cs2_console_status')
       .then((status) => {
         if (active) setConsoleStatus(status);
@@ -48,6 +55,7 @@ export function MatchConnectionDialog() {
       .catch(() => {
         if (active) {
           setConsoleStatus(null);
+          setPreflightReady(false);
           setError('控制台记录状态读取失败，请重新读取。');
         }
       });
@@ -62,9 +70,9 @@ export function MatchConnectionDialog() {
           pending.current?.resolve(false);
           const next = { view, useMulnx, resolve };
           pending.current = next;
+          setPreflightReady(false);
           setRequest(next);
           setInput('');
-          setSkipHud(false);
           setConsoleStatus(null);
           setEarly('');
           setProgram('');
@@ -95,7 +103,7 @@ export function MatchConnectionDialog() {
   } catch {
     /* Report validation on confirmation. */
   }
-  const confirm = async () => {
+  const confirm = async (disableHud = false) => {
     if (busy || !request || pending.current !== request) return;
     setBusy(true);
     setError('');
@@ -120,7 +128,23 @@ export function MatchConnectionDialog() {
         });
       }
       if (pending.current !== request) return;
-      pending.current?.resolve(skipHud ? { skipGameHud: true } : true);
+      if (disableHud) {
+        const response = await fetch('/local/v1/observer-assist', {
+          cache: 'no-store',
+          signal: AbortSignal.timeout(5000),
+        });
+        if (!response.ok) throw new Error('自动操作设置未读取，请重试。');
+        const current = (await response.json()) as ConnectionPreparationView;
+        if (typeof current.gameAutomation?.autoConnect !== 'boolean')
+          throw new Error('自动操作设置未确认，请刷新后重试。');
+        if (pending.current !== request) return;
+        await command('/operator/observer-assist', {
+          action: 'configure-game',
+          settings: { ...current.gameAutomation, hideGameHud: false },
+        });
+        if (pending.current !== request) return;
+      }
+      pending.current?.resolve(true);
       pending.current = null;
       setRequest(null);
     } catch (error) {
@@ -131,9 +155,12 @@ export function MatchConnectionDialog() {
     }
   };
   const endpoints = connection ?? request?.view.connection;
-  const needsHud = request?.useMulnx && request.view.gameAutomation?.hideGameHud && !skipHud;
+  const needsUpdate = Boolean(
+    request?.useMulnx && !request.view.gameRunning && tool?.installed && tool.launchProtocol !== 1,
+  );
+  const needsHud = request?.useMulnx && request.view.gameAutomation?.hideGameHud;
   const hudReady =
-    request?.view.gameHudPrepared ||
+    preflightReady ||
     (consoleStatus?.enabled &&
       (!request?.view.gameRunning || consoleStatus.runtime?.phase === 'reading'));
   return (
@@ -159,11 +186,11 @@ export function MatchConnectionDialog() {
                 自动隐藏游戏 HUD 需要本机控制台记录，并用该设置启动游戏。游戏会写入
                 console.log，可能包含聊天并持续增长。
               </p>
-              {!hudReady && !skipHud ? (
+              {!hudReady ? (
                 <StatusBanner tone="warning">
                   {request.view.gameRunning
                     ? '请确认游戏已启用控制台记录；必要时结束本次游戏后重新启动。'
-                    : '进入前请启用本机控制台记录，或本次禁用自动隐藏。'}
+                    : '进入前请启用本机控制台记录，或关闭自动隐藏后继续。'}
                 </StatusBanner>
               ) : null}
               {!consoleStatus ? (
@@ -202,17 +229,10 @@ export function MatchConnectionDialog() {
                   启用本机控制台记录
                 </Button>
               ) : null}
-              <Checkbox
-                label="本次禁用自动隐藏游戏 HUD"
-                checked={skipHud}
-                disabled={busy || !request.view.capabilities?.skipGameHud}
-                onChange={(event) => setSkipHud(event.target.checked)}
-                message={
-                  request.view.capabilities?.skipGameHud
-                    ? '仅影响本次进入，保留已保存的自动操作设置。'
-                    : '当前桌面组件尚未支持本次选项，请先更新或在游戏与观战设置关闭自动隐藏。'
-                }
-              />
+              <p>“关闭自动隐藏并继续”会保存游戏偏好，保留自动连接设置；以后进入也沿用关闭状态。</p>
+              <Button disabled={busy || needsUpdate} onClick={() => void confirm(true)}>
+                关闭自动隐藏并继续
+              </Button>
             </>
           ) : null}
         </>
@@ -277,7 +297,7 @@ export function MatchConnectionDialog() {
         </Button>
         <Button
           variant="primary"
-          disabled={busy || Boolean(needsHud && !hudReady)}
+          disabled={busy || needsUpdate || Boolean(needsHud && !hudReady)}
           onClick={() => void confirm()}
         >
           确认并进入工作台

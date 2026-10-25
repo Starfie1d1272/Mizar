@@ -37,14 +37,18 @@ export function ObserverHints() {
   const needsRecovery =
     enabled &&
     Boolean(
-      runtime?.failed || ['failed', 'ended', 'stopped'].includes(runtime?.health?.state ?? ''),
+      runtime?.error ||
+      runtime?.failed ||
+      ['failed', 'ended', 'stopped'].includes(runtime?.health?.state ?? ''),
     );
+  const pending = enabled && runtime?.pending;
   const reconnecting = enabled && runtime?.health?.state === 'reconnecting';
   const connecting = enabled && runtime?.health?.state === 'connecting';
   if (!observer && !enabled) return null;
   if (
     observer?.state === 'ready' &&
     hints.length === 0 &&
+    !pending &&
     !needsRecovery &&
     !reconnecting &&
     !connecting
@@ -58,12 +62,18 @@ export function ObserverHints() {
   };
   return (
     <section className="workspace-observer-assist" aria-label="私有观察辅助">
-      {needsRecovery ? (
+      {pending ? (
+        <StatusPill tone="info">正在准备早源</StatusPill>
+      ) : needsRecovery ? (
         <>
           <StatusPill
-            tone={runtime?.failed || runtime?.health.state === 'failed' ? 'danger' : 'warning'}
+            tone={
+              runtime?.error || runtime?.failed || runtime?.health.state === 'failed'
+                ? 'danger'
+                : 'warning'
+            }
           >
-            {runtime?.failed || runtime?.health.state === 'failed'
+            {runtime?.error || runtime?.failed || runtime?.health.state === 'failed'
               ? '早源连接失败'
               : runtime?.health.state === 'ended'
                 ? '早源连接已结束'
@@ -72,10 +82,10 @@ export function ObserverHints() {
           <p>{observerFailureReason(runtime!)}</p>
           {window.__TAURI_INTERNALS__ ? (
             <Button
-              disabled={retrying}
+              disabled={retrying || !runtime?.retryAvailable}
               aria-busy={retrying}
               onClick={() => {
-                if (retrying) return;
+                if (retrying || runtime?.pending || !runtime?.retryAvailable) return;
                 setRetrying(true);
                 setError('');
                 void desktopInvoke('observer_command', { action: 'start-configured' })
@@ -101,7 +111,7 @@ export function ObserverHints() {
         </StatusPill>
       ) : null}
       {error ? <p role="alert">{error}</p> : null}
-      {hints.length && !needsRecovery && !reconnecting && !connecting ? (
+      {hints.length && !pending && !needsRecovery && !reconnecting && !connecting ? (
         <ol className="observer-hints">
           {hints.map((hint) => (
             <li key={hint.id}>

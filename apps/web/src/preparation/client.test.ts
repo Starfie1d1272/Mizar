@@ -35,7 +35,15 @@ afterEach(() => {
 
 function setup(
   failure?:
-    'launch' | 'mulnx' | 'production' | 'restore' | 'presentation' | 'network' | 'trial' | 'assist',
+    | 'launch'
+    | 'mulnx'
+    | 'production'
+    | 'restore'
+    | 'presentation'
+    | 'network'
+    | 'trial'
+    | 'assist'
+    | 'preflight',
   actualMode = 'preparation',
   newlyStarted = true,
   running = true,
@@ -46,14 +54,19 @@ function setup(
     preferMulnx?: boolean;
   }[] = [],
   observerEnabled = false,
-  skipGameHud = false,
 ) {
   registerObserverPreparation(() => Promise.resolve(true));
   const calls: string[] = [];
-  const invoke = vi.fn((command: string) => {
+  const invoke = vi.fn((command: string, args?: Record<string, unknown>) => {
     calls.push(command);
-    if (failure === 'assist' && command === 'observer_command')
+    if (
+      failure === 'assist' &&
+      command === 'observer_command' &&
+      args?.action === 'start-configured'
+    )
       return Promise.reject(new Error('HUD 原值读取失败'));
+    if (failure === 'preflight' && command === 'observer_command')
+      return Promise.reject(new Error('自动隐藏 HUD 尚未准备'));
     if (failure === 'launch' && command === 'start_managed_cs2')
       return Promise.reject(new Error('请先退出已打开的 CS2'));
     if (failure === 'mulnx' && command === 'launch_mulnx')
@@ -81,7 +94,7 @@ function setup(
   window.__TAURI_INTERNALS__ = {
     invoke: async <T>(command: string, args?: Record<string, unknown>) => {
       nativeArgs.push({ command, ...(args ? { args } : {}) });
-      return (await invoke(command)) as T;
+      return (await invoke(command, args)) as T;
     },
   };
   vi.stubGlobal(
@@ -98,7 +111,6 @@ function setup(
           new Response(
             JSON.stringify({
               settings: { enabled: observerEnabled },
-              capabilities: { skipGameHud },
             }),
           ),
         );
@@ -133,11 +145,19 @@ describe('managed CS2 production entry and cleanup', () => {
     await productionAction('enter', preparation);
     expect(calls).toContain('start_managed_cs2');
     expect(calls).not.toContain('launch_mulnx');
-    expect(calls.indexOf('observer_command')).toBeGreaterThan(calls.indexOf('present_production'));
+    expect(
+      nativeArgs.findIndex(
+        (v) => v.command === 'observer_command' && v.args?.action === 'start-configured',
+      ),
+    ).toBeGreaterThan(nativeArgs.findIndex((v) => v.command === 'present_production'));
     expect(calls.indexOf('observer_command')).toBeGreaterThan(
       calls.indexOf('/operator/production'),
     );
-    expect(nativeArgs.find((v) => v.command === 'observer_command')?.args).toMatchObject({
+    expect(
+      nativeArgs.find(
+        (v) => v.command === 'observer_command' && v.args?.action === 'start-configured',
+      )?.args,
+    ).toMatchObject({
       action: 'start-configured',
     });
   });
@@ -271,38 +291,23 @@ describe('managed CS2 production entry and cleanup', () => {
     expect(confirm).toHaveBeenCalledOnce();
     expect(calls).toContain('/local/v1/observer-assist');
     expect(calls).toContain('present_production');
-    expect(nativeArgs.find((value) => value.command === 'observer_command')?.args).toMatchObject({
+    expect(
+      nativeArgs.find(
+        (value) =>
+          value.command === 'observer_command' && value.args?.action === 'start-configured',
+      )?.args,
+    ).toMatchObject({
       action: 'start-configured',
     });
   });
-  it.each([false, true])(
-    'uses the one-entry HUD override only with advertised support (%s)',
-    async (supported) => {
-      const calls = setup(
-        undefined,
-        'preparation',
-        false,
-        true,
-        [
-          { preferMulnx: true, running: true, pending: false },
-          { preferMulnx: true, running: true, pending: false },
-        ],
-        true,
-        supported,
-      );
-      registerObserverPreparation(() => Promise.resolve({ skipGameHud: true }));
-      if (!supported) {
-        await expect(productionAction('enter', preparation)).rejects.toThrow('请更新桌面组件');
-        expect(calls).not.toContain('start_managed_cs2');
-      } else {
-        await productionAction('enter', preparation);
-        expect(
-          nativeArgs.find((value) => value.command === 'observer_command')?.args,
-        ).toMatchObject({ action: 'start-configured', skipGameHud: true });
-        expect(calls).not.toContain('/operator/observer-assist');
-      }
-    },
-  );
+  it('blocks game launch when the native preflight rejects current HUD preparation', async () => {
+    const calls = setup('preflight', 'preparation', false, false, [
+      { preferMulnx: true, running: false, pending: false },
+    ]);
+    await expect(productionAction('enter', preparation)).rejects.toThrow('自动隐藏 HUD 尚未准备');
+    expect(calls).not.toContain('start_managed_cs2');
+    expect(calls).not.toContain('/operator/production');
+  });
   it('coalesces repeated entry clicks while confirmation is pending', async () => {
     const calls = setup(undefined, 'preparation', false, true, [], true);
     let accept!: (value: boolean) => void;

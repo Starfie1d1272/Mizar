@@ -261,7 +261,7 @@ test('preflight reviews current ten-player evidence, actual auto state, disconne
         host.reviewCommands.push({ command, args });
         return Promise.resolve(
           command === 'cs2_config_status'
-            ? { preferMulnx: true, observerHudPending: true, pending: false, running: true }
+            ? { preferMulnx: true, observerHudPending: false, pending: false, running: true }
             : command === 'restore_cs2_focus'
               ? true
               : null,
@@ -306,7 +306,30 @@ test('preflight reviews current ten-player evidence, actual auto state, disconne
       },
     }),
   );
-  await expect(dialog).toContainText('本场使用自动隐藏游戏 HUD');
+  await expect(dialog).toContainText('已启用自动隐藏，请核对实际画面');
+  await expect(dialog.getByRole('button', { name: '复制隐藏命令并返回游戏' })).toHaveCount(0);
+  await expect(dialog).not.toContainText('游戏 HUD 有待恢复记录');
+  await page.evaluate(() => {
+    const host = (
+      window as typeof window & {
+        __TAURI_INTERNALS__: {
+          invoke: <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+        };
+      }
+    ).__TAURI_INTERNALS__;
+    const invoke = host.invoke;
+    host.invoke = <T>(command: string, args?: Record<string, unknown>) =>
+      command === 'cs2_config_status'
+        ? Promise.resolve({
+            preferMulnx: true,
+            observerHudPending: true,
+            pending: false,
+            running: true,
+          } as T)
+        : invoke<T>(command, args);
+  });
+  await expect(dialog).toContainText('游戏 HUD 有待恢复记录');
+  await expect(dialog).toContainText('已启用自动隐藏，请核对实际画面');
   await expect(dialog.getByRole('button', { name: '复制隐藏命令并返回游戏' })).toHaveCount(0);
   hideGameHud = false;
   await expect(dialog.getByRole('button', { name: '复制隐藏命令并返回游戏' })).toBeVisible();

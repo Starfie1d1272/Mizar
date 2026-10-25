@@ -11,16 +11,19 @@ const mocks = vi.hoisted(() => ({
       leadSeconds: 7,
     },
     connection: null,
-    capabilities: { retryEarlyOnly: true },
   },
   command: vi.fn(),
   native: vi.fn(),
   runtime: {
     active: true,
+    pending: false,
+    error: null as 'observer_operation_failed' | null,
+    retryAvailable: true,
     failed: false,
     health: { state: 'live' },
     terminal: undefined as undefined | { reason: string },
   },
+  cs2Status: null as null | { preferMulnx: boolean; running: boolean; observerHudPending: boolean },
   production: { mode: 'preparation' },
   observer: ((): Record<string, unknown> => ({}))(),
 }));
@@ -34,11 +37,16 @@ vi.mock('../src/preparation/client', () => ({
   command: mocks.command,
 }));
 vi.mock('../src/workspace/client', () => ({ desktopInvoke: mocks.native }));
-vi.mock('../src/preparation/cs2-status', () => ({ useCs2Status: () => ({ status: null }) }));
+vi.mock('../src/preparation/cs2-status', () => ({
+  useCs2Status: () => ({ status: mocks.cs2Status, refresh: vi.fn() }),
+}));
 vi.mock('../src/realtime', () => ({
   useLocalChannelClient: () => ({ subscribe: () => () => {}, getSnapshot: () => mocks.observer }),
 }));
-import { ObserverSettingsPanel } from '../src/preparation/ObserverSettings';
+import {
+  GameAutomationSettingsPanel,
+  ObserverSettingsPanel,
+} from '../src/preparation/ObserverSettings';
 import { ObserverHints } from '../src/workspace/ObserverHints';
 let root: Root, container: HTMLDivElement;
 beforeEach(() => {
@@ -46,8 +54,17 @@ beforeEach(() => {
   document.body.append(container);
   root = createRoot(container);
   mocks.view.settings = { ...DEFAULT_OBSERVER_SETTINGS };
-  mocks.runtime = { active: true, failed: false, health: { state: 'live' }, terminal: undefined };
+  mocks.runtime = {
+    active: true,
+    pending: false,
+    error: null,
+    retryAvailable: true,
+    failed: false,
+    health: { state: 'live' },
+    terminal: undefined,
+  };
   mocks.production.mode = 'preparation';
+  mocks.cs2Status = null;
   mocks.command.mockReset().mockResolvedValue({});
   mocks.native.mockReset().mockResolvedValue(undefined);
 });
@@ -125,10 +142,23 @@ it('distinguishes reconnecting from a terminal failure and dispatches the config
   act(() => root.render(<ObserverHints />));
   expect(container.textContent).toContain('正在重连早源');
   expect(container.querySelector('button')).toBeNull();
+  mocks.runtime.pending = true;
+  act(() => root.render(<ObserverHints />));
+  expect(container.textContent).toContain('正在准备早源');
+  expect(container.querySelector('button')).toBeNull();
+  mocks.runtime.pending = false;
+  mocks.runtime.error = 'observer_operation_failed';
+  act(() => root.render(<ObserverHints />));
+  expect(container.textContent).toContain('早源连接失败');
   mocks.runtime.failed = true;
   mocks.runtime.terminal = { reason: 'initialization-timeout' };
   act(() => root.render(<ObserverHints />));
   expect(container.textContent).toContain('早源连接超时');
+  mocks.runtime.retryAvailable = false;
+  act(() => root.render(<ObserverHints />));
+  expect(container.querySelector<HTMLButtonElement>('button')!.disabled).toBe(true);
+  mocks.runtime.retryAvailable = true;
+  act(() => root.render(<ObserverHints />));
   await act(async () => {
     container.querySelector('button')!.click();
     await Promise.resolve();
@@ -140,6 +170,10 @@ it('distinguishes reconnecting from a terminal failure and dispatches the config
 it('requests configured assistance when enabled during a live session', async () => {
   window.__TAURI_INTERNALS__ = { invoke: <T,>() => Promise.resolve(undefined as T) };
   mocks.production.mode = 'live';
+  mocks.runtime.pending = true;
+  act(() => root.render(<ObserverSettingsPanel />));
+  expect(container.querySelector<HTMLButtonElement>('button')!.disabled).toBe(true);
+  mocks.runtime.pending = false;
   act(() => root.render(<ObserverSettingsPanel />));
   act(() => {
     container.querySelector<HTMLInputElement>('input[type=checkbox]')!.click();
@@ -152,5 +186,20 @@ it('requests configured assistance when enabled during a live session', async ()
   });
   expect(mocks.native).toHaveBeenCalledExactlyOnceWith('observer_command', {
     action: 'start-configured',
+  });
+});
+
+it('restores a pending game HUD through its dedicated native command', async () => {
+  window.__TAURI_INTERNALS__ = { invoke: <T,>() => Promise.resolve(undefined as T) };
+  mocks.cs2Status = { preferMulnx: true, running: true, observerHudPending: true };
+  act(() => root.render(<GameAutomationSettingsPanel />));
+  await act(async () => {
+    [...container.querySelectorAll('button')]
+      .find((button) => button.textContent === '恢复游戏 HUD')!
+      .click();
+    await Promise.resolve();
+  });
+  expect(mocks.native).toHaveBeenCalledExactlyOnceWith('observer_command', {
+    action: 'restore-hud',
   });
 });

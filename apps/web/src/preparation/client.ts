@@ -221,11 +221,7 @@ async function performProductionAction(
       : null;
   const entryFeaturesEnabled =
     action === 'enter'
-      ? await flushObserverPreparation(
-          launch?.preferMulnx === true,
-          launch?.running === true,
-          launch?.observerHudPending === true,
-        )
+      ? await flushObserverPreparation(launch?.preferMulnx === true, launch?.running === true)
       : false;
   if (entryFeaturesEnabled === null) {
     task.finish('cancelled', { reason: 'connection_confirmation_cancelled' });
@@ -245,6 +241,8 @@ async function performProductionAction(
     task.finish('cancelled', { reason: 'navigation_changed' });
     return;
   }
+  if (action === 'enter' && window.__TAURI_INTERNALS__ && launch?.preferMulnx)
+    await desktopInvoke('observer_command', { action: 'preflight' }, task);
   let newlyStarted = false;
   let borrowed = Boolean(external);
   let selectedExternal = external;
@@ -304,14 +302,7 @@ async function performProductionAction(
       await desktopInvoke('present_production', { live: action === 'enter' }, task);
       presented = true;
       if (entryFeaturesEnabled)
-        await desktopInvoke(
-          'observer_command',
-          {
-            action: 'start-configured',
-            ...(typeof entryFeaturesEnabled === 'object' ? { skipGameHud: true } : {}),
-          },
-          task,
-        );
+        await desktopInvoke('observer_command', { action: 'start-configured' }, task);
     } else window.location.assign(action === 'enter' ? '/workspace' : '/');
     task.finish('confirmed', { confirmation: 'production_command_ack_and_presentation', action });
   } catch (reason) {
