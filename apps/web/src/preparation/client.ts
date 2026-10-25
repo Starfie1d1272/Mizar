@@ -128,7 +128,25 @@ export async function checkObsBeforeLaunch(requireStoppedOutput = false, task?: 
 
 export type ExternalGameIdentity = { pid: number; created: string };
 
-export async function productionAction(
+let entering: Promise<ControlTask['result']> | undefined;
+export function productionAction(
+  action: 'enter' | 'hide' | 'finish',
+  state: Production,
+  preserveSettings = false,
+  parentTask?: ControlTask,
+  external?: ExternalGameIdentity,
+) {
+  if (action !== 'enter')
+    return runProductionAction(action, state, preserveSettings, parentTask, external);
+  if (entering) return entering;
+  entering = runProductionAction(action, state, preserveSettings, parentTask, external).finally(
+    () => {
+      entering = undefined;
+    },
+  );
+  return entering;
+}
+async function runProductionAction(
   action: 'enter' | 'hide' | 'finish',
   state: Production,
   preserveSettings = false,
@@ -194,12 +212,17 @@ async function performProductionAction(
   }
   let launch =
     action === 'enter' && window.__TAURI_INTERNALS__
-      ? await desktopInvoke<{ preferMulnx?: boolean; running: boolean; pending: boolean }>(
-          'cs2_config_status',
-        )
+      ? await desktopInvoke<{
+          preferMulnx?: boolean;
+          running: boolean;
+          pending: boolean;
+          observerHudPending?: boolean;
+        }>('cs2_config_status')
       : null;
   const entryFeaturesEnabled =
-    action === 'enter' ? await flushObserverPreparation(launch?.preferMulnx === true) : false;
+    action === 'enter'
+      ? await flushObserverPreparation(launch?.preferMulnx === true, launch?.running === true)
+      : false;
   if (entryFeaturesEnabled === null) {
     task.finish('cancelled', { reason: 'connection_confirmation_cancelled' });
     return;
@@ -214,6 +237,12 @@ async function performProductionAction(
       throw new Error('游戏启动方式已更新，请重新确认本场连接后进入工作台。');
     launch = current;
   }
+  if (action === 'enter' && window.location.href !== entryLocation) {
+    task.finish('cancelled', { reason: 'navigation_changed' });
+    return;
+  }
+  if (action === 'enter' && window.__TAURI_INTERNALS__ && launch?.preferMulnx)
+    await desktopInvoke('observer_command', { action: 'preflight' }, task);
   let newlyStarted = false;
   let borrowed = Boolean(external);
   let selectedExternal = external;
@@ -266,16 +295,23 @@ async function performProductionAction(
     task.finish('cancelled', { reason: 'navigation_changed' });
     return;
   }
+  let presented = false;
   try {
     await command('/operator/production', { action, expectedRevision: state.revision }, task);
     if (window.__TAURI_INTERNALS__) {
       await desktopInvoke('present_production', { live: action === 'enter' }, task);
+      presented = true;
       if (entryFeaturesEnabled)
         await desktopInvoke('observer_command', { action: 'start-configured' }, task);
     } else window.location.assign(action === 'enter' ? '/workspace' : '/');
     task.finish('confirmed', { confirmation: 'production_command_ack_and_presentation', action });
   } catch (reason) {
     if (action !== 'enter' || !window.__TAURI_INTERNALS__) throw reason;
+    if (presented)
+      throw new Error(
+        `工作台已打开，观战连接或 HUD 准备未完成。请在游戏与观战设置核对本场连接和 HUD 状态后重试。${reason instanceof Error ? reason.message : '操作未完成。'}`,
+        { cause: reason },
+      );
     const actual = await fetch('/local/v1/production', {
       headers: task.headers(),
       cache: 'no-store',

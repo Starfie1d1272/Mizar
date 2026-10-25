@@ -3,9 +3,11 @@ import { useEffect, useState } from 'react';
 import type { OperatorPayload } from '@mizar/protocol/operator';
 import type { ProgramPayload, ProgramSnapshot } from '@mizar/protocol/program';
 import { Button, Select } from '../ui';
-import { command } from '../preparation/client';
+import { command, useLocalRead } from '../preparation/client';
 import { HIDE_SPECTATOR_HUD_COMMAND } from '../preparation/SpectatorHudCommands';
 import { desktopInvoke, useProgramScenes } from './client';
+import { useCs2Status } from '../preparation/cs2-status';
+import type { ConnectionPreparationView } from '../preparation/observer-preparation';
 import { useObsStatus } from './obs-client';
 import { syncHealthText, type SyncHealth } from './SyncHealthAlert';
 import type { LiveRosterConnection } from './live-roster-model';
@@ -70,6 +72,9 @@ export function PreflightReview(props: Props) {
 
 function ReviewSession({ operator, program, cursor, connection, onOpen }: Props) {
   const scenes = useProgramScenes();
+  const cs2 = useCs2Status();
+  const automation = useLocalRead<ConnectionPreparationView>('/local/v1/observer-assist');
+  const automaticHud = Boolean(cs2.status?.preferMulnx && automation?.gameAutomation?.hideGameHud);
   const obs = useObsStatus();
   const [automaticIncident, setAutomaticIncident] = useState('');
   const [opened, setOpened] = useState(false);
@@ -339,33 +344,42 @@ function ReviewSession({ operator, program, cursor, connection, onOpen }: Props)
             </section>
             <section className="preflight-check">
               <h3>画面与声音</h3>
-              <p>复制后返回游戏，在控制台粘贴并回车。执行后核对画面，试听游戏声与解说声音。</p>
-              <Button
-                variant="primary"
-                disabled={busy}
-                onClick={() =>
-                  void run(async () => {
-                    try {
-                      await navigator.clipboard.writeText(HIDE_SPECTATOR_HUD_COMMAND);
-                    } catch {
-                      throw new Error(`复制未完成，请手动复制：${HIDE_SPECTATOR_HUD_COMMAND}`);
+              {cs2.status?.observerHudPending ? (
+                <p role="status">游戏 HUD 有待恢复记录，请在游戏与观战设置中恢复并核对实际画面。</p>
+              ) : null}
+              {automaticHud ? (
+                <p>已启用自动隐藏，请核对实际画面。返回游戏试听游戏声与解说声音。</p>
+              ) : (
+                <>
+                  <p>复制后返回游戏，在控制台粘贴并回车。执行后核对画面，试听游戏声与解说声音。</p>
+                  <Button
+                    variant="primary"
+                    disabled={busy}
+                    onClick={() =>
+                      void run(async () => {
+                        try {
+                          await navigator.clipboard.writeText(HIDE_SPECTATOR_HUD_COMMAND);
+                        } catch {
+                          throw new Error(`复制未完成，请手动复制：${HIDE_SPECTATOR_HUD_COMMAND}`);
+                        }
+                        if (window.__TAURI_INTERNALS__) {
+                          const focused = await desktopInvoke<boolean>('restore_cs2_focus');
+                          if (!focused)
+                            throw new Error(
+                              '命令已复制，尚未执行。Windows 未允许切换，请用 Alt-Tab 返回 CS2，粘贴后回车。',
+                            );
+                        }
+                        close();
+                      })
                     }
-                    if (window.__TAURI_INTERNALS__) {
-                      const focused = await desktopInvoke<boolean>('restore_cs2_focus');
-                      if (!focused)
-                        throw new Error(
-                          '命令已复制，尚未执行。Windows 未允许切换，请用 Alt-Tab 返回 CS2，粘贴后回车。',
-                        );
-                    }
-                    close();
-                  })
-                }
-              >
-                复制隐藏命令并返回游戏
-              </Button>
-              <small>
-                复制后关闭此窗口；不会代替你执行命令。需要继续核对时，从工作台重新打开。
-              </small>
+                  >
+                    复制隐藏命令并返回游戏
+                  </Button>
+                  <small>
+                    复制后关闭此窗口；不会代替你执行命令。需要继续核对时，从工作台重新打开。
+                  </small>
+                </>
+              )}
               <small>
                 {obs?.connection !== 'connected'
                   ? 'OBS 尚未连接，无法确认输出状态'
