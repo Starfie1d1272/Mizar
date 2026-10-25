@@ -261,6 +261,7 @@ test('enters standard and MulNX without an address, then confirms from the workb
       const host = window as typeof window & {
         nativeCalls: string[];
         openedPaths: string[];
+        nativeRevisions: unknown[];
         failConnection: boolean;
         __TAURI_INTERNALS__: {
           invoke: (name: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -268,6 +269,7 @@ test('enters standard and MulNX without an address, then confirms from the workb
       };
       host.nativeCalls = [];
       host.openedPaths = [];
+      host.nativeRevisions = [];
       host.failConnection = false;
       let running = false;
       host.__TAURI_INTERNALS__ = {
@@ -276,6 +278,7 @@ test('enters standard and MulNX without an address, then confirms from the workb
           host.nativeCalls.push(
             name === 'observer_command' ? `${name}/${String(args?.action)}` : name,
           );
+          if (name === 'observer_command') host.nativeRevisions.push(args?.expectedRevision);
           if (name === 'open_main') host.openedPaths.push(String(args?.path));
           if (name === 'observer_command' && host.failConnection)
             throw new Error('节目或早源操作失败');
@@ -434,6 +437,16 @@ test('enters standard and MulNX without an address, then confirms from the workb
     await expect(dialog.getByRole('textbox', { name: '早源 IPv4:端口' })).not.toBeVisible();
     await expect(dialog.getByRole('button', { name: '复制节目源连接命令' })).toBeVisible();
     await dialog.getByRole('button', { name: '取消', exact: true }).click();
+    expect(
+      await page.evaluate(
+        () => (window as typeof window & { nativeRevisions: unknown[] }).nativeRevisions,
+      ),
+    ).toEqual([
+      '10000000-0000-4000-8000-000000000002',
+      '10000000-0000-4000-8000-000000000002',
+      '10000000-0000-4000-8000-000000000003',
+      '10000000-0000-4000-8000-000000000003',
+    ]);
     await page.reload();
     await expect(control).toBeVisible();
     expect(await calls()).not.toContain('observer_command/start-configured');
