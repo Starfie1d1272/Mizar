@@ -46,14 +46,15 @@ pub fn pulse(app: &tauri::AppHandle, cs2: &managed_cs2::ManagedCs2) {
 
 #[tauri::command]
 pub async fn observer_command(window: tauri::WebviewWindow, app: tauri::AppHandle,
-    action: String, endpoint: Option<String>, password: Option<String>) -> Result<(), String> {
+    action: String, endpoint: Option<String>, password: Option<String>, expected_revision: Option<String>) -> Result<serde_json::Value, String> {
     if !["main", "workspace-left", "workspace-dock"].contains(&window.label()) {
         return Err("请在制播工作台操作观察辅助。".into());
     }
     tauri::async_runtime::spawn_blocking(move || {
         let log = app.state::<DesktopLog>();
         log.event("observer_workspace", "begin", Some(&format!("action={action}")));
-        let result = (|| {
+        let mut automation = None;
+        let result: Result<(), String> = (|| {
             if action == "stop" {
                 request(&log, serde_json::json!({"action":"stop"}))?;
                 ACTIVE.store(false, Ordering::Release);
@@ -85,9 +86,12 @@ pub async fn observer_command(window: tauri::WebviewWindow, app: tauri::AppHandl
             let executable = context["executable"].as_str().ok_or("请确认 CS2 安装位置。")?;
             if action == "start-configured" {
                 let job = observer_job::name(&log.session_id);
-                let use_mulnx = cs2.status()?["preferMulnx"].as_bool().unwrap_or(false);
+                let use_mulnx = crate::mulnx_launch::observer_control_available(&cs2, &log);
+                automation = Some(use_mulnx);
                 let game_key = format!("{}-{}", game.pid, game.created);
-                let preparation = request(&log, serde_json::json!({"action":"prepare","game":game_key,"job":job,"useMulnx":use_mulnx}))?;
+                let mut intent = serde_json::json!({"action":"prepare","game":game_key,"job":job,"useMulnx":use_mulnx});
+                if let Some(revision) = expected_revision { intent["expectedRevision"] = revision.into(); }
+                let preparation = request(&log, intent)?;
                 if preparation["enabled"] != true { stop(&log)?; return Ok(()); }
                 if preparation["reuse"] == true { ACTIVE.store(true, Ordering::Release); return Ok(()); }
                 let mut body = serde_json::json!({"action":"start-configured","executable":executable,
@@ -95,11 +99,10 @@ pub async fn observer_command(window: tauri::WebviewWindow, app: tauri::AppHandl
                 if preparation["hideGameHud"] == true {
                     body["hudOriginal"] = crate::observer_hud::snapshot(&log, std::path::Path::new(executable), &game)?.into();
                 } else { crate::observer_hud::restore(&log)?; }
-                if let Err(error) = request(&log, body) {
-                    if let Err(restore) = crate::observer_hud::restore(&log) { log.event("observer_hud_restore", "failure", Some(&restore)); }
-                    return Err(error);
-                }
                 ACTIVE.store(true, Ordering::Release);
+                // Keep the accepted program operation and HUD journal on auxiliary failure.
+                // Exit restores the original value; retry reuses the same game transaction.
+                request(&log, body)?;
                 return Ok(());
             }
             request(&log, serde_json::json!({"action":"start", "executable":executable,
@@ -109,6 +112,6 @@ pub async fn observer_command(window: tauri::WebviewWindow, app: tauri::AppHandl
             Ok(())
         })();
         log.event("observer_workspace", if result.is_ok() { "success" } else { "failure" }, result.as_ref().err().map(String::as_str));
-        result
+        result.map(|()| serde_json::json!({"useMulnx":automation}))
     }).await.map_err(|error| format!("观察辅助操作需要重试：{error}"))?
 }

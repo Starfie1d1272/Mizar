@@ -133,41 +133,27 @@ function setup(
 }
 
 describe('managed CS2 production entry and cleanup', () => {
-  it('starts configured private assistance after committing production and presenting the workbench', async () => {
-    const calls = setup(
-      undefined,
-      'preparation',
-      false,
-      true,
-      [{ preferMulnx: false, running: false, pending: false }],
-      true,
-    );
-    await productionAction('enter', preparation);
-    expect(calls).toContain('start_managed_cs2');
-    expect(calls).not.toContain('launch_mulnx');
-    expect(
-      nativeArgs.findIndex(
-        (v) => v.command === 'observer_command' && v.args?.action === 'start-configured',
-      ),
-    ).toBeGreaterThan(nativeArgs.findIndex((v) => v.command === 'present_production'));
-    expect(calls.indexOf('observer_command')).toBeGreaterThan(
-      calls.indexOf('/operator/production'),
-    );
-    expect(
-      nativeArgs.find(
-        (v) => v.command === 'observer_command' && v.args?.action === 'start-configured',
-      )?.args,
-    ).toMatchObject({
-      action: 'start-configured',
-    });
-  });
-  it('keeps game and production unchanged when connection confirmation is cancelled', async () => {
-    const calls = setup(undefined, 'preparation', false, true, [], true);
-    registerObserverPreparation(() => Promise.resolve(false));
-    await productionAction('enter', preparation);
-    expect(calls).not.toContain('start_managed_cs2');
-    expect(calls).not.toContain('/operator/production');
-  });
+  it.each([false, true])(
+    'opens without a connection confirmation or observer start (MulNX=%s)',
+    async (preferMulnx) => {
+      const calls = setup(
+        undefined,
+        'preparation',
+        false,
+        true,
+        [{ preferMulnx, running: false, pending: false }],
+        true,
+      );
+      const confirm = vi.fn(() => Promise.resolve(false));
+      registerObserverPreparation(confirm);
+      await productionAction('enter', preparation);
+      expect(confirm).not.toHaveBeenCalled();
+      expect(calls).toContain(preferMulnx ? 'launch_mulnx' : 'start_managed_cs2');
+      expect(calls).toContain('present_production');
+      expect(calls).not.toContain('/local/v1/observer-assist');
+      expect(calls).not.toContain('observer_command');
+    },
+  );
   it('continues the same entry through verified MulNX launch and attachment without launcher navigation', async () => {
     const calls = setup(undefined, 'preparation', false, true, [
       { preferMulnx: true, running: false, pending: false },
@@ -275,66 +261,35 @@ describe('managed CS2 production entry and cleanup', () => {
       error: { cause: { message: '网络中断' } },
     });
   });
-  it('reports auxiliary failure after the workspace is already presented', async () => {
-    const calls = setup('assist', 'live', false, true, [], true);
-    await expect(productionAction('enter', preparation)).rejects.toThrow(
-      '工作台已打开，观战连接或 HUD 准备未完成',
-    );
-    expect(calls).toContain('present_production');
-    expect(calls).not.toContain('finish_managed_cs2');
-  });
-  it('confirms the existing connection on return and dispatches through the reusable native entry', async () => {
+  it('returns to the current workbench without requesting or restarting its connection', async () => {
     const calls = setup(undefined, 'live', false, true, [], true);
-    const confirm = vi.fn(() => Promise.resolve(true));
-    registerObserverPreparation(confirm);
     await productionAction('enter', { ...preparation, mode: 'live' });
-    expect(confirm).toHaveBeenCalledOnce();
-    expect(calls).toContain('/local/v1/observer-assist');
     expect(calls).toContain('present_production');
-    expect(
-      nativeArgs.find(
-        (value) =>
-          value.command === 'observer_command' && value.args?.action === 'start-configured',
-      )?.args,
-    ).toMatchObject({
-      action: 'start-configured',
-    });
+    expect(calls).not.toContain('/local/v1/observer-assist');
+    expect(calls).not.toContain('observer_command');
   });
-  it('blocks game launch when the native preflight rejects current HUD preparation', async () => {
-    const calls = setup('preflight', 'preparation', false, false, [
+  it('keeps HUD checks out of presentation and leaves launch-specific checks to native launch', async () => {
+    const calls = setup('preflight', 'preparation', false, true, [
       { preferMulnx: true, running: false, pending: false },
     ]);
-    await expect(productionAction('enter', preparation)).rejects.toThrow('自动隐藏 HUD 尚未准备');
-    expect(calls).not.toContain('start_managed_cs2');
-    expect(calls).not.toContain('/operator/production');
+    await productionAction('enter', preparation);
+    expect(calls).toContain('launch_mulnx');
+    expect(calls).toContain('present_production');
+    expect(calls).not.toContain('observer_command');
   });
-  it('coalesces repeated entry clicks while confirmation is pending', async () => {
-    const calls = setup(undefined, 'preparation', false, true, [], true);
-    let accept!: (value: boolean) => void;
-    registerObserverPreparation(
-      () =>
-        new Promise((resolve) => {
-          accept = resolve;
-        }),
-    );
+  it('coalesces repeated entry clicks through game startup', async () => {
+    vi.useFakeTimers();
+    const calls = setup(undefined, 'preparation', false, true, [
+      { running: false, pending: false },
+      { running: false, pending: true },
+      { running: true, pending: true },
+    ]);
     const first = productionAction('enter', preparation);
     const repeated = productionAction('enter', preparation);
     expect(repeated).toBe(first);
-    await vi.waitFor(() => expect(accept).toBeDefined());
-    accept(true);
+    await vi.advanceTimersByTimeAsync(1000);
     await Promise.all([first, repeated]);
     expect(calls.filter((call) => call === 'start_managed_cs2')).toHaveLength(1);
-  });
-  it('does not launch after navigation changes during connection confirmation', async () => {
-    const calls = setup(undefined, 'preparation', false, true, [], true);
-    registerObserverPreparation(() => {
-      window.history.pushState(null, '', '/settings');
-      return Promise.resolve(true);
-    });
-    await productionAction('enter', preparation);
-    expect(calls).not.toContain('start_managed_cs2');
-    expect(calls).not.toContain('observer_command');
-    expect(calls).not.toContain('/operator/production');
   });
   it('keeps simultaneous actions separate while linking each native and HTTP child to its root task', async () => {
     setup();

@@ -1382,6 +1382,8 @@ fn main_path_allowed(path: &str) -> bool {
         "/settings",
         "/settings?tab=gsi",
         "/settings?tab=obs",
+        "/settings?tab=music",
+        "/settings?tab=music&section=camera",
         "/settings?tab=rivalhub",
     ]
     .contains(&path)
@@ -1451,12 +1453,6 @@ fn present_production_inner(app: &tauri::AppHandle, live: bool) -> Result<(), St
             let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
             let cs2 = managed.lock().map_err(|_| "CS2 配置状态不可用。")?;
             let process = cs2.workspace_process()?;
-            let log = app.state::<DesktopLog>();
-            if observer_hud::preflight(&log, cs2.status()?["preferMulnx"] == true)? {
-                let (context, game) = cs2.console_source()?.ok_or("请先启动或接入 CS2，再核对 HUD。")?;
-                let executable = context["executable"].as_str().ok_or("CS2 安装位置未确认。")?;
-                observer_hud::snapshot(&log, Path::new(executable), &game)?;
-            }
             let request = process.as_ref().filter(|process| process.owned).and_then(|process| {
                 app.state::<HostState>().entry_focus.lock().ok()?
                     .request(focus_session(process), source)
@@ -2973,6 +2969,18 @@ fn main() {
 #[cfg(test)]
 mod startup_tests {
     use super::*;
+
+    #[test]
+    fn preparation_routes_are_exact_and_include_workspace_settings_links() {
+        for path in ["/", "/matches", "/settings?tab=gsi", "/settings?tab=obs",
+            "/settings?tab=rivalhub", "/settings?tab=music", "/settings?tab=music&section=camera"] {
+            assert!(main_path_allowed(path), "{path}");
+        }
+        for path in ["https://example.com/", "//example.com", "/workspace", "/settings?tab=music&other=1",
+            "/settings?tab=music&section=other", "/settings/../workspace", "/settings?tab=unknown"] {
+            assert!(!main_path_allowed(path), "{path}");
+        }
+    }
 
     #[test]
     fn rollback_ownership_requires_this_session_and_supervisor() {
