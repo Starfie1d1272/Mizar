@@ -148,7 +148,8 @@ test('local and website libraries share match details while browsing and loading
           return route.fulfill({
             json: {
               competition: { name: first.competition?.name ?? '邀请赛' },
-              matches: library.matches.map((document) => ({
+              matches: library.matches.map((document, index) => ({
+                status: (cacheMissing ? index === 1 : index === 0) ? 'in_progress' : 'scheduled',
                 matchId: document.matchId,
                 scheduledAt: document.scheduledAt,
                 format: document.format,
@@ -234,6 +235,11 @@ test('local and website libraries share match details while browsing and loading
     await browser.getByRole('button', { name: '刷新比赛', exact: true }).click();
     await expect.poll(() => refreshes).toBeGreaterThan(before);
     await expect(detail.getByText('完整资料暂未缓存，可稍后重试。')).toBeVisible();
+    await expect(detail.getByRole('heading', { name: '丙队 vs 丁队', exact: true })).toBeVisible();
+    await expect(browser.getByRole('button', { name: /丙队 vs 丁队/ })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
     await capture('04-website-cache-missing');
     await page.getByRole('button', { name: '本地赛事', exact: true }).click();
     await detail.getByRole('button', { name: '编辑比赛', exact: true }).click();

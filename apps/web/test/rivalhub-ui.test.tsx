@@ -2,6 +2,8 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { RivalHubMatchLibrary, type WebsiteSchedule } from '../src/operator/RivalHubMatchLibrary';
+import { sortWebsiteMatches } from '../src/operator/website-schedule-order';
 import { RivalHubLiveSourcePanel } from '../src/workspace/RivalHubLiveSourcePanel';
 
 let mockBpWorkspace: {
@@ -154,5 +156,97 @@ describe('Live Workspace: RivalHubLiveSourcePanel', () => {
         toUrlString(call[0]).includes('/operator/rivalhub/source/claim'),
       ),
     ).toHaveLength(1);
+  });
+});
+
+describe('website match library order', () => {
+  it('orders website states and dates deterministically without changing the source array', () => {
+    const matches = Object.freeze(
+      [
+        {
+          matchId: 'finished-old',
+          status: 'finished',
+          scheduledAt: '2020-01-01',
+          completedAt: '2020-01-02',
+        },
+        { matchId: 'unscheduled', status: 'scheduled', scheduledAt: null },
+        { matchId: 'scheduled-b', status: 'scheduled', scheduledAt: '2026-11-01' },
+        { matchId: 'cancelled', status: 'cancelled', scheduledAt: '2026-11-03' },
+        { matchId: 'live', status: 'in_progress', scheduledAt: null },
+        { matchId: 'legacy', scheduledAt: '2020-01-01' },
+        { matchId: 'scheduled-a', status: 'scheduled', scheduledAt: '2026-11-01' },
+        {
+          matchId: 'finished-new',
+          status: 'finished',
+          scheduledAt: '2019-01-01',
+          completedAt: '2026-11-04',
+        },
+        { matchId: 'undated-ended', status: 'finished', scheduledAt: null },
+        { matchId: 'invalid', status: 'scheduled', scheduledAt: 'invalid' },
+        {
+          matchId: 'fallback',
+          status: 'cancelled',
+          scheduledAt: '2026-11-02',
+          completedAt: 'invalid',
+        },
+      ].map((match) => Object.freeze(match)),
+    );
+    const original = [...matches];
+    const expected = [
+      'live',
+      'legacy',
+      'scheduled-a',
+      'scheduled-b',
+      'invalid',
+      'unscheduled',
+      'finished-new',
+      'cancelled',
+      'fallback',
+      'finished-old',
+      'undated-ended',
+    ];
+    expect(sortWebsiteMatches(matches).map((match) => match.matchId)).toEqual(expected);
+    expect(sortWebsiteMatches([...matches].reverse()).map((match) => match.matchId)).toEqual(
+      expected,
+    );
+    expect(matches).toEqual(original);
+    expect(sortWebsiteMatches([])).toEqual([]);
+  });
+
+  it('defaults to the sorted first match and preserves an explicit choice through refresh', () => {
+    const row = (matchId: string, status: 'scheduled' | 'in_progress' | 'finished') => ({
+      matchId,
+      status,
+      scheduledAt: null,
+      format: 'bo3',
+      entrantA: { name: matchId },
+      entrantB: { name: 'opponent' },
+    });
+    const onSelect = vi.fn();
+    const render = (matches: WebsiteSchedule['matches']) =>
+      act(() =>
+        root?.render(
+          <RivalHubMatchLibrary
+            schedule={{ competition: { name: 'test' }, matches }}
+            selecting={false}
+            onSelect={onSelect}
+            activeMatchId="b"
+            refreshing={false}
+            onRefresh={() => {}}
+          />,
+        ),
+      );
+    render([row('b', 'scheduled'), row('a', 'in_progress')]);
+    expect(container.querySelector('h2')?.textContent).toBe('a vs opponent');
+    const choice = [...container.querySelectorAll('button')].find((button) =>
+      button.textContent?.includes('b vs opponent'),
+    )!;
+    act(() => choice.click());
+    render([row('a', 'in_progress'), row('b', 'finished')]);
+    expect(container.querySelector('h2')?.textContent).toBe('b vs opponent');
+    expect(container.textContent).toContain('前往本场准备');
+    expect(onSelect).not.toHaveBeenCalled();
+    render([row('c', 'scheduled'), row('a', 'in_progress')]);
+    expect(container.querySelector('h2')?.textContent).toBe('a vs opponent');
   });
 });
