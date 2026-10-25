@@ -149,7 +149,7 @@ it('distinguishes reconnecting from a terminal failure and dispatches the config
   mocks.runtime.pending = false;
   mocks.runtime.error = 'observer_operation_failed';
   act(() => root.render(<ObserverHints />));
-  expect(container.textContent).toContain('早源连接失败');
+  expect(container.textContent).toContain('观察辅助准备失败');
   mocks.runtime.failed = true;
   mocks.runtime.terminal = { reason: 'initialization-timeout' };
   act(() => root.render(<ObserverHints />));

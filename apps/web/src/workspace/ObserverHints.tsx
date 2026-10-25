@@ -73,13 +73,19 @@ export function ObserverHints() {
                 : 'warning'
             }
           >
-            {runtime?.error || runtime?.failed || runtime?.health.state === 'failed'
+            {runtime?.failed || runtime?.health.state === 'failed'
               ? '早源连接失败'
-              : runtime?.health.state === 'ended'
-                ? '早源连接已结束'
-                : '早源接收已停止'}
+              : runtime?.error
+                ? '观察辅助准备失败'
+                : runtime?.health.state === 'ended'
+                  ? '早源连接已结束'
+                  : '早源接收已停止'}
           </StatusPill>
-          <p>{observerFailureReason(runtime!)}</p>
+          <p>
+            {runtime?.error && !runtime.failed
+              ? '辅助操作未完成，请核对本场连接后重试。'
+              : observerFailureReason(runtime!)}
+          </p>
           {window.__TAURI_INTERNALS__ ? (
             <Button
               disabled={retrying || !runtime?.retryAvailable}
