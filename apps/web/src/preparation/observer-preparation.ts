@@ -1,11 +1,20 @@
 import type { ObserverSettings, GameAutomationSettings } from '@mizar/protocol/assist';
 export type ConnectionPreparationView = {
-  revision?: string;
+  revision: string;
   settings: ObserverSettings;
   gameAutomation?: GameAutomationSettings;
   connection: { earlyEndpoint: string; programEndpoint: string } | null;
   gameRunning?: boolean;
 };
+/** Refuse incomplete replies rather than silently dropping the concurrency guard. */
+export function requireConnectionRevision(value: unknown): string {
+  if (
+    typeof value !== 'string' ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
+  )
+    throw new Error('本图连接修订未确认，请重新打开连接入口后重试。');
+  return value;
+}
 export type EntryConfirmation = boolean;
 type Confirm = (view: ConnectionPreparationView, useMulnx: boolean) => Promise<EntryConfirmation>;
 let confirm: Confirm | undefined;
@@ -27,6 +36,7 @@ export async function flushObserverPreparation(
   if (!response.ok) throw new Error('本场连接设置未读取，请重试。');
   const view = (await response.json()) as ConnectionPreparationView;
   if (typeof view.settings?.enabled !== 'boolean') throw new Error('请刷新后重试本场连接。');
+  requireConnectionRevision(view.revision);
   if (!confirm) throw new Error('本场连接入口未准备好，请刷新后重试。');
   return (await confirm({ ...view, gameRunning }, useMulnx)) ? true : null;
 }

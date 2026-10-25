@@ -6,6 +6,7 @@ import { command } from './client';
 import { desktopInvoke } from '../workspace/client';
 import {
   registerObserverPreparation,
+  requireConnectionRevision,
   type ConnectionPreparationView,
   type EntryConfirmation,
 } from './observer-preparation';
@@ -41,6 +42,7 @@ export function MatchConnectionDialog() {
             setInput('');
             setEarly('');
             setProgram('');
+            setAdvanced(false);
             setCopied(false);
           }
           draftRevision.current = view.revision;
@@ -64,6 +66,7 @@ export function MatchConnectionDialog() {
       setInput('');
       setEarly('');
       setProgram('');
+      setAdvanced(false);
     }
     pending.current?.resolve(confirmed);
     pending.current = null;
@@ -86,26 +89,27 @@ export function MatchConnectionDialog() {
     setBusy(true);
     setError('');
     try {
-      if (!input.trim() && !request.view.connection) throw new Error('请填写本场授权的观战连接。');
+      if (!input.trim()) throw new Error('请填写本图授权的观战连接。');
       if (input.trim()) {
         if (advanced && (!early.trim() || !program.trim()))
           throw new Error('请填写早源与节目源两个端点。');
         const saved = (await command('/operator/observer-assist', {
           action: 'connection',
-          expectedRevision: draftRevision.current,
+          expectedRevision: requireConnectionRevision(draftRevision.current),
           connection: parseObserverConnection(
             input,
             advanced ? program : undefined,
             advanced ? early : undefined,
           ),
         })) as unknown as ConnectionPreparationView;
-        draftRevision.current = saved.revision ?? draftRevision.current;
+        draftRevision.current = requireConnectionRevision(saved.revision);
       }
       if (pending.current !== request) return;
       // Host checks current game identity, production eligibility and configuration revision.
       if (window.__TAURI_INTERNALS__) {
         const result = await desktopInvoke<{ useMulnx?: boolean } | null>('observer_command', {
           action: 'start-configured',
+          expectedRevision: requireConnectionRevision(draftRevision.current),
         });
         if (pending.current !== request) return;
         setManual(result?.useMulnx !== true);
@@ -124,14 +128,14 @@ export function MatchConnectionDialog() {
   return (
     <Dialog
       open={Boolean(request)}
-      title="本场观战连接"
+      title="本图观战连接"
       className="mizar-surface match-connection-dialog"
       onClose={close}
       canClose={() => !operation.current}
       showCloseButton={false}
     >
       <Field
-        label="本场观战连接"
+        label="本图观战连接"
         value={input}
         autoComplete="off"
         disabled={busy || confirmed}
@@ -140,7 +144,7 @@ export function MatchConnectionDialog() {
           setCopied(false);
         }}
         placeholder="connect IP:27025;password 密码"
-        message="粘贴早源或节目源连接。输入暂存为草稿，确认后才更新本场连接；留空仅沿用已确认的本场地址。"
+        message="粘贴早源或节目源连接。每张图请填写对应的授权地址和密码。输入暂存为草稿，确认后更新两路连接；重试早源请使用专用重试入口。"
       />
       <details open={advanced} onToggle={(event) => setAdvanced(event.currentTarget.open)}>
         <summary>高级设置</summary>
@@ -160,11 +164,14 @@ export function MatchConnectionDialog() {
       </details>
       {endpoints ? (
         <p>
+          {connection ? '本图草稿' : '上次已确认（换图请填写新地址）'}
+          <br />
           早源：{endpoints.earlyEndpoint}
           <br />
           游戏节目源：{endpoints.programEndpoint}
         </p>
       ) : null}
+      <p>换图时保留工作台与游戏，在此提交新地址；旧地址重试不代表已切换到新图。</p>
       <p>
         标准游戏请复制节目源命令并在控制台执行；复制不表示游戏已连接。使用第三方 HUD 时，请按 HUD
         指引手动隐藏游戏 HUD。
@@ -190,23 +197,23 @@ export function MatchConnectionDialog() {
           {copied ? '节目源命令已复制' : '复制节目源连接命令'}
         </Button>
       ) : null}
-      {busy ? <p role="status">正在提交本场连接…</p> : null}
+      {busy ? <p role="status">正在提交本图连接…</p> : null}
       {confirmed ? (
         <StatusBanner tone="success">
           {manual
             ? '当前游戏没有已验证的 MulNX 控制资格，请在控制台手动执行节目源命令；早源按辅助开关独立准备。'
-            : '本场连接操作已提交，请在游戏内核对节目源；命令入队不表示已经连接。'}
+            : '本图连接操作已提交，请在游戏内核对节目源；命令入队不表示已经连接。'}
         </StatusBanner>
       ) : null}
       {error ? (
-        <StatusBanner tone="warning">{error} 工作台和游戏保持打开，可重试本场连接。</StatusBanner>
+        <StatusBanner tone="warning">{error} 工作台和游戏保持打开，可重试本图连接。</StatusBanner>
       ) : null}
       <div className="preparation-actions">
         <Button disabled={busy} onClick={close}>
           {confirmed ? '完成' : '取消'}
         </Button>
         <Button variant="primary" disabled={busy || confirmed} onClick={() => void confirm()}>
-          {error ? '重试本场连接' : '确认本场连接'}
+          {error ? '重试本图连接' : '确认本图连接'}
         </Button>
       </div>
     </Dialog>

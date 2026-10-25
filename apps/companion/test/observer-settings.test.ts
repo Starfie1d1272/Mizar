@@ -177,6 +177,29 @@ it('refreshes only the private projection for lead saves and resets alignment fo
     expect(refresh).toHaveBeenCalledTimes(1);
     await save(10, 130);
     expect(reset).toHaveBeenCalledTimes(1);
+    const connection = {
+      earlyEndpoint: '127.0.0.1:27025',
+      programEndpoint: '127.0.0.1:27026',
+      password: 'map-one',
+    };
+    const confirm = (value: typeof connection) =>
+      app.inject({
+        method: 'POST',
+        url: '/operator/observer-assist',
+        headers: { origin: 'http://127.0.0.1:3000' },
+        payload: { action: 'connection', connection: value },
+      });
+    await confirm(connection);
+    expect(reset).toHaveBeenCalledTimes(2);
+    await confirm(connection);
+    expect(reset).toHaveBeenCalledTimes(2);
+    await confirm({
+      earlyEndpoint: '127.0.0.2:27035',
+      programEndpoint: '127.0.0.2:27036',
+      password: 'map-two',
+    });
+    expect(reset).toHaveBeenCalledTimes(3); // New addresses invalidate old alignment and buffered hints.
+    expect(coordinator.getPublisher('program').getCurrent()).toBe(program);
   } finally {
     await app.close();
   }

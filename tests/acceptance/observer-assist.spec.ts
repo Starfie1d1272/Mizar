@@ -217,12 +217,14 @@ test('enters standard and MulNX without an address, then confirms from the workb
   await context.grantPermissions(['clipboard-read', 'clipboard-write']);
   for (const useMulnx of [false, true]) {
     let view = {
+      revision: '10000000-0000-4000-8000-000000000001',
       settings: { ...DEFAULT_OBSERVER_SETTINGS, enabled: true },
       gameAutomation: { autoConnect: true, hideGameHud: true },
       connection: null as null | { earlyEndpoint: string; programEndpoint: string },
     };
     let production = { mode: 'preparation', revision: 'connection-test', canEnter: true };
     const writes: Record<string, unknown>[] = [];
+    let omitSavedRevision = false;
     await page.route('**/local/v1/observer-assist', (route) => route.fulfill({ json: view }));
     await page.route('**/local/v1/observer', (route) =>
       route.fulfill({ json: { active: false, pending: false, failed: false } }),
@@ -233,8 +235,15 @@ test('enters standard and MulNX without an address, then confirms from the workb
         connection: { earlyEndpoint: string; programEndpoint: string };
       };
       writes.push(body);
-      if (body.action === 'connection') view = { ...view, connection: body.connection };
-      return route.fulfill({ json: view });
+      if (body.action === 'connection') {
+        const next = body.connection.programEndpoint === '127.0.0.1:27026' ? '2' : '3';
+        view = {
+          ...view,
+          revision: `10000000-0000-4000-8000-00000000000${next}`,
+          connection: body.connection,
+        };
+      }
+      return route.fulfill({ json: omitSavedRevision ? { ...view, revision: undefined } : view });
     });
     await page.route('**/local/v1/production', (route) => route.fulfill({ json: production }));
     await page.route('**/operator/production', (route) => {
@@ -270,7 +279,16 @@ test('enters standard and MulNX without an address, then confirms from the workb
           if (name === 'open_main') host.openedPaths.push(String(args?.path));
           if (name === 'observer_command' && host.failConnection)
             throw new Error('节目或早源操作失败');
-          if (name === 'observer_command') return { useMulnx: preferMulnx };
+          if (name === 'observer_command') {
+            if (
+              ![
+                '10000000-0000-4000-8000-000000000002',
+                '10000000-0000-4000-8000-000000000003',
+              ].includes(String(args?.expectedRevision))
+            )
+              throw new Error('saved connection revision was not forwarded');
+            return { useMulnx: preferMulnx };
+          }
           if (name === 'cs2_config_status')
             return {
               preferMulnx,
@@ -301,21 +319,21 @@ test('enters standard and MulNX without an address, then confirms from the workb
     expect(await calls()).toContain(useMulnx ? 'launch_mulnx' : 'start_managed_cs2');
     expect(await calls()).not.toContain('observer_command/start-configured');
     expect(writes).toHaveLength(0);
-    await expect(page.getByRole('dialog', { name: '本场观战连接', exact: true })).not.toBeVisible();
+    await expect(page.getByRole('dialog', { name: '本图观战连接', exact: true })).not.toBeVisible();
     await page.goto('/workspace/left');
-    const control = page.getByRole('button', { name: /本场连接 ·/ });
+    const control = page.getByRole('button', { name: /本图连接 ·/ });
     await expect(control).toContainText('未连接');
     await control.click();
-    const dialog = page.getByRole('dialog', { name: '本场观战连接', exact: true });
+    const dialog = page.getByRole('dialog', { name: '本图观战连接', exact: true });
     await expect(dialog).toBeVisible();
     await dialog
-      .getByRole('textbox', { name: '本场观战连接', exact: true })
+      .getByRole('textbox', { name: '本图观战连接', exact: true })
       .fill('connect 127.0.0.1:27025;password synthetic');
     await dialog.getByRole('button', { name: '取消', exact: true }).click();
     expect(writes).toHaveLength(0);
     await expect(page.locator('.workspace-radar')).toBeVisible();
     await control.click();
-    await expect(dialog.getByRole('textbox', { name: '本场观战连接', exact: true })).toHaveValue(
+    await expect(dialog.getByRole('textbox', { name: '本图观战连接', exact: true })).toHaveValue(
       'connect 127.0.0.1:27025;password synthetic',
     );
     await expect(dialog).toContainText('游戏节目源：127.0.0.1:27026');
@@ -324,26 +342,44 @@ test('enters standard and MulNX without an address, then confirms from the workb
       'password "synthetic"; connect 127.0.0.1:27026',
     );
     expect(writes).toHaveLength(0);
+    omitSavedRevision = true;
+    await dialog.getByRole('button', { name: '确认本图连接', exact: true }).click();
+    await expect(dialog).toContainText('本图连接修订未确认');
+    expect(await calls()).not.toContain('observer_command/start-configured');
+    await dialog.getByRole('button', { name: '取消', exact: true }).click();
+    omitSavedRevision = false;
+    await control.click();
+    await dialog
+      .getByRole('textbox', { name: '本图观战连接', exact: true })
+      .fill('connect 127.0.0.1:27025;password synthetic');
     await page.evaluate(() => {
       (window as typeof window & { failConnection: boolean }).failConnection = true;
     });
-    await dialog.getByRole('button', { name: '确认本场连接', exact: true }).click();
+    await dialog.getByRole('button', { name: '确认本图连接', exact: true }).click();
     await expect(dialog).toContainText('节目或早源操作失败');
     await expect(page.locator('.workspace-radar')).toBeVisible();
     expect(await calls()).not.toContain('finish_workspace');
     expect(await calls()).not.toContain('present_production');
     expect(await calls()).not.toContain('start_managed_cs2');
+    await page.setViewportSize({ width: 480, height: 1080 });
+    expect(
+      await dialog.evaluate(
+        (el) =>
+          el.scrollWidth <= el.clientWidth && el.getBoundingClientRect().right <= window.innerWidth,
+      ),
+    ).toBe(true);
     await page.screenshot({
       path: testInfo.outputPath(
         useMulnx ? 'connection-mulnx-failure.png' : 'connection-standard-failure.png',
       ),
     });
+    await page.setViewportSize({ width: 1920, height: 1080 });
     await page.evaluate(() => {
       (window as typeof window & { failConnection: boolean }).failConnection = false;
     });
-    await dialog.getByRole('button', { name: '重试本场连接', exact: true }).dblclick();
+    await dialog.getByRole('button', { name: '重试本图连接', exact: true }).dblclick();
     await expect(dialog).toContainText(
-      useMulnx ? '本场连接操作已提交' : '当前游戏没有已验证的 MulNX 控制资格',
+      useMulnx ? '本图连接操作已提交' : '当前游戏没有已验证的 MulNX 控制资格',
     );
     expect(
       (await calls()).filter((call) => call === 'observer_command/start-configured'),
@@ -354,6 +390,50 @@ test('enters standard and MulNX without an address, then confirms from the workb
     });
     await dialog.getByRole('button', { name: '完成', exact: true }).click();
     await expect(dialog).not.toBeVisible();
+    // Map two uses new credentials and both endpoints without another game launch.
+    await expect(control).toContainText('待连接');
+    const mapOneWrites = writes.filter((body) => body.action === 'connection').length;
+    await control.click();
+    await dialog
+      .getByRole('textbox', { name: '本图观战连接', exact: true })
+      .fill('connect 127.0.0.2:27035;password second-map');
+    await dialog.getByText('高级设置', { exact: true }).click();
+    await dialog.getByRole('textbox', { name: '早源 IPv4:端口' }).fill('127.0.0.2:27035');
+    await dialog.getByRole('textbox', { name: '节目源 IPv4:端口' }).fill('127.0.0.2:27036');
+    await dialog.getByRole('button', { name: '取消', exact: true }).click();
+    expect(writes.filter((body) => body.action === 'connection')).toHaveLength(mapOneWrites);
+    expect(view.connection?.programEndpoint).toBe('127.0.0.1:27026');
+    await control.click();
+    await dialog.getByRole('button', { name: '复制节目源连接命令' }).click();
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+      'password "second-map"; connect 127.0.0.2:27036',
+    );
+    await page.evaluate(() => {
+      (window as typeof window & { failConnection: boolean }).failConnection = true;
+    });
+    await dialog.getByRole('button', { name: '确认本图连接', exact: true }).click();
+    await expect(dialog).toContainText('节目或早源操作失败');
+    expect(view.connection).toMatchObject({
+      earlyEndpoint: '127.0.0.2:27035',
+      programEndpoint: '127.0.0.2:27036',
+    });
+    await page.evaluate(() => {
+      (window as typeof window & { failConnection: boolean }).failConnection = false;
+    });
+    await dialog.getByRole('button', { name: '重试本图连接', exact: true }).click();
+    await expect(dialog.getByRole('button', { name: '完成', exact: true })).toBeVisible();
+    await dialog.getByRole('button', { name: '完成', exact: true }).click();
+    expect(await calls()).not.toContain('finish_workspace');
+    expect(await calls()).not.toContain('present_production');
+    expect(await calls()).not.toContain('start_managed_cs2');
+    expect(await calls()).not.toContain('launch_mulnx');
+    await control.click();
+    await dialog
+      .getByRole('textbox', { name: '本图观战连接', exact: true })
+      .fill('connect 127.0.0.3:27025;password third-map');
+    await expect(dialog.getByRole('textbox', { name: '早源 IPv4:端口' })).not.toBeVisible();
+    await expect(dialog.getByRole('button', { name: '复制节目源连接命令' })).toBeVisible();
+    await dialog.getByRole('button', { name: '取消', exact: true }).click();
     await page.reload();
     await expect(control).toBeVisible();
     expect(await calls()).not.toContain('observer_command/start-configured');

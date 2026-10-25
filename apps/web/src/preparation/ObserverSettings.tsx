@@ -118,7 +118,7 @@ export function ObserverSettingsPanel() {
       {runtime?.pending ? <p role="status">正在准备观察辅助…</p> : null}
       {error || runtime?.error ? (
         <StatusBanner tone="warning">
-          {error || '观察辅助准备失败，请核对本场连接后重新连接早源。'}
+          {error || '观察辅助准备失败，请核对本图连接后重新连接早源。'}
         </StatusBanner>
       ) : saved ? (
         <StatusBanner tone="success">观察辅助设置已保存。</StatusBanner>
@@ -141,9 +141,9 @@ export function GameAutomationSettingsPanel() {
     try {
       const ready = await flushObserverPreparation(useMulnx, cs2.status?.running);
       if (ready === null) return;
-      setMessage('本场连接操作已完成，请在游戏内核对节目源。');
+      setMessage('本图连接操作已完成，请在游戏内核对节目源。');
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '请重试本场连接。');
+      setMessage(error instanceof Error ? error.message : '请重试本图连接。');
     } finally {
       setBusy(false);
     }
@@ -154,10 +154,10 @@ export function GameAutomationSettingsPanel() {
       <h2>游戏连接与画面准备</h2>
       {cs2.status?.running ? (
         <Button disabled={busy} onClick={() => void changeConnection()}>
-          切换本场观战连接
+          切换本图观战连接
         </Button>
       ) : null}
-      <p>MulNX 启动方式提供自动连接和游戏 HUD 控制；打开工作台后填写并确认本场观战连接。</p>
+      <p>MulNX 启动方式提供自动连接和游戏 HUD 控制；打开工作台后填写并确认本图观战连接。</p>
       <Checkbox
         label="自动连接本场节目源"
         checked={settings.autoConnect}

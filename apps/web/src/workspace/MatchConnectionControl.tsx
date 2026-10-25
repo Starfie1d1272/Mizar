@@ -21,9 +21,9 @@ export function MatchConnectionControl() {
     : runtime?.error || runtime?.failed
       ? '连接失败，可重试'
       : runtime?.programCommandQueued
-        ? '节目连接命令已提交，游戏内待核对'
+        ? '节目命令已提交'
         : runtime?.active
-          ? '早源已启动，节目源请在游戏内核对'
+          ? '早源已启动'
           : view?.connection
             ? '待连接'
             : '未连接';
@@ -38,7 +38,7 @@ export function MatchConnectionControl() {
           setError('');
           void flushObserverPreparation(false, true)
             .catch((reason: unknown) =>
-              setError(reason instanceof Error ? reason.message : '本场连接未读取，请重试。'),
+              setError(reason instanceof Error ? reason.message : '本图连接未读取，请重试。'),
             )
             .finally(() => {
               lock.current = false;
@@ -46,8 +46,20 @@ export function MatchConnectionControl() {
             });
         }}
       >
-        本场连接 · {status}
+        本图连接 · {status}
       </Button>
+      {runtime?.programCommandQueued || runtime?.active ? (
+        <small role="status">
+          节目：{runtime.programCommandQueued ? '命令已提交，实际连接请在游戏内核对' : '请手动连接'}
+          ； 早源：
+          {!view?.settings.enabled
+            ? '辅助关闭'
+            : runtime.health?.state === 'live'
+              ? '接收中'
+              : '等待接收'}
+          。 时间对齐与提示见雷达下方。
+        </small>
+      ) : null}
       {error ? <StatusBanner tone="warning">{error}</StatusBanner> : null}
     </>
   );
