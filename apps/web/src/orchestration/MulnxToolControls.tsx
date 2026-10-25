@@ -31,21 +31,34 @@ export function MulnxToolControls({
         setMessage('已打开 MulNX，启动游戏后选择下方游戏实例。');
       } else if (action === 'update') {
         await desktopInvoke('mulnx_control', { action: 'update' });
-        setMessage('MulNX 更新已完成，请核对版本后继续。');
+        setMessage(
+          'MulNX 版本准备已完成；是否支持自动启动请核对上方状态，不支持时仍需在官方启动器完成检查后启动。',
+        );
       } else if (action === 'stop') {
-        const result = await desktopInvoke<{ result?: string } | null>('mulnx_control', {
-          action: 'stop',
-        });
+        const result = await desktopInvoke<{ result?: string; cleanupPending?: boolean } | null>(
+          'mulnx_control',
+          {
+            action: 'stop',
+          },
+        );
         setStopSubmitted(true);
         setMessage(
           result?.result === 'queued'
-            ? '停止控制请求已入队，执行结果待确认。请返回游戏核对。'
-            : '停止控制结果待确认，请返回游戏核对。不会自动重发停止命令。',
+            ? '停止控制请求已入队，执行结果待确认。请返回游戏核对。该实例不再重复发送；需要继续控制时请正常重启该游戏。'
+            : '停止控制结果待确认，请勿重复发送。请返回游戏核对，需要继续控制时先正常重启该游戏。',
         );
+        if (result?.cleanupPending)
+          setMessage((value) => `${value} 工作台收尾尚未完成，请检查退出状态。`);
       } else await command('/operator/orchestration', { action: 'check-tool' });
     } catch (error) {
       setFailed(true);
-      setMessage(error instanceof Error ? error.message : '操作失败，请重试。');
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : action === 'stop'
+            ? '停止操作未完成；请核对游戏与退出状态，结果不明确时不要重复发送。'
+            : '操作失败，请重试。',
+      );
     } finally {
       running.current = false;
       if (action === 'stop') setConfirmStop(false);
@@ -67,8 +80,8 @@ export function MulnxToolControls({
       ) : tool.installed ? (
         <StatusBanner tone="warning">
           {tool.launchProtocol === null
-            ? '当前 MulNX 不支持自动启动，请先更新。'
-            : '自动启动能力尚未确认，请检查版本后更新。'}
+            ? '当前安装的 MulNX 版本需在官方启动器完成环境检查后启动；请使用下方打开按钮，再明确交接游戏实例。'
+            : '本机自动启动能力尚未确认；可使用下方官方启动器完成环境检查后启动，再明确交接游戏实例。'}
         </StatusBanner>
       ) : null}
       <Button disabled={busy || tool.busy} onClick={() => void run('check')}>
