@@ -64,7 +64,7 @@ Host 的 `prepare` / `start-configured` 绑定游戏实例、Desktop Job 和配�
 
 `prepare` 返回的 `revision` 是绑定当前游戏实例、Desktop Job、启动方式和配置的准备令牌，Host 原样交给 `start-configured`。返回现场复用已有早源；节目连接与 HUD 操作分别按本场已接受的动作去重。仅改变早源地址、提示时间或重试辅助不重复已接受的节目连接。启动、停止与设置引发的辅助启停串行执行，连接变化、更新的准备令牌与停止使旧在途启动失效；组件加载后、真正创建进程前仍核对取消。
 
-本场 Host 续约仍有效时，关闭辅助只停止早源，重新开启复用本场来源启动；不自动重发节目连接。明确停止、切换连接或超过六秒未续约后，重新启动需 Host 再次确认。`GET /local/v1/observer` 另含 `pending`、有限错误码 `error`（当前为 `observer_operation_failed` 或 null）及 `retryAvailable`。界面结合既有 `failed`、`health`、`terminal` 区分连接中、正常重连与失败；重试沿用原生 `observer_command` 的 `start-configured`，由 Host 重新准备，无需浏览器提交路径或凭据。`retryAvailable` 表示当前仍有可复用的 Host 上下文，动作执行时仍重新校验；进程启动或命令入队不代表真实游戏连接、HUD 或节目画面已经验证。
+本场 Host 续约仍有效时，关闭辅助只停止早源，重新开启复用本场来源启动；不自动重发节目连接。明确停止、切换连接或超过六秒未续约后，重新启动需 Host 再次确认。`GET /local/v1/observer` 另含 `pending`、有限错误码 `error`（当前为 `observer_operation_failed` 或 null）及 `retryAvailable`。界面结合既有 `failed`、`health`、`terminal` 区分连接中、正常重连与失败；重试沿用原生 `observer_command` 的 `start-configured`，由 Host 重新准备，无需浏览器提交路径或凭据。`retryAvailable` 表示辅助已开启、有本场连接、现场资格有效且无在途操作；即使旧租约已过期，仍可请求 Host 重新核对当前游戏，动作执行时继续校验；进程启动或命令入队不代表真实游戏连接、HUD 或节目画面已经验证。
 
 ## 公开实时输出
 

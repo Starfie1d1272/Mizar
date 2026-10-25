@@ -407,7 +407,7 @@ it('cancels an in-flight start before a newer connection starts and never stops 
   }));
 
 it('does not resume an explicitly stopped or expired Host session when settings are enabled again', () =>
-  configuredFixture(async ({ observer, settings, start, request }) => {
+  configuredFixture(async ({ observer, settings, start, request, app }) => {
     await start();
     await request({ action: 'stop' });
     await settings.configure({ ...settings.settings, enabled: false });
@@ -421,6 +421,13 @@ it('does not resume an explicitly stopped or expired Host session when settings 
       await request({ action: 'pulse' });
       await settings.configure({ ...settings.settings, enabled: true });
       expect(observer.view().active).toBe(false);
+      await expect
+        .poll(
+          async () =>
+            (await app.inject('/local/v1/observer')).json<{ retryAvailable: boolean }>()
+              .retryAvailable,
+        )
+        .toBe(true);
     } finally {
       vi.restoreAllMocks();
     }

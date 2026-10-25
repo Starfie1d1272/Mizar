@@ -353,7 +353,7 @@ export function registerWorkspaceObserver(
       pending: pending > 0,
       error: lastError,
       retryAvailable: Boolean(
-        settings?.settings.enabled && settings.configured() && leased() && canStart(),
+        settings?.settings.enabled && settings.configured() && canStart() && pending === 0,
       ),
     }),
   );
