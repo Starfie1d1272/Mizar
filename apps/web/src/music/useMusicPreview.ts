@@ -7,10 +7,21 @@ import type {
   MusicTrack,
 } from '@mizar/protocol/music';
 
+interface PreviewWork {
+  request: MusicPreviewRequest;
+  action: MusicPreviewRequest['action'];
+  expires: number;
+  resolve: () => void;
+  reject: (error: unknown) => void;
+}
+
 export function useMusicPreview() {
   const [owner] = useState(() => crypto.randomUUID());
   const operation = useRef(0);
-  const queue = useRef<Promise<void>>(Promise.resolve());
+  const queue = useRef(new Map<MusicPreviewRequest['action'], PreviewWork>());
+  const running = useRef(false);
+  const worker = useRef(0);
+  const abort = useRef<AbortController | null>(null);
   const intent = useRef(0);
   const responseOperation = useRef(0);
   const request = useRef<MusicPreviewRequest | null>(null);
@@ -18,15 +29,22 @@ export function useMusicPreview() {
   const [error, setError] = useState('');
   const mounted = useRef(true);
   const send = useCallback(
-    async (r: MusicPreviewRequest, action: MusicPreviewRequest['action'], keepalive = false) => {
-      const body = { ...r, action, operation: ++operation.current, expiresAt: Date.now() + 4000 };
-      const run = async () => {
+    (r: MusicPreviewRequest, action: MusicPreviewRequest['action'], keepalive = false) => {
+      const execute = async (work: PreviewWork, controller?: AbortController) => {
+        const body = {
+          ...work.request,
+          action: work.action,
+          operation: ++operation.current,
+          expiresAt: Date.now() + 4000,
+        };
         const response = await fetch('/operator/music/preview', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify(body),
-          keepalive,
-          ...(keepalive ? {} : { signal: AbortSignal.timeout(5000) }),
+          keepalive: work.action === 'stop' && keepalive,
+          ...(controller
+            ? { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]) }
+            : {}),
         });
         const result = (await response.json()) as {
           status?: { preview?: MusicPreviewStatus };
@@ -37,22 +55,80 @@ export function useMusicPreview() {
         if (!response.ok) throw new Error(result.message ?? '试听未完成，请检查本机服务与 OBS。');
         if (
           mounted.current &&
-          request.current?.token === r.token &&
+          request.current?.token === work.request.token &&
           body.operation > responseOperation.current
         ) {
           responseOperation.current = body.operation;
           const preview = result.status?.preview;
-          if (preview?.token === r.token) {
+          if (preview?.token === work.request.token) {
             setStatus(preview);
             if (preview.phase === 'failed' || preview.phase === 'stopped') request.current = null;
           }
         }
       };
-      // STOP bypasses queued work. Its newer operation also invalidates requests already in transit.
-      if (action === 'stop') return run();
-      const pending = queue.current.catch(() => undefined).then(run);
-      queue.current = pending.catch(() => undefined);
-      await pending;
+      return new Promise<void>((resolve, reject) => {
+        const work: PreviewWork = {
+          request: r,
+          action,
+          expires: Date.now() + 4000,
+          resolve,
+          reject,
+        };
+        if (action === 'stop') {
+          // Cancel queued intent and bypass the active request. A higher operation also fences
+          // any request that reaches the server after its transport was aborted.
+          worker.current++;
+          abort.current?.abort();
+          abort.current = null;
+          running.current = false;
+          for (const pending of queue.current.values()) pending.resolve();
+          queue.current.clear();
+          void execute(work).then(resolve, reject);
+          return;
+        }
+        if (request.current?.token !== r.token) {
+          resolve();
+          return;
+        }
+        queue.current.get(action)?.resolve(); // A superseded update/lease has no remaining work.
+        queue.current.set(action, work);
+        const pump = () => {
+          if (running.current) return;
+          running.current = true;
+          const generation = ++worker.current;
+          void (async () => {
+            while (generation === worker.current) {
+              // Volume updates also renew the server lease; prioritize the latest audible value.
+              const next =
+                queue.current.get('start') ??
+                queue.current.get('update') ??
+                queue.current.get('lease');
+              if (!next) return;
+              queue.current.delete(next.action);
+              if (request.current?.token !== next.request.token || Date.now() >= next.expires) {
+                next.resolve();
+                continue;
+              }
+              const controller = new AbortController();
+              abort.current = controller;
+              try {
+                await execute(next, controller);
+                next.resolve();
+              } catch (error) {
+                next.reject(error);
+              } finally {
+                if (abort.current === controller) abort.current = null;
+              }
+            }
+          })().finally(() => {
+            if (generation === worker.current) {
+              running.current = false;
+              if (queue.current.size) pump();
+            }
+          });
+        };
+        pump();
+      });
     },
     [],
   );
@@ -150,7 +226,10 @@ export function useMusicPreview() {
     const r = request.current;
     if (!r || r.group !== group) return;
     request.current = { ...r, volume: value };
-    void send(request.current, 'update').catch(() => setError('试听音量更新未确认，请检查 OBS。'));
+    void send(request.current, 'update').catch(() => {
+      if (mounted.current && request.current?.token === r.token)
+        setError('试听音量更新未确认，请检查 OBS。');
+    });
   };
   const stop = async () => {
     intent.current++;

@@ -1150,7 +1150,7 @@ it('does not start a formal cue while OBS has not confirmed the audition stopped
   await r.director.previewRequest(audition(r));
   await r.step(100);
   const restarts = r.obs.restarts();
-  r.obs.intercept = async (type) => {
+  r.obs.intercept = (type) => {
     const last = r.obs.calls.at(-1);
     if (
       type === 'GetMediaInputStatus' &&
@@ -1158,6 +1158,7 @@ it('does not start a formal cue while OBS has not confirmed the audition stopped
       last?.data.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP'
     )
       stinger(r).state = 'OBS_MEDIA_STATE_PLAYING'; // OBS acknowledges STOP but has not actually stopped.
+    return Promise.resolve();
   };
   r.truth.production = true;
   await r.step(100);

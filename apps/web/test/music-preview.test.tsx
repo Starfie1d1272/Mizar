@@ -9,7 +9,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
-it('serializes a delayed volume update ahead of lease delivery, while STOP overtakes both and cannot be resurrected', async () => {
+it('coalesces dense volume changes under a slow response, keeps the latest volume ahead of lease, and lets STOP and a new audition bypass old work', async () => {
   vi.useFakeTimers();
   const sent: MusicPreviewRequest[] = [];
   let highWater = 0;
@@ -22,7 +22,7 @@ it('serializes a delayed volume update ahead of lease delivery, while STOP overt
   vi.stubGlobal(
     'fetch',
     vi.fn(async (_url: string, init: RequestInit) => {
-      const request = JSON.parse(String(init.body)) as MusicPreviewRequest;
+      const request = JSON.parse(init.body as string) as MusicPreviewRequest;
       sent.push(request);
       // This adversarial transport holds volume requests; any unqueued lease would arrive first.
       if (request.action === 'update') await gate;
@@ -53,7 +53,7 @@ it('serializes a delayed volume update ahead of lease delivery, while STOP overt
   const container = document.createElement('div');
   const root = createRoot(container);
   try {
-    await act(async () => root.render(<Harness />));
+    act(() => root.render(<Harness />));
     const spec = defaultMusicConfig().groups.waiting;
     await act(async () =>
       current!.start('waiting', spec, {
@@ -64,18 +64,22 @@ it('serializes a delayed volume update ahead of lease delivery, while STOP overt
       }),
     );
     await act(async () => {
-      current!.volume('waiting', 1);
+      current!.volume('waiting', 0.2);
       await Promise.resolve();
     });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1000);
+    });
+    await act(async () => {
+      for (let i = 0; i <= 200; i++) current!.volume('waiting', i / 200);
+      await Promise.resolve();
     });
     expect(sent.map((r) => r.action)).toEqual(['start', 'update']);
     await act(async () => {
       release();
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(sent.map((r) => r.action)).toEqual(['start', 'update', 'lease']);
+    expect(sent.map((r) => r.action)).toEqual(['start', 'update', 'update', 'lease']);
     expect(appliedVolume).toBe(1);
     expect(current!.error).toBe('');
 
@@ -89,18 +93,43 @@ it('serializes a delayed volume update ahead of lease delivery, while STOP overt
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1000);
     });
+    await act(async () => {
+      for (let i = 0; i <= 200; i++) current!.volume('waiting', i / 250);
+      await Promise.resolve();
+    });
+    const beforeStop = sent.length;
     await act(async () => current!.stop());
+    expect(sent.length).toBe(beforeStop + 1);
     expect(sent.at(-1)?.action).toBe('stop');
     expect(playing).toBe(false);
+    expect(current!.status).toBeNull();
+    // The previous transport is still blocked: new intent must not wait behind its queue.
+    await act(async () =>
+      current!.start(
+        'waiting',
+        { ...spec, volume: 0.4 },
+        {
+          id: `${'b'.repeat(64)}.wav`,
+          name: 'new.wav',
+          startMs: 0,
+          endMs: null,
+        },
+      ),
+    );
+    expect(sent.at(-1)?.action).toBe('start');
+    expect(playing).toBe(true);
+    expect(appliedVolume).toBe(0.4);
     await act(async () => {
       release();
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(appliedVolume).toBe(1); // The delayed, older update cannot overwrite STOP.
-    expect(playing).toBe(false);
-    expect(current!.status).toBeNull();
+    expect(sent.length).toBe(beforeStop + 2); // No old update or lease escaped STOP.
+    expect(appliedVolume).toBe(0.4);
+    expect(playing).toBe(true);
+    expect(current!.error).toBe('');
+    await act(async () => current!.stop());
   } finally {
-    await act(async () => root.unmount());
+    act(() => root.unmount());
     container.remove();
   }
 });
