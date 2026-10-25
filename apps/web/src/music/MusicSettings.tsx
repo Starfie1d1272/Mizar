@@ -8,6 +8,7 @@ import {
 } from '@mizar/protocol/music';
 import { Button, Checkbox, Field, Panel, Select, StatusBanner } from '../ui';
 import { command, useLocalRead } from '../preparation/client';
+import { desktopInvoke } from '../workspace/client';
 import { MusicControls, MUSIC_LABELS, type MusicView } from './MusicControls';
 
 async function localFile(url: string, file: File, type: string) {
@@ -139,6 +140,21 @@ export function MusicSettings() {
         ) : null}
         <details className="music-settings-import">
           <summary>导入音乐包</summary>
+          <Button
+            onClick={() => {
+              if (window.__TAURI_INTERNALS__)
+                void action(() => desktopInvoke<void>('open_music_downloads'));
+              else
+                window.open(
+                  'https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/?p=/Music',
+                  '_blank',
+                  'noopener,noreferrer',
+                );
+            }}
+          >
+            下载音乐包（Box）
+          </Button>
+          <p>在浏览器中选择并下载音乐包，再在下方导入 ZIP。</p>
           <Field
             label="一键导入音乐包"
             message="选择含 music.json 和相对路径音频的 ZIP（最大 128 MiB）。验证成功后替换七组配置。"
@@ -157,7 +173,7 @@ export function MusicSettings() {
                 });
             }}
           />
-          <p>只选择你有权直播或录制使用的音乐。文件仅保存在本机，不联网下载或分享。</p>
+          <p>请核对音乐包的来源与许可，选择你有权直播或录制使用的音乐。导入后音频保存在本机。</p>
         </details>
       </Panel>
       {message && messageAt === 'import' ? (

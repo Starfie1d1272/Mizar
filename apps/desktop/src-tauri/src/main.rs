@@ -1773,6 +1773,16 @@ async fn install_update(window: tauri::WebviewWindow, app: tauri::AppHandle, dia
 }
 
 #[tauri::command]
+fn open_music_downloads(log: tauri::State<'_, DesktopLog>, diagnostic_operation_id: Option<String>) -> Result<(), String> {
+    let operation: Vec<u16> = "open\0".encode_utf16().collect();
+    let target: Vec<u16> = "https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/?p=/Music\0".encode_utf16().collect();
+    let result = unsafe { ShellExecuteW(0, operation.as_ptr(), target.as_ptr(), std::ptr::null(), std::ptr::null(), 1) };
+    let outcome = if result <= 32 { Err("音乐包下载页面未能打开，请重试。".into()) } else { Ok(()) };
+    log.native_outcome("open_music_downloads", diagnostic_operation_id.as_deref(), &outcome);
+    outcome
+}
+
+#[tauri::command]
 fn open_update_page(source: String, version: Option<String>, log: tauri::State<'_, DesktopLog>, diagnostic_operation_id: Option<String>) -> Result<(), String> {
     let diagnostic_log = log.inner().clone();
     let diagnostic_result: Result<(), String> = (|| {
@@ -2274,6 +2284,7 @@ fn run_desktop(
             open_issue_report,
             install_update,
             open_update_page,
+            open_music_downloads,
             open_update_recovery,
             open_rivalhub_workbench,
             save_support_bundle,

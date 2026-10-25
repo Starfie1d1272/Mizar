@@ -39,6 +39,7 @@ fn main() {
             "open_issue_report",
             "install_update",
             "open_update_page",
+            "open_music_downloads",
             "open_update_recovery",
             "save_support_bundle",
             "gsi_status",
