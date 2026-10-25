@@ -8,11 +8,11 @@ import {
   parseObserverConnection,
   formatObserverConnection,
 } from '../src/assist.js';
-it('starts with the private feature off and editable 120/7 timing', () => {
+it('starts with the private feature off and editable 120/5 timing', () => {
   expect(DEFAULT_OBSERVER_SETTINGS).toMatchObject({
     enabled: false,
     expectedDelaySeconds: 120,
-    leadSeconds: 7,
+    leadSeconds: 5,
   });
   expect(
     observerSettingsSchema.safeParse({
@@ -46,7 +46,7 @@ it('parses one authorized connection with adjacent or explicit Program endpoint'
     expect(() => parseObserverConnection(input)).toThrow();
 });
 
-it('keeps the typed snapshot input consistent with assist schema 2', () => {
+it('keeps the typed snapshot input consistent with assist schema 3', () => {
   const input: AssistSnapshotInput = {
     type: 'snapshot',
     protocolVersion: LOCAL_PROTOCOL_VERSION,
@@ -62,7 +62,7 @@ it('keeps the typed snapshot input consistent with assist schema 2', () => {
     },
     payload: { availability: 'unavailable' },
   };
-  expect(assistSnapshotSchema.parse({ ...input, channelSeq: 1 }).schemaVersion).toBe(2);
+  expect(assistSnapshotSchema.parse({ ...input, channelSeq: 1 }).schemaVersion).toBe(3);
 });
 
 it('accepts restricted commands in either order and round-trips the password-first formatter', () => {

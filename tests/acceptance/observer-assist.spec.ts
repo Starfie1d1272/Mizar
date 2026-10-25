@@ -71,6 +71,9 @@ test('keeps the full-width square radar across private hint states and desktop s
     availability: 'available',
     observer: {
       state: 'ready',
+      timingBasis: 'estimated',
+      waitingReason: null,
+      nextWindowSeconds: 0,
       expectedDelaySeconds: 120,
       leadSeconds: 7,
       measuredDelaySeconds: 120,
@@ -162,7 +165,9 @@ test('keeps the full-width square radar across private hint states and desktop s
   await page.clock.runFor(6000);
   await expect(card).toContainText('1 秒后');
   await page.clock.runFor(1000);
-  await expect(card).toHaveCount(0);
+  await expect(card.locator('li')).toHaveCount(0);
+  await expect(card).toContainText('按 120 秒估算');
+  await expect(card).toContainText('等待早源事件');
   expect(await page.locator('.workspace-radar__picture').boundingBox()).toEqual(initialMap);
   snapshot.channelSeq++;
   snapshot.payload = { availability: 'unavailable' };
@@ -180,7 +185,7 @@ test('observer settings show saved timing and support keyboard operation', async
   );
   await page.goto('/settings?tab=observer');
   await expect(page.getByRole('spinbutton', { name: '两路预期延迟差（秒）' })).toHaveValue('120');
-  await expect(page.getByRole('spinbutton', { name: '提示提前时间（秒）' })).toHaveValue('7');
+  await expect(page.getByRole('spinbutton', { name: '提示提前时间（秒）' })).toHaveValue('5');
   await expect(page.getByRole('spinbutton')).toHaveCount(2);
   const toggle = page.getByRole('checkbox', { name: '启用私有观察辅助', exact: true });
   await toggle.focus();

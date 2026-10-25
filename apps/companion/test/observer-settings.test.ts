@@ -19,11 +19,12 @@ it('persists operator timing and keeps per-match connection credentials in memor
       store = new ObserverSettingsStore(path);
     await store.load();
     expect(store.settings).toEqual(DEFAULT_OBSERVER_SETTINGS);
-    await store.configure({ ...store.settings, enabled: true, leadSeconds: 8 });
+    expect(store.settings.leadSeconds).toBe(5);
+    await store.configure({ ...store.settings, enabled: true, leadSeconds: 7 });
     await store.configureGame({ autoConnect: false, hideGameHud: false });
     const preferences = new ObserverSettingsStore(path);
     await preferences.load();
-    expect(preferences.settings.leadSeconds).toBe(8);
+    expect(preferences.settings.leadSeconds).toBe(7);
     expect(preferences.gameAutomation).toEqual({ autoConnect: false, hideGameHud: false });
     store.setConnection({
       earlyEndpoint: '127.0.0.1:27025',
@@ -36,7 +37,7 @@ it('persists operator timing and keeps per-match connection credentials in memor
     await writeFile(path, JSON.stringify({ ...store.settings, displaySeconds: 10 }));
     const restart = new ObserverSettingsStore(path);
     await restart.load();
-    expect(restart.settings.leadSeconds).toBe(8);
+    expect(restart.settings.leadSeconds).toBe(7);
     expect(restart.settings).not.toHaveProperty('displaySeconds');
     expect(restart.configured()).toBeUndefined();
     store.clearConnection();
