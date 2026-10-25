@@ -4,7 +4,7 @@ import {
   type ObserverProgramView,
 } from '../src/projection/observer-assist.js';
 import type { PlayerDeathGameEvent } from '../src/game-events/index.js';
-const settings = { enabled: true, expectedDelaySeconds: 120, leadSeconds: 7, displaySeconds: 10 };
+const settings = { enabled: true, expectedDelaySeconds: 120, leadSeconds: 7 };
 const source = { connected: true, generation: 1, fresh: true };
 function program(sequence: number, dead: number[] = []): ObserverProgramView {
   return {
@@ -75,7 +75,7 @@ function aligned() {
   return timeline;
 }
 describe('private observer hints against Program', () => {
-  it('shows real Program slots seven seconds ahead and expires after ten seconds total', () => {
+  it('shows Program slots seven seconds ahead and removes hints at the event boundary', () => {
     const timeline = aligned(),
       frame = program(3, [8, 9]);
     expect(
@@ -88,14 +88,13 @@ describe('private observer hints against Program', () => {
       .observer?.hints.find((h) => h.victim.observerSlot === 7);
     expect(hint).toMatchObject({
       remainingSeconds: 7,
-      occurred: false,
       attacker: { observerSlot: 3, name: 'Player 3' },
       victim: { observerSlot: 7 },
     });
     expect(
-      timeline.project(program(4, [7, 8, 9]), settings, 130000, source).observer?.hints[0]
-        ?.occurred,
-    ).toBe(true);
+      timeline.project(frame, settings, 129999, source).observer?.hints[0]?.remainingSeconds,
+    ).toBeCloseTo(0.001);
+    expect(timeline.project(frame, settings, 130000, source).observer?.hints).toEqual([]);
     expect(
       timeline.project(program(4, [7, 8, 9]), settings, 133000, source).observer?.hints,
     ).toEqual([]);

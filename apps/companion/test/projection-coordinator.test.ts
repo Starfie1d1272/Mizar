@@ -235,7 +235,6 @@ it('publishes assist refreshes independently of Program and public radar snapsho
       enabled: true,
       expectedDelaySeconds: 120,
       leadSeconds: 7,
-      displaySeconds: 10,
     }),
   });
   try {

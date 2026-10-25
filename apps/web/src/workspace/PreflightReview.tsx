@@ -41,6 +41,8 @@ export function preflightEvidence(
   return { complete, current, warmup: aligned && program?.map.phase === 'warmup' };
 }
 
+const SILENCED_MATCH_KEY = 'mizar.preflight.silenced-match.v1';
+
 type Props = {
   operator: OperatorPayload | null;
   program: ProgramPayload | null;
@@ -72,6 +74,14 @@ function ReviewSession({ operator, program, cursor, connection, onOpen }: Props)
   const [automaticIncident, setAutomaticIncident] = useState('');
   const [opened, setOpened] = useState(false);
   const [dismissed, setDismissed] = useState('');
+  const matchId = operator?.matchContext.summary?.matchId ?? '';
+  const [silenced, setSilenced] = useState(() => {
+    try {
+      return localStorage.getItem(SILENCED_MATCH_KEY) === matchId;
+    } catch {
+      return false;
+    }
+  });
   const completionKey = `mizar.preflight.v1:${JSON.stringify([operator?.matchContext.summary?.matchId, cursor?.producerInstanceId, cursor?.liveSessionId, operator?.activeLineup.mapEpoch])}`;
   const [acknowledged, setAcknowledged] = useState(() => {
     try {
@@ -82,11 +92,15 @@ function ReviewSession({ operator, program, cursor, connection, onOpen }: Props)
   });
   useEffect(() => {
     const changed = (event: StorageEvent) => {
+      if (event.key === SILENCED_MATCH_KEY) {
+        setSilenced(event.newValue === matchId);
+        if (event.newValue === matchId) setOpened(false);
+      }
       if (event.key === completionKey) setAcknowledged(event.newValue ?? '');
     };
     window.addEventListener('storage', changed);
     return () => window.removeEventListener('storage', changed);
-  }, [completionKey]);
+  }, [completionKey, matchId]);
   const [connectionObserved, setConnectionObserved] = useState(false);
   if (connection && !connectionObserved) setConnectionObserved(true);
   const [busy, setBusy] = useState(false);
@@ -154,20 +168,21 @@ function ReviewSession({ operator, program, cursor, connection, onOpen }: Props)
         setAutomaticIncident(incident);
         // The two snapshot channels can briefly be unaligned between deliveries.
         // That absence of evidence is not a new incident or a dismissal reset.
-        if (incident && dismissed !== incident) setOpened(true);
+        if (!silenced && incident && dismissed !== incident) setOpened(true);
       },
       incident.startsWith('website:') ? 1500 : 0,
     );
     return () => clearTimeout(timer);
-  }, [incident, dismissed]);
+  }, [incident, dismissed, silenced]);
   const open =
     isReviewWindow() ||
     (opened &&
       (preparation || (online && connectionObserved && (!connection || !connection.paired)))) ||
-    Boolean(incident && automaticIncident === incident && dismissed !== incident);
+    Boolean(!silenced && incident && automaticIncident === incident && dismissed !== incident);
   const close = () => {
     setOpened(false);
-    setDismissed(incident);
+    // A queued native close event may arrive while snapshot channels are unaligned.
+    if (incident) setDismissed(incident);
     void closeReviewWindow().catch((failure) => setError(String(failure)));
   };
   async function run(action: () => Promise<unknown>) {
@@ -370,6 +385,21 @@ function ReviewSession({ operator, program, cursor, connection, onOpen }: Props)
         {error ? <p role="alert">{error}</p> : null}
         <footer>
           <Button onClick={close}>稍后处理</Button>
+          <Button
+            onClick={() => {
+              const next = !silenced;
+              setSilenced(next);
+              try {
+                if (next) localStorage.setItem(SILENCED_MATCH_KEY, matchId);
+                else localStorage.removeItem(SILENCED_MATCH_KEY);
+              } catch {
+                /* Keep the current window preference when storage is unavailable. */
+              }
+              if (next) close();
+            }}
+          >
+            {silenced ? '恢复本场自动提醒' : '本场比赛不再自动弹出'}
+          </Button>
           {preparation ? (
             <Button
               variant="primary"

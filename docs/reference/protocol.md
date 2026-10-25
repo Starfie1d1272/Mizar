@@ -58,7 +58,7 @@ RivalHub 资料先经过结构与语义校验，阻断错误不进入 Core。比
 
 `GET /local/v1/observer-assist` 返回已保存的偏好、当前连接端点摘要与修订号。受信任本机 Origin 通过 `POST /operator/observer-assist` 保存设置或当前连接。密码仅随本次服务会话保存在内存，比赛切换清除本场连接。
 
-私有 `assist` 通道使用 schema 2；开启时携带来源状态、时间参数、测得延迟与最多六条击杀提示，包含当前 Program 昵称、唯一观战槽位、倒计时与已发生状态。关闭时沿用基础辅助载荷。Program、雷达和公开输出继续使用各自契约。
+私有 `assist` 通道使用 schema 2；开启时携带来源状态、时间参数、测得延迟与最多六条击杀提示，包含当前 Program 昵称、唯一观战槽位、预计发生倒计时。关闭时沿用基础辅助载荷。Program、雷达和公开输出继续使用各自契约。
 
 Host 的 `prepare` / `start-configured` 绑定游戏实例、Desktop Job 和配置修订。节目连接与 HUD 命令复用 MulNX 的 `Game/Command/NoReport` 队列，payload 使用其填充器要求的 JSON 字符串。精确网关回执证明入队，游戏数据与本机控制台查询分别负责节目连接、HUD 值的读回。
 

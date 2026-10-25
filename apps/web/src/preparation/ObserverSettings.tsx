@@ -34,9 +34,7 @@ export function ObserverSettingsPanel() {
     try {
       const parsed = observerSettingsSchema.safeParse(settings);
       if (!parsed.success)
-        throw new Error(
-          '请填写有效整数：延迟差 10–600 秒、提前 1–30 秒、停留 1–60 秒；提前时间应小于延迟差。',
-        );
+        throw new Error('请填写有效整数：延迟差 10–600 秒、提前 1–30 秒；提前时间应小于延迟差。');
       const value = parsed.data;
       await command('/operator/observer-assist', { action: 'configure', settings: value });
       if (!value.enabled && window.__TAURI_INTERNALS__)
@@ -79,22 +77,9 @@ export function ObserverSettingsPanel() {
         onChange={(e) => edit({ leadSeconds: Number(e.target.value) })}
         message="希望在击杀到达节目画面前多久看到提示。"
       />
-      <Field
-        label="提示总停留时间（秒）"
-        type="number"
-        min={1}
-        max={60}
-        value={settings.displaySeconds}
-        disabled={busy || !settings.enabled}
-        onChange={(e) => edit({ displaySeconds: Number(e.target.value) })}
-        message="从首次出现到移除的总时间。"
-      />
       <p>
         按当前设置，稳定延迟差下约缓冲 {settings.expectedDelaySeconds - settings.leadSeconds}{' '}
-        秒后显示；
-        {settings.displaySeconds >= settings.leadSeconds
-          ? `事件发生后继续保留 ${settings.displaySeconds - settings.leadSeconds} 秒。`
-          : `提示在事件发生前 ${settings.leadSeconds - settings.displaySeconds} 秒移除。`}
+        秒后显示；倒计时归零时自动移除。
       </p>
       <Checkbox
         label="连接节目源时自动隐藏游戏原生 HUD"

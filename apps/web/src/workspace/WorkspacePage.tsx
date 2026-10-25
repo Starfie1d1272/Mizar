@@ -118,12 +118,6 @@ function ContextPanel({
   }
   return (
     <section className="workspace-context" aria-label="当前比赛与制作状态">
-      <div className="workspace-section-heading">
-        <small title={match?.competitionName}>
-          {match ? `${match.competitionName} · ${match.format.toUpperCase()}` : '当前比赛 · 待选择'}
-        </small>
-        <Button onClick={() => void openPreparation('/matches')}>比赛资料</Button>
-      </div>
       <div className="workspace-match-score">
         <strong title={score?.teamA.name ?? match?.entryAName}>
           {score?.teamA.name ?? match?.entryAName ?? '队伍 A'}
@@ -135,42 +129,47 @@ function ContextPanel({
           {score?.teamB.name ?? match?.entryBName ?? '队伍 B'}
         </strong>
       </div>
-      {score === null ? null : (
-        <small className="workspace-score-detail">
-          当前图 · {score.currentMapName ?? '等待比赛数据'}
-          {score.seriesScoreText ? ` · 系列 ${score.seriesScoreText}` : ''}
+      <div className="workspace-context__meta">
+        <small className="workspace-score-detail" title={score?.seriesScoreText ?? undefined}>
+          {score?.currentMapName ?? '地图待确认'}
+          {score?.seriesScoreText ? ` · 系列 ${score.seriesScoreText}` : ''}
         </small>
-      )}
-      <p className="workspace-pov">当前视角 · {pov ?? '等待观战数据'}</p>
-      {operator?.matchContext.rosterAuthority !== 'rivalhub' ? (
-        <>
-          <Button onClick={() => setCaptureOpen(true)}>
-            {match ? '识别服务器首发' : '从服务器创建本地比赛'}
-          </Button>
-          <Dialog
-            open={captureOpen}
-            title={match ? '核对现场首发' : '从服务器创建本地比赛'}
-            modal={false}
-            className="workspace-recovery workspace-roster-capture"
-            onClose={() => setCaptureOpen(false)}
-          >
-            <p>连接服务器并进入观战后，核对双方十人名单，再确认保存。</p>
-            <RosterCapture
-              key={match?.matchId ?? 'empty'}
-              create={!match}
-              autoOpen
-              {...(match ? { names: { a: match.entryAName, b: match.entryBName } } : {})}
-            />
-          </Dialog>
-        </>
-      ) : null}
-      <PreflightReview
-        operator={operator}
-        program={program}
-        cursor={programCursor}
-        connection={connection}
-        onOpen={openPreparation}
-      />
+        <p className="workspace-pov" title={pov ?? undefined}>
+          视角 · {pov ?? '等待观战数据'}
+        </p>
+      </div>
+      <div className="workspace-context__actions">
+        <Button onClick={() => void openPreparation('/matches')}>比赛资料</Button>
+        {operator?.matchContext.rosterAuthority !== 'rivalhub' ? (
+          <>
+            <Button onClick={() => setCaptureOpen(true)}>
+              {match ? '识别服务器首发' : '从服务器创建本地比赛'}
+            </Button>
+            <Dialog
+              open={captureOpen}
+              title={match ? '核对现场首发' : '从服务器创建本地比赛'}
+              modal={false}
+              className="workspace-recovery workspace-roster-capture"
+              onClose={() => setCaptureOpen(false)}
+            >
+              <p>连接服务器并进入观战后，核对双方十人名单，再确认保存。</p>
+              <RosterCapture
+                key={match?.matchId ?? 'empty'}
+                create={!match}
+                autoOpen
+                {...(match ? { names: { a: match.entryAName, b: match.entryBName } } : {})}
+              />
+            </Dialog>
+          </>
+        ) : null}
+        <PreflightReview
+          operator={operator}
+          program={program}
+          cursor={programCursor}
+          connection={connection}
+          onOpen={openPreparation}
+        />
+      </div>
       {program?.map.phase !== 'warmup' ? (
         <SyncHealthAlert
           health={connection?.syncHealth}
@@ -327,6 +326,7 @@ function WorkspaceLeftContent() {
         <div className="workspace-left__details">
           <ObserverHints />
           <div className="workspace-left__context">
+            <MusicControls compact />
             <ContextPanel
               operator={payload}
               programCursor={
@@ -336,9 +336,8 @@ function WorkspaceLeftContent() {
                 programState.state === 'live' ? (programState.current?.payload ?? null) : null
               }
             />
+            <ProductionStatus compact matchId={payload?.matchContext.summary?.matchId ?? null} />
           </div>
-          <ProductionStatus compact matchId={payload?.matchContext.summary?.matchId ?? null} />
-          <MusicControls compact />
         </div>
       </div>
       <ObsConfidence />

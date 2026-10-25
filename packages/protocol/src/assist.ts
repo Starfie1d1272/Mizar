@@ -14,14 +14,12 @@ export const assistPayloadSchema = z.object({
       state: z.enum(['connecting', 'aligning', 'ready', 'paused', 'unavailable']),
       expectedDelaySeconds: z.number().finite(),
       leadSeconds: z.number().finite(),
-      displaySeconds: z.number().finite(),
       measuredDelaySeconds: z.number().finite().nullable(),
       hints: z
         .array(
           z.object({
             id: z.string().max(200),
             remainingSeconds: z.number().finite(),
-            occurred: z.boolean(),
             attacker: z.object({
               name: z.string().max(256),
               observerSlot: z.number().int().min(0).max(9).nullable(),
@@ -42,7 +40,6 @@ export const observerSettingsSchema = z
     enabled: z.boolean(),
     expectedDelaySeconds: z.number().int().min(10).max(600),
     leadSeconds: z.number().int().min(1).max(30),
-    displaySeconds: z.number().int().min(1).max(60),
     hideGameHud: z.boolean(),
   })
   .refine((v) => v.leadSeconds < v.expectedDelaySeconds, '提前时间应小于两路延迟差');
@@ -51,7 +48,6 @@ export const DEFAULT_OBSERVER_SETTINGS: ObserverSettings = {
   enabled: false,
   expectedDelaySeconds: 120,
   leadSeconds: 7,
-  displaySeconds: 10,
   hideGameHud: true,
 };
 

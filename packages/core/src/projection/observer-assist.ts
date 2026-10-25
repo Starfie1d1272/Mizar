@@ -6,7 +6,6 @@ import type { PlayerDeathGameEvent, GameEventObservation } from '../game-events/
 export interface ObserverHint {
   readonly id: string;
   readonly remainingSeconds: number;
-  readonly occurred: boolean;
   readonly attacker: { readonly name: string; readonly observerSlot: number | null };
   readonly victim: { readonly name: string; readonly observerSlot: number | null };
 }
@@ -14,7 +13,6 @@ export interface ObserverHintSettings {
   readonly enabled: boolean;
   readonly expectedDelaySeconds: number;
   readonly leadSeconds: number;
-  readonly displaySeconds: number;
 }
 
 /** Operator-only hints share the Program cursor while retaining their own payload. */
@@ -216,7 +214,7 @@ export class ObserverHintTimeline {
       const due = kill.sourceMs + this.offset;
       if (
         now < due - settings.leadSeconds * 1000 ||
-        now >= due + (settings.displaySeconds - settings.leadSeconds) * 1000 ||
+        now >= due ||
         kill.event.cursor.mapName !== program.map.name
       )
         continue;
@@ -228,7 +226,6 @@ export class ObserverHintTimeline {
       hints.push({
         id: `${this.generation}:${kill.event.cursor.sequence}`,
         remainingSeconds: Math.max(0, (due - now) / 1000),
-        occurred: now >= due,
         attacker: ref(attacker),
         victim: ref(victim),
       });

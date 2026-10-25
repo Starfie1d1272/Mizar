@@ -23,9 +23,15 @@ export class ObserverSettingsStore {
   async load() {
     if (!this.path) return;
     try {
-      this.settings = observerSettingsSchema.parse(
-        JSON.parse(await readFile(this.path, 'utf8')) as unknown,
-      );
+      const saved: unknown = JSON.parse(await readFile(this.path, 'utf8'));
+      // Preserve the operator's preferences when loading the preview settings format.
+      if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
+        const current = { ...saved } as Record<string, unknown>;
+        delete current.displaySeconds;
+        this.settings = observerSettingsSchema.parse(current);
+      } else {
+        this.settings = observerSettingsSchema.parse(saved);
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }

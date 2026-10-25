@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify from 'fastify';
@@ -24,9 +24,11 @@ it('persists operator timing and keeps per-match connection credentials in memor
     expect(store.configured()?.password).toBe('synthetic-secret');
     expect(JSON.stringify(store.view())).not.toContain('synthetic-secret');
     expect(await readFile(path, 'utf8')).not.toMatch(/password|127\.0\.0\.1/);
+    await writeFile(path, JSON.stringify({ ...store.settings, displaySeconds: 10 }));
     const restart = new ObserverSettingsStore(path);
     await restart.load();
     expect(restart.settings.leadSeconds).toBe(8);
+    expect(restart.settings).not.toHaveProperty('displaySeconds');
     expect(restart.configured()).toBeUndefined();
     store.clearConnection();
     expect(store.view().connection).toBeNull();

@@ -212,6 +212,27 @@ test('preflight reviews current ten-player evidence, actual auto state, disconne
   ).toBeVisible();
   await expect(finish).toBeDisabled();
   await screenshot('06-stale-data');
+  await dialog.getByRole('button', { name: '本场比赛不再自动弹出' }).click();
+  await expect(dialog).not.toBeVisible();
+  await page.reload();
+  await expect(page.getByRole('button', { name: '赛前核对', exact: true })).toBeVisible();
+  await expect(dialog).not.toBeVisible();
+  await page.getByRole('button', { name: '赛前核对', exact: true }).click();
+  await expect(dialog.getByRole('button', { name: '恢复本场自动提醒' })).toBeVisible();
+  await dialog.getByRole('button', { name: '稍后处理' }).click();
+  operator.payload.activeLineup.retainedCount = 0;
+  operator.payload.runtime.telemetryFreshness = 'fresh';
+  publish();
+  await expect(dialog).not.toBeVisible();
+  const originalMatchId = operator.payload.matchContext.summary!.matchId;
+  operator.payload.matchContext.summary!.matchId = 'next-preflight-match';
+  program.payload.match!.matchId = 'next-preflight-match';
+  await page.reload();
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '本场比赛不再自动弹出' })).toBeVisible();
+  operator.payload.matchContext.summary!.matchId = originalMatchId;
+  program.payload.match!.matchId = originalMatchId;
+
   operator.payload.identity.state = 'matched';
   operator.payload.identity.issues = [];
   operator.payload.activeLineup.retainedCount = 0;

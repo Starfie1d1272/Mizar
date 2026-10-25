@@ -10,7 +10,6 @@ export function mapObserverAssistProjection(projection: ObserverAssistProjection
             state: projection.observer.state,
             expectedDelaySeconds: projection.observer.expectedDelaySeconds,
             leadSeconds: projection.observer.leadSeconds,
-            displaySeconds: projection.observer.displaySeconds,
             measuredDelaySeconds: projection.observer.measuredDelaySeconds,
             hints: projection.observer.hints.map((hint) => ({ ...hint })),
           },

@@ -68,7 +68,6 @@ export interface ProjectionCoordinatorOptions {
     enabled: boolean;
     expectedDelaySeconds: number;
     leadSeconds: number;
-    displaySeconds: number;
   };
   readonly programChat?: (
     cursor: ProgramSnapshot['cursor'],

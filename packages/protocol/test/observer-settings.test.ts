@@ -11,7 +11,6 @@ it('starts with the private feature off and editable 120/7/10 timing', () => {
     enabled: false,
     expectedDelaySeconds: 120,
     leadSeconds: 7,
-    displaySeconds: 10,
   });
   expect(
     observerSettingsSchema.safeParse({

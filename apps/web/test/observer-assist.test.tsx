@@ -9,7 +9,6 @@ const mocks = vi.hoisted(() => ({
       enabled: false,
       expectedDelaySeconds: 120,
       leadSeconds: 7,
-      displaySeconds: 10,
       hideGameHud: true,
     },
     connection: null,
@@ -46,12 +45,12 @@ afterEach(() => {
   container.remove();
   delete window.__TAURI_INTERNALS__;
 });
-it('offers the three timing controls and applies the saved off setting to the running observer', async () => {
+it('offers the two timing controls and applies the saved off setting to the running observer', async () => {
   window.__TAURI_INTERNALS__ = { invoke: <T,>() => Promise.resolve(undefined as T) };
   act(() => root.render(<ObserverSettingsPanel />));
   expect(
     [...container.querySelectorAll<HTMLInputElement>('input[type=number]')].map((e) => e.value),
-  ).toEqual(['120', '7', '10']);
+  ).toEqual(['120', '7']);
   expect(container.textContent).toContain('113');
   expect(container.textContent).toContain('本机控制台记录');
   await act(async () => {
@@ -90,7 +89,6 @@ it('shows private slots and countdowns from the assist channel, and clears on re
             {
               id: 'test',
               remainingSeconds: 7,
-              occurred: false,
               attacker: { name: 'Long player name', observerSlot: 2 },
               victim: { name: 'Victim', observerSlot: 9 },
             },
@@ -100,7 +98,7 @@ it('shows private slots and countdowns from the assist channel, and clears on re
     },
   };
   act(() => root.render(<ObserverHints />));
-  expect(container.textContent).toContain('7.0 秒后');
+  expect(container.textContent).toContain('7 秒后');
   expect([...container.querySelectorAll('kbd')].map((e) => e.textContent)).toEqual(['3', '0']);
   mocks.observer = { state: 'reconnecting' };
   act(() => root.render(<ObserverHints />));
