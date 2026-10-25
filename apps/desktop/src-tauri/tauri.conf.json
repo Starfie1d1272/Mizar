@@ -11,6 +11,7 @@
     "security": {
       "capabilities": [
         "workspace",
+        "review",
         "demo-test",
         "demo-test-workspace",
         "workspace-exit",

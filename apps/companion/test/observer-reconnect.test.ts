@@ -61,6 +61,13 @@ describe('observer reconnection through real owned child processes', () => {
           cancelled: true,
           failed: false,
         });
+        const attempts = (await test.owner.closed).attempts;
+        expect(attempts.map((attempt) => attempt.attemptCount)).toEqual([1, 2]);
+        expect(new Set(attempts.map((attempt) => attempt.attemptId)).size).toBe(2);
+        expect(attempts[0]!.reason).toBe(
+          endpoint === '127.0.0.6:27020' ? 'native-session-closed' : 'initialization-timeout',
+        );
+        expect(attempts[1]).toMatchObject({ cancelled: true, ready: true });
         expect(test.owner.source.getHealth().state).toBe('stopped');
         expect(() => process.kill(next.pid, 0)).toThrow();
       } finally {

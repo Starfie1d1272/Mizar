@@ -36,7 +36,7 @@ it('uses the existing quoted command queue and waits for its exact acknowledgeme
   const envelope = JSON.parse(sent[0]!) as { type: string; payload: string };
   expect(envelope.type).toBe('Game/Command/NoReport');
   expect(JSON.parse(envelope.payload)).toBe(
-    'password "synthetic-only";connect 127.0.0.1:27026;cl_draw_only_deathnotices 1',
+    'password "synthetic-only"; connect 127.0.0.1:27026;cl_draw_only_deathnotices 1',
   );
   expect(observerHudQuery('MIZAR_HUD_' + 'a'.repeat(32), 0)).toBe(
     'echo MIZAR_HUD_' + 'a'.repeat(32) + ';cl_draw_only_deathnotices 0;cl_draw_only_deathnotices',

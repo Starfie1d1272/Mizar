@@ -1,3 +1,4 @@
+import type { WorkspaceObserver } from '../telemetry/observer-workspace.js';
 import type { RetainedDiagnosticBatch } from './delivery.js';
 import { Readable } from 'node:stream';
 import { finished } from 'node:stream/promises';
@@ -138,6 +139,7 @@ export function registerSupportRoutes(
     readonly originPolicy: LocalWebOriginPolicy;
     readonly logsDirectory?: string;
     readonly artifact?: { readonly gitSha: string; readonly artifactSha256: string };
+    readonly observer?: () => ReturnType<WorkspaceObserver['view']> | null;
     readonly runtimeSummary: () => ReturnType<DebugEvidenceStore['getSupportSummary']>;
     readonly sessionLogHealth?: () => unknown;
     readonly pendingJournalEvidence?: () => readonly string[];
@@ -361,6 +363,7 @@ export function registerSupportRoutes(
             '本文件不是 Windows + CS2 + OBS 的真实验收通过证明。',
           ],
           snapshot: {
+            observer: options.observer?.() ?? null,
             nativeObs: nativeSummary,
             program: program
               ? {

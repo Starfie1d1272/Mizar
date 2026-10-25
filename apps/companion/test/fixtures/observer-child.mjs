@@ -6,6 +6,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 const args = process.argv.slice(2);
 const arg = (name) => args[args.indexOf(name) + 1];
+// Match pinned driver: create only the unique leaf, never its ancestors.
+try {
+  fs.mkdirSync(arg('--output'), { mode: 0o700 });
+} catch {
+  process.stderr.write('output-directory-unavailable\n');
+  process.exit(1);
+}
 import { createInterface } from 'node:readline';
 const inputLines = createInterface({ input: process.stdin });
 let cleanupFailure = false;
@@ -20,6 +27,49 @@ for await (const text of inputLines) {
     )
   )
     process.exit(90);
+  const earlyFailures = {
+    '127.0.0.11:27020': 'output-directory-unavailable\nSynthetic interpreter shutdown diagnostic',
+    '127.0.0.12:27020': 'configuration-boundary',
+    '127.0.0.13:27020':
+      'Traceback private path and ' + input.password + '\nValueError: node-runtime-probe-failed',
+    '127.0.0.14:27020': '',
+    '127.0.0.15:27020': '{"schema":',
+    '127.0.0.16:27020': 'private unknown stderr ' + input.password,
+    '127.0.0.17:27020': JSON.stringify({
+      schema: 'cs2-observer-report/1',
+      reachedFull: false,
+      drainCompleted: false,
+      cleanupCompleted: true,
+      outcome: 'failed',
+      reason: input.password,
+    }),
+    '127.0.0.18:27020': JSON.stringify({
+      schema: 'cs2-observer-report/1',
+      reachedFull: false,
+      drainCompleted: false,
+      cleanupCompleted: true,
+      outcome: 'failed',
+      reason: 'ordered-parser-exited',
+    }),
+    '127.0.0.19:27020':
+      'output-directory-unavailable\n' +
+      JSON.stringify({
+        schema: 'cs2-observer-report/1',
+        reachedFull: false,
+        drainCompleted: false,
+        cleanupCompleted: true,
+        outcome: 'failed',
+        reason: 'native-start-failed',
+        native_boot_code: 2,
+      }),
+  };
+  if (Object.hasOwn(earlyFailures, input.endpoint)) {
+    process.stderr.write(earlyFailures[input.endpoint]);
+    process.exitCode = 1;
+    inputLines.close();
+    process.stdin.destroy();
+    break;
+  }
   if (input.endpoint === '127.0.0.2:27020') {
     process.stderr.write(
       JSON.stringify({
@@ -54,7 +104,6 @@ for await (const text of inputLines) {
   const retrying = path.basename(arg('--output')).startsWith('retry-');
   if (supervised) {
     const directory = arg('--output');
-    fs.mkdirSync(directory, { recursive: true });
     fs.writeFileSync(
       path.join(directory, 'child.json'),
       JSON.stringify({ source, pid: process.pid }),
