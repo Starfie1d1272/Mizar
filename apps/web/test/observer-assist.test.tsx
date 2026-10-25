@@ -81,6 +81,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   act(() => root.unmount());
+  vi.useRealTimers();
   container.remove();
   delete window.__TAURI_INTERNALS__;
 });
@@ -344,4 +345,79 @@ it('shows estimated timing and normal waiting separately from source recovery', 
   act(() => root.render(<ObserverHints />));
   expect(container.textContent).toContain('正在积累预告，约 113 秒后进入提示窗口');
   expect(container.textContent).not.toContain('正在对齐');
+});
+
+it('orders private hints by actual remaining time, retains ties, expires locally and leaves input unchanged', () => {
+  vi.useFakeTimers({ toFake: ['performance', 'setInterval', 'clearInterval'] });
+  const hints = Object.freeze(
+    (
+      [
+        ['three', 3],
+        ['equal-first', 5],
+        ['equal-second', 5],
+        ['fraction-low', 5.1],
+        ['fraction-high', 5.9],
+        ['seven', 7],
+      ] as const
+    ).map(([id, remainingSeconds]) =>
+      Object.freeze({
+        id,
+        remainingSeconds,
+        attacker: Object.freeze({ name: id, observerSlot: 2 }),
+        victim: Object.freeze({ name: 'Victim', observerSlot: 9 }),
+      }),
+    ),
+  );
+  const original = JSON.stringify(hints);
+  mocks.observer = {
+    state: 'live',
+    current: {
+      payload: {
+        observer: {
+          state: 'ready',
+          timingBasis: 'estimated',
+          expectedDelaySeconds: 120,
+          leadSeconds: 7,
+          waitingReason: null,
+          nextWindowSeconds: 0,
+          hints,
+        },
+      },
+    },
+  };
+  const names = () =>
+    [...container.querySelectorAll('li strong')].map((element) => element.textContent);
+  const times = () =>
+    [...container.querySelectorAll('.observer-hints__time')].map((element) => element.textContent);
+  act(() => root.render(<ObserverHints />));
+  expect(names()).toEqual([
+    'seven',
+    'fraction-high',
+    'fraction-low',
+    'equal-first',
+    'equal-second',
+    'three',
+  ]);
+  // Both fractional values display six, but actual time still determines their order.
+  expect(times()).toEqual(['7 秒后', '6 秒后', '6 秒后', '5 秒后', '5 秒后', '3 秒后']);
+  act(() => {
+    vi.advanceTimersByTime(3000);
+  });
+  expect(names()).toEqual([
+    'seven',
+    'fraction-high',
+    'fraction-low',
+    'equal-first',
+    'equal-second',
+  ]);
+  expect(times()).toEqual(['4 秒后', '3 秒后', '3 秒后', '2 秒后', '2 秒后']);
+  act(() => {
+    vi.advanceTimersByTime(2000);
+  });
+  expect(names()).toEqual(['seven', 'fraction-high', 'fraction-low']);
+  act(() => {
+    vi.advanceTimersByTime(2000);
+  });
+  expect(names()).toEqual([]);
+  expect(JSON.stringify(hints)).toBe(original);
 });

@@ -32,7 +32,8 @@ export function ObserverHints() {
   const hints =
     observer?.hints
       .map((hint) => ({ ...hint, remainingSeconds: hint.remainingSeconds - elapsed }))
-      .filter((hint) => hint.remainingSeconds > 0) ?? [];
+      .filter((hint) => hint.remainingSeconds > 0)
+      .sort((a, b) => b.remainingSeconds - a.remainingSeconds) ?? [];
   const enabled = Boolean(configuration?.settings.enabled);
   const needsRecovery =
     enabled &&
