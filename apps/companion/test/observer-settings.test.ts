@@ -75,3 +75,35 @@ it('applies origin and payload validation to private settings writes', async () 
     await app.close();
   }
 });
+
+it('keeps equivalent saves idempotent and timing separate from Host preparation revisions', async () => {
+  const store = new ObserverSettingsStore();
+  const changes: string[] = [];
+  store.subscribe((kind) => changes.push(kind));
+  const revision = store.revision;
+  await Promise.all([
+    store.configure({ ...store.settings, leadSeconds: 10 }),
+    store.configure({ ...store.settings, leadSeconds: 10 }),
+    store.configureGame({ ...store.gameAutomation }),
+  ]);
+  expect(changes).toEqual(['settings']);
+  expect(store.revision).toBe(revision);
+  await store.configure({ ...store.settings, enabled: true });
+  expect(store.revision).not.toBe(revision);
+  const connection = {
+    earlyEndpoint: '127.0.0.1:27025',
+    programEndpoint: '127.0.0.1:27026',
+    password: 'synthetic',
+  };
+  store.setConnection(connection);
+  const connected = store.revision;
+  store.setConnection({ ...connection });
+  expect(store.revision).toBe(connected);
+  expect(changes).toEqual(['settings', 'enabled', 'connection']);
+  store.setConnection({ ...connection, password: 'changed' });
+  expect(store.revision).not.toBe(connected);
+  store.clearConnection();
+  const cleared = store.revision;
+  store.clearConnection();
+  expect(store.revision).toBe(cleared);
+});

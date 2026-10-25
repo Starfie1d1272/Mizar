@@ -21,7 +21,7 @@ export class ObserverSettingsStore {
   gameAutomation: GameAutomationSettings = { ...DEFAULT_GAME_AUTOMATION_SETTINGS };
   private connection: ObserverConnection | undefined;
   revision = randomUUID();
-  private listeners = new Set<(kind: 'settings' | 'connection') => void>();
+  private listeners = new Set<(kind: 'settings' | 'enabled' | 'game' | 'connection') => void>();
   private writing = Promise.resolve();
   constructor(private readonly path?: string) {}
   async load() {
@@ -67,10 +67,12 @@ export class ObserverSettingsStore {
   configure(settings: ObserverSettings) {
     const value = observerSettingsSchema.parse(settings);
     const next = this.writing.then(async () => {
+      if (JSON.stringify(this.settings) === JSON.stringify(value)) return;
       if (this.path)
         await atomicJson(this.path, { settings: value, gameAutomation: this.gameAutomation });
+      const enabledChanged = this.settings.enabled !== value.enabled;
       this.settings = value;
-      this.changed();
+      this.changed(enabledChanged ? 'enabled' : 'settings');
     });
     this.writing = next.catch(() => {});
     return next;
@@ -78,29 +80,34 @@ export class ObserverSettingsStore {
   configureGame(value: GameAutomationSettings) {
     const gameAutomation = gameAutomationSettingsSchema.parse(value);
     const next = this.writing.then(async () => {
+      if (JSON.stringify(this.gameAutomation) === JSON.stringify(gameAutomation)) return;
       if (this.path) await atomicJson(this.path, { settings: this.settings, gameAutomation });
       this.gameAutomation = gameAutomation;
-      this.changed();
+      this.changed('game');
     });
     this.writing = next.catch(() => {});
     return next;
   }
   setConnection(value: ObserverConnection) {
-    this.connection = observerConnectionSchema.parse(value);
+    const connection = observerConnectionSchema.parse(value);
+    if (JSON.stringify(this.connection) === JSON.stringify(connection)) return;
+    this.connection = connection;
     this.changed('connection');
   }
   clearConnection() {
+    if (!this.connection) return;
     this.connection = undefined;
     this.changed('connection');
   }
-  subscribe(listener: (kind: 'settings' | 'connection') => void) {
+  subscribe(listener: (kind: 'settings' | 'enabled' | 'game' | 'connection') => void) {
     this.listeners.add(listener);
     return () => {
       this.listeners.delete(listener);
     };
   }
-  private changed(kind: 'settings' | 'connection' = 'settings') {
-    this.revision = randomUUID();
+  private changed(kind: 'settings' | 'enabled' | 'game' | 'connection') {
+    // Timing preferences affect projection calculation, never Host preparation.
+    if (kind !== 'settings') this.revision = randomUUID();
     this.listeners.forEach((f) => f(kind));
   }
 }

@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type LightMyRequestResponse } from 'fastify';
 import { describe, it, expect, vi } from 'vitest';
 import {
   WorkspaceObserver,
@@ -16,10 +16,14 @@ vi.mock('../src/telemetry/observer-game-control.js', async (original) => ({
   sendObserverGameCommand: commands.send,
 }));
 const driver = fileURLToPath(new URL('./fixtures/observer-child.mjs', import.meta.url));
-async function fixture(run: (observer: WorkspaceObserver, app: FastifyInstance) => Promise<void>) {
+async function fixture(
+  run: (observer: WorkspaceObserver, app: FastifyInstance) => Promise<void>,
+  beforeLaunch?: () => Promise<void>,
+) {
   const outputDirectory = await mkdtemp(join(tmpdir(), 'mizar-observer-workspace-'));
-  const observer = new WorkspaceObserver(() =>
-    Promise.resolve({
+  const observer = new WorkspaceObserver(async () => {
+    await beforeLaunch?.();
+    return {
       role: 'lookahead',
       python: process.execPath,
       node: process.execPath,
@@ -29,8 +33,8 @@ async function fixture(run: (observer: WorkspaceObserver, app: FastifyInstance) 
       parserWorker: driver,
       hostVersion: 14192,
       outputDirectory,
-    }),
-  );
+    };
+  });
   const app = Fastify();
   registerWorkspaceObserver(app, observer, 'synthetic-capability');
   try {
@@ -178,7 +182,19 @@ it('rechecks the enabled configuration after waiting for an earlier observer to 
             executable: driver,
             game: '42-1',
             job: 'Local\\MizarObserver-test',
-            revision: settings.revision,
+            revision: (
+              await app.inject({
+                method: 'POST',
+                url: '/operator/runtime/observer',
+                headers: { 'x-runtime-token': 'synthetic-capability' },
+                payload: {
+                  action: 'prepare',
+                  game: '42-1',
+                  job: 'Local\\MizarObserver-test',
+                  useMulnx: false,
+                },
+              })
+            ).json<{ revision: string }>().revision,
           },
         })
         .then((response) => response);
@@ -221,7 +237,19 @@ it('routes standard observers and MulNX game automation independently', () =>
           executable: driver,
           game: '42-1',
           job: 'Local\\MizarObserver-test',
-          revision: settings.revision,
+          revision: (
+            await app.inject({
+              method: 'POST',
+              url: '/operator/runtime/observer',
+              headers: { 'x-runtime-token': 'synthetic-capability' },
+              payload: {
+                action: 'prepare',
+                game: '42-1',
+                job: 'Local\\MizarObserver-test',
+                useMulnx: scenario.useMulnx,
+              },
+            })
+          ).json<{ revision: string }>().revision,
           useMulnx: scenario.useMulnx,
         },
       });
@@ -232,4 +260,217 @@ it('routes standard observers and MulNX game automation independently', () =>
       start.mockRestore();
       await app.close();
     }
+  }));
+
+async function configuredFixture(
+  run: (context: {
+    observer: WorkspaceObserver;
+    settings: ObserverSettingsStore;
+    app: FastifyInstance;
+    request: (payload: Record<string, unknown>) => Promise<LightMyRequestResponse>;
+    prepare: (game?: string) => Promise<Record<string, unknown>>;
+    start: (game?: string) => Promise<LightMyRequestResponse>;
+  }) => Promise<void>,
+) {
+  await fixture(async (observer) => {
+    const app = Fastify();
+    const settings = new ObserverSettingsStore();
+    await settings.configure({ ...settings.settings, enabled: true });
+    await settings.configureGame({ autoConnect: true, hideGameHud: false });
+    settings.setConnection({
+      earlyEndpoint: '127.0.0.1:27020',
+      programEndpoint: '127.0.0.1:27021',
+      password: 'synthetic',
+    });
+    registerWorkspaceObserver(app, observer, 'synthetic-capability', () => true, settings);
+    const request = (payload: Record<string, unknown>) =>
+      app.inject({
+        method: 'POST',
+        url: '/operator/runtime/observer',
+        headers: { 'x-runtime-token': 'synthetic-capability' },
+        payload,
+      });
+    const prepare = async (game = '42-1') =>
+      (
+        await request({ action: 'prepare', game, job: 'Local\\MizarObserver-test', useMulnx: true })
+      ).json<Record<string, unknown>>();
+    const start = async (game = '42-1') =>
+      request({
+        action: 'start-configured',
+        executable: driver,
+        game,
+        job: 'Local\\MizarObserver-test',
+        useMulnx: true,
+        revision: (await prepare(game)).revision,
+        hudOriginal: 0,
+      });
+    commands.send.mockClear();
+    try {
+      await run({ observer, settings, app, request, prepare, start });
+    } finally {
+      await app.close();
+    }
+  });
+}
+
+it('preserves live source and program connection across timing, duplicate saves and concurrent returns', () =>
+  configuredFixture(async ({ observer, settings, prepare, start }) => {
+    const launch = vi.spyOn(observer, 'start');
+    expect((await start()).statusCode).toBe(200);
+    await expect.poll(() => observer.source.getHealth().state).toBe('live');
+    const generation = observer.source.getHealth().generation;
+    const revision = (await prepare()).revision;
+    await settings.configure({ ...settings.settings, leadSeconds: 10, expectedDelaySeconds: 130 });
+    settings.setConnection({ ...settings.configured()! });
+    await settings.configureGame({ ...settings.gameAutomation });
+    expect(await prepare()).toMatchObject({ reuse: true, revision });
+    expect((await Promise.all([start(), start()])).map((r) => r.statusCode)).toEqual([200, 200]);
+    expect(launch).toHaveBeenCalledTimes(1);
+    expect(commands.send).toHaveBeenCalledTimes(1);
+    expect(observer.source.getHealth().generation).toBe(generation);
+  }));
+
+it('restarts only the early source when assistance is re-enabled in the leased session', () =>
+  configuredFixture(async ({ observer, settings, start, prepare }) => {
+    expect((await start()).statusCode).toBe(200);
+    await expect.poll(() => observer.source.getHealth().state).toBe('live');
+    const generation = observer.source.getHealth().generation;
+    await settings.configure({ ...settings.settings, enabled: false });
+    await expect.poll(() => observer.view().active).toBe(false);
+    await settings.configure({ ...settings.settings, enabled: true });
+    await expect.poll(() => observer.source.getHealth().state).toBe('live');
+    expect(observer.source.getHealth().generation).toBeGreaterThan(generation);
+    expect(commands.send).toHaveBeenCalledTimes(1);
+    expect(await prepare()).toMatchObject({ reuse: true });
+  }));
+
+it('retries a failed early launch without repeating the successful game command', () =>
+  configuredFixture(async ({ observer, app, start }) => {
+    const launch = vi
+      .spyOn(observer, 'start')
+      .mockRejectedValueOnce(new Error('synthetic_launch_failure'));
+    expect((await start()).statusCode).toBe(409);
+    expect((await app.inject('/local/v1/observer')).json()).toMatchObject({
+      error: 'observer_operation_failed',
+      retryAvailable: true,
+    });
+    expect((await start()).statusCode).toBe(200);
+    expect(launch).toHaveBeenCalledTimes(2);
+    expect(commands.send).toHaveBeenCalledTimes(1);
+    expect(
+      (await app.inject('/local/v1/observer')).json<{ error: string | null }>().error,
+    ).toBeNull();
+  }));
+
+it('rejects an old prepared game after a new game is prepared and rejects an old connection revision', () =>
+  configuredFixture(async ({ settings, observer, prepare, request, start }) => {
+    const previous = await prepare();
+    await prepare('43-1');
+    const payload = {
+      action: 'start-configured',
+      executable: driver,
+      game: '42-1',
+      job: 'Local\\MizarObserver-test',
+      useMulnx: true,
+      revision: previous.revision,
+    };
+    expect((await request(payload)).statusCode).toBe(409);
+    const next = await prepare('43-1');
+    settings.setConnection({ ...settings.configured()!, earlyEndpoint: '127.0.0.1:27022' });
+    expect((await request({ ...payload, game: '43-1', revision: next.revision })).statusCode).toBe(
+      409,
+    );
+    expect(commands.send).not.toHaveBeenCalled();
+    expect(observer.view().active).toBe(false);
+    expect((await start('43-1')).statusCode).toBe(200);
+  }));
+
+it('cancels an in-flight start before a newer connection starts and never stops the newer owner', () =>
+  configuredFixture(async ({ observer, settings, start, app }) => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const stopped = vi.spyOn(observer, 'stop').mockImplementationOnce(() => gate);
+    const old = start();
+    await expect.poll(() => stopped.mock.calls.length).toBe(1);
+    settings.setConnection({ ...settings.configured()!, earlyEndpoint: '127.0.0.1:27022' });
+    const fresh = start();
+    release();
+    expect((await old).statusCode).toBe(409);
+    expect((await fresh).statusCode).toBe(200);
+    expect((await app.inject('/local/v1/observer')).json()).toMatchObject({
+      active: true,
+      pending: false,
+    });
+    expect(commands.send).toHaveBeenCalledTimes(1);
+  }));
+
+it('does not resume an explicitly stopped or expired Host session when settings are enabled again', () =>
+  configuredFixture(async ({ observer, settings, start, request }) => {
+    await start();
+    await request({ action: 'stop' });
+    await settings.configure({ ...settings.settings, enabled: false });
+    await settings.configure({ ...settings.settings, enabled: true });
+    expect(observer.view().active).toBe(false);
+    await start();
+    await settings.configure({ ...settings.settings, enabled: false });
+    await expect.poll(() => observer.view().active).toBe(false);
+    vi.spyOn(performance, 'now').mockReturnValue(performance.now() + 10_000);
+    try {
+      await request({ action: 'pulse' });
+      await settings.configure({ ...settings.settings, enabled: true });
+      expect(observer.view().active).toBe(false);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  }));
+
+it('cancels component resolution before spawning a process', async () => {
+  let release!: () => void;
+  let resolving!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const entered = new Promise<void>((resolve) => {
+    resolving = resolve;
+  });
+  await fixture(
+    async (observer) => {
+      const pending = observer.start(driver, '127.0.0.1:27020', 'synthetic-only');
+      const rejected = expect(pending).rejects.toThrow('observer_configuration_changed');
+      await entered;
+      const stop = observer.stop();
+      release();
+      await rejected;
+      await stop;
+      expect(observer.view().active).toBe(false);
+      expect(observer.source.getHealth().generation).toBe(0);
+    },
+    async () => {
+      resolving();
+      await gate;
+    },
+  );
+});
+
+it('lets Host restore changed HUD preferences without restarting either connection', () =>
+  configuredFixture(async ({ settings, observer, prepare, start }) => {
+    await settings.configureGame({ autoConnect: true, hideGameHud: true });
+    expect((await start()).statusCode).toBe(200);
+    const generation = observer.source.getHealth().generation;
+    expect(await prepare()).toMatchObject({ reuse: true });
+    await settings.configureGame({ autoConnect: true, hideGameHud: false });
+    expect(await prepare()).toMatchObject({ reuse: false, hideGameHud: false });
+    expect((await start()).statusCode).toBe(200);
+    expect(observer.source.getHealth().generation).toBe(generation);
+    expect(commands.send).toHaveBeenCalledTimes(1);
+    await settings.configureGame({ autoConnect: true, hideGameHud: true });
+    expect(await prepare()).toMatchObject({ reuse: false, hideGameHud: true });
+    expect((await start()).statusCode).toBe(200);
+    expect(commands.send.mock.calls.map((call: unknown[]) => call[0])).toEqual([
+      expect.stringContaining('27021'),
+      'cl_draw_only_deathnotices 1',
+    ]);
+    expect(observer.source.getHealth().generation).toBe(generation);
   }));
