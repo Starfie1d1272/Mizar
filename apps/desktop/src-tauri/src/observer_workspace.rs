@@ -59,6 +59,13 @@ pub async fn observer_command(window: tauri::WebviewWindow, app: tauri::AppHandl
                 ACTIVE.store(false, Ordering::Release);
                 return Ok(());
             }
+            if action == "restore-hud" {
+                app.state::<production_exit::ExitGate>().check()?;
+                app.state::<crate::updates::PendingUpdate>().check()?;
+                let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+                let _cs2 = managed.lock().map_err(|_| "请等待游戏操作完成后重试。")?;
+                return crate::observer_hud::restore(&log);
+            }
             if action == "preflight" {
                 let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
                 let cs2 = managed.lock().map_err(|_| "请等待游戏操作完成后重试。")?;

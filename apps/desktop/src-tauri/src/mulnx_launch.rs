@@ -150,6 +150,21 @@ fn validate_game_identity(status: &Value, result: &Value, executable: &Path) -> 
 mod tests {
     use super::*;
     #[test]
+    fn gateway_owner_requires_the_actual_listener_process() {
+        let root = std::env::temp_dir().join(format!("mizar-gateway-owner-{}-{}", std::process::id(), chrono::Utc::now().timestamp_nanos_opt().unwrap()));
+        let log = DesktopLog::new(&root, None).unwrap();
+        let unmanaged = managed_cs2::ManagedCs2::new(log.clone());
+        assert!(controlled_game(&unmanaged).is_err());
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        verify_gateway_owner(&log, port, std::process::id()).unwrap();
+        assert!(verify_gateway_owner(&log, port, u32::MAX).is_err());
+        drop(listener);
+        assert!(verify_gateway_owner(&log, port, std::process::id()).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn rejects_stale_partial_and_mismatched_launch_results() {
         let success = json!({"protocol":1,"ok":true,"stage":"resumed","pid":42,"created":"134000000000000000","cleanupPending":false});
         assert!(parse_launch_result(success.to_string().as_bytes(), true).is_ok());
@@ -177,6 +192,31 @@ mod tests {
     }
 }
 
+/// The fixed gateway must be owned by the held game, not just another service on the same port.
+fn verify_gateway_owner(log: &DesktopLog, port: u16, pid: u32) -> Result<(), String> {
+    let script = format!("$ErrorActionPreference='Stop'; $owners=@(Get-NetTCPConnection -State Listen -LocalPort {port} | Select-Object -ExpandProperty OwningProcess -Unique); ConvertTo-Json -Compress -InputObject $owners");
+    let mut command = Command::new("powershell.exe");
+    command.args(["-NoProfile", "-NonInteractive", "-Command", &script]).creation_flags(0x08000000);
+    let output = powershell::run(command, log, "核对 MulNX 网关归属", Duration::from_secs(12))?;
+    let owners = powershell::parse(log, "核对 MulNX 网关归属", &output)?;
+    if owners.as_array().is_some_and(|owners| owners.len() == 1 && owners[0].as_u64() == Some(pid as u64)) {
+        Ok(())
+    } else {
+        log.event("mulnx_gateway_owner", "failure", Some(&json!({"expectedPid":pid,"owners":owners}).to_string()));
+        Err("MulNX 网关不属于当前借用的 CS2，已停止发送控制命令。请重新检查游戏实例。".into())
+    }
+}
+
+fn controlled_game(cs2: &managed_cs2::ManagedCs2) -> Result<managed_cs2::WorkspaceProcess, String> {
+    if !cs2.has_external() { return Err("请先检查并明确借用要停止控制的 CS2 实例。".into()); }
+    let (context, game) = cs2.console_source()?.ok_or("当前借用游戏已失效或实例不唯一，请重新检查。")?;
+    if game.owned || !game.is_running() { return Err("当前游戏控制归属未确认，未发送停止命令。".into()); }
+    let executable = context["executable"].as_str().ok_or("当前游戏安装位置未确认。")?;
+    validate_game_identity(&cs2.mulnx_handoff_status()?,
+        &json!({"pid":game.pid,"created":game.created.to_string()}), Path::new(executable))?;
+    Ok(game)
+}
+
 /// Explicit end of MulNX control. Workbench exit intentionally never calls this.
 pub fn stop_control(app: &tauri::AppHandle, log: &DesktopLog) -> Result<Value, String> {
     let _launch = LAUNCH_GATE.try_lock().map_err(|_| "MulNX 正忙，请稍后重试。")?;
@@ -185,27 +225,50 @@ pub fn stop_control(app: &tauri::AppHandle, log: &DesktopLog) -> Result<Value, S
     let _gate = production_exit::WorkspaceExitGuard(&gate);
     app.state::<updates::PendingUpdate>().check()?;
     let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
-    let _cs2 = managed.lock().map_err(|_| "CS2 正忙，请稍后重试。")?;
+    let mut cs2 = managed.lock().map_err(|_| "CS2 正忙，请稍后重试。")?;
+    let game = controlled_game(&cs2)?;
+    verify_gateway_owner(log, 55202, game.pid)?;
     production_exit::finish_workspace_production(log)?;
-    // Restore through the live gateway before asking it to unload. Failure retains the journal
-    // and must leave that recovery channel available for an explicit retry.
-    crate::observer_workspace::finish(log)?;
-    let receipt = log.state_root.join("data/mulnx-launch/current.json");
-    match std::fs::remove_file(receipt) {
-        Ok(()) => (),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
-        Err(error) => return Err(log.preserve_error("mulnx_stop_receipt", None, &error, "旧启动记录未能失效，已保留 MulNX 供重试。".to_string())),
+    let stopped = (|| -> Result<Value, String> {
+        // Restoration failure keeps the journal and does not submit unload.
+        crate::observer_workspace::finish(log)?;
+        let current = controlled_game(&cs2)?;
+        if current.pid != game.pid || current.created != game.created || !game.is_running() {
+            return Err("游戏实例已变化，未发送停止命令。".into());
+        }
+        verify_gateway_owner(log, 55202, game.pid)?;
+        let receipt = log.state_root.join("data/mulnx-launch/current.json");
+        match std::fs::remove_file(receipt) {
+            Ok(()) => (),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+            Err(error) => return Err(log.preserve_error("mulnx_stop_receipt", None, &error, "旧启动记录未能失效，已保留 MulNX 供重试。".to_string())),
+        }
+        let root = crate::bundle_root()?;
+        let mut command = Command::new(root.join("resources/runtime/node.exe"));
+        command.arg(root.join("resources/app/dist/orchestration/provider.js")).arg("--stop-mulnx")
+            .env_remove("NODE_OPTIONS").env_remove("NODE_PATH").creation_flags(0x08000000);
+        let output = powershell::run(command, log, "停止 MulNX 控制", Duration::from_secs(8))?;
+        let result = powershell::parse(log, "停止 MulNX 控制", &output)?;
+        log.event("mulnx_stop", "result", Some(&result.to_string()));
+        if result["result"] != "queued" {
+            return Err(if result["result"] == "rejected" {
+                "当前 MulNX 未接受停止控制；该版本可能不支持 System/Stop，请使用官方退出入口。"
+            } else { "MulNX 停止结果待确认，请在游戏内核对；不会自动重发停止命令。" }.into());
+        }
+        Ok(result) // queued, execution unconfirmed; never claim DLL unloaded.
+    })();
+    // The verified borrowed game remains alive. Safe production finish has already succeeded;
+    // even HUD/transport failure must not leave the borrowed lease or workbench active.
+    let detached = cs2.finish();
+    crate::refresh_finished_window_feedback(app, &cs2);
+    drop(cs2);
+    let preparation = crate::open_main(app.clone(), None, None);
+    let hidden = crate::hide_workspace(app);
+    let cleanup = production_exit::cleanup_results(detached,
+        production_exit::cleanup_results(preparation, hidden));
+    match (stopped, cleanup) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
+        (Err(stop), Err(cleanup)) => Err(format!("{stop}\n{cleanup}")),
     }
-    let root = crate::bundle_root()?;
-    let mut command = Command::new(root.join("resources/runtime/node.exe"));
-    command.arg(root.join("resources/app/dist/orchestration/provider.js")).arg("--stop-mulnx")
-        .env_remove("NODE_OPTIONS").env_remove("NODE_PATH").creation_flags(0x08000000);
-    let output = powershell::run(command, log, "停止 MulNX 控制", Duration::from_secs(8))?;
-    let result = powershell::parse(log, "停止 MulNX 控制", &output)?;
-    if result["result"] != "queued" {
-        return Err(if result["result"] == "rejected" {
-            "当前 MulNX 未接受停止控制；该版本可能不支持 System/Stop，请使用官方退出入口。"
-        } else { "MulNX 停止结果待确认，请在游戏内核对；不会自动重发停止命令。" }.into());
-    }
-    Ok(result) // queued, execution unconfirmed; never claim DLL unloaded.
 }
