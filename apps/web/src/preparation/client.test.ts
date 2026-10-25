@@ -34,7 +34,8 @@ afterEach(() => {
 });
 
 function setup(
-  failure?: 'launch' | 'mulnx' | 'production' | 'restore' | 'presentation' | 'network' | 'trial',
+  failure?:
+    'launch' | 'mulnx' | 'production' | 'restore' | 'presentation' | 'network' | 'trial' | 'assist',
   actualMode = 'preparation',
   newlyStarted = true,
   running = true,
@@ -45,11 +46,14 @@ function setup(
     preferMulnx?: boolean;
   }[] = [],
   observerEnabled = false,
+  skipGameHud = false,
 ) {
   registerObserverPreparation(() => Promise.resolve(true));
   const calls: string[] = [];
   const invoke = vi.fn((command: string) => {
     calls.push(command);
+    if (failure === 'assist' && command === 'observer_command')
+      return Promise.reject(new Error('HUD 原值读取失败'));
     if (failure === 'launch' && command === 'start_managed_cs2')
       return Promise.reject(new Error('请先退出已打开的 CS2'));
     if (failure === 'mulnx' && command === 'launch_mulnx')
@@ -91,7 +95,12 @@ function setup(
         return Promise.reject(new Error('网络中断'));
       if (path === '/local/v1/observer-assist')
         return Promise.resolve(
-          new Response(JSON.stringify({ settings: { enabled: observerEnabled } })),
+          new Response(
+            JSON.stringify({
+              settings: { enabled: observerEnabled },
+              capabilities: { skipGameHud },
+            }),
+          ),
         );
       if (path === '/local/v1/demo-test')
         return Promise.resolve(
@@ -245,6 +254,82 @@ describe('managed CS2 production entry and cleanup', () => {
       result: 'failed',
       error: { cause: { message: '网络中断' } },
     });
+  });
+  it('reports auxiliary failure after the workspace is already presented', async () => {
+    const calls = setup('assist', 'live', false, true, [], true);
+    await expect(productionAction('enter', preparation)).rejects.toThrow(
+      '工作台已打开，观战连接或 HUD 准备未完成',
+    );
+    expect(calls).toContain('present_production');
+    expect(calls).not.toContain('finish_managed_cs2');
+  });
+  it('confirms the existing connection on return and dispatches through the reusable native entry', async () => {
+    const calls = setup(undefined, 'live', false, true, [], true);
+    const confirm = vi.fn(() => Promise.resolve(true));
+    registerObserverPreparation(confirm);
+    await productionAction('enter', { ...preparation, mode: 'live' });
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(calls).toContain('/local/v1/observer-assist');
+    expect(calls).toContain('present_production');
+    expect(nativeArgs.find((value) => value.command === 'observer_command')?.args).toMatchObject({
+      action: 'start-configured',
+    });
+  });
+  it.each([false, true])(
+    'uses the one-entry HUD override only with advertised support (%s)',
+    async (supported) => {
+      const calls = setup(
+        undefined,
+        'preparation',
+        false,
+        true,
+        [
+          { preferMulnx: true, running: true, pending: false },
+          { preferMulnx: true, running: true, pending: false },
+        ],
+        true,
+        supported,
+      );
+      registerObserverPreparation(() => Promise.resolve({ skipGameHud: true }));
+      if (!supported) {
+        await expect(productionAction('enter', preparation)).rejects.toThrow('请更新桌面组件');
+        expect(calls).not.toContain('start_managed_cs2');
+      } else {
+        await productionAction('enter', preparation);
+        expect(
+          nativeArgs.find((value) => value.command === 'observer_command')?.args,
+        ).toMatchObject({ action: 'start-configured', skipGameHud: true });
+        expect(calls).not.toContain('/operator/observer-assist');
+      }
+    },
+  );
+  it('coalesces repeated entry clicks while confirmation is pending', async () => {
+    const calls = setup(undefined, 'preparation', false, true, [], true);
+    let accept!: (value: boolean) => void;
+    registerObserverPreparation(
+      () =>
+        new Promise((resolve) => {
+          accept = resolve;
+        }),
+    );
+    const first = productionAction('enter', preparation);
+    const repeated = productionAction('enter', preparation);
+    expect(repeated).toBe(first);
+    await vi.waitFor(() => expect(accept).toBeDefined());
+    accept(true);
+    await Promise.all([first, repeated]);
+    expect(calls.filter((call) => call === 'start_managed_cs2')).toHaveLength(1);
+  });
+  it('does not launch after navigation changes during connection confirmation', async () => {
+    const calls = setup(undefined, 'preparation', false, true, [], true);
+    registerObserverPreparation(() => {
+      window.history.pushState(null, '', '/settings');
+      return Promise.resolve(true);
+    });
+    await productionAction('enter', preparation);
+    expect(calls).not.toContain('start_managed_cs2');
+    expect(calls).not.toContain('observer_command');
+    expect(calls).not.toContain('/operator/production');
   });
   it('keeps simultaneous actions separate while linking each native and HTTP child to its root task', async () => {
     setup();

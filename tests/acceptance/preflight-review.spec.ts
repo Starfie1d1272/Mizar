@@ -259,7 +259,13 @@ test('preflight reviews current ten-player evidence, actual auto state, disconne
     host.__TAURI_INTERNALS__ = {
       invoke: (command, args) => {
         host.reviewCommands.push({ command, args });
-        return Promise.resolve(command === 'restore_cs2_focus' ? true : null);
+        return Promise.resolve(
+          command === 'cs2_config_status'
+            ? { preferMulnx: true, observerHudPending: true, pending: false, running: true }
+            : command === 'restore_cs2_focus'
+              ? true
+              : null,
+        );
       },
     };
     localStorage.clear();
@@ -290,5 +296,19 @@ test('preflight reviews current ten-player evidence, actual auto state, disconne
       ),
     )
     .toBe(true);
+  let hideGameHud = true;
+  await page.route('**/local/v1/observer-assist', (route) =>
+    route.fulfill({
+      json: {
+        settings: { enabled: false, expectedDelaySeconds: 120, leadSeconds: 7 },
+        gameAutomation: { autoConnect: true, hideGameHud },
+        connection: null,
+      },
+    }),
+  );
+  await expect(dialog).toContainText('本场使用自动隐藏游戏 HUD');
+  await expect(dialog.getByRole('button', { name: '复制隐藏命令并返回游戏' })).toHaveCount(0);
+  hideGameHud = false;
+  await expect(dialog.getByRole('button', { name: '复制隐藏命令并返回游戏' })).toBeVisible();
   expect(errors).toEqual([]);
 });

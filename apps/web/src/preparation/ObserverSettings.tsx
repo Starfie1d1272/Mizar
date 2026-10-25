@@ -9,10 +9,10 @@ import {
 import { Button, Checkbox, Field, Panel, StatusBanner } from '../ui';
 import { command, useLocalRead } from './client';
 import { desktopInvoke } from '../workspace/client';
-import { flushObserverPreparation } from './observer-preparation';
+import { flushObserverPreparation, type ConnectionPreparationView } from './observer-preparation';
 import { useCs2Status } from './cs2-status';
 
-type ObserverView = {
+type ObserverView = ConnectionPreparationView & {
   settings: ObserverSettings;
   gameAutomation: GameAutomationSettings;
   connection: { earlyEndpoint: string; programEndpoint: string } | null;
@@ -20,6 +20,7 @@ type ObserverView = {
 
 export function ObserverSettingsPanel() {
   const view = useLocalRead<ObserverView>('/local/v1/observer-assist');
+  const production = useLocalRead<{ mode: string }>('/local/v1/production');
   const [draft, setDraft] = useState<ObserverSettings | null>(null);
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(''),
@@ -30,6 +31,7 @@ export function ObserverSettingsPanel() {
     setSaved(false);
   };
   const save = async () => {
+    if (busy) return;
     setBusy(true);
     setError('');
     try {
@@ -39,6 +41,14 @@ export function ObserverSettingsPanel() {
       const value = parsed.data;
       await command('/operator/observer-assist', { action: 'configure', settings: value });
       setSaved(true);
+      if (
+        value.enabled &&
+        !view?.settings.enabled &&
+        production?.mode === 'live' &&
+        window.__TAURI_INTERNALS__
+      ) {
+        await desktopInvoke('observer_command', { action: 'start-configured' });
+      }
     } catch (error) {
       setError(error instanceof Error ? error.message : '请核对设置后重试。');
     } finally {
@@ -88,6 +98,23 @@ export function ObserverSettingsPanel() {
       >
         保存观察辅助设置
       </Button>
+      {settings.enabled && production?.mode === 'live' && window.__TAURI_INTERNALS__ ? (
+        <Button
+          disabled={busy}
+          onClick={() => {
+            if (busy) return;
+            setBusy(true);
+            setError('');
+            void desktopInvoke('observer_command', { action: 'start-configured' })
+              .catch((reason: unknown) =>
+                setError(reason instanceof Error ? reason.message : '早源重试未完成，请重试。'),
+              )
+              .finally(() => setBusy(false));
+          }}
+        >
+          重新连接早源
+        </Button>
+      ) : null}
       {error ? (
         <StatusBanner tone="warning">{error}</StatusBanner>
       ) : saved ? (

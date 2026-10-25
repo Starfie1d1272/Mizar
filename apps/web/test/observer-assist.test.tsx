@@ -11,13 +11,26 @@ const mocks = vi.hoisted(() => ({
       leadSeconds: 7,
     },
     connection: null,
+    capabilities: { retryEarlyOnly: true },
   },
   command: vi.fn(),
   native: vi.fn(),
+  runtime: {
+    active: true,
+    failed: false,
+    health: { state: 'live' },
+    terminal: undefined as undefined | { reason: string },
+  },
+  production: { mode: 'preparation' },
   observer: ((): Record<string, unknown> => ({}))(),
 }));
 vi.mock('../src/preparation/client', () => ({
-  useLocalRead: () => mocks.view,
+  useLocalRead: (path: string) =>
+    path === '/local/v1/observer'
+      ? mocks.runtime
+      : path === '/local/v1/production'
+        ? mocks.production
+        : mocks.view,
   command: mocks.command,
 }));
 vi.mock('../src/workspace/client', () => ({ desktopInvoke: mocks.native }));
@@ -33,6 +46,8 @@ beforeEach(() => {
   document.body.append(container);
   root = createRoot(container);
   mocks.view.settings = { ...DEFAULT_OBSERVER_SETTINGS };
+  mocks.runtime = { active: true, failed: false, health: { state: 'live' }, terminal: undefined };
+  mocks.production.mode = 'preparation';
   mocks.command.mockReset().mockResolvedValue({});
   mocks.native.mockReset().mockResolvedValue(undefined);
 });
@@ -97,4 +112,45 @@ it('shows private slots and countdowns from the assist channel, and clears on re
   mocks.observer = { state: 'reconnecting' };
   act(() => root.render(<ObserverHints />));
   expect(container.innerHTML).toBe('');
+});
+
+it('distinguishes reconnecting from a terminal failure and dispatches the configured native retry', async () => {
+  window.__TAURI_INTERNALS__ = { invoke: <T,>() => Promise.resolve(undefined as T) };
+  mocks.view.settings.enabled = true;
+  mocks.observer = {
+    state: 'live',
+    current: { payload: { observer: { state: 'connecting', hints: [] } } },
+  };
+  mocks.runtime.health.state = 'reconnecting';
+  act(() => root.render(<ObserverHints />));
+  expect(container.textContent).toContain('正在重连早源');
+  expect(container.querySelector('button')).toBeNull();
+  mocks.runtime.failed = true;
+  mocks.runtime.terminal = { reason: 'initialization-timeout' };
+  act(() => root.render(<ObserverHints />));
+  expect(container.textContent).toContain('早源连接超时');
+  await act(async () => {
+    container.querySelector('button')!.click();
+    await Promise.resolve();
+  });
+  expect(mocks.native).toHaveBeenCalledExactlyOnceWith('observer_command', {
+    action: 'start-configured',
+  });
+});
+it('requests configured assistance when enabled during a live session', async () => {
+  window.__TAURI_INTERNALS__ = { invoke: <T,>() => Promise.resolve(undefined as T) };
+  mocks.production.mode = 'live';
+  act(() => root.render(<ObserverSettingsPanel />));
+  act(() => {
+    container.querySelector<HTMLInputElement>('input[type=checkbox]')!.click();
+  });
+  await act(async () => {
+    [...container.querySelectorAll('button')]
+      .find((button) => button.textContent === '保存观察辅助设置')!
+      .click();
+    await Promise.resolve();
+  });
+  expect(mocks.native).toHaveBeenCalledExactlyOnceWith('observer_command', {
+    action: 'start-configured',
+  });
 });
