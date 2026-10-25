@@ -1,5 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import type { MusicGroup, MusicStatus, MusicTrack } from '@mizar/protocol/music';
+import type {
+  MusicGroup,
+  MusicStatus,
+  MusicTrack,
+  MusicPreviewRequest,
+} from '@mizar/protocol/music';
 import type { ObsRpc } from '../obs/reconcile.js';
 import {
   musicCue,
@@ -10,6 +15,7 @@ import {
   type MusicTruth,
 } from './cues.js';
 import { looping, type MusicStore, type Playback } from './store.js';
+import { MusicPreview } from './preview.js';
 import { ownedMusicInput, type MusicLayer } from './obs-provider.js';
 
 interface Provider {
@@ -26,6 +32,7 @@ interface Fade {
   stop: boolean;
 }
 export class MusicDirector {
+  private readonly preview: MusicPreview;
   private generation = 0;
   private commandRevision = 0;
   private desiredKey = '';
@@ -60,12 +67,30 @@ export class MusicDirector {
     private readonly truth: () => MusicTruth,
     private readonly now = Date.now,
     private readonly random = Math.random,
-  ) {}
+  ) {
+    this.preview = new MusicPreview(store, now);
+  }
   private isHeld() {
     return this.heldOverride ?? this.store.state.held;
   }
   get(): MusicStatus {
-    return { ...this.status, held: this.isHeld() };
+    return {
+      ...this.status,
+      held: this.isHeld(),
+      ...(this.preview.status ? { preview: this.preview.status } : {}),
+    };
+  }
+  async previewRequest(request: MusicPreviewRequest) {
+    if (this.closed) throw new Error('music_preview_closed');
+    if (
+      request.action === 'start' &&
+      (this.pendingOpening || (this.store.state.stinger && !this.store.state.stinger.finished))
+    )
+      throw new Error('music_preview_channel_busy');
+    this.preview.submit(request);
+    while (this.inFlight && !this.closed) await new Promise((resolve) => setTimeout(resolve, 10));
+    this.lastPoll = -Infinity;
+    await this.tick();
   }
   invalidate() {
     this.generation++;
@@ -73,6 +98,7 @@ export class MusicDirector {
   }
   async command(action: 'stop' | 'resume' | 'next') {
     if (this.closed) return;
+    this.preview.cancel('operator_command');
     const revision = ++this.commandRevision;
     const current = () => !this.closed && revision === this.commandRevision;
     this.invalidate(); // Cancel playback work; command validity is independent of telemetry changes.
@@ -138,6 +164,7 @@ export class MusicDirector {
     )
       return;
     if (this.store.state.consumed.includes(key)) return;
+    this.preview.cancel('opening_take');
     this.pendingOpening = {
       key,
       expires: this.now() + 1000,
@@ -159,12 +186,13 @@ export class MusicDirector {
   }
   async tick(): Promise<void> {
     if (this.closed) return;
-    if (this.store.failure) {
+    if (this.store.failure && this.preview.busy) this.preview.cancel('storage_unavailable');
+    if (this.store.failure && !this.preview.busy) {
       this.status.connection = 'unavailable';
       this.status.message = '本机音乐配置无法读取，音乐已停用。请保留原文件并检查本机配置。';
       return;
     }
-    if (!this.store.ready) return;
+    if (!this.store.ready && !this.preview.busy) return;
     const truth = this.truth();
     const map = musicMapKey(truth.program);
     const pause =
@@ -192,13 +220,26 @@ export class MusicDirector {
     }
     if (this.inFlight) return;
     // Facts still invalidate every 100 ms; steady media polling is bounded, fades remain smooth.
-    const interval = Object.keys(this.fades).length ? 100 : 250;
+    const interval = Object.keys(this.fades).length || this.preview.busy ? 100 : 250;
     if (!changed && !this.pendingOpening && this.now() - this.lastPoll < interval) return;
     this.lastPoll = this.now();
     this.inFlight = true;
     const generation = this.generation;
     const valid = () => !this.closed && generation === this.generation;
     try {
+      if (this.store.failure || !this.store.ready) {
+        await this.provider.session(async (obs, epoch) => {
+          await this.preview.reconcile(
+            obs,
+            epoch,
+            valid,
+            false,
+            (uuid) => this.expectedStops.set('stinger', uuid),
+            () => this.holdForObsControl(),
+          );
+        });
+        return;
+      }
       if (pause && this.store.state.pause?.map !== map)
         await this.store.update((s) => {
           s.pause = { map, id: randomUUID() };
@@ -238,7 +279,7 @@ export class MusicDirector {
         cue &&
         this.store.state.config.groups[cue.group].enabled &&
         this.store.state.config.groups[cue.group].tracks.length;
-      if (!hasSources && !configured && !opening) {
+      if (!hasSources && !configured && !opening && !this.preview.busy) {
         this.status.connection = 'idle';
         return;
       }
@@ -250,8 +291,26 @@ export class MusicDirector {
         this.epoch = epoch;
         this.status.connection = 'connected';
         this.status.message = null;
+        const previewOwned = this.preview.busy;
+        if (configured || opening) this.preview.programPriority();
+        const p = this.truth().program;
+        const previewSafe =
+          !this.pendingOpening &&
+          !opening &&
+          (p.map.phase !== 'live' ||
+            Boolean(musicCue(this.truth(), this.store.state.pause?.id ?? null))) &&
+          (p.map.phase === null || (musicSafe(p) && p.status.telemetry === 'fresh'));
+        await this.preview.reconcile(
+          obs,
+          epoch,
+          valid,
+          previewSafe,
+          (uuid) => this.expectedStops.set('stinger', uuid),
+          () => this.holdForObsControl(),
+        );
+        if (!valid()) return;
         // Observe both existing layers before changing a cue or attributing a stop to the system.
-        if (await this.observeManualControls(obs, valid)) return;
+        if (await this.observeManualControls(obs, valid, previewOwned)) return;
         await this.layer(obs, 'bgm', cue, valid, configChanged, reconnect);
         if (
           opening &&
@@ -274,7 +333,7 @@ export class MusicDirector {
             configChanged,
             reconnect,
           );
-        } else {
+        } else if (!previewOwned) {
           const stinger = this.store.state.stinger;
           const safe =
             truth.production &&
@@ -297,6 +356,8 @@ export class MusicDirector {
         }
       });
     } catch (error) {
+      if (!(error instanceof Error && error.message === 'music_cancelled'))
+        this.preview.unavailable();
       if (valid()) {
         this.status.connection = 'unavailable';
         this.status.message =
@@ -339,6 +400,7 @@ export class MusicDirector {
   }
   private async holdForObsControl() {
     this.commandRevision++;
+    this.preview.cancel('manual_control');
     this.heldOverride = true;
     this.pendingOpening = null;
     this.fades = {};
@@ -347,9 +409,10 @@ export class MusicDirector {
     this.invalidate();
     await this.store.hold(true);
   }
-  private async observeManualControls(obs: ObsRpc, valid: () => boolean) {
+  private async observeManualControls(obs: ObsRpc, valid: () => boolean, skipStinger = false) {
     if (this.isHeld()) return false;
     for (const layer of ['bgm', 'stinger'] as const) {
+      if (skipStinger && layer === 'stinger') continue;
       if (!this.store.state.sources[layer] || this.resumeLayers.has(layer)) continue;
       const name = await ownedMusicInput(obs, this.store, layer, false, valid);
       if (!name) continue;
@@ -735,6 +798,7 @@ export class MusicDirector {
     return fade.stop && progress < 1;
   }
   async close() {
+    this.preview.cancel('shutdown');
     this.commandRevision++;
     this.closed = true;
     this.invalidate();

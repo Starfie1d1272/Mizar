@@ -72,6 +72,13 @@ export class MusicStore {
       throw error;
     }
   }
+  previewEvent(stage: string, evidence: unknown) {
+    try {
+      this.diagnostic(stage, evidence);
+    } catch {
+      /* Diagnostics cannot own playback. */
+    }
+  }
   async load() {
     try {
       await this.stage('music_load', { directory: this.directory }, () => this.loadState());

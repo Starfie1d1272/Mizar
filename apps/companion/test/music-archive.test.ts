@@ -100,6 +100,23 @@ it('requires a loopback Origin for mutations and never returns a local absolute 
       });
       expect(result.statusCode).toBe(403);
     }
+    for (const origin of [undefined, 'https://evil.example']) {
+      const result = await app.inject({
+        method: 'POST',
+        url: '/operator/music/preview',
+        headers: { ...(origin ? { origin } : {}) },
+        payload: { action: 'start' },
+      });
+      expect(result.statusCode).toBe(403);
+    }
+    const invalidPreview = await app.inject({
+      method: 'POST',
+      url: '/operator/music/preview',
+      headers: { origin: 'http://127.0.0.1:4173' },
+      payload: { action: 'start', volume: 2, track: { id: '../private.wav' } },
+    });
+    expect(invalidPreview.statusCode).toBe(400);
+    expect(invalidPreview.body).not.toContain(s.directory);
     const imported = await app.inject({
       method: 'POST',
       url: '/operator/music/import',
