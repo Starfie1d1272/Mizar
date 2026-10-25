@@ -624,6 +624,22 @@ async fn launch_mulnx(window: tauri::WebviewWindow, app: tauri::AppHandle,
 }
 
 #[tauri::command]
+async fn mulnx_control(window: tauri::WebviewWindow, app: tauri::AppHandle,
+    action: String, diagnostic_operation_id: Option<String>) -> Result<serde_json::Value, String> {
+    if window.label() != "main" { return Err("请在准备中心管理 MulNX。".into()); }
+    let log = app.state::<DesktopLog>().inner().clone();
+    let evidence = log.clone();
+    log.event("mulnx_control", "begin", Some(&format!("action={action}")));
+    let result = tauri::async_runtime::spawn_blocking(move || match action.as_str() {
+        "update" => mulnx_launch::update(&app, &log),
+        "stop" => mulnx_launch::stop_control(&app, &log),
+        _ => Err("请选择更新或停止 MulNX 控制。".into()),
+    }).await.unwrap_or_else(|error| Err(format!("MulNX 操作失败：{error}")));
+    evidence.native_outcome("mulnx_control", diagnostic_operation_id.as_deref(), &result);
+    result
+}
+
+#[tauri::command]
 async fn mulnx_handoff_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
@@ -858,7 +874,6 @@ async fn finish_workspace(
         let feedback = host.state::<production_exit::WorkspaceExit>();
         let log = host.state::<DesktopLog>();
         let managed = host.state::<Mutex<managed_cs2::ManagedCs2>>();
-        log.step("workspace_exit_observer", || observer_workspace::stop(&log))?;
         let mut cs2 = log.step("workspace_exit_lock", || managed.lock().map_err(|error| command_log.preserve_error("finish_workspace", native_operation_id.as_deref(), &error, "CS2 配置状态不可用。")))?;
         let activity = host.state::<cs2_activity::Activity>();
         // Open the visible recovery owner before any potentially slow cleanup.
@@ -870,6 +885,11 @@ async fn finish_workspace(
                 Some(&format!("phase=workspace_recovery_window; cause={error}")),
             );
         }
+        feedback.stage("production");
+        log.step("workspace_exit_production", || production_exit::finish_workspace_production(&log))?;
+        let game = production_exit::restore_then_cleanup(
+        || log.step("workspace_exit_observer", || observer_workspace::finish(&log)),
+        || -> Result<(), String> {
         let trial = log.step("workspace_exit_trial_status", || demo_test::status(&log))?;
         if trial["active"] == true || cs2.has_demo_journal()? {
             feedback.stage("restoration");
@@ -881,8 +901,7 @@ async fn finish_workspace(
         } else {
             production_exit::finish_then_restore(
                 || {
-                    feedback.stage("production");
-                    log.step("workspace_exit_production", || production_exit::finish_workspace_production(&log))
+                    Ok(())
                 },
                 || {
                     if cs2.has_external() {
@@ -906,12 +925,15 @@ async fn finish_workspace(
                 },
             )?;
         }
+        Ok(())
+        });
         refresh_finished_window_feedback(&host, &cs2);
         drop(cs2);
         feedback.stage("presentation");
         // Retry presentation after cleanup; an earlier transient window failure
         // must not prevent returning to preparation once the game is finished.
-        log.step("workspace_exit_presentation", || present_production_inner(&host, false))
+        let presentation = log.step("workspace_exit_presentation", || present_production_inner(&host, false));
+        production_exit::cleanup_results(game, presentation)
         })
     } })
     .await
@@ -1437,6 +1459,12 @@ fn present_production_inner(app: &tauri::AppHandle, live: bool) -> Result<(), St
             let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
             let cs2 = managed.lock().map_err(|_| "CS2 配置状态不可用。")?;
             let process = cs2.workspace_process()?;
+            let log = app.state::<DesktopLog>();
+            if observer_hud::preflight(&log, cs2.status()?["preferMulnx"] == true)? {
+                let (context, game) = cs2.console_source()?.ok_or("请先启动或接入 CS2，再核对 HUD。")?;
+                let executable = context["executable"].as_str().ok_or("CS2 安装位置未确认。")?;
+                observer_hud::snapshot(&log, Path::new(executable), &game)?;
+            }
             let request = process.as_ref().filter(|process| process.owned).and_then(|process| {
                 app.state::<HostState>().entry_focus.lock().ok()?
                     .request(focus_session(process), source)
@@ -2227,6 +2255,7 @@ fn run_desktop(
             cs2_config_status,
             mulnx_handoff_status,
             launch_mulnx,
+            mulnx_control,
             open_mulnx_browser,
             observer_workspace::observer_command,
             start_managed_cs2,
@@ -2644,9 +2673,6 @@ fn run_desktop(
                     let mut cs2 = state.lock().map_err(|_| "CS2 配置状态不可用。")?;
                     let activity = cleanup_host.state::<cs2_activity::Activity>();
                     let _activity = activity.begin(if cs2.has_external() { 3 } else { 2 });
-                    if cleanup_host.state::<production_exit::VerifiedStop>().complete() {
-                        observer_hud::restore(&cleanup_host.state::<DesktopLog>())?;
-                    } else { observer_workspace::stop(&cleanup_host.state::<DesktopLog>())?; }
                     production_exit::finish_then_restore(
                         || {
                             // --stop already completed the same safe transaction before
@@ -2662,7 +2688,14 @@ fn run_desktop(
                                 )
                             }
                         },
-                        || cs2.finish(),
+                        || {
+                            production_exit::restore_then_cleanup(
+                                || if cleanup_host.state::<production_exit::VerifiedStop>().complete() {
+                                    observer_hud::restore(&cleanup_host.state::<DesktopLog>())
+                                } else { observer_workspace::finish(&cleanup_host.state::<DesktopLog>()) },
+                                || cs2.finish(),
+                            )
+                        },
                     )
                 })
                 .await

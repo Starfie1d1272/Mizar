@@ -38,9 +38,6 @@ pub fn parse_value(text: &str, marker: &str) -> Result<u8, String> {
 }
 
 fn query(log: &DesktopLog, executable: &Path, value: Option<u8>) -> Result<u8, String> {
-    if cs2_console::settings(log)?["enabled"] != true {
-        return Err("自动隐藏 HUD 需要核对游戏当前值。请在高级设置开启本机控制台记录后重新启动游戏，或关闭自动隐藏选项。".into());
-    }
     let marker = format!("MIZAR_HUD_{:032x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e| e.to_string())?.as_nanos());
     let root = crate::bundle_root()?;
     let mut command = Command::new(root.join("resources/runtime/node.exe"));
@@ -60,6 +57,29 @@ fn query(log: &DesktopLog, executable: &Path, value: Option<u8>) -> Result<u8, S
         std::thread::sleep(Duration::from_millis(50));
     }
     Err("请确认当前 CS2 使用本机控制台记录并已连接 MulNX；HUD 原值读回尚待确认。".into())
+}
+
+/// Validate consent before launching; restoration reads only this transaction's bounded reply,
+/// even if continuous diagnostics were subsequently disabled.
+pub fn preflight(log: &DesktopLog, use_mulnx: bool) -> Result<bool, String> {
+    if !use_mulnx { return Ok(false); }
+    let (code, value) = crate::production_exit::request_with_identity(log, "GET", "/local/v1/observer-assist", "",
+        Instant::now() + Duration::from_secs(5), None)?;
+    if code != 200 { return Err("无法核对自动隐藏 HUD 设置，请检查本地服务后重试。".into()); }
+    validate_preflight(log, &value)
+}
+
+fn validate_preflight(log: &DesktopLog, value: &Value) -> Result<bool, String> {
+    if !value["gameAutomation"]["hideGameHud"].is_boolean() {
+        return Err("无法核对自动隐藏 HUD 设置，请检查本地服务后重试。".into());
+    }
+    let hide = value["gameAutomation"]["hideGameHud"] == true;
+    let recovery = load(log)?.map(|record| managed_cs2::verified_session_process(&record, log))
+        .transpose()?.flatten().is_some();
+    if hide && !recovery && cs2_console::settings(log)?["enabled"] != true {
+        return Err("自动隐藏 HUD 需要核对游戏当前值。请在高级设置开启本机控制台记录后重新启动游戏，或关闭自动隐藏选项。".into());
+    }
+    Ok(hide)
 }
 
 pub fn snapshot(log: &DesktopLog, executable: &Path, process: &managed_cs2::WorkspaceProcess) -> Result<u8, String> {
@@ -100,6 +120,22 @@ pub fn restore(log: &DesktopLog) -> Result<(), String> {
 
 #[cfg(test)] mod tests {
     use super::*;
+    #[test]
+    fn fresh_install_blocks_hud_automation_until_its_independent_dependency_is_ready() {
+        let root = std::env::temp_dir().join(format!("mizar-hud-preflight-{}-{}", std::process::id(), chrono::Utc::now().timestamp_nanos_opt().unwrap()));
+        let log = DesktopLog::new(&root, None).unwrap();
+        let default_game = json!({"gameAutomation":{"hideGameHud":true}});
+        assert_eq!(cs2_console::settings(&log).unwrap()["enabled"], false);
+        assert!(validate_preflight(&log, &default_game).unwrap_err().contains("开启本机控制台记录"));
+        assert!(!file(&log).exists()); // No game/HUD transaction is created by refusal.
+        assert!(!validate_preflight(&log, &json!({"gameAutomation":{"hideGameHud":false}})).unwrap());
+        let current = cs2_console::settings(&log).unwrap();
+        cs2_console::set_enabled(&log, true, current["generation"].as_str()).unwrap();
+        assert!(validate_preflight(&log, &default_game).unwrap());
+        assert!(validate_preflight(&log, &json!({})).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test] fn reads_only_the_current_marker_and_current_value() {
         assert_eq!(parse_value("old cl_draw_only_deathnotices 1\nMARK\n\"cl_draw_only_deathnotices\" = \"0\" (def. 1)", "MARK").unwrap(), 0);
         assert_eq!(parse_value("[Console] MARK\ncl_draw_only_deathnotices = true", "MARK").unwrap(), 1);

@@ -67,6 +67,40 @@ it('prepares the installed launcher locally and preserves upstream options', asy
   expect(await readFile(join(injector, 'CS2BootLoader/Config/config.yaml'), 'utf8')).toContain(
     'patternsCheckDangerous:\n  - 完美世界竞技',
   );
+  expect(tool.view()).toMatchObject({ launchProtocol: 1 });
+  const config = join(injector, 'CS2BootLoader/Config/config.yaml');
+  expect(await readFile(config, 'utf8')).toContain('-condebug');
+  // A process restart must retain ownership, so disabling removes only our flag.
+  const restarted = new MulnxTool(root, join(root, 'bundle'));
+  await restarted.load();
+  await restarted.prepare('D:\\Steam\\game\\bin\\win64\\cs2.exe', false);
+  expect(await readFile(config, 'utf8')).toContain('launchOptions: -insecure -novid\n');
+  // User supplied condebug is retained after either preference change.
+  await writeFile(config, 'path: old\nlaunchOptions: "-insecure -condebug -novid"\n');
+  await restarted.prepare('D:\\Steam\\game\\bin\\win64\\cs2.exe', true);
+  await restarted.prepare('D:\\Steam\\game\\bin\\win64\\cs2.exe', false);
+  expect(await readFile(config, 'utf8')).toContain('-insecure -condebug -novid');
+  await writeFile(config, 'path: old\nlaunchOptions: -insecure\n');
+  await restarted.prepare('D:\\Steam\\game\\bin\\win64\\cs2.exe', true);
+  const owned = await readFile(config, 'utf8');
+  await writeFile(config, owned.replace('-condebug', '-condebug -user-option'));
+  await expect(restarted.prepare('D:\\Steam\\game\\bin\\win64\\cs2.exe', false)).rejects.toThrow(
+    'mulnx_console_ownership_conflict',
+  );
+  expect(await readFile(config, 'utf8')).toContain('-user-option');
+  // Older and future unknown markers remain unsupported, without network upgrade.
+  await rm(join(injector, 'launch-protocol.txt'));
+  const legacy = new MulnxTool(root, join(root, 'bundle'));
+  await legacy.load();
+  expect(legacy.view().launchProtocol).toBeNull();
+  await writeFile(config, owned);
+  expect(await legacy.prepare('D:\\Steam\\game\\bin\\win64\\cs2.exe', false)).toMatchObject({
+    launchProtocol: null,
+  });
+  await writeFile(join(injector, 'launch-protocol.txt'), '2');
+  expect(await legacy.prepare('D:\\Steam\\game\\bin\\win64\\cs2.exe', false)).toMatchObject({
+    launchProtocol: null,
+  });
   expect(fetch).not.toHaveBeenCalled();
   await expect(tool.prepare('D:\\Steam\\game\\bin\\win64\\cs2.exe', false, true)).rejects.toThrow();
   expect(fetch).toHaveBeenCalled();

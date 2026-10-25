@@ -18,12 +18,18 @@ fn request(log: &DesktopLog, body: serde_json::Value) -> Result<serde_json::Valu
 pub fn active() -> bool { ACTIVE.load(Ordering::Acquire) }
 
 pub fn stop(log: &DesktopLog) -> Result<(), String> {
-    let hud = crate::observer_hud::restore(log);
     if ACTIVE.load(Ordering::Acquire) {
         request(log, serde_json::json!({"action":"stop"}))?;
         ACTIVE.store(false, Ordering::Release);
     }
-    hud
+    Ok(())
+}
+
+/// End game automation only at the production/control boundary, independently of auxiliary enablement.
+pub fn finish(log: &DesktopLog) -> Result<(), String> {
+    let observer = stop(log);
+    let hud = crate::observer_hud::restore(log);
+    production_exit::cleanup_results(observer, hud)
 }
 
 pub fn pulse(app: &tauri::AppHandle, cs2: &managed_cs2::ManagedCs2) {
@@ -49,11 +55,15 @@ pub async fn observer_command(window: tauri::WebviewWindow, app: tauri::AppHandl
         log.event("observer_workspace", "begin", Some(&format!("action={action}")));
         let result = (|| {
             if action == "stop" {
-                // Stop the owned observer even when the game's HUD readback needs recovery.
-                let hud = crate::observer_hud::restore(&log);
                 request(&log, serde_json::json!({"action":"stop"}))?;
                 ACTIVE.store(false, Ordering::Release);
-                return hud;
+                return Ok(());
+            }
+            if action == "preflight" {
+                let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+                let cs2 = managed.lock().map_err(|_| "请等待游戏操作完成后重试。")?;
+                crate::observer_hud::preflight(&log, cs2.status()?["preferMulnx"] == true)?;
+                return Ok(());
             }
             if action != "start" && action != "start-configured" { return Err("请选择连接或停止观察辅助。".into()); }
             app.state::<production_exit::ExitGate>().check()?;

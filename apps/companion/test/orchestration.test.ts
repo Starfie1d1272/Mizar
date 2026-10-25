@@ -327,6 +327,17 @@ it('real websocket separates ACK, rejection and unrelated broadcasts; disconnect
   await provider.connect(port);
   replyMode = 'reject';
   expect(await provider.send('CamPlay/ClearForce')).toBe('rejected');
+  expect(await provider.stopControl()).toBe('rejected');
+  expect(JSON.parse(wires.at(-1)!)).toEqual({ type: 'System/Stop', payload: '' });
+  expect(provider.connected).toBe(false);
+  await provider.connect(port);
+  replyMode = 'ack';
+  const generation = provider.generation;
+  expect(await provider.stopControl()).toBe('queued');
+  expect(provider.connected).toBe(false);
+  expect(provider.generation).toBeGreaterThan(generation);
+  expect(await provider.send('CamMacro/Play', '停止后的旧镜头')).toBe('unknown');
+  await provider.connect(port);
   replyMode = 'disconnect';
   expect(await provider.send('CamMacro/Play', '旧镜头')).toBe('unknown');
   const before = wires.length;

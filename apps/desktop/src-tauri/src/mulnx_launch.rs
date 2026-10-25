@@ -8,6 +8,14 @@ use crate::ShellExecuteW;
 static LAUNCH_GATE: Mutex<()> = Mutex::new(());
 
 pub fn launch(app: &tauri::AppHandle, log: &DesktopLog, automatic: bool) -> Result<Value, String> {
+    launch_operation(app, log, automatic, false)
+}
+
+pub fn update(app: &tauri::AppHandle, log: &DesktopLog) -> Result<Value, String> {
+    launch_operation(app, log, false, true)
+}
+
+fn launch_operation(app: &tauri::AppHandle, log: &DesktopLog, automatic: bool, update_only: bool) -> Result<Value, String> {
     let _launch = LAUNCH_GATE.try_lock().map_err(|_| "MulNX 正在启动，请等待本次操作完成。")?;
     app.state::<production_exit::ExitGate>().check()?;
     app.state::<updates::PendingUpdate>().check()?;
@@ -25,6 +33,7 @@ pub fn launch(app: &tauri::AppHandle, log: &DesktopLog, automatic: bool) -> Resu
     if status["pending"] == true || status["spectatorRecoveryPending"] == true || status["demoCleanupPending"] == true {
         return Err("请先完成原有 CS2 配置恢复，再通过 MulNX 启动。".into());
     }
+    if !update_only { crate::observer_hud::preflight(log, status["preferMulnx"] == true)?; }
     let activity = app.state::<cs2_activity::Activity>();
     let _activity = activity.begin(3);
     let output = gsi_script("gsi-status.ps1", None, Duration::from_secs(20), log)?;
@@ -52,7 +61,8 @@ pub fn launch(app: &tauri::AppHandle, log: &DesktopLog, automatic: bool) -> Resu
         }
     }
     no_game()?;
-    let prepared = production_exit::prepare_mulnx(log, &executable, !automatic)?;
+    let prepared = production_exit::prepare_mulnx(log, &executable, update_only)?;
+    if update_only { no_game()?; return Ok(prepared); }
     let launcher = PathBuf::from(prepared["launcher"].as_str().ok_or("MulNX 启动路径缺失。")?);
     let root = log.state_root.join("data/mulnx").canonicalize().map_err(|e| format!("MulNX 目录无法读取：{e}"))?;
     let launcher = launcher.canonicalize().map_err(|e| format!("MulNX 程序无法读取：{e}"))?;
@@ -165,4 +175,37 @@ mod tests {
         ambiguous["processes"].as_array_mut().unwrap().push(status["processes"][0].clone());
         assert!(validate_game_identity(&ambiguous, &success, executable).is_err());
     }
+}
+
+/// Explicit end of MulNX control. Workbench exit intentionally never calls this.
+pub fn stop_control(app: &tauri::AppHandle, log: &DesktopLog) -> Result<Value, String> {
+    let _launch = LAUNCH_GATE.try_lock().map_err(|_| "MulNX 正忙，请稍后重试。")?;
+    let gate = app.state::<production_exit::ExitGate>();
+    if !gate.begin() { return Err("正在退出，请等待收尾结果。".into()); }
+    let _gate = production_exit::WorkspaceExitGuard(&gate);
+    app.state::<updates::PendingUpdate>().check()?;
+    let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+    let _cs2 = managed.lock().map_err(|_| "CS2 正忙，请稍后重试。")?;
+    production_exit::finish_workspace_production(log)?;
+    // Restore through the live gateway before asking it to unload. Failure retains the journal
+    // and must leave that recovery channel available for an explicit retry.
+    crate::observer_workspace::finish(log)?;
+    let receipt = log.state_root.join("data/mulnx-launch/current.json");
+    match std::fs::remove_file(receipt) {
+        Ok(()) => (),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+        Err(error) => return Err(log.preserve_error("mulnx_stop_receipt", None, &error, "旧启动记录未能失效，已保留 MulNX 供重试。".to_string())),
+    }
+    let root = crate::bundle_root()?;
+    let mut command = Command::new(root.join("resources/runtime/node.exe"));
+    command.arg(root.join("resources/app/dist/orchestration/provider.js")).arg("--stop-mulnx")
+        .env_remove("NODE_OPTIONS").env_remove("NODE_PATH").creation_flags(0x08000000);
+    let output = powershell::run(command, log, "停止 MulNX 控制", Duration::from_secs(8))?;
+    let result = powershell::parse(log, "停止 MulNX 控制", &output)?;
+    if result["result"] != "queued" {
+        return Err(if result["result"] == "rejected" {
+            "当前 MulNX 未接受停止控制；该版本可能不支持 System/Stop，请使用官方退出入口。"
+        } else { "MulNX 停止结果待确认，请在游戏内核对；不会自动重发停止命令。" }.into());
+    }
+    Ok(result) // queued, execution unconfirmed; never claim DLL unloaded.
 }
