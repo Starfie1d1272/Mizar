@@ -137,7 +137,7 @@ it('timestamps actual HTTP sync/tail progress without refreshing cached upstream
         get tailTick() {
           return tail;
         },
-        start: async () => ({ status: 'ready' }),
+        start: () => Promise.resolve({ status: 'ready' }),
         run: () => running,
         stop: () => finish({ status: 'cancelled' }),
       };
