@@ -154,6 +154,7 @@ export function MusicSettings() {
               e.target.value = '';
               if (file)
                 void action(async () => {
+                  await preview.stop();
                   const result = await localFile('/operator/music/import', file, 'application/zip');
                   setConfig(result.config);
                   setDirty(false);

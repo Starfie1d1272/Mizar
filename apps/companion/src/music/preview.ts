@@ -62,6 +62,10 @@ export class MusicPreview {
       return;
     }
     if (r.action !== 'start') {
+      if (same && (now >= this.lease || now >= this.deadline)) {
+        this.cancel(now >= this.deadline ? 'deadline' : 'lease');
+        return;
+      }
       if (!same || this.stopping || !['playing', 'requested'].includes(this.status?.phase ?? ''))
         return;
       this.lease = now + 3000;
@@ -103,7 +107,8 @@ export class MusicPreview {
     }
   }
   unavailable() {
-    if (!this.request) return;
+    if (!this.request || (this.stopping && this.status?.message.startsWith('试听停止未确认')))
+      return;
     this.event('failed', 'obs_disconnected');
     this.cancel('obs_disconnected');
     this.status = {
@@ -147,8 +152,18 @@ export class MusicPreview {
           inputUuid: this.uuid,
           mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP',
         });
+        const media = await obs.call('GetMediaInputStatus', { inputUuid: this.uuid });
+        if (
+          ![
+            'OBS_MEDIA_STATE_STOPPED',
+            'OBS_MEDIA_STATE_ENDED',
+            'OBS_MEDIA_STATE_ERROR',
+            'OBS_MEDIA_STATE_NONE',
+          ].includes(String(media.mediaState))
+        )
+          throw new Error('music_preview_stop_unconfirmed');
       }
-      this.event('stopped', 'obs_stop_acknowledged');
+      this.event('stopped', 'obs_stopped');
       this.uuid = null;
       this.request = null;
       this.status = {

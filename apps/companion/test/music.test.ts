@@ -77,6 +77,9 @@ async function rig() {
     directory,
     provider,
     now: () => time,
+    elapse: (ms: number) => {
+      time += ms;
+    },
     step: async (ms = 300) => {
       time += ms;
       await director.tick();
@@ -1052,5 +1055,22 @@ it('keeps a pre-existing hold and yields to a later real opening without consumi
   await r.step(100);
   expect(r.store.state.consumed).toEqual(['new-real-take']);
   expect(r.store.state.stinger?.key).toBe('new-real-take');
+  expect(r.director.get().preview?.phase).toBe('stopped');
+});
+
+it('does not revive an expired lease when a renewal reaches the server before the next polling tick', async () => {
+  const r = await rig();
+  await r.step();
+  const request = audition(r);
+  await r.director.previewRequest(request);
+  await r.step(100);
+  r.elapse(3100);
+  await r.director.previewRequest({
+    ...request,
+    action: 'lease',
+    operation: 2,
+    expiresAt: r.now() + 4000,
+  });
+  expect(stinger(r).state).toBe('OBS_MEDIA_STATE_STOPPED');
   expect(r.director.get().preview?.phase).toBe('stopped');
 });

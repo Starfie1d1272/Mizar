@@ -126,7 +126,10 @@ export function useMusicPreview() {
   };
   const confirm = async () => {
     const r = request.current;
-    if (!r) return;
+    if (!r || r.confirmed) return;
+    setStatus((previous) =>
+      previous ? { ...previous, phase: 'requested', message: '正在核对 OBS 试听状态…' } : previous,
+    );
     request.current = { ...r, confirmed: true };
     try {
       await send(request.current, 'start');
