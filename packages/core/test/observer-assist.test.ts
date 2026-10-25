@@ -75,6 +75,78 @@ function aligned() {
   return timeline;
 }
 describe('private observer hints against Program', () => {
+  it('removes a confirmed death before its estimated due time while retaining its anchor', () => {
+    const timeline = aligned();
+    const event = kill(3, 7, 10000);
+    timeline.consume(event);
+    expect(
+      timeline.project(program(3, [8, 9]), settings, 128000, source).observer?.hints,
+    ).toMatchObject([{ id: '1:3', remainingSeconds: 2 }]);
+
+    const confirmed = program(4, [7, 8, 9]);
+    const result = timeline.project(confirmed, settings, 129000, source);
+    expect(confirmed.players.find((p) => p.sourcePlayerId === '7')?.lifeState).toBe('dead');
+    expect(result.observer?.hints).toEqual([]);
+    expect(result.observer?.state).toBe('ready');
+    expect(result.observer?.measuredDelaySeconds).toBeCloseTo((120 + 120 + 119) / 3);
+
+    // Duplicate delivery and repeated projection cannot reintroduce the matched event.
+    timeline.consume(event);
+    expect(timeline.project(confirmed, settings, 129200, source).observer?.hints).toEqual([]);
+    expect(timeline.project(program(5, [8, 9]), settings, 129500, source).observer?.hints).toEqual(
+      [],
+    );
+    timeline.consume(kill(4, 6, 20000));
+    expect(
+      timeline.project(program(5, [8, 9]), settings, 133000, source).observer?.hints,
+    ).toMatchObject([{ id: '1:4', remainingSeconds: 7 }]);
+  });
+  it('orders buffered events by source time and excludes late events at or past zero', () => {
+    const timeline = aligned();
+    timeline.consume(kill(5, 5, 20000));
+    timeline.consume(kill(4, 6, 15000));
+    timeline.consume(kill(4, 6, 15000));
+    timeline.consume(kill(6, 4, 9000));
+    const frame = program(3, [8, 9]);
+    expect(timeline.project(frame, settings, 133000, source).observer?.hints).toMatchObject([
+      { id: '1:4', remainingSeconds: 2 },
+      { id: '1:5', remainingSeconds: 7 },
+    ]);
+    expect(timeline.project(frame, settings, 135000, source).observer?.hints).toMatchObject([
+      { id: '1:5', remainingSeconds: 5 },
+    ]);
+    expect(timeline.project(frame, settings, 140000, source).observer?.hints).toEqual([]);
+  });
+  it.each(['paused', 'timeout_ct', 'timeout_t'] as const)(
+    'clears %s buffers and requires two new distinct death anchors after resuming',
+    (phase) => {
+      const timeline = aligned();
+      const paused = { ...program(4, [8, 9]), clock: { phase } };
+      expect(timeline.project(paused, settings, 123000, source).observer).toMatchObject({
+        state: 'paused',
+        measuredDelaySeconds: null,
+        hints: [],
+      });
+      timeline.consume(kill(4, 6, 123500));
+      expect(timeline.project(program(5), settings, 124000, source).observer).toMatchObject({
+        state: 'aligning',
+        hints: [],
+      });
+      timeline.consume(kill(5, 8, 125000));
+      timeline.consume(kill(6, 9, 126000));
+      timeline.consume(kill(7, 7, 134000));
+      expect(timeline.project(program(6, [8]), settings, 245000, source).observer).toMatchObject({
+        state: 'aligning',
+        hints: [],
+      });
+      expect(timeline.project(program(7, [8, 9]), settings, 246000, source).observer).toMatchObject(
+        { state: 'ready', measuredDelaySeconds: 120, hints: [] },
+      );
+      expect(
+        timeline.project(program(7, [8, 9]), settings, 247000, source).observer?.hints,
+      ).toMatchObject([{ id: '1:7', remainingSeconds: 7 }]);
+    },
+  );
   it('shows Program slots seven seconds ahead and removes hints at the event boundary', () => {
     const timeline = aligned(),
       frame = program(3, [8, 9]);
@@ -110,13 +182,26 @@ describe('private observer hints against Program', () => {
     const cases = [
       (p: ObserverProgramView) => ({ ...p, clock: { phase: 'paused' as const } }),
       (p: ObserverProgramView) => ({ ...p, map: { name: 'de_nuke' } }),
+      (p: ObserverProgramView) => ({ ...p, match: { matchId: 'next' } }),
       (p: ObserverProgramView) => ({ ...p, cursor: { ...p.cursor, liveSessionId: 'next' } }),
+      (p: ObserverProgramView) => ({ ...p, cursor: { ...p.cursor, mapEpoch: 2 } }),
+      (p: ObserverProgramView) => ({ ...p, cursor: { ...p.cursor, programSourceGeneration: 2 } }),
+      (p: ObserverProgramView) => ({
+        ...p,
+        status: { ...p.status, identity: 'mismatch' as const },
+      }),
       (p: ObserverProgramView) => ({ ...p, status: { ...p.status, telemetry: 'stale' as const } }),
     ];
-    for (const change of cases)
+    for (const change of cases) {
+      const reset = aligned();
       expect(
-        aligned().project(change(program(3, [8, 9])), settings, 123000, source).observer?.hints,
+        reset.project(change(program(3, [8, 9])), settings, 123000, source).observer?.hints,
       ).toEqual([]);
+      expect(reset.project(program(4, [8, 9]), settings, 123200, source).observer).toMatchObject({
+        state: 'aligning',
+        hints: [],
+      });
+    }
     const timeline = aligned();
     timeline.settingsChanged(123000);
     expect(timeline.project(program(3, [8, 9]), settings, 123000, source).observer?.hints).toEqual(
