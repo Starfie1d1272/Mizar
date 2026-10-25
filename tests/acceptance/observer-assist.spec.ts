@@ -215,19 +215,43 @@ test('confirms a shared connection for standard and MulNX entry and exposes inde
   for (const useMulnx of [false, true]) {
     let view = {
       settings: { ...DEFAULT_OBSERVER_SETTINGS, enabled: !useMulnx },
-      gameAutomation: { autoConnect: true, hideGameHud: false },
+      gameAutomation: { autoConnect: true, hideGameHud: useMulnx },
       connection: null as null | { earlyEndpoint: string; programEndpoint: string },
     };
     let production = { mode: 'preparation', revision: 'connection-test', canEnter: true };
     const writes: Record<string, unknown>[] = [];
     await page.route('**/local/v1/observer-assist', (route) => route.fulfill({ json: view }));
+    const tool = {
+      installed: 'Beta16.1',
+      latest: 'New release',
+      launchProtocol: null as 1 | null,
+      busy: false,
+      message: '',
+      packs: [],
+    };
+    await page.route('**/local/v1/orchestration', (route) => route.fulfill({ json: { tool } }));
+    if (useMulnx)
+      await page.exposeFunction('updateMulnx', () => {
+        tool.launchProtocol = 1;
+        tool.installed = 'New release';
+      });
     await page.route('**/operator/observer-assist', (route) => {
       const body = route.request().postDataJSON() as {
         action: string;
+        settings: typeof view.settings & { autoConnect?: boolean; hideGameHud?: boolean };
         connection: { earlyEndpoint: string; programEndpoint: string };
       };
       writes.push(body);
       if (body.action === 'connection') view = { ...view, connection: body.connection };
+      if (body.action === 'configure') view = { ...view, settings: body.settings };
+      if (body.action === 'configure-game')
+        view = {
+          ...view,
+          gameAutomation: {
+            autoConnect: body.settings.autoConnect!,
+            hideGameHud: body.settings.hideGameHud!,
+          },
+        };
       return route.fulfill({ json: view });
     });
     await page.route('**/local/v1/production', (route) => route.fulfill({ json: production }));
@@ -245,14 +269,38 @@ test('confirms a shared connection for standard and MulNX entry and exposes inde
     await page.addInitScript((preferMulnx) => {
       const host = window as typeof window & {
         nativeCalls: string[];
-        __TAURI_INTERNALS__: { invoke: (name: string) => Promise<unknown> };
+        __TAURI_INTERNALS__: {
+          invoke: (name: string, args?: Record<string, unknown>) => Promise<unknown>;
+        };
       };
       host.nativeCalls = [];
       let running = false;
+      let consoleEnabled = false;
       host.__TAURI_INTERNALS__ = {
-        invoke: async (name) => {
+        invoke: async (name, args) => {
           await Promise.resolve();
-          host.nativeCalls.push(name);
+          host.nativeCalls.push(
+            name === 'observer_command' ? `${name}/${String(args?.action)}` : name,
+          );
+          if (
+            name === 'observer_command' &&
+            args?.action === 'preflight' &&
+            preferMulnx &&
+            !consoleEnabled
+          )
+            throw new Error('请先开启本机控制台记录或关闭自动隐藏。');
+          if (name === 'mulnx_control' && args?.action === 'update')
+            return (window as typeof window & { updateMulnx: () => Promise<void> }).updateMulnx();
+          if (name === 'cs2_console_status')
+            return {
+              enabled: consoleEnabled,
+              generation: 'console-test',
+              runtime: { phase: running ? 'reading' : 'idle' },
+            };
+          if (name === 'set_cs2_console_capture') {
+            consoleEnabled = true;
+            return { enabled: true, generation: 'console-test' };
+          }
           if (name === 'cs2_config_status')
             return {
               preferMulnx,
@@ -283,12 +331,26 @@ test('confirms a shared connection for standard and MulNX entry and exposes inde
     await page.getByRole('button', { name: '打开直播工作台', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: '确认本场观战连接' });
     await expect(dialog).toBeVisible();
+    if (useMulnx) {
+      await expect(dialog).toContainText('Beta16.1');
+      await expect(dialog.getByRole('button', { name: '检查更新', exact: true })).toBeVisible();
+      await expect(dialog.getByRole('button', { name: '确认并进入工作台' })).toBeDisabled();
+      await expect(dialog.getByRole('button', { name: '关闭自动隐藏并继续' })).toBeVisible();
+      await dialog.getByRole('button', { name: '启用本机控制台记录' }).click();
+      await expect(dialog.getByRole('button', { name: '确认并进入工作台' })).toBeDisabled();
+    }
     await dialog.getByRole('button', { name: '取消', exact: true }).click();
     await expect(dialog).not.toBeVisible();
     expect(
       await page.evaluate(() => (window as typeof window & { nativeCalls: string[] }).nativeCalls),
     ).not.toContain('start_managed_cs2');
+    expect(writes).toHaveLength(0);
     await page.getByRole('button', { name: '打开直播工作台', exact: true }).click();
+    if (useMulnx) {
+      await dialog.getByRole('button', { name: '更新 MulNX', exact: true }).click();
+      await expect(dialog).toContainText('支持自动启动');
+      await expect(dialog.getByRole('button', { name: '关闭自动隐藏并继续' })).toBeEnabled();
+    }
     await dialog
       .getByRole('textbox', { name: '本场观战连接', exact: true })
       .fill(`connect 127.0.0.1:${useMulnx ? 27025 : 27026};password synthetic`);
@@ -307,13 +369,15 @@ test('confirms a shared connection for standard and MulNX entry and exposes inde
       await page.screenshot({ path: testInfo.outputPath('connection-advanced.png') });
       await page.setViewportSize({ width: 1920, height: 1080 });
     }
-    await dialog.getByRole('button', { name: '确认并进入工作台' }).click();
+    await dialog
+      .getByRole('button', { name: useMulnx ? '关闭自动隐藏并继续' : '确认并进入工作台' })
+      .click();
     await expect(dialog).not.toBeVisible();
     await expect
       .poll(() =>
         page.evaluate(() =>
           (window as typeof window & { nativeCalls: string[] }).nativeCalls.includes(
-            'observer_command',
+            'observer_command/start-configured',
           ),
         ),
       )
@@ -327,6 +391,54 @@ test('confirms a shared connection for standard and MulNX entry and exposes inde
       action: 'connection',
       connection: { earlyEndpoint: '127.0.0.1:27025', programEndpoint: '127.0.0.1:27026' },
     });
+    // Return through the real page, confirmation dialog and production client again.
+    // Reusing an existing connection must not submit another connection write.
+    if (!useMulnx) {
+      await page.getByRole('spinbutton', { name: '提示提前时间（秒）' }).fill('10');
+      await page.getByRole('button', { name: '保存观察辅助设置' }).click();
+      await expect(page.getByText('观察辅助设置已保存。')).toBeVisible();
+    }
+    if (useMulnx) {
+      expect(writes.find((body) => body.action === 'configure-game')).toMatchObject({
+        settings: { autoConnect: true, hideGameHud: false },
+      });
+      expect(view.gameAutomation.autoConnect).toBe(true);
+      expect(view.gameAutomation.hideGameHud).toBe(false);
+    }
+    const connectionsBeforeReturn = writes.filter((body) => body.action === 'connection').length;
+    for (const reenterConnection of [false, true]) {
+      if (reenterConnection && !useMulnx) {
+        await page.getByRole('button', { name: '保存观察辅助设置' }).click();
+        await expect(page.getByText('观察辅助设置已保存。')).toBeVisible();
+      }
+      await page.getByRole('button', { name: '返回现场', exact: true }).click();
+      await expect(dialog).toBeVisible();
+      if (reenterConnection)
+        await dialog
+          .getByRole('textbox', { name: '本场观战连接', exact: true })
+          .fill('connect 127.0.0.1:27025;password synthetic');
+      const before = await page.evaluate(
+        () =>
+          (window as typeof window & { nativeCalls: string[] }).nativeCalls.filter(
+            (call) => call === 'observer_command/start-configured',
+          ).length,
+      );
+      await dialog.getByRole('button', { name: '确认并进入工作台' }).click();
+      await expect(dialog).not.toBeVisible();
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (window as typeof window & { nativeCalls: string[] }).nativeCalls.filter(
+                (call) => call === 'observer_command/start-configured',
+              ).length,
+          ),
+        )
+        .toBe(before + 1);
+      expect(writes.filter((body) => body.action === 'connection')).toHaveLength(
+        connectionsBeforeReturn + Number(reenterConnection),
+      );
+    }
     await page.goto('/settings?tab=gsi');
     await expect(page.getByLabel('游戏启动方式')).toHaveValue(useMulnx ? 'mulnx' : 'steam');
     if (useMulnx)
