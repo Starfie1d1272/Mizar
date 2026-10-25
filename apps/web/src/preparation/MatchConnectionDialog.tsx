@@ -175,7 +175,7 @@ export function MatchConnectionDialog() {
       {request?.useMulnx ? (
         <>
           {tool ? (
-            <MulnxToolControls tool={tool} />
+            <MulnxToolControls tool={tool} allowStop={false} />
           ) : (
             <p role="status">MulNX 版本暂未确认，请在运镜设置中检查更新。</p>
           )}
