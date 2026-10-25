@@ -111,6 +111,7 @@ for (const entry of ['/', '/settings?tab=gsi']) {
                 ) => Promise<unknown>;
               }
             ).manualMulnxNative(command, args);
+            // eslint-disable-next-line @typescript-eslint/only-throw-error -- Emulate the actual Tauri Result<T, String> rejection.
             if (command === 'launch_mulnx' && args?.automatic) throw 'mulnx_manual_launch_required';
             return result;
           },

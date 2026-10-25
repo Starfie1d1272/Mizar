@@ -71,6 +71,7 @@ function setup(
     if (failure === 'launch' && command === 'start_managed_cs2')
       return Promise.reject(new Error('请先退出已打开的 CS2'));
     if (failure === 'mulnx-unsupported' && command === 'launch_mulnx')
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- Tauri Result<T, String> rejects with the native string code.
       return Promise.reject('mulnx_manual_launch_required');
     if (failure === 'mulnx' && command === 'launch_mulnx')
       return Promise.reject(new Error('请先关闭冲突程序：完美世界竞技平台'));
