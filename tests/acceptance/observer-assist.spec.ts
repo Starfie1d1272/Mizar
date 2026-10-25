@@ -95,6 +95,15 @@ test('keeps the full-width square radar across private hint states and desktop s
   await page.screenshot({ path: testInfo.outputPath('workspace-private-hints.png') });
   expect(await page.locator('.workspace-radar__picture').boundingBox()).toEqual(initialMap);
   await expect(page.getByText('即将发生', { exact: true })).toHaveCount(0);
+  snapshot.payload.observer!.hints = Array.from({ length: 3 }, (_, i) => ({
+    ...snapshot.payload.observer!.hints[0]!,
+    id: `layout-${i}`,
+  }));
+  snapshot.channelSeq++;
+  socket!.send(JSON.stringify(snapshot));
+  await expect(card.locator('li')).toHaveCount(3);
+  expect(await card.locator('ol').evaluate((e) => e.scrollHeight <= e.clientHeight)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('workspace-private-hints-three.png') });
   snapshot.payload.observer!.hints = Array.from({ length: 6 }, (_, i) => ({
     ...snapshot.payload.observer!.hints[0]!,
     id: `layout-${i}`,
@@ -138,7 +147,11 @@ test('keeps the full-width square radar across private hint states and desktop s
       expect(b.x >= a.x + a.width - 1 || b.y >= a.y + a.height - 1).toBe(true);
     }
     const list = card.locator('ol');
-    expect(await list.evaluate((e) => e.scrollHeight <= e.clientHeight)).toBe(true);
+    expect(await list.evaluate((e) => e.scrollHeight > e.clientHeight)).toBe(true);
+    const rows = await list.locator('li').all();
+    const listBox = (await list.boundingBox())!;
+    const thirdBox = (await rows[2]!.boundingBox())!;
+    expect(thirdBox.y + thirdBox.height).toBeLessThanOrEqual(listBox.y + listBox.height + 1);
   }
   await page.setViewportSize({ width: 480, height: 1080 });
   await page.screenshot({ path: testInfo.outputPath('workspace-private-hints-six.png') });
