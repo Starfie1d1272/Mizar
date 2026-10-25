@@ -154,6 +154,7 @@ it('timestamps actual HTTP sync/tail progress without refreshing cached upstream
       mapName: 'de_test',
       receiveAgeSeconds: 9999,
     };
+    expect(manager.getHealth().lastReceiveMonotonicMs).toBeUndefined();
     callbacks!.onSync(sync);
     expect(manager.getHealth().lastReceiveMonotonicMs).toBe(100);
     now = 200;

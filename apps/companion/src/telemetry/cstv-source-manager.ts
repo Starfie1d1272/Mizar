@@ -532,8 +532,10 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
     if (this.activeSession === undefined || this.tailTick === this.activeSession.tailTick) {
       return false;
     }
+    const previousTail = this.tailTick;
     this.tailTick = this.activeSession.tailTick;
-    if (this.tailTick !== undefined) this.lastReceiveMonotonicMs = this.receiveNow();
+    if (Number.isFinite(this.tailTick) && this.tailTick > (previousTail ?? 0))
+      this.lastReceiveMonotonicMs = this.receiveNow();
     return true;
   }
 
