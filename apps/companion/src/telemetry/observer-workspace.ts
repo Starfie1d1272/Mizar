@@ -318,7 +318,7 @@ export function registerWorkspaceObserver(
   };
   const unsubscribe = settings?.subscribe((kind) => {
     if (kind === 'game' && !settings.gameAutomation.hideGameHud) hiddenGame = '';
-    if (kind === 'settings' || kind === 'game') return;
+    if (kind === 'settings' || kind === 'lead' || kind === 'game') return;
     const attempt = ++epoch;
     if (kind === 'connection') host = undefined;
     const value = host;
@@ -471,7 +471,7 @@ export function registerWorkspaceObserver(
           const hide = Boolean(gameControl?.hideGameHud && hiddenGame !== key.hud);
           if (gameControl?.hideGameHud && (connect || hide) && body.hudOriginal === undefined)
             throw new Error('observer_hud_snapshot_required');
-          // A confirmed game action is retained even if a later observer launch fails.
+          // An accepted game command is retained even if a later observer launch fails.
           // Retrying the private source must not reconnect the on-air game.
           if (connect && connection) {
             await sendObserverGameCommand(

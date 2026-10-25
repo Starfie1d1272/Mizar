@@ -15,13 +15,15 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 
+type SettingsChange = 'settings' | 'lead' | 'enabled' | 'game' | 'connection';
+
 /** Persist operator preferences; the current match's credentials stay in memory. */
 export class ObserverSettingsStore {
   settings: ObserverSettings = { ...DEFAULT_OBSERVER_SETTINGS };
   gameAutomation: GameAutomationSettings = { ...DEFAULT_GAME_AUTOMATION_SETTINGS };
   private connection: ObserverConnection | undefined;
   revision = randomUUID();
-  private listeners = new Set<(kind: 'settings' | 'enabled' | 'game' | 'connection') => void>();
+  private listeners = new Set<(kind: SettingsChange) => void>();
   private writing = Promise.resolve();
   constructor(private readonly path?: string) {}
   async load() {
@@ -70,9 +72,14 @@ export class ObserverSettingsStore {
       if (JSON.stringify(this.settings) === JSON.stringify(value)) return;
       if (this.path)
         await atomicJson(this.path, { settings: value, gameAutomation: this.gameAutomation });
-      const enabledChanged = this.settings.enabled !== value.enabled;
+      const kind =
+        this.settings.enabled !== value.enabled
+          ? 'enabled'
+          : this.settings.expectedDelaySeconds !== value.expectedDelaySeconds
+            ? 'settings'
+            : 'lead';
       this.settings = value;
-      this.changed(enabledChanged ? 'enabled' : 'settings');
+      this.changed(kind);
     });
     this.writing = next.catch(() => {});
     return next;
@@ -99,15 +106,15 @@ export class ObserverSettingsStore {
     this.connection = undefined;
     this.changed('connection');
   }
-  subscribe(listener: (kind: 'settings' | 'enabled' | 'game' | 'connection') => void) {
+  subscribe(listener: (kind: SettingsChange) => void) {
     this.listeners.add(listener);
     return () => {
       this.listeners.delete(listener);
     };
   }
-  private changed(kind: 'settings' | 'enabled' | 'game' | 'connection') {
+  private changed(kind: SettingsChange) {
     // Timing preferences affect projection calculation, never Host preparation.
-    if (kind !== 'settings') this.revision = randomUUID();
+    if (kind !== 'settings' && kind !== 'lead') this.revision = randomUUID();
     this.listeners.forEach((f) => f(kind));
   }
 }

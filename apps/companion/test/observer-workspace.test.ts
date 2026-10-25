@@ -490,3 +490,19 @@ it('stops the old source even if the next preparation arrives before its queued 
     await expect.poll(() => observer.view().active).toBe(false);
     expect(commands.send).toHaveBeenCalledTimes(1);
   }));
+
+it('preserves an accepted game action on same-instance re-entry and connects on new program endpoint or game identity', () =>
+  configuredFixture(async ({ observer, settings, start, request }) => {
+    expect((await start()).statusCode).toBe(200);
+    const generation = observer.source.getHealth().generation;
+    await request({ action: 'stop' });
+    expect((await start()).statusCode).toBe(200);
+    expect(observer.source.getHealth().generation).toBeGreaterThan(generation);
+    expect(commands.send).toHaveBeenCalledTimes(1);
+    settings.setConnection({ ...settings.configured()!, programEndpoint: '127.0.0.1:27023' });
+    expect((await start()).statusCode).toBe(200);
+    expect(commands.send).toHaveBeenCalledTimes(2);
+    expect(commands.send.mock.calls[1]![0]).toContain('27023');
+    expect((await start('43-1')).statusCode).toBe(200);
+    expect(commands.send).toHaveBeenCalledTimes(3);
+  }));

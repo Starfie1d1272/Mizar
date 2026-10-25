@@ -1268,7 +1268,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     !demoTest.get().active;
   registerObserverSettings(app, observerSettings, localWebTransport.getOriginPolicy());
   const observerSettingsUnsubscribe = observerSettings.subscribe((kind) => {
-    if (kind !== 'game') projectionCoordinator.resetAssist();
+    if (kind === 'lead') projectionCoordinator.refreshAssist();
+    else if (kind !== 'game') projectionCoordinator.resetAssist();
   });
   app.addHook('onClose', () => {
     observerSettingsUnsubscribe();
