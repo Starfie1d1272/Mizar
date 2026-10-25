@@ -72,8 +72,9 @@ fn launch_operation(app: &tauri::AppHandle, log: &DesktopLog, automatic: bool, u
     app.state::<production_exit::ExitGate>().check()?;
     app.state::<updates::PendingUpdate>().check()?;
     no_game()?;
-    if automatic && prepared["launchProtocol"] != 1 {
-        return Err("当前 MulNX 版本尚不支持保留环境检查的一键启动，请更新支持此接口的官方版本。".into());
+    if let Err(reason) = validate_launch_capability(automatic, &prepared) {
+        log.event("mulnx_launch", "manual-required", Some(&json!({"reason":reason,"version":prepared["version"]}).to_string()));
+        return Err(reason);
     }
     let verb: Vec<u16> = "open\0".encode_utf16().collect();
     // The official launcher can start the engine later. Preserve the prior raw
@@ -124,6 +125,13 @@ fn launch_operation(app: &tauri::AppHandle, log: &DesktopLog, automatic: bool, u
     Ok(Value::Null)
 }
 
+fn validate_launch_capability(automatic: bool, prepared: &Value) -> Result<(), String> {
+    if automatic && prepared["launchProtocol"] != 1 {
+        return Err("mulnx_manual_launch_required".into());
+    }
+    Ok(())
+}
+
 fn parse_launch_result(bytes: &[u8], success: bool) -> Result<Value, String> {
     if bytes.len() > 16 * 1024 { return Err("MulNX 启动记录过大。".into()); }
     let result: Value = serde_json::from_slice(bytes).map_err(|_| "MulNX 启动记录不完整。")?;
@@ -149,6 +157,16 @@ fn validate_game_identity(status: &Value, result: &Value, executable: &Path) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unsupported_local_or_new_release_requires_checked_manual_launch_without_changing_supported_path() {
+        for version in ["Beta16.1", "Beta16.2"] {
+            let release = json!({"version":version,"launchProtocol":null});
+            assert_eq!(validate_launch_capability(true, &release).unwrap_err(), "mulnx_manual_launch_required");
+            assert!(validate_launch_capability(false, &release).is_ok());
+        }
+        assert!(validate_launch_capability(true, &json!({"launchProtocol":1})).is_ok());
+        assert!(validate_launch_capability(true, &json!({})).is_err());
+    }
     #[test]
     fn gateway_owner_requires_the_actual_listener_process() {
         let root = std::env::temp_dir().join(format!("mizar-gateway-owner-{}-{}", std::process::id(), chrono::Utc::now().timestamp_nanos_opt().unwrap()));
@@ -238,9 +256,13 @@ pub fn stop_control(app: &tauri::AppHandle, log: &DesktopLog) -> Result<Value, S
     let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
     let mut cs2 = managed.lock().map_err(|_| "CS2 正忙，请稍后重试。")?;
     let game = controlled_game(&cs2)?;
+    let (context, _) = cs2.console_source()?.ok_or("当前借用游戏身份未确认，未发送停止命令。")?;
+    let identity = crate::mulnx_stop::Identity { pid:game.pid, created:game.created,
+        executable:PathBuf::from(context["executable"].as_str().ok_or("当前游戏安装位置未确认。")?) };
+    if crate::mulnx_stop::blocked(log, &identity)? { return Ok(crate::mulnx_stop::uncertain("already-submitted")); }
     verify_gateway_owner(log, 55202, game.pid)?;
     production_exit::finish_workspace_production(log)?;
-    let stopped = (|| -> Result<Value, String> {
+    let stopped = crate::mulnx_stop::submit(log, &identity, || {
         // Restoration failure keeps the journal and does not submit unload.
         crate::observer_workspace::finish(log)?;
         let current = controlled_game(&cs2)?;
@@ -258,16 +280,13 @@ pub fn stop_control(app: &tauri::AppHandle, log: &DesktopLog) -> Result<Value, S
         let mut command = Command::new(root.join("resources/runtime/node.exe"));
         command.arg(root.join("resources/app/dist/orchestration/provider.js")).arg("--stop-mulnx")
             .env_remove("NODE_OPTIONS").env_remove("NODE_PATH").creation_flags(0x08000000);
+        Ok(command)
+    }, |command| {
         let output = powershell::run(command, log, "停止 MulNX 控制", Duration::from_secs(8))?;
         let result = powershell::parse(log, "停止 MulNX 控制", &output)?;
         log.event("mulnx_stop", "result", Some(&result.to_string()));
-        if result["result"] != "queued" {
-            return Err(if result["result"] == "rejected" {
-                "当前 MulNX 未接受停止控制；该版本可能不支持 System/Stop，请使用官方退出入口。"
-            } else { "MulNX 停止结果待确认，请在游戏内核对；不会自动重发停止命令。" }.into());
-        }
-        Ok(result) // queued, execution unconfirmed; never claim DLL unloaded.
-    })();
+        Ok(result) // queued is only submission; the reservation also covers unknown/rejected outcomes.
+    });
     // The verified borrowed game remains alive. Safe production finish has already succeeded;
     // even HUD/transport failure must not leave the borrowed lease or workbench active.
     let detached = cs2.finish();
@@ -277,6 +296,14 @@ pub fn stop_control(app: &tauri::AppHandle, log: &DesktopLog) -> Result<Value, S
     let hidden = crate::hide_workspace(app);
     let cleanup = production_exit::cleanup_results(detached,
         production_exit::cleanup_results(preparation, hidden));
+    if let (Ok(value), Err(error)) = (&stopped, &cleanup) {
+        if value["stopGuard"].is_string() {
+            log.event("mulnx_stop_cleanup", "failure", Some(error));
+            let mut value = value.clone();
+            value["cleanupPending"] = true.into();
+            return Ok(value);
+        }
+    }
     match (stopped, cleanup) {
         (Ok(value), Ok(())) => Ok(value),
         (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),

@@ -507,7 +507,7 @@ test('explicit MulNX stop confirms production effects, shows ownership errors, a
   await stop.click();
   await confirmation.getByRole('button', { name: '结束制作并停止控制', exact: true }).click();
   await expect(
-    page.getByText('停止控制请求已入队，执行结果待确认。请返回游戏核对。'),
+    page.getByText(/^停止控制请求已入队，执行结果待确认。请返回游戏核对。/),
   ).toBeVisible();
   await expect(stop).toBeDisabled();
   expect(stops).toBe(2);

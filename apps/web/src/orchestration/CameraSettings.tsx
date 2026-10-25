@@ -91,8 +91,10 @@ export function CameraSettings() {
     <Panel>
       <h2>地图自动编排</h2>
       <CameraControls setup />
-      <MulnxToolControls tool={current?.tool} />
-      <MulnxHandoff />
+      <section id="mulnx-launch" aria-label="MulNX 启动与游戏交接">
+        <MulnxToolControls tool={current?.tool} />
+        <MulnxHandoff />
+      </section>
       <details>
         <summary>游戏内筛选</summary>
         <p>试播使用当前地图已保存的镜头；结束后仍保持人工模式。</p>
