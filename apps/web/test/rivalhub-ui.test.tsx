@@ -525,8 +525,9 @@ describe('website library one-action load', () => {
       return Promise.resolve(Response.json({ entry: null, error: null }));
     });
     vi.stubGlobal('fetch', fetchMock);
-    await act(async () => {
+    await act(() => {
       root!.render(<RivalHubPreparationPanel onLoaded={onLoaded} />);
+      return Promise.resolve();
     });
     const button = Array.from(container.querySelectorAll('button')).find(
       (b) => b.textContent === '核对并载入本场',
@@ -543,9 +544,10 @@ describe('website library one-action load', () => {
           complete = resolve;
         }),
     );
-    await act(async () => {
+    await act(() => {
       button.click();
       button.click();
+      return Promise.resolve();
     });
     expect(onLoaded).not.toHaveBeenCalled();
     expect(
@@ -555,12 +557,15 @@ describe('website library one-action load', () => {
     const request = vi
       .mocked(fetch)
       .mock.calls.find((c) => toUrlString(c[0]) === '/operator/rivalhub/select');
-    expect(JSON.parse(String(request?.[1]?.body))).toEqual({
+    const requestBody = request?.[1]?.body;
+    if (typeof requestBody !== 'string') throw new Error('Expected JSON request body');
+    expect(JSON.parse(requestBody)).toEqual({
       matchId: 'requested-match',
       activate: true,
     });
-    await act(async () => {
+    await act(() => {
       complete(Response.json({ loaded: true, matchId: 'requested-match' }));
+      return Promise.resolve();
     });
     expect(onLoaded).toHaveBeenCalledTimes(1);
     expect(container.textContent).not.toContain('确认加载比赛');
@@ -577,8 +582,9 @@ describe('website library one-action load', () => {
       const { button, onLoaded } = await renderPanel(() =>
         Promise.resolve(Response.json(payload, { status })),
       );
-      await act(async () => {
+      await act(() => {
         button.click();
+        return Promise.resolve();
       });
       expect(onLoaded).not.toHaveBeenCalled();
       expect(container.querySelector('.library-detail-actions [role="alert"]')).not.toBeNull();
