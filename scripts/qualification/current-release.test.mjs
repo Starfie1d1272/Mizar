@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { URL } from 'node:url';
 import { expect, it } from 'vitest';
 import { readAppVersion } from './app-version.mjs';
 import { readReleaseNotes } from './release-notes.mjs';
