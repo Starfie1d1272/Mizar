@@ -147,6 +147,8 @@ test('local and website libraries share match details while browsing and loading
         if (path.startsWith('/local/v1/rivalhub-library/')) {
           const id = decodeURIComponent(path.split('/').at(-1)!);
           detailReads.push(id);
+          // Isolated network latency: the schedule heading may paint before details arrive.
+          await new Promise((resolve) => setTimeout(resolve, 150));
           const document = library.matches.find((row) => row.matchId === id);
           return route.fulfill({
             json: {
@@ -226,7 +228,7 @@ test('local and website libraries share match details while browsing and loading
     expect(detailReads).toEqual([]);
     await page.getByRole('button', { name: 'RivalHub 赛事', exact: true }).click();
     await expect(detail.getByRole('heading', { name: '甲队 vs 乙队', exact: true })).toBeVisible();
-    expect(await detail.locator('.library-detail-body').innerText()).toBe(localText);
+    await expect.poll(() => detail.locator('.library-detail-body').innerText()).toBe(localText);
     await expect(detail.getByRole('button', { name: '编辑比赛', exact: true })).toHaveCount(0);
     expect(detailReads).toEqual([first.matchId]);
     await expect(page.getByText('授权账号：解说账号', { exact: true })).toBeVisible();
