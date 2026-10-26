@@ -1,4 +1,3 @@
-import { readOnlineManifestResponse } from './http-source.js';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -31,7 +30,7 @@ export class RivalHubLibrary {
     private readonly path: string,
     private readonly competitionId: string,
     private readonly schedule: (from: string, to: string) => Promise<Schedule>,
-    private readonly request: (operation: string, init?: RequestInit) => Promise<Response>,
+    private readonly readManifest: (matchId: string, fresh: boolean) => Promise<unknown>,
     private readonly now = () => Date.now(),
   ) {}
 
@@ -42,7 +41,18 @@ export class RivalHubLibrary {
       // Stored normalized documents are never trusted as online input: only restore schedule.
       // Details are revalidated from the stored provider manifest below.
       if (schedule.ok && schedule.value.competition.competitionId === this.competitionId) {
-        this.saved = { schedule: schedule.value, entries: {}, syncedAt: null };
+        // Disk keeps browsed match details across upgrades, but operator identity and
+        // assignments must come from the current scope's fresh schedule response.
+        const cachedSchedule = {
+          ...schedule.value,
+          matches: schedule.value.matches.map((row) => {
+            const cached = { ...row };
+            delete cached.assignedToViewer;
+            return cached;
+          }),
+        };
+        delete cachedSchedule.viewer;
+        this.saved = { schedule: cachedSchedule, entries: {}, syncedAt: null };
         const manifests =
           (input as Saved & { manifests?: Record<string, unknown> }).manifests ?? {};
         for (const row of schedule.value.matches) {
@@ -136,47 +146,6 @@ export class RivalHubLibrary {
     };
     this.markDiscovered?.();
     this.error = null;
-    const queue = [...schedule.matches];
-    let failures = 0;
-    await Promise.all(
-      Array.from({ length: 3 }, async () => {
-        for (let row = queue.shift(); row; row = queue.shift()) {
-          try {
-            const previous = this.saved!.entries[row.matchId];
-            const response = await this.request(
-              `match?matchId=${encodeURIComponent(row.matchId)}`,
-              { headers: previous?.etag ? { 'if-none-match': previous.etag } : {} },
-            );
-            const checkedAt = new Date(this.now()).toISOString();
-            if (response.status === 304 && previous) {
-              previous.checkedAt = checkedAt;
-              continue;
-            }
-            if (!response.ok) throw new Error('单场更新失败。');
-            const input = await readOnlineManifestResponse(response);
-            const valid = validateBroadcastManifest(input);
-            if (
-              !valid.ok ||
-              valid.value.match.matchId !== row.matchId ||
-              valid.value.match.competition?.competitionId !== this.competitionId
-            )
-              throw new Error('比赛资料不匹配。');
-            const document = toMatchDocumentV1(valid.value);
-            const changed =
-              JSON.stringify(this.manifests[row.matchId]) !== JSON.stringify(valid.value);
-            this.manifests[row.matchId] = valid.value;
-            this.saved!.entries[row.matchId] = {
-              document,
-              etag: response.headers.get('etag'),
-              checkedAt,
-              updatedAt: changed || !previous ? checkedAt : previous.updatedAt,
-            };
-          } catch {
-            failures++;
-          }
-        }
-      }),
-    );
     const ids = new Set(schedule.matches.map((row) => row.matchId));
     this.saved.entries = Object.fromEntries(
       Object.entries(this.saved.entries).filter(([id]) => ids.has(id)),
@@ -184,13 +153,59 @@ export class RivalHubLibrary {
     this.manifests = Object.fromEntries(
       Object.entries(this.manifests).filter(([id]) => ids.has(id)),
     );
-    if (failures) this.error = `${failures} 场资料暂未更新，保留已有资料。`;
-    else this.saved.syncedAt = new Date(this.now()).toISOString();
-    await mkdir(dirname(this.path), { recursive: true });
-    const temporary = `${this.path}.${randomUUID()}.tmp`;
-    await writeFile(temporary, JSON.stringify({ ...this.saved, manifests: this.manifests }), {
-      mode: 0o600,
-    });
-    await rename(temporary, this.path);
+    this.saved.syncedAt = new Date(this.now()).toISOString();
+    await this.persist();
+  }
+
+  async detail(matchId: string, fresh = true) {
+    await this.view();
+    if (!this.saved?.schedule.matches.some((row) => row.matchId === matchId))
+      throw new Error('比赛不在当前赛事赛程中。');
+    try {
+      const valid = validateBroadcastManifest(await this.readManifest(matchId, fresh));
+      if (
+        !valid.ok ||
+        valid.value.match.matchId !== matchId ||
+        valid.value.match.competition?.competitionId !== this.competitionId
+      )
+        throw new Error('比赛资料不匹配。');
+      const checkedAt = new Date(this.now()).toISOString();
+      const previous = this.saved.entries[matchId];
+      const changed = JSON.stringify(this.manifests[matchId]) !== JSON.stringify(valid.value);
+      const entry = {
+        document: toMatchDocumentV1(valid.value),
+        etag: null,
+        checkedAt,
+        updatedAt: changed || !previous ? checkedAt : previous.updatedAt,
+      };
+      this.manifests[matchId] = valid.value;
+      this.saved.entries[matchId] = entry;
+      await this.persist();
+      return { entry, error: null };
+    } catch {
+      return {
+        entry: this.saved.entries[matchId] ?? null,
+        error: this.saved.entries[matchId]
+          ? '网站暂时无法连接，显示上次浏览的资料；载入前会重新核对。'
+          : '完整资料尚未缓存，离线时无法查看。请连接网站后重试。',
+      };
+    }
+  }
+
+  private writing: Promise<void> = Promise.resolve();
+  private persist() {
+    const content = JSON.stringify({ ...this.saved, manifests: this.manifests });
+    const write = this.writing
+      .catch(() => undefined)
+      .then(async () => {
+        await mkdir(dirname(this.path), { recursive: true });
+        const temporary = `${this.path}.${randomUUID()}.tmp`;
+        await writeFile(temporary, content, {
+          mode: 0o600,
+        });
+        await rename(temporary, this.path);
+      });
+    this.writing = write;
+    return write;
   }
 }

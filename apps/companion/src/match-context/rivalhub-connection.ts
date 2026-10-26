@@ -1,12 +1,17 @@
 import { diagnosticValue } from '../support/session-journal.js';
 import { randomUUID, createHash } from 'node:crypto';
+import { SourceLoadError } from './source-error.js';
 import { RivalHubLibrary } from './rivalhub-library.js';
 import { readFile, rename, writeFile, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import type { LiveSnapshotV1, ReliableEventV1 } from '@mizar/protocol/output';
 import type { ScheduleWindowV1 } from '@mizar/core/match-context';
-import { toScheduleWindowV1, validateBroadcastScheduleWindow } from '@mizar/rivalhub';
+import {
+  toScheduleWindowV1,
+  validateBroadcastScheduleWindow,
+  validateBroadcastManifest,
+} from '@mizar/rivalhub';
 import { createOnlineManifestSource } from './http-source.js';
 import { redactDiagnosticText, diagnosticNetworkCode } from '../updates/diagnostics.js';
 import {
@@ -20,6 +25,7 @@ type Installation = {
   installationId: string;
   competitionId: string;
   displayName: string;
+  authorizedUser?: { userId: string; displayName: string } | undefined;
 };
 type PendingPairing = {
   pairingId: string;
@@ -184,6 +190,21 @@ function normalizeBaseUrl(value: string): string {
   return url.origin;
 }
 
+function authorizedUser(input: unknown): Installation['authorizedUser'] {
+  if (!input || typeof input !== 'object') return undefined;
+  const { userId, displayName } = input as Record<string, unknown>;
+  if (
+    typeof userId !== 'string' ||
+    !userId.trim() ||
+    userId.length > 128 ||
+    typeof displayName !== 'string' ||
+    !displayName.trim() ||
+    displayName.length > 256
+  )
+    return undefined;
+  return { userId: userId.trim(), displayName: displayName.trim() };
+}
+
 /** Companion-owned scoped installation. Never exposed to the browser. */
 export class RivalHubConnection {
   private onDiagnostic: (operation: string, error: unknown) => void = () => {};
@@ -236,6 +257,7 @@ export class RivalHubConnection {
     }
   }
   private scheduleGeneration = 0;
+  private scheduleWarning: string | null = null;
   private scheduleCache: {
     competitionId: string;
     value: ScheduleWindowV1;
@@ -247,6 +269,13 @@ export class RivalHubConnection {
       this.monotonicNow() - this.scheduleCache.acquiredAt < 60_000
       ? this.scheduleCache.value
       : null;
+  }
+  private invalidateReadScope() {
+    this.scheduleCache = null;
+    this.scheduleWarning = null;
+    this.browsingLibrary = null;
+    this.manifestScope?.abort.abort();
+    this.manifestScope = null;
   }
   private installation: Installation | null = null;
   private pendingPairing: PendingPairing | null = null;
@@ -431,7 +460,12 @@ export class RivalHubConnection {
         // A malformed URL exception may echo credential-bearing input.
         throw new Error('RivalHub connection setting has an invalid base URL');
       }
-      this.installation = { ...parsed, baseUrl };
+      this.invalidateReadScope();
+      this.installation = {
+        ...parsed,
+        baseUrl,
+        authorizedUser: authorizedUser(parsed.authorizedUser),
+      };
     } catch (error) {
       if (stage === 'connection_read' && (error as NodeJS.ErrnoException)?.code === 'ENOENT')
         return;
@@ -445,6 +479,8 @@ export class RivalHubConnection {
       paired: this.installation !== null,
       competitionId: this.installation?.competitionId ?? null,
       displayName: this.installation?.displayName ?? null,
+      authorizedUser: this.installation?.authorizedUser ?? null,
+      scheduleWarning: this.scheduleWarning,
       activeSourceMatchId: this.source?.matchId ?? null,
       activeDeviceName: this.activeDeviceName,
       activeDeviceMatchId: this.activeDeviceMatchId,
@@ -486,6 +522,7 @@ export class RivalHubConnection {
       if (error.code !== 'ENOENT') throw error;
     });
     this.installation = null;
+    this.invalidateReadScope();
     this.scheduleCache = null;
     this.source = null;
     this.activeDeviceName = null;
@@ -613,6 +650,7 @@ export class RivalHubConnection {
       installationId?: unknown;
       competitionId?: unknown;
       displayName?: unknown;
+      authorizedUser?: unknown;
     };
     if (value.status === 'pending') return 'pending';
     if (value.status === 'expired') {
@@ -637,12 +675,14 @@ export class RivalHubConnection {
       // Safe cleanup by correct owner: new installation persistence must not be blocked by release failure
     }
     this.source = null;
+    this.invalidateReadScope();
     this.installation = {
       baseUrl,
       credential: value.credential,
       installationId: value.installationId,
       competitionId: value.competitionId,
       displayName,
+      authorizedUser: authorizedUser(value.authorizedUser),
     };
     await this.persist();
     this.pendingPairing = null;
@@ -663,20 +703,36 @@ export class RivalHubConnection {
       result.value.competition.competitionId === this.installation.competitionId &&
       installation === this.installation &&
       generation === this.scheduleGeneration
-    )
-      this.scheduleCache = {
-        competitionId: this.installation.competitionId,
-        value: toScheduleWindowV1(result.value),
-        acquiredAt: this.monotonicNow(),
-      };
+    ) {
+      // The operator list keeps all provider rows. The internal adjacent-schedule
+      // schema has a separate 256-row contract; never serve an older cache as fresh.
+      this.scheduleCache = null;
+      this.scheduleWarning = null;
+      if (result.value.matches.length > 256) {
+        this.scheduleWarning = '赛事超过 256 场，完整列表仍可浏览和载入；相邻比赛推荐暂不可用。';
+      } else {
+        // Schema or identity failures propagate instead of being mistaken for a size limit.
+        this.scheduleCache = {
+          competitionId: installation.competitionId,
+          value: toScheduleWindowV1(result.value),
+          acquiredAt: this.monotonicNow(),
+        };
+      }
+      this.installation.authorizedUser = authorizedUser(result.value.viewer);
+      await this.persist();
+    }
     return result.value;
   }
 
   private browsingLibrary: { installation: Installation; value: RivalHubLibrary } | null = null;
-  async library() {
+  private libraryScopeId = randomUUID();
+  private libraryForCurrentScope() {
     const installation = this.installation;
     if (!installation) throw new Error('请先连接 RivalHub。');
     if (this.browsingLibrary?.installation !== installation) {
+      this.libraryScopeId = randomUUID();
+      this.scheduleWarning = null;
+      this.scheduleCache = null;
       const scope = createHash('sha256')
         .update(
           JSON.stringify([
@@ -700,27 +756,114 @@ export class RivalHubConnection {
             current();
             return result;
           },
-          async (operation, init) => {
+          (matchId, fresh) => {
             current();
-            const result = await this.request(operation, init);
-            current();
-            return result;
+            return this.matchSource(matchId, fresh).load();
           },
         ),
       };
     }
-    const result = await this.browsingLibrary.value.view();
+    return this.browsingLibrary.value;
+  }
+
+  async library() {
+    const installation = this.installation;
+    const result = await this.libraryForCurrentScope().view();
+    if (this.installation !== installation) throw new Error('赛事连接已变化。');
+    return {
+      ...result,
+      library: {
+        ...result.library,
+        scopeId: this.libraryScopeId,
+        scheduleWarning: this.scheduleWarning,
+      },
+    };
+  }
+
+  async libraryDetail(matchId: string, fresh = true) {
+    const installation = this.installation;
+    const result = await this.libraryForCurrentScope().detail(matchId, fresh);
     if (this.installation !== installation) throw new Error('赛事连接已变化。');
     return result;
   }
 
-  matchSource(matchId: string) {
-    if (!this.installation) throw new Error('请先连接 RivalHub。');
-    return createOnlineManifestSource(matchId, {
-      urlTemplate: `${this.installation.baseUrl}/api/mizar/match?matchId={matchId}`,
-      readToken: this.installation.credential,
+  private manifestScope: {
+    installation: Installation;
+    pending: Map<string, Promise<unknown>>;
+    retryState: { notBefore: number };
+    abort: AbortController;
+    recent: Map<string, { value: unknown; at: number }>;
+  } | null = null;
+
+  matchSource(matchId: string, fresh = true) {
+    const installation = this.installation;
+    if (!installation) throw new Error('请先连接 RivalHub。');
+    if (this.manifestScope?.installation !== installation)
+      this.manifestScope = {
+        installation,
+        pending: new Map(),
+        retryState: { notBefore: 0 },
+        abort: new AbortController(),
+        recent: new Map(),
+      };
+    const scope = this.manifestScope;
+    const source = createOnlineManifestSource(matchId, {
+      urlTemplate: `${installation.baseUrl}/api/mizar/match?matchId={matchId}`,
+      readToken: installation.credential,
       fetchImpl: this.fetchImpl,
+      retryState: scope.retryState,
+      signal: scope.abort.signal,
+      isCurrent: () => this.installation === installation,
     });
+    return {
+      kind: source.kind,
+      load: async () => {
+        if (this.installation !== installation)
+          throw new SourceLoadError('赛事连接已变化。', undefined, 'authorization');
+        let pending = scope.pending.get(matchId);
+        const recent = scope.recent.get(matchId);
+        // Only overlapping automatic ticks may reuse a just-validated online entity.
+        // Explicit browsing, refresh and activation always read fresh (or join an in-flight read).
+        if (
+          !pending &&
+          !fresh &&
+          recent &&
+          Date.now() >= recent.at &&
+          Date.now() - recent.at < 1000
+        )
+          return structuredClone(recent.value);
+        if (!pending) {
+          if (scope.pending.size >= 3)
+            throw new SourceLoadError('比赛资料正在读取，请稍后重试。', undefined, 'unavailable');
+          pending = source
+            .load()
+            .then((input) => {
+              if (this.installation !== installation)
+                throw new SourceLoadError('赛事连接已变化。', undefined, 'authorization');
+              const valid = validateBroadcastManifest(input);
+              if (!valid.ok)
+                throw new SourceLoadError('比赛资料格式无效。', undefined, 'invalid_manifest');
+              if (
+                valid.value.match.matchId !== matchId ||
+                valid.value.match.competition?.competitionId !== installation.competitionId
+              )
+                throw new SourceLoadError('比赛资料不匹配。', undefined, 'match_mismatch');
+              scope.recent.delete(matchId);
+              scope.recent.set(matchId, { value: valid.value, at: Date.now() });
+              while (scope.recent.size > 2) scope.recent.delete(scope.recent.keys().next().value!);
+              return valid.value;
+            })
+            .catch((error: unknown) => {
+              scope.recent.delete(matchId);
+              throw error;
+            })
+            .finally(() => scope.pending.delete(matchId));
+          scope.pending.set(matchId, pending);
+        }
+        // Consumers own their entity; never share a one-shot Response or a mutable document.
+        return structuredClone(await pending);
+      },
+    };
   }
 
   async claim(snapshot: LiveSnapshotV1, contextRevision: string, takeover: boolean) {

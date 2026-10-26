@@ -1,0 +1,103 @@
+{
+  "schemaVersion": "rivalhub.broadcast-schedule-window.v1",
+  "competition": {
+    "competitionId": "4c84de6f-8825-4286-b341-04592ec0cc1d",
+    "slug": "4c84de6f-8825-4286-b341-04592ec0cc1d",
+    "name": "Mizar live boundary",
+    "logoUrl": null,
+    "themeColor": null
+  },
+  "from": "2026-09-28T00:00:00.000Z",
+  "to": "2026-10-05T00:00:00.000Z",
+  "matches": [
+    {
+      "matchId": "d4853b62-b9b1-4453-9611-45b1b0257905",
+      "status": "in_progress",
+      "format": "bo3",
+      "isTest": false,
+      "resultDisposition": null,
+      "stage": "fixture-stage",
+      "stageLabel": null,
+      "round": null,
+      "roundLabel": null,
+      "matchLabel": null,
+      "scheduledAt": "2026-09-28T01:00:00.000Z",
+      "startedAt": null,
+      "completedAt": null,
+      "scoreA": null,
+      "scoreB": null,
+      "isForfeit": false,
+      "entrantA": {
+        "entryId": "4994f7cb-2f11-4e3e-b96a-486a52282a1c",
+        "name": "Provider A",
+        "logoUrl": null
+      },
+      "entrantB": {
+        "entryId": "22fb39c8-dfa2-46ce-a821-1f12ff360b23",
+        "name": "Provider B",
+        "logoUrl": null
+      },
+      "assignedToViewer": true
+    },
+    {
+      "matchId": "3ef9b679-991c-43b2-95b6-537821a5bad1",
+      "status": "scheduled",
+      "format": "bo3",
+      "isTest": false,
+      "resultDisposition": null,
+      "stage": "fixture-stage",
+      "stageLabel": null,
+      "round": null,
+      "roundLabel": null,
+      "matchLabel": null,
+      "scheduledAt": "2026-09-29T01:00:00.000Z",
+      "startedAt": null,
+      "completedAt": null,
+      "scoreA": null,
+      "scoreB": null,
+      "isForfeit": false,
+      "entrantA": {
+        "entryId": "4994f7cb-2f11-4e3e-b96a-486a52282a1c",
+        "name": "Provider A",
+        "logoUrl": null
+      },
+      "entrantB": {
+        "entryId": "22fb39c8-dfa2-46ce-a821-1f12ff360b23",
+        "name": "Provider B",
+        "logoUrl": null
+      },
+      "assignedToViewer": false
+    },
+    {
+      "matchId": "4e51a95a-700c-47d6-a056-f7d975331b15",
+      "status": "scheduled",
+      "format": "bo1",
+      "isTest": false,
+      "resultDisposition": null,
+      "stage": "fixture-stage",
+      "stageLabel": null,
+      "round": null,
+      "roundLabel": null,
+      "matchLabel": null,
+      "scheduledAt": null,
+      "startedAt": null,
+      "completedAt": null,
+      "scoreA": null,
+      "scoreB": null,
+      "isForfeit": false,
+      "entrantA": {
+        "entryId": "4994f7cb-2f11-4e3e-b96a-486a52282a1c",
+        "name": "Provider A",
+        "logoUrl": null
+      },
+      "entrantB": {
+        "entryId": "22fb39c8-dfa2-46ce-a821-1f12ff360b23",
+        "name": "Provider B",
+        "logoUrl": null
+      },
+      "assignedToViewer": false
+    }
+  ],
+  "viewer": { "userId": "5bbb25b1-3f65-4aed-b191-e2a29fbfcca1", "displayName": "合成解说" },
+  "revision": "8c89972fae7a29ad3060a20637b4d3dfdb9a09583a1c6b3ea55b551894b4689b"
+}

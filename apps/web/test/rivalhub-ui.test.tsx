@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { act } from 'react';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RivalHubMatchLibrary, type WebsiteSchedule } from '../src/operator/RivalHubMatchLibrary';
@@ -249,4 +251,241 @@ describe('website match library order', () => {
     render([row('c', 'scheduled'), row('a', 'in_progress')]);
     expect(container.querySelector('h2')?.textContent).toBe('a vs opponent');
   });
+});
+
+it('pins only the viewer assigned unfinished matches, independently of display names', () => {
+  const rows = [
+    { matchId: 'other-live', status: 'in_progress', scheduledAt: null, assignedToViewer: false },
+    {
+      matchId: 'mine-upcoming',
+      status: 'scheduled',
+      scheduledAt: '2026-11-01',
+      assignedToViewer: true,
+    },
+    { matchId: 'mine-ended', status: 'finished', scheduledAt: null, assignedToViewer: true },
+    { matchId: 'mine-live', status: 'in_progress', scheduledAt: null, assignedToViewer: true },
+    { matchId: 'unknown', status: 'scheduled', scheduledAt: null },
+  ];
+  expect(sortWebsiteMatches(rows).map((row) => row.matchId)).toEqual([
+    'mine-live',
+    'mine-upcoming',
+    'other-live',
+    'unknown',
+    'mine-ended',
+  ]);
+  // A server correction/removal immediately returns the match to its normal group.
+  expect(
+    sortWebsiteMatches(rows.map((row) => ({ ...row, assignedToViewer: false }))).map(
+      (row) => row.matchId,
+    ),
+  ).toEqual(['mine-live', 'other-live', 'mine-upcoming', 'unknown', 'mine-ended']);
+});
+
+it('reads only visible details, stops hidden/unmounted timers, and ignores late A after switching to B', async () => {
+  vi.useFakeTimers();
+  const flush = async (action: () => void) => {
+    await act(async () => {
+      action();
+      await Promise.resolve();
+    });
+  };
+  let resolveA: ((response: Response) => void) | undefined;
+  const fetchMock = vi.fn((url: string | URL | Request) => {
+    if (toUrlString(url).includes('/a?'))
+      return new Promise<Response>((resolve) => {
+        resolveA = resolve;
+      });
+    return Promise.resolve(Response.json({ entry: null, error: 'B 缺少离线资料' }));
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  const schedule: WebsiteSchedule = {
+    competition: { name: 'fixture' },
+    viewer: { userId: 'user-1', displayName: '同名' },
+    matches: ['a', 'b'].map((matchId) => ({
+      matchId,
+      scheduledAt: null,
+      format: 'bo3',
+      entrantA: { name: matchId },
+      entrantB: { name: '同名' },
+      assignedToViewer: matchId === 'b',
+    })),
+  };
+  await flush(() =>
+    root!.render(
+      <details>
+        <summary>比赛库</summary>
+        <RivalHubMatchLibrary
+          schedule={schedule}
+          selecting={false}
+          activeMatchId={null}
+          refreshing={false}
+          onRefresh={() => {}}
+          onSelect={() => {}}
+        />
+      </details>,
+    ),
+  );
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(600_000);
+  });
+  expect(fetchMock).toHaveBeenCalledTimes(0);
+  const details = container.querySelector('details')!;
+  await flush(() => {
+    details.open = true;
+    details.dispatchEvent(new Event('toggle', { bubbles: true }));
+  });
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(toUrlString(fetchMock.mock.calls[0]![0])).toContain('/b?fresh=1');
+  expect(container.textContent).toContain('授权账号：同名');
+  expect(container.textContent).toContain('我认领的');
+  const choose = (name: string) =>
+    [...container.querySelectorAll('button')].find((button) =>
+      button.textContent?.includes(`${name} vs 同名`),
+    )!;
+  await flush(() => choose('a').click());
+  await flush(() => choose('b').click());
+  await flush(() => resolveA?.(Response.json({ entry: null, error: 'late A' })));
+  expect(container.textContent).not.toContain('late A');
+  expect(container.textContent).toContain('B 缺少离线资料');
+  const before = fetchMock.mock.calls.length;
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(600_000);
+  });
+  expect(fetchMock.mock.calls.length - before).toBe(10);
+  await flush(() => {
+    details.open = false;
+    details.dispatchEvent(new Event('toggle', { bubbles: true }));
+  });
+  const hidden = fetchMock.mock.calls.length;
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(600_000);
+  });
+  expect(fetchMock).toHaveBeenCalledTimes(hidden);
+  await flush(() => root!.render(null));
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(60_000);
+  });
+  expect(fetchMock).toHaveBeenCalledTimes(hidden);
+});
+
+it('invalidates same-match detail fallback immediately across scopes, including late success and new-scope failure', async () => {
+  const { parseMatchDocumentV1 } = await import('@mizar/protocol/context');
+  const input: unknown = JSON.parse(
+    await readFile(
+      resolve(process.cwd(), 'packages/protocol/test/fixtures/match-document-v1.json'),
+      'utf8',
+    ),
+  );
+  const document = parseMatchDocumentV1(input);
+  const old = {
+    ...document,
+    entrants: { ...document.entrants, a: { ...document.entrants.a, name: '旧授权独有队名' } },
+  };
+  const entry = {
+    document: old,
+    checkedAt: '2026-09-16T12:00:00Z',
+    updatedAt: '2026-09-16T12:00:00Z',
+  };
+  const responses: ((response: Response) => void)[] = [];
+  let first = true;
+  const fetchMock = vi.fn(() => {
+    if (first) {
+      first = false;
+      return Promise.resolve(Response.json({ entry, error: null }));
+    }
+    return new Promise<Response>((resolve) => responses.push(resolve));
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  const render = async (scopeId: string) => {
+    await act(async () => {
+      root!.render(
+        <RivalHubMatchLibrary
+          schedule={{
+            competition: { name: 'fixture' },
+            matches: [
+              {
+                matchId: document.matchId,
+                scheduledAt: null,
+                format: 'bo3',
+                entrantA: { name: '摘要甲' },
+                entrantB: { name: '摘要乙' },
+              },
+            ],
+            library: { scopeId, entries: {}, syncedAt: null, refreshing: false, error: null },
+          }}
+          selecting={false}
+          activeMatchId={null}
+          refreshing={false}
+          onSelect={() => {}}
+          onRefresh={() => {}}
+        />,
+      );
+      await Promise.resolve();
+    });
+  };
+  await render('scope-a');
+  expect(container.textContent).toContain('旧授权独有队名');
+  await act(async () => {
+    [...container.querySelectorAll('button')]
+      .find((button) => button.textContent === '刷新比赛')!
+      .click();
+    await Promise.resolve();
+  });
+  await render('scope-b');
+  expect(container.textContent).not.toContain('旧授权独有队名');
+  await act(async () => {
+    responses[0]!(Response.json({ entry, error: null }));
+    responses[1]!(new Response(null, { status: 503 }));
+    await Promise.resolve();
+  });
+  expect(container.textContent).not.toContain('旧授权独有队名');
+  expect(container.textContent).toContain('完整资料暂时无法获取');
+});
+
+it('renders the real server viewer and assignment flags and degrades to unknown with the old provider shape', async () => {
+  const read = async (name: string) =>
+    JSON.parse(
+      await readFile(
+        resolve(
+          process.cwd(),
+          `packages/rivalhub/test/fixtures/server-schedule-2026-10-26/${name}`,
+        ),
+        'utf8',
+      ),
+    ) as WebsiteSchedule;
+  const modern = await read('schedule-new-http.json');
+  const legacy = await read('schedule-old-shape.json');
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(() => Promise.resolve(Response.json({ entry: null, error: 'fixture no detail' }))),
+  );
+  const render = async (schedule: WebsiteSchedule) => {
+    await act(async () => {
+      root!.render(
+        <RivalHubMatchLibrary
+          schedule={schedule}
+          selecting={false}
+          activeMatchId={null}
+          refreshing={false}
+          onRefresh={() => {}}
+          onSelect={() => {}}
+        />,
+      );
+      await Promise.resolve();
+    });
+  };
+  await render(modern);
+  const ordered = sortWebsiteMatches(modern.matches);
+  expect(ordered[0]?.matchId).toBe(modern.matches.find((row) => row.assignedToViewer)!.matchId);
+  expect(container.textContent).toContain('授权账号：合成解说');
+  expect(container.querySelectorAll('.library-list button')).toHaveLength(3);
+  expect(
+    [...container.querySelectorAll('.library-list button')].filter((button) =>
+      button.textContent?.includes('我认领的'),
+    ),
+  ).toHaveLength(1);
+  await render(legacy);
+  expect(container.textContent).not.toContain('授权账号：');
+  expect(container.textContent).not.toContain('我认领的');
+  expect(container.querySelectorAll('.library-list button')).toHaveLength(3);
 });

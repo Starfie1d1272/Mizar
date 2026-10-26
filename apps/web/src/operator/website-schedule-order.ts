@@ -2,6 +2,7 @@ type MatchOrderFields = {
   matchId: string;
   scheduledAt: string | null;
   status?: string;
+  assignedToViewer?: boolean;
   completedAt?: string | null;
 };
 
@@ -11,8 +12,8 @@ function timestamp(value: string | null | undefined): number | null {
 }
 
 function group(match: MatchOrderFields): number {
-  if (match.status === 'finished' || match.status === 'cancelled') return 2;
-  return match.status === 'in_progress' ? 0 : 1;
+  if (match.status === 'finished' || match.status === 'cancelled') return 4;
+  return (match.assignedToViewer === true ? 0 : 2) + (match.status === 'in_progress' ? 0 : 1);
 }
 
 /** Website status owns completion; old caches without status remain unfinished. */
@@ -20,7 +21,7 @@ export function sortWebsiteMatches<T extends MatchOrderFields>(matches: readonly
   return [...matches].sort((a, b) => {
     const groupDifference = group(a) - group(b);
     if (groupDifference) return groupDifference;
-    const ended = group(a) === 2;
+    const ended = group(a) === 4;
     const aTime = (ended ? timestamp(a.completedAt) : null) ?? timestamp(a.scheduledAt);
     const bTime = (ended ? timestamp(b.completedAt) : null) ?? timestamp(b.scheduledAt);
     if (aTime === null && bTime !== null) return 1;

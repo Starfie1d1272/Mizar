@@ -8,6 +8,7 @@ import { RivalHubSyncControls } from './RivalHubSyncControls';
 type Connection = {
   paired: boolean;
   displayName: string | null;
+  authorizedUser?: { userId: string; displayName: string } | null;
   activeMatchId: string | null;
   activeSourceMatchId: string | null;
   activeDeviceName: string | null;
@@ -244,7 +245,10 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
                 <div>
                   <h2>{schedule?.competition?.name ?? '已连接赛事'}</h2>
                   <p>
-                    {connection.displayName} · {schedule?.competition?.name ?? '赛事已连接'}
+                    {schedule?.viewer || connection.authorizedUser
+                      ? `授权账号：${(schedule?.viewer ?? connection.authorizedUser)!.displayName}`
+                      : '授权账号：暂未提供'}{' '}
+                    · {schedule?.competition?.name ?? '赛事已连接'}
                   </p>
                 </div>
                 <StatusPill tone={loadError || connection.refreshError ? 'warning' : 'success'}>
@@ -296,6 +300,7 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
                 <p role="status">{loadError ? '赛程未能加载' : '正在加载近期比赛…'}</p>
               ) : (
                 <RivalHubMatchLibrary
+                  key={schedule.library?.scopeId}
                   schedule={schedule}
                   selecting={selecting}
                   activeMatchId={connection.activeMatchId}
