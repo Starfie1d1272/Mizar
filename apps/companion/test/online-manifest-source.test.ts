@@ -26,3 +26,80 @@ it('never sends a credential to an insecure remote origin or a redirect', async 
   });
   await expect(source.load()).rejects.toBeInstanceOf(SourceLoadError);
 });
+
+it.each(['network', '503'] as const)(
+  'backs off bounded %s failures and permits a fresh recovery',
+  async (failure) => {
+    let clock = 0;
+    const waits: number[] = [];
+    let failing = true;
+    const fetchImpl = vi.fn(() => {
+      if (!failing) return Promise.resolve(Response.json({ ok: true }));
+      if (failure === 'network') return Promise.reject(new TypeError('fixture network'));
+      return Promise.resolve(new Response(null, { status: 503 }));
+    });
+    const source = createOnlineManifestSource('m1', {
+      urlTemplate: 'https://fixture.test/{matchId}',
+      readToken: 'fixture-only',
+      fetchImpl,
+      now: () => clock,
+      random: () => 0.5,
+      wait: (ms) => {
+        waits.push(ms);
+        clock += ms;
+        return Promise.resolve();
+      },
+    });
+    await expect(source.load()).rejects.toBeInstanceOf(SourceLoadError);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(waits).toEqual([750, 1500]);
+    failing = false;
+    await expect(source.load()).resolves.toEqual({ ok: true });
+  },
+);
+
+it.each(['120', 'Thu, 01 Jan 1970 00:02:00 GMT'])(
+  'honors Retry-After %s across later timer calls',
+  async (retryAfter) => {
+    let clock = 0;
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(new Response(null, { status: 429, headers: { 'retry-after': retryAfter } })),
+    );
+    const retryState = { notBefore: 0 };
+    const config = {
+      urlTemplate: 'https://fixture.test/{matchId}',
+      readToken: 'fixture-only',
+      fetchImpl,
+      retryState,
+      now: () => clock,
+      random: () => 0,
+      wait: () => Promise.reject(new Error('must not hold a long request')),
+    };
+    await expect(createOnlineManifestSource('m1', config).load()).rejects.toBeInstanceOf(
+      SourceLoadError,
+    );
+    clock = 10_000;
+    await expect(createOnlineManifestSource('m1', config).load()).rejects.toBeInstanceOf(
+      SourceLoadError,
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    clock = 120_000;
+    fetchImpl.mockImplementation(() => Promise.resolve(Response.json({ ok: true })));
+    await expect(createOnlineManifestSource('m1', config).load()).resolves.toEqual({ ok: true });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  },
+);
+
+it.each([401, 403, 404, 304])(
+  'does not retry HTTP %i or accept a 304 without an entity',
+  async (status) => {
+    const fetchImpl = vi.fn(() => Promise.resolve(new Response(null, { status })));
+    const source = createOnlineManifestSource('m1', {
+      urlTemplate: 'https://fixture.test/{matchId}',
+      readToken: 'fixture-only',
+      fetchImpl,
+    });
+    await expect(source.load()).rejects.toBeInstanceOf(SourceLoadError);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  },
+);

@@ -99,6 +99,10 @@ RivalHub LIVE 回执必须明确 `accepted:true` 才表示应用接受。`accept
 
 RivalHub 集成使用赛事级凭据、数据源认领和授权修订号。认领后还需建立地图开始证据：实时快照等待当前认领轮次、生产实例、会话、代际和地图执行的 `map_started` 获得成功回执后才发送，等待期间不缓存旧快照；重新认领或执行变化需要新回执。此投递门槛不替代网站的身份、首发与权限校验，见 [ADR-0050](https://github.com/Starfie1d1272/Mizar/blob/3b187e168ad755ede595eb8371bfaf5933c044fa/docs/decisions/0050-live-after-map-start-acknowledgement.md)。恢复队列保留事件原始生产实例；适配器只使用匹配该实例与会话的认领上传，旧事件在本机终止投递，不借用新认领或当前首发证据，见 [ADR-0051](https://github.com/Starfie1d1272/Mizar/blob/3b187e168ad755ede595eb8371bfaf5933c044fa/docs/decisions/0051-recovered-events-and-source-authority.md)。可靠队列超时向底层传递取消信号，取消或已被新地图开始投递取代的回执不修改本地授权与地图确认。授权与低频控制请求采用有界等待，重叠授权轮询共用一个在途请求；超时提示使用中文，原始错误保留为日志原因。公开上传速率、超时和队列限制以[连接适配器](../../apps/companion/src/match-context/rivalhub-connection.ts)及[输出实现](../../apps/companion/src/output)为准。`GET /local/v1/reliable-output-status` 仅提供本机投递诊断，不返回完整事件。
 
+`GET /local/v1/rivalhub-schedule` 仅刷新轻量赛程，不预取整表详情。`GET /local/v1/rivalhub-library/:matchId` 按需读取已授权赛事中的单场详情，离线时明确区分已有浏览缓存与缺失资料；缓存不能授予在线来源资格。详情在打开、切换、显式刷新及持续浏览的每分钟读取，当前制作比赛仍每十秒刷新。同授权范围、同场在途读取共享已校验实体；相邻一秒内的自动刷新可复用刚校验的实体，显式读取和载入仍请求网站。授权变化隔离旧回包与缓存，不复用旧 ETag。临时读取故障有界退避，429 遵守 Retry-After；不重放 LIVE 或写请求。网站赛程超过内部相邻赛程契约上限时，保留完整浏览列表，内部相邻赛程不可用并向操作者提示限制，不截断比赛。
+
+授权响应的可选 `authorizedUser` 与赛程的可选 `viewer`（仅 `userId`、`displayName`）、行级 `assignedToViewer` 仅用于连接状态及操作员比赛库；新鲜赛程更新身份和认领标记，字段缺失保持未知。身份和认领信息不进入 Core、通用比赛事实、HUD、雷达或公开输出。排序只置顶本人认领的未结束比赛，历史比赛仍置底；刷新保留有效的手动选择。
+
 `POST /operator/rivalhub/refresh` 使用已配对凭据刷新当前关联比赛，不接收浏览器凭据或任意 URL。与每 10 秒自动刷新共用单个在途请求；不同比赛的待确认选择不被后台刷新覆盖。`GET /local/v1/rivalhub-connection` 包含关联的 `activeMatchId`、`sourceReady`、`sourceBlockedReason`、`lastRefreshAt`、`refreshError` 与受限网站工作台地址。关联 ID 不证明推送资格；十人当前首发未到齐时不消耗界面自动认领次数，后端认领继续核对现场模式、在线资料和快照身份。
 
 `GET /local/v1/obs` 保留实际节目场景、Mizar 预期场景及是否对齐，并增加只读 `programEvidence`：当前集合归属、注册场景与包装类型、预期来源的存在／启用状态，以及游戏采集类型、目标程序类别、目标窗口可选状态、可选 CS2 窗口数、OBS 报告活动与来源尺寸。检查期间场景或集合变化标记 `changed`；查询失败为 null，保持连接事实并记录脱敏原始错误，不解释为没有来源。完整帧健康与实际捕获进程身份保持未验证，不从活动或尺寸推断钩子成功，不将全屏包装未使用游戏源解释为故障。支持包保留这些有限值、节目控制模式、资料有效性、身份与地图绑定状态，不导出任意场景名、窗口标题、输入设置或凭据。

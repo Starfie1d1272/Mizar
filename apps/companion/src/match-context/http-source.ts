@@ -7,6 +7,11 @@ export interface OnlineManifestConfig {
   readonly timeoutMs?: number;
   readonly retries?: number;
   readonly fetchImpl?: typeof fetch;
+  readonly retryState?: { notBefore: number };
+  readonly isCurrent?: () => boolean;
+  readonly now?: () => number;
+  readonly random?: () => number;
+  readonly wait?: (ms: number) => Promise<void>;
 }
 
 function manifestUrl(template: string, matchId: string): URL {
@@ -34,16 +39,31 @@ export function createOnlineManifestSource(
   const timeoutMs = config.timeoutMs ?? 3000;
   const retries = config.retries ?? 2;
   const fetchImpl = config.fetchImpl ?? fetch;
+  const now = config.now ?? Date.now;
+  const random = config.random ?? Math.random;
+  const wait =
+    config.wait ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const retryState = config.retryState ?? { notBefore: 0 };
+  const backoff = (attempt: number) => Math.min(4000, 500 * 2 ** attempt) * (1 + random());
+  const current = () => {
+    if (config.isCurrent && !config.isCurrent())
+      throw new SourceLoadError('赛事连接已变化。', undefined, 'authorization');
+  };
   return {
     kind: 'online',
     load: async () => {
+      current();
+      if (retryState.notBefore > now())
+        throw new SourceLoadError('网站请求过于频繁，请稍后重试。', undefined, 'unavailable', 429);
       for (let attempt = 0; attempt <= retries; attempt++) {
+        current();
         try {
           const response = await fetchImpl(url, {
             headers: { Accept: 'application/json', Authorization: `Bearer ${config.readToken}` },
             redirect: 'manual',
             signal: AbortSignal.timeout(timeoutMs),
           });
+          current();
           if (response.status === 401 || response.status === 403)
             throw new SourceLoadError(
               'RivalHub 只读凭据无效。',
@@ -57,7 +77,26 @@ export function createOnlineManifestSource(
               undefined,
               'invalid_response',
             );
-          if ((response.status === 429 || response.status >= 500) && attempt < retries) continue;
+          if (response.status === 429 || response.status >= 500) {
+            let delay = backoff(attempt);
+            if (response.status === 429) {
+              const header = response.headers.get('retry-after');
+              const seconds =
+                header !== null && /^\d+(?:\.\d+)?$/.test(header.trim())
+                  ? Number(header) * 1000
+                  : NaN;
+              const dateDelay = header === null ? NaN : Date.parse(header) - now();
+              const retryAfter = Number.isFinite(seconds) ? seconds : dateDelay;
+              if (Number.isFinite(retryAfter)) delay = Math.max(delay, retryAfter);
+              retryState.notBefore = Math.max(retryState.notBefore, now() + delay);
+            }
+            await response.body?.cancel();
+            // A long Retry-After suppresses later timer reads too; do not hold a request open.
+            if (attempt < retries && delay <= 8000) {
+              await wait(delay);
+              continue;
+            }
+          }
           if (!response.ok)
             throw new SourceLoadError(
               `RivalHub Manifest HTTP ${response.status}`,
@@ -65,8 +104,11 @@ export function createOnlineManifestSource(
               response.status === 404 ? 'not_found' : 'unavailable',
               response.status,
             );
-          return await readOnlineManifestResponse(response);
+          const input = await readOnlineManifestResponse(response);
+          current();
+          return input;
         } catch (error: unknown) {
+          current();
           if (error instanceof SourceLoadError) throw error;
           if (attempt === retries)
             throw new SourceLoadError(
@@ -77,6 +119,7 @@ export function createOnlineManifestSource(
                 ? 'timeout'
                 : 'network',
             );
+          await wait(backoff(attempt));
         }
       }
       throw new SourceLoadError('RivalHub Manifest 暂时不可用。');

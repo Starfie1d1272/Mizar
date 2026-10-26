@@ -56,8 +56,8 @@ export function registerRivalHubConnectionRoutes(
       ? binding
       : undefined;
   };
-  const sourceFor = (matchId: string) => {
-    const source = options.connection.matchSource(matchId);
+  const sourceFor = (matchId: string, fresh = true) => {
+    const source = options.connection.matchSource(matchId, fresh);
     return {
       ...source,
       load: async () => {
@@ -73,7 +73,7 @@ export function registerRivalHubConnectionRoutes(
       },
     };
   };
-  const refresh = () => {
+  const refresh = (fresh = true) => {
     if (refreshing) return refreshing;
     const binding = linkedBinding();
     if (!binding || !options.controller) throw new Error('请先选择并确认加载赛事比赛。');
@@ -83,7 +83,7 @@ export function registerRivalHubConnectionRoutes(
       throw new Error('请先确认或重新选择待加载的比赛。');
     const controller = options.controller;
     refreshing = controller
-      .refreshOnlineMatch(sourceFor(binding.context.matchId), options.canUpdatePlan)
+      .refreshOnlineMatch(sourceFor(binding.context.matchId, fresh), options.canUpdatePlan)
       .then((result) => {
         if (!result.ok) {
           app.log.warn(
@@ -115,7 +115,7 @@ export function registerRivalHubConnectionRoutes(
   const timer = setInterval(() => {
     if (linkedBinding() && !options.controller?.isOnlineCandidateLoading())
       void Promise.resolve()
-        .then(refresh)
+        .then(() => refresh(false))
         .catch(() => undefined);
   }, 10_000);
   timer.unref();
@@ -224,6 +224,25 @@ export function registerRivalHubConnectionRoutes(
       return reply.code(502).send({ message: '赛事赛程暂时无法获取。' });
     }
   });
+  app.get<{ Params: { matchId: string }; Querystring: { fresh?: string } }>(
+    '/local/v1/rivalhub-library/:matchId',
+    async (request, reply) => {
+      if (!options.connection.view().paired)
+        return reply.code(404).send({ message: '尚未连接赛事。' });
+      try {
+        return reply
+          .header('cache-control', 'no-store')
+          .send(
+            await options.connection.libraryDetail(
+              request.params.matchId,
+              request.query.fresh !== '0',
+            ),
+          );
+      } catch {
+        return reply.code(502).send({ message: '完整资料暂时无法获取，请重试。' });
+      }
+    },
+  );
   app.post('/operator/rivalhub/disconnect', async (request, reply) => {
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ message: '本机页面来源无效。' });

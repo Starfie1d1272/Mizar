@@ -250,3 +250,118 @@ describe('website match library order', () => {
     expect(container.querySelector('h2')?.textContent).toBe('a vs opponent');
   });
 });
+
+it('pins only the viewer assigned unfinished matches, independently of display names', () => {
+  const rows = [
+    { matchId: 'other-live', status: 'in_progress', scheduledAt: null, assignedToViewer: false },
+    {
+      matchId: 'mine-upcoming',
+      status: 'scheduled',
+      scheduledAt: '2026-11-01',
+      assignedToViewer: true,
+    },
+    { matchId: 'mine-ended', status: 'finished', scheduledAt: null, assignedToViewer: true },
+    { matchId: 'mine-live', status: 'in_progress', scheduledAt: null, assignedToViewer: true },
+    { matchId: 'unknown', status: 'scheduled', scheduledAt: null },
+  ];
+  expect(sortWebsiteMatches(rows).map((row) => row.matchId)).toEqual([
+    'mine-live',
+    'mine-upcoming',
+    'other-live',
+    'unknown',
+    'mine-ended',
+  ]);
+  // A server correction/removal immediately returns the match to its normal group.
+  expect(
+    sortWebsiteMatches(rows.map((row) => ({ ...row, assignedToViewer: false }))).map(
+      (row) => row.matchId,
+    ),
+  ).toEqual(['mine-live', 'other-live', 'mine-upcoming', 'unknown', 'mine-ended']);
+});
+
+it('reads only visible details, stops hidden/unmounted timers, and ignores late A after switching to B', async () => {
+  vi.useFakeTimers();
+  const flush = async (action: () => void) => {
+    await act(async () => {
+      action();
+      await Promise.resolve();
+    });
+  };
+  let resolveA: ((response: Response) => void) | undefined;
+  const fetchMock = vi.fn((url: string | URL | Request) => {
+    if (toUrlString(url).includes('/a?'))
+      return new Promise<Response>((resolve) => {
+        resolveA = resolve;
+      });
+    return Promise.resolve(Response.json({ entry: null, error: 'B 缺少离线资料' }));
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  const schedule: WebsiteSchedule = {
+    competition: { name: 'fixture' },
+    viewer: { userId: 'user-1', displayName: '同名' },
+    matches: ['a', 'b'].map((matchId) => ({
+      matchId,
+      scheduledAt: null,
+      format: 'bo3',
+      entrantA: { name: matchId },
+      entrantB: { name: '同名' },
+      assignedToViewer: matchId === 'b',
+    })),
+  };
+  await flush(() =>
+    root!.render(
+      <details>
+        <summary>比赛库</summary>
+        <RivalHubMatchLibrary
+          schedule={schedule}
+          selecting={false}
+          activeMatchId={null}
+          refreshing={false}
+          onRefresh={() => {}}
+          onSelect={() => {}}
+        />
+      </details>,
+    ),
+  );
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(600_000);
+  });
+  expect(fetchMock).toHaveBeenCalledTimes(0);
+  const details = container.querySelector('details')!;
+  await flush(() => {
+    details.open = true;
+    details.dispatchEvent(new Event('toggle', { bubbles: true }));
+  });
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(toUrlString(fetchMock.mock.calls[0]![0])).toContain('/b?fresh=1');
+  expect(container.textContent).toContain('授权账号：同名');
+  expect(container.textContent).toContain('我认领的');
+  const choose = (name: string) =>
+    [...container.querySelectorAll('button')].find((button) =>
+      button.textContent?.includes(`${name} vs 同名`),
+    )!;
+  await flush(() => choose('a').click());
+  await flush(() => choose('b').click());
+  await flush(() => resolveA?.(Response.json({ entry: null, error: 'late A' })));
+  expect(container.textContent).not.toContain('late A');
+  expect(container.textContent).toContain('B 缺少离线资料');
+  const before = fetchMock.mock.calls.length;
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(600_000);
+  });
+  expect(fetchMock.mock.calls.length - before).toBe(10);
+  await flush(() => {
+    details.open = false;
+    details.dispatchEvent(new Event('toggle', { bubbles: true }));
+  });
+  const hidden = fetchMock.mock.calls.length;
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(600_000);
+  });
+  expect(fetchMock).toHaveBeenCalledTimes(hidden);
+  await flush(() => root!.render(null));
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(60_000);
+  });
+  expect(fetchMock).toHaveBeenCalledTimes(hidden);
+});
