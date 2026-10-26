@@ -18,7 +18,13 @@ type Connection = {
 
 type Schedule = WebsiteSchedule;
 
-export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches' | 'settings' }) {
+export function RivalHubPreparationPanel({
+  mode = 'matches',
+  onLoaded = () => window.location.assign('/?tab=match'),
+}: {
+  mode?: 'matches' | 'settings';
+  onLoaded?: () => void;
+}) {
   const [connection, setConnection] = useState<Connection | null>(null);
   const [schedule, setSchedule] = useState<Schedule | null>(null);
   const [pairing, setPairing] = useState(false);
@@ -26,6 +32,7 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
   const [authorizeUrl, setAuthorizeUrl] = useState<string | null>(null);
   const [rePairing, setRePairing] = useState(false);
   const [selecting, setSelecting] = useState(false);
+  const selectingRef = useRef(false);
   const [confirming, setConfirming] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -149,7 +156,8 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
   }
 
   async function handleSelectMatch(matchId: string) {
-    if (!matchId) return;
+    if (!matchId || selectingRef.current) return;
+    selectingRef.current = true;
     setSelecting(true);
     setError(null);
     setMessage(null);
@@ -157,16 +165,22 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
       const response = await fetch('/operator/rivalhub/select', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ matchId }),
+        body: JSON.stringify({ matchId, activate: true }),
+        signal: AbortSignal.timeout(30_000),
       });
       if (!response.ok) {
         const data = (await response.json().catch(() => null)) as { message?: string } | null;
         throw new Error(data?.message ?? '比赛选择未完成。');
       }
-      setMessage('已取得比赛资料，请核对双方后确认加载。');
+      const result = (await response.json()) as { loaded?: boolean; matchId?: string };
+      if (result.loaded !== true || result.matchId !== matchId)
+        throw new Error('比赛尚未确认载入，请刷新当前本场后重试。');
+      setMessage('本场已载入。');
+      onLoaded();
     } catch (err) {
       setError(err instanceof Error ? err.message : '选择比赛失败。');
     } finally {
+      selectingRef.current = false;
       setSelecting(false);
     }
   }
@@ -178,8 +192,8 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
     setMessage(null);
     try {
       await switchToRivalhubBp(bpWorkspace.contextRevision, bpWorkspace.pendingRivalhub.revision);
-      setMessage('在线比赛已加载。进入现场工作区后会检查实时数据源；无人占用时自动认领。');
-      await refresh();
+      setMessage('本场已载入。');
+      onLoaded();
     } catch (err) {
       setError(err instanceof Error ? err.message : '确认在线比赛失败。');
     } finally {
@@ -296,21 +310,7 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
           ) : null}
           {mode === 'matches' ? (
             <>
-              {schedule === null ? (
-                <p role="status">{loadError ? '赛程未能加载' : '正在加载近期比赛…'}</p>
-              ) : (
-                <RivalHubMatchLibrary
-                  key={schedule.library?.scopeId}
-                  schedule={schedule}
-                  selecting={selecting}
-                  activeMatchId={connection.activeMatchId}
-                  refreshing={refreshing}
-                  onRefresh={() => void refresh()}
-                  onSelect={(id) => void handleSelectMatch(id)}
-                />
-              )}
-
-              {bpWorkspace?.pendingRivalhub ? (
+              {!selecting && bpWorkspace?.pendingRivalhub ? (
                 <div className="operator-rivalhub-candidate">
                   <div className="operator-rivalhub-candidate-info">
                     <small>待确认比赛候选</small>
@@ -333,6 +333,21 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
                   </Button>
                 </div>
               ) : null}
+
+              {schedule === null ? (
+                <p role="status">{loadError ? '赛程未能加载' : '正在加载近期比赛…'}</p>
+              ) : (
+                <RivalHubMatchLibrary
+                  key={schedule.library?.scopeId}
+                  schedule={schedule}
+                  selecting={selecting}
+                  actionError={error}
+                  activeMatchId={connection.activeMatchId}
+                  refreshing={refreshing}
+                  onRefresh={() => void refresh()}
+                  onSelect={(id) => void handleSelectMatch(id)}
+                />
+              )}
             </>
           ) : null}
         </>
@@ -357,7 +372,9 @@ export function RivalHubPreparationPanel({ mode = 'matches' }: { mode?: 'matches
           {schedule ? ' 当前保留上次赛程。' : ''}
         </StatusBanner>
       ) : null}
-      {error ? <StatusBanner tone="danger">{error}</StatusBanner> : null}
+      {error && !(mode === 'matches' && schedule) ? (
+        <StatusBanner tone="danger">{error}</StatusBanner>
+      ) : null}
       {message ? <StatusBanner tone="info">{message}</StatusBanner> : null}
     </Container>
   );

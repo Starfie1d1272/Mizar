@@ -286,13 +286,31 @@ export function registerRivalHubConnectionRoutes(
   app.post('/operator/rivalhub/select', { bodyLimit: 256 }, async (request, reply) => {
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ message: '本机页面来源无效。' });
-    const body = request.body as { matchId?: unknown };
+    const body = request.body as { matchId?: unknown; activate?: unknown };
     if (!options.controller || typeof body?.matchId !== 'string')
       return reply.code(400).send({ message: '请选择一场比赛。' });
     try {
       const source = sourceFor(body.matchId);
-      const outcome = await options.controller.stageOnlineMatch(body.matchId, source);
-      if (outcome.ok) return { pending: true };
+      const outcome =
+        body.activate === true
+          ? await options.controller.loadOnlineMatch(body.matchId, source)
+          : await options.controller.stageOnlineMatch(body.matchId, source);
+      if (outcome.ok)
+        return body.activate === true
+          ? { loaded: true, matchId: outcome.binding.context.matchId }
+          : { pending: true };
+      if (body.activate === true) {
+        const persistenceFailed = outcome.diagnostics.some(
+          (item) => item.code === 'lkg_persistence_failed',
+        );
+        const stale = outcome.diagnostics.some((item) => item.code === 'selection_stale');
+        if (persistenceFailed || stale)
+          return reply.code(persistenceFailed ? 500 : 409).send({
+            message: persistenceFailed
+              ? '比赛保存失败，当前本场保持不变，请重试。'
+              : '本场或候选资料已变化，尚未载入，请重新选择。',
+          });
+      }
       // Diagnostics contain contract paths/codes only, never rejected input values.
       request.log.warn({ diagnostics: outcome.diagnostics }, 'RivalHub manifest selection failed');
       const fields = outcome.diagnostics

@@ -34,6 +34,7 @@ export type WebsiteSchedule = {
 export function RivalHubMatchLibrary({
   schedule,
   selecting,
+  actionError,
   onSelect,
   activeMatchId,
   refreshing,
@@ -41,6 +42,7 @@ export function RivalHubMatchLibrary({
 }: {
   schedule: WebsiteSchedule;
   selecting: boolean;
+  actionError?: string | null;
   onSelect: (id: string) => void;
   activeMatchId: string | null;
   refreshing: boolean;
@@ -204,6 +206,7 @@ export function RivalHubMatchLibrary({
         footer={
           match ? (
             <>
+              {actionError ? <StatusBanner tone="danger">{actionError}</StatusBanner> : null}
               <small>
                 {entry ? `最近核对 ${libraryMatchTime(entry.checkedAt)} · ` : ''}浏览不会切换本场
               </small>

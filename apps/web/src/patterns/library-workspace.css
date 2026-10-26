@@ -34,6 +34,7 @@
   border-bottom: var(--mizar-line-border) solid var(--mizar-border-default);
 }
 .library-detail-actions {
+  flex-wrap: wrap;
   border-top: var(--mizar-line-border) solid var(--mizar-border-default);
 }
 .library-detail-heading > :first-child,
@@ -86,4 +87,8 @@
   padding-bottom: var(--mizar-layout-padding);
   display: grid;
   gap: var(--mizar-layout-compact);
+}
+
+.library-detail-actions > .mizar-status-banner {
+  flex-basis: 100%;
 }

@@ -489,3 +489,100 @@ it('renders the real server viewer and assignment flags and degrades to unknown 
   expect(container.textContent).not.toContain('我认领的');
   expect(container.querySelectorAll('.library-list button')).toHaveLength(3);
 });
+
+describe('website library one-action load', () => {
+  async function renderPanel(load: () => Promise<Response>) {
+    const { RivalHubPreparationPanel } = await import('../src/operator/RivalHubPreparationPanel');
+    const onLoaded = vi.fn();
+    const fetchMock = vi.fn((url: string | URL | Request) => {
+      const path = toUrlString(url);
+      if (path === '/operator/rivalhub/select') return load();
+      if (path === '/local/v1/rivalhub-connection')
+        return Promise.resolve(
+          Response.json({
+            paired: true,
+            displayName: 'test',
+            activeMatchId: null,
+            activeSourceMatchId: null,
+            activeDeviceName: null,
+          }),
+        );
+      if (path === '/local/v1/rivalhub-schedule')
+        return Promise.resolve(
+          Response.json({
+            competition: { name: '赛事' },
+            matches: [
+              {
+                matchId: 'requested-match',
+                scheduledAt: null,
+                entrantA: { name: '甲' },
+                entrantB: { name: '乙' },
+                format: 'bo3',
+              },
+            ],
+          }),
+        );
+      return Promise.resolve(Response.json({ entry: null, error: null }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await act(async () => {
+      root!.render(<RivalHubPreparationPanel onLoaded={onLoaded} />);
+    });
+    const button = Array.from(container.querySelectorAll('button')).find(
+      (b) => b.textContent === '核对并载入本场',
+    )!;
+    expect(button).toBeDefined();
+    return { onLoaded, fetchMock, button };
+  }
+
+  it('commits with the original button and navigates only after confirmed load', async () => {
+    let complete!: (value: Response) => void;
+    const { button, fetchMock, onLoaded } = await renderPanel(
+      () =>
+        new Promise((resolve) => {
+          complete = resolve;
+        }),
+    );
+    await act(async () => {
+      button.click();
+      button.click();
+    });
+    expect(onLoaded).not.toHaveBeenCalled();
+    expect(
+      fetchMock.mock.calls.filter((c) => toUrlString(c[0]) === '/operator/rivalhub/select'),
+    ).toHaveLength(1);
+    expect(button.disabled).toBe(true);
+    const request = vi
+      .mocked(fetch)
+      .mock.calls.find((c) => toUrlString(c[0]) === '/operator/rivalhub/select');
+    expect(JSON.parse(String(request?.[1]?.body))).toEqual({
+      matchId: 'requested-match',
+      activate: true,
+    });
+    await act(async () => {
+      complete(Response.json({ loaded: true, matchId: 'requested-match' }));
+    });
+    expect(onLoaded).toHaveBeenCalledTimes(1);
+    expect(container.textContent).not.toContain('确认加载比赛');
+  });
+
+  it.each([
+    [200, { pending: true }],
+    [200, { loaded: true, matchId: 'different-match' }],
+    [409, { message: '本场已变化，未载入' }],
+    [500, { message: '保存失败，原本场保留' }],
+  ])(
+    'does not treat unconfirmed response %i as loaded and puts the error beside the action',
+    async (status, payload) => {
+      const { button, onLoaded } = await renderPanel(() =>
+        Promise.resolve(Response.json(payload, { status })),
+      );
+      await act(async () => {
+        button.click();
+      });
+      expect(onLoaded).not.toHaveBeenCalled();
+      expect(container.querySelector('.library-detail-actions [role="alert"]')).not.toBeNull();
+      expect(button.disabled).toBe(false);
+    },
+  );
+});
