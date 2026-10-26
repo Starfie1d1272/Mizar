@@ -556,3 +556,48 @@ it('consumes real PostgreSQL/server new and legacy schedules without leaking ope
     expect(publicFacts).not.toContain(identity.authorizedUser.userId);
   }
 });
+
+it('loads an explicitly selected website match in one request while preserving stage-only callers', async () => {
+  const { default: Fastify } = await import('fastify');
+  const { registerRivalHubConnectionRoutes } =
+    await import('../src/match-context/rivalhub-routes.js');
+  const { MatchContextController, MatchManifestLkgStore } =
+    await import('../src/match-context/index.js');
+  const f = await connected(1);
+  const controller = new MatchContextController({
+    lkgStore: new MatchManifestLkgStore({ filePath: join(f.root, 'selected-lkg.json') }),
+  });
+  const app = Fastify();
+  registerRivalHubConnectionRoutes(app, {
+    connection: f.connection,
+    controller,
+    currentSnapshot: () => null,
+    originPolicy: {
+      mode: 'loopback',
+      bindHost: '127.0.0.1',
+      allowedOrigins: ['http://127.0.0.1:3000'],
+    },
+  });
+  try {
+    const staged = await app.inject({
+      method: 'POST',
+      url: '/operator/rivalhub/select',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: { matchId: f.id },
+    });
+    expect(staged.json()).toEqual({ pending: true });
+    expect(controller.getActiveBinding()).toBeUndefined();
+    const loaded = await app.inject({
+      method: 'POST',
+      url: '/operator/rivalhub/select',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: { matchId: f.id, activate: true },
+    });
+    expect(loaded.statusCode).toBe(200);
+    expect(loaded.json()).toEqual({ loaded: true, matchId: f.id });
+    expect(controller.getActiveBinding()?.context.matchId).toBe(f.id);
+    expect(controller.getPendingOnlineCandidate()).toBeUndefined();
+  } finally {
+    await app.close();
+  }
+});

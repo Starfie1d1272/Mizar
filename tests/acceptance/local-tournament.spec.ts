@@ -187,6 +187,7 @@ test('local and website libraries share match details while browsing and loading
           });
         }
         if (path === '/operator/rivalhub/select') {
+          expect(request.postDataJSON()).toMatchObject({ activate: true });
           selections.push((request.postDataJSON() as { matchId: string }).matchId);
           return route.fulfill({ json: { ok: true } });
         }
@@ -244,6 +245,8 @@ test('local and website libraries share match details while browsing and loading
     await capture('03-website-browse');
     await detail.getByRole('button', { name: '核对并载入本场', exact: true }).click();
     await expect.poll(() => selections).toEqual([second.matchId]);
+    // A legacy/unconfirmed acknowledgement is not a completed load.
+    await expect(detail.getByRole('alert')).toContainText('比赛尚未确认载入');
     const before = refreshes;
     cacheMissing = true;
     await browser.getByRole('button', { name: '刷新比赛', exact: true }).click();
