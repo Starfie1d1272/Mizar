@@ -38,7 +38,7 @@ impl Default for Preferences {
         Self {
             quality: Quality::VeryHigh,
             frame_rate_limit: 60,
-            prefer_mulnx: true,
+            prefer_mulnx: false,
         }
     }
 }
@@ -50,7 +50,7 @@ impl Preferences {
         Ok(Self {
             quality: Quality::parse(quality)?,
             frame_rate_limit,
-            prefer_mulnx: true,
+            prefer_mulnx: false,
         })
     }
     pub fn from_json(value: &Value) -> Result<Self, String> {
@@ -89,12 +89,27 @@ mod tests {
     use super::*;
     #[test]
     fn launch_choice_survives_restart_and_legacy_keeps_steam() {
-        assert!(Preferences::default().prefer_mulnx);
+        assert_eq!(
+            Preferences::default().json(),
+            json!({"qualityPreset": "very-high", "frameRateLimit": 60, "preferMulnx": false})
+        );
+        for quality in ["very-high", "high", "medium", "preserve"] {
+            for limit in [0, 30, 60] {
+                assert!(!Preferences::new(quality, limit).unwrap().prefer_mulnx);
+            }
+        }
         let legacy = json!({"qualityPreset":"high","frameRateLimit":30});
         let mut choice = Preferences::from_json(&legacy).unwrap();
         assert!(!choice.prefer_mulnx);
-        choice.prefer_mulnx = true;
-        assert_eq!(Preferences::from_json(&choice.json()).unwrap(), choice);
+        for prefer_mulnx in [true, false] {
+            choice.prefer_mulnx = prefer_mulnx;
+            assert_eq!(Preferences::from_json(&choice.json()).unwrap(), choice);
+        }
+        for preserve in [true, false] {
+            let old = Preferences::from_json(&json!({"preserveQuality": preserve})).unwrap();
+            assert!(!old.prefer_mulnx);
+            assert_eq!(old.quality == Quality::Preserve, preserve);
+        }
         let mut invalid = legacy;
         invalid["preferMulnx"] = json!("true");
         assert!(Preferences::from_json(&invalid).is_err());

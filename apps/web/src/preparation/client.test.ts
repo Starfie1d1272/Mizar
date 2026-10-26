@@ -284,15 +284,45 @@ describe('managed CS2 production entry and cleanup', () => {
     expect(calls).not.toContain('/local/v1/observer-assist');
     expect(calls).not.toContain('observer_command');
   });
-  it('keeps HUD checks out of presentation and leaves launch-specific checks to native launch', async () => {
-    const calls = setup('preflight', 'preparation', false, true, [
-      { preferMulnx: true, running: false, pending: false },
-    ]);
-    await productionAction('enter', preparation);
-    expect(calls).toContain('launch_mulnx');
-    expect(calls).toContain('present_production');
-    expect(calls).not.toContain('observer_command');
-  });
+  it.each([false, true])(
+    'keeps HUD preflight out of workbench entry (MulNX=%s)',
+    async (preferMulnx) => {
+      const calls = setup(
+        'preflight',
+        'preparation',
+        false,
+        true,
+        [{ preferMulnx, running: false, pending: false }],
+        true,
+      );
+      await productionAction('enter', preparation);
+      expect(calls).toContain(preferMulnx ? 'launch_mulnx' : 'start_managed_cs2');
+      expect(calls).toContain('present_production');
+      expect(calls).not.toContain('/local/v1/observer-assist');
+      expect(calls).not.toContain('observer_command');
+    },
+  );
+  it.each([false, true])(
+    'standard entry preserves the game lifecycle (already running=%s)',
+    async (running) => {
+      const calls = setup(undefined, 'preparation', !running, true, [
+        { preferMulnx: false, running, pending: running },
+      ]);
+      await productionAction('enter', preparation);
+      expect(calls).not.toContain('launch_mulnx');
+      expect(calls).not.toContain('attach_external_cs2');
+      expect(calls.indexOf('start_managed_cs2')).toBeLessThan(
+        calls.indexOf('/operator/production'),
+      );
+      expect(calls.indexOf('/operator/production')).toBeLessThan(
+        calls.indexOf('present_production'),
+      );
+      expect(calls).not.toContain('observer_command');
+      expect(calls).not.toContain('set_cs2_preferences');
+      await productionAction('finish', { ...preparation, mode: 'live' });
+      expect(calls).toContain('finish_workspace');
+    },
+  );
   it('coalesces repeated entry clicks through game startup', async () => {
     vi.useFakeTimers();
     const calls = setup(undefined, 'preparation', false, true, [
