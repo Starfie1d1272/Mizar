@@ -67,6 +67,15 @@ export function createOnlineManifestSource(
         throw new SourceLoadError('网站请求过于频繁，请稍后重试。', undefined, 'unavailable', 429);
       for (let attempt = 0; attempt <= retries; attempt++) {
         current();
+        // Another match may extend this scope's cooldown while this read backs off.
+        // Do not restart waiting or spend a request before the newer deadline.
+        if (retryState.notBefore > now())
+          throw new SourceLoadError(
+            '网站请求过于频繁，请稍后重试。',
+            undefined,
+            'unavailable',
+            429,
+          );
         let response: Response | undefined;
         try {
           response = await fetchImpl(url, {

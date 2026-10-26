@@ -141,3 +141,49 @@ it('cancels the body when the scope changes as a response arrives', async () => 
   await expect(source.load()).rejects.toMatchObject({ code: 'authorization' });
   expect(cancel).toHaveBeenCalledTimes(1);
 });
+
+it('rechecks a shared longer Retry-After before retrying a different match that already waited', async () => {
+  let clock = 0;
+  const retryState = { notBefore: 0 };
+  const responses: ((response: Response) => void)[] = [];
+  const fetchImpl = vi.fn<typeof fetch>(
+    () => new Promise<Response>((resolve) => responses.push(resolve)),
+  );
+  let wake: (() => void) | undefined;
+  const waits: number[] = [];
+  const config = {
+    urlTemplate: 'https://fixture.test/{matchId}',
+    readToken: 'fixture-only',
+    retryState,
+    now: () => clock,
+    random: () => 0,
+    fetchImpl,
+    wait: (ms: number) => {
+      waits.push(ms);
+      return new Promise<void>((resolve) => {
+        wake = resolve;
+      });
+    },
+  };
+  const a = createOnlineManifestSource('match-a', config);
+  const b = createOnlineManifestSource('match-b', config);
+  const readingA = a.load();
+  const readingB = b.load();
+  const failedA = expect(readingA).rejects.toMatchObject({ status: 429 });
+  const failedB = expect(readingB).rejects.toMatchObject({ status: 429 });
+  expect(fetchImpl).toHaveBeenCalledTimes(2);
+  responses[0]!(new Response(null, { status: 429, headers: { 'retry-after': '2' } }));
+  await vi.waitFor(() => expect(waits).toEqual([2000]));
+  responses[1]!(new Response(null, { status: 429, headers: { 'retry-after': '60' } }));
+  await failedB;
+  expect(retryState.notBefore).toBe(60_000);
+  clock = 2000;
+  wake!();
+  await failedA;
+  expect(fetchImpl).toHaveBeenCalledTimes(2);
+  expect(waits).toEqual([2000]);
+  clock = 60_000;
+  fetchImpl.mockImplementation(() => Promise.resolve(Response.json({ ok: true })));
+  await expect(a.load()).resolves.toEqual({ ok: true });
+  expect(fetchImpl).toHaveBeenCalledTimes(3);
+});
