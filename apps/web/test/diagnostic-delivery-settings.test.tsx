@@ -240,36 +240,27 @@ it('does not let a stale console status response overwrite a newly saved consent
   expect(button('保存技术日志设置').disabled).toBe(true);
 });
 
-it('invites once without enabling, and a decline survives remount', () => {
+function showNotice() {
+  vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+  HTMLDialogElement.prototype.showModal = function () {
+    this.open = true;
+  };
+  HTMLDialogElement.prototype.close = function () {
+    this.open = false;
+    this.dispatchEvent(new Event('close'));
+  };
   mocks.status.configured = true;
   act(() => root.render(<DiagnosticDeliveryNotice />));
+}
+it('defaults the choice on but waits for confirmation before sending', async () => {
+  showNotice();
+  expect(container.querySelector('dialog')?.open).toBe(true);
+  expect(container.querySelector<HTMLInputElement>('input[type=checkbox]')!.checked).toBe(true);
   expect(container.textContent).toContain('并非匿名数据');
+  expect(container.textContent).toContain('Cloudflare');
   expect(mocks.command).not.toHaveBeenCalled();
-  act(() => button('暂不开启').click());
-  expect(container.textContent).toBe('');
-  act(() => root.render(null));
-  act(() => root.render(<DiagnosticDeliveryNotice />));
-  expect(container.textContent).toBe('');
-  expect(mocks.command).not.toHaveBeenCalled();
-});
-it('expands the existing disclosure and only enables after explicit consent', async () => {
-  mocks.status.configured = true;
-  act(() => root.render(<DiagnosticDeliveryNotice />));
-  act(() => button('了解并开启').click());
-  expect(mocks.command).not.toHaveBeenCalled();
-  expect(container.querySelector('details')?.open).toBe(true);
-  expect(container.textContent).toContain('维护者管理的 Cloudflare');
-  expect(button('同意并开启').disabled).toBe(true);
-  act(() => container.querySelector<HTMLInputElement>('input[type=checkbox]')!.click());
-  mocks.command.mockRejectedValueOnce(new Error('设置未能保存'));
   await act(async () => {
-    button('同意并开启').click();
-    await Promise.resolve();
-  });
-  expect(container.textContent).toContain('设置未能保存');
-  expect(container.textContent).toContain('暂不开启');
-  await act(async () => {
-    button('同意并开启').click();
+    button('确认并继续').click();
     await Promise.resolve();
   });
   expect(mocks.command).toHaveBeenLastCalledWith('/operator/diagnostics/consent', {
@@ -278,6 +269,67 @@ it('expands the existing disclosure and only enables after explicit consent', as
   });
   expect(container.textContent).toBe('');
 });
+it('lets the user turn the default off and remembers the choice', async () => {
+  showNotice();
+  act(() => container.querySelector<HTMLInputElement>('input[type=checkbox]')!.click());
+  await act(async () => {
+    button('确认并继续').click();
+    await Promise.resolve();
+  });
+  expect(mocks.command).not.toHaveBeenCalled();
+  act(() => root.render(null));
+  act(() => root.render(<DiagnosticDeliveryNotice />));
+  expect(container.textContent).toBe('');
+});
+it('closing the untouched dialog stays off and does not invite again', () => {
+  showNotice();
+  act(() => button('关闭').click());
+  expect(mocks.command).not.toHaveBeenCalled();
+  act(() => root.render(null));
+  act(() => root.render(<DiagnosticDeliveryNotice />));
+  expect(container.textContent).toBe('');
+});
+it('persists off after an uncertain enable instead of assuming it stayed disabled', async () => {
+  showNotice();
+  mocks.command.mockRejectedValueOnce(new Error('lost response'));
+  await act(async () => {
+    button('确认并继续').click();
+    await Promise.resolve();
+  });
+  expect(container.textContent).toContain('设置未能确认保存');
+  await act(async () => {
+    button('关闭').click();
+    await Promise.resolve();
+  });
+  expect(mocks.command).toHaveBeenLastCalledWith('/operator/diagnostics/consent', {
+    enabled: false,
+    revision: 'technical-diagnostics-v3',
+  });
+  expect(container.textContent).toBe('');
+});
+it('waits for a pending explicit choice and keeps a save failure actionable', async () => {
+  showNotice();
+  let reject!: (error: Error) => void;
+  mocks.command.mockImplementationOnce(
+    () =>
+      new Promise<void>((_resolve, fail) => {
+        reject = fail;
+      }),
+  );
+  await act(async () => {
+    button('确认并继续').click();
+    await Promise.resolve();
+  });
+  expect(button('正在保存').disabled).toBe(true);
+  act(() => button('关闭').click());
+  expect(container.querySelector('dialog')?.open).toBe(true);
+  await act(async () => {
+    reject(new Error('failed'));
+    await Promise.resolve();
+  });
+  expect(container.textContent).toContain('设置未能确认保存');
+  expect(button('确认并继续').disabled).toBe(false);
+});
 it('does not invite existing participants or unavailable installations', () => {
   act(() => root.render(<DiagnosticDeliveryNotice />));
   expect(container.textContent).toBe('');
@@ -285,28 +337,4 @@ it('does not invite existing participants or unavailable installations', () => {
   act(() => root.render(<DiagnosticDeliveryNotice />));
   expect(container.textContent).toBe('');
   expect(mocks.command).not.toHaveBeenCalled();
-});
-
-it('does not offer a decline while an explicit enable is being saved', async () => {
-  mocks.status.configured = true;
-  let finish!: () => void;
-  mocks.command.mockImplementationOnce(
-    () =>
-      new Promise<void>((resolve) => {
-        finish = resolve;
-      }),
-  );
-  act(() => root.render(<DiagnosticDeliveryNotice />));
-  act(() => button('了解并开启').click());
-  act(() => container.querySelector<HTMLInputElement>('input[type=checkbox]')!.click());
-  await act(async () => {
-    button('同意并开启').click();
-    await Promise.resolve();
-  });
-  expect(button('暂不开启').disabled).toBe(true);
-  await act(async () => {
-    finish();
-    await Promise.resolve();
-  });
-  expect(container.textContent).toBe('');
 });
