@@ -1064,6 +1064,40 @@ mod tests {
 
 
     #[test]
+    fn launch_preferences_survive_restart_and_game_config_recovery() {
+        let (root, video, store) = setup();
+        assert!(!store.preferences().unwrap().prefer_mulnx);
+        fs::create_dir_all(&store.root).unwrap();
+        // 1.6.4 settings without a launch choice retain the standard path.
+        fs::write(
+            store.root.join("preferences.json"),
+            br#"{"qualityPreset":"high","frameRateLimit":30}"#,
+        )
+        .unwrap();
+        assert!(!store.preferences().unwrap().prefer_mulnx);
+        // Explicit choices saved by alpha.4 remain authoritative, including after recovery.
+        for prefer_mulnx in [true, false] {
+            let mut saved = Preferences::new("medium", 30).unwrap();
+            saved.prefer_mulnx = prefer_mulnx;
+            store.set_preferences(saved).unwrap();
+            let original = fs::read(&video).unwrap();
+            store
+                .prepare(
+                    &video,
+                    &root.join("cs2.exe"),
+                    cs2_video::VideoSize::new(1920, 1080).unwrap(),
+                )
+                .unwrap();
+            let restarted = SessionStore::new(root.clone());
+            assert_eq!(restarted.preferences().unwrap(), saved);
+            restarted.restore().unwrap();
+            assert_eq!(fs::read(&video).unwrap(), original);
+            assert_eq!(restarted.preferences().unwrap(), saved);
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn durable_restart_recovery_does_not_overwrite_pending_backup() {
         let (root, video, store) = setup();
         let original = fs::read(&video).unwrap();
