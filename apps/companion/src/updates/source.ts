@@ -301,6 +301,19 @@ export class StableSource {
         published_at: publication.publishedAt,
         assets: [],
       };
+      // A valid signature proves origin, not freshness. A reachable but stale
+      // mirror must not hide a newer official release from a first-time client.
+      // GitHub failure leaves the authenticated mirror usable in China.
+      try {
+        const official = await this.phase('github_freshness', signal, 15_000, (deadline) =>
+          this.githubLatest(deadline),
+        );
+        if (official && compareVersions(official.tag_name.slice(1), manifest.version) > 0)
+          return official;
+      } catch (error) {
+        this.diagnostic?.('github_freshness_unavailable', error);
+        signal.throwIfAborted();
+      }
       this.mirrorCandidate = { release, manifest: await this.selectCore(manifest, attempt) };
       return release;
     } catch (error) {

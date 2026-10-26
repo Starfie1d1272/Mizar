@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { bundleFromJSON } from '@sigstore/bundle';
 import { TrustedRoot } from '@sigstore/protobuf-specs';
 import { Verifier, toSignedEntity, toTrustMaterial } from '@sigstore/verify';
-import type { Bundle, BundleVerifier } from 'sigstore';
+import { createVerifier, type Bundle, type BundleVerifier } from 'sigstore';
 import { describe, expect, it, vi } from 'vitest';
 import { UPDATE_WORKFLOW, PUBLICATION_WORKFLOW } from '../src/updates/contract.js';
 import { StableSource, verifyAttestation } from '../src/updates/source.js';
@@ -95,4 +95,92 @@ it('filters mixed and mislabeled prereleases before any update asset download', 
     expect(updateManifestSchema.shape.channel.safeParse(suffix.split('.')[0]).success).toBe(false);
   }
   expect(updateManifestSchema.shape.channel.safeParse('stable').success).toBe(true);
+});
+
+// Real signed mirror data, with only the network/TUF acquisition replaced.
+// Signature, publication binding and release selection all use production code.
+describe('a valid mirror does not imply the newest release', () => {
+  async function setup(releases: unknown[] | Error) {
+    vi.mocked(createVerifier).mockImplementation(async (options) => {
+      const identity = String(options?.certificateIdentityURI).includes('release-promotion')
+        ? PUBLICATION_WORKFLOW
+        : UPDATE_WORKFLOW;
+      return (await signedFixture(identity)).verifier;
+    });
+    const index = await readFile(new URL('update-index-v2.json', fixture), 'utf8');
+    const fetcher = vi.fn<typeof globalThis.fetch>((input) => {
+      const url = new URL(input instanceof Request ? input.url : input);
+      if (url.hostname === 'api.github.com') {
+        if (releases instanceof Error) return Promise.reject(releases);
+        return Promise.resolve(new Response(JSON.stringify(releases)));
+      }
+      if (url.pathname.endsWith('/dir/'))
+        return Promise.resolve(
+          new Response(JSON.stringify({ repo_name: 'Mizar', user_perm: 'r' })),
+        );
+      if (url.pathname.endsWith('/download-link/'))
+        return Promise.resolve(
+          new Response(JSON.stringify('https://box.nju.edu.cn/seafhttp/files/test/latest.json')),
+        );
+      if (url.pathname === '/seafhttp/files/test/latest.json')
+        return Promise.resolve(new Response(index));
+      throw new Error('unexpected request');
+    });
+    return { source: new StableSource('fixture-cache', fetcher), fetcher };
+  }
+  const release = (version: string) => ({
+    tag_name: `v${version}`,
+    draft: false,
+    prerelease: false,
+    published_at: '2026-10-26T00:00:00Z',
+    assets: [],
+  });
+  it('discovers a newer official release without a previously known version', async () => {
+    const { source, fetcher } = await setup([release('1.7.0')]);
+    const result = await source.latest(new AbortController().signal);
+    expect(result?.tag_name).toBe('v1.7.0');
+    expect(
+      fetcher.mock.calls.some(([url]) =>
+        (url instanceof Request ? url.url : url.toString()).includes('api.github.com'),
+      ),
+    ).toBe(true);
+    // Discovery alone does not authenticate missing or forged installer metadata.
+    await expect(source.authenticate(result!, new AbortController().signal)).rejects.toThrow(
+      'update_metadata_missing',
+    );
+  });
+  it.each(['1.0.0', '1.1.0'])(
+    'keeps the authenticated mirror over official %s',
+    async (version) => {
+      const { source } = await setup([release(version)]);
+      const result = await source.latest(new AbortController().signal);
+      expect(result?.tag_name).toBe('v1.1.0');
+      expect((await source.authenticate(result!, new AbortController().signal)).version).toBe(
+        '1.1.0',
+      );
+    },
+  );
+  it('keeps the authenticated domestic source when GitHub is unreachable', async () => {
+    const { source } = await setup(new Error('network unavailable'));
+    const result = await source.latest(new AbortController().signal);
+    expect(result?.tag_name).toBe('v1.1.0');
+    expect((await source.authenticate(result!, new AbortController().signal)).version).toBe(
+      '1.1.0',
+    );
+  });
+  it('does not reuse a mirror below the persisted highest version on GitHub failure', async () => {
+    const { source } = await setup(new Error('network unavailable'));
+    await expect(source.latest(new AbortController().signal, '1.6.4')).rejects.toThrow();
+  });
+  it('preserves cancellation during the freshness check instead of returning stale success', async () => {
+    const { source, fetcher } = await setup([]);
+    const original = fetcher.getMockImplementation()!;
+    const controller = new AbortController();
+    fetcher.mockImplementation((input, init) => {
+      if ((input instanceof Request ? input.url : input.toString()).includes('api.github.com'))
+        controller.abort(new Error('cancelled'));
+      return original(input, init);
+    });
+    await expect(source.latest(controller.signal)).rejects.toThrow('cancelled');
+  });
 });
