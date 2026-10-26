@@ -544,7 +544,13 @@ async function planFullDownloadRetirement(box, version, resolveIdentity) {
       '分发目录存在重复文件',
     );
     for (const entry of entries) {
-      if (folder === '/Stable' && entry.type === 'dir' && entry.name === 'Downloads') continue;
+      // Music is independent user content, never an application distribution source.
+      if (
+        folder === '/Stable' &&
+        entry.type === 'dir' &&
+        (entry.name === 'Downloads' || entry.name === 'Music')
+      )
+        continue;
       const match =
         setupPattern.exec(entry.name) ||
         offlinePattern.exec(entry.name) ||

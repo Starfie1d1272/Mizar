@@ -77,6 +77,7 @@ function fixture() {
   };
   return {
     box,
+    dirs,
     files,
     writes,
     full,
@@ -98,6 +99,18 @@ function fixture() {
   };
 }
 
+function addMusic(f) {
+  f.dirs.add('/Stable/Music');
+  const music = new Map(
+    ['BLAST赏金赛.zip', 'BLAST邀请赛.zip', '上海Major.zip'].map((name) => [
+      '/Stable/Music/' + name,
+      Buffer.from('independent music: ' + name),
+    ]),
+  );
+  for (const [path, bytes] of music) f.files.set(path, bytes);
+  return music;
+}
+
 describe('lean Box distribution', () => {
   it('publishes only bootstrap, Core, resources and metadata; reuses the same verified files on retry', async () => {
     const f = fixture();
@@ -109,6 +122,52 @@ describe('lean Box distribution', () => {
     const first = [...f.writes];
     await syncStableRelease(f.options);
     expect(f.writes).toEqual(first);
+  });
+  it('preserves independent Stable/Music without inspecting or trusting its files on same-version retries', async () => {
+    const f = fixture();
+    const music = addMusic(f);
+    const list = vi.spyOn(f.box, 'list');
+    const hash = vi.spyOn(f.box, 'hash');
+    const move = vi.spyOn(f.box, 'move');
+    const remove = vi.spyOn(f.box, 'remove');
+    const resolveIdentity = vi.fn(f.resolveIdentity);
+    const options = { ...f.options, resolveIdentity };
+    await syncStableRelease(options);
+    const writes = [...f.writes];
+    await syncStableRelease(options);
+    expect(f.writes).toEqual(writes);
+    expect(f.writes.at(-1)).toBe('/Updates/latest.json');
+    expect(f.dirs.has('/Stable/Music')).toBe(true);
+    for (const [path, bytes] of music) expect(f.files.get(path)).toEqual(bytes);
+    for (const spy of [list, hash, move, remove])
+      expect(spy.mock.calls.flat().some((path) => path.startsWith('/Stable/Music'))).toBe(false);
+    expect(resolveIdentity).not.toHaveBeenCalled();
+  });
+  it.each([
+    ['/Stable/Downloads/Music', 'dir'],
+    ['/Stable/Music', 'file'],
+    ['/Stable/Other', 'dir'],
+    ['/Stable/notes.txt', 'file'],
+    ['/Stable/Downloads/notes.txt', 'file'],
+  ])('rejects unknown %s (%s) before changing public files', async (path, type) => {
+    const f = fixture();
+    if (type === 'dir') f.dirs.add(path);
+    else f.files.set(path, Buffer.from('independent content'));
+    const before = new Map(f.files);
+    const dirs = new Set(f.dirs);
+    await expect(syncUserDownloads(f)).rejects.toThrow('分发目录存在未知内容');
+    expect(f.files).toEqual(before);
+    expect(f.dirs).toEqual(dirs);
+    expect(f.writes).toEqual([]);
+  });
+  it('still rejects duplicate Music entries before the independent-directory exemption', async () => {
+    const f = fixture();
+    addMusic(f);
+    f.files.set('/Stable/Music', Buffer.from('conflicting file'));
+    const before = new Map(f.files);
+    await expect(syncUserDownloads(f)).rejects.toThrow('分发目录存在重复文件');
+    expect(f.files).toEqual(before);
+    expect(f.writes).toEqual([]);
   });
   it('archives existing Full and ZIP bytes without reuploading or losing the original', async () => {
     const f = fixture();
@@ -124,6 +183,7 @@ describe('lean Box distribution', () => {
     'preserves public files on %s conflict',
     async (kind) => {
       const f = fixture();
+      addMusic(f);
       f.files.set(
         '/Stable/' + f.full.name,
         kind === 'source' ? Buffer.from('tampered') : f.full.bytes,
@@ -166,6 +226,7 @@ describe('lean Box distribution', () => {
 
 it('resumes a partially archived migration without uploading any full package', async () => {
   const f = fixture();
+  const music = addMusic(f);
   f.files.set('/Stable/' + f.full.name, f.full.bytes);
   f.files.set('/Stable/Downloads/' + f.full.offline.name, f.full.offline.bytes);
   const move = f.box.move;
@@ -179,6 +240,7 @@ it('resumes a partially archived migration without uploading any full package', 
   f.box.move = move;
   await syncStableRelease(f.options);
   expect(f.files.get('/Archive/' + f.full.offline.name)).toEqual(f.full.offline.bytes);
+  for (const [path, bytes] of music) expect(f.files.get(path)).toEqual(bytes);
   expect(f.writes.filter((p) => p.endsWith('-Setup.exe'))).toEqual([
     '/Runtime/v1.6.0/Mizar-v1.6.0-Windows-x64-Core-Setup.exe',
   ]);
