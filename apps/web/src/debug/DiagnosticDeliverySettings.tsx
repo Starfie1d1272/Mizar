@@ -74,8 +74,12 @@ export function DiagnosticProblemReport() {
 }
 export function DiagnosticDeliverySettings({
   showProblemReport = true,
+  consentInitiallyOpen = false,
+  onEnabled,
 }: {
   showProblemReport?: boolean;
+  consentInitiallyOpen?: boolean;
+  onEnabled?: () => void;
 }) {
   const [refresh, setRefresh] = useState(0);
   const value = useLocalRead<DeliveryStatus>('/local/v1/diagnostics/delivery', 5000, refresh);
@@ -94,6 +98,7 @@ export function DiagnosticDeliverySettings({
       setAccepted(false);
       setRefresh((v) => v + 1);
       setMessage({ error: false, text: enabled ? '已开启自动发送。' : '已关闭自动发送。' });
+      if (enabled) onEnabled?.();
     } catch (error) {
       setMessage({ error: true, text: error instanceof Error ? error.message : '设置未能保存。' });
     } finally {
@@ -141,7 +146,7 @@ export function DiagnosticDeliverySettings({
           </details>
         </>
       ) : !unavailable ? (
-        <details>
+        <details open={consentInitiallyOpen || undefined}>
           <summary>开启自动发送诊断</summary>
           <p>
             将操作、错误、运行状态和相关配置发送至维护者管理的 Cloudflare

@@ -26,6 +26,7 @@ import { useLocalTournament } from './tournament';
 import { openTool, productionAction, useLocalRead, type Production } from './client';
 import { Settings } from './Settings';
 import { UpdateNotification } from './UpdateNotification';
+import { DiagnosticDeliveryNotice } from '../debug/DiagnosticDeliveryNotice';
 import { SpectatorHudCommands } from './SpectatorHudCommands';
 import { Cs2Recovery } from './Cs2Recovery';
 import { useWorkspaceExitStatus } from './cs2-status';
@@ -198,6 +199,9 @@ export function PreparationPage() {
             打开直播工作台
           </Button>
         </header>
+        {path === '/' && production?.mode === 'preparation' && window.__TAURI_INTERNALS__ ? (
+          <DiagnosticDeliveryNotice />
+        ) : null}
 
         {!(path === '/settings' && tab === 'gsi') ? <Cs2Recovery production={production} /> : null}
         {message ? (

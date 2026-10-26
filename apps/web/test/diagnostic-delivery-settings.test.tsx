@@ -24,9 +24,11 @@ vi.mock('../src/preparation/client', () => ({
 vi.mock('../src/workspace/client', () => ({ desktopInvoke: mocks.native }));
 import { Cs2ConsoleSettings } from '../src/debug/Cs2ConsoleSettings';
 import { DiagnosticDeliverySettings } from '../src/debug/DiagnosticDeliverySettings';
+import { DiagnosticDeliveryNotice } from '../src/debug/DiagnosticDeliveryNotice';
 let root: Root;
 let container: HTMLDivElement;
 beforeEach(() => {
+  window.localStorage.clear();
   container = document.createElement('div');
   document.body.append(container);
   root = createRoot(container);
@@ -236,4 +238,51 @@ it('does not let a stale console status response overwrite a newly saved consent
   });
   expect(container.querySelector<HTMLInputElement>('input[type=checkbox]')!.checked).toBe(true);
   expect(button('保存技术日志设置').disabled).toBe(true);
+});
+
+it('invites once without enabling, and a decline survives remount', () => {
+  mocks.status.configured = true;
+  act(() => root.render(<DiagnosticDeliveryNotice />));
+  expect(container.textContent).toContain('并非匿名数据');
+  expect(mocks.command).not.toHaveBeenCalled();
+  act(() => button('暂不开启').click());
+  expect(container.textContent).toBe('');
+  act(() => root.render(null));
+  act(() => root.render(<DiagnosticDeliveryNotice />));
+  expect(container.textContent).toBe('');
+  expect(mocks.command).not.toHaveBeenCalled();
+});
+it('expands the existing disclosure and only enables after explicit consent', async () => {
+  mocks.status.configured = true;
+  act(() => root.render(<DiagnosticDeliveryNotice />));
+  act(() => button('了解并开启').click());
+  expect(mocks.command).not.toHaveBeenCalled();
+  expect(container.querySelector('details')?.open).toBe(true);
+  expect(container.textContent).toContain('维护者管理的 Cloudflare');
+  expect(button('同意并开启').disabled).toBe(true);
+  act(() => container.querySelector<HTMLInputElement>('input[type=checkbox]')!.click());
+  mocks.command.mockRejectedValueOnce(new Error('设置未能保存'));
+  await act(async () => {
+    button('同意并开启').click();
+    await Promise.resolve();
+  });
+  expect(container.textContent).toContain('设置未能保存');
+  expect(container.textContent).toContain('暂不开启');
+  await act(async () => {
+    button('同意并开启').click();
+    await Promise.resolve();
+  });
+  expect(mocks.command).toHaveBeenLastCalledWith('/operator/diagnostics/consent', {
+    enabled: true,
+    revision: 'technical-diagnostics-v3',
+  });
+  expect(container.textContent).toBe('');
+});
+it('does not invite existing participants or unavailable installations', () => {
+  act(() => root.render(<DiagnosticDeliveryNotice />));
+  expect(container.textContent).toBe('');
+  mocks.status = { ...mocks.status, configured: true, consent: true };
+  act(() => root.render(<DiagnosticDeliveryNotice />));
+  expect(container.textContent).toBe('');
+  expect(mocks.command).not.toHaveBeenCalled();
 });
