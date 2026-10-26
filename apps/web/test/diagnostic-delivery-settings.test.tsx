@@ -286,3 +286,27 @@ it('does not invite existing participants or unavailable installations', () => {
   expect(container.textContent).toBe('');
   expect(mocks.command).not.toHaveBeenCalled();
 });
+
+it('does not offer a decline while an explicit enable is being saved', async () => {
+  mocks.status.configured = true;
+  let finish!: () => void;
+  mocks.command.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  act(() => root.render(<DiagnosticDeliveryNotice />));
+  act(() => button('了解并开启').click());
+  act(() => container.querySelector<HTMLInputElement>('input[type=checkbox]')!.click());
+  await act(async () => {
+    button('同意并开启').click();
+    await Promise.resolve();
+  });
+  expect(button('暂不开启').disabled).toBe(true);
+  await act(async () => {
+    finish();
+    await Promise.resolve();
+  });
+  expect(container.textContent).toBe('');
+});

@@ -76,10 +76,12 @@ export function DiagnosticDeliverySettings({
   showProblemReport = true,
   consentInitiallyOpen = false,
   onEnabled,
+  onConsentPending,
 }: {
   showProblemReport?: boolean;
   consentInitiallyOpen?: boolean;
   onEnabled?: () => void;
+  onConsentPending?: (pending: boolean) => void;
 }) {
   const [refresh, setRefresh] = useState(0);
   const value = useLocalRead<DeliveryStatus>('/local/v1/diagnostics/delivery', 5000, refresh);
@@ -89,6 +91,7 @@ export function DiagnosticDeliverySettings({
   async function change(enabled: boolean) {
     if (busy || (enabled && !value?.configured)) return;
     setBusy(true);
+    onConsentPending?.(true);
     setMessage(null);
     try {
       await command('/operator/diagnostics/consent', {
@@ -103,6 +106,7 @@ export function DiagnosticDeliverySettings({
       setMessage({ error: true, text: error instanceof Error ? error.message : '设置未能保存。' });
     } finally {
       setBusy(false);
+      onConsentPending?.(false);
     }
   }
   async function pause(paused: boolean) {

@@ -18,6 +18,7 @@ function dismissedBefore() {
 export function DiagnosticDeliveryNotice() {
   const [dismissed, setDismissed] = useState(dismissedBefore);
   const [expanded, setExpanded] = useState(false);
+  const [pending, setPending] = useState(false);
   const status = useLocalRead<{ available: boolean; configured: boolean; consent: boolean }>(
     dismissed ? null : '/local/v1/diagnostics/delivery',
     5000,
@@ -41,13 +42,16 @@ export function DiagnosticDeliveryNotice() {
       </p>
       <div className="preparation-actions">
         {!expanded ? <Button onClick={() => setExpanded(true)}>了解并开启</Button> : null}
-        <Button onClick={dismiss}>暂不开启</Button>
+        <Button disabled={pending} onClick={dismiss}>
+          暂不开启
+        </Button>
       </div>
       {expanded ? (
         <DiagnosticDeliverySettings
           showProblemReport={false}
           consentInitiallyOpen
           onEnabled={dismiss}
+          onConsentPending={setPending}
         />
       ) : null}
     </Panel>
