@@ -274,6 +274,7 @@ export class RivalHubConnection {
     this.scheduleCache = null;
     this.scheduleWarning = null;
     this.browsingLibrary = null;
+    this.manifestScope?.abort.abort();
     this.manifestScope = null;
   }
   private installation: Installation | null = null;
@@ -738,7 +739,6 @@ export class RivalHubConnection {
             installation.baseUrl,
             installation.competitionId,
             installation.installationId,
-            installation.credential,
           ]),
         )
         .digest('hex');
@@ -791,6 +791,7 @@ export class RivalHubConnection {
     installation: Installation;
     pending: Map<string, Promise<unknown>>;
     retryState: { notBefore: number };
+    abort: AbortController;
     recent: Map<string, { value: unknown; at: number }>;
   } | null = null;
 
@@ -802,6 +803,7 @@ export class RivalHubConnection {
         installation,
         pending: new Map(),
         retryState: { notBefore: 0 },
+        abort: new AbortController(),
         recent: new Map(),
       };
     const scope = this.manifestScope;
@@ -810,6 +812,7 @@ export class RivalHubConnection {
       readToken: installation.credential,
       fetchImpl: this.fetchImpl,
       retryState: scope.retryState,
+      signal: scope.abort.signal,
       isCurrent: () => this.installation === installation,
     });
     return {
@@ -830,6 +833,8 @@ export class RivalHubConnection {
         )
           return structuredClone(recent.value);
         if (!pending) {
+          if (scope.pending.size >= 3)
+            throw new SourceLoadError('比赛资料正在读取，请稍后重试。', undefined, 'unavailable');
           pending = source
             .load()
             .then((input) => {

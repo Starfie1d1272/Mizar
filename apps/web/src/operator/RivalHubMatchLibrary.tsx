@@ -70,7 +70,9 @@ export function RivalHubMatchLibrary({
   const matches = sortWebsiteMatches(schedule.matches);
   const match = matches.find((row) => row.matchId === selected) ?? matches[0];
   const matchId = match?.matchId;
+  const scopeId = schedule.library?.scopeId;
   const [detail, setDetail] = useState<{
+    scopeId: string | undefined;
     matchId: string;
     entry: NonNullable<WebsiteSchedule['library']>['entries'][string] | null;
     error: string | null;
@@ -85,8 +87,12 @@ export function RivalHubMatchLibrary({
       if (running) return;
       running = true;
       setDetail((previous) => ({
+        scopeId,
         matchId,
-        entry: previous?.matchId === matchId ? previous.entry : null,
+        entry:
+          previous && previous.scopeId === scopeId && previous.matchId === matchId
+            ? previous.entry
+            : null,
         error: null,
         loading: true,
       }));
@@ -103,12 +109,16 @@ export function RivalHubMatchLibrary({
           entry: NonNullable<WebsiteSchedule['library']>['entries'][string] | null;
           error: string | null;
         };
-        if (!controller.signal.aborted) setDetail({ matchId, ...result, loading: false });
+        if (!controller.signal.aborted) setDetail({ scopeId, matchId, ...result, loading: false });
       } catch {
         if (!controller.signal.aborted)
           setDetail((previous) => ({
+            scopeId,
             matchId,
-            entry: previous?.matchId === matchId ? previous.entry : null,
+            entry:
+              previous && previous.scopeId === scopeId && previous.matchId === matchId
+                ? previous.entry
+                : null,
             error: '完整资料暂时无法获取。未浏览过的资料离线不可用，请连接网站后重试。',
             loading: false,
           }));
@@ -122,8 +132,9 @@ export function RivalHubMatchLibrary({
       controller.abort();
       clearInterval(timer);
     };
-  }, [matchId, refreshRevision, schedule.library?.scopeId, visible]);
-  const currentDetail = detail?.matchId === matchId ? detail : null;
+  }, [matchId, refreshRevision, scopeId, visible]);
+  const currentDetail =
+    detail && detail.scopeId === scopeId && detail.matchId === matchId ? detail : null;
   const entry = currentDetail?.entry;
   const matchDocument = entry?.document;
   return (

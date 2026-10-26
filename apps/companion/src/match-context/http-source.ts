@@ -1,3 +1,4 @@
+import { setTimeout as delay } from 'node:timers/promises';
 import { SourceLoadError } from './source-error.js';
 import type { MatchContextSource } from './controller.js';
 
@@ -9,6 +10,7 @@ export interface OnlineManifestConfig {
   readonly fetchImpl?: typeof fetch;
   readonly retryState?: { notBefore: number };
   readonly isCurrent?: () => boolean;
+  readonly signal?: AbortSignal;
   readonly now?: () => number;
   readonly random?: () => number;
   readonly wait?: (ms: number) => Promise<void>;
@@ -28,6 +30,15 @@ function manifestUrl(template: string, matchId: string): URL {
   return url;
 }
 
+/** Request cancellation is best effort and never delays or retries the read itself. */
+function discardManifestResponse(response: Response) {
+  try {
+    void response.body?.cancel().catch(() => undefined);
+  } catch {
+    // A broken/locked stream cannot turn rejection cleanup into another fetch.
+  }
+}
+
 export function createOnlineManifestSource(
   matchId: string,
   config: OnlineManifestConfig,
@@ -41,12 +52,11 @@ export function createOnlineManifestSource(
   const fetchImpl = config.fetchImpl ?? fetch;
   const now = config.now ?? Date.now;
   const random = config.random ?? Math.random;
-  const wait =
-    config.wait ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const wait = config.wait ?? ((ms: number) => delay(ms, undefined, { signal: config.signal }));
   const retryState = config.retryState ?? { notBefore: 0 };
   const backoff = (attempt: number) => Math.min(4000, 500 * 2 ** attempt) * (1 + random());
   const current = () => {
-    if (config.isCurrent && !config.isCurrent())
+    if (config.signal?.aborted || (config.isCurrent && !config.isCurrent()))
       throw new SourceLoadError('赛事连接已变化。', undefined, 'authorization');
   };
   return {
@@ -57,11 +67,14 @@ export function createOnlineManifestSource(
         throw new SourceLoadError('网站请求过于频繁，请稍后重试。', undefined, 'unavailable', 429);
       for (let attempt = 0; attempt <= retries; attempt++) {
         current();
+        let response: Response | undefined;
         try {
-          const response = await fetchImpl(url, {
+          response = await fetchImpl(url, {
             headers: { Accept: 'application/json', Authorization: `Bearer ${config.readToken}` },
             redirect: 'manual',
-            signal: AbortSignal.timeout(timeoutMs),
+            signal: config.signal
+              ? AbortSignal.any([config.signal, AbortSignal.timeout(timeoutMs)])
+              : AbortSignal.timeout(timeoutMs),
           });
           current();
           if (response.status === 401 || response.status === 403)
@@ -90,7 +103,7 @@ export function createOnlineManifestSource(
               if (Number.isFinite(retryAfter)) delay = Math.max(delay, retryAfter);
               retryState.notBefore = Math.max(retryState.notBefore, now() + delay);
             }
-            await response.body?.cancel();
+            discardManifestResponse(response);
             // A long Retry-After suppresses later timer reads too; do not hold a request open.
             if (attempt < retries && delay <= 8000) {
               await wait(delay);
@@ -108,6 +121,7 @@ export function createOnlineManifestSource(
           current();
           return input;
         } catch (error: unknown) {
+          if (response) discardManifestResponse(response);
           current();
           if (error instanceof SourceLoadError) throw error;
           if (attempt === retries)

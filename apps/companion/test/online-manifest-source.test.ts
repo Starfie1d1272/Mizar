@@ -103,3 +103,41 @@ it.each([401, 403, 404, 304])(
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   },
 );
+
+it.each([401, 403, 302, 503])(
+  'releases rejected HTTP %i bodies even when cancellation rejects or stalls',
+  async (status) => {
+    const cancel = vi.fn(() =>
+      status === 503
+        ? new Promise<void>(() => {})
+        : Promise.reject(new Error('fixture cancel failure')),
+    );
+    const response = new Response(new ReadableStream<Uint8Array>({ cancel }), { status });
+    const fetchImpl = vi.fn(() => Promise.resolve(response));
+    const source = createOnlineManifestSource('m1', {
+      urlTemplate: 'https://fixture.test/{matchId}',
+      readToken: 'fixture-only',
+      fetchImpl,
+      retries: 0,
+    });
+    await expect(source.load()).rejects.toBeInstanceOf(SourceLoadError);
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  },
+);
+
+it('cancels the body when the scope changes as a response arrives', async () => {
+  let current = true;
+  const cancel = vi.fn();
+  const source = createOnlineManifestSource('m1', {
+    urlTemplate: 'https://fixture.test/{matchId}',
+    readToken: 'fixture-only',
+    isCurrent: () => current,
+    fetchImpl: vi.fn(() => {
+      current = false;
+      return Promise.resolve(new Response(new ReadableStream<Uint8Array>({ cancel })));
+    }),
+  });
+  await expect(source.load()).rejects.toMatchObject({ code: 'authorization' });
+  expect(cancel).toHaveBeenCalledTimes(1);
+});

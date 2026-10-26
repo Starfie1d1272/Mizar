@@ -41,7 +41,18 @@ export class RivalHubLibrary {
       // Stored normalized documents are never trusted as online input: only restore schedule.
       // Details are revalidated from the stored provider manifest below.
       if (schedule.ok && schedule.value.competition.competitionId === this.competitionId) {
-        this.saved = { schedule: schedule.value, entries: {}, syncedAt: null };
+        // Disk keeps browsed match details across upgrades, but operator identity and
+        // assignments must come from the current scope's fresh schedule response.
+        const cachedSchedule = {
+          ...schedule.value,
+          matches: schedule.value.matches.map((row) => {
+            const cached = { ...row };
+            delete cached.assignedToViewer;
+            return cached;
+          }),
+        };
+        delete cachedSchedule.viewer;
+        this.saved = { schedule: cachedSchedule, entries: {}, syncedAt: null };
         const manifests =
           (input as Saved & { manifests?: Record<string, unknown> }).manifests ?? {};
         for (const row of schedule.value.matches) {

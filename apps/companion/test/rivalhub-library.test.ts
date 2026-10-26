@@ -380,3 +380,179 @@ it('keeps full provider lists at 255/256/257/300, clears older adjacent schedule
     }
   }
 });
+
+it('bounds rapid different-match reads at three, releases failed slots, aborts old scopes and recovers current production', async () => {
+  const { MatchContextController, MatchManifestLkgStore } =
+    await import('../src/match-context/index.js');
+  const f = await fixture();
+  const path = join(f.root, 'bounded.json');
+  const installation = {
+    baseUrl: 'https://fixture.test',
+    credential: 'fixture-only',
+    installationId: 'fixture',
+    competitionId: 'competition-m2',
+    displayName: 'fixture',
+  };
+  await writeFile(path, JSON.stringify(installation));
+  const pending = new Map<string, { resolve: (response: Response) => void; signal: AbortSignal }>();
+  let calls = 0;
+  const fetchImpl = vi.fn<typeof fetch>((input, init) => {
+    const id = new URL(input instanceof Request ? input.url : input.toString()).searchParams.get(
+      'matchId',
+    )!;
+    calls++;
+    return new Promise<Response>((resolve, reject) => {
+      const signal = init!.signal!;
+      pending.set(id, { resolve, signal });
+      signal.addEventListener(
+        'abort',
+        () => reject(new DOMException('fixture scope cancelled', 'AbortError')),
+        { once: true },
+      );
+    });
+  });
+  const connection = new RivalHubConnection(path, fetchImpl);
+  await connection.load();
+  const controller = new MatchContextController({
+    lkgStore: new MatchManifestLkgStore({ filePath: join(f.root, 'bounded-lkg.json') }),
+  });
+  expect(
+    (
+      await controller.selectMatch(f.id, {
+        kind: 'online',
+        load: () => Promise.resolve(f.manifest),
+      })
+    ).ok,
+  ).toBe(true);
+  const reads = ['match-1', 'match-2', 'match-3'].map((id) => connection.matchSource(id).load());
+  const finished = Promise.allSettled(reads);
+  const same = connection.matchSource('match-2').load();
+  const sameFinished = Promise.allSettled([same]);
+  expect(calls).toBe(3);
+  await expect(connection.matchSource('match-4').load()).rejects.toMatchObject({
+    code: 'unavailable',
+  });
+  await controller.refreshOnlineMatch(connection.matchSource(f.id));
+  expect(controller.getActiveBinding()?.context.matchId).toBe(f.id);
+  expect(calls).toBe(3);
+  pending.get('match-1')!.resolve(new Response(null, { status: 404 }));
+  await expect(reads[0]).rejects.toMatchObject({ code: 'not_found' });
+  const recovering = controller.refreshOnlineMatch(connection.matchSource(f.id));
+  pending.get(f.id)!.resolve(Response.json(f.manifest));
+  expect((await recovering).ok).toBe(true);
+  expect(controller.getActiveBinding()?.freshness).toBe('fresh');
+  await writeFile(path, JSON.stringify({ ...installation, credential: 'new-fixture-only' }));
+  await connection.load();
+  expect(pending.get('match-2')!.signal.aborted).toBe(true);
+  expect(pending.get('match-3')!.signal.aborted).toBe(true);
+  expect((await finished).filter((result) => result.status === 'rejected')).toHaveLength(3);
+  await sameFinished;
+  const fresh = connection.matchSource(f.id).load();
+  pending.get(f.id)!.resolve(Response.json(f.manifest));
+  await expect(fresh).resolves.toMatchObject({ match: { matchId: f.id } });
+});
+
+it('restores the original installation-scoped browsing file after upgrade when the website is offline', async () => {
+  const { createHash } = await import('node:crypto');
+  const f = await fixture();
+  const path = join(f.root, 'upgrade.json');
+  const installation = {
+    baseUrl: 'https://fixture.test',
+    credential: 'fixture-only',
+    installationId: 'fixture',
+    competitionId: 'competition-m2',
+    displayName: 'fixture',
+  };
+  await writeFile(path, JSON.stringify(installation));
+  const scope = createHash('sha256')
+    .update(
+      JSON.stringify([
+        installation.baseUrl,
+        installation.competitionId,
+        installation.installationId,
+      ]),
+    )
+    .digest('hex');
+  const cachePath = `${path}.${scope}.library.json`;
+  await writeFile(
+    cachePath,
+    JSON.stringify({
+      schedule: f.schedule,
+      entries: {
+        [f.id]: {
+          etag: 'old-tag',
+          checkedAt: '2026-09-16T12:00:00Z',
+          updatedAt: '2026-09-16T12:00:00Z',
+        },
+      },
+      syncedAt: '2026-09-16T12:00:00Z',
+      manifests: { [f.id]: f.manifest },
+    }),
+  );
+  const fetchImpl = vi.fn<typeof fetch>(() => Promise.reject(new TypeError('fixture offline')));
+  const connection = new RivalHubConnection(path, fetchImpl);
+  await connection.load();
+  let view = await connection.library();
+  await vi.waitFor(async () => {
+    view = await connection.library();
+    expect(view.library.refreshing).toBe(false);
+  });
+  expect(view.library.entries[f.id]?.document.matchId).toBe(f.id);
+  expect(view.library.error).toContain('保留');
+  const saved = JSON.parse(await readFile(cachePath, 'utf8')) as Record<string, unknown>;
+  await writeFile(
+    cachePath,
+    JSON.stringify({
+      ...saved,
+      schedule: {
+        ...f.schedule,
+        viewer: { userId: 'previous-account', displayName: '旧授权昵称' },
+        matches: f.schedule.matches.map((row) => ({ ...row, assignedToViewer: true })),
+      },
+    }),
+  );
+  await connection.load();
+  const newScope = await connection.library();
+  expect(newScope.viewer).toBeUndefined();
+  expect(newScope.matches.every((row) => row.assignedToViewer === undefined)).toBe(true);
+  expect(newScope.library.entries[f.id]?.document.matchId).toBe(f.id);
+  expect(
+    fetchImpl.mock.calls.every(([input]) =>
+      (input instanceof Request ? input.url : input.toString()).includes('/schedule?'),
+    ),
+  ).toBe(true);
+});
+
+it('consumes real PostgreSQL/server new and legacy schedules without leaking operator identity into core', async () => {
+  const { toScheduleWindowV1 } = await import('@mizar/rivalhub');
+  const read = async (name: string) =>
+    JSON.parse(
+      await readFile(
+        new URL(
+          `../../../packages/rivalhub/test/fixtures/server-schedule-2026-10-26/${name}`,
+          import.meta.url,
+        ),
+        'utf8',
+      ),
+    ) as unknown;
+  const modern = validateBroadcastScheduleWindow(await read('schedule-new-http.json'));
+  const legacy = validateBroadcastScheduleWindow(await read('schedule-old-shape.json'));
+  const identity = (await read('poll-authorized-public-identity.json')) as {
+    authorizedUser: { userId: string; displayName: string };
+  };
+  expect(modern.ok).toBe(true);
+  expect(legacy.ok).toBe(true);
+  if (!modern.ok || !legacy.ok) throw new Error('real server schedule rejected');
+  expect(modern.value.viewer).toEqual(identity.authorizedUser);
+  expect(modern.value.matches.map((row) => row.assignedToViewer)).toEqual([true, false, false]);
+  expect(legacy.value.viewer).toBeUndefined();
+  expect(legacy.value.matches.every((row) => row.assignedToViewer === undefined)).toBe(true);
+  for (const schedule of [modern.value, legacy.value]) {
+    const core = toScheduleWindowV1(schedule);
+    expect(core.matches).toHaveLength(3);
+    const publicFacts = JSON.stringify(core);
+    expect(publicFacts).not.toContain('viewer');
+    expect(publicFacts).not.toContain('assignedToViewer');
+    expect(publicFacts).not.toContain(identity.authorizedUser.userId);
+  }
+});

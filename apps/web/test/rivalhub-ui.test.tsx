@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { act } from 'react';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RivalHubMatchLibrary, type WebsiteSchedule } from '../src/operator/RivalHubMatchLibrary';
@@ -364,4 +366,126 @@ it('reads only visible details, stops hidden/unmounted timers, and ignores late 
     await vi.advanceTimersByTimeAsync(60_000);
   });
   expect(fetchMock).toHaveBeenCalledTimes(hidden);
+});
+
+it('invalidates same-match detail fallback immediately across scopes, including late success and new-scope failure', async () => {
+  const { parseMatchDocumentV1 } = await import('@mizar/protocol/context');
+  const input: unknown = JSON.parse(
+    await readFile(
+      resolve(process.cwd(), 'packages/protocol/test/fixtures/match-document-v1.json'),
+      'utf8',
+    ),
+  );
+  const document = parseMatchDocumentV1(input);
+  const old = {
+    ...document,
+    entrants: { ...document.entrants, a: { ...document.entrants.a, name: '旧授权独有队名' } },
+  };
+  const entry = {
+    document: old,
+    checkedAt: '2026-09-16T12:00:00Z',
+    updatedAt: '2026-09-16T12:00:00Z',
+  };
+  const responses: ((response: Response) => void)[] = [];
+  let first = true;
+  const fetchMock = vi.fn(() => {
+    if (first) {
+      first = false;
+      return Promise.resolve(Response.json({ entry, error: null }));
+    }
+    return new Promise<Response>((resolve) => responses.push(resolve));
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  const render = async (scopeId: string) => {
+    await act(async () => {
+      root!.render(
+        <RivalHubMatchLibrary
+          schedule={{
+            competition: { name: 'fixture' },
+            matches: [
+              {
+                matchId: document.matchId,
+                scheduledAt: null,
+                format: 'bo3',
+                entrantA: { name: '摘要甲' },
+                entrantB: { name: '摘要乙' },
+              },
+            ],
+            library: { scopeId, entries: {}, syncedAt: null, refreshing: false, error: null },
+          }}
+          selecting={false}
+          activeMatchId={null}
+          refreshing={false}
+          onSelect={() => {}}
+          onRefresh={() => {}}
+        />,
+      );
+      await Promise.resolve();
+    });
+  };
+  await render('scope-a');
+  expect(container.textContent).toContain('旧授权独有队名');
+  await act(async () => {
+    [...container.querySelectorAll('button')]
+      .find((button) => button.textContent === '刷新比赛')!
+      .click();
+    await Promise.resolve();
+  });
+  await render('scope-b');
+  expect(container.textContent).not.toContain('旧授权独有队名');
+  await act(async () => {
+    responses[0]!(Response.json({ entry, error: null }));
+    responses[1]!(new Response(null, { status: 503 }));
+    await Promise.resolve();
+  });
+  expect(container.textContent).not.toContain('旧授权独有队名');
+  expect(container.textContent).toContain('完整资料暂时无法获取');
+});
+
+it('renders the real server viewer and assignment flags and degrades to unknown with the old provider shape', async () => {
+  const read = async (name: string) =>
+    JSON.parse(
+      await readFile(
+        resolve(
+          process.cwd(),
+          `packages/rivalhub/test/fixtures/server-schedule-2026-10-26/${name}`,
+        ),
+        'utf8',
+      ),
+    ) as WebsiteSchedule;
+  const modern = await read('schedule-new-http.json');
+  const legacy = await read('schedule-old-shape.json');
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(() => Promise.resolve(Response.json({ entry: null, error: 'fixture no detail' }))),
+  );
+  const render = async (schedule: WebsiteSchedule) => {
+    await act(async () => {
+      root!.render(
+        <RivalHubMatchLibrary
+          schedule={schedule}
+          selecting={false}
+          activeMatchId={null}
+          refreshing={false}
+          onRefresh={() => {}}
+          onSelect={() => {}}
+        />,
+      );
+      await Promise.resolve();
+    });
+  };
+  await render(modern);
+  const ordered = sortWebsiteMatches(modern.matches);
+  expect(ordered[0]?.matchId).toBe(modern.matches.find((row) => row.assignedToViewer)!.matchId);
+  expect(container.textContent).toContain('授权账号：合成解说');
+  expect(container.querySelectorAll('.library-list button')).toHaveLength(3);
+  expect(
+    [...container.querySelectorAll('.library-list button')].filter((button) =>
+      button.textContent?.includes('我认领的'),
+    ),
+  ).toHaveLength(1);
+  await render(legacy);
+  expect(container.textContent).not.toContain('授权账号：');
+  expect(container.textContent).not.toContain('我认领的');
+  expect(container.querySelectorAll('.library-list button')).toHaveLength(3);
 });
