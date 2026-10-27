@@ -99,7 +99,12 @@ fn regular(path: &Path, limit: usize) -> Result<Vec<u8>, String> {
     }
     Ok(bytes)
 }
-fn identity(video: &Path, executable: &Path, account: u32) -> Result<(Value, PathBuf), String> {
+fn identity(
+    video: &Path,
+    executable: &Path,
+    account: u32,
+    slot: u32,
+) -> Result<(Value, PathBuf), String> {
     if account == 0
         || !video.is_absolute()
         || !executable.is_absolute()
@@ -138,11 +143,11 @@ fn identity(video: &Path, executable: &Path, account: u32) -> Result<(Value, Pat
     if !m.is_file() || !plain(&m) {
         return Err("identity_invalid".into());
     }
-    let key = cfg.join("cs2_user_keys_0_slot0.vcfg");
+    let key = cfg.join(format!("cs2_user_keys_0_slot{slot}.vcfg"));
     regular(&key, LIMIT)?;
     let canonical = |p: &Path| fs::canonicalize(p).map_err(|_| "identity_invalid".to_string());
     Ok((
-        json!({"account":account,"video":canonical(video)?,"executable":canonical(executable)?,"keys":canonical(&key)?,"slot":0,"format":"vcfg"}),
+        json!({"account":account,"video":canonical(video)?,"executable":canonical(executable)?,"keys":canonical(&key)?,"slot":slot,"format":"vcfg"}),
         key,
     ))
 }
@@ -251,7 +256,14 @@ pub(crate) fn status(root: &Path, video: &Path, exe: &Path, account: u32) -> Sta
             .as_u64()
             .filter(|value| *value > 0 && *value <= u32::MAX as u64)
             .ok_or("damaged")?;
-        if saved["slot"] != 0
+        let slot = saved["slot"]
+            .as_u64()
+            .and_then(|n| u32::try_from(n).ok())
+            .ok_or("damaged")?;
+        if (crate::cs2_config_identity::SessionIdentity::read(payload)
+            .map_err(|_| "damaged")?
+            .is_none()
+            && slot != 0)
             || saved["format"] != "vcfg"
             || ["video", "executable", "keys"].iter().any(|key| {
                 saved[*key]
@@ -267,7 +279,7 @@ pub(crate) fn status(root: &Path, video: &Path, exe: &Path, account: u32) -> Sta
         if saved_account != u64::from(account) {
             return Err("identity".into());
         }
-        let (id, key) = identity(video, exe, account).map_err(|_| "unavailable")?;
+        let (id, key) = identity(video, exe, account, slot).map_err(|_| "unavailable")?;
         if *saved != id {
             return Err("identity".into());
         }
@@ -297,7 +309,7 @@ pub(crate) fn plan_application(
     applied: &Bindings,
     candidate: &str,
 ) -> Result<(PathBuf, Vec<u8>, Vec<u8>), String> {
-    let (id, path) = identity(video, exe, account)?;
+    let (id, path) = identity(video, exe, account, session.config.slot)?;
     if session.config.value() != id {
         return Err("identity_changed".into());
     }
@@ -305,7 +317,9 @@ pub(crate) fn plan_application(
     let text = std::str::from_utf8(&original).map_err(|_| "snapshot_encoding")?;
     let planned = crate::spectator_recovery_vcfg::plan_application(text, candidate, applied, owned)
         .map_err(str::to_string)?;
-    if identity(video, exe, account)?.0 != id || regular(&path, LIMIT)? != original {
+    if identity(video, exe, account, session.config.slot)?.0 != id
+        || regular(&path, LIMIT)? != original
+    {
         return Err("snapshot_changed".into());
     }
     Ok((path, original, planned.into_bytes()))
@@ -338,7 +352,7 @@ pub(crate) fn verify_prepared(
     {
         return Err("snapshot_invalid".into());
     }
-    let (id, key) = identity(video, exe, account)?;
+    let (id, key) = identity(video, exe, account, session.config.slot)?;
     if id != session.config.value() || regular(&key, LIMIT)? != original {
         return Err("snapshot_changed".into());
     }
@@ -352,7 +366,7 @@ pub(crate) fn verify_applied(
     session: &crate::cs2_config_identity::SessionIdentity,
     expected: &[u8],
 ) -> Result<(), String> {
-    let (id, key) = identity(video, exe, account)?;
+    let (id, key) = identity(video, exe, account, session.config.slot)?;
     if id != session.config.value() || regular(&key, LIMIT)? != expected {
         return Err("snapshot_readback_failed".into());
     }
@@ -389,14 +403,15 @@ pub(crate) fn capture_for_session(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
         _ => return Err("snapshot_pending".into()),
     }
-    let (id, path) = identity(video, exe, account)?;
+    let slot = session.map_or(0, |session| session.config.slot);
+    let (id, path) = identity(video, exe, account, slot)?;
     let bytes = regular(&path, LIMIT)?;
     let original = std::str::from_utf8(&bytes).map_err(|_| "snapshot_encoding")?;
     let rows = entries(owned, applied)?;
     // Validate the original structure before persisting ownership.
     crate::spectator_recovery_vcfg::restore(original, applied, original, owned)
         .map_err(str::to_string)?;
-    if identity(video, exe, account)?.0 != id || regular(&path, LIMIT)? != bytes {
+    if identity(video, exe, account, slot)?.0 != id || regular(&path, LIMIT)? != bytes {
         return Err("snapshot_changed".into());
     }
     let mut payload = json!({"version":1,"identity":id,"original":original,"fields":rows});
@@ -417,7 +432,7 @@ pub(crate) fn capture_for_session(
     if regular(&record_path, RECORD_LIMIT)? != record {
         return Err("snapshot_readback_failed".into());
     }
-    if identity(video, exe, account)?.0 != id || regular(&path, LIMIT)? != bytes {
+    if identity(video, exe, account, slot)?.0 != id || regular(&path, LIMIT)? != bytes {
         return Err("snapshot_changed".into());
     }
     Ok(())
@@ -450,7 +465,7 @@ pub(crate) fn handoff(
     let core_session = crate::cs2_config_identity::SessionIdentity::read(core)
         .map_err(str::to_string)?
         .ok_or("identity_changed")?;
-    let (id, _) = identity(video, exe, account)?;
+    let (id, _) = identity(video, exe, account, full_session.config.slot)?;
     let core_video = core["video"]
         .as_str()
         .map(Path::new)
@@ -509,7 +524,7 @@ pub(crate) fn handoff(
     let next = serde_json::to_vec(&record).map_err(|_| "snapshot_invalid")?;
     if next.len() > RECORD_LIMIT
         || regular(&path, RECORD_LIMIT)? != bytes
-        || identity(video, exe, account)?.0 != id
+        || identity(video, exe, account, full_session.config.slot)?.0 != id
     {
         return Err("snapshot_changed".into());
     }
@@ -602,7 +617,18 @@ pub(crate) fn recover(
             return Err("snapshot_invalid".into());
         }
     }
-    let (id, key) = identity(video, exe, account)?;
+    let slot = payload["identity"]["slot"]
+        .as_u64()
+        .and_then(|n| u32::try_from(n).ok())
+        .ok_or("snapshot_invalid")?;
+    if crate::cs2_config_identity::SessionIdentity::read(payload)
+        .map_err(str::to_string)?
+        .is_none()
+        && slot != 0
+    {
+        return Err("snapshot_invalid".into());
+    }
+    let (id, key) = identity(video, exe, account, slot)?;
     if payload["identity"] != id {
         return Err("identity_changed".into());
     }
@@ -615,7 +641,7 @@ pub(crate) fn recover(
     let current = std::str::from_utf8(&current_bytes).map_err(|_| "snapshot_encoding")?;
     let result = crate::spectator_recovery_vcfg::restore(original, &applied, current, &owned)
         .map_err(str::to_string)?;
-    if identity(video, exe, account)?.0 != id
+    if identity(video, exe, account, slot)?.0 != id
         || regular(&key, LIMIT)? != current_bytes
         || regular(&path, RECORD_LIMIT)? != bytes
     {
@@ -701,6 +727,58 @@ mod tests {
         fs::copy(state.join("spectator-full-last.json"), pending(&state)).unwrap();
         recover(&state, &video, &exe, 42, write).unwrap();
         assert_eq!(fs::read_to_string(key).unwrap(), restored);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn explicit_session_preserves_and_restores_discovered_nonzero_slot() {
+        let (root, video, exe, owned, applied) = setup();
+        let state = root.join("state");
+        let slot0 = video.with_file_name("cs2_user_keys_0_slot0.vcfg");
+        let slot3 = video.with_file_name("cs2_user_keys_0_slot3.vcfg");
+        fs::write(&slot3, O).unwrap();
+        let (id, _) = identity(&video, &exe, 42, 3).unwrap();
+        let session = crate::cs2_config_identity::SessionIdentity {
+            session_id: "slot-three".into(),
+            config: crate::cs2_config_identity::ConfigIdentity::from_value(&id).unwrap(),
+        };
+        capture_for_session(
+            &state,
+            &video,
+            &exe,
+            42,
+            &owned,
+            &applied,
+            write,
+            Some(&session),
+        )
+        .unwrap();
+        let record: Value = serde_json::from_slice(&fs::read(pending(&state)).unwrap()).unwrap();
+        assert_eq!(record["payload"]["identity"]["slot"], 3);
+        fs::write(&slot3, A).unwrap();
+        let untouched = fs::read(&slot0).unwrap();
+        recover(&state, &video, &exe, 42, write).unwrap();
+        assert_eq!(fs::read(&slot0).unwrap(), untouched);
+        let restored = fs::read_to_string(&slot3).unwrap();
+        assert!(restored.contains("\"x\" \"\""));
+        assert!(restored.contains("\"mouse_x\" \"old\""));
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn nonzero_slot_without_session_identity_is_not_adopted() {
+        let (root, video, exe, owned, applied) = setup();
+        let state = root.join("state");
+        capture(&state, &video, &exe, 42, &owned, &applied, write).unwrap();
+        let path = pending(&state);
+        let mut record: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        record["payload"]["identity"]["slot"] = json!(3);
+        record["sha256"] = json!(digest(&serde_json::to_vec(&record["payload"]).unwrap()));
+        fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+        assert_eq!(status(&state, &video, &exe, 42), Status::Damaged);
+        assert!(recover(&state, &video, &exe, 42, write).is_err());
+        assert_eq!(
+            fs::read_to_string(video.with_file_name("cs2_user_keys_0_slot0.vcfg")).unwrap(),
+            O
+        );
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
