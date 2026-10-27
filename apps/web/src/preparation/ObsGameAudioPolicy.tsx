@@ -46,7 +46,10 @@ export function ObsGameAudioPolicy() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      if (!response.ok) throw new Error('操作未确认，请重新核对。');
+      if (!response.ok) {
+        await refresh();
+        throw new Error('操作未确认，已刷新设置，请重新核对后操作。');
+      }
       await refresh();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '操作未完成。');
