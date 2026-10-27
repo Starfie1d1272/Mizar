@@ -228,9 +228,15 @@ it('uses the saved BP preference for manual and automatic selection, and closes 
   const playback = bp.get().revision;
   expect((await scene.select('bp', scene.get().revision)).ok).toBe(true);
   expect(bp.get().revision).toBe(playback);
+  ready = false;
+  expect((await scene.select('bp', scene.get().revision)).ok).toBe(true);
+  expect(switches.mock.calls.at(-1)?.[0]).toBe('bp');
+  expect(scene.get().director?.reason).toContain('游戏画面未就绪');
+  expect(bp.get().revision).toBe(playback);
   expect((await scene.select('waiting', scene.get().revision)).ok).toBe(true);
   expect(overlay).toHaveBeenLastCalledWith(false);
   expect(bp.get().state).toBe('hidden');
+  ready = true;
   expect((await scene.selectAutomatic('bp', scene.get().revision, () => true)).ok).toBe(true);
   expect(switches.mock.calls.at(-1)?.[0]).toBe('gameplay');
   expect((await scene.select('waiting', scene.get().revision)).ok).toBe(true);

@@ -323,7 +323,17 @@ export class ProgramSceneController {
           }).catch(() => undefined);
       };
       try {
-        const physical = id === 'bp' && this.bpCompact === 'on' ? 'gameplay' : id;
+        let physical = id === 'bp' && this.bpCompact === 'on' ? 'gameplay' : id;
+        if (physical === 'gameplay' && id === 'bp' && !(await this.gameBackgroundReady())) {
+          try {
+            await this.switchBpCompact?.(false);
+            this.bpCompact = 'off';
+          } catch {
+            this.bpCompact = 'unknown';
+          }
+          this.bpFallbackReason = '游戏画面未就绪，本次使用全屏 BP。';
+          physical = 'bp';
+        }
         await switchObs?.(physical, {
           transition: programTransition(id, id, true),
           valid: () => expectedRevision === this.revision && this.blockedReason(id) === null,
