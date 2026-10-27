@@ -141,30 +141,30 @@ export function MusicSettings() {
             </Button>
           </StatusBanner>
         ) : null}
-        <details className="music-settings-import">
-          <summary>导入音乐包</summary>
-          <Field
-            label="一键导入音乐包"
-            message="选择含 music.json 和相对路径音频的 ZIP（最大 128 MiB）。验证成功后替换七组配置。"
-            type="file"
-            accept=".zip"
-            disabled={busy}
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              e.target.value = '';
-              if (file)
-                void action(async () => {
-                  await preview.stop();
-                  const result = await localFile('/operator/music/import', file, 'application/zip');
-                  setConfig(result.config);
-                  setDirty(false);
-                  setMessage('音乐包已导入并保存。');
-                });
-            }}
-          />
-          <p>只选择你有权直播或录制使用的音乐。文件仅保存在本机，不联网下载或分享。</p>
-        </details>
       </Panel>
+      <details className="music-settings-import">
+        <summary>导入音乐包</summary>
+        <Field
+          label="一键导入音乐包"
+          message="选择含 music.json 和相对路径音频的 ZIP（最大 128 MiB）。验证成功后替换七组配置。"
+          type="file"
+          accept=".zip"
+          disabled={busy}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            e.target.value = '';
+            if (file)
+              void action(async () => {
+                await preview.stop();
+                const result = await localFile('/operator/music/import', file, 'application/zip');
+                setConfig(result.config);
+                setDirty(false);
+                setMessage('音乐包已导入并保存。');
+              });
+          }}
+        />
+        <p>只选择你有权直播或录制使用的音乐。文件仅保存在本机，不联网下载或分享。</p>
+      </details>
       {message && messageAt === 'import' ? (
         <StatusBanner tone={failed ? 'danger' : 'info'}>{message}</StatusBanner>
       ) : null}
