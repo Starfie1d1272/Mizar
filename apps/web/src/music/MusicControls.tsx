@@ -202,8 +202,8 @@ export function MusicControls({
           <option value="">选择已保存曲目</option>
           {Object.entries(view.config.groups).flatMap(([group, spec]) =>
             group !== 'opening' && spec.enabled
-              ? spec.tracks.map((track) => (
-                  <option key={`${group}:${track.id}`} value={`${group}:${track.id}`}>
+              ? spec.tracks.map((track, index) => (
+                  <option key={`${group}:${track.id}:${index}`} value={`${group}:${track.id}`}>
                     {MUSIC_LABELS[group as MusicGroup]} · {track.name}
                   </option>
                 ))

@@ -12,13 +12,20 @@ test('mixer uses confirmed state and music gains stay local to their scene entry
     ]),
   ) as Record<string, { name: string; volume: number; muted: boolean; control: string }>;
   const track = { id: `${'a'.repeat(64)}.wav`, name: '合成.wav', startMs: 0, endMs: null };
+  const firstEntry = { ...track, entryId: '00000000-0000-4000-8000-000000000001' };
+  const secondEntry = { ...track, entryId: '00000000-0000-4000-8000-000000000002' };
   const groups = Object.fromEntries(
     ['waiting', 'tactical', 'technical', 'halftime', 'mapVictory', 'matchVictory', 'opening'].map(
       (group) => [
         group,
         {
           enabled: true,
-          tracks: ['waiting', 'technical'].includes(group) ? [track] : [],
+          tracks:
+            group === 'waiting'
+              ? [firstEntry, secondEntry]
+              : group === 'technical'
+                ? [firstEntry]
+                : [],
           order: 'sequence',
           volume: 0.5,
           fadeInMs: 600,
@@ -92,7 +99,8 @@ test('mixer uses confirmed state and music gains stay local to their scene entry
   await page.goto('/settings?tab=music');
   const waiting = page
     .getByRole('list', { name: '等待音乐曲目列表' })
-    .getByRole('slider', { name: '合成.wav 音量' });
+    .getByRole('slider', { name: '合成.wav 音量' })
+    .first();
   await waiting.focus();
   await page.keyboard.press('ArrowRight');
   await page
@@ -111,6 +119,20 @@ test('mixer uses confirmed state and music gains stay local to their scene entry
   await expect(waiting).toHaveValue('0.55');
   await page.getByRole('button', { name: '保存音乐配置', exact: true }).click();
   await expect.poll(() => saved).not.toBeNull();
-  expect(saved!.groups.waiting.tracks[0].gain).toBe(0.55);
+  expect(saved!.groups.waiting.tracks[0]).toMatchObject({
+    entryId: firstEntry.entryId,
+    gain: 0.55,
+  });
+  expect(saved!.groups.waiting.tracks[1]).toMatchObject({ entryId: secondEntry.entryId });
+  expect(saved!.groups.waiting.tracks[1].gain).toBeUndefined();
   expect(saved!.groups.technical.tracks[0].gain).toBeUndefined();
+  saved = null;
+  await page
+    .getByRole('list', { name: '等待音乐曲目列表' })
+    .getByRole('button', { name: '移除 合成.wav' })
+    .first()
+    .click();
+  await page.getByRole('button', { name: '保存音乐配置', exact: true }).click();
+  await expect.poll(() => saved).not.toBeNull();
+  expect(saved!.groups.waiting.tracks).toEqual([secondEntry]);
 });
