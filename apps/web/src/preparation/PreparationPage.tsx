@@ -46,7 +46,7 @@ const tabs = {
     ['gsi', '游戏与观战'],
     ['obs', 'OBS'],
     ['observer', '观察辅助'],
-    ['music', '音乐'],
+    ['music', '声音'],
     ['camera', '运镜'],
     ['rivalhub', 'RivalHub'],
     ['advanced', '高级'],
@@ -165,7 +165,7 @@ export function PreparationPage() {
   const settingsTitle: Record<string, string> = {
     gsi: '游戏设置',
     obs: 'OBS 连接',
-    music: '音乐',
+    music: '声音',
     camera: '运镜',
     observer: '观察辅助',
     rivalhub: '赛事平台',

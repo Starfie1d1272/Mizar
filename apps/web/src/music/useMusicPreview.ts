@@ -15,7 +15,7 @@ interface PreviewWork {
   reject: (error: unknown) => void;
 }
 
-export function useMusicPreview() {
+export function useMusicPreview(active = true) {
   const [owner] = useState(() => crypto.randomUUID());
   const operation = useRef(0);
   const queue = useRef(new Map<MusicPreviewRequest['action'], PreviewWork>());
@@ -169,6 +169,20 @@ export function useMusicPreview() {
     };
     // The owner and operation counter belong to this mounted window, including its cleanup requests.
   }, [send]);
+  useEffect(() => {
+    if (active) return;
+    intent.current++;
+    const current = request.current;
+    request.current = null;
+    queueMicrotask(() => {
+      if (mounted.current && request.current === null) setStatus(null);
+    });
+    if (current)
+      void send(current, 'stop', true).catch(() => {
+        if (mounted.current)
+          setError('停止未确认，请在 OBS 检查 Mizar 音效来源；服务端将尝试清理。');
+      });
+  }, [active, send]);
   const start = async (
     group: MusicGroup,
     spec: MusicConfig['groups'][MusicGroup],

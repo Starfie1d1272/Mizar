@@ -1268,3 +1268,24 @@
 .obs-audio-commentary-current {
   overflow-wrap: anywhere;
 }
+
+.obs-settings-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--mizar-layout-compact);
+}
+.sound-settings .obs-settings-tabs .mizar-button[aria-pressed='true'] {
+  background: var(--mizar-bg-selected);
+  border-color: var(--mizar-accent-primary);
+}
+.obs-settings-columns[hidden],
+.obs-settings > [hidden] {
+  display: none;
+}
+.sound-settings {
+  display: grid;
+  gap: var(--mizar-layout-padding);
+}
+.sound-settings > [hidden] {
+  display: none;
+}

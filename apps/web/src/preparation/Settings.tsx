@@ -6,7 +6,7 @@ import {
   DiagnosticDeliverySettings,
   DiagnosticProblemReport,
 } from '../debug/DiagnosticDeliverySettings';
-import { MusicSettings } from '../music/MusicSettings';
+import { SoundSettings } from '../audio/SoundSettings';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Panel, StatusBanner, StatusPill } from '../ui';
 import { desktopInvoke } from '../workspace/client';
@@ -169,7 +169,7 @@ export function Settings({ tab }: { tab: string }) {
     </Button>
   );
   if (tab === 'observer') return <ObserverSettingsPanel />;
-  if (tab === 'music') return <MusicSettings />;
+  if (tab === 'music') return <SoundSettings />;
   if (tab === 'camera') return <CameraSettings />;
 
   return (

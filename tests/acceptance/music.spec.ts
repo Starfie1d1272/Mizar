@@ -65,7 +65,7 @@ test('saves real local choices, imports atomically, persists manual stop through
   );
   try {
     await page.goto('/settings?tab=music');
-    await expect(page.getByRole('heading', { name: '音乐', exact: true, level: 1 })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '声音', exact: true, level: 1 })).toBeVisible();
     await expect(page.getByText('尚未选曲 · 静音', { exact: true })).toHaveCount(7);
     await page
       .getByLabel('选择本地曲目', { exact: true })
@@ -370,10 +370,21 @@ test('auditions unsaved drafts through the owned OBS protocol channel with outpu
     obs.streamActive = false;
     await page.getByRole('button', { name: '试听本组', exact: true }).first().click();
     await expect(page.getByText('正在通过 OBS 试听，最多 15 秒。')).toBeVisible();
+    await page.getByRole('button', { name: '音源', exact: true }).click();
+    await expect.poll(() => input().state, { timeout: 6000 }).toBe('OBS_MEDIA_STATE_STOPPED');
+    await page.waitForTimeout(1500);
+    expect(input().state).toBe('OBS_MEDIA_STATE_STOPPED');
+    expect(store.state.held).toBe(false);
+    await page
+      .getByRole('navigation', { name: '声音设置分区' })
+      .getByRole('button', { name: '音乐', exact: true })
+      .click();
+    await page.getByRole('button', { name: '试听本组', exact: true }).first().click();
+    await expect(page.getByText('正在通过 OBS 试听，最多 15 秒。')).toBeVisible();
     await page.goto('/');
     await expect.poll(() => input().state, { timeout: 6000 }).toBe('OBS_MEDIA_STATE_STOPPED');
     await page.goto('/settings?tab=music');
-    const choice = `waiting:${store.state.config.groups.waiting.tracks[0]!.id}`;
+    const choice = `waiting:${store.state.config.groups.waiting.tracks[0]!.entryId}`;
     await expect(page.getByLabel('正式播放曲目').locator(`option[value="${choice}"]`)).toHaveCount(
       1,
     );
