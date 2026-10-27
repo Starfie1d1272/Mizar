@@ -38,6 +38,13 @@ it('binds only explicit current UUIDs and rejects stale windows, deleted sources
     const a = await routing.read(obs, 'ws://127.0.0.1:4455');
     const b = await routing.read(obs, 'ws://127.0.0.1:4455');
     expect(a.candidates).toHaveLength(2);
+    await expect(
+      routing.bind(
+        obs,
+        { role: 'game', selectionId: a.candidates[0]!.selectionId, revision: a.revision },
+        'ws://127.0.0.1:4456',
+      ),
+    ).rejects.toThrow('audio_selection_changed');
     const bound = await routing.bind(
       obs,
       {
