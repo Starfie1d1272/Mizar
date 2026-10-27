@@ -4,6 +4,12 @@ import type { MusicConfig, MusicGroup, MusicStatus } from '@mizar/protocol/music
 import { Button, Field, Select } from '../ui';
 import { useLocalRead, command } from '../preparation/client';
 
+function musicTime(ms: number | null) {
+  if (ms === null || !Number.isFinite(ms)) return '--:--';
+  const seconds = Math.floor(ms / 1000);
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
 export interface MusicView {
   storage?: { ready: boolean; failed: boolean };
   config: MusicConfig;
@@ -31,6 +37,7 @@ export function MusicControls({
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [selection, setSelection] = useState('');
+  const [seekDraft, setSeekDraft] = useState<{ cursorMs: number; playbackId: string } | null>(null);
   const send = async (body: Record<string, unknown>) => {
     setBusy(true);
     setError('');
@@ -43,6 +50,11 @@ export function MusicControls({
     } finally {
       setBusy(false);
     }
+  };
+  const commitSeek = () => {
+    if (seekDraft === null) return;
+    setSeekDraft(null);
+    void send({ action: 'seek', ...seekDraft });
   };
   const status = view?.status;
   if (!status) return null;
@@ -114,6 +126,57 @@ export function MusicControls({
           </span>
         </>
       ) : null}
+      {!compact && status.bgm ? (
+        <>
+          <span>
+            {musicTime(seekDraft?.cursorMs ?? status.cursorMs)} / {musicTime(status.durationMs)}
+          </span>
+          <Field
+            label="播放进度"
+            type="range"
+            min={status.segmentStartMs ?? 0}
+            max={Math.max(
+              status.segmentStartMs ?? 0,
+              Math.min(status.segmentEndMs ?? Infinity, status.durationMs ?? 0) - 1,
+            )}
+            step="1"
+            value={seekDraft?.cursorMs ?? status.cursorMs ?? 0}
+            disabled={
+              busy ||
+              status.cursorMs === null ||
+              !status.durationMs ||
+              !['playing', 'paused'].includes(status.playback)
+            }
+            onChange={(e) =>
+              setSeekDraft({ cursorMs: Number(e.target.value), playbackId: status.bgm!.playbackId })
+            }
+            onPointerUp={commitSeek}
+            onKeyUp={commitSeek}
+            onBlur={commitSeek}
+          />
+        </>
+      ) : null}
+      {!compact ? (
+        <>
+          <Button
+            disabled={busy}
+            onClick={() => void send({ action: 'monitor', enabled: status.monitor !== 'enabled' })}
+          >
+            {status.monitor === 'enabled' ? '关闭本机监听' : '开启本机监听'}
+          </Button>
+          <span role="status">
+            监听：
+            {status.monitor === 'enabled'
+              ? '已开启'
+              : status.monitor === 'disabled'
+                ? '已关闭'
+                : status.monitor === 'mixed'
+                  ? '部分开启'
+                  : '状态未知'}
+            。使用 OBS 所在机器的监听设备；桌面采集可能回灌。
+          </span>
+        </>
+      ) : null}
       {status.bgm ? (
         <Field
           label={compact ? '' : '当前播放音量'}
@@ -138,11 +201,7 @@ export function MusicControls({
       </Button>
       <Button
         disabled={
-          busy ||
-          status.held ||
-          status.intent === 'manual' ||
-          !status.bgm ||
-          !['waiting', 'technical'].includes(status.bgm.group)
+          busy || status.held || !status.bgm || !['waiting', 'technical'].includes(status.bgm.group)
         }
         onClick={() => void send({ action: 'next' })}
       >

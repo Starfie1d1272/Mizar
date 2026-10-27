@@ -65,6 +65,9 @@ export function registerMusicRoutes(
       group?: unknown;
       volume?: unknown;
       trackId?: unknown;
+      cursorMs?: unknown;
+      enabled?: unknown;
+      playbackId?: unknown;
     } | null;
     try {
       if (body?.action === 'reload') {
@@ -91,6 +94,14 @@ export function registerMusicRoutes(
         typeof body.trackId === 'string'
       )
         await director.manualPlay(body.group as MusicGroup, body.trackId);
+      else if (
+        body?.action === 'seek' &&
+        typeof body.cursorMs === 'number' &&
+        typeof body.playbackId === 'string'
+      )
+        await director.seek(body.cursorMs, body.playbackId);
+      else if (body?.action === 'monitor' && typeof body.enabled === 'boolean')
+        await director.monitor(body.enabled);
       else if (body?.action === 'pause' || body?.action === 'continue')
         await director.manualPause(body.action === 'pause');
       else if (body?.action === 'stop' || body?.action === 'resume' || body?.action === 'next')

@@ -91,11 +91,20 @@ export class MediaObs implements ObsRpc {
   calls: { type: string; data: Record<string, unknown> }[] = [];
   inputs = new Map<
     string,
-    { uuid: string; state: string; file: string; volume: number; muted: boolean; cursor: number }
+    {
+      uuid: string;
+      state: string;
+      file: string;
+      volume: number;
+      muted: boolean;
+      cursor: number;
+      monitor: string;
+    }
   >();
   disconnected = false;
   streamActive: boolean | undefined = false;
   recordActive: boolean | undefined = false;
+  duration: number | null = 10000;
   restartOpeningReads = 0;
   restartState = 'OBS_MEDIA_STATE_OPENING';
   private openingReads = -1;
@@ -138,6 +147,7 @@ export class MediaObs implements ObsRpc {
         volume: 1,
         muted: false,
         cursor: 0,
+        monitor: 'OBS_MONITORING_TYPE_NONE',
       });
       return { inputUuid: uuid };
     }
@@ -145,7 +155,12 @@ export class MediaObs implements ObsRpc {
     if (type === 'GetMediaInputStatus') {
       if (this.openingReads >= 0 && this.openingReads-- === 0)
         input.state = 'OBS_MEDIA_STATE_PLAYING';
-      return { mediaState: input.state, mediaCursor: input.cursor, mediaDuration: 10000 };
+      return { mediaState: input.state, mediaCursor: input.cursor, mediaDuration: this.duration };
+    }
+    if (type === 'GetInputAudioMonitorType') return { monitorType: input.monitor };
+    if (type === 'SetInputAudioMonitorType') {
+      input.monitor = String(data.monitorType);
+      return {};
     }
     if (type === 'GetInputMute') return { inputMuted: input.muted };
     if (type === 'GetInputVolume') return { inputVolumeMul: input.volume };

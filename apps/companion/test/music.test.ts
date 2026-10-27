@@ -1273,3 +1273,139 @@ it('keeps formal playback beyond the audition lease without browser renewals', a
   expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_PLAYING');
   await r.director.close();
 });
+
+it('allows manual selection without an automatic cue but still stops on trusted live play', async () => {
+  const r = await rig();
+  r.truth.production = false;
+  await r.director.manualPlay('waiting', r.tracks[1]!.id);
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_PLAYING');
+  r.truth.program.map.phase = 'live';
+  await r.step();
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
+  await r.director.close();
+});
+
+it('reads OBS progress and seeks only within the current segment', async () => {
+  const r = await rig();
+  const config = structuredClone(r.store.state.config);
+  config.groups.waiting.tracks[1] = { ...r.tracks[1]!, startMs: 1000, endMs: 2500 };
+  await r.store.configure(config);
+  await r.director.manualPlay('waiting', r.tracks[1]!.id);
+  expect(r.director.get().cursorMs).toBe(1000);
+  expect(r.director.get().durationMs).toBe(10000);
+  await r.director.seek(2000, r.director.get().bgm!.playbackId);
+  expect(r.obs.bgm().cursor).toBe(2000);
+  expect(r.director.get().cursorMs).toBe(2000);
+  await expect(r.director.seek(999, r.director.get().bgm!.playbackId)).rejects.toThrow(
+    'music_seek_invalid',
+  );
+  await expect(r.director.seek(2500, r.director.get().bgm!.playbackId)).rejects.toThrow(
+    'music_seek_invalid',
+  );
+  await r.director.manualPause(true);
+  await r.director.seek(1500, r.director.get().bgm!.playbackId);
+  expect(r.obs.bgm().cursor).toBe(1500);
+  await expect(r.director.seek(1600, 'old-playback')).rejects.toThrow('music_seek_unavailable');
+  r.obs.duration = null;
+  await expect(r.director.seek(1600, r.director.get().bgm!.playbackId)).rejects.toThrow(
+    'music_seek_invalid',
+  );
+  await r.director.close();
+});
+
+it('selects the next configured track during formal manual playback', async () => {
+  const r = await rig();
+  await r.director.manualPlay('waiting', r.tracks[0]!.id);
+  await r.director.command('next');
+  expect(r.director.get().bgm?.track).toBe(r.tracks[1]!.name);
+  expect(r.director.get().intent).toBe('manual');
+  await r.director.manualPause(true);
+  await r.director.command('next');
+  expect(r.director.get().bgm?.track).toBe(r.tracks[0]!.name);
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_PLAYING');
+  await r.director.close();
+});
+
+it('monitors only owned music inputs and reads back changes and disconnection', async () => {
+  const r = await rig();
+  await r.director.monitor(true);
+  expect(r.director.get().monitor).toBe('enabled');
+  const sets = r.obs.calls.filter((c) => c.type === 'SetInputAudioMonitorType');
+  expect(sets).toHaveLength(2);
+  expect(sets.every((c) => c.data.monitorType === 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT')).toBe(
+    true,
+  );
+  r.obs.bgm().monitor = 'OBS_MONITORING_TYPE_NONE';
+  await r.step();
+  expect(r.director.get().monitor).toBe('mixed');
+  await r.director.monitor(false);
+  expect(r.director.get().monitor).toBe('disabled');
+  r.obs.disconnected = true;
+  await r.step();
+  expect(r.director.get().monitor).toBe('unknown');
+  await r.director.close();
+});
+
+it('reads monitoring back after a lost write acknowledgement without repeating the write', async () => {
+  const r = await rig();
+  await r.director.monitor(false);
+  let writes = 0;
+  r.obs.intercept = (type) => {
+    if (type === 'SetInputAudioMonitorType') {
+      writes++;
+      r.obs.bgm().monitor = 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT';
+      return Promise.reject(new Error('lost acknowledgement'));
+    }
+    return Promise.resolve();
+  };
+  await expect(r.director.monitor(true)).rejects.toThrow('lost acknowledgement');
+  expect(writes).toBe(1);
+  expect(r.director.get().monitor).toBe('mixed');
+  r.obs.intercept = undefined;
+  await r.director.close();
+});
+
+it('respects OBS manual changes before a seek', async () => {
+  const r = await rig();
+  await r.director.manualPlay('waiting', r.tracks[0]!.id);
+  r.obs.bgm().volume = 0.2;
+  await expect(r.director.seek(1000, r.director.get().bgm!.playbackId)).rejects.toThrow(
+    'music_source_changed',
+  );
+  expect(r.director.get().intent).toBe('held');
+  expect(r.obs.bgm().cursor).toBe(0);
+  await r.director.close();
+});
+
+it('reads a seek after a lost acknowledgement and never replays the write', async () => {
+  const r = await rig();
+  await r.director.manualPlay('waiting', r.tracks[0]!.id);
+  let writes = 0;
+  r.obs.intercept = (type) => {
+    if (type === 'SetMediaInputCursor') {
+      writes++;
+      r.obs.bgm().cursor = 1200;
+      return Promise.reject(new Error('lost acknowledgement'));
+    }
+    return Promise.resolve();
+  };
+  await expect(r.director.seek(1200, r.director.get().bgm!.playbackId)).rejects.toThrow();
+  expect(writes).toBe(1);
+  expect(r.director.get().cursorMs).toBe(1200);
+  expect(r.director.get().intent).toBe('held');
+  r.obs.intercept = undefined;
+  await r.director.close();
+});
+
+it('allows a trusted match pause without any automatic cue and stops when play resumes', async () => {
+  const r = await rig();
+  r.truth.production = false;
+  r.truth.program.map.phase = 'live';
+  r.truth.program.clock = { phase: 'paused', endsInSeconds: 40 };
+  await r.director.manualPlay('waiting', r.tracks[0]!.id);
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_PLAYING');
+  r.truth.program.clock.phase = 'freezetime';
+  await r.step();
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
+  await r.director.close();
+});

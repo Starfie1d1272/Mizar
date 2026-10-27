@@ -104,9 +104,12 @@
 }
 .preparation .music-settings-playback {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
   gap: var(--mizar-layout-compact) var(--mizar-layout-padding);
+}
+.music-settings-playback > .music-controls {
+  min-width: 0;
 }
 .music-settings-playback-intro p {
   margin-bottom: 0;

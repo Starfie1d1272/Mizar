@@ -372,6 +372,32 @@ test('auditions unsaved drafts through the owned OBS protocol channel with outpu
     await expect(page.getByText('正在通过 OBS 试听，最多 15 秒。')).toBeVisible();
     await page.goto('/');
     await expect.poll(() => input().state, { timeout: 6000 }).toBe('OBS_MEDIA_STATE_STOPPED');
+    await page.goto('/settings?tab=music');
+    const choice = `waiting:${store.state.config.groups.waiting.tracks[0]!.id}`;
+    await expect(page.getByLabel('正式播放曲目').locator(`option[value="${choice}"]`)).toHaveCount(
+      1,
+    );
+    await page.getByLabel('正式播放曲目').selectOption(choice);
+    await page.getByRole('button', { name: '播放所选' }).click();
+    await expect(page.getByText(/人工播放 · OBS：播放中/)).toBeVisible();
+    const bgm = () => obs.bgm();
+    await page.getByRole('slider', { name: '播放进度' }).fill('2000');
+    await page.getByRole('slider', { name: '播放进度' }).press('Tab');
+    await expect.poll(() => bgm().cursor).toBe(2000);
+    await page.getByRole('button', { name: '下一首', exact: true }).click();
+    await expect.poll(() => bgm().file).toContain(store.state.config.groups.waiting.tracks[1]!.id);
+    await page.getByRole('button', { name: '开启本机监听' }).click();
+    await expect(page.getByText(/监听：已开启/)).toBeVisible();
+    await page.setViewportSize({ width: 1280, height: 720 });
+    expect(
+      await page
+        .locator('.music-settings-playback-intro')
+        .evaluate((el) => el.getBoundingClientRect().width),
+    ).toBeGreaterThan(250);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true,
+    );
+    await page.screenshot({ path: testInfo.outputPath('formal-player-active.png') });
     const exported = await app.inject({
       method: 'POST',
       url: '/debug/support-bundle',
