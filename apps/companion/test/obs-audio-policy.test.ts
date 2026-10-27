@@ -61,6 +61,16 @@ it('attenuates and restores only the selected game field', async () => {
   expect(f.volume()).toBe(0.5);
   expect(f.writes).toEqual(['game', 'game']);
 });
+it('does not restore over an operator adjustment after relinquishing a lease', async () => {
+  const f = fixture();
+  await f.policy.apply(f.obs, 1, binding, 'r', { mode: 'attenuate', db: 6 }, () => true);
+  await f.policy.relinquish();
+  f.setVolume(0.8);
+  await f.policy.restore(f.obs, 1, binding, 'r', () => true);
+  expect(f.volume()).toBe(0.8);
+  expect(f.policy.status).toBe('held');
+  expect(f.writes).toHaveLength(1);
+});
 it('gives way when volume changes away and back, or connection changes', async () => {
   const f = fixture();
   await f.policy.apply(f.obs, 1, binding, 'r', { mode: 'attenuate', db: 6 }, () => true);
