@@ -1,0 +1,203 @@
+import { randomUUID } from 'node:crypto';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
+import { z } from 'zod';
+import {
+  obsAudioBindingSchema,
+  type ObsAudioBindCommand,
+  type ObsAudioRole,
+  type ObsAudioRoutingStatus,
+} from '@mizar/protocol/obs';
+import type { ObsRpc } from './reconcile.js';
+
+const roles = ['game', 'remoteCommentary', 'microphone'] as const;
+const stateSchema = z
+  .object({
+    revision: z.string().uuid(),
+    bindings: z
+      .object({
+        game: obsAudioBindingSchema.nullable(),
+        remoteCommentary: obsAudioBindingSchema.nullable(),
+        microphone: obsAudioBindingSchema.nullable(),
+      })
+      .strict(),
+  })
+  .strict();
+type State = z.infer<typeof stateSchema>;
+type Input = { inputUuid: string; inputName: string; inputKind: string };
+const audioKinds = new Set([
+  'wasapi_output_capture',
+  'wasapi_input_capture',
+  'wasapi_process_output_capture',
+]);
+const videoKinds = new Set(['game_capture', 'window_capture']);
+
+/** Explicit identities are revalidated against OBS; selection tokens expire and contain no PID. */
+export class ObsAudioRouting {
+  private state: State | undefined;
+  private selections = new Map<string, { input: Input; collection: string; until: number }>();
+  constructor(
+    private readonly path: string,
+    private readonly now = Date.now,
+  ) {}
+  private async load(): Promise<State> {
+    if (this.state) return this.state;
+    try {
+      this.state = stateSchema.parse(JSON.parse(await readFile(this.path, 'utf8')));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
+        throw new Error('audio_routing_storage_invalid', { cause: error });
+      this.state = {
+        revision: randomUUID(),
+        bindings: { game: null, remoteCommentary: null, microphone: null },
+      };
+    }
+    return this.state;
+  }
+  async enabled() {
+    const state = await this.load();
+    return roles.some((role) => state.bindings[role] !== null);
+  }
+  private async inputs(obs: ObsRpc) {
+    const collection = (await obs.call('GetSceneCollectionList')).currentSceneCollectionName;
+    if (typeof collection !== 'string' || !collection) throw new Error('audio_collection_unknown');
+    const raw = (await obs.call('GetInputList')).inputs;
+    if (!Array.isArray(raw)) throw new Error('audio_inputs_unknown');
+    const inputs = raw.filter(
+      (i): i is Input =>
+        typeof i?.inputUuid === 'string' &&
+        typeof i?.inputName === 'string' &&
+        typeof i?.inputKind === 'string',
+    );
+    const candidates: Input[] = [];
+    for (const input of inputs) {
+      if (audioKinds.has(input.inputKind)) candidates.push(input);
+      else if (videoKinds.has(input.inputKind)) {
+        const settings = (await obs.call('GetInputSettings', { inputUuid: input.inputUuid }))
+          .inputSettings as Record<string, unknown>;
+        if (settings?.capture_audio === true) candidates.push(input);
+      }
+    }
+    return { collection, inputs, candidates };
+  }
+  async read(obs: ObsRpc): Promise<ObsAudioRoutingStatus> {
+    const state = await this.load();
+    const { collection, inputs, candidates } = await this.inputs(obs);
+    for (const [id, selection] of this.selections)
+      if (selection.until <= this.now()) this.selections.delete(id);
+    const choices = candidates.map((input) => {
+      const selectionId = randomUUID();
+      this.selections.set(selectionId, { input, collection, until: this.now() + 30_000 });
+      return { selectionId, name: input.inputName, kind: input.inputKind, uuid: input.inputUuid };
+    });
+    while (this.selections.size > 2048)
+      this.selections.delete(this.selections.keys().next().value!);
+    const bindings = Object.fromEntries(
+      roles.map((role) => {
+        const binding = state.bindings[role];
+        if (!binding) return [role, null];
+        const found = candidates.find(
+          (i) =>
+            i.inputUuid === binding.inputUuid &&
+            i.inputKind === binding.inputKind &&
+            collection === binding.collection,
+        );
+        return [role, { ...binding, valid: Boolean(found), name: found?.inputName ?? null }];
+      }),
+    ) as ObsAudioRoutingStatus['bindings'];
+    const findings: string[] = [];
+    const specials = await obs.call('GetSpecialInputs');
+    if (
+      Object.entries(specials).some(
+        ([key, value]) => key.startsWith('desktop') && typeof value === 'string' && value,
+      )
+    )
+      findings.push(
+        'OBS 全局桌面音频可能重复采集应用和监听声音。请在 OBS 设置 → 音频中核对并自行迁移。',
+      );
+    for (const input of candidates.filter((i) => videoKinds.has(i.inputKind)))
+      findings.push(`${input.inputName} 已启用捕获音频；请核对是否与应用音频或桌面音频重复。`);
+    if (inputs.some((i) => i.inputKind === 'wasapi_output_capture'))
+      findings.push('桌面音频可能包含应用音频和音乐监听；请在 OBS 中核对并自行迁移。');
+    const scenes = (await obs.call('GetSceneList')).scenes;
+    if (!Array.isArray(scenes)) throw new Error('audio_scenes_unknown');
+    for (const scene of scenes) {
+      if (typeof scene?.sceneName !== 'string') continue;
+      const counts = new Map<string, number>();
+      const walk = async (name: string, group: boolean, ancestors: Set<string>): Promise<void> => {
+        if (ancestors.has(name) || ancestors.size >= 16) return;
+        const next = new Set(ancestors).add(name);
+        const result = await obs.call(group ? 'GetGroupSceneItemList' : 'GetSceneItemList', {
+          sceneName: name,
+        });
+        if (!Array.isArray(result.sceneItems)) throw new Error('audio_scene_items_unknown');
+        for (const item of result.sceneItems) {
+          if (item.sceneItemEnabled !== true) continue;
+          if (
+            typeof item.sourceUuid === 'string' &&
+            candidates.some((i) => i.inputUuid === item.sourceUuid)
+          )
+            counts.set(item.sourceUuid, (counts.get(item.sourceUuid) ?? 0) + 1);
+          if (
+            typeof item.sourceName === 'string' &&
+            (item.isGroup === true || item.sourceType === 'OBS_SOURCE_TYPE_SCENE')
+          )
+            await walk(item.sourceName, item.isGroup === true, next);
+        }
+      };
+      await walk(scene.sceneName, false, new Set());
+      for (const [uuid, count] of counts)
+        if (count > 1) {
+          const input = candidates.find((i) => i.inputUuid === uuid)!;
+          findings.push(
+            `${scene.sceneName} 中 ${input.inputName} 出现 ${count} 次（含嵌套场景）；请在 OBS 核对重复路径。`,
+          );
+        }
+    }
+    findings.push('请在 OBS 核对监听回灌及输出音轨，并录制试听。');
+    return { revision: state.revision, collection, bindings, candidates: choices, findings };
+  }
+  async bind(obs: ObsRpc, command: ObsAudioBindCommand) {
+    const state = await this.load();
+    if (state.revision !== command.revision) throw new Error('audio_revision_changed');
+    let binding: State['bindings'][ObsAudioRole] = null;
+    if (command.selectionId) {
+      const selected = this.selections.get(command.selectionId);
+      if (!selected || selected.until <= this.now()) throw new Error('audio_selection_expired');
+      const current = await this.inputs(obs);
+      const input = current.candidates.find(
+        (i) => i.inputUuid === selected.input.inputUuid && i.inputKind === selected.input.inputKind,
+      );
+      if (!input || current.collection !== selected.collection)
+        throw new Error('audio_selection_changed');
+      if (
+        roles.some(
+          (role) =>
+            role !== command.role &&
+            state.bindings[role]?.inputUuid === input.inputUuid &&
+            state.bindings[role]?.collection === current.collection,
+        )
+      )
+        throw new Error('audio_binding_duplicate');
+      binding = {
+        inputUuid: input.inputUuid,
+        inputKind: input.inputKind,
+        collection: current.collection,
+      };
+    }
+    const next: State = {
+      revision: randomUUID(),
+      bindings: { ...state.bindings, [command.role]: binding },
+    };
+    await mkdir(dirname(this.path), { recursive: true });
+    const temp = `${this.path}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temp, `${JSON.stringify(next)}\n`, { mode: 0o600 });
+      await rename(temp, this.path);
+    } finally {
+      await rm(temp, { force: true });
+    }
+    this.state = next;
+    return this.read(obs);
+  }
+}
