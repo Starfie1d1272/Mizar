@@ -220,7 +220,12 @@ export class ObsAudioRouting {
       findings,
     };
   }
-  async bind(obs: ObsRpc, command: ObsAudioBindCommand, endpoint: string) {
+  async bind(
+    obs: ObsRpc,
+    command: ObsAudioBindCommand,
+    endpoint: string,
+    beforeCommit?: (binding: State['bindings'][ObsAudioRole]) => Promise<void>,
+  ) {
     const state = await this.load();
     if (state.revision !== command.revision) throw new Error('audio_revision_changed');
     let binding: State['bindings'][ObsAudioRole] = null;
@@ -254,6 +259,7 @@ export class ObsAudioRouting {
       (await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== binding.collection
     )
       throw new Error('audio_selection_changed');
+    await beforeCommit?.(binding);
     const next: State = {
       revision: randomUUID(),
       bindings: { ...state.bindings, [command.role]: binding },

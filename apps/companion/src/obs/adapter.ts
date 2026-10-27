@@ -407,8 +407,34 @@ export class ObsAdapter {
   bindAudio(command: ObsAudioBindCommand) {
     if (!this.audioRouting) throw new Error('audio_routing_unavailable');
     return this.serial(() =>
-      this.withObs((obs, endpoint) => this.audioRouting!.bind(obs, command, endpoint), 12000),
+      this.withObs(async (obs, endpoint) => {
+        await this.audioRouting!.bind(obs, command, endpoint, async (binding) => {
+          if (command.role !== 'remoteCommentary' || !this.commentary) return;
+          const current = await this.commentary.owner.get();
+          await this.commentary.owner.set(
+            binding
+              ? {
+                  mode: 'existingInput',
+                  binding: {
+                    endpoint: binding.endpoint,
+                    collection: binding.collection,
+                    inputUuid: binding.inputUuid,
+                  },
+                }
+              : { mode: 'disabled' },
+            current.revision,
+          );
+        });
+      }, 12000),
     );
+  }
+  async readCommentary() {
+    if (!this.commentary) throw new Error('commentary_unavailable');
+    return this.commentary.owner.get();
+  }
+  setCommentaryMode(mode: 'autoTeamspeak' | 'disabled', revision: string) {
+    if (!this.commentary) throw new Error('commentary_unavailable');
+    return this.serial(() => this.commentary!.owner.set({ mode }, revision));
   }
   ensure(activeScene: () => ProgramSceneId = () => 'waiting'): Promise<readonly ObsFinding[]> {
     return this.configurationMutation(async () => {

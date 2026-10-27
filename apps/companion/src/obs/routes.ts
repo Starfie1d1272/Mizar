@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { createObsCaptureDiagnosticReader } from './capture-diagnostic.js';
 import {
   obsAudioBindCommandSchema,
@@ -84,6 +85,28 @@ export function registerObsRoutes(
       return reply
         .code(409)
         .send({ error: 'audio_policy_unavailable', message: '控制权未恢复，请稍后核对。' });
+    }
+  });
+  app.get('/local/v1/obs/remote-commentary', async (request, reply) => {
+    if (!allowedRead(request)) return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    try {
+      return reply.header('cache-control', 'no-store').send(await options.adapter.readCommentary());
+    } catch {
+      return reply.code(409).send({ error: 'commentary_unavailable' });
+    }
+  });
+  app.post('/operator/obs/remote-commentary', { bodyLimit: 2048 }, async (request, reply) => {
+    if (!allowed(request.headers.origin))
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    const result = z
+      .object({ revision: z.string().uuid(), mode: z.enum(['autoTeamspeak', 'disabled']) })
+      .strict()
+      .safeParse(request.body);
+    if (!result.success) return reply.code(400).send({ error: 'commentary_invalid' });
+    try {
+      return await options.adapter.setCommentaryMode(result.data.mode, result.data.revision);
+    } catch {
+      return reply.code(409).send({ error: 'commentary_changed' });
     }
   });
   app.get('/local/v1/obs/audio-routing', async (request, reply) => {
