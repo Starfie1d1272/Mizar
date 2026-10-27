@@ -116,7 +116,7 @@ export function Mixer({ musicOnly = false }: { musicOnly?: boolean }) {
                   {channel === 'music'
                     ? '请在音乐页核对 OBS，并使用“恢复自动音乐”。'
                     : channel === 'game'
-                      ? '请核对 OBS；中场让权时可在场景策略恢复自动控制。'
+                      ? '请核对 OBS；中场自动控制暂停时可在场景策略恢复。'
                       : '请在 OBS 核对来源和音量。'}
                 </small>
               )}
