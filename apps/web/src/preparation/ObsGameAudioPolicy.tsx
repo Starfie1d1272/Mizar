@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Button } from '../ui';
+import { Button, Field, Select } from '../ui';
 type Policy = { mode: 'keep' | 'mute' } | { mode: 'attenuate'; db: number };
 type Status = {
   ready: boolean;
@@ -60,33 +60,36 @@ export function ObsGameAudioPolicy() {
     }
   }
   return (
-    <div>
+    <div className="game-audio-policy">
       <h3>中场游戏音频</h3>
-      <p>仅作用于已绑定的游戏来源；默认保持不变。请在 OBS 核对实际声音。</p>
-      <label htmlFor="game-audio-policy">中场策略</label>{' '}
-      <select
-        id="game-audio-policy"
+      <p>
+        只调整已绑定的游戏来源，不调整解说和麦克风来源。默认保持游戏音量不变；请在 OBS
+        核对实际声音。
+      </p>
+      <p>
+        比赛恢复时，系统会尝试恢复中场前的游戏音量或静音状态。中场期间人工调整或连接状态无法确认时，系统会停止自动控制，保留当前状态并提示处理。
+      </p>
+      <Select
+        label="中场策略"
         value={mode}
         disabled={busy || !status?.ready}
         onChange={(e) => setMode(e.target.value as Policy['mode'])}
       >
-        <option value="keep">保持</option>
-        <option value="attenuate">降低音量</option>
-        <option value="mute">静音</option>
-      </select>
+        <option value="keep">保持游戏音量</option>
+        <option value="attenuate">降低游戏音量</option>
+        <option value="mute">静音游戏</option>
+      </Select>
       {mode === 'attenuate' && (
-        <label>
-          {' '}
-          降低 dB{' '}
-          <input
-            type="number"
-            min="0.1"
-            max="60"
-            step="0.1"
-            value={db}
-            onChange={(e) => setDb(Number(e.target.value))}
-          />
-        </label>
+        <Field
+          label="降低音量（dB）"
+          type="number"
+          min="0.1"
+          max="60"
+          step="0.1"
+          value={db}
+          disabled={busy || !status?.ready}
+          onChange={(e) => setDb(Number(e.target.value))}
+        />
       )}
       <Button
         disabled={busy || !status?.ready || (mode === 'attenuate' && !(db > 0 && db <= 60))}
@@ -101,7 +104,7 @@ export function ObsGameAudioPolicy() {
       </Button>
       {status?.ownership === 'held' && (
         <p role="status">
-          OBS 音频控制已让权。请在比赛恢复后先在 OBS 手动恢复游戏音量与静音状态，然后{' '}
+          游戏音频的自动控制已暂停。请在比赛恢复后先在 OBS 手动恢复游戏音量与静音状态，然后{' '}
           <Button
             disabled={busy}
             onClick={() =>
