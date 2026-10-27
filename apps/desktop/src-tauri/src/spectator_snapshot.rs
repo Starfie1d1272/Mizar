@@ -451,6 +451,22 @@ pub(crate) fn handoff(
         .map_err(str::to_string)?
         .ok_or("identity_changed")?;
     let (id, _) = identity(video, exe, account)?;
+    let core_video = core["video"]
+        .as_str()
+        .map(Path::new)
+        .ok_or("identity_changed")?;
+    let core_exe = core["executable"]
+        .as_str()
+        .map(Path::new)
+        .ok_or("identity_changed")?;
+    check_path(core_video, false).map_err(|_| "identity_changed")?;
+    check_path(core_exe, false).map_err(|_| "identity_changed")?;
+    if fs::canonicalize(core_video).map_err(|_| "identity_changed")? != full_session.config.video
+        || fs::canonicalize(core_exe).map_err(|_| "identity_changed")?
+            != full_session.config.executable
+    {
+        return Err("identity_changed".into());
+    }
     if full_session != core_session
         || full_session.config.value() != id
         || payload["identity"] != id

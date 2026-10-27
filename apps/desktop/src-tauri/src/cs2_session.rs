@@ -146,6 +146,9 @@ impl SessionStore {
         self.recover_spectator_snapshot_locked(&guard, video, executable, account)
     }
     fn recover_spectator_snapshot_locked(&self, _guard: &StoreGuard, video: &Path, executable: &Path, account: u32) -> Result<(), String> {
+        // A live core journal must be handed off before the associated full
+        // record can be removed, including when it belongs to an older session.
+        if self.load()?.is_some() { return Err("core_pending".into()); }
         crate::spectator_snapshot::recover(&self.root, video, executable, account, atomic_write)
     }
     /// Caller must verify the active Steam identity and confirm CS2 is stopped.
@@ -1338,6 +1341,56 @@ mod tests {
         assert_eq!(fs::read(store.root.join("spectator-full-pending.json")).unwrap(), snapshot);
         assert!(!store.journal_path().exists()); assert_eq!(fs::read(&video).unwrap(), before_video);
         assert_eq!(fs::read_to_string(&key).unwrap(), original);
+        fs::remove_dir_all(root).unwrap();
+    }
+    fn coordinated_fixture() -> (PathBuf, PathBuf, PathBuf, PathBuf, SessionStore, Value) {
+        use crate::cs2_config_identity::{ConfigIdentity, SessionIdentity};
+        use crate::spectator_recovery_plan::{Input, InputKind};
+        let (root, video, _, executable, store) = frame_setup();
+        fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        fs::write(&executable, b"fixture").unwrap();
+        let key = video.with_file_name("cs2_user_keys_0_slot0.vcfg");
+        fs::write(&key, "\"config\" {\"bindings\" {\"x\" \"personal\"} \"analogbindings\" {}}").unwrap();
+        let candidate = "\"config\" {\"bindings\" {\"x\" \"preset\"} \"analogbindings\" {}}";
+        let session = SessionIdentity { session_id:"fixture-session".into(), config:ConfigIdentity {
+            account:1, video:fs::canonicalize(&video).unwrap(), executable:fs::canonicalize(&executable).unwrap(),
+            keys:fs::canonicalize(&key).unwrap(), slot:0, format:"vcfg".into() }};
+        let x = Input { kind:InputKind::Key, name:"x".into() };
+        let core = store.prepare_coordinated(&video, &executable, cs2_video::VideoSize::new(1920,1080).unwrap(), None,
+            &session, &[x.clone()].into(), &[(x, vec!["preset".into()])].into(), candidate).unwrap();
+        (root, video, executable, key, store, core)
+    }
+    #[test]
+    fn legacy_full_recovery_cannot_remove_snapshot_while_core_is_pending() {
+        let (root, video, executable, key, store, core) = coordinated_fixture();
+        let snapshot = store.root.join("spectator-full-pending.json");
+        let before_snapshot = fs::read(&snapshot).unwrap(); let before_video = fs::read(&video).unwrap(); let before_key = fs::read(&key).unwrap();
+        assert_eq!(store.recover_spectator_snapshot(&video, &executable, 1).unwrap_err(), "core_pending");
+        assert_eq!(store.load().unwrap(), Some(core)); assert_eq!(fs::read(&snapshot).unwrap(), before_snapshot);
+        assert_eq!(fs::read(&video).unwrap(), before_video); assert_eq!(fs::read(&key).unwrap(), before_key);
+        assert_eq!(store.restore_coordinated(&video, &executable, 1).unwrap(), None);
+        assert!(!snapshot.exists()); assert!(store.load().unwrap().is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn coordinated_handoff_rejects_core_targets_that_disagree_with_identity() {
+        let (root, video, executable, key, store, original_core) = coordinated_fixture();
+        let other_video = root.join("other/cs2_video.txt"); fs::create_dir_all(other_video.parent().unwrap()).unwrap();
+        fs::write(&other_video, &fs::read(&video).unwrap()).unwrap();
+        let other_exe = root.join("other/cs2.exe"); fs::write(&other_exe, b"other executable").unwrap();
+        let full = store.root.join("spectator-full-pending.json");
+        let before_full = fs::read(&full).unwrap(); let before_video = fs::read(&video).unwrap();
+        let before_other = fs::read(&other_video).unwrap(); let before_key = fs::read(&key).unwrap();
+        for (field, replacement) in [("video", &other_video), ("executable", &other_exe)] {
+            let mut tampered = original_core.clone(); tampered[field] = json!(replacement);
+            { let guard = store.acquire_write_guard().unwrap(); store.save_coordinated_locked(&guard, &tampered, atomic_write).unwrap(); }
+            assert!(store.restore_coordinated(&video, &executable, 1).is_err());
+            assert_eq!(store.load().unwrap(), Some(tampered));
+            assert_eq!(fs::read(&full).unwrap(), before_full); assert_eq!(fs::read(&video).unwrap(), before_video);
+            assert_eq!(fs::read(&other_video).unwrap(), before_other); assert_eq!(fs::read(&key).unwrap(), before_key);
+        }
+        { let guard = store.acquire_write_guard().unwrap(); store.save_coordinated_locked(&guard, &original_core, atomic_write).unwrap(); }
+        assert_eq!(store.restore_coordinated(&video, &executable, 1).unwrap(), None);
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
