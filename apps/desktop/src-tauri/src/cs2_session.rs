@@ -9,6 +9,15 @@ use std::{
     path::{Path, PathBuf},
 };
 
+fn full_recovery_warning(code: &str) -> &'static str {
+    match code {
+        "conflict" => "观战键位已被其他程序修改，保留当前配置和原备份；请核对后重试。",
+        "identity_changed" | "identity_invalid" | "identity" | "path_invalid" => "无法确认原账号或安装位置，观战键位备份仍保留。",
+        "damaged" | "snapshot_invalid" | "snapshot_file_invalid" | "snapshot_changed" => "观战键位备份校验失败，原备份仍保留。",
+        _ => "暂时无法恢复观战键位，原备份仍保留；请检查文件访问后重试。",
+    }
+}
+
 /// Missing game identity after a submitted Steam request is not proof of exit.
 pub fn unconfirmed_launch(value: &Value) -> bool {
     value["launchAttempted"] == true
@@ -165,7 +174,7 @@ impl SessionStore {
         }
         match self.recover_spectator_snapshot_locked(&guard, video, executable, account) {
             Ok(()) => Ok(None),
-            Err(error) => Ok(Some(format!("观战键位尚未恢复，原快照仍保留：{error}"))),
+            Err(error) => Ok(Some(full_recovery_warning(&error).into())),
         }
     }
     pub fn backup_directory(&self) -> PathBuf {
@@ -215,6 +224,10 @@ impl SessionStore {
                     return Err("snapshot_pending".into());
                 }
                 let mut old = previous.clone(); let mut next = value.clone();
+                if value["consoleDiagnostics"].is_null() {
+                    old.as_object_mut().ok_or("snapshot_invalid")?.remove("consoleDiagnostics");
+                    next.as_object_mut().ok_or("snapshot_invalid")?.remove("consoleDiagnostics");
+                }
                 for key in ["launchAttempted", "launchTime", "launchCancelled", "pid", "created"] {
                     old.as_object_mut().ok_or("snapshot_invalid")?.remove(key);
                     next.as_object_mut().ok_or("snapshot_invalid")?.remove(key);
@@ -532,6 +545,38 @@ impl SessionStore {
             Err(_) => Err("CS2 画质设置无法读取。".into()),
         }
     }
+    fn full_optins(&self) -> Result<Value, String> {
+        let path = self.root.join("full-spectator-optins.json");
+        match fs::symlink_metadata(&path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(json!({"version":1,"accounts":{}})),
+            Err(_) => Err("完整解说键位选择无法读取。".into()),
+            Ok(metadata) => {
+                if !metadata.is_file() || metadata.len() > 64*1024 || crate::spectator_snapshot::check_path(&path, false).is_err() { return Err("完整解说键位选择无法安全读取。".into()); }
+                let bytes = fs::read(&path).map_err(|_| "完整解说键位选择无法读取。")?;
+                if bytes.len() > 64*1024 { return Err("完整解说键位选择过大。".into()); }
+                let value: Value = serde_json::from_slice(&bytes).map_err(|_| "完整解说键位选择损坏。")?;
+                if value["version"] != 1 || value["accounts"].as_object().is_none_or(|v| v.len() > 128 || v.iter().any(|(k,v)| k.parse::<u32>().ok().filter(|n| *n != 0).is_none() || v != true)) {
+                    return Err("完整解说键位选择损坏。".into());
+                }
+                Ok(value)
+            }
+        }
+    }
+    pub(crate) fn full_optin(&self, account: u32) -> Result<bool, String> {
+        if account == 0 { return Err("Steam 账号无法确认。".into()); }
+        Ok(self.full_optins()?["accounts"].get(account.to_string()).is_some())
+    }
+    pub(crate) fn set_full_optin(&self, account: u32, enabled: bool) -> Result<(), String> {
+        let _guard = self.acquire_write_guard()?;
+        if account == 0 { return Err("Steam 账号无法确认。".into()); }
+        if self.load()?.is_some() { return Err("请结束制作后修改解说键位选择。".into()); }
+        let mut value = self.full_optins()?;
+        let accounts = value["accounts"].as_object_mut().ok_or("完整解说键位选择损坏。")?;
+        if enabled { if accounts.len() >= 128 && !accounts.contains_key(&account.to_string()) { return Err("保存的账号选择过多。".into()); } accounts.insert(account.to_string(), json!(true)); }
+        else { accounts.remove(&account.to_string()); }
+        atomic_write(&self.root.join("full-spectator-optins.json"), &serde_json::to_vec(&value).map_err(|_| "完整解说键位选择无法保存。")?)
+    }
+
     pub fn set_preferences(&self, preferences: Preferences) -> Result<(), String> {
         let guard = self.acquire_write_guard()?;
         self.set_preferences_locked(&guard, preferences)
@@ -835,7 +880,46 @@ impl SessionStore {
         applied: &crate::spectator_recovery_plan::Bindings, candidate: &str,
     ) -> Result<Value, String> {
         let guard = self.acquire_write_guard()?;
-        self.prepare_coordinated_locked(&guard, video, executable, size, frames, session, owned, applied, candidate, atomic_write)
+        self.prepare_coordinated_locked(&guard, video, executable, size, frames, session, owned, applied, candidate, atomic_write, None, None)
+    }
+
+    /// Commit a source-bound, explicitly selected full configuration.
+    pub(crate) fn prepare_eligible(
+        &self, video: &Path, executable: &Path, size: cs2_video::VideoSize,
+        session_id: &str, fingerprint: &crate::spectator_eligibility::Fingerprint,
+        attachments: &Value,
+    ) -> Result<Value, String> {
+        let guard = self.acquire_write_guard()?;
+        let eligible = crate::spectator_eligibility::revalidate(fingerprint, video, executable, fingerprint.identity.account)
+            .map_err(|e| e.message().to_string())?;
+        let original = fs::read_to_string(&fingerprint.identity.keys).map_err(|_| "键位配置无法读取，使用基础观战模式。")?;
+        let (owned, applied, candidate) = crate::spectator_eligibility::build_plan(&eligible, &original)
+            .map_err(|e| e.message().to_string())?;
+        let preferences = self.preferences()?;
+        let frames = cs2_frame_rate::prepare(video, executable, preferences.frame_rate_limit)?;
+        crate::cs2_spectator::full_mode_convar_compatible(&frames, video)?;
+        let session = crate::cs2_config_identity::SessionIdentity { session_id:session_id.into(), config:fingerprint.identity.clone() };
+        self.prepare_coordinated_locked(&guard, video, executable, size, Some(frames), &session,
+            &owned, &applied, &candidate, atomic_write, Some(fingerprint), Some(attachments))
+    }
+
+    /// Recheck frozen source and expected applied bytes before submitting Steam.
+    pub(crate) fn validate_full_launch(&self, fingerprint: &crate::spectator_eligibility::Fingerprint) -> Result<(), String> {
+        let _guard = self.acquire_write_guard()?;
+        let core = self.load()?.ok_or("完整解说键位记录缺失。")?;
+        let session = crate::cs2_config_identity::SessionIdentity::read(&core).map_err(str::to_string)?.ok_or("完整解说键位身份缺失。")?;
+        if core["fullSnapshot"] != true || core["configWriteAttempted"] != true || session.config != fingerprint.identity
+            || crate::spectator_snapshot::linked_session(&self.root)?.as_ref() != Some(&session) {
+            return Err("完整解说键位身份已变化，请恢复后重试。".into());
+        }
+        let video = Path::new(core["video"].as_str().ok_or("完整解说键位路径缺失。")?);
+        let exe = Path::new(core["executable"].as_str().ok_or("完整解说键位路径缺失。")?);
+        let applied = core["fullAppliedSha256"].as_str().ok_or("完整解说键位摘要缺失。")?;
+        let frames = frame_files(&core, video, exe)?;
+        unchanged(video, core["applied"].as_str().ok_or("完整解说键位记录损坏。")?.as_bytes())?;
+        for (path, _, next) in &frames { unchanged(path, next.as_bytes())?; }
+        crate::spectator_eligibility::verify_for_launch(fingerprint, applied, video, exe, session.config.account, &frames)
+            .map_err(|e| e.message().to_string())
     }
 
     #[cfg(test)]
@@ -847,7 +931,7 @@ impl SessionStore {
         write: fn(&Path, &[u8]) -> Result<(), String>,
     ) -> Result<Value, String> {
         let guard = self.acquire_write_guard()?;
-        self.prepare_coordinated_locked(&guard, video, executable, size, frames, session, owned, applied, candidate, write)
+        self.prepare_coordinated_locked(&guard, video, executable, size, frames, session, owned, applied, candidate, write, None, None)
     }
 
     fn prepare_coordinated_locked(
@@ -856,13 +940,29 @@ impl SessionStore {
         owned: &std::collections::BTreeSet<crate::spectator_recovery_plan::Input>,
         applied: &crate::spectator_recovery_plan::Bindings, candidate: &str,
         write: fn(&Path, &[u8]) -> Result<(), String>,
+        eligibility: Option<&crate::spectator_eligibility::Fingerprint>,
+        attachments: Option<&Value>,
     ) -> Result<Value, String> {
         if self.load()?.is_some() || self.spectator_pending() || self.full_spectator_pending() {
             return Err("snapshot_pending".into());
         }
         let mut core = self.plan_files_for_session(video, executable, size, frames, session)?;
+        if let Some(attachment) = attachments {
+            let object = attachment.as_object().ok_or("invalid_plan")?;
+            if object.keys().any(|key| !["consoleDiagnostics", "consoleDiagnosticsWarning"].contains(&key.as_str())) { return Err("invalid_plan".into()); }
+            for (key, value) in object { core[key] = value.clone(); }
+        }
+        if let Some(fingerprint) = eligibility {
+            if fingerprint.identity != session.config { return Err("identity_changed".into()); }
+            crate::spectator_eligibility::revalidate(fingerprint, video, executable, session.config.account).map_err(|e| e.message().to_string())?;
+            core["fullSource"] = json!({"sha256":fingerprint.default_sha256,"source":fingerprint.source});
+        }
         let (key, original_keys, applied_keys) = crate::spectator_snapshot::plan_application(
             video, executable, session.config.account, session, owned, applied, candidate)?;
+        if eligibility.is_some() {
+            use sha2::{Digest, Sha256};
+            core["fullAppliedSha256"] = json!(format!("{:x}", Sha256::digest(&applied_keys)));
+        }
         let key_identity = fs::canonicalize(&key).map_err(|_| "identity_invalid")?;
         if key_identity != session.config.keys || fs::canonicalize(video).map_err(|_| "identity_invalid")? == key_identity {
             return Err("scope_overlap".into());
@@ -888,6 +988,9 @@ impl SessionStore {
         self.preflight_core_plan(&core)?;
         crate::spectator_snapshot::verify_prepared(&self.root, video, executable,
             session.config.account, session, owned, applied, &original_keys, true)?;
+        if let Some(fingerprint) = eligibility {
+            crate::spectator_eligibility::revalidate(fingerprint, video, executable, session.config.account).map_err(|e| e.message().to_string())?;
+        }
         let applied_video = core["applied"].as_str().ok_or("invalid_plan")?;
         write(video, applied_video.as_bytes())?;
         unchanged(video, applied_video.as_bytes())?;
@@ -898,6 +1001,10 @@ impl SessionStore {
         }
         crate::spectator_snapshot::verify_prepared(&self.root, video, executable,
             session.config.account, session, owned, applied, &original_keys, true)?;
+        if let Some(fingerprint) = eligibility {
+            let frames = frame_files(&core, video, executable)?;
+            crate::spectator_eligibility::revalidate_after_core(fingerprint, video, executable, session.config.account, &frames).map_err(|e| e.message().to_string())?;
+        }
         if applied_keys != original_keys { write(&key, &applied_keys)?; }
         crate::spectator_snapshot::verify_applied(video, executable, session.config.account, session, &applied_keys)?;
         Ok(core)
@@ -984,7 +1091,7 @@ impl SessionStore {
         }
         match crate::spectator_snapshot::recover(&self.root, video, executable, account, atomic_write) {
             Ok(()) => Ok(None),
-            Err(error) => Ok(Some(format!("观战键位尚未恢复，原快照仍保留：{error}"))),
+            Err(error) => Ok(Some(full_recovery_warning(&error).into())),
         }
     }
 
@@ -1216,6 +1323,16 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
+    fn full_spectator_optin_is_account_scoped_and_defaults_off() {
+        let (root, _, store) = setup();
+        assert!(!store.full_optin(1).unwrap()); assert!(!store.full_optin(2).unwrap());
+        store.set_full_optin(1, true).unwrap();
+        assert!(SessionStore::new(root.clone()).full_optin(1).unwrap());
+        assert!(!store.full_optin(2).unwrap());
+        store.set_full_optin(1, false).unwrap(); assert!(!store.full_optin(1).unwrap());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
     fn core_plan_is_read_only_and_commit_rejects_changed_original() {
         let (root, video, store) = setup();
         let executable = root.join("cs2.exe");
@@ -1332,6 +1449,42 @@ mod tests {
         store.restore().unwrap();
         assert_eq!(fs::read(&video).unwrap(), before_video);
         assert!(store.full_spectator_pending());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn eligible_source_is_bound_to_coordinated_commit_and_restoration() {
+        let (root, video, machine, executable, store) = frame_setup();
+        fs::create_dir_all(executable.parent().unwrap()).unwrap(); fs::write(&executable, b"fixture").unwrap();
+        fs::write(&machine, "\"config\" {\"convars\" {\"fps_max\" \"0\" \"spec_usenumberkeys_nobinds\" \"0\"}}").unwrap();
+        let key0 = video.with_file_name("cs2_user_keys_0_slot0.vcfg"); fs::remove_file(key0).unwrap();
+        let key = video.with_file_name("cs2_user_keys_0_slot3.vcfg");
+        let original = "\"config\" {\"bindings\" {\"x\" \"personal\"} \"analogbindings\" {\"MOUSE_X\" \"old\"}}";
+        fs::write(&key, original).unwrap();
+        let mut defaults = String::from("\"config\" {\"bindings\" {");
+        for (name, number) in [("1",1),("2",2),("3",3),("4",4),("5",5),("6",6),("7",7),("8",8),("9",9),("0",10)] {
+            defaults.push_str(&format!(" \"{name}\" \"slot{number}\""));
+        }
+        defaults.push_str("} \"analogbindings\" {\"mouse_x\" \"yaw\"}}");
+        let source = root.join("game/csgo/cfg/user_keys_default.vcfg"); fs::write(&source, &defaults).unwrap();
+        let auto = root.join("game/csgo/cfg/auto.cfg"); let original_auto=fs::read(&auto).unwrap();
+        let eligible=crate::spectator_eligibility::inspect(&video,&executable,1).unwrap();
+        fs::write(&source, defaults.replace("slot1\"", "different\"")).unwrap();
+        assert!(store.prepare_eligible(&video,&executable,cs2_video::VideoSize::new(1920,1080).unwrap(),"source-test",&eligible.fingerprint,&json!({})).is_err());
+        assert!(!store.journal_path().exists()); assert!(!store.full_spectator_pending());
+        fs::write(&source, &defaults).unwrap();
+        let eligible=crate::spectator_eligibility::inspect(&video,&executable,1).unwrap();
+        let core=store.prepare_eligible(&video,&executable,cs2_video::VideoSize::new(1920,1080).unwrap(),"source-test",&eligible.fingerprint,&json!({})).unwrap();
+        assert_eq!(core["fullSource"]["sha256"],eligible.fingerprint.default_sha256);
+        assert_eq!(core["configIdentity"]["slot"],3);
+        let applied=fs::read_to_string(&key).unwrap(); assert!(applied.contains("\"MOUSE_X\" \"yaw\""));
+        assert!(applied.contains("\"5\" \"slot5\""));
+        store.validate_full_launch(&eligible.fingerprint).unwrap();
+        fs::write(&key, applied.replace("slot5", "changed")).unwrap();
+        assert!(store.validate_full_launch(&eligible.fingerprint).is_err());
+        fs::write(&key, &applied).unwrap();
+        assert_eq!(store.restore_coordinated(&video,&executable,1).unwrap(),None);
+        let restored=fs::read_to_string(&key).unwrap(); assert!(restored.contains("\"x\" \"personal\""));
+        assert!(restored.contains("\"MOUSE_X\" \"old\"")); assert_eq!(fs::read(auto).unwrap(),original_auto);
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
@@ -1468,7 +1621,7 @@ mod tests {
         assert!(store.load().unwrap().is_some());
         assert!(store.restore().is_err()); // Cannot bypass handoff.
         let warning = store.restore_coordinated(&video, &executable, 1).unwrap().unwrap();
-        assert!(warning.contains("conflict")); assert!(!warning.contains("external"));
+        assert!(warning.contains("其他程序修改")); assert!(!warning.contains("external"));
         assert!(store.load().unwrap().is_none()); assert_eq!(fs::read(&video).unwrap(), before_video);
         assert_eq!(fs::read(&key).unwrap(), changed);
         let record: Value = serde_json::from_slice(&fs::read(store.root.join("spectator-full-pending.json")).unwrap()).unwrap();
@@ -1534,7 +1687,7 @@ mod tests {
                 FAIL_AT.store(target, Ordering::SeqCst); COUNT.store(0, Ordering::SeqCst); AFTER.store(mode, Ordering::SeqCst);
                 let guard = store.acquire_write_guard().unwrap();
                 let result = store.prepare_coordinated_locked(&guard, &video, &executable,
-                    cs2_video::VideoSize::new(1920,1080).unwrap(), Some(frames), &session, &owned, &applied, candidate, injected);
+                    cs2_video::VideoSize::new(1920,1080).unwrap(), Some(frames), &session, &owned, &applied, candidate, injected, None, None);
                 drop(guard);
                 if target == 0 {
                     result.unwrap(); total = COUNT.load(Ordering::SeqCst); assert!(total >= 5);

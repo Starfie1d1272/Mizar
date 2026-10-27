@@ -749,6 +749,18 @@ impl ManagedCs2 {
             json!({"qualityPreset": preferences.quality.name(), "preferMulnx":preferences.prefer_mulnx, "frameRateLimit":preferences.frame_rate_limit, "spectatorRecoveryPending": (self.store.spectator_pending() || self.store.full_spectator_pending()) && pending.is_none(), "demoCleanupPending": self.store.playback_cleanup_pending() && pending.is_none(), "spectatorWarning":self.store.spectator_warning().or_else(|| pending.as_ref().and_then(|value| value["spectatorWarning"].as_str()).map(str::to_string)), "canPreserve": self.can_preserve && pending.is_none(), "preserveSettings": borrowed || pending.as_ref().is_some_and(|v| v["preserveSettings"] == true), "pending":pending.is_some(), "borrowed":borrowed, "externalDetached":self.external_preservation && !borrowed, "running":running, "message":self.message, "busy":false, "phase": if pending.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch) {"uncertain"} else if running {"running"} else if pending.is_some() {"pending"} else {"idle"}}),
         )
     }
+    pub fn full_spectator_preference(&self) -> Result<Value, String> {
+        let (_, _, steam) = discover(&self.log)?;
+        steam.validate(&self.log)?;
+        Ok(json!({"account":steam.account,"enabled":self.store.full_optin(steam.account)?}))
+    }
+    pub fn set_full_spectator_preference(&mut self, account: u32, enabled: bool) -> Result<(), String> {
+        let (_, _, steam) = discover(&self.log)?;
+        if steam.account != account { return Err("Steam 账号已变化，请重新检查后再保存。".into()); }
+        steam.validate(&self.log)?;
+        self.store.set_full_optin(account, enabled)
+    }
+
     pub fn preferences(
         &mut self,
         preferences: crate::cs2_preferences::Preferences,
@@ -988,30 +1000,65 @@ impl ManagedCs2 {
         } else {
             Some(crate::windows_host::launch_viewport()?)
         };
+        let mut full_fingerprint = None;
+        let mut early_console: Option<Value> = None;
+        let mut fallback_reason: Option<String> = None;
         let mut journal = if preserve {
             self.store.prepare_preserved(&video, &executable)?
         } else {
             self.can_preserve = false;
             self.store.backup_originals(&video)?;
-            match self.store.prepare_backed_up(
-                &video,
-                &executable,
-                size.ok_or("工作台游戏尺寸缺失。")?,
-            ) {
+            let viewport = size.ok_or("工作台游戏尺寸缺失。")?;
+            let opted_in = match self.store.full_optin(steam.account) {
                 Ok(value) => value,
-                Err(error) => {
-                    self.can_preserve = self.store.load()?.is_none();
-                    self.message = Some(error.clone());
-                    // Parser errors contain only fixed categories / known keys.
-                    self.log.event(
-                        "cs2_launch",
-                        "failure",
-                        Some(&format!("stage=prepare; {error}")),
-                    );
-                    return Err(error);
+                Err(error) => { fallback_reason = Some(error); false }
+            };
+            let mut full_journal = None;
+            if opted_in && demo.is_some() {
+                fallback_reason = Some("试播暂使用基础观战键位。".into());
+            } else if opted_in && self.store.full_spectator_pending() {
+                fallback_reason = Some("上次观战键位尚未恢复，使用基础观战模式。".into());
+            } else if opted_in {
+                match crate::spectator_eligibility::inspect(&video, &executable, steam.account) {
+                    Err(reason) => fallback_reason = Some(reason.message().into()),
+                    Ok(eligible) => {
+                        steam.validate(&self.log)?;
+                        if any_cs2_running(&self.log)? { return Err("请先退出已打开的 CS2，再由 Mizar 启动。".into()); }
+                        let mut attachment = json!({});
+                        match crate::cs2_console::prepare(&self.log, &executable) {
+                            Ok(Some(prepared)) => attachment["consoleDiagnostics"] = prepared,
+                            Ok(None) => (),
+                            Err(error) if error.starts_with("raw_console_preservation_failed:") => {
+                                return Err(format!("上一场原始控制台尚未安全保存，已停止启动 CS2。请归档 console-history 或检查磁盘后重试。{error}"));
+                            }
+                            Err(error) => { attachment["consoleDiagnosticsWarning"] = json!({"code":"source_prepare_failed","error":error}); }
+                        }
+                        early_console = Some(attachment.clone());
+                        let session_id = crate::demo_test::new_request_id(&self.log)?;
+                        match self.store.prepare_eligible(&video, &executable, viewport, &session_id, &eligible.fingerprint, &attachment) {
+                            Ok(value) => { full_fingerprint = Some(eligible.fingerprint); full_journal = Some(value); }
+                            Err(error) => {
+                                if self.store.load()?.is_some() || self.store.full_spectator_pending() { self.message = Some(error.clone()); return Err(error); }
+                                fallback_reason = Some(error);
+                            }
+                        }
+                    }
+                }
+            }
+            match full_journal {
+                Some(value) => value,
+                None => match self.store.prepare_backed_up(&video, &executable, viewport) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        self.can_preserve = self.store.load()?.is_none();
+                        self.message = Some(error.clone());
+                        self.log.event("cs2_launch", "failure", Some(&format!("stage=prepare; {error}")));
+                        return Err(error);
+                    }
                 }
             }
         };
+        if let Some(reason) = fallback_reason { journal["spectatorWarning"] = json!(reason); }
         self.can_preserve = false;
         if journal["spectatorCfg"] == true {
             if let Err(error) = crate::cs2_spectator::install(&executable)
@@ -1024,13 +1071,13 @@ impl ManagedCs2 {
         if !preserve {
             self.log.event(
                 "cs2_spectator_cfg",
-                if journal["spectatorCfg"] == true {
+                if journal["spectatorCfg"] == true || journal["fullSnapshot"] == true {
                     "success"
                 } else {
                     "failure"
                 },
                 Some(
-                    &json!({"stage":"prepared", "file":crate::cs2_spectator::CFG_NAME,
+                    &json!({"stage":"prepared", "file":if journal["fullSnapshot"] == true { None } else { Some(crate::cs2_spectator::CFG_NAME) },
                     "runtime":"unverified", "reason":journal["spectatorWarning"]})
                     .to_string(),
                 ),
@@ -1054,7 +1101,9 @@ impl ManagedCs2 {
                 return Err(error);
             }
         }
-        match crate::cs2_console::prepare(&self.log, &executable) {
+        if let Some(attachment) = early_console {
+            if let Some(object) = attachment.as_object() { for (key, value) in object { journal[key] = value.clone(); } }
+        } else { match crate::cs2_console::prepare(&self.log, &executable) {
             Ok(Some(prepared)) => journal["consoleDiagnostics"] = prepared,
             Ok(None) => (),
             Err(error) => {
@@ -1068,7 +1117,7 @@ impl ManagedCs2 {
                 journal["consoleDiagnosticsWarning"] =
                     json!({"code":"source_prepare_failed","error":error});
             }
-        }
+        } }
         self.store.save(&journal)?;
         let launch: Result<bool, String> = (|| {
             // Recheck the same process and current account before committing a
@@ -1077,6 +1126,7 @@ impl ManagedCs2 {
             if any_cs2_running(&self.log)? {
                 return Err("请先退出已打开的 CS2，再由 Mizar 启动。".into());
             }
+            if let Some(fingerprint) = &full_fingerprint { self.store.validate_full_launch(fingerprint)?; }
             let mut command = Command::new(&steam.process.executable);
             command.current_dir(
                 steam
@@ -1143,6 +1193,13 @@ impl ManagedCs2 {
                 "argumentsScope":"requested-steam-command",
                 "steamInheritedArguments":"unobserved", "actualGameArguments":"unobserved"
             }).to_string()));
+            // Recheck the same account and source immediately before persisting
+            // the launch attempt. No game-exit wait is performed under Store lock.
+            if let Some(fingerprint) = &full_fingerprint {
+                steam.validate(&self.log)?;
+                if any_cs2_running(&self.log)? { return Err("请先退出已打开的 CS2，再由 Mizar 启动。".into()); }
+                self.store.validate_full_launch(fingerprint)?;
+            }
             // Commit the ambiguous-launch marker only after all checks and
             // argument validation, immediately before sending the Steam request.
             let mut time = FileTime::default();
@@ -1161,7 +1218,8 @@ impl ManagedCs2 {
                 .spawn()
                 .map_err(|error| {
                     self.log.event("cs2_launch", "failure", Some(&format!("stage=steam_spawn; launchTime={launch_time}; code={:?}; cause={error:?}", error.raw_os_error())));
-                    journal["launchAttempted"] = json!(false);
+                    if journal["fullSnapshot"] == true { journal["launchCancelled"] = json!(true); }
+                    else { journal["launchAttempted"] = json!(false); }
                     if journal["spectatorCfg"] == true {
                         if let Err(error) = self.store.spectator_load_attempted(false) {
                             self.log.event("cs2_spectator_restore", "failure", Some(&error));

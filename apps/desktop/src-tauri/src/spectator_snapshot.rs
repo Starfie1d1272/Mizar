@@ -27,7 +27,7 @@ fn plain(metadata: &fs::Metadata) -> bool {
     }
     true
 }
-fn check_path(path: &Path, create_directories: bool) -> Result<(), String> {
+pub(crate) fn check_path(path: &Path, create_directories: bool) -> Result<(), String> {
     if !path.is_absolute() {
         return Err("path_invalid".into());
     }
@@ -99,7 +99,7 @@ fn regular(path: &Path, limit: usize) -> Result<Vec<u8>, String> {
     }
     Ok(bytes)
 }
-fn identity(
+pub(crate) fn identity(
     video: &Path,
     executable: &Path,
     account: u32,

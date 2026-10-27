@@ -37,6 +37,17 @@ fn bindings(keys: &Section, axes: &Section) -> Bindings {
     result
 }
 
+/// Parse both supported sections without normalizing the original key spelling.
+pub(crate) fn parse_bindings(text: &str) -> Result<Bindings, &'static str> {
+    if text.len() > LIMIT {
+        return Err("file_too_large");
+    }
+    Ok(bindings(
+        &section(text, &InputKind::Key)?,
+        &section(text, &InputKind::Axis)?,
+    ))
+}
+
 /// Build a forward write from a trusted candidate while preserving all fields
 /// outside the explicitly owned set. This performs no file I/O.
 pub(crate) fn plan_application(

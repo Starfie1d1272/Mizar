@@ -15,10 +15,10 @@ pub(crate) struct Token {
     pub(crate) value: String,
     pub(crate) start: usize,
     pub(crate) end: usize,
-    quoted: bool,
+    pub(crate) quoted: bool,
 }
 
-fn lex(text: &str, commands: bool) -> Result<Vec<Token>, String> {
+pub(crate) fn lex(text: &str, commands: bool) -> Result<Vec<Token>, String> {
     let bytes = text.as_bytes();
     let mut i = if text.starts_with('\u{feff}') { 3 } else { 0 };
     let mut result = Vec::new();
@@ -358,7 +358,7 @@ fn cfg_root(executable: &Path) -> Result<PathBuf, String> {
         .map(|game| game.join("csgo/cfg"))
         .ok_or_else(|| "CS2 程序目录无效。".into())
 }
-fn included_path(root: &Path, name: &str) -> Result<PathBuf, String> {
+pub(crate) fn included_path(root: &Path, name: &str) -> Result<PathBuf, String> {
     let relative = Path::new(name);
     if relative
         .components()
