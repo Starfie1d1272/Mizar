@@ -63,7 +63,7 @@ test('browser uses real companion mixer routes and recovers after an OBS disconn
     });
   });
   try {
-    await page.goto('/settings?tab=obs');
+    await page.goto('/settings?tab=music');
     for (const [label, key] of [
       ['游戏', 'game'],
       ['其他解说', 'remoteCommentary'],

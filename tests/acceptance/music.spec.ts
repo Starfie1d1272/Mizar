@@ -65,7 +65,7 @@ test('saves real local choices, imports atomically, persists manual stop through
   );
   try {
     await page.goto('/settings?tab=music');
-    await expect(page.getByRole('heading', { name: '音乐', exact: true, level: 1 })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '声音', exact: true, level: 1 })).toBeVisible();
     await expect(page.getByText('尚未选曲 · 静音', { exact: true })).toHaveCount(7);
     await page
       .getByLabel('选择本地曲目', { exact: true })

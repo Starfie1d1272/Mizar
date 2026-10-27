@@ -59,9 +59,10 @@ test('first connection prepares scenes and audio without extra setup clicks, and
   await expect(page.getByText(/音频配置检查通过/)).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath('02-preparing.png') });
   release!();
-  await page.getByRole('button', { name: '音频设置', exact: true }).click();
+  await page.goto('/settings?tab=music');
+  await page.getByRole('button', { name: '音源', exact: true }).click();
   await expect(page.getByText(/音频配置检查通过/)).toBeVisible();
-  await expect(page.getByLabel('WebSocket 密码', { exact: true })).not.toBeVisible();
+
   await page.screenshot({ path: testInfo.outputPath('03-ready.png') });
   expect(requests.filter((action) => ['repair', 'audio-setup'].includes(action))).toEqual([]);
 

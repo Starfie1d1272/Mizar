@@ -212,7 +212,6 @@ export function MusicControls({
               : [],
           )}
         </Select>
-        {volume}
         <div className="music-player__monitor">
           <Button
             disabled={busy}

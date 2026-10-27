@@ -79,7 +79,7 @@ test('mixer uses confirmed state and music gains stay local to their scene entry
     if (body.action === 'play') played = body;
     return route.fulfill({ json: { ok: true } });
   });
-  await page.goto('/settings?tab=obs');
+  await page.goto('/settings?tab=music');
   await expect(page.getByRole('slider', { name: '游戏音量' })).toBeEnabled();
   await page.getByRole('button', { name: '静音游戏' }).click();
   await expect(page.getByRole('button', { name: '取消静音游戏' })).toBeVisible();
@@ -108,6 +108,12 @@ test('mixer uses confirmed state and music gains stay local to their scene entry
     .first();
   await waiting.focus();
   await page.keyboard.press('ArrowRight');
+  await page.getByRole('button', { name: '音源', exact: true }).click();
+  await page
+    .getByRole('navigation', { name: '声音设置分区' })
+    .getByRole('button', { name: '音乐', exact: true })
+    .click();
+  await expect(waiting).toHaveValue('0.55');
   await page
     .getByRole('navigation', { name: '音乐场景' })
     .getByRole('button', { name: /技术暂停/ })
