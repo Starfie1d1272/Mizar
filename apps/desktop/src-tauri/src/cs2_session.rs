@@ -165,12 +165,11 @@ impl SessionStore {
         let guard = self.acquire_write_guard()?;
         if self.load()?.is_some() { return Err("core_pending".into()); }
         if !self.full_spectator_pending() { return Ok(None); }
-        if crate::spectator_snapshot::linked_session(&self.root)?.is_some()
-            && !crate::spectator_snapshot::has_terminal(&self.root)? {
+        if crate::spectator_snapshot::linked_session(&self.root)?.is_some() {
             if crate::spectator_snapshot::finish_unwritten_preparation(&self.root, video, executable, account, atomic_write)? {
                 return Ok(None);
             }
-            return Err("coordinated_recovery_required".into());
+            if !crate::spectator_snapshot::has_terminal(&self.root)? { return Err("coordinated_recovery_required".into()); }
         }
         match self.recover_spectator_snapshot_locked(&guard, video, executable, account) {
             Ok(()) => Ok(None),
@@ -1083,12 +1082,19 @@ impl SessionStore {
         if let Some(core) = self.load()? {
             if core["fullSnapshot"] != true || unconfirmed_launch(&core) { return Err("coordinated_recovery_required".into()); }
             crate::spectator_snapshot::handoff(&self.root, video, executable, account, &core, atomic_write)?;
+            if crate::spectator_snapshot::handed_off_unwritten(&self.root)? {
+                let playback = self.preserve_playback_cleanup_locked(&guard, &core);
+                if let Some(warning) = self.finish_core_restore_locked(&guard, playback, None)? { return Ok(Some(warning)); }
+                if !crate::spectator_snapshot::finish_unwritten_preparation(&self.root, video, executable, account, atomic_write)? { return Err("snapshot_changed".into()); }
+                return Ok(None);
+            }
             if let Some(warning) = self.restore_core_locked(&guard, true)? { return Ok(Some(warning)); }
         } else if !self.full_spectator_pending() {
             return Ok(None);
         } else if !crate::spectator_snapshot::has_terminal(&self.root)? {
             return Err("coordinated_recovery_required".into());
         }
+        if crate::spectator_snapshot::finish_unwritten_preparation(&self.root, video, executable, account, atomic_write)? { return Ok(None); }
         match crate::spectator_snapshot::recover(&self.root, video, executable, account, atomic_write) {
             Ok(()) => Ok(None),
             Err(error) => Ok(Some(full_recovery_warning(&error).into())),
@@ -1537,6 +1543,30 @@ mod tests {
         (root, video, executable, key, store, core)
     }
     #[test]
+    fn unwritten_handoff_requires_both_explicit_false_and_survives_restart() {
+        use sha2::{Digest, Sha256};
+        for (core_attempted, snapshot_attempted, expected) in [(false, Some(false), true), (true, Some(false), false), (false, Some(true), false), (false, None, false)] {
+            let (root, video, executable, key, store, mut core) = coordinated_fixture();
+            core["configWriteAttempted"] = json!(core_attempted);
+            let path = store.root.join("spectator-full-pending.json");
+            let mut record: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            if let Some(value) = snapshot_attempted { record["payload"]["coordinatedWriteAttempted"] = json!(value); }
+            else { record["payload"].as_object_mut().unwrap().remove("coordinatedWriteAttempted"); }
+            record["sha256"] = json!(format!("{:x}", Sha256::digest(serde_json::to_vec(&record["payload"]).unwrap())));
+            fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+            crate::spectator_snapshot::handoff(&store.root, &video, &executable, 1, &core, atomic_write).unwrap();
+            assert_eq!(crate::spectator_snapshot::handed_off_unwritten(&store.root).unwrap(), expected);
+            if expected {
+                let manual = fs::read(&key).unwrap();
+                fs::remove_file(store.journal_path()).unwrap(); // interruption after core cleanup
+                assert_eq!(SessionStore::new(root.clone()).restore_full_pending(&video, &executable, 1).unwrap(), None);
+                assert_eq!(fs::read(&key).unwrap(), manual);
+                assert!(!store.full_spectator_pending());
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+    #[test]
     fn legacy_full_recovery_cannot_remove_snapshot_while_core_is_pending() {
         let (root, video, executable, key, store, core) = coordinated_fixture();
         let snapshot = store.root.join("spectator-full-pending.json");
@@ -1666,6 +1696,7 @@ mod tests {
         }
         // Discover the exact number of writes from the successful production path.
         let mut total = 1;
+        let mut unwritten_cases = [0usize; 3];
         for mode in 0..=2 {
             let mut target = if mode == 0 { 0 } else { 1 };
             while target <= total {
@@ -1699,22 +1730,31 @@ mod tests {
                     assert!(result.is_err(), "failure point {target}, mode {mode}");
                 }
                 FAIL_AT.store(0, Ordering::SeqCst);
+                let core = store.load().unwrap();
+                let record: Option<Value> = fs::read(store.root.join("spectator-full-pending.json")).ok().map(|b| serde_json::from_slice(&b).unwrap());
+                let unwritten = core.as_ref().is_some_and(|c| c["configWriteAttempted"] == false && c["launchAttempted"] == false)
+                    && record.as_ref().is_some_and(|r| r["payload"]["coordinatedWriteAttempted"] == false);
+                let manual = if mode == 1 { candidate } else { "\"config\" {\"bindings\" {\"x\" \"external\"} \"analogbindings\" {}}" };
+                let manual_video = core.as_ref().and_then(|c| c["applied"].as_str()).map(str::to_owned);
+                if unwritten { unwritten_cases[mode] += 1; fs::write(&key, manual).unwrap(); fs::write(&video, manual_video.as_ref().unwrap()).unwrap(); }
                 if store.load().unwrap().is_some() {
                     assert_eq!(SessionStore::new(root.clone()).restore_coordinated(&video, &executable, 1).unwrap(), None);
                 } else if store.full_spectator_pending() {
                     assert_eq!(SessionStore::new(root.clone()).restore_full_pending(&video, &executable, 1).unwrap(), None);
                 }
-                assert_eq!(fs::read(&video).unwrap(), original_video);
+                assert_eq!(fs::read(&video).unwrap(), if unwritten { manual_video.unwrap().into_bytes() } else { original_video });
                 assert_eq!(fs::read(&machine).unwrap(), original_machine);
                 assert_eq!(fs::read(&auto_cfg).unwrap(), original_auto_cfg);
                 assert!(!store.journal_path().exists());
                 assert!(!store.full_spectator_pending());
                 let restored = fs::read_to_string(&key).unwrap();
-                assert!(restored.contains("\"x\" \"personal\"")); assert!(restored.contains("\"extra\" \"keep\""));
+                if unwritten { assert_eq!(restored, manual); }
+                else { assert!(restored.contains("\"x\" \"personal\"")); assert!(restored.contains("\"extra\" \"keep\"")); }
                 fs::remove_dir_all(root).unwrap();
                 target += 1;
             }
         }
+        assert!(unwritten_cases.iter().all(|&count| count > 0));
     }
     #[test]
     fn spectator_snapshot_store_restores_after_restart() {

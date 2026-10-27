@@ -1531,6 +1531,7 @@ mod tests {
         }
         let _processes = GAME_PROCESSES.lock().unwrap();
         let mut total = 1;
+        let mut unwritten_cases = [0usize; 3];
         for mode in 0..=2 {
             let mut target = if mode == 0 { 0 } else { 1 };
             while target <= total {
@@ -1562,15 +1563,29 @@ mod tests {
                 // must survive the real startup recovery path.
                 let orphan = host.store.load().unwrap().is_none() && host.store.full_spectator_pending();
                 if orphan { std::fs::write(&keys, "\"config\" {\"bindings\" {\"x\" \"external\"} \"analogbindings\" {}}").unwrap(); }
+                let core = host.store.load().unwrap();
+                let snapshot: Option<Value> = std::fs::read(host.store.backup_directory().join("spectator-full-pending.json")).ok()
+                    .map(|bytes| serde_json::from_slice(&bytes).unwrap());
+                let unwritten = core.as_ref().is_some_and(|c| c["configWriteAttempted"] == false && c["launchAttempted"] == false)
+                    && snapshot.as_ref().is_some_and(|s| s["payload"]["coordinatedWriteAttempted"] == false);
+                let manual_key = if mode == 1 { candidate } else { "\"config\" {\"bindings\" {\"x\" \"external\"} \"analogbindings\" {}}" };
+                let manual_video = core.as_ref().and_then(|c| c["applied"].as_str()).map(str::to_owned);
+                if unwritten {
+                    unwritten_cases[mode] += 1;
+                    std::fs::write(&keys, manual_key).unwrap();
+                    std::fs::write(&video, manual_video.as_ref().unwrap()).unwrap();
+                }
                 if host.startup_recovery_status().unwrap().pending { host.restore_at_startup(false).unwrap(); }
                 assert!(!host.startup_recovery_status().unwrap().pending);
-                assert_eq!(std::fs::read(&video).unwrap(), original_video);
+                assert_eq!(std::fs::read(&video).unwrap(), if unwritten { manual_video.unwrap().into_bytes() } else { original_video.to_vec() });
                 let current = std::fs::read_to_string(&keys).unwrap();
-                assert!(current.contains(if orphan { "\"x\" \"external\"" } else { "\"x\" \"personal\"" }));
+                if unwritten { assert_eq!(current, manual_key); }
+                else { assert!(current.contains(if orphan { "\"x\" \"external\"" } else { "\"x\" \"personal\"" })); }
                 std::fs::remove_dir_all(root).unwrap();
                 target += 1;
             }
         }
+        assert!(unwritten_cases.iter().all(|&count| count > 0));
     }
 
     #[test]
