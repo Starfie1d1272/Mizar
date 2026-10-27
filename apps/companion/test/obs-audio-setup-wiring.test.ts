@@ -9,6 +9,10 @@ import { RemoteCommentary } from '../src/obs/remote-commentary.js';
 import { ObsAudioRouting } from '../src/obs/audio-routing.js';
 import { GameAudioController } from '../src/obs/audio-policy-controller.js';
 import { EventSubscription } from 'obs-websocket-js';
+import Fastify from 'fastify';
+import { MusicStore } from '../src/music/store.js';
+import { MusicDirector } from '../src/music/director.js';
+import { registerMixerRoutes } from '../src/obs/mixer-routes.js';
 
 const fixture = vi.hoisted(() => ({ client: null as FakeObs | null }));
 vi.mock('obs-websocket-js', async (original) => {
@@ -45,6 +49,8 @@ class FakeObs extends EventEmitter {
   currentScene = '';
   transforms = new Map<number, Record<string, unknown>>();
   muted = new Map<string, boolean>();
+  volumes = new Map<string, number>();
+  offline = false;
   windows = [
     { itemName: 'TeamSpeak', itemValue: 'TeamSpeak:Qt:ts3client_win64.exe', itemEnabled: true },
   ];
@@ -100,6 +106,7 @@ class FakeObs extends EventEmitter {
   }
   async connect(_endpoint?: string, _password?: string, options?: { eventSubscriptions: number }) {
     await Promise.resolve();
+    if (this.offline) throw new Error('offline');
     this.subscriptions = options?.eventSubscriptions ?? EventSubscription.All;
     return {};
   }
@@ -207,7 +214,14 @@ class FakeObs extends EventEmitter {
         });
         return {};
       case 'GetInputVolume':
-        return { inputVolumeMul: 1 };
+        return { inputVolumeMul: this.volumes.get(String(data.inputUuid)) ?? 1 };
+      case 'SetInputVolume':
+        this.volumes.set(String(data.inputUuid), Number(data.inputVolumeMul));
+        this.emit('InputVolumeChanged', {
+          inputUuid: data.inputUuid,
+          inputVolumeMul: data.inputVolumeMul,
+        });
+        return {};
       case 'GetInputAudioMonitorType':
         return { monitorType: 'OBS_MONITORING_TYPE_NONE' };
       case 'GetInputAudioTracks':
@@ -436,6 +450,81 @@ it('creates scenes and audio through the real configure owner and seeds game pol
     expect((await new ObsAudioRouting(join(dir, 'routing')).gameBinding()).binding).toBeNull();
     await adapter.close();
   } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+it('reads and writes the mixer through the real adapter and rejects stale bindings', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'mizar-mixer-wiring-'));
+  const app = Fastify();
+  try {
+    const obs = new FakeObs(true);
+    fixture.client = obs;
+    const routing = new ObsAudioRouting(join(dir, 'routing'));
+    const config = new ObsConfigStore(join(dir, 'obs.json'));
+    const adapter = new ObsAdapter(config, base, () => {}, routing, {
+      owner: new RemoteCommentary(join(dir, 'preference')),
+      journal: join(dir, 'probe'),
+    });
+    await adapter.ensure();
+    const game = new GameAudioController(routing, config, join(dir, 'policy'));
+    await game.load();
+    const store = new MusicStore(join(dir, 'music'));
+    await store.load();
+    const director = new MusicDirector(
+      store,
+      { session: () => Promise.reject(new Error('unused')), close: async () => {} },
+      () => {
+        throw new Error('unused');
+      },
+    );
+    registerMixerRoutes(app, adapter, director, game, {
+      mode: 'loopback',
+      bindHost: '127.0.0.1',
+      allowedOrigins: [],
+    });
+    const read = async () => (await app.inject({ method: 'GET', url: '/local/v1/mixer' })).json();
+    const initial = await read();
+    expect(initial.channels.music.volume).toBe(1);
+    for (const channel of ['game', 'remoteCommentary', 'microphone']) {
+      expect(initial.channels[channel].control).toBe('available');
+      const result = await app.inject({
+        method: 'POST',
+        url: '/operator/mixer',
+        headers: { origin: base },
+        payload: { revision: initial.revision, channel, volume: 0.35, muted: true },
+      });
+      expect(result.json().status).toBe('confirmed');
+      const after = await read();
+      expect(after.channels[channel].volume).toBeCloseTo(0.35);
+      expect(after.channels[channel].muted).toBe(true);
+    }
+    const routingStatus = await adapter.readAudioRouting();
+    await adapter.bindAudio({
+      role: 'microphone',
+      selectionId: null,
+      revision: routingStatus.revision,
+    });
+    const stale = await app.inject({
+      method: 'POST',
+      url: '/operator/mixer',
+      headers: { origin: base },
+      payload: { revision: initial.revision, channel: 'microphone', volume: 0.9 },
+    });
+    expect(stale.json().status).toBe('rejected');
+    obs.offline = true;
+    expect((await read()).channels.game.control).toBe('unknown');
+    const disconnected = await app.inject({
+      method: 'POST',
+      url: '/operator/mixer',
+      headers: { origin: base },
+      payload: { revision: initial.revision, channel: 'game', volume: 0.1 },
+    });
+    expect(disconnected.json().status).toBe('unknown');
+    game.close();
+    await adapter.close();
+  } finally {
+    await app.close();
     await rm(dir, { recursive: true, force: true });
   }
 });
