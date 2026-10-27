@@ -99,12 +99,72 @@ it('loads legacy music state with independent master defaults and preserves it o
   await store.load();
   expect(store.state.master).toBe(1);
   expect(store.state.muted).toBe(false);
-  await store.update((state) => { state.master = 0.3; state.muted = true; });
+  await store.update((state) => {
+    state.master = 0.3;
+    state.muted = true;
+  });
   await store.configure(structuredClone(store.state.config));
   const reloaded = new MusicStore(directory);
   await reloaded.load();
   expect(reloaded.state.master).toBe(0.3);
   expect(reloaded.state.muted).toBe(true);
+});
+it('assigns stable distinct entry identities to duplicate legacy tracks', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-music-entries-'));
+  directories.push(directory);
+  const original = new MusicStore(directory);
+  await original.load();
+  const track = await original.add('duplicate.wav', musicWav());
+  const legacy = structuredClone(original.state);
+  legacy.config.groups.waiting.tracks = [track, { ...track }, { ...track, startMs: 10 }];
+  legacy.config.groups.technical.tracks = [{ ...track }];
+  await writeFile(join(directory, 'state.json'), JSON.stringify(legacy));
+  const store = new MusicStore(directory);
+  await store.load();
+  const ids = [
+    ...store.state.config.groups.waiting.tracks,
+    ...store.state.config.groups.technical.tracks,
+  ].map((item) => item.entryId);
+  expect(ids.every(Boolean)).toBe(true);
+  expect(new Set(ids).size).toBe(4);
+  const again = new MusicStore(directory);
+  await again.load();
+  expect(
+    [
+      ...again.state.config.groups.waiting.tracks,
+      ...again.state.config.groups.technical.tracks,
+    ].map((item) => item.entryId),
+  ).toEqual(ids);
+  await again.configure(structuredClone(again.state.config));
+  expect(again.state.config.groups.waiting.tracks.map((item) => item.entryId)).toEqual(
+    ids.slice(0, 3),
+  );
+});
+it('composes the current entry gain with master and mutes without restarting playback', async () => {
+  const r = await rig();
+  const config = structuredClone(r.store.state.config);
+  config.groups.waiting.tracks[0]!.gain = 0.4;
+  config.groups.technical.tracks[0]!.gain = 0.8;
+  await r.store.configure(config);
+  await r.store.update((state) => {
+    state.master = 0.5;
+  });
+  await r.step();
+  expect(r.obs.bgm().volume).toBeCloseTo(0.2);
+  const starts = r.obs.restarts();
+  await r.store.update((state) => {
+    state.muted = true;
+  });
+  await r.step();
+  expect(r.obs.bgm().volume).toBe(0);
+  expect(r.obs.restarts()).toBe(starts);
+  await r.store.update((state) => {
+    state.muted = false;
+    state.master = 0.25;
+  });
+  await r.step();
+  expect(r.obs.bgm().volume).toBeCloseTo(0.1);
+  expect(r.obs.restarts()).toBe(starts);
 });
 it('keeps pre-game waiting music across fresh menu GSI and BP, but stops for stale data and live play', async () => {
   const r = await rig();

@@ -135,6 +135,14 @@ export class MusicDirector {
   private isHeld() {
     return this.heldOverride ?? this.store.state.held;
   }
+  private effectiveVolume(group: MusicGroup, track: MusicTrack) {
+    const state = this.store.state;
+    const spec = state.config.groups[group];
+    const entry = track.entryId
+      ? spec.tracks.find((item) => item.entryId === track.entryId)
+      : undefined;
+    return (state.muted ? 0 : state.master) * ((entry ? entry.gain : track.gain) ?? spec.volume);
+  }
   get(): MusicStatus {
     return {
       ...this.status,
@@ -420,7 +428,7 @@ export class MusicDirector {
           saved.track,
           this.status.cursorMs,
           this.status.durationMs ?? duration,
-          spec.volume,
+          this.effectiveVolume(saved.group, saved.track),
           spec.fadeOutMs,
         );
         if (!current()) return;
@@ -606,6 +614,8 @@ export class MusicDirector {
       truth.active,
       this.isHeld(),
       this.store.state.config,
+      this.store.state.master,
+      this.store.state.muted,
     ]);
     const changed = preliminary !== this.desiredKey;
     if (changed) {
@@ -679,7 +689,11 @@ export class MusicDirector {
         this.status.connection = 'idle';
         return;
       }
-      const signature = JSON.stringify(this.store.state.config);
+      const signature = JSON.stringify([
+        this.store.state.config,
+        this.store.state.master,
+        this.store.state.muted,
+      ]);
       const configChanged = Boolean(this.config && this.config !== signature);
       this.config = signature;
       await this.provider.session(async (obs, epoch) => {
@@ -810,7 +824,7 @@ export class MusicDirector {
     ].includes(String(state));
     const expectedVolume =
       this.appliedVolumes.get(layer) ??
-      (saved ? this.store.state.config.groups[saved.group].volume : null);
+      (saved ? this.effectiveVolume(saved.group, saved.track) : null);
     return (
       muted === true ||
       Boolean(layer === 'bgm' && this.manual?.paused && state === 'OBS_MEDIA_STATE_PLAYING') ||
@@ -953,7 +967,7 @@ export class MusicDirector {
                 group: p.group,
                 track: p.track.name,
                 playbackId: p.key,
-                volume: this.store.state.config.groups[p.group].volume,
+                volume: this.effectiveVolume(p.group, p.track),
               }
             : null;
       else this.status.stinger = p && !p.finished ? p.track.name : null;
@@ -1000,7 +1014,9 @@ export class MusicDirector {
       saved.group === cue!.group &&
       (cue!.track ? [cue!.track] : spec!.tracks).some(
         (t) =>
-          t.id === saved!.track.id &&
+          (t.entryId && saved!.track.entryId
+            ? t.entryId === saved!.track.entryId
+            : t.id === saved!.track.id) &&
           t.startMs === saved!.track.startMs &&
           t.endMs === saved!.track.endMs,
       );
@@ -1014,6 +1030,7 @@ export class MusicDirector {
       return;
     }
     if (matching && saved) {
+      const targetVolume = this.effectiveVolume(saved.group, saved.track);
       const file = (settings.inputSettings as Record<string, unknown>)?.local_file;
       const expectedPath = await this.store.trackPath(saved.track.id).catch(() => null);
       if (!expectedPath || file !== expectedPath) {
@@ -1026,6 +1043,29 @@ export class MusicDirector {
         return;
       }
       if (layer === 'bgm' && this.manual?.paused && state === 'OBS_MEDIA_STATE_PAUSED') {
+        const fade = this.fades[layer];
+        const progress =
+          fade && !fade.stop && fade.ms
+            ? Math.min(1, Math.max(0, ((this.manual.pausedAt ?? this.now()) - fade.at) / fade.ms))
+            : 1;
+        const faded =
+          fade && !fade.stop
+            ? targetVolume * (fade.from + (fade.to - fade.from) * progress)
+            : targetVolume;
+        const target = Math.min(
+          faded,
+          tailVolume(
+            saved.track,
+            mediaMillis(media.mediaCursor),
+            mediaMillis(media.mediaDuration),
+            targetVolume,
+            spec!.fadeOutMs,
+          ),
+        );
+        if (Math.abs(target - Number(volume.inputVolumeMul)) > 0.0001) {
+          await call('SetInputVolume', { ...args, inputVolumeMul: target });
+          this.appliedVolumes.set(layer, target);
+        }
         markStatus(saved);
         return;
       }
@@ -1034,15 +1074,15 @@ export class MusicDirector {
           s[layer] = { ...saved!, suspended: false };
         });
         if (active) {
-          await call('SetInputVolume', { ...args, inputVolumeMul: spec!.volume });
-          this.appliedVolumes.set(layer, spec!.volume);
+          await call('SetInputVolume', { ...args, inputVolumeMul: targetVolume });
+          this.appliedVolumes.set(layer, targetVolume);
         }
         if (!active) {
           await call('SetInputVolume', {
             ...args,
-            inputVolumeMul: spec!.fadeInMs ? 0 : spec!.volume,
+            inputVolumeMul: spec!.fadeInMs ? 0 : targetVolume,
           });
-          this.appliedVolumes.set(layer, spec!.fadeInMs ? 0 : spec!.volume);
+          this.appliedVolumes.set(layer, spec!.fadeInMs ? 0 : targetVolume);
           await call('TriggerMediaInputAction', {
             ...args,
             mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART',
@@ -1052,8 +1092,8 @@ export class MusicDirector {
           this.fades[layer] = {
             name,
             inputUuid: args.inputUuid,
-            from: spec!.fadeInMs ? 0 : spec!.volume,
-            to: spec!.volume,
+            from: spec!.fadeInMs ? 0 : 1,
+            to: 1,
             at: this.now(),
             ms: spec!.fadeInMs,
             stop: false,
@@ -1061,11 +1101,6 @@ export class MusicDirector {
         }
         markStatus(saved);
         return;
-      }
-      if (configChanged && active) {
-        delete this.fades[layer];
-        await call('SetInputVolume', { ...args, inputVolumeMul: spec!.volume });
-        this.appliedVolumes.set(layer, spec!.volume);
       }
       const segmentEnded =
         saved.track.endMs !== null && Number(media.mediaCursor) >= saved.track.endMs;
@@ -1099,10 +1134,10 @@ export class MusicDirector {
         // Tail gain follows the observed media cursor, not elapsed wall time. Seeking and
         // pausing therefore cannot keep an obsolete fade-out timer alive.
         const fade = this.fades[layer];
-        let gain = spec!.volume;
+        let gain = targetVolume;
         if (fade && !fade.stop) {
           const progress = fade.ms ? Math.min(1, Math.max(0, (this.now() - fade.at) / fade.ms)) : 1;
-          gain = fade.from + (fade.to - fade.from) * progress;
+          gain = targetVolume * (fade.from + (fade.to - fade.from) * progress);
           if (progress === 1) delete this.fades[layer];
         } else if (fade?.stop) delete this.fades[layer];
         gain = Math.min(
@@ -1111,7 +1146,7 @@ export class MusicDirector {
             saved.track,
             mediaMillis(media.mediaCursor),
             mediaMillis(media.mediaDuration),
-            spec!.volume,
+            targetVolume,
             spec!.fadeOutMs,
           ),
         );
@@ -1130,7 +1165,10 @@ export class MusicDirector {
         this.fades[layer] = {
           name,
           inputUuid: args.inputUuid,
-          from: Number(volume.inputVolumeMul),
+          from:
+            this.effectiveVolume(saved.group, saved.track) > 0
+              ? Number(volume.inputVolumeMul) / this.effectiveVolume(saved.group, saved.track)
+              : 1,
           to: 0,
           at: this.now(),
           ms: oldSpec.fadeOutMs,
@@ -1145,6 +1183,7 @@ export class MusicDirector {
       markStatus(null);
       return;
     }
+    const targetVolume = this.effectiveVolume(cue!.group, track);
     const path = await this.store.trackPath(track.id).catch(() => null);
     if (!path) {
       saved = {
@@ -1152,6 +1191,7 @@ export class MusicDirector {
         key: cue!.key,
         ...(cue!.scope ? { scope: cue!.scope } : {}),
         track,
+        configRevision: this.store.state.configRevision,
         finished: false,
         suspended: false,
         cursorMs: track.startMs,
@@ -1164,6 +1204,7 @@ export class MusicDirector {
       key: cue!.key,
       ...(cue!.scope ? { scope: cue!.scope } : {}),
       track,
+      configRevision: this.store.state.configRevision,
       finished: false,
       suspended: true,
       cursorMs: track.startMs,
@@ -1177,8 +1218,8 @@ export class MusicDirector {
       ...args,
       mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP',
     });
-    await call('SetInputVolume', { ...args, inputVolumeMul: spec!.fadeInMs ? 0 : spec!.volume });
-    this.appliedVolumes.set(layer, spec!.fadeInMs ? 0 : spec!.volume);
+    await call('SetInputVolume', { ...args, inputVolumeMul: spec!.fadeInMs ? 0 : targetVolume });
+    this.appliedVolumes.set(layer, spec!.fadeInMs ? 0 : targetVolume);
     await call('SetInputSettings', {
       ...args,
       overlay: true,
@@ -1203,8 +1244,8 @@ export class MusicDirector {
     this.fades[layer] = {
       name,
       inputUuid: args.inputUuid,
-      from: spec!.fadeInMs ? 0 : spec!.volume,
-      to: spec!.volume,
+      from: spec!.fadeInMs ? 0 : 1,
+      to: 1,
       at: this.now(),
       ms: spec!.fadeInMs,
       stop: false,
@@ -1234,7 +1275,9 @@ export class MusicDirector {
     const fade = this.fades[layer];
     if (!fade || !valid()) return false;
     const progress = fade.ms ? Math.min(1, Math.max(0, (this.now() - fade.at) / fade.ms)) : 1;
-    const volume = fade.from + (fade.to - fade.from) * progress;
+    const saved = this.store.state[layer];
+    const target = saved ? this.effectiveVolume(saved.group, saved.track) : 0;
+    const volume = target * (fade.from + (fade.to - fade.from) * progress);
     await obs.call('SetInputVolume', { inputUuid: fade.inputUuid, inputVolumeMul: volume });
     this.appliedVolumes.set(layer, volume);
     if (progress === 1 && valid()) {
