@@ -222,6 +222,8 @@ Host 私有 `POST /operator/runtime/local-match-exit` 仅允许回环监听、�
 
 ### OBS 配置实例归属
 
+本机操作员 `POST /operator/obs/remote-commentary/applications` 读取 OBS 应用音频的窗口候选，返回偏好修订与短期候选标识；必要时在空闲的 Mizar 场景集合中创建禁用探测来源。`POST /operator/obs/remote-commentary/application` 接收修订和候选标识，重新核对当前 OBS 连接、集合、探测来源与窗口后保存应用偏好。候选标识一次性使用，过期或上下文变化时拒绝；这些接口要求受信任的本机 Origin，不向公共节目接口暴露窗口信息。
+
 桌面主窗口独占 `begin_obs_configuration` / `finish_obs_configuration` / `read_obs_configuration_context` 权限。开始配置以随机 UUID 关联 Host 保存的启动 `Child` 句柄；通过进程名发现的既有 OBS 不取得归属，显式 `launch_obs` 将实例交由用户管理。配置结束只消费对应会话，其他配置会话未结束时保留；原句柄退出后不通过 PID 或进程名重新取得归属。返回有限 `reason` 与中文 `message`，诊断记录 `obs_configuration` 阶段和脱敏工具失败原因。
 
 结束配置不会发送 WM_CLOSE、WebSocket 停止输出或终止进程：OBS 标准接口不提供原子的空闲退出，Windows 关闭事件可能延迟且输出确认受运行时设置控制。Host 只读核对制作与输出，区分 `production / output / unconfirmed / safe_quit_unavailable` 并提示手动关闭；`not_owned / configuration_in_use / session_finished` 不触碰进程。页面卸载前尚未完成的启动在完成后结束同一会话；重复结束幂等，不消费新会话。
