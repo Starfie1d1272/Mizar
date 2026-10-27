@@ -75,8 +75,16 @@ export interface MusicStatus {
   held: boolean;
   connection: 'idle' | 'connected' | 'unavailable';
   message: string | null;
-  bgm: { group: MusicGroup; track: string; volume: number } | null;
+  bgm: { group: MusicGroup; track: string; volume: number; playbackId: string } | null;
   stinger: string | null;
+  /** Last OBS media observation; unknown when the connection cannot be verified. */
+  playback: 'playing' | 'paused' | 'stopped' | 'unknown';
+  intent: 'automatic' | 'manual' | 'held';
+  cursorMs: number | null;
+  durationMs: number | null;
+  segmentStartMs: number | null;
+  segmentEndMs: number | null;
+  monitor: 'enabled' | 'disabled' | 'mixed' | 'unknown';
   preview?: MusicPreviewStatus;
 }
 
