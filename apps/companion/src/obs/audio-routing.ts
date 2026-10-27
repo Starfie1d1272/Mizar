@@ -103,6 +103,22 @@ export class ObsAudioRouting {
     }
     return { collection, inputs, candidates };
   }
+  async invalidBindings(obs: ObsRpc, endpoint: string): Promise<ObsAudioRole[]> {
+    const state = await this.load();
+    const { collection, candidates } = await this.inputs(obs);
+    return roles.filter((role) => {
+      const binding = state.bindings[role];
+      return (
+        binding !== null &&
+        (binding.endpoint !== endpoint ||
+          binding.collection !== collection ||
+          !candidates.some(
+            (input) =>
+              input.inputUuid === binding.inputUuid && input.inputKind === binding.inputKind,
+          ))
+      );
+    });
+  }
   async read(obs: ObsRpc, endpoint: string): Promise<ObsAudioRoutingStatus> {
     const state = await this.load();
     const { collection, inputs, candidates } = await this.inputs(obs);

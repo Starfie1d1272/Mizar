@@ -218,17 +218,10 @@ export class ObsAdapter {
 
   private async bindingFindings(obs: ObsRpc, endpoint: string): Promise<ObsFinding[]> {
     if (!(await this.audioRouting?.enabled())) return [];
-    const routing = await this.audioRouting!.read(obs, endpoint);
-    return Object.entries(routing.bindings).flatMap(([role, binding]) =>
-      binding && !binding.valid
-        ? [
-            {
-              code: `audio_binding:${role}`,
-              message: `${role} 音频来源未绑定或已失效，请在音频分路中核对。`,
-            },
-          ]
-        : [],
-    );
+    return (await this.audioRouting!.invalidBindings(obs, endpoint)).map((role) => ({
+      code: `audio_binding:${role}`,
+      message: `${role} 音频来源已失效，请在音频分路中核对。`,
+    }));
   }
   private async configurationFindings(
     obs: ObsRpc,
