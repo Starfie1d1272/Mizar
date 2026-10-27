@@ -55,7 +55,7 @@
   background: var(--mizar-bg-selected);
   border-color: var(--mizar-accent-primary);
 }
-.music-settings-workspace > [hidden] {
+.preparation .music-settings-workspace > .settings-card[hidden] {
   display: none;
 }
 .music-settings-save,
