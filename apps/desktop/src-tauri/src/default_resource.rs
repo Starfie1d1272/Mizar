@@ -152,7 +152,9 @@ fn verify_handle_path(file: &File, path: &Path) -> io::Result<()> {
         return Err(io::Error::other("resource final path exceeds budget"));
     }
     let actual = String::from_utf16(&value[..length as usize]).map_err(io::Error::other)?;
-    let expected = std::path::absolute(path)?;
+    // Parents and the opened target are already checked and held against replacement.
+    // Resolve DOS short names before comparing the final handle path.
+    let expected = fs::canonicalize(path)?;
     let expected = expected
         .to_str()
         .ok_or_else(|| io::Error::other("resource path encoding invalid"))?;
