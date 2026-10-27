@@ -674,3 +674,72 @@ it('delivers display end and execution continuity under a persistent account dif
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+it('retries a map-one snapshot before map-two events and ignores an empty terminal observation', async () => {
+  const binding = await bindingFixture();
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-postmap-order-'));
+  const runtime = createProgramRuntime('postmap-order', {
+    liveSession: { kind: 'bound', liveSessionId: 'postmap-session' },
+  });
+  let time = 1000;
+  const coordinator = createProjectionCoordinator({
+    programRuntime: runtime,
+    cstvSources: createCstvSourceManagers({}),
+    matchContextBinding: binding,
+    nowMonotonicMs: () => time,
+  });
+  const box = new ReliableOutbox(join(directory, 'outbox.json'));
+  const sent: ReliableEventV1[] = [];
+  let failEnd = true;
+  const service = new OutputService({
+    outbox: box,
+    sink: {
+      send: (event) => {
+        sent.push(event);
+        if (event.kind === 'map_ended' && failEnd) {
+          failEnd = false;
+          return Promise.resolve('retry' as const);
+        }
+        return Promise.resolve('accepted' as const);
+      },
+    },
+    now: () => new Date(Date.parse('2026-09-28T00:00:00Z') + time),
+    authorityScope: () => 'test-authority',
+  });
+  try {
+    await service.start();
+    for (const [sequence, phase, mapName] of [
+      [1, 'live', 'de_ancient'],
+      [2, 'gameover', 'de_ancient'],
+      [3, 'live', 'de_mirage'],
+    ] as const) {
+      time = sequence * 1000;
+      const base = observation(binding.manifest, sequence, phase, mapName);
+      const allPlayers = base.telemetry.allPlayers!.map((p, i) => ({
+        ...p,
+        ...(sequence === 1 ? { matchStats: { kills: i, deaths: 2, assists: 0 } } : {}),
+      }));
+      service.beforeRuntimeMutation();
+      const result = runtime.acceptObservation({
+        ...base,
+        telemetry: { ...base.telemetry, allPlayers },
+      });
+      service.afterRuntimeMutation(result, coordinator.afterRuntimeMutation(result), binding);
+      await box.flushPending();
+      await service.retry();
+    }
+    const ends = sent.filter((e) => e.kind === 'map_ended');
+    expect(ends).toHaveLength(2);
+    expect(ends[0]!.idempotencyKey).toBe(ends[1]!.idempotencyKey);
+    if (ends[1]!.kind !== 'map_ended') throw new Error('expected map end');
+    expect(ends[1]!.payload.players).toHaveLength(10);
+    expect(ends[1]!.payload.players?.[0]).toMatchObject({ kills: 0, deaths: 2, assists: 0 });
+    expect(sent.findIndex((e) => e.kind === 'map_epoch_changed')).toBeGreaterThan(
+      sent.lastIndexOf(ends[1]!),
+    );
+  } finally {
+    await service.close();
+    await coordinator.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
