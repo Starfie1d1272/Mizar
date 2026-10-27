@@ -16,9 +16,10 @@ export function ObsGameAudioPolicy() {
   const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
   const generation = useRef(0);
+  const pollSequence = useRef(0);
   const inFlight = useRef(false);
   const confirmedRevision = useRef('');
-  async function refresh(requestGeneration: number) {
+  async function refresh(requestGeneration: number, sequence: number) {
     const response = await fetch('/local/v1/obs/game-audio-policy', { cache: 'no-store' });
     if (!response.ok) throw new Error('无法读取中场音频设置。');
     const next = (await response.json()) as Status;
@@ -30,7 +31,7 @@ export function ObsGameAudioPolicy() {
       !obsGameAudioPolicySchema.safeParse(next.policy).success
     )
       throw new Error('无法读取中场音频设置。');
-    if (requestGeneration !== generation.current) return next;
+    if (requestGeneration !== generation.current || sequence !== pollSequence.current) return next;
     setStatus(next);
     setDraftRevision(next.revision);
     if (next.ready) {
@@ -42,19 +43,25 @@ export function ObsGameAudioPolicy() {
   useEffect(() => {
     const generationRef = generation;
     const initialGeneration = generationRef.current;
+    const initialSequence = ++pollSequence.current;
     void Promise.resolve()
-      .then(() => refresh(initialGeneration))
+      .then(() => refresh(initialGeneration, initialSequence))
       .catch(() => {
-        if (initialGeneration === generationRef.current)
+        if (initialGeneration === generationRef.current && initialSequence === pollSequence.current)
           setMessage({ text: '无法读取中场音频设置。', error: true });
       });
     const timer = setInterval(() => {
       if (inFlight.current) return;
       const requestGeneration = generationRef.current;
+      const sequence = ++pollSequence.current;
       void fetch('/local/v1/obs/game-audio-policy', { cache: 'no-store' })
         .then((response) => (response.ok ? response.json() : null))
         .then((next: Status | null) => {
-          if (next && requestGeneration === generationRef.current) {
+          if (
+            next &&
+            requestGeneration === generationRef.current &&
+            sequence === pollSequence.current
+          ) {
             setStatus(next);
             if (confirmedRevision.current && next.revision !== confirmedRevision.current) {
               confirmedRevision.current = '';
@@ -87,10 +94,10 @@ export function ObsGameAudioPolicy() {
         throw new Error('操作结果无法确认，请重新读取设置并核对。');
       }
       if (!response.ok) {
-        await refresh(requestGeneration).catch(() => undefined);
+        await refresh(requestGeneration, ++pollSequence.current).catch(() => undefined);
         throw new Error('操作未确认，请核对设置后重试。');
       }
-      const next = await refresh(requestGeneration).catch(() => {
+      const next = await refresh(requestGeneration, ++pollSequence.current).catch(() => {
         throw new Error('操作已提交，但无法读取结果，请重新核对设置。');
       });
       if (expected) {

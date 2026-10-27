@@ -17,6 +17,20 @@
     zoom: 1 !important;
   }
 }
+@media (max-width: 600px) {
+  .desktop-canvas__canvas > .product-shell[data-settings] {
+    display: flex;
+    flex-direction: column;
+  }
+  .desktop-canvas__canvas .product-shell[data-settings] .product-sidebar {
+    height: auto;
+    flex: none;
+  }
+  .desktop-canvas__canvas .product-shell[data-settings] .product-content {
+    flex: 1;
+    min-height: 0;
+  }
+}
 .product-sidebar {
   position: sticky;
   top: 0;

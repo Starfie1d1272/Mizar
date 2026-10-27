@@ -85,6 +85,16 @@ test('explicitly selects an OBS source and reports stale bindings', async ({ pag
   }
   await expect(source.locator('option').nth(2)).toHaveText('TeamSpeak 6 · 应用音频');
   await expect(source).not.toContainText('wasapi_process_output_capture');
+  const content = page.locator('.product-content');
+  await content.evaluate((el) => {
+    el.scrollTop = 0;
+  });
+  await content.hover();
+  await page.mouse.wheel(0, 12000);
+  await expect.poll(() => content.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+  expect(
+    await content.evaluate((el) => el.scrollTop + el.clientHeight >= el.scrollHeight - 2),
+  ).toBe(true);
   await source.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath('source-narrow.png') });
   await page.getByLabel('远端解说音频').selectOption(status.candidates[1]!.selectionId);
@@ -179,6 +189,43 @@ test('an older poll cannot replace the saved policy status', async ({ page }) =>
   );
   await expect(page.getByText('游戏音频的自动控制已暂停。', { exact: false })).toHaveCount(0);
   await expect(page.getByText('中场策略已保存。')).toBeVisible();
+});
+
+test('a delayed poll cannot overwrite a newer poll', async ({ page }) => {
+  let reads = 0;
+  let release!: () => void;
+  let finished!: () => void;
+  const delayed = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const done = new Promise<void>((resolve) => {
+    finished = resolve;
+  });
+  await page.route('**/local/v1/obs/game-audio-policy', async (route) => {
+    const read = ++reads;
+    if (read === 2) await delayed;
+    await route.fulfill({
+      json: {
+        ready: true,
+        revision: read === 2 ? 'old' : 'new',
+        policy: { mode: 'keep' },
+        ownership: read === 2 ? 'held' : 'idle',
+      },
+    });
+    if (read === 2) finished();
+  });
+  await page.goto('/settings?tab=music');
+  await page.getByRole('button', { name: '场景策略' }).click();
+  await expect.poll(() => reads).toBeGreaterThanOrEqual(3);
+  release();
+  await done;
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+  await expect(page.getByText('游戏音频的自动控制已暂停。', { exact: false })).toHaveCount(0);
 });
 
 test('chooses another application, cancels, reselects and explicitly restores TS', async ({
