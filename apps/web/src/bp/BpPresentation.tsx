@@ -54,6 +54,78 @@ function TeamLogo({
   );
 }
 
+/** Compact presentation consumes the same reveal cursor as the full-screen scene. */
+export function BpCompactPresentation({
+  snapshot,
+  animate = false,
+}: {
+  readonly snapshot: BpSnapshot | null;
+  readonly animate?: boolean;
+}) {
+  const projection = snapshot?.projection;
+  const steps = projection?.steps.slice(0, snapshot?.revealedCount ?? 0) ?? [];
+  return (
+    <ProgramCanvas className="bp-canvas">
+      {projection && snapshot?.state !== 'hidden' ? (
+        <section
+          className="bp-compact"
+          aria-label="地图禁选"
+          data-state={snapshot?.state}
+          data-animate={animate}
+        >
+          <div className="bp-compact-teams">
+            {(['a', 'b'] as const).map((key) => (
+              <div className="bp-compact-team" data-entrant={key} key={key}>
+                <TeamLogo
+                  src={projection.entrants[key].logoUrl}
+                  name={projection.entrants[key].name}
+                  entrant={key}
+                />
+                <strong title={projection.entrants[key].name}>
+                  {projection.entrants[key].name}
+                </strong>
+              </div>
+            ))}
+          </div>
+          <div className="bp-compact-cards">
+            {projection.cards.map((card, index) => {
+              const shown = steps.some((step) => step.cardIndex === index && step.kind === 'card');
+              const sideShown = steps.some(
+                (step) => step.cardIndex === index && step.kind === 'side-choice',
+              );
+              return (
+                <div
+                  className="bp-compact-card"
+                  data-kind={shown ? card.kind : 'pending'}
+                  data-entrant={shown ? (card.entrant ?? 'none') : 'none'}
+                  key={index}
+                >
+                  {shown ? (
+                    <>
+                      <span>
+                        {card.kind.toUpperCase()} {card.entrant?.toUpperCase()}
+                      </span>
+                      <strong>{card.mapName.replace(/^de_/, '').toUpperCase()}</strong>
+                      {sideShown && card.sideChoice ? (
+                        <small>
+                          {card.sideChoice.entrant.toUpperCase()} · {card.sideChoice.side}
+                        </small>
+                      ) : null}
+                    </>
+                  ) : (
+                    <span aria-label="尚未揭示">—</span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <span className="bp-compact-format">{projection.format.toUpperCase()}</span>
+        </section>
+      ) : null}
+    </ProgramCanvas>
+  );
+}
+
 export function BpPresentation({
   snapshot,
   animate = false,

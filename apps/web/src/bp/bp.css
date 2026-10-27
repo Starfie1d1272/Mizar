@@ -1237,3 +1237,111 @@
     grid-template-columns: 1fr;
   }
 }
+
+.bp-compact {
+  position: absolute;
+  right: 104px;
+  bottom: 64px;
+  left: 104px;
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  height: 136px;
+  padding: 12px;
+  border-top: 3px solid var(--mizar-broadcast-pulse-blue);
+  border-radius: var(--mizar-shape-control);
+  background: var(--mizar-broadcast-pulse-canvas);
+  opacity: 1;
+}
+.bp-compact[data-animate='true'] {
+  transition:
+    opacity 0.36s,
+    transform 0.36s;
+}
+.bp-compact[data-state='hiding'] {
+  opacity: 0;
+  transform: translateY(20px);
+}
+.bp-compact-teams {
+  display: grid;
+  width: 250px;
+  min-width: 0;
+  gap: 4px;
+}
+.bp-compact-team {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+}
+.bp-compact-team .bp-team-logo {
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+}
+.bp-compact-team img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.bp-compact-team strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 18px;
+}
+.bp-compact-cards {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  gap: 6px;
+}
+.bp-compact-card {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  padding: 8px;
+  background: var(--mizar-broadcast-pulse-shell);
+  border-top: 2px solid var(--mizar-broadcast-pulse-blue);
+}
+.bp-compact-card[data-kind='ban'],
+.bp-compact-card[data-kind='pending'] {
+  border-color: var(--mizar-broadcast-pulse-raised);
+}
+.bp-compact-card[data-kind='decider'] {
+  border-color: var(--mizar-broadcast-pulse-gold);
+}
+.bp-compact-card span,
+.bp-compact-card small {
+  color: var(--mizar-broadcast-pulse-muted);
+  font-size: 14px;
+}
+.bp-compact-card strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 19px;
+}
+.bp-compact-format {
+  align-self: center;
+  color: var(--mizar-broadcast-pulse-muted);
+  font-size: 18px;
+  font-weight: 700;
+}
+@media (prefers-reduced-motion: reduce) {
+  .bp-compact[data-animate='true'] {
+    transition: none;
+  }
+}
+
+.bp-compact-team[data-entrant='a'] .bp-team-logo,
+.bp-compact-card[data-entrant='a'] {
+  color: var(--mizar-entrant-a);
+}
+.bp-compact-team[data-entrant='b'] .bp-team-logo,
+.bp-compact-card[data-entrant='b'] {
+  color: var(--mizar-entrant-b);
+}
