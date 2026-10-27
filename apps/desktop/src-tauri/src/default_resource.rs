@@ -235,6 +235,111 @@ fn hold_directories(_path: &Path) -> Result<Vec<File>, Error> {
     Err(Error::UnsafePath)
 }
 
+// Watch the guarded csgo directory recursively before observing either candidate.
+// A notification rejects even a create-then-delete between the two snapshots.
+#[cfg(windows)]
+struct ChangeWatch(*mut std::ffi::c_void);
+#[cfg(windows)]
+impl ChangeWatch {
+    fn new(path: &Path) -> Result<Self, Error> {
+        use std::os::windows::ffi::OsStrExt;
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn FindFirstChangeNotificationW(
+                path: *const u16,
+                subtree: i32,
+                filter: u32,
+            ) -> *mut std::ffi::c_void;
+        }
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        let handle = unsafe { FindFirstChangeNotificationW(wide.as_ptr(), 1, 0x1 | 0x2) };
+        if handle as isize == -1 {
+            return Err(Error::Io(io::Error::last_os_error()));
+        }
+        Ok(Self(handle))
+    }
+    fn verify(&self) -> Result<(), Error> {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn WaitForSingleObject(handle: *mut std::ffi::c_void, millis: u32) -> u32;
+        }
+        match unsafe { WaitForSingleObject(self.0, 0) } {
+            0 => Err(Error::Changed),
+            0x102 => Ok(()),
+            _ => Err(Error::Io(io::Error::last_os_error())),
+        }
+    }
+}
+#[cfg(windows)]
+impl Drop for ChangeWatch {
+    fn drop(&mut self) {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn FindCloseChangeNotification(handle: *mut std::ffi::c_void) -> i32;
+        }
+        unsafe {
+            FindCloseChangeNotification(self.0);
+        }
+    }
+}
+// The non-Windows implementation exists solely for deterministic parser tests;
+// non-test builds fail closed before reaching it.
+#[cfg(all(not(windows), test))]
+struct ChangeWatch {
+    dirs: Vec<(std::path::PathBuf, std::time::SystemTime)>,
+}
+#[cfg(all(not(windows), test))]
+impl ChangeWatch {
+    fn new(path: &Path) -> Result<Self, Error> {
+        let mut dirs = vec![(path.to_owned(), fs::metadata(path)?.modified()?)];
+        let cfg = path.join("cfg");
+        match fs::metadata(&cfg) {
+            Ok(m) => dirs.push((cfg, m.modified()?)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+        Ok(Self { dirs })
+    }
+    fn verify(&self) -> Result<(), Error> {
+        for (path, stamp) in &self.dirs {
+            if fs::metadata(path).and_then(|m| m.modified()).ok() != Some(*stamp) {
+                return Err(Error::Changed);
+            }
+        }
+        Ok(())
+    }
+}
+#[cfg(all(not(windows), not(test)))]
+struct ChangeWatch;
+#[cfg(all(not(windows), not(test)))]
+impl ChangeWatch {
+    fn new(_: &Path) -> Result<Self, Error> {
+        Err(Error::UnsafePath)
+    }
+    fn verify(&self) -> Result<(), Error> {
+        Err(Error::UnsafePath)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct Candidates {
+    loose: Option<String>,
+    vpk: Option<String>,
+}
+fn candidate(path: &Path, held: &mut Vec<File>) -> Result<Option<String>, Error> {
+    let Some((file, id, _)) = open_optional(path)? else {
+        return Ok(None);
+    };
+    held.push(file);
+    Ok(Some(id))
+}
+fn candidates(cfg: &Path, vpk: &Path, held: &mut Vec<File>) -> Result<Candidates, Error> {
+    Ok(Candidates {
+        loose: candidate(&cfg.join("user_keys_default.vcfg"), held)?,
+        vpk: candidate(vpk, held)?,
+    })
+}
+
 // Verify the same named file and stable size/mtime after every bounded read.
 fn stable(path: &Path, file: &File, id: &str, before: &fs::Metadata) -> Result<(), Error> {
     parents(path).map_err(|_| Error::Changed)?;
@@ -365,6 +470,9 @@ fn section(text: &str, name: &str) -> Result<BTreeMap<String, String>, Error> {
 }
 /// `root` is the user-selected CS2 installation root; no user cfg is read.
 pub(crate) fn read_default(root: &Path) -> Result<Resource, Error> {
+    read_default_inner(root, |_| {})
+}
+fn read_default_inner(root: &Path, mut inject: impl FnMut(u8)) -> Result<Resource, Error> {
     if !root.is_absolute()
         || root
             .components()
@@ -380,15 +488,27 @@ pub(crate) fn read_default(root: &Path) -> Result<Resource, Error> {
         Err(Error::Io(e)) if e.kind() == io::ErrorKind::NotFound => None,
         Err(e) => return Err(e),
     };
+    let watch = ChangeWatch::new(&csgo)?;
     let mut held = Vec::new();
-    let loose = if _cfg_guards.is_some() {
-        loose(&cfg.join("user_keys_default.vcfg"), &mut held)?
-    } else {
-        None
-    };
     let vpk_path = csgo.join("pak01_dir.vpk");
+    let initial = candidates(&cfg, &vpk_path, &mut held)?;
+    inject(0);
+    watch.verify()?;
+    let loose_result = if _cfg_guards.is_some() {
+        loose(&cfg.join("user_keys_default.vcfg"), &mut held)
+    } else {
+        Ok(None)
+    };
+    watch.verify()?;
+    let loose = loose_result?;
+    inject(1);
+    watch.verify()?;
     let held_before_vpk = held.len();
-    let packed = packed(&vpk_path, &csgo, &mut held)?;
+    let packed_result = packed(&vpk_path, &csgo, &mut held);
+    watch.verify()?;
+    let packed = packed_result?;
+    inject(2);
+    watch.verify()?;
     if _cfg_guards.is_none() {
         ensure_absent(&cfg)?;
     } else if loose.is_none() {
@@ -397,6 +517,11 @@ pub(crate) fn read_default(root: &Path) -> Result<Resource, Error> {
     if held.len() == held_before_vpk {
         ensure_absent(&vpk_path)?;
     }
+    let final_candidates = candidates(&cfg, &vpk_path, &mut held)?;
+    if final_candidates != initial {
+        return Err(Error::Changed);
+    }
+    watch.verify()?;
     let (bytes, source) = match (loose, packed) {
         (None, None) => return Err(Error::Missing),
         (Some(bytes), None) => (bytes, Source::Loose),
@@ -425,6 +550,7 @@ mod tests {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     // Excerpt from the fixed CS2 mirror recorded in #342, not an installation.
     // https://github.com/SteamTracking/GameTracking-CS2/blob/5278de99318192d682ec7f0e1cc3ea9449f10c6e/game/csgo/cfg/user_keys_default.vcfg
+    // Full mirrored file SHA-256: ba4d5d66c0c3a00cd3ad7f7874b275514c81c550208fccf8b8fb557aa0338ee1.
     const CFG: &[u8] = b"\"config\" { \"bindings\" { \"0\" \"slot10\" \"1\" \"slot1\" \"a\" \"+left\" } \"analogbindings\" { \"MOUSE_X\" \"yaw\" \"MOUSE_Y\" \"pitch\" } }";
     struct Fixture(std::path::PathBuf);
     impl Fixture {
@@ -514,6 +640,56 @@ mod tests {
             read_default(&f.0),
             Err(Error::Vpk(vpk::Error::Truncated))
         ));
+    }
+    #[test]
+    fn rejects_candidate_created_during_read() {
+        let f = Fixture::new();
+        f.write_loose(CFG);
+        let result = read_default_inner(&f.0, |stage| {
+            if stage == 1 {
+                f.write_vpk(CFG, false);
+            }
+        });
+        assert!(matches!(result, Err(Error::Changed)));
+    }
+    #[test]
+    fn rejects_transient_candidate_during_read() {
+        let f = Fixture::new();
+        f.write_loose(CFG);
+        let result = read_default_inner(&f.0, |stage| {
+            if stage == 2 {
+                f.write_vpk(CFG, false);
+                fs::remove_file(f.0.join("game/csgo/pak01_dir.vpk")).unwrap();
+            }
+        });
+        assert!(matches!(result, Err(Error::Changed)));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn rejects_candidate_replaced_during_read() {
+        let f = Fixture::new();
+        f.write_loose(CFG);
+        let result = read_default_inner(&f.0, |stage| {
+            if stage == 0 {
+                let path = f.0.join("game/csgo/cfg/user_keys_default.vcfg");
+                fs::rename(&path, f.0.join("old")).unwrap();
+                fs::write(path, CFG).unwrap();
+            }
+        });
+        assert!(matches!(result, Err(Error::Changed)));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn rejects_candidate_removed_during_read() {
+        let f = Fixture::new();
+        f.write_loose(CFG);
+        f.write_vpk(CFG, false);
+        let result = read_default_inner(&f.0, |stage| {
+            if stage == 1 {
+                fs::remove_file(f.0.join("game/csgo/pak01_dir.vpk")).unwrap();
+            }
+        });
+        assert!(matches!(result, Err(Error::Changed)));
     }
     #[cfg(windows)]
     #[test]
