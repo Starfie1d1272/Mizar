@@ -65,7 +65,26 @@ test('compact source follows the BP reveal cursor and clears when disconnected',
   await expect(strip).toContainText('INFERNO');
   await expect(strip).not.toContainText('CT');
   count = 4;
-  await expect(strip.locator('.bp-compact-side')).toContainText('NAVI · CT 开局');
+  await expect(strip.locator('.bp-compact-side')).toHaveAttribute('aria-label', 'NAVI CT 开局');
+  await expect(strip.locator('.bp-compact-side-team')).toHaveText('NAVI');
+  await expect(strip.locator('.bp-compact-side-choice')).toHaveText('CT 开局');
+  for (const [width, height] of [
+    [1280, 720],
+    [1920, 1080],
+    [2560, 1440],
+    [3840, 2160],
+  ]) {
+    await page.setViewportSize({ width: width!, height: height! });
+    await page.locator('#root').evaluate((root, scale) => {
+      (root as HTMLElement).style.transformOrigin = 'top left';
+      (root as HTMLElement).style.transform = `scale(${scale})`;
+    }, width! / 1920);
+    const actor = (await strip.locator('.bp-compact-side-team').boundingBox())!;
+    const side = (await strip.locator('.bp-compact-side-choice').boundingBox())!;
+    expect(actor.y + actor.height / 2).toBeCloseTo(side.y + side.height / 2, 1);
+    expect(side.x - (actor.x + actor.width)).toBeCloseTo((6 * width!) / 1920, 1);
+  }
+
   const pickerFits = await strip
     .locator('.bp-compact-card')
     .nth(2)

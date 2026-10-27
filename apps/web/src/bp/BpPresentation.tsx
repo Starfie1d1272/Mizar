@@ -123,11 +123,19 @@ export function BpCompactPresentation({
                     <>
                       <CompactMapArt mapName={card.mapName} />
                       {sideShown && card.sideChoice ? (
-                        <div className="bp-compact-side">
-                          <span title={projection.entrants[card.sideChoice.entrant].name}>
+                        <div
+                          className="bp-compact-side"
+                          aria-label={`${projection.entrants[card.sideChoice.entrant].name} ${card.sideChoice.side} 开局`}
+                        >
+                          <span
+                            className="bp-compact-side-team"
+                            title={projection.entrants[card.sideChoice.entrant].name}
+                          >
                             {projection.entrants[card.sideChoice.entrant].name}
                           </span>
-                          <b> · {card.sideChoice.side} 开局</b>
+                          <span className="bp-compact-side-choice">
+                            {card.sideChoice.side} 开局
+                          </span>
                         </div>
                       ) : null}
                       <div className="bp-compact-action">
