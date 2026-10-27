@@ -73,6 +73,7 @@ import { GameAudioController } from './obs/audio-policy-controller.js';
 import { gameAudioTruth } from './obs/audio-policy-truth.js';
 import type { ObsNativeEvidence } from './obs/native-evidence.js';
 import { registerObsRoutes } from './obs/routes.js';
+import { registerMixerRoutes } from './obs/mixer-routes.js';
 import { ProgramSceneController, registerProgramSceneRoutes } from './program-scenes/controller.js';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
@@ -1153,6 +1154,14 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       }),
     );
     registerMusicRoutes(app, musicStore, musicDirector, localWebTransport.getOriginPolicy());
+    if (obsAdapter)
+      registerMixerRoutes(
+        app,
+        obsAdapter,
+        musicDirector,
+        gameAudio,
+        localWebTransport.getOriginPolicy(),
+      );
     const cameraStore = new OrchestrationStore(
       join(dirname(options.obsConfigPath), 'orchestration'),
       (stage, evidence) => sessionJournal?.record(stage, evidence),

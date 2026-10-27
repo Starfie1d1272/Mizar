@@ -19,6 +19,7 @@ const playbackSchema = z
     scope: z.string().max(4000).optional(),
     group: z.enum(MUSIC_GROUPS),
     track: musicTrackSchema,
+    configRevision: z.string().uuid().optional(),
     finished: z.boolean(),
     suspended: z.boolean().default(false),
     cursorMs: z.number().min(0).max(86_400_000).default(0),
@@ -28,6 +29,12 @@ const stateSchema = z
   .object({
     version: z.literal(1),
     config: musicConfigSchema,
+    configRevision: z
+      .string()
+      .uuid()
+      .default(() => randomUUID()),
+    master: z.number().finite().min(0).max(1).default(1),
+    muted: z.boolean().default(false),
     held: z.boolean(),
     owner: z.string().uuid(),
     sources: z.object({ bgm: z.string().nullable(), stinger: z.string().nullable() }).strict(),
@@ -47,6 +54,9 @@ export class MusicStore {
   state: MusicState = {
     version: 1,
     config: defaultMusicConfig(),
+    configRevision: randomUUID(),
+    master: 1,
+    muted: false,
     held: false,
     owner: randomUUID(),
     sources: { bgm: null, stinger: null },
@@ -96,7 +106,41 @@ export class MusicStore {
       const stat = await lstat(path);
       if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 512 * 1024)
         throw new Error('music_state_invalid');
-      this.state = stateSchema.parse(JSON.parse(await readFile(path, 'utf8')));
+      const raw: unknown = JSON.parse(await readFile(path, 'utf8'));
+      this.state = stateSchema.parse(raw);
+      const legacy = z
+        .object({
+          configRevision: z.unknown().optional(),
+          master: z.unknown().optional(),
+          muted: z.unknown().optional(),
+        })
+        .parse(raw);
+      let migrated =
+        !legacy.configRevision || legacy.master === undefined || legacy.muted === undefined;
+      for (const group of MUSIC_GROUPS) {
+        for (const track of this.state.config.groups[group].tracks) {
+          if (!track.entryId) {
+            track.entryId = randomUUID();
+            migrated = true;
+          }
+        }
+      }
+      for (const layer of ['bgm', 'stinger'] as const) {
+        const playback = this.state[layer];
+        if (playback && !playback.configRevision) {
+          playback.configRevision = this.state.configRevision;
+          const matches = this.state.config.groups[playback.group].tracks.filter(
+            (track) =>
+              track.id === playback.track.id &&
+              track.startMs === playback.track.startMs &&
+              track.endMs === playback.track.endMs,
+          );
+          if (!playback.track.entryId && matches.length === 1)
+            playback.track.entryId = matches[0]!.entryId!;
+          migrated = true;
+        }
+      }
+      if (migrated) await atomicJson(path, this.state);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
         throw new Error('music_state_invalid', { cause: error });
@@ -112,6 +156,8 @@ export class MusicStore {
       if (this.failure) throw new Error('music_state_invalid');
       const next = structuredClone(this.state);
       change(next);
+      if (JSON.stringify(next.config) !== JSON.stringify(this.state.config))
+        next.configRevision = randomUUID();
       stateSchema.parse(next);
       await this.stage('music_commit_config', { before: this.state, after: next }, () =>
         atomicJson(join(this.directory, 'state.json'), next),
@@ -167,8 +213,27 @@ export class MusicStore {
     while (this.trackCache.size > 128) this.trackCache.delete(this.trackCache.keys().next().value!);
     return path;
   }
-  async configure(config: MusicConfig) {
+  async configure(config: MusicConfig, preserveEntries = true) {
     const parsed = musicConfigSchema.parse(config);
+    for (const group of MUSIC_GROUPS) {
+      const old = this.state.config.groups[group].tracks;
+      const used = new Set(
+        parsed.groups[group].tracks.flatMap((track) => (track.entryId ? [track.entryId] : [])),
+      );
+      for (const track of parsed.groups[group].tracks) {
+        if (!track.entryId) {
+          const matches = old.filter(
+            (item) =>
+              item.id === track.id && item.startMs === track.startMs && item.endMs === track.endMs,
+          );
+          const candidate =
+            preserveEntries && matches.length === 1 ? matches[0]!.entryId : undefined;
+          track.entryId = candidate && !used.has(candidate) ? candidate : randomUUID();
+          used.add(track.entryId);
+        }
+      }
+    }
+    musicConfigSchema.parse(parsed);
     for (const group of MUSIC_GROUPS)
       for (const track of parsed.groups[group].tracks)
         await this.stage('music_validate_stored_track', { group, id: track.id }, () =>
@@ -200,7 +265,7 @@ export class MusicStore {
           });
         config.groups[group] = { ...spec, tracks };
       }
-      await this.configure(config);
+      await this.configure(config, false);
     } finally {
       this.importing = false;
     }
