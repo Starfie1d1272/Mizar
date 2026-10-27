@@ -329,3 +329,14 @@ it('does not duplicate game-capture audio with default desktop capture', async (
   expect(obs.inputs.get(OBS_CAPTURE_INPUT)!.settings.capture_audio).toBe(true);
   expect(obs.calls.filter((type) => /^(Set|Create|Remove)/.test(type))).toEqual([]);
 });
+
+it('does not duplicate window-capture audio with default desktop capture', async () => {
+  const obs = new FakeObs();
+  await ensureObsConfiguration(obs, baseUrl);
+  obs.inputs.set('Window', { kind: 'window_capture', settings: { capture_audio: true } });
+  obs.calls = [];
+  await ensureObsAudio(obs, baseUrl);
+  expect(obs.inputs.has('Mizar · Desktop Audio')).toBe(false);
+  expect(obs.inputs.get('Window')!.settings.capture_audio).toBe(true);
+  expect(obs.calls.filter((type) => /^(Set|Create|Remove)/.test(type))).toEqual([]);
+});
