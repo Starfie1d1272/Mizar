@@ -9,7 +9,11 @@ import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
 import type { ObsAudioBindCommand, ObsOutputCommand, ObsOutputsStatus } from '@mizar/protocol/obs';
 import type { ObsAudioRouting } from './audio-routing.js';
 import { createCommentaryProbe, isTeamspeak, RemoteCommentary } from './remote-commentary.js';
-import { readCommentarySwitch, saveCommentarySwitch } from './commentary-switch.js';
+import {
+  AUTO_TEAMSPEAK_TARGET,
+  readCommentarySwitch,
+  saveCommentarySwitch,
+} from './commentary-switch.js';
 import { OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
 import { configureIndependentAudio } from './audio-setup.js';
 import { discoverWaitingCommentary } from './remote-commentary-wait.js';
@@ -593,8 +597,10 @@ export class ObsAdapter {
                   pendingSwitch.uuid === owned.uuid &&
                   pendingSwitch.revision === revision &&
                   pendingSwitch.from === value &&
-                  previous.preference.mode === 'application' &&
-                  pendingSwitch.to === previous.preference.window))
+                  ((previous.preference.mode === 'application' &&
+                    pendingSwitch.to === previous.preference.window) ||
+                    (previous.preference.mode === 'autoTeamspeak' &&
+                      pendingSwitch.to === AUTO_TEAMSPEAK_TARGET))))
             )
               from = value;
           }
@@ -678,6 +684,13 @@ export class ObsAdapter {
                 uuid: owned.uuid,
                 from,
                 to: windows[0]!.window,
+                routingRevision: routing.revision,
+              };
+            else if (windows.length === 0)
+              target = {
+                uuid: owned.uuid,
+                from,
+                to: AUTO_TEAMSPEAK_TARGET,
                 routingRevision: routing.revision,
               };
           }

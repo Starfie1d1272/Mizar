@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { MigrationObserver } from './audio-migration.js';
 import type { ObsRpc } from './reconcile.js';
 
+export const AUTO_TEAMSPEAK_TARGET = '@autoTeamspeak';
 const schema = z
   .object({
     endpoint: z.string(),

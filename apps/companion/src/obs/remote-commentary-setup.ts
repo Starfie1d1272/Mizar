@@ -1,9 +1,11 @@
 import { writeFile, rm } from 'node:fs/promises';
 import { OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
-import { createCommentaryProbe, RemoteCommentary } from './remote-commentary.js';
+import { createCommentaryProbe, isTeamspeak, RemoteCommentary } from './remote-commentary.js';
 import {
+  AUTO_TEAMSPEAK_TARGET,
   applyCommentarySwitch,
   readCommentarySwitch,
+  saveCommentarySwitch,
   type CommentarySwitch,
 } from './commentary-switch.js';
 import type { MigrationObserver } from './audio-migration.js';
@@ -87,24 +89,48 @@ export async function prepareRemoteCommentary(
     let window: string | undefined;
     if (state.preference.mode === 'application') window = state.preference.window;
     else {
-      const found = await owner.discover(obs, state.revision, probe);
-      if (found.kind === 'existing') target = found.candidate.inputUuid;
-      else if (found.kind === 'window') window = found.candidate.window;
-      else if (found.kind === 'waiting') {
-        target = await createCommentaryProbe(
-          obs,
-          journal,
-          { endpoint, collection, sceneName: scenes[0]!.sceneName },
-          check,
+      const deferred = await readCommentarySwitch(`${journal}.switch`);
+      if (
+        deferred?.phase === 'prepared' &&
+        deferred.to === AUTO_TEAMSPEAK_TARGET &&
+        deferred.endpoint === endpoint &&
+        deferred.collection === collection &&
+        deferred.revision === state.revision
+      ) {
+        const windows = (await owner.windows(obs, state.revision, deferred.uuid)).filter(
+          (candidate) => isTeamspeak(candidate.window),
         );
-        inputs = records((await obs.call('GetInputList')).inputs);
-        await writeFile(
-          `${journal}.waiting`,
-          `${JSON.stringify({ endpoint, collection, uuid: target, revision: state.revision, phase: 'waiting' })}\n`,
-          { mode: 0o600 },
-        );
-        pendingMessage = '等待 TeamSpeak 启动；场景已准备，音频分路待完成。';
-      } else return pending('检测到多个远端解说候选，请选择来源。');
+        if (windows.length === 0) {
+          await writeFile(
+            `${journal}.waiting`,
+            `${JSON.stringify({ endpoint, collection, uuid: deferred.uuid, revision: state.revision, phase: 'waiting' })}\n`,
+            { mode: 0o600 },
+          );
+          return pending('等待 TeamSpeak 启动；当前解说来源保持不变。');
+        }
+        if (windows.length !== 1) return pending('检测到多个 TeamSpeak 窗口，请选择来源。');
+        window = windows[0]!.window;
+        await saveCommentarySwitch(`${journal}.switch`, { ...deferred, to: window });
+      } else {
+        const found = await owner.discover(obs, state.revision, probe);
+        if (found.kind === 'existing') target = found.candidate.inputUuid;
+        else if (found.kind === 'window') window = found.candidate.window;
+        else if (found.kind === 'waiting') {
+          target = await createCommentaryProbe(
+            obs,
+            journal,
+            { endpoint, collection, sceneName: scenes[0]!.sceneName },
+            check,
+          );
+          inputs = records((await obs.call('GetInputList')).inputs);
+          await writeFile(
+            `${journal}.waiting`,
+            `${JSON.stringify({ endpoint, collection, uuid: target, revision: state.revision, phase: 'waiting' })}\n`,
+            { mode: 0o600 },
+          );
+          pendingMessage = '等待 TeamSpeak 启动；场景已准备，音频分路待完成。';
+        } else return pending('检测到多个远端解说候选，请选择来源。');
+      }
     }
     if (window) {
       const owned = await createCommentaryProbe(

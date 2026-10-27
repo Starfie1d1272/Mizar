@@ -886,10 +886,17 @@ it('switches the owned source from TS to an application and then to another appl
           items.filter((item) => item.sourceUuid === voice.inputUuid && item.sceneItemEnabled),
         ).toHaveLength(1);
     }
+    obs.windows = [];
+    await adapter.setCommentaryMode('autoTeamspeak', (await owner.get()).revision);
+    expect((await adapter.ensure()).some((finding) => finding.code === 'commentary_pending')).toBe(
+      true,
+    );
+    expect(voice.settings.window).toBe('Other:Qt:other.exe');
     obs.windows = [
       { itemName: 'TeamSpeak', itemValue: 'TeamSpeak:Qt:ts3client_win64.exe', itemEnabled: true },
     ];
-    await adapter.setCommentaryMode('autoTeamspeak', (await owner.get()).revision);
+    adapter.startCommentaryRecovery();
+    await vi.waitFor(() => expect(voice.settings.window).toBe('TeamSpeak:Qt:ts3client_win64.exe'));
     expect(await adapter.ensure()).toEqual([]);
     expect(voice.settings.window).toBe('TeamSpeak:Qt:ts3client_win64.exe');
     await adapter.close();

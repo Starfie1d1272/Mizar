@@ -1,8 +1,8 @@
 import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { RemoteCommentary } from './remote-commentary.js';
-import { readCommentarySwitch } from './commentary-switch.js';
+import { isTeamspeak, RemoteCommentary } from './remote-commentary.js';
+import { AUTO_TEAMSPEAK_TARGET, readCommentarySwitch } from './commentary-switch.js';
 import type { ObsRpc } from './reconcile.js';
 
 const journalSchema = z
@@ -71,6 +71,24 @@ export async function discoverWaitingCommentary(
     return (settings as Record<string, unknown>).window ? 'complete' : 'stopped';
   const currentWindow = (settings as Record<string, unknown>).window;
   if (currentWindow) {
+    if (state.preference.mode === 'autoTeamspeak') {
+      const plan = await readCommentarySwitch(`${journalPath}.switch`);
+      if (
+        !plan ||
+        plan.phase !== 'prepared' ||
+        plan.endpoint !== endpoint ||
+        plan.collection !== journal.collection ||
+        plan.uuid !== uuid ||
+        plan.revision !== state.revision ||
+        plan.from !== currentWindow ||
+        plan.to !== AUTO_TEAMSPEAK_TARGET
+      )
+        return 'stopped';
+      const windows = (await owner.windows(obs, state.revision, uuid)).filter((candidate) =>
+        isTeamspeak(candidate.window),
+      );
+      return windows.length === 1 ? 'complete' : 'waiting';
+    }
     if (state.preference.mode !== 'application') return 'stopped';
     if (currentWindow !== state.preference.window) {
       const plan = await readCommentarySwitch(`${journalPath}.switch`);
