@@ -50,6 +50,22 @@ function mediaMillis(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
+function tailVolume(
+  track: MusicTrack,
+  cursor: number | null,
+  duration: number | null,
+  volume: number,
+  fadeOutMs: number,
+) {
+  if (cursor === null || fadeOutMs <= 0) return volume;
+  const end = Math.min(
+    track.endMs ?? Infinity,
+    duration !== null && duration > 0 ? duration : Infinity,
+  );
+  if (!Number.isFinite(end)) return volume;
+  return volume * Math.min(1, Math.max(0, (end - cursor) / fadeOutMs));
+}
+
 interface Provider {
   session<T>(run: (rpc: ObsRpc, epoch: number) => Promise<T>): Promise<T>;
   close(): Promise<void>;
@@ -99,7 +115,12 @@ export class MusicDirector {
   private epoch = 0;
   private lastPoll = -Infinity;
   private nextRequested = false;
-  private manual: { cue: MusicCue; paused: boolean; epoch: number | null } | null = null;
+  private manual: {
+    cue: MusicCue;
+    paused: boolean;
+    pausedAt: number | null;
+    epoch: number | null;
+  } | null = null;
   private unknownControl = false;
   private resumeLayers = new Set<MusicLayer>();
   constructor(
@@ -223,6 +244,7 @@ export class MusicDirector {
     this.manual = {
       cue: { group, key: `manual:${randomUUID()}`, track },
       paused: false,
+      pausedAt: null,
       epoch: null,
     };
     while (this.inFlight && revision === this.commandRevision && !this.closed)
@@ -280,6 +302,7 @@ export class MusicDirector {
         )
           throw new Error('music_state_changed');
         if (!manualSafe(this.truth())) throw new Error('music_program_unsafe');
+        const actionAt = this.now();
         manual.paused = paused;
         await obs.call('TriggerMediaInputAction', {
           inputUuid: uuid,
@@ -293,6 +316,13 @@ export class MusicDirector {
         this.status.playback = observedPlayback(after.mediaState);
         if (after.mediaState !== (paused ? 'OBS_MEDIA_STATE_PAUSED' : 'OBS_MEDIA_STATE_PLAYING'))
           throw new Error('music_state_unconfirmed');
+        if (paused) manual.pausedAt = actionAt;
+        else {
+          const fade = this.fades.bgm;
+          if (fade && !fade.stop && manual.pausedAt !== null)
+            fade.at += Math.max(0, this.now() - manual.pausedAt);
+          manual.pausedAt = null;
+        }
       });
     } catch (error) {
       if (current()) {
@@ -383,6 +413,19 @@ export class MusicDirector {
         if (!current()) return;
         this.status.cursorMs = mediaMillis(observed.mediaCursor);
         this.status.durationMs = mediaMillis(observed.mediaDuration);
+        if (this.status.cursorMs === null) throw new Error('music_seek_unconfirmed');
+        delete this.fades.bgm;
+        const spec = this.store.state.config.groups[saved.group];
+        const target = tailVolume(
+          saved.track,
+          this.status.cursorMs,
+          this.status.durationMs ?? duration,
+          spec.volume,
+          spec.fadeOutMs,
+        );
+        if (!current()) return;
+        await obs.call('SetInputVolume', { inputUuid: uuid, inputVolumeMul: target });
+        if (current()) this.appliedVolumes.set('bgm', target);
       });
     } catch (error) {
       if (writing && current()) {
@@ -394,16 +437,27 @@ export class MusicDirector {
                 inputUuid: this.store.state.sources.bgm,
               });
               if (current()) this.status.cursorMs = mediaMillis(read.mediaCursor);
+              const volume = await obs.call('GetInputVolume', {
+                inputUuid: this.store.state.sources.bgm,
+              });
+              if (
+                current() &&
+                typeof volume.inputVolumeMul === 'number' &&
+                Number.isFinite(volume.inputVolumeMul)
+              )
+                this.appliedVolumes.set('bgm', volume.inputVolumeMul);
             }
           })
           .catch(() => {
-            this.status.cursorMs = null;
+            if (current()) this.status.cursorMs = null;
           });
-        this.status.playback = 'unknown';
-        this.manual = null;
-        this.unknownControl = true;
-        this.heldOverride = true;
-        await this.store.hold(true).catch(() => undefined);
+        if (current()) {
+          this.status.playback = 'unknown';
+          this.manual = null;
+          this.unknownControl = true;
+          this.heldOverride = true;
+          await this.store.hold(true).catch(() => undefined);
+        }
       }
       throw error;
     } finally {
@@ -1042,25 +1096,28 @@ export class MusicDirector {
           return;
         }
       } else if (active) {
-        const endingAt = saved.track.endMs ?? Number(media.mediaDuration);
-        const remainingMs = endingAt - Number(media.mediaCursor);
-        if (
-          endingAt > 0 &&
-          remainingMs > 0 &&
-          remainingMs <= spec!.fadeOutMs &&
-          this.fades[layer]?.to !== 0
-        ) {
-          this.fades[layer] = {
-            name,
-            inputUuid: args.inputUuid,
-            from: Number(volume.inputVolumeMul),
-            to: 0,
-            at: this.now(),
-            ms: remainingMs,
-            stop: false,
-          };
-        }
-        await this.fade(obs, layer, valid);
+        // Tail gain follows the observed media cursor, not elapsed wall time. Seeking and
+        // pausing therefore cannot keep an obsolete fade-out timer alive.
+        const fade = this.fades[layer];
+        let gain = spec!.volume;
+        if (fade && !fade.stop) {
+          const progress = fade.ms ? Math.min(1, Math.max(0, (this.now() - fade.at) / fade.ms)) : 1;
+          gain = fade.from + (fade.to - fade.from) * progress;
+          if (progress === 1) delete this.fades[layer];
+        } else if (fade?.stop) delete this.fades[layer];
+        gain = Math.min(
+          gain,
+          tailVolume(
+            saved.track,
+            mediaMillis(media.mediaCursor),
+            mediaMillis(media.mediaDuration),
+            spec!.volume,
+            spec!.fadeOutMs,
+          ),
+        );
+        if (valid() && Math.abs(gain - Number(volume.inputVolumeMul)) > 0.0001)
+          await call('SetInputVolume', { ...args, inputVolumeMul: gain });
+        if (valid()) this.appliedVolumes.set(layer, gain);
         markStatus(saved);
         return; // Reconcile an existing source without Restart or seek.
       } else return;

@@ -1425,3 +1425,114 @@ it('stops manual music when telemetry becomes stale even without a named map', a
   );
   await r.director.close();
 });
+
+it('recalculates the tail gain from OBS cursor after backward and forward seeks', async () => {
+  const r = await rig();
+  const config = structuredClone(r.store.state.config);
+  config.groups.waiting.fadeOutMs = 2000;
+  await r.store.configure(config);
+  await r.director.manualPlay('waiting', r.tracks[0]!.id);
+  r.obs.bgm().cursor = 9000;
+  await r.step();
+  expect(r.obs.bgm().volume).toBeCloseTo(0.25);
+  const id = r.director.get().bgm!.playbackId;
+  await r.director.seek(4000, id);
+  expect(r.obs.bgm().volume).toBeCloseTo(0.5);
+  await r.step(2500);
+  expect(r.obs.bgm().volume).toBeCloseTo(0.5);
+  await r.director.seek(9500, id);
+  expect(r.obs.bgm().volume).toBeCloseTo(0.125);
+  await r.step(2500);
+  expect(r.obs.bgm().volume).toBeCloseTo(0.125);
+  await r.director.close();
+});
+
+it('freezes fades during repeated pauses and uses the paused cursor on resume', async () => {
+  const r = await rig();
+  const config = structuredClone(r.store.state.config);
+  config.groups.waiting.fadeInMs = 2000;
+  config.groups.waiting.fadeOutMs = 2000;
+  await r.store.configure(config);
+  await r.director.manualPlay('waiting', r.tracks[0]!.id);
+  await r.step(1000);
+  expect(r.obs.bgm().volume).toBeCloseTo(0.25);
+  await r.director.manualPause(true);
+  await r.step(6000);
+  expect(r.obs.bgm().volume).toBeCloseTo(0.25);
+  await r.director.manualPause(false);
+  await r.step(500);
+  expect(r.obs.bgm().volume).toBeCloseTo(0.375);
+  await r.step(500);
+  r.obs.bgm().cursor = 9000;
+  await r.step();
+  expect(r.obs.bgm().volume).toBeCloseTo(0.25);
+  for (let i = 0; i < 2; i++) {
+    await r.director.manualPause(true);
+    await r.step(6000);
+    expect(r.obs.bgm().volume).toBeCloseTo(0.25);
+    await r.director.manualPause(false);
+    await r.step();
+    expect(r.obs.bgm().volume).toBeCloseTo(0.25);
+  }
+  await r.director.manualPause(true);
+  await r.director.seek(9500, r.director.get().bgm!.playbackId);
+  expect(r.obs.bgm().volume).toBeCloseTo(0.125);
+  await r.step(6000);
+  await r.director.manualPause(false);
+  await r.step();
+  expect(r.obs.bgm().volume).toBeCloseTo(0.125);
+  await r.director.close();
+});
+
+it('lets stop preempt seek without a late volume write or restart', async () => {
+  const r = await rig();
+  const config = structuredClone(r.store.state.config);
+  config.groups.waiting.fadeOutMs = 2000;
+  await r.store.configure(config);
+  await r.director.manualPlay('waiting', r.tracks[0]!.id);
+  r.obs.bgm().cursor = 9000;
+  await r.step();
+  let release!: () => void;
+  let reached!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const pending = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  r.obs.intercept = async (type) => {
+    if (type === 'SetMediaInputCursor') {
+      reached();
+      await blocked;
+    }
+  };
+  const seeking = r.director.seek(4000, r.director.get().bgm!.playbackId);
+  await pending;
+  const volumeWrites = r.obs.calls.filter((call) => call.type === 'SetInputVolume').length;
+  const stopping = r.director.command('stop');
+  release();
+  await Promise.allSettled([seeking, stopping]);
+  r.obs.intercept = undefined;
+  await r.step();
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
+  expect(r.obs.calls.filter((call) => call.type === 'SetInputVolume')).toHaveLength(volumeWrites);
+  await r.director.close();
+});
+
+it('finishes a track transition without applying its tail fade to the next track', async () => {
+  const r = await rig();
+  const config = structuredClone(r.store.state.config);
+  config.groups.waiting.fadeOutMs = 2000;
+  await r.store.configure(config);
+  await r.director.manualPlay('waiting', r.tracks[0]!.id);
+  r.obs.bgm().cursor = 9000;
+  await r.step();
+  expect(r.obs.bgm().volume).toBeCloseTo(0.25);
+  await r.director.command('next');
+  await r.step(2100);
+  expect(r.director.get().bgm?.track).toBe(r.tracks[1]!.name);
+  await r.step(300);
+  expect(r.obs.bgm().volume).toBeCloseTo(0.5);
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_PLAYING');
+  await r.director.close();
+});
