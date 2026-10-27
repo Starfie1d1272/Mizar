@@ -373,7 +373,7 @@ test('auditions unsaved drafts through the owned OBS protocol channel with outpu
     await page.goto('/');
     await expect.poll(() => input().state, { timeout: 6000 }).toBe('OBS_MEDIA_STATE_STOPPED');
     await page.goto('/settings?tab=music');
-    const choice = `waiting:${store.state.config.groups.waiting.tracks[0]!.id}`;
+    const choice = `waiting:${store.state.config.groups.waiting.tracks[0]!.entryId}`;
     await expect(page.getByLabel('正式播放曲目').locator(`option[value="${choice}"]`)).toHaveCount(
       1,
     );
