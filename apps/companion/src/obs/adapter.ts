@@ -8,6 +8,7 @@ import type { ObsAudioRouting } from './audio-routing.js';
 import { RemoteCommentary } from './remote-commentary.js';
 import { prepareRemoteCommentary } from './remote-commentary-setup.js';
 import { discoverWaitingCommentary } from './remote-commentary-wait.js';
+import { AudioConfigurationConnection } from './audio-configuration-connection.js';
 import { ObsOutputController, ObsOutputError } from './outputs.js';
 import { readObsProgramEvidence, type ObsProgramEvidence } from './program-evidence.js';
 import {
@@ -70,6 +71,7 @@ const PROGRAM_EVIDENCE_MS = 750;
 
 export class ObsAdapter {
   private readonly outputs: ObsOutputController;
+  private readonly audioConfiguration: AudioConfigurationConnection;
   private configurationPending = false;
   private queue: Promise<unknown> = Promise.resolve();
   private findings: ObsFinding[] = [
@@ -89,6 +91,7 @@ export class ObsAdapter {
     private readonly audioRouting?: ObsAudioRouting,
     private readonly commentary?: { owner: RemoteCommentary; journal: string },
   ) {
+    this.audioConfiguration = new AudioConfigurationConnection(configStore);
     this.outputs = new ObsOutputController(configStore, (error, password) =>
       diagnostic('obs_output', obsErrorEvidence(error, password)),
     );
@@ -438,7 +441,7 @@ export class ObsAdapter {
   }
   ensure(activeScene: () => ProgramSceneId = () => 'waiting'): Promise<readonly ObsFinding[]> {
     return this.configurationMutation(async () => {
-      this.findings = await this.withObs(async (obs, endpoint) => {
+      const prepared = await this.withObs(async (obs, endpoint) => {
         const visual = await ensureObsConfiguration(obs, this.browserBaseUrl, activeScene);
         if (
           visual.some((item) =>
@@ -450,34 +453,38 @@ export class ObsAdapter {
             ].includes(item.code),
           )
         )
-          return visual;
+          return { findings: visual, ready: false };
         let audio: ObsFinding[];
         if (await this.audioRouting?.enabled()) {
           audio = await checkObsAudio(obs);
           audio.push(...(await this.bindingFindings(obs, endpoint)));
         } else audio = await ensureObsAudio(obs, this.browserBaseUrl);
-        let commentary: ObsFinding[] = [];
-        if (this.commentary) {
-          try {
-            commentary = await prepareRemoteCommentary(
+        return { findings: [...visual, ...audio], ready: true };
+      }, 30_000);
+      this.findings = prepared.findings;
+      if (prepared.ready && this.commentary) {
+        try {
+          const commentary = await this.audioConfiguration.run((obs, endpoint) =>
+            prepareRemoteCommentary(
               obs,
-              this.commentary.owner,
-              this.commentary.journal,
+              this.commentary!.owner,
+              this.commentary!.journal,
               endpoint,
               this.browserBaseUrl,
-            );
-          } catch (error) {
-            this.diagnostic('obs_commentary_prepare', obsErrorEvidence(error));
-            commentary = [
-              {
-                code: 'commentary_pending',
-                message: '场景已准备，音频分路待完成。请检查远端解说来源后重试。',
-              },
-            ];
-          }
+            ),
+          );
+          this.findings = [...this.findings, ...commentary];
+        } catch (error) {
+          this.diagnostic('obs_commentary_prepare', obsErrorEvidence(error));
+          this.findings = [
+            ...this.findings,
+            {
+              code: 'commentary_pending',
+              message: '场景已准备，音频分路待完成。请检查远端解说来源后重试。',
+            },
+          ];
         }
-        return [...visual, ...audio, ...commentary];
-      }, 30_000);
+      }
       return this.findings;
     });
   }
