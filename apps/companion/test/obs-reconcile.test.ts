@@ -1,5 +1,9 @@
 import { expect, it, vi } from 'vitest';
-import { BP_COMPACT_INPUT, setBpCompactVisible } from '../src/obs/bp-overlay.js';
+import {
+  assertBpCompactOff,
+  BP_COMPACT_INPUT,
+  setBpCompactVisible,
+} from '../src/obs/bp-overlay.js';
 import { ensureObsAudio } from '../src/obs/audio.js';
 import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
 import {
@@ -342,6 +346,7 @@ it('takes and closes the compact source only after verifying gameplay and HUD st
     .find((item) => item.sourceName === 'Mizar · gameplay · Program')!;
   hud.sceneItemEnabled = false;
   await setBpCompactVisible(obs, baseUrl, true);
+  await expect(assertBpCompactOff(obs)).rejects.toThrow('先关闭');
   expect(
     obs.scenes.get(scene)!.find((item) => item.sourceName === BP_COMPACT_INPUT)?.sceneItemEnabled,
   ).toBe(true);

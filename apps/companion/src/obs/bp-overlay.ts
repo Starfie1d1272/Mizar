@@ -106,10 +106,40 @@ export async function setBpCompactVisible(
     sceneItemId: item.sceneItemId,
     sceneItemEnabled: visible,
   });
-  const verified = objects((await obs.call('GetSceneItemList', { sceneName })).sceneItems).find(
+  const verifiedItems = objects((await obs.call('GetSceneItemList', { sceneName })).sceneItems);
+  const verified = verifiedItems.find(
     (candidate) =>
       candidate.sceneItemId === item.sceneItemId && candidate.sourceName === BP_COMPACT_INPUT,
   );
+  if (
+    visible &&
+    verifiedItems.some(
+      (candidate) =>
+        candidate.sourceName === obsBrowserInputName('gameplay') &&
+        candidate.sceneItemEnabled !== false,
+    )
+  ) {
+    await obs.call('SetSceneItemEnabled', {
+      sceneName,
+      sceneItemId: item.sceneItemId,
+      sceneItemEnabled: false,
+    });
+    throw new Error('比赛 HUD 已重新启用，底栏未播出。');
+  }
+  if (visible) {
+    const actualInput = objects((await obs.call('GetInputList')).inputs).find(
+      (candidate) => candidate.inputName === BP_COMPACT_INPUT,
+    );
+    const settings = (await obs.call('GetInputSettings', { inputName: BP_COMPACT_INPUT }))
+      .inputSettings as Record<string, unknown> | undefined;
+    if (
+      actualInput?.inputKind !== 'browser_source' ||
+      settings?.url !== url ||
+      settings.width !== OBS_WIDTH ||
+      settings.height !== OBS_HEIGHT
+    )
+      throw new Error('未能确认紧凑 BP 来源配置。');
+  }
   if (!verified || verified.sceneItemEnabled !== visible)
     throw new Error('OBS 未确认紧凑 BP 状态。');
   if (
@@ -117,4 +147,16 @@ export async function setBpCompactVisible(
     (visible && (await obs.call('GetCurrentProgramScene')).currentProgramSceneName !== sceneName)
   )
     throw new Error('OBS 场景已变化，紧凑 BP 状态待确认。');
+}
+
+/** Do not re-enable the managed HUD while a compact source is on air. */
+export async function assertBpCompactOff(obs: ObsRpc): Promise<void> {
+  const collection = await obs.call('GetSceneCollectionList');
+  if (collection.currentSceneCollectionName !== OBS_COLLECTION) return;
+  const sceneName = obsSceneName('gameplay');
+  const scenes = objects((await obs.call('GetSceneList')).scenes);
+  if (!scenes.some((scene) => scene.sceneName === sceneName)) return;
+  const items = objects((await obs.call('GetSceneItemList', { sceneName })).sceneItems);
+  if (items.some((item) => item.sourceName === BP_COMPACT_INPUT && item.sceneItemEnabled !== false))
+    throw new Error('请先关闭紧凑 BP 底栏，再修复 OBS 场景。');
 }

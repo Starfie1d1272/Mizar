@@ -1,3 +1,4 @@
+import { assertBpCompactOff, setBpCompactVisible } from './bp-overlay.js';
 import { diagnosticValue } from '../support/session-journal.js';
 import { spawn } from 'node:child_process';
 import { dirname } from 'node:path';
@@ -343,6 +344,7 @@ export class ObsAdapter {
   ensure(activeScene: () => ProgramSceneId = () => 'waiting'): Promise<readonly ObsFinding[]> {
     return this.configurationMutation(async () => {
       this.findings = await this.withObs(async (obs) => {
+        await assertBpCompactOff(obs);
         const visual = await ensureObsConfiguration(obs, this.browserBaseUrl, activeScene);
         if (
           visual.some((item) =>
@@ -364,12 +366,18 @@ export class ObsAdapter {
   repair(activeScene: () => ProgramSceneId): Promise<readonly ObsFinding[]> {
     return this.configurationMutation(async () => {
       this.findings = await this.withObs(async (obs) => {
+        await assertBpCompactOff(obs);
         const findings = await repairObsConfiguration(obs, this.browserBaseUrl);
         await switchObsScene(obs, activeScene());
         return this.configurationFindings(obs, findings);
       }, 12_000);
       return this.findings;
     });
+  }
+  setBpCompactVisible(visible: boolean): Promise<void> {
+    return this.serial(() =>
+      this.withObs((obs) => setBpCompactVisible(obs, this.browserBaseUrl, visible)),
+    );
   }
   switchScene(id: ProgramSceneId, options?: ObsSceneSwitchOptions): Promise<void> {
     return this.serial(() => this.withObs((obs) => switchObsScene(obs, id, options)));
