@@ -33,7 +33,7 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: var(--mizar-layout-padding);
-  margin-block: var(--mizar-layout-padding);
+  margin-block: var(--mizar-layout-compact);
   align-items: start;
 }
 .music-settings-groups {
@@ -66,7 +66,24 @@
   gap: var(--mizar-layout-padding);
 }
 .music-settings-save {
-  margin-block: var(--mizar-layout-padding);
+  margin-top: var(--mizar-layout-padding);
+  flex-wrap: wrap;
+}
+.music-settings-save__title,
+.music-settings-save__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--mizar-layout-padding);
+}
+.music-settings-save__title h2 {
+  margin: 0;
+}
+.music-settings-save__title span {
+  color: var(--mizar-fg-muted);
+}
+.music-settings-save__actions .music-settings-import {
+  margin: 0;
 }
 .music-settings-save > .mizar-status-banner {
   flex: 1;

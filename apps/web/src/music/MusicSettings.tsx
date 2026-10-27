@@ -130,56 +130,68 @@ export function MusicSettings() {
           </StatusBanner>
         ) : null}
       </Panel>
-      <details className="music-settings-import">
-        <summary>导入音乐包</summary>
-        <Field
-          label="一键导入音乐包"
-          message="选择含 music.json 和相对路径音频的 ZIP（最大 128 MiB）。验证成功后替换七组配置。"
-          type="file"
-          accept=".zip"
-          disabled={busy}
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            e.target.value = '';
-            if (file)
-              void action(async () => {
-                await preview.stop();
-                const result = await localFile('/operator/music/import', file, 'application/zip');
-                setConfig(result.config);
-                setDirty(false);
-                setMessage('音乐包已导入并保存。');
-              });
-          }}
-        />
-        <p>只选择你有权直播或录制使用的音乐。文件仅保存在本机，不联网下载或分享。</p>
-      </details>
-      {message && messageAt === 'import' ? (
-        <StatusBanner tone={failed ? 'danger' : 'info'}>{message}</StatusBanner>
-      ) : null}
       {!config ? (
         <p role="status">等待本机音乐服务，请确认 Companion 已配置 OBS。</p>
       ) : (
         <>
           <div className="music-settings-save">
-            <span role="status">{dirty ? '有未保存修改' : '配置已保存'}</span>
-            <Button
-              variant="primary"
-              loading={busy}
-              disabled={busy || !dirty}
-              onClick={() =>
-                void action(async () => {
-                  await command('/operator/music', { action: 'configure', config });
-                  setDirty(false);
-                  setMessage('音乐配置已保存。');
-                }, 'save')
-              }
-            >
-              保存音乐配置
-            </Button>
-            {message && messageAt === 'save' ? (
-              <StatusBanner tone={failed ? 'danger' : 'info'}>{message}</StatusBanner>
-            ) : null}
+            <div className="music-settings-save__title">
+              <h2>音乐配置</h2>
+              <span role="status">
+                {dirty
+                  ? '有未保存修改'
+                  : messageAt === 'save' && message && !failed
+                    ? message
+                    : '配置已保存'}
+              </span>
+            </div>
+            <div className="music-settings-save__actions">
+              <details className="music-settings-import">
+                <summary>导入音乐包</summary>
+                <Field
+                  label="一键导入音乐包"
+                  message="选择含 music.json 和相对路径音频的 ZIP（最大 128 MiB）。验证成功后替换七组配置。"
+                  type="file"
+                  accept=".zip"
+                  disabled={busy}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = '';
+                    if (file)
+                      void action(async () => {
+                        await preview.stop();
+                        const result = await localFile(
+                          '/operator/music/import',
+                          file,
+                          'application/zip',
+                        );
+                        setConfig(result.config);
+                        setDirty(false);
+                        setMessage('音乐包已导入并保存。');
+                      });
+                  }}
+                />
+                <p>只选择你有权直播或录制使用的音乐。文件仅保存在本机，不联网下载或分享。</p>
+              </details>
+              <Button
+                variant="primary"
+                loading={busy}
+                disabled={busy || !dirty}
+                onClick={() =>
+                  void action(async () => {
+                    await command('/operator/music', { action: 'configure', config });
+                    setDirty(false);
+                    setMessage('音乐配置已保存。');
+                  }, 'save')
+                }
+              >
+                保存音乐配置
+              </Button>
+            </div>
           </div>
+          {message && (messageAt === 'import' || (messageAt === 'save' && failed)) ? (
+            <StatusBanner tone={failed ? 'danger' : 'info'}>{message}</StatusBanner>
+          ) : null}
           <div className="music-settings-workspace">
             <nav className="music-settings-groups" aria-label="音乐场景">
               {MUSIC_GROUPS.map((group) => (
@@ -195,7 +207,7 @@ export function MusicSettings() {
                   <span>
                     {config.groups[group].tracks.length
                       ? `${config.groups[group].tracks.length} 首`
-                      : '静音'}
+                      : '空'}
                   </span>
                 </Button>
               ))}
