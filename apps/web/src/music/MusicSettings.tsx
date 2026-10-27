@@ -109,22 +109,10 @@ export function MusicSettings() {
       <Panel className="music-settings-playback">
         <div className="music-settings-playback-intro">
           <h2>当前播放</h2>
-          <p>由 OBS 播放。这里的操作立即生效；调整播放音量也会保存到对应场景。</p>
+          <p>由 OBS 播放。这里的播放操作和音乐总音量立即生效。</p>
         </div>
-        <MusicControls
-          volumeDisabled={busy || dirty}
-          onVolumeChange={(group, volume) => {
-            setConfig((previous) =>
-              previous
-                ? {
-                    ...previous,
-                    groups: { ...previous.groups, [group]: { ...previous.groups[group], volume } },
-                  }
-                : null,
-            );
-          }}
-        />
-        {dirty ? <p>请先保存场景配置，再调整当前播放音量。</p> : null}
+        <MusicControls volumeDisabled={busy || dirty} />
+        {dirty ? <p>请先保存场景配置，再选择正式播放曲目。</p> : null}
         {current?.storage && (!current.storage.ready || current.storage.failed) ? (
           <StatusBanner tone="danger">
             音乐存储未就绪，原配置未加载。请检查数据目录权限或状态文件后重新检查。
@@ -238,6 +226,25 @@ export function MusicSettings() {
                             {String(index + 1).padStart(2, '0')}
                           </span>
                           <strong>{track.name}</strong>
+                          <Field
+                            label={`曲目音量 · ${Math.round(((track as MusicTrack & { gain?: number }).gain ?? spec.volume) * 100)}%`}
+                            aria-label={`${track.name} 音量`}
+                            type="range"
+                            min="0"
+                            max="1"
+                            step="0.05"
+                            value={(track as MusicTrack & { gain?: number }).gain ?? spec.volume}
+                            disabled={busy}
+                            onChange={(event) =>
+                              change(group, {
+                                tracks: spec.tracks.map((entry, n) =>
+                                  n === index
+                                    ? { ...entry, gain: Number(event.target.value) }
+                                    : entry,
+                                ),
+                              })
+                            }
+                          />
                           <Button
                             disabled={busy}
                             aria-label={'试听 ' + track.name}

@@ -1,3 +1,4 @@
+import { Mixer } from '../audio/Mixer';
 import { ObsGameAudioPolicy } from './ObsGameAudioPolicy';
 import { ObsAudioRouting } from './ObsAudioRouting';
 import { prepareObs, useObsPreparation } from '../workspace/obs-preparation';
@@ -173,6 +174,7 @@ export function ObsSettings() {
       {connected && outputActive && obs.findings.length > 0 ? (
         <StatusBanner tone="info">正在直播或录制，自动配置暂缓；停止输出后继续处理。</StatusBanner>
       ) : null}
+      <Mixer />
       <nav className="obs-settings-tabs" aria-label="OBS 设置分区">
         <Button aria-pressed={section === 'connection'} onClick={() => setSection('connection')}>
           连接与节目
