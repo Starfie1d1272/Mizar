@@ -67,6 +67,7 @@ import { BpDemoStateController } from './bp/demo-state.js';
 import { registerBpWorkspaceRoutes } from './bp/workspace-controller.js';
 import { ObsAdapter } from './obs/adapter.js';
 import { ObsConfigStore } from './obs/config.js';
+import { ObsAudioRouting } from './obs/audio-routing.js';
 import type { ObsNativeEvidence } from './obs/native-evidence.js';
 import { registerObsRoutes } from './obs/routes.js';
 import { ProgramSceneController, registerProgramSceneRoutes } from './program-scenes/controller.js';
@@ -729,6 +730,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
               { event: 'obs', stage, result: 'failure', diagnostic: { error } },
               'OBS request failed',
             ),
+          new ObsAudioRouting(`${options.obsConfigPath}.audio-routing.json`),
         );
   let musicDirector: MusicDirector | undefined;
   let cameraDirector: CameraDirector | undefined;

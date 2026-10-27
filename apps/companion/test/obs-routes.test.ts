@@ -22,6 +22,19 @@ it('keeps the OBS WebSocket password out of local status and refuses cross-origi
     expect(status.statusCode).toBe(200);
     expect(status.json()).toMatchObject({ connection: 'unavailable', passwordConfigured: true });
     expect(status.body).not.toContain('secret-probe');
+    expect(
+      (await app.inject({ method: 'GET', url: '/local/v1/obs/audio-routing' })).statusCode,
+    ).toBe(403);
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/operator/obs/audio-routing',
+          headers: { origin: 'https://example.test' },
+          payload: {},
+        })
+      ).statusCode,
+    ).toBe(403);
     const mutation = await app.inject({
       method: 'POST',
       url: '/operator/obs/configure',
