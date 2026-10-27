@@ -140,7 +140,10 @@ export function BpCompactPresentation({
                         )}
                         {sideShown && card.sideChoice ? (
                           <small>
-                            {card.sideChoice.entrant.toUpperCase()} · {card.sideChoice.side} 开局
+                            <span title={projection.entrants[card.sideChoice.entrant].name}>
+                              {projection.entrants[card.sideChoice.entrant].name}
+                            </span>
+                            <b> · {card.sideChoice.side} 开局</b>
                           </small>
                         ) : null}
                       </div>

@@ -52,6 +52,7 @@ it('renders only revealed cards and side choices, and clears on disconnect', () 
   expect(container.textContent).not.toContain('CT');
   act(() => root.render(<BpCompactPresentation snapshot={{ ...snapshot, revealedCount: 2 }} />));
   expect(container.textContent).toContain('CT');
+  expect(container.querySelector('.bp-compact-owner small')?.textContent).toContain('队伍乙');
   const unknown = {
     ...snapshot,
     projection: {

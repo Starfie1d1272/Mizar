@@ -1377,17 +1377,29 @@
   color: var(--mizar-broadcast-pulse-muted);
 }
 .bp-compact-owner > span:not(.bp-team-logo) {
+  flex: 1 1 0;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .bp-compact-owner small {
-  flex: 0 0 auto;
+  display: flex;
+  flex: 0 0 52%;
+  max-width: 52%;
+  min-width: 0;
   margin-left: auto;
   font-size: 14px;
   white-space: nowrap;
   color: var(--mizar-broadcast-pulse-muted);
+}
+.bp-compact-owner small span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bp-compact-owner small b {
+  font-weight: inherit;
 }
 .bp-compact-pending {
   grid-row: 1 / -1;
