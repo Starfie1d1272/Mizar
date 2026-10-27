@@ -1383,22 +1383,26 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.bp-compact-owner small {
+.bp-compact-side {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
   display: flex;
-  flex: 0 0 52%;
-  max-width: 52%;
+  max-width: calc(100% - 16px);
   min-width: 0;
-  margin-left: auto;
+  padding: 2px 5px;
+  color: var(--mizar-broadcast-pulse-white);
+  background: var(--mizar-broadcast-pulse-canvas);
   font-size: 14px;
   white-space: nowrap;
-  color: var(--mizar-broadcast-pulse-muted);
 }
-.bp-compact-owner small span {
+.bp-compact-side span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.bp-compact-owner small b {
+.bp-compact-side b {
   font-weight: inherit;
 }
 .bp-compact-pending {

@@ -122,6 +122,14 @@ export function BpCompactPresentation({
                   {shown ? (
                     <>
                       <CompactMapArt mapName={card.mapName} />
+                      {sideShown && card.sideChoice ? (
+                        <div className="bp-compact-side">
+                          <span title={projection.entrants[card.sideChoice.entrant].name}>
+                            {projection.entrants[card.sideChoice.entrant].name}
+                          </span>
+                          <b> · {card.sideChoice.side} 开局</b>
+                        </div>
+                      ) : null}
                       <div className="bp-compact-action">
                         <span>
                           {card.kind === 'ban' ? '× ' : ''}
@@ -138,14 +146,6 @@ export function BpCompactPresentation({
                         ) : (
                           <span>决胜地图</span>
                         )}
-                        {sideShown && card.sideChoice ? (
-                          <small>
-                            <span title={projection.entrants[card.sideChoice.entrant].name}>
-                              {projection.entrants[card.sideChoice.entrant].name}
-                            </span>
-                            <b> · {card.sideChoice.side} 开局</b>
-                          </small>
-                        ) : null}
                       </div>
                     </>
                   ) : (

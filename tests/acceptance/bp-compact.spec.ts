@@ -31,8 +31,8 @@ test('compact source follows the BP reveal cursor and clears when disconnected',
           stage: 'Fixture',
           format: 'bo3',
           entrants: {
-            a: { name: '甲'.repeat(60), logoUrl: null },
-            b: { name: '乙'.repeat(60), logoUrl: null },
+            a: { name: 'FALCONS', logoUrl: null },
+            b: { name: 'NAVI', logoUrl: null },
           },
           cards,
           steps,
@@ -65,7 +65,13 @@ test('compact source follows the BP reveal cursor and clears when disconnected',
   await expect(strip).toContainText('INFERNO');
   await expect(strip).not.toContainText('CT');
   count = 4;
-  await expect(strip).toContainText('CT');
+  await expect(strip.locator('.bp-compact-side')).toContainText('NAVI · CT 开局');
+  const pickerFits = await strip
+    .locator('.bp-compact-card')
+    .nth(2)
+    .locator('.bp-compact-owner > span:not(.bp-team-logo)')
+    .evaluate((element) => element.scrollWidth <= element.clientWidth);
+  expect(pickerFits).toBe(true);
   online = false;
   await expect(strip).toHaveCount(0);
 });
