@@ -69,7 +69,7 @@ import { ObsAdapter } from './obs/adapter.js';
 import { ObsConfigStore } from './obs/config.js';
 import { ObsAudioRouting } from './obs/audio-routing.js';
 import { GameAudioController } from './obs/audio-policy-controller.js';
-import { isRegulationHalftime } from './program-scenes/presentation.js';
+import { gameAudioTruth } from './obs/audio-policy-truth.js';
 import type { ObsNativeEvidence } from './obs/native-evidence.js';
 import { registerObsRoutes } from './obs/routes.js';
 import { ProgramSceneController, registerProgramSceneRoutes } from './program-scenes/controller.js';
@@ -1212,32 +1212,14 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     void musicDirector?.tick();
     cameraDirector?.tick();
     if (gameAudio) {
-      const p = projectionCoordinator.getCurrent().program;
-      const safe =
-        production.get().mode !== 'preparation' &&
-        projectionCoordinator.getCurrent().operator.matchContext.origin !== 'fixture' &&
-        p.status.context === 'fresh' &&
-        p.status.telemetry === 'fresh' &&
-        p.status.identity !== 'mismatch' &&
-        p.series?.bindingState === 'bound';
-      const half =
-        isRegulationHalftime(p) ||
-        (sceneController.get().active === 'halftime' &&
-          p.map.roundNumber === 12 &&
-          p.clock?.phase === 'freezetime');
+      const projection = projectionCoordinator.getCurrent();
       gameAudio.tick(
-        !safe
-          ? 'unknown'
-          : half &&
-              !(
-                p.clock?.phase === 'freezetime' &&
-                p.clock.endsInSeconds !== null &&
-                p.clock.endsInSeconds <= 5
-              )
-            ? 'halftime'
-            : (half && p.clock?.phase === 'freezetime') || p.map.phase === 'live'
-              ? 'gameplay'
-              : 'unknown',
+        gameAudioTruth(
+          projection.program,
+          sceneController.get().active,
+          production.get().mode !== 'preparation' &&
+            projection.operator.matchContext.origin !== 'fixture',
+        ),
       );
     }
   }, 100);

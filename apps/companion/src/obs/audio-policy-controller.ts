@@ -47,6 +47,7 @@ export class GameAudioController {
   }
   async releaseHeld() {
     if (this.busy) throw new Error('audio_policy_busy');
+    if (this.desired !== 'gameplay') throw new Error('audio_policy_wait_for_gameplay');
     this.busy = true;
     try {
       this.invalidate();

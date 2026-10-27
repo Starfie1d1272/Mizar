@@ -89,7 +89,7 @@ export function ObsGameAudioPolicy() {
       </Button>
       {status?.ownership === 'held' && (
         <p role="status">
-          OBS 音频控制已让权。请先在 OBS 核对游戏音量与静音，然后{' '}
+          OBS 音频控制已让权。请在比赛恢复后先在 OBS 手动恢复游戏音量与静音状态，然后{' '}
           <Button disabled={busy} onClick={() => void send('/operator/obs/game-audio-release', {})}>
             恢复自动控制
           </Button>
