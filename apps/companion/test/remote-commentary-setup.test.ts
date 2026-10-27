@@ -14,6 +14,7 @@ it('prepares a unique TS target once with disabled references in all scenes', as
     const items = new Map(scenes.map((s) => [s.sceneName, [] as Record<string, unknown>[]]));
     const inputs: Record<string, unknown>[] = [];
     const settings: Record<string, unknown> = {};
+    let running = false;
     const writes: { type: string; data: Record<string, unknown> | undefined }[] = [];
     const obs: ObsRpc = {
       call: async (type, data) => {
@@ -35,7 +36,11 @@ it('prepares a unique TS target once with disabled references in all scenes', as
         if (type === 'GetInputList') return { inputs };
         if (type === 'GetInputSettings') return { inputSettings: settings };
         if (type === 'GetInputPropertiesListPropertyItems')
-          return { propertyItems: [{ itemName: 'TS', itemValue: 'TeamSpeak:Qt:teamspeak.exe' }] };
+          return {
+            propertyItems: running
+              ? [{ itemName: 'TS', itemValue: 'TeamSpeak:Qt:teamspeak.exe' }]
+              : [],
+          };
         if (type === 'GetSceneItemList')
           return { sceneItems: items.get(String(data?.sceneName)) ?? [] };
         if (type === 'CreateInput') {
@@ -68,6 +73,11 @@ it('prepares a unique TS target once with disabled references in all scenes', as
     const owner = new RemoteCommentary(join(dir, 'intent'));
     const run = () =>
       prepareRemoteCommentary(obs, owner, join(dir, 'journal'), 'local', 'http://127.0.0.1:3000');
+    expect((await run())[0]?.message).toContain('等待 TeamSpeak');
+    expect(
+      [...items.values()].every((list) => list.length === 1 && list[0]?.sceneItemEnabled === false),
+    ).toBe(true);
+    running = true;
     expect((await run())[0]?.code).toBe('commentary_pending');
     expect((await run())[0]?.code).toBe('commentary_pending');
     expect(writes.filter((w) => w.type === 'CreateInput')).toHaveLength(1);

@@ -46,6 +46,7 @@ export async function prepareRemoteCommentary(
   const scenes = obsDesiredScenes(baseUrl);
   let inputs = records((await obs.call('GetInputList')).inputs);
   let target: string | undefined;
+  let pendingMessage: string | undefined;
   if (state.preference.mode === 'existingInput') {
     const binding = state.preference.binding;
     if (
@@ -74,9 +75,16 @@ export async function prepareRemoteCommentary(
       const found = await owner.discover(obs, state.revision, probe);
       if (found.kind === 'existing') target = found.candidate.inputUuid;
       else if (found.kind === 'window') window = found.candidate.window;
-      else if (found.kind === 'waiting')
-        return pending('等待 TeamSpeak 启动；场景已准备，音频分路待完成。');
-      else return pending('检测到多个远端解说候选，请选择来源。');
+      else if (found.kind === 'waiting') {
+        target = await createCommentaryProbe(
+          obs,
+          journal,
+          { endpoint, collection, sceneName: scenes[0]!.sceneName },
+          check,
+        );
+        inputs = records((await obs.call('GetInputList')).inputs);
+        pendingMessage = '等待 TeamSpeak 启动；场景已准备，音频分路待完成。';
+      } else return pending('检测到多个远端解说候选，请选择来源。');
     }
     if (window) {
       const owned = await createCommentaryProbe(
@@ -144,5 +152,5 @@ export async function prepareRemoteCommentary(
       sceneItemEnabled: false,
     });
   }
-  return pending();
+  return pending(pendingMessage);
 }
