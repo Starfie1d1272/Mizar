@@ -176,9 +176,11 @@ impl SessionStore {
         self.save_locked(&guard, value)
     }
     fn save_locked(&self, _guard: &StoreGuard, value: &Value) -> Result<(), String> {
-        // Only the explicit coordinated transaction may create a core journal
-        // while a full snapshot exists. Ordinary saves cannot adopt that owner.
-        if self.full_spectator_pending() { return Err("snapshot_pending".into()); }
+        // Ordinary sessions may continue without taking over keys, but cannot
+        // adopt a pending full snapshot or arm the ten-key owner.
+        if self.full_spectator_pending() && (value["spectatorCfg"] == true || value["fullSnapshot"] == true) {
+            return Err("snapshot_pending".into());
+        }
         let bytes = serde_json::to_vec_pretty(value).map_err(|_| "CS2 恢复记录无法保存。")?;
         if bytes.len() > 4 * 1024 * 1024 {
             return Err("CS2 恢复记录过大，未修改游戏设置。".into());
@@ -517,7 +519,7 @@ impl SessionStore {
         self.backup_originals_locked(&guard, video)
     }
     fn backup_originals_locked(&self, _guard: &StoreGuard, video: &Path) -> Result<(), String> {
-        if self.load()?.is_some() || self.full_spectator_pending() {
+        if self.load()?.is_some() {
             return Err("上次 CS2 配置尚未恢复，请先退出游戏并重试恢复。".into());
         }
         let target = fs::canonicalize(video).map_err(|_| "无法核实备份目标。")?;
@@ -688,11 +690,10 @@ impl SessionStore {
         executable: &Path,
         size: cs2_video::VideoSize,
     ) -> Result<Value, String> {
-        if self.full_spectator_pending() { return Err("snapshot_pending".into()); }
         let preferences = self.preferences()?;
         let frames = cs2_frame_rate::prepare(video, executable, preferences.frame_rate_limit)?;
-        let spectator = if self.spectator_pending() {
-            Err("上次观战字段尚未恢复，本次未加载观战 CFG；可退出游戏后重试恢复。".into())
+        let spectator = if self.spectator_pending() || self.full_spectator_pending() {
+            Err("上次观战字段或键位尚未恢复，本次未加载观战 CFG；可退出游戏后重试恢复。".into())
         } else {
             crate::cs2_spectator::prepare(&frames, video, executable)
         };
@@ -872,7 +873,7 @@ impl SessionStore {
         value: &Value,
         write_config: fn(&Path, &[u8]) -> Result<(), String>,
     ) -> Result<(), String> {
-        if self.load()?.is_some() || self.full_spectator_pending() {
+        if self.load()?.is_some() {
             return Err("上次 CS2 配置尚未恢复，请先退出游戏并重试恢复。".into());
         }
         let video = Path::new(value["video"].as_str().ok_or("CS2 配置路径缺失。")?);
@@ -902,17 +903,38 @@ impl SessionStore {
         }
         Ok(())
     }
+    /// Host must rediscover this account and confirm all CS2 processes have exited.
+    pub(crate) fn restore_coordinated(&self, video: &Path, executable: &Path, account: u32) -> Result<Option<String>, String> {
+        let guard = self.acquire_write_guard()?;
+        if let Some(core) = self.load()? {
+            if core["fullSnapshot"] != true || unconfirmed_launch(&core) { return Err("coordinated_recovery_required".into()); }
+            crate::spectator_snapshot::handoff(&self.root, video, executable, account, &core, atomic_write)?;
+            if let Some(warning) = self.restore_core_locked(&guard, true)? { return Ok(Some(warning)); }
+        } else if !self.full_spectator_pending() {
+            return Ok(None);
+        } else if !crate::spectator_snapshot::has_terminal(&self.root)? {
+            return Err("coordinated_recovery_required".into());
+        }
+        match crate::spectator_snapshot::recover(&self.root, video, executable, account, atomic_write) {
+            Ok(()) => Ok(None),
+            Err(error) => Ok(Some(format!("观战键位尚未恢复，原快照仍保留：{error}"))),
+        }
+    }
+
     /// Caller must independently confirm no CS2 process can still write this file.
     pub fn restore(&self) -> Result<Option<String>, String> {
         let guard = self.acquire_write_guard()?;
-        self.restore_locked(&guard)
+        self.restore_core_locked(&guard, false)
     }
-    fn restore_locked(&self, guard: &StoreGuard) -> Result<Option<String>, String> {
+    fn restore_core_locked(&self, guard: &StoreGuard, handoff_complete: bool) -> Result<Option<String>, String> {
         let Some(value) = self.load()? else {
             return Ok(None);
         };
         if unconfirmed_launch(&value) {
             return Err("Steam 启动结果待确认，恢复记录与备份仍保留。".into());
+        }
+        if value["fullSnapshot"] == true && !handoff_complete {
+            return Err("coordinated_recovery_required".into());
         }
         if value["version"] == 4 { self.restore_selected_backup_locked(guard, &value)?; return Ok(None); }
         let playback_handoff = self.preserve_playback_cleanup_locked(guard, &value);
@@ -1217,12 +1239,12 @@ mod tests {
         assert_eq!(cs2_config_identity::compare(Some(&parsed), Some(&full)), Relation::Same);
         let mut different = full.clone(); different.session_id = "s-2".into();
         assert_eq!(cs2_config_identity::compare(Some(&parsed), Some(&different)), Relation::Different);
-        assert!(store.backup_originals(&video).is_err()); // Pending behaviour is unchanged.
+        assert!(store.backup_originals(&video).is_ok()); // Video/FPS backup is independent.
         assert_eq!(SessionIdentity::read(&json!({"version":1})).unwrap(), None);
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
-    fn snapshot_between_backup_and_prepare_blocks_core_writes_and_plain_save() {
+    fn old_full_snapshot_allows_core_but_blocks_new_key_ownership() {
         use crate::spectator_recovery_plan::{Input, InputKind};
         let (root, video, _, executable, store) = frame_setup();
         fs::create_dir_all(executable.parent().unwrap()).unwrap(); fs::write(&executable, b"fixture").unwrap();
@@ -1233,10 +1255,15 @@ mod tests {
         store.backup_originals(&video).unwrap();
         let x = Input { kind:InputKind::Key, name:"x".into() };
         store.capture_spectator_snapshot(&video, &executable, 1, &[x.clone()].into(), &[(x, vec!["preset".into()])].into()).unwrap();
-        assert!(store.prepare_backed_up(&video, &executable, cs2_video::VideoSize::new(1920,1080).unwrap()).is_err());
-        assert!(store.save(&json!({"version":1})).is_err());
+        let journal = store.prepare_backed_up(&video, &executable, cs2_video::VideoSize::new(1920,1080).unwrap()).unwrap();
+        assert_ne!(journal["spectatorCfg"], true);
+        assert!(store.save(&json!({"version":1,"spectatorCfg":true})).is_err());
+        assert!(store.save(&json!({"version":1,"fullSnapshot":true})).is_err());
+        assert!(!cfg.exists()); assert!(store.journal_path().exists());
+        assert!(store.full_spectator_pending());
+        assert_eq!(fs::read_to_string(&key).unwrap(), "\"config\" {\"bindings\" {} \"analogbindings\" {}}");
+        store.restore().unwrap();
         assert_eq!(fs::read(&video).unwrap(), before_video);
-        assert!(!cfg.exists()); assert!(!store.journal_path().exists());
         assert!(store.full_spectator_pending());
         fs::remove_dir_all(root).unwrap();
     }
@@ -1270,6 +1297,65 @@ mod tests {
         assert_eq!(fs::read(store.root.join("spectator-full-pending.json")).unwrap(), snapshot);
         assert!(!store.journal_path().exists()); assert_eq!(fs::read(&video).unwrap(), before_video);
         assert_eq!(fs::read_to_string(&key).unwrap(), original);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn coordinated_restore_hands_off_terminal_before_core_cleanup_and_retries_conflict() {
+        use crate::cs2_config_identity::{ConfigIdentity, SessionIdentity};
+        use crate::spectator_recovery_plan::{Input, InputKind};
+        let (root, video, _, executable, store) = frame_setup();
+        fs::create_dir_all(executable.parent().unwrap()).unwrap(); fs::write(&executable, b"fixture").unwrap();
+        let key = video.with_file_name("cs2_user_keys_0_slot0.vcfg");
+        let original = "\"config\" {\"bindings\" {\"x\" \"personal\"} \"analogbindings\" {}}";
+        let candidate = "\"config\" {\"bindings\" {\"x\" \"preset\"} \"analogbindings\" {}}";
+        fs::write(&key, original).unwrap(); let before_video = fs::read(&video).unwrap();
+        let session = SessionIdentity { session_id:"handoff-1".into(), config:ConfigIdentity {
+            account:1, video:fs::canonicalize(&video).unwrap(), executable:fs::canonicalize(&executable).unwrap(),
+            keys:fs::canonicalize(&key).unwrap(), slot:0, format:"vcfg".into() }};
+        let x = Input { kind:InputKind::Key, name:"x".into() };
+        let owned = [x.clone()].into(); let applied = [(x, vec!["preset".into()])].into();
+        let mut core = store.prepare_coordinated(&video, &executable, cs2_video::VideoSize::new(1920,1080).unwrap(), None, &session, &owned, &applied, candidate).unwrap();
+        let applied_text = fs::read(&key).unwrap();
+        core["launchAttempted"] = json!(true);
+        { let guard = store.acquire_write_guard().unwrap(); store.save_coordinated_locked(&guard, &core, atomic_write).unwrap(); }
+        assert!(store.restore_coordinated(&video, &executable, 1).is_err());
+        assert!(store.load().unwrap().is_some());
+        let unconfirmed: Value = serde_json::from_slice(&fs::read(store.root.join("spectator-full-pending.json")).unwrap()).unwrap();
+        assert!(unconfirmed["payload"].get("coreTerminal").is_none());
+        core["pid"] = json!(123); core["created"] = json!(456);
+        { let guard = store.acquire_write_guard().unwrap(); store.save_coordinated_locked(&guard, &core, atomic_write).unwrap(); }
+        fs::write(&key, "\"config\" {\"bindings\" {\"x\" \"external\"} \"analogbindings\" {}}").unwrap();
+        let changed = fs::read(&key).unwrap();
+        fn fail_before(_: &Path, _: &[u8]) -> Result<(), String> { Err("injected_before".into()) }
+        fn fail_after(path: &Path, bytes: &[u8]) -> Result<(), String> { atomic_write(path, bytes)?; Err("injected_after".into()) }
+        let pending = store.root.join("spectator-full-pending.json");
+        let before_handoff = fs::read(&pending).unwrap();
+        {
+            let _guard = store.acquire_write_guard().unwrap();
+            assert!(crate::spectator_snapshot::handoff(&store.root, &video, &executable, 1, &core, fail_before).is_err());
+            assert_eq!(fs::read(&pending).unwrap(), before_handoff);
+            assert!(crate::spectator_snapshot::handoff(&store.root, &video, &executable, 1, &core, fail_after).is_err());
+            assert!(store.load().unwrap().is_some());
+        }
+        assert!(store.restore_coordinated(&video, &executable, 2).is_err());
+        assert!(store.load().unwrap().is_some());
+        assert!(store.restore().is_err()); // Cannot bypass handoff.
+        let warning = store.restore_coordinated(&video, &executable, 1).unwrap().unwrap();
+        assert!(warning.contains("conflict")); assert!(!warning.contains("external"));
+        assert!(store.load().unwrap().is_none()); assert_eq!(fs::read(&video).unwrap(), before_video);
+        assert_eq!(fs::read(&key).unwrap(), changed);
+        let record: Value = serde_json::from_slice(&fs::read(store.root.join("spectator-full-pending.json")).unwrap()).unwrap();
+        assert_eq!(record["payload"]["sessionId"], "handoff-1");
+        assert_eq!(record["payload"]["coreTerminal"]["launchAttempted"], true);
+        assert_eq!(record["payload"]["coreTerminal"]["pid"], 123);
+        assert_eq!(record["payload"]["coreTerminal"]["created"], 456);
+        let restarted = SessionStore::new(root.clone());
+        assert!(restarted.restore_coordinated(&video, &executable, 1).unwrap().is_some());
+        assert_eq!(fs::read(&key).unwrap(), changed);
+        fs::write(&key, applied_text).unwrap();
+        assert_eq!(restarted.restore_coordinated(&video, &executable, 1).unwrap(), None);
+        assert_eq!(restarted.restore_coordinated(&video, &executable, 1).unwrap(), None);
+        assert!(fs::read_to_string(&key).unwrap().contains("\"x\" \"personal\""));
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
@@ -1331,8 +1417,11 @@ mod tests {
                     assert!(result.is_err(), "failure point {target}, mode {mode}");
                 }
                 FAIL_AT.store(0, Ordering::SeqCst);
-                if store.load().unwrap().is_some() { SessionStore::new(root.clone()).restore().unwrap(); }
-                if store.full_spectator_pending() { SessionStore::new(root.clone()).recover_spectator_snapshot(&video, &executable, 1).unwrap(); }
+                if store.load().unwrap().is_some() {
+                    assert_eq!(SessionStore::new(root.clone()).restore_coordinated(&video, &executable, 1).unwrap(), None);
+                } else if store.full_spectator_pending() {
+                    SessionStore::new(root.clone()).recover_spectator_snapshot(&video, &executable, 1).unwrap();
+                }
                 assert_eq!(fs::read(&video).unwrap(), original_video);
                 assert_eq!(fs::read(&machine).unwrap(), original_machine);
                 let restored = fs::read_to_string(&key).unwrap();

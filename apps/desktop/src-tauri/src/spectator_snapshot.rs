@@ -423,6 +423,120 @@ pub(crate) fn capture_for_session(
     Ok(())
 }
 
+/// Persist the terminated core's public recovery facts before clearing it.
+/// The caller must already have confirmed CS2 is stopped.
+pub(crate) fn handoff(
+    root: &Path,
+    video: &Path,
+    exe: &Path,
+    account: u32,
+    core: &Value,
+    write: Writer,
+) -> Result<(), String> {
+    check_path(root, false)?;
+    let path = pending(root);
+    let bytes = regular(&path, RECORD_LIMIT)?;
+    let mut record: Value = serde_json::from_slice(&bytes).map_err(|_| "snapshot_invalid")?;
+    let payload = &record["payload"];
+    if payload["version"] != 1
+        || record["sha256"].as_str()
+            != Some(digest(&serde_json::to_vec(payload).map_err(|_| "snapshot_invalid")?).as_str())
+    {
+        return Err("snapshot_invalid".into());
+    }
+    let full_session = crate::cs2_config_identity::SessionIdentity::read(payload)
+        .map_err(str::to_string)?
+        .ok_or("identity_changed")?;
+    let core_session = crate::cs2_config_identity::SessionIdentity::read(core)
+        .map_err(str::to_string)?
+        .ok_or("identity_changed")?;
+    let (id, _) = identity(video, exe, account)?;
+    if full_session != core_session
+        || full_session.config.value() != id
+        || payload["identity"] != id
+        || core["fullSnapshot"] != true
+    {
+        return Err("identity_changed".into());
+    }
+    let attempted = core["launchAttempted"]
+        .as_bool()
+        .ok_or("snapshot_invalid")?;
+    let config_attempted = core["configWriteAttempted"]
+        .as_bool()
+        .ok_or("snapshot_invalid")?;
+    let cancelled = match core.get("launchCancelled") {
+        None | Some(Value::Null) => Value::Null,
+        Some(Value::Bool(v)) => json!(v),
+        _ => return Err("snapshot_invalid".into()),
+    };
+    let pid = match core.get("pid") {
+        None | Some(Value::Null) => Value::Null,
+        Some(v) if v.as_u64().is_some() => v.clone(),
+        _ => return Err("snapshot_invalid".into()),
+    };
+    let created = match core.get("created") {
+        None | Some(Value::Null) => Value::Null,
+        Some(v) if v.as_u64().is_some() => v.clone(),
+        _ => return Err("snapshot_invalid".into()),
+    };
+    let terminal = json!({"launchAttempted":attempted,"launchCancelled":cancelled,"pid":pid,"created":created,"configWriteAttempted":config_attempted});
+    if let Some(previous) = payload.get("coreTerminal") {
+        if *previous != terminal {
+            return Err("snapshot_changed".into());
+        }
+        return Ok(());
+    }
+    record["payload"]["coreTerminal"] = terminal;
+    record["sha256"] = json!(digest(
+        &serde_json::to_vec(&record["payload"]).map_err(|_| "snapshot_invalid")?
+    ));
+    let next = serde_json::to_vec(&record).map_err(|_| "snapshot_invalid")?;
+    if next.len() > RECORD_LIMIT
+        || regular(&path, RECORD_LIMIT)? != bytes
+        || identity(video, exe, account)?.0 != id
+    {
+        return Err("snapshot_changed".into());
+    }
+    write(&path, &next)?;
+    if regular(&path, RECORD_LIMIT)? != next {
+        return Err("snapshot_readback_failed".into());
+    }
+    Ok(())
+}
+
+/// A remaining coordinated snapshot may be retried only after terminal handoff.
+pub(crate) fn has_terminal(root: &Path) -> Result<bool, String> {
+    let bytes = regular(&pending(root), RECORD_LIMIT)?;
+    let record: Value = serde_json::from_slice(&bytes).map_err(|_| "snapshot_invalid")?;
+    let payload = &record["payload"];
+    if payload["version"] != 1
+        || record["sha256"].as_str()
+            != Some(digest(&serde_json::to_vec(payload).map_err(|_| "snapshot_invalid")?).as_str())
+    {
+        return Err("snapshot_invalid".into());
+    }
+    let session = crate::cs2_config_identity::SessionIdentity::read(payload)
+        .map_err(str::to_string)?
+        .ok_or("snapshot_invalid")?;
+    if session.config.value() != payload["identity"] {
+        return Err("snapshot_invalid".into());
+    }
+    let terminal = &payload["coreTerminal"];
+    if !terminal.is_object()
+        || !terminal["launchAttempted"].is_boolean()
+        || !terminal["configWriteAttempted"].is_boolean()
+    {
+        return Ok(false);
+    }
+    if terminal["launchAttempted"] == true
+        && terminal["launchCancelled"] != true
+        && (terminal["pid"].as_u64().is_none() || terminal["created"].as_u64().is_none())
+    {
+        return Err("launch_unconfirmed".into());
+    }
+    Ok(true)
+}
+
 pub(crate) fn recover(
     root: &Path,
     video: &Path,
