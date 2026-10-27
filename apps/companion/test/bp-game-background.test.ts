@@ -27,6 +27,24 @@ it('rejects black, transparent, corrupt and unsupported capture frames', () => {
 it('requires the owned CS2 capture, available target and a visible frame', async () => {
   let image = png(80);
   let available = true;
+  let enabled = true;
+  const transform = {
+    positionX: 0,
+    positionY: 0,
+    rotation: 0,
+    alignment: 5,
+    boundsType: 'OBS_BOUNDS_STRETCH',
+    boundsWidth: 1920,
+    boundsHeight: 1080,
+    cropLeft: 0,
+    cropRight: 0,
+    cropTop: 0,
+    cropBottom: 0,
+    sourceWidth: 1920,
+    sourceHeight: 1080,
+    scaleX: 1,
+    scaleY: 1,
+  };
   const obs: ObsRpc = {
     async call(type) {
       await Promise.resolve();
@@ -36,7 +54,15 @@ it('requires the owned CS2 capture, available target and a visible frame', async
         case 'GetSceneList':
           return { scenes: [{ sceneName: obsSceneName('gameplay') }] };
         case 'GetSceneItemList':
-          return { sceneItems: [{ sourceName: OBS_CAPTURE_INPUT, sceneItemEnabled: true }] };
+          return {
+            sceneItems: [
+              { sourceName: OBS_CAPTURE_INPUT, sceneItemEnabled: enabled, sceneItemId: 1 },
+            ],
+          };
+        case 'GetVideoSettings':
+          return { baseWidth: 1920, baseHeight: 1080 };
+        case 'GetSceneItemTransform':
+          return { sceneItemTransform: transform };
         case 'GetInputList':
           return {
             inputs: [
@@ -59,6 +85,15 @@ it('requires the owned CS2 capture, available target and a visible frame', async
     },
   };
   expect(await gameBackgroundReady(obs)).toBe(true);
+  transform.positionX = 4000;
+  expect(await gameBackgroundReady(obs)).toBe(false);
+  transform.positionX = 0;
+  transform.cropLeft = 1;
+  expect(await gameBackgroundReady(obs)).toBe(false);
+  transform.cropLeft = 0;
+  enabled = false;
+  expect(await gameBackgroundReady(obs)).toBe(false);
+  enabled = true;
   image = png(0);
   expect(await gameBackgroundReady(obs)).toBe(false);
   image = png(80);

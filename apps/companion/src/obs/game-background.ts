@@ -1,5 +1,11 @@
 import { inflateSync } from 'node:zlib';
-import { OBS_CAPTURE_INPUT, OBS_COLLECTION, obsSceneName } from './desired-state.js';
+import {
+  OBS_CAPTURE_INPUT,
+  OBS_COLLECTION,
+  OBS_HEIGHT,
+  OBS_WIDTH,
+  obsSceneName,
+} from './desired-state.js';
 import type { ObsRpc } from './reconcile.js';
 
 function objects(value: unknown): Record<string, unknown>[] {
@@ -111,10 +117,52 @@ export async function gameBackgroundReady(obs: ObsRpc): Promise<boolean> {
     )
       return false;
     const items = objects((await obs.call('GetSceneItemList', { sceneName })).sceneItems);
+    const captures = items.filter((item) => item.sourceName === OBS_CAPTURE_INPUT);
+    const capture = captures[0];
     if (
-      !items.some((item) => item.sourceName === OBS_CAPTURE_INPUT && item.sceneItemEnabled === true)
+      captures.length !== 1 ||
+      capture?.sceneItemEnabled !== true ||
+      typeof capture.sceneItemId !== 'number'
     )
       return false;
+    const transformReady = async (): Promise<boolean> => {
+      const video = await obs.call('GetVideoSettings');
+      if (video.baseWidth !== OBS_WIDTH || video.baseHeight !== OBS_HEIGHT) return false;
+      const transform = (
+        await obs.call('GetSceneItemTransform', {
+          sceneName,
+          sceneItemId: capture.sceneItemId,
+        })
+      ).sceneItemTransform as Record<string, unknown> | undefined;
+      // Require the canonical managed full-canvas placement. Anything unknown,
+      // cropped, rotated, shifted, scaled to zero or outside the canvas falls back.
+      if (
+        !transform ||
+        transform.positionX !== 0 ||
+        transform.positionY !== 0 ||
+        transform.rotation !== 0 ||
+        transform.alignment !== 5 ||
+        transform.boundsType !== 'OBS_BOUNDS_STRETCH' ||
+        transform.boundsWidth !== OBS_WIDTH ||
+        transform.boundsHeight !== OBS_HEIGHT ||
+        transform.cropLeft !== 0 ||
+        transform.cropRight !== 0 ||
+        transform.cropTop !== 0 ||
+        transform.cropBottom !== 0 ||
+        typeof transform.sourceWidth !== 'number' ||
+        transform.sourceWidth <= 0 ||
+        typeof transform.sourceHeight !== 'number' ||
+        transform.sourceHeight <= 0 ||
+        typeof transform.scaleX !== 'number' ||
+        transform.scaleX === 0 ||
+        typeof transform.scaleY !== 'number' ||
+        transform.scaleY === 0
+      )
+        return false;
+
+      return true;
+    };
+    if (!(await transformReady())) return false;
     const input = objects((await obs.call('GetInputList')).inputs).find(
       (item) => item.inputName === OBS_CAPTURE_INPUT,
     );
@@ -147,8 +195,19 @@ export async function gameBackgroundReady(obs: ObsRpc): Promise<boolean> {
     const current = objects((await obs.call('GetInputList')).inputs).find(
       (item) => item.inputName === OBS_CAPTURE_INPUT,
     );
+    const finalItems = objects(
+      (await obs.call('GetSceneItemList', { sceneName })).sceneItems,
+    ).filter((item) => item.sourceName === OBS_CAPTURE_INPUT);
+    const finalSettings = (await obs.call('GetInputSettings', { inputName: OBS_CAPTURE_INPUT }))
+      .inputSettings as Record<string, unknown> | undefined;
     return (
       current?.inputUuid === input.inputUuid &&
+      finalItems.length === 1 &&
+      finalItems[0]?.sceneItemId === capture.sceneItemId &&
+      finalItems[0]?.sceneItemEnabled === true &&
+      finalSettings?.capture_mode === 'window' &&
+      finalSettings.window === settings.window &&
+      (await transformReady()) &&
       (await obs.call('GetSceneCollectionList')).currentSceneCollectionName === OBS_COLLECTION
     );
   } catch {

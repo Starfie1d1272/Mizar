@@ -322,29 +322,64 @@ export class ProgramSceneController {
             valid: () => this.active === target && this.revision === revision,
           }).catch(() => undefined);
       };
+      let restartedBp = false;
       try {
-        let physical = id === 'bp' && this.bpCompact === 'on' ? 'gameplay' : id;
-        if (physical === 'gameplay' && id === 'bp' && !(await this.gameBackgroundReady())) {
-          try {
-            await this.switchBpCompact?.(false);
+        let physical: ProgramSceneId = id;
+        if (id === 'bp') {
+          if (!switchObs) throw new Error('OBS 场景状态未确认。');
+          // Observation loss ends the old presentation. Reconcile the old owner
+          // before starting a fresh session; an uncertain close cannot be success.
+          if (this.bpCompact === 'unknown') {
+            if (!this.switchBpCompact) throw new Error('紧凑 BP 状态待确认。');
+            await this.switchBpCompact(false);
             this.bpCompact = 'off';
-          } catch {
-            this.bpCompact = 'unknown';
           }
-          this.bpFallbackReason = '游戏画面未就绪，本次使用全屏 BP。';
-          physical = 'bp';
+          const wantsCompact = this.bpPresentationMode() === 'compact';
+          const ready =
+            wantsCompact &&
+            !!switchObs &&
+            !!this.switchBpCompact &&
+            (await this.gameBackgroundReady());
+          if (!ready && this.bpCompact === 'on') {
+            if (!this.switchBpCompact) throw new Error('紧凑 BP 状态待确认。');
+            await this.switchBpCompact(false);
+            this.bpCompact = 'off';
+          }
+          const bp = this.bpSession.get();
+          if (bp.state === 'hidden') {
+            if (!this.bpSession.command('play', bp.revision)) throw new Error('BP 播放未能启动。');
+            restartedBp = true;
+          } else if (bp.state === 'hiding') {
+            throw new Error('BP 正在关闭，请稍后重试。');
+          }
+          if (ready) physical = 'gameplay';
+          this.bpFallbackReason =
+            wantsCompact && !ready ? '游戏画面未就绪，本次使用全屏 BP。' : null;
         }
         await switchObs?.(physical, {
           transition: programTransition(id, id, true),
           valid: () => expectedRevision === this.revision && this.blockedReason(id) === null,
         });
-        if (physical === 'gameplay' && id === 'bp') await this.switchBpCompact?.(true);
+        if (physical === 'gameplay' && id === 'bp') {
+          this.bpCompact = 'unknown';
+          this.compactPreparing = true;
+          try {
+            await this.switchBpCompact!(true);
+            if (expectedRevision !== this.revision) throw new Error('OBS 状态已变化。');
+            this.bpCompact = 'on';
+            this.bpCompactTarget = 'managed';
+          } finally {
+            this.compactPreparing = false;
+          }
+        }
         if (expectedRevision !== this.revision || this.blockedReason(id) !== null) {
+          if (restartedBp) this.bpSession.finishSceneExit();
           await restoreCurrent();
           return { ok: false as const, message: '播出状态已变化，请核对后重试。' };
         }
         this.revision = randomUUID();
       } catch (error) {
+        if (restartedBp) this.bpSession.finishSceneExit();
         await restoreCurrent();
         return {
           ok: false as const,
