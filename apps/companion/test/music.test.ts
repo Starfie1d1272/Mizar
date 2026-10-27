@@ -140,6 +140,23 @@ it('assigns stable distinct entry identities to duplicate legacy tracks', async 
     ids.slice(0, 3),
   );
 });
+it('migrates a legacy playback snapshot to the matching entry without changing its level', async () => {
+  const r = await rig();
+  await r.step();
+  const legacy = structuredClone(r.store.state);
+  for (const group of MUSIC_GROUPS)
+    for (const track of legacy.config.groups[group].tracks) delete track.entryId;
+  delete legacy.bgm!.track.entryId;
+  delete legacy.bgm!.configRevision;
+  await writeFile(join(r.directory, 'state.json'), JSON.stringify(legacy));
+  const restored = new MusicStore(r.directory);
+  await restored.load();
+  expect(restored.state.bgm?.track.entryId).toBe(
+    restored.state.config.groups.waiting.tracks[0]?.entryId,
+  );
+  expect(restored.state.bgm?.configRevision).toBe(restored.state.configRevision);
+  expect(restored.state.config.groups.waiting.volume).toBe(0.5);
+});
 it('composes the current entry gain with master and mutes without restarting playback', async () => {
   const r = await rig();
   const config = structuredClone(r.store.state.config);
@@ -164,6 +181,19 @@ it('composes the current entry gain with master and mutes without restarting pla
   });
   await r.step();
   expect(r.obs.bgm().volume).toBeCloseTo(0.1);
+  expect(r.obs.restarts()).toBe(starts);
+});
+it('keeps the existing OBS hold when music mute is cleared', async () => {
+  const r = await rig();
+  await r.step();
+  r.obs.bgm().volume = 0.17;
+  await r.step();
+  expect(r.director.get().held).toBe(true);
+  const starts = r.obs.restarts();
+  expect(await r.director.setMixer(0.3, true)).toBe(false);
+  expect(await r.director.setMixer(undefined, false)).toBe(false);
+  expect(r.director.get().held).toBe(true);
+  expect(r.obs.bgm().volume).toBe(0.17);
   expect(r.obs.restarts()).toBe(starts);
 });
 it('applies master changes during fade-in without restarting', async () => {
