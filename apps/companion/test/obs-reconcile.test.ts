@@ -1,4 +1,5 @@
 import { expect, it, vi } from 'vitest';
+import { BP_COMPACT_INPUT, setBpCompactVisible } from '../src/obs/bp-overlay.js';
 import { ensureObsAudio } from '../src/obs/audio.js';
 import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
 import {
@@ -328,4 +329,38 @@ it('does not duplicate game-capture audio with default desktop capture', async (
   expect(obs.inputs.has('Mizar · Desktop Audio')).toBe(false);
   expect(obs.inputs.get(OBS_CAPTURE_INPUT)!.settings.capture_audio).toBe(true);
   expect(obs.calls.filter((type) => /^(Set|Create|Remove)/.test(type))).toEqual([]);
+});
+
+it('takes and closes the compact source only after verifying gameplay and HUD state', async () => {
+  const obs = new FakeObs();
+  await repairObsConfiguration(obs, baseUrl);
+  const scene = obsSceneName('gameplay');
+  obs.currentScene = scene;
+  await expect(setBpCompactVisible(obs, baseUrl, true)).rejects.toThrow('HUD');
+  const hud = obs.scenes
+    .get(scene)!
+    .find((item) => item.sourceName === 'Mizar · gameplay · Program')!;
+  hud.sceneItemEnabled = false;
+  await setBpCompactVisible(obs, baseUrl, true);
+  expect(
+    obs.scenes.get(scene)!.find((item) => item.sourceName === BP_COMPACT_INPUT)?.sceneItemEnabled,
+  ).toBe(true);
+  await setBpCompactVisible(obs, baseUrl, true);
+  expect(
+    obs.scenes.get(scene)!.filter((item) => item.sourceName === BP_COMPACT_INPUT),
+  ).toHaveLength(1);
+  await setBpCompactVisible(obs, baseUrl, false);
+  expect(
+    obs.scenes.get(scene)!.find((item) => item.sourceName === BP_COMPACT_INPUT)?.sceneItemEnabled,
+  ).toBe(false);
+  obs.scenes.set(
+    scene,
+    obs.scenes.get(scene)!.filter((item) => item.sourceName !== BP_COMPACT_INPUT),
+  );
+  await setBpCompactVisible(obs, baseUrl, true);
+  expect(
+    obs.scenes.get(scene)!.find((item) => item.sourceName === BP_COMPACT_INPUT)?.sceneItemEnabled,
+  ).toBe(true);
+  obs.currentScene = obsSceneName('waiting');
+  await expect(setBpCompactVisible(obs, baseUrl, true)).rejects.toThrow('受管比赛画面');
 });
