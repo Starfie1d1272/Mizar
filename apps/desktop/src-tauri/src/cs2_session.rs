@@ -92,6 +92,10 @@ fn replace(from: &Path, to: &Path) -> Result<(), String> {
     }
 }
 
+struct StoreGuard {
+    _file: fs::File,
+}
+
 pub struct SessionStore {
     root: PathBuf,
 }
@@ -101,30 +105,47 @@ impl SessionStore {
             root: root.join("data/cs2-session"),
         }
     }
+    fn acquire_write_guard(&self) -> Result<StoreGuard, String> {
+        Ok(StoreGuard {
+            _file: crate::spectator_snapshot::acquire(&self.root)?,
+        })
+    }
     fn full_spectator_pending(&self) -> bool {
         !fs::symlink_metadata(self.root.join("spectator-full-pending.json"))
             .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
     }
     /// Caller must validate the current Steam account and that CS2 is stopped.
     pub(crate) fn capture_spectator_snapshot(&self, video: &Path, executable: &Path, account: u32, owned: &std::collections::BTreeSet<crate::spectator_recovery_plan::Input>, applied: &crate::spectator_recovery_plan::Bindings) -> Result<(), String> {
-        let _lock = crate::spectator_snapshot::acquire(&self.root)?;
+        let guard = self.acquire_write_guard()?;
+        self.capture_spectator_snapshot_locked(&guard, video, executable, account, owned, applied)
+    }
+    fn capture_spectator_snapshot_locked(&self, _guard: &StoreGuard, video: &Path, executable: &Path, account: u32, owned: &std::collections::BTreeSet<crate::spectator_recovery_plan::Input>, applied: &crate::spectator_recovery_plan::Bindings) -> Result<(), String> {
         if self.load()?.is_some() || self.spectator_pending() { return Err("snapshot_pending".into()); }
         crate::spectator_snapshot::capture(&self.root, video, executable, account, owned, applied, atomic_write)
     }
     /// Explicit session capture; legacy pending records remain exclusive.
     pub(crate) fn capture_spectator_snapshot_for_session(&self, video: &Path, executable: &Path, account: u32, owned: &std::collections::BTreeSet<crate::spectator_recovery_plan::Input>, applied: &crate::spectator_recovery_plan::Bindings, session: &crate::cs2_config_identity::SessionIdentity) -> Result<(), String> {
-        let _lock = crate::spectator_snapshot::acquire(&self.root)?;
+        let guard = self.acquire_write_guard()?;
+        self.capture_spectator_snapshot_for_session_locked(&guard, video, executable, account, owned, applied, session)
+    }
+    fn capture_spectator_snapshot_for_session_locked(&self, _guard: &StoreGuard, video: &Path, executable: &Path, account: u32, owned: &std::collections::BTreeSet<crate::spectator_recovery_plan::Input>, applied: &crate::spectator_recovery_plan::Bindings, session: &crate::cs2_config_identity::SessionIdentity) -> Result<(), String> {
         if self.load()?.is_some() || self.spectator_pending() { return Err("snapshot_pending".into()); }
         crate::spectator_snapshot::capture_for_session(&self.root, video, executable, account, owned, applied, atomic_write, Some(session))
     }
     /// Inspection only; caller supplies independently discovered identity.
     pub(crate) fn spectator_snapshot_status(&self, video: &Path, executable: &Path, account: u32) -> Result<crate::spectator_snapshot::Status, String> {
-        let _lock = crate::spectator_snapshot::acquire(&self.root)?;
+        let guard = self.acquire_write_guard()?;
+        self.spectator_snapshot_status_locked(&guard, video, executable, account)
+    }
+    fn spectator_snapshot_status_locked(&self, _guard: &StoreGuard, video: &Path, executable: &Path, account: u32) -> Result<crate::spectator_snapshot::Status, String> {
         Ok(crate::spectator_snapshot::status(&self.root, video, executable, account))
     }
     /// Caller must rediscover the same Steam account and confirm CS2 has exited.
     pub(crate) fn recover_spectator_snapshot(&self, video: &Path, executable: &Path, account: u32) -> Result<(), String> {
-        let _lock = crate::spectator_snapshot::acquire(&self.root)?;
+        let guard = self.acquire_write_guard()?;
+        self.recover_spectator_snapshot_locked(&guard, video, executable, account)
+    }
+    fn recover_spectator_snapshot_locked(&self, _guard: &StoreGuard, video: &Path, executable: &Path, account: u32) -> Result<(), String> {
         crate::spectator_snapshot::recover(&self.root, video, executable, account, atomic_write)
     }
     pub fn backup_directory(&self) -> PathBuf {
@@ -151,6 +172,10 @@ impl SessionStore {
         }
     }
     pub fn save(&self, value: &Value) -> Result<(), String> {
+        let guard = self.acquire_write_guard()?;
+        self.save_locked(&guard, value)
+    }
+    fn save_locked(&self, _guard: &StoreGuard, value: &Value) -> Result<(), String> {
         let bytes = serde_json::to_vec_pretty(value).map_err(|_| "CS2 恢复记录无法保存。")?;
         if bytes.len() > 4 * 1024 * 1024 {
             return Err("CS2 恢复记录过大，未修改游戏设置。".into());
@@ -207,6 +232,10 @@ impl SessionStore {
     /// Persist the possible +exec write before submitting Steam's request.
     /// A definitively failed spawn can disarm it; an ambiguous launch cannot.
     pub fn spectator_load_attempted(&self, attempted: bool) -> Result<(), String> {
+        let guard = self.acquire_write_guard()?;
+        self.spectator_load_attempted_locked(&guard, attempted)
+    }
+    fn spectator_load_attempted_locked(&self, _guard: &StoreGuard, attempted: bool) -> Result<(), String> {
         if attempted {
             self.validate_spectator_launch()?;
         }
@@ -224,6 +253,10 @@ impl SessionStore {
     /// Same owner, separate durable optional-field record. No core transaction
     /// or settings gate depends on this file. Caller must confirm CS2 has exited.
     pub fn restore_spectator(&self) -> Result<(), String> {
+        let guard = self.acquire_write_guard()?;
+        self.restore_spectator_locked(&guard)
+    }
+    fn restore_spectator_locked(&self, _guard: &StoreGuard) -> Result<(), String> {
         let Some(mut record) = self.spectator_record()? else {
             return Ok(());
         };
@@ -313,7 +346,7 @@ impl SessionStore {
     // Handoff ownership before clearing the core journal. Legacy journals are
     // supported too; if persistence fails, core restoration still proceeds and
     // the original journal remains the durable ownership evidence.
-    fn preserve_playback_cleanup(&self, value: &Value) -> Result<(), String> {
+    fn preserve_playback_cleanup_locked(&self, _guard: &StoreGuard, value: &Value) -> Result<(), String> {
         if value.get("demoPlaybackCfg").is_none() {
             return Ok(());
         }
@@ -365,6 +398,10 @@ impl SessionStore {
     }
     /// Explicit retry only, after caller independently confirms no CS2 runs.
     pub fn restore_playback_cleanup(&self) -> Result<(), String> {
+        let guard = self.acquire_write_guard()?;
+        self.restore_playback_cleanup_locked(&guard)
+    }
+    fn restore_playback_cleanup_locked(&self, _guard: &StoreGuard) -> Result<(), String> {
         let entries = match fs::read_dir(self.playback_cleanup_directory()) {
             Ok(entries) => entries,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -407,8 +444,9 @@ impl SessionStore {
             ))
         }
     }
-    fn finish_core_restore(
+    fn finish_core_restore_locked(
         &self,
+        guard: &StoreGuard,
         handoff: Result<(), String>,
         spectator_error: Option<String>,
     ) -> Result<Option<String>, String> {
@@ -416,7 +454,7 @@ impl SessionStore {
             Ok(()) => {
                 fs::remove_file(self.journal_path())
                     .map_err(|_| "原配置已恢复，但恢复记录尚未清理，请重试。".to_string())?;
-                self.restore_playback_cleanup().err()
+                self.restore_playback_cleanup_locked(guard).err()
             }
             Err(error) => Some(format!(
                 "原画质和帧率已恢复；清理证据转存失败，原启动记录仍保留：{error}"
@@ -437,6 +475,10 @@ impl SessionStore {
         }
     }
     pub fn set_preferences(&self, preferences: Preferences) -> Result<(), String> {
+        let guard = self.acquire_write_guard()?;
+        self.set_preferences_locked(&guard, preferences)
+    }
+    fn set_preferences_locked(&self, _guard: &StoreGuard, preferences: Preferences) -> Result<(), String> {
         if self.load()?.is_some() {
             return Err("请结束制作并恢复配置后再修改启动设置。".into());
         }
@@ -452,11 +494,26 @@ impl SessionStore {
         executable: &Path,
         size: cs2_video::VideoSize,
     ) -> Result<Value, String> {
-        self.prepare_files(video, executable, size, None)
+        let guard = self.acquire_write_guard()?;
+        self.prepare_locked(&guard, video, executable, size)
+    }
+    #[cfg(test)]
+    fn prepare_locked(
+        &self,
+        guard: &StoreGuard,
+        video: &Path,
+        executable: &Path,
+        size: cs2_video::VideoSize,
+    ) -> Result<Value, String> {
+        self.prepare_files_locked(guard, video, executable, size, None)
     }
     /// Save opaque source bytes before attempting any interpretation. These
     /// incident snapshots are never automatically restored over later settings.
     pub fn backup_originals(&self, video: &Path) -> Result<(), String> {
+        let guard = self.acquire_write_guard()?;
+        self.backup_originals_locked(&guard, video)
+    }
+    fn backup_originals_locked(&self, _guard: &StoreGuard, video: &Path) -> Result<(), String> {
         if self.load()?.is_some() || self.full_spectator_pending() {
             return Err("上次 CS2 配置尚未恢复，请先退出游戏并重试恢复。".into());
         }
@@ -520,6 +577,11 @@ impl SessionStore {
     /// the same Steam identity and absence of a running game.
     pub fn import_selected_backup(&self, video: &Path, executable: &Path, backup: &str,
         original: &str, frame: Option<(&str, &str)>) -> Result<(), String> {
+        let guard = self.acquire_write_guard()?;
+        self.import_selected_backup_locked(&guard, video, executable, backup, original, frame)
+    }
+    fn import_selected_backup_locked(&self, guard: &StoreGuard, video: &Path, executable: &Path, backup: &str,
+        original: &str, frame: Option<(&str, &str)>) -> Result<(), String> {
         if self.spectator_pending() || self.playback_cleanup_pending() {
             return Err("请先完成上次观战或试播恢复。".into());
         }
@@ -532,14 +594,14 @@ impl SessionStore {
             unchanged(&machine, before.as_bytes())?;
         }
         unchanged(video, original.as_bytes())?;
-        self.backup_originals(video)?;
+        self.backup_originals_locked(guard, video)?;
         // All original bytes are durable before the forward-recovery journal.
         let record = json!({"version":4,"video":fs::canonicalize(video).map_err(|e| io_error("配置目标无法确认。", &e))?,
             "executable":executable,"launchAttempted":false,"files":files});
-        self.save(&record)?;
-        self.restore_selected_backup(&record)
+        self.save_locked(guard, &record)?;
+        self.restore_selected_backup_locked(guard, &record)
     }
-    fn restore_selected_backup(&self, record: &Value) -> Result<(), String> {
+    fn restore_selected_backup_locked(&self, _guard: &StoreGuard, record: &Value) -> Result<(), String> {
         let video = Path::new(record["video"].as_str().ok_or("恢复目标缺失。")?);
         if !video.is_absolute() || video.file_name().is_none_or(|n| n != "cs2_video.txt")
             || fs::canonicalize(video).map_err(|e| io_error("恢复目标无法确认。", &e))? != video {
@@ -578,10 +640,14 @@ impl SessionStore {
         fs::remove_file(self.journal_path()).map_err(|e| io_error("设置已恢复，记录清理失败，请重试。",&e))
     }
     pub fn prepare_preserved(&self, video: &Path, executable: &Path) -> Result<Value, String> {
-        self.backup_originals(video)?;
+        let guard = self.acquire_write_guard()?;
+        self.prepare_preserved_locked(&guard, video, executable)
+    }
+    fn prepare_preserved_locked(&self, guard: &StoreGuard, video: &Path, executable: &Path) -> Result<Value, String> {
+        self.backup_originals_locked(guard, video)?;
         let value = json!({"version":3,"preserveSettings":true,"video":video,"executable":executable,
             "launchAttempted":false,"pid":null,"created":null});
-        self.save(&value)?;
+        self.save_locked(guard, &value)?;
         Ok(value)
     }
     pub fn prepare_with_frame_rate(
@@ -590,11 +656,31 @@ impl SessionStore {
         executable: &Path,
         size: cs2_video::VideoSize,
     ) -> Result<Value, String> {
-        self.backup_originals(video)?;
-        self.prepare_backed_up(video, executable, size)
+        let guard = self.acquire_write_guard()?;
+        self.prepare_with_frame_rate_locked(&guard, video, executable, size)
+    }
+    fn prepare_with_frame_rate_locked(
+        &self,
+        guard: &StoreGuard,
+        video: &Path,
+        executable: &Path,
+        size: cs2_video::VideoSize,
+    ) -> Result<Value, String> {
+        self.backup_originals_locked(guard, video)?;
+        self.prepare_backed_up_locked(guard, video, executable, size)
     }
     pub fn prepare_backed_up(
         &self,
+        video: &Path,
+        executable: &Path,
+        size: cs2_video::VideoSize,
+    ) -> Result<Value, String> {
+        let guard = self.acquire_write_guard()?;
+        self.prepare_backed_up_locked(&guard, video, executable, size)
+    }
+    fn prepare_backed_up_locked(
+        &self,
+        guard: &StoreGuard,
         video: &Path,
         executable: &Path,
         size: cs2_video::VideoSize,
@@ -606,7 +692,7 @@ impl SessionStore {
         } else {
             crate::cs2_spectator::prepare(&frames, video, executable)
         };
-        let mut journal = self.prepare_files(video, executable, size, Some(frames))?;
+        let mut journal = self.prepare_files_locked(guard, video, executable, size, Some(frames))?;
         let armed = spectator.and_then(|record| {
             // This exact original must survive core recovery and restart even if
             // optional restore later fails. Save it before allowing +exec.
@@ -623,18 +709,19 @@ impl SessionStore {
                 journal["spectatorWarning"] = json!(format!("数字键观战预设未应用：{warning}"))
             }
         }
-        self.save(&journal)?;
+        self.save_locked(guard, &journal)?;
         Ok(journal)
     }
-    fn prepare_files(
+    fn prepare_files_locked(
         &self,
+        guard: &StoreGuard,
         video: &Path,
         executable: &Path,
         size: cs2_video::VideoSize,
         frames: Option<Vec<Value>>,
     ) -> Result<Value, String> {
         let plan = self.plan_files(video, executable, size, frames)?;
-        self.commit_files(&plan, atomic_write)?;
+        self.commit_files_locked(guard, &plan, atomic_write)?;
         Ok(plan)
     }
 
@@ -682,8 +769,18 @@ impl SessionStore {
     }
 
     /// Recheck every original, then durably save the plan before the first write.
+    #[cfg(test)]
     fn commit_files(
         &self,
+        value: &Value,
+        write_config: fn(&Path, &[u8]) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let guard = self.acquire_write_guard()?;
+        self.commit_files_locked(&guard, value, write_config)
+    }
+    fn commit_files_locked(
+        &self,
+        guard: &StoreGuard,
         value: &Value,
         write_config: fn(&Path, &[u8]) -> Result<(), String>,
     ) -> Result<(), String> {
@@ -706,7 +803,7 @@ impl SessionStore {
             return Err("视频配置在准备期间发生变化，未修改配置。".into());
         }
         // The original is durable and read-back verified before touching the game.
-        self.save(value)?;
+        self.save_locked(guard, value)?;
         write_config(video, applied.as_bytes())?;
         for (path, original, applied) in frame_files {
             if fs::read_to_string(path).map_err(|_| "无法读取启动配置，备份仍保留。")? != original
@@ -719,14 +816,18 @@ impl SessionStore {
     }
     /// Caller must independently confirm no CS2 process can still write this file.
     pub fn restore(&self) -> Result<Option<String>, String> {
+        let guard = self.acquire_write_guard()?;
+        self.restore_locked(&guard)
+    }
+    fn restore_locked(&self, guard: &StoreGuard) -> Result<Option<String>, String> {
         let Some(value) = self.load()? else {
             return Ok(None);
         };
         if unconfirmed_launch(&value) {
             return Err("Steam 启动结果待确认，恢复记录与备份仍保留。".into());
         }
-        if value["version"] == 4 { self.restore_selected_backup(&value)?; return Ok(None); }
-        let playback_handoff = self.preserve_playback_cleanup(&value);
+        if value["version"] == 4 { self.restore_selected_backup_locked(guard, &value)?; return Ok(None); }
+        let playback_handoff = self.preserve_playback_cleanup_locked(guard, &value);
         if value["version"] == 3 {
             if value["preserveSettings"] != true
                 || [
@@ -752,7 +853,7 @@ impl SessionStore {
             }
             // Nothing was owned or changed. In particular, never replace game
             // writes made during this session with an incident snapshot.
-            return self.finish_core_restore(playback_handoff, None);
+            return self.finish_core_restore_locked(guard, playback_handoff, None);
         }
         let path = Path::new(value["video"].as_str().ok_or("CS2 恢复路径缺失。")?);
         if path.file_name().and_then(|n| n.to_str()) != Some("cs2_video.txt") || !path.is_absolute()
@@ -817,8 +918,8 @@ impl SessionStore {
         }
         // Optional errors retain their own original + diagnostic and cannot
         // prevent completion of the existing FPS/video transaction.
-        let spectator_error = self.restore_spectator().err();
-        self.finish_core_restore(playback_handoff, spectator_error)
+        let spectator_error = self.restore_spectator_locked(guard).err();
+        self.finish_core_restore_locked(guard, playback_handoff, spectator_error)
     }
 }
 
@@ -911,6 +1012,31 @@ mod tests {
         fs::write(cfg.join("crosshair.cfg"), "cl_crosshairsize 2\n").unwrap();
         let executable = root.join("game/bin/win64/cs2.exe");
         (root, video, convars, executable, store)
+    }
+    #[test]
+    fn store_writes_share_lock_and_failures_release_it() {
+        let (root, video, store) = setup();
+        let guard = store.acquire_write_guard().unwrap();
+        let competing_root = root.clone();
+        let competing_video = video.clone();
+        let (save, capture, status, restore) = std::thread::spawn(move || {
+            let other = SessionStore::new(competing_root);
+            let exe = competing_video.with_file_name("cs2.exe");
+            let key = crate::spectator_recovery_plan::Input { kind: crate::spectator_recovery_plan::InputKind::Key, name: "x".into() };
+            (other.save(&json!({"version":1})),
+             other.capture_spectator_snapshot(&competing_video, &exe, 1, &[key].into(), &Default::default()),
+             other.spectator_snapshot_status(&competing_video, &exe, 1),
+             other.restore())
+        }).join().unwrap();
+        assert_eq!(save.unwrap_err(), "snapshot_busy");
+        assert_eq!(capture.unwrap_err(), "snapshot_busy");
+        assert_eq!(status.unwrap_err(), "snapshot_busy");
+        assert_eq!(restore.unwrap_err(), "snapshot_busy");
+        drop(guard);
+        assert!(store.spectator_load_attempted(false).is_err());
+        store.save(&json!({"version":1})).unwrap();
+        assert!(store.load().unwrap().is_some());
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn core_plan_is_read_only_and_commit_rejects_changed_original() {
