@@ -91,6 +91,9 @@ it('requires the owned CS2 capture, available target and a visible frame', async
   transform.cropLeft = 1;
   expect(await gameBackgroundReady(obs)).toBe(false);
   transform.cropLeft = 0;
+  transform.scaleX = -1;
+  expect(await gameBackgroundReady(obs)).toBe(false);
+  transform.scaleX = 1;
   enabled = false;
   expect(await gameBackgroundReady(obs)).toBe(false);
   enabled = true;

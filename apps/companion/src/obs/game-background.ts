@@ -154,9 +154,9 @@ export async function gameBackgroundReady(obs: ObsRpc): Promise<boolean> {
         typeof transform.sourceHeight !== 'number' ||
         transform.sourceHeight <= 0 ||
         typeof transform.scaleX !== 'number' ||
-        transform.scaleX === 0 ||
+        transform.scaleX <= 0 ||
         typeof transform.scaleY !== 'number' ||
-        transform.scaleY === 0
+        transform.scaleY <= 0
       )
         return false;
 
