@@ -778,7 +778,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             },
           }),
     obsAdapter === undefined ? undefined : (options) => obsAdapter.switchToWaitingForExit(options),
+    obsAdapter === undefined ? undefined : (visible) => obsAdapter.setBpCompactVisible(visible),
   );
+  obsAdapter?.onBpDisconnect(() => sceneController.compactDisconnected());
   if (options.steamAvatars) {
     options.steamAvatars.onChanged(() => projectionCoordinator.refresh());
     registerSteamAvatarRoutes(app, options.steamAvatars, localWebTransport.getOriginPolicy());
