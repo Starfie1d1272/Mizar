@@ -588,3 +588,51 @@ it('does not migrate a desktop source explicitly bound by the user', async () =>
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+it('cancels waiting discovery when an operator selects an existing source', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'mizar-wait-override-'));
+  try {
+    const obs = new FakeObs(true);
+    obs.windows = [];
+    fixture.client = obs;
+    const owner = new RemoteCommentary(join(dir, 'preference'));
+    const routing = new ObsAudioRouting(join(dir, 'routing'));
+    const adapter = new ObsAdapter(
+      new ObsConfigStore(join(dir, 'obs.json')),
+      base,
+      () => {},
+      routing,
+      { owner, journal: join(dir, 'probe') },
+    );
+    expect((await adapter.ensure()).some((item) => item.code === 'commentary_pending')).toBe(true);
+    const probe = [...obs.inputs.values()].find(
+      (item) => item.inputKind === 'wasapi_process_output_capture',
+    )!;
+    const selected = obs.addInput('Manual voice', 'wasapi_process_output_capture', {
+      window: 'Other:Qt:voice.exe',
+    });
+    const status = await adapter.readAudioRouting();
+    await adapter.bindAudio({
+      role: 'remoteCommentary',
+      selectionId: status.candidates.find((item) => item.uuid === selected.inputUuid)!.selectionId,
+      revision: status.revision,
+    });
+    obs.windows = [
+      { itemName: 'TeamSpeak', itemValue: 'TeamSpeak:Qt:ts3client_win64.exe', itemEnabled: true },
+    ];
+    adapter.startCommentaryRecovery();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(probe.settings.window).toBeUndefined();
+    expect((await owner.get()).preference).toMatchObject({
+      mode: 'existingInput',
+      binding: { inputUuid: selected.inputUuid },
+    });
+    expect((await new RemoteCommentary(join(dir, 'preference')).get()).preference).toMatchObject({
+      mode: 'existingInput',
+      binding: { inputUuid: selected.inputUuid },
+    });
+    await adapter.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
