@@ -166,6 +166,23 @@ it('composes the current entry gain with master and mutes without restarting pla
   expect(r.obs.bgm().volume).toBeCloseTo(0.1);
   expect(r.obs.restarts()).toBe(starts);
 });
+it('applies master changes during fade-in without restarting', async () => {
+  const r = await rig();
+  const config = structuredClone(r.store.state.config);
+  config.groups.waiting.fadeInMs = 1000;
+  config.groups.waiting.tracks[0]!.gain = 0.8;
+  await r.store.configure(config);
+  await r.step();
+  const starts = r.obs.restarts();
+  await r.step(500);
+  expect(r.obs.bgm().volume).toBeCloseTo(0.4);
+  await r.store.update((state) => {
+    state.master = 0.5;
+  });
+  await r.step(100);
+  expect(r.obs.bgm().volume).toBeCloseTo(0.24);
+  expect(r.obs.restarts()).toBe(starts);
+});
 it('keeps pre-game waiting music across fresh menu GSI and BP, but stops for stale data and live play', async () => {
   const r = await rig();
   r.truth.program.map.name = null;
