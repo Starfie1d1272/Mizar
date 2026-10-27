@@ -253,7 +253,7 @@ describe('private observer hints against Program', () => {
       'ready',
     );
     expect(aligned().project(program(3, [8, 9]), settings, 303000, source).observer?.state).toBe(
-      'ready',
+      'unavailable',
     );
   });
 });
@@ -507,4 +507,147 @@ it('does not choose between two equally plausible repeated-victim sequences', ()
   const result = timeline.project(program(4, [6, 8, 9]), settings, 123000, source);
   expect(result.observer?.calibrationState).toBe('uncalibrated');
   expect(timeline.getDiagnostics().calibration.reason).toBe('competing-offsets');
+});
+
+it('does not reuse confirmed early deaths after their program records leave the window', () => {
+  const timeline = new ObserverHintTimeline();
+  timeline.project(program(1), settings, 0, source);
+  for (const [seq, victim, time] of [
+    [1, 8, 1000],
+    [2, 9, 2000],
+    [3, 6, 3000],
+  ] as const)
+    timeline.consume(kill(seq, victim, time));
+  timeline.project(program(2, [8]), settings, 121000, source);
+  timeline.project(program(3, [8, 9]), settings, 122000, source);
+  expect(
+    timeline.project(program(4, [6, 8, 9]), settings, 123000, source).observer
+      ?.effectiveDelaySeconds,
+  ).toBe(120);
+  timeline.project(program(5), settings, 150000, source);
+  timeline.project(program(6, [8]), settings, 161000, source);
+  timeline.project(program(7, [8, 9]), settings, 162000, source);
+  const later = timeline.project(program(8, [6, 8, 9]), settings, 163000, source);
+  expect(later.observer?.effectiveDelaySeconds).toBe(120);
+  expect(
+    timeline.project(program(9, [5, 6, 8, 9]), settings, 185000, source).observer
+      ?.effectiveDelaySeconds,
+  ).toBe(120);
+  expect(timeline.getDiagnostics().calibration.reason).toBe('insufficient-or-ambiguous');
+});
+
+it('rejects a competing offset even when its cluster has more evidence', () => {
+  const timeline = new ObserverHintTimeline();
+  timeline.project(program(1), settings, 0, source);
+  for (const [seq, victim, time] of [
+    [1, 8, 1000],
+    [2, 9, 2000],
+    [3, 6, 3000],
+    [4, 8, 41000],
+    [5, 9, 42000],
+    [6, 6, 43000],
+    [7, 5, 44000],
+  ] as const)
+    timeline.consume(kill(seq, victim, time));
+  timeline.project(program(2, [8]), settings, 121000, source);
+  timeline.project(program(3, [8, 9]), settings, 122000, source);
+  timeline.project(program(4, [6, 8, 9]), settings, 123000, source);
+  const result = timeline.project(program(5, [5, 6, 8, 9]), settings, 124000, source);
+  expect(result.observer?.calibrationState).toBe('uncalibrated');
+  expect(timeline.getDiagnostics().calibration.reason).toBe('competing-offsets');
+});
+
+it('holds briefly, then stops hints and reacquires a 190-second offset using four new events', () => {
+  const timeline = new ObserverHintTimeline();
+  timeline.project(program(1), settings, 0, source);
+  for (const [seq, victim, time] of [
+    [1, 8, 1000],
+    [2, 9, 2000],
+    [3, 6, 3000],
+  ] as const)
+    timeline.consume(kill(seq, victim, time));
+  timeline.project(program(2, [8]), settings, 121000, source);
+  timeline.project(program(3, [8, 9]), settings, 122000, source);
+  timeline.project(program(4, [6, 8, 9]), settings, 123000, source);
+  expect(timeline.project(program(4, [6, 8, 9]), settings, 193000, source).observer).toMatchObject({
+    state: 'ready',
+    calibrationState: 'held',
+    effectiveDelaySeconds: 120,
+  });
+  for (const [seq, victim, time] of [
+    [4, 8, 160000],
+    [5, 9, 161000],
+    [6, 6, 162000],
+    [7, 5, 163000],
+  ] as const)
+    timeline.consume(kill(seq, victim, time));
+  expect(timeline.project(program(5), settings, 304000, source).observer).toMatchObject({
+    state: 'unavailable',
+    calibrationState: 'reacquiring',
+    waitingReason: 'calibration-reacquiring',
+    hints: [],
+  });
+  timeline.project(program(6, [8]), settings, 350000, source);
+  timeline.project(program(7, [8, 9]), settings, 351000, source);
+  expect(timeline.project(program(8, [6, 8, 9]), settings, 352000, source).observer?.state).toBe(
+    'unavailable',
+  );
+  expect(
+    timeline.project(program(9, [5, 6, 8, 9]), settings, 353000, source).observer,
+  ).toMatchObject({ state: 'ready', calibrationState: 'measured', effectiveDelaySeconds: 190 });
+  expect(timeline.getDiagnostics().calibration.reason).toBe('reacquired');
+});
+
+it('retains sufficient early history for a 650-second offset', () => {
+  const timeline = new ObserverHintTimeline();
+  const longDelay = { ...settings, expectedDelaySeconds: 600 };
+  timeline.project(program(1), longDelay, 0, source);
+  for (const [seq, victim, time] of [
+    [1, 8, 1000],
+    [2, 9, 2000],
+    [3, 6, 3000],
+    [4, 7, 100000],
+  ] as const)
+    timeline.consume(kill(seq, victim, time));
+  timeline.project(program(2, [8]), longDelay, 651000, source);
+  timeline.project(program(3, [8, 9]), longDelay, 652000, source);
+  expect(
+    timeline.project(program(4, [6, 8, 9]), longDelay, 653000, source).observer
+      ?.effectiveDelaySeconds,
+  ).toBe(650);
+  expect(
+    timeline.project(program(4, [6, 8, 9]), longDelay, 743000, source).observer?.hints,
+  ).toMatchObject([{ id: '1:4', remainingSeconds: 7 }]);
+});
+
+it('moves an unshown hint after calibrating to 119 seconds', () => {
+  const timeline = new ObserverHintTimeline();
+  timeline.project(program(1), settings, 0, source);
+  for (const [seq, victim, time] of [
+    [1, 8, 1000],
+    [2, 9, 2000],
+    [3, 6, 3000],
+    [4, 7, 40000],
+  ] as const)
+    timeline.consume(kill(seq, victim, time));
+  timeline.project(program(2, [8]), settings, 120000, source);
+  timeline.project(program(3, [8, 9]), settings, 121000, source);
+  expect(
+    timeline.project(program(4, [6, 8, 9]), settings, 122000, source).observer
+      ?.effectiveDelaySeconds,
+  ).toBe(119);
+  expect(
+    timeline.project(program(4, [6, 8, 9]), settings, 152000, source).observer?.hints,
+  ).toMatchObject([{ id: '1:4', remainingSeconds: 7 }]);
+});
+
+it('does not trust an old estimate after a long stale source gap', () => {
+  const timeline = aligned();
+  timeline.project(program(3, [8, 9]), settings, 130000, { ...source, fresh: false });
+  const resumed = timeline.project(program(4), settings, 600000, source);
+  expect(resumed.observer).toMatchObject({
+    state: 'unavailable',
+    calibrationState: 'reacquiring',
+    hints: [],
+  });
 });

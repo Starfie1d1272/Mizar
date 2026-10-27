@@ -424,3 +424,27 @@ it('orders private hints by actual remaining time, retains ties, expires locally
   expect(names()).toEqual([]);
   expect(JSON.stringify(hints)).toBe(original);
 });
+
+it('shows recalibration as unavailable rather than ready with a stale delay', () => {
+  mocks.view.settings.enabled = true;
+  mocks.observer = {
+    state: 'live',
+    current: {
+      payload: {
+        observer: {
+          state: 'unavailable',
+          timingBasis: 'estimated',
+          calibrationState: 'reacquiring',
+          expectedDelaySeconds: 120,
+          effectiveDelaySeconds: 120,
+          waitingReason: 'calibration-reacquiring',
+          nextWindowSeconds: null,
+          hints: [],
+        },
+      },
+    },
+  };
+  act(() => root.render(<ObserverHints />));
+  expect(container.textContent).toContain('正在重新校准延迟');
+  expect(container.textContent).not.toContain('保持上次校准');
+});

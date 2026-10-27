@@ -22,7 +22,7 @@ export interface ObserverAssistProjection {
   readonly observer?: ObserverHintSettings & {
     readonly state: 'connecting' | 'ready' | 'paused' | 'unavailable';
     readonly timingBasis: 'estimated';
-    readonly calibrationState: 'uncalibrated' | 'measured' | 'held';
+    readonly calibrationState: 'uncalibrated' | 'measured' | 'held' | 'reacquiring';
     readonly effectiveDelaySeconds: number;
     readonly waitingReason: string | null;
     readonly nextWindowSeconds: number | null;
@@ -47,6 +47,7 @@ interface BufferedKill {
   matched: boolean;
   retired: boolean;
   shownDueMs: number | null;
+  pairedProgramKey: string | null;
 }
 
 /** Private event projection. Program deaths provide independent same-player time anchors. */
@@ -185,15 +186,17 @@ export class ObserverHintTimeline {
       matched: false,
       retired: false,
       shownDueMs: null,
+      pairedProgramKey: null,
     });
     if (this.kills.length > 4096) {
       this.kills.shift();
       this.discard('capacity');
     }
   }
-  private calibrationState(now: number): 'uncalibrated' | 'measured' | 'held' {
+  private calibrationState(now: number): 'uncalibrated' | 'measured' | 'held' | 'reacquiring' {
     if (this.effectiveDelayMs === null) return 'uncalibrated';
-    return this.lastEvidenceAt !== null && now - this.lastEvidenceAt <= 60000 ? 'measured' : 'held';
+    const age = this.lastEvidenceAt === null ? Infinity : now - this.lastEvidenceAt;
+    return age <= 60000 ? 'measured' : age <= 180000 ? 'held' : 'reacquiring';
   }
 
   private calibrate(
@@ -204,13 +207,23 @@ export class ObserverHintTimeline {
   ) {
     const observations = this.programEvents.filter((event) => event.time >= now - 60000);
     const center = this.effectiveDelayMs ?? settings.expectedDelaySeconds * 1000;
-    const lower = Math.max(0, center - 60000);
-    const upper = center + 60000;
+    const reacquiring = this.calibrationState(now) === 'reacquiring';
+    const lower = reacquiring ? 0 : Math.max(0, center - 60000);
+    const upper = reacquiring ? Math.max(600000, center + 180000) : center + 60000;
+    const assignments = new Map(
+      this.kills
+        .filter((kill) => kill.pairedProgramKey !== null)
+        .map((kill) => [kill.pairedProgramKey!, kill]),
+    );
     const pairs = observations.flatMap((event) =>
       this.kills
         .filter(
           (kill) =>
             kill.event.cursor.mapName === map &&
+            (kill.pairedProgramKey === null ||
+              kill.pairedProgramKey === `${event.frame}:${event.victim}`) &&
+            (!assignments.has(`${event.frame}:${event.victim}`) ||
+              assignments.get(`${event.frame}:${event.victim}`) === kill) &&
             identities.has(kill.event.attacker!.sourcePlayerId!) &&
             kill.event.victim.sourcePlayerId === event.victim &&
             event.time - kill.sourceMs >= lower &&
@@ -255,7 +268,6 @@ export class ObserverHintTimeline {
     if (
       clusters.some(
         (cluster) =>
-          cluster.length === best.length &&
           Math.abs(
             cluster.map((pair) => pair.delay).sort((a, b) => a - b)[
               Math.floor(cluster.length / 2)
@@ -264,6 +276,13 @@ export class ObserverHintTimeline {
       )
     ) {
       this.estimateReason = 'competing-offsets';
+      return;
+    }
+    if (
+      reacquiring &&
+      (best.length < 4 || new Set(best.map((pair) => pair.event.frame)).size < 3)
+    ) {
+      this.estimateReason = 'insufficient-reacquisition-evidence';
       return;
     }
     const key = best
@@ -279,14 +298,21 @@ export class ObserverHintTimeline {
       this.estimateReason = 'awaiting-jump-evidence';
       return;
     }
-    for (const pair of best) pair.kill.matched = true;
+    for (const pair of best) {
+      pair.kill.matched = true;
+      pair.kill.pairedProgramKey = `${pair.event.frame}:${pair.event.victim}`;
+    }
     this.lastEvidenceKey = key;
     this.evidenceCount = best.length;
     this.evidenceSpreadMs = sorted[sorted.length - 1]! - sorted[0]!;
     this.lastEvidenceAt = now;
-    this.estimateReason = jump ? 'confirmed-timeline-shift' : 'consistent-sequence';
+    this.estimateReason = reacquiring
+      ? 'reacquired'
+      : jump
+        ? 'confirmed-timeline-shift'
+        : 'consistent-sequence';
     this.effectiveDelayMs =
-      this.effectiveDelayMs === null || jump
+      this.effectiveDelayMs === null || jump || reacquiring
         ? median
         : this.effectiveDelayMs + (median - this.effectiveDelayMs) * 0.25;
   }
@@ -402,9 +428,14 @@ export class ObserverHintTimeline {
         .map((p) => [p.sourcePlayerId, p.lifeState === 'alive']),
     );
     // Retire against the old schedule before any new calibration can extend it.
+    const reacquiring = this.calibrationState(now) === 'reacquiring';
     const priorDelay = this.effectiveDelayMs ?? settings.expectedDelaySeconds * 1000;
     for (const kill of this.kills) {
-      if (!kill.retired && now >= (kill.shownDueMs ?? kill.sourceMs + priorDelay)) {
+      if (
+        !kill.retired &&
+        ((reacquiring && kill.shownDueMs !== null) ||
+          (!reacquiring && now >= (kill.shownDueMs ?? kill.sourceMs + priorDelay)))
+      ) {
         kill.retired = true;
         this.discard('expired');
       }
@@ -440,8 +471,15 @@ export class ObserverHintTimeline {
       .filter((event) => event.time >= now - 60000)
       .slice(-256);
     const keepSince =
-      now - (Math.max(settings.expectedDelaySeconds * 1000, this.effectiveDelayMs ?? 0) + 180000);
+      now -
+      (Math.max(600000, settings.expectedDelaySeconds * 1000, this.effectiveDelayMs ?? 0) + 180000);
     this.kills = this.kills.filter((kill) => !kill.retired || kill.sourceMs >= keepSince);
+    if (this.calibrationState(now) === 'reacquiring') {
+      this.blocked = 'calibration-reacquiring';
+      this.nextDueMs = null;
+      this.nextWindowMs = null;
+      return empty('unavailable');
+    }
     const stableDelay = this.effectiveDelayMs;
     const ref = (player: ObserverProgramView['players'][number]) => ({
       name: (player.displayName ?? '选手').slice(0, 256),
