@@ -35,6 +35,7 @@ test('mixer uses confirmed state and music gains stay local to their scene entry
     ),
   );
   let saved: MusicConfig | null = null;
+  let played: { action: string; entryId?: string } | null = null;
   let next = 'confirmed';
   const writes: MixerCommand[] = [];
   await page.route('**/local/v1/mixer', (route) =>
@@ -75,6 +76,7 @@ test('mixer uses confirmed state and music gains stay local to their scene entry
   await page.route('**/operator/music', (route) => {
     const body = route.request().postDataJSON() as { action: string; config: MusicConfig };
     if (body.action === 'configure') saved = body.config;
+    if (body.action === 'play') played = body;
     return route.fulfill({ json: { ok: true } });
   });
   await page.goto('/settings?tab=obs');
@@ -97,6 +99,9 @@ test('mixer uses confirmed state and music gains stay local to their scene entry
   await expect.poll(() => writes.length).toBe(before + 1);
   expect(writes.at(-1)!.channel).toBe('microphone');
   await page.goto('/settings?tab=music');
+  await page.getByLabel('正式播放曲目').selectOption(`waiting:${secondEntry.entryId}`);
+  await page.getByRole('button', { name: '播放所选' }).click();
+  await expect.poll(() => played).toMatchObject({ action: 'play', entryId: secondEntry.entryId });
   const waiting = page
     .getByRole('list', { name: '等待音乐曲目列表' })
     .getByRole('slider', { name: '合成.wav 音量' })

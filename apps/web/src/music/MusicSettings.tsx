@@ -11,9 +11,6 @@ import { Button, Checkbox, Field, Panel, Select, StatusBanner } from '../ui';
 import { command, useLocalRead } from '../preparation/client';
 import { MusicControls, MUSIC_LABELS, type MusicView } from './MusicControls';
 
-// The service assigns persistent entry IDs to older saved configurations.
-type TrackEntry = MusicTrack & { entryId?: string };
-
 async function localFile(url: string, file: File, type: string) {
   const operationId = crypto.randomUUID();
   controlEvidence('music_file', 'selected', {
@@ -236,7 +233,7 @@ export function MusicSettings() {
                       aria-label={MUSIC_LABELS[group] + '曲目列表'}
                     >
                       {spec.tracks.map((track, index) => (
-                        <li key={(track as TrackEntry).entryId ?? `${track.id}:${index}`}>
+                        <li key={track.entryId ?? `${track.id}:${index}`}>
                           <span className="music-settings-track-index">
                             {String(index + 1).padStart(2, '0')}
                           </span>
@@ -310,7 +307,7 @@ export function MusicSettings() {
                                 'application/x-mizar-audio',
                               )),
                               entryId: crypto.randomUUID(),
-                            } as TrackEntry);
+                            });
                           change(group, { tracks });
                           setMessage('曲目已选，请保存音乐配置。');
                         }, group);
@@ -403,7 +400,7 @@ export function MusicSettings() {
                       />
                     ))}
                     {spec.tracks.map((track, i) => (
-                      <div key={(track as TrackEntry).entryId ?? `${track.id}:${i}`}>
+                      <div key={track.entryId ?? `${track.id}:${i}`}>
                         <strong>{track.name}</strong>
                         {(['startMs', 'endMs'] as const).map((key) => (
                           <Field

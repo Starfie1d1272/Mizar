@@ -180,8 +180,8 @@ export function MusicControls({
             disabled={busy || (selection ? volumeDisabled : !canPause)}
             onClick={() => {
               if (selection) {
-                const [group, trackId] = selection.split(':');
-                void send({ action: 'play', group, trackId });
+                const [group, entryId] = selection.split(':');
+                void send({ action: 'play', group, entryId });
               } else void send({ action: status.playback === 'paused' ? 'continue' : 'pause' });
             }}
           >
@@ -202,11 +202,13 @@ export function MusicControls({
           <option value="">选择已保存曲目</option>
           {Object.entries(view.config.groups).flatMap(([group, spec]) =>
             group !== 'opening' && spec.enabled
-              ? spec.tracks.map((track, index) => (
-                  <option key={`${group}:${track.id}:${index}`} value={`${group}:${track.id}`}>
-                    {MUSIC_LABELS[group as MusicGroup]} · {track.name}
-                  </option>
-                ))
+              ? spec.tracks
+                  .filter((track) => track.entryId)
+                  .map((track) => (
+                    <option key={`${group}:${track.entryId}`} value={`${group}:${track.entryId}`}>
+                      {MUSIC_LABELS[group as MusicGroup]} · {track.name}
+                    </option>
+                  ))
               : [],
           )}
         </Select>
