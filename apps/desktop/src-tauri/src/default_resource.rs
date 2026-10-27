@@ -342,6 +342,13 @@ fn packed(
     held.push(f);
     Ok(Some((result, source)))
 }
+fn ensure_absent(path: &Path) -> Result<(), Error> {
+    match fs::symlink_metadata(path) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(Error::Io(e)),
+        Ok(_) => Err(Error::Changed),
+    }
+}
 fn section(text: &str, name: &str) -> Result<BTreeMap<String, String>, Error> {
     let pairs = crate::cs2_frame_rate::scalar_section(text, &["config", name])
         .map_err(Error::InvalidVcfg)?;
@@ -379,7 +386,17 @@ pub(crate) fn read_default(root: &Path) -> Result<Resource, Error> {
     } else {
         None
     };
-    let packed = packed(&csgo.join("pak01_dir.vpk"), &csgo, &mut held)?;
+    let vpk_path = csgo.join("pak01_dir.vpk");
+    let held_before_vpk = held.len();
+    let packed = packed(&vpk_path, &csgo, &mut held)?;
+    if _cfg_guards.is_none() {
+        ensure_absent(&cfg)?;
+    } else if loose.is_none() {
+        ensure_absent(&cfg.join("user_keys_default.vcfg"))?;
+    }
+    if held.len() == held_before_vpk {
+        ensure_absent(&vpk_path)?;
+    }
     let (bytes, source) = match (loose, packed) {
         (None, None) => return Err(Error::Missing),
         (Some(bytes), None) => (bytes, Source::Loose),
