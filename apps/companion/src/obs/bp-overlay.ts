@@ -160,3 +160,172 @@ export async function assertBpCompactOff(obs: ObsRpc): Promise<void> {
   if (items.some((item) => item.sourceName === BP_COMPACT_INPUT && item.sceneItemEnabled !== false))
     throw new Error('请先关闭紧凑 BP 底栏，再修复 OBS 场景。');
 }
+
+/** Tracks only the managed gameplay HUD scene item for one compact playback. */
+export class BpOverlayOwner {
+  private lease: {
+    sceneUuid: string;
+    inputUuid: string;
+    itemId: number;
+    original: boolean;
+    modified: boolean;
+    uncertain: boolean;
+    pending: boolean | null;
+  } | null = null;
+
+  observeItem(sceneName: string, itemId: number, enabled: boolean): boolean {
+    const lease = this.lease;
+    if (!lease || sceneName !== obsSceneName('gameplay') || lease.itemId !== itemId) return false;
+    if (lease.pending === enabled) {
+      lease.pending = null;
+      return false;
+    }
+    lease.modified = true;
+    return true;
+  }
+  observeRemoval(sceneName: string, itemId: number): boolean {
+    if (sceneName !== obsSceneName('gameplay') || this.lease?.itemId !== itemId) return false;
+    this.invalidate();
+    return true;
+  }
+  observeSceneRemoval(sceneName: string): boolean {
+    if (sceneName !== obsSceneName('gameplay') || !this.lease) return false;
+    this.invalidate();
+    return true;
+  }
+  invalidate(): void {
+    if (this.lease) this.lease.uncertain = true;
+  }
+  async set(obs: ObsRpc, baseUrl: string, visible: boolean): Promise<void> {
+    const sceneName = obsSceneName('gameplay');
+    const hudName = obsBrowserInputName('gameplay');
+    const collection = await obs.call('GetSceneCollectionList');
+    if (collection.currentSceneCollectionName !== OBS_COLLECTION) {
+      this.invalidate();
+      throw new Error('OBS 场景集合已改变，请核对比赛 HUD。');
+    }
+    const sceneList = await obs.call('GetSceneList');
+    const scene = objects(sceneList.scenes).find((item) => item.sceneName === sceneName);
+    if (typeof scene?.sceneUuid !== 'string') {
+      this.invalidate();
+      throw new Error('无法确认受管比赛场景身份。');
+    }
+    if (visible && sceneList.currentProgramSceneName !== sceneName)
+      throw new Error('请先将受管比赛画面切到播出。');
+    let items = objects((await obs.call('GetSceneItemList', { sceneName })).sceneItems);
+    const hud = items.filter((item) => item.sourceName === hudName);
+    if (visible && this.lease === null) {
+      const input = objects((await obs.call('GetInputList')).inputs).find(
+        (item) => item.inputName === hudName,
+      );
+      const settings = (await obs.call('GetInputSettings', { inputName: hudName }))
+        .inputSettings as Record<string, unknown> | undefined;
+      if (
+        hud.length !== 1 ||
+        typeof hud[0]?.sceneItemId !== 'number' ||
+        typeof hud[0].sceneItemEnabled !== 'boolean' ||
+        input?.inputKind !== 'browser_source' ||
+        typeof input.inputUuid !== 'string' ||
+        settings?.url !== new URL('/program', baseUrl).toString()
+      )
+        throw new Error('无法确认受管比赛 HUD 身份。');
+      this.lease = {
+        sceneUuid: scene.sceneUuid,
+        inputUuid: input.inputUuid,
+        itemId: hud[0].sceneItemId,
+        original: hud[0].sceneItemEnabled,
+        modified: false,
+        uncertain: false,
+        pending: null,
+      };
+      if (this.lease.original) {
+        this.lease.pending = false;
+        try {
+          await obs.call('SetSceneItemEnabled', {
+            sceneName,
+            sceneItemId: this.lease.itemId,
+            sceneItemEnabled: false,
+          });
+        } catch (error) {
+          this.invalidate();
+          throw error;
+        }
+        items = objects((await obs.call('GetSceneItemList', { sceneName })).sceneItems);
+        if (
+          !items.some(
+            (item) =>
+              item.sceneItemId === this.lease?.itemId &&
+              item.sourceName === hudName &&
+              item.sceneItemEnabled === false,
+          )
+        ) {
+          this.invalidate();
+          throw new Error('比赛 HUD 隐藏未确认。');
+        }
+      }
+    }
+    if (visible && this.lease) {
+      if (
+        this.lease.sceneUuid !== scene.sceneUuid ||
+        this.lease.modified ||
+        this.lease.uncertain ||
+        !items.some(
+          (item) =>
+            item.sceneItemId === this.lease?.itemId &&
+            item.sourceName === hudName &&
+            item.sceneItemEnabled === false,
+        )
+      ) {
+        this.invalidate();
+        throw new Error('比赛 HUD 已变化或状态待确认，请先关闭底栏。');
+      }
+    }
+    await setBpCompactVisible(obs, baseUrl, visible);
+    const lease = this.lease;
+    if (!visible && lease) {
+      items = objects((await obs.call('GetSceneItemList', { sceneName })).sceneItems);
+      const current = items.find(
+        (item) => item.sceneItemId === lease.itemId && item.sourceName === hudName,
+      );
+      const input = objects((await obs.call('GetInputList')).inputs).find(
+        (item) => item.inputName === hudName,
+      );
+      const settings = input
+        ? ((await obs.call('GetInputSettings', { inputName: hudName })).inputSettings as
+            Record<string, unknown> | undefined)
+        : undefined;
+      if (
+        lease.sceneUuid !== scene.sceneUuid ||
+        lease.uncertain ||
+        !current ||
+        input?.inputUuid !== lease.inputUuid ||
+        input.inputKind !== 'browser_source' ||
+        settings?.url !== new URL('/program', baseUrl).toString()
+      ) {
+        this.lease = null;
+        throw new Error('比赛 HUD 状态待确认，请在 OBS 中核对。');
+      }
+      if (lease.original && !lease.modified && current.sceneItemEnabled === false) {
+        lease.pending = true;
+        try {
+          await obs.call('SetSceneItemEnabled', {
+            sceneName,
+            sceneItemId: lease.itemId,
+            sceneItemEnabled: true,
+          });
+        } catch (error) {
+          this.invalidate();
+          throw error;
+        }
+        const restored = objects(
+          (await obs.call('GetSceneItemList', { sceneName })).sceneItems,
+        ).find((item) => item.sceneItemId === lease.itemId && item.sourceName === hudName);
+        if (restored?.sceneItemEnabled !== true) {
+          this.invalidate();
+          throw new Error('比赛 HUD 恢复未确认，请在 OBS 中核对。');
+        }
+      }
+      this.lease = null;
+    }
+  }
+}

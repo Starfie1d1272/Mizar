@@ -1,4 +1,4 @@
-import { assertBpCompactOff, setBpCompactVisible } from './bp-overlay.js';
+import { assertBpCompactOff, BpOverlayOwner } from './bp-overlay.js';
 import { diagnosticValue } from '../support/session-journal.js';
 import { spawn } from 'node:child_process';
 import { dirname } from 'node:path';
@@ -67,6 +67,12 @@ const PROGRAM_EVIDENCE_MS = 750;
 
 export class ObsAdapter {
   private readonly outputs: ObsOutputController;
+  private readonly bpOwner = new BpOverlayOwner();
+  private bpClient: OBSWebSocket | undefined;
+  private bpDisconnect: (() => void) | undefined;
+  onBpDisconnect(callback: () => void): void {
+    this.bpDisconnect = callback;
+  }
   private configurationPending = false;
   private queue: Promise<unknown> = Promise.resolve();
   private findings: ObsFinding[] = [
@@ -117,6 +123,11 @@ export class ObsAdapter {
 
   configure(config: ObsConfig): Promise<void> {
     return this.configurationMutation(async () => {
+      this.bpOwner.invalidate();
+      const bpClient = this.bpClient;
+      this.bpClient = undefined;
+      await bpClient?.disconnect().catch(() => undefined);
+      this.bpDisconnect?.();
       await this.configStore.save(config);
       this.outputs.reset();
     });
@@ -151,6 +162,9 @@ export class ObsAdapter {
   async close(): Promise<void> {
     this.recoveryClosed = true;
     await this.outputs.close();
+    const bpClient = this.bpClient;
+    this.bpClient = undefined;
+    await bpClient?.disconnect().catch(() => undefined);
     if (this.recoveryTimer) clearTimeout(this.recoveryTimer);
     this.recoveryTimer = undefined;
     await this.recoveryTask;
@@ -375,9 +389,80 @@ export class ObsAdapter {
     });
   }
   setBpCompactVisible(visible: boolean): Promise<void> {
-    return this.serial(() =>
-      this.withObs((obs) => setBpCompactVisible(obs, this.browserBaseUrl, visible)),
-    );
+    return this.serial(async () => {
+      let client = this.bpClient;
+      if (!client) {
+        const config = await this.configStore.read();
+        client = new OBSWebSocket();
+        const current = client;
+        const invalidate = () => {
+          if (this.bpClient !== current) return;
+          this.bpOwner.invalidate();
+          this.bpClient = undefined;
+          this.bpDisconnect?.();
+        };
+        client.on('ConnectionClosed', invalidate);
+        client.on('CurrentSceneCollectionChanging', () => {
+          this.bpOwner.invalidate();
+          this.bpDisconnect?.();
+        });
+        client.on('SceneItemEnableStateChanged', (event) => {
+          if (this.bpOwner.observeItem(event.sceneName, event.sceneItemId, event.sceneItemEnabled))
+            this.bpDisconnect?.();
+        });
+        client.on('SceneItemRemoved', (event) => {
+          if (this.bpOwner.observeRemoval(event.sceneName, event.sceneItemId))
+            this.bpDisconnect?.();
+        });
+        client.on('SceneRemoved', (event) => {
+          if (this.bpOwner.observeSceneRemoval(event.sceneName)) this.bpDisconnect?.();
+        });
+        let connectTimer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            client.connect(`ws://${config.host}:${config.port}`, config.password),
+            new Promise<never>((_, reject) => {
+              connectTimer = setTimeout(() => reject(new Error('OBS 连接超时。')), TIMEOUT_MS);
+            }),
+          ]);
+          this.bpClient = client;
+        } catch (error) {
+          await client.disconnect().catch(() => undefined);
+          throw error;
+        } finally {
+          if (connectTimer) clearTimeout(connectTimer);
+        }
+      }
+      const rpc: ObsRpc = {
+        call: (type, data) =>
+          (
+            client.call as (
+              name: string,
+              args?: Record<string, unknown>,
+            ) => Promise<Record<string, unknown>>
+          )(type, data),
+      };
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          this.bpOwner.set(rpc, this.browserBaseUrl, visible),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error('OBS 操作超时，请检查连接。')), TIMEOUT_MS);
+          }),
+        ]);
+        if (!visible && this.bpClient === client) {
+          this.bpClient = undefined;
+          await client.disconnect().catch(() => undefined);
+        }
+      } catch (error) {
+        this.bpOwner.invalidate();
+        if (this.bpClient === client) this.bpClient = undefined;
+        await client.disconnect().catch(() => undefined);
+        throw error;
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    });
   }
   switchScene(id: ProgramSceneId, options?: ObsSceneSwitchOptions): Promise<void> {
     return this.serial(() => this.withObs((obs) => switchObsScene(obs, id, options)));
