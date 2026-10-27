@@ -12,6 +12,7 @@ const SURFACE_ROUTES = [
   ...new Set([
     ...PROGRAM_SCENES.map((scene) => scene.path),
     '/',
+    '/program/bp-compact',
     '/matches',
     '/picture',
     '/settings',

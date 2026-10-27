@@ -583,16 +583,20 @@ export function PlayerCard({
     >
       {avatar}
       {body}
-      <PlayerStatusEffects
-        key={`status:${presentationRevision}`}
-        anchor={physicalSide}
-        state={player.statusEffects}
-      />
-      <PlayerImpactEffects
-        anchor={physicalSide}
-        sourcePlayerId={player.sourcePlayerId}
-        surface="rail"
-      />
+      {!dead && (
+        <PlayerStatusEffects
+          key={`status:${presentationRevision}`}
+          anchor={physicalSide}
+          state={player.statusEffects}
+        />
+      )}
+      {!dead && (
+        <PlayerImpactEffects
+          anchor={physicalSide}
+          sourcePlayerId={player.sourcePlayerId}
+          surface="rail"
+        />
+      )}
       <CombatTransitionEffects feedback={combatFeedback} surface="rail" />
       {endcap}
     </article>

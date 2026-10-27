@@ -7,6 +7,7 @@ const AUDIO_KINDS = new Set([
   'wasapi_input_capture',
   'wasapi_process_output_capture',
 ]);
+const VIDEO_AUDIO_KINDS = new Set(['game_capture', 'window_capture']);
 const MANAGED = [
   { name: 'Mizar · Desktop Audio', kind: 'wasapi_output_capture' },
   { name: 'Mizar · Microphone', kind: 'wasapi_input_capture' },
@@ -16,7 +17,7 @@ const MANAGED = [
 export async function checkObsAudio(obs: ObsRpc): Promise<ObsFinding[]> {
   const inputs = (await obs.call('GetInputList')).inputs as Input[];
   const candidates = inputs.filter((input) => AUDIO_KINDS.has(input.inputKind));
-  for (const input of inputs.filter((item) => item.inputKind === 'game_capture')) {
+  for (const input of inputs.filter((item) => VIDEO_AUDIO_KINDS.has(item.inputKind))) {
     const settings = (await obs.call('GetInputSettings', { inputName: input.inputName }))
       .inputSettings as Record<string, unknown>;
     if (settings.capture_audio === true) candidates.push(input);
@@ -92,11 +93,11 @@ export async function setupObsAudio(obs: ObsRpc, baseUrl: string): Promise<void>
   if (collection.currentSceneCollectionName !== OBS_COLLECTION)
     throw new Error('请先修复并切换到 Mizar 场景集合。');
   const inputs = (await obs.call('GetInputList')).inputs as Input[];
-  for (const input of inputs.filter((item) => item.inputKind === 'game_capture')) {
+  for (const input of inputs.filter((item) => VIDEO_AUDIO_KINDS.has(item.inputKind))) {
     const settings = (await obs.call('GetInputSettings', { inputName: input.inputName }))
       .inputSettings as Record<string, unknown>;
     if (settings.capture_audio === true)
-      throw new Error('游戏捕获已开启音频，请在 OBS 中配置麦克风，以免重复采集游戏声音。');
+      throw new Error('游戏或窗口捕获已开启音频，请在 OBS 中配置麦克风，以免重复采集声音。');
   }
   if (
     inputs.some(
@@ -143,7 +144,7 @@ export async function ensureObsAudio(obs: ObsRpc, baseUrl: string): Promise<ObsF
       !MANAGED.some((managed) => managed.name === input.inputName),
   );
   let gameAudio = false;
-  for (const input of inputs.filter((item) => item.inputKind === 'game_capture')) {
+  for (const input of inputs.filter((item) => VIDEO_AUDIO_KINDS.has(item.inputKind))) {
     const settings = (await obs.call('GetInputSettings', { inputName: input.inputName }))
       .inputSettings as Record<string, unknown>;
     if (settings.capture_audio === true) gameAudio = true;

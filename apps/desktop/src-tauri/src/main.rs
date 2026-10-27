@@ -15,6 +15,8 @@ mod spectator_recovery_plan;
 mod spectator_recovery_vcfg;
 mod spectator_snapshot;
 mod cs2_video;
+mod default_resource;
+mod default_resource_vpk;
 mod demo_test;
 mod desktop_worker;
 mod geometry;

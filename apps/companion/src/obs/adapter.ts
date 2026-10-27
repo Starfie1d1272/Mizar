@@ -1,9 +1,11 @@
+import { assertBpCompactOff, BpOverlayOwner } from './bp-overlay.js';
 import { diagnosticValue } from '../support/session-journal.js';
 import { spawn } from 'node:child_process';
 import { dirname } from 'node:path';
 import { OBSWebSocket } from 'obs-websocket-js';
 import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
-import type { ObsOutputCommand, ObsOutputsStatus } from '@mizar/protocol/obs';
+import type { ObsAudioBindCommand, ObsOutputCommand, ObsOutputsStatus } from '@mizar/protocol/obs';
+import type { ObsAudioRouting } from './audio-routing.js';
 import { ObsOutputController, ObsOutputError } from './outputs.js';
 import { readObsProgramEvidence, type ObsProgramEvidence } from './program-evidence.js';
 import {
@@ -66,6 +68,12 @@ const PROGRAM_EVIDENCE_MS = 750;
 
 export class ObsAdapter {
   private readonly outputs: ObsOutputController;
+  private readonly bpOwner = new BpOverlayOwner();
+  private bpClient: OBSWebSocket | undefined;
+  private bpDisconnect: (() => void) | undefined;
+  onBpDisconnect(callback: () => void): void {
+    this.bpDisconnect = callback;
+  }
   private configurationPending = false;
   private queue: Promise<unknown> = Promise.resolve();
   private findings: ObsFinding[] = [
@@ -80,6 +88,7 @@ export class ObsAdapter {
     private readonly configStore: ObsConfigStore,
     private readonly browserBaseUrl: string,
     private readonly diagnostic: (stage: string, error: unknown) => void = () => undefined,
+    private readonly audioRouting?: ObsAudioRouting,
   ) {
     this.outputs = new ObsOutputController(configStore, (error, password) =>
       diagnostic('obs_output', obsErrorEvidence(error, password)),
@@ -116,7 +125,13 @@ export class ObsAdapter {
 
   configure(config: ObsConfig): Promise<void> {
     return this.configurationMutation(async () => {
+      this.bpOwner.invalidate();
+      const bpClient = this.bpClient;
+      this.bpClient = undefined;
+      await bpClient?.disconnect().catch(() => undefined);
+      this.bpDisconnect?.();
       await this.configStore.save(config);
+      this.audioRouting?.invalidateSelections();
       this.outputs.reset();
     });
   }
@@ -150,6 +165,9 @@ export class ObsAdapter {
   async close(): Promise<void> {
     this.recoveryClosed = true;
     await this.outputs.close();
+    const bpClient = this.bpClient;
+    this.bpClient = undefined;
+    await bpClient?.disconnect().catch(() => undefined);
     if (this.recoveryTimer) clearTimeout(this.recoveryTimer);
     this.recoveryTimer = undefined;
     await this.recoveryTask;
@@ -162,7 +180,7 @@ export class ObsAdapter {
   }
 
   private async withObs<T>(
-    operation: (obs: ObsRpc) => Promise<T>,
+    operation: (obs: ObsRpc, endpoint: string) => Promise<T>,
     timeoutMs = TIMEOUT_MS,
     diagnosticStage?: string,
   ): Promise<T> {
@@ -188,7 +206,7 @@ export class ObsAdapter {
               ) => Promise<Record<string, unknown>>
             )(type, data),
         };
-        return operation(rpc);
+        return operation(rpc, `ws://${config.host}:${config.port}`);
       })();
       return await Promise.race([
         task,
@@ -213,24 +231,39 @@ export class ObsAdapter {
     return this.statusPending;
   }
 
-  private async configurationFindings(obs: ObsRpc, visual?: ObsFinding[]): Promise<ObsFinding[]> {
+  private async bindingFindings(obs: ObsRpc, endpoint: string): Promise<ObsFinding[]> {
+    if (!(await this.audioRouting?.enabled())) return [];
+    return (await this.audioRouting!.invalidBindings(obs, endpoint)).map((role) => ({
+      code: `audio_binding:${role}`,
+      message: `${role} 音频来源已失效，请在音频分路中核对。`,
+    }));
+  }
+  private async configurationFindings(
+    obs: ObsRpc,
+    endpoint: string,
+    visual?: ObsFinding[],
+  ): Promise<ObsFinding[]> {
     const findings = visual ?? (await checkObsConfiguration(obs, this.browserBaseUrl));
     return findings.some((item) =>
       ['collection_missing', 'collection_inactive', 'scene_missing'].includes(item.code),
     )
       ? findings
-      : [...findings, ...(await checkObsAudio(obs))];
+      : [
+          ...findings,
+          ...(await checkObsAudio(obs)),
+          ...(await this.bindingFindings(obs, endpoint)),
+        ];
   }
 
   private async readStatus(): Promise<ObsStatus> {
     const config = await this.configStore.read();
     try {
-      const status = await this.withObs(async (obs) => {
+      const status = await this.withObs(async (obs, endpoint) => {
         const [scene, outputs, video, findings] = await Promise.all([
           obs.call('GetCurrentProgramScene'),
           this.outputs.read(),
           obs.call('GetVideoSettings'),
-          this.configurationFindings(obs).catch((error: unknown) => {
+          this.configurationFindings(obs, endpoint).catch((error: unknown) => {
             this.diagnostic('obs_configuration_check', obsErrorEvidence(error, config.password));
             return [
               {
@@ -336,13 +369,29 @@ export class ObsAdapter {
 
   check(): Promise<readonly ObsFinding[]> {
     return this.serial(async () => {
-      this.findings = await this.withObs((obs) => this.configurationFindings(obs), 12_000);
+      this.findings = await this.withObs(
+        (obs, endpoint) => this.configurationFindings(obs, endpoint),
+        12_000,
+      );
       return this.findings;
     });
   }
+  readAudioRouting() {
+    if (!this.audioRouting) throw new Error('audio_routing_unavailable');
+    return this.serial(() =>
+      this.withObs((obs, endpoint) => this.audioRouting!.read(obs, endpoint), 12000),
+    );
+  }
+  bindAudio(command: ObsAudioBindCommand) {
+    if (!this.audioRouting) throw new Error('audio_routing_unavailable');
+    return this.serial(() =>
+      this.withObs((obs, endpoint) => this.audioRouting!.bind(obs, command, endpoint), 12000),
+    );
+  }
   ensure(activeScene: () => ProgramSceneId = () => 'waiting'): Promise<readonly ObsFinding[]> {
     return this.configurationMutation(async () => {
-      this.findings = await this.withObs(async (obs) => {
+      this.findings = await this.withObs(async (obs, endpoint) => {
+        await assertBpCompactOff(obs);
         const visual = await ensureObsConfiguration(obs, this.browserBaseUrl, activeScene);
         if (
           visual.some((item) =>
@@ -355,7 +404,11 @@ export class ObsAdapter {
           )
         )
           return visual;
-        const audio = await ensureObsAudio(obs, this.browserBaseUrl);
+        let audio: ObsFinding[];
+        if (await this.audioRouting?.enabled()) {
+          audio = await checkObsAudio(obs);
+          audio.push(...(await this.bindingFindings(obs, endpoint)));
+        } else audio = await ensureObsAudio(obs, this.browserBaseUrl);
         return [...visual, ...audio];
       }, 30_000);
       return this.findings;
@@ -363,12 +416,89 @@ export class ObsAdapter {
   }
   repair(activeScene: () => ProgramSceneId): Promise<readonly ObsFinding[]> {
     return this.configurationMutation(async () => {
-      this.findings = await this.withObs(async (obs) => {
+      this.findings = await this.withObs(async (obs, endpoint) => {
+        await assertBpCompactOff(obs);
         const findings = await repairObsConfiguration(obs, this.browserBaseUrl);
         await switchObsScene(obs, activeScene());
-        return this.configurationFindings(obs, findings);
+        return this.configurationFindings(obs, endpoint, findings);
       }, 12_000);
       return this.findings;
+    });
+  }
+  setBpCompactVisible(visible: boolean): Promise<void> {
+    return this.serial(async () => {
+      let client = this.bpClient;
+      if (!client) {
+        const config = await this.configStore.read();
+        client = new OBSWebSocket();
+        const current = client;
+        const invalidate = () => {
+          if (this.bpClient !== current) return;
+          this.bpOwner.invalidate();
+          this.bpClient = undefined;
+          this.bpDisconnect?.();
+        };
+        client.on('ConnectionClosed', invalidate);
+        client.on('CurrentSceneCollectionChanging', () => {
+          this.bpOwner.invalidate();
+          this.bpDisconnect?.();
+        });
+        client.on('SceneItemEnableStateChanged', (event) => {
+          if (this.bpOwner.observeItem(event.sceneName, event.sceneItemId, event.sceneItemEnabled))
+            this.bpDisconnect?.();
+        });
+        client.on('SceneItemRemoved', (event) => {
+          if (this.bpOwner.observeRemoval(event.sceneName, event.sceneItemId))
+            this.bpDisconnect?.();
+        });
+        client.on('SceneRemoved', (event) => {
+          if (this.bpOwner.observeSceneRemoval(event.sceneName)) this.bpDisconnect?.();
+        });
+        let connectTimer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            client.connect(`ws://${config.host}:${config.port}`, config.password),
+            new Promise<never>((_, reject) => {
+              connectTimer = setTimeout(() => reject(new Error('OBS 连接超时。')), TIMEOUT_MS);
+            }),
+          ]);
+          this.bpClient = client;
+        } catch (error) {
+          await client.disconnect().catch(() => undefined);
+          throw error;
+        } finally {
+          if (connectTimer) clearTimeout(connectTimer);
+        }
+      }
+      const rpc: ObsRpc = {
+        call: (type, data) =>
+          (
+            client.call as (
+              name: string,
+              args?: Record<string, unknown>,
+            ) => Promise<Record<string, unknown>>
+          )(type, data),
+      };
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          this.bpOwner.set(rpc, this.browserBaseUrl, visible),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error('OBS 操作超时，请检查连接。')), TIMEOUT_MS);
+          }),
+        ]);
+        if (!visible && this.bpClient === client) {
+          this.bpClient = undefined;
+          await client.disconnect().catch(() => undefined);
+        }
+      } catch (error) {
+        this.bpOwner.invalidate();
+        if (this.bpClient === client) this.bpClient = undefined;
+        await client.disconnect().catch(() => undefined);
+        throw error;
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
     });
   }
   switchScene(id: ProgramSceneId, options?: ObsSceneSwitchOptions): Promise<void> {
@@ -402,9 +532,11 @@ export class ObsAdapter {
     });
   }
   setupAudio(): Promise<void> {
-    return this.configurationMutation(() =>
-      this.withObs((obs) => setupObsAudio(obs, this.browserBaseUrl), 12_000),
-    );
+    return this.configurationMutation(async () => {
+      if (await this.audioRouting?.enabled())
+        throw new Error('已启用音频分路，请在 OBS 中维护音频来源。');
+      await this.withObs((obs) => setupObsAudio(obs, this.browserBaseUrl), 12_000);
+    });
   }
   async launchTarget(): Promise<string> {
     const config = await this.configStore.read();
