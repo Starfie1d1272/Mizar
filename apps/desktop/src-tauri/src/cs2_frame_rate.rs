@@ -151,12 +151,17 @@ pub(crate) fn field(text: &str, target: &[&str]) -> Result<Option<Token>, String
 /// Locate scalar entries of one unambiguous section.
 /// Duplicate entries are returned to the caller rather than silently discarded.
 pub(crate) fn scalar_section(text: &str, target: &[&str]) -> Result<Vec<(Token, Token)>, String> {
+    Ok(scalar_section_with_end(text, target)?.0)
+}
+
+/// Return the byte offset of the section's closing brace for safe insertions.
+pub(crate) fn scalar_section_with_end(text: &str, target: &[&str]) -> Result<(Vec<(Token, Token)>, usize), String> {
     fn walk(
         tokens: &[Token],
         i: &mut usize,
         path: &mut Vec<String>,
         target: &[&str],
-        result: &mut Option<Vec<(Token, Token)>>,
+        result: &mut Option<(Vec<(Token, Token)>, usize)>,
         nested: bool,
     ) -> Result<(), String> {
         if path.len() > 32 {
@@ -173,7 +178,7 @@ pub(crate) fn scalar_section(text: &str, target: &[&str]) -> Result<Vec<(Token, 
                 if !nested {
                     return Err("启动配置结构无效。".into());
                 }
-                if selected && result.replace(entries).is_some() {
+                if selected && result.replace((entries, key.start)).is_some() {
                     return Err("启动配置包含重复配置段。".into());
                 }
                 *i += 1;
