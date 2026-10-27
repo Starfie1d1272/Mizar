@@ -13,4 +13,10 @@ it('does not treat a paused round 13 with a 12-round score as halftime', () => {
   const intermission = { ...p, map: { ...p.map, phase: 'intermission' as const, roundNumber: 12 } };
   expect(gameAudioTruth(intermission, 'halftime', true)).toBe('halftime');
   expect(gameAudioTruth(intermission, 'halftime', false)).toBe('unknown');
+  const early = {
+    ...p,
+    map: { ...p.map, roundNumber: 12, score: { ct: 6, t: 5 } },
+    clock: { phase: 'freezetime', endsInSeconds: 30 },
+  } as ProgramProjection;
+  expect(gameAudioTruth(early, 'halftime', true)).toBe('gameplay');
 });

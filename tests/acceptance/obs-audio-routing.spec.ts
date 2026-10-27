@@ -26,11 +26,11 @@ test('explicitly selects an OBS source and reports stale bindings', async ({ pag
   let bound = false;
   let policy = { mode: 'keep' } as { mode: string; db?: number };
   await page.route('**/local/v1/obs/game-audio-policy', (route) =>
-    route.fulfill({ json: { ready: true, policy, ownership: 'idle' } }),
+    route.fulfill({ json: { ready: true, policy, revision, ownership: 'idle' } }),
   );
   await page.route('**/operator/obs/game-audio-policy', (route) => {
-    policy = route.request().postDataJSON() as typeof policy;
-    return route.fulfill({ json: { ready: true, policy, ownership: 'idle' } });
+    policy = (route.request().postDataJSON() as { policy: typeof policy }).policy;
+    return route.fulfill({ json: { ready: true, policy, revision, ownership: 'idle' } });
   });
   await page.route('**/local/v1/obs/audio-routing', (route) =>
     route.fulfill({

@@ -1,7 +1,8 @@
 import { createObsCaptureDiagnosticReader } from './capture-diagnostic.js';
 import {
   obsAudioBindCommandSchema,
-  obsGameAudioPolicySchema,
+  obsGameAudioPolicyCommandSchema,
+  obsGameAudioReleaseSchema,
   obsOutputCommandSchema,
 } from '@mizar/protocol/obs';
 import type { GameAudioController } from './audio-policy-controller.js';
@@ -59,11 +60,11 @@ export function registerObsRoutes(
   app.post('/operator/obs/game-audio-policy', { bodyLimit: 2048 }, async (request, reply) => {
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
-    const parsed = obsGameAudioPolicySchema.safeParse(request.body);
+    const parsed = obsGameAudioPolicyCommandSchema.safeParse(request.body);
     if (!parsed.success || !options.gameAudio)
       return reply.code(400).send({ error: 'audio_policy_invalid' });
     try {
-      await options.gameAudio.configure(parsed.data);
+      await options.gameAudio.configure(parsed.data.policy, parsed.data.revision);
       return options.gameAudio.status();
     } catch {
       return reply
@@ -75,8 +76,9 @@ export function registerObsRoutes(
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
     try {
+      const parsed = obsGameAudioReleaseSchema.parse(request.body);
       if (!options.gameAudio) throw new Error('unavailable');
-      await options.gameAudio.releaseHeld();
+      await options.gameAudio.releaseHeld(parsed.revision);
       return options.gameAudio.status();
     } catch {
       return reply

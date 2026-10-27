@@ -25,6 +25,10 @@ export const obsGameAudioPolicySchema = z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('mute') }).strict(),
   z.object({ mode: z.literal('attenuate'), db: z.number().finite().positive().max(60) }).strict(),
 ]);
+export const obsGameAudioPolicyCommandSchema = z
+  .object({ revision: z.string().uuid(), policy: obsGameAudioPolicySchema })
+  .strict();
+export const obsGameAudioReleaseSchema = z.object({ revision: z.string().uuid() }).strict();
 export interface ObsAudioRoutingStatus {
   revision: string;
   endpoint: string;

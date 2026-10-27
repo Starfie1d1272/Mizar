@@ -17,7 +17,12 @@ export function gameAudioTruth(
     return 'unknown';
   const half =
     (isRegulationHalftime(p) && (p.map.phase === 'intermission' || p.map.roundNumber === 12)) ||
-    (active === 'halftime' && p.map.roundNumber === 12 && p.clock?.phase === 'freezetime');
+    (active === 'halftime' &&
+      p.map.roundNumber === 12 &&
+      p.map.score.ct !== null &&
+      p.map.score.t !== null &&
+      p.map.score.ct + p.map.score.t === 12 &&
+      p.clock?.phase === 'freezetime');
   if (
     half &&
     !(

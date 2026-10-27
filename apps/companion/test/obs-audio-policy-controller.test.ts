@@ -34,8 +34,15 @@ it('cannot release a held lease during halftime and reapply attenuation', async 
       }),
     );
     await controller.load();
+    const revision = controller.status().revision;
+    await controller.configure({ mode: 'keep' }, revision);
+    await expect(controller.configure({ mode: 'mute' }, revision)).rejects.toThrow(
+      'audio_policy_stale',
+    );
     controller.tick('halftime');
-    await expect(controller.releaseHeld()).rejects.toThrow('audio_policy_wait_for_gameplay');
+    await expect(controller.releaseHeld(controller.status().revision)).rejects.toThrow(
+      'audio_policy_wait_for_gameplay',
+    );
     expect(JSON.parse(await readFile(leasePath, 'utf8')).phase).toBe('held');
   } finally {
     controller.close();

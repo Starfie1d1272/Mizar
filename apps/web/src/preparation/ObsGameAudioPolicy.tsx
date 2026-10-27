@@ -1,9 +1,15 @@
 import { useEffect, useState } from 'react';
 import { Button } from '../ui';
 type Policy = { mode: 'keep' | 'mute' } | { mode: 'attenuate'; db: number };
-type Status = { ready: boolean; policy: Policy; ownership: 'idle' | 'intent' | 'owned' | 'held' };
+type Status = {
+  ready: boolean;
+  revision: string;
+  policy: Policy;
+  ownership: 'idle' | 'intent' | 'owned' | 'held';
+};
 export function ObsGameAudioPolicy() {
   const [status, setStatus] = useState<Status | null>(null);
+  const [draftRevision, setDraftRevision] = useState('');
   const [mode, setMode] = useState<Policy['mode']>('keep');
   const [db, setDb] = useState(6);
   const [message, setMessage] = useState('');
@@ -13,6 +19,7 @@ export function ObsGameAudioPolicy() {
     if (!response.ok) throw new Error('无法读取中场音频设置。');
     const next = (await response.json()) as Status;
     setStatus(next);
+    setDraftRevision(next.revision);
     if (next.ready) {
       setMode(next.policy.mode);
       if (next.policy.mode === 'attenuate') setDb(next.policy.db);
@@ -79,10 +86,10 @@ export function ObsGameAudioPolicy() {
       <Button
         disabled={busy || !status?.ready || (mode === 'attenuate' && !(db > 0 && db <= 60))}
         onClick={() =>
-          void send(
-            '/operator/obs/game-audio-policy',
-            mode === 'attenuate' ? { mode, db } : { mode },
-          )
+          void send('/operator/obs/game-audio-policy', {
+            revision: draftRevision,
+            policy: mode === 'attenuate' ? { mode, db } : { mode },
+          })
         }
       >
         保存中场策略
@@ -90,7 +97,12 @@ export function ObsGameAudioPolicy() {
       {status?.ownership === 'held' && (
         <p role="status">
           OBS 音频控制已让权。请在比赛恢复后先在 OBS 手动恢复游戏音量与静音状态，然后{' '}
-          <Button disabled={busy} onClick={() => void send('/operator/obs/game-audio-release', {})}>
+          <Button
+            disabled={busy}
+            onClick={() =>
+              void send('/operator/obs/game-audio-release', { revision: status!.revision })
+            }
+          >
             恢复自动控制
           </Button>
           。

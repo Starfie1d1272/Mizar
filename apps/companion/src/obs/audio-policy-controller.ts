@@ -9,6 +9,7 @@ import { GameAudioConnection } from './audio-policy-connection.js';
 
 export class GameAudioController {
   private policy: AudioPolicy = { mode: 'keep' };
+  private revision = randomUUID();
   private readonly owner: GameAudioPolicy;
   private readonly connection: GameAudioConnection;
   private desired: 'halftime' | 'gameplay' | 'unknown' = 'unknown';
@@ -43,20 +44,28 @@ export class GameAudioController {
     this.ready = true;
   }
   status() {
-    return { policy: this.policy, ownership: this.owner.status, ready: this.ready };
+    return {
+      policy: this.policy,
+      ownership: this.owner.status,
+      ready: this.ready,
+      revision: this.revision,
+    };
   }
-  async releaseHeld() {
+  async releaseHeld(revision: string) {
+    if (revision !== this.revision) throw new Error('audio_policy_stale');
     if (this.busy) throw new Error('audio_policy_busy');
     if (this.desired !== 'gameplay') throw new Error('audio_policy_wait_for_gameplay');
     this.busy = true;
     try {
       this.invalidate();
       await this.owner.releaseHeld();
+      this.revision = randomUUID();
     } finally {
       this.busy = false;
     }
   }
-  async configure(policy: AudioPolicy) {
+  async configure(policy: AudioPolicy, revision: string) {
+    if (revision !== this.revision) throw new Error('audio_policy_stale');
     if (!this.ready) throw new Error('audio_policy_not_ready');
     if (this.busy) throw new Error('audio_policy_busy');
     const value = obsGameAudioPolicySchema.parse(policy);
@@ -72,17 +81,19 @@ export class GameAudioController {
         await rm(temp, { force: true });
       }
       this.policy = value;
+      this.revision = randomUUID();
     } finally {
       this.busy = false;
     }
   }
   tick(desired: 'halftime' | 'gameplay' | 'unknown') {
+    const changed = this.desired !== desired;
     if (this.desired !== desired) {
       this.desired = desired;
       this.generation++;
     }
     if (desired === 'unknown') {
-      this.connection.invalidate();
+      if (changed) this.connection.invalidate();
       return;
     }
     if (!this.ready || this.closed || this.busy || this.policy.mode === 'keep') return;
