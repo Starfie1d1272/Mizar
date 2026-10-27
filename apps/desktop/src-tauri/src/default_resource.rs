@@ -160,9 +160,15 @@ fn verify_handle_path(file: &File, path: &Path) -> io::Result<()> {
         value
             .replace('/', "\\")
             .trim_start_matches("\\\\?\\")
+            .trim_end_matches('\\')
             .to_lowercase()
     };
     if normalize(&actual) != normalize(expected) {
+        #[cfg(test)]
+        return Err(io::Error::other(format!(
+            "resource handle mismatch: {actual:?} vs {expected:?}"
+        )));
+        #[cfg(not(test))]
         return Err(io::Error::other("resource handle escaped fixed path"));
     }
     Ok(())
@@ -221,7 +227,7 @@ fn hold_directories(path: &Path) -> Result<Vec<File>, Error> {
         if !plain(&file.metadata()?) || !file.metadata()?.is_dir() {
             return Err(Error::UnsafePath);
         }
-        verify_handle_path(&file, dir).map_err(|_| Error::UnsafePath)?;
+        verify_handle_path(&file, dir).map_err(Error::Io)?;
         held.push(file);
     }
     Ok(held)
@@ -261,9 +267,9 @@ impl ChangeWatch {
     fn verify(&self) -> Result<(), Error> {
         #[link(name = "kernel32")]
         extern "system" {
-            fn WaitForSingleObject(handle: *mut std::ffi::c_void, millis: u32) -> u32;
+            fn WaitForSingleObject(handle: isize, millis: u32) -> u32;
         }
-        match unsafe { WaitForSingleObject(self.0, 0) } {
+        match unsafe { WaitForSingleObject(self.0 as isize, 0) } {
             0 => Err(Error::Changed),
             0x102 => Ok(()),
             _ => Err(Error::Io(io::Error::last_os_error())),
