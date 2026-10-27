@@ -20,6 +20,11 @@ export const obsAudioBindCommandSchema = z
 export type ObsAudioRole = z.infer<typeof obsAudioRoleSchema>;
 export type ObsAudioBinding = z.infer<typeof obsAudioBindingSchema>;
 export type ObsAudioBindCommand = z.infer<typeof obsAudioBindCommandSchema>;
+export const obsGameAudioPolicySchema = z.discriminatedUnion('mode', [
+  z.object({ mode: z.literal('keep') }).strict(),
+  z.object({ mode: z.literal('mute') }).strict(),
+  z.object({ mode: z.literal('attenuate'), db: z.number().finite().positive().max(60) }).strict(),
+]);
 export interface ObsAudioRoutingStatus {
   revision: string;
   endpoint: string;

@@ -93,6 +93,14 @@ export class GameAudioPolicy {
   get status() {
     return this.lease?.phase ?? 'idle';
   }
+  async releaseHeld() {
+    await this.load();
+    if (this.lease?.phase !== 'held') throw new Error('audio_policy_not_held');
+    await this.store.write(null);
+    this.lease = null;
+    this.watched = null;
+    this.pending = null;
+  }
   /** Invoke for every volume/mute event, including changes away and back. */
   observe(uuid: string, field: Field, value: number | boolean) {
     if (this.watched?.uuid !== uuid || this.watched.field !== field) return;

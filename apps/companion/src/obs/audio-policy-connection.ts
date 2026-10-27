@@ -70,6 +70,9 @@ export class GameAudioConnection {
         client.on('InputRemoved', (event) => {
           if (current() && event.inputUuid === binding.inputUuid) this.invalidate();
         });
+        client.on('InputSettingsChanged', (event) => {
+          if (current() && event.inputUuid === binding.inputUuid) this.invalidate();
+        });
         client.on('InputVolumeChanged', (event) => {
           if (current()) this.owner.observe(event.inputUuid, 'volume', event.inputVolumeMul);
         });

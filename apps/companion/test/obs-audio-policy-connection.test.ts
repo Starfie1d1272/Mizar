@@ -13,6 +13,7 @@ const binding = {
 };
 class Fake extends EventEmitter {
   volume = 0.5;
+  muted = false;
   collection = 'A';
   writes = 0;
   async connect() {
@@ -37,7 +38,13 @@ class Fake extends EventEmitter {
     if (name === 'GetInputList')
       return { inputs: [{ inputUuid: 'game', inputKind: binding.inputKind }] };
     if (name === 'GetInputVolume') return { inputVolumeMul: this.volume };
-    if (name === 'GetInputMute') return { inputMuted: false };
+    if (name === 'GetInputMute') return { inputMuted: this.muted };
+    if (name === 'SetInputMute') {
+      this.writes++;
+      this.muted = Boolean(data?.inputMuted);
+      this.emit('InputMuteStateChanged', { inputUuid: 'game', inputMuted: this.muted });
+      return {};
+    }
     if (name === 'SetInputVolume') {
       this.writes++;
       this.volume = Number(data?.inputVolumeMul);
@@ -88,4 +95,27 @@ it('retires the lease on disconnect or collection change', async () => {
     expect(obs.writes).toBe(1);
     connection.close();
   }
+});
+
+it('does not write a missing or wrong-collection game source', async () => {
+  const { connection, obs } = setup();
+  obs.collection = 'other';
+  await expect(
+    connection.run(binding, 'r', 'halftime', { mode: 'attenuate', db: 6 }, () => true),
+  ).rejects.toThrow('audio_binding_changed');
+  expect(obs.writes).toBe(0);
+  connection.close();
+});
+
+it('honors manual mute changes away and back', async () => {
+  const { connection, owner, obs } = setup();
+  await connection.run(binding, 'r', 'halftime', { mode: 'mute' }, () => true);
+  obs.muted = false;
+  obs.emit('InputMuteStateChanged', { inputUuid: 'game', inputMuted: false });
+  obs.muted = true;
+  obs.emit('InputMuteStateChanged', { inputUuid: 'game', inputMuted: true });
+  await connection.run(binding, 'r', 'gameplay', { mode: 'mute' }, () => true);
+  expect(owner.status).toBe('held');
+  expect(obs.writes).toBe(1);
+  connection.close();
 });
