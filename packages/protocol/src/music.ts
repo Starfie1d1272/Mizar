@@ -77,6 +77,9 @@ export interface MusicStatus {
   message: string | null;
   bgm: { group: MusicGroup; track: string; volume: number } | null;
   stinger: string | null;
+  /** Last OBS media observation; unknown when the connection cannot be verified. */
+  playback: 'playing' | 'paused' | 'stopped' | 'unknown';
+  intent: 'automatic' | 'manual' | 'held';
   preview?: MusicPreviewStatus;
 }
 

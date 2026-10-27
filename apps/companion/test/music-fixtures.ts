@@ -159,6 +159,14 @@ export class MediaObs implements ObsRpc {
         throw new Error('OBS 604: media input must be playing or paused');
       input.cursor = Number(data.mediaCursor);
     } else if (type === 'TriggerMediaInputAction') {
+      if (data.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PAUSE') {
+        input.state = 'OBS_MEDIA_STATE_PAUSED';
+        return {};
+      }
+      if (data.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY') {
+        input.state = 'OBS_MEDIA_STATE_PLAYING';
+        return {};
+      }
       input.state =
         data.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART'
           ? 'OBS_MEDIA_STATE_PLAYING'

@@ -1,7 +1,7 @@
 import './music.css';
 import { useState } from 'react';
 import type { MusicConfig, MusicGroup, MusicStatus } from '@mizar/protocol/music';
-import { Button, Field } from '../ui';
+import { Button, Field, Select } from '../ui';
 import { useLocalRead, command } from '../preparation/client';
 
 export interface MusicView {
@@ -30,6 +30,7 @@ export function MusicControls({
   const view = useLocalRead<MusicView>('/local/v1/music', 1000);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [selection, setSelection] = useState('');
   const send = async (body: Record<string, unknown>) => {
     setBusy(true);
     setError('');
@@ -58,6 +59,61 @@ export function MusicControls({
             : '音乐 · 静音'}
         {status.stinger ? ` · 音效 ${status.stinger}` : ''}
       </span>
+      {!compact ? (
+        <>
+          <Select
+            label="正式播放曲目"
+            value={selection}
+            disabled={busy || volumeDisabled}
+            onChange={(e) => setSelection(e.target.value)}
+          >
+            <option value="">选择已保存曲目</option>
+            {Object.entries(view.config.groups).flatMap(([group, spec]) =>
+              group !== 'opening' && spec.enabled
+                ? spec.tracks.map((track) => (
+                    <option key={`${group}:${track.id}`} value={`${group}:${track.id}`}>
+                      {MUSIC_LABELS[group as MusicGroup]} · {track.name}
+                    </option>
+                  ))
+                : [],
+            )}
+          </Select>
+          <Button
+            disabled={busy || volumeDisabled || !selection}
+            onClick={() => {
+              const [group, trackId] = selection.split(':');
+              void send({ action: 'play', group, trackId });
+            }}
+          >
+            播放所选
+          </Button>
+          <Button
+            disabled={
+              busy || status.intent !== 'manual' || !['playing', 'paused'].includes(status.playback)
+            }
+            onClick={() =>
+              void send({ action: status.playback === 'paused' ? 'continue' : 'pause' })
+            }
+          >
+            {status.playback === 'paused' ? '继续播放' : '暂停'}
+          </Button>
+          <span role="status">
+            {status.intent === 'manual'
+              ? '人工播放'
+              : status.intent === 'held'
+                ? '手动停止'
+                : '自动编排'}{' '}
+            · OBS：
+            {status.playback === 'playing'
+              ? '播放中'
+              : status.playback === 'paused'
+                ? '已暂停'
+                : status.playback === 'stopped'
+                  ? '已停止'
+                  : '状态未知'}
+          </span>
+        </>
+      ) : null}
       {status.bgm ? (
         <Field
           label={compact ? '' : '当前播放音量'}
@@ -82,13 +138,17 @@ export function MusicControls({
       </Button>
       <Button
         disabled={
-          busy || status.held || !status.bgm || !['waiting', 'technical'].includes(status.bgm.group)
+          busy ||
+          status.held ||
+          status.intent === 'manual' ||
+          !status.bgm ||
+          !['waiting', 'technical'].includes(status.bgm.group)
         }
         onClick={() => void send({ action: 'next' })}
       >
         下一首
       </Button>
-      {status.held ? (
+      {status.held || status.intent === 'manual' ? (
         <Button
           aria-label="恢复自动音乐"
           disabled={busy}

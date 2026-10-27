@@ -1171,3 +1171,105 @@ it('does not start a formal cue while OBS has not confirmed the audition stopped
   expect(stinger(r).state).toBe('OBS_MEDIA_STATE_STOPPED');
   expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_PLAYING');
 });
+
+it('reports observed OBS playback separately and marks it unknown when disconnected', async () => {
+  const r = await rig();
+  await r.step();
+  await r.step();
+  expect(r.director.get().playback).toBe('playing');
+  r.obs.bgm().state = 'OBS_MEDIA_STATE_PAUSED';
+  await r.step();
+  expect(r.director.get().playback).toBe('paused');
+  expect(r.director.get().held).toBe(true);
+  r.obs.disconnected = true;
+  await r.step();
+  expect(r.director.get().playback).toBe('unknown');
+  await r.director.close();
+});
+
+it('plays a selected formal track, pauses and continues through OBS, and stops for live play', async () => {
+  const r = await rig();
+  await r.step();
+  await r.director.manualPlay('waiting', r.tracks[1]!.id);
+  expect(r.director.get().intent).toBe('manual');
+  expect(r.director.get().bgm?.track).toBe(r.tracks[1]!.name);
+  expect(r.director.get().playback).toBe('playing');
+  await r.director.manualPause(true);
+  await r.step();
+  expect(r.director.get().playback).toBe('paused');
+  expect(r.director.get().intent).toBe('manual');
+  await r.director.manualPause(false);
+  expect(r.director.get().playback).toBe('playing');
+  await r.director.manualPause(true);
+  r.truth.program.map.phase = 'live';
+  await r.step();
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
+  expect(r.director.get().intent).toBe('automatic');
+  await r.director.close();
+});
+
+it('does not queue formal playback when OBS is disconnected', async () => {
+  const r = await rig();
+  await r.step();
+  r.obs.disconnected = true;
+  await expect(r.director.manualPlay('waiting', r.tracks[1]!.id)).rejects.toThrow();
+  expect(r.director.get().intent).toBe('held');
+  r.obs.disconnected = false;
+  await r.step();
+  expect(r.director.get().intent).toBe('held');
+  await r.director.close();
+});
+
+it('stops an audition before starting selected formal music', async () => {
+  const r = await auditionRig();
+  await r.director.previewRequest(audition(r));
+  await r.step(100);
+  expect(r.director.get().preview?.phase).toBe('playing');
+  r.truth.production = true;
+  await r.director.manualPlay('waiting', r.tracks[1]!.id);
+  await r.step();
+  expect(stinger(r).state).toBe('OBS_MEDIA_STATE_STOPPED');
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_PLAYING');
+  expect(r.director.get().bgm?.track).toBe(r.tracks[1]!.name);
+  await r.director.close();
+});
+
+it('lets a newer stop supersede a pending formal pause', async () => {
+  const r = await rig();
+  await r.step();
+  await r.director.manualPlay('waiting', r.tracks[1]!.id);
+  let release!: () => void;
+  let reached!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const pending = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  r.obs.intercept = async (type) => {
+    if (type === 'GetInputSettings') {
+      reached();
+      await blocked;
+    }
+  };
+  const pausing = r.director.manualPause(true);
+  await pending;
+  const stopping = r.director.command('stop');
+  release();
+  await Promise.allSettled([pausing, stopping]);
+  r.obs.intercept = undefined;
+  await r.step();
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
+  expect(r.director.get().intent).toBe('held');
+  await r.director.close();
+});
+
+it('keeps formal playback beyond the audition lease without browser renewals', async () => {
+  const r = await rig();
+  await r.step();
+  await r.director.manualPlay('waiting', r.tracks[1]!.id);
+  await r.step(20_000);
+  expect(r.director.get().intent).toBe('manual');
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_PLAYING');
+  await r.director.close();
+});

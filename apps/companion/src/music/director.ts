@@ -18,6 +18,13 @@ import { looping, type MusicStore, type Playback } from './store.js';
 import { MusicPreview } from './preview.js';
 import { ownedMusicInput, type MusicLayer } from './obs-provider.js';
 
+function observedPlayback(state: unknown): MusicStatus['playback'] {
+  if (state === 'OBS_MEDIA_STATE_PLAYING') return 'playing';
+  if (state === 'OBS_MEDIA_STATE_PAUSED') return 'paused';
+  if (state === 'OBS_MEDIA_STATE_STOPPED' || state === 'OBS_MEDIA_STATE_ENDED') return 'stopped';
+  return 'unknown';
+}
+
 interface Provider {
   session<T>(run: (rpc: ObsRpc, epoch: number) => Promise<T>): Promise<T>;
   close(): Promise<void>;
@@ -56,10 +63,14 @@ export class MusicDirector {
     message: null,
     bgm: null,
     stinger: null,
+    playback: 'unknown',
+    intent: 'automatic',
   };
   private epoch = 0;
   private lastPoll = -Infinity;
   private nextRequested = false;
+  private manual: { cue: MusicCue; paused: boolean; epoch: number | null } | null = null;
+  private unknownControl = false;
   private resumeLayers = new Set<MusicLayer>();
   constructor(
     readonly store: MusicStore,
@@ -77,6 +88,7 @@ export class MusicDirector {
     return {
       ...this.status,
       held: this.isHeld(),
+      intent: this.isHeld() ? 'held' : this.manual ? 'manual' : 'automatic',
       ...(this.preview.status ? { preview: this.preview.status } : {}),
     };
   }
@@ -99,6 +111,10 @@ export class MusicDirector {
   async command(action: 'stop' | 'resume' | 'next') {
     if (this.closed) return;
     this.preview.cancel('operator_command');
+    if (action !== 'next') {
+      this.manual = null;
+      this.unknownControl = false;
+    }
     const revision = ++this.commandRevision;
     const current = () => !this.closed && revision === this.commandRevision;
     this.invalidate(); // Cancel playback work; command validity is independent of telemetry changes.
@@ -142,6 +158,99 @@ export class MusicDirector {
     if (!current()) return;
     if (persistenceError)
       throw new Error('music_hold_persistence_failed', { cause: persistenceError });
+  }
+  /** Formal playback has no browser lease. Newer commands invalidate pending work. */
+  async manualPlay(group: MusicGroup, trackId: string) {
+    if (this.closed || !this.store.ready || this.store.failure)
+      throw new Error('music_unavailable');
+    const track = this.store.state.config.groups[group].tracks.find((item) => item.id === trackId);
+    if (!track || !this.store.state.config.groups[group].enabled || group === 'opening')
+      throw new Error('music_track_invalid');
+    if (!musicCue(this.truth(), this.store.state.pause?.id ?? null))
+      throw new Error('music_program_unsafe');
+    const revision = ++this.commandRevision;
+    this.unknownControl = false;
+    this.invalidate();
+    this.preview.cancel('formal_cue');
+    this.pendingOpening = null;
+    this.fades = {};
+    this.heldOverride = true;
+    await this.store.hold(false);
+    if (revision !== this.commandRevision || this.closed) return;
+    this.heldOverride = false;
+    this.manual = {
+      cue: { group, key: `manual:${randomUUID()}`, track },
+      paused: false,
+      epoch: null,
+    };
+    while (this.inFlight && revision === this.commandRevision && !this.closed)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    if (revision !== this.commandRevision || this.closed) return;
+    this.lastPoll = -Infinity;
+    await this.tick();
+    if (this.status.connection !== 'connected' || !this.manual)
+      throw new Error('music_play_unconfirmed');
+  }
+  async manualPause(paused: boolean) {
+    const manual = this.manual;
+    if (!manual || this.closed) throw new Error('music_manual_inactive');
+    const revision = ++this.commandRevision;
+    this.invalidate();
+    while (this.inFlight && revision === this.commandRevision && !this.closed)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    const current = () =>
+      !this.closed && revision === this.commandRevision && this.manual === manual;
+    if (!current()) return;
+    if (!musicCue(this.truth(), this.store.state.pause?.id ?? null)) {
+      this.manual = null;
+      await this.tick();
+      throw new Error('music_program_unsafe');
+    }
+    this.inFlight = true;
+    try {
+      await this.provider.session(async (obs, epoch) => {
+        if (!current() || manual.epoch !== epoch) throw new Error('music_cancelled');
+        const name = await ownedMusicInput(obs, this.store, 'bgm', false, current, false);
+        const uuid = this.store.state.sources.bgm;
+        if (!name || !uuid || !current()) throw new Error('music_source_missing');
+        const settings = await obs.call('GetInputSettings', { inputUuid: uuid });
+        const path = await this.store.trackPath(manual.cue.track!.id);
+        if (!current() || (settings.inputSettings as Record<string, unknown>)?.local_file !== path)
+          throw new Error('music_source_changed');
+        const before = await obs.call('GetMediaInputStatus', { inputUuid: uuid });
+        if (
+          !current() ||
+          before.mediaState !== (paused ? 'OBS_MEDIA_STATE_PLAYING' : 'OBS_MEDIA_STATE_PAUSED')
+        )
+          throw new Error('music_state_changed');
+        if (!musicCue(this.truth(), this.store.state.pause?.id ?? null))
+          throw new Error('music_program_unsafe');
+        manual.paused = paused;
+        await obs.call('TriggerMediaInputAction', {
+          inputUuid: uuid,
+          mediaAction: paused
+            ? 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PAUSE'
+            : 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY',
+        });
+        if (!current()) return;
+        const after = await obs.call('GetMediaInputStatus', { inputUuid: uuid });
+        if (!current()) return;
+        this.status.playback = observedPlayback(after.mediaState);
+        if (after.mediaState !== (paused ? 'OBS_MEDIA_STATE_PAUSED' : 'OBS_MEDIA_STATE_PLAYING'))
+          throw new Error('music_state_unconfirmed');
+      });
+    } catch (error) {
+      if (current()) {
+        this.manual = null;
+        this.unknownControl = true;
+        this.heldOverride = true;
+        this.status.playback = 'unknown';
+        await this.store.hold(true).catch(() => undefined);
+      }
+      throw error;
+    } finally {
+      this.inFlight = false;
+    }
   }
   private openingScope() {
     const p = this.truth().program;
@@ -189,6 +298,7 @@ export class MusicDirector {
     if (this.store.failure && this.preview.busy) this.preview.cancel('storage_unavailable');
     if (this.store.failure && !this.preview.busy) {
       this.status.connection = 'unavailable';
+      this.status.playback = 'unknown';
       this.status.message = '本机音乐配置无法读取，音乐已停用。请保留原文件并检查本机配置。';
       return;
     }
@@ -271,6 +381,8 @@ export class MusicDirector {
           cue.group === 'mapVictory'
             ? { group: 'waiting', key: `waiting:${truth.program.match!.matchId}` }
             : null;
+      const manualUnsafe = Boolean(this.manual && !cue);
+      if (this.manual && cue) cue = this.manual.cue;
       if (this.isHeld()) cue = null;
       const opening = this.pendingOpening;
       this.pendingOpening = null;
@@ -288,6 +400,13 @@ export class MusicDirector {
       this.config = signature;
       await this.provider.session(async (obs, epoch) => {
         const reconnect = this.epoch !== epoch;
+        if (this.manual && this.manual.epoch !== null && this.manual.epoch !== epoch) {
+          this.manual = null;
+          this.unknownControl = true;
+          this.heldOverride = true;
+          cue = null;
+        }
+        if (this.manual) this.manual.epoch = epoch;
         this.epoch = epoch;
         this.status.connection = 'connected';
         this.status.message = null;
@@ -308,10 +427,22 @@ export class MusicDirector {
           (uuid) => this.expectedStops.set('stinger', uuid),
           () => this.holdForObsControl(),
         );
-        if (!valid()) return;
+        if (!valid() || this.preview.busy) return;
+        if (this.unknownControl && musicCue(this.truth(), this.store.state.pause?.id ?? null)) {
+          const name = await ownedMusicInput(obs, this.store, 'bgm', false, valid, false);
+          if (name && valid()) {
+            const media = await obs.call('GetMediaInputStatus', {
+              inputUuid: this.store.state.sources.bgm,
+            });
+            this.status.playback = observedPlayback(media.mediaState);
+          }
+          this.status.message = '音乐控制未确认，请在 OBS 核对后停止音乐或恢复自动。';
+          return;
+        }
         // Observe both existing layers before changing a cue or attributing a stop to the system.
         if (await this.observeManualControls(obs, valid, previewOwned)) return;
         await this.layer(obs, 'bgm', cue, valid, configChanged, reconnect);
+        if (manualUnsafe && valid()) this.manual = null;
         if (
           opening &&
           opening.scope === this.openingScope() &&
@@ -360,6 +491,12 @@ export class MusicDirector {
         this.preview.unavailable();
       if (valid()) {
         this.status.connection = 'unavailable';
+        if (this.manual) {
+          this.manual = null;
+          this.unknownControl = true;
+          this.heldOverride = true;
+        }
+        this.status.playback = 'unknown';
         this.status.message =
           error instanceof Error && error.message === 'music_cancelled'
             ? null
@@ -387,7 +524,8 @@ export class MusicDirector {
       (saved ? this.store.state.config.groups[saved.group].volume : null);
     return (
       muted === true ||
-      state === 'OBS_MEDIA_STATE_PAUSED' ||
+      Boolean(layer === 'bgm' && this.manual?.paused && state === 'OBS_MEDIA_STATE_PLAYING') ||
+      (state === 'OBS_MEDIA_STATE_PAUSED' && !(layer === 'bgm' && this.manual?.paused)) ||
       Boolean(
         saved &&
         !saved.finished &&
@@ -400,6 +538,7 @@ export class MusicDirector {
   }
   private async holdForObsControl() {
     this.commandRevision++;
+    this.manual = null;
     this.preview.cancel('manual_control');
     this.heldOverride = true;
     this.pendingOpening = null;
@@ -427,6 +566,7 @@ export class MusicDirector {
         call('GetInputVolume'),
       ]);
       if (!valid()) throw new Error('music_cancelled');
+      if (layer === 'bgm') this.status.playback = observedPlayback(media.mediaState);
       if (
         this.manualControlObserved(layer, media.mediaState, mute.inputMuted, volume.inputVolumeMul)
       ) {
@@ -505,6 +645,7 @@ export class MusicDirector {
       mute.inputMuted = false;
     }
     const state = media.mediaState;
+    if (layer === 'bgm') this.status.playback = observedPlayback(state);
     const active =
       state === 'OBS_MEDIA_STATE_PLAYING' ||
       state === 'OBS_MEDIA_STATE_OPENING' ||
@@ -586,6 +727,10 @@ export class MusicDirector {
             mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP',
           });
         await this.fail(layer, saved);
+        return;
+      }
+      if (layer === 'bgm' && this.manual?.paused && state === 'OBS_MEDIA_STATE_PAUSED') {
+        markStatus(saved);
         return;
       }
       if (saved.suspended) {
@@ -766,6 +911,10 @@ export class MusicDirector {
       stop: false,
     };
     markStatus(saved);
+    if (layer === 'bgm' && valid()) {
+      const observed = await call('GetMediaInputStatus', args);
+      this.status.playback = observedPlayback(observed.mediaState);
+    }
   }
   private async fail(layer: MusicLayer, saved: Playback) {
     const failed = this.failed.get(saved.key) ?? new Set<string>();
