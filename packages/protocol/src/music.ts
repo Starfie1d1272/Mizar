@@ -22,6 +22,7 @@ export const musicTrackSchema = z
       .refine((s) => [...s].every((c) => c.charCodeAt(0) >= 32)),
     startMs: z.number().int().min(0).max(86_400_000).default(0),
     endMs: z.number().int().min(1).max(86_400_000).nullable().default(null),
+    gain: z.number().finite().min(0).max(1).optional(),
   })
   .strict()
   .refine((t) => t.endMs === null || t.endMs > t.startMs);
