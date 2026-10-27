@@ -128,7 +128,7 @@ test('chooses another application, cancels, reselects and explicitly restores TS
           {
             code: 'commentary_pending',
             message: activeOutput
-              ? 'OBS 正在输出，远端解说音频将在停止输出后配置。'
+              ? 'OBS 正在输出；停止输出后请重新配置远端解说音频。'
               : '等待所选应用启动；场景已准备，音频分路待完成。',
           },
         ],
@@ -161,7 +161,7 @@ test('chooses another application, cancels, reselects and explicitly restores TS
   await page.getByRole('button', { name: '保存应用' }).click();
   expect(chosen).toBe(second);
   await expect(page.getByText(`当前：已选择应用：${longTitle.trim()}`)).toBeVisible();
-  await expect(page.getByText(/OBS 正在输出，远端解说音频将在停止输出后配置/)).toBeVisible();
+  await expect(page.getByText(/OBS 正在输出；停止输出后请重新配置远端解说音频/)).toBeVisible();
   await page.screenshot({
     path: testInfo.outputPath('application-selected-long.png'),
     fullPage: true,

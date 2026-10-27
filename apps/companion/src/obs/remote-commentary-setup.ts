@@ -44,7 +44,7 @@ export async function prepareRemoteCommentary(
     obs.call('GetRecordStatus'),
   ]);
   if (stream.outputActive !== false || record.outputActive !== false)
-    return pending('OBS 正在输出，远端解说音频将在停止输出后配置。');
+    return pending('OBS 正在输出；停止输出后请重新配置远端解说音频。');
   const check = async () => {
     if ((await owner.get()).revision !== state.revision)
       throw new Error('commentary_revision_changed');
