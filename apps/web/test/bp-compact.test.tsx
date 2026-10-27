@@ -34,12 +34,37 @@ it('renders only revealed cards and side choices, and clears on disconnect', () 
       ],
     },
   };
+  // Synthetic pre-reveal rendering proves that no slot carries future information.
+  act(() => root.render(<BpCompactPresentation snapshot={{ ...snapshot, revealedCount: 0 }} />));
+  const pending = container.querySelectorAll('.bp-compact-card');
+  expect(pending).toHaveLength(2);
+  for (const slot of pending) {
+    expect(slot.textContent).toBe('待揭示');
+    expect(slot.outerHTML).not.toMatch(/ancient|inferno|pick|ban|队伍甲|队伍乙|<img/i);
+  }
   act(() => root.render(<BpCompactPresentation snapshot={snapshot} />));
   expect(container.textContent).toContain('ANCIENT');
   expect(container.textContent).not.toContain('INFERNO');
+  expect(container.querySelector('[data-kind="pending"] img')).toBeNull();
+  expect(container.querySelector('[data-kind="pending"]')?.outerHTML).not.toMatch(
+    /inferno|ban|队伍乙/i,
+  );
   expect(container.textContent).not.toContain('CT');
   act(() => root.render(<BpCompactPresentation snapshot={{ ...snapshot, revealedCount: 2 }} />));
   expect(container.textContent).toContain('CT');
+  const unknown = {
+    ...snapshot,
+    projection: {
+      ...snapshot.projection!,
+      cards: [
+        { ...snapshot.projection!.cards[0]!, mapName: 'de_unknown' },
+        snapshot.projection!.cards[1]!,
+      ],
+    },
+  };
+  act(() => root.render(<BpCompactPresentation snapshot={unknown} />));
+  expect(container.textContent).toContain('地图图片不可用');
+  expect(container.textContent).toContain('UNKNOWN');
   act(() => root.render(<BpCompactPresentation snapshot={null} />));
   expect(container.querySelector('.bp-compact')).toBeNull();
   act(() => root.unmount());

@@ -56,6 +56,11 @@ test('compact source follows the BP reveal cursor and clears when disconnected',
   const strip = page.locator('.bp-compact');
   await expect(strip).toContainText('ANCIENT');
   await expect(strip).not.toContainText('INFERNO');
+  await expect(strip.locator('.bp-compact-card[data-kind="pending"] img')).toHaveCount(0);
+  for (const pending of await strip.locator('.bp-compact-card[data-kind="pending"]').all()) {
+    await expect(pending).toHaveText('待揭示');
+    await expect(pending).not.toHaveAttribute('data-entrant');
+  }
   count = 3;
   await expect(strip).toContainText('INFERNO');
   await expect(strip).not.toContainText('CT');
@@ -113,14 +118,14 @@ test('BO1 and BO5 fixtures keep long names and cards within the compact strip', 
     }),
   );
   await page.goto('/program/bp-compact');
-  await expect(page.locator('.bp-compact-format')).toHaveText('BO1');
-  await expect(page.locator('.bp-logo-fallback')).toHaveCount(2);
+  await expect(page.locator('.bp-compact-status > span').last()).toContainText('BO1');
+  await expect(page.locator('.bp-logo-fallback')).toHaveCount(6);
   format = 'bo5';
-  await expect(page.locator('.bp-compact-format')).toHaveText('BO5');
+  await expect(page.locator('.bp-compact-status > span').last()).toContainText('BO5');
   await expect(page.locator('.bp-compact-card')).toHaveCount(7);
   const fits = await page.locator('.bp-compact').evaluate((strip) => {
     const bounds = strip.getBoundingClientRect();
-    return [...strip.querySelectorAll('.bp-compact-team, .bp-compact-card')].every((item) => {
+    return [...strip.querySelectorAll('.bp-compact-card')].every((item) => {
       const rect = item.getBoundingClientRect();
       return (
         rect.left >= bounds.left &&
