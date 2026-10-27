@@ -118,7 +118,14 @@ export function ObserverHints() {
       ) : null}
       {observer?.state === 'ready' && !pending && !needsRecovery && !reconnecting && !connecting ? (
         <>
-          <StatusPill tone="info">按 {observer.expectedDelaySeconds} 秒估算</StatusPill>
+          <StatusPill tone="info">
+            延迟 {(observer.effectiveDelaySeconds ?? observer.expectedDelaySeconds).toFixed(1)} 秒 ·
+            {observer.calibrationState === 'measured'
+              ? '实时校准'
+              : observer.calibrationState === 'held'
+                ? '保持上次校准'
+                : '尚未校准'}
+          </StatusPill>
           {hints.length === 0 ? (
             <p>
               {observer.waitingReason === 'buffering' && observer.nextWindowSeconds !== null

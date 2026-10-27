@@ -2157,8 +2157,8 @@ it('exports bounded observer diagnostics through the ordinary support bundle wit
     timeline.project(program, settings, 3000, { ...source, fresh: false });
     expect(await exported()).toMatchObject({
       blocked: 'source-stale',
-      pending: 0,
-      lastReset: { reason: 'source-stale' },
+      pending: 1,
+      calibration: { state: 'uncalibrated', reason: 'awaiting-evidence' },
     });
   } finally {
     await app.close();

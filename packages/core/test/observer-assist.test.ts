@@ -64,9 +64,12 @@ function aligned() {
   const timeline = new ObserverHintTimeline();
   timeline.project(program(1), settings, 0, source);
   timeline.consume(kill(1, 8, 1000));
+  timeline.consume(kill(10, 6, 1000));
   timeline.consume(kill(2, 9, 2000));
   timeline.consume(kill(3, 7, 10000));
-  expect(timeline.project(program(2, [8]), settings, 121000, source).observer?.state).toBe('ready');
+  expect(timeline.project(program(2, [6, 8]), settings, 121000, source).observer?.state).toBe(
+    'ready',
+  );
   expect(
     timeline.project(program(3, [8, 9]), settings, 122000, source).observer?.measuredDelaySeconds,
   ).toBe(120);
@@ -86,7 +89,7 @@ describe('private observer hints against Program', () => {
     expect(confirmed.players.find((p) => p.sourcePlayerId === '7')?.lifeState).toBe('dead');
     expect(result.observer?.hints).toEqual([]);
     expect(result.observer?.state).toBe('ready');
-    expect(result.observer?.measuredDelaySeconds).toBeCloseTo((120 + 120 + 119) / 3);
+    expect(result.observer?.measuredDelaySeconds).toBe(120);
 
     // Duplicate delivery and repeated projection cannot reintroduce the matched event.
     timeline.consume(event);
@@ -138,7 +141,7 @@ describe('private observer hints against Program', () => {
         hints: [{ id: '1:6', remainingSeconds: 1 }],
       });
       expect(timeline.project(program(7, [8, 9]), settings, 246000, source).observer).toMatchObject(
-        { state: 'ready', measuredDelaySeconds: 120, hints: [] },
+        { state: 'ready', measuredDelaySeconds: null, hints: [] },
       );
       expect(
         timeline.project(program(7, [8, 9]), settings, 247000, source).observer?.hints,
@@ -184,11 +187,6 @@ describe('private observer hints against Program', () => {
       (p: ObserverProgramView) => ({ ...p, cursor: { ...p.cursor, liveSessionId: 'next' } }),
       (p: ObserverProgramView) => ({ ...p, cursor: { ...p.cursor, mapEpoch: 2 } }),
       (p: ObserverProgramView) => ({ ...p, cursor: { ...p.cursor, programSourceGeneration: 2 } }),
-      (p: ObserverProgramView) => ({
-        ...p,
-        status: { ...p.status, identity: 'mismatch' as const },
-      }),
-      (p: ObserverProgramView) => ({ ...p, status: { ...p.status, telemetry: 'stale' as const } }),
     ];
     for (const change of cases) {
       const reset = aligned();
@@ -271,28 +269,10 @@ it.each([0, 1])('estimates the 113-second window with %i anchors', (anchors) => 
   expect(timeline.project(frame, settings, 123000, source).observer).toMatchObject({
     timingBasis: 'estimated',
     expectedDelaySeconds: 120,
-    measuredDelaySeconds: anchors ? 119 : null,
+    measuredDelaySeconds: null,
     hints: [{ remainingSeconds: 7 }],
   });
 });
-
-it.each([121000, 138000])(
-  'does not gate estimates on unstable or out-of-window reference %i',
-  (delay) => {
-    const timeline = new ObserverHintTimeline();
-    timeline.project(program(1), settings, 0, source);
-    timeline.consume(kill(1, 8, 1000));
-    timeline.consume(kill(2, 9, 2000));
-    timeline.consume(kill(3, 7, 30000));
-    timeline.project(program(2, [8]), settings, 120000, source); // 119 s
-    timeline.project(program(3, [8, 9]), settings, 2000 + delay, source);
-    expect(
-      timeline.project(program(3, [8, 9]), settings, 143000, source).observer?.hints,
-    ).toMatchObject([{ id: '1:3', remainingSeconds: 7 }]);
-    expect(timeline.getDiagnostics().anchors).toBe(delay === 121000 ? 2 : 1);
-    if (delay === 121000) expect(timeline.getDiagnostics().measuredDelayMs?.spread).toBe(2000);
-  },
-);
 
 it('retires expired and currently dead hints without deleting later events for the same victim', () => {
   const timeline = new ObserverHintTimeline();
@@ -381,4 +361,150 @@ it('opens the 120/5 estimate 115 seconds after receiving a kill', () => {
   expect(timeline.project(program(1), fiveSeconds, 116000, source).observer?.hints).toMatchObject([
     { remainingSeconds: 5 },
   ]);
+});
+
+it.each([119000, 121000, 150000])(
+  'calibrates a sequence at %i ms and holds it without new events',
+  (delay) => {
+    const timeline = new ObserverHintTimeline();
+    timeline.project(program(1), settings, 0, source);
+    timeline.consume(kill(1, 8, 1000));
+    timeline.consume(kill(2, 9, 2000));
+    timeline.consume(kill(3, 6, 3000));
+    timeline.consume(kill(4, 7, 40000));
+    timeline.project(program(2, [8]), settings, delay + 1000, source);
+    timeline.project(program(3, [8, 9]), settings, delay + 2200, source);
+    const locked = timeline.project(program(4, [6, 8, 9]), settings, delay + 2900, source);
+    expect(locked.observer?.calibrationState).toBe('measured');
+    expect(locked.observer?.effectiveDelaySeconds).toBeCloseTo(delay / 1000);
+    const held = timeline.project(program(4, [6, 8, 9]), settings, delay + 70000, source);
+    expect(held.observer?.calibrationState).toBe('held');
+    expect(held.observer?.effectiveDelaySeconds).toBeCloseTo(delay / 1000);
+  },
+);
+
+it('refuses competing or reversed sequences', () => {
+  const timeline = new ObserverHintTimeline();
+  timeline.project(program(1), settings, 0, source);
+  for (const [seq, victim, time] of [
+    [1, 8, 3000],
+    [2, 9, 2000],
+    [3, 6, 1000],
+  ] as const)
+    timeline.consume(kill(seq, victim, time));
+  timeline.project(program(2, [8]), settings, 121000, source);
+  timeline.project(program(3, [8, 9]), settings, 122000, source);
+  timeline.project(program(4, [6, 8, 9]), settings, 123000, source);
+  expect(timeline.getDiagnostics().calibration.state).toBe('uncalibrated');
+});
+
+it('never resurrects a retired event when a later sequence changes the estimate', () => {
+  const timeline = new ObserverHintTimeline();
+  timeline.project(program(1), settings, 0, source);
+  timeline.consume(kill(1, 8, 1000));
+  timeline.consume(kill(2, 9, 2000));
+  timeline.consume(kill(3, 6, 3000));
+  timeline.consume(kill(4, 7, 4000));
+  timeline.project(program(2, [8]), settings, 151000, source);
+  timeline.project(program(3, [8, 9]), settings, 152000, source);
+  const locked = timeline.project(program(4, [6, 8, 9]), settings, 153000, source);
+  expect(locked.observer?.effectiveDelaySeconds).toBe(150);
+  expect(locked.observer?.hints).toEqual([]);
+  expect(timeline.project(program(5, [6, 8, 9]), settings, 154000, source).observer?.hints).toEqual(
+    [],
+  );
+});
+
+it('rebuilds a shifted timeline only after a new consistent sequence', () => {
+  const timeline = new ObserverHintTimeline();
+  timeline.project(program(1), settings, 0, source);
+  for (const [seq, victim, time] of [
+    [1, 8, 1000],
+    [2, 9, 2000],
+    [3, 6, 3000],
+    [4, 8, 80000],
+    [5, 9, 81000],
+    [6, 6, 82000],
+  ] as const)
+    timeline.consume(kill(seq, victim, time));
+  timeline.project(program(2, [8]), settings, 121000, source);
+  timeline.project(program(3, [8, 9]), settings, 122000, source);
+  expect(
+    timeline.project(program(4, [6, 8, 9]), settings, 123000, source).observer
+      ?.effectiveDelaySeconds,
+  ).toBe(120);
+  timeline.project(program(5), settings, 229000, source);
+  timeline.project(program(6, [8]), settings, 230000, source);
+  timeline.project(program(7, [8, 9]), settings, 231000, source);
+  expect(
+    timeline.project(program(8, [6, 8, 9]), settings, 232000, source).observer
+      ?.effectiveDelaySeconds,
+  ).toBe(150);
+  expect(timeline.getDiagnostics().calibration.reason).toBe('confirmed-timeline-shift');
+});
+
+it('moves only unshown events after calibration and freezes displayed deadlines', () => {
+  const timeline = new ObserverHintTimeline();
+  timeline.project(program(1), settings, 0, source);
+  for (const [seq, victim, time] of [
+    [1, 8, 1000],
+    [2, 9, 2000],
+    [3, 6, 3000],
+    [4, 7, 40000],
+  ] as const)
+    timeline.consume(kill(seq, victim, time));
+  timeline.project(program(2, [8]), settings, 151000, source);
+  timeline.project(program(3, [8, 9]), settings, 152000, source);
+  timeline.project(program(4, [6, 8, 9]), settings, 153000, source);
+  expect(
+    timeline.project(program(4, [6, 8, 9]), settings, 183000, source).observer?.hints,
+  ).toMatchObject([{ id: '1:4', remainingSeconds: 7 }]);
+});
+
+it('keeps a displayed deadline when new measurements update the offset', () => {
+  const timeline = new ObserverHintTimeline();
+  timeline.project(program(1), settings, 0, source);
+  for (const [seq, victim, time] of [
+    [1, 8, 1000],
+    [2, 9, 2000],
+    [3, 6, 3000],
+    [4, 8, 80000],
+    [5, 9, 81000],
+    [6, 6, 82000],
+    [7, 7, 88000],
+  ] as const)
+    timeline.consume(kill(seq, victim, time));
+  timeline.project(program(2, [8]), settings, 120000, source);
+  timeline.project(program(3, [8, 9]), settings, 121000, source);
+  timeline.project(program(4, [6, 8, 9]), settings, 122000, source);
+  timeline.project(program(5), settings, 199000, source);
+  expect(
+    timeline
+      .project(program(5), settings, 200000, source)
+      .observer?.hints.find((hint) => hint.id === '1:7'),
+  ).toMatchObject({ remainingSeconds: 7 });
+  timeline.project(program(6, [8]), settings, 201000, source);
+  timeline.project(program(7, [8, 9]), settings, 202000, source);
+  const result = timeline.project(program(8, [6, 8, 9]), settings, 203000, source);
+  expect(result.observer?.effectiveDelaySeconds).toBe(119.5);
+  expect(result.observer?.hints).toMatchObject([{ id: '1:7', remainingSeconds: 4 }]);
+});
+
+it('does not choose between two equally plausible repeated-victim sequences', () => {
+  const timeline = new ObserverHintTimeline();
+  timeline.project(program(1), settings, 0, source);
+  for (const [seq, victim, time] of [
+    [1, 8, 1000],
+    [2, 9, 2000],
+    [3, 6, 3000],
+    [4, 8, 41000],
+    [5, 9, 42000],
+    [6, 6, 43000],
+  ] as const)
+    timeline.consume(kill(seq, victim, time));
+  timeline.project(program(2, [8]), settings, 121000, source);
+  timeline.project(program(3, [8, 9]), settings, 122000, source);
+  const result = timeline.project(program(4, [6, 8, 9]), settings, 123000, source);
+  expect(result.observer?.calibrationState).toBe('uncalibrated');
+  expect(timeline.getDiagnostics().calibration.reason).toBe('competing-offsets');
 });

@@ -128,6 +128,7 @@ Companion 启动观察器前在已验证的 state 下逐级创建并核对 `data
 - 安全边界由投影、类型和协议结构保证，窗口捕获策略是额外防线。
 - 制作工作区、控制栏和本机 HUD 覆盖允许远程捕获；正式 OBS 输出使用独立的游戏捕获与播出 Browser Source，不依赖制作窗口的捕获排除。策略理由见 [ADR-0022](https://github.com/Starfie1d1272/Mizar/blob/3b187e168ad755ede595eb8371bfaf5933c044fa/docs/decisions/0022-remote-workspace-capture.md)。
 - Lookahead 重连后旧时间轴对齐立即失效。
+- 私有提示以配置延迟为先验（默认 120 秒），初次在其前后 60 秒内搜索，校准后围绕当前估计搜索，将最近 60 秒节目 GSI 死亡变化与早源历史按受害者、地图及顺序配对。多个候选或冲突序列不用于校准；节目 GSI 缺少击杀者，早源缺少回合号，不能视为精确双事件确认。至少三个一致事件的中位偏移用于校准，随后平滑更新；证据稀少时保持上次可信值，来源代际、地图和暂停边界清空。已显示提示固定截止时刻，已退休提示不重放。诊断记录校准状态与证据数量，不保存身份。
 
 接入能力见[数据源矩阵](../guide/data-source-capabilities.md)，尚未交付的研究见 [RFC](https://github.com/Starfie1d1272/Mizar/blob/3b187e168ad755ede595eb8371bfaf5933c044fa/docs/rfcs/0001-lookahead-observer.md)。
 

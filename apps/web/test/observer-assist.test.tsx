@@ -334,10 +334,13 @@ it('shows estimated timing and normal waiting separately from source recovery', 
     waitingReason: 'waiting-event',
     nextWindowSeconds: null as number | null,
     hints: [],
+    calibrationState: 'held',
+    effectiveDelaySeconds: 121,
   };
   mocks.observer = { state: 'live', current: { payload: { observer } } };
   act(() => root.render(<ObserverHints />));
-  expect(container.textContent).toContain('按 120 秒估算');
+  expect(container.textContent).toContain('延迟 121.0 秒');
+  expect(container.textContent).toContain('保持上次校准');
   expect(container.textContent).toContain('等待早源事件');
   expect(container.querySelector('button')).toBeNull();
   observer.waitingReason = 'buffering';
