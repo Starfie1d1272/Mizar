@@ -47,6 +47,7 @@ pub(crate) struct Resource {
     pub(crate) sha256: String,
     pub(crate) source: Source,
     pub(crate) parser_version: &'static str,
+    pub(crate) source_identity: Vec<String>,
     pub(crate) bindings: BTreeMap<String, String>,
     pub(crate) analogbindings: BTreeMap<String, String>,
 }
@@ -544,11 +545,15 @@ fn read_default_inner(root: &Path, mut inject: impl FnMut(u8)) -> Result<Resourc
         std::str::from_utf8(&bytes).map_err(|_| Error::InvalidVcfg("invalid UTF-8".into()))?;
     let bindings = section(text, "bindings")?;
     let analogbindings = section(text, "analogbindings")?;
+    let mut source_identity = held.iter().map(identity).collect::<io::Result<Vec<_>>>()?;
+    source_identity.sort();
+    source_identity.dedup();
     Ok(Resource {
         sha256: format!("{:x}", Sha256::digest(&bytes)),
         bytes,
         source,
         parser_version: PARSER_VERSION,
+        source_identity,
         bindings,
         analogbindings,
     })
