@@ -129,8 +129,8 @@ test('mixer uses confirmed state and music gains stay local to their scene entry
     gain: 0.55,
   });
   expect(saved!.groups.waiting.tracks[1]).toMatchObject({ entryId: secondEntry.entryId });
-  expect(saved!.groups.waiting.tracks[1].gain).toBeUndefined();
-  expect(saved!.groups.technical.tracks[0].gain).toBeUndefined();
+  expect(saved!.groups.waiting.tracks[1]!.gain).toBeUndefined();
+  expect(saved!.groups.technical.tracks[0]!.gain).toBeUndefined();
   saved = null;
   await page
     .getByRole('list', { name: '等待音乐曲目列表' })
