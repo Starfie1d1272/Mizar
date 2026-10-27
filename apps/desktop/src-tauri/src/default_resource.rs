@@ -491,7 +491,9 @@ fn read_default_inner(root: &Path, mut inject: impl FnMut(u8)) -> Result<Resourc
     let watch = ChangeWatch::new(&csgo)?;
     let mut held = Vec::new();
     let vpk_path = csgo.join("pak01_dir.vpk");
-    let initial = candidates(&cfg, &vpk_path, &mut held)?;
+    let initial_result = candidates(&cfg, &vpk_path, &mut held);
+    watch.verify()?;
+    let initial = initial_result?;
     inject(0);
     watch.verify()?;
     let loose_result = if _cfg_guards.is_some() {
@@ -517,7 +519,9 @@ fn read_default_inner(root: &Path, mut inject: impl FnMut(u8)) -> Result<Resourc
     if held.len() == held_before_vpk {
         ensure_absent(&vpk_path)?;
     }
-    let final_candidates = candidates(&cfg, &vpk_path, &mut held)?;
+    let final_result = candidates(&cfg, &vpk_path, &mut held);
+    watch.verify()?;
+    let final_candidates = final_result?;
     if final_candidates != initial {
         return Err(Error::Changed);
     }
