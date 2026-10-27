@@ -106,9 +106,17 @@ export class MusicStore {
       const stat = await lstat(path);
       if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 512 * 1024)
         throw new Error('music_state_invalid');
-      const raw = JSON.parse(await readFile(path, 'utf8'));
+      const raw: unknown = JSON.parse(await readFile(path, 'utf8'));
       this.state = stateSchema.parse(raw);
-      let migrated = !raw.configRevision || raw.master === undefined || raw.muted === undefined;
+      const legacy = z
+        .object({
+          configRevision: z.unknown().optional(),
+          master: z.unknown().optional(),
+          muted: z.unknown().optional(),
+        })
+        .parse(raw);
+      let migrated =
+        !legacy.configRevision || legacy.master === undefined || legacy.muted === undefined;
       for (const group of MUSIC_GROUPS) {
         for (const track of this.state.config.groups[group].tracks) {
           if (!track.entryId) {

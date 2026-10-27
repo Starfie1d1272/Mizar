@@ -72,7 +72,8 @@ export class MusicPreview {
       this.lease = now + 3000;
       // Lease renewals cannot overwrite a newer slider value.
       if (r.action === 'update') {
-        const { gain: _gain, ...track } = this.request!.track;
+        const track = { ...this.request!.track };
+        delete track.gain;
         this.request = {
           ...this.request!,
           track: { ...track, ...(r.track.gain === undefined ? {} : { gain: r.track.gain }) },

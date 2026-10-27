@@ -13,6 +13,7 @@ import Fastify from 'fastify';
 import { MusicStore } from '../src/music/store.js';
 import { MusicDirector } from '../src/music/director.js';
 import { registerMixerRoutes } from '../src/obs/mixer-routes.js';
+import type { MixerCommandResult, MixerStatus } from '@mizar/protocol/mixer';
 import { musicProgram } from './music-fixtures.js';
 
 const fixture = vi.hoisted(() => ({ client: null as FakeObs | null }));
@@ -485,7 +486,8 @@ it('reads and writes the mixer through the real adapter and rejects stale bindin
       bindHost: '127.0.0.1',
       allowedOrigins: [],
     });
-    const read = async () => (await app.inject({ method: 'GET', url: '/local/v1/mixer' })).json();
+    const read = async (): Promise<MixerStatus> =>
+      (await app.inject({ method: 'GET', url: '/local/v1/mixer' })).json<MixerStatus>();
     const initial = await read();
     expect(initial.channels.music.volume).toBe(1);
     const musicWrite = await app.inject({
@@ -494,9 +496,9 @@ it('reads and writes the mixer through the real adapter and rejects stale bindin
       headers: { origin: base },
       payload: { revision: initial.revision, channel: 'music', volume: 0.4, muted: true },
     });
-    expect(musicWrite.json().status).toBe('confirmed');
+    expect(musicWrite.json<MixerCommandResult>().status).toBe('confirmed');
     expect((await read()).channels.music).toMatchObject({ volume: 0.4, muted: true });
-    for (const channel of ['game', 'remoteCommentary', 'microphone']) {
+    for (const channel of ['game', 'remoteCommentary', 'microphone'] as const) {
       expect(initial.channels[channel].control).toBe('available');
       const result = await app.inject({
         method: 'POST',
@@ -504,7 +506,7 @@ it('reads and writes the mixer through the real adapter and rejects stale bindin
         headers: { origin: base },
         payload: { revision: initial.revision, channel, volume: 0.35, muted: channel !== 'game' },
       });
-      expect(result.json().status).toBe('confirmed');
+      expect(result.json<MixerCommandResult>().status).toBe('confirmed');
       const after = await read();
       expect(after.channels[channel].volume).toBeCloseTo(0.35);
       expect(after.channels[channel].muted).toBe(channel !== 'game');
@@ -524,7 +526,7 @@ it('reads and writes the mixer through the real adapter and rejects stale bindin
       headers: { origin: base },
       payload: { revision: initial.revision, channel: 'microphone', volume: 0.9 },
     });
-    expect(stale.json().status).toBe('rejected');
+    expect(stale.json<MixerCommandResult>().status).toBe('rejected');
     obs.offline = true;
     expect((await read()).channels.game.control).toBe('unknown');
     const disconnected = await app.inject({
@@ -533,7 +535,7 @@ it('reads and writes the mixer through the real adapter and rejects stale bindin
       headers: { origin: base },
       payload: { revision: initial.revision, channel: 'game', volume: 0.1 },
     });
-    expect(disconnected.json().status).toBe('unknown');
+    expect(disconnected.json<MixerCommandResult>().status).toBe('unknown');
     game.close();
     await new Promise((resolve) => setTimeout(resolve, 50));
     await adapter.close();

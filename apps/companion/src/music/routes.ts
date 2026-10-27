@@ -96,11 +96,7 @@ export function registerMusicRoutes(
         (body.trackId === undefined || typeof body.trackId === 'string') &&
         (body.entryId === undefined || typeof body.entryId === 'string')
       )
-        await director.manualPlay(
-          body.group as MusicGroup,
-          body.trackId as string | undefined,
-          body.entryId as string | undefined,
-        );
+        await director.manualPlay(body.group as MusicGroup, body.trackId, body.entryId);
       else if (
         body?.action === 'seek' &&
         typeof body.cursorMs === 'number' &&
