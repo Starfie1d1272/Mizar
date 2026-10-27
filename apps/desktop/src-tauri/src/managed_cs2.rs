@@ -74,9 +74,13 @@ fn any_cs2_running(log: &crate::startup_log::DesktopLog) -> Result<bool, String>
 struct SteamLaunch {
     process: SteamProcess,
     account: u32,
+    #[cfg(test)]
+    fixture: bool,
 }
 impl SteamLaunch {
     fn validate(&self, log: &crate::startup_log::DesktopLog) -> Result<(), String> {
+        #[cfg(test)]
+        if self.fixture { return Ok(()); }
         let output = powershell(
             "$context = Get-SteamLaunchContext -NativeIdentity $nativeSteam; $context | ConvertTo-Json -Compress",
             &self.process,
@@ -134,6 +138,8 @@ if ($confirmed.account -ne $account) { Stop-Cs2Discovery 'steam-account-unavaila
         SteamLaunch {
             process: steam,
             account,
+            #[cfg(test)]
+            fixture: false,
         },
     ))
 }
@@ -570,6 +576,18 @@ pub struct ManagedCs2 {
     external_preservation: bool,
     #[cfg(test)]
     recovery_identity_fixture: Option<(PathBuf, PathBuf, u32)>,
+    #[cfg(test)]
+    launch_fixture: Option<LaunchFixture>,
+}
+
+#[cfg(test)]
+struct LaunchFixture {
+    executable: PathBuf,
+    video: PathBuf,
+    account: u32,
+    fail_submit: bool,
+    fail_prepare: bool,
+    submitted: Arc<std::sync::Mutex<Vec<(Value, Vec<String>)>>>,
 }
 
 /// A verified session process held open during window operations. Keeping the
@@ -622,6 +640,8 @@ impl ManagedCs2 {
             external_preservation: false,
             #[cfg(test)]
             recovery_identity_fixture: None,
+            #[cfg(test)]
+            launch_fixture: None,
         }
     }
     fn recovery_identity(&self) -> Result<(PathBuf, PathBuf, u32), String> {
@@ -989,6 +1009,16 @@ impl ManagedCs2 {
         if any_cs2_running(&self.log)? {
             return Err("请先退出已打开的 CS2，再由 Mizar 启动。".into());
         }
+        #[cfg(test)]
+        let (executable, video, steam) = if let Some(fixture) = &self.launch_fixture {
+            let pid = std::process::id();
+            let process = open(pid, &self.log)?.ok_or("fixture process unavailable")?;
+            (fixture.executable.clone(), fixture.video.clone(), SteamLaunch {
+                process: SteamProcess { process, pid, created: 0, executable: fixture.executable.clone() },
+                account: fixture.account, fixture: true,
+            })
+        } else { discover(&self.log)? };
+        #[cfg(not(test))]
         let (executable, video, steam) = discover(&self.log)?;
         if any_cs2_running(&self.log)? {
             return Err("请先退出已打开的 CS2，再由 Mizar 启动。".into());
@@ -998,7 +1028,10 @@ impl ManagedCs2 {
         let size = if preserve {
             None
         } else {
-            Some(crate::windows_host::launch_viewport()?)
+            #[cfg(test)]
+            { if self.launch_fixture.is_some() { Some(crate::cs2_video::VideoSize::new(1920, 1080)?) } else { Some(crate::windows_host::launch_viewport()?) } }
+            #[cfg(not(test))]
+            { Some(crate::windows_host::launch_viewport()?) }
         };
         let mut full_fingerprint = None;
         let mut early_console: Option<Value> = None;
@@ -1035,7 +1068,18 @@ impl ManagedCs2 {
                         }
                         early_console = Some(attachment.clone());
                         let session_id = crate::demo_test::new_request_id(&self.log)?;
-                        match self.store.prepare_eligible(&video, &executable, viewport, &session_id, &eligible.fingerprint, &attachment) {
+                        #[cfg(test)]
+                        let prepared = if self.launch_fixture.as_ref().is_some_and(|f| f.fail_prepare) {
+                            fn fail_after_video(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+                                crate::cs2_session::atomic_write(path, bytes)?;
+                                if path.file_name().is_some_and(|n| n == "cs2_video.txt") { return Err("injected prepare write failure".into()); }
+                                Ok(())
+                            }
+                            self.store.prepare_eligible_with_writer(&video, &executable, viewport, &session_id, &eligible.fingerprint, &attachment, fail_after_video)
+                        } else { self.store.prepare_eligible(&video, &executable, viewport, &session_id, &eligible.fingerprint, &attachment) };
+                        #[cfg(not(test))]
+                        let prepared = self.store.prepare_eligible(&video, &executable, viewport, &session_id, &eligible.fingerprint, &attachment);
+                        match prepared {
                             Ok(value) => { full_fingerprint = Some(eligible.fingerprint); full_journal = Some(value); }
                             Err(error) => {
                                 if self.store.load()?.is_some() || self.store.full_spectator_pending() { self.message = Some(error.clone()); return Err(error); }
@@ -1210,12 +1254,7 @@ impl ManagedCs2 {
             journal["launchTime"] = json!(launch_time);
             journal["launchAttempted"] = json!(true);
             self.store.save(&journal)?;
-            command
-                .creation_flags(0x08000000)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
+            self.submit_steam(&mut command)
                 .map_err(|error| {
                     self.log.event("cs2_launch", "failure", Some(&format!("stage=steam_spawn; launchTime={launch_time}; code={:?}; cause={error:?}", error.raw_os_error())));
                     if journal["fullSnapshot"] == true { journal["launchCancelled"] = json!(true); }
@@ -1247,6 +1286,17 @@ impl ManagedCs2 {
             Ok(true)
         })();
         self.complete_launch(launch, demo.is_some())
+    }
+    fn submit_steam(&self, command: &mut Command) -> std::io::Result<()> {
+        #[cfg(test)]
+        if let Some(fixture) = &self.launch_fixture {
+            let journal = self.store.load().map_err(std::io::Error::other)?.ok_or_else(|| std::io::Error::other("missing launch journal"))?;
+            let args = command.get_args().map(|v| v.to_string_lossy().into_owned()).collect();
+            fixture.submitted.lock().map_err(|_| std::io::Error::other("fixture lock"))?.push((journal, args));
+            if fixture.fail_submit { return Err(std::io::Error::other("injected Steam request failure")); }
+            return Ok(());
+        }
+        command.creation_flags(0x08000000).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().map(|_| ())
     }
     fn complete_launch(
         &mut self,
@@ -1504,6 +1554,75 @@ mod tests {
     // These tests create or inspect machine-wide CS2 / Steam processes. Hold the same
     // gate so the external-game fixture cannot contaminate recovery evidence.
     static GAME_PROCESSES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    #[test]
+    fn standard_start_selects_full_or_base_and_recovers_after_request_outcomes() {
+        let _processes = GAME_PROCESSES.lock().unwrap();
+        for scenario in ["full", "fallback", "prepare_failure", "spawn_failure"] {
+            let root = std::env::temp_dir().join(format!("mizar-host-start-{}-{scenario}", std::process::id()));
+            std::fs::create_dir_all(&root).unwrap();
+            let log = crate::startup_log::DesktopLog::new(&root, None).unwrap();
+            let mut host = ManagedCs2::new(log);
+            let cfg = root.join("steam/userdata/1/730/local/cfg");
+            std::fs::create_dir_all(&cfg).unwrap();
+            std::fs::create_dir_all(root.join("steam/userdata/1/config")).unwrap();
+            let video = cfg.join("cs2_video.txt");
+            let original_video = b"\"video.cfg\" { \"setting.defaultres\" \"1280\" \"setting.defaultresheight\" \"960\" \"setting.fullscreen\" \"1\" }".as_slice();
+            std::fs::write(&video, original_video).unwrap();
+            let machine = cfg.join("cs2_machine_convars.vcfg");
+            let original_machine = b"\"config\" {\"convars\" {\"fps_max\" \"0\" \"spec_usenumberkeys_nobinds\" \"0\"}}";
+            std::fs::write(&machine, original_machine).unwrap();
+            let key = cfg.join("cs2_user_keys_0_slot3.vcfg");
+            let original_key = "\"config\" {\"bindings\" {\"x\" \"personal\"} \"analogbindings\" {\"MOUSE_X\" \"old\"}}";
+            std::fs::write(&key, original_key).unwrap();
+            if scenario == "fallback" { std::fs::write(cfg.join("cs2_user_keys_0_slot4.vcfg"), original_key).unwrap(); }
+            let executable = root.join("game/bin/win64/cs2.exe");
+            std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
+            std::fs::write(&executable, b"fixture").unwrap();
+            let game_cfg = root.join("game/csgo/cfg"); std::fs::create_dir_all(&game_cfg).unwrap();
+            let mut defaults = String::from("\"config\" {\"bindings\" {");
+            for (name, number) in [("1",1),("2",2),("3",3),("4",4),("5",5),("6",6),("7",7),("8",8),("9",9),("0",10)] {
+                defaults.push_str(&format!(" \"{name}\" \"slot{number}\""));
+            }
+            defaults.push_str("} \"analogbindings\" {\"mouse_x\" \"yaw\"}}");
+            std::fs::write(game_cfg.join("user_keys_default.vcfg"), defaults).unwrap();
+            host.store.set_full_optin(1, true).unwrap();
+            let submitted = Arc::new(std::sync::Mutex::new(Vec::new()));
+            host.launch_fixture = Some(LaunchFixture { executable:executable.clone(), video:video.clone(), account:1,
+                fail_submit:scenario == "spawn_failure", fail_prepare:scenario == "prepare_failure", submitted:submitted.clone() });
+            host.recovery_identity_fixture = Some((executable.clone(), video.clone(), 1));
+            let result = host.start();
+            let requests = submitted.lock().unwrap().clone();
+            if scenario == "prepare_failure" {
+                assert!(result.is_err()); assert!(requests.is_empty());
+                assert!(host.store.load().unwrap().is_some()); assert!(host.store.full_spectator_pending());
+                assert_ne!(std::fs::read(&video).unwrap(), original_video);
+                host.recover(false).unwrap();
+                assert_eq!(std::fs::read(&video).unwrap(), original_video);
+                assert_eq!(std::fs::read_to_string(&key).unwrap(), original_key);
+                assert!(host.store.load().unwrap().is_none());
+                assert!(!host.store.full_spectator_pending());
+            } else {
+                assert_eq!(requests.len(), 1, "{scenario}");
+                let (journal, args) = &requests[0];
+                assert_eq!(journal["launchAttempted"], true);
+                assert!(args.windows(2).any(|pair| pair == ["-applaunch", "730"]));
+                assert_eq!(journal["fullSnapshot"] == true, scenario != "fallback");
+                if scenario == "fallback" { assert!(journal["spectatorWarning"].as_str().unwrap().contains("多个")); }
+                if scenario == "spawn_failure" { assert!(result.is_err()); }
+                else {
+                    assert_eq!(result.unwrap(), true);
+                    if scenario == "full" { assert!(std::fs::read_to_string(&key).unwrap().contains("\"5\" \"slot5\"")); }
+                    host.recover(true).unwrap();
+                }
+                assert!(host.store.load().unwrap().is_none(), "{scenario}");
+                assert!(!host.store.full_spectator_pending(), "{scenario}");
+                assert_eq!(std::fs::read(&video).unwrap(), original_video, "{scenario}");
+                assert_eq!(std::fs::read(&machine).unwrap(), original_machine, "{scenario}");
+                assert_eq!(std::fs::read_to_string(&key).unwrap(), original_key, "{scenario}");
+            }
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
     #[test]
     fn coordinated_faults_recover_through_actual_host_entrypoint() {
         use crate::cs2_config_identity::{ConfigIdentity, SessionIdentity};

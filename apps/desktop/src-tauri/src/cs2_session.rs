@@ -888,6 +888,13 @@ impl SessionStore {
         session_id: &str, fingerprint: &crate::spectator_eligibility::Fingerprint,
         attachments: &Value,
     ) -> Result<Value, String> {
+        self.prepare_eligible_with_writer(video, executable, size, session_id, fingerprint, attachments, atomic_write)
+    }
+    pub(crate) fn prepare_eligible_with_writer(
+        &self, video: &Path, executable: &Path, size: cs2_video::VideoSize,
+        session_id: &str, fingerprint: &crate::spectator_eligibility::Fingerprint,
+        attachments: &Value, write: fn(&Path, &[u8]) -> Result<(), String>,
+    ) -> Result<Value, String> {
         let guard = self.acquire_write_guard()?;
         let eligible = crate::spectator_eligibility::revalidate(fingerprint, video, executable, fingerprint.identity.account)
             .map_err(|e| e.message().to_string())?;
@@ -899,7 +906,7 @@ impl SessionStore {
         crate::cs2_spectator::full_mode_convar_compatible(&frames, video)?;
         let session = crate::cs2_config_identity::SessionIdentity { session_id:session_id.into(), config:fingerprint.identity.clone() };
         self.prepare_coordinated_locked(&guard, video, executable, size, Some(frames), &session,
-            &owned, &applied, &candidate, atomic_write, Some(fingerprint), Some(attachments))
+            &owned, &applied, &candidate, write, Some(fingerprint), Some(attachments))
     }
 
     /// Recheck frozen source and expected applied bytes before submitting Steam.
