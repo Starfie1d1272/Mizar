@@ -11,6 +11,8 @@ export async function inspectLegacyAudioTemplate(
   obs: ObsRpc,
   baseUrl: string,
   commentaryUuid: string,
+  gameAudioUuid?: string,
+  desktopEnabled = true,
 ): Promise<{ desktop: Ref[]; microphoneUuid: string } | null> {
   if ((await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== OBS_COLLECTION)
     return null;
@@ -28,6 +30,7 @@ export async function inspectLegacyAudioTemplate(
     inputs.some(
       (input) =>
         input.inputUuid !== commentaryUuid &&
+        input.inputUuid !== gameAudioUuid &&
         (typeof input.inputName !== 'string' || !allowedNames.has(input.inputName)),
     )
   )
@@ -74,7 +77,9 @@ export async function inspectLegacyAudioTemplate(
     inputs.some(
       (x) =>
         audioKinds.has(String(x.inputKind)) &&
-        ![desktop.inputUuid, microphone.inputUuid, commentaryUuid].includes(String(x.inputUuid)),
+        ![desktop.inputUuid, microphone.inputUuid, commentaryUuid, gameAudioUuid].includes(
+          String(x.inputUuid),
+        ),
     )
   )
     return null;
@@ -137,6 +142,7 @@ export async function inspectLegacyAudioTemplate(
       items.some(
         (x) =>
           x.sourceUuid !== commentaryUuid &&
+          x.sourceUuid !== gameAudioUuid &&
           (typeof x.sourceName !== 'string' || !allowedNames.has(x.sourceName)),
       )
     )
@@ -152,6 +158,7 @@ export async function inspectLegacyAudioTemplate(
         items.some(
           (value) =>
             value.sourceUuid !== commentaryUuid &&
+            value.sourceUuid !== gameAudioUuid &&
             (typeof value.sourceName !== 'string' || !expectedNames.has(value.sourceName)),
         )
       )
@@ -175,7 +182,7 @@ export async function inspectLegacyAudioTemplate(
       seen.has(scene.sceneName) ||
       old.length !== 1 ||
       mic.length !== 1 ||
-      old[0]!.sceneItemEnabled !== true ||
+      old[0]!.sceneItemEnabled !== desktopEnabled ||
       mic[0]!.sceneItemEnabled !== true ||
       typeof old[0]!.sceneItemId !== 'number'
     )

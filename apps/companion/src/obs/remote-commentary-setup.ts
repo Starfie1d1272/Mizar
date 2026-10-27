@@ -15,6 +15,7 @@ export async function prepareRemoteCommentary(
   journal: string,
   endpoint: string,
   baseUrl: string,
+  onReady?: (target: string, revision: string) => void,
 ): Promise<ObsFinding[]> {
   const state = await owner.get();
   const pending = (message = '场景已准备，音频分路待完成。'): ObsFinding[] => [
@@ -162,5 +163,6 @@ export async function prepareRemoteCommentary(
     });
   }
   if (!pendingMessage) await rm(`${journal}.waiting`, { force: true });
+  if (!pendingMessage && target) onReady?.(target, state.revision);
   return pending(pendingMessage);
 }

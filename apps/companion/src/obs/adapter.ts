@@ -6,7 +6,7 @@ import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
 import type { ObsAudioBindCommand, ObsOutputCommand, ObsOutputsStatus } from '@mizar/protocol/obs';
 import type { ObsAudioRouting } from './audio-routing.js';
 import { RemoteCommentary } from './remote-commentary.js';
-import { prepareRemoteCommentary } from './remote-commentary-setup.js';
+import { configureIndependentAudio } from './audio-setup.js';
 import { discoverWaitingCommentary } from './remote-commentary-wait.js';
 import { AudioConfigurationConnection } from './audio-configuration-connection.js';
 import { ObsOutputController, ObsOutputError } from './outputs.js';
@@ -464,12 +464,13 @@ export class ObsAdapter {
       this.findings = prepared.findings;
       if (prepared.ready && this.commentary) {
         try {
-          const commentary = await this.audioConfiguration.run((obs, endpoint) =>
-            prepareRemoteCommentary(
+          const commentary = await this.audioConfiguration.run((obs, endpoint, observer) =>
+            configureIndependentAudio(
               obs,
+              endpoint,
+              observer,
               this.commentary!.owner,
               this.commentary!.journal,
-              endpoint,
               this.browserBaseUrl,
             ),
           );

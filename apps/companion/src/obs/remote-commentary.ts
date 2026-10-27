@@ -140,7 +140,7 @@ export class RemoteCommentary {
 export async function createCommentaryProbe(
   obs: ObsRpc,
   journalPath: string,
-  context: { endpoint: string; collection: string; sceneName: string },
+  context: { endpoint: string; collection: string; sceneName: string; label?: string },
   stillCurrent: () => Promise<void>,
 ): Promise<string> {
   const journalSchema = z
@@ -191,7 +191,7 @@ export async function createCommentaryProbe(
   if (!Array.isArray(kinds) || !kinds.includes('wasapi_process_output_capture'))
     throw new Error('commentary_capture_unavailable');
   await stillCurrent();
-  const name = `Mizar · Remote Commentary ${randomUUID()}`;
+  const name = `Mizar · ${context.label ?? 'Remote Commentary'} ${randomUUID()}`;
   const planned = { endpoint: context.endpoint, collection: context.collection, name };
   await mkdir(dirname(journalPath), { recursive: true });
   // Exclusive creation prevents competing callers from claiming the same operation.
