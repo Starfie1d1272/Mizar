@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -86,6 +86,26 @@ async function rig() {
     },
   };
 }
+it('loads legacy music state with independent master defaults and preserves it on configuration', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-music-legacy-'));
+  directories.push(directory);
+  const original = new MusicStore(directory);
+  await original.load();
+  const legacy = structuredClone(original.state) as Partial<typeof original.state>;
+  delete legacy.master;
+  delete legacy.muted;
+  await writeFile(join(directory, 'state.json'), JSON.stringify(legacy));
+  const store = new MusicStore(directory);
+  await store.load();
+  expect(store.state.master).toBe(1);
+  expect(store.state.muted).toBe(false);
+  await store.update((state) => { state.master = 0.3; state.muted = true; });
+  await store.configure(structuredClone(store.state.config));
+  const reloaded = new MusicStore(directory);
+  await reloaded.load();
+  expect(reloaded.state.master).toBe(0.3);
+  expect(reloaded.state.muted).toBe(true);
+});
 it('keeps pre-game waiting music across fresh menu GSI and BP, but stops for stale data and live play', async () => {
   const r = await rig();
   r.truth.program.map.name = null;

@@ -28,6 +28,8 @@ const stateSchema = z
   .object({
     version: z.literal(1),
     config: musicConfigSchema,
+    master: z.number().finite().min(0).max(1).default(1),
+    muted: z.boolean().default(false),
     held: z.boolean(),
     owner: z.string().uuid(),
     sources: z.object({ bgm: z.string().nullable(), stinger: z.string().nullable() }).strict(),
@@ -47,6 +49,8 @@ export class MusicStore {
   state: MusicState = {
     version: 1,
     config: defaultMusicConfig(),
+    master: 1,
+    muted: false,
     held: false,
     owner: randomUUID(),
     sources: { bgm: null, stinger: null },
