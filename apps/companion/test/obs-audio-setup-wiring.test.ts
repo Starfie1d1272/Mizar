@@ -53,6 +53,7 @@ class FakeObs extends EventEmitter {
   muted = new Map<string, boolean>();
   volumes = new Map<string, number>();
   offline = false;
+  invalidateOnMuteRead = 0;
   windows = [
     { itemName: 'TeamSpeak', itemValue: 'TeamSpeak:Qt:ts3client_win64.exe', itemEnabled: true },
   ];
@@ -207,6 +208,8 @@ class FakeObs extends EventEmitter {
         if (input && this.onInputSettings) await this.onInputSettings(input);
         return { inputSettings: input!.settings };
       case 'GetInputMute':
+        if (this.invalidateOnMuteRead > 0 && --this.invalidateOnMuteRead === 0)
+          this.emit('InputRemoved', { inputUuid: data.inputUuid });
         return { inputMuted: this.muted.get(String(data.inputUuid)) ?? false };
       case 'SetInputMute':
         this.muted.set(String(data.inputUuid), Boolean(data.inputMuted));
@@ -514,6 +517,14 @@ it('reads and writes the mixer through the real adapter and rejects stale bindin
     game.tick('gameplay');
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect((await read()).channels.game.muted).toBe(false);
+    obs.invalidateOnMuteRead = 9; // Three roles in each of initial, pre-write and final reads.
+    const invalidated = await app.inject({
+      method: 'POST',
+      url: '/operator/mixer',
+      headers: { origin: base },
+      payload: { revision: initial.revision, channel: 'microphone', volume: 0.6 },
+    });
+    expect(invalidated.json<MixerCommandResult>().status).toBe('unknown');
     const routingStatus = await adapter.readAudioRouting();
     await adapter.bindAudio({
       role: 'microphone',
