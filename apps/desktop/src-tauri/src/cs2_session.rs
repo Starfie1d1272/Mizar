@@ -283,6 +283,102 @@ impl SessionStore {
             .map(Some)
             .map_err(|error| json_error("观战恢复记录损坏，请打开备份目录检查。", &error))
     }
+    // Reserve space for subsequent identity and warning fields before the first write.
+    fn save_new_spectator_record(&self, record: &Value) -> Result<(), String> {
+        let bytes = serde_json::to_vec_pretty(record).map_err(|e| json_error("观战备份无法保存。", &e))?;
+        if bytes.len() > 1024 * 1024 - 16384 { return Err("观战恢复记录过大，未应用观战配置。".into()); }
+        atomic_write(&self.spectator_path(), &bytes)
+    }
+    /// Arm a bounded spectator-only transaction before a MulNX launch request.
+    pub(crate) fn prepare_mulnx_observer(&self, video: &Path, executable: &Path, account: u32) -> Result<bool, String> {
+        let guard = self.acquire_write_guard()?;
+        if self.load()?.is_some() || self.spectator_pending() || self.full_spectator_pending() || self.playback_cleanup_pending() {
+            return Err("请先完成上次游戏配置恢复。".into());
+        }
+        let mut record = crate::cs2_spectator::prepare_standalone(video, executable)?;
+        record["mulnx"] = json!({"account":account,"executable":fs::canonicalize(executable).map_err(|e| io_error("游戏路径无法确认。", &e))?,"pid":null,"created":null,"finished":false,"optionsClean":false});
+        self.save_new_spectator_record(&record)?;
+        self.spectator_load_attempted_locked(&guard, true)?;
+        Ok(true)
+    }
+    pub(crate) fn validate_unsubmitted_mulnx_observer(&self, video: &Path, executable: &Path, account: u32) -> Result<(), String> {
+        let _guard = self.acquire_write_guard()?;
+        let record = self.spectator_record()?.ok_or("观战备份缺失。")?;
+        let saved_video = record["video"].as_str().ok_or("观战恢复目标缺失。")?;
+        let saved_exe = record["mulnx"]["executable"].as_str().ok_or("观战程序路径缺失。")?;
+        if record["loadAttempted"] != true || record["mulnx"]["account"] != json!(account)
+            || !record["mulnx"]["pid"].is_null() || !record["mulnx"]["created"].is_null()
+            || fs::canonicalize(saved_video).map_err(|e| io_error("观战目标无法确认。", &e))? != fs::canonicalize(video).map_err(|e| io_error("当前目标无法确认。", &e))?
+            || fs::canonicalize(saved_exe).map_err(|e| io_error("观战程序无法确认。", &e))? != fs::canonicalize(executable).map_err(|e| io_error("当前程序无法确认。", &e))? {
+            return Err("Steam 账号、游戏路径或观战启动身份已变化。".into());
+        }
+        self.validate_spectator_launch()?;
+        let identity = if record["version"] == 3 { Some(record["hud"]["identity"].as_str().ok_or("HUD 键身份缺失。")?) } else { None };
+        crate::cs2_spectator::validate_installed(executable, identity)
+    }
+    pub(crate) fn cancel_unsubmitted_mulnx_observer(&self) -> Result<(), String> {
+        let guard = self.acquire_write_guard()?;
+        let record = self.spectator_record()?.ok_or("观战备份缺失。")?;
+        if !record["mulnx"].is_object() || !record["mulnx"]["pid"].is_null() || !record["mulnx"]["created"].is_null() {
+            return Err("游戏启动身份已确认，无法取消观战备份。".into());
+        }
+        self.spectator_load_attempted_locked(&guard, false)?;
+        self.restore_spectator_locked(&guard)
+    }
+    pub(crate) fn mulnx_observer_unconfirmed(&self) -> Result<bool, String> {
+        Ok(self.spectator_record()?.is_some_and(|record| record["mulnx"].is_object()
+            && record["loadAttempted"] == true && record["mulnx"]["pid"].is_null() && record["mulnx"]["finished"] != true))
+    }
+    pub(crate) fn mark_mulnx_options_clean(&self) -> Result<(), String> {
+        let _guard = self.acquire_write_guard()?;
+        let mut record = self.spectator_record()?.ok_or("观战备份缺失。")?;
+        if !record["mulnx"].is_object() { return Err("MulNX 观战记录缺失。".into()); }
+        record["mulnx"]["optionsClean"] = json!(true);
+        atomic_write(&self.spectator_path(), &serde_json::to_vec_pretty(&record).map_err(|e| json_error("观战状态无法保存。", &e))?)
+    }
+    pub(crate) fn mark_mulnx_observer_finished(&self) -> Result<(), String> {
+        let _guard = self.acquire_write_guard()?;
+        let mut record = self.spectator_record()?.ok_or("观战备份缺失。")?;
+        if !record["mulnx"].is_object() || record["loadAttempted"] != true
+            || !record["mulnx"]["pid"].is_null() || !record["mulnx"]["created"].is_null() {
+            return Err("MulNX 观战启动身份无法确认。".into());
+        }
+        record["mulnx"]["finished"] = json!(true);
+        atomic_write(&self.spectator_path(), &serde_json::to_vec_pretty(&record).map_err(|e| json_error("观战状态无法保存。", &e))?)
+    }
+    pub(crate) fn bind_mulnx_observer(&self, pid: u32, created: u64, executable: &Path) -> Result<(), String> {
+        let _guard = self.acquire_write_guard()?;
+        let mut record = self.spectator_record()?.ok_or("观战备份缺失。")?;
+        let actual = fs::canonicalize(executable).map_err(|e| io_error("游戏路径无法确认。", &e))?;
+        if record["loadAttempted"] != true || record["mulnx"]["finished"] == true || record["mulnx"]["executable"] != json!(actual)
+            || !record["mulnx"]["pid"].is_null() || !record["mulnx"]["created"].is_null() || pid == 0 || created == 0 {
+            return Err("MulNX 观战启动身份无法确认。".into());
+        }
+        record["mulnx"]["pid"] = json!(pid); record["mulnx"]["created"] = json!(created);
+        atomic_write(&self.spectator_path(), &serde_json::to_vec_pretty(&record).map_err(|e| json_error("观战身份无法保存。", &e))?)
+    }
+    pub(crate) fn mulnx_observer_matches(&self, pid: u32, created: u64, executable: &Path) -> Result<Option<bool>, String> {
+        let Some(record) = self.spectator_record()? else { return Ok(None); };
+        let actual = fs::canonicalize(executable).map_err(|e| io_error("游戏路径无法确认。", &e))?;
+        if record["loadAttempted"] != true || record["mulnx"]["pid"] != json!(pid)
+            || record["mulnx"]["created"] != json!(created) || record["mulnx"]["executable"] != json!(actual) {
+            return Ok(None);
+        }
+        Ok(Some(record["version"] == 3))
+    }
+    pub(crate) fn mulnx_observer_native(&self) -> Result<bool, String> {
+        Ok(self.spectator_record()?.is_some_and(|record| record["version"] == 3 && record["loadAttempted"] == true
+            && record["mulnx"]["pid"].as_u64().is_some_and(|n| n > 0)
+            && record["mulnx"]["created"].as_u64().is_some_and(|n| n > 0)))
+    }
+    pub(crate) fn mulnx_observer_target(&self) -> Result<Option<(PathBuf, PathBuf, u32)>, String> {
+        let Some(record) = self.spectator_record()? else { return Ok(None); };
+        if !record["mulnx"].is_object() { return Ok(None); }
+        let video = record["video"].as_str().ok_or("观战恢复目标缺失。")?;
+        let executable = record["mulnx"]["executable"].as_str().ok_or("观战恢复目标缺失。")?;
+        let account = record["mulnx"]["account"].as_u64().and_then(|n| u32::try_from(n).ok()).ok_or("观战恢复账号缺失。")?;
+        Ok(Some((video.into(), executable.into(), account)))
+    }
     pub fn spectator_warning(&self) -> Option<String> {
         match self.spectator_record() {
             Ok(Some(record)) => record["warning"].as_str().map(str::to_string),
@@ -292,12 +388,21 @@ impl SessionStore {
     }
     pub fn validate_spectator_launch(&self) -> Result<(), String> {
         let record = self.spectator_record()?.ok_or("观战原值备份缺失。")?;
-        if record["version"] != 2 {
+        if record["version"] != 2 && record["version"] != 3 {
             return Err("观战原绑定备份版本无法核实。".into());
         }
         let video = Path::new(record["video"].as_str().ok_or("观战恢复路径缺失。")?);
         crate::cs2_spectator::check_archive(video)?;
-        crate::cs2_spectator::validate_bindings(video, &record["bindings"])
+        crate::cs2_spectator::validate_bindings(video, &record["bindings"])?;
+        if record["version"] == 3 { crate::cs2_spectator::validate_hud(video, &record["hud"])?; }
+        Ok(())
+    }
+    pub fn spectator_hud_identity(&self) -> Result<Option<String>, String> {
+        let record = self.spectator_record()?.ok_or("观战原值备份缺失。")?;
+        if record["version"] != 3 { return Ok(None); }
+        let identity = record["hud"]["identity"].as_str().ok_or("HUD 键身份缺失。")?;
+        crate::cs2_spectator::hud_cfg_name(identity)?;
+        Ok(Some(identity.to_string()))
     }
     /// Persist the possible +exec write before submitting Steam's request.
     /// A definitively failed spawn can disarm it; an ambiguous launch cannot.
@@ -310,7 +415,7 @@ impl SessionStore {
             self.validate_spectator_launch()?;
         }
         let mut record = self.spectator_record()?.ok_or("观战原值备份缺失。")?;
-        if record["version"] != 2 {
+        if record["version"] != 2 && record["version"] != 3 {
             return Err("观战原绑定备份版本无法核实。".into());
         }
         record["loadAttempted"] = json!(attempted);
@@ -331,14 +436,14 @@ impl SessionStore {
             return Ok(());
         };
         let result = (|| {
-            if record["version"] != 1 && record["version"] != 2 {
+            if record["version"] != 1 && record["version"] != 2 && record["version"] != 3 {
                 return Err("观战恢复记录版本不支持。".into());
             }
             let video = Path::new(record["video"].as_str().ok_or("观战恢复路径缺失。")?);
             if !video.is_absolute() || video.file_name().is_none_or(|v| v != "cs2_video.txt") {
                 return Err("观战恢复路径无效。".into());
             }
-            if record["version"] == 2 {
+            if record["version"] == 2 || record["version"] == 3 {
                 match record["loadAttempted"].as_bool() {
                     Some(false) => {
                         return fs::remove_file(self.spectator_path())
@@ -348,7 +453,9 @@ impl SessionStore {
                     None => return Err("观战加载记录无法核实，原值备份仍保留。".into()),
                 }
             }
-            let bindings_result = if record["version"] == 2 {
+            let bindings_result = if record["version"] == 3 {
+                crate::cs2_spectator::restore_v3_bindings(video, &record["bindings"], &record["hud"])
+            } else if record["version"] == 2 {
                 crate::cs2_spectator::restore_bindings(video, &record["bindings"])
             } else {
                 Ok(()) // Legacy records own only the spectator convar.
@@ -746,9 +853,26 @@ impl SessionStore {
         self.prepare_preserved_locked(&guard, video, executable)
     }
     fn prepare_preserved_locked(&self, guard: &StoreGuard, video: &Path, executable: &Path) -> Result<Value, String> {
+        if self.mulnx_observer_target()?.is_some() { return Err("请先恢复上次 MulNX 观战键位。".into()); }
         self.backup_originals_locked(guard, video)?;
-        let value = json!({"version":3,"preserveSettings":true,"video":video,"executable":executable,
+        let mut value = json!({"version":3,"preserveSettings":true,"video":video,"executable":executable,
             "launchAttempted":false,"pid":null,"created":null});
+        let spectator = if self.spectator_pending() || self.full_spectator_pending() {
+            Err("上次观战键位尚未恢复，本次未加载观战 CFG。".into())
+        } else {
+            crate::cs2_spectator::prepare_standalone(video, executable)
+        };
+        match spectator.and_then(|record| {
+            self.save_new_spectator_record(&record)?;
+            Ok(record)
+        }) {
+            Ok(record) => {
+                value["spectatorCfg"] = json!(true); value["nativeHudToggle"] = json!(record["version"] == 3);
+                if record["version"] == 3 { value["hudIdentity"] = record["hud"]["identity"].clone(); }
+                if let Some(warning) = record["hudWarning"].as_str() { value["spectatorWarning"] = json!(warning); }
+            }
+            Err(warning) => value["spectatorWarning"] = json!(warning),
+        }
         self.save_locked(guard, &value)?;
         Ok(value)
     }
@@ -787,6 +911,7 @@ impl SessionStore {
         executable: &Path,
         size: cs2_video::VideoSize,
     ) -> Result<Value, String> {
+        if self.mulnx_observer_target()?.is_some() { return Err("请先恢复上次 MulNX 观战键位。".into()); }
         let preferences = self.preferences()?;
         let frames = cs2_frame_rate::prepare(video, executable, preferences.frame_rate_limit)?;
         let spectator = if self.spectator_pending() || self.full_spectator_pending() {
@@ -798,15 +923,17 @@ impl SessionStore {
         let armed = spectator.and_then(|record| {
             // This exact original must survive core recovery and restart even if
             // optional restore later fails. Save it before allowing +exec.
-            atomic_write(
-                &self.spectator_path(),
-                &serde_json::to_vec_pretty(&record)
-                    .map_err(|error| json_error("观战原值备份无法保存。", &error))?,
-            )?;
+            self.save_new_spectator_record(&record)?;
             Ok(())
         });
         match armed {
-            Ok(()) => journal["spectatorCfg"] = json!(true),
+            Ok(()) => {
+                journal["spectatorCfg"] = json!(true);
+                let record = self.spectator_record()?.ok_or("观战原值备份缺失。")?;
+                journal["nativeHudToggle"] = json!(record["version"] == 3);
+                if record["version"] == 3 { journal["hudIdentity"] = record["hud"]["identity"].clone(); }
+                if let Some(warning) = record["hudWarning"].as_str() { journal["spectatorWarning"] = json!(warning); }
+            },
             Err(warning) => {
                 journal["spectatorWarning"] = json!(format!("数字键观战预设未应用：{warning}"))
             }
@@ -1108,6 +1235,14 @@ impl SessionStore {
         }
     }
 
+    fn restore_core_spectator_locked(&self, guard: &StoreGuard) -> Option<String> {
+        match self.mulnx_observer_target() {
+            Ok(Some(_)) => Some("MulNX 观战备份仍待按原账号和程序恢复。".into()),
+            Err(error) => Some(error),
+            Ok(None) => self.restore_spectator_locked(guard).err(),
+        }
+    }
+
     /// Caller must independently confirm no CS2 process can still write this file.
     pub fn restore(&self) -> Result<Option<String>, String> {
         let guard = self.acquire_write_guard()?;
@@ -1148,9 +1283,10 @@ impl SessionStore {
             {
                 return Err("保留设置的启动记录无效。".into());
             }
-            // Nothing was owned or changed. In particular, never replace game
-            // writes made during this session with an incident snapshot.
-            return self.finish_core_restore_locked(guard, playback_handoff, None);
+            // Video and frame settings remain untouched; spectator keys are an
+            // independent bounded owner and may still need restoration.
+            let spectator_error = self.restore_core_spectator_locked(guard);
+            return self.finish_core_restore_locked(guard, playback_handoff, spectator_error);
         }
         let path = Path::new(value["video"].as_str().ok_or("CS2 恢复路径缺失。")?);
         if path.file_name().and_then(|n| n.to_str()) != Some("cs2_video.txt") || !path.is_absolute()
@@ -1215,7 +1351,7 @@ impl SessionStore {
         }
         // Optional errors retain their own original + diagnostic and cannot
         // prevent completion of the existing FPS/video transaction.
-        let spectator_error = self.restore_spectator_locked(guard).err();
+        let spectator_error = self.restore_core_spectator_locked(guard);
         self.finish_core_restore_locked(guard, playback_handoff, spectator_error)
     }
 }
@@ -1894,6 +2030,142 @@ mod tests {
 
 
 
+
+    #[test]
+    fn preserve_video_still_arms_observer_cfg_and_restores_its_keys() {
+        let (root, video, machine, executable, store) = frame_setup();
+        fs::write(&machine, "\"config\" {\"convars\" {\"fps_max\" \"0\" \"spec_usenumberkeys_nobinds\" \"0\"}}").unwrap();
+        let keys = video.parent().unwrap().join("cs2_user_keys_0_slot0.vcfg");
+        let original = "\"config\" {\"bindings\" {\"h\" \"custom\"}}"; fs::write(&keys, original).unwrap();
+        let before = fs::read(&video).unwrap();
+        let journal = store.prepare_preserved(&video, &executable).unwrap();
+        assert_eq!(journal["preserveSettings"], true); assert_eq!(journal["nativeHudToggle"], true);
+        store.spectator_load_attempted(true).unwrap();
+        fs::write(&keys, original.replace("custom", "toggle cl_draw_only_deathnotices 0 1")).unwrap();
+        SessionStore::new(root.clone()).restore().unwrap();
+        assert_eq!(fs::read_to_string(&keys).unwrap(), original); assert_eq!(fs::read(&video).unwrap(), before);
+        assert!(!store.spectator_pending());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn mulnx_observer_arms_binds_identity_and_restores_only_after_game() {
+        for identity in ["h", "scancode11"] {
+            let (root, video, machine, executable, store) = frame_setup();
+            fs::create_dir_all(executable.parent().unwrap()).unwrap(); fs::write(&executable, b"fixture").unwrap();
+            fs::write(&machine, "\"config\" {\"convars\" {\"fps_max\" \"0\" \"spec_usenumberkeys_nobinds\" \"0\"}}").unwrap();
+            let keys = video.parent().unwrap().join("cs2_user_keys_0_slot0.vcfg");
+            let original = format!("\"config\" {{\"bindings\" {{\"{identity}\" \"custom\"}}}}");
+            fs::write(&keys, &original).unwrap();
+            assert!(store.prepare_mulnx_observer(&video, &executable, 1).unwrap());
+            assert_eq!(store.spectator_record().unwrap().unwrap()["loadAttempted"], true);
+            assert!(store.mulnx_observer_unconfirmed().unwrap());
+            assert!(store.validate_unsubmitted_mulnx_observer(&video, &executable, 1).is_ok());
+            assert!(store.validate_unsubmitted_mulnx_observer(&video, &executable, 2).is_err());
+            fs::write(&keys, original.replace("custom", "edited")).unwrap();
+            assert!(store.validate_unsubmitted_mulnx_observer(&video, &executable, 1).is_err());
+            fs::write(&keys, &original).unwrap();
+            assert!(store.prepare_preserved(&video, &executable).is_err());
+            store.mark_mulnx_options_clean().unwrap();
+            assert_eq!(store.spectator_record().unwrap().unwrap()["mulnx"]["optionsClean"], true);
+            assert!(store.mulnx_observer_matches(123, 456, &executable).unwrap().is_none());
+            store.bind_mulnx_observer(123, 456, &executable).unwrap();
+            assert!(!store.mulnx_observer_unconfirmed().unwrap());
+            assert_eq!(store.mulnx_observer_matches(123, 456, &executable).unwrap(), Some(true));
+            assert!(store.mulnx_observer_matches(123, 457, &executable).unwrap().is_none());
+            assert!(store.cancel_unsubmitted_mulnx_observer().is_err());
+            let applied = original.replace("custom", "toggle cl_draw_only_deathnotices 0 1");
+            let changed = applied.replace("toggle cl_draw_only_deathnotices 0 1", "user changed");
+            fs::write(&keys, &changed).unwrap();
+            assert!(store.restore_spectator().is_err());
+            assert_eq!(fs::read_to_string(&keys).unwrap(), changed); assert!(store.spectator_pending());
+            fs::write(&keys, &applied).unwrap();
+            SessionStore::new(root.clone()).restore_spectator().unwrap();
+            assert_eq!(fs::read_to_string(&keys).unwrap(), original); assert!(!store.spectator_pending());
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+    #[test]
+    fn oversized_spectator_record_is_rejected_before_creation() {
+        let (root, _, _, _, store) = frame_setup();
+        let record = json!({"originalKeys": "\u{0001}".repeat(180_000)});
+        assert!(store.save_new_spectator_record(&record).is_err());
+        assert!(!store.spectator_pending());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn mulnx_unsubmitted_observer_backup_is_disarmed() {
+        let (root, video, machine, executable, store) = frame_setup();
+        fs::create_dir_all(executable.parent().unwrap()).unwrap(); fs::write(&executable, b"fixture").unwrap();
+        fs::write(&machine, "\"config\" {\"convars\" {\"fps_max\" \"0\" \"spec_usenumberkeys_nobinds\" \"0\"}}").unwrap();
+        let keys = video.parent().unwrap().join("cs2_user_keys_0_slot0.vcfg");
+        let original = "\"config\" {\"bindings\" {\"h\" \"custom\"}}"; fs::write(&keys, original).unwrap();
+        assert!(store.prepare_mulnx_observer(&video, &executable, 1).unwrap());
+        store.cancel_unsubmitted_mulnx_observer().unwrap();
+        assert!(!store.spectator_pending()); assert_eq!(fs::read_to_string(&keys).unwrap(), original);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn managed_spectator_prepare_records_h_and_scan_and_rejects_missing_or_ambiguous() {
+        for (entries, expected) in [("\"h\" \"\"", Some("h")), ("\"scancode11\" \"custom\"", Some("scancode11")), ("", Some("scancode11")), ("\"h\" \"one\" \"scancode11\" \"two\"", None)] {
+            let (root, video, machine, executable, store) = frame_setup();
+            fs::write(&machine, "\"config\" {\"convars\" {\"fps_max\" \"0\" \"spec_usenumberkeys_nobinds\" \"1\"}}").unwrap();
+            let keys = video.parent().unwrap().join("cs2_user_keys_0_slot0.vcfg");
+            let original = format!("\"config\" {{\"bindings\" {{{entries}}}}}");
+            fs::write(&keys, &original).unwrap();
+            let journal = store.prepare_with_frame_rate(&video, &executable, cs2_video::VideoSize::new(1440,810).unwrap()).unwrap();
+            assert_eq!(journal["spectatorCfg"], true);
+            assert_eq!(journal["nativeHudToggle"], expected.is_some());
+            assert_eq!(store.spectator_hud_identity().unwrap().as_deref(), expected);
+            if expected.is_some() { assert_eq!(store.spectator_record().unwrap().unwrap()["hud"]["originalKeys"], original); }
+            store.validate_spectator_launch().unwrap();
+            if expected.is_some() {
+                fs::write(&keys, "\"config\" {\"bindings\" {\"h\" \"changed\"}}").unwrap();
+                assert!(store.validate_spectator_launch().is_err());
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn missing_key_backup_never_arms_native_hud_cfg() {
+        let (root, video, machine, executable, store) = frame_setup();
+        fs::write(&machine, "\"config\" {\"convars\" {\"fps_max\" \"0\" \"spec_usenumberkeys_nobinds\" \"1\"}}").unwrap();
+        fs::remove_file(video.parent().unwrap().join("cs2_user_keys_0_slot0.vcfg")).unwrap();
+        let journal = store.prepare_with_frame_rate(&video, &executable, cs2_video::VideoSize::new(1440, 810).unwrap()).unwrap();
+        assert_ne!(journal["nativeHudToggle"], true);
+        assert_ne!(journal["spectatorCfg"], true);
+        assert!(!store.spectator_pending());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn synthetic_v3_recovery_keeps_h_conflicts_and_retries_from_host() {
+        let (root, video, machine, executable, store) = frame_setup();
+        fs::write(&machine, "\"config\" {\"convars\" {\"fps_max\" \"0\" \"spec_usenumberkeys_nobinds\" \"1\"}}").unwrap();
+        let keys = video.parent().unwrap().join("cs2_user_keys_0_slot0.vcfg");
+        fs::write(&keys, "\"config\" {\"bindings\" {\"h\" \"custom\"}}").unwrap();
+        store.prepare_with_frame_rate(&video, &executable, cs2_video::VideoSize::new(1440, 810).unwrap()).unwrap();
+        let mut record = store.spectator_record().unwrap().unwrap();
+        assert_eq!(record["version"], 3);
+        assert_eq!(store.spectator_hud_identity().unwrap().as_deref(), Some("h"));
+        record["version"] = json!(3);
+        record["hud"] = json!({"identity":"h", "candidates":{"h":"\"custom\"", "scancode11":null}, "originalKeys":"\"config\" {\"bindings\" {\"h\" \"custom\"}}"});
+        record["loadAttempted"] = json!(true);
+        atomic_write(&store.spectator_path(), &serde_json::to_vec(&record).unwrap()).unwrap();
+        // Synthetic persistence fixture, not a claim about actual CS2 key serialization.
+        let applied = "\"config\" {\"bindings\" {\"h\" \"toggle cl_draw_only_deathnotices 0 1\"}}";
+        fs::write(&keys, applied.replace("toggle cl_draw_only_deathnotices 0 1", "new user value")).unwrap();
+        assert!(SessionStore::new(root.clone()).restore_spectator().is_err());
+        assert!(fs::read_to_string(&keys).unwrap().contains("new user value"));
+        assert!(store.spectator_pending());
+        fs::write(&keys, applied).unwrap();
+        SessionStore::new(root.clone()).restore_spectator().unwrap();
+        assert_eq!(cs2_frame_rate::field(&fs::read_to_string(&keys).unwrap(), &["config", "bindings", "h"]).unwrap().unwrap().value, "custom");
+        assert!(!store.spectator_pending());
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn observer_cfg_restores_boolean_and_ten_bindings_preserving_other_game_edits() {

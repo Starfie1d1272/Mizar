@@ -450,11 +450,11 @@ pub fn prepare_external_entry(log: &DesktopLog, expected_revision: &str) -> Resu
 }
 
 /// Existing private runtime identity; browsers cannot renew a native lease.
-pub fn prepare_mulnx(log: &DesktopLog, cs2: &std::path::Path, update: bool) -> Result<serde_json::Value, String> {
+pub fn prepare_mulnx(log: &DesktopLog, cs2: &std::path::Path, update: bool, spectator_cfg: bool) -> Result<serde_json::Value, String> {
     let token = runtime_token(log)?;
     let console_capture = crate::cs2_console::settings(log)?["enabled"] == true;
-    log.event("mulnx_prepare_request", "begin", Some(&serde_json::json!({"cs2Path":cs2.to_string_lossy(),"consoleCapture":console_capture,"update":update}).to_string()));
-    let body = serde_json::json!({"cs2Path": cs2.to_string_lossy(),"consoleCapture":console_capture,"update":update}).to_string();
+    log.event("mulnx_prepare_request", "begin", Some(&serde_json::json!({"cs2Path":cs2.to_string_lossy(),"consoleCapture":console_capture,"update":update,"spectatorCfg":spectator_cfg}).to_string()));
+    let body = serde_json::json!({"cs2Path": cs2.to_string_lossy(),"consoleCapture":console_capture,"update":update,"spectatorCfg":spectator_cfg}).to_string();
     let (code, value) = request_with_identity(log, "POST", "/operator/runtime/mulnx-prepare", &body,
         Instant::now() + Duration::from_secs(240), Some(&token))?;
     if code != 200 {

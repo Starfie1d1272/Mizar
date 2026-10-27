@@ -372,7 +372,13 @@ export function registerWorkspaceObserver(
   canStart: () => boolean = () => true,
   settings?: ObserverSettingsStore,
 ) {
-  type Host = { game: string; job: string; executable: string; useMulnx: boolean };
+  type Host = {
+    game: string;
+    job: string;
+    executable: string;
+    useMulnx: boolean;
+    nativeHudToggle: boolean;
+  };
   let host: Host | undefined;
   let hostLease = 0;
   let prepared: { identity: string; settingsRevision: string; token: string } | undefined;
@@ -392,10 +398,18 @@ export function registerWorkspaceObserver(
     queue = next.catch(() => {});
     return next;
   };
-  const identity = (value: { game: string; job: string; useMulnx: boolean }) =>
-    JSON.stringify([value.game, value.job, value.useMulnx]);
-  const policy = (value: { game: string; job: string; useMulnx: boolean }) =>
-    JSON.stringify([identity(value), value.useMulnx ? settings?.gameAutomation : null]);
+  const identity = (value: {
+    game: string;
+    job: string;
+    useMulnx: boolean;
+    nativeHudToggle: boolean;
+  }) => JSON.stringify([value.game, value.job, value.useMulnx, value.nativeHudToggle]);
+  const policy = (value: {
+    game: string;
+    job: string;
+    useMulnx: boolean;
+    nativeHudToggle: boolean;
+  }) => JSON.stringify([identity(value), value.useMulnx ? settings?.gameAutomation : null]);
   const leased = () =>
     host !== undefined &&
     (!prepared || prepared.identity === identity(host)) &&
@@ -479,6 +493,7 @@ export function registerWorkspaceObserver(
   const command = z.discriminatedUnion('action', [
     z.strictObject({
       action: z.literal('prepare'),
+      nativeHudToggle: z.boolean().default(false),
       expectedRevision: z.uuid().optional(),
       useMulnx: z.boolean().default(false),
       game: z.string().max(80),
@@ -486,6 +501,7 @@ export function registerWorkspaceObserver(
     }),
     z.strictObject({
       action: z.literal('start-configured'),
+      nativeHudToggle: z.boolean().default(false),
       useMulnx: z.boolean().default(false),
       executable: z.string().max(2048),
       job: z.string().max(100),
@@ -532,7 +548,8 @@ export function registerWorkspaceObserver(
           !settings ||
           !(
             settings.settings.enabled ||
-            (gameControl && (gameControl.autoConnect || gameControl.hideGameHud))
+            (gameControl &&
+              (gameControl.autoConnect || (!body.nativeHudToggle && gameControl.hideGameHud)))
           )
         )
           return { ok: true, enabled: false };
@@ -553,7 +570,7 @@ export function registerWorkspaceObserver(
           ok: true,
           enabled: true,
           revision: prepared.token,
-          hideGameHud: Boolean(gameControl && gameControl.hideGameHud),
+          hideGameHud: Boolean(!body.nativeHudToggle && gameControl && gameControl.hideGameHud),
           reuse:
             pending === 0 &&
             host !== undefined &&
@@ -564,7 +581,9 @@ export function registerWorkspaceObserver(
               (observer.view().active && observerKey === activeKeys.observer)) &&
             (!gameControl ||
               ((!gameControl.autoConnect || connectedGame === activeKeys.connect) &&
-                (!gameControl.hideGameHud || hiddenGame === activeKeys.hud))),
+                (body.nativeHudToggle ||
+                  !gameControl.hideGameHud ||
+                  hiddenGame === activeKeys.hud))),
           connection: connection
             ? {
                 earlyEndpoint: connection.earlyEndpoint,
@@ -592,17 +611,27 @@ export function registerWorkspaceObserver(
           const value: Host = body;
           const key = keys(value);
           const connect = Boolean(gameControl?.autoConnect && connectedGame !== key.connect);
-          const hide = Boolean(gameControl?.hideGameHud && hiddenGame !== key.hud);
-          if (gameControl?.hideGameHud && (connect || hide) && body.hudOriginal === undefined)
+          const hide = Boolean(
+            !body.nativeHudToggle && gameControl?.hideGameHud && hiddenGame !== key.hud,
+          );
+          if (
+            !body.nativeHudToggle &&
+            gameControl?.hideGameHud &&
+            (connect || hide) &&
+            body.hudOriginal === undefined
+          )
             throw new Error('observer_hud_snapshot_required');
           // An accepted game command is retained even if a later observer launch fails.
           // Retrying the private source must not reconnect the on-air game.
           if (connect && connection) {
             await sendObserverGameCommand(
-              observerConnectCommand(connection, Boolean(gameControl?.hideGameHud)),
+              observerConnectCommand(
+                connection,
+                Boolean(!body.nativeHudToggle && gameControl?.hideGameHud),
+              ),
             );
             connectedGame = key.connect;
-            if (gameControl?.hideGameHud) hiddenGame = key.hud;
+            if (!body.nativeHudToggle && gameControl?.hideGameHud) hiddenGame = key.hud;
           } else if (hide) {
             await sendObserverGameCommand('cl_draw_only_deathnotices 1');
             hiddenGame = key.hud;

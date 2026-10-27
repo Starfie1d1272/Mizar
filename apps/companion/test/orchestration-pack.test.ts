@@ -75,6 +75,33 @@ it('prepares the installed launcher locally and preserves upstream options', asy
   await restarted.load();
   await restarted.prepare('D:\\Steam\\game\\bin\\win64\\cs2.exe', false);
   expect(await readFile(config, 'utf8')).toContain('launchOptions: -insecure -novid\n');
+  // The fixed CFG and console flag share one ownership record across restarts.
+  await restarted.prepare('D:\\Steam\\game\\bin\\win64\\cs2.exe', true, false, true);
+  expect(await readFile(config, 'utf8')).toContain('-condebug +exec mizar_observer.cfg');
+  const combined = await readFile(config, 'utf8');
+  await restarted.prepare('D:\\Steam\\game\\bin\\win64\\cs2.exe', false, false, true);
+  expect(await readFile(config, 'utf8')).toContain('+exec mizar_observer.cfg');
+  expect(await readFile(config, 'utf8')).not.toContain('-condebug');
+  // A crash between journal and configuration rename accepts either known line.
+  const ownership = join(root, directory, 'MulNX/mizar-console-options.json');
+  const cfgOnly = await readFile(config, 'utf8');
+  const originalLine = 'launchOptions: -insecure -novid';
+  const oldLine = combined.match(/^launchOptions:.*$/m)![0];
+  const nextLine = cfgOnly.match(/^launchOptions:.*$/m)![0];
+  await writeFile(
+    ownership,
+    JSON.stringify({ original: originalLine, managed: nextLine, previous: oldLine }),
+  );
+  await writeFile(config, combined);
+  await restarted.prepare('D:\\Steam\\game\\bin\\win64\\cs2.exe', false, false, true);
+  expect(await readFile(config, 'utf8')).toContain(nextLine);
+  await restarted.prepare('D:\\Steam\\game\\bin\\win64\\cs2.exe', false);
+  expect(await readFile(config, 'utf8')).toContain(originalLine);
+  // A user-provided exec remains theirs and is not removed.
+  await writeFile(config, 'path: old\nlaunchOptions: "-novid +exec mizar_observer.cfg"\n');
+  await restarted.prepare('D:\\Steam\\game\\bin\\win64\\cs2.exe', false, false, true);
+  await restarted.prepare('D:\\Steam\\game\\bin\\win64\\cs2.exe', false);
+  expect(await readFile(config, 'utf8')).toContain('+exec mizar_observer.cfg');
   // User supplied condebug is retained after either preference change.
   await writeFile(config, 'path: old\nlaunchOptions: "-insecure -condebug -novid"\n');
   await restarted.prepare('D:\\Steam\\game\\bin\\win64\\cs2.exe', true);
