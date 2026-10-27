@@ -357,7 +357,7 @@ export class ObsAdapter {
   }
   ensure(activeScene: () => ProgramSceneId = () => 'waiting'): Promise<readonly ObsFinding[]> {
     return this.configurationMutation(async () => {
-      this.findings = await this.withObs(async (obs) => {
+      this.findings = await this.withObs(async (obs, endpoint) => {
         const visual = await ensureObsConfiguration(obs, this.browserBaseUrl, activeScene);
         if (
           visual.some((item) =>
@@ -370,9 +370,18 @@ export class ObsAdapter {
           )
         )
           return visual;
-        const audio = (await this.audioRouting?.enabled())
-          ? await checkObsAudio(obs)
-          : await ensureObsAudio(obs, this.browserBaseUrl);
+        let audio: ObsFinding[];
+        if (await this.audioRouting?.enabled()) {
+          audio = await checkObsAudio(obs);
+          const routing = await this.audioRouting!.read(obs, endpoint);
+          for (const [role, binding] of Object.entries(routing.bindings)) {
+            if (!binding || !binding.valid)
+              audio.push({
+                code: `audio_binding:${role}`,
+                message: `${role} 音频来源未绑定或已失效，请在音频分路中核对。`,
+              });
+          }
+        } else audio = await ensureObsAudio(obs, this.browserBaseUrl);
         return [...visual, ...audio];
       }, 30_000);
       return this.findings;

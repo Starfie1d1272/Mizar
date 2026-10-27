@@ -36,9 +36,14 @@ export function ObsAudioRouting() {
     });
     if (!response.ok) {
       await refresh();
-      throw new Error('来源或绑定已变化，请重新选择。');
+      throw new Error('绑定结果未确认，请核对刷新后的状态再操作。');
     }
-    setStatus((await response.json()) as ObsAudioRoutingStatus);
+    try {
+      await refresh();
+    } catch {
+      setStatus(null);
+      throw new Error('绑定已保存，但状态刷新失败；请重新读取 OBS 来源核对。');
+    }
   }
   return (
     <div>

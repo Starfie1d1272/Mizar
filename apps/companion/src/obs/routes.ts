@@ -60,11 +60,15 @@ export function registerObsRoutes(
     const parsed = obsAudioBindCommandSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'audio_binding_invalid' });
     try {
-      return await options.adapter.bindAudio(parsed.data);
+      await options.adapter.bindAudio(parsed.data);
+      return { ok: true };
     } catch {
       return reply
         .code(409)
-        .send({ error: 'audio_binding_changed', message: '绑定未保存，请刷新 OBS 来源后重试。' });
+        .send({
+          error: 'audio_binding_changed',
+          message: '绑定结果未确认，请刷新 OBS 来源后核对。',
+        });
     }
   });
   app.get('/local/v1/obs/outputs', async (_request, reply) =>

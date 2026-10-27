@@ -235,6 +235,5 @@ export class ObsAudioRouting {
       await rm(temp, { force: true });
     }
     this.state = next;
-    return this.read(obs, endpoint);
   }
 }

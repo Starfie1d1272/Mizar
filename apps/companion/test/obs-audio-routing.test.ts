@@ -45,7 +45,7 @@ it('binds only explicit current UUIDs and rejects stale windows, deleted sources
         'ws://127.0.0.1:4456',
       ),
     ).rejects.toThrow('audio_selection_changed');
-    const bound = await routing.bind(
+    await routing.bind(
       obs,
       {
         role: 'remoteCommentary',
@@ -54,7 +54,9 @@ it('binds only explicit current UUIDs and rejects stale windows, deleted sources
       },
       'ws://127.0.0.1:4455',
     );
-    expect(bound.bindings.remoteCommentary?.inputUuid).toBe('two');
+    expect(
+      (await routing.read(obs, 'ws://127.0.0.1:4455')).bindings.remoteCommentary?.inputUuid,
+    ).toBe('two');
     expect((await routing.read(obs, 'ws://127.0.0.1:4456')).bindings.remoteCommentary?.valid).toBe(
       false,
     );

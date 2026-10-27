@@ -23,29 +23,35 @@ test('explicitly selects an OBS source and reports stale bindings', async ({ pag
     ],
     findings: ['桌面音频可能包含应用音频和音乐监听；请在 OBS 中核对并自行迁移。'],
   };
-  await page.route('**/local/v1/obs/audio-routing', (route) => route.fulfill({ json: status }));
+  let bound = false;
+  await page.route('**/local/v1/obs/audio-routing', (route) =>
+    route.fulfill({
+      json: bound
+        ? {
+            ...status,
+            bindings: {
+              ...status.bindings,
+              remoteCommentary: {
+                inputUuid: 'two',
+                inputKind: status.candidates[1]!.kind,
+                collection: 'Mizar',
+                endpoint: status.endpoint,
+                valid: true,
+                name: 'TeamSpeak 6',
+              },
+            },
+          }
+        : status,
+    }),
+  );
   await page.route('**/operator/obs/audio-routing', (route) => {
     expect(route.request().postDataJSON()).toEqual({
       role: 'remoteCommentary',
       selectionId: status.candidates[1]!.selectionId,
       revision,
     });
-    return route.fulfill({
-      json: {
-        ...status,
-        bindings: {
-          ...status.bindings,
-          remoteCommentary: {
-            inputUuid: 'two',
-            inputKind: status.candidates[1]!.kind,
-            collection: 'Mizar',
-            endpoint: status.endpoint,
-            valid: true,
-            name: 'TeamSpeak 6',
-          },
-        },
-      },
-    });
+    bound = true;
+    return route.fulfill({ json: { ok: true } });
   });
   await page.goto('/settings?tab=obs');
   await page.getByRole('button', { name: '刷新 OBS 音频来源' }).click();
