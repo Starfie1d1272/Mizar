@@ -58,6 +58,7 @@ export class ProgramSceneController {
   }
   private active: ProgramSceneId = 'waiting';
   private bpCompact: 'off' | 'on' | 'unknown' = 'off';
+  private bpFallbackReason: string | null = null;
   private compactPreparing = false;
   private bpCompactTarget: 'managed' | 'external' = 'managed';
   private revision = randomUUID();
@@ -75,6 +76,8 @@ export class ProgramSceneController {
     ) => Promise<void>,
     private readonly switchObsForExit?: (options: ObsSceneSwitchOptions) => Promise<void>,
     private readonly switchBpCompact?: (visible: boolean) => Promise<void>,
+    private readonly bpPresentationMode: () => 'full' | 'compact' = () => 'full',
+    private readonly gameBackgroundReady: () => Promise<boolean> = () => Promise.resolve(false),
   ) {}
 
   private blockedReason(id: ProgramSceneId, automatic = false): string | null {
@@ -142,7 +145,14 @@ export class ProgramSceneController {
       introRevision:
         this.preparing?.target === 'matchup' ? this.preparing.revision : this.introRevision,
       ...(this.preparing ? { preparing: this.preparing } : {}),
-      ...(this.director ? { director: this.director.get() } : {}),
+      ...(this.director
+        ? {
+            director: {
+              ...this.director.get(),
+              reason: this.bpFallbackReason ?? this.director.get().reason,
+            },
+          }
+        : {}),
       available: PROGRAM_SCENES.filter((scene) => !(scene.id in blocked)).map((scene) => scene.id),
       blocked,
     });
@@ -192,6 +202,7 @@ export class ProgramSceneController {
       return;
     this.bpSession.finishSceneExit();
     this.bpCompact = 'unknown';
+    this.bpFallbackReason = '紧凑 BP 状态待核对，请检查 OBS。';
     this.revision = randomUUID();
   }
 
@@ -312,10 +323,12 @@ export class ProgramSceneController {
           }).catch(() => undefined);
       };
       try {
-        await switchObs?.(id, {
+        const physical = id === 'bp' && this.bpCompact === 'on' ? 'gameplay' : id;
+        await switchObs?.(physical, {
           transition: programTransition(id, id, true),
           valid: () => expectedRevision === this.revision && this.blockedReason(id) === null,
         });
+        if (physical === 'gameplay' && id === 'bp') await this.switchBpCompact?.(true);
         if (expectedRevision !== this.revision || this.blockedReason(id) !== null) {
           await restoreCurrent();
           return { ok: false as const, message: '播出状态已变化，请核对后重试。' };
@@ -353,6 +366,14 @@ export class ProgramSceneController {
       const nextRevision = randomUUID();
       let preparedBpRevision: string | undefined;
       const rollback = async () => {
+        if (this.bpCompact === 'on') {
+          try {
+            await this.switchBpCompact?.(false);
+            this.bpCompact = 'off';
+          } catch {
+            this.bpCompact = 'unknown';
+          }
+        }
         // A Cut is not delayed by the obsolete automatic transition or its signal.
         await switchObs?.(this.active, {
           transition: programTransition(id, this.active, true),
@@ -361,6 +382,14 @@ export class ProgramSceneController {
           this.bpSession.finishSceneExit();
       };
       try {
+        // Inspect the game before starting the shared reveal clock. A slow OBS
+        // screenshot must not consume steps while the operator is still waiting.
+        const wantsCompact = id === 'bp' && this.bpPresentationMode() === 'compact';
+        const compactReady =
+          wantsCompact &&
+          !!switchObs &&
+          !!this.switchBpCompact &&
+          (await this.gameBackgroundReady());
         if (id === 'bp') {
           const bp = this.bpSession.get();
           if (bp.state === 'hidden') {
@@ -376,14 +405,41 @@ export class ProgramSceneController {
           (p.round?.phase === 'live' ||
             (p.clock?.phase === 'freezetime' && (p.clock.endsInSeconds ?? 0) <= 5));
         this.preparing = { target: id, revision: nextRevision };
-        await switchObs?.(id, {
+        const options: ObsSceneSwitchOptions = {
           transition: programTransition(previous, id, !automaticValid || urgent),
           signal: abort.signal,
           valid: () =>
             valid() &&
             expectedRevision === this.revision &&
             this.blockedReason(id, automaticValid !== undefined) === null,
-        });
+        };
+        let compactTaken = false;
+        this.bpFallbackReason = null;
+        if (wantsCompact) {
+          if (!compactReady || !switchObs || !this.switchBpCompact) {
+            this.bpFallbackReason = '游戏画面未就绪，本次使用全屏 BP。';
+          } else {
+            try {
+              await switchObs('gameplay', options);
+              this.compactPreparing = true;
+              await this.switchBpCompact(true);
+              this.bpCompact = 'on';
+              this.bpCompactTarget = 'managed';
+              compactTaken = true;
+            } catch {
+              try {
+                await this.switchBpCompact(false);
+                this.bpCompact = 'off';
+              } catch {
+                this.bpCompact = 'unknown';
+              }
+              this.bpFallbackReason = '游戏画面或底栏未确认，本次使用全屏 BP。';
+            } finally {
+              this.compactPreparing = false;
+            }
+          }
+        }
+        if (!compactTaken) await switchObs?.(id, options);
         const stillBlocked = this.blockedReason(id, automaticValid !== undefined);
         if (
           stillBlocked !== null ||
@@ -399,6 +455,7 @@ export class ProgramSceneController {
           };
         }
         if (previous === 'bp') this.bpSession.finishSceneExit();
+        if (id !== 'bp') this.bpFallbackReason = null;
         this.active = id;
         this.revision = nextRevision;
         if (id === 'matchup') this.introRevision = nextRevision;

@@ -1,3 +1,4 @@
+import { BpPresentationSettingsPanel } from './BpPresentationSettings';
 import { ObserverSettingsPanel, GameAutomationSettingsPanel } from './ObserverSettings';
 import { ObsSettings } from './ObsSettings';
 import { CameraSettings } from '../orchestration/CameraSettings';
@@ -219,7 +220,10 @@ export function Settings({ tab }: { tab: string }) {
           </Panel>
         </div>
       ) : tab === 'obs' ? (
-        <ObsSettings />
+        <>
+          <BpPresentationSettingsPanel />
+          <ObsSettings />
+        </>
       ) : (
         <div className="game-settings-layout">
           <div className="game-settings-current">

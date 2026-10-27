@@ -1,3 +1,4 @@
+import { gameBackgroundReady } from './game-background.js';
 import { assertBpCompactOff, BpOverlayOwner } from './bp-overlay.js';
 import { diagnosticValue } from '../support/session-journal.js';
 import { createHash, randomUUID } from 'node:crypto';
@@ -946,6 +947,9 @@ export class ObsAdapter {
       }, 12_000);
       return this.findings;
     });
+  }
+  gameBackgroundReady(): Promise<boolean> {
+    return this.serial(() => this.withObs((obs) => gameBackgroundReady(obs)).catch(() => false));
   }
   setBpCompactVisible(visible: boolean): Promise<void> {
     return this.serial(async () => {
