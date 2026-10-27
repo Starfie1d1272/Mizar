@@ -5,6 +5,7 @@ import { AudioConfigurationConnection } from '../src/obs/audio-configuration-con
 it('keeps the configuration connection until a timed-out write settles', async () => {
   let release: (value: Record<string, unknown>) => void = () => undefined;
   let disconnected = false;
+  let observed = false;
   const listeners = new Map<string, (event: unknown) => void>();
   const client = {
     connect: async () => {
@@ -31,10 +32,25 @@ it('keeps the configuration connection until a timed-out write settles', async (
     10,
     1000,
   );
-  const operation = connection.run(async (obs) => obs.call('SetSceneItemEnabled'));
+  const operation = connection.run(async (obs, _endpoint, observer) => {
+    const unsubscribe = observer.subscribe(() => {
+      observed = true;
+    });
+    try {
+      return await obs.call('SetSceneItemEnabled');
+    } finally {
+      unsubscribe();
+    }
+  });
   await new Promise<void>((resolve) => setTimeout(resolve, 30));
   expect(disconnected).toBe(false);
+  listeners.get('SceneItemEnableStateChanged')?.({
+    sceneName: 'scene',
+    sceneItemId: 1,
+    sceneItemEnabled: true,
+  });
+  expect(observed).toBe(true);
   release({});
-  await expect(operation).rejects.toThrow('timeout');
+  await expect(operation).resolves.toEqual({});
   expect(disconnected).toBe(true);
 });
