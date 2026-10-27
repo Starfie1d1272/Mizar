@@ -1013,3 +1013,55 @@ it('applies the latest explicit application choice after output stops', async ()
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+it('resumes prepared switches after restart but never replays sent uncertain writes', async () => {
+  for (const phase of ['prepared', 'sent']) {
+    const dir = await mkdtemp(join(tmpdir(), 'mizar-switch-restart-'));
+    try {
+      const obs = new FakeObs();
+      fixture.client = obs;
+      const preference = join(dir, 'preference');
+      const journal = join(dir, 'probe');
+      const routingPath = join(dir, 'routing');
+      const makeAdapter = () =>
+        new ObsAdapter(
+          new ObsConfigStore(join(dir, 'obs.json')),
+          base,
+          () => {},
+          new ObsAudioRouting(routingPath),
+          { owner: new RemoteCommentary(preference), journal },
+        );
+      const first = makeAdapter();
+      expect(await first.ensure()).toEqual([]);
+      const voice = [...obs.inputs.values()].find(
+        (input) => input.settings.window === 'TeamSpeak:Qt:ts3client_win64.exe',
+      )!;
+      obs.windows = [
+        { itemName: 'Discord', itemValue: 'Discord:Qt:discord.exe', itemEnabled: true },
+      ];
+      const choices = await first.listCommentaryApplications();
+      await first.selectCommentaryApplication(choices.candidates[0]!.id, choices.revision);
+      if (phase === 'sent') {
+        obs.failAfterSettings = true;
+        expect(
+          (await first.ensure()).some((finding) => finding.message.includes('结果待核对')),
+        ).toBe(true);
+      }
+      await first.close();
+      const writes = obs.settingsWrites;
+      const next = makeAdapter();
+      const findings = await next.ensure();
+      if (phase === 'prepared') {
+        expect(findings).toEqual([]);
+        expect(voice.settings.window).toBe('Discord:Qt:discord.exe');
+        expect(obs.settingsWrites).toBe(writes + 1);
+      } else {
+        expect(findings.some((finding) => finding.message.includes('结果待核对'))).toBe(true);
+        expect(obs.settingsWrites).toBe(writes);
+      }
+      await next.close();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+});
