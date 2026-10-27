@@ -1,3 +1,4 @@
+import { RemoteCommentary } from './obs/remote-commentary.js';
 import {
   registerWorkspaceObserver,
   type WorkspaceObserver,
@@ -751,6 +752,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
               'OBS request failed',
             ),
           obsAudioRouting,
+          {
+            owner: new RemoteCommentary(`${options.obsConfigPath}.commentary.json`),
+            journal: `${options.obsConfigPath}.commentary-probe.json`,
+          },
         );
   let musicDirector: MusicDirector | undefined;
   let cameraDirector: CameraDirector | undefined;

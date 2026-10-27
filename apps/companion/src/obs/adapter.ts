@@ -5,6 +5,8 @@ import { OBSWebSocket } from 'obs-websocket-js';
 import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
 import type { ObsAudioBindCommand, ObsOutputCommand, ObsOutputsStatus } from '@mizar/protocol/obs';
 import type { ObsAudioRouting } from './audio-routing.js';
+import { RemoteCommentary } from './remote-commentary.js';
+import { prepareRemoteCommentary } from './remote-commentary-setup.js';
 import { ObsOutputController, ObsOutputError } from './outputs.js';
 import { readObsProgramEvidence, type ObsProgramEvidence } from './program-evidence.js';
 import {
@@ -82,6 +84,7 @@ export class ObsAdapter {
     private readonly browserBaseUrl: string,
     private readonly diagnostic: (stage: string, error: unknown) => void = () => undefined,
     private readonly audioRouting?: ObsAudioRouting,
+    private readonly commentary?: { owner: RemoteCommentary; journal: string },
   ) {
     this.outputs = new ObsOutputController(configStore, (error, password) =>
       diagnostic('obs_output', obsErrorEvidence(error, password)),
@@ -393,7 +396,27 @@ export class ObsAdapter {
           audio = await checkObsAudio(obs);
           audio.push(...(await this.bindingFindings(obs, endpoint)));
         } else audio = await ensureObsAudio(obs, this.browserBaseUrl);
-        return [...visual, ...audio];
+        let commentary: ObsFinding[] = [];
+        if (this.commentary) {
+          try {
+            commentary = await prepareRemoteCommentary(
+              obs,
+              this.commentary.owner,
+              this.commentary.journal,
+              endpoint,
+              this.browserBaseUrl,
+            );
+          } catch (error) {
+            this.diagnostic('obs_commentary_prepare', obsErrorEvidence(error));
+            commentary = [
+              {
+                code: 'commentary_pending',
+                message: '场景已准备，音频分路待完成。请检查远端解说来源后重试。',
+              },
+            ];
+          }
+        }
+        return [...visual, ...audio, ...commentary];
       }, 30_000);
       return this.findings;
     });
