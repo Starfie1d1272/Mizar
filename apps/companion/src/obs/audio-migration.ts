@@ -1,30 +1,53 @@
 import { randomUUID } from 'node:crypto';
-import { link, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { link, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { z } from 'zod';
 import type { ObsRpc } from './reconcile.js';
 
-const item = z
+const ref = z
   .object({
     sceneName: z.string().min(1),
     sceneItemId: z.number().int(),
     sourceUuid: z.string().min(1),
   })
   .strict();
-const transaction = z
+const field = ref
+  .extend({
+    before: z.boolean(),
+    applied: z.boolean(),
+    phase: z.enum(['prepared', 'sent', 'confirmed', 'uncertain', 'restored']),
+    externalChanged: z.boolean(),
+  })
+  .strict();
+const planSchema = z
   .object({
     endpoint: z.string().min(1),
     collection: z.string().min(1),
-    desktop: z.array(item).min(1),
-    independent: z.array(item).min(1),
+    desktop: z.array(ref).min(1),
+    independent: z.array(ref).min(1),
   })
   .strict();
-export type AudioMigrationPlan = z.infer<typeof transaction>;
+const journalSchema = z
+  .object({ endpoint: z.string(), collection: z.string(), fields: z.array(field) })
+  .strict();
+export type AudioMigrationPlan = z.infer<typeof planSchema>;
+type Field = z.infer<typeof field>;
+type Journal = z.infer<typeof journalSchema>;
+export type MigrationEvent =
+  | { type: 'item'; sceneName: string; sceneItemId: number; enabled: boolean }
+  | { type: 'outputStarting' }
+  | { type: 'identityChanged' }
+  | { type: 'disconnected' };
+/** Events must cover output start, item enable changes, input/settings removal, collection and connection changes on the same connection used for RPCs. */
+export interface MigrationObserver {
+  subscribe(listener: (event: MigrationEvent) => void): () => void;
+}
 
-/** Durable rollback primitive. A caller must independently prove template ownership and mix safety. */
+/** A transaction is never resumed from disk while output is active or after observation is lost. */
 export class AudioMigration {
+  private running = false;
   constructor(private readonly path: string) {}
-  private async save(value: AudioMigrationPlan) {
+  private async create(value: Journal) {
     await mkdir(dirname(this.path), { recursive: true });
     const temp = `${this.path}.${randomUUID()}.tmp`;
     try {
@@ -34,97 +57,235 @@ export class AudioMigration {
       await rm(temp, { force: true });
     }
   }
-  private async read(): Promise<AudioMigrationPlan | null> {
+  private async save(value: Journal) {
+    const temp = `${this.path}.${randomUUID()}.tmp`;
     try {
-      return transaction.parse(JSON.parse(await readFile(this.path, 'utf8')));
+      await writeFile(temp, `${JSON.stringify(value)}\n`, { mode: 0o600 });
+      await rename(temp, this.path);
+    } finally {
+      await rm(temp, { force: true });
+    }
+  }
+  async pending(): Promise<Journal | null> {
+    try {
+      return journalSchema.parse(JSON.parse(await readFile(this.path, 'utf8')));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw error;
     }
   }
-  private async context(obs: ObsRpc, plan: AudioMigrationPlan, endpoint: string) {
+  private async context(obs: ObsRpc, plan: AudioMigrationPlan, endpoint: string, idle: boolean) {
     const [stream, record, collection] = await Promise.all([
       obs.call('GetStreamStatus'),
       obs.call('GetRecordStatus'),
       obs.call('GetSceneCollectionList'),
     ]);
-    if (
-      endpoint !== plan.endpoint ||
-      collection.currentSceneCollectionName !== plan.collection ||
-      stream.outputActive !== false ||
-      record.outputActive !== false
-    )
-      throw new Error('audio_migration_context_changed');
+    if (endpoint !== plan.endpoint || collection.currentSceneCollectionName !== plan.collection)
+      throw new Error('audio_migration_identity_changed');
+    if (idle && (stream.outputActive !== false || record.outputActive !== false))
+      throw new Error('audio_migration_output_active');
   }
-  private async status(obs: ObsRpc, ref: z.infer<typeof item>): Promise<boolean> {
-    const raw = (await obs.call('GetSceneItemList', { sceneName: ref.sceneName })).sceneItems;
+  private async status(obs: ObsRpc, entry: Field): Promise<boolean> {
+    const raw = (await obs.call('GetSceneItemList', { sceneName: entry.sceneName })).sceneItems;
     if (!Array.isArray(raw)) throw new Error('audio_migration_items_unknown');
     const found = raw.find(
       (value: unknown) =>
         typeof value === 'object' &&
         value !== null &&
-        (value as Record<string, unknown>).sceneItemId === ref.sceneItemId,
+        (value as Record<string, unknown>).sceneItemId === entry.sceneItemId,
     ) as Record<string, unknown> | undefined;
     if (
       !found ||
-      found.sourceUuid !== ref.sourceUuid ||
+      found.sourceUuid !== entry.sourceUuid ||
       typeof found.sceneItemEnabled !== 'boolean'
     )
-      throw new Error('audio_migration_item_changed');
+      throw new Error('audio_migration_identity_changed');
     return found.sceneItemEnabled;
   }
-  private async change(
+  async migrate(
     obs: ObsRpc,
-    plan: AudioMigrationPlan,
     endpoint: string,
-    ref: z.infer<typeof item>,
-    enabled: boolean,
-  ) {
-    await this.context(obs, plan, endpoint);
-    if ((await this.status(obs, ref)) === enabled) return;
-    await obs.call('SetSceneItemEnabled', {
-      sceneName: ref.sceneName,
-      sceneItemId: ref.sceneItemId,
-      sceneItemEnabled: enabled,
-    });
-    if ((await this.status(obs, ref)) !== enabled)
-      throw new Error('audio_migration_write_unconfirmed');
-  }
-  /** Restore old audio first; only then disable any new paths. */
-  async recover(obs: ObsRpc, endpoint: string): Promise<boolean> {
-    const plan = await this.read();
-    if (!plan) return false;
-    await this.context(obs, plan, endpoint);
-    for (const ref of plan.desktop) await this.change(obs, plan, endpoint, ref, true);
-    for (const ref of plan.independent) await this.change(obs, plan, endpoint, ref, false);
-    await rm(this.path);
-    return true;
-  }
-  /** Run only after all source identities, settings and the entire legacy structure have been proved. */
-  async migrate(obs: ObsRpc, endpoint: string, raw: AudioMigrationPlan): Promise<void> {
-    const plan = transaction.parse(raw);
-    if (await this.read()) throw new Error('audio_migration_recovery_required');
-    await this.context(obs, plan, endpoint);
+    raw: AudioMigrationPlan,
+    observer: MigrationObserver,
+  ): Promise<void> {
+    if (this.running) throw new Error('audio_migration_busy');
+    const plan = planSchema.parse(raw);
+    this.running = true;
     const ids = [...plan.desktop, ...plan.independent].map(
-      (ref) => `${ref.sceneName}\0${ref.sceneItemId}`,
+      (x) => `${x.sceneName}\0${x.sceneItemId}`,
     );
-    if (new Set(ids).size !== ids.length) throw new Error('audio_migration_duplicate');
-    for (const ref of plan.desktop)
-      if (!(await this.status(obs, ref))) throw new Error('audio_migration_desktop_changed');
-    for (const ref of plan.independent)
-      if (await this.status(obs, ref)) throw new Error('audio_migration_independent_changed');
-    await this.save(plan);
+    if (new Set(ids).size !== ids.length) {
+      this.running = false;
+      throw new Error('audio_migration_duplicate');
+    }
+    const journal: Journal = {
+      endpoint: plan.endpoint,
+      collection: plan.collection,
+      fields: [
+        ...plan.independent.map((x) => ({
+          ...x,
+          before: false,
+          applied: true,
+          phase: 'prepared' as const,
+          externalChanged: false,
+        })),
+        ...plan.desktop.map((x) => ({
+          ...x,
+          before: true,
+          applied: false,
+          phase: 'prepared' as const,
+          externalChanged: false,
+        })),
+      ],
+    };
+    let connected = true;
+    let identity = true;
+    let output = false;
+    let expected: { entry: Field; value: boolean; seen: boolean } | undefined;
+    let persistence: Promise<void> = Promise.resolve();
+    let created = false;
+    let wake: (() => void) | undefined;
+    const changed = () => {
+      if (created) persistence = persistence.then(() => this.save(journal));
+    };
+    const unsubscribe = observer.subscribe((event) => {
+      if (event.type === 'disconnected') {
+        connected = false;
+        wake?.();
+      } else if (event.type === 'identityChanged') {
+        identity = false;
+        wake?.();
+      } else if (event.type === 'outputStarting') output = true;
+      else {
+        const entry = journal.fields.find(
+          (x) => x.sceneName === event.sceneName && x.sceneItemId === event.sceneItemId,
+        );
+        if (!entry) return;
+        if (expected?.entry === entry && !expected.seen && event.enabled === expected.value)
+          expected.seen = true;
+        else {
+          entry.externalChanged = true;
+          changed();
+        }
+      }
+    });
+    const flush = async () => {
+      await persistence;
+    };
+    const available = () => connected && identity;
+    const verify = async (idle: boolean) => {
+      await flush();
+      if (!available()) throw new Error('audio_migration_observation_lost');
+      await this.context(obs, plan, endpoint, idle);
+      if (!available()) throw new Error('audio_migration_observation_lost');
+    };
+    const send = async (
+      entry: Field,
+      value: boolean,
+      phase: 'sent' | 'restored',
+      idle: boolean,
+    ) => {
+      await verify(idle);
+      if (entry.externalChanged) throw new Error('audio_migration_external_change');
+      const wantedBefore = phase === 'sent' ? entry.before : entry.applied;
+      if ((await this.status(obs, entry)) !== wantedBefore) {
+        entry.externalChanged = true;
+        changed();
+        await flush();
+        throw new Error('audio_migration_external_change');
+      }
+      if (phase === 'sent') {
+        entry.phase = 'sent';
+        changed();
+        await flush();
+      }
+      if (!available() || entry.externalChanged || (idle && output)) {
+        if (phase === 'sent') {
+          entry.phase = 'prepared';
+          changed();
+          await flush();
+        }
+        throw new Error('audio_migration_interrupted');
+      }
+      expected = { entry, value, seen: false };
+      const interrupted = new Promise<'lost'>((resolve) => {
+        wake = () => resolve('lost');
+      });
+      const call = obs.call('SetSceneItemEnabled', {
+        sceneName: entry.sceneName,
+        sceneItemId: entry.sceneItemId,
+        sceneItemEnabled: value,
+      });
+      const result = await Promise.race([
+        call.then(
+          () => 'ok' as const,
+          () => 'failed' as const,
+        ),
+        interrupted,
+      ]);
+      wake = undefined;
+      if (result !== 'ok') {
+        entry.phase = 'uncertain';
+        changed();
+        await flush();
+        // A failed or interrupted request might still be applied later; do not compensate it.
+        throw new Error('audio_migration_write_uncertain');
+      }
+      await verify(false);
+      if ((await this.status(obs, entry)) !== value) {
+        entry.phase = 'uncertain';
+        changed();
+        await flush();
+        throw new Error('audio_migration_write_uncertain');
+      }
+      entry.phase = phase === 'sent' ? 'confirmed' : 'restored';
+      changed();
+      await flush();
+      expected = undefined;
+      if (entry.externalChanged) throw new Error('audio_migration_external_change');
+    };
     try {
-      for (const ref of plan.desktop) await this.change(obs, plan, endpoint, ref, false);
-      for (const ref of plan.independent) await this.change(obs, plan, endpoint, ref, true);
+      if (await this.pending()) throw new Error('audio_migration_recovery_required');
+      await verify(true);
+      for (const entry of journal.fields)
+        if ((await this.status(obs, entry)) !== entry.before)
+          throw new Error('audio_migration_precondition_changed');
+      await this.create(journal);
+      created = true;
+      for (const entry of journal.fields) {
+        if (output) throw new Error('audio_migration_output_started');
+        await send(entry, entry.applied, 'sent', true);
+        if (output) throw new Error('audio_migration_output_started');
+      }
+      await verify(false);
+      if (output) throw new Error('audio_migration_output_started');
+      if (journal.fields.some((entry) => entry.externalChanged))
+        throw new Error('audio_migration_external_change');
+      unsubscribe();
       await rm(this.path);
+      created = false;
     } catch (error) {
-      try {
-        await this.recover(obs, endpoint);
-      } catch {
-        /* Leave the journal for an idle retry. */
+      await flush();
+      if (created && available() && !journal.fields.some((x) => x.phase === 'uncertain')) {
+        try {
+          // Restore old paths before closing any newly enabled path.
+          for (const entry of journal.fields.filter((x) => x.before && x.phase === 'confirmed'))
+            await send(entry, entry.before, 'restored', false);
+          for (const entry of journal.fields.filter((x) => !x.before && x.phase === 'confirmed'))
+            await send(entry, entry.before, 'restored', false);
+          if (journal.fields.every((x) => x.phase === 'prepared' || x.phase === 'restored')) {
+            await rm(this.path);
+            created = false;
+          }
+        } catch {
+          /* Preserve the journal and any possible remaining audio for review. */
+        }
       }
       throw error;
+    } finally {
+      unsubscribe();
+      await flush();
+      this.running = false;
     }
   }
 }
