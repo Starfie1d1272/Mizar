@@ -11,6 +11,8 @@ mod cs2_preferences;
 mod cs2_session;
 mod cs2_spectator;
 mod cs2_video;
+mod default_resource;
+mod default_resource_vpk;
 mod demo_test;
 mod desktop_worker;
 mod geometry;
