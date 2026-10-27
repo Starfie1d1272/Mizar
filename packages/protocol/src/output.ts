@@ -206,6 +206,7 @@ export const reliableEventKindV1Schema = z.enum([
   'match_started',
   'map_started',
   'map_ended',
+  'map_player_snapshot',
   'series_ended',
   'source_generation_changed',
   'map_epoch_changed',
@@ -244,6 +245,12 @@ export const reliableEventV1Schema = z.discriminatedUnion('kind', [
       scoreB: nonNegativeInteger,
       scoreCT: nonNegativeInteger,
       scoreT: nonNegativeInteger,
+    }),
+  }),
+  reliableEventBase.extend({
+    kind: z.literal('map_player_snapshot'),
+    payload: z.strictObject({
+      mapEndedKey: id,
       players: z
         .array(
           z.strictObject({
@@ -255,8 +262,7 @@ export const reliableEventV1Schema = z.discriminatedUnion('kind', [
           }),
         )
         .min(1)
-        .max(10)
-        .optional(),
+        .max(10),
     }),
   }),
   reliableEventBase.extend({

@@ -210,7 +210,6 @@ export function buildReliableEventV1(input: {
   readonly previousMapEpoch?: number | null;
   readonly previousSourceGeneration?: number | null;
   readonly cursor?: ProjectionBundle['program']['cursor'];
-  readonly players?: Extract<ReliableEventV1, { kind: 'map_ended' }>['payload']['players'];
 }): ReliableEventV1 | null {
   const { binding, bundle } = input;
   if (
@@ -276,8 +275,9 @@ export function buildReliableEventV1(input: {
           scoreB: mapResult!.scoreB,
           scoreCT: bundle.program.map.score.ct!,
           scoreT: bundle.program.map.score.t!,
-          ...(input.players === undefined ? {} : { players: input.players }),
         };
+      case 'map_player_snapshot':
+        throw new Error('snapshot_requires_map_end');
       case 'series_ended':
         return {
           scoreA: bundle.program.series?.score.a ?? null,
@@ -332,7 +332,6 @@ export function transitionReliableEventsV1(input: {
   readonly result: RuntimeReduceResult;
   readonly bundle: ProjectionBundle;
   readonly binding: MatchContextBinding | undefined;
-  readonly players?: Extract<ReliableEventV1, { kind: 'map_ended' }>['payload']['players'];
 }): readonly ReliableEventV1[] {
   if (input.result.disposition.kind !== 'accepted') return [];
   const events: ReliableEventV1[] = [];
@@ -348,7 +347,6 @@ export function transitionReliableEventsV1(input: {
           binding: input.binding,
           observedAt: transition.at.utc,
           source: 'runtime-transition',
-          ...(input.players === undefined ? {} : { players: input.players }),
         }),
       );
     if (transition.kind === 'map_execution_changed')
@@ -365,4 +363,15 @@ export function transitionReliableEventsV1(input: {
       );
   }
   return events;
+}
+
+export function buildMapPlayerSnapshotV1(
+  end: Extract<ReliableEventV1, { kind: 'map_ended' }>,
+  players: Extract<ReliableEventV1, { kind: 'map_player_snapshot' }>['payload']['players'],
+): ReliableEventV1 {
+  const payload = { mapEndedKey: end.idempotencyKey, players };
+  const idempotencyKey = createHash('sha256')
+    .update(JSON.stringify({ kind: 'map_player_snapshot', parent: end.idempotencyKey, payload }))
+    .digest('hex');
+  return parseReliableEventV1({ ...end, kind: 'map_player_snapshot', idempotencyKey, payload });
 }

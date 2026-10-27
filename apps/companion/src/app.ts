@@ -287,6 +287,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             send: (
               event: Parameters<NonNullable<OutputServiceOptions['sink']>['send']>[0],
               signal?: AbortSignal,
+              retainedLineup?: readonly string[],
             ) =>
               options.rivalhubConnection!.view().paired &&
               outputBinding?.origin === 'online' &&
@@ -295,6 +296,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
                     event,
                     outputService.current(true),
                     signal,
+                    retainedLineup,
                   )
                 : (options.reliableSink?.send(event, signal) ??
                   Promise.resolve('rejected' as const)),

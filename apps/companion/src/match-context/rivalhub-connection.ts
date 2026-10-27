@@ -1303,6 +1303,7 @@ export class RivalHubConnection {
     event: ReliableEventV1,
     current: LiveSnapshotV1 | null,
     signal: AbortSignal = AbortSignal.timeout(RELIABLE_SEND_TIMEOUT_MS),
+    retainedLineup?: readonly string[],
   ): Promise<ReliableDeliveryResult> {
     if (this.stoppedMatchId === event.matchId) return 'retry';
     const source = this.source;
@@ -1325,14 +1326,16 @@ export class RivalHubConnection {
       current.cursor.liveSessionId === event.cursor.liveSessionId &&
       current.cursor.programSourceGeneration === event.cursor.programSourceGeneration &&
       current.cursor.mapEpoch === event.cursor.mapEpoch;
-    const observed = sameExecution
-      ? current.players
-          .filter(
-            (player) =>
-              player.lineupEvidence === 'current' && /^\d{17}$/.test(player.sourcePlayerId),
-          )
-          .map((player) => player.sourcePlayerId)
-      : [];
+    const observed =
+      retainedLineup ??
+      (sameExecution
+        ? current.players
+            .filter(
+              (player) =>
+                player.lineupEvidence === 'current' && /^\d{17}$/.test(player.sourcePlayerId),
+            )
+            .map((player) => player.sourcePlayerId)
+        : []);
     if (signal.aborted) return 'retry';
     const attempt = event.kind === 'map_started' ? Symbol('map_start') : undefined;
     if (source && attempt) {

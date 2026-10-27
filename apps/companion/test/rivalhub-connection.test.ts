@@ -607,3 +607,93 @@ it('reports connection load failures without exposing credential excerpts', asyn
   expect(events.at(-1)?.stage).toBe('connection_read');
   expect(events.at(-1)?.error).toMatchObject({ code: 'EISDIR' });
 });
+
+it('sends legacy score payload unchanged when an old server rejects the separate snapshot', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-legacy-postmap-'));
+  temporary.push(directory);
+  const path = join(directory, 'connection.json');
+  await writeFile(
+    path,
+    JSON.stringify({
+      baseUrl: OFFICIAL_RIVALHUB_URL,
+      credential: 'test',
+      installationId: 'installation',
+      competitionId: 'competition',
+      displayName: 'Test',
+    }),
+  );
+  const requests: { event: ReliableEventV1; lineupSteam64: string[] }[] = [];
+  const fetchImpl = vi.fn<typeof fetch>((url, init) => {
+    const endpoint = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+    if (endpoint.endsWith('/claim'))
+      return Promise.resolve(Response.json({ claimed: true, authorityRevision: 1 }));
+    if (endpoint.endsWith('/reliable')) {
+      if (typeof init?.body !== 'string') throw new Error('expected JSON body');
+      const body = JSON.parse(init.body) as {
+        event: ReliableEventV1;
+        lineupSteam64: string[];
+      };
+      requests.push(body);
+      if (body.event.kind === 'map_player_snapshot')
+        return Promise.resolve(new Response(null, { status: 400 }));
+      if (
+        body.event.kind === 'map_ended' &&
+        Object.keys(body.event.payload).sort().join(',') !== 'scoreA,scoreB,scoreCT,scoreT'
+      )
+        return Promise.resolve(new Response(null, { status: 400 }));
+    }
+    return Promise.resolve(new Response(null, { status: 204 }));
+  });
+  const connection = new RivalHubConnection(path, fetchImpl);
+  await connection.load();
+  const cursor = {
+    producerInstanceId: 'producer',
+    liveSessionId: 'session',
+    programSourceGeneration: 1,
+    runtimeSeq: 1,
+    programReceiveSequence: 1,
+    mapEpoch: 1,
+  };
+  const current = {
+    matchId: 'match',
+    competitionId: 'competition',
+    cursor,
+    players: [],
+  } as unknown as LiveSnapshotV1;
+  await connection.claim(current, 'revision', false);
+  const end = {
+    kind: 'map_ended',
+    matchId: 'match',
+    cursor,
+    payload: { scoreA: 13, scoreB: 9, scoreCT: 13, scoreT: 9 },
+  } as ReliableEventV1;
+  expect(await connection.sendReliable(end, current)).toBe('accepted');
+  const provisional = {
+    kind: 'map_player_snapshot',
+    matchId: 'match',
+    cursor,
+    payload: {
+      mapEndedKey: 'end',
+      players: [
+        {
+          sourcePlayerId: '76561198000000001',
+          canonicalPlayerId: null,
+          kills: 1,
+          deaths: null,
+          assists: 0,
+        },
+      ],
+    },
+  } as unknown as ReliableEventV1;
+  expect(await connection.sendReliable(provisional, current)).toBe('rejected');
+  const lineup = Array.from({ length: 10 }, (_, i) => `7656119${String(i).padStart(10, '0')}`);
+  const oldStart = {
+    kind: 'map_started',
+    matchId: 'match',
+    cursor: { ...cursor, mapEpoch: 2 },
+    payload: {},
+  } as ReliableEventV1;
+  const mapThree = { ...current, cursor: { ...cursor, mapEpoch: 3 } };
+  expect(await connection.sendReliable(oldStart, mapThree, undefined, lineup)).toBe('accepted');
+  expect(requests.at(-1)?.lineupSteam64).toEqual(lineup);
+});

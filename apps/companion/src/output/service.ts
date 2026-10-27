@@ -12,6 +12,7 @@ import {
 } from './reliable-outbox.js';
 import {
   buildReliableEventV1,
+  buildMapPlayerSnapshotV1,
   projectLiveSnapshotV1,
   transitionReliableEventsV1,
 } from './projector.js';
@@ -61,7 +62,9 @@ export class OutputService {
   private playerSnapshot:
     | {
         scope: string;
-        players: NonNullable<Extract<ReliableEventV1, { kind: 'map_ended' }>['payload']['players']>;
+        players: NonNullable<
+          Extract<ReliableEventV1, { kind: 'map_player_snapshot' }>['payload']['players']
+        >;
       }
     | undefined;
 
@@ -340,6 +343,35 @@ export class OutputService {
       void this.outbox
         ?.updateContinuity(continuity)
         .catch(() => this.onDiagnostic?.('outbox_continuity_write_failed'));
+    if (bundle.program.status.telemetry === 'fresh' && bundle.program.map.phase === 'gameover') {
+      const cursor = bundle.program.cursor;
+      const map = bundle.program.map;
+      void this.outbox
+        ?.supersedeWhere((event) => {
+          if (
+            event.kind !== 'map_ended' ||
+            event.cursor.liveSessionId !== cursor.liveSessionId ||
+            event.cursor.mapEpoch !== cursor.mapEpoch ||
+            event.cursor.programSourceGeneration !== cursor.programSourceGeneration
+          )
+            return false;
+          const final = bundle.program.series?.maps.find((item) => item.mapId === event.mapId);
+          return (
+            (final?.status === 'completed' &&
+              final.finalScore !== null &&
+              (final.finalScore.a !== event.payload.scoreA ||
+                final.finalScore.b !== event.payload.scoreB)) ||
+            (map.name !== null && map.name !== event.mapName) ||
+            (map.score.ct !== null &&
+              map.score.t !== null &&
+              (map.score.ct !== event.payload.scoreCT || map.score.t !== event.payload.scoreT))
+          );
+        })
+        .catch(() => {
+          this.quarantined = true;
+          this.onDiagnostic?.('outbox_supersede_failed');
+        });
+    }
     const newMapObservation = this.newMapObservation(result, bundle);
     let candidates: ReliableEventV1[];
     try {
@@ -348,16 +380,22 @@ export class OutputService {
           result,
           bundle,
           binding,
-          ...(this.playerSnapshot &&
-          this.playerSnapshot.scope === this.snapshotScope(bundle, binding)
-            ? { players: this.playerSnapshot.players }
-            : {}),
         }),
       ];
     } catch {
       this.onDiagnostic?.('event_projection_failed');
       return;
     }
+    const ended = candidates.find(
+      (event): event is Extract<ReliableEventV1, { kind: 'map_ended' }> =>
+        event.kind === 'map_ended',
+    );
+    if (
+      ended &&
+      this.playerSnapshot &&
+      this.playerSnapshot.scope === this.snapshotScope(bundle, binding)
+    )
+      candidates.push(buildMapPlayerSnapshotV1(ended, this.playerSnapshot.players));
     const add = (
       kind: Parameters<typeof buildReliableEventV1>[0]['kind'],
       source: Parameters<typeof buildReliableEventV1>[0]['source'],
@@ -426,8 +464,22 @@ export class OutputService {
       add('lineup_mismatch', 'identity', 'lineup_differs_from_expected');
     for (const event of candidates) {
       const start = event.kind === 'map_started' ? this.pendingMapStart : undefined;
+      const lineup = bundle.program.players
+        .filter((p) => p.lineupEvidence === 'current')
+        .map((p) => p.sourcePlayerId);
+      const retainedLineup =
+        lineup.length === 10 &&
+        new Set(lineup).size === 10 &&
+        lineup.every((id) => /^\d{17}$/.test(id))
+          ? lineup
+          : undefined;
       void this.outbox
-        ?.enqueue(event, this.now(), continuity)
+        ?.enqueue(
+          event,
+          this.now(),
+          continuity,
+          event.kind === 'map_started' ? retainedLineup : undefined,
+        )
         .then(() => {
           if (start !== undefined && start.revision === this.mapStartRevision)
             this.publishedMapStart = start;
@@ -460,8 +512,8 @@ export class OutputService {
           sink: this.sink,
           now: this.now(),
           isCurrent: (event) => this.quarantined || this.isCurrentForRetry(event),
-          canSend: (event) => {
-            const allowed = this.canSend(event);
+          canSend: (event, lineup) => {
+            const allowed = this.canSend(event, lineup);
             if (!allowed) {
               try {
                 const bundle = this.bundle;
@@ -558,6 +610,7 @@ export class OutputService {
     if (bundle === undefined || binding === undefined) return true;
     if (
       event.kind === 'map_started' &&
+      bundle.program.cursor.mapEpoch === event.cursor.mapEpoch &&
       ![this.publishedMapStart, this.pendingMapStart].some(
         (start) => start?.revision === this.mapStartRevision && start.key === event.idempotencyKey,
       )
@@ -576,17 +629,21 @@ export class OutputService {
         !recoveredEvent) ||
       binding.context.matchId !== event.matchId ||
       (binding.manifest.revision !== event.contextRevision &&
-        !(event.kind === 'map_ended' && event.payload.players)) ||
+        !['map_ended', 'map_player_snapshot', 'map_started', 'map_epoch_changed'].includes(
+          event.kind,
+        )) ||
       bundle.program.cursor.liveSessionId !== event.cursor.liveSessionId ||
       (bundle.program.cursor.mapEpoch !== event.cursor.mapEpoch &&
-        !(event.kind === 'map_ended' && event.payload.players)) ||
+        !['map_ended', 'map_player_snapshot', 'map_started', 'map_epoch_changed'].includes(
+          event.kind,
+        )) ||
       bundle.program.cursor.programSourceGeneration !== event.cursor.programSourceGeneration
     )
       return false;
     return true;
   }
 
-  private canSend(event: ReliableEventV1): boolean {
+  private canSend(event: ReliableEventV1, lineup?: readonly string[]): boolean {
     const bundle = this.bundle;
     if (
       this.quarantined ||
@@ -596,11 +653,13 @@ export class OutputService {
     )
       return false;
     if (
-      event.kind === 'map_ended' &&
-      event.payload.players &&
+      (event.kind === 'map_player_snapshot' ||
+        (['map_started', 'map_epoch_changed', 'map_ended'].includes(event.kind) &&
+          bundle.program.cursor.mapEpoch !== event.cursor.mapEpoch)) &&
       bundle.program.cursor.producerInstanceId === event.cursor.producerInstanceId
     )
       return (
+        (event.kind !== 'map_started' || lineup !== undefined) &&
         event.evidence.telemetryFresh &&
         event.evidence.contextFresh &&
         (event.evidence.identity === 'matched' || event.evidence.lineupMismatchOnly === true)
