@@ -1,3 +1,5 @@
+import { ObsGameAudioPolicy } from './ObsGameAudioPolicy';
+import { ObsAudioRouting } from './ObsAudioRouting';
 import { prepareObs, useObsPreparation } from '../workspace/obs-preparation';
 import { useEffect, useRef, useState } from 'react';
 import type { ProgramSceneState } from '@mizar/protocol/program-scenes';
@@ -250,6 +252,8 @@ export function ObsSettings() {
           </Panel>
           <Panel className="settings-card">
             <h2>音频配置</h2>
+            <ObsAudioRouting />
+            <ObsGameAudioPolicy />
             <p>缺少来源时自动添加默认桌面音频与麦克风；已有音频来源会保留并检查。</p>
             {!connected ? (
               <p>连接后自动检查音频。</p>

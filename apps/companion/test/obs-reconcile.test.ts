@@ -480,3 +480,14 @@ it('keeps an initially hidden HUD hidden and never restores a replacement item',
   await expect(owner.set(obs, baseUrl, false)).rejects.toThrow('状态待确认');
   expect(replacement.sceneItemEnabled).toBe(false);
 });
+
+it('does not duplicate window-capture audio with default desktop capture', async () => {
+  const obs = new FakeObs();
+  await ensureObsConfiguration(obs, baseUrl);
+  obs.inputs.set('Window', { kind: 'window_capture', settings: { capture_audio: true } });
+  obs.calls = [];
+  await ensureObsAudio(obs, baseUrl);
+  expect(obs.inputs.has('Mizar · Desktop Audio')).toBe(false);
+  expect(obs.inputs.get('Window')!.settings.capture_audio).toBe(true);
+  expect(obs.calls.filter((type) => /^(Set|Create|Remove)/.test(type))).toEqual([]);
+});
