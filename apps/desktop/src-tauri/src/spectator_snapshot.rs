@@ -588,9 +588,15 @@ pub(crate) fn handed_off_unwritten(root: &Path, core: &Value) -> Result<bool, St
         || core["launchAttempted"] != terminal["launchAttempted"]
         || core["pid"] != terminal["pid"] || core["created"] != terminal["created"]
         || regular(&pending(root), RECORD_LIMIT)? != bytes { return Err("snapshot_changed".into()); }
-    Ok(payload["coordinatedWriteAttempted"] == false
+    let unwritten = payload["coordinatedWriteAttempted"] == false
         && terminal["configWriteAttempted"] == false && terminal["launchAttempted"] == false
-        && terminal["pid"].is_null() && terminal["created"].is_null())
+        && terminal["pid"].is_null() && terminal["created"].is_null();
+    if unwritten {
+        let original = payload["original"].as_str().filter(|s| s.len() <= LIMIT).ok_or("snapshot_invalid")?;
+        let (owned, applied) = decode(&payload["fields"])?;
+        crate::spectator_recovery_vcfg::restore(original, &applied, original, &owned).map_err(str::to_string)?;
+    }
+    Ok(unwritten)
 }
 
 /// Persist the terminated core's public recovery facts before clearing it.
