@@ -77,6 +77,10 @@ test('browser uses real companion mixer routes and recovers after an OBS disconn
       await page.getByRole('button', { name: `静音${label}` }).click();
       await expect.poll(() => channels[key].muted).toBe(true);
     }
+    const musicSlider = page.getByRole('slider', { name: '音乐音量' });
+    await musicSlider.focus();
+    await page.keyboard.press('ArrowLeft');
+    await expect.poll(() => store.state.master).toBeCloseTo(0.99);
     await page.getByRole('button', { name: '静音音乐' }).click();
     await expect.poll(() => store.state.muted).toBe(true);
     await expect(page.getByRole('button', { name: '取消静音音乐' })).toBeEnabled({
