@@ -8,6 +8,18 @@ type Status = {
   policy: Policy;
   ownership: 'idle' | 'intent' | 'owned' | 'held';
 };
+function readStatus(value: unknown): Status {
+  const next = value as Status | null;
+  if (
+    !next ||
+    typeof next.ready !== 'boolean' ||
+    typeof next.revision !== 'string' ||
+    !['idle', 'intent', 'owned', 'held'].includes(next.ownership) ||
+    !obsGameAudioPolicySchema.safeParse(next.policy).success
+  )
+    throw new Error('无法读取中场音频设置。');
+  return next;
+}
 export function ObsGameAudioPolicy() {
   const [status, setStatus] = useState<Status | null>(null);
   const [draftRevision, setDraftRevision] = useState('');
@@ -19,22 +31,16 @@ export function ObsGameAudioPolicy() {
   const pollSequence = useRef(0);
   const inFlight = useRef(false);
   const confirmedRevision = useRef('');
+  const initialized = useRef(false);
   async function refresh(requestGeneration: number, sequence: number) {
     const response = await fetch('/local/v1/obs/game-audio-policy', { cache: 'no-store' });
     if (!response.ok) throw new Error('无法读取中场音频设置。');
-    const next = (await response.json()) as Status;
-    if (
-      !next ||
-      typeof next.ready !== 'boolean' ||
-      typeof next.revision !== 'string' ||
-      !['idle', 'intent', 'owned', 'held'].includes(next.ownership) ||
-      !obsGameAudioPolicySchema.safeParse(next.policy).success
-    )
-      throw new Error('无法读取中场音频设置。');
+    const next = readStatus(await response.json());
     if (requestGeneration !== generation.current || sequence !== pollSequence.current) return next;
     setStatus(next);
-    setDraftRevision(next.revision);
     if (next.ready) {
+      initialized.current = true;
+      setDraftRevision(next.revision);
       setMode(next.policy.mode);
       if (next.policy.mode === 'attenuate') setDb(next.policy.db);
     }
@@ -56,6 +62,7 @@ export function ObsGameAudioPolicy() {
       const sequence = ++pollSequence.current;
       void fetch('/local/v1/obs/game-audio-policy', { cache: 'no-store' })
         .then((response) => (response.ok ? response.json() : null))
+        .then((value: unknown) => (value ? readStatus(value) : null))
         .then((next: Status | null) => {
           if (
             next &&
@@ -63,6 +70,12 @@ export function ObsGameAudioPolicy() {
             sequence === pollSequence.current
           ) {
             setStatus(next);
+            if (next.ready && !initialized.current) {
+              initialized.current = true;
+              setDraftRevision(next.revision);
+              setMode(next.policy.mode);
+              if (next.policy.mode === 'attenuate') setDb(next.policy.db);
+            }
             if (confirmedRevision.current && next.revision !== confirmedRevision.current) {
               confirmedRevision.current = '';
               setMessage(null);

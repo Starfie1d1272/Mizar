@@ -228,6 +228,42 @@ test('a delayed poll cannot overwrite a newer poll', async ({ page }) => {
   await expect(page.getByText('游戏音频的自动控制已暂停。', { exact: false })).toHaveCount(0);
 });
 
+test('a later ready poll initializes the draft when the first read is delayed', async ({
+  page,
+}) => {
+  let reads = 0;
+  let release!: () => void;
+  const delayed = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let submitted: { revision: string; policy: { mode: string } } | undefined;
+  await page.route('**/local/v1/obs/game-audio-policy', async (route) => {
+    if (++reads === 1) await delayed;
+    await route.fulfill({
+      json: {
+        ready: true,
+        revision: '00000000-0000-4000-8000-000000000001',
+        policy: { mode: 'mute' },
+        ownership: 'idle',
+      },
+    });
+  });
+  await page.route('**/operator/obs/game-audio-policy', (route) => {
+    submitted = route.request().postDataJSON() as typeof submitted;
+    return route.fulfill({ json: { ok: true } });
+  });
+  await page.goto('/settings?tab=music');
+  await page.getByRole('button', { name: '场景策略' }).click();
+  await expect(page.getByLabel('中场策略')).toHaveValue('mute', { timeout: 10000 });
+  await page.getByRole('button', { name: '保存中场策略' }).click();
+  await expect(page.getByText('中场策略已保存。')).toBeVisible();
+  expect(submitted).toEqual({
+    revision: '00000000-0000-4000-8000-000000000001',
+    policy: { mode: 'mute' },
+  });
+  release();
+});
+
 test('chooses another application, cancels, reselects and explicitly restores TS', async ({
   page,
 }, testInfo) => {
