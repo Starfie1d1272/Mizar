@@ -1,3 +1,4 @@
+import { BpCompactPresentation } from '../bp/BpPresentation';
 import { MatchConnectionControl } from './MatchConnectionControl';
 import { ObserverHints } from './ObserverHints';
 import { ReviewDialog, closeReviewWindow } from './ReviewDialog';
@@ -354,12 +355,17 @@ function WorkspaceDockContent() {
   const [message, setMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [compactTarget, setCompactTarget] = useState<'managed' | 'external'>('managed');
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     if (!message) return;
     const timer = setTimeout(() => setMessage(''), 6000);
     return () => clearTimeout(timer);
   }, [message]);
+  const selectedCompactTarget =
+    sceneState?.bpCompact !== 'off'
+      ? (sceneState?.bpCompactTarget ?? compactTarget)
+      : compactTarget;
   const production = useLocalRead<Production>('/local/v1/production');
   const { status: cs2 } = useCs2Status();
   const exit = useWorkspaceExitStatus();
@@ -456,6 +462,87 @@ function WorkspaceDockContent() {
             </Button>
           ))}
         </div>
+        <details className="workspace-bp-compact">
+          <summary>紧凑 BP 底栏</summary>
+          <p>预览为完整 BP，不影响播出。受管比赛画面 Take 时会临时隐藏 HUD；关闭后按原状态恢复。</p>
+          {bp?.projection ? (
+            <div className="workspace-bp-compact-preview" aria-label="紧凑 BP 预览">
+              <div>
+                <BpCompactPresentation
+                  snapshot={{ ...bp, state: 'shown', revealedCount: bp.projection.steps.length }}
+                />
+              </div>
+            </div>
+          ) : (
+            <p>当前比赛没有可播放的完整 BP。</p>
+          )}
+          <Select
+            label="底栏输出"
+            value={selectedCompactTarget}
+            disabled={busy || sceneState?.bpCompact !== 'off'}
+            onChange={(event) =>
+              setCompactTarget(event.currentTarget.value === 'external' ? 'external' : 'managed')
+            }
+          >
+            <option value="managed">受管比赛画面</option>
+            <option value="external">自定义场景浏览器源</option>
+          </Select>
+          {compactTarget === 'external' ? (
+            <p>先在自定义场景添加透明浏览器源。播放只启用来源内容，请在 OBS 核对场景与可见性。</p>
+          ) : null}
+          <div className="workspace-scene-buttons">
+            <Button
+              disabled={
+                busy ||
+                !sceneState ||
+                (selectedCompactTarget === 'managed' && !connected) ||
+                !bp?.projection ||
+                (selectedCompactTarget === 'managed' && sceneState.active !== 'gameplay')
+              }
+              onClick={() =>
+                sceneState &&
+                void action(() =>
+                  command('/operator/bp-compact', {
+                    visible: true,
+                    target: selectedCompactTarget,
+                    expectedRevision: sceneState.revision,
+                  }),
+                )
+              }
+            >
+              {selectedCompactTarget === 'external' ? '播放底栏源' : 'Take 底栏'}
+            </Button>
+            <Button
+              disabled={
+                busy ||
+                !sceneState ||
+                (sceneState.bpCompactTarget !== 'external' && !connected) ||
+                sceneState.bpCompact === 'off'
+              }
+              onClick={() =>
+                sceneState &&
+                void action(() =>
+                  command('/operator/bp-compact', {
+                    visible: false,
+                    expectedRevision: sceneState.revision,
+                  }),
+                )
+              }
+            >
+              关闭底栏
+            </Button>
+            <span role="status">
+              {(!connected && sceneState?.bpCompactTarget !== 'external') ||
+              sceneState?.bpCompact === 'unknown'
+                ? '状态待确认'
+                : sceneState?.bpCompact === 'on'
+                  ? sceneState?.bpCompactTarget === 'external'
+                    ? '底栏源已播放，请核对 OBS'
+                    : '上次 Take 已确认，请核对 OBS'
+                  : '底栏已关闭'}
+            </span>
+          </div>
+        </details>
         <div className="workspace-next-preview" aria-label="下一个场景预览">
           <Select
             label="热身画面"

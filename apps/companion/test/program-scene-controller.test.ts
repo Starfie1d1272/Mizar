@@ -84,3 +84,102 @@ it('真实比赛不会绕过 Program safety gate', async () => {
   const res5 = await scene.select('matchup', scene.get().revision);
   expect(res5.ok).toBe(false);
 });
+
+it('shares BP playback across repeated compact Takes and clears on scene exit', async () => {
+  const { getBpDemoProjection } = await import('../src/bp/demo-projection.js');
+  const bp = new BpSession(() => getBpDemoProjection('bo3'));
+  const projections = {
+    getCurrent: () => ({
+      operator: {
+        runtime: { telemetryFreshness: 'fresh' },
+        matchContext: { freshness: 'fresh' },
+        identity: { state: 'matched' },
+      },
+      program: { series: { bindingState: 'bound', status: 'live', maps: [] } },
+    }),
+    getBpAssessment: () => ({ readiness: 'ready' }),
+  } as unknown as ProjectionCoordinator;
+  const setOverlay = vi.fn<(visible: boolean) => Promise<void>>().mockResolvedValue(undefined);
+  const scene = new ProgramSceneController(projections, bp, async () => {}, undefined, setOverlay);
+  expect((await scene.select('gameplay', scene.get().revision)).ok).toBe(true);
+  expect((await scene.setCompact(true, scene.get().revision)).ok).toBe(true);
+  const revision = bp.get().revision;
+  expect(bp.get().state).toBe('revealing');
+  expect((await scene.setCompact(true, scene.get().revision)).ok).toBe(true);
+  expect(bp.get().revision).toBe(revision);
+  setOverlay.mockRejectedValueOnce(new Error('offline'));
+  expect((await scene.select('waiting', scene.get().revision)).ok).toBe(false);
+  expect(scene.get().bpCompact).toBe('unknown');
+  expect(scene.get().active).toBe('gameplay');
+  expect((await scene.select('waiting', scene.get().revision)).ok).toBe(true);
+  expect(bp.get().state).toBe('hidden');
+  expect(scene.get().bpCompact).toBe('off');
+  expect((await scene.select('gameplay', scene.get().revision)).ok).toBe(true);
+  expect((await scene.setCompact(true, scene.get().revision)).ok).toBe(true);
+  expect((await scene.setCompact(false, scene.get().revision)).ok).toBe(true);
+  expect(bp.get().state).toBe('hidden');
+  expect((await scene.setCompact(true, scene.get().revision)).ok).toBe(true);
+  scene.compactDisconnected();
+  expect(scene.get().bpCompact).toBe('unknown');
+  expect(bp.get().state).toBe('hidden');
+  expect((await scene.setCompact(false, scene.get().revision)).ok).toBe(true);
+  expect((await scene.setCompact(true, scene.get().revision)).ok).toBe(true);
+  scene.forceScene('waiting');
+  expect(bp.get().state).toBe('hidden');
+  expect(scene.get().bpCompact).toBe('unknown');
+  await vi.waitFor(() => expect(scene.get().bpCompact).toBe('off'));
+});
+
+it('activates an external compact source without selecting or mutating a managed OBS scene', async () => {
+  const { getBpDemoProjection } = await import('../src/bp/demo-projection.js');
+  const bp = new BpSession(() => getBpDemoProjection('bo1'));
+  const projections = {
+    getCurrent: () => ({
+      operator: {
+        runtime: { telemetryFreshness: 'fresh' },
+        matchContext: { freshness: 'fresh' },
+        identity: { state: 'matched' },
+      },
+      program: { series: { bindingState: 'bound', status: 'live', maps: [] } },
+    }),
+    getBpAssessment: () => ({ readiness: 'ready' }),
+  } as unknown as ProjectionCoordinator;
+  const switchObs = vi.fn<(id: ProgramSceneId) => Promise<void>>().mockResolvedValue(undefined);
+  const overlay = vi.fn<(visible: boolean) => Promise<void>>().mockResolvedValue(undefined);
+  const scene = new ProgramSceneController(projections, bp, switchObs, undefined, overlay);
+  expect((await scene.setCompact(true, scene.get().revision, 'external')).ok).toBe(true);
+  expect(scene.get().active).toBe('waiting');
+  expect(scene.get().bpCompactTarget).toBe('external');
+  expect(bp.get().state).toBe('revealing');
+  expect(switchObs).not.toHaveBeenCalled();
+  expect(overlay).not.toHaveBeenCalled();
+  expect((await scene.setCompact(false, scene.get().revision)).ok).toBe(true);
+  expect(bp.get().state).toBe('hidden');
+  expect(overlay).not.toHaveBeenCalled();
+});
+
+it('does not start BP when observation is lost during the Take', async () => {
+  const { getBpDemoProjection } = await import('../src/bp/demo-projection.js');
+  const bp = new BpSession(() => getBpDemoProjection('bo3'));
+  const projections = {
+    getCurrent: () => ({
+      operator: {
+        runtime: { telemetryFreshness: 'fresh' },
+        matchContext: { freshness: 'fresh' },
+        identity: { state: 'matched' },
+      },
+      program: { series: { bindingState: 'bound', status: 'live', maps: [] } },
+    }),
+    getBpAssessment: () => ({ readiness: 'ready' }),
+  } as unknown as ProjectionCoordinator;
+  const overlay = vi.fn((visible: boolean) => {
+    if (visible) scene.compactDisconnected();
+    return Promise.resolve();
+  });
+  const scene = new ProgramSceneController(projections, bp, async () => {}, undefined, overlay);
+  await scene.select('gameplay', scene.get().revision);
+  expect((await scene.setCompact(true, scene.get().revision)).ok).toBe(false);
+  expect(bp.get().state).toBe('hidden');
+  expect(scene.get().bpCompact).toBe('unknown');
+  expect(overlay).toHaveBeenCalledWith(false);
+});

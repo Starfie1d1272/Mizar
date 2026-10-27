@@ -735,3 +735,29 @@ it('replaces a waiting application intent or explicitly restores TS before migra
     }
   }
 });
+
+it('preserves the compact BP guard before preparing any audio', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'mizar-bp-audio-'));
+  try {
+    const obs = new FakeObs();
+    fixture.client = obs;
+    const { BP_COMPACT_INPUT } = await import('../src/obs/bp-overlay.js');
+    obs.addInput(BP_COMPACT_INPUT, 'browser_source', {});
+    const gameplay = obsDesiredScenes(base).find((scene) => scene.id === 'gameplay')!;
+    obs.addItem(gameplay.sceneName, BP_COMPACT_INPUT, true);
+    const adapter = new ObsAdapter(
+      new ObsConfigStore(join(dir, 'obs.json')),
+      base,
+      () => {},
+      undefined,
+      { owner: new RemoteCommentary(join(dir, 'preference')), journal: join(dir, 'probe') },
+    );
+    await expect(adapter.ensure()).rejects.toThrow('紧凑 BP');
+    expect(
+      [...obs.inputs.values()].some((input) => input.inputKind === 'wasapi_process_output_capture'),
+    ).toBe(false);
+    await adapter.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

@@ -1,4 +1,10 @@
 import { expect, it, vi } from 'vitest';
+import {
+  assertBpCompactOff,
+  BpOverlayOwner,
+  BP_COMPACT_INPUT,
+  setBpCompactVisible,
+} from '../src/obs/bp-overlay.js';
 import { ensureObsAudio } from '../src/obs/audio.js';
 import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
 import {
@@ -38,6 +44,7 @@ class FakeObs implements ObsRpc {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
+  itemChanged: ((sceneName: string, id: number, enabled: boolean) => void) | undefined;
   nextId = 1;
   call(type: string, data: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
     return Promise.resolve(this.callSync(type, data));
@@ -74,7 +81,10 @@ class FakeObs implements ObsRpc {
     if (type === 'GetSceneList')
       return {
         currentProgramSceneName: this.currentScene,
-        scenes: [...this.scenes.keys()].map((sceneName) => ({ sceneName })),
+        scenes: [...this.scenes.keys()].map((sceneName) => ({
+          sceneName,
+          sceneUuid: `uuid:${sceneName}`,
+        })),
       };
     if (type === 'CreateScene') {
       this.scenes.set(name, []);
@@ -85,6 +95,7 @@ class FakeObs implements ObsRpc {
         inputs: [...this.inputs].map(([inputName, input]) => ({
           inputName,
           inputKind: input.kind,
+          inputUuid: `uuid:${inputName}`,
         })),
       };
     if (type === 'GetSpecialInputs') return {};
@@ -131,6 +142,7 @@ class FakeObs implements ObsRpc {
         .find((item) => item.sceneItemId === data.sceneItemId)!.sceneItemEnabled = Boolean(
         data.sceneItemEnabled,
       );
+      this.itemChanged?.(name, Number(data.sceneItemId), Boolean(data.sceneItemEnabled));
       return {};
     }
     if (type === 'SetSceneItemIndex') {
@@ -328,6 +340,145 @@ it('does not duplicate game-capture audio with default desktop capture', async (
   expect(obs.inputs.has('Mizar · Desktop Audio')).toBe(false);
   expect(obs.inputs.get(OBS_CAPTURE_INPUT)!.settings.capture_audio).toBe(true);
   expect(obs.calls.filter((type) => /^(Set|Create|Remove)/.test(type))).toEqual([]);
+});
+
+it('takes and closes the compact source only after verifying gameplay and HUD state', async () => {
+  const obs = new FakeObs();
+  await repairObsConfiguration(obs, baseUrl);
+  const scene = obsSceneName('gameplay');
+  obs.currentScene = scene;
+  await expect(setBpCompactVisible(obs, baseUrl, true)).rejects.toThrow('HUD');
+  const hud = obs.scenes
+    .get(scene)!
+    .find((item) => item.sourceName === 'Mizar · gameplay · Program')!;
+  hud.sceneItemEnabled = false;
+  await setBpCompactVisible(obs, baseUrl, true);
+  await expect(assertBpCompactOff(obs)).rejects.toThrow('先关闭');
+  expect(
+    obs.scenes.get(scene)!.find((item) => item.sourceName === BP_COMPACT_INPUT)?.sceneItemEnabled,
+  ).toBe(true);
+  await setBpCompactVisible(obs, baseUrl, true);
+  expect(
+    obs.scenes.get(scene)!.filter((item) => item.sourceName === BP_COMPACT_INPUT),
+  ).toHaveLength(1);
+  await setBpCompactVisible(obs, baseUrl, false);
+  expect(
+    obs.scenes.get(scene)!.find((item) => item.sourceName === BP_COMPACT_INPUT)?.sceneItemEnabled,
+  ).toBe(false);
+  obs.scenes.set(
+    scene,
+    obs.scenes.get(scene)!.filter((item) => item.sourceName !== BP_COMPACT_INPUT),
+  );
+  await setBpCompactVisible(obs, baseUrl, true);
+  expect(
+    obs.scenes.get(scene)!.find((item) => item.sourceName === BP_COMPACT_INPUT)?.sceneItemEnabled,
+  ).toBe(true);
+  obs.currentScene = obsSceneName('waiting');
+  await expect(setBpCompactVisible(obs, baseUrl, true)).rejects.toThrow('受管比赛画面');
+});
+
+it('temporarily hides only the owned HUD and restores it after repeated Take and close', async () => {
+  const obs = new FakeObs();
+  await repairObsConfiguration(obs, baseUrl);
+  const scene = obsSceneName('gameplay');
+  obs.currentScene = scene;
+  const owner = new BpOverlayOwner();
+  obs.itemChanged = (name, id, enabled) => owner.observeItem(name, id, enabled);
+  const hud = obs.scenes
+    .get(scene)!
+    .find((item) => item.sourceName === 'Mizar · gameplay · Program')!;
+  await owner.set(obs, baseUrl, true);
+  expect(hud.sceneItemEnabled).toBe(false);
+  await owner.set(obs, baseUrl, true);
+  await owner.set(obs, baseUrl, false);
+  expect(hud.sceneItemEnabled).toBe(true);
+});
+
+it('does not restore after an operator changes HUD or the observation connection is lost', async () => {
+  const obs = new FakeObs();
+  await repairObsConfiguration(obs, baseUrl);
+  const scene = obsSceneName('gameplay');
+  obs.currentScene = scene;
+  const owner = new BpOverlayOwner();
+  obs.itemChanged = (name, id, enabled) => owner.observeItem(name, id, enabled);
+  const hud = obs.scenes
+    .get(scene)!
+    .find((item) => item.sourceName === 'Mizar · gameplay · Program')!;
+  await owner.set(obs, baseUrl, true);
+  await obs.call('SetSceneItemEnabled', {
+    sceneName: scene,
+    sceneItemId: hud.sceneItemId,
+    sceneItemEnabled: true,
+  });
+  await obs.call('SetSceneItemEnabled', {
+    sceneName: scene,
+    sceneItemId: hud.sceneItemId,
+    sceneItemEnabled: false,
+  });
+  await owner.set(obs, baseUrl, false);
+  expect(hud.sceneItemEnabled).toBe(false);
+  hud.sceneItemEnabled = true;
+  await owner.set(obs, baseUrl, true);
+  owner.invalidate();
+  await expect(owner.set(obs, baseUrl, false)).rejects.toThrow('状态待确认');
+  expect(hud.sceneItemEnabled).toBe(false);
+});
+
+it('restores the HUD when the compact source was removed while on air', async () => {
+  const obs = new FakeObs();
+  await repairObsConfiguration(obs, baseUrl);
+  const scene = obsSceneName('gameplay');
+  obs.currentScene = scene;
+  const owner = new BpOverlayOwner();
+  obs.itemChanged = (name, id, enabled) => owner.observeItem(name, id, enabled);
+  const hud = obs.scenes
+    .get(scene)!
+    .find((item) => item.sourceName === 'Mizar · gameplay · Program')!;
+  await owner.set(obs, baseUrl, true);
+  obs.scenes.set(
+    scene,
+    obs.scenes.get(scene)!.filter((item) => item.sourceName !== BP_COMPACT_INPUT),
+  );
+  await owner.set(obs, baseUrl, true);
+  expect(
+    obs.scenes.get(scene)!.filter((item) => item.sourceName === BP_COMPACT_INPUT),
+  ).toHaveLength(1);
+  obs.scenes.set(
+    scene,
+    obs.scenes.get(scene)!.filter((item) => item.sourceName !== BP_COMPACT_INPUT),
+  );
+  await owner.set(obs, baseUrl, false);
+  expect(hud.sceneItemEnabled).toBe(true);
+});
+
+it('keeps an initially hidden HUD hidden and never restores a replacement item', async () => {
+  const obs = new FakeObs();
+  await repairObsConfiguration(obs, baseUrl);
+  const scene = obsSceneName('gameplay');
+  obs.currentScene = scene;
+  const owner = new BpOverlayOwner();
+  obs.itemChanged = (name, id, enabled) => owner.observeItem(name, id, enabled);
+  const hud = obs.scenes
+    .get(scene)!
+    .find((item) => item.sourceName === 'Mizar · gameplay · Program')!;
+  hud.sceneItemEnabled = false;
+  await owner.set(obs, baseUrl, true);
+  await owner.set(obs, baseUrl, false);
+  expect(hud.sceneItemEnabled).toBe(false);
+  hud.sceneItemEnabled = true;
+  await owner.set(obs, baseUrl, true);
+  obs.scenes.set(
+    scene,
+    obs.scenes.get(scene)!.filter((item) => item.sceneItemId !== hud.sceneItemId),
+  );
+  owner.observeRemoval(scene, hud.sceneItemId);
+  obs.addItem(scene, 'Mizar · gameplay · Program');
+  const replacement = obs.scenes
+    .get(scene)!
+    .find((item) => item.sourceName === 'Mizar · gameplay · Program')!;
+  replacement.sceneItemEnabled = false;
+  await expect(owner.set(obs, baseUrl, false)).rejects.toThrow('状态待确认');
+  expect(replacement.sceneItemEnabled).toBe(false);
 });
 
 it('does not duplicate window-capture audio with default desktop capture', async () => {

@@ -210,7 +210,9 @@ test('16:9 workspace scales the native regions and keeps scene controls inside t
       const rect = (await button.boundingBox())!;
       expect(rect.y).toBeGreaterThanOrEqual(bounds.y);
       expect(rect.y + rect.height).toBeLessThanOrEqual(bounds.y + bounds.height);
-      expect(rect.height).toBeGreaterThanOrEqual((32 * width!) / 1920);
+      // Chromium quantizes transformed bounds to 1/64 CSS pixel. Keep the
+      // 32px target requirement while allowing at most one layout quantum.
+      expect(rect.height).toBeGreaterThanOrEqual((32 * width!) / 1920 - 1 / 64);
     }
   }
   // CSS dimensions after 150% Windows scaling, plus native 2K/4K windows.
