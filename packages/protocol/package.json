@@ -70,6 +70,10 @@
       "types": "./dist/music.d.ts",
       "import": "./dist/music.js"
     },
+    "./mixer": {
+      "types": "./dist/mixer.d.ts",
+      "import": "./dist/mixer.js"
+    },
     "./orchestration": {
       "types": "./dist/orchestration.d.ts",
       "import": "./dist/orchestration.js"
