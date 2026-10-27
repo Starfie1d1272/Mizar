@@ -31,6 +31,7 @@ class FakeObs extends EventEmitter {
   failNextSettings = false;
   failAfterSettings = false;
   manualSettingsDuringWrite = false;
+  changeTargetDuringInspection = false;
   settingsWrites = 0;
   manualOverride = false;
   subscriptions = 0;
@@ -168,6 +169,24 @@ class FakeObs extends EventEmitter {
       case 'GetSceneItemList':
         return { sceneItems: this.scenes.get(String(data.sceneName))!.map((x) => ({ ...x })) };
       case 'GetSpecialInputs':
+        if (this.changeTargetDuringInspection) {
+          const voice = [...this.inputs.values()].find(
+            (value) =>
+              value.settings.window === 'TeamSpeak:Qt:ts3client_win64.exe' &&
+              value.inputKind === 'wasapi_process_output_capture',
+          );
+          if (voice) {
+            this.changeTargetDuringInspection = false;
+            this.emit('InputSettingsChanged', {
+              inputUuid: voice.inputUuid,
+              inputSettings: { ...voice.settings, window: 'Manual:Qt:manual.exe' },
+            });
+            this.emit('InputSettingsChanged', {
+              inputUuid: voice.inputUuid,
+              inputSettings: { ...voice.settings },
+            });
+          }
+        }
         return {};
       case 'GetInputSettings':
         return { inputSettings: input!.settings };
@@ -1199,6 +1218,80 @@ it('restores TS from disabled using the confirmed owned application target', asy
     await adapter.setCommentaryMode('autoTeamspeak', (await owner.get()).revision);
     expect(await adapter.ensure()).toEqual([]);
     expect(voice.settings.window).toBe('TeamSpeak:Qt:ts3client_win64.exe');
+    await adapter.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+it('never records a baseline when the owned target is manually changed during binding', async () => {
+  for (const restore of [false, true]) {
+    const dir = await mkdtemp(join(tmpdir(), 'mizar-baseline-takeover-'));
+    try {
+      const obs = new FakeObs();
+      fixture.client = obs;
+      const owner = new RemoteCommentary(join(dir, 'preference'));
+      const journal = join(dir, 'probe');
+      const routing = new ObsAudioRouting(join(dir, 'routing'));
+      routing.onChanged(() => {
+        const voice = [...obs.inputs.values()].find(
+          (input) => input.settings.window === 'TeamSpeak:Qt:ts3client_win64.exe',
+        )!;
+        voice.settings.window = 'Manual:Qt:manual.exe';
+        obs.emit('InputSettingsChanged', {
+          inputUuid: voice.inputUuid,
+          inputSettings: { ...voice.settings },
+        });
+        if (restore) {
+          voice.settings.window = 'TeamSpeak:Qt:ts3client_win64.exe';
+          obs.emit('InputSettingsChanged', {
+            inputUuid: voice.inputUuid,
+            inputSettings: { ...voice.settings },
+          });
+        }
+      });
+      const adapter = new ObsAdapter(
+        new ObsConfigStore(join(dir, 'obs.json')),
+        base,
+        () => {},
+        routing,
+        { owner, journal },
+      );
+      expect(
+        (await adapter.ensure()).some((finding) => finding.code === 'commentary_pending'),
+      ).toBe(true);
+      const { readOwnedCommentaryTarget } = await import('../src/obs/commentary-owned-target.js');
+      expect(await readOwnedCommentaryTarget(`${journal}.owned-target`)).toBeNull();
+      await adapter.close();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+it('observes target changes during template inspection before recording the baseline', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'mizar-baseline-inspection-'));
+  try {
+    const obs = new FakeObs();
+    obs.changeTargetDuringInspection = true;
+    fixture.client = obs;
+    const journal = join(dir, 'probe');
+    const adapter = new ObsAdapter(
+      new ObsConfigStore(join(dir, 'obs.json')),
+      base,
+      () => {},
+      new ObsAudioRouting(join(dir, 'routing')),
+      { owner: new RemoteCommentary(join(dir, 'preference')), journal },
+    );
+    expect((await adapter.ensure()).some((finding) => finding.code === 'commentary_pending')).toBe(
+      true,
+    );
+    const { readOwnedCommentaryTarget } = await import('../src/obs/commentary-owned-target.js');
+    expect(await readOwnedCommentaryTarget(`${journal}.owned-target`)).toBeNull();
+    for (const items of obs.scenes.values())
+      expect(
+        items.find((item) => item.sourceName === 'Mizar · Desktop Audio')!.sceneItemEnabled,
+      ).toBe(true);
     await adapter.close();
   } finally {
     await rm(dir, { recursive: true, force: true });
