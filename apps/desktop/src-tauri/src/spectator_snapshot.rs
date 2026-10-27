@@ -223,7 +223,7 @@ pub(crate) fn status(root: &Path, video: &Path, exe: &Path, account: u32) -> Sta
         return Status::Missing;
     }
     let inspect = || -> Result<Status, String> {
-        let bytes = regular(&path, RECORD_LIMIT).map_err(|_| "damaged")?;
+        let bytes = regular(&path, RECORD_LIMIT).map_err(|_| "unavailable")?;
         let record: Value = serde_json::from_slice(&bytes).map_err(|_| "damaged")?;
         let payload = &record["payload"];
         if payload["version"] != 1
@@ -237,8 +237,31 @@ pub(crate) fn status(root: &Path, video: &Path, exe: &Path, account: u32) -> Sta
             .filter(|v| v.len() <= LIMIT)
             .ok_or("damaged")?;
         let (owned, applied) = decode(&payload["fields"]).map_err(|_| "damaged")?;
-        let (id, key) = identity(video, exe, account).map_err(|_| "identity")?;
-        if payload["identity"] != id {
+        crate::spectator_recovery_vcfg::restore(original, &applied, original, &owned)
+            .map_err(|_| "damaged")?;
+        let saved = &payload["identity"];
+        let saved_account = saved["account"]
+            .as_u64()
+            .filter(|value| *value > 0 && *value <= u32::MAX as u64)
+            .ok_or("damaged")?;
+        if saved["slot"] != 0
+            || saved["format"] != "vcfg"
+            || ["video", "executable", "keys"].iter().any(|key| {
+                saved[*key]
+                    .as_str()
+                    .is_none_or(|path| !Path::new(path).is_absolute())
+            })
+        {
+            return Err("damaged".into());
+        }
+        if account == 0 {
+            return Err("unavailable".into());
+        }
+        if saved_account != u64::from(account) {
+            return Err("identity".into());
+        }
+        let (id, key) = identity(video, exe, account).map_err(|_| "unavailable")?;
+        if *saved != id {
             return Err("identity".into());
         }
         let bytes = regular(&key, LIMIT).map_err(|_| "unavailable")?;
@@ -512,6 +535,40 @@ mod tests {
         assert_eq!(status(&state, &video, &exe, 42), Status::Conflict);
         assert_eq!(status(&state, &video, &exe, 43), Status::IdentityChanged);
         fs::write(pending(&state), "{}").unwrap();
+        assert_eq!(status(&state, &video, &exe, 42), Status::Damaged);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn status_distinguishes_unavailable_files_from_proven_identity_changes() {
+        let (root, video, exe, owned, applied) = setup();
+        let state = root.join("state");
+        let key = video.with_file_name("cs2_user_keys_0_slot0.vcfg");
+        capture(&state, &video, &exe, 42, &owned, &applied, write).unwrap();
+        let other = root.join("other/bin/win64/cs2.exe");
+        fs::create_dir_all(other.parent().unwrap()).unwrap();
+        fs::write(&other, "exe").unwrap();
+        assert_eq!(status(&state, &video, &other, 42), Status::IdentityChanged);
+        assert_eq!(status(&state, &video, &exe, 0), Status::Unavailable);
+        fs::remove_file(&key).unwrap();
+        assert_eq!(status(&state, &video, &exe, 42), Status::Unavailable);
+        fs::write(&key, O).unwrap();
+        fs::remove_file(&exe).unwrap();
+        assert_eq!(status(&state, &video, &exe, 42), Status::Unavailable);
+        fs::remove_file(pending(&state)).unwrap();
+        fs::create_dir(pending(&state)).unwrap();
+        assert_eq!(status(&state, &video, &exe, 42), Status::Unavailable);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn status_detects_invalid_snapshot_identity_even_with_matching_digest() {
+        let (root, video, exe, owned, applied) = setup();
+        let state = root.join("state");
+        capture(&state, &video, &exe, 42, &owned, &applied, write).unwrap();
+        let path = pending(&state);
+        let mut record: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        record["payload"]["identity"]["account"] = json!(null);
+        record["sha256"] = json!(digest(&serde_json::to_vec(&record["payload"]).unwrap()));
+        fs::write(path, serde_json::to_vec(&record).unwrap()).unwrap();
         assert_eq!(status(&state, &video, &exe, 42), Status::Damaged);
         fs::remove_dir_all(root).unwrap();
     }
