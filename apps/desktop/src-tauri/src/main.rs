@@ -12,6 +12,7 @@ mod cs2_session;
 mod cs2_spectator;
 mod spectator_recovery_plan;
 mod spectator_recovery_vcfg;
+mod spectator_snapshot;
 mod cs2_video;
 mod demo_test;
 mod desktop_worker;

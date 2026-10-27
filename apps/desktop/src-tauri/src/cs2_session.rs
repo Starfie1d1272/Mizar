@@ -101,6 +101,19 @@ impl SessionStore {
             root: root.join("data/cs2-session"),
         }
     }
+    fn full_spectator_pending(&self) -> bool {
+        !fs::symlink_metadata(self.root.join("spectator-full-pending.json"))
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+    }
+    /// Caller must validate the current Steam account and that CS2 is stopped.
+    pub(crate) fn capture_spectator_snapshot(&self, video: &Path, executable: &Path, account: u32, owned: &std::collections::BTreeSet<crate::spectator_recovery_plan::Input>, applied: &crate::spectator_recovery_plan::Bindings) -> Result<(), String> {
+        if self.load()?.is_some() || self.spectator_pending() { return Err("snapshot_pending".into()); }
+        crate::spectator_snapshot::capture(&self.root, video, executable, account, owned, applied, atomic_write)
+    }
+    /// Caller must rediscover the same Steam account and confirm CS2 has exited.
+    pub(crate) fn recover_spectator_snapshot(&self, video: &Path, executable: &Path, account: u32) -> Result<(), String> {
+        crate::spectator_snapshot::recover(&self.root, video, executable, account, atomic_write)
+    }
     pub fn backup_directory(&self) -> PathBuf {
         self.root.clone()
     }
@@ -431,7 +444,7 @@ impl SessionStore {
     /// Save opaque source bytes before attempting any interpretation. These
     /// incident snapshots are never automatically restored over later settings.
     pub fn backup_originals(&self, video: &Path) -> Result<(), String> {
-        if self.load()?.is_some() {
+        if self.load()?.is_some() || self.full_spectator_pending() {
             return Err("上次 CS2 配置尚未恢复，请先退出游戏并重试恢复。".into());
         }
         let target = fs::canonicalize(video).map_err(|_| "无法核实备份目标。")?;
@@ -845,6 +858,26 @@ mod tests {
         fs::write(cfg.join("crosshair.cfg"), "cl_crosshairsize 2\n").unwrap();
         let executable = root.join("game/bin/win64/cs2.exe");
         (root, video, convars, executable, store)
+    }
+    #[test]
+    fn spectator_snapshot_store_restores_after_restart() {
+        use crate::spectator_recovery_plan::{Input, InputKind};
+        let (root, video, _, executable, store) = frame_setup();
+        fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        fs::write(&executable, b"fixture").unwrap();
+        let keys = video.with_file_name("cs2_user_keys_0_slot0.vcfg");
+        let original = "\"config\" {\"bindings\" {\"x\" \"\"} \"analogbindings\" {}}";
+        fs::write(&keys, original).unwrap();
+        let x = Input { kind: InputKind::Key, name: "x".into() };
+        let owned = [x.clone()].into();
+        let applied = [(x, vec!["preset".into()])].into();
+        store.capture_spectator_snapshot(&video, &executable, 1, &owned, &applied).unwrap();
+        fs::write(&keys, "\"config\" {\"bindings\" {\"x\" \"preset\" \"new\" \"keep\"} \"analogbindings\" {}}").unwrap();
+        SessionStore::new(root.clone()).recover_spectator_snapshot(&video, &executable, 1).unwrap();
+        let result = fs::read_to_string(keys).unwrap();
+        assert!(result.contains("\"x\" \"\""));
+        assert!(result.contains("\"new\" \"keep\""));
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn selected_backup_preserves_unowned_fields_and_resumes_after_interruption() {
