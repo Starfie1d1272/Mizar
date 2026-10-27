@@ -506,12 +506,15 @@ export class OutputService {
     this.retryPending = true;
     try {
       if (this.sink === undefined)
-        await this.outbox.sweep((event) => this.isCurrentForRetry(event), this.now());
+        await this.outbox.sweep(
+          (event, lineup) => this.isCurrentForRetry(event, lineup),
+          this.now(),
+        );
       else
         await this.outbox.flush({
           sink: this.sink,
           now: this.now(),
-          isCurrent: (event) => this.quarantined || this.isCurrentForRetry(event),
+          isCurrent: (event, lineup) => this.quarantined || this.isCurrentForRetry(event, lineup),
           canSend: (event, lineup) => {
             const allowed = this.canSend(event, lineup);
             if (!allowed) {
@@ -525,7 +528,7 @@ export class OutputService {
                   ...(this.quarantined ? ['quarantined'] : []),
                   ...(!bundle ? ['bundle_unavailable'] : []),
                   ...(this.binding?.freshness !== 'fresh' ? ['context_not_fresh'] : []),
-                  ...(!this.isCurrentForRetry(event) ? ['scope_not_current'] : []),
+                  ...(!this.isCurrentForRetry(event, lineup) ? ['scope_not_current'] : []),
                 ];
                 if (bundle && blockers.length === 0) {
                   if (event.kind === 'map_ended') {
@@ -604,10 +607,16 @@ export class OutputService {
     return this.outbox?.getRecords() ?? [];
   }
 
-  private isCurrentForRetry(event: ReliableEventV1): boolean {
+  private isCurrentForRetry(event: ReliableEventV1, lineup?: readonly string[]): boolean {
     const bundle = this.bundle;
     const binding = this.binding;
     if (bundle === undefined || binding === undefined) return true;
+    if (
+      event.kind === 'map_started' &&
+      bundle.program.cursor.mapEpoch !== event.cursor.mapEpoch &&
+      lineup === undefined
+    )
+      return false;
     if (
       event.kind === 'map_started' &&
       bundle.program.cursor.mapEpoch === event.cursor.mapEpoch &&
@@ -649,7 +658,7 @@ export class OutputService {
       this.quarantined ||
       bundle === undefined ||
       this.binding?.freshness !== 'fresh' ||
-      !this.isCurrentForRetry(event)
+      !this.isCurrentForRetry(event, lineup)
     )
       return false;
     if (
@@ -657,13 +666,15 @@ export class OutputService {
         (['map_started', 'map_epoch_changed', 'map_ended'].includes(event.kind) &&
           bundle.program.cursor.mapEpoch !== event.cursor.mapEpoch)) &&
       bundle.program.cursor.producerInstanceId === event.cursor.producerInstanceId
-    )
+    ) {
+      if (event.kind === 'map_epoch_changed') return event.evidence.contextFresh;
       return (
         (event.kind !== 'map_started' || lineup !== undefined) &&
         event.evidence.telemetryFresh &&
         event.evidence.contextFresh &&
         (event.evidence.identity === 'matched' || event.evidence.lineupMismatchOnly === true)
       );
+    }
     if (
       event.kind === 'map_ended' &&
       event.evidence.lineupMismatchOnly === true &&

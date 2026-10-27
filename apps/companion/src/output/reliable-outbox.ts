@@ -401,7 +401,7 @@ export class ReliableOutbox {
 
   async flush(input: {
     readonly sink: ReliableEventSink;
-    readonly isCurrent: (event: ReliableEventV1) => boolean;
+    readonly isCurrent: (event: ReliableEventV1, lineupSteam64?: readonly string[]) => boolean;
     readonly canSend?: (event: ReliableEventV1, lineupSteam64?: readonly string[]) => boolean;
     readonly now?: Date;
   }): Promise<void> {
@@ -421,7 +421,7 @@ export class ReliableOutbox {
         }
         const expired =
           now.getTime() - Date.parse(record.event.observedAt) >= RELIABLE_OUTBOX_RETENTION_MS;
-        if (expired || !input.isCurrent(record.event)) {
+        if (expired || !input.isCurrent(record.event, record.lineupSteam64)) {
           next.push({
             ...record,
             status: expired ? 'expired' : 'superseded',
@@ -499,13 +499,16 @@ export class ReliableOutbox {
     });
   }
 
-  async sweep(isCurrent: (event: ReliableEventV1) => boolean, now = new Date()): Promise<void> {
+  async sweep(
+    isCurrent: (event: ReliableEventV1, lineupSteam64?: readonly string[]) => boolean,
+    now = new Date(),
+  ): Promise<void> {
     return this.queue.run(async () => {
       const next = this.records.map((record): ReliableOutboxRecord => {
         if (record.status !== 'pending') return record;
         const expired =
           now.getTime() - Date.parse(record.event.observedAt) >= RELIABLE_OUTBOX_RETENTION_MS;
-        if (!expired && isCurrent(record.event)) return record;
+        if (!expired && isCurrent(record.event, record.lineupSteam64)) return record;
         return {
           ...record,
           status: expired ? 'expired' : 'superseded',
