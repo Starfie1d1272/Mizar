@@ -504,6 +504,30 @@ pub(crate) fn handoff(
     Ok(())
 }
 
+/// Validate the protected snapshot before accepting a core launch-state update.
+pub(crate) fn linked_session(
+    root: &Path,
+) -> Result<Option<crate::cs2_config_identity::SessionIdentity>, String> {
+    let bytes = regular(&pending(root), RECORD_LIMIT)?;
+    let record: Value = serde_json::from_slice(&bytes).map_err(|_| "snapshot_invalid")?;
+    let payload = &record["payload"];
+    if payload["version"] != 1
+        || record["sha256"].as_str()
+            != Some(digest(&serde_json::to_vec(payload).map_err(|_| "snapshot_invalid")?).as_str())
+    {
+        return Err("snapshot_invalid".into());
+    }
+    let session =
+        crate::cs2_config_identity::SessionIdentity::read(payload).map_err(str::to_string)?;
+    if session
+        .as_ref()
+        .is_some_and(|session| session.config.value() != payload["identity"])
+    {
+        return Err("snapshot_invalid".into());
+    }
+    Ok(session)
+}
+
 /// A remaining coordinated snapshot may be retried only after terminal handoff.
 pub(crate) fn has_terminal(root: &Path) -> Result<bool, String> {
     let bytes = regular(&pending(root), RECORD_LIMIT)?;

@@ -110,7 +110,7 @@ impl SessionStore {
             _file: crate::spectator_snapshot::acquire(&self.root)?,
         })
     }
-    fn full_spectator_pending(&self) -> bool {
+    pub(crate) fn full_spectator_pending(&self) -> bool {
         !fs::symlink_metadata(self.root.join("spectator-full-pending.json"))
             .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
     }
@@ -148,6 +148,19 @@ impl SessionStore {
     fn recover_spectator_snapshot_locked(&self, _guard: &StoreGuard, video: &Path, executable: &Path, account: u32) -> Result<(), String> {
         crate::spectator_snapshot::recover(&self.root, video, executable, account, atomic_write)
     }
+    /// Caller must verify the active Steam identity and confirm CS2 is stopped.
+    pub(crate) fn restore_full_pending(&self, video: &Path, executable: &Path, account: u32) -> Result<Option<String>, String> {
+        let guard = self.acquire_write_guard()?;
+        if self.load()?.is_some() { return Err("core_pending".into()); }
+        if !self.full_spectator_pending() { return Ok(None); }
+        if crate::spectator_snapshot::linked_session(&self.root)?.is_some() {
+            if !crate::spectator_snapshot::has_terminal(&self.root)? { return Err("coordinated_recovery_required".into()); }
+        }
+        match self.recover_spectator_snapshot_locked(&guard, video, executable, account) {
+            Ok(()) => Ok(None),
+            Err(error) => Ok(Some(format!("观战键位尚未恢复，原快照仍保留：{error}"))),
+        }
+    }
     pub fn backup_directory(&self) -> PathBuf {
         self.root.clone()
     }
@@ -178,8 +191,36 @@ impl SessionStore {
     fn save_locked(&self, _guard: &StoreGuard, value: &Value) -> Result<(), String> {
         // Ordinary sessions may continue without taking over keys, but cannot
         // adopt a pending full snapshot or arm the ten-key owner.
-        if self.full_spectator_pending() && (value["spectatorCfg"] == true || value["fullSnapshot"] == true) {
-            return Err("snapshot_pending".into());
+        if self.full_spectator_pending() {
+            if value["spectatorCfg"] == true { return Err("snapshot_pending".into()); }
+            if value["fullSnapshot"] == true {
+                let previous = self.load()?.ok_or("snapshot_pending")?;
+                let session = crate::cs2_config_identity::SessionIdentity::read(value).map_err(str::to_string)?.ok_or("snapshot_pending")?;
+                if previous["fullSnapshot"] != true
+                    || crate::cs2_config_identity::SessionIdentity::read(&previous).map_err(str::to_string)?.as_ref() != Some(&session)
+                    || crate::spectator_snapshot::linked_session(&self.root)?.as_ref() != Some(&session)
+                    || crate::spectator_snapshot::has_terminal(&self.root)? {
+                    return Err("snapshot_pending".into());
+                }
+                let mut old = previous.clone(); let mut next = value.clone();
+                for key in ["launchAttempted", "launchTime", "launchCancelled", "pid", "created"] {
+                    old.as_object_mut().ok_or("snapshot_invalid")?.remove(key);
+                    next.as_object_mut().ok_or("snapshot_invalid")?.remove(key);
+                }
+                if old != next || !value["launchAttempted"].is_boolean()
+                    || (!value["launchCancelled"].is_null() && !value["launchCancelled"].is_boolean())
+                    || (!value["launchTime"].is_null() && value["launchTime"].as_u64().is_none())
+                    || (!value["pid"].is_null() && value["pid"].as_u64().is_none())
+                    || (!value["created"].is_null() && value["created"].as_u64().is_none())
+                    || value["pid"].is_null() != value["created"].is_null()
+                    || (previous["launchAttempted"] == true && value["launchAttempted"] != true)
+                    || (previous["launchCancelled"] == true && value["launchCancelled"] != true)
+                    || (!previous["launchTime"].is_null() && previous["launchTime"] != value["launchTime"])
+                    || (!previous["pid"].is_null() && previous["pid"] != value["pid"])
+                    || (!previous["created"].is_null() && previous["created"] != value["created"]) {
+                    return Err("snapshot_pending".into());
+                }
+            }
         }
         let bytes = serde_json::to_vec_pretty(value).map_err(|_| "CS2 恢复记录无法保存。")?;
         if bytes.len() > 4 * 1024 * 1024 {
@@ -1316,14 +1357,18 @@ mod tests {
         let owned = [x.clone()].into(); let applied = [(x, vec!["preset".into()])].into();
         let mut core = store.prepare_coordinated(&video, &executable, cs2_video::VideoSize::new(1920,1080).unwrap(), None, &session, &owned, &applied, candidate).unwrap();
         let applied_text = fs::read(&key).unwrap();
-        core["launchAttempted"] = json!(true);
-        { let guard = store.acquire_write_guard().unwrap(); store.save_coordinated_locked(&guard, &core, atomic_write).unwrap(); }
+        core["launchAttempted"] = json!(true); core["launchTime"] = json!(100);
+        store.save(&core).unwrap();
+        let mut altered = core.clone(); altered["original"] = json!("unrelated");
+        assert!(store.save(&altered).is_err());
+        let mut wrong_session = core.clone(); wrong_session["sessionId"] = json!("other");
+        assert!(store.save(&wrong_session).is_err());
         assert!(store.restore_coordinated(&video, &executable, 1).is_err());
         assert!(store.load().unwrap().is_some());
         let unconfirmed: Value = serde_json::from_slice(&fs::read(store.root.join("spectator-full-pending.json")).unwrap()).unwrap();
         assert!(unconfirmed["payload"].get("coreTerminal").is_none());
         core["pid"] = json!(123); core["created"] = json!(456);
-        { let guard = store.acquire_write_guard().unwrap(); store.save_coordinated_locked(&guard, &core, atomic_write).unwrap(); }
+        store.save(&core).unwrap();
         fs::write(&key, "\"config\" {\"bindings\" {\"x\" \"external\"} \"analogbindings\" {}}").unwrap();
         let changed = fs::read(&key).unwrap();
         fn fail_before(_: &Path, _: &[u8]) -> Result<(), String> { Err("injected_before".into()) }
