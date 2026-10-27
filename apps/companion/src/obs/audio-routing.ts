@@ -40,6 +40,9 @@ export class ObsAudioRouting {
     private readonly path: string,
     private readonly now = Date.now,
   ) {}
+  invalidateSelections() {
+    this.selections.clear();
+  }
   private async load(): Promise<State> {
     if (this.state) return this.state;
     try {
@@ -202,6 +205,11 @@ export class ObsAudioRouting {
         collection: current.collection,
       };
     }
+    if (
+      binding &&
+      (await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== binding.collection
+    )
+      throw new Error('audio_selection_changed');
     const next: State = {
       revision: randomUUID(),
       bindings: { ...state.bindings, [command.role]: binding },

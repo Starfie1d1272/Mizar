@@ -119,6 +119,7 @@ export class ObsAdapter {
   configure(config: ObsConfig): Promise<void> {
     return this.configurationMutation(async () => {
       await this.configStore.save(config);
+      this.audioRouting?.invalidateSelections();
       this.outputs.reset();
     });
   }
