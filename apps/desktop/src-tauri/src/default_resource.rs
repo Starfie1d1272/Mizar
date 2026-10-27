@@ -178,7 +178,7 @@ fn checked(path: &Path) -> io::Result<(File, String)> {
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt;
-        options.custom_flags(0x00200000).share_mode(0x3);
+        options.custom_flags(0x00200000).share_mode(0x1);
     }
     let file = options.open(path)?;
     let file_id = identity(&file)?;
@@ -197,6 +197,38 @@ fn checked(path: &Path) -> io::Result<(File, String)> {
         return Err(io::Error::other("resource source identity changed"));
     }
     Ok((file, file_id))
+}
+
+// Hold each ancestor without FILE_SHARE_DELETE, starting at the volume root,
+// so a checked Windows directory cannot be renamed or replaced while reading.
+// FILE_FLAG_OPEN_REPARSE_POINT prevents following the final component.
+#[cfg(windows)]
+fn hold_directories(path: &Path) -> Result<Vec<File>, Error> {
+    use std::os::windows::fs::OpenOptionsExt;
+    let mut ancestors: Vec<_> = path.ancestors().collect();
+    ancestors.reverse();
+    let mut held = Vec::new();
+    for dir in ancestors {
+        let meta = fs::symlink_metadata(dir)?;
+        if !meta.is_dir() || !plain(&meta) {
+            return Err(Error::UnsafePath);
+        }
+        let file = OpenOptions::new()
+            .read(true)
+            .share_mode(0x3)
+            .custom_flags(0x02200000)
+            .open(dir)?;
+        if !plain(&file.metadata()?) || !file.metadata()?.is_dir() {
+            return Err(Error::UnsafePath);
+        }
+        verify_handle_path(&file, dir).map_err(|_| Error::UnsafePath)?;
+        held.push(file);
+    }
+    Ok(held)
+}
+#[cfg(not(windows))]
+fn hold_directories(_path: &Path) -> Result<Vec<File>, Error> {
+    Ok(Vec::new())
 }
 
 // Verify the same named file and stable size/mtime after every bounded read.
@@ -319,7 +351,18 @@ pub(crate) fn read_default(root: &Path) -> Result<Resource, Error> {
         return Err(Error::UnsafePath);
     }
     let csgo = root.join("game").join("csgo");
-    let loose = loose(&csgo.join("cfg").join("user_keys_default.vcfg"))?;
+    let _csgo_guards = hold_directories(&csgo)?;
+    let cfg = csgo.join("cfg");
+    let _cfg_guards = match hold_directories(&cfg) {
+        Ok(guards) => Some(guards),
+        Err(Error::Io(e)) if e.kind() == io::ErrorKind::NotFound => None,
+        Err(e) => return Err(e),
+    };
+    let loose = if _cfg_guards.is_some() {
+        loose(&cfg.join("user_keys_default.vcfg"))?
+    } else {
+        None
+    };
     let packed = packed(&csgo.join("pak01_dir.vpk"), &csgo)?;
     let (bytes, source) = match (loose, packed) {
         (None, None) => return Err(Error::Missing),
@@ -438,6 +481,16 @@ mod tests {
             read_default(&f.0),
             Err(Error::Vpk(vpk::Error::Truncated))
         ));
+    }
+    #[cfg(windows)]
+    #[test]
+    fn held_directory_cannot_be_renamed() {
+        let f = Fixture::new();
+        let cfg = f.0.join("game/csgo/cfg");
+        let guards = hold_directories(&cfg).unwrap();
+        assert!(fs::rename(&cfg, f.0.join("game/csgo/moved")).is_err());
+        drop(guards);
+        fs::rename(&cfg, f.0.join("game/csgo/moved")).unwrap();
     }
     #[cfg(unix)]
     #[test]
