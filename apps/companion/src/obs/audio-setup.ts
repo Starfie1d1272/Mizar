@@ -7,6 +7,7 @@ import { prepareRemoteCommentary } from './remote-commentary-setup.js';
 import type { ObsFinding, ObsRpc } from './reconcile.js';
 import type { ObsAudioRole } from '@mizar/protocol/obs';
 import type { CommentarySwitch } from './commentary-switch.js';
+import { readOwnedCommentaryTarget, saveOwnedCommentaryTarget } from './commentary-owned-target.js';
 
 function records(value: unknown): Record<string, unknown>[] {
   if (!Array.isArray(value) || value.some((v: unknown) => !v || typeof v !== 'object'))
@@ -47,6 +48,47 @@ export async function configureIndependentAudio(
     },
   );
   if (!target || !revision) return pending;
+  const targetUuid = target;
+  const rememberOwnedTarget = async () => {
+    let owned: { endpoint?: string; collection?: string; uuid?: string } | undefined;
+    try {
+      owned = JSON.parse(await readFile(journal, 'utf8')) as typeof owned;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    if (
+      owned?.endpoint !== endpoint ||
+      owned.collection !== OBS_COLLECTION ||
+      owned.uuid !== target
+    )
+      return;
+    const state = await owner.get();
+    if (state.revision !== revision) throw new Error('commentary_revision_changed');
+    const settings = (await obs.call('GetInputSettings', { inputUuid: target })).inputSettings;
+    const window =
+      settings && typeof settings === 'object'
+        ? (settings as Record<string, unknown>).window
+        : undefined;
+    if (typeof window !== 'string' || !window) throw new Error('commentary_settings_unknown');
+    const path = `${journal}.owned-target`;
+    const previous = await readOwnedCommentaryTarget(path);
+    if (previous) {
+      if (
+        previous.endpoint !== endpoint ||
+        previous.collection !== OBS_COLLECTION ||
+        previous.uuid !== target ||
+        previous.window !== window
+      )
+        throw new Error('commentary_owned_target_changed');
+      return;
+    }
+    await saveOwnedCommentaryTarget(path, {
+      endpoint,
+      collection: OBS_COLLECTION,
+      uuid: targetUuid,
+      window,
+    });
+  };
   const commentarySettings = (await obs.call('GetInputSettings', { inputUuid: target }))
     .inputSettings;
   if (!commentarySettings || typeof commentarySettings !== 'object')
@@ -111,6 +153,7 @@ export async function configureIndependentAudio(
         }
         if (valid) {
           await onReady?.({ game, remoteCommentary: target, microphone: verified.microphoneUuid });
+          await rememberOwnedTarget();
           await rm(`${journal}.waiting`, { force: true });
           return [];
         }
@@ -248,6 +291,7 @@ export async function configureIndependentAudio(
       observer,
     );
     await onReady?.({ game, remoteCommentary: target, microphone: legacy.microphoneUuid });
+    await rememberOwnedTarget();
     await rm(`${journal}.waiting`, { force: true });
   } finally {
     stop();

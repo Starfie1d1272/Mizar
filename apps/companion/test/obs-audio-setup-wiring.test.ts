@@ -1065,3 +1065,142 @@ it('resumes prepared switches after restart but never replays sent uncertain wri
     }
   }
 });
+
+it('switches from disabled using the last confirmed owned target, including after restart', async () => {
+  for (const scenario of ['normal', 'restart', 'manual']) {
+    const dir = await mkdtemp(join(tmpdir(), 'mizar-disabled-switch-'));
+    try {
+      const obs = new FakeObs();
+      fixture.client = obs;
+      const preference = join(dir, 'preference');
+      const journal = join(dir, 'probe');
+      const routingPath = join(dir, 'routing');
+      const make = () => {
+        const owner = new RemoteCommentary(preference);
+        return {
+          owner,
+          adapter: new ObsAdapter(
+            new ObsConfigStore(join(dir, 'obs.json')),
+            base,
+            () => {},
+            new ObsAudioRouting(routingPath),
+            { owner, journal },
+          ),
+        };
+      };
+      let { owner, adapter } = make();
+      expect(await adapter.ensure()).toEqual([]);
+      const voice = [...obs.inputs.values()].find(
+        (input) => input.settings.window === 'TeamSpeak:Qt:ts3client_win64.exe',
+      )!;
+      await adapter.setCommentaryMode('disabled', (await owner.get()).revision);
+      if (scenario === 'restart') {
+        await adapter.close();
+        ({ owner, adapter } = make());
+      }
+      if (scenario === 'manual') voice.settings.window = 'Manual:Qt:manual.exe';
+      obs.windows = [
+        { itemName: 'Discord', itemValue: 'Discord:Qt:discord.exe', itemEnabled: true },
+      ];
+      const choices = await adapter.listCommentaryApplications();
+      await adapter.selectCommentaryApplication(choices.candidates[0]!.id, choices.revision);
+      const findings = await adapter.ensure();
+      if (scenario === 'manual') {
+        expect(findings.some((finding) => finding.code === 'commentary_pending')).toBe(true);
+        expect(voice.settings.window).toBe('Manual:Qt:manual.exe');
+      } else {
+        expect(findings).toEqual([]);
+        expect(voice.settings.window).toBe('Discord:Qt:discord.exe');
+      }
+      expect((await new RemoteCommentary(preference).get()).preference.mode).toBe('application');
+      await adapter.close();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+it('switches an explicitly selected owned input but never retargets an external input', async () => {
+  for (const external of [false, true]) {
+    const dir = await mkdtemp(join(tmpdir(), 'mizar-existing-switch-'));
+    try {
+      const obs = new FakeObs();
+      fixture.client = obs;
+      const owner = new RemoteCommentary(join(dir, 'preference'));
+      const adapter = new ObsAdapter(
+        new ObsConfigStore(join(dir, 'obs.json')),
+        base,
+        () => {},
+        new ObsAudioRouting(join(dir, 'routing')),
+        { owner, journal: join(dir, 'probe') },
+      );
+      expect(await adapter.ensure()).toEqual([]);
+      const voice = [...obs.inputs.values()].find(
+        (input) => input.settings.window === 'TeamSpeak:Qt:ts3client_win64.exe',
+      )!;
+      const user = external
+        ? obs.addInput('User voice', 'wasapi_process_output_capture', {
+            window: 'User:Qt:user.exe',
+          })
+        : voice;
+      const status = await adapter.readAudioRouting();
+      await adapter.bindAudio({
+        role: 'remoteCommentary',
+        selectionId: status.candidates.find((candidate) => candidate.uuid === user.inputUuid)!
+          .selectionId,
+        revision: status.revision,
+      });
+      obs.windows = [
+        { itemName: 'Discord', itemValue: 'Discord:Qt:discord.exe', itemEnabled: true },
+      ];
+      const choices = await adapter.listCommentaryApplications();
+      await adapter.selectCommentaryApplication(choices.candidates[0]!.id, choices.revision);
+      const findings = await adapter.ensure();
+      if (external) {
+        expect(findings.some((finding) => finding.code === 'commentary_pending')).toBe(true);
+        expect(user.settings.window).toBe('User:Qt:user.exe');
+        expect(voice.settings.window).toBe('TeamSpeak:Qt:ts3client_win64.exe');
+      } else {
+        expect(findings).toEqual([]);
+        expect(voice.settings.window).toBe('Discord:Qt:discord.exe');
+      }
+      await adapter.close();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+it('restores TS from disabled using the confirmed owned application target', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'mizar-disabled-auto-'));
+  try {
+    const obs = new FakeObs();
+    fixture.client = obs;
+    const owner = new RemoteCommentary(join(dir, 'preference'));
+    const adapter = new ObsAdapter(
+      new ObsConfigStore(join(dir, 'obs.json')),
+      base,
+      () => {},
+      new ObsAudioRouting(join(dir, 'routing')),
+      { owner, journal: join(dir, 'probe') },
+    );
+    expect(await adapter.ensure()).toEqual([]);
+    const voice = [...obs.inputs.values()].find(
+      (input) => input.settings.window === 'TeamSpeak:Qt:ts3client_win64.exe',
+    )!;
+    obs.windows = [{ itemName: 'Discord', itemValue: 'Discord:Qt:discord.exe', itemEnabled: true }];
+    const choices = await adapter.listCommentaryApplications();
+    await adapter.selectCommentaryApplication(choices.candidates[0]!.id, choices.revision);
+    expect(await adapter.ensure()).toEqual([]);
+    await adapter.setCommentaryMode('disabled', (await owner.get()).revision);
+    obs.windows = [
+      { itemName: 'TeamSpeak', itemValue: 'TeamSpeak:Qt:ts3client_win64.exe', itemEnabled: true },
+    ];
+    await adapter.setCommentaryMode('autoTeamspeak', (await owner.get()).revision);
+    expect(await adapter.ensure()).toEqual([]);
+    expect(voice.settings.window).toBe('TeamSpeak:Qt:ts3client_win64.exe');
+    await adapter.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

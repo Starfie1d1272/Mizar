@@ -9,6 +9,7 @@ import {
   type CommentarySwitch,
 } from './commentary-switch.js';
 import type { MigrationObserver } from './audio-migration.js';
+import { readOwnedCommentaryTarget, saveOwnedCommentaryTarget } from './commentary-owned-target.js';
 import type { ObsFinding, ObsRpc } from './reconcile.js';
 
 function records(value: unknown): Record<string, unknown>[] {
@@ -181,10 +182,34 @@ export async function prepareRemoteCommentary(
         )
           return pending('远端解说来源目标已改变，请重新配置。');
         if (!observer || !verifySwitch) throw new Error('commentary_switch_observer_required');
-        await applyCommentarySwitch(obs, path, plan, observer, async () => {
-          await check();
-          if (!(await verifySwitch(plan))) throw new Error('commentary_switch_binding_changed');
-        });
+        const targetPath = `${journal}.owned-target`;
+        await applyCommentarySwitch(
+          obs,
+          path,
+          plan,
+          observer,
+          async () => {
+            await check();
+            const previous = await readOwnedCommentaryTarget(targetPath);
+            if (
+              !(await verifySwitch(plan)) ||
+              !previous ||
+              previous.endpoint !== plan.endpoint ||
+              previous.collection !== plan.collection ||
+              previous.uuid !== plan.uuid ||
+              previous.window !== plan.from
+            )
+              throw new Error('commentary_switch_binding_changed');
+          },
+          async () => {
+            await saveOwnedCommentaryTarget(targetPath, {
+              endpoint: plan.endpoint,
+              collection: plan.collection,
+              uuid: plan.uuid,
+              window: plan.to,
+            });
+          },
+        );
       }
       if (window && !existing) {
         await check();

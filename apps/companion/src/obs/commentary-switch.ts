@@ -42,6 +42,7 @@ export async function applyCommentarySwitch(
   plan: CommentarySwitch,
   observer: MigrationObserver,
   check: () => Promise<void>,
+  commitTarget: () => Promise<void>,
 ): Promise<void> {
   if (plan.phase !== 'prepared') throw new Error('commentary_switch_recovery_required');
   let changed = false;
@@ -99,6 +100,8 @@ export async function applyCommentarySwitch(
       !sameOtherSettings(after as Record<string, unknown>)
     )
       throw new Error('commentary_switch_uncertain');
+    await commitTarget();
+    if (changed) throw new Error('commentary_switch_uncertain');
     await rm(path);
   } finally {
     stop();

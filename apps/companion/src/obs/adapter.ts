@@ -14,6 +14,7 @@ import {
   readCommentarySwitch,
   saveCommentarySwitch,
 } from './commentary-switch.js';
+import { readOwnedCommentaryTarget } from './commentary-owned-target.js';
 import { OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
 import { configureIndependentAudio } from './audio-setup.js';
 import { discoverWaitingCommentary } from './remote-commentary-wait.js';
@@ -567,10 +568,16 @@ export class ObsAdapter {
         }
         let from: string | undefined;
         const routing = await this.audioRouting?.commentaryBinding();
+        const confirmed = await readOwnedCommentaryTarget(
+          `${this.commentary!.journal}.owned-target`,
+        );
         if (
           owned?.endpoint === endpoint &&
           owned.collection === OBS_COLLECTION &&
           typeof owned.uuid === 'string' &&
+          confirmed?.endpoint === endpoint &&
+          confirmed.collection === OBS_COLLECTION &&
+          confirmed.uuid === owned.uuid &&
           routing?.binding?.inputUuid === owned.uuid &&
           routing.binding.endpoint === endpoint &&
           routing.binding.collection === OBS_COLLECTION &&
@@ -588,9 +595,15 @@ export class ObsAdapter {
             if (
               typeof value === 'string' &&
               value !== selected.window &&
+              value === confirmed.window &&
               ((previous.preference.mode === 'autoTeamspeak' && isTeamspeak(value)) ||
                 (previous.preference.mode === 'application' &&
                   previous.preference.window === value) ||
+                previous.preference.mode === 'disabled' ||
+                (previous.preference.mode === 'existingInput' &&
+                  previous.preference.binding.endpoint === endpoint &&
+                  previous.preference.binding.collection === OBS_COLLECTION &&
+                  previous.preference.binding.inputUuid === owned.uuid) ||
                 (pendingSwitch?.phase === 'prepared' &&
                   pendingSwitch.endpoint === endpoint &&
                   pendingSwitch.collection === OBS_COLLECTION &&
@@ -643,17 +656,26 @@ export class ObsAdapter {
           if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
         }
         const routing = await this.audioRouting?.commentaryBinding();
+        const confirmed = await readOwnedCommentaryTarget(`${journal}.owned-target`);
         let target: { uuid: string; from: string; to: string; routingRevision: string } | undefined;
         if (
           owned?.endpoint === endpoint &&
           owned.collection === OBS_COLLECTION &&
           typeof owned.uuid === 'string' &&
+          confirmed?.endpoint === endpoint &&
+          confirmed.collection === OBS_COLLECTION &&
+          confirmed.uuid === owned.uuid &&
           routing?.binding?.inputUuid === owned.uuid &&
           routing.binding.endpoint === endpoint &&
           routing.binding.collection === OBS_COLLECTION &&
           routing.game?.inputUuid !== owned.uuid &&
           routing.microphone?.inputUuid !== owned.uuid &&
-          previous.preference.mode === 'application'
+          (previous.preference.mode === 'application' ||
+            previous.preference.mode === 'disabled' ||
+            (previous.preference.mode === 'existingInput' &&
+              previous.preference.binding.endpoint === endpoint &&
+              previous.preference.binding.collection === OBS_COLLECTION &&
+              previous.preference.binding.inputUuid === owned.uuid))
         ) {
           const [collection, inputs, settings] = await Promise.all([
             obs.call('GetSceneCollectionList'),
@@ -674,7 +696,10 @@ export class ObsAdapter {
           if (
             collection.currentSceneCollectionName === OBS_COLLECTION &&
             found &&
-            from === previous.preference.window
+            from === confirmed.window &&
+            (previous.preference.mode === 'disabled' ||
+              previous.preference.mode === 'existingInput' ||
+              from === previous.preference.window)
           ) {
             const windows = (await owner.windows(obs, revision, owned.uuid)).filter((candidate) =>
               isTeamspeak(candidate.window),
