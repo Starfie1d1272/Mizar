@@ -33,6 +33,12 @@ class FakeObs extends EventEmitter {
   manualSettingsDuringWrite = false;
   changeTargetDuringInspection = false;
   settingsWrites = 0;
+  onInputSettings?: (input: {
+    inputName: string;
+    inputKind: string;
+    inputUuid: string;
+    settings: Record<string, unknown>;
+  }) => Promise<void>;
   manualOverride = false;
   subscriptions = 0;
   collection = 'Mizar';
@@ -189,6 +195,7 @@ class FakeObs extends EventEmitter {
         }
         return {};
       case 'GetInputSettings':
+        if (input && this.onInputSettings) await this.onInputSettings(input);
         return { inputSettings: input!.settings };
       case 'GetInputMute':
         return { inputMuted: this.muted.get(String(data.inputUuid)) ?? false };
@@ -1295,5 +1302,56 @@ it('observes target changes during template inspection before recording the base
     await adapter.close();
   } finally {
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+it('cleans up only its unconfirmed baseline when final readback fails', async () => {
+  for (const replaced of [false, true]) {
+    const dir = await mkdtemp(join(tmpdir(), 'mizar-baseline-read-failure-'));
+    try {
+      const obs = new FakeObs();
+      fixture.client = obs;
+      const journal = join(dir, 'probe');
+      const { readOwnedCommentaryTarget, saveOwnedCommentaryTarget } =
+        await import('../src/obs/commentary-owned-target.js');
+      obs.onInputSettings = async (input) => {
+        if (input.inputKind !== 'wasapi_process_output_capture') return;
+        const baseline = await readOwnedCommentaryTarget(`${journal}.owned-target`);
+        if (!baseline) return;
+        delete obs.onInputSettings;
+        obs.emit('InputSettingsChanged', {
+          inputUuid: input.inputUuid,
+          inputSettings: { ...input.settings, window: 'Manual:Qt:manual.exe' },
+        });
+        obs.emit('InputSettingsChanged', {
+          inputUuid: input.inputUuid,
+          inputSettings: { ...input.settings },
+        });
+        if (replaced)
+          await saveOwnedCommentaryTarget(`${journal}.owned-target`, {
+            ...baseline,
+            window: 'Replacement:Qt:other.exe',
+          });
+        throw new Error('final_readback_failed');
+      };
+      const adapter = new ObsAdapter(
+        new ObsConfigStore(join(dir, 'obs.json')),
+        base,
+        () => {},
+        new ObsAudioRouting(join(dir, 'routing')),
+        { owner: new RemoteCommentary(join(dir, 'preference')), journal },
+      );
+      expect(
+        (await adapter.ensure()).some((finding) => finding.code === 'commentary_pending'),
+      ).toBe(true);
+      const baseline = await readOwnedCommentaryTarget(`${journal}.owned-target`);
+      if (replaced) expect(baseline?.window).toBe('Replacement:Qt:other.exe');
+      else expect(baseline).toBeNull();
+      await adapter.close();
+      expect(obs.listenerCount('InputSettingsChanged')).toBe(0);
+      expect(obs.listenerCount('ConnectionClosed')).toBe(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   }
 });

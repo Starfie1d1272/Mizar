@@ -7,7 +7,10 @@ import { prepareRemoteCommentary } from './remote-commentary-setup.js';
 import type { ObsFinding, ObsRpc } from './reconcile.js';
 import type { ObsAudioRole } from '@mizar/protocol/obs';
 import type { CommentarySwitch } from './commentary-switch.js';
-import { readOwnedCommentaryTarget, saveOwnedCommentaryTarget } from './commentary-owned-target.js';
+import {
+  createOwnedCommentaryTarget,
+  readOwnedCommentaryTarget,
+} from './commentary-owned-target.js';
 
 function records(value: unknown): Record<string, unknown>[] {
   if (!Array.isArray(value) || value.some((v: unknown) => !v || typeof v !== 'object'))
@@ -99,16 +102,19 @@ export async function configureIndependentAudio(
         }
         return;
       }
-      await saveOwnedCommentaryTarget(path, {
+      const removeUnconfirmed = await createOwnedCommentaryTarget(path, {
         endpoint,
         collection: OBS_COLLECTION,
         uuid: targetUuid,
         window,
       });
-      const after = (await obs.call('GetInputSettings', { inputUuid: target })).inputSettings;
-      if (targetChanged || observedChange() || JSON.stringify(after) !== commentarySnapshot) {
-        await rm(path, { force: true });
-        throw new Error('commentary_owned_target_changed');
+      try {
+        const after = (await obs.call('GetInputSettings', { inputUuid: target })).inputSettings;
+        if (targetChanged || observedChange() || JSON.stringify(after) !== commentarySnapshot)
+          throw new Error('commentary_owned_target_changed');
+      } catch (error) {
+        await removeUnconfirmed();
+        throw error;
       }
     };
     const commentarySettings = (await obs.call('GetInputSettings', { inputUuid: target }))
