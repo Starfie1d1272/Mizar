@@ -107,11 +107,18 @@ impl SessionStore {
     }
     /// Caller must validate the current Steam account and that CS2 is stopped.
     pub(crate) fn capture_spectator_snapshot(&self, video: &Path, executable: &Path, account: u32, owned: &std::collections::BTreeSet<crate::spectator_recovery_plan::Input>, applied: &crate::spectator_recovery_plan::Bindings) -> Result<(), String> {
+        let _lock = crate::spectator_snapshot::acquire(&self.root)?;
         if self.load()?.is_some() || self.spectator_pending() { return Err("snapshot_pending".into()); }
         crate::spectator_snapshot::capture(&self.root, video, executable, account, owned, applied, atomic_write)
     }
+    /// Inspection only; caller supplies independently discovered identity.
+    pub(crate) fn spectator_snapshot_status(&self, video: &Path, executable: &Path, account: u32) -> Result<crate::spectator_snapshot::Status, String> {
+        let _lock = crate::spectator_snapshot::acquire(&self.root)?;
+        Ok(crate::spectator_snapshot::status(&self.root, video, executable, account))
+    }
     /// Caller must rediscover the same Steam account and confirm CS2 has exited.
     pub(crate) fn recover_spectator_snapshot(&self, video: &Path, executable: &Path, account: u32) -> Result<(), String> {
+        let _lock = crate::spectator_snapshot::acquire(&self.root)?;
         crate::spectator_snapshot::recover(&self.root, video, executable, account, atomic_write)
     }
     pub fn backup_directory(&self) -> PathBuf {

@@ -6,19 +6,91 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeSet,
     fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 const LIMIT: usize = 256 * 1024;
 const RECORD_LIMIT: usize = 2 * 1024 * 1024;
 type Writer = fn(&Path, &[u8]) -> Result<(), String>;
 
+// Check every existing component without following links or Windows junctions.
+fn plain(metadata: &fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return false;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x400 != 0 {
+            return false;
+        }
+    }
+    true
+}
+fn check_path(path: &Path, create_directories: bool) -> Result<(), String> {
+    if !path.is_absolute() {
+        return Err("path_invalid".into());
+    }
+    let mut current = PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::Prefix(_) => {
+                current.push(part.as_os_str());
+                continue;
+            }
+            Component::RootDir => {
+                current.push(part.as_os_str());
+                let metadata = fs::symlink_metadata(&current).map_err(|_| "path_invalid")?;
+                if !metadata.is_dir() || !plain(&metadata) {
+                    return Err("path_invalid".into());
+                }
+                continue;
+            }
+            Component::Normal(name) => current.push(name),
+            _ => return Err("path_invalid".into()),
+        }
+        let metadata = match fs::symlink_metadata(&current) {
+            Ok(metadata) => metadata,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && create_directories => {
+                fs::create_dir(&current).map_err(|_| "path_invalid")?;
+                fs::symlink_metadata(&current).map_err(|_| "path_invalid")?
+            }
+            Err(_) => return Err("path_invalid".into()),
+        };
+        if !plain(&metadata) {
+            return Err("path_invalid".into());
+        }
+    }
+    Ok(())
+}
+
+/// A kernel-managed lock survives multiple owners but releases on crash.
+/// The lock file is never removed, so an old file is not a stale lock.
+pub(crate) fn acquire(root: &Path) -> Result<fs::File, String> {
+    check_path(root, true)?;
+    let path = root.join("spectator-full.lock");
+    if let Ok(metadata) = fs::symlink_metadata(&path) {
+        if !metadata.is_file() || !plain(&metadata) {
+            return Err("path_invalid".into());
+        }
+    }
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(&path)
+        .map_err(|_| "snapshot_lock_failed")?;
+    check_path(&path, false)?;
+    file.try_lock().map_err(|_| "snapshot_busy")?;
+    Ok(file)
+}
 fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 fn regular(path: &Path, limit: usize) -> Result<Vec<u8>, String> {
+    check_path(path, false)?;
     let m = fs::symlink_metadata(path).map_err(|_| "snapshot_file_unavailable")?;
-    if !m.is_file() || m.file_type().is_symlink() || m.len() > limit as u64 {
+    if !m.is_file() || !plain(&m) || m.len() > limit as u64 {
         return Err("snapshot_file_invalid".into());
     }
     let bytes = fs::read(path).map_err(|_| "snapshot_read_failed")?;
@@ -38,6 +110,8 @@ fn identity(video: &Path, executable: &Path, account: u32) -> Result<(Value, Pat
     {
         return Err("identity_invalid".into());
     }
+    check_path(video, false)?;
+    check_path(executable, false)?;
     let cfg = video.parent().ok_or("identity_invalid")?;
     let local = cfg.parent().ok_or("identity_invalid")?;
     let app = local.parent().ok_or("identity_invalid")?;
@@ -55,13 +129,13 @@ fn identity(video: &Path, executable: &Path, account: u32) -> Result<(Value, Pat
     }
     for directory in [cfg, local, app, user] {
         let m = fs::symlink_metadata(directory).map_err(|_| "identity_invalid")?;
-        if !m.is_dir() || m.file_type().is_symlink() {
+        if !m.is_dir() || !plain(&m) {
             return Err("identity_invalid".into());
         }
     }
     regular(video, LIMIT)?;
     let m = fs::symlink_metadata(executable).map_err(|_| "identity_invalid")?;
-    if !m.is_file() || m.file_type().is_symlink() {
+    if !m.is_file() || !plain(&m) {
         return Err("identity_invalid".into());
     }
     let key = cfg.join("cs2_user_keys_0_slot0.vcfg");
@@ -132,6 +206,57 @@ fn pending(root: &Path) -> PathBuf {
     root.join("spectator-full-pending.json")
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum Status {
+    Missing,
+    Pending,
+    Conflict,
+    Damaged,
+    IdentityChanged,
+    Unavailable,
+}
+
+/// Read-only inspection under the same owner lock; never returns commands.
+pub(crate) fn status(root: &Path, video: &Path, exe: &Path, account: u32) -> Status {
+    let path = pending(root);
+    if fs::symlink_metadata(&path).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound) {
+        return Status::Missing;
+    }
+    let inspect = || -> Result<Status, String> {
+        let bytes = regular(&path, RECORD_LIMIT).map_err(|_| "damaged")?;
+        let record: Value = serde_json::from_slice(&bytes).map_err(|_| "damaged")?;
+        let payload = &record["payload"];
+        if payload["version"] != 1
+            || record["sha256"].as_str()
+                != Some(digest(&serde_json::to_vec(payload).map_err(|_| "damaged")?).as_str())
+        {
+            return Err("damaged".into());
+        }
+        let original = payload["original"]
+            .as_str()
+            .filter(|v| v.len() <= LIMIT)
+            .ok_or("damaged")?;
+        let (owned, applied) = decode(&payload["fields"]).map_err(|_| "damaged")?;
+        let (id, key) = identity(video, exe, account).map_err(|_| "identity")?;
+        if payload["identity"] != id {
+            return Err("identity".into());
+        }
+        let bytes = regular(&key, LIMIT).map_err(|_| "unavailable")?;
+        let current = std::str::from_utf8(&bytes).map_err(|_| "unavailable")?;
+        match crate::spectator_recovery_vcfg::restore(original, &applied, current, &owned) {
+            Ok(_) => Ok(Status::Pending),
+            Err("conflict") => Ok(Status::Conflict),
+            Err(_) => Err("unavailable".into()),
+        }
+    };
+    match inspect() {
+        Ok(value) => value,
+        Err(error) if error == "damaged" => Status::Damaged,
+        Err(error) if error == "identity" => Status::IdentityChanged,
+        Err(_) => Status::Unavailable,
+    }
+}
+
 pub(crate) fn capture(
     root: &Path,
     video: &Path,
@@ -141,6 +266,7 @@ pub(crate) fn capture(
     applied: &Bindings,
     write: Writer,
 ) -> Result<(), String> {
+    check_path(root, false)?;
     let record_path = pending(root);
     match fs::symlink_metadata(&record_path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
@@ -163,6 +289,7 @@ pub(crate) fn capture(
     if record.len() > RECORD_LIMIT {
         return Err("snapshot_too_large".into());
     }
+    check_path(root, false)?;
     write(&record_path, &record)?;
     if regular(&record_path, RECORD_LIMIT)? != record {
         return Err("snapshot_readback_failed".into());
@@ -180,6 +307,7 @@ pub(crate) fn recover(
     account: u32,
     write: Writer,
 ) -> Result<(), String> {
+    check_path(root, false)?;
     let path = pending(root);
     let bytes = regular(&path, RECORD_LIMIT)?;
     let record: Value = serde_json::from_slice(&bytes).map_err(|_| "snapshot_invalid")?;
@@ -210,12 +338,19 @@ pub(crate) fn recover(
         return Err("snapshot_changed".into());
     }
     if let Some(restored) = result {
+        check_path(&key, false)?;
+        check_path(root, false)?;
         write(&key, restored.as_bytes())?;
         if regular(&key, LIMIT)? != restored.as_bytes() {
             return Err("snapshot_readback_failed".into());
         }
     }
-    write(&root.join("spectator-full-last.json"), &bytes)?;
+    check_path(root, false)?;
+    let last = root.join("spectator-full-last.json");
+    if fs::symlink_metadata(&last).is_ok() {
+        check_path(&last, false)?;
+    }
+    write(&last, &bytes)?;
     if regular(&root.join("spectator-full-last.json"), RECORD_LIMIT)? != bytes {
         return Err("snapshot_readback_failed".into());
     }
@@ -242,6 +377,7 @@ mod tests {
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
+        fs::create_dir_all(root.join("state")).unwrap();
         let cfg = root.join("steam/userdata/42/730/local/cfg");
         fs::create_dir_all(&cfg).unwrap();
         let video = cfg.join("cs2_video.txt");
@@ -352,6 +488,100 @@ mod tests {
         )
         .is_err());
         assert!(!pending(&root.join("state")).exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn lock_is_exclusive_and_released_when_owner_drops() {
+        let (root, _, _, _, _) = setup();
+        let state = root.join("state");
+        let lock = acquire(&state).unwrap();
+        assert!(acquire(&state).is_err());
+        drop(lock);
+        assert!(acquire(&state).is_ok());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn status_exposes_conflict_and_damage_without_commands() {
+        let (root, video, exe, owned, applied) = setup();
+        let state = root.join("state");
+        let key = video.with_file_name("cs2_user_keys_0_slot0.vcfg");
+        assert_eq!(status(&state, &video, &exe, 42), Status::Missing);
+        capture(&state, &video, &exe, 42, &owned, &applied, write).unwrap();
+        assert_eq!(status(&state, &video, &exe, 42), Status::Pending);
+        fs::write(&key, A.replace("preset", "private-value")).unwrap();
+        assert_eq!(status(&state, &video, &exe, 42), Status::Conflict);
+        assert_eq!(status(&state, &video, &exe, 43), Status::IdentityChanged);
+        fs::write(pending(&state), "{}").unwrap();
+        assert_eq!(status(&state, &video, &exe, 42), Status::Damaged);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[cfg(unix)]
+    #[test]
+    fn rejects_linked_ancestors_of_all_targets() {
+        let (root, video, exe, owned, applied) = setup();
+        let link = root.join("link");
+        std::os::unix::fs::symlink(&root, &link).unwrap();
+        let linked_video = link.join(video.strip_prefix(&root).unwrap());
+        let linked_exe = link.join(exe.strip_prefix(&root).unwrap());
+        assert!(capture(
+            &root.join("state"),
+            &linked_video,
+            &exe,
+            42,
+            &owned,
+            &applied,
+            write
+        )
+        .is_err());
+        assert!(capture(
+            &root.join("state"),
+            &video,
+            &linked_exe,
+            42,
+            &owned,
+            &applied,
+            write
+        )
+        .is_err());
+        assert!(acquire(&link.join("state")).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[cfg(windows)]
+    #[test]
+    fn rejects_junction_ancestors_of_all_targets() {
+        let (root, video, exe, owned, applied) = setup();
+        let link = root.join("junction");
+        let output = std::process::Command::new("cmd.exe")
+            .args(["/D", "/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&root)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "junction fixture creation failed");
+        let linked_video = link.join(video.strip_prefix(&root).unwrap());
+        let linked_exe = link.join(exe.strip_prefix(&root).unwrap());
+        assert!(capture(
+            &root.join("state"),
+            &linked_video,
+            &exe,
+            42,
+            &owned,
+            &applied,
+            write
+        )
+        .is_err());
+        assert!(capture(
+            &root.join("state"),
+            &video,
+            &linked_exe,
+            42,
+            &owned,
+            &applied,
+            write
+        )
+        .is_err());
+        assert!(acquire(&link.join("state")).is_err());
+        fs::remove_dir(&link).unwrap();
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
