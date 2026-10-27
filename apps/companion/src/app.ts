@@ -1,3 +1,7 @@
+import {
+  BpPresentationSettings,
+  registerBpPresentationSettings,
+} from './bp/presentation-settings.js';
 import { RemoteCommentary } from './obs/remote-commentary.js';
 import {
   registerWorkspaceObserver,
@@ -762,6 +766,13 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         );
   let musicDirector: MusicDirector | undefined;
   let cameraDirector: CameraDirector | undefined;
+  const bpPresentationSettings = new BpPresentationSettings(
+    options.obsConfigPath
+      ? join(dirname(options.obsConfigPath), 'bp-presentation.json')
+      : undefined,
+  );
+  app.addHook('onReady', () => bpPresentationSettings.load());
+  registerBpPresentationSettings(app, bpPresentationSettings, localWebTransport.getOriginPolicy());
   const sceneController = new ProgramSceneController(
     projectionCoordinator,
     bpSession,
@@ -787,6 +798,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           }),
     obsAdapter === undefined ? undefined : (options) => obsAdapter.switchToWaitingForExit(options),
     obsAdapter === undefined ? undefined : (visible) => obsAdapter.setBpCompactVisible(visible),
+    () => bpPresentationSettings.get().mode,
+    () => obsAdapter?.gameBackgroundReady() ?? Promise.resolve(false),
   );
   obsAdapter?.onBpDisconnect(() => sceneController.compactDisconnected());
   if (options.steamAvatars) {
