@@ -34,6 +34,11 @@ const videoKinds = new Set(['game_capture', 'window_capture']);
 
 /** Explicit identities are revalidated against OBS; selection tokens expire and contain no PID. */
 export class ObsAudioRouting {
+  private listeners = new Set<() => void>();
+  onChanged(listener: () => void) {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
   private state: State | undefined;
   private selections = new Map<
     string,
@@ -63,6 +68,10 @@ export class ObsAudioRouting {
   async enabled() {
     const state = await this.load();
     return roles.some((role) => state.bindings[role] !== null);
+  }
+  async gameBinding() {
+    const state = await this.load();
+    return { revision: state.revision, binding: state.bindings.game };
   }
   private async inputs(obs: ObsRpc) {
     const version = await obs.call('GetVersion');
@@ -251,5 +260,6 @@ export class ObsAudioRouting {
       await rm(temp, { force: true });
     }
     this.state = next;
+    for (const listener of this.listeners) listener();
   }
 }
