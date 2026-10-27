@@ -17,6 +17,7 @@ export class GameAudioController {
   private busy = false;
   private ready = false;
   private closed = false;
+  private manualOverride = false;
   private unsubscribe: (() => void)[];
   constructor(
     private readonly routing: ObsAudioRouting,
@@ -64,6 +65,18 @@ export class GameAudioController {
       this.busy = false;
     }
   }
+  async manual<T>(operation: () => Promise<T>): Promise<T> {
+    if (!this.ready || this.closed || this.busy) throw new Error('audio_policy_busy');
+    this.busy = true;
+    try {
+      this.manualOverride = this.desired === 'halftime';
+      this.invalidate();
+      await this.owner.relinquish();
+      return await operation();
+    } finally {
+      this.busy = false;
+    }
+  }
   async configure(policy: AudioPolicy, revision: string) {
     if (revision !== this.revision) throw new Error('audio_policy_stale');
     if (!this.ready) throw new Error('audio_policy_not_ready');
@@ -91,12 +104,20 @@ export class GameAudioController {
     if (this.desired !== desired) {
       this.desired = desired;
       this.generation++;
+      if (desired === 'gameplay') this.manualOverride = false;
     }
     if (desired === 'unknown') {
       if (changed) this.connection.invalidate();
       return;
     }
-    if (!this.ready || this.closed || this.busy || this.policy.mode === 'keep') return;
+    if (
+      !this.ready ||
+      this.closed ||
+      this.busy ||
+      this.manualOverride ||
+      this.policy.mode === 'keep'
+    )
+      return;
     if (
       this.owner.status === 'held' ||
       (desired === 'halftime' && this.owner.status === 'owned') ||

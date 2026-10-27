@@ -14,6 +14,7 @@ export type MusicGroup = (typeof MUSIC_GROUPS)[number];
 export const musicTrackSchema = z
   .object({
     id: z.string().regex(/^[a-f0-9]{64}\.(wav|mp3|ogg|flac|m4a)$/),
+    entryId: z.string().uuid().optional(),
     name: z
       .string()
       .min(1)
@@ -22,6 +23,7 @@ export const musicTrackSchema = z
       .refine((s) => [...s].every((c) => c.charCodeAt(0) >= 32)),
     startMs: z.number().int().min(0).max(86_400_000).default(0),
     endMs: z.number().int().min(1).max(86_400_000).nullable().default(null),
+    gain: z.number().finite().min(0).max(1).optional(),
   })
   .strict()
   .refine((t) => t.endMs === null || t.endMs > t.startMs);
@@ -59,6 +61,17 @@ export const musicConfigSchema = z
           path: ['groups', group, 'tracks'],
           message: '固定主题仅允许一首曲目',
         });
+    for (const group of MUSIC_GROUPS) {
+      const ids = config.groups[group].tracks.flatMap((track) =>
+        track.entryId ? [track.entryId] : [],
+      );
+      if (new Set(ids).size !== ids.length)
+        ctx.addIssue({
+          code: 'custom',
+          path: ['groups', group, 'tracks'],
+          message: '条目标识重复',
+        });
+    }
     const total = new Set(MUSIC_GROUPS.flatMap((g) => config.groups[g].tracks.map((t) => t.id)))
       .size;
     if (total > 128) ctx.addIssue({ code: 'custom', message: '曲目总数超过 128' });

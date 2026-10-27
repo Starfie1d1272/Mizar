@@ -1,6 +1,6 @@
 import { assertBpCompactOff, BpOverlayOwner } from './bp-overlay.js';
 import { diagnosticValue } from '../support/session-journal.js';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { dirname } from 'node:path';
@@ -8,6 +8,8 @@ import { OBSWebSocket } from 'obs-websocket-js';
 import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
 import type { ObsAudioBindCommand, ObsOutputCommand, ObsOutputsStatus } from '@mizar/protocol/obs';
 import type { ObsAudioRouting } from './audio-routing.js';
+import type { GameAudioController } from './audio-policy-controller.js';
+import type { MixerChannelStatus, MixerCommand, MixerCommandResult } from '@mizar/protocol/mixer';
 import { createCommentaryProbe, isTeamspeak, RemoteCommentary } from './remote-commentary.js';
 import {
   AUTO_TEAMSPEAK_TARGET,
@@ -239,14 +241,26 @@ export class ObsAdapter {
     operation: (obs: ObsRpc, endpoint: string) => Promise<T>,
     timeoutMs = TIMEOUT_MS,
     diagnosticStage?: string,
+    observeAudioIdentity = false,
   ): Promise<T> {
     const config = await this.configStore.read();
     const client = new OBSWebSocket();
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let stage = 'obs_connect';
+    let active = true;
+    const invalidateAudio = () => {
+      active = false;
+    };
     try {
       const task = (async () => {
         await client.connect(`ws://${config.host}:${config.port}`, config.password);
+        if (!active) throw new Error('obs_operation_cancelled');
+        if (observeAudioIdentity) {
+          client.on('CurrentSceneCollectionChanging', invalidateAudio);
+          client.on('InputRemoved', invalidateAudio);
+          client.on('InputSettingsChanged', invalidateAudio);
+          client.on('ConnectionClosed', invalidateAudio);
+        }
         stage = 'obs_request';
         const rpc: ObsRpc = {
           onTransitionVideoEnded: (listener) => {
@@ -254,27 +268,41 @@ export class ObsAdapter {
             client.on('SceneTransitionVideoEnded', onEnded);
             return () => client.off('SceneTransitionVideoEnded', onEnded);
           },
-          call: (type, data) =>
-            (
+          call: async (type, data) => {
+            if (!active) throw new Error('obs_operation_cancelled');
+            const result = await (
               client.call as (
                 name: string,
                 args?: Record<string, unknown>,
               ) => Promise<Record<string, unknown>>
-            )(type, data),
+            )(type, data);
+            if (!active) throw new Error('obs_operation_cancelled');
+            return result;
+          },
         };
         return operation(rpc, `ws://${config.host}:${config.port}`);
       })();
       return await Promise.race([
         task,
         new Promise<never>((_resolve, reject) => {
-          timeout = setTimeout(() => reject(new Error('OBS 操作超时，请检查连接。')), timeoutMs);
+          timeout = setTimeout(() => {
+            active = false;
+            reject(new Error('OBS 操作超时，请检查连接。'));
+          }, timeoutMs);
         }),
       ]);
     } catch (error) {
       this.diagnostic(diagnosticStage ?? stage, obsErrorEvidence(error, config.password));
       throw error;
     } finally {
+      active = false;
       if (timeout) clearTimeout(timeout);
+      if (observeAudioIdentity) {
+        client.off('CurrentSceneCollectionChanging', invalidateAudio);
+        client.off('InputRemoved', invalidateAudio);
+        client.off('InputSettingsChanged', invalidateAudio);
+        client.off('ConnectionClosed', invalidateAudio);
+      }
       await client.disconnect().catch(() => undefined);
     }
   }
@@ -436,6 +464,111 @@ export class ObsAdapter {
     if (!this.audioRouting) throw new Error('audio_routing_unavailable');
     return this.serial(() =>
       this.withObs((obs, endpoint) => this.audioRouting!.read(obs, endpoint), 12000),
+    );
+  }
+  private mixerRevision(routing: { revision: string; endpoint: string; collection: string }) {
+    return createHash('sha256')
+      .update(JSON.stringify([routing.revision, routing.endpoint, routing.collection]))
+      .digest('hex');
+  }
+  private async mixerReadObs(obs: ObsRpc, endpoint: string) {
+    if (!this.audioRouting) throw new Error('audio_routing_unavailable');
+    const routing = await this.audioRouting.read(obs, endpoint);
+    const channels = {} as Record<'game' | 'remoteCommentary' | 'microphone', MixerChannelStatus>;
+    for (const role of ['game', 'remoteCommentary', 'microphone'] as const) {
+      const binding = routing.bindings[role];
+      const name =
+        binding?.name ??
+        ({ game: '游戏', remoteCommentary: '远端解说', microphone: '麦克风' } as const)[role];
+      if (!binding || !binding.valid) {
+        channels[role] = {
+          name,
+          volume: null,
+          muted: null,
+          control: binding ? 'unknown' : 'unbound',
+        };
+        continue;
+      }
+      const args = { inputUuid: binding.inputUuid };
+      const [volume, mute] = await Promise.all([
+        obs.call('GetInputVolume', args),
+        obs.call('GetInputMute', args),
+      ]);
+      const known =
+        typeof volume.inputVolumeMul === 'number' &&
+        Number.isFinite(volume.inputVolumeMul) &&
+        typeof mute.inputMuted === 'boolean';
+      channels[role] = {
+        name,
+        volume: known ? (volume.inputVolumeMul as number) : null,
+        muted: known ? (mute.inputMuted as boolean) : null,
+        control: known ? 'available' : 'unknown',
+      };
+    }
+    return { revision: this.mixerRevision(routing), channels, routing };
+  }
+  mixerRead() {
+    return this.serial(() =>
+      this.withObs((obs, endpoint) => this.mixerReadObs(obs, endpoint), 12000, undefined, true),
+    );
+  }
+  mixerWrite(command: MixerCommand, gameAudio?: GameAudioController): Promise<MixerCommandResult> {
+    return this.serial(() =>
+      this.withObs<MixerCommandResult>(
+        async (obs, endpoint) => {
+          try {
+            const initial = await this.mixerReadObs(obs, endpoint);
+            if (
+              command.channel === 'music' ||
+              initial.revision !== command.revision ||
+              initial.channels[command.channel].control !== 'available'
+            )
+              return { status: 'rejected', message: '音频绑定已变化或不可用，请刷新。' };
+            const role = command.channel;
+            const binding = initial.routing.bindings[role]!;
+            const perform = async (): Promise<MixerCommandResult> => {
+              const current = await this.mixerReadObs(obs, endpoint);
+              if (
+                current.revision !== command.revision ||
+                current.channels[role].control !== 'available'
+              )
+                return { status: 'rejected', message: '音频绑定已变化，请刷新。' };
+              const args = { inputUuid: binding.inputUuid };
+              if (command.volume !== undefined) {
+                await obs.call('SetInputVolume', { ...args, inputVolumeMul: command.volume });
+              }
+              if (command.muted !== undefined) {
+                await obs.call('SetInputMute', { ...args, inputMuted: command.muted });
+              }
+              const after = await this.mixerReadObs(obs, endpoint);
+              const observed = after.channels[role];
+              if (
+                after.revision !== command.revision ||
+                observed.control !== 'available' ||
+                (command.volume !== undefined &&
+                  (observed.volume === null ||
+                    Math.fround(observed.volume) !== Math.fround(command.volume))) ||
+                (command.muted !== undefined && observed.muted !== command.muted)
+              )
+                return { status: 'unknown', message: '写入结果未确认，请刷新。' };
+              return { status: 'confirmed' };
+            };
+            if (role === 'game') {
+              if (!gameAudio) return { status: 'rejected', message: '游戏音频控制不可用。' };
+              return await gameAudio.manual(perform);
+            }
+            return await perform();
+          } catch {
+            return {
+              status: 'unknown',
+              message: '音频操作未确认，请刷新。',
+            };
+          }
+        },
+        12000,
+        undefined,
+        true,
+      ).catch(() => ({ status: 'unknown', message: 'OBS 连接未确认。' })),
     );
   }
   bindAudio(command: ObsAudioBindCommand) {

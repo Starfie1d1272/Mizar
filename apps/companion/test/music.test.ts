@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -86,6 +86,158 @@ async function rig() {
     },
   };
 }
+it('loads legacy music state with independent master defaults and preserves it on configuration', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-music-legacy-'));
+  directories.push(directory);
+  const original = new MusicStore(directory);
+  await original.load();
+  const legacy = structuredClone(original.state) as Partial<typeof original.state>;
+  delete legacy.master;
+  delete legacy.muted;
+  await writeFile(join(directory, 'state.json'), JSON.stringify(legacy));
+  const store = new MusicStore(directory);
+  await store.load();
+  expect(store.state.master).toBe(1);
+  expect(store.state.muted).toBe(false);
+  await store.update((state) => {
+    state.master = 0.3;
+    state.muted = true;
+  });
+  await store.configure(structuredClone(store.state.config));
+  const reloaded = new MusicStore(directory);
+  await reloaded.load();
+  expect(reloaded.state.master).toBe(0.3);
+  expect(reloaded.state.muted).toBe(true);
+});
+it('assigns stable distinct entry identities to duplicate legacy tracks', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-music-entries-'));
+  directories.push(directory);
+  const original = new MusicStore(directory);
+  await original.load();
+  const track = await original.add('duplicate.wav', musicWav());
+  const legacy = structuredClone(original.state);
+  legacy.config.groups.waiting.tracks = [track, { ...track }, { ...track, startMs: 10 }];
+  legacy.config.groups.technical.tracks = [{ ...track }];
+  await writeFile(join(directory, 'state.json'), JSON.stringify(legacy));
+  const store = new MusicStore(directory);
+  await store.load();
+  const ids = [
+    ...store.state.config.groups.waiting.tracks,
+    ...store.state.config.groups.technical.tracks,
+  ].map((item) => item.entryId);
+  expect(ids.every(Boolean)).toBe(true);
+  expect(new Set(ids).size).toBe(4);
+  const again = new MusicStore(directory);
+  await again.load();
+  expect(
+    [
+      ...again.state.config.groups.waiting.tracks,
+      ...again.state.config.groups.technical.tracks,
+    ].map((item) => item.entryId),
+  ).toEqual(ids);
+  await again.configure(structuredClone(again.state.config));
+  expect(again.state.config.groups.waiting.tracks.map((item) => item.entryId)).toEqual(
+    ids.slice(0, 3),
+  );
+});
+it('migrates a legacy playback snapshot to the matching entry without changing its level', async () => {
+  const r = await rig();
+  await r.step();
+  const legacy = structuredClone(r.store.state);
+  for (const group of MUSIC_GROUPS)
+    for (const track of legacy.config.groups[group].tracks) delete track.entryId;
+  delete legacy.bgm!.track.entryId;
+  delete legacy.bgm!.configRevision;
+  await writeFile(join(r.directory, 'state.json'), JSON.stringify(legacy));
+  const restored = new MusicStore(r.directory);
+  await restored.load();
+  expect(restored.state.bgm?.track.entryId).toBe(
+    restored.state.config.groups.waiting.tracks[0]?.entryId,
+  );
+  expect(restored.state.bgm?.configRevision).toBe(restored.state.configRevision);
+  expect(restored.state.config.groups.waiting.volume).toBe(0.5);
+});
+it('composes the current entry gain with master and mutes without restarting playback', async () => {
+  const r = await rig();
+  const config = structuredClone(r.store.state.config);
+  config.groups.waiting.tracks[0]!.gain = 0.4;
+  config.groups.technical.tracks[0]!.gain = 0.8;
+  await r.store.configure(config);
+  await r.store.update((state) => {
+    state.master = 0.5;
+  });
+  await r.step();
+  expect(r.obs.bgm().volume).toBeCloseTo(0.2);
+  const starts = r.obs.restarts();
+  await r.store.update((state) => {
+    state.muted = true;
+  });
+  await r.step();
+  expect(r.obs.bgm().volume).toBe(0);
+  expect(r.obs.restarts()).toBe(starts);
+  await r.store.update((state) => {
+    state.muted = false;
+    state.master = 0.25;
+  });
+  await r.step();
+  expect(r.obs.bgm().volume).toBeCloseTo(0.1);
+  expect(r.obs.restarts()).toBe(starts);
+});
+it('keeps the existing OBS hold when music mute is cleared', async () => {
+  const r = await rig();
+  await r.step();
+  r.obs.bgm().volume = 0.17;
+  await r.step();
+  expect(r.director.get().held).toBe(true);
+  const starts = r.obs.restarts();
+  expect(await r.director.setMixer(0.3, true)).toBe(false);
+  expect(await r.director.setMixer(undefined, false)).toBe(false);
+  expect(r.director.get().held).toBe(true);
+  expect(r.obs.bgm().volume).toBe(0.17);
+  expect(r.obs.restarts()).toBe(starts);
+});
+it('applies master changes during fade-in without restarting', async () => {
+  const r = await rig();
+  const config = structuredClone(r.store.state.config);
+  config.groups.waiting.fadeInMs = 1000;
+  config.groups.waiting.tracks[0]!.gain = 0.8;
+  await r.store.configure(config);
+  await r.step();
+  const starts = r.obs.restarts();
+  await r.step(500);
+  expect(r.obs.bgm().volume).toBeCloseTo(0.4);
+  await r.store.update((state) => {
+    state.master = 0.5;
+  });
+  await r.step(100);
+  expect(r.obs.bgm().volume).toBeCloseTo(0.24);
+  expect(r.obs.restarts()).toBe(starts);
+});
+it('advances duplicate files by entry identity in automatic and manual playback', async () => {
+  const r = await rig();
+  const config = structuredClone(r.store.state.config);
+  config.groups.waiting.tracks = [
+    { ...r.tracks[0]!, gain: 0.2 },
+    { ...r.tracks[0]!, gain: 0.8 },
+    { ...r.tracks[1]!, gain: 0.4 },
+  ];
+  await r.store.configure(config);
+  const entries = r.store.state.config.groups.waiting.tracks;
+  await r.step();
+  expect(r.store.state.bgm?.track.entryId).toBe(entries[0]!.entryId);
+  r.obs.bgm().state = 'OBS_MEDIA_STATE_ENDED';
+  await r.step();
+  expect(r.store.state.bgm?.track.entryId).toBe(entries[1]!.entryId);
+  r.obs.bgm().state = 'OBS_MEDIA_STATE_ENDED';
+  await r.step();
+  expect(r.store.state.bgm?.track.entryId).toBe(entries[2]!.entryId);
+  await expect(r.director.manualPlay('waiting', entries[0]!.id)).rejects.toThrow(
+    'music_track_invalid',
+  );
+  await r.director.manualPlay('waiting', undefined, entries[0]!.entryId);
+  await r.director.command('next');
+  expect(r.store.state.bgm?.track.entryId).toBe(entries[1]!.entryId);
+});
 it('keeps pre-game waiting music across fresh menu GSI and BP, but stops for stale data and live play', async () => {
   const r = await rig();
   r.truth.program.map.name = null;
@@ -878,6 +1030,24 @@ function audition(
 function stinger(r: Awaited<ReturnType<typeof rig>>) {
   return [...r.obs.inputs].find(([name]) => name.includes('Stinger'))![1];
 }
+it('applies music master, mute and draft entry gain to audition', async () => {
+  const r = await auditionRig();
+  await r.store.update((state) => {
+    state.master = 0;
+    state.muted = true;
+  });
+  const request = audition(r, { volume: 0.5, track: { ...r.tracks[0]!, gain: 0.8 } });
+  await r.director.previewRequest(request);
+  await r.step(100);
+  expect(stinger(r).volume).toBe(0);
+  expect(stinger(r).state).toBe('OBS_MEDIA_STATE_PLAYING');
+  await r.store.update((state) => {
+    state.master = 0.5;
+    state.muted = false;
+  });
+  await r.step(100);
+  expect(stinger(r).volume).toBeCloseTo(0.4);
+});
 it.each([0, 0.5, 1])(
   'auditions unsaved volume %s and segments without altering formal playback/config/hold/consumption',
   async (volume) => {
