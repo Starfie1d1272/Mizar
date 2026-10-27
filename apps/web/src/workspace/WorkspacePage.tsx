@@ -1,3 +1,4 @@
+import { BpCompactPresentation } from '../bp/BpPresentation';
 import { MatchConnectionControl } from './MatchConnectionControl';
 import { ObserverHints } from './ObserverHints';
 import { ReviewDialog, closeReviewWindow } from './ReviewDialog';
@@ -456,6 +457,66 @@ function WorkspaceDockContent() {
             </Button>
           ))}
         </div>
+        <details className="workspace-bp-compact">
+          <summary>紧凑 BP 底栏</summary>
+          <p>
+            预览为完整 BP，不影响播出。比赛 HUD 布局可能占用底部，请先在 OBS 中关闭比赛 HUD 来源。
+          </p>
+          {bp?.projection ? (
+            <div className="workspace-bp-compact-preview" aria-label="紧凑 BP 预览">
+              <div>
+                <BpCompactPresentation
+                  snapshot={{ ...bp, state: 'shown', revealedCount: bp.projection.steps.length }}
+                />
+              </div>
+            </div>
+          ) : (
+            <p>当前比赛没有可播放的完整 BP。</p>
+          )}
+          <div className="workspace-scene-buttons">
+            <Button
+              disabled={
+                busy ||
+                !sceneState ||
+                !connected ||
+                !bp?.projection ||
+                sceneState.active !== 'gameplay'
+              }
+              onClick={() =>
+                sceneState &&
+                void action(() =>
+                  command('/operator/bp-compact', {
+                    visible: true,
+                    expectedRevision: sceneState.revision,
+                  }),
+                )
+              }
+            >
+              Take 底栏
+            </Button>
+            <Button
+              disabled={busy || !sceneState || !connected || sceneState.bpCompact === 'off'}
+              onClick={() =>
+                sceneState &&
+                void action(() =>
+                  command('/operator/bp-compact', {
+                    visible: false,
+                    expectedRevision: sceneState.revision,
+                  }),
+                )
+              }
+            >
+              关闭底栏
+            </Button>
+            <span role="status">
+              {!connected || sceneState?.bpCompact === 'unknown'
+                ? '状态待确认'
+                : sceneState?.bpCompact === 'on'
+                  ? '上次 Take 已确认，请核对 OBS'
+                  : '底栏已关闭'}
+            </span>
+          </div>
+        </details>
         <div className="workspace-next-preview" aria-label="下一个场景预览">
           <Select
             label="热身画面"
