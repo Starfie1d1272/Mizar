@@ -85,7 +85,12 @@ export class AudioConfigurationConnection {
             // A scene-item write may have reached OBS even when its short RPC
             // deadline expires. Keep the transaction and its observer alive
             // until the original receipt settles or the operation budget ends.
-            if (type !== 'SetSceneItemEnabled' || closed || Date.now() >= deadline) throw error;
+            if (
+              !['SetSceneItemEnabled', 'SetInputSettings'].includes(type) ||
+              closed ||
+              Date.now() >= deadline
+            )
+              throw error;
             return bounded(task, Math.max(1, deadline - Date.now()));
           }
         },

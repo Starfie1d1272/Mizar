@@ -1,6 +1,12 @@
 import { writeFile, rm } from 'node:fs/promises';
 import { OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
 import { createCommentaryProbe, RemoteCommentary } from './remote-commentary.js';
+import {
+  applyCommentarySwitch,
+  readCommentarySwitch,
+  type CommentarySwitch,
+} from './commentary-switch.js';
+import type { MigrationObserver } from './audio-migration.js';
 import type { ObsFinding, ObsRpc } from './reconcile.js';
 
 function records(value: unknown): Record<string, unknown>[] {
@@ -15,12 +21,16 @@ export async function prepareRemoteCommentary(
   journal: string,
   endpoint: string,
   baseUrl: string,
+  observer?: MigrationObserver,
+  verifySwitch?: (plan: CommentarySwitch) => Promise<boolean>,
   onReady?: (target: string, revision: string) => void,
 ): Promise<ObsFinding[]> {
   const state = await owner.get();
   const pending = (message = '场景已准备，音频分路待完成。'): ObsFinding[] => [
     { code: 'commentary_pending', message },
   ];
+  if ((await readCommentarySwitch(`${journal}.switch`))?.phase === 'sent')
+    return pending('上次解说来源切换结果待核对，请在 OBS 中检查后处理。');
   if (state.preference.mode === 'disabled') {
     await rm(`${journal}.waiting`, { force: true });
     return [];
@@ -106,7 +116,6 @@ export async function prepareRemoteCommentary(
       const settings = (await obs.call('GetInputSettings', { inputUuid: owned })).inputSettings;
       if (!settings || typeof settings !== 'object') throw new Error('commentary_settings_unknown');
       const existing = (settings as Record<string, unknown>).window;
-      if (existing && existing !== window) return pending('远端解说来源目标已改变，请重新配置。');
       if (state.preference.mode === 'application') {
         const candidates = await owner.windows(obs, state.revision, owned);
         if (!candidates.some((candidate) => candidate.window === window)) {
@@ -119,6 +128,25 @@ export async function prepareRemoteCommentary(
           pendingMessage = '等待所选应用启动；场景已准备，音频分路待完成。';
           window = undefined;
         }
+      }
+      if (window && existing && existing !== window) {
+        const path = `${journal}.switch`;
+        const plan = await readCommentarySwitch(path);
+        if (
+          !plan ||
+          plan.endpoint !== endpoint ||
+          plan.collection !== collection ||
+          plan.uuid !== owned ||
+          plan.revision !== state.revision ||
+          plan.from !== existing ||
+          plan.to !== window
+        )
+          return pending('远端解说来源目标已改变，请重新配置。');
+        if (!observer || !verifySwitch) throw new Error('commentary_switch_observer_required');
+        await applyCommentarySwitch(obs, path, plan, observer, async () => {
+          await check();
+          if (!(await verifySwitch(plan))) throw new Error('commentary_switch_binding_changed');
+        });
       }
       if (window && !existing) {
         await check();

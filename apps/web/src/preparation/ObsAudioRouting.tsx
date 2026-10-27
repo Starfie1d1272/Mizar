@@ -10,7 +10,10 @@ const labels: Record<ObsAudioRole, string> = {
 export function ObsAudioRouting() {
   const [commentary, setCommentary] = useState<{
     revision: string;
-    preference: { mode: 'autoTeamspeak' | 'application' | 'existingInput' | 'disabled' };
+    preference: {
+      mode: 'autoTeamspeak' | 'application' | 'existingInput' | 'disabled';
+      window?: string;
+    };
   } | null>(null);
   const [status, setStatus] = useState<ObsAudioRoutingStatus | null>(null);
   const [message, setMessage] = useState('');
@@ -53,7 +56,9 @@ export function ObsAudioRouting() {
       method: 'POST',
     });
     if (!response.ok)
-      throw new Error('无法读取应用窗口，请确认 OBS 已连接、场景已准备且输出已停止。');
+      throw new Error(
+        '无法读取应用窗口；请确认 OBS 已连接、场景已准备。首次读取可能需要停止输出。',
+      );
     setApplications((await response.json()) as NonNullable<typeof applications>);
     setApplication('');
   }
@@ -117,13 +122,15 @@ export function ObsAudioRouting() {
   return (
     <div>
       <h3>远端解说音频</h3>
-      <p>
+      <p className="obs-audio-commentary-current">
         当前：
         {commentary
           ? (
               {
                 autoTeamspeak: '自动识别 TeamSpeak',
-                application: '已选择应用',
+                application: commentary.preference.window
+                  ? `已选择应用：${commentary.preference.window.split(':')[0]!.replaceAll('#3A', ':').replaceAll('#22', '#')}`
+                  : '已选择应用',
                 existingInput: '已选择 OBS 来源',
                 disabled: '已停用',
               } as const
@@ -146,7 +153,7 @@ export function ObsAudioRouting() {
         选择其他应用
       </Button>
       {applications && (
-        <div>
+        <div className="obs-audio-application-choice">
           <label htmlFor="commentary-application">应用窗口</label>{' '}
           <select
             id="commentary-application"

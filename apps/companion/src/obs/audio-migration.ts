@@ -35,6 +35,7 @@ type Field = z.infer<typeof field>;
 type Journal = z.infer<typeof journalSchema>;
 export type MigrationEvent =
   | { type: 'item'; sceneName: string; sceneItemId: number; enabled: boolean }
+  | { type: 'inputSettings'; inputUuid: string; settings: Record<string, unknown> }
   | { type: 'outputStarting' }
   | { type: 'identityChanged' }
   | { type: 'disconnected' };
@@ -152,7 +153,7 @@ export class AudioMigration {
       if (event.type === 'disconnected') {
         connected = false;
         wake?.();
-      } else if (event.type === 'identityChanged') {
+      } else if (event.type === 'identityChanged' || event.type === 'inputSettings') {
         identity = false;
         wake?.();
       } else if (event.type === 'outputStarting') output = true;

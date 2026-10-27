@@ -1257,3 +1257,14 @@
   object-fit: cover;
   border-radius: var(--mizar-shape-control);
 }
+.obs-audio-application-choice select {
+  display: block;
+  max-width: 100%;
+  min-width: 0;
+  width: 100%;
+}
+
+.obs-audio-application-choice,
+.obs-audio-commentary-current {
+  overflow-wrap: anywhere;
+}

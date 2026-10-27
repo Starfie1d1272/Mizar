@@ -2,6 +2,7 @@ import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { RemoteCommentary } from './remote-commentary.js';
+import { readCommentarySwitch } from './commentary-switch.js';
 import type { ObsRpc } from './reconcile.js';
 
 const journalSchema = z
@@ -70,10 +71,24 @@ export async function discoverWaitingCommentary(
     return (settings as Record<string, unknown>).window ? 'complete' : 'stopped';
   const currentWindow = (settings as Record<string, unknown>).window;
   if (currentWindow) {
-    if (state.preference.mode !== 'application' || currentWindow !== state.preference.window)
-      return 'stopped';
+    if (state.preference.mode !== 'application') return 'stopped';
+    if (currentWindow !== state.preference.window) {
+      const plan = await readCommentarySwitch(`${journalPath}.switch`);
+      if (
+        !plan ||
+        plan.phase !== 'prepared' ||
+        plan.endpoint !== endpoint ||
+        plan.collection !== journal.collection ||
+        plan.uuid !== uuid ||
+        plan.revision !== state.revision ||
+        plan.from !== currentWindow ||
+        plan.to !== state.preference.window
+      )
+        return 'stopped';
+    }
+    const chosen = state.preference.window;
     return (await owner.windows(obs, state.revision, uuid)).some(
-      (candidate) => candidate.window === currentWindow,
+      (candidate) => candidate.window === chosen,
     )
       ? 'complete'
       : 'waiting';

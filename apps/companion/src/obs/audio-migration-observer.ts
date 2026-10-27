@@ -20,7 +20,6 @@ export function observeAudioMigration(source: MigrationEventSource): MigrationOb
         'CurrentSceneCollectionChanged',
         'InputCreated',
         'InputRemoved',
-        'InputSettingsChanged',
         'InputMuteStateChanged',
         'InputVolumeChanged',
         'InputAudioTracksChanged',
@@ -35,6 +34,24 @@ export function observeAudioMigration(source: MigrationEventSource): MigrationOb
         'SourceFilterSettingsChanged',
       ])
         on(name, signal({ type: 'identityChanged' }));
+      on('InputSettingsChanged', (payload) => {
+        if (
+          typeof payload !== 'object' ||
+          !payload ||
+          typeof (payload as Record<string, unknown>).inputUuid !== 'string' ||
+          typeof (payload as Record<string, unknown>).inputSettings !== 'object' ||
+          !(payload as Record<string, unknown>).inputSettings
+        ) {
+          listener({ type: 'identityChanged' });
+          return;
+        }
+        const value = payload as { inputUuid: string; inputSettings: Record<string, unknown> };
+        listener({
+          type: 'inputSettings',
+          inputUuid: value.inputUuid,
+          settings: value.inputSettings,
+        });
+      });
       for (const name of ['StreamStateChanged', 'RecordStateChanged'])
         on(name, (payload) => {
           if (

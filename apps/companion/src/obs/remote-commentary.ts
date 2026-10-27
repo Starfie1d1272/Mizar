@@ -29,7 +29,7 @@ function executable(window: unknown): string | null {
   if (parts.length !== 3 || parts.some((part) => !part)) return null;
   return parts[2]!.replaceAll('#3A', ':').replaceAll('#22', '#').toLowerCase();
 }
-function isTeamspeak(window: unknown): boolean {
+export function isTeamspeak(window: unknown): boolean {
   const exe = executable(window);
   return (
     exe !== null && ['ts3client_win64.exe', 'ts3client_win32.exe', 'teamspeak.exe'].includes(exe)

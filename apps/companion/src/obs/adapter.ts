@@ -1,13 +1,15 @@
 import { assertBpCompactOff, BpOverlayOwner } from './bp-overlay.js';
 import { diagnosticValue } from '../support/session-journal.js';
 import { randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { dirname } from 'node:path';
 import { OBSWebSocket } from 'obs-websocket-js';
 import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
 import type { ObsAudioBindCommand, ObsOutputCommand, ObsOutputsStatus } from '@mizar/protocol/obs';
 import type { ObsAudioRouting } from './audio-routing.js';
-import { createCommentaryProbe, RemoteCommentary } from './remote-commentary.js';
+import { createCommentaryProbe, isTeamspeak, RemoteCommentary } from './remote-commentary.js';
+import { readCommentarySwitch, saveCommentarySwitch } from './commentary-switch.js';
 import { OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
 import { configureIndependentAudio } from './audio-setup.js';
 import { discoverWaitingCommentary } from './remote-commentary-wait.js';
@@ -465,7 +467,7 @@ export class ObsAdapter {
       this.audioConfiguration.run(async (obs, endpoint) => {
         const { owner, journal } = this.commentary!;
         const state = await owner.get();
-        const check = async () => {
+        const check = async (idle = false) => {
           const [current, stream, record, collection] = await Promise.all([
             owner.get(),
             obs.call('GetStreamStatus'),
@@ -474,8 +476,7 @@ export class ObsAdapter {
           ]);
           if (
             current.revision !== state.revision ||
-            stream.outputActive !== false ||
-            record.outputActive !== false ||
+            (idle && (stream.outputActive !== false || record.outputActive !== false)) ||
             collection.currentSceneCollectionName !== OBS_COLLECTION
           )
             throw new Error('commentary_context_changed');
@@ -499,7 +500,7 @@ export class ObsAdapter {
                   collection: OBS_COLLECTION,
                   sceneName: obsDesiredScenes(this.browserBaseUrl)[0]!.sceneName,
                 },
-                check,
+                () => check(true),
               );
         const windows = await owner.windows(obs, state.revision, probe);
         await check();
@@ -550,16 +551,149 @@ export class ObsAdapter {
         const candidates = await this.commentary!.owner.windows(obs, revision, selected.probe);
         if (!candidates.some((candidate) => candidate.window === selected.window))
           throw new Error('commentary_selection_changed');
-        return this.commentary!.owner.set(
+        const previous = await this.commentary!.owner.get();
+        const switchPath = `${this.commentary!.journal}.switch`;
+        const pendingSwitch = await readCommentarySwitch(switchPath);
+        if (pendingSwitch?.phase === 'sent') throw new Error('commentary_switch_recovery_required');
+        let owned: { endpoint?: string; collection?: string; uuid?: string } | undefined;
+        try {
+          owned = JSON.parse(await readFile(this.commentary!.journal, 'utf8')) as typeof owned;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        }
+        let from: string | undefined;
+        const routing = await this.audioRouting?.commentaryBinding();
+        if (
+          owned?.endpoint === endpoint &&
+          owned.collection === OBS_COLLECTION &&
+          typeof owned.uuid === 'string' &&
+          routing?.binding?.inputUuid === owned.uuid &&
+          routing.binding.endpoint === endpoint &&
+          routing.binding.collection === OBS_COLLECTION &&
+          routing.game?.inputUuid !== owned.uuid &&
+          routing.microphone?.inputUuid !== owned.uuid &&
+          (inputs.inputs as Record<string, unknown>[]).some(
+            (input) =>
+              input.inputUuid === owned.uuid && input.inputKind === 'wasapi_process_output_capture',
+          )
+        ) {
+          const settings = (await obs.call('GetInputSettings', { inputUuid: owned.uuid }))
+            .inputSettings;
+          if (settings && typeof settings === 'object') {
+            const value = (settings as Record<string, unknown>).window;
+            if (
+              typeof value === 'string' &&
+              value !== selected.window &&
+              ((previous.preference.mode === 'autoTeamspeak' && isTeamspeak(value)) ||
+                (previous.preference.mode === 'application' &&
+                  previous.preference.window === value) ||
+                (pendingSwitch?.phase === 'prepared' &&
+                  pendingSwitch.endpoint === endpoint &&
+                  pendingSwitch.collection === OBS_COLLECTION &&
+                  pendingSwitch.uuid === owned.uuid &&
+                  pendingSwitch.revision === revision &&
+                  pendingSwitch.from === value &&
+                  previous.preference.mode === 'application' &&
+                  pendingSwitch.to === previous.preference.window))
+            )
+              from = value;
+          }
+        }
+        const next = await this.commentary!.owner.set(
           { mode: 'application', window: selected.window },
           revision,
         );
+        if (from && owned?.uuid && routing)
+          await saveCommentarySwitch(switchPath, {
+            endpoint,
+            collection: OBS_COLLECTION,
+            uuid: owned.uuid,
+            from,
+            to: selected.window,
+            revision: next.revision,
+            routingRevision: routing.revision,
+            phase: 'prepared',
+          });
+        return next;
       }),
     );
   }
   setCommentaryMode(mode: 'autoTeamspeak' | 'disabled', revision: string) {
     if (!this.commentary) throw new Error('commentary_unavailable');
-    return this.serial(() => this.commentary!.owner.set({ mode }, revision));
+    if (mode === 'disabled')
+      return this.serial(() => this.commentary!.owner.set({ mode }, revision));
+    return this.configurationMutation(() =>
+      this.audioConfiguration.run(async (obs, endpoint) => {
+        const { owner, journal } = this.commentary!;
+        const previous = await owner.get();
+        if (previous.revision !== revision) throw new Error('commentary_revision_changed');
+        const path = `${journal}.switch`;
+        const pending = await readCommentarySwitch(path);
+        if (pending?.phase === 'sent') throw new Error('commentary_switch_recovery_required');
+        let owned: { endpoint?: string; collection?: string; uuid?: string } | undefined;
+        try {
+          owned = JSON.parse(await readFile(journal, 'utf8')) as typeof owned;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        }
+        const routing = await this.audioRouting?.commentaryBinding();
+        let target: { uuid: string; from: string; to: string; routingRevision: string } | undefined;
+        if (
+          owned?.endpoint === endpoint &&
+          owned.collection === OBS_COLLECTION &&
+          typeof owned.uuid === 'string' &&
+          routing?.binding?.inputUuid === owned.uuid &&
+          routing.binding.endpoint === endpoint &&
+          routing.binding.collection === OBS_COLLECTION &&
+          routing.game?.inputUuid !== owned.uuid &&
+          routing.microphone?.inputUuid !== owned.uuid &&
+          previous.preference.mode === 'application'
+        ) {
+          const [collection, inputs, settings] = await Promise.all([
+            obs.call('GetSceneCollectionList'),
+            obs.call('GetInputList'),
+            obs.call('GetInputSettings', { inputUuid: owned.uuid }),
+          ]);
+          const found =
+            Array.isArray(inputs.inputs) &&
+            (inputs.inputs as Record<string, unknown>[]).some(
+              (input) =>
+                input.inputUuid === owned.uuid &&
+                input.inputKind === 'wasapi_process_output_capture',
+            );
+          const from =
+            settings.inputSettings && typeof settings.inputSettings === 'object'
+              ? (settings.inputSettings as Record<string, unknown>).window
+              : undefined;
+          if (
+            collection.currentSceneCollectionName === OBS_COLLECTION &&
+            found &&
+            from === previous.preference.window
+          ) {
+            const windows = (await owner.windows(obs, revision, owned.uuid)).filter((candidate) =>
+              isTeamspeak(candidate.window),
+            );
+            if (windows.length === 1 && windows[0]!.window !== from)
+              target = {
+                uuid: owned.uuid,
+                from,
+                to: windows[0]!.window,
+                routingRevision: routing.revision,
+              };
+          }
+        }
+        const next = await owner.set({ mode }, revision);
+        if (target)
+          await saveCommentarySwitch(path, {
+            endpoint,
+            collection: OBS_COLLECTION,
+            ...target,
+            revision: next.revision,
+            phase: 'prepared',
+          });
+        return next;
+      }),
+    );
   }
   ensure(activeScene: () => ProgramSceneId = () => 'waiting'): Promise<readonly ObsFinding[]> {
     return this.configurationMutation(async () => {
@@ -597,6 +731,18 @@ export class ObsAdapter {
               this.browserBaseUrl,
               async (ids) => this.audioRouting?.seedAutomatic(obs, endpoint, ids),
               async () => !(await this.audioRouting?.enabled()),
+              async (plan) => {
+                const routing = await this.audioRouting?.commentaryBinding();
+                return Boolean(
+                  routing &&
+                  routing.revision === plan.routingRevision &&
+                  routing.binding?.inputUuid === plan.uuid &&
+                  routing.binding.endpoint === plan.endpoint &&
+                  routing.binding.collection === plan.collection &&
+                  routing.game?.inputUuid !== plan.uuid &&
+                  routing.microphone?.inputUuid !== plan.uuid,
+                );
+              },
             ),
           );
           this.findings = [...this.findings, ...commentary];

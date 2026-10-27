@@ -6,6 +6,7 @@ import { createCommentaryProbe, RemoteCommentary } from './remote-commentary.js'
 import { prepareRemoteCommentary } from './remote-commentary-setup.js';
 import type { ObsFinding, ObsRpc } from './reconcile.js';
 import type { ObsAudioRole } from '@mizar/protocol/obs';
+import type { CommentarySwitch } from './commentary-switch.js';
 
 function records(value: unknown): Record<string, unknown>[] {
   if (!Array.isArray(value) || value.some((v: unknown) => !v || typeof v !== 'object'))
@@ -23,6 +24,7 @@ export async function configureIndependentAudio(
   baseUrl: string,
   onReady?: (ids: Record<ObsAudioRole, string>) => Promise<void>,
   allowMigration: () => Promise<boolean> = () => Promise.resolve(true),
+  verifySwitch?: (plan: CommentarySwitch) => Promise<boolean>,
 ): Promise<ObsFinding[]> {
   const migration = new AudioMigration(`${journal}.migration`);
   if (await migration.pending())
@@ -37,6 +39,8 @@ export async function configureIndependentAudio(
     journal,
     endpoint,
     baseUrl,
+    observer,
+    verifySwitch,
     (uuid, rev) => {
       target = uuid;
       revision = rev;

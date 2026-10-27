@@ -82,6 +82,15 @@ export class ObsAudioRouting {
     const state = await this.load();
     return { revision: state.revision, binding: state.bindings.game };
   }
+  async commentaryBinding() {
+    const state = await this.load();
+    return {
+      revision: state.revision,
+      binding: state.bindings.remoteCommentary,
+      game: state.bindings.game,
+      microphone: state.bindings.microphone,
+    };
+  }
   /** Seed a never-configured routing store once; explicit user choices always win. */
   async seedAutomatic(obs: ObsRpc, endpoint: string, ids: Record<ObsAudioRole, string>) {
     const state = await this.load();
