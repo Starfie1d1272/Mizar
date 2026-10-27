@@ -84,6 +84,8 @@ test('saves real local choices, imports atomically, persists manual stop through
     await page.getByRole('button', { name: '保存音乐配置', exact: true }).click();
     await expect(page.getByText('音乐配置已保存。')).toBeVisible();
     expect(service.store.state.config.groups.waiting.tracks[0]?.name).toBe('合成等待.mp3');
+    await expect(page.getByLabel('正式播放曲目')).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath('formal-player.png') });
     await expect(page.getByRole('button', { name: '保存音乐配置', exact: true })).toBeDisabled();
     await page.getByRole('button', { name: '移除 合成等待.mp3', exact: true }).click();
     await expect(page.getByText('有未保存修改', { exact: true })).toBeVisible();
@@ -120,6 +122,8 @@ test('saves real local choices, imports atomically, persists manual stop through
       page.getByText('文件未能读取，请确认文件仍在原位置且可以访问后重新选择。'),
     ).toBeVisible();
     expect(service.store.state.config.groups.waiting.tracks[0]?.name).toBe('合成等待.mp3');
+    await expect(page.getByLabel('正式播放曲目')).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath('formal-player.png') });
     await page
       .getByLabel('选择本地曲目', { exact: true })
       .first()
@@ -130,12 +134,14 @@ test('saves real local choices, imports atomically, persists manual stop through
       });
     await expect(page.getByText('曲目未添加，请选择有效的本地音频（最大 32 MiB）。')).toBeVisible();
     expect(service.store.state.config.groups.waiting.tracks[0]?.name).toBe('合成等待.mp3');
+    await expect(page.getByLabel('正式播放曲目')).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath('formal-player.png') });
     await page.getByRole('button', { name: '停止音乐', exact: true }).click();
-    await expect(page.getByText('音乐 · 手动停止')).toBeVisible();
+    await expect(page.getByText('音乐已停止')).toBeVisible();
     await service.app.close();
     service = await start();
     await page.reload();
-    await expect(page.getByText('音乐 · 手动停止')).toBeVisible();
+    await expect(page.getByText('音乐已停止')).toBeVisible();
     await expect(page.getByText('合成等待.mp3', { exact: true }).first()).toBeVisible();
     const exported = await service.app.inject({
       method: 'POST',
@@ -187,7 +193,7 @@ test('saves real local choices, imports atomically, persists manual stop through
       ),
     ).toBe(true);
     await page.getByRole('button', { name: '恢复自动音乐', exact: true }).click();
-    await expect(page.getByText('音乐 · 静音', { exact: true })).toBeVisible();
+    await expect(page.getByText('当前无音乐', { exact: true })).toBeVisible();
     const pack = musicZip({
       'music.json': Buffer.from(JSON.stringify(musicManifest())),
       'audio/等待.wav': musicWav(1),
@@ -366,6 +372,61 @@ test('auditions unsaved drafts through the owned OBS protocol channel with outpu
     await expect(page.getByText('正在通过 OBS 试听，最多 15 秒。')).toBeVisible();
     await page.goto('/');
     await expect.poll(() => input().state, { timeout: 6000 }).toBe('OBS_MEDIA_STATE_STOPPED');
+    await page.goto('/settings?tab=music');
+    const choice = `waiting:${store.state.config.groups.waiting.tracks[0]!.id}`;
+    await expect(page.getByLabel('正式播放曲目').locator(`option[value="${choice}"]`)).toHaveCount(
+      1,
+    );
+    await page.getByLabel('正式播放曲目').selectOption(choice);
+    await page.getByRole('button', { name: '播放所选' }).click();
+    await expect(page.getByText(/人工播放 · OBS：播放中/)).toBeVisible();
+    const bgm = () => obs.bgm();
+    await page.getByRole('slider', { name: '播放进度' }).fill('2000');
+    await page.getByRole('slider', { name: '播放进度' }).press('Tab');
+    await expect.poll(() => bgm().cursor).toBe(2000);
+    await page.getByRole('button', { name: '下一首', exact: true }).click();
+    await expect.poll(() => bgm().file).toContain(store.state.config.groups.waiting.tracks[1]!.id);
+    await page.getByRole('button', { name: '开启本机监听' }).click();
+    await expect(page.getByText(/监听：已开启/)).toBeVisible();
+    const pauseButton = page.getByRole('button', { name: '暂停', exact: true });
+    await pauseButton.focus();
+    await expect(pauseButton).toBeFocused();
+    await pauseButton.press('Enter');
+    await expect(page.getByRole('button', { name: '继续播放', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '继续播放', exact: true }).press('Enter');
+    await expect(page.getByRole('button', { name: '暂停', exact: true })).toBeVisible();
+    const longTitle = '合成音乐'.repeat(30);
+    await store.update((state) => {
+      if (state.bgm) state.bgm.track.name = longTitle;
+    });
+    await expect(page.locator('.music-player__heading').getByTitle(longTitle)).toBeVisible();
+    expect(
+      await page
+        .locator('.music-player__heading strong')
+        .evaluate((el) => el.scrollWidth > el.clientWidth),
+    ).toBe(true);
+    await store.update((state) => {
+      if (state.bgm) state.bgm.track.name = '合成二.wav';
+    });
+    await expect(page.locator('.music-player__heading').getByTitle('合成二.wav')).toBeVisible();
+    for (const [label, width, height] of [
+      ['desktop', 1440, 900],
+      ['narrow', 800, 720],
+    ] as const) {
+      await page.setViewportSize({ width, height });
+      const player = page.locator('.music-player');
+      await player.scrollIntoViewIfNeeded();
+      await expect(player.getByTitle('合成二.wav')).toBeVisible();
+      expect(
+        await player
+          .getByRole('slider', { name: '播放进度' })
+          .evaluate((el) => el.getBoundingClientRect().width),
+      ).toBeGreaterThan(200);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+        true,
+      );
+      await page.screenshot({ path: testInfo.outputPath(`formal-player-${label}.png`) });
+    }
     const exported = await app.inject({
       method: 'POST',
       url: '/debug/support-bundle',
