@@ -514,7 +514,6 @@ export class ObsAdapter {
     return this.serial(() =>
       this.withObs<MixerCommandResult>(
         async (obs, endpoint) => {
-          let writing = false;
           try {
             const initial = await this.mixerReadObs(obs, endpoint);
             if (
@@ -534,11 +533,9 @@ export class ObsAdapter {
                 return { status: 'rejected', message: '音频绑定已变化，请刷新。' };
               const args = { inputUuid: binding.inputUuid };
               if (command.volume !== undefined) {
-                writing = true;
                 await obs.call('SetInputVolume', { ...args, inputVolumeMul: command.volume });
               }
               if (command.muted !== undefined) {
-                writing = true;
                 await obs.call('SetInputMute', { ...args, inputMuted: command.muted });
               }
               const after = await this.mixerReadObs(obs, endpoint);
@@ -561,7 +558,7 @@ export class ObsAdapter {
             return await perform();
           } catch {
             return {
-              status: writing ? 'unknown' : 'rejected',
+              status: 'unknown',
               message: '音频操作未确认，请刷新。',
             };
           }
