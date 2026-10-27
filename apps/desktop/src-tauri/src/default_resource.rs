@@ -226,9 +226,13 @@ fn hold_directories(path: &Path) -> Result<Vec<File>, Error> {
     }
     Ok(held)
 }
-#[cfg(not(windows))]
+#[cfg(all(not(windows), test))]
 fn hold_directories(_path: &Path) -> Result<Vec<File>, Error> {
     Ok(Vec::new())
+}
+#[cfg(all(not(windows), not(test)))]
+fn hold_directories(_path: &Path) -> Result<Vec<File>, Error> {
+    Err(Error::UnsafePath)
 }
 
 // Verify the same named file and stable size/mtime after every bounded read.
@@ -277,7 +281,7 @@ fn read_range(
     stable(path, file, id, meta)?;
     Ok(bytes)
 }
-fn loose(path: &Path) -> Result<Option<Vec<u8>>, Error> {
+fn loose(path: &Path, held: &mut Vec<File>) -> Result<Option<Vec<u8>>, Error> {
     let Some((mut f, id, meta)) = open_optional(path)? else {
         return Ok(None);
     };
@@ -286,9 +290,14 @@ fn loose(path: &Path) -> Result<Option<Vec<u8>>, Error> {
     }
     let bytes = read_range(path, &mut f, &id, &meta, 0, meta.len() as usize)?;
     std::str::from_utf8(&bytes).map_err(|_| Error::InvalidVcfg("invalid UTF-8".into()))?;
+    held.push(f);
     Ok(Some(bytes))
 }
-fn packed(path: &Path, csgo: &Path) -> Result<Option<(Vec<u8>, Source)>, Error> {
+fn packed(
+    path: &Path,
+    csgo: &Path,
+    held: &mut Vec<File>,
+) -> Result<Option<(Vec<u8>, Source)>, Error> {
     let Some((mut f, id, meta)) = open_optional(path)? else {
         return Ok(None);
     };
@@ -307,7 +316,10 @@ fn packed(path: &Path, csgo: &Path) -> Result<Option<(Vec<u8>, Source)>, Error> 
     let prefix = read_range(path, &mut f, &id, &meta, 0, prefix_len as usize)?;
     let entry = match vpk::find_default(&prefix, meta.len()) {
         Ok(entry) => entry,
-        Err(vpk::Error::Missing) => return Ok(None),
+        Err(vpk::Error::Missing) => {
+            held.push(f);
+            return Ok(None);
+        }
         Err(e) => return Err(e.into()),
     };
     let (body, source) = match entry.storage {
@@ -322,10 +334,13 @@ fn packed(path: &Path, csgo: &Path) -> Result<Option<(Vec<u8>, Source)>, Error> 
             };
             let b = read_range(&volume, &mut vf, &vid, &vmeta, offset, entry.body_len)?;
             stable(path, &f, &id, &meta)?;
+            held.push(vf);
             (b, Source::VpkVolume(index))
         }
     };
-    Ok(Some((vpk::assemble(&entry, &body)?, source)))
+    let result = vpk::assemble(&entry, &body)?;
+    held.push(f);
+    Ok(Some((result, source)))
 }
 fn section(text: &str, name: &str) -> Result<BTreeMap<String, String>, Error> {
     let pairs = crate::cs2_frame_rate::scalar_section(text, &["config", name])
@@ -358,12 +373,13 @@ pub(crate) fn read_default(root: &Path) -> Result<Resource, Error> {
         Err(Error::Io(e)) if e.kind() == io::ErrorKind::NotFound => None,
         Err(e) => return Err(e),
     };
+    let mut held = Vec::new();
     let loose = if _cfg_guards.is_some() {
-        loose(&cfg.join("user_keys_default.vcfg"))?
+        loose(&cfg.join("user_keys_default.vcfg"), &mut held)?
     } else {
         None
     };
-    let packed = packed(&csgo.join("pak01_dir.vpk"), &csgo)?;
+    let packed = packed(&csgo.join("pak01_dir.vpk"), &csgo, &mut held)?;
     let (bytes, source) = match (loose, packed) {
         (None, None) => return Err(Error::Missing),
         (Some(bytes), None) => (bytes, Source::Loose),
