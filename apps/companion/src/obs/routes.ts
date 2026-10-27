@@ -286,12 +286,10 @@ export function registerObsRoutes(
       } catch (error: unknown) {
         if (error instanceof ObsOutputError) return reply.code(409).send(outputFailure(error));
         if (error instanceof ObsActionError)
-          return reply
-            .code(409)
-            .send({
-              error: 'obs_action_failed',
-              message: obsActionMessage(error.code) ?? 'OBS 操作失败，请查看诊断后处理。',
-            });
+          return reply.code(409).send({
+            error: 'obs_action_failed',
+            message: obsActionMessage(error.code) ?? 'OBS 操作失败，请查看诊断后处理。',
+          });
         const password = (await options.configStore.read().catch(() => undefined))?.password;
         request.log.error(
           {
