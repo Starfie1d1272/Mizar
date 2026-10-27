@@ -107,7 +107,20 @@ export async function prepareRemoteCommentary(
       if (!settings || typeof settings !== 'object') throw new Error('commentary_settings_unknown');
       const existing = (settings as Record<string, unknown>).window;
       if (existing && existing !== window) return pending('远端解说来源目标已改变，请重新配置。');
-      if (!existing) {
+      if (state.preference.mode === 'application') {
+        const candidates = await owner.windows(obs, state.revision, owned);
+        if (!candidates.some((candidate) => candidate.window === window)) {
+          target = owned;
+          await writeFile(
+            `${journal}.waiting`,
+            `${JSON.stringify({ endpoint, collection, uuid: target, revision: state.revision, phase: 'waiting' })}\n`,
+            { mode: 0o600 },
+          );
+          pendingMessage = '等待所选应用启动；场景已准备，音频分路待完成。';
+          window = undefined;
+        }
+      }
+      if (window && !existing) {
         await check();
         await obs.call('SetInputSettings', {
           inputUuid: owned,

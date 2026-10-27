@@ -22,7 +22,8 @@ export async function discoverWaitingCommentary(
   endpoint: string,
 ): Promise<'waiting' | 'complete' | 'stopped'> {
   const state = await owner.get();
-  if (state.preference.mode !== 'autoTeamspeak') return 'stopped';
+  if (state.preference.mode !== 'autoTeamspeak' && state.preference.mode !== 'application')
+    return 'stopped';
   let journal: z.infer<typeof journalSchema>;
   try {
     journal = journalSchema.parse(JSON.parse(await readFile(`${journalPath}.waiting`, 'utf8')));
@@ -67,8 +68,25 @@ export async function discoverWaitingCommentary(
   if (!settings || typeof settings !== 'object') throw new Error('commentary_settings_unknown');
   if (journal.phase === 'ready')
     return (settings as Record<string, unknown>).window ? 'complete' : 'stopped';
-  if ((settings as Record<string, unknown>).window) return 'stopped';
-  const found = await owner.discover(obs, state.revision, uuid);
+  const currentWindow = (settings as Record<string, unknown>).window;
+  if (currentWindow) {
+    if (state.preference.mode !== 'application' || currentWindow !== state.preference.window)
+      return 'stopped';
+    return (await owner.windows(obs, state.revision, uuid)).some(
+      (candidate) => candidate.window === currentWindow,
+    )
+      ? 'complete'
+      : 'waiting';
+  }
+  const selectedWindow = state.preference.mode === 'application' ? state.preference.window : null;
+  const found =
+    selectedWindow !== null
+      ? (await owner.windows(obs, state.revision, uuid)).some(
+          (candidate) => candidate.window === selectedWindow,
+        )
+        ? { kind: 'window' as const, candidate: { window: selectedWindow } }
+        : { kind: 'waiting' as const }
+      : await owner.discover(obs, state.revision, uuid);
   if (found.kind !== 'window') return 'waiting';
   if (!(await valid())) return 'waiting';
   const current = (await obs.call('GetInputSettings', { inputUuid: uuid })).inputSettings;

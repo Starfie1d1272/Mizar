@@ -94,6 +94,27 @@ export class RemoteCommentary {
     await this.queue;
     if ((await this.load()).revision !== revision) throw new Error('commentary_revision_changed');
   }
+  async windows(obs: ObsRpc, revision: string, probeUuid: string): Promise<Candidate[]> {
+    await this.assertRevision(revision);
+    const result = await obs.call('GetInputPropertiesListPropertyItems', {
+      inputUuid: probeUuid,
+      propertyName: 'window',
+    });
+    if (!Array.isArray(result.propertyItems)) throw new Error('commentary_windows_unknown');
+    const candidates = records(result.propertyItems)
+      .filter(
+        (item) =>
+          item.itemEnabled !== false &&
+          typeof item.itemValue === 'string' &&
+          executable(item.itemValue) !== null,
+      )
+      .map((item) => ({
+        window: item.itemValue as string,
+        label: typeof item.itemName === 'string' ? item.itemName : (item.itemValue as string),
+      }));
+    await this.assertRevision(revision);
+    return candidates;
+  }
   /** Probe must be an existing process-capture input, including a disabled owned input. */
   async discover(obs: ObsRpc, revision: string, probeUuid: string) {
     await this.assertRevision(revision);

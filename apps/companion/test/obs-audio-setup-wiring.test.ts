@@ -636,3 +636,102 @@ it('cancels waiting discovery when an operator selects an existing source', asyn
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+it('persists an application choice and waits for it to return before migrating', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'mizar-app-choice-'));
+  try {
+    const obs = new FakeObs();
+    obs.windows = [{ itemName: 'Voice App', itemValue: 'Voice:Qt:voice.exe', itemEnabled: true }];
+    fixture.client = obs;
+    const preference = join(dir, 'preference');
+    const routing = new ObsAudioRouting(join(dir, 'routing'));
+    const owner = new RemoteCommentary(preference);
+    const adapter = new ObsAdapter(
+      new ObsConfigStore(join(dir, 'obs.json')),
+      base,
+      () => {},
+      routing,
+      { owner, journal: join(dir, 'probe') },
+    );
+    const choices = await adapter.listCommentaryApplications();
+    expect(choices.candidates.map((candidate) => candidate.label)).toEqual(['Voice App']);
+    await adapter.selectCommentaryApplication(choices.candidates[0]!.id, choices.revision);
+    expect((await new RemoteCommentary(preference).get()).preference).toEqual({
+      mode: 'application',
+      window: 'Voice:Qt:voice.exe',
+    });
+    obs.windows = [];
+    expect(
+      (await adapter.ensure()).some((finding) => finding.message.includes('等待所选应用启动')),
+    ).toBe(true);
+    for (const items of obs.scenes.values())
+      expect(
+        items.find((item) => item.sourceName === 'Mizar · Desktop Audio')!.sceneItemEnabled,
+      ).toBe(true);
+    obs.windows = [{ itemName: 'Voice App', itemValue: 'Voice:Qt:voice.exe', itemEnabled: true }];
+    adapter.startCommentaryRecovery();
+    await vi.waitFor(async () => expect((await routing.gameBinding()).binding).not.toBeNull());
+    const voice = [...obs.inputs.values()].find(
+      (item) => item.settings.window === 'Voice:Qt:voice.exe',
+    )!;
+    expect(voice).toBeDefined();
+    expect((await owner.get()).preference.mode).toBe('application');
+    for (const items of obs.scenes.values())
+      expect(items.find((item) => item.sourceUuid === voice.inputUuid)!.sceneItemEnabled).toBe(
+        true,
+      );
+    await adapter.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+it('replaces a waiting application intent or explicitly restores TS before migration', async () => {
+  for (const auto of [false, true]) {
+    const dir = await mkdtemp(join(tmpdir(), 'mizar-app-reselect-'));
+    try {
+      const obs = new FakeObs();
+      fixture.client = obs;
+      obs.windows = [{ itemName: 'Voice One', itemValue: 'Voice:Qt:one.exe', itemEnabled: true }];
+      const owner = new RemoteCommentary(join(dir, 'preference'));
+      const adapter = new ObsAdapter(
+        new ObsConfigStore(join(dir, 'obs.json')),
+        base,
+        () => {},
+        undefined,
+        { owner, journal: join(dir, 'probe') },
+      );
+      const first = await adapter.listCommentaryApplications();
+      await adapter.selectCommentaryApplication(first.candidates[0]!.id, first.revision);
+      obs.windows = [];
+      expect((await adapter.ensure()).some((item) => item.code === 'commentary_pending')).toBe(
+        true,
+      );
+      obs.windows = auto
+        ? [
+            {
+              itemName: 'TeamSpeak',
+              itemValue: 'TeamSpeak:Qt:ts3client_win64.exe',
+              itemEnabled: true,
+            },
+          ]
+        : [{ itemName: 'Voice Two', itemValue: 'Voice:Qt:two.exe', itemEnabled: true }];
+      if (auto) await adapter.setCommentaryMode('autoTeamspeak', (await owner.get()).revision);
+      else {
+        const second = await adapter.listCommentaryApplications();
+        await adapter.selectCommentaryApplication(second.candidates[0]!.id, second.revision);
+      }
+      expect(await adapter.ensure()).toEqual([]);
+      const wanted = auto ? 'TeamSpeak:Qt:ts3client_win64.exe' : 'Voice:Qt:two.exe';
+      const voice = [...obs.inputs.values()].find((item) => item.settings.window === wanted);
+      expect(voice).toBeDefined();
+      for (const items of obs.scenes.values())
+        expect(items.find((item) => item.sourceUuid === voice!.inputUuid)!.sceneItemEnabled).toBe(
+          true,
+        );
+      await adapter.close();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+});

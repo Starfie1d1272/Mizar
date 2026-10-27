@@ -1,11 +1,13 @@
 import { diagnosticValue } from '../support/session-journal.js';
+import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { dirname } from 'node:path';
 import { OBSWebSocket } from 'obs-websocket-js';
 import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
 import type { ObsAudioBindCommand, ObsOutputCommand, ObsOutputsStatus } from '@mizar/protocol/obs';
 import type { ObsAudioRouting } from './audio-routing.js';
-import { RemoteCommentary } from './remote-commentary.js';
+import { createCommentaryProbe, RemoteCommentary } from './remote-commentary.js';
+import { OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
 import { configureIndependentAudio } from './audio-setup.js';
 import { discoverWaitingCommentary } from './remote-commentary-wait.js';
 import { AudioConfigurationConnection } from './audio-configuration-connection.js';
@@ -84,6 +86,10 @@ export class ObsAdapter {
   private recoveryComplete = false;
   private recoveryTask: Promise<void> | undefined;
   private readonly refreshedBrowserSources = new Set<string>();
+  private commentaryChoices = new Map<
+    string,
+    { window: string; revision: string; endpoint: string; probe: string; until: number }
+  >();
   constructor(
     private readonly configStore: ObsConfigStore,
     private readonly browserBaseUrl: string,
@@ -129,6 +135,7 @@ export class ObsAdapter {
     return this.configurationMutation(async () => {
       await this.configStore.save(config);
       this.audioRouting?.invalidateSelections();
+      this.commentaryChoices.clear();
       this.outputs.reset();
     });
   }
@@ -436,6 +443,104 @@ export class ObsAdapter {
   async readCommentary() {
     if (!this.commentary) throw new Error('commentary_unavailable');
     return this.commentary.owner.get();
+  }
+  listCommentaryApplications() {
+    if (!this.commentary) throw new Error('commentary_unavailable');
+    return this.configurationMutation(() =>
+      this.audioConfiguration.run(async (obs, endpoint) => {
+        const { owner, journal } = this.commentary!;
+        const state = await owner.get();
+        const check = async () => {
+          const [current, stream, record, collection] = await Promise.all([
+            owner.get(),
+            obs.call('GetStreamStatus'),
+            obs.call('GetRecordStatus'),
+            obs.call('GetSceneCollectionList'),
+          ]);
+          if (
+            current.revision !== state.revision ||
+            stream.outputActive !== false ||
+            record.outputActive !== false ||
+            collection.currentSceneCollectionName !== OBS_COLLECTION
+          )
+            throw new Error('commentary_context_changed');
+        };
+        await check();
+        const inputs = (await obs.call('GetInputList')).inputs;
+        if (!Array.isArray(inputs)) throw new Error('commentary_inputs_unknown');
+        const existing = (inputs as Record<string, unknown>[]).find(
+          (input) =>
+            input.inputKind === 'wasapi_process_output_capture' &&
+            typeof input.inputUuid === 'string',
+        );
+        const probe =
+          typeof existing?.inputUuid === 'string'
+            ? existing.inputUuid
+            : await createCommentaryProbe(
+                obs,
+                journal,
+                {
+                  endpoint,
+                  collection: OBS_COLLECTION,
+                  sceneName: obsDesiredScenes(this.browserBaseUrl)[0]!.sceneName,
+                },
+                check,
+              );
+        const windows = await owner.windows(obs, state.revision, probe);
+        await check();
+        this.commentaryChoices.clear();
+        const candidates = windows.map((candidate) => {
+          const id = randomUUID();
+          this.commentaryChoices.set(id, {
+            window: candidate.window,
+            revision: state.revision,
+            endpoint,
+            probe,
+            until: Date.now() + 30_000,
+          });
+          return { id, label: candidate.label };
+        });
+        return { revision: state.revision, candidates };
+      }),
+    );
+  }
+  selectCommentaryApplication(id: string, revision: string) {
+    if (!this.commentary) throw new Error('commentary_unavailable');
+    return this.configurationMutation(() =>
+      this.audioConfiguration.run(async (obs, endpoint) => {
+        const selected = this.commentaryChoices.get(id);
+        this.commentaryChoices.clear();
+        if (
+          !selected ||
+          selected.until <= Date.now() ||
+          selected.revision !== revision ||
+          selected.endpoint !== endpoint ||
+          (await this.commentary!.owner.get()).revision !== revision
+        )
+          throw new Error('commentary_selection_changed');
+        const [collection, inputs] = await Promise.all([
+          obs.call('GetSceneCollectionList'),
+          obs.call('GetInputList'),
+        ]);
+        if (
+          collection.currentSceneCollectionName !== OBS_COLLECTION ||
+          !Array.isArray(inputs.inputs) ||
+          !(inputs.inputs as Record<string, unknown>[]).some(
+            (input) =>
+              input.inputUuid === selected.probe &&
+              input.inputKind === 'wasapi_process_output_capture',
+          )
+        )
+          throw new Error('commentary_selection_changed');
+        const candidates = await this.commentary!.owner.windows(obs, revision, selected.probe);
+        if (!candidates.some((candidate) => candidate.window === selected.window))
+          throw new Error('commentary_selection_changed');
+        return this.commentary!.owner.set(
+          { mode: 'application', window: selected.window },
+          revision,
+        );
+      }),
+    );
   }
   setCommentaryMode(mode: 'autoTeamspeak' | 'disabled', revision: string) {
     if (!this.commentary) throw new Error('commentary_unavailable');
