@@ -51,7 +51,7 @@ export function SoundSettings() {
         ))}
       </nav>
       <div hidden={section !== 'music'}>
-        <MusicSettings />
+        <MusicSettings active={section === 'music'} />
       </div>
       <div hidden={section !== 'sources'}>
         <Panel className="settings-card">

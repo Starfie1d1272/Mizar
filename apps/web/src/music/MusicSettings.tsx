@@ -62,8 +62,8 @@ async function localFile(url: string, file: File, type: string) {
   }
   return response.json() as Promise<MusicView & MusicTrack>;
 }
-export function MusicSettings() {
-  const preview = useMusicPreview();
+export function MusicSettings({ active = true }: { active?: boolean }) {
+  const preview = useMusicPreview(active);
   const current = useLocalRead<MusicView>('/local/v1/music', 2000);
   const [selectedGroup, setSelectedGroup] = useState<MusicGroup>('waiting');
   const [draft, setConfig] = useState<MusicConfig | null>(null);
