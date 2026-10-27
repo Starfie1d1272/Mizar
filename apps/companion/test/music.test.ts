@@ -1409,3 +1409,19 @@ it('allows a trusted match pause without any automatic cue and stops when play r
   expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
   await r.director.close();
 });
+
+it('stops manual music when telemetry becomes stale even without a named map', async () => {
+  const r = await rig();
+  r.truth.program.map.phase = null;
+  r.truth.program.map.name = null;
+  r.truth.program.status.telemetry = 'awaiting';
+  r.truth.production = false;
+  await r.director.manualPlay('waiting', r.tracks[0]!.id);
+  r.truth.program.status.telemetry = 'stale';
+  await r.step();
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
+  await expect(r.director.manualPlay('waiting', r.tracks[0]!.id)).rejects.toThrow(
+    'music_program_unsafe',
+  );
+  await r.director.close();
+});

@@ -28,8 +28,10 @@ function observedPlayback(state: unknown): MusicStatus['playback'] {
 
 function manualSafe(truth: MusicTruth) {
   const p = truth.program;
-  if (p.map.name !== null && p.status.telemetry !== 'fresh') return false;
-  if (p.map.phase !== 'live' || p.status.telemetry !== 'fresh') return true;
+  if (p.status.telemetry === 'stale' || (p.map.name !== null && p.status.telemetry !== 'fresh'))
+    return false;
+  if (p.map.phase !== 'live') return true;
+  if (p.status.telemetry !== 'fresh') return false;
   if (!musicSafe(p)) return false;
   if (musicPause(p)) return true;
   const halftime =
