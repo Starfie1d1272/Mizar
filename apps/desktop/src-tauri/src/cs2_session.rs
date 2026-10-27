@@ -1396,6 +1396,8 @@ mod tests {
                 let candidate = "\"config\" {\"bindings\" {\"x\" \"preset\"} \"analogbindings\" {}}";
                 fs::write(&key, original_keys).unwrap();
                 let original_video = fs::read(&video).unwrap(); let original_machine = fs::read(&machine).unwrap();
+                let auto_cfg = root.join("game/csgo/cfg/auto.cfg");
+                let original_auto_cfg = fs::read(&auto_cfg).unwrap();
                 let session = SessionIdentity { session_id:"test-session".into(), config:ConfigIdentity {
                     account:1, video:fs::canonicalize(&video).unwrap(), executable:fs::canonicalize(&executable).unwrap(),
                     keys:fs::canonicalize(&key).unwrap(), slot:0, format:"vcfg".into() }};
@@ -1424,6 +1426,9 @@ mod tests {
                 }
                 assert_eq!(fs::read(&video).unwrap(), original_video);
                 assert_eq!(fs::read(&machine).unwrap(), original_machine);
+                assert_eq!(fs::read(&auto_cfg).unwrap(), original_auto_cfg);
+                assert!(!store.journal_path().exists());
+                assert!(!store.full_spectator_pending());
                 let restored = fs::read_to_string(&key).unwrap();
                 assert!(restored.contains("\"x\" \"personal\"")); assert!(restored.contains("\"extra\" \"keep\""));
                 fs::remove_dir_all(root).unwrap();
