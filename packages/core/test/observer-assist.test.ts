@@ -651,3 +651,61 @@ it('does not trust an old estimate after a long stale source gap', () => {
     hints: [],
   });
 });
+
+it('keeps a calibrated offset through a long quiet period when both sources keep advancing', () => {
+  const timeline = new ObserverHintTimeline();
+  timeline.project(program(1), settings, 0, source);
+  for (const [seq, victim, time] of [
+    [1, 8, 1000],
+    [2, 9, 2000],
+    [3, 6, 3000],
+  ] as const)
+    timeline.consume(kill(seq, victim, time));
+  timeline.project(program(2, [8]), settings, 121000, source);
+  timeline.project(program(3, [8, 9]), settings, 122000, source);
+  timeline.project(program(4, [6, 8, 9]), settings, 123000, source);
+  let sequence = 5;
+  const healthy = (now: number) =>
+    timeline.project(program(sequence++), settings, now, {
+      ...source,
+      lastReceiveMonotonicMs: now,
+      receiveAgeMs: 0,
+    });
+  for (let now = 130000; now <= 300000; now += 10000) healthy(now);
+  expect(healthy(304000).observer).toMatchObject({
+    state: 'ready',
+    calibrationState: 'held',
+    effectiveDelaySeconds: 120,
+  });
+  timeline.consume(kill(4, 7, 305000));
+  for (let now = 310000; now <= 410000; now += 10000) healthy(now);
+  expect(healthy(418000).observer).toMatchObject({
+    state: 'ready',
+    calibrationState: 'held',
+    hints: [{ id: '1:4', remainingSeconds: 7 }],
+  });
+  expect(timeline.getDiagnostics().calibration.continuity).toBe('observed');
+});
+
+it('stops trusting the estimate when a supposedly fresh source cursor stops progressing', () => {
+  const timeline = aligned();
+  timeline.project(program(4), settings, 130000, { ...source, lastReceiveMonotonicMs: 130000 });
+  timeline.project(program(5), settings, 140000, { ...source, lastReceiveMonotonicMs: 140000 });
+  const stopped = timeline.project(program(6), settings, 171000, {
+    ...source,
+    lastReceiveMonotonicMs: 140000,
+  });
+  expect(stopped.observer).toMatchObject({ state: 'unavailable', calibrationState: 'reacquiring' });
+});
+
+it('does not restore trust just because health cursors resume after loss', () => {
+  const timeline = aligned();
+  expect(timeline.project(program(4), settings, 304000, source).observer?.state).toBe(
+    'unavailable',
+  );
+  timeline.project(program(5), settings, 305000, { ...source, lastReceiveMonotonicMs: 305000 });
+  expect(
+    timeline.project(program(6), settings, 315000, { ...source, lastReceiveMonotonicMs: 315000 })
+      .observer,
+  ).toMatchObject({ state: 'unavailable', calibrationState: 'reacquiring' });
+});
