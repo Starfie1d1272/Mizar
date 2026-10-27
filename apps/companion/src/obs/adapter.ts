@@ -268,14 +268,16 @@ export class ObsAdapter {
             client.on('SceneTransitionVideoEnded', onEnded);
             return () => client.off('SceneTransitionVideoEnded', onEnded);
           },
-          call: (type, data) => {
-            if (!active) return Promise.reject(new Error('obs_operation_cancelled'));
-            return (
+          call: async (type, data) => {
+            if (!active) throw new Error('obs_operation_cancelled');
+            const result = await (
               client.call as (
                 name: string,
                 args?: Record<string, unknown>,
               ) => Promise<Record<string, unknown>>
             )(type, data);
+            if (!active) throw new Error('obs_operation_cancelled');
+            return result;
           },
         };
         return operation(rpc, `ws://${config.host}:${config.port}`);
