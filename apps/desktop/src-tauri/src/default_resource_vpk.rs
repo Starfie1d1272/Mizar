@@ -1,5 +1,5 @@
 //! Bounded, fixed-entry VPK directory parsing. This module is not wired into
-//! the runtime: secure file opening and source conflict handling are separate work.
+//! the runtime: the staged reader still requires filesystem hardening and validation.
 //!
 //! Format reference: ValvePak Package.Read.cs, MIT license,
 //! https://github.com/ValveResourceFormat/ValvePak/blob/6796d11731a52a303b2feb82193203b8731bfa2c/ValvePak/ValvePak/Package.Read.cs
