@@ -8,7 +8,7 @@ test('account-scoped spectator opt-in saves explicitly and shows recovery warnin
   await context.exposeBinding(
     'fullSpectatorNative',
     (_source, command: string, args?: Record<string, unknown>) => {
-      calls.push({ command, args });
+    calls.push({ command, ...(args ? { args } : {}) });
       if (command === 'get_full_spectator_preference') return { account: 42, enabled: false };
       if (command === 'cs2_config_status')
         return {
