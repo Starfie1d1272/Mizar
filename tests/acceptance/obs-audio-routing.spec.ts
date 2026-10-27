@@ -24,6 +24,14 @@ test('explicitly selects an OBS source and reports stale bindings', async ({ pag
     findings: ['桌面音频可能包含应用音频和音乐监听；请在 OBS 中核对并自行迁移。'],
   };
   let bound = false;
+  let policy = { mode: 'keep' } as { mode: string; db?: number };
+  await page.route('**/local/v1/obs/game-audio-policy', (route) =>
+    route.fulfill({ json: { ready: true, policy, revision, ownership: 'idle' } }),
+  );
+  await page.route('**/operator/obs/game-audio-policy', (route) => {
+    policy = (route.request().postDataJSON() as { policy: typeof policy }).policy;
+    return route.fulfill({ json: { ready: true, policy, revision, ownership: 'idle' } });
+  });
   await page.route('**/local/v1/obs/audio-routing', (route) =>
     route.fulfill({
       json: bound
@@ -59,5 +67,8 @@ test('explicitly selects an OBS source and reports stale bindings', async ({ pag
   await page.getByLabel('远端解说（TeamSpeak）').selectOption(status.candidates[1]!.selectionId);
   await expect(page.getByText('已绑定：TeamSpeak 6')).toBeVisible();
   await expect(page.getByText(/桌面音频可能包含/)).toBeVisible();
+  await page.getByLabel('中场策略').selectOption('attenuate');
+  await page.getByRole('button', { name: '保存中场策略' }).click();
+  await expect.poll(() => policy).toEqual({ mode: 'attenuate', db: 6 });
   await page.screenshot({ path: testInfo.outputPath('audio-routing.png'), fullPage: true });
 });
