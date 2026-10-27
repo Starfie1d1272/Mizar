@@ -155,9 +155,21 @@ export async function prepareRemoteCommentary(
           window = undefined;
         }
       }
+      const planned = window ? await readCommentarySwitch(`${journal}.switch`) : null;
+      if (
+        window &&
+        planned?.phase === 'prepared' &&
+        planned.endpoint === endpoint &&
+        planned.collection === collection &&
+        planned.uuid === owned &&
+        planned.revision === state.revision &&
+        planned.to === window &&
+        existing !== planned.from
+      )
+        return pending('远端解说来源目标已改变，请重新配置。');
       if (window && existing && existing !== window) {
         const path = `${journal}.switch`;
-        const plan = await readCommentarySwitch(path);
+        const plan = planned;
         if (
           !plan ||
           plan.endpoint !== endpoint ||

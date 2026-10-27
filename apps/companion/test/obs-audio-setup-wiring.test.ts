@@ -906,7 +906,15 @@ it('switches the owned source from TS to an application and then to another appl
 });
 
 it('defers during output and yields to changed targets or uncertain writes', async () => {
-  for (const scenario of ['output', 'manual', 'failure', 'uncertain', 'concurrent', 'routing']) {
+  for (const scenario of [
+    'output',
+    'manual',
+    'manualTarget',
+    'failure',
+    'uncertain',
+    'concurrent',
+    'routing',
+  ]) {
     const dir = await mkdtemp(join(tmpdir(), 'mizar-owned-switch-guard-'));
     try {
       const obs = new FakeObs();
@@ -930,6 +938,7 @@ it('defers during output and yields to changed targets or uncertain writes', asy
       const choices = await adapter.listCommentaryApplications();
       await adapter.selectCommentaryApplication(choices.candidates[0]!.id, choices.revision);
       if (scenario === 'manual') voice.settings.window = 'Manual:Qt:manual.exe';
+      if (scenario === 'manualTarget') voice.settings.window = 'Discord:Qt:discord.exe';
       if (scenario === 'failure') obs.failNextSettings = true;
       if (scenario === 'uncertain') obs.failAfterSettings = true;
       if (scenario === 'concurrent') obs.manualSettingsDuringWrite = true;
@@ -944,7 +953,7 @@ it('defers during output and yields to changed targets or uncertain writes', asy
       expect(voice.settings.window).toBe(
         scenario === 'manual'
           ? 'Manual:Qt:manual.exe'
-          : scenario === 'concurrent' || scenario === 'uncertain'
+          : scenario === 'concurrent' || scenario === 'uncertain' || scenario === 'manualTarget'
             ? 'Discord:Qt:discord.exe'
             : 'TeamSpeak:Qt:ts3client_win64.exe',
       );
