@@ -68,6 +68,8 @@ import { registerBpWorkspaceRoutes } from './bp/workspace-controller.js';
 import { ObsAdapter } from './obs/adapter.js';
 import { ObsConfigStore } from './obs/config.js';
 import { ObsAudioRouting } from './obs/audio-routing.js';
+import { GameAudioController } from './obs/audio-policy-controller.js';
+import { isRegulationHalftime } from './program-scenes/presentation.js';
 import type { ObsNativeEvidence } from './obs/native-evidence.js';
 import { registerObsRoutes } from './obs/routes.js';
 import { ProgramSceneController, registerProgramSceneRoutes } from './program-scenes/controller.js';
@@ -719,6 +721,24 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   });
   const obsConfigStore =
     options.obsConfigPath === undefined ? undefined : new ObsConfigStore(options.obsConfigPath);
+  const obsAudioRouting =
+    options.obsConfigPath === undefined
+      ? undefined
+      : new ObsAudioRouting(`${options.obsConfigPath}.audio-routing.json`);
+  const gameAudio =
+    obsConfigStore && obsAudioRouting && options.obsConfigPath
+      ? new GameAudioController(
+          obsAudioRouting,
+          obsConfigStore,
+          `${options.obsConfigPath}.game-audio.json`,
+        )
+      : undefined;
+  if (gameAudio)
+    app.addHook('onReady', async () => {
+      await gameAudio
+        .load()
+        .catch((error) => app.log.error({ err: error }, '游戏音频策略加载失败'));
+    });
   const obsAdapter =
     obsConfigStore === undefined
       ? undefined
@@ -730,7 +750,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
               { event: 'obs', stage, result: 'failure', diagnostic: { error } },
               'OBS request failed',
             ),
-          new ObsAudioRouting(`${options.obsConfigPath}.audio-routing.json`),
+          obsAudioRouting,
         );
   let musicDirector: MusicDirector | undefined;
   let cameraDirector: CameraDirector | undefined;
@@ -788,6 +808,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       originPolicy: localWebTransport.getOriginPolicy(),
       configStore: obsConfigStore,
       adapter: obsAdapter,
+      ...(gameAudio ? { gameAudio } : {}),
       ...(options.readObsCaptureEvidence
         ? { readCaptureEvidence: options.readObsCaptureEvidence }
         : {}),
@@ -1190,6 +1211,35 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     void director.tick().catch(() => director.hold());
     void musicDirector?.tick();
     cameraDirector?.tick();
+    if (gameAudio) {
+      const p = projectionCoordinator.getCurrent().program;
+      const safe =
+        production.get().mode !== 'preparation' &&
+        projectionCoordinator.getCurrent().operator.matchContext.origin !== 'fixture' &&
+        p.status.context === 'fresh' &&
+        p.status.telemetry === 'fresh' &&
+        p.status.identity !== 'mismatch' &&
+        p.series?.bindingState === 'bound';
+      const half =
+        isRegulationHalftime(p) ||
+        (sceneController.get().active === 'halftime' &&
+          p.map.roundNumber === 12 &&
+          p.clock?.phase === 'freezetime');
+      gameAudio.tick(
+        !safe
+          ? 'unknown'
+          : half &&
+              !(
+                p.clock?.phase === 'freezetime' &&
+                p.clock.endsInSeconds !== null &&
+                p.clock.endsInSeconds <= 5
+              )
+            ? 'halftime'
+            : (half && p.clock?.phase === 'freezetime') || p.map.phase === 'live'
+              ? 'gameplay'
+              : 'unknown',
+      );
+    }
   }, 100);
   directorTimer.unref();
   registerBpWorkspaceRoutes(app, {
@@ -1810,6 +1860,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     objectiveReferenceUnsubscribe?.();
     cameraDirector?.close();
     await musicDirector?.close();
+    gameAudio?.close();
     await obsAdapter?.close();
     const sourceCleanup = await Promise.allSettled([
       cstvSources.program.stop(),

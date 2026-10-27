@@ -1,5 +1,10 @@
 import { createObsCaptureDiagnosticReader } from './capture-diagnostic.js';
-import { obsAudioBindCommandSchema, obsOutputCommandSchema } from '@mizar/protocol/obs';
+import {
+  obsAudioBindCommandSchema,
+  obsGameAudioPolicySchema,
+  obsOutputCommandSchema,
+} from '@mizar/protocol/obs';
+import type { GameAudioController } from './audio-policy-controller.js';
 import { ObsOutputError } from './outputs.js';
 import type { ObsNativeEvidence } from './native-evidence.js';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
@@ -20,6 +25,7 @@ export function registerObsRoutes(
     readonly configStore: ObsConfigStore;
     readonly originPolicy: LocalWebOriginPolicy;
     readonly activeScene: () => ProgramSceneId;
+    readonly gameAudio?: GameAudioController;
     readonly readCaptureEvidence?: () => Promise<ObsNativeEvidence>;
   },
 ) {
@@ -44,6 +50,40 @@ export function registerObsRoutes(
       return false;
     }
   };
+  app.get('/local/v1/obs/game-audio-policy', (request, reply) => {
+    if (!allowedRead(request)) return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    return reply
+      .header('cache-control', 'no-store')
+      .send(options.gameAudio?.status() ?? { ready: false });
+  });
+  app.post('/operator/obs/game-audio-policy', { bodyLimit: 2048 }, async (request, reply) => {
+    if (!allowed(request.headers.origin))
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    const parsed = obsGameAudioPolicySchema.safeParse(request.body);
+    if (!parsed.success || !options.gameAudio)
+      return reply.code(400).send({ error: 'audio_policy_invalid' });
+    try {
+      await options.gameAudio.configure(parsed.data);
+      return options.gameAudio.status();
+    } catch {
+      return reply
+        .code(409)
+        .send({ error: 'audio_policy_unavailable', message: '设置未确认，请稍后重新核对。' });
+    }
+  });
+  app.post('/operator/obs/game-audio-release', { bodyLimit: 2048 }, async (request, reply) => {
+    if (!allowed(request.headers.origin))
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    try {
+      if (!options.gameAudio) throw new Error('unavailable');
+      await options.gameAudio.releaseHeld();
+      return options.gameAudio.status();
+    } catch {
+      return reply
+        .code(409)
+        .send({ error: 'audio_policy_unavailable', message: '控制权未恢复，请稍后核对。' });
+    }
+  });
   app.get('/local/v1/obs/audio-routing', async (request, reply) => {
     if (!allowedRead(request)) return reply.code(403).send({ error: 'operator_origin_forbidden' });
     try {
@@ -63,12 +103,10 @@ export function registerObsRoutes(
       await options.adapter.bindAudio(parsed.data);
       return { ok: true };
     } catch {
-      return reply
-        .code(409)
-        .send({
-          error: 'audio_binding_changed',
-          message: '绑定结果未确认，请刷新 OBS 来源后核对。',
-        });
+      return reply.code(409).send({
+        error: 'audio_binding_changed',
+        message: '绑定结果未确认，请刷新 OBS 来源后核对。',
+      });
     }
   });
   app.get('/local/v1/obs/outputs', async (_request, reply) =>
