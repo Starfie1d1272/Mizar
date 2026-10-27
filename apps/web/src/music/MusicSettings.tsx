@@ -132,7 +132,7 @@ export function MusicSettings({ active = true }: { active?: boolean }) {
         ) : null}
       </Panel>
       {!config ? (
-        <p role="status">等待本机音乐服务，请确认 Companion 已配置 OBS。</p>
+        <p role="status">等待本机音乐服务，请确认本机服务已配置 OBS。</p>
       ) : (
         <>
           <div className="music-settings-save">
