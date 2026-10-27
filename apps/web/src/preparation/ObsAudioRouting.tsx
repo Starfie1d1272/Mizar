@@ -184,55 +184,60 @@ export function ObsAudioRouting() {
         </div>
       )}
       <p>音频分路完成前，新来源保持禁用；已有桌面声音保留。</p>
-      <h3>音频分路绑定</h3>
-      <p>从 OBS 已有来源明确选择；TeamSpeak 多个客户端需自行辨认。绑定不会修改来源、监听或音轨。</p>
-      <Button disabled={busy} onClick={() => void run(refresh)}>
-        刷新 OBS 音频来源
-      </Button>
-      {message && <p role="alert">{message}</p>}
-      {status && (
-        <>
-          <p>
-            当前 OBS：{status.endpoint}；场景集合：{status.collection}
-          </p>
-          {(Object.keys(labels) as ObsAudioRole[]).map((role) => (
-            <div key={role}>
-              <label htmlFor={`audio-${role}`}>{labels[role]}</label>{' '}
-              <select
-                id={`audio-${role}`}
-                disabled={busy}
-                value=""
-                onChange={(event) => void run(() => bind(role, event.target.value || null))}
-              >
-                <option value="">选择来源或解除绑定</option>
-                {status.candidates.map((candidate) => (
-                  <option key={candidate.selectionId} value={candidate.selectionId}>
-                    {candidate.name} · {candidate.kind} · {candidate.uuid}
-                  </option>
-                ))}
-              </select>{' '}
-              <Button
-                disabled={busy || !status.bindings[role]}
-                onClick={() => void run(() => bind(role, null))}
-              >
-                解除绑定
-              </Button>
-              <p>
-                {status.bindings[role]
-                  ? status.bindings[role].valid
-                    ? `已绑定：${status.bindings[role].name}`
-                    : '绑定来源不可用，请重新核对。'
-                  : '尚未绑定'}
-              </p>
-            </div>
-          ))}
-          <ul>
-            {status.findings.map((finding) => (
-              <li key={finding}>{finding}</li>
+      <details className="obs-audio-advanced">
+        <summary>手动绑定与来源详情</summary>
+        <h3>音频分路绑定</h3>
+        <p>
+          从 OBS 已有来源明确选择；TeamSpeak 多个客户端需自行辨认。绑定不会修改来源、监听或音轨。
+        </p>
+        <Button disabled={busy} onClick={() => void run(refresh)}>
+          刷新 OBS 音频来源
+        </Button>
+        {message && <p role="alert">{message}</p>}
+        {status && (
+          <>
+            <p>
+              当前 OBS：{status.endpoint}；场景集合：{status.collection}
+            </p>
+            {(Object.keys(labels) as ObsAudioRole[]).map((role) => (
+              <div key={role}>
+                <label htmlFor={`audio-${role}`}>{labels[role]}</label>{' '}
+                <select
+                  id={`audio-${role}`}
+                  disabled={busy}
+                  value=""
+                  onChange={(event) => void run(() => bind(role, event.target.value || null))}
+                >
+                  <option value="">选择来源或解除绑定</option>
+                  {status.candidates.map((candidate) => (
+                    <option key={candidate.selectionId} value={candidate.selectionId}>
+                      {candidate.name} · {candidate.kind} · {candidate.uuid}
+                    </option>
+                  ))}
+                </select>{' '}
+                <Button
+                  disabled={busy || !status.bindings[role]}
+                  onClick={() => void run(() => bind(role, null))}
+                >
+                  解除绑定
+                </Button>
+                <p>
+                  {status.bindings[role]
+                    ? status.bindings[role].valid
+                      ? `已绑定：${status.bindings[role].name}`
+                      : '绑定来源不可用，请重新核对。'
+                    : '尚未绑定'}
+                </p>
+              </div>
             ))}
-          </ul>
-        </>
-      )}
+            <ul>
+              {status.findings.map((finding) => (
+                <li key={finding}>{finding}</li>
+              ))}
+            </ul>
+          </>
+        )}
+      </details>
     </div>
   );
 }

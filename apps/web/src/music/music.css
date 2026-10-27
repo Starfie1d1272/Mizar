@@ -31,18 +31,20 @@
 }
 .music-settings-workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 3fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--mizar-layout-padding);
   margin-block: var(--mizar-layout-padding);
   align-items: start;
 }
 .music-settings-groups {
-  display: grid;
+  display: flex;
+  flex-wrap: wrap;
   gap: var(--mizar-layout-compact);
 }
 .music-settings-groups .mizar-button {
   display: flex;
   justify-content: space-between;
+  gap: var(--mizar-layout-compact);
   min-height: calc(var(--mizar-layout-target) + var(--mizar-layout-compact));
 }
 .music-settings-groups span {
