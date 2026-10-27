@@ -184,6 +184,7 @@ export function ObsAudioRouting() {
         </div>
       )}
       <p>音频分路完成前，新来源保持禁用；已有桌面声音保留。</p>
+      {message && <p role="alert">{message}</p>}
       <details className="obs-audio-advanced">
         <summary>手动绑定与来源详情</summary>
         <h3>音频分路绑定</h3>
@@ -193,7 +194,6 @@ export function ObsAudioRouting() {
         <Button disabled={busy} onClick={() => void run(refresh)}>
           刷新 OBS 音频来源
         </Button>
-        {message && <p role="alert">{message}</p>}
         {status && (
           <>
             <p>

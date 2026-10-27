@@ -67,6 +67,8 @@ test('explicitly selects an OBS source and reports stale bindings', async ({ pag
     return route.fulfill({ json: { ok: true } });
   });
   await page.goto('/settings?tab=obs');
+  await page.getByRole('button', { name: '音频设置', exact: true }).click();
+  await page.getByText('手动绑定与来源详情').click();
   await page.getByRole('button', { name: '刷新 OBS 音频来源' }).click();
   await expect(page.getByText(/当前 OBS：ws:/)).toBeVisible();
   await page.getByLabel('远端解说音频').selectOption(status.candidates[1]!.selectionId);
@@ -136,6 +138,7 @@ test('chooses another application, cancels, reselects and explicitly restores TS
     }),
   );
   await page.goto('/settings?tab=obs');
+  await page.getByRole('button', { name: '音频设置', exact: true }).click();
   await page.getByRole('button', { name: '选择其他应用' }).click();
   await page.getByLabel('应用窗口').selectOption(first);
   await page.getByRole('button', { name: '取消', exact: true }).click();
@@ -147,6 +150,7 @@ test('chooses another application, cancels, reselects and explicitly restores TS
   await expect(page.getByText(/等待所选应用启动/)).toBeVisible();
   expect(chosen).toBe(first);
   await page.reload();
+  await page.getByRole('button', { name: '音频设置', exact: true }).click();
   await expect(page.getByText('当前：已选择应用：Voice One')).toBeVisible();
   await page.getByRole('button', { name: '选择其他应用' }).click();
   await page.getByLabel('应用窗口').selectOption(second);
