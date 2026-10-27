@@ -394,7 +394,6 @@ fn loose(path: &Path, held: &mut Vec<File>) -> Result<Option<Vec<u8>>, Error> {
         return Err(Error::Limit);
     }
     let bytes = read_range(path, &mut f, &id, &meta, 0, meta.len() as usize)?;
-    std::str::from_utf8(&bytes).map_err(|_| Error::InvalidVcfg("invalid UTF-8".into()))?;
     held.push(f);
     Ok(Some(bytes))
 }
@@ -629,6 +628,8 @@ mod tests {
             f.write_loose(CFG);
             assert_eq!(read_default(&f.0).unwrap().source, Source::IdenticalBoth);
             f.write_loose(b"different");
+            assert!(matches!(read_default(&f.0), Err(Error::SourceConflict)));
+            f.write_loose(&[0xff]);
             assert!(matches!(read_default(&f.0), Err(Error::SourceConflict)));
         }
     }

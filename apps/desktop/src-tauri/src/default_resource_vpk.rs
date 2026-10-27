@@ -191,7 +191,6 @@ pub(crate) fn assemble(entry: &Entry, body: &[u8]) -> Result<Vec<u8>, Error> {
     let mut bytes = Vec::with_capacity(size);
     bytes.extend_from_slice(&entry.preload);
     bytes.extend_from_slice(body);
-    std::str::from_utf8(&bytes).map_err(|_| Error::Invalid)?;
     Ok(bytes)
 }
 
@@ -273,7 +272,7 @@ mod tests {
         assert_eq!(find_default(&p, p.len() as u64), Err(Error::Limit));
     }
     #[test]
-    fn rejects_unsupported_or_missing_and_non_utf8_body() {
+    fn rejects_unsupported_or_missing() {
         let mut p = fixture(1, 0, 0, 1, false);
         p[4..8].copy_from_slice(&3u32.to_le_bytes());
         assert_eq!(find_default(&p, p.len() as u64), Err(Error::Unsupported));
@@ -282,6 +281,6 @@ mod tests {
         assert_eq!(find_default(&p, p.len() as u64), Err(Error::Missing));
         let p = fixture(1, 0, 0, 1, false);
         let e = find_default(&p, p.len() as u64).unwrap();
-        assert_eq!(assemble(&e, &[0xff]), Err(Error::Invalid));
+        assert_eq!(assemble(&e, &[0xff]).unwrap(), b"ab\xff");
     }
 }
