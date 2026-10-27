@@ -227,13 +227,13 @@ export function MusicSettings() {
                           </span>
                           <strong>{track.name}</strong>
                           <Field
-                            label={`曲目音量 · ${Math.round(((track as MusicTrack & { gain?: number }).gain ?? spec.volume) * 100)}%`}
+                            label={`曲目音量 · ${Math.round((track.gain ?? spec.volume) * 100)}%`}
                             aria-label={`${track.name} 音量`}
                             type="range"
                             min="0"
                             max="1"
                             step="0.05"
-                            value={(track as MusicTrack & { gain?: number }).gain ?? spec.volume}
+                            value={track.gain ?? spec.volume}
                             disabled={busy}
                             onChange={(event) =>
                               change(group, {

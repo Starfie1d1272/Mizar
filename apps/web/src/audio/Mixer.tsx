@@ -3,20 +3,12 @@ import { useRef, useState } from 'react';
 import { useLocalRead } from '../preparation/client';
 import { Button } from '../ui';
 
-type Channel = 'game' | 'remoteCommentary' | 'microphone' | 'music';
-type MixerState = {
-  revision: string;
-  channels: Record<
-    Channel,
-    {
-      name: string;
-      volume: number | null;
-      muted: boolean | null;
-      control: 'available' | 'unbound' | 'unknown' | 'held';
-      message?: string;
-    }
-  >;
-};
+import type {
+  MixerChannel as Channel,
+  MixerStatus,
+  MixerCommandResult,
+} from '@mizar/protocol/mixer';
+
 const labels: Record<Channel, string> = {
   game: '游戏',
   remoteCommentary: '其他解说',
@@ -27,7 +19,7 @@ const channels: Channel[] = ['game', 'remoteCommentary', 'microphone', 'music'];
 
 export function Mixer({ musicOnly = false }: { musicOnly?: boolean }) {
   const [refresh, setRefresh] = useState(0);
-  const state = useLocalRead<MixerState>('/local/v1/mixer', 2000, refresh);
+  const state = useLocalRead<MixerStatus>('/local/v1/mixer', 2000, refresh);
   const [busy, setBusy] = useState(false);
   const inFlight = useRef(false);
   const [error, setError] = useState('');
@@ -44,10 +36,7 @@ export function Mixer({ musicOnly = false }: { musicOnly?: boolean }) {
         body: JSON.stringify({ revision: state.revision, channel, ...change }),
         signal: AbortSignal.timeout(15000),
       });
-      const result = (await response.json()) as {
-        status?: 'confirmed' | 'rejected' | 'unknown';
-        message?: string;
-      };
+      const result = (await response.json()) as MixerCommandResult;
       if (!response.ok || result.status !== 'confirmed')
         setError(
           result.message ??
