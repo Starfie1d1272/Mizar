@@ -1618,7 +1618,12 @@ mod tests {
                 assert!(!host.store.full_spectator_pending(), "{scenario}");
                 assert_eq!(std::fs::read(&video).unwrap(), original_video, "{scenario}");
                 assert_eq!(std::fs::read(&machine).unwrap(), original_machine, "{scenario}");
-                assert_eq!(std::fs::read_to_string(&key).unwrap(), original_key, "{scenario}");
+                let restored = std::fs::read_to_string(&key).unwrap();
+                assert_eq!(crate::spectator_recovery_vcfg::parse_bindings(&restored).unwrap(), crate::spectator_recovery_vcfg::parse_bindings(original_key).unwrap(), "{scenario}");
+                if scenario != "fallback" {
+                    let archive: Value = serde_json::from_slice(&std::fs::read(host.store.backup_directory().join("spectator-full-last.json")).unwrap()).unwrap();
+                    assert_eq!(archive["payload"]["original"], original_key);
+                }
             }
             std::fs::remove_dir_all(root).unwrap();
         }
