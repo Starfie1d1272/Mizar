@@ -108,6 +108,15 @@ export class GameAudioPolicy {
     this.watched = null;
     this.pending = null;
   }
+  /** Manual control supersedes any automatic lease without restoring its old value. */
+  async relinquish() {
+    await this.load();
+    this.disconnect();
+    if (this.lease) {
+      this.lease = { ...this.lease, phase: 'held' };
+      await this.store.write(this.lease);
+    }
+  }
   /** Invoke for every volume/mute event, including changes away and back. */
   observe(uuid: string, field: Field, value: number | boolean) {
     if (this.watched?.uuid !== uuid || this.watched.field !== field) return;
