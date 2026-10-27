@@ -216,24 +216,46 @@ export class ObsAdapter {
     return this.statusPending;
   }
 
-  private async configurationFindings(obs: ObsRpc, visual?: ObsFinding[]): Promise<ObsFinding[]> {
+  private async bindingFindings(obs: ObsRpc, endpoint: string): Promise<ObsFinding[]> {
+    if (!(await this.audioRouting?.enabled())) return [];
+    const routing = await this.audioRouting!.read(obs, endpoint);
+    return Object.entries(routing.bindings).flatMap(([role, binding]) =>
+      binding && !binding.valid
+        ? [
+            {
+              code: `audio_binding:${role}`,
+              message: `${role} 音频来源未绑定或已失效，请在音频分路中核对。`,
+            },
+          ]
+        : [],
+    );
+  }
+  private async configurationFindings(
+    obs: ObsRpc,
+    endpoint: string,
+    visual?: ObsFinding[],
+  ): Promise<ObsFinding[]> {
     const findings = visual ?? (await checkObsConfiguration(obs, this.browserBaseUrl));
     return findings.some((item) =>
       ['collection_missing', 'collection_inactive', 'scene_missing'].includes(item.code),
     )
       ? findings
-      : [...findings, ...(await checkObsAudio(obs))];
+      : [
+          ...findings,
+          ...(await checkObsAudio(obs)),
+          ...(await this.bindingFindings(obs, endpoint)),
+        ];
   }
 
   private async readStatus(): Promise<ObsStatus> {
     const config = await this.configStore.read();
     try {
-      const status = await this.withObs(async (obs) => {
+      const status = await this.withObs(async (obs, endpoint) => {
         const [scene, outputs, video, findings] = await Promise.all([
           obs.call('GetCurrentProgramScene'),
           this.outputs.read(),
           obs.call('GetVideoSettings'),
-          this.configurationFindings(obs).catch((error: unknown) => {
+          this.configurationFindings(obs, endpoint).catch((error: unknown) => {
             this.diagnostic('obs_configuration_check', obsErrorEvidence(error, config.password));
             return [
               {
@@ -339,7 +361,10 @@ export class ObsAdapter {
 
   check(): Promise<readonly ObsFinding[]> {
     return this.serial(async () => {
-      this.findings = await this.withObs((obs) => this.configurationFindings(obs), 12_000);
+      this.findings = await this.withObs(
+        (obs, endpoint) => this.configurationFindings(obs, endpoint),
+        12_000,
+      );
       return this.findings;
     });
   }
@@ -373,14 +398,7 @@ export class ObsAdapter {
         let audio: ObsFinding[];
         if (await this.audioRouting?.enabled()) {
           audio = await checkObsAudio(obs);
-          const routing = await this.audioRouting!.read(obs, endpoint);
-          for (const [role, binding] of Object.entries(routing.bindings)) {
-            if (!binding || !binding.valid)
-              audio.push({
-                code: `audio_binding:${role}`,
-                message: `${role} 音频来源未绑定或已失效，请在音频分路中核对。`,
-              });
-          }
+          audio.push(...(await this.bindingFindings(obs, endpoint)));
         } else audio = await ensureObsAudio(obs, this.browserBaseUrl);
         return [...visual, ...audio];
       }, 30_000);
@@ -389,10 +407,10 @@ export class ObsAdapter {
   }
   repair(activeScene: () => ProgramSceneId): Promise<readonly ObsFinding[]> {
     return this.configurationMutation(async () => {
-      this.findings = await this.withObs(async (obs) => {
+      this.findings = await this.withObs(async (obs, endpoint) => {
         const findings = await repairObsConfiguration(obs, this.browserBaseUrl);
         await switchObsScene(obs, activeScene());
-        return this.configurationFindings(obs, findings);
+        return this.configurationFindings(obs, endpoint, findings);
       }, 12_000);
       return this.findings;
     });
