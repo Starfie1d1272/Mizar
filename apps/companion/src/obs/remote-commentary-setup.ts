@@ -1,3 +1,4 @@
+import { writeFile, rm } from 'node:fs/promises';
 import { OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
 import { createCommentaryProbe, RemoteCommentary } from './remote-commentary.js';
 import type { ObsFinding, ObsRpc } from './reconcile.js';
@@ -19,7 +20,10 @@ export async function prepareRemoteCommentary(
   const pending = (message = '场景已准备，音频分路待完成。'): ObsFinding[] => [
     { code: 'commentary_pending', message },
   ];
-  if (state.preference.mode === 'disabled') return [];
+  if (state.preference.mode === 'disabled') {
+    await rm(`${journal}.waiting`, { force: true });
+    return [];
+  }
   const collection = (await obs.call('GetSceneCollectionList')).currentSceneCollectionName;
   if (collection !== OBS_COLLECTION) return pending('当前场景集合已改变，远端解说音频待配置。');
   const [stream, record] = await Promise.all([
@@ -83,6 +87,11 @@ export async function prepareRemoteCommentary(
           check,
         );
         inputs = records((await obs.call('GetInputList')).inputs);
+        await writeFile(
+          `${journal}.waiting`,
+          `${JSON.stringify({ endpoint, collection, uuid: target, revision: state.revision, phase: 'waiting' })}\n`,
+          { mode: 0o600 },
+        );
         pendingMessage = '等待 TeamSpeak 启动；场景已准备，音频分路待完成。';
       } else return pending('检测到多个远端解说候选，请选择来源。');
     }
@@ -152,5 +161,6 @@ export async function prepareRemoteCommentary(
       sceneItemEnabled: false,
     });
   }
+  if (!pendingMessage) await rm(`${journal}.waiting`, { force: true });
   return pending(pendingMessage);
 }

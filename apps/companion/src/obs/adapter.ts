@@ -7,6 +7,7 @@ import type { ObsAudioBindCommand, ObsOutputCommand, ObsOutputsStatus } from '@m
 import type { ObsAudioRouting } from './audio-routing.js';
 import { RemoteCommentary } from './remote-commentary.js';
 import { prepareRemoteCommentary } from './remote-commentary-setup.js';
+import { discoverWaitingCommentary } from './remote-commentary-wait.js';
 import { ObsOutputController, ObsOutputError } from './outputs.js';
 import { readObsProgramEvidence, type ObsProgramEvidence } from './program-evidence.js';
 import {
@@ -74,6 +75,8 @@ export class ObsAdapter {
   private findings: ObsFinding[] = [
     { code: 'configuration_unchecked', message: '请检查 OBS 场景配置。' },
   ];
+  private commentaryTimer: ReturnType<typeof setTimeout> | undefined;
+  private commentaryTask: Promise<void> | undefined;
   private recoveryTimer: ReturnType<typeof setTimeout> | undefined;
   private recoveryClosed = false;
   private recoveryComplete = false;
@@ -153,8 +156,39 @@ export class ObsAdapter {
     attempt();
   }
 
+  startCommentaryRecovery(): void {
+    if (!this.commentary || this.recoveryClosed || this.commentaryTimer || this.commentaryTask)
+      return;
+    const attempt = () => {
+      if (this.recoveryClosed) return;
+      this.commentaryTimer = undefined;
+      this.commentaryTask = this.serial(() =>
+        this.withObs((obs, endpoint) =>
+          discoverWaitingCommentary(
+            obs,
+            this.commentary!.owner,
+            this.commentary!.journal,
+            endpoint,
+          ),
+        ),
+      )
+        .then(() => undefined)
+        .catch(() => undefined)
+        .finally(() => {
+          this.commentaryTask = undefined;
+          if (!this.recoveryClosed) {
+            this.commentaryTimer = setTimeout(attempt, 5000);
+            this.commentaryTimer.unref();
+          }
+        });
+    };
+    attempt();
+  }
+
   async close(): Promise<void> {
     this.recoveryClosed = true;
+    if (this.commentaryTimer) clearTimeout(this.commentaryTimer);
+    await this.commentaryTask;
     await this.outputs.close();
     if (this.recoveryTimer) clearTimeout(this.recoveryTimer);
     this.recoveryTimer = undefined;
