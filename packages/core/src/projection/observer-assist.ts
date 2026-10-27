@@ -22,6 +22,8 @@ export interface ObserverAssistProjection {
   readonly observer?: ObserverHintSettings & {
     readonly state: 'connecting' | 'ready' | 'paused' | 'unavailable';
     readonly timingBasis: 'estimated';
+    readonly calibrationState: 'uncalibrated' | 'measured' | 'held' | 'reacquiring';
+    readonly effectiveDelaySeconds: number;
     readonly waitingReason: string | null;
     readonly nextWindowSeconds: number | null;
     readonly measuredDelaySeconds: number | null;
@@ -44,6 +46,8 @@ interface BufferedKill {
   sourceMs: number;
   matched: boolean;
   retired: boolean;
+  shownDueMs: number | null;
+  pairedProgramKey: string | null;
 }
 
 /** Private event projection. Program deaths provide independent same-player time anchors. */
@@ -53,8 +57,20 @@ export class ObserverHintTimeline {
   private generation: number | undefined;
   private previous = new Map<string, boolean>();
   private seenReceive: number | null = null;
-  private anchors: { offset: number; delay: number; victim: string }[] = [];
-  private lastAnchorAt = 0;
+  private programEvents: { victim: string; time: number; frame: number }[] = [];
+  private effectiveDelayMs: number | null = null;
+  private lastEvidenceAt: number | null = null;
+  private lastEvidenceKey = '';
+  private evidenceCount = 0;
+  private evidenceSpreadMs: number | null = null;
+  private estimateReason = 'awaiting-evidence';
+  private continuityLost = false;
+  private continuityEstablished = false;
+  private lastHealthCheckAt: number | null = null;
+  private lastProgramSequence: number | null = null;
+  private lastProgramProgressAt: number | null = null;
+  private lastSourceReceiveMs: number | null = null;
+  private lastSourceProgressAt: number | null = null;
   private boundary = '';
   private earliest = -Infinity;
   private lastNow = 0;
@@ -84,7 +100,6 @@ export class ObserverHintTimeline {
   } = { connected: false, generation: 0, fresh: false };
 
   getDiagnostics() {
-    const delays = this.anchors.map((a) => a.delay);
     return {
       source: { ...this.sourceHealth },
       programSource: { ...this.programSource },
@@ -100,14 +115,20 @@ export class ObserverHintTimeline {
         this.nextWindowMs === null ? null : Math.max(0, this.nextWindowMs - this.lastNow),
       programDeathChanges: this.programDeaths,
       matchingCandidates: this.candidateCount,
-      anchors: delays.length,
-      measuredDelayMs: delays.length
-        ? {
-            min: Math.min(...delays),
-            max: Math.max(...delays),
-            spread: Math.max(...delays) - Math.min(...delays),
-          }
-        : null,
+      anchors: this.evidenceCount,
+      calibration: {
+        state: this.calibrationState(this.lastNow),
+        effectiveDelayMs: this.effectiveDelayMs,
+        evidenceCount: this.evidenceCount,
+        evidenceSpreadMs: this.evidenceSpreadMs,
+        lastEvidenceMonotonicMs: this.lastEvidenceAt,
+        reason: this.estimateReason,
+        continuity: this.continuityLost
+          ? 'lost'
+          : this.continuityEstablished
+            ? 'observed'
+            : 'unknown',
+      },
       lastReset: { ...this.lastReset },
       blocked: this.blocked,
     };
@@ -116,7 +137,7 @@ export class ObserverHintTimeline {
     this.discarded[reason] = (this.discarded[reason] ?? 0) + 1;
   }
   private reset(reason: string, now: number) {
-    if (this.lastReset.reason !== reason || this.kills.length || this.anchors.length)
+    if (this.lastReset.reason !== reason || this.kills.length || this.effectiveDelayMs !== null)
       this.lastReset = { reason, atMonotonicMs: now };
     this.clear();
     this.earliest = now;
@@ -124,10 +145,22 @@ export class ObserverHintTimeline {
 
   clear() {
     this.kills = [];
-    this.anchors = [];
+    this.programEvents = [];
+    this.effectiveDelayMs = null;
+    this.lastEvidenceAt = null;
+    this.lastEvidenceKey = '';
+    this.evidenceCount = 0;
+    this.evidenceSpreadMs = null;
+    this.estimateReason = 'awaiting-evidence';
+    this.continuityLost = false;
+    this.continuityEstablished = false;
+    this.lastHealthCheckAt = null;
+    this.lastProgramSequence = null;
+    this.lastProgramProgressAt = null;
+    this.lastSourceReceiveMs = null;
+    this.lastSourceProgressAt = null;
     this.previous.clear();
     this.seenReceive = null;
-    this.lastAnchorAt = 0;
     this.nextDueMs = null;
     this.nextWindowMs = null;
   }
@@ -171,17 +204,178 @@ export class ObserverHintTimeline {
       sourceMs: event.cursor.observedMonotonicMs,
       matched: false,
       retired: false,
+      shownDueMs: null,
+      pairedProgramKey: null,
     });
     if (this.kills.length > 4096) {
       this.kills.shift();
       this.discard('capacity');
     }
   }
+  private calibrationState(now: number): 'uncalibrated' | 'measured' | 'held' | 'reacquiring' {
+    if (this.effectiveDelayMs === null) return 'uncalibrated';
+    const age = this.lastEvidenceAt === null ? Infinity : now - this.lastEvidenceAt;
+    if (this.continuityLost || (age > 180000 && !this.continuityEstablished)) return 'reacquiring';
+    return age <= 60000 ? 'measured' : 'held';
+  }
+
+  private observeContinuity(now: number, sequence: number | null, received: number | null) {
+    if (
+      this.effectiveDelayMs !== null &&
+      this.lastHealthCheckAt !== null &&
+      now - this.lastHealthCheckAt > 30000 &&
+      this.continuityEstablished
+    )
+      this.continuityLost = true;
+    this.lastHealthCheckAt = now;
+    if (sequence !== null && sequence !== this.lastProgramSequence) {
+      if (this.lastProgramSequence !== null && sequence < this.lastProgramSequence)
+        this.continuityLost = true;
+      this.lastProgramSequence = sequence;
+      this.lastProgramProgressAt = now;
+    }
+    if (received !== null && received <= now && received !== this.lastSourceReceiveMs) {
+      if (this.lastSourceReceiveMs !== null) {
+        if (received < this.lastSourceReceiveMs) this.continuityLost = true;
+        else if (this.lastProgramProgressAt !== null) this.continuityEstablished = true;
+      }
+      this.lastSourceReceiveMs = received;
+      this.lastSourceProgressAt = now;
+    }
+    if (
+      this.continuityEstablished &&
+      (this.lastProgramProgressAt === null ||
+        now - this.lastProgramProgressAt > 30000 ||
+        this.lastSourceProgressAt === null ||
+        now - this.lastSourceProgressAt > 30000)
+    )
+      this.continuityLost = true;
+  }
+
+  private calibrate(
+    now: number,
+    settings: ObserverHintSettings,
+    map: string,
+    identities: Set<string>,
+  ) {
+    const observations = this.programEvents.filter((event) => event.time >= now - 60000);
+    const center = this.effectiveDelayMs ?? settings.expectedDelaySeconds * 1000;
+    const reacquiring = this.calibrationState(now) === 'reacquiring';
+    const lower = reacquiring ? 0 : Math.max(0, center - 60000);
+    const upper = reacquiring ? Math.max(600000, center + 180000) : center + 60000;
+    const assignments = new Map(
+      this.kills
+        .filter((kill) => kill.pairedProgramKey !== null)
+        .map((kill) => [kill.pairedProgramKey!, kill]),
+    );
+    const pairs = observations.flatMap((event) =>
+      this.kills
+        .filter(
+          (kill) =>
+            kill.event.cursor.mapName === map &&
+            (kill.pairedProgramKey === null ||
+              kill.pairedProgramKey === `${event.frame}:${event.victim}`) &&
+            (!assignments.has(`${event.frame}:${event.victim}`) ||
+              assignments.get(`${event.frame}:${event.victim}`) === kill) &&
+            identities.has(kill.event.attacker!.sourcePlayerId!) &&
+            kill.event.victim.sourcePlayerId === event.victim &&
+            event.time - kill.sourceMs >= lower &&
+            event.time - kill.sourceMs <= upper,
+        )
+        .map((kill) => ({ event, kill, delay: event.time - kill.sourceMs })),
+    );
+    this.candidateCount += pairs.length;
+    if (pairs.length > 96) {
+      this.estimateReason = 'candidate-capacity';
+      return;
+    }
+    // Evaluate clusters of candidate offsets. Reject ambiguous identities and inconsistent order.
+    const clusters = pairs
+      .map((seed) => {
+        const nearby = pairs.filter((pair) => Math.abs(pair.delay - seed.delay) <= 1500);
+        const unique = nearby.filter(
+          (pair) =>
+            nearby.filter((other) => other.event === pair.event).length === 1 &&
+            nearby.filter((other) => other.kill === pair.kill).length === 1,
+        );
+        unique.sort((a, b) => a.event.time - b.event.time || a.event.frame - b.event.frame);
+        const ordered = unique.every((pair) =>
+          unique.every(
+            (other) =>
+              other.event.frame === pair.event.frame ||
+              other.event.time >= pair.event.time ||
+              other.kill.sourceMs < pair.kill.sourceMs,
+          ),
+        );
+        return ordered ? unique : [];
+      })
+      .filter((cluster) => cluster.length >= 3);
+    clusters.sort((a, b) => b.length - a.length);
+    const best = clusters[0];
+    if (!best) {
+      this.estimateReason = 'insufficient-or-ambiguous';
+      return;
+    }
+    const sorted = best.map((pair) => pair.delay).sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)]!;
+    if (
+      clusters.some(
+        (cluster) =>
+          Math.abs(
+            cluster.map((pair) => pair.delay).sort((a, b) => a - b)[
+              Math.floor(cluster.length / 2)
+            ]! - median,
+          ) > 3000,
+      )
+    ) {
+      this.estimateReason = 'competing-offsets';
+      return;
+    }
+    if (
+      reacquiring &&
+      (best.length < 4 || new Set(best.map((pair) => pair.event.frame)).size < 3)
+    ) {
+      this.estimateReason = 'insufficient-reacquisition-evidence';
+      return;
+    }
+    const key = best
+      .map((pair) => `${pair.event.frame}:${pair.kill.event.cursor.sequence}`)
+      .sort()
+      .join(',');
+    if (key === this.lastEvidenceKey) return;
+    const jump = this.effectiveDelayMs !== null && Math.abs(median - this.effectiveDelayMs) > 8000;
+    if (
+      jump &&
+      best.filter((pair) => pair.event.time > (this.lastEvidenceAt ?? -Infinity)).length < 3
+    ) {
+      this.estimateReason = 'awaiting-jump-evidence';
+      return;
+    }
+    for (const pair of best) {
+      pair.kill.matched = true;
+      pair.kill.pairedProgramKey = `${pair.event.frame}:${pair.event.victim}`;
+    }
+    this.lastEvidenceKey = key;
+    this.evidenceCount = best.length;
+    this.evidenceSpreadMs = sorted[sorted.length - 1]! - sorted[0]!;
+    this.lastEvidenceAt = now;
+    if (reacquiring) this.continuityLost = false;
+    this.estimateReason = reacquiring
+      ? 'reacquired'
+      : jump
+        ? 'confirmed-timeline-shift'
+        : 'consistent-sequence';
+    this.effectiveDelayMs =
+      this.effectiveDelayMs === null || jump || reacquiring
+        ? median
+        : this.effectiveDelayMs + (median - this.effectiveDelayMs) * 0.25;
+  }
   project(
     program: ObserverProgramView,
     settings: ObserverHintSettings,
     now: number,
     source: typeof this.sourceHealth,
+    programReceiveMs = now,
   ): ObserverAssistProjection {
     this.lastNow = now;
     this.configuration = { ...settings };
@@ -200,6 +394,9 @@ export class ObserverHintTimeline {
         ...settings,
         state,
         timingBasis: 'estimated',
+        calibrationState: this.calibrationState(now),
+        effectiveDelaySeconds:
+          (this.effectiveDelayMs ?? settings.expectedDelaySeconds * 1000) / 1000,
         waitingReason: this.blocked,
         nextWindowSeconds: null,
         measuredDelaySeconds: null,
@@ -265,55 +462,86 @@ export class ObserverHintTimeline {
             : !program.map.name
               ? 'map-missing'
               : 'identity-unavailable';
-      this.reset(this.blocked, now);
+      if (source.sameMap === false) this.reset(this.blocked, now);
+      else {
+        if (!source.fresh || program.status.telemetry !== 'fresh') this.continuityLost = true;
+        this.previous.clear();
+        this.seenReceive = null;
+        this.programEvents = [];
+      }
       return empty('unavailable');
     }
     const players = program.players.filter((p) => p.lineupEvidence === 'current');
     if (players.length !== 10 || new Set(players.map((p) => p.sourcePlayerId)).size !== 10) {
       this.blocked = 'identity-unavailable';
-      this.reset(this.blocked, now);
       return empty('unavailable');
     }
+    this.observeContinuity(
+      now,
+      program.cursor.programReceiveSequence,
+      source.lastReceiveMonotonicMs ?? null,
+    );
     this.blocked = null;
     const alive = new Map(
       players
         .filter((p) => p.lifeState !== 'unknown')
         .map((p) => [p.sourcePlayerId, p.lifeState === 'alive']),
     );
+    // Retire against the old schedule before any new calibration can extend it.
+    const reacquiring = this.calibrationState(now) === 'reacquiring';
+    if (reacquiring) this.continuityLost = true;
+    const priorDelay = this.effectiveDelayMs ?? settings.expectedDelaySeconds * 1000;
+    for (const kill of this.kills) {
+      if (
+        !kill.retired &&
+        ((reacquiring && kill.shownDueMs !== null) ||
+          (!reacquiring && now >= (kill.shownDueMs ?? kill.sourceMs + priorDelay)))
+      ) {
+        kill.retired = true;
+        this.discard('expired');
+      }
+    }
     if (program.cursor.programReceiveSequence !== this.seenReceive) {
       const fallen = [...alive]
         .filter(([id, live]) => !live && this.previous.get(id) === true)
         .map(([id]) => id);
       this.programDeaths += fallen.length;
+      const frame = program.cursor.programReceiveSequence ?? 0;
       for (const victim of fallen) {
+        this.programEvents.push({ victim, time: programReceiveMs, frame });
         const candidates = this.kills.filter(
-          (k) =>
-            !k.matched &&
-            k.event.victim.sourcePlayerId === victim &&
-            k.event.cursor.mapName === program.map.name &&
-            Math.abs(
-              now - k.event.cursor.observedMonotonicMs - settings.expectedDelaySeconds * 1000,
-            ) < 15000,
+          (kill) =>
+            !kill.matched &&
+            kill.event.victim.sourcePlayerId === victim &&
+            kill.event.cursor.mapName === program.map.name &&
+            Math.abs(programReceiveMs - kill.sourceMs - priorDelay) <= 60000,
         );
-        this.candidateCount += candidates.length;
-        if (candidates.length !== 1) {
-          this.discard(candidates.length ? 'ambiguous-match' : 'no-match');
-          continue;
-        }
-        const kill = candidates[0]!;
-        kill.matched = true;
-        if (!players.some((p) => p.sourcePlayerId === kill.event.attacker!.sourcePlayerId))
-          continue;
-        this.anchors.push({ offset: now - kill.sourceMs, delay: now - kill.sourceMs, victim });
-        this.anchors = this.anchors.slice(-5);
-        this.lastAnchorAt = now;
+        if (candidates.length === 1) candidates[0]!.matched = true;
       }
       this.previous = alive;
       this.seenReceive = program.cursor.programReceiveSequence;
+      if (fallen.length)
+        this.calibrate(
+          programReceiveMs,
+          settings,
+          program.map.name,
+          new Set(players.map((player) => player.sourcePlayerId)),
+        );
     }
-    if (now - this.lastAnchorAt > 180000) {
-      this.anchors = [];
+    this.programEvents = this.programEvents
+      .filter((event) => event.time >= now - 60000)
+      .slice(-256);
+    const keepSince =
+      now -
+      (Math.max(600000, settings.expectedDelaySeconds * 1000, this.effectiveDelayMs ?? 0) + 180000);
+    this.kills = this.kills.filter((kill) => !kill.retired || kill.sourceMs >= keepSince);
+    if (this.calibrationState(now) === 'reacquiring') {
+      this.blocked = 'calibration-reacquiring';
+      this.nextDueMs = null;
+      this.nextWindowMs = null;
+      return empty('unavailable');
     }
+    const stableDelay = this.effectiveDelayMs;
     const ref = (player: ObserverProgramView['players'][number]) => ({
       name: (player.displayName ?? '选手').slice(0, 256),
       observerSlot:
@@ -330,7 +558,8 @@ export class ObserverHintTimeline {
     this.nextWindowMs = null;
     for (const kill of [...this.kills].sort((a, b) => a.sourceMs - b.sourceMs)) {
       // A Program-confirmed death remains a calibration anchor, never a future hint.
-      const due = kill.sourceMs + settings.expectedDelaySeconds * 1000;
+      const due =
+        kill.shownDueMs ?? kill.sourceMs + (stableDelay ?? settings.expectedDelaySeconds * 1000);
       if (now >= due && !kill.retired) {
         kill.retired = true;
         this.discard('expired');
@@ -361,6 +590,8 @@ export class ObserverHintTimeline {
         this.nextWindowMs = due - settings.leadSeconds * 1000;
       }
       if (now < due - settings.leadSeconds * 1000) continue;
+      if (hints.length >= 6) continue;
+      kill.shownDueMs = due;
       hints.push({
         id: `${this.generation}:${kill.event.cursor.sequence}`,
         remainingSeconds: Math.max(0, (due - now) / 1000),
@@ -375,13 +606,13 @@ export class ObserverHintTimeline {
         ...settings,
         state: 'ready',
         timingBasis: 'estimated',
+        calibrationState: this.calibrationState(now),
+        effectiveDelaySeconds: (stableDelay ?? settings.expectedDelaySeconds * 1000) / 1000,
         waitingReason:
           this.nextDueMs === null ? 'waiting-event' : hints.length ? null : 'buffering',
         nextWindowSeconds:
           this.nextWindowMs === null ? null : Math.max(0, (this.nextWindowMs - now) / 1000),
-        measuredDelaySeconds: this.anchors.length
-          ? this.anchors.reduce((sum, a) => sum + a.delay, 0) / this.anchors.length / 1000
-          : null,
+        measuredDelaySeconds: stableDelay === null ? null : stableDelay / 1000,
         hints: hints.slice(0, 6),
       },
     };

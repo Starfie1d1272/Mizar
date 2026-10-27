@@ -359,7 +359,7 @@ it('keeps calibrated anchors and buffered kills when the lead window is reprojec
       timingBasis: 'estimated',
       waitingReason: 'buffering',
       nextWindowSeconds: 1,
-      measuredDelaySeconds: 120,
+      measuredDelaySeconds: null,
       hints: [],
     });
     expect(diagnostics.mock.lastCall?.[0].source).toMatchObject({
@@ -378,7 +378,7 @@ it('keeps calibrated anchors and buffered kills when the lead window is reprojec
     coordinator.refreshAssist();
     expect(coordinator.getCurrent().assist.observer).toMatchObject({
       state: 'ready',
-      measuredDelaySeconds: 120,
+      measuredDelaySeconds: null,
       hints: [{ remainingSeconds: 8, victim: { observerSlot: 7 } }],
     });
     expect(coordinator.getPublisher('assist').getCurrent()!.channelSeq).toBeGreaterThan(before);

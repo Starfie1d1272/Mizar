@@ -72,6 +72,8 @@ test('keeps the full-width square radar across private hint states and desktop s
     observer: {
       state: 'ready',
       timingBasis: 'estimated',
+      calibrationState: 'measured',
+      effectiveDelaySeconds: 121,
       waitingReason: null,
       nextWindowSeconds: 0,
       expectedDelaySeconds: 120,
@@ -166,7 +168,7 @@ test('keeps the full-width square radar across private hint states and desktop s
   await expect(card).toContainText('1 秒后');
   await page.clock.runFor(1000);
   await expect(card.locator('li')).toHaveCount(0);
-  await expect(card).toContainText('按 120 秒估算');
+  await expect(card).toContainText('延迟 121.0 秒');
   await expect(card).toContainText('等待早源事件');
   expect(await page.locator('.workspace-radar__picture').boundingBox()).toEqual(initialMap);
   snapshot.channelSeq++;
