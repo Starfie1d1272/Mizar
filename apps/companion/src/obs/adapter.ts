@@ -3,7 +3,8 @@ import { spawn } from 'node:child_process';
 import { dirname } from 'node:path';
 import { OBSWebSocket } from 'obs-websocket-js';
 import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
-import type { ObsOutputCommand, ObsOutputsStatus } from '@mizar/protocol/obs';
+import type { ObsAudioBindCommand, ObsOutputCommand, ObsOutputsStatus } from '@mizar/protocol/obs';
+import type { ObsAudioRouting } from './audio-routing.js';
 import { ObsOutputController, ObsOutputError } from './outputs.js';
 import { readObsProgramEvidence, type ObsProgramEvidence } from './program-evidence.js';
 import {
@@ -80,6 +81,7 @@ export class ObsAdapter {
     private readonly configStore: ObsConfigStore,
     private readonly browserBaseUrl: string,
     private readonly diagnostic: (stage: string, error: unknown) => void = () => undefined,
+    private readonly audioRouting?: ObsAudioRouting,
   ) {
     this.outputs = new ObsOutputController(configStore, (error, password) =>
       diagnostic('obs_output', obsErrorEvidence(error, password)),
@@ -340,6 +342,14 @@ export class ObsAdapter {
       return this.findings;
     });
   }
+  readAudioRouting() {
+    if (!this.audioRouting) throw new Error('audio_routing_unavailable');
+    return this.serial(() => this.withObs((obs) => this.audioRouting!.read(obs), 12000));
+  }
+  bindAudio(command: ObsAudioBindCommand) {
+    if (!this.audioRouting) throw new Error('audio_routing_unavailable');
+    return this.serial(() => this.withObs((obs) => this.audioRouting!.bind(obs, command), 12000));
+  }
   ensure(activeScene: () => ProgramSceneId = () => 'waiting'): Promise<readonly ObsFinding[]> {
     return this.configurationMutation(async () => {
       this.findings = await this.withObs(async (obs) => {
@@ -355,7 +365,9 @@ export class ObsAdapter {
           )
         )
           return visual;
-        const audio = await ensureObsAudio(obs, this.browserBaseUrl);
+        const audio = (await this.audioRouting?.enabled())
+          ? await checkObsAudio(obs)
+          : await ensureObsAudio(obs, this.browserBaseUrl);
         return [...visual, ...audio];
       }, 30_000);
       return this.findings;
@@ -402,9 +414,11 @@ export class ObsAdapter {
     });
   }
   setupAudio(): Promise<void> {
-    return this.configurationMutation(() =>
-      this.withObs((obs) => setupObsAudio(obs, this.browserBaseUrl), 12_000),
-    );
+    return this.configurationMutation(async () => {
+      if (await this.audioRouting?.enabled())
+        throw new Error('已启用音频分路，请在 OBS 中维护音频来源。');
+      await this.withObs((obs) => setupObsAudio(obs, this.browserBaseUrl), 12_000);
+    });
   }
   async launchTarget(): Promise<string> {
     const config = await this.configStore.read();

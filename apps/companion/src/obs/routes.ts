@@ -1,5 +1,5 @@
 import { createObsCaptureDiagnosticReader } from './capture-diagnostic.js';
-import { obsOutputCommandSchema } from '@mizar/protocol/obs';
+import { obsAudioBindCommandSchema, obsOutputCommandSchema } from '@mizar/protocol/obs';
 import { ObsOutputError } from './outputs.js';
 import type { ObsNativeEvidence } from './native-evidence.js';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
@@ -44,6 +44,29 @@ export function registerObsRoutes(
       return false;
     }
   };
+  app.get('/local/v1/obs/audio-routing', async (request, reply) => {
+    if (!allowedRead(request)) return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    try {
+      return reply
+        .header('cache-control', 'no-store')
+        .send(await options.adapter.readAudioRouting());
+    } catch {
+      return reply.code(409).send({ error: 'audio_routing_unavailable' });
+    }
+  });
+  app.post('/operator/obs/audio-routing', { bodyLimit: 2048 }, async (request, reply) => {
+    if (!allowed(request.headers.origin))
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    const parsed = obsAudioBindCommandSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'audio_binding_invalid' });
+    try {
+      return await options.adapter.bindAudio(parsed.data);
+    } catch {
+      return reply
+        .code(409)
+        .send({ error: 'audio_binding_changed', message: '绑定未保存，请刷新 OBS 来源后重试。' });
+    }
+  });
   app.get('/local/v1/obs/outputs', async (_request, reply) =>
     reply.header('cache-control', 'no-store').send(await options.adapter.outputStatus()),
   );
