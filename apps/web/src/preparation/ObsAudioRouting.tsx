@@ -82,8 +82,8 @@ export function ObsAudioRouting() {
               </Button>
               <p>
                 {status.bindings[role]
-                  ? status.bindings[role]!.valid
-                    ? `已绑定：${status.bindings[role]!.name}`
+                  ? status.bindings[role].valid
+                    ? `已绑定：${status.bindings[role].name}`
                     : '绑定来源不可用，请重新核对。'
                   : '尚未绑定'}
               </p>

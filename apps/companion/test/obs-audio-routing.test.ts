@@ -15,6 +15,7 @@ it('binds only explicit current UUIDs and rejects stale windows, deleted sources
     ];
     const obs: ObsRpc = {
       call: async (type) => {
+        await Promise.resolve();
         if (type === 'GetVersion')
           return {
             availableRequests: [
@@ -103,6 +104,7 @@ it('reports repeated nested paths and global desktop audio without changing OBS'
   try {
     const obs: ObsRpc = {
       call: async (type, args) => {
+        await Promise.resolve();
         calls.push(type);
         if (type === 'GetVersion')
           return {
