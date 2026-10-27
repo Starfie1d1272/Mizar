@@ -399,7 +399,9 @@ function FocusedPlayerFace({
           <StatGlyph kind="deaths" />
         </div>
       ) : null}
-      <PlayerStatusEffects key={`status:${presentationRevision}`} state={p.statusEffects} />
+      {!p.dead && (
+        <PlayerStatusEffects key={`status:${presentationRevision}`} state={p.statusEffects} />
+      )}
     </div>
   );
 }
@@ -562,7 +564,9 @@ export function FocusedPlayerCard({
         player={player}
         presentationRevision={presentationRevision}
       />
-      <PlayerImpactEffects sourcePlayerId={player.sourcePlayerId} surface="focused" />
+      {!player.dead && (
+        <PlayerImpactEffects sourcePlayerId={player.sourcePlayerId} surface="focused" />
+      )}
       <CombatTransitionEffects feedback={combatFeedback} surface="focused" />
     </article>
   );

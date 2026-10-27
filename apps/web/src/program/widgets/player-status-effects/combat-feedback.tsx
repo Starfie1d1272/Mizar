@@ -102,31 +102,32 @@ export function useCombatFeedback({
     const healthRestored =
       !dead && previousHealth !== null && currentHealth !== null && currentHealth > previousHealth;
 
-    if (healthRestored || (prior.dead && !dead)) {
+    if (healthRestored || (prior.dead && !dead) || deathStarted) {
       if (damageTimer.current !== null) window.clearTimeout(damageTimer.current);
       damageTimer.current = null;
       activeGhost.current = null;
       // A new life/round must not inherit damage presentation from the previous one.
-      setFeedback((value) => (value === EMPTY_FEEDBACK ? value : EMPTY_FEEDBACK));
+      setFeedback(
+        deathStarted ? { ...EMPTY_FEEDBACK, deathPulseKey: ++sequence.current } : EMPTY_FEEDBACK,
+      );
       return;
     }
 
     let damageGhost: DamageGhostState | null = null;
     if (previousHealth !== null && currentHealth !== null && currentHealth < previousHealth) {
       damageGhost = {
-        key: ++sequence.current,
+        key: activeGhost.current?.key ?? ++sequence.current,
         fromPercent: Math.max(activeGhost.current?.fromPercent ?? previousHealth, previousHealth),
         toPercent: currentHealth,
       };
       activeGhost.current = damageGhost;
-      if (damageTimer.current !== null) window.clearTimeout(damageTimer.current);
-      damageTimer.current = window.setTimeout(() => {
-        damageTimer.current = null;
-        activeGhost.current = null;
-        setFeedback((value) =>
-          value.damageGhost === damageGhost ? { ...value, damageGhost: null } : value,
-        );
-      }, 380);
+      if (damageTimer.current === null) {
+        damageTimer.current = window.setTimeout(() => {
+          damageTimer.current = null;
+          activeGhost.current = null;
+          setFeedback((value) => ({ ...value, damageGhost: null }));
+        }, 380);
+      }
     }
 
     if (damageGhost === null && !deathStarted && !lowHealthStarted) return;
