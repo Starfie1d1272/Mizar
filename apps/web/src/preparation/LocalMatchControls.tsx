@@ -56,6 +56,7 @@ export function LocalMatchControls({
         title="删除本地比赛"
         onClose={() => setConfirmation(null)}
         canClose={() => !busy}
+        showCloseButton={false}
       >
         <p>{confirmation?.name}</p>
         {confirmation?.matchId === view?.activeLocalMatchId ? (

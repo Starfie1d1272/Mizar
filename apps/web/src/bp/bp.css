@@ -1008,6 +1008,7 @@
   max-height: 90dvh;
   box-sizing: border-box;
   overflow: auto;
+  scroll-padding-bottom: calc(var(--mizar-layout-target) * 2);
 }
 .bp-editor-dialog__content {
   container: bp-workspace / inline-size;
