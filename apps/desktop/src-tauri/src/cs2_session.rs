@@ -627,6 +627,19 @@ impl SessionStore {
         size: cs2_video::VideoSize,
         frames: Option<Vec<Value>>,
     ) -> Result<Value, String> {
+        let plan = self.plan_files(video, executable, size, frames)?;
+        self.commit_files(&plan, atomic_write)?;
+        Ok(plan)
+    }
+
+    /// Construct a plan from current files without creating a journal or writing configuration.
+    fn plan_files(
+        &self,
+        video: &Path,
+        executable: &Path,
+        size: cs2_video::VideoSize,
+        frames: Option<Vec<Value>>,
+    ) -> Result<Value, String> {
         if self.load()?.is_some() {
             return Err("上次 CS2 配置尚未恢复，请先退出游戏并重试恢复。".into());
         }
@@ -646,7 +659,25 @@ impl SessionStore {
             value["frameRateLimit"] = json!(preferences.frame_rate_limit);
             value["frameRateFiles"] = json!(frames);
         }
-        let frame_files = frame_files(&value, video, executable)?;
+        // Validate frame paths and scope while constructing the plan.
+        frame_files(&value, video, executable)?;
+        Ok(value)
+    }
+
+    /// Recheck every original, then durably save the plan before the first write.
+    fn commit_files(
+        &self,
+        value: &Value,
+        write_config: fn(&Path, &[u8]) -> Result<(), String>,
+    ) -> Result<(), String> {
+        if self.load()?.is_some() {
+            return Err("上次 CS2 配置尚未恢复，请先退出游戏并重试恢复。".into());
+        }
+        let video = Path::new(value["video"].as_str().ok_or("CS2 配置路径缺失。")?);
+        let executable = Path::new(value["executable"].as_str().ok_or("CS2 程序路径缺失。")?);
+        let original = value["original"].as_str().ok_or("CS2 原配置备份缺失。")?;
+        let applied = value["applied"].as_str().ok_or("CS2 应用记录缺失。")?;
+        let frame_files = frame_files(value, video, executable)?;
         // Preflight every file before writing the durable journal or any config.
         for (path, original, _) in &frame_files {
             if fs::read_to_string(path).map_err(|_| "无法读取启动配置。")? != *original {
@@ -658,18 +689,16 @@ impl SessionStore {
             return Err("视频配置在准备期间发生变化，未修改配置。".into());
         }
         // The original is durable and read-back verified before touching the game.
-        self.save(&value)?;
-        if let Err(error) = atomic_write(video, applied.as_bytes()) {
-            return Err(error);
-        }
+        self.save(value)?;
+        write_config(video, applied.as_bytes())?;
         for (path, original, applied) in frame_files {
             if fs::read_to_string(path).map_err(|_| "无法读取启动配置，备份仍保留。")? != original
             {
                 return Err("启动配置在应用期间发生变化，备份仍保留。".into());
             }
-            atomic_write(path, applied.as_bytes())?;
+            write_config(path, applied.as_bytes())?;
         }
-        Ok(value)
+        Ok(())
     }
     /// Caller must independently confirm no CS2 process can still write this file.
     pub fn restore(&self) -> Result<Option<String>, String> {
@@ -865,6 +894,72 @@ mod tests {
         fs::write(cfg.join("crosshair.cfg"), "cl_crosshairsize 2\n").unwrap();
         let executable = root.join("game/bin/win64/cs2.exe");
         (root, video, convars, executable, store)
+    }
+    #[test]
+    fn core_plan_is_read_only_and_commit_rejects_changed_original() {
+        let (root, video, store) = setup();
+        let executable = root.join("cs2.exe");
+        let before = fs::read(&video).unwrap();
+        let plan = store.plan_files(&video, &executable, cs2_video::VideoSize::new(1920, 1080).unwrap(), None).unwrap();
+        assert_eq!(fs::read(&video).unwrap(), before);
+        assert!(!store.journal_path().exists());
+        assert_eq!(plan["video"], json!(video));
+        assert_eq!(plan["executable"], json!(executable));
+        assert_eq!(plan["original"].as_str().unwrap().as_bytes(), before);
+        assert_ne!(plan["applied"].as_str().unwrap().as_bytes(), before);
+        let external = b"external edit";
+        fs::write(&video, external).unwrap();
+        assert!(store.commit_files(&plan, atomic_write).is_err());
+        assert_eq!(fs::read(&video).unwrap(), external);
+        assert!(!store.journal_path().exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn failed_core_commit_retains_original_journal_for_recovery() {
+        fn fail(_: &Path, _: &[u8]) -> Result<(), String> { Err("injected write failure".into()) }
+        let (root, video, store) = setup();
+        let executable = root.join("cs2.exe");
+        let before = fs::read(&video).unwrap();
+        let plan = store.plan_files(&video, &executable, cs2_video::VideoSize::new(1920, 1080).unwrap(), None).unwrap();
+        assert!(store.commit_files(&plan, fail).is_err());
+        assert_eq!(fs::read(&video).unwrap(), before);
+        assert_eq!(store.load().unwrap(), Some(plan));
+        SessionStore::new(root.clone()).restore().unwrap();
+        assert_eq!(fs::read(&video).unwrap(), before);
+        assert!(!store.journal_path().exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn partial_core_commit_keeps_journal_and_restores_after_restart() {
+        fn fail_after_video(path: &Path, bytes: &[u8]) -> Result<(), String> {
+            if path.file_name().is_some_and(|name| name == "cs2_video.txt") {
+                atomic_write(path, bytes)
+            } else {
+                Err("injected frame write failure".into())
+            }
+        }
+        let (root, video, machine, executable, store) = frame_setup();
+        let before_video = fs::read(&video).unwrap();
+        let before_machine = fs::read(&machine).unwrap();
+        let frames = cs2_frame_rate::prepare(&video, &executable, 60).unwrap();
+        let plan = store.plan_files(&video, &executable, cs2_video::VideoSize::new(1920, 1080).unwrap(), Some(frames)).unwrap();
+        assert_eq!(fs::read(&video).unwrap(), before_video);
+        assert_eq!(fs::read(&machine).unwrap(), before_machine);
+        assert!(!store.journal_path().exists());
+        fs::write(&machine, b"external edit").unwrap();
+        assert!(store.commit_files(&plan, atomic_write).is_err());
+        assert_eq!(fs::read(&video).unwrap(), before_video);
+        assert_eq!(fs::read(&machine).unwrap(), b"external edit");
+        assert!(!store.journal_path().exists());
+        fs::write(&machine, &before_machine).unwrap();
+        assert!(store.commit_files(&plan, fail_after_video).is_err());
+        assert_ne!(fs::read(&video).unwrap(), before_video);
+        assert_eq!(store.load().unwrap(), Some(plan));
+        SessionStore::new(root.clone()).restore().unwrap();
+        assert_eq!(fs::read(&video).unwrap(), before_video);
+        assert_eq!(fs::read(&machine).unwrap(), before_machine);
+        assert!(!store.journal_path().exists());
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn spectator_snapshot_store_restores_after_restart() {
