@@ -730,22 +730,3 @@
 .workspace-roster-capture ul {
   padding-left: var(--mizar-layout-padding);
 }
-
-.workspace-bp-compact {
-  margin-block: var(--mizar-layout-gap);
-}
-.workspace-bp-compact-preview {
-  position: relative;
-  width: 100%;
-  aspect-ratio: 16 / 9;
-  overflow: hidden;
-  container-type: inline-size;
-  background: var(--mizar-bg-raised);
-}
-.workspace-bp-compact-preview > div {
-  position: absolute;
-  width: 1920px;
-  height: 1080px;
-  transform: scale(calc(100cqw / 1920px));
-  transform-origin: top left;
-}
