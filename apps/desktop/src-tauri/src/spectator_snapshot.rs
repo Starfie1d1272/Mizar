@@ -317,6 +317,44 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
+    fn oversized_key_file_and_failed_readback_preserve_record() {
+        fn wrong(path: &Path, _: &[u8]) -> Result<(), String> {
+            fs::write(path, b"wrong").map_err(|_| "write_failed".to_string())
+        }
+        let (root, video, exe, owned, applied) = setup();
+        let state = root.join("state");
+        let key = video.with_file_name("cs2_user_keys_0_slot0.vcfg");
+        fs::write(&key, vec![b'x'; LIMIT + 1]).unwrap();
+        assert!(capture(&state, &video, &exe, 42, &owned, &applied, write).is_err());
+        assert!(!pending(&state).exists());
+        fs::write(&key, O).unwrap();
+        capture(&state, &video, &exe, 42, &owned, &applied, write).unwrap();
+        fs::write(&key, A).unwrap();
+        assert!(recover(&state, &video, &exe, 42, wrong).is_err());
+        assert!(pending(&state).exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_target_is_rejected() {
+        let (root, video, exe, owned, applied) = setup();
+        let key = video.with_file_name("cs2_user_keys_0_slot0.vcfg");
+        fs::remove_file(&key).unwrap();
+        std::os::unix::fs::symlink(&video, &key).unwrap();
+        assert!(capture(
+            &root.join("state"),
+            &video,
+            &exe,
+            42,
+            &owned,
+            &applied,
+            write
+        )
+        .is_err());
+        assert!(!pending(&root.join("state")).exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
     fn failed_backup_leaves_game_unchanged() {
         fn fail(_: &Path, _: &[u8]) -> Result<(), String> {
             Err("write_failed".into())
