@@ -13,6 +13,7 @@ import Fastify from 'fastify';
 import { MusicStore } from '../src/music/store.js';
 import { MusicDirector } from '../src/music/director.js';
 import { registerMixerRoutes } from '../src/obs/mixer-routes.js';
+import { musicProgram } from './music-fixtures.js';
 
 const fixture = vi.hoisted(() => ({ client: null as FakeObs | null }));
 vi.mock('obs-websocket-js', async (original) => {
@@ -469,14 +470,15 @@ it('reads and writes the mixer through the real adapter and rejects stale bindin
     await adapter.ensure();
     const game = new GameAudioController(routing, config, join(dir, 'policy'));
     await game.load();
+    await game.configure({ mode: 'mute' }, game.status().revision);
+    game.tick('halftime');
+    await vi.waitFor(() => expect(game.status().ownership).toBe('owned'));
     const store = new MusicStore(join(dir, 'music'));
     await store.load();
     const director = new MusicDirector(
       store,
       { session: () => Promise.reject(new Error('unused')), close: async () => {} },
-      () => {
-        throw new Error('unused');
-      },
+      () => ({ program: musicProgram(), active: 'waiting', production: false }),
     );
     registerMixerRoutes(app, adapter, director, game, {
       mode: 'loopback',
@@ -486,19 +488,30 @@ it('reads and writes the mixer through the real adapter and rejects stale bindin
     const read = async () => (await app.inject({ method: 'GET', url: '/local/v1/mixer' })).json();
     const initial = await read();
     expect(initial.channels.music.volume).toBe(1);
+    const musicWrite = await app.inject({
+      method: 'POST',
+      url: '/operator/mixer',
+      headers: { origin: base },
+      payload: { revision: initial.revision, channel: 'music', volume: 0.4, muted: true },
+    });
+    expect(musicWrite.json().status).toBe('confirmed');
+    expect((await read()).channels.music).toMatchObject({ volume: 0.4, muted: true });
     for (const channel of ['game', 'remoteCommentary', 'microphone']) {
       expect(initial.channels[channel].control).toBe('available');
       const result = await app.inject({
         method: 'POST',
         url: '/operator/mixer',
         headers: { origin: base },
-        payload: { revision: initial.revision, channel, volume: 0.35, muted: true },
+        payload: { revision: initial.revision, channel, volume: 0.35, muted: channel !== 'game' },
       });
       expect(result.json().status).toBe('confirmed');
       const after = await read();
       expect(after.channels[channel].volume).toBeCloseTo(0.35);
-      expect(after.channels[channel].muted).toBe(true);
+      expect(after.channels[channel].muted).toBe(channel !== 'game');
     }
+    game.tick('gameplay');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect((await read()).channels.game.muted).toBe(false);
     const routingStatus = await adapter.readAudioRouting();
     await adapter.bindAudio({
       role: 'microphone',
@@ -522,6 +535,7 @@ it('reads and writes the mixer through the real adapter and rejects stale bindin
     });
     expect(disconnected.json().status).toBe('unknown');
     game.close();
+    await new Promise((resolve) => setTimeout(resolve, 50));
     await adapter.close();
   } finally {
     await app.close();

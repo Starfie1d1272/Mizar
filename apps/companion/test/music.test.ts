@@ -183,6 +183,31 @@ it('applies master changes during fade-in without restarting', async () => {
   expect(r.obs.bgm().volume).toBeCloseTo(0.24);
   expect(r.obs.restarts()).toBe(starts);
 });
+it('advances duplicate files by entry identity in automatic and manual playback', async () => {
+  const r = await rig();
+  const config = structuredClone(r.store.state.config);
+  config.groups.waiting.tracks = [
+    { ...r.tracks[0]!, gain: 0.2 },
+    { ...r.tracks[0]!, gain: 0.8 },
+    { ...r.tracks[1]!, gain: 0.4 },
+  ];
+  await r.store.configure(config);
+  const entries = r.store.state.config.groups.waiting.tracks;
+  await r.step();
+  expect(r.store.state.bgm?.track.entryId).toBe(entries[0]!.entryId);
+  r.obs.bgm().state = 'OBS_MEDIA_STATE_ENDED';
+  await r.step();
+  expect(r.store.state.bgm?.track.entryId).toBe(entries[1]!.entryId);
+  r.obs.bgm().state = 'OBS_MEDIA_STATE_ENDED';
+  await r.step();
+  expect(r.store.state.bgm?.track.entryId).toBe(entries[2]!.entryId);
+  await expect(r.director.manualPlay('waiting', entries[0]!.id)).rejects.toThrow(
+    'music_track_invalid',
+  );
+  await r.director.manualPlay('waiting', undefined, entries[0]!.entryId);
+  await r.director.command('next');
+  expect(r.store.state.bgm?.track.entryId).toBe(entries[1]!.entryId);
+});
 it('keeps pre-game waiting music across fresh menu GSI and BP, but stops for stale data and live play', async () => {
   const r = await rig();
   r.truth.program.map.name = null;
@@ -975,6 +1000,24 @@ function audition(
 function stinger(r: Awaited<ReturnType<typeof rig>>) {
   return [...r.obs.inputs].find(([name]) => name.includes('Stinger'))![1];
 }
+it('applies music master, mute and draft entry gain to audition', async () => {
+  const r = await auditionRig();
+  await r.store.update((state) => {
+    state.master = 0;
+    state.muted = true;
+  });
+  const request = audition(r, { volume: 0.5, track: { ...r.tracks[0]!, gain: 0.8 } });
+  await r.director.previewRequest(request);
+  await r.step(100);
+  expect(stinger(r).volume).toBe(0);
+  expect(stinger(r).state).toBe('OBS_MEDIA_STATE_PLAYING');
+  await r.store.update((state) => {
+    state.master = 0.5;
+    state.muted = false;
+  });
+  await r.step(100);
+  expect(stinger(r).volume).toBeCloseTo(0.4);
+});
 it.each([0, 0.5, 1])(
   'auditions unsaved volume %s and segments without altering formal playback/config/hold/consumption',
   async (volume) => {

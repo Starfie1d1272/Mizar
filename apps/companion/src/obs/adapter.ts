@@ -248,22 +248,18 @@ export class ObsAdapter {
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let stage = 'obs_connect';
     let active = true;
+    const invalidateAudio = () => {
+      active = false;
+    };
     try {
       const task = (async () => {
         await client.connect(`ws://${config.host}:${config.port}`, config.password);
+        if (!active) throw new Error('obs_operation_cancelled');
         if (observeAudioIdentity) {
-          client.on('CurrentSceneCollectionChanging', () => {
-            active = false;
-          });
-          client.on('InputRemoved', () => {
-            active = false;
-          });
-          client.on('InputSettingsChanged', () => {
-            active = false;
-          });
-          client.on('ConnectionClosed', () => {
-            active = false;
-          });
+          client.on('CurrentSceneCollectionChanging', invalidateAudio);
+          client.on('InputRemoved', invalidateAudio);
+          client.on('InputSettingsChanged', invalidateAudio);
+          client.on('ConnectionClosed', invalidateAudio);
         }
         stage = 'obs_request';
         const rpc: ObsRpc = {
@@ -299,6 +295,12 @@ export class ObsAdapter {
     } finally {
       active = false;
       if (timeout) clearTimeout(timeout);
+      if (observeAudioIdentity) {
+        client.off('CurrentSceneCollectionChanging', invalidateAudio);
+        client.off('InputRemoved', invalidateAudio);
+        client.off('InputSettingsChanged', invalidateAudio);
+        client.off('ConnectionClosed', invalidateAudio);
+      }
       await client.disconnect().catch(() => undefined);
     }
   }

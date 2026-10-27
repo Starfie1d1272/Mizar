@@ -71,8 +71,15 @@ export class MusicPreview {
         return;
       this.lease = now + 3000;
       // Lease renewals cannot overwrite a newer slider value.
-      if (r.action === 'update')
-        this.request = { ...this.request!, volume: r.volume, operation: r.operation };
+      if (r.action === 'update') {
+        const { gain: _gain, ...track } = this.request!.track;
+        this.request = {
+          ...this.request!,
+          track: { ...track, ...(r.track.gain === undefined ? {} : { gain: r.track.gain }) },
+          volume: r.volume,
+          operation: r.operation,
+        };
+      }
       return;
     }
     if (this.busy && (!same || this.status?.phase !== 'confirmation'))
@@ -357,7 +364,8 @@ export class MusicPreview {
     }
     const remaining = Math.min(this.deadline - this.now(), end - cursor);
     this.expectedVolume =
-      r.volume *
+      (this.store.state.muted ? 0 : this.store.state.master) *
+      (r.track.gain ?? r.volume) *
       Math.min(
         1,
         r.fadeInMs ? (this.now() - this.fadeAt) / r.fadeInMs : 1,

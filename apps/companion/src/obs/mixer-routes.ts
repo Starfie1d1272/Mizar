@@ -16,6 +16,10 @@ export function registerMixerRoutes(
   game: GameAudioController | undefined,
   policy: LocalWebOriginPolicy,
 ) {
+  let musicQueue: Promise<unknown> = Promise.resolve();
+  let musicSequence = 0;
+  const channelQueues = new Map<string, Promise<unknown>>();
+  const channelSequences = new Map<string, number>();
   const allowed = (origin: string | undefined) =>
     policy.mode === 'loopback' && checkLocalWebOrigin(policy, origin).allowed;
   app.get('/local/v1/mixer', async (request, reply) => {
@@ -63,6 +67,43 @@ export function registerMixerRoutes(
     const parsed = mixerCommandSchema.safeParse(request.body);
     if (!parsed.success)
       return reply.code(400).send({ status: 'rejected', message: '混音参数无效。' });
-    return adapter.mixerWrite(parsed.data, game);
+    if (parsed.data.channel === 'music') {
+      const sequence = ++musicSequence;
+      const command = parsed.data;
+      const task = musicQueue.then(async () => {
+        if (sequence !== musicSequence)
+          return { status: 'rejected' as const, message: '操作已被较新的请求替代。' };
+        const before = await adapter.mixerRead().catch(() => null);
+        if (!before) return { status: 'unknown' as const, message: 'OBS 连接未确认。' };
+        if (before.revision !== command.revision)
+          return { status: 'rejected' as const, message: '音频绑定已变化，请刷新。' };
+        if (sequence !== musicSequence)
+          return { status: 'rejected' as const, message: '操作已被较新的请求替代。' };
+        try {
+          const confirmed = await director.setMixer(command.volume, command.muted);
+          const after = await adapter.mixerRead().catch(() => null);
+          return confirmed && after?.revision === command.revision
+            ? { status: 'confirmed' as const }
+            : { status: 'unknown' as const, message: '音乐设置已保存，应用状态未确认。' };
+        } catch {
+          return { status: 'unknown' as const, message: '音乐操作未确认，请刷新。' };
+        }
+      });
+      musicQueue = task.catch(() => undefined);
+      return task;
+    }
+    const command = parsed.data;
+    const sequence = (channelSequences.get(command.channel) ?? 0) + 1;
+    channelSequences.set(command.channel, sequence);
+    const task = (channelQueues.get(command.channel) ?? Promise.resolve()).then(() => {
+      if (channelSequences.get(command.channel) !== sequence)
+        return { status: 'rejected' as const, message: '操作已被较新的请求替代。' };
+      return adapter.mixerWrite(command, game);
+    });
+    channelQueues.set(
+      command.channel,
+      task.catch(() => undefined),
+    );
+    return task;
   });
 }

@@ -151,6 +151,22 @@ export class MusicDirector {
       ...(this.preview.status ? { preview: this.preview.status } : {}),
     };
   }
+  async setMixer(volume?: number, muted?: boolean): Promise<boolean> {
+    if (this.closed || !this.store.ready || this.store.failure)
+      throw new Error('music_unavailable');
+    await this.store.update((state) => {
+      if (volume !== undefined) state.master = volume;
+      if (muted !== undefined) state.muted = muted;
+    });
+    this.invalidate();
+    if (this.isHeld()) return false;
+    const deadline = Date.now() + 4000;
+    while (this.inFlight && !this.closed && Date.now() < deadline)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    if (this.closed || this.inFlight) return false;
+    await this.tick();
+    return !this.isHeld() && this.status.connection !== 'unavailable';
+  }
   async previewRequest(request: MusicPreviewRequest) {
     if (this.closed) throw new Error('music_preview_closed');
     if (
@@ -172,14 +188,14 @@ export class MusicDirector {
     if (action === 'next' && this.manual) {
       const group = this.manual.cue.group;
       if (!looping(group)) throw new Error('music_next_invalid');
-      const track = this.choose(group, this.manual.cue.key, this.manual.cue.track?.id);
+      const track = this.choose(group, this.manual.cue.key, this.manual.cue.track);
       if (!track) throw new Error('music_track_invalid');
       if (this.manual.paused) {
         const stopRevision = this.commandRevision + 1;
         await this.command('stop');
         if (this.closed || this.commandRevision !== stopRevision) return;
       }
-      await this.manualPlay(group, track.id);
+      await this.manualPlay(group, track.id, track.entryId);
       return;
     }
     this.preview.cancel('operator_command');
@@ -232,10 +248,15 @@ export class MusicDirector {
       throw new Error('music_hold_persistence_failed', { cause: persistenceError });
   }
   /** Formal playback has no browser lease. Newer commands invalidate pending work. */
-  async manualPlay(group: MusicGroup, trackId: string) {
+  async manualPlay(group: MusicGroup, trackId: string | undefined, entryId?: string) {
     if (this.closed || !this.store.ready || this.store.failure)
       throw new Error('music_unavailable');
-    const track = this.store.state.config.groups[group].tracks.find((item) => item.id === trackId);
+    const matches = this.store.state.config.groups[group].tracks.filter((item) =>
+      entryId === undefined
+        ? item.id === trackId
+        : item.entryId === entryId && (trackId === undefined || item.id === trackId),
+    );
+    const track = matches.length === 1 ? matches[0] : undefined;
     if (!track || !this.store.state.config.groups[group].enabled || group === 'opening')
       throw new Error('music_track_invalid');
     if (!manualSafe(this.truth())) throw new Error('music_program_unsafe');
@@ -573,17 +594,28 @@ export class MusicDirector {
       ...(track ? { track } : {}),
     };
   }
-  private choose(group: MusicGroup, key: string, previous?: string) {
+  private choose(group: MusicGroup, key: string, previous?: MusicTrack) {
     const spec = this.store.state.config.groups[group];
     const tracks = spec.tracks.filter((t) => !this.failed.get(key)?.has(t.id));
     if (!spec.enabled || !tracks.length) return null;
     if (!looping(group)) return tracks[0]!;
     if (spec.order === 'shuffle') {
-      const candidates = tracks.length > 1 ? tracks.filter((t) => t.id !== previous) : tracks;
+      const candidates =
+        tracks.length > 1
+          ? tracks.filter((t) =>
+              previous?.entryId ? t.entryId !== previous.entryId : t !== previous,
+            )
+          : tracks;
       const pool = candidates.length ? candidates : tracks;
       return pool[Math.floor(this.random() * pool.length)]!;
     }
-    return tracks[(tracks.findIndex((t) => t.id === previous) + 1) % tracks.length]!;
+    return tracks[
+      (tracks.findIndex((t) =>
+        previous?.entryId ? t.entryId === previous.entryId : t.id === previous?.id,
+      ) +
+        1) %
+        tracks.length
+    ]!;
   }
   async tick(): Promise<void> {
     if (this.closed) return;
@@ -1177,7 +1209,7 @@ export class MusicDirector {
       if (await this.fade(obs, layer, valid)) return;
     }
     const track =
-      cue!.track ?? this.choose(cue!.group, cue!.key, matching ? saved?.track.id : undefined);
+      cue!.track ?? this.choose(cue!.group, cue!.key, matching ? saved?.track : undefined);
     if (!track) {
       this.status.message = '本组曲目均无法播放，保持静音。请检查音频文件或重新选曲。';
       markStatus(null);
