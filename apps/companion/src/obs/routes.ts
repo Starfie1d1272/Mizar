@@ -63,12 +63,10 @@ export function registerObsRoutes(
       await options.adapter.bindAudio(parsed.data);
       return { ok: true };
     } catch {
-      return reply
-        .code(409)
-        .send({
-          error: 'audio_binding_changed',
-          message: '绑定结果未确认，请刷新 OBS 来源后核对。',
-        });
+      return reply.code(409).send({
+        error: 'audio_binding_changed',
+        message: '绑定结果未确认，请刷新 OBS 来源后核对。',
+      });
     }
   });
   app.get('/local/v1/obs/outputs', async (_request, reply) =>
