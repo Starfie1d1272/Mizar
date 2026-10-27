@@ -47,7 +47,7 @@ class Fake extends EventEmitter {
     }
     if (name === 'SetInputVolume') {
       this.writes++;
-      this.volume = Number(data?.inputVolumeMul);
+      this.volume = Math.fround(Number(data?.inputVolumeMul));
       this.emit('InputVolumeChanged', { inputUuid: 'game', inputVolumeMul: this.volume });
       return {};
     }
@@ -79,6 +79,29 @@ it('observes manual changes away and back on the same connection', async () => {
   obs.volume = 0.8;
   obs.emit('InputVolumeChanged', { inputUuid: 'game', inputVolumeMul: obs.volume });
   obs.volume = applied;
+  obs.emit('InputVolumeChanged', { inputUuid: 'game', inputVolumeMul: obs.volume });
+  await connection.run(binding, 'r', 'gameplay', { mode: 'attenuate', db: 6 }, () => true);
+  expect(owner.status).toBe('held');
+  expect(obs.writes).toBe(1);
+  connection.close();
+});
+
+it('round-trips a 6 dB attenuation through float32 and restores the original', async () => {
+  const { connection, owner, obs } = setup();
+  await connection.run(binding, 'r', 'halftime', { mode: 'attenuate', db: 6 }, () => true);
+  expect(owner.status).toBe('owned');
+  expect(obs.volume).toBe(Math.fround(0.5 * 10 ** (-6 / 20)));
+  await connection.run(binding, 'r', 'gameplay', { mode: 'attenuate', db: 6 }, () => true);
+  expect(owner.status).toBe('idle');
+  expect(obs.volume).toBe(0.5);
+  expect(obs.writes).toBe(2);
+  connection.close();
+});
+
+it('gives way to a one-float32-step manual volume change', async () => {
+  const { connection, owner, obs } = setup();
+  await connection.run(binding, 'r', 'halftime', { mode: 'attenuate', db: 6 }, () => true);
+  obs.volume = Math.fround(obs.volume + 2 ** -25);
   obs.emit('InputVolumeChanged', { inputUuid: 'game', inputVolumeMul: obs.volume });
   await connection.run(binding, 'r', 'gameplay', { mode: 'attenuate', db: 6 }, () => true);
   expect(owner.status).toBe('held');

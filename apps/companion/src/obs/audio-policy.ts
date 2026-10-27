@@ -8,6 +8,13 @@ import type { ObsRpc } from './reconcile.js';
 
 export type AudioPolicy = { mode: 'keep' } | { mode: 'attenuate'; db: number } | { mode: 'mute' };
 type Field = 'volume' | 'mute';
+// OBS stores volume multipliers as IEEE-754 float32. Compare canonical float32
+// values, not an arbitrary epsilon that could hide a real fader change.
+function sameField(field: Field, a: number | boolean, b: number | boolean) {
+  return field === 'volume' && typeof a === 'number' && typeof b === 'number'
+    ? Math.fround(a) === Math.fround(b)
+    : a === b;
+}
 export interface AudioLease {
   operation: string;
   binding: ObsAudioBinding;
@@ -104,7 +111,7 @@ export class GameAudioPolicy {
   /** Invoke for every volume/mute event, including changes away and back. */
   observe(uuid: string, field: Field, value: number | boolean) {
     if (this.watched?.uuid !== uuid || this.watched.field !== field) return;
-    if (this.pending?.field === field && this.pending.value === value) {
+    if (this.pending?.field === field && sameField(field, this.pending.value, value)) {
       this.pending = null;
       return;
     }
@@ -177,8 +184,9 @@ export class GameAudioPolicy {
     // Never unmute or lease an already muted source.
     const muted = await obs.call('GetInputMute', { inputUuid: binding.inputUuid });
     if (muted.inputMuted !== false || !valid() || sequence !== this.sequence) return;
-    const applied = policy.mode === 'mute' ? true : Number(before) * 10 ** (-policy.db / 20);
-    if (before === applied) return;
+    const applied =
+      policy.mode === 'mute' ? true : Math.fround(Number(before) * 10 ** (-policy.db / 20));
+    if (sameField(field, before, applied)) return;
     const lease: AudioLease = { ...initial, before, applied };
     this.lease = lease;
     await this.store.write(lease);
@@ -189,7 +197,7 @@ export class GameAudioPolicy {
     try {
       await this.set(obs, lease, applied);
       const current = await this.get(obs, lease);
-      if (!valid() || sequence !== this.sequence || current !== applied) {
+      if (!valid() || sequence !== this.sequence || !sameField(field, current, applied)) {
         this.disconnect();
         return;
       }
@@ -223,7 +231,7 @@ export class GameAudioPolicy {
     }
     const sequence = this.sequence;
     const current = await this.get(obs, lease);
-    if (!valid() || sequence !== this.sequence || current !== lease.applied) {
+    if (!valid() || sequence !== this.sequence || !sameField(lease.field, current, lease.applied)) {
       this.disconnect();
       return;
     }
@@ -237,7 +245,7 @@ export class GameAudioPolicy {
     try {
       await this.set(obs, lease, lease.before);
       const after = await this.get(obs, lease);
-      if (!valid() || sequence !== this.sequence || after !== lease.before) {
+      if (!valid() || sequence !== this.sequence || !sameField(lease.field, after, lease.before)) {
         this.disconnect();
         return;
       }
