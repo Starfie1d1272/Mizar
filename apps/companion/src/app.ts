@@ -1,3 +1,4 @@
+import { RemoteCommentary } from './obs/remote-commentary.js';
 import {
   registerWorkspaceObserver,
   type WorkspaceObserver,
@@ -751,6 +752,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
               'OBS request failed',
             ),
           obsAudioRouting,
+          {
+            owner: new RemoteCommentary(`${options.obsConfigPath}.commentary.json`),
+            journal: `${options.obsConfigPath}.commentary-probe.json`,
+          },
         );
   let musicDirector: MusicDirector | undefined;
   let cameraDirector: CameraDirector | undefined;
@@ -804,6 +809,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     // Chromium's connection-error page and never run the WebSocket retry code.
     app.addHook('onListen', () => {
       obsAdapter.startBrowserRecovery();
+      obsAdapter.startCommentaryRecovery();
       return Promise.resolve();
     });
     registerObsRoutes(app, {
