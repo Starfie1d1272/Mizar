@@ -355,12 +355,17 @@ function WorkspaceDockContent() {
   const [message, setMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [compactTarget, setCompactTarget] = useState<'managed' | 'external'>('managed');
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     if (!message) return;
     const timer = setTimeout(() => setMessage(''), 6000);
     return () => clearTimeout(timer);
   }, [message]);
+  const selectedCompactTarget =
+    sceneState?.bpCompact !== 'off'
+      ? (sceneState?.bpCompactTarget ?? compactTarget)
+      : compactTarget;
   const production = useLocalRead<Production>('/local/v1/production');
   const { status: cs2 } = useCs2Status();
   const exit = useWorkspaceExitStatus();
@@ -473,29 +478,49 @@ function WorkspaceDockContent() {
           ) : (
             <p>当前比赛没有可播放的完整 BP。</p>
           )}
+          <Select
+            label="底栏输出"
+            value={selectedCompactTarget}
+            disabled={busy || sceneState?.bpCompact !== 'off'}
+            onChange={(event) =>
+              setCompactTarget(event.currentTarget.value === 'external' ? 'external' : 'managed')
+            }
+          >
+            <option value="managed">受管比赛画面</option>
+            <option value="external">自定义场景浏览器源</option>
+          </Select>
+          {compactTarget === 'external' ? (
+            <p>先在自定义场景添加透明浏览器源。播放只启用来源内容，请在 OBS 核对场景与可见性。</p>
+          ) : null}
           <div className="workspace-scene-buttons">
             <Button
               disabled={
                 busy ||
                 !sceneState ||
-                !connected ||
+                (selectedCompactTarget === 'managed' && !connected) ||
                 !bp?.projection ||
-                sceneState.active !== 'gameplay'
+                (selectedCompactTarget === 'managed' && sceneState.active !== 'gameplay')
               }
               onClick={() =>
                 sceneState &&
                 void action(() =>
                   command('/operator/bp-compact', {
                     visible: true,
+                    target: selectedCompactTarget,
                     expectedRevision: sceneState.revision,
                   }),
                 )
               }
             >
-              Take 底栏
+              {selectedCompactTarget === 'external' ? '播放底栏源' : 'Take 底栏'}
             </Button>
             <Button
-              disabled={busy || !sceneState || !connected || sceneState.bpCompact === 'off'}
+              disabled={
+                busy ||
+                !sceneState ||
+                (sceneState.bpCompactTarget !== 'external' && !connected) ||
+                sceneState.bpCompact === 'off'
+              }
               onClick={() =>
                 sceneState &&
                 void action(() =>
@@ -509,10 +534,13 @@ function WorkspaceDockContent() {
               关闭底栏
             </Button>
             <span role="status">
-              {!connected || sceneState?.bpCompact === 'unknown'
+              {(!connected && sceneState?.bpCompactTarget !== 'external') ||
+              sceneState?.bpCompact === 'unknown'
                 ? '状态待确认'
                 : sceneState?.bpCompact === 'on'
-                  ? '上次 Take 已确认，请核对 OBS'
+                  ? sceneState?.bpCompactTarget === 'external'
+                    ? '底栏源已播放，请核对 OBS'
+                    : '上次 Take 已确认，请核对 OBS'
                   : '底栏已关闭'}
             </span>
           </div>

@@ -58,6 +58,7 @@ export class ProgramSceneController {
   }
   private active: ProgramSceneId = 'waiting';
   private bpCompact: 'off' | 'on' | 'unknown' = 'off';
+  private bpCompactTarget: 'managed' | 'external' = 'managed';
   private revision = randomUUID();
   private introRevision: string | undefined;
   private queue: Promise<unknown> = Promise.resolve();
@@ -135,6 +136,7 @@ export class ProgramSceneController {
       schemaVersion: 'mizar.program-scenes.v1',
       active: this.active,
       bpCompact: this.bpCompact,
+      bpCompactTarget: this.bpCompactTarget,
       revision: this.revision,
       introRevision:
         this.preparing?.target === 'matchup' ? this.preparing.revision : this.introRevision,
@@ -157,8 +159,11 @@ export class ProgramSceneController {
       this.bpCompact = 'unknown';
       const cleanup = this.queue.then(async () => {
         try {
-          await this.switchBpCompact?.(false);
-          if (this.switchBpCompact) this.bpCompact = 'off';
+          if (this.bpCompactTarget === 'managed') {
+            if (!this.switchBpCompact) throw new Error('OBS 状态待确认。');
+            await this.switchBpCompact(false);
+          }
+          this.bpCompact = 'off';
         } catch {
           /* Keep the uncertain state until a confirmed close. */
         }
@@ -181,21 +186,35 @@ export class ProgramSceneController {
     return result;
   }
 
-  setCompact(visible: boolean, expectedRevision: string) {
+  setCompact(
+    visible: boolean,
+    expectedRevision: string,
+    target: 'managed' | 'external' = 'managed',
+  ) {
     const result = this.queue.then(async () => {
       if (expectedRevision !== this.revision)
         return { ok: false as const, message: '播出状态已变化，请核对后重试。' };
-      if (!this.switchBpCompact)
+      const actualTarget = visible ? target : this.bpCompactTarget;
+      if (visible && this.bpCompact !== 'off' && actualTarget !== this.bpCompactTarget)
+        return { ok: false as const, message: '请先关闭当前底栏再切换输出。' };
+      if (actualTarget === 'managed' && !this.switchBpCompact)
         return { ok: false as const, message: 'OBS 未配置，无法确认底栏状态。' };
-      if (visible && (this.active !== 'gameplay' || this.blockedReason('bp') !== null))
-        return { ok: false as const, message: '请先切到比赛画面并准备完整 BP。' };
+      if (
+        visible &&
+        (this.blockedReason('bp') !== null ||
+          (actualTarget === 'managed' && this.active !== 'gameplay'))
+      )
+        return { ok: false as const, message: '请先准备完整 BP；受管比赛输出需要切到比赛画面。' };
       const bp = this.bpSession.get();
       if (visible && this.bpCompact !== 'on' && bp.state !== 'hidden')
         return { ok: false as const, message: 'BP 正在其他画面播放，请先关闭。' };
       try {
-        await this.switchBpCompact(visible);
-        if (expectedRevision !== this.revision || (visible && this.active !== 'gameplay')) {
-          if (visible) await this.switchBpCompact(false);
+        if (actualTarget === 'managed') await this.switchBpCompact!(visible);
+        if (
+          expectedRevision !== this.revision ||
+          (visible && actualTarget === 'managed' && this.active !== 'gameplay')
+        ) {
+          if (visible && actualTarget === 'managed') await this.switchBpCompact!(false);
           throw new Error('播出状态已变化，请核对后重试。');
         }
         if (
@@ -203,21 +222,22 @@ export class ProgramSceneController {
           bp.state === 'hidden' &&
           this.bpSession.command('play', bp.revision) === null
         ) {
-          await this.switchBpCompact(false);
+          if (actualTarget === 'managed') await this.switchBpCompact!(false);
           throw new Error('BP 状态已变化，请重试。');
         }
         if (!visible && this.bpCompact !== 'off') this.bpSession.finishSceneExit();
         this.bpCompact = visible ? 'on' : 'off';
+        if (visible) this.bpCompactTarget = actualTarget;
         this.director?.hold();
         this.revision = randomUUID();
         return { ok: true as const, state: this.get() };
       } catch (error) {
         if (visible) this.bpSession.finishSceneExit();
-        this.bpCompact = 'unknown';
+        this.bpCompact = actualTarget === 'managed' ? 'unknown' : 'off';
         this.revision = randomUUID();
         return {
           ok: false as const,
-          message: error instanceof Error ? error.message : 'OBS 状态待确认。',
+          message: error instanceof Error ? error.message : '状态待确认。',
         };
       }
     });
@@ -302,8 +322,10 @@ export class ProgramSceneController {
     }
     if (this.active !== id && this.bpCompact !== 'off') {
       try {
-        if (!this.switchBpCompact) throw new Error('OBS 状态待确认。');
-        await this.switchBpCompact(false);
+        if (this.bpCompactTarget === 'managed') {
+          if (!this.switchBpCompact) throw new Error('OBS 状态待确认。');
+          await this.switchBpCompact(false);
+        }
         this.bpCompact = 'off';
         this.bpSession.finishSceneExit();
       } catch {
@@ -427,7 +449,13 @@ export function registerProgramSceneRoutes(
     const body = request.body as Record<string, unknown> | null;
     if (typeof body?.visible !== 'boolean' || typeof body.expectedRevision !== 'string')
       return reply.code(400).send({ error: 'invalid_bp_compact_command' });
-    const result = await options.controller.setCompact(body.visible, body.expectedRevision);
+    if (body.target !== undefined && body.target !== 'managed' && body.target !== 'external')
+      return reply.code(400).send({ error: 'invalid_bp_compact_target' });
+    const result = await options.controller.setCompact(
+      body.visible,
+      body.expectedRevision,
+      body.target,
+    );
     return result.ok ? result.state : reply.code(409).send({ message: result.message });
   });
   app.post('/operator/program-scene', { bodyLimit: 2048 }, async (request, reply) => {
