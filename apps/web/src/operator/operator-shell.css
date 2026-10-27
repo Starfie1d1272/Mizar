@@ -10,6 +10,13 @@
   font-size: var(--mizar-type-size-body);
   -webkit-font-smoothing: antialiased;
 }
+@media (max-width: 1919px), (max-height: 1079px) {
+  .desktop-canvas__canvas:has(> .product-shell[data-settings]) {
+    width: 100% !important;
+    height: 100% !important;
+    zoom: 1 !important;
+  }
+}
 .product-sidebar {
   position: sticky;
   top: 0;

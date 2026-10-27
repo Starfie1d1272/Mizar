@@ -1,11 +1,18 @@
 import { useEffect, useState } from 'react';
 import type { ObsAudioRole, ObsAudioRoutingStatus } from '@mizar/protocol/obs';
-import { Button } from '../ui';
+import { Button, Select } from '../ui';
 
 const labels: Record<ObsAudioRole, string> = {
   game: '游戏',
   remoteCommentary: '远端解说音频',
   microphone: '麦克风',
+};
+const sourceTypes: Record<string, string> = {
+  wasapi_output_capture: '桌面音频',
+  wasapi_input_capture: '音频输入',
+  wasapi_process_output_capture: '应用音频',
+  game_capture: '游戏捕获',
+  window_capture: '窗口捕获',
 };
 export function ObsAudioRouting() {
   const [commentary, setCommentary] = useState<{
@@ -154,9 +161,8 @@ export function ObsAudioRouting() {
       </Button>
       {applications && (
         <div className="obs-audio-application-choice">
-          <label htmlFor="commentary-application">应用窗口</label>{' '}
-          <select
-            id="commentary-application"
+          <Select
+            label="应用窗口"
             value={application}
             disabled={busy}
             onChange={(event) => setApplication(event.target.value)}
@@ -167,7 +173,7 @@ export function ObsAudioRouting() {
                 {candidate.label}
               </option>
             ))}
-          </select>{' '}
+          </Select>{' '}
           <Button disabled={busy || !application} onClick={() => void run(selectApplication)}>
             保存应用
           </Button>{' '}
@@ -201,20 +207,24 @@ export function ObsAudioRouting() {
             </p>
             {(Object.keys(labels) as ObsAudioRole[]).map((role) => (
               <div key={role}>
-                <label htmlFor={`audio-${role}`}>{labels[role]}</label>{' '}
-                <select
-                  id={`audio-${role}`}
+                <Select
+                  label={labels[role]}
                   disabled={busy}
                   value=""
                   onChange={(event) => void run(() => bind(role, event.target.value || null))}
                 >
                   <option value="">选择来源或解除绑定</option>
-                  {status.candidates.map((candidate) => (
+                  {status.candidates.map((candidate, index) => (
                     <option key={candidate.selectionId} value={candidate.selectionId}>
-                      {candidate.name} · {candidate.kind} · {candidate.uuid}
+                      {candidate.name} · {sourceTypes[candidate.kind] ?? '其他音频来源'}
+                      {status.candidates.filter(
+                        (item) => item.name === candidate.name && item.kind === candidate.kind,
+                      ).length > 1
+                        ? ` · ${status.candidates.slice(0, index + 1).filter((item) => item.name === candidate.name && item.kind === candidate.kind).length}`
+                        : ''}
                     </option>
                   ))}
-                </select>{' '}
+                </Select>{' '}
                 <Button
                   disabled={busy || !status.bindings[role]}
                   onClick={() => void run(() => bind(role, null))}
@@ -235,6 +245,16 @@ export function ObsAudioRouting() {
                 <li key={finding}>{finding}</li>
               ))}
             </ul>
+            <details>
+              <summary>来源技术详情</summary>
+              <ul>
+                {status.candidates.map((candidate) => (
+                  <li key={candidate.selectionId}>
+                    {candidate.name} · {candidate.kind} · {candidate.uuid}
+                  </li>
+                ))}
+              </ul>
+            </details>
           </>
         )}
       </details>

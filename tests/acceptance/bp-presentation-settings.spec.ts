@@ -27,6 +27,15 @@ test('BP presentation choice persists and previews both real renderers', async (
   await page
     .locator('.bp-presentation-settings')
     .screenshot({ path: testInfo.outputPath('bp-preference-settings.png') });
+  await page.setViewportSize({ width: 600, height: 650 });
+  await full.scrollIntoViewIfNeeded();
+  expect(
+    await page.locator('.product-content').evaluate((el) => el.scrollWidth <= el.clientWidth),
+  ).toBe(true);
+  expect(
+    await full.evaluate((el) => Number.parseFloat(getComputedStyle(el.closest('label')!).fontSize)),
+  ).toBeGreaterThanOrEqual(14);
+  await page.screenshot({ path: testInfo.outputPath('bp-settings-narrow.png') });
   await full.click();
   await expect(full).toBeChecked();
 });
