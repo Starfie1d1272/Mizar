@@ -31,6 +31,13 @@ const audioKinds = new Set([
   'wasapi_process_output_capture',
 ]);
 const videoKinds = new Set(['game_capture', 'window_capture']);
+function records(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value)
+    ? value.filter(
+        (item): item is Record<string, unknown> => typeof item === 'object' && item !== null,
+      )
+    : [];
+}
 
 /** Explicit identities are revalidated against OBS; selection tokens expire and contain no PID. */
 export class ObsAudioRouting {
@@ -84,7 +91,7 @@ export class ObsAudioRouting {
     if (typeof collection !== 'string' || !collection) throw new Error('audio_collection_unknown');
     const raw = (await obs.call('GetInputList')).inputs;
     if (!Array.isArray(raw)) throw new Error('audio_inputs_unknown');
-    const inputs = raw.filter(
+    const inputs = records(raw).filter(
       (i): i is Input =>
         typeof i?.inputUuid === 'string' &&
         typeof i?.inputName === 'string' &&
@@ -161,7 +168,7 @@ export class ObsAudioRouting {
       findings.push('桌面音频可能包含应用音频和音乐监听；请在 OBS 中核对并自行迁移。');
     const scenes = (await obs.call('GetSceneList')).scenes;
     if (!Array.isArray(scenes)) throw new Error('audio_scenes_unknown');
-    for (const scene of scenes) {
+    for (const scene of records(scenes)) {
       if (typeof scene?.sceneName !== 'string') continue;
       const counts = new Map<string, number>();
       const walk = async (name: string, group: boolean, ancestors: Set<string>): Promise<void> => {
@@ -171,7 +178,7 @@ export class ObsAudioRouting {
           sceneName: name,
         });
         if (!Array.isArray(result.sceneItems)) throw new Error('audio_scene_items_unknown');
-        for (const item of result.sceneItems) {
+        for (const item of records(result.sceneItems)) {
           if (item.sceneItemEnabled !== true) continue;
           if (
             typeof item.sourceUuid === 'string' &&
