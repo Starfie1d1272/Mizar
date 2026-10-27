@@ -111,6 +111,12 @@ impl SessionStore {
         if self.load()?.is_some() || self.spectator_pending() { return Err("snapshot_pending".into()); }
         crate::spectator_snapshot::capture(&self.root, video, executable, account, owned, applied, atomic_write)
     }
+    /// Explicit session capture; legacy pending records remain exclusive.
+    pub(crate) fn capture_spectator_snapshot_for_session(&self, video: &Path, executable: &Path, account: u32, owned: &std::collections::BTreeSet<crate::spectator_recovery_plan::Input>, applied: &crate::spectator_recovery_plan::Bindings, session: &crate::cs2_config_identity::SessionIdentity) -> Result<(), String> {
+        let _lock = crate::spectator_snapshot::acquire(&self.root)?;
+        if self.load()?.is_some() || self.spectator_pending() { return Err("snapshot_pending".into()); }
+        crate::spectator_snapshot::capture_for_session(&self.root, video, executable, account, owned, applied, atomic_write, Some(session))
+    }
     /// Inspection only; caller supplies independently discovered identity.
     pub(crate) fn spectator_snapshot_status(&self, video: &Path, executable: &Path, account: u32) -> Result<crate::spectator_snapshot::Status, String> {
         let _lock = crate::spectator_snapshot::acquire(&self.root)?;
@@ -664,6 +670,17 @@ impl SessionStore {
         Ok(value)
     }
 
+    /// Annotate an independently constructed plan; callers still own identity verification.
+    fn plan_files_for_session(&self, video: &Path, executable: &Path, size: cs2_video::VideoSize, frames: Option<Vec<Value>>, session: &crate::cs2_config_identity::SessionIdentity) -> Result<Value, String> {
+        if fs::canonicalize(video).map_err(|_| "identity_invalid")? != session.config.video
+            || fs::canonicalize(executable).map_err(|_| "identity_invalid")? != session.config.executable {
+            return Err("identity_changed".into());
+        }
+        let mut plan = self.plan_files(video, executable, size, frames)?;
+        session.write(&mut plan).map_err(str::to_string)?;
+        Ok(plan)
+    }
+
     /// Recheck every original, then durably save the plan before the first write.
     fn commit_files(
         &self,
@@ -959,6 +976,35 @@ mod tests {
         assert_eq!(fs::read(&video).unwrap(), before_video);
         assert_eq!(fs::read(&machine).unwrap(), before_machine);
         assert!(!store.journal_path().exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn core_plan_and_full_snapshot_roundtrip_explicit_session_identity() {
+        use crate::cs2_config_identity::{self, ConfigIdentity, Relation, SessionIdentity};
+        use crate::spectator_recovery_plan::{Input, InputKind};
+        let (root, video, _, executable, store) = frame_setup();
+        fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        fs::write(&executable, b"fixture").unwrap();
+        let keys = video.with_file_name("cs2_user_keys_0_slot0.vcfg");
+        fs::write(&keys, "\"config\" {\"bindings\" {} \"analogbindings\" {}}").unwrap();
+        let session = SessionIdentity { session_id: "s-1".into(), config: ConfigIdentity {
+            account: 1, video: fs::canonicalize(&video).unwrap(), executable: fs::canonicalize(&executable).unwrap(),
+            keys: fs::canonicalize(&keys).unwrap(), slot: 0, format: "vcfg".into()
+        }};
+        let plan = store.plan_files_for_session(&video, &executable, cs2_video::VideoSize::new(1920, 1080).unwrap(), None, &session).unwrap();
+        assert!(!store.journal_path().exists());
+        store.save(&plan).unwrap();
+        let parsed = SessionIdentity::read(&store.load().unwrap().unwrap()).unwrap().unwrap();
+        fs::remove_file(store.journal_path()).unwrap(); // Isolated serialization fixture only.
+        let x = Input { kind: InputKind::Key, name: "x".into() };
+        store.capture_spectator_snapshot_for_session(&video, &executable, 1, &[x.clone()].into(), &[(x, vec!["preset".into()])].into(), &session).unwrap();
+        let snapshot: Value = serde_json::from_slice(&fs::read(store.root.join("spectator-full-pending.json")).unwrap()).unwrap();
+        let full = SessionIdentity::read(&snapshot["payload"]).unwrap().unwrap();
+        assert_eq!(cs2_config_identity::compare(Some(&parsed), Some(&full)), Relation::Same);
+        let mut different = full.clone(); different.session_id = "s-2".into();
+        assert_eq!(cs2_config_identity::compare(Some(&parsed), Some(&different)), Relation::Different);
+        assert!(store.backup_originals(&video).is_err()); // Pending behaviour is unchanged.
+        assert_eq!(SessionIdentity::read(&json!({"version":1})).unwrap(), None);
         fs::remove_dir_all(root).unwrap();
     }
     #[test]

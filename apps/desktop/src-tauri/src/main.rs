@@ -9,6 +9,7 @@ mod cs2_console;
 mod cs2_frame_rate;
 mod cs2_preferences;
 mod cs2_session;
+mod cs2_config_identity;
 mod cs2_spectator;
 mod spectator_recovery_plan;
 mod spectator_recovery_vcfg;

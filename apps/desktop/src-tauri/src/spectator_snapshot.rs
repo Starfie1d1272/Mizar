@@ -232,6 +232,13 @@ pub(crate) fn status(root: &Path, video: &Path, exe: &Path, account: u32) -> Sta
         {
             return Err("damaged".into());
         }
+        if let Some(session) =
+            crate::cs2_config_identity::SessionIdentity::read(payload).map_err(|_| "damaged")?
+        {
+            if session.config.value() != payload["identity"] {
+                return Err("damaged".into());
+            }
+        }
         let original = payload["original"]
             .as_str()
             .filter(|v| v.len() <= LIMIT)
@@ -290,6 +297,21 @@ pub(crate) fn capture(
     write: Writer,
 ) -> Result<(), String> {
     check_path(root, false)?;
+    capture_for_session(root, video, exe, account, owned, applied, write, None)
+}
+
+/// Capture with an optional explicit session identity; legacy capture remains unchanged.
+pub(crate) fn capture_for_session(
+    root: &Path,
+    video: &Path,
+    exe: &Path,
+    account: u32,
+    owned: &BTreeSet<Input>,
+    applied: &Bindings,
+    write: Writer,
+    session: Option<&crate::cs2_config_identity::SessionIdentity>,
+) -> Result<(), String> {
+    check_path(root, false)?;
     let record_path = pending(root);
     match fs::symlink_metadata(&record_path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
@@ -305,7 +327,13 @@ pub(crate) fn capture(
     if identity(video, exe, account)?.0 != id || regular(&path, LIMIT)? != bytes {
         return Err("snapshot_changed".into());
     }
-    let payload = json!({"version":1,"identity":id,"original":original,"fields":rows});
+    let mut payload = json!({"version":1,"identity":id,"original":original,"fields":rows});
+    if let Some(session) = session {
+        if session.config.value() != id {
+            return Err("identity_changed".into());
+        }
+        session.write(&mut payload).map_err(str::to_string)?;
+    }
     let payload_bytes = serde_json::to_vec(&payload).map_err(|_| "snapshot_invalid")?;
     let record = serde_json::to_vec(&json!({"payload":payload,"sha256":digest(&payload_bytes)}))
         .map_err(|_| "snapshot_invalid")?;
@@ -340,6 +368,13 @@ pub(crate) fn recover(
             != Some(digest(&serde_json::to_vec(payload).map_err(|_| "snapshot_invalid")?).as_str())
     {
         return Err("snapshot_invalid".into());
+    }
+    if let Some(session) =
+        crate::cs2_config_identity::SessionIdentity::read(payload).map_err(str::to_string)?
+    {
+        if session.config.value() != payload["identity"] {
+            return Err("snapshot_invalid".into());
+        }
     }
     let (id, key) = identity(video, exe, account)?;
     if payload["identity"] != id {
