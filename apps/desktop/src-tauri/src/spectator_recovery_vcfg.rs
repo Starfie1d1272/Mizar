@@ -37,6 +37,60 @@ fn bindings(keys: &Section, axes: &Section) -> Bindings {
     result
 }
 
+/// Build a forward write from a trusted candidate while preserving all fields
+/// outside the explicitly owned set. This performs no file I/O.
+pub(crate) fn plan_application(
+    original: &str,
+    candidate: &str,
+    expected: &Bindings,
+    owned: &BTreeSet<Input>,
+) -> Result<String, &'static str> {
+    if original.len() > LIMIT || candidate.len() > LIMIT {
+        return Err("file_too_large");
+    }
+    if owned.is_empty()
+        || expected.keys().any(|field| !owned.contains(field))
+        || expected.values().any(Vec::is_empty)
+    {
+        return Err("invalid_plan");
+    }
+    let original_keys = section(original, &InputKind::Key)?;
+    let original_axes = section(original, &InputKind::Axis)?;
+    let candidate_keys = section(candidate, &InputKind::Key)?;
+    let candidate_axes = section(candidate, &InputKind::Axis)?;
+    let before = bindings(&original_keys, &original_axes);
+    let candidate_values = bindings(&candidate_keys, &candidate_axes);
+    for field in owned {
+        if candidate_values.get(field) != expected.get(field) {
+            return Err("invalid_plan");
+        }
+    }
+    // Reuse the inverse three-way patch: candidate is the desired original,
+    // while the current original is the known applied state of that inverse.
+    let scoped_before: Bindings = before
+        .iter()
+        .filter(|(field, _)| owned.contains(*field))
+        .map(|(field, values)| (field.clone(), values.clone()))
+        .collect();
+    let output = restore(candidate, &scoped_before, original, owned)?
+        .unwrap_or_else(|| original.to_string());
+    let after = bindings(
+        &section(&output, &InputKind::Key)?,
+        &section(&output, &InputKind::Axis)?,
+    );
+    for field in owned {
+        if after.get(field) != expected.get(field) {
+            return Err("invalid_plan");
+        }
+    }
+    for (field, values) in &before {
+        if !owned.contains(field) && after.get(field) != Some(values) {
+            return Err("invalid_plan");
+        }
+    }
+    Ok(output)
+}
+
 /// Returns None for no change, an updated file for safe restoration, or a
 /// fixed error code. The caller must revalidate identity and bytes before I/O.
 pub(crate) fn restore(
@@ -114,6 +168,47 @@ mod tests {
             kind,
             name: name.into(),
         }
+    }
+    #[test]
+    fn forward_plan_and_recovery_keep_unowned_and_handle_deletion() {
+        let key = input(InputKind::Key, "x");
+        let axis = input(InputKind::Axis, "mouse_x");
+        let original = "\"config\" {\"bindings\" {\"x\" \"\" \"x\" \"custom\" \"keep\" \"personal\"} \"analogbindings\" {\"mouse_x\" \"old\"}}";
+        let candidate = "\"config\" {\"bindings\" {\"keep\" \"untrusted replacement\"} \"analogbindings\" {\"mouse_x\" \"new\"}}";
+        let owned = [key.clone(), axis.clone()].into();
+        let expected = [(axis.clone(), vec!["new".into()])].into();
+        let applied = plan_application(original, candidate, &expected, &owned).unwrap();
+        assert!(applied.contains("\"keep\" \"personal\""));
+        assert!(!applied.contains("untrusted replacement"));
+        let parsed = bindings(
+            &section(&applied, &InputKind::Key).unwrap(),
+            &section(&applied, &InputKind::Axis).unwrap(),
+        );
+        assert!(!parsed.contains_key(&key));
+        assert_eq!(parsed[&axis], vec!["new"]);
+        let restored = restore(original, &expected, &applied, &owned)
+            .unwrap()
+            .unwrap();
+        let parsed = bindings(
+            &section(&restored, &InputKind::Key).unwrap(),
+            &section(&restored, &InputKind::Axis).unwrap(),
+        );
+        assert_eq!(parsed[&key], vec!["", "custom"]);
+        assert_eq!(parsed[&axis], vec!["old"]);
+    }
+    #[test]
+    fn forward_plan_rejects_candidate_or_scope_mismatch() {
+        let key = input(InputKind::Key, "x");
+        let text = "\"config\" {\"bindings\" {\"x\" \"actual\"} \"analogbindings\" {}}";
+        let expected = [(key.clone(), vec!["different".into()])].into();
+        assert_eq!(
+            plan_application(text, text, &expected, &[key].into()),
+            Err("invalid_plan")
+        );
+        assert_eq!(
+            plan_application(text, text, &expected, &Default::default()),
+            Err("invalid_plan")
+        );
     }
     #[test]
     fn restore_missing_empty_duplicates_and_axis_preserves_other_edits() {
