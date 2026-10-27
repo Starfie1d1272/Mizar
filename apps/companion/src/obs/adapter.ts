@@ -761,11 +761,16 @@ export class ObsAdapter {
           this.findings = [...this.findings, ...commentary];
         } catch (error) {
           this.diagnostic('obs_commentary_prepare', obsErrorEvidence(error));
+          const uncertain = await readCommentarySwitch(`${this.commentary.journal}.switch`)
+            .then((value) => value?.phase === 'sent')
+            .catch(() => true);
           this.findings = [
             ...this.findings,
             {
               code: 'commentary_pending',
-              message: '场景已准备，音频分路待完成。请检查远端解说来源后重试。',
+              message: uncertain
+                ? '解说来源切换结果待核对，请在 OBS 中检查后处理。'
+                : '场景已准备，音频分路待完成。请检查远端解说来源后重试。',
             },
           ];
         }

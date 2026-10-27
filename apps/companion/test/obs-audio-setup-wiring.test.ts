@@ -947,9 +947,10 @@ it('defers during output and yields to changed targets or uncertain writes', asy
         await adapter.bindAudio({ role: 'game', selectionId: null, revision: status.revision });
       }
       const writes = obs.settingsWrites;
-      expect(
-        (await adapter.ensure()).some((finding) => finding.code === 'commentary_pending'),
-      ).toBe(true);
+      const findings = await adapter.ensure();
+      expect(findings.some((finding) => finding.code === 'commentary_pending')).toBe(true);
+      if (scenario === 'failure' || scenario === 'uncertain' || scenario === 'concurrent')
+        expect(findings.some((finding) => finding.message.includes('结果待核对'))).toBe(true);
       expect(voice.settings.window).toBe(
         scenario === 'manual'
           ? 'Manual:Qt:manual.exe'
