@@ -287,6 +287,78 @@ pub(crate) fn status(root: &Path, video: &Path, exe: &Path, account: u32) -> Sta
     }
 }
 
+/// Prepare the exact local key-file application without touching disk.
+pub(crate) fn plan_application(
+    video: &Path,
+    exe: &Path,
+    account: u32,
+    session: &crate::cs2_config_identity::SessionIdentity,
+    owned: &BTreeSet<Input>,
+    applied: &Bindings,
+    candidate: &str,
+) -> Result<(PathBuf, Vec<u8>, Vec<u8>), String> {
+    let (id, path) = identity(video, exe, account)?;
+    if session.config.value() != id {
+        return Err("identity_changed".into());
+    }
+    let original = regular(&path, LIMIT)?;
+    let text = std::str::from_utf8(&original).map_err(|_| "snapshot_encoding")?;
+    let planned = crate::spectator_recovery_vcfg::plan_application(text, candidate, applied, owned)
+        .map_err(str::to_string)?;
+    if identity(video, exe, account)?.0 != id || regular(&path, LIMIT)? != original {
+        return Err("snapshot_changed".into());
+    }
+    Ok((path, original, planned.into_bytes()))
+}
+
+/// Check the saved record and original file against the plan immediately before writes.
+pub(crate) fn verify_prepared(
+    root: &Path,
+    video: &Path,
+    exe: &Path,
+    account: u32,
+    session: &crate::cs2_config_identity::SessionIdentity,
+    owned: &BTreeSet<Input>,
+    applied: &Bindings,
+    original: &[u8],
+) -> Result<(), String> {
+    let bytes = regular(&pending(root), RECORD_LIMIT)?;
+    let record: Value = serde_json::from_slice(&bytes).map_err(|_| "snapshot_invalid")?;
+    let payload = &record["payload"];
+    if payload["version"] != 1
+        || record["sha256"].as_str()
+            != Some(digest(&serde_json::to_vec(payload).map_err(|_| "snapshot_invalid")?).as_str())
+        || crate::cs2_config_identity::SessionIdentity::read(payload)
+            .map_err(str::to_string)?
+            .as_ref()
+            != Some(session)
+        || payload["identity"] != session.config.value()
+        || payload["fields"] != entries(owned, applied)?
+        || payload["original"].as_str().map(str::as_bytes) != Some(original)
+    {
+        return Err("snapshot_invalid".into());
+    }
+    let (id, key) = identity(video, exe, account)?;
+    if id != session.config.value() || regular(&key, LIMIT)? != original {
+        return Err("snapshot_changed".into());
+    }
+    Ok(())
+}
+
+pub(crate) fn verify_applied(
+    video: &Path,
+    exe: &Path,
+    account: u32,
+    session: &crate::cs2_config_identity::SessionIdentity,
+    expected: &[u8],
+) -> Result<(), String> {
+    let (id, key) = identity(video, exe, account)?;
+    if id != session.config.value() || regular(&key, LIMIT)? != expected {
+        return Err("snapshot_readback_failed".into());
+    }
+    Ok(())
+}
+
 pub(crate) fn capture(
     root: &Path,
     video: &Path,

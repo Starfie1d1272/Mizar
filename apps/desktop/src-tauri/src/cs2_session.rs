@@ -176,6 +176,9 @@ impl SessionStore {
         self.save_locked(&guard, value)
     }
     fn save_locked(&self, _guard: &StoreGuard, value: &Value) -> Result<(), String> {
+        // Only the explicit coordinated transaction may create a core journal
+        // while a full snapshot exists. Ordinary saves cannot adopt that owner.
+        if self.full_spectator_pending() { return Err("snapshot_pending".into()); }
         let bytes = serde_json::to_vec_pretty(value).map_err(|_| "CS2 恢复记录无法保存。")?;
         if bytes.len() > 4 * 1024 * 1024 {
             return Err("CS2 恢复记录过大，未修改游戏设置。".into());
@@ -685,6 +688,7 @@ impl SessionStore {
         executable: &Path,
         size: cs2_video::VideoSize,
     ) -> Result<Value, String> {
+        if self.full_spectator_pending() { return Err("snapshot_pending".into()); }
         let preferences = self.preferences()?;
         let frames = cs2_frame_rate::prepare(video, executable, preferences.frame_rate_limit)?;
         let spectator = if self.spectator_pending() {
@@ -768,6 +772,90 @@ impl SessionStore {
         Ok(plan)
     }
 
+    /// Prepare both owners under the same Store guard. The Host must have
+    /// independently verified the Steam account and confirmed CS2 is stopped.
+    pub(crate) fn prepare_coordinated(
+        &self, video: &Path, executable: &Path, size: cs2_video::VideoSize,
+        frames: Option<Vec<Value>>, session: &crate::cs2_config_identity::SessionIdentity,
+        owned: &std::collections::BTreeSet<crate::spectator_recovery_plan::Input>,
+        applied: &crate::spectator_recovery_plan::Bindings, candidate: &str,
+    ) -> Result<Value, String> {
+        let guard = self.acquire_write_guard()?;
+        self.prepare_coordinated_locked(&guard, video, executable, size, frames, session, owned, applied, candidate, atomic_write)
+    }
+
+    fn prepare_coordinated_locked(
+        &self, guard: &StoreGuard, video: &Path, executable: &Path, size: cs2_video::VideoSize,
+        frames: Option<Vec<Value>>, session: &crate::cs2_config_identity::SessionIdentity,
+        owned: &std::collections::BTreeSet<crate::spectator_recovery_plan::Input>,
+        applied: &crate::spectator_recovery_plan::Bindings, candidate: &str,
+        write: fn(&Path, &[u8]) -> Result<(), String>,
+    ) -> Result<Value, String> {
+        if self.load()?.is_some() || self.spectator_pending() || self.full_spectator_pending() {
+            return Err("snapshot_pending".into());
+        }
+        let mut core = self.plan_files_for_session(video, executable, size, frames, session)?;
+        let (key, original_keys, applied_keys) = crate::spectator_snapshot::plan_application(
+            video, executable, session.config.account, session, owned, applied, candidate)?;
+        let key_identity = fs::canonicalize(&key).map_err(|_| "identity_invalid")?;
+        if key_identity != session.config.keys || fs::canonicalize(video).map_err(|_| "identity_invalid")? == key_identity {
+            return Err("scope_overlap".into());
+        }
+        for (path, _, _) in frame_files(&core, video, executable)? {
+            if fs::canonicalize(path).map_err(|_| "identity_invalid")? == key_identity {
+                return Err("scope_overlap".into());
+            }
+        }
+        self.preflight_core_plan(&core)?;
+        crate::spectator_snapshot::capture_for_session(&self.root, video, executable,
+            session.config.account, owned, applied, write, Some(session))?;
+        crate::spectator_snapshot::verify_prepared(&self.root, video, executable,
+            session.config.account, session, owned, applied, &original_keys)?;
+        core["fullSnapshot"] = json!(true);
+        core["configWriteAttempted"] = json!(false);
+        self.save_coordinated_locked(guard, &core, write)?;
+        // Persist the possible write before either owner changes a game file.
+        core["configWriteAttempted"] = json!(true);
+        self.save_coordinated_locked(guard, &core, write)?;
+        self.preflight_core_plan(&core)?;
+        crate::spectator_snapshot::verify_prepared(&self.root, video, executable,
+            session.config.account, session, owned, applied, &original_keys)?;
+        let applied_video = core["applied"].as_str().ok_or("invalid_plan")?;
+        write(video, applied_video.as_bytes())?;
+        unchanged(video, applied_video.as_bytes())?;
+        for (path, original, next) in frame_files(&core, video, executable)? {
+            unchanged(path, original.as_bytes())?;
+            write(path, next.as_bytes())?;
+            unchanged(path, next.as_bytes())?;
+        }
+        crate::spectator_snapshot::verify_prepared(&self.root, video, executable,
+            session.config.account, session, owned, applied, &original_keys)?;
+        if applied_keys != original_keys { write(&key, &applied_keys)?; }
+        crate::spectator_snapshot::verify_applied(video, executable, session.config.account, session, &applied_keys)?;
+        Ok(core)
+    }
+
+    fn save_coordinated_locked(&self, _guard: &StoreGuard, value: &Value,
+        write: fn(&Path, &[u8]) -> Result<(), String>) -> Result<(), String> {
+        let bytes = serde_json::to_vec_pretty(value).map_err(|_| "invalid_plan")?;
+        if bytes.len() > 4 * 1024 * 1024 { return Err("invalid_plan".into()); }
+        write(&self.journal_path(), &bytes)?;
+        if fs::read(self.journal_path()).map_err(|_| "journal_readback_failed")? != bytes
+            || self.load()?.as_ref() != Some(value) { return Err("journal_readback_failed".into()); }
+        Ok(())
+    }
+
+    fn preflight_core_plan(&self, value: &Value) -> Result<(), String> {
+        let video = Path::new(value["video"].as_str().ok_or("invalid_plan")?);
+        let executable = Path::new(value["executable"].as_str().ok_or("invalid_plan")?);
+        let original = value["original"].as_str().ok_or("invalid_plan")?;
+        unchanged(video, original.as_bytes())?;
+        for (path, original, _) in frame_files(value, video, executable)? {
+            unchanged(path, original.as_bytes())?;
+        }
+        Ok(())
+    }
+
     /// Recheck every original, then durably save the plan before the first write.
     #[cfg(test)]
     fn commit_files(
@@ -784,7 +872,7 @@ impl SessionStore {
         value: &Value,
         write_config: fn(&Path, &[u8]) -> Result<(), String>,
     ) -> Result<(), String> {
-        if self.load()?.is_some() {
+        if self.load()?.is_some() || self.full_spectator_pending() {
             return Err("上次 CS2 配置尚未恢复，请先退出游戏并重试恢复。".into());
         }
         let video = Path::new(value["video"].as_str().ok_or("CS2 配置路径缺失。")?);
@@ -1132,6 +1220,127 @@ mod tests {
         assert!(store.backup_originals(&video).is_err()); // Pending behaviour is unchanged.
         assert_eq!(SessionIdentity::read(&json!({"version":1})).unwrap(), None);
         fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn snapshot_between_backup_and_prepare_blocks_core_writes_and_plain_save() {
+        use crate::spectator_recovery_plan::{Input, InputKind};
+        let (root, video, _, executable, store) = frame_setup();
+        fs::create_dir_all(executable.parent().unwrap()).unwrap(); fs::write(&executable, b"fixture").unwrap();
+        let key = video.with_file_name("cs2_user_keys_0_slot0.vcfg");
+        fs::write(&key, "\"config\" {\"bindings\" {} \"analogbindings\" {}}").unwrap();
+        let before_video = fs::read(&video).unwrap();
+        let cfg = root.join("game/csgo/cfg/mizar_observer.cfg");
+        store.backup_originals(&video).unwrap();
+        let x = Input { kind:InputKind::Key, name:"x".into() };
+        store.capture_spectator_snapshot(&video, &executable, 1, &[x.clone()].into(), &[(x, vec!["preset".into()])].into()).unwrap();
+        assert!(store.prepare_backed_up(&video, &executable, cs2_video::VideoSize::new(1920,1080).unwrap()).is_err());
+        assert!(store.save(&json!({"version":1})).is_err());
+        assert_eq!(fs::read(&video).unwrap(), before_video);
+        assert!(!cfg.exists()); assert!(!store.journal_path().exists());
+        assert!(store.full_spectator_pending());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn coordinated_prepare_refuses_legacy_different_session_and_identity_changes() {
+        use crate::cs2_config_identity::{ConfigIdentity, SessionIdentity};
+        use crate::spectator_recovery_plan::{Input, InputKind};
+        let (root, video, _, executable, store) = frame_setup();
+        fs::create_dir_all(executable.parent().unwrap()).unwrap(); fs::write(&executable, b"fixture").unwrap();
+        let key = video.with_file_name("cs2_user_keys_0_slot0.vcfg");
+        let original = "\"config\" {\"bindings\" {} \"analogbindings\" {}}";
+        let candidate = "\"config\" {\"bindings\" {\"x\" \"preset\"} \"analogbindings\" {}}";
+        fs::write(&key, original).unwrap(); let before_video = fs::read(&video).unwrap();
+        let session = SessionIdentity { session_id:"session-1".into(), config:ConfigIdentity {
+            account:1, video:fs::canonicalize(&video).unwrap(), executable:fs::canonicalize(&executable).unwrap(),
+            keys:fs::canonicalize(&key).unwrap(), slot:0, format:"vcfg".into() }};
+        let x = Input { kind:InputKind::Key, name:"x".into() };
+        let owned = [x.clone()].into(); let applied = [(x, vec!["preset".into()])].into();
+        let size = cs2_video::VideoSize::new(1920,1080).unwrap();
+        store.save(&json!({"version":1})).unwrap();
+        assert!(store.prepare_coordinated(&video, &executable, size, None, &session, &owned, &applied, candidate).is_err());
+        assert_eq!(store.load().unwrap().unwrap(), json!({"version":1}));
+        fs::remove_file(store.journal_path()).unwrap();
+        let mut changed = session.clone(); changed.config.account = 2;
+        assert!(store.prepare_coordinated(&video, &executable, size, None, &changed, &owned, &applied, candidate).is_err());
+        assert!(!store.full_spectator_pending());
+        store.capture_spectator_snapshot_for_session(&video, &executable, 1, &owned, &applied, &session).unwrap();
+        let snapshot = fs::read(store.root.join("spectator-full-pending.json")).unwrap();
+        let mut other = session.clone(); other.session_id = "session-2".into();
+        assert!(store.prepare_coordinated(&video, &executable, size, None, &other, &owned, &applied, candidate).is_err());
+        assert_eq!(fs::read(store.root.join("spectator-full-pending.json")).unwrap(), snapshot);
+        assert!(!store.journal_path().exists()); assert_eq!(fs::read(&video).unwrap(), before_video);
+        assert_eq!(fs::read_to_string(&key).unwrap(), original);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn coordinated_prepare_failure_points_keep_recoverable_originals() {
+        use crate::cs2_config_identity::{ConfigIdentity, SessionIdentity};
+        use crate::spectator_recovery_plan::{Input, InputKind};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static FAIL_AT: AtomicUsize = AtomicUsize::new(0);
+        static COUNT: AtomicUsize = AtomicUsize::new(0);
+        static AFTER: AtomicUsize = AtomicUsize::new(0);
+        fn injected(path: &Path, bytes: &[u8]) -> Result<(), String> {
+            let index = COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+            if FAIL_AT.load(Ordering::SeqCst) == index {
+                match AFTER.load(Ordering::SeqCst) {
+                    0 => return Err("injected_before".into()),
+                    2 => {
+                        // Simulate a successful return without a durable write;
+                        // when bytes already match, force an explicit error.
+                        if fs::read(path).ok().as_deref() == Some(bytes) { return Err("injected_readback".into()); }
+                        return Ok(());
+                    }
+                    _ => (),
+                }
+            }
+            atomic_write(path, bytes)?;
+            if FAIL_AT.load(Ordering::SeqCst) == index && AFTER.load(Ordering::SeqCst) == 1 { return Err("injected_after".into()); }
+            Ok(())
+        }
+        // Discover the exact number of writes from the successful production path.
+        let mut total = 1;
+        for mode in 0..=2 {
+            let mut target = if mode == 0 { 0 } else { 1 };
+            while target <= total {
+                let (root, video, machine, executable, store) = frame_setup();
+                fs::create_dir_all(executable.parent().unwrap()).unwrap(); fs::write(&executable, b"fixture").unwrap();
+                let key = video.with_file_name("cs2_user_keys_0_slot0.vcfg");
+                let original_keys = "\"config\" {\"bindings\" {\"x\" \"personal\" \"extra\" \"keep\"} \"analogbindings\" {}}";
+                let candidate = "\"config\" {\"bindings\" {\"x\" \"preset\"} \"analogbindings\" {}}";
+                fs::write(&key, original_keys).unwrap();
+                let original_video = fs::read(&video).unwrap(); let original_machine = fs::read(&machine).unwrap();
+                let session = SessionIdentity { session_id:"test-session".into(), config:ConfigIdentity {
+                    account:1, video:fs::canonicalize(&video).unwrap(), executable:fs::canonicalize(&executable).unwrap(),
+                    keys:fs::canonicalize(&key).unwrap(), slot:0, format:"vcfg".into() }};
+                let x = Input { kind:InputKind::Key, name:"x".into() };
+                let owned = [x.clone()].into(); let applied = [(x, vec!["preset".into()])].into();
+                let frames = cs2_frame_rate::prepare(&video, &executable, 60).unwrap();
+                FAIL_AT.store(target, Ordering::SeqCst); COUNT.store(0, Ordering::SeqCst); AFTER.store(mode, Ordering::SeqCst);
+                let guard = store.acquire_write_guard().unwrap();
+                let result = store.prepare_coordinated_locked(&guard, &video, &executable,
+                    cs2_video::VideoSize::new(1920,1080).unwrap(), Some(frames), &session, &owned, &applied, candidate, injected);
+                drop(guard);
+                if target == 0 {
+                    result.unwrap(); total = COUNT.load(Ordering::SeqCst); assert!(total >= 5);
+                    let core = store.load().unwrap().unwrap();
+                    assert_eq!(core["configWriteAttempted"], true); assert_eq!(core["launchAttempted"], false);
+                    let record: Value = serde_json::from_slice(&fs::read(store.root.join("spectator-full-pending.json")).unwrap()).unwrap();
+                    assert_eq!(crate::cs2_config_identity::SessionIdentity::read(&core).unwrap(), crate::cs2_config_identity::SessionIdentity::read(&record["payload"]).unwrap());
+                } else {
+                    assert!(result.is_err(), "failure point {target}, mode {mode}");
+                }
+                FAIL_AT.store(0, Ordering::SeqCst);
+                if store.load().unwrap().is_some() { SessionStore::new(root.clone()).restore().unwrap(); }
+                if store.full_spectator_pending() { SessionStore::new(root.clone()).recover_spectator_snapshot(&video, &executable, 1).unwrap(); }
+                assert_eq!(fs::read(&video).unwrap(), original_video);
+                assert_eq!(fs::read(&machine).unwrap(), original_machine);
+                let restored = fs::read_to_string(&key).unwrap();
+                assert!(restored.contains("\"x\" \"personal\"")); assert!(restored.contains("\"extra\" \"keep\""));
+                fs::remove_dir_all(root).unwrap();
+                target += 1;
+            }
+        }
     }
     #[test]
     fn spectator_snapshot_store_restores_after_restart() {
