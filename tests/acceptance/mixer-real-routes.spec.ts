@@ -24,6 +24,7 @@ test('browser uses real companion mixer routes and recovers after an OBS disconn
     () => ({ program: musicProgram(), active: 'waiting', production: false }),
   );
   let offline = false;
+  let disconnectOnWrite = false;
   const channels = Object.fromEntries(
     ['game', 'remoteCommentary', 'microphone'].map((name) => [
       name,
@@ -34,6 +35,10 @@ test('browser uses real companion mixer routes and recovers after an OBS disconn
     mixerRead: async () =>
       offline ? Promise.reject(new Error('offline')) : { revision: 'test-revision', channels },
     mixerWrite: (command: MixerCommand) => {
+      if (disconnectOnWrite) {
+        offline = true;
+        disconnectOnWrite = false;
+      }
       if (offline)
         return Promise.resolve({ status: 'unknown' as const, message: 'OBS 连接未确认。' });
       const channel = channels[command.channel as Exclude<MixerChannel, 'music'>];
@@ -86,11 +91,8 @@ test('browser uses real companion mixer routes and recovers after an OBS disconn
     await expect(page.getByRole('button', { name: '取消静音音乐' })).toBeEnabled({
       timeout: 10000,
     });
-    offline = true;
-    await page
-      .getByRole('button', { name: '静音游戏' })
-      .click()
-      .catch(() => undefined);
+    disconnectOnWrite = true;
+    await page.getByRole('button', { name: '取消静音游戏' }).click();
     await expect(page.getByRole('alert')).toContainText('未确认');
     await expect(page.getByRole('slider', { name: '游戏音量' })).toBeDisabled({ timeout: 6000 });
     offline = false;
