@@ -27,7 +27,13 @@ function files() {
 }
 it('imports an ordinary ZIP atomically, reloads it, and preserves the previous config for every rejected package', async () => {
   const s = await store();
+  await s.update((state) => {
+    state.master = 0.4;
+    state.muted = true;
+  });
   await s.import(musicZip(files()));
+  expect(s.state.master).toBe(0.4);
+  expect(s.state.muted).toBe(true);
   expect(s.state.config.groups.waiting.tracks[0]?.name).toBe('等待.wav');
   const before = await readFile(join(s.directory, 'state.json'));
   const bad = [
