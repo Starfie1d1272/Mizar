@@ -1082,7 +1082,7 @@ impl SessionStore {
         if let Some(core) = self.load()? {
             if core["fullSnapshot"] != true || unconfirmed_launch(&core) { return Err("coordinated_recovery_required".into()); }
             crate::spectator_snapshot::handoff(&self.root, video, executable, account, &core, atomic_write)?;
-            if crate::spectator_snapshot::handed_off_unwritten(&self.root)? {
+            if crate::spectator_snapshot::handed_off_unwritten(&self.root, &core)? {
                 let playback = self.preserve_playback_cleanup_locked(&guard, &core);
                 if let Some(warning) = self.finish_core_restore_locked(&guard, playback, None)? { return Ok(Some(warning)); }
                 if !crate::spectator_snapshot::finish_unwritten_preparation(&self.root, video, executable, account, atomic_write)? { return Err("snapshot_changed".into()); }
@@ -1555,7 +1555,7 @@ mod tests {
             record["sha256"] = json!(format!("{:x}", Sha256::digest(serde_json::to_vec(&record["payload"]).unwrap())));
             fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
             crate::spectator_snapshot::handoff(&store.root, &video, &executable, 1, &core, atomic_write).unwrap();
-            assert_eq!(crate::spectator_snapshot::handed_off_unwritten(&store.root).unwrap(), expected);
+            assert_eq!(crate::spectator_snapshot::handed_off_unwritten(&store.root, &core).unwrap(), expected);
             if expected {
                 let manual = fs::read(&key).unwrap();
                 fs::remove_file(store.journal_path()).unwrap(); // interruption after core cleanup

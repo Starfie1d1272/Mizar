@@ -572,7 +572,7 @@ pub(crate) fn finish_unwritten_preparation(
 
 /// Only a verified handoff and two explicit false write markers prove no
 /// configuration was written. Missing or asymmetric markers remain conservative.
-pub(crate) fn handed_off_unwritten(root: &Path) -> Result<bool, String> {
+pub(crate) fn handed_off_unwritten(root: &Path, core: &Value) -> Result<bool, String> {
     if !has_terminal(root)? { return Ok(false); }
     let bytes = regular(&pending(root), RECORD_LIMIT)?;
     let record: Value = serde_json::from_slice(&bytes).map_err(|_| "snapshot_invalid")?;
@@ -581,6 +581,13 @@ pub(crate) fn handed_off_unwritten(root: &Path) -> Result<bool, String> {
         return Err("snapshot_invalid".into());
     }
     let terminal = &payload["coreTerminal"];
+    let full_session = crate::cs2_config_identity::SessionIdentity::read(payload).map_err(str::to_string)?.ok_or("identity_changed")?;
+    let core_session = crate::cs2_config_identity::SessionIdentity::read(core).map_err(str::to_string)?.ok_or("identity_changed")?;
+    if full_session != core_session || payload["identity"] != full_session.config.value()
+        || core["configWriteAttempted"] != terminal["configWriteAttempted"]
+        || core["launchAttempted"] != terminal["launchAttempted"]
+        || core["pid"] != terminal["pid"] || core["created"] != terminal["created"]
+        || regular(&pending(root), RECORD_LIMIT)? != bytes { return Err("snapshot_changed".into()); }
     Ok(payload["coordinatedWriteAttempted"] == false
         && terminal["configWriteAttempted"] == false && terminal["launchAttempted"] == false
         && terminal["pid"].is_null() && terminal["created"].is_null())
