@@ -14,14 +14,16 @@ function fixture() {
   let muted = false;
   const writes: string[] = [];
   const store = {
-    read: async () => saved,
-    write: async (value: AudioLease | null) => {
+    read: () => Promise.resolve(saved),
+    write: (value: AudioLease | null) => {
       saved = value;
+      return Promise.resolve();
     },
   };
   const policy = new GameAudioPolicy(store);
   const obs: ObsRpc = {
     call: async (type, data) => {
+      await Promise.resolve();
       if (type === 'GetInputVolume') return { inputVolumeMul: volume };
       if (type === 'GetInputMute') return { inputMuted: muted };
       if (type === 'SetInputVolume') {

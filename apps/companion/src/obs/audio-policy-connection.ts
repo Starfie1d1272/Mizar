@@ -99,7 +99,7 @@ export class GameAudioConnection {
         }
         this.signature = signature;
       }
-      const client = this.client!;
+      const client = this.client;
       const epoch = this.epoch;
       const current = () =>
         !this.closed && this.client === client && this.epoch === epoch && valid();
@@ -139,7 +139,13 @@ export class GameAudioConnection {
         collection.currentSceneCollectionName !== binding.collection ||
         !Array.isArray(list.inputs) ||
         list.inputs.filter(
-          (input) => input.inputUuid === binding.inputUuid && input.inputKind === binding.inputKind,
+          (input: unknown) =>
+            typeof input === 'object' &&
+            input !== null &&
+            'inputUuid' in input &&
+            'inputKind' in input &&
+            input.inputUuid === binding.inputUuid &&
+            input.inputKind === binding.inputKind,
         ).length !== 1 ||
         !current()
       )

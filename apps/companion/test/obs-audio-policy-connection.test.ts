@@ -16,13 +16,14 @@ class Fake extends EventEmitter {
   muted = false;
   collection = 'A';
   writes = 0;
-  async connect() {
-    return {};
+  connect() {
+    return Promise.resolve({});
   }
-  async disconnect() {
-    return;
+  disconnect() {
+    return Promise.resolve();
   }
   async call(name: string, data?: Record<string, unknown>) {
+    await Promise.resolve();
     if (name === 'GetVersion')
       return {
         availableRequests: [
@@ -57,14 +58,16 @@ class Fake extends EventEmitter {
 function setup() {
   let lease: AudioLease | null = null;
   const owner = new GameAudioPolicy({
-    read: async () => lease,
-    write: async (next) => {
+    read: () => Promise.resolve(lease),
+    write: (next) => {
       lease = next;
+      return Promise.resolve();
     },
   });
   const obs = new Fake();
   const config = {
-    read: async () => ({ host: '127.0.0.1', port: 4455, password: '', executablePath: null }),
+    read: () =>
+      Promise.resolve({ host: '127.0.0.1', port: 4455, password: '', executablePath: null }),
   } as ObsConfigStore;
   return {
     owner,

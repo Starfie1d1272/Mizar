@@ -26,7 +26,9 @@ export function ObsGameAudioPolicy() {
     }
   }
   useEffect(() => {
-    void refresh().catch(() => setMessage('无法读取中场音频设置。'));
+    void Promise.resolve()
+      .then(refresh)
+      .catch(() => setMessage('无法读取中场音频设置。'));
     const timer = setInterval(() => {
       void fetch('/local/v1/obs/game-audio-policy', { cache: 'no-store' })
         .then((response) => (response.ok ? response.json() : null))
@@ -103,7 +105,7 @@ export function ObsGameAudioPolicy() {
           <Button
             disabled={busy}
             onClick={() =>
-              void send('/operator/obs/game-audio-release', { revision: status!.revision })
+              void send('/operator/obs/game-audio-release', { revision: status.revision })
             }
           >
             恢复自动控制
