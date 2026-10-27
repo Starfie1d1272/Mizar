@@ -119,6 +119,11 @@ it('shares BP playback across repeated compact Takes and clears on scene exit', 
   expect((await scene.setCompact(false, scene.get().revision)).ok).toBe(true);
   expect(bp.get().state).toBe('hidden');
   expect((await scene.setCompact(true, scene.get().revision)).ok).toBe(true);
+  scene.compactDisconnected();
+  expect(scene.get().bpCompact).toBe('unknown');
+  expect(bp.get().state).toBe('hidden');
+  expect((await scene.setCompact(false, scene.get().revision)).ok).toBe(true);
+  expect((await scene.setCompact(true, scene.get().revision)).ok).toBe(true);
   scene.forceScene('waiting');
   expect(bp.get().state).toBe('hidden');
   expect(scene.get().bpCompact).toBe('unknown');
@@ -151,4 +156,30 @@ it('activates an external compact source without selecting or mutating a managed
   expect((await scene.setCompact(false, scene.get().revision)).ok).toBe(true);
   expect(bp.get().state).toBe('hidden');
   expect(overlay).not.toHaveBeenCalled();
+});
+
+it('does not start BP when observation is lost during the Take', async () => {
+  const { getBpDemoProjection } = await import('../src/bp/demo-projection.js');
+  const bp = new BpSession(() => getBpDemoProjection('bo3'));
+  const projections = {
+    getCurrent: () => ({
+      operator: {
+        runtime: { telemetryFreshness: 'fresh' },
+        matchContext: { freshness: 'fresh' },
+        identity: { state: 'matched' },
+      },
+      program: { series: { bindingState: 'bound', status: 'live', maps: [] } },
+    }),
+    getBpAssessment: () => ({ readiness: 'ready' }),
+  } as unknown as ProjectionCoordinator;
+  const overlay = vi.fn((visible: boolean) => {
+    if (visible) scene.compactDisconnected();
+    return Promise.resolve();
+  });
+  const scene = new ProgramSceneController(projections, bp, async () => {}, undefined, overlay);
+  await scene.select('gameplay', scene.get().revision);
+  expect((await scene.setCompact(true, scene.get().revision)).ok).toBe(false);
+  expect(bp.get().state).toBe('hidden');
+  expect(scene.get().bpCompact).toBe('unknown');
+  expect(overlay).toHaveBeenCalledWith(false);
 });

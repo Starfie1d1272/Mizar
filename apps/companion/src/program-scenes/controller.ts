@@ -58,6 +58,7 @@ export class ProgramSceneController {
   }
   private active: ProgramSceneId = 'waiting';
   private bpCompact: 'off' | 'on' | 'unknown' = 'off';
+  private compactPreparing = false;
   private bpCompactTarget: 'managed' | 'external' = 'managed';
   private revision = randomUUID();
   private introRevision: string | undefined;
@@ -186,6 +187,14 @@ export class ProgramSceneController {
     return result;
   }
 
+  compactDisconnected(): void {
+    if (!this.compactPreparing && (this.bpCompactTarget !== 'managed' || this.bpCompact === 'off'))
+      return;
+    this.bpSession.finishSceneExit();
+    this.bpCompact = 'unknown';
+    this.revision = randomUUID();
+  }
+
   setCompact(
     visible: boolean,
     expectedRevision: string,
@@ -209,6 +218,7 @@ export class ProgramSceneController {
       if (visible && this.bpCompact !== 'on' && bp.state !== 'hidden')
         return { ok: false as const, message: 'BP 正在其他画面播放，请先关闭。' };
       try {
+        this.compactPreparing = actualTarget === 'managed';
         if (actualTarget === 'managed') await this.switchBpCompact!(visible);
         if (
           expectedRevision !== this.revision ||
@@ -239,6 +249,8 @@ export class ProgramSceneController {
           ok: false as const,
           message: error instanceof Error ? error.message : '状态待确认。',
         };
+      } finally {
+        this.compactPreparing = false;
       }
     });
     this.queue = result.catch(() => undefined);

@@ -464,9 +464,7 @@ function WorkspaceDockContent() {
         </div>
         <details className="workspace-bp-compact">
           <summary>紧凑 BP 底栏</summary>
-          <p>
-            预览为完整 BP，不影响播出。比赛 HUD 布局可能占用底部，请先在 OBS 中关闭比赛 HUD 来源。
-          </p>
+          <p>预览为完整 BP，不影响播出。受管比赛画面 Take 时会临时隐藏 HUD；关闭后按原状态恢复。</p>
           {bp?.projection ? (
             <div className="workspace-bp-compact-preview" aria-label="紧凑 BP 预览">
               <div>
