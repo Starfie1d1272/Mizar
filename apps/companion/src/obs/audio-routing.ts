@@ -47,6 +47,7 @@ export class ObsAudioRouting {
     return () => this.listeners.delete(listener);
   }
   private state: State | undefined;
+  private automaticEligible = false;
   private selections = new Map<
     string,
     { input: Input; collection: string; endpoint: string; until: number }
@@ -69,6 +70,7 @@ export class ObsAudioRouting {
         revision: randomUUID(),
         bindings: { game: null, remoteCommentary: null, microphone: null },
       };
+      this.automaticEligible = true;
     }
     return this.state;
   }
@@ -79,6 +81,41 @@ export class ObsAudioRouting {
   async gameBinding() {
     const state = await this.load();
     return { revision: state.revision, binding: state.bindings.game };
+  }
+  /** Seed a never-configured routing store once; explicit user choices always win. */
+  async seedAutomatic(obs: ObsRpc, endpoint: string, ids: Record<ObsAudioRole, string>) {
+    const state = await this.load();
+    if (!this.automaticEligible || roles.some((role) => state.bindings[role])) return;
+    const current = await this.inputs(obs);
+    if (new Set(Object.values(ids)).size !== roles.length)
+      throw new Error('audio_binding_duplicate');
+    const bindings = {} as State['bindings'];
+    for (const role of roles) {
+      const input = current.candidates.find((item) => item.inputUuid === ids[role]);
+      if (!input) throw new Error('audio_selection_changed');
+      bindings[role] = {
+        inputUuid: input.inputUuid,
+        inputKind: input.inputKind,
+        collection: current.collection,
+        endpoint,
+      };
+    }
+    if (
+      (await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== current.collection
+    )
+      throw new Error('audio_selection_changed');
+    const next: State = { revision: randomUUID(), bindings };
+    await mkdir(dirname(this.path), { recursive: true });
+    const temp = `${this.path}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temp, `${JSON.stringify(next)}\n`, { mode: 0o600 });
+      await rename(temp, this.path);
+    } finally {
+      await rm(temp, { force: true });
+    }
+    this.state = next;
+    this.automaticEligible = false;
+    for (const listener of this.listeners) listener();
   }
   private async inputs(obs: ObsRpc) {
     const version = await obs.call('GetVersion');
@@ -273,6 +310,7 @@ export class ObsAudioRouting {
       await rm(temp, { force: true });
     }
     this.state = next;
+    this.automaticEligible = false;
     for (const listener of this.listeners) listener();
   }
 }

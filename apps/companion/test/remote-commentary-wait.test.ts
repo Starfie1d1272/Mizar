@@ -70,6 +70,7 @@ it('completes only the current waiting intent and leaves deleted or changed targ
     window = '';
     expect(await discoverWaitingCommentary(obs, owner, journal, 'local')).toBe('complete');
     expect(writes).toEqual(['TS:Qt:teamspeak.exe']);
+    expect(await discoverWaitingCommentary(obs, owner, journal, 'local')).toBe('complete');
     window = '';
     expect(await discoverWaitingCommentary(obs, owner, journal, 'local')).toBe('stopped');
     await writeWaiting();

@@ -25,6 +25,11 @@ test('explicitly selects an OBS source and reports stale bindings', async ({ pag
   };
   let bound = false;
   let policy = { mode: 'keep' } as { mode: string; db?: number };
+  await page.route('**/local/v1/obs/remote-commentary', (route) =>
+    route.fulfill({
+      json: { revision, preference: { mode: bound ? 'existingInput' : 'autoTeamspeak' } },
+    }),
+  );
   await page.route('**/local/v1/obs/game-audio-policy', (route) =>
     route.fulfill({ json: { ready: true, policy, revision, ownership: 'idle' } }),
   );
@@ -64,7 +69,7 @@ test('explicitly selects an OBS source and reports stale bindings', async ({ pag
   await page.goto('/settings?tab=obs');
   await page.getByRole('button', { name: '刷新 OBS 音频来源' }).click();
   await expect(page.getByText(/当前 OBS：ws:/)).toBeVisible();
-  await page.getByLabel('远端解说（TeamSpeak）').selectOption(status.candidates[1]!.selectionId);
+  await page.getByLabel('远端解说音频').selectOption(status.candidates[1]!.selectionId);
   await expect(page.getByText('已绑定：TeamSpeak 6')).toBeVisible();
   await expect(page.getByText(/桌面音频可能包含/)).toBeVisible();
   await page.getByLabel('中场策略').selectOption('attenuate');

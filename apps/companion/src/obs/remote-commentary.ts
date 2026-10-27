@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { link, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { z } from 'zod';
 import type { ObsRpc } from './reconcile.js';
@@ -52,7 +52,19 @@ export class RemoteCommentary {
       this.state = schema.parse(JSON.parse(await readFile(this.path, 'utf8')));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      this.state = { revision: randomUUID(), preference: { mode: 'autoTeamspeak' } };
+      const initial: State = { revision: randomUUID(), preference: { mode: 'autoTeamspeak' } };
+      await mkdir(dirname(this.path), { recursive: true });
+      const temp = `${this.path}.${randomUUID()}.tmp`;
+      try {
+        await writeFile(temp, `${JSON.stringify(initial)}\n`, { flag: 'wx', mode: 0o600 });
+        await link(temp, this.path);
+        this.state = initial;
+      } catch (writeError) {
+        if ((writeError as NodeJS.ErrnoException).code !== 'EEXIST') throw writeError;
+        this.state = schema.parse(JSON.parse(await readFile(this.path, 'utf8')));
+      } finally {
+        await rm(temp, { force: true });
+      }
     }
     return this.state;
   }

@@ -162,7 +162,6 @@ export async function prepareRemoteCommentary(
       sceneItemEnabled: false,
     });
   }
-  if (!pendingMessage) await rm(`${journal}.waiting`, { force: true });
   if (!pendingMessage && target) onReady?.(target, state.revision);
   return pending(pendingMessage);
 }

@@ -18,10 +18,21 @@ export function observeAudioMigration(source: MigrationEventSource): MigrationOb
       for (const name of [
         'CurrentSceneCollectionChanging',
         'CurrentSceneCollectionChanged',
+        'InputCreated',
         'InputRemoved',
         'InputSettingsChanged',
+        'InputMuteStateChanged',
+        'InputVolumeChanged',
+        'InputAudioTracksChanged',
+        'InputAudioMonitorTypeChanged',
+        'SceneCreated',
+        'SceneItemCreated',
         'SceneItemRemoved',
         'SceneRemoved',
+        'SourceFilterCreated',
+        'SourceFilterRemoved',
+        'SourceFilterEnableStateChanged',
+        'SourceFilterSettingsChanged',
       ])
         on(name, signal({ type: 'identityChanged' }));
       for (const name of ['StreamStateChanged', 'RecordStateChanged'])

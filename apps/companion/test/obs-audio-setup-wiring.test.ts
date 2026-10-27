@@ -6,6 +6,9 @@ import { expect, it, vi } from 'vitest';
 import { obsDesiredScenes, OBS_CAPTURE_INPUT } from '../src/obs/desired-state.js';
 import { ObsConfigStore } from '../src/obs/config.js';
 import { RemoteCommentary } from '../src/obs/remote-commentary.js';
+import { ObsAudioRouting } from '../src/obs/audio-routing.js';
+import { GameAudioController } from '../src/obs/audio-policy-controller.js';
+import { EventSubscription } from 'obs-websocket-js';
 
 const fixture = vi.hoisted(() => ({ client: null as FakeObs | null }));
 vi.mock('obs-websocket-js', async (original) => {
@@ -19,15 +22,18 @@ vi.mock('obs-websocket-js', async (original) => {
     },
   };
 });
-vi.mock('../src/obs/reconcile.js', async (original) => ({
-  ...(await original<typeof import('../src/obs/reconcile.js')>()),
-  ensureObsConfiguration: () => Promise.resolve([]),
-}));
 import { ObsAdapter } from '../src/obs/adapter.js';
 
 const base = 'http://127.0.0.1:3000';
 class FakeObs extends EventEmitter {
   active = false;
+  interruptWrite = false;
+  manualOverride = false;
+  subscriptions = 0;
+  collection = 'Mizar';
+  currentScene = '';
+  transforms = new Map<number, Record<string, unknown>>();
+  muted = new Map<string, boolean>();
   windows = [
     { itemName: 'TeamSpeak', itemValue: 'TeamSpeak:Qt:ts3client_win64.exe', itemEnabled: true },
   ];
@@ -37,11 +43,21 @@ class FakeObs extends EventEmitter {
   >();
   scenes = new Map<
     string,
-    { sourceName: string; sourceUuid: string; sceneItemId: number; sceneItemEnabled: boolean }[]
+    {
+      sourceName: string;
+      sourceUuid: string;
+      sceneItemId: number;
+      sceneItemEnabled: boolean;
+      sceneItemIndex: number;
+    }[]
   >();
   id = 0;
-  constructor() {
+  constructor(empty = false) {
     super();
+    if (empty) {
+      this.collection = 'Other';
+      return;
+    }
     this.addInput(OBS_CAPTURE_INPUT, 'game_capture', {
       capture_audio: false,
       window: 'Counter-Strike 2:SDL_app:cs2.exe',
@@ -66,12 +82,14 @@ class FakeObs extends EventEmitter {
       sourceUuid: this.inputs.get(name)!.inputUuid,
       sceneItemId: ++this.id,
       sceneItemEnabled: enabled,
+      sceneItemIndex: this.scenes.get(scene)!.length,
     };
     this.scenes.get(scene)!.push(item);
     return item;
   }
-  async connect() {
+  async connect(_endpoint?: string, _password?: string, options?: { eventSubscriptions: number }) {
     await Promise.resolve();
+    this.subscriptions = options?.eventSubscriptions ?? EventSubscription.All;
     return {};
   }
   async disconnect() {
@@ -85,14 +103,64 @@ class FakeObs extends EventEmitter {
     );
     switch (type) {
       case 'GetSceneCollectionList':
-        return { currentSceneCollectionName: 'Mizar' };
+        return { currentSceneCollectionName: this.collection, sceneCollections: [this.collection] };
+      case 'CreateSceneCollection':
+      case 'SetCurrentSceneCollection':
+        this.collection = String(data.sceneCollectionName);
+        return {};
+      case 'CreateScene':
+        this.scenes.set(String(data.sceneName), []);
+        return {};
+      case 'GetSceneTransitionList':
+        return {
+          transitions: [
+            { transitionKind: 'cut_transition', transitionName: 'Cut' },
+            { transitionKind: 'fade_transition', transitionName: 'Fade' },
+          ],
+        };
+      case 'GetVideoSettings':
+        return {
+          baseWidth: 1920,
+          baseHeight: 1080,
+          outputWidth: 1920,
+          outputHeight: 1080,
+          fpsNumerator: 60,
+          fpsDenominator: 1,
+        };
+      case 'SetSceneSceneTransitionOverride':
+        return {};
+      case 'SetCurrentProgramScene':
+        this.currentScene = String(data.sceneName);
+        return {};
+      case 'GetCurrentProgramScene':
+        return { currentProgramSceneName: this.currentScene };
+      case 'GetCurrentSceneTransitionCursor':
+        return { transitionCursor: 1 };
+      case 'GetSceneItemTransform':
+        return { sceneItemTransform: this.transforms.get(Number(data.sceneItemId)) };
+      case 'SetSceneItemTransform':
+        this.transforms.set(
+          Number(data.sceneItemId),
+          data.sceneItemTransform as Record<string, unknown>,
+        );
+        return {};
+      case 'SetSceneItemIndex': {
+        const item = this.scenes
+          .get(String(data.sceneName))!
+          .find((x) => x.sceneItemId === data.sceneItemId)!;
+        item.sceneItemIndex = Number(data.sceneItemIndex);
+        return {};
+      }
       case 'GetStreamStatus':
       case 'GetRecordStatus':
         return { outputActive: this.active };
       case 'GetInputList':
         return { inputs: [...this.inputs.values()] };
       case 'GetSceneList':
-        return { scenes: [...this.scenes.keys()].map((sceneName) => ({ sceneName })) };
+        return {
+          currentProgramSceneName: this.currentScene,
+          scenes: [...this.scenes.keys()].map((sceneName) => ({ sceneName })),
+        };
       case 'GetSceneItemList':
         return { sceneItems: this.scenes.get(String(data.sceneName))!.map((x) => ({ ...x })) };
       case 'GetSpecialInputs':
@@ -100,7 +168,14 @@ class FakeObs extends EventEmitter {
       case 'GetInputSettings':
         return { inputSettings: input!.settings };
       case 'GetInputMute':
-        return { inputMuted: false };
+        return { inputMuted: this.muted.get(String(data.inputUuid)) ?? false };
+      case 'SetInputMute':
+        this.muted.set(String(data.inputUuid), Boolean(data.inputMuted));
+        this.emit('InputMuteStateChanged', {
+          inputUuid: data.inputUuid,
+          inputMuted: data.inputMuted,
+        });
+        return {};
       case 'GetInputVolume':
         return { inputVolumeMul: 1 };
       case 'GetInputAudioMonitorType':
@@ -119,6 +194,15 @@ class FakeObs extends EventEmitter {
             'GetInputPropertiesListPropertyItems',
             'CreateInput',
             'GetInputKindList',
+            'GetSceneCollectionList',
+            'GetSpecialInputs',
+            'GetSceneList',
+            'GetSceneItemList',
+            'GetGroupSceneItemList',
+            'GetInputVolume',
+            'SetInputVolume',
+            'GetInputMute',
+            'SetInputMute',
           ],
         };
       case 'GetInputKindList':
@@ -153,11 +237,23 @@ class FakeObs extends EventEmitter {
           .get(String(data.sceneName))!
           .find((x) => x.sceneItemId === data.sceneItemId)!;
         item.sceneItemEnabled = Boolean(data.sceneItemEnabled);
-        this.emit('SceneItemEnableStateChanged', {
+        const event = {
           sceneName: data.sceneName,
           sceneItemId: data.sceneItemId,
           sceneItemEnabled: data.sceneItemEnabled,
-        });
+        };
+        if (this.subscriptions & EventSubscription.SceneItems) {
+          this.emit('SceneItemEnableStateChanged', event);
+          if (this.manualOverride) {
+            this.manualOverride = false;
+            this.emit('SceneItemEnableStateChanged', { ...event, sceneItemEnabled: false });
+            this.emit('SceneItemEnableStateChanged', { ...event, sceneItemEnabled: true });
+          }
+        }
+        if (this.interruptWrite) {
+          this.interruptWrite = false;
+          this.emit('StreamStateChanged', { outputActive: true });
+        }
         return {};
       }
       default:
@@ -226,6 +322,8 @@ it('keeps a custom desktop mix and reports pending without enabling new audio', 
     expect((await adapter.ensure()).some((finding) => finding.code === 'commentary_pending')).toBe(
       true,
     );
+    expect(obs.subscriptions & EventSubscription.Config).toBeTruthy();
+    expect(obs.subscriptions & EventSubscription.SceneItems).toBeTruthy();
     for (const items of obs.scenes.values()) {
       expect(
         items.find((item) => item.sourceName === 'Mizar · Desktop Audio')!.sceneItemEnabled,
@@ -236,6 +334,255 @@ it('keeps a custom desktop mix and reports pending without enabling new audio', 
         ),
       ).toHaveLength(0);
     }
+    await adapter.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+it('creates scenes and audio through the real configure owner and seeds game policy binding', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'mizar-complete-'));
+  try {
+    const obs = new FakeObs(true);
+    fixture.client = obs;
+    const routing = new ObsAudioRouting(join(dir, 'routing'));
+    const config = new ObsConfigStore(join(dir, 'obs.json'));
+    const adapter = new ObsAdapter(config, base, () => {}, routing, {
+      owner: new RemoteCommentary(join(dir, 'preference')),
+      journal: join(dir, 'probe'),
+    });
+    expect(await adapter.ensure()).toEqual([]);
+    expect(obs.scenes.size).toBe(obsDesiredScenes(base).length);
+    const game = [...obs.inputs.values()].find(
+      (x) =>
+        x.inputKind === 'wasapi_process_output_capture' &&
+        x.settings.window === 'Counter-Strike 2:SDL_app:cs2.exe',
+    )!;
+    expect((await routing.gameBinding()).binding?.inputUuid).toBe(game.inputUuid);
+    for (const items of obs.scenes.values()) {
+      expect(
+        items.filter((item) => item.sourceUuid === game.inputUuid && item.sceneItemEnabled),
+      ).toHaveLength(1);
+      expect(
+        items.find((item) => item.sourceName === 'Mizar · Desktop Audio')!.sceneItemEnabled,
+      ).toBe(false);
+    }
+    const controller = new GameAudioController(routing, config, join(dir, 'policy'));
+    await controller.load();
+    await controller.configure({ mode: 'mute' }, controller.status().revision);
+    controller.tick('halftime');
+    await vi.waitFor(() => expect(obs.muted.get(game.inputUuid)).toBe(true));
+    controller.tick('gameplay');
+    await vi.waitFor(() => expect(obs.muted.get(game.inputUuid)).toBe(false));
+    controller.close();
+    const routingStatus = await adapter.readAudioRouting();
+    await adapter.bindAudio({ role: 'game', selectionId: null, revision: routingStatus.revision });
+    expect(await adapter.ensure()).toEqual([]);
+    expect((await routing.gameBinding()).binding).toBeNull();
+    expect((await new ObsAudioRouting(join(dir, 'routing')).gameBinding()).binding).toBeNull();
+    await adapter.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+it('resumes a waiting TS setup and preserves a manual cancellation', async () => {
+  for (const cancel of [false, true]) {
+    const dir = await mkdtemp(join(tmpdir(), 'mizar-wait-wiring-'));
+    try {
+      const obs = new FakeObs(true);
+      obs.windows = [];
+      fixture.client = obs;
+      const owner = new RemoteCommentary(join(dir, 'preference'));
+      const routing = new ObsAudioRouting(join(dir, 'routing'));
+      const adapter = new ObsAdapter(
+        new ObsConfigStore(join(dir, 'obs.json')),
+        base,
+        () => {},
+        routing,
+        { owner, journal: join(dir, 'probe') },
+      );
+      expect(
+        (await adapter.ensure()).some((finding) => finding.code === 'commentary_pending'),
+      ).toBe(true);
+      const probe = [...obs.inputs.values()].find(
+        (x) => x.inputKind === 'wasapi_process_output_capture',
+      )!;
+      if (cancel) await adapter.setCommentaryMode('disabled', (await owner.get()).revision);
+      obs.windows = [
+        { itemName: 'TeamSpeak', itemValue: 'TeamSpeak:Qt:ts3client_win64.exe', itemEnabled: true },
+      ];
+      adapter.startCommentaryRecovery();
+      if (!cancel) {
+        await vi.waitFor(async () => expect((await routing.gameBinding()).binding).not.toBeNull());
+        expect(probe.settings.window).toBe('TeamSpeak:Qt:ts3client_win64.exe');
+        for (const items of obs.scenes.values()) {
+          expect(items.find((item) => item.sourceUuid === probe.inputUuid)!.sceneItemEnabled).toBe(
+            true,
+          );
+          expect(
+            items.find((item) => item.sourceName === 'Mizar · Desktop Audio')!.sceneItemEnabled,
+          ).toBe(false);
+        }
+      } else {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(probe.settings.window).toBeUndefined();
+        expect((await routing.gameBinding()).binding).toBeNull();
+        for (const items of obs.scenes.values())
+          expect(
+            items.find((item) => item.sourceName === 'Mizar · Desktop Audio')!.sceneItemEnabled,
+          ).toBe(true);
+      }
+      await adapter.close();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+it('retries a confirmed rollback using the owned inert game source', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'mizar-rollback-wiring-'));
+  try {
+    const obs = new FakeObs();
+    obs.interruptWrite = true;
+    fixture.client = obs;
+    const adapter = new ObsAdapter(
+      new ObsConfigStore(join(dir, 'obs.json')),
+      base,
+      () => {},
+      undefined,
+      { owner: new RemoteCommentary(join(dir, 'preference')), journal: join(dir, 'probe') },
+    );
+    expect((await adapter.ensure()).some((finding) => finding.code === 'commentary_pending')).toBe(
+      true,
+    );
+    for (const items of obs.scenes.values())
+      expect(
+        items.find((item) => item.sourceName === 'Mizar · Desktop Audio')!.sceneItemEnabled,
+      ).toBe(true);
+    expect(await adapter.ensure()).toEqual([]);
+    for (const items of obs.scenes.values())
+      expect(
+        items.find((item) => item.sourceName === 'Mizar · Desktop Audio')!.sceneItemEnabled,
+      ).toBe(false);
+    await adapter.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+it('keeps the journal and yields when a user changes a migrated item away and back', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'mizar-manual-wiring-'));
+  try {
+    const obs = new FakeObs();
+    obs.manualOverride = true;
+    fixture.client = obs;
+    const journal = join(dir, 'probe');
+    const adapter = new ObsAdapter(
+      new ObsConfigStore(join(dir, 'obs.json')),
+      base,
+      () => {},
+      undefined,
+      { owner: new RemoteCommentary(join(dir, 'preference')), journal },
+    );
+    expect((await adapter.ensure()).some((finding) => finding.code === 'commentary_pending')).toBe(
+      true,
+    );
+    const { AudioMigration } = await import('../src/obs/audio-migration.js');
+    const pending = await new AudioMigration(`${journal}.migration`).pending();
+    expect(pending?.fields.some((field) => field.externalChanged)).toBe(true);
+    const changed = pending!.fields.find((field) => field.externalChanged)!;
+    expect(
+      obs.scenes.get(changed.sceneName)!.find((item) => item.sceneItemId === changed.sceneItemId)!
+        .sceneItemEnabled,
+    ).toBe(true);
+    for (const items of obs.scenes.values())
+      expect(
+        items.find((item) => item.sourceName === 'Mizar · Desktop Audio')!.sceneItemEnabled,
+      ).toBe(true);
+    await adapter.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+it('resumes waiting TS after the companion restarts with the persisted default intent', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'mizar-wait-restart-'));
+  try {
+    const obs = new FakeObs(true);
+    obs.windows = [];
+    fixture.client = obs;
+    const preference = join(dir, 'preference');
+    const journal = join(dir, 'probe');
+    const routingPath = join(dir, 'routing');
+    const firstOwner = new RemoteCommentary(preference);
+    const first = new ObsAdapter(
+      new ObsConfigStore(join(dir, 'obs.json')),
+      base,
+      () => {},
+      new ObsAudioRouting(routingPath),
+      { owner: firstOwner, journal },
+    );
+    expect((await first.ensure()).some((finding) => finding.code === 'commentary_pending')).toBe(
+      true,
+    );
+    const revision = (await firstOwner.get()).revision;
+    await first.close();
+    const nextOwner = new RemoteCommentary(preference);
+    expect((await nextOwner.get()).revision).toBe(revision);
+    const routing = new ObsAudioRouting(routingPath);
+    const next = new ObsAdapter(
+      new ObsConfigStore(join(dir, 'obs.json')),
+      base,
+      () => {},
+      routing,
+      { owner: nextOwner, journal },
+    );
+    obs.windows = [
+      { itemName: 'TeamSpeak', itemValue: 'TeamSpeak:Qt:ts3client_win64.exe', itemEnabled: true },
+    ];
+    next.startCommentaryRecovery();
+    await vi.waitFor(async () => expect((await routing.gameBinding()).binding).not.toBeNull());
+    for (const items of obs.scenes.values())
+      expect(
+        items.find((item) => item.sourceName === 'Mizar · Desktop Audio')!.sceneItemEnabled,
+      ).toBe(false);
+    await next.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+it('does not migrate a desktop source explicitly bound by the user', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'mizar-bound-desktop-'));
+  try {
+    const obs = new FakeObs();
+    fixture.client = obs;
+    const routing = new ObsAudioRouting(join(dir, 'routing'));
+    const adapter = new ObsAdapter(
+      new ObsConfigStore(join(dir, 'obs.json')),
+      base,
+      () => {},
+      routing,
+      { owner: new RemoteCommentary(join(dir, 'preference')), journal: join(dir, 'probe') },
+    );
+    const status = await adapter.readAudioRouting();
+    const desktop = status.candidates.find(
+      (candidate) => candidate.name === 'Mizar · Desktop Audio',
+    )!;
+    await adapter.bindAudio({
+      role: 'game',
+      selectionId: desktop.selectionId,
+      revision: status.revision,
+    });
+    expect((await adapter.ensure()).some((finding) => finding.code === 'commentary_pending')).toBe(
+      true,
+    );
+    expect((await routing.gameBinding()).binding?.inputUuid).toBe(desktop.uuid);
+    for (const items of obs.scenes.values())
+      expect(
+        items.find((item) => item.sourceName === 'Mizar · Desktop Audio')!.sceneItemEnabled,
+      ).toBe(true);
     await adapter.close();
   } finally {
     await rm(dir, { recursive: true, force: true });

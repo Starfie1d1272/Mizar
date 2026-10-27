@@ -1,10 +1,11 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import { OBS_CAPTURE_INPUT, OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
 import { inspectLegacyAudioTemplate } from './audio-template.js';
 import { AudioMigration, type MigrationObserver } from './audio-migration.js';
 import { createCommentaryProbe, RemoteCommentary } from './remote-commentary.js';
 import { prepareRemoteCommentary } from './remote-commentary-setup.js';
 import type { ObsFinding, ObsRpc } from './reconcile.js';
+import type { ObsAudioRole } from '@mizar/protocol/obs';
 
 function records(value: unknown): Record<string, unknown>[] {
   if (!Array.isArray(value) || value.some((v: unknown) => !v || typeof v !== 'object'))
@@ -20,6 +21,8 @@ export async function configureIndependentAudio(
   owner: RemoteCommentary,
   journal: string,
   baseUrl: string,
+  onReady?: (ids: Record<ObsAudioRole, string>) => Promise<void>,
+  allowMigration: () => Promise<boolean> = () => Promise.resolve(true),
 ): Promise<ObsFinding[]> {
   const migration = new AudioMigration(`${journal}.migration`);
   if (await migration.pending())
@@ -45,7 +48,7 @@ export async function configureIndependentAudio(
   if (!commentarySettings || typeof commentarySettings !== 'object')
     throw new Error('commentary_settings_unknown');
   const commentarySnapshot = JSON.stringify(commentarySettings);
-  const legacy = await inspectLegacyAudioTemplate(obs, baseUrl, target);
+  let legacy = await inspectLegacyAudioTemplate(obs, baseUrl, target);
   if (!legacy) {
     // A completed migration may be checked again, but is never replayed.
     let owned: { endpoint?: string; collection?: string; uuid?: string } | undefined;
@@ -69,11 +72,14 @@ export async function configureIndependentAudio(
         (x: Record<string, unknown>) =>
           x.inputUuid === game && x.inputKind === 'wasapi_process_output_capture',
       );
-      if (
+      if (capture && gameInput)
+        legacy = await inspectLegacyAudioTemplate(obs, baseUrl, target, game);
+      const verified =
+        !legacy &&
         capture &&
         gameInput &&
-        (await inspectLegacyAudioTemplate(obs, baseUrl, target, game, false))
-      ) {
+        (await inspectLegacyAudioTemplate(obs, baseUrl, target, game, false));
+      if (capture && gameInput && verified) {
         const captureSettings = (
           await obs.call('GetInputSettings', { inputUuid: capture.inputUuid })
         ).inputSettings as Record<string, unknown>;
@@ -99,16 +105,28 @@ export async function configureIndependentAudio(
           )
             valid = false;
         }
-        if (valid) return [];
+        if (valid) {
+          await onReady?.({ game, remoteCommentary: target, microphone: verified.microphoneUuid });
+          await rm(`${journal}.waiting`, { force: true });
+          return [];
+        }
       }
     }
+    if (!legacy)
+      return [
+        {
+          code: 'commentary_pending',
+          message: '桌面混音不是可验证的默认模板，请在 OBS 中核对音频分路。',
+        },
+      ];
+  }
+  if (!(await allowMigration()))
     return [
       {
         code: 'commentary_pending',
-        message: '桌面混音不是可验证的默认模板，请在 OBS 中核对音频分路。',
+        message: '已存在手动音频绑定，请在 OBS 中核对分路；未自动迁移桌面音频。',
       },
     ];
-  }
   const scenes = obsDesiredScenes(baseUrl);
   const check = async () => {
     const [state, stream, record, collection] = await Promise.all([
@@ -225,6 +243,8 @@ export async function configureIndependentAudio(
       },
       observer,
     );
+    await onReady?.({ game, remoteCommentary: target, microphone: legacy.microphoneUuid });
+    await rm(`${journal}.waiting`, { force: true });
   } finally {
     stop();
   }

@@ -57,8 +57,11 @@ export class AudioConfigurationConnection {
       const connecting = client.connect(endpoint, config.password, {
         eventSubscriptions:
           EventSubscription.General |
+          EventSubscription.Config |
           EventSubscription.Inputs |
           EventSubscription.Scenes |
+          EventSubscription.SceneItems |
+          EventSubscription.Filters |
           EventSubscription.Outputs,
       });
       pending.add(connecting);
@@ -82,8 +85,7 @@ export class AudioConfigurationConnection {
             // A scene-item write may have reached OBS even when its short RPC
             // deadline expires. Keep the transaction and its observer alive
             // until the original receipt settles or the operation budget ends.
-            if (type !== 'SetSceneItemEnabled' || closed || Date.now() >= deadline)
-              throw error;
+            if (type !== 'SetSceneItemEnabled' || closed || Date.now() >= deadline) throw error;
             return bounded(task, Math.max(1, deadline - Date.now()));
           }
         },

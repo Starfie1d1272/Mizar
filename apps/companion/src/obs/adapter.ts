@@ -175,7 +175,9 @@ export class ObsAdapter {
           ),
         ),
       )
-        .then(() => undefined)
+        .then(async (result) => {
+          if (result === 'complete' && !this.recoveryClosed) await this.ensure();
+        })
         .catch(() => undefined)
         .finally(() => {
           this.commentaryTask = undefined;
@@ -472,6 +474,8 @@ export class ObsAdapter {
               this.commentary!.owner,
               this.commentary!.journal,
               this.browserBaseUrl,
+              async (ids) => this.audioRouting?.seedAutomatic(obs, endpoint, ids),
+              async () => !(await this.audioRouting?.enabled()),
             ),
           );
           this.findings = [...this.findings, ...commentary];

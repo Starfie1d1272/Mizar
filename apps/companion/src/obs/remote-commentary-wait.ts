@@ -10,7 +10,7 @@ const journalSchema = z
     collection: z.string(),
     uuid: z.string(),
     revision: z.string(),
-    phase: z.enum(['waiting', 'applying']),
+    phase: z.enum(['waiting', 'applying', 'ready']),
   })
   .strict();
 
@@ -31,7 +31,7 @@ export async function discoverWaitingCommentary(
     throw error;
   }
   if (
-    journal.phase !== 'waiting' ||
+    journal.phase === 'applying' ||
     journal.revision !== state.revision ||
     journal.endpoint !== endpoint
   )
@@ -65,6 +65,8 @@ export async function discoverWaitingCommentary(
     return 'stopped';
   const settings = (await obs.call('GetInputSettings', { inputUuid: uuid })).inputSettings;
   if (!settings || typeof settings !== 'object') throw new Error('commentary_settings_unknown');
+  if (journal.phase === 'ready')
+    return (settings as Record<string, unknown>).window ? 'complete' : 'stopped';
   if ((settings as Record<string, unknown>).window) return 'stopped';
   const found = await owner.discover(obs, state.revision, uuid);
   if (found.kind !== 'window') return 'waiting';
@@ -88,6 +90,12 @@ export async function discoverWaitingCommentary(
     inputSettings: { window: found.candidate.window, priority: 2 },
     overlay: true,
   });
-  await rm(`${journalPath}.waiting`, { force: true });
+  const ready = `${journalPath}.waiting.${randomUUID()}.tmp`;
+  try {
+    await writeFile(ready, `${JSON.stringify({ ...journal, phase: 'ready' })}\n`, { mode: 0o600 });
+    await rename(ready, `${journalPath}.waiting`);
+  } finally {
+    await rm(ready, { force: true });
+  }
   return 'complete';
 }
