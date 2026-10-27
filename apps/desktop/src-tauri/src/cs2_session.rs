@@ -2201,7 +2201,7 @@ mod tests {
             assert!(!commands.contains("bind \"0\" \"slot0\""));
             assert_eq!(fs::read_to_string(&keys).unwrap(), bindings); // No prelaunch key writes.
             let backup = store.spectator_record().unwrap().unwrap();
-            assert_eq!(backup["version"], 2);
+            assert_eq!(backup["version"], 3);
             assert_eq!(backup["bindings"]["1"], "\"say custom; slot7\"");
             assert_eq!(backup["bindings"]["2"], "\"\"");
             assert_eq!(backup["bindings"]["3"], Value::Null);

@@ -26,11 +26,17 @@ it('only copies the external-game CFG command after the host verifies and prepar
   )!;
   expect(container.textContent).toContain('键位可能持久变化，Mizar 不会自动恢复');
   invoke.mockRejectedValueOnce(new Error('当前借用游戏已失效'));
-  await act(async () => { button.click(); await Promise.resolve(); });
+  await act(async () => {
+    button.click();
+    await Promise.resolve();
+  });
   expect(writeText).not.toHaveBeenCalled();
   expect(container.textContent).toContain('当前借用游戏已失效');
   invoke.mockResolvedValueOnce({ cfgReady: true });
-  await act(async () => { button.click(); await Promise.resolve(); });
+  await act(async () => {
+    button.click();
+    await Promise.resolve();
+  });
   expect(invoke).toHaveBeenLastCalledWith('observer_command', { action: 'prepare-cfg' });
   expect(writeText).toHaveBeenCalledExactlyOnceWith('exec mizar_observer.cfg');
   expect(container.textContent).toContain('执行结果尚未确认');
