@@ -58,6 +58,34 @@ export class OutputService {
   private outboundUnsubscribe: (() => Promise<void>) | undefined;
   private outboundTimer: ReturnType<typeof setInterval> | undefined;
   private lastBundleAt = 0;
+  private playerSnapshot:
+    | {
+        scope: string;
+        players: NonNullable<Extract<ReliableEventV1, { kind: 'map_ended' }>['payload']['players']>;
+      }
+    | undefined;
+
+  private snapshotScope(
+    bundle: ProjectionBundle,
+    binding: MatchContextBinding | undefined,
+  ): string | undefined {
+    if (
+      !binding ||
+      binding.origin === 'fixture' ||
+      binding.freshness !== 'fresh' ||
+      bundle.program.match?.matchId !== binding.context.matchId
+    )
+      return undefined;
+    const c = bundle.program.cursor;
+    if (!c.liveSessionId || !c.mapEpoch || !bundle.program.map.name) return undefined;
+    return JSON.stringify([
+      binding.context.matchId,
+      c.producerInstanceId,
+      c.liveSessionId,
+      c.mapEpoch,
+      bundle.program.map.name,
+    ]);
+  }
 
   constructor(private readonly options: OutputServiceOptions = {}) {
     this.outbox = options.outbox;
@@ -121,6 +149,36 @@ export class OutputService {
     this.lastBundleAt = this.now().getTime();
     this.binding = binding;
     this.updateMapStartScope(bundle, binding);
+    const scope = this.snapshotScope(bundle, binding);
+    if (scope !== undefined && this.playerSnapshot?.scope !== scope)
+      this.playerSnapshot = undefined;
+    const players = bundle.program.players.filter((p) => p.lineupEvidence === 'current');
+    if (
+      scope &&
+      bundle.program.status.context === 'fresh' &&
+      bundle.program.status.telemetry === 'fresh' &&
+      bundle.program.status.identity === 'matched' &&
+      players.length === 10 &&
+      new Set(players.map((p) => p.sourcePlayerId)).size === 10 &&
+      players.some(
+        (p) =>
+          p.matchStats &&
+          (p.matchStats.kills != null ||
+            p.matchStats.assists != null ||
+            p.matchStats.deaths != null),
+      )
+    ) {
+      this.playerSnapshot = {
+        scope,
+        players: players.map((p) => ({
+          sourcePlayerId: p.sourcePlayerId,
+          canonicalPlayerId: p.canonicalPlayerId,
+          kills: p.matchStats?.kills ?? null,
+          assists: p.matchStats?.assists ?? null,
+          deaths: p.matchStats?.deaths ?? null,
+        })),
+      };
+    }
     const producedAt = this.now().toISOString();
     for (const [consumer, includeRadar] of this.consumers) {
       const snapshot = this.safeProject(bundle, binding, producedAt, includeRadar);
@@ -285,7 +343,17 @@ export class OutputService {
     const newMapObservation = this.newMapObservation(result, bundle);
     let candidates: ReliableEventV1[];
     try {
-      candidates = [...transitionReliableEventsV1({ result, bundle, binding })];
+      candidates = [
+        ...transitionReliableEventsV1({
+          result,
+          bundle,
+          binding,
+          ...(this.playerSnapshot &&
+          this.playerSnapshot.scope === this.snapshotScope(bundle, binding)
+            ? { players: this.playerSnapshot.players }
+            : {}),
+        }),
+      ];
     } catch {
       this.onDiagnostic?.('event_projection_failed');
       return;
@@ -507,9 +575,11 @@ export class OutputService {
       (bundle.program.cursor.producerInstanceId !== event.cursor.producerInstanceId &&
         !recoveredEvent) ||
       binding.context.matchId !== event.matchId ||
-      binding.manifest.revision !== event.contextRevision ||
+      (binding.manifest.revision !== event.contextRevision &&
+        !(event.kind === 'map_ended' && event.payload.players)) ||
       bundle.program.cursor.liveSessionId !== event.cursor.liveSessionId ||
-      bundle.program.cursor.mapEpoch !== event.cursor.mapEpoch ||
+      (bundle.program.cursor.mapEpoch !== event.cursor.mapEpoch &&
+        !(event.kind === 'map_ended' && event.payload.players)) ||
       bundle.program.cursor.programSourceGeneration !== event.cursor.programSourceGeneration
     )
       return false;
@@ -525,6 +595,16 @@ export class OutputService {
       !this.isCurrentForRetry(event)
     )
       return false;
+    if (
+      event.kind === 'map_ended' &&
+      event.payload.players &&
+      bundle.program.cursor.producerInstanceId === event.cursor.producerInstanceId
+    )
+      return (
+        event.evidence.telemetryFresh &&
+        event.evidence.contextFresh &&
+        (event.evidence.identity === 'matched' || event.evidence.lineupMismatchOnly === true)
+      );
     if (
       event.kind === 'map_ended' &&
       event.evidence.lineupMismatchOnly === true &&

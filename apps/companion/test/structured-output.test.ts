@@ -129,6 +129,9 @@ it('wires restart recovery through production app composition and GSI ingress', 
               name: player.displayName,
               team: sideIndex === 0 ? 'CT' : 'T',
               observer_slot: sideIndex * 5 + index,
+              ...(phase === 'live'
+                ? { match_stats: { kills: index, assists: 0, deaths: 2, mvps: 0, score: 0 } }
+                : {}),
               state: { health: 100, armor: 100, money: 16000, equip_value: 5700 },
             },
           ]),
@@ -207,6 +210,9 @@ it('wires restart recovery through production app composition and GSI ingress', 
   await persisted.load();
   const event = persisted.getRecords().find((record) => record.event.kind === 'map_ended')!.event;
   expect(event.cursor.producerInstanceId).toBe('app-A');
+  if (event.kind !== 'map_ended') throw new Error('expected map end');
+  expect(event.payload.players).toHaveLength(10);
+  expect(event.payload.players?.[0]).toMatchObject({ kills: 0, assists: 0, deaths: 2 });
   const send = vi.fn(() => Promise.resolve('accepted' as const));
   const appB = buildApp({
     supportLogsDirectory: directory,

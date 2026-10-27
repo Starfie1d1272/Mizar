@@ -393,8 +393,13 @@ export class ReliableOutbox {
       const now = input.now ?? new Date();
       let changed = false;
       const next: ReliableOutboxRecord[] = [];
+      let blockedByMapEnd = false;
       for (const record of this.records) {
         if (record.status !== 'pending') {
+          next.push(record);
+          continue;
+        }
+        if (blockedByMapEnd) {
           next.push(record);
           continue;
         }
@@ -411,10 +416,12 @@ export class ReliableOutbox {
         }
         if (input.canSend !== undefined && !input.canSend(record.event)) {
           this.evidence(record, 'send_guard_blocked');
+          if (record.event.kind === 'map_ended') blockedByMapEnd = true;
           next.push(record);
           continue;
         }
         if (Date.parse(record.nextAttemptAt) > now.getTime()) {
+          if (record.event.kind === 'map_ended') blockedByMapEnd = true;
           next.push(record);
           continue;
         }
@@ -437,6 +444,7 @@ export class ReliableOutbox {
         } finally {
           if (timeout !== undefined) clearTimeout(timeout);
         }
+        if (outcome === 'retry' && record.event.kind === 'map_ended') blockedByMapEnd = true;
         const attempts = record.attempts + 1;
         const delayMs = Math.min(60_000, 1_000 * 2 ** Math.min(attempts - 1, 6));
         next.push({
