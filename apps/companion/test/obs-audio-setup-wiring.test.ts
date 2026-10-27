@@ -761,3 +761,67 @@ it('preserves the compact BP guard before preparing any audio', async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+it('accepts an owned disabled compact BP source before and after audio migration', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'mizar-bp-disabled-audio-'));
+  try {
+    const obs = new FakeObs();
+    fixture.client = obs;
+    const { BP_COMPACT_INPUT, BP_COMPACT_PATH } = await import('../src/obs/bp-overlay.js');
+    obs.addInput(BP_COMPACT_INPUT, 'browser_source', {
+      url: new URL(BP_COMPACT_PATH, base).toString(),
+      width: 1920,
+      height: 1080,
+    });
+    const gameplay = obsDesiredScenes(base).find((scene) => scene.id === 'gameplay')!;
+    const compact = obs.addItem(gameplay.sceneName, BP_COMPACT_INPUT, false);
+    const adapter = new ObsAdapter(
+      new ObsConfigStore(join(dir, 'obs.json')),
+      base,
+      () => {},
+      undefined,
+      { owner: new RemoteCommentary(join(dir, 'preference')), journal: join(dir, 'probe') },
+    );
+    expect(await adapter.ensure()).toEqual([]);
+    expect(await adapter.ensure()).toEqual([]);
+    expect(compact.sceneItemEnabled).toBe(false);
+    for (const items of obs.scenes.values())
+      expect(
+        items.find((item) => item.sourceName === 'Mizar · Desktop Audio')!.sceneItemEnabled,
+      ).toBe(false);
+    await adapter.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+it('rejects a modified compact BP source without migrating desktop audio', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'mizar-bp-modified-audio-'));
+  try {
+    const obs = new FakeObs();
+    fixture.client = obs;
+    const { BP_COMPACT_INPUT } = await import('../src/obs/bp-overlay.js');
+    obs.addInput(BP_COMPACT_INPUT, 'browser_source', {
+      url: 'https://example.com/',
+      width: 1920,
+      height: 1080,
+    });
+    const gameplay = obsDesiredScenes(base).find((scene) => scene.id === 'gameplay')!;
+    obs.addItem(gameplay.sceneName, BP_COMPACT_INPUT, false);
+    const adapter = new ObsAdapter(
+      new ObsConfigStore(join(dir, 'obs.json')),
+      base,
+      () => {},
+      undefined,
+      { owner: new RemoteCommentary(join(dir, 'preference')), journal: join(dir, 'probe') },
+    );
+    expect((await adapter.ensure()).some((item) => item.code === 'commentary_pending')).toBe(true);
+    for (const items of obs.scenes.values())
+      expect(
+        items.find((item) => item.sourceName === 'Mizar · Desktop Audio')!.sceneItemEnabled,
+      ).toBe(true);
+    await adapter.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

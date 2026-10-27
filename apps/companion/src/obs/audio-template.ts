@@ -1,4 +1,11 @@
-import { OBS_CAPTURE_INPUT, OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
+import {
+  OBS_CAPTURE_INPUT,
+  OBS_COLLECTION,
+  OBS_HEIGHT,
+  OBS_WIDTH,
+  obsDesiredScenes,
+} from './desired-state.js';
+import { BP_COMPACT_INPUT, BP_COMPACT_PATH } from './bp-overlay.js';
 import type { ObsRpc } from './reconcile.js';
 
 type Ref = { sceneName: string; sceneItemId: number; sourceUuid: string };
@@ -26,6 +33,24 @@ export async function inspectLegacyAudioTemplate(
     'Mizar · Desktop Audio',
     'Mizar · Microphone',
   ]);
+  const compactInputs = inputs.filter((input) => input.inputName === BP_COMPACT_INPUT);
+  if (compactInputs.length > 1) return null;
+  const compact = compactInputs[0];
+  if (compact) {
+    if (compact.inputKind !== 'browser_source' || typeof compact.inputUuid !== 'string')
+      return null;
+    const settings = (await obs.call('GetInputSettings', { inputUuid: compact.inputUuid }))
+      .inputSettings;
+    if (
+      !settings ||
+      typeof settings !== 'object' ||
+      (settings as Record<string, unknown>).url !== new URL(BP_COMPACT_PATH, baseUrl).toString() ||
+      (settings as Record<string, unknown>).width !== OBS_WIDTH ||
+      (settings as Record<string, unknown>).height !== OBS_HEIGHT
+    )
+      return null;
+    allowedNames.add(BP_COMPACT_INPUT);
+  }
   if (
     inputs.some(
       (input) =>
@@ -129,6 +154,7 @@ export async function inspectLegacyAudioTemplate(
   const allScenes = objects((await obs.call('GetSceneList')).scenes);
   const seen = new Set<string>();
   const refs: Ref[] = [];
+  let compactSeen = false;
   for (const scene of allScenes) {
     if (typeof scene.sceneName !== 'string') return null;
     const items = objects(
@@ -137,6 +163,24 @@ export async function inspectLegacyAudioTemplate(
     // Nested paths make ownership and duplicate capture impossible to prove from the template.
     if (items.some((x) => x.isGroup === true || x.sourceType === 'OBS_SOURCE_TYPE_SCENE'))
       return null;
+    const compactItems = items.filter(
+      (item) =>
+        item.sourceName === BP_COMPACT_INPUT || (compact && item.sourceUuid === compact.inputUuid),
+    );
+    if (compactItems.length) {
+      const gameplay = desired.find((value) => value.id === 'gameplay')!;
+      if (
+        !compact ||
+        compactSeen ||
+        scene.sceneName !== gameplay.sceneName ||
+        compactItems.length !== 1 ||
+        compactItems[0]!.sourceUuid !== compact.inputUuid ||
+        compactItems[0]!.sourceName !== BP_COMPACT_INPUT ||
+        compactItems[0]!.sceneItemEnabled !== false
+      )
+        return null;
+      compactSeen = true;
+    }
     if (
       wanted.has(scene.sceneName) &&
       items.some(
@@ -154,6 +198,7 @@ export async function inspectLegacyAudioTemplate(
         'Mizar · Desktop Audio',
         'Mizar · Microphone',
       ]);
+      if (compact && desiredScene.id === 'gameplay') expectedNames.add(BP_COMPACT_INPUT);
       if (
         items.some(
           (value) =>
@@ -194,6 +239,6 @@ export async function inspectLegacyAudioTemplate(
       sourceUuid: desktop.inputUuid,
     });
   }
-  if (seen.size !== wanted.size) return null;
+  if (seen.size !== wanted.size || Boolean(compact) !== compactSeen) return null;
   return { desktop: refs, microphoneUuid: microphone.inputUuid };
 }
