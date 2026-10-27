@@ -1447,6 +1447,75 @@ mod tests {
     // gate so the external-game fixture cannot contaminate recovery evidence.
     static GAME_PROCESSES: std::sync::Mutex<()> = std::sync::Mutex::new(());
     #[test]
+    fn coordinated_faults_recover_through_actual_host_entrypoint() {
+        use crate::cs2_config_identity::{ConfigIdentity, SessionIdentity};
+        use crate::spectator_recovery_plan::{Input, InputKind};
+        use std::path::Path;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static FAIL_AT: AtomicUsize = AtomicUsize::new(0);
+        static COUNT: AtomicUsize = AtomicUsize::new(0);
+        static MODE: AtomicUsize = AtomicUsize::new(0);
+        fn injected(path: &Path, bytes: &[u8]) -> Result<(), String> {
+            let index = COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+            if FAIL_AT.load(Ordering::SeqCst) == index {
+                match MODE.load(Ordering::SeqCst) {
+                    0 => return Err("injected_before".into()),
+                    2 => {
+                        if std::fs::read(path).ok().as_deref() == Some(bytes) { return Err("injected_readback".into()); }
+                        return Ok(());
+                    }
+                    _ => (),
+                }
+            }
+            crate::cs2_session::atomic_write(path, bytes)?;
+            if FAIL_AT.load(Ordering::SeqCst) == index && MODE.load(Ordering::SeqCst) == 1 { return Err("injected_after".into()); }
+            Ok(())
+        }
+        let _processes = GAME_PROCESSES.lock().unwrap();
+        let mut total = 1;
+        for mode in 0..=2 {
+            let mut target = if mode == 0 { 0 } else { 1 };
+            while target <= total {
+                let root = std::env::temp_dir().join(format!("mizar-host-fault-{}-{mode}-{target}", std::process::id()));
+                let log = crate::startup_log::DesktopLog::new(&root, None).unwrap();
+                let mut host = ManagedCs2::new(log);
+                let cfg = root.join("steam/userdata/1/730/local/cfg"); std::fs::create_dir_all(&cfg).unwrap();
+                let video = cfg.join("cs2_video.txt");
+                let original_video = b"\"video.cfg\" { \"setting.defaultres\" \"1280\" \"setting.defaultresheight\" \"960\" \"setting.fullscreen\" \"1\" }";
+                std::fs::write(&video, original_video).unwrap();
+                let keys = cfg.join("cs2_user_keys_0_slot0.vcfg");
+                let original = "\"config\" {\"bindings\" {\"x\" \"personal\"} \"analogbindings\" {}}";
+                let candidate = "\"config\" {\"bindings\" {\"x\" \"preset\"} \"analogbindings\" {}}";
+                std::fs::write(&keys, original).unwrap();
+                let executable = root.join("game/bin/win64/cs2.exe"); std::fs::create_dir_all(executable.parent().unwrap()).unwrap(); std::fs::write(&executable, b"fixture").unwrap();
+                let session = SessionIdentity { session_id:format!("fault-{mode}-{target}"), config:ConfigIdentity {
+                    account:1, video:std::fs::canonicalize(&video).unwrap(), executable:std::fs::canonicalize(&executable).unwrap(),
+                    keys:std::fs::canonicalize(&keys).unwrap(), slot:0, format:"vcfg".into() }};
+                let x = Input { kind:InputKind::Key, name:"x".into() };
+                FAIL_AT.store(target, Ordering::SeqCst); COUNT.store(0, Ordering::SeqCst); MODE.store(mode, Ordering::SeqCst);
+                let result = host.store.prepare_coordinated_with_writer(&video, &executable,
+                    crate::cs2_video::VideoSize::new(1920,1080).unwrap(), None, &session,
+                    &[x.clone()].into(), &[(x, vec!["preset".into()])].into(), candidate, injected);
+                if target == 0 { result.unwrap(); total = COUNT.load(Ordering::SeqCst); assert!(total >= 6); }
+                else { assert!(result.is_err(), "failure point {target}, mode {mode}"); }
+                FAIL_AT.store(0, Ordering::SeqCst);
+                host.recovery_identity_fixture = Some((executable.clone(), video.clone(), 1));
+                // If only a provably unwritten snapshot remains, a later user edit
+                // must survive the real startup recovery path.
+                let orphan = host.store.load().unwrap().is_none() && host.store.full_spectator_pending();
+                if orphan { std::fs::write(&keys, "\"config\" {\"bindings\" {\"x\" \"external\"} \"analogbindings\" {}}").unwrap(); }
+                if host.startup_recovery_status().unwrap().pending { host.restore_at_startup(false).unwrap(); }
+                assert!(!host.startup_recovery_status().unwrap().pending);
+                assert_eq!(std::fs::read(&video).unwrap(), original_video);
+                let current = std::fs::read_to_string(&keys).unwrap();
+                assert!(current.contains(if orphan { "\"x\" \"external\"" } else { "\"x\" \"personal\"" }));
+                std::fs::remove_dir_all(root).unwrap();
+                target += 1;
+            }
+        }
+    }
+
+    #[test]
     fn coordinated_pending_host_checks_uncertain_launch_identity_and_restores() {
         use crate::cs2_config_identity::{ConfigIdentity, SessionIdentity};
         use crate::spectator_recovery_plan::{Input, InputKind};

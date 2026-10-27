@@ -335,6 +335,7 @@ pub(crate) fn verify_prepared(
     owned: &BTreeSet<Input>,
     applied: &Bindings,
     original: &[u8],
+    expected_attempted: bool,
 ) -> Result<(), String> {
     let bytes = regular(&pending(root), RECORD_LIMIT)?;
     let record: Value = serde_json::from_slice(&bytes).map_err(|_| "snapshot_invalid")?;
@@ -349,6 +350,7 @@ pub(crate) fn verify_prepared(
         || payload["identity"] != session.config.value()
         || payload["fields"] != entries(owned, applied)?
         || payload["original"].as_str().map(str::as_bytes) != Some(original)
+        || payload["coordinatedWriteAttempted"] != expected_attempted
     {
         return Err("snapshot_invalid".into());
     }
@@ -397,6 +399,45 @@ pub(crate) fn capture_for_session(
     write: Writer,
     session: Option<&crate::cs2_config_identity::SessionIdentity>,
 ) -> Result<(), String> {
+    capture_inner(
+        root, video, exe, account, owned, applied, write, session, false,
+    )
+}
+
+pub(crate) fn capture_coordinated(
+    root: &Path,
+    video: &Path,
+    exe: &Path,
+    account: u32,
+    owned: &BTreeSet<Input>,
+    applied: &Bindings,
+    write: Writer,
+    session: &crate::cs2_config_identity::SessionIdentity,
+) -> Result<(), String> {
+    capture_inner(
+        root,
+        video,
+        exe,
+        account,
+        owned,
+        applied,
+        write,
+        Some(session),
+        true,
+    )
+}
+
+fn capture_inner(
+    root: &Path,
+    video: &Path,
+    exe: &Path,
+    account: u32,
+    owned: &BTreeSet<Input>,
+    applied: &Bindings,
+    write: Writer,
+    session: Option<&crate::cs2_config_identity::SessionIdentity>,
+    coordinated: bool,
+) -> Result<(), String> {
     check_path(root, false)?;
     let record_path = pending(root);
     match fs::symlink_metadata(&record_path) {
@@ -421,6 +462,9 @@ pub(crate) fn capture_for_session(
         }
         session.write(&mut payload).map_err(str::to_string)?;
     }
+    if coordinated {
+        payload["coordinatedWriteAttempted"] = json!(false);
+    }
     let payload_bytes = serde_json::to_vec(&payload).map_err(|_| "snapshot_invalid")?;
     let record = serde_json::to_vec(&json!({"payload":payload,"sha256":digest(&payload_bytes)}))
         .map_err(|_| "snapshot_invalid")?;
@@ -436,6 +480,91 @@ pub(crate) fn capture_for_session(
         return Err("snapshot_changed".into());
     }
     Ok(())
+}
+
+/// Mark the snapshot before either coordinated owner can write A.
+pub(crate) fn mark_coordinated_write(
+    root: &Path,
+    video: &Path,
+    exe: &Path,
+    account: u32,
+    session: &crate::cs2_config_identity::SessionIdentity,
+    owned: &BTreeSet<Input>,
+    applied: &Bindings,
+    original: &[u8],
+    write: Writer,
+) -> Result<(), String> {
+    verify_prepared(
+        root, video, exe, account, session, owned, applied, original, false,
+    )?;
+    let path = pending(root);
+    let before = regular(&path, RECORD_LIMIT)?;
+    let mut record: Value = serde_json::from_slice(&before).map_err(|_| "snapshot_invalid")?;
+    record["payload"]["coordinatedWriteAttempted"] = json!(true);
+    record["sha256"] = json!(digest(
+        &serde_json::to_vec(&record["payload"]).map_err(|_| "snapshot_invalid")?
+    ));
+    let next = serde_json::to_vec(&record).map_err(|_| "snapshot_invalid")?;
+    if next.len() > RECORD_LIMIT || regular(&path, RECORD_LIMIT)? != before {
+        return Err("snapshot_changed".into());
+    }
+    write(&path, &next)?;
+    if regular(&path, RECORD_LIMIT)? != next {
+        return Err("snapshot_readback_failed".into());
+    }
+    verify_prepared(
+        root, video, exe, account, session, owned, applied, original, true,
+    )
+}
+
+/// Clear only a provably pre-write orphan; do not touch the current key file.
+pub(crate) fn finish_unwritten_preparation(
+    root: &Path,
+    video: &Path,
+    exe: &Path,
+    account: u32,
+    write: Writer,
+) -> Result<bool, String> {
+    let path = pending(root);
+    let bytes = regular(&path, RECORD_LIMIT)?;
+    let record: Value = serde_json::from_slice(&bytes).map_err(|_| "snapshot_invalid")?;
+    let payload = &record["payload"];
+    if payload["version"] != 1
+        || record["sha256"].as_str()
+            != Some(digest(&serde_json::to_vec(payload).map_err(|_| "snapshot_invalid")?).as_str())
+    {
+        return Err("snapshot_invalid".into());
+    }
+    if payload["coordinatedWriteAttempted"] != false || payload.get("coreTerminal").is_some() {
+        return Ok(false);
+    }
+    let session = crate::cs2_config_identity::SessionIdentity::read(payload)
+        .map_err(str::to_string)?
+        .ok_or("snapshot_invalid")?;
+    let (id, _) = identity(video, exe, account, session.config.slot)?;
+    if session.config.value() != id || payload["identity"] != id {
+        return Err("identity_changed".into());
+    }
+    let original = payload["original"]
+        .as_str()
+        .filter(|s| s.len() <= LIMIT)
+        .ok_or("snapshot_invalid")?;
+    let (owned, applied) = decode(&payload["fields"])?;
+    crate::spectator_recovery_vcfg::restore(original, &applied, original, &owned)
+        .map_err(str::to_string)?;
+    if regular(&path, RECORD_LIMIT)? != bytes {
+        return Err("snapshot_changed".into());
+    }
+    let last = root.join("spectator-full-last.json");
+    if fs::symlink_metadata(&last).is_ok() {
+        check_path(&last, false)?;
+    }
+    write(&last, &bytes)?;
+    if regular(&last, RECORD_LIMIT)? != bytes || regular(&path, RECORD_LIMIT)? != bytes {
+        return Err("snapshot_readback_failed".into());
+    }
+    fs::remove_file(path).map_err(|_| "snapshot_cleanup_failed".to_string())?;
+    Ok(true)
 }
 
 /// Persist the terminated core's public recovery facts before clearing it.

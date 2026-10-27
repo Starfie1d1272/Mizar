@@ -156,8 +156,12 @@ impl SessionStore {
         let guard = self.acquire_write_guard()?;
         if self.load()?.is_some() { return Err("core_pending".into()); }
         if !self.full_spectator_pending() { return Ok(None); }
-        if crate::spectator_snapshot::linked_session(&self.root)?.is_some() {
-            if !crate::spectator_snapshot::has_terminal(&self.root)? { return Err("coordinated_recovery_required".into()); }
+        if crate::spectator_snapshot::linked_session(&self.root)?.is_some()
+            && !crate::spectator_snapshot::has_terminal(&self.root)? {
+            if crate::spectator_snapshot::finish_unwritten_preparation(&self.root, video, executable, account, atomic_write)? {
+                return Ok(None);
+            }
+            return Err("coordinated_recovery_required".into());
         }
         match self.recover_spectator_snapshot_locked(&guard, video, executable, account) {
             Ok(()) => Ok(None),
@@ -194,10 +198,15 @@ impl SessionStore {
     fn save_locked(&self, _guard: &StoreGuard, value: &Value) -> Result<(), String> {
         // Ordinary sessions may continue without taking over keys, but cannot
         // adopt a pending full snapshot or arm the ten-key owner.
-        if self.full_spectator_pending() {
+        let previous = self.load()?;
+        let full_pending = self.full_spectator_pending();
+        if previous.as_ref().is_some_and(|core| core["fullSnapshot"] == true)
+            && value["fullSnapshot"] != true { return Err("snapshot_pending".into()); }
+        if value["fullSnapshot"] == true && !full_pending { return Err("snapshot_pending".into()); }
+        if full_pending {
             if value["spectatorCfg"] == true { return Err("snapshot_pending".into()); }
             if value["fullSnapshot"] == true {
-                let previous = self.load()?.ok_or("snapshot_pending")?;
+                let previous = previous.ok_or("snapshot_pending")?;
                 let session = crate::cs2_config_identity::SessionIdentity::read(value).map_err(str::to_string)?.ok_or("snapshot_pending")?;
                 if previous["fullSnapshot"] != true
                     || crate::cs2_config_identity::SessionIdentity::read(&previous).map_err(str::to_string)?.as_ref() != Some(&session)
@@ -829,6 +838,18 @@ impl SessionStore {
         self.prepare_coordinated_locked(&guard, video, executable, size, frames, session, owned, applied, candidate, atomic_write)
     }
 
+    #[cfg(test)]
+    pub(crate) fn prepare_coordinated_with_writer(
+        &self, video: &Path, executable: &Path, size: cs2_video::VideoSize,
+        frames: Option<Vec<Value>>, session: &crate::cs2_config_identity::SessionIdentity,
+        owned: &std::collections::BTreeSet<crate::spectator_recovery_plan::Input>,
+        applied: &crate::spectator_recovery_plan::Bindings, candidate: &str,
+        write: fn(&Path, &[u8]) -> Result<(), String>,
+    ) -> Result<Value, String> {
+        let guard = self.acquire_write_guard()?;
+        self.prepare_coordinated_locked(&guard, video, executable, size, frames, session, owned, applied, candidate, write)
+    }
+
     fn prepare_coordinated_locked(
         &self, guard: &StoreGuard, video: &Path, executable: &Path, size: cs2_video::VideoSize,
         frames: Option<Vec<Value>>, session: &crate::cs2_config_identity::SessionIdentity,
@@ -852,19 +873,21 @@ impl SessionStore {
             }
         }
         self.preflight_core_plan(&core)?;
-        crate::spectator_snapshot::capture_for_session(&self.root, video, executable,
-            session.config.account, owned, applied, write, Some(session))?;
+        crate::spectator_snapshot::capture_coordinated(&self.root, video, executable,
+            session.config.account, owned, applied, write, session)?;
         crate::spectator_snapshot::verify_prepared(&self.root, video, executable,
-            session.config.account, session, owned, applied, &original_keys)?;
+            session.config.account, session, owned, applied, &original_keys, false)?;
         core["fullSnapshot"] = json!(true);
         core["configWriteAttempted"] = json!(false);
         self.save_coordinated_locked(guard, &core, write)?;
-        // Persist the possible write before either owner changes a game file.
+        // Both records independently say a write may occur before either owner writes.
+        crate::spectator_snapshot::mark_coordinated_write(&self.root, video, executable,
+            session.config.account, session, owned, applied, &original_keys, write)?;
         core["configWriteAttempted"] = json!(true);
         self.save_coordinated_locked(guard, &core, write)?;
         self.preflight_core_plan(&core)?;
         crate::spectator_snapshot::verify_prepared(&self.root, video, executable,
-            session.config.account, session, owned, applied, &original_keys)?;
+            session.config.account, session, owned, applied, &original_keys, true)?;
         let applied_video = core["applied"].as_str().ok_or("invalid_plan")?;
         write(video, applied_video.as_bytes())?;
         unchanged(video, applied_video.as_bytes())?;
@@ -874,7 +897,7 @@ impl SessionStore {
             unchanged(path, next.as_bytes())?;
         }
         crate::spectator_snapshot::verify_prepared(&self.root, video, executable,
-            session.config.account, session, owned, applied, &original_keys)?;
+            session.config.account, session, owned, applied, &original_keys, true)?;
         if applied_keys != original_keys { write(&key, &applied_keys)?; }
         crate::spectator_snapshot::verify_applied(video, executable, session.config.account, session, &applied_keys)?;
         Ok(core)
@@ -1410,6 +1433,12 @@ mod tests {
         let owned = [x.clone()].into(); let applied = [(x, vec!["preset".into()])].into();
         let mut core = store.prepare_coordinated(&video, &executable, cs2_video::VideoSize::new(1920,1080).unwrap(), None, &session, &owned, &applied, candidate).unwrap();
         let applied_text = fs::read(&key).unwrap();
+        // A caller cannot strip or clear the established full owner.
+        let mut stripped = core.clone(); stripped.as_object_mut().unwrap().remove("fullSnapshot");
+        assert!(store.save(&stripped).is_err());
+        let mut downgraded = core.clone(); downgraded["fullSnapshot"] = json!(false);
+        assert!(store.save(&downgraded).is_err());
+        assert_eq!(store.load().unwrap(), Some(core.clone()));
         core["launchAttempted"] = json!(true); core["launchTime"] = json!(100);
         store.save(&core).unwrap();
         let mut altered = core.clone(); altered["original"] = json!("unrelated");
@@ -1520,7 +1549,7 @@ mod tests {
                 if store.load().unwrap().is_some() {
                     assert_eq!(SessionStore::new(root.clone()).restore_coordinated(&video, &executable, 1).unwrap(), None);
                 } else if store.full_spectator_pending() {
-                    SessionStore::new(root.clone()).recover_spectator_snapshot(&video, &executable, 1).unwrap();
+                    assert_eq!(SessionStore::new(root.clone()).restore_full_pending(&video, &executable, 1).unwrap(), None);
                 }
                 assert_eq!(fs::read(&video).unwrap(), original_video);
                 assert_eq!(fs::read(&machine).unwrap(), original_machine);
