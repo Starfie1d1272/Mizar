@@ -59,6 +59,21 @@ export class ObsAudioRouting {
     return roles.some((role) => state.bindings[role] !== null);
   }
   private async inputs(obs: ObsRpc) {
+    const version = await obs.call('GetVersion');
+    const requests = version.availableRequests;
+    if (
+      !Array.isArray(requests) ||
+      ![
+        'GetInputList',
+        'GetInputSettings',
+        'GetSceneCollectionList',
+        'GetSpecialInputs',
+        'GetSceneList',
+        'GetSceneItemList',
+        'GetGroupSceneItemList',
+      ].every((name) => requests.includes(name))
+    )
+      throw new Error('audio_obs_capability_missing');
     const collection = (await obs.call('GetSceneCollectionList')).currentSceneCollectionName;
     if (typeof collection !== 'string' || !collection) throw new Error('audio_collection_unknown');
     const raw = (await obs.call('GetInputList')).inputs;
@@ -69,6 +84,8 @@ export class ObsAudioRouting {
         typeof i?.inputName === 'string' &&
         typeof i?.inputKind === 'string',
     );
+    if (new Set(inputs.map((input) => input.inputUuid)).size !== inputs.length)
+      throw new Error('audio_input_identity_ambiguous');
     const candidates: Input[] = [];
     for (const input of inputs) {
       if (audioKinds.has(input.inputKind)) candidates.push(input);

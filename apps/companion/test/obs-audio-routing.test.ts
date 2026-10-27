@@ -15,6 +15,18 @@ it('binds only explicit current UUIDs and rejects stale windows, deleted sources
     ];
     const obs: ObsRpc = {
       call: async (type) => {
+        if (type === 'GetVersion')
+          return {
+            availableRequests: [
+              'GetInputList',
+              'GetInputSettings',
+              'GetSceneCollectionList',
+              'GetSpecialInputs',
+              'GetSceneList',
+              'GetSceneItemList',
+              'GetGroupSceneItemList',
+            ],
+          };
         if (type === 'GetSceneCollectionList') return { currentSceneCollectionName: collection };
         if (type === 'GetInputList') return { inputs };
         if (type === 'GetSpecialInputs') return {};
@@ -54,6 +66,60 @@ it('binds only explicit current UUIDs and rejects stale windows, deleted sources
       (await new ObsAudioRouting(join(dir, 'bindings.json')).read(obs)).bindings.remoteCommentary
         ?.valid,
     ).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+it('reports repeated nested paths and global desktop audio without changing OBS', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'audio-routing-'));
+  const calls: string[] = [];
+  try {
+    const obs: ObsRpc = {
+      call: async (type, args) => {
+        calls.push(type);
+        if (type === 'GetVersion')
+          return {
+            availableRequests: [
+              'GetInputList',
+              'GetInputSettings',
+              'GetSceneCollectionList',
+              'GetSpecialInputs',
+              'GetSceneList',
+              'GetSceneItemList',
+              'GetGroupSceneItemList',
+            ],
+          };
+        if (type === 'GetSceneCollectionList') return { currentSceneCollectionName: 'A' };
+        if (type === 'GetInputList')
+          return {
+            inputs: [
+              { inputUuid: 'x', inputName: '应用', inputKind: 'wasapi_process_output_capture' },
+            ],
+          };
+        if (type === 'GetSpecialInputs') return { desktop1: '桌面音频' };
+        if (type === 'GetSceneList') return { scenes: [{ sceneName: '主场景' }] };
+        if (type === 'GetSceneItemList')
+          return {
+            sceneItems:
+              args?.sceneName === '主场景'
+                ? [
+                    { sourceName: '应用', sourceUuid: 'x', sceneItemEnabled: true },
+                    {
+                      sourceName: '子场景',
+                      sourceType: 'OBS_SOURCE_TYPE_SCENE',
+                      sceneItemEnabled: true,
+                    },
+                  ]
+                : [{ sourceName: '应用', sourceUuid: 'x', sceneItemEnabled: true }],
+          };
+        throw new Error(type);
+      },
+    };
+    const status = await new ObsAudioRouting(join(dir, 'state')).read(obs);
+    expect(status.findings.some((s) => s.includes('全局桌面'))).toBe(true);
+    expect(status.findings.some((s) => s.includes('出现 2 次'))).toBe(true);
+    expect(calls.every((name) => name.startsWith('Get'))).toBe(true);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
