@@ -23,20 +23,34 @@ export function Cs2LaunchSettings() {
     if (!desktop) return;
     let active = true;
     void desktopInvoke<{ account: number; enabled: boolean }>('get_full_spectator_preference')
-      .then((value) => { if (active) setFullChoice(value); })
-      .catch((reason: unknown) => { if (active) setFullError(reason instanceof Error ? reason.message : '无法读取当前账号的解说键位选择。'); });
-    return () => { active = false; };
+      .then((value) => {
+        if (active) setFullChoice(value);
+      })
+      .catch((reason: unknown) => {
+        if (active)
+          setFullError(
+            reason instanceof Error ? reason.message : '无法读取当前账号的解说键位选择。',
+          );
+      });
+    return () => {
+      active = false;
+    };
   }, [desktop]);
   async function setFullEnabled(enabled: boolean) {
     if (!fullChoice || fullBusy || disabled) return;
     setFullBusy(true);
     setFullError('');
     try {
-      await desktopInvoke('set_full_spectator_preference', { account: fullChoice.account, enabled });
+      await desktopInvoke('set_full_spectator_preference', {
+        account: fullChoice.account,
+        enabled,
+      });
       setFullChoice({ ...fullChoice, enabled });
     } catch (reason) {
       setFullError(reason instanceof Error ? reason.message : '解说键位选择未保存，请重试。');
-    } finally { setFullBusy(false); }
+    } finally {
+      setFullBusy(false);
+    }
   }
   const preferences = draft ?? status;
   const dirty = Boolean(
@@ -142,12 +156,18 @@ export function Cs2LaunchSettings() {
             label="为当前 Steam 账号启用完整解说键位"
             checked={fullChoice?.enabled ?? false}
             disabled={disabled || fullBusy || !fullChoice || Boolean(preferences?.preferMulnx)}
-            onChange={(event) => { void setFullEnabled(event.target.checked); }}
-            message={fullChoice
-              ? `账号 ${fullChoice.account}：下次标准启动时检查当前配置；不满足条件时使用基础观战键位。`
-              : '打开 Steam 并完成游戏配置检查后，可为当前账号选择。'}
+            onChange={(event) => {
+              void setFullEnabled(event.target.checked);
+            }}
+            message={
+              fullChoice
+                ? `账号 ${fullChoice.account}：下次标准启动时检查当前配置；不满足条件时使用基础观战键位。`
+                : '打开 Steam 并完成游戏配置检查后，可为当前账号选择。'
+            }
           />
-          {fullChoice?.enabled ? <p>退出游戏后恢复启动前的本机键位；发生冲突时保留当前修改。</p> : null}
+          {fullChoice?.enabled ? (
+            <p>退出游戏后恢复启动前的本机键位；发生冲突时保留当前修改。</p>
+          ) : null}
           {fullError ? <StatusBanner tone="warning">{fullError}</StatusBanner> : null}
           {status?.spectatorWarning ? (
             <StatusBanner tone="warning">{status.spectatorWarning}</StatusBanner>
