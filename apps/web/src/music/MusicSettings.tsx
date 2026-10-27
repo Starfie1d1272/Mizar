@@ -3,6 +3,7 @@ import { controlEvidence, browserErrorEvidence } from '../debug/control-journal'
 import { useState } from 'react';
 import {
   MUSIC_GROUPS,
+  musicConfigSchema,
   type MusicConfig,
   type MusicGroup,
   type MusicTrack,
@@ -131,7 +132,7 @@ export function MusicSettings({ active = true }: { active?: boolean }) {
         ) : null}
       </Panel>
       {!config ? (
-        <p role="status">等待本机音乐服务，请确认 Companion 已配置 OBS。</p>
+        <p role="status">等待本机音乐服务，请确认本机服务已配置 OBS。</p>
       ) : (
         <>
           <div className="music-settings-save">
@@ -180,6 +181,33 @@ export function MusicSettings({ active = true }: { active?: boolean }) {
                 onClick={() =>
                   void action(async () => {
                     await command('/operator/music', { action: 'configure', config });
+                    const response = await fetch('/local/v1/music', { cache: 'no-store' }).catch(
+                      () => {
+                        throw new Error('配置已提交，但无法读取保存结果；请重新核对。');
+                      },
+                    );
+                    if (!response.ok)
+                      throw new Error('配置已提交，但无法读取保存结果；请重新核对。');
+                    const result = (await response.json().catch(() => null)) as MusicView | null;
+                    const parsed = musicConfigSchema.safeParse(result?.config);
+                    if (!parsed.success)
+                      throw new Error('配置已提交，但读取的结果无效；请重新核对。');
+                    const saved = parsed.data;
+                    const matches = MUSIC_GROUPS.every((group) => {
+                      const expected = config.groups[group];
+                      const actual = saved.groups[group];
+                      return (
+                        actual.volume === expected.volume &&
+                        actual.tracks.length === expected.tracks.length &&
+                        expected.tracks.every(
+                          (track, index) =>
+                            actual.tracks[index]?.id === track.id &&
+                            actual.tracks[index]?.gain === track.gain,
+                        )
+                      );
+                    });
+                    if (!matches) throw new Error('保存后的音量与当前设置不一致，请重新核对。');
+                    setConfig(saved);
                     setDirty(false);
                     setMessage('音乐配置已保存。');
                   }, 'save')
@@ -239,7 +267,7 @@ export function MusicSettings({ active = true }: { active?: boolean }) {
                           </span>
                           <strong>{track.name}</strong>
                           <Field
-                            label={`曲目音量 · ${Math.round((track.gain ?? spec.volume) * 100)}%`}
+                            label={`曲目音量 · ${Math.round((track.gain ?? spec.volume) * 100)}% · ${track.gain === undefined ? '跟随场景音量' : '单独设置'}`}
                             aria-label={`${track.name} 音量`}
                             type="range"
                             min="0"
@@ -257,6 +285,24 @@ export function MusicSettings({ active = true }: { active?: boolean }) {
                               })
                             }
                           />
+                          {track.gain !== undefined && (
+                            <Button
+                              disabled={busy}
+                              aria-label={'恢复 ' + track.name + ' 跟随场景音量'}
+                              onClick={() =>
+                                change(group, {
+                                  tracks: spec.tracks.map((entry, n) => {
+                                    if (n !== index) return entry;
+                                    const inherited = { ...entry };
+                                    delete inherited.gain;
+                                    return inherited;
+                                  }),
+                                })
+                              }
+                            >
+                              跟随场景音量
+                            </Button>
+                          )}
                           <Button
                             disabled={busy}
                             aria-label={'试听 ' + track.name}
@@ -318,7 +364,7 @@ export function MusicSettings({ active = true }: { active?: boolean }) {
                   ) : null}
                   <Field
                     label={`场景音量 · ${Math.round(spec.volume * 100)}%`}
-                    message="试听使用未保存的音量和选段；保存后用于节目自动播放。"
+                    message="未单独设置的曲目跟随场景音量；单独设置的曲目使用自己的音量。试听使用未保存的设置，保存后用于节目自动播放。"
                     type="range"
                     min="0"
                     max="1"

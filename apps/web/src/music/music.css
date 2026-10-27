@@ -103,6 +103,7 @@
 }
 .music-settings-tracks li {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--mizar-layout-padding);
   padding: var(--mizar-layout-compact);
@@ -115,6 +116,22 @@
 }
 .music-settings-track-index {
   color: var(--mizar-fg-muted);
+}
+@media (max-width: 900px) {
+  .music-settings-tracks {
+    max-height: none;
+  }
+  .music-settings-tracks li {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--mizar-layout-compact) var(--mizar-layout-gap);
+  }
+  .music-settings-tracks li > strong {
+    grid-column: span 2;
+  }
+  .music-settings-tracks li > .mizar-field {
+    grid-column: 1 / -1;
+  }
 }
 .music-settings-empty {
   padding: var(--mizar-layout-padding);

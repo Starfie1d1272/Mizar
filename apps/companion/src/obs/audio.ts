@@ -1,3 +1,4 @@
+import { ObsActionError } from './action-error.js';
 import { OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
 import type { ObsFinding, ObsRpc } from './reconcile.js';
 
@@ -88,16 +89,14 @@ export async function setupObsAudio(obs: ObsRpc, baseUrl: string): Promise<void>
     obs.call('GetRecordStatus'),
     obs.call('GetSceneCollectionList'),
   ]);
-  if (stream.outputActive || record.outputActive)
-    throw new Error('OBS 正在输出；停止推流和录制后配置音频。');
+  if (stream.outputActive || record.outputActive) throw new ObsActionError('output_active_audio');
   if (collection.currentSceneCollectionName !== OBS_COLLECTION)
-    throw new Error('请先修复并切换到 Mizar 场景集合。');
+    throw new ObsActionError('collection_inactive');
   const inputs = (await obs.call('GetInputList')).inputs as Input[];
   for (const input of inputs.filter((item) => VIDEO_AUDIO_KINDS.has(item.inputKind))) {
     const settings = (await obs.call('GetInputSettings', { inputName: input.inputName }))
       .inputSettings as Record<string, unknown>;
-    if (settings.capture_audio === true)
-      throw new Error('游戏或窗口捕获已开启音频，请在 OBS 中配置麦克风，以免重复采集声音。');
+    if (settings.capture_audio === true) throw new ObsActionError('video_audio_active');
   }
   if (
     inputs.some(
@@ -105,11 +104,11 @@ export async function setupObsAudio(obs: ObsRpc, baseUrl: string): Promise<void>
         AUDIO_KINDS.has(input.inputKind) && !MANAGED.some((item) => item.name === input.inputName),
     )
   )
-    throw new Error('已有自定义音频来源，请在 OBS 中配置，以免重复采集。');
+    throw new ObsActionError('custom_audio');
   for (const managed of MANAGED) {
     const existing = inputs.find((input) => input.inputName === managed.name);
     if (existing && existing.inputKind !== managed.kind)
-      throw new Error('Mizar 音频来源名称冲突，请在 OBS 中核对。');
+      throw new ObsActionError('audio_name_conflict');
     let created = Boolean(existing);
     for (const scene of obsDesiredScenes(baseUrl)) {
       if (!created) {
