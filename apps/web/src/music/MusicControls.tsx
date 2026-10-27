@@ -1,5 +1,6 @@
 import './music.css';
 import { useState } from 'react';
+import { Mixer } from '../audio/Mixer';
 import type { MusicConfig, MusicGroup, MusicStatus } from '@mizar/protocol/music';
 import { Button, Field, Select } from '../ui';
 import { useLocalRead, command } from '../preparation/client';
@@ -27,11 +28,9 @@ export const MUSIC_LABELS = {
 export function MusicControls({
   compact = false,
   volumeDisabled = false,
-  onVolumeChange,
 }: {
   compact?: boolean;
   volumeDisabled?: boolean;
-  onVolumeChange?: (group: MusicGroup, volume: number) => void;
 }) {
   const view = useLocalRead<MusicView>('/local/v1/music', 1000);
   const [error, setError] = useState('');
@@ -43,8 +42,6 @@ export function MusicControls({
     setError('');
     try {
       await command('/operator/music', body);
-      if (body.action === 'volume')
-        onVolumeChange?.(body.group as MusicGroup, body.volume as number);
       if (body.action === 'play') setSelection('');
     } catch {
       setError('音乐操作未完成，请检查本机服务与 OBS 后重试。');
@@ -62,21 +59,7 @@ export function MusicControls({
   const trackTitle = status.bgm?.track ?? (status.held ? '音乐已停止' : '当前无音乐');
   const nextDisabled =
     busy || status.held || !status.bgm || !['waiting', 'technical'].includes(status.bgm.group);
-  const volume = status.bgm ? (
-    <Field
-      label={compact ? '' : '节目音量'}
-      aria-label="音乐音量"
-      disabled={busy || volumeDisabled}
-      type="range"
-      min="0"
-      max="1"
-      step="0.05"
-      value={status.bgm.volume}
-      onChange={(e) =>
-        void send({ action: 'volume', group: status.bgm!.group, volume: Number(e.target.value) })
-      }
-    />
-  ) : null;
+  const volume = <Mixer musicOnly />;
   const stop = (
     <Button disabled={busy} aria-label="停止音乐" onClick={() => void send({ action: 'stop' })}>
       {compact ? '停止' : '停止音乐'}
@@ -197,8 +180,8 @@ export function MusicControls({
             disabled={busy || (selection ? volumeDisabled : !canPause)}
             onClick={() => {
               if (selection) {
-                const [group, trackId] = selection.split(':');
-                void send({ action: 'play', group, trackId });
+                const [group, entryId] = selection.split(':');
+                void send({ action: 'play', group, entryId });
               } else void send({ action: status.playback === 'paused' ? 'continue' : 'pause' });
             }}
           >
@@ -219,15 +202,16 @@ export function MusicControls({
           <option value="">选择已保存曲目</option>
           {Object.entries(view.config.groups).flatMap(([group, spec]) =>
             group !== 'opening' && spec.enabled
-              ? spec.tracks.map((track) => (
-                  <option key={`${group}:${track.id}`} value={`${group}:${track.id}`}>
-                    {MUSIC_LABELS[group as MusicGroup]} · {track.name}
-                  </option>
-                ))
+              ? spec.tracks
+                  .filter((track) => track.entryId)
+                  .map((track) => (
+                    <option key={`${group}:${track.entryId}`} value={`${group}:${track.entryId}`}>
+                      {MUSIC_LABELS[group as MusicGroup]} · {track.name}
+                    </option>
+                  ))
               : [],
           )}
         </Select>
-        {volume}
         <div className="music-player__monitor">
           <Button
             disabled={busy}

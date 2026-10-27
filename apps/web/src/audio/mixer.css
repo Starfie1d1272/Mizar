@@ -1,0 +1,53 @@
+.audio-mixer {
+  padding: var(--mizar-layout-padding);
+  border: var(--mizar-line-border) solid var(--mizar-border-default);
+  border-radius: var(--mizar-shape-panel);
+  background: var(--mizar-bg-surface);
+  min-width: 0;
+}
+.audio-mixer__heading,
+.audio-mixer__title,
+.audio-mixer__control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--mizar-layout-compact);
+}
+.audio-mixer__heading h2 {
+  margin: 0;
+}
+.audio-mixer__heading span,
+.audio-mixer__title span,
+.audio-mixer small {
+  color: var(--mizar-fg-muted);
+}
+.audio-mixer__channels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: var(--mizar-layout-padding);
+  margin-top: var(--mizar-layout-padding);
+}
+.audio-mixer__channel {
+  min-width: 0;
+  display: grid;
+  gap: var(--mizar-layout-compact);
+}
+.audio-mixer__control input {
+  min-width: 0;
+  width: 100%;
+}
+.audio-mixer__control output {
+  min-width: 3em;
+  text-align: right;
+}
+.audio-mixer__control .mizar-button {
+  flex-shrink: 0;
+}
+.audio-mixer--music {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.audio-mixer--music .audio-mixer__channels {
+  margin: 0;
+}
