@@ -165,7 +165,7 @@ export class ObsAdapter {
   }
 
   private async withObs<T>(
-    operation: (obs: ObsRpc) => Promise<T>,
+    operation: (obs: ObsRpc, endpoint: string) => Promise<T>,
     timeoutMs = TIMEOUT_MS,
     diagnosticStage?: string,
   ): Promise<T> {
@@ -191,7 +191,7 @@ export class ObsAdapter {
               ) => Promise<Record<string, unknown>>
             )(type, data),
         };
-        return operation(rpc);
+        return operation(rpc, `ws://${config.host}:${config.port}`);
       })();
       return await Promise.race([
         task,
@@ -345,11 +345,15 @@ export class ObsAdapter {
   }
   readAudioRouting() {
     if (!this.audioRouting) throw new Error('audio_routing_unavailable');
-    return this.serial(() => this.withObs((obs) => this.audioRouting!.read(obs), 12000));
+    return this.serial(() =>
+      this.withObs((obs, endpoint) => this.audioRouting!.read(obs, endpoint), 12000),
+    );
   }
   bindAudio(command: ObsAudioBindCommand) {
     if (!this.audioRouting) throw new Error('audio_routing_unavailable');
-    return this.serial(() => this.withObs((obs) => this.audioRouting!.bind(obs, command), 12000));
+    return this.serial(() =>
+      this.withObs((obs, endpoint) => this.audioRouting!.bind(obs, command, endpoint), 12000),
+    );
   }
   ensure(activeScene: () => ProgramSceneId = () => 'waiting'): Promise<readonly ObsFinding[]> {
     return this.configurationMutation(async () => {

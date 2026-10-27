@@ -50,7 +50,9 @@ export function ObsAudioRouting() {
       {message && <p role="alert">{message}</p>}
       {status && (
         <>
-          <p>当前场景集合：{status.collection}</p>
+          <p>
+            当前 OBS：{status.endpoint}；场景集合：{status.collection}
+          </p>
           {(Object.keys(labels) as ObsAudioRole[]).map((role) => (
             <div key={role}>
               <label htmlFor={`audio-${role}`}>{labels[role]}</label>{' '}

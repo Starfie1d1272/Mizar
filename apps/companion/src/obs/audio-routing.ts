@@ -35,7 +35,10 @@ const videoKinds = new Set(['game_capture', 'window_capture']);
 /** Explicit identities are revalidated against OBS; selection tokens expire and contain no PID. */
 export class ObsAudioRouting {
   private state: State | undefined;
-  private selections = new Map<string, { input: Input; collection: string; until: number }>();
+  private selections = new Map<
+    string,
+    { input: Input; collection: string; endpoint: string; until: number }
+  >();
   constructor(
     private readonly path: string,
     private readonly now = Date.now,
@@ -100,14 +103,14 @@ export class ObsAudioRouting {
     }
     return { collection, inputs, candidates };
   }
-  async read(obs: ObsRpc): Promise<ObsAudioRoutingStatus> {
+  async read(obs: ObsRpc, endpoint: string): Promise<ObsAudioRoutingStatus> {
     const state = await this.load();
     const { collection, inputs, candidates } = await this.inputs(obs);
     for (const [id, selection] of this.selections)
       if (selection.until <= this.now()) this.selections.delete(id);
     const choices = candidates.map((input) => {
       const selectionId = randomUUID();
-      this.selections.set(selectionId, { input, collection, until: this.now() + 30_000 });
+      this.selections.set(selectionId, { input, collection, endpoint, until: this.now() + 30_000 });
       return { selectionId, name: input.inputName, kind: input.inputKind, uuid: input.inputUuid };
     });
     while (this.selections.size > 2048)
@@ -120,7 +123,8 @@ export class ObsAudioRouting {
           (i) =>
             i.inputUuid === binding.inputUuid &&
             i.inputKind === binding.inputKind &&
-            collection === binding.collection,
+            collection === binding.collection &&
+            endpoint === binding.endpoint,
         );
         return [role, { ...binding, valid: Boolean(found), name: found?.inputName ?? null }];
       }),
@@ -175,9 +179,16 @@ export class ObsAudioRouting {
         }
     }
     findings.push('请在 OBS 核对监听回灌及输出音轨，并录制试听。');
-    return { revision: state.revision, collection, bindings, candidates: choices, findings };
+    return {
+      revision: state.revision,
+      endpoint,
+      collection,
+      bindings,
+      candidates: choices,
+      findings,
+    };
   }
-  async bind(obs: ObsRpc, command: ObsAudioBindCommand) {
+  async bind(obs: ObsRpc, command: ObsAudioBindCommand, endpoint: string) {
     const state = await this.load();
     if (state.revision !== command.revision) throw new Error('audio_revision_changed');
     let binding: State['bindings'][ObsAudioRole] = null;
@@ -188,7 +199,7 @@ export class ObsAudioRouting {
       const input = current.candidates.find(
         (i) => i.inputUuid === selected.input.inputUuid && i.inputKind === selected.input.inputKind,
       );
-      if (!input || current.collection !== selected.collection)
+      if (!input || current.collection !== selected.collection || endpoint !== selected.endpoint)
         throw new Error('audio_selection_changed');
       if (
         roles.some(
@@ -203,6 +214,7 @@ export class ObsAudioRouting {
         inputUuid: input.inputUuid,
         inputKind: input.inputKind,
         collection: current.collection,
+        endpoint,
       };
     }
     if (
@@ -223,6 +235,6 @@ export class ObsAudioRouting {
       await rm(temp, { force: true });
     }
     this.state = next;
-    return this.read(obs);
+    return this.read(obs, endpoint);
   }
 }

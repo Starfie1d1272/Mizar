@@ -7,6 +7,7 @@ export const obsAudioBindingSchema = z
     inputUuid: z.string().min(1).max(256),
     inputKind: z.string().min(1).max(256),
     collection: z.string().min(1).max(256),
+    endpoint: z.string().min(1).max(256),
   })
   .strict();
 export const obsAudioBindCommandSchema = z
@@ -21,6 +22,7 @@ export type ObsAudioBinding = z.infer<typeof obsAudioBindingSchema>;
 export type ObsAudioBindCommand = z.infer<typeof obsAudioBindCommandSchema>;
 export interface ObsAudioRoutingStatus {
   revision: string;
+  endpoint: string;
   collection: string;
   bindings: Record<
     ObsAudioRole,

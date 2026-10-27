@@ -35,36 +35,53 @@ it('binds only explicit current UUIDs and rejects stale windows, deleted sources
       },
     };
     const routing = new ObsAudioRouting(join(dir, 'bindings.json'));
-    const a = await routing.read(obs);
-    const b = await routing.read(obs);
+    const a = await routing.read(obs, 'ws://127.0.0.1:4455');
+    const b = await routing.read(obs, 'ws://127.0.0.1:4455');
     expect(a.candidates).toHaveLength(2);
-    const bound = await routing.bind(obs, {
-      role: 'remoteCommentary',
-      selectionId: a.candidates[1]!.selectionId,
-      revision: a.revision,
-    });
+    const bound = await routing.bind(
+      obs,
+      {
+        role: 'remoteCommentary',
+        selectionId: a.candidates[1]!.selectionId,
+        revision: a.revision,
+      },
+      'ws://127.0.0.1:4455',
+    );
     expect(bound.bindings.remoteCommentary?.inputUuid).toBe('two');
+    expect((await routing.read(obs, 'ws://127.0.0.1:4456')).bindings.remoteCommentary?.valid).toBe(
+      false,
+    );
     await expect(
-      routing.bind(obs, {
-        role: 'game',
-        selectionId: b.candidates[0]!.selectionId,
-        revision: b.revision,
-      }),
+      routing.bind(
+        obs,
+        {
+          role: 'game',
+          selectionId: b.candidates[0]!.selectionId,
+          revision: b.revision,
+        },
+        'ws://127.0.0.1:4455',
+      ),
     ).rejects.toThrow('audio_revision_changed');
-    const fresh = await routing.read(obs);
+    const fresh = await routing.read(obs, 'ws://127.0.0.1:4455');
     inputs = [inputs[0]!];
     await expect(
-      routing.bind(obs, {
-        role: 'game',
-        selectionId: fresh.candidates[1]!.selectionId,
-        revision: fresh.revision,
-      }),
+      routing.bind(
+        obs,
+        {
+          role: 'game',
+          selectionId: fresh.candidates[1]!.selectionId,
+          revision: fresh.revision,
+        },
+        'ws://127.0.0.1:4455',
+      ),
     ).rejects.toThrow('audio_selection_changed');
-    expect((await routing.read(obs)).bindings.remoteCommentary?.valid).toBe(false);
+    expect((await routing.read(obs, 'ws://127.0.0.1:4455')).bindings.remoteCommentary?.valid).toBe(
+      false,
+    );
     collection = 'B';
     expect(
-      (await new ObsAudioRouting(join(dir, 'bindings.json')).read(obs)).bindings.remoteCommentary
-        ?.valid,
+      (await new ObsAudioRouting(join(dir, 'bindings.json')).read(obs, 'ws://127.0.0.1:4455'))
+        .bindings.remoteCommentary?.valid,
     ).toBe(false);
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -116,7 +133,7 @@ it('reports repeated nested paths and global desktop audio without changing OBS'
         throw new Error(type);
       },
     };
-    const status = await new ObsAudioRouting(join(dir, 'state')).read(obs);
+    const status = await new ObsAudioRouting(join(dir, 'state')).read(obs, 'ws://127.0.0.1:4455');
     expect(status.findings.some((s) => s.includes('全局桌面'))).toBe(true);
     expect(status.findings.some((s) => s.includes('出现 2 次'))).toBe(true);
     expect(calls.every((name) => name.startsWith('Get'))).toBe(true);
