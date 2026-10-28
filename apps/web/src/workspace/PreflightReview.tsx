@@ -10,7 +10,7 @@ import { useCs2Status } from '../preparation/cs2-status';
 import type { ConnectionPreparationView } from '../preparation/observer-preparation';
 import { useObsStatus } from './obs-client';
 import { syncHealthText, type SyncHealth } from './SyncHealthAlert';
-import { SILENCED_MATCH_KEY } from './review-silence';
+import { SILENCED_MATCH_KEY, SILENCE_CHANGED, setSilencedMatch } from './review-silence';
 import type { LiveRosterConnection } from './live-roster-model';
 import { workspaceIssues } from './model';
 import './preflight-review.css';
@@ -102,8 +102,17 @@ function ReviewSession({ operator, program, cursor, connection, onOpen }: Props)
       }
       if (event.key === completionKey) setAcknowledged(event.newValue ?? '');
     };
+    const localChanged = (event: Event) => {
+      const value = (event as CustomEvent<string | null>).detail;
+      setSilenced(value === matchId);
+      if (value === matchId) setOpened(false);
+    };
     window.addEventListener('storage', changed);
-    return () => window.removeEventListener('storage', changed);
+    window.addEventListener(SILENCE_CHANGED, localChanged);
+    return () => {
+      window.removeEventListener('storage', changed);
+      window.removeEventListener(SILENCE_CHANGED, localChanged);
+    };
   }, [completionKey, matchId]);
   const [connectionObserved, setConnectionObserved] = useState(false);
   if (connection && !connectionObserved) setConnectionObserved(true);
@@ -401,13 +410,7 @@ function ReviewSession({ operator, program, cursor, connection, onOpen }: Props)
           <Button
             onClick={() => {
               const next = !silenced;
-              setSilenced(next);
-              try {
-                if (next) localStorage.setItem(SILENCED_MATCH_KEY, matchId);
-                else localStorage.removeItem(SILENCED_MATCH_KEY);
-              } catch {
-                /* Keep the current window preference when storage is unavailable. */
-              }
+              setSilencedMatch(next ? matchId : null);
               if (next) close();
             }}
           >

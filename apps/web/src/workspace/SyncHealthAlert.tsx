@@ -1,6 +1,6 @@
-import { ReviewDialog, closeReviewWindow } from './ReviewDialog';
+import { ReviewDialog, closeReviewWindow, isReviewWindow } from './ReviewDialog';
 import { useEffect, useRef, useState } from 'react';
-import { SILENCED_MATCH_KEY } from './review-silence';
+import { SILENCED_MATCH_KEY, SILENCE_CHANGED, setSilencedMatch } from './review-silence';
 import { Button, StatusBanner } from '../ui';
 import { command } from '../preparation/client';
 import { RivalHubSyncControls } from '../operator/RivalHubSyncControls';
@@ -63,6 +63,7 @@ export function SyncHealthAlert(props: AlertProps) {
   });
   useEffect(() => {
     const update = () => {
+      setDismissed(null);
       try {
         setSilenced(
           Boolean(props.matchId && localStorage.getItem(SILENCED_MATCH_KEY) === props.matchId),
@@ -72,8 +73,18 @@ export function SyncHealthAlert(props: AlertProps) {
       }
     };
     update();
+    const localUpdate = (event: Event) => {
+      setDismissed(null);
+      setSilenced(
+        Boolean(props.matchId && (event as CustomEvent<string | null>).detail === props.matchId),
+      );
+    };
     window.addEventListener('storage', update);
-    return () => window.removeEventListener('storage', update);
+    window.addEventListener(SILENCE_CHANGED, localUpdate);
+    return () => {
+      window.removeEventListener('storage', update);
+      window.removeEventListener(SILENCE_CHANGED, localUpdate);
+    };
   }, [props.matchId]);
   if (health?.status !== 'attention') return null;
   // Operation feedback and manual review belong only to this active incident.
@@ -86,12 +97,7 @@ export function SyncHealthAlert(props: AlertProps) {
       dismissed={silenced || dismissed === health.incidentId}
       onSilence={() => {
         if (!props.matchId) return;
-        try {
-          localStorage.setItem(SILENCED_MATCH_KEY, props.matchId);
-        } catch {
-          // Keep the current window preference when storage is unavailable.
-        }
-        setSilenced(true);
+        setSilencedMatch(props.matchId);
       }}
       onDismiss={() => setDismissed(health.incidentId)}
     />
@@ -144,7 +150,7 @@ function SyncHealthIncident({
       </StatusBanner>
       <ReviewDialog
         kind="sync"
-        open={reviewing || Boolean(health.incidentId && !dismissed)}
+        open={isReviewWindow() || reviewing || Boolean(health.incidentId && !dismissed)}
         modal={false}
         className="workspace-live-roster-alert"
         title="本场网站同步需要处理"
@@ -179,7 +185,9 @@ function SyncHealthIncident({
             onClick={() => {
               onSilence();
               close();
-              void closeReviewWindow().catch(() => {});
+              void closeReviewWindow().catch((error) =>
+                setFeedback(error instanceof Error ? error.message : '关闭核对窗口失败，请重试。'),
+              );
             }}
           >
             本场比赛不再自动弹出
