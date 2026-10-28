@@ -246,8 +246,21 @@ test('preflight reviews current ten-player evidence, actual auto state, disconne
   syncFailure = true;
   await page.reload();
   const syncDialog = page.getByRole('dialog', { name: '本场网站同步需要处理' });
+  await expect(page.getByRole('button', { name: '网站同步需处理' })).toBeVisible();
+  await expect(syncDialog).not.toBeVisible();
+  await page.getByRole('button', { name: '网站同步需处理' }).click();
   await expect(syncDialog).toBeVisible();
   await expect(syncDialog).not.toContainText('.r');
+  await syncDialog.getByRole('button', { name: '本场比赛不再自动弹出' }).click();
+  await expect(syncDialog).not.toBeVisible();
+  program.payload.map.phase = 'warmup';
+  publish();
+  await page.getByRole('button', { name: '网站连接需处理', exact: true }).click();
+  await dialog.getByRole('button', { name: '恢复本场自动提醒' }).click();
+  await dialog.getByRole('button', { name: '稍后处理' }).click();
+  program.payload.map.phase = 'live';
+  publish();
+  await expect(syncDialog).toBeVisible();
   await screenshot('07-live-sync-failure');
   if (process.env.MIZAR_PREFLIGHT_SCREENSHOTS)
     await syncDialog.screenshot({
@@ -273,8 +286,8 @@ test('preflight reviews current ten-player evidence, actual auto state, disconne
         );
       },
     };
-    localStorage.clear();
   });
+  await page.evaluate(() => localStorage.clear());
   await page.goto('/workspace/left');
   await expect
     .poll(() =>
@@ -326,6 +339,33 @@ test('preflight reviews current ten-player evidence, actual auto state, disconne
       )
       .toBe(true);
   }
+  // A manually opened native sync review must render even for a silenced match.
+  syncFailure = true;
+  program.payload.map.phase = 'live';
+  await page.evaluate(
+    (id) => localStorage.setItem('mizar.preflight.silenced-match.v1', id),
+    originalMatchId,
+  );
+  await page.goto('/workspace/review?kind=sync');
+  await expect(syncDialog).toBeVisible();
+  await page.evaluate(() => {
+    const host = (
+      window as typeof window & {
+        __TAURI_INTERNALS__: { invoke: (command: string, args?: unknown) => Promise<unknown> };
+      }
+    ).__TAURI_INTERNALS__;
+    const invoke = host.invoke;
+    host.invoke = (command, args) =>
+      command === 'close_review'
+        ? Promise.reject(new Error('关闭窗口失败'))
+        : invoke(command, args);
+  });
+  await syncDialog.getByRole('button', { name: '本场比赛不再自动弹出' }).click();
+  await expect(syncDialog).toContainText('关闭窗口失败');
+  syncFailure = false;
+  program.payload.map.phase = 'warmup';
+  await page.goto('/workspace/review?kind=preflight');
+  await expect(dialog).toBeVisible();
   let hideGameHud = true;
   await page.route('**/local/v1/observer-assist', (route) =>
     route.fulfill({
