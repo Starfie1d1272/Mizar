@@ -339,6 +339,30 @@ describe('Box bounded recovery', () => {
     expect(box.hash).toHaveBeenCalledTimes(1);
     expect(transport).toHaveBeenCalledTimes(1);
   });
+  it('waits for a delayed upload to appear and verifies it without resending', async () => {
+    const { box, transport } = uploading({ safe: false });
+    box.list.mockResolvedValueOnce([]).mockResolvedValue([{ name: 'core.exe', type: 'file' }]);
+    box.hash.mockResolvedValue({ size: 4, sha256: digest(bytes) });
+    const pending = box.upload('/Runtime/v1.6.4', 'core.exe', bytes);
+    await vi.advanceTimersByTimeAsync(1000);
+    await pending;
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect(box.hash).toHaveBeenCalledTimes(1);
+  });
+  it('waits for a delayed pointer replacement while the previous bytes remain visible', async () => {
+    const { box, transport } = uploading({
+      safe: false,
+      entries: [{ name: 'core.exe', type: 'file' }],
+    });
+    box.hash
+      .mockResolvedValueOnce({ size: 3, sha256: digest(Buffer.from('old')) })
+      .mockResolvedValue({ size: 4, sha256: digest(bytes) });
+    const pending = box.upload('/Updates', 'core.exe', bytes, true);
+    await vi.advanceTimersByTimeAsync(1000);
+    await pending;
+    expect(box.hash).toHaveBeenCalledTimes(2);
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
   it('preserves a same-size different-content destination', async () => {
     const { box, transport } = uploading({
       entries: [{ name: 'core.exe', type: 'file' }],
@@ -358,7 +382,9 @@ describe('Box bounded recovery', () => {
     'does not replay uncertain/replace writes: %j',
     async ({ safe, replace }) => {
       const { box, transport } = uploading({ safe });
-      await expect(box.upload('/Updates', 'core.exe', bytes, replace)).rejects.toThrow();
+      const pending = expect(box.upload('/Updates', 'core.exe', bytes, replace)).rejects.toThrow();
+      await vi.advanceTimersByTimeAsync(60000);
+      await pending;
       expect(transport).toHaveBeenCalledTimes(1);
     },
   );
@@ -385,7 +411,7 @@ describe('Box bounded recovery', () => {
   });
 });
 
-it('cancels reconciliation at the same 15-minute upload budget', async () => {
+it('bounds reconciliation of a stalled read to 90 seconds', async () => {
   vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
     const controller = new globalThis.AbortController();
     globalThis.setTimeout(() => controller.abort(new DOMException('deadline', 'TimeoutError')), ms);
@@ -409,7 +435,7 @@ it('cancels reconciliation at the same 15-minute upload budget', async () => {
   );
   const pending = box.upload('/Runtime/v1.6.4', 'core.exe', Buffer.from('core'));
   const rejected = expect(pending).rejects.toThrow('timeout');
-  await vi.advanceTimersByTimeAsync(900000);
+  await vi.advanceTimersByTimeAsync(90000);
   await rejected;
   expect(transport).toHaveBeenCalledTimes(1);
 });

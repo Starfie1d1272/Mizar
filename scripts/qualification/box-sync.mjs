@@ -219,6 +219,36 @@ async function retryWait(attempt, reason, deadline, retryAfter, signal) {
   console.log(`Box 暂态失败（${reason}），${delay}ms 后重试 ${attempt + 1}/2`);
   await sleep(delay, undefined, { signal });
 }
+
+// An accepted write can become visible after the connection has failed. Observe
+// the exact destination without issuing another mutation while the outcome is unknown.
+const reconciliationDelays = [0, 1000, 2000, 4000, 8000, 15000, 15000, 15000];
+async function waitForWrittenFile(
+  box,
+  folder,
+  name,
+  identity,
+  signal,
+  allowPrevious = false,
+  delayed = true,
+) {
+  const delays = delayed ? reconciliationDelays : [0];
+  const recoverySignal = AbortSignal.any([AbortSignal.timeout(90000), ...(signal ? [signal] : [])]);
+  for (const delay of delays) {
+    if (delay) await sleep(delay, undefined, { signal: recoverySignal });
+    recoverySignal.throwIfAborted();
+    const matches = (await box.list(folder, recoverySignal)).filter((entry) => entry.name === name);
+    requireValue(
+      matches.length <= 1 && matches.every((entry) => entry.type === 'file'),
+      '写入恢复目标无效；保留现场',
+    );
+    if (!matches.length) continue;
+    const actual = await box.hash(`${folder}/${name}`, recoverySignal);
+    if (actual.size === identity.size && actual.sha256 === identity.sha256) return true;
+    if (!allowPrevious) throw new MirrorError('写入恢复发现不同内容；保留远端文件');
+  }
+  return false;
+}
 async function checkedFetch(url, options = {}, timeout = 120000, transport = fetch, consume) {
   // Error text and response bodies may contain temporary upload URLs or credentials.
   const readOnlyBox =
@@ -454,28 +484,26 @@ export class BoxClient {
             throw error;
           // Reconciliation is read-only and shares this upload's total budget.
           // A completed body might still commit later: absence alone never authorizes replay.
-          let existing;
+          let confirmed;
           try {
-            existing = (await this.list(path, signal)).filter((entry) => entry.name === name);
+            confirmed = await waitForWrittenFile(
+              this,
+              path,
+              name,
+              {
+                size: bytes.length,
+                sha256: digest(bytes),
+              },
+              signal,
+              replace,
+              !error.retrySafeUpload || replace,
+            );
           } catch (readError) {
             // A failed reconciliation cannot make an uncertain write safe to replay.
             if (!error.retrySafeUpload || replace) readError.retryableRead = false;
             throw readError;
           }
-          requireValue(existing.length <= 1, '上传恢复发现重名文件；保留远端内容');
-          if (existing.length) {
-            requireValue(existing[0].type === 'file', '上传恢复目标不是文件');
-            let actual;
-            try {
-              actual = await this.hash(path + '/' + name, signal);
-            } catch (readError) {
-              if (!error.retrySafeUpload || replace) readError.retryableRead = false;
-              throw readError;
-            }
-            requireValue(
-              actual.size === bytes.length && actual.sha256 === digest(bytes),
-              '上传恢复发现不同内容；保留远端文件',
-            );
+          if (confirmed) {
             console.log('Box 上传回执丢失，远端原字节已核验，跳过重传');
             return;
           }
@@ -504,12 +532,42 @@ export class BoxClient {
   }
 }
 
-async function verifyRemote(box, path, identity) {
-  const actual = await box.hash(path);
+async function verifyRemote(box, path, identity, signal) {
+  const actual = await (signal ? box.hash(path, signal) : box.hash(path));
   requireValue(
     actual.sha256 === identity.sha256 && actual.size === identity.size,
     '云盘同名文件内容冲突；停止同步并保留文件',
   );
+}
+
+async function moveVerified(box, from, to, identity) {
+  try {
+    await box.move(from, to, identity.name);
+  } catch (error) {
+    if (!error.uploadOutcomeUnknown) throw error;
+    try {
+      const signal = AbortSignal.timeout(90000);
+      for (const delay of reconciliationDelays) {
+        if (delay) await sleep(delay, undefined, { signal });
+        const source = (await box.list(from, signal)).filter(
+          (entry) => entry.name === identity.name,
+        );
+        const target = (await box.list(to, signal)).filter((entry) => entry.name === identity.name);
+        requireValue(
+          source.length <= 1 &&
+            target.length <= 1 &&
+            target.every((entry) => entry.type === 'file'),
+          '移动恢复目标无效；保留现场',
+        );
+        if (target.length) await verifyRemote(box, `${to}/${identity.name}`, identity, signal);
+        if (!source.length && target.length) return;
+      }
+    } catch (readError) {
+      readError.retryableRead = false;
+      throw readError;
+    }
+    throw error;
+  }
 }
 
 // Upload and verify before removing anything from Stable. Archive is never pruned here.
@@ -590,7 +648,7 @@ async function syncPackage({ box, identity, bytes, resolveIdentity }, folder, pa
       await verifyRemote(box, `/Archive/${previous.name}`, previous);
       await box.remove(`${folder}/${previous.name}`);
     } else {
-      await box.move(folder, '/Archive', previous.name);
+      await moveVerified(box, folder, '/Archive', previous);
       await verifyRemote(box, `/Archive/${previous.name}`, previous);
     }
   }
@@ -657,7 +715,7 @@ async function planFullDownloadRetirement(box, version, resolveIdentity) {
       if (existing) {
         await verifyRemote(box, '/Archive/' + identity.name, identity);
         await box.remove(folder + '/' + identity.name);
-      } else await box.move(folder, '/Archive', identity.name);
+      } else await moveVerified(box, folder, '/Archive', identity);
       await verifyRemote(box, '/Archive/' + identity.name, identity);
     }
   };
@@ -831,26 +889,22 @@ export async function syncResourceFiles({
         } catch (error) {
           // 404 may mean the verified source disappeared, not an unsupported endpoint.
           if (![405, 501].includes(error.httpStatus) && !error.uploadOutcomeUnknown) throw error;
-          let destinations;
+          let copiedAfterTimeout;
           try {
-            destinations = (await box.list(folder)).filter((e) => e.name === file.name);
+            copiedAfterTimeout = await waitForWrittenFile(
+              box,
+              folder,
+              file.name,
+              file,
+              undefined,
+              false,
+              Boolean(error.uploadOutcomeUnknown),
+            );
           } catch (readError) {
             if (error.uploadOutcomeUnknown) readError.retryableRead = false;
             throw readError;
           }
-          requireValue(
-            destinations.length <= 1 && destinations.every((e) => e.type === 'file'),
-            '资源复制目标无效；保留现场',
-          );
-          if (destinations.length) {
-            try {
-              await verifyRemote(box, `${folder}/${file.name}`, file);
-            } catch (readError) {
-              if (error.uploadOutcomeUnknown) readError.retryableRead = false;
-              throw readError;
-            }
-            copied = true;
-          }
+          copied = copiedAfterTimeout;
           // A timed-out copy may still complete later. Only a verified existing
           // destination proves success; absence does not authorize another write.
           if (!copied && error.uploadOutcomeUnknown) throw error;
