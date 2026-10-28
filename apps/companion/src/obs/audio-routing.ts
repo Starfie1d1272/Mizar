@@ -227,7 +227,6 @@ export class ObsAudioRouting {
     )
       return false;
     const inputs = records((await obs.call('GetInputList')).inputs);
-    const captureDefaults = new Map<string, unknown>();
     if (
       Object.values(managed.ids).some(
         (id) => inputs.find((i) => i.inputUuid === id)?.inputKind === 'wasapi_output_capture',
@@ -257,24 +256,7 @@ export class ObsAudioRouting {
           const settings = (await obs.call('GetInputSettings', { inputUuid: input.inputUuid }))
             .inputSettings;
           if (!settings || typeof settings !== 'object') return false;
-          let captureAudio = (settings as Record<string, unknown>).capture_audio;
-          if (captureAudio === undefined) {
-            const kind = String(input.inputKind);
-            if (!captureDefaults.has(kind)) {
-              const defaults = await obs
-                .call('GetInputDefaultSettings', { inputKind: kind })
-                .catch(() => null);
-              const value = defaults?.defaultInputSettings;
-              captureDefaults.set(
-                kind,
-                value && typeof value === 'object'
-                  ? (value as Record<string, unknown>).capture_audio
-                  : undefined,
-              );
-            }
-            captureAudio = captureDefaults.get(kind);
-          }
-          if (captureAudio !== false) return false;
+          if ((settings as Record<string, unknown>).capture_audio !== false) return false;
         }
         if (
           selected ||

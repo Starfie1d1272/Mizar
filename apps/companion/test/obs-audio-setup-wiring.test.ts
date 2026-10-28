@@ -54,7 +54,6 @@ class FakeObs extends EventEmitter {
   volumes = new Map<string, number>();
   monitors = new Map<string, string>();
   mediaStates = new Map<string, string>();
-  captureAudioDefault: unknown = false;
   offline = false;
   invalidateOnMuteRead = 0;
   windows = [
@@ -211,7 +210,7 @@ class FakeObs extends EventEmitter {
         if (input && this.onInputSettings) await this.onInputSettings(input);
         return { inputSettings: input!.settings };
       case 'GetInputDefaultSettings':
-        return { defaultInputSettings: { capture_audio: this.captureAudioDefault } };
+        return { defaultInputSettings: {} };
       case 'GetInputMute':
         if (this.invalidateOnMuteRead > 0 && --this.invalidateOnMuteRead === 0)
           this.emit('InputRemoved', { inputUuid: data.inputUuid });
@@ -572,22 +571,16 @@ it('enables technical music monitoring through the scenes created by the real se
     );
     expect(await adapter.ensure()).toEqual([]);
     const capture = obs.inputs.get(OBS_CAPTURE_INPUT)!;
-    expect(capture.settings.capture_audio).toBeUndefined();
+    expect(capture.settings.capture_audio).toBe(false);
     const store = new MusicStore(join(dir, 'music'));
     await store.load();
     const options = { owner: store.state.owner, sources: store.state.sources, baseUrl: base };
-    obs.captureAudioDefault = undefined;
-    expect(await routing.musicMonitorSafe(obs, 'ws://127.0.0.1:4455', options)).toBe(false);
-    obs.captureAudioDefault = false;
     expect(await routing.musicMonitorSafe(obs, 'ws://127.0.0.1:4455', options)).toBe(true);
-    obs.captureAudioDefault = true;
-    expect(await routing.musicMonitorSafe(obs, 'ws://127.0.0.1:4455', options)).toBe(false);
-    capture.settings.capture_audio = false;
-    expect(await routing.musicMonitorSafe(obs, 'ws://127.0.0.1:4455', options)).toBe(true);
-    obs.captureAudioDefault = false;
     capture.settings.capture_audio = true;
     expect(await routing.musicMonitorSafe(obs, 'ws://127.0.0.1:4455', options)).toBe(false);
     delete capture.settings.capture_audio;
+    expect(await routing.musicMonitorSafe(obs, 'ws://127.0.0.1:4455', options)).toBe(false);
+    capture.settings.capture_audio = false;
     const track = await store.add('合成.wav', musicWav());
     const config = structuredClone(store.state.config);
     config.groups.technical.tracks = [track];
