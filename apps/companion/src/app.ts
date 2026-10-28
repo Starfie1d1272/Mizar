@@ -1167,6 +1167,15 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           production.get().mode !== 'preparation' &&
           projectionCoordinator.getCurrent().operator.matchContext.origin !== 'fixture',
       }),
+      Date.now,
+      Math.random,
+      async (obs) => {
+        const config = await obsConfigStore.read();
+        return (
+          (await obsAudioRouting?.musicMonitorSafe(obs, `ws://${config.host}:${config.port}`)) ??
+          false
+        );
+      },
     );
     registerMusicRoutes(app, musicStore, musicDirector, localWebTransport.getOriginPolicy());
     if (obsAdapter)

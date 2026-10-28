@@ -9,6 +9,7 @@ import {
   type ObsAudioRoutingStatus,
 } from '@mizar/protocol/obs';
 import type { ObsRpc } from './reconcile.js';
+import { OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
 
 const roles = ['game', 'remoteCommentary', 'microphone'] as const;
 const stateSchema = z
@@ -193,6 +194,68 @@ export class ObsAudioRouting {
         roles.map((role) => [role, state.bindings[role]!.inputUuid]),
       ) as Record<ObsAudioRole, string>,
     };
+  }
+  /** Fail closed unless all managed scenes have independent paths and no desktop capture. */
+  async musicMonitorSafe(obs: ObsRpc, endpoint: string): Promise<boolean> {
+    const managed = await this.managedBindings(obs, endpoint);
+    if (
+      !managed ||
+      (await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== OBS_COLLECTION
+    )
+      return false;
+    const specials = await obs.call('GetSpecialInputs');
+    if (
+      Object.entries(specials).some(
+        ([key, value]) => key.startsWith('desktop') && typeof value === 'string' && value,
+      )
+    )
+      return false;
+    const inputs = records((await obs.call('GetInputList')).inputs);
+    if (
+      Object.values(managed.ids).some(
+        (id) => inputs.find((i) => i.inputUuid === id)?.inputKind === 'wasapi_output_capture',
+      )
+    )
+      return false;
+    for (const scene of obsDesiredScenes('http://127.0.0.1:3000')) {
+      const items = records(
+        (await obs.call('GetSceneItemList', { sceneName: scene.sceneName })).sceneItems,
+      );
+      if (
+        Object.values(managed.ids).some(
+          (id) =>
+            items.filter((i) => i.sourceUuid === id && i.sceneItemEnabled === true).length !== 1,
+        )
+      )
+        return false;
+      for (const item of items) {
+        if (typeof item.sceneItemEnabled !== 'boolean') return false;
+        if (item.sceneItemEnabled !== true) continue;
+        if (item.isGroup === true || item.sourceType === 'OBS_SOURCE_TYPE_SCENE') return false;
+        const input = inputs.find((i) => i.inputUuid === item.sourceUuid);
+        if (!input || input.inputKind === 'wasapi_output_capture') return false;
+        if (
+          audioKinds.has(String(input.inputKind)) &&
+          !Object.values(managed.ids).includes(String(input.inputUuid))
+        )
+          return false;
+        if (
+          ['game_capture', 'window_capture'].includes(String(input.inputKind)) &&
+          !Object.values(managed.ids).includes(String(input.inputUuid))
+        ) {
+          const settings = (await obs.call('GetInputSettings', { inputUuid: input.inputUuid }))
+            .inputSettings;
+          if (
+            !settings ||
+            typeof settings !== 'object' ||
+            (settings as Record<string, unknown>).capture_audio !== false
+          )
+            return false;
+        }
+      }
+    }
+    const current = await this.managedBindings(obs, endpoint);
+    return current?.revision === managed.revision;
   }
   async read(obs: ObsRpc, endpoint: string): Promise<ObsAudioRoutingStatus> {
     const state = await this.load();

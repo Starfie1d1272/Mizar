@@ -242,6 +242,12 @@ export function MusicControls({
         </div>
       </div>
       <p className="music-player__hint">使用 OBS 所在机器的监听设备；桌面采集可能回灌。</p>
+      {status.monitorPending ? (
+        <p className="music-player__hint">
+          自动监听尚未配置：无法确认独立分路已完成且没有桌面采集或嵌套路径。请在声音设置完成分路，并在
+          OBS 核对音轨；手动开启前请检查重复收音。
+        </p>
+      ) : null}
       {status.stinger ? <span className="music-player__hint">音效：{status.stinger}</span> : null}
       <div className="music-player__notices">{notices}</div>
     </div>

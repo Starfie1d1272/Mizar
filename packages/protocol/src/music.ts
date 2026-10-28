@@ -98,6 +98,7 @@ export interface MusicStatus {
   segmentStartMs: number | null;
   segmentEndMs: number | null;
   monitor: 'enabled' | 'disabled' | 'mixed' | 'unknown';
+  monitorPending?: boolean;
   preview?: MusicPreviewStatus;
 }
 
