@@ -6,6 +6,13 @@ use serde_json::{Value, json};
 use tauri::Manager;
 static LAUNCH_GATE: Mutex<()> = Mutex::new(());
 
+fn launcher_start_message(error: &std::io::Error) -> &'static str {
+    match error.raw_os_error() {
+        Some(225 | 226) => "Windows 安全防护阻止启动 MulNX，请在 Windows 安全中心查看检测记录。",
+        _ => "MulNX 未能启动。",
+    }
+}
+
 /// Attachment is an internal continuation of a launch initiated by Mizar.
 /// A running game, matching installation or live gateway alone grants no entry.
 pub fn verify_managed_launch(log: &DesktopLog, actual: &Value, pid: u32, created: u64, executable: &Path) -> Result<(), String> {
@@ -156,7 +163,7 @@ fn launch_operation(app: &tauri::AppHandle, log: &DesktopLog, automatic: bool, u
         let mut child = Command::new(&launcher)
             .current_dir(launcher.parent().ok_or("MulNX 目录无效。")?)
             .creation_flags(0x08000000).spawn()
-            .map_err(|error| { let _ = std::fs::remove_file(&pending); log.preserve_error("mulnx_launch", None, &error, "MulNX 未能启动。") })?;
+            .map_err(|error| { let _ = std::fs::remove_file(&pending); log.preserve_error("mulnx_launch", None, &error, launcher_start_message(&error)) })?;
         spawned = true;
         std::fs::write(&pending, json!({"launcherPid":child.id(), "executable":executable}).to_string())
             .map_err(|error| log.preserve_error("mulnx_launch", None, &error, "无法记录启动状态，请关闭 MulNX 并检查游戏。"))?;
@@ -281,6 +288,13 @@ fn validate_game_identity(status: &Value, result: &Value, executable: &Path) -> 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn windows_security_block_has_actionable_message() {
+        for code in [225, 226] {
+            assert!(super::launcher_start_message(&std::io::Error::from_raw_os_error(code)).contains("Windows 安全中心"));
+        }
+        assert_eq!(super::launcher_start_message(&std::io::Error::from_raw_os_error(2)), "MulNX 未能启动。");
+    }
     use super::*;
     #[test]
     fn options_clean_is_recorded_only_after_successful_cleanup() {
