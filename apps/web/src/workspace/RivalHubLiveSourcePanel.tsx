@@ -229,7 +229,7 @@ export function RivalHubLiveSourcePanel({
           void action(() => desktopInvoke('open_main', { path: '/settings?tab=rivalhub' }));
         }}
       >
-        连接 RivalHub 以推送实时数据
+        {compact ? '连接 RivalHub' : '连接 RivalHub 以推送实时数据'}
       </a>
     );
   }
@@ -238,44 +238,39 @@ export function RivalHubLiveSourcePanel({
     connection.activeMatchId && connection.activeSourceMatchId === connection.activeMatchId,
   );
 
+  if (compact) {
+    return (
+      <Button
+        title={connection.sourceBlockedReason || syncHealthText(connection.syncHealth)}
+        onClick={() =>
+          void action(async () => {
+            if (window.__TAURI_INTERNALS__) await desktopInvoke('open_main', { path: '/matches' });
+            else window.open('/matches', 'mizar-match');
+          })
+        }
+      >
+        {connection.sourceBlockedReason ? '比赛同步 · 待处理' : '比赛同步'}
+      </Button>
+    );
+  }
+
   return (
     <div className="workspace-rivalhub-source" data-compact={compact} aria-label="实时数据源状态">
-      {compact && connection.syncHealth ? (
-        <span role="status">{syncHealthText(connection.syncHealth)}</span>
-      ) : null}
-      {compact ? (
-        <Button
-          onClick={() =>
-            void action(async () => {
-              if (window.__TAURI_INTERNALS__)
-                await desktopInvoke('open_main', { path: '/matches' });
-              else window.open('/matches', 'mizar-match');
-            })
-          }
-        >
-          比赛同步
-        </Button>
-      ) : (
-        <RivalHubSyncControls />
-      )}
+      <RivalHubSyncControls />
       {connection.sourceBlockedReason ? (
-        <span role="status" title={connection.sourceBlockedReason}>
-          {compact ? '推送待恢复，请打开比赛同步' : connection.sourceBlockedReason}
-        </span>
+        <span role="status">{connection.sourceBlockedReason}</span>
       ) : null}
-      {!compact ? (
-        <div className="workspace-rivalhub-source-status">
-          {currentMatchTitle ? <small>当前比赛：{currentMatchTitle}</small> : null}
-          <small>实时数据源</small>
-          {isCurrentSource ? (
-            <p>{syncHealthText(connection.syncHealth)}</p>
-          ) : connection.activeDeviceName ? (
-            <p>当前由 {connection.activeDeviceName} 提供实时数据</p>
-          ) : (
-            <p>当前暂无数据源</p>
-          )}
-        </div>
-      ) : null}
+      <div className="workspace-rivalhub-source-status">
+        {currentMatchTitle ? <small>当前比赛：{currentMatchTitle}</small> : null}
+        <small>实时数据源</small>
+        {isCurrentSource ? (
+          <p>{syncHealthText(connection.syncHealth)}</p>
+        ) : connection.activeDeviceName ? (
+          <p>当前由 {connection.activeDeviceName} 提供实时数据</p>
+        ) : (
+          <p>当前暂无数据源</p>
+        )}
+      </div>
       {isCurrentSource ? (
         <Button
           variant="secondary"
