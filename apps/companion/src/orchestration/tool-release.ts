@@ -5,7 +5,8 @@ import { lstat, mkdir, open, readdir, readFile } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
-export const MULNX_REPOSITORY = 'Co1Swet/MulNX_CS2';
+// Compatibility-test branch only; never promote this build as an official candidate.
+export const MULNX_REPOSITORY = 'Starfie1d1272/MulNX_CS2';
 export const SEVEN_ZIP = {
   version: '26.04',
   url: 'https://github.com/ip7z/7zip/releases/download/26.04/7zr.exe',
@@ -72,7 +73,12 @@ export async function latestMulnxRelease(readMetadata = publicJson): Promise<Mul
   const sha256 = asset?.digest?.replace(/^sha256:/, '') ?? '';
   if (
     !release ||
+    release.tag_name !== 'mizar-test-latest-20261029' ||
+    release.id !== 427100122 ||
     !asset ||
+    asset.id !== 686097269 ||
+    asset.size !== 7304647 ||
+    sha256 !== '33e616b00309dd966ee9efae7b118fbf4995c7479c12761d86d3eedaaafbccb2' ||
     !release.published_at ||
     !/^[\w.+-]{1,100}$/.test(release.tag_name) ||
     asset.size < 1 ||

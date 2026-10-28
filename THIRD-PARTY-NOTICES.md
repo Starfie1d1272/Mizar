@@ -183,7 +183,7 @@ EWC 的 `apps/web/public/brand/hud/ewc/contour.svg` 为从用户 EWC01 参考中
 
 ## MulNX 与 7-Zip
 
-Windows 正式候选附带 [MulNX_CS2](https://github.com/Co1Swet/MulNX_CS2) 的独立官方发行归档与原有运镜资源，以及 [7-Zip](https://github.com/ip7z/7zip) 官方 7zr 解压器。MulNX 保持独立版本；Mizar 使用公开接口连接并调用其官方启动器。
+此仅供验收的测试构建附带 [MulNX 测试 fork](https://github.com/Starfie1d1272/MulNX_CS2/releases/tag/mizar-test-latest-20261029)，不属于正式候选。它保留原有运镜资源和 [7-Zip](https://github.com/ip7z/7zip) 官方 7zr 解压器；正式主分支继续使用官方来源。
 
 构建产物的 resources/mulnx 中保留上游 LICENSE、COPYRIGHT、SECURITY、运镜包署名、7-Zip 许可与精确版本源码链接。原始归档内的第三方说明继续保留。各组件与资源按其自身许可分发。
 

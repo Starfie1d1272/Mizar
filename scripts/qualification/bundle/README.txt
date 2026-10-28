@@ -1,3 +1,4 @@
+仅供本机兼容验收：此构建使用指定 MulNX fork，不是正式候选，不得发布或晋级。
 Mizar Windows x64 便携版
 
 本产品包绑定 git SHA <SHORT_SHA>，并内置 Node <NODE_VERSION>。解压到可写目录后，双击 Mizar.exe 打开准备中心。

@@ -261,7 +261,7 @@ export class MulnxTool {
       if (failed?.status === 'rejected') throw failed.reason;
       await writeFile(
         join(notices, 'SOURCES.txt'),
-        `MulNX ${release.tag}\nhttps://github.com/Co1Swet/MulNX_CS2/tree/${release.tag}\nhttps://github.com/Co1Swet/MulNX_CS2/archive/refs/tags/${release.tag}.zip\n`,
+        `TEST FORK ONLY: MulNX ${release.tag}\nhttps://github.com/Starfie1d1272/MulNX_CS2/tree/${release.tag}\nhttps://github.com/Starfie1d1272/MulNX_CS2/archive/refs/tags/${release.tag}.zip\n`,
         { flag: 'wx' },
       );
       const packsRoot = join(extracted.root, 'CS2OBTool/CameraSystem/CamPacks');

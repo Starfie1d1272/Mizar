@@ -18,7 +18,7 @@ export async function buildMetadata(url, run = execute) {
     target.port ||
     target.hash ||
     !(
-      /^\/repos\/Co1Swet\/MulNX_CS2\/(?:releases|contents\/(?:LICENSE\.txt|COPYRIGHT\.md|SECURITY\.md))$/.test(
+      /^\/repos\/Starfie1d1272\/MulNX_CS2\/(?:releases|contents\/(?:LICENSE\.txt|COPYRIGHT\.md|SECURITY\.md))$/.test(
         target.pathname,
       ) || target.pathname === '/repos/ip7z/7zip/contents/DOC/License.txt'
     )
@@ -78,8 +78,9 @@ export async function stageMulnxBundle(root, destination) {
   await writeFile(
     join(destination, 'SOURCES.txt'),
     [
-      `MulNX ${release.tag}: https://github.com/Co1Swet/MulNX_CS2/tree/${release.tag}`,
-      `MulNX source: https://github.com/Co1Swet/MulNX_CS2/archive/refs/tags/${release.tag}.zip`,
+      'LOCAL COMPATIBILITY TEST ONLY — NOT AN OFFICIAL RELEASE CANDIDATE.',
+      `MulNX test fork ${release.tag}: https://github.com/Starfie1d1272/MulNX_CS2/tree/${release.tag}`,
+      `MulNX test source: https://github.com/Starfie1d1272/MulNX_CS2/archive/refs/tags/${release.tag}.zip`,
       'MulNX is distributed as a separate upstream program; its original third-party notices remain in the archive.',
       '7-Zip 26.04 source: https://github.com/ip7z/7zip/tree/26.04',
       '7-Zip source archive: https://github.com/ip7z/7zip/archive/refs/tags/26.04.zip',

@@ -1,0 +1,42 @@
+name: Fork compatibility test only
+
+on:
+  push:
+    branches: [codex/fork-compatibility-test]
+
+permissions:
+  contents: read
+
+jobs:
+  test-build:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024
+        with:
+          runtime: node@24
+          cache: true
+          cache-dependency-path: pnpm-lock.yaml
+          require-lockfile: true
+          install: false
+      - uses: ./.github/actions/cargo-cache
+        with:
+          profile: release
+      - run: pnpm install --frozen-lockfile
+      - run: git checkout -- pnpm-lock.yaml
+      - name: Build integrity-checked test-only portable package
+        run: node scripts/qualification/build.mjs --output "$env:RUNNER_TEMP/fork-compatibility" --label ForkCompatibilityOnly
+      - name: Upload test-only package, never eligible for promotion
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: fork-compatibility-only-not-official-rc
+          path: |
+            ${{ runner.temp }}/fork-compatibility/*.zip
+            ${{ runner.temp }}/fork-compatibility/*.sha256
+            ${{ runner.temp }}/fork-compatibility/release-manifest.json
+          if-no-files-found: error
