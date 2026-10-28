@@ -1368,6 +1368,67 @@ it('does not queue formal playback when OBS is disconnected', async () => {
   await r.director.close();
 });
 
+it('waits for OBS to report an acknowledged pause and resume without sending either twice', async () => {
+  const r = await rig();
+  await r.step();
+  await r.director.manualPlay('waiting', r.tracks[1]!.id);
+  let reads = 0;
+  let pending: 'pause' | 'resume' | null = null;
+  r.obs.intercept = (type) => {
+    if (type === 'TriggerMediaInputAction') {
+      pending = r.obs.bgm().state === 'OBS_MEDIA_STATE_PLAYING' ? 'pause' : 'resume';
+      reads = 0;
+    } else if (type === 'GetMediaInputStatus' && pending) {
+      reads++;
+      r.obs.bgm().state =
+        reads < 3
+          ? pending === 'pause'
+            ? 'OBS_MEDIA_STATE_PLAYING'
+            : 'OBS_MEDIA_STATE_PAUSED'
+          : pending === 'pause'
+            ? 'OBS_MEDIA_STATE_PAUSED'
+            : 'OBS_MEDIA_STATE_PLAYING';
+      if (reads === 3) pending = null;
+    }
+    return Promise.resolve();
+  };
+  await r.director.manualPause(true);
+  expect(r.director.get().playback).toBe('paused');
+  await r.director.manualPause(false);
+  expect(r.director.get().playback).toBe('playing');
+  expect(
+    r.obs.calls.filter(
+      (call) => call.data.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PAUSE',
+    ),
+  ).toHaveLength(1);
+  expect(
+    r.obs.calls.filter((call) => call.data.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY'),
+  ).toHaveLength(1);
+  r.obs.intercept = undefined;
+  await r.director.close();
+});
+
+it('keeps control unconfirmed when OBS never reports the requested pause', async () => {
+  const r = await rig();
+  await r.step();
+  await r.director.manualPlay('waiting', r.tracks[1]!.id);
+  let afterPause = false;
+  r.obs.intercept = (type) => {
+    if (type === 'TriggerMediaInputAction') afterPause = true;
+    if (type === 'GetMediaInputStatus' && afterPause) r.obs.bgm().state = 'OBS_MEDIA_STATE_PLAYING';
+    return Promise.resolve();
+  };
+  await expect(r.director.manualPause(true)).rejects.toThrow('music_state_unconfirmed');
+  expect(r.director.get().held).toBe(true);
+  expect(
+    r.obs.calls.filter(
+      (call) => call.data.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PAUSE',
+    ),
+  ).toHaveLength(1);
+  r.obs.intercept = undefined;
+  await r.director.close();
+});
+
 it('stops an audition before starting selected formal music', async () => {
   const r = await auditionRig();
   await r.director.previewRequest(audition(r));

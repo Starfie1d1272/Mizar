@@ -1,5 +1,5 @@
-//! Own only fps_max, including direct assignments in startup cfg files. Never
-//! rewrite Steam launch options or execute commands found in user files.
+//! Plan bounded startup CFG edits under the existing restoration transaction.
+//! Never rewrite Steam launch options or execute commands found in user files.
 use serde_json::{json, Value};
 use std::{
     collections::BTreeSet,
@@ -269,7 +269,7 @@ struct ConfigScript {
     aliases: BTreeSet<String>,
     commands: BTreeSet<String>,
 }
-fn patch_script(text: &str, limit: u16) -> Result<ConfigScript, String> {
+fn patch_script(text: &str, limit: Option<u16>) -> Result<ConfigScript, String> {
     let tokens = lex(text, true)?;
     let mut edits = Vec::new();
     let mut includes = Vec::new();
@@ -282,6 +282,7 @@ fn patch_script(text: &str, limit: u16) -> Result<ConfigScript, String> {
         commands.insert(command[0].value.to_ascii_lowercase());
         match command[0].value.to_ascii_lowercase().as_str() {
             "fps_max" => {
+                let Some(limit) = limit else { continue; };
                 if command.len() != 2 || fps_number(&command[1].value).is_err() {
                     return Err("启动配置包含无法可靠修改的 fps_max 命令，请改为直接赋值。".into());
                 }
@@ -317,7 +318,7 @@ fn patch_script(text: &str, limit: u16) -> Result<ConfigScript, String> {
                 }
             }
             "incrementvar" | "toggle" => {
-                if command.iter().skip(1).any(|t| {
+                if limit.is_some() && command.iter().skip(1).any(|t| {
                     let value = t.value.to_ascii_lowercase();
                     value.contains("fps_max")
                 }) {
@@ -392,6 +393,9 @@ fn canonical_inside(path: &Path, root: &Path) -> Result<PathBuf, String> {
 
 /// Prepare every backup before the caller changes any file.
 pub fn prepare(video: &Path, executable: &Path, limit: u16) -> Result<Vec<Value>, String> {
+    prepare_with_observer(video, executable, limit, false)
+}
+pub(crate) fn prepare_with_observer(video: &Path, executable: &Path, limit: u16, observer: bool) -> Result<Vec<Value>, String> {
     if ![0, 30, 60].contains(&limit) {
         return Err("帧率选项无效。".into());
     }
@@ -399,9 +403,28 @@ pub fn prepare(video: &Path, executable: &Path, limit: u16) -> Result<Vec<Value>
     let convars = directory.join("cs2_machine_convars.vcfg");
     let original = read_bounded(&convars, FILE_LIMIT)?;
     let applied = patch_convars(&original, limit)?;
-    let mut total = original.len();
     let mut files =
         vec![json!({"kind":"convars", "path":convars, "original":original, "applied":applied})];
+    files.extend(prepare_scripts(video, executable, Some(limit), observer, original.len())?);
+    Ok(files)
+}
+
+const OBSERVER_SUFFIX: &str = "\n// Mizar session: restore the saved startup file on exit.\nexec mizar_observer.cfg\n";
+
+fn observer_script(text: &str, observer: bool) -> Result<String, String> {
+    let result = if observer { format!("{text}{OBSERVER_SUFFIX}") } else { text.to_string() };
+    if result.len() > FILE_LIMIT { return Err("CS2 启动配置超过修改上限。".into()); }
+    Ok(result)
+}
+
+/// Standalone spectator mode owns only the final fixed +exec, never FPS values.
+pub(crate) fn prepare_observer_scripts(video: &Path, executable: &Path) -> Result<Vec<Value>, String> {
+    prepare_scripts(video, executable, None, true, 0)
+}
+
+fn prepare_scripts(video: &Path, executable: &Path, limit: Option<u16>, observer: bool, mut total: usize) -> Result<Vec<Value>, String> {
+    let directory = video.parent().ok_or("CS2 配置目录不可用。")?;
+    let mut files = Vec::new();
     let account = directory
         .parent()
         .and_then(Path::parent)
@@ -445,6 +468,10 @@ pub fn prepare(video: &Path, executable: &Path, limit: u16) -> Result<Vec<Value>
                         "Steam 启动项包含动态配置命令，无法保证帧率上限，请先移除该启动项。".into(),
                     );
                 }
+                if observer && ["+bind", "+binddefaults", "+unbind", "+unbindall", "+spec_usenumberkeys_nobinds"]
+                    .iter().any(|name| token.value.eq_ignore_ascii_case(name)) {
+                    return Err("Steam 启动项直接修改观战键位，无法保证本次解说配置，请先移除冲突项。".into());
+                }
                 if token.value.eq_ignore_ascii_case("+exec")
                     || token.value.eq_ignore_ascii_case("+execifexists")
                 {
@@ -454,7 +481,7 @@ pub fn prepare(video: &Path, executable: &Path, limit: u16) -> Result<Vec<Value>
                         token.value.eq_ignore_ascii_case("+execifexists"),
                     ));
                 }
-                if token.value.eq_ignore_ascii_case("+fps_max") {
+                if let Some(limit) = limit.filter(|_| token.value.eq_ignore_ascii_case("+fps_max")) {
                     if tokens
                         .get(index + 1)
                         .and_then(|t| fps_number(&t.value).ok())
@@ -477,6 +504,9 @@ pub fn prepare(video: &Path, executable: &Path, limit: u16) -> Result<Vec<Value>
             continue;
         }
         let canonical = canonical_inside(&path, &root)?;
+        // Never append an exec of the managed file to itself.
+        if observer && path.parent() == Some(root.as_path())
+            && path.file_name().is_some_and(|name| name.eq_ignore_ascii_case(crate::cs2_spectator::CFG_NAME)) { continue; }
         if !visited.insert(canonical.to_string_lossy().to_lowercase()) {
             continue;
         }
@@ -493,9 +523,10 @@ pub fn prepare(video: &Path, executable: &Path, limit: u16) -> Result<Vec<Value>
         aliases.extend(script.aliases);
         commands.extend(script.commands);
         includes.extend(script.includes);
-        if script.applied != original {
+        let applied = observer_script(&script.applied, observer)?;
+        if applied != original {
             files.push(
-                json!({"kind":"cfg", "path":path, "original":original, "applied":script.applied}),
+                json!({"kind":"cfg", "path":path, "original":original, "applied":applied,"observerCfg":observer}),
             );
         }
     }
@@ -511,6 +542,9 @@ pub fn validated<'a>(
     executable: &Path,
     limit: u16,
 ) -> Result<(&'a Path, &'a str, &'a str), String> {
+    validated_script(record, video, executable, Some(limit))
+}
+pub(crate) fn validated_script<'a>(record: &'a Value, video: &Path, executable: &Path, limit: Option<u16>) -> Result<(&'a Path, &'a str, &'a str), String> {
     let path = Path::new(record["path"].as_str().ok_or("帧率恢复路径缺失。")?);
     let original = record["original"].as_str().ok_or("原帧率备份缺失。")?;
     let applied = record["applied"].as_str().ok_or("帧率应用记录缺失。")?;
@@ -519,6 +553,7 @@ pub fn validated<'a>(
     }
     let expected = match record["kind"].as_str() {
         Some("convars") => {
+            let limit = limit.ok_or("观战启动记录不得修改帧率字段。")?;
             if path
                 != video
                     .parent()
@@ -540,7 +575,17 @@ pub fn validated<'a>(
                 return Err("启动配置恢复路径无效。".into());
             }
             canonical_inside(path, &root)?;
-            patch_script(original, limit)?.applied
+            let observer = match record.get("observerCfg") {
+                None => false,
+                Some(Value::Bool(value)) => *value,
+                _ => return Err("观战启动记录无效。".into()),
+            };
+            if limit.is_none() && !observer { return Err("观战启动记录缺少固定配置。".into()); }
+            if observer && path.parent() == Some(root.as_path())
+                && path.file_name().is_some_and(|name| name.eq_ignore_ascii_case(crate::cs2_spectator::CFG_NAME)) {
+                return Err("观战启动记录不得修改固定 CFG。".into());
+            }
+            observer_script(&patch_script(original, limit)?.applied, observer)?
         }
         _ => return Err("帧率恢复类型无效。".into()),
     };
