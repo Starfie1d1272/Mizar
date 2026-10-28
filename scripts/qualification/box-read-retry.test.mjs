@@ -120,6 +120,16 @@ describe('Box read request recovery', () => {
     expect(transport).toHaveBeenCalledTimes(1);
   });
 
+  it('preserves the uncertain outcome through the copy API stage for reconciliation', async () => {
+    const transport = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error('PRIVATE'), { code: 'ETIMEDOUT' }));
+    await expect(
+      client(transport).copy('/Resources/v1.0.0', '/Resources/v1.1.0', 'pack.zip'),
+    ).rejects.toMatchObject({ uploadOutcomeUnknown: true });
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+
   it('does not replay a mutation rejected by a temporary server response', async () => {
     const transport = vi.fn(async () => new Response('PRIVATE-RESPONSE', { status: 503 }));
     await expect(client(transport).api('file', '/Stable/item', 'POST')).rejects.toMatchObject({

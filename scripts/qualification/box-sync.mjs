@@ -193,7 +193,13 @@ async function boxStage(stage, action) {
     const elapsed = Math.round(globalThis.performance.now() - started);
     console.log(`Box ${stage} 失败（${elapsed}ms）`);
     if (error instanceof MirrorError)
-      throw new MirrorError(`Box ${stage}（${elapsed}ms）：${error.message}`, error.httpStatus);
+      throw Object.assign(
+        new MirrorError(`Box ${stage}（${elapsed}ms）：${error.message}`, error.httpStatus),
+        {
+          uploadOutcomeUnknown: error.uploadOutcomeUnknown,
+          retrySafeUpload: error.retrySafeUpload,
+        },
+      );
     const code = safeNetworkCode(error);
     if (code !== 'network')
       throw new MirrorError(`Box ${stage}（${elapsed}ms）：网络请求失败（${code}）；保留现有文件`);
@@ -771,7 +777,7 @@ export async function syncResourceFiles({
           copied = true;
         } catch (error) {
           // 404 may mean the verified source disappeared, not an unsupported endpoint.
-          if (![405, 501].includes(error.httpStatus)) throw error;
+          if (![405, 501].includes(error.httpStatus) && !error.uploadOutcomeUnknown) throw error;
           const destinations = (await box.list(folder)).filter((e) => e.name === file.name);
           requireValue(
             destinations.length <= 1 && destinations.every((e) => e.type === 'file'),
@@ -781,6 +787,9 @@ export async function syncResourceFiles({
             await verifyRemote(box, `${folder}/${file.name}`, file);
             copied = true;
           }
+          // A timed-out copy may still complete later. Only a verified existing
+          // destination proves success; absence does not authorize another write.
+          if (!copied && error.uploadOutcomeUnknown) throw error;
           if (!copied) console.log('Box 服务端复制未提供；使用已验证原资源上传，保留原目录');
         }
       }

@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { describe, expect, it, vi } from 'vitest';
-import { digest, syncStableRelease, syncUserDownloads } from './box-sync.mjs';
+import { digest, syncResourceFiles, syncStableRelease, syncUserDownloads } from './box-sync.mjs';
 import { makeMachineMetadata } from '../../packages/resource-pack-contract/transport.mjs';
 
 const { Response } = globalThis;
@@ -112,6 +112,55 @@ function addMusic(f) {
 }
 
 describe('lean Box distribution', () => {
+  it('reconciles a timed-out resource copy only after verifying the destination bytes', async () => {
+    const f = fixture();
+    f.dirs.add('/Resources');
+    f.dirs.add('/Resources/v1.5.0');
+    const file = f.resources[0];
+    f.files.set('/Resources/v1.5.0/' + file.name, file.bytes);
+    f.box.copy = vi.fn(async (_from, to, name) => {
+      f.files.set(to + '/' + name, file.bytes);
+      throw Object.assign(new Error('timeout'), { uploadOutcomeUnknown: true });
+    });
+    const upload = vi.spyOn(f.box, 'upload');
+    await syncResourceFiles({
+      box: f.box,
+      version,
+      files: [file],
+      metadataInRuntime: true,
+      reuseVersion: '1.5.0',
+    });
+    expect(f.box.copy).toHaveBeenCalledTimes(1);
+    expect(upload).not.toHaveBeenCalled();
+  });
+
+  it.each(['missing', 'different'])(
+    'does not replay a timed-out resource copy when its destination is %s',
+    async (state) => {
+      const f = fixture();
+      f.dirs.add('/Resources');
+      f.dirs.add('/Resources/v1.5.0');
+      const file = f.resources[0];
+      f.files.set('/Resources/v1.5.0/' + file.name, file.bytes);
+      f.box.copy = vi.fn(async (_from, to, name) => {
+        if (state === 'different') f.files.set(to + '/' + name, Buffer.from('wrong'));
+        throw Object.assign(new Error('timeout'), { uploadOutcomeUnknown: true });
+      });
+      const upload = vi.spyOn(f.box, 'upload');
+      await expect(
+        syncResourceFiles({
+          box: f.box,
+          version,
+          files: [file],
+          metadataInRuntime: true,
+          reuseVersion: '1.5.0',
+        }),
+      ).rejects.toThrow();
+      expect(f.box.copy).toHaveBeenCalledTimes(1);
+      expect(upload).not.toHaveBeenCalled();
+    },
+  );
+
   it('publishes only bootstrap, Core, resources and metadata; reuses the same verified files on retry', async () => {
     const f = fixture();
     await syncStableRelease(f.options);
