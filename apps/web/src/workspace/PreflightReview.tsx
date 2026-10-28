@@ -10,6 +10,7 @@ import { useCs2Status } from '../preparation/cs2-status';
 import type { ConnectionPreparationView } from '../preparation/observer-preparation';
 import { useObsStatus } from './obs-client';
 import { syncHealthText, type SyncHealth } from './SyncHealthAlert';
+import { SILENCED_MATCH_KEY } from './review-silence';
 import type { LiveRosterConnection } from './live-roster-model';
 import { workspaceIssues } from './model';
 import './preflight-review.css';
@@ -42,8 +43,6 @@ export function preflightEvidence(
     current.filter((player) => player.side === 'T').length === 5;
   return { complete, current, warmup: aligned && program?.map.phase === 'warmup' };
 }
-
-const SILENCED_MATCH_KEY = 'mizar.preflight.silenced-match.v1';
 
 type Props = {
   operator: OperatorPayload | null;

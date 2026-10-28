@@ -176,6 +176,7 @@ function ContextPanel({
       {program?.map.phase !== 'warmup' ? (
         <SyncHealthAlert
           health={connection?.syncHealth}
+          matchId={operator?.matchContext.summary?.matchId}
           isSource={Boolean(
             connection?.activeMatchId &&
             connection.activeSourceMatchId === connection.activeMatchId,
