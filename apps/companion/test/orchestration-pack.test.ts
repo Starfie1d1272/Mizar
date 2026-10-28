@@ -149,6 +149,29 @@ it('copies user resources into a unique pack with no automatic lists and leaves 
     OnRoundStart: [],
     OnRoundEnd: [],
   });
+  // Actual MulNX serialization after switching the isolated pack in-game.
+  const rewritten = [
+    `name: ${pack.name}`,
+    'KCP:',
+    '  usable: false',
+    '  ctrl: false',
+    '  shift: false',
+    '  alt: false',
+    '  vkCode: 0',
+    '  comboClick: 1',
+    'OnNewRound:',
+    '  []',
+    'OnRoundStart:',
+    '  []',
+    'OnRoundEnd:',
+    '  []',
+  ].join('\r\n');
+  await writeFile(path, rewritten);
+  expect(verifyIsolatedPack(root, pack.name)).toBe(true);
+  await writeFile(path, rewritten.replace('  []', '  - begin'));
+  expect(verifyIsolatedPack(root, pack.name)).toBe(false);
+  await writeFile(path, rewritten.replace('usable: false', 'usable: true'));
+  expect(verifyIsolatedPack(root, pack.name)).toBe(false);
   metadata.OnNewRound = ['begin'];
   await writeFile(path, JSON.stringify(metadata));
   expect(verifyIsolatedPack(root, pack.name)).toBe(false);
