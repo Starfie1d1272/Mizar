@@ -52,6 +52,13 @@ test('keeps the full-width square radar across private hint states and desktop s
   await page.route('**/local/v1/music', (route) =>
     route.fulfill({ json: { status: { held: true, bgm: null, stinger: null, message: null } } }),
   );
+  let failed = false;
+  await page.route('**/local/v1/observer-assist', (route) =>
+    route.fulfill({ json: { settings: { ...DEFAULT_OBSERVER_SETTINGS, enabled: failed } } }),
+  );
+  await page.route('**/local/v1/observer', (route) =>
+    route.fulfill({ json: { failed, pending: false, health: { state: failed ? 'failed' : 'live' } } }),
+  );
   await page.setViewportSize({ width: 480, height: 1080 });
   await page.clock.install();
   await page.goto('/workspace/left');
@@ -167,14 +174,16 @@ test('keeps the full-width square radar across private hint states and desktop s
   await page.clock.runFor(6000);
   await expect(card).toContainText('1 秒后');
   await page.clock.runFor(1000);
-  await expect(card.locator('li')).toHaveCount(0);
-  await expect(card).toContainText('延迟 121.0 秒');
-  await expect(card).toContainText('等待早源事件');
+  await expect(card).toHaveCount(0);
   expect(await page.locator('.workspace-radar__picture').boundingBox()).toEqual(initialMap);
   snapshot.channelSeq++;
   snapshot.payload = { availability: 'unavailable' };
   socket!.send(JSON.stringify(snapshot));
   await expect(card).toHaveCount(0);
+  failed = true;
+  await page.clock.runFor(5000);
+  await expect(card).toContainText('早源连接失败');
+  expect(await page.locator('.workspace-radar__picture').boundingBox()).toEqual(initialMap);
   expect(errors).toEqual([]);
 });
 test('observer settings show saved timing and support keyboard operation', async ({
