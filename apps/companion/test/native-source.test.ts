@@ -180,6 +180,10 @@ it('advances in memory and retries the checkpoint after cursor persistence fails
     fail = false;
     await source.poll();
     expect(source.health().error).toBeNull();
+    await journal.flush();
+    const stages = (await entries(directory)).records.map((record) => record.stage);
+    expect(stages.filter((stage) => stage === 'native_source_failure')).toHaveLength(1);
+    expect(stages).toContain('native_source_recovered');
     const checkpoint = JSON.parse(
       await readFile(join(directory, 'native-source-cursor.json'), 'utf8'),
     ) as { cursors: { offset: number }[] };

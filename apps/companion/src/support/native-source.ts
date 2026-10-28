@@ -30,6 +30,8 @@ const missing = (error: unknown) => (error as NodeJS.ErrnoException)?.code === '
 export class NativeSource {
   private cursors: Cursor[] = [];
   private checkpointPending = false;
+  private failureReportedAt = new Map<string, { signature: string; time: number }>();
+  private suppressedFailures = 0;
   private initialized = false;
   private closed = false;
   private running: Promise<void> | undefined;
@@ -41,6 +43,22 @@ export class NativeSource {
   private invalid = 0;
   private gaps = 0;
   private backlogBytes = 0;
+  private recordFailure(key: string, evidence: Record<string, unknown>) {
+    this.failures++;
+    const now = Date.now();
+    const last = this.failureReportedAt.get(key);
+    const error = evidence.error;
+    const signature = error instanceof Error ? `${error.name}:${error.message}` : String(error);
+    if (!last || last.signature !== signature || now - last.time >= 60_000) {
+      this.journal.record('native_source_failure', {
+        ...evidence,
+        failures: this.failures,
+        suppressedFailures: this.suppressedFailures,
+      });
+      this.failureReportedAt.set(key, { signature, time: now });
+      this.suppressedFailures = 0;
+    } else this.suppressedFailures++;
+  }
   constructor(
     private readonly directory: string,
     private readonly journal: SessionJournal,
@@ -61,9 +79,8 @@ export class NativeSource {
     this.running = this.journal.withSystem(() =>
       this.read()
         .catch((error: unknown) => {
-          this.failures++;
           this.error = 'native_source_unavailable';
-          this.journal.record('native_source_failure', { error, failures: this.failures });
+          this.recordFailure('poll', { error });
         })
         .finally(() => {
           this.running = undefined;
@@ -135,8 +152,7 @@ export class NativeSource {
         } catch (error) {
           this.cursors = beforeFile;
           sourceFailed = true;
-          this.failures++;
-          this.journal.record('native_source_failure', { name, error, failures: this.failures });
+          this.recordFailure(name, { name, error });
         }
       }
       const removed = this.cursors.filter((cursor) => !found.has(cursor.identity));
@@ -162,12 +178,19 @@ export class NativeSource {
         } catch (error) {
           // Committed records are already delivered. Keep advancing in memory while
           // retrying the checkpoint; restart may safely replay the old checkpoint.
-          this.failures++;
-          this.journal.record('native_source_failure', { error, failures: this.failures });
+          this.recordFailure('checkpoint', { error });
           sourceFailed = true;
         }
       }
       this.error = sourceFailed ? 'native_source_unavailable' : null;
+      if (!sourceFailed && this.failureReportedAt.size) {
+        this.journal.record('native_source_recovered', {
+          failures: this.failures,
+          suppressedFailures: this.suppressedFailures,
+        });
+        this.failureReportedAt.clear();
+        this.suppressedFailures = 0;
+      }
     } catch (error) {
       this.cursors = previous;
       throw error;
