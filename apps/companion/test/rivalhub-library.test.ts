@@ -309,6 +309,11 @@ it('uses the registered ten-second production and minute schedule timers without
     expect(controller.getActiveBinding()?.origin).toBe('online');
   } finally {
     await app.close();
+    // Closing the routes stops their timers; the last discovered schedule may
+    // still be committing its browsing cache. Keep the frozen clock until done.
+    await vi.waitFor(async () => {
+      expect((await f.connection.library()).library.refreshing).toBe(false);
+    });
   }
 });
 
