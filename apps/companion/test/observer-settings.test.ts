@@ -146,12 +146,11 @@ it('keeps equivalent saves idempotent and timing separate from Host preparation 
   expect(store.revision).toBe(cleared);
 });
 
-it('refreshes only the private projection for lead saves and resets alignment for changed expected delay', async () => {
+it('refreshes the private projection for changed settings and connections', async () => {
   const coordinator = createProjectionCoordinator({
     programRuntime: createProgramRuntime('lead-settings-regression'),
     cstvSources: createCstvSourceManagers({}),
   });
-  const reset = vi.spyOn(coordinator, 'resetAssist');
   const refresh = vi.spyOn(coordinator, 'refreshAssist');
   const app = buildApp({ projectionCoordinator: coordinator });
   const save = (leadSeconds: number, expectedDelaySeconds = 120) =>
@@ -166,15 +165,13 @@ it('refreshes only the private projection for lead saves and resets alignment fo
     });
   try {
     await app.ready();
-    reset.mockClear();
     refresh.mockClear();
     expect((await save(10)).statusCode).toBe(200);
-    expect(reset).not.toHaveBeenCalled();
     expect(refresh).toHaveBeenCalledTimes(1);
     await save(10);
     expect(refresh).toHaveBeenCalledTimes(1);
     await save(10, 130);
-    expect(reset).toHaveBeenCalledTimes(1);
+    expect(refresh).toHaveBeenCalledTimes(2);
     const connection = {
       earlyEndpoint: '127.0.0.1:27025',
       programEndpoint: '127.0.0.1:27026',
@@ -188,15 +185,15 @@ it('refreshes only the private projection for lead saves and resets alignment fo
         payload: { action: 'connection', connection: value },
       });
     await confirm(connection);
-    expect(reset).toHaveBeenCalledTimes(2);
+    expect(refresh).toHaveBeenCalledTimes(3);
     await confirm(connection);
-    expect(reset).toHaveBeenCalledTimes(2);
+    expect(refresh).toHaveBeenCalledTimes(3);
     await confirm({
       earlyEndpoint: '127.0.0.2:27035',
       programEndpoint: '127.0.0.2:27036',
       password: 'map-two',
     });
-    expect(reset).toHaveBeenCalledTimes(3); // New addresses invalidate old alignment and buffered hints.
+    expect(refresh).toHaveBeenCalledTimes(4);
   } finally {
     await app.close();
   }
