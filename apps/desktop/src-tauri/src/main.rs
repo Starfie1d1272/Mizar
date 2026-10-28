@@ -1781,7 +1781,9 @@ fn open_music_downloads(log: tauri::State<'_, DesktopLog>, diagnostic_operation_
     let operation: Vec<u16> = "open\0".encode_utf16().collect();
     let target: Vec<u16> = "https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/?p=/Music\0".encode_utf16().collect();
     let result = unsafe { ShellExecuteW(0, operation.as_ptr(), target.as_ptr(), std::ptr::null(), std::ptr::null(), 1) };
-    let outcome = if result <= 32 { Err("音乐包下载页面未能打开，请重试。".into()) } else { Ok(()) };
+    let outcome = if result <= 32 {
+        Err(log.preserve_error("open_music_downloads", diagnostic_operation_id.as_deref(), &result, "音乐包下载页面未能打开，请重试。".into()))
+    } else { Ok(()) };
     log.native_outcome("open_music_downloads", diagnostic_operation_id.as_deref(), &outcome);
     outcome
 }

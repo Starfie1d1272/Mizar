@@ -151,6 +151,7 @@ export function MusicSettings({ active = true }: { active?: boolean }) {
               <details className="music-settings-import">
                 <summary>导入音乐包</summary>
                 <Button
+                  disabled={busy}
                   onClick={() => {
                     if (window.__TAURI_INTERNALS__)
                       void action(() => desktopInvoke<void>('open_music_downloads'));
