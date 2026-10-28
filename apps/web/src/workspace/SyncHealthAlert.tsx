@@ -62,7 +62,8 @@ export function SyncHealthAlert(props: AlertProps) {
     }
   });
   useEffect(() => {
-    const update = () => {
+    const update = (event?: StorageEvent) => {
+      if (event && event.key !== null && event.key !== SILENCED_MATCH_KEY) return;
       setDismissed(null);
       try {
         setSilenced(
