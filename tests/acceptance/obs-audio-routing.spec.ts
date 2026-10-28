@@ -71,6 +71,32 @@ test('explicitly selects an OBS source and reports stale bindings', async ({ pag
   await page.getByText('手动绑定与来源详情').click();
   await page.getByRole('button', { name: '刷新 OBS 音频来源' }).click();
   await expect(page.getByText(/当前 OBS：ws:/)).toBeVisible();
+  const source = page.getByLabel('远端解说音频');
+  for (const [width, height] of [
+    [1280, 720],
+    [1920, 720],
+    [600, 650],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    expect((await source.boundingBox())!.height).toBeGreaterThanOrEqual(32);
+    expect(
+      await page.locator('.product-content').evaluate((el) => el.scrollWidth <= el.clientWidth),
+    ).toBe(true);
+  }
+  await expect(source.locator('option').nth(2)).toHaveText('TeamSpeak 6 · 应用音频');
+  await expect(source).not.toContainText('wasapi_process_output_capture');
+  const content = page.locator('.product-content');
+  await content.evaluate((el) => {
+    el.scrollTop = 0;
+  });
+  await content.hover();
+  await page.mouse.wheel(0, 12000);
+  await expect.poll(() => content.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+  expect(
+    await content.evaluate((el) => el.scrollTop + el.clientHeight >= el.scrollHeight - 2),
+  ).toBe(true);
+  await source.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath('source-narrow.png') });
   await page.getByLabel('远端解说音频').selectOption(status.candidates[1]!.selectionId);
   await expect(page.getByText('已绑定：TeamSpeak 6')).toBeVisible();
   await expect(page.getByText(/桌面音频可能包含/)).toBeVisible();
@@ -78,7 +104,164 @@ test('explicitly selects an OBS source and reports stale bindings', async ({ pag
   await page.getByLabel('中场策略').selectOption('attenuate');
   await page.getByRole('button', { name: '保存中场策略' }).click();
   await expect.poll(() => policy).toEqual({ mode: 'attenuate', db: 6 });
+  await expect(page.getByRole('status').filter({ hasText: '中场策略已保存。' })).toBeVisible();
+  await page.getByText('中场策略已保存。').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath('policy-saved-narrow.png') });
+  await page.getByLabel('中场策略').selectOption('mute');
+  await expect(page.getByText('中场策略已保存。')).toBeHidden();
   await page.screenshot({ path: testInfo.outputPath('audio-routing.png'), fullPage: true });
+});
+
+test('does not report a policy save when readback differs or is unavailable', async ({ page }) => {
+  let readFailure = false;
+  await page.route('**/local/v1/obs/game-audio-policy', (route) =>
+    readFailure
+      ? route.fulfill({ status: 503 })
+      : route.fulfill({
+          json: { ready: true, revision: 'v1', policy: { mode: 'keep' }, ownership: 'idle' },
+        }),
+  );
+  await page.route('**/operator/obs/game-audio-policy', (route) =>
+    route.fulfill({ json: { ok: true } }),
+  );
+  await page.goto('/settings?tab=music');
+  await page.getByRole('button', { name: '场景策略' }).click();
+  await page.getByLabel('中场策略').selectOption('mute');
+  await page.getByRole('button', { name: '保存中场策略' }).click();
+  await expect(
+    page.getByRole('alert').filter({ hasText: '保存后的策略与所选设置不一致' }),
+  ).toBeVisible();
+  await expect(page.getByText('中场策略已保存。')).toBeHidden();
+  readFailure = true;
+  await page.getByRole('button', { name: '保存中场策略' }).click();
+  await expect(
+    page.getByRole('alert').filter({ hasText: '操作已提交，但无法读取结果' }),
+  ).toBeVisible();
+});
+
+test('an older poll cannot replace the saved policy status', async ({ page }) => {
+  let reads = 0;
+  let saved = false;
+  let releasePoll!: () => void;
+  let pollFinished!: () => void;
+  const delayed = new Promise<void>((resolve) => {
+    releasePoll = resolve;
+  });
+  const finished = new Promise<void>((resolve) => {
+    pollFinished = resolve;
+  });
+  await page.route('**/local/v1/obs/game-audio-policy', async (route) => {
+    reads++;
+    if (reads === 2) {
+      await delayed;
+      await route.fulfill({
+        json: { ready: true, revision: 'old', policy: { mode: 'keep' }, ownership: 'held' },
+      });
+      pollFinished();
+      return;
+    }
+    return route.fulfill({
+      json: {
+        ready: true,
+        revision: saved ? 'new' : 'old',
+        policy: { mode: saved ? 'mute' : 'keep' },
+        ownership: 'idle',
+      },
+    });
+  });
+  await page.route('**/operator/obs/game-audio-policy', (route) => {
+    saved = true;
+    return route.fulfill({ json: { ok: true } });
+  });
+  await page.goto('/settings?tab=music');
+  await page.getByRole('button', { name: '场景策略' }).click();
+  await expect.poll(() => reads).toBeGreaterThanOrEqual(2);
+  await page.getByLabel('中场策略').selectOption('mute');
+  await page.getByRole('button', { name: '保存中场策略' }).click();
+  await expect(page.getByText('中场策略已保存。')).toBeVisible();
+  releasePoll();
+  await finished;
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+  await expect(page.getByText('游戏音频的自动控制已暂停。', { exact: false })).toHaveCount(0);
+  await expect(page.getByText('中场策略已保存。')).toBeVisible();
+});
+
+test('a delayed poll cannot overwrite a newer poll', async ({ page }) => {
+  let reads = 0;
+  let release!: () => void;
+  let finished!: () => void;
+  const delayed = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const done = new Promise<void>((resolve) => {
+    finished = resolve;
+  });
+  await page.route('**/local/v1/obs/game-audio-policy', async (route) => {
+    const read = ++reads;
+    if (read === 2) await delayed;
+    await route.fulfill({
+      json: {
+        ready: true,
+        revision: read === 2 ? 'old' : 'new',
+        policy: { mode: 'keep' },
+        ownership: read === 2 ? 'held' : 'idle',
+      },
+    });
+    if (read === 2) finished();
+  });
+  await page.goto('/settings?tab=music');
+  await page.getByRole('button', { name: '场景策略' }).click();
+  await expect.poll(() => reads).toBeGreaterThanOrEqual(3);
+  release();
+  await done;
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+  await expect(page.getByText('游戏音频的自动控制已暂停。', { exact: false })).toHaveCount(0);
+});
+
+test('a later ready poll initializes the draft when the first read is delayed', async ({
+  page,
+}) => {
+  let reads = 0;
+  let release!: () => void;
+  const delayed = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let submitted: { revision: string; policy: { mode: string } } | undefined;
+  await page.route('**/local/v1/obs/game-audio-policy', async (route) => {
+    if (++reads === 1) await delayed;
+    await route.fulfill({
+      json: {
+        ready: true,
+        revision: '00000000-0000-4000-8000-000000000001',
+        policy: { mode: 'mute' },
+        ownership: 'idle',
+      },
+    });
+  });
+  await page.route('**/operator/obs/game-audio-policy', (route) => {
+    submitted = route.request().postDataJSON() as typeof submitted;
+    return route.fulfill({ json: { ok: true } });
+  });
+  await page.goto('/settings?tab=music');
+  await page.getByRole('button', { name: '场景策略' }).click();
+  await expect(page.getByLabel('中场策略')).toHaveValue('mute', { timeout: 10000 });
+  await page.getByRole('button', { name: '保存中场策略' }).click();
+  await expect(page.getByText('中场策略已保存。')).toBeVisible();
+  expect(submitted).toEqual({
+    revision: '00000000-0000-4000-8000-000000000001',
+    policy: { mode: 'mute' },
+  });
+  release();
 });
 
 test('chooses another application, cancels, reselects and explicitly restores TS', async ({

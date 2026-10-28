@@ -691,19 +691,26 @@ export class ProjectionCoordinator {
         : receiveAgeMs <= snapshot.continuityPolicy.staleAfterMs
           ? 'fresh'
           : 'stale';
-    const result = this.observerTimeline.project(program, settings, now, {
-      connected: health.state === 'live',
-      state: health.state,
-      ...(health.lastErrorCode ? { lastErrorCode: health.lastErrorCode } : {}),
-      generation: health.generation,
-      sameMap: sourceMapName === undefined || sourceMapName === program.map.name,
-      // Missing receive evidence preserves the existing compatibility boundary,
-      // while diagnostics explicitly distinguish it from measured freshness.
-      fresh: freshness !== 'stale',
-      freshness,
-      lastReceiveMonotonicMs: received ?? null,
-      receiveAgeMs,
-    });
+    const result = this.observerTimeline.project(
+      program,
+      settings,
+      now,
+      {
+        connected: health.state === 'live',
+        state: health.state,
+        ...(health.lastErrorCode ? { lastErrorCode: health.lastErrorCode } : {}),
+        generation: health.generation,
+        sameMap: sourceMapName === undefined || sourceMapName === program.map.name,
+        // Missing receive evidence preserves the existing compatibility boundary,
+        // while diagnostics explicitly distinguish it from measured freshness.
+        fresh: freshness !== 'stale',
+        freshness,
+        lastReceiveMonotonicMs: received ?? null,
+        receiveAgeMs,
+      },
+      selectProgramSafeRuntimeView(snapshot.current).programSourceLastAccepted
+        ?.receivedMonotonicMs ?? now,
+    );
     try {
       this.onObserverDiagnostics?.(this.observerTimeline.getDiagnostics());
     } catch {

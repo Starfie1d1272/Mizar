@@ -84,6 +84,18 @@ test('saves real local choices, imports atomically, persists manual stop through
     await page.getByRole('button', { name: '保存音乐配置', exact: true }).click();
     await expect(page.getByText('音乐配置已保存。')).toBeVisible();
     expect(service.store.state.config.groups.waiting.tracks[0]?.name).toBe('合成等待.mp3');
+    const trackVolume = page.getByLabel('合成等待.mp3 音量');
+    await expect(page.getByText(/跟随场景音量/).first()).toBeVisible();
+    await trackVolume.fill('0.55');
+    await page.getByRole('button', { name: '保存音乐配置', exact: true }).click();
+    await expect(page.getByText('音乐配置已保存。')).toBeVisible();
+    expect(service.store.state.config.groups.waiting.tracks[0]?.gain).toBe(0.55);
+    await page.getByRole('button', { name: '恢复 合成等待.mp3 跟随场景音量' }).click();
+    await page.getByRole('button', { name: '保存音乐配置', exact: true }).click();
+    await expect(page.getByText('音乐配置已保存。')).toBeVisible();
+    expect(service.store.state.config.groups.waiting.tracks[0]?.gain).toBeUndefined();
+    await page.reload();
+    await expect(page.getByText(/曲目音量.*跟随场景音量/).first()).toBeVisible();
     await expect(page.getByLabel('正式播放曲目')).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath('formal-player.png') });
     await expect(page.getByRole('button', { name: '保存音乐配置', exact: true })).toBeDisabled();
@@ -438,6 +450,30 @@ test('auditions unsaved drafts through the owned OBS protocol channel with outpu
       );
       await page.screenshot({ path: testInfo.outputPath(`formal-player-${label}.png`) });
     }
+    await page.setViewportSize({ width: 600, height: 650 });
+    await page.getByLabel('合成一.wav 音量').fill('0.55');
+    await page.getByLabel('合成二.wav 音量').fill('0.35');
+    await page
+      .getByRole('slider', { name: /场景音量/ })
+      .first()
+      .fill('0');
+    await page.getByRole('button', { name: '保存音乐配置', exact: true }).click();
+    await expect(page.getByText('音乐配置已保存。')).toBeVisible();
+    expect(store.state.config.groups.waiting.tracks.map((track) => track.gain)).toEqual([
+      0.55, 0.35,
+    ]);
+    await page.getByRole('button', { name: '恢复 合成一.wav 跟随场景音量' }).click();
+    await page.getByRole('button', { name: '保存音乐配置', exact: true }).click();
+    await expect(page.getByText('音乐配置已保存。')).toBeVisible();
+    expect(store.state.config.groups.waiting.tracks.map((track) => track.gain)).toEqual([
+      undefined,
+      0.35,
+    ]);
+    await page.reload();
+    await expect(page.getByRole('button', { name: '恢复 合成二.wav 跟随场景音量' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '恢复 合成一.wav 跟随场景音量' })).toHaveCount(0);
+    await page.getByLabel('合成一.wav 音量').scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath('music-inheritance-narrow.png') });
     const exported = await app.inject({
       method: 'POST',
       url: '/debug/support-bundle',

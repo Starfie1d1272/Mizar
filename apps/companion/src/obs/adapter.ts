@@ -1,3 +1,5 @@
+import { gameBackgroundReady } from './game-background.js';
+import { ObsActionError } from './action-error.js';
 import { assertBpCompactOff, BpOverlayOwner } from './bp-overlay.js';
 import { diagnosticValue } from '../support/session-journal.js';
 import { createHash, randomUUID } from 'node:crypto';
@@ -947,6 +949,9 @@ export class ObsAdapter {
       return this.findings;
     });
   }
+  gameBackgroundReady(): Promise<boolean> {
+    return this.serial(() => this.withObs((obs) => gameBackgroundReady(obs)).catch(() => false));
+  }
   setBpCompactVisible(visible: boolean): Promise<void> {
     return this.serial(async () => {
       let client = this.bpClient;
@@ -1055,15 +1060,14 @@ export class ObsAdapter {
   }
   setupAudio(): Promise<void> {
     return this.configurationMutation(async () => {
-      if (await this.audioRouting?.enabled())
-        throw new Error('已启用音频分路，请在 OBS 中维护音频来源。');
+      if (await this.audioRouting?.enabled()) throw new ObsActionError('audio_routing_enabled');
       await this.withObs((obs) => setupObsAudio(obs, this.browserBaseUrl), 12_000);
     });
   }
   async launchTarget(): Promise<string> {
     const config = await this.configStore.read();
     const path = await discoverObsExecutable(config.executablePath);
-    if (!path) throw new Error('未找到 OBS，请在设置中选择 obs64.exe。');
+    if (!path) throw new ObsActionError('executable_missing');
     return path;
   }
 
@@ -1080,7 +1084,7 @@ export class ObsAdapter {
         child.unref();
         resolve();
       });
-      child.once('error', (cause) => reject(new Error('OBS 程序未能打开。', { cause })));
+      child.once('error', (cause) => reject(new ObsActionError('executable_failed', { cause })));
     });
   }
 }

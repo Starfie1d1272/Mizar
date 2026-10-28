@@ -334,10 +334,13 @@ it('shows estimated timing and normal waiting separately from source recovery', 
     waitingReason: 'waiting-event',
     nextWindowSeconds: null as number | null,
     hints: [],
+    calibrationState: 'held',
+    effectiveDelaySeconds: 121,
   };
   mocks.observer = { state: 'live', current: { payload: { observer } } };
   act(() => root.render(<ObserverHints />));
-  expect(container.textContent).toContain('按 120 秒估算');
+  expect(container.textContent).toContain('延迟 121.0 秒');
+  expect(container.textContent).toContain('保持上次校准');
   expect(container.textContent).toContain('等待早源事件');
   expect(container.querySelector('button')).toBeNull();
   observer.waitingReason = 'buffering';
@@ -420,4 +423,28 @@ it('orders private hints by actual remaining time, retains ties, expires locally
   });
   expect(names()).toEqual([]);
   expect(JSON.stringify(hints)).toBe(original);
+});
+
+it('shows recalibration as unavailable rather than ready with a stale delay', () => {
+  mocks.view.settings.enabled = true;
+  mocks.observer = {
+    state: 'live',
+    current: {
+      payload: {
+        observer: {
+          state: 'unavailable',
+          timingBasis: 'estimated',
+          calibrationState: 'reacquiring',
+          expectedDelaySeconds: 120,
+          effectiveDelaySeconds: 120,
+          waitingReason: 'calibration-reacquiring',
+          nextWindowSeconds: null,
+          hints: [],
+        },
+      },
+    },
+  };
+  act(() => root.render(<ObserverHints />));
+  expect(container.textContent).toContain('正在重新校准延迟');
+  expect(container.textContent).not.toContain('保持上次校准');
 });

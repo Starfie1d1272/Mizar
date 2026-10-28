@@ -1,6 +1,5 @@
 import './music.css';
 import { useState } from 'react';
-import { Mixer } from '../audio/Mixer';
 import type { MusicConfig, MusicGroup, MusicStatus } from '@mizar/protocol/music';
 import { Button, Field, Select } from '../ui';
 import { useLocalRead, command } from '../preparation/client';
@@ -59,7 +58,25 @@ export function MusicControls({
   const trackTitle = status.bgm?.track ?? (status.held ? '音乐已停止' : '当前无音乐');
   const nextDisabled =
     busy || status.held || !status.bgm || !['waiting', 'technical'].includes(status.bgm.group);
-  const volume = <Mixer musicOnly />;
+  const volume = status.bgm ? (
+    <Field
+      label=""
+      aria-label="音乐音量"
+      disabled={busy || volumeDisabled}
+      type="range"
+      min="0"
+      max="1"
+      step="0.05"
+      value={view.config.groups[status.bgm.group].volume}
+      onChange={(event) =>
+        void send({
+          action: 'volume',
+          group: status.bgm!.group,
+          volume: Number(event.target.value),
+        })
+      }
+    />
+  ) : null;
   const stop = (
     <Button disabled={busy} aria-label="停止音乐" onClick={() => void send({ action: 'stop' })}>
       {compact ? '停止' : '停止音乐'}
@@ -71,7 +88,7 @@ export function MusicControls({
     </Button>
   );
   const resume =
-    status.held || status.intent === 'manual' ? (
+    status.held || (!compact && status.intent === 'manual') ? (
       <Button
         aria-label="恢复自动音乐"
         className={compact ? undefined : 'music-player__resume'}

@@ -115,6 +115,11 @@ test('preflight reviews current ten-player evidence, actual auto state, disconne
   const dialog = page.getByRole('dialog', { name: '赛前核对', exact: true });
   await expect(dialog).toBeVisible();
   await expect(dialog).toContainText('已匹配 · 10 人');
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  expect(
+    (await dialog.getByRole('button', { name: '稍后处理' }).boundingBox())!.height,
+  ).toBeGreaterThanOrEqual(32);
+  await page.setViewportSize({ width: 2560, height: 1440 });
   await screenshot('01-ten-players');
   const finish = dialog.getByRole('button', { name: '完成赛前核对' });
   await expect(finish).toBeDisabled();
@@ -285,6 +290,14 @@ test('preflight reviews current ten-player evidence, actual auto state, disconne
   await page.setViewportSize({ width: 1000, height: 1160 });
   await page.goto('/workspace/review?kind=preflight');
   await expect(dialog).toBeVisible();
+  await page.setViewportSize({ width: 600, height: 500 });
+  const later = dialog.getByRole('button', { name: '稍后处理' });
+  await later.scrollIntoViewIfNeeded();
+  const bounds = (await later.boundingBox())!;
+  expect(bounds.height).toBeGreaterThanOrEqual(32);
+  expect(bounds.y).toBeGreaterThanOrEqual(0);
+  expect(bounds.y + bounds.height).toBeLessThanOrEqual(500);
+  await page.setViewportSize({ width: 1000, height: 1160 });
   await screenshot('08-native-window-content');
   await dialog.getByRole('button', { name: '复制隐藏命令并返回游戏' }).click();
   await expect
