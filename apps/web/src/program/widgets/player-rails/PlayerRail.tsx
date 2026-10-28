@@ -60,8 +60,7 @@ export function PlayerRail({
       data-physical-side={physicalSide}
       data-player-rail-phase={presentation.phase}
     >
-      {physicalSide === 'right' &&
-      snapshot.payload.status.telemetry === 'fresh' ? (
+      {physicalSide === 'right' && snapshot.payload.status.telemetry === 'fresh' ? (
         <AllChat design={design} messages={snapshot.payload.allChat ?? []} />
       ) : null}
       <div className="player-rail__summary-slot" data-team-summary-slot="true">

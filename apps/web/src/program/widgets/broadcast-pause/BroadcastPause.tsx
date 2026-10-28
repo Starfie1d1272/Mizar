@@ -69,8 +69,7 @@ export function BroadcastPause({
         </div>
       ) : null}
       <PauseNotice presentation={p} />
-      {layout['team-t-rail'].visible &&
-      snapshot.payload.status.telemetry === 'fresh' ? (
+      {layout['team-t-rail'].visible && snapshot.payload.status.telemetry === 'fresh' ? (
         <div
           className="broadcast-pause__chat"
           data-pause-chat-side={historySide === 'left' ? 'right' : 'left'}
