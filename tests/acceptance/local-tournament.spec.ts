@@ -274,6 +274,8 @@ test('local and website libraries share match details while browsing and loading
     await expect(detail.getByRole('heading', { name: '创建本地比赛', exact: true })).toBeVisible();
     await capture('06-local-create');
   } finally {
+    await page.close();
+    await context.unrouteAll({ behavior: 'wait' });
     await app.close();
     await rm(directory, { recursive: true, force: true });
   }
