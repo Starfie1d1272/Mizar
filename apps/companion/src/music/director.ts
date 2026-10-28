@@ -340,7 +340,17 @@ export class MusicDirector {
             : 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY',
         });
         if (!current()) return;
-        const after = await obs.call('GetMediaInputStatus', { inputUuid: uuid });
+        let after = await obs.call('GetMediaInputStatus', { inputUuid: uuid });
+        // OBS may acknowledge the command before its media thread reports the
+        // new state. Only wait while the previous state is still observable;
+        // never resend the command or overwrite another observed state.
+        for (let attempt = 0; attempt < 10 && after.mediaState === before.mediaState; attempt++) {
+          if (!current()) return;
+          if (!manualSafe(this.truth())) throw new Error('music_program_unsafe');
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          if (!current()) return;
+          after = await obs.call('GetMediaInputStatus', { inputUuid: uuid });
+        }
         if (!current()) return;
         this.status.playback = observedPlayback(after.mediaState);
         if (after.mediaState !== (paused ? 'OBS_MEDIA_STATE_PAUSED' : 'OBS_MEDIA_STATE_PLAYING'))
