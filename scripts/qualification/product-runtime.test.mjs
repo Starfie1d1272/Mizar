@@ -132,17 +132,19 @@ describe('portable process lifecycle', () => {
     let ready = false;
     for (let i = 0; i < 100; i++) {
       try {
-        if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) {
+        if ((await globalThis.fetch(`http://127.0.0.1:${port}/health`)).ok) {
           ready = true;
           break;
         }
-      } catch {}
+      } catch {
+        /* Wait for the child to listen. */
+      }
       await delay(30);
     }
     expect(ready).toBe(true);
     const replacement = { instanceId: 'replacement', controlToken: 'replacement' };
     await writeFile(path, JSON.stringify(replacement));
-    await fetch(`http://127.0.0.1:${port}/stop`, { method: 'POST' });
+    await globalThis.fetch(`http://127.0.0.1:${port}/stop`, { method: 'POST' });
     await running;
     expect(JSON.parse(await readFile(path, 'utf8'))).toEqual(replacement);
   }, 15000);
