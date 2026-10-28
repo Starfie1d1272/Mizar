@@ -369,7 +369,7 @@ fn verify_gateway_owner(log: &DesktopLog, port: u16, pid: u32) -> Result<(), Str
     let script = format!("$ErrorActionPreference='Stop'; $owners=@(Get-NetTCPConnection -State Listen -LocalPort {port} | Select-Object -ExpandProperty OwningProcess -Unique); ConvertTo-Json -Compress -InputObject $owners");
     let mut command = Command::new("powershell.exe");
     command.args(["-NoProfile", "-NonInteractive", "-Command", &script]).creation_flags(0x08000000);
-    let output = powershell::run(command, log, "核对 MulNX 网关归属", Duration::from_secs(12))?;
+    let output = powershell::run(command, log, "核对 MulNX 网关归属", Duration::from_secs(30))?;
     let owners = powershell::parse(log, "核对 MulNX 网关归属", &output)?;
     if owners.as_array().is_some_and(|owners| owners.len() == 1 && owners[0].as_u64() == Some(pid as u64)) {
         Ok(())
