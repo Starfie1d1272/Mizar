@@ -169,7 +169,7 @@ export function GameAutomationSettingsPanel() {
         checked={settings.hideGameHud}
         disabled={busy || !view || !useMulnx}
         onChange={(event) => setDraft({ ...settings, hideGameHud: event.target.checked })}
-        message="保留击杀提示，结束时恢复原值。需先在高级设置启用本机控制台记录，并用该设置启动游戏。"
+        message="保留击杀提示，结束时恢复原值。开启聊天上屏后，下次启动游戏时生效。"
       />
       <Button
         disabled={busy || !view || !useMulnx}
