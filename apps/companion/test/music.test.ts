@@ -1088,6 +1088,45 @@ it('expires an abandoned client lease and rejects late starts, foreign stops and
     'music_preview_stale_operation',
   );
 });
+it('waits for OBS to report a delayed stop without claiming a disconnect or resending stop', async () => {
+  const r = await auditionRig();
+  await r.step();
+  const request = audition(r);
+  await r.director.previewRequest(request);
+  await r.step(100);
+  const original = r.obs.call.bind(r.obs);
+  let pending = false;
+  r.obs.call = async (type, data = {}) => {
+    const result = await original(type, data);
+    if (
+      type === 'TriggerMediaInputAction' &&
+      data.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP'
+    )
+      pending = true;
+    else if (type === 'GetMediaInputStatus' && pending) {
+      pending = false;
+      return { ...result, mediaState: 'OBS_MEDIA_STATE_PLAYING' } as Awaited<
+        ReturnType<typeof original>
+      >;
+    }
+    return result;
+  };
+  const mark = r.obs.calls.length;
+  await r.director.previewRequest({ ...request, action: 'stop', operation: 2 });
+  expect(r.director.get().preview?.phase).toBe('cleanup');
+  expect(r.director.get().connection).toBe('connected');
+  await r.step(300);
+  expect(r.director.get().preview?.phase).toBe('stopped');
+  expect(
+    r.obs.calls
+      .slice(mark)
+      .filter(
+        (c) =>
+          c.type === 'TriggerMediaInputAction' &&
+          c.data.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP',
+      ),
+  ).toHaveLength(1);
+});
 it('caps a renewed lease at 15 seconds and applies the draft fade', async () => {
   const r = await auditionRig();
   await r.step();

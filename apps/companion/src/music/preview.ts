@@ -23,6 +23,7 @@ export class MusicPreview {
   private expectedVolume = 0;
   private epoch = 0;
   private stopping = false;
+  private stopSent = false;
   private failureMessage: string | null = null;
   constructor(
     private readonly store: MusicStore,
@@ -90,6 +91,7 @@ export class MusicPreview {
     this.failureMessage = null;
     this.revision++;
     this.stopping = false;
+    this.stopSent = false;
     this.lease = now + 3000;
     this.deadline = now + 15_000;
     this.status = {
@@ -118,7 +120,11 @@ export class MusicPreview {
     this.status = {
       ...this.status!,
       phase: this.uuid ? 'cleanup' : 'stopped',
-      message: reason === 'program_safety' ? '比赛状态不允许试听，已停止。' : '试听已停止。',
+      message: this.uuid
+        ? '试听停止未确认，正在等待 OBS。'
+        : reason === 'program_safety'
+          ? '比赛状态不允许试听，已停止。'
+          : '试听已停止。',
     };
     if (!this.uuid) {
       this.event('stopped', 'not_started');
@@ -126,7 +132,11 @@ export class MusicPreview {
     }
   }
   unavailable() {
-    if (!this.request || (this.stopping && this.status?.message.startsWith('试听停止未确认')))
+    if (
+      !this.request ||
+      (this.stopping &&
+        this.status?.message === '试听停止未确认，请在 OBS 停止 Mizar 音效来源；重连后优先清理。')
+    )
       return;
     const hadMedia = Boolean(this.uuid);
     this.event('failed', 'obs_disconnected');
@@ -169,21 +179,32 @@ export class MusicPreview {
           await manual();
           return;
         }
-        stopExpected(this.uuid!);
-        await obs.call('TriggerMediaInputAction', {
-          inputUuid: this.uuid,
-          mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP',
-        });
-        const media = await obs.call('GetMediaInputStatus', { inputUuid: this.uuid });
-        if (
-          ![
+        const stopAlreadySent = this.stopSent;
+        if (!stopAlreadySent) {
+          stopExpected(this.uuid!);
+          await obs.call('TriggerMediaInputAction', {
+            inputUuid: this.uuid,
+            mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP',
+          });
+          this.stopSent = true;
+        }
+        const stopped = (state: unknown) =>
+          [
             'OBS_MEDIA_STATE_STOPPED',
             'OBS_MEDIA_STATE_ENDED',
             'OBS_MEDIA_STATE_ERROR',
             'OBS_MEDIA_STATE_NONE',
-          ].includes(String(media.mediaState))
-        )
-          throw new Error('music_preview_stop_unconfirmed');
+          ].includes(String(state));
+        let media = await obs.call('GetMediaInputStatus', { inputUuid: this.uuid });
+        if (!stopped(media.mediaState) && stopAlreadySent) {
+          stopExpected(this.uuid!);
+          await obs.call('TriggerMediaInputAction', {
+            inputUuid: this.uuid,
+            mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP',
+          });
+          media = await obs.call('GetMediaInputStatus', { inputUuid: this.uuid });
+        }
+        if (!stopped(media.mediaState)) return;
       }
       this.event('stopped', 'obs_stopped');
       this.uuid = null;
