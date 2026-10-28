@@ -71,7 +71,6 @@ export class ObserverHintTimeline {
   private lastProgramProgressAt: number | null = null;
   private lastSourceReceiveMs: number | null = null;
   private lastSourceProgressAt: number | null = null;
-  private boundary = '';
   private earliest = -Infinity;
   private lastNow = 0;
   private programSource = { generation: 0, mapEpoch: 0, receiveSequence: null as number | null };
@@ -164,8 +163,8 @@ export class ObserverHintTimeline {
     this.nextDueMs = null;
     this.nextWindowMs = null;
   }
-  settingsChanged(now: number) {
-    this.reset('settings-changed', now);
+  settingsChanged() {
+    // Settings affect future projections without discarding the current map timeline.
   }
   consume(event: GameEventObservation) {
     if (event.cursor.role !== 'lookahead') return;
@@ -182,8 +181,8 @@ export class ObserverHintTimeline {
       return;
     }
     if (this.generation !== event.cursor.generation) {
-      this.reset('source-generation', event.cursor.observedMonotonicMs);
       this.generation = event.cursor.generation;
+      this.lastSourceReceiveMs = null;
     }
     if (event.kind !== 'player-death') return;
     if (!event.attacker?.sourcePlayerId || !event.victim.sourcePlayerId) {
@@ -194,7 +193,13 @@ export class ObserverHintTimeline {
       this.discard('invalid-or-before-boundary');
       return;
     }
-    if (this.kills.some((k) => k.event.cursor.sequence === event.cursor.sequence)) {
+    if (
+      this.kills.some(
+        (k) =>
+          k.event.cursor.generation === event.cursor.generation &&
+          k.event.cursor.sequence === event.cursor.sequence,
+      )
+    ) {
       this.discard('duplicate');
       return;
     }
@@ -339,7 +344,10 @@ export class ObserverHintTimeline {
       return;
     }
     const key = best
-      .map((pair) => `${pair.event.frame}:${pair.kill.event.cursor.sequence}`)
+      .map(
+        (pair) =>
+          `${pair.event.frame}:${pair.kill.event.cursor.generation}:${pair.kill.event.cursor.sequence}`,
+      )
       .sort()
       .join(',');
     if (key === this.lastEvidenceKey) return;
@@ -379,6 +387,11 @@ export class ObserverHintTimeline {
   ): ObserverAssistProjection {
     this.lastNow = now;
     this.configuration = { ...settings };
+    if (this.programSource.generation !== program.cursor.programSourceGeneration) {
+      this.lastProgramSequence = null;
+      this.seenReceive = null;
+      this.previous.clear();
+    }
     this.programSource = {
       generation: program.cursor.programSourceGeneration,
       mapEpoch: program.cursor.mapEpoch,
@@ -405,45 +418,28 @@ export class ObserverHintTimeline {
     });
     if (!settings.enabled) {
       this.blocked = 'disabled';
-      this.reset('disabled', now);
       return { cursor: program.cursor, availability: 'unavailable' };
     }
     const context = [
       program.match?.matchId,
       program.cursor.liveSessionId,
-      program.cursor.programSourceGeneration,
       program.cursor.mapEpoch,
       program.map.name,
     ].join(':');
-    const paused = ['paused', 'timeout_ct', 'timeout_t'].includes(program.clock?.phase ?? '');
-    const boundary = paused ? 'paused' : 'active';
-    if (
-      context !== this.context ||
-      boundary !== this.boundary ||
-      (this.generation !== undefined && this.generation !== source.generation)
-    ) {
-      // Both pause and resume require newly received events.
-      this.reset(
-        context !== this.context
-          ? 'program-context'
-          : boundary !== this.boundary
-            ? boundary
-            : 'source-generation',
-        now,
-      );
+    if (program.match && program.map.name && context !== this.context) {
+      this.reset('program-context', now);
       this.context = context;
-      this.boundary = boundary;
+    }
+    if (this.generation === undefined || source.generation > this.generation) {
       this.generation = source.generation;
+      this.lastSourceReceiveMs = null;
     }
     if (!source.connected) {
       this.blocked = 'source-disconnected';
-      this.reset(this.blocked, now);
+      this.lastHealthCheckAt = now;
+      this.lastProgramProgressAt = now;
+      this.lastSourceProgressAt = now;
       return empty('connecting');
-    }
-    if (paused) {
-      this.blocked = 'paused';
-      this.reset(this.blocked, now);
-      return empty('paused');
     }
     if (
       !source.fresh ||
@@ -462,9 +458,11 @@ export class ObserverHintTimeline {
             : !program.map.name
               ? 'map-missing'
               : 'identity-unavailable';
-      if (source.sameMap === false) this.reset(this.blocked, now);
+      if (source.sameMap === false && program.map.name) this.reset(this.blocked, now);
       else {
-        if (!source.fresh || program.status.telemetry !== 'fresh') this.continuityLost = true;
+        this.lastHealthCheckAt = now;
+        this.lastProgramProgressAt = now;
+        this.lastSourceProgressAt = now;
         this.previous.clear();
         this.seenReceive = null;
         this.programEvents = [];
@@ -487,20 +485,9 @@ export class ObserverHintTimeline {
         .filter((p) => p.lifeState !== 'unknown')
         .map((p) => [p.sourcePlayerId, p.lifeState === 'alive']),
     );
-    // Retire against the old schedule before any new calibration can extend it.
     const reacquiring = this.calibrationState(now) === 'reacquiring';
     if (reacquiring) this.continuityLost = true;
     const priorDelay = this.effectiveDelayMs ?? settings.expectedDelaySeconds * 1000;
-    for (const kill of this.kills) {
-      if (
-        !kill.retired &&
-        ((reacquiring && kill.shownDueMs !== null) ||
-          (!reacquiring && now >= (kill.shownDueMs ?? kill.sourceMs + priorDelay)))
-      ) {
-        kill.retired = true;
-        this.discard('expired');
-      }
-    }
     if (program.cursor.programReceiveSequence !== this.seenReceive) {
       const fallen = [...alive]
         .filter(([id, live]) => !live && this.previous.get(id) === true)
@@ -534,7 +521,7 @@ export class ObserverHintTimeline {
     const keepSince =
       now -
       (Math.max(600000, settings.expectedDelaySeconds * 1000, this.effectiveDelayMs ?? 0) + 180000);
-    this.kills = this.kills.filter((kill) => !kill.retired || kill.sourceMs >= keepSince);
+    this.kills = this.kills.filter((kill) => kill.sourceMs >= keepSince);
     if (this.calibrationState(now) === 'reacquiring') {
       this.blocked = 'calibration-reacquiring';
       this.nextDueMs = null;
@@ -560,11 +547,11 @@ export class ObserverHintTimeline {
       // A Program-confirmed death remains a calibration anchor, never a future hint.
       const due =
         kill.shownDueMs ?? kill.sourceMs + (stableDelay ?? settings.expectedDelaySeconds * 1000);
-      if (now >= due && !kill.retired) {
+      if (now >= due && kill.shownDueMs !== null && !kill.retired) {
         kill.retired = true;
         this.discard('expired');
       }
-      if (kill.matched || kill.retired) continue;
+      if (kill.matched || kill.retired || now >= due) continue;
       if (kill.event.cursor.mapName !== program.map.name) {
         kill.retired = true;
         this.discard('map-mismatch');
@@ -593,7 +580,7 @@ export class ObserverHintTimeline {
       if (hints.length >= 6) continue;
       kill.shownDueMs = due;
       hints.push({
-        id: `${this.generation}:${kill.event.cursor.sequence}`,
+        id: `${kill.event.cursor.generation}:${kill.event.cursor.sequence}`,
         remainingSeconds: Math.max(0, (due - now) / 1000),
         attacker: ref(attacker),
         victim: ref(victim),

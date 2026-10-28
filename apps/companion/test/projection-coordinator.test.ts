@@ -389,7 +389,7 @@ it('keeps calibrated anchors and buffered kills when the lead window is reprojec
     expect(coordinator.getCurrent().assist.observer).toMatchObject({
       state: 'ready',
       measuredDelaySeconds: null,
-      hints: [],
+      hints: [{ remainingSeconds: 8, victim: { observerSlot: 7 } }],
     });
     live.mockReturnValue({
       ...health,

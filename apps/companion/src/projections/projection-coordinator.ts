@@ -720,7 +720,7 @@ export class ProjectionCoordinator {
     return result;
   }
   resetAssist(): void {
-    this.observerTimeline.settingsChanged(this.nowMonotonicMs());
+    this.observerTimeline.settingsChanged();
     this.refreshAssist();
   }
   refreshAssist(): void {
