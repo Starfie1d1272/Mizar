@@ -184,6 +184,14 @@ export class MusicStore {
     const target = join(this.directory, 'tracks', id);
     const temporary = join(this.directory, 'tracks', `tmp-${randomUUID()}`);
     await safePath(join(this.directory, 'tracks'));
+    try {
+      // OBS may hold the existing media file open on Windows. Reuse it only
+      // after the same integrity and path checks used for playback.
+      await this.trackPath(id);
+      return track;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
     const fd = await this.stage('music_open_track', { name, id, target, temporary }, () =>
       open(temporary, 'wx', 0o600),
     );
@@ -196,7 +204,16 @@ export class MusicStore {
       await fd.close();
     }
     try {
-      await this.stage('music_commit_track', { name, id }, () => rename(temporary, target));
+      await this.stage('music_commit_track', { name, id }, async () => {
+        try {
+          await rename(temporary, target);
+        } catch (error) {
+          if (!['EEXIST', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? ''))
+            throw error;
+          // A concurrent import may have installed these bytes first.
+          await this.trackPath(id);
+        }
+      });
     } finally {
       await unlink(temporary).catch(() => undefined);
     }
