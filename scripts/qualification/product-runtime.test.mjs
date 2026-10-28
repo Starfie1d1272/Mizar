@@ -71,6 +71,84 @@ describe('portable payload', () => {
 });
 
 describe('portable process lifecycle', () => {
+  it('explains a recorded different version without stopping it, and leaves unknown occupants alone', async () => {
+    const { root, artifact } = await fixture();
+    const port = await freePort();
+    const stateRoot = join(root, 'state');
+    await mkdir(join(stateRoot, 'data'), { recursive: true });
+    const old = {
+      repository: PRODUCT_REPOSITORY,
+      artifactSha256: 'b'.repeat(64),
+      instanceId: 'old',
+      controlToken: 'c'.repeat(64),
+    };
+    await writeFile(join(stateRoot, 'data/runtime.json'), JSON.stringify(old));
+    let stops = 0;
+    const server = createServer((req, res) => {
+      if (req.url !== '/health') stops++;
+      res.end(JSON.stringify({ product: { ...old, mode: 'product' } }));
+    });
+    await new Promise((done) => server.listen(port, '127.0.0.1', done));
+    try {
+      const start = () =>
+        runProduct({
+          root,
+          artifact,
+          port,
+          stateRoot,
+          nodePath: process.execPath,
+          openBrowser: false,
+        });
+      await expect(start()).rejects.toThrow('打开原版本 Mizar');
+      await writeFile(
+        join(stateRoot, 'data/runtime.json'),
+        JSON.stringify({ ...old, instanceId: 'different' }),
+      );
+      await expect(start()).rejects.toThrow('无法确认占用程序');
+      expect(stops).toBe(0);
+    } finally {
+      await new Promise((done) => server.close(done));
+    }
+  });
+
+  it('preserves a replacement runtime record when the previous child exits', async () => {
+    const { root, artifact } = await fixture();
+    const port = await freePort();
+    const stateRoot = join(root, 'state');
+    await writeFile(
+      join(root, 'resources/app/dist/server.js'),
+      `const http=require('node:http'); const e=process.env; const s=http.createServer((q,r)=>{if(q.url==='/health')r.end(JSON.stringify({product:{repository:'${PRODUCT_REPOSITORY}',artifactSha256:e.MIZAR_ARTIFACT_SHA256,instanceId:e.MIZAR_PRODUCT_INSTANCE,mode:'product'}}));else {r.end();s.close();}});s.listen(Number(e.PORT),'127.0.0.1');`,
+    );
+    const running = runProduct({
+      root,
+      artifact,
+      port,
+      stateRoot,
+      nodePath: process.execPath,
+      openBrowser: false,
+    });
+    running.catch(() => {});
+    const path = join(stateRoot, 'data/runtime.json');
+    let ready = false;
+    for (let i = 0; i < 100; i++) {
+      try {
+        if ((await globalThis.fetch(`http://127.0.0.1:${port}/health`)).ok) {
+          ready = true;
+          break;
+        }
+      } catch {
+        /* Wait for the child to listen. */
+      }
+      await delay(30);
+    }
+    expect(ready).toBe(true);
+    const replacement = { instanceId: 'replacement', controlToken: 'replacement' };
+    await writeFile(path, JSON.stringify(replacement));
+    await globalThis.fetch(`http://127.0.0.1:${port}/stop`, { method: 'POST' });
+    await running;
+    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual(replacement);
+  }, 15000);
+
   it('starts a child, stops only its own identity, and preserves data across restart', async () => {
     const { root, artifact } = await fixture();
     const port = await freePort();
