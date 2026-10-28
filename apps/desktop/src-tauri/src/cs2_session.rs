@@ -287,7 +287,8 @@ impl SessionStore {
     fn save_new_spectator_record(&self, record: &Value) -> Result<(), String> {
         let bytes = serde_json::to_vec_pretty(record).map_err(|e| json_error("观战备份无法保存。", &e))?;
         if bytes.len() > 1024 * 1024 - 16384 { return Err("观战恢复记录过大，未应用观战配置。".into()); }
-        atomic_write(&self.spectator_path(), &bytes)
+        atomic_write(&self.spectator_path(), &bytes)?;
+        crate::cs2_spectator::startup_files(record, crate::cs2_spectator::StartupFiles::Apply)
     }
     /// Arm a bounded spectator-only transaction before a MulNX launch request.
     pub(crate) fn prepare_mulnx_observer(&self, video: &Path, executable: &Path, account: u32) -> Result<bool, String> {
@@ -395,6 +396,7 @@ impl SessionStore {
         crate::cs2_spectator::check_archive(video)?;
         crate::cs2_spectator::validate_bindings(video, &record["bindings"])?;
         if record["version"] == 3 { crate::cs2_spectator::validate_hud(video, &record["hud"])?; }
+        crate::cs2_spectator::startup_files(&record, crate::cs2_spectator::StartupFiles::Validate)?;
         Ok(())
     }
     pub fn spectator_hud_identity(&self) -> Result<Option<String>, String> {
@@ -443,6 +445,8 @@ impl SessionStore {
             if !video.is_absolute() || video.file_name().is_none_or(|v| v != "cs2_video.txt") {
                 return Err("观战恢复路径无效。".into());
             }
+            // CFGs may already have been applied before Steam was submitted.
+            crate::cs2_spectator::startup_files(&record, crate::cs2_spectator::StartupFiles::Restore)?;
             if record["version"] == 2 || record["version"] == 3 {
                 match record["loadAttempted"].as_bool() {
                     Some(false) => {
@@ -862,11 +866,10 @@ impl SessionStore {
         } else {
             crate::cs2_spectator::prepare_standalone(video, executable)
         };
-        match spectator.and_then(|record| {
-            self.save_new_spectator_record(&record)?;
-            Ok(record)
-        }) {
+        match spectator {
             Ok(record) => {
+                // A failed or partial CFG write must never fall through to launch.
+                self.save_new_spectator_record(&record)?;
                 value["spectatorCfg"] = json!(true); value["nativeHudToggle"] = json!(record["version"] == 3);
                 if record["version"] == 3 { value["hudIdentity"] = record["hud"]["identity"].clone(); }
                 if let Some(warning) = record["hudWarning"].as_str() { value["spectatorWarning"] = json!(warning); }
@@ -919,15 +922,16 @@ impl SessionStore {
         } else {
             crate::cs2_spectator::prepare(&frames, video, executable)
         };
+        let frames = if spectator.is_ok() {
+            cs2_frame_rate::prepare_with_observer(video, executable, preferences.frame_rate_limit, true)?
+        } else { frames };
+        if let Ok(record) = &spectator {
+            // Save key originals before any startup CFG can execute our bindings.
+            self.save_new_spectator_record(record)?;
+        }
         let mut journal = self.prepare_files_locked(guard, video, executable, size, Some(frames))?;
-        let armed = spectator.and_then(|record| {
-            // This exact original must survive core recovery and restart even if
-            // optional restore later fails. Save it before allowing +exec.
-            self.save_new_spectator_record(&record)?;
-            Ok(())
-        });
-        match armed {
-            Ok(()) => {
+        match spectator {
+            Ok(_) => {
                 journal["spectatorCfg"] = json!(true);
                 let record = self.spectator_record()?.ok_or("观战原值备份缺失。")?;
                 journal["nativeHudToggle"] = json!(record["version"] == 3);
@@ -2038,12 +2042,24 @@ mod tests {
         let keys = video.parent().unwrap().join("cs2_user_keys_0_slot0.vcfg");
         let original = "\"config\" {\"bindings\" {\"h\" \"custom\"}}"; fs::write(&keys, original).unwrap();
         let before = fs::read(&video).unwrap();
+        let startup = executable.parent().unwrap().parent().unwrap().parent().unwrap().join("csgo/cfg/auto.cfg");
+        let startup_original = "binddefaults; bind h switchhands\nfps_max 144\nexec crosshair.cfg\n";
+        fs::write(&startup, startup_original).unwrap();
         let journal = store.prepare_preserved(&video, &executable).unwrap();
         assert_eq!(journal["preserveSettings"], true); assert_eq!(journal["nativeHudToggle"], true);
+        let startup_applied = fs::read_to_string(&startup).unwrap();
+        assert!(startup_applied.starts_with(startup_original));
+        assert_eq!(startup_applied.lines().last(), Some("exec mizar_observer.cfg"));
         store.spectator_load_attempted(true).unwrap();
         fs::write(&keys, original.replace("custom", "toggle cl_draw_only_deathnotices 0 1")).unwrap();
-        SessionStore::new(root.clone()).restore().unwrap();
+        fs::write(&startup, format!("{startup_applied}\n// external edit")).unwrap();
+        assert!(SessionStore::new(root.clone()).restore().unwrap().is_some());
+        assert!(store.spectator_pending());
+        assert!(fs::read_to_string(&startup).unwrap().contains("external edit"));
+        fs::write(&startup, &startup_applied).unwrap();
+        SessionStore::new(root.clone()).restore_spectator().unwrap();
         assert_eq!(fs::read_to_string(&keys).unwrap(), original); assert_eq!(fs::read(&video).unwrap(), before);
+        assert_eq!(fs::read_to_string(&startup).unwrap(), startup_original);
         assert!(!store.spectator_pending());
         fs::remove_dir_all(root).unwrap();
     }
@@ -2100,9 +2116,13 @@ mod tests {
         fs::write(&machine, "\"config\" {\"convars\" {\"fps_max\" \"0\" \"spec_usenumberkeys_nobinds\" \"0\"}}").unwrap();
         let keys = video.parent().unwrap().join("cs2_user_keys_0_slot0.vcfg");
         let original = "\"config\" {\"bindings\" {\"h\" \"custom\"}}"; fs::write(&keys, original).unwrap();
+        let startup = root.join("game/csgo/cfg/auto.cfg");
+        let startup_original = fs::read(&startup).unwrap();
         assert!(store.prepare_mulnx_observer(&video, &executable, 1).unwrap());
+        assert_ne!(fs::read(&startup).unwrap(), startup_original);
         store.cancel_unsubmitted_mulnx_observer().unwrap();
         assert!(!store.spectator_pending()); assert_eq!(fs::read_to_string(&keys).unwrap(), original);
+        assert_eq!(fs::read(&startup).unwrap(), startup_original);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -2136,6 +2156,26 @@ mod tests {
         let journal = store.prepare_with_frame_rate(&video, &executable, cs2_video::VideoSize::new(1440, 810).unwrap()).unwrap();
         assert_ne!(journal["nativeHudToggle"], true);
         assert_ne!(journal["spectatorCfg"], true);
+        assert!(!store.spectator_pending());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn standard_launch_reapplies_observer_after_personal_startup_and_restores_exact_cfg() {
+        let (root, video, machine, executable, store) = frame_setup();
+        fs::write(&machine, "\"config\" {\"convars\" {\"fps_max\" \"0\" \"spec_usenumberkeys_nobinds\" \"0\"}}").unwrap();
+        let startup = root.join("game/csgo/cfg/auto.cfg");
+        let original = "// personal\r\nbinddefaults; bind h switchhands\r\nfps_max 144\r\nexec crosshair.cfg\r\n";
+        fs::write(&startup, original).unwrap();
+        let journal = store.prepare_with_frame_rate(&video, &executable, cs2_video::VideoSize::new(1440,810).unwrap()).unwrap();
+        assert_eq!(journal["nativeHudToggle"], true);
+        let applied = fs::read_to_string(&startup).unwrap();
+        assert!(applied.contains("binddefaults; bind h switchhands"));
+        assert!(applied.contains("fps_max 60"));
+        assert_eq!(applied.lines().last(), Some("exec mizar_observer.cfg"));
+        store.spectator_load_attempted(true).unwrap();
+        assert!(SessionStore::new(root.clone()).restore().unwrap().is_none());
+        assert_eq!(fs::read_to_string(&startup).unwrap(), original);
         assert!(!store.spectator_pending());
         fs::remove_dir_all(root).unwrap();
     }

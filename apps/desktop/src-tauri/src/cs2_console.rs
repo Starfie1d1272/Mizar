@@ -130,10 +130,9 @@ fn verify_handle_path(file: &File, path: &Path) -> io::Result<()> {
         .to_str()
         .ok_or_else(|| io::Error::other("console path encoding invalid"))?;
     let normalize = |value: &str| {
-        value
-            .replace('/', "\\")
-            .trim_start_matches("\\\\?\\")
-            .to_lowercase()
+        let value = value.replace('/', "\\");
+        Path::new(value.strip_prefix("\\\\?\\").unwrap_or(&value))
+            .components().collect::<PathBuf>().to_string_lossy().to_lowercase()
     };
     if normalize(&actual) != normalize(expected) {
         return Err(io::Error::other("console handle escaped fixed path"));
@@ -1237,6 +1236,20 @@ mod tests {
         fs::write(&executable, b"public fixture, never executed").unwrap();
         let log = DesktopLog::new(&root, None).unwrap();
         (root, log, executable)
+    }
+    #[cfg(windows)]
+    #[test]
+    fn console_handle_accepts_equivalent_steam_path_separators() {
+        let (root, _, executable) = setup("steam-separators");
+        let source = path(&executable).unwrap();
+        fs::write(&source, b"[ALL] player: gl hf\n").unwrap();
+        let spelling = source.to_string_lossy().trim_start_matches("\\\\?\\").replace('\\', "\\\\");
+        let (_, expected) = checked(&source).unwrap();
+        assert_eq!(checked(Path::new(&spelling)).unwrap().1, expected);
+        let other = source.with_file_name("other.log");
+        fs::write(&other, b"different source").unwrap();
+        assert!(verify_handle_path(&File::open(&source).unwrap(), &other).is_err());
+        fs::remove_dir_all(root).unwrap();
     }
     fn journal(log: &DesktopLog, executable: &Path) -> Value {
         json!({"pid":42,"created":99,"launchTime":100,"executable":executable,"consoleDiagnostics":prepare(log, executable).unwrap().unwrap()})
