@@ -485,14 +485,12 @@ it('does not duplicate window-capture audio with default desktop capture', async
   const obs = new FakeObs();
   await ensureObsConfiguration(obs, baseUrl);
   obs.inputs.set('Window', { kind: 'window_capture', settings: { capture_audio: true } });
-  obs.scenes
-    .get(obsSceneName('gameplay'))!
-    .push({
-      sourceName: 'Window',
-      sceneItemId: obs.nextId++,
-      sceneItemIndex: 2,
-      sceneItemEnabled: true,
-    });
+  obs.scenes.get(obsSceneName('gameplay'))!.push({
+    sourceName: 'Window',
+    sceneItemId: obs.nextId++,
+    sceneItemIndex: 2,
+    sceneItemEnabled: true,
+  });
   obs.calls = [];
   await ensureObsAudio(obs, baseUrl);
   expect(obs.inputs.has('Mizar · Desktop Audio')).toBe(false);

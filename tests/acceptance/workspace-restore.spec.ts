@@ -6,7 +6,7 @@ for (const mode of ['standard', 'mulnx', 'connected', 'borrowed'] as const) {
     await context.exposeBinding(
       'workspaceNative',
       (_source, command: string, args?: Record<string, unknown>) => {
-        calls.push({ command, args });
+        calls.push({ command, ...(args ? { args } : {}) });
         if (command === 'cs2_config_status')
           return {
             preferMulnx: mode === 'mulnx',
