@@ -1374,7 +1374,7 @@ it('waits for OBS to report an acknowledged pause and resume without sending eit
   await r.director.manualPlay('waiting', r.tracks[1]!.id);
   let reads = 0;
   let pending: 'pause' | 'resume' | null = null;
-  r.obs.intercept = async (type) => {
+  r.obs.intercept = (type) => {
     if (type === 'TriggerMediaInputAction') {
       pending = r.obs.bgm().state === 'OBS_MEDIA_STATE_PLAYING' ? 'pause' : 'resume';
       reads = 0;
@@ -1390,6 +1390,7 @@ it('waits for OBS to report an acknowledged pause and resume without sending eit
             : 'OBS_MEDIA_STATE_PLAYING';
       if (reads === 3) pending = null;
     }
+    return Promise.resolve();
   };
   await r.director.manualPause(true);
   expect(r.director.get().playback).toBe('paused');
@@ -1412,9 +1413,10 @@ it('keeps control unconfirmed when OBS never reports the requested pause', async
   await r.step();
   await r.director.manualPlay('waiting', r.tracks[1]!.id);
   let afterPause = false;
-  r.obs.intercept = async (type) => {
+  r.obs.intercept = (type) => {
     if (type === 'TriggerMediaInputAction') afterPause = true;
     if (type === 'GetMediaInputStatus' && afterPause) r.obs.bgm().state = 'OBS_MEDIA_STATE_PLAYING';
+    return Promise.resolve();
   };
   await expect(r.director.manualPause(true)).rejects.toThrow('music_state_unconfirmed');
   expect(r.director.get().held).toBe(true);
