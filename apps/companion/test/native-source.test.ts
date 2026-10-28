@@ -243,3 +243,49 @@ it('rejects hard-linked source files while committing adjacent trusted sources',
     await journal.close();
   }
 });
+
+it('accepts a Windows mapped fixed file only when the resolved file identity matches', async () => {
+  const { directory, journal, source } = await setup();
+  const name = 'desktop.1.ndjson';
+  const logical = join(directory, name);
+  const mappedDir = await mkdtemp(join(tmpdir(), 'mizar-mapped-source-'));
+  directories.push(mappedDir);
+  const mapped = join(mappedDir, name);
+  const cursor = join(directory, 'native-source-cursor.json');
+  const mappedCursor = join(mappedDir, 'native-source-cursor.json');
+  await writeFile(logical, JSON.stringify(event('mapped_record')) + '\n');
+  await writeFile(mapped, 'different file');
+  await writeFile(cursor, JSON.stringify({ schema: 1, cursors: [] }));
+  await writeFile(mappedCursor, '{}');
+  const originalRealpath = filesystem.realpath;
+  const originalLstat = filesystem.lstat;
+  const descriptor = Object.getOwnPropertyDescriptor(process, 'platform')!;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  vi.spyOn(filesystem, 'realpath').mockImplementation(async (path, options) =>
+    String(path) === logical
+      ? mapped
+      : String(path) === cursor
+        ? mappedCursor
+        : originalRealpath(path, options as never),
+  );
+  try {
+    await source.poll();
+    expect(source.health()).toMatchObject({ copied: 0, error: 'native_source_unavailable' });
+    vi.spyOn(filesystem, 'lstat').mockImplementation(async (path, options) =>
+      originalLstat(
+        String(path) === mapped ? logical : String(path) === mappedCursor ? cursor : path,
+        options as never,
+      ),
+    );
+    await source.poll();
+    expect(source.health()).toMatchObject({ copied: 1, error: null });
+    await journal.flush();
+    expect((await entries(directory)).entries.map((record) => record.entry.stage)).toEqual([
+      'mapped_record',
+    ]);
+  } finally {
+    Object.defineProperty(process, 'platform', descriptor);
+    await source.close();
+    await journal.close();
+  }
+});

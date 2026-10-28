@@ -1,8 +1,9 @@
 import { constants } from 'node:fs';
-import { lstat, open } from 'node:fs/promises';
+import { lstat, open, realpath } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { atomicJson, safePath } from '../resource-store/files.js';
+import { ResourceStoreError } from '../resource-store/contract.js';
 import { diagnosticValue, type SessionJournal } from './session-journal.js';
 
 const names = ['desktop.ndjson', 'desktop.1.ndjson', 'desktop.2.ndjson', 'desktop.3.ndjson'];
@@ -25,6 +26,47 @@ type NativeRecord = {
 };
 const hash = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex');
 const missing = (error: unknown) => (error as NodeJS.ErrnoException)?.code === 'ENOENT';
+
+// Only fixed Host names can use the Windows packaged-app mapping fallback.
+async function nativePath(directory: string, name: string): Promise<string> {
+  try {
+    return await safePath(directory, name);
+  } catch (error) {
+    if (
+      process.platform !== 'win32' ||
+      !(error instanceof ResourceStoreError) ||
+      error.code !== 'resource_path_unsafe'
+    )
+      throw error;
+    if (name !== cursorName && !names.includes(name)) throw error;
+    await safePath(directory);
+    const path = join(directory, name);
+    const before = await lstat(path);
+    if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1) throw error;
+    const resolved = await realpath(path);
+    if (basename(resolved).toLowerCase() !== name.toLowerCase()) throw error;
+    await safePath(dirname(resolved), basename(resolved));
+    const actual = await lstat(resolved);
+    await safePath(directory);
+    const after = await lstat(path);
+    if (
+      !actual.isFile() ||
+      actual.isSymbolicLink() ||
+      actual.nlink !== 1 ||
+      !Number.isSafeInteger(before.ino) ||
+      before.ino === 0 ||
+      actual.dev !== before.dev ||
+      actual.ino !== before.ino ||
+      after.dev !== before.dev ||
+      after.ino !== before.ino ||
+      !after.isFile() ||
+      after.isSymbolicLink() ||
+      after.nlink !== 1
+    )
+      throw error;
+    return path;
+  }
+}
 
 /** Incremental observer of the four fixed Mizar Host files, never a caller-supplied path. */
 export class NativeSource {
@@ -91,13 +133,20 @@ export class NativeSource {
   private async initialize() {
     if (this.initialized) return;
     try {
-      const path = await safePath(this.directory, cursorName);
+      const path = await nativePath(this.directory, cursorName);
       const before = await lstat(path);
       if (before.size > NATIVE_SOURCE_LIMITS.cursorBytes) throw new Error('native_cursor_budget');
       const file = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
       try {
         const actual = await file.stat();
-        if (actual.ino !== before.ino || actual.dev !== before.dev || actual.nlink !== 1)
+        const named = await lstat(await nativePath(this.directory, cursorName));
+        if (
+          actual.ino !== before.ino ||
+          actual.dev !== before.dev ||
+          actual.nlink !== 1 ||
+          actual.ino !== named.ino ||
+          actual.dev !== named.dev
+        )
           throw new Error('native_cursor_changed');
         const buffer = Buffer.alloc(NATIVE_SOURCE_LIMITS.cursorBytes + 1);
         const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
@@ -170,7 +219,7 @@ export class NativeSource {
       if (this.checkpointPending || JSON.stringify(previous) !== JSON.stringify(this.cursors)) {
         this.checkpointPending = true;
         try {
-          await safePath(this.directory, cursorName).catch((error) => {
+          await nativePath(this.directory, cursorName).catch((error) => {
             if (!missing(error)) throw error;
           });
           await atomicJson(join(this.directory, cursorName), { schema: 1, cursors: this.cursors });
@@ -203,7 +252,7 @@ export class NativeSource {
     return hash(bytes);
   }
   private async openSource(name: string) {
-    const path = await safePath(this.directory, name);
+    const path = await nativePath(this.directory, name);
     const before = await lstat(path);
     if (before.size > NATIVE_SOURCE_LIMITS.sourceBytes)
       throw new Error('native_source_size_budget');
@@ -219,12 +268,15 @@ export class NativeSource {
     const { before, file } = source;
     try {
       const actual = await file.stat();
+      const named = await lstat(await nativePath(this.directory, name));
       if (
         !actual.isFile() ||
         actual.nlink !== 1 ||
         actual.size > NATIVE_SOURCE_LIMITS.sourceBytes ||
         actual.ino !== before.ino ||
-        actual.dev !== before.dev
+        actual.dev !== before.dev ||
+        actual.ino !== named.ino ||
+        actual.dev !== named.dev
       )
         throw new Error('native_source_changed');
       const identity = hash(`${actual.dev}:${actual.ino}:${actual.birthtimeMs}`);
