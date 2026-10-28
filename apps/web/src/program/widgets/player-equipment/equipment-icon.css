@@ -6,3 +6,46 @@
 .hud-equipment-icon[data-asset-facing='left'] {
   transform: scaleX(-1);
 }
+
+/* The intrinsic image sizes the artwork inside the larger inventory slot.
+ * Clip in screen coordinates; only the two mask leaves change facing. */
+.hud-equipment-icon[data-clip-fill] {
+  container-type: size;
+  display: flex;
+  align-items: center;
+}
+.hud-equipment-icon[data-clip-fill][data-asset-facing='left'] {
+  justify-content: flex-end;
+}
+.hud-equipment-icon__artwork {
+  position: relative;
+  display: grid;
+}
+.hud-equipment-icon__artwork > img {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100cqw;
+  max-height: 100cqh;
+  visibility: hidden;
+}
+.hud-equipment-icon__artwork::before,
+.hud-equipment-icon__fill::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--mizar-hud-text-primary);
+  mask: var(--player-rail-icon) center / contain no-repeat;
+}
+.hud-equipment-icon__artwork::before {
+  opacity: 0.35;
+}
+.hud-equipment-icon__fill {
+  position: absolute;
+  inset: 0;
+  clip-path: inset(0 var(--magazine-empty) 0 0);
+}
+[data-asset-facing='left'] > .hud-equipment-icon__artwork::before,
+[data-asset-facing='left'] > .hud-equipment-icon__artwork > .hud-equipment-icon__fill::before {
+  transform: scaleX(-1);
+}
