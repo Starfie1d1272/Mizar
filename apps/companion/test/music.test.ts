@@ -10,6 +10,8 @@ import type { ObsRpc } from '../src/obs/reconcile.js';
 import { MusicStore } from '../src/music/store.js';
 import { MusicDirector } from '../src/music/director.js';
 import { ownedMusicInput } from '../src/music/obs-provider.js';
+import { ObsAudioRouting } from '../src/obs/audio-routing.js';
+import { obsDesiredScenes } from '../src/obs/desired-state.js';
 import type { MusicTruth } from '../src/music/cues.js';
 import { musicWav, MediaObs } from './music-fixtures.js';
 
@@ -1574,6 +1576,77 @@ it('enables new monitoring only after a safe routing check and keeps explicit or
   expect(reloaded.state.monitorPreference).toBe(false);
   await r.step();
   expect(r.obs.bgm().monitor).toBe('OBS_MONITORING_TYPE_NONE');
+  await r.director.close();
+});
+
+it('connects a new technical cue to monitoring only after independent routing is ready', async () => {
+  const routingDir = await mkdtemp(join(tmpdir(), 'music-routing-'));
+  directories.push(routingDir);
+  const routing = new ObsAudioRouting(join(routingDir, 'routing.json'));
+  const endpoint = 'ws://127.0.0.1:4455';
+  const desired = obsDesiredScenes('http://127.0.0.1:3000');
+  const roles = [
+    { inputUuid: 'game', inputName: 'Game', inputKind: 'wasapi_process_output_capture' },
+    { inputUuid: 'remote', inputName: 'Remote', inputKind: 'wasapi_process_output_capture' },
+    { inputUuid: 'mic', inputName: 'Mic', inputKind: 'wasapi_input_capture' },
+  ];
+  let desktop = true;
+  const obs: ObsRpc = {
+    call: async (type) => {
+      if (type === 'GetVersion')
+        return {
+          availableRequests: [
+            'GetInputList',
+            'GetInputSettings',
+            'GetSceneCollectionList',
+            'GetSpecialInputs',
+            'GetSceneList',
+            'GetSceneItemList',
+            'GetGroupSceneItemList',
+          ],
+        };
+      if (type === 'GetSceneCollectionList') return { currentSceneCollectionName: 'Mizar' };
+      if (type === 'GetSpecialInputs') return desktop ? { desktop1: 'Desktop' } : {};
+      if (type === 'GetSceneList') return { scenes: desired };
+      if (type === 'GetInputList')
+        return { inputs: [...roles, ...((await r.obs.call('GetInputList')).inputs as object[])] };
+      if (type === 'GetSceneItemList')
+        return {
+          sceneItems: [
+            ...roles.map((input) => ({ sourceUuid: input.inputUuid, sceneItemEnabled: true })),
+            ...[...r.obs.inputs.values()].map((input) => ({
+              sourceUuid: input.uuid,
+              sceneItemEnabled: true,
+            })),
+          ],
+        };
+      throw new Error(type);
+    },
+  };
+  const r: Awaited<ReturnType<typeof rig>> = await rig(() =>
+    routing.musicMonitorSafe(obs, endpoint, {
+      owner: r.store.state.owner,
+      sources: r.store.state.sources,
+      baseUrl: 'http://127.0.0.1:3000',
+    }),
+  );
+  await routing.seedAutomatic(obs, endpoint, {
+    game: 'game',
+    remoteCommentary: 'remote',
+    microphone: 'mic',
+  });
+  r.truth.program.map.phase = 'live';
+  r.truth.program.map.roundNumber = 5;
+  r.truth.program.clock = { phase: 'paused', endsInSeconds: 40 };
+  await r.step();
+  expect(r.director.get().bgm?.group).toBe('technical');
+  expect(r.director.get().playback).toBe('playing');
+  expect(r.director.get().monitor).toBe('disabled');
+  expect(r.director.get().monitorPending).toBe(true);
+  desktop = false;
+  await r.step();
+  expect(r.director.get().monitor).toBe('enabled');
+  expect(r.obs.bgm().monitor).toBe('OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT');
   await r.director.close();
 });
 

@@ -19,6 +19,8 @@ it('permits automatic music monitoring only with complete independent scene path
     let globalDesktop = false;
     let desktopEnabled = false;
     let nested = false;
+    let extraKind: string | null = null;
+    let browserUrl = obsDesiredScenes('http://127.0.0.1:3000')[0]!.browserUrl;
     const obs: ObsRpc = {
       call: async (type) => {
         await Promise.resolve();
@@ -36,6 +38,8 @@ it('permits automatic music monitoring only with complete independent scene path
           };
         if (type === 'GetSceneCollectionList') return { currentSceneCollectionName: 'Mizar' };
         if (type === 'GetInputList') return { inputs };
+        if (type === 'GetInputSettings')
+          return { inputSettings: { capture_audio: false, url: browserUrl } };
         if (type === 'GetSpecialInputs') return globalDesktop ? { desktop1: 'Desktop' } : {};
         if (type === 'GetSceneItemList')
           return {
@@ -45,6 +49,7 @@ it('permits automatic music monitoring only with complete independent scene path
                 .map((input) => ({ sourceUuid: input.inputUuid, sceneItemEnabled: true })),
               { sourceUuid: 'desktop', sceneItemEnabled: desktopEnabled },
               ...(nested ? [{ sourceUuid: 'nested', sceneItemEnabled: true, isGroup: true }] : []),
+              ...(extraKind ? [{ sourceUuid: 'extra', sceneItemEnabled: true }] : []),
             ],
           };
         if (type === 'GetSceneList') return { scenes: obsDesiredScenes('http://127.0.0.1:3000') };
@@ -67,6 +72,29 @@ it('permits automatic music monitoring only with complete independent scene path
     desktopEnabled = false;
     nested = true;
     expect(await routing.musicMonitorSafe(obs, endpoint)).toBe(false);
+    nested = false;
+    inputs.push({ inputUuid: 'extra', inputName: 'Extra', inputKind: 'dshow_input' });
+    extraKind = 'dshow_input';
+    expect(await routing.musicMonitorSafe(obs, endpoint)).toBe(false);
+    inputs[4]!.inputKind = 'unrecognized_source';
+    expect(await routing.musicMonitorSafe(obs, endpoint)).toBe(false);
+    inputs[4]!.inputKind = 'image_source';
+    expect(await routing.musicMonitorSafe(obs, endpoint)).toBe(true);
+    const music = {
+      owner: 'owner',
+      sources: { bgm: 'extra', stinger: null },
+      baseUrl: 'http://127.0.0.1:3000',
+    };
+    inputs[4]!.inputKind = 'ffmpeg_source';
+    inputs[4]!.inputName = 'Mizar · BGM · owner';
+    expect(await routing.musicMonitorSafe(obs, endpoint, music)).toBe(true);
+    inputs[4]!.inputName = 'Unowned';
+    expect(await routing.musicMonitorSafe(obs, endpoint, music)).toBe(false);
+    inputs[4]!.inputKind = 'browser_source';
+    inputs[4]!.inputName = obsDesiredScenes(music.baseUrl)[0]!.browserInput;
+    expect(await routing.musicMonitorSafe(obs, endpoint, music)).toBe(true);
+    browserUrl = 'https://example.com/';
+    expect(await routing.musicMonitorSafe(obs, endpoint, music)).toBe(false);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

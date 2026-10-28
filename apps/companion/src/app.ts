@@ -1172,8 +1172,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       async (obs) => {
         const config = await obsConfigStore.read();
         return (
-          (await obsAudioRouting?.musicMonitorSafe(obs, `ws://${config.host}:${config.port}`)) ??
-          false
+          (await obsAudioRouting?.musicMonitorSafe(obs, `ws://${config.host}:${config.port}`, {
+            owner: musicStore.state.owner,
+            sources: musicStore.state.sources,
+            baseUrl: `http://${options.host ?? '127.0.0.1'}:${options.port ?? 3000}`,
+          })) ?? false
         );
       },
     );

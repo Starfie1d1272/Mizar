@@ -244,7 +244,7 @@ export function MusicControls({
       <p className="music-player__hint">使用 OBS 所在机器的监听设备；桌面采集可能回灌。</p>
       {status.monitorPending ? (
         <p className="music-player__hint">
-          自动监听尚未配置：无法确认独立分路已完成且没有桌面采集或嵌套路径。请在声音设置完成分路，并在
+          自动监听尚未配置：无法确认独立分路及桌面采集、嵌套路径或其他来源的音频。请在声音设置完成分路，并在
           OBS 核对音轨；手动开启前请检查重复收音。
         </p>
       ) : null}
