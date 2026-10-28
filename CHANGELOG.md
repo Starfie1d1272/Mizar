@@ -2,7 +2,7 @@
 
 本文件维护各版本的用户变更与升级说明。正式发布记录及原始资产见 [GitHub Releases](https://github.com/Starfie1d1272/Mizar/releases)。
 
-## [1.8.3-rc.1]
+## [2.0.0-rc.1]
 
 ### 游戏与观战
 
