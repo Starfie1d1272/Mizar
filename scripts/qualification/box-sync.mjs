@@ -369,19 +369,54 @@ export class BoxClient {
       const url = this.temporaryUrl(
         await this.api('download-link', path, 'GET', undefined, signal),
       );
+      let idleController, idleTimer;
+      const resetIdle = () => {
+        globalThis.clearTimeout(idleTimer);
+        idleTimer = globalThis.setTimeout(() => idleController.abort(), 60000);
+      };
+      const stopIdle = () => globalThis.clearTimeout(idleTimer);
       return checkedFetch(
         url,
         { redirect: 'error', signal },
         600000,
-        this.downloadTransport,
-        async (response) => {
-          const hash = createHash('sha256');
-          let size = 0;
-          for await (const chunk of response.body) {
-            hash.update(chunk);
-            size += chunk.length;
+        async (address, options) => {
+          idleController = new globalThis.AbortController();
+          resetIdle();
+          try {
+            const response = await this.downloadTransport(address, {
+              ...options,
+              signal: AbortSignal.any([options.signal, idleController.signal]),
+            });
+            if (!response.ok) stopIdle();
+            return response;
+          } catch (error) {
+            stopIdle();
+            if (idleController.signal.aborted && !options.signal.aborted)
+              throw Object.assign(new Error('Box download stalled'), {
+                code: 'UND_ERR_BODY_TIMEOUT',
+              });
+            throw error;
           }
-          return { sha256: hash.digest('hex'), size };
+        },
+        async (response) => {
+          try {
+            const hash = createHash('sha256');
+            let size = 0;
+            for await (const chunk of response.body) {
+              resetIdle();
+              hash.update(chunk);
+              size += chunk.length;
+            }
+            return { sha256: hash.digest('hex'), size };
+          } catch (error) {
+            if (idleController.signal.aborted && !signal?.aborted)
+              throw Object.assign(new Error('Box download stalled'), {
+                code: 'UND_ERR_BODY_TIMEOUT',
+              });
+            throw error;
+          } finally {
+            stopIdle();
+          }
         },
       );
     });
