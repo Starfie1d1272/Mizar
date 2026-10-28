@@ -159,9 +159,11 @@ export function registerOrchestrationRoutes(
   app.post('/operator/orchestration', { bodyLimit: 256 * 1024 }, async (request, reply) => {
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    let checkingTool = false;
     try {
       const body = commandSchema.parse(request.body);
       if (body.action === 'check-tool') {
+        checkingTool = true;
         if (!tool) throw new Error('mulnx_bundle_unavailable');
         await tool.check();
       } else if (body.action === 'browser') {
@@ -194,7 +196,11 @@ export function registerOrchestrationRoutes(
       );
       return reply.code(400).send({
         error: 'camera_operation_failed',
-        message: '操作未完成，请核对当前地图、连接、预设与本机音频。',
+        message: checkingTool
+          ? error instanceof Error && /^mulnx_metadata_http_(403|429)$/.test(error.message)
+            ? '无法检查 MulNX 更新：GitHub 拒绝了请求，可能已达到请求次数限制。请稍后重试。'
+            : '无法检查 MulNX 更新，请检查网络后重试。'
+          : '操作未完成，请核对当前地图、连接、预设与本机音频。',
         requestId: request.id,
       });
     }

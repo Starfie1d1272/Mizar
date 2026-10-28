@@ -3,12 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify from 'fastify';
 import websocket from '@fastify/websocket';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { cameraMapSchema, orchestrationPresetSchema } from '@mizar/protocol/orchestration';
 import { CameraDirector } from '../src/orchestration/director.js';
 import { OrchestrationStore } from '../src/orchestration/store.js';
 import { MulnxProvider, type GatewayResult } from '../src/orchestration/provider.js';
 import { registerOrchestrationRoutes } from '../src/orchestration/routes.js';
+import { MulnxTool } from '../src/orchestration/tool.js';
 import { MusicStore } from '../src/music/store.js';
 import { registerProductionRoutes } from '../src/program-scenes/production.js';
 import type { ProgramSceneController } from '../src/program-scenes/controller.js';
@@ -291,6 +292,44 @@ it('persists validated drafts, rejects malformed imports and forbids remote cont
   await writeFile(join(r.store.directory, 'preset.json'), '{broken');
   await expect(restored.load()).rejects.toThrow();
   expect(restored.ready).toBe(false);
+});
+it('reports MulNX update check failures without exposing internal errors and permits retry', async () => {
+  const r = await rig();
+  const app = Fastify();
+  cleanup.push(() => app.close());
+  const music = new MusicStore(join(r.root, 'music'));
+  const tool = new MulnxTool(join(r.root, 'mulnx'), join(r.root, 'bundle'));
+  const check = vi.spyOn(tool, 'check');
+  check.mockRejectedValueOnce(new Error('mulnx_metadata_http_403'));
+  check.mockRejectedValueOnce(new Error('private diagnostic'));
+  check.mockResolvedValueOnce(tool.view());
+  registerOrchestrationRoutes(
+    app,
+    r.director,
+    music,
+    {
+      mode: 'loopback',
+      bindHost: '127.0.0.1',
+      allowedOrigins: [],
+    },
+    undefined,
+    tool,
+  );
+  const post = () =>
+    app.inject({
+      method: 'POST',
+      url: '/operator/orchestration',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: { action: 'check-tool' },
+    });
+  const limited = await post();
+  expect(limited.statusCode).toBe(400);
+  expect(limited.json<{ message: string }>().message).toContain('GitHub 拒绝了请求');
+  const other = await post();
+  expect(other.statusCode).toBe(400);
+  expect(other.json<{ message: string }>().message).toBe('无法检查 MulNX 更新，请检查网络后重试。');
+  expect(other.body).not.toContain('private diagnostic');
+  expect((await post()).statusCode).toBe(200);
 });
 it('real websocket separates ACK, rejection and unrelated broadcasts; disconnect never replays', async () => {
   const app = Fastify();
