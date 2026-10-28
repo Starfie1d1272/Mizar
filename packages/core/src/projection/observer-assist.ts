@@ -47,20 +47,56 @@ interface BufferedKill {
   matched: boolean;
   retired: boolean;
   shownDueMs: number | null;
-  pairedProgramKey: string | null;
 }
 
-/** Private event projection. Program deaths provide independent same-player time anchors. */
+interface ClockPoint {
+  round: number;
+  remaining: number;
+  received: number;
+  generation: number;
+  segment: number;
+}
+interface ClockBoundary {
+  round: number;
+  received: number;
+  generation: number;
+}
+interface ClockInput {
+  round: number;
+  remaining: number;
+  received: number;
+  generation: number;
+}
+
+/** Private event projection; clock comparisons use receive times from this process. */
 export class ObserverHintTimeline {
   private kills: BufferedKill[] = [];
   private context = '';
   private generation: number | undefined;
   private previous = new Map<string, boolean>();
   private seenReceive: number | null = null;
-  private programEvents: { victim: string; time: number; frame: number }[] = [];
+  private sourceClocks: ClockPoint[] = [];
+  private sourceExecution: number | undefined;
+  private sourceExecutionChanged = false;
+  private freezeEnds: ClockBoundary[] = [];
+  private programPhase: {
+    phase: string;
+    round: number;
+    received: number;
+    generation: number;
+  } | null = null;
+  private freezeOffset: { delay: number; round: number; generation: number } | null = null;
+  private lastProgramClock: ClockInput | null = null;
+  private clockSegment = 0;
+  private clockEvidence: {
+    delay: number;
+    time: number;
+    remaining: number;
+    round: number;
+    segment: number;
+  }[] = [];
   private effectiveDelayMs: number | null = null;
   private lastEvidenceAt: number | null = null;
-  private lastEvidenceKey = '';
   private evidenceCount = 0;
   private evidenceSpreadMs: number | null = null;
   private estimateReason = 'awaiting-evidence';
@@ -144,10 +180,17 @@ export class ObserverHintTimeline {
 
   clear() {
     this.kills = [];
-    this.programEvents = [];
+    this.sourceClocks = [];
+    this.sourceExecution = undefined;
+    this.sourceExecutionChanged = false;
+    this.freezeEnds = [];
+    this.programPhase = null;
+    this.freezeOffset = null;
+    this.lastProgramClock = null;
+    this.clockEvidence = [];
+    this.clockSegment++;
     this.effectiveDelayMs = null;
     this.lastEvidenceAt = null;
-    this.lastEvidenceKey = '';
     this.evidenceCount = 0;
     this.evidenceSpreadMs = null;
     this.estimateReason = 'awaiting-evidence';
@@ -207,7 +250,6 @@ export class ObserverHintTimeline {
       matched: false,
       retired: false,
       shownDueMs: null,
-      pairedProgramKey: null,
     });
     if (this.kills.length > 4096) {
       this.kills.shift();
@@ -254,126 +296,170 @@ export class ObserverHintTimeline {
       this.continuityLost = true;
   }
 
-  private calibrate(
+  private observeClock(
+    source: ClockInput | undefined,
+    program: ClockInput | undefined,
     now: number,
-    settings: ObserverHintSettings,
-    map: string,
-    identities: Set<string>,
+    freezeEnd?: ClockBoundary,
+    sourceExecution?: number,
+    phase?: { phase: string; round: number; received: number; generation: number },
   ) {
-    const observations = this.programEvents.filter((event) => event.time >= now - 60000);
-    const center = this.effectiveDelayMs ?? settings.expectedDelaySeconds * 1000;
-    const reacquiring = this.calibrationState(now) === 'reacquiring';
-    const lower = reacquiring ? 0 : Math.max(0, center - 60000);
-    const upper = reacquiring ? Math.max(600000, center + 180000) : center + 60000;
-    const assignments = new Map(
-      this.kills
-        .filter((kill) => kill.pairedProgramKey !== null)
-        .map((kill) => [kill.pairedProgramKey!, kill]),
-    );
-    const pairs = observations.flatMap((event) =>
-      this.kills
-        .filter(
-          (kill) =>
-            kill.event.cursor.mapName === map &&
-            (kill.pairedProgramKey === null ||
-              kill.pairedProgramKey === `${event.frame}:${event.victim}`) &&
-            (!assignments.has(`${event.frame}:${event.victim}`) ||
-              assignments.get(`${event.frame}:${event.victim}`) === kill) &&
-            identities.has(kill.event.attacker!.sourcePlayerId!) &&
-            kill.event.victim.sourcePlayerId === event.victim &&
-            event.time - kill.sourceMs >= lower &&
-            event.time - kill.sourceMs <= upper,
-        )
-        .map((kill) => ({ event, kill, delay: event.time - kill.sourceMs })),
-    );
-    this.candidateCount += pairs.length;
-    if (pairs.length > 96) {
-      this.estimateReason = 'candidate-capacity';
-      return;
+    if (sourceExecution !== undefined) {
+      if (this.sourceExecution !== undefined && sourceExecution !== this.sourceExecution) {
+        this.sourceExecutionChanged = true;
+        this.sourceClocks = [];
+        this.clockEvidence = [];
+        this.freezeEnds = [];
+        this.freezeOffset = null;
+      }
+      this.sourceExecution = sourceExecution;
     }
-    // Evaluate clusters of candidate offsets. Reject ambiguous identities and inconsistent order.
-    const clusters = pairs
-      .map((seed) => {
-        const nearby = pairs.filter((pair) => Math.abs(pair.delay - seed.delay) <= 1500);
-        const unique = nearby.filter(
-          (pair) =>
-            nearby.filter((other) => other.event === pair.event).length === 1 &&
-            nearby.filter((other) => other.kill === pair.kill).length === 1,
-        );
-        unique.sort((a, b) => a.event.time - b.event.time || a.event.frame - b.event.frame);
-        const ordered = unique.every((pair) =>
-          unique.every(
-            (other) =>
-              other.event.frame === pair.event.frame ||
-              other.event.time >= pair.event.time ||
-              other.kill.sourceMs < pair.kill.sourceMs,
-          ),
-        );
-        return ordered ? unique : [];
-      })
-      .filter((cluster) => cluster.length >= 3);
-    clusters.sort((a, b) => b.length - a.length);
-    const best = clusters[0];
-    if (!best) {
-      this.estimateReason = 'insufficient-or-ambiguous';
-      return;
-    }
-    const sorted = best.map((pair) => pair.delay).sort((a, b) => a - b);
-    const median = sorted[Math.floor(sorted.length / 2)]!;
+    if (this.sourceExecutionChanged) return;
     if (
-      clusters.some(
-        (cluster) =>
-          Math.abs(
-            cluster.map((pair) => pair.delay).sort((a, b) => a - b)[
-              Math.floor(cluster.length / 2)
-            ]! - median,
-          ) > 3000,
+      freezeEnd &&
+      !this.freezeEnds.some(
+        (p) => p.generation === freezeEnd.generation && p.received === freezeEnd.received,
       )
     ) {
-      this.estimateReason = 'competing-offsets';
+      this.freezeEnds.push(freezeEnd);
+      this.freezeEnds = this.freezeEnds.filter((p) => p.received >= now - 780000).slice(-128);
+    }
+    if (phase && phase.received !== this.programPhase?.received) {
+      const previousPhase = this.programPhase;
+      if (
+        previousPhase?.phase === 'freezetime' &&
+        phase.phase === 'live' &&
+        previousPhase.round === phase.round &&
+        previousPhase.generation === phase.generation &&
+        phase.received > previousPhase.received &&
+        phase.received - previousPhase.received <= 2000
+      ) {
+        const candidates = this.freezeEnds.filter(
+          (p) =>
+            p.round === phase.round &&
+            phase.received >= p.received &&
+            phase.received - p.received <= 600000,
+        );
+        this.freezeOffset =
+          candidates.length === 1
+            ? {
+                delay: phase.received - candidates[0]!.received,
+                round: phase.round,
+                generation: candidates[0]!.generation,
+              }
+            : null;
+      }
+      this.programPhase = phase;
+    } else if (!phase) this.programPhase = null;
+    const last = this.sourceClocks.at(-1);
+    if (source && (!last || source.received !== last.received)) {
+      const elapsed = last ? (source.received - last.received) / 1000 : 0;
+      const advanced = last ? last.remaining - source.remaining : 0;
+      if (
+        !last ||
+        source.generation !== last.generation ||
+        source.round !== last.round ||
+        elapsed <= 0 ||
+        elapsed > 2 ||
+        advanced <= 0 ||
+        Math.abs(advanced - elapsed) > 0.35
+      ) {
+        this.clockSegment++;
+      }
+      this.sourceClocks.push({ ...source, segment: this.clockSegment });
+      this.sourceClocks = this.sourceClocks.filter((p) => p.received >= now - 780000).slice(-16000);
+    } else if (!source && last && last.segment === this.clockSegment) {
+      this.clockSegment++;
+    }
+    if (!program) {
+      this.lastProgramClock = null;
+      this.clockEvidence = [];
       return;
     }
+    if (this.lastProgramClock && program.received === this.lastProgramClock.received) return;
+    const previous = this.lastProgramClock;
+    this.lastProgramClock = program;
     if (
-      reacquiring &&
-      (best.length < 4 || new Set(best.map((pair) => pair.event.frame)).size < 3)
+      !previous ||
+      previous.generation !== program.generation ||
+      previous.round !== program.round
     ) {
-      this.estimateReason = 'insufficient-reacquisition-evidence';
+      this.clockEvidence = [];
       return;
     }
-    const key = best
-      .map(
-        (pair) =>
-          `${pair.event.frame}:${pair.kill.event.cursor.generation}:${pair.kill.event.cursor.sequence}`,
+    const elapsed = (program.received - previous.received) / 1000;
+    const advanced = previous.remaining - program.remaining;
+    if (elapsed <= 0 || elapsed > 2 || advanced <= 0 || Math.abs(advanced - elapsed) > 0.35) {
+      this.clockEvidence = [];
+      return;
+    }
+    const candidates: { delay: number; segment: number }[] = [];
+    for (let i = 1; i < this.sourceClocks.length; i++) {
+      const a = this.sourceClocks[i - 1]!;
+      const b = this.sourceClocks[i]!;
+      if (
+        a.segment !== b.segment ||
+        a.round !== program.round ||
+        b.round !== program.round ||
+        a.remaining < program.remaining ||
+        b.remaining > program.remaining
       )
-      .sort()
-      .join(',');
-    if (key === this.lastEvidenceKey) return;
-    const jump = this.effectiveDelayMs !== null && Math.abs(median - this.effectiveDelayMs) > 8000;
+        continue;
+      const fraction = (a.remaining - program.remaining) / (a.remaining - b.remaining);
+      const sourceTime = a.received + fraction * (b.received - a.received);
+      const delay = program.received - sourceTime;
+      if (
+        delay >= 0 &&
+        delay <= 600000 &&
+        !candidates.some((c) => c.segment === a.segment && Math.abs(c.delay - delay) < 1)
+      )
+        candidates.push({ delay, segment: a.segment });
+    }
+    if (candidates.length !== 1) return;
+    const lastEvidence = this.clockEvidence.at(-1);
+    // Limit correlated samples; paced backlog cannot be identified from this contract.
     if (
-      jump &&
-      best.filter((pair) => pair.event.time > (this.lastEvidenceAt ?? -Infinity)).length < 3
-    ) {
-      this.estimateReason = 'awaiting-jump-evidence';
+      lastEvidence &&
+      (lastEvidence.round !== program.round || lastEvidence.segment !== candidates[0]!.segment)
+    )
+      this.clockEvidence = [];
+    else if (lastEvidence && program.received - lastEvidence.time < 2000) return;
+    this.clockEvidence.push({
+      delay: candidates[0]!.delay,
+      segment: candidates[0]!.segment,
+      time: program.received,
+      remaining: program.remaining,
+      round: program.round,
+    });
+    this.clockEvidence = this.clockEvidence.filter((p) => p.time >= now - 30000).slice(-12);
+    if (
+      this.clockEvidence.length < 3 ||
+      this.clockEvidence.at(-1)!.time - this.clockEvidence[0]!.time < 5000
+    )
+      return;
+    const delays = this.clockEvidence.map((p) => p.delay).sort((a, b) => a - b);
+    const spread = delays.at(-1)! - delays[0]!;
+    if (spread > 1500) {
+      this.estimateReason = 'unstable-clock';
       return;
     }
-    for (const pair of best) {
-      pair.kill.matched = true;
-      pair.kill.pairedProgramKey = `${pair.event.frame}:${pair.event.victim}`;
+    const median = delays[Math.floor(delays.length / 2)]!;
+    if (
+      this.freezeOffset &&
+      this.freezeOffset.round === program.round &&
+      this.freezeOffset.generation ===
+        this.sourceClocks.find((p) => p.segment === candidates[0]!.segment)?.generation &&
+      Math.abs(this.freezeOffset.delay - median) > 2500
+    ) {
+      this.estimateReason = 'freeze-boundary-conflict';
+      return;
     }
-    this.lastEvidenceKey = key;
-    this.evidenceCount = best.length;
-    this.evidenceSpreadMs = sorted[sorted.length - 1]! - sorted[0]!;
+    this.effectiveDelayMs = median;
+    this.evidenceCount = delays.length;
+    this.evidenceSpreadMs = spread;
     this.lastEvidenceAt = now;
-    if (reacquiring) this.continuityLost = false;
-    this.estimateReason = reacquiring
-      ? 'reacquired'
-      : jump
-        ? 'confirmed-timeline-shift'
-        : 'consistent-sequence';
-    this.effectiveDelayMs =
-      this.effectiveDelayMs === null || jump || reacquiring
-        ? median
-        : this.effectiveDelayMs + (median - this.effectiveDelayMs) * 0.25;
+    this.continuityLost = false;
+    this.estimateReason = 'consistent-round-clock';
   }
   project(
     program: ObserverProgramView,
@@ -381,6 +467,13 @@ export class ObserverHintTimeline {
     now: number,
     source: typeof this.sourceHealth,
     programReceiveMs = now,
+    clock?: {
+      source?: ClockInput;
+      program?: ClockInput;
+      freezeEnd?: ClockBoundary;
+      sourceExecution?: number;
+      phase?: { phase: string; round: number; received: number; generation: number };
+    },
   ): ObserverAssistProjection {
     this.lastNow = now;
     this.configuration = { ...settings };
@@ -456,7 +549,8 @@ export class ObserverHintTimeline {
       else {
         this.previous.clear();
         this.seenReceive = null;
-        this.programEvents = [];
+        this.lastProgramClock = null;
+        this.clockSegment++;
       }
       return empty('unavailable');
     }
@@ -471,6 +565,20 @@ export class ObserverHintTimeline {
       source.lastReceiveMonotonicMs ?? null,
     );
     this.blocked = null;
+    this.observeClock(
+      clock?.source,
+      clock?.program,
+      now,
+      clock?.freezeEnd,
+      clock?.sourceExecution,
+      clock?.phase,
+    );
+    if (this.sourceExecutionChanged) {
+      this.blocked = 'source-execution-ahead';
+      this.nextDueMs = null;
+      this.nextWindowMs = null;
+      return empty('unavailable');
+    }
     const alive = new Map(
       players
         .filter((p) => p.lifeState !== 'unknown')
@@ -478,37 +586,26 @@ export class ObserverHintTimeline {
     );
     const reacquiring = this.calibrationState(now) === 'reacquiring';
     if (reacquiring) this.continuityLost = true;
-    const priorDelay = this.effectiveDelayMs ?? settings.expectedDelaySeconds * 1000;
     if (program.cursor.programReceiveSequence !== this.seenReceive) {
       const fallen = [...alive]
         .filter(([id, live]) => !live && this.previous.get(id) === true)
         .map(([id]) => id);
       this.programDeaths += fallen.length;
-      const frame = program.cursor.programReceiveSequence ?? 0;
       for (const victim of fallen) {
-        this.programEvents.push({ victim, time: programReceiveMs, frame });
         const candidates = this.kills.filter(
           (kill) =>
             !kill.matched &&
             kill.event.victim.sourcePlayerId === victim &&
             kill.event.cursor.mapName === program.map.name &&
-            Math.abs(programReceiveMs - kill.sourceMs - priorDelay) <= 60000,
+            kill.shownDueMs !== null &&
+            programReceiveMs >= kill.shownDueMs - settings.leadSeconds * 1000 &&
+            programReceiveMs <= kill.shownDueMs + 1000,
         );
         if (candidates.length === 1) candidates[0]!.matched = true;
       }
       this.previous = alive;
       this.seenReceive = program.cursor.programReceiveSequence;
-      if (fallen.length)
-        this.calibrate(
-          programReceiveMs,
-          settings,
-          program.map.name,
-          new Set(players.map((player) => player.sourcePlayerId)),
-        );
     }
-    this.programEvents = this.programEvents
-      .filter((event) => event.time >= now - 60000)
-      .slice(-256);
     const keepSince =
       now -
       (Math.max(600000, settings.expectedDelaySeconds * 1000, this.effectiveDelayMs ?? 0) + 180000);
@@ -535,7 +632,7 @@ export class ObserverHintTimeline {
     this.nextDueMs = null;
     this.nextWindowMs = null;
     for (const kill of [...this.kills].sort((a, b) => a.sourceMs - b.sourceMs)) {
-      // A Program-confirmed death remains a calibration anchor, never a future hint.
+      // A Program-confirmed death is never a future hint.
       const due =
         kill.shownDueMs ?? kill.sourceMs + (stableDelay ?? settings.expectedDelaySeconds * 1000);
       if (now >= due && kill.shownDueMs !== null && !kill.retired) {

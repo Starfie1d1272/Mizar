@@ -48,6 +48,244 @@ describe('observer through the existing source owner', () => {
     expect(manager.getHealth().lastReceiveMonotonicMs).toBe(10);
     expect(manager.getHealth().lastSync).toBeUndefined(); // Never invent HTTP fragment metadata.
   });
+  it('requires a prior freeze-end lifecycle event and stops on pause or bomb', () => {
+    const { manager, received } = setup();
+    const roundClock = {
+      totalRoundsPlayed: 3,
+      phase: 'unknown',
+      startTime: 1,
+      duration: 115,
+      committedTick: 128,
+      freezePeriod: false,
+      warmupPeriod: false,
+      bombPlanted: false,
+      pause: {
+        active: false,
+        totalPausedTicks: 0,
+        startTick: null,
+        technical: null,
+        semantics: 'unknown',
+      },
+      status: 'partial',
+    };
+    manager.consumeObserverRecord({ ...cursor, roundClock });
+    expect(manager.getHealth().roundClock).toBeUndefined();
+    manager.consumeObserverRecord({
+      ...cursor,
+      sequence: 7,
+      type: 'raw-event',
+      name: 'round_freeze_end',
+      kind: 'round_freeze_end',
+      tick: 0,
+      committedTick: 100,
+      round: 3,
+    });
+    expect(manager.getHealth().freezeEnd).toEqual({
+      round: 3,
+      received: 10,
+      generation: 0,
+      sequence: 7,
+      committedTick: 100,
+    });
+    expect(received).toEqual([]);
+    manager.consumeObserverRecord({ ...cursor, sequence: 8, roundClock });
+    expect(manager.getHealth().roundClock).toEqual({
+      round: 3,
+      remaining: 114,
+      received: 10,
+      generation: 0,
+    });
+    manager.consumeObserverRecord({
+      ...cursor,
+      sequence: 9,
+      roundClock: { ...roundClock, pause: { ...roundClock.pause, totalPausedTicks: 64 } },
+    });
+    expect(manager.getHealth().roundClock).toBeUndefined();
+    manager.consumeObserverRecord({ ...cursor, sequence: 10, roundClock });
+    expect(manager.getHealth().roundClock).toBeUndefined();
+  });
+  it('rejects the same committed tick, wrong round/world and stale rules after round end', () => {
+    const { manager } = setup();
+    const roundClock = {
+      totalRoundsPlayed: 3,
+      phase: 'unknown',
+      startTime: 1,
+      duration: 115,
+      committedTick: 100,
+      freezePeriod: false,
+      warmupPeriod: false,
+      bombPlanted: false,
+      pause: {
+        active: false,
+        totalPausedTicks: 0,
+        startTick: null,
+        technical: null,
+        semantics: 'unknown',
+      },
+      status: 'partial',
+    };
+    manager.consumeObserverRecord(cursor);
+    manager.consumeObserverRecord({
+      ...cursor,
+      sequence: 7,
+      world: 3,
+      type: 'raw-event',
+      name: 'round_freeze_end',
+      kind: 'round_freeze_end',
+      committedTick: 100,
+      round: 3,
+    });
+    manager.consumeObserverRecord({
+      ...cursor,
+      sequence: 7,
+      type: 'raw-event',
+      name: 'round_freeze_end',
+      kind: 'round_freeze_end',
+      tick: 0,
+      committedTick: 100,
+      round: 3,
+    });
+    manager.consumeObserverRecord({ ...cursor, sequence: 8, roundClock });
+    expect(manager.getHealth().roundClock).toBeUndefined();
+    manager.consumeObserverRecord({
+      ...cursor,
+      sequence: 9,
+      roundClock: { ...roundClock, committedTick: 128, totalRoundsPlayed: 4 },
+    });
+    expect(manager.getHealth().roundClock).toBeUndefined();
+    manager.consumeObserverRecord({
+      ...cursor,
+      sequence: 10,
+      type: 'raw-event',
+      name: 'round_freeze_end',
+      kind: 'round_freeze_end',
+      committedTick: 100,
+      round: 3,
+    });
+    manager.consumeObserverRecord({
+      ...cursor,
+      sequence: 11,
+      type: 'raw-event',
+      name: 'round_end',
+      kind: 'round_end',
+    });
+    manager.consumeObserverRecord({
+      ...cursor,
+      sequence: 12,
+      roundClock: { ...roundClock, committedTick: 128 },
+    });
+    expect(manager.getHealth().roundClock).toBeUndefined();
+  });
+  it.each([
+    'bomb',
+    'start-time',
+    'duration',
+    'interval',
+    'tick-reversal',
+    'map',
+    'discontinuity',
+  ] as const)('closes the live clock on %s without admitting old rules', (boundary) => {
+    const { manager } = setup();
+    const roundClock = {
+      totalRoundsPlayed: 3,
+      phase: 'unknown',
+      startTime: 1,
+      duration: 115,
+      committedTick: 128,
+      freezePeriod: false,
+      warmupPeriod: false,
+      bombPlanted: false,
+      pause: {
+        active: false,
+        totalPausedTicks: 0,
+        startTick: null,
+        technical: null,
+        semantics: 'unknown',
+      },
+      status: 'partial',
+    };
+    manager.consumeObserverRecord(cursor);
+    manager.consumeObserverRecord({
+      ...cursor,
+      sequence: 7,
+      type: 'raw-event',
+      name: 'round_freeze_end',
+      kind: 'round_freeze_end',
+      tick: 0,
+      committedTick: 100,
+      round: 3,
+    });
+    manager.consumeObserverRecord({ ...cursor, sequence: 8, roundClock });
+    expect(manager.getHealth().roundClock).toBeDefined();
+    if (boundary === 'map') {
+      manager.consumeObserverRecord({
+        ...cursor,
+        sequence: 9,
+        map: 'de_other',
+        roundClock: { ...roundClock, committedTick: 150 },
+      });
+    } else if (boundary === 'discontinuity') {
+      manager.consumeObserverRecord({ ...cursor, sequence: 9, kind: 'discontinuity', world: 3 });
+      manager.consumeObserverRecord({ ...cursor, sequence: 10, world: 3, roundClock });
+    } else {
+      manager.consumeObserverRecord({
+        ...cursor,
+        sequence: 9,
+        ...(boundary === 'interval' ? { tickInterval: 1 / 128 } : {}),
+        roundClock: {
+          ...roundClock,
+          ...(boundary === 'bomb'
+            ? { bombPlanted: true }
+            : boundary === 'start-time'
+              ? { startTime: 2 }
+              : boundary === 'duration'
+                ? { duration: 116 }
+                : boundary === 'tick-reversal'
+                  ? { committedTick: 110 }
+                  : {}),
+        },
+      });
+      manager.consumeObserverRecord({ ...cursor, sequence: 10, roundClock });
+    }
+    expect(manager.getHealth().roundClock).toBeUndefined();
+  });
+  it('keeps the initial warmup-to-match transition in the initial execution', () => {
+    const { manager } = setup();
+    manager.consumeObserverRecord(cursor);
+    manager.consumeObserverRecord({
+      ...cursor,
+      sequence: 7,
+      type: 'raw-event',
+      kind: 'round_announce_warmup',
+      name: 'round_announce_warmup',
+    });
+    manager.consumeObserverRecord({
+      ...cursor,
+      sequence: 8,
+      type: 'raw-event',
+      kind: 'begin_new_match',
+      name: 'begin_new_match',
+    });
+    expect(manager.getHealth().clockExecution).toBe(0);
+  });
+  it('detects restart after legacy non-clock live evidence', () => {
+    const { manager } = setup();
+    manager.consumeObserverRecord({ ...cursor, warmup: false, round: 3 });
+    manager.consumeObserverRecord({
+      ...cursor,
+      sequence: 7,
+      type: 'raw-event',
+      kind: 'round_announce_warmup',
+      name: 'round_announce_warmup',
+    });
+    expect(manager.getHealth().clockExecution).toBe(1);
+  });
+  it('detects legacy warmup restart without relying on round events', () => {
+    const { manager } = setup();
+    manager.consumeObserverRecord({ ...cursor, warmup: false, round: 0 });
+    manager.consumeObserverRecord({ ...cursor, sequence: 7, warmup: true, round: 0 });
+    expect(manager.getHealth().clockExecution).toBe(1);
+  });
   it('rejects duplicate and out-of-order records', () => {
     const { manager, received } = setup();
     manager.consumeObserverRecord(cursor);
