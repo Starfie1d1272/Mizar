@@ -240,7 +240,7 @@ async function checkedFetch(url, options = {}, timeout = 120000, transport = fet
     } catch (error) {
       const code = safeNetworkCode(error);
       if (
-        readOnlyBox &&
+        (readOnlyBox || (new URL(url).origin === origin && error?.retrySafeMutation === true)) &&
         (networkCodes.has(code) || (code === 'timeout' && signal.aborted)) &&
         attempt < 2 &&
         !options.signal?.aborted

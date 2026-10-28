@@ -30,6 +30,7 @@ export async function apiRequest(url, options, request = httpsRequest) {
   const headers = Object.fromEntries(new Headers(options.headers).entries());
   if (body) headers['content-length'] = String(body.length);
   return new Promise((resolve, reject) => {
+    let secureConnected = false;
     const outgoing = request(
       url,
       { method: options.method ?? 'GET', headers, signal: options.signal },
@@ -89,8 +90,16 @@ export async function apiRequest(url, options, request = httpsRequest) {
         });
       },
     );
+    outgoing.on('socket', (socket) => {
+      if (!socket.connecting && !socket.secureConnecting) secureConnected = true;
+      else socket.once('secureConnect', () => (secureConnected = true));
+    });
     boundConnection(outgoing);
-    outgoing.on('error', reject);
+    outgoing.on('error', (error) => {
+      // HTTPS cannot have sent an application request before the TLS handshake.
+      if (!secureConnected) error.retrySafeMutation = true;
+      reject(error);
+    });
     outgoing.end(body);
   });
 }
