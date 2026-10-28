@@ -9,7 +9,7 @@ import {
   getBuiltinResolvedPreset,
   placementToBox,
 } from '@mizar/hud-config';
-it('allows ALL chat to be hidden without hiding the player rail and exposes its switch on the right only', () => {
+it('renders ALL chat on the right without a preset-specific switch', () => {
   const snapshot = structuredClone(getProgramFixture('live-canonical')!);
   snapshot.payload.allChat = [
     {
@@ -32,12 +32,12 @@ it('allows ALL chat to be hidden without hiding the player rail and exposes its 
     );
   expect(render(true)).toContain('aria-label="公共聊天"');
   const hidden = render(false);
-  expect(hidden).not.toContain('aria-label="公共聊天"');
+  expect(hidden).toContain('aria-label="公共聊天"');
   expect(hidden).toContain('aria-label="右选手栏"');
   expect(render(true, 'team-ct-rail')).not.toContain('aria-label="公共聊天"');
   expect(
     getHudWidgetDescriptor('team-t-rail').editorControls.some((x) => x.path === 'showAllChat'),
-  ).toBe(true);
+  ).toBe(false);
   expect(
     getHudWidgetDescriptor('team-ct-rail').editorControls.some((x) => x.path === 'showAllChat'),
   ).toBe(false);
@@ -66,7 +66,7 @@ it('applies shared pause chat visibility and expiration rules', () => {
       ...preset.widgets['team-t-rail'].settings,
       showAllChat: false,
     };
-    expect(render()).not.toContain('aria-label="公共聊天"');
+    expect(render()).toContain('aria-label="公共聊天"');
     preset.widgets['team-t-rail'].settings = {
       ...preset.widgets['team-t-rail'].settings,
       showAllChat: true,

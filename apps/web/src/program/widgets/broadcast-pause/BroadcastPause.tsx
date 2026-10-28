@@ -70,7 +70,6 @@ export function BroadcastPause({
       ) : null}
       <PauseNotice presentation={p} />
       {layout['team-t-rail'].visible &&
-      right.showAllChat &&
       snapshot.payload.status.telemetry === 'fresh' ? (
         <div
           className="broadcast-pause__chat"

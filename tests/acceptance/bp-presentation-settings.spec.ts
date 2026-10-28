@@ -15,7 +15,7 @@ test('BP presentation choice persists and remains usable in a narrow window', as
     revision++;
     await route.fulfill({ json: { mode, revision: String(revision) } });
   });
-  await page.goto('/settings?tab=obs');
+  await page.goto('/picture?tab=hud');
   const full = page.getByRole('radio', { name: '全屏 BP' });
   const compact = page.getByRole('radio', { name: '游戏画面 + BP 底栏' });
   await expect(full).toBeChecked();

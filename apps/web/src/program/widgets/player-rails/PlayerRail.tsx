@@ -50,7 +50,6 @@ export function PlayerRail({
     <section
       data-all-chat-host={
         physicalSide === 'right' &&
-        options.showAllChat &&
         Boolean(snapshot.payload.allChat?.length) &&
         snapshot.payload.status.telemetry === 'fresh'
       }
@@ -62,7 +61,6 @@ export function PlayerRail({
       data-player-rail-phase={presentation.phase}
     >
       {physicalSide === 'right' &&
-      options.showAllChat &&
       snapshot.payload.status.telemetry === 'fresh' ? (
         <AllChat design={design} messages={snapshot.payload.allChat ?? []} />
       ) : null}

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Button, Field, StatusBanner } from '../ui';
+import { Button, Field, Panel, StatusBanner } from '../ui';
 import { desktopInvoke } from '../workspace/client';
 import { ControlTask } from './control-task';
 
@@ -11,7 +11,6 @@ interface ConsoleStatus {
 }
 export function Cs2ConsoleSettings() {
   const desktop = Boolean(window.__TAURI_INTERNALS__);
-  const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<ConsoleStatus | null>(null);
   const [draft, setDraft] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
@@ -22,7 +21,7 @@ export function Cs2ConsoleSettings() {
   const epoch = useRef(0);
   const saving = useRef(false);
   useEffect(() => {
-    if (!desktop || !open) return;
+    if (!desktop) return;
     let active = true;
     const read = async () => {
       if (saving.current) return;
@@ -38,7 +37,7 @@ export function Cs2ConsoleSettings() {
       } catch (error) {
         task.fail(error);
         if (active && version === epoch.current)
-          setReadError('技术日志设置读取失败，请重新打开此项或导出诊断报告。');
+          setReadError('聊天上屏设置读取失败，请重新读取设置。');
       }
     };
     void read();
@@ -47,7 +46,7 @@ export function Cs2ConsoleSettings() {
       active = false;
       clearInterval(interval);
     };
-  }, [desktop, open, reload]);
+  }, [desktop, reload]);
   if (!desktop) return null;
   const enabled = draft ?? status?.enabled ?? false;
   const dirty =
@@ -59,10 +58,10 @@ export function Cs2ConsoleSettings() {
     : !status.enabled
       ? '已关闭'
       : phase === 'reading'
-        ? '正在观察技术日志'
+        ? '聊天上屏已开启'
         : phase === 'unavailable'
           ? '暂时无法读取，原因已保存到诊断报告'
-          : '等待已确认游戏的日志';
+          : '已开启，等待受管游戏';
   async function save() {
     if (!status || busy || !dirty) return;
     const task = new ControlTask('cs2_console_capture_consent', 'user', {
@@ -86,7 +85,7 @@ export function Cs2ConsoleSettings() {
       task.finish('confirmed', { enabled: value.enabled, phase: value.runtime?.phase });
     } catch (error) {
       task.fail(error);
-      setSaveError('技术日志设置未能完整保存，请重新读取设置后重试。');
+      setSaveError('聊天上屏设置未能完整保存，请重新读取设置后重试。');
       setStatus(null);
       setReload((value) => value + 1);
     } finally {
@@ -95,16 +94,10 @@ export function Cs2ConsoleSettings() {
     }
   }
   return (
-    <details onToggle={(event) => setOpen(event.currentTarget.open)}>
-      <summary>CS2 技术日志（高级）</summary>
-      <p>
-        默认关闭。开启后，仅在 Mizar
-        核实本次受管或明确借用的游戏身份后保存已识别的技术行，跳过旧内容、聊天和未知行。
-      </p>
-      <p>
-        游戏会另外写入本机 console.log，可能包含聊天并持续增长。关闭仅停止 Mizar
-        读取；已发出的游戏日志开关到下次启动才移除。Mizar 不清空或删除游戏日志。
-      </p>
+    <Panel className="settings-card">
+      <h2>比赛聊天上屏</h2>
+      <p>在播出画面显示比赛中的 ALL 公共聊天。</p>
+      <p>开启时游戏会在本机保存控制台日志；关闭后停止读取，下次启动游戏时停止记录。</p>
       <form
         onSubmit={(event) => {
           event.preventDefault();
@@ -113,7 +106,7 @@ export function Cs2ConsoleSettings() {
       >
         <Field
           type="checkbox"
-          label="允许记录本次 CS2 技术日志"
+          label="显示 ALL 公共聊天"
           checked={enabled}
           disabled={!status || busy}
           onChange={(event) => {
@@ -141,9 +134,9 @@ export function Cs2ConsoleSettings() {
           重新读取设置
         </Button>
         <Button type="submit" disabled={!dirty || busy}>
-          {busy ? '保存中…' : '保存技术日志设置'}
+          {busy ? '保存中…' : '保存聊天上屏设置'}
         </Button>
       </form>
-    </details>
+    </Panel>
   );
 }

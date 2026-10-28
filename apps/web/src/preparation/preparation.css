@@ -1135,6 +1135,11 @@
   align-items: start;
   gap: var(--mizar-layout-padding);
 }
+@media (max-width: 900px) {
+  .game-settings-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 .game-settings-current,
 .game-settings-preferences {
   display: grid;
