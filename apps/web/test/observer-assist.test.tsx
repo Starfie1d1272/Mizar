@@ -1,3 +1,7 @@
+import {
+  observerFailureReason,
+  type ObserverRuntimeView,
+} from '../src/preparation/observer-preparation';
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -77,6 +81,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   act(() => root.unmount());
+  vi.useRealTimers();
   container.remove();
   delete window.__TAURI_INTERNALS__;
 });
@@ -85,8 +90,8 @@ it('offers the two timing controls and saves observer preferences independently 
   act(() => root.render(<ObserverSettingsPanel />));
   expect(
     [...container.querySelectorAll<HTMLInputElement>('input[type=number]')].map((e) => e.value),
-  ).toEqual(['120', '7']);
-  expect(container.textContent).toContain('113');
+  ).toEqual(['120', '5']);
+  expect(container.textContent).toContain('115');
   await act(async () => {
     [...container.querySelectorAll('button')]
       .find((e) => e.textContent?.includes('保存观察辅助'))!
@@ -117,6 +122,10 @@ it('shows private slots and countdowns from the assist channel, and clears on re
       payload: {
         observer: {
           state: 'ready',
+          timingBasis: 'estimated',
+          expectedDelaySeconds: 120,
+          waitingReason: null,
+          nextWindowSeconds: 0,
           leadSeconds: 7,
           hints: [
             {
@@ -174,7 +183,7 @@ it('distinguishes reconnecting from a terminal failure and dispatches the config
     action: 'start-configured',
   });
 });
-it('requests configured assistance when enabled during a live session', async () => {
+it('saves auxiliary preferences without confirming a connection or issuing game commands', async () => {
   window.__TAURI_INTERNALS__ = { invoke: <T,>() => Promise.resolve(undefined as T) };
   mocks.production.mode = 'live';
   mocks.runtime.pending = true;
@@ -191,9 +200,7 @@ it('requests configured assistance when enabled during a live session', async ()
       .click();
     await Promise.resolve();
   });
-  expect(mocks.native).toHaveBeenCalledExactlyOnceWith('observer_command', {
-    action: 'start-configured',
-  });
+  expect(mocks.native).not.toHaveBeenCalled();
 });
 
 it('restores a pending game HUD through its dedicated native command', async () => {
@@ -211,58 +218,10 @@ it('restores a pending game HUD through its dedicated native command', async () 
   });
 });
 
-it.each(['queued', 'unknown'])(
-  'confirms explicit MulNX stop and reports %s without retrying or claiming unload',
-  async (result) => {
-    window.__TAURI_INTERNALS__ = { invoke: <T,>() => Promise.resolve(undefined as T) };
-    mocks.native.mockResolvedValue({ result, execution: 'unconfirmed' });
-    act(() =>
-      root.render(
-        <MulnxToolControls
-          tool={{
-            installed: 'test',
-            latest: 'test',
-            launchProtocol: 1,
-            busy: false,
-            message: '',
-            packs: [],
-          }}
-        />,
-      ),
-    );
-    const stop = [...container.querySelectorAll('button')].find(
-      (button) => button.textContent === '停止 MulNX 控制',
-    )!;
-    act(() => stop.click());
-    const dialog = () => document.querySelector<HTMLElement>('dialog[open]')!;
-    expect(dialog().textContent).toContain('结束本场制作、恢复游戏 HUD');
-    expect(dialog().textContent).toContain('CS2 保持运行');
-    act(() =>
-      [...dialog().querySelectorAll('button')]
-        .find((button) => button.textContent === '取消')!
-        .click(),
-    );
-    expect(mocks.native).not.toHaveBeenCalled();
-    act(() => stop.click());
-    await act(async () => {
-      const confirm = [...dialog().querySelectorAll('button')].find(
-        (button) => button.textContent === '结束制作并停止控制',
-      )!;
-      confirm.click();
-      confirm.click();
-      await Promise.resolve();
-    });
-    expect(mocks.native).toHaveBeenCalledExactlyOnceWith('mulnx_control', { action: 'stop' });
-    expect(container.textContent).toContain(
-      result === 'queued' ? '已入队，执行结果待确认' : '结果待确认',
-    );
-    expect(container.textContent).not.toContain('已卸载');
-    expect(stop.disabled).toBe(true);
-  },
-);
-it('shows an unborrowed-game stop rejection at the MulNX controls', async () => {
+it('reports unknown MulNX stop once even on double confirmation', async () => {
+  const result = 'unknown';
   window.__TAURI_INTERNALS__ = { invoke: <T,>() => Promise.resolve(undefined as T) };
-  mocks.native.mockRejectedValue(new Error('请先明确借用本场 CS2。'));
+  mocks.native.mockResolvedValue({ result, execution: 'unconfirmed' });
   act(() =>
     root.render(
       <MulnxToolControls
@@ -277,17 +236,170 @@ it('shows an unborrowed-game stop rejection at the MulNX controls', async () => 
       />,
     ),
   );
-  act(() =>
-    [...container.querySelectorAll('button')]
-      .find((button) => button.textContent === '停止 MulNX 控制')!
-      .click(),
-  );
+  const stop = [...container.querySelectorAll('button')].find(
+    (button) => button.textContent === '停止 MulNX 控制',
+  )!;
+  act(() => stop.click());
+  const dialog = () => document.querySelector<HTMLElement>('dialog[open]')!;
   await act(async () => {
-    [...document.querySelectorAll('dialog[open] button')]
-      .find((button) => button.textContent === '结束制作并停止控制')!
-      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    const confirm = [...dialog().querySelectorAll('button')].find(
+      (button) => button.textContent === '结束制作并停止控制',
+    )!;
+    confirm.click();
+    confirm.click();
     await Promise.resolve();
   });
   expect(mocks.native).toHaveBeenCalledExactlyOnceWith('mulnx_control', { action: 'stop' });
-  expect(container.textContent).toContain('请先明确借用本场 CS2。');
+  expect(container.textContent).toContain('结果待确认');
+  expect(container.textContent).not.toContain('已卸载');
+  expect(stop.disabled).toBe(true);
+});
+it('gives specific repair guidance for known startup causes and diagnostic context for unknown failures', () => {
+  const view: ObserverRuntimeView = {
+    active: false,
+    failed: true,
+    pending: false,
+    error: null,
+    retryAvailable: true,
+    health: { state: 'failed' },
+  };
+  for (const [reason, text] of [
+    ['output-directory-unavailable', '数据目录是否可写'],
+    ['output-parent-unavailable', '数据目录是否可写'],
+    ['configuration-boundary', '未接受连接配置'],
+    ['node-runtime-probe-failed', '运行环境检查失败'],
+    ['native-start-failed', '游戏与组件状态'],
+  ] as const)
+    expect(observerFailureReason({ ...view, terminal: { reason } })).toContain(text);
+  const unknown = observerFailureReason({
+    ...view,
+    terminal: { reason: 'unclassified', stage: 'eof', attemptId: 'diagnostic-123' },
+  });
+  expect(unknown).toContain('eof');
+  expect(unknown).toContain('diagnostic-123');
+  expect(unknown).not.toContain('核对本场连接');
+});
+
+it('shows estimated timing and normal waiting separately from source recovery', () => {
+  mocks.view.settings.enabled = true;
+  const observer = {
+    state: 'ready',
+    timingBasis: 'estimated',
+    expectedDelaySeconds: 120,
+    waitingReason: 'waiting-event',
+    nextWindowSeconds: null as number | null,
+    hints: [],
+    calibrationState: 'held',
+    effectiveDelaySeconds: 121,
+  };
+  mocks.observer = { state: 'live', current: { payload: { observer } } };
+  act(() => root.render(<ObserverHints />));
+  expect(container.textContent).toContain('延迟 121.0 秒');
+  expect(container.textContent).toContain('保持上次校准');
+  expect(container.textContent).toContain('等待早源事件');
+  expect(container.querySelector('button')).toBeNull();
+  observer.waitingReason = 'buffering';
+  observer.nextWindowSeconds = 113;
+  act(() => root.render(<ObserverHints />));
+  expect(container.textContent).toContain('正在积累预告，约 113 秒后进入提示窗口');
+  expect(container.textContent).not.toContain('正在对齐');
+});
+
+it('orders private hints by actual remaining time, retains ties, expires locally and leaves input unchanged', () => {
+  vi.useFakeTimers({ toFake: ['performance', 'setInterval', 'clearInterval'] });
+  const hints = Object.freeze(
+    (
+      [
+        ['three', 3],
+        ['equal-first', 5],
+        ['equal-second', 5],
+        ['fraction-low', 5.1],
+        ['fraction-high', 5.9],
+        ['seven', 7],
+      ] as const
+    ).map(([id, remainingSeconds]) =>
+      Object.freeze({
+        id,
+        remainingSeconds,
+        attacker: Object.freeze({ name: id, observerSlot: 2 }),
+        victim: Object.freeze({ name: 'Victim', observerSlot: 9 }),
+      }),
+    ),
+  );
+  const original = JSON.stringify(hints);
+  mocks.observer = {
+    state: 'live',
+    current: {
+      payload: {
+        observer: {
+          state: 'ready',
+          timingBasis: 'estimated',
+          expectedDelaySeconds: 120,
+          leadSeconds: 7,
+          waitingReason: null,
+          nextWindowSeconds: 0,
+          hints,
+        },
+      },
+    },
+  };
+  const names = () =>
+    [...container.querySelectorAll('li strong')].map((element) => element.textContent);
+  const times = () =>
+    [...container.querySelectorAll('.observer-hints__time')].map((element) => element.textContent);
+  act(() => root.render(<ObserverHints />));
+  expect(names()).toEqual([
+    'seven',
+    'fraction-high',
+    'fraction-low',
+    'equal-first',
+    'equal-second',
+    'three',
+  ]);
+  // Both fractional values display six, but actual time still determines their order.
+  expect(times()).toEqual(['7 秒后', '6 秒后', '6 秒后', '5 秒后', '5 秒后', '3 秒后']);
+  act(() => {
+    vi.advanceTimersByTime(3000);
+  });
+  expect(names()).toEqual([
+    'seven',
+    'fraction-high',
+    'fraction-low',
+    'equal-first',
+    'equal-second',
+  ]);
+  expect(times()).toEqual(['4 秒后', '3 秒后', '3 秒后', '2 秒后', '2 秒后']);
+  act(() => {
+    vi.advanceTimersByTime(2000);
+  });
+  expect(names()).toEqual(['seven', 'fraction-high', 'fraction-low']);
+  act(() => {
+    vi.advanceTimersByTime(2000);
+  });
+  expect(names()).toEqual([]);
+  expect(JSON.stringify(hints)).toBe(original);
+});
+
+it('shows recalibration as unavailable rather than ready with a stale delay', () => {
+  mocks.view.settings.enabled = true;
+  mocks.observer = {
+    state: 'live',
+    current: {
+      payload: {
+        observer: {
+          state: 'unavailable',
+          timingBasis: 'estimated',
+          calibrationState: 'reacquiring',
+          expectedDelaySeconds: 120,
+          effectiveDelaySeconds: 120,
+          waitingReason: 'calibration-reacquiring',
+          nextWindowSeconds: null,
+          hints: [],
+        },
+      },
+    },
+  };
+  act(() => root.render(<ObserverHints />));
+  expect(container.textContent).toContain('正在重新校准延迟');
+  expect(container.textContent).not.toContain('保持上次校准');
 });

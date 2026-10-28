@@ -143,10 +143,7 @@ export function DiagnosticDeliverySettings({
       ) : !unavailable ? (
         <details>
           <summary>开启自动发送诊断</summary>
-          <p>
-            将操作、错误、运行状态和相关配置发送至维护者管理的 Cloudflare
-            服务，帮助排查问题。可能包含机器、路径、赛事和选手标识，并非匿名数据；密码和令牌等凭据会脱敏，不发送音视频或私人聊天。诊断正文自每批接收许可签发起最多保留七天，可识别的会话检索索引保留九十天；可随时暂停，或关闭并请求删除。每批自动发送及安装身份有效期为九十天，到期的未确认副本留在本机，可手动导出；安装身份自动更新。重复上传摘要最多保留九十天，旧安装登记在相关正文和索引清除后删除，正常情况下最迟约一百八十天。清理未完成时会明确保留待处理状态。
-          </p>
+          <DiagnosticConsentDisclosure />
           <Field
             label="我已阅读并同意发送诊断"
             type="checkbox"
@@ -179,5 +176,14 @@ export function DiagnosticDeliverySettings({
       </details>
       {showProblemReport ? <DiagnosticProblemReport /> : null}
     </div>
+  );
+}
+
+export function DiagnosticConsentDisclosure() {
+  return (
+    <p>
+      将操作、错误、运行状态和相关配置发送至维护者管理的 Cloudflare
+      服务，帮助排查问题。可能包含机器、路径、赛事和选手标识，并非匿名数据；密码和令牌等凭据会脱敏，不发送音视频或私人聊天。诊断正文自每批接收许可签发起最多保留七天，可识别的会话检索索引保留九十天；可随时暂停，或关闭并请求删除。每批自动发送及安装身份有效期为九十天，到期的未确认副本留在本机，可手动导出；安装身份自动更新。重复上传摘要最多保留九十天，旧安装登记在相关正文和索引清除后删除，正常情况下最迟约一百八十天。清理未完成时会明确保留待处理状态。
+    </p>
   );
 }

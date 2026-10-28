@@ -90,20 +90,6 @@ export function ObsSettings() {
 
   const preparation = useObsPreparation();
   const preparing = preparation.phase === 'running';
-  const audioFindings =
-    obs?.findings.filter(
-      (item) => item.code.startsWith('audio_') || item.code === 'game_audio_missing',
-    ) ?? [];
-  const audioUnchecked = obs?.findings.some((item) =>
-    [
-      'collection_missing',
-      'collection_inactive',
-      'scene_missing',
-      'configuration_unchecked',
-      'configuration_check_failed',
-      'source_kind_conflict',
-    ].includes(item.code),
-  );
   const connected = obs?.connection === 'connected';
   const outputActive = connected && (obs.streaming || obs.recording);
   async function action(run: () => Promise<unknown>) {
@@ -247,50 +233,6 @@ export function ObsSettings() {
               ) : null}
             </details>
             {obsPathControl}
-          </Panel>
-          <Panel className="settings-card">
-            <h2>音频配置</h2>
-            <p>缺少来源时自动添加默认桌面音频与麦克风；已有音频来源会保留并检查。</p>
-            {!connected ? (
-              <p>连接后自动检查音频。</p>
-            ) : preparing ? (
-              <p>正在自动准备，请稍候。</p>
-            ) : audioUnchecked ? (
-              <p>等待场景准备完成后检查音频。</p>
-            ) : audioFindings.length ? (
-              audioFindings.map((finding) => (
-                <StatusBanner key={finding.code} tone="warning">
-                  {finding.message}
-                </StatusBanner>
-              ))
-            ) : (
-              <p>音频配置检查通过。请在 OBS 核对实际设备、电平和输出音轨，并录制试听。</p>
-            )}
-            <details key={String(audioFindings.length > 0)} open={audioFindings.length > 0}>
-              <summary>{audioFindings.length ? '处理音频问题' : '音频维护'}</summary>
-              {outputActive ? <p>正在直播或录制，请停止输出后再添加来源。</p> : null}
-              <Button
-                disabled={
-                  busy ||
-                  preparing ||
-                  obs?.connection !== 'connected' ||
-                  obs.streaming ||
-                  obs.recording
-                }
-                onClick={() =>
-                  void action(async () => {
-                    await prepareObs();
-                    setMessage('已重新处理自动配置，请核对音频检查结果。');
-                  })
-                }
-              >
-                重试音频自动配置
-              </Button>
-              <small>
-                已有自定义或游戏捕获音频时，不重复添加默认采集；请在 OBS
-                中处理具体设备、静音和音轨问题。
-              </small>
-            </details>
           </Panel>
         </div>
         <Panel className="settings-card" role="region" aria-labelledby="obs-configuration-title">

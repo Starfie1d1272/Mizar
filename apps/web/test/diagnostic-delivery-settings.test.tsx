@@ -24,9 +24,11 @@ vi.mock('../src/preparation/client', () => ({
 vi.mock('../src/workspace/client', () => ({ desktopInvoke: mocks.native }));
 import { Cs2ConsoleSettings } from '../src/debug/Cs2ConsoleSettings';
 import { DiagnosticDeliverySettings } from '../src/debug/DiagnosticDeliverySettings';
+import { DiagnosticDeliveryNotice } from '../src/debug/DiagnosticDeliveryNotice';
 let root: Root;
 let container: HTMLDivElement;
 beforeEach(() => {
+  window.localStorage.clear();
   container = document.createElement('div');
   document.body.append(container);
   root = createRoot(container);
@@ -236,4 +238,103 @@ it('does not let a stale console status response overwrite a newly saved consent
   });
   expect(container.querySelector<HTMLInputElement>('input[type=checkbox]')!.checked).toBe(true);
   expect(button('保存技术日志设置').disabled).toBe(true);
+});
+
+function showNotice() {
+  vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+  HTMLDialogElement.prototype.showModal = function () {
+    this.open = true;
+  };
+  HTMLDialogElement.prototype.close = function () {
+    this.open = false;
+    this.dispatchEvent(new Event('close'));
+  };
+  mocks.status.configured = true;
+  act(() => root.render(<DiagnosticDeliveryNotice />));
+}
+it('defaults the choice on but waits for confirmation before sending', async () => {
+  showNotice();
+  expect(container.querySelector('dialog')?.open).toBe(true);
+  expect(container.querySelector<HTMLInputElement>('input[type=checkbox]')!.checked).toBe(true);
+  expect(container.textContent).toContain('并非匿名数据');
+  expect(container.textContent).toContain('Cloudflare');
+  expect(mocks.command).not.toHaveBeenCalled();
+  await act(async () => {
+    button('确认并继续').click();
+    await Promise.resolve();
+  });
+  expect(mocks.command).toHaveBeenLastCalledWith('/operator/diagnostics/consent', {
+    enabled: true,
+    revision: 'technical-diagnostics-v3',
+  });
+  expect(container.textContent).toBe('');
+});
+it('lets the user turn the default off and remembers the choice', async () => {
+  showNotice();
+  act(() => container.querySelector<HTMLInputElement>('input[type=checkbox]')!.click());
+  await act(async () => {
+    button('确认并继续').click();
+    await Promise.resolve();
+  });
+  expect(mocks.command).not.toHaveBeenCalled();
+  act(() => root.render(null));
+  act(() => root.render(<DiagnosticDeliveryNotice />));
+  expect(container.textContent).toBe('');
+});
+it('closing the untouched dialog stays off and does not invite again', () => {
+  showNotice();
+  act(() => button('关闭').click());
+  expect(mocks.command).not.toHaveBeenCalled();
+  act(() => root.render(null));
+  act(() => root.render(<DiagnosticDeliveryNotice />));
+  expect(container.textContent).toBe('');
+});
+it('persists off after an uncertain enable instead of assuming it stayed disabled', async () => {
+  showNotice();
+  mocks.command.mockRejectedValueOnce(new Error('lost response'));
+  await act(async () => {
+    button('确认并继续').click();
+    await Promise.resolve();
+  });
+  expect(container.textContent).toContain('设置未能确认保存');
+  await act(async () => {
+    button('关闭').click();
+    await Promise.resolve();
+  });
+  expect(mocks.command).toHaveBeenLastCalledWith('/operator/diagnostics/consent', {
+    enabled: false,
+    revision: 'technical-diagnostics-v3',
+  });
+  expect(container.textContent).toBe('');
+});
+it('waits for a pending explicit choice and keeps a save failure actionable', async () => {
+  showNotice();
+  let reject!: (error: Error) => void;
+  mocks.command.mockImplementationOnce(
+    () =>
+      new Promise<void>((_resolve, fail) => {
+        reject = fail;
+      }),
+  );
+  await act(async () => {
+    button('确认并继续').click();
+    await Promise.resolve();
+  });
+  expect(button('正在保存').disabled).toBe(true);
+  act(() => button('关闭').click());
+  expect(container.querySelector('dialog')?.open).toBe(true);
+  await act(async () => {
+    reject(new Error('failed'));
+    await Promise.resolve();
+  });
+  expect(container.textContent).toContain('设置未能确认保存');
+  expect(button('确认并继续').disabled).toBe(false);
+});
+it('does not invite existing participants or unavailable installations', () => {
+  act(() => root.render(<DiagnosticDeliveryNotice />));
+  expect(container.textContent).toBe('');
+  mocks.status = { ...mocks.status, configured: true, consent: true };
+  act(() => root.render(<DiagnosticDeliveryNotice />));
+  expect(container.textContent).toBe('');
+  expect(mocks.command).not.toHaveBeenCalled();
 });

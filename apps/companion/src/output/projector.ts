@@ -276,6 +276,8 @@ export function buildReliableEventV1(input: {
           scoreCT: bundle.program.map.score.ct!,
           scoreT: bundle.program.map.score.t!,
         };
+      case 'map_player_snapshot':
+        throw new Error('snapshot_requires_map_end');
       case 'series_ended':
         return {
           scoreA: bundle.program.series?.score.a ?? null,
@@ -361,4 +363,15 @@ export function transitionReliableEventsV1(input: {
       );
   }
   return events;
+}
+
+export function buildMapPlayerSnapshotV1(
+  end: Extract<ReliableEventV1, { kind: 'map_ended' }>,
+  players: Extract<ReliableEventV1, { kind: 'map_player_snapshot' }>['payload']['players'],
+): ReliableEventV1 {
+  const payload = { mapEndedKey: end.idempotencyKey, players };
+  const idempotencyKey = createHash('sha256')
+    .update(JSON.stringify({ kind: 'map_player_snapshot', parent: end.idempotencyKey, payload }))
+    .digest('hex');
+  return parseReliableEventV1({ ...end, kind: 'map_player_snapshot', idempotencyKey, payload });
 }

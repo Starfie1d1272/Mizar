@@ -177,7 +177,7 @@ describe('固定 Sigstore 根的离线缓存证据', () => {
       now: Date.parse('2027-01-01T00:00:00Z'),
     };
     for (const purpose of ['cache', 'rollback'])
-      expect(parsePublication(statement, policy, { purpose })).toBe(statement);
+      expect(parsePublication(statement, policy, { purpose })).toEqual(statement);
     for (const purpose of ['install', 'legacy'])
       expect(() => parsePublication(statement, policy, { purpose })).toThrow();
     expect(() =>

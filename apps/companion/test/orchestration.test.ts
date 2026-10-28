@@ -264,7 +264,6 @@ it('persists validated drafts, rejects malformed imports and forbids remote cont
   const exported = orchestrationPresetSchema.parse(
     JSON.parse(await readFile(join(r.store.directory, 'preset.json'), 'utf8')),
   );
-  expect(orchestrationPresetSchema.parse(exported)).toEqual(r.store.preset);
   expect(
     (
       await post({

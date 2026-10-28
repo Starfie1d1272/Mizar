@@ -37,7 +37,7 @@ fn status_message(status: &Result<StartupRecoveryStatus, String>) -> String {
         Err(error) => format!("恢复状态无法确认，未修改配置。{error} 请重新检查，或查看本机日志。"),
         Ok(status) if status.running => "CS2 正在运行，本次仅检查。可以继续当前游戏；正常退出游戏后再重新检查配置恢复。".into(),
         Ok(status) if status.requires_service => "Demo 试播隔离状态需要制播服务确认，本次不恢复配置。请修复制播服务启动问题后，再在准备中心恢复。".into(),
-        Ok(status) if status.uncertain => "Steam 启动结果待确认。先取消 Steam 启动请求并确认 CS2 已关闭，再明确确认恢复；Mizar 不会在此关闭游戏。".into(),
+        Ok(status) if status.uncertain => "启动结果待确认。先取消启动请求并确认 CS2 与 MulNX 启动器已关闭，再明确确认恢复；Mizar 不会在此关闭游戏。".into(),
         Ok(status) if status.pending => "发现待恢复配置，原始备份仍保留。恢复只写回备份，不会启动或关闭游戏。".into(),
         Ok(_) => "未发现待恢复记录。可以重试启动，或查看本机日志定位服务启动失败。".into(),
     }
@@ -58,7 +58,7 @@ fn action_label(action: Action, steam_confirmation: bool) -> &'static str {
         Action::Check => "重新检查",
         Action::Restore => "恢复配置备份",
         Action::ConfirmSteam if steam_confirmation => "已取消请求，恢复备份",
-        Action::ConfirmSteam => "恢复前确认 Steam 请求",
+        Action::ConfirmSteam => "恢复前确认启动请求",
         Action::RetryStartup => "重试启动 Mizar",
         Action::Logs => "查看本机日志",
         Action::Exit if steam_confirmation => "返回",
@@ -180,7 +180,7 @@ pub fn show(log: &DesktopLog, startup_error: &str) -> bool {
             }
             Action::Restore | Action::ConfirmSteam => {
                 if choice == Action::ConfirmSteam {
-                    match choose("确认 Steam 请求已取消且游戏已关闭", "请先在 Steam 取消启动请求，并确认所有 CS2 窗口已关闭。只有完成这些操作后才选择恢复；返回不会修改配置。", "恢复前会重新检查游戏进程。原始备份和恢复记录不会因取消而删除。", &[Action::ConfirmSteam, Action::Exit], true) {
+                    match choose("确认启动请求已取消且游戏已关闭", "请先取消 Steam 或 MulNX 启动请求，并确认所有 CS2 和 MulNX 启动器窗口已关闭。只有完成这些操作后才选择恢复；返回不会修改配置。", "恢复前会重新检查游戏进程。原始备份和恢复记录不会因取消而删除。", &[Action::ConfirmSteam, Action::Exit], true) {
                         Ok(Action::ConfirmSteam) => (),
                         Ok(_) => continue,
                         Err(error) => { feedback = error; continue; }

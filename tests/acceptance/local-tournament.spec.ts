@@ -99,6 +99,7 @@ test('local and website libraries share match details while browsing and loading
     localTournamentPath: join(directory, 'tournament.json'),
   });
   const selections: string[] = [];
+  const detailReads: string[] = [];
   let refreshes = 0;
   let cacheMissing = false;
   try {
@@ -143,13 +144,33 @@ test('local and website libraries share match details while browsing and loading
               activeSourceMatchId: null,
             },
           });
+        if (path.startsWith('/local/v1/rivalhub-library/')) {
+          const id = decodeURIComponent(path.split('/').at(-1)!);
+          detailReads.push(id);
+          // Isolated network latency: the schedule heading may paint before details arrive.
+          await new Promise((resolve) => setTimeout(resolve, 150));
+          const document = library.matches.find((row) => row.matchId === id);
+          return route.fulfill({
+            json: {
+              entry: document
+                ? { document, checkedAt: '2026-10-19T00:00:00Z', updatedAt: '2026-10-19T00:00:00Z' }
+                : null,
+              error: cacheMissing
+                ? '网站暂时无法连接，显示上次浏览的资料；载入前会重新核对。'
+                : null,
+            },
+          });
+        }
         if (path === '/local/v1/rivalhub-schedule') {
           refreshes++;
           return route.fulfill({
             json: {
               competition: { name: first.competition?.name ?? '邀请赛' },
-              matches: library.matches.map((document) => ({
+              viewer: { userId: 'fixture-viewer', displayName: '解说账号' },
+              matches: library.matches.map((document, index) => ({
+                status: (cacheMissing ? index === 1 : index === 0) ? 'in_progress' : 'scheduled',
                 matchId: document.matchId,
+                assignedToViewer: index === 0,
                 scheduledAt: document.scheduledAt,
                 format: document.format,
                 stageLabel: document.stageLabel,
@@ -157,26 +178,16 @@ test('local and website libraries share match details while browsing and loading
                 entrantB: document.entrants.b,
               })),
               library: {
-                entries: cacheMissing
-                  ? {}
-                  : Object.fromEntries(
-                      library.matches.map((document) => [
-                        document.matchId,
-                        {
-                          document,
-                          checkedAt: '2026-10-19T00:00:00Z',
-                          updatedAt: '2026-10-19T00:00:00Z',
-                        },
-                      ]),
-                    ),
+                entries: {},
                 syncedAt: '2026-10-19T00:00:00Z',
-                error: cacheMissing ? '刷新失败，已有资料保留' : null,
+                error: null,
                 refreshing: false,
               },
             },
           });
         }
         if (path === '/operator/rivalhub/select') {
+          expect(request.postDataJSON()).toMatchObject({ activate: true });
           selections.push((request.postDataJSON() as { matchId: string }).matchId);
           return route.fulfill({ json: { ok: true } });
         }
@@ -215,25 +226,40 @@ test('local and website libraries share match details while browsing and loading
     await expect(detail.getByRole('button', { name: '确认载入为本场' })).toBeVisible();
     const localText = await detail.locator('.library-detail-body').innerText();
     await capture('01-local');
+    expect(detailReads).toEqual([]);
     await page.getByRole('button', { name: 'RivalHub 赛事', exact: true }).click();
     await expect(detail.getByRole('heading', { name: '甲队 vs 乙队', exact: true })).toBeVisible();
-    expect(await detail.locator('.library-detail-body').innerText()).toBe(localText);
+    await expect.poll(() => detail.locator('.library-detail-body').innerText()).toBe(localText);
     await expect(detail.getByRole('button', { name: '编辑比赛', exact: true })).toHaveCount(0);
+    expect(detailReads).toEqual([first.matchId]);
+    await expect(page.getByText('授权账号：解说账号', { exact: true })).toBeVisible();
+    await expect(browser.getByRole('button', { name: /甲队 vs 乙队/ })).toContainText('我认领的');
     await capture('02-website');
     await browser.getByRole('button', { name: /丙队 vs 丁队/ }).click();
     await expect(detail.getByRole('heading', { name: '丙队 vs 丁队', exact: true })).toBeVisible();
     expect(selections).toEqual([]);
+    await expect.poll(() => detailReads).toEqual([first.matchId, second.matchId]);
     expect(
       (await app.inject('/local/v1/tournament')).json<typeof library>().activeLocalMatchId,
     ).toBe(second.matchId);
     await capture('03-website-browse');
     await detail.getByRole('button', { name: '核对并载入本场', exact: true }).click();
     await expect.poll(() => selections).toEqual([second.matchId]);
+    // A legacy/unconfirmed acknowledgement is not a completed load.
+    await expect(detail.getByRole('alert')).toContainText('比赛尚未确认载入');
     const before = refreshes;
     cacheMissing = true;
     await browser.getByRole('button', { name: '刷新比赛', exact: true }).click();
     await expect.poll(() => refreshes).toBeGreaterThan(before);
-    await expect(detail.getByText('完整资料暂未缓存，可稍后重试。')).toBeVisible();
+    await expect(
+      page.getByText('网站暂时无法连接，显示上次浏览的资料；载入前会重新核对。', { exact: true }),
+    ).toBeVisible();
+    await expect.poll(() => detailReads).toEqual([first.matchId, second.matchId, second.matchId]);
+    await expect(detail.getByRole('heading', { name: '丙队 vs 丁队', exact: true })).toBeVisible();
+    await expect(browser.getByRole('button', { name: /丙队 vs 丁队/ })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
     await capture('04-website-cache-missing');
     await page.getByRole('button', { name: '本地赛事', exact: true }).click();
     await detail.getByRole('button', { name: '编辑比赛', exact: true }).click();

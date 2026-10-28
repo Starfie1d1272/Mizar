@@ -55,18 +55,9 @@ Windows 安装版与便携版属于不同的分发形态，用户数据路径和
 
 ## 发布过程
 
-| 环节     | 核心要求                                                                                |
-| -------- | --------------------------------------------------------------------------------------- |
-| 候选     | 固定来源和版本，给验证者提供安装/便携资产、变更范围、可复核证据；必要时做真实现场短实验 |
-| 资格构建 | 对精确源码执行必需 CI 与打包/安装、启动、升级、内容身份检查，保存报告                   |
-| 正式晋级 | 对比候选与最终源码，验证同一套合格产物，发布前核对标签、清单、下载和许可                |
-| 发布后   | 从公开入口下载复核，与既有版本按需做升级/回退检查，记录异常和修补版本                   |
+资格工作流只创建一次正式 Windows 产品；portable、Full Setup 与 Core Setup 独立并行验收同源候选，Full/Core Setup 复用同一准备 helper 并行安装固定 NSIS 与 Explorer 解压，等待两者成功后才执行后续恢复及安装验收，汇总要求三条身份与安装恢复证据，分发 artifact 文件互不覆盖。晋级校验并发布原始合格资产，不重新编译。`cargo test --profile release` 编译原生契约测试，不能仅因它位于产品构建之后就视为重复产品构建并删掉。打包、安装、GUI、恢复与来源身份仍须分别通过。
 
-资格工作流只创建一次正式 Windows 产品；portable、Full Setup 与 Core Setup 独立并行验收同源候选，Full/Core Setup 复用同一准备 helper 并行安装固定 NSIS 与 Explorer 解压，等待两者成功后才执行后续恢复及安装验收，汇总要求三条身份与安装恢复证据，分发 artifact 文件互不覆盖。晋级校验并发布原始合格资产，不重新编译。`cargo test --profile release` 编译原生契约测试，不能仅因它位于产品构建之后就视为重复产品构建并删掉。打包、安装、GUI、恢复与来源身份仍须分别通过。发行计时以 Qualification 触发至 Box 最后原字节核对为完整范围，包含晋级、流程间等待和 runner 排队；缓存命中情况与恢复运行单独记录，旧版本恢复及缺失计时不能作为新版本 ≤600 秒的验收。
-
-正式 Cargo release profile 使用 Thin LTO、16 个 codegen units 与 strip；CI profile 保持独立，Cargo 缓存身份包含 compiler profile。Full 与 Core Setup 共用 NSIS Zlib，分发身份仍绑定实际安装器脚本摘要。有限 Windows 对照中，热构建平均减少约 88 秒，Host 增加约 1.47 MiB；Full 安装器增加约 14.54 MiB，编译与安装明显缩短。实际 CI artifact 下载与安装已核验，但未测 Box 跨境下载增量，GUI 采样也不能证明零启动退化。参数变更后仍须实际验证正式 Thin 构建、两种 Setup 的安装、卸载、恢复与 GUI；完整 ≤600 秒以随后明确授权的新版本发布终验，不能用历史恢复或拼接实验耗时代替。
-
-Cargo 或 NSIS 参数实验使用不可晋级的独立产物，同一源码、工具链与 runner 对照，明确 target、下载依赖及打包输入的冷热状态。重复试验轮换顺序，分别测量编译、安装与完整生命周期，并同时报告体积及实际下载体验。单轮成功或按带宽假设估算的下载时间不能独立决定正式参数；实验报告不替代冻结候选的 CS2、OBS 与升级恢复验收。
+正式 Cargo release profile 使用 Thin LTO、16 个 codegen units 与 strip；CI profile 保持独立，Cargo 缓存身份包含 compiler profile。Full 与 Core Setup 共用 NSIS Zlib，分发身份仍绑定实际安装器脚本摘要。涉及构建参数变化时，继续验证构建、安装、卸载、恢复与 GUI。
 
 原生恢复资格验证在子进程及其输出流关闭后检查结果；恢复登记断言失败时保留脱敏的恢复 stdout/stderr 与注册表读取错误。诊断不替代原恢复登记、路径和结果断言。
 
@@ -92,7 +83,7 @@ CI 的 Windows 宿主编译测试与更新恢复验证在两个独立 runner 上
 
 ## 分发、镜像与应用内更新
 
-GitHub Releases 是完整正式资产、版本历史和溯源信息的公开入口；完整 Setup 与离线 ZIP 保留在 GitHub。Box 仅镜像轻量安装器、Core 安装后端、独立资源和必要机器元数据，必须与通过资格验收的原始资产字节一致。用户入口见[快速开始](../guide/quick-start.md)。`sync` 可对已经发布的同一版本执行精简迁移，不创建新 Release、不重签已发布元数据；`verify-downloads` 只读核验匿名目录和轻量安装器的完整原字节。精简迁移与验收共用固定公开 Downloads 目录读取器，不向公开入口发送资料库凭据；读取结果核对分享目录、文件路径、唯一名称和大小，归档仍逐项验证原发行身份及受控完整回读，公开目录响应不能授权写入。公开目录中的历史完整包先按其原始 Release 身份核验，再移入 Archive，已存在的归档必须内容一致；未知文件、更新版本或同名异内容直接阻断，不能清空目录。旧书签仍打开 Stable，用户进入 Downloads 获取轻量安装器。历史 Offline 与 Archive 保留，不再提供将完整包恢复为日常镜像的兼容模式。
+GitHub Releases 是完整正式资产、版本历史和溯源信息的公开入口；完整 Setup 与离线 ZIP 保留在 GitHub。Box 仅镜像轻量安装器、Core 安装后端、独立资源和必要机器元数据，必须与通过资格验收的原始资产字节一致。用户入口见[快速开始](../guide/quick-start.md)。`sync` 可对已经发布的同一版本执行精简迁移，不创建新 Release、不重签已发布元数据；`verify-downloads` 只读核验匿名目录和轻量安装器的完整原字节。精简迁移与验收共用固定公开 Downloads 目录读取器，不向公开入口发送资料库凭据；读取结果核对分享目录、文件路径、唯一名称和大小，归档仍逐项验证原发行身份及受控完整回读，公开目录响应不能授权写入。公开目录中的历史完整包先按其原始 Release 身份核验，再移入 Archive，已存在的归档必须内容一致；未知文件、更新版本或同名异内容直接阻断，不能清空目录。`/Stable/Music` 目录作为独立音乐资源保留，不进入、移动或删除，其中内容不参与应用发行身份判断；同名普通文件、Downloads 内同名目录及其他未知内容仍拒绝。旧书签仍打开 Stable，用户进入 Downloads 获取轻量安装器。历史 Offline 与 Archive 保留，不再提供将完整包恢复为日常镜像的兼容模式。
 
 如果产品提供应用内更新，必须先验证更新元数据与来源身份，再核验安装包；**从同一不受信任来源同时获取文件和 SHA-256 并不足以证明发布者身份**。更新应明确区分安装版与便携版，正常退出后安装，不得在 Live 播出时擅自终止程序；网络、校验、安装或恢复失败时保持已安装版本可用。
 
@@ -137,7 +128,7 @@ Box 的 Stable/Downloads 是用户入口，只保留最新轻量 WebInstaller；
 
 Promotion 对同次已成功资格任务的产品和验收证据并行下载到独立目录，两者全部完成后才校验来源与证据；任一失败阻断后续。产品各项 provenance 逐个复用原始 `qualification-provenance.json`，仍绑定 main 签发工作流、精确源码 SHA 和每个资产字节；缺失或无效 bundle 直接失败，不回退到放宽校验。证明核验的性能对照应固定原资产与证明，记录失败及包含准备时间的总墙钟；测量不替代全流程十分钟验收。
 
-Release Host 的原有 `cargo test --profile release --locked` 在 exact-source build 成功后作为独立支路，与三个安装／便携验证支路并行；汇总签发必须等待 Host 测试及全部验证成功。该支路仅复用 release profile 缓存，由 Cargo 核对源码，不拿 CI profile 二进制替代 release 产品。独立的手动 [Release Host benchmark](../../.github/workflows/release-host-benchmark.yml) 运行相同 Windows release 测试命令，固定本次工作流源码，不构建签发候选、不发布、不保存分支缓存；新增 runner 排队及缓存传输必须纳入墙钟比较。
+Release Host 的原有 `cargo test --profile release --locked` 在 exact-source build 成功后作为独立支路，与三个安装／便携验证支路并行；汇总签发必须等待 Host 测试及全部验证成功。该支路仅复用 release profile 缓存，由 Cargo 核对源码，不拿 CI profile 二进制替代 release 产品。
 
 固定旧版本的组装、Core 准备、解压与证明核验实验已退出日常 CI；其原始结果、来源和摘要保存在[历史实验归档](https://github.com/Starfie1d1272/Mizar/tree/archive/2026-10-17/evidence-index)。归档记录不能代替当前版本的资格验收，原固定候选过期后也不重建冒充原样本。
 

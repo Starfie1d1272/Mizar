@@ -1,107 +1,18 @@
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { programSnapshotSchema } from '@mizar/protocol/program';
-import { MUSIC_GROUPS } from '@mizar/protocol/music';
+import { MUSIC_GROUPS, type MusicPreviewRequest } from '@mizar/protocol/music';
 import type { ObsRpc } from '../src/obs/reconcile.js';
 import { MusicStore } from '../src/music/store.js';
 import { MusicDirector } from '../src/music/director.js';
 import { ownedMusicInput } from '../src/music/obs-provider.js';
 import type { MusicTruth } from '../src/music/cues.js';
-import { musicWav } from './music-fixtures.js';
+import { musicWav, MediaObs } from './music-fixtures.js';
 
-class MediaObs implements ObsRpc {
-  calls: { type: string; data: Record<string, unknown> }[] = [];
-  inputs = new Map<
-    string,
-    { uuid: string; state: string; file: string; volume: number; muted: boolean; cursor: number }
-  >();
-  disconnected = false;
-  restartOpeningReads = 0;
-  restartState = 'OBS_MEDIA_STATE_OPENING';
-  private openingReads = -1;
-  private inputGeneration = 0;
-  intercept: ((type: string) => Promise<void>) | undefined;
-  async call(type: string, data: Record<string, unknown> = {}) {
-    await this.intercept?.(type);
-    if (this.disconnected) throw new Error('offline');
-    this.calls.push({ type, data });
-    const input = data.inputUuid
-      ? [...this.inputs.values()].find((i) => i.uuid === data.inputUuid)
-      : this.inputs.get(String(data.inputName));
-    if (type === 'GetSceneCollectionList') return { currentSceneCollectionName: 'Mizar' };
-    if (type === 'GetInputList')
-      return {
-        inputs: [...this.inputs].map(([inputName, i]) => ({
-          inputName,
-          inputUuid: i.uuid,
-          inputKind: 'ffmpeg_source',
-        })),
-      };
-    if (type === 'GetSceneList') return { scenes: [{ sceneName: 'Mizar · 赛前等待' }] };
-    if (type === 'GetSceneItemList')
-      return {
-        sceneItems: [...this.inputs].map(([sourceName, input], sceneItemId) => ({
-          sourceName,
-          sourceUuid: input.uuid,
-          sceneItemId,
-        })),
-      };
-    if (type === 'SetSceneItemTransform') return {};
-    if (type === 'CreateInput') {
-      const uuid = `uuid-${this.inputGeneration++}`;
-      this.inputs.set(String(data.inputName), {
-        uuid,
-        state: 'OBS_MEDIA_STATE_STOPPED',
-        file: '',
-        volume: 1,
-        muted: false,
-        cursor: 0,
-      });
-      return { inputUuid: uuid };
-    }
-    if (!input) throw new Error(`Unexpected input for ${type}`);
-    if (type === 'GetMediaInputStatus') {
-      if (this.openingReads >= 0 && this.openingReads-- === 0)
-        input.state = 'OBS_MEDIA_STATE_PLAYING';
-      return { mediaState: input.state, mediaCursor: input.cursor, mediaDuration: 10000 };
-    }
-    if (type === 'GetInputMute') return { inputMuted: input.muted };
-    if (type === 'GetInputVolume') return { inputVolumeMul: input.volume };
-    if (type === 'GetInputSettings') return { inputSettings: { local_file: input.file } };
-    if (type === 'SetInputSettings')
-      input.file = String((data.inputSettings as { local_file: string }).local_file);
-    else if (type === 'SetInputVolume') input.volume = Number(data.inputVolumeMul);
-    else if (type === 'SetInputMute') input.muted = Boolean(data.inputMuted);
-    else if (type === 'SetMediaInputCursor') {
-      if (!['OBS_MEDIA_STATE_PLAYING', 'OBS_MEDIA_STATE_PAUSED'].includes(input.state))
-        throw new Error('OBS 604: media input must be playing or paused');
-      input.cursor = Number(data.mediaCursor);
-    } else if (type === 'TriggerMediaInputAction') {
-      input.state =
-        data.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART'
-          ? 'OBS_MEDIA_STATE_PLAYING'
-          : 'OBS_MEDIA_STATE_STOPPED';
-      input.cursor = 0;
-      this.openingReads = -1;
-      if (input.state === 'OBS_MEDIA_STATE_PLAYING' && this.restartOpeningReads) {
-        input.state = this.restartState;
-        this.openingReads = this.restartOpeningReads;
-      }
-    } else throw new Error(`Unexpected RPC ${type}`);
-    return {};
-  }
-  restarts() {
-    return this.calls.filter(
-      (c) => c.data.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART',
-    ).length;
-  }
-  bgm() {
-    return [...this.inputs].find(([name]) => name.includes('BGM'))![1];
-  }
-}
 const directories: string[] = [];
 afterEach(async () => {
   await Promise.all(directories.splice(0).map((d) => rm(d, { recursive: true, force: true })));
@@ -165,12 +76,168 @@ async function rig() {
     tracks,
     directory,
     provider,
+    now: () => time,
+    elapse: (ms: number) => {
+      time += ms;
+    },
     step: async (ms = 300) => {
       time += ms;
       await director.tick();
     },
   };
 }
+it('loads legacy music state with independent master defaults and preserves it on configuration', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-music-legacy-'));
+  directories.push(directory);
+  const original = new MusicStore(directory);
+  await original.load();
+  const legacy = structuredClone(original.state) as Partial<typeof original.state>;
+  delete legacy.master;
+  delete legacy.muted;
+  await writeFile(join(directory, 'state.json'), JSON.stringify(legacy));
+  const store = new MusicStore(directory);
+  await store.load();
+  expect(store.state.master).toBe(1);
+  expect(store.state.muted).toBe(false);
+  await store.update((state) => {
+    state.master = 0.3;
+    state.muted = true;
+  });
+  await store.configure(structuredClone(store.state.config));
+  const reloaded = new MusicStore(directory);
+  await reloaded.load();
+  expect(reloaded.state.master).toBe(0.3);
+  expect(reloaded.state.muted).toBe(true);
+});
+it('assigns stable distinct entry identities to duplicate legacy tracks', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-music-entries-'));
+  directories.push(directory);
+  const original = new MusicStore(directory);
+  await original.load();
+  const track = await original.add('duplicate.wav', musicWav());
+  const legacy = structuredClone(original.state);
+  legacy.config.groups.waiting.tracks = [track, { ...track }, { ...track, startMs: 10 }];
+  legacy.config.groups.technical.tracks = [{ ...track }];
+  await writeFile(join(directory, 'state.json'), JSON.stringify(legacy));
+  const store = new MusicStore(directory);
+  await store.load();
+  const ids = [
+    ...store.state.config.groups.waiting.tracks,
+    ...store.state.config.groups.technical.tracks,
+  ].map((item) => item.entryId);
+  expect(ids.every(Boolean)).toBe(true);
+  expect(new Set(ids).size).toBe(4);
+  const again = new MusicStore(directory);
+  await again.load();
+  expect(
+    [
+      ...again.state.config.groups.waiting.tracks,
+      ...again.state.config.groups.technical.tracks,
+    ].map((item) => item.entryId),
+  ).toEqual(ids);
+  await again.configure(structuredClone(again.state.config));
+  expect(again.state.config.groups.waiting.tracks.map((item) => item.entryId)).toEqual(
+    ids.slice(0, 3),
+  );
+});
+it('migrates a legacy playback snapshot to the matching entry without changing its level', async () => {
+  const r = await rig();
+  await r.step();
+  const legacy = structuredClone(r.store.state);
+  for (const group of MUSIC_GROUPS)
+    for (const track of legacy.config.groups[group].tracks) delete track.entryId;
+  delete legacy.bgm!.track.entryId;
+  delete legacy.bgm!.configRevision;
+  await writeFile(join(r.directory, 'state.json'), JSON.stringify(legacy));
+  const restored = new MusicStore(r.directory);
+  await restored.load();
+  expect(restored.state.bgm?.track.entryId).toBe(
+    restored.state.config.groups.waiting.tracks[0]?.entryId,
+  );
+  expect(restored.state.bgm?.configRevision).toBe(restored.state.configRevision);
+  expect(restored.state.config.groups.waiting.volume).toBe(0.5);
+});
+it('composes the current entry gain with master and mutes without restarting playback', async () => {
+  const r = await rig();
+  const config = structuredClone(r.store.state.config);
+  config.groups.waiting.tracks[0]!.gain = 0.4;
+  config.groups.technical.tracks[0]!.gain = 0.8;
+  await r.store.configure(config);
+  await r.store.update((state) => {
+    state.master = 0.5;
+  });
+  await r.step();
+  expect(r.obs.bgm().volume).toBeCloseTo(0.2);
+  const starts = r.obs.restarts();
+  await r.store.update((state) => {
+    state.muted = true;
+  });
+  await r.step();
+  expect(r.obs.bgm().volume).toBe(0);
+  expect(r.obs.restarts()).toBe(starts);
+  await r.store.update((state) => {
+    state.muted = false;
+    state.master = 0.25;
+  });
+  await r.step();
+  expect(r.obs.bgm().volume).toBeCloseTo(0.1);
+  expect(r.obs.restarts()).toBe(starts);
+});
+it('keeps the existing OBS hold when music mute is cleared', async () => {
+  const r = await rig();
+  await r.step();
+  r.obs.bgm().volume = 0.17;
+  await r.step();
+  expect(r.director.get().held).toBe(true);
+  const starts = r.obs.restarts();
+  expect(await r.director.setMixer(0.3, true)).toBe(false);
+  expect(await r.director.setMixer(undefined, false)).toBe(false);
+  expect(r.director.get().held).toBe(true);
+  expect(r.obs.bgm().volume).toBe(0.17);
+  expect(r.obs.restarts()).toBe(starts);
+});
+it('applies master changes during fade-in without restarting', async () => {
+  const r = await rig();
+  const config = structuredClone(r.store.state.config);
+  config.groups.waiting.fadeInMs = 1000;
+  config.groups.waiting.tracks[0]!.gain = 0.8;
+  await r.store.configure(config);
+  await r.step();
+  const starts = r.obs.restarts();
+  await r.step(500);
+  expect(r.obs.bgm().volume).toBeCloseTo(0.4);
+  await r.store.update((state) => {
+    state.master = 0.5;
+  });
+  await r.step(100);
+  expect(r.obs.bgm().volume).toBeCloseTo(0.24);
+  expect(r.obs.restarts()).toBe(starts);
+});
+it('advances duplicate files by entry identity in automatic and manual playback', async () => {
+  const r = await rig();
+  const config = structuredClone(r.store.state.config);
+  config.groups.waiting.tracks = [
+    { ...r.tracks[0]!, gain: 0.2 },
+    { ...r.tracks[0]!, gain: 0.8 },
+    { ...r.tracks[1]!, gain: 0.4 },
+  ];
+  await r.store.configure(config);
+  const entries = r.store.state.config.groups.waiting.tracks;
+  await r.step();
+  expect(r.store.state.bgm?.track.entryId).toBe(entries[0]!.entryId);
+  r.obs.bgm().state = 'OBS_MEDIA_STATE_ENDED';
+  await r.step();
+  expect(r.store.state.bgm?.track.entryId).toBe(entries[1]!.entryId);
+  r.obs.bgm().state = 'OBS_MEDIA_STATE_ENDED';
+  await r.step();
+  expect(r.store.state.bgm?.track.entryId).toBe(entries[2]!.entryId);
+  await expect(r.director.manualPlay('waiting', entries[0]!.id)).rejects.toThrow(
+    'music_track_invalid',
+  );
+  await r.director.manualPlay('waiting', undefined, entries[0]!.entryId);
+  await r.director.command('next');
+  expect(r.store.state.bgm?.track.entryId).toBe(entries[1]!.entryId);
+});
 it('keeps pre-game waiting music across fresh menu GSI and BP, but stops for stale data and live play', async () => {
   const r = await rig();
   r.truth.program.map.name = null;
@@ -205,16 +272,6 @@ it('shares waiting across pictures and maps, loops without immediate repeats, th
   expect(r.obs.restarts()).toBe(1);
   expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_PLAYING');
   expect(r.obs.bgm().muted).toBe(false);
-  expect(r.obs.calls.filter((c) => c.type === 'SetSceneItemTransform')).toEqual([
-    {
-      type: 'SetSceneItemTransform',
-      data: {
-        sceneName: 'Mizar · 赛前等待',
-        sceneItemId: 0,
-        sceneItemTransform: { boundsType: 'OBS_BOUNDS_NONE', scaleX: 0, scaleY: 0 },
-      },
-    },
-  ]);
   for (const active of ['bp', 'waiting', 'intermap'] as const) {
     r.truth.active = active;
     await r.step();
@@ -460,18 +517,6 @@ it('keeps OBS manual stop / mute and cancels a late start when formal play resum
   r.obs.intercept = undefined;
   await r.step();
   expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
-  expect(
-    r.obs.calls
-      .filter((c) => /^Set|Trigger/.test(c.type))
-      .every((c) =>
-        c.type.startsWith('SetSceneItem')
-          ? c.data.sceneName === 'Mizar · 赛前等待' &&
-            Number.isInteger(c.data.sceneItemId) &&
-            Number(c.data.sceneItemId) >= 0 &&
-            Number(c.data.sceneItemId) < r.obs.inputs.size
-          : [...r.obs.inputs.values()].some((i) => i.uuid === c.data.inputUuid),
-      ),
-  ).toBe(true);
   const disk = await readFile(join(r.directory, 'state.json'), 'utf8');
   expect(disk).not.toContain(r.directory);
 });
@@ -931,4 +976,711 @@ it('drops an opening queued for another map and stops an old map stinger without
   expect(r.store.state.stinger?.finished).toBe(true);
   await r.step();
   expect(r.obs.restarts()).toBe(2);
+});
+
+async function auditionRig() {
+  const r = await rig();
+  await r.step();
+  r.truth.production = false;
+  await r.director.command('stop');
+  await r.director.command('resume');
+  return r;
+}
+function audition(
+  r: Awaited<ReturnType<typeof rig>>,
+  patch: Partial<MusicPreviewRequest> = {},
+): MusicPreviewRequest {
+  return {
+    owner: randomUUID(),
+    token: randomUUID(),
+    operation: 1,
+    expiresAt: r.now() + 4000,
+    action: 'start',
+    group: 'waiting',
+    track: r.tracks[0]!,
+    volume: 0.5,
+    fadeInMs: 0,
+    fadeOutMs: 0,
+    confirmed: false,
+    ...patch,
+  };
+}
+function stinger(r: Awaited<ReturnType<typeof rig>>) {
+  return [...r.obs.inputs].find(([name]) => name.includes('Stinger'))![1];
+}
+it('applies music master, mute and draft entry gain to audition', async () => {
+  const r = await auditionRig();
+  await r.store.update((state) => {
+    state.master = 0;
+    state.muted = true;
+  });
+  const request = audition(r, { volume: 0.5, track: { ...r.tracks[0]!, gain: 0.8 } });
+  await r.director.previewRequest(request);
+  await r.step(100);
+  expect(stinger(r).volume).toBe(0);
+  expect(stinger(r).state).toBe('OBS_MEDIA_STATE_PLAYING');
+  await r.store.update((state) => {
+    state.master = 0.5;
+    state.muted = false;
+  });
+  await r.step(100);
+  expect(stinger(r).volume).toBeCloseTo(0.4);
+});
+it.each([0, 0.5, 1])(
+  'auditions unsaved volume %s and segments without altering formal playback/config/hold/consumption',
+  async (volume) => {
+    const r = await auditionRig();
+    await r.step();
+    const before = structuredClone(r.store.state);
+    const request = audition(r, { volume, track: { ...r.tracks[1]!, startMs: 1000, endMs: 2500 } });
+    await r.director.previewRequest(request);
+    await r.step(100);
+    expect(r.director.get().preview?.phase).toBe('playing');
+    expect(stinger(r).volume).toBe(volume);
+    expect(stinger(r).cursor).toBe(1000);
+    const updated = { ...request, action: 'update' as const, operation: 2, volume: 1 - volume };
+    await r.director.previewRequest(updated);
+    expect(stinger(r).volume).toBe(1 - volume);
+    stinger(r).cursor = 2500;
+    await r.step(100);
+    await r.step(100);
+    expect(stinger(r).state).toBe('OBS_MEDIA_STATE_STOPPED');
+    expect(r.store.state).toEqual({ ...before, sources: r.store.state.sources });
+    expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
+  },
+);
+it.each(['stream', 'record', 'unknown'] as const)(
+  'requires current backend output confirmation for %s, with no preview mutations until confirmed',
+  async (output) => {
+    const r = await auditionRig();
+    await r.step();
+    await r.step();
+    if (output === 'stream') r.obs.streamActive = true;
+    else if (output === 'record') r.obs.recordActive = true;
+    else r.obs.streamActive = undefined;
+    const request = audition(r);
+    const mark = r.obs.calls.length;
+    await r.director.previewRequest(request);
+    expect(r.director.get().preview?.phase).toBe('confirmation');
+    expect(r.store.state.sources.stinger).toBeNull();
+    expect(r.obs.calls.slice(mark).filter((c) => /^(Set|Create|Trigger)/.test(c.type))).toEqual([]);
+    await r.director.previewRequest({ ...request, operation: 2, confirmed: true });
+    await r.step(100);
+    expect(r.director.get().preview?.phase).toBe('playing');
+  },
+);
+it('expires an abandoned client lease and rejects late starts, foreign stops and simultaneous windows', async () => {
+  const r = await auditionRig();
+  await r.step();
+  const request = audition(r);
+  await r.director.previewRequest(request);
+  await r.step(100);
+  await expect(r.director.previewRequest(audition(r))).rejects.toThrow('music_preview_busy');
+  await r.director.previewRequest({ ...request, owner: randomUUID(), action: 'stop' });
+  expect(stinger(r).state).toBe('OBS_MEDIA_STATE_PLAYING');
+  await r.step(3000);
+  expect(stinger(r).state).toBe('OBS_MEDIA_STATE_STOPPED');
+  await r.director.previewRequest({ ...request, action: 'stop', operation: 3 });
+  await expect(r.director.previewRequest({ ...request, operation: 2 })).rejects.toThrow(
+    'music_preview_stale_operation',
+  );
+});
+it('caps a renewed lease at 15 seconds and applies the draft fade', async () => {
+  const r = await auditionRig();
+  await r.step();
+  const request = audition(r, { fadeInMs: 1000, fadeOutMs: 1000 });
+  await r.director.previewRequest(request);
+  await r.step(100);
+  expect(stinger(r).volume).toBe(0);
+  await r.step(500);
+  expect(stinger(r).volume).toBeCloseTo(0.25);
+  for (let i = 1; i <= 14; i++) {
+    await r.step(1000);
+    await r.director.previewRequest({
+      ...request,
+      action: 'lease',
+      operation: i + 1,
+      expiresAt: r.now() + 4000,
+    });
+  }
+  await r.step(400);
+  expect(stinger(r).state).toBe('OBS_MEDIA_STATE_STOPPED');
+  expect(r.store.state.consumed).toEqual([]);
+});
+it('prioritizes live safety, operator stop and OBS reconnect cleanup without replaying a preview', async () => {
+  const r = await auditionRig();
+  await r.step();
+  const request = audition(r);
+  await r.director.previewRequest(request);
+  await r.step(100);
+  r.truth.program.map.phase = 'live';
+  await r.step(100);
+  expect(stinger(r).state).toBe('OBS_MEDIA_STATE_STOPPED');
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
+  r.truth.program.map.phase = 'warmup';
+  await r.step();
+  await r.director.previewRequest(audition(r));
+  await r.step(100);
+  r.obs.disconnected = true;
+  await r.step(100);
+  expect(r.director.get().preview?.phase).toBe('cleanup');
+  const restarts = r.obs.restarts();
+  r.obs.disconnected = false;
+  await r.step(100);
+  expect(stinger(r).state).toBe('OBS_MEDIA_STATE_STOPPED');
+  expect(r.director.get().preview?.phase).toBe('stopped');
+  expect(r.director.get().preview?.message).not.toContain('未确认');
+  expect(r.obs.restarts()).toBe(restarts);
+  await r.director.previewRequest(audition(r));
+  await r.step(100);
+  await r.director.command('stop');
+  await r.step(100);
+  expect(stinger(r).state).toBe('OBS_MEDIA_STATE_STOPPED');
+  expect(r.store.state.held).toBe(true);
+});
+it('preserves manual OBS volume/mute and does not restore an old opening after preview', async () => {
+  const r = await auditionRig();
+  await r.step();
+  r.truth.production = true;
+  r.director.opening('take-once');
+  await r.step();
+  await expect(r.director.previewRequest(audition(r))).rejects.toThrow(
+    'music_preview_channel_busy',
+  );
+  stinger(r).state = 'OBS_MEDIA_STATE_ENDED';
+  await r.step();
+  r.truth.production = false;
+  await r.step();
+  const consumed = [...r.store.state.consumed];
+  await r.director.previewRequest(audition(r));
+  await r.step(100);
+  stinger(r).volume = 0.17;
+  stinger(r).muted = true;
+  await r.step(100);
+  await r.step(100);
+  expect(stinger(r).volume).toBe(0.17);
+  expect(stinger(r).muted).toBe(true);
+  expect(r.store.state.held).toBe(true);
+  expect(r.store.state.consumed).toEqual(consumed);
+});
+it('fails missing/corrupt tracks and unavailable storage before starting audio', async () => {
+  const r = await auditionRig();
+  await r.step();
+  await rm(join(r.directory, 'tracks', r.tracks[0]!.id));
+  await r.director.previewRequest(audition(r));
+  expect(r.director.get().preview?.message).toContain('丢失或损坏');
+  expect(r.store.state.sources.stinger).toBeNull();
+  r.store.failure = true;
+  await expect(r.director.previewRequest(audition(r))).rejects.toThrow('music_preview_storage');
+});
+it('cancels an in-flight audition before restart, and cannot resurrect a stopped operation', async () => {
+  const r = await auditionRig();
+  await r.step();
+  const request = audition(r);
+  let release!: () => void;
+  let reached!: () => void;
+  const reachedSettings = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  r.obs.intercept = async (type) => {
+    if (type === 'SetInputSettings') {
+      reached();
+      await pending;
+    }
+  };
+  const starting = r.director.previewRequest(request);
+  await reachedSettings;
+  const stopping = r.director.previewRequest({ ...request, action: 'stop', operation: 2 });
+  release();
+  await Promise.all([starting, stopping]);
+  expect(stinger(r).state).toBe('OBS_MEDIA_STATE_STOPPED');
+  expect(r.obs.restarts()).toBe(1); // Only the original formal BGM restarted.
+  await expect(r.director.previewRequest(request)).rejects.toThrow('music_preview_stale_operation');
+  expect(r.store.state.held).toBe(false);
+});
+it('keeps a pre-existing hold and yields to a later real opening without consuming the audition', async () => {
+  const r = await auditionRig();
+  await r.director.command('stop');
+  const request = audition(r);
+  await r.director.previewRequest(request);
+  await r.step(100);
+  expect(stinger(r).state).toBe('OBS_MEDIA_STATE_PLAYING');
+  expect(r.store.state.held).toBe(true);
+  await r.director.previewRequest({ ...request, action: 'stop', operation: 2 });
+  await r.director.command('resume');
+  await r.step();
+  await r.director.previewRequest(audition(r));
+  await r.step(100);
+  r.truth.production = true;
+  r.director.opening('new-real-take');
+  await r.step(100);
+  expect(r.store.state.consumed).toEqual(['new-real-take']);
+  expect(r.store.state.stinger?.key).toBe('new-real-take');
+  expect(r.director.get().preview?.phase).toBe('stopped');
+});
+
+it('does not revive an expired lease when a renewal reaches the server before the next polling tick', async () => {
+  const r = await auditionRig();
+  await r.step();
+  const request = audition(r);
+  await r.director.previewRequest(request);
+  await r.step(100);
+  r.elapse(3100);
+  await r.director.previewRequest({
+    ...request,
+    action: 'lease',
+    operation: 2,
+    expiresAt: r.now() + 4000,
+  });
+  expect(stinger(r).state).toBe('OBS_MEDIA_STATE_STOPPED');
+  expect(r.director.get().preview?.phase).toBe('stopped');
+});
+it('rejects an audition while formal BGM is active and permits it only after explicit stop', async () => {
+  const r = await rig();
+  await r.step();
+  await r.director.previewRequest(audition(r));
+  expect(r.director.get().preview?.message).toContain('停止音乐');
+  expect(r.store.state.sources.stinger).toBeNull();
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_PLAYING');
+  await r.director.command('stop');
+  await r.director.previewRequest(audition(r));
+  await r.step(100);
+  expect(stinger(r).state).toBe('OBS_MEDIA_STATE_PLAYING');
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
+  expect(r.store.state.held).toBe(true);
+});
+it.each(['OBS_MEDIA_STATE_PLAYING', 'OBS_MEDIA_STATE_PAUSED', 'muted'])(
+  'refuses a borrowed channel when BGM is %s even without a formal cue',
+  async (state) => {
+    const r = await auditionRig();
+    if (state === 'muted') r.obs.bgm().muted = true;
+    else r.obs.bgm().state = state;
+    await r.director.previewRequest(audition(r));
+    expect(r.director.get().preview?.message).toContain('停止音乐');
+    expect(r.store.state.sources.stinger).toBeNull();
+  },
+);
+it('verifies audition stop before a newly eligible formal BGM cue starts, without mixing or restoring hold', async () => {
+  const r = await auditionRig();
+  await r.director.previewRequest(audition(r));
+  await r.step(100);
+  const mark = r.obs.calls.length;
+  const previewUuid = r.store.state.sources.stinger;
+  const bgmUuid = r.store.state.sources.bgm;
+  r.truth.production = true;
+  await r.step(100);
+  expect(stinger(r).state).toBe('OBS_MEDIA_STATE_STOPPED');
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_PLAYING');
+  const calls = r.obs.calls.slice(mark);
+  const stop = calls.findIndex(
+    (c) =>
+      c.data.inputUuid === previewUuid &&
+      c.data.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP',
+  );
+  const verified = calls.findIndex(
+    (c, i) => i > stop && c.data.inputUuid === previewUuid && c.type === 'GetMediaInputStatus',
+  );
+  const restart = calls.findIndex(
+    (c) =>
+      c.data.inputUuid === bgmUuid &&
+      c.data.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART',
+  );
+  expect(stop).toBeGreaterThanOrEqual(0);
+  expect(verified).toBeGreaterThan(stop);
+  expect(restart).toBeGreaterThan(verified);
+  expect(r.store.state.held).toBe(false);
+});
+it('does not start a formal cue while OBS has not confirmed the audition stopped', async () => {
+  const r = await auditionRig();
+  await r.director.previewRequest(audition(r));
+  await r.step(100);
+  const restarts = r.obs.restarts();
+  r.obs.intercept = (type) => {
+    const last = r.obs.calls.at(-1);
+    if (
+      type === 'GetMediaInputStatus' &&
+      last?.data.inputUuid === r.store.state.sources.stinger &&
+      last?.data.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP'
+    )
+      stinger(r).state = 'OBS_MEDIA_STATE_PLAYING'; // OBS acknowledges STOP but has not actually stopped.
+    return Promise.resolve();
+  };
+  r.truth.production = true;
+  await r.step(100);
+  expect(r.director.get().preview?.phase).toBe('cleanup');
+  expect(r.director.get().preview?.message).toContain('未确认');
+  expect(r.obs.restarts()).toBe(restarts);
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
+  r.obs.intercept = undefined;
+  await r.step(100);
+  expect(stinger(r).state).toBe('OBS_MEDIA_STATE_STOPPED');
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_PLAYING');
+});
+
+it('reports observed OBS playback separately and marks it unknown when disconnected', async () => {
+  const r = await rig();
+  await r.step();
+  await r.step();
+  expect(r.director.get().playback).toBe('playing');
+  r.obs.bgm().state = 'OBS_MEDIA_STATE_PAUSED';
+  await r.step();
+  expect(r.director.get().playback).toBe('paused');
+  expect(r.director.get().held).toBe(true);
+  r.obs.disconnected = true;
+  await r.step();
+  expect(r.director.get().playback).toBe('unknown');
+  await r.director.close();
+});
+
+it('plays a selected formal track, pauses and continues through OBS, and stops for live play', async () => {
+  const r = await rig();
+  await r.step();
+  await r.director.manualPlay('waiting', r.tracks[1]!.id);
+  expect(r.director.get().intent).toBe('manual');
+  expect(r.director.get().bgm?.track).toBe(r.tracks[1]!.name);
+  expect(r.director.get().playback).toBe('playing');
+  await r.director.manualPause(true);
+  await r.step();
+  expect(r.director.get().playback).toBe('paused');
+  expect(r.director.get().intent).toBe('manual');
+  await r.director.manualPause(false);
+  expect(r.director.get().playback).toBe('playing');
+  await r.director.manualPause(true);
+  r.truth.program.map.phase = 'live';
+  await r.step();
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
+  expect(r.director.get().intent).toBe('automatic');
+  await r.director.close();
+});
+
+it('does not queue formal playback when OBS is disconnected', async () => {
+  const r = await rig();
+  await r.step();
+  r.obs.disconnected = true;
+  await expect(r.director.manualPlay('waiting', r.tracks[1]!.id)).rejects.toThrow();
+  expect(r.director.get().intent).toBe('held');
+  r.obs.disconnected = false;
+  await r.step();
+  expect(r.director.get().intent).toBe('held');
+  await r.director.close();
+});
+
+it('stops an audition before starting selected formal music', async () => {
+  const r = await auditionRig();
+  await r.director.previewRequest(audition(r));
+  await r.step(100);
+  expect(r.director.get().preview?.phase).toBe('playing');
+  r.truth.production = true;
+  await r.director.manualPlay('waiting', r.tracks[1]!.id);
+  await r.step();
+  expect(stinger(r).state).toBe('OBS_MEDIA_STATE_STOPPED');
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_PLAYING');
+  expect(r.director.get().bgm?.track).toBe(r.tracks[1]!.name);
+  await r.director.close();
+});
+
+it('lets a newer stop supersede a pending formal pause', async () => {
+  const r = await rig();
+  await r.step();
+  await r.director.manualPlay('waiting', r.tracks[1]!.id);
+  let release!: () => void;
+  let reached!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const pending = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  r.obs.intercept = async (type) => {
+    if (type === 'GetInputSettings') {
+      reached();
+      await blocked;
+    }
+  };
+  const pausing = r.director.manualPause(true);
+  await pending;
+  const stopping = r.director.command('stop');
+  release();
+  await Promise.allSettled([pausing, stopping]);
+  r.obs.intercept = undefined;
+  await r.step();
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
+  expect(r.director.get().intent).toBe('held');
+  await r.director.close();
+});
+
+it('keeps formal playback beyond the audition lease without browser renewals', async () => {
+  const r = await rig();
+  await r.step();
+  await r.director.manualPlay('waiting', r.tracks[1]!.id);
+  await r.step(20_000);
+  expect(r.director.get().intent).toBe('manual');
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_PLAYING');
+  await r.director.close();
+});
+
+it('allows manual selection without an automatic cue but still stops on trusted live play', async () => {
+  const r = await rig();
+  r.truth.production = false;
+  await r.director.manualPlay('waiting', r.tracks[1]!.id);
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_PLAYING');
+  r.truth.program.map.phase = 'live';
+  await r.step();
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
+  await r.director.close();
+});
+
+it('reads OBS progress and seeks only within the current segment', async () => {
+  const r = await rig();
+  const config = structuredClone(r.store.state.config);
+  config.groups.waiting.tracks[1] = { ...r.tracks[1]!, startMs: 1000, endMs: 2500 };
+  await r.store.configure(config);
+  await r.director.manualPlay('waiting', r.tracks[1]!.id);
+  expect(r.director.get().cursorMs).toBe(1000);
+  expect(r.director.get().durationMs).toBe(10000);
+  await r.director.seek(2000, r.director.get().bgm!.playbackId);
+  expect(r.obs.bgm().cursor).toBe(2000);
+  expect(r.director.get().cursorMs).toBe(2000);
+  await expect(r.director.seek(999, r.director.get().bgm!.playbackId)).rejects.toThrow(
+    'music_seek_invalid',
+  );
+  await expect(r.director.seek(2500, r.director.get().bgm!.playbackId)).rejects.toThrow(
+    'music_seek_invalid',
+  );
+  await r.director.manualPause(true);
+  await r.director.seek(1500, r.director.get().bgm!.playbackId);
+  expect(r.obs.bgm().cursor).toBe(1500);
+  await expect(r.director.seek(1600, 'old-playback')).rejects.toThrow('music_seek_unavailable');
+  r.obs.duration = null;
+  await expect(r.director.seek(1600, r.director.get().bgm!.playbackId)).rejects.toThrow(
+    'music_seek_invalid',
+  );
+  await r.director.close();
+});
+
+it('selects the next configured track during formal manual playback', async () => {
+  const r = await rig();
+  await r.director.manualPlay('waiting', r.tracks[0]!.id);
+  await r.director.command('next');
+  expect(r.director.get().bgm?.track).toBe(r.tracks[1]!.name);
+  expect(r.director.get().intent).toBe('manual');
+  await r.director.manualPause(true);
+  await r.director.command('next');
+  expect(r.director.get().bgm?.track).toBe(r.tracks[0]!.name);
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_PLAYING');
+  await r.director.close();
+});
+
+it('monitors only owned music inputs and reads back changes and disconnection', async () => {
+  const r = await rig();
+  await r.director.monitor(true);
+  expect(r.director.get().monitor).toBe('enabled');
+  const sets = r.obs.calls.filter((c) => c.type === 'SetInputAudioMonitorType');
+  expect(sets).toHaveLength(2);
+  expect(sets.every((c) => c.data.monitorType === 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT')).toBe(
+    true,
+  );
+  r.obs.bgm().monitor = 'OBS_MONITORING_TYPE_NONE';
+  await r.step();
+  expect(r.director.get().monitor).toBe('mixed');
+  await r.director.monitor(false);
+  expect(r.director.get().monitor).toBe('disabled');
+  r.obs.disconnected = true;
+  await r.step();
+  expect(r.director.get().monitor).toBe('unknown');
+  await r.director.close();
+});
+
+it('reads monitoring back after a lost write acknowledgement without repeating the write', async () => {
+  const r = await rig();
+  await r.director.monitor(false);
+  let writes = 0;
+  r.obs.intercept = (type) => {
+    if (type === 'SetInputAudioMonitorType') {
+      writes++;
+      r.obs.bgm().monitor = 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT';
+      return Promise.reject(new Error('lost acknowledgement'));
+    }
+    return Promise.resolve();
+  };
+  await expect(r.director.monitor(true)).rejects.toThrow('lost acknowledgement');
+  expect(writes).toBe(1);
+  expect(r.director.get().monitor).toBe('mixed');
+  r.obs.intercept = undefined;
+  await r.director.close();
+});
+
+it('respects OBS manual changes before a seek', async () => {
+  const r = await rig();
+  await r.director.manualPlay('waiting', r.tracks[0]!.id);
+  r.obs.bgm().volume = 0.2;
+  await expect(r.director.seek(1000, r.director.get().bgm!.playbackId)).rejects.toThrow(
+    'music_source_changed',
+  );
+  expect(r.director.get().intent).toBe('held');
+  expect(r.obs.bgm().cursor).toBe(0);
+  await r.director.close();
+});
+
+it('reads a seek after a lost acknowledgement and never replays the write', async () => {
+  const r = await rig();
+  await r.director.manualPlay('waiting', r.tracks[0]!.id);
+  let writes = 0;
+  r.obs.intercept = (type) => {
+    if (type === 'SetMediaInputCursor') {
+      writes++;
+      r.obs.bgm().cursor = 1200;
+      return Promise.reject(new Error('lost acknowledgement'));
+    }
+    return Promise.resolve();
+  };
+  await expect(r.director.seek(1200, r.director.get().bgm!.playbackId)).rejects.toThrow();
+  expect(writes).toBe(1);
+  expect(r.director.get().cursorMs).toBe(1200);
+  expect(r.director.get().intent).toBe('held');
+  r.obs.intercept = undefined;
+  await r.director.close();
+});
+
+it('allows a trusted match pause without any automatic cue and stops when play resumes', async () => {
+  const r = await rig();
+  r.truth.production = false;
+  r.truth.program.map.phase = 'live';
+  r.truth.program.clock = { phase: 'paused', endsInSeconds: 40 };
+  await r.director.manualPlay('waiting', r.tracks[0]!.id);
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_PLAYING');
+  r.truth.program.clock.phase = 'freezetime';
+  await r.step();
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
+  await r.director.close();
+});
+
+it('stops manual music when telemetry becomes stale even without a named map', async () => {
+  const r = await rig();
+  r.truth.program.map.phase = null;
+  r.truth.program.map.name = null;
+  r.truth.program.status.telemetry = 'awaiting';
+  r.truth.production = false;
+  await r.director.manualPlay('waiting', r.tracks[0]!.id);
+  r.truth.program.status.telemetry = 'stale';
+  await r.step();
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
+  await expect(r.director.manualPlay('waiting', r.tracks[0]!.id)).rejects.toThrow(
+    'music_program_unsafe',
+  );
+  await r.director.close();
+});
+
+it('recalculates the tail gain from OBS cursor after backward and forward seeks', async () => {
+  const r = await rig();
+  const config = structuredClone(r.store.state.config);
+  config.groups.waiting.fadeOutMs = 2000;
+  await r.store.configure(config);
+  await r.director.manualPlay('waiting', r.tracks[0]!.id);
+  r.obs.bgm().cursor = 9000;
+  await r.step();
+  expect(r.obs.bgm().volume).toBeCloseTo(0.25);
+  const id = r.director.get().bgm!.playbackId;
+  await r.director.seek(4000, id);
+  expect(r.obs.bgm().volume).toBeCloseTo(0.5);
+  await r.step(2500);
+  expect(r.obs.bgm().volume).toBeCloseTo(0.5);
+  await r.director.seek(9500, id);
+  expect(r.obs.bgm().volume).toBeCloseTo(0.125);
+  await r.step(2500);
+  expect(r.obs.bgm().volume).toBeCloseTo(0.125);
+  await r.director.close();
+});
+
+it('freezes fades during repeated pauses and uses the paused cursor on resume', async () => {
+  const r = await rig();
+  const config = structuredClone(r.store.state.config);
+  config.groups.waiting.fadeInMs = 2000;
+  config.groups.waiting.fadeOutMs = 2000;
+  await r.store.configure(config);
+  await r.director.manualPlay('waiting', r.tracks[0]!.id);
+  await r.step(1000);
+  expect(r.obs.bgm().volume).toBeCloseTo(0.25);
+  await r.director.manualPause(true);
+  await r.step(6000);
+  expect(r.obs.bgm().volume).toBeCloseTo(0.25);
+  await r.director.manualPause(false);
+  await r.step(500);
+  expect(r.obs.bgm().volume).toBeCloseTo(0.375);
+  await r.step(500);
+  r.obs.bgm().cursor = 9000;
+  await r.step();
+  expect(r.obs.bgm().volume).toBeCloseTo(0.25);
+  for (let i = 0; i < 2; i++) {
+    await r.director.manualPause(true);
+    await r.step(6000);
+    expect(r.obs.bgm().volume).toBeCloseTo(0.25);
+    await r.director.manualPause(false);
+    await r.step();
+    expect(r.obs.bgm().volume).toBeCloseTo(0.25);
+  }
+  await r.director.manualPause(true);
+  await r.director.seek(9500, r.director.get().bgm!.playbackId);
+  expect(r.obs.bgm().volume).toBeCloseTo(0.125);
+  await r.step(6000);
+  await r.director.manualPause(false);
+  await r.step();
+  expect(r.obs.bgm().volume).toBeCloseTo(0.125);
+  await r.director.close();
+});
+
+it('lets stop preempt seek without a late volume write or restart', async () => {
+  const r = await rig();
+  const config = structuredClone(r.store.state.config);
+  config.groups.waiting.fadeOutMs = 2000;
+  await r.store.configure(config);
+  await r.director.manualPlay('waiting', r.tracks[0]!.id);
+  r.obs.bgm().cursor = 9000;
+  await r.step();
+  let release!: () => void;
+  let reached!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const pending = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  r.obs.intercept = async (type) => {
+    if (type === 'SetMediaInputCursor') {
+      reached();
+      await blocked;
+    }
+  };
+  const seeking = r.director.seek(4000, r.director.get().bgm!.playbackId);
+  await pending;
+  const volumeWrites = r.obs.calls.filter((call) => call.type === 'SetInputVolume').length;
+  const stopping = r.director.command('stop');
+  release();
+  await Promise.allSettled([seeking, stopping]);
+  r.obs.intercept = undefined;
+  await r.step();
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
+  expect(r.obs.calls.filter((call) => call.type === 'SetInputVolume')).toHaveLength(volumeWrites);
+  await r.director.close();
+});
+
+it('finishes a track transition without applying its tail fade to the next track', async () => {
+  const r = await rig();
+  const config = structuredClone(r.store.state.config);
+  config.groups.waiting.fadeOutMs = 2000;
+  await r.store.configure(config);
+  await r.director.manualPlay('waiting', r.tracks[0]!.id);
+  r.obs.bgm().cursor = 9000;
+  await r.step();
+  expect(r.obs.bgm().volume).toBeCloseTo(0.25);
+  await r.director.command('next');
+  await r.step(2100);
+  expect(r.director.get().bgm?.track).toBe(r.tracks[1]!.name);
+  await r.step(300);
+  expect(r.obs.bgm().volume).toBeCloseTo(0.5);
+  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_PLAYING');
+  await r.director.close();
 });

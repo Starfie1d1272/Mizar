@@ -1,4 +1,9 @@
 import {
+  BpPresentationSettings,
+  registerBpPresentationSettings,
+} from './bp/presentation-settings.js';
+import { RemoteCommentary } from './obs/remote-commentary.js';
+import {
   registerWorkspaceObserver,
   type WorkspaceObserver,
 } from './telemetry/observer-workspace.js';
@@ -67,8 +72,12 @@ import { BpDemoStateController } from './bp/demo-state.js';
 import { registerBpWorkspaceRoutes } from './bp/workspace-controller.js';
 import { ObsAdapter } from './obs/adapter.js';
 import { ObsConfigStore } from './obs/config.js';
+import { ObsAudioRouting } from './obs/audio-routing.js';
+import { GameAudioController } from './obs/audio-policy-controller.js';
+import { gameAudioTruth } from './obs/audio-policy-truth.js';
 import type { ObsNativeEvidence } from './obs/native-evidence.js';
 import { registerObsRoutes } from './obs/routes.js';
+import { registerMixerRoutes } from './obs/mixer-routes.js';
 import { ProgramSceneController, registerProgramSceneRoutes } from './program-scenes/controller.js';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
@@ -284,6 +293,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             send: (
               event: Parameters<NonNullable<OutputServiceOptions['sink']>['send']>[0],
               signal?: AbortSignal,
+              retainedLineup?: readonly string[],
             ) =>
               options.rivalhubConnection!.view().paired &&
               outputBinding?.origin === 'online' &&
@@ -292,6 +302,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
                     event,
                     outputService.current(true),
                     signal,
+                    retainedLineup,
                   )
                 : (options.reliableSink?.send(event, signal) ??
                   Promise.resolve('rejected' as const)),
@@ -610,6 +621,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     );
   };
   let observerMatchId: string | null | undefined;
+  let observerDiagnosticKey = '';
+  let observerDiagnosticLoggedAt = -Infinity;
   const projectionCoordinator =
     options.projectionCoordinator ??
     createProjectionCoordinator({
@@ -621,6 +634,21 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       ...(options.steamAvatars ? { avatars: options.steamAvatars } : {}),
       programRuntime,
       cstvSources,
+      onObserverDiagnostics: (diagnostics) => {
+        debugEvidenceStore.recordObserverDiagnostics(diagnostics);
+        const key = JSON.stringify([
+          diagnostics.blocked,
+          diagnostics.lastReset,
+          diagnostics.anchors > 0,
+          diagnostics.pending > 0,
+        ]);
+        const now = debugClock.nowMonotonicMs();
+        if (key !== observerDiagnosticKey && now - observerDiagnosticLoggedAt >= 5000) {
+          observerDiagnosticKey = key;
+          observerDiagnosticLoggedAt = now;
+          sessionJournal?.record('observer_assist_state', diagnostics);
+        }
+      },
       ...(options.matchContextBinding === undefined || demoRecovery
         ? {}
         : { matchContextBinding: options.matchContextBinding }),
@@ -701,6 +729,24 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   });
   const obsConfigStore =
     options.obsConfigPath === undefined ? undefined : new ObsConfigStore(options.obsConfigPath);
+  const obsAudioRouting =
+    options.obsConfigPath === undefined
+      ? undefined
+      : new ObsAudioRouting(`${options.obsConfigPath}.audio-routing.json`);
+  const gameAudio =
+    obsConfigStore && obsAudioRouting && options.obsConfigPath
+      ? new GameAudioController(
+          obsAudioRouting,
+          obsConfigStore,
+          `${options.obsConfigPath}.game-audio.json`,
+        )
+      : undefined;
+  if (gameAudio)
+    app.addHook('onReady', async () => {
+      await gameAudio
+        .load()
+        .catch((error) => app.log.error({ err: error }, '游戏音频策略加载失败'));
+    });
   const obsAdapter =
     obsConfigStore === undefined
       ? undefined
@@ -712,9 +758,21 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
               { event: 'obs', stage, result: 'failure', diagnostic: { error } },
               'OBS request failed',
             ),
+          obsAudioRouting,
+          {
+            owner: new RemoteCommentary(`${options.obsConfigPath}.commentary.json`),
+            journal: `${options.obsConfigPath}.commentary-probe.json`,
+          },
         );
   let musicDirector: MusicDirector | undefined;
   let cameraDirector: CameraDirector | undefined;
+  const bpPresentationSettings = new BpPresentationSettings(
+    options.obsConfigPath
+      ? join(dirname(options.obsConfigPath), 'bp-presentation.json')
+      : undefined,
+  );
+  app.addHook('onReady', () => bpPresentationSettings.load());
+  registerBpPresentationSettings(app, bpPresentationSettings, localWebTransport.getOriginPolicy());
   const sceneController = new ProgramSceneController(
     projectionCoordinator,
     bpSession,
@@ -739,7 +797,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             },
           }),
     obsAdapter === undefined ? undefined : (options) => obsAdapter.switchToWaitingForExit(options),
+    obsAdapter === undefined ? undefined : (visible) => obsAdapter.setBpCompactVisible(visible),
+    () => bpPresentationSettings.get().mode,
+    () => obsAdapter?.gameBackgroundReady() ?? Promise.resolve(false),
   );
+  obsAdapter?.onBpDisconnect(() => sceneController.compactDisconnected());
   if (options.steamAvatars) {
     options.steamAvatars.onChanged(() => projectionCoordinator.refresh());
     registerSteamAvatarRoutes(app, options.steamAvatars, localWebTransport.getOriginPolicy());
@@ -763,12 +825,14 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     // Chromium's connection-error page and never run the WebSocket retry code.
     app.addHook('onListen', () => {
       obsAdapter.startBrowserRecovery();
+      obsAdapter.startCommentaryRecovery();
       return Promise.resolve();
     });
     registerObsRoutes(app, {
       originPolicy: localWebTransport.getOriginPolicy(),
       configStore: obsConfigStore,
       adapter: obsAdapter,
+      ...(gameAudio ? { gameAudio } : {}),
       ...(options.readObsCaptureEvidence
         ? { readCaptureEvidence: options.readObsCaptureEvidence }
         : {}),
@@ -1105,6 +1169,14 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       }),
     );
     registerMusicRoutes(app, musicStore, musicDirector, localWebTransport.getOriginPolicy());
+    if (obsAdapter)
+      registerMixerRoutes(
+        app,
+        obsAdapter,
+        musicDirector,
+        gameAudio,
+        localWebTransport.getOriginPolicy(),
+      );
     const cameraStore = new OrchestrationStore(
       join(dirname(options.obsConfigPath), 'orchestration'),
       (stage, evidence) => sessionJournal?.record(stage, evidence),
@@ -1171,6 +1243,17 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     void director.tick().catch(() => director.hold());
     void musicDirector?.tick();
     cameraDirector?.tick();
+    if (gameAudio) {
+      const projection = projectionCoordinator.getCurrent();
+      gameAudio.tick(
+        gameAudioTruth(
+          projection.program,
+          sceneController.get().active,
+          production.get().mode !== 'preparation' &&
+            projection.operator.matchContext.origin !== 'fixture',
+        ),
+      );
+    }
   }, 100);
   directorTimer.unref();
   registerBpWorkspaceRoutes(app, {
@@ -1568,12 +1651,16 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       });
     },
   });
+  const unsubscribeObserverEvidence = options.workspaceObserver?.subscribeEvidence((evidence) =>
+    sessionJournal?.record('observer_attempt_terminal', evidence),
+  );
   registerSupportRoutes(app, {
     originPolicy: localWebTransport.getOriginPolicy(),
     ...(options.supportLogsDirectory === undefined
       ? {}
       : { logsDirectory: options.supportLogsDirectory }),
     ...(options.productRuntime === undefined ? {} : { artifact: options.productRuntime }),
+    observer: () => options.workspaceObserver?.view() ?? null,
     runtimeSummary: () => debugEvidenceStore.getSupportSummary(debugClock.nowMonotonicMs()),
     flushBusinessLog: async () => {
       await nativeSource?.poll();
@@ -1787,6 +1874,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     objectiveReferenceUnsubscribe?.();
     cameraDirector?.close();
     await musicDirector?.close();
+    gameAudio?.close();
     await obsAdapter?.close();
     const sourceCleanup = await Promise.allSettled([
       cstvSources.program.stop(),
@@ -1802,6 +1890,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     await businessJournal?.close();
     await nativeSource?.close();
     await performanceContext?.close();
+    unsubscribeObserverEvidence?.();
     await sessionJournal?.close();
     await diagnosticDelivery.close();
     const sourceFailures = sourceCleanup

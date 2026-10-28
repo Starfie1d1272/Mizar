@@ -689,6 +689,26 @@ export class MatchContextController {
     });
   }
 
+  /** One explicit library action stages fresh data and commits that same selection. */
+  async loadOnlineMatch(requestedMatchId: string, source: MatchContextSource) {
+    const contextRevision = this.getActiveRevision();
+    const candidateGeneration = this.onlineCandidateGeneration + 1;
+    const result = await this.stageOnlineMatch(requestedMatchId, source);
+    if (!result.ok) return result;
+    if (candidateGeneration !== this.onlineCandidateGeneration)
+      return this.staleSelectionResult(requestedMatchId);
+    const pending = this.pendingOnlineCandidate;
+    if (pending === undefined) {
+      const binding = this.activeBinding;
+      return binding?.origin === 'online' && binding.context.matchId === requestedMatchId
+        ? { ok: true as const, binding, diagnostics: [] }
+        : this.staleSelectionResult(requestedMatchId);
+    }
+    if (pending.binding.context.matchId !== requestedMatchId)
+      return this.staleSelectionResult(requestedMatchId);
+    return this.activatePendingOnlineMatch(contextRevision, pending.revision);
+  }
+
   /** Network refresh only stages a candidate; explicit operator confirmation owns activation. */
   async stageOnlineMatch(requestedMatchId: string, source: MatchContextSource) {
     if (this.temporary) return this.staleSelectionResult(requestedMatchId);

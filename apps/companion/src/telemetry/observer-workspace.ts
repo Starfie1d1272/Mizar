@@ -1,16 +1,47 @@
-import { readFile, lstat } from 'node:fs/promises';
+import { readFile, lstat, mkdir, access } from 'node:fs/promises';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
+import { constants } from 'node:fs';
+import { safePath } from '../resource-store/files.js';
 import { performance } from 'node:perf_hooks';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { createCstvSourceManager, type CstvSourceManager } from './cstv-source-manager.js';
-import { startObserverProcess, type ObserverProcessOptions } from './observer-process.js';
+import {
+  startObserverProcess,
+  type ObserverProcessOptions,
+  type ObserverAttemptEvidence,
+} from './observer-process.js';
 import type { ObserverSettingsStore } from './observer-settings.js';
 import { sendObserverGameCommand, observerConnectCommand } from './observer-game-control.js';
 
 export const OBSERVER_VERSION = '1.0.0';
 const SOURCE_SHA = '4b07fd0ddfb775d8fa1548bddfd98dc78c7fce93';
+/** Create only controlled ancestors; the pinned driver owns the unique final directory. */
+export async function prepareObserverOutputParent(state: string): Promise<string> {
+  await safePath(state);
+  let parent = state;
+  for (const name of ['data', 'observer']) {
+    await safePath(parent);
+    parent = join(parent, name);
+    await mkdir(parent, { mode: 0o700 }).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'EEXIST') throw error;
+    });
+    await safePath(parent);
+  }
+  await access(parent, constants.W_OK | constants.X_OK);
+  return parent;
+}
+class ObserverPreparationError extends Error {
+  constructor(
+    readonly stage: string,
+    readonly reason: string,
+    readonly errnoCode?: string,
+  ) {
+    super(reason);
+  }
+}
+type ObserverHistory = ObserverAttemptEvidence & { sessionId: string };
 type Owner = ReturnType<typeof startObserverProcess<'lookahead'>>;
 
 /** The stable source facade keeps existing private consumers subscribed across attempts. */
@@ -27,6 +58,27 @@ export class WorkspaceObserver {
   private watchdog: ReturnType<typeof setInterval>;
   private closing = false;
   private intent = 0;
+  private readonly history: ObserverHistory[] = [];
+  private sessionId: string | undefined;
+  private evidenceListeners = new Set<(evidence: ObserverHistory) => void>();
+  subscribeEvidence(listener: (evidence: ObserverHistory) => void) {
+    this.evidenceListeners.add(listener);
+    return () => {
+      this.evidenceListeners.delete(listener);
+    };
+  }
+  private retain(evidence: ObserverAttemptEvidence, sessionId: string) {
+    const entry = { ...evidence, sessionId };
+    this.history.push(entry);
+    if (this.history.length > 8) this.history.shift();
+    this.evidenceListeners.forEach((listener) => {
+      try {
+        listener(entry);
+      } catch {
+        console.error('observer_workspace_diagnostic_failed');
+      }
+    });
+  }
   private terminal: Awaited<Owner['closed']>['terminal'] | undefined;
   private failed = false;
   private launched = false;
@@ -84,6 +136,8 @@ export class WorkspaceObserver {
   view() {
     return {
       version: OBSERVER_VERSION,
+      sessionId: this.sessionId,
+      history: [...this.history],
       active: this.owner !== undefined,
       health: this.health(),
       failed: this.failed,
@@ -111,15 +165,53 @@ export class WorkspaceObserver {
       check();
       await this.stopCurrent();
       check();
-      const options = await this.launch(executable);
-      check();
-      this.generationBase += this.current.getHealth().generation + 1;
-      this.owner = startObserverProcess({
-        ...options,
-        ...(job ? { job } : {}),
-        endpoint,
-        password,
-      });
+      this.terminal = undefined;
+      this.failed = false;
+      const sessionId = (this.sessionId = randomUUID());
+      let options: Awaited<ReturnType<typeof this.launch>>;
+      try {
+        options = await this.launch(executable);
+        check();
+        this.generationBase += this.current.getHealth().generation + 1;
+        this.owner = startObserverProcess({
+          ...options,
+          ...(job ? { job } : {}),
+          endpoint,
+          password,
+          onAttempt: (evidence) => this.retain(evidence, sessionId),
+        });
+      } catch (error) {
+        const cancelled = this.closing || intent !== this.intent || !current();
+        this.terminal = {
+          attemptId: randomUUID(),
+          attemptCount: 0,
+          stage: cancelled
+            ? 'cancelled'
+            : error instanceof ObserverPreparationError
+              ? error.stage
+              : 'preparation',
+          reason: cancelled
+            ? 'configuration-changed'
+            : error instanceof ObserverPreparationError
+              ? error.reason
+              : 'preparation-failed',
+          ...(error instanceof ObserverPreparationError && error.errnoCode
+            ? { errnoCode: error.errnoCode }
+            : {}),
+          report: 'missing',
+          code: null,
+          signal: null,
+          ready: false,
+          startupTimedOut: false,
+          cancelled,
+          stdout: { status: 'ended', parsedRecords: 0 },
+          finalizationFailures: [],
+        };
+        this.failed = !cancelled;
+        this.retain(this.terminal, sessionId);
+        this.listeners.forEach((f) => f());
+        throw error;
+      }
       this.terminal = undefined;
       this.failed = false;
       this.launched = true;
@@ -187,63 +279,89 @@ export function installedWorkspaceObserver(
   initialSource?: CstvSourceManager<'lookahead'>,
 ) {
   return new WorkspaceObserver(async (executable) => {
-    const component = join(root, 'resources/observer');
-    const manifest = z
-      .object({
-        componentVersion: z.string(),
-        sourceSha: z.string(),
-        distribution: z.string(),
-        entrypoints: z.strictObject({
-          python: z.literal('runtime/python/python.exe'),
-          driver: z.literal('client/driver.py'),
-          native: z.literal('client/cs2_observer.dll'),
-          worker: z.literal('client/parser_worker.mjs'),
-        }),
-        filesSha256: z.record(z.string(), z.string().regex(/^[a-f0-9]{64}$/)),
-      })
-      .parse(JSON.parse(await readFile(join(component, 'manifest.json'), 'utf8')) as unknown);
-    if (
-      manifest.componentVersion !== OBSERVER_VERSION ||
-      manifest.sourceSha !== SOURCE_SHA ||
-      manifest.distribution !== 'external-node'
-    )
-      throw new Error('observer_component_version');
-    for (const entry of Object.values(manifest.entrypoints)) {
+    let stage = 'component-verification';
+    try {
+      const component = join(root, 'resources/observer');
+      const manifest = z
+        .object({
+          componentVersion: z.string(),
+          sourceSha: z.string(),
+          distribution: z.string(),
+          entrypoints: z.strictObject({
+            python: z.literal('runtime/python/python.exe'),
+            driver: z.literal('client/driver.py'),
+            native: z.literal('client/cs2_observer.dll'),
+            worker: z.literal('client/parser_worker.mjs'),
+          }),
+          filesSha256: z.record(z.string(), z.string().regex(/^[a-f0-9]{64}$/)),
+        })
+        .parse(JSON.parse(await readFile(join(component, 'manifest.json'), 'utf8')) as unknown);
       if (
-        ![
-          'runtime/python/python.exe',
-          'client/driver.py',
-          'client/cs2_observer.dll',
-          'client/parser_worker.mjs',
-        ].includes(entry)
+        manifest.componentVersion !== OBSERVER_VERSION ||
+        manifest.sourceSha !== SOURCE_SHA ||
+        manifest.distribution !== 'external-node'
       )
-        throw new Error('observer_component_entrypoint');
-      const path = join(component, entry);
-      if (
-        (await lstat(path)).isSymbolicLink() ||
-        createHash('sha256')
-          .update(await readFile(path))
-          .digest('hex') !== manifest.filesSha256[entry]
+        throw new Error('observer_component_version');
+      for (const entry of Object.values(manifest.entrypoints)) {
+        if (
+          ![
+            'runtime/python/python.exe',
+            'client/driver.py',
+            'client/cs2_observer.dll',
+            'client/parser_worker.mjs',
+          ].includes(entry)
+        )
+          throw new Error('observer_component_entrypoint');
+        const path = join(component, entry);
+        if (
+          (await lstat(path)).isSymbolicLink() ||
+          createHash('sha256')
+            .update(await readFile(path))
+            .digest('hex') !== manifest.filesSha256[entry]
+        )
+          throw new Error('observer_component_hash');
+      }
+      stage = 'host-version';
+      const game = resolve(dirname(executable), '../..');
+      const info = await readFile(join(game, 'csgo/steam.inf'), 'utf8');
+      const patch = /^PatchVersion=(\d+(?:\.\d+){1,4})\s*$/m.exec(info)?.[1];
+      if (!patch) throw new Error('observer_host_version');
+      stage = 'output-parent';
+      const outputParent = await prepareObserverOutputParent(state);
+      return {
+        role: 'lookahead',
+        python: join(component, 'runtime/python/python.exe'),
+        driver: join(component, 'client/driver.py'),
+        native: join(component, 'client/cs2_observer.dll'),
+        parserWorker: join(component, 'client/parser_worker.mjs'),
+        node: process.execPath,
+        steamApi: join(dirname(executable), 'steam_api64.dll'),
+        hostVersion: Number(patch.replaceAll('.', '')),
+        outputDirectory: join(outputParent, randomUUID()),
+        launcher,
+        job,
+      };
+    } catch (error) {
+      const nativeCode = (error as NodeJS.ErrnoException)?.code;
+      const code = ['ENOENT', 'EACCES', 'EPERM', 'ENOTDIR', 'EROFS', 'ELOOP', 'ENOSPC'].includes(
+        nativeCode ?? '',
       )
-        throw new Error('observer_component_hash');
+        ? nativeCode
+        : undefined;
+      const reason =
+        error instanceof Error &&
+        [
+          'observer_component_version',
+          'observer_component_entrypoint',
+          'observer_component_hash',
+          'observer_host_version',
+        ].includes(error.message)
+          ? error.message
+          : stage === 'output-parent'
+            ? 'output-parent-unavailable'
+            : 'preparation-failed';
+      throw new ObserverPreparationError(stage, reason, code);
     }
-    const game = resolve(dirname(executable), '../..');
-    const info = await readFile(join(game, 'csgo/steam.inf'), 'utf8');
-    const patch = /^PatchVersion=(\d+(?:\.\d+){1,4})\s*$/m.exec(info)?.[1];
-    if (!patch) throw new Error('observer_host_version');
-    return {
-      role: 'lookahead',
-      python: join(component, 'runtime/python/python.exe'),
-      driver: join(component, 'client/driver.py'),
-      native: join(component, 'client/cs2_observer.dll'),
-      parserWorker: join(component, 'client/parser_worker.mjs'),
-      node: process.execPath,
-      steamApi: join(dirname(executable), 'steam_api64.dll'),
-      hostVersion: Number(patch.replaceAll('.', '')),
-      outputDirectory: join(state, 'data/observer', randomUUID()),
-      launcher,
-      job,
-    };
   }, initialSource);
 }
 
@@ -254,7 +372,13 @@ export function registerWorkspaceObserver(
   canStart: () => boolean = () => true,
   settings?: ObserverSettingsStore,
 ) {
-  type Host = { game: string; job: string; executable: string; useMulnx: boolean };
+  type Host = {
+    game: string;
+    job: string;
+    executable: string;
+    useMulnx: boolean;
+    nativeHudToggle: boolean;
+  };
   let host: Host | undefined;
   let hostLease = 0;
   let prepared: { identity: string; settingsRevision: string; token: string } | undefined;
@@ -274,10 +398,18 @@ export function registerWorkspaceObserver(
     queue = next.catch(() => {});
     return next;
   };
-  const identity = (value: { game: string; job: string; useMulnx: boolean }) =>
-    JSON.stringify([value.game, value.job, value.useMulnx]);
-  const policy = (value: { game: string; job: string; useMulnx: boolean }) =>
-    JSON.stringify([identity(value), value.useMulnx ? settings?.gameAutomation : null]);
+  const identity = (value: {
+    game: string;
+    job: string;
+    useMulnx: boolean;
+    nativeHudToggle: boolean;
+  }) => JSON.stringify([value.game, value.job, value.useMulnx, value.nativeHudToggle]);
+  const policy = (value: {
+    game: string;
+    job: string;
+    useMulnx: boolean;
+    nativeHudToggle: boolean;
+  }) => JSON.stringify([identity(value), value.useMulnx ? settings?.gameAutomation : null]);
   const leased = () =>
     host !== undefined &&
     (!prepared || prepared.identity === identity(host)) &&
@@ -350,6 +482,7 @@ export function registerWorkspaceObserver(
   app.get('/local/v1/observer', (_request, reply) =>
     reply.header('cache-control', 'no-store').send({
       ...observer.view(),
+      programCommandQueued: Boolean(host && connectedGame === keys(host).connect),
       pending: pending > 0,
       error: lastError,
       retryAvailable: Boolean(
@@ -360,12 +493,15 @@ export function registerWorkspaceObserver(
   const command = z.discriminatedUnion('action', [
     z.strictObject({
       action: z.literal('prepare'),
+      nativeHudToggle: z.boolean().default(false),
+      expectedRevision: z.uuid().optional(),
       useMulnx: z.boolean().default(false),
       game: z.string().max(80),
       job: z.string().max(100),
     }),
     z.strictObject({
       action: z.literal('start-configured'),
+      nativeHudToggle: z.boolean().default(false),
       useMulnx: z.boolean().default(false),
       executable: z.string().max(2048),
       job: z.string().max(100),
@@ -403,12 +539,17 @@ export function registerWorkspaceObserver(
       if (['start', 'start-configured', 'prepare'].includes(body.action) && !canStart())
         return reply.code(409).send({ message: '请进入正式制播工作台后连接早源。' });
       if (body.action === 'prepare') {
+        if (body.expectedRevision && body.expectedRevision !== settings?.revision)
+          return reply
+            .code(409)
+            .send({ message: '本场连接或比赛已变化，请重新打开本场连接后确认。' });
         const gameControl = body.useMulnx && settings?.gameAutomation;
         if (
           !settings ||
           !(
             settings.settings.enabled ||
-            (gameControl && (gameControl.autoConnect || gameControl.hideGameHud))
+            (gameControl &&
+              (gameControl.autoConnect || (!body.nativeHudToggle && gameControl.hideGameHud)))
           )
         )
           return { ok: true, enabled: false };
@@ -429,7 +570,7 @@ export function registerWorkspaceObserver(
           ok: true,
           enabled: true,
           revision: prepared.token,
-          hideGameHud: Boolean(gameControl && gameControl.hideGameHud),
+          hideGameHud: Boolean(!body.nativeHudToggle && gameControl && gameControl.hideGameHud),
           reuse:
             pending === 0 &&
             host !== undefined &&
@@ -440,7 +581,9 @@ export function registerWorkspaceObserver(
               (observer.view().active && observerKey === activeKeys.observer)) &&
             (!gameControl ||
               ((!gameControl.autoConnect || connectedGame === activeKeys.connect) &&
-                (!gameControl.hideGameHud || hiddenGame === activeKeys.hud))),
+                (body.nativeHudToggle ||
+                  !gameControl.hideGameHud ||
+                  hiddenGame === activeKeys.hud))),
           connection: connection
             ? {
                 earlyEndpoint: connection.earlyEndpoint,
@@ -468,17 +611,27 @@ export function registerWorkspaceObserver(
           const value: Host = body;
           const key = keys(value);
           const connect = Boolean(gameControl?.autoConnect && connectedGame !== key.connect);
-          const hide = Boolean(gameControl?.hideGameHud && hiddenGame !== key.hud);
-          if (gameControl?.hideGameHud && (connect || hide) && body.hudOriginal === undefined)
+          const hide = Boolean(
+            !body.nativeHudToggle && gameControl?.hideGameHud && hiddenGame !== key.hud,
+          );
+          if (
+            !body.nativeHudToggle &&
+            gameControl?.hideGameHud &&
+            (connect || hide) &&
+            body.hudOriginal === undefined
+          )
             throw new Error('observer_hud_snapshot_required');
           // An accepted game command is retained even if a later observer launch fails.
           // Retrying the private source must not reconnect the on-air game.
           if (connect && connection) {
             await sendObserverGameCommand(
-              observerConnectCommand(connection, Boolean(gameControl?.hideGameHud)),
+              observerConnectCommand(
+                connection,
+                Boolean(!body.nativeHudToggle && gameControl?.hideGameHud),
+              ),
             );
             connectedGame = key.connect;
-            if (gameControl?.hideGameHud) hiddenGame = key.hud;
+            if (!body.nativeHudToggle && gameControl?.hideGameHud) hiddenGame = key.hud;
           } else if (hide) {
             await sendObserverGameCommand('cl_draw_only_deathnotices 1');
             hiddenGame = key.hud;

@@ -32,7 +32,8 @@ export function ObserverHints() {
   const hints =
     observer?.hints
       .map((hint) => ({ ...hint, remainingSeconds: hint.remainingSeconds - elapsed }))
-      .filter((hint) => hint.remainingSeconds > 0) ?? [];
+      .filter((hint) => hint.remainingSeconds > 0)
+      .sort((a, b) => b.remainingSeconds - a.remainingSeconds) ?? [];
   const enabled = Boolean(configuration?.settings.enabled);
   const needsRecovery =
     enabled &&
@@ -45,20 +46,21 @@ export function ObserverHints() {
   const reconnecting = enabled && runtime?.health?.state === 'reconnecting';
   const connecting = enabled && runtime?.health?.state === 'connecting';
   if (!observer && !enabled) return null;
-  if (
-    observer?.state === 'ready' &&
-    hints.length === 0 &&
-    !pending &&
-    !needsRecovery &&
-    !reconnecting &&
-    !connecting
-  )
-    return null;
   const labels = {
     connecting: '连接早源',
-    aligning: '正在对齐',
     paused: '比赛暂停',
-    unavailable: '等待节目数据',
+    unavailable:
+      observer?.waitingReason === 'calibration-reacquiring'
+        ? '正在重新校准延迟'
+        : observer?.waitingReason === 'source-stale'
+          ? '等待早源数据'
+          : observer?.waitingReason === 'identity-unavailable'
+            ? '等待当前选手身份'
+            : observer?.waitingReason === 'source-map-mismatch'
+              ? '等待早源切换当前地图'
+              : observer?.waitingReason === 'map-missing'
+                ? '等待当前地图'
+                : '等待节目数据',
   };
   return (
     <section className="workspace-observer-assist" aria-label="私有观察辅助">
@@ -115,6 +117,25 @@ export function ObserverHints() {
                 ? labels[observer.state as keyof typeof labels]
                 : '辅助状态待确认'}
         </StatusPill>
+      ) : null}
+      {observer?.state === 'ready' && !pending && !needsRecovery && !reconnecting && !connecting ? (
+        <>
+          <StatusPill tone="info">
+            延迟 {(observer.effectiveDelaySeconds ?? observer.expectedDelaySeconds).toFixed(1)} 秒 ·
+            {observer.calibrationState === 'measured'
+              ? '实时校准'
+              : observer.calibrationState === 'held'
+                ? '保持上次校准'
+                : '尚未校准'}
+          </StatusPill>
+          {hints.length === 0 ? (
+            <p>
+              {observer.waitingReason === 'buffering' && observer.nextWindowSeconds !== null
+                ? `正在积累预告，约 ${Math.ceil(observer.nextWindowSeconds)} 秒后进入提示窗口`
+                : '等待早源事件'}
+            </p>
+          ) : null}
+        </>
       ) : null}
       {error ? <p role="alert">{error}</p> : null}
       {hints.length && !pending && !needsRecovery && !reconnecting && !connecting ? (

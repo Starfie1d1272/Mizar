@@ -16,11 +16,16 @@ export type ReliableDeliveryResult = 'accepted' | 'rejected' | 'retry';
 export type ReliableDeliveryStatus = 'pending' | 'accepted' | 'rejected' | 'expired' | 'superseded';
 
 export interface ReliableEventSink {
-  send(event: ReliableEventV1, signal?: AbortSignal): Promise<ReliableDeliveryResult>;
+  send(
+    event: ReliableEventV1,
+    signal?: AbortSignal,
+    lineupSteam64?: readonly string[],
+  ): Promise<ReliableDeliveryResult>;
 }
 
 export interface ReliableOutboxRecord {
   readonly event: ReliableEventV1;
+  readonly lineupSteam64?: readonly string[];
   readonly status: ReliableDeliveryStatus;
   readonly attempts: number;
   readonly nextAttemptAt: string;
@@ -48,6 +53,11 @@ function parseRecord(input: unknown): ReliableOutboxRecord {
     throw new Error('outbox_record_invalid');
   const item = input as Record<string, unknown>;
   if (
+    (item.lineupSteam64 !== undefined &&
+      (!Array.isArray(item.lineupSteam64) ||
+        item.lineupSteam64.length !== 10 ||
+        item.lineupSteam64.some((v: unknown) => typeof v !== 'string' || !/^\d{17}$/.test(v)) ||
+        new Set(item.lineupSteam64).size !== 10)) ||
     typeof item.status !== 'string' ||
     !['pending', 'accepted', 'rejected', 'expired', 'superseded'].includes(item.status) ||
     typeof item.attempts !== 'number' ||
@@ -59,8 +69,12 @@ function parseRecord(input: unknown): ReliableOutboxRecord {
     !Number.isFinite(Date.parse(item.updatedAt))
   )
     throw new Error('outbox_record_invalid');
+  const event = parseReliableEventV1(item.event);
+  if (item.lineupSteam64 !== undefined && event.kind !== 'map_started')
+    throw new Error('outbox_lineup_invalid');
   return {
-    event: parseReliableEventV1(item.event),
+    event,
+    ...(item.lineupSteam64 === undefined ? {} : { lineupSteam64: item.lineupSteam64 as string[] }),
     status: item.status as ReliableDeliveryStatus,
     attempts: item.attempts,
     nextAttemptAt: item.nextAttemptAt,
@@ -351,6 +365,7 @@ export class ReliableOutbox {
     event: ReliableEventV1,
     now = new Date(),
     continuity?: DeliveryContinuity,
+    lineupSteam64?: readonly string[],
   ): Promise<boolean> {
     return this.queue.run(async () => {
       const valid = parseReliableEventV1(event);
@@ -362,13 +377,14 @@ export class ReliableOutbox {
       )
         throw new Error('reliable_outbox_full');
       const at = now.toISOString();
-      const next: ReliableOutboxRecord = {
+      const next = parseRecord({
         event: valid,
+        ...(lineupSteam64 === undefined ? {} : { lineupSteam64 }),
         status: 'pending',
         attempts: 0,
         nextAttemptAt: at,
         updatedAt: at,
-      };
+      });
       await this.commit(
         this.trim([...this.records, next]),
         continuity ?? {
@@ -385,22 +401,27 @@ export class ReliableOutbox {
 
   async flush(input: {
     readonly sink: ReliableEventSink;
-    readonly isCurrent: (event: ReliableEventV1) => boolean;
-    readonly canSend?: (event: ReliableEventV1) => boolean;
+    readonly isCurrent: (event: ReliableEventV1, lineupSteam64?: readonly string[]) => boolean;
+    readonly canSend?: (event: ReliableEventV1, lineupSteam64?: readonly string[]) => boolean;
     readonly now?: Date;
   }): Promise<void> {
     return this.queue.run(async () => {
       const now = input.now ?? new Date();
       let changed = false;
       const next: ReliableOutboxRecord[] = [];
+      let blockedByMapEnd = false;
       for (const record of this.records) {
         if (record.status !== 'pending') {
           next.push(record);
           continue;
         }
+        if (blockedByMapEnd) {
+          next.push(record);
+          continue;
+        }
         const expired =
           now.getTime() - Date.parse(record.event.observedAt) >= RELIABLE_OUTBOX_RETENTION_MS;
-        if (expired || !input.isCurrent(record.event)) {
+        if (expired || !input.isCurrent(record.event, record.lineupSteam64)) {
           next.push({
             ...record,
             status: expired ? 'expired' : 'superseded',
@@ -409,12 +430,31 @@ export class ReliableOutbox {
           changed = true;
           continue;
         }
-        if (input.canSend !== undefined && !input.canSend(record.event)) {
+        if (record.event.kind === 'map_player_snapshot') {
+          const mapEndedKey = record.event.payload.mapEndedKey;
+          const parent = [...next, ...this.records].find(
+            (r) => r.event.idempotencyKey === mapEndedKey,
+          );
+          if (!parent || ['rejected', 'expired', 'superseded'].includes(parent.status)) {
+            next.push({ ...record, status: 'superseded', updatedAt: now.toISOString() });
+            changed = true;
+            continue;
+          }
+          if (parent.status !== 'accepted') {
+            next.push(record);
+            continue;
+          }
+        }
+        if (input.canSend !== undefined && !input.canSend(record.event, record.lineupSteam64)) {
           this.evidence(record, 'send_guard_blocked');
+          if (['map_ended', 'map_started', 'map_epoch_changed'].includes(record.event.kind))
+            blockedByMapEnd = true;
           next.push(record);
           continue;
         }
         if (Date.parse(record.nextAttemptAt) > now.getTime()) {
+          if (['map_ended', 'map_started', 'map_epoch_changed'].includes(record.event.kind))
+            blockedByMapEnd = true;
           next.push(record);
           continue;
         }
@@ -423,7 +463,9 @@ export class ReliableOutbox {
         const controller = new AbortController();
         try {
           outcome = await Promise.race([
-            input.sink.send(record.event, controller.signal),
+            record.lineupSteam64 === undefined
+              ? input.sink.send(record.event, controller.signal)
+              : input.sink.send(record.event, controller.signal, record.lineupSteam64),
             new Promise<'retry'>((resolve) => {
               timeout = setTimeout(() => {
                 controller.abort(new DOMException('Reliable delivery timed out', 'TimeoutError'));
@@ -437,6 +479,11 @@ export class ReliableOutbox {
         } finally {
           if (timeout !== undefined) clearTimeout(timeout);
         }
+        if (
+          outcome === 'retry' &&
+          ['map_ended', 'map_started', 'map_epoch_changed'].includes(record.event.kind)
+        )
+          blockedByMapEnd = true;
         const attempts = record.attempts + 1;
         const delayMs = Math.min(60_000, 1_000 * 2 ** Math.min(attempts - 1, 6));
         next.push({
@@ -452,13 +499,16 @@ export class ReliableOutbox {
     });
   }
 
-  async sweep(isCurrent: (event: ReliableEventV1) => boolean, now = new Date()): Promise<void> {
+  async sweep(
+    isCurrent: (event: ReliableEventV1, lineupSteam64?: readonly string[]) => boolean,
+    now = new Date(),
+  ): Promise<void> {
     return this.queue.run(async () => {
       const next = this.records.map((record): ReliableOutboxRecord => {
         if (record.status !== 'pending') return record;
         const expired =
           now.getTime() - Date.parse(record.event.observedAt) >= RELIABLE_OUTBOX_RETENTION_MS;
-        if (!expired && isCurrent(record.event)) return record;
+        if (!expired && isCurrent(record.event, record.lineupSteam64)) return record;
         return {
           ...record,
           status: expired ? 'expired' : 'superseded',
@@ -467,6 +517,18 @@ export class ReliableOutbox {
       });
       if (next.some((record, index) => record !== this.records[index]))
         await this.commit(this.trim(next));
+    });
+  }
+
+  supersedeWhere(selected: (event: ReliableEventV1) => boolean, now = new Date()): Promise<void> {
+    return this.queue.run(async () => {
+      const records = this.records.map((record) =>
+        record.status === 'pending' && selected(record.event)
+          ? { ...record, status: 'superseded' as const, updatedAt: now.toISOString() }
+          : record,
+      );
+      if (records.some((record, index) => record !== this.records[index]))
+        await this.commit(records);
     });
   }
 

@@ -10,11 +10,6 @@
 
 <!-- 列出实际执行的检查、结果和必要的实机证据。验证范围见 CONTRIBUTING.md 与 docs/development/development-validation.md。 -->
 
-## 文档与设计
-
-- [ ] 已同步受影响的当前文档，文字符合中文与术语规范。
-- [ ] 已按任务检查相关架构、协议或设计规则。
-
 <!-- 重大取舍在此说明理由，并链接相关讨论；界面变更回答 docs/design/README.md 的审查项。 -->
 
 ## 后续检查

@@ -2,7 +2,8 @@ use crate::cs2_session::SessionStore;
 use serde_json::{json, Value};
 use std::{
     os::windows::process::CommandExt,
-    path::PathBuf,
+    fs,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
     time::Duration,
@@ -74,9 +75,13 @@ fn any_cs2_running(log: &crate::startup_log::DesktopLog) -> Result<bool, String>
 struct SteamLaunch {
     process: SteamProcess,
     account: u32,
+    #[cfg(test)]
+    fixture: bool,
 }
 impl SteamLaunch {
     fn validate(&self, log: &crate::startup_log::DesktopLog) -> Result<(), String> {
+        #[cfg(test)]
+        if self.fixture { return Ok(()); }
         let output = powershell(
             "$context = Get-SteamLaunchContext -NativeIdentity $nativeSteam; $context | ConvertTo-Json -Compress",
             &self.process,
@@ -134,6 +139,8 @@ if ($confirmed.account -ne $account) { Stop-Cs2Discovery 'steam-account-unavaila
         SteamLaunch {
             process: steam,
             account,
+            #[cfg(test)]
+            fixture: false,
         },
     ))
 }
@@ -568,6 +575,19 @@ pub struct ManagedCs2 {
     external: Option<ExternalSession>,
     // Keep window preservation after detach until a new managed launch is accepted.
     external_preservation: bool,
+    #[cfg(test)]
+    recovery_identity_fixture: Option<(PathBuf, PathBuf, u32)>,
+    #[cfg(test)]
+    launch_fixture: Option<LaunchFixture>,
+}
+
+#[cfg(test)]
+struct LaunchFixture {
+    executable: PathBuf,
+    video: PathBuf,
+    account: u32,
+    fail_submit: bool,
+    submitted: Arc<std::sync::Mutex<Vec<(Value, Vec<String>)>>>,
 }
 
 /// A verified session process held open during window operations. Keeping the
@@ -618,7 +638,62 @@ impl ManagedCs2 {
             selected_backup: None,
             external: None,
             external_preservation: false,
+            #[cfg(test)]
+            recovery_identity_fixture: None,
+            #[cfg(test)]
+            launch_fixture: None,
         }
+    }
+    fn recovery_identity(&self) -> Result<(PathBuf, PathBuf, u32), String> {
+        #[cfg(test)]
+        if let Some(identity) = &self.recovery_identity_fixture { return Ok(identity.clone()); }
+        let (executable, video, steam) = discover(&self.log)?;
+        steam.validate(&self.log)?;
+        Ok((executable, video, steam.account))
+    }
+    pub(crate) fn prepare_observer_for_mulnx(&mut self, expected_executable: &Path) -> Result<bool, String> {
+        if self.has_external() || any_cs2_running(&self.log)? { return Err("请先退出 CS2 再启动观战配置。".into()); }
+        crate::observer_hud::restore(&self.log)?;
+        let (executable, video, steam) = discover(&self.log)?;
+        steam.validate(&self.log)?;
+        if !same_executable(&executable, &expected_executable.to_string_lossy()) { return Err("游戏安装位置已变化，未加载观战配置。".into()); }
+        if any_cs2_running(&self.log)? { return Err("请先退出 CS2 再启动观战配置。".into()); }
+        self.store.prepare_mulnx_observer(&video, &executable, steam.account)
+    }
+    pub(crate) fn validate_prepared_mulnx_observer(&self, expected_executable: &Path) -> Result<(), String> {
+        if self.has_external() || any_cs2_running(&self.log)? { return Err("请先退出 CS2，再启动观战配置。".into()); }
+        let (executable, video, account) = self.recovery_identity()?;
+        if !same_executable(&executable, &expected_executable.to_string_lossy()) { return Err("游戏安装位置已变化。".into()); }
+        self.store.validate_unsubmitted_mulnx_observer(&video, &executable, account)
+    }
+    pub(crate) fn mark_observer_mulnx_finished(&self) -> Result<(), String> {
+        if any_cs2_running(&self.log)? { return Err("CS2 仍在运行，观战备份仍保留。".into()); }
+        self.store.mark_mulnx_observer_finished()
+    }
+    pub(crate) fn mark_observer_mulnx_options_clean(&self) -> Result<(), String> {
+        self.store.mark_mulnx_options_clean()
+    }
+    pub(crate) fn cancel_unsubmitted_mulnx_observer(&mut self) -> Result<(), String> {
+        if self.has_external() || any_cs2_running(&self.log)? || !process_pids("CS2Injector.exe", &self.log)?.is_empty() {
+            return Err("请先退出 CS2 和 MulNX 启动器，再恢复观战备份。".into());
+        }
+        self.store.cancel_unsubmitted_mulnx_observer()
+    }
+    pub(crate) fn prepared_native_hud(&self) -> Result<bool, String> {
+        Ok(self.store.spectator_hud_identity()?.is_some())
+    }
+    pub(crate) fn mulnx_observer_receipt_matches(&self, pid: u32, created: u64, executable: &Path) -> Result<bool, String> {
+        if self.store.full_spectator_pending() || self.store.load()?.is_some() { return Ok(false); }
+        Ok(self.store.mulnx_observer_matches(pid, created, executable)?.is_some())
+    }
+    pub(crate) fn bind_observer_mulnx_process(&self, pid: u32, created: u64, executable: &Path) -> Result<(), String> {
+        if cs2_pids(&self.log)? != vec![pid] { return Err("游戏实例不唯一，观战备份仍保留。".into()); }
+        let process = open(pid, &self.log)?.ok_or("游戏已退出，观战备份仍保留。")?;
+        let (actual_created, actual_executable) = identity(&process, &self.log)?;
+        if actual_created != created || !same_executable(&actual_executable, &executable.to_string_lossy()) {
+            return Err("游戏身份已变化，观战备份仍保留。".into());
+        }
+        self.store.bind_mulnx_observer(pid, created, executable)
     }
     /// Never poll/recover here: merely showing a startup error must not write files.
     pub fn startup_recovery_status(&self) -> Result<StartupRecoveryStatus, String> {
@@ -627,12 +702,12 @@ impl ManagedCs2 {
         Ok(StartupRecoveryStatus {
             pending: journal.is_some()
                 || self.store.spectator_pending()
+                || self.store.full_spectator_pending()
                 || self.store.playback_cleanup_pending()
                 || requires_service,
             running: any_cs2_running(&self.log)?,
-            uncertain: journal
-                .as_ref()
-                .is_some_and(crate::cs2_session::unconfirmed_launch),
+            uncertain: journal.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch)
+                || self.store.mulnx_observer_unconfirmed()?,
             requires_service,
         })
     }
@@ -653,7 +728,8 @@ impl ManagedCs2 {
 
     pub fn has_external(&self) -> bool { self.external.is_some() }
     pub fn attach_external(&mut self, pid: u32, created: u64, executable: &std::path::Path) -> Result<(), String> {
-        if self.store.load()?.is_some() || self.store.spectator_pending()
+        let observer = self.store.mulnx_observer_matches(pid, created, executable)?;
+        if self.store.load()?.is_some() || self.store.full_spectator_pending() || (self.store.spectator_pending() && observer.is_none())
             || self.store.playback_cleanup_pending()
             || crate::demo_test::requires_recovery(&self.log, None)
         { return Err("请先完成 Mizar 原有游戏与配置恢复，再使用外部游戏。".into()); }
@@ -674,7 +750,7 @@ impl ManagedCs2 {
             || unsafe { WaitForSingleObject(process.0, 0) } != 258
         { return Err("游戏身份或安装位置不匹配，请重新检查。".into()); }
         let console = crate::cs2_console::boundary(&self.log, &actual_executable)?;
-        let console_source = json!({"executable":actual_executable.to_string_lossy(),"launchTime":crate::cs2_console::utc(),"pid":pid,"created":created.to_string(),"consoleDiagnostics":console,"ownership":"external"});
+        let console_source = json!({"executable":actual_executable.to_string_lossy(),"launchTime":crate::cs2_console::utc(),"pid":pid,"created":created.to_string(),"consoleDiagnostics":console,"ownership":"external", "nativeHudToggle":observer == Some(true), "spectatorCfg":observer.is_some()});
         self.external = Some(ExternalSession { console_source, demo_request_id: None, camera_lease: None, invalidated: false, isolation_pending: false, process: Arc::new(process), pid, created });
         self.external_preservation = true;
         self.can_preserve = false;
@@ -733,8 +809,11 @@ impl ManagedCs2 {
         let borrowed = self.external.is_some();
         let running = owned_running || (borrowed && self.workspace_process()?.is_some());
         let preferences = self.store.preferences()?;
+        let borrowed_observer = running && self.external.as_ref().is_some_and(|external| external.console_source["spectatorCfg"] == true);
+        let borrowed_hud = self.external.as_ref().is_some_and(|external| external.console_source["nativeHudToggle"] == true);
+        let mulnx_uncertain = self.store.mulnx_observer_unconfirmed()?;
         Ok(
-            json!({"qualityPreset": preferences.quality.name(), "preferMulnx":preferences.prefer_mulnx, "frameRateLimit":preferences.frame_rate_limit, "spectatorRecoveryPending": self.store.spectator_pending() && pending.is_none(), "demoCleanupPending": self.store.playback_cleanup_pending() && pending.is_none(), "spectatorWarning":self.store.spectator_warning().or_else(|| pending.as_ref().and_then(|value| value["spectatorWarning"].as_str()).map(str::to_string)), "canPreserve": self.can_preserve && pending.is_none(), "preserveSettings": borrowed || pending.as_ref().is_some_and(|v| v["preserveSettings"] == true), "pending":pending.is_some(), "borrowed":borrowed, "externalDetached":self.external_preservation && !borrowed, "running":running, "message":self.message, "busy":false, "phase": if pending.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch) {"uncertain"} else if running {"running"} else if pending.is_some() {"pending"} else {"idle"}}),
+            json!({"qualityPreset": preferences.quality.name(), "preferMulnx":preferences.prefer_mulnx, "frameRateLimit":preferences.frame_rate_limit, "nativeHudToggle": running && (borrowed_hud || pending.as_ref().is_some_and(|v| v["nativeHudToggle"] == true && v["spectatorCfg"] == true)), "spectatorRecoveryPending": (self.store.spectator_pending() || self.store.full_spectator_pending()) && pending.is_none() && !borrowed_observer, "demoCleanupPending": self.store.playback_cleanup_pending() && pending.is_none(), "spectatorWarning":self.store.spectator_warning().or_else(|| pending.as_ref().and_then(|value| value["spectatorWarning"].as_str()).map(str::to_string)), "canPreserve": self.can_preserve && pending.is_none(), "preserveSettings": borrowed || pending.as_ref().is_some_and(|v| v["preserveSettings"] == true), "pending":pending.is_some(), "borrowed":borrowed, "externalDetached":self.external_preservation && !borrowed, "running":running, "message":self.message, "busy":false, "phase": if mulnx_uncertain || pending.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch) {"uncertain"} else if running {"running"} else if pending.is_some() {"pending"} else {"idle"}}),
         )
     }
     pub fn preferences(
@@ -794,13 +873,19 @@ impl ManagedCs2 {
             steam.validate(&self.log)?;
         }
         // Preserve Demo quarantine until all core cleanup has completed.
-        let had_spectator = self.store.spectator_pending();
-        let spectator_error = self.store.restore()?;
+        let had_spectator = self.store.spectator_pending() || self.store.full_spectator_pending();
+        let spectator_error = if value["fullSnapshot"] == true {
+            let (executable, video, account) = self.recovery_identity()?;
+            if any_cs2_running(&self.log)? { return Err("等待 CS2 退出后恢复原配置。".into()); }
+            self.store.restore_coordinated(&video, &executable, account)?
+        } else {
+            self.store.restore()?
+        };
         if trial.is_some() && any_cs2_running(&self.log)? {
             return Err("游戏配置已恢复，请先退出 CS2 再完成 Demo 试播恢复。".into());
         }
         crate::demo_test::complete(&self.log, trial.as_deref())?;
-        if self.store.spectator_pending() {
+        if self.store.spectator_pending() || self.store.full_spectator_pending() {
             self.log.event(
                 "cs2_spectator_restore",
                 "failure",
@@ -825,7 +910,7 @@ impl ManagedCs2 {
                     Some("stage=restore; originalField=restored"),
                 );
             }
-            self.message = Some(spectator_error.unwrap_or_else(|| "原设置已恢复。".into()));
+            self.message = Some(spectator_error.unwrap_or_else(|| "本地原设置已恢复。".into()));
         }
 
         Ok(())
@@ -959,6 +1044,20 @@ impl ManagedCs2 {
         if any_cs2_running(&self.log)? {
             return Err("请先退出已打开的 CS2，再由 Mizar 启动。".into());
         }
+        if !preserve {
+            // Finish any legacy runtime journal before a new native-toggle session.
+            crate::observer_hud::restore(&self.log)?;
+        }
+        #[cfg(test)]
+        let (executable, video, steam) = if let Some(fixture) = &self.launch_fixture {
+            let pid = std::process::id();
+            let process = open(pid, &self.log)?.ok_or("fixture process unavailable")?;
+            (fixture.executable.clone(), fixture.video.clone(), SteamLaunch {
+                process: SteamProcess { process, pid, created: 0, executable: fixture.executable.clone() },
+                account: fixture.account, fixture: true,
+            })
+        } else { discover(&self.log)? };
+        #[cfg(not(test))]
         let (executable, video, steam) = discover(&self.log)?;
         if any_cs2_running(&self.log)? {
             return Err("请先退出已打开的 CS2，再由 Mizar 启动。".into());
@@ -968,36 +1067,36 @@ impl ManagedCs2 {
         let size = if preserve {
             None
         } else {
-            Some(crate::windows_host::launch_viewport()?)
+            #[cfg(test)]
+            { if self.launch_fixture.is_some() { Some(crate::cs2_video::VideoSize::new(1920, 1080)?) } else { Some(crate::windows_host::launch_viewport()?) } }
+            #[cfg(not(test))]
+            { Some(crate::windows_host::launch_viewport()?) }
         };
         let mut journal = if preserve {
             self.store.prepare_preserved(&video, &executable)?
         } else {
             self.can_preserve = false;
             self.store.backup_originals(&video)?;
-            match self.store.prepare_backed_up(
-                &video,
-                &executable,
-                size.ok_or("工作台游戏尺寸缺失。")?,
-            ) {
+            match self.store.prepare_backed_up(&video, &executable, size.ok_or("工作台游戏尺寸缺失。")?) {
                 Ok(value) => value,
                 Err(error) => {
                     self.can_preserve = self.store.load()?.is_none();
                     self.message = Some(error.clone());
-                    // Parser errors contain only fixed categories / known keys.
-                    self.log.event(
-                        "cs2_launch",
-                        "failure",
-                        Some(&format!("stage=prepare; {error}")),
-                    );
+                    self.log.event("cs2_launch", "failure", Some(&format!("stage=prepare; {error}")));
                     return Err(error);
                 }
             }
         };
         self.can_preserve = false;
         if journal["spectatorCfg"] == true {
-            if let Err(error) = crate::cs2_spectator::install(&executable)
-                .and_then(|()| self.store.validate_spectator_launch())
+            if let Err(error) = (|| {
+                self.store.validate_spectator_launch()?;
+                if journal["nativeHudToggle"] == true {
+                    let identity = journal["hudIdentity"].as_str().ok_or("HUD 键身份缺失。")?;
+                    if self.store.spectator_hud_identity()?.as_deref() != Some(identity) { return Err("HUD 键身份记录不一致。".into()); }
+                    crate::cs2_spectator::install_hud(&executable, identity)
+                } else { crate::cs2_spectator::install(&executable) }
+            })()
             {
                 journal["spectatorCfg"] = json!(false);
                 journal["spectatorWarning"] = json!(format!("观战 CFG 未加载：{error}"));
@@ -1006,13 +1105,13 @@ impl ManagedCs2 {
         if !preserve {
             self.log.event(
                 "cs2_spectator_cfg",
-                if journal["spectatorCfg"] == true {
+                if journal["spectatorCfg"] == true || journal["fullSnapshot"] == true {
                     "success"
                 } else {
                     "failure"
                 },
                 Some(
-                    &json!({"stage":"prepared", "file":crate::cs2_spectator::CFG_NAME,
+                    &json!({"stage":"prepared", "file":if journal["fullSnapshot"] == true { None } else { Some(crate::cs2_spectator::CFG_NAME) },
                     "runtime":"unverified", "reason":journal["spectatorWarning"]})
                     .to_string(),
                 ),
@@ -1079,22 +1178,26 @@ impl ManagedCs2 {
                         .ok_or("帧率启动参数缺失。")?
                         .to_string(),
                 ]);
-                if journal["spectatorCfg"] == true {
-                    match self.store.spectator_load_attempted(true) {
-                        Ok(()) => {
-                            command.args(["+exec", crate::cs2_spectator::CFG_NAME]);
-                        }
-                        Err(error) => {
-                            journal["spectatorCfg"] = json!(false);
-                            journal["spectatorWarning"] =
-                                json!(format!("观战 CFG 未加载：{error}"));
-                            self.log.event("cs2_spectator_cfg", "failure", Some(&json!({"stage":"prepared", "file":crate::cs2_spectator::CFG_NAME, "runtime":"unverified", "reason":journal["spectatorWarning"]}).to_string()));
-                        }
-                    }
-                }
             } else {
                 command.args(["-applaunch", "730"]);
             }
+            if journal["spectatorCfg"] == true {
+                match self.store.spectator_load_attempted(true) {
+                    Ok(()) => {
+                        let cfg = if journal["nativeHudToggle"] == true {
+                            crate::cs2_spectator::hud_cfg_name(journal["hudIdentity"].as_str().unwrap_or(""))?
+                        } else { crate::cs2_spectator::CFG_NAME };
+                        command.args(["+exec", cfg]);
+                    }
+                    Err(error) => {
+                        journal["spectatorCfg"] = json!(false);
+                        journal["spectatorWarning"] =
+                            json!(format!("观战 CFG 未加载：{error}"));
+                        self.log.event("cs2_spectator_cfg", "failure", Some(&json!({"stage":"prepared", "file":crate::cs2_spectator::CFG_NAME, "runtime":"unverified", "reason":journal["spectatorWarning"]}).to_string()));
+                    }
+                }
+            }
+
             if journal["consoleDiagnostics"]["version"] == 1 {
                 match crate::cs2_console::settings(&self.log) {
                     Ok(config)
@@ -1125,6 +1228,10 @@ impl ManagedCs2 {
                 "argumentsScope":"requested-steam-command",
                 "steamInheritedArguments":"unobserved", "actualGameArguments":"unobserved"
             }).to_string()));
+            // Recheck the account and saved key identity immediately before submission.
+            steam.validate(&self.log)?;
+            if any_cs2_running(&self.log)? { return Err("请先退出已打开的 CS2，再由 Mizar 启动。".into()); }
+            if journal["spectatorCfg"] == true { self.store.validate_spectator_launch()?; }
             // Commit the ambiguous-launch marker only after all checks and
             // argument validation, immediately before sending the Steam request.
             let mut time = FileTime::default();
@@ -1135,15 +1242,11 @@ impl ManagedCs2 {
             journal["launchTime"] = json!(launch_time);
             journal["launchAttempted"] = json!(true);
             self.store.save(&journal)?;
-            command
-                .creation_flags(0x08000000)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
+            self.submit_steam(&mut command)
                 .map_err(|error| {
                     self.log.event("cs2_launch", "failure", Some(&format!("stage=steam_spawn; launchTime={launch_time}; code={:?}; cause={error:?}", error.raw_os_error())));
-                    journal["launchAttempted"] = json!(false);
+                    if journal["fullSnapshot"] == true { journal["launchCancelled"] = json!(true); }
+                    else { journal["launchAttempted"] = json!(false); }
                     if journal["spectatorCfg"] == true {
                         if let Err(error) = self.store.spectator_load_attempted(false) {
                             self.log.event("cs2_spectator_restore", "failure", Some(&error));
@@ -1171,6 +1274,17 @@ impl ManagedCs2 {
             Ok(true)
         })();
         self.complete_launch(launch, demo.is_some())
+    }
+    fn submit_steam(&self, command: &mut Command) -> std::io::Result<()> {
+        #[cfg(test)]
+        if let Some(fixture) = &self.launch_fixture {
+            let journal = self.store.load().map_err(std::io::Error::other)?.ok_or_else(|| std::io::Error::other("missing launch journal"))?;
+            let args = command.get_args().map(|v| v.to_string_lossy().into_owned()).collect();
+            fixture.submitted.lock().map_err(|_| std::io::Error::other("fixture lock"))?.push((journal, args));
+            if fixture.fail_submit { return Err(std::io::Error::other("injected Steam request failure")); }
+            return Ok(());
+        }
+        command.creation_flags(0x08000000).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().map(|_| ())
     }
     fn complete_launch(
         &mut self,
@@ -1281,12 +1395,37 @@ impl ManagedCs2 {
         if self.has_external() { return Err("请先退出工作台解除借用；不会向外部游戏写回配置。".into()); }
         let result = self.recover(confirm_steam_cancelled).and_then(|_| {
             if self.store.load()?.is_none() && self.store.spectator_pending() {
+                if self.store.mulnx_observer_unconfirmed()? {
+                    if !confirm_steam_cancelled { return Err("MulNX 启动结果待确认，请先关闭 MulNX 启动器及 CS2，再确认恢复。".into()); }
+                    if !process_pids("CS2Injector.exe", &self.log)?.is_empty() { return Err("MulNX 启动器仍在运行，观战备份仍保留。".into()); }
+                }
                 if any_cs2_running(&self.log)? {
                     return Err("请先退出 CS2 再恢复观战原值。".into());
                 }
                 thread::sleep(Duration::from_millis(1500));
                 if any_cs2_running(&self.log)? {
                     return Err("请先退出 CS2 再恢复观战原值。".into());
+                }
+                if self.store.mulnx_observer_target()?.is_some() && !process_pids("CS2Injector.exe", &self.log)?.is_empty() {
+                    return Err("MulNX 启动器仍在运行，观战备份仍保留。".into());
+                }
+                if let Some((video, executable, account)) = self.store.mulnx_observer_target()? {
+                    let (current_exe, current_video, current_account) = self.recovery_identity()?;
+                    let saved_video = fs::canonicalize(&video).map_err(|e| crate::cs2_session::io_error("观战恢复目标无法确认。", &e))?;
+                    let live_video = fs::canonicalize(&current_video).map_err(|e| crate::cs2_session::io_error("当前账号目标无法确认。", &e))?;
+                    let saved_exe = fs::canonicalize(&executable).map_err(|e| crate::cs2_session::io_error("观战程序无法确认。", &e))?;
+                    let live_exe = fs::canonicalize(&current_exe).map_err(|e| crate::cs2_session::io_error("当前程序无法确认。", &e))?;
+                    if current_account != account || saved_video != live_video || saved_exe != live_exe {
+                        return Err("请登录原 Steam 账号并确认原游戏安装位置后再恢复。".into());
+                    }
+                    // A crash can leave +exec in MulNX even after a game PID was recorded.
+                    // Reconcile the owned launch option before clearing the key backup.
+                    crate::production_exit::prepare_mulnx(&self.log, &executable, false, false)
+                        .map_err(|e| format!("MulNX 启动参数未能清理，观战备份仍保留：{e}"))?;
+                    self.store.mark_mulnx_options_clean()?;
+                    if any_cs2_running(&self.log)? || !process_pids("CS2Injector.exe", &self.log)?.is_empty() {
+                        return Err("游戏或 MulNX 启动器正在运行，观战备份仍保留。".into());
+                    }
                 }
                 if let Err(error) = self.store.restore_spectator() {
                     self.log
@@ -1299,6 +1438,18 @@ impl ManagedCs2 {
                     Some("stage=retry; originalField=restored"),
                 );
                 self.message = Some("观战原值已恢复。".into());
+            }
+            if self.store.load()?.is_none() && self.store.full_spectator_pending() {
+                if any_cs2_running(&self.log)? { return Err("请先退出 CS2 再恢复观战原值。".into()); }
+                thread::sleep(Duration::from_millis(1500));
+                if any_cs2_running(&self.log)? { return Err("请先退出 CS2 再恢复观战原值。".into()); }
+                let (executable, video, account) = self.recovery_identity()?;
+                if any_cs2_running(&self.log)? { return Err("请先退出 CS2 再恢复观战原值。".into()); }
+                if let Some(warning) = self.store.restore_full_pending(&video, &executable, account)? {
+                    self.message = Some(warning.clone());
+                    return Err(warning);
+                }
+                self.message = Some("本地观战原值已恢复。".into());
             }
             if self.store.load()?.is_none() && self.store.playback_cleanup_pending() {
                 if any_cs2_running(&self.log)? {
@@ -1349,7 +1500,8 @@ impl ManagedCs2 {
             crate::demo_test::status(&self.log)?
         } else { Value::Null };
         if trial_state["active"] == true && trial_state["gameOwnership"] == "external" {
-            if self.store.load()?.is_some() || self.store.spectator_pending() || self.store.playback_cleanup_pending() {
+            let borrowed_observer = self.external.as_ref().is_some_and(|external| external.console_source["spectatorCfg"] == true);
+            if self.store.load()?.is_some() || (self.store.spectator_pending() && !borrowed_observer) || self.store.playback_cleanup_pending() {
                 return Err("请先完成受管游戏的配置恢复。".into());
             }
             // The trial owns isolated match data, never the externally launched game.
@@ -1416,6 +1568,180 @@ mod tests {
     // These tests create or inspect machine-wide CS2 / Steam processes. Hold the same
     // gate so the external-game fixture cannot contaminate recovery evidence.
     static GAME_PROCESSES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    #[test]
+    fn standard_start_uses_single_observer_cfg_and_preserves_keys() {
+        let _processes = GAME_PROCESSES.lock().unwrap();
+        for scenario in ["standard", "spawn_failure", "demo"] {
+            let fail = scenario == "spawn_failure";
+            let root = std::env::temp_dir().join(format!("mizar-observer-start-{}-{scenario}", std::process::id()));
+            std::fs::create_dir_all(&root).unwrap();
+            let log = crate::startup_log::DesktopLog::new(&root, None).unwrap();
+            let mut host = ManagedCs2::new(log);
+            let cfg = root.join("steam/userdata/1/730/local/cfg"); std::fs::create_dir_all(&cfg).unwrap();
+            std::fs::create_dir_all(root.join("steam/userdata/1/config")).unwrap();
+            let video = cfg.join("cs2_video.txt");
+            std::fs::write(&video, b"\"video.cfg\" { \"setting.defaultres\" \"1280\" \"setting.defaultresheight\" \"960\" \"setting.fullscreen\" \"1\" }").unwrap();
+            std::fs::write(cfg.join("cs2_machine_convars.vcfg"), b"\"config\" {\"convars\" {\"fps_max\" \"0\" \"spec_usenumberkeys_nobinds\" \"0\"}}").unwrap();
+            let keys = cfg.join("cs2_user_keys_0_slot0.vcfg");
+            let original = "\"config\" {\"bindings\" {\"h\" \"custom\"} \"analogbindings\" {}}";
+            std::fs::write(&keys, original).unwrap();
+            let executable = root.join("game/bin/win64/cs2.exe"); std::fs::create_dir_all(executable.parent().unwrap()).unwrap(); std::fs::write(&executable, b"fixture").unwrap();
+            std::fs::create_dir_all(root.join("game/csgo/cfg")).unwrap();
+            host.store.set_full_optin(1, true).unwrap(); // Existing preference must not start full takeover.
+            let submitted = Arc::new(std::sync::Mutex::new(Vec::new()));
+            host.launch_fixture = Some(LaunchFixture { executable:executable.clone(), video:video.clone(), account:1, fail_submit:fail, submitted:submitted.clone() });
+            host.recovery_identity_fixture = Some((executable.clone(), video.clone(), 1));
+            let result = if scenario == "demo" {
+                host.start_internal(false, Some(("\"C:/fixture.dem\"", "00000000-0000-4000-8000-000000000001")))
+            } else { host.start() };
+            let requests = submitted.lock().unwrap().clone();
+            assert_eq!(requests.len(), 1); let (journal, args) = &requests[0];
+            assert_ne!(journal["fullSnapshot"], true); assert_eq!(journal["nativeHudToggle"], true);
+            let observer_pos = args.windows(2).position(|pair| pair == ["+exec", crate::cs2_spectator::CFG_NAME]).unwrap();
+            if scenario == "demo" {
+                let demo_name = journal["demoPlaybackCfg"]["name"].as_str().unwrap();
+                let demo_pos = args.windows(2).position(|pair| pair[0] == "+exec" && pair[1] == demo_name).unwrap();
+                assert!(observer_pos < demo_pos); // Request order; game execution is verified separately.
+            }
+            assert!(!host.store.full_spectator_pending());
+            if fail { assert!(result.is_err()); } else { assert_eq!(result.unwrap(), true); if scenario != "demo" { host.recover(true).unwrap(); } }
+            assert_eq!(std::fs::read_to_string(&keys).unwrap(), original);
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+    #[test]
+    fn coordinated_faults_recover_through_actual_host_entrypoint() {
+        use crate::cs2_config_identity::{ConfigIdentity, SessionIdentity};
+        use crate::spectator_recovery_plan::{Input, InputKind};
+        use std::path::Path;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static FAIL_AT: AtomicUsize = AtomicUsize::new(0);
+        static COUNT: AtomicUsize = AtomicUsize::new(0);
+        static MODE: AtomicUsize = AtomicUsize::new(0);
+        fn injected(path: &Path, bytes: &[u8]) -> Result<(), String> {
+            let index = COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+            if FAIL_AT.load(Ordering::SeqCst) == index {
+                match MODE.load(Ordering::SeqCst) {
+                    0 => return Err("injected_before".into()),
+                    2 => {
+                        if std::fs::read(path).ok().as_deref() == Some(bytes) { return Err("injected_readback".into()); }
+                        return Ok(());
+                    }
+                    _ => (),
+                }
+            }
+            crate::cs2_session::atomic_write(path, bytes)?;
+            if FAIL_AT.load(Ordering::SeqCst) == index && MODE.load(Ordering::SeqCst) == 1 { return Err("injected_after".into()); }
+            Ok(())
+        }
+        let _processes = GAME_PROCESSES.lock().unwrap();
+        let mut total = 1;
+        let mut unwritten_cases = [0usize; 3];
+        for mode in 0..=2 {
+            let mut target = if mode == 0 { 0 } else { 1 };
+            while target <= total {
+                let root = std::env::temp_dir().join(format!("mizar-host-fault-{}-{mode}-{target}", std::process::id()));
+                let log = crate::startup_log::DesktopLog::new(&root, None).unwrap();
+                let mut host = ManagedCs2::new(log);
+                let cfg = root.join("steam/userdata/1/730/local/cfg"); std::fs::create_dir_all(&cfg).unwrap();
+                let video = cfg.join("cs2_video.txt");
+                let original_video = b"\"video.cfg\" { \"setting.defaultres\" \"1280\" \"setting.defaultresheight\" \"960\" \"setting.fullscreen\" \"1\" }";
+                std::fs::write(&video, original_video).unwrap();
+                let keys = cfg.join("cs2_user_keys_0_slot0.vcfg");
+                let original = "\"config\" {\"bindings\" {\"x\" \"personal\"} \"analogbindings\" {}}";
+                let candidate = "\"config\" {\"bindings\" {\"x\" \"preset\"} \"analogbindings\" {}}";
+                std::fs::write(&keys, original).unwrap();
+                let executable = root.join("game/bin/win64/cs2.exe"); std::fs::create_dir_all(executable.parent().unwrap()).unwrap(); std::fs::write(&executable, b"fixture").unwrap();
+                let session = SessionIdentity { session_id:format!("fault-{mode}-{target}"), config:ConfigIdentity {
+                    account:1, video:std::fs::canonicalize(&video).unwrap(), executable:std::fs::canonicalize(&executable).unwrap(),
+                    keys:std::fs::canonicalize(&keys).unwrap(), slot:0, format:"vcfg".into() }};
+                let x = Input { kind:InputKind::Key, name:"x".into() };
+                FAIL_AT.store(target, Ordering::SeqCst); COUNT.store(0, Ordering::SeqCst); MODE.store(mode, Ordering::SeqCst);
+                let result = host.store.prepare_coordinated_with_writer(&video, &executable,
+                    crate::cs2_video::VideoSize::new(1920,1080).unwrap(), None, &session,
+                    &[x.clone()].into(), &[(x, vec!["preset".into()])].into(), candidate, injected);
+                if target == 0 { result.unwrap(); total = COUNT.load(Ordering::SeqCst); assert!(total >= 6); }
+                else { assert!(result.is_err(), "failure point {target}, mode {mode}"); }
+                FAIL_AT.store(0, Ordering::SeqCst);
+                host.recovery_identity_fixture = Some((executable.clone(), video.clone(), 1));
+                // If only a provably unwritten snapshot remains, a later user edit
+                // must survive the real startup recovery path.
+                let orphan = host.store.load().unwrap().is_none() && host.store.full_spectator_pending();
+                if orphan { std::fs::write(&keys, "\"config\" {\"bindings\" {\"x\" \"external\"} \"analogbindings\" {}}").unwrap(); }
+                let core = host.store.load().unwrap();
+                let snapshot: Option<Value> = std::fs::read(host.store.backup_directory().join("spectator-full-pending.json")).ok()
+                    .map(|bytes| serde_json::from_slice(&bytes).unwrap());
+                let unwritten = core.as_ref().is_some_and(|c| c["configWriteAttempted"] == false && c["launchAttempted"] == false)
+                    && snapshot.as_ref().is_some_and(|s| s["payload"]["coordinatedWriteAttempted"] == false);
+                let manual_key = if mode == 1 { candidate } else { "\"config\" {\"bindings\" {\"x\" \"external\"} \"analogbindings\" {}}" };
+                let manual_video = core.as_ref().and_then(|c| c["applied"].as_str()).map(str::to_owned);
+                if unwritten {
+                    unwritten_cases[mode] += 1;
+                    std::fs::write(&keys, manual_key).unwrap();
+                    std::fs::write(&video, manual_video.as_ref().unwrap()).unwrap();
+                }
+                if host.startup_recovery_status().unwrap().pending { host.restore_at_startup(false).unwrap(); }
+                assert!(!host.startup_recovery_status().unwrap().pending);
+                assert_eq!(std::fs::read(&video).unwrap(), if unwritten { manual_video.unwrap().into_bytes() } else { original_video.to_vec() });
+                let current = std::fs::read_to_string(&keys).unwrap();
+                if unwritten { assert_eq!(current, manual_key); }
+                else { assert!(current.contains(if orphan { "\"x\" \"external\"" } else { "\"x\" \"personal\"" })); }
+                std::fs::remove_dir_all(root).unwrap();
+                target += 1;
+            }
+        }
+        assert!(unwritten_cases.iter().all(|&count| count > 0));
+    }
+
+    #[test]
+    fn coordinated_pending_host_checks_uncertain_launch_identity_and_restores() {
+        use crate::cs2_config_identity::{ConfigIdentity, SessionIdentity};
+        use crate::spectator_recovery_plan::{Input, InputKind};
+        let _processes = GAME_PROCESSES.lock().unwrap();
+        let root = std::env::temp_dir().join(format!("mizar-host-coordinated-{}", std::process::id()));
+        let log = crate::startup_log::DesktopLog::new(&root, None).unwrap();
+        let mut host = ManagedCs2::new(log);
+        let cfg = root.join("steam/userdata/1/730/local/cfg"); std::fs::create_dir_all(&cfg).unwrap();
+        let video = cfg.join("cs2_video.txt");
+        let video_original = b"\"video.cfg\" { \"setting.defaultres\" \"1280\" \"setting.defaultresheight\" \"960\" \"setting.fullscreen\" \"1\" }";
+        std::fs::write(&video, video_original).unwrap();
+        let keys = cfg.join("cs2_user_keys_0_slot0.vcfg");
+        let original = "\"config\" {\"bindings\" {\"x\" \"personal\"} \"analogbindings\" {}}";
+        let candidate = "\"config\" {\"bindings\" {\"x\" \"preset\"} \"analogbindings\" {}}";
+        std::fs::write(&keys, original).unwrap();
+        let executable = root.join("game/bin/win64/cs2.exe"); std::fs::create_dir_all(executable.parent().unwrap()).unwrap(); std::fs::write(&executable, b"fixture").unwrap();
+        let session = SessionIdentity { session_id:"host-session".into(), config:ConfigIdentity {
+            account:1, video:std::fs::canonicalize(&video).unwrap(), executable:std::fs::canonicalize(&executable).unwrap(),
+            keys:std::fs::canonicalize(&keys).unwrap(), slot:0, format:"vcfg".into() }};
+        let x = Input { kind:InputKind::Key, name:"x".into() };
+        let mut journal = host.store.prepare_coordinated(&video, &executable,
+            crate::cs2_video::VideoSize::new(1920,1080).unwrap(), None, &session,
+            &[x.clone()].into(), &[(x, vec!["preset".into()])].into(), candidate).unwrap();
+        // Same marker and persistence entrypoint used immediately before Steam.
+        journal["launchAttempted"] = json!(true); journal["launchTime"] = json!(1);
+        host.store.save(&journal).unwrap();
+        host.recovery_identity_fixture = Some((executable.clone(), video.clone(), 2));
+        let status = host.startup_recovery_status().unwrap(); assert!(status.pending && status.uncertain);
+        assert!(host.restore_at_startup(false).is_err());
+        assert!(host.restore_at_startup(true).is_err()); // Wrong account: no core or key overwrite.
+        assert!(host.store.load().unwrap().is_some());
+        assert!(std::fs::read_to_string(&keys).unwrap().contains("\"x\" \"preset\""));
+        host.recovery_identity_fixture = Some((executable.clone(), video.clone(), 1));
+        host.restore_at_startup(false).unwrap();
+        assert!(!host.startup_recovery_status().unwrap().pending);
+        assert_eq!(std::fs::read(&video).unwrap(), video_original);
+        assert!(std::fs::read_to_string(&keys).unwrap().contains("\"x\" \"personal\""));
+        // A legacy full-only record is also visible and recoverable at startup.
+        let x = Input { kind:InputKind::Key, name:"x".into() };
+        host.store.capture_spectator_snapshot(&video, &executable, 1, &[x.clone()].into(), &[(x, vec!["preset".into()])].into()).unwrap();
+        std::fs::write(&keys, candidate).unwrap();
+        assert!(host.startup_recovery_status().unwrap().pending);
+        host.restore_at_startup(false).unwrap();
+        assert!(!host.startup_recovery_status().unwrap().pending);
+        assert!(std::fs::read_to_string(&keys).unwrap().contains("\"x\" \"personal\""));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn absent_journal_cleanup_does_not_prove_an_external_game_stopped() {
         let _processes = GAME_PROCESSES.lock().unwrap();

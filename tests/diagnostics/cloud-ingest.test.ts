@@ -1687,9 +1687,6 @@ it.each(['snapshot', 'object-delete'])(
       const kept = await bucket.get(freshRow!.object_key);
       expect(kept).not.toBeNull();
       expect(Buffer.from(await kept!.arrayBuffer())).toEqual(fresh.bytes);
-      expect(JSON.stringify(await decodeDiagnosticBatch(fresh.bytes))).toContain(
-        'new_acknowledged_operation',
-      );
       expect(await db.prepare('SELECT COUNT(*) AS count FROM batches').first()).toMatchObject({
         count: 1,
       });

@@ -5,9 +5,15 @@ import type { BroadcastManifest } from '@mizar/rivalhub';
 import { describe, expect, it, vi } from 'vitest';
 import { BombDamageResources } from '../src/projections/bomb-damage-resources.js';
 
-import { createProjectionCoordinator } from '../src/projections/projection-coordinator.js';
+import {
+  createProjectionCoordinator,
+  type ProjectionCoordinatorOptions,
+} from '../src/projections/projection-coordinator.js';
 import { createProgramRuntime } from '../src/runtime/program-runtime.js';
-import { createCstvSourceManagers } from '../src/telemetry/cstv-source-manager.js';
+import {
+  createCstvSourceManagers,
+  createObserverSourceManager,
+} from '../src/telemetry/cstv-source-manager.js';
 import type { TelemetryObservation } from '@mizar/core/telemetry';
 
 function observation(): TelemetryObservation {
@@ -238,13 +244,13 @@ it('publishes assist refreshes independently of Program and public radar snapsho
     }),
   });
   try {
-    const program = coordinator.getPublisher('program').getCurrent();
-    const radar = coordinator.getPublisher('radar').getCurrent();
+    const program = structuredClone(coordinator.getPublisher('program').getCurrent());
+    const radar = structuredClone(coordinator.getPublisher('radar').getCurrent());
     const before = coordinator.getPublisher('assist').getCurrent()!.channelSeq;
     coordinator.resetAssist();
     coordinator.refreshAssist();
-    expect(coordinator.getPublisher('program').getCurrent()).toBe(program);
-    expect(coordinator.getPublisher('radar').getCurrent()).toBe(radar);
+    expect(coordinator.getPublisher('program').getCurrent()).toEqual(program);
+    expect(coordinator.getPublisher('radar').getCurrent()).toEqual(radar);
     expect(coordinator.getPublisher('assist').getCurrent()!.channelSeq).toBeGreaterThan(before);
     expect(JSON.stringify(program)).not.toContain('observer');
   } finally {
@@ -270,12 +276,14 @@ it('keeps calibrated anchors and buffered kills when the lead window is reprojec
   const runtime = createProgramRuntime('lead-calibration-regression');
   let now = 0,
     sequence = 0;
+  const diagnostics = vi.fn<NonNullable<ProjectionCoordinatorOptions['onObserverDiagnostics']>>();
   const settings = { enabled: true, expectedDelaySeconds: 120, leadSeconds: 7 };
   const coordinator = createProjectionCoordinator({
     programRuntime: runtime,
     cstvSources: sources,
     nowMonotonicMs: () => now,
     observerSettings: () => settings,
+    onObserverDiagnostics: diagnostics,
   });
   const send = (time: number, dead: number[] = []) => {
     now = time;
@@ -348,32 +356,233 @@ it('keeps calibrated anchors and buffered kills when the lead window is reprojec
     send(122000, [8, 9]);
     expect(coordinator.getCurrent().assist.observer).toMatchObject({
       state: 'ready',
-      measuredDelaySeconds: 120,
+      timingBasis: 'estimated',
+      waitingReason: 'buffering',
+      nextWindowSeconds: 1,
+      measuredDelaySeconds: null,
       hints: [],
     });
-    const program = coordinator.getPublisher('program').getCurrent();
-    const radar = coordinator.getPublisher('radar').getCurrent();
+    expect(diagnostics.mock.lastCall?.[0].source).toMatchObject({
+      freshness: 'unknown',
+      lastReceiveMonotonicMs: null,
+      receiveAgeMs: null,
+    });
+    const program = structuredClone(coordinator.getPublisher('program').getCurrent());
+    const radar = structuredClone(coordinator.getPublisher('radar').getCurrent());
+    expect(coordinator.getPublisher('assist').getCurrent()!.payload.observer).toMatchObject({
+      timingBasis: 'estimated',
+      nextWindowSeconds: 1,
+    });
     const before = coordinator.getPublisher('assist').getCurrent()!.channelSeq;
     settings.leadSeconds = 10;
     coordinator.refreshAssist();
     expect(coordinator.getCurrent().assist.observer).toMatchObject({
       state: 'ready',
-      measuredDelaySeconds: 120,
+      measuredDelaySeconds: null,
       hints: [{ remainingSeconds: 8, victim: { observerSlot: 7 } }],
     });
     expect(coordinator.getPublisher('assist').getCurrent()!.channelSeq).toBeGreaterThan(before);
-    expect(coordinator.getPublisher('program').getCurrent()).toBe(program);
-    expect(coordinator.getPublisher('radar').getCurrent()).toBe(radar);
+    expect(coordinator.getPublisher('program').getCurrent()).toEqual(program);
+    expect(coordinator.getPublisher('radar').getCurrent()).toEqual(radar);
     settings.expectedDelaySeconds = 130;
     coordinator.resetAssist();
     expect(coordinator.getCurrent().assist.observer).toMatchObject({
-      state: 'aligning',
+      state: 'ready',
       measuredDelaySeconds: null,
+      hints: [],
+    });
+    live.mockReturnValue({
+      ...health,
+      state: 'live',
+      generation: 1,
+      lastReceiveMonotonicMs: now,
+      lastSync: {
+        protocol: 1,
+        tick: 1,
+        ticksPerSecond: 64,
+        fragment: 1,
+        signupFragment: 0,
+        mapName: 'de_ancient',
+        receiveAgeSeconds: 9999,
+      },
+    });
+    coordinator.refreshAssist();
+    expect(coordinator.getCurrent().assist.observer?.state).toBe('ready');
+    live.mockReturnValue({
+      ...health,
+      state: 'live',
+      generation: 1,
+      lastReceiveMonotonicMs: 0,
+      lastSync: {
+        protocol: 1,
+        tick: 1,
+        ticksPerSecond: 64,
+        fragment: 1,
+        signupFragment: 0,
+        mapName: 'de_ancient',
+        receiveAgeSeconds: 30,
+      },
+    });
+    coordinator.refreshAssist();
+    expect(coordinator.getCurrent().assist.observer).toMatchObject({
+      state: 'unavailable',
+      waitingReason: 'source-stale',
+      hints: [],
+    });
+    live.mockReturnValue({
+      ...health,
+      state: 'live',
+      generation: 1,
+      lastReceiveMonotonicMs: now,
+      lastSync: {
+        protocol: 1,
+        tick: 1,
+        ticksPerSecond: 64,
+        fragment: 1,
+        signupFragment: 0,
+        mapName: 'de_nuke',
+        receiveAgeSeconds: 0,
+      },
+    });
+    coordinator.refreshAssist();
+    expect(coordinator.getCurrent().assist.observer).toMatchObject({
+      state: 'unavailable',
+      waitingReason: 'source-map-mismatch',
       hints: [],
     });
   } finally {
     await coordinator.close();
     live.mockRestore();
     subscription.mockRestore();
+  }
+});
+
+it('isolates only observer diagnostic sink failures from assist and Program publication', async () => {
+  const sink = vi.fn(() => {
+    throw new Error('diagnostic disk unavailable');
+  });
+  const onDiagnostic = vi.fn();
+  let businessFailure = false;
+  const coordinator = createProjectionCoordinator({
+    programRuntime: createProgramRuntime('diagnostic-sink-failure'),
+    cstvSources: createCstvSourceManagers({}),
+    observerSettings: () => {
+      if (businessFailure) throw new Error('business settings failure');
+      return { enabled: true, expectedDelaySeconds: 120, leadSeconds: 7 };
+    },
+    onObserverDiagnostics: sink,
+    onDiagnostic,
+  });
+  try {
+    const programSequence = coordinator.getPublisher('program').getCurrent()!.channelSeq;
+    const assistSequence = coordinator.getPublisher('assist').getCurrent()!.channelSeq;
+    expect(() => coordinator.refreshAssist()).not.toThrow();
+    expect(coordinator.getPublisher('assist').getCurrent()!.channelSeq).toBeGreaterThan(
+      assistSequence,
+    );
+    expect(coordinator.getPublisher('program').getCurrent()!.channelSeq).toBe(programSequence);
+    expect(() => coordinator.refresh()).not.toThrow();
+    expect(coordinator.getPublisher('program').getCurrent()!.channelSeq).toBeGreaterThan(
+      programSequence,
+    );
+    expect(sink).toHaveBeenCalled();
+    expect(onDiagnostic).toHaveBeenCalledWith({ code: 'observer-assist-diagnostic-sink-failed' });
+    businessFailure = true;
+    expect(() => coordinator.refreshAssist()).toThrow('business settings failure');
+  } finally {
+    await coordinator.close();
+  }
+});
+
+it('uses actual observer cursor reception without kills and detects an open but silent source', async () => {
+  const initial = matchedObservation(await readManifest());
+  let now = 0,
+    sequence = 0;
+  const diagnostics = vi.fn<NonNullable<ProjectionCoordinatorOptions['onObserverDiagnostics']>>();
+  const identity = {
+    source: 'ahead:cursor-freshness',
+    role: 'ahead' as const,
+    channel: 1,
+    world: 1,
+  };
+  const lookahead = createObserverSourceManager({
+    role: 'lookahead',
+    identity,
+    clock: { now: () => ({ observedAt: '2026-10-25T00:00:00Z', observedMonotonicMs: now }) },
+  });
+  lookahead.start();
+  const sources = { ...createCstvSourceManagers({}), lookahead };
+  const runtime = createProgramRuntime('cursor-freshness');
+  const coordinator = createProjectionCoordinator({
+    programRuntime: runtime,
+    cstvSources: sources,
+    nowMonotonicMs: () => now,
+    observerSettings: () => ({ enabled: true, expectedDelaySeconds: 120, leadSeconds: 7 }),
+    onObserverDiagnostics: diagnostics,
+  });
+  const sendProgram = () =>
+    coordinator.afterRuntimeMutation(
+      runtime.acceptObservation({
+        ...initial,
+        receive: { ...initial.receive, sequence: ++sequence, receivedMonotonicMs: now },
+        coverage: { ...initial.coverage, round: 'present' },
+        telemetry: { ...initial.telemetry, round: { phase: 'live' } },
+      }),
+    );
+  const cursor = (id: number) => ({
+    ...identity,
+    kind: 'cursor',
+    sequence: id,
+    tick: id * 640,
+    tickInterval: 1 / 64,
+    map: 'de_ancient',
+  });
+  try {
+    for (let id = 1; id <= 13; id++) {
+      now = (id - 1) * 10000;
+      lookahead.consumeObserverRecord(cursor(id));
+      sendProgram();
+      expect(coordinator.getCurrent().assist.observer).toMatchObject({
+        state: 'ready',
+        waitingReason: 'waiting-event',
+        hints: [],
+      });
+      expect(diagnostics.mock.lastCall?.[0].source).toMatchObject({
+        freshness: 'fresh',
+        lastReceiveMonotonicMs: now,
+        receiveAgeMs: 0,
+      });
+    }
+    expect(lookahead.getRecentGameEvents()).toEqual([]);
+    expect(lookahead.getHealth().lastSync).toBeUndefined();
+    now += 20001;
+    sendProgram();
+    expect(lookahead.getHealth().state).toBe('live'); // Pipe lifecycle has not ended.
+    expect(coordinator.getCurrent().assist.observer).toMatchObject({
+      state: 'unavailable',
+      waitingReason: 'source-stale',
+      hints: [],
+    });
+    expect(diagnostics.mock.lastCall?.[0].source).toMatchObject({
+      freshness: 'stale',
+      receiveAgeMs: 20001,
+    });
+    lookahead.consumeObserverRecord({ ...cursor(14), tickInterval: 0 });
+    expect(lookahead.getHealth().lastReceiveMonotonicMs).toBe(120000);
+    lookahead.consumeObserverRecord(cursor(15));
+    sendProgram();
+    expect(coordinator.getCurrent().assist.observer?.state).toBe('ready');
+    lookahead.consumeObserverRecord({ ...cursor(16), map: 'de_nuke' });
+    sendProgram();
+    expect(coordinator.getCurrent().assist.observer).toMatchObject({
+      state: 'unavailable',
+      waitingReason: 'source-map-mismatch',
+      hints: [],
+    });
+    lookahead.disconnectObserver();
+    expect(lookahead.getHealth().lastReceiveMonotonicMs).toBeUndefined();
+  } finally {
+    await coordinator.close();
+    await lookahead.stop();
   }
 });

@@ -17,7 +17,7 @@ import { useEffect, useState } from 'react';
 import { OperatorShell } from '../operator/OperatorShell';
 import { RivalHubPreparationPanel } from '../operator/RivalHubPreparationPanel';
 import { RivalHubSyncControls } from '../operator/RivalHubSyncControls';
-import { desktopInvoke } from '../workspace/client';
+import { desktopInvoke, MulnxManualLaunchRequiredError } from '../workspace/client';
 import { LocalTournamentEditor } from '../workspace/LocalTournamentEditor';
 import { Button, Dialog, Panel, StatusBanner, StatusPill } from '../ui';
 import { LocalOverlayControls } from './LocalOverlayControls';
@@ -26,6 +26,7 @@ import { useLocalTournament } from './tournament';
 import { openTool, productionAction, useLocalRead, type Production } from './client';
 import { Settings } from './Settings';
 import { UpdateNotification } from './UpdateNotification';
+import { DiagnosticDeliveryNotice } from '../debug/DiagnosticDeliveryNotice';
 import { SpectatorHudCommands } from './SpectatorHudCommands';
 import { Cs2Recovery } from './Cs2Recovery';
 import { useWorkspaceExitStatus } from './cs2-status';
@@ -45,7 +46,7 @@ const tabs = {
     ['gsi', '游戏与观战'],
     ['obs', 'OBS'],
     ['observer', '观察辅助'],
-    ['music', '音乐'],
+    ['music', '声音'],
     ['camera', '运镜'],
     ['rivalhub', 'RivalHub'],
     ['advanced', '高级'],
@@ -98,6 +99,7 @@ export function PreparationPage() {
     '/local/v1/rivalhub-connection',
   );
   const [message, setMessage] = useState('');
+  const [manualLaunchRequired, setManualLaunchRequired] = useState(false);
   const [busy, setBusy] = useState(false);
   const [demoOpen, setDemoOpen] = useState(() =>
     new URLSearchParams(window.location.search).has('demoTest'),
@@ -110,10 +112,12 @@ export function PreparationPage() {
     if (busy) return;
     setBusy(true);
     setMessage('');
+    setManualLaunchRequired(false);
     try {
       await run();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '操作未完成。');
+      setManualLaunchRequired(error instanceof MulnxManualLaunchRequiredError);
     } finally {
       setBusy(false);
     }
@@ -124,7 +128,10 @@ export function PreparationPage() {
       void fetch('/local/v1/production', { cache: 'no-store' })
         .then((response) => response.json() as Promise<Production>)
         .then((current) => productionAction('enter', current))
-        .catch((error: Error) => setMessage(error.message));
+        .catch((error: unknown) => {
+          setMessage(error instanceof Error ? error.message : '操作未完成。');
+          setManualLaunchRequired(error instanceof MulnxManualLaunchRequiredError);
+        });
     };
     window.addEventListener('mizar-enter', enter);
     return () => window.removeEventListener('mizar-enter', enter);
@@ -158,7 +165,7 @@ export function PreparationPage() {
   const settingsTitle: Record<string, string> = {
     gsi: '游戏设置',
     obs: 'OBS 连接',
-    music: '音乐',
+    music: '声音',
     camera: '运镜',
     observer: '观察辅助',
     rivalhub: '赛事平台',
@@ -192,9 +199,19 @@ export function PreparationPage() {
             打开直播工作台
           </Button>
         </header>
+        {path === '/' && production?.mode === 'preparation' && window.__TAURI_INTERNALS__ ? (
+          <DiagnosticDeliveryNotice />
+        ) : null}
 
         {!(path === '/settings' && tab === 'gsi') ? <Cs2Recovery production={production} /> : null}
-        {message ? <StatusBanner tone="danger">{message}</StatusBanner> : null}
+        {message ? (
+          <StatusBanner tone={manualLaunchRequired ? 'warning' : 'danger'}>
+            {message}
+            {manualLaunchRequired ? (
+              <a href="/settings?tab=camera#mulnx-launch">打开手动启动与游戏交接</a>
+            ) : null}
+          </StatusBanner>
+        ) : null}
         {options ? (
           <nav className="preparation-tabs" aria-label="页面分区">
             {options.map(([key, label]) => (

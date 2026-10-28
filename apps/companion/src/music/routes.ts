@@ -1,6 +1,11 @@
 import { diagnosticValue } from '../support/session-journal.js';
 import type { FastifyInstance } from 'fastify';
-import { musicConfigSchema, MUSIC_GROUPS, type MusicGroup } from '@mizar/protocol/music';
+import {
+  musicConfigSchema,
+  musicPreviewSchema,
+  MUSIC_GROUPS,
+  type MusicGroup,
+} from '@mizar/protocol/music';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 import type { MusicStore } from './store.js';
 import type { MusicDirector } from './director.js';
@@ -29,6 +34,28 @@ export function registerMusicRoutes(
       storage: { ready: store.ready, failed: store.failure },
     });
   });
+  app.post('/operator/music/preview', { bodyLimit: 16 * 1024 }, async (request, reply) => {
+    if (!allowed(request.headers.origin))
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    try {
+      await director.previewRequest(musicPreviewSchema.parse(request.body));
+      return { status: director.get() };
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : 'music_preview_invalid';
+      request.log.info({ stage: 'music_preview_failed', reason }, '音乐试听未执行');
+      return reply.code(400).send({
+        error: reason,
+        message:
+          reason === 'music_preview_storage'
+            ? '音乐存储未就绪，请重新检查。'
+            : reason === 'music_preview_channel_busy'
+              ? '当前音乐正在播放或已人工接管，请先使用“停止音乐”停止当前音乐，再试听。'
+              : reason === 'music_preview_busy'
+                ? '音效通道或其他窗口正在使用试听，请先停止。'
+                : '试听请求已失效或参数无效，请重新试听。',
+      });
+    }
+  });
   app.post('/operator/music', { bodyLimit: 256 * 1024 }, async (request, reply) => {
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
@@ -37,6 +64,11 @@ export function registerMusicRoutes(
       config?: unknown;
       group?: unknown;
       volume?: unknown;
+      trackId?: unknown;
+      entryId?: unknown;
+      cursorMs?: unknown;
+      enabled?: unknown;
+      playbackId?: unknown;
     } | null;
     try {
       if (body?.action === 'reload') {
@@ -57,7 +89,25 @@ export function registerMusicRoutes(
           s.config.groups[body.group as MusicGroup].volume = body.volume as number;
         });
         director.invalidate();
-      } else if (body?.action === 'stop' || body?.action === 'resume' || body?.action === 'next')
+      } else if (
+        body?.action === 'play' &&
+        MUSIC_GROUPS.includes(body.group as MusicGroup) &&
+        (typeof body.trackId === 'string' || typeof body.entryId === 'string') &&
+        (body.trackId === undefined || typeof body.trackId === 'string') &&
+        (body.entryId === undefined || typeof body.entryId === 'string')
+      )
+        await director.manualPlay(body.group as MusicGroup, body.trackId, body.entryId);
+      else if (
+        body?.action === 'seek' &&
+        typeof body.cursorMs === 'number' &&
+        typeof body.playbackId === 'string'
+      )
+        await director.seek(body.cursorMs, body.playbackId);
+      else if (body?.action === 'monitor' && typeof body.enabled === 'boolean')
+        await director.monitor(body.enabled);
+      else if (body?.action === 'pause' || body?.action === 'continue')
+        await director.manualPause(body.action === 'pause');
+      else if (body?.action === 'stop' || body?.action === 'resume' || body?.action === 'next')
         await director.command(body.action);
       else return reply.code(400).send({ error: 'music_command_invalid' });
       return {

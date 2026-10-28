@@ -6,6 +6,7 @@ export interface Cs2ConfigStatus {
   frameRateLimit: 0 | 30 | 60;
   preferMulnx?: boolean;
   spectatorRecoveryPending?: boolean;
+  nativeHudToggle?: boolean;
   demoCleanupPending?: boolean;
   observerHudPending?: boolean;
   spectatorWarning?: string | null;

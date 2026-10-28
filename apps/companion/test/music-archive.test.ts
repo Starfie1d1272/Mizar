@@ -27,7 +27,13 @@ function files() {
 }
 it('imports an ordinary ZIP atomically, reloads it, and preserves the previous config for every rejected package', async () => {
   const s = await store();
+  await s.update((state) => {
+    state.master = 0.4;
+    state.muted = true;
+  });
   await s.import(musicZip(files()));
+  expect(s.state.master).toBe(0.4);
+  expect(s.state.muted).toBe(true);
   expect(s.state.config.groups.waiting.tracks[0]?.name).toBe('等待.wav');
   const before = await readFile(join(s.directory, 'state.json'));
   const bad = [
@@ -100,6 +106,23 @@ it('requires a loopback Origin for mutations and never returns a local absolute 
       });
       expect(result.statusCode).toBe(403);
     }
+    for (const origin of [undefined, 'https://evil.example']) {
+      const result = await app.inject({
+        method: 'POST',
+        url: '/operator/music/preview',
+        headers: { ...(origin ? { origin } : {}) },
+        payload: { action: 'start' },
+      });
+      expect(result.statusCode).toBe(403);
+    }
+    const invalidPreview = await app.inject({
+      method: 'POST',
+      url: '/operator/music/preview',
+      headers: { origin: 'http://127.0.0.1:4173' },
+      payload: { action: 'start', volume: 2, track: { id: '../private.wav' } },
+    });
+    expect(invalidPreview.statusCode).toBe(400);
+    expect(invalidPreview.body).not.toContain(s.directory);
     const imported = await app.inject({
       method: 'POST',
       url: '/operator/music/import',

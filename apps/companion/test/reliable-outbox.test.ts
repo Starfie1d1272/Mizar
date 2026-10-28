@@ -57,6 +57,49 @@ function event(key: string, observedAt = '2026-09-28T00:00:00.000Z'): ReliableEv
 }
 
 describe('bounded reliable output', () => {
+  it('holds later map events behind a retrying map end', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'mizar-map-order-'));
+    try {
+      const outbox = new ReliableOutbox(join(dir, 'outbox.json'));
+      const at = new Date('2026-09-28T00:00:00.000Z');
+      const end = event('end');
+      const boundary = parseReliableEventV1({
+        ...end,
+        idempotencyKey: 'next',
+        kind: 'map_epoch_changed',
+        cursor: { ...end.cursor, mapEpoch: 4, runtimeSeq: 11 },
+        payload: { previousMapEpoch: 3, reason: null },
+      });
+      await outbox.enqueue(end, at);
+      await outbox.enqueue(boundary, at);
+      const sent: string[] = [];
+      await outbox.flush({
+        now: at,
+        isCurrent: () => true,
+        sink: {
+          send: (e) => {
+            sent.push(e.idempotencyKey);
+            return Promise.resolve('retry');
+          },
+        },
+      });
+      expect(sent).toEqual(['end']);
+      await outbox.flush({
+        now: new Date(at.getTime() + 1000),
+        isCurrent: () => true,
+        sink: {
+          send: (e) => {
+            sent.push(e.idempotencyKey);
+            return Promise.resolve('accepted');
+          },
+        },
+      });
+      expect(sent).toEqual(['end', 'end', 'next']);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('dedupes, retries with backoff, and survives a process restart', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'mizar-outbox-'));
     try {

@@ -68,6 +68,11 @@ export function validateObsConfig(value: unknown): ObsConfig {
 }
 
 export class ObsConfigStore {
+  private listeners = new Set<() => void>();
+  onChanged(listener: () => void) {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
   constructor(private readonly filePath: string) {}
   async read(): Promise<ObsConfig> {
     try {
@@ -83,6 +88,7 @@ export class ObsConfigStore {
     try {
       await writeFile(temp, `${JSON.stringify(value)}\n`, { mode: 0o600 });
       await rename(temp, this.filePath);
+      for (const listener of this.listeners) listener();
     } finally {
       await rm(temp, { force: true });
     }

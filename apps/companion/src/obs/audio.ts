@@ -1,3 +1,4 @@
+import { ObsActionError } from './action-error.js';
 import { OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
 import type { ObsFinding, ObsRpc } from './reconcile.js';
 
@@ -7,6 +8,7 @@ const AUDIO_KINDS = new Set([
   'wasapi_input_capture',
   'wasapi_process_output_capture',
 ]);
+const VIDEO_AUDIO_KINDS = new Set(['game_capture', 'window_capture']);
 const MANAGED = [
   { name: 'Mizar · Desktop Audio', kind: 'wasapi_output_capture' },
   { name: 'Mizar · Microphone', kind: 'wasapi_input_capture' },
@@ -16,7 +18,7 @@ const MANAGED = [
 export async function checkObsAudio(obs: ObsRpc): Promise<ObsFinding[]> {
   const inputs = (await obs.call('GetInputList')).inputs as Input[];
   const candidates = inputs.filter((input) => AUDIO_KINDS.has(input.inputKind));
-  for (const input of inputs.filter((item) => item.inputKind === 'game_capture')) {
+  for (const input of inputs.filter((item) => VIDEO_AUDIO_KINDS.has(item.inputKind))) {
     const settings = (await obs.call('GetInputSettings', { inputName: input.inputName }))
       .inputSettings as Record<string, unknown>;
     if (settings.capture_audio === true) candidates.push(input);
@@ -87,16 +89,14 @@ export async function setupObsAudio(obs: ObsRpc, baseUrl: string): Promise<void>
     obs.call('GetRecordStatus'),
     obs.call('GetSceneCollectionList'),
   ]);
-  if (stream.outputActive || record.outputActive)
-    throw new Error('OBS 正在输出；停止推流和录制后配置音频。');
+  if (stream.outputActive || record.outputActive) throw new ObsActionError('output_active_audio');
   if (collection.currentSceneCollectionName !== OBS_COLLECTION)
-    throw new Error('请先修复并切换到 Mizar 场景集合。');
+    throw new ObsActionError('collection_inactive');
   const inputs = (await obs.call('GetInputList')).inputs as Input[];
-  for (const input of inputs.filter((item) => item.inputKind === 'game_capture')) {
+  for (const input of inputs.filter((item) => VIDEO_AUDIO_KINDS.has(item.inputKind))) {
     const settings = (await obs.call('GetInputSettings', { inputName: input.inputName }))
       .inputSettings as Record<string, unknown>;
-    if (settings.capture_audio === true)
-      throw new Error('游戏捕获已开启音频，请在 OBS 中配置麦克风，以免重复采集游戏声音。');
+    if (settings.capture_audio === true) throw new ObsActionError('video_audio_active');
   }
   if (
     inputs.some(
@@ -104,11 +104,11 @@ export async function setupObsAudio(obs: ObsRpc, baseUrl: string): Promise<void>
         AUDIO_KINDS.has(input.inputKind) && !MANAGED.some((item) => item.name === input.inputName),
     )
   )
-    throw new Error('已有自定义音频来源，请在 OBS 中配置，以免重复采集。');
+    throw new ObsActionError('custom_audio');
   for (const managed of MANAGED) {
     const existing = inputs.find((input) => input.inputName === managed.name);
     if (existing && existing.inputKind !== managed.kind)
-      throw new Error('Mizar 音频来源名称冲突，请在 OBS 中核对。');
+      throw new ObsActionError('audio_name_conflict');
     let created = Boolean(existing);
     for (const scene of obsDesiredScenes(baseUrl)) {
       if (!created) {
@@ -143,7 +143,7 @@ export async function ensureObsAudio(obs: ObsRpc, baseUrl: string): Promise<ObsF
       !MANAGED.some((managed) => managed.name === input.inputName),
   );
   let gameAudio = false;
-  for (const input of inputs.filter((item) => item.inputKind === 'game_capture')) {
+  for (const input of inputs.filter((item) => VIDEO_AUDIO_KINDS.has(item.inputKind))) {
     const settings = (await obs.call('GetInputSettings', { inputName: input.inputName }))
       .inputSettings as Record<string, unknown>;
     if (settings.capture_audio === true) gameAudio = true;

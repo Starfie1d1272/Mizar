@@ -18,12 +18,12 @@ it('persists operator timing and keeps per-match connection credentials in memor
     const path = join(directory, 'observer-assist.json'),
       store = new ObserverSettingsStore(path);
     await store.load();
-    expect(store.settings).toEqual(DEFAULT_OBSERVER_SETTINGS);
-    await store.configure({ ...store.settings, enabled: true, leadSeconds: 8 });
+    expect(store.settings.leadSeconds).toBe(5);
+    await store.configure({ ...store.settings, enabled: true, leadSeconds: 7 });
     await store.configureGame({ autoConnect: false, hideGameHud: false });
     const preferences = new ObserverSettingsStore(path);
     await preferences.load();
-    expect(preferences.settings.leadSeconds).toBe(8);
+    expect(preferences.settings.leadSeconds).toBe(7);
     expect(preferences.gameAutomation).toEqual({ autoConnect: false, hideGameHud: false });
     store.setConnection({
       earlyEndpoint: '127.0.0.1:27025',
@@ -36,7 +36,7 @@ it('persists operator timing and keeps per-match connection credentials in memor
     await writeFile(path, JSON.stringify({ ...store.settings, displaySeconds: 10 }));
     const restart = new ObserverSettingsStore(path);
     await restart.load();
-    expect(restart.settings.leadSeconds).toBe(8);
+    expect(restart.settings.leadSeconds).toBe(7);
     expect(restart.settings).not.toHaveProperty('displaySeconds');
     expect(restart.configured()).toBeUndefined();
     store.clearConnection();
@@ -75,6 +75,40 @@ it('applies origin and payload validation to private settings writes', async () 
     });
     expect(response.statusCode).toBe(200);
     expect(store.settings.enabled).toBe(true);
+  } finally {
+    await app.close();
+  }
+});
+
+it('rejects a stale workbench draft after the current match connection changes', async () => {
+  const app = Fastify();
+  const store = new ObserverSettingsStore();
+  registerObserverSettings(app, store, {
+    mode: 'loopback',
+    bindHost: '127.0.0.1',
+    allowedOrigins: [],
+  });
+  const original = store.revision;
+  const connection = {
+    earlyEndpoint: '127.0.0.1:27025',
+    programEndpoint: '127.0.0.1:27026',
+    password: 'synthetic',
+  };
+  const write = (expectedRevision: string) =>
+    app.inject({
+      method: 'POST',
+      url: '/operator/observer-assist',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: { action: 'connection', expectedRevision, connection },
+    });
+  try {
+    expect((await write(original)).statusCode).toBe(200);
+    const current = store.revision;
+    expect((await write(current)).statusCode).toBe(200);
+    expect(store.revision).toBe(current);
+    store.clearConnection(); // Existing match-change cleanup invalidates the open draft.
+    expect((await write(current)).statusCode).toBe(409);
+    expect(store.configured()).toBeUndefined();
   } finally {
     await app.close();
   }
@@ -134,15 +168,35 @@ it('refreshes only the private projection for lead saves and resets alignment fo
     await app.ready();
     reset.mockClear();
     refresh.mockClear();
-    const program = coordinator.getPublisher('program').getCurrent();
     expect((await save(10)).statusCode).toBe(200);
     expect(reset).not.toHaveBeenCalled();
     expect(refresh).toHaveBeenCalledTimes(1);
-    expect(coordinator.getPublisher('program').getCurrent()).toBe(program);
     await save(10);
     expect(refresh).toHaveBeenCalledTimes(1);
     await save(10, 130);
     expect(reset).toHaveBeenCalledTimes(1);
+    const connection = {
+      earlyEndpoint: '127.0.0.1:27025',
+      programEndpoint: '127.0.0.1:27026',
+      password: 'map-one',
+    };
+    const confirm = (value: typeof connection) =>
+      app.inject({
+        method: 'POST',
+        url: '/operator/observer-assist',
+        headers: { origin: 'http://127.0.0.1:3000' },
+        payload: { action: 'connection', connection: value },
+      });
+    await confirm(connection);
+    expect(reset).toHaveBeenCalledTimes(2);
+    await confirm(connection);
+    expect(reset).toHaveBeenCalledTimes(2);
+    await confirm({
+      earlyEndpoint: '127.0.0.2:27035',
+      programEndpoint: '127.0.0.2:27036',
+      password: 'map-two',
+    });
+    expect(reset).toHaveBeenCalledTimes(3); // New addresses invalidate old alignment and buffered hints.
   } finally {
     await app.close();
   }

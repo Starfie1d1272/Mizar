@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import type { BroadcastManifest } from '@mizar/rivalhub';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   MatchContextController,
@@ -112,5 +112,107 @@ describe('Match Manifest last-known-good seam', () => {
     await controller.refreshOnlineMatch(source('online', changed), () => false);
     expect(controller.getActiveBinding()?.manifest.maps[1]?.teamAStartSide).toBe('ct');
     expect(controller.getPendingOnlineCandidate()).toBeDefined();
+  });
+});
+
+describe('explicit online library load', () => {
+  async function setup() {
+    const root = await temporaryDirectory();
+    const manifest = await readFixture<BroadcastManifest>('broadcast-manifest-v1.valid.json');
+    const store = new MatchManifestLkgStore({ filePath: join(root, 'library-load.json') });
+    const controller = new MatchContextController({ lkgStore: store });
+    controller.activateFixture(manifest);
+    const next = {
+      ...manifest,
+      revision: 'next-revision',
+      match: { ...manifest.match, matchId: 'next-match' },
+    };
+    return { controller, manifest, next, store };
+  }
+
+  it('loads and persists in one action, clears the candidate, and is idempotent', async () => {
+    const { controller, next, store } = await setup();
+    expect((await controller.loadOnlineMatch(next.match.matchId, source('online', next))).ok).toBe(
+      true,
+    );
+    expect(controller.getActiveBinding()?.context.matchId).toBe(next.match.matchId);
+    expect(controller.getPendingOnlineCandidate()).toBeUndefined();
+    const saved = await store.readLatest();
+    expect(saved.ok && saved.value.context.matchId).toBe(next.match.matchId);
+    const revision = controller.getActiveRevision();
+    expect((await controller.loadOnlineMatch(next.match.matchId, source('online', next))).ok).toBe(
+      true,
+    );
+    expect(controller.getActiveRevision()).toBe(revision);
+  });
+
+  it('keeps the current match on acquisition failure and preserves stage-only compatibility', async () => {
+    const { controller, next } = await setup();
+    const old = structuredClone(controller.getActiveBinding());
+    expect(
+      (
+        await controller.loadOnlineMatch(next.match.matchId, {
+          kind: 'online',
+          load: () => Promise.reject(new SourceLoadError('offline')),
+        })
+      ).ok,
+    ).toBe(false);
+    expect(controller.getActiveBinding()).toEqual(old);
+    expect((await controller.stageOnlineMatch(next.match.matchId, source('online', next))).ok).toBe(
+      true,
+    );
+    expect(controller.getActiveBinding()).toEqual(old);
+    expect(controller.getPendingOnlineCandidate()?.binding.context.matchId).toBe(
+      next.match.matchId,
+    );
+  });
+
+  it('does not overwrite a newer selection when a slow acquisition completes', async () => {
+    const { controller, manifest, next } = await setup();
+    let release!: (value: unknown) => void;
+    const slow = controller.loadOnlineMatch(next.match.matchId, {
+      kind: 'online',
+      load: () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    });
+    expect(
+      (await controller.loadOnlineMatch(manifest.match.matchId, source('online', manifest))).ok,
+    ).toBe(true);
+    release(next);
+    expect((await slow).ok).toBe(false);
+    expect(controller.getActiveBinding()?.context.matchId).toBe(manifest.match.matchId);
+  });
+
+  it('refuses activation if the current context changes during acquisition', async () => {
+    const { controller, manifest, next } = await setup();
+    let release!: (value: unknown) => void;
+    const slow = controller.loadOnlineMatch(next.match.matchId, {
+      kind: 'online',
+      load: () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    });
+    controller.activateFixture(manifest);
+    const changed = structuredClone(controller.getActiveBinding());
+    release(next);
+    expect((await slow).ok).toBe(false);
+    expect(controller.getActiveBinding()).toEqual(changed);
+  });
+
+  it('keeps the active match when durable publication fails', async () => {
+    const { controller, next, store } = await setup();
+    const old = structuredClone(controller.getActiveBinding());
+    const save = vi.spyOn(store, 'save').mockRejectedValueOnce(new Error('synthetic disk failure'));
+    await expect(
+      controller.loadOnlineMatch(next.match.matchId, source('online', next)),
+    ).rejects.toThrow('synthetic disk failure');
+    expect(controller.getActiveBinding()).toEqual(old);
+    expect(controller.getPendingOnlineCandidate()?.binding.context.matchId).toBe(
+      next.match.matchId,
+    );
+    save.mockRestore();
   });
 });

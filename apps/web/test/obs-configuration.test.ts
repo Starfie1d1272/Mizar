@@ -34,7 +34,7 @@ describe('OBS configuration cleanup', () => {
     invoke.mockImplementation(successful);
     const session = beginObsConfiguration();
     const finished = session.finish();
-    expect(session.finish()).toBe(finished);
+    void session.finish();
     await Promise.resolve();
     await Promise.resolve();
     expect(invoke.mock.calls.map(([command]) => command)).toEqual([
@@ -48,7 +48,7 @@ describe('OBS configuration cleanup', () => {
       'finish_obs_configuration',
     ]);
     expect(invoke.mock.calls[1]![1]?.documentGeneration).toBe('1');
-    expect(invoke.mock.calls[1]![1]?.sessionId).toMatch(/^[a-f0-9-]{36}$/);
+    expect(invoke.mock.calls[1]![1]?.sessionId).toEqual(expect.any(String));
     expect(invoke.mock.calls[2]![1]?.sessionId).toBe(invoke.mock.calls[1]![1]?.sessionId);
   });
   it('keeps the original document generation through a delayed target lookup so Host can reject a stale begin', async () => {

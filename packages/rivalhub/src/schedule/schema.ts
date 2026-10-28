@@ -19,6 +19,7 @@ export const broadcastScheduleEntrantSchema = z.object({
 
 export const broadcastScheduleMatchSchema = z.object({
   matchId: z.string(),
+  assignedToViewer: z.boolean().optional(),
   scheduledAt: nullableStringSchema,
   startedAt: nullableStringSchema,
   completedAt: nullableStringSchema,
@@ -40,6 +41,12 @@ export const broadcastScheduleMatchSchema = z.object({
 export const broadcastScheduleWindowSchema = z.object({
   schemaVersion: z.literal(BROADCAST_SCHEDULE_WINDOW_SCHEMA_VERSION),
   revision: z.string(),
+  viewer: z
+    .object({
+      userId: z.string().trim().min(1).max(128),
+      displayName: z.string().trim().min(1).max(256),
+    })
+    .optional(),
   competition: broadcastScheduleCompetitionSchema,
   from: z.string(),
   to: z.string(),

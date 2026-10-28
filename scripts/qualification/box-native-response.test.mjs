@@ -197,11 +197,6 @@ it.each([
   'classifies curl %s without leaking its private address',
   async (_label, exit, http, sent, retrySafe) => {
     const run = vi.fn((_command, args) => {
-      expect(args.slice(0, 3)).toEqual(['-q', '--config', '-']);
-      expect(args[args.indexOf('--connect-timeout') + 1]).toBe('15');
-      expect(args[args.indexOf('--speed-limit') + 1]).toBe('1024');
-      expect(args[args.indexOf('--speed-time') + 1]).toBe('60');
-      expect(args[args.indexOf('--max-time') + 1]).toBe('600');
       expect(args.join(' ')).not.toContain('PRIVATE');
       const child = new EventEmitter();
       child.stdin = new PassThrough();

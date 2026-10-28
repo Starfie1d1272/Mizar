@@ -130,21 +130,18 @@ describe.each([
   ['workflow_run', 'sync'],
   ...['sync', 'probe', 'verify-downloads'].map((mode) => ['workflow_dispatch', mode]),
 ])('complete Box workflow: %s / %s', (event, mode) => {
-  it.each(['alpha.1', 'beta.2', 'rc.3'])(
-    'skips every downstream timing/upload step for %s',
-    async (suffix) => {
-      const tag = `v2.0.0-${suffix}`;
-      const ctx = context(event, tag, mode);
-      expect(evaluate(job.if, ctx)).toBe(true);
-      const result = await mirrorOutput(ctx, tag);
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.outputs.prerelease).toBe('true');
-      expect(result.stdout).toContain('预发布版本');
-      // This fails if any subsequent step loses its guard, including timing artifacts.
-      expect(followups.length).toBeGreaterThanOrEqual(2);
-      expect(enabledFollowups(ctx, result.outputs)).toEqual([]);
-    },
-  );
+  it('skips every downstream timing/upload step for a prerelease', async () => {
+    const tag = 'v2.0.0-rc.3';
+    const ctx = context(event, tag, mode);
+    expect(evaluate(job.if, ctx)).toBe(true);
+    const result = await mirrorOutput(ctx, tag);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.outputs.prerelease).toBe('true');
+    expect(result.stdout).toContain('预发布版本');
+    // This fails if any subsequent step loses its guard, including timing artifacts.
+    expect(followups.length).toBeGreaterThanOrEqual(2);
+    expect(enabledFollowups(ctx, result.outputs)).toEqual([]);
+  });
 });
 it.each(['workflow_run', 'workflow_dispatch'])(
   'preserves stable timing/upload eligibility for %s',

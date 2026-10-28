@@ -6,6 +6,7 @@ import {
   obsDesiredScenes,
 } from './desired-state.js';
 import type { ProgramSceneId, ProgramTransition } from '@mizar/protocol/program-scenes';
+import { ObsActionError } from './action-error.js';
 
 export interface ObsRpc {
   call(type: string, data?: Record<string, unknown>): Promise<Record<string, unknown>>;
@@ -317,7 +318,7 @@ export async function repairObsConfiguration(
     return before;
   if (!before.some((finding) => !['video_settings', 'transition_missing'].includes(finding.code)))
     return before;
-  if (await outputActive(obs)) throw new Error('OBS 正在输出；结束输出后可修复制播配置。');
+  if (await outputActive(obs)) throw new ObsActionError('output_active_repair');
   const collections = await obs.call('GetSceneCollectionList');
   const exists = collectionNames(collections.sceneCollections).includes(OBS_COLLECTION);
   if (
@@ -541,7 +542,7 @@ export async function ensureObsConfiguration(
         ['scene_missing', 'source_kind_conflict', 'transition_missing'].includes(item.code),
       )
     ) {
-      if (await outputActive(obs)) throw new Error('OBS 正在输出，暂不切换节目。');
+      if (await outputActive(obs)) throw new ObsActionError('output_active_switch');
       await switchObsScene(obs, activeScene());
     }
     return repaired;

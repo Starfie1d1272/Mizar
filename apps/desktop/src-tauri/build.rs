@@ -29,6 +29,8 @@ fn main() {
             "restore_cs2_backup",
             "open_cs2_backup",
             "set_cs2_preferences",
+            "get_full_spectator_preference",
+            "set_full_spectator_preference",
             "open_main",
             "present_production",
             "open_tool",

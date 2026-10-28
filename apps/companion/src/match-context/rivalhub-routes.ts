@@ -56,8 +56,8 @@ export function registerRivalHubConnectionRoutes(
       ? binding
       : undefined;
   };
-  const sourceFor = (matchId: string) => {
-    const source = options.connection.matchSource(matchId);
+  const sourceFor = (matchId: string, fresh = true) => {
+    const source = options.connection.matchSource(matchId, fresh);
     return {
       ...source,
       load: async () => {
@@ -73,7 +73,7 @@ export function registerRivalHubConnectionRoutes(
       },
     };
   };
-  const refresh = () => {
+  const refresh = (fresh = true) => {
     if (refreshing) return refreshing;
     const binding = linkedBinding();
     if (!binding || !options.controller) throw new Error('请先选择并确认加载赛事比赛。');
@@ -83,7 +83,7 @@ export function registerRivalHubConnectionRoutes(
       throw new Error('请先确认或重新选择待加载的比赛。');
     const controller = options.controller;
     refreshing = controller
-      .refreshOnlineMatch(sourceFor(binding.context.matchId), options.canUpdatePlan)
+      .refreshOnlineMatch(sourceFor(binding.context.matchId, fresh), options.canUpdatePlan)
       .then((result) => {
         if (!result.ok) {
           app.log.warn(
@@ -115,7 +115,7 @@ export function registerRivalHubConnectionRoutes(
   const timer = setInterval(() => {
     if (linkedBinding() && !options.controller?.isOnlineCandidateLoading())
       void Promise.resolve()
-        .then(refresh)
+        .then(() => refresh(false))
         .catch(() => undefined);
   }, 10_000);
   timer.unref();
@@ -224,6 +224,25 @@ export function registerRivalHubConnectionRoutes(
       return reply.code(502).send({ message: '赛事赛程暂时无法获取。' });
     }
   });
+  app.get<{ Params: { matchId: string }; Querystring: { fresh?: string } }>(
+    '/local/v1/rivalhub-library/:matchId',
+    async (request, reply) => {
+      if (!options.connection.view().paired)
+        return reply.code(404).send({ message: '尚未连接赛事。' });
+      try {
+        return reply
+          .header('cache-control', 'no-store')
+          .send(
+            await options.connection.libraryDetail(
+              request.params.matchId,
+              request.query.fresh !== '0',
+            ),
+          );
+      } catch {
+        return reply.code(502).send({ message: '完整资料暂时无法获取，请重试。' });
+      }
+    },
+  );
   app.post('/operator/rivalhub/disconnect', async (request, reply) => {
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ message: '本机页面来源无效。' });
@@ -267,13 +286,31 @@ export function registerRivalHubConnectionRoutes(
   app.post('/operator/rivalhub/select', { bodyLimit: 256 }, async (request, reply) => {
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ message: '本机页面来源无效。' });
-    const body = request.body as { matchId?: unknown };
+    const body = request.body as { matchId?: unknown; activate?: unknown };
     if (!options.controller || typeof body?.matchId !== 'string')
       return reply.code(400).send({ message: '请选择一场比赛。' });
     try {
       const source = sourceFor(body.matchId);
-      const outcome = await options.controller.stageOnlineMatch(body.matchId, source);
-      if (outcome.ok) return { pending: true };
+      const outcome =
+        body.activate === true
+          ? await options.controller.loadOnlineMatch(body.matchId, source)
+          : await options.controller.stageOnlineMatch(body.matchId, source);
+      if (outcome.ok)
+        return body.activate === true
+          ? { loaded: true, matchId: outcome.binding.context.matchId }
+          : { pending: true };
+      if (body.activate === true) {
+        const persistenceFailed = outcome.diagnostics.some(
+          (item) => item.code === 'lkg_persistence_failed',
+        );
+        const stale = outcome.diagnostics.some((item) => item.code === 'selection_stale');
+        if (persistenceFailed || stale)
+          return reply.code(persistenceFailed ? 500 : 409).send({
+            message: persistenceFailed
+              ? '比赛保存失败，当前本场保持不变，请重试。'
+              : '本场或候选资料已变化，尚未载入，请重新选择。',
+          });
+      }
       // Diagnostics contain contract paths/codes only, never rejected input values.
       request.log.warn({ diagnostics: outcome.diagnostics }, 'RivalHub manifest selection failed');
       const fields = outcome.diagnostics

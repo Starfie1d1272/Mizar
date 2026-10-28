@@ -1,0 +1,26 @@
+{
+  "sourceSha": "5085151e7e3f0273bcf8fab8e034ba2bb1b9580f",
+  "generatedAt": "2026-10-26T02:03:44.224Z",
+  "fixture": "tests/integration/db/harness/mizar.ts::seedFixture + two local schedule matches",
+  "database": "disposable loopback PostgreSQL worker database",
+  "newScheduleSource": "actual GET /api/mizar/schedule route response body",
+  "oldScheduleSource": "actual loadMizarScheduleWindow(competitionId, from, to), viewer argument omitted",
+  "pollIdentitySource": "actual POST /api/mizar/pairing/poll response, whitelisted status/displayName/authorizedUser only",
+  "pollIdentityIsPartial": true,
+  "credentialsIncluded": false,
+  "matchCount": 3,
+  "assignedToViewerCount": 1,
+  "sameNamePeerAssignmentIncluded": true,
+  "response": {
+    "status": 200,
+    "etag": "\"8c89972fae7a29ad3060a20637b4d3dfdb9a09583a1c6b3ea55b551894b4689b\"",
+    "cacheControl": "private, no-cache",
+    "vary": "Authorization"
+  },
+  "assertions": [
+    "new viewer equals actual poll authorizedUser",
+    "new and old revisions recompute from full respective payload",
+    "removing only viewer/assignedToViewer/revision yields exactly the old payload",
+    "same-name peer assignment is not assignedToViewer"
+  ]
+}

@@ -111,7 +111,7 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
           ) : null}
           {uncertain && !exit.busy ? (
             <Checkbox
-              label="已取消 Steam 启动请求，并确认 CS2 已关闭"
+              label="已取消启动请求，并确认 CS2 与 MulNX 启动器已关闭"
               checked={cancelled}
               onChange={(event) => setCancelled(event.target.checked)}
             />
@@ -333,10 +333,16 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
           ) : null}
           {status?.spectatorRecoveryPending ? (
             <Button
-              disabled={busy || Boolean(phase) || Boolean(status.running)}
+              disabled={
+                busy || Boolean(phase) || Boolean(status.running) || (uncertain && !cancelled)
+              }
               onClick={() =>
                 void run((task) =>
-                  desktopInvoke('restore_cs2_backup', { confirmSteamCancelled: false }, task),
+                  desktopInvoke(
+                    'restore_cs2_backup',
+                    { confirmSteamCancelled: uncertain && cancelled },
+                    task,
+                  ),
                 )
               }
             >

@@ -11,7 +11,12 @@ export const assistPayloadSchema = z.object({
   availability: z.enum(['unavailable', 'available']),
   observer: z
     .object({
-      state: z.enum(['connecting', 'aligning', 'ready', 'paused', 'unavailable']),
+      state: z.enum(['connecting', 'ready', 'paused', 'unavailable']),
+      timingBasis: z.literal('estimated'),
+      calibrationState: z.enum(['uncalibrated', 'measured', 'held', 'reacquiring']).optional(),
+      effectiveDelaySeconds: z.number().finite().nonnegative().optional(),
+      waitingReason: z.string().max(64).nullable(),
+      nextWindowSeconds: z.number().finite().nonnegative().nullable(),
       expectedDelaySeconds: z.number().finite(),
       leadSeconds: z.number().finite(),
       measuredDelaySeconds: z.number().finite().nullable(),
@@ -46,7 +51,7 @@ export type ObserverSettings = z.infer<typeof observerSettingsSchema>;
 export const DEFAULT_OBSERVER_SETTINGS: ObserverSettings = {
   enabled: false,
   expectedDelaySeconds: 120,
-  leadSeconds: 7,
+  leadSeconds: 5,
 };
 
 export const gameAutomationSettingsSchema = z.strictObject({
@@ -66,7 +71,9 @@ const endpoint = z
   .refine((v) => {
     const [ip, port] = v.split(':');
     return (
-      ip!.split('.').every((n) => Number(n) <= 255) && Number(port) > 0 && Number(port) <= 65535
+      ip!.split('.').every((n) => (n === '0' || !n.startsWith('0')) && Number(n) <= 255) &&
+      Number(port) > 0 &&
+      Number(port) <= 65535
     );
   }, '请填写有效的数字 IP 和端口');
 export const observerConnectionSchema = z
@@ -88,13 +95,24 @@ export function parseObserverConnection(
   programEndpoint?: string,
   earlyOverride?: string,
 ): ObserverConnection {
-  const match =
-    /^(?:connect\s+)?(\d{1,3}(?:\.\d{1,3}){3}:\d{1,5})(?:\s*;\s*password\s+(?:"([^";\\]*)"|([^;"\\]*)))?\s*;?\s*$/i.exec(
-      input.trim(),
-    );
-  if (!match || input.length > 512)
+  if (input.length > 512 || /[\r\n\0]/.test(input))
     throw new Error('请粘贴 GOTV 地址或 connect 地址；password 密码');
-  const supplied = match[1]!;
+  // No escaping or arbitrary console grammar: exactly one endpoint and at most one password.
+  const commands = input.trim().replace(/;\s*$/, '').split(';');
+  let supplied: string | undefined;
+  let password: string | undefined;
+  for (const command of commands) {
+    const connect =
+      /^(?:connect\s+)?(?:"(\d{1,3}(?:\.\d{1,3}){3}:\d{1,5})"|(\d{1,3}(?:\.\d{1,3}){3}:\d{1,5}))\s*$/i.exec(
+        command.trim(),
+      );
+    const secret = /^password\s+(?:"([^";\\]*)"|([^;"\\]*))\s*$/i.exec(command.trim());
+    if (connect && supplied === undefined) supplied = connect[1] ?? connect[2]!;
+    else if (secret && password === undefined) password = secret[1] ?? secret[2]!.trim();
+    else throw new Error('请只填写一条连接和可选的 password 密码');
+  }
+  if (!supplied) throw new Error('请填写 GOTV 数字 IP 和端口');
+  endpoint.parse(supplied);
   const colon = supplied.lastIndexOf(':');
   const port = Number(supplied.slice(colon + 1));
   if (!programEndpoint?.trim() && port !== 27025 && port !== 27026)
@@ -103,8 +121,14 @@ export function parseObserverConnection(
   return observerConnectionSchema.parse({
     earlyEndpoint: earlyOverride?.trim() || earlyEndpoint,
     programEndpoint: programEndpoint?.trim() || supplied.slice(0, colon + 1) + '27026',
-    password: match[2] ?? (match[3] ?? '').trim(),
+    password: password ?? '',
   });
+}
+
+/** Safe console output shared by native automation and the connection clipboard. */
+export function formatObserverConnection(connection: ObserverConnection): string {
+  const parsed = observerConnectionSchema.parse(connection);
+  return `password "${parsed.password}"; connect ${parsed.programEndpoint}`;
 }
 
 export const assistSnapshotSchema = localSnapshotEnvelopeSchema.extend({

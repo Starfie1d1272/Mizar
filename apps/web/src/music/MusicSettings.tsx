@@ -1,7 +1,9 @@
+import { useMusicPreview } from './useMusicPreview';
 import { controlEvidence, browserErrorEvidence } from '../debug/control-journal';
 import { useState } from 'react';
 import {
   MUSIC_GROUPS,
+  musicConfigSchema,
   type MusicConfig,
   type MusicGroup,
   type MusicTrack,
@@ -62,7 +64,8 @@ async function localFile(url: string, file: File, type: string) {
   }
   return response.json() as Promise<MusicView & MusicTrack>;
 }
-export function MusicSettings() {
+export function MusicSettings({ active = true }: { active?: boolean }) {
+  const preview = useMusicPreview(active);
   const current = useLocalRead<MusicView>('/local/v1/music', 2000);
   const [selectedGroup, setSelectedGroup] = useState<MusicGroup>('waiting');
   const [draft, setConfig] = useState<MusicConfig | null>(null);
@@ -74,6 +77,8 @@ export function MusicSettings() {
   const config = draft ?? current?.config ?? null;
   const change = (group: MusicGroup, patch: Partial<MusicConfig['groups'][MusicGroup]>) => {
     controlEvidence('music_draft', 'change', { group, patch });
+    if (patch.volume !== undefined) preview.volume(group, patch.volume);
+    else void preview.stop();
     setDirty(true);
     setMessage('');
     setConfig((c) => {
@@ -106,22 +111,10 @@ export function MusicSettings() {
       <Panel className="music-settings-playback">
         <div className="music-settings-playback-intro">
           <h2>当前播放</h2>
-          <p>由 OBS 播放。这里的操作立即生效；调整播放音量也会保存到对应场景。</p>
+          <p>由 OBS 播放。这里的播放操作和音乐总音量立即生效。</p>
         </div>
-        <MusicControls
-          volumeDisabled={busy || dirty}
-          onVolumeChange={(group, volume) => {
-            setConfig((previous) =>
-              previous
-                ? {
-                    ...previous,
-                    groups: { ...previous.groups, [group]: { ...previous.groups[group], volume } },
-                  }
-                : null,
-            );
-          }}
-        />
-        {dirty ? <p>请先保存场景配置，再调整当前播放音量。</p> : null}
+        <MusicControls volumeDisabled={busy || dirty} />
+        {dirty ? <p>请先保存场景配置，再选择正式播放曲目。</p> : null}
         {current?.storage && (!current.storage.ready || current.storage.failed) ? (
           <StatusBanner tone="danger">
             音乐存储未就绪，原配置未加载。请检查数据目录权限或状态文件后重新检查。
@@ -138,84 +131,127 @@ export function MusicSettings() {
             </Button>
           </StatusBanner>
         ) : null}
-        <details className="music-settings-import">
-          <summary>导入音乐包</summary>
-          <Button
-            onClick={() => {
-              if (window.__TAURI_INTERNALS__)
-                void action(() => desktopInvoke<void>('open_music_downloads'));
-              else
-                window.open(
-                  'https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/?p=/Music',
-                  '_blank',
-                  'noopener,noreferrer',
-                );
-            }}
-          >
-            下载音乐包（Box）
-          </Button>
-          <p>在浏览器中选择并下载音乐包，再在下方导入 ZIP。</p>
-          <Field
-            label="一键导入音乐包"
-            message="选择含 music.json 和相对路径音频的 ZIP（最大 128 MiB）。验证成功后替换七组配置。"
-            type="file"
-            accept=".zip"
-            disabled={busy}
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              e.target.value = '';
-              if (file)
-                void action(async () => {
-                  const result = await localFile('/operator/music/import', file, 'application/zip');
-                  setConfig(result.config);
-                  setDirty(false);
-                  setMessage('音乐包已导入并保存。');
-                });
-            }}
-          />
-          <p>请核对音乐包的来源与许可，选择你有权直播或录制使用的音乐。导入后音频保存在本机。</p>
-        </details>
       </Panel>
-      {message && messageAt === 'import' ? (
-        <StatusBanner tone={failed ? 'danger' : 'info'}>{message}</StatusBanner>
-      ) : null}
       {!config ? (
-        <p role="status">等待本机音乐服务，请确认 Companion 已配置 OBS。</p>
+        <p role="status">等待本机音乐服务，请确认本机服务已配置 OBS。</p>
       ) : (
         <>
           <div className="music-settings-save">
-            <span role="status">{dirty ? '有未保存修改' : '配置已保存'}</span>
-            <Button
-              variant="primary"
-              loading={busy}
-              disabled={busy || !dirty}
-              onClick={() =>
-                void action(async () => {
-                  await command('/operator/music', { action: 'configure', config });
-                  setDirty(false);
-                  setMessage('音乐配置已保存。');
-                }, 'save')
-              }
-            >
-              保存音乐配置
-            </Button>
-            {message && messageAt === 'save' ? (
-              <StatusBanner tone={failed ? 'danger' : 'info'}>{message}</StatusBanner>
-            ) : null}
+            <div className="music-settings-save__title">
+              <h2>音乐配置</h2>
+              <span role="status">
+                {dirty
+                  ? '有未保存修改'
+                  : messageAt === 'save' && message && !failed
+                    ? message
+                    : '配置已保存'}
+              </span>
+            </div>
+            <div className="music-settings-save__actions">
+              <details className="music-settings-import">
+                <summary>导入音乐包</summary>
+                <Button
+                  onClick={() => {
+                    if (window.__TAURI_INTERNALS__)
+                      void action(() => desktopInvoke<void>('open_music_downloads'));
+                    else
+                      window.open(
+                        'https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/?p=/Music',
+                        '_blank',
+                        'noopener,noreferrer',
+                      );
+                  }}
+                >
+                  下载音乐包（Box）
+                </Button>
+                <p>在浏览器下载音乐包后，选择 ZIP 导入。</p>
+                <Field
+                  label="一键导入音乐包"
+                  message="选择含 music.json 和相对路径音频的 ZIP（最大 128 MiB）。验证成功后替换七组配置。"
+                  type="file"
+                  accept=".zip"
+                  disabled={busy}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = '';
+                    if (file)
+                      void action(async () => {
+                        await preview.stop();
+                        const result = await localFile(
+                          '/operator/music/import',
+                          file,
+                          'application/zip',
+                        );
+                        setConfig(result.config);
+                        setDirty(false);
+                        setMessage('音乐包已导入并保存。');
+                      });
+                  }}
+                />
+                <p>请核对音乐来源与许可，仅使用有权直播或录制的音乐。导入文件保存在本机。</p>
+              </details>
+              <Button
+                variant="primary"
+                loading={busy}
+                disabled={busy || !dirty}
+                onClick={() =>
+                  void action(async () => {
+                    await command('/operator/music', { action: 'configure', config });
+                    const response = await fetch('/local/v1/music', { cache: 'no-store' }).catch(
+                      () => {
+                        throw new Error('配置已提交，但无法读取保存结果；请重新核对。');
+                      },
+                    );
+                    if (!response.ok)
+                      throw new Error('配置已提交，但无法读取保存结果；请重新核对。');
+                    const result = (await response.json().catch(() => null)) as MusicView | null;
+                    const parsed = musicConfigSchema.safeParse(result?.config);
+                    if (!parsed.success)
+                      throw new Error('配置已提交，但读取的结果无效；请重新核对。');
+                    const saved = parsed.data;
+                    const matches = MUSIC_GROUPS.every((group) => {
+                      const expected = config.groups[group];
+                      const actual = saved.groups[group];
+                      return (
+                        actual.volume === expected.volume &&
+                        actual.tracks.length === expected.tracks.length &&
+                        expected.tracks.every(
+                          (track, index) =>
+                            actual.tracks[index]?.id === track.id &&
+                            actual.tracks[index]?.gain === track.gain,
+                        )
+                      );
+                    });
+                    if (!matches) throw new Error('保存后的音量与当前设置不一致，请重新核对。');
+                    setConfig(saved);
+                    setDirty(false);
+                    setMessage('音乐配置已保存。');
+                  }, 'save')
+                }
+              >
+                保存音乐配置
+              </Button>
+            </div>
           </div>
+          {message && (messageAt === 'import' || (messageAt === 'save' && failed)) ? (
+            <StatusBanner tone={failed ? 'danger' : 'info'}>{message}</StatusBanner>
+          ) : null}
           <div className="music-settings-workspace">
             <nav className="music-settings-groups" aria-label="音乐场景">
               {MUSIC_GROUPS.map((group) => (
                 <Button
                   key={group}
                   aria-pressed={selectedGroup === group}
-                  onClick={() => setSelectedGroup(group)}
+                  onClick={() => {
+                    void preview.stop();
+                    setSelectedGroup(group);
+                  }}
                 >
                   {MUSIC_LABELS[group]}
                   <span>
                     {config.groups[group].tracks.length
                       ? `${config.groups[group].tracks.length} 首`
-                      : '静音'}
+                      : '空'}
                   </span>
                 </Button>
               ))}
@@ -241,11 +277,55 @@ export function MusicSettings() {
                       aria-label={MUSIC_LABELS[group] + '曲目列表'}
                     >
                       {spec.tracks.map((track, index) => (
-                        <li key={track.id + ':' + index}>
+                        <li key={track.entryId ?? `${track.id}:${index}`}>
                           <span className="music-settings-track-index">
                             {String(index + 1).padStart(2, '0')}
                           </span>
                           <strong>{track.name}</strong>
+                          <Field
+                            label={`曲目音量 · ${Math.round((track.gain ?? spec.volume) * 100)}% · ${track.gain === undefined ? '跟随场景音量' : '单独设置'}`}
+                            aria-label={`${track.name} 音量`}
+                            type="range"
+                            min="0"
+                            max="1"
+                            step="0.05"
+                            value={track.gain ?? spec.volume}
+                            disabled={busy}
+                            onChange={(event) =>
+                              change(group, {
+                                tracks: spec.tracks.map((entry, n) =>
+                                  n === index
+                                    ? { ...entry, gain: Number(event.target.value) }
+                                    : entry,
+                                ),
+                              })
+                            }
+                          />
+                          {track.gain !== undefined && (
+                            <Button
+                              disabled={busy}
+                              aria-label={'恢复 ' + track.name + ' 跟随场景音量'}
+                              onClick={() =>
+                                change(group, {
+                                  tracks: spec.tracks.map((entry, n) => {
+                                    if (n !== index) return entry;
+                                    const inherited = { ...entry };
+                                    delete inherited.gain;
+                                    return inherited;
+                                  }),
+                                })
+                              }
+                            >
+                              跟随场景音量
+                            </Button>
+                          )}
+                          <Button
+                            disabled={busy}
+                            aria-label={'试听 ' + track.name}
+                            onClick={() => void preview.start(group, spec, track)}
+                          >
+                            试听
+                          </Button>
                           <Button
                             disabled={busy}
                             aria-label={'移除 ' + track.name}
@@ -282,13 +362,14 @@ export function MusicSettings() {
                         void action(async () => {
                           const tracks: MusicTrack[] = [];
                           for (const file of files)
-                            tracks.push(
-                              await localFile(
+                            tracks.push({
+                              ...(await localFile(
                                 '/operator/music/track',
                                 file,
                                 'application/x-mizar-audio',
-                              ),
-                            );
+                              )),
+                              entryId: crypto.randomUUID(),
+                            });
                           change(group, { tracks });
                           setMessage('曲目已选，请保存音乐配置。');
                         }, group);
@@ -299,7 +380,7 @@ export function MusicSettings() {
                   ) : null}
                   <Field
                     label={`场景音量 · ${Math.round(spec.volume * 100)}%`}
-                    message="保存后生效；若本场景正在播放，也会更新当前音量。"
+                    message="未单独设置的曲目跟随场景音量；单独设置的曲目使用自己的音量。试听使用未保存的设置，保存后用于节目自动播放。"
                     type="range"
                     min="0"
                     max="1"
@@ -308,6 +389,50 @@ export function MusicSettings() {
                     disabled={busy}
                     onChange={(e) => change(group, { volume: Number(e.target.value) })}
                   />
+                  <div className="music-controls" aria-label="音乐试听">
+                    <Button
+                      disabled={
+                        busy ||
+                        !spec.tracks.length ||
+                        Boolean(
+                          current?.storage && (!current.storage.ready || current.storage.failed),
+                        )
+                      }
+                      onClick={() => void preview.start(group, spec, spec.tracks[0]!)}
+                    >
+                      试听本组
+                    </Button>
+                    <Button
+                      disabled={
+                        !preview.status || ['stopped', 'failed'].includes(preview.status.phase)
+                      }
+                      onClick={() => void preview.stop()}
+                    >
+                      停止试听
+                    </Button>
+                    <span>通过 OBS 试听，会进入直播/录制。</span>
+                  </div>
+                  {!spec.tracks.length ? <p>本组尚未选曲，选择本地音频后可试听。</p> : null}
+                  {preview.error && selectedGroup === group ? (
+                    <StatusBanner tone="danger">{preview.error}</StatusBanner>
+                  ) : null}
+                  {preview.status?.group === group ? (
+                    <StatusBanner
+                      tone={
+                        preview.status.phase === 'failed' || preview.status.phase === 'cleanup'
+                          ? 'danger'
+                          : 'info'
+                      }
+                    >
+                      {preview.status.message}
+                      {preview.status.phase === 'confirmation' ? (
+                        <>
+                          <Button onClick={() => void preview.confirm()}>确认通过 OBS 试听</Button>
+                          <Button onClick={() => void preview.stop()}>取消试听</Button>
+                        </>
+                      ) : null}
+                    </StatusBanner>
+                  ) : null}
                   <details>
                     <summary>高级设置</summary>
                     {playlist ? (
@@ -337,7 +462,7 @@ export function MusicSettings() {
                       />
                     ))}
                     {spec.tracks.map((track, i) => (
-                      <div key={`${track.id}:${i}`}>
+                      <div key={track.entryId ?? `${track.id}:${i}`}>
                         <strong>{track.name}</strong>
                         {(['startMs', 'endMs'] as const).map((key) => (
                           <Field

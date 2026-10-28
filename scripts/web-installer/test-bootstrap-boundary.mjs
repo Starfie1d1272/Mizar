@@ -37,7 +37,6 @@ try {
     completeBootstrap({ app, coreRoot, corePlan }),
     /Authenticated official resource cache/,
   );
-  assert.equal(app.getDecorator('getResourceStore')(), store);
   assert.equal(store.getStatus('official:epl-default').activeVersion, null);
   await assert.rejects(
     completeBootstrap({

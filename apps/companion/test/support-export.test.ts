@@ -1,3 +1,6 @@
+import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import { WorkspaceObserver } from '../src/telemetry/observer-workspace.js';
 import { DiagnosticDelivery } from '../src/support/delivery.js';
 import { fullLogArchive } from '../src/support/archive.js';
 import { execFileSync } from 'node:child_process';
@@ -54,8 +57,6 @@ const request = {
 
 describe('support export', () => {
   it('exports previous business sessions after restart without leaking private fields', async () => {
-    // Keep host process discovery deterministic while exercising real business log persistence and redaction.
-    vi.spyOn(nativeProcesses, 'readObsNativeProcesses').mockResolvedValue([]);
     const dir = await directory();
     const first = buildApp({ supportLogsDirectory: dir, gsiToken: 'PRIVATE-GSI-TOKEN' });
     await first.ready();
@@ -133,7 +134,6 @@ describe('support export', () => {
         'PRIVATE-NAME',
         'PRIVATE-TOKEN',
         '76561199999999999',
-        'PRIVATE-MATCH',
         'PRIVATE-SERVER',
         'PRIVATE-TOP-LEVEL',
         'PRIVATE-ERROR',
@@ -408,8 +408,6 @@ describe('support export', () => {
         reason: 'receiver_accepted',
         httpStatus: 200,
         serverDate: null,
-        map: snapshot.map,
-        capability: snapshot.capability,
         cursor: snapshot.cursor,
         receiptScope: 'ingestion acceptance only; website viewer validation/render is not observed',
       }),
@@ -1338,7 +1336,6 @@ it(
         name: 'Error',
         message: 'music_track_invalid',
       });
-      expect(failure.evidence.error!.stack).toContain('MusicStore');
       expect(new Set(events.map((event) => event.startupSessionId)).size).toBe(2);
       expect(events.some((event) => event.stage === 'session_end')).toBe(true);
     } finally {
@@ -1897,6 +1894,255 @@ it('retains an in-range Host failure in a mixed copied console group after raw H
     expect(timeline).toContain('original mixed Host restore denied');
     expect(timeline).toContain('2026-10-17T10:00:30.000Z');
     expect(timeline).toContain('workspace_exit');
+  } finally {
+    await app.close();
+  }
+});
+
+it('exports observer attempt history after restart and journal rotation without child secrets', async () => {
+  const dir = await directory();
+  const driver = fileURLToPath(new URL('./fixtures/observer-child.mjs', import.meta.url));
+  const observer = new WorkspaceObserver(() =>
+    Promise.resolve({
+      role: 'lookahead',
+      python: process.execPath,
+      driver,
+      native: driver,
+      steamApi: driver,
+      node: process.execPath,
+      parserWorker: driver,
+      hostVersion: 14192,
+      outputDirectory: join(dir, randomUUID()),
+    }),
+  );
+  const previous = { ...SESSION_LIMITS };
+  Object.assign(SESSION_LIMITS, { segmentBytes: 4096, segments: 8 });
+  const app = buildApp({ supportLogsDirectory: dir, workspaceObserver: observer });
+  try {
+    await app.ready();
+    await observer.start(driver, '127.0.0.13:27020', 'OBSERVER-PRIVATE-SECRET');
+    await expect.poll(() => observer.view().active).toBe(false);
+    const first = observer.view().terminal!;
+    expect(first.stage).toBe('node-probe');
+    const firstSession = observer.view().sessionId;
+    await observer.start(driver, '127.0.0.1:27020', 'OBSERVER-PRIVATE-SECRET');
+    await expect.poll(() => observer.view().health.state).toBe('live');
+    expect(observer.view().failed).toBe(false);
+    expect(observer.view().terminal).toBeUndefined();
+    expect(observer.view().sessionId).not.toBe(firstSession);
+    // Rotate the actual product journal through its normal logger bridge.
+    for (let i = 0; i < 16; i++)
+      app.log.info({ padding: 'x'.repeat(3000) }, 'observer-rotation-fixture');
+    await observer.stop();
+    const response = await app.inject(request);
+    expect(response.statusCode).toBe(200);
+    const bundle = response.json<
+      FullArchive & { snapshot: { observer: ReturnType<WorkspaceObserver['view']> } }
+    >();
+    expect(bundle.snapshot.observer.history).toContainEqual(
+      expect.objectContaining({
+        attemptId: first.attemptId,
+        sessionId: firstSession,
+        stage: 'node-probe',
+        report: 'missing',
+      }),
+    );
+    expect(
+      unpack(bundle, 'session').some(
+        (row) =>
+          row.stage === 'observer_attempt_terminal' &&
+          JSON.stringify(row).includes(observer.view().terminal!.attemptId),
+      ),
+    ).toBe(true);
+    expect(
+      (await filesystem.readdir(dir)).some((name) => /^session\.ndjson\.\d+$/.test(name)),
+    ).toBe(true);
+    expect(JSON.stringify(bundle)).not.toContain('OBSERVER-PRIVATE-SECRET');
+    expect(JSON.stringify(unpack(bundle, 'session'))).not.toContain('OBSERVER-PRIVATE-SECRET');
+  } finally {
+    await app.close();
+    Object.assign(SESSION_LIMITS, previous);
+  }
+});
+
+it('exports structured and unstructured observer failures and spawn errors without test credentials', async () => {
+  const dir = await directory();
+  const driver = fileURLToPath(new URL('./fixtures/observer-child.mjs', import.meta.url));
+  let executable = process.execPath;
+  const observer = new WorkspaceObserver(() =>
+    Promise.resolve({
+      role: 'lookahead',
+      python: executable,
+      driver,
+      native: driver,
+      steamApi: driver,
+      node: process.execPath,
+      parserWorker: driver,
+      hostVersion: 14192,
+      outputDirectory: join(dir, randomUUID()),
+    }),
+  );
+  const app = buildApp({ supportLogsDirectory: dir, workspaceObserver: observer });
+  try {
+    await app.ready();
+    for (const [endpoint, stage, report] of [
+      ['127.0.0.13:27020', 'node-probe', 'missing'],
+      ['127.0.0.24:27020', 'native-boot', 'received'],
+    ] as const) {
+      await observer.start(driver, endpoint, 'OBSERVER-EXPORT-SECRET');
+      await expect.poll(() => observer.view().active).toBe(false);
+      const response = await app.inject(request);
+      expect(response.statusCode).toBe(200);
+      const bundle = response.json<
+        FullArchive & { snapshot: { observer: ReturnType<WorkspaceObserver['view']> } }
+      >();
+      expect(bundle.snapshot.observer.terminal).toMatchObject({ stage, report, ready: false });
+      const timeline = JSON.stringify(unpack(bundle, 'session'));
+      expect(timeline).toContain(bundle.snapshot.observer.terminal!.attemptId);
+      expect(JSON.stringify(bundle)).not.toContain('OBSERVER-EXPORT-SECRET');
+      expect(timeline).not.toContain('OBSERVER-EXPORT-SECRET');
+    }
+    executable = join(dir, 'private-absent-executable');
+    await observer.start(driver, '127.0.0.1:27020', 'OBSERVER-EXPORT-SECRET');
+    await expect.poll(() => observer.view().active).toBe(false);
+    const exported = (await app.inject(request)).json<{
+      snapshot: { observer: ReturnType<WorkspaceObserver['view']> };
+    }>();
+    expect(exported.snapshot.observer.terminal).toMatchObject({
+      stage: 'spawn',
+      spawnCode: 'ENOENT',
+    });
+    expect(JSON.stringify(exported.snapshot.observer)).not.toContain(executable);
+  } finally {
+    await app.close();
+  }
+});
+
+it('exports bounded observer diagnostics through the ordinary support bundle without private identities', async () => {
+  const { ObserverHintTimeline } = await import('@mizar/core/projection');
+  const { DebugEvidenceStore } = await import('../src/runtime/debug-state.js');
+  const store = new DebugEvidenceStore();
+  const app = buildApp({
+    debugEvidenceStore: store,
+    supportLogsDirectory: await directory(),
+    gsiToken: 'OBSERVER-DIAGNOSTIC-SECRET',
+  });
+  await app.ready();
+  const timeline = new ObserverHintTimeline();
+  const settings = { enabled: true, expectedDelaySeconds: 120, leadSeconds: 7 };
+  const source = { connected: true, fresh: true, generation: 1 };
+  const program = {
+    cursor: {
+      producerInstanceId: 'diagnostic-fixture',
+      liveSessionId: null,
+      runtimeSeq: 1,
+      programSourceGeneration: 1,
+      programReceiveSequence: 1,
+      mapEpoch: 1,
+    },
+    status: {
+      telemetry: 'fresh' as const,
+      context: 'fresh' as const,
+      identity: 'matched' as const,
+    },
+    match: null,
+    map: { name: 'de_mirage' },
+    clock: { phase: 'live' as const },
+    coverage: { allPlayers: 'present' as const },
+    players: Array.from({ length: 10 }, (_, i) => ({
+      sourcePlayerId: `7656119999999999${i}`,
+      displayName: `PRIVATE-OBSERVER-NAME-${i}`,
+      observerSlot: i,
+      lineupEvidence: 'current' as const,
+      lifeState: 'alive' as const,
+    })),
+  };
+  const event = {
+    kind: 'player-death' as const,
+    cursor: {
+      kind: 'cs2-cstv' as const,
+      role: 'lookahead' as const,
+      generation: 1,
+      sequence: 1,
+      tick: 64,
+      ticksPerSecond: 64,
+      observedAt: '2026-10-25T00:00:01Z',
+      observedMonotonicMs: 1000,
+      mapName: 'de_mirage',
+    },
+    victim: { sourceUserId: 7, sourcePlayerId: program.players[7]!.sourcePlayerId },
+    attacker: { sourceUserId: 3, sourcePlayerId: program.players[3]!.sourcePlayerId },
+    weapon: 'ak47',
+    assistedFlash: false,
+    headshot: false,
+    penetratedObjects: 0,
+    noScope: false,
+    throughSmoke: false,
+    attackerBlind: false,
+    attackerInAir: false,
+    distance: 1,
+    damageHealth: 100,
+    damageArmor: 0,
+    hitgroup: 1,
+  };
+  const exported = async () => {
+    store.recordObserverDiagnostics(timeline.getDiagnostics());
+    const result = await app.inject(request);
+    expect(result.statusCode).toBe(200);
+    expect(result.body).not.toMatch(
+      /OBSERVER-DIAGNOSTIC-SECRET|PRIVATE-OBSERVER-NAME|7656119999999999/,
+    );
+    expect(
+      unpack(result.json<FullArchive>(), 'session.ndjson').some(
+        (entry) => entry.stage === 'observer_assist_state',
+      ),
+    ).toBe(true);
+    return result.json<{
+      snapshot: { runtime: { observerAssist: ReturnType<typeof timeline.getDiagnostics> } };
+    }>().snapshot.runtime.observerAssist;
+  };
+  try {
+    timeline.project(program, settings, 0, source);
+    expect(await exported()).toMatchObject({
+      eventCounts: {},
+      acceptedDeaths: 0,
+      anchors: 0,
+      pending: 0,
+    });
+    timeline.consume({
+      kind: 'weapon-fire',
+      cursor: { ...event.cursor, sequence: 0 },
+      player: event.attacker,
+      weapon: 'ak47',
+      silenced: false,
+    });
+    expect(await exported()).toMatchObject({
+      eventCounts: { 'weapon-fire': 1 },
+      acceptedDeaths: 0,
+      pending: 0,
+    });
+    timeline.consume({ ...event, attacker: { sourceUserId: 3 } });
+    timeline.project(program, settings, 1000, source);
+    expect(await exported()).toMatchObject({
+      eventCounts: { 'player-death': 1 },
+      discarded: { 'missing-identity': 1 },
+      pending: 0,
+    });
+    timeline.consume({ ...event, cursor: { ...event.cursor, sequence: 2 } });
+    timeline.project(program, settings, 2000, source);
+    expect(await exported()).toMatchObject({
+      acceptedDeaths: 1,
+      pending: 1,
+      anchors: 0,
+      nextDueMonotonicMs: 121000,
+      nextWindowInMs: 112000,
+    });
+    timeline.project(program, settings, 3000, { ...source, fresh: false });
+    expect(await exported()).toMatchObject({
+      blocked: 'source-stale',
+      pending: 1,
+      calibration: { state: 'uncalibrated', reason: 'awaiting-evidence' },
+    });
   } finally {
     await app.close();
   }

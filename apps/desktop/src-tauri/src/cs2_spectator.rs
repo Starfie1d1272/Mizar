@@ -26,6 +26,30 @@ fn boolean(value: &str) -> Result<bool, String> {
 
 pub const CFG_NAME: &str = "mizar_observer.cfg";
 const CFG: &[u8] = include_bytes!("../../../../config/mizar_observer.cfg");
+const HUD_COMMAND: &str = "toggle cl_draw_only_deathnotices 0 1";
+const HUD_LINE: &str = "bind \"h\" \"toggle cl_draw_only_deathnotices 0 1\"\n";
+
+pub fn hud_cfg_name(identity: &str) -> Result<&'static str, String> {
+    match identity {
+        "h" | "scancode11" => Ok(CFG_NAME),
+        _ => Err("HUD 键身份无法核实。".into()),
+    }
+}
+
+fn config_for(identity: Option<&str>) -> Result<Vec<u8>, String> {
+    let source = std::str::from_utf8(CFG).map_err(|_| "观战 CFG 格式无效。")?;
+    if source.matches(HUD_LINE).count() != 1 {
+        return Err("观战 CFG 格式无效。".into());
+    }
+    let replacement = match identity {
+        None => String::new(),
+        Some("h") => HUD_LINE.to_string(),
+        Some("scancode11") => HUD_LINE.replace("\"h\"", "\"scancode11\""),
+        _ => return Err("HUD 键身份无法核实。".into()),
+    };
+    Ok(source.replace(HUD_LINE, &replacement).into_bytes())
+}
+
 const LEGACY_CFG: &[u8] = b"// Mizar managed spectator session; personal bindings remain unchanged.\nspec_usenumberkeys_nobinds 1\necho MIZAR_OBSERVER_CFG_LOADED\n";
 const KEYS_NAME: &str = "cs2_user_keys_0_slot0.vcfg";
 const NUMBER_BINDINGS: [(&str, &str); 10] = [
@@ -54,26 +78,43 @@ pub(crate) fn cfg_path(executable: &Path) -> Result<PathBuf, String> {
 /// Never replace an
 /// unknown file, including a symlink or a partially written previous install.
 pub fn install(executable: &Path) -> Result<(), String> {
+    install_config(executable, None)
+}
+
+pub fn install_hud(executable: &Path, identity: &str) -> Result<(), String> {
+    hud_cfg_name(identity)?;
+    install_config(executable, Some(identity))
+}
+
+fn install_config(executable: &Path, identity: Option<&str>) -> Result<(), String> {
     let path = cfg_path(executable)?;
+    let expected = config_for(identity)?;
+    let known = [
+        config_for(None)?,
+        config_for(Some("h"))?,
+        config_for(Some("scancode11"))?,
+        LEGACY_CFG.to_vec(),
+    ];
     match fs::symlink_metadata(&path) {
         Ok(metadata) => {
             if !metadata.is_file()
                 || metadata.file_type().is_symlink()
-                || ![CFG.len() as u64, LEGACY_CFG.len() as u64].contains(&metadata.len())
+                || !known
+                    .iter()
+                    .any(|bytes| bytes.len() as u64 == metadata.len())
             {
-                return Err(
-                    "同名 mizar_observer.cfg 不属于当前固定配置，已保留原文件，未加载观战预设。"
-                        .into(),
-                );
+                return Err("同名 mizar_observer.cfg 不属于固定配置，已保留原文件。".into());
             }
             let bytes = fs::read(&path).map_err(|error| io_error("无法核实观战 CFG。", &error))?;
-            if bytes == LEGACY_CFG {
-                crate::cs2_session::atomic_write(&path, CFG)?;
-            } else if bytes != CFG {
-                return Err(
-                    "同名 mizar_observer.cfg 不属于当前固定配置，已保留原文件，未加载观战预设。"
-                        .into(),
-                );
+            if !known.contains(&bytes) {
+                return Err("同名 mizar_observer.cfg 不属于固定配置，已保留原文件。".into());
+            }
+            if bytes != expected {
+                if fs::read(&path).map_err(|error| io_error("无法复核观战 CFG。", &error))? != bytes
+                {
+                    return Err("观战 CFG 在部署期间已变化，原文件保留。".into());
+                }
+                crate::cs2_session::atomic_write(&path, &expected)?;
             }
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -81,16 +122,32 @@ pub fn install(executable: &Path) -> Result<(), String> {
                 .write(true)
                 .create_new(true)
                 .open(&path)
-                .map_err(|error| io_error("观战 CFG 无法部署，未加载观战预设。", &error))?;
-            file.write_all(CFG)
+                .map_err(|error| io_error("观战 CFG 无法部署。", &error))?;
+            file.write_all(&expected)
                 .and_then(|_| file.sync_all())
-                .map_err(|error| io_error("观战 CFG 未能完整保存，未加载观战预设。", &error))?;
-            if fs::read(&path).map_err(|error| io_error("观战 CFG 无法读回核实。", &error))? != CFG
+                .map_err(|error| io_error("观战 CFG 未能完整保存。", &error))?;
+            if fs::read(&path).map_err(|error| io_error("观战 CFG 无法读回核实。", &error))?
+                != expected
             {
-                return Err("观战 CFG 读回不一致，未加载观战预设。".into());
+                return Err("观战 CFG 读回不一致。".into());
             }
         }
-        Err(error) => return Err(io_error("无法核实观战 CFG，未加载观战预设。", &error)),
+        Err(error) => return Err(io_error("无法核实观战 CFG。", &error)),
+    }
+    Ok(())
+}
+
+/// Verify exact managed bytes immediately before submitting a launch.
+pub(crate) fn validate_installed(executable: &Path, identity: Option<&str>) -> Result<(), String> {
+    let path = cfg_path(executable)?;
+    let expected = config_for(identity)?;
+    let metadata = fs::symlink_metadata(&path).map_err(|e| io_error("观战 CFG 无法核实。", &e))?;
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.len() != expected.len() as u64
+        || fs::read(&path).map_err(|e| io_error("观战 CFG 无法核实。", &e))? != expected
+    {
+        return Err("观战 CFG 已变化，未提交启动。".into());
     }
     Ok(())
 }
@@ -241,6 +298,99 @@ pub fn restore_bindings(video: &Path, saved: &Value) -> Result<(), String> {
     Ok(())
 }
 
+/// A missing explicit binding uses the standard physical H scancode; aliases are never inferred.
+fn backup_hud(text: &str) -> Result<Value, String> {
+    let entries = binding_entries(text)?;
+    let mut candidates = serde_json::Map::new();
+    let mut selected = None;
+    for name in ["h", "scancode11"] {
+        let matches: Vec<_> = entries
+            .iter()
+            .filter(|(key, _)| key.value.eq_ignore_ascii_case(name))
+            .collect();
+        if matches.len() > 1 || matches.first().is_some_and(|(key, _)| key.value != name) {
+            return Err("HUD 键身份重复或大小写不确定，未应用绑定。".into());
+        }
+        let token = matches
+            .first()
+            .map(|(_, value)| text[value.start..value.end].to_string());
+        if token.is_some() {
+            if selected.is_some() {
+                return Err("HUD 键候选存在冲突，未应用绑定。".into());
+            }
+            selected = Some(name);
+        }
+        candidates.insert(name.to_string(), json!(token));
+    }
+    let identity = selected.unwrap_or("scancode11");
+    Ok(json!({"identity":identity,"candidates":candidates,"originalKeys":text}))
+}
+
+fn restore_hud(saved: &Value, current: &str) -> Result<String, String> {
+    let identity = saved["identity"].as_str().ok_or("HUD 键身份备份缺失。")?;
+    hud_cfg_name(identity)?;
+    let original_text = saved["originalKeys"]
+        .as_str()
+        .ok_or("HUD 原始键位备份缺失。")?;
+    if original_text.len() > 256 * 1024 || backup_hud(original_text)? != *saved {
+        return Err("HUD 原始键位备份无法核实。".into());
+    }
+    let entries = binding_entries(current)?;
+    let other = if identity == "h" { "scancode11" } else { "h" };
+    // An added or renamed candidate is a conflict, even if its command looks like ours.
+    if entries
+        .iter()
+        .any(|(key, _)| key.value.eq_ignore_ascii_case(other))
+    {
+        return Err("HUD 键候选已变化，原绑定备份仍保留。".into());
+    }
+    let matches: Vec<_> = entries
+        .iter()
+        .filter(|(key, _)| key.value.eq_ignore_ascii_case(identity))
+        .collect();
+    if matches.len() > 1
+        || matches
+            .first()
+            .is_some_and(|(key, _)| key.value != identity)
+    {
+        return Err("HUD 键重复或身份变化，原绑定备份仍保留。".into());
+    }
+    let original = saved_binding(&saved["candidates"], identity)?;
+    let current_value = matches.first().map(|(_, value)| value.value.as_str());
+    if current_value == original.as_ref().map(|(_, value)| value.as_str()) {
+        return Ok(current.to_string());
+    }
+    if current_value != Some(HUD_COMMAND) {
+        return Err("HUD 键已被外部修改或缺失，原绑定备份仍保留。".into());
+    }
+    let (key, value) = matches[0];
+    let mut result = current.to_string();
+    match original {
+        Some((raw, _)) => result.replace_range(value.start..value.end, &raw),
+        None => result.replace_range(key.start..value.end, ""),
+    }
+    Ok(result)
+}
+
+pub fn validate_hud(video: &Path, saved: &Value) -> Result<(), String> {
+    if backup_hud(&read_keys(video)?)? != *saved {
+        return Err("HUD 键绑定在准备期间发生变化。".into());
+    }
+    Ok(())
+}
+
+pub fn restore_v3_bindings(video: &Path, bindings: &Value, hud: &Value) -> Result<(), String> {
+    let current = read_keys(video)?;
+    let restored = restore_hud(hud, &restored_bindings(bindings, &current)?)?;
+    if restored != current {
+        if read_keys(video)? != current {
+            return Err("按键配置在恢复期间发生变化，备份仍保留。".into());
+        }
+        crate::cs2_session::atomic_write(&keys_path(video)?, restored.as_bytes())?;
+    }
+    Ok(())
+}
+
 pub fn restore(original: &str, current: &str) -> Result<String, String> {
     restore_with_applied(original, current, true)
 }
@@ -335,6 +485,45 @@ pub fn check_archive(video: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Full-key mode does not own the spectator convar; only use it when the
+/// archived value already selects slot bindings and no mirror conflicts.
+pub(crate) fn full_mode_convar_compatible(files: &[Value], video: &Path) -> Result<(), String> {
+    check_archive(video)?;
+    let original = files
+        .first()
+        .filter(|record| record["kind"] == "convars")
+        .and_then(|record| record["original"].as_str())
+        .ok_or("观战设置无法确认，使用基础观战模式。")?;
+    let token = value(original).map_err(|_| "观战设置无法确认，使用基础观战模式。")?;
+    if boolean(&token.value)? {
+        return Err("当前数字键观战设置需要单独接管，使用基础观战模式。".into());
+    }
+    Ok(())
+}
+
+/// Read only the spectator convar; standalone launch must not inspect or own FPS scripts.
+pub(crate) fn prepare_standalone(video: &Path, executable: &Path) -> Result<Value, String> {
+    check_archive(video)?;
+    let path = video
+        .parent()
+        .ok_or("观战配置目录缺失。")?
+        .join("cs2_machine_convars.vcfg");
+    let metadata = fs::symlink_metadata(&path).map_err(|e| io_error("观战配置无法读取。", &e))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 256 * 1024 {
+        return Err("观战配置无法安全核实。".into());
+    }
+    let original = fs::read_to_string(&path).map_err(|e| io_error("观战配置无法读取。", &e))?;
+    if original.len() > 256 * 1024 {
+        return Err("观战配置过大。".into());
+    }
+    value(&original)?;
+    prepare(
+        &[json!({"kind":"convars", "original":original})],
+        video,
+        executable,
+    )
+}
+
 pub fn prepare(files: &[Value], video: &Path, executable: &Path) -> Result<Value, String> {
     check_archive(video)?;
     let record = files
@@ -345,11 +534,109 @@ pub fn prepare(files: &[Value], video: &Path, executable: &Path) -> Result<Value
         .as_str()
         .ok_or("观战配置原值备份缺失。")?;
     value(original)?;
-    let bindings = backup_bindings(&read_keys(video)?)?;
-    install(executable)?;
-    // Runtime +exec selects weapon-slot bindings even when the original was true. Do not
-    // prewrite this archive field or change FPS's original/applied contract.
-    Ok(
-        json!({"version":2,"video":video,"original":original,"bindings":bindings,"loadAttempted":false}),
-    )
+    let keys = read_keys(video)?;
+    let bindings = backup_bindings(&keys)?;
+    match backup_hud(&keys) {
+        Ok(hud) => {
+            let identity = hud["identity"].as_str().ok_or("HUD 键身份缺失。")?;
+            match install_hud(executable, identity) {
+                Ok(()) => Ok(
+                    json!({"version":3,"video":video,"original":original,"bindings":bindings,"hud":hud,"loadAttempted":false}),
+                ),
+                Err(warning) => Err(warning),
+            }
+        }
+        Err(warning) => {
+            install(executable)?;
+            Ok(
+                json!({"version":2,"video":video,"original":original,"bindings":bindings,"hudWarning":warning,"loadAttempted":false}),
+            )
+        }
+    }
+}
+
+#[cfg(test)]
+mod hud_tests {
+    use super::*;
+    fn keys(entries: &str) -> String {
+        format!("\"config\" {{\"bindings\" {{{entries}}}}}")
+    }
+
+    #[test]
+    fn resolves_only_one_exact_candidate_and_preserves_original_bytes() {
+        for (name, value) in [("h", ""), ("scancode11", "say custom")] {
+            let before = keys(&format!("\"{name}\" \"{value}\" \"x\" \"other\""));
+            let record = backup_hud(&before).unwrap();
+            assert_eq!(record["identity"], name);
+            assert_eq!(record["originalKeys"], before);
+            assert_eq!(record["candidates"][name], format!("\"{value}\""));
+            let other = if name == "h" { "scancode11" } else { "h" };
+            assert!(record["candidates"][other].is_null());
+            let applied = keys(&format!("\"{name}\" \"{HUD_COMMAND}\" \"x\" \"new\""));
+            let restored = restore_hud(&record, &applied).unwrap();
+            assert_eq!(
+                field(&restored, &["config", "bindings", name])
+                    .unwrap()
+                    .unwrap()
+                    .value,
+                value
+            );
+            assert_eq!(
+                field(&restored, &["config", "bindings", "x"])
+                    .unwrap()
+                    .unwrap()
+                    .value,
+                "new"
+            );
+            assert_eq!(restore_hud(&record, &restored).unwrap(), restored);
+            assert!(restore_hud(&record, &applied.replace(HUD_COMMAND, "user edit")).is_err());
+            assert!(restore_hud(&record, &applied.replace(name, other)).is_err());
+            assert!(restore_hud(
+                &record,
+                &keys(&format!(
+                    "\"{name}\" \"{HUD_COMMAND}\" \"{other}\" \"{HUD_COMMAND}\""
+                ))
+            )
+            .is_err());
+            assert!(restore_hud(&record, &keys("")).is_err());
+        }
+        let missing = backup_hud(&keys("")).unwrap();
+        assert_eq!(missing["identity"], "scancode11");
+        assert_eq!(restore_hud(&missing, &keys("")).unwrap(), keys(""));
+        let applied = keys(&format!("\"scancode11\" \"{HUD_COMMAND}\""));
+        let restored = restore_hud(&missing, &applied).unwrap();
+        assert!(field(&restored, &["config", "bindings", "scancode11"])
+            .unwrap()
+            .is_none());
+        assert!(restore_hud(&missing, &keys(&format!("\"h\" \"{HUD_COMMAND}\""))).is_err());
+        assert!(backup_hud(&keys("\"h\" \"a\" \"scancode11\" \"b\"")).is_err());
+        assert!(backup_hud(&keys("\"h\" \"a\" \"h\" \"a\"")).is_err());
+        assert!(backup_hud(&keys("\"H\" \"a\"")).is_err());
+    }
+
+    #[test]
+    fn fixed_cfg_does_not_overwrite_unknown_content() {
+        let root = std::env::temp_dir().join(format!(
+            "mizar-hud-cfg-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let cfg = root.join("game/csgo/cfg");
+        fs::create_dir_all(&cfg).unwrap();
+        let executable = root.join("game/bin/win64/cs2.exe");
+        for identity in ["h", "scancode11"] {
+            let file = cfg.join(hud_cfg_name(identity).unwrap());
+            fs::write(&file, "user content").unwrap();
+            assert!(install_hud(&executable, identity).is_err());
+            assert_eq!(fs::read(&file).unwrap(), b"user content");
+            fs::remove_file(&file).unwrap();
+            install_hud(&executable, identity).unwrap();
+            install_hud(&executable, identity).unwrap();
+        }
+        assert!(install_hud(&executable, "other").is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
 }

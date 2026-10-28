@@ -54,6 +54,121 @@ function TeamLogo({
   );
 }
 
+function CompactMapArt({ mapName }: { readonly mapName: string }) {
+  const image = getMapThumbnail(mapName);
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const src = image?.outputPath;
+  return (
+    <div className="bp-compact-art">
+      {src && src !== failedSrc ? (
+        <img src={src} alt="" onError={() => setFailedSrc(src)} />
+      ) : (
+        <span className="bp-compact-missing">地图图片不可用</span>
+      )}
+      <strong>{mapName.replace(/^de_/, '').toUpperCase()}</strong>
+    </div>
+  );
+}
+
+/** Compact presentation consumes the same reveal cursor as the full-screen scene. */
+export function BpCompactPresentation({
+  snapshot,
+  animate = false,
+}: {
+  readonly snapshot: BpSnapshot | null;
+  readonly animate?: boolean;
+}) {
+  const projection = snapshot?.projection;
+  const steps = projection?.steps.slice(0, snapshot?.revealedCount ?? 0) ?? [];
+  const currentCard = snapshot?.state === 'revealing' ? steps.at(-1)?.cardIndex : undefined;
+  return (
+    <ProgramCanvas className="bp-canvas">
+      {projection && snapshot?.state !== 'hidden' ? (
+        <section
+          className="bp-compact"
+          aria-label="地图禁选"
+          data-state={snapshot?.state}
+          data-animate={animate}
+        >
+          <div className="bp-compact-status">
+            <span
+              className="bp-compact-match"
+              title={`${projection.entrants.a.name} vs ${projection.entrants.b.name}`}
+            >
+              {projection.entrants.a.name} <b>VS</b> {projection.entrants.b.name}
+            </span>
+            <span>
+              {projection.format.toUpperCase()} ·{' '}
+              {snapshot?.state === 'shown' ? '地图禁选完成' : '地图禁选'}
+            </span>
+          </div>
+          <div className="bp-compact-cards">
+            {projection.cards.map((card, index) => {
+              const cardStep = steps.findIndex(
+                (step) => step.cardIndex === index && step.kind === 'card',
+              );
+              const shown = cardStep !== -1;
+              const sideShown = steps.some(
+                (step) => step.cardIndex === index && step.kind === 'side-choice',
+              );
+              const team = shown && card.entrant ? projection.entrants[card.entrant] : null;
+              return (
+                <article
+                  className="bp-compact-card"
+                  data-kind={shown ? card.kind : 'pending'}
+                  data-current={shown && index === currentCard}
+                  key={index}
+                >
+                  {shown ? (
+                    <>
+                      <CompactMapArt mapName={card.mapName} />
+                      {sideShown && card.sideChoice ? (
+                        <div
+                          className="bp-compact-side"
+                          aria-label={`${projection.entrants[card.sideChoice.entrant].name} ${card.sideChoice.side} 开局`}
+                        >
+                          <span
+                            className="bp-compact-side-team"
+                            title={projection.entrants[card.sideChoice.entrant].name}
+                          >
+                            {projection.entrants[card.sideChoice.entrant].name}
+                          </span>
+                          <span className="bp-compact-side-choice">
+                            {card.sideChoice.side} 开局
+                          </span>
+                        </div>
+                      ) : null}
+                      <div className="bp-compact-action">
+                        <span>
+                          {card.kind === 'ban' ? '× ' : ''}
+                          {card.kind.toUpperCase()} · {String(cardStep + 1).padStart(2, '0')}
+                        </span>
+                        {index === currentCard ? <span>当前</span> : null}
+                      </div>
+                      <div className="bp-compact-owner">
+                        {team && card.entrant ? (
+                          <>
+                            <TeamLogo src={team.logoUrl} name={team.name} entrant={card.entrant} />
+                            <span title={team.name}>{team.name}</span>
+                          </>
+                        ) : (
+                          <span>决胜地图</span>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <span className="bp-compact-pending">待揭示</span>
+                  )}
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
+    </ProgramCanvas>
+  );
+}
+
 export function BpPresentation({
   snapshot,
   animate = false,

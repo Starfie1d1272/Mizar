@@ -1257,3 +1257,46 @@
   object-fit: cover;
   border-radius: var(--mizar-shape-control);
 }
+.obs-audio-application-choice select {
+  display: block;
+  max-width: 100%;
+  min-width: 0;
+  width: 100%;
+}
+
+.obs-audio-application-choice,
+.obs-audio-commentary-current {
+  overflow-wrap: anywhere;
+}
+
+.obs-settings-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--mizar-layout-compact);
+}
+.sound-settings .obs-settings-tabs .mizar-button[aria-pressed='true'] {
+  background: var(--mizar-bg-selected);
+  border-color: var(--mizar-accent-primary);
+}
+.obs-settings-columns[hidden],
+.obs-settings > [hidden] {
+  display: none;
+}
+.sound-settings {
+  display: grid;
+  gap: var(--mizar-layout-padding);
+}
+.sound-settings > [hidden] {
+  display: none;
+}
+.game-audio-policy {
+  display: grid;
+  gap: var(--mizar-layout-gap);
+  justify-items: start;
+}
+.game-audio-policy h3 {
+  margin: 0;
+}
+.game-audio-policy .mizar-field {
+  width: min(100%, 24rem);
+}

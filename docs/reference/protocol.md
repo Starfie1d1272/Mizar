@@ -56,9 +56,9 @@ RivalHub 资料先经过结构与语义校验，阻断错误不进入 Core。比
 
 `GET /local/v1/observer` 提供组件版本、连接活动状态与来源健康。工作台通过原生 `observer_command` 提交连接和停止意图，Host 核对当前游戏实例后调用 `POST /operator/runtime/observer`；该接口使用本次运行的私有能力，接受启动、停止和游戏会话续约。入口、运行时、Steam API 及输出路径由安装与运行数据目录推导。连接密码经 stdin 传递，状态响应只含运行摘要。观察器事件进入 Lookahead 来源，消费边界沿用正式节目与私有辅助的独立投影。
 
-`GET /local/v1/observer-assist` 返回观察辅助 `settings`、游戏自动操作 `gameAutomation`、当前连接端点摘要与修订号。受信任本机 Origin 通过 `POST /operator/observer-assist` 通过 `configure`、`configure-game` 分别保存偏好，通过 `connection` 提交本场连接。密码仅随本次服务会话保存在内存，比赛切换清除本场连接。相同有效值再次保存不更新修订或通知消费者；提示时间只更新辅助计算：单改 `leadSeconds` 保留缓冲与已验证锚点并立即重新投影；改变 `expectedDelaySeconds` 清除旧匹配条件下的对齐，等待新锚点。`revision` 仅用于辅助启停、游戏操作与本场连接准备。
+`GET /local/v1/observer-assist` 返回观察辅助 `settings`、游戏自动操作 `gameAutomation`、当前连接端点摘要与修订号。受信任本机 Origin 通过 `POST /operator/observer-assist` 通过 `configure`、`configure-game` 分别保存偏好，通过 `connection` 提交本场连接。密码仅随本次服务会话保存在内存，比赛切换清除本场连接。相同有效值再次保存不更新修订或通知消费者；提示时间只更新辅助计算：单改 `leadSeconds` 保留缓冲与测量历史并立即重新投影；改变 `expectedDelaySeconds` 清空旧缓冲与测量历史，从新收到的事件计时。`revision` 仅用于辅助启停、游戏操作与本场连接准备。
 
-私有 `assist` 通道使用 schema 2；开启时携带来源状态、时间参数、测得延迟与最多六条击杀提示，包含当前 Program 昵称、唯一观战槽位、预计发生倒计时。关闭时沿用基础辅助载荷。Program、雷达和公开输出继续使用各自契约。
+私有 `assist` 通道使用 schema 3；开启时携带来源状态、时间参数、`timingBasis: estimated`、只读 `measuredDelaySeconds`、`waitingReason`、距首个提示窗口的 `nextWindowSeconds` 与最多六条击杀提示，包含当前 Program 昵称、唯一观战槽位、预计发生倒计时。预告始终按配置延迟估算，测量不改变配置或阻止显示；无事件和缓冲为正常等待状态。关闭时沿用基础辅助载荷。Program、雷达和公开输出继续使用各自契约。
 
 Host 的 `prepare` / `start-configured` 绑定游戏实例、Desktop Job 和配置修订，并由 Host 根据游戏启动偏好提交 `useMulnx`。标准路线直接启动选定的观察器；MulNX 路线按自动连接与 HUD 开关提交命令，观察器仍由独立开关决定。节目连接与 HUD 命令复用 MulNX 的 `Game/Command/NoReport` 队列，payload 使用其填充器要求的 JSON 字符串。精确网关回执证明入队，游戏数据与本机控制台查询分别负责节目连接、HUD 值的读回。
 
@@ -81,10 +81,10 @@ C4 异步预测的普通实战更新可最多合并十六毫秒；等待期间�
 可靠事件来自发生转换时的上下文，包含幂等键、时间、连续性游标、身份与有限赛果。事件种类和逐类负载见 `output.ts`；接收端必须去重，不能把本地观测直接当作官方赛果。
 
 - 高影响事件需要新鲜上下文、匹配身份和当前执行证据。
-- 单图结果同时表达参赛方相对比分与当时 CT/T 比分，由生产端完成换边归属，接收端不自行重算。
+- 单图结果同时表达参赛方相对比分与当时 CT/T 比分，由生产端完成换边归属，接收端不自行重算。独立的 `map_player_snapshot` 事件关联该结束事件的幂等键，携带当前绑定与地图执行中最后有效的基础数据，最多十人；无完整覆盖证明的 ADR 不输出，缺值保持 null。比分事件保持旧四字段契约。旧接收端可拒绝新增事件，不影响比分和后续赛事。
 - 持久投递队列 v2 在同一串行提交中记录随机提交标识与完整载荷 SHA-256（包含事件、终态回执、连续性及待核对标记）；同步并原子替换恢复副本后再替换主文件，全部成功才发布内存。完好 v1 主文件保持可读，下次提交迁移为 v2；损坏 v1 不推断提交代次。主文件通过完整校验时优先，忽略可能较旧或尚未发布的镜像。主文件损坏时先另存两份原始字节；仅在主文件仍有合法 v2 提交标识及摘要、镜像完整校验通过且两者提交标识与摘要均相同时，恢复整个镜像，不拼接记录。主文件缺失、截断、元数据损坏、镜像损坏或不同提交均不能证明一致性：原字节隔离待核对，旧事件不进入发送队列，待核对标记随后续提交持久化并在重启后继续提示。此时允许本地应用启动并生产新的事件，不宣称旧事件已恢复或送达。完整恢复保留原幂等键、终态回执、生产实例、会话和连续性，沿用原发送、授权、退避与过期门禁。摘要用于检测意外损坏，不是身份认证或所有磁盘故障下的最新提交证明。磁盘读取、原字节保全或恢复提交失败仍中断并保留阶段及原因，不报恢复成功。
 - 持久投递队列有上限、退避与过期规则。普通重试保持事件和幂等键；上下文明确不兼容时终止旧事件。
-- 重启只恢复兼容的投递连续性，不恢复旧遥测、时钟或统计；等待新输入核对。终图事件还要与当前结束状态和已冻结结果一致。
+- 重启只恢复兼容的投递连续性，不恢复旧遥测、时钟或统计；等待新输入核对。终图事件在当前地图需要继续核验最终比分；同一地图后续有效终局证据冲突时终止旧事件。同生产实例和会话内的跨图恢复按序重放地图边界，并使用当时持久保存的有效名单；快照单独重试且不阻塞后续地图。
 - `map_started` 证明已观测到当前有效地图执行，不是首回合开始边沿。首次冻结期或中途接入均可提供证明；同 epoch 的 generation、context/名单/身份恢复、authority 重新认领及重启后，必须收到新的已接受遥测才补发一次，稳定正常帧不重复发布。
 - 开始证明使用当时合法的 producer/session/generation/context 与递增 runtime/receive cursor。只有成功构造并可靠入队后才标记发布；投影或持久化失败保留后续新帧的机会。连续性检查点和旧开始事件不能替代新证明；失效恢复轮次的旧开始事件停止重试。
 - RivalHub 仍核对 BP、首张未完成地图、十人首发、context/authority/连续性并审计；新证明不覆盖人工接管或正式结果，结束事件不自动恢复权限。跨项目真实实测独立记录。
@@ -97,7 +97,11 @@ C4 异步预测的普通实战更新可最多合并十六毫秒；等待期间�
 
 RivalHub LIVE 回执必须明确 `accepted:true` 才表示应用接受。`accepted:false` 的 `frame_expired / contended / delivery_dropped` 及 HTTP 429 的 `capacity` 为正常丢帧；`broadcast_unavailable`、未分类的旧服拒收、无效回执、非 2xx 和超时累计为投递失败。适配器在既有连接状态暴露安全结果、连续未接收计数及持续时间；短暂正常丢帧不提示，持续无成功接收达到阈值后只记录一次诊断并降级。正常丢帧不清除既有失败窗口或告警，只有明确 `accepted:true` 清除提示并确认恢复；没有原因的旧服回执只记未知拒收。失败保留 fetch/read/parse/validate/cancel 阶段及最多三层经过类型、长度、安全字符与既有脱敏校验的异常 name/code/cause，超时独立分类；禁止记录异常 message/stack、网址、凭据与响应正文，未知但合法的异常名称/机器码保留，凭据样式与不合法标识不原样输出。不逐帧记录远端正文，不排队或重试旧 LIVE。可靠事件仍按其独立 ACK 与取消合约处理。
 
-RivalHub 集成使用赛事级凭据、数据源认领和授权修订号。认领后还需建立地图开始证据：实时快照等待当前认领轮次、生产实例、会话、代际和地图执行的 `map_started` 获得成功回执后才发送，等待期间不缓存旧快照；重新认领或执行变化需要新回执。此投递门槛不替代网站的身份、首发与权限校验，见 [ADR-0050](https://github.com/Starfie1d1272/Mizar/blob/3b187e168ad755ede595eb8371bfaf5933c044fa/docs/decisions/0050-live-after-map-start-acknowledgement.md)。恢复队列保留事件原始生产实例；适配器只使用匹配该实例与会话的认领上传，旧事件在本机终止投递，不借用新认领或当前首发证据，见 [ADR-0051](https://github.com/Starfie1d1272/Mizar/blob/3b187e168ad755ede595eb8371bfaf5933c044fa/docs/decisions/0051-recovered-events-and-source-authority.md)。可靠队列超时向底层传递取消信号，取消或已被新地图开始投递取代的回执不修改本地授权与地图确认。授权与低频控制请求采用有界等待，重叠授权轮询共用一个在途请求；超时提示使用中文，原始错误保留为日志原因。公开上传速率、超时和队列限制以[连接适配器](../../apps/companion/src/match-context/rivalhub-connection.ts)及[输出实现](../../apps/companion/src/output)为准。`GET /local/v1/reliable-output-status` 仅提供本机投递诊断，不返回完整事件。
+RivalHub 集成使用赛事级凭据、数据源认领和授权修订号。认领后还需建立地图开始证据：实时快照等待当前认领轮次、生产实例、会话、代际和地图执行的 `map_started` 获得成功回执后才发送，等待期间不缓存旧快照；重新认领或执行变化需要新回执。此投递门槛不替代网站的身份、首发与权限校验，见 [ADR-0050](https://github.com/Starfie1d1272/Mizar/blob/3b187e168ad755ede595eb8371bfaf5933c044fa/docs/decisions/0050-live-after-map-start-acknowledgement.md)。恢复队列保留事件原始生产实例；适配器只使用匹配该实例与会话的认领上传，旧事件在本机终止投递，不借用新认领或当前首发证据，见 [ADR-0051](https://github.com/Starfie1d1272/Mizar/blob/3b187e168ad755ede595eb8371bfaf5933c044fa/docs/decisions/0051-recovered-events-and-source-authority.md)。上线顺序优先部署兼容的新 RivalHub，随后更新 Mizar；若旧 RivalHub 仍在运行，它会拒绝临时快照，但应继续接受原格式的比分。可靠队列超时向底层传递取消信号，取消或已被新地图开始投递取代的回执不修改本地授权与地图确认。授权与低频控制请求采用有界等待，重叠授权轮询共用一个在途请求；超时提示使用中文，原始错误保留为日志原因。公开上传速率、超时和队列限制以[连接适配器](../../apps/companion/src/match-context/rivalhub-connection.ts)及[输出实现](../../apps/companion/src/output)为准。`GET /local/v1/reliable-output-status` 仅提供本机投递诊断，不返回完整事件。
+
+`GET /local/v1/rivalhub-schedule` 仅刷新轻量赛程，不预取整表详情。`GET /local/v1/rivalhub-library/:matchId` 按需读取已授权赛事中的单场详情，离线时明确区分已有浏览缓存与缺失资料；缓存不能授予在线来源资格。详情在打开、切换、显式刷新及持续浏览的每分钟读取，当前制作比赛仍每十秒刷新。同授权范围、同场在途读取共享已校验实体；相邻一秒内的自动刷新可复用刚校验的实体，显式读取和载入仍请求网站。授权变化取消旧 scope 在途读并隔离旧回包，不复用旧 ETag。不同场次最多三份在途读取，满额明确返回暂不可用，不排队；失败后释放额度。浏览文件沿用 installation 稳定身份，升级保留已浏览资料，磁盘中的旧 viewer/认领标记不跨 scope 恢复。临时读取故障有界退避，429 遵守 Retry-After；不重放 LIVE 或写请求。网站赛程超过内部相邻赛程契约上限时，保留完整浏览列表，内部相邻赛程不可用并向操作者提示限制，不截断比赛。
+
+授权响应的可选 `authorizedUser` 与赛程的可选 `viewer`（仅 `userId`、`displayName`）、行级 `assignedToViewer` 仅用于连接状态及操作员比赛库；新鲜赛程更新身份和认领标记，字段缺失保持未知。身份和认领信息不进入 Core、通用比赛事实、HUD、雷达或公开输出。排序只置顶本人认领的未结束比赛，历史比赛仍置底；刷新保留有效的手动选择。
 
 `POST /operator/rivalhub/refresh` 使用已配对凭据刷新当前关联比赛，不接收浏览器凭据或任意 URL。与每 10 秒自动刷新共用单个在途请求；不同比赛的待确认选择不被后台刷新覆盖。`GET /local/v1/rivalhub-connection` 包含关联的 `activeMatchId`、`sourceReady`、`sourceBlockedReason`、`lastRefreshAt`、`refreshError` 与受限网站工作台地址。关联 ID 不证明推送资格；十人当前首发未到齐时不消耗界面自动认领次数，后端认领继续核对现场模式、在线资料和快照身份。
 
@@ -218,6 +222,8 @@ Host 私有 `POST /operator/runtime/local-match-exit` 仅允许回环监听、�
 
 ### OBS 配置实例归属
 
+本机操作员 `POST /operator/obs/remote-commentary/applications` 读取 OBS 应用音频的窗口候选，返回偏好修订与短期候选标识；必要时在空闲的 Mizar 场景集合中创建禁用探测来源。`POST /operator/obs/remote-commentary/application` 接收修订和候选标识，重新核对当前 OBS 连接、集合、探测来源与窗口后保存应用偏好。候选标识一次性使用，过期或上下文变化时拒绝；这些接口要求受信任的本机 Origin，不向公共节目接口暴露窗口信息。
+
 桌面主窗口独占 `begin_obs_configuration` / `finish_obs_configuration` / `read_obs_configuration_context` 权限。开始配置以随机 UUID 关联 Host 保存的启动 `Child` 句柄；通过进程名发现的既有 OBS 不取得归属，显式 `launch_obs` 将实例交由用户管理。配置结束只消费对应会话，其他配置会话未结束时保留；原句柄退出后不通过 PID 或进程名重新取得归属。返回有限 `reason` 与中文 `message`，诊断记录 `obs_configuration` 阶段和脱敏工具失败原因。
 
 结束配置不会发送 WM_CLOSE、WebSocket 停止输出或终止进程：OBS 标准接口不提供原子的空闲退出，Windows 关闭事件可能延迟且输出确认受运行时设置控制。Host 只读核对制作与输出，区分 `production / output / unconfirmed / safe_quit_unavailable` 并提示手动关闭；`not_owned / configuration_in_use / session_finished` 不触碰进程。页面卸载前尚未完成的启动在完成后结束同一会话；重复结束幂等，不消费新会话。
@@ -249,7 +255,7 @@ RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对�
 
 ## 本机节目音乐
 
-`GET /local/v1/music` 提供本机曲库配置和播放摘要；`POST /operator/music` 保存配置、调整本组音量、停止、下一首或恢复自动；`POST /operator/music/track` 接收本机选曲，`POST /operator/music/import` 验证并原子应用本地音乐 ZIP。写操作只允许本机可信 Origin，读取检查回环 Host 和浏览器跨站来源；局域网模式拒绝。只返回内容 ID、曲名、策略与必要状态，不返回绝对路径或音频下载地址。比赛、节目、雷达和外部 LIVE 不添加音乐路径或曲库字段；本机私下交付的诊断包保留音乐操作与相关配置，音频正文不进入支持包。格式与限制见[节目音乐](music.md)。
+`GET /local/v1/music` 提供本机曲库配置和播放摘要；`POST /operator/music` 保存配置、调整本组音量、停止、下一首或恢复自动；`POST /operator/music/preview` 接收有期限的试听开始、音量更新、续租和停止，核对窗口身份、会话令牌与递增操作编号；不写持久配置或正式播放记录。`POST /operator/music/track` 接收本机选曲，`POST /operator/music/import` 验证并原子应用本地音乐 ZIP。写操作只允许本机可信 Origin，读取检查回环 Host 和浏览器跨站来源；局域网模式拒绝。只返回内容 ID、曲名、策略与必要状态，不返回绝对路径或音频下载地址。比赛、节目、雷达和外部 LIVE 不添加音乐路径或曲库字段；本机私下交付的诊断包保留音乐操作与相关配置，音频正文不进入支持包。格式与限制见[节目音乐](music.md)。
 
 本机诊断导出 `POST /debug/support-bundle` 接受可选 ISO 时间 `from/to` 与可选索引焦点 `focusSessionId`，默认全保留范围；完整日志、压缩分卷、预算和完整性语义统一见[架构](architecture.md)。`POST /debug/control-event` 只允许本机可信 Origin，最多 64 KiB，接收 Mizar 浏览器操作证据，不具备控制或文件读取能力。
 
@@ -269,6 +275,19 @@ RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对�
 
 `GET /local/v1/rivalhub-schedule` 返回已授权赛事前后各 14 天赛程及 `library` 浏览资料：按 matchId 索引的完整比赛文档、`checkedAt`、`updatedAt`、整体 `syncedAt`、刷新状态与错误说明。后台最多每分钟启动一轮刷新，最多三场并发，首轮取得赛程后即可返回，详情随后填充。提供方 `/api/mizar/match` 支持 ETag / If-None-Match；304 只推进核对时间，200 重新校验和比较单场内容后更新。赛程列表无变化也检查单场，避免漏掉名单、队标或 BP 更新。
 
-缓存按网站地址、授权赛事和安装身份隔离、原子持久化；重启恢复重新校验提供方原文和赛事/比赛标识。网络或单场失败保留已验证内容并明确标记，成功赛程中已移除的比赛不继续出现在库内。浏览缓存不作为正式节目新鲜度依据，不激活比赛；载入仍走在线候选核对与显式确认。连接解除或更换后旧请求不能将旧赛事资料返回给新连接。
+缓存按网站地址、授权赛事和安装身份隔离、原子持久化；重启恢复重新校验提供方原文和赛事/比赛标识。网络或单场失败保留已验证内容并明确标记，成功赛程中已移除的比赛不继续出现在库内。浏览缓存不作为正式节目新鲜度依据，不激活比赛。比赛库的“核对并载入本场”是一次明确载入意图：`POST /operator/rivalhub/select` 携带 `activate: true` 后，服务先获取并校验最新资料，再在原上下文修订和候选代次仍匹配时原子持久化、激活；成功返回 `loaded: true` 与对应 `matchId`，界面随后进入本场准备，不再要求页面下方二次确认。获取、并发修订或写盘失败不切换原本场；请求未确认时不显示已载入。不携带该标记的旧调用仍只暂存候选，后台资料冲突也仍需明确确认。连接解除或更换后旧请求不能将旧赛事资料返回给新连接。
 
 `POST /operator/local-match/create` 可选 `eventName` 用于未指定 `eventId` 时自动创建赛事（去除首尾空白、1–128 字）；已有 `eventId` 保留原赛事身份与名称。
+
+
+### 观战连接命令
+
+端点使用规范十进制 IPv4 与有效端口；IPv4 各分段除单独的 `0` 外不得有前导零。普通输入、高级端点和命令 formatter 使用同一校验，拒绝不规范地址，不静默改写。
+
+本机观战配置接受裸数字 IPv4:port，或只含一次 `connect` 与可选一次 `password` 的受限命令；两条命令可交换顺序，支持大小写、外围空格、参数引号和一个尾分号。拒绝重复／额外命令、无效端口与注入字符，密码字符范围保持不变。27025／27026 固定映射为早源／节目源；其他端点需要显式高级配置。`@mizar/protocol/assist` 的 `formatObserverConnection` 统一输出 password-first 的安全节目源命令；高级端点往返解析需保留原显式早源与节目源配置。
+
+### 本机混音控制
+
+`GET /local/v1/mixer` 返回 `MixerStatus`；`POST /operator/mixer` 接受 `MixerCommand` 并返回 `MixerCommandResult`。协议类型位于 `@mizar/protocol/mixer`。revision 标识后端观察到的绑定上下文，过期命令必须拒绝；写入结果只有经回读确认才返回 `confirmed`。前三路音量是 OBS 观察值，音乐音量是独立的本机 master 配置。音乐条目的可选 `gain` 缺省时使用所属组 `volume`，通过音乐配置保存，旧的组音量命令语义不变。
+
+`POST /operator/music` 的 `play` 动作接受 `group` 和 `entryId`；旧客户端可发送 `trackId`，仅在组内唯一匹配时有效。两个字段同时提供时必须指向同一条目。

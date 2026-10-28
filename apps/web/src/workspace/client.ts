@@ -67,6 +67,17 @@ declare global {
 /** The Host retains this outcome; UI commands must not copy it into local state. */
 export class HostWindowControlError extends Error {}
 
+/** A native capability refusal, distinct from update/download or environment failures. */
+export class MulnxManualLaunchRequiredError extends Error {
+  readonly code = 'mulnx_manual_launch_required';
+  constructor(cause: unknown) {
+    super(
+      '当前安装的 MulNX 版本需在官方启动器完成环境检查后启动游戏，再明确借用该实例进入工作台。',
+      { cause },
+    );
+  }
+}
+
 export async function desktopInvoke<T>(
   command: string,
   args?: Record<string, unknown>,
@@ -140,6 +151,8 @@ export async function desktopInvoke<T>(
     ) {
       throw new HostWindowControlError(error.message, { cause: error });
     }
+    if (command === 'launch_mulnx' && error === 'mulnx_manual_launch_required')
+      throw new MulnxManualLaunchRequiredError(error);
     // Tauri commands returning Result<T, String> reject with a string.
     throw error instanceof Error
       ? error

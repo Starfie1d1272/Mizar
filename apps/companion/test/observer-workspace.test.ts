@@ -1,12 +1,16 @@
+import { execFileSync } from 'node:child_process';
 import { ObserverSettingsStore } from '../src/telemetry/observer-settings.js';
+import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, symlink, chmod, realpath, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import Fastify, { type FastifyInstance, type LightMyRequestResponse } from 'fastify';
 import { describe, it, expect, vi } from 'vitest';
 import {
   WorkspaceObserver,
+  prepareObserverOutputParent,
+  installedWorkspaceObserver,
   registerWorkspaceObserver,
 } from '../src/telemetry/observer-workspace.js';
 
@@ -32,7 +36,7 @@ async function fixture(
       steamApi: driver,
       parserWorker: driver,
       hostVersion: 14192,
-      outputDirectory,
+      outputDirectory: join(outputDirectory, randomUUID()),
     };
   });
   const app = Fastify();
@@ -48,9 +52,16 @@ async function fixture(
 describe('workbench observer ownership', () => {
   it('reports output failure after joining the child and permits a fresh connection', () =>
     fixture(async (observer) => {
+      const recorded: unknown[] = [];
+      observer.subscribeEvidence(() => {
+        throw new Error('diagnostic-listener-secret');
+      });
+      observer.subscribeEvidence((entry) => recorded.push(entry));
       await observer.start(driver, '127.0.0.3:27020', 'synthetic-only');
       await expect.poll(() => observer.view().active).toBe(false);
       expect(observer.view().failed).toBe(true);
+      expect(recorded).toHaveLength(1);
+      expect(JSON.stringify(recorded)).not.toContain('diagnostic-listener-secret');
       await observer.start(driver, '127.0.0.1:27020', 'synthetic-only');
       await expect.poll(() => observer.source.getHealth().state).toBe('live');
       expect(observer.view().failed).toBe(false);
@@ -257,6 +268,9 @@ it('routes standard observers and MulNX game automation independently', () =>
       expect(start).toHaveBeenCalledTimes(Number(scenario.enabled));
       expect(commands.send).toHaveBeenCalledTimes(Number(scenario.command));
       if (scenario.command) expect(commands.send.mock.calls[0]![0]).toContain('27026');
+      expect((await app.inject('/local/v1/observer')).json()).toMatchObject({
+        programCommandQueued: scenario.command,
+      });
       start.mockRestore();
       await app.close();
     }
@@ -376,14 +390,77 @@ it('rejects an old prepared game after a new game is prepared and rejects an old
     };
     expect((await request(payload)).statusCode).toBe(409);
     const next = await prepare('43-1');
+    const draftRevision = settings.revision;
     settings.setConnection({ ...settings.configured()!, earlyEndpoint: '127.0.0.1:27022' });
     expect((await request({ ...payload, game: '43-1', revision: next.revision })).statusCode).toBe(
       409,
     );
+    expect(
+      (
+        await request({
+          action: 'prepare',
+          game: '43-1',
+          job: 'Local\\MizarObserver-test',
+          useMulnx: true,
+          expectedRevision: draftRevision,
+        })
+      ).statusCode,
+    ).toBe(409);
     expect(commands.send).not.toHaveBeenCalled();
     expect(observer.view().active).toBe(false);
     expect((await start('43-1')).statusCode).toBe(200);
   }));
+
+it('keeps a rejected program submission retryable without launching the early source first', () =>
+  configuredFixture(async ({ observer, start }) => {
+    const launch = vi.spyOn(observer, 'start');
+    commands.send.mockRejectedValueOnce(new Error('synthetic program rejection'));
+    expect((await start()).statusCode).toBe(409);
+    expect(launch).not.toHaveBeenCalled();
+    expect(observer.view().active).toBe(false);
+    expect((await start()).statusCode).toBe(200);
+    expect(launch).toHaveBeenCalledTimes(1);
+    expect(commands.send).toHaveBeenCalledTimes(2); // Rejected first; only the second submission is accepted.
+  }));
+
+it.each([false, true])(
+  'switches both endpoints for a second map and retries only its failed early source (MulNX=%s)',
+  (useMulnx) =>
+    configuredFixture(async ({ observer, settings, request }) => {
+      const connect = async () => {
+        const body = { game: '42-1', job: 'Local\\MizarObserver-test', useMulnx };
+        const prepared = (
+          await request({ ...body, action: 'prepare', expectedRevision: settings.revision })
+        ).json<{ revision: string }>();
+        return request({
+          ...body,
+          action: 'start-configured',
+          executable: driver,
+          revision: prepared.revision,
+        });
+      };
+      const launch = vi.spyOn(observer, 'start');
+      expect((await connect()).statusCode).toBe(200);
+      await expect.poll(() => observer.source.getHealth().state).toBe('live');
+      const generation = observer.source.getHealth().generation;
+      const stop = vi.spyOn(observer, 'stop');
+      settings.setConnection({
+        earlyEndpoint: '127.0.0.2:27035',
+        programEndpoint: '127.0.0.2:27036',
+        password: 'second-map',
+      });
+      launch.mockRejectedValueOnce(new Error('synthetic second-map early launch failure'));
+      expect((await connect()).statusCode).toBe(409);
+      expect(stop).toHaveBeenCalled();
+      expect(commands.send).toHaveBeenCalledTimes(useMulnx ? 2 : 0);
+      if (useMulnx) expect(commands.send.mock.calls[1]![0]).toContain('connect 127.0.0.2:27036');
+      expect((await connect()).statusCode).toBe(200);
+      await expect.poll(() => observer.source.getHealth().state).toBe('live');
+      expect(observer.source.getHealth().generation).toBeGreaterThan(generation);
+      expect(launch.mock.calls.at(-1)?.slice(1, 3)).toEqual(['127.0.0.2:27035', 'second-map']);
+      expect(commands.send).toHaveBeenCalledTimes(useMulnx ? 2 : 0);
+    }),
+);
 
 it('cancels an in-flight start before a newer connection starts and never stops the newer owner', () =>
   configuredFixture(async ({ observer, settings, start, app }) => {
@@ -394,7 +471,11 @@ it('cancels an in-flight start before a newer connection starts and never stops 
     const stopped = vi.spyOn(observer, 'stop').mockImplementationOnce(() => gate);
     const old = start();
     await expect.poll(() => stopped.mock.calls.length).toBe(1);
-    settings.setConnection({ ...settings.configured()!, earlyEndpoint: '127.0.0.1:27022' });
+    settings.setConnection({
+      earlyEndpoint: '127.0.0.2:27035',
+      programEndpoint: '127.0.0.2:27036',
+      password: 'second-map',
+    });
     const fresh = start();
     release();
     expect((await old).statusCode).toBe(409);
@@ -403,7 +484,9 @@ it('cancels an in-flight start before a newer connection starts and never stops 
       active: true,
       pending: false,
     });
-    expect(commands.send).toHaveBeenCalledTimes(1);
+    expect(commands.send).toHaveBeenCalledTimes(2);
+    expect(commands.send.mock.calls[0]![0]).toContain('127.0.0.1:27021');
+    expect(commands.send.mock.calls[1]![0]).toContain('127.0.0.2:27036');
   }));
 
 it('does not resume an explicitly stopped or expired Host session when settings are enabled again', () =>
@@ -505,4 +588,159 @@ it('preserves an accepted game action on same-instance re-entry and connects on 
     expect(commands.send.mock.calls[1]![0]).toContain('27023');
     expect((await start('43-1')).statusCode).toBe(200);
     expect(commands.send).toHaveBeenCalledTimes(3);
+  }));
+
+it('creates only observer ancestors, reuses them, and rejects files, links and unwritable parents', async () => {
+  const root = await mkdtemp(join(await realpath(tmpdir()), 'mizar-observer-目录 space-'));
+  try {
+    const parent = await prepareObserverOutputParent(root);
+    expect(parent).toBe(join(root, 'data/observer'));
+    expect(await readdir(parent)).toEqual([]);
+    expect(await prepareObserverOutputParent(root)).toBe(parent);
+    await rm(join(root, 'data'), { recursive: true });
+    await writeFile(join(root, 'data'), 'not a directory');
+    await expect(prepareObserverOutputParent(root)).rejects.toThrow();
+    await rm(join(root, 'data'));
+    const outside = join(root, 'outside');
+    await mkdir(outside);
+    await symlink(outside, join(root, 'data'), process.platform === 'win32' ? 'junction' : 'dir');
+    await expect(prepareObserverOutputParent(root)).rejects.toThrow();
+    expect(await readdir(outside)).toEqual([]);
+    await rm(join(root, 'data'));
+    if (process.platform !== 'win32') {
+      await mkdir(join(root, 'data'), { mode: 0o500 });
+      await expect(prepareObserverOutputParent(root)).rejects.toThrow();
+      await chmod(join(root, 'data'), 0o700);
+    }
+  } finally {
+    await chmod(join(root, 'data'), 0o700).catch(() => {});
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it('bounds failed attempt history across fresh starts while keeping current success clean', () =>
+  fixture(async (observer) => {
+    for (let i = 0; i < 10; i++) {
+      await observer.start(driver, '127.0.0.12:27020', 'history-private-secret');
+      await expect.poll(() => observer.view().active).toBe(false);
+    }
+    expect(observer.view().history).toHaveLength(8);
+    expect(new Set(observer.view().history.map((entry) => entry.attemptId)).size).toBe(8);
+    expect(new Set(observer.view().history.map((entry) => entry.sessionId)).size).toBe(8);
+    await observer.start(driver, '127.0.0.1:27020', 'history-private-secret');
+    await expect.poll(() => observer.view().health.state).toBe('live');
+    expect(observer.view().failed).toBe(false);
+    expect(observer.view().terminal).toBeUndefined();
+    expect(JSON.stringify(observer.view())).not.toContain('history-private-secret');
+  }));
+
+it.each(['portable', 'installed'])(
+  'prepares the %s output parent and classifies preparation failure before spawning',
+  async (distribution) => {
+    const root = await mkdtemp(join(await realpath(tmpdir()), 'mizar-installed-observer-'));
+    if (distribution === 'installed') await writeFile(join(root, 'installed.flag'), '');
+    const localAppData = join(root, 'AppData Local');
+    const state = execFileSync(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        'const {writableRoot} = await import(process.argv[1]); console.log(writableRoot(process.argv[2]));',
+        new URL('../../../scripts/qualification/product-runtime.mjs', import.meta.url).href,
+        root,
+      ],
+      { encoding: 'utf8', env: { ...process.env, LOCALAPPDATA: localAppData } },
+    ).trim();
+    expect(state).toBe(
+      distribution === 'installed' ? join(localAppData, 'Mizar') : join(root, 'state'),
+    );
+    const entries = {
+      python: 'runtime/python/python.exe',
+      driver: 'client/driver.py',
+      native: 'client/cs2_observer.dll',
+      worker: 'client/parser_worker.mjs',
+    };
+    try {
+      await mkdir(state, { recursive: true });
+      for (const path of Object.values(entries)) {
+        const destination = join(root, 'resources/observer', path);
+        await mkdir(join(destination, '..'), { recursive: true });
+        await writeFile(destination, 'synthetic non-executable component');
+      }
+      await writeFile(
+        join(root, 'resources/observer/manifest.json'),
+        JSON.stringify({
+          componentVersion: '1.0.0',
+          sourceSha: '4b07fd0ddfb775d8fa1548bddfd98dc78c7fce93',
+          distribution: 'external-node',
+          entrypoints: entries,
+          filesSha256: Object.fromEntries(
+            Object.values(entries).map((path) => [
+              path,
+              createHash('sha256').update('synthetic non-executable component').digest('hex'),
+            ]),
+          ),
+        }),
+      );
+      await mkdir(join(root, 'game/csgo'), { recursive: true });
+      await writeFile(join(root, 'game/csgo/steam.inf'), 'PatchVersion=1.41.9.2');
+      // The synthetic component manifest tests assembly only; no pinned component is replaced.
+      const observer = installedWorkspaceObserver(
+        root,
+        state,
+        join(root, 'missing-launcher'),
+        'Local\\MizarObserver-test',
+      );
+      try {
+        await writeFile(join(state, 'data'), 'not a directory');
+        await expect(
+          observer.start(join(root, 'game/bin/win64/cs2.exe'), '127.0.0.1:27025', 'private'),
+        ).rejects.toThrow('output-parent-unavailable');
+        expect(observer.view().terminal).toMatchObject({
+          stage: 'output-parent',
+          reason: 'output-parent-unavailable',
+          ready: false,
+        });
+        expect(observer.view().history).toHaveLength(1);
+        await rm(join(state, 'data'));
+        await observer.start(join(root, 'game/bin/win64/cs2.exe'), '127.0.0.1:27025', 'private');
+        await expect.poll(() => observer.view().active).toBe(false);
+        expect(observer.view().terminal).toMatchObject({ stage: 'spawn', spawnCode: 'ENOENT' });
+        expect(await readdir(join(state, 'data/observer'))).toEqual([]);
+        expect(observer.view().history).toHaveLength(2);
+      } finally {
+        await observer.close();
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+it('does not hide the native HUD on connect, retry or reconnect in qualified toggle mode', () =>
+  configuredFixture(async ({ settings, request }) => {
+    await settings.configureGame({ autoConnect: true, hideGameHud: true });
+    const base = {
+      game: '42-1',
+      job: 'Local\\MizarObserver-test',
+      useMulnx: true,
+      nativeHudToggle: true,
+    };
+    const launch = async () => {
+      const prepared = (await request({ action: 'prepare', ...base })).json<{ revision: string }>();
+      return request({
+        action: 'start-configured',
+        executable: driver,
+        ...base,
+        revision: prepared.revision,
+      });
+    };
+    expect((await launch()).statusCode).toBe(200);
+    expect((await launch()).statusCode).toBe(200);
+    settings.setConnection({ ...settings.configured()!, programEndpoint: '127.0.0.1:27022' });
+    expect((await launch()).statusCode).toBe(200);
+    expect(commands.send).toHaveBeenCalledTimes(2);
+    for (const [command] of commands.send.mock.calls) {
+      expect(command).not.toContain('cl_draw_only_deathnotices');
+    }
   }));

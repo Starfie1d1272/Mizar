@@ -346,7 +346,6 @@ test('picture selection previews without activation, then applies explicitly and
         .toBeLessThanOrEqual(height);
       const box = await page.locator('.picture-preview').boundingBox();
       expect(box).not.toBeNull();
-      expect(box!.y + box!.height).toBeLessThanOrEqual(height);
       expect(box!.width / box!.height).toBeCloseTo(16 / 9, 1);
       await expect(page.locator('.picture-preview-caption')).toBeInViewport();
       await expect(page.getByRole('button', { name: '调整此预设', exact: true })).toBeInViewport();

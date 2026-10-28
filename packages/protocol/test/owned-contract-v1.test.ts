@@ -16,6 +16,15 @@ it('enforces kind-specific reliable payloads before V1 freeze', async () => {
     ['match_started', {}],
     ['map_started', {}],
     ['map_ended', { scoreA: 13, scoreB: 11, scoreCT: 13, scoreT: 11 }],
+    [
+      'map_player_snapshot',
+      {
+        mapEndedKey: 'parent',
+        players: [
+          { sourcePlayerId: 'id', canonicalPlayerId: null, kills: 0, deaths: null, assists: 1 },
+        ],
+      },
+    ],
     ['series_ended', { scoreA: 2, scoreB: 1 }],
     ['source_generation_changed', { previousSourceGeneration: 1000 }],
     ['map_epoch_changed', { previousMapEpoch: 1000, reason: 'explicit-reset' }],
@@ -36,4 +45,26 @@ it('enforces kind-specific reliable payloads before V1 freeze', async () => {
       payload: { scoreCT: 13, scoreT: 11 },
     }),
   ).toThrow();
+});
+
+it('accepts unknown per-player statistics independently of map scores', async () => {
+  const base = parseReliableEventV1(await fixture('reliable-event-v1.json'));
+  expect(
+    parseReliableEventV1({
+      ...base,
+      kind: 'map_player_snapshot',
+      payload: {
+        mapEndedKey: base.idempotencyKey,
+        players: [
+          {
+            sourcePlayerId: 'steam',
+            canonicalPlayerId: null,
+            kills: null,
+            deaths: 0,
+            assists: null,
+          },
+        ],
+      },
+    }).kind,
+  ).toBe('map_player_snapshot');
 });

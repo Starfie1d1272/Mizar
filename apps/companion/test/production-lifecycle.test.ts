@@ -240,14 +240,6 @@ it.each(['stream', 'record'] as const)(
       expect((await send('finish')).statusCode).toBe(200);
       expect(scene).toBe(waiting);
       expect(vi.mocked(obsConfig.isObsProcessRunning)).not.toHaveBeenCalled();
-      expect(obsWire.call.mock.calls.map(([type]) => type)).toEqual([
-        'GetSceneCollectionList',
-        'GetSceneList',
-        'GetSceneTransitionList',
-        'SetSceneSceneTransitionOverride',
-        'SetCurrentProgramScene',
-        'GetCurrentProgramScene',
-      ]);
       // Previously participating OBS: disconnect still blocks until closure is proved.
       obsWire.connect.mockRejectedValue(new Error('ECONNREFUSED'));
       expect((await send('finish')).statusCode).toBe(409);

@@ -129,6 +129,9 @@ it('wires restart recovery through production app composition and GSI ingress', 
               name: player.displayName,
               team: sideIndex === 0 ? 'CT' : 'T',
               observer_slot: sideIndex * 5 + index,
+              ...(phase === 'live'
+                ? { match_stats: { kills: index, assists: 0, deaths: 2, mvps: 0, score: 0 } }
+                : {}),
               state: { health: 100, armor: 100, money: 16000, equip_value: 5700 },
             },
           ]),
@@ -207,6 +210,12 @@ it('wires restart recovery through production app composition and GSI ingress', 
   await persisted.load();
   const event = persisted.getRecords().find((record) => record.event.kind === 'map_ended')!.event;
   expect(event.cursor.producerInstanceId).toBe('app-A');
+  const snapshot = persisted
+    .getRecords()
+    .find((record) => record.event.kind === 'map_player_snapshot')!.event;
+  if (snapshot.kind !== 'map_player_snapshot') throw new Error('expected player snapshot');
+  expect(snapshot.payload.players).toHaveLength(10);
+  expect(snapshot.payload.players[0]).toMatchObject({ kills: 0, assists: 0, deaths: 2 });
   const send = vi.fn(() => Promise.resolve('accepted' as const));
   const appB = buildApp({
     supportLogsDirectory: directory,
@@ -662,6 +671,219 @@ it('delivers display end and execution continuity under a persistent account dif
       winnerEntryId: null,
     });
     expect(service.current()?.capability.lineupMismatchOnly).toBe(true);
+  } finally {
+    await service.close();
+    await coordinator.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+it('retries a map-one snapshot before map-two events and ignores an empty terminal observation', async () => {
+  const binding = await bindingFixture();
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-postmap-order-'));
+  const runtime = createProgramRuntime('postmap-order', {
+    liveSession: { kind: 'bound', liveSessionId: 'postmap-session' },
+  });
+  let time = 1000;
+  const coordinator = createProjectionCoordinator({
+    programRuntime: runtime,
+    cstvSources: createCstvSourceManagers({}),
+    matchContextBinding: binding,
+    nowMonotonicMs: () => time,
+  });
+  const box = new ReliableOutbox(join(directory, 'outbox.json'));
+  const sent: ReliableEventV1[] = [];
+  let failEnd = true;
+  const service = new OutputService({
+    outbox: box,
+    sink: {
+      send: (event) => {
+        sent.push(event);
+        if (event.kind === 'map_ended' && failEnd) {
+          failEnd = false;
+          return Promise.resolve('retry' as const);
+        }
+        return Promise.resolve('accepted' as const);
+      },
+    },
+    now: () => new Date(Date.parse('2026-09-28T00:00:00Z') + time),
+    authorityScope: () => 'test-authority',
+  });
+  try {
+    await service.start();
+    for (const [sequence, phase, mapName] of [
+      [1, 'live', 'de_ancient'],
+      [2, 'gameover', 'de_ancient'],
+      [3, 'live', 'de_mirage'],
+    ] as const) {
+      time = sequence * 1000;
+      const base = observation(binding.manifest, sequence, phase, mapName);
+      const allPlayers = base.telemetry.allPlayers!.map((p, i) => ({
+        ...p,
+        ...(sequence === 1 ? { matchStats: { kills: i, deaths: 2, assists: 0 } } : {}),
+      }));
+      service.beforeRuntimeMutation();
+      const result = runtime.acceptObservation({
+        ...base,
+        telemetry: { ...base.telemetry, allPlayers },
+      });
+      service.afterRuntimeMutation(result, coordinator.afterRuntimeMutation(result), binding);
+      await box.flushPending();
+      await service.retry();
+    }
+    const ends = sent.filter((e) => e.kind === 'map_ended');
+    expect(ends).toHaveLength(2);
+    expect(ends[0]!.idempotencyKey).toBe(ends[1]!.idempotencyKey);
+    const snapshot = sent.find((event) => event.kind === 'map_player_snapshot');
+    if (snapshot?.kind !== 'map_player_snapshot') throw new Error('expected player snapshot');
+    expect(snapshot.payload.players).toHaveLength(10);
+    expect(snapshot.payload.players[0]).toMatchObject({ kills: 0, deaths: 2, assists: 0 });
+    expect(sent.findIndex((e) => e.kind === 'map_epoch_changed')).toBeGreaterThan(
+      sent.lastIndexOf(ends[1]!),
+    );
+  } finally {
+    await service.close();
+    await coordinator.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+it('supersedes a pending end when a later same-epoch final score contradicts it', async () => {
+  const binding = await bindingFixture();
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-score-correction-'));
+  const runtime = createProgramRuntime('correction', {
+    liveSession: { kind: 'bound', liveSessionId: 'correction-session' },
+  });
+  let time = 1000;
+  const coordinator = createProjectionCoordinator({
+    programRuntime: runtime,
+    cstvSources: createCstvSourceManagers({}),
+    matchContextBinding: binding,
+    nowMonotonicMs: () => time,
+  });
+  const box = new ReliableOutbox(join(directory, 'outbox.json'));
+  const sent: ReliableEventV1[] = [];
+  const service = new OutputService({
+    outbox: box,
+    sink: {
+      send: (event) => {
+        sent.push(event);
+        return Promise.resolve(
+          event.kind === 'map_ended' ? ('retry' as const) : ('accepted' as const),
+        );
+      },
+    },
+    now: () => new Date(Date.parse('2026-09-28T00:00:00Z') + time),
+    authorityScope: () => 'test-authority',
+  });
+  try {
+    await service.start();
+    for (const [sequence, phase, scoreB] of [
+      [1, 'live', 9],
+      [2, 'gameover', 9],
+      [3, 'gameover', 10],
+      [4, 'live', 0],
+    ] as const) {
+      time = sequence * 1000;
+      const input = observation(
+        binding.manifest,
+        sequence,
+        phase,
+        sequence === 4 ? 'de_mirage' : 'de_ancient',
+        { scoreB },
+      );
+      service.beforeRuntimeMutation();
+      const result = runtime.acceptObservation(input);
+      service.afterRuntimeMutation(result, coordinator.afterRuntimeMutation(result), binding);
+      await box.flushPending();
+      await service.retry();
+    }
+    const ends = sent.filter((event) => event.kind === 'map_ended');
+    expect(ends).toHaveLength(1);
+    expect(
+      box.getRecords().find((record) => record.event.idempotencyKey === ends[0]!.idempotencyKey)
+        ?.status,
+    ).toBe('superseded');
+  } finally {
+    await service.close();
+    await coordinator.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+it('replays two map boundaries and their original lineups in order after an outage', async () => {
+  const binding = await bindingFixture();
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-three-map-replay-'));
+  const runtime = createProgramRuntime('three-map', {
+    liveSession: { kind: 'bound', liveSessionId: 'three-map-session' },
+  });
+  let time = 1000;
+  const coordinator = createProjectionCoordinator({
+    programRuntime: runtime,
+    cstvSources: createCstvSourceManagers({}),
+    matchContextBinding: binding,
+    nowMonotonicMs: () => time,
+  });
+  const box = new ReliableOutbox(join(directory, 'outbox.json'));
+  const delivered: Array<{ event: ReliableEventV1; lineup?: readonly string[] }> = [];
+  let offline = false;
+  const service = new OutputService({
+    outbox: box,
+    sink: {
+      send: (event, _signal, lineup) => {
+        if (offline) return Promise.resolve('retry' as const);
+        delivered.push({ event, ...(lineup ? { lineup } : {}) });
+        return Promise.resolve('accepted' as const);
+      },
+    },
+    now: () => new Date(Date.parse('2026-09-28T00:00:00Z') + time),
+    authorityScope: () => 'test-authority',
+  });
+  try {
+    await service.start();
+    const frames = [
+      [1, 'live', 'de_ancient', 13, 9],
+      [2, 'gameover', 'de_ancient', 13, 9],
+      [3, 'live', 'de_mirage', 9, 13],
+      [4, 'gameover', 'de_mirage', 9, 13],
+      [5, 'live', 'de_nuke', 0, 0],
+    ] as const;
+    for (const [sequence, phase, name, scoreA, scoreB] of frames) {
+      time = sequence * 1000;
+      if (sequence === 2) offline = true;
+      const base = observation(binding.manifest, sequence, phase, name, { scoreA, scoreB });
+      const allPlayers = base.telemetry.allPlayers!.map((p, i) => ({
+        ...p,
+        matchStats: { kills: i, assists: 0, deaths: 2 },
+      }));
+      service.beforeRuntimeMutation();
+      const result = runtime.acceptObservation({
+        ...base,
+        telemetry: { ...base.telemetry, allPlayers },
+      });
+      service.afterRuntimeMutation(result, coordinator.afterRuntimeMutation(result), binding);
+      await box.flushPending();
+      await service.retry();
+    }
+    offline = false;
+    time = 12000;
+    await service.retry();
+    const relevant = delivered.filter(({ event }) =>
+      ['map_ended', 'map_epoch_changed', 'map_started'].includes(event.kind),
+    );
+    expect(relevant.map(({ event }) => [event.kind, event.cursor.mapEpoch])).toEqual([
+      ['map_started', 1],
+      ['map_ended', 1],
+      ['map_epoch_changed', 2],
+      ['map_started', 2],
+      ['map_ended', 2],
+      ['map_epoch_changed', 3],
+      ['map_started', 3],
+    ]);
+    expect(
+      relevant.find(({ event }) => event.kind === 'map_started' && event.cursor.mapEpoch === 2)
+        ?.lineup,
+    ).toHaveLength(10);
   } finally {
     await service.close();
     await coordinator.close();

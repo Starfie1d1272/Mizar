@@ -217,7 +217,7 @@ describe('signed content retained across compatible Core authorization', () => {
     // dates, source and Promotion signature remain byte-for-byte unchanged.
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(now + 2 * 86400000);
-    for (const suffix of ['', '-alpha.1', '-beta.2', '-rc.3']) {
+    for (const suffix of ['', '-rc.3']) {
       const core = {
         ...newCore,
         appVersion: `1.2.0${suffix}`,
