@@ -266,7 +266,10 @@ function playerPresentation(
     return {
       ...presented,
       active,
-      clipFill: active && presented.item?.kind === 'firearm' ? magazineFill(held) : null,
+      clipFill:
+        active && presented.item?.kind === 'firearm' && presented.item.family !== 'pistol'
+          ? magazineFill(held)
+          : null,
     };
   });
   const dead = player.lifeState === 'dead';
