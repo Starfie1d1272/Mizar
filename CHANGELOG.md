@@ -2,6 +2,13 @@
 
 本文件维护各版本的用户变更与升级说明。正式发布记录及原始资产见 [GitHub Releases](https://github.com/Starfie1d1272/Mizar/releases)。
 
+## [1.8.3-rc.1]
+
+### 游戏与观战
+
+- 适配 MulNX 新版启动器消息总线，支持从准备中心发起启动并核对游戏实例。
+- 此候选版仍需 Windows、CS2 和 OBS 实机验收；MulNX 自动启动需要包含对应接口的版本。
+
 ## [1.8.2]
 
 ### 观察与比赛
