@@ -14,11 +14,24 @@ const MANAGED = [
   { name: 'Mizar · Microphone', kind: 'wasapi_input_capture' },
 ] as const;
 
+async function activeManagedInputs(obs: ObsRpc, inputs: Input[]): Promise<Input[]> {
+  const names = new Set<string>();
+  const specials = await obs.call('GetSpecialInputs');
+  for (const value of Object.values(specials)) if (typeof value === 'string') names.add(value);
+  for (const scene of obsDesiredScenes('http://127.0.0.1')) {
+    const items = (await obs.call('GetSceneItemList', { sceneName: scene.sceneName }))
+      .sceneItems as { sourceName: string; sceneItemEnabled: boolean }[];
+    for (const item of items) if (item.sceneItemEnabled !== false) names.add(item.sourceName);
+  }
+  return inputs.filter((input) => names.has(input.inputName));
+}
+
 /** Structural readiness only. Audible content still needs an OBS/stream listening check. */
 export async function checkObsAudio(obs: ObsRpc): Promise<ObsFinding[]> {
   const inputs = (await obs.call('GetInputList')).inputs as Input[];
-  const candidates = inputs.filter((input) => AUDIO_KINDS.has(input.inputKind));
-  for (const input of inputs.filter((item) => VIDEO_AUDIO_KINDS.has(item.inputKind))) {
+  const active = await activeManagedInputs(obs, inputs);
+  const candidates = active.filter((input) => AUDIO_KINDS.has(input.inputKind));
+  for (const input of active.filter((item) => VIDEO_AUDIO_KINDS.has(item.inputKind))) {
     const settings = (await obs.call('GetInputSettings', { inputName: input.inputName }))
       .inputSettings as Record<string, unknown>;
     if (settings.capture_audio === true) candidates.push(input);
@@ -82,7 +95,7 @@ export async function checkObsAudio(obs: ObsRpc): Promise<ObsFinding[]> {
   return findings;
 }
 
-/** Adds managed defaults only when no unrelated audio sources could be duplicated. */
+/** Stage defaults in Mizar scenes; custom paths stay audible until the migration commits. */
 export async function setupObsAudio(obs: ObsRpc, baseUrl: string): Promise<void> {
   const [stream, record, collection] = await Promise.all([
     obs.call('GetStreamStatus'),
@@ -93,18 +106,22 @@ export async function setupObsAudio(obs: ObsRpc, baseUrl: string): Promise<void>
   if (collection.currentSceneCollectionName !== OBS_COLLECTION)
     throw new ObsActionError('collection_inactive');
   const inputs = (await obs.call('GetInputList')).inputs as Input[];
-  for (const input of inputs.filter((item) => VIDEO_AUDIO_KINDS.has(item.inputKind))) {
+  const active = await activeManagedInputs(obs, inputs);
+  if (
+    Object.values(await obs.call('GetSpecialInputs')).some(
+      (value) => typeof value === 'string' && value,
+    )
+  )
+    throw new ObsActionError('custom_audio');
+  for (const input of active.filter((item) => VIDEO_AUDIO_KINDS.has(item.inputKind))) {
     const settings = (await obs.call('GetInputSettings', { inputName: input.inputName }))
       .inputSettings as Record<string, unknown>;
     if (settings.capture_audio === true) throw new ObsActionError('video_audio_active');
   }
-  if (
-    inputs.some(
-      (input) =>
-        AUDIO_KINDS.has(input.inputKind) && !MANAGED.some((item) => item.name === input.inputName),
-    )
-  )
-    throw new ObsActionError('custom_audio');
+  const custom = active.some(
+    (input) =>
+      AUDIO_KINDS.has(input.inputKind) && !MANAGED.some((item) => item.name === input.inputName),
+  );
   for (const managed of MANAGED) {
     const existing = inputs.find((input) => input.inputName === managed.name);
     if (existing && existing.inputKind !== managed.kind)
@@ -117,7 +134,7 @@ export async function setupObsAudio(obs: ObsRpc, baseUrl: string): Promise<void>
           inputName: managed.name,
           inputKind: managed.kind,
           inputSettings: { device_id: 'default' },
-          sceneItemEnabled: true,
+          sceneItemEnabled: !custom,
         });
         created = true;
       } else {
@@ -127,28 +144,30 @@ export async function setupObsAudio(obs: ObsRpc, baseUrl: string): Promise<void>
           await obs.call('CreateSceneItem', {
             sceneName: scene.sceneName,
             sourceName: managed.name,
-            sceneItemEnabled: true,
+            sceneItemEnabled: !custom,
           });
       }
     }
   }
 }
 
-/** Automatic preparation preserves existing custom/global/game-capture audio. */
+/** Automatic preparation scopes changes to Mizar scenes and preserves shared source settings. */
 export async function ensureObsAudio(obs: ObsRpc, baseUrl: string): Promise<ObsFinding[]> {
   const inputs = (await obs.call('GetInputList')).inputs as Input[];
-  const customAudio = inputs.some(
-    (input) =>
-      AUDIO_KINDS.has(input.inputKind) &&
-      !MANAGED.some((managed) => managed.name === input.inputName),
-  );
+  const active = await activeManagedInputs(obs, inputs);
   let gameAudio = false;
-  for (const input of inputs.filter((item) => VIDEO_AUDIO_KINDS.has(item.inputKind))) {
+  for (const input of active.filter((item) => VIDEO_AUDIO_KINDS.has(item.inputKind))) {
     const settings = (await obs.call('GetInputSettings', { inputName: input.inputName }))
       .inputSettings as Record<string, unknown>;
     if (settings.capture_audio === true) gameAudio = true;
   }
-  if (customAudio || gameAudio) return checkObsAudio(obs);
+  if (
+    gameAudio ||
+    Object.values(await obs.call('GetSpecialInputs')).some(
+      (value) => typeof value === 'string' && value,
+    )
+  )
+    return checkObsAudio(obs);
   if (
     MANAGED.some((managed) =>
       inputs.some((input) => input.inputName === managed.name && input.inputKind !== managed.kind),

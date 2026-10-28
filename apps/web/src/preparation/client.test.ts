@@ -69,7 +69,7 @@ function setup(
       return Promise.reject(new Error('请先退出已打开的 CS2'));
     if (failure === 'mulnx-unsupported' && command === 'launch_mulnx')
       // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- Tauri Result<T, String> rejects with the native string code.
-      return Promise.reject('mulnx_manual_launch_required');
+      return Promise.reject('mulnx_automatic_launch_unavailable');
     if (failure === 'mulnx' && command === 'launch_mulnx')
       return Promise.reject(new Error('请先关闭冲突程序：完美世界竞技平台'));
     if (failure === 'restore' && command === 'finish_managed_cs2')
@@ -181,7 +181,7 @@ describe('managed CS2 production entry and cleanup', () => {
       { preferMulnx: true, running: false, pending: false },
     ]);
     await expect(productionAction('enter', preparation)).rejects.toMatchObject({
-      code: 'mulnx_manual_launch_required',
+      code: 'mulnx_automatic_launch_unavailable',
     });
     expect(calls).not.toContain('attach_external_cs2');
     expect(calls).not.toContain('start_managed_cs2');

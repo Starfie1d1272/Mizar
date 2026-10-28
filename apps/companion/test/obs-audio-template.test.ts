@@ -3,7 +3,7 @@ import { obsDesiredScenes } from '../src/obs/desired-state.js';
 import { inspectLegacyAudioTemplate } from '../src/obs/audio-template.js';
 import type { ObsRpc } from '../src/obs/reconcile.js';
 
-it('accepts only the complete default template and rejects user changes', async () => {
+it('scopes migration to managed scenes and retains custom source settings', async () => {
   const scenes = obsDesiredScenes('http://127.0.0.1:3000');
   let custom = false;
   let global = false;
@@ -96,13 +96,13 @@ it('accepts only the complete default template and rejects user changes', async 
     (await inspectLegacyAudioTemplate(obs, 'http://127.0.0.1:3000', 'voice'))?.desktop,
   ).toHaveLength(scenes.length);
   custom = true;
-  expect(await inspectLegacyAudioTemplate(obs, 'http://127.0.0.1:3000', 'voice')).toBeNull();
+  expect(await inspectLegacyAudioTemplate(obs, 'http://127.0.0.1:3000', 'voice')).not.toBeNull();
   custom = false;
   global = true;
   expect(await inspectLegacyAudioTemplate(obs, 'http://127.0.0.1:3000', 'voice')).toBeNull();
   global = false;
   filter = true;
-  expect(await inspectLegacyAudioTemplate(obs, 'http://127.0.0.1:3000', 'voice')).toBeNull();
+  expect(await inspectLegacyAudioTemplate(obs, 'http://127.0.0.1:3000', 'voice')).not.toBeNull();
   filter = false;
   extraPath = true;
   expect(await inspectLegacyAudioTemplate(obs, 'http://127.0.0.1:3000', 'voice')).toBeNull();

@@ -42,8 +42,10 @@ export function MusicControls({
     try {
       await command('/operator/music', body);
       if (body.action === 'play') setSelection('');
-    } catch {
-      setError('音乐操作未完成，请检查本机服务与 OBS 后重试。');
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : '音乐操作未完成，请检查本机服务与 OBS 后重试。',
+      );
     } finally {
       setBusy(false);
     }

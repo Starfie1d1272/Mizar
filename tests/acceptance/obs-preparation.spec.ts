@@ -1,5 +1,39 @@
 import { test, expect } from './companion-isolation.js';
 
+test('different check and preparation findings do not repeat configuration writes', async ({
+  page,
+}) => {
+  let ensures = 0;
+  let reads = 0;
+  await page.route('**/local/v1/obs', (route) => {
+    reads++;
+    return route.fulfill({
+      json: {
+        connection: 'connected',
+        currentScene: 'Mizar · 赛前等待',
+        port: 4455,
+        streaming: false,
+        recording: false,
+        passwordConfigured: true,
+        video: null,
+        findings: [{ code: 'audio_missing', message: '音频待检查' }],
+        sceneAligned: true,
+      },
+    });
+  });
+  await page.route('**/operator/obs/ensure', (route) => {
+    ensures++;
+    return route.fulfill({
+      json: { findings: [{ code: 'commentary_pending', message: '等待解说音频' }] },
+    });
+  });
+  await page.goto('/');
+  await expect.poll(() => ensures).toBe(1);
+  const afterEnsure = reads;
+  await expect.poll(() => reads, { timeout: 12000 }).toBeGreaterThanOrEqual(afterEnsure + 4);
+  expect(ensures).toBe(1);
+});
+
 test('first connection prepares scenes and audio without extra setup clicks, and exposes remaining audio problems', async ({
   page,
 }, testInfo) => {

@@ -17,7 +17,7 @@ import { useEffect, useState } from 'react';
 import { OperatorShell } from '../operator/OperatorShell';
 import { RivalHubPreparationPanel } from '../operator/RivalHubPreparationPanel';
 import { RivalHubSyncControls } from '../operator/RivalHubSyncControls';
-import { desktopInvoke, MulnxManualLaunchRequiredError } from '../workspace/client';
+import { desktopInvoke, MulnxAutomaticLaunchUnavailableError } from '../workspace/client';
 import { LocalTournamentEditor } from '../workspace/LocalTournamentEditor';
 import { Button, Dialog, Panel, StatusBanner, StatusPill } from '../ui';
 import { LocalOverlayControls } from './LocalOverlayControls';
@@ -99,7 +99,7 @@ export function PreparationPage() {
     '/local/v1/rivalhub-connection',
   );
   const [message, setMessage] = useState('');
-  const [manualLaunchRequired, setManualLaunchRequired] = useState(false);
+  const [automaticLaunchUnavailable, setAutomaticLaunchUnavailable] = useState(false);
   const [busy, setBusy] = useState(false);
   const [demoOpen, setDemoOpen] = useState(() =>
     new URLSearchParams(window.location.search).has('demoTest'),
@@ -112,12 +112,12 @@ export function PreparationPage() {
     if (busy) return;
     setBusy(true);
     setMessage('');
-    setManualLaunchRequired(false);
+    setAutomaticLaunchUnavailable(false);
     try {
       await run();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '操作未完成。');
-      setManualLaunchRequired(error instanceof MulnxManualLaunchRequiredError);
+      setAutomaticLaunchUnavailable(error instanceof MulnxAutomaticLaunchUnavailableError);
     } finally {
       setBusy(false);
     }
@@ -130,7 +130,7 @@ export function PreparationPage() {
         .then((current) => productionAction('enter', current))
         .catch((error: unknown) => {
           setMessage(error instanceof Error ? error.message : '操作未完成。');
-          setManualLaunchRequired(error instanceof MulnxManualLaunchRequiredError);
+          setAutomaticLaunchUnavailable(error instanceof MulnxAutomaticLaunchUnavailableError);
         });
     };
     window.addEventListener('mizar-enter', enter);
@@ -205,10 +205,10 @@ export function PreparationPage() {
 
         {!(path === '/settings' && tab === 'gsi') ? <Cs2Recovery production={production} /> : null}
         {message ? (
-          <StatusBanner tone={manualLaunchRequired ? 'warning' : 'danger'}>
+          <StatusBanner tone={automaticLaunchUnavailable ? 'warning' : 'danger'}>
             {message}
-            {manualLaunchRequired ? (
-              <a href="/settings?tab=camera#mulnx-launch">打开手动启动与游戏交接</a>
+            {automaticLaunchUnavailable ? (
+              <a href="/settings?tab=camera#mulnx-launch">检查 MulNX 启动能力</a>
             ) : null}
           </StatusBanner>
         ) : null}

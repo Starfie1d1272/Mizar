@@ -1,7 +1,14 @@
 import { useRef, useState } from 'react';
 import type { MulnxToolView } from '@mizar/protocol/orchestration';
 import { Button, Dialog, StatusBanner } from '../ui';
-import { command } from '../preparation/client';
+import {
+  command,
+  checkObsBeforeLaunch,
+  productionAction,
+  useLocalRead,
+  type Production,
+  type ExternalGameIdentity,
+} from '../preparation/client';
 import { desktopInvoke } from '../workspace/client';
 
 export function MulnxToolControls({
@@ -11,6 +18,7 @@ export function MulnxToolControls({
   allowStop?: boolean;
   tool: (MulnxToolView & { launchProtocol?: 1 | null }) | undefined;
 }) {
+  const production = useLocalRead<Production>('/local/v1/production');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [failed, setFailed] = useState(false);
@@ -26,14 +34,14 @@ export function MulnxToolControls({
     setFailed(false);
     try {
       if (action === 'open') {
-        await desktopInvoke('launch_mulnx');
+        if (!production || !(await checkObsBeforeLaunch(true))) return;
+        const game = await desktopInvoke<ExternalGameIdentity>('launch_mulnx', { automatic: true });
+        await productionAction('enter', production, false, undefined, game);
         setStopSubmitted(false);
-        setMessage('已打开 MulNX，启动游戏后选择下方游戏实例。');
+        setMessage('已由 Mizar 启动 MulNX 游戏并进入工作台。');
       } else if (action === 'update') {
         await desktopInvoke('mulnx_control', { action: 'update' });
-        setMessage(
-          'MulNX 版本准备已完成；是否支持自动启动请核对上方状态，不支持时仍需在官方启动器完成检查后启动。',
-        );
+        setMessage('MulNX 版本准备已完成；确认支持自动启动后，从 Mizar 启动工作台。');
       } else if (action === 'stop') {
         const result = await desktopInvoke<{ result?: string; cleanupPending?: boolean } | null>(
           'mulnx_control',
@@ -68,8 +76,8 @@ export function MulnxToolControls({
   return (
     <div>
       <p>
-        启动前请先退出完美世界竞技平台、其他竞技平台和游戏，再在 MulNX 完成环境检查。仅用于离线 Demo
-        或已授权观战。
+        启动前请先退出完美世界竞技平台、其他竞技平台和游戏，Mizar 会调用 MulNX
+        完成环境检查。仅用于离线 Demo 或已授权观战。
       </p>
       <p>
         MulNX · {tool.installed ?? '首次启动时准备'}
@@ -80,8 +88,8 @@ export function MulnxToolControls({
       ) : tool.installed ? (
         <StatusBanner tone="warning">
           {tool.launchProtocol === null
-            ? '当前安装的 MulNX 版本需在官方启动器完成环境检查后启动；请使用下方打开按钮，再明确交接游戏实例。'
-            : '本机自动启动能力尚未确认；可使用下方官方启动器完成环境检查后启动，再明确交接游戏实例。'}
+            ? '当前 MulNX 版本不支持自动启动，请检查可用更新，或选择标准启动。'
+            : '本机自动启动能力尚未确认，请先检查更新。'}
         </StatusBanner>
       ) : null}
       <Button disabled={busy || tool.busy} onClick={() => void run('check')}>
@@ -93,8 +101,17 @@ export function MulnxToolControls({
         </Button>
       ) : null}
       {window.__TAURI_INTERNALS__ ? (
-        <Button disabled={busy || tool.busy} onClick={() => void run('open')}>
-          打开本机 MulNX
+        <Button
+          disabled={
+            busy ||
+            tool.busy ||
+            tool.launchProtocol !== 1 ||
+            !production?.canEnter ||
+            production.mode !== 'preparation'
+          }
+          onClick={() => void run('open')}
+        >
+          启动 MulNX 工作台
         </Button>
       ) : null}
       {window.__TAURI_INTERNALS__ && allowStop ? (

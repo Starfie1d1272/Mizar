@@ -4,11 +4,24 @@ use std::{path::{Path, PathBuf}, sync::Mutex, time::{Duration, Instant}, process
 use std::os::windows::process::CommandExt;
 use serde_json::{Value, json};
 use tauri::Manager;
-use crate::ShellExecuteW;
 static LAUNCH_GATE: Mutex<()> = Mutex::new(());
 
+/// Attachment is an internal continuation of a launch initiated by Mizar.
+/// A running game, matching installation or live gateway alone grants no entry.
+pub fn verify_managed_launch(log: &DesktopLog, actual: &Value, pid: u32, created: u64, executable: &Path) -> Result<(), String> {
+    let denied = "当前 CS2 不是由 Mizar 启动，请先退出游戏，再从 Mizar 打开工作台。";
+    let bytes = std::fs::read(log.state_root.join("data/mulnx-launch/current.json")).map_err(|_| denied)?;
+    let receipt = parse_launch_result(&bytes, true).map_err(|_| denied)?;
+    if receipt["pid"].as_u64() != Some(pid as u64)
+        || receipt["created"].as_str().and_then(|value| value.parse::<u64>().ok()) != Some(created) {
+        return Err(denied.into());
+    }
+    validate_game_identity(actual, &receipt, executable).map_err(|_| denied.into())
+}
+
 pub fn launch(app: &tauri::AppHandle, log: &DesktopLog, automatic: bool) -> Result<Value, String> {
-    launch_operation(app, log, automatic, false)
+    if !automatic { return Err("请从 Mizar 自动启动 MulNX 工作台。".into()); }
+    launch_operation(app, log, true, false)
 }
 
 pub fn update(app: &tauri::AppHandle, log: &DesktopLog) -> Result<Value, String> {
@@ -65,7 +78,7 @@ fn launch_operation(app: &tauri::AppHandle, log: &DesktopLog, automatic: bool, u
                     return Ok(receipt);
                 }
             }
-            return Err("已有 CS2 与本次 MulNX 启动记录不匹配，请先退出它，或从外部游戏交接入口明确选择。".into());
+            return Err("当前 CS2 不是由 Mizar 启动，请先退出游戏，再从 Mizar 打开工作台。".into());
         }
     }
     if status["spectatorRecoveryPending"] == true { return Err("请先完成上次游戏配置恢复。".into()); }
@@ -82,20 +95,8 @@ fn launch_operation(app: &tauri::AppHandle, log: &DesktopLog, automatic: bool, u
     app.state::<updates::PendingUpdate>().check()?;
     no_game()?;
     if let Err(reason) = validate_launch_capability(automatic, &prepared) {
-        log.event("mulnx_launch", "manual-required", Some(&json!({"reason":reason,"version":prepared["version"]}).to_string()));
+        log.event("mulnx_launch", "unsupported", Some(&json!({"reason":reason,"version":prepared["version"]}).to_string()));
         return Err(reason);
-    }
-    if !automatic {
-        // Opening the UI grants no game or keyboard ownership and does not add
-        // the session-only exec; the user may start a game independently later.
-        crate::observer_hud::preflight(log, status["preferMulnx"] == true)?;
-        let verb: Vec<u16> = "open\0".encode_utf16().collect();
-        let target: Vec<u16> = format!("{}\0", launcher.display()).encode_utf16().collect();
-        let directory: Vec<u16> = format!("{}\0", launcher.parent().ok_or("MulNX 目录无效。")?.display()).encode_utf16().collect();
-        let result = unsafe { ShellExecuteW(0, verb.as_ptr(), target.as_ptr(), std::ptr::null(), directory.as_ptr(), 1) };
-        if result <= 32 { return Err(format!("MulNX 未能打开（系统代码 {result}）。")); }
-        log.event("mulnx_launch", "success", Some(&format!("version={}; spectator_cfg=not_requested", prepared["version"])));
-        return Ok(Value::Null);
     }
     let spectator_cfg = managed.try_lock().map_err(|_| "CS2 正忙，请稍后重试。")?.prepare_observer_for_mulnx(&executable)?;
     let cancel_unsubmitted = || -> Result<(), String> {
@@ -251,7 +252,7 @@ fn failure_receipt_confirms_cleanup(result: &Value) -> bool {
 
 fn validate_launch_capability(automatic: bool, prepared: &Value) -> Result<(), String> {
     if automatic && prepared["launchProtocol"] != 1 {
-        return Err("mulnx_manual_launch_required".into());
+        return Err("mulnx_automatic_launch_unavailable".into());
     }
     Ok(())
 }
@@ -309,6 +310,25 @@ mod tests {
         assert!(outcome.unwrap_err().contains("备份仍保留")); assert!(!cancelled.get());
     }
     #[test]
+    fn attachment_requires_a_matching_mizar_launch_receipt() {
+        let root = std::env::temp_dir().join(format!("mizar-attach-receipt-{}-{}", std::process::id(), chrono::Utc::now().timestamp_nanos_opt().unwrap()));
+        let log = DesktopLog::new(&root, None).unwrap();
+        let executable = Path::new(r"D:\Steam\cs2.exe");
+        let actual = json!({"processes":[{"pid":42,"created":"134000000000000000","executable":executable}]});
+        assert!(verify_managed_launch(&log, &actual, 42, 134000000000000000, executable).is_err());
+        let path = log.state_root.join("data/mulnx-launch/current.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let receipt = json!({"protocol":1,"ok":true,"stage":"resumed","pid":42,"created":"134000000000000000","cleanupPending":false});
+        std::fs::write(&path, receipt.to_string()).unwrap();
+        assert!(verify_managed_launch(&log, &actual, 42, 134000000000000000, executable).is_ok());
+        assert!(verify_managed_launch(&log, &actual, 42, 134000000000000001, executable).is_err());
+        assert!(verify_managed_launch(&log, &actual, 43, 134000000000000000, executable).is_err());
+        assert!(verify_managed_launch(&log, &actual, 42, 134000000000000000, Path::new(r"D:\Other\cs2.exe")).is_err());
+        std::fs::write(&path, "{}").unwrap();
+        assert!(verify_managed_launch(&log, &actual, 42, 134000000000000000, executable).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
     fn receipt_reuse_requires_its_own_record_and_clean_launch_options() {
         use std::cell::Cell;
         let calls = Cell::new(0);
@@ -339,10 +359,10 @@ mod tests {
         assert!(error.contains("spawn failed") && error.contains("record busy"));
     }
     #[test]
-    fn unsupported_local_or_new_release_requires_checked_manual_launch_without_changing_supported_path() {
+    fn unsupported_local_or_new_release_refuses_automatic_launch() {
         for version in ["Beta16.1", "Beta16.2"] {
             let release = json!({"version":version,"launchProtocol":null});
-            assert_eq!(validate_launch_capability(true, &release).unwrap_err(), "mulnx_manual_launch_required");
+            assert_eq!(validate_launch_capability(true, &release).unwrap_err(), "mulnx_automatic_launch_unavailable");
             assert!(validate_launch_capability(false, &release).is_ok());
         }
         assert!(validate_launch_capability(true, &json!({"launchProtocol":1})).is_ok());

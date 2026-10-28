@@ -60,7 +60,6 @@ pub async fn observer_command(window: tauri::WebviewWindow, app: tauri::AppHandl
         let log = app.state::<DesktopLog>();
         log.event("observer_workspace", "begin", Some(&format!("action={action}")));
         let mut automation = None;
-        let mut cfg_ready = false;
         let result: Result<(), String> = (|| {
             if action == "stop" {
                 request(&log, serde_json::json!({"action":"stop"}))?;
@@ -73,28 +72,6 @@ pub async fn observer_command(window: tauri::WebviewWindow, app: tauri::AppHandl
                 let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
                 let _cs2 = managed.lock().map_err(|_| "请等待游戏操作完成后重试。")?;
                 return if native_toggle_session(&log)? { Ok(()) } else { crate::observer_hud::restore(&log) };
-            }
-            if action == "prepare-cfg" {
-                app.state::<production_exit::ExitGate>().check()?;
-                app.state::<crate::updates::PendingUpdate>().check()?;
-                let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
-                let cs2 = managed.lock().map_err(|_| "请等待游戏操作完成后重试。")?;
-                if !cs2.has_external() { return Err("请先明确借用正在运行的外部 CS2。".into()); }
-                let store = crate::cs2_session::SessionStore::new(log.state_root.clone());
-                if store.spectator_pending() || store.full_spectator_pending() {
-                    return Err("请先完成上次观战键位恢复。".into());
-                }
-                let (context, game) = cs2.console_source()?.ok_or("当前借用游戏已失效或实例不唯一。")?;
-                if game.owned || !game.is_running() { return Err("当前外部游戏身份无法核实。".into()); }
-                let executable = context["executable"].as_str().ok_or("当前游戏安装位置无法核实。")?;
-                crate::cs2_spectator::install_hud(std::path::Path::new(executable), "h")?;
-                let (after, current) = cs2.console_source()?.ok_or("游戏实例已变化，请重新检查。")?;
-                if current.owned || !current.is_running() || current.pid != game.pid || current.created != game.created
-                    || after["executable"] != context["executable"] || store.spectator_pending() || store.full_spectator_pending() {
-                    return Err("游戏实例或恢复状态已变化，请重新检查。".into());
-                }
-                cfg_ready = true;
-                return Ok(());
             }
             if action == "preflight" {
                 let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
@@ -143,6 +120,6 @@ pub async fn observer_command(window: tauri::WebviewWindow, app: tauri::AppHandl
             Ok(())
         })();
         log.event("observer_workspace", if result.is_ok() { "success" } else { "failure" }, result.as_ref().err().map(String::as_str));
-        result.map(|()| if cfg_ready { serde_json::json!({"cfgReady":true}) } else { serde_json::json!({"useMulnx":automation}) })
+        result.map(|()| serde_json::json!({"useMulnx":automation}))
     }).await.map_err(|error| format!("观察辅助操作需要重试：{error}"))?
 }

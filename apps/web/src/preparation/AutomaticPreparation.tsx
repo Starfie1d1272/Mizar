@@ -62,7 +62,9 @@ export function AutomaticPreparation({ showGsiMessage = true }: { showGsiMessage
       ensured.current = null;
       return;
     }
-    const signature = JSON.stringify([obs.video, obs.findings]);
+    // Findings are results of ensure/check, not a new setup intent. Including them
+    // feeds the configured event back into ensure and can starve trial entry.
+    const signature = JSON.stringify(obs.video);
     if (ensured.current === signature) return;
     ensured.current = signature;
     void prepareObs()

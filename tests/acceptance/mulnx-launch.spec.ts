@@ -3,7 +3,7 @@ import { emptyOrchestrationPreset } from '../../packages/protocol/src/orchestrat
 
 // Native calls are browser contract doubles; no real launcher, CS2 or OBS is used.
 for (const entry of ['/', '/settings?tab=gsi']) {
-  test(`unsupported checked automatic launch navigates from ${entry} to explicit manual handoff`, async ({
+  test(`unsupported checked automatic launch navigates from ${entry} to managed launch settings without manual fallback`, async ({
     page,
     context,
   }) => {
@@ -111,8 +111,10 @@ for (const entry of ['/', '/settings?tab=gsi']) {
                 ) => Promise<unknown>;
               }
             ).manualMulnxNative(command, args);
-            // eslint-disable-next-line @typescript-eslint/only-throw-error -- Emulate the actual Tauri Result<T, String> rejection.
-            if (command === 'launch_mulnx' && args?.automatic) throw 'mulnx_manual_launch_required';
+            if (command === 'launch_mulnx' && args?.automatic) {
+              // eslint-disable-next-line @typescript-eslint/only-throw-error -- Emulate the actual Tauri Result<T, String> rejection.
+              throw 'mulnx_automatic_launch_unavailable';
+            }
             return result;
           },
         },
@@ -120,7 +122,7 @@ for (const entry of ['/', '/settings?tab=gsi']) {
     );
     await page.goto(entry);
     await page.getByRole('button', { name: '打开直播工作台', exact: true }).click();
-    const route = page.getByRole('link', { name: '打开手动启动与游戏交接', exact: true });
+    const route = page.getByRole('link', { name: '检查 MulNX 启动能力', exact: true });
     await expect(route).toHaveAttribute('href', '/settings?tab=camera#mulnx-launch');
     expect(
       calls.some((call) =>
@@ -133,24 +135,18 @@ for (const entry of ['/', '/settings?tab=gsi']) {
       ),
     ).toBe(false);
     await route.click();
-    const region = page.getByRole('region', { name: 'MulNX 启动与游戏交接' });
-    await expect(region).toContainText('在官方启动器完成环境检查后启动');
-    await expect(region).not.toContainText('请先更新');
-    await page.getByRole('button', { name: '打开本机 MulNX', exact: true }).click();
-    expect(borrowed).toBe(false);
-    await page.getByRole('button', { name: '检查游戏实例', exact: true }).click();
-    await expect(region).toContainText('134065746000000000');
-    await expect(region).toContainText('D:\\Steam\\CS2\\game\\bin\\win64\\cs2.exe');
-    expect(borrowed).toBe(false);
-    await page.getByRole('button', { name: '借用此游戏并进入工作台', exact: true }).click();
-    await expect
-      .poll(() => calls.filter((call) => call.command === 'present_production').length)
-      .toBe(1);
-    expect(calls.filter((call) => call.command === 'attach_external_cs2')).toHaveLength(1);
+    const region = page.getByRole('region', { name: 'MulNX 启动管理' });
+    await expect(region).toContainText('不支持自动启动');
+    await expect(
+      page.getByRole('button', { name: '启动 MulNX 工作台', exact: true }),
+    ).toBeDisabled();
+    await expect(
+      page.getByRole('button', { name: '借用此游戏并进入工作台', exact: true }),
+    ).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '打开本机 MulNX', exact: true })).toHaveCount(0);
+    expect(calls.filter((call) => call.command === 'launch_mulnx')).toHaveLength(1);
     expect(
-      calls.some((call) =>
-        ['start_managed_cs2', 'finish_managed_cs2', 'set_cs2_preferences'].includes(call.command),
-      ),
+      calls.some((call) => ['attach_external_cs2', 'present_production'].includes(call.command)),
     ).toBe(false);
   });
 }
