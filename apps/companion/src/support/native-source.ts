@@ -29,6 +29,7 @@ const missing = (error: unknown) => (error as NodeJS.ErrnoException)?.code === '
 /** Incremental observer of the four fixed Mizar Host files, never a caller-supplied path. */
 export class NativeSource {
   private cursors: Cursor[] = [];
+  private checkpointPending = false;
   private initialized = false;
   private closed = false;
   private running: Promise<void> | undefined;
@@ -150,11 +151,21 @@ export class NativeSource {
       this.cursors = this.cursors.filter((cursor) => found.has(cursor.identity));
       // The journal commit precedes this checkpoint. A crash in between can replay
       // stable sourceRecordIds, never skip evidence whose durable commit failed.
-      if (JSON.stringify(previous) !== JSON.stringify(this.cursors)) {
-        await safePath(this.directory, cursorName).catch((error) => {
-          if (!missing(error)) throw error;
-        });
-        await atomicJson(join(this.directory, cursorName), { schema: 1, cursors: this.cursors });
+      if (this.checkpointPending || JSON.stringify(previous) !== JSON.stringify(this.cursors)) {
+        this.checkpointPending = true;
+        try {
+          await safePath(this.directory, cursorName).catch((error) => {
+            if (!missing(error)) throw error;
+          });
+          await atomicJson(join(this.directory, cursorName), { schema: 1, cursors: this.cursors });
+          this.checkpointPending = false;
+        } catch (error) {
+          // Committed records are already delivered. Keep advancing in memory while
+          // retrying the checkpoint; restart may safely replay the old checkpoint.
+          this.failures++;
+          this.journal.record('native_source_failure', { error, failures: this.failures });
+          sourceFailed = true;
+        }
       }
       this.error = sourceFailed ? 'native_source_unavailable' : null;
     } catch (error) {
