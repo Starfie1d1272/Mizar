@@ -36,6 +36,59 @@ const impact = {
 
 afterEach(() => vi.useRealTimers());
 
+it('shows current primary magazine evidence and clears it on equipment and telemetry boundaries', () => {
+  const original = fixture.payload.players.find((player) => player.sourcePlayerId === playerId)!;
+  const rifle = {
+    ...original.weapons[0]!,
+    name: 'weapon_ak47',
+    state: 'active' as const,
+    ammoClip: 15,
+    ammoClipMax: 30,
+  };
+  const present = (weapons = [rifle], overrides: Partial<typeof original> = {}, fresh = true) => {
+    const payload = {
+      ...fixture.payload,
+      status: {
+        ...fixture.payload.status,
+        telemetry: fresh ? ('fresh' as const) : ('stale' as const),
+      },
+      players: fixture.payload.players.map((player) =>
+        player.sourcePlayerId === playerId
+          ? {
+              ...player,
+              lifeState: 'alive' as const,
+              lineupEvidence: 'current' as const,
+              weaponsAvailable: true,
+              weapons,
+              ...overrides,
+            }
+          : player,
+      ),
+    };
+    const rails = buildPlayerRailsPresentation(payload);
+    return [...rails.ct.players, ...rails.t.players].find(
+      (player) => player.sourcePlayerId === playerId,
+    )!;
+  };
+  expect(present().primaryWeapon?.clipFill).toBe(0.5);
+  expect(present([{ ...rifle, ammoClip: 30 }]).primaryWeapon?.clipFill).toBe(1);
+  expect(present([{ ...rifle, ammoClip: 0 }]).primaryWeapon?.clipFill).toBe(0);
+  expect(
+    present([{ ...rifle, state: 'reloading' as typeof rifle.state }]).primaryWeapon?.clipFill,
+  ).toBe(0.5);
+  expect(present([{ ...rifle, name: 'weapon_glock' }]).primaryWeapon).toMatchObject({
+    active: true,
+    clipFill: null,
+  });
+  expect(
+    present([rifle, { ...rifle, sourceWeaponId: 'second' }]).primaryWeapon?.clipFill,
+  ).toBeNull();
+  expect(present([rifle], { weaponsAvailable: false }).primaryWeapon?.clipFill).toBeNull();
+  expect(present([rifle], {}, false).primaryWeapon?.clipFill).toBeNull();
+  expect(present([rifle], { lifeState: 'dead' }).primaryWeapon).toBeNull();
+  expect(present([{ ...rifle, ammoClipMax: 0 }]).primaryWeapon?.clipFill).toBeNull();
+});
+
 it.each(['rail', 'focused'] as const)(
   '%s bounds repeated damage and clears feedback at death, revival and reset',
   (surface) => {
