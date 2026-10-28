@@ -272,6 +272,10 @@ fn migrate_chat_default(log: &DesktopLog) -> Result<(), String> {
     let directory = state_directory(log);
     fs::create_dir_all(&directory).map_err(failure)?;
     parents(&directory.join(SETTINGS)).map_err(failure)?;
+    // Keep the existing file and disable fence subject to the same path checks
+    // as normal reads before replacing either during the one-time migration.
+    read_state(&directory.join(SETTINGS)).map_err(failure)?;
+    marker_generation(log)?;
     let value = json!({"version":1,"enabled":true,"generation":generation(),"changedAt":utc()});
     crate::cs2_session::atomic_write(&directory.join(SETTINGS), &serde_json::to_vec(&value).map_err(failure)?)?;
     match fs::remove_file(disabled_marker(log)) {
