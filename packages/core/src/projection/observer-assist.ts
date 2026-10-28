@@ -163,9 +163,6 @@ export class ObserverHintTimeline {
     this.nextDueMs = null;
     this.nextWindowMs = null;
   }
-  settingsChanged() {
-    // Settings affect future projections without discarding the current map timeline.
-  }
   consume(event: GameEventObservation) {
     if (event.cursor.role !== 'lookahead') return;
     this.lastReceivedMs = event.cursor.observedMonotonicMs;
@@ -436,9 +433,6 @@ export class ObserverHintTimeline {
     }
     if (!source.connected) {
       this.blocked = 'source-disconnected';
-      this.lastHealthCheckAt = now;
-      this.lastProgramProgressAt = now;
-      this.lastSourceProgressAt = now;
       return empty('connecting');
     }
     if (
@@ -460,9 +454,6 @@ export class ObserverHintTimeline {
               : 'identity-unavailable';
       if (source.sameMap === false && program.map.name) this.reset(this.blocked, now);
       else {
-        this.lastHealthCheckAt = now;
-        this.lastProgramProgressAt = now;
-        this.lastSourceProgressAt = now;
         this.previous.clear();
         this.seenReceive = null;
         this.programEvents = [];

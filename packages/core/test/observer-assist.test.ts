@@ -182,7 +182,6 @@ describe('private observer hints against Program', () => {
       });
     }
     const timeline = aligned();
-    timeline.settingsChanged();
     expect(
       timeline.project(program(3, [8, 9]), settings, 123000, source).observer?.hints,
     ).toMatchObject([{ id: '1:3' }]);
@@ -307,7 +306,6 @@ it('keeps settings changes without clearing buffered events', () => {
   expect(
     timeline.project(program(1), { ...settings, leadSeconds: 10 }, 111000, source).observer?.hints,
   ).toHaveLength(1);
-  timeline.settingsChanged();
   timeline.consume(kill(1, 7, 1000));
   expect(
     timeline.project(program(1), { ...settings, expectedDelaySeconds: 125 }, 120000, source)
@@ -651,16 +649,38 @@ it('preserves buffered events and the measured delay through a brief stale inter
   });
 });
 
-it('does not trust an old estimate after a long stale source gap', () => {
-  const timeline = aligned();
-  timeline.project(program(3, [8, 9]), settings, 130000, { ...source, fresh: false });
-  const resumed = timeline.project(program(4), settings, 600000, source);
-  expect(resumed.observer).toMatchObject({
-    state: 'unavailable',
-    calibrationState: 'reacquiring',
-    hints: [],
-  });
-});
+it.each(['stale', 'disconnected'] as const)(
+  'reacquires after continuous projections during a long %s gap',
+  (gap) => {
+    const timeline = aligned();
+    timeline.project(program(4), settings, 130000, { ...source, lastReceiveMonotonicMs: 130000 });
+    timeline.project(program(5), settings, 140000, { ...source, lastReceiveMonotonicMs: 140000 });
+    expect(timeline.getDiagnostics().calibration.continuity).toBe('observed');
+    timeline.consume(kill(4, 5, 145000));
+    for (let now = 140200; now <= 200000; now += 200) {
+      timeline.project(program(5), settings, now, {
+        ...source,
+        connected: gap !== 'disconnected',
+        fresh: gap !== 'stale',
+        lastReceiveMonotonicMs: 140000,
+      });
+    }
+    const resumed = timeline.project(program(6), settings, 200200, {
+      ...source,
+      lastReceiveMonotonicMs: 200200,
+    });
+    expect(resumed.observer).toMatchObject({
+      state: 'unavailable',
+      calibrationState: 'reacquiring',
+      effectiveDelaySeconds: 120,
+      hints: [],
+    });
+    expect(timeline.getDiagnostics()).toMatchObject({
+      buffered: 5,
+      calibration: { continuity: 'lost', effectiveDelayMs: 120000 },
+    });
+  },
+);
 
 it('keeps a calibrated offset through a long quiet period when both sources keep advancing', () => {
   const timeline = new ObserverHintTimeline();

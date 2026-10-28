@@ -719,10 +719,6 @@ export class ProjectionCoordinator {
     }
     return result;
   }
-  resetAssist(): void {
-    this.observerTimeline.settingsChanged();
-    this.refreshAssist();
-  }
   refreshAssist(): void {
     if (this.closed || !this.current) return;
     const assist = this.assistance(this.current.program, this.nowMonotonicMs());

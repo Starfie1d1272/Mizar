@@ -247,7 +247,7 @@ it('publishes assist refreshes independently of Program and public radar snapsho
     const program = structuredClone(coordinator.getPublisher('program').getCurrent());
     const radar = structuredClone(coordinator.getPublisher('radar').getCurrent());
     const before = coordinator.getPublisher('assist').getCurrent()!.channelSeq;
-    coordinator.resetAssist();
+    coordinator.refreshAssist();
     coordinator.refreshAssist();
     expect(coordinator.getPublisher('program').getCurrent()).toEqual(program);
     expect(coordinator.getPublisher('radar').getCurrent()).toEqual(radar);
@@ -385,7 +385,7 @@ it('keeps calibrated anchors and buffered kills when the lead window is reprojec
     expect(coordinator.getPublisher('program').getCurrent()).toEqual(program);
     expect(coordinator.getPublisher('radar').getCurrent()).toEqual(radar);
     settings.expectedDelaySeconds = 130;
-    coordinator.resetAssist();
+    coordinator.refreshAssist();
     expect(coordinator.getCurrent().assist.observer).toMatchObject({
       state: 'ready',
       measuredDelaySeconds: null,
