@@ -91,7 +91,7 @@ export function CameraSettings() {
     <Panel>
       <h2>地图自动编排</h2>
       <CameraControls setup />
-      <section id="mulnx-launch" aria-label="MulNX 启动与游戏交接">
+      <section id="mulnx-launch" aria-label="MulNX 启动管理">
         <MulnxToolControls tool={current?.tool} />
         <MulnxHandoff />
       </section>

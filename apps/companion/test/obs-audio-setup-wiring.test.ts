@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
@@ -379,7 +379,7 @@ it('configures the default legacy mix through the adapter on its live OBS connec
   }
 });
 
-it('keeps a custom desktop mix and reports pending without enabling new audio', async () => {
+it('ignores unrelated custom inputs while migrating managed audio', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'mizar-custom-'));
   try {
     const obs = new FakeObs();
@@ -392,19 +392,89 @@ it('keeps a custom desktop mix and reports pending without enabling new audio', 
       undefined,
       { owner: new RemoteCommentary(join(dir, 'preference')), journal: join(dir, 'probe') },
     );
-    expect((await adapter.ensure()).some((finding) => finding.code === 'commentary_pending')).toBe(
-      true,
-    );
+    expect(await adapter.ensure()).toEqual([]);
+    expect(obs.inputs.get('Custom Audio')!.settings).toEqual({ device_id: 'other' });
     for (const items of obs.scenes.values()) {
       expect(
         items.find((item) => item.sourceName === 'Mizar · Desktop Audio')!.sceneItemEnabled,
-      ).toBe(true);
+      ).toBe(false);
       expect(
         items.filter(
           (item) => item.sourceName.includes('Remote Commentary') && item.sceneItemEnabled,
         ),
-      ).toHaveLength(0);
+      ).toHaveLength(1);
     }
+    await adapter.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+it('manages custom direct audio, reuses the existing microphone and preserves unrelated scenes', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'mizar-custom-managed-'));
+  try {
+    const obs = new FakeObs();
+    const custom = obs.addInput('My Game', 'wasapi_output_capture', { device_id: 'sonar-game' });
+    const music = obs.addInput(
+      'Mizar · BGM · 00000000-0000-4000-8000-000000000001',
+      'ffmpeg_source',
+      { local_file: 'music.mp3' },
+    );
+    const mic = obs.addInput('My Microphone', 'wasapi_input_capture', { device_id: 'my-mic' });
+    for (const scene of obsDesiredScenes(base)) {
+      obs.addItem(scene.sceneName, custom.inputName, true);
+      obs.addItem(scene.sceneName, music.inputName, true);
+      obs.addItem(scene.sceneName, mic.inputName, true);
+    }
+    obs.scenes.set('Personal', []);
+    obs.addItem('Personal', custom.inputName, true);
+    const personal = structuredClone(obs.scenes.get('Personal'));
+    fixture.client = obs;
+    const routing = new ObsAudioRouting(join(dir, 'routing'));
+    const adapter = new ObsAdapter(
+      new ObsConfigStore(join(dir, 'obs.json')),
+      base,
+      () => {},
+      routing,
+      { owner: new RemoteCommentary(join(dir, 'preference')), journal: join(dir, 'probe') },
+    );
+    expect(await adapter.ensure()).toEqual([]);
+    expect((await routing.commentaryBinding()).microphone?.inputUuid).toBe(mic.inputUuid);
+    expect(obs.scenes.get('Personal')).toEqual(personal);
+    expect(custom.settings).toEqual({ device_id: 'sonar-game' });
+    expect(mic.settings).toEqual({ device_id: 'my-mic' });
+    const status = await adapter.readAudioRouting();
+    await adapter.bindAudio({
+      role: 'game',
+      selectionId: status.candidates.find((input) => input.uuid === custom.inputUuid)!.selectionId,
+      revision: status.revision,
+    });
+    // The selected hardware route is now applied in every managed scene, without manual OBS edits.
+    expect(await adapter.ensure()).toEqual([]);
+    for (const scene of obsDesiredScenes(base)) {
+      const active = obs.scenes.get(scene.sceneName)!.filter((item) => item.sceneItemEnabled);
+      expect(active.filter((item) => item.sourceUuid === custom.inputUuid)).toHaveLength(1);
+      expect(active.filter((item) => item.sourceUuid === mic.inputUuid)).toHaveLength(1);
+      expect(active.filter((item) => item.sourceUuid === music.inputUuid)).toHaveLength(1);
+      expect(
+        active.some(
+          (item) =>
+            item.sourceName === 'Mizar · Desktop Audio' ||
+            item.sourceName.startsWith('Mizar · Game Audio '),
+        ),
+      ).toBe(false);
+    }
+    const backups = (await readdir(dir)).filter((name) => name.includes('.migration.completed-'));
+    expect(backups).toHaveLength(2);
+    const saved = JSON.parse(await readFile(join(dir, backups[0]!), 'utf8')) as {
+      fields: unknown[];
+    };
+    expect(saved.fields.length).toBeGreaterThan(0);
+    expect(await adapter.ensure()).toEqual([]);
+    expect(
+      (await readdir(dir)).filter((name) => name.includes('.migration.completed-')),
+    ).toHaveLength(2);
+    expect(obs.scenes.get('Personal')).toEqual(personal);
     await adapter.close();
   } finally {
     await rm(dir, { recursive: true, force: true });

@@ -13,26 +13,43 @@ function objects(value: unknown): Record<string, unknown>[] {
   if (!Array.isArray(value)) throw new Error('audio_template_unknown');
   return value.filter((x): x is Record<string, unknown> => typeof x === 'object' && x !== null);
 }
-/** Fail closed unless the entire legacy default mix and its direct scene references match. */
+/** Inspect only direct Mizar scene paths; shared source device, gain and filters remain untouched. */
 export async function inspectLegacyAudioTemplate(
   obs: ObsRpc,
   baseUrl: string,
   commentaryUuid: string,
   gameAudioUuid?: string,
   desktopEnabled = true,
-): Promise<{ desktop: Ref[]; microphoneUuid: string } | null> {
+): Promise<{ desktop: Ref[]; microphoneUuid: string; microphone: Ref[] } | null> {
   if ((await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== OBS_COLLECTION)
     return null;
   const specials = await obs.call('GetSpecialInputs');
   if (Object.values(specials).some((x) => typeof x === 'string' && x.length > 0)) return null;
   const inputs = objects((await obs.call('GetInputList')).inputs);
   const desired = obsDesiredScenes(baseUrl);
+  if (
+    !gameAudioUuid &&
+    inputs.some(
+      (input) =>
+        typeof input.inputName === 'string' && input.inputName.startsWith('Mizar · Game Audio '),
+    )
+  )
+    return null;
   const allowedNames = new Set([
     OBS_CAPTURE_INPUT,
     ...desired.map((scene) => scene.browserInput),
     'Mizar · Desktop Audio',
     'Mizar · Microphone',
   ]);
+  const musicNames = inputs
+    .filter(
+      (input) =>
+        input.inputKind === 'ffmpeg_source' &&
+        typeof input.inputName === 'string' &&
+        /^Mizar · (BGM|Stinger) · [0-9a-f-]{36}$/.test(input.inputName),
+    )
+    .map((input) => String(input.inputName));
+  for (const name of musicNames) allowedNames.add(name);
   const compactInputs = inputs.filter((input) => input.inputName === BP_COMPACT_INPUT);
   if (compactInputs.length > 1) return null;
   const compact = compactInputs[0];
@@ -51,15 +68,6 @@ export async function inspectLegacyAudioTemplate(
       return null;
     allowedNames.add(BP_COMPACT_INPUT);
   }
-  if (
-    inputs.some(
-      (input) =>
-        input.inputUuid !== commentaryUuid &&
-        input.inputUuid !== gameAudioUuid &&
-        (typeof input.inputName !== 'string' || !allowedNames.has(input.inputName)),
-    )
-  )
-    return null;
   for (const scene of desired) {
     const input = inputs.find((value) => value.inputName === scene.browserInput);
     if (!input || input.inputKind !== 'browser_source' || typeof input.inputUuid !== 'string')
@@ -84,9 +92,29 @@ export async function inspectLegacyAudioTemplate(
   const desktop = inputs.find(
     (x) => x.inputName === 'Mizar · Desktop Audio' && x.inputKind === 'wasapi_output_capture',
   );
-  const microphone = inputs.find(
+  let microphone = inputs.find(
     (x) => x.inputName === 'Mizar · Microphone' && x.inputKind === 'wasapi_input_capture',
   );
+  const activeMicrophones = new Set<string>();
+  for (const scene of desired) {
+    const items = objects(
+      (await obs.call('GetSceneItemList', { sceneName: scene.sceneName })).sceneItems,
+    );
+    for (const item of items)
+      if (
+        item.sceneItemEnabled === true &&
+        inputs.some(
+          (input) =>
+            input.inputUuid === item.sourceUuid &&
+            input.inputKind === 'wasapi_input_capture' &&
+            input.inputName !== 'Mizar · Microphone',
+        )
+      )
+        activeMicrophones.add(String(item.sourceUuid));
+  }
+  if (activeMicrophones.size > 1) return null;
+  if (activeMicrophones.size === 1)
+    microphone = inputs.find((input) => activeMicrophones.has(String(input.inputUuid)));
   if (
     typeof desktop?.inputUuid !== 'string' ||
     typeof microphone?.inputUuid !== 'string' ||
@@ -98,19 +126,7 @@ export async function inspectLegacyAudioTemplate(
     'wasapi_input_capture',
     'wasapi_process_output_capture',
   ]);
-  if (
-    inputs.some(
-      (x) =>
-        audioKinds.has(String(x.inputKind)) &&
-        ![desktop.inputUuid, microphone.inputUuid, commentaryUuid, gameAudioUuid].includes(
-          String(x.inputUuid),
-        ),
-    )
-  )
-    return null;
-  for (const input of inputs.filter((x) =>
-    ['game_capture', 'window_capture'].includes(String(x.inputKind)),
-  )) {
+  for (const input of inputs.filter((x) => x.inputName === OBS_CAPTURE_INPUT)) {
     if (typeof input.inputUuid !== 'string') return null;
     const settings = (await obs.call('GetInputSettings', { inputUuid: input.inputUuid }))
       .inputSettings;
@@ -121,42 +137,15 @@ export async function inspectLegacyAudioTemplate(
     )
       return null;
   }
-  for (const input of [desktop, microphone]) {
-    const [settings, mute, volume, monitor, tracks, filters] = await Promise.all([
-      obs.call('GetInputSettings', { inputUuid: input.inputUuid }),
-      obs.call('GetInputMute', { inputUuid: input.inputUuid }),
-      obs.call('GetInputVolume', { inputUuid: input.inputUuid }),
-      obs.call('GetInputAudioMonitorType', { inputUuid: input.inputUuid }),
-      obs.call('GetInputAudioTracks', { inputUuid: input.inputUuid }),
-      obs.call('GetSourceFilterList', { sourceName: input.inputName }),
-    ]);
-    if (
-      !settings.inputSettings ||
-      typeof settings.inputSettings !== 'object' ||
-      (settings.inputSettings as Record<string, unknown>).device_id !== 'default' ||
-      mute.inputMuted !== false ||
-      volume.inputVolumeMul !== 1 ||
-      monitor.monitorType !== 'OBS_MONITORING_TYPE_NONE' ||
-      !Array.isArray(filters.filters) ||
-      filters.filters.length !== 0
-    )
-      return null;
-    const track = tracks.inputAudioTracks;
-    if (
-      !track ||
-      typeof track !== 'object' ||
-      Object.keys(track).length !== 6 ||
-      Object.values(track).some((v) => v !== true)
-    )
-      return null;
-  }
   const wanted = new Set(desired.map((x) => x.sceneName));
   const allScenes = objects((await obs.call('GetSceneList')).scenes);
   const seen = new Set<string>();
   const refs: Ref[] = [];
+  const microphoneRefs: Ref[] = [];
   let compactSeen = false;
   for (const scene of allScenes) {
     if (typeof scene.sceneName !== 'string') return null;
+    if (!wanted.has(scene.sceneName)) continue;
     const items = objects(
       (await obs.call('GetSceneItemList', { sceneName: scene.sceneName })).sceneItems,
     );
@@ -187,6 +176,9 @@ export async function inspectLegacyAudioTemplate(
         (x) =>
           x.sourceUuid !== commentaryUuid &&
           x.sourceUuid !== gameAudioUuid &&
+          !inputs.some(
+            (input) => input.inputUuid === x.sourceUuid && audioKinds.has(String(input.inputKind)),
+          ) &&
           (typeof x.sourceName !== 'string' || !allowedNames.has(x.sourceName)),
       )
     )
@@ -197,6 +189,7 @@ export async function inspectLegacyAudioTemplate(
         ...desiredScene.sources,
         'Mizar · Desktop Audio',
         'Mizar · Microphone',
+        ...musicNames,
       ]);
       if (compact && desiredScene.id === 'gameplay') expectedNames.add(BP_COMPACT_INPUT);
       if (
@@ -204,6 +197,10 @@ export async function inspectLegacyAudioTemplate(
           (value) =>
             value.sourceUuid !== commentaryUuid &&
             value.sourceUuid !== gameAudioUuid &&
+            !inputs.some(
+              (input) =>
+                input.inputUuid === value.sourceUuid && audioKinds.has(String(input.inputKind)),
+            ) &&
             (typeof value.sourceName !== 'string' || !expectedNames.has(value.sourceName)),
         )
       )
@@ -217,28 +214,46 @@ export async function inspectLegacyAudioTemplate(
           return null;
       }
     }
-    const old = items.filter((x) => x.sourceUuid === desktop.inputUuid);
-    const mic = items.filter((x) => x.sourceUuid === microphone.inputUuid);
-    if (!wanted.has(scene.sceneName)) {
-      if (old.length || mic.length) return null;
-      continue;
-    }
+    const old = items.filter(
+      (item) =>
+        item.sourceUuid !== microphone.inputUuid &&
+        item.sourceUuid !== commentaryUuid &&
+        item.sourceUuid !== gameAudioUuid &&
+        inputs.some(
+          (input) => input.inputUuid === item.sourceUuid && audioKinds.has(String(input.inputKind)),
+        ),
+    );
+    const mic = items.filter((item) => item.sourceUuid === microphone.inputUuid);
+    const desktopRefs = old.filter((item) => item.sourceUuid === desktop.inputUuid);
     if (
       seen.has(scene.sceneName) ||
-      old.length !== 1 ||
+      desktopRefs.length !== 1 ||
       mic.length !== 1 ||
-      old[0]!.sceneItemEnabled !== desktopEnabled ||
-      mic[0]!.sceneItemEnabled !== true ||
-      typeof old[0]!.sceneItemId !== 'number'
+      typeof mic[0]!.sceneItemEnabled !== 'boolean' ||
+      typeof mic[0]!.sceneItemId !== 'number' ||
+      old.some(
+        (item) =>
+          typeof item.sceneItemEnabled !== 'boolean' || typeof item.sceneItemId !== 'number',
+      ) ||
+      (desktopEnabled
+        ? !old.some((item) => item.sceneItemEnabled === true)
+        : old.some((item) => item.sceneItemEnabled !== false))
     )
       return null;
     seen.add(scene.sceneName);
-    refs.push({
-      sceneName: scene.sceneName,
-      sceneItemId: old[0]!.sceneItemId,
-      sourceUuid: desktop.inputUuid,
-    });
+    for (const item of old.filter((value) => value.sceneItemEnabled === desktopEnabled))
+      refs.push({
+        sceneName: scene.sceneName,
+        sceneItemId: item.sceneItemId as number,
+        sourceUuid: String(item.sourceUuid),
+      });
+    if (mic[0]!.sceneItemEnabled === false)
+      microphoneRefs.push({
+        sceneName: scene.sceneName,
+        sceneItemId: mic[0]!.sceneItemId,
+        sourceUuid: microphone.inputUuid,
+      });
   }
   if (seen.size !== wanted.size || Boolean(compact) !== compactSeen) return null;
-  return { desktop: refs, microphoneUuid: microphone.inputUuid };
+  return { desktop: refs, microphoneUuid: microphone.inputUuid, microphone: microphoneRefs };
 }

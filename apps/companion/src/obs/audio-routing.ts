@@ -181,6 +181,19 @@ export class ObsAudioRouting {
       );
     });
   }
+  async managedBindings(obs: ObsRpc, endpoint: string) {
+    const state = await this.load();
+    if (!(await this.enabled())) return null;
+    if (roles.some((role) => !state.bindings[role])) return null;
+    if ((await this.invalidBindings(obs, endpoint)).length)
+      throw new Error('audio_bindings_incomplete');
+    return {
+      revision: state.revision,
+      ids: Object.fromEntries(
+        roles.map((role) => [role, state.bindings[role]!.inputUuid]),
+      ) as Record<ObsAudioRole, string>,
+    };
+  }
   async read(obs: ObsRpc, endpoint: string): Promise<ObsAudioRoutingStatus> {
     const state = await this.load();
     const { collection, inputs, candidates } = await this.inputs(obs);

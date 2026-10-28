@@ -2,8 +2,7 @@ import {
   emptyOrchestrationPreset,
   type OrchestrationView,
 } from '../../packages/protocol/src/orchestration.js';
-import { DEFAULT_OBSERVER_SETTINGS } from '../../packages/protocol/src/assist.js';
-import { mkdtemp, rm, readFile, mkdir, writeFile, copyFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { gunzipSync } from 'node:zlib';
@@ -281,137 +280,20 @@ test('external-game browser entry uses real production lifecycle without native 
   }
 });
 
-test('Host handoff binds the selected external instance and detaches without managed launch or close', async ({
-  page,
-  context,
-}, testInfo) => {
-  const calls: string[] = [];
-  let borrowed = false;
-  let production = { mode: 'preparation', revision: 'external-1', canEnter: true };
-  await context.route('**/local/v1/observer-assist', (route) =>
-    route.fulfill({ json: { settings: DEFAULT_OBSERVER_SETTINGS, connection: null } }),
-  );
-  await context.route('**/local/v1/production', (route) => route.fulfill({ json: production }));
-  await context.route('**/local/v1/demo-test', (route) =>
-    route.fulfill({ json: { active: false } }),
-  );
-  await context.route('**/local/v1/obs', (route) =>
-    route.fulfill({ json: { connection: 'connected', findings: [] } }),
-  );
-  await context.route('**/operator/production', (route) => {
-    expect(route.request().postDataJSON()).toMatchObject({
-      action: 'enter',
-      expectedRevision: 'external-1',
-    });
-    production = { ...production, mode: 'live', revision: 'external-2' };
-    return route.fulfill({ json: production });
-  });
-  await context.exposeBinding(
-    'cameraNative',
-    (_source, command: string, args?: Record<string, unknown>) => {
-      calls.push(command);
-      if (command === 'mulnx_handoff_status')
-        return {
-          processes: [
-            {
-              pid: 4212,
-              created: '134065746000000000',
-              executable: 'D:\\Steam\\CS2\\game\\bin\\win64\\cs2.exe',
-              managed: false,
-            },
-          ],
-          url: 'http://127.0.0.1:3000/',
-        };
-      if (command === 'cs2_config_status')
-        return {
-          pending: false,
-          running: borrowed,
-          borrowed,
-          preserveSettings: borrowed,
-          phase: 'idle',
-        };
-      if (command === 'gsi_status') return { installed: true, conflict: false };
-      if (command === 'attach_external_cs2') {
-        expect(args).toMatchObject({
-          pid: 4212,
-          created: '134065746000000000',
-          expectedRevision: 'external-1',
-        });
-        borrowed = true;
-        return false;
-      }
-      if (command === 'present_production') return null;
-      if (command === 'finish_workspace') {
-        borrowed = false;
-        production = { ...production, mode: 'preparation', revision: 'external-3' };
-        return null;
-      }
-      if (command === 'workspace_exit_status') return { busy: false, stage: '', message: null };
-      if (command === 'open_mulnx_browser') return null;
-      throw new Error(`unexpected native command ${command}`);
-    },
-  );
-  await context.addInitScript(() =>
-    Object.assign(window, {
-      __TAURI_INTERNALS__: {
-        invoke: (command: string, args?: Record<string, unknown>) =>
-          (
-            window as unknown as {
-              cameraNative: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
-            }
-          ).cameraNative(command, args),
-      },
-    }),
-  );
-  await page.goto('/settings?tab=music&section=camera');
-  await page.getByText('MulNX 游戏交接', { exact: true }).click();
-  await page.getByRole('button', { name: '检查游戏实例', exact: true }).click();
-  await expect(page.getByText(/PID 4212 · 外部进程/)).toBeVisible();
-  await page.getByRole('button', { name: '打开浏览器联调', exact: true }).click();
-  await expect.poll(() => calls.filter((c) => c === 'open_mulnx_browser').length).toBe(1);
-  expect(calls).not.toContain('start_managed_cs2');
-  expect(calls).not.toContain('finish_managed_cs2');
-  await page.getByText('MulNX 游戏交接', { exact: true }).scrollIntoViewIfNeeded();
-  await page.screenshot({ path: testInfo.outputPath('mulnx-host-handoff-preparation.png') });
-  await page.getByRole('button', { name: '借用此游戏并进入工作台', exact: true }).click();
-  await expect.poll(() => calls.includes('present_production')).toBe(true);
-  await expect(page.getByText('已借用外部 CS2', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: '结束本次制作', exact: true }).click();
-  await expect.poll(() => calls.includes('finish_workspace')).toBe(true);
-  expect(borrowed).toBe(false);
-  expect(calls).not.toContain('start_managed_cs2');
-  expect(calls).not.toContain('finish_managed_cs2');
-});
-
-test('starts external camera audition without selecting a formal match', async ({
-  page,
-  context,
-}, testInfo) => {
-  await context.route('**/local/v1/production', (route) =>
-    route.fulfill({
-      json: {
-        mode: 'preparation',
-        revision: 'demo-ready',
-        canEnter: false,
-      },
-    }),
-  );
+test('native camera settings never adopt an independently running game', async ({ page }) => {
   await page.addInitScript(() => {
-    const calls: { command: string; args: unknown }[] = [];
+    const calls: string[] = [];
     Object.assign(window, {
       cameraHandoffCalls: calls,
       __TAURI_INTERNALS__: {
-        invoke: (command: string, args: unknown) => {
-          calls.push({ command, args });
+        invoke: (command: string) => {
+          calls.push(command);
+          if (command === 'cs2_config_status')
+            return Promise.resolve({ running: true, borrowed: false });
           if (command === 'mulnx_handoff_status')
             return Promise.resolve({
               processes: [
-                {
-                  pid: 42,
-                  created: '123456789',
-                  executable: 'C:\\CS2\\game\\bin\\win64\\cs2.exe',
-                  managed: false,
-                },
+                { pid: 42, created: '123456789', executable: 'C:\\CS2\\cs2.exe', managed: false },
               ],
             });
           return Promise.resolve(false);
@@ -419,34 +301,16 @@ test('starts external camera audition without selecting a formal match', async (
       },
     });
   });
-  await page.goto('/settings?tab=music&section=camera');
-  await page.getByText('MulNX 游戏交接', { exact: true }).click();
-  await page.getByRole('button', { name: '检查游戏实例', exact: true }).click();
-  await expect(
-    page.getByRole('button', { name: '借用此游戏并进入工作台', exact: true }),
-  ).toBeDisabled();
-  const trial = page.getByRole('button', { name: '运镜试播', exact: true });
-  await expect(trial).toBeEnabled();
-  await page.screenshot({ path: testInfo.outputPath('external-demo-handoff.png'), fullPage: true });
-  const evidence = '.agent-tmp/test-evidence/mulnx-demo';
-  await mkdir(evidence, { recursive: true });
-  await copyFile(
-    testInfo.outputPath('external-demo-handoff.png'),
-    join(evidence, 'external-demo-handoff.png'),
-  );
-  await trial.click();
+  await page.goto('/settings?tab=camera');
+  await expect(page.getByRole('heading', { name: '运镜', exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'MulNX 启动管理' })).toBeAttached();
+  for (const name of ['检查游戏实例', '借用此游戏并进入工作台', '运镜试播'])
+    await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0);
   const calls = await page.evaluate(
-    () => (window as unknown as { cameraHandoffCalls: unknown[] }).cameraHandoffCalls,
+    () => (window as unknown as { cameraHandoffCalls: string[] }).cameraHandoffCalls,
   );
-  expect(calls).toContainEqual({
-    command: 'attach_external_cs2',
-    args: expect.objectContaining({
-      pid: 42,
-      created: '123456789',
-      expectedRevision: 'demo-ready',
-      demoTrial: true,
-    }),
-  });
+  expect(calls).not.toContain('attach_external_cs2');
+  expect(calls).not.toContain('mulnx_handoff_status');
 });
 
 test('explicit MulNX stop confirms production effects, shows ownership errors, and reports queueing once', async ({

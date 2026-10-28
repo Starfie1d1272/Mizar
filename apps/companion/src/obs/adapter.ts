@@ -916,11 +916,22 @@ export class ObsAdapter {
                   routing.microphone?.inputUuid !== plan.uuid,
                 );
               },
+              async () => (await this.audioRouting?.managedBindings(obs, endpoint)) ?? null,
             ),
           );
           this.findings = [...this.findings, ...commentary];
         } catch (error) {
           this.diagnostic('obs_commentary_prepare', obsErrorEvidence(error));
+          const audioReason = error instanceof Error ? error.message : '';
+          const audioHelp: Record<string, string> = {
+            audio_global_path_unresolved:
+              'OBS 仍启用了全局音频，请先关闭重复的全局采集，再重试自动配置。',
+            audio_nested_path_unresolved:
+              'Mizar 场景包含嵌套音频路径，请先将音频改为直接来源，再重试自动配置。',
+            audio_video_path_unresolved:
+              '画面来源仍附带采集声音，请将它选为对应音频分路，或关闭附带音频后重试。',
+            audio_bindings_incomplete: '已选择的音频来源已失效，请在声音设置中重新选择。',
+          };
           const uncertain = await readCommentarySwitch(`${this.commentary.journal}.switch`)
             .then((value) => value?.phase === 'sent')
             .catch(() => true);
@@ -930,7 +941,8 @@ export class ObsAdapter {
               code: 'commentary_pending',
               message: uncertain
                 ? '解说来源切换结果待核对，请在 OBS 中检查后处理。'
-                : '场景已准备，音频分路待完成。请检查远端解说来源后重试。',
+                : (audioHelp[audioReason] ??
+                  '场景已准备，音频分路待完成。请检查远端解说来源后重试。'),
             },
           ];
         }

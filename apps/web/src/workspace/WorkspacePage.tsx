@@ -5,6 +5,7 @@ import { PreflightReview } from './PreflightReview';
 import { RosterCapture } from '../preparation/RosterCapture';
 import { DesktopCanvas } from '../patterns/DesktopCanvas';
 import { CameraControls } from '../orchestration/CameraControls';
+import type { OrchestrationView } from '@mizar/protocol/orchestration';
 import { MusicControls } from '../music/MusicControls';
 import { ObsOutputControls } from './ObsOutputControls';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
@@ -362,6 +363,8 @@ function WorkspaceDockContent() {
   }, [message]);
   const production = useLocalRead<Production>('/local/v1/production');
   const { status: cs2 } = useCs2Status();
+  const orchestration = useLocalRead<OrchestrationView>('/local/v1/orchestration');
+  const showCamera = Boolean(cs2?.preferMulnx || orchestration?.status.connected);
   const exit = useWorkspaceExitStatus();
   const visibleError = exit?.message || errorMessage || exit?.windowMessage || '';
   useEffect(() => {
@@ -411,7 +414,11 @@ function WorkspaceDockContent() {
     [next, mode],
   );
   return (
-    <main className="workspace-dock mizar-surface" aria-label="现场控制底栏">
+    <main
+      className="workspace-dock mizar-surface"
+      data-camera={showCamera}
+      aria-label="现场控制底栏"
+    >
       <section className="workspace-direction" aria-label="节目控制">
         <div className="workspace-section-heading">
           <strong>
@@ -496,17 +503,17 @@ function WorkspaceDockContent() {
           </div>
         </div>
       </section>
-      <section className="workspace-camera" aria-label="运镜控制">
-        <div className="workspace-section-heading">
-          <strong>运镜</strong>
-          <Button
-            onClick={() => void action(() => openPreparation('/settings?tab=music&section=camera'))}
-          >
-            配置运镜
-          </Button>
-        </div>
-        <CameraControls workspace />
-      </section>
+      {showCamera ? (
+        <section className="workspace-camera" aria-label="运镜控制">
+          <div className="workspace-section-heading">
+            <strong>运镜</strong>
+            <Button onClick={() => void action(() => openPreparation('/settings?tab=camera'))}>
+              配置运镜
+            </Button>
+          </div>
+          <CameraControls workspace />
+        </section>
+      ) : null}
       <section className="workspace-spectator" aria-label="观战控制">
         <div className="workspace-section-heading">
           {exit?.windowMessage ? (

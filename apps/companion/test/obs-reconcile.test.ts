@@ -308,7 +308,7 @@ it('does not configure a new collection or audio while OBS is outputting', async
   expect(obs.calls.filter((type) => /^(Set|Create|Remove)/.test(type))).toEqual([]);
 });
 
-it('preserves custom audio and reports gaps instead of adding duplicate capture', async () => {
+it('ignores unused custom audio when preparing managed scenes', async () => {
   const obs = new FakeObs();
   await ensureObsConfiguration(obs, baseUrl);
   obs.inputs.set('My microphone', {
@@ -317,9 +317,9 @@ it('preserves custom audio and reports gaps instead of adding duplicate capture'
   });
   obs.calls = [];
   const findings = await ensureObsAudio(obs, baseUrl);
-  expect(findings.some((item) => item.code === 'game_audio_missing')).toBe(true);
-  expect(obs.inputs.has('Mizar · Desktop Audio')).toBe(false);
-  expect(obs.calls.filter((type) => /^(Set|Create|Remove)/.test(type))).toEqual([]);
+  expect(findings).toEqual([]);
+  expect(obs.inputs.has('Mizar · Desktop Audio')).toBe(true);
+  expect(obs.inputs.get('My microphone')!.settings).toEqual({ device_id: 'custom' });
 });
 
 it('reports an audio name collision and leaves the existing source untouched', async () => {
@@ -485,6 +485,12 @@ it('does not duplicate window-capture audio with default desktop capture', async
   const obs = new FakeObs();
   await ensureObsConfiguration(obs, baseUrl);
   obs.inputs.set('Window', { kind: 'window_capture', settings: { capture_audio: true } });
+  obs.scenes.get(obsSceneName('gameplay'))!.push({
+    sourceName: 'Window',
+    sceneItemId: obs.nextId++,
+    sceneItemIndex: 2,
+    sceneItemEnabled: true,
+  });
   obs.calls = [];
   await ensureObsAudio(obs, baseUrl);
   expect(obs.inputs.has('Mizar · Desktop Audio')).toBe(false);

@@ -23,8 +23,8 @@ const planSchema = z
   .object({
     endpoint: z.string().min(1),
     collection: z.string().min(1),
-    desktop: z.array(ref).min(1),
-    independent: z.array(ref).min(1),
+    desktop: z.array(ref),
+    independent: z.array(ref),
   })
   .strict();
 const journalSchema = z
@@ -263,7 +263,8 @@ export class AudioMigration {
       if (journal.fields.some((entry) => entry.externalChanged))
         throw new Error('audio_migration_external_change');
       unsubscribe();
-      await rm(this.path);
+      // Keep the original reference states as an audit/restore backup after a successful change.
+      await rename(this.path, `${this.path}.completed-${randomUUID()}.json`);
       created = false;
     } catch (error) {
       await flush();

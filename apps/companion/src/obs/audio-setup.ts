@@ -1,5 +1,6 @@
 import { readFile, rm } from 'node:fs/promises';
 import { OBS_CAPTURE_INPUT, OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
+import { reconcileManagedAudio } from './managed-audio.js';
 import { inspectLegacyAudioTemplate } from './audio-template.js';
 import { AudioMigration, type MigrationObserver } from './audio-migration.js';
 import { createCommentaryProbe, isTeamspeak, RemoteCommentary } from './remote-commentary.js';
@@ -29,6 +30,7 @@ export async function configureIndependentAudio(
   onReady?: (ids: Record<ObsAudioRole, string>) => Promise<void>,
   allowMigration: () => Promise<boolean> = () => Promise.resolve(true),
   verifySwitch?: (plan: CommentarySwitch) => Promise<boolean>,
+  managedBindings?: () => Promise<{ revision: string; ids: Record<ObsAudioRole, string> } | null>,
 ): Promise<ObsFinding[]> {
   const migration = new AudioMigration(`${journal}.migration`);
   if (await migration.pending())
@@ -131,6 +133,30 @@ export async function configureIndependentAudio(
     )
       throw new Error('commentary_target_changed');
     const commentarySnapshot = JSON.stringify(commentarySettings);
+    const selected = await managedBindings?.();
+    if (selected) {
+      if (selected.ids.remoteCommentary !== target)
+        throw new Error('commentary_binding_target_changed');
+      await reconcileManagedAudio(
+        obs,
+        endpoint,
+        observer,
+        journal,
+        baseUrl,
+        selected.ids,
+        async () => {
+          const current = await managedBindings?.();
+          return (
+            current?.revision === selected.revision &&
+            (await owner.get()).revision === revision &&
+            !targetChanged
+          );
+        },
+      );
+      await rememberOwnedTarget(() => false);
+      await rm(`${journal}.waiting`, { force: true });
+      return [];
+    }
     let legacy = await inspectLegacyAudioTemplate(obs, baseUrl, target);
     if (!legacy) {
       // A completed migration may be checked again, but is never replayed.
@@ -217,7 +243,7 @@ export async function configureIndependentAudio(
         return [
           {
             code: 'commentary_pending',
-            message: '桌面混音不是可验证的默认模板，请在 OBS 中核对音频分路。',
+            message: '音频路径尚未确认，请检查全局、嵌套或重复的来源，并在声音设置中确认分路。',
           },
         ];
     }
@@ -225,7 +251,7 @@ export async function configureIndependentAudio(
       return [
         {
           code: 'commentary_pending',
-          message: '已存在手动音频绑定，请在 OBS 中核对分路；未自动迁移桌面音频。',
+          message: '请补全游戏、远端解说和麦克风分路，再由 Mizar 完成场景配置。',
         },
       ];
     const scenes = obsDesiredScenes(baseUrl);
@@ -285,7 +311,9 @@ export async function configureIndependentAudio(
     const gameInput = updated.find((x: Record<string, unknown>) => x.inputUuid === game);
     if (!gameInput || typeof gameInput.inputName !== 'string')
       throw new Error('audio_game_missing');
-    const independent: { sceneName: string; sceneItemId: number; sourceUuid: string }[] = [];
+    const independent: { sceneName: string; sceneItemId: number; sourceUuid: string }[] = [
+      ...legacy.microphone,
+    ];
     for (const scene of scenes) {
       let items = records(
         (await obs.call('GetSceneItemList', { sceneName: scene.sceneName })).sceneItems,

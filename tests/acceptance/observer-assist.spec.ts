@@ -462,13 +462,18 @@ test('enters standard and MulNX without an address, then confirms from the workb
     expect(await calls()).not.toContain('cs2_console_status');
     expect(await calls()).not.toContain('set_cs2_console_capture');
     await page.goto('/workspace/dock');
-    await page.getByRole('button', { name: '配置运镜', exact: true }).click();
-    await expect
-      .poll(() =>
-        page.evaluate(() => (window as typeof window & { openedPaths: string[] }).openedPaths),
-      )
-      .toContain('/settings?tab=music&section=camera');
-    await page.goto('/settings?tab=music&section=camera');
-    await expect(page.getByRole('heading', { name: '运镜', exact: true })).toBeVisible();
+    const camera = page.getByRole('button', { name: '配置运镜', exact: true });
+    if (useMulnx) {
+      await camera.click();
+      await expect
+        .poll(() =>
+          page.evaluate(() => (window as typeof window & { openedPaths: string[] }).openedPaths),
+        )
+        .toContain('/settings?tab=camera');
+      await page.goto('/settings?tab=camera');
+      await expect(page.getByRole('heading', { name: '运镜', exact: true })).toBeVisible();
+    } else {
+      await expect(camera).toHaveCount(0);
+    }
   }
 });
