@@ -115,6 +115,7 @@ function WeaponIcon({
     <EquipmentIcon
       asset={weapon?.asset ?? null}
       active={weapon?.active}
+      clipFill={weapon?.clipFill}
       className={`player-rail__icon ${visualRole === undefined ? '' : `is-${visualRole}`}`}
       physicalSide={physicalSide}
       label={weapon?.name ?? 'Weapon'}

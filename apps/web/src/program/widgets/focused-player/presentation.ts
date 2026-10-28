@@ -5,6 +5,7 @@ import {
   utilityPresentation,
 } from '../player-rails/presentation';
 import { playerStatusEffectState } from '../player-status-effects/presentation';
+import { heldWeapon, magazineFill } from '../player-equipment/presentation';
 
 export type FocusedPlayerItemKind =
   'firearm' | 'knife' | 'grenade' | 'objective' | 'taser' | 'other';
@@ -76,11 +77,8 @@ export function buildFocusedPlayerPresentation(payload: ProgramPayload) {
     payload.bomb?.sourcePlayerId === player.sourcePlayerId &&
     (payload.bomb.state === 'carried' || payload.bomb.state === 'planting');
   const weapons = player.weaponsAvailable ? player.weapons.map(weaponPresentation) : [];
-  const candidates = player.weaponsAvailable
-    ? player.weapons.filter((w) => w.state === 'active')
-    : [];
-  const active = candidates.length === 1 ? candidates[0] : undefined;
-  const resolved = active === undefined ? null : weaponPresentation(active);
+  const active = heldWeapon(player, payload.status.telemetry === 'fresh');
+  const resolved = active === null ? null : weaponPresentation(active);
   const activeItem =
     dead || resolved?.item == null || (resolved.item.kind === 'objective' && !hasC4)
       ? null
@@ -135,14 +133,7 @@ export function buildFocusedPlayerPresentation(payload: ProgramPayload) {
     activeItem,
     activeItemKind: activeItemKind(activeItem?.item ?? null),
     clip: firearm ? (active?.ammoClip ?? null) : null,
-    clipFill:
-      firearm &&
-      active?.ammoClip != null &&
-      active.ammoClipMax !== null &&
-      Number.isFinite(active.ammoClipMax) &&
-      active.ammoClipMax > 0
-        ? Math.max(0, Math.min(1, active.ammoClip / active.ammoClipMax))
-        : null,
+    clipFill: firearm ? magazineFill(active) : null,
     ...reserveAmmo,
   };
 }
