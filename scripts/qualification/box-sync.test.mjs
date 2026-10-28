@@ -112,6 +112,42 @@ function addMusic(f) {
 }
 
 describe('lean Box distribution', () => {
+  it('resumes the same sync after a transient read failure without repeating verified writes', async () => {
+    const f = fixture();
+    const original = f.box.hash;
+    let failed = false;
+    f.box.hash = vi.fn(async (path) => {
+      if (!failed && path.startsWith('/Runtime/')) {
+        failed = true;
+        throw Object.assign(new Error('temporary read failure'), { retryableRead: true });
+      }
+      return original(path);
+    });
+    await syncStableRelease(f.options);
+    expect(failed).toBe(true);
+    expect(f.writes.at(-1)).toBe('/Updates/latest.json');
+    expect(new Set(f.writes).size).toBe(f.writes.length);
+  });
+
+  it('does not restart when another parallel operation has an uncertain write', async () => {
+    const f = fixture();
+    const originalUpload = f.box.upload;
+    const originalHash = f.box.hash;
+    const initialize = vi.spyOn(f.box, 'initialize');
+    f.box.upload = vi.fn(async (folder, ...args) => {
+      if (folder.startsWith('/Runtime/')) throw new Error('uncertain write');
+      return originalUpload(folder, ...args);
+    });
+    f.box.hash = vi.fn(async (path) => {
+      if (path.startsWith('/Resources/'))
+        throw Object.assign(new Error('temporary read'), { retryableRead: true });
+      return originalHash(path);
+    });
+    await expect(syncStableRelease(f.options)).rejects.toThrow('uncertain write');
+    expect(initialize).toHaveBeenCalledTimes(2);
+    expect(f.writes).not.toContain('/Updates/latest.json');
+  });
+
   it('reconciles a timed-out resource copy only after verifying the destination bytes', async () => {
     const f = fixture();
     f.dirs.add('/Resources');

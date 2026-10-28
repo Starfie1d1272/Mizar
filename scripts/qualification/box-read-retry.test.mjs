@@ -229,6 +229,13 @@ describe('Box bounded recovery', () => {
     await expect(box.upload('/Runtime/v1.6.4', 'core.exe', bytes)).rejects.toThrow('不同内容');
     expect(transport).toHaveBeenCalledTimes(1);
   });
+  it('does not mark a failed reconciliation of an uncertain upload as safe to restart', async () => {
+    const { box } = uploading({ safe: false });
+    box.list.mockRejectedValue(Object.assign(new Error('read failed'), { retryableRead: true }));
+    await expect(box.upload('/Runtime/v1.6.4', 'core.exe', bytes)).rejects.toMatchObject({
+      retryableRead: false,
+    });
+  });
   it.each([{ safe: false }, { safe: true, replace: true }])(
     'does not replay uncertain/replace writes: %j',
     async ({ safe, replace }) => {
