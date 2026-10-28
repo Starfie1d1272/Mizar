@@ -54,7 +54,6 @@ export class MulnxTool {
   private latest: MulnxRelease | undefined;
   private pending: Promise<unknown> | undefined;
   private message = '';
-  private launchProtocol: 1 | null = null;
   constructor(
     readonly directory: string,
     readonly bundle: string,
@@ -69,7 +68,6 @@ export class MulnxTool {
     return {
       installed: this.installed?.release.tag ?? null,
       latest: this.latest?.tag ?? null,
-      launchProtocol: this.launchProtocol,
       busy: Boolean(this.pending),
       message: this.message,
       packs: this.installed?.packs ?? [],
@@ -94,9 +92,6 @@ export class MulnxTool {
         .parse(await readJson(this.directory, 'current.json'));
       await safePath(join(this.directory, data.directory), 'MulNX/CS2Injector/CS2Injector.exe');
       this.installed = data;
-      this.launchProtocol = await this.readLaunchProtocol(
-        join(this.directory, data.directory, 'MulNX'),
-      );
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
@@ -141,20 +136,8 @@ export class MulnxTool {
       const root = join(this.directory, this.installed!.directory, 'MulNX');
       await this.configureLauncher(root, cs2Path, consoleCapture, spectatorCfg);
       const launcher = await safePath(root, 'CS2Injector/CS2Injector.exe');
-      const launchProtocol = await this.readLaunchProtocol(root);
-      this.launchProtocol = launchProtocol;
-      return { launcher, version: this.installed!.release.tag, launchProtocol };
+      return { launcher, version: this.installed!.release.tag };
     });
-  }
-  private async readLaunchProtocol(root: string): Promise<1 | null> {
-    try {
-      const path = await safePath(root, 'CS2Injector/launch-protocol.txt');
-      if ((await lstat(path)).size > 32) return null;
-      return (await readFile(path, 'utf8')).trim() === '1' ? 1 : null;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-      throw error;
-    }
   }
   private async configureLauncher(
     root: string,
@@ -162,6 +145,28 @@ export class MulnxTool {
     consoleCapture = false,
     spectatorCfg = false,
   ) {
+    const auto = await readFile(
+      await safePath(root, 'CS2Injector/CS2BootLoader/Config/auto.yaml'),
+      'utf8',
+    );
+    if (
+      (auto.match(/^autoLaunch\s*:/gm) ?? []).length !== 1 ||
+      !/^autoLaunch\s*:\s*false\s*(?:#.*)?$/m.test(auto)
+    )
+      throw new Error('mulnx_launcher_config_unsupported');
+    try {
+      const socketConfig = await readFile(
+        await safePath(root, 'CS2Injector/WebSocketManager/Config/config.yaml'),
+        'utf8',
+      );
+      if (
+        (socketConfig.match(/^port\s*:/gm) ?? []).length !== 1 ||
+        !/^port\s*:\s*55203\s*(?:#.*)?$/m.test(socketConfig)
+      )
+        throw new Error('mulnx_launcher_config_unsupported');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
     const config = await safePath(root, 'CS2Injector/CS2BootLoader/Config/config.yaml');
     const stat = await lstat(config);
     if (stat.size > 64 * 1024) throw new Error('mulnx_launcher_config_invalid');

@@ -666,10 +666,6 @@ impl ManagedCs2 {
         if !same_executable(&executable, &expected_executable.to_string_lossy()) { return Err("游戏安装位置已变化。".into()); }
         self.store.validate_unsubmitted_mulnx_observer(&video, &executable, account)
     }
-    pub(crate) fn mark_observer_mulnx_finished(&self) -> Result<(), String> {
-        if any_cs2_running(&self.log)? { return Err("CS2 仍在运行，观战备份仍保留。".into()); }
-        self.store.mark_mulnx_observer_finished()
-    }
     pub(crate) fn mark_observer_mulnx_options_clean(&self) -> Result<(), String> {
         self.store.mark_mulnx_options_clean()
     }
@@ -783,6 +779,9 @@ impl ManagedCs2 {
         Ok(Some((context, process)))
     }
     /// Inspection only: do not adopt a process, write a session, restore config or close a game.
+    pub(crate) fn mulnx_launcher_running(&self) -> Result<bool, String> {
+        Ok(!process_pids("CS2Injector.exe", &self.log)?.is_empty())
+    }
     pub fn mulnx_handoff_status(&self) -> Result<Value, String> {
         let owned = if self.has_external() { None } else { self.workspace_process()? };
         let mut processes = Vec::new();

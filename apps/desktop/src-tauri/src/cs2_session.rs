@@ -337,16 +337,6 @@ impl SessionStore {
         record["mulnx"]["optionsClean"] = json!(true);
         atomic_write(&self.spectator_path(), &serde_json::to_vec_pretty(&record).map_err(|e| json_error("观战状态无法保存。", &e))?)
     }
-    pub(crate) fn mark_mulnx_observer_finished(&self) -> Result<(), String> {
-        let _guard = self.acquire_write_guard()?;
-        let mut record = self.spectator_record()?.ok_or("观战备份缺失。")?;
-        if !record["mulnx"].is_object() || record["loadAttempted"] != true
-            || !record["mulnx"]["pid"].is_null() || !record["mulnx"]["created"].is_null() {
-            return Err("MulNX 观战启动身份无法确认。".into());
-        }
-        record["mulnx"]["finished"] = json!(true);
-        atomic_write(&self.spectator_path(), &serde_json::to_vec_pretty(&record).map_err(|e| json_error("观战状态无法保存。", &e))?)
-    }
     pub(crate) fn bind_mulnx_observer(&self, pid: u32, created: u64, executable: &Path) -> Result<(), String> {
         let _guard = self.acquire_write_guard()?;
         let mut record = self.spectator_record()?.ok_or("观战备份缺失。")?;

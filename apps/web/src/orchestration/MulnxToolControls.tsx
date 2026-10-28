@@ -16,7 +16,7 @@ export function MulnxToolControls({
   allowStop = true,
 }: {
   allowStop?: boolean;
-  tool: (MulnxToolView & { launchProtocol?: 1 | null }) | undefined;
+  tool: MulnxToolView | undefined;
 }) {
   const production = useLocalRead<Production>('/local/v1/production');
   const [busy, setBusy] = useState(false);
@@ -83,15 +83,6 @@ export function MulnxToolControls({
         MulNX · {tool.installed ?? '首次启动时准备'}
         {tool.latest && tool.latest !== tool.installed ? ` · 可更新至 ${tool.latest}` : ''}
       </p>
-      {tool.launchProtocol === 1 ? (
-        <p>支持自动启动。</p>
-      ) : tool.installed ? (
-        <StatusBanner tone="warning">
-          {tool.launchProtocol === null
-            ? '当前 MulNX 版本不支持自动启动，请检查可用更新，或选择标准启动。'
-            : '本机自动启动能力尚未确认，请先检查更新。'}
-        </StatusBanner>
-      ) : null}
       <Button disabled={busy || tool.busy} onClick={() => void run('check')}>
         检查更新
       </Button>
@@ -102,13 +93,7 @@ export function MulnxToolControls({
       ) : null}
       {window.__TAURI_INTERNALS__ ? (
         <Button
-          disabled={
-            busy ||
-            tool.busy ||
-            tool.launchProtocol !== 1 ||
-            !production?.canEnter ||
-            production.mode !== 'preparation'
-          }
+          disabled={busy || tool.busy || !production?.canEnter || production.mode !== 'preparation'}
           onClick={() => void run('open')}
         >
           启动 MulNX 工作台

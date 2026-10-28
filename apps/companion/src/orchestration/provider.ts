@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'node:url';
 export type GatewayResult = 'queued' | 'rejected' | 'unknown';
-type CameraCommand = 'CamMacro/Play' | 'CamPlay/ClearForce' | 'System/Stop';
+type CameraCommand =
+  'CamMacro/Play' | 'CamPlay/ClearForce' | 'System/Stop' | 'CS2BootLoader/Launch';
 /** Fixed audited gateway. No arbitrary commands, endpoint, reconnect, retries or offline queue. */
 export class MulnxProvider {
   private socket: WebSocket | null = null;
@@ -126,11 +127,16 @@ export class MulnxProvider {
 
 // Native-only fixed operation; no browser-provided commands or endpoints.
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  if (process.argv.slice(2).join(' ') !== '--stop-mulnx') throw new Error('mulnx_stop_arguments');
+  const action = process.argv.slice(2).join(' ');
+  if (action !== '--stop-mulnx' && action !== '--launch-mulnx') throw new Error('mulnx_arguments');
   const provider = new MulnxProvider();
   try {
-    await provider.connect();
-    console.log(JSON.stringify({ result: await provider.stopControl(), execution: 'unconfirmed' }));
+    await provider.connect(action === '--launch-mulnx' ? 55203 : 55202);
+    const result =
+      action === '--launch-mulnx'
+        ? await provider.send('CS2BootLoader/Launch')
+        : await provider.stopControl();
+    console.log(JSON.stringify({ result, execution: 'unconfirmed' }));
   } finally {
     provider.close();
   }
