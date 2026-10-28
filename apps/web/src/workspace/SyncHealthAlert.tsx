@@ -1,5 +1,6 @@
-import { ReviewDialog } from './ReviewDialog';
-import { useRef, useState } from 'react';
+import { ReviewDialog, closeReviewWindow, isReviewWindow } from './ReviewDialog';
+import { useEffect, useRef, useState } from 'react';
+import { SILENCED_MATCH_KEY, SILENCE_CHANGED, setSilencedMatch } from './review-silence';
 import { Button, StatusBanner } from '../ui';
 import { command } from '../preparation/client';
 import { RivalHubSyncControls } from '../operator/RivalHubSyncControls';
@@ -44,6 +45,7 @@ export function syncHealthText(health?: SyncHealth): string {
 
 type AlertProps = {
   health: SyncHealth | undefined;
+  matchId: string | undefined;
   isSource: boolean;
   onOpen: (path: string) => Promise<void>;
 };
@@ -52,6 +54,39 @@ type AlertProps = {
 export function SyncHealthAlert(props: AlertProps) {
   const [dismissed, setDismissed] = useState<string | null>(null);
   const health = props.health;
+  const [silenced, setSilenced] = useState(() => {
+    try {
+      return Boolean(props.matchId && localStorage.getItem(SILENCED_MATCH_KEY) === props.matchId);
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    const update = (event?: StorageEvent) => {
+      if (event && event.key !== null && event.key !== SILENCED_MATCH_KEY) return;
+      setDismissed(null);
+      try {
+        setSilenced(
+          Boolean(props.matchId && localStorage.getItem(SILENCED_MATCH_KEY) === props.matchId),
+        );
+      } catch {
+        setSilenced(false);
+      }
+    };
+    update();
+    const localUpdate = (event: Event) => {
+      setDismissed(null);
+      setSilenced(
+        Boolean(props.matchId && (event as CustomEvent<string | null>).detail === props.matchId),
+      );
+    };
+    window.addEventListener('storage', update);
+    window.addEventListener(SILENCE_CHANGED, localUpdate);
+    return () => {
+      window.removeEventListener('storage', update);
+      window.removeEventListener(SILENCE_CHANGED, localUpdate);
+    };
+  }, [props.matchId]);
   if (health?.status !== 'attention') return null;
   // Operation feedback and manual review belong only to this active incident.
   // Leaving attention unmounts them, including callbacks still awaiting a reply.
@@ -60,7 +95,11 @@ export function SyncHealthAlert(props: AlertProps) {
       key={health.incidentId}
       {...props}
       health={health}
-      dismissed={dismissed === health.incidentId}
+      dismissed={silenced || dismissed === health.incidentId}
+      onSilence={() => {
+        if (!props.matchId) return;
+        setSilencedMatch(props.matchId);
+      }}
       onDismiss={() => setDismissed(health.incidentId)}
     />
   );
@@ -72,7 +111,14 @@ function SyncHealthIncident({
   onOpen,
   dismissed,
   onDismiss,
-}: AlertProps & { health: SyncHealth; dismissed: boolean; onDismiss: () => void }) {
+  onSilence,
+  matchId,
+}: AlertProps & {
+  health: SyncHealth;
+  dismissed: boolean;
+  onDismiss: () => void;
+  onSilence: () => void;
+}) {
   const [reviewing, setReviewing] = useState(false);
   const [busy, setBusy] = useState(false);
   const running = useRef(false);
@@ -105,7 +151,7 @@ function SyncHealthIncident({
       </StatusBanner>
       <ReviewDialog
         kind="sync"
-        open={reviewing || Boolean(health.incidentId && !dismissed)}
+        open={isReviewWindow() || reviewing || Boolean(health.incidentId && !dismissed)}
         modal={false}
         className="workspace-live-roster-alert"
         title="本场网站同步需要处理"
@@ -135,6 +181,19 @@ function SyncHealthIncident({
             立即重试同步
           </Button>
         )}
+        {matchId ? (
+          <Button
+            onClick={() => {
+              onSilence();
+              close();
+              void closeReviewWindow().catch((error) =>
+                setFeedback(error instanceof Error ? error.message : '关闭核对窗口失败，请重试。'),
+              );
+            }}
+          >
+            本场比赛不再自动弹出
+          </Button>
+        ) : null}
         <RivalHubSyncControls />
         <details>
           <summary>详情与诊断导出</summary>

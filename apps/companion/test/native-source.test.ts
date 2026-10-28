@@ -153,14 +153,13 @@ it('does not advance the source cursor when durable journal commit fails', async
   }
 });
 
-it('replays stable source identities after cursor persistence fails following a journal commit', async () => {
+it('advances in memory and retries the checkpoint after cursor persistence fails', async () => {
   const { directory, journal, source, path } = await setup();
   await writeFile(path, JSON.stringify(event('workspace_exit_terminal')) + '\n');
   const originalRename = filesystem.rename;
   let fail = true;
   vi.spyOn(filesystem, 'rename').mockImplementation(async (from, to) => {
     if (String(to).endsWith('native-source-cursor.json') && fail) {
-      fail = false;
       throw new Error('cursor rename denied');
     }
     await originalRename(from, to);
@@ -168,12 +167,27 @@ it('replays stable source identities after cursor persistence fails following a 
   try {
     await source.poll();
     expect(source.health().failures).toBe(1);
+    await appendFile(path, JSON.stringify(event('new_record')) + '\n');
     await source.poll();
     await journal.flush();
     const restored = await entries(directory);
     expect(restored.entries).toHaveLength(2);
-    expect(restored.entries[0]?.sourceRecordId).toBe(restored.entries[1]?.sourceRecordId);
+    expect(restored.entries.map((record) => record.entry.stage)).toEqual([
+      'workspace_exit_terminal',
+      'new_record',
+    ]);
+    expect(source.health().error).toBe('native_source_unavailable');
+    fail = false;
+    await source.poll();
     expect(source.health().error).toBeNull();
+    await journal.flush();
+    const stages = (await entries(directory)).records.map((record) => record.stage);
+    expect(stages.filter((stage) => stage === 'native_source_failure')).toHaveLength(1);
+    expect(stages).toContain('native_source_recovered');
+    const checkpoint = JSON.parse(
+      await readFile(join(directory, 'native-source-cursor.json'), 'utf8'),
+    ) as { cursors: { offset: number }[] };
+    expect(checkpoint.cursors[0]?.offset).toBe((await filesystem.stat(path)).size);
   } finally {
     await source.close();
     await journal.close();
@@ -225,6 +239,52 @@ it('rejects hard-linked source files while committing adjacent trusted sources',
       'trusted_adjacent',
     ]);
   } finally {
+    await source.close();
+    await journal.close();
+  }
+});
+
+it('accepts a Windows mapped fixed file only when the resolved file identity matches', async () => {
+  const { directory, journal, source } = await setup();
+  const name = 'desktop.1.ndjson';
+  const logical = join(directory, name);
+  const mappedDir = await mkdtemp(join(tmpdir(), 'mizar-mapped-source-'));
+  directories.push(mappedDir);
+  const mapped = join(mappedDir, name);
+  const cursor = join(directory, 'native-source-cursor.json');
+  const mappedCursor = join(mappedDir, 'native-source-cursor.json');
+  await writeFile(logical, JSON.stringify(event('mapped_record')) + '\n');
+  await writeFile(mapped, 'different file');
+  await writeFile(cursor, JSON.stringify({ schema: 1, cursors: [] }));
+  await writeFile(mappedCursor, '{}');
+  const originalRealpath = filesystem.realpath;
+  const originalLstat = filesystem.lstat;
+  const descriptor = Object.getOwnPropertyDescriptor(process, 'platform')!;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  vi.spyOn(filesystem, 'realpath').mockImplementation(async (path, options) =>
+    String(path) === logical
+      ? mapped
+      : String(path) === cursor
+        ? mappedCursor
+        : originalRealpath(path, options as never),
+  );
+  try {
+    await source.poll();
+    expect(source.health()).toMatchObject({ copied: 0, error: 'native_source_unavailable' });
+    vi.spyOn(filesystem, 'lstat').mockImplementation(async (path, options) =>
+      originalLstat(
+        String(path) === mapped ? logical : String(path) === mappedCursor ? cursor : path,
+        options as never,
+      ),
+    );
+    await source.poll();
+    expect(source.health()).toMatchObject({ copied: 1, error: null });
+    await journal.flush();
+    expect((await entries(directory)).entries.map((record) => record.entry.stage)).toEqual([
+      'mapped_record',
+    ]);
+  } finally {
+    Object.defineProperty(process, 'platform', descriptor);
     await source.close();
     await journal.close();
   }

@@ -152,6 +152,26 @@ async function portAvailable(port) {
   await new Promise((done) => server.close(done));
 }
 
+async function conflictMessage(health, stateRoot, artifact) {
+  try {
+    const state = JSON.parse(await readFile(join(stateRoot, 'data/runtime.json'), 'utf8'));
+    if (
+      state.repository === PRODUCT_REPOSITORY &&
+      /^[a-f0-9]{64}$/.test(state.artifactSha256) &&
+      /^[a-f0-9]{64}$/.test(state.controlToken) &&
+      typeof state.instanceId === 'string' &&
+      sameRuntime(health, state, state.instanceId)
+    ) {
+      if (state.artifactSha256 === artifact.artifactSha256)
+        return '已有同版本 Mizar 服务正在运行，请重新启动 Mizar；如仍无法打开，请查看启动日志。';
+      return '3000 端口上的 Mizar 服务与本机运行记录匹配，但程序版本不同。请打开原版本 Mizar，完成游戏与制作收尾并从托盘退出，再启动当前版本；若原版本不可用，请查看启动日志并联系支持。';
+    }
+  } catch {
+    // Missing or unreadable state cannot establish a local runtime identity.
+  }
+  return '3000 端口已被占用，无法确认占用程序。请检查端口占用和运行日志；制播服务不会切换端口';
+}
+
 async function writeJson(path, data) {
   await writeFile(path, JSON.stringify(data, null, 2) + '\n', { mode: 0o600 });
 }
@@ -212,7 +232,7 @@ export async function runProduct({
         await open();
         return { reused: true };
       }
-      if (health !== null) throw new Error('已有其他版本或其他程序占用 3000 端口，请先停止该程序');
+      if (health !== null) throw new Error(await conflictMessage(health, stateRoot, artifact));
       await delay(200);
     }
     throw new Error('已有制播实例尚未就绪，请检查 state/logs 后重试');
@@ -227,7 +247,7 @@ export async function runProduct({
     await portAvailable(port);
   } catch {
     log('port_conflict');
-    throw new Error('3000 端口已被其他程序占用，请先停止该程序；制播服务不会切换端口');
+    throw new Error(await conflictMessage(await healthAt(port), stateRoot, artifact));
   }
   for (const dir of ['data', 'logs', 'evidence'])
     await mkdir(join(stateRoot, dir), { recursive: true });
@@ -339,7 +359,16 @@ export async function runProduct({
       log('companion_rollback');
       child.kill();
     }
-    await rm(statePath, { force: true });
+    try {
+      const state = JSON.parse(await readFile(statePath, 'utf8'));
+      if (state.instanceId === instanceId && state.controlToken === controlToken)
+        await rm(statePath, { force: true });
+    } catch (error) {
+      if (error.code !== 'ENOENT')
+        log('runtime_state_cleanup_failed', {
+          error: safeLogText(error.message, logOptions.secrets),
+        });
+    }
     log('supervisor_complete');
   }
 }
