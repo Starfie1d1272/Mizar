@@ -44,13 +44,15 @@ it('silences repeated sync incidents for this match and keeps manual review avai
   render('match-a', 'incident-1');
   expect(element.querySelector('[data-review]')).not.toBeNull();
   act(() => [...element.querySelectorAll('button')].find((b) => b.textContent === '关闭')!.click());
-  act(() =>
+  act(() => {
     window.dispatchEvent(
       new StorageEvent('storage', { key: 'diagnostic-preference', newValue: '1' }),
-    ),
-  );
+    );
+  });
   expect(element.querySelector('[data-review]')).toBeNull();
-  act(() => window.dispatchEvent(new StorageEvent('storage', { key: null })));
+  act(() => {
+    window.dispatchEvent(new StorageEvent('storage', { key: null }));
+  });
   expect(element.querySelector('[data-review]')).not.toBeNull();
   act(() => [...element.querySelectorAll('button')].find((b) => b.textContent === '关闭')!.click());
   act(() =>
