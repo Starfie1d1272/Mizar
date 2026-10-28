@@ -701,6 +701,7 @@ export class ProjectionCoordinator {
         ...(health.lastErrorCode ? { lastErrorCode: health.lastErrorCode } : {}),
         generation: health.generation,
         sameMap: sourceMapName === undefined || sourceMapName === program.map.name,
+        ...(sourceMapName === undefined ? {} : { mapName: sourceMapName }),
         // Missing receive evidence preserves the existing compatibility boundary,
         // while diagnostics explicitly distinguish it from measured freshness.
         fresh: freshness !== 'stale',
@@ -710,6 +711,52 @@ export class ProjectionCoordinator {
       },
       selectProgramSafeRuntimeView(snapshot.current).programSourceLastAccepted
         ?.receivedMonotonicMs ?? now,
+      (() => {
+        const view = selectProgramSafeRuntimeView(snapshot.current);
+        const telemetry = view.telemetry;
+        const countdown = telemetry?.telemetry.phaseCountdowns;
+        const round = telemetry?.telemetry.map?.roundNumber;
+        const receivedAt = view.programSourceLastAccepted?.receivedMonotonicMs;
+        const remaining = countdown?.endsInSeconds;
+        return {
+          ...(health.roundClock ? { source: health.roundClock } : {}),
+          ...(health.freezeEnd ? { freezeEnd: health.freezeEnd } : {}),
+          ...(health.clockExecution === undefined
+            ? {}
+            : { sourceExecution: health.clockExecution }),
+          ...(typeof countdown?.phase === 'string' &&
+          typeof round === 'number' &&
+          Number.isSafeInteger(round) &&
+          round >= 0 &&
+          receivedAt !== undefined
+            ? {
+                phase: {
+                  phase: countdown.phase,
+                  round,
+                  received: receivedAt,
+                  generation: program.cursor.programSourceGeneration,
+                },
+              }
+            : {}),
+          ...(countdown?.phase === 'live' &&
+          typeof round === 'number' &&
+          Number.isSafeInteger(round) &&
+          round >= 0 &&
+          typeof remaining === 'number' &&
+          Number.isFinite(remaining) &&
+          remaining >= 0 &&
+          receivedAt !== undefined
+            ? {
+                program: {
+                  round,
+                  remaining,
+                  received: receivedAt,
+                  generation: program.cursor.programSourceGeneration,
+                },
+              }
+            : {}),
+        };
+      })(),
     );
     try {
       this.onObserverDiagnostics?.(this.observerTimeline.getDiagnostics());
