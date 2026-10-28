@@ -16,7 +16,7 @@ it('enables the required close_review ACL exclusively for its dedicated window',
   const review = capabilities.find((capability) => capability.identifier === 'review');
   expect(review).toMatchObject({
     windows: ['tool-review'],
-    remote: { urls: ['http://127.0.0.1:3000/workspace/review*'] },
+    remote: { urls: ['http://127.0.0.1:3000/*'] },
     permissions: ['allow-close-review'],
   });
   expect(enabled).toContain('review');

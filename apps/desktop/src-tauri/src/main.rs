@@ -2993,6 +2993,18 @@ mod startup_tests {
     use super::*;
 
     #[test]
+    fn review_capability_matches_the_windows_ipc_origin() {
+        let capability: serde_json::Value = serde_json::from_str(include_str!("../capabilities/review.json")).unwrap();
+        assert_eq!(capability["windows"], serde_json::json!(["tool-review"]));
+        assert_eq!(capability["permissions"], serde_json::json!(["allow-close-review"]));
+        let pattern: tauri_utils::acl::RemoteUrlPattern = capability["remote"]["urls"][0].as_str().unwrap().parse().unwrap();
+        // Windows IPC authorizes the Origin header, which has no document path.
+        assert!(pattern.test(&"http://127.0.0.1:3000/".parse().unwrap()));
+        assert!(!pattern.test(&"http://127.0.0.1:3001/".parse().unwrap()));
+        assert!(!pattern.test(&"http://example.com:3000/".parse().unwrap()));
+    }
+
+    #[test]
     fn preparation_routes_are_exact_and_include_workspace_settings_links() {
         for path in ["/", "/matches", "/settings?tab=gsi", "/settings?tab=obs",
             "/settings?tab=rivalhub", "/settings?tab=music", "/settings?tab=music&section=camera"] {
