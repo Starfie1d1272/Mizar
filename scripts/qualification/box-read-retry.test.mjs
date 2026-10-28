@@ -80,6 +80,82 @@ describe('Box read request recovery', () => {
     expect(output.mock.calls.flat().join('\n')).not.toContain('PRIVATE-URL');
   });
 
+  it('restarts a stalled download after 60 seconds rather than waiting for the total deadline', async () => {
+    const download = vi
+      .fn()
+      .mockImplementationOnce(
+        (_url, options) =>
+          new Promise((_resolve, reject) => {
+            options.signal.addEventListener('abort', () =>
+              reject(new DOMException('aborted', 'AbortError')),
+            );
+          }),
+      )
+      .mockResolvedValueOnce(new Response('complete'));
+    const api = vi
+      .fn()
+      .mockResolvedValue(new Response('"https://box.nju.edu.cn/seafhttp/private"'));
+    const box = new BoxClient('PRIVATE-TOKEN', undefined, api, download);
+    const pending = box.hash('/Resources/v1.8.0/pack.zip');
+    await vi.advanceTimersByTimeAsync(60999);
+    expect(download).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(pending).resolves.toEqual({ size: 8, sha256: digest(Buffer.from('complete')) });
+    expect(download).toHaveBeenCalledTimes(2);
+  });
+
+  it('allows a long download while chunks continue to arrive', async () => {
+    let stream;
+    const body = new globalThis.ReadableStream({
+      start(controller) {
+        stream = controller;
+        controller.enqueue(new globalThis.TextEncoder().encode('first'));
+      },
+    });
+    const download = vi.fn().mockResolvedValue(new Response(body));
+    const api = vi
+      .fn()
+      .mockResolvedValue(new Response('"https://box.nju.edu.cn/seafhttp/private"'));
+    const box = new BoxClient('PRIVATE-TOKEN', undefined, api, download);
+    const pending = box.hash('/Resources/v1.8.0/pack.zip');
+    await vi.advanceTimersByTimeAsync(59000);
+    stream.enqueue(new globalThis.TextEncoder().encode('second'));
+    await vi.advanceTimersByTimeAsync(59000);
+    stream.close();
+    await expect(pending).resolves.toEqual({
+      size: 11,
+      sha256: digest(Buffer.from('firstsecond')),
+    });
+    expect(download).toHaveBeenCalledTimes(1);
+  });
+
+  it('restarts the full hash when a partial response stops making progress', async () => {
+    const download = vi
+      .fn()
+      .mockImplementationOnce(
+        async (_url, options) =>
+          new Response(
+            new globalThis.ReadableStream({
+              start(controller) {
+                controller.enqueue(new globalThis.TextEncoder().encode('partial'));
+                options.signal.addEventListener('abort', () =>
+                  controller.error(new DOMException('aborted', 'AbortError')),
+                );
+              },
+            }),
+          ),
+      )
+      .mockResolvedValueOnce(new Response('complete'));
+    const api = vi
+      .fn()
+      .mockResolvedValue(new Response('"https://box.nju.edu.cn/seafhttp/private"'));
+    const box = new BoxClient('PRIVATE-TOKEN', undefined, api, download);
+    const pending = box.hash('/Resources/v1.8.0/pack.zip');
+    await vi.advanceTimersByTimeAsync(61000);
+    await expect(pending).resolves.toEqual({ size: 8, sha256: digest(Buffer.from('complete')) });
+    expect(download).toHaveBeenCalledTimes(2);
+  });
+
   it('bounds an expired read to three independent request deadlines', async () => {
     vi.spyOn(AbortSignal, 'timeout').mockImplementation(() =>
       AbortSignal.abort(new DOMException('PRIVATE-TIMEOUT', 'TimeoutError')),
