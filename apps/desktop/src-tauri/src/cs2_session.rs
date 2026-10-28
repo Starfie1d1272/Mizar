@@ -2305,7 +2305,7 @@ mod tests {
     #[test]
     fn launch_preferences_survive_restart_and_game_config_recovery() {
         let (root, video, store) = setup();
-        assert!(!store.preferences().unwrap().prefer_mulnx);
+        assert!(store.preferences().unwrap().prefer_mulnx);
         fs::create_dir_all(&store.root).unwrap();
         // 1.6.4 settings without a launch choice retain the standard path.
         fs::write(

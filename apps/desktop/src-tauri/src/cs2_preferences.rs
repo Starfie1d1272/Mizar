@@ -38,7 +38,7 @@ impl Default for Preferences {
         Self {
             quality: Quality::VeryHigh,
             frame_rate_limit: 60,
-            prefer_mulnx: false,
+            prefer_mulnx: true,
         }
     }
 }
@@ -91,7 +91,7 @@ mod tests {
     fn launch_choice_survives_restart_and_legacy_keeps_steam() {
         assert_eq!(
             Preferences::default().json(),
-            json!({"qualityPreset": "very-high", "frameRateLimit": 60, "preferMulnx": false})
+            json!({"qualityPreset": "very-high", "frameRateLimit": 60, "preferMulnx": true})
         );
         for quality in ["very-high", "high", "medium", "preserve"] {
             for limit in [0, 30, 60] {
