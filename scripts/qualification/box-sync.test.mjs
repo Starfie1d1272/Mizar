@@ -3,6 +3,22 @@ import { describe, expect, it, vi } from 'vitest';
 import { digest, syncResourceFiles, syncStableRelease, syncUserDownloads } from './box-sync.mjs';
 import { makeMachineMetadata } from '../../packages/resource-pack-contract/transport.mjs';
 
+vi.mock('node:timers/promises', () => ({
+  setTimeout: (ms, value, { signal } = {}) =>
+    new Promise((resolve, reject) => {
+      signal?.throwIfAborted();
+      const abort = () => {
+        globalThis.clearTimeout(timer);
+        reject(signal.reason);
+      };
+      const timer = globalThis.setTimeout(() => {
+        signal?.removeEventListener('abort', abort);
+        resolve(value);
+      }, ms);
+      signal?.addEventListener('abort', abort, { once: true });
+    }),
+}));
+
 const { Response } = globalThis;
 const version = '1.6.0';
 const identity = (name, bytes = Buffer.from(name)) => ({
@@ -170,30 +186,65 @@ describe('lean Box distribution', () => {
     expect(upload).not.toHaveBeenCalled();
   });
 
-  it.each(['missing', 'different'])(
-    'does not replay a timed-out resource copy when its destination is %s',
-    async (state) => {
+  it('waits for a delayed resource copy without sending it a second time', async () => {
+    vi.useFakeTimers();
+    try {
       const f = fixture();
       f.dirs.add('/Resources');
       f.dirs.add('/Resources/v1.5.0');
       const file = f.resources[0];
       f.files.set('/Resources/v1.5.0/' + file.name, file.bytes);
       f.box.copy = vi.fn(async (_from, to, name) => {
-        if (state === 'different') f.files.set(to + '/' + name, Buffer.from('wrong'));
+        globalThis.setTimeout(() => f.files.set(to + '/' + name, file.bytes), 1500);
         throw Object.assign(new Error('timeout'), { uploadOutcomeUnknown: true });
       });
-      const upload = vi.spyOn(f.box, 'upload');
-      await expect(
-        syncResourceFiles({
-          box: f.box,
-          version,
-          files: [file],
-          metadataInRuntime: true,
-          reuseVersion: '1.5.0',
-        }),
-      ).rejects.toThrow();
+      const pending = syncResourceFiles({
+        box: f.box,
+        version,
+        files: [file],
+        metadataInRuntime: true,
+        reuseVersion: '1.5.0',
+      });
+      await vi.advanceTimersByTimeAsync(3000);
+      await pending;
       expect(f.box.copy).toHaveBeenCalledTimes(1);
-      expect(upload).not.toHaveBeenCalled();
+      expect(f.writes).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['missing', 'different'])(
+    'does not replay a timed-out resource copy when its destination is %s',
+    async (state) => {
+      vi.useFakeTimers();
+      try {
+        const f = fixture();
+        f.dirs.add('/Resources');
+        f.dirs.add('/Resources/v1.5.0');
+        const file = f.resources[0];
+        f.files.set('/Resources/v1.5.0/' + file.name, file.bytes);
+        f.box.copy = vi.fn(async (_from, to, name) => {
+          if (state === 'different') f.files.set(to + '/' + name, Buffer.from('wrong'));
+          throw Object.assign(new Error('timeout'), { uploadOutcomeUnknown: true });
+        });
+        const upload = vi.spyOn(f.box, 'upload');
+        const pending = expect(
+          syncResourceFiles({
+            box: f.box,
+            version,
+            files: [file],
+            metadataInRuntime: true,
+            reuseVersion: '1.5.0',
+          }),
+        ).rejects.toThrow();
+        await vi.advanceTimersByTimeAsync(60000);
+        await pending;
+        expect(f.box.copy).toHaveBeenCalledTimes(1);
+        expect(upload).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
     },
   );
 
@@ -261,6 +312,45 @@ describe('lean Box distribution', () => {
     expect(f.files.get('/Archive/' + f.full.name)).toEqual(f.full.bytes);
     expect(f.files.get('/Archive/' + f.full.offline.name)).toEqual(f.full.offline.bytes);
     expect(f.files.has('/Stable/' + f.full.name)).toBe(false);
+  });
+  it('waits for a delayed archive move and verifies both destination and source', async () => {
+    vi.useFakeTimers();
+    try {
+      const f = fixture();
+      f.files.set('/Stable/' + f.full.name, f.full.bytes);
+      const move = f.box.move;
+      f.box.move = vi.fn(async (from, to, name) => {
+        globalThis.setTimeout(() => void move(from, to, name), 1500);
+        throw Object.assign(new Error('timeout'), { uploadOutcomeUnknown: true });
+      });
+      const pending = syncStableRelease(f.options);
+      await vi.advanceTimersByTimeAsync(3000);
+      await pending;
+      expect(f.box.move).toHaveBeenCalledTimes(1);
+      expect(f.files.get('/Archive/' + f.full.name)).toEqual(f.full.bytes);
+      expect(f.files.has('/Stable/' + f.full.name)).toBe(false);
+      expect(f.writes.at(-1)).toBe('/Updates/latest.json');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('never publishes the update pointer when an archive move remains uncertain', async () => {
+    vi.useFakeTimers();
+    try {
+      const f = fixture();
+      f.files.set('/Stable/' + f.full.name, f.full.bytes);
+      f.box.move = vi.fn(async () => {
+        throw Object.assign(new Error('timeout'), { uploadOutcomeUnknown: true });
+      });
+      const pending = expect(syncStableRelease(f.options)).rejects.toThrow('timeout');
+      await vi.advanceTimersByTimeAsync(60000);
+      await pending;
+      expect(f.box.move).toHaveBeenCalledTimes(1);
+      expect(f.files.get('/Stable/' + f.full.name)).toEqual(f.full.bytes);
+      expect(f.writes).not.toContain('/Updates/latest.json');
+    } finally {
+      vi.useRealTimers();
+    }
   });
   it.each(['source', 'archive', 'unknown', 'newer'])(
     'preserves public files on %s conflict',
