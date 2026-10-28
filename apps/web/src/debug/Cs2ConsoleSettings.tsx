@@ -125,9 +125,7 @@ export function Cs2ConsoleSettings() {
         ) : null}
         {saved ? (
           <StatusBanner tone="success">
-            {status?.enabled
-              ? '已保存。受管启动或明确交接后生效；游戏需启用控制台日志。'
-              : '已停止 Mizar 读取。'}
+            {status?.enabled ? '已保存，下次由 Mizar 启动游戏后生效。' : '已停止 Mizar 读取。'}
           </StatusBanner>
         ) : null}
         <Button type="button" disabled={busy} onClick={() => setReload((value) => value + 1)}>
