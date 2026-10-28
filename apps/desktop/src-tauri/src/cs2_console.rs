@@ -125,7 +125,13 @@ fn verify_handle_path(file: &File, path: &Path) -> io::Result<()> {
         return Err(io::Error::other("console final path exceeds budget"));
     }
     let actual = String::from_utf16(&value[..length as usize]).map_err(io::Error::other)?;
-    let expected = std::path::absolute(path)?;
+    // Windows packaged-app file virtualization can map a plain named path to
+    // LocalCache without making any visible ancestor a reparse point. Resolve
+    // the name through the same OS view and recheck ancestors before comparing
+    // it with the already-open handle. checked() also reopens and compares IDs.
+    parents(path)?;
+    let expected = fs::canonicalize(path)?;
+    parents(path)?;
     let expected = expected
         .to_str()
         .ok_or_else(|| io::Error::other("console path encoding invalid"))?;
@@ -1250,6 +1256,20 @@ mod tests {
         fs::write(&other, b"different source").unwrap();
         assert!(verify_handle_path(&File::open(&source).unwrap(), &other).is_err());
         fs::remove_dir_all(root).unwrap();
+    }
+    #[cfg(windows)]
+    #[test]
+    fn console_handle_accepts_the_os_resolved_local_appdata_path() {
+        let local = PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap());
+        let root = local.join(format!("mizar-console-qualification-{}-{}", std::process::id(), Utc::now().timestamp_nanos_opt().unwrap()));
+        fs::create_dir(&root).unwrap();
+        let source = root.join("console-settings.json");
+        fs::write(&source, b"{}\n").unwrap();
+        let (file, _) = checked(&source).unwrap();
+        assert!(verify_handle_path(&file, &source).is_ok());
+        drop(file);
+        fs::remove_file(source).unwrap();
+        fs::remove_dir(root).unwrap();
     }
     fn journal(log: &DesktopLog, executable: &Path) -> Value {
         json!({"pid":42,"created":99,"launchTime":100,"executable":executable,"consoleDiagnostics":prepare(log, executable).unwrap().unwrap()})
