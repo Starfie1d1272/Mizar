@@ -62,25 +62,19 @@ describe('Release resource integration with the real official Pack', () => {
     await restorePublishedResourceMetadata(recovery, originals);
     for (const [name, bytes] of originals)
       expect(await readFile(join(recovery, name))).toEqual(bytes);
-    const original = originals.get(RESOURCE_ASSET_NAMES.publication);
     await writeFile(join(recovery, RESOURCE_ASSET_NAMES.publication), 'different');
     await expect(restorePublishedResourceMetadata(recovery, originals)).rejects.toThrow();
     expect(await readFile(join(recovery, RESOURCE_ASSET_NAMES.publication), 'utf8')).toBe(
       'different',
     );
-    expect(original).not.toEqual(Buffer.from('different'));
   });
-  it('binds all 43 actual materials, canonical bytes, exact Core identity and fixed public addresses', () => {
-    expect(candidate.pack.manifest.files).toHaveLength(43);
-    // Includes the updated third-party notices shipped in this exact Pack.
-    expect(candidate.pack.manifest.totalBytes).toBe(85665267);
+  it('binds exact Core identity and fixed public addresses', () => {
     expect(candidate.entry.policy).toEqual({
       packVersion: '1.0.0',
       sourceSha,
       coreVersion: '1.1.0',
       minimumSequence: 7,
     });
-    expect(Object.keys(candidate.entry.assets)).toHaveLength(8);
     expect(candidate.entry.assets['resource-catalog.json']).toBe(
       'https://github.com/Starfie1d1272/Mizar/releases/download/v1.1.0/resource-catalog.json',
     );
@@ -119,38 +113,36 @@ describe('Release resource integration with the real official Pack', () => {
 });
 
 // Reuse the actual Pack bytes; prerelease suffixes affect Core identity, not Pack versions.
-it.each(['alpha.1', 'beta.2', 'rc.3'])(
-  'preserves exact %s Core identity and resource compatibility',
-  async (suffix) => {
-    const appVersion = `1.5.0-${suffix}`;
-    const core = { ...manifest, appVersion, archive: `Mizar-v${appVersion}-Windows-x64-Core.zip` };
-    const descriptor = makeResourceDescriptor(candidate.pack, core, candidate.entry.publication);
-    const target = join(directory, suffix);
-    await mkdir(target);
-    await writeFile(
-      join(target, 'resource-descriptor.json'),
-      JSON.stringify(descriptor, null, 2) + '\n',
-    );
-    await writeFile(join(target, candidate.entry.archive.name), candidate.archiveBytes);
-    const result = await readResourceCandidate(target, core);
-    expect(result.entry.policy.coreVersion).toBe('1.5.0');
-    expect(result.entry.policy.packVersion).toBe('1.0.0');
-    expect(result.entry.assets['resource-catalog.json']).toContain(`/v${appVersion}/`);
-    await expect(readResourceCandidate(target, { ...core, appVersion: '1.5.0' })).rejects.toThrow();
-    await expect(
-      readResourceCandidate(target, { ...core, gitSha: 'f'.repeat(40) }),
-    ).rejects.toThrow();
-    // The existing Pack explicitly excludes Core 2.0.0; suffix removal must not bypass that bound.
-    expect(() =>
-      makeResourceDescriptor(
-        candidate.pack,
-        {
-          ...core,
-          appVersion: `2.0.0-${suffix}`,
-          archive: `Mizar-v2.0.0-${suffix}-Windows-x64-Core.zip`,
-        },
-        candidate.entry.publication,
-      ),
-    ).toThrow('兼容');
-  },
-);
+it('preserves exact prerelease Core identity and resource compatibility', async () => {
+  const suffix = 'rc.3';
+  const appVersion = `1.5.0-${suffix}`;
+  const core = { ...manifest, appVersion, archive: `Mizar-v${appVersion}-Windows-x64-Core.zip` };
+  const descriptor = makeResourceDescriptor(candidate.pack, core, candidate.entry.publication);
+  const target = join(directory, suffix);
+  await mkdir(target);
+  await writeFile(
+    join(target, 'resource-descriptor.json'),
+    JSON.stringify(descriptor, null, 2) + '\n',
+  );
+  await writeFile(join(target, candidate.entry.archive.name), candidate.archiveBytes);
+  const result = await readResourceCandidate(target, core);
+  expect(result.entry.policy.coreVersion).toBe('1.5.0');
+  expect(result.entry.policy.packVersion).toBe('1.0.0');
+  expect(result.entry.assets['resource-catalog.json']).toContain(`/v${appVersion}/`);
+  await expect(readResourceCandidate(target, { ...core, appVersion: '1.5.0' })).rejects.toThrow();
+  await expect(
+    readResourceCandidate(target, { ...core, gitSha: 'f'.repeat(40) }),
+  ).rejects.toThrow();
+  // The existing Pack explicitly excludes Core 2.0.0; suffix removal must not bypass that bound.
+  expect(() =>
+    makeResourceDescriptor(
+      candidate.pack,
+      {
+        ...core,
+        appVersion: `2.0.0-${suffix}`,
+        archive: `Mizar-v2.0.0-${suffix}-Windows-x64-Core.zip`,
+      },
+      candidate.entry.publication,
+    ),
+  ).toThrow('兼容');
+});

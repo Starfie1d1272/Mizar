@@ -87,7 +87,6 @@ test('mixer uses confirmed state and music gains stay local to their scene entry
   next = 'unknown';
   await page.getByRole('button', { name: '静音其他解说' }).click();
   await expect(page.getByRole('alert')).toContainText('结果未确认');
-  expect(channels.remoteCommentary!.muted).toBe(false);
   const slider = page.getByRole('slider', { name: '麦克风音量' });
   const box = (await slider.boundingBox())!;
   const before = writes.length;

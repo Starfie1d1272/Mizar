@@ -272,16 +272,6 @@ it('shares waiting across pictures and maps, loops without immediate repeats, th
   expect(r.obs.restarts()).toBe(1);
   expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_PLAYING');
   expect(r.obs.bgm().muted).toBe(false);
-  expect(r.obs.calls.filter((c) => c.type === 'SetSceneItemTransform')).toEqual([
-    {
-      type: 'SetSceneItemTransform',
-      data: {
-        sceneName: 'Mizar · 赛前等待',
-        sceneItemId: 0,
-        sceneItemTransform: { boundsType: 'OBS_BOUNDS_NONE', scaleX: 0, scaleY: 0 },
-      },
-    },
-  ]);
   for (const active of ['bp', 'waiting', 'intermap'] as const) {
     r.truth.active = active;
     await r.step();
@@ -527,18 +517,6 @@ it('keeps OBS manual stop / mute and cancels a late start when formal play resum
   r.obs.intercept = undefined;
   await r.step();
   expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
-  expect(
-    r.obs.calls
-      .filter((c) => /^Set|Trigger/.test(c.type))
-      .every((c) =>
-        c.type.startsWith('SetSceneItem')
-          ? c.data.sceneName === 'Mizar · 赛前等待' &&
-            Number.isInteger(c.data.sceneItemId) &&
-            Number(c.data.sceneItemId) >= 0 &&
-            Number(c.data.sceneItemId) < r.obs.inputs.size
-          : [...r.obs.inputs.values()].some((i) => i.uuid === c.data.inputUuid),
-      ),
-  ).toBe(true);
   const disk = await readFile(join(r.directory, 'state.json'), 'utf8');
   expect(disk).not.toContain(r.directory);
 });

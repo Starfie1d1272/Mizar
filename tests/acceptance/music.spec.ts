@@ -135,7 +135,6 @@ test('saves real local choices, imports atomically, persists manual stop through
     ).toBeVisible();
     expect(service.store.state.config.groups.waiting.tracks[0]?.name).toBe('合成等待.mp3');
     await expect(page.getByLabel('正式播放曲目')).toBeVisible();
-    await page.screenshot({ path: testInfo.outputPath('formal-player.png') });
     await page
       .getByLabel('选择本地曲目', { exact: true })
       .first()
@@ -147,7 +146,6 @@ test('saves real local choices, imports atomically, persists manual stop through
     await expect(page.getByText('曲目未添加，请选择有效的本地音频（最大 32 MiB）。')).toBeVisible();
     expect(service.store.state.config.groups.waiting.tracks[0]?.name).toBe('合成等待.mp3');
     await expect(page.getByLabel('正式播放曲目')).toBeVisible();
-    await page.screenshot({ path: testInfo.outputPath('formal-player.png') });
     await page.getByRole('button', { name: '停止音乐', exact: true }).click();
     await expect(page.getByText('音乐已停止')).toBeVisible();
     await service.app.close();
@@ -247,8 +245,6 @@ test('saves real local choices, imports atomically, persists manual stop through
     const music = page.getByLabel('现场音乐', { exact: true });
     await expect(music.getByRole('button', { name: '停止音乐' })).toBeVisible();
     const geometry = await music.evaluate((el) => ({
-      width: el.getBoundingClientRect().width,
-      height: el.getBoundingClientRect().height,
       overflow: el.scrollWidth > el.clientWidth,
     }));
     expect(geometry.overflow).toBe(false);

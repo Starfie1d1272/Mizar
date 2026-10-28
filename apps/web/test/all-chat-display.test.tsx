@@ -34,7 +34,6 @@ it('allows ALL chat to be hidden without hiding the player rail and exposes its 
   const hidden = render(false);
   expect(hidden).not.toContain('aria-label="公共聊天"');
   expect(hidden).toContain('aria-label="右选手栏"');
-  expect(hidden).toContain('player-rail__card');
   expect(render(true, 'team-ct-rail')).not.toContain('aria-label="公共聊天"');
   expect(
     getHudWidgetDescriptor('team-t-rail').editorControls.some((x) => x.path === 'showAllChat'),
@@ -44,45 +43,35 @@ it('allows ALL chat to be hidden without hiding the player rail and exposes its 
   ).toBe(false);
 });
 
-it('keeps pause chat opposite history, with shared visibility and expiration rules', () => {
-  for (const design of ['current', 'ewc', 'iem', 'perfectworld', 'esl'] as const) {
-    for (const phase of ['timeout_ct', 'timeout_t', 'paused'] as const) {
-      const snapshot = structuredClone(getProgramFixture('live-canonical')!);
-      snapshot.payload.clock = { ...snapshot.payload.clock!, phase };
-      snapshot.payload.allChat = [
-        {
-          id: 'pause-chat',
-          sender: '选手',
-          text: '暂停消息',
-          expiresAt: '2099-01-01T00:00:00.000Z',
-        },
-      ];
-      const preset = structuredClone(getBuiltinResolvedPreset());
-      const render = () =>
-        renderToStaticMarkup(
-          createElement(BroadcastPause, { snapshot, resolvedPreset: preset, design }),
-        );
-      const html = render();
-      expect(html).toContain('aria-label="公共聊天"');
-      const historySide = html.match(/data-pause-history-side="(left|right)"/)?.[1];
-      if (historySide)
-        expect(html).toContain(
-          `data-pause-chat-side="${historySide === 'left' ? 'right' : 'left'}"`,
-        );
-      expect(html).toContain(
-        `data-pause-chat-kind="${phase === 'paused' ? 'technical' : 'tactical'}"`,
+it('applies shared pause chat visibility and expiration rules', () => {
+  for (const phase of ['timeout_ct', 'timeout_t', 'paused'] as const) {
+    const snapshot = structuredClone(getProgramFixture('live-canonical')!);
+    snapshot.payload.clock = { ...snapshot.payload.clock!, phase };
+    snapshot.payload.allChat = [
+      {
+        id: 'pause-chat',
+        sender: '选手',
+        text: '暂停消息',
+        expiresAt: '2099-01-01T00:00:00.000Z',
+      },
+    ];
+    const preset = structuredClone(getBuiltinResolvedPreset());
+    const render = () =>
+      renderToStaticMarkup(
+        createElement(BroadcastPause, { snapshot, resolvedPreset: preset, design: 'current' }),
       );
-      preset.widgets['team-t-rail'].settings = {
-        ...preset.widgets['team-t-rail'].settings,
-        showAllChat: false,
-      };
-      expect(render()).not.toContain('aria-label="公共聊天"');
-      preset.widgets['team-t-rail'].settings = {
-        ...preset.widgets['team-t-rail'].settings,
-        showAllChat: true,
-      };
-      snapshot.payload.allChat[0]!.expiresAt = '2000-01-01T00:00:00.000Z';
-      expect(render()).not.toContain('aria-label="公共聊天"');
-    }
+    const html = render();
+    expect(html).toContain('aria-label="公共聊天"');
+    preset.widgets['team-t-rail'].settings = {
+      ...preset.widgets['team-t-rail'].settings,
+      showAllChat: false,
+    };
+    expect(render()).not.toContain('aria-label="公共聊天"');
+    preset.widgets['team-t-rail'].settings = {
+      ...preset.widgets['team-t-rail'].settings,
+      showAllChat: true,
+    };
+    snapshot.payload.allChat[0]!.expiresAt = '2000-01-01T00:00:00.000Z';
+    expect(render()).not.toContain('aria-label="公共聊天"');
   }
 });

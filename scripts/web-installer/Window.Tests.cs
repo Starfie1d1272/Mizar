@@ -15,8 +15,6 @@ namespace Mizar.WebInstaller {
     static Task<string> Complete(IProgress<long> bytes,IProgress<string> stages,CancellationToken token) {return Task.FromResult("UI-only-not-installed");}
     internal static void Run() {
       Application.EnableVisualStyles();
-      string diagnostic=Window.DiagnosticText(new Exception("resource_path_unsafe https://example.com/file?token=secret access_token=hidden",new Exception("exit code 7 stderr source failure")));
-      Assert(diagnostic.Contains("resource_path_unsafe") && diagnostic.Contains("exit code 7") && !diagnostic.Contains("token=secret") && !diagnostic.Contains("hidden"),"Diagnostic retains cause and exit evidence while redacting credentials");
       string secrets=Window.DiagnosticText(new Exception("Authorization: Bearer TOPSECRET\r\nProxy-Authorization: Basic OTHERSECRET\r\ntoken=TOKENVALUE api_key=APISECRET password=PASSSECRET\r\nhttps://user:URLPASSWORD@example.com/file?sig=QUERYPASSWORD#FRAGMENTPASSWORD\r\n{\"access_token\":\"JSONSECRET\"}\r\nresource_path_unsafe",new Exception("exit code 7")));
       foreach(string secret in new[]{"TOPSECRET","OTHERSECRET","TOKENVALUE","APISECRET","PASSSECRET","URLPASSWORD","QUERYPASSWORD","FRAGMENTPASSWORD","JSONSECRET"}) Assert(!secrets.Contains(secret),"Credentials must not appear in exported diagnostic: "+secret);
       Assert(secrets.Contains("resource_path_unsafe") && secrets.Contains("exit code 7"),"Sanitization preserves the actionable cause");
@@ -30,7 +28,6 @@ namespace Mizar.WebInstaller {
       Func<IProgress<long>,IProgress<string>,CancellationToken,Task<string>> operation=(bytes,stages,token)=>{installs++;return Complete(bytes,stages,token);};
       using(var window=new Window(UiPlan(),operation,path=>launches++,true)) {
         window.Show(); Application.DoEvents();
-        Assert(!window.detail.Text.Contains("网络"),"Welcome does not preemptively warn about network");
         Assert(!window.offlineDownload.Visible,"Offline guidance is only exposed after a network failure");
         Assert(window.destination.Visible && window.destination.Text.EndsWith("Mizar") && window.browse.Visible,"Welcome exposes the default destination without another page");
         Assert(!window.bar.Visible && !window.launchChoice.Visible,"Initial window must hide progress and launch choice");

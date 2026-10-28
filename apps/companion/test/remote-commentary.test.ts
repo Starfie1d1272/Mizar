@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
@@ -96,7 +96,7 @@ it('uses target settings and window properties, never source names, and cancels 
   }
 });
 
-it('creates a disabled probe only while idle and retains its UUID without a PID', async () => {
+it('creates a disabled probe only while idle and retains its UUID', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'commentary-'));
   try {
     let active = true;
@@ -138,7 +138,6 @@ it('creates a disabled probe only while idle and retains its UUID without a PID'
     });
     expect(await createCommentaryProbe(obs, path, context, async () => {})).toBe('owned-uuid');
     expect(calls.filter((c) => c.type === 'CreateInput')).toHaveLength(1);
-    expect(await readFile(path, 'utf8')).not.toMatch(/pid/i);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

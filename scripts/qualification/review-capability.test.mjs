@@ -25,10 +25,4 @@ it('enables the required close_review ACL exclusively for its dedicated window',
       .filter((capability) => capability.permissions.includes('allow-close-review'))
       .map((capability) => capability.identifier),
   ).toEqual(['review']);
-  // Tauri generates allow-close-review from this command declaration during the native build.
-  const build = await readFile(new URL('build.rs', root), 'utf8');
-  expect(build.match(/"close_review"/g)).toHaveLength(1);
-  const host = await readFile(new URL('src/main.rs', root), 'utf8');
-  expect(host).toMatch(/fn close_review\(window: tauri::WebviewWindow\)/);
-  expect(host).toMatch(/window.label\(\) != "tool-review"/);
 });

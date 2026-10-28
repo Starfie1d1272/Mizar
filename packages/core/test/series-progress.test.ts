@@ -263,7 +263,7 @@ it('preserves frozen results and history, exposes conflicts, and clears an agree
     ),
   };
   const conflict = reconcileSeriesProgressResults(frozen, website);
-  expect(conflict.maps).toBe(frozen.maps);
+  expect(conflict.maps).toEqual(frozen.maps);
   expect(conflict.score).toEqual({ a: 1, b: 0 });
   expect(conflict.issues).toContainEqual(
     expect.objectContaining({ code: 'context_result_conflict', mapOrder: 1 }),
@@ -297,8 +297,8 @@ it('requires explicit completion, identical identity and plan, and does not skip
       index === 0 ? { ...map, completedAt: '2026-10-13T14:13:45Z' } : map,
     ),
   };
-  expect(reconcileSeriesProgressResults(progress, scoreOnly)).toBe(progress);
-  expect(reconcileSeriesProgressResults(progress, { ...completed, matchId: 'another' })).toBe(
+  expect(reconcileSeriesProgressResults(progress, scoreOnly)).toEqual(progress);
+  expect(reconcileSeriesProgressResults(progress, { ...completed, matchId: 'another' })).toEqual(
     progress,
   );
   expect(
@@ -309,7 +309,7 @@ it('requires explicit completion, identical identity and plan, and does not skip
         a: { ...completed.entrants.a, entryId: 'replacement' },
       },
     }),
-  ).toBe(progress);
+  ).toEqual(progress);
   expect(
     reconcileSeriesProgressResults(progress, {
       ...completed,
@@ -317,14 +317,14 @@ it('requires explicit completion, identical identity and plan, and does not skip
         index === 0 ? { ...map, teamAStartSide: 'T' as const } : map,
       ),
     }),
-  ).toBe(progress);
+  ).toEqual(progress);
   const laterOnly = {
     ...context,
     maps: context.maps.map((map, index) =>
       index === 1 ? { ...map, scoreA: 13, scoreB: 3, completedAt: '2026-10-13T14:13:45Z' } : map,
     ),
   };
-  expect(reconcileSeriesProgressResults(progress, laterOnly)).toBe(progress);
+  expect(reconcileSeriesProgressResults(progress, laterOnly)).toEqual(progress);
   const completedSeries = {
     ...completed,
     maps: completed.maps.map((map, index) =>

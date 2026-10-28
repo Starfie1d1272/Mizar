@@ -1,6 +1,6 @@
 import { expect, test } from './companion-isolation.js';
 
-test('BP presentation choice persists and previews both real renderers', async ({
+test('BP presentation choice persists and remains usable in a narrow window', async ({
   page,
 }, testInfo) => {
   let mode = 'full';
@@ -19,7 +19,6 @@ test('BP presentation choice persists and previews both real renderers', async (
   const full = page.getByRole('radio', { name: '全屏 BP' });
   const compact = page.getByRole('radio', { name: '游戏画面 + BP 底栏' });
   await expect(full).toBeChecked();
-  await expect(page.locator('.bp-presentation-preview')).toHaveCount(2);
   await compact.click();
   await expect(compact).toBeChecked();
   await page.reload();

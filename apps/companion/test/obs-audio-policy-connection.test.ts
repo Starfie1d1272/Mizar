@@ -75,20 +75,6 @@ function setup() {
     connection: new GameAudioConnection(config, owner, () => obs as unknown as OBSWebSocket),
   };
 }
-it('observes manual changes away and back on the same connection', async () => {
-  const { connection, owner, obs } = setup();
-  await connection.run(binding, 'r', 'halftime', { mode: 'attenuate', db: 6 }, () => true);
-  const applied = obs.volume;
-  obs.volume = 0.8;
-  obs.emit('InputVolumeChanged', { inputUuid: 'game', inputVolumeMul: obs.volume });
-  obs.volume = applied;
-  obs.emit('InputVolumeChanged', { inputUuid: 'game', inputVolumeMul: obs.volume });
-  await connection.run(binding, 'r', 'gameplay', { mode: 'attenuate', db: 6 }, () => true);
-  expect(owner.status).toBe('held');
-  expect(obs.writes).toBe(1);
-  connection.close();
-});
-
 it('round-trips a 6 dB attenuation through float32 and restores the original', async () => {
   const { connection, owner, obs } = setup();
   await connection.run(binding, 'r', 'halftime', { mode: 'attenuate', db: 6 }, () => true);

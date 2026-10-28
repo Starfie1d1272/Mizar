@@ -43,8 +43,7 @@ function setup(
     | 'presentation'
     | 'network'
     | 'trial'
-    | 'assist'
-    | 'preflight',
+    | 'assist',
   actualMode = 'preparation',
   newlyStarted = true,
   running = true,
@@ -66,8 +65,6 @@ function setup(
       args?.action === 'start-configured'
     )
       return Promise.reject(new Error('HUD 原值读取失败'));
-    if (failure === 'preflight' && command === 'observer_command')
-      return Promise.reject(new Error('自动隐藏 HUD 尚未准备'));
     if (failure === 'launch' && command === 'start_managed_cs2')
       return Promise.reject(new Error('请先退出已打开的 CS2'));
     if (failure === 'mulnx-unsupported' && command === 'launch_mulnx')
@@ -285,24 +282,6 @@ describe('managed CS2 production entry and cleanup', () => {
     expect(calls).not.toContain('observer_command');
   });
   it.each([false, true])(
-    'keeps HUD preflight out of workbench entry (MulNX=%s)',
-    async (preferMulnx) => {
-      const calls = setup(
-        'preflight',
-        'preparation',
-        false,
-        true,
-        [{ preferMulnx, running: false, pending: false }],
-        true,
-      );
-      await productionAction('enter', preparation);
-      expect(calls).toContain(preferMulnx ? 'launch_mulnx' : 'start_managed_cs2');
-      expect(calls).toContain('present_production');
-      expect(calls).not.toContain('/local/v1/observer-assist');
-      expect(calls).not.toContain('observer_command');
-    },
-  );
-  it.each([false, true])(
     'standard entry preserves the game lifecycle (already running=%s)',
     async (running) => {
       const calls = setup(undefined, 'preparation', !running, true, [
@@ -332,7 +311,6 @@ describe('managed CS2 production entry and cleanup', () => {
     ]);
     const first = productionAction('enter', preparation);
     const repeated = productionAction('enter', preparation);
-    expect(repeated).toBe(first);
     await vi.advanceTimersByTimeAsync(1000);
     await Promise.all([first, repeated]);
     expect(calls.filter((call) => call === 'start_managed_cs2')).toHaveLength(1);

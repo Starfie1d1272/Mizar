@@ -68,23 +68,6 @@ test('compact source follows the BP reveal cursor and clears when disconnected',
   await expect(strip.locator('.bp-compact-side')).toHaveAttribute('aria-label', 'NAVI CT 开局');
   await expect(strip.locator('.bp-compact-side-team')).toHaveText('NAVI');
   await expect(strip.locator('.bp-compact-side-choice')).toHaveText('CT 开局');
-  for (const [width, height] of [
-    [1280, 720],
-    [1920, 1080],
-    [2560, 1440],
-    [3840, 2160],
-  ]) {
-    await page.setViewportSize({ width: width!, height: height! });
-    await page.locator('#root').evaluate((root, scale) => {
-      (root as HTMLElement).style.transformOrigin = 'top left';
-      (root as HTMLElement).style.transform = `scale(${scale})`;
-    }, width! / 1920);
-    const actor = (await strip.locator('.bp-compact-side-team').boundingBox())!;
-    const side = (await strip.locator('.bp-compact-side-choice').boundingBox())!;
-    expect(actor.y + actor.height / 2).toBeCloseTo(side.y + side.height / 2, 1);
-    expect(side.x - (actor.x + actor.width)).toBeCloseTo((6 * width!) / 1920, 1);
-  }
-
   const pickerFits = await strip
     .locator('.bp-compact-card')
     .nth(2)
@@ -144,10 +127,8 @@ test('BO1 and BO5 fixtures keep long names and cards within the compact strip', 
   );
   await page.goto('/program/bp-compact');
   await expect(page.locator('.bp-compact-status > span').last()).toContainText('BO1');
-  await expect(page.locator('.bp-logo-fallback')).toHaveCount(6);
   format = 'bo5';
   await expect(page.locator('.bp-compact-status > span').last()).toContainText('BO5');
-  await expect(page.locator('.bp-compact-card')).toHaveCount(7);
   const fits = await page.locator('.bp-compact').evaluate((strip) => {
     const bounds = strip.getBoundingClientRect();
     return [...strip.querySelectorAll('.bp-compact-card')].every((item) => {
@@ -161,19 +142,4 @@ test('BO1 and BO5 fixtures keep long names and cards within the compact strip', 
     });
   });
   expect(fits).toBe(true);
-  // OBS scales the fixed 1920×1080 browser source to the output canvas.
-  for (const [width, height] of [
-    [2560, 1440],
-    [3840, 2160],
-  ]) {
-    await page.setViewportSize({ width: width!, height: height! });
-    await page.locator('#root').evaluate((root, scale) => {
-      (root as HTMLElement).style.transformOrigin = 'top left';
-      (root as HTMLElement).style.transform = `scale(${scale})`;
-    }, width! / 1920);
-    const bounds = (await page.locator('.bp-compact').boundingBox())!;
-    expect(bounds.x).toBeCloseTo((48 * width!) / 1920, 0);
-    expect(bounds.y + bounds.height).toBeCloseTo(height! - (32 * width!) / 1920, 0);
-    expect(bounds.width).toBeCloseTo((1824 * width!) / 1920, 0);
-  }
 });

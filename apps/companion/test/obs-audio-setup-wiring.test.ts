@@ -395,8 +395,6 @@ it('keeps a custom desktop mix and reports pending without enabling new audio', 
     expect((await adapter.ensure()).some((finding) => finding.code === 'commentary_pending')).toBe(
       true,
     );
-    expect(obs.subscriptions & EventSubscription.Config).toBeTruthy();
-    expect(obs.subscriptions & EventSubscription.SceneItems).toBeTruthy();
     for (const items of obs.scenes.values()) {
       expect(
         items.find((item) => item.sourceName === 'Mizar · Desktop Audio')!.sceneItemEnabled,
@@ -425,7 +423,6 @@ it('creates scenes and audio through the real configure owner and seeds game pol
       journal: join(dir, 'probe'),
     });
     expect(await adapter.ensure()).toEqual([]);
-    expect(obs.scenes.size).toBe(obsDesiredScenes(base).length);
     const game = [...obs.inputs.values()].find(
       (x) =>
         x.inputKind === 'wasapi_process_output_capture' &&

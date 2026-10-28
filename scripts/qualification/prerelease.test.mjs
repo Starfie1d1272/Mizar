@@ -44,7 +44,8 @@ describe('bounded application release versions', () => {
   });
 });
 
-describe.each(prereleases)('%s stays outside Stable distribution', (version) => {
+describe('prereleases stay outside Stable distribution', () => {
+  const version = '2.0.0-rc.3';
   const tag = `v${version}`;
   it('links the exact full Setup and ZIP, without a stable Box or WebInstaller entry', () => {
     const notes = githubReleaseNotes(

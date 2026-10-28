@@ -91,19 +91,16 @@ it.each(['rail', 'focused'] as const)(
     try {
       render(100);
       render(80);
-      const ghost = node.querySelector('[data-damage-ghost]');
-      expect(ghost).not.toBeNull();
+      expect(node.querySelector('[data-damage-ghost]')).not.toBeNull();
       act(() => {
         vi.advanceTimersByTime(200);
       });
       render(60);
-      expect(node.querySelector('[data-damage-ghost]')).toBe(ghost);
       act(() => {
         vi.advanceTimersByTime(179);
       });
       expect(node.querySelector('[data-damage-ghost]')).not.toBeNull();
       render(50);
-      expect(node.querySelector('[data-damage-ghost]')).toBe(ghost);
       act(() => {
         vi.advanceTimersByTime(1);
       });

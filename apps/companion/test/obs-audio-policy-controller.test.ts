@@ -1,13 +1,15 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { GameAudioController } from '../src/obs/audio-policy-controller.js';
+import { FileAudioLeaseStore } from '../src/obs/audio-policy.js';
 import { ObsAudioRouting } from '../src/obs/audio-routing.js';
 import { ObsConfigStore } from '../src/obs/config.js';
 
 it('cannot release a held lease during halftime and reapply attenuation', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'game-audio-'));
+  const writes = vi.spyOn(FileAudioLeaseStore.prototype, 'write');
   const controller = new GameAudioController(
     new ObsAudioRouting(join(dir, 'routing')),
     new ObsConfigStore(join(dir, 'obs')),
@@ -46,6 +48,11 @@ it('cannot release a held lease during halftime and reapply attenuation', async 
     expect((JSON.parse(await readFile(leasePath, 'utf8')) as { phase: string }).phase).toBe('held');
   } finally {
     controller.close();
-    await rm(dir, { recursive: true, force: true });
+    try {
+      await Promise.all(writes.mock.results.map((result) => result.value as Promise<void>));
+    } finally {
+      writes.mockRestore();
+      await rm(dir, { recursive: true, force: true });
+    }
   }
 });
