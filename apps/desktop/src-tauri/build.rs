@@ -16,6 +16,7 @@ fn main() {
             "mulnx_handoff_status",
             "open_mulnx_browser",
             "launch_mulnx",
+            "mulnx_control",
             "observer_command",
             "start_managed_cs2",
             "attach_external_cs2",

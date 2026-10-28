@@ -15,6 +15,7 @@
         "demo-test",
         "demo-test-workspace",
         "workspace-exit",
+        "mulnx-control",
         "obs-configuration",
         "console-status",
         "console-settings"
