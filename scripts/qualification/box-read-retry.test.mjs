@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BoxClient, digest } from './box-sync.mjs';
 import { Buffer } from 'node:buffer';
+import { EventEmitter } from 'node:events';
+import { apiRequest } from './box-upload.mjs';
 
 vi.mock('node:timers/promises', () => ({
   setTimeout: (ms, value, { signal } = {}) =>
@@ -195,6 +197,46 @@ describe('Box read request recovery', () => {
     await vi.advanceTimersByTimeAsync(3000);
     expect(transport).toHaveBeenCalledTimes(1);
   });
+
+  it('retries a mutation only when the HTTPS transport proves no request was sent', async () => {
+    const transport = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error('connection failed'), {
+          code: 'ETIMEDOUT',
+          retrySafeMutation: true,
+        }),
+      )
+      .mockResolvedValueOnce(ok());
+    const pending = client(transport).api('sync-batch-copy-item', undefined, 'POST', { file: 'x' });
+    await vi.advanceTimersByTimeAsync(1000);
+    await expect(pending).resolves.toEqual({ repo_name: 'Mizar' });
+    expect(transport).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([false, true])(
+    'marks mutation errors safe only before TLS connection: %s',
+    async (connected) => {
+      const request = () => {
+        const outgoing = new EventEmitter();
+        outgoing.setTimeout = () => {};
+        outgoing.end = () => {
+          Promise.resolve().then(() => {
+            if (connected) outgoing.emit('socket', { connecting: false, secureConnecting: false });
+            outgoing.emit('error', Object.assign(new Error('failed'), { code: 'ETIMEDOUT' }));
+          });
+        };
+        return outgoing;
+      };
+      await expect(
+        apiRequest(
+          'https://box.nju.edu.cn/',
+          { method: 'POST', signal: AbortSignal.timeout(5000) },
+          request,
+        ),
+      ).rejects.toSatisfy((error) => Boolean(error.retrySafeMutation) === !connected);
+    },
+  );
 
   it('preserves the uncertain outcome through the copy API stage for reconciliation', async () => {
     const transport = vi
