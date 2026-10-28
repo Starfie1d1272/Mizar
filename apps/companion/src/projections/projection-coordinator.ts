@@ -701,6 +701,7 @@ export class ProjectionCoordinator {
         ...(health.lastErrorCode ? { lastErrorCode: health.lastErrorCode } : {}),
         generation: health.generation,
         sameMap: sourceMapName === undefined || sourceMapName === program.map.name,
+        ...(sourceMapName === undefined ? {} : { mapName: sourceMapName }),
         // Missing receive evidence preserves the existing compatibility boundary,
         // while diagnostics explicitly distinguish it from measured freshness.
         fresh: freshness !== 'stale',

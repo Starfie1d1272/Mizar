@@ -144,9 +144,7 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
   private liveTickInterval: number | undefined;
   private liveCommittedTick: number | undefined;
   private clockExecution = 0;
-  private pauseObserved = false;
   private clockHadLive = false;
-  private observedNonWarmup = false;
   private freezeEnd: CstvSourceHealth['freezeEnd'];
   private lastEventTick: number | undefined;
   private lastEventSequence: number | undefined;
@@ -385,9 +383,7 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
       this.lastReceiveMonotonicMs = this.receiveNow();
       if (this.observerMap !== undefined && this.observerMap !== row.map) {
         this.clockExecution++;
-        this.pauseObserved = false;
         this.clockHadLive = false;
-        this.observedNonWarmup = false;
         this.freezeEnd = undefined;
         this.liveStartTime = undefined;
         this.liveDuration = undefined;
@@ -400,13 +396,10 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
         !Array.isArray(row.roundClock)
           ? (row.roundClock as Record<string, unknown>)
           : undefined;
-      if (row.warmup === true && row.round === 0 && this.observedNonWarmup) {
+      if (row.warmup === true && row.round === 0 && this.clockHadLive) {
         this.clockExecution++;
         this.clockHadLive = false;
-        this.pauseObserved = false;
-        this.observedNonWarmup = false;
       }
-      if (row.warmup === false) this.observedNonWarmup = true;
       if (
         row.warmup === false &&
         typeof row.round === 'number' &&
@@ -426,11 +419,6 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
         typeof clock?.pause === 'object' && clock.pause !== null && !Array.isArray(clock.pause)
           ? (clock.pause as Record<string, unknown>)
           : undefined;
-      if (
-        pause?.active === true ||
-        (typeof pause?.totalPausedTicks === 'number' && pause.totalPausedTicks > 0)
-      )
-        this.pauseObserved = true;
       if (
         this.freezeEnd &&
         (clock?.warmupPeriod === true ||
@@ -470,7 +458,6 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
         clock.bombPlanted === false &&
         pause?.active === false &&
         pause.totalPausedTicks === 0 &&
-        !this.pauseObserved &&
         typeof clock.totalRoundsPlayed === 'number' &&
         Number.isSafeInteger(clock.totalRoundsPlayed) &&
         clock.totalRoundsPlayed >= 0 &&
@@ -523,10 +510,8 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
     ) {
       if (row.name !== row.kind) return;
       if (row.kind === 'begin_new_match' || row.kind === 'round_announce_warmup') {
-        if (this.clockHadLive || this.observedNonWarmup) this.clockExecution++;
+        if (this.clockHadLive) this.clockExecution++;
         this.clockHadLive = false;
-        this.observedNonWarmup = false;
-        this.pauseObserved = false;
       }
       if (
         row.kind === 'round_freeze_end' &&
@@ -540,6 +525,7 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
         Number.isSafeInteger(row.committedTick) &&
         row.committedTick > 0
       ) {
+        this.clockHadLive = true;
         this.freezeEnd = {
           round: row.round,
           received: this.receiveNow(),

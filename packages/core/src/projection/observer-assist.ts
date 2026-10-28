@@ -71,7 +71,14 @@ interface ClockInput {
 /** Private event projection; clock comparisons use receive times from this process. */
 export class ObserverHintTimeline {
   private kills: BufferedKill[] = [];
+  private pendingMap: {
+    name: string;
+    since: number;
+    execution: number | undefined;
+    conflicted: boolean;
+  } | null = null;
   private context = '';
+  private contextIdentity: { match: string; session: string | null; map: string } | null = null;
   private generation: number | undefined;
   private previous = new Map<string, boolean>();
   private seenReceive: number | null = null;
@@ -130,6 +137,7 @@ export class ObserverHintTimeline {
     lastReceiveMonotonicMs?: number | null;
     receiveAgeMs?: number | null;
     sameMap?: boolean;
+    mapName?: string;
     state?: string;
     lastErrorCode?: string;
   } = { connected: false, generation: 0, fresh: false };
@@ -517,8 +525,41 @@ export class ObserverHintTimeline {
       program.map.name,
     ].join(':');
     if (program.match && program.map.name && context !== this.context) {
+      const prior = this.contextIdentity;
+      const pendingConflict =
+        prior?.match === program.match.matchId &&
+        prior.session === program.cursor.liveSessionId &&
+        this.pendingMap?.name === program.map.name &&
+        (this.pendingMap.conflicted ||
+          (this.pendingMap.execution !== undefined &&
+            clock?.sourceExecution !== undefined &&
+            this.pendingMap.execution !== clock.sourceExecution));
+      const pending =
+        prior &&
+        prior.match === program.match.matchId &&
+        prior.session === program.cursor.liveSessionId &&
+        prior.map !== program.map.name &&
+        source.sameMap === true &&
+        this.pendingMap?.name === program.map.name &&
+        !pendingConflict
+          ? this.kills.filter(
+              (k) =>
+                k.event.cursor.mapName === program.map.name && k.sourceMs >= this.pendingMap!.since,
+            )
+          : [];
       this.reset('program-context', now);
+      if (pendingConflict) {
+        this.sourceExecution = clock?.sourceExecution;
+        this.sourceExecutionChanged = true;
+      }
+      this.pendingMap = null;
+      this.kills = pending;
       this.context = context;
+      this.contextIdentity = {
+        match: program.match.matchId,
+        session: program.cursor.liveSessionId,
+        map: program.map.name,
+      };
     }
     if (this.generation === undefined || source.generation > this.generation) {
       this.generation = source.generation;
@@ -545,13 +586,26 @@ export class ObserverHintTimeline {
             : !program.map.name
               ? 'map-missing'
               : 'identity-unavailable';
-      if (source.sameMap === false && program.map.name) this.reset(this.blocked, now);
-      else {
-        this.previous.clear();
-        this.seenReceive = null;
-        this.lastProgramClock = null;
-        this.clockSegment++;
+      if (source.sameMap === false && source.mapName) {
+        if (this.pendingMap?.name !== source.mapName) {
+          this.pendingMap = {
+            name: source.mapName,
+            since: now,
+            execution: clock?.sourceExecution,
+            conflicted: false,
+          };
+        } else if (
+          this.pendingMap.execution !== undefined &&
+          clock?.sourceExecution !== undefined &&
+          this.pendingMap.execution !== clock.sourceExecution
+        ) {
+          this.pendingMap.conflicted = true;
+        }
       }
+      this.previous.clear();
+      this.seenReceive = null;
+      this.lastProgramClock = null;
+      this.clockSegment++;
       return empty('unavailable');
     }
     const players = program.players.filter((p) => p.lineupEvidence === 'current');

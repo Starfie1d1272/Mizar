@@ -646,3 +646,77 @@ it('does not retire an unseen future death for the same player', () => {
     { id: '1:1', remainingSeconds: 7 },
   ]);
 });
+
+it('keeps early new-map events while Program catches up, then discards the previous map', () => {
+  const timeline = new ObserverHintTimeline();
+  timeline.project(program(1), settings, 0, source);
+  timeline.consume(kill(1, 8, 500));
+  const ahead = { ...source, sameMap: false, mapName: 'de_nuke' };
+  timeline.project(program(2), settings, 1000, ahead);
+  const event = kill(2, 7, 2000);
+  timeline.consume({ ...event, cursor: { ...event.cursor, mapName: 'de_nuke' } });
+  timeline.project(program(3), settings, 3000, ahead);
+  const next = {
+    ...program(4),
+    map: { name: 'de_nuke' },
+    cursor: { ...program(4).cursor, mapEpoch: 2 },
+  };
+  timeline.project(next, settings, 4000, { ...source, sameMap: true, mapName: 'de_nuke' });
+  expect(timeline.getDiagnostics().buffered).toBe(1);
+  expect(
+    timeline.project(next, settings, 115000, { ...source, sameMap: true, mapName: 'de_nuke' })
+      .observer?.hints,
+  ).toMatchObject([{ id: '1:2', remainingSeconds: 7 }]);
+});
+
+it('does not mix executions when the early source restarts on the next map before Program arrives', () => {
+  const timeline = new ObserverHintTimeline();
+  timeline.project(program(1), settings, 0, source, 0, { sourceExecution: 0 });
+  const ahead = { ...source, sameMap: false, mapName: 'de_nuke' };
+  timeline.project(program(2), settings, 1000, ahead, 1000, { sourceExecution: 1 });
+  const event = kill(1, 7, 2000);
+  timeline.consume({ ...event, cursor: { ...event.cursor, mapName: 'de_nuke' } });
+  timeline.project(program(3), settings, 3000, ahead, 3000, { sourceExecution: 2 });
+  const next = {
+    ...program(4),
+    map: { name: 'de_nuke' },
+    cursor: { ...program(4).cursor, mapEpoch: 2 },
+  };
+  const result = timeline.project(
+    next,
+    settings,
+    4000,
+    { ...source, sameMap: true, mapName: 'de_nuke' },
+    4000,
+    { sourceExecution: 2 },
+  );
+  expect(result.observer).toMatchObject({
+    state: 'unavailable',
+    waitingReason: 'source-execution-ahead',
+    hints: [],
+  });
+  expect(timeline.getDiagnostics().buffered).toBe(0);
+});
+
+it('does not carry pending map execution conflicts into a different match', () => {
+  const timeline = new ObserverHintTimeline();
+  timeline.project(program(1), settings, 0, source, 0, { sourceExecution: 0 });
+  const ahead = { ...source, sameMap: false, mapName: 'de_nuke' };
+  timeline.project(program(2), settings, 1000, ahead, 1000, { sourceExecution: 1 });
+  timeline.project(program(3), settings, 2000, ahead, 2000, { sourceExecution: 2 });
+  const next = {
+    ...program(4),
+    match: { matchId: 'other' },
+    map: { name: 'de_nuke' },
+    cursor: { ...program(4).cursor, liveSessionId: 'other', mapEpoch: 2 },
+  };
+  const result = timeline.project(
+    next,
+    settings,
+    3000,
+    { ...source, sameMap: true, mapName: 'de_nuke' },
+    3000,
+    { sourceExecution: 2 },
+  );
+  expect(result.observer?.state).toBe('ready');
+});
