@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
@@ -77,6 +77,18 @@ it('rejects ZIP metadata sizes before inflate and symbolic links in the content 
   await rm(path);
   await symlink(join(s.directory, 'state.json'), path);
   await expect(s.trackPath(track.id)).rejects.toThrow();
+});
+it('reuses verified identical audio without replacing it and rejects corrupted existing content', async () => {
+  const s = await store();
+  const first = await s.add('first.wav', musicWav());
+  const path = join(s.directory, 'tracks', first.id);
+  const before = await stat(path);
+  const second = await s.add('second.wav', musicWav());
+  expect(second.id).toBe(first.id);
+  expect(second.name).toBe('second.wav');
+  expect((await stat(path)).mtimeMs).toBe(before.mtimeMs);
+  await writeFile(path, Buffer.from('corrupted'));
+  await expect(s.add('first.wav', musicWav())).rejects.toThrow();
 });
 it('requires a loopback Origin for mutations and never returns a local absolute path or uploaded media', async () => {
   const s = await store(),
