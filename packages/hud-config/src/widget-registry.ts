@@ -118,7 +118,7 @@ function widgetContract(id: HudWidgetId) {
   ];
   const defaults = schema.parse({});
   const editorControls: HudEditorControl[] = Object.keys(defaults)
-    .filter((path) => path !== 'showAllChat' || id === 'team-t-rail')
+    .filter((path) => path !== 'showAllChat')
     .map((path) =>
       path === 'zoomMode'
         ? {

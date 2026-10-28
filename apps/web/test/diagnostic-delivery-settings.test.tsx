@@ -121,9 +121,6 @@ it('acknowledges a saved marker briefly and shows write failures beside the acti
 
 async function openConsole() {
   await act(async () => {
-    const details = container.querySelector('details')!;
-    details.open = true;
-    details.dispatchEvent(new Event('toggle'));
     await Promise.resolve();
   });
 }
@@ -138,12 +135,10 @@ it('keeps native console capture off and makes its separate consent explicit bef
     runtime: { phase: 'disabled' },
   });
   act(() => root.render(<Cs2ConsoleSettings />));
-  expect(mocks.native).not.toHaveBeenCalled();
   await openConsole();
   const checkbox = container.querySelector<HTMLInputElement>('input[type=checkbox]')!;
   expect(checkbox.checked).toBe(false);
-  expect(container.textContent).toContain('可能包含聊天并持续增长');
-  expect(container.textContent).toContain('不清空或删除游戏日志');
+  expect(container.textContent).toContain('在本机保存控制台日志');
   await act(async () => {
     checkbox.click();
     await Promise.resolve();
@@ -155,7 +150,7 @@ it('keeps native console capture off and makes its separate consent explicit bef
   );
   mocks.native.mockResolvedValueOnce({ enabled: true, generation: 'a'.repeat(64) });
   await act(async () => {
-    button('保存技术日志设置').click();
+    button('保存聊天上屏设置').click();
     await Promise.resolve();
   });
   expect(mocks.native).toHaveBeenCalledWith(
@@ -184,20 +179,20 @@ it('keeps a failed console change visible and lets a memory-only revocation be r
     revocationPending: true,
   });
   await act(async () => {
-    button('保存技术日志设置').click();
+    button('保存聊天上屏设置').click();
     await Promise.resolve();
   });
   expect(container.textContent).toContain('未能完整保存');
   expect(container.textContent).not.toContain('PRIVATE_NATIVE_TECHNICAL_DETAIL');
   expect(container.textContent).toContain('当前已停止读取');
-  expect(button('保存技术日志设置').disabled).toBe(false);
+  expect(button('保存聊天上屏设置').disabled).toBe(false);
   mocks.native.mockResolvedValueOnce({
     enabled: false,
     generation: 'c'.repeat(64),
     revocationPending: false,
   });
   await act(async () => {
-    button('保存技术日志设置').click();
+    button('保存聊天上屏设置').click();
     await Promise.resolve();
   });
   expect(mocks.native).toHaveBeenLastCalledWith(
@@ -229,7 +224,7 @@ it('does not let a stale console status response overwrite a newly saved consent
     await Promise.resolve();
   });
   await act(async () => {
-    button('保存技术日志设置').click();
+    button('保存聊天上屏设置').click();
     await Promise.resolve();
   });
   await act(async () => {
@@ -237,7 +232,7 @@ it('does not let a stale console status response overwrite a newly saved consent
     await Promise.resolve();
   });
   expect(container.querySelector<HTMLInputElement>('input[type=checkbox]')!.checked).toBe(true);
-  expect(button('保存技术日志设置').disabled).toBe(true);
+  expect(button('保存聊天上屏设置').disabled).toBe(true);
 });
 
 function showNotice() {

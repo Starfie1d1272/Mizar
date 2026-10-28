@@ -1747,6 +1747,8 @@ mod tests {
         let _processes = GAME_PROCESSES.lock().unwrap();
         let root = std::env::temp_dir().join(format!("mizar-external-game-{}", std::process::id()));
         let log = crate::startup_log::DesktopLog::new(&root, None).unwrap();
+        let console = crate::cs2_console::settings(&log).unwrap();
+        crate::cs2_console::set_enabled(&log, false, console["generation"].as_str()).unwrap();
         // Use a harmless waiting Windows command process with the game's executable
         // name to exercise real process enumeration without CS2 or Steam.
         let system = PathBuf::from(std::env::var_os("SystemRoot").unwrap());

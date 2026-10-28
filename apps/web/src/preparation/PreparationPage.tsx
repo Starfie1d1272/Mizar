@@ -4,6 +4,7 @@ import { useHudConfigClient } from '../realtime/hud-config-client';
 import { hudStyleReference } from './hud-style-reference';
 import { EventMatchWorkspace } from './EventMatchWorkspace';
 import { HudPresetDirectory } from './HudPresetDirectory';
+import { BpPresentationSettingsPanel } from './BpPresentationSettings';
 import './production.css';
 import { AutomaticPreparation } from './AutomaticPreparation';
 import { DemoTestPanel } from './DemoTestPanel';
@@ -663,7 +664,10 @@ export function PreparationPage() {
           </>
         ) : path === '/picture' ? (
           tab === 'hud' ? (
-            <HudPresetDirectory action={action} />
+            <>
+              <HudPresetDirectory action={action} />
+              <BpPresentationSettingsPanel />
+            </>
           ) : (
             <div className="preparation-overlay-workspace">
               <Panel className="preparation-overlay-display">

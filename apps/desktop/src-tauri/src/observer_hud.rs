@@ -125,7 +125,9 @@ pub fn restore(log: &DesktopLog) -> Result<(), String> {
         let root = std::env::temp_dir().join(format!("mizar-hud-preflight-{}-{}", std::process::id(), chrono::Utc::now().timestamp_nanos_opt().unwrap()));
         let log = DesktopLog::new(&root, None).unwrap();
         let default_game = json!({"gameAutomation":{"hideGameHud":true}});
-        assert_eq!(cs2_console::settings(&log).unwrap()["enabled"], false);
+        let initial = cs2_console::settings(&log).unwrap();
+        assert_eq!(initial["enabled"], true);
+        cs2_console::set_enabled(&log, false, initial["generation"].as_str()).unwrap();
         assert!(validate_preflight(&log, &default_game).unwrap_err().contains("开启本机控制台记录"));
         assert!(!file(&log).exists()); // No game/HUD transaction is created by refusal.
         assert!(!validate_preflight(&log, &json!({"gameAutomation":{"hideGameHud":false}})).unwrap());

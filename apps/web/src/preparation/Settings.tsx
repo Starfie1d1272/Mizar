@@ -1,4 +1,3 @@
-import { BpPresentationSettingsPanel } from './BpPresentationSettings';
 import { ObserverSettingsPanel, GameAutomationSettingsPanel } from './ObserverSettings';
 import { ObsSettings } from './ObsSettings';
 import { CameraSettings } from '../orchestration/CameraSettings';
@@ -216,12 +215,10 @@ export function Settings({ tab }: { tab: string }) {
               <h3>自动发送诊断</h3>
               <DiagnosticDeliverySettings showProblemReport={false} />
             </section>
-            <Cs2ConsoleSettings />
           </Panel>
         </div>
       ) : tab === 'obs' ? (
         <>
-          <BpPresentationSettingsPanel />
           <ObsSettings />
         </>
       ) : (
@@ -436,10 +433,11 @@ export function Settings({ tab }: { tab: string }) {
                 </details>
               ) : null}
             </Panel>
+            <GameAutomationSettingsPanel />
           </div>
           <div className="game-settings-preferences">
             <Cs2LaunchSettings />
-            <GameAutomationSettingsPanel />
+            <Cs2ConsoleSettings />
             <SteamAvatarSettings />
           </div>
         </div>

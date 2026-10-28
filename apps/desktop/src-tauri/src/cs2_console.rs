@@ -196,6 +196,7 @@ fn read_state(path: &Path) -> Result<Option<Value>, String> {
     serde_json::from_slice(&bytes).map(Some).map_err(failure)
 }
 static SETTINGS_WRITER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static CHAT_MIGRATION: std::sync::Mutex<()> = std::sync::Mutex::new(());
 static DISABLED_ROOTS: std::sync::Mutex<std::collections::BTreeMap<PathBuf, String>> =
     std::sync::Mutex::new(std::collections::BTreeMap::new());
 fn disabled_marker(log: &DesktopLog) -> PathBuf {
@@ -225,6 +226,7 @@ fn marker_generation(log: &DesktopLog) -> Result<Option<String>, String> {
     String::from_utf8(bytes).map(Some).map_err(failure)
 }
 pub fn settings(log: &DesktopLog) -> Result<Value, String> {
+    migrate_chat_default(log)?;
     let memory_fence = DISABLED_ROOTS
         .lock()
         .map_err(failure)?
@@ -235,7 +237,7 @@ pub fn settings(log: &DesktopLog) -> Result<Value, String> {
     let loaded = read_state(&state_directory(log).join(SETTINGS));
     let mut value = match loaded {
         Ok(Some(value)) => value,
-        Ok(None) => json!({"enabled":false,"generation":null}),
+        Ok(None) => json!({"version":1,"enabled":true,"generation":digest("default-console-capture-v1")}),
         Err(error) if fence.is_some() => json!({"enabled":false,"generation":null,"warning":error}),
         Err(error) => return Err(error),
     };
@@ -259,11 +261,39 @@ pub fn settings(log: &DesktopLog) -> Result<Value, String> {
     value["revocationPending"] = json!(pending);
     Ok(value)
 }
+fn migrate_chat_default(log: &DesktopLog) -> Result<(), String> {
+    let _guard = CHAT_MIGRATION.lock().map_err(failure)?;
+    let marker = log.state_root.join("chat-setting-v1.flag");
+    match checked(&marker) {
+        Ok(_) => return Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => (),
+        Err(error) => return Err(failure(error)),
+    }
+    let directory = state_directory(log);
+    fs::create_dir_all(&directory).map_err(failure)?;
+    parents(&directory.join(SETTINGS)).map_err(failure)?;
+    // Keep the existing file and disable fence subject to the same path checks
+    // as normal reads before replacing either during the one-time migration.
+    read_state(&directory.join(SETTINGS)).map_err(failure)?;
+    marker_generation(log)?;
+    let value = json!({"version":1,"enabled":true,"generation":generation(),"changedAt":utc()});
+    crate::cs2_session::atomic_write(&directory.join(SETTINGS), &serde_json::to_vec(&value).map_err(failure)?)?;
+    match fs::remove_file(disabled_marker(log)) {
+        Ok(()) => (),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => (),
+        Err(error) => return Err(failure(error)),
+    }
+    DISABLED_ROOTS.lock().map_err(failure)?.remove(&log.state_root);
+    parents(&marker).map_err(failure)?;
+    crate::cs2_session::atomic_write(&marker, b"1")?;
+    Ok(())
+}
 pub fn set_enabled(
     log: &DesktopLog,
     enabled: bool,
     expected_generation: Option<&str>,
 ) -> Result<Value, String> {
+    migrate_chat_default(log)?;
     let _guard = SETTINGS_WRITER.lock().map_err(failure)?;
     if !enabled {
         // A separate durable fence wins over an old enable document and over
@@ -1314,6 +1344,7 @@ mod tests {
         let (root, log, executable) = setup("restart");
         let source = path(&executable).unwrap();
         fs::write(&source, b"[RenderSystem] Error: PRE_SESSION_PRIVATE\n").unwrap();
+        change(&log, false).unwrap();
         assert_eq!(settings(&log).unwrap()["enabled"], false);
         assert!(prepare(&log, &executable).unwrap().is_none());
         change(&log, true).unwrap();
@@ -1373,6 +1404,17 @@ mod tests {
         assert!(!fs::read_to_string(state_directory(&log).join(CURSOR))
             .unwrap()
             .contains("PRIVATE"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn old_disabled_state_migrates_once_and_new_disable_persists() {
+        let (root, log, _) = setup("chat-migration");
+        fs::write(disabled_marker(&log), generation()).unwrap();
+        assert_eq!(settings(&log).unwrap()["enabled"], true);
+        change(&log, false).unwrap();
+        assert_eq!(settings(&log).unwrap()["enabled"], false);
+        assert_eq!(settings(&log).unwrap()["enabled"], false);
         fs::remove_dir_all(root).unwrap();
     }
 
