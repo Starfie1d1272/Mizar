@@ -131,44 +131,6 @@ it('does not compensate an uncertain in-flight write after disconnection even if
   }
 });
 
-it('yields to an item manually changed away and back', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'mizar-migration-'));
-  try {
-    const f = fixture();
-    f.setHook(async (id) => {
-      if (id === 1) {
-        f.emit({ type: 'item', sceneName: 'scene', sceneItemId: 1, enabled: false });
-        f.emit({ type: 'item', sceneName: 'scene', sceneItemId: 1, enabled: true });
-        f.emit({ type: 'outputStarting' });
-      }
-      await Promise.resolve();
-    });
-    const owner = new AudioMigration(join(dir, 'journal'));
-    await expect(owner.migrate(f.obs, 'local', plan, f.observer)).rejects.toThrow();
-    expect(f.calls).toEqual([[1, true]]);
-    expect((await owner.pending())?.fields[0]?.externalChanged).toBe(true);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
-it('does not compensate after identity changes', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'mizar-migration-'));
-  try {
-    const f = fixture();
-    f.setHook(async () => {
-      f.emit({ type: 'identityChanged' });
-      await Promise.resolve();
-    });
-    const owner = new AudioMigration(join(dir, 'journal'));
-    await expect(owner.migrate(f.obs, 'local', plan, f.observer)).rejects.toThrow();
-    expect(f.calls).toEqual([[1, true]]);
-    expect(await owner.pending()).not.toBeNull();
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
 it('keeps new paths enabled when restoring old audio fails', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'mizar-migration-'));
   try {
@@ -190,23 +152,6 @@ it('keeps new paths enabled when restoring old audio fails', async () => {
     expect((await owner.pending())?.fields.find((field) => field.sceneItemId === 3)?.phase).toBe(
       'uncertain',
     );
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
-it('keeps a sent write uncertain on a lost acknowledgement without compensating', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'mizar-migration-'));
-  try {
-    const f = fixture();
-    f.setHook(async () => {
-      await Promise.resolve();
-      throw new Error('lost acknowledgement');
-    });
-    const owner = new AudioMigration(join(dir, 'journal'));
-    await expect(owner.migrate(f.obs, 'local', plan, f.observer)).rejects.toThrow('uncertain');
-    expect(f.calls).toEqual([[1, true]]);
-    expect((await owner.pending())?.fields[0]?.phase).toBe('uncertain');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

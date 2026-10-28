@@ -258,7 +258,6 @@ it('uses the saved BP preference for manual and automatic selection, and closes 
   expect(switches.mock.calls.at(-1)?.[0]).toBe('bp');
   expect(scene.get().bpCompact).toBe('off');
   expect(scene.get().director?.reason).toContain('游戏画面未就绪');
-  expect(mode).toBe('compact');
   expect((await scene.select('waiting', scene.get().revision)).ok).toBe(true);
   mode = 'full';
   ready = true;

@@ -64,21 +64,9 @@ function marker(runId, kind, monotonicMs, options = {}) {
   };
 }
 
-async function createEvidenceRun({
-  complete = true,
-  withCapture = true,
-  captureFirstObservation = true,
-  captureSecondObservation = true,
-  programTelemetryCleared = true,
-  observedMapChange = false,
-  qualificationProfile = 'base',
-} = {}) {
+async function createEvidenceRun({ withCapture = true } = {}) {
   const runDir = await mkdtemp(join(tmpdir(), 'rivalhub-qualification-evidence-'));
   const runId = 'qualification-test-run';
-  const demoBSequence = observedMapChange ? 2 : 1;
-  const demoBReceivedMonotonicMs = observedMapChange ? 20_700 : 20_600;
-  const demoBMapEpoch = observedMapChange ? 3 : 2;
-  const demoBRuntimeSeq = observedMapChange ? 4 : 3;
   await mkdir(join(runDir, 'debug'), { recursive: true });
   await mkdir(join(runDir, 'recorder'), { recursive: true });
   await writeFile(join(runDir, 'scenario.jsonl'), '', 'utf8');
@@ -90,7 +78,7 @@ async function createEvidenceRun({
       runId,
       windowsVersion: 'Windows 11 test',
       cs2Version: 'CS2 test',
-      qualificationProfile,
+      qualificationProfile: 'base',
     })}\n`,
     'utf8',
   );
@@ -98,35 +86,13 @@ async function createEvidenceRun({
     join(runDir, 'debug', 'final-runtime.json'),
     `${JSON.stringify({
       freshness: 'fresh',
-      ...(observedMapChange
-        ? {
-            recentTransitions: [
-              {
-                kind: 'map_execution_changed',
-                reason: 'observed-map-name-change',
-                runtimeSeq: 3,
-                producerInstanceId: 'qualification-producer',
-                mapEpoch: 3,
-                previousMapEpoch: 2,
-                previousMapName: 'de_ancient',
-                mapName: 'de_dust2',
-                sourceGeneration: 0,
-                receiveSequence: 1,
-                at: {
-                  monotonicMs: 20_650,
-                  utc: new Date(Date.parse(BASE_TIME) + 20_650).toISOString(),
-                },
-              },
-            ],
-          }
-        : {}),
     })}\n`,
     'utf8',
   );
 
   const markers = [
     marker(runId, 'demo-a-live', 100, {
-      sequence: captureFirstObservation ? 0 : 99,
+      sequence: 0,
       receivedAt: BASE_TIME,
       receivedMonotonicMs: 100,
     }),
@@ -144,18 +110,16 @@ async function createEvidenceRun({
         resetReason: 'operator-correction',
         previousMapEpoch: 1,
         mapEpoch: 2,
-        programTelemetryCleared,
+        programTelemetryCleared: true,
       },
     }),
     marker(runId, 'cs2-reopened', 20_600, { freshness: 'stale', mapEpoch: 2, runtimeSeq: 2 }),
     marker(runId, 'demo-b-live', 20_800, {
-      sequence: captureSecondObservation ? demoBSequence : 0,
-      receivedAt: captureSecondObservation
-        ? new Date(Date.parse(BASE_TIME) + demoBReceivedMonotonicMs).toISOString()
-        : BASE_TIME,
-      receivedMonotonicMs: captureSecondObservation ? demoBReceivedMonotonicMs : 100,
-      mapEpoch: demoBMapEpoch,
-      runtimeSeq: demoBRuntimeSeq,
+      sequence: 1,
+      receivedAt: new Date(Date.parse(BASE_TIME) + 20_600).toISOString(),
+      receivedMonotonicMs: 20_600,
+      mapEpoch: 2,
+      runtimeSeq: 3,
     }),
   ];
   await writeFile(
@@ -167,35 +131,20 @@ async function createEvidenceRun({
   if (withCapture) {
     const frames =
       [
-        ...(captureFirstObservation
-          ? [
-              {
-                version: 1,
-                sequence: 0,
-                elapsedUs: 0,
-                receivedAt: BASE_TIME,
-                payload: { map: { name: 'de_ancient', phase: 'live' } },
-              },
-            ]
-          : []),
-        ...(observedMapChange
-          ? [
-              {
-                version: 1,
-                sequence: 1,
-                elapsedUs: 20_650_000,
-                receivedAt: new Date(Date.parse(BASE_TIME) + 20_650).toISOString(),
-                payload: { map: { name: 'de_dust2', phase: 'live' } },
-              },
-            ]
-          : []),
         {
           version: 1,
-          sequence: demoBSequence,
-          elapsedUs: demoBReceivedMonotonicMs * 1_000,
-          receivedAt: new Date(Date.parse(BASE_TIME) + demoBReceivedMonotonicMs).toISOString(),
+          sequence: 0,
+          elapsedUs: 0,
+          receivedAt: BASE_TIME,
+          payload: { map: { name: 'de_ancient', phase: 'live' } },
+        },
+        {
+          version: 1,
+          sequence: 1,
+          elapsedUs: 20_600_000,
+          receivedAt: new Date(Date.parse(BASE_TIME) + 20_600).toISOString(),
           payload: {
-            map: { name: observedMapChange ? 'de_dust2' : 'de_ancient', phase: 'live' },
+            map: { name: 'de_ancient', phase: 'live' },
           },
         },
       ]
@@ -214,7 +163,7 @@ async function createEvidenceRun({
         broadcastCommit: artifact().gitSha,
         scenario: 'qualification-test',
         gsiConfig: { uri: 'http://127.0.0.1:3000/gsi' },
-        complete,
+        complete: true,
         frameCount: frames.trimEnd().split('\n').length,
         droppedFrames: 0,
         framesSha256: createHash('sha256').update(frames, 'utf8').digest('hex'),

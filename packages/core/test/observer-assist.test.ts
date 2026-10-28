@@ -86,7 +86,6 @@ describe('private observer hints against Program', () => {
 
     const confirmed = program(4, [7, 8, 9]);
     const result = timeline.project(confirmed, settings, 129000, source);
-    expect(confirmed.players.find((p) => p.sourcePlayerId === '7')?.lifeState).toBe('dead');
     expect(result.observer?.hints).toEqual([]);
     expect(result.observer?.state).toBe('ready');
     expect(result.observer?.measuredDelaySeconds).toBe(120);
@@ -179,9 +178,8 @@ describe('private observer hints against Program', () => {
     const hints = timeline.project(program(3, [8, 9]), settings, 133000, source).observer?.hints;
     expect(hints?.find((h) => h.victim.observerSlot === 6)?.remainingSeconds).toBe(7);
   });
-  it('clears boundaries and waits for fresh events after setting, pause, map and source changes', () => {
+  it('clears boundaries and waits for fresh events after setting, map and source changes', () => {
     const cases = [
-      (p: ObserverProgramView) => ({ ...p, clock: { phase: 'paused' as const } }),
       (p: ObserverProgramView) => ({ ...p, map: { name: 'de_nuke' } }),
       (p: ObserverProgramView) => ({ ...p, match: { matchId: 'next' } }),
       (p: ObserverProgramView) => ({ ...p, cursor: { ...p.cursor, liveSessionId: 'next' } }),

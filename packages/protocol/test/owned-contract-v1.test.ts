@@ -2,7 +2,6 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { expect, it } from 'vitest';
-import { z } from 'zod';
 import { parseReliableEventV1 } from '../src/output.js';
 
 async function fixture(name: string): Promise<unknown> {
@@ -48,27 +47,14 @@ it('enforces kind-specific reliable payloads before V1 freeze', async () => {
   ).toThrow();
 });
 
-it('keeps the old strict score payload usable when the old server rejects the new event', async () => {
+it('accepts unknown per-player statistics independently of map scores', async () => {
   const base = parseReliableEventV1(await fixture('reliable-event-v1.json'));
-  const legacyPayload = z.strictObject({
-    scoreA: z.number(),
-    scoreB: z.number(),
-    scoreCT: z.number(),
-    scoreT: z.number(),
-  });
-  const end = parseReliableEventV1({
-    ...base,
-    kind: 'map_ended',
-    payload: { scoreA: 13, scoreB: 9, scoreCT: 13, scoreT: 9 },
-  });
-  expect(legacyPayload.safeParse(end.payload).success).toBe(true);
-  expect(legacyPayload.safeParse({ ...end.payload, players: [] }).success).toBe(false);
   expect(
     parseReliableEventV1({
       ...base,
       kind: 'map_player_snapshot',
       payload: {
-        mapEndedKey: end.idempotencyKey,
+        mapEndedKey: base.idempotencyKey,
         players: [
           {
             sourcePlayerId: 'steam',

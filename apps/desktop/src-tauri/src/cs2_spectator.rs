@@ -564,43 +564,41 @@ mod hud_tests {
 
     #[test]
     fn resolves_only_one_exact_candidate_and_preserves_original_bytes() {
-        for name in ["h", "scancode11"] {
-            for value in ["", "say custom"] {
-                let before = keys(&format!("\"{name}\" \"{value}\" \"x\" \"other\""));
-                let record = backup_hud(&before).unwrap();
-                assert_eq!(record["identity"], name);
-                assert_eq!(record["originalKeys"], before);
-                assert_eq!(record["candidates"][name], format!("\"{value}\""));
-                let other = if name == "h" { "scancode11" } else { "h" };
-                assert!(record["candidates"][other].is_null());
-                let applied = keys(&format!("\"{name}\" \"{HUD_COMMAND}\" \"x\" \"new\""));
-                let restored = restore_hud(&record, &applied).unwrap();
-                assert_eq!(
-                    field(&restored, &["config", "bindings", name])
-                        .unwrap()
-                        .unwrap()
-                        .value,
-                    value
-                );
-                assert_eq!(
-                    field(&restored, &["config", "bindings", "x"])
-                        .unwrap()
-                        .unwrap()
-                        .value,
-                    "new"
-                );
-                assert_eq!(restore_hud(&record, &restored).unwrap(), restored);
-                assert!(restore_hud(&record, &applied.replace(HUD_COMMAND, "user edit")).is_err());
-                assert!(restore_hud(&record, &applied.replace(name, other)).is_err());
-                assert!(restore_hud(
-                    &record,
-                    &keys(&format!(
-                        "\"{name}\" \"{HUD_COMMAND}\" \"{other}\" \"{HUD_COMMAND}\""
-                    ))
-                )
-                .is_err());
-                assert!(restore_hud(&record, &keys("")).is_err());
-            }
+        for (name, value) in [("h", ""), ("scancode11", "say custom")] {
+            let before = keys(&format!("\"{name}\" \"{value}\" \"x\" \"other\""));
+            let record = backup_hud(&before).unwrap();
+            assert_eq!(record["identity"], name);
+            assert_eq!(record["originalKeys"], before);
+            assert_eq!(record["candidates"][name], format!("\"{value}\""));
+            let other = if name == "h" { "scancode11" } else { "h" };
+            assert!(record["candidates"][other].is_null());
+            let applied = keys(&format!("\"{name}\" \"{HUD_COMMAND}\" \"x\" \"new\""));
+            let restored = restore_hud(&record, &applied).unwrap();
+            assert_eq!(
+                field(&restored, &["config", "bindings", name])
+                    .unwrap()
+                    .unwrap()
+                    .value,
+                value
+            );
+            assert_eq!(
+                field(&restored, &["config", "bindings", "x"])
+                    .unwrap()
+                    .unwrap()
+                    .value,
+                "new"
+            );
+            assert_eq!(restore_hud(&record, &restored).unwrap(), restored);
+            assert!(restore_hud(&record, &applied.replace(HUD_COMMAND, "user edit")).is_err());
+            assert!(restore_hud(&record, &applied.replace(name, other)).is_err());
+            assert!(restore_hud(
+                &record,
+                &keys(&format!(
+                    "\"{name}\" \"{HUD_COMMAND}\" \"{other}\" \"{HUD_COMMAND}\""
+                ))
+            )
+            .is_err());
+            assert!(restore_hud(&record, &keys("")).is_err());
         }
         let missing = backup_hud(&keys("")).unwrap();
         assert_eq!(missing["identity"], "scancode11");

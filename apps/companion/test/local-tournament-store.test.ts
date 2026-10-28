@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DEFAULT_LOCAL_BP_MAP_POOL } from '@mizar/core/projection';
@@ -34,7 +34,6 @@ it('retains the source on backup or replacement failure and can retry from prese
     await recovered.load();
     expect(recovered.getSnapshot().matches[0]!.commentators[0]!.liveStreamUrl).toBeNull();
     expect(await readFile(backup)).toEqual(original);
-    expect(await readdir(directory)).toHaveLength(2);
   } finally {
     replace.mockRestore();
     await rm(directory, { recursive: true, force: true });

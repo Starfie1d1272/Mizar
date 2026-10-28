@@ -155,8 +155,6 @@ Desktop 通过 localhost Companion 读取随包 Web，Tauri 不嵌入生产 Web 
 
 [#226 的参数对照](https://github.com/Starfie1d1272/Mizar/pull/226)显示编译耗时与产物体积存在取舍；单轮、固定顺序以及缺少真实下载和冻结 RC 验收，不足以改变正式 Cargo/NSIS 参数。一次性研究入口、脚本与原始输出已归档于该 PR 和 Git 历史，不作为常规 CI。正式 ZIP 与 Setup 已压缩，资格产品上传保持外层压缩关闭，原始产品字节与身份不变。
 
-使用 `node scripts/ci/measure-run.mjs owner/repository run-id` 记录终态 CI 的 `created_at → ci-gate.completed_at` wall time、初始排队与各 job/step 时长；缓存冷热根据当次 Actions cache 输出分别报告；浏览器容器拉取与初始化也计入 job 和总 wall time。等待、下载和后置门禁均属于 wall time，超标如实记录。
-
 - `local-web-production-smoke.mjs` 验证生产 HTML、资源传输、样式表类型与构建内容一致性、CS2 资源摘要及真实 WebSocket 基线；它不执行浏览器页面，不证明最终 HUD 已渲染。
 - `pnpm local-web:production-browser-smoke` 在已构建的 Companion 与 Web 上执行真实 HTTP GSI → 运行时／投影 → WebSocket → Chromium，使用已保存 Ancient 回合的 628 帧并核对摘要。它检查队伍、十名选手、雷达实际绘制、C4 阶段与回合结束比分，不拦截 HTTP 或 WebSocket；比赛资料与接收时钟由回放夹具提供。先通过 pnpm 构建图构建 Companion 与 Web，并安装 Chromium；不要在浏览器运行期间重建共享包。此回合片段不证明完整现场制播或 Windows／OBS 性能。
 - `product-smoke.mjs` 检查服务、安装/恢复和重启，`--no-browser` 模式不证明桌面窗口成功。

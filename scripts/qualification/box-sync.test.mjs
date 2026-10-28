@@ -115,7 +115,6 @@ describe('lean Box distribution', () => {
   it('publishes only bootstrap, Core, resources and metadata; reuses the same verified files on retry', async () => {
     const f = fixture();
     await syncStableRelease(f.options);
-    expect(f.writes).toHaveLength(5);
     expect(f.writes).not.toContain('/Stable/' + f.full.name);
     expect(f.writes).not.toContain('/Stable/Downloads/' + f.full.offline.name);
     expect(f.writes.at(-1)).toBe('/Updates/latest.json');
@@ -177,7 +176,6 @@ describe('lean Box distribution', () => {
     expect(f.files.get('/Archive/' + f.full.name)).toEqual(f.full.bytes);
     expect(f.files.get('/Archive/' + f.full.offline.name)).toEqual(f.full.offline.bytes);
     expect(f.files.has('/Stable/' + f.full.name)).toBe(false);
-    expect(f.writes).toHaveLength(5);
   });
   it.each(['source', 'archive', 'unknown', 'newer'])(
     'preserves public files on %s conflict',

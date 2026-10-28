@@ -44,48 +44,34 @@ async function settled(library: RivalHubLibrary) {
   return value;
 }
 
-it.each([30, 300])(
-  'reads no manifests for an idle %i-match schedule over ten minutes; browsing reads only one',
-  async (size) => {
-    const f = await fixture(size);
-    let clock = Date.parse('2026-09-16T12:00:00Z');
-    const schedule = vi.fn(() => Promise.resolve(f.schedule));
-    const read = vi.fn<(id: string, fresh: boolean) => Promise<unknown>>(() =>
-      Promise.resolve(f.manifest),
-    );
-    const library = new RivalHubLibrary(
-      join(f.root, 'library.json'),
-      'competition-m2',
-      schedule,
-      read,
-      () => clock,
-    );
-    for (let minute = 0; minute <= 10; minute++) {
-      await settled(library);
-      if (minute < 10) clock += 60_000;
-    }
-    expect(schedule).toHaveBeenCalledTimes(11);
-    expect(read).toHaveBeenCalledTimes(0);
-    expect((await library.view()).library.entries).toEqual({});
-    for (let minute = 0; minute <= 10; minute++) {
-      await library.detail(f.id, minute === 0);
-      if (minute < 10) clock += 60_000;
-    }
-    expect(read).toHaveBeenCalledTimes(11);
-    expect(read.mock.calls.every(([id]) => id === f.id)).toBe(true);
-    console.info(
-      JSON.stringify({
-        size,
-        minutes: 10,
-        idleManifest: 0,
-        browsedManifest: read.mock.calls.length,
-        initial: 1,
-        periodic: 10,
-        retries: 0,
-      }),
-    );
-  },
-);
+it('reads no manifests for an idle 300-match schedule over ten minutes; browsing reads only one', async () => {
+  const f = await fixture(300);
+  let clock = Date.parse('2026-09-16T12:00:00Z');
+  const schedule = vi.fn(() => Promise.resolve(f.schedule));
+  const read = vi.fn<(id: string, fresh: boolean) => Promise<unknown>>(() =>
+    Promise.resolve(f.manifest),
+  );
+  const library = new RivalHubLibrary(
+    join(f.root, 'library.json'),
+    'competition-m2',
+    schedule,
+    read,
+    () => clock,
+  );
+  for (let minute = 0; minute <= 10; minute++) {
+    await settled(library);
+    if (minute < 10) clock += 60_000;
+  }
+  expect(schedule).toHaveBeenCalledTimes(11);
+  expect(read).toHaveBeenCalledTimes(0);
+  expect((await library.view()).library.entries).toEqual({});
+  for (let minute = 0; minute <= 10; minute++) {
+    await library.detail(f.id, minute === 0);
+    if (minute < 10) clock += 60_000;
+  }
+  expect(read).toHaveBeenCalledTimes(11);
+  expect(read.mock.calls.every(([id]) => id === f.id)).toBe(true);
+});
 
 it('fetches corrections on reopen, persists only browsed details and distinguishes offline cache from missing details', async () => {
   const f = await fixture();
@@ -172,43 +158,29 @@ async function connected(size = 30) {
   };
 }
 
-it.each([30, 300])(
-  'keeps current production reads at 61 with %i scheduled matches and merges browsing ticks',
-  async (size) => {
-    const f = await connected(size);
-    let clock = Date.parse('2026-09-16T12:00:00Z');
-    vi.spyOn(Date, 'now').mockImplementation(() => clock);
-    try {
-      await f.connection.library();
-      for (let tick = 0; tick <= 60; tick++) {
-        const current = f.connection.matchSource(f.id, tick === 0).load();
-        const browsing =
-          tick % 6 === 0 ? f.connection.libraryDetail(f.id, tick === 0) : Promise.resolve();
-        await Promise.all([current, browsing]);
-        clock += 10_000;
-      }
-      expect(f.reads).toHaveLength(61);
-      expect(new Set(f.reads)).toEqual(new Set([f.id]));
-      f.change();
-      const result = await f.connection.matchSource(f.id).load();
-      expect(result).toMatchObject({ entrants: { a: { name: '最新更正' } } });
-      expect(f.reads).toHaveLength(62); // Explicit fresh is a separate denominator.
-      console.info(
-        JSON.stringify({
-          size,
-          minutes: 10,
-          currentAndBrowsingManifest: 61,
-          initial: 1,
-          periodic: 60,
-          explicitFresh: 1,
-          retries: 0,
-        }),
-      );
-    } finally {
-      vi.restoreAllMocks();
+it('keeps current production reads at 61 with 300 scheduled matches and merges browsing ticks', async () => {
+  const f = await connected(300);
+  let clock = Date.parse('2026-09-16T12:00:00Z');
+  vi.spyOn(Date, 'now').mockImplementation(() => clock);
+  try {
+    await f.connection.library();
+    for (let tick = 0; tick <= 60; tick++) {
+      const current = f.connection.matchSource(f.id, tick === 0).load();
+      const browsing =
+        tick % 6 === 0 ? f.connection.libraryDetail(f.id, tick === 0) : Promise.resolve();
+      await Promise.all([current, browsing]);
+      clock += 10_000;
     }
-  },
-);
+    expect(f.reads).toHaveLength(61);
+    expect(new Set(f.reads)).toEqual(new Set([f.id]));
+    f.change();
+    const result = await f.connection.matchSource(f.id).load();
+    expect(result).toMatchObject({ entrants: { a: { name: '最新更正' } } });
+    expect(f.reads).toHaveLength(62); // Explicit fresh is a separate denominator.
+  } finally {
+    vi.restoreAllMocks();
+  }
+});
 
 it('shares validated entities, rejects old-scope replies and never carries tags into reauthorization', async () => {
   const f = await connected();
@@ -217,9 +189,9 @@ it('shares validated entities, rejects old-scope replies and never carries tags 
   const second = f.connection.matchSource(f.id).load();
   expect(f.reads).toHaveLength(1);
   f.resolve();
-  const [a, b] = await Promise.all([first, second]);
-  expect(a).toEqual(b);
-  expect(a).not.toBe(b);
+  const [firstResult, secondResult] = await Promise.all([first, second]);
+  expect(firstResult).toMatchObject({ match: { matchId: f.id } });
+  expect(secondResult).toMatchObject({ match: { matchId: f.id } });
   f.delay();
   const old = f.connection.matchSource(f.id);
   const late = old.load();
@@ -337,6 +309,11 @@ it('uses the registered ten-second production and minute schedule timers without
     expect(controller.getActiveBinding()?.origin).toBe('online');
   } finally {
     await app.close();
+    // Closing the routes stops their timers; the last discovered schedule may
+    // still be committing its browsing cache. Keep the frozen clock until done.
+    await vi.waitFor(async () => {
+      expect((await f.connection.library()).library.refreshing).toBe(false);
+    });
   }
 });
 

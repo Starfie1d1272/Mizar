@@ -1,6 +1,6 @@
 name: 实现任务
 description: 目标与主要方案明确，可直接开展的实现任务。
-title: "[任务] "
+title: '[任务] '
 body:
   - type: markdown
     attributes:
@@ -89,25 +89,11 @@ body:
         - label: Windows CI
         - label: Linux CI
 
-  - type: dropdown
-    id: real_environment_gate
-    attributes:
-      label: 真实环境验收门槛
-      description: 在任务可视为完全验收前，需要什么生产近似环境证据？
-      options:
-        - 不需要
-        - 真实 Windows
-        - Windows + CS2
-        - Windows + OBS
-        - Windows + CS2 + OBS
-    validations:
-      required: true
-
   - type: textarea
     id: platform_notes
     attributes:
       label: 平台与验收说明
-      description: 说明预期验证环境、测试样例或验收证据；如不需要真实环境，也说明原因。
+      description: 按需说明预期验证环境、测试样例或验收证据。
 
   - type: textarea
     id: tests
@@ -157,6 +143,6 @@ body:
     attributes:
       label: 交接要求
       description: 除 CONTRIBUTING.md 外，最终 PR 还必须报告哪些任务特有信息。
-      placeholder: "例如：偏离项、实际验证证据、后续实机验收、剩余风险和后续工作。"
+      placeholder: '例如：偏离项、实际验证证据、后续实机验收、剩余风险和后续工作。'
     validations:
       required: true

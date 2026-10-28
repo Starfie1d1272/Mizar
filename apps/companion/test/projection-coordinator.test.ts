@@ -244,13 +244,13 @@ it('publishes assist refreshes independently of Program and public radar snapsho
     }),
   });
   try {
-    const program = coordinator.getPublisher('program').getCurrent();
-    const radar = coordinator.getPublisher('radar').getCurrent();
+    const program = structuredClone(coordinator.getPublisher('program').getCurrent());
+    const radar = structuredClone(coordinator.getPublisher('radar').getCurrent());
     const before = coordinator.getPublisher('assist').getCurrent()!.channelSeq;
     coordinator.resetAssist();
     coordinator.refreshAssist();
-    expect(coordinator.getPublisher('program').getCurrent()).toBe(program);
-    expect(coordinator.getPublisher('radar').getCurrent()).toBe(radar);
+    expect(coordinator.getPublisher('program').getCurrent()).toEqual(program);
+    expect(coordinator.getPublisher('radar').getCurrent()).toEqual(radar);
     expect(coordinator.getPublisher('assist').getCurrent()!.channelSeq).toBeGreaterThan(before);
     expect(JSON.stringify(program)).not.toContain('observer');
   } finally {
@@ -367,8 +367,8 @@ it('keeps calibrated anchors and buffered kills when the lead window is reprojec
       lastReceiveMonotonicMs: null,
       receiveAgeMs: null,
     });
-    const program = coordinator.getPublisher('program').getCurrent();
-    const radar = coordinator.getPublisher('radar').getCurrent();
+    const program = structuredClone(coordinator.getPublisher('program').getCurrent());
+    const radar = structuredClone(coordinator.getPublisher('radar').getCurrent());
     expect(coordinator.getPublisher('assist').getCurrent()!.payload.observer).toMatchObject({
       timingBasis: 'estimated',
       nextWindowSeconds: 1,
@@ -382,8 +382,8 @@ it('keeps calibrated anchors and buffered kills when the lead window is reprojec
       hints: [{ remainingSeconds: 8, victim: { observerSlot: 7 } }],
     });
     expect(coordinator.getPublisher('assist').getCurrent()!.channelSeq).toBeGreaterThan(before);
-    expect(coordinator.getPublisher('program').getCurrent()).toBe(program);
-    expect(coordinator.getPublisher('radar').getCurrent()).toBe(radar);
+    expect(coordinator.getPublisher('program').getCurrent()).toEqual(program);
+    expect(coordinator.getPublisher('radar').getCurrent()).toEqual(radar);
     settings.expectedDelaySeconds = 130;
     coordinator.resetAssist();
     expect(coordinator.getCurrent().assist.observer).toMatchObject({

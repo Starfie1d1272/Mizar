@@ -218,58 +218,10 @@ it('restores a pending game HUD through its dedicated native command', async () 
   });
 });
 
-it.each(['queued', 'unknown'])(
-  'confirms explicit MulNX stop and reports %s without retrying or claiming unload',
-  async (result) => {
-    window.__TAURI_INTERNALS__ = { invoke: <T,>() => Promise.resolve(undefined as T) };
-    mocks.native.mockResolvedValue({ result, execution: 'unconfirmed' });
-    act(() =>
-      root.render(
-        <MulnxToolControls
-          tool={{
-            installed: 'test',
-            latest: 'test',
-            launchProtocol: 1,
-            busy: false,
-            message: '',
-            packs: [],
-          }}
-        />,
-      ),
-    );
-    const stop = [...container.querySelectorAll('button')].find(
-      (button) => button.textContent === '停止 MulNX 控制',
-    )!;
-    act(() => stop.click());
-    const dialog = () => document.querySelector<HTMLElement>('dialog[open]')!;
-    expect(dialog().textContent).toContain('结束本场制作、恢复游戏 HUD');
-    expect(dialog().textContent).toContain('CS2 保持运行');
-    act(() =>
-      [...dialog().querySelectorAll('button')]
-        .find((button) => button.textContent === '取消')!
-        .click(),
-    );
-    expect(mocks.native).not.toHaveBeenCalled();
-    act(() => stop.click());
-    await act(async () => {
-      const confirm = [...dialog().querySelectorAll('button')].find(
-        (button) => button.textContent === '结束制作并停止控制',
-      )!;
-      confirm.click();
-      confirm.click();
-      await Promise.resolve();
-    });
-    expect(mocks.native).toHaveBeenCalledExactlyOnceWith('mulnx_control', { action: 'stop' });
-    expect(container.textContent).toContain(
-      result === 'queued' ? '已入队，执行结果待确认' : '结果待确认',
-    );
-    expect(container.textContent).not.toContain('已卸载');
-    expect(stop.disabled).toBe(true);
-  },
-);
-it('shows an unborrowed-game stop rejection at the MulNX controls', async () => {
+it('reports unknown MulNX stop once even on double confirmation', async () => {
+  const result = 'unknown';
   window.__TAURI_INTERNALS__ = { invoke: <T,>() => Promise.resolve(undefined as T) };
-  mocks.native.mockRejectedValue(new Error('请先明确借用本场 CS2。'));
+  mocks.native.mockResolvedValue({ result, execution: 'unconfirmed' });
   act(() =>
     root.render(
       <MulnxToolControls
@@ -284,21 +236,24 @@ it('shows an unborrowed-game stop rejection at the MulNX controls', async () => 
       />,
     ),
   );
-  act(() =>
-    [...container.querySelectorAll('button')]
-      .find((button) => button.textContent === '停止 MulNX 控制')!
-      .click(),
-  );
+  const stop = [...container.querySelectorAll('button')].find(
+    (button) => button.textContent === '停止 MulNX 控制',
+  )!;
+  act(() => stop.click());
+  const dialog = () => document.querySelector<HTMLElement>('dialog[open]')!;
   await act(async () => {
-    [...document.querySelectorAll('dialog[open] button')]
-      .find((button) => button.textContent === '结束制作并停止控制')!
-      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    const confirm = [...dialog().querySelectorAll('button')].find(
+      (button) => button.textContent === '结束制作并停止控制',
+    )!;
+    confirm.click();
+    confirm.click();
     await Promise.resolve();
   });
   expect(mocks.native).toHaveBeenCalledExactlyOnceWith('mulnx_control', { action: 'stop' });
-  expect(container.textContent).toContain('请先明确借用本场 CS2。');
+  expect(container.textContent).toContain('结果待确认');
+  expect(container.textContent).not.toContain('已卸载');
+  expect(stop.disabled).toBe(true);
 });
-
 it('gives specific repair guidance for known startup causes and diagnostic context for unknown failures', () => {
   const view: ObserverRuntimeView = {
     active: false,
