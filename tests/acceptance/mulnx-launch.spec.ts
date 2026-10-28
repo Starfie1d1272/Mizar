@@ -3,7 +3,7 @@ import { emptyOrchestrationPreset } from '../../packages/protocol/src/orchestrat
 
 // Native calls are browser contract doubles; no real launcher, CS2 or OBS is used.
 for (const entry of ['/', '/settings?tab=gsi']) {
-  test(`unsupported checked automatic launch navigates from ${entry} to managed launch settings without manual fallback`, async ({
+  test(`unavailable automatic launch reports the failure from ${entry} without manual fallback`, async ({
     page,
     context,
   }) => {
@@ -14,7 +14,6 @@ for (const entry of ['/', '/settings?tab=gsi']) {
     const tool = {
       installed: 'Beta16.2',
       latest: 'Beta16.2',
-      launchProtocol: null,
       busy: false,
       message: '',
       packs: [],
@@ -113,7 +112,7 @@ for (const entry of ['/', '/settings?tab=gsi']) {
             ).manualMulnxNative(command, args);
             if (command === 'launch_mulnx' && args?.automatic) {
               // eslint-disable-next-line @typescript-eslint/only-throw-error -- Emulate the actual Tauri Result<T, String> rejection.
-              throw 'mulnx_automatic_launch_unavailable';
+              throw 'MulNX 启动接口不可用，请检查更新或选择标准启动；请关闭启动器后重试。';
             }
             return result;
           },
@@ -122,8 +121,9 @@ for (const entry of ['/', '/settings?tab=gsi']) {
     );
     await page.goto(entry);
     await page.getByRole('button', { name: '打开直播工作台', exact: true }).click();
-    const route = page.getByRole('link', { name: '检查 MulNX 启动能力', exact: true });
-    await expect(route).toHaveAttribute('href', '/settings?tab=camera#mulnx-launch');
+    await expect(
+      page.getByText('MulNX 启动接口不可用，请检查更新或选择标准启动；请关闭启动器后重试。'),
+    ).toBeVisible();
     expect(
       calls.some((call) =>
         [
@@ -134,16 +134,6 @@ for (const entry of ['/', '/settings?tab=gsi']) {
         ].includes(call.command),
       ),
     ).toBe(false);
-    await route.click();
-    const region = page.getByRole('region', { name: 'MulNX 启动管理' });
-    await expect(region).toContainText('不支持自动启动');
-    await expect(
-      page.getByRole('button', { name: '启动 MulNX 工作台', exact: true }),
-    ).toBeDisabled();
-    await expect(
-      page.getByRole('button', { name: '借用此游戏并进入工作台', exact: true }),
-    ).toHaveCount(0);
-    await expect(page.getByRole('button', { name: '打开本机 MulNX', exact: true })).toHaveCount(0);
     expect(calls.filter((call) => call.command === 'launch_mulnx')).toHaveLength(1);
     expect(
       calls.some((call) => ['attach_external_cs2', 'present_production'].includes(call.command)),

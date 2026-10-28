@@ -228,7 +228,6 @@ it('reports unknown MulNX stop once even on double confirmation', async () => {
         tool={{
           installed: 'test',
           latest: 'test',
-          launchProtocol: 1,
           busy: false,
           message: '',
           packs: [],

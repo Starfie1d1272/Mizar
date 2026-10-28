@@ -18,7 +18,7 @@ import { useEffect, useState } from 'react';
 import { OperatorShell } from '../operator/OperatorShell';
 import { RivalHubPreparationPanel } from '../operator/RivalHubPreparationPanel';
 import { RivalHubSyncControls } from '../operator/RivalHubSyncControls';
-import { desktopInvoke, MulnxAutomaticLaunchUnavailableError } from '../workspace/client';
+import { desktopInvoke } from '../workspace/client';
 import { LocalTournamentEditor } from '../workspace/LocalTournamentEditor';
 import { Button, Dialog, Panel, StatusBanner, StatusPill } from '../ui';
 import { LocalOverlayControls } from './LocalOverlayControls';
@@ -100,7 +100,6 @@ export function PreparationPage() {
     '/local/v1/rivalhub-connection',
   );
   const [message, setMessage] = useState('');
-  const [automaticLaunchUnavailable, setAutomaticLaunchUnavailable] = useState(false);
   const [busy, setBusy] = useState(false);
   const [demoOpen, setDemoOpen] = useState(() =>
     new URLSearchParams(window.location.search).has('demoTest'),
@@ -113,12 +112,10 @@ export function PreparationPage() {
     if (busy) return;
     setBusy(true);
     setMessage('');
-    setAutomaticLaunchUnavailable(false);
     try {
       await run();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '操作未完成。');
-      setAutomaticLaunchUnavailable(error instanceof MulnxAutomaticLaunchUnavailableError);
     } finally {
       setBusy(false);
     }
@@ -131,7 +128,6 @@ export function PreparationPage() {
         .then((current) => productionAction('enter', current))
         .catch((error: unknown) => {
           setMessage(error instanceof Error ? error.message : '操作未完成。');
-          setAutomaticLaunchUnavailable(error instanceof MulnxAutomaticLaunchUnavailableError);
         });
     };
     window.addEventListener('mizar-enter', enter);
@@ -205,14 +201,7 @@ export function PreparationPage() {
         ) : null}
 
         {!(path === '/settings' && tab === 'gsi') ? <Cs2Recovery production={production} /> : null}
-        {message ? (
-          <StatusBanner tone={automaticLaunchUnavailable ? 'warning' : 'danger'}>
-            {message}
-            {automaticLaunchUnavailable ? (
-              <a href="/settings?tab=camera#mulnx-launch">检查 MulNX 启动能力</a>
-            ) : null}
-          </StatusBanner>
-        ) : null}
+        {message ? <StatusBanner tone="danger">{message}</StatusBanner> : null}
         {options ? (
           <nav className="preparation-tabs" aria-label="页面分区">
             {options.map(([key, label]) => (
