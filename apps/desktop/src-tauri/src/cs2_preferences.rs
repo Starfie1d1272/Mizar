@@ -60,9 +60,14 @@ impl Preferences {
                 .and_then(|v| u16::try_from(v).ok())
                 .ok_or("CS2 帧率设置无法读取。")?;
             let mut preferences = Self::new(quality, limit)?;
-            preferences.prefer_mulnx = match value.get("preferMulnx") {
-                None => false,
-                Some(value) => value.as_bool().ok_or("CS2 启动方式无法读取。")?,
+            let saved = match value.get("preferMulnx") {
+                None => None,
+                Some(value) => Some(value.as_bool().ok_or("CS2 启动方式无法读取。")?),
+            };
+            preferences.prefer_mulnx = match value.get("launchPreferenceVersion") {
+                None => true,
+                Some(version) if version == 2 => saved.ok_or("CS2 启动方式无法读取。")?,
+                Some(_) => return Err("CS2 启动方式版本无法读取。".into()),
             };
             Ok(preferences)
         } else if let Some(preserve) = value["preserveQuality"].as_bool() {
@@ -72,7 +77,7 @@ impl Preferences {
                 } else {
                     Quality::VeryHigh
                 },
-                prefer_mulnx: false,
+                prefer_mulnx: true,
                 ..Self::default()
             })
         } else {
@@ -80,7 +85,7 @@ impl Preferences {
         }
     }
     pub fn json(self) -> Value {
-        json!({"qualityPreset": self.quality.name(), "frameRateLimit": self.frame_rate_limit, "preferMulnx": self.prefer_mulnx})
+        json!({"qualityPreset": self.quality.name(), "frameRateLimit": self.frame_rate_limit, "preferMulnx": self.prefer_mulnx, "launchPreferenceVersion": 2})
     }
 }
 
@@ -88,10 +93,10 @@ impl Preferences {
 mod tests {
     use super::*;
     #[test]
-    fn launch_choice_survives_restart_and_legacy_keeps_steam() {
+    fn launch_choice_survives_restart_and_legacy_migrates_to_mulnx() {
         assert_eq!(
             Preferences::default().json(),
-            json!({"qualityPreset": "very-high", "frameRateLimit": 60, "preferMulnx": true})
+            json!({"qualityPreset": "very-high", "frameRateLimit": 60, "preferMulnx": true, "launchPreferenceVersion": 2})
         );
         for quality in ["very-high", "high", "medium", "preserve"] {
             for limit in [0, 30, 60] {
@@ -100,16 +105,17 @@ mod tests {
         }
         let legacy = json!({"qualityPreset":"high","frameRateLimit":30});
         let mut choice = Preferences::from_json(&legacy).unwrap();
-        assert!(!choice.prefer_mulnx);
+        assert!(choice.prefer_mulnx);
         for prefer_mulnx in [true, false] {
             choice.prefer_mulnx = prefer_mulnx;
             assert_eq!(Preferences::from_json(&choice.json()).unwrap(), choice);
         }
         for preserve in [true, false] {
             let old = Preferences::from_json(&json!({"preserveQuality": preserve})).unwrap();
-            assert!(!old.prefer_mulnx);
+            assert!(old.prefer_mulnx);
             assert_eq!(old.quality == Quality::Preserve, preserve);
         }
+        assert!(Preferences::from_json(&json!({"qualityPreset":"high","frameRateLimit":30,"preferMulnx":false})).unwrap().prefer_mulnx);
         let mut invalid = legacy;
         invalid["preferMulnx"] = json!("true");
         assert!(Preferences::from_json(&invalid).is_err());

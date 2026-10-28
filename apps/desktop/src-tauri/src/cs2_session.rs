@@ -2307,14 +2307,14 @@ mod tests {
         let (root, video, store) = setup();
         assert!(store.preferences().unwrap().prefer_mulnx);
         fs::create_dir_all(&store.root).unwrap();
-        // 1.6.4 settings without a launch choice retain the standard path.
+        // Existing settings migrate once to MulNX; a later explicit choice survives restart.
         fs::write(
             store.root.join("preferences.json"),
             br#"{"qualityPreset":"high","frameRateLimit":30}"#,
         )
         .unwrap();
-        assert!(!store.preferences().unwrap().prefer_mulnx);
-        // Explicit choices saved by alpha.4 remain authoritative, including after recovery.
+        assert!(store.preferences().unwrap().prefer_mulnx);
+        // Choices saved after migration remain authoritative, including after recovery.
         for prefer_mulnx in [true, false] {
             let mut saved = Preferences::new("medium", 30).unwrap();
             saved.prefer_mulnx = prefer_mulnx;
