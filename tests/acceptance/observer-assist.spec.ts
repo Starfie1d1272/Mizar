@@ -57,7 +57,9 @@ test('keeps the full-width square radar across private hint states and desktop s
     route.fulfill({ json: { settings: { ...DEFAULT_OBSERVER_SETTINGS, enabled: failed } } }),
   );
   await page.route('**/local/v1/observer', (route) =>
-    route.fulfill({ json: { failed, pending: false, health: { state: failed ? 'failed' : 'live' } } }),
+    route.fulfill({
+      json: { failed, pending: false, health: { state: failed ? 'failed' : 'live' } },
+    }),
   );
   await page.setViewportSize({ width: 480, height: 1080 });
   await page.clock.install();
