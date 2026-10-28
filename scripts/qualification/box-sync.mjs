@@ -167,6 +167,7 @@ const networkCodes = new Set([
   'UND_ERR_CONNECT_TIMEOUT',
   'UND_ERR_HEADERS_TIMEOUT',
   'UND_ERR_BODY_TIMEOUT',
+  'UND_ERR_SOCKET',
 ]);
 function safeNetworkCode(error) {
   if (error?.name === 'TimeoutError' || error?.name === 'AbortError') return 'timeout';
@@ -211,7 +212,7 @@ async function retryWait(attempt, reason, deadline, retryAfter, signal) {
   console.log(`Box 暂态失败（${reason}），${delay}ms 后重试 ${attempt + 1}/2`);
   await sleep(delay, undefined, { signal });
 }
-async function checkedFetch(url, options = {}, timeout = 120000, transport = fetch) {
+async function checkedFetch(url, options = {}, timeout = 120000, transport = fetch, consume) {
   // Error text and response bodies may contain temporary upload URLs or credentials.
   const readOnlyBox =
     ['GET', 'HEAD'].includes((options.method ?? 'GET').toUpperCase()) &&
@@ -228,6 +229,7 @@ async function checkedFetch(url, options = {}, timeout = 120000, transport = fet
     let response;
     try {
       response = await transport(url, { ...options, signal });
+      if (response.ok && consume) return await consume(response);
     } catch (error) {
       const code = safeNetworkCode(error);
       if (
@@ -273,11 +275,17 @@ async function checkedFetch(url, options = {}, timeout = 120000, transport = fet
 }
 
 export class BoxClient {
-  constructor(token, uploadTransport = curlMultipartUpload, apiTransport = apiRequest) {
+  constructor(
+    token,
+    uploadTransport = curlMultipartUpload,
+    apiTransport = apiRequest,
+    downloadTransport = fetch,
+  ) {
     requireValue(token, '未配置 MIZAR_BOX_REPO_TOKEN；在 Actions 配置后重试');
     this.token = token;
     this.uploadTransport = uploadTransport;
     this.apiTransport = apiTransport;
+    this.downloadTransport = downloadTransport;
   }
   async api(endpoint, path, method = 'GET', body, signal) {
     const safeEndpoint = [
@@ -350,14 +358,21 @@ export class BoxClient {
       const url = this.temporaryUrl(
         await this.api('download-link', path, 'GET', undefined, signal),
       );
-      const response = await checkedFetch(url, { redirect: 'error', signal }, 600000);
-      const hash = createHash('sha256');
-      let size = 0;
-      for await (const chunk of response.body) {
-        hash.update(chunk);
-        size += chunk.length;
-      }
-      return { sha256: hash.digest('hex'), size };
+      return checkedFetch(
+        url,
+        { redirect: 'error', signal },
+        600000,
+        this.downloadTransport,
+        async (response) => {
+          const hash = createHash('sha256');
+          let size = 0;
+          for await (const chunk of response.body) {
+            hash.update(chunk);
+            size += chunk.length;
+          }
+          return { sha256: hash.digest('hex'), size };
+        },
+      );
     });
   }
   async upload(path, name, bytes, replace = false) {

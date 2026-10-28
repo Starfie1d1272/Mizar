@@ -53,6 +53,33 @@ describe('Box read request recovery', () => {
     },
   );
 
+  it('restarts the full hash after a response body socket failure', async () => {
+    const error = Object.assign(new TypeError('PRIVATE-URL'), {
+      cause: { code: 'UND_ERR_SOCKET' },
+    });
+    const broken = new Response(
+      new globalThis.ReadableStream({
+        start(controller) {
+          controller.enqueue(new globalThis.TextEncoder().encode('partial'));
+          controller.error(error);
+        },
+      }),
+    );
+    const download = vi
+      .fn()
+      .mockResolvedValueOnce(broken)
+      .mockResolvedValueOnce(new Response('complete'));
+    const api = vi
+      .fn()
+      .mockResolvedValue(new Response('"https://box.nju.edu.cn/seafhttp/private"'));
+    const box = new BoxClient('PRIVATE-TOKEN', undefined, api, download);
+    const pending = box.hash('/Resources/v1.8.0/pack.zip');
+    await vi.advanceTimersByTimeAsync(1000);
+    await expect(pending).resolves.toEqual({ size: 8, sha256: digest(Buffer.from('complete')) });
+    expect(download).toHaveBeenCalledTimes(2);
+    expect(output.mock.calls.flat().join('\n')).not.toContain('PRIVATE-URL');
+  });
+
   it('bounds an expired read to three independent request deadlines', async () => {
     vi.spyOn(AbortSignal, 'timeout').mockImplementation(() =>
       AbortSignal.abort(new DOMException('PRIVATE-TIMEOUT', 'TimeoutError')),
