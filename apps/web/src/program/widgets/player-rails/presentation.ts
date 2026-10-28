@@ -9,6 +9,7 @@ import {
   playerStatusEffectState,
   type PlayerStatusEffectState,
 } from '../player-status-effects/presentation';
+import { heldWeapon, magazineFill } from '../player-equipment/presentation';
 
 export const LOW_ARMOR_THRESHOLD = 25;
 
@@ -27,6 +28,7 @@ export interface PlayerRailWeapon {
   readonly asset: PlayerRailAsset | null;
   readonly ammoReserve: number | null;
   readonly active?: boolean;
+  readonly clipFill?: number | null;
 }
 
 export type WeaponVisualRole = 'primary-firearm' | 'standalone-pistol' | 'secondary-pistol';
@@ -257,7 +259,16 @@ function playerPresentation(
   phase: PlayerRailsPhase,
   payload: ProgramPayload,
 ): PlayerCardPresentation {
-  const weapons = knownWeapons(player);
+  const held = heldWeapon(player, payload.status.telemetry === 'fresh');
+  const weapons = player.weapons.map((weapon) => {
+    const presented = weaponPresentation(weapon);
+    const active = weapon === held;
+    return {
+      ...presented,
+      active,
+      clipFill: active && presented.item?.kind === 'firearm' ? magazineFill(held) : null,
+    };
+  });
   const dead = player.lifeState === 'dead';
   const { primary, secondary } = primaryAndSecondary(weapons);
   const armorAsset =
