@@ -280,6 +280,18 @@ describe('observer through the existing source owner', () => {
     });
     expect(manager.getHealth().clockExecution).toBe(1);
   });
+  it('fences a first-round legacy source when a new match starts without warmup', () => {
+    const { manager } = setup();
+    manager.consumeObserverRecord({ ...cursor, warmup: false, round: 0 });
+    manager.consumeObserverRecord({
+      ...cursor,
+      sequence: 7,
+      type: 'raw-event',
+      kind: 'begin_new_match',
+      name: 'begin_new_match',
+    });
+    expect(manager.getHealth().clockExecution).toBe(1);
+  });
   it('detects legacy warmup restart without relying on round events', () => {
     const { manager } = setup();
     manager.consumeObserverRecord({ ...cursor, warmup: false, round: 0 });

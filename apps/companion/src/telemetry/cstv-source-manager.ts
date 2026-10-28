@@ -523,8 +523,9 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
     ) {
       if (row.name !== row.kind) return;
       if (row.kind === 'begin_new_match' || row.kind === 'round_announce_warmup') {
-        if (this.clockHadLive) this.clockExecution++;
+        if (this.clockHadLive || this.observedNonWarmup) this.clockExecution++;
         this.clockHadLive = false;
+        this.observedNonWarmup = false;
         this.pauseObserved = false;
       }
       if (
