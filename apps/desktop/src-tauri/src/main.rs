@@ -1226,24 +1226,6 @@ async fn set_cs2_preferences(
 }
 
 #[tauri::command]
-async fn get_full_spectator_preference(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
-        let cs2 = state.lock().map_err(|_| "CS2 配置状态不可用。".to_string())?;
-        cs2.full_spectator_preference()
-    }).await.map_err(|_| "完整解说键位选择无法读取。".to_string())?
-}
-
-#[tauri::command]
-async fn set_full_spectator_preference(app: tauri::AppHandle, account: u32, enabled: bool) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
-        let mut cs2 = state.lock().map_err(|_| "CS2 配置状态不可用。".to_string())?;
-        cs2.set_full_spectator_preference(account, enabled)
-    }).await.map_err(|_| "完整解说键位选择无法保存。".to_string())?
-}
-
-#[tauri::command]
 async fn restore_cs2_backup(
     app: tauri::AppHandle,
     confirm_steam_cancelled: bool,
@@ -2285,8 +2267,6 @@ fn run_desktop(
             open_cs2_backup,
             manage_cs2_backup,
             set_cs2_preferences,
-            get_full_spectator_preference,
-            set_full_spectator_preference,
             cs2_console_status,
             set_cs2_console_capture,
             open_main,

@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Button, Checkbox, Panel, Select, StatusBanner } from '../ui';
+import { useState } from 'react';
+import { Button, Panel, Select, StatusBanner } from '../ui';
 import { desktopInvoke } from '../workspace/client';
 
 import { useCs2Status, type Cs2ConfigStatus } from './cs2-status';
@@ -16,42 +16,6 @@ export function Cs2LaunchSettings() {
     'qualityPreset' | 'frameRateLimit' | 'preferMulnx'
   > | null>(null);
   const [saved, setSaved] = useState(false);
-  const [fullChoice, setFullChoice] = useState<{ account: number; enabled: boolean } | null>(null);
-  const [fullBusy, setFullBusy] = useState(false);
-  const [fullError, setFullError] = useState('');
-  useEffect(() => {
-    if (!desktop) return;
-    let active = true;
-    void desktopInvoke<{ account: number; enabled: boolean }>('get_full_spectator_preference')
-      .then((value) => {
-        if (active) setFullChoice(value);
-      })
-      .catch((reason: unknown) => {
-        if (active)
-          setFullError(
-            reason instanceof Error ? reason.message : '无法读取当前账号的解说键位选择。',
-          );
-      });
-    return () => {
-      active = false;
-    };
-  }, [desktop]);
-  async function setFullEnabled(enabled: boolean) {
-    if (!fullChoice || fullBusy || disabled) return;
-    setFullBusy(true);
-    setFullError('');
-    try {
-      await desktopInvoke('set_full_spectator_preference', {
-        account: fullChoice.account,
-        enabled,
-      });
-      setFullChoice({ ...fullChoice, enabled });
-    } catch (reason) {
-      setFullError(reason instanceof Error ? reason.message : '解说键位选择未保存，请重试。');
-    } finally {
-      setFullBusy(false);
-    }
-  }
   const preferences = draft ?? status;
   const dirty = Boolean(
     draft &&
@@ -87,7 +51,7 @@ export function Cs2LaunchSettings() {
   return (
     <Panel className="settings-card">
       <h2>CS2 启动设置</h2>
-      <p>画质与帧率在下次由 Mizar 启动游戏时生效；接入已有游戏不会覆盖其设置。</p>
+      <p>画质与帧率在下次由 Mizar 启动游戏时生效；接入已有游戏时保留其画质与帧率。</p>
       {desktop ? (
         <form
           onSubmit={(event) => {
@@ -152,23 +116,7 @@ export function Cs2LaunchSettings() {
               MulNX 版本；仅用于离线 Demo 或已授权观战。
             </p>
           ) : null}
-          <Checkbox
-            label="为当前 Steam 账号启用完整解说键位"
-            checked={fullChoice?.enabled ?? false}
-            disabled={disabled || fullBusy || !fullChoice || Boolean(preferences?.preferMulnx)}
-            onChange={(event) => {
-              void setFullEnabled(event.target.checked);
-            }}
-            message={
-              fullChoice
-                ? `账号 ${fullChoice.account}：下次标准启动时检查当前配置；不满足条件时使用基础观战键位。`
-                : '打开 Steam 并完成游戏配置检查后，可为当前账号选择。'
-            }
-          />
-          {fullChoice?.enabled ? (
-            <p>退出游戏后恢复启动前的本机键位；发生冲突时保留当前修改。</p>
-          ) : null}
-          {fullError ? <StatusBanner tone="warning">{fullError}</StatusBanner> : null}
+          {status?.nativeHudToggle ? <p>按 H 切换 CS2 原生 HUD</p> : null}
           {status?.spectatorWarning ? (
             <StatusBanner tone="warning">{status.spectatorWarning}</StatusBanner>
           ) : null}
@@ -202,8 +150,8 @@ export function Cs2LaunchSettings() {
         <p>无边框窗口 · 分辨率适配工作台</p>
         <p>首次先安装 GSI，并在 OBS 启用 WebSocket 服务器、连接并检查场景。</p>
         <p>
-          本次启动使用国际服、开发者控制台与 OBS 游戏捕获兼容选项，并临时绑定数字键 1–9 与 0
-          用于观战，退出游戏后恢复原键位。
+          解说配置包含数字键 1–9 与 0 的观战选择及 CS2 原生 HUD 切换。
+          键位无法应用或恢复时会显示原因。
         </p>
         <div>
           <code>-console -allow_third_party_software -worldwide</code>
@@ -215,7 +163,10 @@ export function Cs2LaunchSettings() {
             本次帧率同时应用到游戏配置和启动时加载的配置文件，退出后恢复。存在无法处理的冲突时会提示检查配置。
           </p>
         </div>
-        <p>退出工作台或退出 Mizar 时关闭本次游戏并恢复原设置；隐藏工作区保留游戏。</p>
+        <p>
+          退出工作台或退出 Mizar
+          时关闭受管游戏并恢复原设置；接入的已有游戏继续运行，隐藏工作区也保留游戏。
+        </p>
       </details>
       {error || statusError ? (
         <StatusBanner tone="danger">{error || statusError}</StatusBanner>

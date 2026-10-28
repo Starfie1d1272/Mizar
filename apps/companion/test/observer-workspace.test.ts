@@ -716,3 +716,31 @@ it.each(['portable', 'installed'])(
     }
   },
 );
+
+it('does not hide the native HUD on connect, retry or reconnect in qualified toggle mode', () =>
+  configuredFixture(async ({ settings, request }) => {
+    await settings.configureGame({ autoConnect: true, hideGameHud: true });
+    const base = {
+      game: '42-1',
+      job: 'Local\\MizarObserver-test',
+      useMulnx: true,
+      nativeHudToggle: true,
+    };
+    const launch = async () => {
+      const prepared = (await request({ action: 'prepare', ...base })).json<{ revision: string }>();
+      return request({
+        action: 'start-configured',
+        executable: driver,
+        ...base,
+        revision: prepared.revision,
+      });
+    };
+    expect((await launch()).statusCode).toBe(200);
+    expect((await launch()).statusCode).toBe(200);
+    settings.setConnection({ ...settings.configured()!, programEndpoint: '127.0.0.1:27022' });
+    expect((await launch()).statusCode).toBe(200);
+    expect(commands.send).toHaveBeenCalledTimes(2);
+    for (const [command] of commands.send.mock.calls) {
+      expect(command).not.toContain('cl_draw_only_deathnotices');
+    }
+  }));

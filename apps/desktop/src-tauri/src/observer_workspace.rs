@@ -17,6 +17,12 @@ fn request(log: &DesktopLog, body: serde_json::Value) -> Result<serde_json::Valu
 
 pub fn active() -> bool { ACTIVE.load(Ordering::Acquire) }
 
+fn native_toggle_session(log: &DesktopLog) -> Result<bool, String> {
+    let store = crate::cs2_session::SessionStore::new(log.state_root.clone());
+    Ok(store.load()?.is_some_and(|context| context["nativeHudToggle"] == true && context["spectatorCfg"] == true)
+        || store.mulnx_observer_native()?)
+}
+
 pub fn stop(log: &DesktopLog) -> Result<(), String> {
     if ACTIVE.load(Ordering::Acquire) {
         request(log, serde_json::json!({"action":"stop"}))?;
@@ -28,7 +34,7 @@ pub fn stop(log: &DesktopLog) -> Result<(), String> {
 /// End game automation only at the production/control boundary, independently of auxiliary enablement.
 pub fn finish(log: &DesktopLog) -> Result<(), String> {
     let observer = stop(log);
-    let hud = crate::observer_hud::restore(log);
+    let hud = native_toggle_session(log).and_then(|native| if native { Ok(()) } else { crate::observer_hud::restore(log) });
     production_exit::cleanup_results(observer, hud)
 }
 
@@ -54,6 +60,7 @@ pub async fn observer_command(window: tauri::WebviewWindow, app: tauri::AppHandl
         let log = app.state::<DesktopLog>();
         log.event("observer_workspace", "begin", Some(&format!("action={action}")));
         let mut automation = None;
+        let mut cfg_ready = false;
         let result: Result<(), String> = (|| {
             if action == "stop" {
                 request(&log, serde_json::json!({"action":"stop"}))?;
@@ -65,12 +72,35 @@ pub async fn observer_command(window: tauri::WebviewWindow, app: tauri::AppHandl
                 app.state::<crate::updates::PendingUpdate>().check()?;
                 let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
                 let _cs2 = managed.lock().map_err(|_| "请等待游戏操作完成后重试。")?;
-                return crate::observer_hud::restore(&log);
+                return if native_toggle_session(&log)? { Ok(()) } else { crate::observer_hud::restore(&log) };
+            }
+            if action == "prepare-cfg" {
+                app.state::<production_exit::ExitGate>().check()?;
+                app.state::<crate::updates::PendingUpdate>().check()?;
+                let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+                let cs2 = managed.lock().map_err(|_| "请等待游戏操作完成后重试。")?;
+                if !cs2.has_external() { return Err("请先明确借用正在运行的外部 CS2。".into()); }
+                let store = crate::cs2_session::SessionStore::new(log.state_root.clone());
+                if store.spectator_pending() || store.full_spectator_pending() {
+                    return Err("请先完成上次观战键位恢复。".into());
+                }
+                let (context, game) = cs2.console_source()?.ok_or("当前借用游戏已失效或实例不唯一。")?;
+                if game.owned || !game.is_running() { return Err("当前外部游戏身份无法核实。".into()); }
+                let executable = context["executable"].as_str().ok_or("当前游戏安装位置无法核实。")?;
+                crate::cs2_spectator::install_hud(std::path::Path::new(executable), "h")?;
+                let (after, current) = cs2.console_source()?.ok_or("游戏实例已变化，请重新检查。")?;
+                if current.owned || !current.is_running() || current.pid != game.pid || current.created != game.created
+                    || after["executable"] != context["executable"] || store.spectator_pending() || store.full_spectator_pending() {
+                    return Err("游戏实例或恢复状态已变化，请重新检查。".into());
+                }
+                cfg_ready = true;
+                return Ok(());
             }
             if action == "preflight" {
                 let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
                 let cs2 = managed.lock().map_err(|_| "请等待游戏操作完成后重试。")?;
-                crate::observer_hud::preflight(&log, cs2.status()?["preferMulnx"] == true)?;
+                let native = cs2.console_source()?.is_some_and(|(context, _)| context["nativeHudToggle"] == true && context["spectatorCfg"] == true);
+                if !native { crate::observer_hud::preflight(&log, cs2.status()?["preferMulnx"] == true)?; }
                 return Ok(());
             }
             if action != "start" && action != "start-configured" { return Err("请选择连接或停止观察辅助。".into()); }
@@ -89,16 +119,17 @@ pub async fn observer_command(window: tauri::WebviewWindow, app: tauri::AppHandl
                 let use_mulnx = crate::mulnx_launch::observer_control_available(&cs2, &log);
                 automation = Some(use_mulnx);
                 let game_key = format!("{}-{}", game.pid, game.created);
-                let mut intent = serde_json::json!({"action":"prepare","game":game_key,"job":job,"useMulnx":use_mulnx});
+                let native_hud_toggle = context["nativeHudToggle"] == true && context["spectatorCfg"] == true;
+                let mut intent = serde_json::json!({"action":"prepare","game":game_key,"job":job,"useMulnx":use_mulnx,"nativeHudToggle":native_hud_toggle});
                 if let Some(revision) = expected_revision { intent["expectedRevision"] = revision.into(); }
                 let preparation = request(&log, intent)?;
                 if preparation["enabled"] != true { stop(&log)?; return Ok(()); }
                 if preparation["reuse"] == true { ACTIVE.store(true, Ordering::Release); return Ok(()); }
                 let mut body = serde_json::json!({"action":"start-configured","executable":executable,
-                    "game":game_key,"job":job,"revision":preparation["revision"],"useMulnx":use_mulnx});
+                    "game":game_key,"job":job,"revision":preparation["revision"],"useMulnx":use_mulnx,"nativeHudToggle":native_hud_toggle});
                 if preparation["hideGameHud"] == true {
                     body["hudOriginal"] = crate::observer_hud::snapshot(&log, std::path::Path::new(executable), &game)?.into();
-                } else { crate::observer_hud::restore(&log)?; }
+                } else if !native_hud_toggle { crate::observer_hud::restore(&log)?; }
                 ACTIVE.store(true, Ordering::Release);
                 // Keep the accepted program operation and HUD journal on auxiliary failure.
                 // Exit restores the original value; retry reuses the same game transaction.
@@ -112,6 +143,6 @@ pub async fn observer_command(window: tauri::WebviewWindow, app: tauri::AppHandl
             Ok(())
         })();
         log.event("observer_workspace", if result.is_ok() { "success" } else { "failure" }, result.as_ref().err().map(String::as_str));
-        result.map(|()| serde_json::json!({"useMulnx":automation}))
+        result.map(|()| if cfg_ready { serde_json::json!({"cfgReady":true}) } else { serde_json::json!({"useMulnx":automation}) })
     }).await.map_err(|error| format!("观察辅助操作需要重试：{error}"))?
 }

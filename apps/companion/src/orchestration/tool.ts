@@ -127,7 +127,7 @@ export class MulnxTool {
       return this.view();
     });
   }
-  prepare(cs2Path: string, consoleCapture = false, update = false) {
+  prepare(cs2Path: string, consoleCapture = false, update = false, spectatorCfg = false) {
     return this.run('mulnx_prepare', async () => {
       // Called only by the authenticated native host after its process and install checks.
       // Entry uses prepared local bytes. The explicit update action owns network discovery.
@@ -139,7 +139,7 @@ export class MulnxTool {
       if (!this.installed || this.installed.release.sha256 !== release.sha256)
         await this.install(release, cs2Path);
       const root = join(this.directory, this.installed!.directory, 'MulNX');
-      await this.configureLauncher(root, cs2Path, consoleCapture);
+      await this.configureLauncher(root, cs2Path, consoleCapture, spectatorCfg);
       const launcher = await safePath(root, 'CS2Injector/CS2Injector.exe');
       const launchProtocol = await this.readLaunchProtocol(root);
       this.launchProtocol = launchProtocol;
@@ -156,7 +156,12 @@ export class MulnxTool {
       throw error;
     }
   }
-  private async configureLauncher(root: string, cs2Path: string, consoleCapture = false) {
+  private async configureLauncher(
+    root: string,
+    cs2Path: string,
+    consoleCapture = false,
+    spectatorCfg = false,
+  ) {
     const config = await safePath(root, 'CS2Injector/CS2BootLoader/Config/config.yaml');
     const stat = await lstat(config);
     if (stat.size > 64 * 1024) throw new Error('mulnx_launcher_config_invalid');
@@ -166,41 +171,55 @@ export class MulnxTool {
     // JSON strings are YAML strings; retain upstream launch options and platform checks.
     const withPath = original.replace(/^path\s*:.*$/m, `path: ${JSON.stringify(cs2Path)}`);
     const ownership = join(root, 'mizar-console-options.json');
-    let owned: { original: string; managed: string } | undefined;
+    let owned: { original: string; managed: string; previous?: string | undefined } | undefined;
     try {
       owned = z
-        .object({ original: z.string().max(65536), managed: z.string().max(65536) })
+        .object({
+          original: z.string().max(65536),
+          managed: z.string().max(65536),
+          previous: z.string().max(65536).optional(),
+        })
         .parse(await readJson(root, 'mizar-console-options.json'));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
     const line = withPath.match(/^launchOptions\s*:.*$/m)?.[0];
-    let updated = withPath;
-    if (owned && line !== owned.managed && line !== owned.original)
+    if (!line) throw new Error('mulnx_launcher_config_unsupported');
+    if (owned && ![owned.original, owned.managed, owned.previous].includes(line))
       throw new Error('mulnx_console_ownership_conflict');
-    if (!consoleCapture && owned) {
-      updated = withPath.replace(/^launchOptions\s*:.*$/m, owned.original);
-    } else if (consoleCapture) {
-      updated = consoleLaunchOptions(withPath);
-      const managed = updated.match(/^launchOptions\s*:.*$/m)![0];
-      if (
-        !owned &&
-        managed !== line &&
-        !/(?:^|\s)-condebug(?:\s|$)/i.test(launchOptionsValue(withPath))
-      ) {
-        // Journal before mutation: a crash cannot lose ownership of our addition.
-        await atomicJson(ownership, { original: line, managed });
-      }
+    // Derive every requested combination from the saved user line. A transition
+    // record accepts both the old and new managed lines if a crash interrupts it.
+    const originalLine = owned?.original ?? line;
+    const baseline = withPath.replace(/^launchOptions\s*:.*$/m, originalLine);
+    let options = launchOptionsValue(baseline);
+    if (consoleCapture && !/(?:^|\s)-condebug(?:\s|$)/i.test(options))
+      options = `${options} -condebug`.trim();
+    if (
+      spectatorCfg &&
+      !/(?:^|\s)\+exec\s+(?:"mizar_observer\.cfg"|mizar_observer\.cfg)(?=\s|$)/i.test(options)
+    )
+      options = `${options} +exec mizar_observer.cfg`.trim();
+    const baselineOptions = launchOptionsValue(baseline);
+    const managedLine =
+      options === baselineOptions ? originalLine : `launchOptions: ${JSON.stringify(options)}`;
+    const updated = withPath.replace(/^launchOptions\s*:.*$/m, managedLine);
+    if (managedLine !== originalLine || owned) {
+      // The previous accepted line makes both sides of an interrupted rename recoverable.
+      await atomicJson(ownership, { original: originalLine, managed: managedLine, previous: line });
     }
     const temporary = `${config}.${randomUUID()}.tmp`;
     try {
       await writeFile(temporary, updated, { flag: 'wx' });
+      if ((await readFile(config, 'utf8')) !== original)
+        throw new Error('mulnx_console_ownership_conflict');
       await rename(temporary, config);
-      if (!consoleCapture && owned) await rm(ownership);
+      if (managedLine === originalLine) await rm(ownership, { force: true });
+      else await atomicJson(ownership, { original: originalLine, managed: managedLine });
     } finally {
       await rm(temporary, { force: true });
     }
   }
+
   private async install(release: MulnxRelease, cs2Path: string) {
     await safePath(this.directory);
     const extractor = await safePath(this.bundle, '7zr.exe');
