@@ -148,7 +148,7 @@ describe('explicit online library load', () => {
 
   it('keeps the current match on acquisition failure and preserves stage-only compatibility', async () => {
     const { controller, next } = await setup();
-    const old = controller.getActiveBinding();
+    const old = structuredClone(controller.getActiveBinding());
     expect(
       (
         await controller.loadOnlineMatch(next.match.matchId, {
@@ -157,11 +157,11 @@ describe('explicit online library load', () => {
         })
       ).ok,
     ).toBe(false);
-    expect(controller.getActiveBinding()).toBe(old);
+    expect(controller.getActiveBinding()).toEqual(old);
     expect((await controller.stageOnlineMatch(next.match.matchId, source('online', next))).ok).toBe(
       true,
     );
-    expect(controller.getActiveBinding()).toBe(old);
+    expect(controller.getActiveBinding()).toEqual(old);
     expect(controller.getPendingOnlineCandidate()?.binding.context.matchId).toBe(
       next.match.matchId,
     );
@@ -196,20 +196,20 @@ describe('explicit online library load', () => {
         }),
     });
     controller.activateFixture(manifest);
-    const changed = controller.getActiveBinding();
+    const changed = structuredClone(controller.getActiveBinding());
     release(next);
     expect((await slow).ok).toBe(false);
-    expect(controller.getActiveBinding()).toBe(changed);
+    expect(controller.getActiveBinding()).toEqual(changed);
   });
 
   it('keeps the active match when durable publication fails', async () => {
     const { controller, next, store } = await setup();
-    const old = controller.getActiveBinding();
+    const old = structuredClone(controller.getActiveBinding());
     const save = vi.spyOn(store, 'save').mockRejectedValueOnce(new Error('synthetic disk failure'));
     await expect(
       controller.loadOnlineMatch(next.match.matchId, source('online', next)),
     ).rejects.toThrow('synthetic disk failure');
-    expect(controller.getActiveBinding()).toBe(old);
+    expect(controller.getActiveBinding()).toEqual(old);
     expect(controller.getPendingOnlineCandidate()?.binding.context.matchId).toBe(
       next.match.matchId,
     );

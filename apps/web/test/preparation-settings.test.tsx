@@ -9,7 +9,6 @@ const mocks = vi.hoisted(() => ({
     ready: Promise.resolve(false),
     finish: vi.fn().mockResolvedValue({ reason: 'not_owned', message: '' }),
   })),
-  captureUnavailable: false,
   obsCommand:
     vi.fn<
       (
@@ -30,26 +29,7 @@ vi.mock('../src/workspace/obs-client', () => ({
     passwordConfigured: true,
     video: null,
     findings: [],
-    programEvidence: mocks.captureUnavailable
-      ? {
-          state: 'measured',
-          collection: 'mizar',
-          sceneId: 'gameplay',
-          composition: 'gameplay_overlay',
-          sources: [],
-          capture: {
-            kind: 'game_capture',
-            mode: 'window',
-            target: 'cs2.exe',
-            targetAvailable: false,
-            cs2WindowCount: 0,
-            videoActive: false,
-            videoShowing: false,
-            width: 0,
-            height: 0,
-          },
-        }
-      : null,
+    programEvidence: null,
   }),
   obsCommand: mocks.obsCommand,
   beginObsConfiguration: mocks.beginObsConfiguration,
@@ -69,7 +49,6 @@ beforeEach(() => {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
-  mocks.captureUnavailable = false;
   mocks.obsCommand.mockReset().mockResolvedValue({ findings: [] });
   mocks.invoke.mockReset().mockResolvedValue(null);
 });

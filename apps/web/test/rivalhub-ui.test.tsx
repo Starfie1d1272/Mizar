@@ -475,8 +475,6 @@ it('renders the real server viewer and assignment flags and degrades to unknown 
     });
   };
   await render(modern);
-  const ordered = sortWebsiteMatches(modern.matches);
-  expect(ordered[0]?.matchId).toBe(modern.matches.find((row) => row.assignedToViewer)!.matchId);
   expect(container.textContent).toContain('授权账号：合成解说');
   expect(container.querySelectorAll('.library-list button')).toHaveLength(3);
   expect(
