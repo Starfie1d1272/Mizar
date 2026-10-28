@@ -46,6 +46,16 @@ export function ObserverHints() {
   const reconnecting = enabled && runtime?.health?.state === 'reconnecting';
   const connecting = enabled && runtime?.health?.state === 'connecting';
   if (!observer && !enabled) return null;
+  if (
+    observer?.state === 'ready' &&
+    hints.length === 0 &&
+    !pending &&
+    !needsRecovery &&
+    !reconnecting &&
+    !connecting &&
+    !error
+  )
+    return null;
   const labels = {
     connecting: '连接早源',
     paused: '比赛暂停',
@@ -128,13 +138,6 @@ export function ObserverHints() {
                 ? '保持上次校准'
                 : '尚未校准'}
           </StatusPill>
-          {hints.length === 0 ? (
-            <p>
-              {observer.waitingReason === 'buffering' && observer.nextWindowSeconds !== null
-                ? `正在积累预告，约 ${Math.ceil(observer.nextWindowSeconds)} 秒后进入提示窗口`
-                : '等待早源事件'}
-            </p>
-          ) : null}
         </>
       ) : null}
       {error ? <p role="alert">{error}</p> : null}
