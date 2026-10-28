@@ -10,6 +10,8 @@ import type { ObsRpc } from '../src/obs/reconcile.js';
 import { MusicStore } from '../src/music/store.js';
 import { MusicDirector } from '../src/music/director.js';
 import { ownedMusicInput } from '../src/music/obs-provider.js';
+import { ObsAudioRouting } from '../src/obs/audio-routing.js';
+import { obsDesiredScenes } from '../src/obs/desired-state.js';
 import type { MusicTruth } from '../src/music/cues.js';
 import { musicWav, MediaObs } from './music-fixtures.js';
 
@@ -17,7 +19,7 @@ const directories: string[] = [];
 afterEach(async () => {
   await Promise.all(directories.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
-async function rig() {
+async function rig(monitorSafe: () => Promise<boolean> = () => Promise.resolve(false)) {
   const directory = await mkdtemp(join(tmpdir(), 'mizar-music-'));
   directories.push(directory);
   const store = new MusicStore(directory);
@@ -67,6 +69,7 @@ async function rig() {
     () => truth,
     () => time,
     () => 0,
+    monitorSafe,
   );
   return {
     store,
@@ -1552,6 +1555,131 @@ it('monitors only owned music inputs and reads back changes and disconnection', 
   r.obs.disconnected = true;
   await r.step();
   expect(r.director.get().monitor).toBe('unknown');
+  await r.director.close();
+});
+
+it('enables new monitoring only after a safe routing check and keeps explicit or OBS changes', async () => {
+  let safe = false;
+  const r = await rig(() => Promise.resolve(safe));
+  await r.step();
+  expect(r.obs.bgm().monitor).toBe('OBS_MONITORING_TYPE_NONE');
+  expect(r.director.get().monitorPending).toBe(true);
+  safe = true;
+  await r.step();
+  expect(r.obs.bgm().monitor).toBe('OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT');
+  r.obs.bgm().monitor = 'OBS_MONITORING_TYPE_NONE';
+  await r.step();
+  expect(r.obs.bgm().monitor).toBe('OBS_MONITORING_TYPE_NONE');
+  await r.director.monitor(false);
+  const reloaded = new MusicStore(r.directory);
+  await reloaded.load();
+  expect(reloaded.state.monitorPreference).toBe(false);
+  await r.step();
+  expect(r.obs.bgm().monitor).toBe('OBS_MONITORING_TYPE_NONE');
+  await r.director.close();
+});
+
+it('connects a new technical cue to monitoring only after independent routing is ready', async () => {
+  const routingDir = await mkdtemp(join(tmpdir(), 'music-routing-'));
+  directories.push(routingDir);
+  const routing = new ObsAudioRouting(join(routingDir, 'routing.json'));
+  const endpoint = 'ws://127.0.0.1:4455';
+  const desired = obsDesiredScenes('http://127.0.0.1:3000');
+  const roles = [
+    { inputUuid: 'game', inputName: 'Game', inputKind: 'wasapi_process_output_capture' },
+    { inputUuid: 'remote', inputName: 'Remote', inputKind: 'wasapi_process_output_capture' },
+    { inputUuid: 'mic', inputName: 'Mic', inputKind: 'wasapi_input_capture' },
+  ];
+  let desktop = true;
+  const obs: ObsRpc = {
+    call: async (type) => {
+      if (type === 'GetVersion')
+        return {
+          availableRequests: [
+            'GetInputList',
+            'GetInputSettings',
+            'GetSceneCollectionList',
+            'GetSpecialInputs',
+            'GetSceneList',
+            'GetSceneItemList',
+            'GetGroupSceneItemList',
+          ],
+        };
+      if (type === 'GetSceneCollectionList') return { currentSceneCollectionName: 'Mizar' };
+      if (type === 'GetSpecialInputs') return desktop ? { desktop1: 'Desktop' } : {};
+      if (type === 'GetSceneList') return { scenes: desired };
+      if (type === 'GetInputList')
+        return { inputs: [...roles, ...((await r.obs.call('GetInputList')).inputs as object[])] };
+      if (type === 'GetSceneItemList')
+        return {
+          sceneItems: [
+            ...roles.map((input) => ({ sourceUuid: input.inputUuid, sceneItemEnabled: true })),
+            ...[...r.obs.inputs.values()].map((input) => ({
+              sourceUuid: input.uuid,
+              sceneItemEnabled: true,
+            })),
+          ],
+        };
+      throw new Error(type);
+    },
+  };
+  const r: Awaited<ReturnType<typeof rig>> = await rig(() =>
+    routing.musicMonitorSafe(obs, endpoint, {
+      owner: r.store.state.owner,
+      sources: r.store.state.sources,
+      baseUrl: 'http://127.0.0.1:3000',
+    }),
+  );
+  await routing.seedAutomatic(obs, endpoint, {
+    game: 'game',
+    remoteCommentary: 'remote',
+    microphone: 'mic',
+  });
+  r.truth.program.map.phase = 'live';
+  r.truth.program.map.roundNumber = 5;
+  r.truth.program.clock = { phase: 'paused', endsInSeconds: 40 };
+  await r.step();
+  expect(r.director.get().bgm?.group).toBe('technical');
+  expect(r.director.get().playback).toBe('playing');
+  expect(r.director.get().monitor).toBe('disabled');
+  expect(r.director.get().monitorPending).toBe(true);
+  desktop = false;
+  await r.step();
+  expect(r.director.get().monitor).toBe('enabled');
+  expect(r.obs.bgm().monitor).toBe('OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT');
+  await r.director.close();
+});
+
+it('preserves the unknown preference of old music state', async () => {
+  const r = await rig(() => Promise.resolve(true));
+  const legacy = structuredClone(r.store.state) as Partial<typeof r.store.state>;
+  delete legacy.monitorPreference;
+  delete legacy.monitorConfigured;
+  await writeFile(join(r.directory, 'state.json'), JSON.stringify(legacy));
+  await r.store.load();
+  await r.step();
+  expect(r.store.state.monitorPreference).toBe(null);
+  expect(r.obs.bgm().monitor).toBe('OBS_MONITORING_TYPE_NONE');
+  expect(r.director.get().monitor).toBe('disabled');
+  await r.director.close();
+});
+
+it('does not repeat an automatic monitor write after its acknowledgement is lost', async () => {
+  const r = await rig(() => Promise.resolve(true));
+  let writes = 0;
+  r.obs.intercept = (type) => {
+    if (type === 'SetInputAudioMonitorType') {
+      writes++;
+      return Promise.reject(new Error('lost acknowledgement'));
+    }
+    return Promise.resolve();
+  };
+  await r.step();
+  r.obs.intercept = undefined;
+  await r.step();
+  expect(writes).toBe(1);
+  expect(r.obs.bgm().monitor).toBe('OBS_MONITORING_TYPE_NONE');
+  expect(r.director.get().monitor).toBe('disabled');
   await r.director.close();
 });
 
