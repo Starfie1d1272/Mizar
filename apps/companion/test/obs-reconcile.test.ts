@@ -342,6 +342,19 @@ it('does not duplicate game-capture audio with default desktop capture', async (
   expect(obs.calls.filter((type) => /^(Set|Create|Remove)/.test(type))).toEqual([]);
 });
 
+it('disables capture audio only when creating the managed game source', async () => {
+  const obs = new FakeObs();
+  await ensureObsConfiguration(obs, baseUrl);
+  const capture = obs.inputs.get(OBS_CAPTURE_INPUT)!;
+  expect(capture.settings.capture_audio).toBe(false);
+  capture.settings.capture_audio = true;
+  await ensureObsConfiguration(obs, baseUrl);
+  expect(capture.settings.capture_audio).toBe(true);
+  delete capture.settings.capture_audio;
+  await ensureObsConfiguration(obs, baseUrl);
+  expect(capture.settings.capture_audio).toBeUndefined();
+});
+
 it('takes and closes the compact source only after verifying gameplay and HUD state', async () => {
   const obs = new FakeObs();
   await repairObsConfiguration(obs, baseUrl);

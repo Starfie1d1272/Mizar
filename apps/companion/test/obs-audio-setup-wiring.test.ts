@@ -14,7 +14,7 @@ import { MusicStore } from '../src/music/store.js';
 import { MusicDirector } from '../src/music/director.js';
 import { registerMixerRoutes } from '../src/obs/mixer-routes.js';
 import type { MixerCommandResult, MixerStatus } from '@mizar/protocol/mixer';
-import { musicProgram } from './music-fixtures.js';
+import { musicProgram, musicWav } from './music-fixtures.js';
 
 const fixture = vi.hoisted(() => ({ client: null as FakeObs | null }));
 vi.mock('obs-websocket-js', async (original) => {
@@ -52,6 +52,8 @@ class FakeObs extends EventEmitter {
   transforms = new Map<number, Record<string, unknown>>();
   muted = new Map<string, boolean>();
   volumes = new Map<string, number>();
+  monitors = new Map<string, string>();
+  mediaStates = new Map<string, string>();
   offline = false;
   invalidateOnMuteRead = 0;
   windows = [
@@ -207,6 +209,8 @@ class FakeObs extends EventEmitter {
       case 'GetInputSettings':
         if (input && this.onInputSettings) await this.onInputSettings(input);
         return { inputSettings: input!.settings };
+      case 'GetInputDefaultSettings':
+        return { defaultInputSettings: {} };
       case 'GetInputMute':
         if (this.invalidateOnMuteRead > 0 && --this.invalidateOnMuteRead === 0)
           this.emit('InputRemoved', { inputUuid: data.inputUuid });
@@ -228,7 +232,26 @@ class FakeObs extends EventEmitter {
         });
         return {};
       case 'GetInputAudioMonitorType':
-        return { monitorType: 'OBS_MONITORING_TYPE_NONE' };
+        return {
+          monitorType: this.monitors.get(String(data.inputUuid)) ?? 'OBS_MONITORING_TYPE_NONE',
+        };
+      case 'SetInputAudioMonitorType':
+        this.monitors.set(String(data.inputUuid), String(data.monitorType));
+        return {};
+      case 'GetMediaInputStatus':
+        return {
+          mediaState: this.mediaStates.get(String(data.inputUuid)) ?? 'OBS_MEDIA_STATE_STOPPED',
+          mediaCursor: 0,
+          mediaDuration: 10000,
+        };
+      case 'TriggerMediaInputAction':
+        this.mediaStates.set(
+          String(data.inputUuid),
+          data.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART'
+            ? 'OBS_MEDIA_STATE_PLAYING'
+            : 'OBS_MEDIA_STATE_STOPPED',
+        );
+        return {};
       case 'GetInputAudioTracks':
         return {
           inputAudioTracks: Object.fromEntries([1, 2, 3, 4, 5, 6].map((x) => [String(x), true])),
@@ -298,13 +321,17 @@ class FakeObs extends EventEmitter {
           throw new Error('settings_receipt_lost');
         }
         return {};
-      case 'CreateSceneItem':
-        this.addItem(
+      case 'CreateSceneItem': {
+        const item = this.addItem(
           String(data.sceneName),
-          String(data.sourceName),
+          typeof data.sourceName === 'string'
+            ? data.sourceName
+            : [...this.inputs.values()].find((item) => item.inputUuid === data.sourceUuid)!
+                .inputName,
           Boolean(data.sceneItemEnabled),
         );
-        return {};
+        return { sceneItemId: item.sceneItemId };
+      }
       case 'SetSceneItemEnabled': {
         const item = this.scenes
           .get(String(data.sceneName))!
@@ -520,6 +547,80 @@ it('creates scenes and audio through the real configure owner and seeds game pol
     expect(await adapter.ensure()).toEqual([]);
     expect((await routing.gameBinding()).binding).toBeNull();
     expect((await new ObsAudioRouting(join(dir, 'routing')).gameBinding()).binding).toBeNull();
+    await adapter.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+it('enables technical music monitoring through the scenes created by the real setup', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'mizar-music-setup-'));
+  try {
+    const obs = new FakeObs(true);
+    fixture.client = obs;
+    const routing = new ObsAudioRouting(join(dir, 'routing'));
+    const adapter = new ObsAdapter(
+      new ObsConfigStore(join(dir, 'obs.json')),
+      base,
+      () => {},
+      routing,
+      {
+        owner: new RemoteCommentary(join(dir, 'preference')),
+        journal: join(dir, 'probe'),
+      },
+    );
+    expect(await adapter.ensure()).toEqual([]);
+    const capture = obs.inputs.get(OBS_CAPTURE_INPUT)!;
+    expect(capture.settings.capture_audio).toBe(false);
+    const store = new MusicStore(join(dir, 'music'));
+    await store.load();
+    const options = { owner: store.state.owner, sources: store.state.sources, baseUrl: base };
+    expect(await routing.musicMonitorSafe(obs, 'ws://127.0.0.1:4455', options)).toBe(true);
+    capture.settings.capture_audio = true;
+    expect(await routing.musicMonitorSafe(obs, 'ws://127.0.0.1:4455', options)).toBe(false);
+    delete capture.settings.capture_audio;
+    expect(await routing.musicMonitorSafe(obs, 'ws://127.0.0.1:4455', options)).toBe(false);
+    capture.settings.capture_audio = false;
+    const track = await store.add('合成.wav', musicWav());
+    const config = structuredClone(store.state.config);
+    config.groups.technical.tracks = [track];
+    config.groups.technical.fadeInMs = 0;
+    await store.configure(config);
+    const program = musicProgram();
+    program.status = { context: 'fresh', telemetry: 'fresh', identity: 'matched' };
+    program.series!.bindingState = 'bound';
+    program.map.phase = 'live';
+    program.map.roundNumber = 5;
+    program.clock = { phase: 'paused', endsInSeconds: 40 };
+    let sessionError: unknown;
+    const director = new MusicDirector(
+      store,
+      {
+        session: (run) =>
+          run(obs, 1).catch((error: unknown) => {
+            sessionError = error;
+            throw error;
+          }),
+        close: () => Promise.resolve(),
+      },
+      () => ({ program, active: 'gameplay', production: true }),
+      Date.now,
+      Math.random,
+      () =>
+        routing.musicMonitorSafe(obs, 'ws://127.0.0.1:4455', {
+          ...options,
+          sources: store.state.sources,
+        }),
+    );
+    await director.tick();
+    expect(sessionError).toBeUndefined();
+    expect(director.get()).toMatchObject({ connection: 'connected', bgm: { group: 'technical' } });
+    expect(director.get().playback).toBe('playing');
+    expect(director.get().monitor).toBe('enabled');
+    expect(obs.monitors.get(store.state.sources.bgm!)).toBe(
+      'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
+    );
+    await director.close();
     await adapter.close();
   } finally {
     await rm(dir, { recursive: true, force: true });

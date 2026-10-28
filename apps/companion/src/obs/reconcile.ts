@@ -373,6 +373,7 @@ export async function repairObsConfiguration(
           window: CS2_WINDOW_FALLBACK,
           priority: 2,
           capture_cursor: false,
+          capture_audio: false,
         },
         sceneItemEnabled: true,
       });

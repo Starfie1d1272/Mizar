@@ -1167,6 +1167,18 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           production.get().mode !== 'preparation' &&
           projectionCoordinator.getCurrent().operator.matchContext.origin !== 'fixture',
       }),
+      Date.now,
+      Math.random,
+      async (obs) => {
+        const config = await obsConfigStore.read();
+        return (
+          (await obsAudioRouting?.musicMonitorSafe(obs, `ws://${config.host}:${config.port}`, {
+            owner: musicStore.state.owner,
+            sources: musicStore.state.sources,
+            baseUrl: `http://${options.host ?? '127.0.0.1'}:${options.port ?? 3000}`,
+          })) ?? false
+        );
+      },
     );
     registerMusicRoutes(app, musicStore, musicDirector, localWebTransport.getOriginPolicy());
     if (obsAdapter)
@@ -1351,8 +1363,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     !demoTest.get().active;
   registerObserverSettings(app, observerSettings, localWebTransport.getOriginPolicy());
   const observerSettingsUnsubscribe = observerSettings.subscribe((kind) => {
-    if (kind === 'lead') projectionCoordinator.refreshAssist();
-    else if (kind !== 'game') projectionCoordinator.resetAssist();
+    if (kind !== 'game') projectionCoordinator.refreshAssist();
   });
   app.addHook('onClose', () => {
     observerSettingsUnsubscribe();

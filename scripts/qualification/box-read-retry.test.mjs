@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BoxClient, digest } from './box-sync.mjs';
 import { Buffer } from 'node:buffer';
+import { EventEmitter } from 'node:events';
+import { apiRequest } from './box-upload.mjs';
 
 vi.mock('node:timers/promises', () => ({
   setTimeout: (ms, value, { signal } = {}) =>
@@ -80,6 +82,82 @@ describe('Box read request recovery', () => {
     expect(output.mock.calls.flat().join('\n')).not.toContain('PRIVATE-URL');
   });
 
+  it('restarts a stalled download after 60 seconds rather than waiting for the total deadline', async () => {
+    const download = vi
+      .fn()
+      .mockImplementationOnce(
+        (_url, options) =>
+          new Promise((_resolve, reject) => {
+            options.signal.addEventListener('abort', () =>
+              reject(new DOMException('aborted', 'AbortError')),
+            );
+          }),
+      )
+      .mockResolvedValueOnce(new Response('complete'));
+    const api = vi
+      .fn()
+      .mockResolvedValue(new Response('"https://box.nju.edu.cn/seafhttp/private"'));
+    const box = new BoxClient('PRIVATE-TOKEN', undefined, api, download);
+    const pending = box.hash('/Resources/v1.8.0/pack.zip');
+    await vi.advanceTimersByTimeAsync(60999);
+    expect(download).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(pending).resolves.toEqual({ size: 8, sha256: digest(Buffer.from('complete')) });
+    expect(download).toHaveBeenCalledTimes(2);
+  });
+
+  it('allows a long download while chunks continue to arrive', async () => {
+    let stream;
+    const body = new globalThis.ReadableStream({
+      start(controller) {
+        stream = controller;
+        controller.enqueue(new globalThis.TextEncoder().encode('first'));
+      },
+    });
+    const download = vi.fn().mockResolvedValue(new Response(body));
+    const api = vi
+      .fn()
+      .mockResolvedValue(new Response('"https://box.nju.edu.cn/seafhttp/private"'));
+    const box = new BoxClient('PRIVATE-TOKEN', undefined, api, download);
+    const pending = box.hash('/Resources/v1.8.0/pack.zip');
+    await vi.advanceTimersByTimeAsync(59000);
+    stream.enqueue(new globalThis.TextEncoder().encode('second'));
+    await vi.advanceTimersByTimeAsync(59000);
+    stream.close();
+    await expect(pending).resolves.toEqual({
+      size: 11,
+      sha256: digest(Buffer.from('firstsecond')),
+    });
+    expect(download).toHaveBeenCalledTimes(1);
+  });
+
+  it('restarts the full hash when a partial response stops making progress', async () => {
+    const download = vi
+      .fn()
+      .mockImplementationOnce(
+        async (_url, options) =>
+          new Response(
+            new globalThis.ReadableStream({
+              start(controller) {
+                controller.enqueue(new globalThis.TextEncoder().encode('partial'));
+                options.signal.addEventListener('abort', () =>
+                  controller.error(new DOMException('aborted', 'AbortError')),
+                );
+              },
+            }),
+          ),
+      )
+      .mockResolvedValueOnce(new Response('complete'));
+    const api = vi
+      .fn()
+      .mockResolvedValue(new Response('"https://box.nju.edu.cn/seafhttp/private"'));
+    const box = new BoxClient('PRIVATE-TOKEN', undefined, api, download);
+    const pending = box.hash('/Resources/v1.8.0/pack.zip');
+    await vi.advanceTimersByTimeAsync(61000);
+    await expect(pending).resolves.toEqual({ size: 8, sha256: digest(Buffer.from('complete')) });
+    expect(download).toHaveBeenCalledTimes(2);
+  });
+
   it('bounds an expired read to three independent request deadlines', async () => {
     vi.spyOn(AbortSignal, 'timeout').mockImplementation(() =>
       AbortSignal.abort(new DOMException('PRIVATE-TIMEOUT', 'TimeoutError')),
@@ -117,6 +195,56 @@ describe('Box read request recovery', () => {
       '已尝试1次',
     );
     await vi.advanceTimersByTimeAsync(3000);
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a mutation only when the HTTPS transport proves no request was sent', async () => {
+    const transport = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error('connection failed'), {
+          code: 'ETIMEDOUT',
+          retrySafeMutation: true,
+        }),
+      )
+      .mockResolvedValueOnce(ok());
+    const pending = client(transport).api('sync-batch-copy-item', undefined, 'POST', { file: 'x' });
+    await vi.advanceTimersByTimeAsync(1000);
+    await expect(pending).resolves.toEqual({ repo_name: 'Mizar' });
+    expect(transport).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([false, true])(
+    'marks mutation errors safe only before TLS connection: %s',
+    async (connected) => {
+      const request = () => {
+        const outgoing = new EventEmitter();
+        outgoing.setTimeout = () => {};
+        outgoing.end = () => {
+          Promise.resolve().then(() => {
+            if (connected) outgoing.emit('socket', { connecting: false, secureConnecting: false });
+            outgoing.emit('error', Object.assign(new Error('failed'), { code: 'ETIMEDOUT' }));
+          });
+        };
+        return outgoing;
+      };
+      await expect(
+        apiRequest(
+          'https://box.nju.edu.cn/',
+          { method: 'POST', signal: AbortSignal.timeout(5000) },
+          request,
+        ),
+      ).rejects.toSatisfy((error) => Boolean(error.retrySafeMutation) === !connected);
+    },
+  );
+
+  it('preserves the uncertain outcome through the copy API stage for reconciliation', async () => {
+    const transport = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error('PRIVATE'), { code: 'ETIMEDOUT' }));
+    await expect(
+      client(transport).copy('/Resources/v1.0.0', '/Resources/v1.1.0', 'pack.zip'),
+    ).rejects.toMatchObject({ uploadOutcomeUnknown: true });
     expect(transport).toHaveBeenCalledTimes(1);
   });
 
@@ -211,6 +339,30 @@ describe('Box bounded recovery', () => {
     expect(box.hash).toHaveBeenCalledTimes(1);
     expect(transport).toHaveBeenCalledTimes(1);
   });
+  it('waits for a delayed upload to appear and verifies it without resending', async () => {
+    const { box, transport } = uploading({ safe: false });
+    box.list.mockResolvedValueOnce([]).mockResolvedValue([{ name: 'core.exe', type: 'file' }]);
+    box.hash.mockResolvedValue({ size: 4, sha256: digest(bytes) });
+    const pending = box.upload('/Runtime/v1.6.4', 'core.exe', bytes);
+    await vi.advanceTimersByTimeAsync(1000);
+    await pending;
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect(box.hash).toHaveBeenCalledTimes(1);
+  });
+  it('waits for a delayed pointer replacement while the previous bytes remain visible', async () => {
+    const { box, transport } = uploading({
+      safe: false,
+      entries: [{ name: 'core.exe', type: 'file' }],
+    });
+    box.hash
+      .mockResolvedValueOnce({ size: 3, sha256: digest(Buffer.from('old')) })
+      .mockResolvedValue({ size: 4, sha256: digest(bytes) });
+    const pending = box.upload('/Updates', 'core.exe', bytes, true);
+    await vi.advanceTimersByTimeAsync(1000);
+    await pending;
+    expect(box.hash).toHaveBeenCalledTimes(2);
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
   it('preserves a same-size different-content destination', async () => {
     const { box, transport } = uploading({
       entries: [{ name: 'core.exe', type: 'file' }],
@@ -219,11 +371,20 @@ describe('Box bounded recovery', () => {
     await expect(box.upload('/Runtime/v1.6.4', 'core.exe', bytes)).rejects.toThrow('不同内容');
     expect(transport).toHaveBeenCalledTimes(1);
   });
+  it('does not mark a failed reconciliation of an uncertain upload as safe to restart', async () => {
+    const { box } = uploading({ safe: false });
+    box.list.mockRejectedValue(Object.assign(new Error('read failed'), { retryableRead: true }));
+    await expect(box.upload('/Runtime/v1.6.4', 'core.exe', bytes)).rejects.toMatchObject({
+      retryableRead: false,
+    });
+  });
   it.each([{ safe: false }, { safe: true, replace: true }])(
     'does not replay uncertain/replace writes: %j',
     async ({ safe, replace }) => {
       const { box, transport } = uploading({ safe });
-      await expect(box.upload('/Updates', 'core.exe', bytes, replace)).rejects.toThrow();
+      const pending = expect(box.upload('/Updates', 'core.exe', bytes, replace)).rejects.toThrow();
+      await vi.advanceTimersByTimeAsync(60000);
+      await pending;
       expect(transport).toHaveBeenCalledTimes(1);
     },
   );
@@ -250,7 +411,7 @@ describe('Box bounded recovery', () => {
   });
 });
 
-it('cancels reconciliation at the same 15-minute upload budget', async () => {
+it('bounds reconciliation of a stalled read to 90 seconds', async () => {
   vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
     const controller = new globalThis.AbortController();
     globalThis.setTimeout(() => controller.abort(new DOMException('deadline', 'TimeoutError')), ms);
@@ -274,7 +435,7 @@ it('cancels reconciliation at the same 15-minute upload budget', async () => {
   );
   const pending = box.upload('/Runtime/v1.6.4', 'core.exe', Buffer.from('core'));
   const rejected = expect(pending).rejects.toThrow('timeout');
-  await vi.advanceTimersByTimeAsync(900000);
+  await vi.advanceTimersByTimeAsync(90000);
   await rejected;
   expect(transport).toHaveBeenCalledTimes(1);
 });

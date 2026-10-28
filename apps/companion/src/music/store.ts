@@ -35,6 +35,11 @@ const stateSchema = z
       .default(() => randomUUID()),
     master: z.number().finite().min(0).max(1).default(1),
     muted: z.boolean().default(false),
+    monitorPreference: z.boolean().nullable().default(null),
+    monitorConfigured: z
+      .object({ bgm: z.string().nullable(), stinger: z.string().nullable() })
+      .strict()
+      .default({ bgm: null, stinger: null }),
     held: z.boolean(),
     owner: z.string().uuid(),
     sources: z.object({ bgm: z.string().nullable(), stinger: z.string().nullable() }).strict(),
@@ -57,6 +62,8 @@ export class MusicStore {
     configRevision: randomUUID(),
     master: 1,
     muted: false,
+    monitorPreference: true,
+    monitorConfigured: { bgm: null, stinger: null },
     held: false,
     owner: randomUUID(),
     sources: { bgm: null, stinger: null },

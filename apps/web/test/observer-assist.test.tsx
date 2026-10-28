@@ -280,7 +280,7 @@ it('gives specific repair guidance for known startup causes and diagnostic conte
   expect(unknown).not.toContain('核对本场连接');
 });
 
-it('shows estimated timing and normal waiting separately from source recovery', () => {
+it('hides the hint area while no event is ready', () => {
   mocks.view.settings.enabled = true;
   const observer = {
     state: 'ready',
@@ -294,15 +294,12 @@ it('shows estimated timing and normal waiting separately from source recovery', 
   };
   mocks.observer = { state: 'live', current: { payload: { observer } } };
   act(() => root.render(<ObserverHints />));
-  expect(container.textContent).toContain('延迟 121.0 秒');
-  expect(container.textContent).toContain('保持上次校准');
-  expect(container.textContent).toContain('等待早源事件');
+  expect(container.querySelector('.workspace-observer-assist')).toBeNull();
   expect(container.querySelector('button')).toBeNull();
   observer.waitingReason = 'buffering';
   observer.nextWindowSeconds = 113;
   act(() => root.render(<ObserverHints />));
-  expect(container.textContent).toContain('正在积累预告，约 113 秒后进入提示窗口');
-  expect(container.textContent).not.toContain('正在对齐');
+  expect(container.querySelector('.workspace-observer-assist')).toBeNull();
 });
 
 it('orders private hints by actual remaining time, retains ties, expires locally and leaves input unchanged', () => {

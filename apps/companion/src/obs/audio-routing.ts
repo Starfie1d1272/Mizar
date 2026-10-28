@@ -9,6 +9,8 @@ import {
   type ObsAudioRoutingStatus,
 } from '@mizar/protocol/obs';
 import type { ObsRpc } from './reconcile.js';
+import { OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
+import { BP_COMPACT_INPUT, BP_COMPACT_PATH } from './bp-overlay.js';
 
 const roles = ['game', 'remoteCommentary', 'microphone'] as const;
 const stateSchema = z
@@ -31,6 +33,13 @@ const audioKinds = new Set([
   'wasapi_process_output_capture',
 ]);
 const videoKinds = new Set(['game_capture', 'window_capture']);
+const visualKinds = new Set([
+  'image_source',
+  'color_source',
+  'color_source_v3',
+  'text_gdiplus',
+  'text_gdiplus_v2',
+]);
 function records(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value)
     ? value.filter(
@@ -193,6 +202,103 @@ export class ObsAudioRouting {
         roles.map((role) => [role, state.bindings[role]!.inputUuid]),
       ) as Record<ObsAudioRole, string>,
     };
+  }
+  /** Fail closed unless all managed scenes have independent paths and no desktop capture. */
+  async musicMonitorSafe(
+    obs: ObsRpc,
+    endpoint: string,
+    music?: {
+      owner: string;
+      sources: { bgm: string | null; stinger: string | null };
+      baseUrl: string;
+    },
+  ): Promise<boolean> {
+    const managed = await this.managedBindings(obs, endpoint);
+    if (
+      !managed ||
+      (await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== OBS_COLLECTION
+    )
+      return false;
+    const specials = await obs.call('GetSpecialInputs');
+    if (
+      Object.entries(specials).some(
+        ([key, value]) => key.startsWith('desktop') && typeof value === 'string' && value,
+      )
+    )
+      return false;
+    const inputs = records((await obs.call('GetInputList')).inputs);
+    if (
+      Object.values(managed.ids).some(
+        (id) => inputs.find((i) => i.inputUuid === id)?.inputKind === 'wasapi_output_capture',
+      )
+    )
+      return false;
+    for (const scene of obsDesiredScenes('http://127.0.0.1:3000')) {
+      const items = records(
+        (await obs.call('GetSceneItemList', { sceneName: scene.sceneName })).sceneItems,
+      );
+      if (
+        Object.values(managed.ids).some(
+          (id) =>
+            items.filter((i) => i.sourceUuid === id && i.sceneItemEnabled === true).length !== 1,
+        )
+      )
+        return false;
+      for (const item of items) {
+        if (typeof item.sceneItemEnabled !== 'boolean') return false;
+        if (item.sceneItemEnabled !== true) continue;
+        if (item.isGroup === true || item.sourceType === 'OBS_SOURCE_TYPE_SCENE') return false;
+        const input = inputs.find((i) => i.inputUuid === item.sourceUuid);
+        if (!input || input.inputKind === 'wasapi_output_capture') return false;
+        const selected = Object.values(managed.ids).includes(String(input.inputUuid));
+        if (audioKinds.has(String(input.inputKind)) && !selected) return false;
+        if (['game_capture', 'window_capture'].includes(String(input.inputKind)) && !selected) {
+          const settings = (await obs.call('GetInputSettings', { inputUuid: input.inputUuid }))
+            .inputSettings;
+          if (!settings || typeof settings !== 'object') return false;
+          if ((settings as Record<string, unknown>).capture_audio !== false) return false;
+        }
+        if (
+          selected ||
+          videoKinds.has(String(input.inputKind)) ||
+          visualKinds.has(String(input.inputKind))
+        )
+          continue;
+        if (
+          music &&
+          input.inputKind === 'ffmpeg_source' &&
+          (['bgm', 'stinger'] as const).some(
+            (layer) =>
+              input.inputUuid === music.sources[layer] &&
+              input.inputName === `Mizar · ${layer === 'bgm' ? 'BGM' : 'Stinger'} · ${music.owner}`,
+          )
+        )
+          continue;
+        if (music && input.inputKind === 'browser_source') {
+          const desired = obsDesiredScenes(music.baseUrl).find(
+            (s) => s.browserInput === input.inputName,
+          );
+          const expected =
+            desired?.browserUrl ??
+            (input.inputName === BP_COMPACT_INPUT
+              ? new URL(BP_COMPACT_PATH, music.baseUrl).toString()
+              : null);
+          if (expected) {
+            const settings = (await obs.call('GetInputSettings', { inputUuid: input.inputUuid }))
+              .inputSettings;
+            if (
+              settings &&
+              typeof settings === 'object' &&
+              (settings as Record<string, unknown>).url === expected
+            )
+              continue;
+          }
+        }
+        return false;
+      }
+    }
+    const current = await this.managedBindings(obs, endpoint);
+    return current?.revision === managed.revision;
   }
   async read(obs: ObsRpc, endpoint: string): Promise<ObsAudioRoutingStatus> {
     const state = await this.load();
