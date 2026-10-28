@@ -61,11 +61,15 @@ export function MulnxToolControls({
     } catch (error) {
       setFailed(true);
       setMessage(
-        error instanceof Error
-          ? error.message
-          : action === 'stop'
-            ? '停止操作未完成；请核对游戏与退出状态，结果不明确时不要重复发送。'
-            : '操作失败，请重试。',
+        /mulnx_metadata_http_(403|429)\b/.test(
+          error instanceof Error ? error.message : String(error),
+        )
+          ? '无法检查 MulNX 更新：GitHub 拒绝了请求，可能已达到请求次数限制。请稍后重试。'
+          : error instanceof Error
+            ? error.message
+            : action === 'stop'
+              ? '停止操作未完成；请核对游戏与退出状态，结果不明确时不要重复发送。'
+              : '操作失败，请重试。',
       );
     } finally {
       running.current = false;

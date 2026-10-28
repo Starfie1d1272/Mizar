@@ -253,6 +253,32 @@ it('reports unknown MulNX stop once even on double confirmation', async () => {
   expect(container.textContent).not.toContain('已卸载');
   expect(stop.disabled).toBe(true);
 });
+it('explains a rejected MulNX update check and allows retry', async () => {
+  window.__TAURI_INTERNALS__ = { invoke: <T,>() => Promise.resolve(undefined as T) };
+  mocks.native.mockRejectedValueOnce(new Error('mulnx_metadata_http_403'));
+  act(() =>
+    root.render(
+      <MulnxToolControls
+        tool={{ installed: 'old', latest: null, busy: false, message: '', packs: [] }}
+      />,
+    ),
+  );
+  const update = [...container.querySelectorAll('button')].find(
+    (button) => button.textContent === '更新 MulNX',
+  )!;
+  await act(async () => {
+    update.click();
+    await Promise.resolve();
+  });
+  expect(container.textContent).toContain('GitHub 拒绝了请求');
+  expect(container.textContent).toContain('请稍后重试');
+  await act(async () => {
+    update.click();
+    await Promise.resolve();
+  });
+  expect(mocks.native).toHaveBeenCalledTimes(2);
+  expect(container.textContent).toContain('MulNX 版本准备已完成');
+});
 it('gives specific repair guidance for known startup causes and diagnostic context for unknown failures', () => {
   const view: ObserverRuntimeView = {
     active: false,
