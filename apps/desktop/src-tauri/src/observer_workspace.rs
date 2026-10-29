@@ -1,22 +1,38 @@
 //! Workbench intents use the verified game handle and the current desktop Job.
 use crate::{managed_cs2, observer_job, production_exit, startup_log::DesktopLog};
-use std::{sync::{Mutex, atomic::{AtomicBool, Ordering}}, time::{Instant, Duration}};
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    },
+    time::{Duration, Instant},
+};
 use tauri::Manager;
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 
 fn request(log: &DesktopLog, body: serde_json::Value) -> Result<serde_json::Value, String> {
     let token = production_exit::runtime_token(log)?;
     let timeout = if body["action"] == "pulse" { 1 } else { 18 };
-    let (code, value) = production_exit::request_with_identity(log, "POST", "/operator/runtime/observer",
-        &body.to_string(), Instant::now() + Duration::from_secs(timeout), Some(&token))?;
+    let (code, value) = production_exit::request_with_identity(
+        log,
+        "POST",
+        "/operator/runtime/observer",
+        &body.to_string(),
+        Instant::now() + Duration::from_secs(timeout),
+        Some(&token),
+    )?;
     if code != 200 || value["ok"] != true {
-        return Err(value["message"].as_str().unwrap_or("请检查本地服务后重试观察辅助连接。").into());
+        return Err(value["message"]
+            .as_str()
+            .unwrap_or("请检查本地服务后重试观察辅助连接。")
+            .into());
     }
     Ok(value)
 }
 
-pub fn active() -> bool { ACTIVE.load(Ordering::Acquire) }
-
+pub fn active() -> bool {
+    ACTIVE.load(Ordering::Acquire)
+}
 
 pub fn stop(log: &DesktopLog) -> Result<(), String> {
     if ACTIVE.load(Ordering::Acquire) {
@@ -34,23 +50,51 @@ pub fn finish(log: &DesktopLog) -> Result<(), String> {
 }
 
 pub fn pulse(app: &tauri::AppHandle, cs2: &managed_cs2::ManagedCs2) {
-    if !ACTIVE.load(Ordering::Acquire) { return; }
+    if !ACTIVE.load(Ordering::Acquire) {
+        return;
+    }
     let log = app.state::<DesktopLog>();
-    let valid = cs2.workspace_process().ok().flatten().is_some_and(|game| game.is_running());
+    let valid = cs2
+        .workspace_process()
+        .ok()
+        .flatten()
+        .is_some_and(|game| game.is_running());
     let result = if valid {
         request(&log, serde_json::json!({"action":"pulse"})).and_then(|value| {
-            if value["enabled"] == false { stop(&log) } else { Ok(()) }
+            if value["enabled"] == false {
+                stop(&log)
+            } else {
+                Ok(())
+            }
         })
-    } else { stop(&log) };
-    if let Err(error) = result { log.event("observer_lease", "failure", Some(&error)); }
+    } else {
+        stop(&log)
+    };
+    if let Err(error) = result {
+        log.event("observer_lease", "failure", Some(&error));
+    }
 }
 
 #[tauri::command]
-pub async fn observer_command(window: tauri::WebviewWindow, app: tauri::AppHandle,
-    action: String, endpoint: Option<String>, password: Option<String>, expected_revision: Option<String>) -> Result<serde_json::Value, String> {
+pub async fn observer_command(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    action: String,
+    endpoint: Option<String>,
+    password: Option<String>,
+    expected_revision: Option<String>,
+) -> Result<serde_json::Value, String> {
     if !["main", "workspace-left", "workspace-dock"].contains(&window.label())
-        && !(window.label() == "tool-review" && matches!(action.as_str(), "start-configured" | "connection-mode")
-            && window.url().ok().is_some_and(|url| url.path() == "/workspace/review" && matches!(url.query(), Some("kind=connection" | "kind=next-connection")))) {
+        && !(window.label() == "tool-review"
+            && matches!(action.as_str(), "start-configured" | "connection-mode")
+            && window.url().ok().is_some_and(|url| {
+                url.path() == "/workspace/review"
+                    && matches!(
+                        url.query(),
+                        Some("kind=connection" | "kind=next-connection")
+                    )
+            }))
+    {
         return Err("请在制播工作台操作观察辅助。".into());
     }
     tauri::async_runtime::spawn_blocking(move || {

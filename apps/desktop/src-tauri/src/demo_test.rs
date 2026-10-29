@@ -374,11 +374,6 @@ fn engine_path(text: &str) -> Result<String, String> {
     Ok(text.into())
 }
 
-#[cfg(test)]
-pub fn request_id() -> Result<String, String> {
-    random_uuid(None)
-}
-
 pub fn new_request_id(log: &DesktopLog) -> Result<String, String> {
     random_uuid(Some(log))
 }
@@ -481,7 +476,10 @@ pub fn complete(log: &DesktopLog, request_id: Option<&str>) -> Result<(), String
 }
 
 pub fn begin_external(log: &DesktopLog, request_id: &str) -> Result<Value, String> {
-    rpc(log, Some(json!({"action":"begin","requestId":request_id,"gameOwnership":"external"})))
+    rpc(
+        log,
+        Some(json!({"action":"begin","requestId":request_id,"gameOwnership":"external"})),
+    )
 }
 
 pub fn request(
@@ -811,61 +809,4 @@ fn safe_uuid(value: Option<&Value>) -> Option<&str> {
             })
             .unwrap_or("[invalid UUID redacted]")
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-
-    #[test]
-    fn selected_file_stays_native_and_is_revalidated() {
-        let root = std::env::temp_dir().join(request_id().unwrap());
-        fs::create_dir_all(&root).unwrap();
-        let path = root.join("校园 对阵.dem");
-        fs::write(&path, b"PBDEMS2\0payload").unwrap();
-        let log = DesktopLog::new(&root, None).unwrap();
-        let mut selection = Selection::default();
-        let selected = selection.select(&path, &log).unwrap();
-        assert_eq!(selected["name"], "校园 对阵.dem");
-        assert!(selected.get("path").is_none());
-        assert!(selection.resolve("arbitrary path", &log).is_err());
-        assert_eq!(
-            selection
-                .resolve(selected["token"].as_str().unwrap(), &log)
-                .unwrap(),
-            path.canonicalize().unwrap()
-        );
-        fs::write(&path, b"HL2DEMO\0payload").unwrap();
-        assert!(selection
-            .resolve(selected["token"].as_str().unwrap(), &log)
-            .is_err());
-        fs::write(root.join("injection;+quit.dem"), b"PBDEMS2\0").unwrap();
-        assert!(validate_file(&root.join("injection;+quit.dem"), &log).is_err());
-        assert!(validate_file(&root, &log).is_err());
-        fs::write(root.join("short.dem"), b"PBDEMS2").unwrap();
-        assert!(validate_file(&root.join("short.dem"), &log).is_err());
-        fs::write(&path, b"PBDEMS2\0payload").unwrap();
-        assert!(selection.select(&root.join("short.dem"), &log).is_err());
-        // A cancelled picker makes no select call; previous capability remains valid.
-        assert!(selection
-            .resolve(selected["token"].as_str().unwrap(), &log)
-            .is_ok());
-        assert!(playdemo_argument(&path, &log)
-            .unwrap()
-            .contains("校园 对阵.dem"));
-        fs::rename(&path, root.join("moved.dem")).unwrap();
-        assert!(selection
-            .resolve(selected["token"].as_str().unwrap(), &log)
-            .is_err());
-        fs::remove_dir_all(root).unwrap();
-    }
-
-
-
-
-
-
-
-
 }

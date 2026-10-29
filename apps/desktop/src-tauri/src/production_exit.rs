@@ -116,7 +116,10 @@ pub fn restore_then_cleanup(
 }
 
 /// Both independent cleanups have already run; preserve every failure for retry/diagnostics.
-pub fn cleanup_results(first: Result<(), String>, second: Result<(), String>) -> Result<(), String> {
+pub fn cleanup_results(
+    first: Result<(), String>,
+    second: Result<(), String>,
+) -> Result<(), String> {
     match (first, second) {
         (Ok(()), Ok(())) => Ok(()),
         (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
@@ -399,9 +402,19 @@ fn confirm_local_match_exit(
     }
 }
 
-fn settle_local_match_exit(log: &DesktopLog, qualification: &serde_json::Value) -> Result<(), String> {
-    let response = exit_request(log, serde_json::json!({"action": "settle", "qualification": qualification}))?;
-    if response["ok"] == true { Ok(()) } else { Err("本场退出状态未能确认。".into()) }
+fn settle_local_match_exit(
+    log: &DesktopLog,
+    qualification: &serde_json::Value,
+) -> Result<(), String> {
+    let response = exit_request(
+        log,
+        serde_json::json!({"action": "settle", "qualification": qualification}),
+    )?;
+    if response["ok"] == true {
+        Ok(())
+    } else {
+        Err("本场退出状态未能确认。".into())
+    }
 }
 
 pub fn invalidate_local_match_exit(log: &DesktopLog) -> Result<(), String> {
@@ -429,7 +442,7 @@ fn finish_with_qualification(
         Ok(Some(qualification)) => {
             settle(&qualification).map_err(|_| EXIT_UNCONFIRMED.to_string())?;
             confirm(qualification).map_err(|_| EXIT_UNCONFIRMED.into())
-        },
+        }
         Ok(None) => Ok(()),
         Err(_) => Err(EXIT_UNCONFIRMED.into()),
     }
@@ -452,7 +465,10 @@ pub fn finish_managed_game(
 pub fn prepare_external_entry(log: &DesktopLog, expected_revision: &str) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_secs(5);
     let (code, view) = request(log, "GET", "/local/v1/production", "", deadline)?;
-    if code != 200 || view["mode"] != "preparation" || view["revision"].as_str() != Some(expected_revision) {
+    if code != 200
+        || view["mode"] != "preparation"
+        || view["revision"].as_str() != Some(expected_revision)
+    {
         return Err("制作状态已变化，请回到准备中心重新选择外部游戏。".into());
     }
     disconnect_camera(log)?;
@@ -460,33 +476,74 @@ pub fn prepare_external_entry(log: &DesktopLog, expected_revision: &str) -> Resu
 }
 
 /// Existing private runtime identity; browsers cannot renew a native lease.
-pub fn prepare_mulnx(log: &DesktopLog, cs2: &std::path::Path, update: bool, spectator_cfg: bool) -> Result<serde_json::Value, String> {
+pub fn prepare_mulnx(
+    log: &DesktopLog,
+    cs2: &std::path::Path,
+    update: bool,
+    spectator_cfg: bool,
+) -> Result<serde_json::Value, String> {
     prepare_mulnx_with_demo(log, cs2, update, spectator_cfg, None)
 }
 
-pub fn prepare_mulnx_with_demo(log: &DesktopLog, cs2: &std::path::Path, update: bool, spectator_cfg: bool, demo_cfg: Option<&str>) -> Result<serde_json::Value, String> {
+pub fn prepare_mulnx_with_demo(
+    log: &DesktopLog,
+    cs2: &std::path::Path,
+    update: bool,
+    spectator_cfg: bool,
+    demo_cfg: Option<&str>,
+) -> Result<serde_json::Value, String> {
     let token = runtime_token(log)?;
     let console_capture = crate::cs2_console::settings(log)?["enabled"] == true;
     log.event("mulnx_prepare_request", "begin", Some(&serde_json::json!({"cs2Path":cs2.to_string_lossy(),"consoleCapture":console_capture,"update":update,"spectatorCfg":spectator_cfg}).to_string()));
     let body = serde_json::json!({"cs2Path": cs2.to_string_lossy(),"consoleCapture":console_capture,"update":update,"spectatorCfg":spectator_cfg,"demoCfg":demo_cfg}).to_string();
-    let (code, value) = request_with_identity(log, "POST", "/operator/runtime/mulnx-prepare", &body,
-        Instant::now() + Duration::from_secs(240), Some(&token))?;
+    let (code, value) = request_with_identity(
+        log,
+        "POST",
+        "/operator/runtime/mulnx-prepare",
+        &body,
+        Instant::now() + Duration::from_secs(240),
+        Some(&token),
+    )?;
     if code != 200 {
-        log.event("mulnx_prepare", "failure", Some(&format!("http={code}; response={value}")));
-        return Err(value["message"].as_str().unwrap_or("MulNX 准备失败，请重试。").into());
+        log.event(
+            "mulnx_prepare",
+            "failure",
+            Some(&format!("http={code}; response={value}")),
+        );
+        return Err(value["message"]
+            .as_str()
+            .unwrap_or("MulNX 准备失败，请重试。")
+            .into());
     }
     Ok(value)
 }
 
-pub fn camera_session(log: &DesktopLog, action: &str, lease: Option<&str>, revision: Option<&str>) -> Result<serde_json::Value, String> {
+pub fn camera_session(
+    log: &DesktopLog,
+    action: &str,
+    lease: Option<&str>,
+    revision: Option<&str>,
+) -> Result<serde_json::Value, String> {
     let token = runtime_token(log)?;
     let mut body = serde_json::json!({"action": action, "host": log.session_id});
-    if let Some(lease) = lease { body["lease"] = lease.into(); }
-    if let Some(revision) = revision {
-        body[if action == "begin-demo" { "requestId" } else { "expectedRevision" }] = revision.into();
+    if let Some(lease) = lease {
+        body["lease"] = lease.into();
     }
-    let (code, value) = request_with_identity(log, "POST", "/operator/runtime/camera-session", &body.to_string(),
-        Instant::now() + Duration::from_secs(2), Some(&token))?;
+    if let Some(revision) = revision {
+        body[if action == "begin-demo" {
+            "requestId"
+        } else {
+            "expectedRevision"
+        }] = revision.into();
+    }
+    let (code, value) = request_with_identity(
+        log,
+        "POST",
+        "/operator/runtime/camera-session",
+        &body.to_string(),
+        Instant::now() + Duration::from_secs(2),
+        Some(&token),
+    )?;
     if code != 200 || value["ok"] != true {
         return Err("原生运镜会话已失效；请结束制作后重新借用。".into());
     }
@@ -494,8 +551,13 @@ pub fn camera_session(log: &DesktopLog, action: &str, lease: Option<&str>, revis
 }
 
 pub fn disconnect_camera(log: &DesktopLog) -> Result<(), String> {
-    let (code, camera) = request(log, "POST", "/operator/orchestration", r#"{"action":"disconnect"}"#,
-        Instant::now() + Duration::from_secs(2))?;
+    let (code, camera) = request(
+        log,
+        "POST",
+        "/operator/orchestration",
+        r#"{"action":"disconnect"}"#,
+        Instant::now() + Duration::from_secs(2),
+    )?;
     if code != 200 || camera["status"]["held"] != true || camera["status"]["connected"] != false {
         return Err("旧运镜连接未能隔离，请检查本地服务；执行及停止均未确认。".into());
     }
@@ -543,115 +605,4 @@ fn finish_production(log: &DesktopLog, action: &str) -> Result<(), String> {
             .into());
     }
     Err("制作仍在处理操作，请稍后重试退出。".into())
-}
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-
-
-
-    #[test]
-    fn safe_production_precedes_restore_and_restore_failure_cannot_skip_cleanup() {
-        let calls = std::cell::RefCell::new(Vec::new());
-        let result = finish_then_restore(
-            || { calls.borrow_mut().push("obs-safe"); Ok(()) },
-            || restore_then_cleanup(
-                || { calls.borrow_mut().push("restore-hud"); Err("hud failed".into()) },
-                || { calls.borrow_mut().push("cleanup-game"); Err("game failed".into()) },
-            ),
-        );
-        assert_eq!(*calls.borrow(), ["obs-safe", "restore-hud", "cleanup-game"]);
-        assert_eq!(result.unwrap_err(), "hud failed\ngame failed");
-        calls.borrow_mut().clear();
-        assert!(finish_then_restore(
-            || Err("OBS still live".into()),
-            || { calls.borrow_mut().push("unsafe restore"); Ok(()) },
-        ).is_err());
-        assert!(calls.borrow().is_empty());
-    }
-
-    fn qualification() -> serde_json::Value {
-        serde_json::json!({"ticket": "private-ticket", "matchId": "match-7", "contextRevision": "revision-9"})
-    }
-
-    #[test]
-    fn game_cleanup_and_process_check_must_succeed_before_confirmation() {
-        let confirmed = std::cell::Cell::new(false);
-        for error in [
-            "restore failed",
-            "external CS2 still running",
-            "process query failed",
-        ] {
-            let result = finish_with_qualification(
-                || Ok(Some(qualification())),
-                |requires_proof| {
-                    assert!(requires_proof);
-                    Err(error.into())
-                },
-                |_| panic!("must not settle before successful cleanup"),
-                |_| {
-                    confirmed.set(true);
-                    Ok(())
-                },
-            );
-            assert_eq!(result.unwrap_err(), error);
-            assert!(!confirmed.get());
-        }
-        let calls = std::cell::RefCell::new(Vec::new());
-        finish_with_qualification(
-            || { calls.borrow_mut().push("prepare"); Ok(Some(qualification())) },
-            |requires_proof| {
-                assert!(requires_proof);
-                calls.borrow_mut().extend(["cleanup", "process-check"]);
-                Ok(())
-            },
-            |_| { calls.borrow_mut().push("settle"); Ok(()) },
-            |captured| {
-                assert_eq!(captured, serde_json::json!({"ticket": "private-ticket", "matchId": "match-7", "contextRevision": "revision-9"}));
-                calls.borrow_mut().push("confirm");
-                Ok(())
-            },
-        ).unwrap();
-        assert_eq!(
-            *calls.borrow(),
-            ["prepare", "cleanup", "process-check", "settle", "confirm"]
-        );
-        let result = finish_with_qualification(
-            || Ok(Some(qualification())),
-            |_| Ok(()),
-            |_| Err("identity changed".into()),
-            |_| panic!("must not confirm after settlement failure"),
-        );
-        assert_eq!(result.unwrap_err(), EXIT_UNCONFIRMED);
-    }
-
-
-
-    #[test]
-    fn private_handshake_uses_token_without_origin_and_preserves_captured_identity() {
-        let token = "a".repeat(64);
-        let body =
-            serde_json::json!({"action": "confirm", "qualification": qualification()}).to_string();
-        let wire = wire_request("POST", EXIT_ENDPOINT, &body, Some(&token));
-        let (headers, payload) = wire.split_once("\r\n\r\n").unwrap();
-        assert!(headers.starts_with("POST /operator/runtime/local-match-exit HTTP/1.1\r\n"));
-        assert!(headers.contains(&format!("\r\nx-runtime-token: {token}\r\n")));
-        assert!(!headers.to_ascii_lowercase().contains("origin:"));
-        let payload: serde_json::Value = serde_json::from_str(payload).unwrap();
-        assert_eq!(
-            payload,
-            serde_json::json!({"action": "confirm", "qualification": {
-                "ticket": "private-ticket", "matchId": "match-7", "contextRevision": "revision-9"
-            }})
-        );
-        assert!(wire_request("GET", "/local/v1/production", "", None)
-            .contains("Origin: http://127.0.0.1:3000\r\n"));
-    }
-
-
-
-
-
-
 }

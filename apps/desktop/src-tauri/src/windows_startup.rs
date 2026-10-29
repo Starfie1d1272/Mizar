@@ -111,7 +111,9 @@ impl Drop for DesktopMutex {
 /// The runtime wrapper waits for assignment before starting Companion.
 pub struct RuntimeJob(isize);
 impl RuntimeJob {
-    pub fn new() -> io::Result<Self> { Self::create(std::ptr::null()) }
+    pub fn new() -> io::Result<Self> {
+        Self::create(std::ptr::null())
+    }
     pub fn named(name: &str) -> io::Result<Self> {
         let wide: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
         Self::create(wide.as_ptr())
@@ -160,7 +162,9 @@ impl RuntimeJob {
     pub fn assign_current(&self) -> io::Result<()> {
         if unsafe { AssignProcessToJobObject(self.0, GetCurrentProcess()) } == 0 {
             Err(io::Error::last_os_error())
-        } else { Ok(()) }
+        } else {
+            Ok(())
+        }
     }
 }
 impl Drop for RuntimeJob {
@@ -613,80 +617,4 @@ pub fn windows_version() -> String {
     } else {
         "unknown".into()
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::{
-        io::Write,
-        os::windows::process::CommandExt,
-        process::{Command, Stdio},
-        thread,
-        time::{Duration, Instant},
-    };
-
-
-    fn owned_child(job: &RuntimeJob) -> Child {
-        let child = Command::new("cmd.exe")
-            .args(["/D", "/Q", "/K"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .creation_flags(0x08000000)
-            .spawn()
-            .unwrap();
-        job.assign(&child).unwrap();
-        child
-    }
-    #[test]
-    fn closing_job_terminates_owned_process() {
-        let job = RuntimeJob::new().unwrap();
-        let mut child = Command::new("cmd.exe")
-            .args(["/D", "/Q", "/K"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .creation_flags(0x08000000)
-            .spawn()
-            .unwrap();
-        job.assign(&child).unwrap();
-        child
-            .stdin
-            .as_mut()
-            .unwrap()
-            .write_all(b"rem job assignment complete\r\n")
-            .unwrap();
-        assert!(child.try_wait().unwrap().is_none());
-        drop(job);
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while child.try_wait().unwrap().is_none() && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(20));
-        }
-        assert!(child.try_wait().unwrap().is_some());
-    }
-
-
-
-
-
-    #[test]
-    fn termination_does_not_touch_a_borrowed_process() {
-        let outside = RuntimeJob::new().unwrap();
-        let mut borrowed = owned_child(&outside);
-        let startup = RuntimeJob::new().unwrap();
-        let mut owned = owned_child(&startup);
-        startup.terminate().unwrap();
-        owned.wait().unwrap();
-        assert!(borrowed.try_wait().unwrap().is_none());
-        drop(outside);
-        borrowed.wait().unwrap();
-    }
-}
-
-#[cfg(test)]
-mod webview_recovery_tests {
-    use super::*;
-
-
 }

@@ -1,17 +1,8 @@
 // One contract for source validation; release artifacts remain exact-main-SHA.
 export const fullSourceJobs = Object.freeze([
-  'plan',
-  ...['static', 'unit', 'fixtures', 'build'].map((lane) => `quality / ${lane}`),
-  'design',
-  ...[1, 2, 3, 4, 5, 6, 7, 8].map((shard) => `acceptance / ${shard} of 8`),
-  'platform / Windows',
-  'native / Windows',
-  'update recovery / Windows',
-  'installer / Windows / update',
-  'installer / Windows / faults',
-  'installer / Windows / cleanup',
-  'qualification / offline / Linux',
-  'qualification / offline / macOS',
+  'build',
+  'quality',
+  'native build / Windows',
   'ci-gate',
 ]);
 

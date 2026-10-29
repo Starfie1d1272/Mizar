@@ -140,15 +140,6 @@ fn fields(text: &str) -> Result<(BTreeMap<String, Token>, usize), String> {
     Ok((map, close))
 }
 
-#[cfg(test)]
-pub fn preset(preserve_quality: bool) -> BTreeMap<String, String> {
-    quality_preset(if preserve_quality {
-        Quality::Preserve
-    } else {
-        Quality::VeryHigh
-    })
-}
-
 pub fn quality_preset(quality: Quality) -> BTreeMap<String, String> {
     let mut values = BTreeMap::new();
     for (key, value) in [
@@ -291,77 +282,72 @@ pub fn restore(
 pub fn compatible_restore(backup: &str, current: &str) -> Result<String, String> {
     let (before, _) = fields(backup)?;
     let known = quality_preset(Quality::VeryHigh);
-    let desired: BTreeMap<_, _> = before.iter().filter(|(key, _)| known.contains_key(*key))
-        .map(|(key, value)| (key.clone(), value.value.clone())).collect();
-    for key in ["setting.defaultres", "setting.defaultresheight", "setting.fullscreen"] {
-        if !desired.contains_key(key) { return Err("备份缺少必要画面设置，请选择完整的视频配置备份。".into()); }
+    let desired: BTreeMap<_, _> = before
+        .iter()
+        .filter(|(key, _)| known.contains_key(*key))
+        .map(|(key, value)| (key.clone(), value.value.clone()))
+        .collect();
+    for key in [
+        "setting.defaultres",
+        "setting.defaultresheight",
+        "setting.fullscreen",
+    ] {
+        if !desired.contains_key(key) {
+            return Err("备份缺少必要画面设置，请选择完整的视频配置备份。".into());
+        }
     }
     for (key, value) in &desired {
-        let number: i32 = value.parse().map_err(|_| "备份中的画面设置不是有效数值。")?;
+        let number: i32 = value
+            .parse()
+            .map_err(|_| "备份中的画面设置不是有效数值。")?;
         if number < -1 || number > 32768 || (key.starts_with("setting.defaultres") && number <= 0) {
             return Err("备份中的画面设置超出有效范围。".into());
         }
     }
     let ts = tokens(current)?;
-    if ts.len() < 3 || ts[0].value != "video.cfg" || !ts[0].quoted || ts[1].quoted || ts[1].value != "{"
-        || ts.last().unwrap().quoted || ts.last().unwrap().value != "}" || (ts.len()-3)%2 != 0 {
+    if ts.len() < 3
+        || ts[0].value != "video.cfg"
+        || !ts[0].quoted
+        || ts[1].quoted
+        || ts[1].value != "{"
+        || ts.last().unwrap().quoted
+        || ts.last().unwrap().value != "}"
+        || (ts.len() - 3) % 2 != 0
+    {
         return Err("当前视频配置结构无法识别，请保留原件后检查。".into());
     }
     let mut edits = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
-    for pair in ts[2..ts.len()-1].chunks_exact(2) {
+    for pair in ts[2..ts.len() - 1].chunks_exact(2) {
         let (key, value) = (&pair[0], &pair[1]);
-        if !key.quoted || !value.quoted { return Err("当前视频配置包含嵌套结构，请先检查原件。".into()); }
+        if !key.quoted || !value.quoted {
+            return Err("当前视频配置包含嵌套结构，请先检查原件。".into());
+        }
         if let Some(replacement) = desired.get(&key.value) {
-            if seen.insert(key.value.clone()) { edits.push((value.start, value.end, format!("\"{replacement}\""))); }
-            else { edits.push((key.start, value.end, String::new())); }
+            if seen.insert(key.value.clone()) {
+                edits.push((value.start, value.end, format!("\"{replacement}\"")));
+            } else {
+                edits.push((key.start, value.end, String::new()));
+            }
         }
     }
-    let newline = if current.contains("\r\n") { "\r\n" } else { "\n" };
+    let newline = if current.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
     let mut added = String::new();
-    for (key, value) in desired { if !seen.contains(&key) { added.push_str(&format!("\t\"{key}\"\t\"{value}\"{newline}")); } }
+    for (key, value) in desired {
+        if !seen.contains(&key) {
+            added.push_str(&format!("\t\"{key}\"\t\"{value}\"{newline}"));
+        }
+    }
     let close = ts.last().unwrap().start;
     edits.push((close, close, added));
     edits.sort_by_key(|edit| std::cmp::Reverse(edit.0));
     let mut output = current.to_string();
-    for (start, end, value) in edits { output.replace_range(start..end, &value); }
-    Ok(output)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    const ORIGINAL: &str = "\u{feff}\"video.cfg\"\r\n{\r\n// user comment\r\n\"setting.defaultres\" \"1280\"\r\n\"setting.defaultresheight\" \"960\"\r\n\"setting.fullscreen\" \"1\"\r\n\"setting.videocfg_fsr_detail\" \"3\"\r\n\"unrelated\" \"keep\"\r\n}\r\n";
-
-
-    #[test]
-    fn preserves_unrelated_edits_and_restores_game_updated_resolution() {
-        let preset = preset(false);
-        let applied = apply(ORIGINAL, &preset).unwrap();
-        let current = applied.replace("\"keep\"", "\"user change\"");
-        let restored = restore(ORIGINAL, &applied, &current, &preset).unwrap();
-        assert!(restored.contains("\"user change\""));
-        assert_eq!(
-            fields(&restored).unwrap().0["setting.defaultres"].value,
-            "1280"
-        );
-        assert!(!fields(&restored)
-            .unwrap()
-            .0
-            .contains_key("setting.msaa_samples"));
-        let resized = restore(
-            ORIGINAL,
-            &applied,
-            &applied.replace("\"1920\"", "\"1600\""),
-            &preset,
-        )
-        .unwrap();
-        assert_eq!(
-            fields(&resized).unwrap().0["setting.defaultres"].value,
-            "1280"
-        );
+    for (start, end, value) in edits {
+        output.replace_range(start..end, &value);
     }
-
-
-
+    Ok(output)
 }

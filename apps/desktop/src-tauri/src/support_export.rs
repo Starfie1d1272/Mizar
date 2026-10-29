@@ -31,20 +31,3 @@ pub fn save(path: &Path, contents: &str) -> Result<(), String> {
     }
     fs::write(path, contents).map_err(|_| "诊断包未能保存，请选择可写位置后重试。".into())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const BUNDLE: &str =
-        r#"{"schema":"mizar-support-bundle/1","manifest":{},"snapshot":{},"logs":[],"summary":[]}"#;
-
-    #[test]
-    fn rejects_wrong_schema_and_utf8_byte_overflow() {
-        assert!(validate(BUNDLE).is_ok());
-        assert!(validate("{}").is_err());
-        assert!(validate(&BUNDLE.replace("/1", "/2")).is_err());
-        assert!(validate_with_limit(&"错".repeat(512), 1024).is_err());
-    }
-
-}

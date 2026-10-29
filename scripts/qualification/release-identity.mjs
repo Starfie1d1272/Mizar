@@ -15,7 +15,10 @@ function assertMainWorkflow(context, checkedOutSha, workflow) {
   if (
     context.repository !== REPOSITORY ||
     context.ref !== MAIN_REF ||
-    context.event !== 'workflow_dispatch' ||
+    !(
+      context.event === 'workflow_dispatch' ||
+      (workflow === PROMOTION_WORKFLOW && context.event === 'workflow_run')
+    ) ||
     context.workflowRef !== `${REPOSITORY}/${workflow}@${MAIN_REF}` ||
     !isSha(context.sha) ||
     checkedOutSha !== context.sha

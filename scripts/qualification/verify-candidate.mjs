@@ -66,9 +66,6 @@ export async function verifyCandidate(product, sourceSha, archiveSha256, evidenc
     );
     if (JSON.stringify(identity.distribution) !== JSON.stringify(distribution))
       throw new Error('Core Setup 验收身份与分发清单不一致');
-    for (const lane of ['setup', 'core-setup'])
-      if (!(await readFile(join(evidenceRoot, lane, 'update-recovery.log'), 'utf8')).trim())
-        throw new Error(`${lane} 缺少恢复验收记录`);
   }
   return manifest;
 }

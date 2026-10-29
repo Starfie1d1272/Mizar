@@ -47,6 +47,8 @@ runs:
       with:
         path: apps/desktop/src-tauri/target/${{ inputs.profile }}
         key: cargo-v3-${{ runner.os }}-${{ runner.arch }}-${{ inputs.profile }}-${{ steps.rust.outputs.fingerprint }}-${{ steps.cargo-key.outputs.lock }}-${{ steps.cargo-key.outputs.manifest }}-${{ hashFiles('.cargo/config', '.cargo/config.toml', 'rust-toolchain', 'rust-toolchain.toml', 'apps/desktop/src-tauri/build.rs') }}
+        restore-keys: |
+          cargo-v3-${{ runner.os }}-${{ runner.arch }}-${{ inputs.profile }}-${{ steps.rust.outputs.fingerprint }}-${{ steps.cargo-key.outputs.lock }}-
     - name: Record cache observations
       shell: pwsh
       env:

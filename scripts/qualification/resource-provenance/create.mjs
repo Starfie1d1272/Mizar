@@ -47,7 +47,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   requireValue(
     process.env.GITHUB_REPOSITORY === REPOSITORY &&
       process.env.GITHUB_REF === 'refs/heads/main' &&
-      process.env.GITHUB_EVENT_NAME === 'workflow_dispatch' &&
+      ['workflow_dispatch', 'workflow_run'].includes(process.env.GITHUB_EVENT_NAME) &&
       process.env.GITHUB_WORKFLOW_REF ===
         `${REPOSITORY}/.github/workflows/release-promotion.yml@refs/heads/main` &&
       process.env.GITHUB_SHA === sha,
