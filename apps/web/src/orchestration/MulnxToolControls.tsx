@@ -16,10 +16,14 @@ export function MulnxToolControls({
   allowStop = true,
   runtimeOnly = false,
   maintenanceOnly = false,
+  preparedSession,
+  onPreparedSessionChange,
 }: {
   allowStop?: boolean;
   runtimeOnly?: boolean;
   maintenanceOnly?: boolean;
+  preparedSession?: { preparedId: string; tag: string } | null;
+  onPreparedSessionChange?: (value: { preparedId: string; tag: string } | null) => void;
   tool:
     | (Pick<MulnxToolView, 'installed' | 'latest' | 'busy'> &
         Partial<Pick<MulnxToolView, 'message' | 'packs'>>)
@@ -33,7 +37,11 @@ export function MulnxToolControls({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [failed, setFailed] = useState(false);
-  const [prepared, setPrepared] = useState<{ preparedId: string; tag: string } | null>(null);
+  const [localPrepared, setLocalPrepared] = useState<{ preparedId: string; tag: string } | null>(
+    null,
+  );
+  const prepared = onPreparedSessionChange ? (preparedSession ?? null) : localPrepared;
+  const setPrepared = onPreparedSessionChange ?? setLocalPrepared;
   const [confirmStop, setConfirmStop] = useState(false);
   const [stopSubmitted, setStopSubmitted] = useState(false);
   const running = useRef(false);

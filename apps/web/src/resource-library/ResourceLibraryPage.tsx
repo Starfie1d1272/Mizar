@@ -35,6 +35,10 @@ export function ResourceLibraryPage() {
   const view = useLocalRead<LibraryView>('/local/v1/resource-library', 2000);
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState<'all' | 'media' | 'tool'>('all');
+  const [preparedSession, setPreparedSession] = useState<{
+    preparedId: string;
+    tag: string;
+  } | null>(null);
   const matches = (name: string) =>
     name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
   const resources = view?.resources?.filter((resource) =>
@@ -153,6 +157,8 @@ export function ResourceLibraryPage() {
                   busy: view.tool.busy,
                 }}
                 maintenanceOnly
+                preparedSession={preparedSession}
+                onPreparedSessionChange={setPreparedSession}
               />
             </div>
             {view.tool.packs.length ? (
