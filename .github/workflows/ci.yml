@@ -55,6 +55,7 @@ jobs:
           if [ "$TARGET" != development/2.0 ]; then
             cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check
           else
+            if [ "$GITHUB_EVENT_NAME" = pull_request ]; then BASE=$(git rev-parse "${GITHUB_SHA}^1"); fi
             if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then BASE=$(git rev-parse "${GITHUB_SHA}^"); fi
             git cat-file -e "${BASE}^{commit}" || { echo 'Cannot determine formatting base' >&2; exit 1; }
             git diff --name-only --diff-filter=ACMR -z "$BASE" "$GITHUB_SHA" -- 'apps/desktop/src-tauri/*.rs' 'apps/desktop/src-tauri/**/*.rs' > /tmp/mizar-rust-files
