@@ -426,6 +426,25 @@ export class ObsAudioRouting {
       endpoint,
       collection,
       desktop: state.desktop,
+      desktopMicrophone: state.desktopMicrophone
+        ? {
+            ...state.desktopMicrophone,
+            valid:
+              state.desktopMicrophone.endpoint === endpoint &&
+              state.desktopMicrophone.collection === collection &&
+              candidates.some(
+                (input) =>
+                  input.inputUuid === state.desktopMicrophone!.inputUuid &&
+                  input.inputKind === state.desktopMicrophone!.inputKind,
+              ),
+            name:
+              candidates.find(
+                (input) =>
+                  input.inputUuid === state.desktopMicrophone!.inputUuid &&
+                  input.inputKind === state.desktopMicrophone!.inputKind,
+              )?.inputName ?? null,
+          }
+        : null,
       transition: state.transition,
       bindings,
       candidates: choices,

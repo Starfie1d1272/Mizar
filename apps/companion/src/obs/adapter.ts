@@ -594,7 +594,9 @@ export class ObsAdapter {
                 ),
               name: '桌面混音',
             }
-          : routing.bindings[role];
+          : routing.desktop && role === 'microphone'
+            ? (routing.desktopMicrophone ?? null)
+            : routing.bindings[role];
       if (routing.desktop && role === 'remoteCommentary') {
         channels[role] = {
           name: '远端解说',
@@ -656,7 +658,9 @@ export class ObsAdapter {
             const binding =
               role === 'game' && initial.routing.desktop
                 ? initial.routing.desktop
-                : initial.routing.bindings[role]!;
+                : role === 'microphone' && initial.routing.desktop
+                  ? initial.routing.desktopMicrophone!
+                  : initial.routing.bindings[role]!;
             const perform = async (): Promise<MixerCommandResult> => {
               const current = await this.mixerReadObs(obs, endpoint);
               if (
