@@ -85,7 +85,6 @@ export interface OrchestrationStatus {
   held: boolean;
   preparation: 'waiting' | 'preparing' | 'ready' | 'error';
   request: 'idle' | 'submitted' | 'queued' | 'rejected' | 'unknown';
-  execution: 'unconfirmed' | 'pending' | 'started' | 'completed' | 'failed' | 'cancelled';
   current: string | null;
   message: string;
 }

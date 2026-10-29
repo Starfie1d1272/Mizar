@@ -70,6 +70,7 @@ it('keeps drawing new samples after a projectile disappears when a RAF timestamp
       },
     }) as unknown as CanvasRenderingContext2D;
   });
+  const resolveAssetUrl = vi.fn((url: string) => `/portable${url}`);
   const host = document.createElement('div');
   document.body.append(host);
   const root = createRoot(host);
@@ -88,10 +89,18 @@ it('keeps drawing new samples after a projectile disappears when a RAF timestamp
   };
   try {
     await act(async () => {
-      root.render(<RadarView client={client} assetBaseUrl="/radar-assets" />);
+      root.render(
+        <RadarView
+          client={client}
+          assetBaseUrl="/radar-assets"
+          resolveAssetUrl={resolveAssetUrl}
+        />,
+      );
       await Promise.resolve();
     });
     draw(100);
+    expect(resolveAssetUrl).toHaveBeenCalled();
+    expect(resolveAssetUrl.mock.calls[0]?.[0]).toMatch(/^\/radar-assets\//);
     // Browser RAF timestamps may predate performance.now() in later callbacks.
     clock = 500;
     snapshot = { ...snapshot, sequence: 2, payload: { ...snapshot.payload, grenades: [] } };

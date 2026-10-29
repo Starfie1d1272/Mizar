@@ -1,8 +1,8 @@
-import { BroadcastPause } from '../src/program/widgets/broadcast-pause/BroadcastPause';
+import { BroadcastPause } from '@mizar/hud-view';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { expect, it } from 'vitest';
-import { PlayerRail } from '../src/program/widgets/player-rails/PlayerRail';
+import { PlayerRail } from '@mizar/hud-view';
 import { getProgramFixture } from '../src/program/fixtures';
 import {
   getHudWidgetDescriptor,

@@ -208,7 +208,9 @@ export function Settings({ tab }: { tab: string }) {
             <ResourceSettings />
             <Panel className="settings-card">
               <h2>运镜工具维护</h2>
-              <MulnxToolControls tool={camera?.tool} />
+              <p>在资源管理中查看运镜工具版本与状态。</p>
+              <a href="/packages">管理资源</a>
+              <MulnxToolControls tool={camera?.tool} runtimeOnly />
             </Panel>
           </div>
           <Panel className="settings-card advanced-settings-support">

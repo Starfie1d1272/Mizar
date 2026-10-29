@@ -129,9 +129,7 @@ test('workspace exit outcome survives a closed dock and failure allows a single 
   await recovery.goto('/');
   const result = recovery.getByLabel('工作台退出结果');
   await expect(result).toContainText('关闭游戏与恢复设置');
-  await expect(
-    recovery.getByRole('button', { name: '启动并进入工作台', exact: true }),
-  ).toBeDisabled();
+  await expect(recovery.locator('.preparation-heading > button')).toBeDisabled();
   await expect(result.getByRole('button', { name: '正在退出…' })).toBeDisabled();
   await result.getByRole('button', { name: '运行诊断', exact: true }).click();
   expect(calls).toContainEqual({
@@ -199,7 +197,10 @@ test('16:9 workspace scales the native regions and keeps scene controls inside t
     expect(bounds.y).toBeCloseTo((height! * 3) / 4, 0);
     expect(bounds.width).toBeCloseTo((width! * 3) / 4, 0);
     expect(bounds.height).toBeCloseTo(height! / 4, 0);
-    const resume = (await page.getByRole('button', { name: '准备运镜并恢复自动' }).boundingBox())!;
+    const resume = (await page
+      .locator('.workspace-camera-controls')
+      .getByRole('button', { name: /恢复/ })
+      .boundingBox())!;
     const footer = (await page.locator('.workspace-message').boundingBox())!;
     expect(resume.y + resume.height).toBeLessThanOrEqual(footer.y);
     const buttons = page.getByLabel('手动切换场景').getByRole('button');
@@ -227,6 +228,13 @@ test('16:9 workspace scales the native regions and keeps scene controls inside t
     const exit = (await page
       .getByRole('button', { name: '退出工作台', exact: true })
       .boundingBox())!;
-    expect(exit.y + exit.height).toBeLessThanOrEqual(viewport.height + 1);
+    // Leave room for the keyboard focus outline inside the native window.
+    expect(exit.y + exit.height).toBeLessThanOrEqual(viewport.height - 2);
+    expect(exit.x + exit.width).toBeLessThanOrEqual(viewport.width - 2);
+    for (const summary of await page.locator('.workspace-secondary > summary').all()) {
+      const rect = (await summary.boundingBox())!;
+      expect(rect.height).toBeGreaterThanOrEqual(32);
+      expect(rect.y + rect.height).toBeLessThanOrEqual(exit.y);
+    }
   }
 });

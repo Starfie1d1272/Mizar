@@ -43,7 +43,7 @@ const frame = fromPublicRadar(live.radar, {
 />;
 ```
 
-父容器提供雷达尺寸（通常为正方形）。`assetBaseUrl` 也可为 `https://cdn.example/radar/0.1.0`。CSS 独立导入，保留宿主控制权；颜色可通过 `--mizar-side-ct`、`--mizar-side-t`、`--mizar-hud-objective-bomb` 覆盖，缺失时使用原雷达默认值。组件默认响应 `prefers-reduced-motion`，也可显式传 `reducedMotion`。Canvas 只读，无键盘焦点或禁用操作；连接提示、加载失败说明与文字替代内容由页面提供。
+父容器提供雷达尺寸（通常为正方形）。`assetBaseUrl` 也可为 `https://cdn.example/radar/0.1.0`。可选 `resolveAssetUrl` 接收与 base 拼接后的路径，供宿主映射素材地址；保持函数引用稳定可避免重复加载。CSS 独立导入，保留宿主控制权；颜色可通过 `--mizar-side-ct`、`--mizar-side-t`、`--mizar-hud-objective-bomb` 覆盖，缺失时使用原雷达默认值。组件默认响应 `prefers-reduced-motion`，也可显式传 `reducedMotion`。Canvas 只读，无键盘焦点或禁用操作；连接提示、加载失败说明与文字替代内容由页面提供。
 
 ## 数据与连续性
 
