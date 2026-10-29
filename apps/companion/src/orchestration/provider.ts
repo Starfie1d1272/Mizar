@@ -44,6 +44,7 @@ export class MulnxProvider {
     const generation = this.generation;
     const events = new MulnxEventSequence();
     let subscribed = false;
+    let clockGeneration: number | undefined;
     socket.addEventListener('message', ({ data }) => {
       if (typeof data !== 'string' || this.socket !== socket) return;
       if (data.length > 64 * 1024) {
@@ -62,10 +63,13 @@ export class MulnxProvider {
           } else if (subscribed) {
             const receivedMonotonicMs = performance.now();
             const clock = parseMulnxClock(raw, receivedMonotonicMs);
-            if (clock) this.emitInput({ kind: 'clock', generation, sample: clock });
-            else {
+            if (clock) {
+              clockGeneration = clock.readSucceeded ? clock.captureGeneration : undefined;
+              this.emitInput({ kind: 'clock', generation, sample: clock });
+            } else {
               const event = events.accept(raw);
-              if (event) this.emitInput({ kind: 'event', generation, receivedMonotonicMs, event });
+              if (event && clockGeneration === event.captureGeneration)
+                this.emitInput({ kind: 'event', generation, receivedMonotonicMs, event });
             }
           }
         } catch {

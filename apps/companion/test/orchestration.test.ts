@@ -1239,6 +1239,18 @@ it('receives HSI input without a pending command and separates reconnects', asyn
   await app.register(websocket);
   app.get('/', { websocket: true }, (socket) => {
     socket.on('message', () => {
+      const event = {
+        eventType: 'player_hurt',
+        sequence: 1,
+        captureGeneration: 2,
+        capturedAtUnixMs: 100,
+        attackerSteamId: '0',
+        victimSteamId: '76561198000000001',
+        weapon: 'awp',
+        dmgHealth: 40,
+        health: 60,
+        hitgroup: 1,
+      };
       socket.send(
         JSON.stringify({
           eventType: 'game_clock',
@@ -1250,6 +1262,7 @@ it('receives HSI input without a pending command and separates reconnects', asyn
         }),
       );
       socket.send(JSON.stringify({ type: 'HSI/Subscribed' }));
+      socket.send(JSON.stringify({ ...event, sequence: 2 }));
       socket.send(
         JSON.stringify({
           eventType: 'game_clock',
@@ -1260,20 +1273,9 @@ it('receives HSI input without a pending command and separates reconnects', asyn
           tick: 123,
         }),
       );
-      const event = JSON.stringify({
-        eventType: 'player_hurt',
-        sequence: 1,
-        captureGeneration: 2,
-        capturedAtUnixMs: 100,
-        attackerSteamId: '0',
-        victimSteamId: '76561198000000001',
-        weapon: 'awp',
-        dmgHealth: 40,
-        health: 60,
-        hitgroup: 1,
-      });
-      socket.send(event);
-      socket.send(event);
+      socket.send(JSON.stringify({ ...event, sequence: 3, captureGeneration: 1 }));
+      socket.send(JSON.stringify({ ...event, sequence: 4 }));
+      socket.send(JSON.stringify({ ...event, sequence: 4 }));
     });
   });
   await app.listen({ host: '127.0.0.1', port: 0 });
