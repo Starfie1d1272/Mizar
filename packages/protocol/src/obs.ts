@@ -34,7 +34,10 @@ export interface ObsAudioRoutingStatus {
   endpoint: string;
   collection: string;
   desktop: ObsAudioBinding | null;
+  desktopMicrophone?: (ObsAudioBinding & { valid: boolean; name: string | null }) | null;
   transition: boolean;
+  waitingIndependent?: boolean;
+  independentCommentaryDisabled?: boolean;
   bindings: Record<
     ObsAudioRole,
     (ObsAudioBinding & { valid: boolean; name: string | null }) | null

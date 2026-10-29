@@ -39,10 +39,38 @@ const stateSchema = z
     desktopMonitorOriginal: z
       .object({
         bgm: z
-          .object({ uuid: z.string(), mode: z.literal('OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT') })
+          .object({
+            uuid: z.string(),
+            mode: z.enum([
+              'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
+              'OBS_MONITORING_TYPE_MONITOR_ONLY',
+              'OBS_MONITORING_TYPE_NONE',
+            ]),
+            applied: z
+              .enum([
+                'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
+                'OBS_MONITORING_TYPE_MONITOR_ONLY',
+                'OBS_MONITORING_TYPE_NONE',
+              ])
+              .optional(),
+          })
           .nullable(),
         stinger: z
-          .object({ uuid: z.string(), mode: z.literal('OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT') })
+          .object({
+            uuid: z.string(),
+            mode: z.enum([
+              'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
+              'OBS_MONITORING_TYPE_MONITOR_ONLY',
+              'OBS_MONITORING_TYPE_NONE',
+            ]),
+            applied: z
+              .enum([
+                'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
+                'OBS_MONITORING_TYPE_MONITOR_ONLY',
+                'OBS_MONITORING_TYPE_NONE',
+              ])
+              .optional(),
+          })
           .nullable(),
       })
       .strict()

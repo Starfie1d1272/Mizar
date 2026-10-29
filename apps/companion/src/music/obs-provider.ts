@@ -16,6 +16,7 @@ export class ObsMusicProvider {
   constructor(
     private readonly config: ObsConfigStore,
     private readonly diagnostic: (stage: string, evidence: unknown) => void = () => {},
+    private readonly onMonitorSettingsChanged: () => void = () => {},
   ) {}
   private trace(stage: string, evidence: unknown, secrets = this.knownSecrets) {
     try {
@@ -34,6 +35,8 @@ export class ObsMusicProvider {
       this.trace('music_obs_connect', { result: 'begin', host: config.host, port: config.port });
       const client = new OBSWebSocket();
       this.client = client;
+      client.on('InputAudioMonitorTypeChanged', () => this.onMonitorSettingsChanged());
+      client.on('CurrentProfileChanged', () => this.onMonitorSettingsChanged());
       client.on('ConnectionClosed', (error) => {
         if (this.client === client) {
           this.connected = false;
@@ -148,6 +151,7 @@ export async function ownedMusicInput(
   valid: () => boolean,
   attach = true,
   preservePlayback = false,
+  renameLegacy = true,
 ) {
   const assertCurrent = () => {
     if (!valid()) throw new Error('music_cancelled');
@@ -166,7 +170,7 @@ export async function ownedMusicInput(
   const expected = store.state.sources[layer];
   const found = expected ? inputs.find((i) => i.inputUuid === expected) : undefined;
   let name = found?.inputName ?? baseName;
-  if (found?.inputName === legacyName && found.inputKind === 'ffmpeg_source') {
+  if (renameLegacy && found?.inputName === legacyName && found.inputKind === 'ffmpeg_source') {
     const [stream, record] = await Promise.all([
       obs.call('GetStreamStatus'),
       obs.call('GetRecordStatus'),

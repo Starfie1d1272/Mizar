@@ -1,3 +1,4 @@
+import { obsDesiredScenes } from './desired-state.js';
 import type { MigrationEvent, MigrationObserver } from './audio-migration.js';
 
 /** Use with the same live, event-subscribed OBS connection as the transaction RPC. */
@@ -15,6 +16,20 @@ export function observeAudioMigration(source: MigrationEventSource): MigrationOb
       };
       const signal = (event: MigrationEvent) => () => listener(event);
       on('ConnectionClosed', signal({ type: 'disconnected' }));
+      on('CurrentProgramSceneChanged', (payload) => {
+        const name =
+          payload && typeof payload === 'object'
+            ? (payload as Record<string, unknown>).sceneName
+            : undefined;
+        if (typeof name !== 'string') {
+          listener({ type: 'identityChanged' });
+          return;
+        }
+        listener({
+          type: 'programChanged',
+          managed: obsDesiredScenes('http://127.0.0.1').some((scene) => scene.sceneName === name),
+        });
+      });
       for (const name of [
         'CurrentSceneCollectionChanging',
         'CurrentSceneCollectionChanged',
@@ -23,7 +38,6 @@ export function observeAudioMigration(source: MigrationEventSource): MigrationOb
         'InputMuteStateChanged',
         'InputVolumeChanged',
         'InputAudioTracksChanged',
-        'InputAudioMonitorTypeChanged',
         'SceneCreated',
         'SceneItemCreated',
         'SceneItemRemoved',
@@ -34,6 +48,19 @@ export function observeAudioMigration(source: MigrationEventSource): MigrationOb
         'SourceFilterSettingsChanged',
       ])
         on(name, signal({ type: 'identityChanged' }));
+      on('InputAudioMonitorTypeChanged', (payload) => {
+        if (
+          !payload ||
+          typeof payload !== 'object' ||
+          typeof (payload as Record<string, unknown>).inputUuid !== 'string' ||
+          typeof (payload as Record<string, unknown>).monitorType !== 'string'
+        ) {
+          listener({ type: 'identityChanged' });
+          return;
+        }
+        const event = payload as { inputUuid: string; monitorType: string };
+        listener({ type: 'monitor', ...event });
+      });
       on('InputSettingsChanged', (payload) => {
         if (
           typeof payload !== 'object' ||

@@ -86,7 +86,9 @@ export class AudioConfigurationConnection {
             // deadline expires. Keep the transaction and its observer alive
             // until the original receipt settles or the operation budget ends.
             if (
-              !['SetSceneItemEnabled', 'SetInputSettings'].includes(type) ||
+              !['SetSceneItemEnabled', 'SetInputSettings', 'SetInputAudioMonitorType'].includes(
+                type,
+              ) ||
               closed ||
               Date.now() >= deadline
             )

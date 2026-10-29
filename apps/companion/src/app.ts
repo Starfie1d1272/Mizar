@@ -846,7 +846,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     // Chromium's connection-error page and never run the WebSocket retry code.
     app.addHook('onListen', () => {
       obsAdapter.startBrowserRecovery();
-      obsAdapter.startCommentaryRecovery();
+      obsAdapter.startCommentaryRecovery(musicDirector, gameAudio);
       return Promise.resolve();
     });
     registerObsRoutes(app, {
@@ -1186,8 +1186,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     });
     musicDirector = new MusicDirector(
       musicStore,
-      new ObsMusicProvider(obsConfigStore, (stage, evidence) =>
-        sessionJournal?.record(stage, evidence),
+      new ObsMusicProvider(
+        obsConfigStore,
+        (stage, evidence) => sessionJournal?.record(stage, evidence),
+        () => musicDirector?.noteMonitorSettingsChanged(),
       ),
       () => ({
         program: projectionCoordinator.getCurrent().program,
@@ -1211,7 +1213,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       async (obs) => {
         if (await obsAudioRouting?.modePending()) throw new Error('audio_mode_pending');
         const binding = await obsAudioRouting?.desktopBinding();
-        if (!binding) return false;
+        if (!binding) return 'independent';
         const config = await obsConfigStore.read();
         if (
           binding.endpoint !== `ws://${config.host}:${config.port}` ||
@@ -1220,9 +1222,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         )
           throw new Error('audio_binding_changed');
         const relation = await desktopMonitorRelationship(obs, binding.inputUuid);
-        if (relation === 'unknown') throw new Error('audio_monitor_device_unknown');
-        return relation === 'same';
+        return relation;
       },
+      () => obsAudioRouting?.modePending() ?? Promise.resolve(false),
     );
     registerMusicRoutes(app, musicStore, musicDirector, localWebTransport.getOriginPolicy());
     if (obsAdapter)
