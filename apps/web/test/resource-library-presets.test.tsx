@@ -9,6 +9,7 @@ it('uses the inspected scheme and module revisions only on an explicit action', 
     modules: [
       { id: 'h', kind: 'hud', name: 'HUD', revision: 'hr' },
       { id: 'p', kind: 'program', name: 'Pulse', revision: 'pr' },
+      { id: 'm', kind: 'music', name: '导入音乐', revision: 'mr' },
     ],
     presets: [
       {
@@ -49,6 +50,33 @@ it('uses the inspected scheme and module revisions only on an explicit action', 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(element.textContent).toContain('已修改，尚未使用');
     expect(element.textContent).not.toContain('当前使用');
+    const select = element.querySelector('select')!;
+    await act(async () => {
+      select.value = 'm';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      await Promise.resolve();
+    });
+    const save = [...element.querySelectorAll('button')].find(
+      (item) => item.textContent === '保存音乐选择',
+    )!;
+    await act(async () => {
+      save.click();
+      await Promise.resolve();
+    });
+    const saveArgs = fetchMock.mock.calls.find(
+      ([path]) => path === '/operator/broadcast-presets/save',
+    );
+    const saved = JSON.parse(saveArgs![1]!.body as string) as {
+      expectedPresetRevision: string;
+      modules: unknown[];
+      preset: { bindings: unknown[] };
+    };
+    expect(saved.expectedPresetRevision).toBe('revision');
+    expect(saved.modules).toEqual([]);
+    expect(saved.preset.bindings).toContainEqual({ kind: 'music', mode: 'use', moduleId: 'm' });
+    expect(
+      fetchMock.mock.calls.some(([path]) => path === '/operator/broadcast-presets/apply'),
+    ).toBe(false);
     const button = [...element.querySelectorAll('button')].find(
       (item) => item.textContent === '使用方案',
     )!;
