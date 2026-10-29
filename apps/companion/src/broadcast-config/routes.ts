@@ -3,6 +3,7 @@ import { z, ZodError } from 'zod';
 import { displayConfig, parseBroadcastPreset, parseModuleRecord } from '@mizar/broadcast-config';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 import type { BroadcastConfigStore } from './store.js';
+import { isBuiltinModuleId } from './builtin-modules.js';
 
 const revision = z.string().min(1).max(200);
 const moduleRevisions = z.strictObject({
@@ -31,6 +32,29 @@ const save = z.strictObject({
     .array(z.strictObject({ value: z.unknown(), expectedRevision: revision.nullable() }))
     .max(128),
 });
+const moduleSave = z.strictObject({ value: z.unknown(), expectedRevision: revision.nullable() });
+const moduleClone = z.strictObject({
+  moduleId: z.string().uuid(),
+  expectedRevision: revision,
+  name: z.string().trim().min(1).max(120),
+});
+const moduleDelete = z.strictObject({
+  moduleId: z.string().uuid(),
+  expectedRevision: revision,
+  replacement: z
+    .strictObject({
+      moduleId: z.string().uuid().nullable(),
+      expectedPresetRevisions: z.record(z.string().uuid(), revision),
+    })
+    .optional(),
+});
+const presetDelete = z.strictObject({ presetId: z.string().uuid(), expectedRevision: revision });
+const moduleApply = z.strictObject({
+  moduleId: z.string().uuid(),
+  expectedRevision: revision,
+  expectedActiveRevision: revision,
+  requestId: z.string().uuid(),
+});
 
 export function registerBroadcastConfigRoutes(
   app: FastifyInstance,
@@ -55,10 +79,36 @@ export function registerBroadcastConfigRoutes(
     if (!isReady()) return reply.code(503).send({ error: 'broadcast_config_unavailable' });
     return reply.header('cache-control', 'no-store').send(store.snapshot);
   });
+  app.get('/local/v1/broadcast-modules', (request, reply) => {
+    if (
+      originPolicy.mode !== 'loopback' ||
+      !['127.0.0.1', 'localhost', '[::1]', '::1'].includes(request.hostname) ||
+      request.headers['sec-fetch-site'] === 'cross-site' ||
+      (request.headers.origin && !authorized(request.headers.origin))
+    )
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    if (!isReady()) return reply.code(503).send({ error: 'broadcast_config_unavailable' });
+    return reply.header('cache-control', 'no-store').send({
+      modules: store.snapshot.modules.map((module) => ({
+        module,
+        builtin: isBuiltinModuleId(module.id),
+      })),
+    });
+  });
   const failure = (error: unknown) => {
     if (error instanceof ZodError) return { status: 400, code: 'invalid_request' };
     const code = error instanceof Error ? error.message : '';
-    if (['revision_conflict', 'request_conflict', 'production_busy'].includes(code))
+    if (
+      [
+        'revision_conflict',
+        'request_conflict',
+        'production_busy',
+        'builtin_immutable',
+        'module_active',
+        'module_referenced',
+        'preset_active',
+      ].includes(code)
+    )
       return { status: 409, code };
     if (['preset_missing', 'module_missing'].includes(code)) return { status: 404, code };
     if (code === 'broadcast_owner_sync_failed') return { status: 503, code };
@@ -74,6 +124,72 @@ export function registerBroadcastConfigRoutes(
       return { status: 400, code: 'invalid_request' };
     return { status: 503, code: 'provider_unavailable' };
   };
+  for (const action of ['save', 'clone', 'delete', 'apply'] as const) {
+    app.post(
+      `/operator/broadcast-modules/${action}`,
+      { bodyLimit: 1024 * 1024 },
+      async (request, reply) => {
+        if (!authorized(request.headers.origin))
+          return reply.code(403).send({
+            error: {
+              code: 'operator_forbidden',
+              message: '请求来源不可用',
+              requestId: request.id,
+            },
+          });
+        if (!isReady()) {
+          const retry = action === 'apply' ? moduleApply.safeParse(request.body) : null;
+          if (!retry?.success || !store.hasReceipt(retry.data.requestId))
+            return reply.code(503).send({
+              error: {
+                code: 'broadcast_config_unavailable',
+                message: '播出配置尚未就绪。',
+                requestId: request.id,
+              },
+            });
+        }
+        try {
+          if (action === 'save') {
+            const input = moduleSave.parse(request.body);
+            return await store.saveModule(parseModuleRecord(input.value), input.expectedRevision);
+          }
+          if (action === 'clone') {
+            const input = moduleClone.parse(request.body);
+            return await store.cloneModule(input.moduleId, input.expectedRevision, input.name);
+          }
+          if (action === 'apply') return await store.applyModule(moduleApply.parse(request.body));
+          const input = moduleDelete.parse(request.body);
+          await store.deleteModule(input.moduleId, input.expectedRevision, input.replacement);
+          return { ok: true };
+        } catch (error) {
+          const { status, code } = failure(error);
+          return reply.code(status).send({
+            error: {
+              code,
+              message:
+                status === 409 ? '配置正在使用或已变化，请先替换引用后重试。' : '配置暂时不可用。',
+              requestId: request.id,
+            },
+          });
+        }
+      },
+    );
+  }
+  app.post('/operator/broadcast-presets/delete', async (request, reply) => {
+    if (!authorized(request.headers.origin))
+      return reply.code(403).send({ error: 'operator_forbidden' });
+    if (!isReady()) return reply.code(503).send({ error: 'broadcast_config_unavailable' });
+    try {
+      const input = presetDelete.parse(request.body);
+      await store.deletePreset(input.presetId, input.expectedRevision);
+      return { ok: true };
+    } catch (error) {
+      const { status, code } = failure(error);
+      return reply.code(status).send({
+        error: { code, message: '方案正在使用或已变化，请刷新后重试。', requestId: request.id },
+      });
+    }
+  });
   for (const action of ['save', 'clone', 'preview', 'apply'] as const) {
     app.post(
       `/operator/broadcast-presets/${action}`,

@@ -20,6 +20,7 @@ import type {
 } from '@mizar/broadcast-config';
 import type { HudConfigPersistence } from '../hud-config/store.js';
 import type { BroadcastConfigStore } from './store.js';
+import { isBuiltinModuleId } from './builtin-modules.js';
 
 /** Reconstruct the existing HUD editor view from the coordinator's native modules. */
 export function hudDocumentFromBroadcast(document: BroadcastConfigDocument): HudConfigDocument {
@@ -102,6 +103,7 @@ export function createHudConfigPersistence(
               (item) =>
                 item.kind === 'hud' && 'preset' in item.value && item.value.preset.id === preset.id,
             ) as ModuleRecord<'hud'> | undefined;
+            if (old && isBuiltinModuleId(old.id)) continue;
             const template = old?.value ?? oldHud;
             if (!('preset' in template) && !('overlays' in template))
               throw new Error('hud_renderer_unsupported');
@@ -136,7 +138,9 @@ export function createHudConfigPersistence(
             ),
           };
         },
-        ...(activeChanged ? { active: { kind: 'hud' as const, value: nextHud, lock } } : {}),
+        ...(activeChanged
+          ? { active: { kind: 'hud' as const, moduleId: target?.id, value: nextHud, lock } }
+          : {}),
       });
     },
   };

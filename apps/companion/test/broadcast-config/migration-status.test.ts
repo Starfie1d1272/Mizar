@@ -123,6 +123,63 @@ it('boots built-in providers without custom injection when legacy dependencies a
         accent: { source: 'fixed' },
       },
     });
+    const modules = (await app.inject('/local/v1/broadcast-modules')).json<{
+      modules: Array<{ module: { id: string; kind: string; revision: string }; builtin: boolean }>;
+    }>().modules;
+    expect(modules.filter((item) => item.builtin && item.module.kind === 'hud')).toHaveLength(5);
+    expect(modules.filter((item) => item.builtin && item.module.kind === 'program')).toHaveLength(
+      1,
+    );
+    const original = modules.find((item) => item.builtin && item.module.kind === 'hud')!.module;
+    const post = (action: string, payload: object) =>
+      app.inject({
+        method: 'POST',
+        url: `/operator/broadcast-modules/${action}`,
+        headers: { origin: 'http://127.0.0.1:3000' },
+        payload,
+      });
+    expect(
+      (await post('delete', { moduleId: original.id, expectedRevision: original.revision }))
+        .statusCode,
+    ).toBe(409);
+    const cloned = await post('clone', {
+      moduleId: original.id,
+      expectedRevision: original.revision,
+      name: '我的 HUD',
+    });
+    expect(cloned.statusCode).toBe(200);
+    const copy = cloned.json<{ id: string; revision: string }>();
+    const before = (await app.inject('/local/v1/broadcast-presets')).json<BroadcastConfigDocument>()
+      .active;
+    const { randomUUID } = await import('node:crypto');
+    const applied = await post('apply', {
+      moduleId: copy.id,
+      expectedRevision: copy.revision,
+      expectedActiveRevision: before.revision,
+      requestId: randomUUID(),
+    });
+    expect(applied.statusCode).toBe(200);
+    const active = applied.json<BroadcastConfigDocument['active']>();
+    expect(active.sourceModuleIds?.hud).toBe(copy.id);
+    expect(active.moduleRevisions.music).toBe(before.moduleRevisions.music);
+    expect(active.moduleRevisions.camera).toBe(before.moduleRevisions.camera);
+    expect(
+      (await post('delete', { moduleId: copy.id, expectedRevision: copy.revision })).statusCode,
+    ).toBe(409);
+    expect(
+      (
+        await post('apply', {
+          moduleId: original.id,
+          expectedRevision: original.revision,
+          expectedActiveRevision: active.revision,
+          requestId: randomUUID(),
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(
+      (await post('delete', { moduleId: copy.id, expectedRevision: copy.revision })).statusCode,
+    ).toBe(200);
+    expect(hud.getState().document.customPresets).toHaveLength(0);
   } finally {
     await app.close();
     await rm(root, { recursive: true, force: true });
