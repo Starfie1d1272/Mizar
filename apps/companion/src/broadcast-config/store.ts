@@ -5,6 +5,7 @@ import {
   boundModules,
   clonePreset,
   preparePreset,
+  parseBroadcastConfigDocument,
   type ActiveBroadcastSnapshot,
   type ApplyPresetRequest,
   type BroadcastConfigDocument,
@@ -30,7 +31,6 @@ interface Envelope {
 /** Parsing must use the registered domain codecs, including their resolved snapshot parsers. */
 export interface BroadcastConfigStoreOptions {
   filePath: string;
-  parseDocument(input: unknown): BroadcastConfigDocument;
   createInitial(): Promise<BroadcastConfigDocument>;
   resolver: PresetResolver;
   /** Holds the production and resource-reference guards through the commit. */
@@ -55,7 +55,7 @@ export class BroadcastConfigStore {
       Object.keys(value).some((key) => !['version', 'document', 'receipts'].includes(key))
     )
       throw new Error('broadcast_config_invalid');
-    const document = this.options.parseDocument(value.document);
+    const document = parseBroadcastConfigDocument(value.document);
     const receipts: Record<string, Receipt> = Object.create(null) as Record<string, Receipt>;
     for (const [id, raw] of Object.entries(value.receipts)) {
       if (!raw || typeof raw !== 'object' || Array.isArray(raw))
@@ -67,7 +67,7 @@ export class BroadcastConfigStore {
       )
         throw new Error('broadcast_config_invalid');
       // Reuse the same domain parser for the persisted receipt's resolved snapshot.
-      const checked = this.options.parseDocument({ ...document, active: receipt.active });
+      const checked = parseBroadcastConfigDocument({ ...document, active: receipt.active });
       receipts[id] = { fingerprint: receipt.fingerprint, active: checked.active };
     }
     return { version: 1, document, receipts };
@@ -84,8 +84,10 @@ export class BroadcastConfigStore {
         this.envelope = await this.read();
       } catch (error) {
         if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
-        const document = this.options.parseDocument(await this.options.createInitial());
+        const document = parseBroadcastConfigDocument(await this.options.createInitial());
         const initial: Envelope = { version: 1, document, receipts: {} };
+        if (Buffer.byteLength(JSON.stringify(initial)) > 16 * 1024 * 1024)
+          throw new Error('broadcast_config_too_large');
         await replaceDurableJson(this.options.filePath, initial);
         this.envelope = await this.read();
       }
@@ -97,6 +99,8 @@ export class BroadcastConfigStore {
   }
   private async commit(next: Envelope): Promise<void> {
     const checked = this.parseEnvelope(next);
+    if (Buffer.byteLength(JSON.stringify(checked)) > 16 * 1024 * 1024)
+      throw new Error('broadcast_config_too_large');
     await replaceDurableJson(this.options.filePath, checked);
     this.envelope = checked;
   }

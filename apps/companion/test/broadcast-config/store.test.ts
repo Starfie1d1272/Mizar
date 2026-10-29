@@ -9,11 +9,7 @@ import {
   getBuiltinResolvedPreset,
   getBuiltinTheme,
 } from '@mizar/hud-config';
-import {
-  parseBroadcastConfigDocument,
-  type BroadcastConfigDocument,
-  type ProgramVisualConfigV1,
-} from '@mizar/broadcast-config';
+import { type BroadcastConfigDocument, type ProgramVisualConfigV1 } from '@mizar/broadcast-config';
 import { BroadcastConfigStore } from '../../src/broadcast-config/store.js';
 
 const directories: string[] = [];
@@ -120,7 +116,6 @@ async function setup() {
   const initial = fixture();
   const options = {
     filePath: join(directory, 'config.json'),
-    parseDocument: parseBroadcastConfigDocument,
     createInitial: () => Promise.resolve(initial),
     resolver: {
       resolve: () =>
