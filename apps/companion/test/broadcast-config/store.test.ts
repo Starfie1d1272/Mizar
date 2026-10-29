@@ -124,7 +124,9 @@ async function setup() {
       resolve: () =>
         Promise.resolve({ resolved: initial.active.resolved, lock: initial.active.lock }),
     },
-    withCommitGuard: async <T>(operation: () => Promise<T>) => operation(),
+    withReferenceGuard: <T>(operation: () => Promise<T>) => operation(),
+    withApplyGuard: <T>(operation: (canCommit: () => boolean) => Promise<T>) =>
+      operation(() => true),
   };
   const store = new BroadcastConfigStore(options);
   await store.load();
@@ -188,5 +190,25 @@ describe('BroadcastConfigStore', () => {
     } finally {
       await app.close();
     }
+  });
+  it('does not publish when readiness changes before the atomic rename', async () => {
+    const { options, initial } = await setup();
+    const store = new BroadcastConfigStore({
+      ...options,
+      withApplyGuard: (operation) => operation(() => false),
+    });
+    await store.load();
+    const request = {
+      presetId: initial.presets[0]!.id,
+      expectedRevision: 'p1',
+      expectedModuleRevisions: { hud: 'h1', program: 'p1' },
+      expectedActiveRevision: 'active',
+      requestId: randomUUID(),
+    };
+    await expect(store.apply(request)).rejects.toThrow('production_busy');
+    expect(store.snapshot.active.revision).toBe('active');
+    const reopened = new BroadcastConfigStore(options);
+    await reopened.load();
+    expect(reopened.snapshot.active.revision).toBe('active');
   });
 });

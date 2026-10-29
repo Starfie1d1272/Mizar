@@ -129,7 +129,7 @@ export function registerProductionRoutes(
       // Synchronous commit shares this lifecycle owner; no separate preparation authority.
       commit();
     },
-    configureBroadcast: async <T>(commit: () => Promise<T>): Promise<T> => {
+    configureBroadcast: async <T>(commit: (canCommit: () => boolean) => Promise<T>): Promise<T> => {
       if (
         mode !== 'preparation' ||
         busy ||
@@ -142,7 +142,15 @@ export function registerProductionRoutes(
         throw new Error('production_busy');
       busy = true;
       try {
-        return await commit();
+        return await commit(
+          () =>
+            mode === 'preparation' &&
+            !shuttingDown &&
+            !updatePending &&
+            !trialPending &&
+            options.scenes.get().active === 'waiting' &&
+            options.scenes.get().preparing === undefined,
+        );
       } finally {
         busy = false;
       }

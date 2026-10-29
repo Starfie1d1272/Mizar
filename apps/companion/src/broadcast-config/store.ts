@@ -33,8 +33,10 @@ export interface BroadcastConfigStoreOptions {
   filePath: string;
   createInitial(): Promise<BroadcastConfigDocument>;
   resolver: PresetResolver;
-  /** Holds the production and resource-reference guards through the commit. */
-  withCommitGuard<T>(operation: () => Promise<T>): Promise<T>;
+  /** Serializes changes to resource references with provider removal. */
+  withReferenceGuard<T>(operation: () => Promise<T>): Promise<T>;
+  /** Holds the production lifecycle and exposes a synchronous final readiness check. */
+  withApplyGuard<T>(operation: (canCommit: () => boolean) => Promise<T>): Promise<T>;
   onApplied?(active: ActiveBroadcastSnapshot, previous: ActiveBroadcastSnapshot): void;
 }
 
@@ -97,16 +99,21 @@ export class BroadcastConfigStore {
     if (!this.envelope) throw new Error('broadcast_config_unavailable');
     return structuredClone(this.envelope.document);
   }
-  private async commit(next: Envelope): Promise<void> {
+  private async commit(next: Envelope, canCommit?: () => boolean): Promise<void> {
     const checked = this.parseEnvelope(next);
     if (Buffer.byteLength(JSON.stringify(checked)) > 16 * 1024 * 1024)
       throw new Error('broadcast_config_too_large');
-    await replaceDurableJson(this.options.filePath, checked);
+    const committed = await replaceDurableJson(
+      this.options.filePath,
+      checked,
+      canCommit ? { canCommit } : {},
+    );
+    if (!committed) throw new Error('production_busy');
     this.envelope = checked;
   }
   async clone(request: ClonePresetRequest): Promise<{ presetId: string }> {
     return this.queue.run(() =>
-      this.options.withCommitGuard(async () => {
+      this.options.withReferenceGuard(async () => {
         if (!this.envelope) throw new Error('broadcast_config_unavailable');
         const next = structuredClone(this.envelope);
         const copy = clonePreset(next.document, request, randomUUID);
@@ -124,7 +131,7 @@ export class BroadcastConfigStore {
     modules: { value: ModuleRecord; expectedRevision: Revision | null }[];
   }): Promise<BroadcastConfigDocument> {
     return this.queue.run(() =>
-      this.options.withCommitGuard(async () => {
+      this.options.withReferenceGuard(async () => {
         if (!this.envelope) throw new Error('broadcast_config_unavailable');
         const next = structuredClone(this.envelope);
         const oldPreset = next.document.presets.find((item) => item.id === input.preset.id);
@@ -172,48 +179,50 @@ export class BroadcastConfigStore {
     );
   }
   async apply(request: ApplyPresetRequest): Promise<ActiveBroadcastSnapshot> {
-    return this.queue.run(() =>
-      this.options.withCommitGuard(async () => {
-        if (!this.envelope) throw new Error('broadcast_config_unavailable');
-        if (
-          !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-            request.requestId,
-          )
+    return this.queue.run(async () => {
+      if (!this.envelope) throw new Error('broadcast_config_unavailable');
+      if (
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+          request.requestId,
         )
-          throw new Error('invalid_request');
-        const fingerprint = canonicalJson(request);
-        const receipt = this.envelope.receipts[request.requestId];
-        if (receipt) {
-          if (receipt.fingerprint !== fingerprint) throw new Error('request_conflict');
-          return structuredClone(receipt.active);
-        }
-        const previous = this.envelope.document.active;
-        const active = await preparePreset(
-          this.snapshot,
-          request,
-          this.options.resolver,
-          randomUUID,
-        );
-        const next = structuredClone(this.envelope);
-        next.document.previousActive = structuredClone(previous);
-        next.document.active = active;
-        next.receipts[request.requestId] = { fingerprint, active };
-        try {
-          await this.commit(next);
-        } catch (error) {
-          // A rename may have succeeded even if a later persistence step failed.
-          const disk = await this.read().catch(() => null);
-          const committed = disk?.receipts[request.requestId];
-          if (!disk || !committed || committed.fingerprint !== fingerprint) throw error;
-          this.envelope = disk;
-        }
-        try {
-          this.options.onApplied?.(structuredClone(active), structuredClone(previous));
-        } catch {
-          /* Persistence remains authoritative. */
-        }
-        return structuredClone(active);
-      }),
-    );
+      )
+        throw new Error('invalid_request');
+      const fingerprint = canonicalJson(request);
+      const receipt = this.envelope.receipts[request.requestId];
+      if (receipt) {
+        if (receipt.fingerprint !== fingerprint) throw new Error('request_conflict');
+        return structuredClone(receipt.active);
+      }
+      return this.options.withApplyGuard((canCommit) =>
+        this.options.withReferenceGuard(async () => {
+          if (!this.envelope) throw new Error('broadcast_config_unavailable');
+          const previous = this.envelope.document.active;
+          const active = await preparePreset(
+            this.snapshot,
+            request,
+            this.options.resolver,
+            randomUUID,
+          );
+          const next = structuredClone(this.envelope);
+          next.document.previousActive = structuredClone(previous);
+          next.document.active = active;
+          next.receipts[request.requestId] = { fingerprint, active };
+          try {
+            await this.commit(next, canCommit);
+          } catch (error) {
+            const disk = await this.read().catch(() => null);
+            const committed = disk?.receipts[request.requestId];
+            if (!disk || !committed || committed.fingerprint !== fingerprint) throw error;
+            this.envelope = disk;
+          }
+          try {
+            this.options.onApplied?.(structuredClone(active), structuredClone(previous));
+          } catch {
+            /* Persistence remains authoritative. */
+          }
+          return structuredClone(active);
+        }),
+      );
+    });
   }
 }
