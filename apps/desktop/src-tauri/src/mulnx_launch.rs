@@ -106,6 +106,15 @@ pub fn launch(app: &tauri::AppHandle, log: &DesktopLog, automatic: bool, preserv
     launch_operation(app, log, true, false, preserve)
 }
 
+/// Only reconcile an existing submitted request; absence never starts a new one.
+pub fn resume(app: &tauri::AppHandle, log: &DesktopLog) -> Result<Value, String> {
+    let _launch = LAUNCH_GATE.try_lock().map_err(|_| "MulNX 正在启动，请稍后重试。")?;
+    app.state::<production_exit::ExitGate>().check()?;
+    app.state::<updates::PendingUpdate>().check()?;
+    let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+    Ok(resume_pending_launch(log, &managed)?.unwrap_or_else(|| json!({"result":"not-found"})))
+}
+
 pub fn update(app: &tauri::AppHandle, log: &DesktopLog) -> Result<Value, String> {
     launch_operation(app, log, false, true, false)
 }
