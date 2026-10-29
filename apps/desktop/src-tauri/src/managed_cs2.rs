@@ -1666,7 +1666,7 @@ impl ManagedCs2 {
                 self.log.state_root.join("data/mulnx-launch/pending.json").exists(),
                 || any_cs2_running(&self.log),
                 || launcher.stop().map_err(|error| self.log.preserve_error(
-                    "mulnx_launcher_exit", None, &error, "本次 MulNX 启动器未能关闭，请检查后重试。")),
+                    "mulnx_launcher_exit", None, &error, "本次 MulNX 启动器未能关闭，请检查后重试。".to_string())),
             )?;
             self.log.event("mulnx_launcher_exit", "success", Some("owned launch handle stopped after game exit"));
             self.mulnx_launcher = None;
