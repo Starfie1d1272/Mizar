@@ -435,12 +435,16 @@ pub fn stop_managed_for_exit(cs2: &managed_cs2::ManagedCs2, log: &DesktopLog) ->
     }
     if crate::mulnx_stop::blocked(log, &identity)? { return Err("MulNX 停止结果仍未知，请检查游戏后重试。".into()); }
     verify_gateway_owner(log, 55202, game.pid)?;
+    crate::mulnx_stop::verify_present(&game)?;
     let proof = crate::mulnx_stop::UnloadProof::open(game.pid)?;
+    crate::mulnx_stop::verify_present(&game)?;
+    verify_gateway_owner(log, 55202, game.pid)?;
     let result = crate::mulnx_stop::submit(log, &identity, || {
         let current = controlled_game(cs2, log)?;
         if current.pid != game.pid || current.created != game.created || !current.is_running() {
             return Err("游戏身份已变化，未发送停止命令。".into());
         }
+        crate::mulnx_stop::verify_present(&game)?;
         verify_gateway_owner(log, 55202, game.pid)?;
         let root = crate::bundle_root()?;
         let mut command = Command::new(root.join("resources/runtime/node.exe"));
@@ -474,7 +478,10 @@ pub fn stop_control(app: &tauri::AppHandle, log: &DesktopLog) -> Result<Value, S
         executable:PathBuf::from(context["executable"].as_str().ok_or("当前游戏安装位置未确认。")?) };
     if crate::mulnx_stop::blocked(log, &identity)? { return Ok(crate::mulnx_stop::uncertain("already-submitted")); }
     verify_gateway_owner(log, 55202, game.pid)?;
+    crate::mulnx_stop::verify_present(&game)?;
     let proof = crate::mulnx_stop::UnloadProof::open(game.pid)?;
+    crate::mulnx_stop::verify_present(&game)?;
+    verify_gateway_owner(log, 55202, game.pid)?;
     production_exit::finish_workspace_production(log)?;
     let stopped = crate::mulnx_stop::submit(log, &identity, || {
         // Restoration failure keeps the journal and does not submit unload.
@@ -483,6 +490,7 @@ pub fn stop_control(app: &tauri::AppHandle, log: &DesktopLog) -> Result<Value, S
         if current.pid != game.pid || current.created != game.created || !game.is_running() {
             return Err("游戏实例已变化，未发送停止命令。".into());
         }
+        crate::mulnx_stop::verify_present(&game)?;
         verify_gateway_owner(log, 55202, game.pid)?;
         let receipt = log.state_root.join("data/mulnx-launch/current.json");
         match std::fs::remove_file(receipt) {

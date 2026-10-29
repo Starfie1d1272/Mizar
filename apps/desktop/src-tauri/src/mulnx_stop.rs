@@ -42,29 +42,40 @@ impl UnloadProof {
     }
 }
 
+fn module_present(game: &crate::managed_cs2::WorkspaceProcess) -> Result<bool, String> {
+    if !game.is_running() { return Err("游戏已退出，MulNX 状态无法单独确认。".into()); }
+    let snapshot = unsafe { CreateToolhelp32Snapshot(0x18, game.pid) };
+    if snapshot == -1 { return Err("无法检查 MulNX 模块，状态未知。".into()); }
+    let snapshot = Handle(snapshot);
+    let mut entry: ModuleEntry = unsafe { std::mem::zeroed() };
+    entry.size = std::mem::size_of::<ModuleEntry>() as u32;
+    let mut next = unsafe { Module32FirstW(snapshot.0, &mut entry) };
+    let mut found = false;
+    while next != 0 {
+        let length = entry.name.iter().position(|c| *c == 0).unwrap_or(entry.name.len());
+        if String::from_utf16_lossy(&entry.name[..length]).eq_ignore_ascii_case("CS2OBTool.dll") { found = true; }
+        next = unsafe { Module32NextW(snapshot.0, &mut entry) };
+    }
+    if unsafe { GetLastError() } != 18 { return Err("无法完整检查 MulNX 模块，状态未知。".into()); }
+    if !game.is_running() { return Err("游戏身份已失效，MulNX 状态未知。".into()); }
+    Ok(found)
+}
+
+/// A live gateway and loaded module establish the current injection before
+/// opening its event; the event name alone does not identify an injection cycle.
+pub fn verify_present(game: &crate::managed_cs2::WorkspaceProcess) -> Result<(), String> {
+    if !module_present(game)? { return Err("当前游戏没有已启动的 MulNX 模块，未发送停止命令。".into()); }
+    Ok(())
+}
+
 /// Recheck the same live process on every retry, including after a restart.
 pub fn verify_absent(game: &crate::managed_cs2::WorkspaceProcess) -> Result<(), String> {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        loop {
-            if !game.is_running() { return Err("游戏已退出，MulNX 卸载结果无法单独确认。".into()); }
-            let snapshot = unsafe { CreateToolhelp32Snapshot(0x18, game.pid) };
-            if snapshot == -1 { return Err("无法检查 MulNX 模块，卸载结果未知。".into()); }
-            let snapshot = Handle(snapshot);
-            let mut entry: ModuleEntry = unsafe { std::mem::zeroed() };
-            entry.size = std::mem::size_of::<ModuleEntry>() as u32;
-            let mut next = unsafe { Module32FirstW(snapshot.0, &mut entry) };
-            let mut found = false;
-            while next != 0 {
-                let length = entry.name.iter().position(|c| *c == 0).unwrap_or(entry.name.len());
-                if String::from_utf16_lossy(&entry.name[..length]).eq_ignore_ascii_case("CS2OBTool.dll") { found = true; }
-                next = unsafe { Module32NextW(snapshot.0, &mut entry) };
-            }
-            if unsafe { GetLastError() } != 18 { return Err("无法完整检查 MulNX 模块，卸载结果未知。".into()); }
-            if !game.is_running() { return Err("游戏身份已失效，卸载结果未知。".into()); }
-            if !found { return Ok(()); }
-            if std::time::Instant::now() >= deadline { return Err("MulNX 模块仍在游戏中，卸载结果未知。".into()); }
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if !module_present(game)? { return Ok(()); }
+        if std::time::Instant::now() >= deadline { return Err("MulNX 模块仍在游戏中，卸载结果未知。".into()); }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
 }
 
 #[derive(Clone)]
