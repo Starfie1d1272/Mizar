@@ -144,6 +144,43 @@ async function rig(nativeRequired = false) {
     },
   };
 }
+it('keeps the current shot while drafts are written', async () => {
+  const r = await rig();
+  await r.resume();
+  await r.round(0);
+  r.director.opening();
+  await r.tick();
+  const id = await r.store.createPreset();
+  for (const write of [
+    () => r.store.createPreset(),
+    () => r.store.createPreset(id),
+    () => r.store.savePreset(id, { ...r.store.preset, name: '编辑' }),
+  ]) {
+    const pending = write();
+    expect(r.store.saving).toBe(false);
+    await r.tick();
+    await pending;
+    expect(r.calls).toEqual([{ type: 'CamMacro/Play', macro: '开场' }]);
+  }
+});
+
+it('persists a catalog larger than the ordinary receipt limit', async () => {
+  const r = await rig();
+  const shot = { macro: 'x'.repeat(110), maxMs: 6000 };
+  const maps = Array.from({ length: 16 }, (_, index) => ({
+    map: `de_map${index}`,
+    pack: '包',
+    rounds: Array.from({ length: 64 }, () => shot),
+  }));
+  await r.store.savePreset(r.store.activePresetId, { ...r.store.preset, maps });
+  for (let i = 0; i < 18; i++) await r.store.createPreset(r.store.activePresetId);
+  const file = await readFile(join(r.store.directory, 'presets.json'));
+  expect(file.byteLength).toBeGreaterThan(2 * 1024 * 1024);
+  const restored = new OrchestrationStore(r.store.directory);
+  await restored.load();
+  expect(restored.presets).toHaveLength(19);
+});
+
 it('new round shots draw once, continue into live play and clear at their deadline', async () => {
   const r = await rig();
   await r.resume();
