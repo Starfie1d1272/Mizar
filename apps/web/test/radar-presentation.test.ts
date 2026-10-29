@@ -3,7 +3,7 @@ import { radarSnapshotSchema, type RadarSnapshot } from '@mizar/protocol/radar';
 import { RadarPresentation as SharedRadarPresentation } from '@mizar-hud/radar-view/presentation';
 import fixtures from '../src/program/fixtures/generated/real-radar-fixtures.generated.json';
 
-import { toRadarViewFrame } from '../src/program/widgets/radar/adapter';
+import { toRadarViewFrame } from '@mizar/hud-view';
 import type { RadarViewFrame } from '@mizar-hud/radar-view';
 class RadarPresentation extends SharedRadarPresentation {
   override accept(snapshot: RadarSnapshot | RadarViewFrame | null, now: number, reconnect = false) {

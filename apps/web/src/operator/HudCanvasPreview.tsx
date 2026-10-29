@@ -9,10 +9,10 @@ import {
 } from '@mizar/hud-config';
 import type { ProgramSnapshot } from '@mizar/protocol/program';
 
-import type { RadarProps } from '../program/widgets/radar/Radar';
+import type { RadarProps } from '@mizar/hud-view';
 import { HudEditorOverlay } from '../program/HudEditorOverlay';
-import { ProgramView } from '../program/ProgramView';
-import { hasAcceptedProgramSnapshot } from '../program/presentation-boundary';
+import { ProgramView } from '@mizar/hud-view';
+import { hasAcceptedProgramSnapshot } from '@mizar/hud-view';
 import type { LocalChannelConnectionState } from '../realtime';
 import { getMapThumbnail } from '@mizar/cs2-assets';
 import type { ReactNode } from 'react';

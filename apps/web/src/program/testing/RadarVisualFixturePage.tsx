@@ -1,11 +1,11 @@
 import { getBuiltinResolvedPreset } from '@mizar/hud-config';
-import { Radar } from '../widgets/radar/Radar';
+import { Radar } from '@mizar/hud-view';
 import {
   RADAR_VISUAL_FIXTURES,
   radarVisualFixture,
   type RadarVisualFixture,
 } from '../fixtures/radar-fixtures';
-import { themeStyle } from '../GameplayHud';
+import { themeStyle } from '@mizar/hud-view';
 
 export function RadarVisualFixturePage({ id }: { readonly id: string }) {
   if (!(RADAR_VISUAL_FIXTURES as readonly string[]).includes(id)) return <p>雷达场景不存在</p>;

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { BpSnapshot } from '@mizar/protocol/bp';
-import { BpCompactPresentation, BpPresentation } from '../bp/BpPresentation';
+import { BpCompactPresentation, BpPresentation } from '@mizar/hud-view';
 import { Panel, StatusBanner } from '../ui';
 import { command, useLocalRead } from './client';
 import './bp-presentation-settings.css';

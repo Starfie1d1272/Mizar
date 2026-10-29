@@ -4,6 +4,9 @@ import { pathToFileURL } from 'node:url';
 import { parseTree } from 'jsonc-parser';
 
 export const RUNTIME_COLORS = new Set([
+  // Host-resolved built-in presentation textures.
+  '--mizar-asset-ewc-contour',
+  '--mizar-asset-esl-texture',
   '--mizar-event-accent',
   '--mizar-entrant-a',
   '--mizar-entrant-b',
