@@ -189,7 +189,23 @@ export class MusicStore {
   private async loadDelegatedState(): Promise<void> {
     const persistence = this.persistence;
     if (!persistence) throw new Error('music_state_invalid');
-    const runtime = await this.readRuntime();
+    let runtime;
+    try {
+      runtime = await this.readRuntime();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      try {
+        const path = await safePath(this.directory, 'state.json');
+        const stat = await lstat(path);
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 512 * 1024)
+          throw new Error('music_state_invalid', { cause: error });
+        runtime = runtimeState(stateSchema.parse(JSON.parse(await readFile(path, 'utf8'))));
+      } catch (legacyError) {
+        if ((legacyError as NodeJS.ErrnoException).code !== 'ENOENT') throw legacyError;
+        runtime = runtimeState(this.state);
+      }
+      await atomicJson(join(this.directory, 'runtime.json'), runtime);
+    }
     const current = await persistence.read();
     this.state = stateSchema.parse({
       ...runtime,
@@ -253,6 +269,7 @@ export class MusicStore {
       if (this.failure) throw new Error('music_state_invalid');
       const next = structuredClone(this.state);
       change(next);
+      stateSchema.parse(next);
       const configChanged = JSON.stringify(next.config) !== JSON.stringify(this.state.config);
       if (this.persistence && configChanged) {
         if (JSON.stringify(runtimeState(next)) !== JSON.stringify(runtimeState(this.state)))

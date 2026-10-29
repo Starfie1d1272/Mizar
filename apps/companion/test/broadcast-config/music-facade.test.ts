@@ -51,6 +51,12 @@ it('keeps playback state local while the coordinator owns music config across re
       }),
     ).rejects.toThrow('music_mixed_update');
     expect(saved.config.groups.waiting.volume).toBe(0.2);
+    await rm(join(directory, 'runtime.json'));
+    const recovered = new MusicStore(directory);
+    await recovered.loadWithPersistence(owner);
+    expect(recovered.state.config.groups.waiting.volume).toBe(0.2);
+    expect(recovered.state.master).toBe(1);
+    expect(await readFile(join(directory, 'state.json'), 'utf8')).toBe(legacy);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
