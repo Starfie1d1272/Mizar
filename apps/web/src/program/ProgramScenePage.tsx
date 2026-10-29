@@ -1,3 +1,4 @@
+import { useBroadcastDisplayConfig } from '../realtime/broadcast-display-client';
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import {
   programPresentationSchema,
@@ -56,12 +57,18 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
   const data = preview ? presentationPreview(sceneId, params.get('variant')) : liveData;
   const scenes = useProgramScenes();
   const reducedMotion = useSyncExternalStore(subscribeMotion, readReducedMotion, () => false);
-  const hud = useHudConfigClient();
+  const display = useBroadcastDisplayConfig(!preview);
+  const hud = useHudConfigClient(
+    preview || (display.current === null && display.status !== 'unsupported'),
+  );
+  const activeHud =
+    !preview && display.current?.hud.renderer === 'native' ? display.current.hud : null;
   const client = useLocalChannelClient('program');
   const connection = useSyncExternalStore(client.subscribe, client.getSnapshot, client.getSnapshot);
   const snapshot = preview
     ? programPreviewSnapshot('gameplay', params.get('variant'))
     : connection.current;
+  if (!preview && display.status === 'unsupported' && display.current === null) return null;
   return (
     <ProgramView
       kind="scene"
@@ -69,7 +76,9 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
       data={data}
       snapshot={snapshot ?? null}
       scenes={scenes}
-      resolvedPreset={hud.current}
+      resolvedPreset={activeHud?.config ?? hud.current}
+      overlays={activeHud?.overlays}
+      accent={activeHud?.accent}
       reducedMotion={reducedMotion}
       preview={preview}
       shortIntro={params.get('intro') === 'short'}

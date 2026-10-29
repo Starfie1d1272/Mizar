@@ -12,6 +12,7 @@ export function PlayerRail({
   settings,
   widgetId,
   presentationRevision = 0,
+  chatEnabled = true,
 }: HudWidgetRendererProps) {
   const options = playerRailSettingsSchema.parse(settings.settings);
   const presentation = buildPlayerRailsPresentation(snapshot.payload);
@@ -49,6 +50,7 @@ export function PlayerRail({
   return (
     <section
       data-all-chat-host={
+        chatEnabled &&
         physicalSide === 'right' &&
         Boolean(snapshot.payload.allChat?.length) &&
         snapshot.payload.status.telemetry === 'fresh'
@@ -60,7 +62,7 @@ export function PlayerRail({
       data-physical-side={physicalSide}
       data-player-rail-phase={presentation.phase}
     >
-      {physicalSide === 'right' && snapshot.payload.status.telemetry === 'fresh' ? (
+      {chatEnabled && physicalSide === 'right' && snapshot.payload.status.telemetry === 'fresh' ? (
         <AllChat design={design} messages={snapshot.payload.allChat ?? []} />
       ) : null}
       <div className="player-rail__summary-slot" data-team-summary-slot="true">

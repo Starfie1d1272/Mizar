@@ -1,4 +1,4 @@
-import { BroadcastPause } from '@mizar/hud-view';
+import { BroadcastPause, GameplayHud } from '@mizar/hud-view';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { expect, it } from 'vitest';
@@ -74,4 +74,58 @@ it('applies shared pause chat visibility and expiration rules', () => {
     snapshot.payload.allChat[0]!.expiresAt = '2000-01-01T00:00:00.000Z';
     expect(render()).not.toContain('aria-label="公共聊天"');
   }
+});
+
+it('uses independent pause and chat settings while preserving automatic placement', () => {
+  const snapshot = structuredClone(getProgramFixture('live-canonical')!);
+  snapshot.payload.clock = { ...snapshot.payload.clock!, phase: 'paused' };
+  snapshot.payload.allChat = [
+    { id: 'chat', sender: '选手', text: '消息', expiresAt: '2099-01-01T00:00:00.000Z' },
+  ];
+  const preset = structuredClone(getBuiltinResolvedPreset());
+  preset.layout.widgets['top-score-bar'].visible = false;
+  preset.layout.widgets['team-t-rail'].visible = false;
+  const overlays = {
+    pause: { enabled: true, visual: 'legacy' },
+    chat: { enabled: true, placement: 'auto' as const },
+  };
+  const render = () =>
+    renderToStaticMarkup(
+      createElement(GameplayHud, {
+        snapshot,
+        resolvedPreset: preset,
+        overlays,
+        accent: { source: 'fixed', value: preset.theme.brandColor },
+      }),
+    );
+  expect(render()).toContain('data-broadcast-pause');
+  expect(render()).toContain('aria-label="公共聊天"');
+  expect(render()).toContain('--mizar-hud-accent:');
+  overlays.pause.enabled = false;
+  expect(render()).not.toContain('data-broadcast-pause');
+  expect(render()).toContain('aria-label="公共聊天"');
+  overlays.chat.enabled = false;
+  expect(render()).not.toContain('aria-label="公共聊天"');
+  const fixed = {
+    ...overlays,
+    chat: {
+      enabled: true,
+      placement: { ...preset.layout.widgets['team-t-rail'], visible: true, offsetX: -48 },
+    },
+  };
+  const fixedMarkup = renderToStaticMarkup(
+    createElement(GameplayHud, { snapshot, resolvedPreset: preset, overlays: fixed }),
+  );
+  expect(fixedMarkup).toContain('hud-fixed-chat');
+  expect(fixedMarkup).toContain('aria-label="公共聊天"');
+  const fallback = getBuiltinResolvedPreset('builtin:esl-preset').theme.brandColor;
+  const eventMarkup = renderToStaticMarkup(
+    createElement(GameplayHud, {
+      snapshot,
+      resolvedPreset: preset,
+      overlays: fixed,
+      accent: { source: 'event', fallback },
+    }),
+  );
+  expect(eventMarkup).toContain(`--mizar-hud-accent:${fallback}`);
 });
