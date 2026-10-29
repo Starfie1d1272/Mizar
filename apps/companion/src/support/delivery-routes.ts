@@ -175,6 +175,11 @@ export function registerDiagnosticDelivery(
   });
   return {
     status,
+    snapshotStatus: () => ({
+      available: ready,
+      error: ready ? (delivery?.status().error ?? null) : failure,
+      delivery: ready ? (delivery?.status() ?? null) : null,
+    }),
     async retainedBatches(): Promise<RetainedDiagnosticBatch[]> {
       await initializing;
       if (!options.directory) return [];

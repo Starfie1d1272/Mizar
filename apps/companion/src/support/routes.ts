@@ -1,5 +1,6 @@
 import type { WorkspaceObserver } from '../telemetry/observer-workspace.js';
 import type { RetainedDiagnosticBatch } from './delivery.js';
+import type { registerDiagnosticDelivery } from './delivery-routes.js';
 import { Readable } from 'node:stream';
 import { finished } from 'node:stream/promises';
 import { encodeSupportBundle, fullLogArchive } from './archive.js';
@@ -143,6 +144,9 @@ export function registerSupportRoutes(
     readonly runtimeSummary: () => ReturnType<DebugEvidenceStore['getSupportSummary']>;
     readonly sessionLogHealth?: () => unknown;
     readonly pendingJournalEvidence?: () => readonly string[];
+    readonly diagnosticDelivery?: () => ReturnType<
+      ReturnType<typeof registerDiagnosticDelivery>['snapshotStatus']
+    >;
     readonly retainedDiagnosticBatches?: () => Promise<readonly RetainedDiagnosticBatch[]>;
     readonly pendingPerformanceEvidence?: () => readonly unknown[];
     readonly beginPerformanceExport?: () => Promise<() => Promise<void>>;
@@ -363,6 +367,45 @@ export function registerSupportRoutes(
             '本文件不是 Windows + CS2 + OBS 的真实验收通过证明。',
           ],
           snapshot: {
+            diagnosticDelivery: (() => {
+              const status = options.diagnosticDelivery?.();
+              const available = status?.available ?? false;
+              const delivery = status?.delivery;
+              const errorCodes = [
+                'not_configured',
+                'local_queue_unavailable',
+                'state_unreadable',
+                'consent_policy_changed',
+                'delivery_failed',
+                'session_budget_waiting_for_capacity',
+                'queue_write_unconfirmed',
+                'journal_unreadable',
+                'queue_budget_local_journal_retained',
+                'manifest_budget_local_journal_retained',
+                'retired_identity_sync_required',
+                'server_retention_expired_local_copy_retained',
+                'receipt_size_or_body',
+                'receipt_size_budget',
+                'invalid_enrollment_ack',
+                'invalid_batch_permit',
+                'batch_integrity_failed',
+                'withdrawal_pending',
+              ];
+              return {
+                available,
+                configured: available ? (delivery?.configured ?? null) : null,
+                consent: available ? (delivery?.consent ?? null) : null,
+                paused: available ? (delivery?.paused ?? null) : null,
+                queuedBatches: available ? (delivery?.queuedBatches ?? null) : null,
+                blockedBatches: available ? (delivery?.blockedBatches ?? null) : null,
+                queuedBytes: available ? (delivery?.queuedBytes ?? null) : null,
+                pendingBytes: available ? (delivery?.pendingBytes ?? null) : null,
+                acknowledged: available ? (delivery?.acknowledged ?? null) : null,
+                failures: available ? (delivery?.failures ?? null) : null,
+                error: status?.error ? (choice(status.error, errorCodes) ?? 'other') : null,
+                nextAttemptAt: available ? (delivery?.nextAttemptAt ?? null) : null,
+              };
+            })(),
             observer: options.observer?.() ?? null,
             nativeObs: nativeSummary,
             program: program
