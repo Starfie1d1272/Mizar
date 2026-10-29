@@ -117,15 +117,21 @@ export class MusicStore {
     }
   }
   async load() {
-    try {
-      await this.stage('music_load', { directory: this.directory }, () =>
-        this.persistence ? this.loadDelegatedState() : this.loadState(),
-      );
-    } catch (error) {
-      this.failure = true;
-      this.ready = false;
-      throw error;
-    }
+    const run = async () => {
+      try {
+        await this.stage('music_load', { directory: this.directory }, () =>
+          this.persistence ? this.loadDelegatedState() : this.loadState(),
+        );
+      } catch (error) {
+        this.failure = true;
+        this.ready = false;
+        throw error;
+      }
+    };
+    if (!this.persistence) return run();
+    const result = this.queue.then(run);
+    this.queue = result.catch(() => undefined);
+    return result;
   }
   private async loadState() {
     await ensureDirectory(this.directory);
