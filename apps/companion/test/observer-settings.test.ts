@@ -40,13 +40,14 @@ it('persists operator timing and keeps per-match connection credentials in memor
     expect(store.configured()?.password).toBe('synthetic-secret');
     expect(JSON.stringify(store.view())).not.toContain('synthetic-secret');
     expect(await readFile(path, 'utf8')).not.toMatch(/password|127\.0\.0\.1/);
-    const legacy: Partial<typeof store.settings> = { ...store.settings };
+    const legacy: Partial<typeof store.settings> = { ...store.settings, enabled: false };
     delete legacy.nicknameSource;
-    await writeFile(path, JSON.stringify({ ...legacy, displaySeconds: 10 }));
+    await writeFile(path, JSON.stringify({ ...legacy, expectedDelaySeconds: 120, displaySeconds: 10 }));
     const restart = new ObserverSettingsStore(path);
     await restart.load();
-    expect(restart.settings.leadSeconds).toBe(7);
-    expect(restart.settings.nicknameSource).toBe('game');
+    expect(restart.settings).toEqual({ enabled: false, leadSeconds: 7, nicknameSource: 'game' });
+    expect(restart.settings).not.toHaveProperty('expectedDelaySeconds');
+
     expect(restart.settings).not.toHaveProperty('displaySeconds');
     expect(restart.configured()).toBeUndefined();
     store.clearConnection();
@@ -275,14 +276,14 @@ it('refreshes the private projection for changed settings and connections', asyn
   });
   const refresh = vi.spyOn(coordinator, 'refreshAssist');
   const app = buildApp({ projectionCoordinator: coordinator });
-  const save = (leadSeconds: number, expectedDelaySeconds = 120) =>
+  const save = (leadSeconds: number) =>
     app.inject({
       method: 'POST',
       url: '/operator/observer-assist',
       headers: { origin: 'http://127.0.0.1:3000' },
       payload: {
         action: 'configure',
-        settings: { enabled: false, expectedDelaySeconds, leadSeconds },
+        settings: { enabled: false, leadSeconds },
       },
     });
   try {
@@ -292,8 +293,6 @@ it('refreshes the private projection for changed settings and connections', asyn
     expect(refresh).toHaveBeenCalledTimes(1);
     await save(10);
     expect(refresh).toHaveBeenCalledTimes(1);
-    await save(10, 130);
-    expect(refresh).toHaveBeenCalledTimes(2);
     const connection = {
       earlyEndpoint: '127.0.0.1:27025',
       programEndpoint: '127.0.0.1:27026',
@@ -307,15 +306,15 @@ it('refreshes the private projection for changed settings and connections', asyn
         payload: { action: 'connection', connection: value },
       });
     await confirm(connection);
-    expect(refresh).toHaveBeenCalledTimes(3);
+    expect(refresh).toHaveBeenCalledTimes(2);
     await confirm(connection);
-    expect(refresh).toHaveBeenCalledTimes(3);
+    expect(refresh).toHaveBeenCalledTimes(2);
     await confirm({
       earlyEndpoint: '127.0.0.2:27035',
       programEndpoint: '127.0.0.2:27036',
       password: 'map-two',
     });
-    expect(refresh).toHaveBeenCalledTimes(4);
+    expect(refresh).toHaveBeenCalledTimes(3);
   } finally {
     await app.close();
   }

@@ -41,8 +41,7 @@ export function ObserverSettingsPanel() {
     setError('');
     try {
       const parsed = observerSettingsSchema.safeParse(settings);
-      if (!parsed.success)
-        throw new Error('请填写有效整数：延迟差 10–600 秒、提前 1–30 秒；提前时间应小于延迟差。');
+      if (!parsed.success) throw new Error('请填写有效整数：提前时间为 1–30 秒。');
       const value = parsed.data;
       await command('/operator/observer-assist', { action: 'configure', settings: value });
       setSaved(true);
@@ -65,6 +64,7 @@ export function ObserverSettingsPanel() {
         />
         <Button disabled={busy || runtime?.pending || !view} onClick={() => void save()}>
           保存昵称设置
+
         </Button>
       </Panel>
       <Panel className="settings-card">
@@ -78,16 +78,6 @@ export function ObserverSettingsPanel() {
           message="开启后，提示显示在工作台左侧雷达下方；关闭后沿用常规工作台布局。"
         />
         <Field
-          label="两路预期延迟差（秒）"
-          type="number"
-          min={10}
-          max={600}
-          value={settings.expectedDelaySeconds}
-          disabled={busy || runtime?.pending || !settings.enabled}
-          onChange={(e) => edit({ expectedDelaySeconds: Number(e.target.value) })}
-          message="按此延迟差估算提示时间；后台测量仅供参考，不会自动修改。"
-        />
-        <Field
           label="提示提前时间（秒）"
           type="number"
           min={1}
@@ -97,10 +87,7 @@ export function ObserverSettingsPanel() {
           onChange={(e) => edit({ leadSeconds: Number(e.target.value) })}
           message="希望在击杀到达节目画面前多久看到提示。"
         />
-        <p>
-          按当前设置，稳定延迟差下约缓冲 {settings.expectedDelaySeconds - settings.leadSeconds}{' '}
-          秒后显示；倒计时归零时自动移除。
-        </p>
+        <p>两路回合倒计时稳定校准后显示提示；未校准时等待可靠数据。</p>
         <Button
           variant="primary"
           disabled={busy || runtime?.pending || !view}

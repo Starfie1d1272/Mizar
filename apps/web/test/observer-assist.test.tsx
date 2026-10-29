@@ -11,7 +11,6 @@ const mocks = vi.hoisted(() => ({
   view: {
     settings: {
       enabled: false,
-      expectedDelaySeconds: 120,
       leadSeconds: 7,
     },
     connection: null,
@@ -85,13 +84,13 @@ afterEach(() => {
   container.remove();
   delete window.__TAURI_INTERNALS__;
 });
-it('offers the two timing controls and saves observer preferences independently of game controls', async () => {
+it('offers the lead control and saves observer preferences independently of game controls', async () => {
   window.__TAURI_INTERNALS__ = { invoke: <T,>() => Promise.resolve(undefined as T) };
   act(() => root.render(<ObserverSettingsPanel />));
   expect(
     [...container.querySelectorAll<HTMLInputElement>('input[type=number]')].map((e) => e.value),
-  ).toEqual(['120', '5']);
-  expect(container.textContent).toContain('115');
+  ).toEqual(['5']);
+  expect(container.textContent).toContain('校准');
   await act(async () => {
     [...container.querySelectorAll('button')]
       .find((e) => e.textContent?.includes('保存观察辅助'))!
@@ -144,7 +143,6 @@ it('shows private slots and countdowns from the assist channel, and clears on re
         observer: {
           state: 'ready',
           timingBasis: 'estimated',
-          expectedDelaySeconds: 120,
           waitingReason: null,
           nextWindowSeconds: 0,
           leadSeconds: 7,
@@ -167,6 +165,14 @@ it('shows private slots and countdowns from the assist channel, and clears on re
   act(() => root.render(<ObserverHints />));
   expect(container.textContent).toContain('辅助状态待确认');
   expect(container.textContent).not.toContain('Long player name');
+});
+
+it('shows calibration instead of a countdown when timing is unavailable', () => {
+  mocks.observer = { state: 'live', current: { payload: { observer: { state: 'ready', timingBasis: 'program-clock', effectiveDelaySeconds: null, waitingReason: null, nextWindowSeconds: null, leadSeconds: 5, hints: [] } } } };
+  act(() => root.render(<ObserverHints />));
+  expect(container.textContent).toContain('正在校准延迟');
+  expect(container.textContent).not.toContain('秒后');
+
 });
 
 it('distinguishes reconnecting from a terminal failure and dispatches the configured native retry', async () => {
@@ -400,7 +406,6 @@ it('orders private hints by actual remaining time, retains ties, expires locally
         observer: {
           state: 'ready',
           timingBasis: 'estimated',
-          expectedDelaySeconds: 120,
           leadSeconds: 7,
           waitingReason: null,
           nextWindowSeconds: 0,
@@ -456,7 +461,6 @@ it('shows recalibration as unavailable rather than ready with a stale delay', ()
           state: 'unavailable',
           timingBasis: 'estimated',
           calibrationState: 'reacquiring',
-          expectedDelaySeconds: 120,
           effectiveDelaySeconds: 120,
           waitingReason: 'calibration-reacquiring',
           nextWindowSeconds: null,

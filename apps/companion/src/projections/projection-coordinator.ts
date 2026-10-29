@@ -67,7 +67,7 @@ export interface ProjectionCoordinatorOptions {
   readonly observerSettings?: () => {
     enabled: boolean;
     nicknameSource?: 'game' | 'website';
-    expectedDelaySeconds: number;
+
     leadSeconds: number;
   };
   readonly onObserverDiagnostics?: (
