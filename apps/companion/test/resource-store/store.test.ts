@@ -59,6 +59,22 @@ const prepare =
   };
 
 describe('Resource Store', () => {
+  it('checks references from the authenticated receipt even when cached content is damaged', async () => {
+    let referenced = true;
+    const { store } = await setup({
+      packs: [{ packId, optional: true }],
+      references: {
+        run: (operation) => operation(),
+        isReferenced: () => Promise.resolve(referenced),
+      },
+    });
+    await store.installVerified(packId, prepare());
+    const file = await store.resolveReadOnlyPath(packId, 'replay/video.mp4');
+    await rm(file);
+    await expect(store.removeOptional(packId)).rejects.toThrow('resource_in_use');
+    referenced = false;
+    await expect(store.removeOptional(packId)).resolves.toMatchObject({ phase: 'missing' });
+  });
   it('serializes a new reference before the final optional removal check', async () => {
     const queue = new BroadcastReferenceQueue();
     let referenced = false;
