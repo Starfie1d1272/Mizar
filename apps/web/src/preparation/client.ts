@@ -224,27 +224,28 @@ async function performProductionAction(
   }
   let newlyStarted = false;
   let borrowed = Boolean(external);
-  let selectedExternal = external;
+  let launchedMulnx = false;
+  const selectedExternal = external;
   if (action === 'enter' && window.__TAURI_INTERNALS__) {
     if (!external) {
       if (launch?.preferMulnx && !launch.running && !launch.pending) {
-        selectedExternal = await desktopInvoke<ExternalGameIdentity>(
+        await desktopInvoke<ExternalGameIdentity>(
           'launch_mulnx',
-          { automatic: true },
+          { automatic: true, ...(preserveSettings ? { preserveSettings: true } : {}) },
           task,
         );
+        launchedMulnx = true;
         if (window.location.href !== entryLocation) {
-          task.finish('cancelled', { reason: 'navigation_changed', game: selectedExternal });
+          task.finish('cancelled', { reason: 'navigation_changed' });
           return;
         }
-        borrowed = true;
       }
     }
     newlyStarted = await desktopInvoke<boolean>(
       selectedExternal ? 'attach_external_cs2' : 'start_managed_cs2',
       selectedExternal
         ? { ...selectedExternal, expectedRevision: state.revision }
-        : preserveSettings
+        : preserveSettings && !launchedMulnx
           ? { preserveSettings: true }
           : undefined,
       task,

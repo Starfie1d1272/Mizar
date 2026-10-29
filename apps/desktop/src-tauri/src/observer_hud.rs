@@ -105,6 +105,28 @@ pub fn snapshot(log: &DesktopLog, executable: &Path, process: &managed_cs2::Work
     Ok(original)
 }
 
+/// Save and initialize once per game. Persist the attempt before sending so an
+/// ambiguous reply or later connection retry cannot overwrite the operator's H key.
+pub fn initialize(log: &DesktopLog, executable: &Path, process: &managed_cs2::WorkspaceProcess) -> Result<(), String> {
+    snapshot(log, executable, process)?;
+    let _guard = JOURNAL.lock().map_err(|_| "HUD 恢复记录正忙。")?;
+    let mut record = load(log)?.ok_or("HUD 原值记录缺失。")?;
+    if record["pid"] != process.pid || record["created"] != process.created || !process.is_running() {
+        return Err("游戏身份已变化，未初始化 HUD。".into());
+    }
+    if !reserve_initialization(log, &mut record)? { return Ok(()); }
+    if query(log, executable, Some(1))? != 1 { return Err("HUD 初始化未确认，请在游戏内核对。".into()); }
+    Ok(())
+}
+
+fn reserve_initialization(log: &DesktopLog, record: &mut Value) -> Result<bool, String> {
+    if record["initialAttempted"] == true { return Ok(false); }
+    record["initialAttempted"] = true.into();
+    let bytes = serde_json::to_vec(record).map_err(|_| "HUD 初始化记录无法保存。")?;
+    crate::cs2_session::atomic_write(&file(log), &bytes)?;
+    Ok(true)
+}
+
 pub fn pending(log: &DesktopLog) -> bool { file(log).exists() && !crate::observer_workspace::active() }
 
 pub fn restore(log: &DesktopLog) -> Result<(), String> {
@@ -120,6 +142,17 @@ pub fn restore(log: &DesktopLog) -> Result<(), String> {
 
 #[cfg(test)] mod tests {
     use super::*;
+    #[test]
+    fn ambiguous_initialization_is_not_replayed_after_retry_or_restart() {
+        let root = std::env::temp_dir().join(format!("mizar-hud-init-{}-{}", std::process::id(), chrono::Utc::now().timestamp_nanos_opt().unwrap()));
+        let log = DesktopLog::new(&root, None).unwrap();
+        let mut record = json!({"version":1,"pid":42,"created":123,"executable":"game.exe","original":0});
+        assert!(reserve_initialization(&log, &mut record).unwrap());
+        let mut restored = load(&log).unwrap().unwrap();
+        assert!(!reserve_initialization(&log, &mut restored).unwrap());
+        assert_eq!(restored["original"], 0);
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn fresh_install_blocks_hud_automation_until_its_independent_dependency_is_ready() {
         let root = std::env::temp_dir().join(format!("mizar-hud-preflight-{}-{}", std::process::id(), chrono::Utc::now().timestamp_nanos_opt().unwrap()));

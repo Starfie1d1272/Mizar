@@ -825,6 +825,19 @@ impl ManagedCs2 {
         let Some(mut value) = self.store.load()? else {
             return Ok(());
         };
+        // MulNX requires its gateway check before a process can be adopted.
+        // A submitted or interrupted launch remains pending until that check or
+        // explicit cancellation after the launcher and game have stopped.
+        if self.log.state_root.join("data/mulnx-launch/pending.json").exists() {
+            if !confirm_steam_cancelled { return Ok(()); }
+            if any_cs2_running(&self.log)? || self.mulnx_launcher_running()? {
+                return Err("请先关闭 CS2 和 MulNX 启动器，再恢复配置。".into());
+            }
+            let executable = value["executable"].as_str().ok_or("游戏路径记录缺失。")?;
+            crate::production_exit::prepare_mulnx(&self.log, Path::new(executable), false, false)?;
+            std::fs::remove_file(self.log.state_root.join("data/mulnx-launch/pending.json"))
+                .map_err(|_| "MulNX 启动记录无法清理，原备份仍保留。")?;
+        }
         // A delayed Steam launch remains a transaction until its identity is
         // known, or the operator explicitly cancels Steam's pending request.
         if crate::cs2_session::unconfirmed_launch(&value) {
@@ -975,7 +988,45 @@ impl ManagedCs2 {
         {
             return Err("请先结束 Demo 试播并恢复游戏配置。".into());
         }
-        self.start_internal(preserve, None)
+        self.start_internal(preserve, None, false)
+    }
+    /// Prepare the same configuration transaction as Steam without submitting a launch.
+    pub(crate) fn prepare_managed_mulnx(&mut self, expected: &Path, preserve: bool) -> Result<Value, String> {
+        if !self.start_internal(preserve, None, true)? { return Err("请先结束现有游戏并恢复配置。".into()); }
+        let journal = self.store.load()?.ok_or("CS2 配置事务缺失。")?;
+        if !same_executable(expected, journal["executable"].as_str().ok_or("游戏路径缺失。")?) {
+            return Err("游戏安装位置已变化，原配置备份仍保留。".into());
+        }
+        Ok(journal)
+    }
+    pub(crate) fn submit_managed_mulnx(&self) -> Result<(), String> {
+        let mut journal = self.store.load()?.ok_or("CS2 配置事务缺失。")?;
+        let (executable, _, _) = self.recovery_identity()?;
+        if !same_executable(&executable, journal["executable"].as_str().ok_or("游戏路径缺失。")?)
+            || any_cs2_running(&self.log)? { return Err("游戏身份已变化，未提交启动。".into()); }
+        if journal["spectatorCfg"] == true {
+            self.store.validate_spectator_launch()?;
+            self.store.spectator_load_attempted(true)?;
+        }
+        let mut time = FileTime::default();
+        unsafe { GetSystemTimeAsFileTime(&mut time); }
+        journal["launchTime"] = json!(((time.high as u64) << 32) | time.low as u64);
+        journal["launchAttempted"] = json!(true);
+        self.store.save(&journal)
+    }
+    pub(crate) fn bind_managed_mulnx(&self, pid: u32, created: u64, executable: &Path) -> Result<(), String> {
+        let mut journal = self.store.load()?.ok_or("CS2 配置事务缺失。")?;
+        if journal["launchAttempted"] != true || created < journal["launchTime"].as_u64().ok_or("启动时间缺失。")?
+            || cs2_pids(&self.log)? != vec![pid] { return Err("游戏启动身份不唯一。".into()); }
+        let process = open(pid, &self.log)?.ok_or("游戏已退出。")?;
+        let (actual_created, actual_executable) = identity(&process, &self.log)?;
+        if actual_created != created || !same_executable(&actual_executable, &executable.to_string_lossy())
+            || !same_executable(executable, journal["executable"].as_str().ok_or("游戏路径缺失。")?) {
+            return Err("游戏身份已变化，原配置备份仍保留。".into());
+        }
+        journal["pid"] = json!(pid);
+        journal["created"] = json!(created);
+        self.store.save(&journal)
     }
     pub fn ensure_demo_available(&self) -> Result<(), String> {
         if self.has_external() || self.store.load()?.is_some() || any_cs2_running(&self.log)? {
@@ -991,7 +1042,7 @@ impl ManagedCs2 {
     ) -> Result<bool, String> {
         self.ensure_demo_available()?;
         let argument = crate::demo_test::playdemo_argument(path, &self.log)?;
-        self.start_internal(preserve, Some((&argument, request_id)))
+        self.start_internal(preserve, Some((&argument, request_id)), false)
     }
     pub fn demo_launch_attempted(&self) -> Result<bool, String> {
         Ok(self
@@ -1027,6 +1078,7 @@ impl ManagedCs2 {
         &mut self,
         preserve: bool,
         demo: Option<(&str, &str)>,
+        prepare_only: bool,
     ) -> Result<bool, String> {
         if preserve && !self.can_preserve {
             return Err("请先检查配置接管结果，再选择保持原游戏设置继续。".into());
@@ -1149,7 +1201,9 @@ impl ManagedCs2 {
                     json!({"code":"source_prepare_failed","error":error});
             }
         }
+        if prepare_only { journal["mulnxLaunch"] = json!(true); }
         self.store.save(&journal)?;
+        if prepare_only { return Ok(true); }
         let launch: Result<bool, String> = (|| {
             // Recheck the same process and current account before committing a
             // request. A refused check remains an unlaunched, recoverable journal.
@@ -1529,7 +1583,14 @@ impl ManagedCs2 {
                     .and_then(|v| u32::try_from(v).ok())
                     .ok_or("CS2 进程记录缺失。")?;
                 let created = value["created"].as_u64().ok_or("CS2 进程记录缺失。")?;
-                if let Err(error) = close_owned_process(&process, pid, created, &self.log) {
+                // Every owned-game exit, including application shutdown and a
+                // failed workbench entry, must pass the same MulNX unload fence.
+                // External sessions have already returned through detach above.
+                let result = crate::production_exit::finish_then_restore(
+                    || self.log.step("cs2_exit_mulnx_unload", || crate::mulnx_launch::stop_managed_for_exit(self, &self.log)),
+                    || close_owned_process(&process, pid, created, &self.log),
+                );
+                if let Err(error) = result {
                     self.message = Some(error.clone());
                     return Err(error);
                 }
@@ -1570,7 +1631,7 @@ mod tests {
     #[test]
     fn standard_start_uses_single_observer_cfg_and_preserves_keys() {
         let _processes = GAME_PROCESSES.lock().unwrap();
-        for scenario in ["standard", "spawn_failure", "demo"] {
+        for scenario in ["standard", "spawn_failure", "demo", "mulnx_preserved"] {
             let fail = scenario == "spawn_failure";
             let root = std::env::temp_dir().join(format!("mizar-observer-start-{}-{scenario}", std::process::id()));
             std::fs::create_dir_all(&root).unwrap();
@@ -1590,8 +1651,23 @@ mod tests {
             let submitted = Arc::new(std::sync::Mutex::new(Vec::new()));
             host.launch_fixture = Some(LaunchFixture { executable:executable.clone(), video:video.clone(), account:1, fail_submit:fail, submitted:submitted.clone() });
             host.recovery_identity_fixture = Some((executable.clone(), video.clone(), 1));
+            if scenario == "mulnx_preserved" {
+                let before_video = std::fs::read(&video).unwrap();
+                let before_convars = std::fs::read(cfg.join("cs2_machine_convars.vcfg")).unwrap();
+                assert!(host.prepare_managed_mulnx(&executable, true).is_err());
+                assert!(host.store.load().unwrap().is_none());
+                host.can_preserve = true;
+                let journal = host.prepare_managed_mulnx(&executable, true).unwrap();
+                assert_eq!(journal["preserveSettings"], true);
+                assert_eq!(journal["mulnxLaunch"], true);
+                assert_eq!(std::fs::read(&video).unwrap(), before_video);
+                assert_eq!(std::fs::read(cfg.join("cs2_machine_convars.vcfg")).unwrap(), before_convars);
+                assert!(submitted.lock().unwrap().is_empty());
+                std::fs::remove_dir_all(root).unwrap();
+                continue;
+            }
             let result = if scenario == "demo" {
-                host.start_internal(false, Some(("\"C:/fixture.dem\"", "00000000-0000-4000-8000-000000000001")))
+                host.start_internal(false, Some(("\"C:/fixture.dem\"", "00000000-0000-4000-8000-000000000001")), false)
             } else { host.start() };
             let requests = submitted.lock().unwrap().clone();
             assert_eq!(requests.len(), 1); let (journal, args) = &requests[0];
