@@ -75,6 +75,15 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
     true,
   );
   let routeAvailable = true;
+  let delayNextSave = false;
+  let releaseSave!: () => void;
+  let saveStarted!: () => void;
+  const savedRequest = new Promise<void>((resolve) => {
+    saveStarted = resolve;
+  });
+  const saveGate = new Promise<void>((resolve) => {
+    releaseSave = resolve;
+  });
   let preparationRevision = '';
   registerOrchestrationRoutes(
     app,
@@ -105,6 +114,15 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
         return;
       }
       const request = route.request();
+      if (
+        delayNextSave &&
+        request.method() === 'POST' &&
+        request.postDataJSON()?.action === 'save-preset'
+      ) {
+        delayNextSave = false;
+        saveStarted();
+        await saveGate;
+      }
       const response = await app.inject({
         method: request.method() as 'GET' | 'POST',
         url: new URL(request.url()).pathname,
@@ -142,7 +160,32 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
     await expect(page.getByRole('alert')).toBeVisible();
     expect(store.preset.maps).toHaveLength(0);
     await page.getByLabel('最多持续（秒）').fill('1.003');
+    const rejectLeave = page.waitForEvent('dialog').then(async (dialog) => {
+      expect(dialog.type()).toBe('beforeunload');
+      await dialog.dismiss();
+    });
+    await Promise.all([
+      rejectLeave,
+      page.getByRole('link', { name: '声音', exact: true }).click({ noWaitAfter: true }),
+    ]);
+    await expect(page.getByLabel('开场镜头名称')).toHaveValue('候选镜头');
+    const rejectReload = page.waitForEvent('dialog').then(async (dialog) => {
+      expect(dialog.type()).toBe('beforeunload');
+      await dialog.dismiss();
+    });
+    await Promise.all([rejectReload, page.reload({ timeout: 2000 }).catch(() => null)]);
+    await expect(page.getByLabel('开场镜头名称')).toHaveValue('候选镜头');
+    await page.getByLabel('开场镜头名称').fill('提交时镜头');
+    delayNextSave = true;
     await page.getByRole('button', { name: '保存草稿', exact: true }).click();
+    await savedRequest;
+    await page.getByLabel('开场镜头名称').fill('候选镜头');
+    releaseSave();
+    await expect.poll(() => store.presets[0]?.preset.maps[0]?.opening?.macro).toBe('提交时镜头');
+    await expect(page.getByLabel('开场镜头名称')).toHaveValue('候选镜头');
+    await expect(page.getByRole('button', { name: '保存草稿', exact: true })).toBeEnabled();
+    await page.getByRole('button', { name: '保存草稿', exact: true }).click();
+    await expect.poll(() => store.presets[0]?.preset.maps[0]?.opening?.macro).toBe('候选镜头');
     await expect.poll(() => store.presets[0]?.preset.maps[0]?.opening?.maxMs).toBe(1003);
     expect(store.preset.maps).toHaveLength(0);
     await page.getByRole('button', { name: '返回运镜设置' }).click();

@@ -91,7 +91,17 @@ export function CameraSettings() {
   const [failed, setFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const operation = useRef(false);
+  const editVersion = useRef(0);
   const [automaticOverride, setAutomaticOverride] = useState<boolean | null>(null);
+  useEffect(() => {
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      if (!draft) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', beforeUnload);
+    return () => window.removeEventListener('beforeunload', beforeUnload);
+  }, [draft]);
   useEffect(() => {
     if (automaticOverride === null || current?.automaticEnabled !== automaticOverride) return;
     const timer = setTimeout(() => setAutomaticOverride(null), 0);
@@ -165,11 +175,16 @@ export function CameraSettings() {
   };
   const create = (copy: boolean) =>
     void action(async () => {
+      const version = editVersion.current;
       const result = await updateCatalog({
         action: 'create-preset',
         ...(copy ? { sourceId: selected } : {}),
       });
       if (!result.createdPresetId) throw new Error('新预设未确认，请重新打开管理页。');
+      if (editVersion.current !== version) {
+        setMessage('预设已创建，当前更改尚未保存。');
+        return;
+      }
       setSelectedId(result.createdPresetId);
       setDraft(null);
       setAdvanced(true);
@@ -179,16 +194,26 @@ export function CameraSettings() {
     void action(async () => {
       if (file.size > 256 * 1024) throw new Error('预设文件过大，请选择较小的文件。');
       const preset = orchestrationPresetSchema.parse(JSON.parse(await file.text()));
+      const initialVersion = editVersion.current;
       const result = await updateCatalog({ action: 'create-preset' });
       if (!result.createdPresetId) throw new Error('新预设未确认，请重新打开管理页。');
+      if (editVersion.current !== initialVersion) {
+        await updateCatalog({ action: 'save-preset', id: result.createdPresetId, preset });
+        setMessage('已导入草稿，当前更改尚未保存。');
+        return;
+      }
       setSelectedId(result.createdPresetId);
       setDraft(preset);
+      const version = ++editVersion.current;
       setAdvanced(true);
       await updateCatalog({ action: 'save-preset', id: result.createdPresetId, preset });
-      setDraft(null);
-      setMessage('已导入并保存草稿，请在启用前确认镜头和音频资源。');
+      if (editVersion.current === version) {
+        setDraft(null);
+        setMessage('已导入并保存草稿，请在启用前确认镜头和音频资源。');
+      } else setMessage('已保存导入内容，后续更改尚未保存。');
     });
   const edit = (next: OrchestrationPreset) => {
+    editVersion.current++;
     setDraft(next);
     setMessage('');
     setFailed(false);
@@ -501,9 +526,12 @@ export function CameraSettings() {
                 onClick={() =>
                   void action(async () => {
                     const preset = orchestrationPresetSchema.parse(config);
+                    const version = editVersion.current;
                     await updateCatalog({ action: 'save-preset', id: selected, preset });
-                    setDraft(null);
-                    setMessage('草稿已保存。');
+                    if (editVersion.current === version) {
+                      setDraft(null);
+                      setMessage('草稿已保存。');
+                    } else setMessage('已保存本次内容，后续更改尚未保存。');
                   })
                 }
               >
