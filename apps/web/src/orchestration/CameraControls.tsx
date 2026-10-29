@@ -102,10 +102,10 @@ export function CameraControls({
             !s.isolated ||
             s.control.state === 'blocked'
           }
-          title={`确认游戏内当前地图 ${s.map ?? '未知'}，活动包 ${s.pack ?? '未配置'}，并允许清空全部运镜槽`}
+          title={`应用并核对当前地图 ${s.map ?? '未知'} 的隔离包 ${s.pack ?? '未配置'}`}
           onClick={() => void send('resume')}
         >
-          {workspace ? '确认运镜包并恢复自动' : '确认活动隔离包并启用自动'}
+          {workspace ? '准备运镜并恢复自动' : '准备隔离包并启用自动'}
         </Button>
       ) : null}
       {error && !workspace ? <span role="alert">{error}</span> : null}

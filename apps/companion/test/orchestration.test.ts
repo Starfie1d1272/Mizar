@@ -55,12 +55,14 @@ async function rig(nativeRequired = false) {
     connected: true,
     generation: 1,
     send: (
-      type: 'CamMacro/Play' | 'CamPlay/ClearForce',
+      type: 'CamMacro/Play' | 'CamPack/Apply' | 'CamPlay/ClearForce',
       macro?: string,
     ): Promise<GatewayResult> => {
-      calls.push({ type, ...(macro ? { macro } : {}) });
+      if (type !== 'CamPack/Apply') calls.push({ type, ...(macro ? { macro } : {}) });
       return Promise.resolve('queued');
     },
+    packStatus: (): Promise<{ active: string | null; empty: boolean } | null> =>
+      Promise.resolve({ active: '测试包', empty: true }),
     connect: () => {
       provider.connected = true;
       provider.generation++;
@@ -191,10 +193,12 @@ it('map/source changes, stale data and reconnect invalidate late replies and req
   const r = await rig();
   await r.resume();
   let reply!: (r: GatewayResult) => void;
-  r.provider.send = () =>
-    new Promise((resolve) => {
-      reply = resolve;
-    });
+  r.provider.send = (type) =>
+    type === 'CamPack/Apply'
+      ? Promise.resolve('queued')
+      : new Promise((resolve) => {
+          reply = resolve;
+        });
   await r.round(1);
   const staleExpected = r.director.get();
   const playbackReply = reply;
@@ -248,6 +252,25 @@ it('pause labels share one instance and halftime wins over paused', async () => 
   };
   await r.tick();
   expect(r.calls.at(-1)).toEqual({ type: 'CamMacro/Play', macro: '中场' });
+});
+it('only arms after the applied pack and empty lists are read back in the same context', async () => {
+  const r = await rig();
+  r.provider.packStatus = () => Promise.resolve({ active: 'other', empty: true });
+  await expect(r.resume()).rejects.toThrow('camera_pack_unconfirmed');
+  expect(r.director.get().held).toBe(true);
+  r.provider.packStatus = () => Promise.resolve({ active: '测试包', empty: false });
+  await expect(r.resume()).rejects.toThrow('camera_pack_unconfirmed');
+  let finish!: (status: { active: string | null; empty: boolean } | null) => void;
+  r.provider.packStatus = () =>
+    new Promise((resolve) => {
+      finish = resolve;
+    });
+  const pending = r.resume();
+  await Promise.resolve();
+  r.director.hold();
+  finish({ active: '测试包', empty: true });
+  await expect(pending).rejects.toThrow('camera_pack_unconfirmed');
+  expect(r.director.get().held).toBe(true);
 });
 it('persists validated drafts, rejects malformed imports and forbids remote control', async () => {
   const r = await rig();
@@ -336,6 +359,7 @@ it('real websocket separates ACK, rejection and unrelated broadcasts; disconnect
   await app.register(websocket);
   const wires: string[] = [];
   let replyMode = 'ack';
+  let ackFirst = false;
   app.get('/', { websocket: true }, (socket) => {
     socket.on('message', (data) => {
       const wire = (
@@ -347,8 +371,33 @@ it('real websocket separates ACK, rejection and unrelated broadcasts; disconnect
       ).toString();
       wires.push(wire);
       socket.send(JSON.stringify({ attackerSteamId: '0' }));
-      if (replyMode === 'ack') socket.send(`已投入消息总线${wire}`);
-      else if (replyMode === 'reject') socket.send(`error: ${wire} desc: missing converter`);
+      const command = JSON.parse(wire) as { type: string; payload: string };
+      if (command.type === 'CamPack/Status' && ackFirst) socket.send(`已投入消息总线${wire}`);
+      if (command.type === 'CamPack/Status') {
+        socket.send(
+          JSON.stringify({
+            type: 'CamPack/Status',
+            requestId: 'old',
+            active: 'wrong',
+            OnNewRoundEmpty: true,
+            OnRoundStartEmpty: true,
+            OnRoundEndEmpty: true,
+          }),
+        );
+        socket.send(
+          JSON.stringify({
+            type: 'CamPack/Status',
+            requestId: JSON.parse(command.payload) as string,
+            active: 'Mizar_pack',
+            OnNewRoundEmpty: true,
+            OnRoundStartEmpty: true,
+            OnRoundEndEmpty: true,
+          }),
+        );
+      }
+      if (replyMode === 'ack') {
+        if (!(command.type === 'CamPack/Status' && ackFirst)) socket.send(`已投入消息总线${wire}`);
+      } else if (replyMode === 'reject') socket.send(`error: ${wire} desc: missing converter`);
       else if (replyMode !== 'silent') socket.close();
     });
   });
@@ -365,6 +414,11 @@ it('real websocket separates ACK, rejection and unrelated broadcasts; disconnect
   expect(JSON.parse(wires.shift()!)).toEqual({ type: 'CS2BootLoader/Launch', payload: '' });
   expect(await provider.send('CamPack/Apply', 'Mizar_pack')).toBe('queued');
   expect(JSON.parse(wires.shift()!)).toEqual({ type: 'CamPack/Apply', payload: '"Mizar_pack"' });
+  expect(await provider.packStatus()).toEqual({ active: 'Mizar_pack', empty: true });
+  expect((JSON.parse(wires.shift()!) as { type: string }).type).toBe('CamPack/Status');
+  ackFirst = true;
+  expect(await provider.packStatus()).toEqual({ active: 'Mizar_pack', empty: true });
+  wires.shift();
   expect(await provider.send('CamMacro/Play', '中文 "宏" \\')).toBe('queued');
   expect(JSON.parse(wires[0]!)).toEqual({ type: 'CamMacro/Play', payload: '"中文 \\"宏\\" \\\\"' });
   replyMode = 'silent';
@@ -414,10 +468,12 @@ it('disconnect while a stop is pending cannot leave an orphan submitted state bl
   await r.resume();
   await r.round(1);
   let finish!: (result: GatewayResult) => void;
-  r.provider.send = () =>
-    new Promise((resolve) => {
-      finish = resolve;
-    });
+  r.provider.send = (type) =>
+    type === 'CamPack/Apply'
+      ? Promise.resolve('queued')
+      : new Promise((resolve) => {
+          finish = resolve;
+        });
   r.director.hold();
   r.provider.close();
   await r.tick();
