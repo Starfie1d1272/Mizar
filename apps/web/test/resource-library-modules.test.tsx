@@ -385,3 +385,148 @@ it('offers a recovery path for the unavailable active scene without blocking HUD
     vi.unstubAllGlobals();
   }
 });
+
+it('locates only the selected successful module and offers explicit links for multiple selections', async () => {
+  const entries = [
+    { entryId: 'hud-entry', type: 'module', kind: 'hud', name: '内置画面', status: 'existing' },
+    { entryId: 'camera-entry', type: 'module', kind: 'camera', name: '运镜 A', status: 'existing' },
+    { entryId: 'music-entry', type: 'module', kind: 'music', name: '音乐 B', status: 'existing' },
+    {
+      entryId: 'program-entry',
+      type: 'module',
+      kind: 'program',
+      name: '场景 C',
+      status: 'existing',
+    },
+  ];
+  const modules = [
+    { id: 'hud-id', kind: 'hud', name: '内置画面', revision: 'h', origin: null, value: {} },
+    {
+      id: 'camera-id',
+      kind: 'camera',
+      name: '运镜 A',
+      revision: 'c',
+      origin: null,
+      value: { maps: [] },
+    },
+    {
+      id: 'music-id',
+      kind: 'music',
+      name: '音乐 B',
+      revision: 'm',
+      origin: null,
+      value: { groups: {} },
+    },
+    { id: 'program-id', kind: 'program', name: '场景 C', revision: 'p', origin: null, value: {} },
+  ];
+  const mapping = {
+    moduleEntries: {
+      'hud-entry': ['hud-id'],
+      'camera-entry': ['camera-id'],
+      'music-entry': ['music-id'],
+      'program-entry': ['program-id'],
+    },
+    moduleOwners: { 'hud-id': null, 'camera-id': null, 'music-id': null, 'program-id': null },
+    presetEntries: {},
+  };
+  const fetchMock = vi.fn((path: string) => {
+    if (path === '/local/v1/broadcast-presets')
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ modules, presets: [], active: { revision: 'active' } }),
+      });
+    if (path === '/local/v1/broadcast-modules')
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ modules: modules.map((module) => ({ module, builtin: false })) }),
+      });
+    if (path === '/operator/resource-library/check-pack')
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ name: '组合包', source: { digest: 'a'.repeat(64) }, entries }),
+      });
+    if (path.startsWith('/operator/resource-library/import-pack?')) {
+      const selection = JSON.parse(
+        new URL(path, 'http://localhost').searchParams.get('selection')!,
+      ) as { modules: string[] };
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          reused: true,
+          mapping,
+          entries: entries.map((entry) => ({
+            ...entry,
+            result: selection.modules.includes(entry.entryId) ? 'existing' : 'not_selected',
+          })),
+        }),
+      });
+    }
+    return Promise.resolve({ ok: true, json: async () => ({ pending: null }) });
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  vi.stubGlobal('matchMedia', () => ({
+    matches: false,
+    addEventListener() {},
+    removeEventListener() {},
+  }));
+  const showAll = vi.fn();
+  const element = document.createElement('div');
+  document.body.append(element);
+  const root = createRoot(element);
+  try {
+    await act(async () => {
+      root.render(<ResourceModules query="" category="all" onImported={showAll} />);
+      await Promise.resolve();
+    });
+    const input = element.querySelector<HTMLInputElement>('input[type=file]')!;
+    Object.defineProperty(input, 'files', {
+      value: [new File(['zip'], 'pack.mizarpack')],
+      configurable: true,
+    });
+    await act(async () => {
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      await Promise.resolve();
+    });
+    const checkbox = (name: string) =>
+      [...element.querySelectorAll<HTMLInputElement>('input[type=checkbox]')].find((item) =>
+        item.parentElement?.textContent?.includes(name),
+      )!;
+    const buttons = () => [...element.querySelectorAll('button')];
+    for (const name of ['内置画面', '音乐 B', '场景 C']) act(() => checkbox(name).click());
+    await act(async () => {
+      buttons()
+        .find((button) => button.textContent === '导入所选')!
+        .click();
+      await Promise.resolve();
+    });
+    expect(element.querySelector('#resource-camera-id')?.textContent).toContain('关闭详情');
+    expect(element.querySelector('#resource-hud-id')?.textContent).toContain('查看详情');
+    expect(showAll).toHaveBeenCalledTimes(1);
+    act(() =>
+      buttons()
+        .find((button) => button.textContent === '继续选择资源')!
+        .click(),
+    );
+    act(() => checkbox('音乐 B').click());
+    await act(async () => {
+      buttons()
+        .find((button) => button.textContent === '导入所选')!
+        .click();
+      await Promise.resolve();
+    });
+    expect(showAll).toHaveBeenCalledTimes(1);
+    expect(buttons().some((button) => button.textContent === '查看运镜 A')).toBe(true);
+    expect(buttons().some((button) => button.textContent === '查看音乐 B')).toBe(true);
+    act(() =>
+      buttons()
+        .find((button) => button.textContent === '查看音乐 B')!
+        .click(),
+    );
+    expect(element.querySelector('#resource-music-id')?.textContent).toContain('关闭详情');
+    expect(showAll).toHaveBeenCalledTimes(2);
+  } finally {
+    act(() => root.unmount());
+    element.remove();
+    vi.unstubAllGlobals();
+  }
+});

@@ -28,6 +28,7 @@ type PackEntry = {
   name?: string;
   status: 'ready' | 'dependency_missing' | 'unsupported' | 'invalid' | 'existing' | 'removed';
   reason?: string;
+  copies?: { id: string; state: 'existing' | 'removed'; owner?: string | null }[];
 };
 type PackInspection = {
   file: File;
@@ -139,9 +140,13 @@ export function ResourceModules({
   const [inspectionOpen, setInspectionOpen] = useState(false);
   const [importResults, setImportResults] = useState<ImportResult[] | null>(null);
   const [resultEntries, setResultEntries] = useState<PackEntry[] | null>(null);
+  const [importTargets, setImportTargets] = useState<
+    Record<string, { type: 'module' | 'preset'; id: string }>
+  >({});
   const [selectedEntries, setSelectedEntries] = useState<string[]>([]);
   const input = useRef<HTMLInputElement>(null);
   const scrollToSelection = useRef(false);
+  const selectionEpoch = useRef(0);
   const showList = category === 'all' || ['hud', 'program', 'music', 'camera'].includes(category);
   const entries =
     directory?.modules.filter(
@@ -251,6 +256,17 @@ export function ResourceModules({
       setRefresh((value) => value + 1);
     }
   }
+  function navigateImportTarget(target: { type: 'module' | 'preset'; id: string }) {
+    selectionEpoch.current++;
+    if (target.type === 'preset') {
+      setSelected(null);
+      onImported(target.id);
+    } else {
+      scrollToSelection.current = true;
+      setSelected(target.id);
+      onImported();
+    }
+  }
   async function inspectFile(file: File) {
     if (busy) return;
     setBusy(true);
@@ -271,6 +287,7 @@ export function ResourceModules({
       setInspection({ ...result, file });
       setImportResults(null);
       setResultEntries(null);
+      setImportTargets({});
       setSelectedEntries(
         result.entries
           .filter((entry) => ['ready', 'existing', 'dependency_missing'].includes(entry.status))
@@ -297,6 +314,7 @@ export function ResourceModules({
         .map((entry) => entry.entryId),
     };
 
+    const startingEpoch = selectionEpoch.current;
     setBusy(true);
     setNotice(null);
     try {
@@ -317,24 +335,11 @@ export function ResourceModules({
         mapping: {
           moduleEntries: Record<string, string[]>;
           presetEntries?: Record<string, string>;
+          moduleOwners?: Record<string, string | null>;
         };
         reused: boolean;
         entries: ImportResult[];
       };
-      const presetId = inspection.entries.find(
-        (entry) =>
-          entry.type === 'preset' &&
-          selectedEntries.includes(entryKey(entry)) &&
-          result.mapping.presetEntries?.[entry.entryId],
-      );
-      const firstId = Object.values(result.mapping.moduleEntries).flat()[0];
-      if (presetId) {
-        setSelected(null);
-        onImported(result.mapping.presetEntries?.[presetId.entryId]);
-      } else if (firstId) {
-        setSelected(firstId);
-        onImported();
-      }
       const accepted = result.entries.filter(
         (entry) => entry.result === 'imported' || entry.result === 'existing',
       );
@@ -359,6 +364,49 @@ export function ResourceModules({
           check.ok ? ((await check.json()) as { entries: PackEntry[] }).entries : null,
         )
         .catch(() => null);
+      const latest = await fetch('/local/v1/broadcast-presets', {
+        cache: 'no-store',
+        signal: AbortSignal.timeout(5000),
+      })
+        .then(async (response) => (response.ok ? ((await response.json()) as Snapshot) : null))
+        .catch(() => null);
+      const targets: Record<string, { type: 'module' | 'preset'; id: string }> = {};
+      if (latest)
+        for (const entry of inspection.entries) {
+          const key = entryKey(entry);
+          const outcome = result.entries.find(
+            (item) => item.type === entry.type && item.entryId === entry.entryId,
+          );
+          if (
+            !selectedEntries.includes(key) ||
+            !outcome ||
+            !['imported', 'existing'].includes(outcome.result)
+          )
+            continue;
+          if (entry.type === 'preset') {
+            const id = result.mapping.presetEntries?.[entry.entryId];
+            if (id && latest.presets.some((preset) => preset.id === id))
+              targets[key] = { type: 'preset', id };
+          } else {
+            const ids = result.mapping.moduleEntries[entry.entryId] ?? [];
+            const copies = refreshed?.find((item) => entryKey(item) === key)?.copies ?? [];
+            const live = ids.filter((id) =>
+              latest.modules.some((module) => module.id === id && module.kind === entry.kind),
+            );
+            const standalone =
+              copies.find(
+                (copy) => copy.state === 'existing' && copy.owner == null && live.includes(copy.id),
+              )?.id ??
+              live.find((id) => result.mapping.moduleOwners?.[id] === null) ??
+              live[0];
+            if (standalone) targets[key] = { type: 'module', id: standalone };
+          }
+        }
+      setImportTargets(targets);
+      if (selectedEntries.length === 1 && selectionEpoch.current === startingEpoch) {
+        const target = targets[selectedEntries[0]!];
+        if (target) navigateImportTarget(target);
+      }
       setResultEntries(refreshed);
       setImportResults(result.entries);
       setNotice({
@@ -420,6 +468,11 @@ export function ResourceModules({
                 <li key={entryKey(entry)}>
                   {entryName(entry, index)} · {kind}：
                   {resultDescription(checked, returned, resultEntries !== null)}
+                  {importTargets[entryKey(entry)] && (
+                    <Button onClick={() => navigateImportTarget(importTargets[entryKey(entry)]!)}>
+                      查看{entryName(entry, index)}
+                    </Button>
+                  )}
                 </li>
               );
             })}
@@ -478,6 +531,7 @@ export function ResourceModules({
           </p>
           <Button
             onClick={() => {
+              selectionEpoch.current++;
               scrollToSelection.current = true;
               setSelected(snapshot?.active.sourceModuleIds?.program ?? null);
               onImported();
@@ -537,6 +591,7 @@ export function ResourceModules({
             </div>
             <Button
               onClick={() => {
+                selectionEpoch.current++;
                 setSelected(selected === entry.id ? null : entry.id);
                 setReplacement('');
               }}
