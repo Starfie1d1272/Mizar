@@ -479,3 +479,192 @@ it('keeps an existing active camera snapshot when MulNX disappears and still app
     await rm(root, { recursive: true, force: true });
   }
 });
+
+it('rejects unknown image slots and keeps the service usable after the active image is damaged', async () => {
+  const { mkdtemp, readFile, writeFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { createHash, randomUUID } = await import('node:crypto');
+  const { HudConfigStore } = await import('../../src/hud-config/store.js');
+  const { BroadcastReferenceQueue } = await import('../../src/broadcast-config/reference-queue.js');
+  const root = await mkdtemp(join(tmpdir(), 'broadcast-scene-asset-'));
+  const path = join(root, 'image.png');
+  const bytes = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNg+M8AAAICAQB7CYF4AAAAAElFTkSuQmCC',
+    'base64',
+  );
+  await writeFile(path, bytes);
+  const ref = {
+    resource: { id: 'local:mizar-pack:' + randomUUID(), version: '1.0.0', digest: 'a'.repeat(64) },
+    fileId: 'image',
+  };
+  const verifyImage = async (value: typeof ref) => {
+    if (
+      JSON.stringify(value) !== JSON.stringify(ref) ||
+      createHash('sha256')
+        .update(await readFile(path))
+        .digest('hex') !== createHash('sha256').update(bytes).digest('hex')
+    )
+      throw new Error('resource_damaged');
+  };
+  const makeApp = async () => {
+    const hud = new HudConfigStore();
+    await hud.load();
+    const lockForActive = async (resolved: BroadcastConfigDocument['active']['resolved']) => {
+      for (const image of Object.values(resolved.program.assets)) await verifyImage(image);
+      return {
+        resources: Object.values(resolved.program.assets).map((image) => image.resource),
+        tools: [],
+      };
+    };
+    return buildApp({
+      obsConfigPath: join(root, 'obs.json'),
+      hudConfigStore: hud,
+      broadcastConfig: {
+        path: join(root, 'broadcast.json'),
+        musicAutomaticEnabled: true,
+        references: new BroadcastReferenceQueue(),
+        isDeleting: () => Promise.resolve(false),
+        resolve: {
+          asset: verifyImage,
+          image: verifyImage,
+          hud: () => Promise.reject(new Error('unsupported')),
+          scene: () => Promise.resolve(),
+          camera: () => Promise.reject(new Error('unexpected')),
+        },
+        camera: {
+          localPack: () => Promise.reject(new Error('unexpected')),
+          localTrackId: () => Promise.reject(new Error('unexpected')),
+          portable: (preset, automaticEnabled) =>
+            Promise.resolve({
+              format: 'mizar.camera-config',
+              version: 2,
+              name: preset.name,
+              automaticEnabled,
+              maps: [],
+            }),
+          lock: (_value, active) => Promise.resolve(active.lock),
+        },
+        localTrackId: () => Promise.reject(new Error('unexpected')),
+        lockForActive,
+        verifyActive: async (active) => {
+          const expected = await lockForActive(active.resolved);
+          if (JSON.stringify(expected) !== JSON.stringify(active.lock))
+            throw new Error('dependency_missing');
+        },
+      },
+    });
+  };
+  const post = (base: string, action: string, payload: unknown) =>
+    fetch(`${base}/operator/broadcast-modules/${action}`, {
+      method: 'POST',
+      headers: { origin: 'http://127.0.0.1:3000', 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  const first = await makeApp();
+  try {
+    const base = await first.listen({ host: '127.0.0.1', port: 0 });
+    const list = (await (await fetch(`${base}/local/v1/broadcast-modules`)).json()) as {
+      modules: Array<{ module: ModuleRecord }>;
+    };
+    const builtin = list.modules.find(({ module }) => module.kind === 'program')!.module;
+    const copy = (await (
+      await post(base, 'clone', {
+        moduleId: builtin.id,
+        expectedRevision: builtin.revision,
+        name: 'Scene',
+      })
+    ).json()) as ModuleRecord;
+    if (copy.kind !== 'program') throw new Error('expected program');
+    copy.value.assets = { 'wrong.slot': ref };
+    let saved = (await (
+      await post(base, 'save', { value: copy, expectedRevision: copy.revision })
+    ).json()) as ModuleRecord;
+    let document = (await (
+      await fetch(`${base}/local/v1/broadcast-presets`)
+    ).json()) as BroadcastConfigDocument;
+    const invalid = await post(base, 'apply', {
+      moduleId: saved.id,
+      expectedRevision: saved.revision,
+      expectedActiveRevision: document.active.revision,
+      requestId: randomUUID(),
+    });
+    expect(invalid.status).toBe(422);
+    expect(((await invalid.json()) as { error: { code: string } }).error.code).toBe(
+      'capability_unsupported',
+    );
+    if (saved.kind !== 'program') throw new Error('expected program');
+    saved.value.assets = { 'pulse.background': ref };
+    saved = (await (
+      await post(base, 'save', { value: saved, expectedRevision: saved.revision })
+    ).json()) as ModuleRecord;
+    document = (await (
+      await fetch(`${base}/local/v1/broadcast-presets`)
+    ).json()) as BroadcastConfigDocument;
+    expect(
+      (
+        await post(base, 'apply', {
+          moduleId: saved.id,
+          expectedRevision: saved.revision,
+          expectedActiveRevision: document.active.revision,
+          requestId: randomUUID(),
+        })
+      ).status,
+    ).toBe(200);
+  } finally {
+    await first.close();
+  }
+  await writeFile(path, 'damaged');
+  const second = await makeApp();
+  try {
+    const base = await second.listen({ host: '127.0.0.1', port: 0 });
+    const list = (await (await fetch(`${base}/local/v1/broadcast-modules`)).json()) as {
+      modules: Array<{ module: ModuleRecord; availability: { state: string } }>;
+    };
+    const scene = list.modules.find(
+      ({ module }) => module.kind === 'program' && module.name === 'Scene',
+    )!;
+    expect(scene.availability.state).toBe('dependency_missing');
+    const display = await fetch(`${base}/local/v1/broadcast-display-config`);
+    expect(display.status).toBe(200);
+    expect(display.headers.get('x-mizar-program-status')).toBe('dependency_missing');
+    const before = (await (
+      await fetch(`${base}/local/v1/broadcast-presets`)
+    ).json()) as BroadcastConfigDocument;
+    expect(before.active.resolved.program.assets['pulse.background']).toEqual(ref);
+    expect(before.active.lock.resources).toContainEqual(ref.resource);
+    const hud = list.modules.find(({ module }) => module.kind === 'hud')!.module;
+    expect(
+      (
+        await post(base, 'apply', {
+          moduleId: hud.id,
+          expectedRevision: hud.revision,
+          expectedActiveRevision: before.active.revision,
+          requestId: randomUUID(),
+        })
+      ).status,
+    ).toBe(200);
+    const after = (await (
+      await fetch(`${base}/local/v1/broadcast-presets`)
+    ).json()) as BroadcastConfigDocument;
+    expect(after.active.resolved.program.assets['pulse.background']).toEqual(ref);
+    expect(after.active.lock.resources).toContainEqual(ref.resource);
+    await writeFile(path, bytes);
+    expect(
+      (
+        await post(base, 'apply', {
+          moduleId: scene.module.id,
+          expectedRevision: scene.module.revision,
+          expectedActiveRevision: after.active.revision,
+          requestId: randomUUID(),
+        })
+      ).status,
+    ).toBe(200);
+    const repairedDisplay = await fetch(`${base}/local/v1/broadcast-display-config`);
+    expect(repairedDisplay.status).toBe(200);
+    expect(repairedDisplay.headers.get('x-mizar-program-status')).toBeNull();
+  } finally {
+    await second.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

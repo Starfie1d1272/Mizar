@@ -1334,6 +1334,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
               scene: (value) => broadcastConfig!.resolve.scene(value),
               camera: (value) => broadcastConfig!.resolve.camera(value),
               hud: (value) => broadcastConfig!.resolve.hud(value),
+              ...(broadcastConfig.resolve.image
+                ? { image: (value) => broadcastConfig!.resolve.image!(value) }
+                : {}),
               asset: async (ref) => {
                 if (ref.resource.id !== PACK_ID) return broadcastConfig!.resolve.asset(ref);
                 if (!resources) throw new Error('resource_store_unavailable');
@@ -1391,6 +1394,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         () => broadcastRuntime.ready,
         () => broadcastRuntime.restoreLegacyCamera(),
         (module) => broadcastRuntime.moduleAvailability(module),
+        () => broadcastRuntime.displayAvailable,
       );
     }
     catalogTool = mulnxTool;

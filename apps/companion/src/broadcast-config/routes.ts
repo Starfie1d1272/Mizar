@@ -72,11 +72,13 @@ export function registerBroadcastConfigRoutes(
   moduleAvailability?: (
     module: ModuleRecord,
   ) => Promise<{ state: 'ready' | 'dependency_missing'; reason?: string }>,
+  displayAvailable: () => boolean = () => true,
 ): void {
   const authorized = (origin: string | undefined) =>
     originPolicy.mode === 'loopback' && checkLocalWebOrigin(originPolicy, origin).allowed;
   app.get('/local/v1/broadcast-display-config', (_request, reply) => {
     if (!isReady()) return reply.code(503).send({ error: 'broadcast_config_unavailable' });
+    if (!displayAvailable()) reply.header('x-mizar-program-status', 'dependency_missing');
     return reply.header('cache-control', 'no-store').send(displayConfig(store.snapshot.active));
   });
   app.get('/local/v1/broadcast-presets', (request, reply) => {
@@ -197,6 +199,7 @@ export function registerBroadcastConfigRoutes(
     )
       return { status: 409, code };
     if (['preset_missing', 'module_missing'].includes(code)) return { status: 404, code };
+    if (code === 'capability_unsupported') return { status: 422, code };
     if (code === 'broadcast_owner_sync_failed') return { status: 503, code };
     if (
       [
@@ -253,7 +256,11 @@ export function registerBroadcastConfigRoutes(
             error: {
               code,
               message:
-                status === 409 ? '配置正在使用或已变化，请先替换引用后重试。' : '配置暂时不可用。',
+                code === 'capability_unsupported'
+                  ? '该配置包含尚不支持的场景槽位或素材类型，请修改后重试。'
+                  : status === 409
+                    ? '配置正在使用或已变化，请先替换引用后重试。'
+                    : '配置暂时不可用。',
               requestId: request.id,
             },
           });
