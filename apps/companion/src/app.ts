@@ -1782,6 +1782,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         : null,
     pendingPerformanceEvidence: () => performanceContext?.exportMemory() ?? [],
     pendingJournalEvidence: () => sessionJournal?.pendingEvidence() ?? [],
+    diagnosticDelivery: () => diagnosticDelivery.snapshotStatus(),
     retainedDiagnosticBatches: () => diagnosticDelivery.retainedBatches(),
     beginPerformanceExport: () =>
       performanceContext?.beginExport() ?? Promise.resolve(async () => {}),
