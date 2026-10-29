@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@fontsource/inter": "catalog:",
+    "@mizar/broadcast-config": "workspace:*",
     "@mizar/core": "workspace:*",
     "@mizar/design-tokens": "workspace:*",
     "@mizar/hud-config": "workspace:*",

@@ -1,3 +1,5 @@
+import { resolveHudPreset } from '@mizar/hud-config';
+import type { BroadcastConfigDocument } from '@mizar/broadcast-config';
 import { exportLhmHud } from '../hud-export/lhm.js';
 import { diagnosticValue } from '../support/session-journal.js';
 import type { FastifyInstance, FastifyReply } from 'fastify';
@@ -17,6 +19,7 @@ export interface HudConfigControllerOptions {
   readonly store: HudConfigStore;
   readonly originPolicy: LocalWebOriginPolicy;
   readonly webRoot?: string;
+  readonly getBroadcastDocument?: () => BroadcastConfigDocument | undefined;
   readonly waitForBroadcast?: () => Promise<void>;
 }
 
@@ -80,7 +83,11 @@ export function registerHudConfigRoutes(
     if (!checkLocalWebOrigin(options.originPolicy, request.headers.origin).allowed)
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
     const body: unknown = request.body;
-    if (!isRecord(body) || typeof body.expectedActiveRevision !== 'string')
+    if (
+      !isRecord(body) ||
+      (typeof body.expectedActiveRevision !== 'string' &&
+        (typeof body.moduleId !== 'string' || typeof body.moduleRevision !== 'string'))
+    )
       return reply.code(400).send({ error: 'invalid_hud_config_command' });
     try {
       await options.waitForBroadcast?.();
@@ -90,13 +97,36 @@ export function registerHudConfigRoutes(
     if (!options.store.canMigrate) return reply.code(503).send({ error: 'hud_config_unavailable' });
     const state = options.store.getState();
     if (state.persistenceError) return reply.code(503).send({ error: 'hud_config_unavailable' });
-    if (state.activeRevision !== body.expectedActiveRevision)
+    if (
+      typeof body.expectedActiveRevision === 'string' &&
+      state.activeRevision !== body.expectedActiveRevision
+    )
       return reply.code(409).send({ error: 'hud_config_active_conflict' });
     if (!options.webRoot) return reply.code(503).send({ error: 'lhm_export_runtime_unavailable' });
     try {
-      const archive = await exportLhmHud(options.webRoot, state.resolved);
+      const document = options.getBroadcastDocument?.();
+      let value: unknown = document?.active.resolved.hud ?? state.resolved;
+      if (typeof body.moduleId === 'string') {
+        const item = document?.modules.find(
+          (item) => item.id === body.moduleId && item.kind === 'hud',
+        );
+        if (!item || item.revision !== body.moduleRevision)
+          return reply.code(409).send({ error: 'hud_config_editor_conflict' });
+        if (item.kind !== 'hud' || !('preset' in item.value))
+          return reply.code(400).send({ error: 'lhm_export_unsupported_hud' });
+        value = {
+          renderer: 'native',
+          config: resolveHudPreset(item.value.preset, item.value.layout, item.value.theme),
+          overlays: item.value.overlays,
+          accent: item.value.accent,
+        };
+      }
+      const archive = await exportLhmHud(options.webRoot, value);
       await options.waitForBroadcast?.();
-      if (options.store.getState().activeRevision !== body.expectedActiveRevision)
+      if (
+        typeof body.expectedActiveRevision === 'string' &&
+        options.store.getState().activeRevision !== body.expectedActiveRevision
+      )
         return reply.code(409).send({ error: 'hud_config_active_conflict' });
       return reply
         .header('content-type', 'application/zip')

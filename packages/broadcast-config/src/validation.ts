@@ -229,7 +229,7 @@ const preset = z.strictObject({
     }),
   ),
 });
-const resolvedHud = z.union([
+export const resolvedHudSchema = z.union([
   z.strictObject({
     renderer: z.literal('native'),
     overlays: nativeHud.shape.overlays,
@@ -272,7 +272,7 @@ const snapshot = z.strictObject({
     camera: revision,
   }),
   resolved: z.strictObject({
-    hud: resolvedHud,
+    hud: resolvedHudSchema,
     program,
     music: music.nullable(),
     camera: camera.nullable(),
@@ -281,7 +281,7 @@ const snapshot = z.strictObject({
 });
 const displayConfigSchema = z.strictObject({
   activeRevision: revision,
-  hud: resolvedHud,
+  hud: resolvedHudSchema,
   program,
 });
 
