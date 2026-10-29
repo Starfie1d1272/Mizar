@@ -226,6 +226,8 @@ Host 私有 `POST /operator/runtime/local-match-exit` 仅允许回环监听、�
 
 ### OBS 配置实例归属
 
+本机操作员 `POST /operator/obs/audio-mode` 接收音频绑定修订和 OBS 桌面音频短期选择标识；标识为空表示切回独立分路。停止输出后，场景引用迁移和受管音乐监听转换须完成并回读，切换中断保留待处理状态。切换结果和设备关系仅为本机配置，不进入公开节目投影；桌面混音不能分别控制游戏与解说。
+
 本机操作员 `POST /operator/obs/remote-commentary/applications` 读取 OBS 应用音频的窗口候选，返回偏好修订与短期候选标识；必要时在空闲的 Mizar 场景集合中创建禁用探测来源。`POST /operator/obs/remote-commentary/application` 接收修订和候选标识，重新核对当前 OBS 连接、集合、探测来源与窗口后保存应用偏好。候选标识一次性使用，过期或上下文变化时拒绝；这些接口要求受信任的本机 Origin，不向公共节目接口暴露窗口信息。
 
 桌面主窗口独占 `begin_obs_configuration` / `finish_obs_configuration` / `read_obs_configuration_context` 权限。开始配置以随机 UUID 关联 Host 保存的启动 `Child` 句柄；通过进程名发现的既有 OBS 不取得归属，显式 `launch_obs` 将实例交由用户管理。配置结束只消费对应会话，其他配置会话未结束时保留；原句柄退出后不通过 PID 或进程名重新取得归属。返回有限 `reason` 与中文 `message`，诊断记录 `obs_configuration` 阶段和脱敏工具失败原因。

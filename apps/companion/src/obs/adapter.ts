@@ -21,6 +21,9 @@ import {
 import { readOwnedCommentaryTarget } from './commentary-owned-target.js';
 import { OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
 import { configureIndependentAudio } from './audio-setup.js';
+import { reconcileManagedAudio } from './managed-audio.js';
+import { AudioMigration } from './audio-migration.js';
+import { desktopMonitorRelationship } from './audio-monitor-device.js';
 import { discoverWaitingCommentary } from './remote-commentary-wait.js';
 import { AudioConfigurationConnection } from './audio-configuration-connection.js';
 import { ObsOutputController, ObsOutputError } from './outputs.js';
@@ -468,6 +471,73 @@ export class ObsAdapter {
       this.withObs((obs, endpoint) => this.audioRouting!.read(obs, endpoint), 12000),
     );
   }
+  switchAudioMode(
+    revision: string,
+    selectionId: string | null,
+    prepareMusic: (obs: ObsRpc, same: boolean) => Promise<void>,
+  ) {
+    if (!this.audioRouting || !this.commentary) throw new Error('audio_routing_unavailable');
+    return this.configurationMutation(() =>
+      this.audioConfiguration.run((obs, endpoint, observer) =>
+        this.audioRouting!.switchMode(
+          obs,
+          endpoint,
+          revision,
+          selectionId,
+          async (ids, desktop, verify) => {
+            const [stream, record, collection, inputs] = await Promise.all([
+              obs.call('GetStreamStatus'),
+              obs.call('GetRecordStatus'),
+              obs.call('GetSceneCollectionList'),
+              obs.call('GetInputList'),
+            ]);
+            if (
+              stream.outputActive !== false ||
+              record.outputActive !== false ||
+              collection.currentSceneCollectionName !== OBS_COLLECTION ||
+              !Array.isArray(inputs.inputs)
+            )
+              throw new Error('audio_setup_context_changed');
+            const allInputs = inputs.inputs as Record<string, unknown>[];
+            if (
+              desktop &&
+              [ids.game, ids.remoteCommentary].some((uuid) =>
+                ['game_capture', 'window_capture'].includes(
+                  String(allInputs.find((input) => input.inputUuid === uuid)?.inputKind),
+                ),
+              )
+            )
+              throw new Error('audio_video_binding');
+            const relationship = desktop
+              ? await desktopMonitorRelationship(obs, desktop)
+              : 'different';
+            if (relationship === 'unknown') throw new Error('audio_monitor_device_unknown');
+            if (desktop && relationship === 'same') {
+              const mic = await obs.call('GetInputAudioMonitorType', { inputUuid: ids.microphone });
+              if (mic.monitorType !== 'OBS_MONITORING_TYPE_NONE')
+                throw new Error('audio_microphone_monitor');
+            }
+            await new AudioMigration(`${this.commentary!.journal}.migration`).recover(
+              obs,
+              endpoint,
+              observer,
+            );
+            await prepareMusic(obs, relationship === 'same');
+            await reconcileManagedAudio(
+              obs,
+              endpoint,
+              observer,
+              this.commentary!.journal,
+              this.browserBaseUrl,
+              ids,
+              verify,
+              desktop,
+            );
+          },
+        ),
+      ),
+    );
+  }
   private mixerRevision(routing: { revision: string; endpoint: string; collection: string }) {
     return createHash('sha256')
       .update(JSON.stringify([routing.revision, routing.endpoint, routing.collection]))
@@ -478,7 +548,41 @@ export class ObsAdapter {
     const routing = await this.audioRouting.read(obs, endpoint);
     const channels = {} as Record<'game' | 'remoteCommentary' | 'microphone', MixerChannelStatus>;
     for (const role of ['game', 'remoteCommentary', 'microphone'] as const) {
-      const binding = routing.bindings[role];
+      if (routing.transition) {
+        channels[role] = {
+          name: role,
+          volume: null,
+          muted: null,
+          control: 'unknown',
+          message: '音频模式切换待完成，请回到声音设置重新切换。',
+        };
+        continue;
+      }
+      const binding =
+        routing.desktop && role === 'game'
+          ? {
+              ...routing.desktop,
+              valid:
+                routing.desktop.endpoint === endpoint &&
+                routing.desktop.collection === routing.collection &&
+                routing.candidates.some(
+                  (input) =>
+                    input.uuid === routing.desktop!.inputUuid &&
+                    input.kind === routing.desktop!.inputKind,
+                ),
+              name: '桌面混音',
+            }
+          : routing.bindings[role];
+      if (routing.desktop && role === 'remoteCommentary') {
+        channels[role] = {
+          name: '远端解说',
+          volume: null,
+          muted: null,
+          control: 'unbound',
+          message: '桌面混音中无法单独调整。',
+        };
+        continue;
+      }
       const name =
         binding?.name ??
         ({ game: '游戏', remoteCommentary: '远端解说', microphone: '麦克风' } as const)[role];
@@ -527,7 +631,10 @@ export class ObsAdapter {
             )
               return { status: 'rejected', message: '音频绑定已变化或不可用，请刷新。' };
             const role = command.channel;
-            const binding = initial.routing.bindings[role]!;
+            const binding =
+              role === 'game' && initial.routing.desktop
+                ? initial.routing.desktop
+                : initial.routing.bindings[role]!;
             const perform = async (): Promise<MixerCommandResult> => {
               const current = await this.mixerReadObs(obs, endpoint);
               if (
@@ -555,7 +662,7 @@ export class ObsAdapter {
                 return { status: 'unknown', message: '写入结果未确认，请刷新。' };
               return { status: 'confirmed' };
             };
-            if (role === 'game') {
+            if (role === 'game' && !initial.routing.desktop) {
               if (!gameAudio) return { status: 'rejected', message: '游戏音频控制不可用。' };
               return await gameAudio.manual(perform);
             }
@@ -892,7 +999,20 @@ export class ObsAdapter {
         return { findings: [...visual, ...audio], ready: true };
       }, 30_000);
       this.findings = prepared.findings;
-      if (prepared.ready && this.commentary) {
+      if (await this.audioRouting?.modePending())
+        this.findings = [
+          ...this.findings,
+          {
+            code: 'commentary_pending',
+            message: '音频模式切换待完成，请在声音设置重新核对并切换。',
+          },
+        ];
+      if (
+        prepared.ready &&
+        this.commentary &&
+        !(await this.audioRouting?.desktopBinding()) &&
+        !(await this.audioRouting?.modePending())
+      ) {
         try {
           const commentary = await this.audioConfiguration.run((obs, endpoint, observer) =>
             configureIndependentAudio(

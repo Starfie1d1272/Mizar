@@ -52,6 +52,9 @@ export class GameAudioController {
       revision: this.revision,
     };
   }
+  async desktopMix() {
+    return Boolean((await this.routing.desktopBinding()) || (await this.routing.modePending()));
+  }
   async releaseHeld(revision: string) {
     if (revision !== this.revision) throw new Error('audio_policy_stale');
     if (this.busy) throw new Error('audio_policy_busy');
