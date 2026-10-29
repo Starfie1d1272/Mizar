@@ -6,12 +6,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PreparePack, StoreOptions, TrustedPack } from '../../src/resource-store/contract.js';
 import { checkDescriptor, safePath, verifiedRead } from '../../src/resource-store/files.js';
 import { ResourceStore } from '../../src/resource-store/store.js';
+import { BroadcastReferenceQueue } from '../../src/broadcast-config/reference-queue.js';
 
 const packId = 'official:epl-default';
 const hash = (data: string | Buffer) => createHash('sha256').update(data).digest('hex');
 const fixture = (version: string, data = '0123456789'): TrustedPack => ({
   packId,
   packVersion: version,
+  manifestSha256: hash(`manifest-${version}`),
   compatible: true,
   files: [{ path: 'replay/video.mp4', bytes: Buffer.byteLength(data), sha256: hash(data) }],
 });
@@ -57,6 +59,103 @@ const prepare =
   };
 
 describe('Resource Store', () => {
+  it('serializes a new reference before the final optional removal check', async () => {
+    const queue = new BroadcastReferenceQueue();
+    let referenced = false;
+    const { store } = await setup({
+      packs: [{ packId, optional: true }],
+      references: {
+        run: (operation) => queue.run(operation),
+        isReferenced: () => Promise.resolve(referenced),
+      },
+    });
+    await store.installVerified(packId, prepare());
+    let release!: () => void;
+    let entered!: () => void;
+    const wait = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const commit = queue.run(async () => {
+      entered();
+      await wait;
+      referenced = true;
+    });
+    await started;
+    const removal = store.removeOptional(packId);
+    release();
+    await commit;
+    await expect(removal).rejects.toThrow('resource_in_use');
+    expect((await store.read(packId, 'replay/video.mp4')).bytes.toString()).toBe('0123456789');
+  });
+  it('keeps interrupted deletion marked across restart until cleanup finishes', async () => {
+    let interrupt = true;
+    const { store, options } = await setup({
+      packs: [{ packId, optional: true }],
+      activateWhenSafe: async (commit) => {
+        await commit();
+        if (interrupt) throw new Error('interrupted');
+        return true;
+      },
+      references: { run: (operation) => operation(), isReferenced: () => Promise.resolve(false) },
+    });
+    await store.installVerified(packId, prepare(), { activation: 'prepare-only' });
+    await expect(store.removeOptional(packId)).rejects.toThrow('interrupted');
+    await store.close();
+    const restored = await ResourceStore.open(options);
+    stores.push(restored);
+    const ref = { id: packId, version: '1', digest: hash('manifest-1') };
+    expect(await restored.isDeleting(ref)).toBe(true);
+    await expect(restored.verifyExact(ref)).rejects.toThrow('resource_deleting');
+    await expect(restored.installVerified(packId, prepare())).rejects.toThrow('resource_deleting');
+    interrupt = false;
+    await restored.removeOptional(packId);
+    expect(await restored.isDeleting(ref)).toBe(false);
+  });
+  it('checks references inside the shared queue before optional removal', async () => {
+    let referenced = true;
+    let inQueue = false;
+    const { store } = await setup({
+      packs: [{ packId, optional: true }],
+      references: {
+        async run(operation) {
+          inQueue = true;
+          try {
+            return await operation();
+          } finally {
+            inQueue = false;
+          }
+        },
+        isReferenced(ref) {
+          expect(inQueue).toBe(true);
+          expect(ref).toEqual({ id: packId, version: '1', digest: hash('manifest-1') });
+          return Promise.resolve(referenced);
+        },
+      },
+    });
+    await store.installVerified(packId, prepare());
+    await expect(store.removeOptional(packId)).rejects.toThrow('resource_in_use');
+    expect((await store.read(packId, 'replay/video.mp4')).bytes.toString()).toBe('0123456789');
+    referenced = false;
+    await store.removeOptional(packId);
+    expect(await store.isDeleting({ id: packId, version: '1', digest: hash('manifest-1') })).toBe(
+      false,
+    );
+  });
+  it('reads exact authenticated versions without following the active pointer', async () => {
+    const { store } = await setup();
+    await store.installVerified(packId, prepare());
+    await store.installVerified(packId, prepare('v2', 'abcdefghij'), { packVersion: '2' });
+    const ref = { id: packId, version: '1', digest: hash('manifest-1') };
+    await store.verifyExact(ref);
+    expect((await store.readExact(ref, 'replay/video.mp4')).bytes.toString()).toBe('0123456789');
+    await expect(store.verifyExact({ ...ref, digest: hash('wrong') })).rejects.toThrow(
+      'resource_not_ready',
+    );
+    expect((await store.read(packId, 'replay/video.mp4')).bytes.toString()).toBe('abcdefghij');
+  });
   it('keeps a prepared version inactive on download and cache reuse', async () => {
     const { store } = await setup();
     await store.installVerified(packId, prepare());
