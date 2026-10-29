@@ -747,6 +747,14 @@ it('round trips real music owner configuration to independent drafts without act
     const restartedResources = new MusicPackResources(freshPath);
     const assetApp = Fastify();
     registerBroadcastAssetRoutes(assetApp, restartedResources);
+    registerMusicPackRoutes(
+      assetApp,
+      store,
+      music,
+      restartedResources,
+      createLocalWebOriginPolicy({ host: '127.0.0.1' }),
+      () => true,
+    );
     try {
       const address = await assetApp.listen({ host: '127.0.0.1', port: 0 });
       const query = new URLSearchParams({
@@ -768,6 +776,36 @@ it('round trips real music owner configuration to independent drafts without act
         .digest('hex')}.mizarpack`;
       await writeFile(join(freshPath, filename), Buffer.from('damaged zip'));
       expect((await fetch(`${address}/local/v1/broadcast-assets?${query}`)).status).toBe(422);
+      const headers = {
+        origin: 'http://127.0.0.1:3000',
+        'content-type': 'application/x-mizarpack',
+      };
+      const body = () => new Blob([new Uint8Array(presetZip)]);
+      const checked = await fetch(`${address}/operator/resource-library/check-pack`, {
+        method: 'POST',
+        headers,
+        body: body(),
+      });
+      expect(checked.status).toBe(200);
+      const check = (await checked.json()) as {
+        source: { digest: string };
+        entries: Array<{ entryId: string; kind: string }>;
+      };
+      const programEntry = check.entries.find((entry) => entry.kind === 'program')!.entryId;
+      const selection = new URLSearchParams({
+        digest: check.source.digest,
+        selection: JSON.stringify({ modules: [programEntry], presets: [] }),
+      });
+      const beforeModules = store.snapshot.modules.map((module) => module.id);
+      const repaired = await fetch(
+        `${address}/operator/resource-library/import-pack?${selection}`,
+        { method: 'POST', headers, body: body() },
+      );
+      expect(repaired.status).toBe(200);
+      expect(store.snapshot.modules.map((module) => module.id)).toEqual(beforeModules);
+      const restoredImage = await fetch(`${address}/local/v1/broadcast-assets?${query}`);
+      expect(restoredImage.status).toBe(200);
+      expect(Buffer.from(await restoredImage.arrayBuffer())).toEqual(image);
     } finally {
       await assetApp.close();
     }

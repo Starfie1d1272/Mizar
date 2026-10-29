@@ -390,8 +390,19 @@ export async function importPresetPack(input: {
     const entry = inspected.entries.find((item) => item.entryId === id);
     return entry && entry.status !== 'unsupported' && entry.status !== 'invalid';
   };
+  const reusable = new Set(
+    inspected.entries
+      .filter(
+        (entry) =>
+          entry.type === 'module' &&
+          selected.modules.includes(entry.entryId) &&
+          allowed(entry.entryId) &&
+          entry.copies.some((copy) => copy.state === 'existing'),
+      )
+      .map((entry) => entry.entryId),
+  );
   const batch = inspected.prepare({
-    modules: selected.modules.filter(allowed),
+    modules: selected.modules.filter((id) => allowed(id) && !reusable.has(id)),
     presets: selected.presets.filter(allowed),
   });
   const before = input.store.snapshot;
@@ -416,20 +427,47 @@ export async function importPresetPack(input: {
           )
           ? ('imported' as const)
           : ('existing' as const)
-        : (entry.type === 'module' ? selected.modules : selected.presets).includes(entry.entryId)
-          ? ('unavailable' as const)
-          : ('not_selected' as const),
+        : reusable.has(entry.entryId)
+          ? ('existing' as const)
+          : (entry.type === 'module' ? selected.modules : selected.presets).includes(entry.entryId)
+            ? ('unavailable' as const)
+            : ('not_selected' as const),
     }));
-  if (!batch.modules.length && !batch.presets.length)
+  if (!batch.modules.length && !batch.presets.length && !reusable.size)
     return {
       mapping: { source: inspected.source, moduleEntries: {}, presetEntries: {} },
       reused: false,
       entries: makeEntries(before),
     };
-  const result = await input.resources.installAndCommit(input.zip, async (installed) => {
-    if (resourceKey(installed) !== resourceKey(inspected.source))
-      throw new Error('package_identity_mismatch');
-    return input.store.importBatch(batch);
-  });
+  const result = await input.resources.installAndCommit(
+    input.zip,
+    async (installed) => {
+      if (resourceKey(installed) !== resourceKey(inspected.source))
+        throw new Error('package_identity_mismatch');
+      if (batch.modules.length || batch.presets.length) return input.store.importBatch(batch);
+      const index = input.store.inspectImport(installed)!;
+      return {
+        reused: true,
+        mapping: {
+          source: installed,
+          moduleEntries: Object.fromEntries(
+            Object.entries(index.modules).map(([id, copies]) => [
+              id,
+              copies.map((copy) => copy.id),
+            ]),
+          ),
+          presetEntries: Object.fromEntries(
+            Object.entries(index.presets).map(([id, copy]) => [id, copy.id]),
+          ),
+          moduleOwners: Object.fromEntries(
+            Object.values(index.modules)
+              .flat()
+              .map((copy) => [copy.id, copy.owner]),
+          ),
+        },
+      };
+    },
+    (ref) => input.store.inspectImport(ref) !== null,
+  );
   return { ...result, entries: makeEntries(input.store.snapshot) };
 }
