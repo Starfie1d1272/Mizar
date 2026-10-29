@@ -72,7 +72,7 @@ export function CameraAudition() {
         expected: { context: current.status.context, connection: current.status.connection },
       });
       setLastPlayed({ shot, context: current.status.context });
-      setMessage('播放请求已提交，请在游戏内核对。');
+      setMessage('已发送播放请求。');
     });
   return (
     <>
