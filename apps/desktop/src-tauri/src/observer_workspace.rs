@@ -49,7 +49,7 @@ pub fn pulse(app: &tauri::AppHandle, cs2: &managed_cs2::ManagedCs2) {
 pub async fn observer_command(window: tauri::WebviewWindow, app: tauri::AppHandle,
     action: String, endpoint: Option<String>, password: Option<String>, expected_revision: Option<String>) -> Result<serde_json::Value, String> {
     if !["main", "workspace-left", "workspace-dock"].contains(&window.label())
-        && !(window.label() == "tool-review" && action == "start-configured"
+        && !(window.label() == "tool-review" && matches!(action.as_str(), "start-configured" | "connection-mode")
             && window.url().ok().is_some_and(|url| url.path() == "/workspace/review" && url.query() == Some("kind=connection"))) {
         return Err("请在制播工作台操作观察辅助。".into());
     }
@@ -58,6 +58,12 @@ pub async fn observer_command(window: tauri::WebviewWindow, app: tauri::AppHandl
         log.event("observer_workspace", "begin", Some(&format!("action={action}")));
         let mut automation = None;
         let result: Result<(), String> = (|| {
+            if action == "connection-mode" {
+                let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+                let cs2 = managed.try_lock().map_err(|_| "请等待游戏操作完成后重试。")?;
+                automation = Some(crate::mulnx_launch::observer_control_available(&cs2, &log));
+                return Ok(());
+            }
             if action == "stop" {
                 request(&log, serde_json::json!({"action":"stop"}))?;
                 ACTIVE.store(false, Ordering::Release);

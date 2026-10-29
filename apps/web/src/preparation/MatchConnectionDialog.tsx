@@ -32,6 +32,8 @@ export function MatchConnectionDialog() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
+  const [automatic, setAutomatic] = useState<boolean | null>(null);
+  const [modeCheck, setModeCheck] = useState(0);
   const [confirmed, setConfirmed] = useState(false);
   const [saved, setSaved] = useState(false);
   const [mode, setMode] = useState<'connect' | 'seamless'>('connect');
@@ -79,6 +81,26 @@ export function MatchConnectionDialog() {
       pending.current = null;
     };
   }, []);
+  useEffect(() => {
+    if (!request) return;
+    let active = true;
+    setAutomatic(null);
+    if (!window.__TAURI_INTERNALS__) setAutomatic(false);
+    else
+      void desktopInvoke<{ useMulnx?: boolean }>('observer_command', { action: 'connection-mode' })
+        .then((result) => {
+          if (active)
+            setAutomatic(
+              result.useMulnx === true && request.view.gameAutomation?.autoConnect === true,
+            );
+        })
+        .catch(() => {
+          if (active) setError('无法检查游戏连接方式，请重试。');
+        });
+    return () => {
+      active = false;
+    };
+  }, [request, modeCheck]);
   const close = () => {
     if (operation.current) return;
     if (confirmed) {
@@ -251,9 +273,9 @@ export function MatchConnectionDialog() {
           游戏观战：{endpoints.programEndpoint}
         </p>
       ) : null}
-      <p>标准启动：复制连接命令，在游戏控制台执行。</p>
-      <p>自动启动：按游戏与观战设置连接并隐藏 HUD。观察辅助单独运行。</p>
-      {connection || (mode === 'connect' && !input.trim() && request && savedView?.connection) ? (
+      {automatic === false ? <p>复制游戏连接命令，在 CS2 控制台执行。</p> : null}
+      {automatic === false &&
+      (connection || (mode === 'connect' && !input.trim() && request && savedView?.connection)) ? (
         <Button
           disabled={busy}
           onClick={() => {
@@ -276,6 +298,16 @@ export function MatchConnectionDialog() {
         </Button>
       ) : null}
       {busy ? <p role="status">正在提交本图连接…</p> : null}
+      {automatic === null && error ? (
+        <Button
+          onClick={() => {
+            setError('');
+            setModeCheck((value) => value + 1);
+          }}
+        >
+          重新检查游戏
+        </Button>
+      ) : null}
       {error ? (
         <StatusBanner tone="warning">
           {saved ? '观察辅助准备未完成，可重试辅助或返回工作台。' : error}
