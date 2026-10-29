@@ -202,8 +202,16 @@ it('round trips real music owner configuration to independent drafts without act
     expect(roundTrip.value.groups.waiting.tracks[0]!.asset).toEqual(
       roundTrip.value.groups.waiting.tracks[1]!.asset,
     );
+    const schemeDocument = structuredClone(initial);
+    const programModule = schemeDocument.modules.find((item) => item.kind === 'program');
+    if (!programModule || programModule.kind !== 'program') throw new Error('missing program');
+    const official = {
+      resource: { id: 'official:epl-default', version: '1.0.0', digest: 'a'.repeat(64) },
+      fileId: 'fixtures/epl/team.png',
+    };
+    programModule.value.assets.logo = official;
     const presetZip = await exportPresetPack({
-      document: initial,
+      document: schemeDocument,
       presetId: initial.presets[0]!.id,
       music,
       resources,
@@ -217,6 +225,15 @@ it('round trips real music owner configuration to independent drafts without act
       (item) => item.id === presetResult.mapping.presetEntries.main,
     )!;
     expect(importedPreset.bindings).toHaveLength(4);
+    const programBinding = importedPreset.bindings.find((item) => item.kind === 'program');
+    if (!programBinding || programBinding.mode !== 'use')
+      throw new Error('missing program binding');
+    const importedProgram = store.snapshot.modules.find(
+      (item) => item.id === programBinding.moduleId,
+    );
+    if (!importedProgram || importedProgram.kind !== 'program')
+      throw new Error('missing program module');
+    expect(importedProgram.value.assets.logo).toEqual(official);
     const importedMusicId = importedPreset.bindings.find((item) => item.kind === 'music');
     if (!importedMusicId || importedMusicId.mode !== 'use') throw new Error('missing preset music');
     const presetMusic = store.snapshot.modules.find((item) => item.id === importedMusicId.moduleId);

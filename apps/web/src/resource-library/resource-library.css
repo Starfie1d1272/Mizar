@@ -63,6 +63,11 @@
 .resource-library__actions {
   grid-column: 1 / -1;
 }
+.resource-library__preset-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--mizar-layout-compact);
+}
 .resource-library__preset details {
   grid-column: auto;
 }

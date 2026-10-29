@@ -36,7 +36,7 @@ it('uses the inspected scheme and module revisions only on an explicit action', 
     void options;
     return path === '/local/v1/broadcast-presets'
       ? Promise.resolve({ ok: true, json: () => Promise.resolve(view) })
-      : Promise.resolve({ ok: true });
+      : Promise.resolve({ ok: true, json: () => Promise.resolve({ reused: false }) });
   });
   vi.stubGlobal('fetch', fetchMock);
   const element = document.createElement('div');
@@ -50,6 +50,18 @@ it('uses the inspected scheme and module revisions only on an explicit action', 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(element.textContent).toContain('已修改，尚未使用');
     expect(element.textContent).not.toContain('当前使用');
+    const fileInput = element.querySelector('input[type=file]') as HTMLInputElement;
+    const file = new File(['zip'], 'scheme.mizarpack');
+    Object.defineProperty(fileInput, 'files', { value: [file], configurable: true });
+    await act(async () => {
+      fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(element.textContent).toContain('播出方案已保存');
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/operator/resource-library/import-preset-pack',
+      expect.objectContaining({ method: 'POST', body: file }),
+    );
     const select = element.querySelector('select')!;
     await act(async () => {
       select.value = 'm';

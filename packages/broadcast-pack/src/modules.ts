@@ -36,6 +36,27 @@ function array(value: unknown): unknown[] {
   if (!Array.isArray(value)) throw new Error('package_invalid');
   return value;
 }
+function validFileId(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= 200 &&
+    !/[\\:]/.test(value) &&
+    [...value].every(
+      (character) => character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127,
+    ) &&
+    value
+      .split('/')
+      .every(
+        (part) =>
+          part.length > 0 &&
+          part !== '.' &&
+          part !== '..' &&
+          !/[. ]$/.test(part) &&
+          !/^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i.test(part),
+      )
+  );
+}
 function templateRef(value: unknown, asset: boolean): { package: string; fileId?: string } {
   const ref = object(value);
   const keys = Object.keys(ref);
@@ -43,8 +64,7 @@ function templateRef(value: unknown, asset: boolean): { package: string; fileId?
     keys.length !== (asset ? 2 : 1) ||
     typeof ref.package !== 'string' ||
     !/^(\$self|[a-zA-Z0-9][a-zA-Z0-9._-]{0,127})$/.test(ref.package) ||
-    (asset &&
-      (typeof ref.fileId !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(ref.fileId)))
+    (asset && !validFileId(ref.fileId))
   )
     throw new Error('package_invalid');
   return ref as { package: string; fileId?: string };
