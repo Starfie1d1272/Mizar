@@ -97,12 +97,28 @@ it('prepares without selecting and publishes a configured instance only after se
     acquisition: { kind: 'upstream', release: { archiveSha256: release.sha256 } },
   });
   expect(source.treeSha256).toMatch(/^[a-f0-9]{64}$/);
-  const resolver = new CameraConfigResolver(restarted, {} as MusicStore, async () => true);
+  // Old current.json records have no content hash. Rebuild it from the verified local archive.
+  const originalReceipt = await readFile(join(data, 'current.json'), 'utf8');
+  const legacyReceipt = JSON.parse(originalReceipt) as { packs: { treeSha256?: string }[] };
+  delete legacyReceipt.packs[0]!.treeSha256;
+  await writeFile(join(data, 'current.json'), JSON.stringify(legacyReceipt));
+  const legacy = new MulnxTool(data, bundle);
+  await legacy.load();
+  const legacyResolver = new CameraConfigResolver(legacy, {} as MusicStore, () =>
+    Promise.resolve(true),
+  );
+  expect(await legacy.cameraSource(current.packs[0]!.name)).toEqual(source);
+  await expect(legacyResolver.camera(source)).resolves.toEqual(source.acquisition);
+  expect(await readFile(join(data, 'current.json'), 'utf8')).toBe(JSON.stringify(legacyReceipt));
+  await writeFile(join(data, 'current.json'), originalReceipt);
+  const resolver = new CameraConfigResolver(restarted, {} as MusicStore, () =>
+    Promise.resolve(true),
+  );
   const preset = orchestrationPresetSchema.parse({
     format: 'mizar.orchestration',
     version: 1,
     name: 'Camera',
-    maps: [{ map: 'de_dust2', pack: current.packs[0].name }],
+    maps: [{ map: 'de_dust2', pack: current.packs[0]!.name }],
   });
   const config = await resolver.cameraConfig(preset, true);
   expect(config).toMatchObject({
@@ -122,18 +138,20 @@ it('prepares without selecting and publishes a configured instance only after se
   await expect(resolver.camera({ ...source, treeSha256: 'b'.repeat(64) })).rejects.toThrow(
     'mulnx_source_unavailable',
   );
-  const unsupported = new CameraConfigResolver(restarted, {} as MusicStore, async () => false);
+  const unsupported = new CameraConfigResolver(restarted, {} as MusicStore, () =>
+    Promise.resolve(false),
+  );
   await expect(unsupported.camera(source)).rejects.toThrow('mulnx_capability_unavailable');
   const isolated = join(
     data,
     current.directory,
     'MulNX/CS2OBTool/CameraSystem/CamPacks',
-    current.packs[0].name,
+    current.packs[0]!.name,
     'Campaths',
     'extra',
   );
   await writeFile(isolated, 'changed');
-  await expect(resolver.camera(source)).rejects.toThrow('mulnx_source_unavailable');
+  await expect(resolver.camera(source)).rejects.toThrow('mulnx_source_unverified');
   await rm(isolated);
 
   await writeFile(
