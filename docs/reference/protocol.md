@@ -298,7 +298,7 @@ RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对�
 
 `GET /local/v1/mixer` 返回 `MixerStatus`；`POST /operator/mixer` 接受 `MixerCommand` 并返回 `MixerCommandResult`。协议类型位于 `@mizar/protocol/mixer`。revision 标识后端观察到的绑定上下文，过期命令必须拒绝；写入结果只有经回读确认才返回 `confirmed`。前三路音量是 OBS 观察值，音乐音量是独立的本机 master 配置。音乐条目的可选 `gain` 缺省时使用所属组 `volume`，通过音乐配置保存，旧的组音量命令语义不变。
 
-本机配置协调器就绪时，`POST /operator/resource-library/import-preset-pack` 接收 `application/x-mizarpack`，校验、发布素材并一次保存独立方案草稿；`POST /operator/resource-library/export-preset-pack` 以方案 ID 和预期方案、模块修订导出。当前支持原生 HUD、节目引用、音乐和空运镜，带镜头来源的运镜方案需等待来源适配；外部资源以精确引用保留，嵌入第三方归档暂不支持。写入仅允许本机可信 Origin，导入不修改活动配置或播放状态。
+本机配置协调器就绪时，`POST /operator/resource-library/import-preset-pack` 接收 `application/x-mizarpack`，校验、发布素材并一次保存独立方案草稿；`POST /operator/resource-library/export-preset-pack` 以方案 ID 和预期方案、模块修订导出。支持原生 HUD、节目引用、音乐和带镜头来源的运镜配置；独立开场音效随包携带，MulNX 官方发行依赖保留精确发行与归档摘要，不包含程序本体。导入只保留取得来源，使用时仍由 MulNX owner 核验本机内容与兼容性；开发测试 fork 的分享和嵌入第三方归档暂不支持。写入仅允许本机可信 Origin，导入不修改活动配置或播放状态。
 
 本机配置协调器就绪时，`POST /operator/resource-library/import-music-pack` 接收 `application/x-mizarpack`，校验并发布音乐素材后只创建音乐草稿；重复导入复用映射，不改变活动配置或播放。`POST /operator/resource-library/export-music-pack` 以模块 ID 和预期修订导出单个音乐模块及引用的音频。两者受本机可信 Origin 限制；当前入口不接受完整方案、外部依赖或其他媒体类型，完整分享包能力仍在建设中。
 

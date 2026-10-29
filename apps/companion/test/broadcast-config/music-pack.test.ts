@@ -7,11 +7,14 @@ import Fastify from 'fastify';
 import { createLocalWebOriginPolicy } from '../../src/local-web/origin-policy.js';
 import { registerMusicPackRoutes } from '../../src/broadcast-config/music-pack-routes.js';
 import { defaultMusicConfig } from '@mizar/protocol/music';
-import { emptyOrchestrationPreset } from '@mizar/protocol/orchestration';
-import { readPackArchive } from '@mizar/broadcast-pack';
+import { cameraMapSchema, emptyOrchestrationPreset } from '@mizar/protocol/orchestration';
+import { readPackArchive, writePackArchive } from '@mizar/broadcast-pack';
 import { HudConfigStore } from '../../src/hud-config/store.js';
 import { MusicStore } from '../../src/music/store.js';
-import { portableMusicConfig } from '../../src/broadcast-config/music-assets.js';
+import {
+  portableMusicConfig,
+  portableMusicTrack,
+} from '../../src/broadcast-config/music-assets.js';
 import { migrateLegacyBroadcast } from '../../src/broadcast-config/migrate.js';
 import { BroadcastConfigStore } from '../../src/broadcast-config/store.js';
 import { exportMusicPack, importMusicPack } from '../../src/broadcast-config/music-pack.js';
@@ -210,6 +213,38 @@ it('round trips real music owner configuration to independent drafts without act
       fileId: 'fixtures/epl/team.png',
     };
     programModule.value.assets.logo = official;
+    const opening = await music.add('camera.wav', Buffer.from('RIFF1111WAVEcamera'));
+    const cameraModule = schemeDocument.modules.find((item) => item.kind === 'camera');
+    if (!cameraModule || cameraModule.kind !== 'camera') throw new Error('missing camera');
+    const {
+      pack: _pack,
+      openingSound: _sound,
+      ...map
+    } = cameraMapSchema.parse({
+      map: 'de_mirage',
+      pack: 'local-only',
+      opening: { macro: 'intro', maxMs: 6000 },
+    });
+    void _pack;
+    void _sound;
+    const source = {
+      sourceName: 'Original',
+      treeSha256: 'c'.repeat(64),
+      converterVersion: 1 as const,
+      acquisition: {
+        kind: 'upstream' as const,
+        release: {
+          repository: 'Co1Swet/MulNX_CS2' as const,
+          releaseId: 42,
+          assetId: 73,
+          tag: 'Beta15',
+          archiveSha256: 'd'.repeat(64),
+        },
+      },
+    };
+    cameraModule.value.maps = [
+      { ...map, source, openingSound: await portableMusicTrack(music, opening) },
+    ];
     const presetZip = await exportPresetPack({
       document: schemeDocument,
       presetId: initial.presets[0]!.id,
@@ -217,6 +252,29 @@ it('round trips real music owner configuration to independent drafts without act
       resources,
       metadata: { packageId: randomUUID(), version: '1.0.0', name: '完整方案', author: '' },
     });
+    const presetArchive = await readPackArchive(presetZip);
+    expect(presetArchive.manifest.dependencies).toContainEqual({
+      alias: expect.any(String),
+      resource: { id: 'upstream:mulnx:42:73', version: 'Beta15', digest: 'd'.repeat(64) },
+      delivery: { kind: 'external' },
+    });
+    expect(
+      presetArchive.manifest.files.filter((file) => file.mediaType.startsWith('audio/')),
+    ).toHaveLength(2);
+    const invalidManifest = structuredClone(presetArchive.manifest);
+    const toolDependency = invalidManifest.dependencies.find((item) =>
+      item.resource.id.startsWith('upstream:mulnx:'),
+    );
+    if (!toolDependency) throw new Error('missing tool dependency');
+    toolDependency.resource.id = 'upstream:mulnx:42:0';
+    const invalidZip = await writePackArchive(
+      Buffer.from(JSON.stringify(invalidManifest)),
+      presetArchive.files,
+    );
+    await expect(importPresetPack({ zip: invalidZip, store, resources })).rejects.toThrow(
+      'capability_unsupported',
+    );
+    expect(store.snapshot.active).toEqual(before);
     const presetResult = await importPresetPack({ zip: presetZip, store, resources });
     const repeated = await importPresetPack({ zip: presetZip, store, resources });
     expect(repeated.reused).toBe(true);
@@ -225,6 +283,34 @@ it('round trips real music owner configuration to independent drafts without act
       (item) => item.id === presetResult.mapping.presetEntries.main,
     )!;
     expect(importedPreset.bindings).toHaveLength(4);
+    const cameraBinding = importedPreset.bindings.find((item) => item.kind === 'camera');
+    if (!cameraBinding || cameraBinding.mode !== 'use') throw new Error('missing camera binding');
+    const importedCamera = store.snapshot.modules.find(
+      (item) => item.id === cameraBinding.moduleId,
+    );
+    if (!importedCamera || importedCamera.kind !== 'camera')
+      throw new Error('missing camera module');
+    expect(importedCamera.value.maps[0]!.source).toEqual(source);
+    const sound = importedCamera.value.maps[0]!.openingSound;
+    if (!sound) throw new Error('missing opening sound');
+    expect((await resources.read(sound.asset)).bytes).toEqual(Buffer.from('RIFF1111WAVEcamera'));
+    const reshared = await exportPresetPack({
+      document: store.snapshot,
+      presetId: importedPreset.id,
+      music,
+      resources,
+      metadata: { packageId: randomUUID(), version: '1.0.0', name: '再次分享方案', author: '' },
+    });
+    const resharedResult = await importPresetPack({ zip: reshared, store, resources });
+    const resharedCamera = store.snapshot.modules.find(
+      (item) => item.id === resharedResult.mapping.moduleEntries.camera![0],
+    );
+    if (!resharedCamera || resharedCamera.kind !== 'camera')
+      throw new Error('missing reshared camera');
+    expect(resharedCamera.value.maps[0]!.source).toEqual(source);
+    expect((await resources.read(resharedCamera.value.maps[0]!.openingSound!.asset)).bytes).toEqual(
+      Buffer.from('RIFF1111WAVEcamera'),
+    );
     const programBinding = importedPreset.bindings.find((item) => item.kind === 'program');
     if (!programBinding || programBinding.mode !== 'use')
       throw new Error('missing program binding');
