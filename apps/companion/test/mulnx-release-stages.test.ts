@@ -215,11 +215,12 @@ it('prepares without selecting and publishes a configured instance only after se
     metadata: { packageId: randomUUID(), version: '1.0.0', name: 'Camera', author: '' },
   });
   const imported = await importPresetPack({ zip, store: shareStore, resources: shareResources });
-  const camera = shareStore.snapshot.modules.find(
-    (item) =>
-      item.kind === 'camera' &&
-      Object.values(imported.mapping.moduleEntries).flat().includes(item.id),
+  const importedPreset = shareStore.snapshot.presets.find(
+    (item) => item.id === imported.mapping.presetEntries.main,
   );
+  const cameraBinding = importedPreset?.bindings.find((binding) => binding.kind === 'camera');
+  if (!cameraBinding || cameraBinding.mode !== 'use') throw new Error('missing camera binding');
+  const camera = shareStore.snapshot.modules.find((item) => item.id === cameraBinding.moduleId);
   if (!camera || camera.kind !== 'camera') throw new Error('missing imported camera');
   expect(camera.value.maps[0]!.source).toEqual(source);
   expect(await productionResolver.localPack(camera.value.maps[0]!.source)).toBe(
