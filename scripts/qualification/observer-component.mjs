@@ -4,7 +4,7 @@ import { lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 
 import { dirname, join, resolve, sep } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import pin from '../../config/observer-component.json' with { type: 'json' };
+import pin from '../../apps/companion/src/telemetry/observer-component.json' with { type: 'json' };
 const execute = promisify(execFile);
 async function inspectNode(node) {
   const { stdout } = await execute(
