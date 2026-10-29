@@ -285,6 +285,10 @@ async function checkedFetch(url, options = {}, timeout = 120000, transport = fet
         ),
         {
           retrySafeUpload: error?.retrySafeUpload === true,
+          uploadTimedOut:
+            error?.uploadTimedOut === true ||
+            code === 'ETIMEDOUT' ||
+            (code === 'timeout' && signal.aborted),
           uploadOutcomeUnknown:
             code === 'BOX_CURL_FAILED' || networkCodes.has(code) || code === 'timeout',
           retryableRead: readOnlyBox && (networkCodes.has(code) || code === 'timeout'),
@@ -470,7 +474,7 @@ export class BoxClient {
             await checkedFetch(
               url,
               { method: 'POST', body: form, redirect: 'error', signal },
-              Math.min(600000, Math.max(1, deadline - Date.now())),
+              Math.min(180000, Math.max(1, deadline - Date.now())),
               this.uploadTransport,
             )
           ).json();
@@ -482,8 +486,8 @@ export class BoxClient {
         } catch (error) {
           if (!error.uploadOutcomeUnknown || error.httpStatus === 401 || error.httpStatus === 403)
             throw error;
-          // Reconciliation is read-only and shares this upload's total budget.
-          // A completed body might still commit later: absence alone never authorizes replay.
+          // Reconcile before replay. replace=0 prevents overwriting a late commit;
+          // a conflicting file is never replaced.
           let confirmed;
           try {
             confirmed = await waitForWrittenFile(
@@ -507,8 +511,9 @@ export class BoxClient {
             console.log('Box 上传回执丢失，远端原字节已核验，跳过重传');
             return;
           }
-          if (!error.retrySafeUpload || replace || attempt === 2) throw error;
-          await retryWait(attempt, '上传未发送且目标缺失', deadline, undefined, signal);
+          if ((!error.retrySafeUpload && !error.uploadTimedOut) || replace || attempt === 2)
+            throw error;
+          await retryWait(attempt, '上传后目标缺失', deadline, undefined, signal);
         }
       }
     });
