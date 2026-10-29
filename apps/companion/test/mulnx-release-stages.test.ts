@@ -161,7 +161,11 @@ it('prepares without selecting and publishes a configured instance only after se
   await expect(restarted.cameraSource(current.packs[0]!.name)).rejects.toThrow(
     'mulnx_source_changed',
   );
+  await expect(legacy.cameraSource(current.packs[0]!.name)).rejects.toThrow('mulnx_source_changed');
   await writeFile(join(data, prepared.preparedId, 'MulNX.7z'), 'bad');
+  await expect(legacy.cameraSource(current.packs[0]!.name)).rejects.toThrow(
+    'mulnx_prepared_integrity',
+  );
   await expect(restarted.selectRelease(prepared.preparedId, 'D:\\Steam\\cs2.exe')).rejects.toThrow(
     'mulnx_prepared_integrity',
   );
