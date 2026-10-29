@@ -77,6 +77,7 @@ export class MusicStore {
   constructor(
     readonly directory: string,
     private readonly diagnostic: (stage: string, evidence: unknown) => void = () => {},
+    readonly builtinPack?: string,
   ) {}
   private async stage<T>(stage: string, evidence: unknown, run: () => Promise<T> | T): Promise<T> {
     this.diagnostic(stage, { result: 'begin', ...(evidence as object) });
@@ -152,7 +153,9 @@ export class MusicStore {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
         throw new Error('music_state_invalid', { cause: error });
       this.failure = false;
-      await this.update(() => undefined);
+      this.ready = true;
+      if (this.builtinPack) await this.import(await readFile(this.builtinPack));
+      else await this.update(() => undefined);
     }
     this.failure = false;
     this.ready = true;

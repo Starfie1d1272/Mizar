@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { diagnosticValue } from '../support/session-journal.js';
 import type { FastifyInstance } from 'fastify';
 import {
@@ -173,6 +174,22 @@ export function registerMusicRoutes(
         requestId: request.id,
         message: '音乐包未导入，原配置已保留。请检查清单、音频格式及 ZIP 安全限制。',
       });
+    }
+  });
+  app.post('/operator/music/builtin', async (request, reply) => {
+    if (!allowed(request.headers.origin))
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    try {
+      if (!store.builtinPack) throw new Error('builtin_music_unavailable');
+      await store.import(await readFile(store.builtinPack));
+      director.invalidate();
+      return { config: store.state.config };
+    } catch (error) {
+      request.log.error(
+        { stage: 'music_builtin', error: diagnosticValue(error) },
+        '内置音乐加载失败',
+      );
+      return reply.code(400).send({ message: '内置音乐未加载，原配置已保留。' });
     }
   });
   app.post('/operator/music/track', { bodyLimit: 32 * 1024 * 1024 }, async (request, reply) => {

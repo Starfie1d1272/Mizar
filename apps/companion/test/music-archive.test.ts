@@ -25,6 +25,25 @@ function files() {
     'audio/等待.wav': musicWav(),
   };
 }
+it('loads the bundled pack only for a new music store and preserves existing choices', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'mizar-builtin-music-'));
+  dirs.push(dir);
+  const pack = join(process.cwd(), 'apps/companion/builtin-music.zip');
+  const initial = new MusicStore(dir, undefined, pack);
+  await initial.load();
+  expect(initial.state.config.groups.waiting.tracks[0]?.name).toBe('before_match.mp3');
+  expect(initial.state.config.groups.opening.tracks[0]?.name).toBe('opening.mp3');
+  await initial.configure({
+    ...initial.state.config,
+    groups: {
+      ...initial.state.config.groups,
+      waiting: { ...initial.state.config.groups.waiting, tracks: [] },
+    },
+  });
+  const restored = new MusicStore(dir, undefined, pack);
+  await restored.load();
+  expect(restored.state.config.groups.waiting.tracks).toEqual([]);
+});
 it('imports an ordinary ZIP atomically, reloads it, and preserves the previous config for every rejected package', async () => {
   const s = await store();
   await s.update((state) => {

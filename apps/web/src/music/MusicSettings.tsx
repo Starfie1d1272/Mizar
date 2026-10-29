@@ -150,6 +150,24 @@ export function MusicSettings({ active = true }: { active?: boolean }) {
             <div className="music-settings-save__actions">
               <details className="music-settings-import">
                 <summary>导入音乐包</summary>
+                <p>加载内置音乐会替换当前七组音乐配置及未保存的修改。</p>
+                <Button
+                  disabled={busy}
+                  onClick={() =>
+                    void action(async () => {
+                      await preview.stop();
+                      const result = (await command('/operator/music/builtin')) as {
+                        config?: MusicConfig;
+                      };
+                      const parsed = musicConfigSchema.parse(result.config);
+                      setConfig(parsed);
+                      setDirty(false);
+                      setMessage('内置音乐已加载并保存。');
+                    })
+                  }
+                >
+                  加载内置音乐
+                </Button>
                 <Button
                   disabled={busy}
                   onClick={() => {
