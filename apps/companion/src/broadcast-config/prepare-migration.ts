@@ -25,7 +25,6 @@ export async function prepareLegacyMigration(input: {
   music: MusicStore;
   camera: OrchestrationStore;
   musicAutomaticEnabled: boolean;
-  overlays: LegacyBroadcastMigration['overlays'];
   cameraConfig?: LegacyBroadcastMigration['cameraConfig'];
   lock?: LegacyBroadcastMigration['lock'];
 }): Promise<PreparedLegacyMigration> {
@@ -70,7 +69,6 @@ export async function prepareLegacyMigration(input: {
         active: input.camera.preset,
         automaticEnabled: input.camera.automaticEnabled,
       },
-      overlays: input.overlays,
       musicConfig: (value) => portableMusicConfig(input.music, value, input.musicAutomaticEnabled),
       cameraConfig: input.cameraConfig ?? emptyCamera,
       lock: input.lock ?? localLock,

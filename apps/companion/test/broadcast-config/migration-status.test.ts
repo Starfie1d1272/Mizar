@@ -21,7 +21,7 @@ it('boots the coordinator with verified owners and exposes only display configur
   const { mkdtemp, rm } = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
-  const { getBuiltinLayout, getBuiltinTheme } = await import('@mizar/hud-config');
+  const { getBuiltinTheme } = await import('@mizar/hud-config');
   const { HudConfigStore } = await import('../../src/hud-config/store.js');
   const { BroadcastReferenceQueue } = await import('../../src/broadcast-config/reference-queue.js');
   const root = await mkdtemp(join(tmpdir(), 'broadcast-runtime-'));
@@ -32,10 +32,6 @@ it('boots the coordinator with verified owners and exposes only display configur
     hudConfigStore: hud,
     broadcastConfig: {
       path: join(root, 'broadcast.json'),
-      overlays: {
-        pause: { enabled: true, visual: 'default' },
-        chat: { enabled: true, placement: Object.values(getBuiltinLayout().widgets)[0]! },
-      },
       musicAutomaticEnabled: true,
       references: new BroadcastReferenceQueue(),
       isDeleting: () => Promise.resolve(false),

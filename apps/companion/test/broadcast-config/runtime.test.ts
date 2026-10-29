@@ -2,7 +2,6 @@ import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
-import { getBuiltinLayout } from '@mizar/hud-config';
 import { HudConfigStore } from '../../src/hud-config/store.js';
 import { MusicStore } from '../../src/music/store.js';
 import { OrchestrationStore } from '../../src/orchestration/store.js';
@@ -34,10 +33,6 @@ it('leaves legacy owners and files intact if camera source verification cannot f
       diagnostic: () => {},
       dependencies: {
         path,
-        overlays: {
-          pause: { enabled: true, visual: 'default' },
-          chat: { enabled: true, placement: Object.values(getBuiltinLayout().widgets)[0]! },
-        },
         musicAutomaticEnabled: true,
         references: new BroadcastReferenceQueue(),
         isDeleting: () => Promise.resolve(false),

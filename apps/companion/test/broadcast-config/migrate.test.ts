@@ -26,10 +26,6 @@ it('preserves the active camera independently of its newer draft', async () => {
       active: camera,
       automaticEnabled: false,
     },
-    overlays: {
-      pause: { enabled: true, visual: 'default' },
-      chat: { enabled: true, placement: Object.values(getBuiltinLayout().widgets)[0]! },
-    },
     musicConfig: (config) =>
       Promise.resolve({
         ...config,
@@ -82,10 +78,6 @@ it('reports pending when camera content cannot yet be identified', async () => {
       music,
       camera,
       musicAutomaticEnabled: true,
-      overlays: {
-        pause: { enabled: true, visual: 'default' },
-        chat: { enabled: true, placement: Object.values(getBuiltinLayout().widgets)[0]! },
-      },
     };
     const ready = await prepareLegacyMigration(options);
     expect(ready.state).toBe('ready');

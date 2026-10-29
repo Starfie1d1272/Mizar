@@ -21,14 +21,12 @@ import { createHudConfigPersistence, hudDocumentFromBroadcast } from './hud-faca
 import { createMusicConfigPersistence } from './music-facade.js';
 import { createCameraConfigPersistence, type CameraFacadeDependencies } from './camera-facade.js';
 import { BroadcastConfigStore } from './store.js';
-import type { LegacyBroadcastMigration } from './migrate.js';
 import type { BroadcastMigrationStatus } from './migration-status.js';
 
 /** Providers share this queue with their final reference check and deletion mark. */
 export interface BroadcastRuntimeDependencies {
   path: string;
   hudPath?: string | undefined;
-  overlays: LegacyBroadcastMigration['overlays'];
   musicAutomaticEnabled: boolean;
   references: BroadcastReferenceQueue;
   isDeleting(ref: ResourceRef): Promise<boolean>;
@@ -108,7 +106,6 @@ export function createBroadcastRuntime(input: {
         hud: hud.getState(),
         music,
         camera,
-        overlays: deps.overlays,
         musicAutomaticEnabled: deps.musicAutomaticEnabled,
         cameraConfig: (preset, enabled) => deps.camera.portable(preset, enabled),
         lock: lockFor,

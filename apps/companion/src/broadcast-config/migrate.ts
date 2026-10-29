@@ -7,7 +7,6 @@ import {
   topScoreBarSettingsSchema,
   type HudLayout,
   type HudWidgetSettings,
-  type HudWidgetPlacement,
 } from '@mizar/hud-config';
 import {
   parseBroadcastConfigDocument,
@@ -33,10 +32,6 @@ export interface LegacyBroadcastMigration {
     activePresetId: string;
     active: OrchestrationPreset;
     automaticEnabled: boolean;
-  };
-  overlays: {
-    pause: { enabled: boolean; visual: string };
-    chat: { enabled: boolean; placement: HudWidgetPlacement };
   };
   musicConfig(value: MusicConfig): Promise<PortableMusicConfigV1>;
   cameraConfig(value: OrchestrationPreset, automaticEnabled: boolean): Promise<CameraModuleV2>;
