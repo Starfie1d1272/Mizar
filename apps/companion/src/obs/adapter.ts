@@ -116,8 +116,6 @@ export class ObsAdapter {
     { code: 'configuration_unchecked', message: '请检查 OBS 场景配置。' },
   ];
   private commentaryTimer: ReturnType<typeof setTimeout> | undefined;
-  private audioModeTimer: ReturnType<typeof setTimeout> | undefined;
-  private audioModeTask: Promise<void> | undefined;
   private commentaryTask: Promise<void> | undefined;
   private recoveryTimer: ReturnType<typeof setTimeout> | undefined;
   private recoveryClosed = false;
@@ -209,39 +207,8 @@ export class ObsAdapter {
     attempt();
   }
 
-  startCommentaryRecovery(): void {
-    if (!this.commentary || this.recoveryClosed || this.commentaryTimer || this.commentaryTask)
-      return;
-    const attempt = () => {
-      if (this.recoveryClosed) return;
-      this.commentaryTimer = undefined;
-      this.commentaryTask = this.serial(() =>
-        this.withObs((obs, endpoint) =>
-          discoverWaitingCommentary(
-            obs,
-            this.commentary!.owner,
-            this.commentary!.journal,
-            endpoint,
-          ),
-        ),
-      )
-        .then(async (result) => {
-          if (result === 'complete' && !this.recoveryClosed) await this.ensure();
-        })
-        .catch(() => undefined)
-        .finally(() => {
-          this.commentaryTask = undefined;
-          if (!this.recoveryClosed) {
-            this.commentaryTimer = setTimeout(attempt, 5000);
-            this.commentaryTimer.unref();
-          }
-        });
-    };
-    attempt();
-  }
-
-  startAudioModeRecovery(
-    music: Pick<
+  startCommentaryRecovery(
+    music?: Pick<
       MusicDirector,
       | 'prepareDesktopMix'
       | 'withAudioModeRecovery'
@@ -251,32 +218,55 @@ export class ObsAdapter {
     >,
     gameAudio?: GameAudioController,
   ): void {
-    if (
-      !this.audioRouting ||
-      !this.commentary ||
-      this.recoveryClosed ||
-      this.audioModeTimer ||
-      this.audioModeTask
-    )
+    if (!this.commentary || this.recoveryClosed || this.commentaryTimer || this.commentaryTask)
       return;
     const attempt = () => {
       if (this.recoveryClosed) return;
-      this.audioModeTimer = undefined;
-      this.audioModeTask = (async () => {
-        await this.recoverAudioMode(music);
-        await this.queueIndependentCommentary();
-        const ready = await this.prepareWaitingIndependent();
-        if (ready && gameAudio)
-          await gameAudio.switchMode(() =>
-            this.switchAudioMode(ready.revision, 'independent', undefined, music, ready.id),
+      this.commentaryTimer = undefined;
+      this.commentaryTask = (async () => {
+        if (music && this.audioRouting) {
+          try {
+            await this.recoverAudioMode(music);
+            await this.queueIndependentCommentary();
+            const ready = await this.prepareWaitingIndependent();
+            if (ready && gameAudio)
+              await gameAudio.switchMode(() =>
+                this.switchAudioMode(ready.revision, 'independent', undefined, music, ready.id),
+              );
+          } catch (error) {
+            this.diagnostic('audio_mode_recovery', error);
+          }
+        }
+        const state = await this.audioRouting?.modeRecoveryState();
+        if (
+          state?.desktop ||
+          state?.transition ||
+          state?.waitingIndependent ||
+          state?.independentCommentaryDisabled
+        )
+          return;
+        try {
+          const result = await this.serial(() =>
+            this.withObs((obs, endpoint) =>
+              discoverWaitingCommentary(
+                obs,
+                this.commentary!.owner,
+                this.commentary!.journal,
+                endpoint,
+              ),
+            ),
           );
+          if (result === 'complete' && !this.recoveryClosed) await this.ensure();
+        } catch {
+          // Commentary discovery is retried independently of mode recovery.
+        }
       })()
-        .catch((error) => this.diagnostic('audio_mode_recovery', error))
+        .catch((error) => this.diagnostic('commentary_recovery', error))
         .finally(() => {
-          this.audioModeTask = undefined;
+          this.commentaryTask = undefined;
           if (!this.recoveryClosed) {
-            this.audioModeTimer = setTimeout(attempt, 5000);
-            this.audioModeTimer.unref();
+            this.commentaryTimer = setTimeout(attempt, 5000);
+            this.commentaryTimer.unref();
           }
         });
     };
@@ -428,8 +418,6 @@ export class ObsAdapter {
   }
   async close(): Promise<void> {
     this.recoveryClosed = true;
-    if (this.audioModeTimer) clearTimeout(this.audioModeTimer);
-    await this.audioModeTask;
     if (this.commentaryTimer) clearTimeout(this.commentaryTimer);
     await this.commentaryTask;
     await this.outputs.close();
@@ -919,9 +907,6 @@ export class ObsAdapter {
               endpoint,
               observer,
             );
-            const backupApplied = await new AudioMigration(
-              `${this.commentary!.journal}.migration`,
-            ).completedMonitorApplied(completedPath);
             await music.prepareDesktopMix(
               obs,
               desktop ? relationship : 'independent',
@@ -1045,7 +1030,6 @@ export class ObsAdapter {
                     ids,
                     verify,
                     desktop,
-                    undefined,
                     monitorChanges,
                     modeId,
                     Boolean(
@@ -1106,7 +1090,6 @@ export class ObsAdapter {
                 if (!desktop) await migration.clearModeBackup(completedPath);
                 await migration.clearMode(modeId);
               },
-              backupApplied,
             );
           },
         );

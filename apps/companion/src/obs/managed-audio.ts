@@ -29,7 +29,6 @@ export async function reconcileManagedAudio(
   ids: Partial<Record<ObsAudioRole, string>>,
   verify: () => Promise<boolean>,
   desktopUuid?: string,
-  completedPath?: string,
   monitor: AudioMonitorChange[] = [],
   modeId?: string,
   omitCommentary = false,
@@ -316,7 +315,6 @@ export async function reconcileManagedAudio(
         endpoint,
         { endpoint, collection: OBS_COLLECTION, desktop, independent, captureAudio, monitor },
         observer,
-        completedPath,
         modeId,
       );
     await check();

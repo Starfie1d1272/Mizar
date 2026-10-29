@@ -187,29 +187,12 @@ export class ObsAudioRouting {
       (await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== current.collection
     )
       throw new Error('audio_selection_changed');
-    const next: State = {
-      revision: randomUUID(),
-      desktop: null,
-      lastDesktop: state.lastDesktop,
-      desktopMicrophone: state.desktopMicrophone,
-      independentCommentaryDisabled: state.independentCommentaryDisabled,
-      cancelledCommentaryRevision: state.cancelledCommentaryRevision,
-      waitingIndependent: state.waitingIndependent,
-      transition: null,
-      bindings,
-    };
-    await mkdir(dirname(this.path), { recursive: true });
-    const temp = `${this.path}.${randomUUID()}.tmp`;
-    try {
-      await writeFile(temp, `${JSON.stringify(next)}\n`, { mode: 0o600 });
-      await rename(temp, this.path);
-    } finally {
-      await rm(temp, { force: true });
-    }
-    this.state = next;
-    this.automaticEligible = false;
-    for (const listener of this.listeners) listener();
+    await this.saveState(
+      { ...state, revision: randomUUID(), desktop: null, transition: null, bindings },
+      true,
+    );
   }
+
   private async inputs(obs: ObsRpc) {
     const version = await obs.call('GetVersion');
     const requests = version.availableRequests;
@@ -370,24 +353,17 @@ export class ObsAudioRouting {
       obs,
       scenes.map((scene) => scene.sceneName),
     );
-    const containers = new Map(
-      graph.map((container) => [
-        `${container.group ? 'group' : 'scene'}\0${container.name}`,
-        container,
-      ]),
-    );
-    const activeItems = (name: string, group: boolean): (typeof graph)[number]['items'] => {
-      const container = containers.get(`${group ? 'group' : 'scene'}\0${name}`);
-      if (!container) throw new Error('audio_scene_items_unknown');
-      return container.items.flatMap((item) => {
-        if (!item.sceneItemEnabled) return [];
-        if (item.isGroup === true || item.sourceType === 'OBS_SOURCE_TYPE_SCENE')
-          return activeItems(item.sourceName, item.isGroup === true);
-        return [item];
-      });
-    };
     for (const scene of scenes) {
-      const items = activeItems(scene.sceneName, false);
+      const items = graph
+        .filter((container) => container.activeManagedRoots.has(scene.sceneName))
+        .flatMap((container) =>
+          container.items.filter(
+            (item) =>
+              item.sceneItemEnabled &&
+              item.isGroup !== true &&
+              item.sourceType !== 'OBS_SOURCE_TYPE_SCENE',
+          ),
+        );
       if (
         selectedIds.some(
           (id) =>
@@ -537,7 +513,7 @@ export class ObsAudioRouting {
       waitingIndependent: state.waitingIndependent,
     };
   }
-  private async saveState(next: State) {
+  private async saveState(next: State, clearAutomatic = false) {
     await mkdir(dirname(this.path), { recursive: true });
     const temp = `${this.path}.${randomUUID()}.tmp`;
     try {
@@ -547,6 +523,7 @@ export class ObsAudioRouting {
       await rm(temp, { force: true });
     }
     this.state = next;
+    if (clearAutomatic) this.automaticEligible = false;
     for (const listener of this.listeners) listener();
   }
   async commitModeTransition(id: string, side: 'before' | 'after') {
@@ -964,27 +941,13 @@ export class ObsAudioRouting {
     )
       throw new Error('audio_selection_changed');
     await beforeCommit?.(binding);
-    const next: State = {
-      revision: randomUUID(),
-      desktop: state.desktop,
-      lastDesktop: state.lastDesktop,
-      desktopMicrophone: state.desktopMicrophone,
-      independentCommentaryDisabled: state.independentCommentaryDisabled,
-      cancelledCommentaryRevision: state.cancelledCommentaryRevision,
-      waitingIndependent: state.waitingIndependent,
-      transition: state.transition,
-      bindings: { ...state.bindings, [command.role]: binding },
-    };
-    await mkdir(dirname(this.path), { recursive: true });
-    const temp = `${this.path}.${randomUUID()}.tmp`;
-    try {
-      await writeFile(temp, `${JSON.stringify(next)}\n`, { mode: 0o600 });
-      await rename(temp, this.path);
-    } finally {
-      await rm(temp, { force: true });
-    }
-    this.state = next;
-    this.automaticEligible = false;
-    for (const listener of this.listeners) listener();
+    await this.saveState(
+      {
+        ...state,
+        revision: randomUUID(),
+        bindings: { ...state.bindings, [command.role]: binding },
+      },
+      true,
+    );
   }
 }

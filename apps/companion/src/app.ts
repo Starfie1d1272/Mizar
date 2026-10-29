@@ -846,8 +846,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     // Chromium's connection-error page and never run the WebSocket retry code.
     app.addHook('onListen', () => {
       obsAdapter.startBrowserRecovery();
-      obsAdapter.startCommentaryRecovery();
-      if (musicDirector) obsAdapter.startAudioModeRecovery(musicDirector, gameAudio);
+      obsAdapter.startCommentaryRecovery(musicDirector, gameAudio);
       return Promise.resolve();
     });
     registerObsRoutes(app, {

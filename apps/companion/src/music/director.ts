@@ -639,18 +639,8 @@ export class MusicDirector {
       musicBefore: MonitorOriginals;
       musicAfter: MonitorOriginals;
     }) => Promise<T>,
-    backupApplied: Readonly<Record<string, MonitorType>> = {},
   ): Promise<T> {
-    if (this.closed || !this.store.ready || this.store.failure)
-      throw new Error('music_unavailable');
-    const revision = ++this.commandRevision;
-    this.invalidate();
-    while (this.inFlight && revision === this.commandRevision && !this.closed)
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    const current = () => !this.closed && revision === this.commandRevision;
-    if (!current()) throw new Error('music_cancelled');
-    this.inFlight = true;
-    try {
+    return this.withAudioModeRecovery(async (current) => {
       const changes: AudioMonitorChange[] = [];
       const managedMusicUuids: string[] = [];
       const musicBefore = structuredClone(this.store.state.desktopMonitorOriginal);
@@ -678,7 +668,7 @@ export class MusicDirector {
         if (!isMonitorType(mode)) throw new Error('music_monitor_unknown');
         managedMusicUuids.push(uuid);
         if (original && original.uuid !== uuid) throw new Error('music_monitor_source_changed');
-        const held = original ? (original.applied ?? backupApplied[uuid]) : undefined;
+        const held = original?.applied;
         if (original && (held === undefined || held !== mode)) {
           // A later external edit owns this field; do not replay the backup.
           originals[layer] = null;
@@ -709,9 +699,7 @@ export class MusicDirector {
       this.status.monitorPending =
         relationship === 'unknown' && this.store.state.monitorPreference === true;
       return result;
-    } finally {
-      this.inFlight = false;
-    }
+    });
   }
   monitorPlanCompatible(relationship: MonitorRelationship, after: MonitorOriginals): boolean {
     const desired = desiredMonitorType(relationship, this.store.state.monitorPreference === true);
@@ -719,7 +707,7 @@ export class MusicDirector {
       (layer) => !after[layer]?.applied || after[layer]!.applied === desired,
     );
   }
-  async withAudioModeRecovery<T>(run: () => Promise<T>): Promise<T> {
+  async withAudioModeRecovery<T>(run: (current: () => boolean) => Promise<T>): Promise<T> {
     if (this.closed || !this.store.ready || this.store.failure)
       throw new Error('music_unavailable');
     const revision = ++this.commandRevision;
@@ -729,7 +717,7 @@ export class MusicDirector {
     if (this.closed || revision !== this.commandRevision) throw new Error('music_cancelled');
     this.inFlight = true;
     try {
-      return await run();
+      return await run(() => !this.closed && revision === this.commandRevision);
     } finally {
       this.inFlight = false;
     }
