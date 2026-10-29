@@ -57,6 +57,21 @@ const prepare =
   };
 
 describe('Resource Store', () => {
+  it('keeps a prepared version inactive on download and cache reuse', async () => {
+    const { store } = await setup();
+    await store.installVerified(packId, prepare());
+    await store.installVerified(packId, prepare('v2', 'abcdefghij'), {
+      packVersion: '2',
+      activation: 'prepare-only',
+    });
+    expect(store.getStatus(packId)).toMatchObject({ activeVersion: '1', preparedVersion: '2' });
+    await store.installVerified(packId, prepare('v2', 'abcdefghij'), {
+      packVersion: '2',
+      activation: 'prepare-only',
+    });
+    expect(store.getStatus(packId)).toMatchObject({ activeVersion: '1', preparedVersion: '2' });
+    expect((await store.read(packId, 'replay/video.mp4')).bytes.toString()).toBe('0123456789');
+  });
   it('cancels and rejects concurrent operations/writers while preserving old ready bytes', async () => {
     const { store, options } = await setup();
     await store.installVerified(packId, prepare());
