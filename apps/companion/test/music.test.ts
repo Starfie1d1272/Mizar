@@ -1341,13 +1341,7 @@ it('does not start a formal cue while OBS has not confirmed the audition stopped
   await r.step(100);
   const restarts = r.obs.restarts();
   r.obs.intercept = (type) => {
-    const last = r.obs.calls.at(-1);
-    if (
-      type === 'GetMediaInputStatus' &&
-      last?.data.inputUuid === r.store.state.sources.stinger &&
-      last?.data.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP'
-    )
-      stinger(r).state = 'OBS_MEDIA_STATE_PLAYING'; // OBS acknowledges STOP but has not actually stopped.
+    if (type === 'GetMediaInputStatus') stinger(r).state = 'OBS_MEDIA_STATE_PLAYING'; // OBS acknowledges STOP but has not actually stopped.
     return Promise.resolve();
   };
   r.truth.production = true;
@@ -1356,6 +1350,19 @@ it('does not start a formal cue while OBS has not confirmed the audition stopped
   expect(r.director.get().preview?.message).toContain('未确认');
   expect(r.obs.restarts()).toBe(restarts);
   expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
+  const stopCount = () =>
+    r.obs.calls.filter(
+      (call) =>
+        call.data.inputUuid === r.store.state.sources.stinger &&
+        call.data.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP',
+    ).length;
+  const beforeRetry = stopCount();
+  for (let i = 0; i < 3; i++) {
+    await r.step(100);
+    expect(r.director.get().preview?.phase).toBe('cleanup');
+    expect(r.obs.restarts()).toBe(restarts);
+  }
+  expect(stopCount()).toBeGreaterThan(beforeRetry);
   r.obs.intercept = undefined;
   await r.step(100);
   expect(stinger(r).state).toBe('OBS_MEDIA_STATE_STOPPED');
