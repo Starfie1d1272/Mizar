@@ -110,6 +110,7 @@ export function PreparationPage() {
     const tool = updates?.mulnx;
     if (
       checkedOnEntry.current ||
+      !updates?.automatic ||
       !tool ||
       tool.busy ||
       (tool.checkedAt && Date.now() - tool.checkedAt < 5 * 60_000)
