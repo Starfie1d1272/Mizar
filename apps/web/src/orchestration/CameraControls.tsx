@@ -47,10 +47,11 @@ export function CameraControls({
         <div className="workspace-camera-summary">
           <StatusPill tone={s.held ? 'warning' : 'info'}>
             {s.held ? '人工运镜' : '自动运镜'}
+            {s.current ? ` · 已提交 ${s.current}` : ''}
           </StatusPill>
         </div>
       ) : null}
-      {!workspace || error || s.current || preparation !== 'ready' ? (
+      {!workspace || error || preparation === 'error' || (!s.current && preparation !== 'ready') ? (
         <span
           className="music-controls__track"
           title={error || s.message}

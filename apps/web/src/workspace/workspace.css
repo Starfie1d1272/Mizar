@@ -767,6 +767,9 @@
   position: relative;
 }
 .workspace-secondary > summary {
+  min-height: var(--mizar-layout-target);
+  padding-block: calc(var(--mizar-layout-compact) / 2);
+  box-sizing: border-box;
   cursor: pointer;
   color: var(--mizar-fg-secondary);
 }
@@ -830,6 +833,10 @@
 @media (max-height: 200px) {
   .workspace-dock > section {
     padding: calc(var(--mizar-layout-compact) / 2);
+    gap: 2px;
+  }
+  .workspace-camera-controls > .music-controls__track {
+    flex-basis: auto;
   }
   .workspace-message {
     padding-inline: var(--mizar-layout-compact);
