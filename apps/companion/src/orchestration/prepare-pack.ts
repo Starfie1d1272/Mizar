@@ -1,9 +1,9 @@
 import { constants } from 'node:fs';
-import { copyFile, lstat, mkdir, readdir, realpath, writeFile } from 'node:fs/promises';
+import { copyFile, lstat, mkdir, readFile, readdir, realpath, writeFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { isolatedMetadata, verifyIsolatedPack } from './isolated-pack.js';
+import { disableMacroShortcut, isolatedMetadata, verifyIsolatedPack } from './isolated-pack.js';
 
 /** Create a separate scheduling pack while preserving the original resources. */
 export async function prepareIsolatedPack(source: string, root: string, stableName?: string) {
@@ -15,17 +15,20 @@ export async function prepareIsolatedPack(source: string, root: string, stableNa
   await mkdir(target); // Exclusive; partial copies never get valid metadata.
   let files = 0,
     bytes = 0;
-  const copy = async (src: string, dest: string, depth: number) => {
+  const copy = async (src: string, dest: string, depth: number, macro: boolean) => {
     const stat = await lstat(src);
     if (stat.isSymbolicLink() || depth > 8) throw new Error('pack_unsafe_entry');
     if (stat.isDirectory()) {
       await mkdir(dest);
       for (const entry of await readdir(src))
-        await copy(join(src, entry), join(dest, entry), depth + 1);
+        await copy(join(src, entry), join(dest, entry), depth + 1, macro);
     } else if (stat.isFile() && stat.nlink === 1) {
       if (++files > 4096 || (bytes += stat.size) > 64 * 1024 * 1024)
         throw new Error('pack_too_large');
-      await copyFile(src, dest, constants.COPYFILE_EXCL);
+      if (macro) {
+        if (depth !== 1 || stat.size > 1024 * 1024) throw new Error('pack_macro_invalid');
+        await writeFile(dest, disableMacroShortcut(await readFile(src, 'utf8')), { flag: 'wx' });
+      } else await copyFile(src, dest, constants.COPYFILE_EXCL);
     } else throw new Error('pack_unsafe_entry');
   };
   // These are MulNX's resource directories; no original automatic triggers are copied.
@@ -35,7 +38,7 @@ export async function prepareIsolatedPack(source: string, root: string, stableNa
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
       throw error;
     });
-    if (stat) await copy(input, join(target, dir), 0);
+    if (stat) await copy(input, join(target, dir), 0, dir === 'CamMacros');
     else await mkdir(join(target, dir));
   }
   await writeFile(join(target, `${name}.yaml`), isolatedMetadata(name), { flag: 'wx' });

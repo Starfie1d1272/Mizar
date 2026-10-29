@@ -39,7 +39,10 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
   const source = join(root, 'source');
   await mkdir(join(source, 'CamMacros'), { recursive: true });
   await mkdir(join(source, 'Campaths'));
-  await writeFile(join(source, 'CamMacros', 'candidate.yaml'), 'name: 候选镜头\n');
+  await writeFile(
+    join(source, 'CamMacros', 'candidate.yaml'),
+    'name: 候选镜头\nKCP: { usable: false, ctrl: false, shift: false, alt: false, vkCode: 0, comboClick: 1 }\n',
+  );
   const pack = await prepareIsolatedPack(source, root);
   let packRoot: string | undefined;
   const calls: string[] = [];
@@ -59,6 +62,7 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
       calls.push(type);
       return Promise.resolve('queued' as const);
     },
+    packStatus: () => Promise.resolve({ active: pack.name, empty: true }),
   };
   const director = new CameraDirector(
     store,
@@ -133,7 +137,7 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
       page.getByRole('button', { name: '确认活动隔离包并试播', exact: true }),
     ).toBeDisabled();
     await expect(
-      page.getByRole('button', { name: '确认活动隔离包并启用自动', exact: true }),
+      page.getByRole('button', { name: '准备隔离包并启用自动', exact: true }),
     ).toBeDisabled();
     packRoot = root;
     await expect(page.getByText(/隔离文件已验证/)).toBeVisible();

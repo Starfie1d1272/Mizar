@@ -42,7 +42,7 @@ export class CameraDirector {
     readonly store: OrchestrationStore,
     readonly provider: Pick<
       MulnxProvider,
-      'generation' | 'connected' | 'send' | 'connect' | 'close'
+      'generation' | 'connected' | 'send' | 'connect' | 'close' | 'packStatus'
     >,
     private readonly truth: () => CameraTruth,
     private readonly diagnostic: (stage: string, evidence: unknown) => void = () => {},
@@ -413,8 +413,29 @@ export class CameraDirector {
         !this.packReady()
       )
         throw new Error('camera_context_changed');
+      const pack = this.store.map(this.truth().program.map.name)!.pack;
+      const revision = this.revision;
+      const generation = this.provider.generation;
+      const context = this.context;
+      if ((await this.provider.send('CamPack/Apply', pack)) !== 'queued')
+        throw new Error('camera_pack_apply_unconfirmed');
+      const status = await this.provider.packStatus();
+      if (
+        !status ||
+        status.active !== pack ||
+        !status.empty ||
+        revision !== this.revision ||
+        generation !== this.provider.generation ||
+        context !== this.identity(this.truth()) ||
+        !this.safe(this.truth()) ||
+        !this.provider.connected ||
+        !this.store.ready ||
+        this.store.saving ||
+        !this.packReady()
+      )
+        throw new Error('camera_pack_unconfirmed');
       this.held = false;
-      this.message = '自动 · 等待下一个阶段';
+      this.message = '活动包和自动列表已核对；资源加载未确认 · 等待下一个阶段';
     }
     this.diagnostic('camera_command', { action, after: this.get(), result: 'success' });
   }

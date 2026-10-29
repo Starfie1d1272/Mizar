@@ -264,7 +264,7 @@ it('explains a rejected MulNX update check and allows retry', async () => {
     ),
   );
   const update = [...container.querySelectorAll('button')].find(
-    (button) => button.textContent === '更新 MulNX',
+    (button) => button.textContent === '更新或重新准备 MulNX',
   )!;
   await act(async () => {
     update.click();

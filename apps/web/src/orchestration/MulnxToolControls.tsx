@@ -92,7 +92,7 @@ export function MulnxToolControls({
       </Button>
       {window.__TAURI_INTERNALS__ ? (
         <Button disabled={busy || tool.busy} onClick={() => void run('update')}>
-          更新 MulNX
+          更新或重新准备 MulNX
         </Button>
       ) : null}
       {window.__TAURI_INTERNALS__ ? (

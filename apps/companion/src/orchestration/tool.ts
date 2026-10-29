@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { parseDocument } from 'yaml';
 import { createHash, randomUUID } from 'node:crypto';
 import {
   copyFile,
@@ -57,6 +58,13 @@ export function consoleLaunchOptions(source: string): string {
   const value = launchOptionsValue(source);
   const options = /(?:^|\s)-condebug(?:\s|$)/i.test(value) ? value : `${value} -condebug`.trim();
   return source.replace(/^launchOptions\s*:.*$/m, `launchOptions: ${JSON.stringify(options)}`);
+}
+/** Remove only the bundled first-Demo POV trigger; leave all other commands intact. */
+export function firstDemoOptions(source: string): string {
+  return source.replace(
+    /^[\t ]*MulNX\/CSCfg\/POV[\t ]*(?=\r?$)/gim,
+    '// Mizar: POV remains operator controlled',
+  );
 }
 /** Distribution state is independent of the Mizar application and camera presets. */
 export class MulnxTool {
@@ -166,6 +174,7 @@ export class MulnxTool {
           z.object({ release: releaseSchema }).parse(await readJson(this.bundle, 'release.json'))
             .release);
       if (
+        update ||
         launcherUnavailable ||
         !this.installed ||
         this.installed.release.sha256 !== release.sha256
@@ -177,12 +186,63 @@ export class MulnxTool {
       return { launcher, version: this.installed!.release.tag };
     });
   }
+  private async replaceManaged(path: string, original: string, updated: string) {
+    if (original === updated) return;
+    const temporary = `${path}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temporary, updated, { flag: 'wx' });
+      if ((await readFile(path, 'utf8')) !== original) throw new Error('mulnx_config_conflict');
+      await rename(temporary, path);
+    } finally {
+      await rm(temporary, { force: true });
+    }
+  }
+  private async configureReflection(root: string, relative: string, key: string) {
+    const path = await safePath(root, relative);
+    const stat = await lstat(path);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 256 * 1024)
+      throw new Error('mulnx_config_invalid');
+    const original = await readFile(path, 'utf8');
+    const document = parseDocument(original, { uniqueKeys: true });
+    if (document.errors.length || document.warnings.length) throw new Error('mulnx_config_invalid');
+    const value: unknown = document.toJS({ maxAliasCount: 0 });
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+      throw new Error('mulnx_config_invalid');
+    document.set(key, false);
+    await this.replaceManaged(path, original, document.toString());
+  }
+  private async configureFirstDemo(root: string) {
+    const relative = 'CS2OBTool/AutoCfgLoad/FirstPlayDemo';
+    let directory: string;
+    try {
+      directory = await safePath(join(root, relative));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw error;
+    }
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith('.cfg')) continue;
+      const path = join(directory, entry.name);
+      const stat = await lstat(path);
+      if (stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 1024 * 1024)
+        throw new Error('mulnx_first_demo_config_invalid');
+      const original = await readFile(path, 'utf8');
+      await this.replaceManaged(path, original, firstDemoOptions(original));
+    }
+  }
   private async configureLauncher(
     root: string,
     cs2Path: string,
     consoleCapture = false,
     spectatorCfg = false,
   ) {
+    await this.configureReflection(root, 'Config/CS2OBTool_Refl.yaml', 'UISystem.ifDrawMid');
+    await this.configureReflection(
+      root,
+      'Config/CS2Injector_Refl.yaml',
+      'CS2HelperController.injectReshade',
+    );
+    await this.configureFirstDemo(root);
     const auto = await readFile(
       await safePath(root, 'CS2Injector/CS2BootLoader/Config/auto.yaml'),
       'utf8',
