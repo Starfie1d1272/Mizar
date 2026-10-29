@@ -72,16 +72,16 @@ pub fn verify_managed_launch(log: &DesktopLog, actual: &Value, pid: u32, created
     validate_game_identity(actual, &receipt, executable).map_err(|_| denied.into())
 }
 
-pub fn launch(app: &tauri::AppHandle, log: &DesktopLog, automatic: bool) -> Result<Value, String> {
+pub fn launch(app: &tauri::AppHandle, log: &DesktopLog, automatic: bool, preserve: bool) -> Result<Value, String> {
     if !automatic { return Err("请从 Mizar 自动启动 MulNX 工作台。".into()); }
-    launch_operation(app, log, true, false)
+    launch_operation(app, log, true, false, preserve)
 }
 
 pub fn update(app: &tauri::AppHandle, log: &DesktopLog) -> Result<Value, String> {
-    launch_operation(app, log, false, true)
+    launch_operation(app, log, false, true, false)
 }
 
-fn launch_operation(app: &tauri::AppHandle, log: &DesktopLog, automatic: bool, update_only: bool) -> Result<Value, String> {
+fn launch_operation(app: &tauri::AppHandle, log: &DesktopLog, automatic: bool, update_only: bool, preserve: bool) -> Result<Value, String> {
     let _launch = LAUNCH_GATE.try_lock().map_err(|_| "MulNX 正在启动，请等待本次操作完成。")?;
     app.state::<production_exit::ExitGate>().check()?;
     app.state::<updates::PendingUpdate>().check()?;
@@ -96,6 +96,9 @@ fn launch_operation(app: &tauri::AppHandle, log: &DesktopLog, automatic: bool, u
     };
     if !automatic { no_game()?; }
     let status = managed.try_lock().map_err(|_| "CS2 正忙，请稍后重试。")?.status()?;
+    if preserve && status["canPreserve"] != true {
+        return Err("请先检查配置接管结果，再选择保持原游戏设置继续。".into());
+    }
     if status["pending"] == true || status["demoCleanupPending"] == true || (!automatic && status["spectatorRecoveryPending"] == true) {
         return Err("请先完成原有 CS2 配置恢复，再通过 MulNX 启动。".into());
     }
@@ -162,7 +165,7 @@ fn launch_operation(app: &tauri::AppHandle, log: &DesktopLog, automatic: bool, u
     let pending = results.join("pending.json");
     crate::cs2_session::atomic_write(&pending, b"{}")?;
     let journal = managed.try_lock().map_err(|_| "CS2 正忙，请稍后重试。")?
-        .prepare_managed_mulnx(&executable)?;
+        .prepare_managed_mulnx(&executable, preserve)?;
     let spectator_cfg = journal["spectatorCfg"] == true;
     let configured = production_exit::prepare_mulnx(log, &executable, false, spectator_cfg)?;
     if configured["launcher"] != prepared["launcher"] || configured["version"] != prepared["version"] {

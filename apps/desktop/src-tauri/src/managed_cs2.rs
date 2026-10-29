@@ -991,8 +991,8 @@ impl ManagedCs2 {
         self.start_internal(preserve, None, false)
     }
     /// Prepare the same configuration transaction as Steam without submitting a launch.
-    pub(crate) fn prepare_managed_mulnx(&mut self, expected: &Path) -> Result<Value, String> {
-        if !self.start_internal(false, None, true)? { return Err("请先结束现有游戏并恢复配置。".into()); }
+    pub(crate) fn prepare_managed_mulnx(&mut self, expected: &Path, preserve: bool) -> Result<Value, String> {
+        if !self.start_internal(preserve, None, true)? { return Err("请先结束现有游戏并恢复配置。".into()); }
         let journal = self.store.load()?.ok_or("CS2 配置事务缺失。")?;
         if !same_executable(expected, journal["executable"].as_str().ok_or("游戏路径缺失。")?) {
             return Err("游戏安装位置已变化，原配置备份仍保留。".into());
@@ -1631,7 +1631,7 @@ mod tests {
     #[test]
     fn standard_start_uses_single_observer_cfg_and_preserves_keys() {
         let _processes = GAME_PROCESSES.lock().unwrap();
-        for scenario in ["standard", "spawn_failure", "demo"] {
+        for scenario in ["standard", "spawn_failure", "demo", "mulnx_preserved"] {
             let fail = scenario == "spawn_failure";
             let root = std::env::temp_dir().join(format!("mizar-observer-start-{}-{scenario}", std::process::id()));
             std::fs::create_dir_all(&root).unwrap();
@@ -1651,6 +1651,21 @@ mod tests {
             let submitted = Arc::new(std::sync::Mutex::new(Vec::new()));
             host.launch_fixture = Some(LaunchFixture { executable:executable.clone(), video:video.clone(), account:1, fail_submit:fail, submitted:submitted.clone() });
             host.recovery_identity_fixture = Some((executable.clone(), video.clone(), 1));
+            if scenario == "mulnx_preserved" {
+                let before_video = std::fs::read(&video).unwrap();
+                let before_convars = std::fs::read(cfg.join("cs2_machine_convars.vcfg")).unwrap();
+                assert!(host.prepare_managed_mulnx(&executable, true).is_err());
+                assert!(host.store.load().unwrap().is_none());
+                host.can_preserve = true;
+                let journal = host.prepare_managed_mulnx(&executable, true).unwrap();
+                assert_eq!(journal["preserveSettings"], true);
+                assert_eq!(journal["mulnxLaunch"], true);
+                assert_eq!(std::fs::read(&video).unwrap(), before_video);
+                assert_eq!(std::fs::read(cfg.join("cs2_machine_convars.vcfg")).unwrap(), before_convars);
+                assert!(submitted.lock().unwrap().is_empty());
+                std::fs::remove_dir_all(root).unwrap();
+                continue;
+            }
             let result = if scenario == "demo" {
                 host.start_internal(false, Some(("\"C:/fixture.dem\"", "00000000-0000-4000-8000-000000000001")), false)
             } else { host.start() };

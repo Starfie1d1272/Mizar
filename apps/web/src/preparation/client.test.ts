@@ -158,6 +158,20 @@ describe('managed CS2 production entry and cleanup', () => {
     expect(calls).toContain('present_production');
     expect(window.location.pathname).toBe('/');
   });
+  it('passes the preserve choice to MulNX before starting the managed session', async () => {
+    const calls = setup(undefined, 'preparation', false, true, [
+      { preferMulnx: true, running: false, pending: false },
+    ]);
+    await productionAction('enter', preparation, true);
+    expect(nativeArgs.find((v) => v.command === 'launch_mulnx')?.args).toMatchObject({
+      automatic: true,
+      preserveSettings: true,
+    });
+    expect(
+      nativeArgs.find((v) => v.command === 'start_managed_cs2')?.args?.preserveSettings,
+    ).toBeUndefined();
+    expect(calls.indexOf('launch_mulnx')).toBeLessThan(calls.indexOf('start_managed_cs2'));
+  });
   it('does not attach, enter production or fall back to Steam after a MulNX environment rejection', async () => {
     const calls = setup('mulnx', 'preparation', false, false, [
       { preferMulnx: true, running: false, pending: false },
