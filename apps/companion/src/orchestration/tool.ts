@@ -96,6 +96,36 @@ export class MulnxTool {
       packs: this.installed?.packs ?? [],
     };
   }
+  /** Read the provider's published receipts; archive bytes are reverified at selection. */
+  async listPreparedReleases() {
+    const names = (await readdir(this.directory)).filter((name) =>
+      /^prepared-[a-f0-9]{64}-[a-f0-9-]{36}$/.test(name),
+    );
+    if (names.length > 256) throw new Error('mulnx_prepared_budget');
+    return Promise.all(
+      names.sort().map(async (preparedId) => {
+        try {
+          const root = await safePath(join(this.directory, preparedId));
+          const { release } = z
+            .object({ release: releaseSchema })
+            .parse(await readJson(root, 'receipt.json'));
+          if (!preparedId.startsWith(`prepared-${release.sha256}-`))
+            throw new Error('mulnx_prepared_invalid');
+          const archive = await safePath(root, 'MulNX.7z');
+          if ((await lstat(archive)).size !== release.size)
+            throw new Error('mulnx_prepared_integrity');
+          return {
+            preparedId,
+            tag: release.tag,
+            archiveSha256: release.sha256,
+            state: 'available' as const,
+          };
+        } catch {
+          return { preparedId, tag: null, archiveSha256: null, state: 'damaged' as const };
+        }
+      }),
+    );
+  }
   /** Return a portable source only after checking the selected instance's original bytes. */
   async cameraSource(name: string) {
     const installed = this.installed;

@@ -88,6 +88,24 @@ export function registerOrchestrationRoutes(
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
     return reply.header('cache-control', 'no-store').send(view());
   });
+  app.get('/local/v1/mulnx-releases', async (request, reply) => {
+    if (
+      policy.mode !== 'loopback' ||
+      !['127.0.0.1', 'localhost', '[::1]', '::1'].includes(request.hostname) ||
+      request.headers['sec-fetch-site'] === 'cross-site' ||
+      (request.headers.origin && !allowed(request.headers.origin))
+    )
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    if (!tool) return reply.code(503).send({ error: 'mulnx_bundle_unavailable' });
+    try {
+      return reply
+        .header('cache-control', 'no-store')
+        .send({ releases: await tool.listPreparedReleases() });
+    } catch (error) {
+      request.log.error({ stage: 'mulnx_list_releases', err: error }, 'MulNX 版本读取失败');
+      return reply.code(503).send({ error: 'mulnx_list_unavailable' });
+    }
+  });
   app.post('/operator/runtime/camera-session', { bodyLimit: 2048 }, (request, reply) => {
     const expected = Buffer.from(session?.controlToken ?? '');
     const token = request.headers['x-runtime-token'];
