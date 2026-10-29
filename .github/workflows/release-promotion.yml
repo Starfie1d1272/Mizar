@@ -143,21 +143,23 @@ jobs:
           }
           'RESOURCE_ENABLED=true' >> $env:GITHUB_ENV
           if (Test-Path -LiteralPath "$env:RESOURCE_ROOT.download-failed") { throw 'Resource-aware qualification is missing its original resource artifact' }
-          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/ci/resource-release.mjs" resolve "$env:RESOURCE_ROOT" product/core-release-manifest.json
+          $manifest = Join-Path $env:GITHUB_WORKSPACE 'product/core-release-manifest.json'
+          $parameters = Join-Path $env:RUNNER_TEMP 'resource-publication-parameters.json'
+          Set-Location -LiteralPath $env:RESOURCE_PUBLISHER_ROOT
+          node scripts/ci/resource-release.mjs resolve "$env:RESOURCE_ROOT" "$manifest" "$parameters"
           if ($LASTEXITCODE -ne 0) { throw 'Existing resource publication resolution failed; refusing overwrite' }
       - name: Prepare exact resource publication on the current main tools
         if: ${{ env.RESOURCE_ENABLED == 'true' && env.RESOURCE_RELEASE_EXISTS != 'true' }}
         shell: pwsh
         run: |
-          $manifest = Join-Path $env:GITHUB_WORKSPACE 'product/core-release-manifest.json'
           $parameters = Join-Path $env:RUNNER_TEMP 'resource-publication-parameters.json'
           Set-Location -LiteralPath $env:RESOURCE_PUBLISHER_ROOT
-          node scripts/ci/resource-release.mjs parameters "$env:RESOURCE_ROOT" "$manifest" "$parameters"
-          if ($LASTEXITCODE -ne 0) { throw 'Qualified resource policy preparation failed' }
           $descriptor = Get-Content (Join-Path $env:RESOURCE_ROOT 'resource-descriptor.json') -Raw | ConvertFrom-Json
           $archive = Join-Path $env:RESOURCE_ROOT $descriptor.resources[0].archive.name
-          if (!$descriptor.origin.publication) { node scripts/qualification/resource-provenance/create.mjs "$archive" (Join-Path $env:RESOURCE_ROOT 'resource-pack-provenance.json') "$parameters" (Join-Path $env:RESOURCE_ROOT 'resource-publication.json') }
-          if ($LASTEXITCODE -ne 0) { throw 'Resource publication source/Qualification/CI authorization failed' }
+          if (!$descriptor.origin.publication) {
+            node scripts/qualification/resource-provenance/create.mjs "$archive" (Join-Path $env:RESOURCE_ROOT 'resource-pack-provenance.json') "$parameters" (Join-Path $env:RESOURCE_ROOT 'resource-publication.json')
+            if ($LASTEXITCODE -ne 0) { throw 'Resource publication source/Qualification/CI authorization failed' }
+          }
       - name: Attest the publication and trusted resource catalog
         if: ${{ env.RESOURCE_ENABLED == 'true' && env.RESOURCE_RELEASE_EXISTS != 'true' && env.RESOURCE_PUBLICATION_REUSED != 'true' }}
         id: resource-publication-provenance

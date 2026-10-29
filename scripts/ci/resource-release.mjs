@@ -525,12 +525,12 @@ async function resolvePublishedResourceFiles(folder, manifest) {
   });
   const tag = `v${manifest.appVersion}`;
   const release = lookupGithubObject(`releases/tags/${tag}`);
-  if (release === null) return false;
+  if (release === null) return { exists: false, candidate };
   if (release.assets.some((a) => a.name === MACHINE_METADATA_NAME)) {
     const originals = await publishedCarrier(release);
     await restorePublishedResourceMetadata(folder, originals);
     await verifyPublishedResourceMetadata(folder, manifest, release);
-    return true;
+    return { exists: true };
   }
   const qualified = await resourceAssetInventory(folder, manifest);
   publishedResourceMetadata(
@@ -548,7 +548,7 @@ async function resolvePublishedResourceFiles(folder, manifest) {
   const present = authorizationNames.filter((name) =>
     release.assets.some((asset) => asset.name === name),
   );
-  if (!present.length) return false;
+  if (!present.length) return { exists: false, candidate };
   if (present.length === authorizationNames.length) {
     for (const name of authorizationNames) {
       const found = release.assets.filter((asset) => asset.name === name);
@@ -616,7 +616,33 @@ async function resolvePublishedResourceFiles(folder, manifest) {
     true,
   );
 
-  return true;
+  return { exists: true };
+}
+
+async function preparePublicationParameters(folder, candidate, argument) {
+  requireValue(
+    isSourceSha(process.env.GITHUB_SHA) &&
+      execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim() ===
+        process.env.GITHUB_SHA,
+    '资源签发工具必须使用本次晋级工作流精确源码',
+  );
+  if (process.env.GITHUB_ENV)
+    await appendFile(
+      process.env.GITHUB_ENV,
+      `RESOURCE_PUBLICATION_REUSED=${Boolean(candidate.descriptor.origin?.publication)}\n`,
+    );
+  const catalog = makePublishedCatalog(candidate, process.env.GITHUB_SHA);
+  await writeFile(join(folder, names.catalog), jsonBytes(catalog), { flag: 'wx' });
+  const { publication } = candidate.entry;
+  await writeFile(
+    argument,
+    jsonBytes({
+      sequence: publication.sequence,
+      issuedAt: publication.issuedAt,
+      expiresAt: publication.expiresAt,
+    }),
+    { flag: 'wx' },
+  );
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
@@ -672,29 +698,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     console.log('Original resource Qualification proofs and exact Core/source identity verified');
   } else if (mode === 'parameters') {
     const candidate = await verifyQualifiedResources(folder, manifest);
-    requireValue(
-      isSourceSha(process.env.GITHUB_SHA) &&
-        execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim() ===
-          process.env.GITHUB_SHA,
-      '资源签发工具必须使用本次晋级工作流精确源码',
-    );
-    if (process.env.GITHUB_ENV)
-      await appendFile(
-        process.env.GITHUB_ENV,
-        `RESOURCE_PUBLICATION_REUSED=${Boolean(candidate.descriptor.origin?.publication)}\n`,
-      );
-    const catalog = makePublishedCatalog(candidate, process.env.GITHUB_SHA);
-    await writeFile(join(folder, names.catalog), jsonBytes(catalog), { flag: 'wx' });
-    const { publication } = candidate.entry;
-    await writeFile(
-      argument,
-      jsonBytes({
-        sequence: publication.sequence,
-        issuedAt: publication.issuedAt,
-        expiresAt: publication.expiresAt,
-      }),
-      { flag: 'wx' },
-    );
+    await preparePublicationParameters(folder, candidate, argument);
   } else if (mode === 'published') {
     await resourceAssetInventory(folder, manifest, true);
     console.log(
@@ -703,7 +707,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   } else if (mode === 'freeze') {
     await freezePublishedResources(folder, manifest, argument);
   } else if (mode === 'resolve') {
-    const exists = await resolvePublishedResourceFiles(folder, manifest);
+    const { exists, candidate } = await resolvePublishedResourceFiles(folder, manifest);
+    if (!exists && argument) await preparePublicationParameters(folder, candidate, argument);
     requireValue(process.env.GITHUB_ENV, '发行工作流环境缺失');
     await appendFile(process.env.GITHUB_ENV, `RESOURCE_RELEASE_EXISTS=${exists}\n`);
   } else if (mode === 'published-release') {
