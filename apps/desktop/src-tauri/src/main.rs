@@ -1837,7 +1837,7 @@ async fn open_tool(app: tauri::AppHandle, tool: String, preset_id: Option<String
     if tool == "review" {
         if !exit_review && !app.state::<HostState>().visible.load(Ordering::Relaxed) { return Err("工作台已隐藏，请返回工作台后重新打开核对窗口。".into()); }
         let kind = preset_id.as_deref().unwrap_or("preflight");
-        if !matches!(kind, "preflight" | "roster" | "sync" | "issues" | "exit") { return Err("核对页面无法识别。".into()); }
+        if !matches!(kind, "preflight" | "roster" | "sync" | "issues" | "exit" | "connection") { return Err("核对页面无法识别。".into()); }
         target.query_pairs_mut().append_pair("kind", kind);
     }
     if tool == "hud" {

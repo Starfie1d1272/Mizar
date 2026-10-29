@@ -52,6 +52,7 @@ function setup(
     pending?: boolean;
     busy?: boolean;
     preferMulnx?: boolean;
+    mulnxLaunchResumable?: boolean;
   }[] = [],
   observerEnabled = false,
 ) {
@@ -139,6 +140,20 @@ function setup(
 }
 
 describe('managed CS2 production entry and cleanup', () => {
+  it('resumes only the submitted MulNX launch before continuing the entry intent', async () => {
+    const calls = setup(undefined, 'preparation', false, true, [
+      { running: false, pending: true, mulnxLaunchResumable: true },
+      { running: true, pending: true },
+    ]);
+    await productionAction('enter', preparation, true);
+    expect(nativeArgs.find((value) => value.command === 'launch_mulnx')?.args).toMatchObject({
+      resumeOnly: true,
+    });
+    expect(calls.filter((call) => call === 'launch_mulnx')).toHaveLength(1);
+    expect(calls.indexOf('launch_mulnx')).toBeLessThan(calls.indexOf('start_managed_cs2'));
+    expect(calls).toContain('present_production');
+  });
+
   it.each([false, true])(
     'opens without a connection confirmation or observer start (MulNX=%s)',
     async (preferMulnx) => {
@@ -309,6 +324,32 @@ describe('managed CS2 production entry and cleanup', () => {
         .map((event) => event.evidence.evidence?.result),
     ).toEqual(['cancelled']);
     expect(controls.some((event) => event.phase === 'waiting')).toBe(true);
+  });
+  it('does not present a workspace after navigation cancels a pending production commit', async () => {
+    const calls = setup();
+    const originalFetch = vi.mocked(fetch).getMockImplementation()!;
+    let release!: (response: Response) => void;
+    let dispatched!: () => void;
+    const started = new Promise<void>((resolve) => {
+      dispatched = resolve;
+    });
+    vi.mocked(fetch).mockImplementation((path, init) => {
+      if (path === '/operator/production') {
+        calls.push(String(path));
+        dispatched();
+        return new Promise<Response>((resolve) => {
+          release = resolve;
+        });
+      }
+      return originalFetch(path, init);
+    });
+    const entry = productionAction('enter', preparation);
+    await started;
+    window.dispatchEvent(new Event('pagehide'));
+    release(new Response(JSON.stringify({ ok: true })));
+    expect(await entry).toBe('cancelled');
+    expect(calls).toContain('cancel_managed_camera');
+    expect(calls).not.toContain('present_production');
   });
   it('reads actual live state after an uncertain commit and keeps the newly started game', async () => {
     const calls = setup('network', 'live');

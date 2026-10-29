@@ -203,12 +203,23 @@ async function runProductionAction(
     { ...state, preserveSettings, ...(external ? { external } : {}) },
     parentTask,
   );
+  let cancelled = false;
+  const cancelEntry = () => {
+    cancelled = true;
+  };
+  if (action === 'enter') {
+    window.addEventListener('pagehide', cancelEntry);
+    window.addEventListener('popstate', cancelEntry);
+  }
   try {
-    await performProductionAction(action, state, preserveSettings, task, external);
+    await performProductionAction(action, state, preserveSettings, task, external, () => cancelled);
     return task.result;
   } catch (error) {
     task.fail(error);
     throw error;
+  } finally {
+    window.removeEventListener('pagehide', cancelEntry);
+    window.removeEventListener('popstate', cancelEntry);
   }
 }
 async function performProductionAction(
@@ -216,7 +227,8 @@ async function performProductionAction(
   state: Production,
   preserveSettings: boolean,
   task: ControlTask,
-  external?: ExternalGameIdentity,
+  external: ExternalGameIdentity | undefined,
+  cancelled: () => boolean,
 ) {
   const entryLocation = window.location.href;
   controlEvidence('production_action', 'dispatch', {
@@ -270,12 +282,13 @@ async function performProductionAction(
     action === 'enter' && window.__TAURI_INTERNALS__
       ? await desktopInvoke<{
           preferMulnx?: boolean;
+          mulnxLaunchResumable?: boolean;
           running: boolean;
           pending: boolean;
           observerHudPending?: boolean;
         }>('cs2_config_status')
       : null;
-  if (action === 'enter' && window.location.href !== entryLocation) {
+  if (action === 'enter' && (cancelled() || window.location.href !== entryLocation)) {
     task.finish('cancelled', { reason: 'navigation_changed' });
     return;
   }
@@ -285,14 +298,27 @@ async function performProductionAction(
   const selectedExternal = external;
   if (action === 'enter' && window.__TAURI_INTERNALS__) {
     if (!external) {
-      if (launch?.preferMulnx && !launch.running && !launch.pending) {
+      if (launch?.mulnxLaunchResumable) {
+        const result = await desktopInvoke<{ result?: string }>(
+          'launch_mulnx',
+          { resumeOnly: true },
+          task,
+        );
+        if (result?.result === 'not-found')
+          throw new Error('启动请求已结束，请检查游戏状态后重新进入工作台。');
+        launchedMulnx = true;
+        if (cancelled() || window.location.href !== entryLocation) {
+          task.finish('cancelled', { reason: 'navigation_changed' });
+          return;
+        }
+      } else if (launch?.preferMulnx && !launch.running && !launch.pending) {
         await desktopInvoke<ExternalGameIdentity>(
           'launch_mulnx',
           { automatic: true, ...(preserveSettings ? { preserveSettings: true } : {}) },
           task,
         );
         launchedMulnx = true;
-        if (window.location.href !== entryLocation) {
+        if (cancelled() || window.location.href !== entryLocation) {
           task.finish('cancelled', { reason: 'navigation_changed' });
           return;
         }
@@ -311,24 +337,37 @@ async function performProductionAction(
     borrowed = gameStatus.borrowed ?? borrowed;
     // Preserve this one entry intent while the native command lock is free.
     // Recovery/cancel remains available; navigation cancels only entry intent.
+    const waitStarted = Date.now();
     while (!gameStatus.running) {
-      if ((!gameStatus.busy && !gameStatus.pending) || window.location.href !== entryLocation) {
-        task.finish(window.location.href !== entryLocation ? 'cancelled' : 'blocked', {
-          reason: window.location.href !== entryLocation ? 'navigation_changed' : 'cs2_not_running',
-          gameStatus,
-        });
+      if (Date.now() - waitStarted >= 60000)
+        throw new Error('CS2 启动尚未确认，请检查游戏状态后重试。');
+      if (
+        (!gameStatus.busy && !gameStatus.pending) ||
+        cancelled() ||
+        window.location.href !== entryLocation
+      ) {
+        task.finish(
+          cancelled() || window.location.href !== entryLocation ? 'cancelled' : 'blocked',
+          {
+            reason:
+              cancelled() || window.location.href !== entryLocation
+                ? 'navigation_changed'
+                : 'cs2_not_running',
+            gameStatus,
+          },
+        );
         return;
       }
       task.event('waiting', { reason: 'steam_startup', gameStatus });
       await new Promise<void>((resolve) => setTimeout(resolve, 1000));
-      if (window.location.href !== entryLocation) {
+      if (cancelled() || window.location.href !== entryLocation) {
         task.finish('cancelled', { reason: 'navigation_changed' });
         return;
       }
       gameStatus = await desktopInvoke<Cs2ConfigStatus>('cs2_config_status', undefined, task);
     }
   }
-  if (action === 'enter' && window.location.href !== entryLocation) {
+  if (action === 'enter' && (cancelled() || window.location.href !== entryLocation)) {
     task.finish('cancelled', { reason: 'navigation_changed' });
     return;
   }
@@ -339,7 +378,7 @@ async function performProductionAction(
     state.mode === 'preparation'
   ) {
     await desktopInvoke('begin_managed_camera', { expectedRevision: state.revision }, task);
-    if (window.location.href !== entryLocation) {
+    if (cancelled() || window.location.href !== entryLocation) {
       await desktopInvoke('cancel_managed_camera', undefined, task);
       task.finish('cancelled', { reason: 'navigation_changed' });
       return;
@@ -348,6 +387,12 @@ async function performProductionAction(
   let presented = false;
   try {
     await command('/operator/production', { action, expectedRevision: state.revision }, task);
+    if (action === 'enter' && (cancelled() || window.location.href !== entryLocation)) {
+      if (window.__TAURI_INTERNALS__ && !external && state.mode === 'preparation')
+        await desktopInvoke('cancel_managed_camera', undefined, task);
+      task.finish('cancelled', { reason: 'navigation_changed' });
+      return;
+    }
     if (window.__TAURI_INTERNALS__) {
       await desktopInvoke('present_production', { live: action === 'enter' }, task);
       presented = true;
