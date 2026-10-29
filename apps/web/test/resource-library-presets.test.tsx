@@ -50,7 +50,9 @@ it('uses the inspected scheme and module revisions only on an explicit action', 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(element.textContent).toContain('已修改，尚未使用');
     expect(element.textContent).not.toContain('当前使用');
-    const select = [...element.querySelectorAll('.resource-library__preset select')][2]!;
+    const select = [
+      ...element.querySelectorAll<HTMLSelectElement>('.resource-library__preset select'),
+    ][2]!;
     await act(async () => {
       select.value = 'm';
       select.dispatchEvent(new Event('change', { bubbles: true }));

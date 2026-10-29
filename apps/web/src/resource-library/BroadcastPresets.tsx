@@ -157,6 +157,7 @@ export function BroadcastPresets({ query }: { query: string }) {
   const [refresh, setRefresh] = useState(0);
   const view = useLocalRead<View>('/local/v1/broadcast-presets', 2000, refresh);
   const [busy, setBusy] = useState(false);
+  const [missing, setMissing] = useState<{ id: string; name: string; kind: Kind }[]>([]);
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
@@ -408,6 +409,7 @@ export function BroadcastPresets({ query }: { query: string }) {
     if (!revisions) return;
     setBusy(true);
     setNotice(null);
+    setMissing([]);
     try {
       const response = await fetch('/operator/broadcast-presets/apply', {
         method: 'POST',
@@ -420,14 +422,37 @@ export function BroadcastPresets({ query }: { query: string }) {
           requestId: crypto.randomUUID(),
         }),
       });
-      if (!response.ok)
+      if (!response.ok) {
+        if (response.status !== 409) {
+          const directoryResponse = await fetch('/local/v1/broadcast-modules', {
+            cache: 'no-store',
+          });
+          if (directoryResponse.ok) {
+            const directory = (await directoryResponse.json()) as {
+              modules: { module: Module; availability?: { state: string } }[];
+            };
+            setMissing(
+              preset.bindings.flatMap((binding) => {
+                if (binding.mode !== 'use') return [];
+                const entry = directory.modules.find(
+                  (item) =>
+                    item.module.id === binding.moduleId &&
+                    item.module.revision === revisions[binding.kind],
+                );
+                return entry?.availability?.state === 'dependency_missing'
+                  ? [{ id: entry.module.id, name: entry.module.name, kind: binding.kind }]
+                  : [];
+              }),
+            );
+          }
+        }
         throw new Error(
           response.status === 409
             ? '配置已变化或当前无法切换，请刷新后重试。'
-            : '方案暂时无法使用，请检查所需素材和设备。',
+            : '方案未使用。请检查列出的资源；如没有列出资源，请检查本地制播服务。',
         );
+      }
       setNotice({ tone: 'success', message: `已使用「${preset.name}」。` });
-      setRefresh((value) => value + 1);
     } catch (error) {
       setNotice({
         tone: 'danger',
@@ -435,6 +460,7 @@ export function BroadcastPresets({ query }: { query: string }) {
       });
     } finally {
       setBusy(false);
+      setRefresh((value) => value + 1);
     }
   }
   const presets = (view?.presets ?? []).filter((item) =>
@@ -472,6 +498,17 @@ export function BroadcastPresets({ query }: { query: string }) {
         />
       )}
       {notice ? <StatusBanner tone={notice.tone}>{notice.message}</StatusBanner> : null}
+      {missing.length > 0 && (
+        <ul>
+          {missing.map((item) => (
+            <li key={item.id}>
+              {labels[item.kind]}：
+              <a href={`/packages?resource=${encodeURIComponent(item.id)}`}>{item.name}</a>{' '}
+              所需资源不可用
+            </li>
+          ))}
+        </ul>
+      )}
       {!view ? (
         <StatusBanner tone="warning">播出方案暂不可用，请检查本地制播服务。</StatusBanner>
       ) : null}

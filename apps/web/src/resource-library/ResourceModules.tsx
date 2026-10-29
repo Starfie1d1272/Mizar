@@ -39,12 +39,16 @@ export function ResourceModules({
 }) {
   const [refresh, setRefresh] = useState(0);
   const snapshot = useLocalRead<Snapshot>('/local/v1/broadcast-presets', 2000, refresh);
-  const directory = useLocalRead<{ modules: { module: ModuleRecord; builtin: boolean }[] }>(
-    '/local/v1/broadcast-modules',
-    2000,
-    refresh,
+  const directory = useLocalRead<{
+    modules: {
+      module: ModuleRecord;
+      builtin: boolean;
+      availability?: { state: 'ready' | 'dependency_missing'; reason?: string };
+    }[];
+  }>('/local/v1/broadcast-modules', 2000, refresh);
+  const [selected, setSelected] = useState<string | null>(() =>
+    new URLSearchParams(window.location.search).get('resource'),
   );
-  const [selected, setSelected] = useState<string | null>(null);
   const [replacement, setReplacement] = useState('');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ tone: 'success' | 'danger'; message: string } | null>(
@@ -163,7 +167,7 @@ export function ResourceModules({
         <p>没有找到匹配的资源，可导入资源包。</p>
       )}
       {showList &&
-        entries.map(({ module: entry, builtin }) => (
+        entries.map(({ module: entry, builtin, availability }) => (
           <Panel className="resource-library__item" key={entry.id}>
             <div>
               <span className="resource-library__kind">
@@ -188,6 +192,13 @@ export function ResourceModules({
             </Button>
             {selected === entry.id && (
               <div>
+                {availability?.state === 'dependency_missing' && (
+                  <StatusBanner tone="warning">
+                    {entry.kind === 'camera'
+                      ? '运镜来源不可用，请准备对应的 MulNX 镜头内容后重试。'
+                      : '所需资源不可用，请重新导入或恢复资源后重试。'}
+                  </StatusBanner>
+                )}
                 {(entry.kind === 'hud' || entry.kind === 'program') && (
                   <PresetVisualPreview
                     key={entry.id}
