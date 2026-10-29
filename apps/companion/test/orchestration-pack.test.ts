@@ -119,6 +119,22 @@ it('prepares the installed launcher locally and preserves upstream options', asy
   expect(fetch).toHaveBeenCalled();
   expect(tool.view().installed).toBe('BetaFixture');
   expect(diagnostics).toContainEqual(expect.objectContaining({ stage: 'mulnx_prepare' }));
+  const launcher = join(injector, 'CS2Injector.exe');
+  await rm(launcher);
+  const missing = new MulnxTool(root, join(root, 'bundle'));
+  await missing.load();
+  expect(missing.view().installed).toBe('BetaFixture');
+  await expect(missing.prepare('D:\\Steam\\game\\bin\\win64\\cs2.exe')).rejects.toThrow(
+    '启动程序缺失或无法读取',
+  );
+  await expect(
+    missing.prepare('D:\\Steam\\game\\bin\\win64\\cs2.exe', false, true),
+  ).rejects.toThrow('启动程序缺失或无法读取');
+  await writeFile(launcher, 'fixture, restored');
+  await writeFile(config, owned);
+  await expect(missing.prepare('D:\\Steam\\game\\bin\\win64\\cs2.exe')).resolves.toMatchObject({
+    version: 'BetaFixture',
+  });
 });
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'mizar-isolation-'));

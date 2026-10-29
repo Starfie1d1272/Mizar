@@ -1,6 +1,16 @@
 import { z } from 'zod';
 import { createHash, randomUUID } from 'node:crypto';
-import { copyFile, lstat, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import {
+  copyFile,
+  lstat,
+  mkdir,
+  open,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import { join } from 'node:path';
 import { atomicJson, ensureDirectory, readJson, safePath } from '../resource-store/files.js';
 import { prepareIsolatedPack } from './prepare-pack.js';
@@ -90,7 +100,6 @@ export class MulnxTool {
             .max(128),
         })
         .parse(await readJson(this.directory, 'current.json'));
-      await safePath(join(this.directory, data.directory), 'MulNX/CS2Injector/CS2Injector.exe');
       this.installed = data;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
@@ -126,6 +135,28 @@ export class MulnxTool {
     return this.run('mulnx_prepare', async () => {
       // Called only by the authenticated native host after its process and install checks.
       // Entry uses prepared local bytes. The explicit update action owns network discovery.
+      if (this.installed) {
+        // Recheck the actual file on every attempt; the receipt alone cannot prove it is usable.
+        try {
+          const path = await safePath(
+            join(this.directory, this.installed.directory),
+            'MulNX/CS2Injector/CS2Injector.exe',
+          );
+          const file = await open(path, 'r');
+          try {
+            await file.read(Buffer.alloc(1), 0, 1, 0);
+          } finally {
+            await file.close();
+          }
+        } catch (error) {
+          if (['ENOENT', 'EACCES', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? ''))
+            throw new Error(
+              'MulNX 启动程序缺失或无法读取。请核对官方来源及 Windows 安全中心的检测记录；处理后重新进入工作台以检查文件。旧版本文件和设置已保留。仍无法使用时，可在“设置 → 游戏与观战 → CS2 启动设置”选择标准启动并保存。',
+              { cause: error },
+            );
+          throw error;
+        }
+      }
       const release = update
         ? await latestMulnxRelease()
         : (this.installed?.release ??

@@ -8,7 +8,7 @@ static LAUNCH_GATE: Mutex<()> = Mutex::new(());
 
 fn launcher_start_message(error: &std::io::Error) -> &'static str {
     match error.raw_os_error() {
-        Some(225 | 226) => "Windows 安全防护阻止启动 MulNX，请在 Windows 安全中心查看检测记录。",
+        Some(225 | 226) => "Windows 安全防护阻止启动 MulNX，请核对官方来源并在 Windows 安全中心查看检测记录。处理后重新进入工作台；仍无法使用时，可在设置 → 游戏与观战 → CS2 启动设置中选择标准启动并保存。",
         _ => "MulNX 未能启动。",
     }
 }
