@@ -47,6 +47,10 @@ function fixture() {
         .map(([p, b]) => ({ name: p.slice(p.lastIndexOf('/') + 1), type: 'file', size: b.length })),
     ],
     api: async (_kind, path, method, data) => {
+      if (method === 'DELETE') {
+        dirs.delete(path);
+        return;
+      }
       if (method !== 'POST' || data.operation !== 'mkdir') throw Error('unexpected api');
       dirs.add(path);
     },
@@ -61,6 +65,7 @@ function fixture() {
       writes.push(path);
       files.set(path, bytes);
     },
+    uploadChunks: async (folder, name, bytes) => box.upload(folder, name, bytes),
     move: async (from, to, name) => {
       if (files.has(to + '/' + name)) throw Error('overwrite archive');
       files.set(to + '/' + name, files.get(from + '/' + name));
@@ -320,13 +325,14 @@ describe('lean Box distribution', () => {
       f.files.set('/Stable/' + f.full.name, f.full.bytes);
       const move = f.box.move;
       f.box.move = vi.fn(async (from, to, name) => {
+        if (from !== '/Stable') return move(from, to, name);
         globalThis.setTimeout(() => void move(from, to, name), 1500);
         throw Object.assign(new Error('timeout'), { uploadOutcomeUnknown: true });
       });
       const pending = syncStableRelease(f.options);
       await vi.advanceTimersByTimeAsync(3000);
       await pending;
-      expect(f.box.move).toHaveBeenCalledTimes(1);
+      expect(f.box.move.mock.calls.filter(([from]) => from === '/Stable')).toHaveLength(1);
       expect(f.files.get('/Archive/' + f.full.name)).toEqual(f.full.bytes);
       expect(f.files.has('/Stable/' + f.full.name)).toBe(false);
       expect(f.writes.at(-1)).toBe('/Updates/latest.json');
@@ -339,13 +345,15 @@ describe('lean Box distribution', () => {
     try {
       const f = fixture();
       f.files.set('/Stable/' + f.full.name, f.full.bytes);
-      f.box.move = vi.fn(async () => {
+      const move = f.box.move;
+      f.box.move = vi.fn(async (from, to, name) => {
+        if (from !== '/Stable') return move(from, to, name);
         throw Object.assign(new Error('timeout'), { uploadOutcomeUnknown: true });
       });
       const pending = expect(syncStableRelease(f.options)).rejects.toThrow('timeout');
       await vi.advanceTimersByTimeAsync(60000);
       await pending;
-      expect(f.box.move).toHaveBeenCalledTimes(1);
+      expect(f.box.move.mock.calls.filter(([from]) => from === '/Stable')).toHaveLength(1);
       expect(f.files.get('/Stable/' + f.full.name)).toEqual(f.full.bytes);
       expect(f.writes).not.toContain('/Updates/latest.json');
     } finally {
@@ -415,8 +423,13 @@ it('resumes a partially archived migration without uploading any full package', 
   expect(f.files.get('/Archive/' + f.full.offline.name)).toEqual(f.full.offline.bytes);
   for (const [path, bytes] of music) expect(f.files.get(path)).toEqual(bytes);
   expect(f.writes.filter((p) => p.endsWith('-Setup.exe'))).toEqual([
-    '/Runtime/v1.6.0/Mizar-v1.6.0-Windows-x64-Core-Setup.exe',
+    expect.stringMatching(
+      /^\/Archive\/mizar-runtime-[^/]+\/Mizar-v1\.6\.0-Windows-x64-Core-Setup\.exe$/,
+    ),
   ]);
+  expect(f.files.get('/Runtime/v1.6.0/Mizar-v1.6.0-Windows-x64-Core-Setup.exe')).toEqual(
+    f.runtime[1].bytes,
+  );
 });
 
 it('anonymous acceptance needs only the exact bootstrap and checks every byte', async () => {
