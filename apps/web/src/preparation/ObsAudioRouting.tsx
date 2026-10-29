@@ -25,6 +25,7 @@ export function ObsAudioRouting() {
   const [status, setStatus] = useState<ObsAudioRoutingStatus | null>(null);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const [commentaryPreparing, setCommentaryPreparing] = useState(false);
   const [applications, setApplications] = useState<{
     revision: string;
     candidates: { id: string; label: string }[];
@@ -49,12 +50,23 @@ export function ObsAudioRouting() {
       .catch(() => setMessage('无法读取远端解说设置。'));
   }, []);
   useEffect(() => {
-    if (!status?.waitingIndependent && !status?.transition) return;
+    if (!status?.waitingIndependent && !status?.transition && !commentaryPreparing) return;
+    let active = true;
     const timer = setInterval(() => {
-      void refresh().catch(() => undefined);
+      void refresh()
+        .then((current) => {
+          if (active && commentaryPreparing && commentaryReady(current)) {
+            setCommentaryPreparing(false);
+            setMessage('解说音频已接入。');
+          }
+        })
+        .catch(() => undefined);
     }, 2500);
-    return () => clearInterval(timer);
-  }, [status?.waitingIndependent, status?.transition]);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [status?.waitingIndependent, status?.transition, commentaryPreparing]);
   async function setMode(mode: 'autoTeamspeak' | 'disabled') {
     if (!commentary) return;
     const response = await fetch('/operator/obs/remote-commentary', {
@@ -67,6 +79,7 @@ export function ObsAudioRouting() {
     setApplications(null);
     setApplication('');
     if (mode === 'autoTeamspeak') await prepareCommentary();
+    else setCommentaryPreparing(false);
   }
   async function listApplications() {
     const response = await fetch('/operator/obs/remote-commentary/applications', {
@@ -92,7 +105,28 @@ export function ObsAudioRouting() {
     await refreshCommentary();
     await prepareCommentary();
   }
+  function commentaryReady(current: ObsAudioRoutingStatus) {
+    return (
+      !current.desktop &&
+      !current.transition &&
+      !current.waitingIndependent &&
+      !current.independentCommentaryDisabled &&
+      Boolean(current.bindings.remoteCommentary?.valid)
+    );
+  }
   async function prepareCommentary() {
+    const wasReenabling = Boolean(
+      status && !status.desktop && status.independentCommentaryDisabled,
+    );
+    const current = await refresh();
+    if (wasReenabling || (!current.desktop && current.independentCommentaryDisabled)) {
+      if (commentaryReady(current)) setMessage('解说音频已接入。');
+      else {
+        setCommentaryPreparing(true);
+        setMessage('');
+      }
+      return;
+    }
     const configured = await fetch('/operator/obs/ensure', { method: 'POST' });
     if (!configured.ok) throw new Error('应用选择已保存，场景配置待处理。');
     const result = (await configured.json()) as { findings: { code: string; message: string }[] };
@@ -104,9 +138,11 @@ export function ObsAudioRouting() {
   async function refresh() {
     const response = await fetch('/local/v1/obs/audio-routing', { cache: 'no-store' });
     if (!response.ok) throw new Error('无法读取 OBS 音频来源，请检查连接。');
-    setStatus((await response.json()) as ObsAudioRoutingStatus);
+    const current = (await response.json()) as ObsAudioRoutingStatus;
+    setStatus(current);
+    return current;
   }
-  async function run(action: () => Promise<void>) {
+  async function run(action: () => Promise<unknown>) {
     setBusy(true);
     setMessage('');
     try {
@@ -136,6 +172,7 @@ export function ObsAudioRouting() {
       throw new Error(result.message ?? '切换未确认，请检查 OBS。');
     }
     const result = (await response.json()) as { monitorPending?: boolean; waiting?: boolean };
+    if (cancelling) setCommentaryPreparing(false);
     await refresh();
     setDesktopSelection('');
     setChooseDesktop(false);
@@ -307,6 +344,11 @@ export function ObsAudioRouting() {
         </div>
       )}
       <p>音频分路完成前，新来源保持禁用；已有桌面声音保留。</p>
+      {commentaryPreparing && !message && (
+        <p role="status">
+          {status?.waitingIndependent ? '等待解说应用接入。' : '正在准备解说音频。'}
+        </p>
+      )}
       {message && <p role="alert">{message}</p>}
       <details className="obs-audio-advanced">
         <summary>手动绑定与来源详情</summary>
