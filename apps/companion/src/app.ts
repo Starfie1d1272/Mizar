@@ -1410,6 +1410,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       options.productRuntime.controlToken,
       observerEligible,
       observerSettings,
+      () => matchContextController?.getActiveBinding() ?? undefined,
     );
   app.addHook('onRequest', async (request, reply) => {
     if (['GET', 'HEAD'].includes(request.method)) return;
