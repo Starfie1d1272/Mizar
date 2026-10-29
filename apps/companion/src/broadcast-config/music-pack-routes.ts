@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { PACK_LIMITS } from '@mizar/broadcast-pack';
-import { boundModules } from '@mizar/broadcast-config';
+import { assetRefSchema, boundModules } from '@mizar/broadcast-config';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 import type { MusicStore } from '../music/store.js';
 import type { BroadcastConfigStore } from './store.js';
@@ -24,6 +24,38 @@ const presetExportRequest = z.strictObject({
     camera: z.string().optional(),
   }),
 });
+export function registerBroadcastAssetRoutes(
+  app: FastifyInstance,
+  resources: MusicPackResources,
+): void {
+  app.get('/local/v1/broadcast-assets', async (request, reply) => {
+    const query = z
+      .strictObject({
+        resourceId: z.string(),
+        version: z.string(),
+        digest: z.string(),
+        fileId: z.string(),
+      })
+      .safeParse(request.query);
+    if (!query.success) return reply.code(400).send({ error: 'invalid_request' });
+    const { resourceId, version, digest, fileId } = query.data;
+    const ref = assetRefSchema.safeParse({ resource: { id: resourceId, version, digest }, fileId });
+    if (!ref.success) return reply.code(400).send({ error: 'invalid_request' });
+    try {
+      const asset = await resources.readAsset(ref.data);
+      return reply
+        .header('content-type', asset.mediaType)
+        .header('x-content-type-options', 'nosniff')
+        .header('cache-control', 'public, max-age=31536000, immutable')
+        .send(asset.bytes);
+    } catch (error) {
+      const code = error instanceof Error ? error.message : '';
+      if (code === 'resource_unsupported') return reply.code(415).send({ error: code });
+      if (code === 'resource_damaged') return reply.code(422).send({ error: code });
+      return reply.code(404).send({ error: 'resource_missing' });
+    }
+  });
+}
 export function registerMusicPackRoutes(
   app: FastifyInstance,
   store: BroadcastConfigStore,

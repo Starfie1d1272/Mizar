@@ -16,7 +16,7 @@ import {
 import { audioBytes } from '../music/archive.js';
 import type { MusicStore } from '../music/store.js';
 import { readMusicAsset } from './music-assets.js';
-import type { MusicPackResources } from './music-pack-resources.js';
+import { validPackImage, type MusicPackResources } from './music-pack-resources.js';
 import type { BroadcastConfigStore } from './store.js';
 
 const resourceKey = (ref: ResourceRef) => JSON.stringify([ref.id, ref.version, ref.digest]);
@@ -98,6 +98,21 @@ export async function exportPresetPack(input: {
   for (const { bound } of presets)
     for (const module of bound.values()) if (module) modules.set(module.id, module);
   const audio = new Map<string, { id: string; path: string; data: Buffer }>();
+  const images = new Map<string, { id: string; path: string; data: Buffer; mediaType: string }>();
+  const addImage = async (ref: AssetRef) => {
+    if (images.has(assetKey(ref))) return;
+    if (!ref.resource.id.startsWith('local:mizar-pack:')) throw new Error('capability_unsupported');
+    const file = await input.resources.readAsset(ref);
+    if (!validPackImage(file.bytes, file.mediaType)) throw new Error('capability_unsupported');
+    const id = `image-${createHash('sha256').update(file.bytes).digest('hex')}`;
+    const ext = file.mediaType === 'image/jpeg' ? 'jpg' : file.mediaType.slice(6);
+    images.set(assetKey(ref), {
+      id,
+      path: `assets/${id}.${ext}`,
+      data: file.bytes,
+      mediaType: file.mediaType,
+    });
+  };
   const addAudio = async (ref: AssetRef) => {
     if (audio.has(assetKey(ref))) return;
     const file = ref.resource.id.startsWith('local:mizar-pack:')
@@ -111,6 +126,10 @@ export async function exportPresetPack(input: {
     });
   };
   for (const module of modules.values()) {
+    if (module.kind === 'program')
+      for (const ref of Object.values(module.value.assets)) await addImage(ref);
+    if (module.kind === 'hud' && !('preset' in module.value))
+      for (const ref of Object.values(module.value.panelAssets)) await addImage(ref);
     if (module.kind === 'music')
       for (const group of MUSIC_GROUPS)
         for (const track of module.value.groups[group].tracks) await addAudio(track.asset);
@@ -151,7 +170,7 @@ export async function exportPresetPack(input: {
     moduleIds.set(module.id, entryId);
     const template = exportModule(module, {
       asset(ref) {
-        const local = audio.get(assetKey(ref));
+        const local = audio.get(assetKey(ref)) ?? images.get(assetKey(ref));
         return local
           ? { package: '$self', fileId: local.id }
           : { package: alias(ref.resource), fileId: ref.fileId };
@@ -195,6 +214,8 @@ export async function exportPresetPack(input: {
   }
   for (const asset of new Map([...audio.values()].map((item) => [item.id, item])).values())
     files.push({ ...asset, mediaType: `audio/${asset.path.split('.').at(-1)!}` });
+  for (const asset of new Map([...images.values()].map((item) => [item.id, item])).values())
+    files.push(asset);
   const manifest = {
     format: 'mizar.pack',
     formatVersion: 1,
@@ -232,7 +253,7 @@ export async function importPresetPack(input: {
   )
     throw new Error('capability_unsupported');
   const jsonIds = new Set([...manifest.modules, ...manifest.presets].map((entry) => entry.fileId));
-  const audioIds = new Set<string>();
+  const assetIds = new Set<string>();
   for (const file of manifest.files) {
     if (jsonIds.has(file.id)) {
       if (file.mediaType !== 'application/json' || !file.path.endsWith('.json'))
@@ -240,9 +261,13 @@ export async function importPresetPack(input: {
     } else {
       const bytes = archive.files.get(file.path),
         ext = file.path.split('.').at(-1)?.toLowerCase();
-      if (!bytes || file.mediaType !== `audio/${ext}` || !audioBytes(file.path, bytes))
+      if (
+        !bytes ||
+        (!(file.mediaType === `audio/${ext}` && audioBytes(file.path, bytes)) &&
+          !validPackImage(bytes, file.mediaType))
+      )
         throw new Error('package_invalid');
-      audioIds.add(file.id);
+      assetIds.add(file.id);
     }
   }
   const source: ResourceRef = {
@@ -263,7 +288,7 @@ export async function importPresetPack(input: {
       source,
       refs: {
         asset(ref) {
-          if (ref.package === '$self' && !audioIds.has(ref.fileId))
+          if (ref.package === '$self' && !assetIds.has(ref.fileId))
             throw new Error('resource_missing');
           return { resource: lookup(ref.package), fileId: ref.fileId };
         },

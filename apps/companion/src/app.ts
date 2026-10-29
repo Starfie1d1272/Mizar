@@ -1,6 +1,9 @@
 import { CameraConfigResolver } from './broadcast-config/camera.js';
 import { MusicPackResources } from './broadcast-config/music-pack-resources.js';
-import { registerMusicPackRoutes } from './broadcast-config/music-pack-routes.js';
+import {
+  registerBroadcastAssetRoutes,
+  registerMusicPackRoutes,
+} from './broadcast-config/music-pack-routes.js';
 import { createProductionBroadcastDependencies } from './broadcast-config/production.js';
 import {
   createBroadcastRuntime,
@@ -1303,6 +1306,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       : undefined;
     const supportsMusicPacks = !broadcastConfig;
     const musicPacks = new MusicPackResources(join(dirname(options.obsConfigPath), 'music-packs'));
+    registerBroadcastAssetRoutes(app, musicPacks);
     broadcastConfig ??= createProductionBroadcastDependencies(
       dirname(options.obsConfigPath),
       musicStore,
