@@ -284,3 +284,5 @@ export async function preparePreset(
     lock: structuredClone(prepared.lock),
   };
 }
+
+export * from './validation.js';

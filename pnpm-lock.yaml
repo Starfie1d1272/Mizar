@@ -292,6 +292,9 @@ importers:
 
   apps/companion:
     dependencies:
+      '@mizar/broadcast-config':
+        specifier: workspace:*
+        version: link:../../packages/broadcast-config
       '@fastify/static':
         specifier: 'catalog:'
         version: 10.1.5
@@ -466,6 +469,9 @@ importers:
       '@mizar/protocol':
         specifier: workspace:*
         version: link:../protocol
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.5
     devDependencies:
       '@typescript/native':
         specifier: 'catalog:'

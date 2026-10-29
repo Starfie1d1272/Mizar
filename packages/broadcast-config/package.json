@@ -17,7 +17,8 @@
   },
   "dependencies": {
     "@mizar/hud-config": "workspace:*",
-    "@mizar/protocol": "workspace:*"
+    "@mizar/protocol": "workspace:*",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@typescript/native": "catalog:"
