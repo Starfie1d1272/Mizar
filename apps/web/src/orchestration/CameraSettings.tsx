@@ -90,11 +90,17 @@ export function CameraSettings() {
   const [message, setMessage] = useState('');
   const [failed, setFailed] = useState(false);
   const [busy, setBusy] = useState(false);
+  const operation = useRef(false);
   const [automaticOverride, setAutomaticOverride] = useState<boolean | null>(null);
   useEffect(() => {
     if (automaticOverride !== null && current?.automaticEnabled === automaticOverride)
       setAutomaticOverride(null);
   }, [automaticOverride, current?.automaticEnabled]);
+  useEffect(() => {
+    if (automaticOverride === null) return;
+    const timer = setTimeout(() => setAutomaticOverride(null), 5000);
+    return () => clearTimeout(timer);
+  }, [automaticOverride]);
   useEffect(() => {
     if (
       confirmed &&
@@ -114,6 +120,7 @@ export function CameraSettings() {
   const selected = selectedId ?? catalog?.activePresetId;
   const selectedPreset = catalog?.presets.find((item) => item.id === selected)?.preset;
   const config = draft ?? selectedPreset;
+  const catalogFull = (catalog?.presets.length ?? 0) >= 32;
   const tracks = [
     ...new Map(
       Object.values(music?.config.groups ?? {})
@@ -122,7 +129,8 @@ export function CameraSettings() {
     ).values(),
   ];
   const action = async (run: () => Promise<void> | void) => {
-    if (busy) return;
+    if (operation.current) return;
+    operation.current = true;
     setBusy(true);
     setMessage('');
     setFailed(false);
@@ -138,6 +146,7 @@ export function CameraSettings() {
             : '操作未完成，请重试。',
       );
     } finally {
+      operation.current = false;
       setBusy(false);
     }
   };
@@ -253,8 +262,12 @@ export function CameraSettings() {
           >
             启用所选预设
           </Button>
-          <ImportPreset disabled={busy || Boolean(draft)} onFile={importFile} />
+          <ImportPreset
+            disabled={busy || Boolean(draft) || catalogFull || !catalog?.ready}
+            onFile={importFile}
+          />
           <p>导入后会保存为草稿，确认资源后可启用。</p>
+          {catalogFull ? <p>预设已达到上限，请使用已有预设。</p> : null}
           {draft ? <p>有未保存的预设更改，可返回管理页继续编辑。</p> : null}
           <Button onClick={() => setAdvanced(true)}>管理与编辑预设</Button>
         </>
@@ -265,14 +278,15 @@ export function CameraSettings() {
           ) : (
             <>
               <p>保存草稿后，可在运镜设置中启用。</p>
+              {catalogFull ? <p>预设已达到上限，请使用已有预设。</p> : null}
               <Button
-                disabled={busy || Boolean(draft) || !catalog?.ready}
+                disabled={busy || Boolean(draft) || !catalog?.ready || catalogFull}
                 onClick={() => create(false)}
               >
                 新建预设
               </Button>
               <Button
-                disabled={busy || Boolean(draft) || !selected || !catalog?.ready}
+                disabled={busy || Boolean(draft) || !selected || !catalog?.ready || catalogFull}
                 onClick={() => create(true)}
               >
                 复制预设
@@ -495,7 +509,10 @@ export function CameraSettings() {
               <details>
                 <summary>导入与导出</summary>
                 <p>启用前请确认镜头和音频资源可用。</p>
-                <ImportPreset disabled={busy || Boolean(draft)} onFile={importFile} />
+                <ImportPreset
+                  disabled={busy || Boolean(draft) || catalogFull || !catalog?.ready}
+                  onFile={importFile}
+                />
                 <Button
                   disabled={busy}
                   onClick={() =>
