@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process';
 import { lstat, mkdir, open, readdir, readFile } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
+import { transfer } from '../distribution/transfer.js';
 
 export const MULNX_REPOSITORY = 'Co1Swet/MulNX_CS2';
 export const SEVEN_ZIP = {
@@ -140,30 +141,46 @@ export async function downloadVerified(
   target: string,
   sha256: string,
   expectedSize?: number,
+  signal: AbortSignal = AbortSignal.timeout(120_000),
+  progress?: (bytes: number) => void,
 ) {
-  const response = await fetch(url, { signal: AbortSignal.timeout(120_000) });
-  if (!response.ok || !response.body) throw new Error(`mulnx_download_http_${response.status}`);
-  const file = await open(target, 'wx', 0o600);
-  const digest = createHash('sha256');
-  let size = 0;
-  try {
-    for await (const chunk of response.body as AsyncIterable<Uint8Array>) {
-      size += chunk.length;
-      if (size > (expectedSize ?? MAX_ARCHIVE)) throw new Error('mulnx_download_too_large');
-      digest.update(chunk);
-      let written = 0;
-      while (written < chunk.length) {
-        const result = await file.write(chunk.subarray(written));
-        if (!result.bytesWritten) throw new Error('mulnx_download_write_failed');
-        written += result.bytesWritten;
-      }
-    }
-    if ((expectedSize !== undefined && size !== expectedSize) || digest.digest('hex') !== sha256)
-      throw new Error('mulnx_download_integrity');
-    await file.sync();
-  } finally {
-    await file.close();
-  }
+  await transfer({
+    target,
+    ...(expectedSize === undefined ? {} : { bytes: expectedSize }),
+    maxBytes: MAX_ARCHIVE,
+    sha256,
+    integrityError: 'mulnx_download_integrity',
+    signal,
+    progress: (bytes) => progress?.(bytes),
+    sources: [
+      async (attempt) => {
+        let current = new URL(url);
+        for (let redirects = 0; redirects < 5; redirects++) {
+          if (
+            current.protocol !== 'https:' ||
+            current.username ||
+            current.password ||
+            current.port ||
+            current.hash ||
+            !(
+              (current.hostname === 'github.com' &&
+                (current.pathname.startsWith(`/${MULNX_REPOSITORY}/releases/download/`) ||
+                  current.href === SEVEN_ZIP.url)) ||
+              current.hostname === 'release-assets.githubusercontent.com'
+            )
+          )
+            throw new Error('mulnx_url_forbidden');
+          const response = await fetch(current, { redirect: 'manual', signal: attempt });
+          if (![301, 302, 303, 307, 308].includes(response.status)) return response;
+          const location = response.headers.get('location');
+          await response.body?.cancel();
+          if (!location) throw new Error('mulnx_redirect_invalid');
+          current = new URL(location, current);
+        }
+        throw new Error('mulnx_redirect_limit');
+      },
+    ],
+  });
 }
 
 export async function fileSha256(path: string): Promise<string> {

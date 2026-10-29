@@ -26,7 +26,7 @@ export function MulnxToolControls({
   onPreparedSessionChange?: (value: { preparedId: string; tag: string } | null) => void;
   tool:
     | (Pick<MulnxToolView, 'installed' | 'latest' | 'busy'> &
-        Partial<Pick<MulnxToolView, 'message' | 'packs'>>)
+        Partial<Omit<MulnxToolView, 'installed' | 'latest' | 'busy'>>)
     | undefined;
 }) {
   const production = useLocalRead<Production>('/local/v1/production');
@@ -140,6 +140,25 @@ export function MulnxToolControls({
         </p>
       ) : null}
       {!runtimeOnly && !maintenanceOnly ? <p>运行版本：未确认</p> : null}
+      {!runtimeOnly && tool.checkResult === 'error' ? (
+        <p>未能确认最新版，请稍后重新检查。</p>
+      ) : null}
+      {!runtimeOnly && tool.checkedAt ? (
+        <p>检查时间：{new Date(tool.checkedAt).toLocaleString()}</p>
+      ) : null}
+      {tool.phase === 'downloading' ? (
+        <p>
+          正在从 {tool.source} 下载：{tool.downloadedBytes ?? 0} / {tool.totalBytes ?? 0} 字节{' '}
+          <Button
+            onClick={() =>
+              void command('/operator/orchestration', { action: 'cancel-tool-download' })
+            }
+          >
+            取消下载
+          </Button>
+        </p>
+      ) : null}
+      {tool.phase === 'installing' ? <p>正在校验并准备版本…</p> : null}
       {!runtimeOnly ? (
         <Button disabled={busy || tool.busy} onClick={() => void run('check')}>
           检查更新

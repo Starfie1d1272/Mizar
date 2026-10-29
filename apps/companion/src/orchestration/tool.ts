@@ -78,6 +78,15 @@ export class MulnxTool {
     { id: string; installed: InstalledTool; expected: string | undefined } | undefined;
   private pending: Promise<unknown> | undefined;
   private message = '';
+  private checkResult: 'unchecked' | 'current' | 'available' | 'error' = 'unchecked';
+  private checkedAt: number | null = null;
+  private phase:
+    'idle' | 'checking' | 'downloading' | 'installing' | 'complete' | 'error' | 'cancelled' =
+    'idle';
+  private downloadedBytes = 0;
+  private downloadTotal = 0;
+  private downloadAbort: AbortController | undefined;
+  private notifiedIdentity: string | null = null;
   constructor(
     readonly directory: string,
     readonly bundle: string,
@@ -97,6 +106,20 @@ export class MulnxTool {
       latest: this.latest?.tag ?? null,
       busy: Boolean(this.pending),
       message: this.message,
+      phase: this.phase,
+      checkedAt: this.checkedAt,
+      checkResult: this.checkResult,
+      downloadedBytes: this.downloadedBytes,
+      totalBytes: this.downloadTotal,
+      notificationIdentity:
+        this.installed &&
+        this.latest &&
+        this.installed.release.sha256 !== this.latest.sha256 &&
+        this.checkResult === 'available'
+          ? `${this.latest.id}:${this.latest.assetId}:${this.latest.sha256}`
+          : null,
+      notifiedIdentity: this.notifiedIdentity,
+      source: this.phase === 'downloading' ? 'GitHub' : null,
       packs: this.installed?.packs ?? [],
     };
   }
@@ -315,9 +338,31 @@ export class MulnxTool {
   }
   check() {
     return this.run('mulnx_check', async () => {
-      this.latest = await latestMulnxRelease();
+      this.phase = 'checking';
+      try {
+        this.latest = await latestMulnxRelease();
+        this.checkResult =
+          this.installed?.release.sha256 === this.latest.sha256 ? 'current' : 'available';
+        this.phase = 'idle';
+      } catch (error) {
+        this.checkResult = 'error';
+        this.phase = 'error';
+        throw error;
+      } finally {
+        this.checkedAt = Date.now();
+      }
       return this.view();
     });
+  }
+  resetNotification() {
+    this.notifiedIdentity = null;
+  }
+  dismissNotification(identity: string) {
+    if (this.view().notificationIdentity === identity) this.notifiedIdentity = identity;
+  }
+  cancelDownload() {
+    if (!this.downloadAbort) throw new Error('mulnx_download_not_active');
+    this.downloadAbort.abort();
   }
   prepare(
     cs2Path: string,
@@ -614,7 +659,31 @@ export class MulnxTool {
           (await fileSha256(archive)) !== release.sha256
         )
           throw new Error('mulnx_bundle_integrity');
-      } else await downloadVerified(release.url, archive, release.sha256, release.size);
+      } else {
+        const abort = new AbortController();
+        this.downloadAbort = abort;
+        this.phase = 'downloading';
+        this.downloadedBytes = 0;
+        this.downloadTotal = release.size;
+        try {
+          await downloadVerified(
+            release.url,
+            archive,
+            release.sha256,
+            release.size,
+            AbortSignal.any([abort.signal, AbortSignal.timeout(120_000)]),
+            (bytes) => {
+              this.downloadedBytes = bytes;
+            },
+          );
+        } catch (error) {
+          this.phase = abort.signal.aborted ? 'cancelled' : 'error';
+          throw error;
+        } finally {
+          this.downloadAbort = undefined;
+        }
+      }
+      this.phase = 'installing';
       const unpacked = join(stage, 'unpacked');
       await extractMulnx(extractor, archive, unpacked);
       const notices = join(stage, 'Mizar-Upstream-Notices');
@@ -639,7 +708,11 @@ export class MulnxTool {
       await writeFile(join(stage, 'receipt.json'), JSON.stringify({ release }), { flag: 'wx' });
       await rm(unpacked, { recursive: true, force: true });
       await rename(stage, join(this.directory, preparedId));
+      this.phase = 'complete';
       return { preparedId, release };
+    } catch (error) {
+      if (this.phase !== 'cancelled') this.phase = 'error';
+      throw error;
     } finally {
       await rm(stage, { recursive: true, force: true });
     }

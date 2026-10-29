@@ -19,6 +19,12 @@ export interface UpdateStatus {
   automatic: boolean;
   notificationPending?: boolean;
   notificationSafe?: boolean;
+  mulnxNotificationPending?: boolean;
+  mulnx?: {
+    installed: string | null;
+    latest: string | null;
+    notificationIdentity: string | null;
+  } | null;
   currentVersion: string;
   distribution: 'installed' | 'portable';
   error: string | null;
@@ -30,6 +36,7 @@ export interface UpdateStatus {
     operationId: string;
   }[];
   downloadedBytes: number;
+  downloadSource?: string | null;
   candidate: null | { version: string; notes: string; installer: { bytes: number } };
   installBlockedReason?: string | null;
   canResumeAutomatic?: boolean;
@@ -287,8 +294,10 @@ export function UpdateSettings({ children }: { children?: ReactNode }) {
             max={status?.candidate?.installer.bytes ?? 1}
           />
           <span>
+            {status?.downloadSource ? `${status.downloadSource} · ` : ''}
+            {status?.downloadedBytes ?? 0} / {status?.candidate?.installer.bytes ?? 0} 字节 ·{' '}
             {Math.min(
-              100,
+              99,
               Math.floor(
                 ((status?.downloadedBytes ?? 0) / (status?.candidate?.installer.bytes ?? 1)) * 100,
               ),
@@ -365,7 +374,7 @@ export function UpdateSettings({ children }: { children?: ReactNode }) {
           <details className="settings-update-options">
             <summary>更新设置</summary>
             <Checkbox
-              label="自动检查更新"
+              label="自动检查 Mizar 和 MulNX 更新"
               checked={status.automatic}
               disabled={waiting || downloading || requested}
               onChange={(event) => void action('automatic', event.target.checked)}

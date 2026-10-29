@@ -92,6 +92,12 @@ export interface MulnxToolView {
   installed: string | null;
   latest: string | null;
   busy: boolean;
+  phase?: 'idle' | 'checking' | 'downloading' | 'installing' | 'complete' | 'error' | 'cancelled';
+  checkedAt?: number | null;
+  checkResult?: 'unchecked' | 'current' | 'available' | 'error';
+  downloadedBytes?: number;
+  totalBytes?: number;
+  source?: string | null;
   message: string;
   packs: { name: string; sourceName: string }[];
 }
