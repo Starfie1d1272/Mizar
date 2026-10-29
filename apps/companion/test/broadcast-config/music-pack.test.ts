@@ -5,7 +5,10 @@ import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import Fastify from 'fastify';
 import { createLocalWebOriginPolicy } from '../../src/local-web/origin-policy.js';
-import { registerMusicPackRoutes } from '../../src/broadcast-config/music-pack-routes.js';
+import {
+  registerBroadcastAssetRoutes,
+  registerMusicPackRoutes,
+} from '../../src/broadcast-config/music-pack-routes.js';
 import { defaultMusicConfig } from '@mizar/protocol/music';
 import { cameraMapSchema, emptyOrchestrationPreset } from '@mizar/protocol/orchestration';
 import { readPackArchive, writePackArchive } from '@mizar/broadcast-pack';
@@ -21,6 +24,62 @@ import { exportMusicPack, importMusicPack } from '../../src/broadcast-config/mus
 import { MusicPackResources } from '../../src/broadcast-config/music-pack-resources.js';
 import { exportPresetPack, importPresetPack } from '../../src/broadcast-config/preset-pack.js';
 import { createProductionBroadcastDependencies } from '../../src/broadcast-config/production.js';
+
+it('reads the exact package version when file IDs coincide', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'broadcast-image-identity-'));
+  const resources = new MusicPackResources(root);
+  const packageId = randomUUID();
+  const first = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aXcAAAAASUVORK5CYII=',
+    'base64',
+  );
+  const second = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC',
+    'base64',
+  );
+  const pack = (version: string, bytes: Buffer) =>
+    writePackArchive(
+      Buffer.from(
+        JSON.stringify({
+          format: 'mizar.pack',
+          formatVersion: 1,
+          packageId,
+          version,
+          name: 'Images',
+          author: '',
+          modules: [],
+          presets: [],
+          dependencies: [],
+          requirements: [],
+          files: [
+            {
+              id: 'background',
+              path: 'asset.png',
+              mediaType: 'image/png',
+              bytes: bytes.length,
+              sha256: createHash('sha256').update(bytes).digest('hex'),
+            },
+          ],
+        }),
+      ),
+      new Map([['asset.png', bytes]]),
+    );
+  try {
+    const one = await resources.install(await pack('1.0.0', first));
+    const two = await resources.install(await pack('2.0.0', second));
+    expect((await resources.readAsset({ resource: one, fileId: 'background' })).bytes).toEqual(
+      first,
+    );
+    expect((await resources.readAsset({ resource: two, fileId: 'background' })).bytes).toEqual(
+      second,
+    );
+    await expect(
+      resources.readAsset({ resource: { ...one, digest: two.digest }, fileId: 'background' }),
+    ).rejects.toThrow('resource_damaged');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 it('round trips real music owner configuration to independent drafts without activation', async () => {
   const root = await mkdtemp(join(tmpdir(), 'music-pack-'));
@@ -322,11 +381,43 @@ it('round trips real music owner configuration to independent drafts without act
     const schemeDocument = structuredClone(initial);
     const programModule = schemeDocument.modules.find((item) => item.kind === 'program');
     if (!programModule || programModule.kind !== 'program') throw new Error('missing program');
-    const official = {
-      resource: { id: 'official:epl-default', version: '1.0.0', digest: 'a'.repeat(64) },
-      fileId: 'fixtures/epl/team.png',
+    const image = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aXcAAAAASUVORK5CYII=',
+      'base64',
+    );
+    const imagePath = 'assets/background.png';
+    const imageSource = await resources.install(
+      await writePackArchive(
+        Buffer.from(
+          JSON.stringify({
+            format: 'mizar.pack',
+            formatVersion: 1,
+            packageId: randomUUID(),
+            version: '1.0.0',
+            name: 'Image',
+            author: '',
+            modules: [],
+            presets: [],
+            dependencies: [],
+            requirements: [],
+            files: [
+              {
+                id: 'background',
+                path: imagePath,
+                mediaType: 'image/png',
+                bytes: image.length,
+                sha256: createHash('sha256').update(image).digest('hex'),
+              },
+            ],
+          }),
+        ),
+        new Map([[imagePath, image]]),
+      ),
+    );
+    programModule.value.assets['pulse.background'] = {
+      resource: imageSource,
+      fileId: 'background',
     };
-    programModule.value.assets.logo = official;
     const opening = await music.add('camera.wav', Buffer.from('RIFF1111WAVEcamera'));
     const cameraModule = schemeDocument.modules.find((item) => item.kind === 'camera');
     if (!cameraModule || cameraModule.kind !== 'camera') throw new Error('missing camera');
@@ -453,7 +544,32 @@ it('round trips real music owner configuration to independent drafts without act
     );
     if (!importedProgram || importedProgram.kind !== 'program')
       throw new Error('missing program module');
-    expect(importedProgram.value.assets.logo).toEqual(official);
+    const importedImage = importedProgram.value.assets['pulse.background']!;
+    expect(importedImage.resource).toEqual(presetResult.mapping.source);
+    expect((await resources.readAsset(importedImage)).bytes).toEqual(image);
+    const freshPath = join(root, 'fresh-packages');
+    await new MusicPackResources(freshPath).install(presetZip);
+    const restartedResources = new MusicPackResources(freshPath);
+    const assetApp = Fastify();
+    registerBroadcastAssetRoutes(assetApp, restartedResources);
+    try {
+      const address = await assetApp.listen({ host: '127.0.0.1', port: 0 });
+      const query = new URLSearchParams({
+        resourceId: importedImage.resource.id,
+        version: importedImage.resource.version,
+        digest: importedImage.resource.digest,
+        fileId: importedImage.fileId,
+      });
+      const response = await fetch(`${address}/local/v1/broadcast-assets?${query}`);
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-type')).toBe('image/png');
+      expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(image);
+      query.set('digest', '0'.repeat(64));
+      expect((await fetch(`${address}/local/v1/broadcast-assets?${query}`)).status).toBe(422);
+    } finally {
+      await assetApp.close();
+    }
     const importedMusicId = importedPreset.bindings.find((item) => item.kind === 'music');
     if (!importedMusicId || importedMusicId.mode !== 'use') throw new Error('missing preset music');
     const presetMusic = store.snapshot.modules.find((item) => item.id === importedMusicId.moduleId);

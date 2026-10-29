@@ -26,7 +26,7 @@ export function createProductionBroadcastDependencies(
   const asset = async (ref: AssetRef) => {
     if (ref.resource.id.startsWith('local:music:')) await readMusicAsset(music, ref);
     else if (ref.resource.id.startsWith('local:mizar-pack:') && musicPacks)
-      await musicPacks.read(ref);
+      await musicPacks.readAsset(ref);
     else await readAdditionalAsset(ref);
   };
   const localTrackId = async (ref: AssetRef) => {
