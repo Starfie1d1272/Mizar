@@ -200,7 +200,9 @@ export function registerOrchestrationRoutes(
           ? error instanceof Error && /^mulnx_metadata_http_(403|429)$/.test(error.message)
             ? '无法检查 MulNX 更新：GitHub 拒绝了请求，可能已达到请求次数限制。请稍后重试。'
             : '无法检查 MulNX 更新，请检查网络后重试。'
-          : '操作未完成，请核对当前地图、连接、预设与本机音频。',
+          : error instanceof Error && error.message === 'camera_audition_unavailable'
+            ? '镜头暂不能试播，请核对当前地图、游戏连接和活动运镜包后重试。'
+            : '操作未完成，请核对当前地图、连接、预设与本机音频。',
         requestId: request.id,
       });
     }
