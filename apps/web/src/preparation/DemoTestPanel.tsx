@@ -129,6 +129,7 @@ export function DemoTestPanel({ forceExpanded = false }: { forceExpanded?: boole
     const requestId = trial?.requestId;
     if (
       !desktop ||
+      (!forceExpanded && !expanded) ||
       trial?.phase !== 'starting' ||
       !game?.running ||
       !requestId ||
@@ -138,7 +139,17 @@ export function DemoTestPanel({ forceExpanded = false }: { forceExpanded?: boole
       return;
     attemptedEntry.current = requestId;
     void run(() => enter(requestId));
-  }, [desktop, trial?.phase, trial?.requestId, game?.running, busy, run, enter]);
+  }, [
+    desktop,
+    forceExpanded,
+    expanded,
+    trial?.phase,
+    trial?.requestId,
+    game?.running,
+    busy,
+    run,
+    enter,
+  ]);
 
   const Container = forceExpanded ? 'div' : Panel;
   return (
