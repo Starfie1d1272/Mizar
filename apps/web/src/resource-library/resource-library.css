@@ -79,3 +79,18 @@
     grid-template-columns: 1fr;
   }
 }
+
+.resource-library__music {
+  display: grid;
+  gap: var(--mizar-layout-padding);
+}
+.resource-library__music-heading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--mizar-layout-padding);
+  align-items: center;
+  justify-content: space-between;
+}
+.resource-library__music-heading p {
+  margin-bottom: 0;
+}
