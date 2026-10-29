@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
@@ -13,6 +13,7 @@ import { portableMusicConfig } from '../../src/broadcast-config/music-assets.js'
 import { migrateLegacyBroadcast } from '../../src/broadcast-config/migrate.js';
 import { BroadcastConfigStore } from '../../src/broadcast-config/store.js';
 import { exportMusicPack, importMusicPack } from '../../src/broadcast-config/music-pack.js';
+import { MusicPackResources } from '../../src/broadcast-config/music-pack-resources.js';
 
 it('round trips real music owner configuration to independent drafts without activation', async () => {
   const root = await mkdtemp(join(tmpdir(), 'music-pack-'));
@@ -69,34 +70,28 @@ it('round trips real music owner configuration to independent drafts without act
       withApplyGuard: (operation) => operation(() => true),
     });
     await store.load();
+    const packageId = randomUUID();
     const zip = await exportMusicPack(music, musicModule, {
-      packageId: randomUUID(),
+      packageId,
       version: '1.0.0',
       name: 'Music',
       author: 'Test',
     });
     const archive = await readPackArchive(zip);
     expect(archive.manifest.files).toHaveLength(2);
-    let installed = 0;
-    const install = (value: typeof archive) => {
-      installed++;
-      return Promise.resolve({
-        id: `local:mizar-pack:${value.manifest.packageId}`,
-        version: value.manifest.version,
-        digest: value.digest,
-      });
-    };
+    const resources = new MusicPackResources(join(root, 'packages'));
+    const blocked = join(root, 'blocked');
+    await writeFile(blocked, 'not a directory');
     const before = store.snapshot.active;
     await expect(
-      importMusicPack({ zip, store, install: () => Promise.reject(new Error('install_failed')) }),
-    ).rejects.toThrow('install_failed');
+      importMusicPack({ zip, store, resources: new MusicPackResources(join(blocked, 'packages')) }),
+    ).rejects.toThrow();
     expect(store.snapshot).toEqual(initial);
-    const first = await importMusicPack({ zip, store, install });
-    const second = await importMusicPack({ zip, store, install });
+    const first = await importMusicPack({ zip, store, resources });
+    const second = await importMusicPack({ zip, store, resources });
     expect(first.reused).toBe(false);
     expect(second.reused).toBe(true);
     expect(second.mapping).toEqual(first.mapping);
-    expect(installed).toBe(2);
     expect(store.snapshot.active).toEqual(before);
     const imported = store.snapshot.modules.find(
       (item) => item.id === first.mapping.moduleEntries.music![0],
@@ -113,6 +108,23 @@ it('round trips real music owner configuration to independent drafts without act
       ['opening.wav', 0, 100, 0.3],
       ['opening.wav', 100, 200, 0.8],
     ]);
+    const ref = imported.value.groups.waiting.tracks[0]!.asset;
+    const reopened = new MusicPackResources(join(root, 'packages'));
+    expect((await reopened.read(ref)).bytes).toEqual(Buffer.from('RIFF0000WAVEtest'));
+    expect(await reopened.materialize(ref, music)).toBe(track.id);
+    const conflicting = await exportMusicPack(music, musicModule, {
+      packageId,
+      version: '1.0.0',
+      name: 'Changed',
+      author: 'Test',
+    });
+    await expect(importMusicPack({ zip: conflicting, store, resources })).rejects.toThrow(
+      'identity_conflict',
+    );
+    expect((await reopened.read(ref)).bytes).toEqual(Buffer.from('RIFF0000WAVEtest'));
+    const file = (await readdir(join(root, 'packages')))[0]!;
+    await writeFile(join(root, 'packages', file), 'corrupt');
+    await expect(reopened.read(ref)).rejects.toThrow();
     expect(imported.value.groups.waiting.tracks[0]!.asset).toEqual(
       imported.value.groups.waiting.tracks[1]!.asset,
     );
