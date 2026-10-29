@@ -82,7 +82,7 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
     clock !== 'timeout_t';
   const matchId = data?.match?.matchId ?? null;
   const observedMatch = connection.current?.payload.match?.matchId;
-  if (!preview && display.status === 'unsupported' && display.current === null) return null;
+  if (!preview && display.current === null) return null;
   const scene = (
     <ProgramView
       kind="scene"

@@ -29,6 +29,11 @@ export function useBroadcastDisplayConfig(
           signal: AbortSignal.timeout(2000),
         });
         if (!response.ok) throw new Error('display configuration unavailable');
+        if (
+          scene !== 'gameplay' &&
+          response.headers?.get('x-mizar-program-status') === 'dependency_missing'
+        )
+          throw new Error('scene dependency unavailable');
         const current = parseBroadcastDisplayConfig(await response.json());
         if (!supportsBroadcastDisplay(current, scene)) {
           if (active)

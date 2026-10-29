@@ -9,7 +9,7 @@ export function BpPage({ compact = false }: { readonly compact?: boolean }) {
   const { snapshot, animate } = useBpSession();
   const scenes = useProgramScenes();
   const display = useBroadcastDisplayConfig(true, 'bp');
-  if (display.status === 'unsupported' && display.current === null) return null;
+  if (display.current === null) return null;
   return (
     <ProgramView
       kind="bp"
