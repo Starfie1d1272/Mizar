@@ -53,14 +53,30 @@ export function createBroadcastRuntime(input: {
   let ready = false;
   let syncError: Error | undefined;
   let cameraUnavailable = false;
+  let programUnavailable = false;
   let cameraAvailable = () => true;
-  async function verifyWithoutCamera(active: ActiveBroadcastSnapshot) {
-    const resolved = { ...active.resolved, camera: null };
+  async function verifyUnchanged(
+    active: ActiveBroadcastSnapshot,
+    skipProgram: boolean,
+    skipCamera: boolean,
+  ) {
+    const resolved = {
+      ...active.resolved,
+      ...(skipCamera ? { camera: null } : {}),
+      ...(skipProgram ? { program: { ...active.resolved.program, assets: {}, tokens: {} } } : {}),
+    };
     const lock = await deps.lockForActive(resolved);
     await deps.verifyActive({ ...active, resolved, lock });
   }
+  const readyStatus = (): BroadcastMigrationStatus =>
+    programUnavailable
+      ? { state: 'pending', reason: 'program_dependency_unavailable' }
+      : store.pendingLegacyCamera || cameraUnavailable
+        ? { state: 'pending', reason: 'camera_identity_unavailable' }
+        : { state: 'ready' };
   const resolver = createBroadcastResolver({
     asset: (ref) => deps.resolve.asset(ref),
+    ...(deps.resolve.image ? { image: (ref: AssetRef) => deps.resolve.image!(ref) } : {}),
     scene: (value) => deps.resolve.scene(value),
     camera: (source) => deps.resolve.camera(source),
     hud: () => Promise.reject(new Error('capability_unsupported')),
@@ -80,7 +96,7 @@ export function createBroadcastRuntime(input: {
       assertReferenceCommitAllowed(previous, next, (ref) => deps.isDeleting(ref)),
     withApplyGuard: (operation) => input.withApplyGuard(operation),
     verifyLegacyActive: async (active, kind) => {
-      if (kind === 'hud' || kind === 'program') await verifyWithoutCamera(active);
+      if (kind === 'hud' || kind === 'program') await verifyUnchanged(active, kind === 'hud', true);
       else await deps.verifyActive(active);
     },
     validateHudDraft: (document) => {
@@ -110,12 +126,18 @@ export function createBroadcastRuntime(input: {
         throw syncError;
       }
       if (!kind || kind === 'camera') cameraUnavailable = !cameraAvailable();
+      try {
+        await resolver.resolveModule({
+          kind: 'program',
+          value: store.snapshot.active.resolved.program,
+        } as import('@mizar/broadcast-config').ModuleRecord<'program'>);
+        programUnavailable = false;
+      } catch {
+        programUnavailable = true;
+      }
       syncError = undefined;
       ready = true;
-      status =
-        store.pendingLegacyCamera || cameraUnavailable
-          ? { state: 'pending', reason: 'camera_identity_unavailable' }
-          : { state: 'ready' };
+      status = readyStatus();
     },
   });
   function hudDocument() {
@@ -169,18 +191,49 @@ export function createBroadcastRuntime(input: {
       try {
         await deps.verifyActive(active);
       } catch (error) {
-        if (!active.resolved.camera) throw error;
-        // Validate all other active dependencies without changing the captured snapshot.
-        await verifyWithoutCamera(active);
-        cameraUnavailable = true;
+        try {
+          await resolver.resolveModule({
+            kind: 'program',
+            value: active.resolved.program,
+          } as import('@mizar/broadcast-config').ModuleRecord<'program'>);
+        } catch {
+          programUnavailable = true;
+        }
+        if (active.resolved.camera) {
+          try {
+            await resolver.resolveModule({
+              kind: 'camera',
+              value: active.resolved.camera,
+            } as import('@mizar/broadcast-config').ModuleRecord<'camera'>);
+          } catch {
+            cameraUnavailable = true;
+          }
+        }
+        if (!programUnavailable && !cameraUnavailable) throw error;
+        const captured = new Set(active.lock.resources.map((ref) => JSON.stringify(ref)));
+        if (
+          programUnavailable &&
+          Object.values(active.resolved.program.assets).some(
+            (ref) => !captured.has(JSON.stringify(ref.resource)),
+          )
+        )
+          throw new Error('broadcast_config_invalid', { cause: error });
+        await verifyUnchanged(active, programUnavailable, cameraUnavailable);
         input.diagnostic(error);
       }
       for (const ref of store.referencedResources())
         if (await deps.isDeleting(ref)) throw new Error('resource_deleting');
     }
     const hudPersistence = createHudConfigPersistence(store, async (value, current) => {
-      const lock = await lockFor({ ...current.resolved, hud: value, camera: null });
+      const lock = await lockFor({
+        ...current.resolved,
+        hud: value,
+        camera: null,
+        program: { ...current.resolved.program, assets: {}, tokens: {} },
+      });
       const refs = new Map(lock.resources.map((ref) => [JSON.stringify(ref), ref]));
+      for (const ref of Object.values(current.resolved.program.assets))
+        refs.set(JSON.stringify(ref.resource), ref.resource);
       for (const map of current.resolved.camera?.maps ?? [])
         if (map.openingSound)
           refs.set(
@@ -205,10 +258,7 @@ export function createBroadcastRuntime(input: {
     else await camera.loadWithPersistence(cameraPersistence);
     cameraUnavailable ||= !cameraPersistence.available && !store.pendingLegacyCamera;
     ready = true;
-    status =
-      store.pendingLegacyCamera || cameraUnavailable
-        ? { state: 'pending', reason: 'camera_identity_unavailable' }
-        : { state: 'ready' };
+    status = readyStatus();
   }
   return {
     store,
@@ -235,22 +285,29 @@ export function createBroadcastRuntime(input: {
     get status() {
       return store.isApplying
         ? { state: 'pending' as const, reason: 'owner_sync_pending' as const }
-        : ready && !cameraUnavailable
-          ? store.pendingLegacyCamera
-            ? { state: 'pending' as const, reason: 'camera_identity_unavailable' as const }
-            : { state: 'ready' as const }
+        : ready
+          ? readyStatus()
           : status;
     },
     restoreLegacyCamera: () => store.restoreLegacyCamera(deps.camera.portable),
+    get displayAvailable() {
+      return !programUnavailable;
+    },
     async moduleAvailability(module: import('@mizar/broadcast-config').ModuleRecord) {
       try {
         await resolver.resolveModule(module);
         return { state: 'ready' as const };
-      } catch {
+      } catch (error) {
         return {
           state: 'dependency_missing' as const,
           reason:
-            module.kind === 'camera' ? 'camera_identity_unavailable' : 'dependency_unavailable',
+            error instanceof Error && error.message === 'capability_unsupported'
+              ? 'capability_unsupported'
+              : module.kind === 'program'
+                ? 'program_dependency_unavailable'
+                : module.kind === 'camera'
+                  ? 'camera_identity_unavailable'
+                  : 'dependency_unavailable',
         };
       }
     },
