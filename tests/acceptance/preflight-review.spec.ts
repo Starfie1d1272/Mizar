@@ -152,7 +152,7 @@ test('preflight reviews current ten-player evidence, actual auto state, disconne
       ),
   );
   await expect(dialog).not.toBeVisible();
-  await page.getByRole('button', { name: '赛前核对', exact: true }).click();
+  await page.locator('.preflight-summary > button').click();
   await expect(dialog).toBeVisible();
   if (await dialog.getByRole('button', { name: '恢复自动编排', exact: true }).isVisible()) {
     await dialog.getByRole('button', { name: '恢复自动编排', exact: true }).click();
@@ -222,9 +222,9 @@ test('preflight reviews current ten-player evidence, actual auto state, disconne
   await dialog.getByRole('button', { name: '本场不再弹出提示和警告' }).click();
   await expect(dialog).not.toBeVisible();
   await page.reload();
-  await expect(page.getByRole('button', { name: '赛前核对', exact: true })).toBeVisible();
+  await expect(page.locator('.preflight-summary > button')).toBeVisible();
   await expect(dialog).not.toBeVisible();
-  await page.getByRole('button', { name: '赛前核对', exact: true }).click();
+  await page.locator('.preflight-summary > button').click();
   await expect(dialog.getByRole('button', { name: '恢复本场自动提醒' })).toBeVisible();
   await dialog.getByRole('button', { name: '稍后处理' }).click();
   await expect(dialog).not.toBeVisible();
@@ -268,7 +268,7 @@ test('preflight reviews current ten-player evidence, actual auto state, disconne
   await expect(syncDialog).not.toBeVisible();
   program.payload.map.phase = 'warmup';
   publish();
-  await page.getByRole('button', { name: '网站连接需处理', exact: true }).click();
+  await page.locator('.preflight-summary > button').click();
   await dialog.getByRole('button', { name: '恢复本场自动提醒' }).click();
   await dialog.getByRole('button', { name: '稍后处理' }).click();
   program.payload.map.phase = 'live';

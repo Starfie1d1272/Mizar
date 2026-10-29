@@ -91,7 +91,7 @@ export function MatchConnectionControl({ primary = false }: { primary?: boolean 
         {nextMapNeeded
           ? '填写下一图 GoTV'
           : primary
-            ? runtime?.programCommandQueued
+            ? runtime?.programCommandQueued || view?.waitingForMap
               ? '查看本图连接'
               : '填写 GoTV'
             : `本图连接 · ${status}`}
@@ -101,7 +101,7 @@ export function MatchConnectionControl({ primary = false }: { primary?: boolean 
           填写下一图 GoTV
         </Button>
       ) : null}
-      {runtime?.programCommandQueued || runtime?.active ? (
+      {!primary && (runtime?.programCommandQueued || runtime?.active) ? (
         <small role="status">
           节目：{runtime.programCommandQueued ? '命令已提交，实际连接请在游戏内核对' : '请手动连接'}
           ； 观察辅助：
