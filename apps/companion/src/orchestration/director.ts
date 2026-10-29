@@ -190,7 +190,8 @@ export class CameraDirector {
         this.highestRound = -1;
         this.pauseId = 0;
         this.paused = false;
-        if (t.program.map.phase !== 'warmup') this.consume('opening');
+        if (t.program.map.phase !== 'warmup' && t.program.map.roundNumber !== 0)
+          this.consume('opening');
       }
       this.lastEdge = this.edge(t).key; // Baseline, not a newly witnessed event.
       if (this.lastEdge) this.consume(this.lastEdge);
@@ -226,8 +227,8 @@ export class CameraDirector {
       const round = t.program.map.roundNumber!;
       if (round <= this.highestRound) return;
       this.highestRound = round;
-      // Opening owns round zero.
-      if (round === 0) return;
+      // Opening owns round zero; a late first observation in live play is not a start.
+      if (round === 0 || t.program.clock?.phase !== 'freezetime') return;
       const candidates =
         map.rounds.length > 1
           ? map.rounds.filter((s) => s.macro !== this.previousMacro)
@@ -244,6 +245,7 @@ export class CameraDirector {
       map = this.store.map(t.program.map.name);
     if (!map?.opening || this.seen.has('opening')) return;
     this.consume('opening');
+    if (this.held) return;
     if (this.current) this.stop('开场交接，已请求清空；停止结果未确认。');
     this.dispatch(map.opening, 'opening', this.edge(t).key);
   }
@@ -291,7 +293,8 @@ export class CameraDirector {
       this.now() >= next.until ||
       next.context !== this.identity(this.truth()) ||
       next.connection !== this.provider.generation ||
-      next.edge !== this.edge(this.truth()).key
+      next.edge !== this.edge(this.truth()).key ||
+      (next.key.startsWith('round:') && this.truth().program.clock?.phase !== 'freezetime')
     )
       return;
     this.play(next.shot, next.key, next.edge);
