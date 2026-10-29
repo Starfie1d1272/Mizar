@@ -1341,13 +1341,16 @@ export class DiagnosticDelivery {
               headers: { authorization: `Bearer ${bearer}` },
             },
           );
+          if (!response.ok) {
+            void response.body?.cancel().catch(() => undefined);
+            throw transportReceiptError('withdrawal', response.status, null);
+          }
           const ack = (await responseJson(response, signal)) as {
             installationId: string;
             revoked: boolean;
             deletion: string;
           };
           if (
-            !response.ok ||
             ack.installationId !== item.installationId ||
             ack.revoked !== true ||
             ack.deletion !== 'complete'
@@ -1359,17 +1362,22 @@ export class DiagnosticDelivery {
           this.state.withdrawals = previous.withdrawals.filter(
             (v) => v.installationId !== item.installationId,
           );
-          if (
+          const recovered =
             this.state.withdrawals.length === 0 &&
-            ['withdrawal', 'enrollment'].includes(this.state.transportFailure?.phase ?? '')
-          )
+            (['withdrawal', 'enrollment'].includes(this.state.transportFailure?.phase ?? '') ||
+              this.error === 'withdrawal_pending');
+          if (recovered) {
             this.state.transportFailure = null;
+            this.state.failures = 0;
+            this.state.nextAttemptAt = 0;
+          }
           try {
             await this.save();
           } catch (error) {
             this.state = previous;
             throw error;
           }
+          if (recovered) this.error = null;
         });
       }
       if (
