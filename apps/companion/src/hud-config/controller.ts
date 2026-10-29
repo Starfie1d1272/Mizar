@@ -1,3 +1,4 @@
+import { exportLhmHud } from '../hud-export/lhm.js';
 import { diagnosticValue } from '../support/session-journal.js';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 
@@ -15,6 +16,7 @@ import {
 export interface HudConfigControllerOptions {
   readonly store: HudConfigStore;
   readonly originPolicy: LocalWebOriginPolicy;
+  readonly webRoot?: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -69,6 +71,32 @@ export function registerHudConfigRoutes(
     const requested = request.headers['if-none-match'];
     if (typeof requested === 'string' && requested === state.etag) return reply.code(304).send();
     return reply.code(200).send(onAirResponse(state));
+  });
+
+  app.post('/operator/hud-config/export-lhm', async (request, reply) => {
+    if (options.originPolicy.mode !== 'loopback')
+      return reply.code(403).send({ error: 'operator_mutation_loopback_only' });
+    if (!checkLocalWebOrigin(options.originPolicy, request.headers.origin).allowed)
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    const body: unknown = request.body;
+    if (!isRecord(body) || typeof body.expectedActiveRevision !== 'string')
+      return reply.code(400).send({ error: 'invalid_hud_config_command' });
+    const state = options.store.getState();
+    if (state.activeRevision !== body.expectedActiveRevision)
+      return reply.code(409).send({ error: 'hud_config_active_conflict' });
+    if (!options.webRoot) return reply.code(503).send({ error: 'lhm_export_runtime_unavailable' });
+    try {
+      const archive = await exportLhmHud(options.webRoot, state.resolved);
+      if (options.store.getState().activeRevision !== body.expectedActiveRevision)
+        return reply.code(409).send({ error: 'hud_config_active_conflict' });
+      return reply
+        .header('content-type', 'application/zip')
+        .header('content-disposition', 'attachment; filename="mizar-hud.zip"')
+        .header('cache-control', 'no-store')
+        .send(archive);
+    } catch {
+      return reply.code(503).send({ error: 'lhm_export_runtime_unavailable' });
+    }
   });
 
   app.get('/operator/hud-config', (request, reply) => {

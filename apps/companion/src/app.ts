@@ -753,6 +753,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     );
   registerHudConfigRoutes(app, {
     store: hudConfigStore,
+    webRoot: options.webRoot ?? defaultWebRoot(),
     originPolicy: localWebTransport.getOriginPolicy(),
   });
   void app.register(async (scope) => {
