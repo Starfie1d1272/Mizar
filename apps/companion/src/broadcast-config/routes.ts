@@ -66,15 +66,13 @@ export function registerBroadcastConfigRoutes(
       { bodyLimit: 1024 * 1024 },
       async (request, reply) => {
         if (!authorized(request.headers.origin))
-          return reply
-            .code(403)
-            .send({
-              error: {
-                code: 'operator_forbidden',
-                message: '请求来源不可用',
-                requestId: request.id,
-              },
-            });
+          return reply.code(403).send({
+            error: {
+              code: 'operator_forbidden',
+              message: '请求来源不可用',
+              requestId: request.id,
+            },
+          });
         try {
           if (action === 'clone') return await store.clone(clone.parse(request.body));
           if (action === 'preview') return await store.preview(apply.parse(request.body));
@@ -90,22 +88,20 @@ export function registerBroadcastConfigRoutes(
           });
         } catch (error) {
           const { status, code } = failure(error);
-          return reply
-            .code(status)
-            .send({
-              error: {
-                code,
-                message:
-                  status === 409
-                    ? '配置已变化或当前无法切换，请刷新后重试。'
-                    : status === 404
-                      ? '方案或模块不存在。'
-                      : status === 400
-                        ? '配置内容无效。'
-                        : '配置暂时不可用。',
-                requestId: request.id,
-              },
-            });
+          return reply.code(status).send({
+            error: {
+              code,
+              message:
+                status === 409
+                  ? '配置已变化或当前无法切换，请刷新后重试。'
+                  : status === 404
+                    ? '方案或模块不存在。'
+                    : status === 400
+                      ? '配置内容无效。'
+                      : '配置暂时不可用。',
+              requestId: request.id,
+            },
+          });
         }
       },
     );

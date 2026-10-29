@@ -12,7 +12,11 @@ import {
   getBuiltinResolvedPreset,
   getBuiltinTheme,
 } from '@mizar/hud-config';
-import { type BroadcastConfigDocument, type ProgramVisualConfigV1 } from '@mizar/broadcast-config';
+import {
+  clonePreset,
+  type BroadcastConfigDocument,
+  type ProgramVisualConfigV1,
+} from '@mizar/broadcast-config';
 import { BroadcastConfigStore } from '../../src/broadcast-config/store.js';
 
 const directories: string[] = [];
@@ -125,6 +129,7 @@ async function setup() {
         Promise.resolve({ resolved: initial.active.resolved, lock: initial.active.lock }),
     },
     withReferenceGuard: <T>(operation: () => Promise<T>) => operation(),
+    assertReferenceCommitAllowed: () => Promise.resolve(),
     withApplyGuard: <T>(operation: (canCommit: () => boolean) => Promise<T>) =>
       operation(() => true),
   };
@@ -210,5 +215,59 @@ describe('BroadcastConfigStore', () => {
     const reopened = new BroadcastConfigStore(options);
     await reopened.load();
     expect(reopened.snapshot.active.revision).toBe('active');
+  });
+  it('imports multiple independent presets atomically and reuses the persisted mapping', async () => {
+    const { store, options, initial } = await setup();
+    const request = {
+      sourceId: initial.presets[0]!.id,
+      expectedRevision: 'p1',
+      expectedModuleRevisions: { hud: 'h1', program: 'p1' },
+      name: 'Imported',
+    };
+    const first = clonePreset(initial, request, randomUUID);
+    const second = clonePreset(initial, { ...request, name: 'Second' }, randomUUID);
+    const batch = {
+      source: { id: 'local:package', version: '1', digest: 'a'.repeat(64) },
+      modules: [...first.modules, ...second.modules],
+      presets: [first.preset, second.preset],
+      moduleEntries: {
+        hud: [first.modules[0]!.id, second.modules[0]!.id],
+        program: [first.modules[1]!.id, second.modules[1]!.id],
+      },
+      presetEntries: { first: first.preset.id, second: second.preset.id },
+    };
+    const result = await store.importBatch(batch);
+    expect(result.reused).toBe(false);
+    expect(store.snapshot.active).toEqual(initial.active);
+    const reopened = new BroadcastConfigStore(options);
+    await reopened.load();
+    expect(await reopened.importBatch(batch)).toEqual({ mapping: result.mapping, reused: true });
+    await expect(
+      reopened.importBatch({ ...batch, source: { ...batch.source, digest: 'b'.repeat(64) } }),
+    ).rejects.toThrow('identity_conflict');
+    expect(reopened.snapshot.presets).toHaveLength(3);
+  });
+  it('rejects shared editable modules across imported presets without publishing either', async () => {
+    const { store, initial } = await setup();
+    const copy = clonePreset(
+      initial,
+      {
+        sourceId: initial.presets[0]!.id,
+        expectedRevision: 'p1',
+        expectedModuleRevisions: { hud: 'h1', program: 'p1' },
+        name: 'Imported',
+      },
+      randomUUID,
+    );
+    const second = { ...structuredClone(copy.preset), id: randomUUID(), revision: randomUUID() };
+    const batch = {
+      source: { id: 'local:package', version: '1', digest: 'a'.repeat(64) },
+      modules: copy.modules,
+      presets: [copy.preset, second],
+      moduleEntries: { hud: [copy.modules[0]!.id], program: [copy.modules[1]!.id] },
+      presetEntries: { first: copy.preset.id, second: second.id },
+    };
+    await expect(store.importBatch(batch)).rejects.toThrow('invalid_import_mapping');
+    expect(store.snapshot).toEqual(initial);
   });
 });
