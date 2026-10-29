@@ -60,7 +60,7 @@ RivalHub 资料先经过结构与语义校验，阻断错误不进入 Core。比
 
 `GET /local/v1/observer-assist` 返回观察辅助 `settings`、游戏自动操作 `gameAutomation`、当前连接端点摘要与修订号。受信任本机 Origin 通过 `POST /operator/observer-assist` 通过 `configure`、`configure-game` 分别保存偏好，通过 `connection` 提交本场连接。密码仅随本次服务会话保存在内存，比赛切换清除本场连接。相同有效值再次保存不更新修订或通知消费者；提示时间只更新辅助计算：单改 `leadSeconds` 保留缓冲与测量历史并立即重新投影；旧配置的 `expectedDelaySeconds` 读取时忽略。`revision` 仅用于辅助启停、游戏操作与本场连接准备。
 
-私有 `assist` 通道使用 schema 4；开启时携带来源状态、时间参数、`timingBasis`（`estimated` 或 `program-clock`）、校准状态、只读 `measuredDelaySeconds`、`waitingReason`、距首个提示窗口的 `nextWindowSeconds` 与最多六条击杀提示，包含当前 Program 昵称、唯一观战槽位、预计发生倒计时。实时预告依赖可靠的两源回合时钟校准；校准不足或连续性丢失时等待，不以固定配置延迟猜测。无事件和缓冲为正常等待状态。关闭时沿用基础辅助载荷。Program、雷达和公开输出继续使用各自契约。
+私有 `assist` 通道使用 schema 4；开启时携带来源状态、时间参数、`timingBasis`（`estimated` 或 `program-clock`）、校准状态、只读 `measuredDelaySeconds`、`waitingReason`、距首个提示窗口的 `nextWindowSeconds` 与最多六条击杀提示，包含当前 Program 昵称、唯一观战槽位、预计发生倒计时。当前生产使用的 `estimated` 路径依赖可靠的两源回合时钟校准；校准不足或连续性丢失时等待，不以固定配置延迟猜测。无事件和缓冲为正常等待状态。关闭时沿用基础辅助载荷。Program、雷达和公开输出继续使用各自契约。
 
 Host 的 `prepare` / `start-configured` 绑定游戏实例、Desktop Job 和配置修订，并由 Host 根据游戏启动偏好提交 `useMulnx`。标准路线直接启动选定的观察器；MulNX 路线按自动连接与 HUD 开关提交命令，观察器仍由独立开关决定。节目连接与 HUD 命令复用 MulNX 的 `Game/Command/NoReport` 队列，payload 使用其填充器要求的 JSON 字符串。精确网关回执证明入队，游戏数据与本机控制台查询分别负责节目连接、HUD 值的读回。
 
