@@ -554,16 +554,20 @@ export class MusicDirector {
       return;
     }
     const safe = await this.monitorSafe(obs).catch(() => false);
+    const monitorOnly = await this.desktopMonitorOnly(obs).catch(() => null);
     if (!valid()) return;
-    this.status.monitorPending = !safe;
-    if (!safe) return;
+    this.status.monitorPending = !safe || monitorOnly === null;
+    if (!safe || monitorOnly === null) return;
     for (const layer of pending) {
       const name = await ownedMusicInput(obs, this.store, layer, false, valid, false);
       const uuid = this.store.state.sources[layer];
       if (!name || !uuid || !valid()) return;
       const read = await obs.call('GetInputAudioMonitorType', { inputUuid: uuid });
       if (!valid()) return;
-      if (!(await this.monitorSafe(obs).catch(() => false))) {
+      if (
+        !(await this.monitorSafe(obs).catch(() => false)) ||
+        (await this.desktopMonitorOnly(obs).catch(() => null)) !== monitorOnly
+      ) {
         if (valid()) this.status.monitorPending = true;
         return;
       }
@@ -571,12 +575,19 @@ export class MusicDirector {
       // Record the attempt first: an uncertain OBS response must never be replayed.
       await this.store.update((state) => {
         state.monitorConfigured[layer] = uuid;
+        if (monitorOnly && read.monitorType === 'OBS_MONITORING_TYPE_NONE')
+          state.desktopMonitorOriginal[layer] = {
+            uuid,
+            mode: 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
+          };
       });
       if (!valid()) return;
       if (read.monitorType === 'OBS_MONITORING_TYPE_NONE')
         await obs.call('SetInputAudioMonitorType', {
           inputUuid: uuid,
-          monitorType: 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
+          monitorType: monitorOnly
+            ? 'OBS_MONITORING_TYPE_MONITOR_ONLY'
+            : 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
         });
     }
   }

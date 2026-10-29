@@ -103,6 +103,100 @@ export class AudioMigration {
       throw new Error('audio_migration_identity_changed');
     return found.sceneItemEnabled;
   }
+  /** Recheck an interrupted transaction on a new observed connection and restore
+   * its recorded pre-switch references before allowing another migration. */
+  async recover(obs: ObsRpc, endpoint: string, observer: MigrationObserver): Promise<void> {
+    if (this.running) throw new Error('audio_migration_busy');
+    this.running = true;
+    let interrupted = false;
+    let expected:
+      { sceneName: string; sceneItemId: number; enabled: boolean; seen: boolean } | undefined;
+    const stop = observer.subscribe((event) => {
+      if (event.type !== 'item') {
+        interrupted = true;
+        return;
+      }
+      if (
+        expected &&
+        !expected.seen &&
+        event.sceneName === expected.sceneName &&
+        event.sceneItemId === expected.sceneItemId &&
+        event.enabled === expected.enabled
+      )
+        expected.seen = true;
+      else interrupted = true;
+    });
+    try {
+      const journal = await this.pending();
+      if (!journal) return;
+      if (journal.fields.some((entry) => entry.externalChanged || entry.before === entry.applied))
+        throw new Error('audio_migration_external_change');
+      const keys = journal.fields.map((entry) => `${entry.sceneName}\0${entry.sceneItemId}`);
+      if (new Set(keys).size !== keys.length) throw new Error('audio_migration_duplicate');
+      const plan = {
+        endpoint: journal.endpoint,
+        collection: journal.collection,
+        desktop: [],
+        independent: [],
+      };
+      const check = async () => {
+        if (interrupted) throw new Error('audio_migration_observation_lost');
+        await this.context(obs, plan, endpoint, true);
+        if (interrupted) throw new Error('audio_migration_observation_lost');
+      };
+      await check();
+      const initial = await Promise.all(journal.fields.map((entry) => this.status(obs, entry)));
+      await check();
+      const confirmed = await Promise.all(journal.fields.map((entry) => this.status(obs, entry)));
+      if (
+        initial.some(
+          (value, index) =>
+            value !== confirmed[index] ||
+            (['prepared', 'restored'].includes(journal.fields[index]!.phase) &&
+              value !== journal.fields[index]!.before),
+        )
+      )
+        throw new Error('audio_migration_external_change');
+      await check();
+      // Open previous paths before closing paths added by the interrupted switch.
+      for (const entry of [...journal.fields].sort((a, b) => Number(b.before) - Number(a.before))) {
+        await check();
+        const current = await this.status(obs, entry);
+        if (current !== entry.before) {
+          entry.phase = 'uncertain';
+          await this.save(journal);
+          await check();
+          expected = {
+            sceneName: entry.sceneName,
+            sceneItemId: entry.sceneItemId,
+            enabled: entry.before,
+            seen: false,
+          };
+          await obs.call('SetSceneItemEnabled', {
+            sceneName: entry.sceneName,
+            sceneItemId: entry.sceneItemId,
+            sceneItemEnabled: entry.before,
+          });
+          await check();
+          if ((await this.status(obs, entry)) !== entry.before)
+            throw new Error('audio_migration_write_uncertain');
+          expected = undefined;
+        }
+        entry.phase = 'restored';
+        await this.save(journal);
+      }
+      await check();
+      for (const entry of journal.fields)
+        if ((await this.status(obs, entry)) !== entry.before)
+          throw new Error('audio_migration_external_change');
+      await check();
+      stop();
+      await rename(this.path, `${this.path}.recovered-${randomUUID()}.json`);
+    } finally {
+      stop();
+      this.running = false;
+    }
+  }
   async migrate(
     obs: ObsRpc,
     endpoint: string,

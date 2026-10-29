@@ -22,6 +22,7 @@ import { readOwnedCommentaryTarget } from './commentary-owned-target.js';
 import { OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
 import { configureIndependentAudio } from './audio-setup.js';
 import { reconcileManagedAudio } from './managed-audio.js';
+import { AudioMigration } from './audio-migration.js';
 import { desktopMonitorRelationship } from './audio-monitor-device.js';
 import { discoverWaitingCommentary } from './remote-commentary-wait.js';
 import { AudioConfigurationConnection } from './audio-configuration-connection.js';
@@ -516,6 +517,11 @@ export class ObsAdapter {
               if (mic.monitorType !== 'OBS_MONITORING_TYPE_NONE')
                 throw new Error('audio_microphone_monitor');
             }
+            await new AudioMigration(`${this.commentary!.journal}.migration`).recover(
+              obs,
+              endpoint,
+              observer,
+            );
             await prepareMusic(obs, relationship === 'same');
             await reconcileManagedAudio(
               obs,
