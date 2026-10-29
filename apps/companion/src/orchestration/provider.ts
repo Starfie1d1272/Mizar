@@ -1,5 +1,11 @@
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
+import {
+  MulnxEventSequence,
+  parseMulnxClock,
+  type MulnxClockSample,
+  type MulnxEventCandidate,
+} from './mulnx-events.js';
 export type GatewayResult = 'queued' | 'rejected' | 'unknown';
 type CameraCommand =
   | 'CamMacro/Play'
@@ -12,23 +18,61 @@ type CameraCommand =
 export class MulnxProvider {
   private socket: WebSocket | null = null;
   private pending: { wire: string; finish: (result: GatewayResult) => void } | null = null;
+  private readonly observers = new Set<(message: MulnxInput) => void>();
   generation = 0;
   constructor(private readonly diagnostic: (stage: string, evidence: unknown) => void = () => {}) {}
   get connected() {
     return this.socket?.readyState === WebSocket.OPEN;
+  }
+  subscribeInput(observer: (message: MulnxInput) => void): () => void {
+    this.observers.add(observer);
+    return () => this.observers.delete(observer);
+  }
+  private emitInput(message: MulnxInput): void {
+    for (const observer of this.observers) {
+      try {
+        observer(message);
+      } catch {
+        /* Consumers cannot interrupt the socket. */
+      }
+    }
   }
   async connect(port = 55202): Promise<void> {
     this.close();
     const socket = new WebSocket(`ws://127.0.0.1:${port}`);
     this.socket = socket;
     const generation = this.generation;
+    const events = new MulnxEventSequence();
+    let subscribed = false;
     socket.addEventListener('message', ({ data }) => {
-      if (typeof data !== 'string' || this.socket !== socket || !this.pending) return;
+      if (typeof data !== 'string' || this.socket !== socket) return;
       if (data.length > 64 * 1024) {
         this.close();
         return;
       }
       const text = data;
+      if (text.startsWith('{')) {
+        try {
+          const raw: unknown = JSON.parse(text);
+          if (raw && typeof raw === 'object' && 'type' in raw && raw.type === 'HSI/Subscribed') {
+            if (!subscribed) {
+              subscribed = true;
+              this.emitInput({ kind: 'subscribed', generation });
+            }
+          } else if (subscribed) {
+            const receivedMonotonicMs = performance.now();
+            const clock = parseMulnxClock(raw, receivedMonotonicMs);
+            if (clock) this.emitInput({ kind: 'clock', generation, sample: clock });
+            else {
+              const event = events.accept(raw);
+              if (event) this.emitInput({ kind: 'event', generation, receivedMonotonicMs, event });
+            }
+          }
+        } catch {
+          /* Other frames are not HSI input. */
+        }
+      }
+      if (!this.pending) return;
       const { wire, finish } = this.pending;
       // HSI broadcasts and unrelated / late replies are not execution evidence.
       if (text === `已投入消息总线${wire}`) finish('queued');
@@ -50,8 +94,14 @@ export class MulnxProvider {
         'open',
         () => {
           clearTimeout(timer);
-          if (generation === this.generation) resolve();
-          else reject(new Error('camera_cancelled'));
+          if (generation === this.generation) {
+            try {
+              socket.send(JSON.stringify({ type: 'HSI/Subscribe' }));
+            } catch {
+              /* Camera connection remains independent. */
+            }
+            resolve();
+          } else reject(new Error('camera_cancelled'));
         },
         { once: true },
       );
@@ -178,9 +228,21 @@ export class MulnxProvider {
     const socket = this.socket;
     this.socket = null;
     this.generation++;
+    if (socket) this.emitInput({ kind: 'disconnected', generation: this.generation });
     socket?.close();
   }
 }
+
+export type MulnxInput =
+  | { readonly kind: 'subscribed'; readonly generation: number }
+  | { readonly kind: 'clock'; readonly generation: number; readonly sample: MulnxClockSample }
+  | {
+      readonly kind: 'event';
+      readonly generation: number;
+      readonly receivedMonotonicMs: number;
+      readonly event: MulnxEventCandidate;
+    }
+  | { readonly kind: 'disconnected'; readonly generation: number };
 
 // Native-only fixed operation; no browser-provided commands or endpoints.
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
