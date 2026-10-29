@@ -1,4 +1,4 @@
-import { ReviewDialog } from './ReviewDialog';
+import { ReviewDialog, isReviewWindow } from './ReviewDialog';
 import { useEffect, useState } from 'react';
 import { SILENCED_MATCH_KEY, SILENCE_CHANGED } from './review-silence';
 import { Button, StatusBanner } from '../ui';
@@ -65,7 +65,10 @@ export function LiveRosterAlert({
   // Only a positively recovered current lineup permits the same difference to alert again.
   if (recovered && dismissedKey !== null) setDismissedKey(null);
   if (!alert) return null;
-  const open = requested || (!suppressAutomatic && !silenced && dismissedKey !== alert.key);
+  const open =
+    requested ||
+    (isReviewWindow() && new URLSearchParams(window.location.search).get('kind') === 'roster') ||
+    (!suppressAutomatic && !silenced && dismissedKey !== alert.key);
   return (
     <>
       <StatusBanner tone="warning">
