@@ -1,10 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
-import { parseModuleRecord, type ModuleRecord } from '@mizar/broadcast-config';
+import {
+  parseModuleRecord,
+  type CameraSourceRef,
+  type ModuleRecord,
+} from '@mizar/broadcast-config';
 import { useLocalRead } from '../preparation/client';
 import { Button, Checkbox, Field, Panel, Select, StatusBanner } from '../ui';
 import { PresetVisualPreview } from './PresetVisualPreview';
 import { pulseTokenStyle } from '../program/broadcast-display';
 import { exportFailure } from './export-error';
+import { MusicModuleEditor } from './MusicModuleEditor';
+import { CameraModuleEditor } from './CameraModuleEditor';
 
 type Kind = ModuleRecord['kind'];
 export type Snapshot = {
@@ -152,6 +158,55 @@ function SceneEditor({
   );
 }
 
+function ModuleDraftEditor({
+  module,
+  modules,
+  sources,
+  busy,
+  save,
+  cancel,
+}: {
+  module: ModuleRecord<'music'> | ModuleRecord<'camera'>;
+  modules: ModuleRecord[];
+  sources: CameraSourceRef[];
+  busy: boolean;
+  save: (value: ModuleRecord, revision: string) => Promise<boolean>;
+  cancel: () => void;
+}) {
+  const [draft, setDraft] = useState(() => structuredClone(module));
+  const finish = async () => {
+    if (await save(draft, draft.revision)) cancel();
+  };
+  return (
+    <div>
+      {draft.kind === 'music' ? (
+        <MusicModuleEditor
+          value={draft.value}
+          busy={busy}
+          onChange={(value) => setDraft({ ...draft, value })}
+          onSave={() => void finish()}
+        />
+      ) : (
+        <CameraModuleEditor
+          value={draft.value}
+          busy={busy}
+          availableSources={[
+            ...sources,
+            ...modules.flatMap((item) =>
+              item.kind === 'camera' ? item.value.maps.map((map) => map.source) : [],
+            ),
+          ]}
+          onChange={(value) => setDraft({ ...draft, value })}
+          onSave={() => void finish()}
+        />
+      )}
+      <Button disabled={busy} onClick={cancel}>
+        取消编辑
+      </Button>
+    </div>
+  );
+}
+
 function programUnsupported(entry: ModuleRecord): boolean {
   try {
     const parsed = parseModuleRecord(entry);
@@ -230,6 +285,14 @@ export function ResourceModules({
     new URLSearchParams(window.location.search).get('resource'),
   );
   const [replacement, setReplacement] = useState('');
+  const [editing, setEditing] = useState<string | null>(null);
+  const cameraSources = useLocalRead<{ sources: CameraSourceRef[] }>(
+    editing && snapshot?.modules.some((item) => item.id === editing && item.kind === 'camera')
+      ? '/local/v1/orchestration/camera-sources'
+      : null,
+    60000,
+    refresh,
+  );
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{
     tone: 'success' | 'danger' | 'warning';
@@ -704,6 +767,29 @@ export function ResourceModules({
                     }
                   />
                 )}
+                {!builtin &&
+                  (entry.kind === 'music' || entry.kind === 'camera') &&
+                  (editing === entry.id ? (
+                    <ModuleDraftEditor
+                      key={entry.id}
+                      module={entry}
+                      modules={snapshot?.modules ?? []}
+                      sources={cameraSources?.sources ?? []}
+                      busy={busy}
+                      cancel={() => setEditing(null)}
+                      save={(value, expectedRevision) =>
+                        perform(
+                          '/operator/broadcast-modules/save',
+                          { value, expectedRevision },
+                          '资源已保存，尚未使用。',
+                        )
+                      }
+                    />
+                  ) : (
+                    <Button disabled={busy} onClick={() => setEditing(entry.id)}>
+                      编辑{labels[entry.kind]}
+                    </Button>
+                  ))}
                 <div className="resource-library__preset-actions">
                   <Button
                     disabled={

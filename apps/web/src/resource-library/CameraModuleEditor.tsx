@@ -1,4 +1,4 @@
-import type { CameraModuleV2 } from '@mizar/broadcast-config';
+import type { CameraModuleV2, CameraSourceRef } from '@mizar/broadcast-config';
 import { CAMERA_STAGES, cameraMapSchema, type CameraShot } from '@mizar/protocol/orchestration';
 import { MUSIC_LABELS } from '../music/MusicControls';
 import { Shot } from '../orchestration/CameraShotField';
@@ -9,18 +9,18 @@ export function CameraModuleEditor({
   onChange,
   onSave,
   busy,
+  availableSources = [],
 }: {
   value: CameraModuleV2;
   onChange: (value: CameraModuleV2) => void;
   onSave: () => void;
   busy: boolean;
+  availableSources?: CameraSourceRef[];
 }) {
-  const sources = value.maps
-    .map((map) => map.source)
-    .filter(
-      (source, i, all) =>
-        all.findIndex((item) => JSON.stringify(item) === JSON.stringify(source)) === i,
-    );
+  const sources = [...value.maps.map((map) => map.source), ...availableSources].filter(
+    (source, i, all) =>
+      all.findIndex((item) => JSON.stringify(item) === JSON.stringify(source)) === i,
+  );
   const sounds = value.maps
     .flatMap((map) => (map.openingSound ? [map.openingSound] : []))
     .filter(
@@ -66,8 +66,8 @@ export function CameraModuleEditor({
     </details>
   );
   return (
-    <details>
-      <summary>编辑运镜</summary>
+    <div>
+      <h3>编辑运镜</h3>
       <p>保存为草稿，不会改变当前播出。启用前请确认镜头和音频来源可用。</p>
       <Field
         label="预设名称"
@@ -187,6 +187,6 @@ export function CameraModuleEditor({
       <Button variant="primary" disabled={busy} onClick={onSave}>
         保存草稿
       </Button>
-    </details>
+    </div>
   );
 }

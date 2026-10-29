@@ -89,6 +89,23 @@ export function registerOrchestrationRoutes(
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
     return reply.header('cache-control', 'no-store').send(view());
   });
+  app.get('/local/v1/orchestration/camera-sources', async (request, reply) => {
+    if (
+      policy.mode !== 'loopback' ||
+      !['127.0.0.1', 'localhost', '[::1]', '::1'].includes(request.hostname) ||
+      request.headers['sec-fetch-site'] === 'cross-site' ||
+      (request.headers.origin && !allowed(request.headers.origin))
+    )
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    const sources = tool
+      ? await Promise.allSettled(tool.view().packs.map((pack) => tool.cameraSource(pack.name)))
+      : [];
+    return reply
+      .header('cache-control', 'no-store')
+      .send({
+        sources: sources.flatMap((result) => (result.status === 'fulfilled' ? [result.value] : [])),
+      });
+  });
   app.get('/local/v1/mulnx-releases', async (request, reply) => {
     if (
       policy.mode !== 'loopback' ||
