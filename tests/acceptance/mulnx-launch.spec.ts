@@ -120,7 +120,7 @@ for (const entry of ['/', '/settings?tab=gsi']) {
       }),
     );
     await page.goto(entry);
-    await page.getByRole('button', { name: '打开直播工作台', exact: true }).click();
+    await page.getByRole('button', { name: '启动并进入工作台', exact: true }).click();
     await expect(
       page.getByText('MulNX 启动接口不可用，请检查更新或选择标准启动；请关闭启动器后重试。'),
     ).toBeVisible();

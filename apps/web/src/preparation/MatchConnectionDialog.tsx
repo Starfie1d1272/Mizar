@@ -4,6 +4,8 @@ import { Button, Dialog, Field, StatusBanner } from '../ui';
 import './match-connection.css';
 import { command } from './client';
 import { desktopInvoke } from '../workspace/client';
+import { closeReviewWindow, isReviewWindow } from '../workspace/ReviewDialog';
+import { flushObserverPreparation } from './observer-preparation';
 import {
   registerObserverPreparation,
   requireConnectionRevision,
@@ -30,8 +32,10 @@ export function MatchConnectionDialog() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
+  const [automatic, setAutomatic] = useState<boolean | null>(null);
+  const [modeCheck, setModeCheck] = useState(0);
   const [confirmed, setConfirmed] = useState(false);
-  const [manual, setManual] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [mode, setMode] = useState<'connect' | 'seamless'>('connect');
   const [nextMap, setNextMap] = useState(false);
   useEffect(() => {
@@ -59,15 +63,46 @@ export function MatchConnectionDialog() {
           pending.current = next;
           setRequest(next);
           setError('');
+          setAutomatic(null);
           setConfirmed(false);
+          setSaved(false);
         }),
     );
+    if (
+      isReviewWindow() &&
+      new URLSearchParams(window.location.search).get('kind') === 'connection'
+    ) {
+      void flushObserverPreparation(false, true).catch((reason: unknown) =>
+        setError(reason instanceof Error ? reason.message : '本图连接未读取，请重试。'),
+      );
+    }
     return () => {
       unregister();
       pending.current?.resolve(false);
       pending.current = null;
     };
   }, []);
+  useEffect(() => {
+    if (!request) return;
+    let active = true;
+    void (
+      window.__TAURI_INTERNALS__
+        ? desktopInvoke<{ useMulnx?: boolean }>('observer_command', { action: 'connection-mode' })
+        : Promise.resolve({ useMulnx: false })
+    )
+      .then((result) => {
+        if (active)
+          setAutomatic(
+            result.useMulnx === true && request.view.gameAutomation?.autoConnect === true,
+          );
+      })
+      .catch(() => {
+        if (active) setError('无法检查游戏连接方式，请重试。');
+      });
+    return () => {
+      active = false;
+    };
+  }, [request, modeCheck]);
   const close = () => {
     if (operation.current) return;
     if (confirmed) {
@@ -79,6 +114,7 @@ export function MatchConnectionDialog() {
     pending.current?.resolve(confirmed);
     pending.current = null;
     setRequest(null);
+    void closeReviewWindow();
   };
   let connection: ReturnType<typeof parseObserverConnection> | null = null;
   try {
@@ -99,39 +135,44 @@ export function MatchConnectionDialog() {
     try {
       if (!input.trim() && !savedView?.connection) throw new Error('请填写本图授权的观战连接。');
       if (mode === 'connect' && input.trim()) {
-        if (advanced && (!early.trim() || !program.trim()))
-          throw new Error('请填写早源与节目源两个端点。');
+        if (advanced && (!early.trim() || !program.trim())) throw new Error('请填写两路观战地址。');
       }
-      const saved = (await command('/operator/observer-assist', {
-        action: 'map-connection',
-        id: mapId.current,
-        mode,
-        nextMap,
-        expectedRevision: requireConnectionRevision(draftRevision.current),
-        ...(mode === 'connect' && input.trim()
-          ? {
-              connection: parseObserverConnection(
-                input,
-                advanced ? program : undefined,
-                advanced ? early : undefined,
-              ),
-            }
-          : {}),
-      })) as unknown as ConnectionPreparationView;
-      draftRevision.current = requireConnectionRevision(saved.revision);
+      const resultView = saved
+        ? savedView!
+        : ((await command('/operator/observer-assist', {
+            action: 'map-connection',
+            id: mapId.current,
+            mode,
+            nextMap,
+            expectedRevision: requireConnectionRevision(draftRevision.current),
+            ...(mode === 'connect' && input.trim()
+              ? {
+                  connection: parseObserverConnection(
+                    input,
+                    advanced ? program : undefined,
+                    advanced ? early : undefined,
+                  ),
+                }
+              : {}),
+          })) as unknown as ConnectionPreparationView);
+      setSaved(true);
+      draftRevision.current = requireConnectionRevision(resultView.revision);
       if (pending.current !== request) return;
-      setSavedView(saved);
+      setSavedView(resultView);
       // Host checks current game identity, production eligibility and configuration revision.
       if (window.__TAURI_INTERNALS__) {
-        const result = await desktopInvoke<{ useMulnx?: boolean } | null>('observer_command', {
+        await desktopInvoke('observer_command', {
           action: 'start-configured',
           expectedRevision: requireConnectionRevision(draftRevision.current),
         });
         if (pending.current !== request) return;
-        setManual(result?.useMulnx !== true);
-      } else setManual(true);
+      }
       if (pending.current !== request) return;
       setConfirmed(true);
+      pending.current?.resolve(true);
+      pending.current = null;
+      setRequest(null);
+      void closeReviewWindow();
     } catch (error) {
       if (pending.current !== request) return;
       setError(error instanceof Error ? error.message : '请核对连接后重试。');
@@ -141,6 +182,12 @@ export function MatchConnectionDialog() {
     }
   };
   const endpoints = connection ?? savedView?.connection;
+  if (!request && error && isReviewWindow())
+    return (
+      <div role="alert">
+        {error} <Button onClick={() => void closeReviewWindow()}>关闭窗口</Button>
+      </div>
+    );
   return (
     <Dialog
       open={Boolean(request)}
@@ -154,21 +201,21 @@ export function MatchConnectionDialog() {
         label="本图观战连接"
         value={input}
         autoComplete="off"
-        disabled={busy || confirmed || mode === 'seamless'}
+        disabled={busy || saved || confirmed || mode === 'seamless'}
         onChange={(event) => {
           mapId.current = crypto.randomUUID();
           setInput(event.target.value);
           setCopied(false);
         }}
         placeholder="connect IP:27025;password 密码"
-        message="粘贴本图授权连接；留空可沿用上次确认的地址和密码。重试早源请使用专用重试入口。"
+        message="粘贴本图授权连接；留空可沿用上次确认的地址和密码。"
       />
       {request && savedView?.connection ? (
         <label>
           <input
             type="checkbox"
             checked={nextMap || mode === 'seamless'}
-            disabled={busy || confirmed || mode === 'seamless'}
+            disabled={busy || saved || confirmed || mode === 'seamless'}
             onChange={(event) => {
               mapId.current = crypto.randomUUID();
               setNextMap(event.target.checked);
@@ -182,7 +229,7 @@ export function MatchConnectionDialog() {
           <input
             type="checkbox"
             checked={mode === 'seamless'}
-            disabled={busy || confirmed}
+            disabled={busy || saved || confirmed}
             onChange={(event) => {
               mapId.current = crypto.randomUUID();
               setMode(event.target.checked ? 'seamless' : 'connect');
@@ -200,18 +247,18 @@ export function MatchConnectionDialog() {
       >
         <summary>高级设置</summary>
         <Field
-          label="早源 IPv4:端口"
+          label="观察辅助 IPv4:端口"
           value={early}
-          disabled={busy || confirmed || mode === 'seamless'}
+          disabled={busy || saved || confirmed || mode === 'seamless'}
           onChange={(event) => {
             mapId.current = crypto.randomUUID();
             setEarly(event.target.value);
           }}
         />
         <Field
-          label="节目源 IPv4:端口"
+          label="游戏观战 IPv4:端口"
           value={program}
-          disabled={busy || confirmed || mode === 'seamless'}
+          disabled={busy || saved || confirmed || mode === 'seamless'}
           onChange={(event) => {
             mapId.current = crypto.randomUUID();
             setProgram(event.target.value);
@@ -223,25 +270,14 @@ export function MatchConnectionDialog() {
         <p>
           {connection ? '本图草稿' : '上次已确认'}
           <br />
-          早源：{endpoints.earlyEndpoint}
+          观察辅助：{endpoints.earlyEndpoint}
           <br />
-          游戏节目源：{endpoints.programEndpoint}
+          游戏观战：{endpoints.programEndpoint}
         </p>
       ) : null}
-      <p>换图时保留工作台与游戏；服务器无缝换图时可保持现有连接。</p>
-      <p>
-        标准游戏请复制节目源命令并在控制台执行；复制不表示游戏已连接。使用第三方 HUD 时，请按 HUD
-        指引手动隐藏游戏 HUD。
-      </p>
-      <p>
-        MulNX 自动连接与隐藏 HUD
-        沿用已有偏好，仅对当前已验证控制资格的游戏执行。已启用的私有观察辅助由 Host 独立连接早源。
-      </p>
-      <p>
-        HUD
-        自动隐藏需要启动前已配置的本机控制台记录；请从游戏与观战设置检查，工作台不会自动开启记录。
-      </p>
-      {connection || (mode === 'connect' && !input.trim() && request && savedView?.connection) ? (
+      {automatic === false ? <p>复制游戏连接命令，在 CS2 控制台执行。</p> : null}
+      {automatic === false &&
+      (connection || (mode === 'connect' && !input.trim() && request && savedView?.connection)) ? (
         <Button
           disabled={busy}
           onClick={() => {
@@ -260,28 +296,31 @@ export function MatchConnectionDialog() {
               .catch(() => setError('复制未完成，请重试。'));
           }}
         >
-          {copied ? '节目源命令已复制' : '复制节目源连接命令'}
+          {copied ? '游戏连接命令已复制' : '复制游戏连接命令'}
         </Button>
       ) : null}
       {busy ? <p role="status">正在提交本图连接…</p> : null}
-      {confirmed ? (
-        <StatusBanner tone="success">
-          {mode === 'seamless'
-            ? '已保留现有连接，请在游戏内核对新图；早源按辅助开关独立运行。'
-            : manual
-              ? '当前游戏没有已验证的 MulNX 控制资格，请在控制台手动执行节目源命令；早源按辅助开关独立准备。'
-              : '本图连接操作已提交，请在游戏内核对节目源；命令入队不表示已经连接。'}
-        </StatusBanner>
+      {automatic === null && error ? (
+        <Button
+          onClick={() => {
+            setError('');
+            setModeCheck((value) => value + 1);
+          }}
+        >
+          重新检查游戏
+        </Button>
       ) : null}
-      {error ? (
-        <StatusBanner tone="warning">{error} 工作台和游戏保持打开，可重试本图连接。</StatusBanner>
-      ) : null}
+      {error ? <StatusBanner tone="warning">{error}</StatusBanner> : null}
       <div className="preparation-actions">
         <Button disabled={busy} onClick={close}>
           {confirmed ? '完成' : '取消'}
         </Button>
-        <Button variant="primary" disabled={busy || confirmed} onClick={() => void confirm()}>
-          {error ? '重试本图连接' : '确认本图连接'}
+        <Button
+          variant="primary"
+          disabled={busy || confirmed || automatic === null}
+          onClick={() => void confirm()}
+        >
+          {saved ? '重试准备' : '确认本图连接'}
         </Button>
       </div>
     </Dialog>

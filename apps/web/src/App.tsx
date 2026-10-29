@@ -659,7 +659,10 @@ export function App() {
   if (pathname === '/program/bp') return <BpPage />;
   if (pathname === '/program/bp-compact') return <BpPage compact />;
   if (pathname === '/workspace') return <WorkspacePreview />;
-  if (pathname === '/workspace/review') return <WorkspaceReview />;
+  if (pathname === '/workspace/review')
+    return new URLSearchParams(window.location.search).get('kind') === 'connection' ? null : (
+      <WorkspaceReview />
+    );
   if (pathname === '/workspace/left') return <WorkspaceLeft />;
   if (pathname === '/workspace/dock') return <WorkspaceDock />;
   const programScene = programSceneForPath(pathname);

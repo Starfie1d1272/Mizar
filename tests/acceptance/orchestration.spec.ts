@@ -285,7 +285,7 @@ test('external-game browser entry uses real production lifecycle without native 
   try {
     await page.goto('/');
     expect(await page.evaluate(() => '__TAURI_INTERNALS__' in window)).toBe(false);
-    await page.getByRole('button', { name: '打开直播工作台', exact: true }).click();
+    await page.getByRole('button', { name: '启动并进入工作台', exact: true }).click();
     await expect(page).toHaveURL(/\/workspace$/);
     expect((await app.inject('/local/v1/production')).json()).toMatchObject({ mode: 'live' });
     await page.getByRole('button', { name: '退出工作台', exact: true }).click();
@@ -396,9 +396,7 @@ test('explicit MulNX stop confirms production effects, shows ownership errors, a
   borrowed = true;
   await stop.click();
   await confirmation.getByRole('button', { name: '结束制作并停止控制', exact: true }).click();
-  await expect(
-    page.getByText(/^停止控制请求已入队，执行结果待确认。请返回游戏核对。/),
-  ).toBeVisible();
+  await expect(page.getByText('停止控制正在确认，请检查游戏状态。', { exact: true })).toBeVisible();
   await expect(stop).toBeDisabled();
   expect(stops).toBe(2);
   await expect(page.getByText('DLL 已卸载', { exact: true })).toHaveCount(0);
