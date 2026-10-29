@@ -78,6 +78,7 @@ export function ObsOutputControls({ onError }: { onError: (message: string) => v
       </div>
       <Dialog
         className="workspace-obs-confirmation"
+        showCloseButton={false}
         open={confirmation !== null}
         title={
           !canConfirm

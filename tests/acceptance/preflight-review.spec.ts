@@ -219,7 +219,7 @@ test('preflight reviews current ten-player evidence, actual auto state, disconne
   ).toBeVisible();
   await expect(finish).toBeDisabled();
   await screenshot('06-stale-data');
-  await dialog.getByRole('button', { name: '本场比赛不再自动弹出' }).click();
+  await dialog.getByRole('button', { name: '本场不再弹出提示和警告' }).click();
   await expect(dialog).not.toBeVisible();
   await page.reload();
   await expect(page.locator('.preflight-summary > button')).toBeVisible();
@@ -227,16 +227,27 @@ test('preflight reviews current ten-player evidence, actual auto state, disconne
   await page.locator('.preflight-summary > button').click();
   await expect(dialog.getByRole('button', { name: '恢复本场自动提醒' })).toBeVisible();
   await dialog.getByRole('button', { name: '稍后处理' }).click();
+  await expect(dialog).not.toBeVisible();
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
   operator.payload.activeLineup.retainedCount = 0;
   operator.payload.runtime.telemetryFreshness = 'fresh';
+  operator.payload.identity.issues = [
+    { ...operator.payload.identity.issues[0]!, code: 'lineup_differs_from_expected' },
+  ];
   publish();
-  await expect(dialog).not.toBeVisible();
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: '稍后处理' }).click();
   const originalMatchId = operator.payload.matchContext.summary!.matchId;
   operator.payload.matchContext.summary!.matchId = 'next-preflight-match';
   program.payload.match!.matchId = 'next-preflight-match';
   await page.reload();
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByRole('button', { name: '本场比赛不再自动弹出' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '本场不再弹出提示和警告' })).toBeVisible();
   operator.payload.matchContext.summary!.matchId = originalMatchId;
   program.payload.match!.matchId = originalMatchId;
 
@@ -253,7 +264,7 @@ test('preflight reviews current ten-player evidence, actual auto state, disconne
   await page.getByRole('button', { name: '网站同步需处理' }).click();
   await expect(syncDialog).toBeVisible();
   await expect(syncDialog).not.toContainText('.r');
-  await syncDialog.getByRole('button', { name: '本场比赛不再自动弹出' }).click();
+  await syncDialog.getByRole('button', { name: '本场不再弹出提示和警告' }).click();
   await expect(syncDialog).not.toBeVisible();
   program.payload.map.phase = 'warmup';
   publish();
@@ -362,7 +373,7 @@ test('preflight reviews current ten-player evidence, actual auto state, disconne
         ? Promise.reject(new Error('关闭窗口失败'))
         : invoke(command, args);
   });
-  await syncDialog.getByRole('button', { name: '本场比赛不再自动弹出' }).click();
+  await syncDialog.getByRole('button', { name: '本场不再弹出提示和警告' }).click();
   await expect(syncDialog).toContainText('关闭窗口失败');
   syncFailure = false;
   program.payload.map.phase = 'warmup';
