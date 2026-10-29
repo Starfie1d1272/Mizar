@@ -185,7 +185,7 @@ WebSocket 子协议为 `mizar.local.v1`，路由为 `/local/v1/{channel}`。
 
 预设文件只包含已声明的预设、布局和外观，导入原子创建新副本并重写引用，不启用、不执行代码、不携带比赛数据或图片。精确格式和上限见[配置包](../../packages/hud-config/src/index.ts)，可编辑样例见 [perfectworld.mizar-hud.json](../examples/perfectworld.mizar-hud.json)。
 
-播出配置协调器启用时，`GET /local/v1/broadcast-display-config` 返回 `{activeRevision, hud, program}`，三个字段来自同一活动快照；音乐、运镜、设备状态和路径不进入此响应。协调器未就绪时返回 `503`。`GET /local/v1/broadcast-config/migration` 是本机受限的迁移状态查询，依赖未验证时保留旧配置。`GET /local/v1/broadcast-presets` 和 `POST /operator/broadcast-presets/{save,clone,preview,apply}` 仅在协调器装配后注册并受本机来源限制；预览不提交活动配置，使用请求由服务端在生产与资源引用守卫内准备并提交。生产启动支持原生 HUD、Pulse、本机音乐和空运镜；其余 provider 尚未就绪时保留旧配置并报告待完成，不启用方案写入口。
+播出配置协调器启用时，`GET /local/v1/broadcast-display-config` 返回 `{activeRevision, hud, program}`，三个字段来自同一活动快照；音乐、运镜、设备状态和路径不进入此响应。协调器未就绪时返回 `503`。`GET /local/v1/broadcast-config/migration` 是本机受限的迁移状态查询，依赖未验证时保留旧配置。`GET /local/v1/broadcast-presets` 和 `POST /operator/broadcast-presets/{save,clone,preview,apply}` 仅在协调器装配后注册并受本机来源限制；预览不提交活动配置，使用请求由服务端在生产与资源引用守卫内准备并提交。进入制作等待正在进行的使用请求完成 owner 同步；同步失败时保持准备状态并返回错误。生产启动支持原生 HUD、Pulse、本机音乐和空运镜；其余 provider 尚未就绪时保留旧配置并报告待完成，不启用方案写入口。
 
 ## BP 播放与补录
 

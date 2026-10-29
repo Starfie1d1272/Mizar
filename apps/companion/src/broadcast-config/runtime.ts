@@ -50,6 +50,7 @@ export function createBroadcastRuntime(input: {
   let status: BroadcastMigrationStatus = { state: 'pending', reason: 'owner_unavailable' };
   let candidate: BroadcastConfigDocument | undefined;
   let ready = false;
+  let syncError: unknown;
   const store = new BroadcastConfigStore({
     filePath: deps.path,
     createInitial: () => {
@@ -79,8 +80,10 @@ export function createBroadcastRuntime(input: {
       if (failed?.status === 'rejected') {
         status = { state: 'pending', reason: 'dependency_unavailable' };
         input.diagnostic(failed.reason);
-        throw new Error('broadcast_owner_sync_failed', { cause: failed.reason });
+        syncError = new Error('broadcast_owner_sync_failed', { cause: failed.reason });
+        throw syncError;
       }
+      syncError = undefined;
       ready = true;
       status = { state: 'ready' };
     },
@@ -157,6 +160,10 @@ export function createBroadcastRuntime(input: {
   return {
     store,
     initialize,
+    async waitForApply() {
+      await store.waitForApply();
+      if (syncError) throw syncError;
+    },
     get ready() {
       return ready && !store.isApplying;
     },
