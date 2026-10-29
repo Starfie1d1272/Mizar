@@ -485,11 +485,7 @@ export async function prepareIndependentForDesktop(
     if (
       binding.endpoint !== endpoint ||
       binding.collection !== OBS_COLLECTION ||
-      !inputs.some(
-        (input) =>
-          input.inputUuid === binding.inputUuid &&
-          input.inputKind === 'wasapi_process_output_capture',
-      )
+      !inputs.some((input) => input.inputUuid === binding.inputUuid)
     )
       throw new Error('audio_binding_changed');
     commentary = binding.inputUuid;
