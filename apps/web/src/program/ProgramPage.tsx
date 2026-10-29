@@ -1,3 +1,4 @@
+import type { ResolvedHudModule } from '@mizar/broadcast-config';
 import { getBuiltinResolvedPreset, type HudResolvedPreset } from '@mizar/hud-config';
 import type { ProgramSnapshot } from '@mizar/protocol/program';
 
@@ -16,6 +17,8 @@ export interface ProgramPageProps {
   readonly connectionState?: LocalChannelConnectionState;
   readonly resolvedPreset?: HudResolvedPreset;
   readonly gg?: boolean;
+  readonly overlays?: Extract<ResolvedHudModule, { renderer: 'native' }>['overlays'] | undefined;
+  readonly accent?: Extract<ResolvedHudModule, { renderer: 'native' }>['accent'] | undefined;
 }
 
 export function ProgramPage({
@@ -24,6 +27,8 @@ export function ProgramPage({
   resolvedPreset,
   radarSource,
   radarSnapshot,
+  overlays,
+  accent,
   gg = false,
 }: ProgramPageProps = {}) {
   if (snapshot === undefined && connectionState === undefined && resolvedPreset === undefined) {
@@ -47,6 +52,8 @@ export function ProgramPage({
         resolvedPreset={resolvedPreset ?? getBuiltinResolvedPreset()}
         snapshot={presentationSnapshot}
         gg={gg}
+        overlays={overlays}
+        accent={accent}
       />
     </ProgramCanvas>
   );

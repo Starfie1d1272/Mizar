@@ -1,3 +1,4 @@
+import type { ResolvedHudModule } from '@mizar/broadcast-config';
 import { assetCssUrl, useAssetUrl } from './assets.js';
 import { useEffect, useEffectEvent, useRef, useState } from 'react';
 import { getMapThumbnail } from '@mizar/cs2-assets';
@@ -342,6 +343,8 @@ export interface ProgramSceneViewProps {
   readonly snapshot: ProgramSnapshot | null;
   readonly scenes: ProgramSceneState | null;
   readonly resolvedPreset: HudResolvedPreset;
+  readonly overlays?: Extract<ResolvedHudModule, { renderer: 'native' }>['overlays'] | undefined;
+  readonly accent?: Extract<ResolvedHudModule, { renderer: 'native' }>['accent'] | undefined;
   readonly preview: boolean;
   readonly shortIntro: boolean;
   readonly previewBackground: boolean;
@@ -355,6 +358,8 @@ export function ProgramSceneView({
   snapshot,
   scenes,
   resolvedPreset,
+  overlays,
+  accent,
   preview,
   shortIntro,
   previewBackground,
@@ -596,6 +601,8 @@ export function ProgramSceneView({
           <GameplayHud
             snapshot={snapshot}
             resolvedPreset={resolvedPreset}
+            overlays={overlays}
+            accent={accent}
             gg={
               scenes?.active === 'gameplay' &&
               (scenes.director?.gg?.remainingMs ?? 0) > 0 &&
@@ -609,7 +616,12 @@ export function ProgramSceneView({
               className="intro-hud"
               style={{ animationDelay: `${Math.max(0, duration - 600)}ms` }}
             >
-              <GameplayHud snapshot={snapshot} resolvedPreset={resolvedPreset} />
+              <GameplayHud
+                snapshot={snapshot}
+                resolvedPreset={resolvedPreset}
+                overlays={overlays}
+                accent={accent}
+              />
             </div>
             <div
               ref={intro}
@@ -652,7 +664,12 @@ export function ProgramSceneView({
       ) : sceneId === 'waiting' ? (
         <h1 className="waiting-neutral">BROADCAST STARTING SOON</h1>
       ) : sceneId === 'gameplay' ? (
-        <GameplayHud snapshot={snapshot} resolvedPreset={resolvedPreset} />
+        <GameplayHud
+          snapshot={snapshot}
+          resolvedPreset={resolvedPreset}
+          overlays={overlays}
+          accent={accent}
+        />
       ) : null}
     </ProgramCanvas>
   );
