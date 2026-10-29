@@ -1,6 +1,6 @@
 name: 设计 / 架构任务
 description: 在进入实现前调研并冻结重要产品或技术决策。
-title: "[设计] "
+title: '[设计] '
 body:
   - type: textarea
     id: problem

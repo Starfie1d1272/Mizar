@@ -1,6 +1,6 @@
 name: 缺陷报告
 description: 报告当前已实现行为中可复现的缺陷。
-title: "[Bug] "
+title: '[Bug] '
 body:
   - type: textarea
     id: observed

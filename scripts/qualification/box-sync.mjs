@@ -285,6 +285,10 @@ async function checkedFetch(url, options = {}, timeout = 120000, transport = fet
         ),
         {
           retrySafeUpload: error?.retrySafeUpload === true,
+          uploadTimedOut:
+            error?.uploadTimedOut === true ||
+            code === 'ETIMEDOUT' ||
+            (code === 'timeout' && signal.aborted),
           uploadOutcomeUnknown:
             code === 'BOX_CURL_FAILED' || networkCodes.has(code) || code === 'timeout',
           retryableRead: readOnlyBox && (networkCodes.has(code) || code === 'timeout'),
@@ -408,7 +412,7 @@ export class BoxClient {
       return checkedFetch(
         url,
         { redirect: 'error', signal },
-        600000,
+        180000,
         async (address, options) => {
           idleController = new globalThis.AbortController();
           resetIdle();
@@ -470,7 +474,7 @@ export class BoxClient {
             await checkedFetch(
               url,
               { method: 'POST', body: form, redirect: 'error', signal },
-              Math.min(600000, Math.max(1, deadline - Date.now())),
+              Math.min(180000, Math.max(1, deadline - Date.now())),
               this.uploadTransport,
             )
           ).json();
@@ -482,8 +486,8 @@ export class BoxClient {
         } catch (error) {
           if (!error.uploadOutcomeUnknown || error.httpStatus === 401 || error.httpStatus === 403)
             throw error;
-          // Reconciliation is read-only and shares this upload's total budget.
-          // A completed body might still commit later: absence alone never authorizes replay.
+          // Reconcile before replay. replace=0 prevents overwriting a late commit;
+          // a conflicting file is never replaced.
           let confirmed;
           try {
             confirmed = await waitForWrittenFile(
@@ -507,11 +511,46 @@ export class BoxClient {
             console.log('Box 上传回执丢失，远端原字节已核验，跳过重传');
             return;
           }
-          if (!error.retrySafeUpload || replace || attempt === 2) throw error;
-          await retryWait(attempt, '上传未发送且目标缺失', deadline, undefined, signal);
+          if ((!error.retrySafeUpload && !error.uploadTimedOut) || replace || attempt === 2)
+            throw error;
+          await retryWait(attempt, '上传后目标缺失', deadline, undefined, signal);
         }
       }
     });
+  }
+  // A fresh temporary directory isolates each attempt. Never replay an uncertain chunk.
+  async uploadChunks(path, name, bytes, chunkSize = 4 * 1024 * 1024) {
+    const url = this.temporaryUrl(await this.api('upload-link', path));
+    url.searchParams.set('ret-json', '1');
+    for (let start = 0; start < bytes.length; start += chunkSize) {
+      const end = Math.min(start + chunkSize, bytes.length);
+      console.log(`Box 分块 ${start}-${end - 1}/${bytes.length}`);
+      const form = new FormData();
+      form.set('parent_dir', path);
+      form.set('replace', '0');
+      form.set('file', new Blob([bytes.subarray(start, end)]), name);
+      const response = await checkedFetch(
+        url,
+        {
+          method: 'POST',
+          body: form,
+          redirect: 'error',
+          headers: {
+            'Content-Range': `bytes ${start}-${end - 1}/${bytes.length}`,
+            'Content-Disposition': `attachment; filename="${name}"`,
+          },
+        },
+        180000,
+        this.uploadTransport,
+      );
+      const result = await response.json();
+      requireValue(
+        end === bytes.length
+          ? Array.isArray(result) && result.length === 1 && result[0].name === name
+          : result?.success === true,
+        '分块上传回执不一致；保留现场',
+      );
+    }
   }
   async move(from, to, name) {
     await this.api('sync-batch-move-item', undefined, 'POST', {
@@ -798,7 +837,7 @@ export async function verifyPublicDownloads({ bootstrap }) {
       // A redirect is expected from the shared file page; do not forward credentials.
       response = await fetch(url, {
         redirect: 'manual',
-        signal: AbortSignal.timeout(600000),
+        signal: AbortSignal.timeout(180000),
       });
       if ([301, 302, 303, 307, 308].includes(response.status)) {
         const location = response.headers.get('location');
@@ -916,6 +955,44 @@ export async function syncResourceFiles({
     await verifyRemote(box, `${folder}/${file.name}`, file);
   }
 }
+// A unique staging directory avoids mixing chunks from previous attempts. Only
+// a fully read-back match may enter Runtime; failed staging is left untouched.
+async function uploadRuntimeChunks(box, folder, file) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const staging = `/Archive/mizar-runtime-${randomUUID()}`;
+    await box.api('dir', staging, 'POST', { operation: 'mkdir' });
+    try {
+      await box.uploadChunks(staging, file.name, file.bytes);
+      await verifyRemote(box, `${staging}/${file.name}`, file);
+    } catch (error) {
+      if (!error.uploadOutcomeUnknown) {
+        error.retryableRead = false;
+        throw error;
+      }
+      let confirmed;
+      try {
+        confirmed = await waitForWrittenFile(box, staging, file.name, file);
+      } catch (readError) {
+        readError.retryableRead = false;
+        throw readError;
+      }
+      if (!confirmed) {
+        if (attempt === 2) throw error;
+        console.log(`Box 分块结果未落盘，使用新暂存目录重试 ${attempt + 1}/2`);
+        continue;
+      }
+    }
+    const target = (await box.list(folder)).filter((entry) => entry.name === file.name);
+    requireValue(
+      target.length <= 1 && target.every((entry) => entry.type === 'file'),
+      'Runtime 目标无效',
+    );
+    if (target.length) await verifyRemote(box, `${folder}/${file.name}`, file);
+    else await moveVerified(box, staging, folder, file);
+    if ((await box.list(staging)).length === 0) await box.api('dir', staging, 'DELETE');
+    return;
+  }
+}
 export async function syncRuntimeFiles({ box, version, files }) {
   requireValue(
     /^\d+\.\d+\.\d+$/.test(version) &&
@@ -951,7 +1028,8 @@ export async function syncRuntimeFiles({ box, version, files }) {
   for (const file of files.filter((f) => existing.some((e) => e.name === f.name)))
     await verifyRemote(box, folder + '/' + file.name, file);
   for (const file of files.filter((f) => !existing.some((e) => e.name === f.name))) {
-    await box.upload(folder, file.name, file.bytes);
+    if (file.name === MACHINE_METADATA_NAME) await box.upload(folder, file.name, file.bytes);
+    else await uploadRuntimeChunks(box, folder, file);
     await verifyRemote(box, folder + '/' + file.name, file);
   }
 }
@@ -1055,7 +1133,7 @@ export async function probe(box) {
   const expected = { size: bytes.length, sha256: digest(bytes) };
   await box.api('dir', folder, 'POST', { operation: 'mkdir' });
   try {
-    await box.upload(folder, name, bytes);
+    await box.uploadChunks(folder, name, bytes, Math.ceil(bytes.length / 2));
     await verifyRemote(box, `${folder}/${name}`, expected);
     const metadata = await box.api('file', `${folder}/${name}`);
     requireValue(metadata, '探测文件元数据读取失败');
@@ -1070,7 +1148,7 @@ export async function probe(box) {
     requireValue((await box.list(folder)).length === 0, '探测目录出现其他文件；保留目录供核对');
     await box.api('dir', folder, 'DELETE');
   }
-  return '接口探测通过：列目录、上传、元数据、下载校验、移动与删除；Stable 保持原样。';
+  return '接口探测通过：列目录、分块上传、元数据、下载校验、移动与删除；Stable 保持原样。';
 }
 
 async function github(path) {
@@ -1272,7 +1350,7 @@ async function main() {
     const run = await github(`actions/runs/${event.workflow_run.id}`);
     requireValue(
       run.conclusion === 'success' &&
-        run.event === 'workflow_dispatch' &&
+        ['workflow_dispatch', 'workflow_run'].includes(run.event) &&
         run.path === '.github/workflows/release-promotion.yml' &&
         run.repository.full_name === process.env.GITHUB_REPOSITORY,
       '触发来源不是成功的发布晋级',
