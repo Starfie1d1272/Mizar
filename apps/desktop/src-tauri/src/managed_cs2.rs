@@ -1582,6 +1582,10 @@ impl ManagedCs2 {
         false
     }
     pub fn finish(&mut self) -> Result<(), String> {
+        self.finish_with_service_stopped(false)
+    }
+    /// Only the verified service-stop path can skip the lease expiry wait.
+    pub fn finish_with_service_stopped(&mut self, service_stopped: bool) -> Result<(), String> {
         let trial_state = if crate::demo_test::requires_recovery(&self.log, None) {
             crate::demo_test::status(&self.log)?
         } else { Value::Null };
@@ -1606,8 +1610,13 @@ impl ManagedCs2 {
             return Ok(());
         }
         if let Some((lease, _)) = self.managed_camera_lease() {
+            // The caller holds the CS2 mutex, so the heartbeat cannot renew while
+            // the revoke is attempted or while an unknown outcome expires.
             self.invalidate_managed_camera();
-            crate::production_exit::camera_session(&self.log, "invalidate", Some(&lease), None)?;
+            let outcome = retire_camera_before_cleanup(service_stopped,
+                || crate::production_exit::camera_session(&self.log, "invalidate", Some(&lease), None).map(|_| ()),
+                || thread::sleep(Duration::from_millis(12100)));
+            self.log.event("managed_camera_retire", outcome, None);
             self.clear_managed_camera();
         }
         let journal = self.store.load()?;
@@ -1660,12 +1669,36 @@ impl ManagedCs2 {
     }
 }
 
+/// A failed request does not prove revocation. With renewals fenced by the
+/// caller's mutex, wait for two lease periods: at most one timed-out pulse can
+/// still arrive before the current lease expires and extend it once. A verified
+/// stopped service has no live lease.
+fn retire_camera_before_cleanup(service_stopped: bool, revoke: impl FnOnce() -> Result<(), String>,
+    wait_for_expiry: impl FnOnce()) -> &'static str {
+    if service_stopped { return "service-stopped"; }
+    if revoke().is_ok() { return "revoked"; }
+    wait_for_expiry();
+    "expired-after-unknown"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     // These tests create or inspect machine-wide CS2 / Steam processes. Hold the same
     // gate so the external-game fixture cannot contaminate recovery evidence.
     static GAME_PROCESSES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    #[test]
+    fn camera_retirement_waits_only_when_revocation_is_unknown() {
+        let calls = std::cell::RefCell::new(Vec::new());
+        let outcome = retire_camera_before_cleanup(false,
+            || { calls.borrow_mut().push("revoke"); Err("service unavailable".into()) },
+            || calls.borrow_mut().push("lease-expired"));
+        calls.borrow_mut().push("game-cleanup");
+        assert_eq!(outcome, "expired-after-unknown");
+        assert_eq!(*calls.borrow(), ["revoke", "lease-expired", "game-cleanup"]);
+        assert_eq!(retire_camera_before_cleanup(false, || Ok(()), || panic!("unneeded wait")), "revoked");
+        assert_eq!(retire_camera_before_cleanup(true, || panic!("service stopped"), || panic!("unneeded wait")), "service-stopped");
+    }
     #[test]
     fn standard_start_uses_single_observer_cfg_and_preserves_keys() {
         let _processes = GAME_PROCESSES.lock().unwrap();

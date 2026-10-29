@@ -2759,7 +2759,7 @@ fn run_desktop(
                                 || if cleanup_host.state::<production_exit::VerifiedStop>().complete() {
                                     observer_hud::restore(&cleanup_host.state::<DesktopLog>())
                                 } else { observer_workspace::finish(&cleanup_host.state::<DesktopLog>()) },
-                                || cs2.finish(),
+                                || cs2.finish_with_service_stopped(cleanup_host.state::<production_exit::VerifiedStop>().complete()),
                             )
                         },
                     )
