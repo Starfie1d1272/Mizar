@@ -84,7 +84,9 @@ export interface CameraSourceRef {
   sourceName: string;
   treeSha256: string;
   converterVersion: 1;
-  release: MulnxReleaseRef;
+  acquisition:
+    | { kind: 'upstream'; release: MulnxReleaseRef }
+    | { kind: 'developer-fork'; repository: string; revision: string; archiveSha256: string };
 }
 export type CameraMapConfig = Omit<CameraMap, 'pack' | 'openingSound'> & {
   source: CameraSourceRef;
@@ -255,6 +257,21 @@ export interface PresetResolver {
   ): Promise<Pick<ActiveBroadcastSnapshot, 'resolved' | 'lock'>>;
 }
 
+function effectiveModuleJson(
+  kind: ModuleKind,
+  value: ActiveBroadcastSnapshot['resolved'][ModuleKind],
+): string {
+  if (kind !== 'camera' || value === null) return canonicalJson(value);
+  const camera = value as CameraModuleV2;
+  return canonicalJson({
+    ...camera,
+    maps: camera.maps.map(({ source, ...map }) => ({
+      ...map,
+      source: { treeSha256: source.treeSha256, converterVersion: source.converterVersion },
+    })),
+  });
+}
+
 /** Prepare a candidate without mutating the document or any external device. */
 export async function preparePreset(
   document: BroadcastConfigDocument,
@@ -271,7 +288,10 @@ export async function preparePreset(
   const prepared = await resolver.resolve(modules);
   const moduleRevisions = { ...document.active.moduleRevisions };
   for (const kind of MODULE_KINDS) {
-    if (canonicalJson(prepared.resolved[kind]) !== canonicalJson(document.active.resolved[kind]))
+    if (
+      effectiveModuleJson(kind, prepared.resolved[kind]) !==
+      effectiveModuleJson(kind, document.active.resolved[kind])
+    )
       moduleRevisions[kind] = newRevision();
   }
   return {

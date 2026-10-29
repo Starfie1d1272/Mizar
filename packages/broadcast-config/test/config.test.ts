@@ -144,4 +144,52 @@ describe('broadcast preset', () => {
     });
     expect(document.active.revision).toBe('a1');
   });
+  it('does not revise camera when only the acquisition release changes', async () => {
+    const document = fixture();
+    const source = {
+      sourceName: 'default',
+      treeSha256: 'a'.repeat(64),
+      converterVersion: 1,
+      acquisition: {
+        kind: 'upstream',
+        release: {
+          repository: 'Co1Swet/MulNX_CS2',
+          releaseId: 1,
+          assetId: 1,
+          tag: 'v1',
+          archiveSha256: 'b'.repeat(64),
+        },
+      },
+    };
+    const camera = {
+      format: 'mizar.camera-config',
+      version: 2,
+      name: 'Camera',
+      automaticEnabled: true,
+      maps: [{ map: 'de_example', source }],
+    } as unknown as NonNullable<typeof document.active.resolved.camera>;
+    document.active.resolved.camera = camera;
+    const changed = structuredClone(camera);
+    const acquisition = changed.maps[0]!.source.acquisition;
+    if (acquisition.kind !== 'upstream') throw new Error('unexpected source');
+    acquisition.release.releaseId = 2;
+    const next = await preparePreset(
+      document,
+      {
+        presetId: 'preset',
+        expectedRevision: 'r1',
+        expectedModuleRevisions: expected,
+        expectedActiveRevision: 'a1',
+        requestId: 'request',
+      },
+      {
+        resolve: async () => ({
+          resolved: { ...document.active.resolved, camera: changed },
+          lock: { resources: [], tools: [] },
+        }),
+      },
+      () => 'new',
+    );
+    expect(next.moduleRevisions.camera).toBe('ac');
+  });
 });

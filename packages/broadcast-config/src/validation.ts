@@ -69,7 +69,15 @@ const cameraSource = z.strictObject({
   sourceName: z.string().trim().min(1).max(120),
   treeSha256: sha,
   converterVersion: z.literal(1),
-  release,
+  acquisition: z.discriminatedUnion('kind', [
+    z.strictObject({ kind: z.literal('upstream'), release }),
+    z.strictObject({
+      kind: z.literal('developer-fork'),
+      repository: z.string().min(1).max(256),
+      revision: z.string().min(1).max(200),
+      archiveSha256: sha,
+    }),
+  ]),
 });
 const cameraMap = cameraMapSchema
   .omit({ pack: true, openingSound: true })
