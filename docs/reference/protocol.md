@@ -312,4 +312,4 @@ RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对�
 
 `POST /operator/hud-config/export-lhm` 接收 `{ "expectedActiveRevision": "…" }`，只允许回环操作来源。服务端捕获当前 HUD 已启用的解析配置，并在导出完成前复核修订；修订不符返回 409。成功返回 `application/zip` 文件，不更改当前配置或播放状态；缺少预构建运行时或素材时返回 503。
 
-ZIP 根目录包含 `hud.json`、`panel.json`、`keybinds.json`、`mizar-config.json`、预编译浏览器代码与内置素材。`mizar-export-report.json` 列明包含、不支持和需要绑定的项目。该阶段通过 LHM Socket.IO 或 LHM 窗口 IPC 接收 CS2 GSI，复用 Mizar 遥测、运行时和共享 HUD 展示；Mizar 不必运行。未连接比赛身份时显示中立 CT/T，比赛系列、队伍身份和标志、头像、炸弹伤害预测、音乐、运镜及节目场景不在此导出范围。实际 LHM/JT、Windows 和 OBS 验收仍需执行。
+ZIP 根目录包含 `hud.json`、`panel.json`、`keybinds.json`、`mizar-config.json`、预编译浏览器代码与内置素材。`mizar-export-report.json` 列明包含、不支持和需要绑定的项目。该阶段通过 LHM Socket.IO 或 LHM 窗口 IPC 接收 CS2 GSI，复用 Mizar 遥测、运行时和共享 HUD 展示；Mizar 不必运行。BO1、BO3、BO5 比赛系列、队伍身份、标志和选手头像在目标宿主提供时从其只读接口读取，BO2 尚不支持；未绑定或无法确认换边时显示中立 CT/T；目标宿主的比赛数据和媒体不写入 ZIP。炸弹伤害预测、音乐、运镜及节目场景不在此导出范围。实际 LHM/JT、Windows 和 OBS 验收仍需执行。

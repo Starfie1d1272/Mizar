@@ -59,19 +59,25 @@ export async function exportLhmHud(webRoot: string, value: unknown): Promise<Buf
   add(
     'mizar-export-report.json',
     json({
-      included: ['hud-layout', 'theme', 'built-in-media', 'gsi-gameplay'],
+      included: [
+        'hud-layout',
+        'theme',
+        'built-in-media',
+        'gsi-gameplay',
+        'match-series',
+        'team-identity',
+        'team-logos',
+        'player-avatars',
+      ],
       unsupported: [
         'program-scenes',
         'music',
         'camera-control',
         'bomb-damage-prediction',
-        'match-series',
-        'team-identity',
-        'team-logos',
-        'player-avatars',
+        'bo2-match-series',
         'hud-actions',
       ],
-      needsBinding: ['lhm-or-jt-host'],
+      needsBinding: ['lhm-or-jt-host', 'host-match-and-media'],
     }),
   );
   return Buffer.from(zipSync(files, { level: 6, mtime: new Date('1980-01-01T00:00:00Z') }));
