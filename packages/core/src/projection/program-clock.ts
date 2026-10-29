@@ -16,12 +16,14 @@ export class ProgramClockTracker {
   private progressing = false;
   private state: ClockState = 'syncing';
   private broken = false;
+  private brokenContinuity: string | null = null;
 
   reset() {
     this.last = null;
     this.progressing = false;
     this.state = 'syncing';
     this.broken = false;
+    this.brokenContinuity = null;
   }
 
   observe(sample: ProgramClockSample) {
@@ -33,9 +35,11 @@ export class ProgramClockTracker {
       !Number.isFinite(sample.receivedMonotonicMs)
     ) {
       this.broken = true;
+      this.brokenContinuity = sample.continuity;
       this.state = 'syncing';
       return;
     }
+    if (this.broken && this.brokenContinuity !== sample.continuity) this.reset();
     let last = this.last;
     if (last && last.continuity !== sample.continuity) {
       this.reset();
@@ -48,6 +52,7 @@ export class ProgramClockTracker {
         sample.tick < last.tick)
     ) {
       this.broken = true;
+      this.brokenContinuity = sample.continuity;
     }
     if (this.broken) {
       this.state = 'syncing';
