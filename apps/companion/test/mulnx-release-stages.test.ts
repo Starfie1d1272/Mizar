@@ -206,8 +206,9 @@ it('prepares without selecting and publishes a configured instance only after se
     metadata: { packageId: randomUUID(), version: '1.0.0', name: 'Camera', author: '' },
   });
   const imported = await importPresetPack({ zip, store: shareStore, resources: shareResources });
+  const importedModuleIds = new Set(Object.values(imported.mapping.moduleEntries).flat());
   const camera = shareStore.snapshot.modules.find(
-    (item) => item.id === imported.mapping.moduleEntries.camera![0],
+    (item) => item.kind === 'camera' && importedModuleIds.has(item.id),
   );
   if (!camera || camera.kind !== 'camera') throw new Error('missing imported camera');
   expect(camera.value.maps[0]!.source).toEqual(source);
@@ -298,12 +299,19 @@ it('prepares without selecting and publishes a configured instance only after se
       return committed.json<{ cameraReady: boolean }>().cameraReady;
     };
     expect(await switchRelease('different source')).toBe(false);
+    expect((await app.inject('/local/v1/orchestration')).json<unknown>()).toMatchObject({
+      preset: { name: '已关闭', maps: [] },
+      automaticEnabled: false,
+    });
     expect((await app.inject('/local/v1/broadcast-presets')).json<unknown>()).toMatchObject({
       active: {
         resolved: { camera: { maps: [{ source: { treeSha256: source.treeSha256 } }] } },
       },
     });
     expect(await switchRelease('source')).toBe(true);
+    expect((await app.inject('/local/v1/orchestration')).json<unknown>()).toMatchObject({
+      preset: { maps: [{ map: 'de_dust2', pack: current.packs[0]!.name }] },
+    });
   } finally {
     await app.close();
     await writeFile(join(data, 'current.json'), originalReceipt);

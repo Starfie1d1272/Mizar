@@ -1444,8 +1444,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         withSelection: production.withResourceActivation,
         reconcileSelection: async () => {
           if (!cameraStore.hasPersistence) return true;
-          await cameraStore.synchronizeFromPersistence();
-          return true;
+          return (await broadcastRuntime?.reconcileCameraSelection()) ?? false;
         },
       },
       mulnxTool,
