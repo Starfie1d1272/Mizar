@@ -200,4 +200,4 @@ export function verifyFiles(
   }
 }
 
-export { readPackArchive } from './archive.js';
+export { readPackArchive, writePackArchive } from './archive.js';
