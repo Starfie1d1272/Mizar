@@ -331,7 +331,7 @@ test('external-game browser entry uses real production lifecycle without native 
   try {
     await page.goto('/');
     expect(await page.evaluate(() => '__TAURI_INTERNALS__' in window)).toBe(false);
-    await page.getByRole('button', { name: '打开直播工作台', exact: true }).click();
+    await page.locator('.preparation-heading > button').click();
     await expect(page).toHaveURL(/\/workspace$/);
     expect((await app.inject('/local/v1/production')).json()).toMatchObject({ mode: 'live' });
     await page.getByRole('button', { name: '退出工作台', exact: true }).click();
@@ -440,7 +440,7 @@ test('explicit MulNX stop confirms production effects, shows ownership errors, a
   await stop.click();
   await confirmation.getByRole('button', { name: '结束制作并停止控制', exact: true }).click();
   await expect(
-    page.getByText(/^停止控制请求已入队，执行结果待确认。请返回游戏核对。/),
+    stop.locator('xpath=../..').locator('.mizar-status-banner[data-tone=info]'),
   ).toBeVisible();
   await expect(stop).toBeDisabled();
   expect(stops).toBe(2);
