@@ -1230,3 +1230,55 @@ it('keeps the longest concurrent GitHub secondary limit', async () => {
     vi.useRealTimers();
   }
 });
+it('receives HSI input without a pending command and separates reconnects', async () => {
+  const app = Fastify();
+  await app.register(websocket);
+  app.get('/', { websocket: true }, (socket) => {
+    socket.send(
+      JSON.stringify({
+        eventType: 'game_clock',
+        sampledAtUnixMs: 100,
+        timeDomain: 'network_game_client_tick',
+        valid: true,
+        tick: 123,
+      }),
+    );
+    const event = JSON.stringify({
+      eventType: 'player_hurt',
+      sequence: 1,
+      capturedAtUnixMs: 100,
+      attackerSteamId: '0',
+      victimSteamId: '76561198000000001',
+      weapon: 'awp',
+      dmgHealth: 40,
+      health: 60,
+      hitgroup: 1,
+    });
+    socket.send(event);
+    socket.send(event);
+  });
+  await app.listen({ host: '127.0.0.1', port: 0 });
+  const port = (app.server.address() as { port: number }).port;
+  const provider = new MulnxProvider();
+  cleanup.push(() => app.close());
+  cleanup.push(async () => provider.close());
+  const messages: import('../src/orchestration/provider.js').MulnxInput[] = [];
+  provider.subscribeInput((message) => messages.push(message));
+  await provider.connect(port);
+  await vi.waitFor(() =>
+    expect(messages.filter((message) => message.kind === 'event')).toHaveLength(1),
+  );
+  expect(messages.find((message) => message.kind === 'clock')).toMatchObject({
+    generation: provider.generation,
+    sample: { tick: 123, valid: true },
+  });
+  const firstGeneration = provider.generation;
+  await provider.connect(port);
+  await vi.waitFor(() =>
+    expect(messages.filter((message) => message.kind === 'event')).toHaveLength(2),
+  );
+  expect(
+    messages.filter((message) => message.kind === 'event').map((message) => message.generation),
+  ).toEqual([firstGeneration, provider.generation]);
+  expect(messages.some((message) => message.kind === 'disconnected')).toBe(true);
+});

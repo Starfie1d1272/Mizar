@@ -60,3 +60,34 @@ it('rejects duplicates and old sequences within a socket', () => {
   expect(sequence.accept({ ...hurt, sequence: 2 })).toBeNull();
   expect(new MulnxEventSequence().accept(hurt)).not.toBeNull();
 });
+
+it('parses clock samples without fabricating a tick or map', async () => {
+  const { parseMulnxClock } = await import('../src/orchestration/mulnx-events.js');
+  expect(
+    parseMulnxClock(
+      {
+        eventType: 'game_clock',
+        sampledAtUnixMs: 100,
+        timeDomain: 'network_game_client_tick',
+        valid: false,
+      },
+      50,
+    ),
+  ).toEqual({
+    sampledAtUnixMs: 100,
+    receivedMonotonicMs: 50,
+    timeDomain: 'network_game_client_tick',
+    valid: false,
+  });
+  expect(
+    parseMulnxClock(
+      {
+        eventType: 'game_clock',
+        sampledAtUnixMs: 100,
+        timeDomain: 'network_game_client_tick',
+        valid: true,
+      },
+      50,
+    ),
+  ).toBeNull();
+});

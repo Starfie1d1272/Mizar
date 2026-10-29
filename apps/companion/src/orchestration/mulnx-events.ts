@@ -37,6 +37,61 @@ const message = z.discriminatedUnion('eventType', [
   }),
 ]);
 
+const clockMessage = z
+  .object({
+    eventType: z.literal('game_clock'),
+    sampledAtUnixMs: integer.nonnegative(),
+    timeDomain: z.literal('network_game_client_tick'),
+    valid: z.boolean(),
+    tick: integer.optional(),
+    demoTime: z
+      .object({
+        timeDomain: z.literal('demo_playback_tick'),
+        tick: integer,
+        paused: z.boolean().optional(),
+      })
+      .optional(),
+  })
+  .refine((value) => !value.valid || value.tick !== undefined);
+
+export interface MulnxClockSample {
+  readonly sampledAtUnixMs: number;
+  readonly receivedMonotonicMs: number;
+  readonly timeDomain: 'network_game_client_tick';
+  readonly valid: boolean;
+  readonly tick?: number;
+  readonly demoTime?: {
+    readonly timeDomain: 'demo_playback_tick';
+    readonly tick: number;
+    readonly paused?: boolean;
+  };
+}
+
+export function parseMulnxClock(
+  input: unknown,
+  receivedMonotonicMs: number,
+): MulnxClockSample | null {
+  const result = clockMessage.safeParse(input);
+  if (!result.success || !Number.isFinite(receivedMonotonicMs)) return null;
+  const sample = result.data;
+  return {
+    sampledAtUnixMs: sample.sampledAtUnixMs,
+    receivedMonotonicMs,
+    timeDomain: sample.timeDomain,
+    valid: sample.valid,
+    ...(sample.tick === undefined ? {} : { tick: sample.tick }),
+    ...(sample.demoTime === undefined
+      ? {}
+      : {
+          demoTime: {
+            timeDomain: sample.demoTime.timeDomain,
+            tick: sample.demoTime.tick,
+            ...(sample.demoTime.paused === undefined ? {} : { paused: sample.demoTime.paused }),
+          },
+        }),
+  };
+}
+
 type EventFacts = Omit<PlayerDeathGameEvent, 'cursor'> | Omit<PlayerHurtGameEvent, 'cursor'>;
 export interface MulnxEventCandidate {
   readonly sequence: number;
