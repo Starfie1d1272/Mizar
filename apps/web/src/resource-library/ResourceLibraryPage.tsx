@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { HudPackages } from './HudPackages';
 import { MusicPackages } from './MusicPackages';
 import { OperatorShell } from '../operator/OperatorShell';
 import { MulnxToolControls } from '../orchestration/MulnxToolControls';
@@ -35,7 +36,7 @@ const phases: Record<ResourceStatus['phase'], string> = {
 export function ResourceLibraryPage() {
   const view = useLocalRead<LibraryView>('/local/v1/resource-library', 2000);
   const [query, setQuery] = useState('');
-  const [category, setCategory] = useState<'all' | 'media' | 'tool' | 'music'>('all');
+  const [category, setCategory] = useState<'all' | 'media' | 'tool' | 'music' | 'visual'>('all');
   const [preparedSession, setPreparedSession] = useState<{
     preparedId: string;
     tag: string;
@@ -46,6 +47,7 @@ export function ResourceLibraryPage() {
     matches(resource.packId === 'official:epl-default' ? 'EPL 官方示例 素材' : resource.packId),
   );
   const showMedia = category === 'all' || category === 'media';
+  const showHud = (category === 'all' || category === 'visual') && matches('HUD 预设 视觉');
   const showMusic = category === 'all' || category === 'music';
   const showTool = (category === 'all' || category === 'tool') && matches('MulNX 运镜 工具');
   return (
@@ -71,6 +73,7 @@ export function ResourceLibraryPage() {
                 ['all', '全部'],
                 ['media', '素材'],
                 ['music', '音乐'],
+                ['visual', '视觉'],
                 ['tool', '工具'],
               ] as const
             ).map(([value, label]) => (
@@ -86,6 +89,7 @@ export function ResourceLibraryPage() {
           </div>
         </div>
         {showMusic ? <MusicPackages query={query} /> : null}
+        {showHud ? <HudPackages /> : null}
         {!view ? (
           <StatusBanner tone="warning">
             正在连接资源状态；如果持续无法连接，请检查本地制播服务。
@@ -183,7 +187,8 @@ export function ResourceLibraryPage() {
         {view &&
         !(showMedia && (resources?.length || view.resources === null)) &&
         !showTool &&
-        !showMusic ? (
+        !showMusic &&
+        !showHud ? (
           <p>没有找到匹配的资源。</p>
         ) : null}
       </main>
