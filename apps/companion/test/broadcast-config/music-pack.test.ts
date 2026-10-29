@@ -567,6 +567,12 @@ it('round trips real music owner configuration to independent drafts without act
       expect(Buffer.from(await response.arrayBuffer())).toEqual(image);
       query.set('digest', '0'.repeat(64));
       expect((await fetch(`${address}/local/v1/broadcast-assets?${query}`)).status).toBe(422);
+      query.set('digest', importedImage.resource.digest);
+      const filename = `${createHash('sha256')
+        .update(JSON.stringify([importedImage.resource.id, importedImage.resource.version]))
+        .digest('hex')}.mizarpack`;
+      await writeFile(join(freshPath, filename), Buffer.from('damaged zip'));
+      expect((await fetch(`${address}/local/v1/broadcast-assets?${query}`)).status).toBe(422);
     } finally {
       await assetApp.close();
     }

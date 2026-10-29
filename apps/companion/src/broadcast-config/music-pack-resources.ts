@@ -130,7 +130,13 @@ export class MusicPackResources {
   private async readArchive(ref: ResourceRef) {
     if (!/^local:mizar-pack:[0-9a-f-]{36}$/i.test(ref.id) || !/^[a-f0-9]{64}$/.test(ref.digest))
       throw new Error('resource_missing');
-    const archive = await this.readStored(this.filename(ref.id, ref.version));
+    let archive: Awaited<ReturnType<MusicPackResources['readStored']>>;
+    try {
+      archive = await this.readStored(this.filename(ref.id, ref.version));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('resource_missing');
+      throw new Error('resource_damaged', { cause: error });
+    }
     if (
       `local:mizar-pack:${archive.manifest.packageId}` !== ref.id ||
       archive.manifest.version !== ref.version ||
