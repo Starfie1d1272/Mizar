@@ -62,14 +62,14 @@ it('uses the inspected scheme and module revisions only on an explicit action', 
       '/operator/resource-library/import-preset-pack',
       expect.objectContaining({ method: 'POST', body: file }),
     );
-    const select = element.querySelector('select')!;
+    const select = [...element.querySelectorAll('select')][2]!;
     await act(async () => {
       select.value = 'm';
       select.dispatchEvent(new Event('change', { bubbles: true }));
       await Promise.resolve();
     });
     const save = [...element.querySelectorAll('button')].find(
-      (item) => item.textContent === '保存音乐选择',
+      (item) => item.textContent === '保存方案',
     )!;
     await act(async () => {
       save.click();

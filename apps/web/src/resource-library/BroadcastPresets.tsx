@@ -25,7 +25,7 @@ const labels: Record<Kind, string> = {
   camera: '运镜',
 };
 
-function MusicBindingEditor({
+function BindingEditor({
   preset,
   modules,
   busy,
@@ -34,30 +34,54 @@ function MusicBindingEditor({
   preset: Preset;
   modules: Module[];
   busy: boolean;
-  save: (preset: Preset, moduleId: string) => void;
+  save: (preset: Preset, bindings: Binding[]) => void;
 }) {
-  const binding = preset.bindings.find((item) => item.kind === 'music');
-  const initial = binding?.mode === 'use' ? binding.moduleId : '';
+  const initial = Object.fromEntries(
+    preset.bindings.map((binding) => [
+      binding.kind,
+      binding.mode === 'use' ? binding.moduleId : '',
+    ]),
+  ) as Record<Kind, string>;
   const [selection, setSelection] = useState(initial);
+  const kinds: Kind[] = ['hud', 'program', 'music', 'camera'];
+  const changed = kinds.some((kind) => selection[kind] !== initial[kind]);
   return (
     <div className="resource-library__preset-music">
-      <Select
-        label="音乐配置"
-        value={selection}
-        disabled={busy}
-        onChange={(event) => setSelection(event.currentTarget.value)}
+      {kinds.map((kind) => (
+        <Select
+          key={kind}
+          label={labels[kind]}
+          value={selection[kind] ?? ''}
+          disabled={busy}
+          onChange={(event) => {
+            const selected = event.currentTarget.value;
+            setSelection((value) => ({ ...value, [kind]: selected }));
+          }}
+        >
+          {kind === 'music' || kind === 'camera' ? <option value="">关闭</option> : null}
+          {modules
+            .filter((module) => module.kind === kind)
+            .map((module) => (
+              <option key={module.id} value={module.id}>
+                {module.name}
+              </option>
+            ))}
+        </Select>
+      ))}
+      <Button
+        disabled={busy || !changed || !selection.hud || !selection.program}
+        onClick={() =>
+          save(
+            preset,
+            kinds.map((kind): Binding =>
+              selection[kind]
+                ? { kind, mode: 'use', moduleId: selection[kind] }
+                : { kind, mode: 'off' },
+            ),
+          )
+        }
       >
-        <option value="">关闭音乐</option>
-        {modules
-          .filter((module) => module.kind === 'music')
-          .map((module) => (
-            <option key={module.id} value={module.id}>
-              {module.name}
-            </option>
-          ))}
-      </Select>
-      <Button disabled={busy || selection === initial} onClick={() => save(preset, selection)}>
-        保存音乐选择
+        保存方案
       </Button>
     </div>
   );
@@ -74,15 +98,8 @@ export function BroadcastPresets({ query }: { query: string }) {
   const [notice, setNotice] = useState<{ tone: 'success' | 'danger'; message: string } | null>(
     null,
   );
-  async function saveMusic(preset: Preset, moduleId: string) {
+  async function saveBindings(preset: Preset, bindings: Binding[]) {
     if (!view || busy) return;
-    const bindings = preset.bindings.map((binding) =>
-      binding.kind !== 'music'
-        ? binding
-        : moduleId
-          ? { kind: 'music', mode: 'use', moduleId }
-          : { kind: 'music', mode: 'off' },
-    );
     setBusy(true);
     setNotice(null);
     try {
@@ -97,16 +114,14 @@ export function BroadcastPresets({ query }: { query: string }) {
       });
       if (!response.ok)
         throw new Error(
-          response.status === 409
-            ? '方案已变化，请刷新后重试。'
-            : '音乐选择未保存，请检查方案后重试。',
+          response.status === 409 ? '方案已变化，请刷新后重试。' : '方案未保存，请检查配置后重试。',
         );
-      setNotice({ tone: 'success', message: '音乐选择已保存，使用方案后生效。' });
+      setNotice({ tone: 'success', message: '方案已保存，使用方案后生效。' });
       setRefresh((value) => value + 1);
     } catch (error) {
       setNotice({
         tone: 'danger',
-        message: error instanceof Error ? error.message : '音乐选择未保存，请重试。',
+        message: error instanceof Error ? error.message : '方案未保存，请重试。',
       });
     } finally {
       setBusy(false);
@@ -250,6 +265,38 @@ export function BroadcastPresets({ query }: { query: string }) {
       setNotice({
         tone: 'danger',
         message: error instanceof Error ? error.message : '分享失败，请重试。',
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function clonePreset(preset: Preset) {
+    if (!view || busy) return;
+    const revisions = moduleRevisions(preset);
+    if (!revisions) return;
+    setBusy(true);
+    setNotice(null);
+    try {
+      const response = await fetch('/operator/broadcast-presets/clone', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sourceId: preset.id,
+          expectedRevision: preset.revision,
+          expectedModuleRevisions: revisions,
+          name: `${preset.name.slice(0, 117)} 副本`,
+        }),
+      });
+      if (!response.ok)
+        throw new Error(
+          response.status === 409 ? '配置已变化，请刷新后重试。' : '复制失败，请重试。',
+        );
+      setNotice({ tone: 'success', message: `已复制「${preset.name}」，可编辑后使用。` });
+      setRefresh((value) => value + 1);
+    } catch (error) {
+      setNotice({
+        tone: 'danger',
+        message: error instanceof Error ? error.message : '复制失败，请重试。',
       });
     } finally {
       setBusy(false);
@@ -418,16 +465,19 @@ export function BroadcastPresets({ query }: { query: string }) {
                 <PresetVisualPreview bindings={preset.bindings} modules={view.modules} />
               ) : null}
               {view ? (
-                <MusicBindingEditor
+                <BindingEditor
                   key={`${preset.id}:${preset.revision}`}
                   preset={preset}
                   modules={view.modules}
                   busy={busy}
-                  save={(item, moduleId) => void saveMusic(item, moduleId)}
+                  save={(item, bindings) => void saveBindings(item, bindings)}
                 />
               ) : null}
             </details>
             <div className="resource-library__preset-actions">
+              <Button disabled={busy} onClick={() => void clonePreset(preset)}>
+                复制
+              </Button>
               <Button disabled={busy} onClick={() => void exportFile(preset)}>
                 分享
               </Button>
