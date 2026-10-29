@@ -141,6 +141,9 @@ export class BroadcastConfigStore {
       }
     });
   }
+  hasReceipt(requestId: string): boolean {
+    return Object.hasOwn(this.envelope?.receipts ?? {}, requestId);
+  }
   get snapshot(): BroadcastConfigDocument {
     if (!this.envelope) throw new Error('broadcast_config_unavailable');
     return structuredClone(this.envelope.document);

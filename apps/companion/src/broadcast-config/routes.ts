@@ -61,6 +61,7 @@ export function registerBroadcastConfigRoutes(
     if (['revision_conflict', 'request_conflict', 'production_busy'].includes(code))
       return { status: 409, code };
     if (['preset_missing', 'module_missing'].includes(code)) return { status: 404, code };
+    if (code === 'broadcast_owner_sync_failed') return { status: 503, code };
     if (
       [
         'incomplete_preset',
@@ -86,14 +87,19 @@ export function registerBroadcastConfigRoutes(
               requestId: request.id,
             },
           });
-        if (!isReady())
-          return reply.code(503).send({
-            error: {
-              code: 'broadcast_config_unavailable',
-              message: '播出配置尚未就绪。',
-              requestId: request.id,
-            },
-          });
+        if (!isReady()) {
+          const parsed = action === 'apply' ? apply.safeParse(request.body) : null;
+          if (!parsed?.success || !store.hasReceipt(parsed.data.requestId))
+            return reply
+              .code(503)
+              .send({
+                error: {
+                  code: 'broadcast_config_unavailable',
+                  message: '播出配置尚未就绪。',
+                  requestId: request.id,
+                },
+              });
+        }
         try {
           if (action === 'clone') return await store.clone(clone.parse(request.body));
           if (action === 'preview') return await store.preview(apply.parse(request.body));

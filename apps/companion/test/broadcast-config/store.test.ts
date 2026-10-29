@@ -630,4 +630,53 @@ describe('BroadcastConfigStore', () => {
     ).toEqual({ kind: 'camera', mode: 'use', moduleId: missingId });
     expect(store.snapshot.active.sourceModuleIds?.camera).toBe(activeId);
   });
+  it('reports a committed synchronization failure and accepts the same request for recovery', async () => {
+    const { options, initial } = await setup();
+    let ready = true,
+      attempts = 0;
+    const store = new BroadcastConfigStore({
+      ...options,
+      onApplied: () => {
+        ready = false;
+        if (++attempts === 1) throw new Error('broadcast_owner_sync_failed');
+        ready = true;
+      },
+    });
+    await store.load();
+    const app = Fastify();
+    registerBroadcastConfigRoutes(
+      app,
+      store,
+      createLocalWebOriginPolicy(),
+      () => ready && !store.isApplying,
+    );
+    const payload = {
+      presetId: initial.presets[0]!.id,
+      expectedRevision: 'p1',
+      expectedModuleRevisions: { hud: 'h1', program: 'p1' },
+      expectedActiveRevision: 'active',
+      requestId: randomUUID(),
+    };
+    try {
+      const first = await app.inject({
+        method: 'POST',
+        url: '/operator/broadcast-presets/apply',
+        headers: { origin: 'http://127.0.0.1:3000' },
+        payload,
+      });
+      expect(first.statusCode).toBe(503);
+      expect(first.json()).toMatchObject({ error: { code: 'broadcast_owner_sync_failed' } });
+      const retry = await app.inject({
+        method: 'POST',
+        url: '/operator/broadcast-presets/apply',
+        headers: { origin: 'http://127.0.0.1:3000' },
+        payload,
+      });
+      expect(retry.statusCode).toBe(200);
+      expect(ready).toBe(true);
+      expect(attempts).toBe(2);
+    } finally {
+      await app.close();
+    }
+  });
 });
