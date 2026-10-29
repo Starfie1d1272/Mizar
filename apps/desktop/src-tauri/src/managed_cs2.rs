@@ -655,6 +655,12 @@ impl ManagedCs2 {
     pub(crate) fn remember_mulnx_launcher(&mut self, launcher: Arc<crate::mulnx_launch::HiddenLauncher>) {
         self.mulnx_launcher = Some(launcher);
     }
+    pub(crate) fn owns_mulnx_launcher(&self, pid: u32) -> Result<bool, String> {
+        match &self.mulnx_launcher {
+            Some(launcher) if launcher.pid() == pid => launcher.running().map_err(|e| e.to_string()),
+            _ => Ok(false),
+        }
+    }
     fn recovery_identity(&self) -> Result<(PathBuf, PathBuf, u32), String> {
         #[cfg(test)]
         if let Some(identity) = &self.recovery_identity_fixture { return Ok(identity.clone()); }

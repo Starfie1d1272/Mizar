@@ -58,7 +58,8 @@ impl HiddenLauncher {
         unsafe { CloseHandle(info.thread); }
         Ok(Self { process: info.process, pid: info.pid })
     }
-    fn running(&self) -> std::io::Result<bool> {
+    pub(crate) fn pid(&self) -> u32 { self.pid }
+    pub(crate) fn running(&self) -> std::io::Result<bool> {
         match unsafe { WaitForSingleObject(self.process, 0) } {
             0 => Ok(false), 258 => Ok(true), _ => Err(std::io::Error::last_os_error()),
         }
@@ -123,6 +124,9 @@ fn launch_operation(app: &tauri::AppHandle, log: &DesktopLog, automatic: bool, u
         Ok(())
     };
     if !automatic { no_game()?; }
+    if automatic {
+        if let Some(receipt) = resume_pending_launch(log, &managed)? { return Ok(receipt); }
+    }
     let status = managed.try_lock().map_err(|_| "CS2 正忙，请稍后重试。")?.status()?;
     if preserve && status["canPreserve"] != true {
         return Err("请先检查配置接管结果，再选择保持原游戏设置继续。".into());
@@ -266,6 +270,41 @@ fn launch_operation(app: &tauri::AppHandle, log: &DesktopLog, automatic: bool, u
     if let Err(error) = cleanup { return Err(format!("MulNX 启动参数清理失败，原备份仍保留：{error}")); }
     if outcome.is_ok() { std::fs::remove_file(&pending).map_err(|e| e.to_string())?; }
     outcome
+}
+
+/// Resume only a submitted request whose launcher is still owned by this Host.
+/// Never submit a second request or adopt a process after Host restart.
+fn resume_pending_launch(log: &DesktopLog, managed: &Mutex<managed_cs2::ManagedCs2>) -> Result<Option<Value>, String> {
+    let results = log.state_root.join("data/mulnx-launch");
+    let pending = results.join("pending.json");
+    let bytes = match std::fs::read(&pending) {
+        Ok(bytes) if bytes.len() <= 16 * 1024 => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        _ => return Err("MulNX 启动记录无法读取，请检查并恢复。".into()),
+    };
+    let record: Value = serde_json::from_slice(&bytes).map_err(|_| "MulNX 启动记录不完整，请检查并恢复。")?;
+    if record["request"] != "submitted" { return Ok(None); }
+    let pid = record["launcherPid"].as_u64().filter(|pid| *pid > 0 && *pid <= u32::MAX as u64)
+        .ok_or("MulNX 启动器身份缺失，请检查并恢复。")? as u32;
+    let executable = PathBuf::from(record["executable"].as_str().ok_or("游戏安装位置缺失，请检查并恢复。")?);
+    let cs2 = managed.try_lock().map_err(|_| "CS2 正忙，请稍后重试。")?;
+    if !cs2.owns_mulnx_launcher(pid)? { return Err("上次 MulNX 启动结果待确认；请检查并退出游戏和启动器后恢复。".into()); }
+    verify_gateway_owner(log, 55203, pid)?;
+    let actual = cs2.mulnx_handoff_status()?;
+    let processes = actual["processes"].as_array().ok_or("CS2 实例状态不可用。")?;
+    if processes.len() != 1 { return Err("MulNX 启动结果待确认；请稍后重试或检查游戏和启动器。".into()); }
+    let process = &processes[0];
+    let result = json!({"mizarLaunch":1,"pid":process["pid"],"created":process["created"]});
+    validate_game_identity(&actual, &result, &executable)?;
+    let game_pid = result["pid"].as_u64().ok_or("游戏身份缺失。")? as u32;
+    let created = result["created"].as_str().and_then(|v| v.parse::<u64>().ok()).ok_or("游戏创建时间缺失。")?;
+    verify_gateway_owner(log, 55202, game_pid)?;
+    cs2.bind_managed_mulnx(game_pid, created, &executable)?;
+    crate::cs2_session::atomic_write(&results.join("current.json"), result.to_string().as_bytes())?;
+    production_exit::prepare_mulnx(log, &executable, false, false)?;
+    std::fs::remove_file(&pending).map_err(|e| e.to_string())?;
+    log.event("mulnx_launch_reuse", "success", Some(&result.to_string()));
+    Ok(Some(result))
 }
 
 /// Persist clean only after the launcher configuration is restored.
@@ -469,7 +508,10 @@ pub fn stop_managed_for_exit(cs2: &managed_cs2::ManagedCs2, log: &DesktopLog) ->
     if crate::mulnx_stop::confirmed(log, &identity)? {
         return crate::mulnx_stop::verify_absent(&game);
     }
-    if crate::mulnx_stop::blocked(log, &identity)? { return Err("MulNX 停止结果仍未知，请检查游戏后重试。".into()); }
+    if crate::mulnx_stop::blocked(log, &identity)? {
+        crate::mulnx_stop::verify_absent(&game)?;
+        return crate::mulnx_stop::mark_confirmed(log, &identity);
+    }
     verify_gateway_owner(log, 55202, game.pid)?;
     crate::mulnx_stop::verify_present(&game)?;
     let proof = crate::mulnx_stop::UnloadProof::open(game.pid)?;
@@ -512,7 +554,19 @@ pub fn stop_control(app: &tauri::AppHandle, log: &DesktopLog) -> Result<Value, S
     let (context, _) = cs2.console_source()?.ok_or("当前借用游戏身份未确认，未发送停止命令。")?;
     let identity = crate::mulnx_stop::Identity { pid:game.pid, created:game.created,
         executable:PathBuf::from(context["executable"].as_str().ok_or("当前游戏安装位置未确认。")?) };
-    if crate::mulnx_stop::blocked(log, &identity)? { return Ok(crate::mulnx_stop::uncertain("already-submitted")); }
+    if crate::mulnx_stop::blocked(log, &identity)? {
+        crate::mulnx_stop::verify_absent(&game)?;
+        crate::mulnx_stop::mark_confirmed(log, &identity)?;
+        production_exit::finish_workspace_production(log)?;
+        crate::observer_workspace::finish(log)?;
+        let detached = cs2.finish();
+        crate::refresh_finished_window_feedback(app, &cs2);
+        drop(cs2);
+        let preparation = crate::open_main(app.clone(), None, None);
+        let hidden = crate::hide_workspace(app);
+        production_exit::cleanup_results(detached, production_exit::cleanup_results(preparation, hidden))?;
+        return Ok(json!({"result":"unknown", "execution":"confirmed", "stopGuard":"already-submitted"}));
+    }
     verify_gateway_owner(log, 55202, game.pid)?;
     crate::mulnx_stop::verify_present(&game)?;
     let proof = crate::mulnx_stop::UnloadProof::open(game.pid)?;
