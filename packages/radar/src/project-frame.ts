@@ -3,6 +3,7 @@ import type { IdentityResolution } from '@mizar/core/identity';
 import {
   derivePlayerLifeState,
   livePlayerDisplayName,
+  matchPlayerDisplayName,
   getProjectionIdentityState,
   getProgramSafeRuntimeFreshness,
   isProjectionIdentityCurrent,
@@ -14,6 +15,7 @@ import type { ObservedGrenade, ObservedPlayer } from '@mizar/core/telemetry';
 import type { RadarFrame, RadarGrenade, RadarPlayer } from './frame.js';
 
 export interface RadarProjectionInput {
+  readonly preferCanonicalPlayerNames?: boolean;
   readonly runtime: ProgramSafeRuntimeView;
   readonly identity: IdentityResolution;
   readonly context?: MatchContext;
@@ -58,8 +60,11 @@ function projectRadarPlayer(input: RadarProjectionInput, player: ObservedPlayer)
       : undefined;
   const { displayName } = livePlayerDisplayName(
     fresh && telemetry?.coverage.allPlayers === 'present' ? player.displayName : null,
-    canonical?.displayName,
+    input.preferCanonicalPlayerNames
+      ? matchPlayerDisplayName(input.context, player.sourcePlayerId)
+      : canonical?.displayName,
     [entrant?.name, sideName],
+    input.preferCanonicalPlayerNames === true,
   );
   const candidates =
     player.weapons?.filter((weapon) => weapon.state === 'active' || weapon.state === 'reloading') ??
