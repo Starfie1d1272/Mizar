@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@fontsource/inter": "catalog:",
+    "@mizar/broadcast-config": "workspace:*",
     "@mizar/core": "workspace:*",
     "@mizar/cs2-assets": "workspace:*",
     "@mizar/design-tokens": "workspace:*",
