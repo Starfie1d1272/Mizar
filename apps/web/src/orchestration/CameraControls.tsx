@@ -18,10 +18,7 @@ export function CameraControls({
       <p className="workspace-camera-empty">运镜状态暂不可用，请检查本地服务。</p>
     ) : null;
   const s = view.status;
-  // #566 adds preparation to the existing status; older companions omit it.
-  const preparation = (
-    s as typeof s & { preparation?: 'waiting' | 'preparing' | 'ready' | 'error' }
-  ).preparation;
+  const preparation = s.preparation;
   const send = async (action: string) => {
     setBusy(true);
     setError('');
