@@ -50,7 +50,7 @@ export function statsInserts(bundle: BroadcastStats): StatsInsert[] {
       },
     ];
   });
-  if (maps.length > 0 && maps.length <= 7)
+  if (maps.length > 0)
     result.push({ ...base, title: '地图表现', subtitle: 'MAP PERFORMANCE', rows: maps });
   if (
     a.recentResults.available &&
@@ -82,7 +82,7 @@ export function statsInserts(bundle: BroadcastStats): StatsInsert[] {
     const l = a[kind],
       r = b[kind];
     if (!l.available || !r.available || l.scope !== r.scope) return;
-    const rows = fields.map(({ get, label }) => {
+    const rows = fields.flatMap(({ get, label }) => {
       const x = get(a),
         y = get(b);
       if (
@@ -95,15 +95,16 @@ export function statsInserts(bundle: BroadcastStats): StatsInsert[] {
         x.wins > x.opportunities ||
         y.wins > y.opportunities
       )
-        return null;
-      return {
-        label,
-        values: [`${(x.rate * 100).toFixed(1)}%`, `${(y.rate * 100).toFixed(1)}%`] as const,
-        samples: [`${x.wins} / ${x.opportunities}`, `${y.wins} / ${y.opportunities}`] as const,
-      };
+        return [];
+      return [
+        {
+          label,
+          values: [`${(x.rate * 100).toFixed(1)}%`, `${(y.rate * 100).toFixed(1)}%`] as const,
+          samples: [`${x.wins} / ${x.opportunities}`, `${y.wins} / ${y.opportunities}`] as const,
+        },
+      ];
     });
-    if (rows.every((row) => row !== null))
-      result.push({ ...base, title, subtitle, layout: 'columns', rows });
+    if (rows.length) result.push({ ...base, title, subtitle, layout: 'columns', rows });
   };
   winCard(
     'pistol',
@@ -128,21 +129,23 @@ export function statsInserts(bundle: BroadcastStats): StatsInsert[] {
     { key: 'enemyBlindSecondsPerRound', label: '敌方致盲秒数 / 回合' },
   ] as const;
   if (a.utility.available && b.utility.available && a.utility.scope === b.utility.scope) {
-    const rows = utilityFields.map(({ key, label }) => {
+    const rows = utilityFields.flatMap(({ key, label }) => {
       const x = a.utility[key],
         y = b.utility[key];
       if (!x || !y || x.rate === null || y.rate === null || x.attempts <= 0 || y.attempts <= 0)
-        return null;
-      return {
-        label,
-        values: [x.rate.toFixed(2), y.rate.toFixed(2)] as const,
-        samples: [
-          `${x.attempts} ${key === 'enemyBlindSecondsPerFlash' ? '颗' : '回合'}`,
-          `${y.attempts} ${key === 'enemyBlindSecondsPerFlash' ? '颗' : '回合'}`,
-        ] as const,
-      };
+        return [];
+      return [
+        {
+          label,
+          values: [x.rate.toFixed(2), y.rate.toFixed(2)] as const,
+          samples: [
+            `${x.attempts} ${key === 'enemyBlindSecondsPerFlash' ? '颗' : '回合'}`,
+            `${y.attempts} ${key === 'enemyBlindSecondsPerFlash' ? '颗' : '回合'}`,
+          ] as const,
+        },
+      ];
     });
-    if (rows.every((row) => row !== null))
+    if (rows.length)
       result.push({ ...base, title: '道具支援', subtitle: 'UTILITY', layout: 'cells', rows });
   }
   if (
@@ -168,7 +171,8 @@ export function statsInserts(bundle: BroadcastStats): StatsInsert[] {
         (player) =>
           team.starters.some((starter) => starter.userId === player.userId) &&
           player.sample.maps > 0 &&
-          player.sample.ratingMaps === player.sample.maps &&
+          player.sample.ratingMaps > 0 &&
+          player.sample.ratingMaps <= player.sample.maps &&
           player.rating !== null,
       )
       .sort(
@@ -176,14 +180,7 @@ export function statsInserts(bundle: BroadcastStats): StatsInsert[] {
       )[0];
   const left = focus(a),
     right = focus(b);
-  if (
-    left &&
-    right &&
-    left.available &&
-    right.available &&
-    left.adr !== null &&
-    right.adr !== null
-  ) {
+  if (left && right) {
     const playerName = (team: Entrant, player: Player) =>
       team.starters.find((starter) => starter.userId === player.userId)!.nickname;
     const playerBase = {
@@ -209,11 +206,20 @@ export function statsInserts(bundle: BroadcastStats): StatsInsert[] {
           values: [left.rating!.toFixed(2), right.rating!.toFixed(2)],
           samples: [`${left.sample.ratingMaps} 图`, `${right.sample.ratingMaps} 图`],
         },
-        {
-          label: 'ADR / 回合',
-          values: [left.adr!.toFixed(1), right.adr!.toFixed(1)],
-          samples: sample,
-        },
+        ...(left.adr !== null &&
+        right.adr !== null &&
+        left.sample.adrRounds !== null &&
+        left.sample.adrRounds > 0 &&
+        right.sample.adrRounds !== null &&
+        right.sample.adrRounds > 0
+          ? [
+              {
+                label: 'ADR / 回合',
+                values: [left.adr.toFixed(1), right.adr.toFixed(1)] as const,
+                samples: sample,
+              },
+            ]
+          : []),
       ],
     });
   }
