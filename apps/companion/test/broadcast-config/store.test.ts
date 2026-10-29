@@ -1,3 +1,5 @@
+import { OrchestrationStore } from '../../src/orchestration/store.js';
+import { createCameraConfigPersistence } from '../../src/broadcast-config/camera-facade.js';
 import { dirname, join as pathJoin } from 'node:path';
 import { MusicStore } from '../../src/music/store.js';
 import { createMusicConfigPersistence } from '../../src/broadcast-config/music-facade.js';
@@ -100,7 +102,7 @@ function fixture(): BroadcastConfigDocument {
     active: {
       schemaVersion: 1,
       revision: 'active',
-      sourcePreset: null,
+      sourcePreset: { id: presetId, revision: 'p1' },
       adjusted: false,
       moduleRevisions: { hud: 'h', program: 'p', music: 'm', camera: 'c' },
       resolved: {
@@ -373,5 +375,57 @@ describe('BroadcastConfigStore', () => {
     expect(active.moduleRevisions.hud).toBe(initial.active.moduleRevisions.hud);
     expect(active.moduleRevisions.camera).toBe(initial.active.moduleRevisions.camera);
     expect(active.adjusted).toBe(true);
+  });
+  it('delegates camera drafts and automatic strategy without touching other active modules', async () => {
+    const { store, options } = await setup();
+    const id = randomUUID();
+    const value = {
+      format: 'mizar.camera-config' as const,
+      version: 2 as const,
+      name: 'Camera',
+      maps: [],
+      automaticEnabled: false,
+    };
+    await store.updateFromLegacy({
+      updateDraft(document) {
+        document.modules.push({
+          id,
+          kind: 'camera',
+          schemaVersion: 2,
+          revision: randomUUID(),
+          name: 'Camera',
+          value,
+          origin: null,
+        });
+        document.presets[0]!.bindings = document.presets[0]!.bindings.map((binding) =>
+          binding.kind === 'camera' ? { kind: 'camera', mode: 'use', moduleId: id } : binding,
+        );
+      },
+      active: { kind: 'camera', value, lock: store.snapshot.active.lock },
+    });
+    const before = store.snapshot.active;
+    const camera = new OrchestrationStore(pathJoin(dirname(options.filePath), 'camera'));
+    await camera.load();
+    const persistence = createCameraConfigPersistence(store, {
+      localPack: () => Promise.reject(new Error('unexpected')),
+      localTrackId: () => Promise.reject(new Error('unexpected')),
+      portable: (preset, automaticEnabled) =>
+        Promise.resolve({
+          format: 'mizar.camera-config',
+          version: 2,
+          name: preset.name,
+          maps: [],
+          automaticEnabled,
+        }),
+      lock: (_value, active) => Promise.resolve(active.lock),
+    });
+    await camera.adoptPersistence(persistence);
+    const draftId = await camera.createPreset();
+    await camera.savePreset(draftId, { ...camera.preset, name: 'Draft' });
+    expect(store.snapshot.active).toEqual(before);
+    await camera.saveAutomaticEnabled(true);
+    expect(store.snapshot.active.resolved.camera?.automaticEnabled).toBe(true);
+    expect(store.snapshot.active.moduleRevisions.music).toBe(before.moduleRevisions.music);
+    expect(store.snapshot.active.moduleRevisions.hud).toBe(before.moduleRevisions.hud);
   });
 });
