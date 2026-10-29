@@ -26,7 +26,7 @@ export function createRuntimeVerifier(
   const approved = [pinned, ...history.map((item) => ({ ...item }))].filter(
     (item): item is ResourceTrustPolicy => item !== undefined,
   );
-  return createManifestVerifier(
+  const verify = createManifestVerifier(
     {
       parsePackManifest,
       assertResourcePath,
@@ -63,6 +63,15 @@ export function createRuntimeVerifier(
       expectedCore?.appVersion.replace(/-(?:alpha|beta|rc)\.[1-9]\d*$/, '') ??
       '1.1.0',
   );
+  return async (input) => {
+    const descriptor = await verify(input);
+    const encoded = (input.receipt as { manifestBase64?: unknown } | null)?.manifestBase64;
+    if (typeof encoded !== 'string') throw new ResourceStoreError('resource_receipt_invalid');
+    return {
+      ...descriptor,
+      manifestSha256: createHash('sha256').update(Buffer.from(encoded, 'base64')).digest('hex'),
+    };
+  };
 }
 
 export { PACK_ID };

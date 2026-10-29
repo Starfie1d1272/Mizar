@@ -13,6 +13,7 @@ export function registerProductionRoutes(
     scenes: ProgramSceneController;
     release: () => Promise<void>;
     beforeEnter?: () => void;
+    waitForBroadcast?: () => Promise<void>;
     onEnter?: () => void;
     beforeFinish?: () => void;
     finishTrial?: () => Promise<void>;
@@ -33,6 +34,14 @@ export function registerProductionRoutes(
     reply.header('cache-control', 'no-store').send(view()),
   );
   async function change(body: { action?: unknown; expectedRevision?: unknown } | null) {
+    if (body?.action === 'enter') {
+      try {
+        await options.waitForBroadcast?.();
+      } catch (error) {
+        app.log.error({ stage: 'broadcast_owner_sync', err: error }, '播出配置同步失败');
+        return { code: 409, value: { message: '播出配置同步失败，请重试使用方案。' } };
+      }
+    }
     if (
       busy ||
       (trialPending && !['finish', 'shutdown'].includes(String(body?.action))) ||

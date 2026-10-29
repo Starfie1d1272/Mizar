@@ -35,7 +35,7 @@ export type HudModule =
       theme: HudTheme;
       overlays: {
         pause: { enabled: boolean; visual: string };
-        chat: { enabled: boolean; placement: HudWidgetPlacement };
+        chat: { enabled: boolean; placement: 'auto' | HudWidgetPlacement };
       };
       accent: VisualColor;
     }
@@ -143,7 +143,7 @@ export type ResolvedHudModule =
       config: HudResolvedPreset;
       overlays: {
         pause: { enabled: boolean; visual: string };
-        chat: { enabled: boolean; placement: HudWidgetPlacement };
+        chat: { enabled: boolean; placement: 'auto' | HudWidgetPlacement };
       };
       accent: VisualColor;
     }
@@ -154,6 +154,7 @@ export interface ActiveBroadcastSnapshot {
   sourcePreset: { id: string; revision: Revision } | null;
   adjusted: boolean;
   moduleRevisions: Record<ModuleKind, Revision>;
+  sourceModuleIds?: Partial<Record<ModuleKind, string | null>>;
   resolved: {
     hud: ResolvedHudModule;
     program: ProgramVisualConfigV1;
@@ -161,6 +162,19 @@ export interface ActiveBroadcastSnapshot {
     camera: CameraModuleV2 | null;
   };
   lock: { resources: ResourceRef[]; tools: MulnxToolRef[] };
+}
+/** Public display projection; production audio and camera data remain private. */
+export interface BroadcastDisplayConfig {
+  activeRevision: Revision;
+  hud: ResolvedHudModule;
+  program: ProgramVisualConfigV1;
+}
+export function displayConfig(snapshot: ActiveBroadcastSnapshot): BroadcastDisplayConfig {
+  return structuredClone({
+    activeRevision: snapshot.revision,
+    hud: snapshot.resolved.hud,
+    program: snapshot.resolved.program,
+  });
 }
 export interface BroadcastConfigDocument {
   schemaVersion: 1;
@@ -302,6 +316,15 @@ function effectiveModuleJson(
   });
 }
 
+/** Compare effective output rather than editor identities and labels. */
+export function sameEffectiveModule<K extends ModuleKind>(
+  kind: K,
+  left: ActiveBroadcastSnapshot['resolved'][K],
+  right: ActiveBroadcastSnapshot['resolved'][K],
+): boolean {
+  return effectiveModuleJson(kind, left) === effectiveModuleJson(kind, right);
+}
+
 /** Prepare a candidate without mutating the document or any external device. */
 export async function preparePreset(
   document: BroadcastConfigDocument,
@@ -318,10 +341,7 @@ export async function preparePreset(
   const prepared = await resolver.resolve(modules);
   const moduleRevisions = { ...document.active.moduleRevisions };
   for (const kind of MODULE_KINDS) {
-    if (
-      effectiveModuleJson(kind, prepared.resolved[kind]) !==
-      effectiveModuleJson(kind, document.active.resolved[kind])
-    )
+    if (!sameEffectiveModule(kind, prepared.resolved[kind], document.active.resolved[kind]))
       moduleRevisions[kind] = newRevision();
   }
   return {
@@ -330,6 +350,9 @@ export async function preparePreset(
     sourcePreset: { id: preset.id, revision: preset.revision },
     adjusted: false,
     moduleRevisions,
+    sourceModuleIds: Object.fromEntries(
+      MODULE_KINDS.map((kind) => [kind, modules.get(kind)?.id ?? null]),
+    ),
     resolved: structuredClone(prepared.resolved),
     lock: structuredClone(prepared.lock),
   };
