@@ -493,7 +493,7 @@ export class ObserverHintTimeline {
     source: typeof this.sourceHealth,
     programReceiveMs = now,
     clock?: {
-      playback?: ProgramClock;
+      playback?: ProgramClock | null;
       source?: ClockInput;
       program?: ClockInput;
       freezeEnd?: ClockBoundary;
@@ -522,7 +522,7 @@ export class ObserverHintTimeline {
       observer: {
         ...settings,
         state,
-        timingBasis: clock?.playback ? 'program-clock' : 'estimated',
+        timingBasis: clock && 'playback' in clock ? 'program-clock' : 'estimated',
         calibrationState: this.calibrationState(now),
         effectiveDelaySeconds:
           (this.effectiveDelayMs ?? settings.expectedDelaySeconds * 1000) / 1000,
@@ -631,9 +631,10 @@ export class ObserverHintTimeline {
       this.blocked = 'identity-unavailable';
       return empty('unavailable');
     }
-    if (clock?.playback) {
+    if (clock && 'playback' in clock) {
       const playback = clock.playback;
       const valid =
+        playback &&
         playback.usable &&
         playback.timeDomain.length > 0 &&
         playback.continuity.length > 0 &&

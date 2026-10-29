@@ -1,14 +1,10 @@
-import type { ProgramClock } from './observer-assist.js';
-
 /** Already parsed by the source adapter; receipt time is monotonic in this process. */
 export interface ProgramClockSample {
   readonly timeDomain: string;
   readonly continuity: string;
-  readonly mapName: string;
   readonly tick: number;
-  readonly ticksPerSecond: number;
   readonly receivedMonotonicMs: number;
-  readonly valid: boolean;
+  readonly readSucceeded: boolean;
   readonly paused?: boolean;
 }
 
@@ -30,13 +26,10 @@ export class ProgramClockTracker {
 
   observe(sample: ProgramClockSample) {
     if (
-      !sample.valid ||
+      !sample.readSucceeded ||
       !sample.timeDomain ||
       !sample.continuity ||
-      !sample.mapName ||
       !Number.isSafeInteger(sample.tick) ||
-      !Number.isFinite(sample.ticksPerSecond) ||
-      sample.ticksPerSecond <= 0 ||
       !Number.isFinite(sample.receivedMonotonicMs)
     ) {
       this.broken = true;
@@ -64,8 +57,6 @@ export class ProgramClockTracker {
       !last ||
       last.timeDomain !== sample.timeDomain ||
       last.continuity !== sample.continuity ||
-      last.mapName !== sample.mapName ||
-      last.ticksPerSecond !== sample.ticksPerSecond ||
       sample.tick < last.tick
     ) {
       this.progressing = false;
@@ -79,7 +70,10 @@ export class ProgramClockTracker {
     this.last = sample;
   }
 
-  current(now: number): { state: ClockState | 'stale'; clock: ProgramClock | null } {
+  current(now: number): {
+    state: ClockState | 'stale';
+    clock: { timeDomain: string; continuity: string; tick: number; usable: boolean } | null;
+  } {
     const last = this.last;
     if (!last || this.broken) return { state: 'syncing', clock: null };
     if (
@@ -93,9 +87,7 @@ export class ProgramClockTracker {
       clock: {
         timeDomain: last.timeDomain,
         continuity: last.continuity,
-        mapName: last.mapName,
         tick: last.tick,
-        ticksPerSecond: last.ticksPerSecond,
         usable: this.state === 'progressing' || this.state === 'paused',
       },
     };

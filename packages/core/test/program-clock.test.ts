@@ -7,11 +7,9 @@ describe('program clock samples', () => {
     const sample = {
       timeDomain: 'synthetic',
       continuity: '1',
-      mapName: 'de_mirage',
       tick: 10,
-      ticksPerSecond: 64,
       receivedMonotonicMs: 0,
-      valid: true,
+      readSucceeded: true,
     };
     tracker.observe(sample);
     expect(tracker.current(0).clock?.usable).toBe(false);

@@ -759,6 +759,9 @@ describe('explicit program playback clock', () => {
       timingBasis: 'program-clock',
       hints: [],
     });
+    expect(
+      timeline.project(frame, settings, 205500, source, 205500, { playback: null }).observer,
+    ).toMatchObject({ state: 'unavailable', timingBasis: 'program-clock', hints: [] });
     timeline.consume(kill(2, 6, 2));
     expect(project(320, 206000).observer).toMatchObject({
       state: 'unavailable',
