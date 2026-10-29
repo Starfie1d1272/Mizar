@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import type { ModuleRecord } from '@mizar/broadcast-config';
 import { useLocalRead } from '../preparation/client';
-import { Button, Panel, Select, StatusBanner } from '../ui';
+import { Button, Checkbox, Panel, Select, StatusBanner } from '../ui';
 import { PresetVisualPreview } from './PresetVisualPreview';
 import { pulseTokenStyle } from '../program/broadcast-display';
 import { exportFailure } from './export-error';
@@ -20,6 +20,28 @@ type Snapshot = {
     sourceModuleIds?: Partial<Record<Kind, string | null>>;
     sourceModuleRevisions?: Partial<Record<Kind, string | null>>;
   };
+};
+type PackEntry = {
+  entryId: string;
+  type: 'module' | 'preset';
+  kind?: Kind;
+  name?: string;
+  status: 'ready' | 'dependency_missing' | 'unsupported' | 'invalid' | 'existing' | 'removed';
+};
+type PackInspection = {
+  file: File;
+  name: string;
+  source: { digest: string };
+  entries: PackEntry[];
+};
+const entryKey = (entry: PackEntry) => `${entry.type}:${entry.entryId}`;
+const entryStatus: Record<PackEntry['status'], string> = {
+  ready: '可导入',
+  dependency_missing: '所需来源暂不可用，可先保存',
+  unsupported: '暂不支持',
+  invalid: '内容无效',
+  existing: '已存在',
+  removed: '曾删除，可重新导入',
 };
 const labels: Record<Kind, string> = { hud: 'HUD', program: '场景', music: '音乐', camera: '运镜' };
 function download(blob: Blob, name: string) {
@@ -63,6 +85,9 @@ export function ResourceModules({
     tone: 'success' | 'danger' | 'warning';
     message: string;
   } | null>(null);
+  const [inspection, setInspection] = useState<PackInspection | null>(null);
+  const [inspectionOpen, setInspectionOpen] = useState(false);
+  const [selectedEntries, setSelectedEntries] = useState<string[]>([]);
   const input = useRef<HTMLInputElement>(null);
   const showList = category === 'all' || ['hud', 'program', 'music', 'camera'].includes(category);
   const entries =
@@ -165,14 +190,61 @@ export function ResourceModules({
       setRefresh((value) => value + 1);
     }
   }
-  async function importFile(file: File) {
+  async function inspectFile(file: File) {
+    if (busy) return;
     setBusy(true);
     setNotice(null);
     try {
-      const response = await fetch('/operator/resource-library/import-pack', {
+      const response = await fetch('/operator/resource-library/check-pack', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-mizarpack' },
         body: file,
+      });
+      if (!response.ok)
+        throw new Error(
+          response.status === 409
+            ? '同一版本的内容不同，请检查文件。'
+            : '无法检查资源包，请检查文件后重试。',
+        );
+      const result = (await response.json()) as Omit<PackInspection, 'file'>;
+      setInspection({ ...result, file });
+      setSelectedEntries(
+        result.entries
+          .filter((entry) => ['ready', 'existing', 'dependency_missing'].includes(entry.status))
+          .map(entryKey),
+      );
+      setInspectionOpen(true);
+    } catch (error) {
+      setNotice({
+        tone: 'danger',
+        message: error instanceof Error ? error.message : '无法检查资源包。',
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function importFile() {
+    if (!inspection || busy || !selectedEntries.length) return;
+    const selection = {
+      modules: inspection.entries
+        .filter((entry) => entry.type === 'module' && selectedEntries.includes(entryKey(entry)))
+        .map((entry) => entry.entryId),
+      presets: inspection.entries
+        .filter((entry) => entry.type === 'preset' && selectedEntries.includes(entryKey(entry)))
+        .map((entry) => entry.entryId),
+    };
+
+    setBusy(true);
+    setNotice(null);
+    try {
+      const query = new URLSearchParams({
+        selection: JSON.stringify(selection),
+        digest: inspection.source.digest,
+      });
+      const response = await fetch(`/operator/resource-library/import-pack?${query}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-mizarpack' },
+        body: inspection.file,
       });
       if (!response.ok)
         throw new Error(
@@ -212,6 +284,10 @@ export function ResourceModules({
               message: result.reused ? '资源已存在，已定位。' : '资源已导入，尚未使用。',
             },
       );
+      if (!unavailable.length || accepted?.length) {
+        setInspection(null);
+        setInspectionOpen(false);
+      }
       setRefresh((value) => value + 1);
     } catch (error) {
       setNotice({ tone: 'danger', message: error instanceof Error ? error.message : '导入失败。' });
@@ -231,11 +307,12 @@ export function ResourceModules({
           hidden
           type="file"
           accept=".mizarpack"
+          disabled={busy}
           aria-label="选择资源包"
           onChange={(event) => {
             const file = event.currentTarget.files?.[0];
             event.currentTarget.value = '';
-            if (file) void importFile(file);
+            if (file) void inspectFile(file);
           }}
         />
         <Button disabled={busy} onClick={() => input.current?.click()}>
@@ -243,6 +320,48 @@ export function ResourceModules({
         </Button>
       </div>
       {notice && <StatusBanner tone={notice.tone}>{notice.message}</StatusBanner>}
+      {inspection && !inspectionOpen && (
+        <Button disabled={busy} onClick={() => setInspectionOpen(true)}>
+          继续选择资源
+        </Button>
+      )}
+      {inspection && inspectionOpen && (
+        <Panel className="resource-library__import" aria-label="选择导入内容">
+          <h3>选择导入内容</h3>
+          <p>{inspection.name} · 选择要保存的内容，方案会带入所需资源。导入不会切换播出。</p>
+          {inspection.entries.map((entry, index) => {
+            const kind =
+              entry.type === 'preset' ? '方案' : (entry.kind && labels[entry.kind]) || '资源';
+            const name = entry.name?.trim() || `${kind} ${index + 1}`;
+            const key = entryKey(entry);
+            const disabled = entry.status === 'unsupported' || entry.status === 'invalid';
+            return (
+              <Checkbox
+                key={key}
+                label={`${name} · ${kind}`}
+                message={entryStatus[entry.status]}
+                checked={selectedEntries.includes(key)}
+                disabled={busy || disabled}
+                onChange={(event) => {
+                  const checked = event.currentTarget.checked;
+                  setSelectedEntries((previous) =>
+                    checked ? [...previous, key] : previous.filter((item) => item !== key),
+                  );
+                }}
+              />
+            );
+          })}
+          <div className="resource-library__actions">
+            <Button disabled={busy || !selectedEntries.length} onClick={() => void importFile()}>
+              导入所选
+            </Button>
+            <Button disabled={busy} onClick={() => setInspectionOpen(false)}>
+              稍后继续
+            </Button>
+          </div>
+        </Panel>
+      )}
+
       {(!snapshot || !directory) && (
         <StatusBanner tone="warning">资源目录暂不可用，请检查本地制播服务。</StatusBanner>
       )}
