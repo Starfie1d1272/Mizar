@@ -104,6 +104,26 @@ it('offers the two timing controls and saves observer preferences independently 
   });
   expect(mocks.native).not.toHaveBeenCalled();
 });
+it('saves the website nickname choice from settings', async () => {
+  act(() => root.render(<ObserverSettingsPanel />));
+  const checkbox = [...container.querySelectorAll<HTMLInputElement>('input[type=checkbox]')].find(
+    (element) => element.closest('label')?.textContent?.includes('网站比赛使用网站昵称'),
+  )!;
+  expect(checkbox.checked).toBe(false);
+  act(() => {
+    checkbox.click();
+  });
+  await act(async () => {
+    [...container.querySelectorAll('button')]
+      .find((button) => button.textContent?.includes('保存昵称设置'))!
+      .click();
+    await Promise.resolve();
+  });
+  expect(mocks.command).toHaveBeenCalledWith('/operator/observer-assist', {
+    action: 'configure',
+    settings: { ...DEFAULT_OBSERVER_SETTINGS, nicknameSource: 'website' },
+  });
+});
 it('keeps the disabled feature out of connection preparation and the workbench', () => {
   mocks.observer = { state: 'live', current: { payload: { availability: 'unavailable' } } };
   act(() =>

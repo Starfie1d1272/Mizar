@@ -19,11 +19,18 @@ it('persists operator timing and keeps per-match connection credentials in memor
       store = new ObserverSettingsStore(path);
     await store.load();
     expect(store.settings.leadSeconds).toBe(5);
-    await store.configure({ ...store.settings, enabled: true, leadSeconds: 7 });
+    expect(store.settings.nicknameSource).toBe('game');
+    await store.configure({
+      ...store.settings,
+      enabled: true,
+      leadSeconds: 7,
+      nicknameSource: 'website',
+    });
     await store.configureGame({ autoConnect: false, hideGameHud: false });
     const preferences = new ObserverSettingsStore(path);
     await preferences.load();
     expect(preferences.settings.leadSeconds).toBe(7);
+    expect(preferences.settings.nicknameSource).toBe('website');
     expect(preferences.gameAutomation).toEqual({ autoConnect: false, hideGameHud: false });
     store.setConnection({
       earlyEndpoint: '127.0.0.1:27025',
@@ -33,10 +40,13 @@ it('persists operator timing and keeps per-match connection credentials in memor
     expect(store.configured()?.password).toBe('synthetic-secret');
     expect(JSON.stringify(store.view())).not.toContain('synthetic-secret');
     expect(await readFile(path, 'utf8')).not.toMatch(/password|127\.0\.0\.1/);
-    await writeFile(path, JSON.stringify({ ...store.settings, displaySeconds: 10 }));
+    const legacy: Partial<typeof store.settings> = { ...store.settings };
+    delete legacy.nicknameSource;
+    await writeFile(path, JSON.stringify({ ...legacy, displaySeconds: 10 }));
     const restart = new ObserverSettingsStore(path);
     await restart.load();
     expect(restart.settings.leadSeconds).toBe(7);
+    expect(restart.settings.nicknameSource).toBe('game');
     expect(restart.settings).not.toHaveProperty('displaySeconds');
     expect(restart.configured()).toBeUndefined();
     store.clearConnection();

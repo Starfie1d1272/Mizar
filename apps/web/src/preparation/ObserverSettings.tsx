@@ -53,77 +53,92 @@ export function ObserverSettingsPanel() {
     }
   };
   return (
-    <Panel className="settings-card">
-      <h2>私有观察辅助</h2>
-      <p>使用早源已经发生的事件，提示延迟节目即将出现的击杀，帮助提前选人和准备镜头。</p>
-      <Checkbox
-        label="启用私有观察辅助"
-        checked={settings.enabled}
-        onChange={(e) => edit({ enabled: e.target.checked })}
-        disabled={busy || runtime?.pending || !view}
-        message="开启后，提示显示在工作台左侧雷达下方；关闭后沿用常规工作台布局。"
-      />
-      <Field
-        label="两路预期延迟差（秒）"
-        type="number"
-        min={10}
-        max={600}
-        value={settings.expectedDelaySeconds}
-        disabled={busy || runtime?.pending || !settings.enabled}
-        onChange={(e) => edit({ expectedDelaySeconds: Number(e.target.value) })}
-        message="按此延迟差估算提示时间；后台测量仅供参考，不会自动修改。"
-      />
-      <Field
-        label="提示提前时间（秒）"
-        type="number"
-        min={1}
-        max={30}
-        value={settings.leadSeconds}
-        disabled={busy || runtime?.pending || !settings.enabled}
-        onChange={(e) => edit({ leadSeconds: Number(e.target.value) })}
-        message="希望在击杀到达节目画面前多久看到提示。"
-      />
-      <p>
-        按当前设置，稳定延迟差下约缓冲 {settings.expectedDelaySeconds - settings.leadSeconds}{' '}
-        秒后显示；倒计时归零时自动移除。
-      </p>
-      <Button
-        variant="primary"
-        disabled={busy || runtime?.pending || !view}
-        aria-busy={busy}
-        onClick={() => void save()}
-      >
-        保存观察辅助设置
-      </Button>
-      {settings.enabled &&
-      production?.mode === 'live' &&
-      window.__TAURI_INTERNALS__ &&
-      runtime?.retryAvailable ? (
-        <Button
-          disabled={busy || runtime?.pending}
-          onClick={() => {
-            if (busy || runtime?.pending) return;
-            setBusy(true);
-            setError('');
-            void desktopInvoke('observer_command', { action: 'start-configured' })
-              .catch((reason: unknown) =>
-                setError(reason instanceof Error ? reason.message : '早源重试未完成，请重试。'),
-              )
-              .finally(() => setBusy(false));
-          }}
-        >
-          重新连接早源
+    <>
+      <Panel className="settings-card">
+        <h2>选手昵称</h2>
+        <Checkbox
+          label="网站比赛使用网站昵称"
+          checked={settings.nicknameSource === 'website'}
+          disabled={busy || runtime?.pending || !view}
+          onChange={(e) => edit({ nicknameSource: e.target.checked ? 'website' : 'game' })}
+          message="默认使用游戏昵称；未绑定网站时仍使用游戏昵称。MulNX 同步遵循此设置。"
+        />
+        <Button disabled={busy || runtime?.pending || !view} onClick={() => void save()}>
+          保存昵称设置
         </Button>
-      ) : null}
-      {runtime?.pending ? <p role="status">正在准备观察辅助…</p> : null}
-      {error || runtime?.error ? (
-        <StatusBanner tone="warning">
-          {error || '观察辅助准备失败，请核对本图连接后重新连接早源。'}
-        </StatusBanner>
-      ) : saved ? (
-        <StatusBanner tone="success">观察辅助设置已保存。</StatusBanner>
-      ) : null}
-    </Panel>
+      </Panel>
+      <Panel className="settings-card">
+        <h2>私有观察辅助</h2>
+        <p>使用早源已经发生的事件，提示延迟节目即将出现的击杀，帮助提前选人和准备镜头。</p>
+        <Checkbox
+          label="启用私有观察辅助"
+          checked={settings.enabled}
+          onChange={(e) => edit({ enabled: e.target.checked })}
+          disabled={busy || runtime?.pending || !view}
+          message="开启后，提示显示在工作台左侧雷达下方；关闭后沿用常规工作台布局。"
+        />
+        <Field
+          label="两路预期延迟差（秒）"
+          type="number"
+          min={10}
+          max={600}
+          value={settings.expectedDelaySeconds}
+          disabled={busy || runtime?.pending || !settings.enabled}
+          onChange={(e) => edit({ expectedDelaySeconds: Number(e.target.value) })}
+          message="按此延迟差估算提示时间；后台测量仅供参考，不会自动修改。"
+        />
+        <Field
+          label="提示提前时间（秒）"
+          type="number"
+          min={1}
+          max={30}
+          value={settings.leadSeconds}
+          disabled={busy || runtime?.pending || !settings.enabled}
+          onChange={(e) => edit({ leadSeconds: Number(e.target.value) })}
+          message="希望在击杀到达节目画面前多久看到提示。"
+        />
+        <p>
+          按当前设置，稳定延迟差下约缓冲 {settings.expectedDelaySeconds - settings.leadSeconds}{' '}
+          秒后显示；倒计时归零时自动移除。
+        </p>
+        <Button
+          variant="primary"
+          disabled={busy || runtime?.pending || !view}
+          aria-busy={busy}
+          onClick={() => void save()}
+        >
+          保存观察辅助设置
+        </Button>
+        {settings.enabled &&
+        production?.mode === 'live' &&
+        window.__TAURI_INTERNALS__ &&
+        runtime?.retryAvailable ? (
+          <Button
+            disabled={busy || runtime?.pending}
+            onClick={() => {
+              if (busy || runtime?.pending) return;
+              setBusy(true);
+              setError('');
+              void desktopInvoke('observer_command', { action: 'start-configured' })
+                .catch((reason: unknown) =>
+                  setError(reason instanceof Error ? reason.message : '早源重试未完成，请重试。'),
+                )
+                .finally(() => setBusy(false));
+            }}
+          >
+            重新连接早源
+          </Button>
+        ) : null}
+        {runtime?.pending ? <p role="status">正在准备观察辅助…</p> : null}
+        {error || runtime?.error ? (
+          <StatusBanner tone="warning">
+            {error || '观察辅助准备失败，请核对本图连接后重新连接早源。'}
+          </StatusBanner>
+        ) : saved ? (
+          <StatusBanner tone="success">设置已保存。</StatusBanner>
+        ) : null}
+      </Panel>
+    </>
   );
 }
 
