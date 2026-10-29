@@ -248,7 +248,7 @@ it('keeps equivalent saves idempotent and timing separate from Host preparation 
   ]);
   expect(changes).toEqual(['lead']);
   expect(store.revision).toBe(revision);
-  await store.configure({ ...store.settings, enabled: true });
+  await store.configure({ ...store.settings, enabled: false });
   expect(store.revision).not.toBe(revision);
   const connection = {
     earlyEndpoint: '127.0.0.1:27025',

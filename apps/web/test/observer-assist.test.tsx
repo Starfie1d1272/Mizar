@@ -125,6 +125,7 @@ it('saves the website nickname choice from settings', async () => {
   });
 });
 it('keeps the disabled feature out of connection preparation and the workbench', () => {
+  mocks.view.settings.enabled = false;
   mocks.observer = { state: 'live', current: { payload: { availability: 'unavailable' } } };
   act(() =>
     root.render(
@@ -164,7 +165,8 @@ it('shows private slots and countdowns from the assist channel, and clears on re
   expect([...container.querySelectorAll('kbd')].map((e) => e.textContent)).toEqual(['3', '0']);
   mocks.observer = { state: 'reconnecting' };
   act(() => root.render(<ObserverHints />));
-  expect(container.innerHTML).toBe('');
+  expect(container.textContent).toContain('辅助状态待确认');
+  expect(container.textContent).not.toContain('Long player name');
 });
 
 it('distinguishes reconnecting from a terminal failure and dispatches the configured native retry', async () => {
