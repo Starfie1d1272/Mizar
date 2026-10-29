@@ -32,7 +32,12 @@ const release = z.strictObject({
   tag: z.string().min(1).max(200),
   archiveSha256: sha,
 });
-const { id: _trackId, entryId: _entryId, ...portableTrackFields } = musicTrackSchema.shape;
+const portableTrackFields = {
+  name: musicTrackSchema.shape.name,
+  startMs: musicTrackSchema.shape.startMs,
+  endMs: musicTrackSchema.shape.endMs,
+  gain: musicTrackSchema.shape.gain,
+};
 const track = z
   .strictObject({ ...portableTrackFields, entryId: id, asset: assetRefSchema })
   .refine((value) => value.endMs === null || value.endMs > value.startMs);

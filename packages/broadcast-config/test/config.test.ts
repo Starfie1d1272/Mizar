@@ -133,7 +133,7 @@ describe('broadcast preset', () => {
         expectedActiveRevision: 'a1',
         requestId: 'request',
       },
-      { resolve: async () => ({ resolved, lock: { resources: [], tools: [] } }) },
+      { resolve: () => Promise.resolve({ resolved, lock: { resources: [], tools: [] } }) },
       () => `revision-${++id}`,
     );
     expect(next.moduleRevisions).toEqual({
@@ -183,10 +183,11 @@ describe('broadcast preset', () => {
         requestId: 'request',
       },
       {
-        resolve: async () => ({
-          resolved: { ...document.active.resolved, camera: changed },
-          lock: { resources: [], tools: [] },
-        }),
+        resolve: () =>
+          Promise.resolve({
+            resolved: { ...document.active.resolved, camera: changed },
+            lock: { resources: [], tools: [] },
+          }),
       },
       () => 'new',
     );

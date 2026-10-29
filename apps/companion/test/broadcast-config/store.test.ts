@@ -60,7 +60,7 @@ function fixture(): BroadcastConfigDocument {
             pause: { enabled: true, visual: 'default' },
             chat: { enabled: true, placement: Object.values(layout.widgets)[0]! },
           },
-          accent: { source: 'event', fallback: '#ffffff' },
+          accent: { source: 'event', fallback: getBuiltinTheme().brandColor },
         },
       },
       {
@@ -113,9 +113,10 @@ async function setup() {
   const options = {
     filePath: join(directory, 'config.json'),
     parseDocument: parseBroadcastConfigDocument,
-    createInitial: async () => initial,
+    createInitial: () => Promise.resolve(initial),
     resolver: {
-      resolve: async () => ({ resolved: initial.active.resolved, lock: initial.active.lock }),
+      resolve: () =>
+        Promise.resolve({ resolved: initial.active.resolved, lock: initial.active.lock }),
     },
     withCommitGuard: async <T>(operation: () => Promise<T>) => operation(),
   };

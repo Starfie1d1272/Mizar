@@ -24,21 +24,23 @@ it('preserves the active camera independently of its newer draft', async () => {
       pause: { enabled: true, visual: 'default' },
       chat: { enabled: true, placement: Object.values(getBuiltinLayout().widgets)[0]! },
     },
-    musicConfig: async (config) => ({
-      ...config,
-      automaticEnabled: true,
-      groups: Object.fromEntries(
-        Object.entries(config.groups).map(([name, group]) => [name, { ...group, tracks: [] }]),
-      ) as never,
-    }),
-    cameraConfig: async (preset, automaticEnabled) => ({
-      format: 'mizar.camera-config',
-      version: 2,
-      name: preset.name,
-      automaticEnabled,
-      maps: [],
-    }),
-    lock: async () => ({ resources: [], tools: [] }),
+    musicConfig: (config) =>
+      Promise.resolve({
+        ...config,
+        automaticEnabled: true,
+        groups: Object.fromEntries(
+          Object.entries(config.groups).map(([name, group]) => [name, { ...group, tracks: [] }]),
+        ) as never,
+      }),
+    cameraConfig: (preset, automaticEnabled) =>
+      Promise.resolve({
+        format: 'mizar.camera-config',
+        version: 2,
+        name: preset.name,
+        automaticEnabled,
+        maps: [],
+      }),
+    lock: () => Promise.resolve({ resources: [], tools: [] }),
   });
   const draftModule = document.modules.find((module) => module.id === id);
   expect(draftModule?.name).toBe('新草稿');
