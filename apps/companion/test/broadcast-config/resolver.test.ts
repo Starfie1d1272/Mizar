@@ -37,12 +37,13 @@ it('checks every referenced asset before returning a candidate', async () => {
         match_result: visual,
       },
       tokens: {},
-      assets: { logo: asset },
+      assets: { 'pulse.background': asset },
     },
   } as unknown as ModuleRecord;
   const verify = vi.fn(() => Promise.reject(new Error('dependency_missing')));
   const resolver = createBroadcastResolver({
     asset: verify,
+    image: verify,
     hud: () => Promise.resolve(),
     scene: () => Promise.resolve(),
     camera: () => Promise.reject(new Error('unused')),
@@ -55,4 +56,9 @@ it('checks every referenced asset before returning a candidate', async () => {
   ]);
   await expect(resolver.resolve(modules)).rejects.toThrow('dependency_missing');
   expect(verify).toHaveBeenCalledWith(asset);
+  if (program.kind !== 'program') throw new Error('expected program');
+  program.value.assets = { logo: asset };
+  verify.mockClear();
+  await expect(resolver.resolve(modules)).rejects.toThrow('capability_unsupported');
+  expect(verify).not.toHaveBeenCalled();
 });
