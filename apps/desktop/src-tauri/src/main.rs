@@ -1837,7 +1837,7 @@ async fn open_tool(app: tauri::AppHandle, tool: String, preset_id: Option<String
     if tool == "review" {
         if !exit_review && !app.state::<HostState>().visible.load(Ordering::Relaxed) { return Err("工作台已隐藏，请返回工作台后重新打开核对窗口。".into()); }
         let kind = preset_id.as_deref().unwrap_or("preflight");
-        if !matches!(kind, "preflight" | "roster" | "sync" | "issues" | "exit" | "connection") { return Err("核对页面无法识别。".into()); }
+        if !matches!(kind, "preflight" | "roster" | "sync" | "issues" | "exit" | "connection" | "next-connection") { return Err("核对页面无法识别。".into()); }
         target.query_pairs_mut().append_pair("kind", kind);
     }
     if tool == "hud" {
@@ -1854,7 +1854,9 @@ async fn open_tool(app: tauri::AppHandle, tool: String, preset_id: Option<String
                 window.eval(&format!("window.dispatchEvent(new CustomEvent('mizar:hud-select-preset', {{detail:{detail}}}));"))
                     .map_err(|error| command_log.preserve_error("open_tool", native_operation_id.as_deref(), &error, "HUD 预设未能打开。"))?;
             }
-        } else if tool != "review" || window.url().ok().as_ref() != Some(&target) {
+        } else if tool == "review" && window.url().ok().as_ref() != Some(&target) {
+            return Err("请先完成或关闭当前任务，再打开其他任务。".into());
+        } else if tool != "review" {
             window.navigate(target.clone())
                 .map_err(|error| command_log.preserve_error("open_tool", native_operation_id.as_deref(), &error, "工具窗口未能恢复。"))?;
         }
