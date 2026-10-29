@@ -106,7 +106,7 @@ export class MusicPackResources {
       .update(JSON.stringify([id, version]))
       .digest('hex')}.mizarpack`;
   }
-  private async readStored(name: string) {
+  private async readStoredBytes(name: string) {
     const path = await safePath(this.root, name);
     const before = await lstat(path);
     const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
@@ -125,7 +125,10 @@ export class MusicPackResources {
     } finally {
       await handle.close();
     }
-    return readPackArchive(bytes);
+    return bytes;
+  }
+  private async readStored(name: string) {
+    return readPackArchive(await this.readStoredBytes(name));
   }
   private async readArchive(ref: ResourceRef) {
     if (!/^local:mizar-pack:[0-9a-f-]{36}$/i.test(ref.id) || !/^[a-f0-9]{64}$/.test(ref.digest))
@@ -150,7 +153,11 @@ export class MusicPackResources {
     return this.installAndCommit(zip, async (ref) => ref);
   }
   /** Serialize installation through the configuration commit with explicit removal. */
-  async installAndCommit<T>(zip: Buffer, commit: (ref: ResourceRef) => Promise<T>): Promise<T> {
+  async installAndCommit<T>(
+    zip: Buffer,
+    commit: (ref: ResourceRef) => Promise<T>,
+    allowRepair?: (ref: ResourceRef) => boolean,
+  ): Promise<T> {
     return this.queue.run(async () => {
       const bytes = Buffer.from(zip);
       const archive = await readPackArchive(bytes);
@@ -176,25 +183,28 @@ export class MusicPackResources {
           await link(temporary, target);
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+          const existingBytes = await this.readStoredBytes(filename);
+          let existing: Awaited<ReturnType<typeof readPackArchive>> | undefined;
+          try {
+            existing = await readPackArchive(existingBytes);
+          } catch (damage) {
+            if (!allowRepair?.(ref)) throw new Error('resource_damaged', { cause: damage });
+            await rename(temporary, target);
+          }
+          if (
+            existing &&
+            (existing.manifest.packageId !== archive.manifest.packageId ||
+              existing.manifest.version !== ref.version ||
+              existing.digest !== ref.digest)
+          )
+            throw new Error('identity_conflict', { cause: error });
         }
       } finally {
         await unlink(temporary).catch((error: NodeJS.ErrnoException) => {
           if (error.code !== 'ENOENT') throw error;
         });
       }
-      try {
-        await this.readArchive(ref);
-      } catch (error) {
-        // An existing same-id/version file with another digest must never be replaced.
-        const existing = await this.readStored(filename);
-        if (
-          `local:mizar-pack:${existing.manifest.packageId}` === ref.id &&
-          existing.manifest.version === ref.version &&
-          existing.digest !== ref.digest
-        )
-          throw new Error('identity_conflict', { cause: error });
-        throw error;
-      }
+      await this.readArchive(ref);
       return commit(ref);
     });
   }
