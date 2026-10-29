@@ -227,7 +227,7 @@ impl SessionStore {
                     old.as_object_mut().ok_or("snapshot_invalid")?.remove("consoleDiagnostics");
                     next.as_object_mut().ok_or("snapshot_invalid")?.remove("consoleDiagnostics");
                 }
-                for key in ["launchAttempted", "launchTime", "launchCancelled", "pid", "created"] {
+                for key in ["launchAttempted", "launchTime", "launchCancelled", "pid", "created", "mulnxLaunch"] {
                     old.as_object_mut().ok_or("snapshot_invalid")?.remove(key);
                     next.as_object_mut().ok_or("snapshot_invalid")?.remove(key);
                 }
@@ -236,6 +236,9 @@ impl SessionStore {
                     || (!value["launchTime"].is_null() && value["launchTime"].as_u64().is_none())
                     || (!value["pid"].is_null() && value["pid"].as_u64().is_none())
                     || (!value["created"].is_null() && value["created"].as_u64().is_none())
+                    || (!value["mulnxLaunch"].is_null() && value["mulnxLaunch"] != true)
+                    || (previous["mulnxLaunch"] == true && value["mulnxLaunch"] != true)
+                    || (previous["launchAttempted"] == true && previous["mulnxLaunch"] != value["mulnxLaunch"])
                     || value["pid"].is_null() != value["created"].is_null()
                     || (previous["launchAttempted"] == true && value["launchAttempted"] != true)
                     || (previous["launchCancelled"] == true && value["launchCancelled"] != true)

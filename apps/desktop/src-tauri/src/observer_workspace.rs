@@ -17,11 +17,6 @@ fn request(log: &DesktopLog, body: serde_json::Value) -> Result<serde_json::Valu
 
 pub fn active() -> bool { ACTIVE.load(Ordering::Acquire) }
 
-fn native_toggle_session(log: &DesktopLog) -> Result<bool, String> {
-    let store = crate::cs2_session::SessionStore::new(log.state_root.clone());
-    Ok(store.load()?.is_some_and(|context| context["nativeHudToggle"] == true && context["spectatorCfg"] == true)
-        || store.mulnx_observer_native()?)
-}
 
 pub fn stop(log: &DesktopLog) -> Result<(), String> {
     if ACTIVE.load(Ordering::Acquire) {
@@ -34,7 +29,7 @@ pub fn stop(log: &DesktopLog) -> Result<(), String> {
 /// End game automation only at the production/control boundary, independently of auxiliary enablement.
 pub fn finish(log: &DesktopLog) -> Result<(), String> {
     let observer = stop(log);
-    let hud = native_toggle_session(log).and_then(|native| if native { Ok(()) } else { crate::observer_hud::restore(log) });
+    let hud = crate::observer_hud::restore(log);
     production_exit::cleanup_results(observer, hud)
 }
 
@@ -71,7 +66,7 @@ pub async fn observer_command(window: tauri::WebviewWindow, app: tauri::AppHandl
                 app.state::<crate::updates::PendingUpdate>().check()?;
                 let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
                 let _cs2 = managed.lock().map_err(|_| "请等待游戏操作完成后重试。")?;
-                return if native_toggle_session(&log)? { Ok(()) } else { crate::observer_hud::restore(&log) };
+                return crate::observer_hud::restore(&log);
             }
             if action == "preflight" {
                 let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
@@ -100,6 +95,9 @@ pub async fn observer_command(window: tauri::WebviewWindow, app: tauri::AppHandl
                 let mut intent = serde_json::json!({"action":"prepare","game":game_key,"job":job,"useMulnx":use_mulnx,"nativeHudToggle":native_hud_toggle});
                 if let Some(revision) = expected_revision { intent["expectedRevision"] = revision.into(); }
                 let preparation = request(&log, intent)?;
+                if native_hud_toggle && use_mulnx && crate::observer_hud::preflight(&log, true)? {
+                    crate::observer_hud::initialize(&log, std::path::Path::new(executable), &game)?;
+                }
                 if preparation["enabled"] != true { stop(&log)?; return Ok(()); }
                 if preparation["reuse"] == true { ACTIVE.store(true, Ordering::Release); return Ok(()); }
                 let mut body = serde_json::json!({"action":"start-configured","executable":executable,

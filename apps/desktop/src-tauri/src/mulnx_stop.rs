@@ -3,6 +3,81 @@ use crate::{cs2_session, startup_log::DesktopLog};
 use serde_json::{json, Value};
 use std::{fs, io::Write, path::PathBuf};
 
+#[repr(C)]
+struct ModuleEntry {
+    size: u32, module_id: u32, process_id: u32, global_usage: u32, process_usage: u32,
+    base: *mut u8, base_size: u32, module: isize, name: [u16; 256], path: [u16; 260],
+}
+#[link(name = "kernel32")]
+extern "system" {
+    fn OpenEventW(access: u32, inherit: i32, name: *const u16) -> isize;
+    fn WaitForSingleObject(handle: isize, timeout: u32) -> u32;
+    fn CloseHandle(handle: isize) -> i32;
+    fn CreateToolhelp32Snapshot(flags: u32, pid: u32) -> isize;
+    fn Module32FirstW(snapshot: isize, entry: *mut ModuleEntry) -> i32;
+    fn Module32NextW(snapshot: isize, entry: *mut ModuleEntry) -> i32;
+    fn GetLastError() -> u32;
+}
+struct Handle(isize);
+impl Drop for Handle { fn drop(&mut self) { unsafe { CloseHandle(self.0); } } }
+
+/// Open before submission and hold the event through this injection's stop.
+pub struct UnloadProof(Handle);
+impl UnloadProof {
+    pub fn open(pid: u32) -> Result<Self, String> {
+        let name: Vec<u16> = format!("Local\\MulNX_CS2_UnloadReady_{pid}").encode_utf16().chain(Some(0)).collect();
+        let handle = unsafe { OpenEventW(0x00100000, 0, name.as_ptr()) };
+        if handle == 0 { return Err("无法打开 MulNX 卸载确认事件，未发送停止命令。".into()); }
+        let proof = Self(Handle(handle));
+        if unsafe { WaitForSingleObject(handle, 0) } != 258 {
+            return Err("MulNX 卸载事件状态不可用，未发送停止命令。".into());
+        }
+        Ok(proof)
+    }
+    pub fn confirm(&self, game: &crate::managed_cs2::WorkspaceProcess) -> Result<(), String> {
+        if unsafe { WaitForSingleObject(self.0.0, 10000) } != 0 {
+            return Err("MulNX 卸载完成未确认，请保留游戏并检查后重试。".into());
+        }
+        verify_absent(game)
+    }
+}
+
+fn module_present(game: &crate::managed_cs2::WorkspaceProcess) -> Result<bool, String> {
+    if !game.is_running() { return Err("游戏已退出，MulNX 状态无法单独确认。".into()); }
+    let snapshot = unsafe { CreateToolhelp32Snapshot(0x18, game.pid) };
+    if snapshot == -1 { return Err("无法检查 MulNX 模块，状态未知。".into()); }
+    let snapshot = Handle(snapshot);
+    let mut entry: ModuleEntry = unsafe { std::mem::zeroed() };
+    entry.size = std::mem::size_of::<ModuleEntry>() as u32;
+    let mut next = unsafe { Module32FirstW(snapshot.0, &mut entry) };
+    let mut found = false;
+    while next != 0 {
+        let length = entry.name.iter().position(|c| *c == 0).unwrap_or(entry.name.len());
+        if String::from_utf16_lossy(&entry.name[..length]).eq_ignore_ascii_case("CS2OBTool.dll") { found = true; }
+        next = unsafe { Module32NextW(snapshot.0, &mut entry) };
+    }
+    if unsafe { GetLastError() } != 18 { return Err("无法完整检查 MulNX 模块，状态未知。".into()); }
+    if !game.is_running() { return Err("游戏身份已失效，MulNX 状态未知。".into()); }
+    Ok(found)
+}
+
+/// A live gateway and loaded module establish the current injection before
+/// opening its event; the event name alone does not identify an injection cycle.
+pub fn verify_present(game: &crate::managed_cs2::WorkspaceProcess) -> Result<(), String> {
+    if !module_present(game)? { return Err("当前游戏没有已启动的 MulNX 模块，未发送停止命令。".into()); }
+    Ok(())
+}
+
+/// Recheck the same live process on every retry, including after a restart.
+pub fn verify_absent(game: &crate::managed_cs2::WorkspaceProcess) -> Result<(), String> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if !module_present(game)? { return Ok(()); }
+        if std::time::Instant::now() >= deadline { return Err("MulNX 模块仍在游戏中，卸载结果未知。".into()); }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
 #[derive(Clone)]
 pub struct Identity {
     pub pid: u32,
@@ -26,12 +101,27 @@ pub fn blocked(log: &DesktopLog, game: &Identity) -> Result<bool, String> {
     }
     let bytes = fs::read(&path).map_err(|error| cs2_session::io_error("停止控制记录无法读取；不要重复发送，请导出诊断。", &error))?;
     let record: Value = serde_json::from_slice(&bytes).map_err(|_| "停止控制记录不完整；不要重复发送，请导出诊断。")?;
-    if record["version"] != 1 || record["phase"] != "possibly-sent"
+    if record["version"] != 1 || !["possibly-sent", "confirmed"].contains(&record["phase"].as_str().unwrap_or(""))
         || record["pid"].as_u64() != Some(game.pid as u64) || record["created"].as_u64() != Some(game.created)
         || !record["executable"].as_str().is_some_and(|value| value.eq_ignore_ascii_case(&game.executable.to_string_lossy())) {
         return Err("停止控制记录与游戏身份不一致；不要重复发送，请导出诊断。".into());
     }
     Ok(true)
+}
+
+/// A confirmed record is useful only while the exact game identity still matches.
+pub fn confirmed(log: &DesktopLog, game: &Identity) -> Result<bool, String> {
+    if !blocked(log, game)? { return Ok(false); }
+    let bytes = fs::read(path(log, game)).map_err(|e| cs2_session::io_error("停止控制记录无法读取。", &e))?;
+    let record: Value = serde_json::from_slice(&bytes).map_err(|_| "停止控制记录不完整。")?;
+    Ok(record["phase"] == "confirmed")
+}
+pub fn mark_confirmed(log: &DesktopLog, game: &Identity) -> Result<(), String> {
+    if !blocked(log, game)? { return Err("停止控制记录缺失。".into()); }
+    let record = json!({"version":1,"phase":"confirmed", "pid":game.pid,
+        "created":game.created,"executable":game.executable});
+    let bytes = serde_json::to_vec(&record).map_err(|_| "卸载确认记录无法保存。")?;
+    cs2_session::atomic_write(&path(log, game), &bytes)
 }
 
 pub fn uncertain(guard: &str) -> Value {
@@ -104,6 +194,18 @@ pub fn submit<T>(log: &DesktopLog, game: &Identity,
                 assert!(blocked(&restarted, game).unwrap()); // A new instance never removes the old reservation.
             });
         }
+    }
+    #[test] fn confirmation_is_persisted_for_the_same_process_and_never_rearms_stop() {
+        fixture(|log, game| {
+            reserve(log, game).unwrap();
+            assert!(!confirmed(log, game).unwrap());
+            mark_confirmed(log, game).unwrap();
+            assert!(confirmed(log, game).unwrap());
+            assert!(blocked(log, game).unwrap());
+            let wrong = Identity { executable: PathBuf::from(r"C:\other\cs2.exe"), ..game.clone() };
+            assert!(confirmed(log, &wrong).is_err());
+            assert_eq!(submit(log, game, || panic!("already confirmed"), |()| panic!("duplicate stop")).unwrap()["stopGuard"], "already-submitted");
+        });
     }
     #[test] fn preflight_and_storage_failures_do_not_send() {
         fixture(|log, game| {

@@ -1,7 +1,13 @@
 import { fileURLToPath } from 'node:url';
+import { randomUUID } from 'node:crypto';
 export type GatewayResult = 'queued' | 'rejected' | 'unknown';
 type CameraCommand =
-  'CamMacro/Play' | 'CamPlay/ClearForce' | 'System/Stop' | 'CS2BootLoader/Launch';
+  | 'CamMacro/Play'
+  | 'CamPack/Apply'
+  | 'CamPack/Status'
+  | 'CamPlay/ClearForce'
+  | 'System/Stop'
+  | 'CS2BootLoader/Launch';
 /** Fixed audited gateway. No arbitrary commands, endpoint, reconnect, retries or offline queue. */
 export class MulnxProvider {
   private socket: WebSocket | null = null;
@@ -68,7 +74,7 @@ export class MulnxProvider {
     });
     this.diagnostic('camera_connect', { result: 'connected', generation });
   }
-  send(type: CameraCommand, macro = ''): Promise<GatewayResult> {
+  send(type: CameraCommand, value = ''): Promise<GatewayResult> {
     if (!this.connected) return Promise.resolve('unknown');
     if (this.pending) {
       if (type !== 'CamPlay/ClearForce' && type !== 'System/Stop')
@@ -77,7 +83,10 @@ export class MulnxProvider {
     }
     const wire = JSON.stringify({
       type,
-      payload: type === 'CamMacro/Play' ? JSON.stringify(macro) : '',
+      payload:
+        type === 'CamMacro/Play' || type === 'CamPack/Apply' || type === 'CamPack/Status'
+          ? JSON.stringify(value)
+          : '',
     });
     const socket = this.socket!;
     this.diagnostic('camera_request', { wire, generation: this.generation, result: 'submitted' });
@@ -107,6 +116,54 @@ export class MulnxProvider {
         if (this.socket === socket) this.close();
       }
     });
+  }
+  async packStatus(): Promise<{ active: string | null; empty: boolean } | null> {
+    const socket = this.socket;
+    if (!socket || !this.connected || this.pending) return null;
+    const requestId = randomUUID();
+    const generation = this.generation;
+    let finish!: (status: { active: string | null; empty: boolean } | null) => void;
+    const response = new Promise<{ active: string | null; empty: boolean } | null>((resolve) => {
+      const timer = setTimeout(() => finish(null), 1500);
+      const listener = ({ data }: MessageEvent) => {
+        if (typeof data !== 'string' || data.length > 64 * 1024) return;
+        try {
+          const value: unknown = JSON.parse(data);
+          if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+          const status = value as Record<string, unknown>;
+          if (status.type !== 'CamPack/Status' || status.requestId !== requestId) return;
+          if (status.active === null) return finish({ active: null, empty: false });
+          if (
+            typeof status.active !== 'string' ||
+            !['OnNewRoundEmpty', 'OnRoundStartEmpty', 'OnRoundEndEmpty'].every(
+              (key) => typeof status[key] === 'boolean',
+            )
+          )
+            return finish(null);
+          finish({
+            active: status.active,
+            empty:
+              status.OnNewRoundEmpty === true &&
+              status.OnRoundStartEmpty === true &&
+              status.OnRoundEndEmpty === true,
+          });
+        } catch {
+          /* unrelated messages */
+        }
+      };
+      finish = (status) => {
+        clearTimeout(timer);
+        socket.removeEventListener('message', listener);
+        resolve(status);
+      };
+      socket.addEventListener('message', listener);
+    });
+    const ack = await this.send('CamPack/Status', requestId);
+    if (ack !== 'queued') finish(null);
+    const status = await response;
+    return ack === 'queued' && this.socket === socket && this.generation === generation
+      ? status
+      : null;
   }
   /** Upstream #9 only acknowledges queueing. Never retry or infer unload from disconnect. */
   async stopControl(): Promise<GatewayResult> {

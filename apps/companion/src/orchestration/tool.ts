@@ -1,6 +1,17 @@
 import { z } from 'zod';
+import { parseDocument } from 'yaml';
 import { createHash, randomUUID } from 'node:crypto';
-import { copyFile, lstat, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import {
+  copyFile,
+  lstat,
+  mkdir,
+  open,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import { join } from 'node:path';
 import { atomicJson, ensureDirectory, readJson, safePath } from '../resource-store/files.js';
 import { prepareIsolatedPack } from './prepare-pack.js';
@@ -48,6 +59,13 @@ export function consoleLaunchOptions(source: string): string {
   const options = /(?:^|\s)-condebug(?:\s|$)/i.test(value) ? value : `${value} -condebug`.trim();
   return source.replace(/^launchOptions\s*:.*$/m, `launchOptions: ${JSON.stringify(options)}`);
 }
+/** Remove only the bundled first-Demo POV trigger; leave all other commands intact. */
+export function firstDemoOptions(source: string): string {
+  return source.replace(
+    /^[\t ]*MulNX\/CSCfg\/POV[\t ]*(?=\r?$)/gim,
+    '// Mizar: POV remains operator controlled',
+  );
+}
 /** Distribution state is independent of the Mizar application and camera presets. */
 export class MulnxTool {
   private installed: InstalledTool | undefined;
@@ -90,7 +108,6 @@ export class MulnxTool {
             .max(128),
         })
         .parse(await readJson(this.directory, 'current.json'));
-      await safePath(join(this.directory, data.directory), 'MulNX/CS2Injector/CS2Injector.exe');
       this.installed = data;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
@@ -126,12 +143,42 @@ export class MulnxTool {
     return this.run('mulnx_prepare', async () => {
       // Called only by the authenticated native host after its process and install checks.
       // Entry uses prepared local bytes. The explicit update action owns network discovery.
+      let launcherUnavailable = false;
+      if (this.installed) {
+        // Recheck the actual file on every attempt; the receipt alone cannot prove it is usable.
+        try {
+          const path = await safePath(
+            join(this.directory, this.installed.directory),
+            'MulNX/CS2Injector/CS2Injector.exe',
+          );
+          const file = await open(path, 'r');
+          try {
+            await file.read(Buffer.alloc(1), 0, 1, 0);
+          } finally {
+            await file.close();
+          }
+        } catch (error) {
+          if (!['ENOENT', 'EACCES', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? ''))
+            throw error;
+          if (!update)
+            throw new Error(
+              'MulNX 启动程序缺失或无法读取。请核对官方来源及 Windows 安全中心的检测记录；处理后重新进入工作台以检查文件；文件已删除时，可在“设置 → 运镜”点击更新 MulNX 重新安装。旧版本文件和设置已保留。仍无法使用时，可在“设置 → 游戏与观战 → CS2 启动设置”选择标准启动并保存。',
+              { cause: error },
+            );
+          launcherUnavailable = true;
+        }
+      }
       const release = update
         ? await latestMulnxRelease()
         : (this.installed?.release ??
           z.object({ release: releaseSchema }).parse(await readJson(this.bundle, 'release.json'))
             .release);
-      if (!this.installed || this.installed.release.sha256 !== release.sha256)
+      if (
+        update ||
+        launcherUnavailable ||
+        !this.installed ||
+        this.installed.release.sha256 !== release.sha256
+      )
         await this.install(release, cs2Path);
       const root = join(this.directory, this.installed!.directory, 'MulNX');
       await this.configureLauncher(root, cs2Path, consoleCapture, spectatorCfg);
@@ -139,12 +186,63 @@ export class MulnxTool {
       return { launcher, version: this.installed!.release.tag };
     });
   }
+  private async replaceManaged(path: string, original: string, updated: string) {
+    if (original === updated) return;
+    const temporary = `${path}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temporary, updated, { flag: 'wx' });
+      if ((await readFile(path, 'utf8')) !== original) throw new Error('mulnx_config_conflict');
+      await rename(temporary, path);
+    } finally {
+      await rm(temporary, { force: true });
+    }
+  }
+  private async configureReflection(root: string, relative: string, key: string) {
+    const path = await safePath(root, relative);
+    const stat = await lstat(path);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 256 * 1024)
+      throw new Error('mulnx_config_invalid');
+    const original = await readFile(path, 'utf8');
+    const document = parseDocument(original, { uniqueKeys: true });
+    if (document.errors.length || document.warnings.length) throw new Error('mulnx_config_invalid');
+    const value: unknown = document.toJS({ maxAliasCount: 0 });
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+      throw new Error('mulnx_config_invalid');
+    document.set(key, false);
+    await this.replaceManaged(path, original, document.toString());
+  }
+  private async configureFirstDemo(root: string) {
+    const relative = 'CS2OBTool/AutoCfgLoad/FirstPlayDemo';
+    let directory: string;
+    try {
+      directory = await safePath(join(root, relative));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw error;
+    }
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith('.cfg')) continue;
+      const path = join(directory, entry.name);
+      const stat = await lstat(path);
+      if (stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 1024 * 1024)
+        throw new Error('mulnx_first_demo_config_invalid');
+      const original = await readFile(path, 'utf8');
+      await this.replaceManaged(path, original, firstDemoOptions(original));
+    }
+  }
   private async configureLauncher(
     root: string,
     cs2Path: string,
     consoleCapture = false,
     spectatorCfg = false,
   ) {
+    await this.configureReflection(root, 'Config/CS2OBTool_Refl.yaml', 'UISystem.ifDrawMid');
+    await this.configureReflection(
+      root,
+      'Config/CS2Injector_Refl.yaml',
+      'CS2HelperController.injectReshade',
+    );
+    await this.configureFirstDemo(root);
     const auto = await readFile(
       await safePath(root, 'CS2Injector/CS2BootLoader/Config/auto.yaml'),
       'utf8',

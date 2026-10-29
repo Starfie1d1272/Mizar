@@ -621,11 +621,11 @@ async fn cs2_config_status(app: tauri::AppHandle) -> Result<serde_json::Value, S
 
 #[tauri::command]
 async fn launch_mulnx(window: tauri::WebviewWindow, app: tauri::AppHandle,
-    automatic: Option<bool>, diagnostic_operation_id: Option<String>) -> Result<serde_json::Value, String> {
+    automatic: Option<bool>, preserve_settings: Option<bool>, diagnostic_operation_id: Option<String>) -> Result<serde_json::Value, String> {
     if window.label() != "main" { return Err("请在准备中心打开 MulNX。".into()); }
     let log = app.state::<DesktopLog>().inner().clone();
     let evidence = log.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || mulnx_launch::launch(&app, &log, automatic.unwrap_or(true)))
+    let result = tauri::async_runtime::spawn_blocking(move || mulnx_launch::launch(&app, &log, automatic.unwrap_or(true), preserve_settings.unwrap_or(false)))
         .await.unwrap_or_else(|error| Err(format!("MulNX 启动任务失败：{error}")));
     evidence.native_outcome("launch_mulnx", diagnostic_operation_id.as_deref(), &result);
     result
@@ -704,7 +704,6 @@ async fn attach_external_cs2(
         let created = created.parse::<u64>().map_err(|_| "游戏创建标识无效。")?;
         app.state::<production_exit::ExitGate>().check()?;
         app.state::<updates::PendingUpdate>().check()?;
-        mulnx_launch::verify_managed_launch(&log, &cs2.mulnx_handoff_status()?, pid, created, &executable)?;
         production_exit::prepare_external_entry(&log, &expected_revision)?;
         cs2.attach_external(pid, created, &executable)?;
         let trial_id = if demo_trial == Some(true) {
