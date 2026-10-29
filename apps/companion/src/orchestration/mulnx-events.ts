@@ -5,17 +5,11 @@ const integer = z.number().int().safe();
 const flag = z.union([z.literal(0), z.literal(1)]);
 const playerId = z.string().regex(/^(?:0|\d{17})$/);
 const common = {
-  sequence: integer.positive(),
-  captureGeneration: integer.nonnegative(),
-  capturedAtUnixMs: integer.nonnegative(),
   attackerSteamId: playerId,
   victimSteamId: playerId,
   weapon: z.string(),
-  clientTime: z
-    .object({ timeDomain: z.literal('network_game_client_tick'), tick: integer })
-    .optional(),
 };
-const message = z.discriminatedUnion('eventType', [
+const message = z.union([
   z.object({
     ...common,
     eventType: z.literal('player_hurt'),
@@ -25,7 +19,9 @@ const message = z.discriminatedUnion('eventType', [
   }),
   z.object({
     ...common,
-    eventType: z.literal('player_death'),
+    eventType: z.never().optional(),
+    capturedAtUnixMs: integer.nonnegative().optional(),
+    networkGameClientTick: integer.optional(),
     assistSteamId: playerId,
     assistedflash: flag,
     headshot: flag,
@@ -37,49 +33,10 @@ const message = z.discriminatedUnion('eventType', [
   }),
 ]);
 
-const clockMessage = z
-  .object({
-    eventType: z.literal('game_clock'),
-    sampledAtUnixMs: integer.nonnegative(),
-    timeDomain: z.literal('network_game_client_tick'),
-    captureGeneration: integer.nonnegative(),
-    readSucceeded: z.boolean(),
-    tick: integer.optional(),
-  })
-  .refine((value) => value.readSucceeded === (value.tick !== undefined));
-
-export interface MulnxClockSample {
-  readonly sampledAtUnixMs: number;
-  readonly receivedMonotonicMs: number;
-  readonly timeDomain: 'network_game_client_tick';
-  readonly captureGeneration: number;
-  readonly readSucceeded: boolean;
-  readonly tick?: number;
-}
-
-export function parseMulnxClock(
-  input: unknown,
-  receivedMonotonicMs: number,
-): MulnxClockSample | null {
-  const result = clockMessage.safeParse(input);
-  if (!result.success || !Number.isFinite(receivedMonotonicMs)) return null;
-  const sample = result.data;
-  return {
-    sampledAtUnixMs: sample.sampledAtUnixMs,
-    receivedMonotonicMs,
-    timeDomain: sample.timeDomain,
-    captureGeneration: sample.captureGeneration,
-    readSucceeded: sample.readSucceeded,
-    ...(sample.tick === undefined ? {} : { tick: sample.tick }),
-  };
-}
-
 type EventFacts = Omit<PlayerDeathGameEvent, 'cursor'> | Omit<PlayerHurtGameEvent, 'cursor'>;
 export interface MulnxEventCandidate {
-  readonly sequence: number;
-  readonly captureGeneration: number;
-  readonly capturedAtUnixMs: number;
-  readonly clientTime?: { readonly timeDomain: 'network_game_client_tick'; readonly tick: number };
+  readonly capturedAtUnixMs?: number;
+  readonly networkGameClientTick?: number;
   readonly facts: EventFacts;
 }
 
@@ -119,22 +76,12 @@ export function parseMulnxEvent(input: unknown): MulnxEventCandidate | null {
           attackerInAir: event.attackerinair === 1,
         };
   return {
-    sequence: event.sequence,
-    captureGeneration: event.captureGeneration,
-    capturedAtUnixMs: event.capturedAtUnixMs,
-    ...(event.clientTime === undefined ? {} : { clientTime: event.clientTime }),
+    ...('capturedAtUnixMs' in event && event.capturedAtUnixMs !== undefined
+      ? { capturedAtUnixMs: event.capturedAtUnixMs }
+      : {}),
+    ...('networkGameClientTick' in event && event.networkGameClientTick !== undefined
+      ? { networkGameClientTick: event.networkGameClientTick }
+      : {}),
     facts,
   };
-}
-
-/** One instance belongs to one socket; discard it when that socket closes. */
-export class MulnxEventSequence {
-  private last = 0;
-
-  accept(input: unknown): MulnxEventCandidate | null {
-    const event = parseMulnxEvent(input);
-    if (event === null || event.sequence <= this.last) return null;
-    this.last = event.sequence;
-    return event;
-  }
 }

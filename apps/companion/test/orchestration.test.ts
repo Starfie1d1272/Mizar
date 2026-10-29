@@ -678,10 +678,6 @@ it('real websocket separates ACK, rejection and unrelated broadcasts; disconnect
             : Buffer.concat(data)
       ).toString();
       const command = JSON.parse(wire) as { type: string; payload: string };
-      if (command.type === 'WebSocket/SelectChannel' && command.payload === 'events') {
-        socket.send(JSON.stringify({ type: 'WebSocket/ChannelSelected', payload: 'events' }));
-        return;
-      }
       wires.push(wire);
       socket.send(JSON.stringify({ attackerSteamId: '0' }));
       if (command.type === 'CamPack/Status' && ackFirst) socket.send(`已投入消息总线${wire}`);
@@ -1504,69 +1500,21 @@ it('keeps the longest concurrent GitHub secondary limit', async () => {
     vi.useRealTimers();
   }
 });
-it('receives HSI input without a pending command and separates reconnects', async () => {
+it('receives raw HSI broadcasts on the existing connection across reconnects', async () => {
   const app = Fastify();
   await app.register(websocket);
-  const requests: string[] = [];
   app.get('/', { websocket: true }, (socket) => {
-    socket.on('message', (data) => {
-      requests.push(
-        (Buffer.isBuffer(data)
-          ? data
-          : data instanceof ArrayBuffer
-            ? Buffer.from(data)
-            : Buffer.concat(data)
-        ).toString(),
-      );
-      const event = {
+    socket.send(
+      JSON.stringify({
         eventType: 'player_hurt',
-        sequence: 1,
-        captureGeneration: 2,
-        capturedAtUnixMs: 100,
         attackerSteamId: '0',
         victimSteamId: '76561198000000001',
         weapon: 'awp',
         dmgHealth: 40,
         health: 60,
         hitgroup: 1,
-      };
-      socket.send(
-        JSON.stringify({
-          eventType: 'game_clock',
-          sampledAtUnixMs: 99,
-          timeDomain: 'network_game_client_tick',
-          captureGeneration: 2,
-          readSucceeded: true,
-          tick: 122,
-        }),
-      );
-      socket.send(JSON.stringify({ type: 'WebSocket/ChannelSelected', payload: 'legacy' }));
-      socket.send(
-        JSON.stringify({
-          eventType: 'game_clock',
-          sampledAtUnixMs: 99,
-          timeDomain: 'network_game_client_tick',
-          captureGeneration: 2,
-          readSucceeded: true,
-          tick: 122,
-        }),
-      );
-      socket.send(JSON.stringify({ type: 'WebSocket/ChannelSelected', payload: 'events' }));
-      socket.send(JSON.stringify({ ...event, sequence: 2 }));
-      socket.send(
-        JSON.stringify({
-          eventType: 'game_clock',
-          sampledAtUnixMs: 100,
-          timeDomain: 'network_game_client_tick',
-          captureGeneration: 2,
-          readSucceeded: true,
-          tick: 123,
-        }),
-      );
-      socket.send(JSON.stringify({ ...event, sequence: 3, captureGeneration: 1 }));
-      socket.send(JSON.stringify({ ...event, sequence: 4 }));
-      socket.send(JSON.stringify({ ...event, sequence: 4 }));
-    });
+      }),
+    );
   });
   await app.listen({ host: '127.0.0.1', port: 0 });
   const port = (app.server.address() as { port: number }).port;
@@ -1580,18 +1528,8 @@ it('receives HSI input without a pending command and separates reconnects', asyn
   provider.subscribeInput((message) => messages.push(message));
   await provider.connect(port);
   await vi.waitFor(() =>
-    expect(requests).toEqual([
-      JSON.stringify({ type: 'WebSocket/SelectChannel', payload: 'events' }),
-    ]),
-  );
-  await vi.waitFor(() =>
     expect(messages.filter((message) => message.kind === 'event')).toHaveLength(1),
   );
-  expect(messages.find((message) => message.kind === 'clock')).toMatchObject({
-    generation: provider.generation,
-    sample: { tick: 123, readSucceeded: true },
-  });
-  expect(messages.filter((message) => message.kind === 'clock')).toHaveLength(1);
   const firstGeneration = provider.generation;
   await provider.connect(port);
   await vi.waitFor(() =>

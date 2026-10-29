@@ -28,7 +28,6 @@ import { CameraDirector } from './orchestration/director.js';
 import { MulnxTool } from './orchestration/tool.js';
 import { OrchestrationStore } from './orchestration/store.js';
 import { MulnxProvider } from './orchestration/provider.js';
-import { MulnxProgramClock } from './orchestration/mulnx-clock.js';
 import { registerOrchestrationRoutes } from './orchestration/routes.js';
 import { registerDiagnosticDelivery } from './support/delivery-routes.js';
 import { checkLocalWebOrigin } from './local-web/origin-policy.js';
@@ -827,8 +826,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   let cameraDirector: CameraDirector | undefined;
   let catalogTool: MulnxTool | undefined;
   let catalogToolLoaded = false;
-  let mulnxClock: MulnxProgramClock | undefined;
-  let mulnxClockState = '';
   const bpPresentationSettings = new BpPresentationSettings(
     options.obsConfigPath
       ? join(dirname(options.obsConfigPath), 'bp-presentation.json')
@@ -1375,8 +1372,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     }
     catalogTool = mulnxTool;
     const mulnxProvider = new MulnxProvider(cameraEvidence);
-    mulnxClock = new MulnxProgramClock(mulnxProvider);
-    app.addHook('onClose', () => mulnxClock?.close());
     cameraDirector = new CameraDirector(
       cameraStore,
       mulnxProvider,
@@ -1478,11 +1473,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     void director.tick().catch(() => director.hold());
     void musicDirector?.tick();
     cameraDirector?.tick();
-    const clockState = mulnxClock?.current(performance.now()).state;
-    if (clockState && clockState !== mulnxClockState) {
-      mulnxClockState = clockState;
-      sessionJournal?.record('program_clock', { state: clockState });
-    }
     if (gameAudio) {
       const projection = projectionCoordinator.getCurrent();
       gameAudio.tick(
