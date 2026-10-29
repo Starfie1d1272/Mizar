@@ -1,4 +1,5 @@
 import { AudioMigration, type MigrationObserver } from './audio-migration.js';
+import { inspectAudioSceneGraph } from './audio-scene-graph.js';
 import { OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
 import type { ObsRpc } from './reconcile.js';
 import type { ObsAudioRole } from '@mizar/protocol/obs';
@@ -68,32 +69,52 @@ export async function reconcileManagedAudio(
   };
   try {
     await check();
-    const desktop: { sceneName: string; sceneItemId: number; sourceUuid: string }[] = [];
+    const desktop: {
+      sceneName: string;
+      sceneItemId: number;
+      sourceUuid: string;
+      group?: boolean;
+    }[] = [];
     const independent: typeof desktop = [];
-    for (const { sceneName } of obsDesiredScenes(baseUrl)) {
-      let items = records((await obs.call('GetSceneItemList', { sceneName })).sceneItems);
-      if (
-        items.some(
-          (item) =>
-            item.sceneItemEnabled !== false &&
-            (item.isGroup === true || item.sourceType === 'OBS_SOURCE_TYPE_SCENE'),
-        )
-      )
-        throw new Error('audio_nested_path_unresolved');
-      for (const input of selected) {
-        if (!items.some((item) => item.sourceUuid === input.inputUuid)) {
-          await check();
-          await obs.call('CreateSceneItem', {
-            sceneName,
-            sourceName: input.inputName,
-            sceneItemEnabled: false,
-          });
-          items = records((await obs.call('GetSceneItemList', { sceneName })).sceneItems);
+    const desired = obsDesiredScenes(baseUrl);
+    const graph = await inspectAudioSceneGraph(
+      obs,
+      desired.map((scene) => scene.sceneName),
+    );
+    // Check nested paths before creating or changing any scene references.
+    for (const container of graph) {
+      if (!container.activeManagedRoots.size || desired.some((s) => s.sceneName === container.name))
+        continue;
+      for (const item of container.items) {
+        if (!item.sceneItemEnabled) continue;
+        const input = inputs.find((value) => value.inputUuid === item.sourceUuid);
+        if (!input) continue;
+        if (wantedIds.includes(item.sourceUuid)) throw new Error('audio_nested_target_unresolved');
+        if (['game_capture', 'window_capture'].includes(String(input.inputKind))) {
+          const settings = (await obs.call('GetInputSettings', { inputUuid: item.sourceUuid }))
+            .inputSettings as Record<string, unknown>;
+          if (settings?.capture_audio === true) throw new Error('audio_video_path_unresolved');
         }
-        if (items.filter((item) => item.sourceUuid === input.inputUuid).length !== 1)
-          throw new Error('audio_duplicate_path');
+        if (!audioKinds.has(String(input.inputKind))) continue;
+        if (container.otherRoots.size) throw new Error('audio_nested_shared_path');
+        // Restoring an existing nested reference needs a persistent reverse plan;
+        // do not replace it with a new direct scene reference in the meantime.
+        throw new Error('audio_nested_path_unresolved');
       }
-      snapshots.set(sceneName, JSON.stringify(items));
+      snapshots.set(
+        `${container.group ? 'group' : 'scene'}\0${container.name}`,
+        JSON.stringify(container.items),
+      );
+    }
+    const missing: { sceneName: string; input: Record<string, unknown> }[] = [];
+    for (const { sceneName } of desired) {
+      const items = records((await obs.call('GetSceneItemList', { sceneName })).sceneItems);
+      for (const input of selected) {
+        const count = items.filter((item) => item.sourceUuid === input.inputUuid).length;
+        if (count > 1) throw new Error('audio_duplicate_path');
+        if (count === 0) missing.push({ sceneName, input });
+      }
+      snapshots.set(`scene\0${sceneName}`, JSON.stringify(items));
       for (const item of items) {
         const input = inputs.find((value) => value.inputUuid === item.sourceUuid);
         if (!input) continue;
@@ -119,12 +140,46 @@ export async function reconcileManagedAudio(
         if (!wanted && item.sceneItemEnabled) desktop.push(ref);
       }
     }
-    preparing = false;
-    for (const [sceneName, snapshot] of snapshots)
+    for (const { sceneName, input } of missing) {
+      await check();
+      const key = `scene\0${sceneName}`;
       if (
-        JSON.stringify((await obs.call('GetSceneItemList', { sceneName })).sceneItems) !== snapshot
+        JSON.stringify((await obs.call('GetSceneItemList', { sceneName })).sceneItems) !==
+        snapshots.get(key)
       )
         throw new Error('audio_scene_changed');
+      await obs.call('CreateSceneItem', {
+        sceneName,
+        sourceName: input.inputName,
+        sceneItemEnabled: false,
+      });
+      const items = records((await obs.call('GetSceneItemList', { sceneName })).sceneItems);
+      const matches = items.filter((item) => item.sourceUuid === input.inputUuid);
+      const item = matches[0];
+      if (
+        matches.length !== 1 ||
+        typeof item?.sceneItemId !== 'number' ||
+        typeof item.sourceUuid !== 'string' ||
+        item.sceneItemEnabled !== false
+      )
+        throw new Error('audio_selection_changed');
+      independent.push({ sceneName, sceneItemId: item.sceneItemId, sourceUuid: item.sourceUuid });
+      snapshots.set(key, JSON.stringify(items));
+    }
+    preparing = false;
+    for (const [key, snapshot] of snapshots) {
+      const [kind, sceneName] = key.split('\0');
+      if (
+        JSON.stringify(
+          (
+            await obs.call(kind === 'group' ? 'GetGroupSceneItemList' : 'GetSceneItemList', {
+              sceneName,
+            })
+          ).sceneItems,
+        ) !== snapshot
+      )
+        throw new Error('audio_scene_changed');
+    }
     await check();
     if (desktop.length || independent.length)
       await new AudioMigration(`${journal}.migration`).migrate(

@@ -9,6 +9,7 @@ const ref = z
     sceneName: z.string().min(1),
     sceneItemId: z.number().int(),
     sourceUuid: z.string().min(1),
+    group: z.boolean().optional(),
   })
   .strict();
 const field = ref
@@ -68,12 +69,61 @@ export class AudioMigration {
     }
   }
   async pending(): Promise<Journal | null> {
+    return this.readJournal(this.path);
+  }
+  private async readJournal(path: string): Promise<Journal | null> {
     try {
-      return journalSchema.parse(JSON.parse(await readFile(this.path, 'utf8')));
+      return journalSchema.parse(JSON.parse(await readFile(path, 'utf8')));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw error;
     }
+  }
+  /** Restore a completed switch only while every recorded item still has the
+   * value written by that switch. The ordinary migration journal protects the
+   * reverse operation itself if its outcome becomes uncertain. */
+  async restoreCompleted(
+    obs: ObsRpc,
+    endpoint: string,
+    observer: MigrationObserver,
+    completedPath: string,
+  ): Promise<boolean> {
+    const completed = await this.readJournal(completedPath);
+    if (!completed) return false;
+    if (
+      completed.endpoint !== endpoint ||
+      completed.fields.some((entry) => entry.externalChanged || entry.phase !== 'confirmed')
+    )
+      throw new Error('audio_migration_external_change');
+    const values = await Promise.all(completed.fields.map((entry) => this.status(obs, entry)));
+    // A crash may occur after all reverse writes but before the mode commit.
+    // Retain the record until that commit so a retry can recognize this state.
+    if (completed.fields.every((entry, index) => values[index] === entry.before)) return true;
+    if (completed.fields.some((entry, index) => values[index] !== entry.applied))
+      throw new Error('audio_migration_external_change');
+    const desktop: AudioMigrationPlan['desktop'] = [];
+    const independent: AudioMigrationPlan['independent'] = [];
+    for (const entry of completed.fields) {
+      const ref = {
+        sceneName: entry.sceneName,
+        sceneItemId: entry.sceneItemId,
+        sourceUuid: entry.sourceUuid,
+        ...(entry.group === undefined ? {} : { group: entry.group }),
+      };
+      (entry.before ? independent : desktop).push(ref);
+    }
+    await this.migrate(
+      obs,
+      endpoint,
+      {
+        endpoint: completed.endpoint,
+        collection: completed.collection,
+        desktop,
+        independent,
+      },
+      observer,
+    );
+    return true;
   }
   private async context(obs: ObsRpc, plan: AudioMigrationPlan, endpoint: string, idle: boolean) {
     const [stream, record, collection] = await Promise.all([
@@ -87,7 +137,11 @@ export class AudioMigration {
       throw new Error('audio_migration_output_active');
   }
   private async status(obs: ObsRpc, entry: Field): Promise<boolean> {
-    const raw = (await obs.call('GetSceneItemList', { sceneName: entry.sceneName })).sceneItems;
+    const raw = (
+      await obs.call(entry.group ? 'GetGroupSceneItemList' : 'GetSceneItemList', {
+        sceneName: entry.sceneName,
+      })
+    ).sceneItems;
     if (!Array.isArray(raw)) throw new Error('audio_migration_items_unknown');
     const found = raw.find(
       (value: unknown) =>
@@ -158,8 +212,8 @@ export class AudioMigration {
       )
         throw new Error('audio_migration_external_change');
       await check();
-      // Open previous paths before closing paths added by the interrupted switch.
-      for (const entry of [...journal.fields].sort((a, b) => Number(b.before) - Number(a.before))) {
+      // Close paths added by the interrupted switch before reopening the previous paths.
+      for (const entry of [...journal.fields].sort((a, b) => Number(a.before) - Number(b.before))) {
         await check();
         const current = await this.status(obs, entry);
         if (current !== entry.before) {
@@ -202,6 +256,7 @@ export class AudioMigration {
     endpoint: string,
     raw: AudioMigrationPlan,
     observer: MigrationObserver,
+    completedPath?: string,
   ): Promise<void> {
     if (this.running) throw new Error('audio_migration_busy');
     const plan = planSchema.parse(raw);
@@ -217,17 +272,17 @@ export class AudioMigration {
       endpoint: plan.endpoint,
       collection: plan.collection,
       fields: [
-        ...plan.independent.map((x) => ({
-          ...x,
-          before: false,
-          applied: true,
-          phase: 'prepared' as const,
-          externalChanged: false,
-        })),
         ...plan.desktop.map((x) => ({
           ...x,
           before: true,
           applied: false,
+          phase: 'prepared' as const,
+          externalChanged: false,
+        })),
+        ...plan.independent.map((x) => ({
+          ...x,
+          before: false,
+          applied: true,
           phase: 'prepared' as const,
           externalChanged: false,
         })),
@@ -358,16 +413,22 @@ export class AudioMigration {
         throw new Error('audio_migration_external_change');
       unsubscribe();
       // Keep the original reference states as an audit/restore backup after a successful change.
-      await rename(this.path, `${this.path}.completed-${randomUUID()}.json`);
+      if (completedPath) {
+        // Do not replace the only restore record from an earlier switch.
+        await link(this.path, completedPath);
+        await rm(this.path);
+      } else {
+        await rename(this.path, `${this.path}.completed-${randomUUID()}.json`);
+      }
       created = false;
     } catch (error) {
       await flush();
       if (created && available() && !journal.fields.some((x) => x.phase === 'uncertain')) {
         try {
-          // Restore old paths before closing any newly enabled path.
-          for (const entry of journal.fields.filter((x) => x.before && x.phase === 'confirmed'))
-            await send(entry, entry.before, 'restored', false);
+          // Close newly enabled paths before restoring old paths to avoid duplicate audio.
           for (const entry of journal.fields.filter((x) => !x.before && x.phase === 'confirmed'))
+            await send(entry, entry.before, 'restored', false);
+          for (const entry of journal.fields.filter((x) => x.before && x.phase === 'confirmed'))
             await send(entry, entry.before, 'restored', false);
           if (journal.fields.every((x) => x.phase === 'prepared' || x.phase === 'restored')) {
             await rm(this.path);
