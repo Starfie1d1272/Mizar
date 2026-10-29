@@ -20,6 +20,7 @@ it('renames only the journal-owned legacy game input, preserving its UUID and ot
   let active = true;
   const obs: ObsRpc = {
     async call(type, data) {
+      await Promise.resolve();
       if (type === 'GetStreamStatus' || type === 'GetRecordStatus') return { outputActive: active };
       if (type === 'GetSceneCollectionList') return { currentSceneCollectionName: 'Mizar' };
       if (type === 'GetInputList') return { inputs };

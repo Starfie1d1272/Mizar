@@ -179,7 +179,7 @@ export async function renameLegacyProbe(
 ): Promise<void> {
   let saved: { endpoint?: string; collection?: string; uuid?: string; name?: string };
   try {
-    saved = JSON.parse(await readFile(journalPath, 'utf8'));
+    saved = JSON.parse(await readFile(journalPath, 'utf8')) as typeof saved;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
     throw error;
