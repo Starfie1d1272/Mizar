@@ -1467,9 +1467,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       resources: resources?.list() ?? null,
       tool: tool
         ? {
-            installed: tool.installed,
-            latest: tool.latest,
-            busy: tool.busy,
+            ...tool,
             packs: tool.packs.map((pack) => pack.sourceName),
           }
         : null,

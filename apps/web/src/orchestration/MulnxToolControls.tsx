@@ -152,7 +152,12 @@ export function MulnxToolControls({
           {tool.sourceMessage ? <span>{tool.sourceMessage} </span> : null}
           <Button
             onClick={() =>
-              void command('/operator/orchestration', { action: 'cancel-tool-download' })
+              void command('/operator/orchestration', { action: 'cancel-tool-download' }).catch(
+                () => {
+                  setFailed(true);
+                  setMessage('下载状态已变化，请刷新后查看。');
+                },
+              )
             }
           >
             取消下载

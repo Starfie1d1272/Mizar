@@ -22,7 +22,10 @@ it('replaces an obsolete MulNX notice and defers its return while typing', async
   };
   HTMLDialogElement.prototype.close = function () {
     this.open = false;
+    setTimeout(() => this.dispatchEvent(new Event('close')), 0);
   };
+  const fetchMock = vi.fn(() => Promise.resolve(new Response('{}')));
+  vi.stubGlobal('fetch', fetchMock);
   vi.spyOn(document, 'hasFocus').mockReturnValue(true);
   window.__TAURI_INTERNALS__ = { invoke: <T,>() => Promise.resolve(undefined as T) };
   const host = document.createElement('div');
@@ -45,6 +48,10 @@ it('replaces an obsolete MulNX notice and defers its return while typing', async
     };
     await render();
     expect(host.textContent).toContain('MulNX v3');
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
     fixture.status = { ...fixture.status, notificationSafe: false };
     await render();
     expect(host.querySelector('dialog')?.open).toBe(false);
@@ -66,6 +73,7 @@ it('replaces an obsolete MulNX notice and defers its return while typing', async
     host.remove();
     input.remove();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     delete window.__TAURI_INTERNALS__;
   }
 });

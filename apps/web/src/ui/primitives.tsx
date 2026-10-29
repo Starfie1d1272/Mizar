@@ -202,12 +202,16 @@ export function Dialog({
   showCloseButton?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const programmaticCloses = useRef(0);
   const id = useId();
   useEffect(() => {
     const dialog = ref.current;
     if (!dialog || !modal) return;
     if (open && !dialog.open) dialog.showModal();
-    if (!open && dialog.open) dialog.close();
+    if (!open && dialog.open) {
+      programmaticCloses.current++;
+      dialog.close();
+    }
   }, [open, modal]);
   return (
     <dialog
@@ -240,7 +244,13 @@ export function Dialog({
           first?.focus();
         }
       }}
-      onClose={onClose}
+      onClose={() => {
+        if (programmaticCloses.current > 0) {
+          programmaticCloses.current--;
+          return;
+        }
+        onClose();
+      }}
     >
       <h2 id={id}>{title}</h2>
       {children}
