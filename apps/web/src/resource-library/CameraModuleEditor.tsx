@@ -1,52 +1,34 @@
-import { useState } from 'react';
-import { parseModuleRecord, type ModuleRecord } from '@mizar/broadcast-config';
+import type { CameraModuleV2 } from '@mizar/broadcast-config';
 import { CAMERA_STAGES, cameraMapSchema, type CameraShot } from '@mizar/protocol/orchestration';
 import { MUSIC_LABELS } from '../music/MusicControls';
 import { Shot } from '../orchestration/CameraShotField';
-import { Button, Checkbox, Field, Panel, Select, StatusBanner } from '../ui';
+import { Button, Checkbox, Field, Panel, Select } from '../ui';
 
-type CameraRecord = Extract<ModuleRecord, { kind: 'camera' }>;
-
-/** The parent owns persistence and must only render this editor for editable copies. */
 export function CameraModuleEditor({
-  module,
-  modules = [module],
+  value,
+  onChange,
+  onSave,
   busy,
-  onDraftChange,
-  save,
 }: {
-  module: CameraRecord;
-  modules?: ModuleRecord[];
+  value: CameraModuleV2;
+  onChange: (value: CameraModuleV2) => void;
+  onSave: () => void;
   busy: boolean;
-  onDraftChange?: (value: CameraRecord['value']) => void;
-  save: (value: ModuleRecord) => Promise<boolean>;
 }) {
-  const [value, setDraft] = useState(module.value);
-  const setValue = (next: CameraRecord['value']) => {
-    setDraft(next);
-    onDraftChange?.(next);
-  };
-  const [error, setError] = useState(false);
-  const maps = modules.flatMap((item) => (item.kind === 'camera' ? item.value.maps : []));
-  const sources = maps
+  const sources = value.maps
     .map((map) => map.source)
     .filter(
       (source, i, all) =>
         all.findIndex((item) => JSON.stringify(item) === JSON.stringify(source)) === i,
     );
-  const sounds = [
-    ...maps.flatMap((map) => (map.openingSound ? [map.openingSound] : [])),
-    ...modules.flatMap((item) =>
-      item.kind === 'music'
-        ? Object.values(item.value.groups).flatMap((group) => group.tracks)
-        : [],
-    ),
-  ].filter(
-    (sound, i, all) =>
-      all.findIndex((item) => JSON.stringify(item) === JSON.stringify(sound)) === i,
-  );
-  const update = (index: number, patch: Partial<CameraRecord['value']['maps'][number]>) =>
-    setValue({
+  const sounds = value.maps
+    .flatMap((map) => (map.openingSound ? [map.openingSound] : []))
+    .filter(
+      (sound, i, all) =>
+        all.findIndex((item) => JSON.stringify(item) === JSON.stringify(sound)) === i,
+    );
+  const update = (index: number, patch: Partial<CameraModuleV2['maps'][number]>) =>
+    onChange({
       ...value,
       maps: value.maps.map((map, i) => (i === index ? { ...map, ...patch } : map)),
     });
@@ -90,12 +72,12 @@ export function CameraModuleEditor({
       <Field
         label="预设名称"
         value={value.name}
-        onChange={(e) => setValue({ ...value, name: e.target.value })}
+        onChange={(e) => onChange({ ...value, name: e.target.value })}
       />
       <Checkbox
         label="开启自动运镜"
         checked={value.automaticEnabled}
-        onChange={(e) => setValue({ ...value, automaticEnabled: e.target.checked })}
+        onChange={(e) => onChange({ ...value, automaticEnabled: e.target.checked })}
       />
       <div className="settings-grid">
         {value.maps.map((map, index) => (
@@ -174,7 +156,7 @@ export function CameraModuleEditor({
               ))}
             </details>
             <Button
-              onClick={() => setValue({ ...value, maps: value.maps.filter((_, i) => i !== index) })}
+              onClick={() => onChange({ ...value, maps: value.maps.filter((_, i) => i !== index) })}
             >
               移除地图
             </Button>
@@ -192,7 +174,7 @@ export function CameraModuleEditor({
               openingSound: _sound,
               ...map
             } = cameraMapSchema.parse({ map: 'de_placeholder', pack: 'placeholder' });
-            setValue({
+            onChange({
               ...value,
               maps: [...value.maps, { ...map, map: '', source, openingSound: null }],
             });
@@ -202,29 +184,7 @@ export function CameraModuleEditor({
         添加地图
       </Button>
       {sources.length === 0 && <p>此资源没有可复用的运镜来源，无法添加地图。</p>}
-      {error && <StatusBanner tone="danger">预设格式或内容有误，请检查后重试。</StatusBanner>}
-      <Button
-        disabled={busy}
-        onClick={() => {
-          setValue(module.value);
-          setError(false);
-        }}
-      >
-        放弃未保存更改
-      </Button>
-      <Button
-        variant="primary"
-        disabled={busy}
-        onClick={() => {
-          try {
-            const next = parseModuleRecord({ ...module, value });
-            setError(false);
-            void save(next);
-          } catch {
-            setError(true);
-          }
-        }}
-      >
+      <Button variant="primary" disabled={busy} onClick={onSave}>
         保存草稿
       </Button>
     </details>
