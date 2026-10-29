@@ -692,8 +692,8 @@ it('real websocket separates ACK, rejection and unrelated broadcasts; disconnect
             : Buffer.concat(data)
       ).toString();
       const command = JSON.parse(wire) as { type: string; payload: string };
-      if (command.type === 'HSI/Subscribe') {
-        socket.send(JSON.stringify({ type: 'HSI/Subscribed' }));
+      if (command.type === 'WebSocket/SelectChannel' && command.payload === 'events') {
+        socket.send(JSON.stringify({ type: 'WebSocket/ChannelSelected', payload: 'events' }));
         return;
       }
       wires.push(wire);
@@ -1558,8 +1558,17 @@ it('keeps the longest concurrent GitHub secondary limit', async () => {
 it('receives HSI input without a pending command and separates reconnects', async () => {
   const app = Fastify();
   await app.register(websocket);
+  const requests: string[] = [];
   app.get('/', { websocket: true }, (socket) => {
-    socket.on('message', () => {
+    socket.on('message', (data) => {
+      requests.push(
+        (Buffer.isBuffer(data)
+          ? data
+          : data instanceof ArrayBuffer
+            ? Buffer.from(data)
+            : Buffer.concat(data)
+        ).toString(),
+      );
       const event = {
         eventType: 'player_hurt',
         sequence: 1,
@@ -1582,7 +1591,18 @@ it('receives HSI input without a pending command and separates reconnects', asyn
           tick: 122,
         }),
       );
-      socket.send(JSON.stringify({ type: 'HSI/Subscribed' }));
+      socket.send(JSON.stringify({ type: 'WebSocket/ChannelSelected', payload: 'legacy' }));
+      socket.send(
+        JSON.stringify({
+          eventType: 'game_clock',
+          sampledAtUnixMs: 99,
+          timeDomain: 'network_game_client_tick',
+          captureGeneration: 2,
+          readSucceeded: true,
+          tick: 122,
+        }),
+      );
+      socket.send(JSON.stringify({ type: 'WebSocket/ChannelSelected', payload: 'events' }));
       socket.send(JSON.stringify({ ...event, sequence: 2 }));
       socket.send(
         JSON.stringify({
@@ -1610,6 +1630,11 @@ it('receives HSI input without a pending command and separates reconnects', asyn
   const messages: import('../src/orchestration/provider.js').MulnxInput[] = [];
   provider.subscribeInput((message) => messages.push(message));
   await provider.connect(port);
+  await vi.waitFor(() =>
+    expect(requests).toEqual([
+      JSON.stringify({ type: 'WebSocket/SelectChannel', payload: 'events' }),
+    ]),
+  );
   await vi.waitFor(() =>
     expect(messages.filter((message) => message.kind === 'event')).toHaveLength(1),
   );
