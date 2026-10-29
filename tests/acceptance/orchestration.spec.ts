@@ -63,6 +63,16 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
       return Promise.resolve('queued' as const);
     },
     packStatus: () => Promise.resolve({ active: pack.name, empty: true }),
+    trackedStatus: () => Promise.resolve({ generation: 0, current: null }),
+    cancelTracked: (generation: number) => {
+      calls.push('CamPlay/ClearForce');
+      return Promise.resolve({ generation: generation + 1, matched: true });
+    },
+    playTracked: () => {
+      calls.push('CamMacro/Play');
+      return Promise.resolve('queued' as const);
+    },
+    onTracked: () => () => {},
   };
   const director = new CameraDirector(
     store,
@@ -328,9 +338,13 @@ test('explicit MulNX stop confirms production effects, shows ownership errors, a
 }) => {
   let borrowed = false;
   let stops = 0;
+  const preset = emptyOrchestrationPreset();
+  const presetId = '00000000-0000-4000-8000-000000000001';
   const view: OrchestrationView = {
+    activePresetId: presetId,
+    presets: [{ id: presetId, preset }],
     tool: { installed: 'test', latest: null, busy: false, message: '', packs: [] },
-    preset: emptyOrchestrationPreset(),
+    preset,
     automaticEnabled: false,
     ready: true,
     status: {
