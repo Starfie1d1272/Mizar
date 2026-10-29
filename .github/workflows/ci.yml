@@ -41,7 +41,7 @@ jobs:
         run: |
           native=true
           if [ "$GITHUB_EVENT_NAME" = pull_request ] && [ -n "$PR_BASE" ] && git cat-file -e "${PR_BASE}^{commit}" 2>/dev/null; then
-            if git diff --quiet "$PR_BASE" "$GITHUB_SHA" -- apps/desktop/src-tauri scripts/qualification/bundle/gsi-discovery.ps1 config/mizar_observer.cfg .cargo rust-toolchain rust-toolchain.toml .github/actions/cargo-cache .github/actions/save-cargo-cache .github/workflows/ci.yml; then
+            if git diff --quiet "$PR_BASE" "$GITHUB_SHA" -- apps/desktop/src-tauri scripts/qualification/bundle/gsi-discovery.ps1 config/mizar_observer.cfg scripts/ci/cargo-cache-key.mjs .cargo rust-toolchain rust-toolchain.toml .github/actions/cargo-cache .github/actions/save-cargo-cache .github/workflows/ci.yml; then
               native=false
             else
               result=$?
