@@ -227,6 +227,13 @@ test('preflight reviews current ten-player evidence, actual auto state, disconne
   await page.getByRole('button', { name: '赛前核对', exact: true }).click();
   await expect(dialog.getByRole('button', { name: '恢复本场自动提醒' })).toBeVisible();
   await dialog.getByRole('button', { name: '稍后处理' }).click();
+  await expect(dialog).not.toBeVisible();
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
   operator.payload.activeLineup.retainedCount = 0;
   operator.payload.runtime.telemetryFreshness = 'fresh';
   operator.payload.identity.issues = [
