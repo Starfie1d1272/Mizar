@@ -123,6 +123,13 @@ export function registerHudConfigRoutes(
       }
       const archive = await exportLhmHud(options.webRoot, value);
       await options.waitForBroadcast?.();
+      if (typeof body.moduleId === 'string') {
+        const current = options
+          .getBroadcastDocument?.()
+          ?.modules.find((item) => item.id === body.moduleId && item.kind === 'hud');
+        if (!current || current.revision !== body.moduleRevision)
+          return reply.code(409).send({ error: 'hud_config_editor_conflict' });
+      }
       if (
         typeof body.expectedActiveRevision === 'string' &&
         options.store.getState().activeRevision !== body.expectedActiveRevision

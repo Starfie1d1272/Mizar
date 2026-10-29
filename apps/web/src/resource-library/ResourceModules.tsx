@@ -28,7 +28,15 @@ function download(blob: Blob, name: string) {
   link.click();
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
-export function ResourceModules({ query, category }: { query: string; category: string }) {
+export function ResourceModules({
+  query,
+  category,
+  onImported,
+}: {
+  query: string;
+  category: string;
+  onImported: () => void;
+}) {
   const [refresh, setRefresh] = useState(0);
   const snapshot = useLocalRead<Snapshot>('/local/v1/broadcast-presets', 2000, refresh);
   const directory = useLocalRead<{ modules: { module: ModuleRecord; builtin: boolean }[] }>(
@@ -109,7 +117,10 @@ export function ResourceModules({ query, category }: { query: string; category: 
         reused: boolean;
       };
       const firstId = Object.values(result.mapping.moduleEntries).flat()[0];
-      if (firstId) setSelected(firstId);
+      if (firstId) {
+        setSelected(firstId);
+        onImported();
+      }
       setNotice({
         tone: 'success',
         message: result.reused ? '资源已存在，已定位。' : '资源已导入，尚未使用。',

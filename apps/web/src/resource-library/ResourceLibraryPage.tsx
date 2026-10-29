@@ -89,6 +89,15 @@ export function ResourceLibraryPage() {
             <p>查看播出方案、音乐配置、素材和运镜工具。</p>
           </div>
         </header>
+        <details>
+          <summary>创建和制作</summary>
+          <p>在制作入口创建或编辑内容，保存后返回资源管理。</p>
+          <div className="resource-library__actions">
+            <a href="/operator/hud">HUD 编辑器</a>
+            <a href="/settings?tab=music">音乐制作</a>
+            <a href="/settings?tab=camera">运镜制作</a>
+          </div>
+        </details>
         <div className="resource-library__filters">
           <Field
             label="搜索资源"
@@ -121,7 +130,14 @@ export function ResourceLibraryPage() {
             ))}
           </div>
         </div>
-        <ResourceModules query={query} category={category} />
+        <ResourceModules
+          query={query}
+          category={category}
+          onImported={() => {
+            setCategory('all');
+            setQuery('');
+          }}
+        />
         {showPresets ? <BroadcastPresets query={query} /> : null}
         {!view ? (
           <StatusBanner tone="warning">

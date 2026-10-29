@@ -41,7 +41,7 @@ it('uses and exports the selected module with its revision without applying whil
   const root = createRoot(element);
   try {
     await act(async () => {
-      root.render(<ResourceModules query="" category="all" />);
+      root.render(<ResourceModules query="" category="all" onImported={() => {}} />);
       await Promise.resolve();
     });
     act(() =>
