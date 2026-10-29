@@ -7,6 +7,7 @@ export type ConnectionPreparationView = {
   mapConnection?: { id: string; mode: 'connect' | 'seamless' } | null;
   waitingForMap?: boolean;
   gameRunning?: boolean;
+  nextMapRequested?: boolean;
 };
 /** Refuse incomplete replies rather than silently dropping the concurrency guard. */
 export function requireConnectionRevision(value: unknown): string {
@@ -30,6 +31,7 @@ export function registerObserverPreparation(handler: Confirm) {
 export async function flushObserverPreparation(
   useMulnx = false,
   gameRunning = false,
+  nextMapRequested = false,
 ): Promise<EntryConfirmation | null> {
   const response = await fetch('/local/v1/observer-assist', {
     cache: 'no-store',
@@ -40,7 +42,7 @@ export async function flushObserverPreparation(
   if (typeof view.settings?.enabled !== 'boolean') throw new Error('请刷新后重试本场连接。');
   requireConnectionRevision(view.revision);
   if (!confirm) throw new Error('本场连接入口未准备好，请刷新后重试。');
-  return (await confirm({ ...view, gameRunning }, useMulnx)) ? true : null;
+  return (await confirm({ ...view, gameRunning, nextMapRequested }, useMulnx)) ? true : null;
 }
 
 /** Private runtime status; sourced from the existing observer owner. */

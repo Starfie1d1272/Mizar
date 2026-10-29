@@ -520,6 +520,32 @@ test('online account differences alert once, preserve unknown identities and rea
     await page.setViewportSize({ width: 640, height: 1440 });
     await page.screenshot({ path: testInfo.outputPath('live-roster-alert.png') });
     await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+    await page.evaluate(
+      (matchId) => localStorage.setItem('mizar.preflight.silenced-match.v1', matchId),
+      manifest.match.matchId,
+    );
+    const reviewPage = await context.newPage();
+    await reviewPage.addInitScript((address) => {
+      const NativeWebSocket = window.WebSocket;
+      window.WebSocket = class extends NativeWebSocket {
+        constructor(url: string | URL, protocols?: string | string[]) {
+          const target = new URL(url, window.location.href);
+          if (target.pathname.startsWith('/local/v1/')) target.host = new URL(address).host;
+          super(target, protocols);
+        }
+      };
+    }, address);
+    await reviewPage.routeWebSocket(`ws://${new URL(address).host}/local/v1/**`, (socket) =>
+      socket.connectToServer(),
+    );
+    await reviewPage.goto(new URL('/workspace/review?kind=roster', page.url()).toString());
+    const manualReview = reviewPage.getByRole('dialog', {
+      name: '本场上场选手／账号与网站首发不一致',
+    });
+    await expect(manualReview).toBeVisible();
+    await expect(manualReview).toContainText('广州老头乐');
+    await reviewPage.close();
+    await page.evaluate(() => localStorage.removeItem('mizar.preflight.silenced-match.v1'));
     await push(changed);
     await expect(dialog).not.toBeVisible();
     await expect(page.getByRole('button', { name: '查看人员差异' })).toBeVisible();
