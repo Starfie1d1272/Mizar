@@ -394,6 +394,17 @@ describe('BroadcastConfigStore', () => {
     await reopened.deleteModule(second.modules[0]!.id, second.modules[0]!.revision);
     const restarted = new BroadcastConfigStore(options);
     await restarted.load();
+    const inspection = restarted.inspectImport(batch.source)!;
+    expect(inspection.presets.second?.state).toBe('removed');
+    expect(inspection.presets.first?.state).toBe('existing');
+    expect(inspection.modules.hud).toContainEqual({
+      id: second.modules[0]!.id,
+      owner: 'second',
+      state: 'removed',
+    });
+    expect(() => restarted.inspectImport({ ...batch.source, digest: 'b'.repeat(64) })).toThrow(
+      'identity_conflict',
+    );
     const retryFirst = clonePreset(initial, request, randomUUID);
     const retrySecond = clonePreset(initial, { ...request, name: 'Second' }, randomUUID);
     const retry = {
