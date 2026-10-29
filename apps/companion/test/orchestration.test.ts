@@ -420,13 +420,13 @@ it('real websocket separates ACK, rejection and unrelated broadcasts; disconnect
             ? Buffer.from(data)
             : Buffer.concat(data)
       ).toString();
-      if (JSON.parse(wire).type === 'HSI/Subscribe') {
+      const command = JSON.parse(wire) as { type: string; payload: string };
+      if (command.type === 'HSI/Subscribe') {
         socket.send(JSON.stringify({ type: 'HSI/Subscribed' }));
         return;
       }
       wires.push(wire);
       socket.send(JSON.stringify({ attackerSteamId: '0' }));
-      const command = JSON.parse(wire) as { type: string; payload: string };
       if (command.type === 'CamPack/Status' && ackFirst) socket.send(`已投入消息总线${wire}`);
       if (command.type === 'CamPack/Status') {
         socket.send(
@@ -1282,7 +1282,10 @@ it('receives HSI input without a pending command and separates reconnects', asyn
   const port = (app.server.address() as { port: number }).port;
   const provider = new MulnxProvider();
   cleanup.push(() => app.close());
-  cleanup.push(async () => provider.close());
+  cleanup.push(() => {
+    provider.close();
+    return Promise.resolve();
+  });
   const messages: import('../src/orchestration/provider.js').MulnxInput[] = [];
   provider.subscribeInput((message) => messages.push(message));
   await provider.connect(port);
