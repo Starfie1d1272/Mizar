@@ -10,6 +10,7 @@ import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/ori
 import type { MusicStore } from './store.js';
 import type { MusicDirector } from './director.js';
 import { MUSIC_MAX_BYTES } from './archive.js';
+import { portableMusicTrack } from '../broadcast-config/music-assets.js';
 
 export function registerMusicRoutes(
   app: FastifyInstance,
@@ -182,7 +183,8 @@ export function registerMusicRoutes(
       const name = decodeURIComponent(String(request.headers['x-mizar-filename'] ?? ''));
       if (!Buffer.isBuffer(request.body) || !name || /[\\/]/.test(name))
         throw new Error('music_track_invalid');
-      return await store.add(name, request.body);
+      const track = await store.add(name, request.body);
+      return { ...track, portable: await portableMusicTrack(store, track) };
     } catch (error) {
       request.log.error(
         {

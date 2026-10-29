@@ -1,7 +1,7 @@
 import { useMusicPreview } from './useMusicPreview';
 import { MusicVolumeField } from './MusicVolumeField';
 import { controlEvidence } from '../debug/control-journal';
-import { localFile } from './music-files';
+import { localFile, type UploadedMusicTrack } from './music-files';
 import { useState } from 'react';
 import {
   MUSIC_GROUPS,
@@ -307,15 +307,15 @@ export function MusicSettings({ active = true }: { active?: boolean }) {
                       if (files.length)
                         void action(async () => {
                           const tracks: MusicTrack[] = [];
-                          for (const file of files)
-                            tracks.push({
-                              ...(await localFile(
+                          for (const file of files) {
+                            const { portable: _portable, ...track } =
+                              await localFile<UploadedMusicTrack>(
                                 '/operator/music/track',
                                 file,
                                 'application/x-mizar-audio',
-                              )),
-                              entryId: crypto.randomUUID(),
-                            });
+                              );
+                            tracks.push({ ...track, entryId: crypto.randomUUID() });
+                          }
                           change(group, { tracks });
                           setMessage('曲目已选，请保存音乐配置。');
                         }, group);

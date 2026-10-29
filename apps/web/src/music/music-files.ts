@@ -1,6 +1,9 @@
 import { controlEvidence, browserErrorEvidence } from '../debug/control-journal';
 import type { MusicView } from './MusicControls';
 import type { MusicTrack } from '@mizar/protocol/music';
+import type { PortableTrack } from '@mizar/broadcast-config';
+
+export type UploadedMusicTrack = MusicTrack & { portable: PortableTrack };
 
 export async function localFile<T = MusicView & MusicTrack>(url: string, file: File, type: string) {
   const operationId = crypto.randomUUID();

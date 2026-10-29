@@ -11,6 +11,7 @@ import { pulseTokenStyle } from '../program/broadcast-display';
 import { exportFailure } from './export-error';
 import { MusicModuleEditor } from './MusicModuleEditor';
 import { CameraModuleEditor } from './CameraModuleEditor';
+import { localFile, type UploadedMusicTrack } from '../music/music-files';
 
 type Kind = ModuleRecord['kind'];
 export type Snapshot = {
@@ -181,6 +182,18 @@ function ModuleDraftEditor({
         <MusicModuleEditor
           value={draft.value}
           busy={busy}
+          importTracks={async (files) => {
+            const tracks = [];
+            for (const file of files) {
+              const result = await localFile<UploadedMusicTrack>(
+                '/operator/music/track',
+                file,
+                'application/x-mizar-audio',
+              );
+              tracks.push(result.portable);
+            }
+            return tracks;
+          }}
           onChange={(value) => setDraft({ ...draft, value })}
           onSave={() => void finish()}
         />
