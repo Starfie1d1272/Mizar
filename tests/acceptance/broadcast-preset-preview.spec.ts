@@ -98,6 +98,9 @@ test('previews each saved scene without applying the scheme or requiring tools',
   ]) {
     await scene.selectOption(id);
     await expect(frame.locator(selector)).toBeVisible();
+    if (id === 'waiting') {
+      await expect(frame.locator('.waiting-label')).toHaveCSS('color', 'rgb(244, 248, 253)');
+    }
   }
   expect(writes).toBe(0);
 });
