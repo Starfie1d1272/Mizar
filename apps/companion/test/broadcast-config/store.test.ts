@@ -465,4 +465,160 @@ describe('BroadcastConfigStore', () => {
     expect(store.snapshot.active.resolved.camera).not.toBeNull();
     expect(store.snapshot.active.resolved.camera?.automaticEnabled).toBe(false);
   });
+  it('waits for owners after releasing the coordinator queue and retries synchronization after failure', async () => {
+    const { options, initial } = await setup();
+    let release!: () => void;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let attempts = 0;
+    const store = new BroadcastConfigStore({
+      ...options,
+      onApplied: async () => {
+        attempts++;
+        entered();
+        await gate;
+        await store.save({
+          preset: store.snapshot.presets[0]!,
+          expectedPresetRevision: 'p1',
+          modules: [],
+        });
+        if (attempts === 1) throw new Error('sync_failed');
+      },
+    });
+    await store.load();
+    const request = {
+      presetId: initial.presets[0]!.id,
+      expectedRevision: 'p1',
+      expectedModuleRevisions: { hud: 'h1', program: 'p1' },
+      expectedActiveRevision: 'active',
+      requestId: randomUUID(),
+    };
+    let finished = false;
+    const applying = store.apply(request).finally(() => {
+      finished = true;
+    });
+    await started;
+    expect(finished).toBe(false);
+    expect(store.isApplying).toBe(true);
+    release();
+    await expect(applying).rejects.toThrow('sync_failed');
+    expect(store.isApplying).toBe(false);
+    const committed = store.snapshot.active.revision;
+    expect(committed).not.toBe('active');
+    expect((await store.apply(request)).revision).toBe(committed);
+    expect(attempts).toBe(2);
+  });
+  it('keeps active camera identity when its preset is rebound and another draft is unavailable', async () => {
+    const { store } = await setup();
+    const activeId = randomUUID(),
+      missingId = randomUUID();
+    const active = {
+      format: 'mizar.camera-config' as const,
+      version: 2 as const,
+      name: 'Active',
+      maps: [],
+      automaticEnabled: false,
+    };
+    const source = {
+      sourceName: 'missing',
+      treeSha256: 'a'.repeat(64),
+      converterVersion: 1 as const,
+      acquisition: {
+        kind: 'upstream' as const,
+        release: {
+          repository: 'Co1Swet/MulNX_CS2' as const,
+          releaseId: 1,
+          assetId: 2,
+          tag: 'v1',
+          archiveSha256: 'b'.repeat(64),
+        },
+      },
+    };
+    const map = {
+      map: 'de_mirage',
+      source,
+      opening: null,
+      openingSound: null,
+      rounds: [],
+      pauseCandidates: { tactical: [], technical: [] },
+      stages: {
+        warmup: null,
+        tactical: null,
+        technical: null,
+        halftime: null,
+        mapVictory: null,
+        matchVictory: null,
+      },
+    };
+    await store.updateFromLegacy({
+      updateDraft(document) {
+        document.modules.push(
+          {
+            id: activeId,
+            kind: 'camera',
+            schemaVersion: 2,
+            revision: randomUUID(),
+            name: 'Active',
+            value: active,
+            origin: null,
+          },
+          {
+            id: missingId,
+            kind: 'camera',
+            schemaVersion: 2,
+            revision: randomUUID(),
+            name: 'Missing',
+            value: { ...active, name: 'Missing', maps: [map] },
+            origin: null,
+          },
+        );
+        document.presets[0]!.bindings = document.presets[0]!.bindings.map((binding) =>
+          binding.kind === 'camera' ? { kind: 'camera', mode: 'use', moduleId: activeId } : binding,
+        );
+      },
+      active: {
+        kind: 'camera',
+        value: active,
+        lock: store.snapshot.active.lock,
+        moduleId: activeId,
+      },
+    });
+    await store.updateFromLegacy({
+      updateDraft(document) {
+        document.presets[0]!.bindings = document.presets[0]!.bindings.map((binding) =>
+          binding.kind === 'camera'
+            ? { kind: 'camera', mode: 'use', moduleId: missingId }
+            : binding,
+        );
+      },
+    });
+    let resolveCalls = 0;
+    const persistence = createCameraConfigPersistence(store, {
+      localPack: () => {
+        resolveCalls++;
+        return Promise.reject(new Error('dependency_missing'));
+      },
+      localTrackId: () => Promise.reject(new Error('unexpected')),
+      portable: (preset, automaticEnabled) =>
+        Promise.resolve({
+          format: 'mizar.camera-config',
+          version: 2,
+          name: preset.name,
+          maps: [],
+          automaticEnabled,
+        }),
+      lock: (_value, current) => Promise.resolve(current.lock),
+    });
+    const view = await persistence.read();
+    expect(resolveCalls).toBe(0);
+    expect(view.catalog.activePresetId).toBe(activeId);
+    expect(view.catalog.preset.name).toBe('Active');
+    expect(view.catalog.presets.some((preset) => preset.id === missingId)).toBe(false);
+    expect(store.snapshot.modules.some((module) => module.id === missingId)).toBe(true);
+  });
 });

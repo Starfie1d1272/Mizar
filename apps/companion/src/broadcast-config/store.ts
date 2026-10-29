@@ -65,11 +65,19 @@ export interface BroadcastConfigStoreOptions {
   verifyLegacyActive(active: ActiveBroadcastSnapshot): Promise<void>;
   /** Holds the production lifecycle and exposes a synchronous final readiness check. */
   withApplyGuard<T>(operation: (canCommit: () => boolean) => Promise<T>): Promise<T>;
-  onApplied?(active: ActiveBroadcastSnapshot, previous: ActiveBroadcastSnapshot): void;
+  onApplied?(
+    active: ActiveBroadcastSnapshot,
+    previous: ActiveBroadcastSnapshot,
+  ): void | Promise<void>;
 }
 
 export class BroadcastConfigStore {
   private readonly queue = new SerialCommitQueue();
+  private readonly applyQueue = new SerialCommitQueue();
+  private applying = false;
+  get isApplying(): boolean {
+    return this.applying;
+  }
   private envelope: Envelope | null = null;
   constructor(private readonly options: BroadcastConfigStoreOptions) {}
 
@@ -272,6 +280,7 @@ export class BroadcastConfigStore {
   async updateFromLegacy<K extends ModuleKind>(input: {
     updateDraft(document: BroadcastConfigDocument): void;
     active?: {
+      moduleId?: string | null | undefined;
       kind: K;
       value: ActiveBroadcastSnapshot['resolved'][K];
       lock: ActiveBroadcastSnapshot['lock'];
@@ -313,6 +322,10 @@ export class BroadcastConfigStore {
           if (!sameEffectiveModule(kind, previous.resolved[kind], value))
             active.moduleRevisions[kind] = randomUUID();
           active.resolved[kind] = structuredClone(value);
+          active.sourceModuleIds = {
+            ...active.sourceModuleIds,
+            [kind]: input.active.moduleId ?? null,
+          };
           active.lock = structuredClone(lock);
           active.revision = randomUUID();
           active.adjusted = true;
@@ -322,13 +335,6 @@ export class BroadcastConfigStore {
         }
         await this.options.assertReferenceCommitAllowed(this.envelope.document, next.document);
         await this.commit(next);
-        if (input.active) {
-          try {
-            this.options.onApplied?.(structuredClone(next.document.active), previous);
-          } catch {
-            /* Persistence remains authoritative. */
-          }
-        }
         return this.snapshot;
       }),
     );
@@ -339,51 +345,62 @@ export class BroadcastConfigStore {
     );
   }
   async apply(request: ApplyPresetRequest): Promise<ActiveBroadcastSnapshot> {
-    return this.queue.run(async () => {
-      if (!this.envelope) throw new Error('broadcast_config_unavailable');
-      if (
-        !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-          request.requestId,
-        )
-      )
-        throw new Error('invalid_request');
-      const fingerprint = canonicalJson(request);
-      const receipt = this.envelope.receipts[request.requestId];
-      if (receipt) {
-        if (receipt.fingerprint !== fingerprint) throw new Error('request_conflict');
-        return structuredClone(receipt.active);
-      }
-      return this.options.withApplyGuard((canCommit) =>
-        this.options.withReferenceGuard(async () => {
+    return this.applyQueue.run(async () => {
+      this.applying = true;
+      try {
+        const result = await this.queue.run(async () => {
           if (!this.envelope) throw new Error('broadcast_config_unavailable');
-          const previous = this.envelope.document.active;
-          const active = await preparePreset(
-            this.snapshot,
-            request,
-            this.options.resolver,
-            randomUUID,
+          if (
+            !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+              request.requestId,
+            )
+          )
+            throw new Error('invalid_request');
+          const fingerprint = canonicalJson(request);
+          const receipt = this.envelope.receipts[request.requestId];
+          if (receipt) {
+            if (receipt.fingerprint !== fingerprint) throw new Error('request_conflict');
+            return {
+              active: structuredClone(receipt.active),
+              previous: structuredClone(this.envelope.document.previousActive ?? receipt.active),
+            };
+          }
+          return this.options.withApplyGuard((canCommit) =>
+            this.options.withReferenceGuard(async () => {
+              if (!this.envelope) throw new Error('broadcast_config_unavailable');
+              const previous = this.envelope.document.active;
+              const active = await preparePreset(
+                this.snapshot,
+                request,
+                this.options.resolver,
+                randomUUID,
+              );
+              const next = structuredClone(this.envelope);
+              next.document.previousActive = structuredClone(previous);
+              next.document.active = active;
+              next.receipts[request.requestId] = { fingerprint, active };
+              await this.options.assertReferenceCommitAllowed(
+                this.envelope.document,
+                next.document,
+              );
+              try {
+                await this.commit(next, canCommit);
+              } catch (error) {
+                const disk = await this.read().catch(() => null);
+                const committed = disk?.receipts[request.requestId];
+                if (!disk || !committed || committed.fingerprint !== fingerprint) throw error;
+                this.envelope = disk;
+              }
+              return { active: structuredClone(active), previous: structuredClone(previous) };
+            }),
           );
-          const next = structuredClone(this.envelope);
-          next.document.previousActive = structuredClone(previous);
-          next.document.active = active;
-          next.receipts[request.requestId] = { fingerprint, active };
-          await this.options.assertReferenceCommitAllowed(this.envelope.document, next.document);
-          try {
-            await this.commit(next, canCommit);
-          } catch (error) {
-            const disk = await this.read().catch(() => null);
-            const committed = disk?.receipts[request.requestId];
-            if (!disk || !committed || committed.fingerprint !== fingerprint) throw error;
-            this.envelope = disk;
-          }
-          try {
-            this.options.onApplied?.(structuredClone(active), structuredClone(previous));
-          } catch {
-            /* Persistence remains authoritative. */
-          }
-          return structuredClone(active);
-        }),
-      );
+        });
+        // Owner queues may themselves be waiting for the coordinator; wait only after releasing it.
+        await this.options.onApplied?.(result.active, result.previous);
+        return result.active;
+      } finally {
+        this.applying = false;
+      }
     });
   }
 }

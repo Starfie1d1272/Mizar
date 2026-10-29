@@ -1,13 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import { expect, it } from 'vitest';
-import { getBuiltinLayout, getBuiltinTheme } from '@mizar/hud-config';
+import { getBuiltinLayout, getBuiltinPreset, getBuiltinTheme } from '@mizar/hud-config';
 import { defaultMusicConfig } from '@mizar/protocol/music';
 import { emptyOrchestrationPreset } from '@mizar/protocol/orchestration';
 import { HudConfigStore } from '../../src/hud-config/store.js';
-import { migrateLegacyBroadcast } from '../../src/broadcast-config/migrate.js';
+import { legacyOverlays, migrateLegacyBroadcast } from '../../src/broadcast-config/migrate.js';
 
 it('preserves the active camera independently of its newer draft', async () => {
   const hud = new HudConfigStore().getState();
+  hud.resolved.layout.widgets['top-score-bar'].visible = false;
+  hud.resolved.layout.widgets['team-t-rail'].visible = false;
   const layout = { ...getBuiltinLayout(), id: 'custom:unbound-layout', name: 'Unbound layout' };
   const theme = { ...getBuiltinTheme(), id: 'custom:unbound-theme', name: 'Unbound theme' };
   hud.document.customLayouts.push(layout);
@@ -51,6 +53,13 @@ it('preserves the active camera independently of its newer draft', async () => {
   expect(document.active.resolved.camera?.name).toBe(camera.name);
   expect(document.active.resolved.camera?.automaticEnabled).toBe(false);
   expect(document.active.adjusted).toBe(true);
+  const activeHud = document.active.resolved.hud;
+  if (activeHud.renderer !== 'native') throw new Error('unexpected HUD');
+  expect(activeHud.overlays).toEqual({
+    pause: { enabled: false, visual: 'legacy' },
+    chat: { enabled: false, placement: 'auto' },
+  });
+  expect(activeHud.accent).toEqual({ source: 'fixed', value: hud.resolved.theme.brandColor });
   expect(document.unboundHudResources).toEqual({ layouts: [layout], themes: [theme] });
 });
 
@@ -89,4 +98,15 @@ it('reports pending when camera content cannot yet be identified', async () => {
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+it('maps both legacy pause controls and retains automatic chat placement', () => {
+  const layout = getBuiltinLayout();
+  const preset = getBuiltinPreset();
+  layout.widgets['top-score-bar'].visible = true;
+  preset.widgets['top-score-bar'].settings.showTimeout = false;
+  expect(legacyOverlays(layout, preset.widgets).pause.enabled).toBe(false);
+  preset.widgets['top-score-bar'].settings.showTimeout = true;
+  expect(legacyOverlays(layout, preset.widgets).pause.enabled).toBe(true);
+  expect(legacyOverlays(layout, preset.widgets).chat.placement).toBe('auto');
 });

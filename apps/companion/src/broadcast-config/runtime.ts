@@ -70,17 +70,21 @@ export function createBroadcastRuntime(input: {
       assertReferenceCommitAllowed(previous, next, (ref) => deps.isDeleting(ref)),
     withApplyGuard: (operation) => input.withApplyGuard(operation),
     verifyLegacyActive: (active) => deps.verifyActive(active),
-    onApplied: () => {
-      // Never wait for owner queues while holding the coordinator queue.
-      void Promise.all([
+    onApplied: async () => {
+      ready = false;
+      const results = await Promise.allSettled([
         Promise.resolve().then(() => hud.synchronizeFromPersistence(hudDocument())),
         Promise.resolve().then(() => music.synchronizeFromPersistence()),
         Promise.resolve().then(() => camera.synchronizeFromPersistence()),
-      ]).catch((error: unknown) => {
-        ready = false;
+      ]);
+      const failed = results.find((result) => result.status === 'rejected');
+      if (failed?.status === 'rejected') {
         status = { state: 'pending', reason: 'dependency_unavailable' };
-        input.diagnostic(error);
-      });
+        input.diagnostic(failed.reason);
+        throw new Error('broadcast_owner_sync_failed', { cause: failed.reason });
+      }
+      ready = true;
+      status = { state: 'ready' };
     },
   });
   function hudDocument() {
@@ -157,10 +161,12 @@ export function createBroadcastRuntime(input: {
     store,
     initialize,
     get ready() {
-      return ready;
+      return ready && !store.isApplying;
     },
     get status() {
-      return status;
+      return store.isApplying
+        ? { state: 'pending' as const, reason: 'owner_sync_pending' as const }
+        : status;
     },
   };
 }

@@ -4,6 +4,9 @@ import {
   getBuiltinLayouts,
   getBuiltinPresets,
   getBuiltinThemes,
+  topScoreBarSettingsSchema,
+  type HudLayout,
+  type HudWidgetSettings,
   type HudWidgetPlacement,
 } from '@mizar/hud-config';
 import {
@@ -40,6 +43,22 @@ export interface LegacyBroadcastMigration {
   lock(resolved: ActiveBroadcastSnapshot['resolved']): Promise<ActiveBroadcastSnapshot['lock']>;
 }
 
+/** Preserve the old pause and chat rules until the user selects fixed placement. */
+export function legacyOverlays(
+  layout: HudLayout,
+  widgets: Record<string, HudWidgetSettings>,
+): Extract<HudModule, { preset: unknown }>['overlays'] {
+  return {
+    pause: {
+      enabled:
+        layout.widgets['top-score-bar'].visible &&
+        topScoreBarSettingsSchema.parse(widgets['top-score-bar']!.settings).showTimeout,
+      visual: 'legacy',
+    },
+    chat: { enabled: layout.widgets['team-t-rail'].visible, placement: 'auto' },
+  };
+}
+
 /** Builds a complete candidate only; callers publish it after verifying dependencies and backing up legacy files. */
 export async function migrateLegacyBroadcast(
   input: LegacyBroadcastMigration,
@@ -57,8 +76,8 @@ export async function migrateLegacyBroadcast(
         preset: structuredClone(preset),
         layout: structuredClone(layout),
         theme: structuredClone(theme),
-        overlays: structuredClone(input.overlays),
-        accent: { source: 'event', fallback: theme.brandColor },
+        overlays: legacyOverlays(layout, preset.widgets),
+        accent: { source: 'fixed', value: theme.brandColor },
       };
       return {
         id: randomUUID(),
@@ -138,8 +157,8 @@ export async function migrateLegacyBroadcast(
     hud: {
       renderer: 'native',
       config: structuredClone(input.hud.resolved),
-      overlays: structuredClone(input.overlays),
-      accent: { source: 'event', fallback: input.hud.resolved.theme.brandColor },
+      overlays: legacyOverlays(input.hud.resolved.layout, input.hud.resolved.widgets),
+      accent: { source: 'fixed', value: input.hud.resolved.theme.brandColor },
     },
     program,
     music: structuredClone(musicModule.value),
@@ -155,6 +174,12 @@ export async function migrateLegacyBroadcast(
         canonicalJson(
           input.camera.presets.find((item) => item.id === input.camera.activePresetId)!.preset,
         ),
+    sourceModuleIds: {
+      hud: hud.id,
+      program: programModule.id,
+      music: musicModule.id,
+      camera: camera.id,
+    },
     moduleRevisions: {
       hud: randomUUID(),
       program: randomUUID(),

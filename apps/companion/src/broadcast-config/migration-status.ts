@@ -9,7 +9,8 @@ export type BroadcastMigrationStatus =
         | 'owner_unavailable'
         | 'camera_identity_unavailable'
         | 'facades_pending'
-        | 'dependency_unavailable';
+        | 'dependency_unavailable'
+        | 'owner_sync_pending';
     };
 /** This status is private to the local operator; it never includes legacy configuration or paths. */
 export function registerBroadcastMigrationStatus(

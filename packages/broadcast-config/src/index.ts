@@ -35,7 +35,7 @@ export type HudModule =
       theme: HudTheme;
       overlays: {
         pause: { enabled: boolean; visual: string };
-        chat: { enabled: boolean; placement: HudWidgetPlacement };
+        chat: { enabled: boolean; placement: 'auto' | HudWidgetPlacement };
       };
       accent: VisualColor;
     }
@@ -143,7 +143,7 @@ export type ResolvedHudModule =
       config: HudResolvedPreset;
       overlays: {
         pause: { enabled: boolean; visual: string };
-        chat: { enabled: boolean; placement: HudWidgetPlacement };
+        chat: { enabled: boolean; placement: 'auto' | HudWidgetPlacement };
       };
       accent: VisualColor;
     }
@@ -154,6 +154,7 @@ export interface ActiveBroadcastSnapshot {
   sourcePreset: { id: string; revision: Revision } | null;
   adjusted: boolean;
   moduleRevisions: Record<ModuleKind, Revision>;
+  sourceModuleIds?: Partial<Record<ModuleKind, string | null>>;
   resolved: {
     hud: ResolvedHudModule;
     program: ProgramVisualConfigV1;
@@ -349,6 +350,9 @@ export async function preparePreset(
     sourcePreset: { id: preset.id, revision: preset.revision },
     adjusted: false,
     moduleRevisions,
+    sourceModuleIds: Object.fromEntries(
+      MODULE_KINDS.map((kind) => [kind, modules.get(kind)?.id ?? null]),
+    ),
     resolved: structuredClone(prepared.resolved),
     lock: structuredClone(prepared.lock),
   };
