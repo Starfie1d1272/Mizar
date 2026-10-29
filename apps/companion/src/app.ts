@@ -900,6 +900,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     });
   }
   let previousBindingOrigin: string | undefined = options.matchContextBinding?.origin;
+  let statsProductionActive = false;
   // The binding listener must retire fixture state on the way out, but it is created
   // before the rehearsal exists; this slot carries the later-constructed instance.
   const fixtureLifecycle: { rehearsal: RivalsRehearsal | undefined } = { rehearsal: undefined };
@@ -917,6 +918,14 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             outputBinding = binding;
             outputService.setBinding(binding);
             projectionCoordinator.setMatchContextBinding(binding);
+            if (statsProductionActive && binding?.origin === 'online')
+              void options.rivalhubConnection?.stats(binding.context.matchId);
+            else if (
+              !binding ||
+              (binding.origin !== 'online' &&
+                !(binding.origin === 'cache' && binding.cachedFrom === 'online'))
+            )
+              options.rivalhubConnection?.clearStats();
 
             // Leaving the Rivals sample by any route retires fixture runtime state
             // without waiting for an explicit "stop rehearsal" action.
@@ -1060,7 +1069,17 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       if (cameraDirector?.store.saving) throw new Error('camera_settings_saving');
       demoTest?.openFormalBoundary();
     },
-    onEnter: () => cameraDirector?.beginProduction(),
+    onEnter: () => {
+      cameraDirector?.beginProduction();
+      statsProductionActive = true;
+      const binding = matchContextController?.getActiveBinding() ?? options.matchContextBinding;
+      if (binding?.origin === 'online')
+        void options.rivalhubConnection?.stats(binding.context.matchId);
+    },
+    onFinish: () => {
+      statsProductionActive = false;
+      options.rivalhubConnection?.clearStats();
+    },
     beforeFinish: () => {
       cameraDirector?.finishProduction();
       observerSettings.endProduction();
@@ -1229,12 +1248,12 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     const binding = matchContextController?.getActiveBinding() ?? options.matchContextBinding;
     if (
       !binding ||
-      binding.origin !== 'online' ||
-      binding.freshness !== 'fresh' ||
+      (binding.origin !== 'online' &&
+        !(binding.origin === 'cache' && binding.cachedFrom === 'online')) ||
       !options.rivalhubConnection
     )
       return reply.header('cache-control', 'no-store').send(null);
-    const value = await options.rivalhubConnection.stats(binding.context.matchId);
+    const value = await options.rivalhubConnection.getStats(binding.context.matchId);
     const current = matchContextController?.getActiveBinding() ?? options.matchContextBinding;
     const ids = [binding.manifest.entrants.a.entryId, binding.manifest.entrants.b.entryId];
     if (
@@ -1262,6 +1281,14 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       };
     });
     return reply.header('cache-control', 'no-store').send({ ...value, entrants });
+  });
+  app.get('/local/v1/broadcast-stats-status', (_request, reply) => {
+    const binding = matchContextController?.getActiveBinding() ?? options.matchContextBinding;
+    return reply.header('cache-control', 'no-store').send({
+      fetchedAt: binding
+        ? (options.rivalhubConnection?.statsFetchedAt(binding.context.matchId) ?? null)
+        : null,
+    });
   });
   const director = new ProgramDirector(
     projectionCoordinator,

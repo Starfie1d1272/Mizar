@@ -5,9 +5,7 @@
   "matchId": "00000000-0000-4000-8000-000000000001",
   "competitionId": "00000000-0000-4000-8000-000000000002",
   "scope": {
-    "kind": "competition-before-match",
-    "cutoffAt": "2026-10-29T12:00:00.000Z",
-    "cutoffSource": "generatedAt"
+    "kind": "competition"
   },
   "entrants": [
     {
@@ -86,7 +84,7 @@
             "attributes": {
               "available": true,
               "benchmark": "rivalhub-all-time-qualified",
-              "scope": "competition-before-match",
+              "scope": "competition",
               "sample": {
                 "rounds": 60
               },
@@ -127,7 +125,8 @@
                   "status": "qualified"
                 }
               ]
-            }
+            },
+            "available": true
           },
           {
             "userId": "00000000-0000-4000-8001-000000000002",
@@ -142,7 +141,7 @@
             "attributes": {
               "available": true,
               "benchmark": "rivalhub-all-time-qualified",
-              "scope": "competition-before-match",
+              "scope": "competition",
               "sample": {
                 "rounds": 60
               },
@@ -183,7 +182,8 @@
                   "status": "qualified"
                 }
               ]
-            }
+            },
+            "available": true
           },
           {
             "userId": "00000000-0000-4000-8001-000000000003",
@@ -198,7 +198,7 @@
             "attributes": {
               "available": true,
               "benchmark": "rivalhub-all-time-qualified",
-              "scope": "competition-before-match",
+              "scope": "competition",
               "sample": {
                 "rounds": 60
               },
@@ -239,7 +239,8 @@
                   "status": "qualified"
                 }
               ]
-            }
+            },
+            "available": true
           },
           {
             "userId": "00000000-0000-4000-8001-000000000004",
@@ -254,7 +255,7 @@
             "attributes": {
               "available": true,
               "benchmark": "rivalhub-all-time-qualified",
-              "scope": "competition-before-match",
+              "scope": "competition",
               "sample": {
                 "rounds": 60
               },
@@ -295,7 +296,8 @@
                   "status": "qualified"
                 }
               ]
-            }
+            },
+            "available": true
           },
           {
             "userId": "00000000-0000-4000-8001-000000000005",
@@ -310,7 +312,7 @@
             "attributes": {
               "available": true,
               "benchmark": "rivalhub-all-time-qualified",
-              "scope": "competition-before-match",
+              "scope": "competition",
               "sample": {
                 "rounds": 60
               },
@@ -351,9 +353,74 @@
                   "status": "qualified"
                 }
               ]
-            }
+            },
+            "available": true
           }
         ]
+      },
+      "pistol": {
+        "scope": "competition",
+        "coverage": {
+          "completedMaps": 3,
+          "detailedMaps": 3
+        },
+        "available": true,
+        "pistol": {
+          "wins": 2,
+          "opportunities": 3,
+          "rate": 0.6666666666666666
+        },
+        "conversion": {
+          "wins": 2,
+          "opportunities": 3,
+          "rate": 0.6666666666666666
+        },
+        "break": {
+          "wins": 2,
+          "opportunities": 3,
+          "rate": 0.6666666666666666
+        }
+      },
+      "economy": {
+        "scope": "competition",
+        "coverage": {
+          "completedMaps": 3,
+          "detailedMaps": 3
+        },
+        "available": true,
+        "ecoSemiUpset": {
+          "wins": 2,
+          "opportunities": 3,
+          "rate": 0.6666666666666666
+        }
+      },
+      "utility": {
+        "scope": "competition",
+        "coverage": {
+          "completedMaps": 3,
+          "detailedMaps": 3
+        },
+        "available": true,
+        "utilityDamagePerRound": {
+          "successes": 60,
+          "attempts": 60,
+          "rate": 1
+        },
+        "flashAssistsPerRound": {
+          "successes": 60,
+          "attempts": 60,
+          "rate": 1
+        },
+        "enemyBlindSecondsPerFlash": {
+          "successes": 60,
+          "attempts": 60,
+          "rate": 1
+        },
+        "enemyBlindSecondsPerRound": {
+          "successes": 60,
+          "attempts": 60,
+          "rate": 1
+        }
       }
     },
     {
@@ -432,7 +499,7 @@
             "attributes": {
               "available": true,
               "benchmark": "rivalhub-all-time-qualified",
-              "scope": "competition-before-match",
+              "scope": "competition",
               "sample": {
                 "rounds": 60
               },
@@ -473,7 +540,8 @@
                   "status": "qualified"
                 }
               ]
-            }
+            },
+            "available": true
           },
           {
             "userId": "00000000-0000-4000-8001-000000000007",
@@ -488,7 +556,7 @@
             "attributes": {
               "available": true,
               "benchmark": "rivalhub-all-time-qualified",
-              "scope": "competition-before-match",
+              "scope": "competition",
               "sample": {
                 "rounds": 60
               },
@@ -529,7 +597,8 @@
                   "status": "qualified"
                 }
               ]
-            }
+            },
+            "available": true
           },
           {
             "userId": "00000000-0000-4000-8001-000000000008",
@@ -544,7 +613,7 @@
             "attributes": {
               "available": true,
               "benchmark": "rivalhub-all-time-qualified",
-              "scope": "competition-before-match",
+              "scope": "competition",
               "sample": {
                 "rounds": 60
               },
@@ -585,7 +654,8 @@
                   "status": "qualified"
                 }
               ]
-            }
+            },
+            "available": true
           },
           {
             "userId": "00000000-0000-4000-8001-000000000009",
@@ -600,7 +670,7 @@
             "attributes": {
               "available": true,
               "benchmark": "rivalhub-all-time-qualified",
-              "scope": "competition-before-match",
+              "scope": "competition",
               "sample": {
                 "rounds": 60
               },
@@ -641,7 +711,8 @@
                   "status": "qualified"
                 }
               ]
-            }
+            },
+            "available": true
           },
           {
             "userId": "00000000-0000-4000-8001-000000000010",
@@ -656,7 +727,7 @@
             "attributes": {
               "available": true,
               "benchmark": "rivalhub-all-time-qualified",
-              "scope": "competition-before-match",
+              "scope": "competition",
               "sample": {
                 "rounds": 60
               },
@@ -697,9 +768,74 @@
                   "status": "qualified"
                 }
               ]
-            }
+            },
+            "available": true
           }
         ]
+      },
+      "pistol": {
+        "scope": "competition",
+        "coverage": {
+          "completedMaps": 3,
+          "detailedMaps": 3
+        },
+        "available": true,
+        "pistol": {
+          "wins": 2,
+          "opportunities": 3,
+          "rate": 0.6666666666666666
+        },
+        "conversion": {
+          "wins": 2,
+          "opportunities": 3,
+          "rate": 0.6666666666666666
+        },
+        "break": {
+          "wins": 2,
+          "opportunities": 3,
+          "rate": 0.6666666666666666
+        }
+      },
+      "economy": {
+        "scope": "competition",
+        "coverage": {
+          "completedMaps": 3,
+          "detailedMaps": 3
+        },
+        "available": true,
+        "ecoSemiUpset": {
+          "wins": 2,
+          "opportunities": 3,
+          "rate": 0.6666666666666666
+        }
+      },
+      "utility": {
+        "scope": "competition",
+        "coverage": {
+          "completedMaps": 3,
+          "detailedMaps": 3
+        },
+        "available": true,
+        "utilityDamagePerRound": {
+          "successes": 60,
+          "attempts": 60,
+          "rate": 1
+        },
+        "flashAssistsPerRound": {
+          "successes": 60,
+          "attempts": 60,
+          "rate": 1
+        },
+        "enemyBlindSecondsPerFlash": {
+          "successes": 60,
+          "attempts": 60,
+          "rate": 1
+        },
+        "enemyBlindSecondsPerRound": {
+          "successes": 60,
+          "attempts": 60,
+          "rate": 1
+        }
       }
     }
   ]

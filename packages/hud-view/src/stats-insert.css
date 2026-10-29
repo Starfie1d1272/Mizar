@@ -67,6 +67,97 @@
   flex-direction: column;
   justify-content: center;
 }
+.stats-insert__radar {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  font: 25px var(--mizar-type-family-body);
+  fill: var(--mizar-broadcast-pulse-white);
+}
+.stats-insert__radar-values {
+  font: 700 27px var(--mizar-type-family-display);
+  fill: var(--mizar-broadcast-pulse-highlight);
+}
+.stats-insert__recent {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  align-content: center;
+}
+.stats-insert__recent section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.stats-insert__recent-item {
+  background: var(--mizar-broadcast-pulse-raised);
+  min-height: 94px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 12px 24px;
+}
+.stats-insert__recent-item img {
+  width: 55px;
+  height: 55px;
+  object-fit: contain;
+}
+.stats-insert__recent-item strong {
+  font-size: 28px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stats-insert__recent-item small {
+  margin-left: auto;
+  color: var(--mizar-broadcast-pulse-muted);
+  font-size: 20px;
+}
+.stats-insert__rows--columns,
+.stats-insert__rows--cells {
+  display: grid;
+  align-content: center;
+  gap: 18px;
+}
+.stats-insert__rows--columns {
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+}
+.stats-insert__rows--cells {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.stats-insert__metric {
+  background: var(--mizar-broadcast-pulse-raised);
+  padding: 30px 36px;
+  min-width: 0;
+}
+.stats-insert__metric h2 {
+  margin: 0 0 26px;
+  font-size: 27px;
+  color: var(--mizar-broadcast-pulse-muted);
+}
+.stats-insert__metric-values {
+  display: grid;
+  gap: 24px;
+}
+.stats-insert__rows--cells .stats-insert__metric-values {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.stats-insert__metric-values > div {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.stats-insert__metric-values span,
+.stats-insert__metric-values small {
+  font-size: 21px;
+  color: var(--mizar-broadcast-pulse-muted);
+}
+.stats-insert__metric-values strong {
+  font: 700 76px var(--mizar-type-family-display);
+}
 .stats-insert__row {
   display: grid;
   grid-template-columns: 1fr 360px 1fr;

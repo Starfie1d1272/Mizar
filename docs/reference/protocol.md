@@ -48,7 +48,7 @@ RivalHub 输入同时接受 `rivalhub.broadcast-manifest.v1` 与 `.v2`。v1 的�
 
 RivalHub 资料先经过结构与语义校验，阻断错误不进入 Core。比赛与赛程分别维护最近有效缓存（LKG），恢复重新解析、校验和转换。赛程缓存按赛事与请求时间窗口核对兼容性。
 
-广播统计使用独立的 `rivalhub.broadcast-stats.v1`，由 RivalHub 聚合赛前赛事范围数据。Companion 使用已配对 installation 读取 `/api/mizar/stats?matchId=...`，按安装和比赛隔离内存缓存，每分钟至多重验证一次；本机 `/local/v1/broadcast-stats` 仅为当前新鲜在线比赛返回匹配赛事、双方及首发身份的数据。统计不进入比赛文档、赛程或 Gameplay 投影。`/program/stats` 在打开时固定一份快照，提供地图、近期赛果、阵容和选手专题；`card` 查询参数可选对应英文专题名，数据不足则跳过。此入口不自动切场，等待及图间的编排策略另行决定。
+广播统计使用独立的 `rivalhub.broadcast-stats.v1`，由 RivalHub 提供当前赛事统计快照。Companion 在进入制作并激活在线比赛时使用已配对 installation 读取一次 `/api/mizar/stats?matchId=...`，按安装和比赛隔离内存缓存；换比赛、重新进入制作或明确刷新时重取。本机 `/local/v1/broadcast-stats` 仅读取匹配赛事、双方及首发身份的数据。统计不进入比赛文档、赛程或 Gameplay 投影。自动模式下等待及图间从主画面开始轮播可用统计卡，手动模式、暂停与其它节目场景优先；每张卡固定快照，下一张卡才采用刷新。数据不足的专题跳过，设置中的统计状态和刷新属于现有 RivalHub 区域。
 
 同场刷新失败可保留当前绑定并标记过期；切换到另一场失败不能残留上一场。旧请求晚返回不能覆盖新选择；赛程获取失败不清除当前比赛。在线候选恢复后不静默覆盖本地选择，需明确确认。
 

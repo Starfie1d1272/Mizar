@@ -9,6 +9,21 @@ const attribute = z.object({
   score: z.number().min(0).max(100).nullable(),
   status: z.enum(['qualified', 'limited', 'no-data']),
 });
+const block = {
+  available: z.boolean(),
+  scope: z.literal('competition'),
+  coverage: z.object({ completedMaps: count, detailedMaps: count }),
+};
+const winRate = z
+  .object({ wins: count, opportunities: count, rate: z.number().min(0).max(1).nullable() })
+  .nullable();
+const quantityRate = z
+  .object({
+    successes: z.number().nonnegative(),
+    attempts: count,
+    rate: z.number().nonnegative().nullable(),
+  })
+  .nullable();
 const entrant = z.object({
   entryId: id,
   name,
@@ -26,6 +41,15 @@ const entrant = z.object({
         }),
       )
       .max(32),
+  }),
+  pistol: z.object({ ...block, pistol: winRate, conversion: winRate, break: winRate }),
+  economy: z.object({ ...block, ecoSemiUpset: winRate }),
+  utility: z.object({
+    ...block,
+    utilityDamagePerRound: quantityRate,
+    flashAssistsPerRound: quantityRate,
+    enemyBlindSecondsPerFlash: quantityRate,
+    enemyBlindSecondsPerRound: quantityRate,
   }),
   recentResults: z.object({
     available: z.boolean(),
@@ -49,6 +73,7 @@ const entrant = z.object({
       .array(
         z.object({
           userId: id,
+          available: z.boolean(),
           sample: z.object({
             maps: count,
             rounds: count.nullable(),
@@ -60,7 +85,7 @@ const entrant = z.object({
           attributes: z.object({
             available: z.boolean(),
             benchmark: z.literal('rivalhub-all-time-qualified'),
-            scope: z.literal('competition-before-match'),
+            scope: z.literal('competition'),
             sample: z.object({ rounds: count }),
             values: z.array(attribute).max(7),
           }),
@@ -76,11 +101,7 @@ export const broadcastStatsSchema = z
     generatedAt: z.iso.datetime(),
     matchId: id,
     competitionId: id,
-    scope: z.object({
-      kind: z.literal('competition-before-match'),
-      cutoffAt: z.iso.datetime(),
-      cutoffSource: z.enum(['startedAt', 'scheduledAt', 'generatedAt']),
-    }),
+    scope: z.object({ kind: z.literal('competition') }),
     entrants: z.array(entrant).max(2),
   })
   .superRefine((bundle, ctx) => {
