@@ -140,7 +140,7 @@ export function useMusicPreview(active = true) {
     try {
       await send(r, 'stop', true);
     } catch {
-      if (mounted.current) setError('停止未确认，请在 OBS 检查 Mizar 音效来源；服务端将尝试清理。');
+      if (mounted.current) setError('停止未确认，请在 OBS 检查 音效来源；服务端将尝试清理。');
     }
   };
   useEffect(() => {
@@ -156,7 +156,7 @@ export function useMusicPreview(active = true) {
       if (r)
         void send(r, 'lease').catch(() => {
           if (request.current?.token !== r.token) return;
-          if (mounted.current) setError('试听连接中断，停止未确认。请在 OBS 检查 Mizar 音效来源。');
+          if (mounted.current) setError('试听连接中断，停止未确认。请在 OBS 检查 音效来源。');
           request.current = null;
         });
     }, 1000);
@@ -179,8 +179,7 @@ export function useMusicPreview(active = true) {
     });
     if (current)
       void send(current, 'stop', true).catch(() => {
-        if (mounted.current)
-          setError('停止未确认，请在 OBS 检查 Mizar 音效来源；服务端将尝试清理。');
+        if (mounted.current) setError('停止未确认，请在 OBS 检查 音效来源；服务端将尝试清理。');
       });
   }, [active, send]);
   const start = async (

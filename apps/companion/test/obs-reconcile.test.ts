@@ -86,6 +86,22 @@ class FakeObs implements ObsRpc {
           sceneUuid: `uuid:${sceneName}`,
         })),
       };
+    if (type === 'SetSceneName') {
+      const items = this.scenes.get(name)!;
+      this.scenes.delete(name);
+      this.scenes.set(String(data.newSceneName), items);
+      return {};
+    }
+    if (type === 'SetInputName') {
+      const old = String(data.inputName);
+      const next = String(data.newInputName);
+      const input = this.inputs.get(old)!;
+      this.inputs.delete(old);
+      this.inputs.set(next, input);
+      for (const items of this.scenes.values())
+        for (const item of items) if (item.sourceName === old) item.sourceName = next;
+      return {};
+    }
     if (type === 'CreateScene') {
       this.scenes.set(name, []);
       return {};
@@ -184,7 +200,7 @@ it('repairs only Mizar collection, browser sources and order, then is idempotent
   const gameplay = obsDesiredScenes(baseUrl).find((scene) => scene.id === 'gameplay')!;
   const capture = obs.scenes
     .get(gameplay.sceneName)!
-    .find((item) => item.sourceName === 'Mizar · CS2 Game Capture')!;
+    .find((item) => item.sourceName === '游戏画面')!;
   expect(obs.transforms.get(capture.sceneItemId)).toMatchObject({
     boundsType: 'OBS_BOUNDS_STRETCH',
     boundsWidth: 1920,
@@ -202,7 +218,7 @@ it('repairs only Mizar collection, browser sources and order, then is idempotent
   expect(obs.scenes.size).toBe(PROGRAM_SCENES.length + 1);
   expect(await repairObsConfiguration(obs, baseUrl)).toEqual([]);
   expect(obs.scenes.size).toBe(PROGRAM_SCENES.length + 1);
-  obs.inputs.get('Mizar · CS2 Game Capture')!.settings.window = 'other.exe';
+  obs.inputs.get('游戏画面')!.settings.window = 'other.exe';
   expect((await checkObsConfiguration(obs, baseUrl)).map((finding) => finding.code)).toContain(
     'capture_drift',
   );
@@ -274,18 +290,14 @@ it('automatically prepares a new collection and default audio, without duplicati
   expect(obs.collection).toBe(OBS_COLLECTION);
   expect(obs.currentScene).toBe(obsSceneName('waiting'));
   expect(await ensureObsAudio(obs, baseUrl)).toEqual([]);
-  expect(obs.inputs.get('Mizar · Desktop Audio')?.kind).toBe('wasapi_output_capture');
-  expect(obs.inputs.get('Mizar · Microphone')?.kind).toBe('wasapi_input_capture');
+  expect(obs.inputs.get('桌面声音')?.kind).toBe('wasapi_output_capture');
+  expect(obs.inputs.get('麦克风')?.kind).toBe('wasapi_input_capture');
   for (const scene of obsDesiredScenes(baseUrl)) {
     expect(
-      obs.scenes
-        .get(scene.sceneName)
-        ?.filter((item) => item.sourceName.startsWith('Mizar · Desktop Audio')),
+      obs.scenes.get(scene.sceneName)?.filter((item) => item.sourceName.startsWith('桌面声音')),
     ).toHaveLength(1);
     expect(
-      obs.scenes
-        .get(scene.sceneName)
-        ?.filter((item) => item.sourceName.startsWith('Mizar · Microphone')),
+      obs.scenes.get(scene.sceneName)?.filter((item) => item.sourceName.startsWith('麦克风')),
     ).toHaveLength(1);
   }
   obs.calls = [];
@@ -318,14 +330,14 @@ it('ignores unused custom audio when preparing managed scenes', async () => {
   obs.calls = [];
   const findings = await ensureObsAudio(obs, baseUrl);
   expect(findings).toEqual([]);
-  expect(obs.inputs.has('Mizar · Desktop Audio')).toBe(true);
+  expect(obs.inputs.has('桌面声音')).toBe(true);
   expect(obs.inputs.get('My microphone')!.settings).toEqual({ device_id: 'custom' });
 });
 
 it('reports an audio name collision and leaves the existing source untouched', async () => {
   const obs = new FakeObs();
   await ensureObsConfiguration(obs, baseUrl);
-  obs.inputs.set('Mizar · Microphone', { kind: 'image_source', settings: {} });
+  obs.inputs.set('麦克风', { kind: 'image_source', settings: {} });
   obs.calls = [];
   expect((await ensureObsAudio(obs, baseUrl))[0]?.code).toBe('audio_source_conflict');
   expect(obs.calls.filter((type) => /^(Set|Create|Remove)/.test(type))).toEqual([]);
@@ -337,7 +349,7 @@ it('does not duplicate game-capture audio with default desktop capture', async (
   obs.inputs.get(OBS_CAPTURE_INPUT)!.settings.capture_audio = true;
   obs.calls = [];
   await ensureObsAudio(obs, baseUrl);
-  expect(obs.inputs.has('Mizar · Desktop Audio')).toBe(false);
+  expect(obs.inputs.has('桌面声音')).toBe(false);
   expect(obs.inputs.get(OBS_CAPTURE_INPUT)!.settings.capture_audio).toBe(true);
   expect(obs.calls.filter((type) => /^(Set|Create|Remove)/.test(type))).toEqual([]);
 });
@@ -361,9 +373,7 @@ it('takes and closes the compact source only after verifying gameplay and HUD st
   const scene = obsSceneName('gameplay');
   obs.currentScene = scene;
   await expect(setBpCompactVisible(obs, baseUrl, true)).rejects.toThrow('HUD');
-  const hud = obs.scenes
-    .get(scene)!
-    .find((item) => item.sourceName === 'Mizar · gameplay · Program')!;
+  const hud = obs.scenes.get(scene)!.find((item) => item.sourceName === '比赛中画面')!;
   hud.sceneItemEnabled = false;
   await setBpCompactVisible(obs, baseUrl, true);
   await expect(assertBpCompactOff(obs)).rejects.toThrow('先关闭');
@@ -397,9 +407,7 @@ it('temporarily hides only the owned HUD and restores it after repeated Take and
   obs.currentScene = scene;
   const owner = new BpOverlayOwner();
   obs.itemChanged = (name, id, enabled) => owner.observeItem(name, id, enabled);
-  const hud = obs.scenes
-    .get(scene)!
-    .find((item) => item.sourceName === 'Mizar · gameplay · Program')!;
+  const hud = obs.scenes.get(scene)!.find((item) => item.sourceName === '比赛中画面')!;
   await owner.set(obs, baseUrl, true);
   expect(hud.sceneItemEnabled).toBe(false);
   await owner.set(obs, baseUrl, true);
@@ -414,9 +422,7 @@ it('does not restore after an operator changes HUD or the observation connection
   obs.currentScene = scene;
   const owner = new BpOverlayOwner();
   obs.itemChanged = (name, id, enabled) => owner.observeItem(name, id, enabled);
-  const hud = obs.scenes
-    .get(scene)!
-    .find((item) => item.sourceName === 'Mizar · gameplay · Program')!;
+  const hud = obs.scenes.get(scene)!.find((item) => item.sourceName === '比赛中画面')!;
   await owner.set(obs, baseUrl, true);
   await obs.call('SetSceneItemEnabled', {
     sceneName: scene,
@@ -444,9 +450,7 @@ it('restores the HUD when the compact source was removed while on air', async ()
   obs.currentScene = scene;
   const owner = new BpOverlayOwner();
   obs.itemChanged = (name, id, enabled) => owner.observeItem(name, id, enabled);
-  const hud = obs.scenes
-    .get(scene)!
-    .find((item) => item.sourceName === 'Mizar · gameplay · Program')!;
+  const hud = obs.scenes.get(scene)!.find((item) => item.sourceName === '比赛中画面')!;
   await owner.set(obs, baseUrl, true);
   obs.scenes.set(
     scene,
@@ -471,9 +475,7 @@ it('keeps an initially hidden HUD hidden and never restores a replacement item',
   obs.currentScene = scene;
   const owner = new BpOverlayOwner();
   obs.itemChanged = (name, id, enabled) => owner.observeItem(name, id, enabled);
-  const hud = obs.scenes
-    .get(scene)!
-    .find((item) => item.sourceName === 'Mizar · gameplay · Program')!;
+  const hud = obs.scenes.get(scene)!.find((item) => item.sourceName === '比赛中画面')!;
   hud.sceneItemEnabled = false;
   await owner.set(obs, baseUrl, true);
   await owner.set(obs, baseUrl, false);
@@ -485,10 +487,8 @@ it('keeps an initially hidden HUD hidden and never restores a replacement item',
     obs.scenes.get(scene)!.filter((item) => item.sceneItemId !== hud.sceneItemId),
   );
   owner.observeRemoval(scene, hud.sceneItemId);
-  obs.addItem(scene, 'Mizar · gameplay · Program');
-  const replacement = obs.scenes
-    .get(scene)!
-    .find((item) => item.sourceName === 'Mizar · gameplay · Program')!;
+  obs.addItem(scene, '比赛中画面');
+  const replacement = obs.scenes.get(scene)!.find((item) => item.sourceName === '比赛中画面')!;
   replacement.sceneItemEnabled = false;
   await expect(owner.set(obs, baseUrl, false)).rejects.toThrow('状态待确认');
   expect(replacement.sceneItemEnabled).toBe(false);
@@ -506,7 +506,37 @@ it('does not duplicate window-capture audio with default desktop capture', async
   });
   obs.calls = [];
   await ensureObsAudio(obs, baseUrl);
-  expect(obs.inputs.has('Mizar · Desktop Audio')).toBe(false);
+  expect(obs.inputs.has('桌面声音')).toBe(false);
   expect(obs.inputs.get('Window')!.settings.capture_audio).toBe(true);
   expect(obs.calls.filter((type) => /^(Set|Create|Remove)/.test(type))).toEqual([]);
+});
+
+it('renames legacy managed scenes and inputs in place, preserving user items', async () => {
+  const obs = new FakeObs();
+  const baseUrl = 'http://127.0.0.1:3000';
+  await repairObsConfiguration(obs, baseUrl);
+  for (const scene of PROGRAM_SCENES) {
+    await obs.call('SetSceneName', {
+      sceneName: obsSceneName(scene.id),
+      newSceneName: `Mizar · ${scene.title}`,
+    });
+    const desired = obsDesiredScenes(baseUrl).find((item) => item.id === scene.id)!;
+    await obs.call('SetInputName', {
+      inputName: desired.browserInput,
+      newInputName: `Mizar · ${scene.id} · Program`,
+    });
+  }
+  await obs.call('SetInputName', {
+    inputName: OBS_CAPTURE_INPUT,
+    newInputName: 'Mizar · CS2 Game Capture',
+  });
+  obs.inputs.set('自定义', { kind: 'image_source', settings: {} });
+  obs.addItem('Mizar · 比赛中', '自定义');
+  const oldItems = obs.scenes.get('Mizar · 比赛中')!.map((item) => item.sceneItemId);
+  await repairObsConfiguration(obs, baseUrl);
+  expect(obs.scenes.get('比赛中')!.map((item) => item.sceneItemId)).toEqual(oldItems);
+  expect(obs.scenes.get('比赛中')!.some((item) => item.sourceName === '自定义')).toBe(true);
+  expect(obs.inputs.has('Mizar · CS2 Game Capture')).toBe(false);
+  expect(obs.inputs.has('游戏画面')).toBe(true);
+  expect(await checkObsConfiguration(obs, baseUrl)).toEqual([]);
 });

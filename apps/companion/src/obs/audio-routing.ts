@@ -270,7 +270,10 @@ export class ObsAudioRouting {
           (['bgm', 'stinger'] as const).some(
             (layer) =>
               input.inputUuid === music.sources[layer] &&
-              input.inputName === `Mizar · ${layer === 'bgm' ? 'BGM' : 'Stinger'} · ${music.owner}`,
+              (input.inputName ===
+                `Mizar · ${layer === 'bgm' ? 'BGM' : 'Stinger'} · ${music.owner}` ||
+                (typeof input.inputName === 'string' &&
+                  (layer === 'bgm' ? /^音乐(?: \d+)?$/ : /^音效(?: \d+)?$/).test(input.inputName))),
           )
         )
           continue;

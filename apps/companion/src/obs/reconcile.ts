@@ -7,6 +7,7 @@ import {
 } from './desired-state.js';
 import type { ProgramSceneId, ProgramTransition } from '@mizar/protocol/program-scenes';
 import { ObsActionError } from './action-error.js';
+import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
 
 export interface ObsRpc {
   call(type: string, data?: Record<string, unknown>): Promise<Record<string, unknown>>;
@@ -83,7 +84,7 @@ function collectionNames(value: unknown): string[] {
 }
 
 function ownedScene(name: string): boolean {
-  return name.startsWith('Mizar · ');
+  return obsDesiredScenes('http://127.0.0.1').some((scene) => scene.sceneName === name);
 }
 
 /** Reload only exact Mizar program URLs, without changing scenes or user settings. */
@@ -213,6 +214,19 @@ export async function checkObsConfiguration(obs: ObsRpc, baseUrl: string): Promi
   const inputKinds = new Map(
     objects(inputs.inputs).map((item) => [String(item.inputName), String(item.inputKind)]),
   );
+  if (
+    [
+      'Mizar · CS2 Game Capture',
+      'Mizar · Desktop Audio',
+      'Mizar · Microphone',
+      'Mizar · BP 紧凑底栏',
+      ...PROGRAM_SCENES.map((scene) => `Mizar · ${scene.id} · Program`),
+    ].some((name) => inputKinds.has(name))
+  )
+    findings.push({
+      code: 'legacy_names',
+      message: '旧版来源名称等待更新，请停止输出后修复场景。',
+    });
   if (inputKinds.has(OBS_CAPTURE_INPUT) && inputKinds.get(OBS_CAPTURE_INPUT) !== 'game_capture')
     findings.push({ code: 'source_kind_conflict', message: 'Mizar 游戏采集来源名称冲突。' });
   if (inputKinds.get(OBS_CAPTURE_INPUT) === 'game_capture') {
@@ -329,6 +343,44 @@ export async function repairObsConfiguration(
   if (!exists) await obs.call('CreateSceneCollection', { sceneCollectionName: OBS_COLLECTION });
   else if (collections.currentSceneCollectionName !== OBS_COLLECTION)
     await obs.call('SetCurrentSceneCollection', { sceneCollectionName: OBS_COLLECTION });
+  // Migrate exact previous managed names in place so scene items and UUIDs survive.
+  const oldScenes = await obs.call('GetSceneList');
+  const oldInputs = await obs.call('GetInputList');
+  const sceneSet = new Set(names(oldScenes.scenes, 'sceneName'));
+  const inputList = objects(oldInputs.inputs);
+  const inputSet = new Set(names(oldInputs.inputs, 'inputName'));
+  const sceneRenames = PROGRAM_SCENES.map((scene) => ({
+    old: `Mizar · ${scene.title}`,
+    next: desired.find((item) => item.id === scene.id)!.sceneName,
+  }));
+  const inputRenames = [
+    { old: 'Mizar · CS2 Game Capture', next: OBS_CAPTURE_INPUT, kind: 'game_capture' },
+    { old: 'Mizar · Desktop Audio', next: '桌面声音', kind: 'wasapi_output_capture' },
+    { old: 'Mizar · Microphone', next: '麦克风', kind: 'wasapi_input_capture' },
+    { old: 'Mizar · BP 紧凑底栏', next: '禁选紧凑底栏', kind: 'browser_source' },
+    ...PROGRAM_SCENES.map((scene) => ({
+      old: `Mizar · ${scene.id} · Program`,
+      next: desired.find((item) => item.id === scene.id)!.browserInput,
+      kind: 'browser_source',
+    })),
+  ];
+  for (const item of sceneRenames)
+    if (sceneSet.has(item.old) && (sceneSet.has(item.next) || inputSet.has(item.next)))
+      throw new Error(`OBS 名称冲突：${item.next}。请先重命名冲突来源或场景。`);
+  for (const item of inputRenames) {
+    const existing = inputList.find((input) => input.inputName === item.old);
+    if (
+      existing &&
+      (existing.inputKind !== item.kind || inputSet.has(item.next) || sceneSet.has(item.next))
+    )
+      throw new Error(`OBS 名称冲突：${item.next}。请先重命名冲突来源或场景。`);
+  }
+  for (const item of sceneRenames)
+    if (sceneSet.has(item.old))
+      await obs.call('SetSceneName', { sceneName: item.old, newSceneName: item.next });
+  for (const item of inputRenames)
+    if (inputSet.has(item.old))
+      await obs.call('SetInputName', { inputName: item.old, newInputName: item.next });
   const scenes = await obs.call('GetSceneList');
   const sceneNames = new Set(names(scenes.scenes, 'sceneName'));
   const inputs = await obs.call('GetInputList');

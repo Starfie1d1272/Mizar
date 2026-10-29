@@ -900,7 +900,7 @@ export class MusicDirector {
         this.status.message =
           error instanceof Error && error.message === 'music_cancelled'
             ? null
-            : '音乐控制未确认。请在 OBS 检查或停止 Mizar 音乐来源；连接恢复后会重新核对。';
+            : '音乐控制未确认。请在 OBS 检查或停止 音乐来源；连接恢复后会重新核对。';
       }
     } finally {
       this.inFlight = false;

@@ -48,7 +48,8 @@ const component = (v: unknown): v is string =>
   !Array.from(v).some((c) => c.charCodeAt(0) < 32) &&
   v !== '.' &&
   v !== '..';
-const sceneId = (v: unknown) => PROGRAM_SCENES.find((s) => obsSceneName(s.id) === v)?.id ?? null;
+const sceneId = (v: unknown) =>
+  PROGRAM_SCENES.find((s) => obsSceneName(s.id) === v || `Mizar · ${s.title}` === v)?.id ?? null;
 const target = (v: unknown) =>
   typeof v !== 'string'
     ? null
@@ -395,7 +396,11 @@ export function projectObsNativeLogLine(line: string): ObsNativeLogEvent | null 
     category:
       hook || updateFailure || globalSuccess ? 'hook' : capture ? 'window_capture' : 'renderer',
     outcome,
-    source: capture ? (capture[2] === OBS_CAPTURE_INPUT ? 'mizar_capture' : 'other_capture') : null,
+    source: capture
+      ? [OBS_CAPTURE_INPUT, 'Mizar · CS2 Game Capture'].includes(capture[2]!)
+        ? 'mizar_capture'
+        : 'other_capture'
+      : null,
     target: attempt ? target(attempt[1]) : openFailure ? target(openFailure[1]) : null,
     reason:
       outcome !== 'failure'
@@ -1150,7 +1155,9 @@ export async function collectObsNativeEvidence(
                 // Saved global configuration or another software's capture is insufficient.
                 const sources = [
                   OBS_CAPTURE_INPUT,
+                  'Mizar · CS2 Game Capture',
                   ...PROGRAM_SCENES.map((scene) => obsBrowserInputName(scene.id)),
+                  ...PROGRAM_SCENES.map((scene) => `Mizar · ${scene.id} · Program`),
                 ];
                 const related = sources.some(
                   (source) =>

@@ -7,7 +7,7 @@ import {
 } from './desired-state.js';
 import type { ObsRpc } from './reconcile.js';
 
-export const BP_COMPACT_INPUT = 'Mizar · BP 紧凑底栏';
+export const BP_COMPACT_INPUT = '禁选紧凑底栏';
 export const BP_COMPACT_PATH = '/program/bp-compact';
 
 function objects(value: unknown): Record<string, unknown>[] {
