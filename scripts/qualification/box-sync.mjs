@@ -1571,11 +1571,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try {
     const result = await main();
     console.log(result);
-    if (process.env.GITHUB_OUTPUT && uploadRecoveryStartedAt)
-      await appendFile(
-        process.env.GITHUB_OUTPUT,
-        `recovery_started_at=${uploadRecoveryStartedAt}\n`,
-      );
     if (process.env.GITHUB_STEP_SUMMARY)
       await appendFile(process.env.GITHUB_STEP_SUMMARY, `${result}\n`);
   } catch (error) {

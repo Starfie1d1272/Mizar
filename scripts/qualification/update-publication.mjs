@@ -237,12 +237,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         process.env.GITHUB_REPOSITORY === repository &&
         process.env.GITHUB_REF === 'refs/heads/main' &&
         ['workflow_dispatch', 'workflow_run'].includes(process.env.GITHUB_EVENT_NAME) &&
-        (process.env.GITHUB_WORKFLOW_REF ===
-          `${repository}/.github/workflows/release-promotion.yml@refs/heads/main` ||
-          (process.env.GITHUB_WORKFLOW_REF ===
-            `${repository}/.github/workflows/release-qualification.yml@refs/heads/main` &&
-            process.env.RUN_ID === process.env.GITHUB_RUN_ID &&
-            process.env.QUALIFICATION_ATTEMPT === process.env.GITHUB_RUN_ATTEMPT)) &&
+        process.env.GITHUB_WORKFLOW_REF ===
+          `${repository}/.github/workflows/release-promotion.yml@refs/heads/main` &&
         /^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA),
       '发布确认必须由 main 正式晋级签发',
     );

@@ -10,17 +10,14 @@ export async function downloadQualifiedArtifacts(
   runId,
   execute = promisify(execFile),
   resourceRoot,
-  attempt,
 ) {
   if (!/^\d+$/.test(runId)) throw new Error('Invalid qualification run ID');
   if (resourceRoot) await rm(`${resourceRoot}.download-failed`, { force: true });
   const results = await Promise.allSettled(
     [
-      [`release-portable-product${attempt ? `-${attempt}` : ''}`, 'product'],
-      [`release-qualification-evidence${attempt ? `-${attempt}` : ''}`, 'evidence'],
-      ...(resourceRoot
-        ? [[`release-qualified-resources${attempt ? `-${attempt}` : ''}`, resourceRoot]]
-        : []),
+      ['release-portable-product', 'product'],
+      ['release-qualification-evidence', 'evidence'],
+      ...(resourceRoot ? [['release-qualified-resources', resourceRoot]] : []),
     ].map(([name, directory]) =>
       execute('gh', ['run', 'download', runId, '--name', name, '--dir', directory], {
         timeout: 180000,
@@ -38,10 +35,5 @@ export async function downloadQualifiedArtifacts(
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  await downloadQualifiedArtifacts(
-    process.argv[2] ?? '',
-    undefined,
-    process.argv[3],
-    process.argv[4],
-  );
+  await downloadQualifiedArtifacts(process.argv[2] ?? '', undefined, process.argv[3]);
 }

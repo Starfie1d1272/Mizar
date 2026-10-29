@@ -48,12 +48,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     process.env.GITHUB_REPOSITORY === REPOSITORY &&
       process.env.GITHUB_REF === 'refs/heads/main' &&
       ['workflow_dispatch', 'workflow_run'].includes(process.env.GITHUB_EVENT_NAME) &&
-      (process.env.GITHUB_WORKFLOW_REF ===
-        `${REPOSITORY}/.github/workflows/release-promotion.yml@refs/heads/main` ||
-        (process.env.GITHUB_WORKFLOW_REF ===
-          `${REPOSITORY}/.github/workflows/release-qualification.yml@refs/heads/main` &&
-          process.env.RUN_ID === process.env.GITHUB_RUN_ID &&
-          process.env.QUALIFICATION_ATTEMPT === process.env.GITHUB_RUN_ATTEMPT)) &&
+      process.env.GITHUB_WORKFLOW_REF ===
+        `${REPOSITORY}/.github/workflows/release-promotion.yml@refs/heads/main` &&
       process.env.GITHUB_SHA === sha,
     '资源发行声明只能在既有 main 晋级工作流构造',
   );

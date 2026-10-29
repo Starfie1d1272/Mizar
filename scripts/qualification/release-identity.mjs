@@ -47,32 +47,6 @@ export function assertQualificationRun(run, sourceSha) {
     throw new Error('资格任务必须是 main 上产品精确源码的成功签发任务');
 }
 
-// A single-run release can consume its qualification before the caller run ends.
-// Use the attempt-specific jobs API: the overall run may later fail in promotion
-// or mirroring, but the exact qualification stage must have completed successfully.
-export function assertQualificationStage(run, jobs, sourceSha, runId, attempt) {
-  if (
-    !isSha(sourceSha) ||
-    String(run.id) !== String(runId) ||
-    run.run_attempt !== Number(attempt) ||
-    run.event !== 'workflow_dispatch' ||
-    run.path !== QUALIFICATION_WORKFLOW ||
-    run.head_branch !== 'main' ||
-    run.head_repository?.full_name !== REPOSITORY ||
-    run.head_sha !== sourceSha
-  )
-    throw new Error('资格任务的运行、尝试或源码身份不一致');
-  const qualification = jobs.filter((job) => job.name === 'release_qualification');
-  if (
-    qualification.length !== 1 ||
-    qualification[0].status !== 'completed' ||
-    qualification[0].conclusion !== 'success' ||
-    qualification[0].run_id !== run.id ||
-    qualification[0].run_attempt !== Number(attempt)
-  )
-    throw new Error('精确资格阶段未成功完成');
-}
-
 export function releaseAttestationArgs(file, sourceSha, bundle, workflow = 'qualification') {
   if (!isSha(sourceSha)) throw new Error('来源证明必须绑定有效产品源码 SHA');
   if (!['qualification', 'promotion'].includes(workflow)) throw new Error('非法签发工作流');
@@ -148,31 +122,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     console.log(`候选与签发身份一致：${sha}`);
   } else if (mode === 'promotion' && args.length === 2) {
     const checkedOutSha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
-    const context = workflowContext();
-    const sameRun =
-      process.env.QUALIFICATION_ATTEMPT && process.env.GITHUB_RUN_ID === process.env.RUN_ID;
-    assertMainWorkflow(
-      context,
-      checkedOutSha,
-      sameRun ? QUALIFICATION_WORKFLOW : PROMOTION_WORKFLOW,
-    );
+    assertMainWorkflow(workflowContext(), checkedOutSha, PROMOTION_WORKFLOW);
     const manifest = await readJson(args[1]);
-    const run = await readJson(args[0]);
-    if (process.env.QUALIFICATION_ATTEMPT) {
-      const jobs = await readJson('qualification-jobs.json');
-      assertQualificationStage(
-        run,
-        jobs.jobs,
-        manifest.gitSha,
-        process.env.RUN_ID,
-        process.env.QUALIFICATION_ATTEMPT,
-      );
-    } else assertQualificationRun(run, manifest.gitSha);
-  } else if (mode === 'qualification-stage' && args.length === 5) {
-    const [runPath, jobsPath, manifestPath, runId, attempt] = args;
-    const manifest = await readJson(manifestPath);
-    const jobs = await readJson(jobsPath);
-    assertQualificationStage(await readJson(runPath), jobs.jobs, manifest.gitSha, runId, attempt);
+    assertQualificationRun(await readJson(args[0]), manifest.gitSha);
   } else if (mode === 'attestation' && (args.length === 2 || args.length === 4)) {
     if (args.length === 4 && args[2] !== '--bundle') throw new Error('非法证明参数');
     await verifyReleaseAttestations([{ file: args[0], sourceSha: args[1], bundle: args[3] }]);

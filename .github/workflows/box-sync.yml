@@ -1,19 +1,8 @@
 name: Box Sync
 on:
-  workflow_call:
-    inputs:
-      tag:
-        required: true
-        type: string
-      qualification_run:
-        required: true
-        type: string
-      qualification_attempt:
-        required: true
-        type: string
-    secrets:
-      MIZAR_BOX_REPO_TOKEN:
-        required: true
+  workflow_run:
+    workflows: [Release Promotion]
+    types: [completed]
   workflow_dispatch:
     inputs:
       tag:
@@ -37,13 +26,13 @@ concurrency:
   cancel-in-progress: false
 jobs:
   sync:
-    if: github.repository == 'Starfie1d1272/Mizar'
+    if: github.repository == 'Starfie1d1272/Mizar' && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && !startsWith(github.event.workflow_run.display_title, 'Stage draft ') && github.event.workflow_run.path == '.github/workflows/release-promotion.yml' && contains(fromJSON('["workflow_dispatch","workflow_run"]'), github.event.workflow_run.event)))
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: main
           persist-credentials: false
       - name: 同步与校验云盘
         id: mirror
@@ -60,9 +49,6 @@ jobs:
         if: always() && (steps.mirror.outputs.prerelease == 'false' || steps.mirror.outcome == 'failure')
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag }}
-          QUALIFICATION_RUN: ${{ inputs.qualification_run }}
-          QUALIFICATION_ATTEMPT: ${{ inputs.qualification_attempt }}
           BOX_OUTCOME: ${{ steps.mirror.outcome }}
           BOX_RECOVERY_STARTED_AT: ${{ steps.mirror.outputs.recovery_started_at }}
         run: node scripts/qualification/release-timings.mjs box release-timings.json
