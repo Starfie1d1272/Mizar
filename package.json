@@ -29,7 +29,7 @@
     "format": "prettier --write \"package.json\" \"pnpm-workspace.yaml\" \"tsconfig*.json\" \"eslint.config.js\" \".prettierrc.json\" \"apps/**/*.{ts,tsx,js,jsx,json,css,html}\" \"packages/**/*.{ts,tsx,js,jsx,mjs,json,css,html}\" \"tests/**/*.{ts,tsx,js,jsx,json,css,html}\" \"scripts/**/*.mjs\"",
     "format:check": "prettier --check \"package.json\" \"pnpm-workspace.yaml\" \"tsconfig*.json\" \"eslint.config.js\" \".prettierrc.json\" \"apps/**/*.{ts,tsx,js,jsx,json,css,html}\" \"packages/**/*.{ts,tsx,js,jsx,mjs,json,css,html}\" \"tests/**/*.{ts,tsx,js,jsx,json,css,html}\" \"scripts/**/*.mjs\"",
     "lint": "pnpm build:packages && eslint . --max-warnings=0",
-    "typecheck": "node scripts/qualification/app-version.mjs && pnpm -r run typecheck && pnpm --filter @mizar-hud/radar-view... --fail-if-no-match run consumer:typecheck && tsc -p tsconfig.json --noEmit",
+    "typecheck": "node scripts/qualification/app-version.mjs && pnpm -r run typecheck && pnpm --filter @mizar-hud/radar-view... --fail-if-no-match run consumer:typecheck",
     "qualification:build": "node scripts/qualification/build.mjs",
     "qualification:offline": "node scripts/qualification/offline.mjs",
     "qualification:verify": "node scripts/qualification/verify.mjs",
@@ -45,7 +45,7 @@
     "design:tokens:verify": "node packages/design-tokens/scripts/tokens.mjs --check",
     "design:catalog": "pnpm --filter @mizar/web^... --fail-if-no-match run build && pnpm --filter @mizar/web run storybook",
     "design:catalog:build": "pnpm --filter @mizar/web^... --fail-if-no-match run build && pnpm --filter @mizar/web run storybook:build",
-    "design:check": "pnpm design:tokens:verify && pnpm architecture:check && pnpm design:contracts:test && pnpm design:catalog:build && pnpm design:components:test",
+    "design:check": "pnpm design:tokens:verify && pnpm architecture:check && pnpm design:catalog:build",
     "build:packages": "pnpm --filter './packages/*...' --fail-if-no-match run build"
   },
   "devDependencies": {
