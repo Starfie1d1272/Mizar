@@ -1,0 +1,122 @@
+import { randomUUID } from 'node:crypto';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { expect, it } from 'vitest';
+import { getBuiltinLayout } from '@mizar/hud-config';
+import { defaultMusicConfig } from '@mizar/protocol/music';
+import { emptyOrchestrationPreset } from '@mizar/protocol/orchestration';
+import { readPackArchive } from '@mizar/broadcast-pack';
+import { HudConfigStore } from '../../src/hud-config/store.js';
+import { MusicStore } from '../../src/music/store.js';
+import { portableMusicConfig } from '../../src/broadcast-config/music-assets.js';
+import { migrateLegacyBroadcast } from '../../src/broadcast-config/migrate.js';
+import { BroadcastConfigStore } from '../../src/broadcast-config/store.js';
+import { exportMusicPack, importMusicPack } from '../../src/broadcast-config/music-pack.js';
+
+it('round trips real music owner configuration to independent drafts without activation', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'music-pack-'));
+  try {
+    const music = new MusicStore(join(root, 'music'));
+    await music.load();
+    const track = await music.add('opening.wav', Buffer.from('RIFF0000WAVEtest'));
+    const config = defaultMusicConfig();
+    config.groups.waiting.tracks = [
+      { ...track, entryId: randomUUID(), startMs: 0, endMs: 100, gain: 0.3 },
+      { ...track, entryId: randomUUID(), startMs: 100, endMs: 200, gain: 0.8 },
+    ];
+    await music.configure(config);
+    const id = randomUUID(),
+      camera = emptyOrchestrationPreset(),
+      layout = getBuiltinLayout();
+    const initial = await migrateLegacyBroadcast({
+      hud: new HudConfigStore().getState(),
+      music: music.state.config,
+      musicRevision: music.state.configRevision,
+      camera: {
+        activePresetId: id,
+        presets: [{ id, preset: camera }],
+        active: camera,
+        automaticEnabled: false,
+      },
+      overlays: {
+        pause: { enabled: true, visual: 'default' },
+        chat: { enabled: true, placement: Object.values(layout.widgets)[0]! },
+      },
+      musicConfig: (value) => portableMusicConfig(music, value, true),
+      cameraConfig: (value, automaticEnabled) =>
+        Promise.resolve({
+          format: 'mizar.camera-config',
+          version: 2,
+          name: value.name,
+          automaticEnabled,
+          maps: [],
+        }),
+      lock: () => Promise.resolve({ resources: [], tools: [] }),
+    });
+    const musicModule = initial.modules.find((item) => item.kind === 'music');
+    if (!musicModule || musicModule.kind !== 'music') throw new Error('missing music');
+    const store = new BroadcastConfigStore({
+      filePath: join(root, 'config.json'),
+      createInitial: () => Promise.resolve(initial),
+      resolver: {
+        resolve: () =>
+          Promise.resolve({ resolved: initial.active.resolved, lock: initial.active.lock }),
+      },
+      withReferenceGuard: (operation) => operation(),
+      assertReferenceCommitAllowed: () => Promise.resolve(),
+      verifyLegacyActive: () => Promise.resolve(),
+      withApplyGuard: (operation) => operation(() => true),
+    });
+    await store.load();
+    const zip = await exportMusicPack(music, musicModule, {
+      packageId: randomUUID(),
+      version: '1.0.0',
+      name: 'Music',
+      author: 'Test',
+    });
+    const archive = await readPackArchive(zip);
+    expect(archive.manifest.files).toHaveLength(2);
+    let installed = 0;
+    const install = (value: typeof archive) => {
+      installed++;
+      return Promise.resolve({
+        id: `local:mizar-pack:${value.manifest.packageId}`,
+        version: value.manifest.version,
+        digest: value.digest,
+      });
+    };
+    const before = store.snapshot.active;
+    await expect(
+      importMusicPack({ zip, store, install: () => Promise.reject(new Error('install_failed')) }),
+    ).rejects.toThrow('install_failed');
+    expect(store.snapshot).toEqual(initial);
+    const first = await importMusicPack({ zip, store, install });
+    const second = await importMusicPack({ zip, store, install });
+    expect(first.reused).toBe(false);
+    expect(second.reused).toBe(true);
+    expect(second.mapping).toEqual(first.mapping);
+    expect(installed).toBe(2);
+    expect(store.snapshot.active).toEqual(before);
+    const imported = store.snapshot.modules.find(
+      (item) => item.id === first.mapping.moduleEntries.music![0],
+    );
+    if (!imported || imported.kind !== 'music') throw new Error('missing imported module');
+    expect(
+      imported.value.groups.waiting.tracks.map((item) => [
+        item.name,
+        item.startMs,
+        item.endMs,
+        item.gain,
+      ]),
+    ).toEqual([
+      ['opening.wav', 0, 100, 0.3],
+      ['opening.wav', 100, 200, 0.8],
+    ]);
+    expect(imported.value.groups.waiting.tracks[0]!.asset).toEqual(
+      imported.value.groups.waiting.tracks[1]!.asset,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
