@@ -63,9 +63,7 @@ export function ResourceLibraryPage() {
     };
   }, []);
   const [query, setQuery] = useState('');
-  const [category, setCategory] = useState<
-    'all' | 'media' | 'tool' | 'music' | 'presets'
-  >('all');
+  const [category, setCategory] = useState<'all' | 'media' | 'tool' | 'music' | 'presets'>('all');
   const [preparedSession, setPreparedSession] = useState<{
     preparedId: string;
     tag: string;
