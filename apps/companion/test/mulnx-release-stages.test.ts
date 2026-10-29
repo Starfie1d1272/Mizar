@@ -299,12 +299,19 @@ it('prepares without selecting and publishes a configured instance only after se
       return committed.json<{ cameraReady: boolean }>().cameraReady;
     };
     expect(await switchRelease('different source')).toBe(false);
+    expect((await app.inject('/local/v1/orchestration')).json<unknown>()).toMatchObject({
+      preset: { name: '已关闭', maps: [] },
+      automaticEnabled: false,
+    });
     expect((await app.inject('/local/v1/broadcast-presets')).json<unknown>()).toMatchObject({
       active: {
         resolved: { camera: { maps: [{ source: { treeSha256: source.treeSha256 } }] } },
       },
     });
     expect(await switchRelease('source')).toBe(true);
+    expect((await app.inject('/local/v1/orchestration')).json<unknown>()).toMatchObject({
+      preset: { maps: [{ map: 'de_dust2', pack: current.packs[0]!.name }] },
+    });
   } finally {
     await app.close();
     await writeFile(join(data, 'current.json'), originalReceipt);

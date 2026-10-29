@@ -279,6 +279,11 @@ export function createBroadcastRuntime(input: {
       await store.waitForApply();
       if (syncError) throw syncError;
     },
+    async reconcileCameraSelection(): Promise<boolean> {
+      await camera.synchronizeFromPersistence();
+      cameraUnavailable = !cameraAvailable() && !store.pendingLegacyCamera;
+      return cameraAvailable();
+    },
     get ready() {
       return ready && !store.isApplying;
     },
