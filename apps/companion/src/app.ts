@@ -1269,6 +1269,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     broadcastConfig ??= createProductionBroadcastDependencies(
       dirname(options.obsConfigPath),
       musicStore,
+      async (ref) => {
+        if (ref.resource.id !== PACK_ID || !resources) throw new Error('dependency_missing');
+        await resources.readExact(ref.resource, ref.fileId);
+      },
     );
     const broadcastRuntime = broadcastConfig
       ? createBroadcastRuntime({
