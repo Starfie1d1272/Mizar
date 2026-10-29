@@ -1010,7 +1010,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       matchContextController?.getActiveBinding() !== undefined &&
       matchContextController?.getActiveBinding() != null,
     scenes: sceneController,
-    beforeEnter: () => demoTest?.openFormalBoundary(),
+    beforeEnter: () => {
+      if (cameraDirector?.store.saving) throw new Error('camera_settings_saving');
+      demoTest?.openFormalBoundary();
+    },
     beforeFinish: () => {
       cameraDirector?.finishProduction();
       observerSettings.endProduction();
@@ -1226,14 +1229,12 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       () => ({
         program: projectionCoordinator.getCurrent().program,
         active: sceneController.get().active,
+        sessionActive: production.get().mode !== 'preparation',
         production:
           production.get().mode !== 'preparation' &&
           !waitingObserverMap &&
           projectionCoordinator.getCurrent().operator.matchContext.origin !== 'fixture',
-        demoAudition:
-          demoTest.get().gameOwnership === 'external'
-            ? demoTest.canUseCamera('audition')
-            : undefined,
+        demoAudition: demoTest.get().active ? demoTest.canUseCamera('audition') : undefined,
       }),
       cameraEvidence,
       undefined,
@@ -1392,7 +1393,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           : undefined;
       confirmedObserverMap = currentMap;
       observerSettings.waitingForMap = Boolean(waitingObserverMap);
-      cameraDirector?.hold('本图连接已变更，请核对当前地图与运镜包。');
+      cameraDirector?.invalidatePreparation('本图连接已变更，正在准备运镜。');
       projectionCoordinator.resetObserverAssist();
     } else if (kind !== 'game') {
       if (kind === 'connection') confirmedObserverMap = waitingObserverMap = undefined;
