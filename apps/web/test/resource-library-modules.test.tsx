@@ -165,7 +165,32 @@ it('reports a partial import instead of claiming every resource was imported', a
       });
     if (path === '/local/v1/broadcast-modules')
       return Promise.resolve({ ok: true, json: async () => ({ modules: [] }) });
-    if (path === '/operator/resource-library/import-pack')
+    if (path === '/operator/resource-library/check-pack')
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          name: '分享包',
+          source: { digest: 'a'.repeat(64) },
+          entries: [
+            { entryId: 'hud', type: 'module', kind: 'hud', name: '实况 HUD', status: 'ready' },
+            {
+              entryId: 'camera',
+              type: 'module',
+              kind: 'camera',
+              name: '镜头',
+              status: 'dependency_missing',
+            },
+            {
+              entryId: 'old',
+              type: 'module',
+              kind: 'music',
+              name: '已删除音乐',
+              status: 'removed',
+            },
+          ],
+        }),
+      });
+    if (path.startsWith('/operator/resource-library/import-pack?'))
       return Promise.resolve({
         ok: true,
         json: async () => ({
@@ -197,6 +222,40 @@ it('reports a partial import instead of claiming every resource was imported', a
       input.dispatchEvent(new Event('change', { bubbles: true }));
       await Promise.resolve();
     });
+    expect(element.textContent).toContain('实况 HUD');
+    expect(element.textContent).toContain('所需来源暂不可用，可先保存');
+    const boxes = [...element.querySelectorAll<HTMLInputElement>('input[type=checkbox]')];
+    expect(boxes.map((box) => box.checked)).toEqual([true, true, false]);
+    await act(async () => {
+      [...element.querySelectorAll('button')]
+        .find((button) => button.textContent === '稍后继续')!
+        .click();
+    });
+    await act(async () => {
+      [...element.querySelectorAll('button')]
+        .find((button) => button.textContent === '继续选择资源')!
+        .click();
+    });
+    expect(
+      [...element.querySelectorAll<HTMLInputElement>('input[type=checkbox]')].map(
+        (box) => box.checked,
+      ),
+    ).toEqual([true, true, false]);
+    await act(async () => {
+      [...element.querySelectorAll('button')]
+        .find((button) => button.textContent === '导入所选')!
+        .click();
+      await Promise.resolve();
+    });
+    const importCall = fetchMock.mock.calls.find(([path]) =>
+      path.startsWith('/operator/resource-library/import-pack?'),
+    )!;
+    const query = new URL(importCall[0], 'http://localhost').searchParams;
+    expect(JSON.parse(query.get('selection')!)).toEqual({
+      modules: ['hud', 'camera'],
+      presets: [],
+    });
+    expect(query.get('digest')).toBe('a'.repeat(64));
     expect(element.textContent).toContain('部分资源已保存，尚未使用');
     expect(element.textContent).toContain('运镜');
   } finally {
