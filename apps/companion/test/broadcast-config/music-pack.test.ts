@@ -776,6 +776,7 @@ it('round trips real music owner configuration to independent drafts without act
         .digest('hex')}.mizarpack`;
       await writeFile(join(freshPath, filename), Buffer.from('damaged zip'));
       expect((await fetch(`${address}/local/v1/broadcast-assets?${query}`)).status).toBe(422);
+      await expect(restartedResources.install(presetZip)).rejects.toThrow('resource_damaged');
       const headers = {
         origin: 'http://127.0.0.1:3000',
         'content-type': 'application/x-mizarpack',

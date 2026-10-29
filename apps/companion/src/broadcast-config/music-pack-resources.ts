@@ -197,7 +197,7 @@ export class MusicPackResources {
               existing.manifest.version !== ref.version ||
               existing.digest !== ref.digest)
           )
-            throw new Error('identity_conflict');
+            throw new Error('identity_conflict', { cause: error });
         }
       } finally {
         await unlink(temporary).catch((error: NodeJS.ErrnoException) => {

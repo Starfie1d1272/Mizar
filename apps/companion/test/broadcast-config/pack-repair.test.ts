@@ -144,6 +144,41 @@ it('repairs a damaged active picture package with an explicit identical reimport
       const next = await resumed.listen({ host: '127.0.0.1', port: 0 });
       expect((await fetch(`${next}/local/v1/broadcast-modules`)).status).toBe(200);
       expect((await fetch(`${next}/local/v1/broadcast-assets?${query}`)).status).toBe(422);
+      const whileDamaged = (await (
+        await fetch(`${next}/local/v1/broadcast-presets`)
+      ).json()) as BroadcastConfigDocument;
+      const hud = whileDamaged.modules.find((module) => module.kind === 'hud')!;
+      const hudApply = await fetch(`${next}/operator/broadcast-modules/apply`, {
+        method: 'POST',
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          moduleId: hud.id,
+          expectedRevision: hud.revision,
+          expectedActiveRevision: whileDamaged.active.revision,
+          requestId: randomUUID(),
+        }),
+      });
+      expect(hudApply.status).toBe(200);
+      const different = await writePackArchive(
+        Buffer.from(JSON.stringify({ ...manifest, name: '不同摘要' })),
+        new Map([
+          ['scene.json', moduleBytes],
+          ['background.png', image],
+        ]),
+      );
+      const conflict = await fetch(`${next}/operator/resource-library/import-pack`, {
+        method: 'POST',
+        headers,
+        body: new Blob([new Uint8Array(different)]),
+      });
+      expect(conflict.status).toBe(409);
+      const corruptInput = await fetch(`${next}/operator/resource-library/import-pack`, {
+        method: 'POST',
+        headers,
+        body: new Blob(['not a zip']),
+      });
+      expect(corruptInput.status).toBe(400);
+      expect((await fetch(`${next}/local/v1/broadcast-assets?${query}`)).status).toBe(422);
       const checked = await fetch(`${next}/operator/resource-library/check-pack`, {
         method: 'POST',
         headers,

@@ -307,6 +307,8 @@ RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对�
 
 `POST /operator/resource-library/import-pack` 同样接收完整包字节；查询参数 `selection` 是分别 URL 编码的 JSON `{ "modules": [entryId], "presets": [entryId] }`，`digest` 是检查得到的清单摘要。方案自动带入其所需模块，不支持或无效条目不会阻断其他条目；可解析但本机缺依赖的草稿允许保存，使用时重新验证。响应包含 `mapping`、`reused` 和逐项 `entries`，其中 `result` 为 `imported`、`existing`、`unavailable` 或 `not_selected`。主动选择已删除条目会重新创建；存活副本复用且保留编辑。省略 selection 表示选择全部。导入不启用配置。
 
+已索引包的缓存损坏时，重新选择并导入同一完整身份、经验证的原包可原子修复缓存并复用存活条目；同一 ID 和版本的不同摘要仍返回 `409 identity_conflict`。修复缓存不自动使用场景，须显式使用以重新验证活动显示。
+
 `POST /operator/resource-library/export-pack` 接收 `modules`（每项 `moduleId`、`expectedRevision`）及 `presets`（每项 `presetId`、`expectedRevision`、`expectedModuleRevisions`）数组，至少选择一项；导出前后核对修订。不能编码时返回 `422 export_failed`，`entries` 列出无法导出的选择及原因，不生成缺项的成功包。
 
 `POST /operator/resource-library/delete-pack` 接收完整包 `ResourceRef`，在共享引用队列内检查草稿、活动、上一个活动快照及使用回执；仍有引用时返回 `409 resource_in_use`，文件保留。无引用时先持久标记删除，再清理包字节；清理中断后可重试同一请求。清理不会创建或恢复目录项。
