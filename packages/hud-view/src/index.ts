@@ -33,3 +33,4 @@ export { PlayerCard } from './widgets/player-rails/PlayerCard.js';
 export { buildPlayerRailsPresentation } from './widgets/player-rails/presentation.js';
 export { FocusedPlayerCard } from './widgets/focused-player/FocusedPlayer.js';
 export { buildFocusedPlayerPresentation } from './widgets/focused-player/presentation.js';
+export { AssetProvider, type AssetUrlResolver } from './assets.js';

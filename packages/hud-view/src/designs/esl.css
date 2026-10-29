@@ -517,36 +517,12 @@
 .hud-widget-design[data-hud-design='esl'] .player-rail__health-value {
   font-family: inherit;
 }
-@font-face {
-  font-family: ESLLegend;
-  src: url('/brand/fonts/esl/legend-regular.woff2') format('woff2');
-  font-weight: 400;
-  font-display: swap;
-}
-@font-face {
-  font-family: ESLLegend;
-  src: url('/brand/fonts/esl/legend-bold.woff2') format('woff2');
-  font-weight: 600 900;
-  font-display: swap;
-}
-@font-face {
-  font-family: ESLLegend;
-  src: url('/brand/fonts/esl/legend-light.woff2') format('woff2');
-  font-weight: 300;
-  font-display: swap;
-}
-@font-face {
-  font-family: SourceHanSans;
-  src: url('/brand/fonts/esl/SourceHanSansCN-Regular.woff2') format('woff2');
-  font-weight: 400;
-  font-display: swap;
-}
 .hud-widget-design[data-hud-design='esl'] .match-header__score-shell,
 .hud-widget-design[data-hud-design='esl'] .broadcast-event-ribbon,
 .hud-widget-design[data-hud-design='esl'] .player-rail__body::before,
 .hud-widget-design[data-hud-design='esl'] .match-header__series-map,
 .hud-widget-design[data-hud-design='esl'] .focused-player__identity {
-  background-image: url('/brand/hud/esl/texture.svg');
+  background-image: var(--mizar-asset-esl-texture);
   background-size: 150% auto;
 }
 .hud-widget-design[data-hud-design='esl'] .focused-player::before,

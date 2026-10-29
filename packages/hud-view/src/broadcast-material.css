@@ -1,11 +1,4 @@
 /* Native broadcast artwork; product UI and other HUD recipes never consume it. */
-@font-face {
-  font-family: 'Barlow Condensed';
-  src: url('/brand/fonts/barlow-condensed/BarlowCondensed-Bold.ttf') format('truetype');
-  font-weight: 700;
-  font-style: normal;
-  font-display: swap;
-}
 .program-scene:not(.program-scene--matchup):not(.program-scene--gameplay),
 .bp-canvas .bp-scene {
   background: linear-gradient(

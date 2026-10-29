@@ -3,7 +3,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { expect, it } from 'vitest';
 import type { BpSnapshot } from '@mizar/protocol/bp';
-import { BpCompactPresentation } from '@mizar/hud-view';
+import { BpCompactPresentation, ProgramView } from '@mizar/hud-view';
 
 it('renders only revealed cards and side choices, and clears on disconnect', () => {
   const container = document.createElement('div');
@@ -66,6 +66,32 @@ it('renders only revealed cards and side choices, and clears on disconnect', () 
   act(() => root.render(<BpCompactPresentation snapshot={unknown} />));
   expect(container.textContent).toContain('地图图片不可用');
   expect(container.textContent).toContain('UNKNOWN');
+  const branded = {
+    ...snapshot,
+    projection: {
+      ...snapshot.projection!,
+      entrants: {
+        ...snapshot.projection!.entrants,
+        a: { ...snapshot.projection!.entrants.a, logoUrl: 'https://example.test/team.png' },
+      },
+    },
+  };
+  act(() =>
+    root.render(
+      <ProgramView
+        kind="bp"
+        compact={false}
+        animate={false}
+        snapshot={branded}
+        resolveAssetUrl={(path) => `/portable${path}`}
+      />,
+    ),
+  );
+  expect(container.querySelector('.bp-map-art')?.getAttribute('src')).toMatch(/^\/portable\//);
+  expect(container.querySelector('.bp-team-logo img')?.getAttribute('src')).toBe(
+    'https://example.test/team.png',
+  );
+  expect(container.querySelector('style')?.textContent).toContain('/portable/brand/fonts/');
   act(() => root.render(<BpCompactPresentation snapshot={null} />));
   expect(container.querySelector('.bp-compact')).toBeNull();
   act(() => root.unmount());

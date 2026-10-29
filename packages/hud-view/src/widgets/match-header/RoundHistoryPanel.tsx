@@ -1,3 +1,4 @@
+import { assetCssUrl, useAssetUrl } from '../../assets.js';
 import type { CSSProperties } from 'react';
 import { assetForCanonicalKey } from '../player-rails/presentation.js';
 import type {
@@ -11,12 +12,15 @@ function WinIcon({
 }: {
   readonly condition: MatchHeaderRoundPresentation['winCondition'];
 }) {
+  const resolveAssetUrl = useAssetUrl();
   if (condition === 'defuse') {
     const asset = assetForCanonicalKey('equipment.defuse-kit');
     return asset ? (
       <span
         className="round-history-panel__kit"
-        style={{ '--history-icon': `url("${asset.outputPath}")` } as CSSProperties}
+        style={
+          { '--history-icon': assetCssUrl(resolveAssetUrl(asset.outputPath)) } as CSSProperties
+        }
       />
     ) : (
       <span>?</span>

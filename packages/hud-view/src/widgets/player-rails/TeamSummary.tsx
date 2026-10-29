@@ -1,3 +1,4 @@
+import { assetCssUrl, useAssetUrl } from '../../assets.js';
 import { getSideLogo } from '@mizar/cs2-assets';
 import type { HudDesign } from '../../hud-design.js';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
@@ -35,9 +36,12 @@ function UtilityAsset({
   readonly family: TeamUtilityFamily;
   readonly label: string;
 }) {
+  const resolveAssetUrl = useAssetUrl();
   const asset = teamUtilityAsset(side, family);
   if (asset === null) return null;
-  const style = { '--player-rail-icon': `url("${asset.outputPath}")` } as CSSProperties;
+  const style = {
+    '--player-rail-icon': assetCssUrl(resolveAssetUrl(asset.outputPath)),
+  } as CSSProperties;
   return (
     <span
       aria-hidden="true"
@@ -61,6 +65,7 @@ export function TeamSummary({
   readonly side: PlayerRailSide;
   readonly summary: TeamSummaryPresentation;
 }) {
+  const resolveAssetUrl = useAssetUrl();
   const previousPhase = useRef(phase);
   const [carryoverActive, setCarryoverActive] = useState(false);
 
@@ -94,7 +99,11 @@ export function TeamSummary({
         {economyVisible ? (
           <div className="shanghai-summary__economy">
             {side === 'CT' || side === 'T' ? (
-              <img className="shanghai-summary__side" src={getSideLogo(side)?.outputPath} alt="" />
+              <img
+                className="shanghai-summary__side"
+                src={getSideLogo(side) ? resolveAssetUrl(getSideLogo(side)!.outputPath) : undefined}
+                alt=""
+              />
             ) : null}
             <div>
               <strong>{formatMoney(displayed.lossBonus).replaceAll(',', '')}</strong>

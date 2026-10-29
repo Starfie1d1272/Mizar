@@ -20,7 +20,7 @@
 .broadcast-pause[data-hud-design='esl'] .broadcast-pause__notice,
 .hud-widget-design[data-hud-design='esl'] .round-history-panel,
 .hud-widget-design[data-hud-design='esl'] .shanghai-series-overview {
-  background-image: url('/brand/hud/esl/texture.svg');
+  background-image: var(--mizar-asset-esl-texture);
   background-size: 440px auto;
   border-radius: 0;
 }
@@ -131,7 +131,7 @@
 .hud-widget-design.hud-redraw[data-hud-design='esl']
   .focused-player__face[data-side]
   .focused-player__identity {
-  background-image: url('/brand/hud/esl/texture.svg');
+  background-image: var(--mizar-asset-esl-texture);
   background-size: 440px auto;
 }
 .hud-widget-design[data-hud-design='esl'] .shanghai-series-detail {
@@ -139,6 +139,6 @@
 }
 .hud-widget-design[data-hud-design='esl']
   .shanghai-series-detail:not(.shanghai-series-detail--heading) {
-  background-image: url('/brand/hud/esl/texture.svg');
+  background-image: var(--mizar-asset-esl-texture);
   background-size: 440px auto;
 }

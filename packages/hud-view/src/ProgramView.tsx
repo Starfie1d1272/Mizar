@@ -1,3 +1,4 @@
+import { AssetProvider, type AssetUrlResolver } from './assets.js';
 import type { BpSnapshot } from '@mizar/protocol/bp';
 import { BpCompactPresentation, BpPresentation } from './BpPresentation.js';
 import { ProgramSceneView, type ProgramSceneViewProps } from './ProgramSceneView.js';
@@ -14,7 +15,17 @@ export type ProgramViewProps =
       readonly compact: boolean;
     };
 
-export function ProgramView(props: ProgramViewProps) {
+export function ProgramView(
+  props: ProgramViewProps & { readonly resolveAssetUrl?: AssetUrlResolver },
+) {
+  return (
+    <AssetProvider resolve={props.resolveAssetUrl}>
+      <ProgramViewContent {...props} />
+    </AssetProvider>
+  );
+}
+
+function ProgramViewContent(props: ProgramViewProps) {
   if (props.kind === 'hud') return <GameplayHud {...props} />;
   if (props.kind === 'scene') return <ProgramSceneView {...props} />;
   return props.compact ? (

@@ -1,3 +1,4 @@
+import { assetCssUrl, useAssetUrl } from '../../assets.js';
 import { getMapThumbnail, getSideLogo } from '@mizar/cs2-assets';
 import type { CSSProperties } from 'react';
 
@@ -5,6 +6,7 @@ import type { HudWidgetRendererProps } from '../../hud-renderer-registry.js';
 import { buildMatchHeaderPresentation, hasSeriesMapStrip } from './presentation.js';
 
 export function SeriesStrip({ snapshot, design = 'current' }: HudWidgetRendererProps) {
+  const resolveAssetUrl = useAssetUrl();
   const presentation = buildMatchHeaderPresentation(snapshot.payload);
   const maps = presentation.seriesMaps;
   if (maps === null || !hasSeriesMapStrip(snapshot.payload)) return null;
@@ -57,7 +59,7 @@ export function SeriesStrip({ snapshot, design = 'current' }: HudWidgetRendererP
                   style={
                     mapAsset === null
                       ? undefined
-                      : { backgroundImage: `url("${mapAsset.outputPath}")` }
+                      : { backgroundImage: assetCssUrl(resolveAssetUrl(mapAsset.outputPath)) }
                   }
                 />
                 {map.pickerLogoUrl === null ? null : (
@@ -79,7 +81,9 @@ export function SeriesStrip({ snapshot, design = 'current' }: HudWidgetRendererP
                       sideLogo === null
                         ? undefined
                         : ({
-                            '--match-header-side-logo': `url("${sideLogo.outputPath}")`,
+                            '--match-header-side-logo': assetCssUrl(
+                              resolveAssetUrl(sideLogo.outputPath),
+                            ),
                           } as CSSProperties)
                     }
                   ></span>
