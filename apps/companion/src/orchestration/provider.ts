@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url';
 export type GatewayResult = 'queued' | 'rejected' | 'unknown';
 type CameraCommand =
-  'CamMacro/Play' | 'CamPlay/ClearForce' | 'System/Stop' | 'CS2BootLoader/Launch';
+  'CamMacro/Play' | 'CamPack/Apply' | 'CamPlay/ClearForce' | 'System/Stop' | 'CS2BootLoader/Launch';
 /** Fixed audited gateway. No arbitrary commands, endpoint, reconnect, retries or offline queue. */
 export class MulnxProvider {
   private socket: WebSocket | null = null;
@@ -68,7 +68,7 @@ export class MulnxProvider {
     });
     this.diagnostic('camera_connect', { result: 'connected', generation });
   }
-  send(type: CameraCommand, macro = ''): Promise<GatewayResult> {
+  send(type: CameraCommand, value = ''): Promise<GatewayResult> {
     if (!this.connected) return Promise.resolve('unknown');
     if (this.pending) {
       if (type !== 'CamPlay/ClearForce' && type !== 'System/Stop')
@@ -77,7 +77,7 @@ export class MulnxProvider {
     }
     const wire = JSON.stringify({
       type,
-      payload: type === 'CamMacro/Play' ? JSON.stringify(macro) : '',
+      payload: type === 'CamMacro/Play' || type === 'CamPack/Apply' ? JSON.stringify(value) : '',
     });
     const socket = this.socket!;
     this.diagnostic('camera_request', { wire, generation: this.generation, result: 'submitted' });
