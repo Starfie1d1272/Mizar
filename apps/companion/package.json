@@ -24,6 +24,7 @@
     "fastify": "catalog:",
     "obs-websocket-js": "5.0.8",
     "sigstore": "5.0.0",
+    "socket.io": "4.8.1",
     "yaml": "2.9.1",
     "zod": "catalog:"
   },
@@ -35,6 +36,7 @@
     "@types/node": "catalog:",
     "@types/ws": "catalog:",
     "@typescript/native": "catalog:",
+    "socket.io-client": "4.8.1",
     "tsx": "catalog:",
     "vitest": "catalog:"
   }
