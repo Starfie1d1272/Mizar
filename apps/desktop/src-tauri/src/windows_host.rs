@@ -416,7 +416,6 @@ impl GameTracker {
         let foreground_allowed = overlay_foreground_allowed(foreground, window.hwnd, workspace_windows);
         overlay_visible(!self.preserve_settings && self.managed && self.overlay_enabled, unsafe { IsIconic(window.hwnd) != 0 }, client, foreground_allowed).then_some(client)
     }
-    }
     pub fn restore_focus(&self, source: isize) -> bool {
         self.window.is_some_and(|window| unsafe {
             let mut pid = 0;
