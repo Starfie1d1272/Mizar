@@ -54,6 +54,7 @@ type ImportResult = {
   result: 'imported' | 'existing' | 'unavailable' | 'not_selected';
   status?: PackEntry['status'];
   reason?: string;
+  targetId?: string;
 };
 function entryName(entry: PackEntry, index: number): string {
   const kind = entry.type === 'preset' ? '方案' : (entry.kind && labels[entry.kind]) || '资源';
@@ -457,15 +458,7 @@ export function ResourceModules({
           !['imported', 'existing'].includes(outcome.result)
         )
           continue;
-        if (entry.type === 'preset') {
-          const id = result.mapping.presetEntries?.[entry.entryId];
-          if (id) targets[key] = { type: 'preset', id };
-        } else {
-          const ids = result.mapping.moduleEntries[entry.entryId] ?? [];
-          const id =
-            ids.find((candidate) => result.mapping.moduleOwners?.[candidate] === null) ?? ids[0];
-          if (id) targets[key] = { type: 'module', id };
-        }
+        if (outcome.targetId) targets[key] = { type: entry.type, id: outcome.targetId };
       }
       setImportTargets(targets);
       if (selectedEntries.length === 1 && selectionEpoch.current === startingEpoch) {
