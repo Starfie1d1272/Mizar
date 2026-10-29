@@ -25,7 +25,11 @@ export function livePlayerDisplayName(
   observedName: string | null | undefined,
   canonicalName: string | null | undefined,
   teamNames: readonly (string | null | undefined)[],
+  preferCanonical = false,
 ): { displayName: string | null; displayNameSource: 'observed' | 'canonical' | 'unavailable' } {
+  if (preferCanonical && canonicalName?.trim()) {
+    return { displayName: canonicalName, displayNameSource: 'canonical' };
+  }
   if (observedName?.trim()) {
     return {
       displayName: observedPlayerDisplayName(observedName, teamNames),
@@ -36,4 +40,17 @@ export function livePlayerDisplayName(
     displayName: canonicalName ?? null,
     displayNameSource: canonicalName == null ? 'unavailable' : 'canonical',
   };
+}
+import type { MatchContext } from '../match-context/types.js';
+
+/** A name is usable only when this match identifies exactly one player by Steam64. */
+export function matchPlayerDisplayName(
+  context: MatchContext | undefined,
+  steam64: string,
+): string | null {
+  if (context === undefined || !/^\d{17}$/.test(steam64)) return null;
+  const players = [...context.entrants.a.players, ...context.entrants.b.players].filter(
+    (player) => player.steam64 === steam64,
+  );
+  return players.length === 1 && players[0]!.displayName?.trim() ? players[0]!.displayName : null;
 }

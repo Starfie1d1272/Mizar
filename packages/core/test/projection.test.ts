@@ -14,6 +14,8 @@ import {
 } from '../src/runtime/index.js';
 import {
   getProjectionIdentityCapabilities,
+  livePlayerDisplayName,
+  matchPlayerDisplayName,
   projectProgram,
   selectProgramSafeRuntimeView,
 } from '../src/projection/index.js';
@@ -188,6 +190,31 @@ function resolvedLineup(
 }
 
 describe('Program-safe projections', () => {
+  it('uses only unique Steam64 match bindings for website names and preserves local fallback', () => {
+    const context = contextFixture();
+    const name = matchPlayerDisplayName(context, steam64(1));
+    expect(livePlayerDisplayName('Game Name', name, [], true)).toEqual({
+      displayName: 'Alpha Player 1',
+      displayNameSource: 'canonical',
+    });
+    expect(livePlayerDisplayName('Game Name', name, [], false).displayName).toBe('Game Name');
+    expect(
+      livePlayerDisplayName('Game Name', matchPlayerDisplayName(context, steam64(99)), [], true)
+        .displayName,
+    ).toBe('Game Name');
+    expect(livePlayerDisplayName(undefined, null, [], true).displayName).toBeNull();
+    const duplicate = {
+      ...context,
+      entrants: {
+        ...context.entrants,
+        b: {
+          ...context.entrants.b,
+          players: [...context.entrants.b.players, context.entrants.a.players[0]!],
+        },
+      },
+    };
+    expect(matchPlayerDisplayName(duplicate, steam64(1))).toBeNull();
+  });
   it('fails closed to neutral teams and player ids across an identity epoch change', () => {
     const context = contextFixture();
     const input = observation();
