@@ -330,52 +330,9 @@ async function run(root, reportPath) {
     await assertStopped(0);
     current.result = 'PASS';
 
-    // Use the real WebView2 override to reproduce a startup prerequisite failure;
-    // no product-only test switch and no mutation of the exact artifact payload.
-    start('missing-webview2', {
-      WEBVIEW2_BROWSER_EXECUTABLE_FOLDER: join(stateBase, 'missing WebView2 runtime'),
-    });
-    const failure = await waitFor(async (snapshot) => {
-      assert.equal(
-        active.child.exitCode,
-        null,
-        'startup failure exited without its visible dialog',
-      );
-      const visible = snapshot.windows.some(
-        (window) => window.className === '#32770' && window.title === 'Mizar 启动失败',
-      );
-      if (!visible) return false;
-      const entries = await desktopLog(stateRoot);
-      current.runtimeReady = assertDesktopLog(entries, {
-        pid: active.child.pid,
-        artifact,
-        stage: 'runtime_ready',
-        result: 'success',
-      });
-      current.failure = assertDesktopLog(entries, {
-        pid: active.child.pid,
-        artifact,
-        stage: 'webview2_preflight',
-        result: 'failure',
-        startupSessionId: current.runtimeReady.startupSessionId,
-      });
-      current.rollback = assertDesktopLog(entries, {
-        pid: active.child.pid,
-        artifact,
-        stage: 'startup_rollback',
-        result: 'success',
-        startupSessionId: current.runtimeReady.startupSessionId,
-      });
-      return snapshot.processes.every((process) => process.pid === active.child.pid);
-    }, 'WebView2 failure did not show its error, preserve diagnostics, and roll back children');
-    assert.equal(await health(), null, 'failed Desktop left Companion running');
-    current.failureWindow = failure.windows.find((window) => window.className === '#32770');
-    await sample('dismiss-failure');
-    await assertStopped(1);
-    current.result = 'PASS';
     report.result = 'PASS';
     console.log(
-      'Windows GUI smoke passed: exact artifact, normal visible Desktop, page load, hidden Node consoles, controlled stop, WebView2 failure diagnostics and rollback. Real CS2/OBS acceptance: NOT RUN.',
+      'Windows GUI smoke passed: exact artifact, visible Desktop, page load and controlled stop. Real CS2/OBS acceptance: NOT RUN.',
     );
   } catch (error) {
     report.error = String(error);

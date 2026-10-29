@@ -12,20 +12,26 @@ import { readMusicAsset } from './music-assets.js';
 import { BroadcastReferenceQueue } from './reference-queue.js';
 import type { BroadcastRuntimeDependencies } from './runtime.js';
 import type { CameraConfigResolver } from './camera.js';
+import type { MusicPackResources } from './music-pack-resources.js';
 
 /** Built-in providers support native HUD, Pulse, local music and verified camera resources. */
 export function createProductionBroadcastDependencies(
   directory: string,
   music: MusicStore,
   readAdditionalAsset: (ref: AssetRef) => Promise<void>,
+  musicPacks?: MusicPackResources,
   camera?: CameraConfigResolver,
 ): BroadcastRuntimeDependencies {
   const references = new BroadcastReferenceQueue();
   const asset = async (ref: AssetRef) => {
     if (ref.resource.id.startsWith('local:music:')) await readMusicAsset(music, ref);
+    else if (ref.resource.id.startsWith('local:mizar-pack:') && musicPacks)
+      await musicPacks.read(ref);
     else await readAdditionalAsset(ref);
   };
   const localTrackId = async (ref: AssetRef) => {
+    if (ref.resource.id.startsWith('local:mizar-pack:') && musicPacks)
+      return musicPacks.materialize(ref, music);
     await readMusicAsset(music, ref);
     return ref.fileId;
   };
@@ -61,7 +67,7 @@ export function createProductionBroadcastDependencies(
     musicAutomaticEnabled: true,
     references,
     isDeleting: (ref) =>
-      ref.id.startsWith('local:music:')
+      ref.id.startsWith('local:music:') || (ref.id.startsWith('local:mizar-pack:') && musicPacks)
         ? Promise.resolve(false)
         : Promise.reject(new Error('provider_unavailable')),
     resolve: {

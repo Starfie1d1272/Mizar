@@ -29,21 +29,32 @@ const mocks = vi.hoisted(() => ({
   },
   cs2Status: null as null | { preferMulnx: boolean; running: boolean; observerHudPending: boolean },
   production: { mode: 'preparation' },
-  inventory: { releases: [] as { preparedId: string; tag: string; state: 'available' }[] },
+  inventory: {
+    releases: [] as { preparedId: string; tag: string | null; state: 'available' | 'damaged' }[],
+  },
+  catalog: {
+    resources: [],
+    tool: { installed: 'old', latest: 'new', busy: false, packs: [] },
+  },
   observer: ((): Record<string, unknown> => ({}))(),
 }));
 vi.mock('../src/preparation/client', () => ({
   useLocalRead: (path: string) =>
-    path === '/local/v1/mulnx-releases'
-      ? mocks.inventory
-      : path === '/local/v1/observer'
-        ? mocks.runtime
-        : path === '/local/v1/production'
-          ? mocks.production
-          : mocks.view,
+    path === '/local/v1/resource-library'
+      ? mocks.catalog
+      : path === '/local/v1/mulnx-releases'
+        ? mocks.inventory
+        : path === '/local/v1/observer'
+          ? mocks.runtime
+          : path === '/local/v1/production'
+            ? mocks.production
+            : mocks.view,
   command: mocks.command,
 }));
 vi.mock('../src/workspace/client', () => ({ desktopInvoke: mocks.native }));
+vi.mock('../src/operator/OperatorShell', () => ({
+  OperatorShell: ({ children }: { children: React.ReactNode }) => children,
+}));
 vi.mock('../src/preparation/cs2-status', () => ({
   useCs2Status: () => ({ status: mocks.cs2Status, refresh: vi.fn() }),
 }));
@@ -55,6 +66,7 @@ import {
   ObserverSettingsPanel,
 } from '../src/preparation/ObserverSettings';
 import { MulnxToolControls } from '../src/orchestration/MulnxToolControls';
+import { ResourceLibraryPage } from '../src/resource-library/ResourceLibraryPage';
 import { ObserverHints } from '../src/workspace/ObserverHints';
 let root: Root, container: HTMLDivElement;
 beforeEach(() => {
@@ -365,6 +377,79 @@ it('shows the available MulNX maintenance action after checking versions', () =>
   expect(
     [...container.querySelectorAll('button')].some((button) => button.textContent === '更新'),
   ).toBe(true);
+});
+it('keeps the downloaded version available when native selection is blocked', async () => {
+  window.__TAURI_INTERNALS__ = { invoke: <T,>() => Promise.resolve(undefined as T) };
+  mocks.native.mockResolvedValueOnce({ preparedId: 'prepared-id', tag: 'new' });
+  mocks.native.mockRejectedValueOnce(new Error('请先退出 CS2'));
+  act(() =>
+    root.render(
+      <MulnxToolControls maintenanceOnly tool={{ installed: 'old', latest: null, busy: false }} />,
+    ),
+  );
+  const button = (label: string) =>
+    [...container.querySelectorAll('button')].find((item) => item.textContent === label)!;
+  await act(async () => {
+    button('下载最新版本').click();
+    await Promise.resolve();
+  });
+  expect(container.textContent).toContain('已下载：new');
+  await act(async () => {
+    button('使用此版本').click();
+    await Promise.resolve();
+  });
+  expect(mocks.native).toHaveBeenLastCalledWith('mulnx_control', {
+    action: 'select',
+    preparedId: 'prepared-id',
+  });
+  expect(container.textContent).toContain('请先退出 CS2');
+  expect(container.textContent).toContain('已下载：new');
+});
+it('retains the download receipt when filtering the resource catalog', async () => {
+  window.__TAURI_INTERNALS__ = { invoke: <T,>() => Promise.resolve(undefined as T) };
+  mocks.native.mockResolvedValueOnce({ preparedId: 'prepared-id', tag: 'new' });
+  act(() => root.render(<ResourceLibraryPage />));
+  const button = (label: string) =>
+    [...container.querySelectorAll('button')].find((item) => item.textContent === label)!;
+  await act(async () => {
+    button('下载最新版本').click();
+    await Promise.resolve();
+  });
+  expect(container.textContent).toContain('已下载：new');
+  act(() => button('素材').click());
+  expect(container.textContent).not.toContain('已下载：new');
+  act(() => button('工具').click());
+  expect(container.textContent).toContain('已下载：new');
+  await act(async () => {
+    button('使用此版本').click();
+    await Promise.resolve();
+  });
+  expect(mocks.native).toHaveBeenLastCalledWith('mulnx_control', {
+    action: 'select',
+    preparedId: 'prepared-id',
+  });
+});
+it('shows saved and damaged versions from the owner in the resource catalog', async () => {
+  window.__TAURI_INTERNALS__ = { invoke: <T,>() => Promise.resolve(undefined as T) };
+  mocks.inventory.releases = [
+    { preparedId: 'saved', tag: 'saved-version', state: 'available' },
+    { preparedId: 'damaged', tag: null, state: 'damaged' },
+  ];
+  act(() => root.render(<ResourceLibraryPage />));
+  expect(container.textContent).toContain('已下载：saved-version');
+  expect(container.textContent).toContain('已下载：文件损坏');
+  const buttons = [...container.querySelectorAll('button')].filter(
+    (item) => item.textContent === '使用此版本',
+  );
+  expect(buttons).toHaveLength(1);
+  await act(async () => {
+    buttons[0]!.click();
+    await Promise.resolve();
+  });
+  expect(mocks.native).toHaveBeenLastCalledWith('mulnx_control', {
+    action: 'select',
+    preparedId: 'saved',
+  });
 });
 it('gives specific repair guidance for known startup causes and diagnostic context for unknown failures', () => {
   const view: ObserverRuntimeView = {

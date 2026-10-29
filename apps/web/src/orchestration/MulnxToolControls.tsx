@@ -16,10 +16,14 @@ export function MulnxToolControls({
   allowStop = true,
   runtimeOnly = false,
   maintenanceOnly = false,
+  preparedSession,
+  onPreparedSessionChange,
 }: {
   allowStop?: boolean;
   runtimeOnly?: boolean;
   maintenanceOnly?: boolean;
+  preparedSession?: { preparedId: string; tag: string } | null;
+  onPreparedSessionChange?: (value: { preparedId: string; tag: string } | null) => void;
   tool:
     | (Pick<MulnxToolView, 'installed' | 'latest' | 'busy'> &
         Partial<Pick<MulnxToolView, 'message' | 'packs'>>)
@@ -33,7 +37,11 @@ export function MulnxToolControls({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [failed, setFailed] = useState(false);
-  const [prepared, setPrepared] = useState<{ preparedId: string; tag: string } | null>(null);
+  const [localPrepared, setLocalPrepared] = useState<{ preparedId: string; tag: string } | null>(
+    null,
+  );
+  const prepared = onPreparedSessionChange ? (preparedSession ?? null) : localPrepared;
+  const setPrepared = onPreparedSessionChange ?? setLocalPrepared;
   const [confirmStop, setConfirmStop] = useState(false);
   const [stopSubmitted, setStopSubmitted] = useState(false);
   const running = useRef(false);
@@ -125,24 +133,25 @@ export function MulnxToolControls({
           完成环境检查。仅用于离线 Demo 或已授权观战。
         </p>
       ) : null}
-      {!runtimeOnly ? (
+      {!runtimeOnly && !maintenanceOnly ? (
         <p>
           已选版本：{tool.installed ?? '首次启动时准备'}
           {tool.latest && tool.latest !== tool.installed ? ` · 可更新至 ${tool.latest}` : ''}
         </p>
       ) : null}
-      {!runtimeOnly ? <p>运行版本：未确认</p> : null}
+      {!runtimeOnly && !maintenanceOnly ? <p>运行版本：未确认</p> : null}
       {!runtimeOnly ? (
         <Button disabled={busy || tool.busy} onClick={() => void run('check')}>
           检查更新
         </Button>
       ) : null}
+      {maintenanceOnly && !tool.latest ? <span>检查更新后可查看最新版本。</span> : null}
       {!runtimeOnly && window.__TAURI_INTERNALS__ ? (
         <Button disabled={busy || tool.busy} onClick={() => void run('prepare')}>
           下载最新版本
         </Button>
       ) : null}
-      {!runtimeOnly
+      {!runtimeOnly && !maintenanceOnly
         ? available.map((item) => (
             <div key={item.preparedId}>
               <p>已下载版本：{item.tag ?? '文件损坏'}</p>
@@ -159,7 +168,6 @@ export function MulnxToolControls({
             </div>
           ))
         : null}
-      {maintenanceOnly && !tool.latest ? <span>检查后可选择安装或更新。</span> : null}
       {!runtimeOnly && window.__TAURI_INTERNALS__ && (!maintenanceOnly || tool.latest) ? (
         <Button disabled={busy || tool.busy} onClick={() => void run('update')}>
           {maintenanceOnly
@@ -170,6 +178,30 @@ export function MulnxToolControls({
                 : '更新'
             : '更新或重新准备 MulNX'}
         </Button>
+      ) : null}
+      {maintenanceOnly ? (
+        <details className="resource-library__versions" open={prepared !== null}>
+          <summary>版本</summary>
+          <ul>
+            <li>当前选择：{tool.installed ?? '尚未安装'}</li>
+            {available.map((item) => (
+              <li key={item.preparedId}>
+                已下载：{item.tag ?? '文件损坏'}{' '}
+                {window.__TAURI_INTERNALS__ && item.tag && item.state === 'available' ? (
+                  <Button
+                    disabled={busy || tool.busy || production?.mode !== 'preparation'}
+                    onClick={() =>
+                      void run('select', { preparedId: item.preparedId, tag: item.tag! })
+                    }
+                  >
+                    使用此版本
+                  </Button>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+          {!inventory ? <p>下载版本状态暂不可用。</p> : null}
+        </details>
       ) : null}
       {!runtimeOnly && !maintenanceOnly && window.__TAURI_INTERNALS__ ? (
         <Button

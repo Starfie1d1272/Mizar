@@ -45,9 +45,14 @@ export async function verifyWebResources(root, requestedMode) {
   if (mode !== 'full') {
     for (const entry of await readdir(root, { withFileTypes: true })) {
       if (
-        !['assets', 'brand', 'index.html', 'product-shell.css', 'web-resource-mode.json'].includes(
-          entry.name,
-        ) ||
+        ![
+          'assets',
+          'brand',
+          'lhm-runtime',
+          'index.html',
+          'product-shell.css',
+          'web-resource-mode.json',
+        ].includes(entry.name) ||
         entry.isSymbolicLink()
       ) {
         throw new Error(`Core contains unknown or optional resources: ${entry.name}`);
@@ -61,7 +66,8 @@ export async function verifyWebResources(root, requestedMode) {
       fileURLToPath(new URL('../../packages/cs2-assets/generated/public/', import.meta.url)),
       root,
     );
-    for (const path of ['index.html', 'product-shell.css']) await access(resolve(root, path));
+    for (const path of ['index.html', 'product-shell.css', 'lhm-runtime/index.html'])
+      await access(resolve(root, path));
     return;
   }
   const media = JSON.parse(

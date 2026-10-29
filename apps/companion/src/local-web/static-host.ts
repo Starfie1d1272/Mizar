@@ -48,7 +48,7 @@ export interface StaticHostOptions {
   ) => Promise<Awaited<ReturnType<ResourceStore['read']>> | undefined>;
 }
 
-function defaultWebRoot(): string {
+export function defaultWebRoot(): string {
   return fileURLToPath(new URL('../../../web/dist/', import.meta.url));
 }
 

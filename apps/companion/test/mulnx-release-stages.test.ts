@@ -161,6 +161,7 @@ it('prepares without selecting and publishes a configured instance only after se
     root,
     musicStore,
     () => Promise.reject(new Error('unexpected_asset')),
+    undefined,
     productionResolver,
   );
   const migrated = await prepareLegacyMigration({

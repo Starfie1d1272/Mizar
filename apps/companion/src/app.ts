@@ -1,4 +1,6 @@
 import { CameraConfigResolver } from './broadcast-config/camera.js';
+import { MusicPackResources } from './broadcast-config/music-pack-resources.js';
+import { registerMusicPackRoutes } from './broadcast-config/music-pack-routes.js';
 import { createProductionBroadcastDependencies } from './broadcast-config/production.js';
 import {
   createBroadcastRuntime,
@@ -140,7 +142,7 @@ import {
   type GsiSequenceSource,
   type ObservationSink,
 } from './telemetry/gsi-ingress.js';
-import { registerStaticHost } from './local-web/static-host.js';
+import { defaultWebRoot, registerStaticHost } from './local-web/static-host.js';
 import { registerOperatorCommandRoutes } from './operator/controller.js';
 import { registerHudConfigRoutes } from './hud-config/controller.js';
 import { HudConfigStore } from './hud-config/store.js';
@@ -752,8 +754,15 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     app.get('/local/v1/broadcast-display-config', (_request, reply) =>
       reply.code(503).send({ error: 'broadcast_config_unavailable' }),
     );
+  let waitForBroadcast: (() => Promise<void>) | undefined;
   registerHudConfigRoutes(app, {
     store: hudConfigStore,
+    webRoot: options.webRoot ?? defaultWebRoot(),
+    waitForBroadcast: async () => {
+      await waitForBroadcast?.();
+      if (options.obsConfigPath && getBroadcastMigrationStatus().state !== 'ready')
+        throw new Error('broadcast_config_unavailable');
+    },
     originPolicy: localWebTransport.getOriginPolicy(),
   });
   void app.register(async (scope) => {
@@ -1043,7 +1052,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         : reply.header('cache-control', 'no-store').send(envelope);
     });
   }
-  let waitForBroadcast: (() => Promise<void>) | undefined;
   const production = registerProductionRoutes(app, {
     originPolicy: localWebTransport.getOriginPolicy(),
     hasContext: () =>
@@ -1293,6 +1301,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           ),
         )
       : undefined;
+    const supportsMusicPacks = !broadcastConfig;
+    const musicPacks = new MusicPackResources(join(dirname(options.obsConfigPath), 'music-packs'));
     broadcastConfig ??= createProductionBroadcastDependencies(
       dirname(options.obsConfigPath),
       musicStore,
@@ -1300,6 +1310,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         if (ref.resource.id !== PACK_ID || !resources) throw new Error('dependency_missing');
         await resources.readExact(ref.resource, ref.fileId);
       },
+      musicPacks,
       cameraResolver,
     );
     const broadcastRuntime = broadcastConfig
@@ -1346,6 +1357,15 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         return broadcastResourceReferences(broadcastRuntime.store.snapshot);
       };
       getBroadcastMigrationStatus = () => broadcastRuntime.status;
+      if (supportsMusicPacks)
+        registerMusicPackRoutes(
+          app,
+          broadcastRuntime.store,
+          musicStore,
+          musicPacks,
+          localWebTransport.getOriginPolicy(),
+          () => broadcastRuntime.ready,
+        );
       registerBroadcastConfigRoutes(
         app,
         broadcastRuntime.store,
@@ -2105,7 +2125,15 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   if (options.lhmHost) {
     const hostOptions = options.lhmHost;
     app.addHook('onReady', async () => {
-      lhmHost = await startLhmHost({ ...hostOptions, projections: projectionCoordinator });
+      lhmHost = await startLhmHost({
+        ...hostOptions,
+        webRoot: options.webRoot ?? defaultWebRoot(),
+        projections: projectionCoordinator,
+        ...(options.steamAvatars ? { steamAvatars: options.steamAvatars } : {}),
+        ...(options.localTournamentPath
+          ? { localAssetsDirectory: join(dirname(options.localTournamentPath), 'local-assets') }
+          : {}),
+      });
       app.log.info({ url: lhmHost.url }, 'LHM 展示宿主正在监听');
     });
   }
