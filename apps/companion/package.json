@@ -34,7 +34,6 @@
     "@types/node": "catalog:",
     "@types/ws": "catalog:",
     "@typescript/native": "catalog:",
-    "tsx": "catalog:",
-    "vitest": "catalog:"
+    "tsx": "catalog:"
   }
 }
