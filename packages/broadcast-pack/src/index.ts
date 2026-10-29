@@ -135,7 +135,7 @@ function safePath(path: string): boolean {
           part !== '.' &&
           part !== '..' &&
           !/[. ]$/.test(part) &&
-          !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part),
+          !/^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i.test(part),
       )
   );
 }
@@ -163,7 +163,12 @@ export function parseManifest(bytes: Uint8Array): { manifest: PackManifestV1; di
     !unique(entries.map((e) => e.entryId)) ||
     !unique(manifest.dependencies.map((d) => d.alias)) ||
     manifest.dependencies.some((d) => d.alias === '$self') ||
-    manifest.files.some((f) => !safePath(f.path) || f.path.toLowerCase() === 'manifest.json') ||
+    manifest.files.some(
+      (f) =>
+        !safePath(f.path) ||
+        f.path.toLowerCase() === 'manifest.json' ||
+        f.path.toLowerCase().startsWith('manifest.json/'),
+    ) ||
     paths.some((p) => paths.some((other) => other.startsWith(`${p}/`))) ||
     manifest.files.reduce((n, f) => n + f.bytes, bytes.length) > PACK_LIMITS.total ||
     entries.some((e) => !ids.has(e.fileId)) ||
