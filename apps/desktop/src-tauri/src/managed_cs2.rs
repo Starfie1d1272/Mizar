@@ -574,6 +574,7 @@ pub struct ManagedCs2 {
     selected_backup: Option<Value>,
     external: Option<ExternalSession>,
     camera: Option<CameraLease>,
+    mulnx_launcher: Option<Arc<crate::mulnx_launch::HiddenLauncher>>,
     // Keep window preservation after detach until a new managed launch is accepted.
     external_preservation: bool,
     #[cfg(test)]
@@ -643,12 +644,16 @@ impl ManagedCs2 {
             selected_backup: None,
             external: None,
             camera: None,
+            mulnx_launcher: None,
             external_preservation: false,
             #[cfg(test)]
             recovery_identity_fixture: None,
             #[cfg(test)]
             launch_fixture: None,
         }
+    }
+    pub(crate) fn remember_mulnx_launcher(&mut self, launcher: Arc<crate::mulnx_launch::HiddenLauncher>) {
+        self.mulnx_launcher = Some(launcher);
     }
     fn recovery_identity(&self) -> Result<(PathBuf, PathBuf, u32), String> {
         #[cfg(test)]
@@ -1656,6 +1661,16 @@ impl ManagedCs2 {
                     .into(),
             );
         }
+        if let Some(launcher) = &self.mulnx_launcher {
+            stop_owned_launcher(
+                self.log.state_root.join("data/mulnx-launch/pending.json").exists(),
+                || any_cs2_running(&self.log),
+                || launcher.stop().map_err(|error| self.log.preserve_error(
+                    "mulnx_launcher_exit", None, &error, "本次 MulNX 启动器未能关闭，请检查后重试。")),
+            )?;
+            self.log.event("mulnx_launcher_exit", "success", Some("owned launch handle stopped after game exit"));
+            self.mulnx_launcher = None;
+        }
         match self.recover(false) {
             Ok(()) => {
                 if trial.is_some() && any_cs2_running(&self.log)? {
@@ -1669,6 +1684,13 @@ impl ManagedCs2 {
             }
         }
     }
+}
+
+fn stop_owned_launcher(pending: bool, game_running: impl FnOnce() -> Result<bool, String>,
+    stop: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+    if pending { return Err("MulNX 启动结果仍待确认，请先检查游戏和启动器。".into()); }
+    if game_running()? { return Err("CS2 仍在运行，未关闭本次 MulNX 启动器。".into()); }
+    stop()
 }
 
 /// A failed request does not prove revocation. With renewals fenced by the
@@ -1686,6 +1708,19 @@ fn retire_camera_before_cleanup(service_stopped: bool, revoke: impl FnOnce() -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn owned_launcher_is_stopped_only_after_confirmed_game_exit() {
+        let stopped = std::cell::Cell::new(false);
+        let stop = || { stopped.set(true); Ok(()) };
+        assert!(stop_owned_launcher(true, || Ok(false), stop).is_err());
+        assert!(!stopped.get());
+        assert!(stop_owned_launcher(false, || Ok(true), stop).is_err());
+        assert!(!stopped.get());
+        assert!(stop_owned_launcher(false, || Err("unknown".into()), stop).is_err());
+        assert!(!stopped.get());
+        stop_owned_launcher(false, || Ok(false), stop).unwrap();
+        assert!(stopped.get());
+    }
     // These tests create or inspect machine-wide CS2 / Steam processes. Hold the same
     // gate so the external-game fixture cannot contaminate recovery evidence.
     static GAME_PROCESSES: std::sync::Mutex<()> = std::sync::Mutex::new(());

@@ -1,6 +1,6 @@
 //! The native host selects the installation and opens the managed upstream launcher.
 use crate::{cs2_activity, gsi_script, managed_cs2, powershell, production_exit, startup_log::DesktopLog, updates};
-use std::{io::Write, path::{Path, PathBuf}, sync::Mutex, time::{Duration, Instant}, process::Command};
+use std::{io::Write, path::{Path, PathBuf}, sync::{Arc, Mutex}, time::{Duration, Instant}, process::Command};
 use std::os::windows::{ffi::OsStrExt, process::CommandExt};
 use serde_json::{Value, json};
 use tauri::Manager;
@@ -22,8 +22,21 @@ extern "system" {
         directory: *const u16, startup: *const StartupInfo, info: *mut ProcessInformation) -> i32;
     fn WaitForSingleObject(handle: isize, timeout: u32) -> u32;
     fn CloseHandle(handle: isize) -> i32;
+    fn TerminateProcess(handle: isize, exit_code: u32) -> i32;
 }
-struct HiddenLauncher { process: isize, pid: u32 }
+#[link(name = "user32")]
+extern "system" {
+    fn EnumWindows(callback: unsafe extern "system" fn(isize, isize) -> i32, data: isize) -> i32;
+    fn GetWindowThreadProcessId(window: isize, pid: *mut u32) -> u32;
+    fn PostMessageW(window: isize, message: u32, wparam: usize, lparam: isize) -> i32;
+}
+unsafe extern "system" fn close_launcher_window(window: isize, data: isize) -> i32 {
+    let mut pid = 0;
+    GetWindowThreadProcessId(window, &mut pid);
+    if pid == data as u32 { PostMessageW(window, 0x0010, 0, 0); }
+    1
+}
+pub(crate) struct HiddenLauncher { process: isize, pid: u32 }
 impl Drop for HiddenLauncher { fn drop(&mut self) { unsafe { CloseHandle(self.process); } } }
 impl HiddenLauncher {
     fn spawn(path: &Path) -> std::io::Result<Self> {
@@ -49,6 +62,21 @@ impl HiddenLauncher {
         match unsafe { WaitForSingleObject(self.process, 0) } {
             0 => Ok(false), 258 => Ok(true), _ => Err(std::io::Error::last_os_error()),
         }
+    }
+    pub(crate) fn stop(&self) -> std::io::Result<()> {
+        if !self.running()? { return Ok(()); }
+        unsafe { EnumWindows(close_launcher_window, self.pid as isize); }
+        match unsafe { WaitForSingleObject(self.process, 3000) } {
+            0 => return Ok(()), 258 => (), _ => return Err(std::io::Error::last_os_error()),
+        }
+        if unsafe { TerminateProcess(self.process, 0) } == 0 {
+            let error = std::io::Error::last_os_error();
+            if self.running()? { return Err(error); }
+        }
+        if unsafe { WaitForSingleObject(self.process, 5000) } != 0 {
+            return Err(std::io::Error::other("launcher did not exit"));
+        }
+        Ok(())
     }
 }
 
@@ -149,6 +177,9 @@ fn launch_operation(app: &tauri::AppHandle, log: &DesktopLog, automatic: bool, u
     }
     if status["spectatorRecoveryPending"] == true { return Err("请先完成上次游戏配置恢复。".into()); }
     no_game()?;
+    if automatic && managed.try_lock().map_err(|_| "CS2 正忙，请稍后重试。")?.mulnx_launcher_running()? {
+        return Err("MulNX 启动器仍在运行，请先关闭它，再重试启动。".into());
+    }
     let prepared = production_exit::prepare_mulnx(log, &executable, update_only, false)?;
     if update_only { no_game()?; return Ok(prepared); }
     let launcher = PathBuf::from(prepared["launcher"].as_str().ok_or("MulNX 启动路径缺失。")?);
@@ -176,8 +207,10 @@ fn launch_operation(app: &tauri::AppHandle, log: &DesktopLog, automatic: bool, u
         app.state::<updates::PendingUpdate>().check()?;
         no_game()?;
         std::fs::create_dir_all(&results).map_err(|error| log.preserve_error("mulnx_launch", None, &error, "无法准备 MulNX 启动记录。"))?;
-        let child = HiddenLauncher::spawn(&launcher)
-            .map_err(|error| log.preserve_error("mulnx_launch", None, &error, launcher_start_message(&error)))?;
+        let child = Arc::new(HiddenLauncher::spawn(&launcher)
+            .map_err(|error| log.preserve_error("mulnx_launch", None, &error, launcher_start_message(&error)))?);
+        managed.lock().map_err(|_| "CS2 状态不可用，请关闭本次 MulNX 启动器后恢复。")?
+            .remember_mulnx_launcher(Arc::clone(&child));
         std::fs::write(&pending, json!({"launcherPid":child.pid, "executable":executable}).to_string())
             .map_err(|error| log.preserve_error("mulnx_launch", None, &error, "无法记录启动状态，请关闭 MulNX 并检查游戏。"))?;
         log.event("mulnx_launch", "begin", Some(&json!({"launcherPid":child.pid,"version":prepared["version"]}).to_string()));
