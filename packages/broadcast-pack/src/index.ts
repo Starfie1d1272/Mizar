@@ -143,15 +143,21 @@ function unique(values: string[]): boolean {
   return new Set(values).size === values.length;
 }
 
-/** Parse strict JSON before hashing; the digest is independent of ZIP encoding. */
-export function parseManifest(bytes: Uint8Array): { manifest: PackManifestV1; digest: string } {
-  if (bytes.length > PACK_LIMITS.manifest) throw new Error('package_budget_exceeded');
+/** Strict JSON without duplicate keys, comments or invalid Unicode. */
+export function parsePackJson(bytes: Uint8Array, limit: number): unknown {
+  if (bytes.length > limit) throw new Error('package_budget_exceeded');
   const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
   const errors: ParseError[] = [];
   const tree = parseTree(text, errors, { disallowComments: true, allowTrailingComma: false });
   if (!tree || errors.length) throw new Error('package_invalid');
   uniqueKeys(tree);
-  const raw: unknown = JSON.parse(text);
+  return JSON.parse(text) as unknown;
+}
+
+/** Parse strict JSON before hashing; the digest is independent of ZIP encoding. */
+export function parseManifest(bytes: Uint8Array): { manifest: PackManifestV1; digest: string } {
+  if (bytes.length > PACK_LIMITS.manifest) throw new Error('package_budget_exceeded');
+  const raw = parsePackJson(bytes, PACK_LIMITS.manifest);
   const manifest = manifestSchema.parse(raw);
   const paths = manifest.files.map((f) => f.path.toLowerCase());
   const ids = new Set(manifest.files.map((f) => f.id));
@@ -202,3 +208,4 @@ export function verifyFiles(
 
 export { readPackArchive, writePackArchive } from './archive.js';
 export * from './modules.js';
+export * from './drafts.js';
