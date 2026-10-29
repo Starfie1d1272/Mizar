@@ -730,8 +730,8 @@ it.each(['portable', 'installed'])(
       await writeFile(
         join(root, 'resources/observer/manifest.json'),
         JSON.stringify({
-          componentVersion: '1.0.0',
-          sourceSha: '4b07fd0ddfb775d8fa1548bddfd98dc78c7fce93',
+          componentVersion: '1.1.0',
+          sourceSha: '7c026956fe5f44ad347bc3c7c5a48f3e21fb006d',
           distribution: 'external-node',
           entrypoints: entries,
           filesSha256: Object.fromEntries(
