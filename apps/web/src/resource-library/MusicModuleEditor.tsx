@@ -1,21 +1,33 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { PortableMusicConfigV1, PortableTrack } from '@mizar/broadcast-config';
 import { MUSIC_GROUPS, type MusicGroup } from '@mizar/protocol/music';
 import { MUSIC_LABELS } from '../music/MusicControls';
 import { MusicVolumeField } from '../music/MusicVolumeField';
-import { Button, Checkbox, Field, Panel, Select } from '../ui';
+import { Button, Checkbox, Field, Panel, Select, StatusBanner } from '../ui';
 
 export function MusicModuleEditor({
   value,
   onChange,
   onSave,
-  busy,
+  busy: saving,
+  importTracks,
 }: {
   value: PortableMusicConfigV1;
   onChange: (value: PortableMusicConfigV1) => void;
   onSave: () => void;
   busy: boolean;
+  importTracks: (files: File[]) => Promise<PortableTrack[]>;
 }) {
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState('');
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const busy = saving || importing;
   const [selectedGroup, setSelectedGroup] = useState<MusicGroup>('waiting');
   const spec = value.groups[selectedGroup];
   const change = (patch: Partial<PortableMusicConfigV1['groups'][MusicGroup]>) =>
@@ -60,6 +72,7 @@ export function MusicModuleEditor({
           {MUSIC_GROUPS.map((group) => (
             <Button
               key={group}
+              disabled={busy}
               aria-pressed={group === selectedGroup}
               onClick={() => setSelectedGroup(group)}
             >
@@ -174,6 +187,62 @@ export function MusicModuleEditor({
               <strong>尚未选曲 · 静音</strong>
             </div>
           )}
+          <Field
+            label={
+              selectedGroup === 'waiting' || selectedGroup === 'technical'
+                ? '添加本地曲目'
+                : '选择本地主题'
+            }
+            message={
+              selectedGroup === 'waiting' || selectedGroup === 'technical'
+                ? '可多选，添加到本组；支持 MP3、WAV、OGG、FLAC、M4A，每首最大 32 MiB。'
+                : '选择一首主题，将替换本组原有曲目。'
+            }
+            type="file"
+            accept=".wav,.mp3,.ogg,.flac,.m4a"
+            multiple={selectedGroup === 'waiting' || selectedGroup === 'technical'}
+            disabled={busy}
+            onChange={(event) => {
+              const files = Array.from(event.target.files ?? []);
+              event.target.value = '';
+              if (!files.length) return;
+              const playlist = selectedGroup === 'waiting' || selectedGroup === 'technical';
+              if (
+                (playlist && spec.tracks.length + files.length > 64) ||
+                (!playlist && files.length !== 1)
+              ) {
+                setImportError('本组曲目数量超出限制。');
+                return;
+              }
+              setImporting(true);
+              setImportError('');
+              void importTracks(files)
+                .then((tracks) => {
+                  if (!mounted.current) return;
+                  const nextTracks = playlist ? [...spec.tracks, ...tracks] : tracks;
+                  const assets = new Set(
+                    MUSIC_GROUPS.flatMap((group) =>
+                      (group === selectedGroup ? nextTracks : value.groups[group].tracks).map(
+                        (track) => JSON.stringify(track.asset),
+                      ),
+                    ),
+                  );
+                  if (assets.size > 128) {
+                    setImportError('曲目总数超过 128，请先移除其他曲目。');
+                    return;
+                  }
+                  change({ tracks: nextTracks });
+                })
+                .catch((error: unknown) => {
+                  if (mounted.current)
+                    setImportError(error instanceof Error ? error.message : '曲目未添加，请重试。');
+                })
+                .finally(() => {
+                  if (mounted.current) setImporting(false);
+                });
+            }}
+          />
+          {importError && <StatusBanner tone="danger">{importError}</StatusBanner>}
           <MusicVolumeField
             label={`场景音量 · ${Math.round(spec.volume * 100)}%`}
             message="未单独设置的曲目跟随场景音量。"
