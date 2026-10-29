@@ -164,8 +164,12 @@ it('new round shots draw once, continue into live play and clear at their deadli
   await r.round(3, 4);
   expect(r.calls).toHaveLength(count + 1);
   expect(r.calls.at(-1)).toEqual({ type: 'CamMacro/Play', macro: 'A' });
+  await r.advance(6001);
+  r.program.map.roundNumber = 4;
+  await r.live();
+  expect(r.calls.at(-1)).toEqual({ type: 'CamMacro/Play', macro: 'B' });
 });
-it('hold, skip, manual scene control and resume consume current edges without catch-up', async () => {
+it('hold, skip and resume consume current edges without catch-up', async () => {
   const r = await rig();
   await r.resume();
   await r.round(1);
@@ -187,7 +191,7 @@ it('hold, skip, manual scene control and resume consume current edges without ca
   await r.round(4);
   r.truth.manual = true;
   await r.tick();
-  expect(r.director.get().held).toBe(true);
+  expect(r.director.get().held).toBe(false);
 });
 it('map/source changes, stale data and reconnect invalidate late replies and require fresh explicit arming', async () => {
   const r = await rig();
@@ -444,7 +448,7 @@ it('real websocket separates ACK, rejection and unrelated broadcasts; disconnect
   await provider.connect(port);
   expect(wires).toHaveLength(before);
 });
-it('audition is explicit, never arms automatic mode, and refuses late live shots', async () => {
+it('audition works during live rounds and manual scene control without arming automatic mode', async () => {
   const r = await rig();
   r.director.audition({ macro: '自选镜头', maxMs: 2000 }, r.director.get());
   await r.tick();
@@ -458,9 +462,11 @@ it('audition is explicit, never arms automatic mode, and refuses late live shots
   await r.round(1);
   expect(r.calls.filter((c) => c.type === 'CamMacro/Play')).toHaveLength(1);
   await r.live();
-  expect(() => r.director.audition({ macro: '自选镜头', maxMs: 2000 }, r.director.get())).toThrow(
-    'camera_audition_unavailable',
-  );
+  r.truth.manual = true;
+  r.program.series!.bindingState = 'needs_operator';
+  r.director.audition({ macro: '自选镜头', maxMs: 2000 }, r.director.get());
+  await r.tick();
+  expect(r.calls.at(-1)).toEqual({ type: 'CamMacro/Play', macro: '自选镜头' });
   expect(r.director.get().held).toBe(true);
 });
 it('disconnect while a stop is pending cannot leave an orphan submitted state blocking re-arm', async () => {
@@ -495,11 +501,14 @@ it('cannot arm while preset persistence is pending or with an earlier saved revi
   await r.resume();
   expect(r.director.get().held).toBe(false);
 });
-it('a source reconnect or preset revision never grants a second automatic opening in the same map execution', async () => {
+it('an automatic opening can play in a live round and is not repeated after reconnect or preset revision', async () => {
   const r = await rig();
   await r.resume();
+  await r.round(0);
+  await r.live();
   r.director.opening();
   await r.tick();
+  expect(r.calls.at(-1)).toEqual({ type: 'CamMacro/Play', macro: '开场' });
   await r.advance(6001);
   r.program.cursor.programSourceGeneration++;
   await r.tick();
@@ -579,33 +588,25 @@ it('an actual opening Take replaces an older phase even when its clear is unreso
   await r.tick();
   expect(r.calls).toHaveLength(3);
 });
-it.each([
-  'hold',
-  'skip',
-  'map',
-  'reconnect',
-  'expire',
-  'phase',
-  'manual',
-  'isolation',
-  'rejected',
-] as const)('drops the one-slot handoff on %s, including late ACKs', async (cancel) => {
-  const r = await pendingTransition();
-  if (cancel === 'hold') r.director.hold();
-  else if (cancel === 'skip') await r.director.command('skip');
-  else if (cancel === 'map') r.program.map.name = 'de_nuke';
-  else if (cancel === 'reconnect') r.provider.generation++;
-  else if (cancel === 'expire') await r.advance(1000);
-  else if (cancel === 'phase') await r.live();
-  else if (cancel === 'manual') r.truth.manual = true;
-  else if (cancel === 'isolation') r.setIsolation(false);
-  r.clear(cancel === 'rejected' ? 'rejected' : 'queued');
-  await r.tick();
-  await r.tick();
-  expect(r.calls.filter((c) => c.type === 'CamMacro/Play')).toEqual([
-    { type: 'CamMacro/Play', macro: 'A' },
-  ]);
-});
+it.each(['hold', 'skip', 'map', 'reconnect', 'expire', 'phase', 'isolation', 'rejected'] as const)(
+  'drops the one-slot handoff on %s, including late ACKs',
+  async (cancel) => {
+    const r = await pendingTransition();
+    if (cancel === 'hold') r.director.hold();
+    else if (cancel === 'skip') await r.director.command('skip');
+    else if (cancel === 'map') r.program.map.name = 'de_nuke';
+    else if (cancel === 'reconnect') r.provider.generation++;
+    else if (cancel === 'expire') await r.advance(1000);
+    else if (cancel === 'phase') await r.live();
+    else if (cancel === 'isolation') r.setIsolation(false);
+    r.clear(cancel === 'rejected' ? 'rejected' : 'queued');
+    await r.tick();
+    await r.tick();
+    expect(r.calls.filter((c) => c.type === 'CamMacro/Play')).toEqual([
+      { type: 'CamMacro/Play', macro: 'A' },
+    ]);
+  },
+);
 it('requires verified isolation for both enabling and audition; loss of isolation holds automation', async () => {
   const r = await rig();
   r.setIsolation(false);

@@ -5,7 +5,6 @@ import type { MulnxProvider } from './provider.js';
 import type { OrchestrationStore } from './store.js';
 
 export interface CameraTruth extends MusicTruth {
-  manual: boolean;
   /** Present only during an isolated external Demo trial; true requires fresh map/player data. */
   demoAudition?: boolean | undefined;
 }
@@ -123,11 +122,11 @@ export class CameraDirector {
       this.controlEpoch,
     ]);
   }
-  private safe(t: CameraTruth) {
+  private safe(t: CameraTruth, audition = false) {
     return (
       this.nativeReady() &&
       t.production &&
-      (t.demoAudition === undefined ? !t.manual && musicSafe(t.program) : t.demoAudition) &&
+      (t.demoAudition === undefined ? audition || musicSafe(t.program) : t.demoAudition) &&
       t.program.status.telemetry === 'fresh'
     );
   }
@@ -141,12 +140,7 @@ export class CameraDirector {
     if (p.map.phase === 'warmup') return { key: 'warmup', stage: 'warmup' };
     if (p.map.phase === 'live' && p.map.roundNumber !== null) {
       const roundKey = `round:${p.map.roundNumber}`;
-      // A round-start shot may follow players out of spawn. Only an already
-      // running shot carries this edge into live play; live never creates a cue.
-      if (
-        p.clock?.phase === 'freezetime' ||
-        (p.clock?.phase === 'live' && this.current?.edge === roundKey)
-      )
+      if (p.clock?.phase === 'freezetime' || p.clock?.phase === 'live')
         return { key: roundKey, stage: 'round' };
     }
     return { key: '', stage: '' };
@@ -204,7 +198,7 @@ export class CameraDirector {
       return;
     }
     if (
-      !this.safe(t) ||
+      !this.safe(t, this.current?.key === 'audition') ||
       !this.provider.connected ||
       !this.store.ready ||
       this.store.saving ||
@@ -213,9 +207,11 @@ export class CameraDirector {
       if (!this.held || this.current) this.hold('自动运镜已暂停，请核对连接和比赛状态。');
     }
     const edge = this.edge(t);
-    if (t.program.map.phase === 'live' && t.program.clock?.phase !== 'freezetime')
-      this.highestRound = Math.max(this.highestRound, t.program.map.roundNumber ?? -1);
-    if (this.current && (this.now() >= this.current.until || this.current.edge !== edge.key))
+    if (
+      this.current &&
+      (this.now() >= this.current.until ||
+        (this.current.key !== 'audition' && this.current.edge !== edge.key))
+    )
       this.stop('镜头窗口已结束，已请求清空；停止结果未确认。');
     if (this.handoff && (this.now() >= this.handoff.until || this.handoff.edge !== edge.key))
       this.handoff = null;
@@ -230,8 +226,8 @@ export class CameraDirector {
       const round = t.program.map.roundNumber!;
       if (round <= this.highestRound) return;
       this.highestRound = round;
-      // Opening owns round zero. Unknown/expired freezes do not create a cue.
-      if (round === 0 || (t.program.clock?.endsInSeconds ?? 0) <= 0) return;
+      // Opening owns round zero.
+      if (round === 0) return;
       const candidates =
         map.rounds.length > 1
           ? map.rounds.filter((s) => s.macro !== this.previousMacro)
@@ -257,7 +253,7 @@ export class CameraDirector {
       this.closed ||
       expected.context !== this.context ||
       expected.connection !== this.provider.generation ||
-      !this.safe(this.truth()) ||
+      !this.safe(this.truth(), true) ||
       !this.provider.connected ||
       this.current ||
       this.request === 'submitted'
@@ -305,7 +301,7 @@ export class CameraDirector {
     if (
       this.held ||
       this.closed ||
-      !this.safe(t) ||
+      !this.safe(t, key === 'audition') ||
       !this.provider.connected ||
       !this.store.ready ||
       this.store.saving ||
@@ -314,12 +310,7 @@ export class CameraDirector {
       return false;
     // Only dispatch can retain one bounded transition behind an in-flight clear.
     if (this.current || this.request === 'submitted') return false;
-    if (t.program.map.phase === null) return false;
     const maxMs = shot.maxMs;
-    if (t.program.map.phase === 'live' && !musicPause(t.program)) {
-      if (t.program.clock?.phase !== 'freezetime' || (t.program.clock.endsInSeconds ?? 0) <= 0)
-        return false;
-    }
     const revision = ++this.revision;
     this.current = { key, macro: shot.macro, until: this.now() + maxMs, edge };
     this.previousMacro = shot.macro;

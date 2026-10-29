@@ -1230,7 +1230,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           production.get().mode !== 'preparation' &&
           !waitingObserverMap &&
           projectionCoordinator.getCurrent().operator.matchContext.origin !== 'fixture',
-        manual: director.get().mode === 'manual',
         demoAudition:
           demoTest.get().gameOwnership === 'external'
             ? demoTest.canUseCamera('audition')
