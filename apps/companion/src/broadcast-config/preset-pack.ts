@@ -18,7 +18,7 @@ import { audioBytes } from '../music/archive.js';
 import type { MusicStore } from '../music/store.js';
 import { readMusicAsset } from './music-assets.js';
 import { validPackImage, type MusicPackResources } from './music-pack-resources.js';
-import type { BroadcastConfigStore } from './store.js';
+import type { BroadcastConfigStore, BroadcastImportMapping } from './store.js';
 
 const resourceKey = (ref: ResourceRef) => JSON.stringify([ref.id, ref.version, ref.digest]);
 const assetKey = (ref: AssetRef) => JSON.stringify([resourceKey(ref.resource), ref.fileId]);
@@ -390,23 +390,11 @@ export async function importPresetPack(input: {
     const entry = inspected.entries.find((item) => item.entryId === id);
     return entry && entry.status !== 'unsupported' && entry.status !== 'invalid';
   };
-  const reusable = new Set(
-    inspected.entries
-      .filter(
-        (entry) =>
-          entry.type === 'module' &&
-          selected.modules.includes(entry.entryId) &&
-          allowed(entry.entryId) &&
-          entry.copies.some((copy) => copy.state === 'existing'),
-      )
-      .map((entry) => entry.entryId),
-  );
   const batch = inspected.prepare({
-    modules: selected.modules.filter((id) => allowed(id) && !reusable.has(id)),
+    modules: selected.modules.filter(allowed),
     presets: selected.presets.filter(allowed),
   });
-  const before = input.store.snapshot;
-  const makeEntries = (after: BroadcastConfigDocument) =>
+  const makeEntries = (mapping: BroadcastImportMapping) =>
     inspected.entries.map((entry) => ({
       ...entry,
       selected: (entry.type === 'module' ? selected.modules : selected.presets).includes(
@@ -417,57 +405,35 @@ export async function importPresetPack(input: {
           ? batch.moduleEntries[entry.entryId]
           : batch.presetEntries[entry.entryId]
       )
-        ? (entry.type === 'module' ? after.modules : after.presets).some(
-            (item) =>
-              item.origin?.entryId === entry.entryId &&
-              resourceKey(item.origin.resource) === resourceKey(inspected.source) &&
-              !(entry.type === 'module' ? before.modules : before.presets).some(
-                (previous) => previous.id === item.id,
-              ),
+        ? (
+            entry.type === 'module'
+              ? batch.moduleEntries[entry.entryId]?.some((id) =>
+                  mapping.moduleEntries[entry.entryId]?.includes(id),
+                )
+              : mapping.presetEntries[entry.entryId] === batch.presetEntries[entry.entryId]
           )
           ? ('imported' as const)
           : ('existing' as const)
-        : reusable.has(entry.entryId)
-          ? ('existing' as const)
-          : (entry.type === 'module' ? selected.modules : selected.presets).includes(entry.entryId)
-            ? ('unavailable' as const)
-            : ('not_selected' as const),
+        : (entry.type === 'module' ? selected.modules : selected.presets).includes(entry.entryId)
+          ? ('unavailable' as const)
+          : ('not_selected' as const),
     }));
-  if (!batch.modules.length && !batch.presets.length && !reusable.size)
-    return {
-      mapping: { source: inspected.source, moduleEntries: {}, presetEntries: {} },
-      reused: false,
-      entries: makeEntries(before),
+  if (!batch.modules.length && !batch.presets.length) {
+    const mapping: BroadcastImportMapping = {
+      source: inspected.source,
+      moduleEntries: {},
+      presetEntries: {},
     };
+    return { mapping, reused: false, entries: makeEntries(mapping) };
+  }
   const result = await input.resources.installAndCommit(
     input.zip,
     async (installed) => {
       if (resourceKey(installed) !== resourceKey(inspected.source))
         throw new Error('package_identity_mismatch');
-      if (batch.modules.length || batch.presets.length) return input.store.importBatch(batch);
-      const index = input.store.inspectImport(installed)!;
-      return {
-        reused: true,
-        mapping: {
-          source: installed,
-          moduleEntries: Object.fromEntries(
-            Object.entries(index.modules).map(([id, copies]) => [
-              id,
-              copies.map((copy) => copy.id),
-            ]),
-          ),
-          presetEntries: Object.fromEntries(
-            Object.entries(index.presets).map(([id, copy]) => [id, copy.id]),
-          ),
-          moduleOwners: Object.fromEntries(
-            Object.values(index.modules)
-              .flat()
-              .map((copy) => [copy.id, copy.owner]),
-          ),
-        },
-      };
+      return input.store.importBatch(batch);
     },
     (ref) => input.store.inspectImport(ref) !== null,
   );
-  return { ...result, entries: makeEntries(input.store.snapshot) };
+  return { ...result, entries: makeEntries(result.mapping) };
 }
