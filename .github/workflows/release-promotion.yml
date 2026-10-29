@@ -14,6 +14,11 @@ on:
         description: Exact application version tag (stable, alpha.N, beta.N or rc.N)
         required: true
         type: string
+      recovery:
+        description: Resume an expired qualified release with a separate recovery budget
+        required: false
+        default: false
+        type: boolean
 permissions:
   contents: write
   actions: read
@@ -33,6 +38,8 @@ jobs:
       GH_REPO: ${{ github.repository }}
       RUN_ID: ${{ inputs.qualification_run || github.event.workflow_run.id }}
       RELEASE_TAG: ${{ inputs.tag || github.event.workflow_run.display_title }}
+      RELEASE_RECOVERY: ${{ github.event_name == 'workflow_dispatch' && inputs.recovery && 'true' || 'false' }}
+      RELEASE_BUDGET_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.recovery && github.run_id || inputs.qualification_run || github.event.workflow_run.id }}
       RESOURCE_PUBLISHER_ROOT: ${{ github.workspace }}/.agent-tmp/resource-publisher-source
       RESOURCE_ROOT: ${{ github.workspace }}/qualified-resources
       RESOURCE_FROZEN_ROOT: ${{ github.workspace }}/frozen-resources
@@ -66,11 +73,19 @@ jobs:
           New-Item -ItemType Directory -Force -Path (Split-Path $env:RESOURCE_PUBLISHER_ROOT -Parent) | Out-Null
           git worktree add --detach "$env:RESOURCE_PUBLISHER_ROOT" $env:GITHUB_SHA
           if ($LASTEXITCODE -ne 0) { throw 'Trusted publication tool snapshot failed' }
+      - name: Validate explicit recovery
+        if: ${{ env.RELEASE_RECOVERY == 'true' }}
+        shell: pwsh
+        run: |
+          $run = gh api "repos/$env:GH_REPO/actions/runs/$env:RUN_ID" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.event -ne 'workflow_dispatch' -or $run.path -ne '.github/workflows/release-qualification.yml' -or $run.head_branch -ne 'main' -or $run.head_repository.full_name -ne $env:GH_REPO) { throw 'Recovery requires a successful original main qualification' }
+          if (([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($run.created_at)).TotalSeconds -le 600) { throw 'Recovery requires the original release budget to have expired' }
+          Write-Output 'Explicit recovery: original fresh-release budget was not met.'
       - name: Bound Resolve successful qualification source to remaining time
         id: budget_resolve
         shell: pwsh
         run: |
-          $created = gh api "repos/$env:GH_REPO/actions/runs/$env:RUN_ID" --jq .created_at
+          $created = gh api "repos/$env:GH_REPO/actions/runs/$env:RELEASE_BUDGET_RUN" --jq .created_at
           if ($LASTEXITCODE -ne 0 -or !$created) { throw 'Cannot read qualification start time' }
           $minutes = [math]::Floor((600 - ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($created)).TotalSeconds) / 60)
           if ($minutes -lt 1) { throw 'Less than one minute remains in release budget' }
@@ -82,9 +97,11 @@ jobs:
           if ($env:RUN_ID -notmatch '^\d+$') { throw 'Invalid run ID' }
           $run = gh api "repos/$env:GH_REPO/actions/runs/$env:RUN_ID" | ConvertFrom-Json
           if ($run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.path -ne '.github/workflows/release-qualification.yml' -or $run.event -ne 'workflow_dispatch' -or $run.head_branch -ne 'main' -or $run.head_repository.full_name -ne $env:GH_REPO) { throw 'Not a successful main qualification run' }
-          $elapsed = ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($run.created_at)).TotalSeconds
+          $budgetCreated = gh api "repos/$env:GH_REPO/actions/runs/$env:RELEASE_BUDGET_RUN" --jq .created_at
+          if ($LASTEXITCODE -ne 0 -or !$budgetCreated) { throw 'Cannot read release budget start time' }
+          $elapsed = ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($budgetCreated)).TotalSeconds
           if ($elapsed -gt 600) { throw "Release budget exceeded before promotion: $elapsed seconds" }
-          "RELEASE_DEADLINE=$(([DateTimeOffset]::Parse($run.created_at).AddSeconds(600)).ToString('o'))" >> $env:GITHUB_ENV
+          "RELEASE_DEADLINE=$(([DateTimeOffset]::Parse($budgetCreated).AddSeconds(600)).ToString('o'))" >> $env:GITHUB_ENV
           $run | ConvertTo-Json -Depth 50 | Set-Content qualification-run.json -Encoding utf8
           node scripts/qualification/download-qualified-artifacts.mjs $env:RUN_ID
           if ($LASTEXITCODE -ne 0) { throw 'Qualified product/evidence download failed' }
@@ -247,7 +264,7 @@ jobs:
         id: budget_publish
         shell: pwsh
         run: |
-          $created = gh api "repos/$env:GH_REPO/actions/runs/$env:RUN_ID" --jq .created_at
+          $created = gh api "repos/$env:GH_REPO/actions/runs/$env:RELEASE_BUDGET_RUN" --jq .created_at
           if ($LASTEXITCODE -ne 0 -or !$created) { throw 'Cannot read qualification start time' }
           $minutes = [math]::Floor((600 - ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($created)).TotalSeconds) / 60)
           if ($minutes -lt 1) { throw 'Less than one minute remains in release budget' }
@@ -320,7 +337,7 @@ jobs:
         if: ${{ !contains(env.RELEASE_TAG, '-') && env.RELEASE_ALREADY_PUBLISHED != 'true' }}
         shell: pwsh
         run: |
-          $created = gh api "repos/$env:GH_REPO/actions/runs/$env:RUN_ID" --jq .created_at
+          $created = gh api "repos/$env:GH_REPO/actions/runs/$env:RELEASE_BUDGET_RUN" --jq .created_at
           if ($LASTEXITCODE -ne 0 -or !$created) { throw 'Cannot read qualification start time' }
           $minutes = [math]::Floor((600 - ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($created)).TotalSeconds) / 60)
           if ($minutes -lt 1) { throw 'Less than one minute remains in release budget' }

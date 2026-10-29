@@ -174,7 +174,10 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         sourceSha: process.env.SOURCE_SHA,
         finishedAt: finishedAt,
         publishedAt: release.published_at,
-        recovery: process.env.RELEASE_ALREADY_PUBLISHED === 'true' || current.run_attempt !== 1,
+        recovery:
+          process.env.RELEASE_RECOVERY === 'true' ||
+          process.env.RELEASE_ALREADY_PUBLISHED === 'true' ||
+          current.run_attempt !== 1,
         build,
       });
       await recordReport(report, output);
