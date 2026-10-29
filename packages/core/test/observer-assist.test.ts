@@ -720,3 +720,53 @@ it('does not carry pending map execution conflicts into a different match', () =
   );
   expect(result.observer?.state).toBe('ready');
 });
+
+describe('explicit program playback clock', () => {
+  it('follows position through pause and rewind and rejects mismatched timelines', () => {
+    const timeline = new ObserverHintTimeline();
+    const frame = program(1);
+    const clock = {
+      timeDomain: 'synthetic',
+      continuity: 'execution-1',
+      mapName: 'de_mirage',
+      tick: 0,
+      ticksPerSecond: 64,
+      usable: true,
+    };
+    const project = (tick: number, now: number, patch = {}) =>
+      timeline.project(frame, settings, now, source, now, {
+        playback: { ...clock, tick, ...patch },
+      });
+    project(0, 0);
+    const position = {
+      timeDomain: clock.timeDomain,
+      continuity: clock.continuity,
+      mapName: clock.mapName,
+      tick: 640,
+      ticksPerSecond: 64,
+    };
+    timeline.consume(kill(1, 7, 1), position);
+    timeline.consume(kill(1, 7, 1), position);
+    expect(project(128, 1000).observer?.hints).toEqual([]);
+    expect(project(192, 2000).observer?.hints).toMatchObject([{ remainingSeconds: 7 }]);
+    expect(project(192, 200000).observer?.hints).toMatchObject([{ remainingSeconds: 7 }]);
+    expect(project(640, 201000).observer?.hints).toEqual([]);
+    expect(project(320, 202000).observer?.hints).toMatchObject([{ remainingSeconds: 5 }]);
+    expect(project(320, 203000, { timeDomain: 'other' }).observer?.hints).toEqual([]);
+    expect(project(320, 204000, { continuity: 'other' }).observer?.hints).toEqual([]);
+    expect(project(320, 205000, { usable: false }).observer).toMatchObject({
+      state: 'unavailable',
+      timingBasis: 'program-clock',
+      hints: [],
+    });
+    expect(
+      timeline.project(frame, settings, 205500, source, 205500, { playback: null }).observer,
+    ).toMatchObject({ state: 'unavailable', timingBasis: 'program-clock', hints: [] });
+    timeline.consume(kill(2, 6, 2));
+    expect(project(320, 206000).observer).toMatchObject({
+      state: 'unavailable',
+      waitingReason: 'program-clock-syncing',
+      hints: [],
+    });
+  });
+});
