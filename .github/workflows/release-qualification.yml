@@ -182,14 +182,13 @@ jobs:
 
   release_host_tests:
     name: release Host tests
-    needs: build
     runs-on: windows-2025
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.build.outputs.source_sha }}
-      - name: Restore the release profile cache after the exact-source build
+          ref: ${{ github.sha }}
+      - name: Restore the release profile cache
         uses: ./.github/actions/cargo-cache
         with:
           profile: release

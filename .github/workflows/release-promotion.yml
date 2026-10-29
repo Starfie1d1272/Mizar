@@ -68,6 +68,8 @@ jobs:
           if ($env:RUN_ID -notmatch '^\d+$') { throw 'Invalid run ID' }
           $run = gh api "repos/$env:GH_REPO/actions/runs/$env:RUN_ID" | ConvertFrom-Json
           if ($run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.path -ne '.github/workflows/release-qualification.yml' -or $run.event -ne 'workflow_dispatch' -or $run.head_branch -ne 'main') { throw 'Not a successful main qualification run' }
+          $elapsed = ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($run.created_at)).TotalSeconds
+          if ($elapsed -gt 600) { throw "Release budget exceeded before promotion: $elapsed seconds" }
           $run | ConvertTo-Json -Depth 50 | Set-Content qualification-run.json -Encoding utf8
           node scripts/qualification/download-qualified-artifacts.mjs $env:RUN_ID
           if ($LASTEXITCODE -ne 0) { throw 'Qualified product/evidence download failed' }

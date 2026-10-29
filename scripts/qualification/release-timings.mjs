@@ -210,28 +210,28 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
           );
           const record = await json(join(directory, 'release-timings.json'));
           const qualification = api(`actions/runs/${record.qualification.id}`);
-          await recordReport(
-            releaseTimingReport({
-              qualification,
-              promotion,
-              box: current,
-              jobs: {
-                qualification: api(`actions/runs/${qualification.id}/jobs?per_page=100`).jobs,
-                promotion: api(`actions/runs/${promotion.id}/jobs?per_page=100`).jobs,
-                box: currentJobs,
-                qualificationFirstAttempt: firstAttemptJobs(qualification),
-                promotionFirstAttempt: firstAttemptJobs(promotion),
-                boxFirstAttempt: firstAttemptJobs(current),
-              },
-              finishedAt: finishedAt,
-              tag: record.tag,
-              sourceSha: record.sourceSha,
-              publishedAt: record.publishedAt,
-              recovery: record.recovery || current.run_attempt !== 1,
-              build: record.build,
-            }),
-            output,
-          );
+          const report = releaseTimingReport({
+            qualification,
+            promotion,
+            box: current,
+            jobs: {
+              qualification: api(`actions/runs/${qualification.id}/jobs?per_page=100`).jobs,
+              promotion: api(`actions/runs/${promotion.id}/jobs?per_page=100`).jobs,
+              box: currentJobs,
+              qualificationFirstAttempt: firstAttemptJobs(qualification),
+              promotionFirstAttempt: firstAttemptJobs(promotion),
+              boxFirstAttempt: firstAttemptJobs(current),
+            },
+            finishedAt: finishedAt,
+            tag: record.tag,
+            sourceSha: record.sourceSha,
+            publishedAt: record.publishedAt,
+            recovery: record.recovery || current.run_attempt !== 1,
+            build: record.build,
+          });
+          await recordReport(report, output);
+          if (!report.freshReleaseWithin600Seconds)
+            throw new Error('Release exceeded 600-second budget or is a recovery');
         } finally {
           await rm(directory, { recursive: true, force: true });
         }
@@ -245,10 +245,14 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         'Invalid release timing order',
         'Release timing source differs',
         'Unknown release timing mode',
+        'Release exceeded 600-second budget or is a recovery',
       ].includes(error.message)
     )
       // eslint-disable-next-line preserve-caught-error -- Download causes may expose signed URLs.
       throw new Error('发行计时证据缺失或结构、时序有误；不得作为完整发行验收。');
+    if (mode === 'box' && process.env.GITHUB_EVENT_NAME === 'workflow_run') {
+      throw new Error('Release timing unavailable; cannot verify 600-second budget');
+    }
     // Metrics cannot invalidate delivery after its original-byte checks succeeded.
     // Missing timing evidence also cannot claim the fresh release budget passed.
     await recordReport(

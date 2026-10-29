@@ -534,6 +534,16 @@ jobs:
         if: ${{ needs.plan.outputs.run_installer == 'true' }}
         run: node scripts/ci/verify-installer-shards.mjs .agent-tmp/installer-shards ${{ github.run_attempt }}
 
+      - name: Enforce 180-second run budget
+        if: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          created=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .created_at)
+          elapsed=$(( $(date -u +%s) - $(date -u -d "$created" +%s) ))
+          echo "CI created to budget check: ${elapsed}s"
+          test "$elapsed" -le 180
+
       - name: Validate planner-selected jobs
         run: node scripts/ci/plan.mjs --gate
         env:

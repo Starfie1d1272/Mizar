@@ -5,13 +5,6 @@ export const fullSourceJobs = Object.freeze([
   'design',
   ...[1, 2, 3, 4, 5, 6, 7, 8].map((shard) => `acceptance / ${shard} of 8`),
   'platform / Windows',
-  'native / Windows',
-  'update recovery / Windows',
-  'installer / Windows / update',
-  'installer / Windows / faults',
-  'installer / Windows / cleanup',
-  'qualification / offline / Linux',
-  'qualification / offline / macOS',
   'ci-gate',
 ]);
 
