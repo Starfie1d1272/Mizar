@@ -101,7 +101,7 @@ export class CameraDirector {
   }
   finishProduction() {
     if (this.nativeMode) this.invalidateNative();
-    else this.hold('正在结束制作；已停用自动运镜，停止结果未确认。');
+    else this.hold('正在结束制作。');
   }
   private invalidateNative() {
     this.diagnostic('camera_host_session', {
@@ -169,7 +169,6 @@ export class CameraDirector {
       held: this.held,
       preparation: this.preparation,
       request: this.request,
-      execution: 'unconfirmed',
       current: this.current?.macro ?? null,
       message: this.message,
     };
@@ -223,7 +222,7 @@ export class CameraDirector {
       (this.now() >= this.current.until ||
         (this.current.key !== 'audition' && this.current.edge !== edge.key))
     )
-      void this.stop('镜头窗口已结束，已请求清空；停止结果未确认。');
+      void this.stop('已发送停止请求。');
     if (this.handoff && (this.now() >= this.handoff.until || this.handoff.edge !== edge.key))
       this.handoff = null;
     if (edge.key === this.lastEdge) return;
@@ -330,7 +329,7 @@ export class CameraDirector {
     if (!map?.opening || this.seen.has('opening')) return;
     this.consume('opening');
     if (this.held) return;
-    if (this.current) void this.stop('开场交接，已请求清空；停止结果未确认。');
+    if (this.current) void this.stop('已发送停止请求。');
     this.dispatch(map.opening, 'opening', this.edge(t).key);
   }
   async audition(shot: CameraShot, expected: { context: string; connection: number }) {
@@ -416,13 +415,17 @@ export class CameraDirector {
     this.current = { key, macro: shot.macro, until: this.now() + maxMs, edge };
     this.previousMacro = shot.macro;
     this.request = 'submitted';
-    this.message = '请求已提交，执行未确认';
+    this.message = '已发送播放请求。';
     this.diagnostic('camera_cue', { context: this.context, key, shot, result: 'submitted' });
     void this.provider.send('CamMacro/Play', shot.macro).then((result) => {
       if (revision !== this.revision || this.closed) return;
       this.request = result;
       this.message =
-        result === 'queued' ? '请求已入队，执行未确认' : '运镜请求未确认，请在游戏内检查。';
+        result === 'queued'
+          ? '已发送播放请求。'
+          : result === 'rejected'
+            ? '播放请求被拒绝，请检查运镜工具。'
+            : '播放请求未得到回应，请检查游戏连接。';
       if (result !== 'queued') {
         this.preparation = 'error';
         void this.stop(this.message);
@@ -466,6 +469,10 @@ export class CameraDirector {
         if (result !== 'queued') {
           this.preparation = 'error';
           this.handoff = null;
+          this.message =
+            result === 'rejected'
+              ? '停止请求被拒绝，请检查运镜工具。'
+              : '停止请求未得到回应，请检查游戏连接。';
         } else this.releaseHandoff();
       }
       return result;
@@ -476,7 +483,7 @@ export class CameraDirector {
     });
     return pending;
   }
-  hold(message = '人工接管；已请求清空全部运镜槽，停止未确认。') {
+  hold(message = '已发送停止请求。') {
     this.intentRevision++;
     this.held = true;
     void this.stop(message);
@@ -504,12 +511,19 @@ export class CameraDirector {
         const revision = ++this.revision;
         this.request = 'submitted';
         const result = await this.provider.send('CamPlay/ClearForce');
-        if (revision === this.revision) this.request = result;
+        if (revision === this.revision) {
+          this.request = result;
+          if (result !== 'queued')
+            this.message =
+              result === 'rejected'
+                ? '停止请求被拒绝，请检查运镜工具。'
+                : '停止请求未得到回应，请检查游戏连接。';
+        }
       }
     } else if (action === 'skip') {
       this.intentRevision++;
       if (this.lastEdge) this.consume(this.lastEdge);
-      void this.stop('已跳过本次运镜，停止结果未确认。');
+      void this.stop('已发送停止请求。');
     } else {
       if (
         this.closed ||

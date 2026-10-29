@@ -198,7 +198,7 @@ it('new round shots draw once, continue into live play and clear at their deadli
   r.director.opening();
   await r.tick();
   expect(r.calls).toEqual([{ type: 'CamMacro/Play', macro: '开场' }]);
-  expect(r.director.get()).toMatchObject({ request: 'queued', execution: 'unconfirmed' });
+  expect(r.director.get()).toMatchObject({ request: 'queued' });
   r.director.opening();
   await r.tick();
   expect(r.calls).toHaveLength(1);
@@ -584,7 +584,6 @@ it('audition works during live rounds and manual scene control without arming au
   expect(r.director.get()).toMatchObject({
     held: true,
     request: 'queued',
-    execution: 'unconfirmed',
   });
   r.director.opening();
   expect(r.calls).toEqual([{ type: 'CamMacro/Play', macro: '自选镜头' }]);
@@ -604,11 +603,11 @@ it('audition works during live rounds and manual scene control without arming au
     { type: 'CamPlay/ClearForce' },
     { type: 'CamMacro/Play', macro: '另一个镜头' },
   ]);
-  expect(r.director.get()).toMatchObject({ held: true, execution: 'unconfirmed' });
+  expect(r.director.get()).toMatchObject({ held: true });
   r.program.series!.bindingState = 'bound';
   await r.resume();
   expect(r.calls.at(-1)).toEqual({ type: 'CamPlay/ClearForce' });
-  expect(r.director.get()).toMatchObject({ held: false, current: null, execution: 'unconfirmed' });
+  expect(r.director.get()).toMatchObject({ held: false, current: null });
 });
 it('disconnect while a stop is pending cannot leave an orphan submitted state blocking re-arm', async () => {
   const r = await rig();
@@ -708,7 +707,7 @@ it('hands a freeze shot to a fresh tactical pause after clear ACK without claimi
   await r.tick();
   expect(r.calls.at(-1)).toEqual({ type: 'CamMacro/Play', macro: '暂停' });
   expect(r.calls).toHaveLength(3);
-  expect(r.director.get()).toMatchObject({ execution: 'unconfirmed', request: 'queued' });
+  expect(r.director.get()).toMatchObject({ request: 'queued' });
 });
 it('does not start a queued round shot after freeze time ends', async () => {
   const r = await rig();
