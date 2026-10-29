@@ -119,7 +119,7 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
   );
   try {
     await page.goto('/settings?tab=music&section=camera');
-    await expect(page.getByRole('button', { name: '开启自动运镜' })).toBeVisible();
+    await expect(page.getByText('我的编排', { exact: true })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath('camera-common.png') });
     await page.getByRole('button', { name: '管理与编辑预设', exact: true }).click();
     await page.screenshot({ path: testInfo.outputPath('camera-advanced.png') });
@@ -128,31 +128,43 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
     await page.getByLabel('镜头包名称').fill(pack.name);
     await page.getByLabel('开场镜头名称', { exact: true }).fill('候选镜头');
     await page.getByRole('button', { name: '保存并应用预设', exact: true }).click();
-    await expect(page.getByText('已保存；自动运镜需重新启用。', { exact: true })).toBeVisible();
+    await expect.poll(() => store.preset.maps.length).toBe(1);
     expect(calls).toEqual([]);
-    await expect(page.getByRole('button', { name: '连接 MulNX', exact: true })).toBeDisabled();
-    await page.getByText('浏览器联调', { exact: true }).click();
-    await page.getByRole('button', { name: '使用浏览器联调模式', exact: true }).click();
-    await expect(page.getByRole('button', { name: '连接 MulNX', exact: true })).toBeEnabled();
-    expect(director.get().control).toEqual({ mode: 'browser', state: 'ready' });
-    await page.getByRole('button', { name: '连接 MulNX', exact: true }).click();
-    await page.getByRole('button', { name: '返回运镜设置', exact: true }).click();
-    await expect(page.getByRole('button', { name: '播放', exact: true })).toBeDisabled();
-    await expect(page.getByRole('button', { name: '开启自动运镜', exact: true })).toBeDisabled();
+    director.useBrowser();
+    await director.command('connect');
     packRoot = root;
+    await page.route('**/local/v1/demo-test', (route) =>
+      route.fulfill({
+        json: {
+          active: true,
+          phase: 'playing',
+          requestId: 'test',
+          teamAName: 'A',
+          teamBName: 'B',
+          dataReady: true,
+        },
+      }),
+    );
+    await page.addInitScript(() =>
+      Object.assign(window, {
+        __TAURI_INTERNALS__: { invoke: () => Promise.resolve({ running: true }) },
+      }),
+    );
+    await page.goto('/?demoTest');
+    await page.getByText('筛选运镜镜头', { exact: true }).click();
     await expect(page.getByRole('button', { name: '播放', exact: true })).toBeEnabled();
     await page.getByRole('button', { name: '播放', exact: true }).click();
     await expect.poll(() => calls.at(-1)).toBe('CamMacro/Play');
     expect(calls).toContain('CamPack/Apply');
-    expect(calls.at(-1)).toBe('CamMacro/Play');
     expect(director.get()).toMatchObject({
       held: true,
       execution: 'unconfirmed',
       request: 'queued',
     });
-    await page.getByRole('button', { name: '管理与编辑预设', exact: true }).click();
-    await page.getByRole('button', { name: '接管运镜', exact: true }).click();
+    await page.getByRole('button', { name: '停止', exact: true }).click();
     await expect.poll(() => calls.at(-1)).toBe('CamPlay/ClearForce');
+    await page.goto('/settings?tab=camera');
+    await page.getByRole('button', { name: '管理与编辑预设' }).click();
     await page.getByText('导入与导出', { exact: true }).click();
     const downloadPromise = page.waitForEvent('download');
     await page.getByRole('button', { name: '导出预设', exact: true }).click();
@@ -309,7 +321,7 @@ test('native camera settings never adopt an independently running game', async (
   await page.goto('/settings?tab=camera');
   await expect(page.getByRole('heading', { name: '运镜', exact: true, level: 1 })).toBeVisible();
   await page.getByRole('button', { name: '管理与编辑预设' }).click();
-  await expect(page.getByRole('region', { name: 'MulNX 启动管理' })).toBeAttached();
+  await expect(page.getByRole('region', { name: 'MulNX 启动管理' })).toHaveCount(0);
   for (const name of ['检查游戏实例', '借用此游戏并进入工作台', '运镜试播'])
     await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0);
   const calls = await page.evaluate(
@@ -361,8 +373,7 @@ test('explicit MulNX stop confirms production effects, shows ownership errors, a
       },
     }),
   );
-  await page.goto('/settings?tab=camera');
-  await page.getByRole('button', { name: '管理与编辑预设' }).click();
+  await page.goto('/settings?tab=advanced');
   await page.getByText('停止控制', { exact: true }).click();
   const stop = page.getByRole('button', { name: '停止 MulNX 控制', exact: true });
   const confirmation = page.getByRole('dialog', { name: '停止 MulNX 控制', exact: true });

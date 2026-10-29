@@ -6,16 +6,14 @@ import { command, useLocalRead } from '../preparation/client';
 export function CameraControls({
   setup = false,
   workspace = false,
-  simple = false,
 }: {
   setup?: boolean;
   workspace?: boolean;
-  simple?: boolean;
 }) {
   const view = useLocalRead<OrchestrationView>('/local/v1/orchestration', 1000);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  if (!view || (!setup && !workspace && !simple && !view.preset.maps.length))
+  if (!view || (!setup && !workspace && !view.preset.maps.length))
     return workspace ? (
       <p className="workspace-camera-empty">运镜状态暂不可用，请检查本地服务。</p>
     ) : null;
@@ -36,34 +34,6 @@ export function CameraControls({
       setBusy(false);
     }
   };
-  if (simple) {
-    const unavailable = !view.ready
-      ? '预设暂不可用，请检查设置。'
-      : !s.connected
-        ? '请先连接运镜工具。'
-        : !s.map || !s.pack || !s.isolated
-          ? '请先准备当前地图的镜头。'
-          : s.control.state === 'blocked'
-            ? '运镜工具尚未准备好。'
-            : '';
-    return (
-      <div className="music-controls" aria-label="自动运镜">
-        <span>{s.held ? '自动运镜已关闭' : '自动运镜已开启'}</span>
-        <Button
-          variant={s.held ? 'primary' : 'secondary'}
-          disabled={busy || (s.held && (Boolean(unavailable) || Boolean(s.current)))}
-          onClick={() => void send(s.held ? 'resume' : 'hold')}
-        >
-          {s.held ? '开启自动运镜' : '关闭自动运镜'}
-        </Button>
-        {s.held && unavailable ? <span>{unavailable}</span> : null}
-        {s.held && s.current ? <span>请先停止当前镜头。</span> : null}
-        {s.preparation === 'preparing' ? <span>正在准备运镜…</span> : null}
-        {s.preparation === 'error' ? <span>运镜准备失败，请检查连接后重试。</span> : null}
-        {error ? <span role="alert">{error}</span> : null}
-      </div>
-    );
-  }
   return (
     <div
       className={workspace ? 'workspace-camera-controls' : 'music-controls'}
@@ -87,24 +57,16 @@ export function CameraControls({
           error
         ) : (
           <>
-            {workspace ? '本次请求' : `运镜 · ${s.held ? '手动' : '自动'}`}
+            {workspace ? '本次请求' : `运镜 · ${s.held ? '人工' : '自动'}`}
             {s.current ? ` · ${s.current}` : ''} ·{' '}
-            {setup
-              ? s.control.state === 'blocked'
-                ? '等待工具准备'
-                : s.connected
-                  ? '工具已连接'
-                  : '工具未连接'
-              : s.control.state === 'blocked'
-                ? '原生交接待确认'
-                : s.message}
+            {s.control.state === 'blocked' ? '原生交接待确认' : s.message}
           </>
         )}
       </span>
       {setup ? (
         <span>
-          {s.map ?? '地图待确认'} · {s.pack ?? '未配置镜头包'} ·{' '}
-          {s.isolated ? '镜头已准备' : '请准备镜头包'}
+          {s.map ?? '地图待确认'} · {s.pack ?? '未配运镜包'} ·{' '}
+          {s.isolated ? '隔离文件已验证' : '需准备隔离包'}
         </span>
       ) : null}
       {setup ? (
@@ -120,7 +82,7 @@ export function CameraControls({
           <Button
             disabled={busy}
             onClick={() => void send('hold')}
-            title="停止当前运镜并切换为手动，请在游戏内确认画面"
+            title="请求清空 MulNX 全部运镜槽；实际停止需在游戏内确认；不会关闭其他包的自动列表"
           >
             接管运镜
           </Button>
@@ -140,10 +102,10 @@ export function CameraControls({
             !s.isolated ||
             s.control.state === 'blocked'
           }
-          title={`准备当前地图 ${s.map ?? '未知'} 的镜头包 ${s.pack ?? '未配置'}`}
+          title={`应用并核对当前地图 ${s.map ?? '未知'} 的隔离包 ${s.pack ?? '未配置'}`}
           onClick={() => void send('resume')}
         >
-          {workspace ? '准备运镜并恢复自动' : '开启自动运镜'}
+          {workspace ? '准备运镜并恢复自动' : '准备隔离包并启用自动'}
         </Button>
       ) : null}
       {error && !workspace ? <span role="alert">{error}</span> : null}

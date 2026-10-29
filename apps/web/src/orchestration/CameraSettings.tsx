@@ -11,9 +11,6 @@ import {
 import { Button, Field, Panel, Select, StatusBanner } from '../ui';
 import { command, useLocalRead } from '../preparation/client';
 import { MUSIC_LABELS, type MusicView } from '../music/MusicControls';
-import { MulnxToolControls } from './MulnxToolControls';
-import { MulnxHandoff } from './MulnxHandoff';
-import { CameraControls } from './CameraControls';
 
 function Shot({
   label,
@@ -64,47 +61,9 @@ export function CameraSettings() {
   const [advanced, setAdvanced] = useState(false);
   const [draft, setDraft] = useState<OrchestrationPreset | null>(null);
   const [message, setMessage] = useState('');
-  const [audition, setAudition] = useState('opening');
-  const [lastPlayed, setLastPlayed] = useState<{ shot: string; context: string } | null>(null);
   const [failed, setFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const config = draft ?? current?.preset;
-  const currentMap = current?.preset.maps.find((map) => map.map === current.status.map);
-  const shots = [
-    ...(currentMap?.opening
-      ? [{ value: 'opening', label: `开场 · ${currentMap.opening.macro}` }]
-      : []),
-    ...CAMERA_STAGES.flatMap((stage) =>
-      currentMap?.stages[stage]
-        ? [
-            {
-              value: stage,
-              label: `${stage === 'warmup' ? '热身' : MUSIC_LABELS[stage]} · ${currentMap.stages[stage]!.macro}`,
-            },
-          ]
-        : [],
-    ),
-    ...(['tactical', 'technical'] as const).flatMap((stage) =>
-      (currentMap?.pauseCandidates[stage] ?? []).map((shot, index) => ({
-        value: `${stage}:${index}`,
-        label: `${MUSIC_LABELS[stage]} · ${shot.macro}`,
-      })),
-    ),
-    ...(currentMap?.rounds.map((shot, index) => ({
-      value: `round:${index}`,
-      label: `回合 · ${shot.macro}`,
-    })) ?? []),
-  ];
-  const selectedShot = shots.some((shot) => shot.value === audition) ? audition : shots[0]?.value;
-  const shotIndex = shots.findIndex((shot) => shot.value === selectedShot);
-  const playDisabled =
-    busy ||
-    !current?.ready ||
-    !current.status.connected ||
-    !current.status.isolated ||
-    !selectedShot ||
-    Boolean(current.status.current) ||
-    current.status.preparation === 'preparing';
   const tracks = [
     ...new Map(
       Object.values(music?.config.groups ?? {})
@@ -139,26 +98,12 @@ export function CameraSettings() {
         maps: config.maps.map((m, i) => (i === index ? { ...m, ...patch } : m)),
       });
   };
-  const play = (shot = selectedShot) =>
-    void action(async () => {
-      if (!current || !shot) return;
-      const [stage, index] = shot.split(':');
-      await command('/operator/orchestration', {
-        action: 'audition',
-        stage,
-        ...(index !== undefined ? { index: Number(index) } : {}),
-        expected: { context: current.status.context, connection: current.status.connection },
-      });
-      setLastPlayed({ shot, context: current.status.context });
-      setMessage('播放请求已提交，请在游戏内核对。');
-    });
   return (
     <Panel>
       <h2>{advanced ? '管理与编辑预设' : '运镜设置'}</h2>
       {advanced ? <Button onClick={() => setAdvanced(false)}>返回运镜设置</Button> : null}
       {!advanced ? (
         <>
-          <CameraControls simple />
           <h3>当前预设</h3>
           <p>{current?.preset.name ?? '正在读取预设…'}</p>
           <p>适用地图：{current?.preset.maps.map((map) => map.map).join('、') || '暂无'}</p>
@@ -181,79 +126,10 @@ export function CameraSettings() {
             }}
           />
           <p>导入后可检查并保存预设。</p>
-          <section aria-label="试播">
-            <h3>试播</h3>
-            <p>试播当前地图已保存的镜头，播放后保持手动运镜。</p>
-            <p>当前地图：{current?.status.map ?? '等待游戏数据'}</p>
-            <Select
-              label="试播镜头"
-              value={selectedShot ?? ''}
-              onChange={(e) => setAudition(e.target.value)}
-            >
-              {!shots.length ? <option value="">当前地图暂无镜头</option> : null}
-              {shots.map((shot) => (
-                <option key={shot.value} value={shot.value}>
-                  {shot.label}
-                </option>
-              ))}
-            </Select>
-            <Button disabled={playDisabled} onClick={() => play()}>
-              播放
-            </Button>
-            {lastPlayed?.shot === selectedShot &&
-            lastPlayed?.context === current?.status.context ? (
-              <Button disabled={playDisabled} onClick={() => play()}>
-                重播
-              </Button>
-            ) : null}
-            <Button
-              disabled={playDisabled || shotIndex <= 0}
-              onClick={() => {
-                const shot = shots[shotIndex - 1]!.value;
-                setAudition(shot);
-                play(shot);
-              }}
-            >
-              上一条
-            </Button>
-            <Button
-              disabled={playDisabled || shotIndex < 0 || shotIndex >= shots.length - 1}
-              onClick={() => {
-                const shot = shots[shotIndex + 1]!.value;
-                setAudition(shot);
-                play(shot);
-              }}
-            >
-              下一条
-            </Button>
-            {current?.status.current ? (
-              <Button
-                disabled={busy}
-                onClick={() =>
-                  void action(async () => {
-                    await command('/operator/orchestration', { action: 'hold' });
-                    setMessage('已请求停止，请在游戏内核对。');
-                  })
-                }
-              >
-                停止
-              </Button>
-            ) : null}
-            {current && !current.status.connected ? <p>请先连接运镜工具。</p> : null}
-            {current?.status.connected && !current.status.isolated ? (
-              <p>请先准备当前地图的镜头。</p>
-            ) : null}
-          </section>
           <Button onClick={() => setAdvanced(true)}>管理与编辑预设</Button>
         </>
       ) : (
         <>
-          <CameraControls setup />
-          <section id="mulnx-launch" aria-label="MulNX 启动管理">
-            <MulnxToolControls tool={current?.tool} />
-            <MulnxHandoff />
-          </section>
-          <p>在 MulNX 载入本图镜头包后连接。开场音效随开场画面播放；其他音乐在声音设置中配置。</p>
           {current && !current.ready ? (
             <StatusBanner tone="danger">
               运镜预设无法读取，请检查本机数据目录后重启服务。
@@ -448,7 +324,7 @@ export function CameraSettings() {
                     const preset = orchestrationPresetSchema.parse(config);
                     await command('/operator/orchestration', { action: 'configure', preset });
                     setDraft(preset);
-                    setMessage('已保存；自动运镜需重新启用。');
+                    setMessage('预设已保存。');
                   })
                 }
               >
@@ -492,10 +368,6 @@ export function CameraSettings() {
                 >
                   导出预设
                 </Button>
-              </details>
-              <details>
-                <summary>连接说明</summary>
-                <p>打开 MulNX 后，在游戏内载入本图镜头包，再连接并试播。换图或重连后请重新确认。</p>
               </details>
             </>
           )}

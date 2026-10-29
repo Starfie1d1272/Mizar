@@ -1,3 +1,4 @@
+import { CameraAudition } from '../orchestration/CameraAudition';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getBuiltinPresets } from '@mizar/hud-config';
 import { Button, Field, Panel, Select, StatusBanner } from '../ui';
@@ -146,6 +147,12 @@ export function DemoTestPanel({ forceExpanded = false }: { forceExpanded?: boole
                 : '结束试播并恢复设置'}
             </Button>
           </div>
+          {trial.phase === 'playing' && trial.dataReady ? (
+            <details>
+              <summary>筛选运镜镜头</summary>
+              <CameraAudition />
+            </details>
+          ) : null}
           <p>关闭此窗口不会结束试播。</p>
         </>
       ) : (
