@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
-import type { BroadcastManifest } from '@mizar/rivalhub';
+import { toMatchContext, type BroadcastManifest } from '@mizar/rivalhub';
 import { describe, expect, it, vi } from 'vitest';
 import { BombDamageResources } from '../src/projections/bomb-damage-resources.js';
 
@@ -355,10 +355,10 @@ it('keeps calibrated anchors and buffered kills when the lead window is reprojec
     send(121000, [8]);
     send(122000, [8, 9]);
     expect(coordinator.getCurrent().assist.observer).toMatchObject({
-      state: 'ready',
+      state: 'unavailable',
       timingBasis: 'estimated',
-      waitingReason: 'buffering',
-      nextWindowSeconds: 1,
+      waitingReason: 'calibration-pending',
+      nextWindowSeconds: null,
       measuredDelaySeconds: null,
       hints: [],
     });
@@ -371,26 +371,19 @@ it('keeps calibrated anchors and buffered kills when the lead window is reprojec
     const radar = structuredClone(coordinator.getPublisher('radar').getCurrent());
     expect(coordinator.getPublisher('assist').getCurrent()!.payload.observer).toMatchObject({
       timingBasis: 'estimated',
-      nextWindowSeconds: 1,
+      nextWindowSeconds: null,
     });
     const before = coordinator.getPublisher('assist').getCurrent()!.channelSeq;
     settings.leadSeconds = 10;
     coordinator.refreshAssist();
     expect(coordinator.getCurrent().assist.observer).toMatchObject({
-      state: 'ready',
+      state: 'unavailable',
       measuredDelaySeconds: null,
-      hints: [{ remainingSeconds: 8, victim: { observerSlot: 7 } }],
+      hints: [],
     });
     expect(coordinator.getPublisher('assist').getCurrent()!.channelSeq).toBeGreaterThan(before);
     expect(coordinator.getPublisher('program').getCurrent()).toEqual(program);
     expect(coordinator.getPublisher('radar').getCurrent()).toEqual(radar);
-    settings.expectedDelaySeconds = 130;
-    coordinator.refreshAssist();
-    expect(coordinator.getCurrent().assist.observer).toMatchObject({
-      state: 'ready',
-      measuredDelaySeconds: null,
-      hints: [{ remainingSeconds: 8, victim: { observerSlot: 7 } }],
-    });
     live.mockReturnValue({
       ...health,
       state: 'live',
@@ -407,7 +400,7 @@ it('keeps calibrated anchors and buffered kills when the lead window is reprojec
       },
     });
     coordinator.refreshAssist();
-    expect(coordinator.getCurrent().assist.observer?.state).toBe('ready');
+    expect(coordinator.getCurrent().assist.observer?.waitingReason).toBe('calibration-pending');
     live.mockReturnValue({
       ...health,
       state: 'live',
@@ -456,9 +449,10 @@ it('keeps calibrated anchors and buffered kills when the lead window is reprojec
     const freshEvent = now + 1000;
     kill(4, 6, freshEvent);
     send(freshEvent + 120000);
-    expect(coordinator.getCurrent().assist.observer?.hints).toMatchObject([
-      { victim: { observerSlot: 6 } },
-    ]);
+    expect(coordinator.getCurrent().assist.observer).toMatchObject({
+      waitingReason: 'calibration-pending',
+      hints: [],
+    });
   } finally {
     await coordinator.close();
     live.mockRestore();
@@ -552,8 +546,8 @@ it('uses actual observer cursor reception without kills and detects an open but 
       lookahead.consumeObserverRecord(cursor(id));
       sendProgram();
       expect(coordinator.getCurrent().assist.observer).toMatchObject({
-        state: 'ready',
-        waitingReason: 'waiting-event',
+        state: 'unavailable',
+        waitingReason: 'calibration-pending',
         hints: [],
       });
       expect(diagnostics.mock.lastCall?.[0].source).toMatchObject({
@@ -580,7 +574,7 @@ it('uses actual observer cursor reception without kills and detects an open but 
     expect(lookahead.getHealth().lastReceiveMonotonicMs).toBe(120000);
     lookahead.consumeObserverRecord(cursor(15));
     sendProgram();
-    expect(coordinator.getCurrent().assist.observer?.state).toBe('ready');
+    expect(coordinator.getCurrent().assist.observer?.waitingReason).toBe('calibration-pending');
     lookahead.consumeObserverRecord({ ...cursor(16), map: 'de_nuke' });
     sendProgram();
     expect(coordinator.getCurrent().assist.observer).toMatchObject({
@@ -593,5 +587,60 @@ it('uses actual observer cursor reception without kills and detects an open but 
   } finally {
     await coordinator.close();
     await lookahead.stop();
+  }
+});
+
+it('switches website-bound program and radar names together, and falls back without a binding', async () => {
+  const manifest = await readManifest();
+  const initial = matchedObservation(manifest);
+  const players = initial.telemetry.allPlayers!.map((player, index) => ({
+    ...player,
+    displayName: `Game${index}`,
+  }));
+  const runtime = createProgramRuntime('nickname-choice');
+  const settings = {
+    enabled: false,
+    expectedDelaySeconds: 120,
+    leadSeconds: 5,
+    nicknameSource: 'game' as 'game' | 'website',
+  };
+  const coordinator = createProjectionCoordinator({
+    programRuntime: runtime,
+    cstvSources: createCstvSourceManagers({}),
+    nowMonotonicMs: () => 0,
+    observerSettings: () => settings,
+  });
+  try {
+    coordinator.setMatchContextBinding({
+      manifest,
+      context: toMatchContext(manifest),
+      origin: 'online',
+      freshness: 'fresh',
+      diagnostics: [],
+    });
+    coordinator.afterRuntimeMutation(
+      runtime.acceptObservation({
+        ...initial,
+        telemetry: { ...initial.telemetry, allPlayers: players, player: players[0]! },
+      }),
+    );
+    const id = players[0]!.sourcePlayerId;
+    const names = () => ({
+      program: coordinator.getCurrent().program.players.find((p) => p.sourcePlayerId === id)
+        ?.displayName,
+      radar: coordinator.getCurrent().radar.players.find((p) => p.sourcePlayerId === id)
+        ?.displayName,
+    });
+    expect(names()).toEqual({ program: 'Game0', radar: 'Game0' });
+    settings.nicknameSource = 'website';
+    coordinator.refresh();
+    expect(names()).toEqual({
+      program: manifest.entrants.a.roster.players[0]!.displayName,
+      radar: manifest.entrants.a.roster.players[0]!.displayName,
+    });
+    coordinator.setMatchContextBinding(undefined);
+    expect(names()).toEqual({ program: 'Game0', radar: 'Game0' });
+  } finally {
+    await coordinator.close();
   }
 });

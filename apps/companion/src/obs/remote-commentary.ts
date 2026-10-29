@@ -169,6 +169,54 @@ export class RemoteCommentary {
   }
 }
 
+/** Rename only journal-owned legacy probes; custom names and active output are left intact. */
+export async function renameLegacyProbe(
+  obs: ObsRpc,
+  journalPath: string,
+  endpoint: string,
+  collection: string,
+  role: 'game' | 'commentary',
+): Promise<void> {
+  let saved: { endpoint?: string; collection?: string; uuid?: string; name?: string };
+  try {
+    saved = JSON.parse(await readFile(journalPath, 'utf8')) as typeof saved;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  if (saved.endpoint !== endpoint || saved.collection !== collection || !saved.uuid) return;
+  const pattern =
+    role === 'game'
+      ? /^Mizar · Game Audio [0-9a-f-]{36}$/
+      : /^Mizar · Remote Commentary [0-9a-f-]{36}$/;
+  const [stream, record, current, list] = await Promise.all([
+    obs.call('GetStreamStatus'),
+    obs.call('GetRecordStatus'),
+    obs.call('GetSceneCollectionList'),
+    obs.call('GetInputList'),
+  ]);
+  if (
+    stream.outputActive !== false ||
+    record.outputActive !== false ||
+    current.currentSceneCollectionName !== collection
+  )
+    return;
+  const inputs = records(list.inputs);
+  const owned = inputs.find((input) => input.inputUuid === saved.uuid);
+  if (
+    owned?.inputKind !== 'wasapi_process_output_capture' ||
+    typeof owned.inputName !== 'string' ||
+    !pattern.test(owned.inputName) ||
+    owned.inputName !== saved.name
+  )
+    return;
+  const base = role === 'game' ? '游戏声音' : '其他解说';
+  let name = base;
+  for (let index = 2; inputs.some((input) => input.inputName === name); index++)
+    name = `${base} ${index}`;
+  await obs.call('SetInputName', { inputUuid: saved.uuid, newInputName: name });
+}
+
 /** Create an inert probe only with an idle OBS; the journal prevents blind recreation after an uncertain call. */
 export async function createCommentaryProbe(
   obs: ObsRpc,
@@ -224,7 +272,11 @@ export async function createCommentaryProbe(
   if (!Array.isArray(kinds) || !kinds.includes('wasapi_process_output_capture'))
     throw new Error('commentary_capture_unavailable');
   await stillCurrent();
-  const name = `Mizar · ${context.label ?? 'Remote Commentary'} ${randomUUID()}`;
+  const baseName = context.label === 'Game Audio' ? '游戏声音' : '其他解说';
+  const inputs = records((await obs.call('GetInputList')).inputs);
+  let name = baseName;
+  for (let index = 2; inputs.some((input) => input.inputName === name); index++)
+    name = `${baseName} ${index}`;
   const planned = { endpoint: context.endpoint, collection: context.collection, name };
   await mkdir(dirname(journalPath), { recursive: true });
   // Exclusive creation prevents competing callers from claiming the same operation.

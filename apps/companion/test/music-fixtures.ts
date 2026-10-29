@@ -128,7 +128,7 @@ export class MediaObs implements ObsRpc {
           inputKind: 'ffmpeg_source',
         })),
       };
-    if (type === 'GetSceneList') return { scenes: [{ sceneName: 'Mizar · 赛前等待' }] };
+    if (type === 'GetSceneList') return { scenes: [{ sceneName: '赛前等待' }] };
     if (type === 'GetSceneItemList')
       return {
         sceneItems: [...this.inputs].map(([sourceName, input], sceneItemId) => ({
@@ -201,6 +201,6 @@ export class MediaObs implements ObsRpc {
     ).length;
   }
   bgm() {
-    return [...this.inputs].find(([name]) => name.includes('BGM'))![1];
+    return [...this.inputs].find(([name]) => name === '音乐')![1];
   }
 }

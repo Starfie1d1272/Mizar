@@ -11,12 +11,12 @@ it('scopes migration to managed scenes and retains custom source settings', asyn
   let extraPath = false;
   const inputs = [
     {
-      inputName: 'Mizar · Desktop Audio',
+      inputName: '桌面声音',
       inputKind: 'wasapi_output_capture',
       inputUuid: 'desktop',
     },
-    { inputName: 'Mizar · Microphone', inputKind: 'wasapi_input_capture', inputUuid: 'mic' },
-    { inputName: 'Mizar · CS2 Game Capture', inputKind: 'game_capture', inputUuid: 'game' },
+    { inputName: '麦克风', inputKind: 'wasapi_input_capture', inputUuid: 'mic' },
+    { inputName: '游戏画面', inputKind: 'game_capture', inputUuid: 'game' },
     { inputName: 'voice', inputKind: 'wasapi_process_output_capture', inputUuid: 'voice' },
     ...scenes.map((scene) => ({
       inputName: scene.browserInput,
@@ -67,13 +67,13 @@ it('scopes migration to managed scenes and retains custom source settings', asyn
                 sceneItemEnabled: true,
               })),
             {
-              sourceName: 'Mizar · Desktop Audio',
+              sourceName: '桌面声音',
               sourceUuid: 'desktop',
               sceneItemId: 1,
               sceneItemEnabled: true,
             },
             {
-              sourceName: 'Mizar · Microphone',
+              sourceName: '麦克风',
               sourceUuid: 'mic',
               sceneItemId: 2,
               sceneItemEnabled: true,

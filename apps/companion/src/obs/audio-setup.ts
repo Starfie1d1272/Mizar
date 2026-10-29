@@ -3,7 +3,12 @@ import { OBS_CAPTURE_INPUT, OBS_COLLECTION, obsDesiredScenes } from './desired-s
 import { reconcileManagedAudio } from './managed-audio.js';
 import { inspectLegacyAudioTemplate } from './audio-template.js';
 import { AudioMigration, type MigrationObserver } from './audio-migration.js';
-import { createCommentaryProbe, isTeamspeak, RemoteCommentary } from './remote-commentary.js';
+import {
+  createCommentaryProbe,
+  isTeamspeak,
+  renameLegacyProbe,
+  RemoteCommentary,
+} from './remote-commentary.js';
 import { prepareRemoteCommentary } from './remote-commentary-setup.js';
 import type { ObsFinding, ObsRpc } from './reconcile.js';
 import type { ObsAudioRole } from '@mizar/protocol/obs';
@@ -37,6 +42,8 @@ export async function configureIndependentAudio(
     return [
       { code: 'commentary_pending', message: '上次音频迁移结果待核对，请先检查 OBS 与迁移记录。' },
     ];
+  await renameLegacyProbe(obs, journal, endpoint, OBS_COLLECTION, 'commentary');
+  await renameLegacyProbe(obs, `${journal}.game`, endpoint, OBS_COLLECTION, 'game');
   let target: string | undefined;
   let revision: string | undefined;
   const pending = await prepareRemoteCommentary(

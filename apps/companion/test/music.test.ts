@@ -339,19 +339,19 @@ it('suppresses music video on reconnect and before enabling new scene attachment
   expect(calls.filter((c) => c.type.startsWith('Set') || c.type === 'CreateSceneItem')).toEqual([
     {
       type: 'CreateSceneItem',
-      data: { sceneName: 'Mizar · 赛前等待', sourceUuid, sceneItemEnabled: false },
+      data: { sceneName: '赛前等待', sourceUuid, sceneItemEnabled: false },
     },
     {
       type: 'SetSceneItemTransform',
       data: {
-        sceneName: 'Mizar · 赛前等待',
+        sceneName: '赛前等待',
         sceneItemId: 30,
         sceneItemTransform: { boundsType: 'OBS_BOUNDS_NONE', scaleX: 0, scaleY: 0 },
       },
     },
     {
       type: 'SetSceneItemEnabled',
-      data: { sceneName: 'Mizar · 赛前等待', sceneItemId: 30, sceneItemEnabled: true },
+      data: { sceneName: '赛前等待', sceneItemId: 30, sceneItemEnabled: true },
     },
   ]);
   expect(r.obs.restarts()).toBe(1);
@@ -453,7 +453,7 @@ it('layers only actual opening starts and never catches up an expired or consume
   r.director.opening('take-1');
   await r.step();
   expect(r.obs.restarts()).toBe(2);
-  const stinger = [...r.obs.inputs].find(([name]) => name.includes('Stinger'))![1];
+  const stinger = [...r.obs.inputs].find(([name]) => name === '音效')![1];
   stinger.state = 'OBS_MEDIA_STATE_ENDED';
   await r.step();
   await r.step();
@@ -801,9 +801,7 @@ it('observes OBS manual control before replacing waiting with a tactical cue', a
         await r.step();
       }
       const input =
-        layer === 'bgm'
-          ? r.obs.bgm()
-          : [...r.obs.inputs].find(([name]) => name.includes('Stinger'))![1];
+        layer === 'bgm' ? r.obs.bgm() : [...r.obs.inputs].find(([name]) => name === '音效')![1];
       control.apply(input);
       const label = `${layer}:${control.name}`,
         starts = r.obs.restarts();
@@ -834,9 +832,7 @@ it('observes OBS manual control before stale telemetry can record a system suspe
         await r.step();
       }
       const input =
-        layer === 'bgm'
-          ? r.obs.bgm()
-          : [...r.obs.inputs].find(([name]) => name.includes('Stinger'))![1];
+        layer === 'bgm' ? r.obs.bgm() : [...r.obs.inputs].find(([name]) => name === '音效')![1];
       control.apply(input);
       const label = `${layer}:${control.name}`,
         starts = r.obs.restarts();
@@ -1009,7 +1005,7 @@ function audition(
   };
 }
 function stinger(r: Awaited<ReturnType<typeof rig>>) {
-  return [...r.obs.inputs].find(([name]) => name.includes('Stinger'))![1];
+  return [...r.obs.inputs].find(([name]) => name === '音效')![1];
 }
 it('applies music master, mute and draft entry gain to audition', async () => {
   const r = await auditionRig();
@@ -1917,15 +1913,5 @@ it('finishes a track transition without applying its tail fade to the next track
   await r.step(300);
   expect(r.obs.bgm().volume).toBeCloseTo(0.5);
   expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_PLAYING');
-  await r.director.close();
-});
-
-it('disables automatic music without preventing manual playback', async () => {
-  const r = await rig();
-  r.store.automaticEnabled = false;
-  await r.step();
-  expect(r.obs.restarts()).toBe(0);
-  await r.director.manualPlay('waiting', r.tracks[0]!.id);
-  expect(r.obs.restarts()).toBe(1);
   await r.director.close();
 });

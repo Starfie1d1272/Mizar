@@ -40,53 +40,6 @@ afterEach(() => {
   vi.mocked(obsConfig.isObsProcessRunning).mockReset().mockResolvedValue(false);
 });
 
-it('waits for broadcast owner synchronization before entering and preserves preparation on failure', async () => {
-  const scenes = {
-    get: () => ({ revision: 'scene', active: 'waiting' }),
-  } as unknown as ProgramSceneController;
-  const app = Fastify();
-  let resolve!: () => void;
-  let reject!: (error: Error) => void;
-  let pending = new Promise<void>((ok, fail) => {
-    resolve = ok;
-    reject = fail;
-  });
-  void pending.catch(() => {});
-  const lifecycle = registerProductionRoutes(app, {
-    originPolicy: createLocalWebOriginPolicy(),
-    hasContext: () => true,
-    scenes,
-    release: () => Promise.resolve(),
-    waitForBroadcast: () => pending,
-  });
-  const enter = () =>
-    app.inject({
-      method: 'POST',
-      url: '/operator/production',
-      headers: { origin: 'http://127.0.0.1:3000' },
-      payload: { action: 'enter', expectedRevision: lifecycle.get().revision },
-    });
-  try {
-    await app.ready();
-    const first = Promise.resolve(enter());
-    await new Promise<void>((done) => setImmediate(done));
-    expect(lifecycle.get().mode).toBe('preparation');
-    reject(new Error('broadcast_owner_sync_failed'));
-    expect((await first).statusCode).toBe(409);
-    expect(lifecycle.get().mode).toBe('preparation');
-    pending = new Promise<void>((ok) => {
-      resolve = ok;
-    });
-    const second = Promise.resolve(enter());
-    await new Promise<void>((done) => setImmediate(done));
-    expect(lifecycle.get().mode).toBe('preparation');
-    resolve();
-    expect((await second).json()).toMatchObject({ mode: 'live' });
-  } finally {
-    await app.close();
-  }
-});
-
 it('requires only match context, preserves match through hide/resume/finish, and rejects stale commands', async () => {
   const root = await mkdtemp(join(tmpdir(), 'mizar-lifecycle-'));
   await new obsConfig.ObsConfigStore(join(root, 'obs.json')).save(obsConfig.DEFAULT_OBS_CONFIG);
@@ -403,49 +356,5 @@ it('keeps recovered external Demo sessions cleanup-only at the real HTTP boundar
   } finally {
     await app.close();
     await rm(root, { recursive: true, force: true });
-  }
-});
-
-it('holds production transitions while committing a broadcast configuration', async () => {
-  const scenes = {
-    get: () => ({ revision: 'scene', active: 'waiting' }),
-  } as unknown as ProgramSceneController;
-  const app = Fastify();
-  const lifecycle = registerProductionRoutes(app, {
-    originPolicy: createLocalWebOriginPolicy(),
-    hasContext: () => true,
-    scenes,
-    release: () => Promise.resolve(),
-  });
-  let finish!: () => void;
-  const pending = lifecycle.configureBroadcast(
-    () =>
-      new Promise<void>((resolve) => {
-        finish = resolve;
-      }),
-  );
-  try {
-    const response = await app.inject({
-      method: 'POST',
-      url: '/operator/production',
-      headers: { origin: 'http://127.0.0.1:3000' },
-      payload: { action: 'enter', expectedRevision: lifecycle.get().revision },
-    });
-    expect(response.statusCode).toBe(409);
-    finish();
-    await pending;
-    const entered = await app.inject({
-      method: 'POST',
-      url: '/operator/production',
-      headers: { origin: 'http://127.0.0.1:3000' },
-      payload: { action: 'enter', expectedRevision: lifecycle.get().revision },
-    });
-    expect(entered.statusCode).toBe(200);
-    await expect(lifecycle.configureBroadcast(() => Promise.resolve())).rejects.toThrow(
-      'production_busy',
-    );
-  } finally {
-    finish();
-    await app.close();
   }
 });

@@ -22,8 +22,6 @@ Server 使用独立持久目录，并从已通过 Core 内容身份校验的 bun
 
 `installVerified(packId, prepare, {packVersion?, signal?, force?, activation?})` 默认复验并复用 active；请求不同版本时必须传 `packVersion`。默认在安全时启用，`activation: 'prepare-only'` 则只准备版本，缓存命中也不启用。`repair` 强制重新准备，也支持该选项。`cancel(packId)` 取消正在运行的安装。并发安装/删除/切换明确拒绝，不创建并行状态机。
 
-`verifyExact` 与 `readExact` 以包 ID、版本和已认证原始清单的 SHA-256 寻址，复验历史收据及实际内容，不跟随活动指针。配置协调器启用时须注入与配置提交共用的 `references.run` 和实时引用查询；可选包删除在该队列内核对所有版本并持久标记，再清理文件。`isDeleting` 对整包保守返回删除状态，标记在中断重启后保留；可重试删除以完成清理。默认 EPL 为必需包，不可通过此入口删除。读取期间拒绝删除，标记后拒绝读取、安装及启用。
-
 `reuseActive(packId, createActivePolicyVerifier(currentPolicy), {signal?})` 是原生安装桥的离线重装入口。现有互斥保护覆盖当前 active 的 receipt、本次认证策略和全部文件复验，期间安装/回退不能切换身份。没有 active 返回 null；通过返回 `{status, identity: {packId, packVersion, sourceSha, promotionSha, manifestSha256}}`，没有下载器或网络调用。身份与实际字节不符明确拒绝，不能仅凭 activeVersion 相等复用。该原生回调不暴露给 renderer。
 
 安装流程为临时目录 → 外部授权 → 逐文件尺寸/摘要校验并复制 → 对实际副本复验授权 → 同文件系统版本目录 rename → 原子持久化指针。活动版本和上一个版本保留，失败不会删除现有内容；重启清除未发布的临时目录。启动复验发现活动版本损坏时，恢复仍能通过完整复验的上一版并保留失败诊断。`activatePrepared` 在安全制作时机切换，`rollback` 经同样的外部复验和制作锁回退。历史文件保留供恢复，`removeOptional` 只允许显式配置为 optional 的素材，且须安全切换；默认 EPL 素材不可删除。

@@ -101,36 +101,4 @@ describe('HudConfigStore', () => {
       error: { code: 'EISDIR' },
     });
   });
-  it('switches the legacy HUD writer only after coordinator initialization succeeds', async () => {
-    const filePath = await temporaryConfigPath();
-    const store = new HudConfigStore({ filePath });
-    await store.load();
-    await store.saveAs('theme', getBuiltinThemes()[0]!, store.getState().editorRevision);
-    const oldBytes = await readFile(filePath, 'utf8');
-    await expect(
-      store.adoptPersistence({
-        initialize: () => Promise.reject(new Error('unavailable')),
-        commit: () => Promise.resolve(),
-      }),
-    ).rejects.toThrow('unavailable');
-    expect(await readFile(filePath, 'utf8')).toBe(oldBytes);
-    let persisted = store.getState().document;
-    await store.adoptPersistence({
-      initialize: (document) => {
-        persisted = document;
-        return Promise.resolve(document);
-      },
-      commit: (candidate) => {
-        persisted = candidate;
-        return Promise.resolve();
-      },
-    });
-    const result = await store.saveAs(
-      'theme',
-      getBuiltinThemes()[0]!,
-      store.getState().editorRevision,
-    );
-    expect(persisted).toEqual(result.document);
-    expect(await readFile(filePath, 'utf8')).toBe(oldBytes);
-  });
 });

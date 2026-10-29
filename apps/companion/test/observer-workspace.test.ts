@@ -334,7 +334,7 @@ it('preserves live source and program connection across timing, duplicate saves 
     await expect.poll(() => observer.source.getHealth().state).toBe('live');
     const generation = observer.source.getHealth().generation;
     const revision = (await prepare()).revision;
-    await settings.configure({ ...settings.settings, leadSeconds: 10, expectedDelaySeconds: 130 });
+    await settings.configure({ ...settings.settings, leadSeconds: 10 });
     settings.setConnection({ ...settings.configured()! });
     await settings.configureGame({ ...settings.gameAutomation });
     expect(await prepare()).toMatchObject({ reuse: true, revision });
@@ -809,7 +809,7 @@ it('enables the managed lease for website names when observer and game automatio
   fixture(async (observer) => {
     const app = Fastify();
     const settings = new ObserverSettingsStore();
-    await settings.configure({ ...settings.settings, enabled: false });
+    await settings.configure({ ...settings.settings, enabled: false, nicknameSource: 'website' });
     await settings.configureGame({ autoConnect: false, hideGameHud: false });
     const binding = {
       origin: 'online',

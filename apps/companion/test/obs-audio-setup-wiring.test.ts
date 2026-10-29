@@ -84,12 +84,12 @@ class FakeObs extends EventEmitter {
       capture_audio: false,
       window: 'Counter-Strike 2:SDL_app:cs2.exe',
     });
-    this.addInput('Mizar · Desktop Audio', 'wasapi_output_capture', { device_id: 'default' });
-    this.addInput('Mizar · Microphone', 'wasapi_input_capture', { device_id: 'default' });
+    this.addInput('桌面声音', 'wasapi_output_capture', { device_id: 'default' });
+    this.addInput('麦克风', 'wasapi_input_capture', { device_id: 'default' });
     for (const scene of obsDesiredScenes(base)) {
       this.addInput(scene.browserInput, 'browser_source', { url: scene.browserUrl });
       this.scenes.set(scene.sceneName, []);
-      for (const name of [...scene.sources, 'Mizar · Desktop Audio', 'Mizar · Microphone'])
+      for (const name of [...scene.sources, '桌面声音', '麦克风'])
         this.addItem(scene.sceneName, name, true);
     }
   }
@@ -392,10 +392,8 @@ it('configures the default legacy mix through the adapter on its live OBS connec
       expect(
         items.filter((x) => x.sourceUuid === game.inputUuid && x.sceneItemEnabled),
       ).toHaveLength(1);
-      expect(items.find((x) => x.sourceName === 'Mizar · Desktop Audio')!.sceneItemEnabled).toBe(
-        false,
-      );
-      expect(items.find((x) => x.sourceName === 'Mizar · Microphone')!.sceneItemEnabled).toBe(true);
+      expect(items.find((x) => x.sourceName === '桌面声音')!.sceneItemEnabled).toBe(false);
+      expect(items.find((x) => x.sourceName === '麦克风')!.sceneItemEnabled).toBe(true);
     }
     const inputCount = obs.inputs.size;
     expect(await adapter.ensure()).toEqual([]);
@@ -422,13 +420,9 @@ it('ignores unrelated custom inputs while migrating managed audio', async () => 
     expect(await adapter.ensure()).toEqual([]);
     expect(obs.inputs.get('Custom Audio')!.settings).toEqual({ device_id: 'other' });
     for (const items of obs.scenes.values()) {
+      expect(items.find((item) => item.sourceName === '桌面声音')!.sceneItemEnabled).toBe(false);
       expect(
-        items.find((item) => item.sourceName === 'Mizar · Desktop Audio')!.sceneItemEnabled,
-      ).toBe(false);
-      expect(
-        items.filter(
-          (item) => item.sourceName.includes('Remote Commentary') && item.sceneItemEnabled,
-        ),
+        items.filter((item) => item.sourceName.startsWith('其他解说') && item.sceneItemEnabled),
       ).toHaveLength(1);
     }
     await adapter.close();
@@ -485,9 +479,7 @@ it('manages custom direct audio, reuses the existing microphone and preserves un
       expect(active.filter((item) => item.sourceUuid === music.inputUuid)).toHaveLength(1);
       expect(
         active.some(
-          (item) =>
-            item.sourceName === 'Mizar · Desktop Audio' ||
-            item.sourceName.startsWith('Mizar · Game Audio '),
+          (item) => item.sourceName === '桌面声音' || item.sourceName.startsWith('游戏声音'),
         ),
       ).toBe(false);
     }
@@ -530,9 +522,7 @@ it('creates scenes and audio through the real configure owner and seeds game pol
       expect(
         items.filter((item) => item.sourceUuid === game.inputUuid && item.sceneItemEnabled),
       ).toHaveLength(1);
-      expect(
-        items.find((item) => item.sourceName === 'Mizar · Desktop Audio')!.sceneItemEnabled,
-      ).toBe(false);
+      expect(items.find((item) => item.sourceName === '桌面声音')!.sceneItemEnabled).toBe(false);
     }
     const controller = new GameAudioController(routing, config, join(dir, 'policy'));
     await controller.load();
@@ -758,18 +748,16 @@ it('resumes a waiting TS setup and preserves a manual cancellation', async () =>
           expect(items.find((item) => item.sourceUuid === probe.inputUuid)!.sceneItemEnabled).toBe(
             true,
           );
-          expect(
-            items.find((item) => item.sourceName === 'Mizar · Desktop Audio')!.sceneItemEnabled,
-          ).toBe(false);
+          expect(items.find((item) => item.sourceName === '桌面声音')!.sceneItemEnabled).toBe(
+            false,
+          );
         }
       } else {
         await new Promise((resolve) => setTimeout(resolve, 50));
         expect(probe.settings.window).toBeUndefined();
         expect((await routing.gameBinding()).binding).toBeNull();
         for (const items of obs.scenes.values())
-          expect(
-            items.find((item) => item.sourceName === 'Mizar · Desktop Audio')!.sceneItemEnabled,
-          ).toBe(true);
+          expect(items.find((item) => item.sourceName === '桌面声音')!.sceneItemEnabled).toBe(true);
       }
       await adapter.close();
     } finally {
@@ -795,14 +783,10 @@ it('retries a confirmed rollback using the owned inert game source', async () =>
       true,
     );
     for (const items of obs.scenes.values())
-      expect(
-        items.find((item) => item.sourceName === 'Mizar · Desktop Audio')!.sceneItemEnabled,
-      ).toBe(true);
+      expect(items.find((item) => item.sourceName === '桌面声音')!.sceneItemEnabled).toBe(true);
     expect(await adapter.ensure()).toEqual([]);
     for (const items of obs.scenes.values())
-      expect(
-        items.find((item) => item.sourceName === 'Mizar · Desktop Audio')!.sceneItemEnabled,
-      ).toBe(false);
+      expect(items.find((item) => item.sourceName === '桌面声音')!.sceneItemEnabled).toBe(false);
     await adapter.close();
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -835,9 +819,7 @@ it('keeps the journal and yields when a user changes a migrated item away and ba
         .sceneItemEnabled,
     ).toBe(true);
     for (const items of obs.scenes.values())
-      expect(
-        items.find((item) => item.sourceName === 'Mizar · Desktop Audio')!.sceneItemEnabled,
-      ).toBe(true);
+      expect(items.find((item) => item.sourceName === '桌面声音')!.sceneItemEnabled).toBe(true);
     await adapter.close();
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -882,9 +864,7 @@ it('resumes waiting TS after the companion restarts with the persisted default i
     next.startCommentaryRecovery();
     await vi.waitFor(async () => expect((await routing.gameBinding()).binding).not.toBeNull());
     for (const items of obs.scenes.values())
-      expect(
-        items.find((item) => item.sourceName === 'Mizar · Desktop Audio')!.sceneItemEnabled,
-      ).toBe(false);
+      expect(items.find((item) => item.sourceName === '桌面声音')!.sceneItemEnabled).toBe(false);
     await next.close();
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -905,9 +885,7 @@ it('does not migrate a desktop source explicitly bound by the user', async () =>
       { owner: new RemoteCommentary(join(dir, 'preference')), journal: join(dir, 'probe') },
     );
     const status = await adapter.readAudioRouting();
-    const desktop = status.candidates.find(
-      (candidate) => candidate.name === 'Mizar · Desktop Audio',
-    )!;
+    const desktop = status.candidates.find((candidate) => candidate.name === '桌面声音')!;
     await adapter.bindAudio({
       role: 'game',
       selectionId: desktop.selectionId,
@@ -918,9 +896,7 @@ it('does not migrate a desktop source explicitly bound by the user', async () =>
     );
     expect((await routing.gameBinding()).binding?.inputUuid).toBe(desktop.uuid);
     for (const items of obs.scenes.values())
-      expect(
-        items.find((item) => item.sourceName === 'Mizar · Desktop Audio')!.sceneItemEnabled,
-      ).toBe(true);
+      expect(items.find((item) => item.sourceName === '桌面声音')!.sceneItemEnabled).toBe(true);
     await adapter.close();
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -1003,9 +979,7 @@ it('persists an application choice and waits for it to return before migrating',
       (await adapter.ensure()).some((finding) => finding.message.includes('等待所选应用启动')),
     ).toBe(true);
     for (const items of obs.scenes.values())
-      expect(
-        items.find((item) => item.sourceName === 'Mizar · Desktop Audio')!.sceneItemEnabled,
-      ).toBe(true);
+      expect(items.find((item) => item.sourceName === '桌面声音')!.sceneItemEnabled).toBe(true);
     obs.windows = [{ itemName: 'Voice App', itemValue: 'Voice:Qt:voice.exe', itemEnabled: true }];
     adapter.startCommentaryRecovery();
     await vi.waitFor(async () => expect((await routing.gameBinding()).binding).not.toBeNull());
@@ -1124,9 +1098,7 @@ it('accepts an owned disabled compact BP source before and after audio migration
     expect(await adapter.ensure()).toEqual([]);
     expect(compact.sceneItemEnabled).toBe(false);
     for (const items of obs.scenes.values())
-      expect(
-        items.find((item) => item.sourceName === 'Mizar · Desktop Audio')!.sceneItemEnabled,
-      ).toBe(false);
+      expect(items.find((item) => item.sourceName === '桌面声音')!.sceneItemEnabled).toBe(false);
     await adapter.close();
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -1155,9 +1127,7 @@ it('rejects a modified compact BP source without migrating desktop audio', async
     );
     expect((await adapter.ensure()).some((item) => item.code === 'commentary_pending')).toBe(true);
     for (const items of obs.scenes.values())
-      expect(
-        items.find((item) => item.sourceName === 'Mizar · Desktop Audio')!.sceneItemEnabled,
-      ).toBe(true);
+      expect(items.find((item) => item.sourceName === '桌面声音')!.sceneItemEnabled).toBe(true);
     await adapter.close();
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -1582,9 +1552,7 @@ it('observes target changes during template inspection before recording the base
     const { readOwnedCommentaryTarget } = await import('../src/obs/commentary-owned-target.js');
     expect(await readOwnedCommentaryTarget(`${journal}.owned-target`)).toBeNull();
     for (const items of obs.scenes.values())
-      expect(
-        items.find((item) => item.sourceName === 'Mizar · Desktop Audio')!.sceneItemEnabled,
-      ).toBe(true);
+      expect(items.find((item) => item.sourceName === '桌面声音')!.sceneItemEnabled).toBe(true);
     await adapter.close();
   } finally {
     await rm(dir, { recursive: true, force: true });
