@@ -1,37 +1,31 @@
 import { useState } from 'react';
-import type { ModuleRecord, PortableMusicConfigV1, PortableTrack } from '@mizar/broadcast-config';
+import type { PortableMusicConfigV1, PortableTrack } from '@mizar/broadcast-config';
 import { MUSIC_GROUPS, type MusicGroup } from '@mizar/protocol/music';
 import { MUSIC_LABELS } from '../music/MusicControls';
 import { MusicVolumeField } from '../music/MusicVolumeField';
 import { Button, Checkbox, Field, Panel, Select } from '../ui';
 
-type MusicModule = ModuleRecord<'music'>;
-
-/** Mount with key={module.id}; save is supplied by the resource library and persists only the draft. */
 export function MusicModuleEditor({
-  module,
-  builtin,
+  value,
+  onChange,
+  onSave,
   busy,
-  save,
 }: {
-  module: MusicModule;
-  builtin: boolean;
+  value: PortableMusicConfigV1;
+  onChange: (value: PortableMusicConfigV1) => void;
+  onSave: () => void;
   busy: boolean;
-  save: (value: MusicModule) => Promise<boolean>;
 }) {
-  const [value, setValue] = useState(module.value);
   const [selectedGroup, setSelectedGroup] = useState<MusicGroup>('waiting');
-  const [open, setOpen] = useState(false);
   const spec = value.groups[selectedGroup];
-  const dirty = JSON.stringify(value) !== JSON.stringify(module.value);
   const change = (patch: Partial<PortableMusicConfigV1['groups'][MusicGroup]>) =>
-    setValue((current) => ({
-      ...current,
+    onChange({
+      ...value,
       groups: {
-        ...current.groups,
-        [selectedGroup]: { ...current.groups[selectedGroup], ...patch },
+        ...value.groups,
+        [selectedGroup]: { ...spec, ...patch },
       },
-    }));
+    });
   const changeTrack = (index: number, update: (track: PortableTrack) => PortableTrack) =>
     change({ tracks: spec.tracks.map((track, i) => (i === index ? update(track) : track)) });
   const move = (index: number, destination: MusicGroup) => {
@@ -43,7 +37,7 @@ export function MusicModuleEditor({
       target.tracks.length >= (destination === 'waiting' || destination === 'technical' ? 64 : 1)
     )
       return;
-    setValue({
+    onChange({
       ...value,
       groups: {
         ...value.groups,
@@ -52,16 +46,14 @@ export function MusicModuleEditor({
       },
     });
   };
-  if (builtin) return <p>内置音乐资源只读，请先复制后编辑。</p>;
   return (
-    <details open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
-      <summary>编辑音乐配置</summary>
+    <>
       <p>保存后仍是资源草稿，不会改变当前播出。</p>
       <Checkbox
         label="自动播放"
         checked={value.automaticEnabled}
         disabled={busy}
-        onChange={(event) => setValue({ ...value, automaticEnabled: event.target.checked })}
+        onChange={(event) => onChange({ ...value, automaticEnabled: event.target.checked })}
       />
       <div className="music-settings-workspace">
         <nav className="music-settings-groups" aria-label="音乐场景">
@@ -249,28 +241,10 @@ export function MusicModuleEditor({
         </Panel>
       </div>
       <div className="music-settings-save__actions">
-        <Button
-          disabled={busy || !dirty}
-          onClick={() => {
-            setValue(module.value);
-            setOpen(false);
-          }}
-        >
-          取消
-        </Button>
-        <Button
-          variant="primary"
-          loading={busy}
-          disabled={busy || !dirty}
-          onClick={() =>
-            void save({ ...module, value }).then((ok) => {
-              if (ok) setOpen(false);
-            })
-          }
-        >
+        <Button variant="primary" loading={busy} disabled={busy} onClick={onSave}>
           保存音乐配置
         </Button>
       </div>
-    </details>
+    </>
   );
 }
