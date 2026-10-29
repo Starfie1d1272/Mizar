@@ -80,7 +80,7 @@ test('previews each saved scene without applying the scheme or requiring tools',
     return route.fulfill({ status: 500 });
   });
   await page.goto('/packages');
-  await page.getByRole('button', { name: '播出方案', exact: true }).click();
+  await page.getByRole('button', { name: '方案', exact: true }).click();
   await page.getByText('查看配置', { exact: true }).click();
   await expect(page.getByText('模拟画面 · 示例比赛数据')).toBeVisible();
   const frame = page.getByLabel('示例画面');
@@ -111,7 +111,7 @@ test('previews a HUD or scene independently when the other module is missing', a
     route.fulfill({ json: { ...view, modules } }),
   );
   await page.goto('/packages');
-  await page.getByRole('button', { name: '播出方案', exact: true }).click();
+  await page.getByRole('button', { name: '方案', exact: true }).click();
   await page.getByText('查看配置', { exact: true }).click();
   await expect(page.getByLabel('示例画面').locator('[data-gameplay-hud]')).toBeVisible();
   modules = view.modules
@@ -121,7 +121,7 @@ test('previews a HUD or scene independently when the other module is missing', a
       value: { ...module.value, tokens: { 'pulse.white': '#112233' } },
     }));
   await page.reload();
-  await page.getByRole('button', { name: '播出方案', exact: true }).click();
+  await page.getByRole('button', { name: '方案', exact: true }).click();
   await page.getByText('查看配置', { exact: true }).click();
   await page.getByLabel('节目场景').selectOption('waiting');
   await expect(page.getByLabel('示例画面').locator('.program-scene--waiting')).toBeVisible();

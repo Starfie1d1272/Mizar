@@ -121,8 +121,8 @@ export function ResourceLibraryPage() {
             ))}
           </div>
         </div>
+        <ResourceModules query={query} category={category} />
         {showPresets ? <BroadcastPresets query={query} /> : null}
-        {showModules ? <ResourceModules query={query} category={category} /> : null}
         {!view ? (
           <StatusBanner tone="warning">
             正在连接资源状态；如果持续无法连接，请检查本地制播服务。
