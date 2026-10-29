@@ -275,6 +275,19 @@ async function performProductionAction(
     task.finish('cancelled', { reason: 'navigation_changed' });
     return;
   }
+  if (
+    action === 'enter' &&
+    window.__TAURI_INTERNALS__ &&
+    !external &&
+    state.mode === 'preparation'
+  ) {
+    await desktopInvoke('begin_managed_camera', { expectedRevision: state.revision }, task);
+    if (window.location.href !== entryLocation) {
+      await desktopInvoke('cancel_managed_camera', undefined, task);
+      task.finish('cancelled', { reason: 'navigation_changed' });
+      return;
+    }
+  }
   let presented = false;
   try {
     await command('/operator/production', { action, expectedRevision: state.revision }, task);

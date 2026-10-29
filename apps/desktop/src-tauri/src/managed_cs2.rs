@@ -573,6 +573,7 @@ pub struct ManagedCs2 {
     can_preserve: bool,
     selected_backup: Option<Value>,
     external: Option<ExternalSession>,
+    managed_camera: Option<ManagedCamera>,
     // Keep window preservation after detach until a new managed launch is accepted.
     external_preservation: bool,
     #[cfg(test)]
@@ -597,6 +598,11 @@ pub struct WorkspaceProcess {
     pub owned: bool,
     pub pid: u32,
     pub created: u64,
+}
+struct ManagedCamera {
+    process: WorkspaceProcess,
+    lease: String,
+    invalidated: bool,
 }
 struct ExternalSession {
     console_source: Value,
@@ -637,6 +643,7 @@ impl ManagedCs2 {
             can_preserve: false,
             selected_backup: None,
             external: None,
+            managed_camera: None,
             external_preservation: false,
             #[cfg(test)]
             recovery_identity_fixture: None,
@@ -942,6 +949,25 @@ impl ManagedCs2 {
             self.message = Some(error);
         }
     }
+    /// A lease is bound to the held, verified game process, never just a PID.
+    pub fn bind_managed_camera(&mut self, process: WorkspaceProcess, lease: String) -> Result<(), String> {
+        if !process.owned || !process.is_running() || cs2_pids(&self.log)? != vec![process.pid] {
+            return Err("受管游戏身份已变化，运镜会话未绑定。".into());
+        }
+        self.managed_camera = Some(ManagedCamera { process, lease, invalidated: false });
+        Ok(())
+    }
+    pub fn managed_camera_lease(&mut self) -> Option<(String, bool)> {
+        let camera = self.managed_camera.as_mut()?;
+        if !camera.process.is_running() || cs2_pids(&self.log).map_or(true, |pids| pids != vec![camera.process.pid]) {
+            camera.invalidated = true;
+        }
+        Some((camera.lease.clone(), camera.invalidated))
+    }
+    pub fn invalidate_managed_camera(&mut self) {
+        if let Some(camera) = &mut self.managed_camera { camera.invalidated = true; }
+    }
+    pub fn clear_managed_camera(&mut self) { self.managed_camera = None; }
     pub fn bind_external_camera(&mut self, lease: String) {
         if let Some(external) = &mut self.external { external.camera_lease = Some(lease); }
     }
@@ -1572,6 +1598,11 @@ impl ManagedCs2 {
             // No owned journal is ever created. Releasing a query handle cannot terminate a game.
             return Ok(());
         }
+        if let Some((lease, _)) = self.managed_camera_lease() {
+            self.invalidate_managed_camera();
+            crate::production_exit::camera_session(&self.log, "invalidate", Some(&lease), None)?;
+            self.clear_managed_camera();
+        }
         let journal = self.store.load()?;
         let trial = crate::demo_test::quarantine_if_needed(&self.log, journal.as_ref())?;
         // Poll once to adopt a uniquely identified late launch before closing it.
@@ -1931,8 +1962,19 @@ mod tests {
         assert!(!restarted.has_external());
         assert!(restarted.external_camera_lease().is_none());
         assert!(restarted.workspace_process().unwrap().is_none());
+        // The same real process identity backs an owned lease; losing it must
+        // turn the next heartbeat into an invalidation rather than a renewal.
+        let owned_log = crate::startup_log::DesktopLog::new(&external.root.join("owned-host"), None).unwrap();
+        let mut owned_host = ManagedCs2::new(owned_log);
+        owned_host.store.save(&json!({"version":1,"pid":external.child.id(),"created":created,"executable":actual_path})).unwrap();
+        let owned_process = owned_host.workspace_process().unwrap().unwrap();
+        owned_host.bind_managed_camera(owned_process, "managed-lease".into()).unwrap();
+        assert_eq!(owned_host.managed_camera_lease(), Some(("managed-lease".into(), false)));
         external.child.kill().unwrap();
         external.child.wait().unwrap();
+        assert_eq!(owned_host.managed_camera_lease(), Some(("managed-lease".into(), true)));
+        owned_host.clear_managed_camera();
+        assert!(owned_host.managed_camera_lease().is_none());
         managed.poll();
         assert!(managed.external_isolation_pending());
         assert_eq!(managed.external_camera_lease(), Some("second-lease"));

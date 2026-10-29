@@ -844,6 +844,28 @@ it('native expiry drops a pending clear handoff and a late gateway ACK cannot re
   expect(r.director.get().held).toBe(true);
 });
 
+it('accepts a managed Host handoff, renews beyond the lease period and isolates on exit', async () => {
+  const r = await nativeRig();
+  expect((await r.native({ action: 'host-start', host: 'managed-host' })).statusCode).toBe(200);
+  const lease = await r.begin('managed-host');
+  expect((await r.lifecycle('enter')).statusCode).toBe(200);
+  await r.arm();
+  for (let i = 0; i < 4; i++) {
+    await r.advance(4000);
+    expect((await r.native({ action: 'pulse', host: 'managed-host', lease })).statusCode).toBe(200);
+  }
+  expect(r.director.get().control).toEqual({ mode: 'native', state: 'ready' });
+  expect((await r.native({ action: 'invalidate', host: 'managed-host', lease })).statusCode).toBe(
+    200,
+  );
+  expect(r.director.get()).toMatchObject({
+    held: true,
+    connected: false,
+    control: { state: 'blocked' },
+  });
+  expect((await r.native({ action: 'pulse', host: 'managed-host', lease })).statusCode).toBe(409);
+});
+
 it('healthy native renewals preserve manual hold across rounds without restoring automatic intent', async () => {
   const r = await nativeRig();
   await r.native({ action: 'host-start', host: 'host' });

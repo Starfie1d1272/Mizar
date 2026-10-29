@@ -154,7 +154,13 @@ describe('managed CS2 production entry and cleanup', () => {
     });
     expect(calls).not.toContain('attach_external_cs2');
     expect(calls.indexOf('launch_mulnx')).toBeLessThan(calls.indexOf('start_managed_cs2'));
-    expect(calls.indexOf('start_managed_cs2')).toBeLessThan(calls.indexOf('/operator/production'));
+    expect(calls.indexOf('start_managed_cs2')).toBeLessThan(calls.indexOf('begin_managed_camera'));
+    expect(calls.indexOf('begin_managed_camera')).toBeLessThan(
+      calls.indexOf('/operator/production'),
+    );
+    expect(nativeArgs.find((v) => v.command === 'begin_managed_camera')?.args).toMatchObject({
+      expectedRevision: 'one',
+    });
     expect(calls).toContain('present_production');
     expect(window.location.pathname).toBe('/');
   });
@@ -189,6 +195,7 @@ describe('managed CS2 production entry and cleanup', () => {
     });
     expect(calls).toContain('attach_external_cs2');
     expect(calls).not.toContain('start_managed_cs2');
+    expect(calls).not.toContain('begin_managed_camera');
     expect(calls).not.toContain('finish_managed_cs2');
     expect(nativeArgs.find((v) => v.command === 'attach_external_cs2')?.args).toMatchObject({
       pid: 42,

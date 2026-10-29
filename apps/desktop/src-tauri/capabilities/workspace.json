@@ -28,6 +28,8 @@
     "allow-launch-mulnx",
     "allow-observer-command",
     "allow-start-managed-cs2",
+    "allow-begin-managed-camera",
+    "allow-cancel-managed-camera",
     "allow-finish-managed-cs2",
     "allow-workspace-exit-status",
     "allow-restore-cs2-backup",
