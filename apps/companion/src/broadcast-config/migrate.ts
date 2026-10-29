@@ -167,6 +167,14 @@ export async function migrateLegacyBroadcast(
     schemaVersion: 1,
     modules: [...hudModules, programModule, musicModule, ...cameraModules],
     presets: [preset],
+    unboundHudResources: {
+      layouts: document.customLayouts.filter(
+        (layout) => !document.customPresets.some((item) => item.layoutId === layout.id),
+      ),
+      themes: document.customThemes.filter(
+        (theme) => !document.customPresets.some((item) => item.themeId === theme.id),
+      ),
+    },
     active,
     previousActive: null,
   });

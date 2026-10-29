@@ -166,6 +166,8 @@ export interface BroadcastConfigDocument {
   schemaVersion: 1;
   modules: ModuleRecord[];
   presets: BroadcastPreset[];
+  /** Legacy editor resources not currently bound to a preset. */
+  unboundHudResources?: { layouts: HudLayout[]; themes: HudTheme[] };
   active: ActiveBroadcastSnapshot;
   previousActive: ActiveBroadcastSnapshot | null;
 }
@@ -270,10 +272,29 @@ function effectiveModuleJson(
   kind: ModuleKind,
   value: ActiveBroadcastSnapshot['resolved'][ModuleKind],
 ): string {
+  if (kind === 'hud' && value !== null) {
+    const hud = value as ResolvedHudModule;
+    if (hud.renderer === 'native') {
+      const { schemaVersion, widgets } = hud.config.layout;
+      const { brandColor, panelStyle, cornerStyle, recipe, semantic } = hud.config.theme;
+      const layout = { schemaVersion, widgets };
+      const theme = { brandColor, panelStyle, cornerStyle, recipe, semantic };
+      return canonicalJson({
+        renderer: hud.renderer,
+        layout,
+        theme,
+        widgets: hud.config.widgets,
+        overlays: hud.overlays,
+        accent: hud.accent,
+      });
+    }
+  }
   if (kind !== 'camera' || value === null) return canonicalJson(value);
   const camera = value as CameraModuleV2;
   return canonicalJson({
-    ...camera,
+    format: camera.format,
+    version: camera.version,
+    automaticEnabled: camera.automaticEnabled,
     maps: camera.maps.map(({ source, ...map }) => ({
       ...map,
       source: { treeSha256: source.treeSha256, converterVersion: source.converterVersion },

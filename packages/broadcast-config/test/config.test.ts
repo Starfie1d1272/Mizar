@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { getBuiltinResolvedPreset, getBuiltinTheme } from '@mizar/hud-config';
 import {
   boundModules,
   clonePreset,
@@ -67,7 +68,17 @@ function fixture(): BroadcastConfigDocument {
       sourcePreset: null,
       adjusted: false,
       moduleRevisions: { hud: 'ah', program: 'ap', music: 'am', camera: 'ac' },
-      resolved: { hud: { renderer: 'native', config: {} }, program: {}, music: {}, camera: null },
+      resolved: {
+        hud: {
+          renderer: 'native',
+          config: getBuiltinResolvedPreset(),
+          overlays: { pause: { enabled: true, visual: 'default' } },
+          accent: { source: 'fixed', value: getBuiltinTheme().brandColor },
+        },
+        program: {},
+        music: {},
+        camera: null,
+      },
       lock: { resources: [], tools: [] },
     },
     previousActive: null,
@@ -121,7 +132,10 @@ describe('broadcast preset', () => {
     ).toThrow('incomplete_preset');
     const resolved = {
       ...document.active.resolved,
-      hud: { renderer: 'native', config: { changed: true } },
+      hud: {
+        ...document.active.resolved.hud,
+        overlays: { pause: { enabled: false, visual: 'default' } },
+      },
     } as unknown as typeof document.active.resolved;
     let id = 0;
     const next = await preparePreset(
@@ -170,6 +184,7 @@ describe('broadcast preset', () => {
     } as unknown as NonNullable<typeof document.active.resolved.camera>;
     document.active.resolved.camera = camera;
     const changed = structuredClone(camera);
+    changed.name = 'Renamed';
     const acquisition = changed.maps[0]!.source.acquisition;
     if (acquisition.kind !== 'upstream') throw new Error('unexpected source');
     acquisition.release.releaseId = 2;
@@ -192,5 +207,57 @@ describe('broadcast preset', () => {
       () => 'new',
     );
     expect(next.moduleRevisions.camera).toBe('ac');
+  });
+  it('ignores copied native HUD editor IDs and names but detects visual changes', async () => {
+    const document = fixture();
+    const previous = document.active.resolved.hud;
+    if (previous.renderer !== 'native') throw new Error('unexpected HUD');
+    const copied = structuredClone(previous);
+    copied.config = {
+      ...copied.config,
+      preset: {
+        ...copied.config.preset,
+        id: 'copy',
+        name: 'Copy',
+        layoutId: 'layout-copy',
+        themeId: 'theme-copy',
+      },
+      layout: { ...copied.config.layout, id: 'layout-copy', name: 'Copy' },
+      theme: { ...copied.config.theme, id: 'theme-copy', name: 'Copy' },
+    };
+    const request = {
+      presetId: 'preset',
+      expectedRevision: 'r1',
+      expectedModuleRevisions: expected,
+      expectedActiveRevision: 'a1',
+      requestId: 'request',
+    };
+    const candidate = await preparePreset(
+      document,
+      request,
+      {
+        resolve: () =>
+          Promise.resolve({
+            resolved: { ...document.active.resolved, hud: copied },
+            lock: { resources: [], tools: [] },
+          }),
+      },
+      () => 'new',
+    );
+    expect(candidate.moduleRevisions.hud).toBe('ah');
+    copied.overlays.pause.enabled = false;
+    const changed = await preparePreset(
+      document,
+      request,
+      {
+        resolve: () =>
+          Promise.resolve({
+            resolved: { ...document.active.resolved, hud: copied },
+            lock: { resources: [], tools: [] },
+          }),
+      },
+      () => 'new',
+    );
+    expect(changed.moduleRevisions.hud).toBe('new');
   });
 });

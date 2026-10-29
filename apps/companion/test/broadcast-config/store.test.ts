@@ -211,4 +211,37 @@ describe('BroadcastConfigStore', () => {
     await reopened.load();
     expect(reopened.snapshot.active.revision).toBe('active');
   });
+  it('enforces the size limit on the formatted bytes before initialization and save', async () => {
+    const { store, options, initial } = await setup();
+    const large = structuredClone(initial);
+    const program = large.modules.find((module) => module.kind === 'program');
+    if (!program || program.kind !== 'program') throw new Error('program missing');
+    program.value = {
+      ...program.value,
+      tokens: Object.fromEntries(
+        Array.from({ length: 100_000 }, (_, index) => [`k${index}`, 'x'.repeat(150)]),
+      ),
+    };
+    const envelope = { version: 1, document: large, receipts: {} };
+    expect(Buffer.byteLength(JSON.stringify(envelope))).toBeLessThanOrEqual(16 * 1024 * 1024);
+    expect(Buffer.byteLength(`${JSON.stringify(envelope, null, 2)}\n`)).toBeGreaterThan(
+      16 * 1024 * 1024,
+    );
+    const newStore = new BroadcastConfigStore({
+      ...options,
+      filePath: `${options.filePath}.large`,
+      createInitial: () => Promise.resolve(large),
+    });
+    await expect(newStore.load()).rejects.toThrow('broadcast_config_too_large');
+    await expect(
+      store.save({
+        preset: initial.presets[0]!,
+        expectedPresetRevision: 'p1',
+        modules: [{ value: program, expectedRevision: 'p1' }],
+      }),
+    ).rejects.toThrow('broadcast_config_too_large');
+    const reopened = new BroadcastConfigStore(options);
+    await reopened.load();
+    expect(reopened.snapshot).toEqual(initial);
+  });
 });
