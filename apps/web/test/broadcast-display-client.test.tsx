@@ -134,3 +134,64 @@ it('accepts a HUD or a selected scene independently of unsupported unrelated vis
   expect(supportsBroadcastDisplay(config, 'bp')).toBe(true);
   expect(supportsBroadcastDisplay(config, 'matchup')).toBe(false);
 });
+
+it('checks the full background reference before accepting a scene and retains the last good display on failure', async () => {
+  vi.useFakeTimers();
+  const background = {
+    resource: { id: 'local:mizar-pack:example', version: '1.0.0', digest: 'a'.repeat(64) },
+    fileId: 'background',
+  };
+  const imageConfig = {
+    ...projection,
+    activeRevision: 'active-2',
+    program: { ...projection.program, assets: { 'pulse.background': background } },
+  };
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce({ ok: true, json: async () => projection })
+    .mockResolvedValueOnce({ ok: true, json: async () => imageConfig })
+    .mockResolvedValueOnce({ ok: false });
+  vi.stubGlobal('fetch', fetchMock);
+  let state: BroadcastDisplayClientState | undefined;
+  function Probe() {
+    state = useBroadcastDisplayConfig(true, 'waiting');
+    return null;
+  }
+  const root = createRoot(document.createElement('div'));
+  await act(async () => {
+    root.render(<Probe />);
+    await Promise.resolve();
+  });
+  const previous = state?.current;
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(500);
+  });
+  expect(state).toEqual({ status: 'unavailable', current: previous });
+  const path = fetchMock.mock.calls[2]![0] as string;
+  const query = new URL(path, 'http://localhost').searchParams;
+  expect(Object.fromEntries(query)).toEqual({
+    resourceId: background.resource.id,
+    version: background.resource.version,
+    digest: background.resource.digest,
+    fileId: background.fileId,
+  });
+  act(() => root.unmount());
+});
+
+it('rejects unsupported background slots without affecting HUD support', async () => {
+  const { supportsBroadcastDisplay } = await import('../src/program/broadcast-display');
+  const config = {
+    ...projection,
+    program: {
+      ...projection.program,
+      assets: {
+        'other.slot': {
+          resource: { id: 'local:mizar-pack:example', version: '1', digest: 'a'.repeat(64) },
+          fileId: 'background',
+        },
+      },
+    },
+  } as Parameters<typeof supportsBroadcastDisplay>[0];
+  expect(supportsBroadcastDisplay(config, 'waiting')).toBe(false);
+  expect(supportsBroadcastDisplay(config, 'gameplay')).toBe(true);
+});

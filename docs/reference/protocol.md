@@ -188,7 +188,7 @@ WebSocket 子协议为 `mizar.local.v1`，路由为 `/local/v1/{channel}`。
 
 `GET /local/v1/broadcast-modules` 返回 `{ modules: [{ module, builtin, availability }] }`；`availability` 为 `{ state: 'ready' }` 或 `{ state: 'dependency_missing', reason }`，提交使用时仍重新验证。本机操作 `POST /operator/broadcast-modules/save` 接受 `{ value, expectedRevision }`，`clone` 接受 `{ moduleId, expectedRevision, name }`，`apply` 接受 `{ moduleId, expectedRevision, expectedActiveRevision, requestId }`。`delete` 接受 `{ moduleId, expectedRevision, replacement? }`；存在方案引用时，replacement 为 `{ moduleId, expectedPresetRevisions }`，其中音乐或运镜可以用 null 关闭，HUD 和节目必须选同类替代。当前活动模块必须先替换。`POST /operator/broadcast-presets/delete` 接受 `{ presetId, expectedRevision }`，不删除模块。五套内置 HUD 和 Pulse 在服务端禁止更改和删除，复制后的模块独立编辑。
 
-`GET /local/v1/broadcast-assets?resourceId=…&version=…&digest=…&fileId=…` 按完整 `AssetRef` 读取已安装包中的音频或 PNG、JPEG、WebP 图片，查询值分别 URL 编码。成功响应包含实际 `Content-Type` 和 `X-Content-Type-Options: nosniff`；缺失、损坏、不支持分别返回 404、422、415。此接口不接受磁盘路径，也不安装或枚举包。场景图片槽位为 `pulse.background`；配置保存资源引用，页面以完整引用构造本机 URL。
+`GET /local/v1/broadcast-assets?resourceId=…&version=…&digest=…&fileId=…` 按完整 `AssetRef` 读取已安装包中的音频或 PNG、JPEG、WebP 图片，查询值分别 URL 编码。成功响应包含实际 `Content-Type` 和 `X-Content-Type-Options: nosniff`；缺失、损坏、不支持分别返回 404、422、415。此接口不接受磁盘路径，也不安装或枚举包。场景图片槽位为 `pulse.background`；配置保存资源引用，页面以完整引用构造本机 URL，预览和正式节目及 BP 共用此映射。Pulse 渲染器支持 `pulse.white`、`pulse.blue`、`pulse.gold`、`pulse.muted`、`pulse.canvas` 和 `pulse.shell` 颜色字段，网页遇到其他字段或图片槽时拒绝预览及从资源页使用。
 
 ## BP 播放与补录
 

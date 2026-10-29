@@ -1,4 +1,6 @@
 import { PresetVisualPreview } from './PresetVisualPreview';
+import { parseModuleRecord } from '@mizar/broadcast-config';
+import { pulseTokenStyle } from '../program/broadcast-display';
 import { useState } from 'react';
 import { useLocalRead } from '../preparation/client';
 import { Button, Checkbox, Field, Panel, Select, StatusBanner } from '../ui';
@@ -407,6 +409,24 @@ export function BroadcastPresets({ query }: { query: string }) {
     if (!view || busy) return;
     const revisions = moduleRevisions(preset);
     if (!revisions) return;
+    const binding = preset.bindings.find((item) => item.kind === 'program');
+    const program =
+      binding?.mode === 'use'
+        ? view.modules.find((item) => item.id === binding.moduleId)
+        : undefined;
+    if (program) {
+      try {
+        const parsed = parseModuleRecord(program);
+        if (parsed.kind === 'program' && pulseTokenStyle(parsed.value) === null) {
+          setMissing([{ id: parsed.id, name: parsed.name, kind: 'program' }]);
+          setNotice({ tone: 'danger', message: '方案未使用：场景包含不支持的颜色或图片槽。' });
+          return;
+        }
+      } catch {
+        setNotice({ tone: 'danger', message: '方案未使用：场景配置损坏。' });
+        return;
+      }
+    }
     setBusy(true);
     setNotice(null);
     setMissing([]);

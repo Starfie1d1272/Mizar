@@ -3,6 +3,7 @@ import type { ModuleRecord } from '@mizar/broadcast-config';
 import { useLocalRead } from '../preparation/client';
 import { Button, Panel, Select, StatusBanner } from '../ui';
 import { PresetVisualPreview } from './PresetVisualPreview';
+import { pulseTokenStyle } from '../program/broadcast-display';
 
 type Kind = ModuleRecord['kind'];
 type Snapshot = {
@@ -231,7 +232,11 @@ export function ResourceModules({
                 )}
                 <div className="resource-library__preset-actions">
                   <Button
-                    disabled={busy || !snapshot}
+                    disabled={
+                      busy ||
+                      !snapshot ||
+                      (entry.kind === 'program' && pulseTokenStyle(entry.value) === null)
+                    }
                     onClick={() =>
                       snapshot &&
                       void perform(

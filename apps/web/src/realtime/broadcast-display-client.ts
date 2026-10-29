@@ -1,5 +1,5 @@
 import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
-import { supportsBroadcastDisplay } from '../program/broadcast-display';
+import { pulseBackgroundUrl, supportsBroadcastDisplay } from '../program/broadcast-display';
 import { useEffect, useState } from 'react';
 import { parseBroadcastDisplayConfig, type BroadcastDisplayConfig } from '@mizar/broadcast-config';
 
@@ -21,6 +21,7 @@ export function useBroadcastDisplayConfig(
     if (!enabled) return;
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
+    let verifiedBackground: string | null = null;
     const poll = async () => {
       try {
         const response = await fetch('/local/v1/broadcast-display-config', {
@@ -33,6 +34,13 @@ export function useBroadcastDisplayConfig(
           if (active)
             setValue((previous) => ({ status: 'unsupported', current: previous.current }));
           return;
+        }
+        const background = scene === 'gameplay' ? null : pulseBackgroundUrl(current.program);
+        if (background && background !== verifiedBackground) {
+          const image = await fetch(background, { signal: AbortSignal.timeout(2000) });
+          if (!image.ok || !image.headers.get('content-type')?.startsWith('image/'))
+            throw new Error('background unavailable');
+          verifiedBackground = background;
         }
         if (active)
           setValue((previous) =>

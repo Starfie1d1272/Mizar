@@ -1,7 +1,11 @@
-import { useMemo, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { parseModuleRecord, type ModuleRecord } from '@mizar/broadcast-config';
 import { getBuiltinResolvedPreset, resolveHudPreset } from '@mizar/hud-config';
-import { pulseTokenStyle, supportsProgramScene } from '../program/broadcast-display';
+import {
+  pulseBackgroundUrl,
+  pulseTokenStyle,
+  supportsProgramScene,
+} from '../program/broadcast-display';
 import { PROGRAM_SCENES, type ProgramSceneId } from '@mizar/protocol/program-scenes';
 import { ProgramView } from '@mizar/hud-view';
 import { bpPreviewSnapshot } from '../bp/preview';
@@ -63,6 +67,29 @@ export function PresetVisualPreview({
     }
     return { hud: resolvedHud, program: program?.kind === 'program' ? program.value : null };
   }, [bindings, modules]);
+  const backgroundUrl = visuals.program ? pulseBackgroundUrl(visuals.program) : null;
+  const [backgroundStatus, setBackgroundStatus] = useState<{ url: string; ready: boolean } | null>(
+    null,
+  );
+  useEffect(() => {
+    if (!backgroundUrl) return;
+    let active = true;
+    setBackgroundStatus(null);
+    void fetch(backgroundUrl)
+      .then((response) => {
+        if (active)
+          setBackgroundStatus({
+            url: backgroundUrl,
+            ready: response.ok && !!response.headers.get('content-type')?.startsWith('image/'),
+          });
+      })
+      .catch(() => {
+        if (active) setBackgroundStatus({ url: backgroundUrl, ready: false });
+      });
+    return () => {
+      active = false;
+    };
+  }, [backgroundUrl]);
   const fixture = useMemo(() => getHudEditorFixture('epl-live'), []);
   const radar = useMemo(() => radarSnapshotForProgramFixture('epl-live'), []);
   const supported =
@@ -95,8 +122,21 @@ export function PresetVisualPreview({
       </div>
       {scene === 'gameplay' && (!visuals.hud || !fixture) ? (
         <p>画面配置暂不可预览。</p>
+      ) : scene !== 'gameplay' && backgroundUrl && backgroundStatus?.url !== backgroundUrl ? (
+        <p>正在读取场景背景。</p>
+      ) : scene !== 'gameplay' && backgroundUrl && !backgroundStatus?.ready ? (
+        <p>场景背景不可用，请重新导入或恢复资源。</p>
       ) : !supported ? (
-        <p>此场景暂不支持预览。</p>
+        <p>
+          {visuals.program &&
+          Object.keys(visuals.program.assets).some((name) => name !== 'pulse.background')
+            ? `不支持的场景图片槽：${Object.keys(visuals.program.assets)
+                .filter((name) => name !== 'pulse.background')
+                .join('、')}。`
+            : visuals.program && pulseTokenStyle(visuals.program) === null
+              ? '场景颜色包含不支持的字段或无效颜色，请检查资源。'
+              : '此场景暂不支持预览。'}
+        </p>
       ) : (
         <div className="resource-library__preview-frame" aria-label="示例画面" data-scene={scene}>
           {scene === 'gameplay' ? (
@@ -143,7 +183,7 @@ export function PresetVisualPreview({
                   accent={visuals.hud?.accent}
                   preview
                   shortIntro={false}
-                  previewBackground
+                  previewBackground={!backgroundUrl}
                   reducedMotion={reducedMotion}
                 />
               )}

@@ -8,7 +8,23 @@ it('uses the inspected scheme and module revisions only on an explicit action', 
   const view = {
     modules: [
       { id: 'h', kind: 'hud', name: 'HUD', revision: 'hr' },
-      { id: 'p', kind: 'program', name: 'Pulse', revision: 'pr' },
+      {
+        id: '00000000-0000-4000-8000-000000000002',
+        kind: 'program',
+        schemaVersion: 1,
+        name: 'Pulse',
+        revision: 'pr',
+        origin: null,
+        value: {
+          scenes: Object.fromEntries(
+            ['waiting', 'matchup', 'bp', 'halftime', 'map_result', 'intermap', 'match_result'].map(
+              (id) => [id, { kind: 'builtin', id: 'pulse', apiVersion: 1 }],
+            ),
+          ),
+          tokens: {},
+          assets: {},
+        },
+      },
       { id: 'm', kind: 'music', name: '导入音乐', revision: 'mr' },
     ],
     presets: [
@@ -18,7 +34,7 @@ it('uses the inspected scheme and module revisions only on an explicit action', 
         revision: 'revision',
         bindings: [
           { kind: 'hud', mode: 'use', moduleId: 'h' },
-          { kind: 'program', mode: 'use', moduleId: 'p' },
+          { kind: 'program', mode: 'use', moduleId: '00000000-0000-4000-8000-000000000002' },
           { kind: 'music', mode: 'off' },
           { kind: 'camera', mode: 'off' },
         ],
@@ -27,7 +43,12 @@ it('uses the inspected scheme and module revisions only on an explicit action', 
     active: {
       revision: 'active',
       sourcePreset: { id: 'preset', revision: 'revision' },
-      sourceModuleIds: { hud: 'h', program: 'p', music: null, camera: null },
+      sourceModuleIds: {
+        hud: 'h',
+        program: '00000000-0000-4000-8000-000000000002',
+        music: null,
+        camera: null,
+      },
       sourceModuleRevisions: { hud: 'old', program: 'pr', music: null, camera: null },
       adjusted: false,
     },
@@ -107,14 +128,30 @@ it('uses the inspected scheme and module revisions only on an explicit action', 
 it('exports selected schemes together without using them', async () => {
   const bindings = [
     { kind: 'hud', mode: 'use', moduleId: 'h' },
-    { kind: 'program', mode: 'use', moduleId: 'p' },
+    { kind: 'program', mode: 'use', moduleId: '00000000-0000-4000-8000-000000000002' },
     { kind: 'music', mode: 'off' },
     { kind: 'camera', mode: 'off' },
   ];
   const view = {
     modules: [
       { id: 'h', kind: 'hud', name: 'HUD', revision: 'hr' },
-      { id: 'p', kind: 'program', name: 'Pulse', revision: 'pr' },
+      {
+        id: '00000000-0000-4000-8000-000000000002',
+        kind: 'program',
+        schemaVersion: 1,
+        name: 'Pulse',
+        revision: 'pr',
+        origin: null,
+        value: {
+          scenes: Object.fromEntries(
+            ['waiting', 'matchup', 'bp', 'halftime', 'map_result', 'intermap', 'match_result'].map(
+              (id) => [id, { kind: 'builtin', id: 'pulse', apiVersion: 1 }],
+            ),
+          ),
+          tokens: {},
+          assets: {},
+        },
+      },
     ],
     presets: [
       { id: 'one', name: '标准', revision: 'one-r', bindings },
@@ -196,7 +233,23 @@ it('creates a saved scheme without activating it', async () => {
   const view = {
     modules: [
       { id: 'h', kind: 'hud', name: 'HUD', revision: 'hr' },
-      { id: 'p', kind: 'program', name: 'Pulse', revision: 'pr' },
+      {
+        id: '00000000-0000-4000-8000-000000000002',
+        kind: 'program',
+        schemaVersion: 1,
+        name: 'Pulse',
+        revision: 'pr',
+        origin: null,
+        value: {
+          scenes: Object.fromEntries(
+            ['waiting', 'matchup', 'bp', 'halftime', 'map_result', 'intermap', 'match_result'].map(
+              (id) => [id, { kind: 'builtin', id: 'pulse', apiVersion: 1 }],
+            ),
+          ),
+          tokens: {},
+          assets: {},
+        },
+      },
     ],
     presets: [],
     active: { revision: 'active', sourcePreset: null, adjusted: false },
@@ -224,7 +277,7 @@ it('creates a saved scheme without activating it', async () => {
     act(() => {
       selects[0]!.value = 'h';
       selects[0]!.dispatchEvent(new Event('change', { bubbles: true }));
-      selects[1]!.value = 'p';
+      selects[1]!.value = '00000000-0000-4000-8000-000000000002';
       selects[1]!.dispatchEvent(new Event('change', { bubbles: true }));
     });
     await act(async () => {
@@ -243,7 +296,7 @@ it('creates a saved scheme without activating it', async () => {
         name: '新方案',
         bindings: [
           { kind: 'hud', mode: 'use', moduleId: 'h' },
-          { kind: 'program', mode: 'use', moduleId: 'p' },
+          { kind: 'program', mode: 'use', moduleId: '00000000-0000-4000-8000-000000000002' },
           { kind: 'music', mode: 'off' },
           { kind: 'camera', mode: 'off' },
         ],
