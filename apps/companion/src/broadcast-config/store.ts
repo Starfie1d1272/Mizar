@@ -87,7 +87,7 @@ export class BroadcastConfigStore {
         const document = parseBroadcastConfigDocument(await this.options.createInitial());
         const initial: Envelope = { version: 1, document, receipts: {} };
         if (Buffer.byteLength(JSON.stringify(initial)) > 16 * 1024 * 1024)
-          throw new Error('broadcast_config_too_large');
+          throw new Error('broadcast_config_too_large', { cause: error });
         await replaceDurableJson(this.options.filePath, initial);
         this.envelope = await this.read();
       }
