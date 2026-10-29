@@ -183,7 +183,7 @@ export function CameraModuleEditor({
       >
         添加地图
       </Button>
-      {sources.length === 0 && <p>此资源没有可复用的运镜来源，无法添加地图。</p>}
+      {sources.length === 0 && <p>尚无可复用的运镜来源，请先导入包含镜头来源的运镜资源。</p>}
       <Button variant="primary" disabled={busy} onClick={onSave}>
         保存草稿
       </Button>

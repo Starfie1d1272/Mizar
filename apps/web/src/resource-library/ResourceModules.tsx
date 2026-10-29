@@ -161,14 +161,12 @@ function SceneEditor({
 function ModuleDraftEditor({
   module,
   modules,
-  sources,
   busy,
   save,
   cancel,
 }: {
   module: ModuleRecord<'music'> | ModuleRecord<'camera'>;
   modules: ModuleRecord[];
-  sources: CameraSourceRef[];
   busy: boolean;
   save: (value: ModuleRecord, revision: string) => Promise<boolean>;
   cancel: () => void;
@@ -191,7 +189,6 @@ function ModuleDraftEditor({
           value={draft.value}
           busy={busy}
           availableSources={[
-            ...sources,
             ...modules.flatMap((item) =>
               item.kind === 'camera' ? item.value.maps.map((map) => map.source) : [],
             ),
@@ -286,13 +283,6 @@ export function ResourceModules({
   );
   const [replacement, setReplacement] = useState('');
   const [editing, setEditing] = useState<string | null>(null);
-  const cameraSources = useLocalRead<{ sources: CameraSourceRef[] }>(
-    editing && snapshot?.modules.some((item) => item.id === editing && item.kind === 'camera')
-      ? '/local/v1/orchestration/camera-sources'
-      : null,
-    60000,
-    refresh,
-  );
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{
     tone: 'success' | 'danger' | 'warning';
@@ -774,7 +764,6 @@ export function ResourceModules({
                       key={entry.id}
                       module={entry}
                       modules={snapshot?.modules ?? []}
-                      sources={cameraSources?.sources ?? []}
                       busy={busy}
                       cancel={() => setEditing(null)}
                       save={(value, expectedRevision) =>
