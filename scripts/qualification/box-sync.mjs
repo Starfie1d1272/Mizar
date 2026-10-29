@@ -492,7 +492,7 @@ export class BoxClient {
         } catch (error) {
           if (!error.uploadOutcomeUnknown || error.httpStatus === 401 || error.httpStatus === 403)
             throw error;
-          if (error.uploadTimedOut) recordUploadRecovery();
+          recordUploadRecovery();
           // Reconcile before replay. replace=0 prevents overwriting a late commit;
           // a conflicting file is never replaced.
           let confirmed;
