@@ -142,57 +142,56 @@ export class MulnxTool {
   }
   /** Revalidate old installations against locally available original bytes, without changing selection. */
   private async legacySourceSha256(release: MulnxRelease, sourceName: string): Promise<string> {
-    let archive: string | undefined;
     const sameRelease = (candidate: MulnxRelease) =>
       candidate.id === release.id &&
       candidate.assetId === release.assetId &&
       candidate.tag === release.tag &&
       candidate.sha256 === release.sha256 &&
       candidate.size === release.size;
-    try {
-      const bundled = z
-        .object({ release: releaseSchema })
-        .parse(await readJson(this.bundle, 'release.json'));
-      if (sameRelease(bundled.release)) archive = await safePath(this.bundle, 'MulNX.7z');
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    }
-    if (!archive) {
-      const entries = (await readdir(this.directory)).filter((name) =>
-        new RegExp(`^prepared-${release.sha256}-[a-f0-9-]{36}$`).test(name),
-      );
-      if (entries.length > 128) throw new Error('mulnx_prepared_budget');
-      for (const entry of entries.sort()) {
-        const root = await safePath(join(this.directory, entry));
-        const receipt = z
-          .object({ release: releaseSchema })
-          .parse(await readJson(root, 'receipt.json'));
-        if (sameRelease(receipt.release)) {
-          archive = await safePath(root, 'MulNX.7z');
-          break;
-        }
-      }
-    }
-    if (!archive) throw new Error('mulnx_source_unverified');
-    if (
-      (await lstat(archive)).size !== release.size ||
-      (await fileSha256(archive)) !== release.sha256
-    )
-      throw new Error('mulnx_prepared_integrity');
     const extractor = await safePath(this.bundle, '7zr.exe');
     if ((await fileSha256(extractor)) !== SEVEN_ZIP.sha256)
       throw new Error('mulnx_extractor_integrity');
-    const stage = join(this.directory, `staging-${randomUUID()}`);
-    await mkdir(stage);
-    try {
-      const extracted = await extractMulnx(extractor, archive, join(stage, 'unpacked'));
-      return await cameraSourceTreeSha256(
-        join(extracted.root, 'CS2OBTool/CameraSystem/CamPacks', sourceName),
-      );
-    } finally {
-      await rm(stage, { recursive: true, force: true });
+    const entries = (await readdir(this.directory)).filter((name) =>
+      new RegExp(`^prepared-${release.sha256}-[a-f0-9-]{36}$`).test(name),
+    );
+    if (entries.length > 128) throw new Error('mulnx_prepared_budget');
+    const candidates = [
+      { root: this.bundle, receipt: 'release.json' },
+      ...entries
+        .sort()
+        .map((entry) => ({ root: join(this.directory, entry), receipt: 'receipt.json' })),
+    ];
+    let failure: Error | undefined;
+    for (const candidate of candidates) {
+      try {
+        const root = await safePath(candidate.root);
+        const receipt = z
+          .object({ release: releaseSchema })
+          .parse(await readJson(root, candidate.receipt));
+        if (!sameRelease(receipt.release)) continue;
+        const archive = await safePath(root, 'MulNX.7z');
+        if (
+          (await lstat(archive)).size !== release.size ||
+          (await fileSha256(archive)) !== release.sha256
+        )
+          throw new Error('mulnx_prepared_integrity');
+        const stage = join(this.directory, `staging-${randomUUID()}`);
+        await mkdir(stage);
+        try {
+          const extracted = await extractMulnx(extractor, archive, join(stage, 'unpacked'));
+          return await cameraSourceTreeSha256(
+            join(extracted.root, 'CS2OBTool/CameraSystem/CamPacks', sourceName),
+          );
+        } finally {
+          await rm(stage, { recursive: true, force: true });
+        }
+      } catch (error) {
+        failure = error instanceof Error ? error : new Error('mulnx_source_unverified');
+      }
     }
+    throw failure ?? new Error('mulnx_source_unverified');
   }
+
   /** Resolve content against the selected instance, independent of its acquisition. */
   private async resolveCamera(
     source: CameraSourceRef,

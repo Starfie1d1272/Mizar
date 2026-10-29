@@ -102,6 +102,12 @@ it('prepares without selecting and publishes a configured instance only after se
   const legacyReceipt = JSON.parse(originalReceipt) as { packs: { treeSha256?: string }[] };
   delete legacyReceipt.packs[0]!.treeSha256;
   await writeFile(join(data, 'current.json'), JSON.stringify(legacyReceipt));
+  // A broken bundled copy and an invalid earlier receipt must not mask the valid prepared copy.
+  await writeFile(join(bundle, 'release.json'), JSON.stringify({ release }));
+  await writeFile(join(bundle, 'MulNX.7z'), 'bad');
+  const invalid = join(data, `prepared-${release.sha256}-00000000-0000-4000-8000-000000000000`);
+  await mkdir(invalid);
+  await writeFile(join(invalid, 'receipt.json'), '{invalid');
   const legacy = new MulnxTool(data, bundle);
   await legacy.load();
   const legacyResolver = new CameraConfigResolver(legacy, {} as MusicStore, () =>
