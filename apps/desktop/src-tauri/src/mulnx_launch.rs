@@ -430,6 +430,9 @@ pub fn stop_managed_for_exit(cs2: &managed_cs2::ManagedCs2, log: &DesktopLog) ->
     verify_managed_launch(log, &cs2.mulnx_handoff_status()?, game.pid, game.created, &executable)?;
     let game = controlled_game(cs2, log)?;
     let identity = crate::mulnx_stop::Identity { pid: game.pid, created: game.created, executable };
+    if crate::mulnx_stop::confirmed(log, &identity)? {
+        return crate::mulnx_stop::verify_absent(&game);
+    }
     if crate::mulnx_stop::blocked(log, &identity)? { return Err("MulNX 停止结果仍未知，请检查游戏后重试。".into()); }
     verify_gateway_owner(log, 55202, game.pid)?;
     let proof = crate::mulnx_stop::UnloadProof::open(game.pid)?;
@@ -450,6 +453,7 @@ pub fn stop_managed_for_exit(cs2: &managed_cs2::ManagedCs2, log: &DesktopLog) ->
     })?;
     log.event("mulnx_stop", "submitted", Some(&result.to_string()));
     proof.confirm(&game)?;
+    crate::mulnx_stop::mark_confirmed(log, &identity)?;
     log.event("mulnx_unload", "confirmed", Some(&format!("pid={} created={}", game.pid, game.created)));
     Ok(())
 }

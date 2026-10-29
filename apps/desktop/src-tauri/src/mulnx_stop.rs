@@ -38,6 +38,12 @@ impl UnloadProof {
         if unsafe { WaitForSingleObject(self.0.0, 10000) } != 0 {
             return Err("MulNX 卸载完成未确认，请保留游戏并检查后重试。".into());
         }
+        verify_absent(game)
+    }
+}
+
+/// Recheck the same live process on every retry, including after a restart.
+pub fn verify_absent(game: &crate::managed_cs2::WorkspaceProcess) -> Result<(), String> {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
             if !game.is_running() { return Err("游戏已退出，MulNX 卸载结果无法单独确认。".into()); }
@@ -59,7 +65,6 @@ impl UnloadProof {
             if std::time::Instant::now() >= deadline { return Err("MulNX 模块仍在游戏中，卸载结果未知。".into()); }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
-    }
 }
 
 #[derive(Clone)]
@@ -85,12 +90,27 @@ pub fn blocked(log: &DesktopLog, game: &Identity) -> Result<bool, String> {
     }
     let bytes = fs::read(&path).map_err(|error| cs2_session::io_error("停止控制记录无法读取；不要重复发送，请导出诊断。", &error))?;
     let record: Value = serde_json::from_slice(&bytes).map_err(|_| "停止控制记录不完整；不要重复发送，请导出诊断。")?;
-    if record["version"] != 1 || record["phase"] != "possibly-sent"
+    if record["version"] != 1 || !["possibly-sent", "confirmed"].contains(&record["phase"].as_str().unwrap_or(""))
         || record["pid"].as_u64() != Some(game.pid as u64) || record["created"].as_u64() != Some(game.created)
         || !record["executable"].as_str().is_some_and(|value| value.eq_ignore_ascii_case(&game.executable.to_string_lossy())) {
         return Err("停止控制记录与游戏身份不一致；不要重复发送，请导出诊断。".into());
     }
     Ok(true)
+}
+
+/// A confirmed record is useful only while the exact game identity still matches.
+pub fn confirmed(log: &DesktopLog, game: &Identity) -> Result<bool, String> {
+    if !blocked(log, game)? { return Ok(false); }
+    let bytes = fs::read(path(log, game)).map_err(|e| cs2_session::io_error("停止控制记录无法读取。", &e))?;
+    let record: Value = serde_json::from_slice(&bytes).map_err(|_| "停止控制记录不完整。")?;
+    Ok(record["phase"] == "confirmed")
+}
+pub fn mark_confirmed(log: &DesktopLog, game: &Identity) -> Result<(), String> {
+    if !blocked(log, game)? { return Err("停止控制记录缺失。".into()); }
+    let record = json!({"version":1,"phase":"confirmed", "pid":game.pid,
+        "created":game.created,"executable":game.executable});
+    let bytes = serde_json::to_vec(&record).map_err(|_| "卸载确认记录无法保存。")?;
+    cs2_session::atomic_write(&path(log, game), &bytes)
 }
 
 pub fn uncertain(guard: &str) -> Value {
@@ -163,6 +183,18 @@ pub fn submit<T>(log: &DesktopLog, game: &Identity,
                 assert!(blocked(&restarted, game).unwrap()); // A new instance never removes the old reservation.
             });
         }
+    }
+    #[test] fn confirmation_is_persisted_for_the_same_process_and_never_rearms_stop() {
+        fixture(|log, game| {
+            reserve(log, game).unwrap();
+            assert!(!confirmed(log, game).unwrap());
+            mark_confirmed(log, game).unwrap();
+            assert!(confirmed(log, game).unwrap());
+            assert!(blocked(log, game).unwrap());
+            let wrong = Identity { executable: PathBuf::from(r"C:\other\cs2.exe"), ..game.clone() };
+            assert!(confirmed(log, &wrong).is_err());
+            assert_eq!(submit(log, game, || panic!("already confirmed"), |()| panic!("duplicate stop")).unwrap()["stopGuard"], "already-submitted");
+        });
     }
     #[test] fn preflight_and_storage_failures_do_not_send() {
         fixture(|log, game| {
