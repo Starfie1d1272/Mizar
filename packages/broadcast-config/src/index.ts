@@ -1,3 +1,4 @@
+import { canonicalJson } from '@mizar/hud-config';
 import type {
   HudLayout,
   HudPreset,
@@ -170,4 +171,116 @@ export interface ClonePresetRequest {
   expectedRevision: Revision;
   expectedModuleRevisions: Partial<Record<ModuleKind, Revision>>;
   name: string;
+}
+
+/** Validate the complete binding graph before cloning or using a preset. */
+export function boundModules(
+  preset: BroadcastPreset,
+  modules: readonly ModuleRecord[],
+): Map<ModuleKind, ModuleRecord | null> {
+  const result = new Map<ModuleKind, ModuleRecord | null>();
+  for (const binding of preset.bindings) {
+    if (result.has(binding.kind)) throw new Error('duplicate_module_kind');
+    if (binding.mode === 'off') {
+      if (binding.kind === 'hud' || binding.kind === 'program')
+        throw new Error('required_module_off');
+      result.set(binding.kind, null);
+    } else {
+      const matches = modules.filter((module) => module.id === binding.moduleId);
+      if (matches.length !== 1 || matches[0]!.kind !== binding.kind)
+        throw new Error('module_missing');
+      result.set(binding.kind, matches[0]!);
+    }
+  }
+  if (MODULE_KINDS.some((kind) => !result.has(kind))) throw new Error('incomplete_preset');
+  return result;
+}
+
+function checkRevisions(
+  preset: BroadcastPreset,
+  modules: Map<ModuleKind, ModuleRecord | null>,
+  revision: Revision,
+  expected: Partial<Record<ModuleKind, Revision>>,
+) {
+  if (preset.revision !== revision) throw new Error('revision_conflict');
+  for (const [kind, module] of modules) {
+    if (module && expected[kind] !== module.revision) throw new Error('revision_conflict');
+  }
+}
+
+/** Copies editable modules and rewrites internal HUD resource IDs; immutable assets stay referenced. */
+export function clonePreset(
+  document: BroadcastConfigDocument,
+  request: ClonePresetRequest,
+  newId: () => string,
+): { preset: BroadcastPreset; modules: ModuleRecord[] } {
+  const source = document.presets.find((preset) => preset.id === request.sourceId);
+  if (!source) throw new Error('preset_missing');
+  const bound = boundModules(source, document.modules);
+  checkRevisions(source, bound, request.expectedRevision, request.expectedModuleRevisions);
+  const copies: ModuleRecord[] = [];
+  const bindings: ModuleBinding[] = source.bindings.map((binding) => {
+    if (binding.mode === 'off') return { ...binding };
+    const module = structuredClone(bound.get(binding.kind)!);
+    if (!module) throw new Error('module_missing');
+    module.id = newId();
+    module.revision = newId();
+    if (module.kind === 'hud' && 'preset' in module.value) {
+      const { preset, layout, theme } = module.value;
+      layout.id = newId();
+      theme.id = newId();
+      preset.id = newId();
+      preset.layoutId = layout.id;
+      preset.themeId = theme.id;
+    }
+    copies.push(module);
+    return { kind: binding.kind, mode: 'use', moduleId: module.id };
+  });
+  return {
+    preset: {
+      ...structuredClone(source),
+      id: newId(),
+      revision: newId(),
+      name: request.name,
+      bindings,
+    },
+    modules: copies,
+  };
+}
+
+/** A resolver runs before committing and must not issue playback or device commands. */
+export interface PresetResolver {
+  resolve(
+    modules: ReadonlyMap<ModuleKind, ModuleRecord | null>,
+  ): Promise<Pick<ActiveBroadcastSnapshot, 'resolved' | 'lock'>>;
+}
+
+/** Prepare a candidate without mutating the document or any external device. */
+export async function preparePreset(
+  document: BroadcastConfigDocument,
+  request: ApplyPresetRequest,
+  resolver: PresetResolver,
+  newRevision: () => Revision,
+): Promise<ActiveBroadcastSnapshot> {
+  const preset = document.presets.find((item) => item.id === request.presetId);
+  if (!preset) throw new Error('preset_missing');
+  if (document.active.revision !== request.expectedActiveRevision)
+    throw new Error('revision_conflict');
+  const modules = boundModules(preset, document.modules);
+  checkRevisions(preset, modules, request.expectedRevision, request.expectedModuleRevisions);
+  const prepared = await resolver.resolve(modules);
+  const moduleRevisions = { ...document.active.moduleRevisions };
+  for (const kind of MODULE_KINDS) {
+    if (canonicalJson(prepared.resolved[kind]) !== canonicalJson(document.active.resolved[kind]))
+      moduleRevisions[kind] = newRevision();
+  }
+  return {
+    schemaVersion: 1,
+    revision: newRevision(),
+    sourcePreset: { id: preset.id, revision: preset.revision },
+    adjusted: false,
+    moduleRevisions,
+    resolved: structuredClone(prepared.resolved),
+    lock: structuredClone(prepared.lock),
+  };
 }
