@@ -64,7 +64,7 @@ it('keeps the typed snapshot input consistent with assist schema 4', () => {
   expect(assistSnapshotSchema.parse({ ...input, channelSeq: 1 }).schemaVersion).toBe(4);
 });
 
-it('accepts restricted commands in either order and round-trips the password-first formatter', () => {
+it('accepts restricted commands in either order and round-trips the formatter', () => {
   const expected = {
     earlyEndpoint: '127.0.0.1:27025',
     programEndpoint: '127.0.0.1:27026',
@@ -75,6 +75,10 @@ it('accepts restricted commands in either order and round-trips the password-fir
     ' PASSWORD " a b " ; CoNnEcT 127.0.0.1:27025;',
   ])
     expect(parseObserverConnection(input)).toEqual(expected);
+  expect(formatObserverConnection(expected)).toBe('connect 127.0.0.1:27026;password " a b "');
+  expect(formatObserverConnection({ ...expected, password: 'synthetic' })).toBe(
+    'connect 127.0.0.1:27026;password synthetic',
+  );
   expect(parseObserverConnection(formatObserverConnection(expected))).toEqual(expected);
   const custom = {
     ...expected,
@@ -137,5 +141,5 @@ it('preserves canonical IPv4 with single zero octets without rewriting addresses
     earlyEndpoint: '0.0.0.0:27025',
     programEndpoint: '0.0.0.0:27026',
   });
-  expect(formatObserverConnection(connection)).toBe('password ""; connect 127.0.0.1:27026');
+  expect(formatObserverConnection(connection)).toBe('connect 127.0.0.1:27026;password ""');
 });

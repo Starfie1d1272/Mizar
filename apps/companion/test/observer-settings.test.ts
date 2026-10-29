@@ -177,7 +177,7 @@ it('confirms a map with the saved private connection and keeps retries idempoten
     const copied = await copy('http://127.0.0.1:3000', revision);
     expect(copied.headers['cache-control']).toBe('no-store');
     expect(copied.json<{ command: string }>().command).toBe(
-      'password "synthetic"; connect 127.0.0.1:27026',
+      'connect 127.0.0.1:27026;password synthetic',
     );
     expect(JSON.stringify((await app.inject('/local/v1/observer-assist')).json())).not.toContain(
       'synthetic',
