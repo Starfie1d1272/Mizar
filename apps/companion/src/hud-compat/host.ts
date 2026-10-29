@@ -69,7 +69,7 @@ export async function startLhmHost(options: {
         unsupported: [
           'tournament',
           'external-logos-and-avatars',
-          'multi-layer-maps',
+          'multi-layer-maps-derived-fallback',
           ...(maps.has(program.map.name ?? '') ? [] : ['current-map']),
           ...(context ? [] : ['current-match']),
           'panel-image-import',
@@ -90,17 +90,7 @@ export async function startLhmHost(options: {
           lhmId: name,
           name,
           game: 'cs2',
-          radars: [
-            {
-              lhmId: 'default',
-              originX: map.config.origin.x,
-              originY: map.config.origin.y,
-              pxPerUX: map.config.pxPerUX,
-              pxPerUY: map.config.pxPerUY,
-              visibleUnderHeight: null,
-              visibleOverHeight: null,
-            },
-          ],
+          radars: map.radars,
         })),
       );
       return;
@@ -108,10 +98,12 @@ export async function startLhmHost(options: {
     if (url.pathname === '/api/radar/maps') {
       json(
         Object.fromEntries(
-          [...maps].map(([name, map]) => [
-            name,
-            { config: map.config, file: `/api/game-maps/cs2/image/${name}/radar` },
-          ]),
+          [...maps]
+            .filter(([, map]) => map.config !== null)
+            .map(([name, map]) => [
+              name,
+              { config: map.config, file: `/api/game-maps/cs2/image/${name}/radar` },
+            ]),
         ),
       );
       return;
@@ -123,7 +115,7 @@ export async function startLhmHost(options: {
         res.writeHead(404).end();
         return;
       }
-      res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Content-Type', map.mime);
       res.end(map.bytes);
       return;
     }

@@ -139,7 +139,15 @@ it('registers and re-registers the instance with current config and projection',
     expect(Buffer.from(await mapImage.arrayBuffer())).toEqual(bytes);
     const maps = (await (await fetch(`http://127.0.0.1:${port}/api/game-maps/cs2`)).json()) as {
       lhmId: string;
-      radars: { originX: number; originY: number; pxPerUX: number; pxPerUY: number }[];
+      radars: {
+        lhmId: string;
+        originX: number;
+        originY: number;
+        pxPerUX: number;
+        pxPerUY: number;
+        visibleUnderHeight: number | null;
+        visibleOverHeight: number | null;
+      }[];
     }[];
     expect(maps.find((map) => map.lhmId === 'de_ancient')?.radars[0]).toMatchObject({
       originX: 590.6,
@@ -147,8 +155,18 @@ it('registers and re-registers the instance with current config and projection',
       pxPerUX: 0.2,
       pxPerUY: -0.2,
     });
+    const nukeImage = await fetch(`http://127.0.0.1:${port}/api/game-maps/cs2/image/de_nuke/radar`);
+    expect(nukeImage.headers.get('content-type')).toBe('image/svg+xml');
+    expect((await nukeImage.text()).match(/<image /g)).toHaveLength(2);
+    const nuke = maps.find((map) => map.lhmId === 'de_nuke')!;
+    const layers = nuke.radars;
+    expect(layers).toHaveLength(2);
+    expect(layers[0]!.originX).toBeCloseTo(256 + 3453 / 14);
+    expect(layers[1]!.originY - layers[0]!.originY).toBe(512);
+    expect(layers[0]!.visibleUnderHeight!).toBeLessThan(-495);
+    expect(layers[1]!.visibleOverHeight).toBe(-495);
     expect(
-      (await fetch(`http://127.0.0.1:${port}/api/game-maps/cs2/image/de_nuke/radar`)).status,
+      (await fetch(`http://127.0.0.1:${port}/api/game-maps/cs2/image/de_unknown/radar`)).status,
     ).toBe(404);
   } finally {
     socket.disconnect();
