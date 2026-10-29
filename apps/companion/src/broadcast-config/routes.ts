@@ -78,8 +78,7 @@ export function registerBroadcastConfigRoutes(
     originPolicy.mode === 'loopback' && checkLocalWebOrigin(originPolicy, origin).allowed;
   app.get('/local/v1/broadcast-display-config', (_request, reply) => {
     if (!isReady()) return reply.code(503).send({ error: 'broadcast_config_unavailable' });
-    if (!displayAvailable())
-      return reply.code(503).send({ error: 'program_dependency_unavailable' });
+    if (!displayAvailable()) reply.header('x-mizar-program-status', 'dependency_missing');
     return reply.header('cache-control', 'no-store').send(displayConfig(store.snapshot.active));
   });
   app.get('/local/v1/broadcast-presets', (request, reply) => {

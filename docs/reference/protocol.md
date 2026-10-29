@@ -188,7 +188,7 @@ WebSocket 子协议为 `mizar.local.v1`，路由为 `/local/v1/{channel}`。
 
 `GET /local/v1/broadcast-modules` 返回 `{ modules: [{ module, builtin, availability }] }`；`availability` 为 `{ state: 'ready' }` 或 `{ state: 'dependency_missing', reason }`，提交使用时仍重新验证。本机操作 `POST /operator/broadcast-modules/save` 接受 `{ value, expectedRevision }`，`clone` 接受 `{ moduleId, expectedRevision, name }`，`apply` 接受 `{ moduleId, expectedRevision, expectedActiveRevision, requestId }`。`delete` 接受 `{ moduleId, expectedRevision, replacement? }`；存在方案引用时，replacement 为 `{ moduleId, expectedPresetRevisions }`，其中音乐或运镜可以用 null 关闭，HUD 和节目必须选同类替代。当前活动模块必须先替换。`POST /operator/broadcast-presets/delete` 接受 `{ presetId, expectedRevision }`，不删除模块。五套内置 HUD 和 Pulse 在服务端禁止更改和删除，复制后的模块独立编辑。
 
-Pulse 场景仅支持 `pulse.background` 图片槽，不支持其他素材槽或自定义 token；使用含不支持内容的场景返回 422 `capability_unsupported`。已活动场景素材损坏时，保留原活动快照和引用锁，迁移状态报告 `program_dependency_unavailable`，显示配置端点返回同名 503；模块目录和独立 HUD 操作仍可用。修复素材或编辑场景后需显式使用场景，重新验证后恢复显示。
+Pulse 场景仅支持 `pulse.background` 图片槽，不支持其他素材槽或自定义 token；使用含不支持内容的场景返回 422 `capability_unsupported`。已活动场景素材损坏时，保留原活动快照和引用锁，迁移状态报告 `program_dependency_unavailable`；显示配置仍返回真实快照供 HUD 使用，并通过响应头 `X-Mizar-Program-Status: dependency_missing` 标明场景不可用，页面须据此显示错误而非呈现替代场景。模块目录和独立 HUD 操作仍可用。修复素材或编辑场景后需显式使用场景，重新验证后恢复显示。
 
 资源释放检查包含草稿、活动及上一个活动快照，以及持久化使用回执所引用的资源。即使随后切换并删除了原模块，对同一 `requestId` 的合法重试仍返回原回执，不重新切换活动配置。
 

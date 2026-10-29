@@ -625,7 +625,9 @@ it('rejects unknown image slots and keeps the service usable after the active im
       ({ module }) => module.kind === 'program' && module.name === 'Scene',
     )!;
     expect(scene.availability.state).toBe('dependency_missing');
-    expect((await fetch(`${base}/local/v1/broadcast-display-config`)).status).toBe(503);
+    const display = await fetch(`${base}/local/v1/broadcast-display-config`);
+    expect(display.status).toBe(200);
+    expect(display.headers.get('x-mizar-program-status')).toBe('dependency_missing');
     const before = (await (
       await fetch(`${base}/local/v1/broadcast-presets`)
     ).json()) as BroadcastConfigDocument;
