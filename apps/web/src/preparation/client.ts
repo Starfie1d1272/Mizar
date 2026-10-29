@@ -51,6 +51,32 @@ export async function command(path: string, body: unknown = {}, task?: ControlTa
   if (!response.ok) throw new Error(result.message ?? '操作未完成，请刷新后重试。');
   return result;
 }
+export async function enterDemoTest(
+  requestId: string,
+  task?: ControlTask,
+  isCurrent: () => boolean = () => true,
+): Promise<boolean> {
+  const location = window.location.href;
+  const current = () => isCurrent() && window.location.href === location;
+  if (!current()) return false;
+  const camera = await desktopInvoke<boolean>('enter_demo_test', { requestId }, task);
+  if (!current()) return false;
+  if (camera) {
+    const response = await fetch('/local/v1/demo-test', {
+      headers: task?.headers() ?? {},
+      cache: 'no-store',
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) throw new Error('试播状态未确认，请重试。');
+    const trial = (await response.json()) as DemoTestView;
+    if (!current() || !trial.active || trial.phase !== 'playing' || trial.requestId !== requestId)
+      return false;
+    await command('/operator/orchestration', { action: 'connect' }, task);
+    if (!current()) return false;
+  }
+  return true;
+}
+
 export type Tool = 'hud' | 'bp' | 'diagnostics';
 const toolPaths = {
   hud: '/operator/hud',
@@ -173,6 +199,7 @@ async function performProductionAction(
   task: ControlTask,
   external?: ExternalGameIdentity,
 ) {
+  const entryLocation = window.location.href;
   controlEvidence('production_action', 'dispatch', {
     taskId: task.taskId,
     trigger: task.trigger,
@@ -199,12 +226,23 @@ async function performProductionAction(
       if (external) throw new Error('请先结束 Demo 试播，再选择外部游戏。');
       if (action === 'finish')
         await desktopInvoke('finish_demo_test', { requestId: trial.requestId }, task);
-      else await desktopInvoke('enter_demo_test', { requestId: trial.requestId }, task);
+      else {
+        if (!trial.requestId) throw new Error('试播状态未确认，请刷新后重试。');
+        if (
+          !(await enterDemoTest(
+            trial.requestId,
+            task,
+            () => window.location.href === entryLocation,
+          ))
+        ) {
+          task.finish('cancelled', { reason: 'demo_entry_changed' });
+          return;
+        }
+      }
       task.finish('confirmed', { confirmation: 'host_demo_command_ack', trial });
       return;
     }
   }
-  const entryLocation = window.location.href;
   if (action === 'enter' && !(await checkObsBeforeLaunch(false, task))) {
     task.finish('blocked', { reason: 'preflight_requires_attention' });
     return;

@@ -1159,6 +1159,15 @@ async fn start_demo_test(
 }
 
 #[tauri::command]
+async fn resume_demo_test(window: tauri::WebviewWindow, app: tauri::AppHandle, request_id: String) -> Result<serde_json::Value, String> {
+    demo_main_window(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let log = app.state::<DesktopLog>();
+        mulnx_launch::resume_demo(&app, &log, &request_id)
+    }).await.map_err(|_| "Demo 启动状态未能确认。".to_string())?
+}
+
+#[tauri::command]
 async fn enter_demo_test(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
@@ -1178,6 +1187,8 @@ async fn enter_demo_test(
     tauri::async_runtime::spawn_blocking({ let command_log = command_log.clone(); let native_operation_id = native_operation_id.clone(); let native_task_id = native_task_id.clone(); let native_trigger = native_trigger.clone(); move || {
         command_log.with_task(native_task_id.as_deref(), native_operation_id.as_deref(), native_trigger.as_deref(), || {
         let managed = host.state::<Mutex<managed_cs2::ManagedCs2>>();
+        let log = host.state::<DesktopLog>();
+        mulnx_launch::resume_demo(&host, &log, &request_id)?;
         let mut cs2 = managed.lock().map_err(|error| command_log.preserve_error("enter_demo_test", native_operation_id.as_deref(), &error, "CS2 配置状态不可用。"))?;
         host.state::<production_exit::ExitGate>().check()?;
         host.state::<updates::PendingUpdate>().check()?;
@@ -2374,6 +2385,7 @@ fn run_desktop(
             select_demo_file,
             start_demo_test,
             enter_demo_test,
+            resume_demo_test,
             finish_demo_test,
             restore_cs2_backup,
             open_cs2_backup,

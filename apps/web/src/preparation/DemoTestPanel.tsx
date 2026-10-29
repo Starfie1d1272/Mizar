@@ -4,7 +4,7 @@ import { getBuiltinPresets } from '@mizar/hud-config';
 import { Button, Field, Panel, Select, StatusBanner } from '../ui';
 import { desktopInvoke } from '../workspace/client';
 import { mutateHudConfig, useHudConfigEditorClient } from '../realtime/hud-config-client';
-import { checkObsBeforeLaunch, command, useLocalRead } from './client';
+import { checkObsBeforeLaunch, enterDemoTest, useLocalRead } from './client';
 import { useCs2Status } from './cs2-status';
 import type { DemoTestView, SelectedDemo } from './demo-test';
 
@@ -79,10 +79,44 @@ export function DemoTestPanel({ forceExpanded = false }: { forceExpanded?: boole
     !teamAName.trim() ||
     !teamBName.trim();
 
-  const enter = useCallback(async (requestId: string) => {
-    const camera = await desktopInvoke<boolean>('enter_demo_test', { requestId });
-    if (camera) await command('/operator/orchestration', { action: 'connect' });
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
   }, []);
+  const enter = useCallback(
+    (requestId: string) => enterDemoTest(requestId, undefined, () => mounted.current),
+    [],
+  );
+
+  useEffect(() => {
+    const requestId = trial?.requestId;
+    if (
+      !desktop ||
+      trial?.phase !== 'starting' ||
+      !requestId ||
+      !game?.mulnxLaunchResumable ||
+      game.running
+    )
+      return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const resume = async () => {
+      try {
+        await desktopInvoke('resume_demo_test', { requestId });
+      } catch {
+        /* The game may still be starting. */
+      }
+      if (active) timer = setTimeout(() => void resume(), 5000);
+    };
+    void resume();
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [desktop, trial?.phase, trial?.requestId, game?.mulnxLaunchResumable, game?.running]);
 
   // Native verifies ownership again. A PID snapshot does not authorize playback.
   useEffect(() => {

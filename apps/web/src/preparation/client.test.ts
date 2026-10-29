@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { registerObserverPreparation } from './observer-preparation';
-import { productionAction, type Production } from './client';
+import { enterDemoTest, productionAction, type Production } from './client';
 
 interface RecordedControl {
   operation: string;
@@ -35,7 +35,15 @@ afterEach(() => {
 
 function setup(
   failure?:
-    'launch' | 'mulnx' | 'production' | 'restore' | 'presentation' | 'network' | 'trial' | 'assist',
+    | 'launch'
+    | 'mulnx'
+    | 'production'
+    | 'restore'
+    | 'presentation'
+    | 'network'
+    | 'trial'
+    | 'assist'
+    | 'demo',
   actualMode = 'preparation',
   newlyStarted = true,
   running = true,
@@ -66,19 +74,21 @@ function setup(
     if (failure === 'presentation' && command === 'present_production')
       return Promise.reject(new Error('窗口未打开'));
     return Promise.resolve(
-      command === 'gsi_status'
-        ? { installed: true, conflict: false }
-        : command === 'cs2_config_status'
-          ? (gameStates.shift() ?? {
-              running,
-              pending: true,
-              phase: running ? 'running' : 'uncertain',
-            })
-          : command === 'launch_mulnx'
-            ? { pid: 42, created: '134000000000000000' }
-            : command === 'start_managed_cs2'
-              ? newlyStarted
-              : undefined,
+      command === 'enter_demo_test' && failure === 'demo'
+        ? true
+        : command === 'gsi_status'
+          ? { installed: true, conflict: false }
+          : command === 'cs2_config_status'
+            ? (gameStates.shift() ?? {
+                running,
+                pending: true,
+                phase: running ? 'running' : 'uncertain',
+              })
+            : command === 'launch_mulnx'
+              ? { pid: 42, created: '134000000000000000' }
+              : command === 'start_managed_cs2'
+                ? newlyStarted
+                : undefined,
     );
   });
   window.__TAURI_INTERNALS__ = {
@@ -106,7 +116,13 @@ function setup(
         );
       if (path === '/local/v1/demo-test')
         return Promise.resolve(
-          new Response(JSON.stringify({ active: failure === 'trial', phase: 'idle' })),
+          new Response(
+            JSON.stringify(
+              failure === 'demo'
+                ? { active: true, phase: 'playing', requestId: 'trial-id' }
+                : { active: failure === 'trial', phase: 'idle' },
+            ),
+          ),
         );
       if (path === '/local/v1/production')
         return Promise.resolve(new Response(JSON.stringify({ ...preparation, mode: actualMode })));
@@ -206,6 +222,28 @@ describe('managed CS2 production entry and cleanup', () => {
       calls.indexOf('/operator/production'),
     );
     expect(calls.indexOf('/operator/production')).toBeLessThan(calls.indexOf('present_production'));
+  });
+  it('connects the camera when entering a Demo from the common production action', async () => {
+    const calls = setup('demo');
+    await productionAction('enter', preparation);
+    expect(calls).toContain('enter_demo_test');
+    expect(calls).toContain('/operator/orchestration');
+    expect(calls.indexOf('enter_demo_test')).toBeLessThan(calls.indexOf('/operator/orchestration'));
+  });
+  it('does not connect if the Demo entry intent was cancelled', async () => {
+    const calls = setup('demo');
+    let current = true;
+    const invoke = window.__TAURI_INTERNALS__!.invoke.bind(window.__TAURI_INTERNALS__);
+    window.__TAURI_INTERNALS__!.invoke = async <T>(
+      name: string,
+      args?: Record<string, unknown>,
+    ) => {
+      const result = await invoke<T>(name, args);
+      if (name === 'enter_demo_test') current = false;
+      return result;
+    };
+    expect(await enterDemoTest('trial-id', undefined, () => current)).toBe(false);
+    expect(calls).not.toContain('/operator/orchestration');
   });
   it('does not redirect an explicit external selection into an existing Demo session', async () => {
     const calls = setup('trial');

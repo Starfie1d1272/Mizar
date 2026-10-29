@@ -112,7 +112,15 @@ pub fn resume(app: &tauri::AppHandle, log: &DesktopLog) -> Result<Value, String>
     app.state::<production_exit::ExitGate>().check()?;
     app.state::<updates::PendingUpdate>().check()?;
     let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
-    Ok(resume_pending_launch(log, &managed)?.unwrap_or_else(|| json!({"result":"not-found"})))
+    Ok(resume_pending_launch(log, &managed, None)?.unwrap_or_else(|| json!({"result":"not-found"})))
+}
+
+pub fn resume_demo(app: &tauri::AppHandle, log: &DesktopLog, request_id: &str) -> Result<Value, String> {
+    let _launch = demo_launch_guard()?;
+    app.state::<production_exit::ExitGate>().check()?;
+    app.state::<updates::PendingUpdate>().check()?;
+    let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+    Ok(resume_pending_launch(log, &managed, Some(request_id))?.unwrap_or_else(|| json!({"result":"not-found"})))
 }
 
 pub fn update(app: &tauri::AppHandle, log: &DesktopLog) -> Result<Value, String> {
@@ -142,7 +150,7 @@ fn launch_operation(app: &tauri::AppHandle, log: &DesktopLog, automatic: bool, u
     };
     if !automatic { no_game()?; }
     if automatic && demo.is_none() {
-        if let Some(receipt) = resume_pending_launch(log, &managed)? { return Ok(receipt); }
+        if let Some(receipt) = resume_pending_launch(log, &managed, None)? { return Ok(receipt); }
     }
     let status = managed.try_lock().map_err(|_| "CS2 正忙，请稍后重试。")?.status()?;
     if preserve && status["canPreserve"] != true {
@@ -298,7 +306,7 @@ fn launch_operation(app: &tauri::AppHandle, log: &DesktopLog, automatic: bool, u
 
 /// Resume only a submitted request whose launcher is still owned by this Host.
 /// Never submit a second request or adopt a process after Host restart.
-fn resume_pending_launch(log: &DesktopLog, managed: &Mutex<managed_cs2::ManagedCs2>) -> Result<Option<Value>, String> {
+fn resume_pending_launch(log: &DesktopLog, managed: &Mutex<managed_cs2::ManagedCs2>, demo_id: Option<&str>) -> Result<Option<Value>, String> {
     let results = log.state_root.join("data/mulnx-launch");
     let pending = results.join("pending.json");
     let bytes = match std::fs::read(&pending) {
@@ -312,6 +320,13 @@ fn resume_pending_launch(log: &DesktopLog, managed: &Mutex<managed_cs2::ManagedC
         .ok_or("无法确认启动器，请恢复设置。")? as u32;
     let executable = PathBuf::from(record["executable"].as_str().ok_or("无法确认游戏位置，请恢复设置。")?);
     let cs2 = managed.try_lock().map_err(|_| "CS2 正忙，请稍后重试。")?;
+    if let Some(id) = demo_id {
+        let trial = crate::demo_test::status(log)?;
+        if trial["active"] != true || trial["phase"] != "starting"
+            || trial["requestId"].as_str() != Some(id) || !cs2.matches_pending_demo(id)? {
+            return Err("Demo 试播状态已变化，请刷新后重试。".into());
+        }
+    }
     if !cs2.owns_mulnx_launcher(pid)? { return Err("无法确认本次启动，请关闭游戏和 MulNX 后恢复设置。".into()); }
     verify_gateway_owner(log, 55203, pid)?;
     let actual = cs2.mulnx_handoff_status()?;

@@ -1173,6 +1173,10 @@ impl ManagedCs2 {
             .load()?
             .is_some_and(|v| v["launchAttempted"] == true))
     }
+    pub(crate) fn matches_pending_demo(&self, request_id: &str) -> Result<bool, String> {
+        Ok(self.store.load()?.is_some_and(|v| v["demoTestRequestId"].as_str() == Some(request_id)
+            && v["mulnxLaunch"] == true && v["launchAttempted"] == true))
+    }
     pub fn has_demo_journal(&self) -> Result<bool, String> {
         Ok(self
             .store

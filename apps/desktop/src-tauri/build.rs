@@ -28,6 +28,7 @@ fn main() {
             "select_demo_file",
             "start_demo_test",
             "enter_demo_test",
+            "resume_demo_test",
             "finish_demo_test",
             "restore_cs2_backup",
             "open_cs2_backup",
