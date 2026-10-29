@@ -570,6 +570,27 @@ it('hands a freeze shot to a fresh tactical pause after clear ACK without claimi
   expect(r.calls).toHaveLength(3);
   expect(r.director.get()).toMatchObject({ execution: 'unconfirmed', request: 'queued' });
 });
+it('does not start a queued round shot after freeze time ends', async () => {
+  const r = await rig();
+  await r.resume();
+  await r.round(1);
+  const send = r.provider.send;
+  let clear!: (result: GatewayResult) => void;
+  r.provider.send = (type, macro) => {
+    if (type !== 'CamPlay/ClearForce') return send(type, macro);
+    r.calls.push({ type });
+    return new Promise((resolve) => {
+      clear = resolve;
+    });
+  };
+  await r.round(2, 0.1);
+  await r.live();
+  clear('queued');
+  await r.tick();
+  expect(r.calls.filter((call) => call.type === 'CamMacro/Play')).toEqual([
+    { type: 'CamMacro/Play', macro: 'A' },
+  ]);
+});
 it('an actual opening Take replaces an older phase even when its clear is unresolved', async () => {
   const r = await rig();
   await r.resume();
