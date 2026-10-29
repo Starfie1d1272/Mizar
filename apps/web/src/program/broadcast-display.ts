@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react';
 import type {
   BroadcastDisplayConfig,
   ProgramVisualConfigV1,
@@ -14,6 +15,26 @@ export function supportsHud(hud: ResolvedHudModule): boolean {
   );
 }
 
+const pulseTokens = {
+  'pulse.white': '--mizar-broadcast-pulse-white',
+  'pulse.blue': '--mizar-broadcast-pulse-blue',
+  'pulse.gold': '--mizar-broadcast-pulse-gold',
+  'pulse.muted': '--mizar-broadcast-pulse-muted',
+  'pulse.canvas': '--mizar-broadcast-pulse-canvas',
+  'pulse.shell': '--mizar-broadcast-pulse-shell',
+} as const;
+
+export function pulseTokenStyle(program: ProgramVisualConfigV1): CSSProperties | null {
+  const result: Record<string, string> = {};
+  for (const [name, value] of Object.entries(program.tokens)) {
+    const property = pulseTokens[name as keyof typeof pulseTokens];
+    if (!property || typeof value !== 'string' || !/^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i.test(value))
+      return null;
+    result[property] = value;
+  }
+  return result as CSSProperties;
+}
+
 export function supportsProgramScene(
   program: ProgramVisualConfigV1,
   scene: Exclude<ProgramSceneId, 'gameplay'>,
@@ -23,7 +44,7 @@ export function supportsProgramScene(
     selected.kind === 'builtin' &&
     selected.id === 'pulse' &&
     selected.apiVersion === 1 &&
-    Object.keys(program.tokens).length === 0 &&
+    pulseTokenStyle(program) !== null &&
     Object.keys(program.assets).length === 0
   );
 }

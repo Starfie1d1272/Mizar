@@ -1,3 +1,4 @@
+import { pulseTokenStyle } from '../program/broadcast-display';
 import { useBroadcastDisplayConfig } from '../realtime/broadcast-display-client';
 import { ProgramView } from '@mizar/hud-view';
 import { useProgramScenes } from '../workspace/client';
@@ -12,6 +13,9 @@ export function BpPage({ compact = false }: { readonly compact?: boolean }) {
   return (
     <ProgramView
       kind="bp"
+      sceneStyle={
+        display.current ? (pulseTokenStyle(display.current.program) ?? undefined) : undefined
+      }
       compact={compact}
       snapshot={compact && scenes?.bpCompact !== 'on' ? null : snapshot}
       animate={animate}

@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react';
 import { AssetProvider, type AssetUrlResolver } from './assets.js';
 import type { BpSnapshot } from '@mizar/protocol/bp';
 import { BpCompactPresentation, BpPresentation } from './BpPresentation.js';
@@ -16,11 +17,16 @@ export type ProgramViewProps =
     };
 
 export function ProgramView(
-  props: ProgramViewProps & { readonly resolveAssetUrl?: AssetUrlResolver },
+  props: ProgramViewProps & {
+    readonly resolveAssetUrl?: AssetUrlResolver;
+    readonly sceneStyle?: CSSProperties | undefined;
+  },
 ) {
   return (
     <AssetProvider resolve={props.resolveAssetUrl}>
-      <ProgramViewContent {...props} />
+      <div style={{ display: 'contents', ...props.sceneStyle }}>
+        <ProgramViewContent {...props} />
+      </div>
     </AssetProvider>
   );
 }

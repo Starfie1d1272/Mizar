@@ -1,3 +1,4 @@
+import { pulseTokenStyle } from './broadcast-display';
 import { useBroadcastDisplayConfig } from '../realtime/broadcast-display-client';
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import {
@@ -72,6 +73,9 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
   return (
     <ProgramView
       kind="scene"
+      sceneStyle={
+        display.current ? (pulseTokenStyle(display.current.program) ?? undefined) : undefined
+      }
       sceneId={sceneId}
       data={data}
       snapshot={snapshot ?? null}

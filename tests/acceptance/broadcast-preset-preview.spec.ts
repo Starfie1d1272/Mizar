@@ -104,3 +104,31 @@ test('previews each saved scene without applying the scheme or requiring tools',
   }
   expect(writes).toBe(0);
 });
+
+test('previews a HUD or scene independently when the other module is missing', async ({ page }) => {
+  let modules = view.modules.filter((module) => module.kind === 'hud');
+  await page.route('**/local/v1/broadcast-presets', (route) =>
+    route.fulfill({ json: { ...view, modules } }),
+  );
+  await page.goto('/packages');
+  await page.getByRole('button', { name: '播出方案', exact: true }).click();
+  await page.getByText('查看配置', { exact: true }).click();
+  await expect(page.getByLabel('示例画面').locator('[data-gameplay-hud]')).toBeVisible();
+  modules = view.modules
+    .filter((module) => module.kind === 'program')
+    .map((module) => ({
+      ...module,
+      value: { ...module.value, tokens: { 'pulse.white': '#112233' } },
+    }));
+  await page.reload();
+  await page.getByRole('button', { name: '播出方案', exact: true }).click();
+  await page.getByText('查看配置', { exact: true }).click();
+  await page.getByLabel('节目场景').selectOption('waiting');
+  await expect(page.getByLabel('示例画面').locator('.program-scene--waiting')).toBeVisible();
+  await expect(page.getByLabel('示例画面').locator('.waiting-label')).toHaveCSS(
+    'color',
+    'rgb(17, 34, 51)',
+  );
+  await page.getByLabel('节目场景').selectOption('bp');
+  await expect(page.getByLabel('示例画面').locator('.bp-scene')).toBeVisible();
+});
