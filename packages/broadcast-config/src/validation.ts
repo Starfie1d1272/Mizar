@@ -260,6 +260,19 @@ const snapshot = z.strictObject({
   }),
   lock: z.strictObject({ resources: z.array(resourceRefSchema), tools: z.array(tool) }),
 });
+const displayConfigSchema = z.strictObject({
+  activeRevision: revision,
+  hud: resolvedHud,
+  program,
+});
+
+/** Validate the complete public display projection before switching renderers. */
+export function parseBroadcastDisplayConfig(
+  input: unknown,
+): import('./index.js').BroadcastDisplayConfig {
+  return displayConfigSchema.parse(input);
+}
+
 const documentSchema = z.strictObject({
   schemaVersion: z.literal(1),
   modules: z.array(module),
