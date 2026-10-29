@@ -25,6 +25,7 @@ extern "system" {
     fn GetWindowRect(hwnd: Hwnd, rect: *mut WinRect) -> i32;
     fn ClientToScreen(hwnd: Hwnd, point: *mut Point) -> i32;
     fn GetWindowLongW(hwnd: Hwnd, index: i32) -> i32;
+    fn GetWindow(hwnd: Hwnd, command: u32) -> Hwnd;
     fn GetDpiForWindow(hwnd: Hwnd) -> u32;
     fn SetThreadDpiAwarenessContext(context: isize) -> isize;
     fn AdjustWindowRectExForDpi(rect: *mut WinRect, style: u32, menu: i32, ex_style: u32, dpi: u32) -> i32;
@@ -106,6 +107,8 @@ pub struct Cs2Window { pub pid: u32, pub hwnd: isize }
 
 unsafe extern "system" fn collect_window(hwnd: Hwnd, data: isize) -> i32 {
     if IsWindowVisible(hwnd) == 0 || IsIconic(hwnd) != 0 { return 1; }
+    // Owned dialogs and tool windows are not the game's rendering surface.
+    if GetWindow(hwnd, 4) != 0 || (GetWindowLongW(hwnd, -20) as u32 & 0x80) != 0 { return 1; }
     let mut pid = 0;
     GetWindowThreadProcessId(hwnd, &mut pid);
     if pid != 0 && is_cs2(pid) && client_rect(hwnd).is_some() {
@@ -405,14 +408,13 @@ impl GameTracker {
         }
         None
     }
-    pub fn overlay_rect(&self) -> Option<Rect> {
+    pub fn overlay_rect(&self, workspace_windows: &[isize]) -> Option<Rect> {
         let _coordinates = PhysicalCoordinates::enter();
         let window = self.window?;
         let client = client_rect(window.hwnd)?;
-        let mut foreground_pid = 0;
-        unsafe { GetWindowThreadProcessId(GetForegroundWindow(), &mut foreground_pid); }
-        let foreground_owned = foreground_pid == window.pid || foreground_pid == std::process::id();
-        overlay_visible(!self.preserve_settings && self.managed && self.overlay_enabled, unsafe { IsIconic(window.hwnd) != 0 }, client, foreground_owned).then_some(client)
+        let foreground = unsafe { GetForegroundWindow() };
+        let foreground_allowed = overlay_foreground_allowed(foreground, window.hwnd, workspace_windows);
+        overlay_visible(!self.preserve_settings && self.managed && self.overlay_enabled, unsafe { IsIconic(window.hwnd) != 0 }, client, foreground_allowed).then_some(client)
     }
     pub fn restore_focus(&self, source: isize) -> bool {
         self.window.is_some_and(|window| unsafe {
@@ -426,6 +428,10 @@ impl GameTracker {
     }
 }
 
+fn overlay_foreground_allowed(foreground: isize, game: isize, workspace_windows: &[isize]) -> bool {
+    foreground != 0 && (foreground == game || workspace_windows.contains(&foreground))
+}
+
 fn alignment_geometry_recovered(previous: Option<Rect>, previous_dpi: u32, current: Option<Rect>, dpi: u32) -> bool {
     (previous.is_none() || previous_dpi == 0) && current.is_some() && dpi != 0
 }
@@ -433,6 +439,16 @@ fn alignment_geometry_recovered(previous: Option<Rect>, previous_dpi: u32, curre
 #[cfg(test)]
 mod recovery_tests {
     use super::*;
+    #[test]
+    fn overlay_only_follows_game_and_workspace_windows() {
+        let workspace = [10, 11];
+        assert!(overlay_foreground_allowed(20, 20, &workspace));
+        assert!(overlay_foreground_allowed(10, 20, &workspace));
+        assert!(overlay_foreground_allowed(11, 20, &workspace));
+        assert!(!overlay_foreground_allowed(12, 20, &workspace));
+        assert!(!overlay_foreground_allowed(21, 20, &workspace));
+        assert!(!overlay_foreground_allowed(0, 20, &workspace));
+    }
     #[test]
     fn unavailable_geometry_can_recover_after_alignment_retries_are_exhausted() {
         let valid = Some(Rect {x:0,y:0,width:1280,height:720});

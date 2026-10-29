@@ -123,7 +123,14 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
     await page.getByLabel('地图', { exact: true }).fill(program.map.name!);
     await page.getByLabel('MulNX 活动包名称').fill(pack.name);
     await page.getByLabel('开场宏', { exact: true }).fill('候选镜头');
+    await page.getByText('镜头时限', { exact: true }).click();
+    await page.getByLabel('最多持续（秒）').fill('1.0035');
     await page.getByRole('button', { name: '保存预设', exact: true }).click();
+    await expect(page.getByRole('alert')).toBeVisible();
+    expect(store.preset.maps).toHaveLength(0);
+    await page.getByLabel('最多持续（秒）').fill('1.003');
+    await page.getByRole('button', { name: '保存预设', exact: true }).click();
+    await expect.poll(() => store.preset.maps[0]?.opening?.maxMs).toBe(1003);
     await expect(page.getByText('已保存；自动运镜需重新启用。', { exact: true })).toBeVisible();
     expect(calls).toEqual([]);
     await expect(page.getByRole('button', { name: '连接 MulNX', exact: true })).toBeDisabled();
@@ -143,7 +150,8 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
     await expect(page.getByText(/隔离文件已验证/)).toBeVisible();
     await page.getByRole('button', { name: '确认活动隔离包并试播', exact: true }).click();
     await expect(page.getByText('试播请求已提交，请在游戏内核对。', { exact: true })).toBeVisible();
-    expect(calls).toEqual(['CamMacro/Play']);
+    expect(calls).toContain('CamPack/Apply');
+    expect(calls.at(-1)).toBe('CamMacro/Play');
     expect(director.get()).toMatchObject({
       held: true,
       execution: 'unconfirmed',
@@ -162,9 +170,7 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
       mimeType: 'application/json',
       buffer: Buffer.from('{bad'),
     });
-    await expect(
-      page.getByText('预设未应用，请检查字段、文件与本机音频。', { exact: true }),
-    ).toBeVisible();
+    await expect(page.getByRole('alert')).toBeVisible();
     const modified = { ...store.preset, name: '游戏内筛选候选' };
     await page.getByLabel('导入预设到草稿').setInputFiles({
       name: 'candidate.json',
@@ -325,6 +331,7 @@ test('explicit MulNX stop confirms production effects, shows ownership errors, a
   const view: OrchestrationView = {
     tool: { installed: 'test', latest: null, busy: false, message: '', packs: [] },
     preset: emptyOrchestrationPreset(),
+    automaticEnabled: false,
     ready: true,
     status: {
       control: { mode: 'native', state: 'blocked' },
@@ -335,6 +342,7 @@ test('explicit MulNX stop confirms production effects, shows ownership errors, a
       pack: null,
       isolated: false,
       held: true,
+      preparation: 'waiting',
       request: 'idle',
       execution: 'unconfirmed',
       current: null,

@@ -329,13 +329,20 @@ fn sync_workspace_shell(app: &tauri::AppHandle) {
     };
 }
 
+fn overlay_workspace_windows(app: &tauri::AppHandle) -> Vec<isize> {
+    ["workspace-left", "workspace-dock"].iter().filter_map(|label| {
+        app.get_webview_window(label).and_then(|window| window.hwnd().ok()).map(|hwnd| hwnd.0 as isize)
+    }).collect()
+}
+
 fn update_overlay(app: &tauri::AppHandle, state: &HostState) {
+    let workspace_windows = overlay_workspace_windows(app);
     let rect = if state.visible.load(Ordering::Relaxed) {
         state
             .tracker
             .lock()
             .ok()
-            .and_then(|tracker| tracker.overlay_rect())
+            .and_then(|tracker| tracker.overlay_rect(&workspace_windows))
     } else {
         None
     };
@@ -621,11 +628,14 @@ async fn cs2_config_status(app: tauri::AppHandle) -> Result<serde_json::Value, S
 
 #[tauri::command]
 async fn launch_mulnx(window: tauri::WebviewWindow, app: tauri::AppHandle,
-    automatic: Option<bool>, preserve_settings: Option<bool>, diagnostic_operation_id: Option<String>) -> Result<serde_json::Value, String> {
+    automatic: Option<bool>, preserve_settings: Option<bool>, resume_only: Option<bool>, diagnostic_operation_id: Option<String>) -> Result<serde_json::Value, String> {
     if window.label() != "main" { return Err("请在准备中心打开 MulNX。".into()); }
     let log = app.state::<DesktopLog>().inner().clone();
     let evidence = log.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || mulnx_launch::launch(&app, &log, automatic.unwrap_or(true), preserve_settings.unwrap_or(false)))
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        if resume_only.unwrap_or(false) { mulnx_launch::resume(&app, &log) }
+        else { mulnx_launch::launch(&app, &log, automatic.unwrap_or(true), preserve_settings.unwrap_or(false)) }
+    })
         .await.unwrap_or_else(|error| Err(format!("MulNX 启动任务失败：{error}")));
     evidence.native_outcome("launch_mulnx", diagnostic_operation_id.as_deref(), &result);
     result
@@ -2531,6 +2541,7 @@ fn run_desktop(
                         && worker_visible.load(Ordering::Relaxed)
                         && !exit_signal.requested()
                     {
+                        let workspace_windows = overlay_workspace_windows(&host);
                         worker_tracker
                             .lock()
                             .ok()
@@ -2546,7 +2557,7 @@ fn run_desktop(
                                 if let Some(failure) = tracker.alignment_event() {
                                     host.state::<DesktopLog>().event("cs2_window_alignment", "failure", Some(&failure.diagnostic().to_string()));
                                 }
-                                (layout, tracker.overlay_rect())
+                                (layout, tracker.overlay_rect(&workspace_windows))
                             })
                             .unwrap_or((None, None))
                     } else {
