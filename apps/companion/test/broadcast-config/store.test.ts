@@ -1,3 +1,5 @@
+import { HudConfigStore } from '../../src/hud-config/store.js';
+import { createHudConfigPersistence } from '../../src/broadcast-config/hud-facade.js';
 import Fastify from 'fastify';
 import { createLocalWebOriginPolicy } from '../../src/local-web/origin-policy.js';
 import { registerBroadcastConfigRoutes } from '../../src/broadcast-config/routes.js';
@@ -332,5 +334,24 @@ describe('BroadcastConfigStore', () => {
     expect(result.active.moduleRevisions.camera).toBe(initial.active.moduleRevisions.camera);
     expect(result.previousActive).toEqual(initial.active);
     expect(result.modules[0]!.revision).not.toBe(initial.modules[0]!.revision);
+  });
+  it('delegates legacy HUD draft writes to the unified document and restores them', async () => {
+    const { store, options, initial } = await setup();
+    const hud = new HudConfigStore();
+    await hud.load();
+    await hud.adoptPersistence(
+      createHudConfigPersistence(store, (_hud, active) => Promise.resolve(active.lock)),
+    );
+    const saved = await hud.saveAs('theme', getBuiltinTheme(), hud.getState().editorRevision);
+    expect(store.snapshot.unboundHudResources?.themes).toEqual(saved.document.customThemes);
+    expect(store.snapshot.active).toEqual(initial.active);
+    const reopened = new BroadcastConfigStore(options);
+    await reopened.load();
+    const nextHud = new HudConfigStore();
+    await nextHud.load();
+    await nextHud.adoptPersistence(
+      createHudConfigPersistence(reopened, (_hud, active) => Promise.resolve(active.lock)),
+    );
+    expect(nextHud.getState().document).toEqual(saved.document);
   });
 });

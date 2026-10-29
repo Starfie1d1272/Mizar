@@ -318,7 +318,7 @@ export class BroadcastConfigStore {
           active.adjusted = true;
           next.document.previousActive = previous;
           next.document.active = active;
-          await this.options.verifyLegacyActive(active);
+          await this.options.verifyLegacyActive(parseBroadcastConfigDocument(next.document).active);
         }
         await this.options.assertReferenceCommitAllowed(this.envelope.document, next.document);
         await this.commit(next);
