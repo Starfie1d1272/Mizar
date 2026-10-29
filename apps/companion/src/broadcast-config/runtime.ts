@@ -217,7 +217,7 @@ export function createBroadcastRuntime(input: {
             (ref) => !captured.has(JSON.stringify(ref.resource)),
           )
         )
-          throw new Error('broadcast_config_invalid');
+          throw new Error('broadcast_config_invalid', { cause: error });
         await verifyUnchanged(active, programUnavailable, cameraUnavailable);
         input.diagnostic(error);
       }
