@@ -1,17 +1,24 @@
 import { join } from 'node:path';
 import { canonicalJson } from '@mizar/hud-config';
 import { MUSIC_GROUPS } from '@mizar/protocol/music';
-import type { ActiveBroadcastSnapshot, AssetRef, ResourceRef } from '@mizar/broadcast-config';
+import type {
+  ActiveBroadcastSnapshot,
+  AssetRef,
+  MulnxToolRef,
+  ResourceRef,
+} from '@mizar/broadcast-config';
 import type { MusicStore } from '../music/store.js';
 import { readMusicAsset } from './music-assets.js';
 import { BroadcastReferenceQueue } from './reference-queue.js';
 import type { BroadcastRuntimeDependencies } from './runtime.js';
+import type { CameraConfigResolver } from './camera.js';
 
-/** Built-in providers support native HUD, Pulse, local music and an empty camera configuration. */
+/** Built-in providers support native HUD, Pulse, local music and verified camera resources. */
 export function createProductionBroadcastDependencies(
   directory: string,
   music: MusicStore,
   readAdditionalAsset: (ref: AssetRef) => Promise<void>,
+  camera?: CameraConfigResolver,
 ): BroadcastRuntimeDependencies {
   const references = new BroadcastReferenceQueue();
   const asset = async (ref: AssetRef) => {
@@ -39,8 +46,15 @@ export function createProductionBroadcastDependencies(
           await localTrackId(track.asset);
           await add(track.asset);
         }
-    if (resolved.camera?.maps.length) throw new Error('camera_identity_unavailable');
-    return { resources: [...resources.values()], tools: [] };
+    const tools = new Map<string, MulnxToolRef>();
+    if (resolved.camera)
+      for (const map of resolved.camera.maps) {
+        if (!camera) throw new Error('camera_identity_unavailable');
+        const tool = await camera.camera(map.source);
+        tools.set(canonicalJson(tool), tool);
+        if (map.openingSound) await add(map.openingSound.asset);
+      }
+    return { resources: [...resources.values()], tools: [...tools.values()] };
   };
   return {
     path: join(directory, 'broadcast-config.json'),
@@ -57,31 +71,41 @@ export function createProductionBroadcastDependencies(
         value.kind === 'builtin' && value.id === 'pulse'
           ? Promise.resolve()
           : Promise.reject(new Error('capability_unsupported')),
-      camera: () => Promise.reject(new Error('camera_identity_unavailable')),
+      camera: (source) =>
+        camera?.camera(source) ?? Promise.reject(new Error('camera_identity_unavailable')),
     },
     camera: {
-      localPack: () => Promise.reject(new Error('camera_identity_unavailable')),
+      localPack: (source) =>
+        camera?.localPack(source) ?? Promise.reject(new Error('camera_identity_unavailable')),
       localTrackId,
       portable: (preset, automaticEnabled) =>
-        preset.maps.length
-          ? Promise.reject(new Error('camera_identity_unavailable'))
-          : Promise.resolve({
-              format: 'mizar.camera-config',
-              version: 2,
-              name: preset.name,
-              maps: [],
-              automaticEnabled,
-            }),
+        camera
+          ? camera.cameraConfig(preset, automaticEnabled)
+          : preset.maps.length
+            ? Promise.reject(new Error('camera_identity_unavailable'))
+            : Promise.resolve({
+                format: 'mizar.camera-config',
+                version: 2,
+                name: preset.name,
+                maps: [],
+                automaticEnabled,
+              }),
       lock: (value, active) => lockForActive({ ...active.resolved, camera: value }),
     },
     localTrackId,
     lockForActive,
     verifyActive: async (active) => {
       const expected = await lockForActive(active.resolved);
-      const sort = (values: ResourceRef[]) => values.map(canonicalJson).sort();
+      const sort = (values: (ResourceRef | MulnxToolRef)[]) => values.map(canonicalJson).sort();
+      if (canonicalJson(sort(expected.resources)) !== canonicalJson(sort(active.lock.resources)))
+        throw new Error('dependency_missing');
+      // The selected release can change while providing the same verified camera content.
+      // Keep the snapshot's historical lock, but require the currently verified provider.
       if (
-        canonicalJson(sort(expected.resources)) !== canonicalJson(sort(active.lock.resources)) ||
-        active.lock.tools.length
+        expected.tools.length !== active.lock.tools.length ||
+        active.lock.tools.some(
+          (tool) => tool.kind !== 'upstream' || tool.release.repository !== 'Co1Swet/MulNX_CS2',
+        )
       )
         throw new Error('dependency_missing');
     },

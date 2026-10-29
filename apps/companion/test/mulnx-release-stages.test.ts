@@ -47,8 +47,13 @@ vi.mock('../src/orchestration/tool-release.js', () => ({
   },
 }));
 import { MulnxTool } from '../src/orchestration/tool.js';
+import { buildApp } from '../src/app.js';
 import { CameraConfigResolver } from '../src/broadcast-config/camera.js';
-import type { MusicStore } from '../src/music/store.js';
+import { MusicStore } from '../src/music/store.js';
+import { OrchestrationStore } from '../src/orchestration/store.js';
+import { HudConfigStore } from '../src/hud-config/store.js';
+import { createProductionBroadcastDependencies } from '../src/broadcast-config/production.js';
+import { prepareLegacyMigration } from '../src/broadcast-config/prepare-migration.js';
 import { orchestrationPresetSchema } from '@mizar/protocol/orchestration';
 
 const roots: string[] = [];
@@ -59,7 +64,7 @@ it('prepares without selecting and publishes a configured instance only after se
   const root = await mkdtemp(join(tmpdir(), 'mizar-mulnx-stages-'));
   roots.push(root);
   const bundle = join(root, 'bundle');
-  const data = join(root, 'data');
+  const data = join(root, 'mulnx');
   await mkdir(bundle);
   await writeFile(join(bundle, '7zr.exe'), 'fixture');
   await writeFile(
@@ -127,6 +132,83 @@ it('prepares without selecting and publishes a configured instance only after se
     name: 'Camera',
     maps: [{ map: 'de_dust2', pack: current.packs[0]!.name }],
   });
+  const musicStore = new MusicStore(join(root, 'music'));
+  await musicStore.load();
+  const sound = await musicStore.add('opening.wav', Buffer.from('RIFF0000WAVEtest'));
+  const soundPreset = orchestrationPresetSchema.parse({
+    ...preset,
+    maps: [{ ...preset.maps[0], openingSound: sound }],
+  });
+  const cameraStore = new OrchestrationStore(join(root, 'orchestration'));
+  await cameraStore.load();
+  await cameraStore.save(soundPreset);
+  const productionResolver = new CameraConfigResolver(restarted, musicStore, () =>
+    Promise.resolve(true),
+  );
+  const dependencies = createProductionBroadcastDependencies(
+    root,
+    musicStore,
+    () => Promise.reject(new Error('unexpected_asset')),
+    productionResolver,
+  );
+  const migrated = await prepareLegacyMigration({
+    hud: new HudConfigStore().getState(),
+    music: musicStore,
+    camera: cameraStore,
+    musicAutomaticEnabled: true,
+    cameraConfig: (preset, enabled) => dependencies.camera.portable(preset, enabled),
+    lock: (resolved) => dependencies.lockForActive(resolved),
+  });
+  expect(migrated.state).toBe('ready');
+  if (migrated.state !== 'ready') throw new Error('migration failed');
+  const active = migrated.document.active;
+  expect(active.lock.tools).toEqual([source.acquisition]);
+  expect(active.lock.resources).toContainEqual(
+    active.resolved.camera!.maps[0]!.openingSound!.asset.resource,
+  );
+  expect(await dependencies.camera.localPack(source)).toBe(current.packs[0]!.name);
+  expect(await dependencies.resolve.camera(source)).toEqual(source.acquisition);
+  await expect(dependencies.verifyActive(active)).resolves.toBeUndefined();
+  // The old lock is historical; a compatible selected release can have the same source bytes.
+  const olderTool = {
+    ...source.acquisition,
+    release: { ...source.acquisition.release, releaseId: 99, tag: 'older' },
+  };
+  await expect(
+    dependencies.verifyActive({ ...active, lock: { ...active.lock, tools: [olderTool] } }),
+  ).resolves.toBeUndefined();
+  await expect(
+    dependencies.verifyActive({ ...active, lock: { ...active.lock, tools: [] } }),
+  ).rejects.toThrow('dependency_missing');
+  // Exercise actual app assembly and legacy migration with no running game or gateway.
+  await writeFile(join(data, 'current.json'), JSON.stringify(legacyReceipt));
+  const hud = new HudConfigStore();
+  await hud.load();
+  const app = buildApp({
+    obsConfigPath: join(root, 'obs.json'),
+    hudConfigStore: hud,
+    mulnxBundle: bundle,
+  });
+  try {
+    const status = await app.inject('/local/v1/broadcast-config/migration');
+    expect(status.json<unknown>()).toEqual({ state: 'ready' });
+    const listing = await app.inject('/local/v1/broadcast-presets');
+    expect(listing.statusCode).toBe(200);
+    expect(listing.json<unknown>()).toMatchObject({
+      active: {
+        resolved: {
+          camera: {
+            maps: [
+              { source: { treeSha256: source.treeSha256 }, openingSound: { name: 'opening.wav' } },
+            ],
+          },
+        },
+      },
+    });
+  } finally {
+    await app.close();
+    await writeFile(join(data, 'current.json'), originalReceipt);
+  }
   const config = await resolver.cameraConfig(preset, true);
   expect(config).toMatchObject({
     format: 'mizar.camera-config',

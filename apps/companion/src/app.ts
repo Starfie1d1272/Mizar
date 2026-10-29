@@ -1,3 +1,4 @@
+import { CameraConfigResolver } from './broadcast-config/camera.js';
 import { createProductionBroadcastDependencies } from './broadcast-config/production.js';
 import {
   createBroadcastRuntime,
@@ -1268,6 +1269,24 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       join(dirname(options.obsConfigPath), 'orchestration'),
       (stage, evidence) => sessionJournal?.record(stage, evidence),
     );
+    const cameraEvidence = (stage: string, evidence: unknown) =>
+      sessionJournal?.record(stage, evidence);
+    const mulnxTool = options.mulnxBundle
+      ? new MulnxTool(
+          join(dirname(options.obsConfigPath), 'mulnx'),
+          options.mulnxBundle,
+          cameraEvidence,
+        )
+      : undefined;
+    // This checks the fixed upstream adapter, not whether a game is connected.
+    // Actual PackStatus readiness is checked by the existing camera director.
+    const cameraResolver = mulnxTool
+      ? new CameraConfigResolver(mulnxTool, musicStore, (tool) =>
+          Promise.resolve(
+            tool.kind === 'upstream' && tool.release.repository === 'Co1Swet/MulNX_CS2',
+          ),
+        )
+      : undefined;
     broadcastConfig ??= createProductionBroadcastDependencies(
       dirname(options.obsConfigPath),
       musicStore,
@@ -1275,6 +1294,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         if (ref.resource.id !== PACK_ID || !resources) throw new Error('dependency_missing');
         await resources.readExact(ref.resource, ref.fileId);
       },
+      cameraResolver,
     );
     const broadcastRuntime = broadcastConfig
       ? createBroadcastRuntime({
@@ -1327,15 +1347,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         () => broadcastRuntime.ready,
       );
     }
-    const cameraEvidence = (stage: string, evidence: unknown) =>
-      sessionJournal?.record(stage, evidence);
-    const mulnxTool = options.mulnxBundle
-      ? new MulnxTool(
-          join(dirname(options.obsConfigPath), 'mulnx'),
-          options.mulnxBundle,
-          cameraEvidence,
-        )
-      : undefined;
     catalogTool = mulnxTool;
     const mulnxProvider = new MulnxProvider(cameraEvidence);
     mulnxClock = new MulnxProgramClock(mulnxProvider);
