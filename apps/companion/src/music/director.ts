@@ -39,6 +39,13 @@ function ownedMonitorApplied(original: MonitorOriginals['bgm']): MonitorType | u
       : undefined)
   );
 }
+function monitorRestoreTarget(
+  original: MonitorOriginals['bgm'],
+  preference: boolean | null,
+): MonitorType | undefined {
+  if (!original) return undefined;
+  return !original.applied && preference === false ? 'OBS_MONITORING_TYPE_NONE' : original.mode;
+}
 function isMonitorType(value: unknown): value is MonitorType {
   return (
     value === 'OBS_MONITORING_TYPE_NONE' ||
@@ -623,7 +630,7 @@ export class MusicDirector {
           state.desktopMonitorOriginal[layer] = {
             uuid,
             mode:
-              original?.mode ??
+              monitorRestoreTarget(original, wanted) ??
               (wanted ? 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT' : 'OBS_MONITORING_TYPE_NONE'),
             applied: desired,
           };
@@ -685,10 +692,7 @@ export class MusicDirector {
           continue;
         }
         if (relationship === 'independent') {
-          const target =
-            original && !original.applied && this.store.state.monitorPreference === false
-              ? 'OBS_MONITORING_TYPE_NONE'
-              : original?.mode;
+          const target = monitorRestoreTarget(original, this.store.state.monitorPreference);
           if (target && mode !== target)
             changes.push({
               kind: 'monitor',
@@ -703,7 +707,11 @@ export class MusicDirector {
         const desired = desiredMonitorType(relationship, wanted);
         if (mode !== desired)
           changes.push({ kind: 'monitor', inputUuid: uuid, before: mode, applied: desired });
-        originals[layer] = { uuid, mode: original?.mode ?? mode, applied: desired };
+        originals[layer] = {
+          uuid,
+          mode: monitorRestoreTarget(original, this.store.state.monitorPreference) ?? mode,
+          applied: desired,
+        };
       }
       if (!current()) throw new Error('music_cancelled');
       const musicAfter = structuredClone(musicBefore);
