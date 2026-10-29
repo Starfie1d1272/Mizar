@@ -1,11 +1,8 @@
 import { expect, it } from 'vitest';
-import { MulnxEventSequence, parseMulnxEvent } from '../src/orchestration/mulnx-events.js';
+import { parseMulnxEvent } from '../src/orchestration/mulnx-events.js';
 
 const hurt = {
   eventType: 'player_hurt',
-  sequence: 1,
-  captureGeneration: 2,
-  capturedAtUnixMs: 1700000000000,
   attackerSteamId: '0',
   victimSteamId: '76561198000000001',
   weapon: 'awp',
@@ -16,9 +13,6 @@ const hurt = {
 
 it('normalizes HSI facts without inventing unavailable values', () => {
   expect(parseMulnxEvent(hurt)).toEqual({
-    sequence: 1,
-    captureGeneration: 2,
-    capturedAtUnixMs: 1700000000000,
     facts: {
       kind: 'player-hurt',
       victim: { sourcePlayerId: hurt.victimSteamId },
@@ -30,7 +24,7 @@ it('normalizes HSI facts without inventing unavailable values', () => {
   });
   const death = parseMulnxEvent({
     ...hurt,
-    eventType: 'player_death',
+    eventType: undefined,
     assistSteamId: '0',
     assistedflash: 0,
     headshot: 1,
@@ -39,7 +33,8 @@ it('normalizes HSI facts without inventing unavailable values', () => {
     thrusmoke: 0,
     attackerblind: 0,
     attackerinair: 0,
-    clientTime: { timeDomain: 'network_game_client_tick', tick: 90 },
+    capturedAtUnixMs: 1700000000000,
+    networkGameClientTick: 90,
   });
   expect(death?.facts).toMatchObject({
     kind: 'player-death',
@@ -47,50 +42,8 @@ it('normalizes HSI facts without inventing unavailable values', () => {
     penetratedObjects: 2,
   });
   expect(death?.facts).not.toHaveProperty('distance');
-  expect(death?.clientTime).toEqual({ timeDomain: 'network_game_client_tick', tick: 90 });
+  expect(death?.networkGameClientTick).toBe(90);
+  expect(death?.capturedAtUnixMs).toBe(1700000000000);
   expect(parseMulnxEvent({ ...hurt, victimSteamId: 0 })).toBeNull();
   expect(parseMulnxEvent({ ...hurt, eventType: 'CamPack/Status' })).toBeNull();
-});
-
-it('rejects duplicates and old sequences within a socket', () => {
-  const sequence = new MulnxEventSequence();
-  expect(sequence.accept(hurt)).not.toBeNull();
-  expect(sequence.accept(hurt)).toBeNull();
-  expect(sequence.accept({ ...hurt, sequence: 3 })).not.toBeNull();
-  expect(sequence.accept({ ...hurt, sequence: 2 })).toBeNull();
-  expect(new MulnxEventSequence().accept(hurt)).not.toBeNull();
-});
-
-it('parses clock samples without fabricating a tick or map', async () => {
-  const { parseMulnxClock } = await import('../src/orchestration/mulnx-events.js');
-  expect(
-    parseMulnxClock(
-      {
-        eventType: 'game_clock',
-        sampledAtUnixMs: 100,
-        timeDomain: 'network_game_client_tick',
-        captureGeneration: 2,
-        readSucceeded: false,
-      },
-      50,
-    ),
-  ).toEqual({
-    sampledAtUnixMs: 100,
-    receivedMonotonicMs: 50,
-    timeDomain: 'network_game_client_tick',
-    captureGeneration: 2,
-    readSucceeded: false,
-  });
-  expect(
-    parseMulnxClock(
-      {
-        eventType: 'game_clock',
-        sampledAtUnixMs: 100,
-        timeDomain: 'network_game_client_tick',
-        captureGeneration: 2,
-        readSucceeded: true,
-      },
-      50,
-    ),
-  ).toBeNull();
 });

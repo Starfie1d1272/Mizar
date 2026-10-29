@@ -1,11 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { randomInt, randomUUID } from 'node:crypto';
-import {
-  MulnxEventSequence,
-  parseMulnxClock,
-  type MulnxClockSample,
-  type MulnxEventCandidate,
-} from './mulnx-events.js';
+import { parseMulnxEvent, type MulnxEventCandidate } from './mulnx-events.js';
 export type GatewayResult = 'queued' | 'rejected' | 'unknown';
 type CameraCommand =
   | 'CamPlay/Tracked'
@@ -72,9 +67,6 @@ export class MulnxProvider {
     const socket = new WebSocket(`ws://127.0.0.1:${port}`);
     this.socket = socket;
     const generation = this.generation;
-    const events = new MulnxEventSequence();
-    let subscribed = false;
-    let clockGeneration: number | undefined;
     socket.addEventListener('message', ({ data }) => {
       if (typeof data !== 'string' || this.socket !== socket) return;
       if (data.length > 64 * 1024) {
@@ -85,30 +77,14 @@ export class MulnxProvider {
       if (text.startsWith('{')) {
         try {
           const raw: unknown = JSON.parse(text);
-          if (
-            raw &&
-            typeof raw === 'object' &&
-            'type' in raw &&
-            raw.type === 'WebSocket/ChannelSelected' &&
-            'payload' in raw &&
-            raw.payload === 'events'
-          ) {
-            if (!subscribed) {
-              subscribed = true;
-              this.emitInput({ kind: 'subscribed', generation });
-            }
-          } else if (subscribed) {
-            const receivedMonotonicMs = performance.now();
-            const clock = parseMulnxClock(raw, receivedMonotonicMs);
-            if (clock) {
-              clockGeneration = clock.readSucceeded ? clock.captureGeneration : undefined;
-              this.emitInput({ kind: 'clock', generation, sample: clock });
-            } else {
-              const event = events.accept(raw);
-              if (event && clockGeneration === event.captureGeneration)
-                this.emitInput({ kind: 'event', generation, receivedMonotonicMs, event });
-            }
-          }
+          const event = parseMulnxEvent(raw);
+          if (event)
+            this.emitInput({
+              kind: 'event',
+              generation,
+              receivedMonotonicMs: performance.now(),
+              event,
+            });
         } catch {
           /* Other frames are not HSI input. */
         }
@@ -160,11 +136,6 @@ export class MulnxProvider {
         () => {
           clearTimeout(timer);
           if (generation === this.generation) {
-            try {
-              socket.send(JSON.stringify({ type: 'WebSocket/SelectChannel', payload: 'events' }));
-            } catch {
-              /* Camera connection remains independent. */
-            }
             resolve();
           } else reject(new Error('camera_cancelled'));
         },
@@ -388,8 +359,6 @@ export class MulnxProvider {
 }
 
 export type MulnxInput =
-  | { readonly kind: 'subscribed'; readonly generation: number }
-  | { readonly kind: 'clock'; readonly generation: number; readonly sample: MulnxClockSample }
   | {
       readonly kind: 'event';
       readonly generation: number;
