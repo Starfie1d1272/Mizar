@@ -328,9 +328,13 @@ test('explicit MulNX stop confirms production effects, shows ownership errors, a
 }) => {
   let borrowed = false;
   let stops = 0;
+  const preset = emptyOrchestrationPreset();
+  const presetId = '00000000-0000-4000-8000-000000000001';
   const view: OrchestrationView = {
+    activePresetId: presetId,
+    presets: [{ id: presetId, preset }],
     tool: { installed: 'test', latest: null, busy: false, message: '', packs: [] },
-    preset: emptyOrchestrationPreset(),
+    preset,
     automaticEnabled: false,
     ready: true,
     status: {

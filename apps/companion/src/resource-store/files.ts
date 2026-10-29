@@ -225,9 +225,13 @@ export async function readJson(root: string, relative: string): Promise<unknown>
   }
 }
 
-export async function atomicJson(path: string, value: unknown): Promise<void> {
+export async function atomicJson(
+  path: string,
+  value: unknown,
+  maxBytes = limits.receiptBytes,
+): Promise<void> {
   const body = JSON.stringify(value);
-  if (!body || Buffer.byteLength(body) > limits.receiptBytes)
+  if (!body || Buffer.byteLength(body) > maxBytes)
     throw new ResourceStoreError('resource_receipt_invalid');
   await safePath(dirname(path));
   const temporary = join(dirname(path), `tmp-${randomUUID()}.json`);
