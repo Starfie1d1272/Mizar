@@ -50,7 +50,7 @@ pub async fn observer_command(window: tauri::WebviewWindow, app: tauri::AppHandl
     action: String, endpoint: Option<String>, password: Option<String>, expected_revision: Option<String>) -> Result<serde_json::Value, String> {
     if !["main", "workspace-left", "workspace-dock"].contains(&window.label())
         && !(window.label() == "tool-review" && matches!(action.as_str(), "start-configured" | "connection-mode")
-            && window.url().ok().is_some_and(|url| url.path() == "/workspace/review" && url.query() == Some("kind=connection"))) {
+            && window.url().ok().is_some_and(|url| url.path() == "/workspace/review" && matches!(url.query(), Some("kind=connection" | "kind=next-connection")))) {
         return Err("请在制播工作台操作观察辅助。".into());
     }
     tauri::async_runtime::spawn_blocking(move || {

@@ -188,6 +188,7 @@ function ContextPanel({
       {program?.map.phase !== 'warmup' ? (
         <LiveRosterAlert
           alert={rosterAlert}
+          matchId={operator?.matchContext.summary?.matchId}
           suppressAutomatic={connection?.syncHealth?.status === 'attention'}
           recovered={
             operator?.runtime.telemetryFreshness === 'fresh' &&
