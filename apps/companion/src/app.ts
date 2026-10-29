@@ -3,6 +3,8 @@ import {
   type BroadcastRuntimeDependencies,
 } from './broadcast-config/runtime.js';
 import { registerBroadcastConfigRoutes } from './broadcast-config/routes.js';
+import { broadcastResourceReferences } from './broadcast-config/reference-queue.js';
+import type { ResourceRef } from '@mizar/broadcast-config';
 import {
   registerBroadcastMigrationStatus,
   type BroadcastMigrationStatus,
@@ -247,6 +249,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   const demoRecovery = readDemoTestRecovery(demoMarkerPath);
   const formalMutations = new Set<string>();
   let resources: ResourceStore | undefined;
+  let getBroadcastReferences: (() => ResourceRef[]) | undefined;
   let recorder = options.recorder ?? createDisabledRecorder('recorder_not_configured');
   const currentRecorder = (): CaptureRecorder => recorder;
   const programRuntime =
@@ -1112,6 +1115,25 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
               : undefined,
           ),
           activateWhenSafe: (commit) => production.withResourceActivation(commit),
+          ...(options.broadcastConfig
+            ? {
+                references: {
+                  run: <T>(operation: () => Promise<T>) =>
+                    options.broadcastConfig!.references.run(operation),
+                  isReferenced: (ref: ResourceRef) => {
+                    if (!getBroadcastReferences) throw new Error('broadcast_config_unavailable');
+                    return Promise.resolve(
+                      getBroadcastReferences().some(
+                        (used) =>
+                          used.id === ref.id &&
+                          used.version === ref.version &&
+                          used.digest === ref.digest,
+                      ),
+                    );
+                  },
+                },
+              }
+            : {}),
         });
       } catch (error) {
         app.log.warn(
@@ -1248,6 +1270,27 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           dependencies: {
             ...options.broadcastConfig,
             hudPath: options.broadcastConfig.hudPath ?? options.hudConfigPath,
+            isDeleting: async (ref) => {
+              if (ref.id !== PACK_ID) return options.broadcastConfig!.isDeleting(ref);
+              if (!resources) throw new Error('resource_store_unavailable');
+              return resources.isDeleting(ref);
+            },
+            resolve: {
+              ...options.broadcastConfig.resolve,
+              asset: async (ref) => {
+                if (ref.resource.id !== PACK_ID) return options.broadcastConfig!.resolve.asset(ref);
+                if (!resources) throw new Error('resource_store_unavailable');
+                await resources.readExact(ref.resource, ref.fileId);
+              },
+            },
+            verifyActive: async (active) => {
+              await options.broadcastConfig!.verifyActive(active);
+              for (const ref of active.lock.resources) {
+                if (ref.id !== PACK_ID) continue;
+                if (!resources) throw new Error('resource_store_unavailable');
+                await resources.verifyExact(ref);
+              }
+            },
           },
           withApplyGuard: (operation) => production.configureBroadcast(operation),
           diagnostic: (error) =>
@@ -1255,6 +1298,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         })
       : undefined;
     if (broadcastRuntime) {
+      getBroadcastReferences = () => {
+        if (!broadcastRuntime.ready) throw new Error('broadcast_config_unavailable');
+        return broadcastResourceReferences(broadcastRuntime.store.snapshot);
+      };
       getBroadcastMigrationStatus = () => broadcastRuntime.status;
       registerBroadcastConfigRoutes(
         app,
