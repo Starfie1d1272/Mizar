@@ -330,6 +330,12 @@ async function performProductionAction(
   let presented = false;
   try {
     await command('/operator/production', { action, expectedRevision: state.revision }, task);
+    if (action === 'enter' && (cancelled() || window.location.href !== entryLocation)) {
+      if (window.__TAURI_INTERNALS__ && !external && state.mode === 'preparation')
+        await desktopInvoke('cancel_managed_camera', undefined, task);
+      task.finish('cancelled', { reason: 'navigation_changed' });
+      return;
+    }
     if (window.__TAURI_INTERNALS__) {
       await desktopInvoke('present_production', { live: action === 'enter' }, task);
       presented = true;

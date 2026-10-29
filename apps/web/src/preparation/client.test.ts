@@ -263,6 +263,32 @@ describe('managed CS2 production entry and cleanup', () => {
     ).toEqual(['cancelled']);
     expect(controls.some((event) => event.phase === 'waiting')).toBe(true);
   });
+  it('does not present a workspace after navigation cancels a pending production commit', async () => {
+    const calls = setup();
+    const originalFetch = vi.mocked(fetch).getMockImplementation()!;
+    let release!: (response: Response) => void;
+    let dispatched!: () => void;
+    const started = new Promise<void>((resolve) => {
+      dispatched = resolve;
+    });
+    vi.mocked(fetch).mockImplementation((path, init) => {
+      if (path === '/operator/production') {
+        calls.push(String(path));
+        dispatched();
+        return new Promise<Response>((resolve) => {
+          release = resolve;
+        });
+      }
+      return originalFetch(path, init);
+    });
+    const entry = productionAction('enter', preparation);
+    await started;
+    window.dispatchEvent(new Event('pagehide'));
+    release(new Response(JSON.stringify({ ok: true })));
+    expect(await entry).toBe('cancelled');
+    expect(calls).toContain('cancel_managed_camera');
+    expect(calls).not.toContain('present_production');
+  });
   it('reads actual live state after an uncertain commit and keeps the newly started game', async () => {
     const calls = setup('network', 'live');
     await expect(productionAction('enter', preparation)).rejects.toThrow(

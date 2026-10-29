@@ -308,21 +308,17 @@ export function MatchConnectionDialog() {
           重新检查游戏
         </Button>
       ) : null}
-      {error ? (
-        <StatusBanner tone="warning">
-          {saved ? '观察辅助准备未完成，可重试辅助或返回工作台。' : error}
-        </StatusBanner>
-      ) : null}
+      {error ? <StatusBanner tone="warning">{error}</StatusBanner> : null}
       <div className="preparation-actions">
         <Button disabled={busy} onClick={close}>
           {confirmed ? '完成' : '取消'}
         </Button>
         <Button
           variant="primary"
-          disabled={busy || saved || confirmed}
+          disabled={busy || confirmed || automatic === null}
           onClick={() => void confirm()}
         >
-          {saved ? '重试观察辅助' : '确认本图连接'}
+          {saved ? '重试准备' : '确认本图连接'}
         </Button>
       </div>
     </Dialog>
