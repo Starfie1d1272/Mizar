@@ -95,10 +95,10 @@ pub async fn observer_command(window: tauri::WebviewWindow, app: tauri::AppHandl
                 let mut intent = serde_json::json!({"action":"prepare","game":game_key,"job":job,"useMulnx":use_mulnx,"nativeHudToggle":native_hud_toggle});
                 if let Some(revision) = expected_revision { intent["expectedRevision"] = revision.into(); }
                 let preparation = request(&log, intent)?;
-                if preparation["enabled"] != true { stop(&log)?; return Ok(()); }
                 if native_hud_toggle && use_mulnx && crate::observer_hud::preflight(&log, true)? {
                     crate::observer_hud::initialize(&log, std::path::Path::new(executable), &game)?;
                 }
+                if preparation["enabled"] != true { stop(&log)?; return Ok(()); }
                 if preparation["reuse"] == true { ACTIVE.store(true, Ordering::Release); return Ok(()); }
                 let mut body = serde_json::json!({"action":"start-configured","executable":executable,
                     "game":game_key,"job":job,"revision":preparation["revision"],"useMulnx":use_mulnx,"nativeHudToggle":native_hud_toggle});
