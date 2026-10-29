@@ -85,7 +85,7 @@ export interface OrchestrationStatus {
   held: boolean;
   preparation: 'waiting' | 'preparing' | 'ready' | 'error';
   request: 'idle' | 'submitted' | 'queued' | 'rejected' | 'unknown';
-  execution: 'unconfirmed';
+  execution: 'unconfirmed' | 'pending' | 'started' | 'completed' | 'failed' | 'cancelled';
   current: string | null;
   message: string;
 }
@@ -99,6 +99,8 @@ export interface MulnxToolView {
 export interface OrchestrationView {
   tool?: MulnxToolView;
   preset: OrchestrationPreset;
+  activePresetId: string;
+  presets: { id: string; preset: OrchestrationPreset }[];
   automaticEnabled: boolean;
   ready: boolean;
   status: OrchestrationStatus;
