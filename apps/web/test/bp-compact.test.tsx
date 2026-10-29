@@ -3,7 +3,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { expect, it } from 'vitest';
 import type { BpSnapshot } from '@mizar/protocol/bp';
-import { BpCompactPresentation } from '../src/bp/BpPresentation';
+import { BpCompactPresentation } from '@mizar/hud-view';
 
 it('renders only revealed cards and side choices, and clears on disconnect', () => {
   const container = document.createElement('div');

@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react';
 
 import type { ProgramSnapshot } from '@mizar/protocol/program';
 
-import { ProgramCanvas } from '../ProgramCanvas';
-import { ProgramView } from '../ProgramView';
+import { ProgramCanvas } from '@mizar/hud-view';
+import { ProgramView } from '@mizar/hud-view';
 import { getProgramFixture, getProgramFixtureProvenance } from '../fixtures';
 import { ProgramFoundationProbe } from './ProgramFoundationProbe';
 import { getBuiltinResolvedPreset } from '@mizar/hud-config';

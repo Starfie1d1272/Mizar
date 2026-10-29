@@ -1,7 +1,7 @@
 import { canonicalizeCs2MapName } from '@mizar/core/map-name';
 import type { OperatorPayload } from '@mizar/protocol/operator';
 import type { ProgramPayload } from '@mizar/protocol/program';
-import { buildMatchHeaderPresentation } from '../program/widgets/match-header/presentation';
+import { buildMatchHeaderPresentation } from '@mizar/hud-view';
 
 export function workspaceMatchScore(program: ProgramPayload | null) {
   if (program?.status.telemetry !== 'fresh') return null;

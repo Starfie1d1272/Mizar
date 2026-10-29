@@ -5,10 +5,10 @@ import { afterEach, expect, it, vi } from 'vitest';
 import type { ProgramSnapshot } from '@mizar/protocol/program';
 import { getProgramFixture } from '../src/program/fixtures';
 import { ProgramCueEffectProvider } from '../src/program/ProgramCueRendererBridge';
-import { FocusedPlayerCard } from '../src/program/widgets/focused-player/FocusedPlayer';
-import { buildFocusedPlayerPresentation } from '../src/program/widgets/focused-player/presentation';
-import { PlayerCard } from '../src/program/widgets/player-rails/PlayerCard';
-import { buildPlayerRailsPresentation } from '../src/program/widgets/player-rails/presentation';
+import { FocusedPlayerCard } from '@mizar/hud-view';
+import { buildFocusedPlayerPresentation } from '@mizar/hud-view';
+import { PlayerCard } from '@mizar/hud-view';
+import { buildPlayerRailsPresentation } from '@mizar/hud-view';
 
 const fixture = getProgramFixture('live-canonical')!;
 const playerId = fixture.payload.observedPlayerSourceId!;

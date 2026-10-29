@@ -50,7 +50,7 @@ import {
   type ProgramFixtureId,
 } from '../program/fixtures';
 import { radarSnapshotForProgramFixture } from '../program/fixtures/radar-fixtures';
-import { hasAcceptedProgramSnapshot } from '../program/presentation-boundary';
+import { hasAcceptedProgramSnapshot } from '@mizar/hud-view';
 
 import { HudCanvasPreview } from './HudCanvasPreview';
 import { HudConsoleWorkspaces } from './HudConsoleWorkspaces';
