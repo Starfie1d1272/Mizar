@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react';
 
 import type { ProgramSnapshot } from '@mizar/protocol/program';
 
-import { ProgramCanvas } from '../ProgramCanvas';
-import { GameplayHud } from '../GameplayHud';
+import { ProgramCanvas } from '@mizar/hud-view';
+import { ProgramView } from '@mizar/hud-view';
 import { getProgramFixture, getProgramFixtureProvenance } from '../fixtures';
 import { ProgramFoundationProbe } from './ProgramFoundationProbe';
 import { getBuiltinResolvedPreset } from '@mizar/hud-config';
@@ -108,7 +108,8 @@ export function ProgramVisualFixturePage({ fixtureId }: { readonly fixtureId: st
           <CarryoverVisualFixture resolvedPreset={resolvedPreset} snapshot={snapshot} />
         ) : (
           <>
-            <GameplayHud
+            <ProgramView
+              kind="hud"
               gg={fixtureId === 'gameplay-map-ended-gg'}
               radarSnapshot={radarSnapshot}
               resolvedPreset={resolvedPreset}
@@ -143,7 +144,7 @@ function CarryoverVisualFixture({
 
   return (
     <>
-      <GameplayHud resolvedPreset={resolvedPreset} snapshot={displayedSnapshot} />
+      <ProgramView kind="hud" resolvedPreset={resolvedPreset} snapshot={displayedSnapshot} />
       <ProgramFoundationProbe fixtureId="player-rails-carryover" snapshot={displayedSnapshot} />
     </>
   );

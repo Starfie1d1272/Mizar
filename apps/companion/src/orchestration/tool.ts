@@ -15,6 +15,7 @@ import {
 import { join } from 'node:path';
 import { atomicJson, ensureDirectory, readJson, safePath } from '../resource-store/files.js';
 import { prepareIsolatedPack } from './prepare-pack.js';
+import { cameraSourceTreeSha256 } from './camera-source.js';
 import {
   downloadVerified,
   extractMulnx,
@@ -28,7 +29,7 @@ import {
 interface InstalledTool {
   release: MulnxRelease;
   directory: string;
-  packs: { name: string; sourceName: string }[];
+  packs: { name: string; sourceName: string; treeSha256?: string | undefined }[];
 }
 const releaseSchema = z.object({
   id: z.number().int().positive(),
@@ -91,6 +92,42 @@ export class MulnxTool {
       packs: this.installed?.packs ?? [],
     };
   }
+  /** Return a portable source only after checking the selected instance's original bytes. */
+  async cameraSource(name: string) {
+    const installed = this.installed;
+    const pack = installed?.packs.find((item) => item.name === name);
+    if (!installed || !pack?.treeSha256) throw new Error('mulnx_source_unverified');
+    const root = await safePath(
+      join(this.directory, installed.directory, 'MulNX/CS2OBTool/CameraSystem/CamPacks'),
+    );
+    if (
+      !pack.sourceName ||
+      pack.sourceName.trim() !== pack.sourceName ||
+      pack.sourceName.length > 120 ||
+      /[\\/]/.test(pack.sourceName) ||
+      [...pack.sourceName].some((character) => character.charCodeAt(0) < 32) ||
+      pack.sourceName === '.' ||
+      pack.sourceName === '..'
+    )
+      throw new Error('mulnx_source_invalid');
+    const treeSha256 = await cameraSourceTreeSha256(join(root, pack.sourceName));
+    if (treeSha256 !== pack.treeSha256) throw new Error('mulnx_source_changed');
+    return {
+      sourceName: pack.sourceName,
+      treeSha256,
+      converterVersion: 1 as const,
+      acquisition: {
+        kind: 'upstream' as const,
+        release: {
+          repository: 'Co1Swet/MulNX_CS2' as const,
+          releaseId: installed.release.id,
+          assetId: installed.release.assetId,
+          tag: installed.release.tag,
+          archiveSha256: installed.release.sha256,
+        },
+      },
+    };
+  }
   async load() {
     await ensureDirectory(this.directory);
     try {
@@ -103,6 +140,10 @@ export class MulnxTool {
               z.object({
                 name: z.string().regex(/^Mizar_[a-f0-9]{24}$/),
                 sourceName: z.string().min(1).max(256),
+                treeSha256: z
+                  .string()
+                  .regex(/^[a-f0-9]{64}$/)
+                  .optional(),
               }),
             )
             .max(128),
@@ -139,7 +180,13 @@ export class MulnxTool {
       return this.view();
     });
   }
-  prepare(cs2Path: string, consoleCapture = false, update = false, spectatorCfg = false) {
+  prepare(
+    cs2Path: string,
+    consoleCapture = false,
+    update = false,
+    spectatorCfg = false,
+    demoCfg?: string,
+  ) {
     return this.run('mulnx_prepare', async () => {
       // Called only by the authenticated native host after its process and install checks.
       // Entry uses prepared local bytes. The explicit update action owns network discovery.
@@ -179,9 +226,9 @@ export class MulnxTool {
         !this.installed ||
         this.installed.release.sha256 !== release.sha256
       )
-        await this.install(release, cs2Path);
+        await this.install(release, cs2Path, consoleCapture, spectatorCfg, demoCfg);
       const root = join(this.directory, this.installed!.directory, 'MulNX');
-      await this.configureLauncher(root, cs2Path, consoleCapture, spectatorCfg);
+      await this.configureLauncher(root, cs2Path, consoleCapture, spectatorCfg, demoCfg);
       const launcher = await safePath(root, 'CS2Injector/CS2Injector.exe');
       return { launcher, version: this.installed!.release.tag };
     });
@@ -235,6 +282,7 @@ export class MulnxTool {
     cs2Path: string,
     consoleCapture = false,
     spectatorCfg = false,
+    demoCfg?: string,
   ) {
     await this.configureReflection(root, 'Config/CS2OBTool_Refl.yaml', 'UISystem.ifDrawMid');
     await this.configureReflection(
@@ -302,6 +350,11 @@ export class MulnxTool {
       !/(?:^|\s)\+exec\s+(?:"mizar_observer\.cfg"|mizar_observer\.cfg)(?=\s|$)/i.test(options)
     )
       options = `${options} +exec mizar_observer.cfg`.trim();
+    if (demoCfg) {
+      if (!/^mizar_demo_[0-9a-f-]{36}\.cfg$/i.test(demoCfg))
+        throw new Error('mulnx_demo_config_invalid');
+      options = `${options} +exec ${demoCfg}`.trim();
+    }
     const baselineOptions = launchOptionsValue(baseline);
     const managedLine =
       options === baselineOptions ? originalLine : `launchOptions: ${JSON.stringify(options)}`;
@@ -323,7 +376,40 @@ export class MulnxTool {
     }
   }
 
-  private async install(release: MulnxRelease, cs2Path: string) {
+  /** Download and verify an upstream release without changing the selected instance. */
+  prepareRelease(update = true) {
+    return this.run('mulnx_prepare_release', async () => {
+      const release = update
+        ? await latestMulnxRelease()
+        : z.object({ release: releaseSchema }).parse(await readJson(this.bundle, 'release.json'))
+            .release;
+      return this.prepareReleaseFiles(release);
+    });
+  }
+
+  /** Native host must hold its launch and process/recovery guards while selecting. */
+  selectRelease(preparedId: string, cs2Path: string) {
+    return this.run('mulnx_select_release', () => this.selectReleaseFiles(preparedId, cs2Path));
+  }
+
+  private async install(
+    release: MulnxRelease,
+    cs2Path: string,
+    consoleCapture: boolean,
+    spectatorCfg: boolean,
+    demoCfg?: string,
+  ) {
+    const prepared = await this.prepareReleaseFiles(release);
+    await this.selectReleaseFiles(
+      prepared.preparedId,
+      cs2Path,
+      consoleCapture,
+      spectatorCfg,
+      demoCfg,
+    );
+  }
+
+  private async prepareReleaseFiles(release: MulnxRelease) {
     await safePath(this.directory);
     const extractor = await safePath(this.bundle, '7zr.exe');
     if ((await fileSha256(extractor)) !== SEVEN_ZIP.sha256)
@@ -344,8 +430,8 @@ export class MulnxTool {
           throw new Error('mulnx_bundle_integrity');
       } else await downloadVerified(release.url, archive, release.sha256, release.size);
       const unpacked = join(stage, 'unpacked');
-      const extracted = await extractMulnx(extractor, archive, unpacked);
-      const notices = join(extracted.root, 'Mizar-Upstream-Notices');
+      await extractMulnx(extractor, archive, unpacked);
+      const notices = join(stage, 'Mizar-Upstream-Notices');
       await mkdir(notices);
       const copies = await Promise.allSettled(
         ['LICENSE.txt', 'COPYRIGHT.md', 'SECURITY.md'].map(async (name) => {
@@ -362,6 +448,53 @@ export class MulnxTool {
         `MulNX ${release.tag}\nhttps://github.com/Co1Swet/MulNX_CS2/tree/${release.tag}\nhttps://github.com/Co1Swet/MulNX_CS2/archive/refs/tags/${release.tag}.zip\n`,
         { flag: 'wx' },
       );
+      // Publish the verified archive and receipt together; no machine configuration is written here.
+      const preparedId = `prepared-${release.sha256}-${randomUUID()}`;
+      await writeFile(join(stage, 'receipt.json'), JSON.stringify({ release }), { flag: 'wx' });
+      await rm(unpacked, { recursive: true, force: true });
+      await rename(stage, join(this.directory, preparedId));
+      return { preparedId, release };
+    } finally {
+      await rm(stage, { recursive: true, force: true });
+    }
+  }
+
+  private async selectReleaseFiles(
+    preparedId: string,
+    cs2Path: string,
+    consoleCapture = false,
+    spectatorCfg = false,
+    demoCfg?: string,
+  ) {
+    if (!/^prepared-[a-f0-9]{64}-[a-f0-9-]{36}$/.test(preparedId))
+      throw new Error('mulnx_prepared_invalid');
+    const prepared = await safePath(join(this.directory, preparedId));
+    const { release } = z
+      .object({ release: releaseSchema })
+      .parse(await readJson(prepared, 'receipt.json'));
+    if (!preparedId.startsWith(`prepared-${release.sha256}-`))
+      throw new Error('mulnx_prepared_invalid');
+    const archive = await safePath(prepared, 'MulNX.7z');
+    if (
+      (await lstat(archive)).size !== release.size ||
+      (await fileSha256(archive)) !== release.sha256
+    )
+      throw new Error('mulnx_prepared_integrity');
+    const extractor = await safePath(this.bundle, '7zr.exe');
+    if ((await fileSha256(extractor)) !== SEVEN_ZIP.sha256)
+      throw new Error('mulnx_extractor_integrity');
+    const stage = join(this.directory, `staging-${randomUUID()}`);
+    await mkdir(stage);
+    try {
+      const unpacked = join(stage, 'unpacked');
+      const extracted = await extractMulnx(extractor, archive, unpacked);
+      const notices = join(extracted.root, 'Mizar-Upstream-Notices');
+      await mkdir(notices);
+      for (const name of ['LICENSE.txt', 'COPYRIGHT.md', 'SECURITY.md', 'SOURCES.txt'])
+        await copyFile(
+          await safePath(prepared, `Mizar-Upstream-Notices/${name}`),
+          join(notices, name),
+        );
       const packsRoot = join(extracted.root, 'CS2OBTool/CameraSystem/CamPacks');
       const packs: InstalledTool['packs'] = [];
       const entries = await readdir(packsRoot, { withFileTypes: true });
@@ -369,10 +502,11 @@ export class MulnxTool {
       for (const entry of entries) {
         if (!entry.isDirectory() || entry.name.startsWith('Mizar_')) continue;
         const name = `Mizar_${createHash('sha256').update(entry.name).digest('hex').slice(0, 24)}`;
+        const treeSha256 = await cameraSourceTreeSha256(join(packsRoot, entry.name));
         await prepareIsolatedPack(join(packsRoot, entry.name), packsRoot, name);
-        packs.push({ name, sourceName: entry.name });
+        packs.push({ name, sourceName: entry.name, treeSha256 });
       }
-      await this.configureLauncher(extracted.root, cs2Path);
+      await this.configureLauncher(extracted.root, cs2Path, consoleCapture, spectatorCfg, demoCfg);
       const directory = `release-${release.sha256}-${randomUUID()}`;
       await rename(unpacked, join(this.directory, directory));
       const installed = { release, directory, packs };

@@ -32,6 +32,8 @@ Companion 组装运行时、持久化和接口
 
 官方示例素材由 Companion 的[单一资源 Store](../../apps/companion/src/resource-store/README.md)持有独立持久缓存和状态。安装器复用同一 Store；来源授权与清单消费复用资源契约模块，缓存启动离线复验证据及实际文件。原资源 URL 从活动版本读取；无活动缓存时保留 Full 随包来源，错误不混合版本。激活与制作生命周期及更新共用互斥保护，现场只准备素材。
 
+资源管理目录只汇总资源 Store 和 MulNX 工具的状态，不另存安装或当前版本。MulNX 镜头内容仍属于发行版，目录仅展示来源名称；工具检查沿用既有控制入口。
+
 安装器的素材准备入口必须成功打开 Store；初始化失败时，启动错误通过 `cause` 保留原始异常，由安装器既有脱敏日志出口记录错误码和系统调用等细节。普通 Companion 启动仍允许回退 Full 随包素材，不改变其容错行为。
 
 | 模块 | 负责 | 不负责 |
@@ -46,6 +48,7 @@ Companion 组装运行时、持久化和接口
 | `packages/rivalhub` | 公开赛事资料的解析、验证与转换 | 核心运行时和雷达逻辑 |
 | `packages/radar` | 地图几何、坐标投影、楼层和道具语义 | 动画、平滑或前端框架 |
 | `packages/radar-view` | 共享 React Canvas 雷达、资源与展示平滑 | 再做世界坐标校准或比赛推断 |
+| `packages/hud-view` | HUD、BP 与节目场景的共享 React 展示 | 实时连接与比赛事实 |
 | `packages/hud-config` | 预设、布局、外观、组件描述、校验与解析 | 比赛数据、文件系统或 React |
 | `packages/design-tokens` | 静态设计变量与生成 CSS | 运行时业务 |
 | `packages/cs2-assets` | 官方展示资产、目录、来源与解析入口 | 地图几何或比赛数据 |
@@ -70,7 +73,7 @@ Companion 组装运行时、持久化和接口
 
 Core 只维护一份 `RuntimeState`，通过 `ProgramProjection`、`RadarFrame`、`OperatorProjection`、`ObserverAssistProjection` 和 `DebugProjection` 提供不同视图。
 
-- 渲染层只消费自己需要的投影，不重新解释生死、名单、伤害统计或游戏时钟。
+- 渲染层只消费自己需要的投影，不重新解释生死、名单、伤害统计或游戏时钟。 Web 的 `ProgramView` 接收 HUD、节目场景或 BP 展示输入；实时订阅和雷达通道适配留在宿主，导演进度由场景状态传入。
 - 诊断可以看到更多信息，但不成为正式节目的数据源。
 - 选手稳定身份使用 Steam64，阵营与参赛方身份分开。名单和统计算法由[遥测语义](telemetry.md#名单与伤害统计)统一说明。
 - 展示配置故障不改变比赛数据；展示摘要也不向领域状态回写。

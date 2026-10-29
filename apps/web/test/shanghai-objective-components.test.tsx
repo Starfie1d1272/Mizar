@@ -5,7 +5,7 @@ import { expect, it } from 'vitest';
 import { getBuiltinResolvedPreset, placementToBox } from '@mizar/hud-config';
 import type { ProgramSnapshot } from '@mizar/protocol/program';
 import { getProgramFixture } from '../src/program/fixtures';
-import { TopScoreBar } from '../src/program/widgets/match-header/TopScoreBar';
+import { TopScoreBar } from '@mizar/hud-view';
 
 it.each(['plant', 'defuse'] as const)(
   'removes the Shanghai %s panel immediately when timing ends or becomes unavailable',

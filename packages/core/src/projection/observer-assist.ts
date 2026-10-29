@@ -3,6 +3,17 @@ import type { ProgramSafeRuntimeView } from './program-safe-runtime.js';
 import type { ProgramProjection, ProgramPlayerProjection } from './program.js';
 import type { PlayerDeathGameEvent, GameEventObservation } from '../game-events/index.js';
 
+/** A position proven to share one playback timeline and continuity with an event. */
+export interface ProgramClock {
+  readonly timeDomain: string;
+  readonly continuity: string;
+  readonly mapName: string;
+  readonly tick: number;
+  readonly ticksPerSecond: number;
+  /** Set only after freshness, progress and continuity have been checked by the caller. */
+  readonly usable: boolean;
+}
+
 export interface ObserverHint {
   readonly id: string;
   readonly remainingSeconds: number;
@@ -21,7 +32,7 @@ export interface ObserverAssistProjection {
   readonly availability: 'unavailable' | 'available';
   readonly observer?: ObserverHintSettings & {
     readonly state: 'connecting' | 'ready' | 'paused' | 'unavailable';
-    readonly timingBasis: 'estimated';
+    readonly timingBasis: 'estimated' | 'program-clock';
     readonly calibrationState: 'uncalibrated' | 'measured' | 'held' | 'reacquiring';
     readonly effectiveDelaySeconds: number;
     readonly waitingReason: string | null;
@@ -47,6 +58,7 @@ interface BufferedKill {
   matched: boolean;
   retired: boolean;
   shownDueMs: number | null;
+  position?: Omit<ProgramClock, 'usable'>;
 }
 
 interface ClockPoint {
@@ -218,7 +230,7 @@ export class ObserverHintTimeline {
     this.nextDueMs = null;
     this.nextWindowMs = null;
   }
-  consume(event: GameEventObservation) {
+  consume(event: GameEventObservation, position?: Omit<ProgramClock, 'usable'>) {
     if (event.cursor.role !== 'lookahead') return;
     this.lastReceivedMs = event.cursor.observedMonotonicMs;
     this.eventCounts[event.kind] = (this.eventCounts[event.kind] ?? 0) + 1;
@@ -262,6 +274,7 @@ export class ObserverHintTimeline {
       matched: false,
       retired: false,
       shownDueMs: null,
+      ...(position ? { position } : {}),
     });
     if (this.kills.length > 4096) {
       this.kills.shift();
@@ -480,6 +493,7 @@ export class ObserverHintTimeline {
     source: typeof this.sourceHealth,
     programReceiveMs = now,
     clock?: {
+      playback?: ProgramClock | null;
       source?: ClockInput;
       program?: ClockInput;
       freezeEnd?: ClockBoundary;
@@ -508,7 +522,7 @@ export class ObserverHintTimeline {
       observer: {
         ...settings,
         state,
-        timingBasis: 'estimated',
+        timingBasis: clock && 'playback' in clock ? 'program-clock' : 'estimated',
         calibrationState: this.calibrationState(now),
         effectiveDelaySeconds:
           (this.effectiveDelayMs ?? settings.expectedDelaySeconds * 1000) / 1000,
@@ -616,6 +630,92 @@ export class ObserverHintTimeline {
     if (players.length !== 10 || new Set(players.map((p) => p.sourcePlayerId)).size !== 10) {
       this.blocked = 'identity-unavailable';
       return empty('unavailable');
+    }
+    if (clock && 'playback' in clock) {
+      const playback = clock.playback;
+      const valid =
+        playback &&
+        playback.usable &&
+        playback.timeDomain.length > 0 &&
+        playback.continuity.length > 0 &&
+        playback.mapName === program.map.name &&
+        Number.isFinite(playback.tick) &&
+        Number.isFinite(playback.ticksPerSecond) &&
+        playback.ticksPerSecond > 0;
+      if (!valid) {
+        this.blocked = 'program-clock-unavailable';
+        return empty('unavailable');
+      }
+      if (
+        this.kills.some(
+          (kill) => kill.event.cursor.generation === source.generation && !kill.position,
+        )
+      ) {
+        this.blocked = 'program-clock-syncing';
+        return empty('unavailable');
+      }
+      const hints: ObserverHint[] = [];
+      let nextWindow: number | null = null;
+      for (const kill of this.kills) {
+        const position = kill.position;
+        if (
+          !position ||
+          kill.event.cursor.generation !== source.generation ||
+          kill.event.cursor.mapName !== position.mapName ||
+          position.timeDomain !== playback.timeDomain ||
+          position.continuity !== playback.continuity ||
+          position.mapName !== playback.mapName ||
+          position.ticksPerSecond !== playback.ticksPerSecond ||
+          !Number.isFinite(position.tick)
+        )
+          continue;
+        const remaining = (position.tick - playback.tick) / playback.ticksPerSecond;
+        if (remaining <= 0) continue;
+        const attacker = players.find(
+          (p) => p.sourcePlayerId === kill.event.attacker!.sourcePlayerId,
+        );
+        const victim = players.find((p) => p.sourcePlayerId === kill.event.victim.sourcePlayerId);
+        if (!attacker || !victim || victim.lifeState === 'dead') continue;
+        const window = Math.max(0, remaining - settings.leadSeconds);
+        nextWindow = nextWindow === null ? window : Math.min(nextWindow, window);
+        if (window > 0) continue;
+        const ref = (player: typeof attacker) => ({
+          name: (player.displayName ?? '选手').slice(0, 256),
+          observerSlot:
+            player.observerSlot !== null &&
+            Number.isInteger(player.observerSlot) &&
+            player.observerSlot >= 0 &&
+            player.observerSlot <= 9 &&
+            players.filter((p) => p.observerSlot === player.observerSlot).length === 1
+              ? player.observerSlot
+              : null,
+        });
+        hints.push({
+          id: `${kill.event.cursor.generation}:${kill.event.cursor.sequence}`,
+          remainingSeconds: remaining,
+          attacker: ref(attacker),
+          victim: ref(victim),
+        });
+      }
+      hints.sort((a, b) => a.remainingSeconds - b.remainingSeconds);
+      this.blocked = null;
+      return {
+        cursor: program.cursor,
+        availability: 'available',
+        observer: {
+          ...settings,
+          state: 'ready',
+          timingBasis: 'program-clock',
+          calibrationState: this.calibrationState(now),
+          effectiveDelaySeconds:
+            (this.effectiveDelayMs ?? settings.expectedDelaySeconds * 1000) / 1000,
+          waitingReason: nextWindow === null ? 'waiting-event' : hints.length ? null : 'buffering',
+          nextWindowSeconds: nextWindow,
+          measuredDelaySeconds:
+            this.effectiveDelayMs === null ? null : this.effectiveDelayMs / 1000,
+          hints: hints.slice(0, 6),
+        },
+      };
     }
     this.observeContinuity(
       now,

@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.library.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "tsBuildInfoFile": "./tsconfig.test.tsbuildinfo",
+    "types": ["node"]
+  },
+  "include": ["src", "test"]
+}
