@@ -5,7 +5,7 @@ import { useBpWorkspace } from '../bp/client';
 import { Button, Dialog, Panel, Select, StatusBanner } from '../ui';
 import { command } from './client';
 import { MatchDocumentView } from './MatchDocumentView';
-import '../bp/bp.css';
+import '@mizar/hud-view/bp.css';
 
 export function MatchBpSection({
   document,

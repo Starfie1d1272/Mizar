@@ -1,3 +1,4 @@
+import { useRadarViewSource } from '../realtime/radar-view-source';
 import { MatchConnectionControl } from './MatchConnectionControl';
 import { ObserverHints } from './ObserverHints';
 import { ReviewDialog, closeReviewWindow } from './ReviewDialog';
@@ -22,8 +23,8 @@ import type { ProgramPayload, ProgramSnapshot } from '@mizar/protocol/program';
 import { getRadarArtwork } from '@mizar-hud/radar-view';
 import { useBpSession } from '../bp/client';
 import { useLocalChannelClient } from '../realtime';
-import { Radar } from '../program/widgets/radar/Radar';
-import { hasRadarViewFrame } from '../program/widgets/radar/adapter';
+import { Radar } from '@mizar/hud-view';
+import { hasRadarViewFrame } from '@mizar/hud-view';
 import {
   desktopInvoke,
   HostWindowControlError,
@@ -287,6 +288,7 @@ function WorkspaceLeftContent() {
   );
   const guidance = useLocalRead<ProductionGuidance>('/local/v1/production-guidance');
   const radar = useLocalChannelClient('radar');
+  const radarSource = useRadarViewSource(radar);
   const operator = useLocalChannelClient('operator');
   const program = useLocalChannelClient('program');
   const state = useSyncExternalStore(
@@ -329,7 +331,7 @@ function WorkspaceLeftContent() {
         <section className="workspace-radar" aria-label="比赛雷达">
           <div className="workspace-radar__picture">
             {liveRadar ? (
-              <Radar client={radar} zoomMode="full-map" />
+              <Radar source={radarSource} zoomMode="full-map" />
             ) : (
               <div className="workspace-radar-placeholder" data-artwork={Boolean(artwork)}>
                 {artwork ? (
