@@ -53,7 +53,9 @@ test('uncertain Steam launch recovery stays visible after navigation and require
   await page
     .getByRole('region', { name: '配置与恢复', exact: true })
     .screenshot({ path: testInfo.outputPath('cs2-recovery-steam-pending.png') });
-  await page.getByRole('checkbox', { name: '已取消启动请求，并确认 CS2 与 MulNX 启动器已关闭' }).check();
+  await page
+    .getByRole('checkbox', { name: '已取消启动请求，并确认 CS2 与 MulNX 启动器已关闭' })
+    .check();
   await page.getByRole('button', { name: '恢复配置备份' }).click();
   await expect(page.getByRole('button', { name: '恢复配置备份' })).toHaveCount(0);
   await expect(page.getByText('原设置已恢复', { exact: true })).toBeVisible();
