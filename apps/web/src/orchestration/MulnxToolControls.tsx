@@ -104,9 +104,16 @@ export function MulnxToolControls({
           检查更新
         </Button>
       ) : null}
-      {!runtimeOnly && window.__TAURI_INTERNALS__ ? (
+      {maintenanceOnly && !tool.latest ? <span>检查后可选择安装或更新。</span> : null}
+      {!runtimeOnly && window.__TAURI_INTERNALS__ && (!maintenanceOnly || tool.latest) ? (
         <Button disabled={busy || tool.busy} onClick={() => void run('update')}>
-          更新或重新准备 MulNX
+          {maintenanceOnly
+            ? !tool.installed
+              ? '安装'
+              : tool.installed === tool.latest
+                ? '重新安装'
+                : '更新'
+            : '更新或重新准备 MulNX'}
         </Button>
       ) : null}
       {!runtimeOnly && !maintenanceOnly && window.__TAURI_INTERNALS__ ? (

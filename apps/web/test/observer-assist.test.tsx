@@ -261,12 +261,12 @@ it('explains a rejected MulNX update check and allows retry', async () => {
     root.render(
       <MulnxToolControls
         maintenanceOnly
-        tool={{ installed: 'old', latest: null, busy: false, message: '', packs: [] }}
+        tool={{ installed: 'old', latest: 'new', busy: false, message: '', packs: [] }}
       />,
     ),
   );
   const update = [...container.querySelectorAll('button')].find(
-    (button) => button.textContent === '更新或重新准备 MulNX',
+    (button) => button.textContent === '更新',
   )!;
   expect(container.textContent).not.toContain('启动 MulNX 工作台');
   expect(container.textContent).not.toContain('停止 MulNX 控制');
@@ -282,6 +282,24 @@ it('explains a rejected MulNX update check and allows retry', async () => {
   });
   expect(mocks.native).toHaveBeenCalledTimes(2);
   expect(container.textContent).toContain('MulNX 版本准备已完成');
+});
+it('shows the available MulNX maintenance action after checking versions', () => {
+  window.__TAURI_INTERNALS__ = { invoke: <T,>() => Promise.resolve(undefined as T) };
+  const render = (latest: string | null) =>
+    act(() =>
+      root.render(
+        <MulnxToolControls maintenanceOnly tool={{ installed: 'v1', latest, busy: false }} />,
+      ),
+    );
+  render(null);
+  expect(container.textContent).toContain('检查更新');
+  expect(container.textContent).not.toContain('重新安装');
+  render('v1');
+  expect(container.textContent).toContain('重新安装');
+  render('v2');
+  expect(
+    [...container.querySelectorAll('button')].some((button) => button.textContent === '更新'),
+  ).toBe(true);
 });
 it('gives specific repair guidance for known startup causes and diagnostic context for unknown failures', () => {
   const view: ObserverRuntimeView = {
