@@ -184,12 +184,14 @@ export function registerObsRoutes(
       const music = options.musicDirector?.();
       if (!music) throw new Error('music_unavailable');
       const result = await options.gameAudio.switchMode(() =>
-        options.adapter.switchAudioMode(
-          parsed.data.revision,
-          parsed.data.mode,
-          parsed.data.mode === 'desktop' ? parsed.data.selectionId : undefined,
-          music,
-        ),
+        parsed.data.mode === 'independent'
+          ? options.adapter.requestIndependentMode(parsed.data.revision, music)
+          : options.adapter.switchAudioMode(
+              parsed.data.revision,
+              'desktop',
+              parsed.data.selectionId,
+              music,
+            ),
       );
       return { ok: true, ...result };
     } catch (error) {
@@ -218,7 +220,7 @@ export function registerObsRoutes(
                         : error instanceof Error &&
                             error.message.startsWith('audio_global_path_unresolved:')
                           ? `OBS 全局音频来源“${error.message.slice('audio_global_path_unresolved:'.length)}”与目标重复，请在 OBS 停用该来源后重试。`
-                          : '切换未确认，请检查 OBS 音频、停止输出并重新读取来源。',
+                          : '切换未确认，请检查 OBS 音频后重试。',
       });
     }
   });

@@ -221,7 +221,13 @@ export async function renameLegacyProbe(
 export async function createCommentaryProbe(
   obs: ObsRpc,
   journalPath: string,
-  context: { endpoint: string; collection: string; sceneName: string; label?: string },
+  context: {
+    endpoint: string;
+    collection: string;
+    sceneName: string;
+    label?: string;
+    allowOutput?: boolean;
+  },
   stillCurrent: () => Promise<void>,
 ): Promise<string> {
   const journalSchema = z
@@ -257,7 +263,11 @@ export async function createCommentaryProbe(
     obs.call('GetSceneCollectionList'),
     obs.call('GetVersion'),
   ]);
-  if (stream.outputActive !== false || record.outputActive !== false)
+  if (
+    typeof stream.outputActive !== 'boolean' ||
+    typeof record.outputActive !== 'boolean' ||
+    (!context.allowOutput && (stream.outputActive || record.outputActive))
+  )
     throw new Error('commentary_output_active');
   if (collection.currentSceneCollectionName !== context.collection)
     throw new Error('commentary_collection_changed');
@@ -289,8 +299,9 @@ export async function createCommentaryProbe(
       obs.call('GetSceneCollectionList'),
     ]);
     if (
-      check[0].outputActive !== false ||
-      check[1].outputActive !== false ||
+      typeof check[0].outputActive !== 'boolean' ||
+      typeof check[1].outputActive !== 'boolean' ||
+      (!context.allowOutput && (check[0].outputActive || check[1].outputActive)) ||
       check[2].currentSceneCollectionName !== context.collection
     )
       throw new Error('commentary_context_changed');

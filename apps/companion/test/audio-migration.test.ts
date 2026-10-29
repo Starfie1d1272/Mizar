@@ -19,7 +19,7 @@ import { MusicStore } from '../src/music/store.js';
 import type { RemoteCommentary } from '../src/obs/remote-commentary.js';
 import type { ObsRpc } from '../src/obs/reconcile.js';
 
-function fixture() {
+function fixture(active = false) {
   const items = [
     { sceneItemId: 1, sourceUuid: 'old', sceneItemEnabled: true },
     { sceneItemId: 2, sourceUuid: 'new', sceneItemEnabled: false },
@@ -36,7 +36,7 @@ function fixture() {
   };
   const obs: ObsRpc = {
     async call(type, data) {
-      if (type === 'GetStreamStatus' || type === 'GetRecordStatus') return { outputActive: false };
+      if (type === 'GetStreamStatus' || type === 'GetRecordStatus') return { outputActive: active };
       if (type === 'GetSceneCollectionList') return { currentSceneCollectionName: 'collection' };
       if (type === 'GetInputAudioMonitorType') return { monitorType: monitor.mode };
       if (type === 'SetInputAudioMonitorType') {
@@ -97,6 +97,9 @@ function fixture() {
     plan,
     failNextWrite: () => {
       failAfterWrite = true;
+    },
+    programChanged: () => {
+      for (const listener of listeners) listener({ type: 'programChanged', managed: false });
     },
   };
 }
@@ -198,8 +201,7 @@ test('mode switch disables exclusive video audio and restores it without changin
     const mic = { mode: 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT' };
     const obs: ObsRpc = {
       async call(type, data) {
-        if (type === 'GetStreamStatus' || type === 'GetRecordStatus')
-          return { outputActive: false };
+        if (type === 'GetStreamStatus' || type === 'GetRecordStatus') return { outputActive: true };
         if (type === 'GetSceneCollectionList')
           return { currentSceneCollectionName: OBS_COLLECTION };
         if (type === 'GetInputList') return { inputs };
@@ -325,6 +327,9 @@ test('mode switch disables exclusive video audio and restores it without changin
       },
       async withAudioModeRecovery(run: () => Promise<void>) {
         await run();
+      },
+      monitorPlanCompatible() {
+        return true;
       },
       async commitDesktopMonitorOriginals() {},
     } as unknown as MusicDirector;
@@ -699,6 +704,8 @@ test('different managed desktop devices require selection before any write', asy
           };
         if (type === 'GetInputList') return { inputs };
         if (type === 'GetInputSettings') return { inputSettings: { device_id: data?.inputUuid } };
+        if (type === 'GetInputDefaultSettings')
+          return { defaultInputSettings: { device_id: 'default' } };
         if (type === 'GetSceneList')
           return { scenes: scenes.map(({ sceneName }) => ({ sceneName })) };
         if (type === 'GetSceneItemList')
@@ -801,6 +808,10 @@ test('mode recovery resolves persisted intent and completed journal without repl
               ],
             };
           if (type === 'GetInputList') return { inputs };
+          if (type === 'GetInputSettings') return { inputSettings: { device_id: 'default' } };
+          if (type === 'GetInputDefaultSettings')
+            return { defaultInputSettings: { device_id: 'default' } };
+          if (type === 'GetProfileParameter') return { parameterValue: 'default' };
           if (type === 'GetSceneList')
             return { scenes: scenes.map(({ sceneName }) => ({ sceneName })) };
           if (type === 'GetSceneItemList')
@@ -900,6 +911,9 @@ test('mode recovery resolves persisted intent and completed journal without repl
       const music = {
         async withAudioModeRecovery(run: () => Promise<void>) {
           await run();
+        },
+        monitorPlanCompatible() {
+          return true;
         },
         async commitDesktopMonitorOriginals(
           _before: typeof before,
@@ -1097,6 +1111,9 @@ test('interrupted switch back either restores desktop or commits independent mod
       const music = {
         async withAudioModeRecovery(run: () => Promise<void>) {
           await run();
+        },
+        monitorPlanCompatible() {
+          return true;
         },
         async commitDesktopMonitorOriginals(
           _before: typeof before,
@@ -1458,4 +1475,53 @@ test('unknown monitor device plans direct music output while retaining monitor p
       await director.commitDesktopMonitorOriginals(plan.musicBefore, plan.musicAfter, 'after');
     });
     assert.deepEqual(store.state.desktopMonitorOriginal, { bgm: null, stinger: null });
+  }));
+
+test('mode migration works during output while initialization remains protected', async () =>
+  withJournal(async (path) => {
+    const { items, obs, observer, plan } = fixture(true);
+    await assert.rejects(
+      new AudioMigration(path).migrate(obs, 'endpoint', plan, observer),
+      /output_active/,
+    );
+    const modeId = randomUUID();
+    const migration = new AudioMigration(path);
+    await migration.migrate(obs, 'endpoint', plan, observer, undefined, modeId);
+    assert.deepEqual(
+      items.map((item) => item.sceneItemEnabled),
+      [false, true],
+    );
+    assert.equal(await migration.inspectMode(obs, 'endpoint', observer, modeId), 'applied');
+    await migration.recover(obs, 'endpoint', observer, true);
+    assert.deepEqual(
+      items.map((item) => item.sceneItemEnabled),
+      [true, false],
+    );
+  }));
+
+test('program scene change interrupts a mode migration and retains recovery', async () =>
+  withJournal(async (path) => {
+    const { items, obs, observer, plan, programChanged } = fixture(true);
+    let switched = false;
+    const changing: ObsRpc = {
+      async call(type, data) {
+        const result = await obs.call(type, data);
+        if (type === 'SetSceneItemEnabled' && !switched) {
+          switched = true;
+          programChanged();
+        }
+        return result;
+      },
+    };
+    const migration = new AudioMigration(path);
+    await assert.rejects(
+      migration.migrate(changing, 'endpoint', plan, observer, undefined, randomUUID()),
+      /observation_lost|write_uncertain/,
+    );
+    assert.ok(await migration.pending());
+    await new AudioMigration(path).recover(obs, 'endpoint', observer, true);
+    assert.deepEqual(
+      items.map((item) => item.sceneItemEnabled),
+      [true, false],
+    );
   }));

@@ -44,7 +44,15 @@ const stateSchema = z
             mode: z.enum([
               'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
               'OBS_MONITORING_TYPE_MONITOR_ONLY',
+              'OBS_MONITORING_TYPE_NONE',
             ]),
+            applied: z
+              .enum([
+                'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
+                'OBS_MONITORING_TYPE_MONITOR_ONLY',
+                'OBS_MONITORING_TYPE_NONE',
+              ])
+              .optional(),
           })
           .nullable(),
         stinger: z
@@ -53,7 +61,15 @@ const stateSchema = z
             mode: z.enum([
               'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
               'OBS_MONITORING_TYPE_MONITOR_ONLY',
+              'OBS_MONITORING_TYPE_NONE',
             ]),
+            applied: z
+              .enum([
+                'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
+                'OBS_MONITORING_TYPE_MONITOR_ONLY',
+                'OBS_MONITORING_TYPE_NONE',
+              ])
+              .optional(),
           })
           .nullable(),
       })

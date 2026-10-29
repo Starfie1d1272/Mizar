@@ -32,10 +32,11 @@ export async function reconcileManagedAudio(
   completedPath?: string,
   monitor: AudioMonitorChange[] = [],
   modeId?: string,
+  omitCommentary = false,
 ): Promise<void> {
   const roleIds = Object.values(ids);
   if (new Set(roleIds).size !== roleIds.length) throw new Error('audio_binding_duplicate');
-  if (!desktopUuid && (!ids.game || !ids.remoteCommentary || !ids.microphone))
+  if (!desktopUuid && (!ids.game || (!ids.remoteCommentary && !omitCommentary) || !ids.microphone))
     throw new Error('audio_bindings_incomplete');
   const inputs = records((await obs.call('GetInputList')).inputs);
   if (desktopUuid) {
@@ -69,7 +70,9 @@ export async function reconcileManagedAudio(
     if (
       event.type !== 'item' &&
       !(preparing && event.type === 'identityChanged') &&
-      !(migrating && (event.type === 'inputSettings' || event.type === 'monitor'))
+      !(migrating && (event.type === 'inputSettings' || event.type === 'monitor')) &&
+      !(modeId && event.type === 'outputStarting') &&
+      !(modeId && event.type === 'programChanged' && event.managed)
     )
       changed = true;
   });
@@ -83,8 +86,9 @@ export async function reconcileManagedAudio(
     if (
       changed ||
       !(await verify()) ||
-      stream.outputActive !== false ||
-      record.outputActive !== false ||
+      typeof stream.outputActive !== 'boolean' ||
+      typeof record.outputActive !== 'boolean' ||
+      (!modeId && (stream.outputActive !== false || record.outputActive !== false)) ||
       collection.currentSceneCollectionName !== OBS_COLLECTION
     )
       throw new Error('audio_setup_context_changed');
@@ -327,6 +331,7 @@ export async function verifyManagedAudioMode(
   baseUrl: string,
   ids: Partial<Record<ObsAudioRole, string>>,
   desktop?: string,
+  omitCommentary = false,
 ): Promise<boolean> {
   const inputs = records((await obs.call('GetInputList')).inputs);
   const specials = await obs.call('GetSpecialInputs');
@@ -341,7 +346,9 @@ export async function verifyManagedAudioMode(
       .map((input) => String(input.inputName)),
   );
   if ([...globalNames].some((name) => !allowedGlobals.has(name))) return false;
-  const wanted = desktop ? [desktop] : [ids.game, ids.remoteCommentary];
+  const wanted = desktop
+    ? [desktop]
+    : [ids.game, ...(omitCommentary ? [] : [ids.remoteCommentary])];
   if (wanted.some((uuid) => !uuid || !inputs.some((input) => input.inputUuid === uuid)))
     return false;
   if (

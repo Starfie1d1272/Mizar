@@ -16,6 +16,7 @@ export class ObsMusicProvider {
   constructor(
     private readonly config: ObsConfigStore,
     private readonly diagnostic: (stage: string, evidence: unknown) => void = () => {},
+    private readonly onMonitorSettingsChanged: () => void = () => {},
   ) {}
   private trace(stage: string, evidence: unknown, secrets = this.knownSecrets) {
     try {
@@ -34,6 +35,8 @@ export class ObsMusicProvider {
       this.trace('music_obs_connect', { result: 'begin', host: config.host, port: config.port });
       const client = new OBSWebSocket();
       this.client = client;
+      client.on('InputAudioMonitorTypeChanged', () => this.onMonitorSettingsChanged());
+      client.on('CurrentProfileChanged', () => this.onMonitorSettingsChanged());
       client.on('ConnectionClosed', (error) => {
         if (this.client === client) {
           this.connected = false;

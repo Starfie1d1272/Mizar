@@ -48,6 +48,13 @@ export function ObsAudioRouting() {
       .then((value: typeof commentary) => setCommentary(value))
       .catch(() => setMessage('无法读取远端解说设置。'));
   }, []);
+  useEffect(() => {
+    if (!status?.waitingIndependent && !status?.transition) return;
+    const timer = setInterval(() => {
+      void refresh().catch(() => undefined);
+    }, 2500);
+    return () => clearInterval(timer);
+  }, [status?.waitingIndependent, status?.transition]);
   async function setMode(mode: 'autoTeamspeak' | 'disabled') {
     if (!commentary) return;
     const response = await fetch('/operator/obs/remote-commentary', {
@@ -112,6 +119,7 @@ export function ObsAudioRouting() {
   }
   async function switchMode(mode: 'desktop' | 'independent') {
     if (!status) return;
+    const cancelling = mode === 'desktop' && Boolean(status.waitingIndependent);
     const response = await fetch('/operator/obs/audio-mode', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -127,16 +135,20 @@ export function ObsAudioRouting() {
       await refresh().catch(() => undefined);
       throw new Error(result.message ?? '切换未确认，请检查 OBS。');
     }
-    const result = (await response.json()) as { monitorPending?: boolean };
+    const result = (await response.json()) as { monitorPending?: boolean; waiting?: boolean };
     await refresh();
     setDesktopSelection('');
     setChooseDesktop(false);
     setMessage(
-      result.monitorPending
-        ? '已切换桌面混音。音乐仍播出，本机监听待选择设备。'
-        : mode === 'desktop'
-          ? '已切换桌面混音。请录制试听。'
-          : '已切换独立分路。请录制试听。',
+      cancelling
+        ? '已取消等待。'
+        : result.waiting
+          ? '等待解说应用后切回，桌面混音仍可用。'
+          : result.monitorPending
+            ? '已切换桌面混音；音乐仍播出，本机监听暂缓。'
+            : mode === 'desktop'
+              ? '已切换桌面混音。请录制试听。'
+              : '已切换独立分路。请录制试听。',
     );
   }
   async function bind(role: ObsAudioRole, selectionId: string | null) {
@@ -171,7 +183,13 @@ export function ObsAudioRouting() {
         <>
           <p>
             当前模式：
-            {status.transition ? '正在核对切换状态' : status.desktop ? '桌面混音' : '独立分路'}
+            {status.transition
+              ? '正在核对切换状态'
+              : status.waitingIndependent
+                ? '桌面混音，等待解说应用后切回'
+                : status.desktop
+                  ? '桌面混音'
+                  : '独立分路'}
           </p>
           {chooseDesktop && (
             <Select
@@ -193,15 +211,17 @@ export function ObsAudioRouting() {
           <Button
             disabled={
               busy ||
-              Boolean(status.desktop && !status.transition) ||
-              (chooseDesktop && !desktopSelection)
+              Boolean(status.desktop && !status.transition && !status.waitingIndependent) ||
+              (chooseDesktop && !desktopSelection && !status.waitingIndependent)
             }
             onClick={() => void run(() => switchMode('desktop'))}
           >
-            切换桌面混音
+            {status.waitingIndependent ? '取消等待' : '切换桌面混音'}
           </Button>{' '}
           <Button
-            disabled={busy || (!status.desktop && !status.transition)}
+            disabled={
+              busy || Boolean(status.waitingIndependent) || (!status.desktop && !status.transition)
+            }
             onClick={() => void run(() => switchMode('independent'))}
           >
             切回独立分路

@@ -1,4 +1,5 @@
 import { writeFile, rm } from 'node:fs/promises';
+import { inspectAudioSceneGraph } from './audio-scene-graph.js';
 import { OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
 import { createCommentaryProbe, isTeamspeak, RemoteCommentary } from './remote-commentary.js';
 import {
@@ -27,6 +28,7 @@ export async function prepareRemoteCommentary(
   observer?: MigrationObserver,
   verifySwitch?: (plan: CommentarySwitch) => Promise<boolean>,
   onReady?: (target: string, revision: string) => void,
+  allowOutput = false,
 ): Promise<ObsFinding[]> {
   const state = await owner.get();
   const pending = (message = '场景已准备，音频分路待完成。'): ObsFinding[] => [
@@ -44,8 +46,12 @@ export async function prepareRemoteCommentary(
     obs.call('GetStreamStatus'),
     obs.call('GetRecordStatus'),
   ]);
-  if (stream.outputActive !== false || record.outputActive !== false)
-    return pending('OBS 正在输出；停止输出后请重新配置远端解说音频。');
+  if (
+    typeof stream.outputActive !== 'boolean' ||
+    typeof record.outputActive !== 'boolean' ||
+    (!allowOutput && (stream.outputActive || record.outputActive))
+  )
+    return pending('OBS 音频状态未确认，请稍后重试。');
   const check = async () => {
     if ((await owner.get()).revision !== state.revision)
       throw new Error('commentary_revision_changed');
@@ -55,13 +61,34 @@ export async function prepareRemoteCommentary(
       obs.call('GetSceneCollectionList'),
     ]);
     if (
-      s.outputActive !== false ||
-      r.outputActive !== false ||
+      typeof s.outputActive !== 'boolean' ||
+      typeof r.outputActive !== 'boolean' ||
+      (!allowOutput && (s.outputActive || r.outputActive)) ||
       c.currentSceneCollectionName !== collection
     )
       throw new Error('commentary_context_changed');
   };
   const scenes = obsDesiredScenes(baseUrl);
+  const ensureInert = async (uuid: string) => {
+    if (!allowOutput) return;
+    const graph = await inspectAudioSceneGraph(
+      obs,
+      scenes.map((scene) => scene.sceneName),
+    );
+    if (
+      graph.some((container) =>
+        container.items.some(
+          (item) =>
+            item.sourceUuid === uuid && (item.sceneItemEnabled || container.otherRoots.size),
+        ),
+      )
+    )
+      throw new Error('commentary_shared_source');
+    const inputs = records((await obs.call('GetInputList')).inputs);
+    const name = inputs.find((input) => input.inputUuid === uuid)?.inputName;
+    if (Object.values(await obs.call('GetSpecialInputs')).includes(name))
+      throw new Error('commentary_shared_source');
+  };
   let inputs = records((await obs.call('GetInputList')).inputs);
   let target: string | undefined;
   let pendingMessage: string | undefined;
@@ -82,7 +109,7 @@ export async function prepareRemoteCommentary(
       probe = await createCommentaryProbe(
         obs,
         journal,
-        { endpoint, collection, sceneName: scenes[0]!.sceneName },
+        { endpoint, collection, sceneName: scenes[0]!.sceneName, allowOutput },
         check,
       );
       inputs = records((await obs.call('GetInputList')).inputs);
@@ -120,7 +147,7 @@ export async function prepareRemoteCommentary(
           target = await createCommentaryProbe(
             obs,
             journal,
-            { endpoint, collection, sceneName: scenes[0]!.sceneName },
+            { endpoint, collection, sceneName: scenes[0]!.sceneName, allowOutput },
             check,
           );
           inputs = records((await obs.call('GetInputList')).inputs);
@@ -137,7 +164,7 @@ export async function prepareRemoteCommentary(
       const owned = await createCommentaryProbe(
         obs,
         journal,
-        { endpoint, collection, sceneName: scenes[0]!.sceneName },
+        { endpoint, collection, sceneName: scenes[0]!.sceneName, allowOutput },
         check,
       );
       const settings = (await obs.call('GetInputSettings', { inputUuid: owned })).inputSettings;
@@ -169,6 +196,7 @@ export async function prepareRemoteCommentary(
       )
         return pending('远端解说来源目标已改变，请重新配置。');
       if (window && existing && existing !== window) {
+        if (allowOutput) return pending('解说来源已改变，请重新选择。');
         const path = `${journal}.switch`;
         const plan = planned;
         if (
@@ -212,6 +240,7 @@ export async function prepareRemoteCommentary(
         );
       }
       if (window && !existing) {
+        await ensureInert(owned);
         await check();
         await obs.call('SetInputSettings', {
           inputUuid: owned,

@@ -17,7 +17,18 @@ const roles = ['game', 'remoteCommentary', 'microphone'] as const;
 const musicOriginal = z
   .object({
     uuid: z.string().min(1),
-    mode: z.enum(['OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT', 'OBS_MONITORING_TYPE_MONITOR_ONLY']),
+    mode: z.enum([
+      'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
+      'OBS_MONITORING_TYPE_MONITOR_ONLY',
+      'OBS_MONITORING_TYPE_NONE',
+    ]),
+    applied: z
+      .enum([
+        'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
+        'OBS_MONITORING_TYPE_MONITOR_ONLY',
+        'OBS_MONITORING_TYPE_NONE',
+      ])
+      .optional(),
   })
   .strict()
   .nullable();
@@ -30,6 +41,7 @@ const modeTransition = z
     collection: z.string().min(1),
     targetDesktop: obsAudioBindingSchema.nullable(),
     targetMicrophone: obsAudioBindingSchema.nullable(),
+    omitCommentary: z.boolean().default(false),
     musicBefore: musicOriginals,
     musicAfter: musicOriginals,
   })
@@ -41,6 +53,19 @@ const stateSchema = z
     desktop: obsAudioBindingSchema.nullable().default(null),
     lastDesktop: obsAudioBindingSchema.nullable().default(null),
     desktopMicrophone: obsAudioBindingSchema.nullable().default(null),
+    independentCommentaryDisabled: z.boolean().default(false),
+    waitingIndependent: z
+      .object({
+        id: z.string().uuid(),
+        endpoint: z.string().min(1),
+        collection: z.string().min(1),
+        commentaryRevision: z.string().uuid(),
+        createdMicrophone: z.boolean().default(false),
+        omitCommentary: z.boolean().default(false),
+      })
+      .strict()
+      .nullable()
+      .default(null),
     transition: z
       .union([modeTransition, z.boolean(), z.null()])
       .default(null)
@@ -109,6 +134,8 @@ export class ObsAudioRouting {
         desktop: null,
         lastDesktop: null,
         desktopMicrophone: null,
+        independentCommentaryDisabled: false,
+        waitingIndependent: null,
         transition: null,
         bindings: { game: null, remoteCommentary: null, microphone: null },
       };
@@ -163,6 +190,8 @@ export class ObsAudioRouting {
       desktop: null,
       lastDesktop: state.lastDesktop,
       desktopMicrophone: state.desktopMicrophone,
+      independentCommentaryDisabled: state.independentCommentaryDisabled,
+      waitingIndependent: state.waitingIndependent,
       transition: null,
       bindings,
     };
@@ -257,10 +286,13 @@ export class ObsAudioRouting {
     },
   ): Promise<boolean> {
     const state = await this.load();
-    const managed = state.desktop ? null : await this.managedBindings(obs, endpoint);
+    const managed =
+      state.desktop || state.independentCommentaryDisabled
+        ? null
+        : await this.managedBindings(obs, endpoint);
     if (
       state.transition ||
-      (!state.desktop && !managed) ||
+      (!state.desktop && !state.independentCommentaryDisabled && !managed) ||
       (await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== OBS_COLLECTION ||
       (state.desktop &&
         (state.desktop.endpoint !== endpoint || state.desktop.collection !== OBS_COLLECTION))
@@ -271,9 +303,31 @@ export class ObsAudioRouting {
           state.desktop.inputUuid,
           ...(state.desktopMicrophone ? [state.desktopMicrophone.inputUuid] : []),
         ]
-      : Object.values(managed!.ids);
+      : state.independentCommentaryDisabled
+        ? [state.bindings.game?.inputUuid, state.bindings.microphone?.inputUuid].filter(
+            (uuid): uuid is string => Boolean(uuid),
+          )
+        : Object.values(managed!.ids);
     const specials = await obs.call('GetSpecialInputs');
     const inputs = records((await obs.call('GetInputList')).inputs);
+    if (
+      !state.desktop &&
+      state.independentCommentaryDisabled &&
+      (selectedIds.length !== 2 ||
+        ['game', 'microphone'].some((role) => {
+          const binding = state.bindings[role as 'game' | 'microphone'];
+          return (
+            !binding ||
+            binding.endpoint !== endpoint ||
+            binding.collection !== OBS_COLLECTION ||
+            !inputs.some(
+              (input) =>
+                input.inputUuid === binding.inputUuid && input.inputKind === binding.inputKind,
+            )
+          );
+        }))
+    )
+      return false;
     const globalNames = new Set(
       Object.values(specials).filter(
         (value): value is string => typeof value === 'string' && value.length > 0,
@@ -432,6 +486,8 @@ export class ObsAudioRouting {
           }
         : null,
       transition: Boolean(state.transition),
+      waitingIndependent: Boolean(state.waitingIndependent),
+      independentCommentaryDisabled: state.independentCommentaryDisabled,
       bindings,
       candidates: choices,
       findings,
@@ -450,6 +506,9 @@ export class ObsAudioRouting {
       desktop: state.desktop,
       transition: state.transition,
       bindings: state.bindings,
+      desktopMicrophone: state.desktopMicrophone,
+      independentCommentaryDisabled: state.independentCommentaryDisabled,
+      waitingIndependent: state.waitingIndependent,
     };
   }
   private async saveState(next: State) {
@@ -476,8 +535,113 @@ export class ObsAudioRouting {
       desktop,
       lastDesktop: desktop ?? state.desktop ?? state.lastDesktop,
       desktopMicrophone: side === 'after' ? transition.targetMicrophone : state.desktopMicrophone,
+      independentCommentaryDisabled:
+        side === 'after' && !desktop
+          ? transition.omitCommentary
+          : state.independentCommentaryDisabled,
+      waitingIndependent: side === 'after' && !desktop ? null : state.waitingIndependent,
       transition: null,
     });
+  }
+  async waitForIndependent(
+    revision: string,
+    endpoint: string,
+    collection: string,
+    commentaryRevision: string,
+    omitCommentary: boolean,
+  ) {
+    const state = await this.load();
+    if (state.revision !== revision) throw new Error('audio_revision_changed');
+    if (
+      !state.desktop ||
+      state.transition ||
+      state.desktop.endpoint !== endpoint ||
+      state.desktop.collection !== collection
+    )
+      throw new Error('audio_mode_pending');
+    const existing = state.waitingIndependent;
+    if (
+      existing &&
+      existing.endpoint === endpoint &&
+      existing.collection === collection &&
+      existing.commentaryRevision === commentaryRevision
+    )
+      return existing;
+    const waitingIndependent = {
+      id: randomUUID(),
+      endpoint,
+      collection,
+      commentaryRevision,
+      createdMicrophone: false,
+      omitCommentary,
+    };
+    await this.saveState({ ...state, revision: randomUUID(), waitingIndependent });
+    return waitingIndependent;
+  }
+  async cancelIndependentWait(id?: string) {
+    const state = await this.load();
+    if (!state.waitingIndependent || (id && state.waitingIndependent.id !== id)) return false;
+    await this.saveState({ ...state, revision: randomUUID(), waitingIndependent: null });
+    return true;
+  }
+  async adoptPreparedBindings(
+    obs: ObsRpc,
+    endpoint: string,
+    waitId: string,
+    revision: string,
+    ids: Partial<Record<ObsAudioRole, string>>,
+    createdMicrophone: boolean,
+  ) {
+    const state = await this.load();
+    if (
+      state.revision !== revision ||
+      state.waitingIndependent?.id !== waitId ||
+      state.transition ||
+      !state.desktop
+    )
+      throw new Error('audio_revision_changed');
+    const current = await this.inputs(obs);
+    if (
+      current.collection !== state.waitingIndependent.collection ||
+      endpoint !== state.waitingIndependent.endpoint ||
+      !ids.game ||
+      !ids.microphone ||
+      (!ids.remoteCommentary && !state.waitingIndependent.omitCommentary) ||
+      new Set(Object.values(ids)).size !== Object.values(ids).length
+    )
+      throw new Error('audio_selection_changed');
+    const bindings = { ...state.bindings };
+    for (const role of roles) {
+      if (!ids[role]) continue;
+      const input = current.inputs.find((candidate) => candidate.inputUuid === ids[role]);
+      if (!input) throw new Error('audio_selection_changed');
+      const existing = bindings[role];
+      if (
+        existing &&
+        (existing.inputUuid !== input.inputUuid ||
+          existing.inputKind !== input.inputKind ||
+          existing.endpoint !== endpoint ||
+          existing.collection !== current.collection)
+      )
+        throw new Error('audio_binding_changed');
+      if (!existing)
+        bindings[role] = {
+          inputUuid: input.inputUuid,
+          inputKind: input.inputKind,
+          endpoint,
+          collection: current.collection,
+        };
+    }
+    await this.saveState({
+      ...state,
+      revision: randomUUID(),
+      bindings,
+      waitingIndependent: {
+        ...state.waitingIndependent,
+        createdMicrophone: state.waitingIndependent.createdMicrophone || createdMicrophone,
+      },
+    });
+    return (await this.load()).revision;
   }
   async switchMode(
     obs: ObsRpc,
@@ -496,19 +660,40 @@ export class ObsAudioRouting {
     const state = await this.load();
     if (state.revision !== revision) throw new Error('audio_revision_changed');
     if (state.transition) throw new Error('audio_mode_pending');
-    if (mode === 'desktop' && state.desktop) throw new Error('audio_mode_already_desktop');
+    if (mode === 'desktop' && state.desktop) {
+      if (state.waitingIndependent) {
+        await this.cancelIndependentWait(state.waitingIndependent.id);
+        return;
+      }
+      throw new Error('audio_mode_already_desktop');
+    }
     let ids: Partial<Record<ObsAudioRole, string>> = {};
     let desktop: State['desktop'] = null;
     let desktopMicrophone: State['desktopMicrophone'] = null;
     if (mode === 'independent') {
-      if (
-        !state.bindings.remoteCommentary ||
-        (await this.invalidBindings(obs, endpoint)).includes('remoteCommentary')
-      )
-        throw new Error('audio_commentary_unavailable');
-      const managed = await this.managedBindings(obs, endpoint);
-      if (!managed) throw new Error('audio_bindings_incomplete');
-      ids = managed.ids;
+      if (state.waitingIndependent?.omitCommentary) {
+        const invalid = await this.invalidBindings(obs, endpoint);
+        if (
+          !state.bindings.game ||
+          !state.bindings.microphone ||
+          invalid.includes('game') ||
+          invalid.includes('microphone')
+        )
+          throw new Error('audio_bindings_incomplete');
+        ids = {
+          game: state.bindings.game.inputUuid,
+          microphone: state.bindings.microphone.inputUuid,
+        };
+      } else {
+        if (
+          !state.bindings.remoteCommentary ||
+          (await this.invalidBindings(obs, endpoint)).includes('remoteCommentary')
+        )
+          throw new Error('audio_commentary_unavailable');
+        const managed = await this.managedBindings(obs, endpoint);
+        if (!managed) throw new Error('audio_bindings_incomplete');
+        ids = managed.ids;
+      }
     } else {
       const [stream, record, current, specials] = await Promise.all([
         obs.call('GetStreamStatus'),
@@ -517,8 +702,8 @@ export class ObsAudioRouting {
         obs.call('GetSpecialInputs'),
       ]);
       if (
-        stream.outputActive !== false ||
-        record.outputActive !== false ||
+        typeof stream.outputActive !== 'boolean' ||
+        typeof record.outputActive !== 'boolean' ||
         current.collection !== OBS_COLLECTION
       )
         throw new Error('audio_setup_context_changed');
@@ -585,15 +770,17 @@ export class ObsAudioRouting {
               (managedIds.has(value.inputUuid) || globalNames.has(value.inputName)),
           );
           if (candidates.length > 1) {
+            const defaults = (
+              await obs.call('GetInputDefaultSettings', { inputKind: 'wasapi_output_capture' })
+            ).defaultInputSettings as Record<string, unknown> | undefined;
             const deviceIds = await Promise.all(
               candidates.map(async (candidate) => {
                 const result = await obs.call('GetInputSettings', {
                   inputUuid: candidate.inputUuid,
                 });
                 const settings = result.inputSettings as Record<string, unknown> | undefined;
-                return typeof settings?.device_id === 'string' && settings.device_id
-                  ? settings.device_id.toLowerCase()
-                  : null;
+                const device = settings?.device_id ?? defaults?.device_id;
+                return typeof device === 'string' && device ? device.toLowerCase() : null;
               }),
             );
             if (deviceIds.some((id) => !id) || new Set(deviceIds).size !== 1)
@@ -613,8 +800,8 @@ export class ObsAudioRouting {
             obs.call('GetSceneCollectionList'),
           ]);
           if (
-            streamNow.outputActive !== false ||
-            recordNow.outputActive !== false ||
+            typeof streamNow.outputActive !== 'boolean' ||
+            typeof recordNow.outputActive !== 'boolean' ||
             collectionNow.currentSceneCollectionName !== current.collection ||
             (await this.load()).revision !== revision
           )
@@ -678,6 +865,7 @@ export class ObsAudioRouting {
           collection: desktop?.collection ?? OBS_COLLECTION,
           targetDesktop: desktop,
           targetMicrophone: desktopMicrophone,
+          omitCommentary: !desktop && Boolean(state.waitingIndependent?.omitCommentary),
           musicBefore,
           musicAfter,
         },
@@ -743,6 +931,8 @@ export class ObsAudioRouting {
       desktop: state.desktop,
       lastDesktop: state.lastDesktop,
       desktopMicrophone: state.desktopMicrophone,
+      independentCommentaryDisabled: state.independentCommentaryDisabled,
+      waitingIndependent: state.waitingIndependent,
       transition: state.transition,
       bindings: { ...state.bindings, [command.role]: binding },
     };

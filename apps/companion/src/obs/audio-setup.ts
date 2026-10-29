@@ -1,4 +1,6 @@
-import { readFile, rm } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import { OBS_CAPTURE_INPUT, OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
 import { reconcileManagedAudio } from './managed-audio.js';
 import { inspectLegacyAudioTemplate } from './audio-template.js';
@@ -11,7 +13,8 @@ import {
 } from './remote-commentary.js';
 import { prepareRemoteCommentary } from './remote-commentary-setup.js';
 import type { ObsFinding, ObsRpc } from './reconcile.js';
-import type { ObsAudioRole } from '@mizar/protocol/obs';
+import type { ObsAudioBinding, ObsAudioRole } from '@mizar/protocol/obs';
+import { inspectAudioSceneGraph } from './audio-scene-graph.js';
 import type { CommentarySwitch } from './commentary-switch.js';
 import {
   createOwnedCommentaryTarget,
@@ -397,4 +400,248 @@ export async function configureIndependentAudio(
   } finally {
     stopTargetObservation();
   }
+}
+
+export async function commentaryTargetReady(
+  obs: ObsRpc,
+  owner: RemoteCommentary,
+  uuid: string,
+  expectedRevision: string,
+): Promise<boolean> {
+  const preference = await owner.get();
+  if (preference.revision !== expectedRevision || preference.preference.mode === 'disabled')
+    return false;
+  if (preference.preference.mode === 'existingInput')
+    return preference.preference.binding.inputUuid === uuid;
+  const settings = (await obs.call('GetInputSettings', { inputUuid: uuid })).inputSettings as
+    Record<string, unknown> | undefined;
+  const window = settings?.window;
+  if (
+    typeof window !== 'string' ||
+    (preference.preference.mode === 'autoTeamspeak' && !isTeamspeak(window)) ||
+    (preference.preference.mode === 'application' && window !== preference.preference.window)
+  )
+    return false;
+  const candidates = await owner.windows(obs, preference.revision, uuid);
+  if (candidates.some((candidate) => candidate.window === window)) return true;
+  return (
+    preference.preference.mode === 'autoTeamspeak' &&
+    candidates.filter((candidate) => isTeamspeak(candidate.window)).length === 1
+  );
+}
+
+/** Prepare disabled independent sources while the desktop path remains active. */
+export async function prepareIndependentForDesktop(
+  obs: ObsRpc,
+  endpoint: string,
+  observer: MigrationObserver,
+  owner: RemoteCommentary,
+  journal: string,
+  baseUrl: string,
+  bindings: Record<ObsAudioRole, ObsAudioBinding | null>,
+  desktopMicrophone: ObsAudioBinding | null,
+  expectedCommentaryRevision: string,
+  valid: () => Promise<boolean>,
+): Promise<{ ids: Partial<Record<ObsAudioRole, string>>; createdMicrophone: boolean } | null> {
+  const scenes = obsDesiredScenes(baseUrl);
+  const check = async () => {
+    const [collection, stream, record, preference] = await Promise.all([
+      obs.call('GetSceneCollectionList'),
+      obs.call('GetStreamStatus'),
+      obs.call('GetRecordStatus'),
+      owner.get(),
+    ]);
+    if (
+      collection.currentSceneCollectionName !== OBS_COLLECTION ||
+      typeof stream.outputActive !== 'boolean' ||
+      typeof record.outputActive !== 'boolean' ||
+      preference.revision !== expectedCommentaryRevision ||
+      !(await valid())
+    )
+      throw new Error('audio_setup_context_changed');
+  };
+  await check();
+  const preference = await owner.get();
+  const omitCommentary = preference.preference.mode === 'disabled';
+  let inputs = records((await obs.call('GetInputList')).inputs);
+  const validateBinding = (binding: ObsAudioBinding | null) => {
+    if (!binding) return undefined;
+    if (
+      binding.endpoint !== endpoint ||
+      binding.collection !== OBS_COLLECTION ||
+      !inputs.some(
+        (input) => input.inputUuid === binding.inputUuid && input.inputKind === binding.inputKind,
+      )
+    )
+      throw new Error('audio_binding_changed');
+    return binding.inputUuid;
+  };
+  let commentary = omitCommentary ? undefined : validateBinding(bindings.remoteCommentary);
+  if (
+    commentary &&
+    !(await commentaryTargetReady(obs, owner, commentary, expectedCommentaryRevision))
+  )
+    return null;
+  if (!commentary && !omitCommentary) {
+    await prepareRemoteCommentary(
+      obs,
+      owner,
+      journal,
+      endpoint,
+      baseUrl,
+      observer,
+      undefined,
+      (uuid) => {
+        commentary = uuid;
+      },
+      true,
+    );
+    if (!commentary) return null;
+    inputs = records((await obs.call('GetInputList')).inputs);
+  }
+  await check();
+  let game = validateBinding(bindings.game);
+  if (!game) {
+    game = await createCommentaryProbe(
+      obs,
+      `${journal}.game`,
+      {
+        endpoint,
+        collection: OBS_COLLECTION,
+        sceneName: scenes[0]!.sceneName,
+        label: 'Game Audio',
+        allowOutput: true,
+      },
+      check,
+    );
+    const settings = (await obs.call('GetInputSettings', { inputUuid: game })).inputSettings as
+      Record<string, unknown> | undefined;
+    if (!settings) throw new Error('audio_game_target_changed');
+    if (!settings.window) {
+      const graph = await inspectAudioSceneGraph(
+        obs,
+        scenes.map((scene) => scene.sceneName),
+      );
+      if (
+        graph.some((container) =>
+          container.items.some(
+            (item) =>
+              item.sourceUuid === game && (item.sceneItemEnabled || container.otherRoots.size),
+          ),
+        )
+      )
+        throw new Error('audio_game_source_shared');
+      const capture = inputs.find(
+        (input) => input.inputName === OBS_CAPTURE_INPUT && input.inputKind === 'game_capture',
+      );
+      const captureSettings = capture
+        ? ((await obs.call('GetInputSettings', { inputUuid: capture.inputUuid })).inputSettings as
+            Record<string, unknown> | undefined)
+        : undefined;
+      const target =
+        typeof captureSettings?.window === 'string' &&
+        captureSettings.window.split(':').at(-1)?.toLowerCase() === 'cs2.exe'
+          ? captureSettings.window
+          : 'Counter-Strike 2:SDL_app:cs2.exe';
+      await check();
+      await obs.call('SetInputSettings', {
+        inputUuid: game,
+        inputSettings: { window: target, priority: 2 },
+        overlay: true,
+      });
+      if (
+        (
+          (await obs.call('GetInputSettings', { inputUuid: game })).inputSettings as
+            Record<string, unknown> | undefined
+        )?.window !== target
+      )
+        throw new Error('audio_game_target_changed');
+    }
+    inputs = records((await obs.call('GetInputList')).inputs);
+  }
+  const createdMicrophone = !bindings.microphone && !desktopMicrophone;
+  let microphone = validateBinding(bindings.microphone ?? desktopMicrophone);
+  if (!microphone) {
+    const path = `${journal}.microphone`;
+    let saved: { endpoint: string; collection: string; name: string; uuid?: string } | undefined;
+    try {
+      saved = JSON.parse(await readFile(path, 'utf8')) as typeof saved;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    if (saved) {
+      if (
+        saved.endpoint !== endpoint ||
+        saved.collection !== OBS_COLLECTION ||
+        !saved.uuid ||
+        !inputs.some(
+          (input) =>
+            input.inputUuid === saved!.uuid &&
+            input.inputKind === 'wasapi_input_capture' &&
+            input.inputName === saved!.name,
+        )
+      )
+        throw new Error('audio_microphone_creation_unconfirmed');
+      microphone = saved.uuid;
+    } else {
+      const names = new Set(inputs.map((input) => input.inputName));
+      let name = '麦克风';
+      for (let index = 2; names.has(name); index++) name = `麦克风 ${index}`;
+      saved = { endpoint, collection: OBS_COLLECTION, name };
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, `${JSON.stringify(saved)}\n`, { flag: 'wx', mode: 0o600 });
+      await check();
+      const created = await obs.call('CreateInput', {
+        sceneName: scenes[0]!.sceneName,
+        inputName: name,
+        inputKind: 'wasapi_input_capture',
+        inputSettings: { device_id: 'default' },
+        sceneItemEnabled: false,
+      });
+      if (typeof created.inputUuid !== 'string' || !created.inputUuid)
+        throw new Error('audio_microphone_creation_unconfirmed');
+      microphone = created.inputUuid;
+      const temp = `${path}.${randomUUID()}.tmp`;
+      try {
+        await writeFile(temp, `${JSON.stringify({ ...saved, uuid: microphone })}\n`, {
+          mode: 0o600,
+        });
+        await rename(temp, path);
+      } finally {
+        await rm(temp, { force: true });
+      }
+    }
+    inputs = records((await obs.call('GetInputList')).inputs);
+  }
+  const ids = { game, ...(commentary ? { remoteCommentary: commentary } : {}), microphone };
+  if (new Set(Object.values(ids)).size !== Object.values(ids).length)
+    throw new Error('audio_binding_duplicate');
+  for (const scene of scenes) {
+    let items = records(
+      (await obs.call('GetSceneItemList', { sceneName: scene.sceneName })).sceneItems,
+    );
+    for (const uuid of Object.values(ids)) {
+      if (items.some((item) => item.sourceUuid === uuid)) continue;
+      const input = inputs.find((item) => item.inputUuid === uuid);
+      if (!input || typeof input.inputName !== 'string') throw new Error('audio_selection_changed');
+      await check();
+      await obs.call('CreateSceneItem', {
+        sceneName: scene.sceneName,
+        sourceName: input.inputName,
+        sceneItemEnabled: false,
+      });
+      items = records(
+        (await obs.call('GetSceneItemList', { sceneName: scene.sceneName })).sceneItems,
+      );
+      if (!items.some((item) => item.sourceUuid === uuid && item.sceneItemEnabled === false))
+        throw new Error('audio_selection_changed');
+    }
+  }
+  await check();
+  if (
+    commentary &&
+    !(await commentaryTargetReady(obs, owner, commentary, expectedCommentaryRevision))
+  )
+    return null;
+  return { ids, createdMicrophone };
 }

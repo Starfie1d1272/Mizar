@@ -21,6 +21,21 @@ import { looping, type MusicStore, type Playback } from './store.js';
 import { MusicPreview } from './preview.js';
 import { ownedMusicInput, type MusicLayer } from './obs-provider.js';
 
+type MonitorRelationship = 'independent' | 'same' | 'different' | 'unknown';
+type MonitorType = AudioMonitorChange['before'];
+function desiredMonitorType(relationship: MonitorRelationship, wanted: boolean): MonitorType {
+  if (!wanted || relationship === 'unknown') return 'OBS_MONITORING_TYPE_NONE';
+  return relationship === 'same'
+    ? 'OBS_MONITORING_TYPE_MONITOR_ONLY'
+    : 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT';
+}
+function isMonitorType(value: unknown): value is MonitorType {
+  return (
+    value === 'OBS_MONITORING_TYPE_NONE' ||
+    value === 'OBS_MONITORING_TYPE_MONITOR_ONLY' ||
+    value === 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT'
+  );
+}
 function observedPlayback(state: unknown): MusicStatus['playback'] {
   if (state === 'OBS_MEDIA_STATE_PLAYING') return 'playing';
   if (state === 'OBS_MEDIA_STATE_PAUSED') return 'paused';
@@ -115,6 +130,7 @@ export class MusicDirector {
     monitor: 'unknown',
   };
   private epoch = 0;
+  private monitorSettingsChanged = false;
   private lastPoll = -Infinity;
   private nextRequested = false;
   private manual: {
@@ -132,8 +148,8 @@ export class MusicDirector {
     private readonly now = Date.now,
     private readonly random = Math.random,
     private readonly monitorSafe: (obs: ObsRpc) => Promise<boolean> = () => Promise.resolve(false),
-    private readonly desktopMonitorOnly: (obs: ObsRpc) => Promise<boolean | null> = () =>
-      Promise.resolve(false),
+    private readonly monitorRelationship: (obs: ObsRpc) => Promise<MonitorRelationship> = () =>
+      Promise.resolve('independent'),
     private readonly audioModePending: () => Promise<boolean> = () => Promise.resolve(false),
   ) {
     this.preview = new MusicPreview(store, now);
@@ -543,67 +559,87 @@ export class MusicDirector {
             : 'unknown';
   }
 
-  private async configureDefaultMonitor(obs: ObsRpc, valid: () => boolean) {
-    if (this.store.state.monitorPreference !== true) {
-      this.status.monitorPending = false;
-      return;
-    }
+  noteMonitorSettingsChanged() {
+    this.monitorSettingsChanged = true;
+  }
+
+  private async configureDefaultMonitor(obs: ObsRpc, valid: () => boolean, recheck = false) {
+    const wanted = this.store.state.monitorPreference;
     const pending = (['bgm', 'stinger'] as const).filter((layer) => {
       const uuid = this.store.state.sources[layer];
       return uuid && this.store.state.monitorConfigured[layer] !== uuid;
     });
-    if (!pending.length) {
-      this.status.monitorPending = false;
+    if (!pending.length && !recheck) return;
+    const relationship = await this.monitorRelationship(obs).catch(() => 'unknown' as const);
+    if (!valid()) return;
+    this.status.monitorPending = wanted === true && relationship === 'unknown';
+    if (wanted === null) return;
+    const safe = await this.monitorSafe(obs).catch(() => false);
+    if (!valid()) return;
+    if (!safe) {
+      this.status.monitorPending = wanted;
       return;
     }
-    const safe = await this.monitorSafe(obs).catch(() => false);
-    const monitorOnly = await this.desktopMonitorOnly(obs).catch(() => null);
-    if (!valid()) return;
-    this.status.monitorPending = !safe || monitorOnly === null;
-    if (!safe || monitorOnly === null) return;
-    for (const layer of pending) {
-      const name = await ownedMusicInput(obs, this.store, layer, false, valid, false);
+    for (const layer of ['bgm', 'stinger'] as const) {
       const uuid = this.store.state.sources[layer];
-      if (!name || !uuid || !valid()) return;
-      const read = await obs.call('GetInputAudioMonitorType', { inputUuid: uuid });
-      if (!valid()) return;
+      const original = this.store.state.desktopMonitorOriginal[layer];
+      const isNew = pending.includes(layer);
+      if (!uuid || (!isNew && (!recheck || !original))) continue;
+      const name = await ownedMusicInput(obs, this.store, layer, false, valid, false);
+      if (!name || !valid()) return;
+      const observed = (await obs.call('GetInputAudioMonitorType', { inputUuid: uuid }))
+        .monitorType;
+      if (!isMonitorType(observed) || !valid()) return;
       if (
         !(await this.monitorSafe(obs).catch(() => false)) ||
-        (await this.desktopMonitorOnly(obs).catch(() => null)) !== monitorOnly
+        (await this.monitorRelationship(obs).catch(() => 'unknown' as const)) !== relationship
       ) {
-        if (valid()) this.status.monitorPending = true;
+        if (valid()) this.status.monitorPending = wanted;
         return;
       }
-      if (!valid()) return;
-      // Record the attempt first: an uncertain OBS response must never be replayed.
+      const desired = desiredMonitorType(relationship, wanted);
+      if (
+        isNew
+          ? observed !== 'OBS_MONITORING_TYPE_NONE' && observed !== desired
+          : !original?.applied || original.uuid !== uuid || original.applied !== observed
+      ) {
+        // An external edit owns this field; leave it unchanged.
+        this.status.monitorPending = wanted;
+        continue;
+      }
       await this.store.update((state) => {
         state.monitorConfigured[layer] = uuid;
-        if (monitorOnly && read.monitorType === 'OBS_MONITORING_TYPE_NONE')
+        if (relationship !== 'independent')
           state.desktopMonitorOriginal[layer] = {
             uuid,
-            mode: 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
+            mode:
+              original?.mode ??
+              (wanted ? 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT' : 'OBS_MONITORING_TYPE_NONE'),
+            applied: desired,
           };
       });
       if (!valid()) return;
-      if (read.monitorType === 'OBS_MONITORING_TYPE_NONE')
-        await obs.call('SetInputAudioMonitorType', {
-          inputUuid: uuid,
-          monitorType: monitorOnly
-            ? 'OBS_MONITORING_TYPE_MONITOR_ONLY'
-            : 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
-        });
+      if (observed !== desired) {
+        await obs.call('SetInputAudioMonitorType', { inputUuid: uuid, monitorType: desired });
+        if (
+          (await obs.call('GetInputAudioMonitorType', { inputUuid: uuid })).monitorType !== desired
+        )
+          throw new Error('music_monitor_unconfirmed');
+      }
     }
   }
 
   /** Hold music changes while the audio mode journal owns monitor writes. */
   async prepareDesktopMix<T>(
     obs: ObsRpc,
-    relationship: 'same' | 'different' | 'unknown' | 'independent',
+    relationship: MonitorRelationship,
     apply: (plan: {
       changes: AudioMonitorChange[];
+      managedMusicUuids: string[];
       musicBefore: MonitorOriginals;
       musicAfter: MonitorOriginals;
     }) => Promise<T>,
+    backupApplied: Readonly<Record<string, MonitorType>> = {},
   ): Promise<T> {
     if (this.closed || !this.store.ready || this.store.failure)
       throw new Error('music_unavailable');
@@ -616,6 +652,7 @@ export class MusicDirector {
     this.inFlight = true;
     try {
       const changes: AudioMonitorChange[] = [];
+      const managedMusicUuids: string[] = [];
       const musicBefore = structuredClone(this.store.state.desktopMonitorOriginal);
       const originals: Partial<
         Record<MusicLayer, NonNullable<MonitorOriginals[MusicLayer]> | null>
@@ -638,42 +675,49 @@ export class MusicDirector {
           continue;
         }
         const mode = (await obs.call('GetInputAudioMonitorType', { inputUuid: uuid })).monitorType;
-        if (
-          (relationship === 'same' && mode === 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT') ||
-          (relationship === 'unknown' &&
-            (mode === 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT' ||
-              mode === 'OBS_MONITORING_TYPE_MONITOR_ONLY'))
-        ) {
-          changes.push({
-            kind: 'monitor',
-            inputUuid: uuid,
-            before: mode,
-            applied:
-              relationship === 'same'
-                ? 'OBS_MONITORING_TYPE_MONITOR_ONLY'
-                : 'OBS_MONITORING_TYPE_NONE',
-          });
-          originals[layer] = { uuid, mode };
-        } else if (relationship === 'independent' && original) {
-          if (original.uuid !== uuid) throw new Error('music_monitor_source_changed');
-          if (mode === 'OBS_MONITORING_TYPE_MONITOR_ONLY' || mode === 'OBS_MONITORING_TYPE_NONE')
+        if (!isMonitorType(mode)) throw new Error('music_monitor_unknown');
+        managedMusicUuids.push(uuid);
+        if (original && original.uuid !== uuid) throw new Error('music_monitor_source_changed');
+        const held = original ? (original.applied ?? backupApplied[uuid]) : undefined;
+        if (original && (held === undefined || held !== mode)) {
+          // A later external edit owns this field; do not replay the backup.
+          originals[layer] = null;
+          continue;
+        }
+        if (relationship === 'independent') {
+          if (original && mode !== original.mode)
             changes.push({
               kind: 'monitor',
               inputUuid: uuid,
               before: mode,
               applied: original.mode,
             });
-          originals[layer] = null;
+          if (original) originals[layer] = null;
+          continue;
         }
+        const wanted = this.store.state.monitorPreference === true;
+        const desired = desiredMonitorType(relationship, wanted);
+        if (mode !== desired)
+          changes.push({ kind: 'monitor', inputUuid: uuid, before: mode, applied: desired });
+        originals[layer] = { uuid, mode: original?.mode ?? mode, applied: desired };
       }
       if (!current()) throw new Error('music_cancelled');
       const musicAfter = structuredClone(musicBefore);
       for (const layer of ['bgm', 'stinger'] as const)
         if (originals[layer] !== undefined) musicAfter[layer] = originals[layer]!;
-      return await apply({ changes, musicBefore, musicAfter });
+      const result = await apply({ changes, managedMusicUuids, musicBefore, musicAfter });
+      this.status.monitorPending =
+        relationship === 'unknown' && this.store.state.monitorPreference === true;
+      return result;
     } finally {
       this.inFlight = false;
     }
+  }
+  monitorPlanCompatible(relationship: MonitorRelationship, after: MonitorOriginals): boolean {
+    const desired = desiredMonitorType(relationship, this.store.state.monitorPreference === true);
+    return (['bgm', 'stinger'] as const).every(
+      (layer) => !after[layer]?.applied || after[layer]!.applied === desired,
+    );
   }
   async withAudioModeRecovery<T>(run: () => Promise<T>): Promise<T> {
     if (this.closed || !this.store.ready || this.store.failure)
@@ -730,28 +774,27 @@ export class MusicDirector {
       });
       if (!current()) return;
       await this.provider.session(async (obs) => {
-        const relation = enabled ? await this.desktopMonitorOnly(obs) : false;
-        const monitorOnly = relation === true;
-        const monitorPending = enabled && relation === null;
+        const relation = await this.monitorRelationship(obs).catch(() => 'unknown' as const);
+        const monitorPending = enabled && relation === 'unknown';
         for (const layer of ['bgm', 'stinger'] as const) {
           const name = await ownedMusicInput(obs, this.store, layer, true, current, true, true);
           const uuid = this.store.state.sources[layer];
           if (!name || !uuid || !current()) throw new Error('music_cancelled');
+          const monitorType = desiredMonitorType(relation, enabled);
           await this.store.update((state) => {
             state.monitorConfigured[layer] = uuid;
             state.desktopMonitorOriginal[layer] =
-              monitorOnly || monitorPending
-                ? { uuid, mode: 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT' }
-                : null;
+              relation === 'independent'
+                ? null
+                : {
+                    uuid,
+                    mode: enabled
+                      ? 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT'
+                      : 'OBS_MONITORING_TYPE_NONE',
+                    applied: monitorType,
+                  };
           });
           if (!current()) return;
-          const monitorType = monitorPending
-            ? 'OBS_MONITORING_TYPE_NONE'
-            : enabled
-              ? monitorOnly
-                ? 'OBS_MONITORING_TYPE_MONITOR_ONLY'
-                : 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT'
-              : 'OBS_MONITORING_TYPE_NONE';
           await obs.call('SetInputAudioMonitorType', {
             inputUuid: uuid,
             monitorType,
@@ -968,7 +1011,9 @@ export class MusicDirector {
           (uuid) => this.expectedStops.set('stinger', uuid),
           () => this.holdForObsControl(),
         );
-        await this.configureDefaultMonitor(obs, valid);
+        const monitorRecheck = reconnect || this.monitorSettingsChanged;
+        this.monitorSettingsChanged = false;
+        await this.configureDefaultMonitor(obs, valid, monitorRecheck);
         if (valid() && this.preview.busy) await this.readMonitor(obs, valid);
         if (!valid() || this.preview.busy) return;
         if (this.unknownControl && manualSafe(this.truth())) {

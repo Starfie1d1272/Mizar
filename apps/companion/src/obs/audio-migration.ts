@@ -83,6 +83,7 @@ export type MigrationEvent =
   | { type: 'monitor'; inputUuid: string; monitorType: string }
   | { type: 'inputSettings'; inputUuid: string; settings: Record<string, unknown> }
   | { type: 'outputStarting' }
+  | { type: 'programChanged'; managed: boolean }
   | { type: 'identityChanged' }
   | { type: 'disconnected' };
 /** Events must cover output start, item enable changes, input/settings removal, collection and connection changes on the same connection used for RPCs. */
@@ -90,7 +91,7 @@ export interface MigrationObserver {
   subscribe(listener: (event: MigrationEvent) => void): () => void;
 }
 
-/** A transaction is never resumed from disk while output is active or after observation is lost. */
+/** Mode changes may run during output; initialization still requires idle output. */
 export class AudioMigration {
   private running = false;
   constructor(private readonly path: string) {}
@@ -136,8 +137,8 @@ export class AudioMigration {
     if (journal.fields.some((entry) => entry.externalChanged || entry.before === entry.applied))
       throw new Error('audio_migration_external_change');
     let changed = false;
-    const stop = observer.subscribe(() => {
-      changed = true;
+    const stop = observer.subscribe((event) => {
+      if (event.type !== 'programChanged' || !event.managed) changed = true;
     });
     try {
       const plan = {
@@ -146,10 +147,10 @@ export class AudioMigration {
         desktop: [],
         independent: [],
       };
-      await this.context(obs, plan, endpoint, true);
+      await this.context(obs, plan, endpoint, false);
       const first = await Promise.all(journal.fields.map((entry) => this.status(obs, entry)));
       const second = await Promise.all(journal.fields.map((entry) => this.status(obs, entry)));
-      await this.context(obs, plan, endpoint, true);
+      await this.context(obs, plan, endpoint, false);
       if (
         changed ||
         first.some((value, index) => {
@@ -209,6 +210,27 @@ export class AudioMigration {
     if (modeId && journal.modeId !== modeId) return;
     await rm(completedPath);
   }
+  async completedMonitorApplied(
+    path: string,
+  ): Promise<Record<string, AudioMonitorChange['applied']>> {
+    const completed = await this.readJournal(path);
+    return Object.fromEntries(
+      (completed?.fields ?? [])
+        .filter(
+          (entry): entry is z.infer<typeof monitorField> =>
+            'kind' in entry && !entry.externalChanged && entry.phase === 'confirmed',
+        )
+        .map((entry) => [entry.inputUuid, entry.applied]),
+    );
+  }
+  async completedEnabledItems(path: string) {
+    const completed = await this.readJournal(path);
+    return (
+      completed?.fields.filter(
+        (entry): entry is z.infer<typeof field> => 'sceneName' in entry && entry.before,
+      ) ?? []
+    );
+  }
   /** Restore a completed switch only while every recorded item still has the
    * value written by that switch. The ordinary migration journal protects the
    * reverse operation itself if its outcome becomes uncertain. */
@@ -219,12 +241,17 @@ export class AudioMigration {
     completedPath: string,
     extraMonitor: AudioMonitorChange[] = [],
     modeId?: string,
+    extraIndependent: AudioMigrationPlan['independent'] = [],
+    managedMusicUuids: readonly string[] = [],
   ): Promise<boolean> {
     const completed = await this.readJournal(completedPath);
     if (!completed) return false;
+    const fields = completed.fields.filter(
+      (entry) => !('kind' in entry && managedMusicUuids.includes(entry.inputUuid)),
+    );
     if (
       completed.endpoint !== endpoint ||
-      completed.fields.some((entry) => entry.externalChanged || entry.phase !== 'confirmed')
+      fields.some((entry) => entry.externalChanged || entry.phase !== 'confirmed')
     )
       throw new Error('audio_migration_external_change');
     await this.context(
@@ -236,9 +263,9 @@ export class AudioMigration {
         independent: [],
       },
       endpoint,
-      true,
+      !modeId,
     );
-    const values = await Promise.all(completed.fields.map((entry) => this.status(obs, entry)));
+    const values = await Promise.all(fields.map((entry) => this.status(obs, entry)));
     await this.context(
       obs,
       {
@@ -248,28 +275,30 @@ export class AudioMigration {
         independent: [],
       },
       endpoint,
-      true,
+      !modeId,
     );
     // A crash may occur after all reverse writes but before the mode commit.
     // Retain the record until that commit so a retry can recognize this state.
-    const alreadyRestored = completed.fields.every(
-      (entry, index) => values[index] === entry.before,
-    );
-    if (modeId && alreadyRestored && completed.fields.length)
+    const alreadyRestored = fields.every((entry, index) => values[index] === entry.before);
+    if (modeId && alreadyRestored && fields.length)
       throw new Error('audio_migration_external_change');
-    if (
-      !alreadyRestored &&
-      completed.fields.some((entry, index) => values[index] !== entry.applied)
-    )
+    if (!alreadyRestored && fields.some((entry, index) => values[index] !== entry.applied))
       throw new Error('audio_migration_external_change');
     const desktop: AudioMigrationPlan['desktop'] = [];
     const captureAudio: NonNullable<AudioMigrationPlan['captureAudio']> = [];
     const monitor: NonNullable<AudioMigrationPlan['monitor']> = extraMonitor.filter(
-      (extra) =>
-        !completed.fields.some((entry) => 'kind' in entry && entry.inputUuid === extra.inputUuid),
+      (extra) => !fields.some((entry) => 'kind' in entry && entry.inputUuid === extra.inputUuid),
     );
-    const independent: AudioMigrationPlan['independent'] = [];
-    for (const entry of alreadyRestored ? [] : completed.fields) {
+    const independent: AudioMigrationPlan['independent'] = extraIndependent.filter(
+      (extra) =>
+        !completed.fields.some(
+          (entry) =>
+            'sceneName' in entry &&
+            entry.sceneName === extra.sceneName &&
+            entry.sceneItemId === extra.sceneItemId,
+        ),
+    );
+    for (const entry of alreadyRestored ? [] : fields) {
       if ('kind' in entry) {
         monitor.push({
           kind: 'monitor',
@@ -329,6 +358,8 @@ export class AudioMigration {
     ]);
     if (endpoint !== plan.endpoint || collection.currentSceneCollectionName !== plan.collection)
       throw new Error('audio_migration_identity_changed');
+    if (typeof stream.outputActive !== 'boolean' || typeof record.outputActive !== 'boolean')
+      throw new Error('audio_migration_output_unknown');
     if (idle && (stream.outputActive !== false || record.outputActive !== false))
       throw new Error('audio_migration_output_active');
   }
@@ -415,7 +446,11 @@ export class AudioMigration {
     const stop = observer.subscribe((event) => {
       if (expected && !expected.seen && this.matches(event, expected.entry, expected.value)) {
         expected.seen = true;
-      } else interrupted = true;
+      } else if (
+        !(retain && event.type === 'outputStarting') &&
+        !(event.type === 'programChanged' && event.managed)
+      )
+        interrupted = true;
     });
     try {
       const journal = await this.pending();
@@ -438,7 +473,7 @@ export class AudioMigration {
       };
       const check = async () => {
         if (interrupted) throw new Error('audio_migration_observation_lost');
-        await this.context(obs, plan, endpoint, true);
+        await this.context(obs, plan, endpoint, !retain);
         if (interrupted) throw new Error('audio_migration_observation_lost');
       };
       await check();
@@ -562,10 +597,14 @@ export class AudioMigration {
       if (event.type === 'disconnected') {
         connected = false;
         wake?.();
-      } else if (event.type === 'identityChanged') {
+      } else if (
+        event.type === 'identityChanged' ||
+        (event.type === 'programChanged' && !event.managed)
+      ) {
         identity = false;
         wake?.();
       } else if (event.type === 'outputStarting') output = true;
+      else if (event.type === 'programChanged') return;
       else {
         const entry = journal.fields.find((x) => this.matchesIdentity(event, x));
         if (!entry) {
@@ -594,7 +633,7 @@ export class AudioMigration {
     const verify = async (idle: boolean) => {
       await flush();
       if (!available()) throw new Error('audio_migration_observation_lost');
-      await this.context(obs, plan, endpoint, idle);
+      await this.context(obs, plan, endpoint, idle && !modeId);
       if (!available()) throw new Error('audio_migration_observation_lost');
     };
     const send = async (entry: Field, value: Value, phase: 'sent' | 'restored', idle: boolean) => {
@@ -612,7 +651,7 @@ export class AudioMigration {
         changed();
         await flush();
       }
-      if (!available() || entry.externalChanged || (idle && output)) {
+      if (!available() || entry.externalChanged || (idle && output && !modeId)) {
         if (phase === 'sent') {
           entry.phase = 'prepared';
           changed();
@@ -662,12 +701,12 @@ export class AudioMigration {
       await this.create(journal);
       created = true;
       for (const entry of journal.fields) {
-        if (output) throw new Error('audio_migration_output_started');
+        if (output && !modeId) throw new Error('audio_migration_output_started');
         await send(entry, entry.applied, 'sent', true);
-        if (output) throw new Error('audio_migration_output_started');
+        if (output && !modeId) throw new Error('audio_migration_output_started');
       }
       await verify(false);
-      if (output) throw new Error('audio_migration_output_started');
+      if (output && !modeId) throw new Error('audio_migration_output_started');
       if (journal.fields.some((entry) => entry.externalChanged))
         throw new Error('audio_migration_external_change');
       unsubscribe();
