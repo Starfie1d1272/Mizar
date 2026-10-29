@@ -157,13 +157,13 @@ fn launch_operation(app: &tauri::AppHandle, log: &DesktopLog, automatic: bool, u
     app.state::<production_exit::ExitGate>().check()?;
     app.state::<updates::PendingUpdate>().check()?;
     no_game()?;
+    crate::observer_hud::preflight(log, status["preferMulnx"] == true)?;
     std::fs::create_dir_all(&results).map_err(|e| e.to_string())?;
     let pending = results.join("pending.json");
     crate::cs2_session::atomic_write(&pending, b"{}")?;
     let journal = managed.try_lock().map_err(|_| "CS2 正忙，请稍后重试。")?
         .prepare_managed_mulnx(&executable)?;
     let spectator_cfg = journal["spectatorCfg"] == true;
-    if !spectator_cfg || journal["nativeHudToggle"] != true { crate::observer_hud::preflight(log, status["preferMulnx"] == true)?; }
     let configured = production_exit::prepare_mulnx(log, &executable, false, spectator_cfg)?;
     if configured["launcher"] != prepared["launcher"] || configured["version"] != prepared["version"] {
         return Err("启动器身份或版本已变化；原配置备份仍保留。".into());

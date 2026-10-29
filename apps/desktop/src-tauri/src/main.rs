@@ -704,7 +704,6 @@ async fn attach_external_cs2(
         let created = created.parse::<u64>().map_err(|_| "游戏创建标识无效。")?;
         app.state::<production_exit::ExitGate>().check()?;
         app.state::<updates::PendingUpdate>().check()?;
-        mulnx_launch::verify_managed_launch(&log, &cs2.mulnx_handoff_status()?, pid, created, &executable)?;
         production_exit::prepare_external_entry(&log, &expected_revision)?;
         cs2.attach_external(pid, created, &executable)?;
         let trial_id = if demo_trial == Some(true) {
