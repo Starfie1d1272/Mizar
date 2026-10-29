@@ -146,10 +146,21 @@ export function registerOrchestrationRoutes(
           consoleCapture: z.boolean().default(false),
           update: z.boolean().default(false),
           spectatorCfg: z.boolean().default(false),
+          demoCfg: z
+            .string()
+            .regex(/^mizar_demo_[0-9a-f-]{36}\.cfg$/i)
+            .nullable()
+            .optional(),
         })
         .parse(request.body);
       director.hold('正在准备 MulNX');
-      return await tool.prepare(body.cs2Path, body.consoleCapture, body.update, body.spectatorCfg);
+      return await tool.prepare(
+        body.cs2Path,
+        body.consoleCapture,
+        body.update,
+        body.spectatorCfg,
+        body.demoCfg ?? undefined,
+      );
     } catch (error) {
       request.log.error(
         { stage: 'mulnx_prepare', err: error, result: 'failure' },
