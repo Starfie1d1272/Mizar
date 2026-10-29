@@ -188,7 +188,7 @@ function ModuleDraftEditor({
         <CameraModuleEditor
           value={draft.value}
           busy={busy}
-          availableSources={[
+          sources={[
             ...modules.flatMap((item) =>
               item.kind === 'camera' ? item.value.maps.map((map) => map.source) : [],
             ),
