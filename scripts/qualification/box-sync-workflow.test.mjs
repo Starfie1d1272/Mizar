@@ -26,7 +26,17 @@ const mirrorIndex = job.steps.findIndex((step) => step.id === 'mirror');
 const mirror = job.steps[mirrorIndex];
 const followups = job.steps.slice(mirrorIndex + 1);
 const evaluate = (expression, context) =>
-  runInNewContext(expression.replace(/^\$\{\{|\}\}$/g, '').trim(), context, { timeout: 1000 });
+  runInNewContext(
+    expression.replace(/^\$\{\{|\}\}$/g, '').trim(),
+    {
+      ...context,
+      startsWith: (value, prefix) => (value ?? '').startsWith(prefix),
+      contains: (values, value) => values.includes(value),
+      fromJSON: JSON.parse,
+      always: () => true,
+    },
+    { timeout: 1000 },
+  );
 function context(event, tag, mode) {
   return {
     github: {

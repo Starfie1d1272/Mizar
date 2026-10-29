@@ -39,11 +39,17 @@ export async function curlMultipartUpload(url, options, run = spawn) {
           '--speed-time',
           '60',
           '--max-time',
-          '600',
+          '175',
           '--request',
           'POST',
           '--header',
           `Content-Type: ${encoded.headers.get('content-type')}`,
+          ...(options.headers
+            ? Object.entries(options.headers).flatMap(([key, value]) => [
+                '--header',
+                `${key}: ${value}`,
+              ])
+            : []),
           '--data-binary',
           `@${input}`,
           '--output',
@@ -89,6 +95,7 @@ export async function curlMultipartUpload(url, options, run = spawn) {
           const error = Object.assign(new Error('Box curl upload failed'), {
             code: 'BOX_CURL_FAILED',
             httpStatus: valid && numbers[0] >= 400 ? numbers[0] : undefined,
+            uploadTimedOut: code === 28 || options.signal.aborted,
             // Only failures before any body bytes were sent can authorize replay.
             // Partial/complete uploads with a lost response are reconciled instead.
             retrySafeUpload:
@@ -97,6 +104,7 @@ export async function curlMultipartUpload(url, options, run = spawn) {
               [6, 7, 18, 28, 35, 52, 55, 56].includes(code) &&
               numbers[7] === 0,
           });
+          if (!valid) console.log('Box curl 阶段及发送字节不可用（未收到完整指标）');
           console.log(`Box curl 上传失败，退出码 ${Number.isInteger(code) ? code : 'signal'}`);
           reject(error);
           return;

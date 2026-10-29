@@ -17,15 +17,15 @@ PowerShell 用 `$env:GSI_TOKEN = "mizar-local-preview"`。示例令牌仅用于�
 
 开发网页为 `http://127.0.0.1:4173/`，Companion 为 `http://127.0.0.1:3000/`。生产构建由 Companion 同时提供网页和协议。
 
-| 路径                      | 用途                                 |
-| ------------------------- | ------------------------------------ |
-| `/`                       | 准备中心                             |
-| `/operator/hud`           | HUD 编辑器                           |
-| `/workspace`              | 浏览器工作台预览                     |
-| `/operator`               | 制作控制                             |
-| `/program`、`/program/bp` | HUD 与 BP 播出                       |
-| `/debug`                  | 运行诊断                             |
-| `/operator/bp`            | 兼容重定向到 BP 预览工作台           |
+| 路径                      | 用途                       |
+| ------------------------- | -------------------------- |
+| `/`                       | 准备中心                   |
+| `/operator/hud`           | HUD 编辑器                 |
+| `/workspace`              | 浏览器工作台预览           |
+| `/operator`               | 制作控制                   |
+| `/program`、`/program/bp` | HUD 与 BP 播出             |
+| `/debug`                  | 运行诊断                   |
+| `/operator/bp`            | 兼容重定向到 BP 预览工作台 |
 
 桌面左右区和底栏由桌面宿主管理。Windows 窗口捕获、显示缩放与 OBS 正式输出通过实机验收验证。
 
@@ -86,27 +86,9 @@ pnpm --filter @mizar/companion... --fail-if-no-match run build
 - 优先扩展既有负责测试，针对本次改动的真实风险注入失败，经生产导出入口读取实际诊断包，独立判定能否还原操作顺序、关键参数、阶段、原因和结果；验证凭据不泄露、超限或中断的缺口可见。按受影响边界覆盖，不在各层重复完整矩阵。仅断言 HTTP 400、日志函数被调用或生成文件不足以通过。
 - PR 审查逐项核对“产生 → 持久化 → 导出 → 可定位”，说明实际验证与待实机证据。界面只显示必要、简短、可操作的反馈，失败应在当前操作位置可见；技术记录完整性不能转化成默认界面的冗余说明。
 
-## CI 按改动选择检查
+## 常规 CI
 
-权威分类在 [scripts/ci](../../scripts/ci)；`ci-gate` 是稳定的必需检查。
-
-- 普通文档只运行计划器和汇总检查；`docs/design/**` 另运行设计检查。
-- 代码运行基础质量检查，Web 语义与验收路径增加浏览器验收，平台相关路径增加对应平台检查。
-- Core、Radar、Radar View、HUD Config、Protocol、Telemetry GSI 的 `src/`，以及 Companion 的运行时、投影、场景、协议发布、配置、BP、比赛资料、系列进展、重放、公开输出与应用组装入口，保守增加完整的既有浏览器验收。Steam 发现脚本及其测试变更同时运行平台消费者，确保 Windows PowerShell 测试实际执行。精确前缀由计划器维护；这些规则保障消费者回归范围；本地服务与浏览器的完整链路另由集成检查验证。
-- 浏览器验收映射适用于上述实现路径；普通文档、CSS 和包外部测试按各自规则分类。基础质量、平台与 Windows 原生检查分别判定，多文件变更取风险并集。
-- 未知路径、无法确定的差异、工作流、锁文件、工具链或计划器改动默认完整验证。
-- Box 镜像工具及其测试由基础质量任务负责：校验已发布资产身份、远端字节、授权和失败时不发布更新清单；这两个明确路径不进入产品载荷，无需重编译 Desktop 或重复安装。与安装器、更新恢复、候选来源、Desktop 或其它路径混合时仍取所有风险并集；Windows 脚本和宿主消费者按明确的已知文件清单保持真实 Windows 原生验证；完整打包及安装生命周期由 Release Qualification 负责，不对 bundle、installer-assets 或 evidence 目录作整目录豁免；资格证据完整性及新增未知文件回退完整验证；候选、晋级、Stable 信任协议与未知 qualification 工具完整验证，工作流仍保守回退。
-- 仅改动 `offline.mjs` 或其测试时，由基础质量与 Linux/macOS 离线平台验证负责；这些脚本不进入 Windows 产品载荷。混合载荷、安装或恢复改动仍按风险并集增加真实 Windows 验证；未知脚本保守完整验证。
-- 删除按旧路径分类；重命名按旧/新路径的风险并集分类。差异采用 NUL 分隔，无法解析的记录仍完整验证。
-- 基础质量检查（`quality`）分为静态检查、单元测试、样例、类型与构建四路并行任务；全部选中任务通过后汇总成功。
-- 浏览器验收按实测文件耗时均衡分成八个独立任务，更新交互用例独立成文件，避免与准备页检查集中于一个长分片；权重使用完整成功 run 的实际耗时，每个任务使用与锁文件版本一致、固定官方镜像 digest 的浏览器及完整原生依赖，使用一个工作进程串行执行；全部分片通过后，ci-gate 核对八份实际身份的并集恰好覆盖同一 FULL 且无重复，再汇总成功，失败报告按分片保留。受控帧测试先固定日期并暂停计时器，再以相对时间推进，避免将 runner 调度延迟误当作产品采样间隔；不以重试掩盖时钟不确定性。`MIZAR_BROWSER_SHARDING=balanced pnpm acceptance:ci --shard=N/8` 分别记录 FULL 发现、分片发现和实际执行身份，拒绝空集合、遗漏、额外用例、skip、retry 和 runner 错误；只有实际成功执行集合与所选集合一致才通过。证据保存在 `.agent-tmp/test-evidence/`，CI 随分片上传。
-- 同一 CI run 的部分重跑复用未重跑分片的原证据；每份证据绑定精确 checkout SHA、run、attempt 和分片身份，门禁只选择每个分片的最新 attempt。缺失、损坏、不同身份或最新失败直接拒绝，不回退旧成功；分片并集仍须完整覆盖同一 FULL。
-- 基础质量已选中时，设计任务只执行自身的 token 检查，架构和设计契约由基础质量统一执行；仅设计任务选中时仍执行这些门禁。
-- Windows/macOS 验证本平台类型、生产构建、文件系统、进程与传输；完整 JavaScript 单元测试由 Ubuntu Quality 负责。平台消费者清单由 `scripts/ci/platform-contracts.mjs` 维护，执行报告拒绝缺失文件、失败、空执行与新增跳过。Windows 平台消费者按文件串行执行，避免文件持久化与真实 PowerShell 启动争用 runner；保留原进程及测试超时和全部断言。Windows 原生任务编译并执行真实 Rust/Tauri 宿主测试和更新取消/恢复检查；Rust 测试用例串行执行，避免真实 PowerShell、窗口与进程夹具争用系统资源，用例内部并发、原超时与全部断言不变；完整包、EXE GUI 与安装器验收由 Release Qualification 负责。Full 的 macOS 消费者统一由 offline 任务执行，不再重复另起同 OS 平台任务。
-- 资源 Store 的持久化、租约、取消、损坏恢复、路径/链接与 TOCTOU，以及原 URL 的 App/HTTP 接线测试纳入平台消费者清单，在真实 Windows/macOS 文件系统执行；该证据不代替正式资源签名正例或 OBS 实机验收。
-- PR 按差异选择检查，所有任务 checkout 同一 GitHub 模拟合并 SHA。Full、定时和手动验证包含离线平台消费者；主分支推送保守执行 Full。可信 PR 复用实现由 `verify-merge-evidence.mjs` 维护，开关默认关闭，须先取得受信任 main 工作流下的真实正向证明再启用。复用要求最终 squash tree、模拟 merge 的 base/head、同仓库、未改动的工作流/执行脚本、GitHub 最新成功 run/attempt 和全部必需 jobs 一致；证据来自可信 plan job 日志与 GitHub metadata，拒绝 PR artifact 自证。直接 push、漂移、错树、失败或缺证据回退 Full。发行来源默认仍要求最终 main exact-SHA Full CI；PR 构建不作为发行产物。候选版使用独立的 Release Qualification 工作流和 `release` 构建配置。
-
-不要为了避免检查改变分类或恢复旧锁文件。执行过的检查如实写入 PR，未执行的不得记为通过。
+main 与 development/2.0 的 PR 和推送执行构建、类型检查、启动页面冒烟、格式与 lint；Windows 原生改动编译宿主。`ci-gate` 要求各任务成功，且从工作流创建到门禁不超过 180 秒。development/2.0 对 PR 和推送中变更的 Rust 文件检查格式，手动运行对照当前提交的第一父提交；main 仍检查整个 Rust 工程。保留的历史测试按改动风险定向运行，常规 CI 不执行旧业务测试矩阵；发行资格仍由独立工作流负责。
 
 ## 样例、重放与来源
 
@@ -145,7 +127,7 @@ BP 内置 BO3 演示使用同场 EPL 公开禁选和已确认的 UTC 开赛时�
 
 ## 便携包自动化
 
-离线验收单独运行时保留完整静态检查。CI 已选择同一源码的质量任务时，通过 `--quality-owned-static-checks` 将格式、lint 和架构检查交给质量任务；聚合门禁仍要求质量与离线任务都成功。独立 offline 命令保留类型、完整单测、构建和可移植性检查；CI 选中必需 Quality 时，`--platform-only --quality-owned-static-checks` 保留本 OS 类型、构建、真实平台消费者和包完整性，由 Quality 唯一负责通用单测和静态检查。不跨 OS 复用构建产物。离线脚本自身变化同时选择 Linux/macOS 验收；阶段耗时和失败保留于 `.agent-tmp/offline-evidence/build-timings.json`。
+离线验收可独立运行静态检查、类型和构建；发行资格及实机验收仍需按对应流程记录证据。
 
 离线验收与构建器共用应用版本和发布包命名函数，检查同一版本的目录及 ZIP；不接受其他版本的归档替代本次产物。检查整个应用目录中残留的开发文件和符号链接，不仅凭依赖目录名为 `test` 就删除可能被运行入口引用的资源。发布名称规范见[发布流程](release-readiness.md)。
 

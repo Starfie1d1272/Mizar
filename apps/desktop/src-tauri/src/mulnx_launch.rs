@@ -123,8 +123,57 @@ pub fn resume_demo(app: &tauri::AppHandle, log: &DesktopLog, request_id: &str) -
     Ok(resume_pending_launch(log, &managed, Some(request_id))?.unwrap_or_else(|| json!({"result":"not-found"})))
 }
 
+pub fn prepare_release(app: &tauri::AppHandle, log: &DesktopLog) -> Result<Value, String> {
+    let _launch = demo_launch_guard()?;
+    app.state::<production_exit::ExitGate>().check()?;
+    app.state::<updates::PendingUpdate>().check()?;
+    production_exit::prepare_mulnx_release(log)
+}
+
+pub fn select_release(app: &tauri::AppHandle, log: &DesktopLog, prepared_id: &str) -> Result<Value, String> {
+    let _launch = demo_launch_guard()?;
+    app.state::<production_exit::ExitGate>().check()?;
+    app.state::<updates::PendingUpdate>().check()?;
+    let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+    let check_idle = |cs2: &managed_cs2::ManagedCs2| -> Result<(), String> {
+        let status = cs2.status()?;
+        if status["pending"] == true || status["demoCleanupPending"] == true || status["spectatorRecoveryPending"] == true
+            || log.state_root.join("data/mulnx-launch/pending.json").exists() {
+            return Err("请先完成游戏和 MulNX 的恢复。".into());
+        }
+        let actual = cs2.mulnx_handoff_status()?;
+        if !actual["processes"].as_array().is_some_and(|processes| processes.is_empty()) || cs2.mulnx_launcher_running()? {
+            return Err("请先退出 CS2 并关闭 MulNX 启动器。".into());
+        }
+        Ok(())
+    };
+    { let cs2 = managed.try_lock().map_err(|_| "CS2 正忙，请稍后重试。")?; check_idle(&cs2)?; }
+    let activity = app.state::<cs2_activity::Activity>();
+    let _activity = activity.begin(3);
+    let output = gsi_script("gsi-status.ps1", None, Duration::from_secs(20), log)?;
+    let gsi = powershell::parse(log, "MulNX 游戏安装位置", &output)?;
+    if gsi["detected"] != true || gsi["installed"] != true || gsi["conflict"] != false || gsi["readFailed"] != false {
+        return Err("请先完成 CS2 的 GSI 配置。".into());
+    }
+    let cfg = PathBuf::from(gsi["cfgPath"].as_str().ok_or("CS2 安装位置未确认。")?);
+    let executable = cfg.parent().and_then(Path::parent).and_then(Path::parent)
+        .ok_or("CS2 安装位置无效。")?.join("bin").join("win64").join("cs2.exe");
+    if !executable.is_file() { return Err("所选 CS2 程序不存在。".into()); }
+    let console_capture = crate::cs2_console::settings(log)?["enabled"] == true;
+    let staged = production_exit::mulnx_selection(log, &json!({"action":"stage", "preparedId":prepared_id,
+        "cs2Path":executable.to_string_lossy(), "consoleCapture":console_capture}))?;
+    let id = staged["id"].as_str().ok_or("MulNX 准备结果无法确认。")?;
+    app.state::<production_exit::ExitGate>().check()?;
+    app.state::<updates::PendingUpdate>().check()?;
+    let cs2 = managed.try_lock().map_err(|_| "CS2 正忙，请稍后重试。")?;
+    check_idle(&cs2)?;
+    production_exit::mulnx_selection(log, &json!({"action":"commit", "id":id}))
+}
+
 pub fn update(app: &tauri::AppHandle, log: &DesktopLog) -> Result<Value, String> {
-    launch_operation(app, log, false, true, false, None, false)
+    let prepared = prepare_release(app, log)?;
+    let id = prepared["preparedId"].as_str().ok_or("MulNX 下载结果无法确认。")?;
+    select_release(app, log, id).map_err(|error| format!("版本已下载，请核对切换结果：{error}"))
 }
 
 pub fn demo_launch_guard() -> Result<std::sync::MutexGuard<'static, ()>, String> {

@@ -4,7 +4,7 @@ name: PR metadata
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, development/2.0]
     types: [opened, synchronize, reopened, edited, ready_for_review]
 
 permissions: {}

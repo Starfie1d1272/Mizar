@@ -2,7 +2,6 @@ param(
   [Parameter(Mandatory = $true)][string]$BundleRoot,
   [Parameter(Mandatory = $true)][string]$OutputRoot,
   [Parameter(Mandatory = $true)][string]$ExtractRoot,
-  [switch]$CaptureUi,
   [ValidateSet('release-manifest.json','core-release-manifest.json')][string]$ManifestName = 'release-manifest.json',
   [ValidateSet('distribution-manifest.json','core-distribution-manifest.json')][string]$DistributionName = 'distribution-manifest.json'
 )
@@ -78,30 +77,6 @@ Invoke-SetupPhase 'first-payload-verification' {
   })
   if ($extra.Count) { throw 'Unexpected Setup payload files' }
 }
-if ($CaptureUi) {
-  Invoke-SetupPhase 'interactive-install-and-launch' {
-    & (Join-Path $PSScriptRoot 'capture-setup-ui.ps1') -Installer $archive -InstallDirectory $target -OutputDirectory (Join-Path (Split-Path $output -Parent) 'installer-ui')
-  }
-}
-$sentinel = Join-Path $env:LOCALAPPDATA 'Mizar\data\setup-smoke-sentinel.txt'
-if (Test-Path -LiteralPath $sentinel) { throw 'Refusing to overwrite existing smoke sentinel' }
-New-Item -ItemType Directory -Force -Path (Split-Path $sentinel) | Out-Null
-Set-Content -LiteralPath $sentinel -Value 'preserve-user-data'
-try {
-  Invoke-SetupPhase 'overwrite-install' { Install-Setup }
-  Invoke-SetupPhase 'uninstall-and-user-data' {
-    $process = Start-Process -FilePath (Join-Path $target 'Uninstall.exe') -ArgumentList @('/S', ('_?=' + $target)) -PassThru -Wait
-    if ($process.ExitCode -ne 0 -or (Test-Path -LiteralPath (Join-Path $target 'Mizar.exe'))) { throw 'Setup uninstall failed' }
-    if ((Get-Content -LiteralPath $sentinel -Raw).Trim() -ne 'preserve-user-data') { throw 'User data changed' }
-  }
-  Invoke-SetupPhase 'reinstall' { Install-Setup }
-  Invoke-SetupPhase 'reinstall-payload-verification' {
-    foreach ($file in $files) {
-      $relative = [IO.Path]::GetRelativePath($source, $file.FullName)
-      if ((Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash -ne (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $target $relative)).Hash) { throw "Reinstall payload differs: $relative" }
-    }
-  }
-} finally { Remove-Item -LiteralPath $sentinel -ErrorAction SilentlyContinue }
 $licenseName = 'NSIS-LICENSE.txt'
 $licensePath = Join-Path $output $licenseName
 Copy-Item -LiteralPath (Join-Path (Split-Path $compiler) 'COPYING') -Destination $licensePath

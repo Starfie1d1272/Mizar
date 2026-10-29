@@ -120,6 +120,7 @@ export async function multipartUpload(url, options, request = httpsRequest) {
         headers: {
           'Content-Type': encoded.headers.get('content-type'),
           'Content-Length': String(bytes.length),
+          ...options.headers,
         },
       },
       (incoming) => {
@@ -173,7 +174,12 @@ export async function multipartUpload(url, options, request = httpsRequest) {
       },
     );
     boundConnection(outgoing);
-    outgoing.on('error', reject);
+    outgoing.on('error', (error) => {
+      console.log(
+        `Box 上传失败（${Math.round(performance.now() - started)}ms，socket 已写出 ${outgoing.socket?.bytesWritten ?? 0} bytes）`,
+      );
+      reject(error);
+    });
     outgoing.on('finish', () => {
       console.log(
         `Box 上传请求体已写出 ${bytes.length} bytes（${Math.round(performance.now() - started)}ms）`,

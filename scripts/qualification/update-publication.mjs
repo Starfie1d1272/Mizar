@@ -236,7 +236,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       /^v\d+\.\d+\.\d+$/.test(tag) &&
         process.env.GITHUB_REPOSITORY === repository &&
         process.env.GITHUB_REF === 'refs/heads/main' &&
-        process.env.GITHUB_EVENT_NAME === 'workflow_dispatch' &&
+        ['workflow_dispatch', 'workflow_run'].includes(process.env.GITHUB_EVENT_NAME) &&
         process.env.GITHUB_WORKFLOW_REF ===
           `${repository}/.github/workflows/release-promotion.yml@refs/heads/main` &&
         /^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA),

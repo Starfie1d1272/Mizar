@@ -19,6 +19,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@mizar/broadcast-config": "workspace:*",
     "@mizar/protocol": "workspace:*",
     "@mizar/cs2-assets": "workspace:*",
     "@mizar/hud-config": "workspace:*",
