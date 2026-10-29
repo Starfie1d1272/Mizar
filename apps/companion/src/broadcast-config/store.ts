@@ -18,7 +18,7 @@ import {
   type PresetResolver,
   type ResourceRef,
 } from '@mizar/broadcast-config';
-import { replaceDurableJson } from '../match-context/durable-json.js';
+import { durableJsonByteLength, replaceDurableJson } from '../match-context/durable-json.js';
 import { SerialCommitQueue } from '../match-context/serial-commit.js';
 
 interface Receipt {
@@ -122,7 +122,7 @@ export class BroadcastConfigStore {
         if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
         const document = parseBroadcastConfigDocument(await this.options.createInitial());
         const initial: Envelope = { version: 1, document, receipts: {}, imports: [] };
-        if (Buffer.byteLength(JSON.stringify(initial)) > 16 * 1024 * 1024)
+        if (durableJsonByteLength(initial) > 16 * 1024 * 1024)
           throw new Error('broadcast_config_too_large', { cause: error });
         await replaceDurableJson(this.options.filePath, initial);
         this.envelope = await this.read();
@@ -135,7 +135,7 @@ export class BroadcastConfigStore {
   }
   private async commit(next: Envelope, canCommit?: () => boolean): Promise<void> {
     const checked = this.parseEnvelope(next);
-    if (Buffer.byteLength(JSON.stringify(checked)) > 16 * 1024 * 1024)
+    if (durableJsonByteLength(checked) > 16 * 1024 * 1024)
       throw new Error('broadcast_config_too_large');
     const committed = await replaceDurableJson(
       this.options.filePath,
