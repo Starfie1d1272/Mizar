@@ -263,6 +263,8 @@ jobs:
             }
             & .\resources\runtime\node.exe ($env:GITHUB_WORKSPACE + '\scripts\qualification\verify-c4-resources.mjs') (Join-Path $bundleRoot.FullName 'resources/app') | Tee-Object -FilePath (Join-Path $env:QUALIFICATION_BUILD_ROOT 'c4-resources.log')
             if ($LASTEXITCODE -ne 0) { throw 'installed C4 资源校验失败' }
+            & .\resources\runtime\node.exe ($env:GITHUB_WORKSPACE + '\scripts\qualification\desktop-smoke.mjs') $bundleRoot.FullName (Join-Path $env:QUALIFICATION_BUILD_ROOT 'desktop-smoke.json')
+            if ($LASTEXITCODE -ne 0) { throw 'Desktop startup and shutdown smoke failed' }
           } finally {
             Pop-Location
           }

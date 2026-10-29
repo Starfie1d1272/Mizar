@@ -536,8 +536,12 @@ pub(crate) fn finish_unwritten_preparation(
         return Err("snapshot_invalid".into());
     }
     let terminal = payload.get("coreTerminal");
-    let terminal_unwritten = terminal.is_none_or(|t| t["configWriteAttempted"] == false
-        && t["launchAttempted"] == false && t["pid"].is_null() && t["created"].is_null());
+    let terminal_unwritten = terminal.is_none_or(|t| {
+        t["configWriteAttempted"] == false
+            && t["launchAttempted"] == false
+            && t["pid"].is_null()
+            && t["created"].is_null()
+    });
     if payload["coordinatedWriteAttempted"] != false || !terminal_unwritten {
         return Ok(false);
     }
@@ -573,28 +577,47 @@ pub(crate) fn finish_unwritten_preparation(
 /// Only a verified handoff and two explicit false write markers prove no
 /// configuration was written. Missing or asymmetric markers remain conservative.
 pub(crate) fn handed_off_unwritten(root: &Path, core: &Value) -> Result<bool, String> {
-    if !has_terminal(root)? { return Ok(false); }
+    if !has_terminal(root)? {
+        return Ok(false);
+    }
     let bytes = regular(&pending(root), RECORD_LIMIT)?;
     let record: Value = serde_json::from_slice(&bytes).map_err(|_| "snapshot_invalid")?;
     let payload = &record["payload"];
-    if record["sha256"].as_str() != Some(digest(&serde_json::to_vec(payload).map_err(|_| "snapshot_invalid")?).as_str()) {
+    if record["sha256"].as_str()
+        != Some(digest(&serde_json::to_vec(payload).map_err(|_| "snapshot_invalid")?).as_str())
+    {
         return Err("snapshot_invalid".into());
     }
     let terminal = &payload["coreTerminal"];
-    let full_session = crate::cs2_config_identity::SessionIdentity::read(payload).map_err(str::to_string)?.ok_or("identity_changed")?;
-    let core_session = crate::cs2_config_identity::SessionIdentity::read(core).map_err(str::to_string)?.ok_or("identity_changed")?;
-    if full_session != core_session || payload["identity"] != full_session.config.value()
+    let full_session = crate::cs2_config_identity::SessionIdentity::read(payload)
+        .map_err(str::to_string)?
+        .ok_or("identity_changed")?;
+    let core_session = crate::cs2_config_identity::SessionIdentity::read(core)
+        .map_err(str::to_string)?
+        .ok_or("identity_changed")?;
+    if full_session != core_session
+        || payload["identity"] != full_session.config.value()
         || core["configWriteAttempted"] != terminal["configWriteAttempted"]
         || core["launchAttempted"] != terminal["launchAttempted"]
-        || core["pid"] != terminal["pid"] || core["created"] != terminal["created"]
-        || regular(&pending(root), RECORD_LIMIT)? != bytes { return Err("snapshot_changed".into()); }
+        || core["pid"] != terminal["pid"]
+        || core["created"] != terminal["created"]
+        || regular(&pending(root), RECORD_LIMIT)? != bytes
+    {
+        return Err("snapshot_changed".into());
+    }
     let unwritten = payload["coordinatedWriteAttempted"] == false
-        && terminal["configWriteAttempted"] == false && terminal["launchAttempted"] == false
-        && terminal["pid"].is_null() && terminal["created"].is_null();
+        && terminal["configWriteAttempted"] == false
+        && terminal["launchAttempted"] == false
+        && terminal["pid"].is_null()
+        && terminal["created"].is_null();
     if unwritten {
-        let original = payload["original"].as_str().filter(|s| s.len() <= LIMIT).ok_or("snapshot_invalid")?;
+        let original = payload["original"]
+            .as_str()
+            .filter(|s| s.len() <= LIMIT)
+            .ok_or("snapshot_invalid")?;
         let (owned, applied) = decode(&payload["fields"])?;
-        crate::spectator_recovery_vcfg::restore(original, &applied, original, &owned).map_err(str::to_string)?;
+        crate::spectator_recovery_vcfg::restore(original, &applied, original, &owned)
+            .map_err(str::to_string)?;
     }
     Ok(unwritten)
 }

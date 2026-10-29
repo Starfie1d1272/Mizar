@@ -25,6 +25,26 @@ jobs:
           install: false
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      - run: pnpm typecheck
+      - name: Start built service, open main page and stop
+        env:
+          CHROME_BIN: google-chrome
+        run: pnpm local-web:production-smoke
+  quality:
+    name: quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
+        with:
+          runtime: node@24
+          install: false
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm format:check
+      - run: pnpm exec prettier --check '.github/**/*.{yml,yaml}'
+      - run: cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check
+      - run: pnpm exec eslint . --max-warnings=0
   native:
     name: native build / Windows
     runs-on: windows-2025
@@ -59,7 +79,7 @@ jobs:
   ci-gate:
     name: ci-gate
     if: always()
-    needs: [build, native]
+    needs: [build, quality, native]
     runs-on: ubuntu-24.04
     steps:
       - name: Require successful builds within 180 seconds
@@ -67,8 +87,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BUILD: ${{ needs.build.result }}
           NATIVE: ${{ needs.native.result }}
+          QUALITY: ${{ needs.quality.result }}
         run: |
           created=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .created_at)
           elapsed=$(( $(date -u +%s) - $(date -u -d "$created" +%s) ))
           echo "CI created to gate: ${elapsed}s"
-          test "$BUILD" = success && test "$NATIVE" = success && test "$elapsed" -le 180
+          test "$BUILD" = success && test "$QUALITY" = success && test "$NATIVE" = success && test "$elapsed" -le 180

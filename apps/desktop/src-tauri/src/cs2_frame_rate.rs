@@ -155,7 +155,10 @@ pub(crate) fn scalar_section(text: &str, target: &[&str]) -> Result<Vec<(Token, 
 }
 
 /// Return the byte offset of the section's closing brace for safe insertions.
-pub(crate) fn scalar_section_with_end(text: &str, target: &[&str]) -> Result<(Vec<(Token, Token)>, usize), String> {
+pub(crate) fn scalar_section_with_end(
+    text: &str,
+    target: &[&str],
+) -> Result<(Vec<(Token, Token)>, usize), String> {
     fn walk(
         tokens: &[Token],
         i: &mut usize,
@@ -252,14 +255,22 @@ pub fn compatible_restore(backup: &str, current: &str) -> Result<String, String>
     let mut found = false;
     for (key, value) in entries {
         if key.value.eq_ignore_ascii_case("fps_max") {
-            if found { edits.push((key.start, value.end, String::new())); }
-            else { edits.push((value.start, value.end, format!("\"{}\"", before.value))); found = true; }
+            if found {
+                edits.push((key.start, value.end, String::new()));
+            } else {
+                edits.push((value.start, value.end, format!("\"{}\"", before.value)));
+                found = true;
+            }
         }
     }
-    if !found { return Err("当前配置缺少 fps_max，请先运行一次 CS2。".into()); }
+    if !found {
+        return Err("当前配置缺少 fps_max，请先运行一次 CS2。".into());
+    }
     edits.sort_by_key(|edit| std::cmp::Reverse(edit.0));
     let mut output = current.to_string();
-    for (start, end, value) in edits { output.replace_range(start..end, &value); }
+    for (start, end, value) in edits {
+        output.replace_range(start..end, &value);
+    }
     Ok(output)
 }
 
@@ -282,7 +293,9 @@ fn patch_script(text: &str, limit: Option<u16>) -> Result<ConfigScript, String> 
         commands.insert(command[0].value.to_ascii_lowercase());
         match command[0].value.to_ascii_lowercase().as_str() {
             "fps_max" => {
-                let Some(limit) = limit else { continue; };
+                let Some(limit) = limit else {
+                    continue;
+                };
                 if command.len() != 2 || fps_number(&command[1].value).is_err() {
                     return Err("启动配置包含无法可靠修改的 fps_max 命令，请改为直接赋值。".into());
                 }
@@ -318,10 +331,12 @@ fn patch_script(text: &str, limit: Option<u16>) -> Result<ConfigScript, String> 
                 }
             }
             "incrementvar" | "toggle" => {
-                if limit.is_some() && command.iter().skip(1).any(|t| {
-                    let value = t.value.to_ascii_lowercase();
-                    value.contains("fps_max")
-                }) {
+                if limit.is_some()
+                    && command.iter().skip(1).any(|t| {
+                        let value = t.value.to_ascii_lowercase();
+                        value.contains("fps_max")
+                    })
+                {
                     return Err("启动配置包含动态帧率命令，请先改为 fps_max 直接赋值。".into());
                 }
             }
@@ -395,7 +410,12 @@ fn canonical_inside(path: &Path, root: &Path) -> Result<PathBuf, String> {
 pub fn prepare(video: &Path, executable: &Path, limit: u16) -> Result<Vec<Value>, String> {
     prepare_with_observer(video, executable, limit, false)
 }
-pub(crate) fn prepare_with_observer(video: &Path, executable: &Path, limit: u16, observer: bool) -> Result<Vec<Value>, String> {
+pub(crate) fn prepare_with_observer(
+    video: &Path,
+    executable: &Path,
+    limit: u16,
+    observer: bool,
+) -> Result<Vec<Value>, String> {
     if ![0, 30, 60].contains(&limit) {
         return Err("帧率选项无效。".into());
     }
@@ -405,24 +425,46 @@ pub(crate) fn prepare_with_observer(video: &Path, executable: &Path, limit: u16,
     let applied = patch_convars(&original, limit)?;
     let mut files =
         vec![json!({"kind":"convars", "path":convars, "original":original, "applied":applied})];
-    files.extend(prepare_scripts(video, executable, Some(limit), observer, original.len())?);
+    files.extend(prepare_scripts(
+        video,
+        executable,
+        Some(limit),
+        observer,
+        original.len(),
+    )?);
     Ok(files)
 }
 
-const OBSERVER_SUFFIX: &str = "\n// Mizar session: restore the saved startup file on exit.\nexec mizar_observer.cfg\n";
+const OBSERVER_SUFFIX: &str =
+    "\n// Mizar session: restore the saved startup file on exit.\nexec mizar_observer.cfg\n";
 
 fn observer_script(text: &str, observer: bool) -> Result<String, String> {
-    let result = if observer { format!("{text}{OBSERVER_SUFFIX}") } else { text.to_string() };
-    if result.len() > FILE_LIMIT { return Err("CS2 启动配置超过修改上限。".into()); }
+    let result = if observer {
+        format!("{text}{OBSERVER_SUFFIX}")
+    } else {
+        text.to_string()
+    };
+    if result.len() > FILE_LIMIT {
+        return Err("CS2 启动配置超过修改上限。".into());
+    }
     Ok(result)
 }
 
 /// Standalone spectator mode owns only the final fixed +exec, never FPS values.
-pub(crate) fn prepare_observer_scripts(video: &Path, executable: &Path) -> Result<Vec<Value>, String> {
+pub(crate) fn prepare_observer_scripts(
+    video: &Path,
+    executable: &Path,
+) -> Result<Vec<Value>, String> {
     prepare_scripts(video, executable, None, true, 0)
 }
 
-fn prepare_scripts(video: &Path, executable: &Path, limit: Option<u16>, observer: bool, mut total: usize) -> Result<Vec<Value>, String> {
+fn prepare_scripts(
+    video: &Path,
+    executable: &Path,
+    limit: Option<u16>,
+    observer: bool,
+    mut total: usize,
+) -> Result<Vec<Value>, String> {
     let directory = video.parent().ok_or("CS2 配置目录不可用。")?;
     let mut files = Vec::new();
     let account = directory
@@ -468,9 +510,21 @@ fn prepare_scripts(video: &Path, executable: &Path, limit: Option<u16>, observer
                         "Steam 启动项包含动态配置命令，无法保证帧率上限，请先移除该启动项。".into(),
                     );
                 }
-                if observer && ["+bind", "+binddefaults", "+unbind", "+unbindall", "+spec_usenumberkeys_nobinds"]
-                    .iter().any(|name| token.value.eq_ignore_ascii_case(name)) {
-                    return Err("Steam 启动项直接修改观战键位，无法保证本次解说配置，请先移除冲突项。".into());
+                if observer
+                    && [
+                        "+bind",
+                        "+binddefaults",
+                        "+unbind",
+                        "+unbindall",
+                        "+spec_usenumberkeys_nobinds",
+                    ]
+                    .iter()
+                    .any(|name| token.value.eq_ignore_ascii_case(name))
+                {
+                    return Err(
+                        "Steam 启动项直接修改观战键位，无法保证本次解说配置，请先移除冲突项。"
+                            .into(),
+                    );
                 }
                 if token.value.eq_ignore_ascii_case("+exec")
                     || token.value.eq_ignore_ascii_case("+execifexists")
@@ -481,7 +535,8 @@ fn prepare_scripts(video: &Path, executable: &Path, limit: Option<u16>, observer
                         token.value.eq_ignore_ascii_case("+execifexists"),
                     ));
                 }
-                if let Some(limit) = limit.filter(|_| token.value.eq_ignore_ascii_case("+fps_max")) {
+                if let Some(limit) = limit.filter(|_| token.value.eq_ignore_ascii_case("+fps_max"))
+                {
                     if tokens
                         .get(index + 1)
                         .and_then(|t| fps_number(&t.value).ok())
@@ -505,8 +560,14 @@ fn prepare_scripts(video: &Path, executable: &Path, limit: Option<u16>, observer
         }
         let canonical = canonical_inside(&path, &root)?;
         // Never append an exec of the managed file to itself.
-        if observer && path.parent() == Some(root.as_path())
-            && path.file_name().is_some_and(|name| name.eq_ignore_ascii_case(crate::cs2_spectator::CFG_NAME)) { continue; }
+        if observer
+            && path.parent() == Some(root.as_path())
+            && path
+                .file_name()
+                .is_some_and(|name| name.eq_ignore_ascii_case(crate::cs2_spectator::CFG_NAME))
+        {
+            continue;
+        }
         if !visited.insert(canonical.to_string_lossy().to_lowercase()) {
             continue;
         }
@@ -544,7 +605,12 @@ pub fn validated<'a>(
 ) -> Result<(&'a Path, &'a str, &'a str), String> {
     validated_script(record, video, executable, Some(limit))
 }
-pub(crate) fn validated_script<'a>(record: &'a Value, video: &Path, executable: &Path, limit: Option<u16>) -> Result<(&'a Path, &'a str, &'a str), String> {
+pub(crate) fn validated_script<'a>(
+    record: &'a Value,
+    video: &Path,
+    executable: &Path,
+    limit: Option<u16>,
+) -> Result<(&'a Path, &'a str, &'a str), String> {
     let path = Path::new(record["path"].as_str().ok_or("帧率恢复路径缺失。")?);
     let original = record["original"].as_str().ok_or("原帧率备份缺失。")?;
     let applied = record["applied"].as_str().ok_or("帧率应用记录缺失。")?;
@@ -580,9 +646,15 @@ pub(crate) fn validated_script<'a>(record: &'a Value, video: &Path, executable: 
                 Some(Value::Bool(value)) => *value,
                 _ => return Err("观战启动记录无效。".into()),
             };
-            if limit.is_none() && !observer { return Err("观战启动记录缺少固定配置。".into()); }
-            if observer && path.parent() == Some(root.as_path())
-                && path.file_name().is_some_and(|name| name.eq_ignore_ascii_case(crate::cs2_spectator::CFG_NAME)) {
+            if limit.is_none() && !observer {
+                return Err("观战启动记录缺少固定配置。".into());
+            }
+            if observer
+                && path.parent() == Some(root.as_path())
+                && path
+                    .file_name()
+                    .is_some_and(|name| name.eq_ignore_ascii_case(crate::cs2_spectator::CFG_NAME))
+            {
                 return Err("观战启动记录不得修改固定 CFG。".into());
             }
             observer_script(&patch_script(original, limit)?.applied, observer)?

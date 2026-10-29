@@ -138,7 +138,10 @@ fn verify_handle_path(file: &File, path: &Path) -> io::Result<()> {
     let normalize = |value: &str| {
         let value = value.replace('/', "\\");
         Path::new(value.strip_prefix("\\\\?\\").unwrap_or(&value))
-            .components().collect::<PathBuf>().to_string_lossy().to_lowercase()
+            .components()
+            .collect::<PathBuf>()
+            .to_string_lossy()
+            .to_lowercase()
     };
     if normalize(&actual) != normalize(expected) {
         return Err(io::Error::other("console handle escaped fixed path"));
@@ -237,7 +240,9 @@ pub fn settings(log: &DesktopLog) -> Result<Value, String> {
     let loaded = read_state(&state_directory(log).join(SETTINGS));
     let mut value = match loaded {
         Ok(Some(value)) => value,
-        Ok(None) => json!({"version":1,"enabled":true,"generation":digest("default-console-capture-v1")}),
+        Ok(None) => {
+            json!({"version":1,"enabled":true,"generation":digest("default-console-capture-v1")})
+        }
         Err(error) if fence.is_some() => json!({"enabled":false,"generation":null,"warning":error}),
         Err(error) => return Err(error),
     };
@@ -277,13 +282,19 @@ fn migrate_chat_default(log: &DesktopLog) -> Result<(), String> {
     read_state(&directory.join(SETTINGS)).map_err(failure)?;
     marker_generation(log)?;
     let value = json!({"version":1,"enabled":true,"generation":generation(),"changedAt":utc()});
-    crate::cs2_session::atomic_write(&directory.join(SETTINGS), &serde_json::to_vec(&value).map_err(failure)?)?;
+    crate::cs2_session::atomic_write(
+        &directory.join(SETTINGS),
+        &serde_json::to_vec(&value).map_err(failure)?,
+    )?;
     match fs::remove_file(disabled_marker(log)) {
         Ok(()) => (),
         Err(error) if error.kind() == io::ErrorKind::NotFound => (),
         Err(error) => return Err(failure(error)),
     }
-    DISABLED_ROOTS.lock().map_err(failure)?.remove(&log.state_root);
+    DISABLED_ROOTS
+        .lock()
+        .map_err(failure)?
+        .remove(&log.state_root);
     parents(&marker).map_err(failure)?;
     crate::cs2_session::atomic_write(&marker, b"1")?;
     Ok(())
@@ -432,44 +443,73 @@ fn preserve_previous_console(log: &DesktopLog, executable: &Path) -> io::Result<
 
     const FILE_LIMIT: u64 = 512 * 1024 * 1024;
     const TOTAL_LIMIT: u64 = 2 * 1024 * 1024 * 1024;
-    let (mut source, source_identity) = match checked(&path(executable).map_err(io::Error::other)?) {
+    let (mut source, source_identity) = match checked(&path(executable).map_err(io::Error::other)?)
+    {
         Ok(value) => value,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error),
     };
     let before = source.metadata()?;
-    if before.len() == 0 { return Ok(()); }
-    if before.len() > FILE_LIMIT { return Err(io::Error::other("raw_console_file_budget")); }
+    if before.len() == 0 {
+        return Ok(());
+    }
+    if before.len() > FILE_LIMIT {
+        return Err(io::Error::other("raw_console_file_budget"));
+    }
     let directory = log.state_root.join("console-history");
-    parents(&directory.join("probe")) .or_else(|error| {
-        if error.kind() != io::ErrorKind::NotFound { return Err(error); }
+    parents(&directory.join("probe")).or_else(|error| {
+        if error.kind() != io::ErrorKind::NotFound {
+            return Err(error);
+        }
         fs::create_dir(&directory)?;
         parents(&directory.join("probe"))
     })?;
-    let temporary = directory.join(format!(".capture-{}-{}", std::process::id(), Utc::now().timestamp_nanos_opt().unwrap_or_default()));
+    let temporary = directory.join(format!(
+        ".capture-{}-{}",
+        std::process::id(),
+        Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
     let result = (|| {
-        let mut output = OpenOptions::new().write(true).create_new(true).open(&temporary)?;
+        let mut output = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
         let mut hasher = Sha256::new();
         let mut buffer = [0u8; 64 * 1024];
         let mut copied = 0u64;
         loop {
             let count = source.read(&mut buffer)?;
-            if count == 0 { break; }
+            if count == 0 {
+                break;
+            }
             copied += count as u64;
-            if copied > FILE_LIMIT { return Err(io::Error::other("raw_console_file_budget")); }
+            if copied > FILE_LIMIT {
+                return Err(io::Error::other("raw_console_file_budget"));
+            }
             output.write_all(&buffer[..count])?;
             hasher.update(&buffer[..count]);
         }
         let after = source.metadata()?;
-        if copied != before.len() || after.len() != before.len() || after.modified()? != before.modified()? || identity(&source)? != source_identity {
+        if copied != before.len()
+            || after.len() != before.len()
+            || after.modified()? != before.modified()?
+            || identity(&source)? != source_identity
+        {
             return Err(io::Error::other("raw_console_changed_during_capture"));
         }
         let target = directory.join(format!("{:x}.log", hasher.finalize()));
         if target.exists() {
             let (mut existing, _) = checked(&target)?;
             let mut hash = Sha256::new();
-            loop { let count=existing.read(&mut buffer)?; if count==0 {break;} hash.update(&buffer[..count]); }
-            if format!("{:x}.log",hash.finalize()) != target.file_name().unwrap().to_string_lossy() {
+            loop {
+                let count = existing.read(&mut buffer)?;
+                if count == 0 {
+                    break;
+                }
+                hash.update(&buffer[..count]);
+            }
+            if format!("{:x}.log", hash.finalize()) != target.file_name().unwrap().to_string_lossy()
+            {
                 return Err(io::Error::other("raw_console_existing_copy_corrupt"));
             }
             return Ok(());
@@ -477,14 +517,20 @@ fn preserve_previous_console(log: &DesktopLog, executable: &Path) -> io::Result<
         let mut total = copied;
         let mut count = 0;
         for entry in fs::read_dir(&directory)? {
-            let entry=entry?;
-            if entry.path() == temporary {continue;}
-            let metadata=fs::symlink_metadata(entry.path())?;
-            if !metadata.is_file() || !plain(&metadata) { return Err(io::Error::other("raw_console_history_unsafe")); }
+            let entry = entry?;
+            if entry.path() == temporary {
+                continue;
+            }
+            let metadata = fs::symlink_metadata(entry.path())?;
+            if !metadata.is_file() || !plain(&metadata) {
+                return Err(io::Error::other("raw_console_history_unsafe"));
+            }
             count += 1;
             total += metadata.len();
         }
-        if count >= 16 || total > TOTAL_LIMIT {return Err(io::Error::other("raw_console_history_budget"));}
+        if count >= 16 || total > TOTAL_LIMIT {
+            return Err(io::Error::other("raw_console_history_budget"));
+        }
         output.sync_all()?;
         drop(output);
         // Hard-link commits without replacing an existing file on either platform.
@@ -703,13 +749,28 @@ impl Capture {
             let line = line.trim_start_matches('\u{feff}').trim_end_matches('\r');
             if public_chat_boundary(line) && owned() {
                 self.active(log)?;
-                log.committed_event("program_all_chat_reset", "observed", Some(&json!({"binding":self.binding,"capturedAt":captured_at}).to_string())).map_err(failure)?;
+                log.committed_event(
+                    "program_all_chat_reset",
+                    "observed",
+                    Some(&json!({"binding":self.binding,"capturedAt":captured_at}).to_string()),
+                )
+                .map_err(failure)?;
             }
             let channel = match category(line) {
                 Category::Chat => {
                     increment(&mut self.cursor, "chat");
                     if let Some((sender, text)) = public_chat(line) {
-                        let after = self.cursor["observations"].as_array().and_then(|values| values.iter().rev().find(|value| value["offset"].as_u64().is_some_and(|offset| offset <= source_offset))).map(|value| value["after"].clone()).unwrap_or_else(|| self.cursor["sourceAfterUtc"].clone());
+                        let after = self.cursor["observations"]
+                            .as_array()
+                            .and_then(|values| {
+                                values.iter().rev().find(|value| {
+                                    value["offset"]
+                                        .as_u64()
+                                        .is_some_and(|offset| offset <= source_offset)
+                                })
+                            })
+                            .map(|value| value["after"].clone())
+                            .unwrap_or_else(|| self.cursor["sourceAfterUtc"].clone());
                         if owned() {
                             self.active(log)?;
                             log.committed_event("program_all_chat", "observed", Some(&json!({"binding":self.binding,"id":digest(format!("{}:{id}:{source_offset}",self.binding)),"sourceAfterUtc":after,"capturedAt":captured_at,"sender":sender,"text":text}).to_string())).map_err(failure)?;
@@ -814,17 +875,41 @@ fn increment(value: &mut Value, field: &str) {
 }
 
 fn public_chat(line: &str) -> Option<(String, String)> {
-    let body = console_body(line.trim_start()).trim_start().strip_prefix("[ALL] ")?;
+    let body = console_body(line.trim_start())
+        .trim_start()
+        .strip_prefix("[ALL] ")?;
     let (sender, text) = body.split_once('：').or_else(|| body.split_once(": "))?;
-    let clean = |text: &str| text.chars().filter(|c| !c.is_control() && !matches!(*c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')).collect::<String>().trim().to_owned();
-    let sender=clean(sender); let text=clean(text);
-    if sender.is_empty() || text.is_empty() || sender.chars().count()>128 || text.chars().count()>512 {return None;}
+    let clean = |text: &str| {
+        text.chars()
+            .filter(|c| {
+                !c.is_control() && !matches!(*c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+            })
+            .collect::<String>()
+            .trim()
+            .to_owned()
+    };
+    let sender = clean(sender);
+    let text = clean(text);
+    if sender.is_empty()
+        || text.is_empty()
+        || sender.chars().count() > 128
+        || text.chars().count() > 512
+    {
+        return None;
+    }
     Some((sender, text))
 }
 
 fn public_chat_boundary(line: &str) -> bool {
-    let body=console_body(line.trim_start()).trim_start();
-    ["[Demo] Requesting playback of ", "[HostStateManager] HostStateRequest::Start(", "[HostStateManager] Host activate:", "Loading map \""].iter().any(|prefix|body.starts_with(prefix))
+    let body = console_body(line.trim_start()).trim_start();
+    [
+        "[Demo] Requesting playback of ",
+        "[HostStateManager] HostStateRequest::Start(",
+        "[HostStateManager] Host activate:",
+        "Loading map \"",
+    ]
+    .iter()
+    .any(|prefix| body.starts_with(prefix))
 }
 fn newline(bytes: &[u8], mode: &str) -> Option<(usize, usize)> {
     if mode == "utf8" {
@@ -1078,13 +1163,17 @@ pub fn status(log: &DesktopLog) -> Result<Value, String> {
     Ok(config)
 }
 #[cfg(windows)]
-pub fn run_worker(log: DesktopLog, running: std::sync::Arc<std::sync::atomic::AtomicBool>, app: tauri::AppHandle) {
-    use tauri::Manager;
+pub fn run_worker(
+    log: DesktopLog,
+    running: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    app: tauri::AppHandle,
+) {
     use std::{
         sync::atomic::Ordering,
         thread,
         time::{Duration, Instant},
     };
+    use tauri::Manager;
     let mut capture: Option<Capture> = None;
     let mut last_signature = String::new();
     let mut failures: u64 = 0;
@@ -1097,7 +1186,9 @@ pub fn run_worker(log: DesktopLog, running: std::sync::Arc<std::sync::atomic::At
             }
             let source = {
                 let state = app.state::<std::sync::Mutex<crate::managed_cs2::ManagedCs2>>();
-                let Ok(cs2) = state.try_lock() else { return Ok(json!({"phase":"source_busy"})); };
+                let Ok(cs2) = state.try_lock() else {
+                    return Ok(json!({"phase":"source_busy"}));
+                };
                 cs2.console_source()?
             };
             let Some((journal, process)) = source else {
@@ -1125,8 +1216,20 @@ pub fn run_worker(log: DesktopLog, running: std::sync::Arc<std::sync::atomic::At
                 .poll(&log, &|| {
                     process.is_running() && running.load(Ordering::Acquire) && {
                         let state = app.state::<std::sync::Mutex<crate::managed_cs2::ManagedCs2>>();
-                        state.try_lock().ok().and_then(|cs2| cs2.console_source().ok().flatten().map(|(_, process)| process))
-                            .is_some_and(|current| current.pid == process.pid && current.created == process.created && current.is_running())
+                        state
+                            .try_lock()
+                            .ok()
+                            .and_then(|cs2| {
+                                cs2.console_source()
+                                    .ok()
+                                    .flatten()
+                                    .map(|(_, process)| process)
+                            })
+                            .is_some_and(|current| {
+                                current.pid == process.pid
+                                    && current.created == process.created
+                                    && current.is_running()
+                            })
                     }
                 })
         })();

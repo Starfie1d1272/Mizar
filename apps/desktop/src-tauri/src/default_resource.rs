@@ -167,7 +167,6 @@ fn verify_handle_path(file: &File, path: &Path) -> io::Result<()> {
             .to_lowercase()
     };
     if normalize(&actual) != normalize(expected) {
-
         return Err(io::Error::other("resource handle escaped fixed path"));
     }
     Ok(())

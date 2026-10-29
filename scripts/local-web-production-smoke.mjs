@@ -1,267 +1,171 @@
-import net from 'node:net';
-import { Buffer } from 'node:buffer';
-import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { spawn } from 'node:child_process';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { createServer } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 
-const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const webRoot = join(rootDir, 'apps', 'web', 'dist');
-const upgradeTimeoutMs = 5_000;
-const appCloseTimeoutMs = 10_000;
-
-function assert(condition, message) {
-  if (!condition) throw new Error(message);
-}
-
-function withTimeout(promise, message, timeoutMs = upgradeTimeoutMs) {
+const root = resolve(import.meta.dirname, '..');
+const temporary = await mkdtemp(join(tmpdir(), 'mizar-startup-'));
+const port = await new Promise((resolvePort, reject) => {
+  const server = createServer();
+  server.once('error', reject);
+  server.listen(0, '127.0.0.1', () => {
+    const { port: selected } = server.address();
+    server.close(() => resolvePort(selected));
+  });
+});
+const url = `http://127.0.0.1:${port}`;
+function bounded(promise, label, ms = 5000) {
   let timer;
   const timeout = new Promise((_, reject) => {
-    timer = globalThis.setTimeout(() => reject(new Error(message)), timeoutMs);
+    timer = globalThis.setTimeout(() => reject(new Error(`${label} timed out`)), ms);
   });
   return Promise.race([promise, timeout]).finally(() => globalThis.clearTimeout(timer));
 }
 
-function parseFrame(buffer) {
-  if (buffer.length < 2) return null;
-  const firstLength = buffer[1] & 0x7f;
-  let payloadLength = firstLength;
-  let offset = 2;
-  if (firstLength === 126) {
-    if (buffer.length < 4) return null;
-    payloadLength = buffer.readUInt16BE(2);
-    offset = 4;
-  } else if (firstLength === 127) {
-    if (buffer.length < 10) return null;
-    const length = buffer.readBigUInt64BE(2);
-    assert(length <= BigInt(Number.MAX_SAFE_INTEGER), 'WebSocket frame is too large');
-    payloadLength = Number(length);
-    offset = 10;
+const service = spawn(process.execPath, [join(root, 'apps/companion/dist/server.js')], {
+  cwd: root,
+  env: {
+    ...process.env,
+    HOST: '127.0.0.1',
+    PORT: String(port),
+    GSI_TOKEN: 'mizar-startup-smoke',
+    WEB_ROOT: join(root, 'apps/web/dist'),
+    MIZAR_STATE_ROOT: temporary,
+    CAPTURE_DIR: join(temporary, 'recordings'),
+  },
+  stdio: ['ignore', 'pipe', 'pipe'],
+});
+let logs = '';
+service.stdout.on('data', (data) => (logs += data));
+service.stderr.on('data', (data) => (logs += data));
+const serviceExit = new Promise((resolveExit) =>
+  service.once('exit', (code, signal) => resolveExit({ code, signal })),
+);
+let browser;
+let socket;
+let failure;
+try {
+  const deadline = Date.now() + 30000;
+  while (true) {
+    if (service.exitCode !== null) throw new Error(`Companion exited before readiness: ${logs}`);
+    const health = await globalThis
+      .fetch(`${url}/health`, { signal: globalThis.AbortSignal.timeout(2000) })
+      .catch(() => null);
+    if (health?.ok) break;
+    if (Date.now() >= deadline) throw new Error(`Companion readiness timed out: ${logs}`);
+    await delay(100);
   }
-  assert((buffer[1] & 0x80) === 0, 'server WebSocket frame must not be masked');
-  if (buffer.length < offset + payloadLength) return null;
-  return {
-    opcode: buffer[0] & 0x0f,
-    payload: buffer.subarray(offset, offset + payloadLength),
-  };
-}
-
-function closeWebSocket(socket) {
-  if (!socket.destroyed) socket.destroy();
-}
-
-function readUpgradeResponse(socket) {
-  return new Promise((resolvePromise, reject) => {
-    let buffer = Buffer.alloc(0);
-    const cleanup = () => {
-      socket.off('data', onData);
-      socket.off('error', onError);
-      socket.off('close', onClose);
-    };
-    const onData = (chunk) => {
-      buffer = Buffer.concat([buffer, chunk]);
-      const end = buffer.indexOf('\r\n\r\n');
-      if (end < 0) return;
-      cleanup();
-      resolvePromise({
-        headers: buffer.subarray(0, end).toString('latin1'),
-        remaining: buffer.subarray(end + 4),
-      });
-    };
-    const onError = (error) => {
-      cleanup();
-      reject(error);
-    };
-    const onClose = () => {
-      cleanup();
-      reject(new Error('WebSocket socket closed before upgrade response'));
-    };
-    socket.on('data', onData);
-    socket.on('error', onError);
-    socket.on('close', onClose);
+  browser = spawn(
+    process.env.CHROME_BIN || 'chromium',
+    [
+      '--headless',
+      '--no-sandbox',
+      '--disable-gpu',
+      '--no-first-run',
+      '--remote-debugging-port=0',
+      `--user-data-dir=${join(temporary, 'browser')}`,
+      'about:blank',
+    ],
+    { stdio: 'ignore' },
+  );
+  let browserError;
+  browser.once('error', (error) => {
+    browserError = error;
   });
-}
-
-function readFrame(socket, initialBuffer) {
-  return new Promise((resolvePromise, reject) => {
-    let buffer = initialBuffer;
-    const consume = () => {
-      const frame = parseFrame(buffer);
-      if (frame === null) return;
-      cleanup();
-      resolvePromise(frame);
-    };
-    const cleanup = () => {
-      socket.off('data', onData);
-      socket.off('error', onError);
-      socket.off('close', onClose);
-    };
-    const onData = (chunk) => {
-      buffer = Buffer.concat([buffer, chunk]);
-      consume();
-    };
-    const onError = (error) => {
-      cleanup();
-      reject(error);
-    };
-    const onClose = () => {
-      cleanup();
-      reject(new Error('WebSocket socket closed before baseline'));
-    };
-    socket.on('data', onData);
-    socket.on('error', onError);
-    socket.on('close', onClose);
-    consume();
+  let debuggerPort;
+  while (!debuggerPort) {
+    if (browserError) throw browserError;
+    if (browser.exitCode !== null) throw new Error('Chromium exited before startup');
+    debuggerPort = await readFile(join(temporary, 'browser', 'DevToolsActivePort'), 'utf8')
+      .then((content) => Number(content.split('\n')[0]))
+      .catch(() => null);
+    if (Date.now() >= deadline) throw new Error('Chromium startup timed out');
+    if (!debuggerPort) await delay(100);
+  }
+  const info = await globalThis
+    .fetch(`http://127.0.0.1:${debuggerPort}/json/version`, {
+      signal: globalThis.AbortSignal.timeout(2000),
+    })
+    .then((response) => response.json());
+  socket = new globalThis.WebSocket(info.webSocketDebuggerUrl);
+  await bounded(
+    new Promise((resolveOpen, reject) => {
+      socket.addEventListener('open', resolveOpen, { once: true });
+      socket.addEventListener('error', reject, { once: true });
+    }),
+    'Chrome connection',
+  );
+  let nextId = 0;
+  const pending = new Map();
+  const errors = [];
+  socket.addEventListener('message', (event) => {
+    const message = JSON.parse(event.data);
+    if (message.method === 'Runtime.exceptionThrown')
+      errors.push(message.params.exceptionDetails.text);
+    if (!message.id || !pending.has(message.id)) return;
+    const { resolveCall, reject } = pending.get(message.id);
+    pending.delete(message.id);
+    if (message.error) reject(new Error(message.error.message));
+    else resolveCall(message.result);
   });
-}
-
-async function assertProgramBaseline(port, subprotocol, route) {
-  const socket = net.createConnection({ host: '127.0.0.1', port });
-  try {
-    await withTimeout(
-      new Promise((resolvePromise, reject) => {
-        socket.once('connect', resolvePromise);
-        socket.once('error', reject);
+  const call = (method, params = {}, sessionId) =>
+    bounded(
+      new Promise((resolveCall, reject) => {
+        const id = ++nextId;
+        pending.set(id, { resolveCall, reject });
+        socket.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
       }),
-      'WebSocket TCP connection timed out',
+      method,
     );
-    socket.write(
-      `GET ${route} HTTP/1.1\r\n` +
-        `Host: 127.0.0.1:${port}\r\n` +
-        'Connection: Upgrade\r\n' +
-        'Upgrade: websocket\r\n' +
-        'Sec-WebSocket-Version: 13\r\n' +
-        'Sec-WebSocket-Key: cHJvZHVjdGlvbi1zbW9rZQ==\r\n' +
-        'Origin: http://127.0.0.1:4173\r\n' +
-        `Sec-WebSocket-Protocol: ${subprotocol}\r\n` +
-        '\r\n',
+  const { targetId } = await call('Target.createTarget', { url: 'about:blank' });
+  const { sessionId } = await call('Target.attachToTarget', { targetId, flatten: true });
+  await call('Runtime.enable', {}, sessionId);
+  await call('Page.enable', {}, sessionId);
+  await call('Page.navigate', { url }, sessionId);
+  while (true) {
+    const result = await call(
+      'Runtime.evaluate',
+      {
+        expression:
+          "document.readyState === 'complete' && document.querySelector('#root main') !== null",
+        returnByValue: true,
+      },
+      sessionId,
     );
-    const response = await withTimeout(
-      readUpgradeResponse(socket),
-      'WebSocket upgrade response timed out',
-    );
-    assert(/^HTTP\/1\.1 101\b/m.test(response.headers), 'Program WebSocket did not upgrade');
-    assert(
-      new RegExp(`^Sec-WebSocket-Protocol: ${subprotocol}$`, 'im').test(response.headers),
-      'Program WebSocket did not negotiate the Local Protocol V1 subprotocol',
-    );
-    const frame = await withTimeout(
-      readFrame(socket, response.remaining),
-      'Program WebSocket baseline timed out',
-    );
-    assert(frame.opcode === 1, 'Program WebSocket baseline must be a text frame');
-    const snapshot = JSON.parse(frame.payload.toString('utf8'));
-    assert(snapshot.type === 'snapshot', 'Program WebSocket did not send a snapshot baseline');
-    assert(snapshot.channel === 'program', 'Program WebSocket baseline has the wrong channel');
-  } finally {
-    console.log('[production-smoke] WS cleanup');
-    closeWebSocket(socket);
+    if (errors.length) throw new Error(`Main page error: ${errors.join('; ')}`);
+    if (result.result.value === true) break;
+    if (Date.now() >= deadline) throw new Error('Main page did not render');
+    await delay(100);
   }
+  await delay(500);
+  if (errors.length) throw new Error(`Main page error: ${errors.join('; ')}`);
+  console.log('Production Companion ready; main page rendered without uncaught errors.');
+} catch (error) {
+  failure = error;
+} finally {
+  socket?.close();
+  if (browser && browser.exitCode === null) browser.kill('SIGKILL');
+  if (service.exitCode === null) service.kill('SIGTERM');
+  const exit = await Promise.race([
+    serviceExit,
+    delay(10000, null, { ref: false }).then(() => null),
+  ]);
+  if (!exit) {
+    service.kill('SIGKILL');
+    failure ??= new Error('Companion did not exit');
+  }
+  await rm(temporary, { recursive: true, force: true });
+  if (exit && exit.code !== 0)
+    failure ??= new Error(`Companion exit failed: ${JSON.stringify(exit)} ${logs}`);
+  if (
+    await globalThis.fetch(`${url}/health`, { signal: globalThis.AbortSignal.timeout(2000) }).then(
+      () => true,
+      () => false,
+    )
+  )
+    failure ??= new Error('Companion port remained active');
 }
 
-async function assertCs2Assets(baseUrl, requestOptions) {
-  const manifestResponse = await globalThis.fetch(
-    `${baseUrl}/assets/cs2/manifest.json`,
-    requestOptions,
-  );
-  assert(manifestResponse.status === 200, 'CS2 asset manifest 未返回 HTTP 200');
-  assert(
-    manifestResponse.headers.get('content-type')?.includes('application/json') === true,
-    'CS2 asset manifest MIME 不正确',
-  );
-  const manifest = JSON.parse(await manifestResponse.text());
-  assert(manifest.schemaVersion === 1, 'CS2 asset manifest schemaVersion 不正确');
-  for (const [assetId, asset] of Object.entries(manifest.assets ?? {})) {
-    const assetResponse = await globalThis.fetch(`${baseUrl}${asset.outputPath}`, requestOptions);
-    const body = Buffer.from(await assetResponse.arrayBuffer());
-    assert(assetResponse.status === 200, `${assetId} 未返回 HTTP 200`);
-    assert(
-      assetResponse.headers.get('content-type')?.includes('image/svg+xml') === true,
-      `${assetId} SVG MIME 不正确`,
-    );
-    const digest = createHash('sha256').update(body).digest('hex');
-    assert(digest === asset.outputSha256, `${assetId} SVG hash 不一致`);
-  }
-}
-
-async function closeApp(app) {
-  const closePromise = app.close();
-  try {
-    await withTimeout(closePromise, 'Fastify app.close timed out', appCloseTimeoutMs);
-  } catch (error) {
-    app.server.closeAllConnections?.();
-    app.server.closeIdleConnections?.();
-    throw error;
-  }
-}
-
-async function runPhase(name, operation) {
-  console.log(`[production-smoke] ${name}`);
-  try {
-    return await operation();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`${name}: ${message}`, { cause: error });
-  }
-}
-
-async function main() {
-  const builtHtml = await readFile(join(webRoot, 'index.html'), 'utf8');
-  const assetPath = /(?:src|href)="(\/assets\/[^"\s]+)"/.exec(builtHtml)?.[1];
-  assert(assetPath !== undefined, 'Vite build HTML has no hashed /assets reference');
-
-  const { buildApp } = await import('../apps/companion/dist/app.js');
-  const { LOCAL_WEB_ROUTES, LOCAL_WEB_SUBPROTOCOL } =
-    await import('../apps/companion/dist/local-web/transport-constants.js');
-  const app = buildApp({ webRoot });
-  try {
-    await app.listen({ host: '127.0.0.1', port: 0 });
-    const address = app.server.address();
-    assert(address !== null && typeof address !== 'string', 'production smoke has no server port');
-    const baseUrl = `http://127.0.0.1:${address.port}`;
-    const requestOptions = { headers: { connection: 'close' } };
-    await runPhase('static html', async () => {
-      const pageResponse = await globalThis.fetch(`${baseUrl}/program`, requestOptions);
-      const pageBody = await pageResponse.text();
-      assert(pageResponse.status === 200, `/program returned HTTP ${pageResponse.status}`);
-      assert(
-        pageResponse.headers.get('content-type')?.includes('text/html') === true,
-        '/program did not return HTML',
-      );
-      assert(pageBody === builtHtml, '/program did not return the built Vite HTML');
-    });
-    await runPhase('hashed asset drained', async () => {
-      const assetResponse = await globalThis.fetch(`${baseUrl}${assetPath}`, requestOptions);
-      await assetResponse.arrayBuffer();
-      assert(assetResponse.status === 200, `${assetPath} returned HTTP ${assetResponse.status}`);
-    });
-    await runPhase('shared product shell stylesheet', async () => {
-      const response = await globalThis.fetch(`${baseUrl}/product-shell.css`, requestOptions);
-      const body = await response.text();
-      assert(response.status === 200, `/product-shell.css returned HTTP ${response.status}`);
-      assert(
-        response.headers.get('content-type')?.includes('text/css') === true,
-        '/product-shell.css did not return CSS',
-      );
-      const builtStyles = await readFile(join(webRoot, 'product-shell.css'), 'utf8');
-      assert(builtStyles.trim().length > 0, 'built product shell stylesheet is empty');
-      assert(body === builtStyles, '/product-shell.css did not return the built stylesheet');
-    });
-    await runPhase('CS2 assets', () => assertCs2Assets(baseUrl, requestOptions));
-    await runPhase('WS baseline', () =>
-      assertProgramBaseline(address.port, LOCAL_WEB_SUBPROTOCOL, LOCAL_WEB_ROUTES.program),
-    );
-  } finally {
-    console.log('[production-smoke] app.close');
-    await closeApp(app);
-  }
-}
-
-main()
-  .then(() => console.log('LOCAL_WEB_PRODUCTION_SMOKE_PASS'))
-  .catch((error) => {
-    console.error(
-      `LOCAL_WEB_PRODUCTION_SMOKE_FAIL: ${error instanceof Error ? error.message : error}`,
-    );
-    process.exitCode = 1;
-  });
+if (failure) throw failure;

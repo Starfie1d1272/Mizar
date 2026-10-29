@@ -13,7 +13,13 @@ impl Members {
         [self.left, self.dock, self.game]
     }
     fn role(self, hwnd: isize) -> &'static str {
-        if hwnd == self.left { "left" } else if hwnd == self.dock { "dock" } else { "game" }
+        if hwnd == self.left {
+            "left"
+        } else if hwnd == self.dock {
+            "dock"
+        } else {
+            "game"
+        }
     }
     fn contains(self, hwnd: isize) -> bool {
         hwnd != 0 && self.handles().contains(&hwnd)
@@ -38,7 +44,12 @@ impl Failure {
         serde_json::json!({"stage": self.stage, "api": self.api, "lastError": self.last_error, "target": self.target})
     }
     pub fn message(self) -> String {
-        let target = match self.target { "left" => "工作台左侧", "dock" => "工作台底栏", "game" => "CS2", _ => "工作台窗口组" };
+        let target = match self.target {
+            "left" => "工作台左侧",
+            "dock" => "工作台底栏",
+            "game" => "CS2",
+            _ => "工作台窗口组",
+        };
         if self.last_error == Some(5) {
             format!("{target}窗口层级恢复被系统拒绝。请核对 Mizar 与 Steam／CS2 的运行权限，切回工作台重试；仍失败时正常退出本次游戏，在准备中心重试恢复，备份与错误记录会保留。")
         } else {
@@ -332,7 +343,6 @@ mod native {
             None
         }
     }
-
 }
 #[cfg(windows)]
 pub use native::synchronize;

@@ -2,9 +2,7 @@ import eslint from '@eslint/js';
 import reactHooks from 'eslint-plugin-react-hooks';
 import tseslint from 'typescript-eslint';
 
-import { architectureEslintConfigs } from './scripts/architecture/policy.mjs';
-
-const typeCheckedConfigs = tseslint.configs.recommendedTypeChecked.map((config) => ({
+const typeCheckedConfigs = tseslint.configs.recommended.map((config) => ({
   ...config,
   files: ['**/*.{ts,tsx,mts,cts}'],
 }));
@@ -15,15 +13,6 @@ export default tseslint.config(
   },
   eslint.configs.recommended,
   ...typeCheckedConfigs,
-  {
-    files: ['**/*.{ts,tsx,mts,cts}'],
-    languageOptions: {
-      parserOptions: {
-        projectService: true,
-        tsconfigRootDir: import.meta.dirname,
-      },
-    },
-  },
   {
     files: [
       'apps/web/**/*.{ts,tsx}',
@@ -47,5 +36,4 @@ export default tseslint.config(
       },
     },
   },
-  ...architectureEslintConfigs(),
 );

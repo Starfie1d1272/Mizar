@@ -1,13 +1,13 @@
 use crate::cs2_session::SessionStore;
 use serde_json::{json, Value};
 use std::{
-    os::windows::process::CommandExt,
     fs,
+    os::windows::process::CommandExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::Arc,
     thread,
     time::Duration,
-    sync::Arc,
 };
 
 pub const LAUNCH_ARGS: &[&str] = &[
@@ -78,7 +78,6 @@ struct SteamLaunch {
 }
 impl SteamLaunch {
     fn validate(&self, log: &crate::startup_log::DesktopLog) -> Result<(), String> {
-
         let output = powershell(
             "$context = Get-SteamLaunchContext -NativeIdentity $nativeSteam; $context | ConvertTo-Json -Compress",
             &self.process,
@@ -229,18 +228,35 @@ fn process_pids(name: &str, log: &crate::startup_log::DesktopLog) -> Result<Vec<
     }
     Ok(pids)
 }
-pub(crate) fn process_parent(pid: u32, log: &crate::startup_log::DesktopLog) -> Result<Option<u32>, String> {
+pub(crate) fn process_parent(
+    pid: u32,
+    log: &crate::startup_log::DesktopLog,
+) -> Result<Option<u32>, String> {
     let snapshot = unsafe { CreateToolhelp32Snapshot(2, 0) };
-    if snapshot == -1 { return Err(win32_failure(log, "CreateToolhelp32Snapshot", "无法检查游戏进程，请重试。")); }
+    if snapshot == -1 {
+        return Err(win32_failure(
+            log,
+            "CreateToolhelp32Snapshot",
+            "无法检查游戏进程，请重试。",
+        ));
+    }
     let snapshot = Process(snapshot);
     let mut entry: ProcessEntry = unsafe { std::mem::zeroed() };
     entry.size = std::mem::size_of::<ProcessEntry>() as u32;
     let mut found = unsafe { Process32FirstW(snapshot.0, &mut entry) };
     while found != 0 {
-        if entry.pid == pid { return Ok(Some(entry.parent)); }
+        if entry.pid == pid {
+            return Ok(Some(entry.parent));
+        }
         found = unsafe { Process32NextW(snapshot.0, &mut entry) };
     }
-    if unsafe { GetLastError() } != 18 { return Err(win32_failure(log, "Process32NextW", "无法检查游戏进程，请重试。")); }
+    if unsafe { GetLastError() } != 18 {
+        return Err(win32_failure(
+            log,
+            "Process32NextW",
+            "无法检查游戏进程，请重试。",
+        ));
+    }
     Ok(None)
 }
 fn open(pid: u32, log: &crate::startup_log::DesktopLog) -> Result<Option<Process>, String> {
@@ -290,7 +306,13 @@ fn identity(
         PathBuf::from(String::from_utf16_lossy(&buffer[..len as usize])),
     ))
 }
-fn identity_failure(log: &crate::startup_log::DesktopLog, process: &Process, api: &str, message: &str, created: Option<u64>) -> String {
+fn identity_failure(
+    log: &crate::startup_log::DesktopLog,
+    process: &Process,
+    api: &str,
+    message: &str,
+    created: Option<u64>,
+) -> String {
     // Preserve the failing API's error before any diagnostic observation changes it.
     let code = unsafe { GetLastError() };
     let pid = unsafe { GetProcessId(process.0) };
@@ -618,7 +640,9 @@ impl WorkspaceProcess {
     }
     pub(crate) fn has_exited(&self) -> Result<bool, String> {
         match unsafe { WaitForSingleObject(self.process.0, 0) } {
-            0 => Ok(true), 258 => Ok(false), _ => Err("无法检查游戏状态，请重试。".into()),
+            0 => Ok(true),
+            258 => Ok(false),
+            _ => Err("无法检查游戏状态，请重试。".into()),
         }
     }
 }
@@ -658,42 +682,69 @@ impl ManagedCs2 {
     pub(crate) fn remember_mulnx_stop(&mut self, context: Value, game: WorkspaceProcess) {
         self.pending_mulnx_stop = Some((context, game));
     }
-    pub(crate) fn clear_mulnx_stop(&mut self) { self.pending_mulnx_stop = None; }
-    pub(crate) fn remember_mulnx_launcher(&mut self, launcher: Arc<crate::mulnx_launch::HiddenLauncher>) {
+    pub(crate) fn clear_mulnx_stop(&mut self) {
+        self.pending_mulnx_stop = None;
+    }
+    pub(crate) fn remember_mulnx_launcher(
+        &mut self,
+        launcher: Arc<crate::mulnx_launch::HiddenLauncher>,
+    ) {
         self.mulnx_launcher = Some(launcher);
     }
     pub(crate) fn owns_mulnx_launcher(&self, pid: u32) -> Result<bool, String> {
         match &self.mulnx_launcher {
-            Some(launcher) if launcher.pid() == pid => launcher.running().map_err(|e| e.to_string()),
+            Some(launcher) if launcher.pid() == pid => {
+                launcher.running().map_err(|e| e.to_string())
+            }
             _ => Ok(false),
         }
     }
     fn recovery_identity(&self) -> Result<(PathBuf, PathBuf, u32), String> {
-
         let (executable, video, steam) = discover(&self.log)?;
         steam.validate(&self.log)?;
         Ok((executable, video, steam.account))
     }
-    pub(crate) fn prepare_observer_for_mulnx(&mut self, expected_executable: &Path) -> Result<bool, String> {
-        if self.has_external() || any_cs2_running(&self.log)? { return Err("请先退出 CS2 再启动观战配置。".into()); }
+    pub(crate) fn prepare_observer_for_mulnx(
+        &mut self,
+        expected_executable: &Path,
+    ) -> Result<bool, String> {
+        if self.has_external() || any_cs2_running(&self.log)? {
+            return Err("请先退出 CS2 再启动观战配置。".into());
+        }
         crate::observer_hud::restore(&self.log)?;
         let (executable, video, steam) = discover(&self.log)?;
         steam.validate(&self.log)?;
-        if !same_executable(&executable, &expected_executable.to_string_lossy()) { return Err("游戏安装位置已变化，未加载观战配置。".into()); }
-        if any_cs2_running(&self.log)? { return Err("请先退出 CS2 再启动观战配置。".into()); }
-        self.store.prepare_mulnx_observer(&video, &executable, steam.account)
+        if !same_executable(&executable, &expected_executable.to_string_lossy()) {
+            return Err("游戏安装位置已变化，未加载观战配置。".into());
+        }
+        if any_cs2_running(&self.log)? {
+            return Err("请先退出 CS2 再启动观战配置。".into());
+        }
+        self.store
+            .prepare_mulnx_observer(&video, &executable, steam.account)
     }
-    pub(crate) fn validate_prepared_mulnx_observer(&self, expected_executable: &Path) -> Result<(), String> {
-        if self.has_external() || any_cs2_running(&self.log)? { return Err("请先退出 CS2，再启动观战配置。".into()); }
+    pub(crate) fn validate_prepared_mulnx_observer(
+        &self,
+        expected_executable: &Path,
+    ) -> Result<(), String> {
+        if self.has_external() || any_cs2_running(&self.log)? {
+            return Err("请先退出 CS2，再启动观战配置。".into());
+        }
         let (executable, video, account) = self.recovery_identity()?;
-        if !same_executable(&executable, &expected_executable.to_string_lossy()) { return Err("游戏安装位置已变化。".into()); }
-        self.store.validate_unsubmitted_mulnx_observer(&video, &executable, account)
+        if !same_executable(&executable, &expected_executable.to_string_lossy()) {
+            return Err("游戏安装位置已变化。".into());
+        }
+        self.store
+            .validate_unsubmitted_mulnx_observer(&video, &executable, account)
     }
     pub(crate) fn mark_observer_mulnx_options_clean(&self) -> Result<(), String> {
         self.store.mark_mulnx_options_clean()
     }
     pub(crate) fn cancel_unsubmitted_mulnx_observer(&mut self) -> Result<(), String> {
-        if self.has_external() || any_cs2_running(&self.log)? || !process_pids("CS2Injector.exe", &self.log)?.is_empty() {
+        if self.has_external()
+            || any_cs2_running(&self.log)?
+            || !process_pids("CS2Injector.exe", &self.log)?.is_empty()
+        {
             return Err("请先退出 CS2 和 MulNX 启动器，再恢复观战备份。".into());
         }
         self.store.cancel_unsubmitted_mulnx_observer()
@@ -701,15 +752,34 @@ impl ManagedCs2 {
     pub(crate) fn prepared_native_hud(&self) -> Result<bool, String> {
         Ok(self.store.spectator_hud_identity()?.is_some())
     }
-    pub(crate) fn mulnx_observer_receipt_matches(&self, pid: u32, created: u64, executable: &Path) -> Result<bool, String> {
-        if self.store.full_spectator_pending() || self.store.load()?.is_some() { return Ok(false); }
-        Ok(self.store.mulnx_observer_matches(pid, created, executable)?.is_some())
+    pub(crate) fn mulnx_observer_receipt_matches(
+        &self,
+        pid: u32,
+        created: u64,
+        executable: &Path,
+    ) -> Result<bool, String> {
+        if self.store.full_spectator_pending() || self.store.load()?.is_some() {
+            return Ok(false);
+        }
+        Ok(self
+            .store
+            .mulnx_observer_matches(pid, created, executable)?
+            .is_some())
     }
-    pub(crate) fn bind_observer_mulnx_process(&self, pid: u32, created: u64, executable: &Path) -> Result<(), String> {
-        if cs2_pids(&self.log)? != vec![pid] { return Err("游戏实例不唯一，观战备份仍保留。".into()); }
+    pub(crate) fn bind_observer_mulnx_process(
+        &self,
+        pid: u32,
+        created: u64,
+        executable: &Path,
+    ) -> Result<(), String> {
+        if cs2_pids(&self.log)? != vec![pid] {
+            return Err("游戏实例不唯一，观战备份仍保留。".into());
+        }
         let process = open(pid, &self.log)?.ok_or("游戏已退出，观战备份仍保留。")?;
         let (actual_created, actual_executable) = identity(&process, &self.log)?;
-        if actual_created != created || !same_executable(&actual_executable, &executable.to_string_lossy()) {
+        if actual_created != created
+            || !same_executable(&actual_executable, &executable.to_string_lossy())
+        {
             return Err("游戏身份已变化，观战备份仍保留。".into());
         }
         self.store.bind_mulnx_observer(pid, created, executable)
@@ -725,9 +795,16 @@ impl ManagedCs2 {
                 || self.store.playback_cleanup_pending()
                 || requires_service,
             running: any_cs2_running(&self.log)?,
-            uncertain: journal.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch)
+            uncertain: journal
+                .as_ref()
+                .is_some_and(crate::cs2_session::unconfirmed_launch)
                 || self.store.mulnx_observer_unconfirmed()?
-                || (journal.is_some() && self.log.state_root.join("data/mulnx-launch/pending.json").exists()),
+                || (journal.is_some()
+                    && self
+                        .log
+                        .state_root
+                        .join("data/mulnx-launch/pending.json")
+                        .exists()),
             requires_service,
         })
     }
@@ -746,36 +823,73 @@ impl ManagedCs2 {
         Ok(self.message.clone())
     }
 
-    pub fn has_external(&self) -> bool { self.external.is_some() }
-    pub(crate) fn external_matches(&self, game: &WorkspaceProcess) -> bool {
-        self.external.as_ref().is_some_and(|external|
-            external.pid == game.pid && external.created == game.created && Arc::ptr_eq(&external.process, &game.process))
+    pub fn has_external(&self) -> bool {
+        self.external.is_some()
     }
-    pub fn attach_external(&mut self, pid: u32, created: u64, executable: &std::path::Path) -> Result<(), String> {
-        let observer = self.store.mulnx_observer_matches(pid, created, executable)?;
-        if self.store.load()?.is_some() || self.store.full_spectator_pending() || (self.store.spectator_pending() && observer.is_none())
+    pub(crate) fn external_matches(&self, game: &WorkspaceProcess) -> bool {
+        self.external.as_ref().is_some_and(|external| {
+            external.pid == game.pid
+                && external.created == game.created
+                && Arc::ptr_eq(&external.process, &game.process)
+        })
+    }
+    pub fn attach_external(
+        &mut self,
+        pid: u32,
+        created: u64,
+        executable: &std::path::Path,
+    ) -> Result<(), String> {
+        let observer = self
+            .store
+            .mulnx_observer_matches(pid, created, executable)?;
+        if self.store.load()?.is_some()
+            || self.store.full_spectator_pending()
+            || (self.store.spectator_pending() && observer.is_none())
             || self.store.playback_cleanup_pending()
             || crate::demo_test::requires_recovery(&self.log, None)
-        { return Err("请先完成 Mizar 原有游戏与配置恢复，再使用外部游戏。".into()); }
+        {
+            return Err("请先完成 Mizar 原有游戏与配置恢复，再使用外部游戏。".into());
+        }
         if let Some(external) = &self.external {
-            if !external.invalidated && external.pid == pid && external.created == created
+            if !external.invalidated
+                && external.pid == pid
+                && external.created == created
                 && unsafe { WaitForSingleObject(external.process.0, 0) } == 258
                 && cs2_pids(&self.log)? == vec![pid]
-                && identity(&external.process, &self.log)?.1.to_string_lossy().eq_ignore_ascii_case(&executable.to_string_lossy())
-            { return Ok(()); }
+                && identity(&external.process, &self.log)?
+                    .1
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case(&executable.to_string_lossy())
+            {
+                return Ok(());
+            }
             return Err("已有借用实例，请先退出工作台解除借用。".into());
         }
         // Refuse ambiguity, stale UI identities, a different installation and exited processes.
-        if cs2_pids(&self.log)? != vec![pid] { return Err("CS2 实例不唯一或已变化，请重新检查。".into()); }
+        if cs2_pids(&self.log)? != vec![pid] {
+            return Err("CS2 实例不唯一或已变化，请重新检查。".into());
+        }
         let process = open(pid, &self.log)?.ok_or("所选 CS2 已退出，请重新检查。")?;
         let (actual_created, actual_executable) = identity(&process, &self.log)?;
         if actual_created != created
-            || !actual_executable.to_string_lossy().eq_ignore_ascii_case(&executable.to_string_lossy())
+            || !actual_executable
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&executable.to_string_lossy())
             || unsafe { WaitForSingleObject(process.0, 0) } != 258
-        { return Err("游戏身份或安装位置不匹配，请重新检查。".into()); }
+        {
+            return Err("游戏身份或安装位置不匹配，请重新检查。".into());
+        }
         let console = crate::cs2_console::boundary(&self.log, &actual_executable)?;
         let console_source = json!({"executable":actual_executable.to_string_lossy(),"launchTime":crate::cs2_console::utc(),"pid":pid,"created":created.to_string(),"consoleDiagnostics":console,"ownership":"external", "nativeHudToggle":observer == Some(true), "spectatorCfg":observer.is_some()});
-        self.external = Some(ExternalSession { console_source, demo_request_id: None, invalidated: false, isolation_pending: false, process: Arc::new(process), pid, created });
+        self.external = Some(ExternalSession {
+            console_source,
+            demo_request_id: None,
+            invalidated: false,
+            isolation_pending: false,
+            process: Arc::new(process),
+            pid,
+            created,
+        });
         self.external_preservation = true;
         self.can_preserve = false;
         self.message = Some("已借用外部游戏；保持原设置和窗口，退出工作台不会关闭它。".into());
@@ -784,9 +898,14 @@ impl ManagedCs2 {
     }
     pub fn workspace_process(&self) -> Result<Option<WorkspaceProcess>, String> {
         if let Some(external) = &self.external {
-            return Ok((!external.invalidated && unsafe { WaitForSingleObject(external.process.0, 0) } == 258).then(|| WorkspaceProcess {
-                process: external.process.clone(), owned: false, pid: external.pid, created: external.created,
-            }));
+            return Ok((!external.invalidated
+                && unsafe { WaitForSingleObject(external.process.0, 0) } == 258)
+                .then(|| WorkspaceProcess {
+                    process: external.process.clone(),
+                    owned: false,
+                    pid: external.pid,
+                    created: external.created,
+                }));
         }
         let Some(value) = self.store.load()? else {
             return Ok(None);
@@ -796,12 +915,18 @@ impl ManagedCs2 {
     /// Read-only diagnostics context follows the explicit current attachment.
     /// This context is never written to SessionStore and grants no shutdown right.
     pub fn console_source(&self) -> Result<Option<(Value, WorkspaceProcess)>, String> {
-        let Some(process) = self.workspace_process()? else { return Ok(None); };
+        let Some(process) = self.workspace_process()? else {
+            return Ok(None);
+        };
         let context = if let Some(external) = &self.external {
-            if cs2_pids(&self.log)? != vec![external.pid] { return Ok(None); }
+            if cs2_pids(&self.log)? != vec![external.pid] {
+                return Ok(None);
+            }
             external.console_source.clone()
         } else {
-            let Some(journal) = self.store.load()? else { return Ok(None); };
+            let Some(journal) = self.store.load()? else {
+                return Ok(None);
+            };
             journal
         };
         Ok(Some((context, process)))
@@ -811,15 +936,27 @@ impl ManagedCs2 {
         Ok(!process_pids("CS2Injector.exe", &self.log)?.is_empty())
     }
     pub fn mulnx_handoff_status(&self) -> Result<Value, String> {
-        let owned = if self.has_external() { None } else { self.workspace_process()? };
+        let owned = if self.has_external() {
+            None
+        } else {
+            self.workspace_process()?
+        };
         let mut processes = Vec::new();
         for pid in cs2_pids(&self.log)? {
-            let Some(process) = open(pid, &self.log)? else { continue; };
+            let Some(process) = open(pid, &self.log)? else {
+                continue;
+            };
             let (created, executable) = identity(&process, &self.log)?;
             if unsafe { WaitForSingleObject(process.0, 0) } != 258
-                || !executable.file_name().is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case("cs2.exe"))
-            { continue; }
-            let managed = owned.as_ref().is_some_and(|p| p.pid == pid && p.created == created && p.is_running());
+                || !executable
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case("cs2.exe"))
+            {
+                continue;
+            }
+            let managed = owned
+                .as_ref()
+                .is_some_and(|p| p.pid == pid && p.created == created && p.is_running());
             processes.push(json!({"pid": pid, "created": created.to_string(), "executable": executable, "managed": managed, "borrowed": self.external.as_ref().is_some_and(|p| p.pid == pid && p.created == created)}));
         }
         // Snapshot of kernel identity only; neither launcher provenance nor MulNX readiness.
@@ -836,19 +973,49 @@ impl ManagedCs2 {
         let borrowed = self.external.is_some();
         let running = owned_running || (borrowed && self.workspace_process()?.is_some());
         let preferences = self.store.preferences()?;
-        let borrowed_observer = running && self.external.as_ref().is_some_and(|external| external.console_source["spectatorCfg"] == true);
-        let borrowed_hud = self.external.as_ref().is_some_and(|external| external.console_source["nativeHudToggle"] == true);
+        let borrowed_observer = running
+            && self
+                .external
+                .as_ref()
+                .is_some_and(|external| external.console_source["spectatorCfg"] == true);
+        let borrowed_hud = self
+            .external
+            .as_ref()
+            .is_some_and(|external| external.console_source["nativeHudToggle"] == true);
         let mulnx_uncertain = self.store.mulnx_observer_unconfirmed()?
-            || (pending.is_some() && self.log.state_root.join("data/mulnx-launch/pending.json").exists());
-        let mulnx_launch_resumable = if pending.as_ref().is_some_and(|v| v["mulnxLaunch"] == true && v["launchAttempted"] == true) {
-            std::fs::read(self.log.state_root.join("data/mulnx-launch/pending.json")).ok()
+            || (pending.is_some()
+                && self
+                    .log
+                    .state_root
+                    .join("data/mulnx-launch/pending.json")
+                    .exists());
+        let mulnx_launch_resumable = if pending
+            .as_ref()
+            .is_some_and(|v| v["mulnxLaunch"] == true && v["launchAttempted"] == true)
+        {
+            std::fs::read(self.log.state_root.join("data/mulnx-launch/pending.json"))
+                .ok()
                 .filter(|bytes| bytes.len() <= 16 * 1024)
                 .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-                .filter(|record| record["request"] == "submitted" && record["executable"].as_str().is_some_and(|path|
-                    pending.as_ref().and_then(|v| v["executable"].as_str()).is_some_and(|expected| path.eq_ignore_ascii_case(expected))))
-                .and_then(|record| record["launcherPid"].as_u64().filter(|pid| *pid > 0).and_then(|pid| u32::try_from(pid).ok()))
+                .filter(|record| {
+                    record["request"] == "submitted"
+                        && record["executable"].as_str().is_some_and(|path| {
+                            pending
+                                .as_ref()
+                                .and_then(|v| v["executable"].as_str())
+                                .is_some_and(|expected| path.eq_ignore_ascii_case(expected))
+                        })
+                })
+                .and_then(|record| {
+                    record["launcherPid"]
+                        .as_u64()
+                        .filter(|pid| *pid > 0)
+                        .and_then(|pid| u32::try_from(pid).ok())
+                })
                 .is_some_and(|pid| self.owns_mulnx_launcher(pid).unwrap_or(false))
-        } else { false };
+        } else {
+            false
+        };
         Ok(
             json!({"qualityPreset": preferences.quality.name(), "preferMulnx":preferences.prefer_mulnx, "frameRateLimit":preferences.frame_rate_limit, "nativeHudToggle": running && (borrowed_hud || pending.as_ref().is_some_and(|v| v["nativeHudToggle"] == true && v["spectatorCfg"] == true)), "spectatorRecoveryPending": (self.store.spectator_pending() || self.store.full_spectator_pending()) && pending.is_none() && !borrowed_observer, "demoCleanupPending": self.store.playback_cleanup_pending() && pending.is_none(), "demoCameraRequestId": pending.as_ref().filter(|v| v["mulnxLaunch"] == true).and_then(|v| v["demoTestRequestId"].as_str()), "spectatorWarning":self.store.spectator_warning().or_else(|| pending.as_ref().and_then(|value| value["spectatorWarning"].as_str()).map(str::to_string)), "canPreserve": self.can_preserve && pending.is_none(), "preserveSettings": borrowed || pending.as_ref().is_some_and(|v| v["preserveSettings"] == true), "pending":pending.is_some(), "mulnxLaunchResumable":mulnx_launch_resumable, "borrowed":borrowed, "externalDetached":self.external_preservation && !borrowed, "running":running, "message":self.message, "busy":false, "phase": if mulnx_uncertain || pending.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch) {"uncertain"} else if running {"running"} else if pending.is_some() {"pending"} else {"idle"}}),
         )
@@ -866,8 +1033,15 @@ impl ManagedCs2 {
         // MulNX requires its gateway check before a process can be adopted.
         // A submitted or interrupted launch remains pending until that check or
         // explicit cancellation after the launcher and game have stopped.
-        if self.log.state_root.join("data/mulnx-launch/pending.json").exists() {
-            if !confirm_steam_cancelled { return Ok(()); }
+        if self
+            .log
+            .state_root
+            .join("data/mulnx-launch/pending.json")
+            .exists()
+        {
+            if !confirm_steam_cancelled {
+                return Ok(());
+            }
             if any_cs2_running(&self.log)? || self.mulnx_launcher_running()? {
                 return Err("请先关闭 CS2 和 MulNX 启动器，再恢复配置。".into());
             }
@@ -919,15 +1093,23 @@ impl ManagedCs2 {
         }
         if value["version"] == 4 {
             let (_, video, steam) = discover(&self.log)?;
-            if value["video"] != json!(std::fs::canonicalize(&video).map_err(|e| crate::cs2_session::io_error("恢复目标无法确认。", &e))?) { return Err("请登录原目标 Steam 账号后重试恢复。".into()); }
+            if value["video"]
+                != json!(std::fs::canonicalize(&video)
+                    .map_err(|e| crate::cs2_session::io_error("恢复目标无法确认。", &e))?)
+            {
+                return Err("请登录原目标 Steam 账号后重试恢复。".into());
+            }
             steam.validate(&self.log)?;
         }
         // Preserve Demo quarantine until all core cleanup has completed.
         let had_spectator = self.store.spectator_pending() || self.store.full_spectator_pending();
         let spectator_error = if value["fullSnapshot"] == true {
             let (executable, video, account) = self.recovery_identity()?;
-            if any_cs2_running(&self.log)? { return Err("等待 CS2 退出后恢复原配置。".into()); }
-            self.store.restore_coordinated(&video, &executable, account)?
+            if any_cs2_running(&self.log)? {
+                return Err("等待 CS2 退出后恢复原配置。".into());
+            }
+            self.store
+                .restore_coordinated(&video, &executable, account)?
         } else {
             self.store.restore()?
         };
@@ -967,12 +1149,23 @@ impl ManagedCs2 {
     }
     pub fn poll(&mut self) {
         if let Some(external) = &mut self.external {
-            if !external.invalidated && (unsafe { WaitForSingleObject(external.process.0, 0) } != 258
-                || cs2_pids(&self.log).map_or(true, |pids| pids != vec![external.pid])) {
+            if !external.invalidated
+                && (unsafe { WaitForSingleObject(external.process.0, 0) } != 258
+                    || cs2_pids(&self.log).map_or(true, |pids| pids != vec![external.pid]))
+            {
                 external.invalidated = true;
                 external.isolation_pending = true;
-                self.message = Some("借用实例已退出或不再唯一；自动运镜连接正在隔离，请结束制作后重新检查。".into());
-                self.log.event("external_game_invalidated", "unknown", Some(&json!({"pid":external.pid,"created":external.created.to_string()}).to_string()));
+                self.message = Some(
+                    "借用实例已退出或不再唯一；自动运镜连接正在隔离，请结束制作后重新检查。".into(),
+                );
+                self.log.event(
+                    "external_game_invalidated",
+                    "unknown",
+                    Some(
+                        &json!({"pid":external.pid,"created":external.created.to_string()})
+                            .to_string(),
+                    ),
+                );
             }
             return;
         }
@@ -981,40 +1174,77 @@ impl ManagedCs2 {
         }
     }
     /// A lease is bound to the held, verified game process, never just a PID.
-    pub fn bind_managed_camera(&mut self, process: WorkspaceProcess, lease: String) -> Result<(), String> {
+    pub fn bind_managed_camera(
+        &mut self,
+        process: WorkspaceProcess,
+        lease: String,
+    ) -> Result<(), String> {
         if !process.owned || !process.is_running() || cs2_pids(&self.log)? != vec![process.pid] {
             return Err("受管游戏身份已变化，运镜会话未绑定。".into());
         }
-        self.camera = Some(CameraLease { process, lease, invalidated: false });
+        self.camera = Some(CameraLease {
+            process,
+            lease,
+            invalidated: false,
+        });
         Ok(())
     }
     pub fn managed_camera_lease(&mut self) -> Option<(String, bool)> {
         let camera = self.camera.as_mut()?;
-        if !camera.process.owned { return None; }
-        if !camera.process.is_running() || cs2_pids(&self.log).map_or(true, |pids| pids != vec![camera.process.pid]) {
+        if !camera.process.owned {
+            return None;
+        }
+        if !camera.process.is_running()
+            || cs2_pids(&self.log).map_or(true, |pids| pids != vec![camera.process.pid])
+        {
             camera.invalidated = true;
         }
         Some((camera.lease.clone(), camera.invalidated))
     }
     pub fn invalidate_managed_camera(&mut self) {
-        if let Some(camera) = &mut self.camera { if camera.process.owned { camera.invalidated = true; } }
+        if let Some(camera) = &mut self.camera {
+            if camera.process.owned {
+                camera.invalidated = true;
+            }
+        }
     }
     pub fn clear_managed_camera(&mut self) {
-        if self.camera.as_ref().is_some_and(|camera| camera.process.owned) { self.camera = None; }
+        if self
+            .camera
+            .as_ref()
+            .is_some_and(|camera| camera.process.owned)
+        {
+            self.camera = None;
+        }
     }
     pub fn bind_external_camera(&mut self, lease: String) {
         if let Some(external) = &self.external {
-            let process = WorkspaceProcess { process: external.process.clone(), owned: false,
-                pid: external.pid, created: external.created };
-            self.camera = Some(CameraLease { process, lease, invalidated: false });
+            let process = WorkspaceProcess {
+                process: external.process.clone(),
+                owned: false,
+                pid: external.pid,
+                created: external.created,
+            };
+            self.camera = Some(CameraLease {
+                process,
+                lease,
+                invalidated: false,
+            });
         }
     }
     pub fn bind_external_demo(&mut self, request_id: String) {
-        if let Some(external) = &mut self.external { external.demo_request_id = Some(request_id); }
+        if let Some(external) = &mut self.external {
+            external.demo_request_id = Some(request_id);
+        }
     }
     pub fn external_camera_lease(&self) -> Option<&str> {
-        self.external.as_ref().filter(|external| !external.invalidated || external.isolation_pending)?;
-        self.camera.as_ref().filter(|camera| !camera.process.owned).map(|camera| camera.lease.as_str())
+        self.external
+            .as_ref()
+            .filter(|external| !external.invalidated || external.isolation_pending)?;
+        self.camera
+            .as_ref()
+            .filter(|camera| !camera.process.owned)
+            .map(|camera| camera.lease.as_str())
     }
     pub fn invalidate_external(&mut self) {
         if let Some(external) = &mut self.external {
@@ -1027,11 +1257,15 @@ impl ManagedCs2 {
         self.external.as_ref().is_some_and(|p| p.isolation_pending)
     }
     pub fn external_isolated(&mut self) {
-        if let Some(external) = &mut self.external { external.isolation_pending = false; }
+        if let Some(external) = &mut self.external {
+            external.isolation_pending = false;
+        }
         self.message = Some("借用实例已失效，旧运镜连接已断开；请结束制作后重新检查。".into());
     }
     pub fn preserve_settings(&self) -> bool {
-        if self.external_preservation { return true; }
+        if self.external_preservation {
+            return true;
+        }
         // Corrupt/unreadable journals must also prevent automatic game layout.
         self.store.load().map_or(true, |value| {
             value.is_some_and(|v| v["preserveSettings"] == true)
@@ -1043,7 +1277,9 @@ impl ManagedCs2 {
     pub fn start_with_settings(&mut self, preserve: bool) -> Result<bool, String> {
         if self.has_external() {
             self.poll();
-            if self.workspace_process()?.is_none() { return Err("借用实例已失效，请先结束本次制作，再重新选择实例。".into()); }
+            if self.workspace_process()?.is_none() {
+                return Err("借用实例已失效，请先结束本次制作，再重新选择实例。".into());
+            }
             return Ok(false);
         }
         let journal = self.store.load()?;
@@ -1055,22 +1291,40 @@ impl ManagedCs2 {
         self.start_internal(preserve, None, false)
     }
     /// Prepare the same configuration transaction as Steam without submitting a launch.
-    pub(crate) fn prepare_managed_mulnx(&mut self, expected: &Path, preserve: bool) -> Result<Value, String> {
-        if !self.start_internal(preserve, None, true)? { return Err("请先结束现有游戏并恢复配置。".into()); }
+    pub(crate) fn prepare_managed_mulnx(
+        &mut self,
+        expected: &Path,
+        preserve: bool,
+    ) -> Result<Value, String> {
+        if !self.start_internal(preserve, None, true)? {
+            return Err("请先结束现有游戏并恢复配置。".into());
+        }
         let journal = self.store.load()?.ok_or("CS2 配置事务缺失。")?;
-        if !same_executable(expected, journal["executable"].as_str().ok_or("游戏路径缺失。")?) {
+        if !same_executable(
+            expected,
+            journal["executable"].as_str().ok_or("游戏路径缺失。")?,
+        ) {
             return Err("游戏安装位置已变化，原配置备份仍保留。".into());
         }
         Ok(journal)
     }
-    pub(crate) fn prepare_managed_mulnx_demo(&mut self, expected: &Path, preserve: bool, path: &Path, request_id: &str) -> Result<Value, String> {
+    pub(crate) fn prepare_managed_mulnx_demo(
+        &mut self,
+        expected: &Path,
+        preserve: bool,
+        path: &Path,
+        request_id: &str,
+    ) -> Result<Value, String> {
         self.ensure_demo_available()?;
         let argument = crate::demo_test::playdemo_argument(path, &self.log)?;
         if !self.start_internal(preserve, Some((&argument, request_id)), true)? {
             return Err("请先结束现有游戏并恢复配置。".into());
         }
         let journal = self.store.load()?.ok_or("CS2 配置事务缺失。")?;
-        if !same_executable(expected, journal["executable"].as_str().ok_or("游戏路径缺失。")?) {
+        if !same_executable(
+            expected,
+            journal["executable"].as_str().ok_or("游戏路径缺失。")?,
+        ) {
             return Err("游戏安装位置已变化，原配置备份仍保留。".into());
         }
         Ok(journal)
@@ -1078,30 +1332,56 @@ impl ManagedCs2 {
     pub(crate) fn submit_managed_mulnx(&self) -> Result<(), String> {
         let mut journal = self.store.load()?.ok_or("CS2 配置事务缺失。")?;
         let (executable, _, _) = self.recovery_identity()?;
-        if !same_executable(&executable, journal["executable"].as_str().ok_or("游戏路径缺失。")?)
-            || any_cs2_running(&self.log)? { return Err("游戏身份已变化，未提交启动。".into()); }
+        if !same_executable(
+            &executable,
+            journal["executable"].as_str().ok_or("游戏路径缺失。")?,
+        ) || any_cs2_running(&self.log)?
+        {
+            return Err("游戏身份已变化，未提交启动。".into());
+        }
         if journal["spectatorCfg"] == true {
             self.store.validate_spectator_launch()?;
             self.store.spectator_load_attempted(true)?;
         }
         let mut time = FileTime::default();
-        unsafe { GetSystemTimeAsFileTime(&mut time); }
+        unsafe {
+            GetSystemTimeAsFileTime(&mut time);
+        }
         journal["launchTime"] = json!(((time.high as u64) << 32) | time.low as u64);
         journal["launchAttempted"] = json!(true);
         self.store.save(&journal)
     }
-    pub(crate) fn bind_managed_mulnx(&self, pid: u32, created: u64, executable: &Path) -> Result<(), String> {
+    pub(crate) fn bind_managed_mulnx(
+        &self,
+        pid: u32,
+        created: u64,
+        executable: &Path,
+    ) -> Result<(), String> {
         let mut journal = self.store.load()?.ok_or("CS2 配置事务缺失。")?;
         if (!journal["pid"].is_null() || !journal["created"].is_null())
-            && (journal["pid"].as_u64() != Some(pid as u64) || journal["created"].as_u64() != Some(created)) {
+            && (journal["pid"].as_u64() != Some(pid as u64)
+                || journal["created"].as_u64() != Some(created))
+        {
             return Err("游戏已变化，请关闭游戏和 MulNX 后恢复设置。".into());
         }
-        if journal["launchAttempted"] != true || created < journal["launchTime"].as_u64().ok_or("无法确认本次启动，请恢复设置。")?
-            || cs2_pids(&self.log)? != vec![pid] { return Err("游戏启动身份不唯一。".into()); }
+        if journal["launchAttempted"] != true
+            || created
+                < journal["launchTime"]
+                    .as_u64()
+                    .ok_or("无法确认本次启动，请恢复设置。")?
+            || cs2_pids(&self.log)? != vec![pid]
+        {
+            return Err("游戏启动身份不唯一。".into());
+        }
         let process = open(pid, &self.log)?.ok_or("游戏已退出。")?;
         let (actual_created, actual_executable) = identity(&process, &self.log)?;
-        if actual_created != created || !same_executable(&actual_executable, &executable.to_string_lossy())
-            || !same_executable(executable, journal["executable"].as_str().ok_or("游戏路径缺失。")?) {
+        if actual_created != created
+            || !same_executable(&actual_executable, &executable.to_string_lossy())
+            || !same_executable(
+                executable,
+                journal["executable"].as_str().ok_or("游戏路径缺失。")?,
+            )
+        {
             return Err("游戏身份已变化，原配置备份仍保留。".into());
         }
         journal["pid"] = json!(pid);
@@ -1129,7 +1409,9 @@ impl ManagedCs2 {
             return Err("启动结果待确认，请先检查游戏后恢复。".into());
         }
         if let Some(launcher) = &self.mulnx_launcher {
-            launcher.stop().map_err(|_| "MulNX 启动器未能关闭，请检查后恢复。")?;
+            launcher
+                .stop()
+                .map_err(|_| "MulNX 启动器未能关闭，请检查后恢复。")?;
             self.mulnx_launcher = None;
         }
         if self.store.load()?.is_some() {
@@ -1151,8 +1433,11 @@ impl ManagedCs2 {
             .is_some_and(|v| v["launchAttempted"] == true))
     }
     pub(crate) fn matches_pending_demo(&self, request_id: &str) -> Result<bool, String> {
-        Ok(self.store.load()?.is_some_and(|v| v["demoTestRequestId"].as_str() == Some(request_id)
-            && v["mulnxLaunch"] == true && v["launchAttempted"] == true))
+        Ok(self.store.load()?.is_some_and(|v| {
+            v["demoTestRequestId"].as_str() == Some(request_id)
+                && v["mulnxLaunch"] == true
+                && v["launchAttempted"] == true
+        }))
     }
     pub fn has_demo_journal(&self) -> Result<bool, String> {
         Ok(self
@@ -1162,9 +1447,13 @@ impl ManagedCs2 {
     }
     pub fn validate_demo_running(&mut self, request_id: &str) -> Result<(), String> {
         if let Some(external) = &self.external {
-            if !external.invalidated && external.demo_request_id.as_deref() == Some(request_id)
+            if !external.invalidated
+                && external.demo_request_id.as_deref() == Some(request_id)
                 && cs2_pids(&self.log)? == vec![external.pid]
-                && self.workspace_process()?.is_some_and(|process| process.is_running()) {
+                && self
+                    .workspace_process()?
+                    .is_some_and(|process| process.is_running())
+            {
                 return Ok(());
             }
             return Err("外部 Demo 试播或游戏实例已变化，请重新交接。".into());
@@ -1213,20 +1502,29 @@ impl ManagedCs2 {
         let size = if preserve {
             None
         } else {
-
-            { Some(crate::windows_host::launch_viewport()?) }
+            {
+                Some(crate::windows_host::launch_viewport()?)
+            }
         };
         let mut journal = if preserve {
             self.store.prepare_preserved(&video, &executable)?
         } else {
             self.can_preserve = false;
             self.store.backup_originals(&video)?;
-            match self.store.prepare_backed_up(&video, &executable, size.ok_or("工作台游戏尺寸缺失。")?) {
+            match self.store.prepare_backed_up(
+                &video,
+                &executable,
+                size.ok_or("工作台游戏尺寸缺失。")?,
+            ) {
                 Ok(value) => value,
                 Err(error) => {
                     self.can_preserve = self.store.load()?.is_none();
                     self.message = Some(error.clone());
-                    self.log.event("cs2_launch", "failure", Some(&format!("stage=prepare; {error}")));
+                    self.log.event(
+                        "cs2_launch",
+                        "failure",
+                        Some(&format!("stage=prepare; {error}")),
+                    );
                     return Err(error);
                 }
             }
@@ -1237,11 +1535,14 @@ impl ManagedCs2 {
                 self.store.validate_spectator_launch()?;
                 if journal["nativeHudToggle"] == true {
                     let identity = journal["hudIdentity"].as_str().ok_or("HUD 键身份缺失。")?;
-                    if self.store.spectator_hud_identity()?.as_deref() != Some(identity) { return Err("HUD 键身份记录不一致。".into()); }
+                    if self.store.spectator_hud_identity()?.as_deref() != Some(identity) {
+                        return Err("HUD 键身份记录不一致。".into());
+                    }
                     crate::cs2_spectator::install_hud(&executable, identity)
-                } else { crate::cs2_spectator::install(&executable) }
-            })()
-            {
+                } else {
+                    crate::cs2_spectator::install(&executable)
+                }
+            })() {
                 journal["spectatorCfg"] = json!(false);
                 journal["spectatorWarning"] = json!(format!("观战 CFG 未加载：{error}"));
             }
@@ -1285,7 +1586,8 @@ impl ManagedCs2 {
             Err(error) => {
                 if error.starts_with("raw_console_preservation_failed:") {
                     self.log.event("cs2_console_prepare", "failure", Some(&json!({"error":error,"condebugRequested":false,"gameLaunchContinues":false}).to_string()));
-                    journal["consoleDiagnosticsWarning"] = json!({"code":"raw_preservation_failed","error":error});
+                    journal["consoleDiagnosticsWarning"] =
+                        json!({"code":"raw_preservation_failed","error":error});
                     self.store.save(&journal)?;
                     return Err(format!("上一场原始控制台尚未安全保存，已停止启动 CS2。请归档 console-history 或检查磁盘后重试。{error}"));
                 }
@@ -1294,9 +1596,13 @@ impl ManagedCs2 {
                     json!({"code":"source_prepare_failed","error":error});
             }
         }
-        if prepare_only { journal["mulnxLaunch"] = json!(true); }
+        if prepare_only {
+            journal["mulnxLaunch"] = json!(true);
+        }
         self.store.save(&journal)?;
-        if prepare_only { return Ok(true); }
+        if prepare_only {
+            return Ok(true);
+        }
         let launch: Result<bool, String> = (|| {
             // Recheck the same process and current account before committing a
             // request. A refused check remains an unlaunched, recoverable journal.
@@ -1331,14 +1637,17 @@ impl ManagedCs2 {
                 match self.store.spectator_load_attempted(true) {
                     Ok(()) => {
                         let cfg = if journal["nativeHudToggle"] == true {
-                            crate::cs2_spectator::hud_cfg_name(journal["hudIdentity"].as_str().unwrap_or(""))?
-                        } else { crate::cs2_spectator::CFG_NAME };
+                            crate::cs2_spectator::hud_cfg_name(
+                                journal["hudIdentity"].as_str().unwrap_or(""),
+                            )?
+                        } else {
+                            crate::cs2_spectator::CFG_NAME
+                        };
                         command.args(["+exec", cfg]);
                     }
                     Err(error) => {
                         journal["spectatorCfg"] = json!(false);
-                        journal["spectatorWarning"] =
-                            json!(format!("观战 CFG 未加载：{error}"));
+                        journal["spectatorWarning"] = json!(format!("观战 CFG 未加载：{error}"));
                         self.log.event("cs2_spectator_cfg", "failure", Some(&json!({"stage":"prepared", "file":crate::cs2_spectator::CFG_NAME, "runtime":"unverified", "reason":journal["spectatorWarning"]}).to_string()));
                     }
                 }
@@ -1376,8 +1685,12 @@ impl ManagedCs2 {
             }).to_string()));
             // Recheck the account and saved key identity immediately before submission.
             steam.validate(&self.log)?;
-            if any_cs2_running(&self.log)? { return Err("请先退出已打开的 CS2，再由 Mizar 启动。".into()); }
-            if journal["spectatorCfg"] == true { self.store.validate_spectator_launch()?; }
+            if any_cs2_running(&self.log)? {
+                return Err("请先退出已打开的 CS2，再由 Mizar 启动。".into());
+            }
+            if journal["spectatorCfg"] == true {
+                self.store.validate_spectator_launch()?;
+            }
             // Commit the ambiguous-launch marker only after all checks and
             // argument validation, immediately before sending the Steam request.
             let mut time = FileTime::default();
@@ -1388,21 +1701,37 @@ impl ManagedCs2 {
             journal["launchTime"] = json!(launch_time);
             journal["launchAttempted"] = json!(true);
             self.store.save(&journal)?;
-            self.submit_steam(&mut command)
-                .map_err(|error| {
-                    self.log.event("cs2_launch", "failure", Some(&format!("stage=steam_spawn; launchTime={launch_time}; code={:?}; cause={error:?}", error.raw_os_error())));
-                    if journal["fullSnapshot"] == true { journal["launchCancelled"] = json!(true); }
-                    else { journal["launchAttempted"] = json!(false); }
-                    if journal["spectatorCfg"] == true {
-                        if let Err(error) = self.store.spectator_load_attempted(false) {
-                            self.log.event("cs2_spectator_restore", "failure", Some(&error));
-                        }
+            self.submit_steam(&mut command).map_err(|error| {
+                self.log.event(
+                    "cs2_launch",
+                    "failure",
+                    Some(&format!(
+                        "stage=steam_spawn; launchTime={launch_time}; code={:?}; cause={error:?}",
+                        error.raw_os_error()
+                    )),
+                );
+                if journal["fullSnapshot"] == true {
+                    journal["launchCancelled"] = json!(true);
+                } else {
+                    journal["launchAttempted"] = json!(false);
+                }
+                if journal["spectatorCfg"] == true {
+                    if let Err(error) = self.store.spectator_load_attempted(false) {
+                        self.log
+                            .event("cs2_spectator_restore", "failure", Some(&error));
                     }
-                    if let Err(save_error) = self.store.save(&journal) {
-                        self.log.event("cs2_launch", "failure", Some(&format!("stage=journal_after_spawn_failure; cause={save_error}")));
-                    }
-                    "CS2 未能启动。"
-                })?;
+                }
+                if let Err(save_error) = self.store.save(&journal) {
+                    self.log.event(
+                        "cs2_launch",
+                        "failure",
+                        Some(&format!(
+                            "stage=journal_after_spawn_failure; cause={save_error}"
+                        )),
+                    );
+                }
+                "CS2 未能启动。"
+            })?;
             // Steam's launcher PID is not the game PID. Commit the pending
             // request and release the command lock; the existing background poll
             // adopts only a unique new process from the selected installation.
@@ -1422,8 +1751,13 @@ impl ManagedCs2 {
         self.complete_launch(launch, demo.is_some())
     }
     fn submit_steam(&self, command: &mut Command) -> std::io::Result<()> {
-
-        command.creation_flags(0x08000000).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().map(|_| ())
+        command
+            .creation_flags(0x08000000)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map(|_| ())
     }
     fn complete_launch(
         &mut self,
@@ -1452,29 +1786,45 @@ impl ManagedCs2 {
         self.store.backup_directory()
     }
     fn require_backup_idle(&self) -> Result<(), String> {
-        if self.has_external() || self.store.load()?.is_some() || self.store.spectator_pending()
+        if self.has_external()
+            || self.store.load()?.is_some()
+            || self.store.spectator_pending()
             || self.store.playback_cleanup_pending()
-            || crate::demo_test::requires_recovery(&self.log, None) {
+            || crate::demo_test::requires_recovery(&self.log, None)
+        {
             return Err("请先结束工作台并完成上次配置恢复。".into());
         }
-        if any_cs2_running(&self.log)? { return Err("请先退出 CS2，再选择恢复备份。".into()); }
+        if any_cs2_running(&self.log)? {
+            return Err("请先退出 CS2，再选择恢复备份。".into());
+        }
         Ok(())
     }
-    pub fn cancel_selected_backup(&mut self) { self.selected_backup = None; }
+    pub fn cancel_selected_backup(&mut self) {
+        self.selected_backup = None;
+    }
     pub fn select_backup(&mut self, source: &std::path::Path) -> Result<Value, String> {
         self.selected_backup = None;
         self.require_backup_idle()?;
         let (executable, video, steam) = discover(&self.log)?;
-        let source = std::fs::canonicalize(source).map_err(|e| crate::cs2_session::io_error("备份路径无法读取。", &e))?;
-        let backup = backup_text(&source, 128*1024)?;
-        let original = backup_text(&video, 128*1024)?;
+        let source = std::fs::canonicalize(source)
+            .map_err(|e| crate::cs2_session::io_error("备份路径无法读取。", &e))?;
+        let backup = backup_text(&source, 128 * 1024)?;
+        let original = backup_text(&video, 128 * 1024)?;
         crate::cs2_video::compatible_restore(&backup, &original)?;
         let account_id = (76561197960265728u64 + u64::from(steam.account)).to_string();
-        let steam_root = steam.process.executable.parent().ok_or("Steam 目录不可用。")?;
-        let users = backup_text(&steam_root.join("config/loginusers.vdf"), 1024*1024)?;
-        let nickname = crate::cs2_frame_rate::field(&users, &["users", &account_id, "PersonaName"])?
-            .map(|v| v.value).filter(|v| !v.trim().is_empty()).ok_or("当前 Steam 昵称无法读取，请重新登录 Steam 后再试。")?;
-        let avatar = backup_avatar(&steam_root.join(format!("config/avatarcache/{account_id}.png")));
+        let steam_root = steam
+            .process
+            .executable
+            .parent()
+            .ok_or("Steam 目录不可用。")?;
+        let users = backup_text(&steam_root.join("config/loginusers.vdf"), 1024 * 1024)?;
+        let nickname =
+            crate::cs2_frame_rate::field(&users, &["users", &account_id, "PersonaName"])?
+                .map(|v| v.value)
+                .filter(|v| !v.trim().is_empty())
+                .ok_or("当前 Steam 昵称无法读取，请重新登录 Steam 后再试。")?;
+        let avatar =
+            backup_avatar(&steam_root.join(format!("config/avatarcache/{account_id}.png")));
         let mut frame = None;
         // Only a named snapshot offers a sibling convars file. A loose .bak
         // never silently selects an unrelated live convars file beside it.
@@ -1482,61 +1832,104 @@ impl ManagedCs2 {
             let candidate = source.with_file_name("cs2_machine_convars.vcfg");
             match std::fs::symlink_metadata(&candidate) {
                 Ok(_) => {
-                    let selected = backup_text(&candidate, 256*1024)?;
-                    let before = backup_text(&video.with_file_name("cs2_machine_convars.vcfg"), 256*1024)?;
+                    let selected = backup_text(&candidate, 256 * 1024)?;
+                    let before = backup_text(
+                        &video.with_file_name("cs2_machine_convars.vcfg"),
+                        256 * 1024,
+                    )?;
                     crate::cs2_frame_rate::compatible_restore(&selected, &before)?;
                     frame = Some(json!({"source":candidate,"backup":selected,"original":before}));
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
-                Err(e) => return Err(crate::cs2_session::io_error("备份中的帧率文件无法读取。", &e)),
+                Err(e) => {
+                    return Err(crate::cs2_session::io_error(
+                        "备份中的帧率文件无法读取。",
+                        &e,
+                    ))
+                }
             }
         }
         steam.validate(&self.log)?;
-        let id = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-            .map_err(|_| "系统时间不可用。")?.as_nanos().to_string();
+        let id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| "系统时间不可用。")?
+            .as_nanos()
+            .to_string();
         let preview = json!({"selectionId":id,"nickname":nickname,"avatar":avatar,
             "sourceName":source.file_name().map(|n|n.to_string_lossy().to_string()),
             "targetPath":video,"includesFrameRate":frame.is_some()});
-        self.selected_backup = Some(json!({"id":id,"source":source,"backup":backup,"original":original,
-            "video":video,"executable":executable,"account":steam.account,"frame":frame}));
+        self.selected_backup = Some(
+            json!({"id":id,"source":source,"backup":backup,"original":original,
+            "video":video,"executable":executable,"account":steam.account,"frame":frame}),
+        );
         Ok(preview)
     }
     pub fn apply_selected_backup(&mut self, id: &str) -> Result<(), String> {
         self.require_backup_idle()?;
-        let selection = self.selected_backup.as_ref().ok_or("请先选择备份并核对目标账号。")?;
-        if selection["id"] != id { return Err("备份选择已变化，请重新核对。".into()); }
-        let (executable,video,steam) = discover(&self.log)?;
+        let selection = self
+            .selected_backup
+            .as_ref()
+            .ok_or("请先选择备份并核对目标账号。")?;
+        if selection["id"] != id {
+            return Err("备份选择已变化，请重新核对。".into());
+        }
+        let (executable, video, steam) = discover(&self.log)?;
         if selection["account"].as_u64() != Some(u64::from(steam.account))
-            || selection["video"] != json!(video) || selection["executable"] != json!(executable) {
+            || selection["video"] != json!(video)
+            || selection["executable"] != json!(executable)
+        {
             return Err("Steam 账号或配置位置已变化，请重新选择备份。".into());
         }
         let backup = selection["backup"].as_str().ok_or("备份内容缺失。")?;
         let original = selection["original"].as_str().ok_or("当前配置记录缺失。")?;
         let source = std::path::Path::new(selection["source"].as_str().ok_or("备份路径缺失。")?);
-        if backup_text(source,128*1024)? != backup { return Err("所选备份已变化，请重新选择。".into()); }
+        if backup_text(source, 128 * 1024)? != backup {
+            return Err("所选备份已变化，请重新选择。".into());
+        }
         let frame = if selection["frame"].is_object() {
             let v = &selection["frame"];
             let selected = v["backup"].as_str().ok_or("帧率备份缺失。")?;
-            if backup_text(std::path::Path::new(v["source"].as_str().ok_or("帧率备份路径缺失。")?),256*1024)? != selected {
+            if backup_text(
+                std::path::Path::new(v["source"].as_str().ok_or("帧率备份路径缺失。")?),
+                256 * 1024,
+            )? != selected
+            {
                 return Err("帧率备份已变化，请重新选择。".into());
             }
-            Some((v["original"].as_str().ok_or("原始帧率记录缺失。")?,selected))
-        } else { None };
+            Some((
+                v["original"].as_str().ok_or("原始帧率记录缺失。")?,
+                selected,
+            ))
+        } else {
+            None
+        };
         steam.validate(&self.log)?;
-        if any_cs2_running(&self.log)? { return Err("CS2 已启动，请退出游戏后重试。".into()); }
-        self.store.import_selected_backup(&video,&executable,backup,original,frame)?;
+        if any_cs2_running(&self.log)? {
+            return Err("CS2 已启动，请退出游戏后重试。".into());
+        }
+        self.store
+            .import_selected_backup(&video, &executable, backup, original, frame)?;
         self.selected_backup = None;
         self.can_preserve = false;
         self.message = Some("所选设置已恢复，恢复前的原件已保存。".into());
         Ok(())
     }
     pub fn restore_backup(&mut self, confirm_steam_cancelled: bool) -> Result<(), String> {
-        if self.has_external() { return Err("请先退出工作台解除借用；不会向外部游戏写回配置。".into()); }
+        if self.has_external() {
+            return Err("请先退出工作台解除借用；不会向外部游戏写回配置。".into());
+        }
         let result = self.recover(confirm_steam_cancelled).and_then(|_| {
             if self.store.load()?.is_none() && self.store.spectator_pending() {
                 if self.store.mulnx_observer_unconfirmed()? {
-                    if !confirm_steam_cancelled { return Err("MulNX 启动结果待确认，请先关闭 MulNX 启动器及 CS2，再确认恢复。".into()); }
-                    if !process_pids("CS2Injector.exe", &self.log)?.is_empty() { return Err("MulNX 启动器仍在运行，观战备份仍保留。".into()); }
+                    if !confirm_steam_cancelled {
+                        return Err(
+                            "MulNX 启动结果待确认，请先关闭 MulNX 启动器及 CS2，再确认恢复。"
+                                .into(),
+                        );
+                    }
+                    if !process_pids("CS2Injector.exe", &self.log)?.is_empty() {
+                        return Err("MulNX 启动器仍在运行，观战备份仍保留。".into());
+                    }
                 }
                 if any_cs2_running(&self.log)? {
                     return Err("请先退出 CS2 再恢复观战原值。".into());
@@ -1545,16 +1938,25 @@ impl ManagedCs2 {
                 if any_cs2_running(&self.log)? {
                     return Err("请先退出 CS2 再恢复观战原值。".into());
                 }
-                if self.store.mulnx_observer_target()?.is_some() && !process_pids("CS2Injector.exe", &self.log)?.is_empty() {
+                if self.store.mulnx_observer_target()?.is_some()
+                    && !process_pids("CS2Injector.exe", &self.log)?.is_empty()
+                {
                     return Err("MulNX 启动器仍在运行，观战备份仍保留。".into());
                 }
                 if let Some((video, executable, account)) = self.store.mulnx_observer_target()? {
                     let (current_exe, current_video, current_account) = self.recovery_identity()?;
-                    let saved_video = fs::canonicalize(&video).map_err(|e| crate::cs2_session::io_error("观战恢复目标无法确认。", &e))?;
-                    let live_video = fs::canonicalize(&current_video).map_err(|e| crate::cs2_session::io_error("当前账号目标无法确认。", &e))?;
-                    let saved_exe = fs::canonicalize(&executable).map_err(|e| crate::cs2_session::io_error("观战程序无法确认。", &e))?;
-                    let live_exe = fs::canonicalize(&current_exe).map_err(|e| crate::cs2_session::io_error("当前程序无法确认。", &e))?;
-                    if current_account != account || saved_video != live_video || saved_exe != live_exe {
+                    let saved_video = fs::canonicalize(&video)
+                        .map_err(|e| crate::cs2_session::io_error("观战恢复目标无法确认。", &e))?;
+                    let live_video = fs::canonicalize(&current_video)
+                        .map_err(|e| crate::cs2_session::io_error("当前账号目标无法确认。", &e))?;
+                    let saved_exe = fs::canonicalize(&executable)
+                        .map_err(|e| crate::cs2_session::io_error("观战程序无法确认。", &e))?;
+                    let live_exe = fs::canonicalize(&current_exe)
+                        .map_err(|e| crate::cs2_session::io_error("当前程序无法确认。", &e))?;
+                    if current_account != account
+                        || saved_video != live_video
+                        || saved_exe != live_exe
+                    {
                         return Err("请登录原 Steam 账号并确认原游戏安装位置后再恢复。".into());
                     }
                     // A crash can leave +exec in MulNX even after a game PID was recorded.
@@ -1562,7 +1964,9 @@ impl ManagedCs2 {
                     crate::production_exit::prepare_mulnx(&self.log, &executable, false, false)
                         .map_err(|e| format!("MulNX 启动参数未能清理，观战备份仍保留：{e}"))?;
                     self.store.mark_mulnx_options_clean()?;
-                    if any_cs2_running(&self.log)? || !process_pids("CS2Injector.exe", &self.log)?.is_empty() {
+                    if any_cs2_running(&self.log)?
+                        || !process_pids("CS2Injector.exe", &self.log)?.is_empty()
+                    {
                         return Err("游戏或 MulNX 启动器正在运行，观战备份仍保留。".into());
                     }
                 }
@@ -1579,12 +1983,21 @@ impl ManagedCs2 {
                 self.message = Some("观战原值已恢复。".into());
             }
             if self.store.load()?.is_none() && self.store.full_spectator_pending() {
-                if any_cs2_running(&self.log)? { return Err("请先退出 CS2 再恢复观战原值。".into()); }
+                if any_cs2_running(&self.log)? {
+                    return Err("请先退出 CS2 再恢复观战原值。".into());
+                }
                 thread::sleep(Duration::from_millis(1500));
-                if any_cs2_running(&self.log)? { return Err("请先退出 CS2 再恢复观战原值。".into()); }
+                if any_cs2_running(&self.log)? {
+                    return Err("请先退出 CS2 再恢复观战原值。".into());
+                }
                 let (executable, video, account) = self.recovery_identity()?;
-                if any_cs2_running(&self.log)? { return Err("请先退出 CS2 再恢复观战原值。".into()); }
-                if let Some(warning) = self.store.restore_full_pending(&video, &executable, account)? {
+                if any_cs2_running(&self.log)? {
+                    return Err("请先退出 CS2 再恢复观战原值。".into());
+                }
+                if let Some(warning) =
+                    self.store
+                        .restore_full_pending(&video, &executable, account)?
+                {
                     self.message = Some(warning.clone());
                     return Err(warning);
                 }
@@ -1622,13 +2035,21 @@ impl ManagedCs2 {
 
     /// Read-only feedback retirement; absent journal alone is not a stop proof.
     pub fn window_session_finished(&self) -> Result<bool, String> {
-        if self.external_preservation { return Ok(!self.has_external() && self.store.load()?.is_none()); }
+        if self.external_preservation {
+            return Ok(!self.has_external() && self.store.load()?.is_none());
+        }
         Ok(self.store.load()?.is_none() && !any_cs2_running(&self.log)?)
     }
 
     fn detach_external(&mut self) -> bool {
         if let Some(external) = self.external.take() {
-            if self.camera.as_ref().is_some_and(|camera| !camera.process.owned) { self.camera = None; }
+            if self
+                .camera
+                .as_ref()
+                .is_some_and(|camera| !camera.process.owned)
+            {
+                self.camera = None;
+            }
             self.log.event("external_game_detach", "success", Some(&json!({"pid":external.pid,"created":external.created.to_string(),"gameStopped":false}).to_string()));
             self.message = Some("已解除游戏借用；外部游戏及设置保持不变。".into());
             return true;
@@ -1642,10 +2063,18 @@ impl ManagedCs2 {
     pub fn finish_with_service_stopped(&mut self, service_stopped: bool) -> Result<(), String> {
         let trial_state = if crate::demo_test::requires_recovery(&self.log, None) {
             crate::demo_test::status(&self.log)?
-        } else { Value::Null };
+        } else {
+            Value::Null
+        };
         if trial_state["active"] == true && trial_state["gameOwnership"] == "external" {
-            let borrowed_observer = self.external.as_ref().is_some_and(|external| external.console_source["spectatorCfg"] == true);
-            if self.store.load()?.is_some() || (self.store.spectator_pending() && !borrowed_observer) || self.store.playback_cleanup_pending() {
+            let borrowed_observer = self
+                .external
+                .as_ref()
+                .is_some_and(|external| external.console_source["spectatorCfg"] == true);
+            if self.store.load()?.is_some()
+                || (self.store.spectator_pending() && !borrowed_observer)
+                || self.store.playback_cleanup_pending()
+            {
                 return Err("请先完成受管游戏的配置恢复。".into());
             }
             // The trial owns isolated match data, never the externally launched game.
@@ -1667,9 +2096,19 @@ impl ManagedCs2 {
             // The caller holds the CS2 mutex, so the heartbeat cannot renew while
             // the revoke is attempted or while an unknown outcome expires.
             self.invalidate_managed_camera();
-            let outcome = retire_camera_before_cleanup(service_stopped,
-                || crate::production_exit::camera_session(&self.log, "invalidate", Some(&lease), None).map(|_| ()),
-                || thread::sleep(Duration::from_millis(12100)));
+            let outcome = retire_camera_before_cleanup(
+                service_stopped,
+                || {
+                    crate::production_exit::camera_session(
+                        &self.log,
+                        "invalidate",
+                        Some(&lease),
+                        None,
+                    )
+                    .map(|_| ())
+                },
+                || thread::sleep(Duration::from_millis(12100)),
+            );
             self.log.event("managed_camera_retire", outcome, None);
             self.clear_managed_camera();
         }
@@ -1688,7 +2127,11 @@ impl ManagedCs2 {
                 // failed workbench entry, must pass the same MulNX unload fence.
                 // External sessions have already returned through detach above.
                 let result = crate::production_exit::finish_then_restore(
-                    || self.log.step("cs2_exit_mulnx_unload", || crate::mulnx_launch::stop_managed_for_exit(self, &self.log)),
+                    || {
+                        self.log.step("cs2_exit_mulnx_unload", || {
+                            crate::mulnx_launch::stop_managed_for_exit(self, &self.log)
+                        })
+                    },
                     || close_owned_process(&process, pid, created, &self.log),
                 );
                 if let Err(error) = result {
@@ -1710,12 +2153,27 @@ impl ManagedCs2 {
         }
         if let Some(launcher) = &self.mulnx_launcher {
             stop_owned_launcher(
-                self.log.state_root.join("data/mulnx-launch/pending.json").exists(),
+                self.log
+                    .state_root
+                    .join("data/mulnx-launch/pending.json")
+                    .exists(),
                 || any_cs2_running(&self.log),
-                || launcher.stop().map_err(|error| self.log.preserve_error(
-                    "mulnx_launcher_exit", None, &error, "本次 MulNX 启动器未能关闭，请检查后重试。".to_string())),
+                || {
+                    launcher.stop().map_err(|error| {
+                        self.log.preserve_error(
+                            "mulnx_launcher_exit",
+                            None,
+                            &error,
+                            "本次 MulNX 启动器未能关闭，请检查后重试。".to_string(),
+                        )
+                    })
+                },
             )?;
-            self.log.event("mulnx_launcher_exit", "success", Some("owned launch handle stopped after game exit"));
+            self.log.event(
+                "mulnx_launcher_exit",
+                "success",
+                Some("owned launch handle stopped after game exit"),
+            );
             self.mulnx_launcher = None;
         }
         match self.recover(false) {
@@ -1733,10 +2191,17 @@ impl ManagedCs2 {
     }
 }
 
-fn stop_owned_launcher(pending: bool, game_running: impl FnOnce() -> Result<bool, String>,
-    stop: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
-    if pending { return Err("MulNX 启动结果仍待确认，请先检查游戏和启动器。".into()); }
-    if game_running()? { return Err("CS2 仍在运行，未关闭本次 MulNX 启动器。".into()); }
+fn stop_owned_launcher(
+    pending: bool,
+    game_running: impl FnOnce() -> Result<bool, String>,
+    stop: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    if pending {
+        return Err("MulNX 启动结果仍待确认，请先检查游戏和启动器。".into());
+    }
+    if game_running()? {
+        return Err("CS2 仍在运行，未关闭本次 MulNX 启动器。".into());
+    }
     stop()
 }
 
@@ -1744,35 +2209,61 @@ fn stop_owned_launcher(pending: bool, game_running: impl FnOnce() -> Result<bool
 /// caller's mutex, wait for two lease periods: at most one timed-out pulse can
 /// still arrive before the current lease expires and extend it once. A verified
 /// stopped service has no live lease.
-fn retire_camera_before_cleanup(service_stopped: bool, revoke: impl FnOnce() -> Result<(), String>,
-    wait_for_expiry: impl FnOnce()) -> &'static str {
-    if service_stopped { return "service-stopped"; }
-    if revoke().is_ok() { return "revoked"; }
+fn retire_camera_before_cleanup(
+    service_stopped: bool,
+    revoke: impl FnOnce() -> Result<(), String>,
+    wait_for_expiry: impl FnOnce(),
+) -> &'static str {
+    if service_stopped {
+        return "service-stopped";
+    }
+    if revoke().is_ok() {
+        return "revoked";
+    }
     wait_for_expiry();
     "expired-after-unknown"
 }
 
 fn backup_text(path: &std::path::Path, limit: usize) -> Result<String, String> {
-    let metadata = std::fs::symlink_metadata(path).map_err(|e| crate::cs2_session::io_error("配置文件无法读取。", &e))?;
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|e| crate::cs2_session::io_error("配置文件无法读取。", &e))?;
     if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > limit as u64 {
         return Err("配置文件类型或大小不支持。".into());
     }
-    let value = std::fs::read_to_string(path).map_err(|e| crate::cs2_session::io_error("配置内容无法读取。", &e))?;
-    if value.len() > limit { return Err("配置内容过大。".into()); }
+    let value = std::fs::read_to_string(path)
+        .map_err(|e| crate::cs2_session::io_error("配置内容无法读取。", &e))?;
+    if value.len() > limit {
+        return Err("配置内容过大。".into());
+    }
     Ok(value)
 }
 fn backup_avatar(path: &std::path::Path) -> Option<String> {
     let metadata = std::fs::symlink_metadata(path).ok()?;
-    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 256*1024 { return None; }
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 256 * 1024 {
+        return None;
+    }
     let bytes = std::fs::read(path).ok()?;
-    if bytes.len() > 256*1024 || !bytes.starts_with(b"\x89PNG\r\n\x1a\n") { return None; }
+    if bytes.len() > 256 * 1024 || !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return None;
+    }
     const B64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut encoded = String::from("data:image/png;base64,");
     for group in bytes.chunks(3) {
-        let n = (u32::from(group[0])<<16) | (u32::from(*group.get(1).unwrap_or(&0))<<8) | u32::from(*group.get(2).unwrap_or(&0));
-        encoded.push(B64[((n>>18)&63)as usize]as char); encoded.push(B64[((n>>12)&63)as usize]as char);
-        encoded.push(if group.len()>1 { B64[((n>>6)&63)as usize]as char } else { '=' });
-        encoded.push(if group.len()>2 { B64[(n&63)as usize]as char } else { '=' });
+        let n = (u32::from(group[0]) << 16)
+            | (u32::from(*group.get(1).unwrap_or(&0)) << 8)
+            | u32::from(*group.get(2).unwrap_or(&0));
+        encoded.push(B64[((n >> 18) & 63) as usize] as char);
+        encoded.push(B64[((n >> 12) & 63) as usize] as char);
+        encoded.push(if group.len() > 1 {
+            B64[((n >> 6) & 63) as usize] as char
+        } else {
+            '='
+        });
+        encoded.push(if group.len() > 2 {
+            B64[(n & 63) as usize] as char
+        } else {
+            '='
+        });
     }
     Some(encoded)
 }

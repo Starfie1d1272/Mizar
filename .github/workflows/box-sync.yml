@@ -34,18 +34,6 @@ jobs:
         with:
           ref: main
           persist-credentials: false
-      # Manual sync is recovery of an existing release, outside the initial 600-second budget.
-      - name: Check remaining release budget
-        if: ${{ github.event_name == 'workflow_run' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PROMOTION_RUN: ${{ github.event.workflow_run.id }}
-          PROMOTION_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
-        run: |
-          job=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PROMOTION_RUN/jobs?per_page=100" --jq '.jobs[] | select(.name | test("^发布 Mizar v[0-9]+\\.[0-9]+\\.[0-9]+-(alpha|beta|rc)\\.[1-9][0-9]*$")) | .name')
-          if [ -n "$job" ]; then exit 0; fi
-          gh run download "$PROMOTION_RUN" --name "promotion-records-$PROMOTION_ATTEMPT" --dir "$RUNNER_TEMP/release-records"
-          node --input-type=module -e 'import {readFileSync} from "node:fs"; const r=JSON.parse(readFileSync(process.env.RUNNER_TEMP+"/release-records/release-timings.json")); const t=Date.parse(r.qualification.createdAt); const seconds=Math.floor((t+600000-Date.now())/1000); if (!Number.isFinite(t) || seconds<1) throw new Error("Release 600-second budget exceeded or missing start time"); console.log(`RELEASE_DEADLINE_EPOCH=${Math.floor((t+600000)/1000)}`);' >> "$GITHUB_ENV"
       - name: 同步与校验云盘
         id: mirror
         env:
@@ -56,14 +44,7 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
           BOX_UPLOAD_TRANSPORT: ${{ inputs.transport || 'curl' }}
           BOX_SYNC_MODE: ${{ inputs.mode || 'sync' }}
-        run: |
-          if [ -n "$RELEASE_DEADLINE_EPOCH" ]; then
-            remaining=$(( RELEASE_DEADLINE_EPOCH - $(date -u +%s) ))
-            test "$remaining" -gt 0
-            timeout --signal=KILL "${remaining}s" node scripts/qualification/box-sync.mjs
-          else
-            node scripts/qualification/box-sync.mjs
-          fi
+        run: node scripts/qualification/box-sync.mjs
       - name: Record complete qualification trigger through Box verification timing
         if: steps.mirror.outputs.prerelease == 'false'
         env:

@@ -13,12 +13,23 @@ thread_local! {
 }
 struct TaskContextGuard(Value);
 impl Drop for TaskContextGuard {
-    fn drop(&mut self) { TASK_CONTEXT.with(|slot| { slot.replace(self.0.take()); }); }
+    fn drop(&mut self) {
+        TASK_CONTEXT.with(|slot| {
+            slot.replace(self.0.take());
+        });
+    }
 }
 fn diagnostic_uuid(value: Option<&str>) -> Option<&str> {
-    value.filter(|text| text.len() == 36 && text.bytes().enumerate().all(|(i, byte)| {
-        if [8, 13, 18, 23].contains(&i) { byte == b'-' } else { byte.is_ascii_hexdigit() }
-    }))
+    value.filter(|text| {
+        text.len() == 36
+            && text.bytes().enumerate().all(|(i, byte)| {
+                if [8, 13, 18, 23].contains(&i) {
+                    byte == b'-'
+                } else {
+                    byte.is_ascii_hexdigit()
+                }
+            })
+    })
 }
 
 pub const LOG_LIMIT: u64 = 25 * 1024 * 1024;
@@ -65,9 +76,10 @@ pub fn writable_root(root: &Path, override_path: Option<PathBuf>) -> io::Result<
     let default = if let Some(path) = override_path {
         path
     } else if root.join("installed.flag").is_file() {
-        PathBuf::from(std::env::var_os("LOCALAPPDATA").ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotFound, "用户数据目录不可用。")
-        })?)
+        PathBuf::from(
+            std::env::var_os("LOCALAPPDATA")
+                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "用户数据目录不可用。"))?,
+        )
         .join("Mizar")
     } else {
         root.join("state")
@@ -116,19 +128,39 @@ fn rotate(directory: &Path) -> io::Result<()> {
 
 fn credential_key(key: &str) -> bool {
     let key = key.to_ascii_lowercase().replace(['_', '-'], "");
-    ["password", "passwd", "token", "secret", "credential", "authorization", "cookie", "streamkey", "apikey"].iter().any(|word| key.contains(word))
+    [
+        "password",
+        "passwd",
+        "token",
+        "secret",
+        "credential",
+        "authorization",
+        "cookie",
+        "streamkey",
+        "apikey",
+    ]
+    .iter()
+    .any(|word| key.contains(word))
 }
 
 /// Preserve technical context while removing credentials embedded in text.
 pub(crate) fn redact_text(text: &str) -> String {
     use regex::Regex;
     use std::sync::LazyLock;
-    static BEARER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?i)\b(Bearer|Basic)\s+[^\s\"',}]+"#).unwrap());
-    static COOKIE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?im)(\b(?:Cookie|Set-Cookie)\s*:\s*)[^\r\n]*").unwrap());
-    static FIELD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?i)\b((?:[a-z0-9_-]*(?:password|passwd|token|secret|credential)|authorization|cookie|set-cookie|api[_-]?key|stream[_-]?key|ticket)[\"']?\s*[:=]\s*)(?:\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|[^\s,;}&?#]+)"#).unwrap());
-    static USERINFO: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?i)([a-z][a-z0-9+.-]{0,31}://)[^/\s\"'<>@]+@"#).unwrap());
-    static RTMP: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?i)(rtmps?://[^/\s\"'<>]+/(?:[^/\s\"'<>]+/)+)[^/\s\"'<>?#]+"#).unwrap());
-    static LOGIN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"rh_mizar_[a-zA-Z0-9_-]+").unwrap());
+    static BEARER: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"(?i)\b(Bearer|Basic)\s+[^\s\"',}]+"#).unwrap());
+    static COOKIE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?im)(\b(?:Cookie|Set-Cookie)\s*:\s*)[^\r\n]*").unwrap());
+    static FIELD: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r#"(?i)\b((?:[a-z0-9_-]*(?:password|passwd|token|secret|credential)|authorization|cookie|set-cookie|api[_-]?key|stream[_-]?key|ticket)[\"']?\s*[:=]\s*)(?:\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|[^\s,;}&?#]+)"#).unwrap()
+    });
+    static USERINFO: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"(?i)([a-z][a-z0-9+.-]{0,31}://)[^/\s\"'<>@]+@"#).unwrap());
+    static RTMP: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r#"(?i)(rtmps?://[^/\s\"'<>]+/(?:[^/\s\"'<>]+/)+)[^/\s\"'<>?#]+"#).unwrap()
+    });
+    static LOGIN: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"rh_mizar_[a-zA-Z0-9_-]+").unwrap());
     let text = BEARER.replace_all(text, "$1 [redacted]");
     let text = COOKIE.replace_all(&text, "$1[redacted]");
     let text = FIELD.replace_all(&text, "$1[redacted]");
@@ -139,21 +171,45 @@ pub(crate) fn redact_text(text: &str) -> String {
 
 fn redact_value(value: Value) -> Value {
     match value {
-        Value::Object(fields) => Value::Object(fields.into_iter().map(|(key, value)| {
-            let value = if credential_key(&key) { json!("[redacted]") } else { redact_value(value) };
-            (key, value)
-        }).collect()),
+        Value::Object(fields) => Value::Object(
+            fields
+                .into_iter()
+                .map(|(key, value)| {
+                    let value = if credential_key(&key) {
+                        json!("[redacted]")
+                    } else {
+                        redact_value(value)
+                    };
+                    (key, value)
+                })
+                .collect(),
+        ),
         Value::Array(fields) => Value::Array(fields.into_iter().map(redact_value).collect()),
         Value::String(text) if text.starts_with("http://") || text.starts_with("https://") => {
             if let Some((path, query)) = text.split_once('?') {
-                let query = query.split('&').map(|part| {
-                    if let Some((key, value)) = part.split_once('=') {
-                        format!("{key}={}", if credential_key(key) || ["code", "key", "auth"].contains(&key) { "[redacted]" } else { value })
-                    } else { part.to_owned() }
-                }).collect::<Vec<_>>().join("&");
+                let query = query
+                    .split('&')
+                    .map(|part| {
+                        if let Some((key, value)) = part.split_once('=') {
+                            format!(
+                                "{key}={}",
+                                if credential_key(key) || ["code", "key", "auth"].contains(&key) {
+                                    "[redacted]"
+                                } else {
+                                    value
+                                }
+                            )
+                        } else {
+                            part.to_owned()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("&");
                 json!(redact_text(&format!("{path}?{query}")))
-            } else { json!(redact_text(&text)) }
-        },
+            } else {
+                json!(redact_text(&text))
+            }
+        }
         Value::String(text) => json!(redact_text(&text)),
         other => other,
     }
@@ -213,10 +269,21 @@ impl DesktopLog {
     fn write(&self, stage: &str, result: &str, detail: Option<&str>) -> io::Result<()> {
         self.write_mode(stage, result, detail, false)
     }
-    pub fn committed_event(&self, stage: &str, result: &str, detail: Option<&str>) -> io::Result<()> {
+    pub fn committed_event(
+        &self,
+        stage: &str,
+        result: &str,
+        detail: Option<&str>,
+    ) -> io::Result<()> {
         self.write_mode(stage, result, detail, true)
     }
-    fn write_mode(&self, stage: &str, result: &str, detail: Option<&str>, durable: bool) -> io::Result<()> {
+    fn write_mode(
+        &self,
+        stage: &str,
+        result: &str,
+        detail: Option<&str>,
+        durable: bool,
+    ) -> io::Result<()> {
         let mut log = self
             .inner
             .lock()
@@ -224,27 +291,39 @@ impl DesktopLog {
         // Preserve each navigation in the full retained product log.
         if stage == "main_page_load" && result == "success" {
             log.page_loads = log.page_loads.saturating_add(1);
-
         }
         if let Some(detail) = detail {
-            let clean = serde_json::from_str::<Value>(detail).map(redact_value).map(|value| value.to_string()).unwrap_or_else(|_| redact_text(detail));
+            let clean = serde_json::from_str::<Value>(detail)
+                .map(redact_value)
+                .map(|value| value.to_string())
+                .unwrap_or_else(|_| redact_text(detail));
             if clean.len() > MESSAGE_LIMIT {
                 let mut chunks = Vec::new();
                 let mut start = 0;
                 while start < clean.len() {
                     let mut end = (start + MESSAGE_LIMIT).min(clean.len());
-                    while !clean.is_char_boundary(end) { end -= 1; }
+                    while !clean.is_char_boundary(end) {
+                        end -= 1;
+                    }
                     chunks.push(&clean[start..end]);
                     start = end;
                 }
-                let detail_id = format!("{:x}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos());
+                let detail_id = format!(
+                    "{:x}",
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_nanos()
+                );
                 for (index, text) in chunks.iter().enumerate() {
                     Self::write_entry(&log, stage, result, Some(&json!({"detailId":detail_id,"part":index + 1,"parts":chunks.len(),"text":text}).to_string()), durable)?;
                 }
                 return Ok(());
             }
             Self::write_entry(&log, stage, result, Some(&clean), durable)
-        } else { Self::write_entry(&log, stage, result, None, durable) }
+        } else {
+            Self::write_entry(&log, stage, result, None, durable)
+        }
     }
 
     fn write_entry(
@@ -260,7 +339,9 @@ impl DesktopLog {
         entry["operationId"] = Value::Null;
         TASK_CONTEXT.with(|slot| {
             if let Value::Object(context) = &*slot.borrow() {
-                for (key, value) in context { entry[key] = value.clone(); }
+                for (key, value) in context {
+                    entry[key] = value.clone();
+                }
             }
         });
         entry["time"] = json!(Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true));
@@ -271,7 +352,10 @@ impl DesktopLog {
                 "error"
             } else {
                 "detail"
-            }] = json!(serde_json::from_str::<Value>(detail).map(redact_value).map(|value| value.to_string()).unwrap_or_else(|_| redact_text(detail)));
+            }] = json!(serde_json::from_str::<Value>(detail)
+                .map(redact_value)
+                .map(|value| value.to_string())
+                .unwrap_or_else(|_| redact_text(detail)));
         }
         if stage == "main_page_load" && result == "success" {
             entry["occurrences"] = json!(1);
@@ -285,12 +369,20 @@ impl DesktopLog {
         let mut file = OpenOptions::new().create(true).append(true).open(current)?;
         file.write_all(&bytes)?;
         file.flush()?;
-        if durable { file.sync_data()?; }
+        if durable {
+            file.sync_data()?;
+        }
         Ok(())
     }
 
     /// Scope synchronous native work only; async/spawned work must enter its own scope.
-    pub fn with_task<T>(&self, task_id: Option<&str>, operation_id: Option<&str>, trigger: Option<&str>, run: impl FnOnce() -> T) -> T {
+    pub fn with_task<T>(
+        &self,
+        task_id: Option<&str>,
+        operation_id: Option<&str>,
+        trigger: Option<&str>,
+        run: impl FnOnce() -> T,
+    ) -> T {
         let task_id = diagnostic_uuid(task_id);
         let context = json!({"taskId":task_id,"operationId":diagnostic_uuid(operation_id),"trigger":if task_id.is_some() { match trigger { Some("user") => "user", Some("system") => "system", _ => "unattributed" } } else {"unattributed"}});
         let _guard = TaskContextGuard(TASK_CONTEXT.with(|slot| slot.replace(context)));
@@ -322,12 +414,30 @@ impl DesktopLog {
         }
     }
 
-    pub fn preserve_error<E: std::fmt::Debug, T>(&self, command: &str, operation_id: Option<&str>, error: &E, friendly: T) -> T {
-        self.event("native_error", "failure", Some(&json!({"command":command,"operationId":operation_id,"cause":format!("{error:?}")}).to_string()));
+    pub fn preserve_error<E: std::fmt::Debug, T>(
+        &self,
+        command: &str,
+        operation_id: Option<&str>,
+        error: &E,
+        friendly: T,
+    ) -> T {
+        self.event(
+            "native_error",
+            "failure",
+            Some(
+                &json!({"command":command,"operationId":operation_id,"cause":format!("{error:?}")})
+                    .to_string(),
+            ),
+        );
         friendly
     }
 
-    pub fn native_outcome<T: std::fmt::Debug, E: std::fmt::Debug>(&self, command: &str, operation_id: Option<&str>, result: &Result<T, E>) {
+    pub fn native_outcome<T: std::fmt::Debug, E: std::fmt::Debug>(
+        &self,
+        command: &str,
+        operation_id: Option<&str>,
+        result: &Result<T, E>,
+    ) {
         self.event("native_command", if result.is_ok() { "success" } else { "failure" }, Some(&json!({"command":command,"operationId":operation_id,"outcome":format!("{result:?}")}).to_string()));
     }
 
