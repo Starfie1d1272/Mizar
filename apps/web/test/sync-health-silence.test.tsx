@@ -19,12 +19,13 @@ vi.mock('../src/workspace/ReviewDialog', () => ({
         <button onClick={onClose}>关闭</button>
       </div>
     ) : null,
-  isReviewWindow: () => false,
+  isReviewWindow: () => window.location.pathname === '/workspace/review',
   closeReviewWindow: () => Promise.resolve(),
 }));
 vi.mock('../src/operator/RivalHubSyncControls', () => ({ RivalHubSyncControls: () => null }));
 vi.mock('../src/debug/SupportExport', () => ({ SupportExport: () => null }));
 import { SyncHealthAlert } from '../src/workspace/SyncHealthAlert';
+import { LiveRosterAlert } from '../src/workspace/LiveRosterAlert';
 it('silences repeated sync incidents for this match and keeps manual review available', () => {
   localStorage.clear();
   const element = document.createElement('div');
@@ -78,4 +79,33 @@ it('silences repeated sync incidents for this match and keeps manual review avai
   act(() => root.unmount());
   element.remove();
   localStorage.clear();
+});
+
+it('keeps a manually opened roster review visible while automatic alerts are silenced', () => {
+  localStorage.setItem(SILENCED_MATCH_KEY, 'match-a');
+  window.history.replaceState(null, '', '/workspace/review?kind=roster');
+  const element = document.createElement('div');
+  document.body.append(element);
+  const root = createRoot(element);
+  act(() =>
+    root.render(
+      <LiveRosterAlert
+        matchId="match-a"
+        recovered={false}
+        onReview={() => {}}
+        error={null}
+        alert={{
+          key: 'incident',
+          syncStatus: '需要核对',
+          observed: [{ key: 'one', displayName: '选手一', avatarUrl: null }],
+          absent: [],
+        }}
+      />,
+    ),
+  );
+  expect(element.querySelector('[data-review]')?.textContent).toContain('选手一');
+  act(() => root.unmount());
+  element.remove();
+  localStorage.clear();
+  window.history.replaceState(null, '', '/');
 });
