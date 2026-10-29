@@ -405,13 +405,14 @@ impl GameTracker {
         }
         None
     }
-    pub fn overlay_rect(&self) -> Option<Rect> {
+    pub fn overlay_rect(&self, workspace_windows: &[isize]) -> Option<Rect> {
         let _coordinates = PhysicalCoordinates::enter();
         let window = self.window?;
         let client = client_rect(window.hwnd)?;
         let mut foreground_pid = 0;
-        unsafe { GetWindowThreadProcessId(GetForegroundWindow(), &mut foreground_pid); }
-        let foreground_owned = foreground_pid == window.pid || foreground_pid == std::process::id();
+        let foreground = unsafe { GetForegroundWindow() };
+        unsafe { GetWindowThreadProcessId(foreground, &mut foreground_pid); }
+        let foreground_owned = overlay_foreground_allowed(foreground, foreground_pid, window.pid, std::process::id(), workspace_windows);
         overlay_visible(!self.preserve_settings && self.managed && self.overlay_enabled, unsafe { IsIconic(window.hwnd) != 0 }, client, foreground_owned).then_some(client)
     }
     pub fn restore_focus(&self, source: isize) -> bool {
@@ -426,6 +427,10 @@ impl GameTracker {
     }
 }
 
+fn overlay_foreground_allowed(foreground: isize, foreground_pid: u32, game_pid: u32, host_pid: u32, workspace_windows: &[isize]) -> bool {
+    foreground != 0 && (foreground_pid == game_pid || (foreground_pid == host_pid && workspace_windows.contains(&foreground)))
+}
+
 fn alignment_geometry_recovered(previous: Option<Rect>, previous_dpi: u32, current: Option<Rect>, dpi: u32) -> bool {
     (previous.is_none() || previous_dpi == 0) && current.is_some() && dpi != 0
 }
@@ -433,6 +438,16 @@ fn alignment_geometry_recovered(previous: Option<Rect>, previous_dpi: u32, curre
 #[cfg(test)]
 mod recovery_tests {
     use super::*;
+    #[test]
+    fn overlay_only_follows_game_and_workspace_windows() {
+        let workspace = [10, 11];
+        assert!(overlay_foreground_allowed(20, 1, 1, 2, &workspace));
+        assert!(overlay_foreground_allowed(10, 2, 1, 2, &workspace));
+        assert!(overlay_foreground_allowed(11, 2, 1, 2, &workspace));
+        assert!(!overlay_foreground_allowed(12, 2, 1, 2, &workspace));
+        assert!(!overlay_foreground_allowed(10, 3, 1, 2, &workspace));
+        assert!(!overlay_foreground_allowed(0, 0, 1, 2, &workspace));
+    }
     #[test]
     fn unavailable_geometry_can_recover_after_alignment_retries_are_exhausted() {
         let valid = Some(Rect {x:0,y:0,width:1280,height:720});
