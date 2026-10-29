@@ -44,6 +44,12 @@ export async function curlMultipartUpload(url, options, run = spawn) {
           'POST',
           '--header',
           `Content-Type: ${encoded.headers.get('content-type')}`,
+          ...(options.headers
+            ? Object.entries(options.headers).flatMap(([key, value]) => [
+                '--header',
+                `${key}: ${value}`,
+              ])
+            : []),
           '--data-binary',
           `@${input}`,
           '--output',
