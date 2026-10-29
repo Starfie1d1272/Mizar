@@ -1201,6 +1201,7 @@ impl ManagedCs2 {
                     json!({"code":"source_prepare_failed","error":error});
             }
         }
+        if prepare_only { journal["mulnxLaunch"] = json!(true); }
         self.store.save(&journal)?;
         if prepare_only { return Ok(true); }
         let launch: Result<bool, String> = (|| {

@@ -919,6 +919,7 @@ async fn finish_workspace(
                 if confirm_steam_cancelled == Some(true) {
                     log.step("workspace_exit_restore_backup", || cs2.restore_backup(true))?;
                 }
+                log.step("workspace_exit_mulnx_unload", || mulnx_launch::stop_managed_for_exit(&cs2, &log))?;
                 log.step("workspace_exit_game_finish", || cs2.finish())?;
                 if requires_proof {
                     log.step("workspace_exit_stop_proof", || cs2.confirm_game_stopped())?;
