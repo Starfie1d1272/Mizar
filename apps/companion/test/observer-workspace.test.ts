@@ -809,7 +809,7 @@ it('enables the managed lease for website names when observer and game automatio
   fixture(async (observer) => {
     const app = Fastify();
     const settings = new ObserverSettingsStore();
-    await settings.configure({ ...settings.settings, enabled: false });
+    await settings.configure({ ...settings.settings, enabled: false, nicknameSource: 'website' });
     await settings.configureGame({ autoConnect: false, hideGameHud: false });
     const binding = {
       origin: 'online',

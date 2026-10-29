@@ -18,7 +18,6 @@ import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/ori
 
 type SettingsChange = 'lead' | 'name' | 'enabled' | 'game' | 'connection' | 'map';
 
-
 /** Persist operator preferences; the current match's credentials stay in memory. */
 export class ObserverSettingsStore {
   settings: ObserverSettings = { ...DEFAULT_OBSERVER_SETTINGS };
@@ -80,7 +79,12 @@ export class ObserverSettingsStore {
       if (this.path)
         await atomicJson(this.path, { settings: value, gameAutomation: this.gameAutomation });
       const nameChanged = this.settings.nicknameSource !== value.nicknameSource;
-      const kind = this.settings.enabled !== value.enabled ? 'enabled' : this.settings.leadSeconds !== value.leadSeconds ? 'lead' : undefined;
+      const kind =
+        this.settings.enabled !== value.enabled
+          ? 'enabled'
+          : this.settings.leadSeconds !== value.leadSeconds
+            ? 'lead'
+            : undefined;
 
       this.settings = value;
       if (nameChanged) this.changed('name');

@@ -168,11 +168,17 @@ it('shows private slots and countdowns from the assist channel, and clears on re
 });
 
 it('shows calibration instead of a countdown when timing is unavailable', () => {
-  mocks.observer = { state: 'live', current: { payload: { observer: { state: 'ready', timingBasis: 'program-clock', effectiveDelaySeconds: null, waitingReason: null, nextWindowSeconds: null, leadSeconds: 5, hints: [] } } } };
+  mocks.observer = {
+    state: 'live',
+    current: {
+      payload: {
+        observer: { state: 'unavailable', waitingReason: 'calibration-pending', hints: [] },
+      },
+    },
+  };
   act(() => root.render(<ObserverHints />));
   expect(container.textContent).toContain('正在校准延迟');
   expect(container.textContent).not.toContain('秒后');
-
 });
 
 it('distinguishes reconnecting from a terminal failure and dispatches the configured native retry', async () => {
