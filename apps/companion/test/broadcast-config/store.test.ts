@@ -9,7 +9,7 @@ import Fastify from 'fastify';
 import { createLocalWebOriginPolicy } from '../../src/local-web/origin-policy.js';
 import { registerBroadcastConfigRoutes } from '../../src/broadcast-config/routes.js';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -283,6 +283,45 @@ describe('BroadcastConfigStore', () => {
     );
     expect(reopened.snapshot.previousActive).toEqual(initial.active);
   });
+  it('retains receipt resources and can retry an apply after the selected module was deleted', async () => {
+    const { options } = await setup();
+    const ref = { id: 'local:test', version: '1', digest: 'a'.repeat(64) };
+    let selected = '';
+    const store = new BroadcastConfigStore({
+      ...options,
+      resolveModule: (module) =>
+        Promise.resolve({
+          value: module.value as never,
+          lock: { resources: module.id === selected ? [ref] : [], tools: [] },
+        }),
+    });
+    await store.load();
+    const builtin = store.snapshot.modules.find(
+      (item) => item.kind === 'program' && item.name === 'Pulse',
+    )!;
+    const copy = await store.cloneModule(builtin.id, builtin.revision, 'Copy');
+    selected = copy.id;
+    const request = {
+      moduleId: copy.id,
+      expectedRevision: copy.revision,
+      expectedActiveRevision: store.snapshot.active.revision,
+      requestId: randomUUID(),
+    };
+    const original = await store.applyModule(request);
+    for (let index = 0; index < 2; index++)
+      await store.applyModule({
+        moduleId: builtin.id,
+        expectedRevision: builtin.revision,
+        expectedActiveRevision: store.snapshot.active.revision,
+        requestId: randomUUID(),
+      });
+    await store.deleteModule(copy.id, copy.revision);
+    expect(store.snapshot.active.lock.resources).not.toContainEqual(ref);
+    expect(store.snapshot.previousActive?.lock.resources).not.toContainEqual(ref);
+    expect(store.referencedResources()).toContainEqual(ref);
+    expect(await store.applyModule(request)).toEqual(original);
+    expect(store.snapshot.active.sourceModuleIds?.program).toBe(builtin.id);
+  });
   it('does not publish a draft when validation fails', async () => {
     const { store, initial } = await setup();
     const preset = { ...initial.presets[0]!, bindings: initial.presets[0]!.bindings.slice(0, 3) };
@@ -394,6 +433,17 @@ describe('BroadcastConfigStore', () => {
     await reopened.deleteModule(second.modules[0]!.id, second.modules[0]!.revision);
     const restarted = new BroadcastConfigStore(options);
     await restarted.load();
+    const inspection = restarted.inspectImport(batch.source)!;
+    expect(inspection.presets.second?.state).toBe('removed');
+    expect(inspection.presets.first?.state).toBe('existing');
+    expect(inspection.modules.hud).toContainEqual({
+      id: second.modules[0]!.id,
+      owner: 'second',
+      state: 'removed',
+    });
+    expect(() => restarted.inspectImport({ ...batch.source, digest: 'b'.repeat(64) })).toThrow(
+      'identity_conflict',
+    );
     const retryFirst = clonePreset(initial, request, randomUUID);
     const retrySecond = clonePreset(initial, { ...request, name: 'Second' }, randomUUID);
     const retry = {
@@ -447,6 +497,70 @@ describe('BroadcastConfigStore', () => {
     };
     await expect(store.importBatch(batch)).rejects.toThrow('invalid_import_mapping');
     expect(store.snapshot).toEqual(initial);
+  });
+  it('only replenishes selected module entries and keeps edits to surviving entries', async () => {
+    const { store, options } = await setup();
+    const source = { id: 'local:package', version: '1', digest: 'a'.repeat(64) };
+    const template = store.snapshot.modules.find((item) => item.kind === 'program')!;
+    const batch = (entries: string[]) => {
+      const modules = entries.map((entryId) => ({
+        ...structuredClone(template),
+        id: randomUUID(),
+        revision: randomUUID(),
+        name: entryId,
+        origin: { resource: source, entryId },
+      }));
+      return {
+        source,
+        modules,
+        presets: [],
+        moduleEntries: Object.fromEntries(modules.map((module) => [module.name, [module.id]])),
+        presetEntries: {},
+      };
+    };
+    const first = await store.importBatch(batch(['first']));
+    const second = await store.importBatch(batch(['second']));
+    const firstId = first.mapping.moduleEntries.first![0]!;
+    const firstModule = store.snapshot.modules.find((item) => item.id === firstId)!;
+    await store.saveModule({ ...firstModule, name: 'Edited' }, firstModule.revision);
+    const both = await store.importBatch(batch(['first', 'second']));
+    expect(both.reused).toBe(true);
+    expect(store.snapshot.modules.find((item) => item.id === firstId)?.name).toBe('Edited');
+    const revised = store.snapshot.modules.find((item) => item.id === firstId)!;
+    await store.deleteModule(firstId, revised.revision);
+    const restarted = new BroadcastConfigStore(options);
+    await restarted.load();
+    const repeatSecond = await restarted.importBatch(batch(['second']));
+    expect(repeatSecond.reused).toBe(true);
+    expect(restarted.snapshot.modules.some((item) => item.id === firstId)).toBe(false);
+    const firstAgain = await restarted.importBatch(batch(['first']));
+    expect(firstAgain.mapping.moduleEntries.first![0]).not.toBe(firstId);
+    expect(firstAgain.mapping.moduleEntries.second).toEqual(second.mapping.moduleEntries.second);
+  });
+  it('rejects a persisted import mapping that points at an unrelated live module', async () => {
+    const { store, options } = await setup();
+    const source = { id: 'local:package', version: '1', digest: 'a'.repeat(64) };
+    const template = store.snapshot.modules.find((item) => item.kind === 'program')!;
+    const module = {
+      ...structuredClone(template),
+      id: randomUUID(),
+      revision: randomUUID(),
+      origin: { resource: source, entryId: 'program' },
+    };
+    await store.importBatch({
+      source,
+      modules: [module],
+      presets: [],
+      moduleEntries: { program: [module.id] },
+      presetEntries: {},
+    });
+    const envelope = JSON.parse(await readFile(options.filePath, 'utf8'));
+    envelope.document.modules.find((item: { id: string }) => item.id === module.id).origin.entryId =
+      'different';
+    await writeFile(options.filePath, JSON.stringify(envelope));
+    await expect(new BroadcastConfigStore(options).load()).rejects.toThrow(
+      'broadcast_import_index_invalid',
+    );
   });
   it('enforces the size limit on the formatted bytes before initialization and save', async () => {
     const { store, options, initial } = await setup();

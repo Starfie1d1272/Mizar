@@ -174,7 +174,7 @@ export function createBroadcastRuntime(input: {
         cameraUnavailable = true;
         input.diagnostic(error);
       }
-      for (const ref of broadcastResourceReferences(store.snapshot))
+      for (const ref of store.referencedResources())
         if (await deps.isDeleting(ref)) throw new Error('resource_deleting');
     }
     const hudPersistence = createHudConfigPersistence(store, async (value, current) => {

@@ -190,6 +190,8 @@ WebSocket 子协议为 `mizar.local.v1`，路由为 `/local/v1/{channel}`。
 
 `GET /local/v1/broadcast-assets?resourceId=…&version=…&digest=…&fileId=…` 按完整 `AssetRef` 读取已安装包中的音频或 PNG、JPEG、WebP 图片，查询值分别 URL 编码。成功响应包含实际 `Content-Type` 和 `X-Content-Type-Options: nosniff`；缺失、损坏、不支持分别返回 404、422、415。此接口不接受磁盘路径，也不安装或枚举包。场景图片槽位为 `pulse.background`；配置保存资源引用，页面以完整引用构造本机 URL，预览和正式节目及 BP 共用此映射。Pulse 渲染器支持 `pulse.white`、`pulse.blue`、`pulse.gold`、`pulse.muted`、`pulse.canvas` 和 `pulse.shell` 颜色字段，网页遇到其他字段或图片槽时拒绝预览及从资源页使用。
 
+资源释放检查包含草稿、活动及上一个活动快照，以及持久化使用回执所引用的资源。即使随后切换并删除了原模块，对同一 `requestId` 的合法重试仍返回原回执，不重新切换活动配置。
+
 ## BP 播放与补录
 
 `GET /local/v1/bp` 是有限的地图卡、步骤、公开标题和播放状态；不返回内部比赛 ID、名单或完整来源文档。ETag 覆盖当前播放进度，浏览器超时隐藏，恢复读取当前值，不重演旧步骤。
