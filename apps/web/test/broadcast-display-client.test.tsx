@@ -60,7 +60,7 @@ it('accepts a complete display projection and retains it across an unavailable o
   vi.stubGlobal('fetch', fetch);
   let state: BroadcastDisplayClientState | undefined;
   function Probe() {
-    state = useBroadcastDisplayConfig();
+    state = useBroadcastDisplayConfig(true, 'waiting');
     return null;
   }
   const root = createRoot(document.createElement('div'));
@@ -104,7 +104,7 @@ it('does not substitute legacy visuals after the active configuration is known t
   );
   let state: BroadcastDisplayClientState | undefined;
   function Probe() {
-    state = useBroadcastDisplayConfig();
+    state = useBroadcastDisplayConfig(true, 'waiting');
     return null;
   }
   const root = createRoot(document.createElement('div'));
@@ -118,4 +118,19 @@ it('does not substitute legacy visuals after the active configuration is known t
   });
   expect(state).toEqual({ status: 'unsupported', current: null });
   act(() => root.unmount());
+});
+
+it('accepts a HUD or a selected scene independently of unsupported unrelated visuals', async () => {
+  const { supportsBroadcastDisplay } = await import('../src/program/broadcast-display');
+  const config = {
+    ...projection,
+    program: {
+      ...projection.program,
+      scenes: { ...projection.program.scenes, matchup: { ...visual, id: 'other' } },
+    },
+  } as Parameters<typeof supportsBroadcastDisplay>[0];
+  expect(supportsBroadcastDisplay(config, 'gameplay')).toBe(true);
+  expect(supportsBroadcastDisplay(config, 'waiting')).toBe(true);
+  expect(supportsBroadcastDisplay(config, 'bp')).toBe(true);
+  expect(supportsBroadcastDisplay(config, 'matchup')).toBe(false);
 });

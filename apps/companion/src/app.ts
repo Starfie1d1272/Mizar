@@ -754,8 +754,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       reply.code(503).send({ error: 'broadcast_config_unavailable' }),
     );
   let waitForBroadcast: (() => Promise<void>) | undefined;
+  let getExportBroadcastDocument:
+    (() => import('@mizar/broadcast-config').BroadcastConfigDocument) | undefined;
   registerHudConfigRoutes(app, {
     store: hudConfigStore,
+    getBroadcastDocument: () => getExportBroadcastDocument?.(),
     webRoot: options.webRoot ?? defaultWebRoot(),
     waitForBroadcast: async () => {
       await waitForBroadcast?.();
@@ -1348,6 +1351,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         })
       : undefined;
     if (broadcastRuntime) {
+      getExportBroadcastDocument = () => broadcastRuntime.store.snapshot;
       waitForBroadcast = () => broadcastRuntime.waitForApply();
       getBroadcastReferences = () => {
         if (!broadcastRuntime.ready) throw new Error('broadcast_config_unavailable');

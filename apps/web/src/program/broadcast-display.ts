@@ -1,24 +1,59 @@
-import type { BroadcastDisplayConfig } from '@mizar/broadcast-config';
+import type { CSSProperties } from 'react';
+import type {
+  BroadcastDisplayConfig,
+  ProgramVisualConfigV1,
+  ResolvedHudModule,
+} from '@mizar/broadcast-config';
 import { HUD_BROADCAST_STYLES } from '@mizar/hud-config';
+import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
 
-/** Reject unimplemented visuals instead of silently substituting an on-air design. */
-export function supportsBroadcastDisplay(config: BroadcastDisplayConfig): boolean {
-  if (config.hud.renderer !== 'native') return false;
-  const visual = config.hud.overlays.pause.visual;
-  if (
-    visual !== 'legacy' &&
-    visual !== 'current' &&
-    !HUD_BROADCAST_STYLES.some((id) => id === visual)
-  )
-    return false;
-  // Accept a complete scene set together so independent OBS sources never
-  // switch to a partially supported configuration.
+export function supportsHud(hud: ResolvedHudModule): boolean {
+  if (hud.renderer !== 'native') return false;
+  const visual = hud.overlays.pause.visual;
   return (
-    Object.values(config.program.scenes).every(
-      (selected) =>
-        selected.kind === 'builtin' && selected.id === 'pulse' && selected.apiVersion === 1,
-    ) &&
-    Object.keys(config.program.tokens).length === 0 &&
-    Object.keys(config.program.assets).length === 0
+    visual === 'legacy' || visual === 'current' || HUD_BROADCAST_STYLES.some((id) => id === visual)
   );
+}
+
+const pulseTokens = {
+  'pulse.white': '--mizar-broadcast-pulse-white',
+  'pulse.blue': '--mizar-broadcast-pulse-blue',
+  'pulse.gold': '--mizar-broadcast-pulse-gold',
+  'pulse.muted': '--mizar-broadcast-pulse-muted',
+  'pulse.canvas': '--mizar-broadcast-pulse-canvas',
+  'pulse.shell': '--mizar-broadcast-pulse-shell',
+} as const;
+
+export function pulseTokenStyle(program: ProgramVisualConfigV1): CSSProperties | null {
+  const result: Record<string, string> = {};
+  for (const [name, value] of Object.entries(program.tokens)) {
+    const property = pulseTokens[name as keyof typeof pulseTokens];
+    if (!property || typeof value !== 'string' || !/^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i.test(value))
+      return null;
+    result[property] = value;
+  }
+  return result as CSSProperties;
+}
+
+export function supportsProgramScene(
+  program: ProgramVisualConfigV1,
+  scene: Exclude<ProgramSceneId, 'gameplay'>,
+): boolean {
+  const selected = program.scenes[scene];
+  return (
+    selected.kind === 'builtin' &&
+    selected.id === 'pulse' &&
+    selected.apiVersion === 1 &&
+    pulseTokenStyle(program) !== null &&
+    Object.keys(program.assets).length === 0
+  );
+}
+
+export function supportsBroadcastDisplay(
+  config: BroadcastDisplayConfig,
+  scene: ProgramSceneId = 'gameplay',
+): boolean {
+  return scene === 'gameplay'
+    ? supportsHud(config.hud)
+    : supportsProgramScene(config.program, scene);
 }

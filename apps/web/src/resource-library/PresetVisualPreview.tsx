@@ -1,6 +1,7 @@
 import { useMemo, useState, useSyncExternalStore } from 'react';
 import { parseModuleRecord, type ModuleRecord } from '@mizar/broadcast-config';
-import { resolveHudPreset } from '@mizar/hud-config';
+import { getBuiltinResolvedPreset, resolveHudPreset } from '@mizar/hud-config';
+import { pulseTokenStyle, supportsProgramScene } from '../program/broadcast-display';
 import { PROGRAM_SCENES, type ProgramSceneId } from '@mizar/protocol/program-scenes';
 import { ProgramView } from '@mizar/hud-view';
 import { bpPreviewSnapshot } from '../bp/preview';
@@ -46,35 +47,27 @@ export function PresetVisualPreview({
     };
     const hud = get('hud');
     const program = get('program');
-    if (
-      !hud ||
-      hud.kind !== 'hud' ||
-      !('preset' in hud.value) ||
-      !program ||
-      program.kind !== 'program'
-    )
-      return null;
-    try {
-      return {
-        hud: resolveHudPreset(hud.value.preset, hud.value.layout, hud.value.theme),
-        overlays: hud.value.overlays,
-        accent: hud.value.accent,
-        program: program.value,
-      };
-    } catch {
-      return null;
+    let resolvedHud = null;
+    if (hud?.kind === 'hud' && 'preset' in hud.value) {
+      try {
+        resolvedHud = {
+          config: resolveHudPreset(hud.value.preset, hud.value.layout, hud.value.theme),
+          overlays: hud.value.overlays,
+          accent: hud.value.accent,
+        };
+      } catch {
+        // Other scenes can still be previewed when the HUD is unavailable.
+      }
     }
+    return { hud: resolvedHud, program: program?.kind === 'program' ? program.value : null };
   }, [bindings, modules]);
   const fixture = useMemo(() => getHudEditorFixture('epl-live'), []);
   const radar = useMemo(() => radarSnapshotForProgramFixture('epl-live'), []);
-  const selected = scene === 'gameplay' ? null : visuals?.program.scenes[scene];
   const supported =
-    scene === 'gameplay' ||
-    (selected?.kind === 'builtin' &&
-      selected.id === 'pulse' &&
-      selected.apiVersion === 1 &&
-      Object.keys(visuals?.program.tokens ?? {}).length === 0 &&
-      Object.keys(visuals?.program.assets ?? {}).length === 0);
+    scene === 'gameplay'
+      ? visuals.hud !== null
+      : visuals.program !== null && supportsProgramScene(visuals.program, scene);
+
   return (
     <section className="resource-library__preview" aria-label="方案画面预览">
       <div className="resource-library__preview-heading">
@@ -94,7 +87,7 @@ export function PresetVisualPreview({
           ))}
         </Select>
       </div>
-      {!visuals || !fixture ? (
+      {scene === 'gameplay' && (!visuals.hud || !fixture) ? (
         <p>画面配置暂不可预览。</p>
       ) : !supported ? (
         <p>此场景暂不支持预览。</p>
@@ -102,10 +95,10 @@ export function PresetVisualPreview({
         <div className="resource-library__preview-frame" aria-label="示例画面" data-scene={scene}>
           {scene === 'gameplay' ? (
             <HudCanvasPreview
-              resolvedPreset={visuals.hud}
-              overlays={visuals.overlays}
-              accent={visuals.accent}
-              snapshot={fixture}
+              resolvedPreset={visuals.hud!.config}
+              overlays={visuals.hud!.overlays}
+              accent={visuals.hud!.accent}
+              snapshot={fixture!}
               radarSnapshot={radar}
               mapBackground
               connectionState="live"
@@ -122,6 +115,9 @@ export function PresetVisualPreview({
               {scene === 'bp' ? (
                 <ProgramView
                   kind="bp"
+                  sceneStyle={
+                    visuals.program ? (pulseTokenStyle(visuals.program) ?? undefined) : undefined
+                  }
                   snapshot={bpPreviewSnapshot}
                   animate={false}
                   compact={false}
@@ -129,13 +125,16 @@ export function PresetVisualPreview({
               ) : (
                 <ProgramView
                   kind="scene"
+                  sceneStyle={
+                    visuals.program ? (pulseTokenStyle(visuals.program) ?? undefined) : undefined
+                  }
                   sceneId={scene}
                   data={presentationPreview(scene, null)}
                   snapshot={programPreviewSnapshot('gameplay', null)}
                   scenes={null}
-                  resolvedPreset={visuals.hud}
-                  overlays={visuals.overlays}
-                  accent={visuals.accent}
+                  resolvedPreset={visuals.hud?.config ?? getBuiltinResolvedPreset()}
+                  overlays={visuals.hud?.overlays}
+                  accent={visuals.hud?.accent}
                   preview
                   shortIntro={false}
                   previewBackground

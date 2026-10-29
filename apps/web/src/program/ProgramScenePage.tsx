@@ -1,3 +1,4 @@
+import { pulseTokenStyle } from './broadcast-display';
 import { useBroadcastDisplayConfig } from '../realtime/broadcast-display-client';
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import {
@@ -57,7 +58,7 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
   const data = preview ? presentationPreview(sceneId, params.get('variant')) : liveData;
   const scenes = useProgramScenes();
   const reducedMotion = useSyncExternalStore(subscribeMotion, readReducedMotion, () => false);
-  const display = useBroadcastDisplayConfig(!preview);
+  const display = useBroadcastDisplayConfig(!preview, sceneId);
   const hud = useHudConfigClient(
     preview || (display.current === null && display.status !== 'unsupported'),
   );
@@ -72,6 +73,9 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
   return (
     <ProgramView
       kind="scene"
+      sceneStyle={
+        display.current ? (pulseTokenStyle(display.current.program) ?? undefined) : undefined
+      }
       sceneId={sceneId}
       data={data}
       snapshot={snapshot ?? null}
