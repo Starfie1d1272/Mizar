@@ -44,7 +44,14 @@ function Shot({
             max={60}
             step={0.001}
             value={shot.maxMs / 1000}
-            onChange={(e) => change({ ...shot, maxMs: Number(e.target.value) * 1000 })}
+            onChange={(e) => {
+              const milliseconds = Number(e.target.value) * 1000;
+              const rounded = Math.round(milliseconds);
+              change({
+                ...shot,
+                maxMs: Math.abs(milliseconds - rounded) < 1e-7 ? rounded : milliseconds,
+              });
+            }}
           />
         </details>
       ) : null}
