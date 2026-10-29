@@ -5,7 +5,13 @@ import { readPackArchive, writePackArchive } from '../src/index.js';
 
 function archive(
   files: [string, Buffer][],
-  options: { symlink?: boolean; deflate?: boolean } = {},
+  options: {
+    symlink?: boolean;
+    deflate?: boolean;
+    utf8?: boolean;
+    localExtra?: Buffer;
+    centralExtra?: Buffer;
+  } = {},
 ) {
   const locals: Buffer[] = [],
     central: Buffer[] = [];
@@ -16,25 +22,31 @@ function archive(
     const local = Buffer.alloc(30);
     local.writeUInt32LE(0x04034b50, 0);
     local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(options.utf8 ? 0x800 : 0, 6);
     local.writeUInt16LE(options.deflate ? 8 : 0, 8);
     local.writeUInt32LE(crc32(bytes), 14);
     local.writeUInt32LE(packed.length, 18);
     local.writeUInt32LE(bytes.length, 22);
     local.writeUInt16LE(n.length, 26);
+    local.writeUInt16LE(options.localExtra?.length ?? 0, 28);
     const header = Buffer.alloc(46);
     header.writeUInt32LE(0x02014b50, 0);
     header.writeUInt16LE(20, 4);
     header.writeUInt16LE(20, 6);
+    header.writeUInt16LE(options.utf8 ? 0x800 : 0, 8);
     header.writeUInt16LE(options.deflate ? 8 : 0, 10);
     header.writeUInt32LE(crc32(bytes), 16);
     header.writeUInt32LE(packed.length, 20);
     header.writeUInt32LE(bytes.length, 24);
     header.writeUInt16LE(n.length, 28);
+    header.writeUInt16LE(options.centralExtra?.length ?? 0, 30);
     header.writeUInt32LE(options.symlink ? 0xa0000000 : 0, 38);
     header.writeUInt32LE(offset, 42);
-    locals.push(local, n, packed);
-    central.push(header, n);
-    offset += local.length + n.length + packed.length;
+    const localExtra = options.localExtra ?? Buffer.alloc(0);
+    const centralExtra = options.centralExtra ?? Buffer.alloc(0);
+    locals.push(local, n, localExtra, packed);
+    central.push(header, n, centralExtra);
+    offset += local.length + n.length + localExtra.length + packed.length;
   }
   const directory = Buffer.concat(central),
     end = Buffer.alloc(22);
@@ -88,6 +100,28 @@ describe('pack archive', () => {
     const result = await readPackArchive(zip);
     expect(result.files.get('assets/a.txt')).toEqual(content);
     expect(() => writePackArchive(manifest, new Map())).toThrow();
+  });
+  it('rejects conflicting Unicode path metadata and unmarked non-ASCII names', async () => {
+    const unicodePath = Buffer.from([0x75, 0x70, 0, 0]);
+    await expect(readPackArchive(archive(members, { localExtra: unicodePath }))).rejects.toThrow();
+    await expect(
+      readPackArchive(archive(members, { centralExtra: unicodePath })),
+    ).rejects.toThrow();
+    await expect(
+      readPackArchive(archive(members, { localExtra: Buffer.from([1, 0, 1, 0]) })),
+    ).rejects.toThrow();
+    const unicodeManifest = Buffer.from(
+      manifest.toString().replace('assets/a.txt', 'assets/中.txt'),
+    );
+    const unicodeMembers: [string, Buffer][] = [
+      ['manifest.json', unicodeManifest],
+      ['assets/中.txt', content],
+    ];
+    await expect(readPackArchive(archive(unicodeMembers))).rejects.toThrow();
+    await expect(readPackArchive(archive(unicodeMembers, { utf8: true }))).resolves.toBeDefined();
+    await expect(
+      readPackArchive(archive(members, { localExtra: Buffer.from([1, 0, 0, 0]) })),
+    ).resolves.toBeDefined();
   });
   it('rejects unlisted, duplicate, damaged and symbolic link members', async () => {
     await expect(readPackArchive(archive([...members, ['extra', content]]))).rejects.toThrow();

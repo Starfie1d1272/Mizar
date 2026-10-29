@@ -7,6 +7,17 @@ function requireArchive(ok: unknown): asserts ok {
   if (!ok) throw new Error('package_invalid');
 }
 
+function checkExtra(bytes: Buffer): void {
+  let offset = 0;
+  while (offset < bytes.length) {
+    requireArchive(offset + 4 <= bytes.length);
+    const id = bytes.readUInt16LE(offset),
+      size = bytes.readUInt16LE(offset + 2);
+    requireArchive(id !== 0x7075 && offset + 4 + size <= bytes.length);
+    offset += 4 + size;
+  }
+}
+
 /** Read ZIP32 into memory without extracting paths or granting content authority. */
 export async function readPackArchive(zip: Buffer) {
   requireArchive(zip.length >= 22 && zip.length <= PACK_LIMITS.total);
@@ -53,8 +64,12 @@ export async function readPackArchive(zip: Buffer) {
     const rawName = zip.subarray(cursor + 46, cursor + 46 + nameSize),
       name = rawName.toString('utf8');
     requireArchive(
-      Buffer.from(name).equals(rawName) && !folded.has(name.toLowerCase()) && !name.endsWith('/'),
+      Buffer.from(name).equals(rawName) &&
+        ((flags & 0x800) !== 0 || rawName.every((byte) => byte < 0x80)) &&
+        !folded.has(name.toLowerCase()) &&
+        !name.endsWith('/'),
     );
+    checkExtra(zip.subarray(cursor + 46 + nameSize, cursor + 46 + nameSize + extra));
     folded.add(name.toLowerCase());
     requireArchive(
       zip.readUInt32LE(offset) === 0x04034b50 &&
@@ -67,6 +82,7 @@ export async function readPackArchive(zip: Buffer) {
       start + compressed <= directoryStart &&
         zip.subarray(offset + 30, offset + 30 + nameSize).equals(rawName),
     );
+    checkExtra(zip.subarray(offset + 30 + nameSize, start));
     total += size;
     if (
       size > (name === 'manifest.json' ? PACK_LIMITS.manifest : PACK_LIMITS.file) ||
