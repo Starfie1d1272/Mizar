@@ -130,6 +130,7 @@ async function setup() {
     },
     withReferenceGuard: <T>(operation: () => Promise<T>) => operation(),
     assertReferenceCommitAllowed: () => Promise.resolve(),
+    verifyLegacyActive: () => Promise.resolve(),
     withApplyGuard: <T>(operation: (canCommit: () => boolean) => Promise<T>) =>
       operation(() => true),
   };
@@ -312,5 +313,24 @@ describe('BroadcastConfigStore', () => {
     const reopened = new BroadcastConfigStore(options);
     await reopened.load();
     expect(reopened.snapshot).toEqual(initial);
+  });
+  it('commits a legacy HUD action without revising unrelated active modules', async () => {
+    const { store, initial } = await setup();
+    const hud = initial.active.resolved.hud;
+    if (hud.renderer !== 'native') throw new Error('unexpected HUD');
+    const changed = structuredClone(hud);
+    changed.overlays.pause.enabled = false;
+    const result = await store.updateFromLegacy({
+      updateDraft: (document) => {
+        document.modules[0]!.name = 'Edited';
+      },
+      active: { kind: 'hud', value: changed, lock: initial.active.lock },
+    });
+    expect(result.active.adjusted).toBe(true);
+    expect(result.active.moduleRevisions.hud).not.toBe(initial.active.moduleRevisions.hud);
+    expect(result.active.moduleRevisions.music).toBe(initial.active.moduleRevisions.music);
+    expect(result.active.moduleRevisions.camera).toBe(initial.active.moduleRevisions.camera);
+    expect(result.previousActive).toEqual(initial.active);
+    expect(result.modules[0]!.revision).not.toBe(initial.modules[0]!.revision);
   });
 });

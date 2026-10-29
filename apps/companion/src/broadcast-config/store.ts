@@ -8,6 +8,7 @@ import {
   preparePreset,
   parseBroadcastConfigDocument,
   resourceRefSchema,
+  sameEffectiveModule,
   type ActiveBroadcastSnapshot,
   type ApplyPresetRequest,
   type BroadcastConfigDocument,
@@ -17,6 +18,7 @@ import {
   type Revision,
   type PresetResolver,
   type ResourceRef,
+  type ModuleKind,
 } from '@mizar/broadcast-config';
 import { durableJsonByteLength, replaceDurableJson } from '../match-context/durable-json.js';
 import { SerialCommitQueue } from '../match-context/serial-commit.js';
@@ -59,6 +61,8 @@ export interface BroadcastConfigStoreOptions {
     previous: BroadcastConfigDocument,
     next: BroadcastConfigDocument,
   ): Promise<void>;
+  /** Verify all references and capabilities in an individually adjusted active snapshot. */
+  verifyLegacyActive(active: ActiveBroadcastSnapshot): Promise<void>;
   /** Holds the production lifecycle and exposes a synchronous final readiness check. */
   withApplyGuard<T>(operation: (canCommit: () => boolean) => Promise<T>): Promise<T>;
   onApplied?(active: ActiveBroadcastSnapshot, previous: ActiveBroadcastSnapshot): void;
@@ -260,6 +264,71 @@ export class BroadcastConfigStore {
         for (const item of next.document.presets) boundModules(item, next.document.modules);
         await this.options.assertReferenceCommitAllowed(this.envelope.document, next.document);
         await this.commit(next);
+        return this.snapshot;
+      }),
+    );
+  }
+  /** Internal facade transaction; the legacy owner validates its edit before submitting it. */
+  async updateFromLegacy<K extends ModuleKind>(input: {
+    updateDraft(document: BroadcastConfigDocument): void;
+    active?: {
+      kind: K;
+      value: ActiveBroadcastSnapshot['resolved'][K];
+      lock: ActiveBroadcastSnapshot['lock'];
+    };
+  }): Promise<BroadcastConfigDocument> {
+    return this.queue.run(() =>
+      this.options.withReferenceGuard(async () => {
+        if (!this.envelope) throw new Error('broadcast_config_unavailable');
+        const next = structuredClone(this.envelope);
+        const previous = structuredClone(next.document.active);
+        const previousRecovery = canonicalJson(next.document.previousActive);
+        input.updateDraft(next.document);
+        for (const module of next.document.modules) {
+          const old = this.envelope.document.modules.find((item) => item.id === module.id);
+          if (old && old.kind !== module.kind) throw new Error('invalid_request');
+          module.revision =
+            old &&
+            canonicalJson({ ...old, revision: '' }) === canonicalJson({ ...module, revision: '' })
+              ? old.revision
+              : randomUUID();
+        }
+        for (const preset of next.document.presets) {
+          const old = this.envelope.document.presets.find((item) => item.id === preset.id);
+          preset.revision =
+            old &&
+            canonicalJson({ ...old, revision: '' }) === canonicalJson({ ...preset, revision: '' })
+              ? old.revision
+              : randomUUID();
+        }
+
+        if (
+          canonicalJson(next.document.active) !== canonicalJson(previous) ||
+          canonicalJson(next.document.previousActive) !== previousRecovery
+        )
+          throw new Error('active_mutation_forbidden');
+        if (input.active) {
+          const { kind, value, lock } = input.active;
+          const active = structuredClone(previous);
+          if (!sameEffectiveModule(kind, previous.resolved[kind], value))
+            active.moduleRevisions[kind] = randomUUID();
+          active.resolved[kind] = structuredClone(value);
+          active.lock = structuredClone(lock);
+          active.revision = randomUUID();
+          active.adjusted = true;
+          next.document.previousActive = previous;
+          next.document.active = active;
+          await this.options.verifyLegacyActive(active);
+        }
+        await this.options.assertReferenceCommitAllowed(this.envelope.document, next.document);
+        await this.commit(next);
+        if (input.active) {
+          try {
+            this.options.onApplied?.(structuredClone(next.document.active), previous);
+          } catch {
+            /* Persistence remains authoritative. */
+          }
+        }
         return this.snapshot;
       }),
     );

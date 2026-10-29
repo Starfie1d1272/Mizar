@@ -315,6 +315,15 @@ function effectiveModuleJson(
   });
 }
 
+/** Compare effective output rather than editor identities and labels. */
+export function sameEffectiveModule<K extends ModuleKind>(
+  kind: K,
+  left: ActiveBroadcastSnapshot['resolved'][K],
+  right: ActiveBroadcastSnapshot['resolved'][K],
+): boolean {
+  return effectiveModuleJson(kind, left) === effectiveModuleJson(kind, right);
+}
+
 /** Prepare a candidate without mutating the document or any external device. */
 export async function preparePreset(
   document: BroadcastConfigDocument,
@@ -331,10 +340,7 @@ export async function preparePreset(
   const prepared = await resolver.resolve(modules);
   const moduleRevisions = { ...document.active.moduleRevisions };
   for (const kind of MODULE_KINDS) {
-    if (
-      effectiveModuleJson(kind, prepared.resolved[kind]) !==
-      effectiveModuleJson(kind, document.active.resolved[kind])
-    )
+    if (!sameEffectiveModule(kind, prepared.resolved[kind], document.active.resolved[kind]))
       moduleRevisions[kind] = newRevision();
   }
   return {
