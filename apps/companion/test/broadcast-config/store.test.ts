@@ -143,9 +143,50 @@ async function setup() {
   };
   const store = new BroadcastConfigStore(options);
   await store.load();
-  return { store, options, initial };
+  return { store, options, initial: store.snapshot };
 }
 describe('BroadcastConfigStore', () => {
+  it('protects built-ins and refuses removal of active or referenced modules', async () => {
+    const { store, initial } = await setup();
+    const builtin = store.snapshot.modules.find(
+      (item) => item.id === 'fb81f5a0-9e35-4ae5-8f15-000000000001',
+    )!;
+    await expect(store.deleteModule(builtin.id, builtin.revision)).rejects.toThrow(
+      'builtin_immutable',
+    );
+    await expect(store.saveModule(builtin, builtin.revision)).rejects.toThrow('builtin_immutable');
+    const bound = initial.modules[0]!;
+    await expect(store.deleteModule(bound.id, bound.revision)).rejects.toThrow('module_active');
+    const clone = await store.cloneModule(builtin.id, builtin.revision, '可编辑 HUD');
+    expect(clone.id).not.toBe(builtin.id);
+    await store.deleteModule(clone.id, clone.revision);
+    expect(store.snapshot.modules.some((item) => item.id === clone.id)).toBe(false);
+  });
+  it('replaces a draft reference atomically when deleting a module', async () => {
+    const { store, initial } = await setup();
+    const builtin = store.snapshot.modules.find(
+      (item) => item.id === 'fb81f5a0-9e35-4ae5-8f15-000000000001',
+    )!;
+    const copy = await store.cloneModule(builtin.id, builtin.revision, '草稿 HUD');
+    const preset = structuredClone(initial.presets[0]!);
+    preset.id = randomUUID();
+    preset.bindings = preset.bindings.map((binding) =>
+      binding.kind === 'hud' ? { kind: 'hud', mode: 'use', moduleId: copy.id } : binding,
+    );
+    await store.save({ preset, expectedPresetRevision: null, modules: [] });
+    const current = store.snapshot.presets.find((item) => item.id === preset.id)!;
+    await expect(store.deleteModule(copy.id, copy.revision)).rejects.toThrow('module_referenced');
+    await store.deleteModule(copy.id, copy.revision, {
+      moduleId: builtin.id,
+      expectedPresetRevisions: { [current.id]: current.revision },
+    });
+    expect(store.snapshot.presets.find((item) => item.id === preset.id)?.bindings).toContainEqual({
+      kind: 'hud',
+      mode: 'use',
+      moduleId: builtin.id,
+    });
+    expect(store.snapshot.modules.some((item) => item.id === copy.id)).toBe(false);
+  });
   it('commits an apply once and recovers its receipt after restart', async () => {
     const { store, options, initial } = await setup();
     const request = {

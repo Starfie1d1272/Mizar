@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import type { BroadcastConfigDocument } from '@mizar/broadcast-config';
+import type { BroadcastConfigDocument, ModuleRecord } from '@mizar/broadcast-config';
 import { buildApp } from '../../src/app.js';
 
 it('reports pending migration without exposing or changing legacy settings', async () => {
@@ -123,6 +123,93 @@ it('boots built-in providers without custom injection when legacy dependencies a
         accent: { source: 'fixed' },
       },
     });
+    const modules = (await app.inject('/local/v1/broadcast-modules')).json<{
+      modules: Array<{ module: { id: string; kind: string; revision: string }; builtin: boolean }>;
+    }>().modules;
+    expect(modules.filter((item) => item.builtin && item.module.kind === 'hud')).toHaveLength(5);
+    expect(modules.filter((item) => item.builtin && item.module.kind === 'program')).toHaveLength(
+      1,
+    );
+    const original = modules.find((item) => item.builtin && item.module.kind === 'hud')!.module;
+    const post = (action: string, payload: object) =>
+      app.inject({
+        method: 'POST',
+        url: `/operator/broadcast-modules/${action}`,
+        headers: { origin: 'http://127.0.0.1:3000' },
+        payload,
+      });
+    expect(
+      (await post('delete', { moduleId: original.id, expectedRevision: original.revision }))
+        .statusCode,
+    ).toBe(409);
+    const cloned = await post('clone', {
+      moduleId: original.id,
+      expectedRevision: original.revision,
+      name: '我的 HUD',
+    });
+    expect(cloned.statusCode).toBe(200);
+    const copy = cloned.json<{ id: string; revision: string }>();
+    const otherResponse = await post('clone', {
+      moduleId: original.id,
+      expectedRevision: original.revision,
+      name: '另一 HUD',
+    });
+    const other = otherResponse.json<ModuleRecord>();
+    const drafts = (
+      await app.inject('/local/v1/broadcast-presets')
+    ).json<BroadcastConfigDocument>();
+    const first = drafts.modules.find((module) => module.id === copy.id)!;
+    if (
+      first.kind !== 'hud' ||
+      !('preset' in first.value) ||
+      other.kind !== 'hud' ||
+      !('preset' in other.value)
+    )
+      throw new Error('expected native HUD');
+    other.value.layout.id = first.value.layout.id;
+    other.value.preset.layoutId = first.value.layout.id;
+    other.value.layout.widgets.radar.offsetX += 1;
+    expect(
+      (await post('save', { value: other, expectedRevision: other.revision })).statusCode,
+    ).toBe(409);
+    const unchanged = (
+      await app.inject('/local/v1/broadcast-presets')
+    ).json<BroadcastConfigDocument>();
+    expect(unchanged.modules.find((item) => item.id === other.id)?.revision).toBe(other.revision);
+    expect(
+      (await post('delete', { moduleId: other.id, expectedRevision: other.revision })).statusCode,
+    ).toBe(200);
+    const before = (await app.inject('/local/v1/broadcast-presets')).json<BroadcastConfigDocument>()
+      .active;
+    const { randomUUID } = await import('node:crypto');
+    const applied = await post('apply', {
+      moduleId: copy.id,
+      expectedRevision: copy.revision,
+      expectedActiveRevision: before.revision,
+      requestId: randomUUID(),
+    });
+    expect(applied.statusCode).toBe(200);
+    const active = applied.json<BroadcastConfigDocument['active']>();
+    expect(active.sourceModuleIds?.hud).toBe(copy.id);
+    expect(active.moduleRevisions.music).toBe(before.moduleRevisions.music);
+    expect(active.moduleRevisions.camera).toBe(before.moduleRevisions.camera);
+    expect(
+      (await post('delete', { moduleId: copy.id, expectedRevision: copy.revision })).statusCode,
+    ).toBe(409);
+    expect(
+      (
+        await post('apply', {
+          moduleId: original.id,
+          expectedRevision: original.revision,
+          expectedActiveRevision: active.revision,
+          requestId: randomUUID(),
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(
+      (await post('delete', { moduleId: copy.id, expectedRevision: copy.revision })).statusCode,
+    ).toBe(200);
+    expect(hud.getState().document.customPresets).toHaveLength(0);
   } finally {
     await app.close();
     await rm(root, { recursive: true, force: true });

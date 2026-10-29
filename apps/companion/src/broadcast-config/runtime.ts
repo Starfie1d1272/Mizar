@@ -51,6 +51,12 @@ export function createBroadcastRuntime(input: {
   let candidate: BroadcastConfigDocument | undefined;
   let ready = false;
   let syncError: Error | undefined;
+  const resolver = createBroadcastResolver({
+    asset: (ref) => deps.resolve.asset(ref),
+    scene: (value) => deps.resolve.scene(value),
+    camera: (source) => deps.resolve.camera(source),
+    hud: () => Promise.reject(new Error('capability_unsupported')),
+  });
   const store = new BroadcastConfigStore({
     filePath: deps.path,
     createInitial: () => {
@@ -58,23 +64,31 @@ export function createBroadcastRuntime(input: {
       return Promise.resolve(candidate);
     },
     // The legacy HUD facade cannot represent a third-party renderer yet.
-    resolver: createBroadcastResolver({
-      asset: (ref) => deps.resolve.asset(ref),
-      scene: (value) => deps.resolve.scene(value),
-      camera: (source) => deps.resolve.camera(source),
-      hud: () => Promise.reject(new Error('capability_unsupported')),
-    }),
+    resolver,
+    resolveModule: (module) => resolver.resolveModule(module),
     withReferenceGuard: (operation) => deps.references.run(operation),
     assertReferenceCommitAllowed: (previous, next) =>
       assertReferenceCommitAllowed(previous, next, (ref) => deps.isDeleting(ref)),
     withApplyGuard: (operation) => input.withApplyGuard(operation),
     verifyLegacyActive: (active) => deps.verifyActive(active),
-    onApplied: async () => {
+    validateHudDraft: (document) => {
+      hudDocumentFromBroadcast(document);
+    },
+    onDraftChanged: async (kind) => {
+      if (kind === 'hud') await hud.synchronizeFromPersistence(hudDocument());
+    },
+    onApplied: async (_active, _previous, kind) => {
       ready = false;
       const results = await Promise.allSettled([
-        Promise.resolve().then(() => hud.synchronizeFromPersistence(hudDocument())),
-        Promise.resolve().then(() => music.synchronizeFromPersistence()),
-        Promise.resolve().then(() => camera.synchronizeFromPersistence()),
+        ...(!kind || kind === 'hud'
+          ? [Promise.resolve().then(() => hud.synchronizeFromPersistence(hudDocument()))]
+          : []),
+        ...(!kind || kind === 'music'
+          ? [Promise.resolve().then(() => music.synchronizeFromPersistence())]
+          : []),
+        ...(!kind || kind === 'camera'
+          ? [Promise.resolve().then(() => camera.synchronizeFromPersistence())]
+          : []),
       ]);
       const failed = results.find((result) => result.status === 'rejected');
       if (failed?.status === 'rejected') {
