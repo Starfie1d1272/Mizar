@@ -21,36 +21,10 @@ export function createLhmProjection() {
   let runtime = createInitialRuntimeState('lhm-export');
   let lineup = emptyActiveLineup(0, 0);
   let sequence = 0;
-  return (raw: unknown, now = performance.now()) => {
-    const result = adaptGsiPayload(raw, {
-      sequence: ++sequence,
-      receivedAt: new Date().toISOString(),
-      receivedMonotonicMs: now,
-    });
-    if (!result.ok) return null;
-    const reduced = reduceRuntime(
-      runtime,
-      {
-        kind: 'program-telemetry',
-        sourceGeneration: runtime.programSource.generation,
-        observation: result.observation,
-      },
-      policy,
-    );
-    if (reduced.disposition.kind !== 'accepted') return null;
-    runtime = reduced.state;
+  const refresh = (now = performance.now()) => {
+    if (!runtime.programTelemetry) return null;
     const view = selectProgramSafeRuntimeView(runtime);
     const identity = unboundIdentityResolution();
-    lineup = resolveActiveLineup({
-      sourceGeneration: runtime.programSource.generation,
-      mapEpoch: runtime.map.epoch,
-      ...(view.telemetry?.telemetry.allPlayers
-        ? { allPlayers: view.telemetry.telemetry.allPlayers }
-        : {}),
-      ...(view.telemetry ? { allPlayersCoverage: view.telemetry.coverage.allPlayers } : {}),
-      identity,
-      previous: lineup,
-    });
     const projection = projectProgram({
       runtime: view,
       identity,
@@ -96,4 +70,37 @@ export function createLhmProjection() {
       }),
     };
   };
+  const accept = (raw: unknown, now = performance.now()) => {
+    const result = adaptGsiPayload(raw, {
+      sequence: ++sequence,
+      receivedAt: new Date().toISOString(),
+      receivedMonotonicMs: now,
+    });
+    if (!result.ok) return null;
+    const reduced = reduceRuntime(
+      runtime,
+      {
+        kind: 'program-telemetry',
+        sourceGeneration: runtime.programSource.generation,
+        observation: result.observation,
+      },
+      policy,
+    );
+    if (reduced.disposition.kind !== 'accepted') return null;
+    runtime = reduced.state;
+    const view = selectProgramSafeRuntimeView(runtime);
+    const identity = unboundIdentityResolution();
+    lineup = resolveActiveLineup({
+      sourceGeneration: runtime.programSource.generation,
+      mapEpoch: runtime.map.epoch,
+      ...(view.telemetry?.telemetry.allPlayers
+        ? { allPlayers: view.telemetry.telemetry.allPlayers }
+        : {}),
+      ...(view.telemetry ? { allPlayersCoverage: view.telemetry.coverage.allPlayers } : {}),
+      identity,
+      previous: lineup,
+    });
+    return refresh(now);
+  };
+  return Object.assign(accept, { refresh });
 }

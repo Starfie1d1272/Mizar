@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { io } from 'socket.io-client';
 import { parseHudResolvedPreset, type HudResolvedPreset } from '@mizar/hud-config';
+import { getObjectiveClockLeaseMs } from '@mizar/core/runtime';
 import { AssetProvider, ProgramCanvas, ProgramView } from '@mizar/hud-view';
 import { createLhmProjection } from './projection';
 import '@mizar/design-tokens/tokens.css';
@@ -38,6 +39,7 @@ function App() {
     const socket = io('/');
     let project = createLhmProjection();
     let stale: ReturnType<typeof setTimeout> | undefined;
+    let objectiveExpiry: ReturnType<typeof setTimeout> | undefined;
     const update = (raw: unknown) => {
       if (!alive) return;
       let next: Snapshot | null;
@@ -48,6 +50,13 @@ function App() {
       }
       if (!next) return;
       setSnapshot(next);
+      clearTimeout(objectiveExpiry);
+      objectiveExpiry = setTimeout(
+        () => {
+          if (alive) setSnapshot(project.refresh());
+        },
+        getObjectiveClockLeaseMs({ staleAfterMs: 20_000 }) + 1,
+      );
       clearTimeout(stale);
       stale = setTimeout(() => setSnapshot(null), 20_000);
     };
@@ -74,6 +83,7 @@ function App() {
     socket.on('refreshHUD', () => window.location.reload());
     socket.on('disconnect', () => {
       clearTimeout(stale);
+      clearTimeout(objectiveExpiry);
       setSnapshot(null);
       project = createLhmProjection();
     });
@@ -81,6 +91,7 @@ function App() {
     return () => {
       alive = false;
       clearTimeout(stale);
+      clearTimeout(objectiveExpiry);
       window.removeEventListener('resize', resize);
       socket.disconnect();
     };
