@@ -48,7 +48,9 @@ async function fetchPublicJson(url: string): Promise<unknown> {
   if (!response.ok) {
     if (
       response.status === 429 ||
-      (response.status === 403 && response.headers.get('x-ratelimit-remaining') === '0')
+      (response.status === 403 &&
+        (response.headers.get('x-ratelimit-remaining') === '0' ||
+          response.headers.has('retry-after')))
     ) {
       const now = Date.now();
       const retry = response.headers.get('retry-after');
@@ -58,6 +60,7 @@ async function fetchPublicJson(url: string): Promise<unknown> {
       metadataRetry = {
         status: response.status,
         until: Math.max(
+          metadataRetry?.until ?? 0,
           now + 60_000,
           now + seconds,
           Number.isFinite(retryDate) ? retryDate : 0,
