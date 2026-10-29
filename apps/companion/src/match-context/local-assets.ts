@@ -1,6 +1,6 @@
 import { diagnosticValue } from '../support/session-journal.js';
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { FastifyInstance } from 'fastify';
@@ -29,6 +29,29 @@ function validImage(bytes: Buffer, mime: keyof typeof MIME_EXTENSION): boolean {
     bytes.toString('ascii', 0, 4) === 'RIFF' &&
     bytes.toString('ascii', 8, 12) === 'WEBP'
   );
+}
+
+export async function readLocalAsset(
+  directory: string,
+  url: string,
+): Promise<{ bytes: Buffer; mime: string } | null> {
+  const match = /^\/local\/v1\/local-assets\/([a-f0-9]{64})\.(png|jpg|webp)$/.exec(url);
+  if (!match) return null;
+  const mime = match[2] === 'png' ? 'image/png' : match[2] === 'jpg' ? 'image/jpeg' : 'image/webp';
+  try {
+    const path = join(directory, `${match[1]}.${match[2]}`);
+    if ((await stat(path)).size > MAX_ASSET_BYTES) return null;
+    const bytes = await readFile(path);
+    if (
+      bytes.length > MAX_ASSET_BYTES ||
+      !validImage(bytes, mime) ||
+      createHash('sha256').update(bytes).digest('hex') !== match[1]
+    )
+      return null;
+    return { bytes, mime };
+  } catch {
+    return null;
+  }
 }
 
 export function registerLocalAssetRoutes(

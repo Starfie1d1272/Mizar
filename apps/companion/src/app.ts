@@ -139,7 +139,7 @@ import {
   type GsiSequenceSource,
   type ObservationSink,
 } from './telemetry/gsi-ingress.js';
-import { registerStaticHost } from './local-web/static-host.js';
+import { defaultWebRoot, registerStaticHost } from './local-web/static-host.js';
 import { registerOperatorCommandRoutes } from './operator/controller.js';
 import { registerHudConfigRoutes } from './hud-config/controller.js';
 import { HudConfigStore } from './hud-config/store.js';
@@ -2085,7 +2085,15 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   if (options.lhmHost) {
     const hostOptions = options.lhmHost;
     app.addHook('onReady', async () => {
-      lhmHost = await startLhmHost({ ...hostOptions, projections: projectionCoordinator });
+      lhmHost = await startLhmHost({
+        ...hostOptions,
+        webRoot: options.webRoot ?? defaultWebRoot(),
+        projections: projectionCoordinator,
+        ...(options.steamAvatars ? { steamAvatars: options.steamAvatars } : {}),
+        ...(options.localTournamentPath
+          ? { localAssetsDirectory: join(dirname(options.localTournamentPath), 'local-assets') }
+          : {}),
+      });
       app.log.info({ url: lhmHost.url }, 'LHM 展示宿主正在监听');
     });
   }
