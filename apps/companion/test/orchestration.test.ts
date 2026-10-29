@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify from 'fastify';
@@ -23,6 +23,21 @@ import { musicProgram } from './music-fixtures.js';
 const cleanup: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
   for (const close of cleanup.splice(0).reverse()) await close();
+});
+it('migrates the legacy active preset and retains its identity on restart', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mizar-camera-migration-'));
+  cleanup.push(() => rm(root, { recursive: true, force: true }));
+  const directory = join(root, 'orchestration');
+  await mkdir(directory);
+  const preset = { format: 'mizar.orchestration', version: 1, name: '旧预设', maps: [] };
+  await writeFile(join(directory, 'preset.json'), JSON.stringify(preset));
+  const store = new OrchestrationStore(directory);
+  await store.load();
+  const restored = new OrchestrationStore(directory);
+  await restored.load();
+  expect(restored.preset).toEqual(preset);
+  expect(restored.activePresetId).toBe(store.activePresetId);
+  expect(restored.presets).toEqual([{ id: store.activePresetId, preset }]);
 });
 async function rig(nativeRequired = false) {
   const root = await mkdtemp(join(tmpdir(), 'mizar-camera-'));
@@ -315,9 +330,7 @@ it('persists validated drafts, rejects malformed imports and forbids remote cont
   const send = vi.spyOn(r.provider, 'send');
   const post = (payload: Record<string, unknown>, origin = 'http://127.0.0.1:3000') =>
     app.inject({ method: 'POST', url: '/operator/orchestration', headers: { origin }, payload });
-  const exported = orchestrationPresetSchema.parse(
-    JSON.parse(await readFile(join(r.store.directory, 'preset.json'), 'utf8')),
-  );
+  const exported = orchestrationPresetSchema.parse(r.store.preset);
   expect(
     (
       await post({
@@ -342,10 +355,24 @@ it('persists validated drafts, rejects malformed imports and forbids remote cont
   expect((await post({ action: 'set-automatic', enabled: true })).json()).toMatchObject({
     automaticEnabled: true,
   });
+  const activeId = r.store.activePresetId;
+  const created = (await post({ action: 'create-preset', sourceId: activeId })).json();
+  const id = created.createdPresetId as string;
+  expect(id).not.toBe(activeId);
+  expect(
+    (await post({ action: 'save-preset', id, preset: { ...exported, name: '草稿' } })).statusCode,
+  ).toBe(200);
+  expect(r.store.preset.name).toBe('RC 候选');
+  const revision = r.store.revision;
+  expect((await post({ action: 'activate-preset', id })).statusCode).toBe(200);
+  expect(r.store.preset.name).toBe('草稿');
+  expect(r.store.revision).toBe(revision + 1);
   expect(send).not.toHaveBeenCalled();
   const restored = new OrchestrationStore(r.store.directory);
   await restored.load();
-  expect(restored.preset.name).toBe('RC 候选');
+  expect(restored.preset.name).toBe('草稿');
+  expect(restored.activePresetId).toBe(id);
+  expect(restored.presets).toHaveLength(2);
   expect(restored.automaticEnabled).toBe(true);
   r.truth.production = true;
   r.director.beginProduction();
@@ -363,7 +390,7 @@ it('persists validated drafts, rejects malformed imports and forbids remote cont
   r.director.beginProduction();
   await r.tick();
   expect(r.director.get().held).toBe(true);
-  await writeFile(join(r.store.directory, 'preset.json'), '{broken');
+  await writeFile(join(r.store.directory, 'presets.json'), '{broken');
   await expect(restored.load()).rejects.toThrow();
   expect(restored.ready).toBe(false);
 });
