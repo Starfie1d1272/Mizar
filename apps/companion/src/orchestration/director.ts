@@ -7,8 +7,6 @@ import type { OrchestrationStore } from './store.js';
 export interface CameraTruth extends MusicTruth {
   /** Present only during an isolated external Demo trial; true requires fresh map/player data. */
   demoAudition?: boolean | undefined;
-  /** Production lifecycle, independent of telemetry readiness. */
-  sessionActive?: boolean | undefined;
 }
 /** Consume authoritative projections; never become a second match / timing authority. */
 export class CameraDirector {
@@ -19,7 +17,7 @@ export class CameraDirector {
   private execution = '';
   private connection = -1;
   private held = true;
-  private sessionActive = false;
+  private intentRevision = 0;
   private preparation: OrchestrationStatus['preparation'] = 'waiting';
   private preparationKey = '';
   private preparationEpoch = 0;
@@ -95,6 +93,10 @@ export class CameraDirector {
     this.nativeMode = false;
     this.native = null;
     this.message = '浏览器联调，请重新连接并确认隔离包。';
+  }
+  beginProduction() {
+    this.intentRevision++;
+    this.held = !this.store.ready || !this.store.automaticEnabled;
   }
   finishProduction() {
     if (this.nativeMode) this.invalidateNative();
@@ -185,12 +187,6 @@ export class CameraDirector {
     if (this.closed) return;
     this.nativeReady();
     const t = this.truth();
-    const sessionActive = t.sessionActive ?? t.production;
-    if (!sessionActive) this.sessionActive = false;
-    else if (!this.sessionActive && this.store.ready) {
-      this.sessionActive = true;
-      this.held = t.demoAudition !== undefined || !this.store.automaticEnabled;
-    }
     const context = this.identity(t);
     if (context !== this.context || this.connection !== this.provider.generation) {
       const execution = this.executionIdentity(t);
@@ -349,10 +345,12 @@ export class CameraDirector {
     )
       throw new Error('camera_audition_unavailable');
     this.held = true;
+    const intent = ++this.intentRevision;
     const revision = this.revision;
     await this.prepare(true);
     if (
       revision !== this.revision ||
+      intent !== this.intentRevision ||
       expected.context !== this.identity(this.truth()) ||
       expected.connection !== this.provider.generation ||
       !this.play(shot, 'audition', this.edge(this.truth()).key)
@@ -465,6 +463,7 @@ export class CameraDirector {
     });
   }
   hold(message = '人工接管；已请求清空全部运镜槽，停止未确认。') {
+    this.intentRevision++;
     this.held = true;
     this.stop(message);
   }
@@ -494,6 +493,7 @@ export class CameraDirector {
         if (revision === this.revision) this.request = result;
       }
     } else if (action === 'skip') {
+      this.intentRevision++;
       if (this.lastEdge) this.consume(this.lastEdge);
       this.stop('已跳过本次运镜，停止结果未确认。');
     } else {
@@ -514,10 +514,12 @@ export class CameraDirector {
         !this.packReady()
       )
         throw new Error('camera_context_changed');
+      const intent = ++this.intentRevision;
       const revision = this.revision;
       await this.prepare(true);
       if (
         revision !== this.revision ||
+        intent !== this.intentRevision ||
         expected.context !== this.identity(this.truth()) ||
         expected.connection !== this.provider.generation ||
         !this.safe(this.truth()) ||
