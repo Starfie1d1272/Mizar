@@ -89,6 +89,11 @@ const manifestSchema = z
   })
   .strict();
 export type PackManifestV1 = z.infer<typeof manifestSchema>;
+export type ResourceRef = z.infer<typeof resource>;
+export interface TemplateAssetRef {
+  package: string; // "$self" or a dependency alias
+  fileId: string;
+}
 
 function validString(value: string): boolean {
   return !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value);
@@ -194,3 +199,5 @@ export function verifyFiles(
       throw new Error('package_invalid');
   }
 }
+
+export { readPackArchive, writePackArchive } from './archive.js';
