@@ -560,6 +560,7 @@ export function registerWorkspaceObserver(
       return reply.code(403).send({ error: 'runtime-control-denied' });
     const parsed = command.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'observer_command_invalid' });
+    const operation = { stage: 'preparation' as 'preparation' | 'game' | 'hud' | 'assist' };
     try {
       const body = parsed.data;
       if (['start', 'start-configured', 'prepare'].includes(body.action) && !canStart())
@@ -658,6 +659,7 @@ export function registerWorkspaceObserver(
           // An accepted game command is retained even if a later observer launch fails.
           // Retrying the private source must not reconnect the on-air game.
           if (connect && connection) {
+            operation.stage = 'game';
             await sendObserverGameCommand(
               observerConnectCommand(
                 connection,
@@ -667,17 +669,21 @@ export function registerWorkspaceObserver(
             connectedGame = key.connect;
             if (!body.nativeHudToggle && gameControl?.hideGameHud) hiddenGame = key.hud;
           } else if (hide) {
+            operation.stage = 'hud';
             await sendObserverGameCommand('cl_draw_only_deathnotices 1');
             hiddenGame = key.hud;
           }
+          operation.stage = 'preparation';
           if (!current()) throw new Error('observer_configuration_changed');
           host = value;
           appliedPolicy = policy(value);
           hostLease = performance.now();
+          operation.stage = 'assist';
           await startAssist(value, current);
           lastError = null;
         });
       } else if (body.action === 'start') {
+        operation.stage = 'assist';
         const attempt = ++epoch;
         host = undefined;
         await serialize(async () => {
@@ -715,9 +721,16 @@ export function registerWorkspaceObserver(
         },
         '观察辅助操作需要重试',
       );
-      return reply
-        .code(409)
-        .send({ message: '请核对本场观战连接和所选启动方式的组件状态；详细阶段见运行诊断。' });
+      return reply.code(409).send({
+        message:
+          operation.stage === 'game'
+            ? '游戏观战连接未确认，请在游戏内检查连接后重试。'
+            : operation.stage === 'hud'
+              ? 'CS2 原生 HUD 设置未确认，请检查游戏画面后重试。'
+              : operation.stage === 'assist'
+                ? '观察辅助未能启动，请检查辅助设置后重试；游戏连接请在游戏内核对。'
+                : '观战准备未完成，请检查游戏连接和设置后重试。',
+      });
     }
   });
 }

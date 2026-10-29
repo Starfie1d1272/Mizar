@@ -28,13 +28,15 @@ test('preflight reviews current ten-player evidence, actual auto state, disconne
   );
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
-  const sockets: { operator?: WebSocketRoute; program?: WebSocketRoute } = {};
+  const sockets = { operator: new Set<WebSocketRoute>(), program: new Set<WebSocketRoute>() };
   await page.routeWebSocket('**/local/v1/operator', (ws) => {
-    sockets.operator = ws;
+    sockets.operator.add(ws);
+    ws.onClose(() => sockets.operator.delete(ws));
     ws.send(JSON.stringify(operator));
   });
   await page.routeWebSocket('**/local/v1/program', (ws) => {
-    sockets.program = ws;
+    sockets.program.add(ws);
+    ws.onClose(() => sockets.program.delete(ws));
     ws.send(JSON.stringify(program));
   });
   const publish = () => {
@@ -42,8 +44,8 @@ test('preflight reviews current ten-player evidence, actual auto state, disconne
     programSnapshotSchema.parse(program);
     operator.channelSeq++;
     program.channelSeq++;
-    sockets.operator!.send(JSON.stringify(operator));
-    sockets.program!.send(JSON.stringify(program));
+    for (const socket of sockets.operator) socket.send(JSON.stringify(operator));
+    for (const socket of sockets.program) socket.send(JSON.stringify(program));
   };
   let paired = true;
   let syncFailure = false;
