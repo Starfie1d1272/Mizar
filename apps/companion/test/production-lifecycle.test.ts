@@ -358,3 +358,47 @@ it('keeps recovered external Demo sessions cleanup-only at the real HTTP boundar
     await rm(root, { recursive: true, force: true });
   }
 });
+
+it('holds production transitions while committing a broadcast configuration', async () => {
+  const scenes = {
+    get: () => ({ revision: 'scene', active: 'waiting' }),
+  } as unknown as ProgramSceneController;
+  const app = Fastify();
+  const lifecycle = registerProductionRoutes(app, {
+    originPolicy: createLocalWebOriginPolicy(),
+    hasContext: () => true,
+    scenes,
+    release: () => Promise.resolve(),
+  });
+  let finish!: () => void;
+  const pending = lifecycle.configureBroadcast(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  try {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/operator/production',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: { action: 'enter', expectedRevision: lifecycle.get().revision },
+    });
+    expect(response.statusCode).toBe(409);
+    finish();
+    await pending;
+    const entered = await app.inject({
+      method: 'POST',
+      url: '/operator/production',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: { action: 'enter', expectedRevision: lifecycle.get().revision },
+    });
+    expect(entered.statusCode).toBe(200);
+    await expect(lifecycle.configureBroadcast(() => Promise.resolve())).rejects.toThrow(
+      'production_busy',
+    );
+  } finally {
+    finish();
+    await app.close();
+  }
+});
