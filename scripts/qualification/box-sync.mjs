@@ -518,6 +518,43 @@ export class BoxClient {
       }
     });
   }
+  // Probe-only: one fresh temporary name and sequential chunks, never retry a
+  // final chunk whose commit result is uncertain.
+  async probeChunks(path, name, bytes) {
+    const url = this.temporaryUrl(await this.api('upload-link', path));
+    url.searchParams.set('ret-json', '1');
+    const split = Math.ceil(bytes.length / 2);
+    for (const [start, end] of [
+      [0, split],
+      [split, bytes.length],
+    ]) {
+      const form = new FormData();
+      form.set('parent_dir', path);
+      form.set('replace', '0');
+      form.set('file', new Blob([bytes.subarray(start, end)]), name);
+      const response = await checkedFetch(
+        url,
+        {
+          method: 'POST',
+          body: form,
+          redirect: 'error',
+          headers: {
+            'Content-Range': `bytes ${start}-${end - 1}/${bytes.length}`,
+            'Content-Disposition': `attachment; filename="${name}"`,
+          },
+        },
+        180000,
+        this.uploadTransport,
+      );
+      const result = await response.json();
+      requireValue(
+        end === bytes.length
+          ? Array.isArray(result) && result.length === 1 && result[0].name === name
+          : result?.success === true,
+        '分块上传回执不一致；保留现场',
+      );
+    }
+  }
   async move(from, to, name) {
     await this.api('sync-batch-move-item', undefined, 'POST', {
       src_parent_dir: from,
@@ -1060,7 +1097,7 @@ export async function probe(box) {
   const expected = { size: bytes.length, sha256: digest(bytes) };
   await box.api('dir', folder, 'POST', { operation: 'mkdir' });
   try {
-    await box.upload(folder, name, bytes);
+    await box.probeChunks(folder, name, bytes);
     await verifyRemote(box, `${folder}/${name}`, expected);
     const metadata = await box.api('file', `${folder}/${name}`);
     requireValue(metadata, '探测文件元数据读取失败');
@@ -1075,7 +1112,7 @@ export async function probe(box) {
     requireValue((await box.list(folder)).length === 0, '探测目录出现其他文件；保留目录供核对');
     await box.api('dir', folder, 'DELETE');
   }
-  return '接口探测通过：列目录、上传、元数据、下载校验、移动与删除；Stable 保持原样。';
+  return '接口探测通过：列目录、分块上传、元数据、下载校验、移动与删除；Stable 保持原样。';
 }
 
 async function github(path) {

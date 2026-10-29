@@ -120,6 +120,7 @@ export async function multipartUpload(url, options, request = httpsRequest) {
         headers: {
           'Content-Type': encoded.headers.get('content-type'),
           'Content-Length': String(bytes.length),
+          ...options.headers,
         },
       },
       (incoming) => {
