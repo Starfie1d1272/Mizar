@@ -339,7 +339,11 @@ export class ObsAudioRouting {
           (input) =>
             (state.desktop && input.inputUuid === state.desktop.inputUuid) ||
             input.inputUuid ===
-              (state.desktop ? state.desktopMicrophone?.inputUuid : managed?.ids.microphone),
+              (state.desktop
+                ? state.desktopMicrophone?.inputUuid
+                : state.independentCommentaryDisabled
+                  ? state.bindings.microphone?.inputUuid
+                  : managed?.ids.microphone),
         )
         .map((input) => String(input.inputName)),
     );
