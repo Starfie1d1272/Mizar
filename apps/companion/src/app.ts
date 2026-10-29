@@ -1225,6 +1225,44 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         : options.rivalhubConnection?.getSchedule();
     return reply.header('cache-control', 'no-store').send(presentation.get(document, schedule));
   });
+  app.get('/local/v1/broadcast-stats', async (_request, reply) => {
+    const binding = matchContextController?.getActiveBinding() ?? options.matchContextBinding;
+    if (
+      !binding ||
+      binding.origin !== 'online' ||
+      binding.freshness !== 'fresh' ||
+      !options.rivalhubConnection
+    )
+      return reply.header('cache-control', 'no-store').send(null);
+    const value = await options.rivalhubConnection.stats(binding.context.matchId);
+    const current = matchContextController?.getActiveBinding() ?? options.matchContextBinding;
+    const ids = [binding.manifest.entrants.a.entryId, binding.manifest.entrants.b.entryId];
+    if (
+      current !== binding ||
+      !value ||
+      value.entrants.length !== 2 ||
+      new Set(value.entrants.map((entry) => entry.entryId)).size !== 2 ||
+      !ids.every((id) => value.entrants.some((entry) => entry.entryId === id))
+    )
+      return reply.header('cache-control', 'no-store').send(null);
+    const entrants = [binding.manifest.entrants.a, binding.manifest.entrants.b].map((canonical) => {
+      const entry = value.entrants.find((candidate) => candidate.entryId === canonical.entryId)!;
+      const ids = new Set(
+        canonical.roster.players
+          .filter((player) => player.isStarter)
+          .map((player) => player.playerId),
+      );
+      return {
+        ...entry,
+        starters: entry.starters.filter((player) => ids.has(player.userId)),
+        playerPerformance: {
+          ...entry.playerPerformance,
+          players: entry.playerPerformance.players.filter((player) => ids.has(player.userId)),
+        },
+      };
+    });
+    return reply.header('cache-control', 'no-store').send({ ...value, entrants });
+  });
   const director = new ProgramDirector(
     projectionCoordinator,
     sceneController,

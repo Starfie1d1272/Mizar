@@ -111,7 +111,7 @@ for (const entry of ['/', '/settings?tab=gsi']) {
               }
             ).manualMulnxNative(command, args);
             if (command === 'launch_mulnx' && args?.automatic) {
-              // eslint-disable-next-line @typescript-eslint/only-throw-error -- Emulate the actual Tauri Result<T, String> rejection.
+              // Emulate the actual Tauri Result<T, String> rejection.
               throw 'MulNX 启动接口不可用，请检查更新或选择标准启动；请关闭启动器后重试。';
             }
             return result;

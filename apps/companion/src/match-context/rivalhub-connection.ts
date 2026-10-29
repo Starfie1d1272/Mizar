@@ -12,7 +12,8 @@ import {
   validateBroadcastScheduleWindow,
   validateBroadcastManifest,
 } from '@mizar/rivalhub';
-import { createOnlineManifestSource } from './http-source.js';
+import { createOnlineManifestSource, readOnlineManifestResponse } from './http-source.js';
+import { broadcastStatsSchema, type BroadcastStats } from '@mizar/protocol/broadcast-stats';
 import { redactDiagnosticText, diagnosticNetworkCode } from '../updates/diagnostics.js';
 import {
   RELIABLE_SEND_TIMEOUT_MS,
@@ -271,11 +272,73 @@ export class RivalHubConnection {
       : null;
   }
   private invalidateReadScope() {
+    this.statsScope = null;
     this.scheduleCache = null;
     this.scheduleWarning = null;
     this.browsingLibrary = null;
     this.manifestScope?.abort.abort();
     this.manifestScope = null;
+  }
+  private statsScope: {
+    installation: Installation;
+    matchId: string;
+    value: BroadcastStats | null;
+    etag: string | null;
+    attemptedAt: number;
+    pending: Promise<BroadcastStats | null> | null;
+  } | null = null;
+
+  /** Low-frequency, installation-scoped broadcast data; never part of gameplay. */
+  async stats(matchId: string): Promise<BroadcastStats | null> {
+    const installation = this.installation;
+    if (!installation || !/^[A-Za-z0-9_-]{1,128}$/.test(matchId)) return null;
+    if (this.statsScope?.installation !== installation || this.statsScope.matchId !== matchId)
+      this.statsScope = {
+        installation,
+        matchId,
+        value: null,
+        etag: null,
+        attemptedAt: -Infinity,
+        pending: null,
+      };
+    const scope = this.statsScope;
+    if (scope.pending) return scope.pending;
+    if (this.monotonicNow() - scope.attemptedAt < 60_000) return scope.value;
+    scope.attemptedAt = this.monotonicNow();
+    scope.pending = (async () => {
+      try {
+        const response = await this.request(`stats?matchId=${encodeURIComponent(matchId)}`, {
+          headers: scope.etag ? { 'if-none-match': scope.etag } : {},
+        });
+        if (this.statsScope !== scope || this.installation !== installation) return null;
+        if (response.status === 304 && scope.value) return scope.value;
+        if (!response.ok) return null;
+        const parsed = broadcastStatsSchema.safeParse(await readOnlineManifestResponse(response));
+        if (this.statsScope !== scope || this.installation !== installation) return null;
+        if (
+          !parsed.success ||
+          parsed.data.matchId !== matchId ||
+          parsed.data.competitionId !== installation.competitionId
+        )
+          return null;
+        scope.value = parsed.data;
+        scope.etag = response.headers.get('etag');
+        return scope.value;
+      } catch {
+        return null;
+      }
+    })()
+      .then((value) => {
+        if (!value) {
+          scope.value = null;
+          scope.etag = null;
+        }
+        return value;
+      })
+      .finally(() => {
+        scope.pending = null;
+      });
+    return scope.pending;
   }
   private installation: Installation | null = null;
   private pendingPairing: PendingPairing | null = null;
