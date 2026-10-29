@@ -96,11 +96,15 @@ it('prepares the installed launcher locally and preserves upstream options', asy
   );
   const config = join(injector, 'CS2BootLoader/Config/config.yaml');
   expect(await readFile(config, 'utf8')).toContain('-condebug');
+  const demoCfg = 'mizar_demo_00000000-0000-4000-8000-000000000001.cfg';
+  await tool.prepare('D:\\Steam\\game\\bin\\win64\\cs2.exe', true, false, true, demoCfg);
+  expect(await readFile(config, 'utf8')).toContain(`+exec ${demoCfg}`);
   // A process restart must retain ownership, so disabling removes only our flag.
   const restarted = new MulnxTool(root, join(root, 'bundle'));
   await restarted.load();
   await restarted.prepare('D:\\Steam\\game\\bin\\win64\\cs2.exe', false);
   expect(await readFile(config, 'utf8')).toContain('launchOptions: -insecure -novid\n');
+  expect(await readFile(config, 'utf8')).not.toContain(demoCfg);
   // The fixed CFG and console flag share one ownership record across restarts.
   await restarted.prepare('D:\\Steam\\game\\bin\\win64\\cs2.exe', true, false, true);
   expect(await readFile(config, 'utf8')).toContain('-condebug +exec mizar_observer.cfg');

@@ -51,6 +51,51 @@ export async function command(path: string, body: unknown = {}, task?: ControlTa
   if (!response.ok) throw new Error(result.message ?? '操作未完成，请刷新后重试。');
   return result;
 }
+export async function enterDemoTest(
+  requestId: string,
+  task?: ControlTask,
+  isCurrent: () => boolean = () => true,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const location = window.location.href;
+  const intentId = crypto.randomUUID();
+  const current = () => !signal?.aborted && isCurrent() && window.location.href === location;
+  const cancel = () => {
+    void desktopInvoke('cancel_demo_entry', { intentId }).catch(() => {});
+  };
+  if (!current()) return false;
+  window.addEventListener('pagehide', cancel);
+  window.addEventListener('popstate', cancel);
+  signal?.addEventListener('abort', cancel);
+  try {
+    await desktopInvoke('begin_demo_entry', { intentId }, task);
+    if (!current()) return false;
+    const camera = await desktopInvoke<boolean>('enter_demo_test', { requestId }, task);
+    if (!current()) return false;
+    await desktopInvoke('present_demo_test', { requestId, expectedUrl: location, intentId }, task);
+    if (!current()) return false;
+    if (camera) {
+      const response = await fetch('/local/v1/demo-test', {
+        headers: task?.headers() ?? {},
+        cache: 'no-store',
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!response.ok) throw new Error('试播状态未确认，请重试。');
+      const trial = (await response.json()) as DemoTestView;
+      if (!current() || !trial.active || trial.phase !== 'playing' || trial.requestId !== requestId)
+        return false;
+      await command('/operator/orchestration', { action: 'connect' }, task);
+      if (!current()) return false;
+    }
+    return true;
+  } finally {
+    window.removeEventListener('pagehide', cancel);
+    window.removeEventListener('popstate', cancel);
+    signal?.removeEventListener('abort', cancel);
+    cancel();
+  }
+}
+
 export type Tool = 'hud' | 'bp' | 'diagnostics';
 const toolPaths = {
   hud: '/operator/hud',
@@ -185,6 +230,7 @@ async function performProductionAction(
   external: ExternalGameIdentity | undefined,
   cancelled: () => boolean,
 ) {
+  const entryLocation = window.location.href;
   controlEvidence('production_action', 'dispatch', {
     taskId: task.taskId,
     trigger: task.trigger,
@@ -211,12 +257,23 @@ async function performProductionAction(
       if (external) throw new Error('请先结束 Demo 试播，再选择外部游戏。');
       if (action === 'finish')
         await desktopInvoke('finish_demo_test', { requestId: trial.requestId }, task);
-      else await desktopInvoke('enter_demo_test', { requestId: trial.requestId }, task);
+      else {
+        if (!trial.requestId) throw new Error('试播状态未确认，请刷新后重试。');
+        if (
+          !(await enterDemoTest(
+            trial.requestId,
+            task,
+            () => window.location.href === entryLocation,
+          ))
+        ) {
+          task.finish('cancelled', { reason: 'demo_entry_changed' });
+          return;
+        }
+      }
       task.finish('confirmed', { confirmation: 'host_demo_command_ack', trial });
       return;
     }
   }
-  const entryLocation = window.location.href;
   if (action === 'enter' && !(await checkObsBeforeLaunch(false, task))) {
     task.finish('blocked', { reason: 'preflight_requires_attention' });
     return;

@@ -1078,6 +1078,7 @@ async fn start_demo_test(
     team_a_name: String,
     team_b_name: String,
     preserve_settings: Option<bool>,
+    camera_trial: Option<bool>,
     diagnostic_operation_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let diagnostic_log = app.state::<DesktopLog>().inner().clone();
@@ -1100,8 +1101,36 @@ async fn start_demo_test(
             .resolve(&token, &app.state::<DesktopLog>())?;
         cs2.ensure_demo_available()?;
         let log = app.state::<DesktopLog>();
+        let launch_guard = if camera_trial.unwrap_or(false) {
+            let guard = mulnx_launch::demo_launch_guard()?;
+            if log.state_root.join("data/mulnx-launch/pending.json").exists() || cs2.mulnx_launcher_running()? {
+                return Err("请先完成上次 MulNX 启动的恢复。".into());
+            }
+            Some(guard)
+        } else { None };
         let id = demo_test::new_request_id(&log)?;
         let starting = demo_test::request(&log, "begin", &id, Some((&team_a_name, &team_b_name)))?;
+        if camera_trial.unwrap_or(false) {
+            drop(cs2);
+            let result = mulnx_launch::launch_demo(&app, &log, &path, &id, preserve_settings.unwrap_or(false), launch_guard.as_ref().unwrap());
+            let mut cs2 = managed.lock().map_err(|_| "CS2 状态不可用，请恢复试播。")?;
+            return match result {
+                Ok(_) => {
+                    if let Ok(mut tracker) = app.state::<HostState>().tracker.lock() {
+                        tracker.preserve_settings = cs2.preserve_settings();
+                    }
+                    Ok(starting)
+                }
+                Err(error) => {
+                    if !cs2.demo_launch_attempted()? {
+                        if let Err(recovery) = cs2.cancel_unsubmitted_mulnx_demo() {
+                            return Err(format!("{error}；恢复未完成：{recovery}"));
+                        }
+                    }
+                    Err(error)
+                }
+            };
+        }
         match cs2.start_demo(&path, &id, preserve_settings.unwrap_or(false)) {
             Ok(true) => {
                 if let Ok(mut tracker) = app.state::<HostState>().tracker.lock() {
@@ -1130,6 +1159,15 @@ async fn start_demo_test(
 }
 
 #[tauri::command]
+async fn resume_demo_test(window: tauri::WebviewWindow, app: tauri::AppHandle, request_id: String) -> Result<serde_json::Value, String> {
+    demo_main_window(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let log = app.state::<DesktopLog>();
+        mulnx_launch::resume_demo(&app, &log, &request_id)
+    }).await.map_err(|_| "Demo 启动状态未能确认。".to_string())?
+}
+
+#[tauri::command]
 async fn enter_demo_test(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
@@ -1137,34 +1175,101 @@ async fn enter_demo_test(
     diagnostic_operation_id: Option<String>,
     diagnostic_task_id: Option<String>,
     diagnostic_trigger: Option<String>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let diagnostic_log = app.state::<DesktopLog>().inner().clone();
     let command_log = diagnostic_log.clone();
     let native_operation_id = diagnostic_operation_id.clone();
     let native_task_id = diagnostic_task_id.clone();
     let native_trigger = diagnostic_trigger.clone();
-    let diagnostic_result: Result<(), String> = async move {
+    let diagnostic_result: Result<bool, String> = async move {
     demo_main_window(&window)?;
     let host = app.clone();
     tauri::async_runtime::spawn_blocking({ let command_log = command_log.clone(); let native_operation_id = native_operation_id.clone(); let native_task_id = native_task_id.clone(); let native_trigger = native_trigger.clone(); move || {
         command_log.with_task(native_task_id.as_deref(), native_operation_id.as_deref(), native_trigger.as_deref(), || {
         let managed = host.state::<Mutex<managed_cs2::ManagedCs2>>();
+        let log = host.state::<DesktopLog>();
+        mulnx_launch::resume_demo(&host, &log, &request_id)?;
         let mut cs2 = managed.lock().map_err(|error| command_log.preserve_error("enter_demo_test", native_operation_id.as_deref(), &error, "CS2 配置状态不可用。"))?;
         host.state::<production_exit::ExitGate>().check()?;
         host.state::<updates::PendingUpdate>().check()?;
         cs2.validate_demo_running(&request_id)?;
-        demo_test::request(&host.state::<DesktopLog>(), "playing", &request_id, None)?;
+        let log = host.state::<DesktopLog>();
+        let camera_trial = cs2.console_source()?.is_some_and(|(context, game)| game.owned && context["mulnxLaunch"] == true);
+        if camera_trial && cs2.managed_camera_lease().is_none() {
+            if !mulnx_launch::observer_control_available(&cs2, &log) {
+                return Err("运镜工具尚未就绪，请检查试播游戏状态。".into());
+            }
+            let game = cs2.workspace_process()?.filter(|game| game.owned && game.is_running())
+                .ok_or("试播游戏身份已变化。")?;
+            let value = production_exit::camera_session(&log, "begin-demo", None, Some(&request_id))?;
+            let lease = value["lease"].as_str().ok_or("运镜会话未确认。")?.to_owned();
+            if let Err(error) = cs2.bind_managed_camera(game, lease.clone()) {
+                let _ = production_exit::camera_session(&log, "invalidate", Some(&lease), None);
+                return Err(error);
+            }
+        }
+        demo_test::request(&log, "playing", &request_id, None)?;
         drop(cs2);
-        present_production_inner(&host, true)
+        Ok(camera_trial)
         })
     } })
     .await
-    .map_err(|error| command_log.preserve_error("enter_demo_test", native_operation_id.as_deref(), &error, "Demo 工作台未能打开。".to_string()))??;
-    Ok(())
+    .map_err(|error| command_log.preserve_error("enter_demo_test", native_operation_id.as_deref(), &error, "Demo 工作台未能打开。".to_string()))?
 
     }.await;
     diagnostic_log.with_task(diagnostic_task_id.as_deref(), diagnostic_operation_id.as_deref(), diagnostic_trigger.as_deref(), || diagnostic_log.native_outcome("enter_demo_test", diagnostic_operation_id.as_deref(), &diagnostic_result));
     diagnostic_result
+}
+
+#[derive(Default)]
+struct DemoEntryIntent(Mutex<Option<String>>);
+impl DemoEntryIntent {
+    fn begin(&self, id: String) -> Result<(), String> {
+        *self.0.lock().map_err(|_| "试播进入状态不可用。")? = Some(id);
+        Ok(())
+    }
+    fn cancel(&self, id: &str) -> Result<(), String> {
+        let mut current = self.0.lock().map_err(|_| "试播进入状态不可用。")?;
+        if current.as_deref() == Some(id) { *current = None; }
+        Ok(())
+    }
+    fn cancel_all(&self) {
+        *self.0.lock().unwrap_or_else(|error| error.into_inner()) = None;
+    }
+    fn publish(&self, id: &str, valid_page: impl FnOnce() -> bool, show: impl FnOnce()) -> bool {
+        let mut current = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        if current.as_deref() != Some(id) || !valid_page() { return false; }
+        *current = None;
+        show();
+        true
+    }
+}
+
+#[tauri::command]
+fn begin_demo_entry(window: tauri::WebviewWindow, app: tauri::AppHandle, intent_id: String) -> Result<(), String> {
+    demo_main_window(&window)?;
+    if intent_id.len() != 36 || !intent_id.bytes().all(|c| c.is_ascii_hexdigit() || c == b'-') {
+        return Err("试播进入请求无效。".into());
+    }
+    app.state::<DemoEntryIntent>().begin(intent_id)
+}
+
+#[tauri::command]
+fn cancel_demo_entry(window: tauri::WebviewWindow, app: tauri::AppHandle, intent_id: String) -> Result<(), String> {
+    demo_main_window(&window)?;
+    app.state::<DemoEntryIntent>().cancel(&intent_id)
+}
+
+#[tauri::command]
+async fn present_demo_test(window: tauri::WebviewWindow, app: tauri::AppHandle, request_id: String, expected_url: String, intent_id: String) -> Result<(), String> {
+    demo_main_window(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = demo_test::status(&app.state::<DesktopLog>())?;
+        if state["active"] != true || state["phase"] != "playing" || state["requestId"].as_str() != Some(&request_id) {
+            return Err("试播状态已变化，请重新进入。".into());
+        }
+        present_production_inner_checked(&app, true, Some((expected_url, intent_id)))
+    }).await.map_err(|_| "试播工作台未能打开。".to_string())?
 }
 
 #[tauri::command]
@@ -1188,6 +1293,7 @@ async fn finish_demo_test(
     let host = app.clone();
     tauri::async_runtime::spawn_blocking({ let command_log = command_log.clone(); let native_operation_id = native_operation_id.clone(); let native_task_id = native_task_id.clone(); let native_trigger = native_trigger.clone(); move || {
         command_log.with_task(native_task_id.as_deref(), native_operation_id.as_deref(), native_trigger.as_deref(), || {
+        host.state::<DemoEntryIntent>().cancel_all();
         let managed = host.state::<Mutex<managed_cs2::ManagedCs2>>();
         let mut cs2 = managed.lock().map_err(|error| command_log.preserve_error("finish_demo_test", native_operation_id.as_deref(), &error, "CS2 配置状态不可用。"))?;
         let activity = host.state::<cs2_activity::Activity>();
@@ -1501,6 +1607,10 @@ async fn present_production(app: tauri::AppHandle, live: bool, diagnostic_operat
 }
 
 fn present_production_inner(app: &tauri::AppHandle, live: bool) -> Result<(), String> {
+    present_production_inner_checked(app, live, None)
+}
+
+fn present_production_inner_checked(app: &tauri::AppHandle, live: bool, expected_url: Option<(String, String)>) -> Result<(), String> {
     if live {
         let ticket = app.state::<production_exit::ExitGate>().presentation_ticket()?;
         // Capture before window creation/layout work. A later foreground change
@@ -1560,18 +1670,30 @@ fn present_production_inner(app: &tauri::AppHandle, live: bool) -> Result<(), St
         app.run_on_main_thread(move || {
             // Check and publish under the same gate on the actual UI thread.
             // An exit begun during readiness invalidates this callback even after it finishes.
+            let mut valid_intent = true;
             let result = host.state::<production_exit::ExitGate>().publish(ticket, || {
-                host.state::<production_exit::WorkspaceExit>().complete(&Ok(()));
-                show_workspace(&host);
-                if let Some(request) = request {
-                    let focused = attempt_game_focus(&host, request);
-                    host.state::<DesktopLog>().event("workspace_entry_focus",
-                        if focused { "focused" } else { "not_focused" }, None);
-                }
-                if let Some(main) = host.get_webview_window("main") {
-                    let _ = window_presentation::set_visible(&main, false);
-                }
+                let show = || {
+                    host.state::<production_exit::WorkspaceExit>().complete(&Ok(()));
+                    show_workspace(&host);
+                    if let Some(request) = request {
+                        let focused = attempt_game_focus(&host, request);
+                        host.state::<DesktopLog>().event("workspace_entry_focus",
+                            if focused { "focused" } else { "not_focused" }, None);
+                    }
+                    if let Some(main) = host.get_webview_window("main") {
+                        let _ = window_presentation::set_visible(&main, false);
+                    }
+                };
+                if let Some((expected, id)) = &expected_url {
+                    valid_intent = host.state::<DemoEntryIntent>().publish(id, || {
+                        host.get_webview_window("main").is_some_and(|window| {
+                            window.is_visible().ok() == Some(true)
+                                && window.url().ok().is_some_and(|url| url.as_str() == expected)
+                        })
+                    }, show);
+                } else { show(); }
             });
+            let result = result.and_then(|()| if valid_intent { Ok(()) } else { Err("进入试播的页面已变化，请重新进入。".into()) });
             let _ = published.send(result);
         }).map_err(|error| error.to_string())?;
         completion.recv().map_err(|_| "现场窗口呈现未能完成，请在准备中心重新进入工作台。".to_string())??;
@@ -1715,7 +1837,7 @@ async fn open_tool(app: tauri::AppHandle, tool: String, preset_id: Option<String
     if tool == "review" {
         if !exit_review && !app.state::<HostState>().visible.load(Ordering::Relaxed) { return Err("工作台已隐藏，请返回工作台后重新打开核对窗口。".into()); }
         let kind = preset_id.as_deref().unwrap_or("preflight");
-        if !matches!(kind, "preflight" | "roster" | "sync" | "issues" | "exit" | "connection") { return Err("核对页面无法识别。".into()); }
+        if !matches!(kind, "preflight" | "roster" | "sync" | "issues" | "exit" | "connection" | "next-connection") { return Err("核对页面无法识别。".into()); }
         target.query_pairs_mut().append_pair("kind", kind);
     }
     if tool == "hud" {
@@ -1732,7 +1854,9 @@ async fn open_tool(app: tauri::AppHandle, tool: String, preset_id: Option<String
                 window.eval(&format!("window.dispatchEvent(new CustomEvent('mizar:hud-select-preset', {{detail:{detail}}}));"))
                     .map_err(|error| command_log.preserve_error("open_tool", native_operation_id.as_deref(), &error, "HUD 预设未能打开。"))?;
             }
-        } else if tool != "review" || window.url().ok().as_ref() != Some(&target) {
+        } else if tool == "review" && window.url().ok().as_ref() != Some(&target) {
+            return Err("请先完成或关闭当前任务，再打开其他任务。".into());
+        } else if tool != "review" {
             window.navigate(target.clone())
                 .map_err(|error| command_log.preserve_error("open_tool", native_operation_id.as_deref(), &error, "工具窗口未能恢复。"))?;
         }
@@ -2291,6 +2415,7 @@ fn run_desktop(
         .manage(Mutex::new(demo_test::Selection::default()))
         .manage(cs2_activity::Activity::default())
         .manage(production_exit::ExitGate::default())
+        .manage(DemoEntryIntent::default())
         .manage(production_exit::WorkspaceExit::default())
         .manage(production_exit::VerifiedStop::default())
         .manage(updates::PendingUpdate::new(update_stage))
@@ -2330,6 +2455,10 @@ fn run_desktop(
             select_demo_file,
             start_demo_test,
             enter_demo_test,
+            resume_demo_test,
+            present_demo_test,
+            begin_demo_entry,
+            cancel_demo_entry,
             finish_demo_test,
             restore_cs2_backup,
             open_cs2_backup,
@@ -2666,6 +2795,9 @@ fn run_desktop(
             }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
+                if window.label() == "main" {
+                    window.state::<DemoEntryIntent>().cancel_all();
+                }
                 match window.label() {
                     "tool-review" => { let _ = window.destroy(); }
                     "workspace-left" | "workspace-dock" => {
@@ -3059,6 +3191,27 @@ fn main() {
 #[cfg(test)]
 mod startup_tests {
     use super::*;
+
+    #[test]
+    fn demo_entry_cancellation_and_page_change_block_publication() {
+        let intent = DemoEntryIntent::default();
+        let shown = std::cell::Cell::new(false);
+        intent.begin("first".into()).unwrap();
+        intent.cancel("first").unwrap();
+        assert!(!intent.publish("first", || true, || shown.set(true)));
+        intent.begin("second".into()).unwrap();
+        assert!(!intent.publish("second", || false, || shown.set(true)));
+        intent.begin("third".into()).unwrap();
+        intent.cancel("second").unwrap();
+        assert!(intent.publish("third", || true, || shown.set(true)));
+        assert!(shown.get());
+        assert!(!intent.publish("third", || true, || panic!("entry is one-shot")));
+        intent.begin("closing".into()).unwrap();
+        intent.cancel_all();
+        assert!(!intent.publish("closing", || true, || panic!("closed window must stay closed")));
+        intent.begin("reopened".into()).unwrap();
+        assert!(intent.publish("reopened", || true, || {}));
+    }
 
     #[test]
     fn review_capability_matches_the_windows_ipc_origin() {
