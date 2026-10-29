@@ -144,8 +144,7 @@ export class DemoTestController {
     if (
       this.busy ||
       this.phase !== 'starting' ||
-      this.marker?.gameOwnership !== 'external' ||
-      this.marker.requestId !== requestId ||
+      this.marker?.requestId !== requestId ||
       !this.options.production.reserveTrialOperation()
     )
       throw new Error('demo_camera_session_changed');
@@ -156,7 +155,7 @@ export class DemoTestController {
     }
   }
   canUseCamera(action: unknown): boolean {
-    if (this.marker?.gameOwnership !== 'external' || typeof action !== 'string') return false;
+    if (!this.marker || typeof action !== 'string') return false;
     if (['disconnect', 'hold'].includes(action)) return true;
     if (this.busy || !['starting', 'playing'].includes(this.phase)) return false;
     if (['connect', 'skip'].includes(action)) return true;
