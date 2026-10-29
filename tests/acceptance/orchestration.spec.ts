@@ -120,7 +120,7 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
   );
   try {
     await page.goto('/settings?tab=music&section=camera');
-    await expect(page.getByText('我的编排', { exact: true })).toBeVisible();
+    await expect(page.getByRole('combobox', { name: '选择预设' })).toBeVisible();
     const automatic = page.getByLabel('开启自动运镜');
     await expect(automatic).toBeEnabled();
     await automatic.click();
@@ -138,12 +138,15 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
     await page.getByLabel('开场镜头名称', { exact: true }).fill('候选镜头');
     await page.getByText('镜头时限', { exact: true }).click();
     await page.getByLabel('最多持续（秒）').fill('1.0035');
-    await page.getByRole('button', { name: '启用预设', exact: true }).click();
+    await page.getByRole('button', { name: '保存草稿', exact: true }).click();
     await expect(page.getByRole('alert')).toBeVisible();
     expect(store.preset.maps).toHaveLength(0);
     await page.getByLabel('最多持续（秒）').fill('1.003');
-    await page.getByRole('button', { name: '启用预设', exact: true }).click();
-    await expect.poll(() => store.preset.maps[0]?.opening?.maxMs).toBe(1003);
+    await page.getByRole('button', { name: '保存草稿', exact: true }).click();
+    await expect.poll(() => store.presets[0]?.preset.maps[0]?.opening?.maxMs).toBe(1003);
+    expect(store.preset.maps).toHaveLength(0);
+    await page.getByRole('button', { name: '返回运镜设置' }).click();
+    await page.getByRole('button', { name: '启用所选预设' }).click();
     await expect.poll(() => store.preset.maps.length).toBe(1);
     expect(calls).toEqual([]);
     director.useBrowser();
@@ -203,8 +206,18 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
     });
     await expect(page.getByLabel('预设名称')).toHaveValue('游戏内筛选候选');
     expect(store.preset.name).toBe('我的编排');
-    await page.getByRole('button', { name: '启用预设', exact: true }).click();
+    await expect
+      .poll(() => store.presets.some((item) => item.preset.name === '游戏内筛选候选'))
+      .toBe(true);
+    const draftReload = new OrchestrationStore(store.directory);
+    await draftReload.load();
+    expect(draftReload.preset.name).toBe('我的编排');
+    expect(draftReload.presets.some((item) => item.preset.name === '游戏内筛选候选')).toBe(true);
+    expect(store.preset.name).toBe('我的编排');
+    await page.getByRole('button', { name: '返回运镜设置' }).click();
+    await page.getByRole('button', { name: '启用所选预设' }).click();
     await expect.poll(() => store.preset.name).toBe('游戏内筛选候选');
+    await page.getByRole('button', { name: '管理与编辑预设' }).click();
     const reloaded = new OrchestrationStore(store.directory);
     await reloaded.load();
     expect(reloaded.preset).toEqual(modified);
@@ -243,9 +256,21 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.screenshot({ path: testInfo.outputPath('orchestration-1920.png') });
     await page.setViewportSize({ width: 1280, height: 720 });
-    await page.getByRole('button', { name: '启用预设', exact: true }).focus();
-    await expect(page.getByRole('button', { name: '启用预设', exact: true })).toBeFocused();
+    await page.getByRole('button', { name: '保存草稿', exact: true }).focus();
+    await expect(page.getByRole('button', { name: '保存草稿', exact: true })).toBeFocused();
     await page.screenshot({ path: testInfo.outputPath('orchestration-1280.png') });
+    await page.getByRole('button', { name: '放弃未保存更改' }).click();
+    const count = store.presets.length;
+    await page.getByRole('button', { name: '复制预设' }).click();
+    await expect.poll(() => store.presets.length).toBe(count + 1);
+    expect(store.presets.at(-1)?.preset).toEqual(modified);
+    await page.getByRole('button', { name: '新建预设' }).click();
+    await expect.poll(() => store.presets.length).toBe(count + 2);
+    expect(store.presets.at(-1)?.preset.maps).toEqual([]);
+    expect(store.preset).toEqual(modified);
+    await page.getByRole('button', { name: '返回运镜设置' }).click();
+    await page.getByRole('combobox', { name: '选择预设' }).selectOption(store.activePresetId);
+    await page.screenshot({ path: testInfo.outputPath('camera-common-populated.png') });
     const exportedLogs = await app.inject({
       method: 'POST',
       url: '/debug/support-bundle',
@@ -390,6 +415,8 @@ test('explicit MulNX stop confirms production effects, shows ownership errors, a
     preset: emptyOrchestrationPreset(),
     automaticEnabled: false,
     ready: true,
+    activePresetId: '00000000-0000-4000-8000-000000000000',
+    presets: [],
     status: {
       control: { mode: 'native', state: 'blocked' },
       connected: false,

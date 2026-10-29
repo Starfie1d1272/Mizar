@@ -85,6 +85,8 @@ export function CameraSettings() {
   const music = useLocalRead<MusicView>('/local/v1/music', 2000);
   const [advanced, setAdvanced] = useState(false);
   const [draft, setDraft] = useState<OrchestrationPreset | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [confirmed, setConfirmed] = useState<OrchestrationView | null>(null);
   const [message, setMessage] = useState('');
   const [failed, setFailed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -93,7 +95,20 @@ export function CameraSettings() {
     if (automaticOverride !== null && current?.automaticEnabled === automaticOverride)
       setAutomaticOverride(null);
   }, [automaticOverride, current?.automaticEnabled]);
-  const config = draft ?? current?.preset;
+  useEffect(() => {
+    if (
+      confirmed &&
+      current &&
+      current.activePresetId === confirmed.activePresetId &&
+      JSON.stringify(current.presets) === JSON.stringify(confirmed.presets) &&
+      JSON.stringify(current.preset) === JSON.stringify(confirmed.preset)
+    )
+      setConfirmed(null);
+  }, [confirmed, current]);
+  const catalog = confirmed ?? current;
+  const selected = selectedId ?? catalog?.activePresetId;
+  const selectedPreset = catalog?.presets.find((item) => item.id === selected)?.preset;
+  const config = draft ?? selectedPreset;
   const tracks = [
     ...new Map(
       Object.values(music?.config.groups ?? {})
@@ -121,6 +136,41 @@ export function CameraSettings() {
       setBusy(false);
     }
   };
+  const updateCatalog = async (body: object) => {
+    const result = (await command(
+      '/operator/orchestration',
+      body,
+    )) as unknown as OrchestrationView & { createdPresetId?: string };
+    if (!Array.isArray(result.presets) || !result.activePresetId)
+      throw new Error('预设状态未确认，请重试。');
+    setConfirmed(result);
+    return result;
+  };
+  const create = (copy: boolean) =>
+    void action(async () => {
+      const result = await updateCatalog({
+        action: 'create-preset',
+        ...(copy ? { sourceId: selected } : {}),
+      });
+      if (!result.createdPresetId) throw new Error('新预设未确认，请重新打开管理页。');
+      setSelectedId(result.createdPresetId);
+      setDraft(null);
+      setAdvanced(true);
+      setMessage(copy ? '已复制预设，可继续编辑。' : '已新建预设，可继续编辑。');
+    });
+  const importFile = (file: File) =>
+    void action(async () => {
+      if (file.size > 256 * 1024) throw new Error('预设文件过大，请选择较小的文件。');
+      const preset = orchestrationPresetSchema.parse(JSON.parse(await file.text()));
+      const result = await updateCatalog({ action: 'create-preset' });
+      if (!result.createdPresetId) throw new Error('新预设未确认，请重新打开管理页。');
+      setSelectedId(result.createdPresetId);
+      setDraft(preset);
+      setAdvanced(true);
+      await updateCatalog({ action: 'save-preset', id: result.createdPresetId, preset });
+      setDraft(null);
+      setMessage('已导入并保存草稿，请在启用前确认镜头和音频资源。');
+    });
   const edit = (next: OrchestrationPreset) => {
     setDraft(next);
     setMessage('');
@@ -161,21 +211,46 @@ export function CameraSettings() {
             }}
           />
           <h3>当前预设</h3>
-          <p>{current?.preset.name ?? '正在读取预设…'}</p>
-          <p>适用地图：{current?.preset.maps.map((map) => map.map).join('、') || '暂无'}</p>
-          <ImportPreset
-            disabled={busy}
-            onFile={(file) => {
+          <p>{catalog?.preset.name ?? '正在读取预设…'}</p>
+          <p>适用地图：{catalog?.preset.maps.map((map) => map.map).join('、') || '暂无'}</p>
+          <Select
+            label="选择预设"
+            value={selected ?? ''}
+            disabled={busy || Boolean(draft) || !catalog?.ready}
+            onChange={(event) => setSelectedId(event.target.value)}
+          >
+            {catalog?.presets.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.preset.name}
+                {item.id === catalog.activePresetId ? '（当前）' : ''}
+              </option>
+            ))}
+          </Select>
+          {selectedPreset ? (
+            <p>
+              所选预设适用地图：{selectedPreset.maps.map((map) => map.map).join('、') || '暂无'}
+            </p>
+          ) : null}
+          {catalog &&
+          selected === catalog.activePresetId &&
+          selectedPreset &&
+          JSON.stringify(selectedPreset) !== JSON.stringify(catalog.preset) ? (
+            <p>所选预设有已保存的更改，启用后生效。</p>
+          ) : null}
+          <Button
+            disabled={busy || Boolean(draft) || !selected || !catalog?.ready}
+            onClick={() =>
               void action(async () => {
-                if (file.size > 256 * 1024) throw new Error('预设文件过大，请选择较小的文件。');
-                setDraft(orchestrationPresetSchema.parse(JSON.parse(await file.text())));
-                setMessage('已载入配置草稿，请在启用前确认镜头和音频资源。');
-                setAdvanced(true);
-              });
-            }}
-          />
-          <p>导入后可检查并启用预设。</p>
-          {draft ? <p>有未启用的预设更改，可返回管理页继续编辑。</p> : null}
+                await updateCatalog({ action: 'activate-preset', id: selected });
+                setMessage('预设已启用。');
+              })
+            }
+          >
+            启用所选预设
+          </Button>
+          <ImportPreset disabled={busy || Boolean(draft)} onFile={importFile} />
+          <p>导入后会保存为草稿，确认资源后可启用。</p>
+          {draft ? <p>有未保存的预设更改，可返回管理页继续编辑。</p> : null}
           <Button onClick={() => setAdvanced(true)}>管理与编辑预设</Button>
         </>
       ) : (
@@ -184,7 +259,30 @@ export function CameraSettings() {
             <p role="status">正在读取运镜设置</p>
           ) : (
             <>
-              <p>编辑内容暂存在本页面；启用后保存为当前预设。</p>
+              <p>保存草稿后，可在运镜设置中启用。</p>
+              <Button
+                disabled={busy || Boolean(draft) || !catalog?.ready}
+                onClick={() => create(false)}
+              >
+                新建预设
+              </Button>
+              <Button
+                disabled={busy || Boolean(draft) || !selected || !catalog?.ready}
+                onClick={() => create(true)}
+              >
+                复制预设
+              </Button>
+              {draft ? (
+                <Button
+                  disabled={busy}
+                  onClick={() => {
+                    setDraft(null);
+                    setMessage('已放弃未保存的更改。');
+                  }}
+                >
+                  放弃未保存更改
+                </Button>
+              ) : null}
               <Field
                 label="预设名称"
                 value={config.name}
@@ -381,28 +479,18 @@ export function CameraSettings() {
                 onClick={() =>
                   void action(async () => {
                     const preset = orchestrationPresetSchema.parse(config);
-                    await command('/operator/orchestration', { action: 'configure', preset });
+                    await updateCatalog({ action: 'save-preset', id: selected, preset });
                     setDraft(null);
-                    setMessage('预设已保存。');
+                    setMessage('草稿已保存。');
                   })
                 }
               >
-                启用预设
+                保存草稿
               </Button>
               <details>
                 <summary>导入与导出</summary>
-                <p>请先准备对应的镜头和音频资源，再保存预设。</p>
-                <ImportPreset
-                  disabled={busy}
-                  onFile={(file) => {
-                    void action(async () => {
-                      if (file.size > 256 * 1024)
-                        throw new Error('预设文件过大，请选择较小的文件。');
-                      setDraft(orchestrationPresetSchema.parse(JSON.parse(await file.text())));
-                      setMessage('已载入配置草稿，请在启用前确认镜头和音频资源。');
-                    });
-                  }}
-                />
+                <p>启用前请确认镜头和音频资源可用。</p>
+                <ImportPreset disabled={busy || Boolean(draft)} onFile={importFile} />
                 <Button
                   disabled={busy}
                   onClick={() =>
