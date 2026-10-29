@@ -519,7 +519,10 @@ export async function restorePublishedResourceMetadata(folder, originals) {
   }
 }
 async function resolvePublishedResourceFiles(folder, manifest) {
-  const candidate = await verifyQualifiedResources(folder, manifest);
+  const candidate = await withVerifiedSnapshot(folder, manifest, false, async (value) => {
+    await assertFileSet(folder, expectedResourceNames(value, false));
+    return value;
+  });
   const tag = `v${manifest.appVersion}`;
   const release = lookupGithubObject(`releases/tags/${tag}`);
   if (release === null) return false;

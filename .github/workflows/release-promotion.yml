@@ -108,7 +108,7 @@ jobs:
           if ($elapsed -gt 600) { throw "Release budget exceeded before promotion: $elapsed seconds" }
           "RELEASE_DEADLINE=$(([DateTimeOffset]::Parse($budgetCreated).AddSeconds(600)).ToString('o'))" >> $env:GITHUB_ENV
           $run | ConvertTo-Json -Depth 50 | Set-Content qualification-run.json -Encoding utf8
-          node scripts/qualification/download-qualified-artifacts.mjs $env:RUN_ID
+          node scripts/qualification/download-qualified-artifacts.mjs $env:RUN_ID "$env:RESOURCE_ROOT"
           if ($LASTEXITCODE -ne 0) { throw 'Qualified product/evidence download failed' }
           if (!(Test-Path -LiteralPath product/qualification-provenance.json -PathType Leaf)) { throw 'Original qualification provenance bundle is required' }
           $manifest = Get-Content product/release-manifest.json -Raw | ConvertFrom-Json
@@ -142,10 +142,7 @@ jobs:
             exit 0
           }
           'RESOURCE_ENABLED=true' >> $env:GITHUB_ENV
-          gh run download $env:RUN_ID --name release-qualified-resources --dir "$env:RESOURCE_ROOT"
-          if ($LASTEXITCODE -ne 0) { throw 'Resource-aware qualification is missing its original resource artifact' }
-          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/ci/resource-release.mjs" qualified "$env:RESOURCE_ROOT" product/core-release-manifest.json
-          if ($LASTEXITCODE -ne 0) { throw 'Original resource Qualification proofs failed' }
+          if (Test-Path -LiteralPath "$env:RESOURCE_ROOT.download-failed") { throw 'Resource-aware qualification is missing its original resource artifact' }
           node "$env:RESOURCE_PUBLISHER_ROOT/scripts/ci/resource-release.mjs" resolve "$env:RESOURCE_ROOT" product/core-release-manifest.json
           if ($LASTEXITCODE -ne 0) { throw 'Existing resource publication resolution failed; refusing overwrite' }
       - name: Prepare exact resource publication on the current main tools

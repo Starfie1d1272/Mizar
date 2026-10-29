@@ -518,6 +518,40 @@ export class BoxClient {
       }
     });
   }
+  // A fresh temporary directory isolates each attempt. Never replay an uncertain chunk.
+  async uploadChunks(path, name, bytes, chunkSize = 4 * 1024 * 1024) {
+    const url = this.temporaryUrl(await this.api('upload-link', path));
+    url.searchParams.set('ret-json', '1');
+    for (let start = 0; start < bytes.length; start += chunkSize) {
+      const end = Math.min(start + chunkSize, bytes.length);
+      console.log(`Box 分块 ${start}-${end - 1}/${bytes.length}`);
+      const form = new FormData();
+      form.set('parent_dir', path);
+      form.set('replace', '0');
+      form.set('file', new Blob([bytes.subarray(start, end)]), name);
+      const response = await checkedFetch(
+        url,
+        {
+          method: 'POST',
+          body: form,
+          redirect: 'error',
+          headers: {
+            'Content-Range': `bytes ${start}-${end - 1}/${bytes.length}`,
+            'Content-Disposition': `attachment; filename="${name}"`,
+          },
+        },
+        180000,
+        this.uploadTransport,
+      );
+      const result = await response.json();
+      requireValue(
+        end === bytes.length
+          ? Array.isArray(result) && result.length === 1 && result[0].name === name
+          : result?.success === true,
+        '分块上传回执不一致；保留现场',
+      );
+    }
+  }
   async move(from, to, name) {
     await this.api('sync-batch-move-item', undefined, 'POST', {
       src_parent_dir: from,
@@ -921,6 +955,44 @@ export async function syncResourceFiles({
     await verifyRemote(box, `${folder}/${file.name}`, file);
   }
 }
+// A unique staging directory avoids mixing chunks from previous attempts. Only
+// a fully read-back match may enter Runtime; failed staging is left untouched.
+async function uploadRuntimeChunks(box, folder, file) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const staging = `/Archive/mizar-runtime-${randomUUID()}`;
+    await box.api('dir', staging, 'POST', { operation: 'mkdir' });
+    try {
+      await box.uploadChunks(staging, file.name, file.bytes);
+      await verifyRemote(box, `${staging}/${file.name}`, file);
+    } catch (error) {
+      if (!error.uploadOutcomeUnknown) {
+        error.retryableRead = false;
+        throw error;
+      }
+      let confirmed;
+      try {
+        confirmed = await waitForWrittenFile(box, staging, file.name, file);
+      } catch (readError) {
+        readError.retryableRead = false;
+        throw readError;
+      }
+      if (!confirmed) {
+        if (attempt === 2) throw error;
+        console.log(`Box 分块结果未落盘，使用新暂存目录重试 ${attempt + 1}/2`);
+        continue;
+      }
+    }
+    const target = (await box.list(folder)).filter((entry) => entry.name === file.name);
+    requireValue(
+      target.length <= 1 && target.every((entry) => entry.type === 'file'),
+      'Runtime 目标无效',
+    );
+    if (target.length) await verifyRemote(box, `${folder}/${file.name}`, file);
+    else await moveVerified(box, staging, folder, file);
+    if ((await box.list(staging)).length === 0) await box.api('dir', staging, 'DELETE');
+    return;
+  }
+}
 export async function syncRuntimeFiles({ box, version, files }) {
   requireValue(
     /^\d+\.\d+\.\d+$/.test(version) &&
@@ -956,7 +1028,8 @@ export async function syncRuntimeFiles({ box, version, files }) {
   for (const file of files.filter((f) => existing.some((e) => e.name === f.name)))
     await verifyRemote(box, folder + '/' + file.name, file);
   for (const file of files.filter((f) => !existing.some((e) => e.name === f.name))) {
-    await box.upload(folder, file.name, file.bytes);
+    if (file.name === MACHINE_METADATA_NAME) await box.upload(folder, file.name, file.bytes);
+    else await uploadRuntimeChunks(box, folder, file);
     await verifyRemote(box, folder + '/' + file.name, file);
   }
 }
@@ -1060,7 +1133,7 @@ export async function probe(box) {
   const expected = { size: bytes.length, sha256: digest(bytes) };
   await box.api('dir', folder, 'POST', { operation: 'mkdir' });
   try {
-    await box.upload(folder, name, bytes);
+    await box.uploadChunks(folder, name, bytes, Math.ceil(bytes.length / 2));
     await verifyRemote(box, `${folder}/${name}`, expected);
     const metadata = await box.api('file', `${folder}/${name}`);
     requireValue(metadata, '探测文件元数据读取失败');
@@ -1075,7 +1148,7 @@ export async function probe(box) {
     requireValue((await box.list(folder)).length === 0, '探测目录出现其他文件；保留目录供核对');
     await box.api('dir', folder, 'DELETE');
   }
-  return '接口探测通过：列目录、上传、元数据、下载校验、移动与删除；Stable 保持原样。';
+  return '接口探测通过：列目录、分块上传、元数据、下载校验、移动与删除；Stable 保持原样。';
 }
 
 async function github(path) {
