@@ -54,6 +54,7 @@ const stateSchema = z
     lastDesktop: obsAudioBindingSchema.nullable().default(null),
     desktopMicrophone: obsAudioBindingSchema.nullable().default(null),
     independentCommentaryDisabled: z.boolean().default(false),
+    cancelledCommentaryRevision: z.string().uuid().nullable().default(null),
     waitingIndependent: z
       .object({
         id: z.string().uuid(),
@@ -135,6 +136,7 @@ export class ObsAudioRouting {
         lastDesktop: null,
         desktopMicrophone: null,
         independentCommentaryDisabled: false,
+        cancelledCommentaryRevision: null,
         waitingIndependent: null,
         transition: null,
         bindings: { game: null, remoteCommentary: null, microphone: null },
@@ -191,6 +193,7 @@ export class ObsAudioRouting {
       lastDesktop: state.lastDesktop,
       desktopMicrophone: state.desktopMicrophone,
       independentCommentaryDisabled: state.independentCommentaryDisabled,
+      cancelledCommentaryRevision: state.cancelledCommentaryRevision,
       waitingIndependent: state.waitingIndependent,
       transition: null,
       bindings,
@@ -530,6 +533,7 @@ export class ObsAudioRouting {
       bindings: state.bindings,
       desktopMicrophone: state.desktopMicrophone,
       independentCommentaryDisabled: state.independentCommentaryDisabled,
+      cancelledCommentaryRevision: state.cancelledCommentaryRevision,
       waitingIndependent: state.waitingIndependent,
     };
   }
@@ -600,10 +604,20 @@ export class ObsAudioRouting {
     await this.saveState({ ...state, revision: randomUUID(), waitingIndependent });
     return waitingIndependent;
   }
-  async cancelIndependentWait(id?: string) {
+  async cancelIndependentWait(id?: string, userCancelled = false, revision?: string) {
     const state = await this.load();
+    if (revision && state.revision !== revision) throw new Error('audio_revision_changed');
+    if (state.transition) throw new Error('audio_mode_pending');
     if (!state.waitingIndependent || (id && state.waitingIndependent.id !== id)) return false;
-    await this.saveState({ ...state, revision: randomUUID(), waitingIndependent: null });
+    await this.saveState({
+      ...state,
+      revision: randomUUID(),
+      cancelledCommentaryRevision:
+        userCancelled && !state.desktop
+          ? state.waitingIndependent.commentaryRevision
+          : state.cancelledCommentaryRevision,
+      waitingIndependent: null,
+    });
     return true;
   }
   async adoptPreparedBindings(
@@ -686,13 +700,11 @@ export class ObsAudioRouting {
     const state = await this.load();
     if (state.revision !== revision) throw new Error('audio_revision_changed');
     if (state.transition) throw new Error('audio_mode_pending');
-    if (mode === 'desktop' && state.desktop) {
-      if (state.waitingIndependent) {
-        await this.cancelIndependentWait(state.waitingIndependent.id);
-        return;
-      }
-      throw new Error('audio_mode_already_desktop');
+    if (mode === 'desktop' && state.waitingIndependent) {
+      await this.cancelIndependentWait(state.waitingIndependent.id, true);
+      return;
     }
+    if (mode === 'desktop' && state.desktop) throw new Error('audio_mode_already_desktop');
     let ids: Partial<Record<ObsAudioRole, string>> = {};
     let desktop: State['desktop'] = null;
     let desktopMicrophone: State['desktopMicrophone'] = null;
@@ -958,6 +970,7 @@ export class ObsAudioRouting {
       lastDesktop: state.lastDesktop,
       desktopMicrophone: state.desktopMicrophone,
       independentCommentaryDisabled: state.independentCommentaryDisabled,
+      cancelledCommentaryRevision: state.cancelledCommentaryRevision,
       waitingIndependent: state.waitingIndependent,
       transition: state.transition,
       bindings: { ...state.bindings, [command.role]: binding },

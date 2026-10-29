@@ -117,9 +117,9 @@ export function ObsAudioRouting() {
       setBusy(false);
     }
   }
-  async function switchMode(mode: 'desktop' | 'independent') {
+  async function switchMode(mode: 'desktop' | 'independent' | 'cancel') {
     if (!status) return;
-    const cancelling = mode === 'desktop' && Boolean(status.waitingIndependent);
+    const cancelling = mode === 'cancel';
     const response = await fetch('/operator/obs/audio-mode', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -186,7 +186,9 @@ export function ObsAudioRouting() {
             {status.transition
               ? '正在核对切换状态'
               : status.waitingIndependent
-                ? '桌面混音，等待解说应用后切回'
+                ? status.desktop
+                  ? '桌面混音，等待解说应用后切回'
+                  : '独立分路，等待解说应用后启用'
                 : status.desktop
                   ? '桌面混音'
                   : '独立分路'}
@@ -214,7 +216,9 @@ export function ObsAudioRouting() {
               Boolean(status.desktop && !status.transition && !status.waitingIndependent) ||
               (chooseDesktop && !desktopSelection && !status.waitingIndependent)
             }
-            onClick={() => void run(() => switchMode('desktop'))}
+            onClick={() =>
+              void run(() => switchMode(status.waitingIndependent ? 'cancel' : 'desktop'))
+            }
           >
             {status.waitingIndependent ? '取消等待' : '切换桌面混音'}
           </Button>{' '}

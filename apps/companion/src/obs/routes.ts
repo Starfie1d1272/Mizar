@@ -176,20 +176,24 @@ export function registerObsRoutes(
           })
           .strict(),
         z.object({ revision: z.string().uuid(), mode: z.literal('independent') }).strict(),
+        z.object({ revision: z.string().uuid(), mode: z.literal('cancel') }).strict(),
       ])
       .safeParse(request.body);
-    if (!parsed.success || !options.gameAudio)
-      return reply.code(400).send({ error: 'audio_mode_invalid' });
+    if (!parsed.success) return reply.code(400).send({ error: 'audio_mode_invalid' });
     try {
+      if (parsed.data.mode === 'cancel')
+        return { ok: true, ...(await options.adapter.cancelAudioWait(parsed.data.revision)) };
+      if (!options.gameAudio) throw new Error('audio_policy_unavailable');
+      const command = parsed.data;
       const music = options.musicDirector?.();
       if (!music) throw new Error('music_unavailable');
       const result = await options.gameAudio.switchMode(() =>
-        parsed.data.mode === 'independent'
-          ? options.adapter.requestIndependentMode(parsed.data.revision, music)
+        command.mode === 'independent'
+          ? options.adapter.requestIndependentMode(command.revision, music)
           : options.adapter.switchAudioMode(
-              parsed.data.revision,
+              command.revision,
               'desktop',
-              parsed.data.selectionId,
+              command.selectionId,
               music,
             ),
       );

@@ -676,6 +676,14 @@ export class ObsAdapter {
       this.withObs((obs, endpoint) => this.audioRouting!.read(obs, endpoint), 12000),
     );
   }
+  cancelAudioWait(revision: string) {
+    if (!this.audioRouting) throw new Error('audio_routing_unavailable');
+    return this.serial(async () => {
+      if (!(await this.audioRouting!.cancelIndependentWait(undefined, true, revision)))
+        throw new Error('audio_wait_cancelled');
+      return { cancelled: true };
+    });
+  }
   async requestIndependentMode(
     revision: string,
     music: Pick<
@@ -732,7 +740,11 @@ export class ObsAdapter {
     )
       return;
     const preference = await this.commentary.owner.get();
-    if (preference.preference.mode === 'disabled') return;
+    if (
+      preference.preference.mode === 'disabled' ||
+      initial.cancelledCommentaryRevision === preference.revision
+    )
+      return;
     await this.configurationMutation(() =>
       this.audioConfiguration.run(async (obs, endpoint) => {
         const current = await this.audioRouting!.modeRecoveryState();
