@@ -782,7 +782,7 @@ export class ProjectionCoordinator {
     );
   }
   resetObserverAssist(): void {
-    this.observerTimeline.clear();
+    this.observerTimeline.resetForMap(this.nowMonotonicMs());
     this.refreshAssist();
   }
   private refreshOperator(): ProjectionBundle {

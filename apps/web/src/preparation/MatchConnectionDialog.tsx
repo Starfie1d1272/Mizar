@@ -18,6 +18,7 @@ type Request = {
 /** A draft only becomes the shared current connection on explicit confirmation. */
 export function MatchConnectionDialog() {
   const [request, setRequest] = useState<Request | null>(null);
+  const [savedView, setSavedView] = useState<ConnectionPreparationView | null>(null);
   const pending = useRef<Request | null>(null);
   const operation = useRef(false);
   const draftRevision = useRef<string | undefined>(undefined);
@@ -54,6 +55,7 @@ export function MatchConnectionDialog() {
           setNextMap(false);
           pending.current?.resolve(false);
           const next = { view, resolve };
+          setSavedView(view);
           pending.current = next;
           setRequest(next);
           setError('');
@@ -95,7 +97,7 @@ export function MatchConnectionDialog() {
     setBusy(true);
     setError('');
     try {
-      if (!input.trim() && !request.view.connection) throw new Error('请填写本图授权的观战连接。');
+      if (!input.trim() && !savedView?.connection) throw new Error('请填写本图授权的观战连接。');
       if (mode === 'connect' && input.trim()) {
         if (advanced && (!early.trim() || !program.trim()))
           throw new Error('请填写早源与节目源两个端点。');
@@ -118,6 +120,7 @@ export function MatchConnectionDialog() {
       })) as unknown as ConnectionPreparationView;
       draftRevision.current = requireConnectionRevision(saved.revision);
       if (pending.current !== request) return;
+      setSavedView(saved);
       // Host checks current game identity, production eligibility and configuration revision.
       if (window.__TAURI_INTERNALS__) {
         const result = await desktopInvoke<{ useMulnx?: boolean } | null>('observer_command', {
@@ -137,7 +140,7 @@ export function MatchConnectionDialog() {
       setBusy(false);
     }
   };
-  const endpoints = connection ?? request?.view.connection;
+  const endpoints = connection ?? savedView?.connection;
   return (
     <Dialog
       open={Boolean(request)}
@@ -153,47 +156,66 @@ export function MatchConnectionDialog() {
         autoComplete="off"
         disabled={busy || confirmed || mode === 'seamless'}
         onChange={(event) => {
+          mapId.current = crypto.randomUUID();
           setInput(event.target.value);
           setCopied(false);
         }}
         placeholder="connect IP:27025;password 密码"
         message="粘贴本图授权连接；留空可沿用上次确认的地址和密码。重试早源请使用专用重试入口。"
       />
-      {request?.view.connection ? (
+      {request && savedView?.connection ? (
         <label>
           <input
             type="checkbox"
             checked={nextMap || mode === 'seamless'}
             disabled={busy || confirmed || mode === 'seamless'}
-            onChange={(event) => setNextMap(event.target.checked)}
+            onChange={(event) => {
+              mapId.current = crypto.randomUUID();
+              setNextMap(event.target.checked);
+            }}
           />
           这是下一张地图
         </label>
       ) : null}
-      {request?.view.connection ? (
+      {request && savedView?.connection ? (
         <label>
           <input
             type="checkbox"
             checked={mode === 'seamless'}
             disabled={busy || confirmed}
-            onChange={(event) => setMode(event.target.checked ? 'seamless' : 'connect')}
+            onChange={(event) => {
+              mapId.current = crypto.randomUUID();
+              setMode(event.target.checked ? 'seamless' : 'connect');
+            }}
           />
           服务器已无缝换图，保持现有连接
         </label>
       ) : null}
-      <details open={advanced} onToggle={(event) => setAdvanced(event.currentTarget.open)}>
+      <details
+        open={advanced}
+        onToggle={(event) => {
+          if (advanced !== event.currentTarget.open) mapId.current = crypto.randomUUID();
+          setAdvanced(event.currentTarget.open);
+        }}
+      >
         <summary>高级设置</summary>
         <Field
           label="早源 IPv4:端口"
           value={early}
           disabled={busy || confirmed || mode === 'seamless'}
-          onChange={(event) => setEarly(event.target.value)}
+          onChange={(event) => {
+            mapId.current = crypto.randomUUID();
+            setEarly(event.target.value);
+          }}
         />
         <Field
           label="节目源 IPv4:端口"
           value={program}
           disabled={busy || confirmed || mode === 'seamless'}
-          onChange={(event) => setProgram(event.target.value)}
+          onChange={(event) => {
+            mapId.current = crypto.randomUUID();
+            setProgram(event.target.value);
+          }}
         />
         <p>用于自定义端口或不同服务器；密码沿用上方连接中的值。</p>
       </details>
@@ -219,12 +241,21 @@ export function MatchConnectionDialog() {
         HUD
         自动隐藏需要启动前已配置的本机控制台记录；请从游戏与观战设置检查，工作台不会自动开启记录。
       </p>
-      {connection ? (
+      {connection || (mode === 'connect' && !input.trim() && request && savedView?.connection) ? (
         <Button
           disabled={busy}
           onClick={() => {
-            void navigator.clipboard
-              .writeText(formatObserverConnection(connection))
+            void (async () => {
+              const text = connection
+                ? formatObserverConnection(connection)
+                : (
+                    (await command('/operator/observer-assist', {
+                      action: 'copy-connection',
+                      expectedRevision: requireConnectionRevision(draftRevision.current),
+                    })) as unknown as { command: string }
+                  ).command;
+              await navigator.clipboard.writeText(text);
+            })()
               .then(() => setCopied(true))
               .catch(() => setError('复制未完成，请重试。'));
           }}

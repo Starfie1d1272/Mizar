@@ -129,7 +129,7 @@ it('confirms a map with the saved private connection and keeps retries idempoten
   };
   store.setConnection(connection);
   const id = crypto.randomUUID();
-  const write = (revision: string, mode: string, value?: typeof connection) =>
+  const write = (revision: string, mode: string, value?: typeof connection, nextMap = false) =>
     app.inject({
       method: 'POST',
       url: '/operator/observer-assist',
@@ -138,6 +138,7 @@ it('confirms a map with the saved private connection and keeps retries idempoten
         action: 'map-connection',
         id,
         mode,
+        nextMap,
         expectedRevision: revision,
         ...(value ? { connection: value } : {}),
       },
@@ -147,10 +148,79 @@ it('confirms a map with the saved private connection and keeps retries idempoten
     const revision = store.revision;
     expect((await write(revision, 'connect')).statusCode).toBe(200);
     expect(store.revision).toBe(revision);
+    expect(
+      (await write(revision, 'connect', { ...connection, password: 'changed' })).statusCode,
+    ).toBe(409);
+    expect((await write(revision, 'seamless')).statusCode).toBe(409);
+    expect((await write(revision, 'connect', undefined, true)).statusCode).toBe(409);
+    expect(store.configured()).toEqual(connection);
+    const copy = (origin: string, expectedRevision: string) =>
+      app.inject({
+        method: 'POST',
+        url: '/operator/observer-assist',
+        headers: { origin },
+        payload: { action: 'copy-connection', expectedRevision },
+      });
+    expect((await copy('https://example.org', revision)).statusCode).toBe(403);
+    expect((await copy('http://127.0.0.1:3000', crypto.randomUUID())).statusCode).toBe(409);
+    const copied = await copy('http://127.0.0.1:3000', revision);
+    expect(copied.headers['cache-control']).toBe('no-store');
+    expect(copied.json<{ command: string }>().command).toBe(
+      'password "synthetic"; connect 127.0.0.1:27026',
+    );
     expect(JSON.stringify((await app.inject('/local/v1/observer-assist')).json())).not.toContain(
       'synthetic',
     );
     expect(store.configured()).toEqual(connection);
+  } finally {
+    await app.close();
+  }
+});
+
+it('waits for new map data and restores the private projection after the transition', async () => {
+  const app = buildApp({ gsiToken: 'test-gsi-token' });
+  const gsi = (name: string) =>
+    app.inject({
+      method: 'POST',
+      url: '/gsi',
+      payload: {
+        auth: { token: 'test-gsi-token' },
+        provider: { appid: 730 },
+        map: { name, phase: 'live', round: 1 },
+      },
+    });
+  const get = async () =>
+    (await app.inject('/local/v1/observer-assist')).json<{
+      revision: string;
+      waitingForMap: boolean;
+    }>();
+  const confirm = async (nextMap: boolean) =>
+    app.inject({
+      method: 'POST',
+      url: '/operator/observer-assist',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: {
+        action: 'map-connection',
+        id: crypto.randomUUID(),
+        mode: 'connect',
+        nextMap,
+        expectedRevision: (await get()).revision,
+        connection: {
+          earlyEndpoint: '127.0.0.1:27025',
+          programEndpoint: '127.0.0.1:27026',
+          password: 'synthetic',
+        },
+      },
+    });
+  try {
+    expect((await gsi('de_ancient')).statusCode).toBe(204);
+    expect((await confirm(false)).statusCode).toBe(200);
+    expect((await confirm(true)).statusCode).toBe(200);
+    expect((await get()).waitingForMap).toBe(true);
+    expect((await gsi('de_ancient')).statusCode).toBe(204);
+    expect((await get()).waitingForMap).toBe(true);
+    expect((await gsi('de_mirage')).statusCode).toBe(204);
+    expect((await get()).waitingForMap).toBe(false);
   } finally {
     await app.close();
   }

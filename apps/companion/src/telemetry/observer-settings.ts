@@ -7,6 +7,7 @@ import {
   type GameAutomationSettings,
   DEFAULT_OBSERVER_SETTINGS,
   observerConnectionSchema,
+  formatObserverConnection,
   type ObserverSettings,
   type ObserverConnection,
 } from '@mizar/protocol/assist';
@@ -113,9 +114,17 @@ export class ObserverSettingsStore {
     value?: ObserverConnection,
     nextMap = false,
   ) {
-    if (this.mapConnection?.id === id) return;
     const connection = value ? observerConnectionSchema.parse(value) : this.connection;
     if (!connection) throw new Error('connection_required');
+    if (this.mapConnection?.id === id) {
+      if (
+        this.mapConnection.mode !== mode ||
+        this.mapConnection.nextMap !== (nextMap || mode === 'seamless') ||
+        JSON.stringify(connection) !== JSON.stringify(this.connection)
+      )
+        throw new Error('map_intent_conflict');
+      return;
+    }
     if (mode === 'seamless' && JSON.stringify(connection) !== JSON.stringify(this.connection))
       throw new Error('seamless_connection_changed');
     this.connection = connection;
@@ -172,6 +181,7 @@ export function registerObserverSettings(
       expectedRevision: z.uuid(),
     }),
     z.strictObject({ action: z.literal('configure-game'), settings: gameAutomationSettingsSchema }),
+    z.strictObject({ action: z.literal('copy-connection'), expectedRevision: z.uuid() }),
   ]);
   app.post('/operator/observer-assist', { bodyLimit: 4096 }, async (request, reply) => {
     if (policy.mode !== 'loopback' || !checkLocalWebOrigin(policy, request.headers.origin).allowed)
@@ -179,6 +189,14 @@ export function registerObserverSettings(
     const parsed = schema.safeParse(request.body);
     if (!parsed.success)
       return reply.code(400).send({ message: '请核对时间设置、GOTV 地址和密码格式。' });
+    if (parsed.data.action === 'copy-connection') {
+      const connection = store.configured();
+      if (parsed.data.expectedRevision !== store.revision || !connection)
+        return reply.code(409).send({ message: '本图连接已变化，请重新打开后复制。' });
+      return reply
+        .header('cache-control', 'no-store')
+        .send({ command: formatObserverConnection(connection) });
+    }
     if (parsed.data.action === 'configure') await store.configure(parsed.data.settings);
     else if (parsed.data.action === 'configure-game')
       await store.configureGame(parsed.data.settings);
@@ -195,7 +213,9 @@ export function registerObserverSettings(
             parsed.data.connection,
             parsed.data.nextMap,
           );
-        } catch {
+        } catch (error) {
+          if (error instanceof Error && error.message === 'map_intent_conflict')
+            return reply.code(409).send({ message: '本图连接意图已变化，请重新确认。' });
           return reply.code(400).send({ message: '请填写本图连接；无缝换图只能沿用已有连接。' });
         }
       } else store.setConnection(parsed.data.connection);
