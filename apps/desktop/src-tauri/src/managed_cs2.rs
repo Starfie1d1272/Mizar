@@ -709,7 +709,8 @@ impl ManagedCs2 {
                 || requires_service,
             running: any_cs2_running(&self.log)?,
             uncertain: journal.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch)
-                || self.store.mulnx_observer_unconfirmed()?,
+                || self.store.mulnx_observer_unconfirmed()?
+                || (journal.is_some() && self.log.state_root.join("data/mulnx-launch/pending.json").exists()),
             requires_service,
         })
     }
@@ -2076,6 +2077,7 @@ mod tests {
         std::fs::create_dir_all(&launch).unwrap();
         std::fs::write(launch.join("pending.json"), b"{}").unwrap();
         assert_eq!(managed.status().unwrap()["phase"], "uncertain");
+        assert!(managed.startup_recovery_status().unwrap().uncertain);
         std::fs::remove_dir_all(root).unwrap();
     }
 
