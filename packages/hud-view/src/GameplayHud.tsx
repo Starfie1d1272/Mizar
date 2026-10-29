@@ -1,3 +1,4 @@
+import { AssetFonts, assetStyle, useAssetUrl } from './assets.js';
 import { presentationBoundaryKey } from './presentation-boundary.js';
 import type { RadarProps } from './widgets/radar/Radar.js';
 import type { CSSProperties, ReactElement } from 'react';
@@ -78,6 +79,7 @@ export function GameplayHud({
   rendererRegistry = HUD_RENDERER_REGISTRY,
   broadcastBranding,
 }: GameplayHudProps) {
+  const resolve = useAssetUrl();
   const programFresh = snapshot?.payload.status.telemetry === 'fresh';
   const radarAvailable = radarSource !== undefined || radarSnapshot != null;
   if (!programFresh && !radarAvailable) return null;
@@ -98,8 +100,9 @@ export function GameplayHud({
         className="gameplay-hud"
         data-gameplay-hud="true"
         data-hud-preset-id={resolvedPreset.preset.id}
-        style={themeStyle(resolvedPreset.theme)}
+        style={{ ...themeStyle(resolvedPreset.theme), ...assetStyle(resolve) }}
       >
+        <AssetFonts />
         <BroadcastPause
           snapshot={snapshot}
           resolvedPreset={resolvedPreset}
@@ -115,8 +118,9 @@ export function GameplayHud({
       className="gameplay-hud"
       data-gameplay-hud="true"
       data-hud-preset-id={resolvedPreset.preset.id}
-      style={themeStyle(resolvedPreset.theme)}
+      style={{ ...themeStyle(resolvedPreset.theme), ...assetStyle(resolve) }}
     >
+      <AssetFonts />
       {HUD_WIDGET_REGISTRY.map((descriptor) => {
         const placement = resolvedPreset.layout.widgets[descriptor.id];
         if (placement === undefined || !placement.visible) return null;

@@ -1,3 +1,4 @@
+import { useAssetUrl } from '../../assets.js';
 import { hudDesignForVariant } from '../../hud-design.js';
 import { useMemo } from 'react';
 import { RadarView, type RadarViewSource } from '@mizar-hud/radar-view';
@@ -21,6 +22,7 @@ export function Radar({
   presentationRevision,
   appearance = 'default',
 }: RadarProps) {
+  const resolveAssetUrl = useAssetUrl();
   const frame = useMemo(() => toRadarViewFrame(snapshot ?? null), [snapshot]);
   return (
     <RadarView
@@ -30,6 +32,7 @@ export function Radar({
       zoomMode={zoomMode}
       presentationRevision={presentationRevision}
       assetBaseUrl="/"
+      resolveAssetUrl={resolveAssetUrl}
       className="radar"
     />
   );

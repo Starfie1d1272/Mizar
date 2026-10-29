@@ -1,3 +1,4 @@
+import { useAssetUrl } from './assets.js';
 import type { BpSnapshot } from '@mizar/protocol/bp';
 import { getMapThumbnail } from '@mizar/cs2-assets';
 import { useState } from 'react';
@@ -55,9 +56,10 @@ function TeamLogo({
 }
 
 function CompactMapArt({ mapName }: { readonly mapName: string }) {
+  const resolveAssetUrl = useAssetUrl();
   const image = getMapThumbnail(mapName);
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
-  const src = image?.outputPath;
+  const src = image ? resolveAssetUrl(image.outputPath) : undefined;
   return (
     <div className="bp-compact-art">
       {src && src !== failedSrc ? (
@@ -176,6 +178,7 @@ export function BpPresentation({
   readonly snapshot: BpSnapshot | null;
   readonly animate?: boolean;
 }) {
+  const resolveAssetUrl = useAssetUrl();
   const projection = snapshot?.projection;
   const visible = snapshot !== null && snapshot.state !== 'hidden';
   const effectiveRevealedCount = snapshot?.revealedCount ?? 0;
@@ -231,7 +234,9 @@ export function BpPresentation({
                   aria-hidden={!shown}
                   data-entrant={card.entrant ?? 'none'}
                 >
-                  {image ? <img className="bp-map-art" src={image.outputPath} alt="" /> : null}
+                  {image ? (
+                    <img className="bp-map-art" src={resolveAssetUrl(image.outputPath)} alt="" />
+                  ) : null}
                   <div className="bp-shade" />
                   <span className="bp-number">{String(index + 1).padStart(2, '0')}</span>
                   <span className="bp-badge">{card.kind.toUpperCase()}</span>

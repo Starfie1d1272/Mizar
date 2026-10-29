@@ -1,3 +1,4 @@
+import { assetCssUrl, useAssetUrl } from '../../assets.js';
 import { StatGlyph } from '../player-status-effects/StatGlyph.js';
 import {
   focusedPlayerSettingsSchema,
@@ -34,6 +35,7 @@ import {
 } from './presentation.js';
 
 function Icon({ asset }: { readonly asset: PlayerRailAsset | null }) {
+  const resolveAssetUrl = useAssetUrl();
   if (asset === null) return null;
   return (
     <span
@@ -41,7 +43,7 @@ function Icon({ asset }: { readonly asset: PlayerRailAsset | null }) {
       role="img"
       aria-label={asset.canonicalKey}
       data-asset-id={asset.canonicalKey}
-      style={{ '--focused-icon': `url("${asset.outputPath}")` } as CSSProperties}
+      style={{ '--focused-icon': assetCssUrl(resolveAssetUrl(asset.outputPath)) } as CSSProperties}
     />
   );
 }
@@ -175,6 +177,7 @@ function FocusedPlayerFace({
   readonly pending?: boolean;
   readonly combatFeedback?: CombatFeedbackState | null;
 }) {
+  const resolveAssetUrl = useAssetUrl();
   const [displayAvatarUrl, setDisplayAvatarUrl] = useState<string | null>(null);
   const [failedAvatarUrl, setFailedAvatarUrl] = useState<string | null>(null);
   useLayoutEffect(() => {
@@ -349,7 +352,9 @@ function FocusedPlayerFace({
                     data-asset-id={p.reserveMagazine.asset.canonicalKey}
                     style={
                       {
-                        '--focused-icon': `url("${p.reserveMagazine.asset.outputPath}")`,
+                        '--focused-icon': assetCssUrl(
+                          resolveAssetUrl(p.reserveMagazine.asset.outputPath),
+                        ),
                       } as CSSProperties
                     }
                   />

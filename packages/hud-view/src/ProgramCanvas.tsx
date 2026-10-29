@@ -1,3 +1,4 @@
+import { AssetFonts, assetStyle, useAssetUrl } from './assets.js';
 import type { ReactNode } from 'react';
 
 import './program.css';
@@ -11,11 +12,13 @@ export interface ProgramCanvasProps {
 }
 
 export function ProgramCanvas({ children, className }: ProgramCanvasProps) {
+  const resolve = useAssetUrl();
   const canvasClassName =
     className === undefined ? 'program-canvas' : `program-canvas ${className}`;
 
   return (
-    <div className={canvasClassName} data-program-canvas="true">
+    <div className={canvasClassName} data-program-canvas="true" style={assetStyle(resolve)}>
+      <AssetFonts />
       {children}
     </div>
   );

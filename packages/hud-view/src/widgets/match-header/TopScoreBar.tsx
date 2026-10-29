@@ -1,3 +1,4 @@
+import { assetCssUrl, useAssetUrl } from '../../assets.js';
 import { TeamLogo } from './TeamLogo.js';
 import { useAliveMatchup } from './useAliveMatchup.js';
 import { presentationBoundaryKey } from '../../presentation-boundary.js';
@@ -325,12 +326,13 @@ function TimeoutPanel({
 }
 
 function ShanghaiKit() {
+  const resolveAssetUrl = useAssetUrl();
   const asset = assetForCanonicalKey('equipment.defuse-kit');
   return asset === null ? null : (
     <span
       className="shanghai-kit"
       aria-hidden="true"
-      style={{ '--shanghai-kit': `url("${asset.outputPath}")` } as CSSProperties}
+      style={{ '--shanghai-kit': assetCssUrl(resolveAssetUrl(asset.outputPath)) } as CSSProperties}
     />
   );
 }

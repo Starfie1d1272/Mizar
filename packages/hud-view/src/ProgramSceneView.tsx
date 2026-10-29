@@ -1,3 +1,4 @@
+import { assetCssUrl, useAssetUrl } from './assets.js';
 import { useEffect, useEffectEvent, useRef, useState } from 'react';
 import { getMapThumbnail } from '@mizar/cs2-assets';
 import type { HudResolvedPreset } from '@mizar/hud-config';
@@ -63,6 +64,7 @@ const scheduleTime = (value: string) =>
   }).format(new Date(value)) + ' · UTC+8';
 
 function BroadcastIdentity({ data }: { data: ProgramPresentation }) {
+  const resolveAssetUrl = useAssetUrl();
   return (
     <footer className="broadcast-identity">
       <div>
@@ -71,7 +73,7 @@ function BroadcastIdentity({ data }: { data: ProgramPresentation }) {
         <span>{data.match?.stage}</span>
       </div>
       <div className="broadcast-signature">
-        <img src="/brand/mizar-mark-mono.svg" alt="" />
+        <img src={resolveAssetUrl('/brand/mizar-mark-mono.svg')} alt="" />
         <span>MIZAR</span>
       </div>
     </footer>
@@ -79,6 +81,7 @@ function BroadcastIdentity({ data }: { data: ProgramPresentation }) {
 }
 
 function MapStrip({ data }: { data: ProgramPresentation }) {
+  const resolveAssetUrl = useAssetUrl();
   const series = data.series;
   if (!series) return null;
   return (
@@ -98,7 +101,7 @@ function MapStrip({ data }: { data: ProgramPresentation }) {
             <article key={map.mapOrder} className={`summary-map summary-map--${map.status}`}>
               <div className="summary-map-tab">{mapName(map.mapName)}</div>
               <div className="summary-map-art">
-                {asset ? <img src={asset.outputPath} alt="" /> : null}
+                {asset ? <img src={resolveAssetUrl(asset.outputPath)} alt="" /> : null}
                 <div className="summary-map-pick">
                   {picker ? `${picker} PICK` : map.selection.kind === 'decider' ? 'DECIDER' : '—'}
                 </div>
@@ -274,6 +277,7 @@ function Waiting({ data }: { data: ProgramPresentation }) {
   );
 }
 function MapResult({ data }: { data: ProgramPresentation }) {
+  const resolveAssetUrl = useAssetUrl();
   const summary = summaryForScene(data, 'map_result');
   const series = data.series;
   return summary && series ? (
@@ -281,7 +285,7 @@ function MapResult({ data }: { data: ProgramPresentation }) {
       {getMapThumbnail(summary.mapName) ? (
         <img
           className="result-backdrop"
-          src={getMapThumbnail(summary.mapName)!.outputPath}
+          src={resolveAssetUrl(getMapThumbnail(summary.mapName)!.outputPath)}
           alt=""
         />
       ) : null}
@@ -356,6 +360,7 @@ export function ProgramSceneView({
   previewBackground,
   reducedMotion,
 }: ProgramSceneViewProps) {
+  const resolveAssetUrl = useAssetUrl();
   const intro = useRef<HTMLDivElement>(null);
   const preparingIntro = !preview && scenes?.preparing?.target === 'matchup';
   const onAirIntro = scenes?.active === 'matchup';
@@ -568,7 +573,11 @@ export function ProgramSceneView({
       {preview && (sceneId === 'matchup' || sceneId === 'gameplay') && previewBackground ? (
         <div
           className="intro-preview-backdrop"
-          style={{ backgroundImage: `url(${getMapThumbnail('de_ancient')?.outputPath})` }}
+          style={{
+            backgroundImage: assetCssUrl(
+              resolveAssetUrl(getMapThumbnail('de_ancient')?.outputPath ?? ''),
+            ),
+          }}
         />
       ) : null}
       {sceneId !== 'matchup' && sceneId !== 'gameplay' ? (

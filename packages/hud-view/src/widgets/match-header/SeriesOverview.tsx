@@ -1,3 +1,4 @@
+import { assetCssUrl, useAssetUrl } from '../../assets.js';
 import { TeamLogo } from './TeamLogo.js';
 import { getMapThumbnail } from '@mizar/cs2-assets';
 import type { HudWidgetRendererProps } from '../../hud-renderer-registry.js';
@@ -5,6 +6,7 @@ import { buildMatchHeaderPresentation } from './presentation.js';
 
 /** Separate layout-owned detail panel; never carried from freeze into live play. */
 export function SeriesOverview({ snapshot }: Pick<HudWidgetRendererProps, 'snapshot'>) {
+  const resolveAssetUrl = useAssetUrl();
   if (
     snapshot.payload.status.telemetry !== 'fresh' ||
     snapshot.payload.round?.phase !== 'freezetime'
@@ -37,7 +39,9 @@ export function SeriesOverview({ snapshot }: Pick<HudWidgetRendererProps, 'snaps
           <div className="shanghai-series-detail" key={map.mapOrder}>
             <div
               className="shanghai-series-detail__map"
-              style={art ? { backgroundImage: `url("${art.outputPath}")` } : undefined}
+              style={
+                art ? { backgroundImage: assetCssUrl(resolveAssetUrl(art.outputPath)) } : undefined
+              }
             >
               <strong>{map.mapName}</strong>
             </div>

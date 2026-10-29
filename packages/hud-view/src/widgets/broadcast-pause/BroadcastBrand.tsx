@@ -1,3 +1,4 @@
+import { useAssetUrl } from '../../assets.js';
 /** Optional presentation assets supplied by the broadcast host; never gameplay facts. */
 export interface BroadcastBranding {
   readonly eventLogoUrl?: string | null;
@@ -37,6 +38,7 @@ export function BroadcastBrand({
   readonly competition: string | null;
   readonly stage: string | null;
 }) {
+  const resolveAssetUrl = useAssetUrl();
   return (
     <section className="broadcast-pause__brand" aria-label="Broadcast identity">
       {branding?.eventLogoUrl || competition ? (
@@ -53,7 +55,7 @@ export function BroadcastBrand({
         data-event-present={Boolean(competition || branding?.eventLogoUrl)}
       >
         <Logo
-          src={branding?.broadcasterLogoUrl ?? '/brand/mizar-mark-mono.svg'}
+          src={branding?.broadcasterLogoUrl ?? resolveAssetUrl('/brand/mizar-mark-mono.svg')}
           label={branding?.broadcasterName ?? 'Mizar'}
         />
         <strong>{branding?.broadcasterName ?? 'MIZAR'}</strong>

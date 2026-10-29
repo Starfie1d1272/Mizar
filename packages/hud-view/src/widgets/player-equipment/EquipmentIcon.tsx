@@ -1,3 +1,4 @@
+import { assetCssUrl, useAssetUrl } from '../../assets.js';
 import type { CSSProperties } from 'react';
 import type { PlayerRailAsset, WeaponVisualRole } from '../player-rails/presentation.js';
 import './equipment-icon.css';
@@ -21,6 +22,7 @@ export function EquipmentIcon({
   readonly active?: boolean | undefined;
   readonly clipFill?: number | null | undefined;
 }) {
+  const resolveAssetUrl = useAssetUrl();
   if (!asset) return null;
   const filled = clipFill != null;
   return (
@@ -35,7 +37,7 @@ export function EquipmentIcon({
       data-clip-fill={filled ? clipFill : undefined}
       style={
         {
-          '--player-rail-icon': `url("${asset.outputPath}")`,
+          '--player-rail-icon': assetCssUrl(resolveAssetUrl(asset.outputPath)),
           ...(filled
             ? {
                 '--magazine-empty': `${(1 - clipFill) * 100}%`,
@@ -49,7 +51,7 @@ export function EquipmentIcon({
     >
       {filled ? (
         <span className="hud-equipment-icon__artwork" aria-hidden="true">
-          <img src={asset.outputPath} alt="" />
+          <img src={resolveAssetUrl(asset.outputPath)} alt="" />
           <span className="hud-equipment-icon__fill" />
         </span>
       ) : null}

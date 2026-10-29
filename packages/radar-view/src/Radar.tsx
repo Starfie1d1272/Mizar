@@ -35,6 +35,7 @@ export interface RadarViewProps {
   readonly paused?: boolean;
   readonly reducedMotion?: boolean;
   readonly assetBaseUrl: string;
+  readonly resolveAssetUrl?: ((url: string) => string) | undefined;
   readonly className?: string;
   readonly presentationRevision?: number | undefined;
 }
@@ -45,6 +46,7 @@ export function RadarView({
   appearance = 'default',
   snapshot,
   assetBaseUrl,
+  resolveAssetUrl,
   className,
   paused = false,
   reducedMotion,
@@ -117,7 +119,8 @@ export function RadarView({
       let image = images.get(url);
       if (!image) {
         image = new Image();
-        image.src = radarAssetUrl(url, assetBaseUrl);
+        const assetUrl = radarAssetUrl(url, assetBaseUrl);
+        image.src = resolveAssetUrl ? resolveAssetUrl(assetUrl) : assetUrl;
         images.set(url, image);
       }
       return image.complete && image.naturalWidth > 0 ? image : null;
@@ -880,7 +883,7 @@ export function RadarView({
       model.reset();
       images.clear();
     };
-  }, [client, zoomMode, assetBaseUrl, appearance]);
+  }, [client, zoomMode, assetBaseUrl, resolveAssetUrl, appearance]);
   return (
     <canvas
       aria-label="比赛雷达"

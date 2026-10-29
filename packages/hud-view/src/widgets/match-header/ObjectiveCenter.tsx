@@ -1,3 +1,4 @@
+import { assetCssUrl, useAssetUrl } from '../../assets.js';
 /* eslint-disable react-hooks/refs -- render-local sample continuity is intentionally kept outside domain state. */
 /** Icon/progress composition adapted from Lexogrine BombTimer.tsx / PlantDefuse.tsx,
  * cs2-react-hud@7874750c97fcecd8f72eb3fad382917e035ec651 (MIT).
@@ -19,6 +20,7 @@ function Icon({
   readonly defusing?: boolean;
   readonly className?: string;
 }) {
+  const resolveAssetUrl = useAssetUrl();
   const item = getCs2Item(id);
   const asset = item === undefined ? undefined : getCs2Asset(item.assetId);
   return asset === undefined ? null : (
@@ -27,7 +29,9 @@ function Icon({
       aria-label={id === 'objective.c4' ? 'C4' : '拆弹器'}
       data-asset-id={id}
       className={`objective-center__icon${defusing ? ' is-defusing' : ''}${className ? ` ${className}` : ''}`}
-      style={{ '--objective-icon': `url("${asset.outputPath}")` } as CSSProperties}
+      style={
+        { '--objective-icon': assetCssUrl(resolveAssetUrl(asset.outputPath)) } as CSSProperties
+      }
     />
   );
 }
