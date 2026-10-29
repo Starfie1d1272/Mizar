@@ -21,7 +21,7 @@ export function CameraAudition() {
         ? [
             {
               value: stage,
-              label: `${stage === 'warmup' ? '热身' : MUSIC_LABELS[stage]} · ${currentMap.stages[stage]!.macro}`,
+              label: `${stage === 'warmup' ? '热身' : MUSIC_LABELS[stage]} · ${currentMap.stages[stage].macro}`,
             },
           ]
         : [],

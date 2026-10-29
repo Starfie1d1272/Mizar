@@ -127,7 +127,7 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
       if (
         delayNextSave &&
         request.method() === 'POST' &&
-        request.postDataJSON()?.action === 'save-preset'
+        (request.postDataJSON() as { action?: unknown } | null)?.action === 'save-preset'
       ) {
         delayNextSave = false;
         saveStarted();
