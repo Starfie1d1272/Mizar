@@ -87,15 +87,13 @@ export function registerBroadcastConfigRoutes(
             },
           });
         if (!isReady())
-          return reply
-            .code(503)
-            .send({
-              error: {
-                code: 'broadcast_config_unavailable',
-                message: '播出配置尚未就绪。',
-                requestId: request.id,
-              },
-            });
+          return reply.code(503).send({
+            error: {
+              code: 'broadcast_config_unavailable',
+              message: '播出配置尚未就绪。',
+              requestId: request.id,
+            },
+          });
         try {
           if (action === 'clone') return await store.clone(clone.parse(request.body));
           if (action === 'preview') return await store.preview(apply.parse(request.body));
