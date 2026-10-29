@@ -129,11 +129,11 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
     await page.getByLabel('开场镜头名称', { exact: true }).fill('候选镜头');
     await page.getByText('镜头时限', { exact: true }).click();
     await page.getByLabel('最多持续（秒）').fill('1.0035');
-    await page.getByRole('button', { name: '保存并应用预设', exact: true }).click();
+    await page.getByRole('button', { name: '启用预设', exact: true }).click();
     await expect(page.getByRole('alert')).toBeVisible();
     expect(store.preset.maps).toHaveLength(0);
     await page.getByLabel('最多持续（秒）').fill('1.003');
-    await page.getByRole('button', { name: '保存并应用预设', exact: true }).click();
+    await page.getByRole('button', { name: '启用预设', exact: true }).click();
     await expect.poll(() => store.preset.maps[0]?.opening?.maxMs).toBe(1003);
     await expect.poll(() => store.preset.maps.length).toBe(1);
     expect(calls).toEqual([]);
@@ -160,6 +160,7 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
     await page.goto('/?demoTest');
     await page.getByText('筛选运镜镜头', { exact: true }).click();
     await expect(page.getByRole('button', { name: '播放', exact: true })).toBeEnabled();
+    await page.screenshot({ path: testInfo.outputPath('camera-demo-screening.png') });
     await page.getByRole('button', { name: '播放', exact: true }).click();
     await expect.poll(() => calls.at(-1)).toBe('CamMacro/Play');
     expect(calls).toContain('CamPack/Apply');
@@ -193,16 +194,47 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
     });
     await expect(page.getByLabel('预设名称')).toHaveValue('游戏内筛选候选');
     expect(store.preset.name).toBe('我的编排');
-    await page.getByRole('button', { name: '保存并应用预设', exact: true }).click();
+    await page.getByRole('button', { name: '启用预设', exact: true }).click();
     await expect.poll(() => store.preset.name).toBe('游戏内筛选候选');
     const reloaded = new OrchestrationStore(store.directory);
     await reloaded.load();
     expect(reloaded.preset).toEqual(modified);
+    await page.getByRole('button', { name: '添加地图', exact: true }).click();
+    const maps = page.locator('.settings-card');
+    const first = maps.nth(0);
+    const second = maps.nth(1);
+    await second.getByLabel('地图', { exact: true }).fill('de_nuke');
+    await second.getByLabel('镜头包名称').fill(pack.name);
+    await second.getByLabel('开场镜头名称').fill('开场镜头');
+    await page.getByLabel('预设名称').scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath('camera-advanced-top.png') });
+    const rounds = first
+      .locator('details')
+      .filter({ has: page.getByText('回合开局 · 随机列表', { exact: false }) });
+    await rounds.locator('summary').click();
+    await rounds.getByRole('button', { name: '添加候选' }).click();
+    await rounds.getByLabel('候选 1').fill('回合镜头');
+    const tactical = first
+      .locator('details')
+      .filter({ has: page.getByText('战术暂停候选', { exact: false }) });
+    await tactical.locator('summary').click();
+    await tactical.getByRole('button', { name: '添加候选' }).click();
+    await tactical.getByLabel('候选 1').fill('战术暂停镜头');
+    const technical = first
+      .locator('details')
+      .filter({ has: page.getByText('技术暂停候选', { exact: false }) });
+    await technical.locator('summary').click();
+    await technical.getByRole('button', { name: '添加候选' }).click();
+    await technical.getByLabel('候选 1').fill('技术暂停镜头');
+    await page.screenshot({
+      path: testInfo.outputPath('camera-advanced-filled.png'),
+      fullPage: true,
+    });
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.screenshot({ path: testInfo.outputPath('orchestration-1920.png') });
     await page.setViewportSize({ width: 1280, height: 720 });
-    await page.getByRole('button', { name: '保存并应用预设', exact: true }).focus();
-    await expect(page.getByRole('button', { name: '保存并应用预设', exact: true })).toBeFocused();
+    await page.getByRole('button', { name: '启用预设', exact: true }).focus();
+    await expect(page.getByRole('button', { name: '启用预设', exact: true })).toBeFocused();
     await page.screenshot({ path: testInfo.outputPath('orchestration-1280.png') });
     const exportedLogs = await app.inject({
       method: 'POST',

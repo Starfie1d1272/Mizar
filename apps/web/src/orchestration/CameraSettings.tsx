@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   CAMERA_STAGES,
   cameraMapSchema,
@@ -11,6 +11,30 @@ import {
 import { Button, Field, Panel, Select, StatusBanner } from '../ui';
 import { command, useLocalRead } from '../preparation/client';
 import { MUSIC_LABELS, type MusicView } from '../music/MusicControls';
+
+function ImportPreset({ disabled, onFile }: { disabled: boolean; onFile: (file: File) => void }) {
+  const input = useRef<HTMLInputElement>(null);
+  return (
+    <>
+      <input
+        ref={input}
+        aria-label="导入预设到草稿"
+        type="file"
+        accept=".json,application/json"
+        hidden
+        disabled={disabled}
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          event.target.value = '';
+          if (file) onFile(file);
+        }}
+      />
+      <Button disabled={disabled} onClick={() => input.current?.click()}>
+        导入预设
+      </Button>
+    </>
+  );
+}
 
 function Shot({
   label,
@@ -91,9 +115,14 @@ export function CameraSettings() {
       setBusy(false);
     }
   };
+  const edit = (next: OrchestrationPreset) => {
+    setDraft(next);
+    setMessage('');
+    setFailed(false);
+  };
   const update = (index: number, patch: Partial<CameraMap>) => {
     if (config)
-      setDraft({
+      edit({
         ...config,
         maps: config.maps.map((m, i) => (i === index ? { ...m, ...patch } : m)),
       });
@@ -102,47 +131,39 @@ export function CameraSettings() {
     <Panel>
       <h2>{advanced ? '管理与编辑预设' : '运镜设置'}</h2>
       {advanced ? <Button onClick={() => setAdvanced(false)}>返回运镜设置</Button> : null}
+      {current && !current.ready ? (
+        <StatusBanner tone="danger">运镜预设无法读取，请检查本机数据目录后重启服务。</StatusBanner>
+      ) : null}
       {!advanced ? (
         <>
           <h3>当前预设</h3>
           <p>{current?.preset.name ?? '正在读取预设…'}</p>
           <p>适用地图：{current?.preset.maps.map((map) => map.map).join('、') || '暂无'}</p>
-          <Field
-            label="导入预设到草稿"
-            type="file"
-            accept=".json,application/json"
+          <ImportPreset
             disabled={busy}
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              e.target.value = '';
-              if (file)
-                void action(async () => {
-                  if (file.size > 256 * 1024)
-                    throw new Error('预设文件过大，请选择小于 256 KiB 的文件。');
-                  setDraft(orchestrationPresetSchema.parse(JSON.parse(await file.text())));
-                  setMessage('已载入配置草稿，请确认镜头和音频资源可用后保存。');
-                  setAdvanced(true);
-                });
+            onFile={(file) => {
+              void action(async () => {
+                if (file.size > 256 * 1024) throw new Error('预设文件过大，请选择较小的文件。');
+                setDraft(orchestrationPresetSchema.parse(JSON.parse(await file.text())));
+                setMessage('已载入配置草稿，请在启用前确认镜头和音频资源。');
+                setAdvanced(true);
+              });
             }}
           />
-          <p>导入后可检查并保存预设。</p>
+          <p>导入后可检查并启用预设。</p>
           <Button onClick={() => setAdvanced(true)}>管理与编辑预设</Button>
         </>
       ) : (
         <>
-          {current && !current.ready ? (
-            <StatusBanner tone="danger">
-              运镜预设无法读取，请检查本机数据目录后重启服务。
-            </StatusBanner>
-          ) : null}
           {!config ? (
             <p role="status">正在读取运镜设置</p>
           ) : (
             <>
+              <p>编辑内容暂存在本页面；启用后保存为当前预设。</p>
               <Field
                 label="预设名称"
                 value={config.name}
-                onChange={(e) => setDraft({ ...config, name: e.target.value })}
+                onChange={(e) => edit({ ...config, name: e.target.value })}
               />
               <div className="settings-grid">
                 {config.maps.map((map, index) => (
@@ -290,7 +311,7 @@ export function CameraSettings() {
                     </details>
                     <Button
                       onClick={() =>
-                        setDraft({ ...config, maps: config.maps.filter((_, i) => i !== index) })
+                        edit({ ...config, maps: config.maps.filter((_, i) => i !== index) })
                       }
                     >
                       移除地图
@@ -301,7 +322,7 @@ export function CameraSettings() {
               <Button
                 disabled={busy || config.maps.length >= 32}
                 onClick={() =>
-                  setDraft({
+                  edit({
                     ...config,
                     maps: [
                       ...config.maps,
@@ -323,30 +344,25 @@ export function CameraSettings() {
                   void action(async () => {
                     const preset = orchestrationPresetSchema.parse(config);
                     await command('/operator/orchestration', { action: 'configure', preset });
-                    setDraft(preset);
-                    setMessage('预设已保存。');
+                    setDraft(null);
+                    setMessage('预设已启用。');
                   })
                 }
               >
-                保存并应用预设
+                启用预设
               </Button>
               <details>
                 <summary>导入与导出</summary>
                 <p>请先准备对应的镜头和音频资源，再保存预设。</p>
-                <Field
-                  label="导入预设到草稿"
-                  type="file"
-                  accept=".json,application/json"
+                <ImportPreset
                   disabled={busy}
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    e.target.value = '';
-                    if (file)
-                      void action(async () => {
-                        if (file.size > 256 * 1024) throw new Error('预设超过 256 KiB');
-                        setDraft(orchestrationPresetSchema.parse(JSON.parse(await file.text())));
-                        setMessage('已载入配置草稿，请确认镜头和音频资源可用后保存。');
-                      });
+                  onFile={(file) => {
+                    void action(async () => {
+                      if (file.size > 256 * 1024)
+                        throw new Error('预设文件过大，请选择较小的文件。');
+                      setDraft(orchestrationPresetSchema.parse(JSON.parse(await file.text())));
+                      setMessage('已载入配置草稿，请在启用前确认镜头和音频资源。');
+                    });
                   }}
                 />
                 <Button

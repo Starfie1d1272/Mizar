@@ -85,7 +85,9 @@ export function CameraAudition() {
           value={selectedShot ?? ''}
           onChange={(e) => setAudition(e.target.value)}
         >
-          {!shots.length ? <option value="">当前地图暂无镜头</option> : null}
+          {!shots.length ? (
+            <option value="">{current?.status.map ? '当前地图暂无镜头' : '等待游戏数据'}</option>
+          ) : null}
           {shots.map((shot) => (
             <option key={shot.value} value={shot.value}>
               {shot.label}
@@ -95,7 +97,7 @@ export function CameraAudition() {
         <Button disabled={playDisabled} onClick={() => play()}>
           播放
         </Button>
-        {lastPlayed?.shot === selectedShot && lastPlayed?.context === current?.status.context ? (
+        {lastPlayed && lastPlayed.shot === selectedShot && lastPlayed.context === current?.status.context ? (
           <Button disabled={playDisabled} onClick={() => play()}>
             重播
           </Button>
@@ -133,10 +135,17 @@ export function CameraAudition() {
             停止
           </Button>
         ) : null}
-        {current && !current.status.connected ? <p>请先连接运镜工具。</p> : null}
-        {current?.status.connected && !current.status.isolated ? (
-          <p>请先准备当前地图的镜头。</p>
+        {!current ? <p role="status">正在读取运镜状态…</p> : null}
+        {current && !current.status.connected ? (
+          <p>运镜工具尚未就绪，请检查试播游戏状态。</p>
         ) : null}
+        {current?.status.connected && !current.status.isolated ? (
+          <p>当前地图的镜头尚未准备好，请检查预设和镜头资源。</p>
+        ) : null}
+        {current?.status.preparation === 'error' ? (
+          <p>运镜准备失败，请检查预设和游戏状态后重试。</p>
+        ) : null}
+        {current?.status.current ? <p>镜头请求处理中，请先停止后继续。</p> : null}
       </section>
       {message ? <StatusBanner tone={failed ? 'danger' : 'info'}>{message}</StatusBanner> : null}
     </>
