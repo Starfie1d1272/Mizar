@@ -35,8 +35,7 @@ export function pulseTokenStyle(program: ProgramVisualConfigV1): CSSProperties |
       digest: background.resource.digest,
       fileId: background.fileId,
     });
-    result['--pulse-background-image'] =
-      `url("/local/v1/broadcast-assets?${query.toString()}")`;
+    result['--pulse-background-image'] = `url("/local/v1/broadcast-assets?${query.toString()}")`;
   }
   for (const [name, value] of Object.entries(program.tokens)) {
     const property = pulseTokens[name as keyof typeof pulseTokens];
