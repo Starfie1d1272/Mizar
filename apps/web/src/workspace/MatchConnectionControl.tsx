@@ -96,7 +96,7 @@ export function MatchConnectionControl({ primary = false }: { primary?: boolean 
               : '填写 GoTV'
             : `本图连接 · ${status}`}
       </Button>
-      {!primary && !nextMapNeeded && !view?.waitingForMap && series?.status !== 'completed' ? (
+      {!nextMapNeeded && !view?.waitingForMap && series?.status !== 'completed' ? (
         <Button disabled={busy || runtime?.pending} onClick={() => open(true)}>
           填写下一图 GoTV
         </Button>

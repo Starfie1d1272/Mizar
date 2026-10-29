@@ -339,8 +339,11 @@ for (const useMulnx of [false, true]) {
       )
       .toContain('present_production');
     expect(writes).toHaveLength(0);
+    await page.setViewportSize({ width: 480, height: 1080 });
     await page.goto('/workspace/left');
-    const control = page.getByRole('button', { name: /本图连接 ·/ });
+    const control = page.locator(
+      '.workspace-radar .workspace-empty > button[data-variant=primary]',
+    );
     const openTask = async () => {
       const opened = page.waitForEvent('popup');
       await control.click();
