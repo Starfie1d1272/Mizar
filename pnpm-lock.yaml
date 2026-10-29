@@ -408,6 +408,9 @@ importers:
       '@mizar/hud-config':
         specifier: workspace:*
         version: link:../../packages/hud-config
+      '@mizar/hud-view':
+        specifier: workspace:*
+        version: link:../../packages/hud-view
       '@mizar/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
@@ -517,6 +520,34 @@ importers:
         specifier: 'catalog:'
         version: 4.6.5
     devDependencies:
+      '@typescript/native':
+        specifier: 'catalog:'
+        version: typescript@7.0.2
+
+  packages/hud-view:
+    dependencies:
+      '@mizar-hud/radar-view':
+        specifier: workspace:*
+        version: link:../radar-view
+      '@mizar/cs2-assets':
+        specifier: workspace:*
+        version: link:../cs2-assets
+      '@mizar/hud-config':
+        specifier: workspace:*
+        version: link:../hud-config
+      '@mizar/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@mizar/radar':
+        specifier: workspace:*
+        version: link:../radar
+      react:
+        specifier: ^19.0.0
+        version: 19.3.0
+    devDependencies:
+      '@types/react':
+        specifier: 'catalog:'
+        version: 19.3.0
       '@typescript/native':
         specifier: 'catalog:'
         version: typescript@7.0.2

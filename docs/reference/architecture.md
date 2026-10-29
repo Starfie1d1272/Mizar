@@ -48,6 +48,7 @@ Companion 组装运行时、持久化和接口
 | `packages/rivalhub` | 公开赛事资料的解析、验证与转换 | 核心运行时和雷达逻辑 |
 | `packages/radar` | 地图几何、坐标投影、楼层和道具语义 | 动画、平滑或前端框架 |
 | `packages/radar-view` | 共享 React Canvas 雷达、资源与展示平滑 | 再做世界坐标校准或比赛推断 |
+| `packages/hud-view` | HUD、BP 与节目场景的共享 React 展示 | 实时连接与比赛事实 |
 | `packages/hud-config` | 预设、布局、外观、组件描述、校验与解析 | 比赛数据、文件系统或 React |
 | `packages/design-tokens` | 静态设计变量与生成 CSS | 运行时业务 |
 | `packages/cs2-assets` | 官方展示资产、目录、来源与解析入口 | 地图几何或比赛数据 |

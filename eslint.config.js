@@ -28,6 +28,7 @@ export default tseslint.config(
     files: [
       'apps/web/**/*.{ts,tsx}',
       'packages/radar-view/src/**/*.{ts,tsx}',
+      'packages/hud-view/src/**/*.{ts,tsx}',
       'packages/radar-view/examples/**/*.{ts,tsx}',
     ],
     plugins: {

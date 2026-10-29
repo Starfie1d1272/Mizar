@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import type { RadarViewSource } from '@mizar-hud/radar-view';
 import type { LocalChannelClient } from './index';
-import { toRadarViewFrame } from '../program/widgets/radar/adapter';
+import { toRadarViewFrame } from '@mizar/hud-view';
 
 function createRadarViewSource(client: LocalChannelClient<'radar'>): RadarViewSource {
   let last: ReturnType<typeof client.getSnapshot> | undefined;

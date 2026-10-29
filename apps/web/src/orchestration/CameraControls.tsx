@@ -94,7 +94,7 @@ export function CameraControls({
           <Button
             disabled={busy}
             onClick={() => void send('hold')}
-            title="请求清空 MulNX 全部运镜槽；实际停止需在游戏内确认；不会关闭其他包的自动列表"
+            title="停止当前运镜并切换为人工"
           >
             接管运镜
           </Button>
