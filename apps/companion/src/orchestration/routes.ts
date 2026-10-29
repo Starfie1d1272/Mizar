@@ -175,7 +175,10 @@ export function registerOrchestrationRoutes(
         );
         return reply.code(409).send({
           error: 'mulnx_prepare_failed',
-          message: 'MulNX 下载或校验失败，请检查网络后重试。',
+          message:
+            tool?.view().phase === 'cancelled'
+              ? 'MulNX 下载已取消，旧版本和配置已保留。'
+              : 'MulNX 下载或校验失败，请检查网络后重试。',
           requestId: request.id,
         });
       }

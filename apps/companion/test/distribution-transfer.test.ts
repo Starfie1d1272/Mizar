@@ -11,6 +11,7 @@ it('retries corrupt remote bytes but never overwrites a local file', async () =>
   const bytes = Buffer.from('good');
   const sha256 = createHash('sha256').update(bytes).digest('hex');
   let fallback = 0;
+  const verifying = vi.fn();
   try {
     await transfer({
       target,
@@ -18,12 +19,14 @@ it('retries corrupt remote bytes but never overwrites a local file', async () =>
       sha256,
       signal: new AbortController().signal,
       sources: [async () => new Response('evil'), async () => new Response(bytes)],
+      verifying,
       fallback: () => {
         fallback++;
       },
     });
     expect(await readFile(target)).toEqual(bytes);
     expect(fallback).toBe(1);
+    expect(verifying).toHaveBeenCalledTimes(2);
     await writeFile(target, 'original');
     await expect(
       transfer({

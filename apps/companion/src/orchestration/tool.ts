@@ -91,8 +91,14 @@ export class MulnxTool {
   private checkResult: 'unchecked' | 'current' | 'available' | 'error' = 'unchecked';
   private checkedAt: number | null = null;
   private phase:
-    'idle' | 'checking' | 'downloading' | 'installing' | 'complete' | 'error' | 'cancelled' =
-    'idle';
+    | 'idle'
+    | 'checking'
+    | 'downloading'
+    | 'verifying'
+    | 'installing'
+    | 'complete'
+    | 'error'
+    | 'cancelled' = 'idle';
   private downloadedBytes = 0;
   private downloadTotal = 0;
   private downloadAbort: AbortController | undefined;
@@ -129,7 +135,7 @@ export class MulnxTool {
           ? `${this.latest.id}:${this.latest.assetId}:${this.latest.sha256}`
           : null,
       notifiedIdentity: this.notifiedIdentity,
-      source: this.phase === 'downloading' ? this.sourceName : null,
+      source: this.phase === 'downloading' || this.phase === 'verifying' ? this.sourceName : null,
       sourceMessage: this.sourceMessage,
       packs: this.installed?.packs ?? [],
     };
@@ -750,6 +756,7 @@ export class MulnxTool {
             release.size,
             AbortSignal.any([abort.signal, AbortSignal.timeout(120_000)]),
             (bytes, source) => {
+              this.phase = 'downloading';
               this.downloadedBytes = bytes;
               this.sourceName =
                 this.mirror && sameMulnxAsset(this.mirror.release, release) && source === 0
@@ -762,6 +769,9 @@ export class MulnxTool {
             (error) => {
               this.sourceMessage = '南大云盘连接或文件校验失败，已切换至 GitHub。';
               this.diagnostic('mulnx_mirror_download', { result: 'failure', error });
+            },
+            () => {
+              this.phase = 'verifying';
             },
           );
         } catch (error) {

@@ -14,6 +14,7 @@ export async function transfer(options: {
   signal: AbortSignal;
   sources: Array<(signal: AbortSignal) => Promise<Response>>;
   progress?: (bytes: number, source: number) => void;
+  verifying?: () => void;
   fallback?: (error: unknown, source: number) => void;
 }) {
   let lastError: unknown;
@@ -73,6 +74,7 @@ export async function transfer(options: {
         options.progress?.(bytes, index);
         arm(STALL_TIMEOUT);
       }
+      options.verifying?.();
       if (
         (options.bytes !== undefined && bytes !== options.bytes) ||
         hash.digest('hex') !== options.sha256

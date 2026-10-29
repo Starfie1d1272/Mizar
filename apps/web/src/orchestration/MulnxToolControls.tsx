@@ -107,7 +107,7 @@ export function MulnxToolControls({
           setMessage((value) => `${value} 工作台收尾尚未完成，请检查退出状态。`);
       } else await command('/operator/orchestration', { action: 'check-tool' }, undefined, 60_000);
     } catch (error) {
-      setFailed(true);
+      setFailed(!(error instanceof Error && error.message.includes('已取消')));
       setMessage(
         /mulnx_metadata_http_(403|429)\b/.test(
           error instanceof Error ? error.message : String(error),
@@ -146,9 +146,10 @@ export function MulnxToolControls({
       {!runtimeOnly && tool.checkedAt ? (
         <p>检查时间：{new Date(tool.checkedAt).toLocaleString()}</p>
       ) : null}
-      {tool.phase === 'downloading' ? (
+      {tool.phase === 'downloading' || tool.phase === 'verifying' ? (
         <p>
-          正在从 {tool.source} 下载：{tool.downloadedBytes ?? 0} / {tool.totalBytes ?? 0} 字节{' '}
+          {tool.phase === 'verifying' ? '正在校验' : `正在从 ${tool.source} 下载`}：
+          {tool.downloadedBytes ?? 0} / {tool.totalBytes ?? 0} 字节{' '}
           {tool.sourceMessage ? <span>{tool.sourceMessage} </span> : null}
           <Button
             onClick={() =>

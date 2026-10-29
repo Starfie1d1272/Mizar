@@ -55,6 +55,7 @@ export class UpdateManager {
   private downloaded = 0;
   private downloadSource: string | null = null;
   private sourceMessage = '';
+  private transferStage: 'downloading' | 'verifying' = 'downloading';
   private abort: AbortController | undefined;
   private task: Promise<void> | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
@@ -346,6 +347,7 @@ export class UpdateManager {
       downloadedBytes: this.downloaded,
       downloadSource: this.downloadSource,
       sourceMessage: this.sourceMessage,
+      transferStage: this.transferStage,
       candidate: this.candidate,
       notificationPending:
         this.config.automatic &&
@@ -534,8 +536,12 @@ export class UpdateManager {
           (attempt) => updateRequest(installerUrl(manifest), attempt, this.options.fetcher),
         ],
         progress: (bytes, source) => {
+          this.transferStage = 'downloading';
           this.downloaded = bytes;
           this.downloadSource = source === 0 ? '南大云盘' : 'GitHub';
+        },
+        verifying: () => {
+          this.transferStage = 'verifying';
         },
         fallback: (error) => {
           this.sourceMessage = '南大云盘连接或文件校验失败，已切换至 GitHub。';

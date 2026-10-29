@@ -43,6 +43,7 @@ export interface UpdateStatus {
   downloadedBytes: number;
   downloadSource?: string | null;
   sourceMessage?: string;
+  transferStage?: 'downloading' | 'verifying';
   candidate: null | { version: string; notes: string; installer: { bytes: number } };
   installBlockedReason?: string | null;
   canResumeAutomatic?: boolean;
@@ -294,6 +295,7 @@ export function UpdateSettings({ children }: { children?: ReactNode }) {
       ) : null}
       {downloading ? (
         <div className="settings-update-progress">
+          {status?.transferStage === 'verifying' ? <span>正在校验</span> : null}
           <progress
             aria-label="更新下载进度"
             value={Math.min(

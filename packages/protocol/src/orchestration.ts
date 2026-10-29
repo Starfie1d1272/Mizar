@@ -92,7 +92,15 @@ export interface MulnxToolView {
   installed: string | null;
   latest: string | null;
   busy: boolean;
-  phase?: 'idle' | 'checking' | 'downloading' | 'installing' | 'complete' | 'error' | 'cancelled';
+  phase?:
+    | 'idle'
+    | 'checking'
+    | 'downloading'
+    | 'verifying'
+    | 'installing'
+    | 'complete'
+    | 'error'
+    | 'cancelled';
   checkedAt?: number | null;
   checkResult?: 'unchecked' | 'current' | 'available' | 'error';
   downloadedBytes?: number;

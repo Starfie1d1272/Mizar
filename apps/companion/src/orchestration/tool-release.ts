@@ -145,6 +145,7 @@ export async function downloadVerified(
   progress?: (bytes: number, source: number) => void,
   mirror?: (signal: AbortSignal) => Promise<Response>,
   fallback?: (error: unknown) => void,
+  verifying?: () => void,
 ) {
   await transfer({
     target,
@@ -155,6 +156,7 @@ export async function downloadVerified(
     signal,
     progress: (bytes, source) => progress?.(bytes, source),
     fallback: (error) => fallback?.(error),
+    verifying: () => verifying?.(),
     sources: [
       ...(mirror ? [mirror] : []),
       async (attempt) => {
