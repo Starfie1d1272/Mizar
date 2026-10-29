@@ -427,5 +427,42 @@ describe('BroadcastConfigStore', () => {
     expect(store.snapshot.active.resolved.camera?.automaticEnabled).toBe(true);
     expect(store.snapshot.active.moduleRevisions.music).toBe(before.moduleRevisions.music);
     expect(store.snapshot.active.moduleRevisions.hud).toBe(before.moduleRevisions.hud);
+    const cameraRevision = camera.revision;
+    const currentHud = store.snapshot.active.resolved.hud;
+    if (currentHud.renderer !== 'native') throw new Error('unexpected HUD');
+    const changedHud = structuredClone(currentHud);
+    changedHud.overlays.pause.enabled = false;
+    await store.updateFromLegacy({
+      updateDraft: () => {},
+      active: { kind: 'hud', value: changedHud, lock: store.snapshot.active.lock },
+    });
+    await camera.synchronizeFromPersistence();
+    expect(camera.revision).toBe(cameraRevision);
+  });
+  it('keeps camera explicitly off until a legacy operator activates a real draft', async () => {
+    const { store, options, initial } = await setup();
+    const camera = new OrchestrationStore(pathJoin(dirname(options.filePath), 'camera-off'));
+    await camera.load();
+    const persistence = createCameraConfigPersistence(store, {
+      localPack: () => Promise.reject(new Error('unexpected')),
+      localTrackId: () => Promise.reject(new Error('unexpected')),
+      portable: (preset, automaticEnabled) =>
+        Promise.resolve({
+          format: 'mizar.camera-config',
+          version: 2,
+          name: preset.name,
+          maps: [],
+          automaticEnabled,
+        }),
+      lock: (_value, active) => Promise.resolve(active.lock),
+    });
+    await camera.adoptPersistence(persistence);
+    expect(camera.automaticEnabled).toBe(false);
+    expect(store.snapshot.active).toEqual(initial.active);
+    const id = await camera.createPreset();
+    expect(store.snapshot.active.resolved.camera).toBeNull();
+    await camera.activatePreset(id, () => Promise.resolve());
+    expect(store.snapshot.active.resolved.camera).not.toBeNull();
+    expect(store.snapshot.active.resolved.camera?.automaticEnabled).toBe(false);
   });
 });
