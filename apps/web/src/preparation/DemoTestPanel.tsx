@@ -1,3 +1,4 @@
+import { CameraAudition } from '../orchestration/CameraAudition';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getBuiltinPresets } from '@mizar/hud-config';
 import { Button, Field, Panel, Select, StatusBanner } from '../ui';
@@ -117,7 +118,7 @@ export function DemoTestPanel({ forceExpanded = false }: { forceExpanded?: boole
                 : '请先退出 CS2，再重试恢复。'}
           </p>
           {trial.phase === 'starting' || (trial.phase === 'playing' && !trial.dataReady) ? (
-            <p>游戏运行不代表 Demo 已加载，请在 CS2 检查播放画面。</p>
+            <p>游戏已运行，请在 CS2 检查 Demo 播放画面。</p>
           ) : trial.phase === 'playing' ? (
             <p>试播保持手动编排，可检查 HUD、场景与 OBS 音画。</p>
           ) : (
@@ -146,6 +147,12 @@ export function DemoTestPanel({ forceExpanded = false }: { forceExpanded?: boole
                 : '结束试播并恢复设置'}
             </Button>
           </div>
+          {trial.phase === 'playing' && trial.dataReady ? (
+            <details>
+              <summary>筛选运镜镜头</summary>
+              <CameraAudition />
+            </details>
+          ) : null}
           <p>关闭此窗口不会结束试播。</p>
         </>
       ) : (
@@ -226,7 +233,9 @@ export function DemoTestPanel({ forceExpanded = false }: { forceExpanded?: boole
       )}
       {!desktop ? <p>请在 Mizar 桌面准备中心选择并启动本地 Demo。</p> : null}
       {message ? <StatusBanner tone="danger">{message}</StatusBanner> : null}
-      {shown && editor.error ? <StatusBanner tone="warning">{editor.error}</StatusBanner> : null}
+      {shown && !trial?.active && editor.error ? (
+        <StatusBanner tone="warning">画面设置暂不可用，请检查本地服务后重试。</StatusBanner>
+      ) : null}
     </Container>
   );
 }
