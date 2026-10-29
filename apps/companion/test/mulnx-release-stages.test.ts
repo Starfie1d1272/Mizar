@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it, vi } from 'vitest';
 
+const fixture = vi.hoisted(() => ({ source: 'source' }));
 const release = {
   id: 1,
   assetId: 2,
@@ -28,7 +29,10 @@ vi.mock('../src/orchestration/tool-release.js', () => ({
       recursive: true,
     });
     await mkdir(join(root, 'CS2OBTool/CameraSystem/CamPacks/Source/Campaths'));
-    await writeFile(join(root, 'CS2OBTool/CameraSystem/CamPacks/Source/Source.yaml'), 'source');
+    await writeFile(
+      join(root, 'CS2OBTool/CameraSystem/CamPacks/Source/Source.yaml'),
+      fixture.source,
+    );
     await writeFile(join(root, 'Config/CS2OBTool_Refl.yaml'), 'UISystem.ifDrawMid: true\n');
     await writeFile(
       join(root, 'Config/CS2Injector_Refl.yaml'),
@@ -47,8 +51,13 @@ vi.mock('../src/orchestration/tool-release.js', () => ({
   },
 }));
 import { MulnxTool } from '../src/orchestration/tool.js';
+import { buildApp } from '../src/app.js';
 import { CameraConfigResolver } from '../src/broadcast-config/camera.js';
-import type { MusicStore } from '../src/music/store.js';
+import { MusicStore } from '../src/music/store.js';
+import { OrchestrationStore } from '../src/orchestration/store.js';
+import { HudConfigStore } from '../src/hud-config/store.js';
+import { createProductionBroadcastDependencies } from '../src/broadcast-config/production.js';
+import { prepareLegacyMigration } from '../src/broadcast-config/prepare-migration.js';
 import { orchestrationPresetSchema } from '@mizar/protocol/orchestration';
 
 const roots: string[] = [];
@@ -59,7 +68,7 @@ it('prepares without selecting and publishes a configured instance only after se
   const root = await mkdtemp(join(tmpdir(), 'mizar-mulnx-stages-'));
   roots.push(root);
   const bundle = join(root, 'bundle');
-  const data = join(root, 'data');
+  const data = join(root, 'mulnx');
   await mkdir(bundle);
   await writeFile(join(bundle, '7zr.exe'), 'fixture');
   await writeFile(
@@ -135,6 +144,134 @@ it('prepares without selecting and publishes a configured instance only after se
     name: 'Camera',
     maps: [{ map: 'de_dust2', pack: current.packs[0]!.name }],
   });
+  const musicStore = new MusicStore(join(root, 'music'));
+  await musicStore.load();
+  const sound = await musicStore.add('opening.wav', Buffer.from('RIFF0000WAVEtest'));
+  const soundPreset = orchestrationPresetSchema.parse({
+    ...preset,
+    maps: [{ ...preset.maps[0], openingSound: sound }],
+  });
+  const cameraStore = new OrchestrationStore(join(root, 'orchestration'));
+  await cameraStore.load();
+  await cameraStore.save(soundPreset);
+  const productionResolver = new CameraConfigResolver(restarted, musicStore, () =>
+    Promise.resolve(true),
+  );
+  const dependencies = createProductionBroadcastDependencies(
+    root,
+    musicStore,
+    () => Promise.reject(new Error('unexpected_asset')),
+    undefined,
+    productionResolver,
+  );
+  const migrated = await prepareLegacyMigration({
+    hud: new HudConfigStore().getState(),
+    music: musicStore,
+    camera: cameraStore,
+    musicAutomaticEnabled: true,
+    cameraConfig: (preset, enabled) => dependencies.camera.portable(preset, enabled),
+    lock: (resolved) => dependencies.lockForActive(resolved),
+  });
+  expect(migrated.state).toBe('ready');
+  if (migrated.state !== 'ready') throw new Error('migration failed');
+  const active = migrated.document.active;
+  expect(active.lock.tools).toEqual([source.acquisition]);
+  expect(active.lock.resources).toContainEqual(
+    active.resolved.camera!.maps[0]!.openingSound!.asset.resource,
+  );
+  expect(await dependencies.camera.localPack(source)).toBe(current.packs[0]!.name);
+  expect(await dependencies.resolve.camera(source)).toEqual(source.acquisition);
+  await expect(dependencies.verifyActive(active)).resolves.toBeUndefined();
+  // The old lock is historical; a compatible selected release can have the same source bytes.
+  const olderTool = {
+    ...source.acquisition,
+    release: { ...source.acquisition.release, releaseId: 99, tag: 'older' },
+  };
+  await expect(
+    dependencies.verifyActive({ ...active, lock: { ...active.lock, tools: [olderTool] } }),
+  ).resolves.toBeUndefined();
+  await expect(
+    dependencies.verifyActive({ ...active, lock: { ...active.lock, tools: [] } }),
+  ).rejects.toThrow('dependency_missing');
+  // Exercise actual app assembly and legacy migration with no running game or gateway.
+  await writeFile(join(data, 'current.json'), JSON.stringify(legacyReceipt));
+  const hud = new HudConfigStore();
+  await hud.load();
+  await writeFile(
+    join(bundle, 'release.json'),
+    JSON.stringify({ release: { ...release, sha256: 'b'.repeat(64) } }),
+  );
+  const app = buildApp({
+    obsConfigPath: join(root, 'obs.json'),
+    hudConfigStore: hud,
+    mulnxBundle: bundle,
+    productRuntime: {
+      artifactSha256: 'a'.repeat(64),
+      gitSha: 'b'.repeat(40),
+      instanceId: 'fixture',
+      controlToken: 'c'.repeat(64),
+      stop: () => {},
+    },
+  });
+  try {
+    const status = await app.inject('/local/v1/broadcast-config/migration');
+    expect(status.json<unknown>()).toEqual({ state: 'ready' });
+    const listing = await app.inject('/local/v1/broadcast-presets');
+    expect(listing.statusCode).toBe(200);
+    expect(listing.json<unknown>()).toMatchObject({
+      active: {
+        resolved: {
+          camera: {
+            maps: [
+              { source: { treeSha256: source.treeSha256 }, openingSound: { name: 'opening.wav' } },
+            ],
+          },
+        },
+      },
+    });
+    const headers = { 'x-runtime-token': 'c'.repeat(64) };
+    const switchRelease = async (contents: string) => {
+      fixture.source = contents;
+      const downloaded = await app.inject({
+        method: 'POST',
+        url: '/operator/runtime/mulnx-prepare-release',
+        headers,
+        payload: {},
+      });
+      expect(downloaded.statusCode).toBe(200);
+      const preparedId = downloaded.json<{ preparedId: string }>().preparedId;
+      const staged = await app.inject({
+        method: 'POST',
+        url: '/operator/runtime/mulnx-select',
+        headers,
+        payload: {
+          action: 'stage',
+          preparedId,
+          cs2Path: 'D:\\Steam\\cs2.exe',
+          consoleCapture: false,
+        },
+      });
+      expect(staged.statusCode).toBe(200);
+      const committed = await app.inject({
+        method: 'POST',
+        url: '/operator/runtime/mulnx-select',
+        headers,
+        payload: { action: 'commit', id: staged.json<{ id: string }>().id },
+      });
+      expect(committed.statusCode).toBe(200);
+      return committed.json<{ cameraReady: boolean }>().cameraReady;
+    };
+    expect(await switchRelease('different source')).toBe(false);
+    expect((await app.inject('/local/v1/broadcast-presets')).json<unknown>()).toMatchObject({
+      active: {
+        resolved: { camera: { maps: [{ source: { treeSha256: source.treeSha256 } }] } },
+      },
+    });
+    expect(await switchRelease('source')).toBe(true);
+  } finally {
+    await app.close();
+    await writeFile(join(data, 'current.json'), originalReceipt);
+  }
   const config = await resolver.cameraConfig(preset, true);
   expect(config).toMatchObject({
     format: 'mizar.camera-config',
@@ -183,22 +320,36 @@ it('prepares without selecting and publishes a configured instance only after se
   );
   await expect(legacy.cameraSource(current.packs[0]!.name)).rejects.toThrow('mulnx_source_changed');
   await writeFile(join(data, prepared.preparedId, 'MulNX.7z'), 'bad');
-  await expect(legacy.cameraSource(current.packs[0]!.name)).rejects.toThrow(
-    'mulnx_prepared_integrity',
+  await expect(legacy.cameraSource(current.packs[0]!.name)).rejects.toThrow('mulnx_source_changed');
+  expect(await restarted.listPreparedReleases()).toEqual(
+    expect.arrayContaining([
+      {
+        preparedId: `prepared-${release.sha256}-00000000-0000-4000-8000-000000000000`,
+        tag: null,
+        archiveSha256: null,
+        state: 'damaged',
+      },
+      { preparedId: prepared.preparedId, tag: null, archiveSha256: null, state: 'damaged' },
+    ]),
   );
-  expect(await restarted.listPreparedReleases()).toEqual([
-    {
-      preparedId: `prepared-${release.sha256}-00000000-0000-4000-8000-000000000000`,
-      tag: null,
-      archiveSha256: null,
-      state: 'damaged',
-    },
-    { preparedId: prepared.preparedId, tag: null, archiveSha256: null, state: 'damaged' },
-  ]);
   await expect(restarted.selectRelease(prepared.preparedId, 'D:\\Steam\\cs2.exe')).rejects.toThrow(
     'mulnx_prepared_integrity',
   );
   expect(JSON.parse(await readFile(join(data, 'current.json'), 'utf8')) as unknown).toEqual(
     current,
   );
+  // Identical local pack names must not hide different source contents after a version switch.
+  await writeFile(
+    join(bundle, 'release.json'),
+    JSON.stringify({ release: { ...release, sha256: 'b'.repeat(64) } }),
+  );
+  fixture.source = 'different source';
+  const changedRelease = await restarted.prepareRelease();
+  await restarted.selectRelease(changedRelease.preparedId, 'D:\\Steam\\cs2.exe');
+  expect(restarted.view().packs[0]!.name).toBe(current.packs[0]!.name);
+  await expect(resolver.localPack(source)).rejects.toThrow('mulnx_source_unavailable');
+  fixture.source = 'source';
+  const compatibleRelease = await restarted.prepareRelease();
+  await restarted.selectRelease(compatibleRelease.preparedId, 'D:\\Steam\\cs2.exe');
+  await expect(resolver.localPack(source)).resolves.toBe(current.packs[0]!.name);
 });

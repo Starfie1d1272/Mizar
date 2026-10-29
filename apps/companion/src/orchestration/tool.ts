@@ -82,6 +82,9 @@ export class MulnxTool {
     readonly bundle: string,
     private readonly diagnostic: (stage: string, evidence: unknown) => void = () => {},
   ) {}
+  get selectionId() {
+    return this.installed?.directory ?? null;
+  }
   get camPacksRoot() {
     return this.installed
       ? join(this.directory, this.installed.directory, 'MulNX/CS2OBTool/CameraSystem/CamPacks')

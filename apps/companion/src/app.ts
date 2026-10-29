@@ -1,3 +1,4 @@
+import { CameraConfigResolver } from './broadcast-config/camera.js';
 import { MusicPackResources } from './broadcast-config/music-pack-resources.js';
 import { registerMusicPackRoutes } from './broadcast-config/music-pack-routes.js';
 import { createProductionBroadcastDependencies } from './broadcast-config/production.js';
@@ -1282,6 +1283,24 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       join(dirname(options.obsConfigPath), 'orchestration'),
       (stage, evidence) => sessionJournal?.record(stage, evidence),
     );
+    const cameraEvidence = (stage: string, evidence: unknown) =>
+      sessionJournal?.record(stage, evidence);
+    const mulnxTool = options.mulnxBundle
+      ? new MulnxTool(
+          join(dirname(options.obsConfigPath), 'mulnx'),
+          options.mulnxBundle,
+          cameraEvidence,
+        )
+      : undefined;
+    // This checks the fixed upstream adapter, not whether a game is connected.
+    // Actual PackStatus readiness is checked by the existing camera director.
+    const cameraResolver = mulnxTool
+      ? new CameraConfigResolver(mulnxTool, musicStore, (tool) =>
+          Promise.resolve(
+            tool.kind === 'upstream' && tool.release.repository === 'Co1Swet/MulNX_CS2',
+          ),
+        )
+      : undefined;
     const supportsMusicPacks = !broadcastConfig;
     const musicPacks = new MusicPackResources(join(dirname(options.obsConfigPath), 'music-packs'));
     broadcastConfig ??= createProductionBroadcastDependencies(
@@ -1292,6 +1311,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         await resources.readExact(ref.resource, ref.fileId);
       },
       musicPacks,
+      cameraResolver,
     );
     const broadcastRuntime = broadcastConfig
       ? createBroadcastRuntime({
@@ -1353,15 +1373,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         () => broadcastRuntime.ready,
       );
     }
-    const cameraEvidence = (stage: string, evidence: unknown) =>
-      sessionJournal?.record(stage, evidence);
-    const mulnxTool = options.mulnxBundle
-      ? new MulnxTool(
-          join(dirname(options.obsConfigPath), 'mulnx'),
-          options.mulnxBundle,
-          cameraEvidence,
-        )
-      : undefined;
     catalogTool = mulnxTool;
     const mulnxProvider = new MulnxProvider(cameraEvidence);
     mulnxClock = new MulnxProgramClock(mulnxProvider);
@@ -1383,6 +1394,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       undefined,
       (pack) => verifyIsolatedPack(options.mulnxCamPacksRoot ?? mulnxTool?.camPacksRoot, pack),
       options.productRuntime !== undefined,
+      (map, pack) => {
+        if (!cameraStore.hasPersistence) return Promise.resolve(true);
+        return broadcastRuntime?.verifyCameraPack(map, pack) ?? Promise.resolve(false);
+      },
     );
     app.addHook('onReady', async () => {
       if (mulnxTool) {
@@ -1427,6 +1442,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         configureDemo: (requestId, commit) => demoTest.configureCameraSession(requestId, commit),
         canPrepare: () => production.get().mode === 'preparation',
         withSelection: production.withResourceActivation,
+        reconcileSelection: async () => {
+          if (!cameraStore.hasPersistence) return true;
+          await cameraStore.synchronizeFromPersistence();
+          return true;
+        },
       },
       mulnxTool,
     );

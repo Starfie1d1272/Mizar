@@ -64,6 +64,7 @@ export function registerOrchestrationRoutes(
     configureDemo?: (requestId: string, commit: () => void) => void;
     canPrepare?: () => boolean;
     withSelection?: (commit: () => Promise<void>) => Promise<boolean>;
+    reconcileSelection?: () => Promise<boolean>;
   },
   tool?: MulnxTool,
 ) {
@@ -206,12 +207,18 @@ export function registerOrchestrationRoutes(
       if (!tool) throw new Error('mulnx_bundle_unavailable');
       if (body.action === 'stage')
         return await tool.stageSelection(body.preparedId, body.cs2Path, body.consoleCapture);
-      let result: { version: string } | undefined;
+      let result: { version: string; cameraReady?: boolean } | undefined;
       if (
         !session?.withSelection ||
         !(await session.withSelection(async () => {
           result = await tool.commitSelection(body.id);
           director.invalidatePreparation('MulNX 版本已切换，请重新准备运镜。');
+          if (session.reconcileSelection) {
+            const cameraReady = await session.reconcileSelection().catch(() => false);
+            result = { ...result, cameraReady };
+            if (!cameraReady)
+              director.invalidatePreparation('镜头资源已变化，请重新选择或使用方案。');
+          }
         }))
       )
         throw new Error('mulnx_preparation_required');
@@ -256,13 +263,20 @@ export function registerOrchestrationRoutes(
         })
         .parse(request.body);
       director.hold('正在准备 MulNX');
-      return await tool.prepare(
+      const previous = tool.selectionId;
+      const result = await tool.prepare(
         body.cs2Path,
         body.consoleCapture,
         body.update,
         body.spectatorCfg,
         body.demoCfg ?? undefined,
       );
+      if (previous !== tool.selectionId) {
+        director.invalidatePreparation('MulNX 版本已切换，请重新准备运镜。');
+        if (session.reconcileSelection && !(await session.reconcileSelection().catch(() => false)))
+          director.invalidatePreparation('镜头资源已变化，请重新选择或使用方案。');
+      }
+      return result;
     } catch (error) {
       request.log.error(
         { stage: 'mulnx_prepare', err: error, result: 'failure' },
@@ -347,21 +361,23 @@ export function registerOrchestrationRoutes(
             : '无法检查 MulNX 更新，请检查网络后重试。'
           : error instanceof Error && error.message === 'camera_settings_preparation_required'
             ? '请先结束制作，再修改自动运镜设置。'
-            : error instanceof Error && error.message === 'camera_audition_unavailable'
-              ? '镜头暂不能播放，请先停止当前镜头并检查连接。'
-              : error instanceof Error && error.message === 'camera_stop_unconfirmed'
-                ? '停止未确认，请检查游戏连接后重试。'
-                : error instanceof Error && error.message === 'camera_status_unsupported'
-                  ? '当前运镜工具版本不支持此功能，请更新至支持的版本。'
-                  : error instanceof Error && error.message === 'camera_status_unconfirmed'
-                    ? '无法确认运镜状态，请检查游戏连接和工具版本。'
-                    : error instanceof Error && error.message === 'camera_pack_apply_unconfirmed'
-                      ? '运镜准备失败，请检查游戏连接后重试。'
-                      : error instanceof Error && error.message === 'camera_pack_unconfirmed'
-                        ? '运镜准备未完成，请检查当前地图和预设后重试。'
-                        : error instanceof Error && error.message === 'camera_prepare_unavailable'
-                          ? '暂不能准备运镜，请检查游戏连接和当前地图。'
-                          : '操作未完成，请检查当前地图、连接、预设与本机音频。',
+            : error instanceof Error && error.message === 'camera_source_changed'
+              ? '镜头资源已变化，请重新选择或使用方案。'
+              : error instanceof Error && error.message === 'camera_audition_unavailable'
+                ? '镜头暂不能播放，请先停止当前镜头并检查连接。'
+                : error instanceof Error && error.message === 'camera_stop_unconfirmed'
+                  ? '停止未确认，请检查游戏连接后重试。'
+                  : error instanceof Error && error.message === 'camera_status_unsupported'
+                    ? '当前运镜工具版本不支持此功能，请更新至支持的版本。'
+                    : error instanceof Error && error.message === 'camera_status_unconfirmed'
+                      ? '无法确认运镜状态，请检查游戏连接和工具版本。'
+                      : error instanceof Error && error.message === 'camera_pack_apply_unconfirmed'
+                        ? '运镜准备失败，请检查游戏连接后重试。'
+                        : error instanceof Error && error.message === 'camera_pack_unconfirmed'
+                          ? '运镜准备未完成，请检查当前地图和预设后重试。'
+                          : error instanceof Error && error.message === 'camera_prepare_unavailable'
+                            ? '暂不能准备运镜，请检查游戏连接和当前地图。'
+                            : '操作未完成，请检查当前地图、连接、预设与本机音频。',
         requestId: request.id,
       });
     }

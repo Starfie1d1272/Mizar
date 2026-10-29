@@ -55,6 +55,8 @@ export class CameraDirector {
     private readonly random = Math.random,
     private readonly isolated: (pack: string) => boolean = () => false,
     private nativeMode = false,
+    private readonly verifyPack: (map: string, pack: string) => Promise<boolean> = () =>
+      Promise.resolve(true),
   ) {}
   /** Authenticated Host lifecycle; never a source of match or upstream execution facts. */
   hostStarted(host: string) {
@@ -292,6 +294,9 @@ export class CameraDirector {
       !this.clearing;
     const work = async () => {
       try {
+        if (!(await this.verifyPack(this.truth().program.map.name ?? '', pack)))
+          throw new Error('camera_source_changed');
+        if (!valid()) throw new Error('camera_context_changed');
         if ((await this.provider.send('CamPack/Apply', pack)) !== 'queued')
           throw new Error('camera_pack_apply_unconfirmed');
         if (!valid()) throw new Error('camera_context_changed');
@@ -308,7 +313,10 @@ export class CameraDirector {
           generation === this.provider.generation
         ) {
           this.preparation = 'error';
-          this.message = '运镜准备失败，请检查当前地图和连接后重试。';
+          this.message =
+            error instanceof Error && error.message === 'camera_source_changed'
+              ? '镜头资源已变化，请重新选择或使用方案。'
+              : '运镜准备失败，请检查当前地图和连接后重试。';
         }
         throw error;
       }

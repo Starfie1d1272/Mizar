@@ -160,6 +160,18 @@ export function createBroadcastRuntime(input: {
   return {
     store,
     initialize,
+    async verifyCameraPack(map: string, pack: string): Promise<boolean> {
+      if (!ready || store.isApplying) return false;
+      const source = store.snapshot.active.resolved.camera?.maps.find(
+        (item) => item.map === map,
+      )?.source;
+      if (!source) return false;
+      try {
+        return (await deps.camera.localPack(source)) === pack;
+      } catch {
+        return false;
+      }
+    },
     async waitForApply() {
       await store.waitForApply();
       if (syncError) throw syncError;
