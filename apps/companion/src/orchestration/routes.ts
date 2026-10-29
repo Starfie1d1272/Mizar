@@ -31,6 +31,13 @@ const commandSchema = z.discriminatedUnion('action', [
     })
     .strict(),
   z.object({ action: z.literal('configure'), preset: orchestrationPresetSchema }).strict(),
+  z.strictObject({ action: z.literal('create-preset'), sourceId: z.uuid().optional() }),
+  z.strictObject({
+    action: z.literal('save-preset'),
+    id: z.uuid(),
+    preset: orchestrationPresetSchema,
+  }),
+  z.strictObject({ action: z.literal('activate-preset'), id: z.uuid() }),
   z.object({ action: z.enum(['connect', 'disconnect', 'hold', 'skip']) }).strict(),
   z
     .object({
@@ -63,6 +70,8 @@ export function registerOrchestrationRoutes(
     policy.mode === 'loopback' && checkLocalWebOrigin(policy, origin).allowed;
   const view = () => ({
     preset: director.store.preset,
+    activePresetId: director.store.activePresetId,
+    presets: director.store.presets,
     automaticEnabled: director.store.automaticEnabled,
     ready: director.store.ready,
     status: director.get(),
@@ -175,7 +184,22 @@ export function registerOrchestrationRoutes(
     let checkingTool = false;
     try {
       const body = commandSchema.parse(request.body);
-      if (body.action === 'set-automatic') {
+      let createdPresetId: string | undefined;
+      if (body.action === 'create-preset') {
+        createdPresetId = await director.store.createPreset(body.sourceId);
+      } else if (body.action === 'save-preset') {
+        await director.store.savePreset(body.id, body.preset);
+      } else if (body.action === 'activate-preset') {
+        director.invalidatePreparation('正在启用预设。');
+        try {
+          await director.store.activatePreset(body.id, async (preset) => {
+            for (const map of preset.maps)
+              if (map.openingSound) await music.trackPath(map.openingSound.id);
+          });
+        } finally {
+          director.invalidatePreparation('正在准备运镜。');
+        }
+      } else if (body.action === 'set-automatic') {
         if (!session?.canPrepare?.()) throw new Error('camera_settings_preparation_required');
         await director.store.saveAutomaticEnabled(body.enabled);
       } else if (body.action === 'check-tool') {
@@ -207,7 +231,7 @@ export function registerOrchestrationRoutes(
         director.invalidatePreparation('预设已保存，正在准备运镜。');
       } else
         await director.command(body.action, body.action === 'resume' ? body.expected : undefined);
-      return view();
+      return { ...view(), ...(createdPresetId ? { createdPresetId } : {}) };
     } catch (error) {
       request.log.error(
         { stage: 'camera_operation', err: error, result: 'failure' },

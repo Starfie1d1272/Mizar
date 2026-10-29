@@ -99,6 +99,8 @@ export interface MulnxToolView {
 export interface OrchestrationView {
   tool?: MulnxToolView;
   preset: OrchestrationPreset;
+  activePresetId: string;
+  presets: { id: string; preset: OrchestrationPreset }[];
   automaticEnabled: boolean;
   ready: boolean;
   status: OrchestrationStatus;
