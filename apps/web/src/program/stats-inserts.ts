@@ -50,8 +50,17 @@ export function statsInserts(bundle: BroadcastStats): StatsInsert[] {
       },
     ];
   });
-  if (maps.length > 0)
-    result.push({ ...base, title: '地图表现', subtitle: 'MAP PERFORMANCE', rows: maps });
+  const mapPageSize = 7;
+  for (let start = 0; start < maps.length; start += mapPageSize) {
+    const pages = Math.ceil(maps.length / mapPageSize);
+    result.push({
+      ...base,
+      scope: pages > 1 ? `${base.scope} · ${start / mapPageSize + 1} / ${pages} 页` : base.scope,
+      title: '地图表现',
+      subtitle: 'MAP PERFORMANCE',
+      rows: maps.slice(start, start + mapPageSize),
+    });
+  }
   if (
     a.recentResults.available &&
     b.recentResults.available &&
@@ -191,11 +200,6 @@ export function statsInserts(bundle: BroadcastStats): StatsInsert[] {
         b.starters.find((p) => p.userId === right.userId)!.avatarUrl,
       ] as const,
     };
-    const sample = [left, right].map((p) =>
-      [`${p.sample.maps} 图`, p.sample.adrRounds === null ? null : `${p.sample.adrRounds} 回合`]
-        .filter(Boolean)
-        .join(' · '),
-    ) as [string, string];
     result.push({
       ...playerBase,
       title: '选手对比',
@@ -216,7 +220,10 @@ export function statsInserts(bundle: BroadcastStats): StatsInsert[] {
               {
                 label: 'ADR / 回合',
                 values: [left.adr.toFixed(1), right.adr.toFixed(1)] as const,
-                samples: sample,
+                samples: [
+                  `${left.sample.adrRounds} 回合`,
+                  `${right.sample.adrRounds} 回合`,
+                ] as const,
               },
             ]
           : []),

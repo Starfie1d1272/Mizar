@@ -84,3 +84,16 @@ it('skips incomplete statistics from the provider sparse fixture', () => {
   const cards = statsInserts(broadcastStatsSchema.parse(sparse));
   expect(cards.some((card) => card.subtitle === 'MAP PERFORMANCE')).toBe(false);
 });
+
+it('splits a large shared map history into readable pages', () => {
+  const input = broadcastStatsSchema.parse(fixture);
+  for (let i = 0; i < 8; i++) {
+    for (const team of input.entrants) {
+      team.mapPerformance.maps.push({ mapName: `de_extra_${i}`, played: 1, wins: 0, winRate: 0 });
+    }
+  }
+  const pages = statsInserts(input).filter((card) => card.subtitle === 'MAP PERFORMANCE');
+  expect(pages).toHaveLength(2);
+  expect(pages.map((card) => card.rows.length)).toEqual([7, 2]);
+  expect(pages[1]!.scope).toContain('2 / 2 页');
+});

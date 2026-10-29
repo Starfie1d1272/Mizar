@@ -46,3 +46,29 @@ it('starts on the main scene, freezes each card, and restarts after unmount', as
   expect(host.textContent).toBe('MAIN');
   await act(async () => root.unmount());
 });
+
+it('shows each map page before continuing the rotation', async () => {
+  vi.useFakeTimers();
+  const data = structuredClone(fixture);
+  for (let i = 0; i < 8; i++)
+    for (const team of data.entrants)
+      team.mapPerformance.maps.push({ mapName: `de_extra_${i}`, played: 1, wins: 0, winRate: 0 });
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => Response.json(data)),
+  );
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  function Rotation() {
+    const card = useStatsRotation(true, data.matchId);
+    return <span>{card ? `${card.subtitle} ${card.scope}` : 'MAIN'}</span>;
+  }
+  await act(async () => root.render(<Rotation />));
+  await act(async () => vi.advanceTimersByTimeAsync(32_000));
+  expect(host.textContent).toContain('1 / 2 页');
+  await act(async () => vi.advanceTimersByTimeAsync(15_000));
+  expect(host.textContent).toContain('2 / 2 页');
+  await act(async () => vi.advanceTimersByTimeAsync(15_000));
+  expect(host.textContent).toContain('RECENT MAPS');
+  await act(async () => root.unmount());
+});

@@ -1,9 +1,18 @@
+import type { SyntheticEvent } from 'react';
 import { getMapThumbnail } from '@mizar/cs2-assets';
 import { BroadcastArc } from './BroadcastArc.js';
 import { ProgramCanvas } from './ProgramCanvas.js';
 import { useAssetUrl } from './assets.js';
 import './broadcast-material.css';
 import './stats-insert.css';
+
+function hideBrokenImage(event: SyntheticEvent<HTMLImageElement>) {
+  event.currentTarget.style.visibility = 'hidden';
+}
+
+function showLoadedImage(event: SyntheticEvent<HTMLImageElement>) {
+  event.currentTarget.style.visibility = '';
+}
 
 export type StatsInsert = {
   readonly title: string;
@@ -38,12 +47,34 @@ export function StatsInsertView({ insert }: { readonly insert: StatsInsert }) {
         </header>
         <div className="stats-insert__teams">
           <strong>
-            {insert.logos?.[0] && <img src={insert.logos[0]} alt="" referrerPolicy="no-referrer" />}
+            {insert.layout === 'radar' && (
+              <i className="stats-insert__key stats-insert__key--left" aria-hidden="true" />
+            )}
+            {insert.logos?.[0] && (
+              <img
+                src={insert.logos[0]}
+                alt=""
+                referrerPolicy="no-referrer"
+                onError={hideBrokenImage}
+                onLoad={showLoadedImage}
+              />
+            )}
             {insert.teams[0]}
           </strong>
           <span>VS</span>
           <strong>
-            {insert.logos?.[1] && <img src={insert.logos[1]} alt="" referrerPolicy="no-referrer" />}
+            {insert.layout === 'radar' && (
+              <i className="stats-insert__key stats-insert__key--right" aria-hidden="true" />
+            )}
+            {insert.logos?.[1] && (
+              <img
+                src={insert.logos[1]}
+                alt=""
+                referrerPolicy="no-referrer"
+                onError={hideBrokenImage}
+                onLoad={showLoadedImage}
+              />
+            )}
             {insert.teams[1]}
           </strong>
         </div>
@@ -107,7 +138,15 @@ export function StatsInsertView({ insert }: { readonly insert: StatsInsert }) {
               <section key={side}>
                 {items.map((item, i) => (
                   <div className="stats-insert__recent-item" key={i}>
-                    {item.logo && <img src={item.logo} alt="" referrerPolicy="no-referrer" />}
+                    {item.logo && (
+                      <img
+                        src={item.logo}
+                        alt=""
+                        referrerPolicy="no-referrer"
+                        onError={hideBrokenImage}
+                        onLoad={showLoadedImage}
+                      />
+                    )}
                     <strong>{item.value}</strong>
                     <small>{item.sample}</small>
                   </div>
@@ -144,6 +183,8 @@ export function StatsInsertView({ insert }: { readonly insert: StatsInsert }) {
                         src={row.portraits[0]}
                         alt=""
                         referrerPolicy="no-referrer"
+                        onError={hideBrokenImage}
+                        onLoad={showLoadedImage}
                       />
                     )}
                     <strong>{row.values[0]}</strong>
@@ -160,6 +201,8 @@ export function StatsInsertView({ insert }: { readonly insert: StatsInsert }) {
                         src={row.portraits[1]}
                         alt=""
                         referrerPolicy="no-referrer"
+                        onError={hideBrokenImage}
+                        onLoad={showLoadedImage}
                       />
                     )}
                     <strong>{row.values[1]}</strong>

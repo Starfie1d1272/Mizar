@@ -42,6 +42,15 @@
   height: 60px;
   object-fit: contain;
 }
+.stats-insert__key {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  background: #59a8ff;
+}
+.stats-insert__key--right {
+  background: #c6d7e9;
+}
 .stats-insert__portrait {
   width: 64px;
   height: 64px;

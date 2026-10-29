@@ -22,9 +22,11 @@ export function useStatsRotation(enabled: boolean, matchId: string | null): Stat
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
     let index = 0;
+    let page = 0;
     const main = () => {
       setVisible(null);
       index = 0;
+      page = 0;
       timer = setTimeout(() => void next(), 20_000);
     };
     const next = async () => {
@@ -41,8 +43,13 @@ export function useStatsRotation(enabled: boolean, matchId: string | null): Stat
         }
         const cards = statsInserts(parsed.data);
         while (index < sequence.length) {
-          const [name, duration] = sequence[index++]!;
-          const card = cards.find((item) => item.subtitle === name);
+          const [name, duration] = sequence[index]!;
+          const matching = cards.filter((item) => item.subtitle === name);
+          const card = matching[page++];
+          if (page >= matching.length) {
+            index++;
+            page = 0;
+          }
           if (card) {
             setVisible({ matchId, card });
             timer = setTimeout(() => void next(), duration);

@@ -28,14 +28,19 @@ export function StatsInsertPage() {
         if (!active) return;
         if (matchId !== current) {
           current = matchId;
-          const requestGeneration = ++generation;
+          generation++;
           setBundle(null);
-          if (matchId) {
+        }
+        if (matchId) {
+          const requestGeneration = generation;
+          try {
             const stats = await fetch('/local/v1/broadcast-stats', {
               cache: 'no-store',
               signal: AbortSignal.timeout(5000),
             });
-            const parsed = broadcastStatsSchema.safeParse(stats.ok ? await stats.json() : null);
+            const data = stats.ok ? await stats.json() : undefined;
+            if (active && requestGeneration === generation && data === null) setBundle(null);
+            const parsed = broadcastStatsSchema.safeParse(data);
             if (
               active &&
               requestGeneration === generation &&
@@ -43,6 +48,8 @@ export function StatsInsertPage() {
               parsed.data.matchId === matchId
             )
               setBundle(parsed.data);
+          } catch {
+            // Keep the last same-match snapshot when the local read fails.
           }
         }
       } catch {
