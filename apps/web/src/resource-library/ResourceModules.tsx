@@ -1,5 +1,5 @@
-import { useRef, useState } from 'react';
-import type { ModuleRecord } from '@mizar/broadcast-config';
+import { useEffect, useRef, useState } from 'react';
+import { parseModuleRecord, type ModuleRecord } from '@mizar/broadcast-config';
 import { useLocalRead } from '../preparation/client';
 import { Button, Checkbox, Panel, Select, StatusBanner } from '../ui';
 import { PresetVisualPreview } from './PresetVisualPreview';
@@ -44,6 +44,14 @@ const entryStatus: Record<PackEntry['status'], string> = {
   removed: '曾删除，可重新导入',
 };
 const labels: Record<Kind, string> = { hud: 'HUD', program: '场景', music: '音乐', camera: '运镜' };
+function programUnsupported(entry: ModuleRecord): boolean {
+  try {
+    const parsed = parseModuleRecord(entry);
+    return parsed.kind !== 'program' || pulseTokenStyle(parsed.value) === null;
+  } catch {
+    return true;
+  }
+}
 function download(blob: Blob, name: string) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
@@ -70,6 +78,11 @@ export function ResourceModules({
       availability?: { state: 'ready' | 'dependency_missing'; reason?: string };
     }[];
   }>('/local/v1/broadcast-modules', 2000, refresh);
+  const migration = useLocalRead<{ state: string; reason?: string }>(
+    '/local/v1/broadcast-config/migration',
+    2000,
+    refresh,
+  );
   const pendingCamera = useLocalRead<{
     pending: {
       catalog: { presets: { id: string; preset: { name: string } }[] };
@@ -89,6 +102,7 @@ export function ResourceModules({
   const [inspectionOpen, setInspectionOpen] = useState(false);
   const [selectedEntries, setSelectedEntries] = useState<string[]>([]);
   const input = useRef<HTMLInputElement>(null);
+  const scrollToSelection = useRef(false);
   const showList = category === 'all' || ['hud', 'program', 'music', 'camera'].includes(category);
   const entries =
     directory?.modules.filter(
@@ -96,6 +110,14 @@ export function ResourceModules({
         (category === 'all' || category === module.kind) &&
         module.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()),
     ) ?? [];
+  useEffect(() => {
+    if (!scrollToSelection.current || !selected || !showList) return;
+    const target = document.getElementById(`resource-${selected}`);
+    if (target) {
+      scrollToSelection.current = false;
+      target.scrollIntoView?.({ block: 'nearest' });
+    }
+  }, [selected, showList, directory]);
   const item = directory?.modules.find(({ module }) => module.id === selected);
   const module = item?.module;
   const referenceView = useLocalRead<{
@@ -377,6 +399,22 @@ export function ResourceModules({
       {(!snapshot || !directory) && (
         <StatusBanner tone="warning">资源目录暂不可用，请检查本地制播服务。</StatusBanner>
       )}
+      {migration?.state === 'pending' && migration.reason === 'program_dependency_unavailable' && (
+        <StatusBanner tone="danger">
+          <p>
+            当前播出场景的背景不可用。请恢复图片后重新使用该场景，或使用其他场景；HUD 可继续使用。
+          </p>
+          <Button
+            onClick={() => {
+              scrollToSelection.current = true;
+              setSelected(snapshot?.active.sourceModuleIds?.program ?? null);
+              onImported();
+            }}
+          >
+            检查场景资源
+          </Button>
+        </StatusBanner>
+      )}
       {(category === 'all' || category === 'camera') && pendingCamera?.pending && (
         <Panel className="resource-library__item">
           <div>
@@ -411,7 +449,7 @@ export function ResourceModules({
         )}
       {showList &&
         entries.map(({ module: entry, builtin, availability }) => (
-          <Panel className="resource-library__item" key={entry.id}>
+          <Panel className="resource-library__item" key={entry.id} id={`resource-${entry.id}`}>
             <div>
               <span className="resource-library__kind">
                 {labels[entry.kind]} · {builtin ? '内置' : entry.origin ? '导入' : '自建'}
@@ -475,9 +513,7 @@ export function ResourceModules({
                 <div className="resource-library__preset-actions">
                   <Button
                     disabled={
-                      busy ||
-                      !snapshot ||
-                      (entry.kind === 'program' && pulseTokenStyle(entry.value) === null)
+                      busy || !snapshot || (entry.kind === 'program' && programUnsupported(entry))
                     }
                     onClick={() =>
                       snapshot &&
