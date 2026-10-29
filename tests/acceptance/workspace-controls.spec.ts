@@ -129,9 +129,7 @@ test('workspace exit outcome survives a closed dock and failure allows a single 
   await recovery.goto('/');
   const result = recovery.getByLabel('工作台退出结果');
   await expect(result).toContainText('关闭游戏与恢复设置');
-  await expect(
-    recovery.getByRole('button', { name: '打开直播工作台', exact: true }),
-  ).toBeDisabled();
+  await expect(recovery.locator('.preparation-heading > button')).toBeDisabled();
   await expect(result.getByRole('button', { name: '正在退出…' })).toBeDisabled();
   await result.getByRole('button', { name: '运行诊断', exact: true }).click();
   expect(calls).toContainEqual({
