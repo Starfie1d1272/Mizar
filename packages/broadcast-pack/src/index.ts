@@ -201,3 +201,4 @@ export function verifyFiles(
 }
 
 export { readPackArchive, writePackArchive } from './archive.js';
+export * from './modules.js';
