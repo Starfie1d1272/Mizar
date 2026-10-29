@@ -69,7 +69,7 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
   const snapshot = preview
     ? programPreviewSnapshot('gameplay', params.get('variant'))
     : connection.current;
-  if (!preview && display.status === 'unsupported' && display.current === null) return null;
+  if (!preview && display.current === null) return null;
   return (
     <ProgramView
       kind="scene"
