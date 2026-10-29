@@ -85,7 +85,14 @@ export class MulnxProvider {
       if (text.startsWith('{')) {
         try {
           const raw: unknown = JSON.parse(text);
-          if (raw && typeof raw === 'object' && 'type' in raw && raw.type === 'HSI/Subscribed') {
+          if (
+            raw &&
+            typeof raw === 'object' &&
+            'type' in raw &&
+            raw.type === 'WebSocket/ChannelSelected' &&
+            'payload' in raw &&
+            raw.payload === 'events'
+          ) {
             if (!subscribed) {
               subscribed = true;
               this.emitInput({ kind: 'subscribed', generation });
@@ -154,7 +161,7 @@ export class MulnxProvider {
           clearTimeout(timer);
           if (generation === this.generation) {
             try {
-              socket.send(JSON.stringify({ type: 'HSI/Subscribe' }));
+              socket.send(JSON.stringify({ type: 'WebSocket/SelectChannel', payload: 'events' }));
             } catch {
               /* Camera connection remains independent. */
             }

@@ -14,6 +14,8 @@ import {
 } from './observer-process.js';
 import type { ObserverSettingsStore } from './observer-settings.js';
 import { sendObserverGameCommand, observerConnectCommand } from './observer-game-control.js';
+import { MatchNameSync, matchNames } from './match-names.js';
+import type { MatchContextBinding } from '../match-context/lkg-store.js';
 import observerComponent from './observer-component.json' with { type: 'json' };
 
 export const OBSERVER_VERSION = observerComponent.version;
@@ -371,6 +373,7 @@ export function registerWorkspaceObserver(
   token: string,
   canStart: () => boolean = () => true,
   settings?: ObserverSettingsStore,
+  binding?: () => MatchContextBinding | undefined,
 ) {
   type Host = {
     game: string;
@@ -415,6 +418,14 @@ export function registerWorkspaceObserver(
     host !== undefined &&
     (!prepared || prepared.identity === identity(host)) &&
     performance.now() - hostLease <= 6000;
+  const names = new MatchNameSync(() => ({
+    session: leased() && host?.useMulnx ? JSON.stringify([host.game, host.job]) : null,
+    names: canStart() ? matchNames(binding?.()) : new Map<string, string>(),
+  }));
+  const namesTimer = setInterval(() => {
+    void names.tick().catch(() => app.log.error({ stage: 'match_names' }, '游戏昵称同步失败'));
+  }, 1000);
+  namesTimer.unref();
   const keys = (value: Host) => {
     const connection = settings?.configured();
     const game = JSON.stringify([value.game, value.job]);
@@ -487,6 +498,8 @@ export function registerWorkspaceObserver(
     });
   });
   app.addHook('onClose', async () => {
+    clearInterval(namesTimer);
+    await names.close();
     unsubscribe?.();
     ++epoch;
     host = undefined;
@@ -562,6 +575,7 @@ export function registerWorkspaceObserver(
           !settings ||
           !(
             settings.settings.enabled ||
+            (body.useMulnx && matchNames(binding?.()).size > 0) ||
             (gameControl &&
               (gameControl.autoConnect || (!body.nativeHudToggle && gameControl.hideGameHud)))
           )
