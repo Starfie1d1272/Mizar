@@ -660,7 +660,9 @@ it('rejects unknown image slots and keeps the service usable after the active im
         })
       ).status,
     ).toBe(200);
-    expect((await fetch(`${base}/local/v1/broadcast-display-config`)).status).toBe(200);
+    const repairedDisplay = await fetch(`${base}/local/v1/broadcast-display-config`);
+    expect(repairedDisplay.status).toBe(200);
+    expect(repairedDisplay.headers.get('x-mizar-program-status')).toBeNull();
   } finally {
     await second.close();
     await rm(root, { recursive: true, force: true });
