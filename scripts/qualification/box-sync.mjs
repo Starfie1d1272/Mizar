@@ -1277,7 +1277,7 @@ async function main() {
     const run = await github(`actions/runs/${event.workflow_run.id}`);
     requireValue(
       run.conclusion === 'success' &&
-        run.event === 'workflow_dispatch' &&
+        ['workflow_dispatch', 'workflow_run'].includes(run.event) &&
         run.path === '.github/workflows/release-promotion.yml' &&
         run.repository.full_name === process.env.GITHUB_REPOSITORY,
       '触发来源不是成功的发布晋级',

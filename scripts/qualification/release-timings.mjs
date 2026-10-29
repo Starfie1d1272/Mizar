@@ -73,7 +73,7 @@ export function releaseTimingReport({
     qualification.event !== 'workflow_dispatch' ||
     promotion.path !== '.github/workflows/release-promotion.yml' ||
     promotion.head_branch !== 'main' ||
-    promotion.event !== 'workflow_dispatch' ||
+    !['workflow_dispatch', 'workflow_run'].includes(promotion.event) ||
     (box &&
       (promotion.conclusion !== 'success' ||
         box.path !== '.github/workflows/box-sync.yml' ||

@@ -127,8 +127,6 @@ BP 内置 BO3 演示使用同场 EPL 公开禁选和已确认的 UTC 开赛时�
 
 ## 便携包自动化
 
-离线验收单独运行时保留完整静态检查。CI 已选择同一源码的质量任务时，通过 `--quality-owned-static-checks` 将格式、lint 和架构检查交给质量任务；聚合门禁仍要求质量与离线任务都成功。独立 offline 命令保留类型、完整单测、构建和可移植性检查；CI 选中必需 Quality 时，`--platform-only --quality-owned-static-checks` 保留本 OS 类型、构建、真实平台消费者和包完整性，由 Quality 唯一负责通用单测和静态检查。不跨 OS 复用构建产物。离线脚本自身变化同时选择 Linux/macOS 验收；阶段耗时和失败保留于 `.agent-tmp/offline-evidence/build-timings.json`。
-
 离线验收与构建器共用应用版本和发布包命名函数，检查同一版本的目录及 ZIP；不接受其他版本的归档替代本次产物。检查整个应用目录中残留的开发文件和符号链接，不仅凭依赖目录名为 `test` 就删除可能被运行入口引用的资源。发布名称规范见[发布流程](release-readiness.md)。
 
 Desktop 通过 localhost Companion 读取随包 Web，Tauri 不嵌入生产 Web 副本。便携包仅包含 Node 可执行文件与许可，不携带 npm、Corepack、TypeScript 声明（含 `.d.mts` / `.d.cts`）、明确脚本与样式扩展名的源码映射或构建缓存；资源摘要和校验清单在精简后生成。首次启动采用有界并发校验，并记录文件进度；桌面分别为产物校验和服务就绪计时，不能让校验耗时挤占服务启动期限。正式 Web 使用 EPL Inferno 开局与决胜回合回放，包含本地头像；历史 Ancient 与 Nuke 回放只用于开发回归，不进入生产包。每次产品构建校验资源边界。
@@ -137,16 +135,7 @@ Desktop 通过 localhost Companion 读取随包 Web，Tauri 不嵌入生产 Web 
 
 [#226 的参数对照](https://github.com/Starfie1d1272/Mizar/pull/226)显示编译耗时与产物体积存在取舍；单轮、固定顺序以及缺少真实下载和冻结 RC 验收，不足以改变正式 Cargo/NSIS 参数。一次性研究入口、脚本与原始输出已归档于该 PR 和 Git 历史，不作为常规 CI。正式 ZIP 与 Setup 已压缩，资格产品上传保持外层压缩关闭，原始产品字节与身份不变。
 
-- `local-web-production-smoke.mjs` 验证生产 HTML、资源传输、样式表类型与构建内容一致性、CS2 资源摘要及真实 WebSocket 基线；它不执行浏览器页面，不证明最终 HUD 已渲染。
-- `pnpm local-web:production-browser-smoke` 在已构建的 Companion 与 Web 上执行真实 HTTP GSI → 运行时／投影 → WebSocket → Chromium，使用已保存 Ancient 回合的 628 帧并核对摘要。它检查队伍、十名选手、雷达实际绘制、C4 阶段与回合结束比分，不拦截 HTTP 或 WebSocket；比赛资料与接收时钟由回放夹具提供。先通过 pnpm 构建图构建 Companion 与 Web，并安装 Chromium；不要在浏览器运行期间重建共享包。此回合片段不证明完整现场制播或 Windows／OBS 性能。
-- `product-smoke.mjs` 检查服务、安装/恢复和重启，`--no-browser` 模式不证明桌面窗口成功。
-- Windows Release Qualification 使用资源管理器 ZIP 处理器解压，等待全部文件落盘后校验资源并启动；不能只用 `tar` 解压证明“全部提取”兼容。
-- `desktop-smoke.mjs` 启动正常 EXE，检查同包健康、所属进程的可见窗口、页面导航、无可见 Node 控制台与完整退出；失败注入核对错误、回滚和日志。 控制台采样遇到 Win32 5 时重新查询原 PID 与创建时间，只有确认原进程已退出才接受该采样；活进程检查失败与可见控制台仍判失败。
-- `product-soak.mjs` 在同一进程运行合成比赛流程，检查连续更新和有界投递，不冒充真实整场比赛。
-- 原生另存为、DPI、多显示器、真实 CS2 与 OBS 仍在 RC 上实测。
-- Windows 定向 CI、扩展验证与资格构建运行 `verify-update-recovery.mjs`，使用明确的独立安装器样例验证成功、取消、写入失败、宿主残留和中断后的旧版恢复及资料保留。签名测试使用真实正式发布证明，离线验证证书、签名与透明日志；浏览器验证更新日志优先展示、单次明确操作衔接安装、取消与延迟安装意图、制作保护及错误反馈。实际旧版到新 Stable 的 NSIS 升级、登录恢复入口及 CS2 / OBS 制作保护仍需 Windows 实机验收。
-- PowerShell 故障注入从 DesktopLog 进入桌面后台执行器，核对原始 stderr、退出码、超时、无效 JSON、输出限额和凭据脱敏。GSI 后台命令的 UTF-8 输出与 Windows 逐字路径前缀需要在影响该调用边界的改动中定向验证；不能仅直接运行脚本代替桌面调用边界验证。
-- Windows Steam 路径发现先规范化绝对路径、斜杠、大小写与尾部分隔符，再核对唯一安装；注册信息和库清单重复引用同一路径不算多个安装，真正不同的安装仍拒绝自动选择。候选按 AppID 730 清单定位并验证程序及新版 cfg；旧版 cfg 不产生第二份安装。原生手动选择与 GSI、启动共用安装位置，读取失败与真实配置冲突分别举证。重复接收地址自动备份／停用与恢复须覆盖重试、中断及原路径被其他软件重新创建的情况；不同地址配置保持不变。后台 CS2 巡检的锁竞争不表示人工操作正在执行，配置进度只展示启动、恢复与设置变更。
+产品的 Windows、CS2 与 OBS 行为通过实机验收；自动发行保留资产、来源与签名检查。
 
 ```sh
 node scripts/qualification/desktop-smoke.mjs <bundle-root> <report.json>
@@ -158,8 +147,6 @@ pnpm qualification:verify <evidence-dir-or-zip>
 ## 证据与结果
 
 Full Setup 资格准备并行安装固定 NSIS 3.11 与解压已核验候选 ZIP，进入真实安装前等待两者结束；任何一项失败仍拒绝，解压失败也必须等待工具写入结束。Core 的工具准备保持原路径。Setup 构建按编译、首次安装及内容核验、交互安装与启动、覆盖安装、卸载与用户数据保留、重装及内容复核记录分段耗时和原始失败状态，随各自资格证据保留 `setup-timings.json` / `core-setup-timings.json`；静默、交互、卸载与重装检查均保留。历史耗时和理论重叠时间不替代新源码整轮 Qualification 或完整发布链的达标证据。
-
-Release Qualification 对 Setup 启用 `create-windows-setup.ps1 -CaptureUi`，实际操作中文向导、选择桌面快捷方式、完成后启动 Mizar 并正常停止，保存欢迎、目录、快捷方式、进度和完成页截图，以及安装包摘要、系统版本和实际 DPI。截图在 Setup 资格证据包的 `installer-ui` 中供维护者签收；截图与自动化通过不代替审美判断。125% / 150% 缩放必须在对应实际 DPI 下复核中文和控件边界；报告未覆盖的缩放仍待实机验收。验收者可在对应 Windows 显示缩放下运行 `scripts/qualification/capture-setup-ui.ps1`，指定同一安装包、全新安装目录和证据目录。
 
 安装器素材清单记录原标志来源、许可、SVG 与 BMP 的大小和 SHA-256。Setup 构建先核对清单与原标志，再将素材清单、图标和素材摘要记录到 `distribution-manifest.json`；这些是安装器构建输入，不进入被安装内容的身份。正式构建缺少素材或摘要不符时停止；直接编译 NSIS 脚本未指定素材目录时可使用 MUI2 默认画面。
 

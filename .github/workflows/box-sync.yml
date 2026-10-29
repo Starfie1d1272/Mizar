@@ -26,7 +26,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   sync:
-    if: github.repository == 'Starfie1d1272/Mizar' && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.path == '.github/workflows/release-promotion.yml' && github.event.workflow_run.event == 'workflow_dispatch'))
+    if: github.repository == 'Starfie1d1272/Mizar' && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.path == '.github/workflows/release-promotion.yml' && contains(fromJSON('["workflow_dispatch","workflow_run"]'), github.event.workflow_run.event)))
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -34,6 +34,17 @@ jobs:
         with:
           ref: main
           persist-credentials: false
+      - name: Check remaining release budget
+        if: ${{ github.event_name == 'workflow_run' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROMOTION_RUN: ${{ github.event.workflow_run.id }}
+          PROMOTION_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+        run: |
+          job=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PROMOTION_RUN/jobs?per_page=100" --jq '.jobs[] | select(.name | test("^发布 Mizar v[0-9]+\\.[0-9]+\\.[0-9]+-(alpha|beta|rc)\\.[1-9][0-9]*$")) | .name')
+          if [ -n "$job" ]; then exit 0; fi
+          gh run download "$PROMOTION_RUN" --name "promotion-records-$PROMOTION_ATTEMPT" --dir "$RUNNER_TEMP/release-records"
+          node --input-type=module -e 'import {readFileSync} from "node:fs"; const r=JSON.parse(readFileSync(process.env.RUNNER_TEMP+"/release-records/release-timings.json")); const t=Date.parse(r.qualification.createdAt); if (!Number.isFinite(t) || Date.now()-t>600000) throw new Error("Release 600-second budget exceeded or missing start time");'
       - name: 同步与校验云盘
         id: mirror
         env:
