@@ -207,8 +207,9 @@ export function registerObsRoutes(
                 ? '麦克风监听会回到桌面混音；请在 OBS 关闭麦克风监听后重试。'
                 : error instanceof Error && error.message === 'audio_video_binding'
                   ? '游戏或解说音频绑定在画面来源上；请先改为独立音频来源，避免关闭画面。'
-                  : error instanceof Error && error.message === 'audio_global_path_unresolved'
-                    ? '请在 OBS 设置 → 音频关闭全局音频来源，再切换。'
+                  : error instanceof Error &&
+                      error.message.startsWith('audio_global_path_unresolved:')
+                    ? `OBS 全局音频来源“${error.message.slice('audio_global_path_unresolved:'.length)}”与目标重复，请在 OBS 停用该来源后重试。`
                     : '切换未确认，请检查 OBS 音频、停止输出并重新读取来源。',
       });
     }

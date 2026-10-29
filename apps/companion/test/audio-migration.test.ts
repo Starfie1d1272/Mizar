@@ -1266,3 +1266,134 @@ test('exclusive nested audio is restored and a group shared with another scene i
       }
     });
 });
+
+test('matching global desktop is reused and extra global audio blocks before writes', async () => {
+  for (const conflict of [false, true])
+    await withJournal(async (path) => {
+      const revision = randomUUID();
+      await writeFile(
+        path,
+        JSON.stringify({
+          revision,
+          desktop: null,
+          transition: false,
+          bindings: {
+            game: null,
+            remoteCommentary: null,
+            microphone: {
+              inputUuid: 'mic',
+              inputKind: 'wasapi_input_capture',
+              endpoint: 'endpoint',
+              collection: OBS_COLLECTION,
+            },
+          },
+        }),
+      );
+      const scenes = obsDesiredScenes('http://127.0.0.1');
+      const inputs = [
+        { inputUuid: 'desk', inputName: 'global desktop', inputKind: 'wasapi_output_capture' },
+        { inputUuid: 'mic', inputName: 'global mic', inputKind: 'wasapi_input_capture' },
+        { inputUuid: 'game', inputName: 'game', inputKind: 'wasapi_process_output_capture' },
+        { inputUuid: 'extra', inputName: 'extra', inputKind: 'wasapi_input_capture' },
+      ];
+      const lists = new Map(
+        scenes.map(({ sceneName }) => [
+          sceneName,
+          [{ sourceUuid: 'game', sourceName: 'game', sceneItemId: 1, sceneItemEnabled: true }],
+        ]),
+      );
+      const listeners = new Set<(event: MigrationEvent) => void>();
+      const observer: MigrationObserver = {
+        subscribe(listener) {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      };
+      let writes = 0;
+      const obs: ObsRpc = {
+        async call(type, data) {
+          if (type === 'GetStreamStatus' || type === 'GetRecordStatus')
+            return { outputActive: false };
+          if (type === 'GetSceneCollectionList')
+            return { currentSceneCollectionName: OBS_COLLECTION };
+          if (type === 'GetSpecialInputs')
+            return {
+              desktop1: 'global desktop',
+              mic1: 'global mic',
+              ...(conflict ? { mic2: 'extra' } : {}),
+            };
+          if (type === 'GetVersion')
+            return {
+              availableRequests: [
+                'GetInputList',
+                'GetInputSettings',
+                'GetSceneCollectionList',
+                'GetSpecialInputs',
+                'GetSceneList',
+                'GetSceneItemList',
+                'GetGroupSceneItemList',
+              ],
+            };
+          if (type === 'GetInputList') return { inputs };
+          if (type === 'GetSceneList')
+            return { scenes: scenes.map(({ sceneName }) => ({ sceneName })) };
+          if (type === 'GetSceneItemList')
+            return {
+              sceneItems: lists.get(data?.sceneName as string)!.map((item) => ({ ...item })),
+            };
+          if (type === 'SetSceneItemEnabled') {
+            const item = lists.get(data?.sceneName as string)![0]!;
+            item.sceneItemEnabled = data?.sceneItemEnabled as boolean;
+            writes++;
+            for (const listener of listeners)
+              listener({
+                type: 'item',
+                sceneName: data?.sceneName as string,
+                sceneItemId: item.sceneItemId,
+                enabled: item.sceneItemEnabled,
+              });
+            return {};
+          }
+          throw new Error(`Unexpected request ${type}`);
+        },
+      };
+      const routing = new ObsAudioRouting(path);
+      const run = () =>
+        routing.switchMode(
+          obs,
+          'endpoint',
+          revision,
+          'desktop',
+          undefined,
+          async (ids, desktop, verify, begin, commit) => {
+            assert.equal(desktop, 'desk');
+            assert.equal(ids.microphone, 'mic');
+            const id = await begin({ bgm: null, stinger: null }, { bgm: null, stinger: null });
+            await reconcileManagedAudio(
+              obs,
+              'endpoint',
+              observer,
+              `${path}.probe`,
+              'http://127.0.0.1',
+              ids,
+              verify,
+              desktop,
+              undefined,
+              [],
+              id,
+            );
+            await commit(id);
+          },
+        );
+      if (conflict) {
+        await assert.rejects(run(), /audio_global_path_unresolved:extra/);
+        assert.equal(writes, 0);
+      } else {
+        await run();
+        assert.equal((await routing.desktopBinding())?.inputUuid, 'desk');
+        assert.ok(
+          [...lists.values()].every((list) => list.length === 1 && !list[0]!.sceneItemEnabled),
+        );
+      }
+    });
+});

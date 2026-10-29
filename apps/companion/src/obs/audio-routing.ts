@@ -270,13 +270,23 @@ export class ObsAudioRouting {
         ]
       : Object.values(managed!.ids);
     const specials = await obs.call('GetSpecialInputs');
-    if (
-      Object.entries(specials).some(
-        ([key, value]) => key.startsWith('desktop') && typeof value === 'string' && value,
-      )
-    )
-      return false;
     const inputs = records((await obs.call('GetInputList')).inputs);
+    const globalNames = new Set(
+      Object.values(specials).filter(
+        (value): value is string => typeof value === 'string' && value.length > 0,
+      ),
+    );
+    const allowed = new Set(
+      inputs
+        .filter(
+          (input) =>
+            (state.desktop && input.inputUuid === state.desktop.inputUuid) ||
+            input.inputUuid ===
+              (state.desktop ? state.desktopMicrophone?.inputUuid : managed?.ids.microphone),
+        )
+        .map((input) => String(input.inputName)),
+    );
+    if ([...globalNames].some((name) => !allowed.has(name))) return false;
     if (state.desktop) {
       if (
         !inputs.some(
@@ -298,6 +308,7 @@ export class ObsAudioRouting {
       if (
         selectedIds.some(
           (id) =>
+            !globalNames.has(String(inputs.find((input) => input.inputUuid === id)?.inputName)) &&
             items.filter((i) => i.sourceUuid === id && i.sceneItemEnabled === true).length !== 1,
         )
       )
@@ -552,8 +563,11 @@ export class ObsAudioRouting {
         current.collection !== OBS_COLLECTION
       )
         throw new Error('audio_setup_context_changed');
-      if (Object.values(specials).some((value) => typeof value === 'string' && value))
-        throw new Error('audio_global_path_unresolved');
+      const globalNames = new Set(
+        Object.values(specials).filter(
+          (value): value is string => typeof value === 'string' && value.length > 0,
+        ),
+      );
       const managedNames = obsDesiredScenes('http://127.0.0.1').map((scene) => scene.sceneName);
       const graph = await inspectAudioSceneGraph(obs, managedNames);
       const managedIds = new Set(
@@ -576,7 +590,9 @@ export class ObsAudioRouting {
       }
       if (!ids.microphone) {
         const microphones = current.candidates.filter(
-          (input) => input.inputKind === 'wasapi_input_capture' && managedIds.has(input.inputUuid),
+          (input) =>
+            input.inputKind === 'wasapi_input_capture' &&
+            (managedIds.has(input.inputUuid) || globalNames.has(input.inputName)),
         );
         if (microphones.length === 1) ids.microphone = microphones[0]!.inputUuid;
       }
@@ -606,7 +622,8 @@ export class ObsAudioRouting {
         if (!input) {
           const candidates = current.candidates.filter(
             (value) =>
-              value.inputKind === 'wasapi_output_capture' && managedIds.has(value.inputUuid),
+              value.inputKind === 'wasapi_output_capture' &&
+              (managedIds.has(value.inputUuid) || globalNames.has(value.inputName)),
           );
           if (candidates.length > 1) {
             const deviceIds = await Promise.all(
@@ -626,6 +643,11 @@ export class ObsAudioRouting {
           input = candidates[0];
         }
         if (!input) {
+          const micName = current.candidates.find(
+            (candidate) => candidate.inputUuid === ids.microphone,
+          )?.inputName;
+          const conflict = [...globalNames].find((name) => name !== micName);
+          if (conflict) throw new Error(`audio_global_path_unresolved:${conflict}`);
           const [streamNow, recordNow, collectionNow] = await Promise.all([
             obs.call('GetStreamStatus'),
             obs.call('GetRecordStatus'),
@@ -659,6 +681,13 @@ export class ObsAudioRouting {
             throw new Error('audio_selection_changed');
         }
       }
+      const micName = current.candidates.find(
+        (candidate) => candidate.inputUuid === ids.microphone,
+      )?.inputName;
+      const globalConflict = [...globalNames].find(
+        (name) => name !== micName && name !== input!.inputName,
+      );
+      if (globalConflict) throw new Error(`audio_global_path_unresolved:${globalConflict}`);
       if (ids.microphone) {
         const microphone = current.candidates.find(
           (candidate) => candidate.inputUuid === ids.microphone,

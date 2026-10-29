@@ -55,6 +55,12 @@ export async function reconcileManagedAudio(
     if (!input || typeof input.inputName !== 'string') throw new Error('audio_selection_changed');
     return input;
   });
+  let globalNames = new Set<string>();
+  const allowedGlobals = new Set(
+    selected
+      .filter((input) => input.inputUuid === ids.microphone || input.inputUuid === desktopUuid)
+      .map((input) => String(input.inputName)),
+  );
   let changed = false;
   let preparing = true;
   let migrating = false;
@@ -82,8 +88,12 @@ export async function reconcileManagedAudio(
       collection.currentSceneCollectionName !== OBS_COLLECTION
     )
       throw new Error('audio_setup_context_changed');
-    if (Object.values(specials).some((value) => typeof value === 'string' && value.length))
-      throw new Error('audio_global_path_unresolved');
+    const names = Object.values(specials).filter(
+      (value): value is string => typeof value === 'string' && value.length > 0,
+    );
+    const conflict = names.find((name) => !allowedGlobals.has(name));
+    if (conflict) throw new Error(`audio_global_path_unresolved:${conflict}`);
+    globalNames = new Set(names);
   };
   try {
     await check();
@@ -197,6 +207,7 @@ export async function reconcileManagedAudio(
         );
         if (
           count === 0 &&
+          !globalNames.has(String(input.inputName)) &&
           !coveredByNested &&
           (!desktopUuid || input.inputUuid !== ids.microphone || microphoneActive)
         )
@@ -240,6 +251,7 @@ export async function reconcileManagedAudio(
         if (
           wanted &&
           !item.sceneItemEnabled &&
+          !globalNames.has(String(input.inputName)) &&
           !nestedAlreadyActive &&
           (!desktopUuid || input.inputUuid !== ids.microphone)
         )
@@ -313,7 +325,17 @@ export async function verifyManagedAudioMode(
 ): Promise<boolean> {
   const inputs = records((await obs.call('GetInputList')).inputs);
   const specials = await obs.call('GetSpecialInputs');
-  if (Object.values(specials).some((value) => typeof value === 'string' && value)) return false;
+  const globalNames = new Set(
+    Object.values(specials).filter(
+      (value): value is string => typeof value === 'string' && value.length > 0,
+    ),
+  );
+  const allowedGlobals = new Set(
+    inputs
+      .filter((input) => input.inputUuid === desktop || input.inputUuid === ids.microphone)
+      .map((input) => String(input.inputName)),
+  );
+  if ([...globalNames].some((name) => !allowedGlobals.has(name))) return false;
   const wanted = desktop ? [desktop] : [ids.game, ids.remoteCommentary];
   if (wanted.some((uuid) => !uuid || !inputs.some((input) => input.inputUuid === uuid)))
     return false;
@@ -328,7 +350,14 @@ export async function verifyManagedAudioMode(
     const active = graph
       .filter((container) => container.activeManagedRoots.has(name))
       .flatMap((container) => container.items.filter((item) => item.sceneItemEnabled));
-    if (wanted.some((uuid) => !active.some((item) => item.sourceUuid === uuid))) return false;
+    if (
+      wanted.some(
+        (uuid) =>
+          !active.some((item) => item.sourceUuid === uuid) &&
+          !globalNames.has(String(inputs.find((input) => input.inputUuid === uuid)?.inputName)),
+      )
+    )
+      return false;
     for (const item of active) {
       const input = inputs.find((entry) => entry.inputUuid === item.sourceUuid);
       if (!input) continue;

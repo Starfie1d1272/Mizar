@@ -674,6 +674,14 @@ export class ObsAdapter {
               )
             )
               throw new Error('audio_video_binding');
+            if (!desktop) {
+              const specials = await obs.call('GetSpecialInputs');
+              const conflictingDesktop = Object.entries(specials).find(
+                ([key, value]) => key.startsWith('desktop') && typeof value === 'string' && value,
+              );
+              if (conflictingDesktop)
+                throw new Error(`audio_global_path_unresolved:${conflictingDesktop[1]}`);
+            }
             const relationship = desktop
               ? await desktopMonitorRelationship(obs, desktop)
               : 'different';
