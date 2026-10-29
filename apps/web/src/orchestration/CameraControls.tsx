@@ -18,6 +18,7 @@ export function CameraControls({
       <p className="workspace-camera-empty">运镜状态暂不可用，请检查本地服务。</p>
     ) : null;
   const s = view.status;
+  const preparation = s.preparation;
   const send = async (action: string) => {
     setBusy(true);
     setError('');
@@ -42,27 +43,38 @@ export function CameraControls({
       {workspace ? (
         <div className="workspace-camera-summary">
           <StatusPill tone={s.held ? 'warning' : 'info'}>
-            {s.held ? '人工保持' : '自动运镜'}
+            {s.held ? '人工运镜' : '自动运镜'}
+            {s.current ? ` · 已提交 ${s.current}` : ''}
           </StatusPill>
-          <strong>{s.map ?? '地图待确认'}</strong>
-          <span title={s.pack ?? undefined}>{s.pack ?? '未配运镜包'}</span>
         </div>
       ) : null}
-      <span
-        className="music-controls__track"
-        title={error || s.message}
-        role={workspace && error ? 'alert' : undefined}
-      >
-        {workspace && error ? (
-          error
-        ) : (
-          <>
-            {workspace ? '本次请求' : `运镜 · ${s.held ? '人工' : '自动'}`}
-            {s.current ? ` · ${s.current}` : ''} ·{' '}
-            {s.control.state === 'blocked' ? '原生交接待确认' : s.message}
-          </>
-        )}
-      </span>
+      {!workspace || error || preparation === 'error' || (!s.current && preparation !== 'ready') ? (
+        <span
+          className="music-controls__track"
+          title={error || s.message}
+          role={workspace && error ? 'alert' : undefined}
+        >
+          {workspace && error ? (
+            error
+          ) : (
+            <>
+              {workspace
+                ? s.current
+                  ? `已提交 · ${s.current}`
+                  : preparation === 'preparing'
+                    ? '正在准备运镜'
+                    : preparation === 'error'
+                      ? s.message
+                      : preparation === 'waiting'
+                        ? '等待运镜准备'
+                        : preparation === 'ready'
+                          ? '运镜已就绪'
+                          : s.message
+                : `运镜 · ${s.held ? '人工' : '自动'}${s.current ? ` · ${s.current}` : ''} · ${s.control.state === 'blocked' ? '原生交接待确认' : s.message}`}
+            </>
+          )}
+        </span>
+      ) : null}
       {setup ? (
         <span>
           {s.map ?? '地图待确认'} · {s.pack ?? '未配运镜包'} ·{' '}
@@ -77,7 +89,7 @@ export function CameraControls({
           {s.connected ? '断开 MulNX' : '连接 MulNX'}
         </Button>
       ) : null}
-      {!s.held || s.current ? (
+      {!s.held ? (
         <>
           <Button
             disabled={busy}
@@ -86,16 +98,20 @@ export function CameraControls({
           >
             接管运镜
           </Button>
-          <Button disabled={busy || !s.connected || !s.current} onClick={() => void send('skip')}>
-            跳过本次
-          </Button>
         </>
+      ) : null}
+      {s.current ? (
+        <Button disabled={busy || !s.connected} onClick={() => void send('skip')}>
+          跳过本次
+        </Button>
       ) : null}
       {s.held ? (
         <Button
           variant="primary"
           disabled={
             busy ||
+            (workspace && Boolean(s.current)) ||
+            (workspace && preparation === 'preparing') ||
             !s.connected ||
             !view.ready ||
             !s.pack ||
@@ -105,7 +121,7 @@ export function CameraControls({
           title={`应用并核对当前地图 ${s.map ?? '未知'} 的隔离包 ${s.pack ?? '未配置'}`}
           onClick={() => void send('resume')}
         >
-          {workspace ? '准备运镜并恢复自动' : '准备隔离包并启用自动'}
+          {workspace ? '恢复运镜自动' : '准备隔离包并启用自动'}
         </Button>
       ) : null}
       {error && !workspace ? <span role="alert">{error}</span> : null}

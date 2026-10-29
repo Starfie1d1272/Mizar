@@ -219,6 +219,22 @@ export function RivalHubLiveSourcePanel({
       onMessage('已停止作为数据源。');
     });
 
+  if (!connection?.paired && compact) {
+    return (
+      <Button
+        onClick={() =>
+          void action(async () => {
+            if (window.__TAURI_INTERNALS__)
+              await desktopInvoke('open_main', { path: '/settings?tab=rivalhub' });
+            else window.open('/settings?tab=rivalhub', 'mizar-preparation');
+          })
+        }
+      >
+        连接 RivalHub
+      </Button>
+    );
+  }
+
   if (!connection?.paired) {
     return (
       <a

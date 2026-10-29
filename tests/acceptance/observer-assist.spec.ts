@@ -382,6 +382,14 @@ for (const useMulnx of [false, true]) {
         password: 'synthetic',
       },
     });
+    const nextOpened = page.waitForEvent('popup');
+    await page.getByRole('button', { name: '填写下一图 GoTV' }).click();
+    const nextTask = await nextOpened;
+    const nextDialog = nextTask.getByRole('dialog', { name: '下一图 GoTV 连接' });
+    await nextDialog.getByRole('textbox').fill('connect 127.0.0.2:27025;password next-map');
+    await nextDialog.getByRole('button', { name: '取消', exact: true }).click();
+    await expect.poll(() => nextTask.isClosed()).toBe(true);
+    expect(writes).toHaveLength(1);
     expect(
       await page.evaluate(() => (window as typeof window & { nativeCalls: string[] }).nativeCalls),
     ).not.toContain('finish_workspace');

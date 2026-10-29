@@ -1205,8 +1205,10 @@ it('switches the owned source from TS to an application and then to another appl
     obs.windows = [
       { itemName: 'TeamSpeak', itemValue: 'TeamSpeak:Qt:ts3client_win64.exe', itemEnabled: true },
     ];
+    const recoveryEnsure = vi.spyOn(adapter, 'ensure');
     adapter.startCommentaryRecovery();
-    await vi.waitFor(() => expect(voice.settings.window).toBe('TeamSpeak:Qt:ts3client_win64.exe'));
+    await vi.waitFor(() => expect(recoveryEnsure).toHaveBeenCalled());
+    expect(await recoveryEnsure.mock.results[0]!.value).toEqual([]);
     expect(await adapter.ensure()).toEqual([]);
     expect(voice.settings.window).toBe('TeamSpeak:Qt:ts3client_win64.exe');
     await adapter.close();
