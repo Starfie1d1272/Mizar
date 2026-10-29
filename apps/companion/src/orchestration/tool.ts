@@ -15,7 +15,9 @@ import {
 import { join } from 'node:path';
 import { atomicJson, ensureDirectory, readJson, safePath } from '../resource-store/files.js';
 import { prepareIsolatedPack } from './prepare-pack.js';
-import { cameraSourceTreeSha256 } from './camera-source.js';
+import { cameraSourceTreeSha256, verifyCameraConversion } from './camera-source.js';
+import { verifyIsolatedPack } from './isolated-pack.js';
+import type { CameraSourceRef, MulnxToolRef } from '@mizar/broadcast-config';
 import {
   downloadVerified,
   extractMulnx,
@@ -129,6 +131,37 @@ export class MulnxTool {
         },
       },
     };
+  }
+  /** Resolve content against the selected instance, independent of its acquisition. */
+  async resolveCameraSource(source: CameraSourceRef): Promise<MulnxToolRef> {
+    if (source.converterVersion !== 1 || !/^[a-f0-9]{64}$/.test(source.treeSha256))
+      throw new Error('mulnx_source_invalid');
+    const installed = this.installed;
+    if (!installed) throw new Error('mulnx_source_unavailable');
+    const pack = installed.packs.find((item) => item.treeSha256 === source.treeSha256);
+    if (!pack) throw new Error('mulnx_source_unavailable');
+    const actual = await this.cameraSource(pack.name);
+    const root = this.camPacksRoot;
+    if (
+      this.installed !== installed ||
+      actual.treeSha256 !== source.treeSha256 ||
+      !verifyIsolatedPack(root, pack.name) ||
+      !root ||
+      !(await verifyCameraConversion(join(root, pack.sourceName), join(root, pack.name)))
+    )
+      throw new Error('mulnx_source_unavailable');
+    const launcher = await safePath(
+      join(this.directory, installed.directory),
+      'MulNX/CS2Injector/CS2Injector.exe',
+    );
+    const file = await open(launcher, 'r');
+    try {
+      await file.read(Buffer.alloc(1), 0, 1, 0);
+    } finally {
+      await file.close();
+    }
+    if (this.installed !== installed) throw new Error('mulnx_source_unavailable');
+    return actual.acquisition;
   }
   async load() {
     await ensureDirectory(this.directory);

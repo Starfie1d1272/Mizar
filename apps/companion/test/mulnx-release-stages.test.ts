@@ -47,6 +47,9 @@ vi.mock('../src/orchestration/tool-release.js', () => ({
   },
 }));
 import { MulnxTool } from '../src/orchestration/tool.js';
+import { CameraConfigResolver } from '../src/broadcast-config/camera.js';
+import type { MusicStore } from '../src/music/store.js';
+import { orchestrationPresetSchema } from '@mizar/protocol/orchestration';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -94,6 +97,45 @@ it('prepares without selecting and publishes a configured instance only after se
     acquisition: { kind: 'upstream', release: { archiveSha256: release.sha256 } },
   });
   expect(source.treeSha256).toMatch(/^[a-f0-9]{64}$/);
+  const resolver = new CameraConfigResolver(restarted, {} as MusicStore, async () => true);
+  const preset = orchestrationPresetSchema.parse({
+    format: 'mizar.orchestration',
+    version: 1,
+    name: 'Camera',
+    maps: [{ map: 'de_dust2', pack: current.packs[0].name }],
+  });
+  const config = await resolver.cameraConfig(preset, true);
+  expect(config).toMatchObject({
+    format: 'mizar.camera-config',
+    version: 2,
+    automaticEnabled: true,
+    maps: [{ source, openingSound: null }],
+  });
+  const fromOlderRelease = {
+    ...source,
+    acquisition: {
+      kind: 'upstream' as const,
+      release: { ...source.acquisition.release, tag: 'Older', releaseId: 44 },
+    },
+  };
+  await expect(resolver.camera(fromOlderRelease)).resolves.toEqual(source.acquisition);
+  await expect(resolver.camera({ ...source, treeSha256: 'b'.repeat(64) })).rejects.toThrow(
+    'mulnx_source_unavailable',
+  );
+  const unsupported = new CameraConfigResolver(restarted, {} as MusicStore, async () => false);
+  await expect(unsupported.camera(source)).rejects.toThrow('mulnx_capability_unavailable');
+  const isolated = join(
+    data,
+    current.directory,
+    'MulNX/CS2OBTool/CameraSystem/CamPacks',
+    current.packs[0].name,
+    'Campaths',
+    'extra',
+  );
+  await writeFile(isolated, 'changed');
+  await expect(resolver.camera(source)).rejects.toThrow('mulnx_source_unavailable');
+  await rm(isolated);
+
   await writeFile(
     join(data, current.directory, 'MulNX/CS2OBTool/CameraSystem/CamPacks/Source/Source.yaml'),
     'changed',
