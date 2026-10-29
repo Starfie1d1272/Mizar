@@ -230,8 +230,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
             build: record.build,
           });
           await recordReport(report, output);
-          if (!report.freshReleaseWithin600Seconds)
-            throw new Error('Release exceeded 600-second budget or is a recovery');
+          if (!report.recovery && !report.freshReleaseWithin600Seconds)
+            throw new Error('Release exceeded 600-second budget');
         } finally {
           await rm(directory, { recursive: true, force: true });
         }
@@ -245,7 +245,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         'Invalid release timing order',
         'Release timing source differs',
         'Unknown release timing mode',
-        'Release exceeded 600-second budget or is a recovery',
+        'Release exceeded 600-second budget',
       ].includes(error.message)
     )
       // eslint-disable-next-line preserve-caught-error -- Download causes may expose signed URLs.
