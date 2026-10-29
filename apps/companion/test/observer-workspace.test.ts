@@ -804,3 +804,56 @@ it('does not hide the native HUD on connect, retry or reconnect in qualified tog
       expect(command).not.toContain('cl_draw_only_deathnotices');
     }
   }));
+
+it('enables the managed lease for website names when observer and game automation are disabled', () =>
+  fixture(async (observer) => {
+    const app = Fastify();
+    const settings = new ObserverSettingsStore();
+    await settings.configure({ ...settings.settings, enabled: false });
+    await settings.configureGame({ autoConnect: false, hideGameHud: false });
+    const binding = {
+      origin: 'online',
+      context: {
+        entrants: {
+          a: { players: [{ steam64: '76561198000000001', displayName: 'Name' }] },
+          b: { players: [] },
+        },
+      },
+    } as unknown as import('../src/match-context/lkg-store.js').MatchContextBinding;
+    registerWorkspaceObserver(
+      app,
+      observer,
+      'synthetic-capability',
+      () => true,
+      settings,
+      () => binding,
+    );
+    try {
+      const headers = { 'x-runtime-token': 'synthetic-capability' };
+      const preparation = await app.inject({
+        method: 'POST',
+        url: '/operator/runtime/observer',
+        headers,
+        payload: { action: 'prepare', game: 'game', job: 'job', useMulnx: true },
+      });
+      expect(preparation.json<{ enabled: boolean }>().enabled).toBe(true);
+      const start = await app.inject({
+        method: 'POST',
+        url: '/operator/runtime/observer',
+        headers,
+        payload: {
+          action: 'start-configured',
+          game: 'game',
+          job: 'job',
+          executable: driver,
+          useMulnx: true,
+          revision: preparation.json<{ revision: string }>().revision,
+        },
+      });
+      expect(start.statusCode).toBe(200);
+      expect(start.json<{ enabled: boolean }>().enabled).toBe(true);
+      expect(observer.view().active).toBe(false);
+    } finally {
+      await app.close();
+    }
+  }));
