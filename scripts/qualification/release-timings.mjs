@@ -64,6 +64,8 @@ export function releaseTimingReport({
   publishedAt,
   recovery,
   build,
+  boxOutcome,
+  boxRecoveryStartedAt,
 }) {
   if (
     qualification.path !== '.github/workflows/release-qualification.yml' ||
@@ -90,7 +92,7 @@ export function releaseTimingReport({
   recovery ||=
     qualification.run_attempt !== 1 ||
     promotion.run_attempt !== 1 ||
-    (box && box.run_attempt !== 1) ||
+    (box && (box.run_attempt !== 1 || Boolean(boxRecoveryStartedAt))) ||
     Date.parse(publishedAt) < Date.parse(promotion.created_at);
   const result = {
     tag,
@@ -113,11 +115,18 @@ export function releaseTimingReport({
   };
   if (box) {
     result.box = runTiming(box, jobs.box, finishedAt, jobs.boxFirstAttempt);
+    result.boxOutcome = boxOutcome;
+    if (boxRecoveryStartedAt) {
+      elapsed(box.created_at, boxRecoveryStartedAt);
+      result.boxRecoveryStartedAt = boxRecoveryStartedAt;
+      result.boxRecoveryDurationMs = elapsed(boxRecoveryStartedAt, finishedAt);
+    }
     result.triggerToBoxMs = elapsed(qualification.created_at, finishedAt);
     result.promotionToBoxMs = elapsed(promotion.created_at, finishedAt);
     result.publishedToBoxMs = elapsed(publishedAt, finishedAt);
     // Retries or a previously published version cannot prove a fresh release budget.
-    result.freshReleaseWithin600Seconds = !recovery && result.triggerToBoxMs <= 600000;
+    result.freshReleaseWithin600Seconds =
+      !recovery && boxOutcome === 'success' && result.triggerToBoxMs <= 600000;
   }
   return result;
 }
@@ -138,7 +147,7 @@ async function recordReport(report, path) {
       `Release timing: ${report.recovery ? 'recovery; not fresh-release acceptance' : 'fresh release'}; ` +
         (report.triggerToBoxMs === undefined
           ? 'Promotion checkpoint'
-          : `Qualification trigger → Box verified: ${(report.triggerToBoxMs / 1000).toFixed(1)}s; initial queues Q/P/B: ${[report.qualification, report.promotion, report.box].map((r) => (r.initialQueueMs === null ? 'unknown' : (r.initialQueueMs / 1000).toFixed(1) + 's')).join('/')}`) +
+          : `Qualification trigger → Box checkpoint: ${(report.triggerToBoxMs / 1000).toFixed(1)}s; initial queues Q/P/B: ${[report.qualification, report.promotion, report.box].map((r) => (r.initialQueueMs === null ? 'unknown' : (r.initialQueueMs / 1000).toFixed(1) + 's')).join('/')}`) +
         '\n',
     );
 }
@@ -188,6 +197,11 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
             recovery: true,
             freshReleaseWithin600Seconds: false,
             box: runTiming(current, currentJobs, finishedAt, firstAttemptJobs(current)),
+            boxOutcome: process.env.BOX_OUTCOME,
+            boxRecoveryStartedAt: process.env.BOX_RECOVERY_STARTED_AT || undefined,
+            boxRecoveryDurationMs: process.env.BOX_RECOVERY_STARTED_AT
+              ? elapsed(process.env.BOX_RECOVERY_STARTED_AT, finishedAt)
+              : undefined,
           },
           output,
         );
@@ -231,9 +245,14 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
             publishedAt: record.publishedAt,
             recovery: record.recovery || current.run_attempt !== 1,
             build: record.build,
+            boxOutcome: process.env.BOX_OUTCOME,
+            boxRecoveryStartedAt: process.env.BOX_RECOVERY_STARTED_AT || undefined,
           });
           await recordReport(report, output);
-          if (!report.recovery && !report.freshReleaseWithin600Seconds)
+          if (
+            process.env.BOX_OUTCOME !== 'success' ||
+            (!record.recovery && current.run_attempt === 1 && report.triggerToBoxMs > 600000)
+          )
             throw new Error('Release exceeded 600-second budget');
         } finally {
           await rm(directory, { recursive: true, force: true });
