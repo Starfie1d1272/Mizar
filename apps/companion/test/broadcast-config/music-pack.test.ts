@@ -22,7 +22,11 @@ import { migrateLegacyBroadcast } from '../../src/broadcast-config/migrate.js';
 import { BroadcastConfigStore } from '../../src/broadcast-config/store.js';
 import { exportMusicPack, importMusicPack } from '../../src/broadcast-config/music-pack.js';
 import { MusicPackResources } from '../../src/broadcast-config/music-pack-resources.js';
-import { exportPresetPack, importPresetPack } from '../../src/broadcast-config/preset-pack.js';
+import {
+  exportPresetPack,
+  importPresetPack,
+  inspectPresetPack,
+} from '../../src/broadcast-config/preset-pack.js';
 import { createProductionBroadcastDependencies } from '../../src/broadcast-config/production.js';
 
 it('reads the exact package version when file IDs coincide', async () => {
@@ -219,6 +223,64 @@ it('round trips real music owner configuration to independent drafts without act
         const archive = await readPackArchive(exportedModule.rawPayload);
         expect(archive.manifest.modules.map((item) => item.module)).toEqual([module.kind]);
         expect(archive.manifest.presets).toHaveLength(0);
+        if (module.kind === 'hud') {
+          const manifest = structuredClone(archive.manifest);
+          manifest.packageId = randomUUID();
+          manifest.modules.push({ ...manifest.modules[0]!, entryId: 'future', module: 'future' });
+          const mixed = await writePackArchive(
+            Buffer.from(JSON.stringify(manifest)),
+            archive.files,
+          );
+          const headers = {
+            origin: 'http://127.0.0.1:3000',
+            'content-type': 'application/x-mizarpack',
+          };
+          const checked = await app.inject({
+            method: 'POST',
+            url: '/operator/resource-library/check-pack',
+            headers,
+            payload: mixed,
+          });
+          expect(checked.statusCode).toBe(200);
+          expect(checked.json().entries.map((entry: { status: string }) => entry.status)).toEqual([
+            'ready',
+            'unsupported',
+          ]);
+          const selection = JSON.stringify({ modules: ['module-1', 'future'], presets: [] });
+          const query = new URLSearchParams({ selection, digest: checked.json().source.digest });
+          const partial = await app.inject({
+            method: 'POST',
+            url: `/operator/resource-library/import-pack?${query}`,
+            headers,
+            payload: mixed,
+          });
+          expect(partial.statusCode).toBe(200);
+          expect(partial.json().entries.map((entry: { result: string }) => entry.result)).toEqual([
+            'imported',
+            'unavailable',
+          ]);
+          query.set('digest', '0'.repeat(64));
+          expect(
+            (
+              await app.inject({
+                method: 'POST',
+                url: `/operator/resource-library/import-pack?${query}`,
+                headers,
+                payload: mixed,
+              })
+            ).statusCode,
+          ).toBe(400);
+          expect(
+            (
+              await app.inject({
+                method: 'POST',
+                url: '/operator/resource-library/check-pack',
+                headers,
+                payload: Buffer.from('broken'),
+              })
+            ).statusCode,
+          ).toBe(400);
+        }
         const importedModule = await app.inject({
           method: 'POST',
           url: '/operator/resource-library/import-pack',
@@ -239,7 +301,7 @@ it('round trips real music owner configuration to independent drafts without act
           headers: { origin: 'http://127.0.0.1:3000', 'content-type': 'application/x-mizarpack' },
           payload: exportedModule.rawPayload,
         });
-        expect(repeatedModule.json()).toEqual({ mapping: result.mapping, reused: true });
+        expect(repeatedModule.json()).toMatchObject({ mapping: result.mapping, reused: true });
       }
       expect(store.snapshot.active).toEqual(before);
       const originalPreset = initial.presets[0]!;
@@ -484,9 +546,16 @@ it('round trips real music owner configuration to independent drafts without act
       Buffer.from(JSON.stringify(invalidManifest)),
       presetArchive.files,
     );
-    await expect(importPresetPack({ zip: invalidZip, store, resources })).rejects.toThrow(
-      'capability_unsupported',
+    const invalidAnalysis = await inspectPresetPack({ zip: invalidZip, store });
+    expect(invalidAnalysis.entries.find((entry) => entry.kind === 'camera')?.status).toBe(
+      'unsupported',
     );
+    expect(invalidAnalysis.entries.find((entry) => entry.type === 'preset')?.status).toBe(
+      'dependency_missing',
+    );
+    expect(
+      invalidAnalysis.entries.some((entry) => entry.kind === 'hud' && entry.status === 'ready'),
+    ).toBe(true);
     expect(store.snapshot.active).toEqual(before);
     const sharedArchive = await readPackArchive(presetZip);
     expect(sharedArchive.manifest.presets).toHaveLength(2);

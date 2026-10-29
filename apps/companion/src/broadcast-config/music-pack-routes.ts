@@ -2,13 +2,18 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { PACK_LIMITS } from '@mizar/broadcast-pack';
-import { assetRefSchema, boundModules } from '@mizar/broadcast-config';
+import {
+  assetRefSchema,
+  boundModules,
+  type ModuleRecord,
+  type ResourceRef,
+} from '@mizar/broadcast-config';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 import type { MusicStore } from '../music/store.js';
 import type { BroadcastConfigStore } from './store.js';
 import type { MusicPackResources } from './music-pack-resources.js';
 import { exportMusicPack, importMusicPack } from './music-pack.js';
-import { exportPresetPack, importPresetPack } from './preset-pack.js';
+import { exportPresetPack, importPresetPack, inspectPresetPack } from './preset-pack.js';
 
 const exportRequest = z.strictObject({
   moduleId: z.string().uuid(),
@@ -63,6 +68,7 @@ export function registerMusicPackRoutes(
   resources: MusicPackResources,
   origin: LocalWebOriginPolicy,
   ready: () => boolean,
+  availability?: (module: ModuleRecord, source: ResourceRef) => Promise<void>,
 ): void {
   const allowed = (value: string | undefined) =>
     origin.mode === 'loopback' && checkLocalWebOrigin(origin, value).allowed;
@@ -70,6 +76,26 @@ export function registerMusicPackRoutes(
     'application/x-mizarpack',
     { parseAs: 'buffer', bodyLimit: PACK_LIMITS.total },
     (_request, body, done) => done(null, body),
+  );
+  app.post(
+    '/operator/resource-library/check-pack',
+    { bodyLimit: PACK_LIMITS.total },
+    async (request, reply) => {
+      if (!allowed(request.headers.origin))
+        return reply.code(403).send({ error: 'operator_origin_forbidden' });
+      if (!ready()) return reply.code(503).send({ error: 'broadcast_config_unavailable' });
+      try {
+        if (!Buffer.isBuffer(request.body)) throw new Error('package_invalid');
+        const { prepare: _prepare, ...result } = await inspectPresetPack({
+          zip: request.body,
+          store,
+          ...(availability ? { availability } : {}),
+        });
+        return result;
+      } catch {
+        return reply.code(400).send({ error: 'package_invalid' });
+      }
+    },
   );
   app.post(
     '/operator/resource-library/import-pack',
@@ -80,7 +106,32 @@ export function registerMusicPackRoutes(
       if (!ready()) return reply.code(503).send({ error: 'broadcast_config_unavailable' });
       try {
         if (!Buffer.isBuffer(request.body)) throw new Error('package_invalid');
-        return await importPresetPack({ zip: request.body, store, resources });
+        const query = z
+          .strictObject({
+            selection: z.string().max(16384).optional(),
+            digest: z
+              .string()
+              .regex(/^[a-f0-9]{64}$/)
+              .optional(),
+          })
+          .parse(request.query);
+        const selection =
+          query.selection === undefined
+            ? undefined
+            : z
+                .strictObject({
+                  modules: z.array(z.string().max(128)).max(128),
+                  presets: z.array(z.string().max(128)).max(32),
+                })
+                .parse(JSON.parse(query.selection));
+        return await importPresetPack({
+          zip: request.body,
+          store,
+          resources,
+          ...(selection ? { selection } : {}),
+          ...(query.digest ? { expectedDigest: query.digest } : {}),
+          ...(availability ? { availability } : {}),
+        });
       } catch (error) {
         if (error instanceof Error && error.message === 'identity_conflict')
           return reply.code(409).send({ error: 'identity_conflict' });

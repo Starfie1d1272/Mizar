@@ -9,6 +9,7 @@ import {
   createBroadcastRuntime,
   type BroadcastRuntimeDependencies,
 } from './broadcast-config/runtime.js';
+import { createBroadcastResolver } from './broadcast-config/resolver.js';
 import { registerBroadcastConfigRoutes } from './broadcast-config/routes.js';
 import { broadcastResourceReferences } from './broadcast-config/reference-queue.js';
 import type { ResourceRef } from '@mizar/broadcast-config';
@@ -1366,6 +1367,18 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           musicPacks,
           localWebTransport.getOriginPolicy(),
           () => broadcastRuntime.ready,
+          async (module, source) => {
+            const resolver = createBroadcastResolver({
+              ...broadcastConfig!.resolve,
+              asset: (ref) =>
+                ref.resource.id === source.id &&
+                ref.resource.version === source.version &&
+                ref.resource.digest === source.digest
+                  ? Promise.resolve()
+                  : broadcastConfig!.resolve.asset(ref),
+            });
+            await resolver.resolveModule(module);
+          },
         );
       registerBroadcastConfigRoutes(
         app,

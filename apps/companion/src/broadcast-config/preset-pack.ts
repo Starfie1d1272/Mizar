@@ -5,11 +5,12 @@ import {
   type AssetRef,
   type BroadcastConfigDocument,
   type MulnxToolRef,
+  type ModuleRecord,
   type ResourceRef,
 } from '@mizar/broadcast-config';
 import {
   exportModule,
-  preparePackDrafts,
+  analyzePackDrafts,
   readPackArchive,
   writePackArchive,
 } from '@mizar/broadcast-pack';
@@ -239,70 +240,170 @@ export async function exportPresetPack(input: {
   );
 }
 
-/** Validate the package and create drafts; the resource owner publishes before the configuration commit. */
-export async function importPresetPack(input: {
+/** Inspect a verified archive without publishing it or changing configuration. */
+export async function inspectPresetPack(input: {
   zip: Buffer;
   store: BroadcastConfigStore;
-  resources: MusicPackResources;
+  availability?: (module: ModuleRecord, source: ResourceRef) => Promise<void>;
 }) {
   const archive = await readPackArchive(input.zip);
   const { manifest } = archive;
-  if (
-    (!manifest.presets.length && !manifest.modules.length) ||
-    manifest.dependencies.some((d) => d.delivery.kind !== 'external')
-  )
-    throw new Error('capability_unsupported');
-  const jsonIds = new Set([...manifest.modules, ...manifest.presets].map((entry) => entry.fileId));
-  const assetIds = new Set<string>();
-  for (const file of manifest.files) {
-    if (jsonIds.has(file.id)) {
-      if (file.mediaType !== 'application/json' || !file.path.endsWith('.json'))
-        throw new Error('package_invalid');
-    } else {
-      const bytes = archive.files.get(file.path),
-        ext = file.path.split('.').at(-1)?.toLowerCase();
-      if (
-        !bytes ||
-        (!(file.mediaType === `audio/${ext}` && audioBytes(file.path, bytes)) &&
-          !validPackImage(bytes, file.mediaType))
-      )
-        throw new Error('package_invalid');
-      assetIds.add(file.id);
-    }
-  }
+  if (!manifest.presets.length && !manifest.modules.length) throw new Error('package_invalid');
   const source: ResourceRef = {
     id: `local:mizar-pack:${manifest.packageId}`,
     version: manifest.version,
     digest: archive.digest,
   };
+  const files = new Map(manifest.files.map((file) => [file.id, file]));
   const dependencies = new Map(manifest.dependencies.map((entry) => [entry.alias, entry.resource]));
   const lookup = (alias: string) => {
     const ref = alias === '$self' ? source : dependencies.get(alias);
     if (!ref) throw new Error('dependency_missing');
     return ref;
   };
-  const prepare = () =>
-    preparePackDrafts({
-      manifestBytes: archive.manifestBytes,
-      files: archive.files,
-      source,
-      refs: {
-        asset(ref) {
-          if (ref.package === '$self' && !assetIds.has(ref.fileId))
-            throw new Error('resource_missing');
-          return { resource: lookup(ref.package), fileId: ref.fileId };
-        },
-        resource(ref) {
-          return lookup(ref.package);
-        },
-        tool(ref) {
-          return releaseTool(lookup(ref.package));
-        },
+  const analyzed = analyzePackDrafts({
+    manifestBytes: archive.manifestBytes,
+    files: archive.files,
+    source,
+    refs: {
+      asset(ref) {
+        if (ref.package === '$self') {
+          const file = files.get(ref.fileId);
+          const bytes = file && archive.files.get(file.path);
+          if (!file || !bytes) throw new Error('resource_missing');
+          const ext = file.path.split('.').at(-1)?.toLowerCase();
+          if (!file.mediaType.startsWith('audio/') && !file.mediaType.startsWith('image/'))
+            throw new Error('capability_unsupported');
+          if (
+            !(file.mediaType === `audio/${ext}` && audioBytes(file.path, bytes)) &&
+            !validPackImage(bytes, file.mediaType)
+          )
+            throw new Error('package_invalid');
+        }
+        return { resource: lookup(ref.package), fileId: ref.fileId };
       },
-      supports: () => false,
-    });
-  const batch = prepare();
+      resource(ref) {
+        return lookup(ref.package);
+      },
+      tool(ref) {
+        return releaseTool(lookup(ref.package));
+      },
+    },
+    supports: () => false,
+  });
+  const document = input.store.snapshot;
+  const entries = await Promise.all(
+    analyzed.entries.map(async (entry) => {
+      let status = entry.status;
+      let reason = entry.reason;
+      if (entry.type === 'module' && status === 'ready' && input.availability) {
+        const module = analyzed.prepare({ modules: [entry.entryId], presets: [] }).modules[0];
+        if (module)
+          try {
+            await input.availability(module, source);
+          } catch (error) {
+            reason = error instanceof Error ? error.message : 'dependency_missing';
+            status = reason === 'capability_unsupported' ? 'unsupported' : 'dependency_missing';
+          }
+      }
+      const objects = entry.type === 'module' ? document.modules : document.presets;
+      const existing = objects.some(
+        (item) =>
+          item.origin?.entryId === entry.entryId &&
+          resourceKey(item.origin.resource) === resourceKey(source),
+      );
+      return {
+        ...entry,
+        status: existing && status === 'ready' ? ('existing' as const) : status,
+        ...(reason ? { reason } : {}),
+      };
+    }),
+  );
+  for (const entry of entries)
+    if (entry.type === 'preset' && entry.status === 'ready') {
+      const unavailable = entry.dependencies
+        .map((id) => entries.find((item) => item.entryId === id))
+        .find((item) => item && item.status !== 'ready' && item.status !== 'existing');
+      if (unavailable) {
+        entry.status =
+          unavailable.status === 'dependency_missing' ? 'dependency_missing' : 'unsupported';
+        if (unavailable.reason) entry.reason = unavailable.reason;
+      }
+    }
+  return {
+    source,
+    name: manifest.name,
+    dependencies: manifest.dependencies,
+    entries,
+    prepare: analyzed.prepare,
+  };
+}
+
+/** Reinspect the full archive at commit time; save selected drafts without applying them. */
+export async function importPresetPack(input: {
+  zip: Buffer;
+  store: BroadcastConfigStore;
+  resources: MusicPackResources;
+  selection?: { modules: string[]; presets: string[] };
+  expectedDigest?: string;
+  availability?: (module: ModuleRecord, source: ResourceRef) => Promise<void>;
+}) {
+  const inspected = await inspectPresetPack(input);
+  if (input.expectedDigest && input.expectedDigest !== inspected.source.digest)
+    throw new Error('package_identity_mismatch');
+  const selected = input.selection ?? {
+    modules: inspected.entries
+      .filter((entry) => entry.type === 'module')
+      .map((entry) => entry.entryId),
+    presets: inspected.entries
+      .filter((entry) => entry.type === 'preset')
+      .map((entry) => entry.entryId),
+  };
+  // Validate the complete requested selection before excluding unsupported entries.
+  inspected.prepare(selected);
+  const allowed = (id: string) => {
+    const entry = inspected.entries.find((item) => item.entryId === id);
+    return entry && entry.status !== 'unsupported' && entry.status !== 'invalid';
+  };
+  const batch = inspected.prepare({
+    modules: selected.modules.filter(allowed),
+    presets: selected.presets.filter(allowed),
+  });
+  const before = input.store.snapshot;
+  const makeEntries = (after: BroadcastConfigDocument) =>
+    inspected.entries.map((entry) => ({
+      ...entry,
+      selected: (entry.type === 'module' ? selected.modules : selected.presets).includes(
+        entry.entryId,
+      ),
+      result: (
+        entry.type === 'module'
+          ? batch.moduleEntries[entry.entryId]
+          : batch.presetEntries[entry.entryId]
+      )
+        ? (entry.type === 'module' ? after.modules : after.presets).some(
+            (item) =>
+              item.origin?.entryId === entry.entryId &&
+              resourceKey(item.origin.resource) === resourceKey(inspected.source) &&
+              !(entry.type === 'module' ? before.modules : before.presets).some(
+                (previous) => previous.id === item.id,
+              ),
+          )
+          ? ('imported' as const)
+          : ('existing' as const)
+        : (entry.type === 'module' ? selected.modules : selected.presets).includes(entry.entryId)
+          ? ('unavailable' as const)
+          : ('not_selected' as const),
+    }));
+  if (!batch.modules.length && !batch.presets.length)
+    return {
+      mapping: { source: inspected.source, moduleEntries: {}, presetEntries: {} },
+      reused: false,
+      entries: makeEntries(before),
+    };
   const installed = await input.resources.install(input.zip);
-  if (resourceKey(installed) !== resourceKey(source)) throw new Error('package_identity_mismatch');
-  return input.store.importBatch(batch);
+  if (resourceKey(installed) !== resourceKey(inspected.source))
+    throw new Error('package_identity_mismatch');
+  const result = await input.store.importBatch(batch);
+  return { ...result, entries: makeEntries(input.store.snapshot) };
 }
