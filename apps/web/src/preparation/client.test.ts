@@ -144,7 +144,7 @@ describe('managed CS2 production entry and cleanup', () => {
       expect(calls).not.toContain('observer_command');
     },
   );
-  it('continues the same entry through verified MulNX launch and attachment without launcher navigation', async () => {
+  it('continues the same entry through verified MulNX launch and managed session without launcher navigation', async () => {
     const calls = setup(undefined, 'preparation', false, true, [
       { preferMulnx: true, running: false, pending: false },
     ]);
@@ -152,16 +152,9 @@ describe('managed CS2 production entry and cleanup', () => {
     expect(nativeArgs.find((v) => v.command === 'launch_mulnx')?.args).toMatchObject({
       automatic: true,
     });
-    expect(nativeArgs.find((v) => v.command === 'attach_external_cs2')?.args).toMatchObject({
-      pid: 42,
-      created: '134000000000000000',
-      expectedRevision: 'one',
-    });
-    expect(calls).not.toContain('start_managed_cs2');
-    expect(calls.indexOf('launch_mulnx')).toBeLessThan(calls.indexOf('attach_external_cs2'));
-    expect(calls.indexOf('attach_external_cs2')).toBeLessThan(
-      calls.indexOf('/operator/production'),
-    );
+    expect(calls).not.toContain('attach_external_cs2');
+    expect(calls.indexOf('launch_mulnx')).toBeLessThan(calls.indexOf('start_managed_cs2'));
+    expect(calls.indexOf('start_managed_cs2')).toBeLessThan(calls.indexOf('/operator/production'));
     expect(calls).toContain('present_production');
     expect(window.location.pathname).toBe('/');
   });

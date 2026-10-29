@@ -224,20 +224,15 @@ async function performProductionAction(
   }
   let newlyStarted = false;
   let borrowed = Boolean(external);
-  let selectedExternal = external;
+  const selectedExternal = external;
   if (action === 'enter' && window.__TAURI_INTERNALS__) {
     if (!external) {
       if (launch?.preferMulnx && !launch.running && !launch.pending) {
-        selectedExternal = await desktopInvoke<ExternalGameIdentity>(
-          'launch_mulnx',
-          { automatic: true },
-          task,
-        );
+        await desktopInvoke<ExternalGameIdentity>('launch_mulnx', { automatic: true }, task);
         if (window.location.href !== entryLocation) {
-          task.finish('cancelled', { reason: 'navigation_changed', game: selectedExternal });
+          task.finish('cancelled', { reason: 'navigation_changed' });
           return;
         }
-        borrowed = true;
       }
     }
     newlyStarted = await desktopInvoke<boolean>(
