@@ -807,6 +807,62 @@ describe('BroadcastConfigStore', () => {
     await expect(commit).rejects.toThrow('revision_conflict');
     expect(store.snapshot.modules.some((item) => item.id === id)).toBe(false);
   });
+  it('marks the camera facade unavailable when an active pack cannot be materialized', async () => {
+    const { store } = await setup();
+    const source = {
+      sourceName: 'missing',
+      treeSha256: 'a'.repeat(64),
+      converterVersion: 1 as const,
+      acquisition: {
+        kind: 'upstream' as const,
+        release: {
+          repository: 'Co1Swet/MulNX_CS2' as const,
+          releaseId: 1,
+          assetId: 2,
+          tag: 'v1',
+          archiveSha256: 'b'.repeat(64),
+        },
+      },
+    };
+    const value = {
+      format: 'mizar.camera-config' as const,
+      version: 2 as const,
+      name: 'Camera',
+      automaticEnabled: true,
+      maps: [
+        {
+          map: 'de_mirage',
+          source,
+          opening: null,
+          openingSound: null,
+          rounds: [],
+          pauseCandidates: { tactical: [], technical: [] },
+          stages: {
+            warmup: null,
+            tactical: null,
+            technical: null,
+            halftime: null,
+            mapVictory: null,
+            matchVictory: null,
+          },
+        },
+      ],
+    };
+    await store.updateFromLegacy({
+      updateDraft: () => {},
+      active: { kind: 'camera', value, lock: store.snapshot.active.lock },
+    });
+    const persistence = createCameraConfigPersistence(store, {
+      localPack: () => Promise.reject(new Error('missing')),
+      localTrackId: () => Promise.reject(new Error('unexpected')),
+      portable: () => Promise.reject(new Error('unexpected')),
+      lock: (_value, active) => Promise.resolve(active.lock),
+    });
+    const result = await persistence.read();
+    expect(result.automaticEnabled).toBe(false);
+    expect(persistence.available).toBe(false);
+    expect(store.snapshot.active.resolved.camera).toEqual(value);
+  });
   it('keeps camera explicitly off until a legacy operator activates a real draft', async () => {
     const { store, options, initial } = await setup();
     const camera = new OrchestrationStore(pathJoin(dirname(options.filePath), 'camera-off'));
