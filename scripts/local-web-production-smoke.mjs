@@ -74,22 +74,22 @@ try {
   browser.once('error', (error) => {
     browserError = error;
   });
-  let debuggerPort;
-  while (!debuggerPort) {
+  let debuggerAddress;
+  while (!debuggerAddress) {
     if (browserError) throw browserError;
     if (browser.exitCode !== null) throw new Error('Chromium exited before startup');
-    debuggerPort = await readFile(join(temporary, 'browser', 'DevToolsActivePort'), 'utf8')
-      .then((content) => Number(content.split('\n')[0]))
+    debuggerAddress = await readFile(join(temporary, 'browser', 'DevToolsActivePort'), 'utf8')
+      .then((content) => {
+        const [port, path] = content.trim().split('\n');
+        return /^\d+$/.test(port) && path?.startsWith('/devtools/browser/')
+          ? `ws://127.0.0.1:${port}${path}`
+          : null;
+      })
       .catch(() => null);
     if (Date.now() >= deadline) throw new Error('Chromium startup timed out');
-    if (!debuggerPort) await delay(100);
+    if (!debuggerAddress) await delay(100);
   }
-  const info = await globalThis
-    .fetch(`http://127.0.0.1:${debuggerPort}/json/version`, {
-      signal: globalThis.AbortSignal.timeout(2000),
-    })
-    .then((response) => response.json());
-  socket = new globalThis.WebSocket(info.webSocketDebuggerUrl);
+  socket = new globalThis.WebSocket(debuggerAddress);
   await bounded(
     new Promise((resolveOpen, reject) => {
       socket.addEventListener('open', resolveOpen, { once: true });
