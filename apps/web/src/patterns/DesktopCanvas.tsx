@@ -1,9 +1,8 @@
 import './desktop-canvas.css';
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 
-// Logical 1080p coordinates keep shared 14px/32px controls usable at 1080p.
-// At 2K every dimension scales by 4/3; at 4K it scales by 2, including text.
-// Measure CSS pixels: WebView already accounts for Windows display scaling.
+// Preview and product surfaces retain logical coordinates. Native workspace windows
+// use their CSS pixel dimensions, which already account for display scaling.
 const surfaces = {
   left: { width: 480, height: 1080 },
   dock: { width: 1440, height: 270 },
@@ -21,7 +20,9 @@ export function DesktopCanvas({
   const host = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
   const size = surfaces[kind];
+  const responsive = kind === 'left' || kind === 'dock';
   useLayoutEffect(() => {
+    if (responsive) return;
     const element = host.current;
     if (!element) return;
     const resize = () => {
@@ -31,10 +32,13 @@ export function DesktopCanvas({
     const observer = new ResizeObserver(resize);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [size]);
+  }, [size, responsive]);
   return (
     <div className="desktop-canvas" data-kind={kind} ref={host}>
-      <div className="desktop-canvas__canvas" style={{ ...size, zoom: scale }}>
+      <div
+        className="desktop-canvas__canvas"
+        style={responsive ? { width: '100%', height: '100%' } : { ...size, zoom: scale }}
+      >
         {children}
       </div>
     </div>
