@@ -1434,6 +1434,7 @@ fn main_path_allowed(path: &str) -> bool {
         "/settings?tab=gsi",
         "/settings?tab=obs",
         "/settings?tab=music",
+        "/settings?tab=camera",
         "/settings?tab=music&section=camera",
         "/settings?tab=rivalhub",
     ]
@@ -3063,7 +3064,7 @@ mod startup_tests {
     #[test]
     fn preparation_routes_are_exact_and_include_workspace_settings_links() {
         for path in ["/", "/matches", "/settings?tab=gsi", "/settings?tab=obs",
-            "/settings?tab=rivalhub", "/settings?tab=music", "/settings?tab=music&section=camera"] {
+            "/settings?tab=rivalhub", "/settings?tab=music", "/settings?tab=camera", "/settings?tab=music&section=camera"] {
             assert!(main_path_allowed(path), "{path}");
         }
         for path in ["https://example.com/", "//example.com", "/workspace", "/settings?tab=music&other=1",
