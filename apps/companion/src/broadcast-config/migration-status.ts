@@ -1,10 +1,16 @@
 import type { FastifyInstance } from 'fastify';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 
-export type BroadcastMigrationStatus = {
-  state: 'pending';
-  reason: 'owner_unavailable' | 'camera_identity_unavailable' | 'facades_pending';
-};
+export type BroadcastMigrationStatus =
+  | { state: 'ready' }
+  | {
+      state: 'pending';
+      reason:
+        | 'owner_unavailable'
+        | 'camera_identity_unavailable'
+        | 'facades_pending'
+        | 'dependency_unavailable';
+    };
 /** This status is private to the local operator; it never includes legacy configuration or paths. */
 export function registerBroadcastMigrationStatus(
   app: FastifyInstance,

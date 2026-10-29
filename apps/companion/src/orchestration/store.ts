@@ -61,13 +61,17 @@ export class OrchestrationStore {
     private readonly diagnostic: (stage: string, evidence: unknown) => void = () => {},
   ) {}
   async load() {
+    if (this.persistence) {
+      const result = this.queue.then(async () => {
+        if (!this.persistence) throw new Error('camera_storage_unavailable');
+        this.usePersisted(await this.persistence.read());
+        this.ready = true;
+      });
+      this.queue = result.catch(() => undefined);
+      return result;
+    }
     this.ready = false;
     await ensureDirectory(this.directory);
-    if (this.persistence) {
-      this.usePersisted(await this.persistence.read());
-      this.ready = true;
-      return;
-    }
     try {
       const file = await safePath(this.directory, 'settings.json');
       const stat = await lstat(file);

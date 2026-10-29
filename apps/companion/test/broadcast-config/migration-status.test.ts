@@ -16,3 +16,63 @@ it('reports pending migration without exposing or changing legacy settings', asy
     await app.close();
   }
 });
+
+it('boots the coordinator with verified owners and exposes only display configuration', async () => {
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { getBuiltinLayout } = await import('@mizar/hud-config');
+  const { HudConfigStore } = await import('../../src/hud-config/store.js');
+  const { BroadcastReferenceQueue } = await import('../../src/broadcast-config/reference-queue.js');
+  const root = await mkdtemp(join(tmpdir(), 'broadcast-runtime-'));
+  const hud = new HudConfigStore();
+  await hud.load();
+  const app = buildApp({
+    obsConfigPath: join(root, 'obs.json'),
+    hudConfigStore: hud,
+    broadcastConfig: {
+      path: join(root, 'broadcast.json'),
+      overlays: {
+        pause: { enabled: true, visual: 'default' },
+        chat: { enabled: true, placement: Object.values(getBuiltinLayout().widgets)[0]! },
+      },
+      musicAutomaticEnabled: true,
+      references: new BroadcastReferenceQueue(),
+      isDeleting: () => Promise.resolve(false),
+      resolve: {
+        asset: () => Promise.resolve(),
+        hud: () => Promise.resolve(),
+        scene: () => Promise.resolve(),
+        camera: () => Promise.reject(new Error('unexpected')),
+      },
+      camera: {
+        localPack: () => Promise.reject(new Error('unexpected')),
+        localTrackId: () => Promise.reject(new Error('unexpected')),
+        portable: (preset, automaticEnabled) =>
+          Promise.resolve({
+            format: 'mizar.camera-config',
+            version: 2,
+            name: preset.name,
+            maps: [],
+            automaticEnabled,
+          }),
+        lock: (_value, active) => Promise.resolve(active.lock),
+      },
+      localTrackId: () => Promise.reject(new Error('unexpected')),
+      lockForActive: () => Promise.resolve({ resources: [], tools: [] }),
+      verifyActive: () => Promise.resolve(),
+    },
+  });
+  try {
+    const status = await app.inject('/local/v1/broadcast-config/migration');
+    expect(status.json()).toEqual({ state: 'ready' });
+    const display = await app.inject('/local/v1/broadcast-display-config');
+    expect(display.statusCode).toBe(200);
+    expect(Object.keys(display.json()).sort()).toEqual(['activeRevision', 'hud', 'program']);
+    const presets = await app.inject('/local/v1/broadcast-presets');
+    expect(presets.statusCode).toBe(200);
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

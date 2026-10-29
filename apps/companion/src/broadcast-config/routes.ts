@@ -36,12 +36,14 @@ export function registerBroadcastConfigRoutes(
   app: FastifyInstance,
   store: BroadcastConfigStore,
   originPolicy: LocalWebOriginPolicy,
+  isReady: () => boolean = () => true,
 ): void {
   const authorized = (origin: string | undefined) =>
     originPolicy.mode === 'loopback' && checkLocalWebOrigin(originPolicy, origin).allowed;
-  app.get('/local/v1/broadcast-display-config', (_request, reply) =>
-    reply.header('cache-control', 'no-store').send(displayConfig(store.snapshot.active)),
-  );
+  app.get('/local/v1/broadcast-display-config', (_request, reply) => {
+    if (!isReady()) return reply.code(503).send({ error: 'broadcast_config_unavailable' });
+    return reply.header('cache-control', 'no-store').send(displayConfig(store.snapshot.active));
+  });
   app.get('/local/v1/broadcast-presets', (request, reply) => {
     if (
       originPolicy.mode !== 'loopback' ||
@@ -50,6 +52,7 @@ export function registerBroadcastConfigRoutes(
       (request.headers.origin && !authorized(request.headers.origin))
     )
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    if (!isReady()) return reply.code(503).send({ error: 'broadcast_config_unavailable' });
     return reply.header('cache-control', 'no-store').send(store.snapshot);
   });
   const failure = (error: unknown) => {
@@ -83,6 +86,16 @@ export function registerBroadcastConfigRoutes(
               requestId: request.id,
             },
           });
+        if (!isReady())
+          return reply
+            .code(503)
+            .send({
+              error: {
+                code: 'broadcast_config_unavailable',
+                message: '播出配置尚未就绪。',
+                requestId: request.id,
+              },
+            });
         try {
           if (action === 'clone') return await store.clone(clone.parse(request.body));
           if (action === 'preview') return await store.preview(apply.parse(request.body));

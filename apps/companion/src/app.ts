@@ -1,4 +1,9 @@
 import {
+  createBroadcastRuntime,
+  type BroadcastRuntimeDependencies,
+} from './broadcast-config/runtime.js';
+import { registerBroadcastConfigRoutes } from './broadcast-config/routes.js';
+import {
   registerBroadcastMigrationStatus,
   type BroadcastMigrationStatus,
 } from './broadcast-config/migration-status.js';
@@ -194,6 +199,7 @@ export interface CompanionAppOptions {
   readonly clock?: GsiClock;
   readonly qualificationMode?: boolean;
   readonly qualificationControlToken?: string;
+  readonly broadcastConfig?: BroadcastRuntimeDependencies;
   readonly hudConfigPath?: string;
   readonly hudConfigStore?: HudConfigStore;
   readonly obsConfigPath?: string;
@@ -725,11 +731,14 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     state: 'pending',
     reason: 'owner_unavailable',
   };
-  registerBroadcastMigrationStatus(
-    app,
-    localWebTransport.getOriginPolicy(),
-    () => broadcastMigrationStatus,
+  let getBroadcastMigrationStatus = () => broadcastMigrationStatus;
+  registerBroadcastMigrationStatus(app, localWebTransport.getOriginPolicy(), () =>
+    getBroadcastMigrationStatus(),
   );
+  if (!options.broadcastConfig || !options.obsConfigPath)
+    app.get('/local/v1/broadcast-display-config', (_request, reply) =>
+      reply.code(503).send({ error: 'broadcast_config_unavailable' }),
+    );
   registerHudConfigRoutes(app, {
     store: hudConfigStore,
     originPolicy: localWebTransport.getOriginPolicy(),
@@ -1228,6 +1237,29 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       join(dirname(options.obsConfigPath), 'orchestration'),
       (stage, evidence) => sessionJournal?.record(stage, evidence),
     );
+    const broadcastRuntime = options.broadcastConfig
+      ? createBroadcastRuntime({
+          hud: hudConfigStore,
+          music: musicStore,
+          camera: cameraStore,
+          dependencies: {
+            ...options.broadcastConfig,
+            hudPath: options.broadcastConfig.hudPath ?? options.hudConfigPath,
+          },
+          withApplyGuard: (operation) => production.configureBroadcast(operation),
+          diagnostic: (error) =>
+            app.log.error({ stage: 'broadcast_owner_sync', err: error }, '播出配置同步失败'),
+        })
+      : undefined;
+    if (broadcastRuntime) {
+      getBroadcastMigrationStatus = () => broadcastRuntime.status;
+      registerBroadcastConfigRoutes(
+        app,
+        broadcastRuntime.store,
+        localWebTransport.getOriginPolicy(),
+        () => broadcastRuntime.ready,
+      );
+    }
     const cameraEvidence = (stage: string, evidence: unknown) =>
       sessionJournal?.record(stage, evidence);
     const mulnxTool = options.mulnxBundle
@@ -1277,6 +1309,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         };
       }
     });
+    if (broadcastRuntime)
+      app.addHook('onReady', async () => {
+        await broadcastRuntime.initialize();
+        broadcastMigrationStatus = broadcastRuntime.status;
+      });
     registerOrchestrationRoutes(
       app,
       cameraDirector,

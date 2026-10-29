@@ -180,6 +180,17 @@ export class HudConfigStore {
   }
 
   async load(): Promise<void> {
+    if (this.persistence) {
+      await this.commits.run(async () => {
+        if (!this.persistence) throw new Error('hud_persistence_unavailable');
+        this.document = parseHudConfigDocument(
+          await this.persistence.initialize(clone(this.document)),
+        );
+        this.persistenceError = null;
+        this.loaded = true;
+      });
+      return;
+    }
     if (this.filePath === undefined) {
       this.loaded = true;
       return;
@@ -216,6 +227,19 @@ export class HudConfigStore {
         throw new Error('hud_persistence_unavailable');
       const document = parseHudConfigDocument(await persistence.initialize(clone(this.document)));
       this.document = document;
+      this.persistence = persistence;
+    });
+  }
+
+  /** Recover an existing coordinator without treating the legacy file as authoritative. */
+  async restorePersistence(persistence: HudConfigPersistence): Promise<void> {
+    await this.commits.run(async () => {
+      if (this.persistence) throw new Error('hud_persistence_unavailable');
+      const document = parseHudConfigDocument(await persistence.initialize(clone(this.document)));
+      this.document = document;
+      this.persistenceError = null;
+      this.loadFailure = false;
+      this.loaded = true;
       this.persistence = persistence;
     });
   }
@@ -379,6 +403,10 @@ export class HudConfigStore {
 
   async flush(): Promise<void> {
     await this.commits.flush();
+  }
+
+  get canMigrate(): boolean {
+    return this.loaded && !this.loadFailure;
   }
 
   get isLoaded(): boolean {
