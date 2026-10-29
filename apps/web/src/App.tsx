@@ -1,7 +1,9 @@
+import { useRadarViewSource } from './realtime/radar-view-source';
 import { useLocalRead } from './preparation/client';
 import type { OverlayPolicy } from './preparation/desktop-overlay';
 import { ToolShell } from './patterns';
 import { PreparationPage } from './preparation/PreparationPage';
+import { ResourceLibraryPage } from './resource-library/ResourceLibraryPage';
 import { BpPage } from './bp/BpPage';
 import { OperatorShell } from './operator/OperatorShell';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
@@ -157,6 +159,7 @@ function ProgramRoute() {
     return () => window.removeEventListener('resize', resize);
   }, []);
   const radarClient = useLocalChannelConnection('radar');
+  const radarSource = useRadarViewSource(radarClient);
   const programClient = useLocalChannelConnection('program');
   const programConnection = useSyncExternalStore(
     programClient.subscribe,
@@ -232,7 +235,7 @@ function ProgramRoute() {
   const program = (
     <ProgramCueRendererBridge client={cueClient}>
       <ProgramPage
-        radarClient={radarClient}
+        radarSource={radarSource}
         connectionState={programConnection.state}
         resolvedPreset={resolved}
         snapshot={activeSnapshot}
@@ -615,6 +618,7 @@ export function DebugPage() {
 
 export function App() {
   const pathname = window.location.pathname;
+  if (pathname === '/packages') return <ResourceLibraryPage />;
   if (['/', '/operator', '/matches', '/resources', '/picture', '/settings'].includes(pathname))
     return <PreparationPage />;
   if (pathname === '/qualification')

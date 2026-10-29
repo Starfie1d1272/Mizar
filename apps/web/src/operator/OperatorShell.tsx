@@ -46,7 +46,7 @@ export function OperatorShell({
     <DesktopCanvas kind="product">
       <div
         className="product-shell mizar-surface"
-        data-settings={active === '/settings' || undefined}
+        data-settings={active === '/settings' || active === '/packages' || undefined}
       >
         <a className="product-skip" href="#product-content">
           跳到主要内容
@@ -60,6 +60,7 @@ export function OperatorShell({
             {[
               ['/', '本场'],
               ['/resources', '比赛库'],
+              ['/packages', '资源管理'],
               ['/picture', 'HUD 与画面'],
               ['/settings', '设置'],
             ].map(([path, label]) => (

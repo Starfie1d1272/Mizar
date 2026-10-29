@@ -7,11 +7,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { cameraMapSchema, orchestrationPresetSchema } from '@mizar/protocol/orchestration';
 import { CameraDirector } from '../src/orchestration/director.js';
 import { OrchestrationStore } from '../src/orchestration/store.js';
-import {
-  MulnxProvider,
-  type GatewayResult,
-  type TrackedState,
-} from '../src/orchestration/provider.js';
+import { MulnxProvider, type GatewayResult } from '../src/orchestration/provider.js';
 import { registerOrchestrationRoutes } from '../src/orchestration/routes.js';
 import { MulnxTool } from '../src/orchestration/tool.js';
 import { MusicStore } from '../src/music/store.js';
@@ -70,9 +66,6 @@ async function rig(nativeRequired = false) {
     manual: false,
   };
   const calls: { type: string; macro?: string }[] = [];
-  let preparingCancel = false;
-  let trackedListener: ((state: TrackedState) => void) | undefined;
-  let tracked: { id: number; generation: number } | undefined;
   const provider = {
     connected: true,
     generation: 1,
@@ -80,31 +73,11 @@ async function rig(nativeRequired = false) {
       type: 'CamMacro/Play' | 'CamPack/Apply' | 'CamPlay/ClearForce',
       macro?: string,
     ): Promise<GatewayResult> => {
-      if (type !== 'CamPack/Apply' && !preparingCancel)
-        calls.push({ type, ...(macro ? { macro } : {}) });
+      if (type !== 'CamPack/Apply') calls.push({ type, ...(macro ? { macro } : {}) });
       return Promise.resolve('queued');
     },
     packStatus: (): Promise<{ active: string | null; empty: boolean } | null> =>
       Promise.resolve({ active: '测试包', empty: true }),
-    trackedStatus: () => {
-      preparingCancel = true;
-      return Promise.resolve({ generation: 0, current: null });
-    },
-    cancelTracked: async (generation: number) => {
-      const result = await provider.send('CamPlay/ClearForce');
-      preparingCancel = false;
-      return result === 'queued' ? { generation: generation + 1, matched: true } : null;
-    },
-    playTracked: (macro: string, _pack: string, id: number, generation: number) => {
-      tracked = { id, generation };
-      return provider.send('CamMacro/Play', macro);
-    },
-    onTracked: (listener: (state: TrackedState) => void) => {
-      trackedListener = listener;
-      return () => {
-        trackedListener = undefined;
-      };
-    },
     connect: () => {
       provider.connected = true;
       provider.generation++;
@@ -158,15 +131,6 @@ async function rig(nativeRequired = false) {
     calls,
     provider,
     director,
-    emit: (state: TrackedState['state']) => {
-      if (!tracked) throw new Error('missing tracked request');
-      trackedListener?.({
-        requestId: tracked.id,
-        generation: tracked.generation,
-        state,
-        reason: '',
-      });
-    },
     resume,
     tick,
     round,
@@ -234,7 +198,7 @@ it('new round shots draw once, continue into live play and clear at their deadli
   r.director.opening();
   await r.tick();
   expect(r.calls).toEqual([{ type: 'CamMacro/Play', macro: '开场' }]);
-  expect(r.director.get()).toMatchObject({ request: 'queued', execution: 'unconfirmed' });
+  expect(r.director.get()).toMatchObject({ request: 'queued' });
   r.director.opening();
   await r.tick();
   expect(r.calls).toHaveLength(1);
@@ -267,165 +231,6 @@ it('new round shots draw once, continue into live play and clear at their deadli
   r.program.map.roundNumber = 4;
   await r.live();
   expect(r.calls).toHaveLength(beforeLateRound);
-});
-it('replaces manual playback after confirmed cancellation and continues a pause only on completion', async () => {
-  const r = await rig();
-  const map = r.store.preset.maps[0]!;
-  await r.store.save({
-    ...r.store.preset,
-    maps: [
-      {
-        ...map,
-        pauseCandidates: {
-          tactical: [
-            { macro: '暂停一', maxMs: 6000 },
-            { macro: '暂停二', maxMs: 6000 },
-          ],
-          technical: [],
-        },
-      },
-    ],
-  });
-  await r.resume();
-  await r.director.audition({ macro: '手动一', maxMs: 6000 }, r.director.get());
-  r.emit('started');
-  expect(r.director.get()).toMatchObject({ current: '手动一', execution: 'started', held: true });
-  await r.director.audition({ macro: '手动二', maxMs: 6000 }, r.director.get());
-  expect(r.calls.slice(-2)).toEqual([
-    { type: 'CamPlay/ClearForce' },
-    { type: 'CamMacro/Play', macro: '手动二' },
-  ]);
-  await r.director.command('resume', r.director.get());
-  expect(r.director.get().held).toBe(false);
-  r.program.map.phase = 'live';
-  r.program.map.roundNumber = 4;
-  r.program.clock = { phase: 'timeout_ct', endsInSeconds: 30 };
-  await r.tick();
-  expect(r.calls.at(-1)).toEqual({ type: 'CamMacro/Play', macro: '暂停一' });
-  r.emit('completed');
-  await r.tick();
-  expect(r.calls.at(-1)).toEqual({ type: 'CamMacro/Play', macro: '暂停二' });
-  r.emit('completed');
-  await r.tick();
-  const count = r.calls.length;
-  await r.tick();
-  expect(r.calls).toHaveLength(count);
-});
-it('waits for the first play acknowledgement when pause completion arrives early', async () => {
-  const r = await rig();
-  const map = r.store.preset.maps[0]!;
-  await r.store.save({
-    ...r.store.preset,
-    maps: [
-      {
-        ...map,
-        pauseCandidates: {
-          tactical: [
-            { macro: '暂停一', maxMs: 6000 },
-            { macro: '暂停二', maxMs: 6000 },
-          ],
-          technical: [],
-        },
-      },
-    ],
-  });
-  await r.resume();
-  const send = r.provider.send;
-  let reply!: (result: GatewayResult) => void;
-  r.provider.send = (type, macro) => {
-    if (type !== 'CamMacro/Play' || macro !== '暂停一') return send(type, macro);
-    r.calls.push({ type, macro });
-    return new Promise((resolve) => {
-      reply = resolve;
-    });
-  };
-  r.program.map.phase = 'live';
-  r.program.map.roundNumber = 4;
-  r.program.clock = { phase: 'timeout_ct', endsInSeconds: 30 };
-  await r.tick();
-  r.emit('completed');
-  expect(r.calls.at(-1)).toEqual({ type: 'CamMacro/Play', macro: '暂停一' });
-  reply('queued');
-  await r.tick();
-  expect(r.calls.at(-1)).toEqual({ type: 'CamMacro/Play', macro: '暂停二' });
-});
-it('does not replace a shot when the upstream cancellation token is stale', async () => {
-  const r = await rig();
-  await r.resume();
-  await r.director.audition({ macro: '手动一', maxMs: 6000 }, r.director.get());
-  const cancel = vi
-    .fn()
-    .mockResolvedValueOnce({ generation: 9, matched: false })
-    .mockResolvedValue({ generation: 11, matched: true });
-  r.provider.cancelTracked = cancel;
-  const status = vi.fn().mockResolvedValue({ generation: 10, current: null });
-  r.provider.trackedStatus = status;
-  await expect(
-    r.director.audition({ macro: '手动二', maxMs: 6000 }, r.director.get()),
-  ).rejects.toThrow('camera_stop_unconfirmed');
-  expect(r.calls.filter((call) => call.type === 'CamMacro/Play')).toEqual([
-    { type: 'CamMacro/Play', macro: '手动一' },
-  ]);
-  expect(r.director.get()).toMatchObject({ current: '手动一', preparation: 'error', held: true });
-  await r.advance(7000);
-  await r.tick();
-  await r.tick();
-  await r.tick();
-  expect(cancel).toHaveBeenCalledTimes(1);
-  await r.director.audition({ macro: '手动二', maxMs: 6000 }, r.director.get());
-  expect(status).toHaveBeenCalled();
-  expect(cancel).toHaveBeenLastCalledWith(10);
-});
-it('invalidates preparation after an external cancellation and queries before playing again', async () => {
-  const r = await rig();
-  await r.resume();
-  await r.director.audition({ macro: '手动一', maxMs: 6000 }, r.director.get());
-  const status = vi.spyOn(r.provider, 'trackedStatus');
-  r.emit('cancelled');
-  expect(r.director.get()).toMatchObject({
-    current: null,
-    execution: 'cancelled',
-    preparation: 'waiting',
-  });
-  await r.director.audition({ macro: '手动二', maxMs: 6000 }, r.director.get());
-  expect(status).toHaveBeenCalled();
-  expect(r.calls.at(-1)).toEqual({ type: 'CamMacro/Play', macro: '手动二' });
-});
-it('keeps a pending cancellation valid when its state arrives before its reply', async () => {
-  const r = await rig();
-  await r.resume();
-  await r.director.audition({ macro: '手动一', maxMs: 6000 }, r.director.get());
-  let finish!: (result: { generation: number; matched: boolean } | null) => void;
-  r.provider.cancelTracked = () =>
-    new Promise((resolve) => {
-      finish = resolve;
-    });
-  const replacement = r.director.audition({ macro: '手动二', maxMs: 6000 }, r.director.get());
-  r.emit('cancelled');
-  r.director.hold();
-  finish({ generation: 3, matched: true });
-  await expect(replacement).rejects.toThrow('camera_context_changed');
-  expect(r.director.get()).toMatchObject({ current: null, held: true, execution: 'cancelled' });
-  await r.director.command('resume', r.director.get());
-  expect(r.director.get().held).toBe(false);
-});
-it('does not submit a replacement on a new connection after an old cancellation reply', async () => {
-  const r = await rig();
-  await r.resume();
-  await r.director.audition({ macro: '旧镜头', maxMs: 6000 }, r.director.get());
-  let finish!: (result: { generation: number; matched: boolean } | null) => void;
-  r.provider.cancelTracked = () =>
-    new Promise((resolve) => {
-      finish = resolve;
-    });
-  const pending = r.director.audition({ macro: '新镜头', maxMs: 6000 }, r.director.get());
-  r.provider.close();
-  await r.provider.connect();
-  finish({ generation: 3, matched: true });
-  await expect(pending).rejects.toThrow();
-  expect(r.calls.filter((call) => call.type === 'CamMacro/Play')).toEqual([
-    { type: 'CamMacro/Play', macro: '旧镜头' },
-  ]);
 });
 it('hold, skip and resume consume current edges without catch-up', async () => {
   const r = await rig();
@@ -808,33 +613,6 @@ it('real websocket separates ACK, rejection and unrelated broadcasts; disconnect
       }
       wires.push(wire);
       socket.send(JSON.stringify({ attackerSteamId: '0' }));
-      if (command.type === 'CamPlay/StatusTracked') {
-        socket.send(
-          JSON.stringify({
-            type: command.type,
-            requestId: Number(command.payload),
-            generation: 4,
-            current: null,
-          }),
-        );
-      }
-      if (command.type === 'CamPlay/CancelTracked') {
-        const [id, gen] = command.payload.split(' ').map(Number);
-        socket.send(
-          JSON.stringify({ type: command.type, requestId: id, generation: 5, matched: gen === 4 }),
-        );
-      }
-      if (command.type === 'CamPlay/Tracked') {
-        socket.send(
-          JSON.stringify({
-            type: 'CamPlay/State',
-            requestId: 22,
-            generation: 5,
-            state: 'started',
-            reason: '',
-          }),
-        );
-      }
       if (command.type === 'CamPack/Status' && ackFirst) socket.send(`已投入消息总线${wire}`);
       if (command.type === 'CamPack/Status') {
         socket.send(
@@ -881,32 +659,13 @@ it('real websocket separates ACK, rejection and unrelated broadcasts; disconnect
   expect(JSON.parse(wires.shift()!)).toEqual({ type: 'CamPack/Apply', payload: '"Mizar_pack"' });
   expect(await provider.packStatus()).toEqual({ active: 'Mizar_pack', empty: true });
   expect((JSON.parse(wires.shift()!) as { type: string }).type).toBe('CamPack/Status');
-  expect(await provider.trackedStatus()).toEqual({ generation: 4, current: null });
-  wires.shift();
-  expect(await provider.cancelTracked(4)).toEqual({ generation: 5, matched: true });
-  wires.shift();
-  const states: string[] = [];
-  const unsubscribe = provider.onTracked((state) => states.push(state.state));
-  expect(await provider.playTracked('宏 "x"', '包 \\x', 22, 5)).toBe('queued');
-  expect(states).toEqual(['started']);
-  expect((JSON.parse(wires.shift()!) as { payload: string }).payload).toBe(
-    '"宏 \\"x\\"" "包 \\\\x" 22 5',
-  );
-  unsubscribe();
-  replyMode = 'unsupported';
-  await expect(provider.trackedStatus()).rejects.toThrow('camera_status_unsupported');
-  await expect(provider.packStatus()).rejects.toThrow('camera_status_unsupported');
-  replyMode = 'reject';
-  expect(await provider.trackedStatus()).toBeNull();
-  replyMode = 'ack';
-  wires.splice(0);
   ackFirst = true;
   expect(await provider.packStatus()).toEqual({ active: 'Mizar_pack', empty: true });
   wires.shift();
   expect(await provider.send('CamMacro/Play', '中文 "宏" \\')).toBe('queued');
   expect(JSON.parse(wires[0]!)).toEqual({ type: 'CamMacro/Play', payload: '"中文 \\"宏\\" \\\\"' });
   replyMode = 'silent';
-  expect(await provider.trackedStatus()).toBeNull();
+  expect(await provider.send('CamMacro/Play', '无回执')).toBe('unknown');
   expect(provider.connected).toBe(false);
   await provider.connect(port);
   replyMode = 'reject';
@@ -935,7 +694,6 @@ it('audition works during live rounds and manual scene control without arming au
   expect(r.director.get()).toMatchObject({
     held: true,
     request: 'queued',
-    execution: 'unconfirmed',
   });
   r.director.opening();
   expect(r.calls).toEqual([{ type: 'CamMacro/Play', macro: '自选镜头' }]);
@@ -950,6 +708,16 @@ it('audition works during live rounds and manual scene control without arming au
   await r.tick();
   expect(r.calls.at(-1)).toEqual({ type: 'CamMacro/Play', macro: '自选镜头' });
   expect(r.director.get().held).toBe(true);
+  await r.director.audition({ macro: '另一个镜头', maxMs: 2000 }, r.director.get());
+  expect(r.calls.slice(-2)).toEqual([
+    { type: 'CamPlay/ClearForce' },
+    { type: 'CamMacro/Play', macro: '另一个镜头' },
+  ]);
+  expect(r.director.get()).toMatchObject({ held: true });
+  r.program.series!.bindingState = 'bound';
+  await r.resume();
+  expect(r.calls.at(-1)).toEqual({ type: 'CamPlay/ClearForce' });
+  expect(r.director.get()).toMatchObject({ held: false, current: null });
 });
 it('disconnect while a stop is pending cannot leave an orphan submitted state blocking re-arm', async () => {
   const r = await rig();
@@ -1049,7 +817,7 @@ it('hands a freeze shot to a fresh tactical pause after clear ACK without claimi
   await r.tick();
   expect(r.calls.at(-1)).toEqual({ type: 'CamMacro/Play', macro: '暂停' });
   expect(r.calls).toHaveLength(3);
-  expect(r.director.get()).toMatchObject({ execution: 'unconfirmed', request: 'queued' });
+  expect(r.director.get()).toMatchObject({ request: 'queued' });
 });
 it('does not start a queued round shot after freeze time ends', async () => {
   const r = await rig();

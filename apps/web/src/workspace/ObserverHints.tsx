@@ -8,7 +8,7 @@ import {
   type ObserverRuntimeView,
   type ConnectionPreparationView,
 } from '../preparation/observer-preparation';
-import { observerHotkeyLabel } from '../program/observer-hotkey';
+import { observerHotkeyLabel } from '@mizar/hud-view';
 
 export function ObserverHints() {
   const runtime = useLocalRead<ObserverRuntimeView>('/local/v1/observer');

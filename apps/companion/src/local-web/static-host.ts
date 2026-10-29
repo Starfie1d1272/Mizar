@@ -14,6 +14,7 @@ const SURFACE_ROUTES = [
     '/',
     '/program/bp-compact',
     '/matches',
+    '/packages',
     '/picture',
     '/settings',
     '/operator',

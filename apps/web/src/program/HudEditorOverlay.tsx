@@ -1,4 +1,4 @@
-import { themeStyle } from './GameplayHud';
+import { themeStyle } from '@mizar/hud-view';
 import { Fragment, type PointerEvent } from 'react';
 
 import {
@@ -13,7 +13,7 @@ import {
   getHudRendererEntry,
   HUD_RENDERER_REGISTRY,
   type HudRendererRegistry,
-} from './hud-renderer-registry';
+} from '@mizar/hud-view';
 
 export interface HudEditorOverlayProps {
   readonly resolvedPreset: HudResolvedPreset;

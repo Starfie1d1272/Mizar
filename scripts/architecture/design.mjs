@@ -18,7 +18,12 @@ const foundationReference = /--mizar-(?:color|space|radius|font|motion|stroke|si
 const baseline = JSON.parse(readFileSync(new URL('./design-legacy.json', import.meta.url), 'utf8'));
 
 function isRenderer(path) {
-  return path.startsWith('apps/web/src/program/');
+  return (
+    path.startsWith('apps/web/src/program/') ||
+    (path.startsWith('packages/hud-view/src/') &&
+      !path.endsWith('/bp.css') &&
+      !path.endsWith('/BpPresentation.tsx'))
+  );
 }
 function isCatalog(path) {
   return /\.stories\.[^.]+$/.test(path);
@@ -129,7 +134,11 @@ export function checkDesign(repository, records, report) {
   }
   const canonicalNames = new Set([...canonical.values()].map((token) => token.cssName));
   for (const [path, source] of repository.files) {
-    if (!path.startsWith('apps/') || !/\.(?:css|[cm]?[jt]sx?)$/.test(path)) continue;
+    if (
+      (!path.startsWith('apps/') && !path.startsWith('packages/hud-view/src/')) ||
+      !/\.(?:css|[cm]?[jt]sx?)$/.test(path)
+    )
+      continue;
     const budget = new Map(Object.entries(baseline[path] ?? {}));
     for (const finding of visualFindings(path, source)) {
       const key = `${finding.ruleId} | ${finding.value}`;

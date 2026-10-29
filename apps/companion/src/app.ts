@@ -1,3 +1,15 @@
+import { createProductionBroadcastDependencies } from './broadcast-config/production.js';
+import {
+  createBroadcastRuntime,
+  type BroadcastRuntimeDependencies,
+} from './broadcast-config/runtime.js';
+import { registerBroadcastConfigRoutes } from './broadcast-config/routes.js';
+import { broadcastResourceReferences } from './broadcast-config/reference-queue.js';
+import type { ResourceRef } from '@mizar/broadcast-config';
+import {
+  registerBroadcastMigrationStatus,
+  type BroadcastMigrationStatus,
+} from './broadcast-config/migration-status.js';
 import {
   BpPresentationSettings,
   registerBpPresentationSettings,
@@ -191,6 +203,7 @@ export interface CompanionAppOptions {
   readonly clock?: GsiClock;
   readonly qualificationMode?: boolean;
   readonly qualificationControlToken?: string;
+  readonly broadcastConfig?: BroadcastRuntimeDependencies;
   readonly hudConfigPath?: string;
   readonly hudConfigStore?: HudConfigStore;
   readonly obsConfigPath?: string;
@@ -237,6 +250,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   const demoRecovery = readDemoTestRecovery(demoMarkerPath);
   const formalMutations = new Set<string>();
   let resources: ResourceStore | undefined;
+  let broadcastConfig = options.broadcastConfig;
+  let getBroadcastReferences: (() => ResourceRef[]) | undefined;
   let recorder = options.recorder ?? createDisabledRecorder('recorder_not_configured');
   const currentRecorder = (): CaptureRecorder => recorder;
   const programRuntime =
@@ -718,6 +733,18 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     },
   });
   registerLocalWebSocketTransport(app, localWebTransport);
+  let broadcastMigrationStatus: BroadcastMigrationStatus = {
+    state: 'pending',
+    reason: 'owner_unavailable',
+  };
+  let getBroadcastMigrationStatus = () => broadcastMigrationStatus;
+  registerBroadcastMigrationStatus(app, localWebTransport.getOriginPolicy(), () =>
+    getBroadcastMigrationStatus(),
+  );
+  if (!options.obsConfigPath)
+    app.get('/local/v1/broadcast-display-config', (_request, reply) =>
+      reply.code(503).send({ error: 'broadcast_config_unavailable' }),
+    );
   registerHudConfigRoutes(app, {
     store: hudConfigStore,
     originPolicy: localWebTransport.getOriginPolicy(),
@@ -782,6 +809,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         );
   let musicDirector: MusicDirector | undefined;
   let cameraDirector: CameraDirector | undefined;
+  let catalogTool: MulnxTool | undefined;
+  let catalogToolLoaded = false;
   let mulnxClock: MulnxProgramClock | undefined;
   let mulnxClockState = '';
   const bpPresentationSettings = new BpPresentationSettings(
@@ -1007,12 +1036,14 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         : reply.header('cache-control', 'no-store').send(envelope);
     });
   }
+  let waitForBroadcast: (() => Promise<void>) | undefined;
   const production = registerProductionRoutes(app, {
     originPolicy: localWebTransport.getOriginPolicy(),
     hasContext: () =>
       matchContextController?.getActiveBinding() !== undefined &&
       matchContextController?.getActiveBinding() != null,
     scenes: sceneController,
+    waitForBroadcast: () => waitForBroadcast?.() ?? Promise.resolve(),
     beforeEnter: () => {
       if (cameraDirector?.store.saving) throw new Error('camera_settings_saving');
       demoTest?.openFormalBoundary();
@@ -1090,6 +1121,25 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
               : undefined,
           ),
           activateWhenSafe: (commit) => production.withResourceActivation(commit),
+          ...(broadcastConfig
+            ? {
+                references: {
+                  run: <T>(operation: () => Promise<T>) =>
+                    broadcastConfig!.references.run(operation),
+                  isReferenced: (ref: ResourceRef) => {
+                    if (!getBroadcastReferences) throw new Error('broadcast_config_unavailable');
+                    return Promise.resolve(
+                      getBroadcastReferences().some(
+                        (used) =>
+                          used.id === ref.id &&
+                          used.version === ref.version &&
+                          used.digest === ref.digest,
+                      ),
+                    );
+                  },
+                },
+              }
+            : {}),
         });
       } catch (error) {
         app.log.warn(
@@ -1218,6 +1268,65 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       join(dirname(options.obsConfigPath), 'orchestration'),
       (stage, evidence) => sessionJournal?.record(stage, evidence),
     );
+    broadcastConfig ??= createProductionBroadcastDependencies(
+      dirname(options.obsConfigPath),
+      musicStore,
+      async (ref) => {
+        if (ref.resource.id !== PACK_ID || !resources) throw new Error('dependency_missing');
+        await resources.readExact(ref.resource, ref.fileId);
+      },
+    );
+    const broadcastRuntime = broadcastConfig
+      ? createBroadcastRuntime({
+          hud: hudConfigStore,
+          music: musicStore,
+          camera: cameraStore,
+          dependencies: {
+            ...broadcastConfig,
+            hudPath: broadcastConfig.hudPath ?? options.hudConfigPath,
+            isDeleting: async (ref) => {
+              if (ref.id !== PACK_ID) return broadcastConfig!.isDeleting(ref);
+              if (!resources) throw new Error('resource_store_unavailable');
+              return resources.isDeleting(ref);
+            },
+            resolve: {
+              scene: (value) => broadcastConfig!.resolve.scene(value),
+              camera: (value) => broadcastConfig!.resolve.camera(value),
+              hud: (value) => broadcastConfig!.resolve.hud(value),
+              asset: async (ref) => {
+                if (ref.resource.id !== PACK_ID) return broadcastConfig!.resolve.asset(ref);
+                if (!resources) throw new Error('resource_store_unavailable');
+                await resources.readExact(ref.resource, ref.fileId);
+              },
+            },
+            verifyActive: async (active) => {
+              await broadcastConfig!.verifyActive(active);
+              for (const ref of active.lock.resources) {
+                if (ref.id !== PACK_ID) continue;
+                if (!resources) throw new Error('resource_store_unavailable');
+                await resources.verifyExact(ref);
+              }
+            },
+          },
+          withApplyGuard: (operation) => production.configureBroadcast(operation),
+          diagnostic: (error) =>
+            app.log.error({ stage: 'broadcast_owner_sync', err: error }, '播出配置同步失败'),
+        })
+      : undefined;
+    if (broadcastRuntime) {
+      waitForBroadcast = () => broadcastRuntime.waitForApply();
+      getBroadcastReferences = () => {
+        if (!broadcastRuntime.ready) throw new Error('broadcast_config_unavailable');
+        return broadcastResourceReferences(broadcastRuntime.store.snapshot);
+      };
+      getBroadcastMigrationStatus = () => broadcastRuntime.status;
+      registerBroadcastConfigRoutes(
+        app,
+        broadcastRuntime.store,
+        localWebTransport.getOriginPolicy(),
+        () => broadcastRuntime.ready,
+      );
+    }
     const cameraEvidence = (stage: string, evidence: unknown) =>
       sessionJournal?.record(stage, evidence);
     const mulnxTool = options.mulnxBundle
@@ -1227,6 +1336,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           cameraEvidence,
         )
       : undefined;
+    catalogTool = mulnxTool;
     const mulnxProvider = new MulnxProvider(cameraEvidence);
     mulnxClock = new MulnxProgramClock(mulnxProvider);
     app.addHook('onClose', () => mulnxClock?.close());
@@ -1249,9 +1359,14 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       options.productRuntime !== undefined,
     );
     app.addHook('onReady', async () => {
-      await mulnxTool
-        ?.load()
-        .catch((error) => app.log.error({ stage: 'mulnx_load', err: error }, 'MulNX 加载失败'));
+      if (mulnxTool) {
+        try {
+          await mulnxTool.load();
+          catalogToolLoaded = true;
+        } catch (error) {
+          app.log.error({ stage: 'mulnx_load', err: error }, 'MulNX 加载失败');
+        }
+      }
       await cameraStore
         .load()
         .catch((error) =>
@@ -1260,7 +1375,21 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             '运镜预设加载失败',
           ),
         );
+      if (musicStore.ready && !musicStore.failure && cameraStore.ready && hudConfigStore.isLoaded) {
+        const hasCameraSources =
+          cameraStore.preset.maps.length > 0 ||
+          cameraStore.presets.some((item) => item.preset.maps.length > 0);
+        broadcastMigrationStatus = {
+          state: 'pending',
+          reason: hasCameraSources ? 'camera_identity_unavailable' : 'facades_pending',
+        };
+      }
     });
+    if (broadcastRuntime)
+      app.addHook('onReady', async () => {
+        await broadcastRuntime.initialize();
+        broadcastMigrationStatus = broadcastRuntime.status;
+      });
     registerOrchestrationRoutes(
       app,
       cameraDirector,
@@ -1276,6 +1405,28 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       mulnxTool,
     );
   }
+  app.get('/local/v1/resource-library', (request, reply) => {
+    const policy = localWebTransport.getOriginPolicy();
+    if (
+      policy.mode !== 'loopback' ||
+      !['127.0.0.1', 'localhost', '[::1]', '::1'].includes(request.hostname) ||
+      request.headers['sec-fetch-site'] === 'cross-site' ||
+      (request.headers.origin && !checkLocalWebOrigin(policy, request.headers.origin).allowed)
+    )
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    const tool = catalogToolLoaded ? catalogTool?.view() : undefined;
+    return reply.header('cache-control', 'no-store').send({
+      resources: resources?.list() ?? null,
+      tool: tool
+        ? {
+            installed: tool.installed,
+            latest: tool.latest,
+            busy: tool.busy,
+            packs: tool.packs.map((pack) => pack.sourceName),
+          }
+        : null,
+    });
+  });
   sceneController.attachDirector(director);
   const directorTimer = setInterval(() => {
     void director.tick().catch(() => director.hold());

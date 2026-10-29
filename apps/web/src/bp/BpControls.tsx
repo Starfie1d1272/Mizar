@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { BpSnapshot } from '@mizar/protocol/bp';
 import { sendBpCommand } from './client';
-import './bp.css';
+import '@mizar/hud-view/bp.css';
 const labels = {
   hidden: '已收起',
   revealing: '正在播放',

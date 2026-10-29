@@ -53,6 +53,24 @@ it('retains normal Companion fallback when the optional resource store cannot op
   }
 });
 
+it('reports unavailable catalog owners and rejects cross-site reads', async () => {
+  const app = buildApp({});
+  try {
+    await app.ready();
+    const local = await app.inject({ method: 'GET', url: '/local/v1/resource-library' });
+    expect(local.statusCode).toBe(200);
+    expect(local.json()).toEqual({ resources: null, tool: null });
+    const crossSite = await app.inject({
+      method: 'GET',
+      url: '/local/v1/resource-library',
+      headers: { 'sec-fetch-site': 'cross-site' },
+    });
+    expect(crossSite.statusCode).toBe(403);
+  } finally {
+    await app.close();
+  }
+});
+
 it('holds production, scene and Host-update exclusion for the entire asynchronous activation', async () => {
   const app = Fastify();
   let finishScene!: () => void;
