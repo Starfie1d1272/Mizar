@@ -254,7 +254,10 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
           />
         ) : null}
         {status?.spectatorRecoveryPending ? (
-          <p>{status.message || '观战原值备份仍保留，帧率和画质恢复不受影响。'}</p>
+          <p>
+            {(!status.externalDetached && status.message) ||
+              '观战原值备份仍保留，帧率和画质恢复不受影响。'}
+          </p>
         ) : null}
         {status?.demoCleanupPending ? (
           <p>
