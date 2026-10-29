@@ -251,6 +251,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       // eslint-disable-next-line preserve-caught-error -- Download causes may expose signed URLs.
       throw new Error('发行计时证据缺失或结构、时序有误；不得作为完整发行验收。');
     if (mode === 'box' && process.env.GITHUB_EVENT_NAME === 'workflow_run') {
+      // eslint-disable-next-line preserve-caught-error -- The cause can contain signed URLs.
       throw new Error('Release timing unavailable; cannot verify 600-second budget');
     }
     // Metrics cannot invalidate delivery after its original-byte checks succeeded.
