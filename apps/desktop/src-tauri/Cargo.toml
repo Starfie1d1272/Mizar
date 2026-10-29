@@ -15,7 +15,7 @@ regex = "=1.13.1"
 sha2 = "=0.10.9"
 chrono = { version = "=0.4.45", default-features = false, features = ["clock"] }
 tauri-plugin-dialog = "=2.8.1"
-windows = { version = "=0.62.2", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell", "Win32_UI_Controls", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "=0.62.2", features = ["Win32_Foundation", "Win32_Media_Audio", "Win32_System_Com", "Win32_UI_Shell", "Win32_UI_Controls", "Win32_UI_WindowsAndMessaging"] }
 
 [build-dependencies]
 tauri-build = "=2.7.1"

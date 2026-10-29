@@ -130,6 +130,7 @@ export class ObsAdapter {
     private readonly diagnostic: (stage: string, error: unknown) => void = () => undefined,
     private readonly audioRouting?: ObsAudioRouting,
     private readonly commentary?: { owner: RemoteCommentary; journal: string },
+    private readonly defaultRenderDevice: () => string | null = () => null,
   ) {
     this.audioConfiguration = new AudioConfigurationConnection(configStore);
     this.outputs = new ObsOutputController(configStore, (error, password) =>
@@ -680,7 +681,7 @@ export class ObsAdapter {
                 throw new Error(`audio_global_path_unresolved:${conflictingDesktop[1]}`);
             }
             const relationship = desktop
-              ? await desktopMonitorRelationship(obs, desktop)
+              ? await desktopMonitorRelationship(obs, desktop, this.defaultRenderDevice())
               : 'different';
             monitorPending = Boolean(
               desktop && relationship === 'unknown' && music.store?.state.monitorPreference,

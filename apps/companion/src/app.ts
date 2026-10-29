@@ -77,7 +77,7 @@ import { ObsConfigStore } from './obs/config.js';
 import { ObsAudioRouting } from './obs/audio-routing.js';
 import { GameAudioController } from './obs/audio-policy-controller.js';
 import { gameAudioTruth } from './obs/audio-policy-truth.js';
-import { desktopMonitorRelationship } from './obs/audio-monitor-device.js';
+import { DefaultRenderDevice, desktopMonitorRelationship } from './obs/audio-monitor-device.js';
 import type { ObsNativeEvidence } from './obs/native-evidence.js';
 import { registerObsRoutes } from './obs/routes.js';
 import { registerMixerRoutes } from './obs/mixer-routes.js';
@@ -764,6 +764,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         .load()
         .catch((error) => app.log.error({ err: error }, '游戏音频策略加载失败'));
     });
+  const defaultRenderDevice = new DefaultRenderDevice();
   const obsAdapter =
     obsConfigStore === undefined
       ? undefined
@@ -780,6 +781,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             owner: new RemoteCommentary(`${options.obsConfigPath}.commentary.json`),
             journal: `${options.obsConfigPath}.commentary-probe.json`,
           },
+          () => defaultRenderDevice.current(),
         );
   let musicDirector: MusicDirector | undefined;
   let cameraDirector: CameraDirector | undefined;
@@ -1220,7 +1222,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             binding.collection
         )
           throw new Error('audio_binding_changed');
-        const relation = await desktopMonitorRelationship(obs, binding.inputUuid);
+        const relation = await desktopMonitorRelationship(
+          obs,
+          binding.inputUuid,
+          defaultRenderDevice.current(),
+        );
         if (relation === 'unknown') return null;
         return relation === 'same';
       },
@@ -1602,6 +1608,36 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
 
   if (options.productRuntime !== undefined) {
     const product = options.productRuntime;
+    app.post('/operator/runtime/audio-default', { bodyLimit: 2048 }, async (request, reply) => {
+      const token = request.headers['x-runtime-token'];
+      const expected = Buffer.from(product.controlToken);
+      const supplied = Buffer.from(typeof token === 'string' ? token : '');
+      if (
+        request.headers.origin !== undefined ||
+        !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.ip) ||
+        !expected.length ||
+        supplied.length !== expected.length ||
+        !timingSafeEqual(supplied, expected)
+      )
+        return reply.code(403).send({ error: 'runtime-control-denied' });
+      const body = request.body;
+      if (
+        !body ||
+        typeof body !== 'object' ||
+        Array.isArray(body) ||
+        Object.keys(body).length !== 1 ||
+        !('endpoint' in body) ||
+        !(
+          body.endpoint === null ||
+          (typeof body.endpoint === 'string' &&
+            body.endpoint.length > 0 &&
+            body.endpoint.length <= 1024)
+        )
+      )
+        return reply.code(400).send({ error: 'audio-default-invalid' });
+      defaultRenderDevice.update(body.endpoint);
+      return { ok: true };
+    });
     app.post('/operator/runtime/stop', async (request, reply) => {
       const token = request.headers['x-runtime-token'];
       const expected = Buffer.from(product.controlToken);

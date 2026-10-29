@@ -12,6 +12,7 @@ mod cs2_video;
 mod default_resource;
 mod default_resource_vpk;
 mod demo_test;
+mod desktop_audio;
 mod desktop_worker;
 mod geometry;
 mod managed_cs2;
@@ -3700,7 +3701,12 @@ fn run_desktop(
             let pending = Arc::new(AtomicBool::new(false));
             let worker = thread::spawn(move || {
                 let mut cs2_check = Instant::now() - Duration::from_secs(2);
+                let mut audio_check = Instant::now() - Duration::from_secs(2);
                 while worker_running.load(Ordering::Relaxed) {
+                    if audio_check.elapsed() >= Duration::from_secs(2) {
+                        desktop_audio::pulse(&host.state::<DesktopLog>());
+                        audio_check = Instant::now();
+                    }
                     if cs2_check.elapsed() >= Duration::from_secs(2) {
                         if let Ok(mut cs2) =
                             host.state::<Mutex<managed_cs2::ManagedCs2>>().try_lock()

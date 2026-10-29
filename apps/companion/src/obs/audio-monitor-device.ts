@@ -1,10 +1,24 @@
 import type { ObsRpc } from './reconcile.js';
 
-/** Compare OBS device selectors. A default selector cannot be resolved to an
- * explicit Windows endpoint by obs-websocket, so that case remains unknown. */
+/** The desktop host refreshes this value through its private runtime capability. */
+export class DefaultRenderDevice {
+  private value: string | null = null;
+  private until = 0;
+  constructor(private readonly now = Date.now) {}
+  update(value: string | null) {
+    this.value = value;
+    this.until = this.now() + 6000;
+  }
+  current() {
+    return this.now() < this.until ? this.value : null;
+  }
+}
+
+/** Compare OBS selectors; unresolved defaults remain unknown. */
 export async function desktopMonitorRelationship(
   obs: ObsRpc,
   desktopUuid: string,
+  defaultRender?: string | null,
 ): Promise<'same' | 'different' | 'unknown'> {
   const [source, defaults, profile] = await Promise.all([
     obs.call('GetInputSettings', { inputUuid: desktopUuid }),
@@ -20,7 +34,16 @@ export async function desktopMonitorRelationship(
   const monitor = profile.parameterValue;
   if (typeof capture !== 'string' || !capture || typeof monitor !== 'string' || !monitor)
     return 'unknown';
-  if (capture.toLowerCase() === monitor.toLowerCase()) return 'same';
-  if (capture.toLowerCase() === 'default' || monitor.toLowerCase() === 'default') return 'unknown';
+  const captureId = capture.toLowerCase();
+  const monitorId = monitor.toLowerCase();
+  if (captureId === monitorId) return 'same';
+  if (captureId === 'default' || monitorId === 'default') {
+    if (!defaultRender) return 'unknown';
+    const resolved = defaultRender.toLowerCase();
+    return (captureId === 'default' ? resolved : captureId) ===
+      (monitorId === 'default' ? resolved : monitorId)
+      ? 'same'
+      : 'different';
+  }
   return 'different';
 }
