@@ -70,9 +70,12 @@ it('prepares without selecting and publishes a configured instance only after se
   await expect(readFile(join(data, 'current.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   const restarted = new MulnxTool(data, bundle);
   await restarted.load();
-  await expect(
-    restarted.selectRelease(prepared.preparedId, 'D:\\Steam\\cs2.exe'),
-  ).resolves.toBeUndefined();
+  const staged = await restarted.stageSelection(prepared.preparedId, 'D:\\Steam\\cs2.exe', false);
+  expect(restarted.view().installed).toBeNull();
+  await expect(restarted.commitSelection('wrong')).rejects.toThrow('mulnx_selection_changed');
+  expect(restarted.view().installed).toBeNull();
+  await expect(restarted.commitSelection(staged.id)).resolves.toEqual({ version: release.tag });
+  await expect(restarted.commitSelection(staged.id)).rejects.toThrow('mulnx_selection_changed');
   expect(restarted.view().installed).toBe(release.tag);
   const current = JSON.parse(await readFile(join(data, 'current.json'), 'utf8')) as {
     directory: string;

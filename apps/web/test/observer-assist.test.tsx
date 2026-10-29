@@ -279,6 +279,37 @@ it('explains a rejected MulNX update check and allows retry', async () => {
   expect(mocks.native).toHaveBeenCalledTimes(2);
   expect(container.textContent).toContain('MulNX 版本准备已完成');
 });
+it('keeps a downloaded MulNX version available when selection is blocked', async () => {
+  window.__TAURI_INTERNALS__ = { invoke: <T,>() => Promise.resolve(undefined as T) };
+  mocks.native.mockResolvedValueOnce({ preparedId: 'prepared-id', tag: 'new' });
+  mocks.native.mockRejectedValueOnce(new Error('请先退出 CS2'));
+  act(() =>
+    root.render(
+      <MulnxToolControls
+        tool={{ installed: 'old', latest: null, busy: false, message: '', packs: [] }}
+      />,
+    ),
+  );
+  const button = (label: string) =>
+    [...container.querySelectorAll('button')].find((item) => item.textContent === label)!;
+  await act(async () => {
+    button('下载最新版本').click();
+    await Promise.resolve();
+  });
+  expect(container.textContent).toContain('已选版本：old');
+  expect(container.textContent).toContain('已下载版本：new');
+  expect(container.textContent).toContain('运行版本：未确认');
+  await act(async () => {
+    button('使用已下载版本').click();
+    await Promise.resolve();
+  });
+  expect(mocks.native).toHaveBeenLastCalledWith('mulnx_control', {
+    action: 'select',
+    preparedId: 'prepared-id',
+  });
+  expect(container.textContent).toContain('请先退出 CS2');
+  expect(container.textContent).toContain('已下载版本：new');
+});
 it('gives specific repair guidance for known startup causes and diagnostic context for unknown failures', () => {
   const view: ObserverRuntimeView = {
     active: false,

@@ -22,11 +22,12 @@ export function MulnxToolControls({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [failed, setFailed] = useState(false);
+  const [prepared, setPrepared] = useState<{ preparedId: string; tag: string } | null>(null);
   const [confirmStop, setConfirmStop] = useState(false);
   const [stopSubmitted, setStopSubmitted] = useState(false);
   const running = useRef(false);
   if (!tool) return null;
-  async function run(action: 'check' | 'open' | 'update' | 'stop') {
+  async function run(action: 'check' | 'open' | 'update' | 'prepare' | 'select' | 'stop') {
     if (running.current) return;
     running.current = true;
     setBusy(true);
@@ -42,6 +43,17 @@ export function MulnxToolControls({
       } else if (action === 'update') {
         await desktopInvoke('mulnx_control', { action: 'update' });
         setMessage('MulNX 版本准备已完成；确认支持自动启动后，从 Mizar 启动工作台。');
+      } else if (action === 'prepare') {
+        const result = await desktopInvoke<{ preparedId: string; tag: string }>('mulnx_control', {
+          action: 'prepare',
+        });
+        setPrepared(result);
+        setMessage(`已下载 ${result.tag}，可以在退出游戏后使用。`);
+      } else if (action === 'select') {
+        if (!prepared) return;
+        await desktopInvoke('mulnx_control', { action: 'select', preparedId: prepared.preparedId });
+        setMessage(`已选择 ${prepared.tag}，下次启动时使用。`);
+        setPrepared(null);
       } else if (action === 'stop') {
         const result = await desktopInvoke<{
           result?: string;
@@ -85,12 +97,27 @@ export function MulnxToolControls({
         完成环境检查。仅用于离线 Demo 或已授权观战。
       </p>
       <p>
-        MulNX · {tool.installed ?? '首次启动时准备'}
+        已选版本：{tool.installed ?? '首次启动时准备'}
         {tool.latest && tool.latest !== tool.installed ? ` · 可更新至 ${tool.latest}` : ''}
       </p>
+      <p>运行版本：未确认</p>
+      {prepared ? <p>已下载版本：{prepared.tag}</p> : null}
       <Button disabled={busy || tool.busy} onClick={() => void run('check')}>
         检查更新
       </Button>
+      {window.__TAURI_INTERNALS__ ? (
+        <Button disabled={busy || tool.busy} onClick={() => void run('prepare')}>
+          下载最新版本
+        </Button>
+      ) : null}
+      {window.__TAURI_INTERNALS__ && prepared ? (
+        <Button
+          disabled={busy || tool.busy || production?.mode !== 'preparation'}
+          onClick={() => void run('select')}
+        >
+          使用已下载版本
+        </Button>
+      ) : null}
       {window.__TAURI_INTERNALS__ ? (
         <Button disabled={busy || tool.busy} onClick={() => void run('update')}>
           更新或重新准备 MulNX

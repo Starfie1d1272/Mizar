@@ -489,6 +489,17 @@ pub fn prepare_mulnx_release(log: &DesktopLog) -> Result<serde_json::Value, Stri
     Ok(value)
 }
 
+pub fn mulnx_selection(log: &DesktopLog, body: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let token = runtime_token(log)?;
+    let (code, value) = request_with_identity(log, "POST", "/operator/runtime/mulnx-select", &body.to_string(),
+        Instant::now() + Duration::from_secs(240), Some(&token))?;
+    if code != 200 {
+        log.event("mulnx_select", "failure", Some(&format!("http={code}; response={value}")));
+        return Err(value["message"].as_str().unwrap_or("MulNX 切换失败，请重试。").into());
+    }
+    Ok(value)
+}
+
 pub fn camera_session(log: &DesktopLog, action: &str, lease: Option<&str>, revision: Option<&str>) -> Result<serde_json::Value, String> {
     let token = runtime_token(log)?;
     let mut body = serde_json::json!({"action": action, "host": log.session_id});

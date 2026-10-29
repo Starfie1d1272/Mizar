@@ -1271,6 +1271,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         configure: production.configureCameraSession,
         configureDemo: (requestId, commit) => demoTest.configureCameraSession(requestId, commit),
         canPrepare: () => production.get().mode === 'preparation',
+        withSelection: production.withResourceActivation,
       },
       mulnxTool,
     );

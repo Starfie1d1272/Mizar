@@ -71,6 +71,8 @@ export function firstDemoOptions(source: string): string {
 export class MulnxTool {
   private installed: InstalledTool | undefined;
   private latest: MulnxRelease | undefined;
+  private staged:
+    { id: string; installed: InstalledTool; expected: string | undefined } | undefined;
   private pending: Promise<unknown> | undefined;
   private message = '';
   constructor(
@@ -389,7 +391,53 @@ export class MulnxTool {
 
   /** Native host must hold its launch and process/recovery guards while selecting. */
   selectRelease(preparedId: string, cs2Path: string) {
-    return this.run('mulnx_select_release', () => this.selectReleaseFiles(preparedId, cs2Path));
+    return this.run('mulnx_select_release', async () => {
+      const installed = await this.selectReleaseFiles(preparedId, cs2Path);
+      await this.publishSelection(installed);
+    });
+  }
+
+  /** Prepare the configured instance before the native host's final process check. */
+  stageSelection(preparedId: string, cs2Path: string, consoleCapture: boolean) {
+    return this.run('mulnx_stage_selection', async () => {
+      const expected = this.installed?.directory;
+      this.staged = undefined;
+      const installed = await this.selectReleaseFiles(preparedId, cs2Path, consoleCapture);
+      const id = randomUUID();
+      this.staged = { id, installed, expected };
+      return { id };
+    });
+  }
+
+  commitSelection(id: string) {
+    return this.run('mulnx_commit_selection', async () => {
+      const staged = this.staged;
+      if (!staged || staged.id !== id || staged.expected !== this.installed?.directory)
+        throw new Error('mulnx_selection_changed');
+      await safePath(
+        join(this.directory, staged.installed.directory),
+        'MulNX/CS2Injector/CS2Injector.exe',
+      );
+      await this.publishSelection(staged.installed);
+      this.staged = undefined;
+      return { version: staged.installed.release.tag };
+    });
+  }
+
+  private async publishSelection(installed: InstalledTool) {
+    try {
+      await atomicJson(join(this.directory, 'current.json'), installed);
+    } catch (error) {
+      // A directory-sync failure can occur after rename. Read back before deciding.
+      let persisted: unknown;
+      try {
+        persisted = await readJson(this.directory, 'current.json');
+      } catch {
+        throw new Error('mulnx_selection_unconfirmed', { cause: error });
+      }
+      if (JSON.stringify(persisted) !== JSON.stringify(installed)) throw error;
+    }
+    this.installed = installed;
   }
 
   private async install(
@@ -400,13 +448,14 @@ export class MulnxTool {
     demoCfg?: string,
   ) {
     const prepared = await this.prepareReleaseFiles(release);
-    await this.selectReleaseFiles(
+    const installed = await this.selectReleaseFiles(
       prepared.preparedId,
       cs2Path,
       consoleCapture,
       spectatorCfg,
       demoCfg,
     );
+    await this.publishSelection(installed);
   }
 
   private async prepareReleaseFiles(release: MulnxRelease) {
@@ -509,9 +558,7 @@ export class MulnxTool {
       await this.configureLauncher(extracted.root, cs2Path, consoleCapture, spectatorCfg, demoCfg);
       const directory = `release-${release.sha256}-${randomUUID()}`;
       await rename(unpacked, join(this.directory, directory));
-      const installed = { release, directory, packs };
-      await atomicJson(join(this.directory, 'current.json'), installed);
-      this.installed = installed;
+      return { release, directory, packs };
     } finally {
       await rm(stage, { recursive: true, force: true });
     }

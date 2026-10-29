@@ -727,6 +727,65 @@ it('allows only the native host to prepare a MulNX release without selecting it'
   expect(prepare).toHaveBeenCalledOnce();
   expect(tool.view().installed).toBeNull();
 });
+it('commits a prepared MulNX selection only inside the production guard', async () => {
+  const r = await rig();
+  const app = Fastify();
+  cleanup.push(() => app.close());
+  const music = new MusicStore(join(r.root, 'music'));
+  const tool = new MulnxTool(join(r.root, 'mulnx'), join(r.root, 'bundle'));
+  const id = '11111111-1111-4111-8111-111111111111';
+  const stage = vi.spyOn(tool, 'stageSelection').mockResolvedValue({ id });
+  const commit = vi.spyOn(tool, 'commitSelection').mockResolvedValue({ version: 'Beta' });
+  let allowed = false;
+  registerOrchestrationRoutes(
+    app,
+    r.director,
+    music,
+    { mode: 'loopback', bindHost: '127.0.0.1', allowedOrigins: [] },
+    {
+      controlToken: 'secret',
+      configure: () => {},
+      withSelection: async (fn) => {
+        if (!allowed) return false;
+        await fn();
+        return true;
+      },
+    },
+    tool,
+  );
+  const post = (payload: Record<string, unknown>, token = 'secret') =>
+    app.inject({
+      method: 'POST',
+      url: '/operator/runtime/mulnx-select',
+      headers: { 'x-runtime-token': token },
+      payload,
+    });
+  const preparedId = `prepared-${'a'.repeat(64)}-${id}`;
+  expect(
+    (
+      await post(
+        { action: 'stage', preparedId, cs2Path: 'D:\\Steam\\cs2.exe', consoleCapture: false },
+        'bad',
+      )
+    ).statusCode,
+  ).toBe(403);
+  expect(
+    (
+      await post({
+        action: 'stage',
+        preparedId,
+        cs2Path: 'D:\\Steam\\cs2.exe',
+        consoleCapture: false,
+      })
+    ).statusCode,
+  ).toBe(200);
+  expect(stage).toHaveBeenCalledOnce();
+  expect((await post({ action: 'commit', id })).statusCode).toBe(409);
+  expect(commit).not.toHaveBeenCalled();
+  allowed = true;
+  expect((await post({ action: 'commit', id })).statusCode).toBe(200);
+  expect(commit).toHaveBeenCalledOnce();
+});
 it('real websocket separates ACK, rejection and unrelated broadcasts; disconnect never replays', async () => {
   const app = Fastify();
   await app.register(websocket);
