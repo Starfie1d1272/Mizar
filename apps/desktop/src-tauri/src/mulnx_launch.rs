@@ -562,7 +562,7 @@ pub fn stop_control(app: &tauri::AppHandle, log: &DesktopLog) -> Result<Value, S
     let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
     let mut cs2 = managed.lock().map_err(|_| "CS2 正忙，请稍后重试。")?;
     if let Some((context, game)) = cs2.pending_mulnx_stop() {
-        if !game.is_running() { cs2.clear_mulnx_stop(); return Err("游戏已退出。".into()); }
+        if !game.is_running() { return Err("游戏已退出，请检查收尾状态。".into()); }
         let executable = PathBuf::from(context["executable"].as_str().ok_or("无法确认游戏位置，请检查游戏状态。")?);
         validate_game_identity(&cs2.mulnx_handoff_status()?,
             &json!({"pid":game.pid,"created":game.created.to_string()}), &executable)?;
@@ -570,7 +570,21 @@ pub fn stop_control(app: &tauri::AppHandle, log: &DesktopLog) -> Result<Value, S
         if !crate::mulnx_stop::blocked(log, &identity)? { return Err("停止状态已变化，请检查游戏状态。".into()); }
         crate::mulnx_stop::verify_absent(&game)?;
         crate::mulnx_stop::mark_confirmed(log, &identity)?;
-        cs2.clear_mulnx_stop();
+        let detached = if cs2.has_external() {
+            let (_, current) = cs2.console_source()?.ok_or("游戏状态已变化，请检查后重试。")?;
+            if current.pid != game.pid || current.created != game.created {
+                return Err("游戏状态已变化，请检查后重试。".into());
+            }
+            cs2.finish()
+        } else if cs2.workspace_process()?.is_some() {
+            return Err("已有其他游戏，请结束当前工作台后重试。".into());
+        } else { Ok(()) };
+        crate::refresh_finished_window_feedback(app, &cs2);
+        drop(cs2);
+        let preparation = crate::open_main(app.clone(), None, None);
+        let hidden = crate::hide_workspace(app);
+        production_exit::cleanup_results(detached, production_exit::cleanup_results(preparation, hidden))?;
+        managed.lock().map_err(|_| "CS2 正忙，请稍后重试。")?.clear_mulnx_stop();
         return Ok(json!({"result":"unknown", "execution":"confirmed", "stopGuard":"already-submitted"}));
     }
     let game = controlled_game(&cs2, log)?;
@@ -583,12 +597,14 @@ pub fn stop_control(app: &tauri::AppHandle, log: &DesktopLog) -> Result<Value, S
         crate::mulnx_stop::mark_confirmed(log, &identity)?;
         production_exit::finish_workspace_production(log)?;
         crate::observer_workspace::finish(log)?;
+        cs2.remember_mulnx_stop(context, game);
         let detached = cs2.finish();
         crate::refresh_finished_window_feedback(app, &cs2);
         drop(cs2);
         let preparation = crate::open_main(app.clone(), None, None);
         let hidden = crate::hide_workspace(app);
         production_exit::cleanup_results(detached, production_exit::cleanup_results(preparation, hidden))?;
+        managed.lock().map_err(|_| "CS2 正忙，请稍后重试。")?.clear_mulnx_stop();
         return Ok(json!({"result":"unknown", "execution":"confirmed", "stopGuard":"already-submitted"}));
     }
     verify_gateway_owner(log, 55202, game.pid)?;
@@ -631,9 +647,8 @@ pub fn stop_control(app: &tauri::AppHandle, log: &DesktopLog) -> Result<Value, S
     });
     // The verified borrowed game remains alive. Safe production finish has already succeeded;
     // even HUD/transport failure must not leave the borrowed lease or workbench active.
-    if stopped.is_err() && !matches!(crate::mulnx_stop::blocked(log, &identity), Ok(false)) {
-        cs2.remember_mulnx_stop(context, game);
-    }
+    let reserved = !matches!(crate::mulnx_stop::blocked(log, &identity), Ok(false));
+    if reserved { cs2.remember_mulnx_stop(context, game); }
     let detached = cs2.finish();
     crate::refresh_finished_window_feedback(app, &cs2);
     drop(cs2);
@@ -641,6 +656,9 @@ pub fn stop_control(app: &tauri::AppHandle, log: &DesktopLog) -> Result<Value, S
     let hidden = crate::hide_workspace(app);
     let cleanup = production_exit::cleanup_results(detached,
         production_exit::cleanup_results(preparation, hidden));
+    if reserved && stopped.is_ok() && cleanup.is_ok() {
+        managed.lock().map_err(|_| "CS2 正忙，请稍后重试。")?.clear_mulnx_stop();
+    }
     if let (Ok(value), Err(error)) = (&stopped, &cleanup) {
         if value["stopGuard"].is_string() {
             log.event("mulnx_stop_cleanup", "failure", Some(error));
