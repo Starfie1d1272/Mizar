@@ -21,10 +21,23 @@ export interface BroadcastDependencyResolver {
   scene(value: SceneVisualRef): Promise<void>;
   camera(source: CameraSourceRef): Promise<MulnxToolRef>;
 }
-/** The renderer implements exactly the Pulse background slot and no custom tokens. */
+const pulseColorTokens = new Set([
+  'pulse.white',
+  'pulse.blue',
+  'pulse.gold',
+  'pulse.muted',
+  'pulse.canvas',
+  'pulse.shell',
+]);
+/** The renderer implements the Pulse background slot and six color tokens. */
 export function assertSupportedProgram(value: ProgramVisualConfigV1): void {
   if (
-    Object.keys(value.tokens).length ||
+    Object.entries(value.tokens).some(
+      ([key, color]) =>
+        !pulseColorTokens.has(key) ||
+        typeof color !== 'string' ||
+        !/^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i.test(color),
+    ) ||
     Object.keys(value.assets).some((key) => key !== 'pulse.background')
   )
     throw new Error('capability_unsupported');
