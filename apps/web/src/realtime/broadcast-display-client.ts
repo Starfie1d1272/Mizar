@@ -1,3 +1,4 @@
+import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
 import { supportsBroadcastDisplay } from '../program/broadcast-display';
 import { useEffect, useState } from 'react';
 import { parseBroadcastDisplayConfig, type BroadcastDisplayConfig } from '@mizar/broadcast-config';
@@ -8,7 +9,10 @@ export interface BroadcastDisplayClientState {
 }
 
 /** Poll an atomic display projection; retain the last complete value across transient failures. */
-export function useBroadcastDisplayConfig(enabled = true): BroadcastDisplayClientState {
+export function useBroadcastDisplayConfig(
+  enabled = true,
+  scene: ProgramSceneId = 'gameplay',
+): BroadcastDisplayClientState {
   const [value, setValue] = useState<BroadcastDisplayClientState>({
     status: 'loading',
     current: null,
@@ -25,7 +29,7 @@ export function useBroadcastDisplayConfig(enabled = true): BroadcastDisplayClien
         });
         if (!response.ok) throw new Error('display configuration unavailable');
         const current = parseBroadcastDisplayConfig(await response.json());
-        if (!supportsBroadcastDisplay(current)) {
+        if (!supportsBroadcastDisplay(current, scene)) {
           if (active)
             setValue((previous) => ({ status: 'unsupported', current: previous.current }));
           return;
@@ -53,6 +57,6 @@ export function useBroadcastDisplayConfig(enabled = true): BroadcastDisplayClien
       active = false;
       clearTimeout(timer);
     };
-  }, [enabled]);
+  }, [enabled, scene]);
   return value;
 }

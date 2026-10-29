@@ -7,7 +7,7 @@ import '@mizar/hud-view/bp.css';
 export function BpPage({ compact = false }: { readonly compact?: boolean }) {
   const { snapshot, animate } = useBpSession();
   const scenes = useProgramScenes();
-  const display = useBroadcastDisplayConfig();
+  const display = useBroadcastDisplayConfig(true, 'bp');
   if (display.status === 'unsupported' && display.current === null) return null;
   return (
     <ProgramView

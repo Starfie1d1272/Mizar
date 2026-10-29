@@ -57,7 +57,7 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
   const data = preview ? presentationPreview(sceneId, params.get('variant')) : liveData;
   const scenes = useProgramScenes();
   const reducedMotion = useSyncExternalStore(subscribeMotion, readReducedMotion, () => false);
-  const display = useBroadcastDisplayConfig(!preview);
+  const display = useBroadcastDisplayConfig(!preview, sceneId);
   const hud = useHudConfigClient(
     preview || (display.current === null && display.status !== 'unsupported'),
   );
