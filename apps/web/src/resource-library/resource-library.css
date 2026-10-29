@@ -97,3 +97,9 @@
 .resource-library__music-heading p {
   margin-bottom: 0;
 }
+
+.resource-library__preset-music {
+  display: grid;
+  gap: var(--mizar-layout-compact);
+  margin-top: var(--mizar-layout-padding);
+}

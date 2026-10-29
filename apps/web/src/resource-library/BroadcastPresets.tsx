@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useLocalRead } from '../preparation/client';
-import { Button, Panel, StatusBanner } from '../ui';
+import { Button, Panel, Select, StatusBanner } from '../ui';
 
 type Kind = 'hud' | 'program' | 'music' | 'camera';
 type Module = { id: string; kind: Kind; name: string; revision: string };
@@ -24,6 +24,44 @@ const labels: Record<Kind, string> = {
   camera: '运镜',
 };
 
+function MusicBindingEditor({
+  preset,
+  modules,
+  busy,
+  save,
+}: {
+  preset: Preset;
+  modules: Module[];
+  busy: boolean;
+  save: (preset: Preset, moduleId: string) => void;
+}) {
+  const binding = preset.bindings.find((item) => item.kind === 'music');
+  const initial = binding?.mode === 'use' ? binding.moduleId : '';
+  const [selection, setSelection] = useState(initial);
+  return (
+    <div className="resource-library__preset-music">
+      <Select
+        label="音乐配置"
+        value={selection}
+        disabled={busy}
+        onChange={(event) => setSelection(event.currentTarget.value)}
+      >
+        <option value="">关闭音乐</option>
+        {modules
+          .filter((module) => module.kind === 'music')
+          .map((module) => (
+            <option key={module.id} value={module.id}>
+              {module.name}
+            </option>
+          ))}
+      </Select>
+      <Button disabled={busy || selection === initial} onClick={() => save(preset, selection)}>
+        保存音乐选择
+      </Button>
+    </div>
+  );
+}
+
 export function BroadcastPresets({ query }: { query: string }) {
   const [refresh, setRefresh] = useState(0);
   const view = useLocalRead<View>('/local/v1/broadcast-presets', 2000, refresh);
@@ -31,6 +69,44 @@ export function BroadcastPresets({ query }: { query: string }) {
   const [notice, setNotice] = useState<{ tone: 'success' | 'danger'; message: string } | null>(
     null,
   );
+  async function saveMusic(preset: Preset, moduleId: string) {
+    if (!view || busy) return;
+    const bindings = preset.bindings.map((binding) =>
+      binding.kind !== 'music'
+        ? binding
+        : moduleId
+          ? { kind: 'music', mode: 'use', moduleId }
+          : { kind: 'music', mode: 'off' },
+    );
+    setBusy(true);
+    setNotice(null);
+    try {
+      const response = await fetch('/operator/broadcast-presets/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          preset: { ...preset, bindings },
+          expectedPresetRevision: preset.revision,
+          modules: [],
+        }),
+      });
+      if (!response.ok)
+        throw new Error(
+          response.status === 409
+            ? '方案已变化，请刷新后重试。'
+            : '音乐选择未保存，请检查方案后重试。',
+        );
+      setNotice({ tone: 'success', message: '音乐选择已保存，使用方案后生效。' });
+      setRefresh((value) => value + 1);
+    } catch (error) {
+      setNotice({
+        tone: 'danger',
+        message: error instanceof Error ? error.message : '音乐选择未保存，请重试。',
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
   async function applyPreset(preset: Preset) {
     if (!view || busy) return;
     const revisions: Partial<Record<Kind, string>> = {};
@@ -145,6 +221,15 @@ export function BroadcastPresets({ query }: { query: string }) {
                   </div>
                 ))}
               </dl>
+              {view ? (
+                <MusicBindingEditor
+                  key={`${preset.id}:${preset.revision}`}
+                  preset={preset}
+                  modules={view.modules}
+                  busy={busy}
+                  save={(item, moduleId) => void saveMusic(item, moduleId)}
+                />
+              ) : null}
             </details>
             <Button disabled={busy} onClick={() => void applyPreset(preset)}>
               使用方案
