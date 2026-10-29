@@ -70,19 +70,20 @@ const music = z
     );
     if (new Set(assets).size > 128) ctx.addIssue({ code: 'custom', message: '曲目总数超过 128' });
   });
+const tool = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('upstream'), release }),
+  z.strictObject({
+    kind: z.literal('developer-fork'),
+    repository: z.string().min(1).max(256),
+    revision: z.string().min(1).max(200),
+    archiveSha256: sha,
+  }),
+]);
 const cameraSource = z.strictObject({
   sourceName: z.string().trim().min(1).max(120),
   treeSha256: sha,
   converterVersion: z.literal(1),
-  acquisition: z.discriminatedUnion('kind', [
-    z.strictObject({ kind: z.literal('upstream'), release }),
-    z.strictObject({
-      kind: z.literal('developer-fork'),
-      repository: z.string().min(1).max(256),
-      revision: z.string().min(1).max(200),
-      archiveSha256: sha,
-    }),
-  ]),
+  acquisition: tool,
 });
 const cameraMap = cameraMapSchema
   .omit({ pack: true, openingSound: true })
@@ -248,7 +249,7 @@ const snapshot = z.strictObject({
     music: music.nullable(),
     camera: camera.nullable(),
   }),
-  lock: z.strictObject({ resources: z.array(resourceRefSchema), tools: z.array(release) }),
+  lock: z.strictObject({ resources: z.array(resourceRefSchema), tools: z.array(tool) }),
 });
 const documentSchema = z.strictObject({
   schemaVersion: z.literal(1),

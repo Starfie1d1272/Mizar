@@ -79,14 +79,15 @@ export interface MulnxReleaseRef {
   tag: string;
   archiveSha256: string;
 }
+export type MulnxToolRef =
+  | { kind: 'upstream'; release: MulnxReleaseRef }
+  | { kind: 'developer-fork'; repository: string; revision: string; archiveSha256: string };
 /** Content identity is independent of the release from which it was obtained. */
 export interface CameraSourceRef {
   sourceName: string;
   treeSha256: string;
   converterVersion: 1;
-  acquisition:
-    | { kind: 'upstream'; release: MulnxReleaseRef }
-    | { kind: 'developer-fork'; repository: string; revision: string; archiveSha256: string };
+  acquisition: MulnxToolRef;
 }
 export type CameraMapConfig = Omit<CameraMap, 'pack' | 'openingSound'> & {
   source: CameraSourceRef;
@@ -159,7 +160,7 @@ export interface ActiveBroadcastSnapshot {
     music: PortableMusicConfigV1 | null;
     camera: CameraModuleV2 | null;
   };
-  lock: { resources: ResourceRef[]; tools: MulnxReleaseRef[] };
+  lock: { resources: ResourceRef[]; tools: MulnxToolRef[] };
 }
 export interface BroadcastConfigDocument {
   schemaVersion: 1;
