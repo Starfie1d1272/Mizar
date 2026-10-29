@@ -47,6 +47,12 @@ export function ResourceModules({
       availability?: { state: 'ready' | 'dependency_missing'; reason?: string };
     }[];
   }>('/local/v1/broadcast-modules', 2000, refresh);
+  const pendingCamera = useLocalRead<{
+    pending: {
+      catalog: { presets: { id: string; preset: { name: string } }[] };
+      automaticEnabled: boolean;
+    } | null;
+  }>('/local/v1/broadcast-config/pending-camera', 2000, refresh);
   const [selected, setSelected] = useState<string | null>(() =>
     new URLSearchParams(window.location.search).get('resource'),
   );
@@ -113,6 +119,46 @@ export function ResourceModules({
       setBusy(false);
     }
   }
+  async function handlePendingCamera(action: 'restore' | 'delete') {
+    if (busy) return;
+    setBusy(true);
+    setNotice(null);
+    try {
+      const response = await fetch(`/operator/broadcast-config/pending-camera/${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      if (!response.ok)
+        throw new Error(
+          response.status === 404
+            ? '保留的运镜配置已变化，请刷新后重试。'
+            : action === 'restore'
+              ? '暂时无法恢复。请先准备原配置所需的 MulNX 镜头内容，再重试；原配置仍会保留。'
+              : '暂时无法删除保留的运镜配置，请检查本地制播服务后重试。',
+        );
+      if (action === 'restore') {
+        const result = (await response.json()) as { restored: { moduleId: string }[] };
+        if (result.restored[0]) {
+          setSelected(result.restored[0].moduleId);
+          onImported();
+        }
+      }
+      setNotice({
+        tone: 'success',
+        message:
+          action === 'restore' ? '运镜配置已恢复为草稿，尚未使用。' : '保留的运镜配置已删除。',
+      });
+    } catch (error) {
+      setNotice({
+        tone: 'danger',
+        message: error instanceof Error ? error.message : '操作未完成，请重试。',
+      });
+    } finally {
+      setBusy(false);
+      setRefresh((value) => value + 1);
+    }
+  }
   async function importFile(file: File) {
     setBusy(true);
     setNotice(null);
@@ -173,9 +219,38 @@ export function ResourceModules({
       {(!snapshot || !directory) && (
         <StatusBanner tone="warning">资源目录暂不可用，请检查本地制播服务。</StatusBanner>
       )}
-      {showList && snapshot && directory && !entries.length && (
-        <p>没有找到匹配的资源，可导入资源包。</p>
+      {(category === 'all' || category === 'camera') && pendingCamera?.pending && (
+        <Panel className="resource-library__item">
+          <div>
+            <span className="resource-library__kind">运镜 · 待恢复</span>
+            <h3>原运镜配置已保留</h3>
+            <p>准备原配置所需的 MulNX 镜头内容后，可恢复为草稿。恢复不会切换当前播出。</p>
+            {pendingCamera.pending.catalog.presets.length > 0 && (
+              <p>
+                包含：
+                {pendingCamera.pending.catalog.presets.map((entry) => entry.preset.name).join('、')}
+              </p>
+            )}
+          </div>
+          <Button disabled={busy} onClick={() => void handlePendingCamera('restore')}>
+            恢复运镜配置
+          </Button>
+          <details>
+            <summary>删除保留的配置</summary>
+            <p>删除后将无法从此保留记录恢复。</p>
+            <Button disabled={busy} onClick={() => void handlePendingCamera('delete')}>
+              确认删除保留配置
+            </Button>
+          </details>
+        </Panel>
       )}
+      {showList &&
+        snapshot &&
+        directory &&
+        !entries.length &&
+        !((category === 'all' || category === 'camera') && pendingCamera?.pending) && (
+          <p>没有找到匹配的资源，可导入资源包。</p>
+        )}
       {showList &&
         entries.map(({ module: entry, builtin, availability }) => (
           <Panel className="resource-library__item" key={entry.id}>

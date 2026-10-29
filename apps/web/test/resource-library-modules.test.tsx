@@ -81,3 +81,77 @@ it('uses and exports the selected module with its revision without applying whil
     vi.unstubAllGlobals();
   }
 });
+
+it('keeps the old camera configuration visible after a failed recovery and restores it without applying', async () => {
+  const module = { id: 'hud-one', name: 'HUD', kind: 'hud', revision: 'h1', origin: null };
+  let pending = true;
+  let restoreSucceeds = false;
+  const fetchMock = vi.fn((path: string, options?: RequestInit) => {
+    if (path === '/local/v1/broadcast-presets')
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ modules: [module], presets: [], active: { revision: 'a1' } }),
+      });
+    if (path === '/local/v1/broadcast-modules')
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ modules: [{ module, builtin: true }] }),
+      });
+    if (path === '/local/v1/broadcast-config/pending-camera')
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          pending: pending
+            ? {
+                catalog: { presets: [{ id: 'old', preset: { name: '原运镜' } }] },
+                automaticEnabled: true,
+              }
+            : null,
+        }),
+      });
+    if (path.endsWith('/pending-camera/restore')) {
+      expect(options?.body).toBe('{}');
+      if (!restoreSucceeds) return Promise.resolve({ ok: false, status: 503 });
+      pending = false;
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ restored: [{ moduleId: 'new-camera' }] }),
+      });
+    }
+    return Promise.resolve({ ok: true, json: async () => ({}) });
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  const imported = vi.fn();
+  const element = document.createElement('div');
+  document.body.append(element);
+  const root = createRoot(element);
+  try {
+    await act(async () => {
+      root.render(<ResourceModules query="" category="camera" onImported={imported} />);
+      await Promise.resolve();
+    });
+    expect(element.textContent).toContain('原运镜');
+    const restore = () =>
+      [...element.querySelectorAll('button')].find(
+        (button) => button.textContent === '恢复运镜配置',
+      )!;
+    await act(async () => {
+      restore().click();
+      await Promise.resolve();
+    });
+    expect(element.textContent).toContain('原配置仍会保留');
+    expect(element.textContent).toContain('原运镜');
+    restoreSucceeds = true;
+    await act(async () => {
+      restore().click();
+      await Promise.resolve();
+    });
+    expect(element.textContent).toContain('已恢复为草稿，尚未使用');
+    expect(imported).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls.some(([path]) => path.endsWith('/apply'))).toBe(false);
+  } finally {
+    act(() => root.unmount());
+    element.remove();
+    vi.unstubAllGlobals();
+  }
+});

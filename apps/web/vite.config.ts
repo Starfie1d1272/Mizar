@@ -377,6 +377,7 @@ export default defineConfig({
       '/operator/hud-config': 'http://127.0.0.1:3000',
       '/operator/broadcast-presets': 'http://127.0.0.1:3000',
       '/operator/broadcast-modules': 'http://127.0.0.1:3000',
+      '/operator/broadcast-config': 'http://127.0.0.1:3000',
       '/operator/resource-library': 'http://127.0.0.1:3000',
       '/operator/bp-local-save': 'http://127.0.0.1:3000',
       '/operator/bp-rivalhub': 'http://127.0.0.1:3000',
