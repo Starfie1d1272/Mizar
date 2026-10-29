@@ -2,15 +2,27 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { PACK_LIMITS } from '@mizar/broadcast-pack';
+import { boundModules } from '@mizar/broadcast-config';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 import type { MusicStore } from '../music/store.js';
 import type { BroadcastConfigStore } from './store.js';
 import type { MusicPackResources } from './music-pack-resources.js';
 import { exportMusicPack, importMusicPack } from './music-pack.js';
+import { exportPresetPack, importPresetPack } from './preset-pack.js';
 
 const exportRequest = z.strictObject({
   moduleId: z.string().uuid(),
   expectedRevision: z.string().min(1).max(200),
+});
+const presetExportRequest = z.strictObject({
+  presetId: z.string().uuid(),
+  expectedRevision: z.string().min(1).max(200),
+  expectedModuleRevisions: z.strictObject({
+    hud: z.string().optional(),
+    program: z.string().optional(),
+    music: z.string().optional(),
+    camera: z.string().optional(),
+  }),
 });
 export function registerMusicPackRoutes(
   app: FastifyInstance,
@@ -72,6 +84,70 @@ export function registerMusicPackRoutes(
         return reply
           .header('cache-control', 'no-store')
           .header('content-disposition', 'attachment; filename="music.mizarpack"')
+          .type('application/x-mizarpack')
+          .send(zip);
+      } catch {
+        return reply.code(422).send({ error: 'export_failed' });
+      }
+    },
+  );
+  app.post(
+    '/operator/resource-library/import-preset-pack',
+    { bodyLimit: PACK_LIMITS.total },
+    async (request, reply) => {
+      if (!allowed(request.headers.origin))
+        return reply.code(403).send({ error: 'operator_origin_forbidden' });
+      if (!ready()) return reply.code(503).send({ error: 'broadcast_config_unavailable' });
+      try {
+        if (!Buffer.isBuffer(request.body)) throw new Error('package_invalid');
+        return await importPresetPack({ zip: request.body, store, resources });
+      } catch (error) {
+        if (error instanceof Error && error.message === 'identity_conflict')
+          return reply.code(409).send({ error: 'identity_conflict' });
+        return reply.code(400).send({ error: 'package_invalid' });
+      }
+    },
+  );
+  app.post(
+    '/operator/resource-library/export-preset-pack',
+    { bodyLimit: 4096 },
+    async (request, reply) => {
+      if (!allowed(request.headers.origin))
+        return reply.code(403).send({ error: 'operator_origin_forbidden' });
+      if (!ready()) return reply.code(503).send({ error: 'broadcast_config_unavailable' });
+      const parsed = presetExportRequest.safeParse(request.body);
+      if (!parsed.success) return reply.code(400).send({ error: 'invalid_request' });
+      const document = store.snapshot;
+      const preset = document.presets.find((item) => item.id === parsed.data.presetId);
+      if (!preset) return reply.code(404).send({ error: 'preset_missing' });
+      if (preset.revision !== parsed.data.expectedRevision)
+        return reply.code(409).send({ error: 'revision_conflict' });
+      try {
+        const bound = boundModules(preset, document.modules);
+        for (const [kind, module] of bound)
+          if (module && parsed.data.expectedModuleRevisions[kind] !== module.revision)
+            return reply.code(409).send({ error: 'revision_conflict' });
+        const zip = await exportPresetPack({
+          document,
+          presetId: preset.id,
+          music,
+          resources,
+          metadata: { packageId: randomUUID(), version: '1.0.0', name: preset.name, author: '' },
+        });
+        const current = store.snapshot;
+        const latest = current.presets.find((item) => item.id === preset.id);
+        if (
+          !latest ||
+          latest.revision !== preset.revision ||
+          [...bound.values()].some(
+            (item) =>
+              item && current.modules.find((m) => m.id === item.id)?.revision !== item.revision,
+          )
+        )
+          return reply.code(409).send({ error: 'revision_conflict' });
+        return reply
+          .header('cache-control', 'no-store')
+          .header('content-disposition', 'attachment; filename="broadcast.mizarpack"')
           .type('application/x-mizarpack')
           .send(zip);
       } catch {

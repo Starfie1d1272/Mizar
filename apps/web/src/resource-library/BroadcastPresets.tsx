@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useLocalRead } from '../preparation/client';
 import { Button, Panel, Select, StatusBanner } from '../ui';
 
@@ -64,6 +64,7 @@ function MusicBindingEditor({
 
 export function BroadcastPresets({ query }: { query: string }) {
   const [refresh, setRefresh] = useState(0);
+  const fileInput = useRef<HTMLInputElement>(null);
   const view = useLocalRead<View>('/local/v1/broadcast-presets', 2000, refresh);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ tone: 'success' | 'danger'; message: string } | null>(
@@ -107,8 +108,8 @@ export function BroadcastPresets({ query }: { query: string }) {
       setBusy(false);
     }
   }
-  async function applyPreset(preset: Preset) {
-    if (!view || busy) return;
+  function moduleRevisions(preset: Preset): Partial<Record<Kind, string>> | null {
+    if (!view) return null;
     const revisions: Partial<Record<Kind, string>> = {};
     for (const binding of preset.bindings)
       if (binding.mode === 'use') {
@@ -117,10 +118,90 @@ export function BroadcastPresets({ query }: { query: string }) {
         );
         if (!module) {
           setNotice({ tone: 'danger', message: '方案配置不完整，请刷新后检查。' });
-          return;
+          return null;
         }
         revisions[binding.kind] = module.revision;
       }
+    return revisions;
+  }
+  async function importFile(file: File) {
+    if (busy) return;
+    setBusy(true);
+    setNotice(null);
+    try {
+      const response = await fetch('/operator/resource-library/import-preset-pack', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-mizarpack' },
+        body: file,
+      });
+      if (!response.ok)
+        throw new Error(
+          response.status === 409
+            ? '同一版本的内容不同，请检查文件。'
+            : '导入失败，请检查播出方案文件后重试。',
+        );
+      const result = (await response.json()) as { reused: boolean };
+      setNotice({
+        tone: 'success',
+        message: result.reused ? '此播出方案已导入。' : '播出方案已保存，可查看配置后使用。',
+      });
+      setRefresh((value) => value + 1);
+    } catch (error) {
+      setNotice({
+        tone: 'danger',
+        message: error instanceof Error ? error.message : '导入失败，请重试。',
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function exportFile(preset: Preset) {
+    if (!view || busy) return;
+    const revisions = moduleRevisions(preset);
+    if (!revisions) return;
+    setBusy(true);
+    setNotice(null);
+    try {
+      const response = await fetch('/operator/resource-library/export-preset-pack', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          presetId: preset.id,
+          expectedRevision: preset.revision,
+          expectedModuleRevisions: revisions,
+        }),
+      });
+      if (!response.ok)
+        throw new Error(
+          response.status === 409
+            ? '配置已变化，请刷新后重试。'
+            : '方案暂时无法分享，请检查所需素材和运镜来源。',
+        );
+      const url = URL.createObjectURL(await response.blob());
+      try {
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `${[...preset.name.trim()].map((c) => (c.charCodeAt(0) < 32 || '/\\:*?"<>|'.includes(c) ? '_' : c)).join('') || '播出方案'}.mizarpack`;
+        link.hidden = true;
+        document.body.append(link);
+        link.click();
+        link.remove();
+      } finally {
+        window.setTimeout(() => URL.revokeObjectURL(url), 0);
+      }
+    } catch (error) {
+      setNotice({
+        tone: 'danger',
+        message: error instanceof Error ? error.message : '分享失败，请重试。',
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function applyPreset(preset: Preset) {
+    if (!view || busy) return;
+    const revisions = moduleRevisions(preset);
+    if (!revisions) return;
     setBusy(true);
     setNotice(null);
     try {
@@ -162,6 +243,22 @@ export function BroadcastPresets({ query }: { query: string }) {
           <h2>播出方案</h2>
           <p>查看配置，并在准备阶段使用方案。</p>
         </div>
+        <input
+          ref={fileInput}
+          type="file"
+          accept=".mizarpack"
+          aria-label="选择播出方案文件"
+          hidden
+          disabled={busy || !view}
+          onChange={(event) => {
+            const file = event.currentTarget.files?.[0];
+            event.currentTarget.value = '';
+            if (file) void importFile(file);
+          }}
+        />
+        <Button disabled={!view} loading={busy} onClick={() => fileInput.current?.click()}>
+          导入方案
+        </Button>
       </div>
       {notice ? <StatusBanner tone={notice.tone}>{notice.message}</StatusBanner> : null}
       {!view ? (
@@ -231,9 +328,14 @@ export function BroadcastPresets({ query }: { query: string }) {
                 />
               ) : null}
             </details>
-            <Button disabled={busy} onClick={() => void applyPreset(preset)}>
-              使用方案
-            </Button>
+            <div className="resource-library__preset-actions">
+              <Button disabled={busy} onClick={() => void exportFile(preset)}>
+                分享
+              </Button>
+              <Button disabled={busy} onClick={() => void applyPreset(preset)}>
+                使用方案
+              </Button>
+            </div>
           </Panel>
         );
       })}
