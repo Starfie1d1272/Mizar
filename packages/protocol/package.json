@@ -62,6 +62,10 @@
       "types": "./dist/program-scenes.d.ts",
       "import": "./dist/program-scenes.js"
     },
+    "./broadcast-stats": {
+      "types": "./dist/broadcast-stats.d.ts",
+      "import": "./dist/broadcast-stats.js"
+    },
     "./obs": {
       "types": "./dist/obs.d.ts",
       "import": "./dist/obs.js"

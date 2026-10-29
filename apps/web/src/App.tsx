@@ -26,6 +26,7 @@ import { RadarVisualFixturePage } from './program/testing/RadarVisualFixturePage
 import { ProgramPage } from './program/ProgramPage';
 import { getHudEditorFixture, HUD_EDITOR_DEFAULT_FIXTURE_ID } from './program/fixtures/index.js';
 import { ProgramScenePage } from './program/ProgramScenePage';
+import { StatsInsertPage } from './program/StatsInsertPage';
 import { programSceneForPath } from '@mizar/protocol/program-scenes';
 import {
   WorkspaceDock,
@@ -688,6 +689,7 @@ export function App() {
     );
   if (pathname === '/workspace/left') return <WorkspaceLeft />;
   if (pathname === '/workspace/dock') return <WorkspaceDock />;
+  if (pathname === '/program/stats') return <StatsInsertPage />;
   const programScene = programSceneForPath(pathname);
   if (
     programScene?.id === 'gameplay' &&

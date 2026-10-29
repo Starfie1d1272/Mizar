@@ -13,6 +13,7 @@ export {
   type ProgramCanvasProps,
 } from './ProgramCanvas.js';
 export { BroadcastArc } from './BroadcastArc.js';
+export { StatsInsertView, type StatsInsert } from './StatsInsert.js';
 export { ProgramSceneView, type ProgramSceneViewProps } from './ProgramSceneView.js';
 export { ProgramView, type ProgramViewProps } from './ProgramView.js';
 export { GameplayHud, themeStyle, type GameplayHudProps } from './GameplayHud.js';

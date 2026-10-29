@@ -1,6 +1,6 @@
 import { pulseTokenStyle } from './broadcast-display';
 import { useBroadcastDisplayConfig } from '../realtime/broadcast-display-client';
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import {
   programPresentationSchema,
   type ProgramPresentation,
@@ -10,7 +10,8 @@ import { useHudConfigClient } from '../realtime/hud-config-client';
 import { useLocalChannelClient } from '../realtime';
 import { useProgramScenes } from '../workspace/client';
 import { presentationPreview, programPreviewSnapshot } from './presentation-preview';
-import { ProgramView } from '@mizar/hud-view';
+import { ProgramView, StatsInsertView } from '@mizar/hud-view';
+import { useStatsRotation } from './useStatsRotation';
 
 const motionQuery = '(prefers-reduced-motion: reduce)';
 const subscribeMotion = (notify: () => void) => {
@@ -69,8 +70,20 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
   const snapshot = preview
     ? programPreviewSnapshot('gameplay', params.get('variant'))
     : connection.current;
+  const clock = snapshot?.payload.clock?.phase;
+  const canRotate =
+    !preview &&
+    (sceneId === 'waiting' || sceneId === 'intermap') &&
+    scenes?.active === sceneId &&
+    scenes.director?.mode === 'auto' &&
+    !scenes.preparing &&
+    clock !== 'paused' &&
+    clock !== 'timeout_ct' &&
+    clock !== 'timeout_t';
+  const matchId = data?.match?.matchId ?? null;
+  const observedMatch = connection.current?.payload.match?.matchId;
   if (!preview && display.status === 'unsupported' && display.current === null) return null;
-  return (
+  const scene = (
     <ProgramView
       kind="scene"
       sceneStyle={
@@ -89,4 +102,22 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
       previewBackground={params.get('background') !== 'transparent'}
     />
   );
+  return canRotate && (!connection.current || observedMatch === matchId) && matchId ? (
+    <RotatingScene key={JSON.stringify([sceneId, matchId])} matchId={matchId}>
+      {scene}
+    </RotatingScene>
+  ) : (
+    scene
+  );
+}
+
+function RotatingScene({
+  matchId,
+  children,
+}: {
+  readonly matchId: string;
+  readonly children: ReactNode;
+}) {
+  const insert = useStatsRotation(true, matchId);
+  return insert ? <StatsInsertView insert={insert} /> : children;
 }
