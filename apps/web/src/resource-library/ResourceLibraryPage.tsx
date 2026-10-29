@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { BroadcastPresets } from './BroadcastPresets';
 import { HudPackages } from './HudPackages';
 import { MusicPackages } from './MusicPackages';
 import { OperatorShell } from '../operator/OperatorShell';
@@ -36,7 +37,7 @@ const phases: Record<ResourceStatus['phase'], string> = {
 export function ResourceLibraryPage() {
   const view = useLocalRead<LibraryView>('/local/v1/resource-library', 2000);
   const [query, setQuery] = useState('');
-  const [category, setCategory] = useState<'all' | 'media' | 'tool' | 'music' | 'visual'>('all');
+  const [category, setCategory] = useState<'all' | 'media' | 'tool' | 'music' | 'visual' | 'presets'>('all');
   const [preparedSession, setPreparedSession] = useState<{
     preparedId: string;
     tag: string;
@@ -47,6 +48,7 @@ export function ResourceLibraryPage() {
     matches(resource.packId === 'official:epl-default' ? 'EPL 官方示例 素材' : resource.packId),
   );
   const showMedia = category === 'all' || category === 'media';
+  const showPresets = category === 'all' || category === 'presets';
   const showHud = (category === 'all' || category === 'visual') && matches('HUD 预设 视觉');
   const showMusic = category === 'all' || category === 'music';
   const showTool = (category === 'all' || category === 'tool') && matches('MulNX 运镜 工具');
@@ -71,6 +73,7 @@ export function ResourceLibraryPage() {
             {(
               [
                 ['all', '全部'],
+                ['presets', '播出方案'],
                 ['media', '素材'],
                 ['music', '音乐'],
                 ['visual', '视觉'],
@@ -88,6 +91,7 @@ export function ResourceLibraryPage() {
             ))}
           </div>
         </div>
+        {showPresets ? <BroadcastPresets query={query} /> : null}
         {showMusic ? <MusicPackages query={query} /> : null}
         {showHud ? <HudPackages /> : null}
         {!view ? (
