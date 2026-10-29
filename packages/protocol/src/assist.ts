@@ -128,7 +128,9 @@ export function parseObserverConnection(
 /** Safe console output shared by native automation and the connection clipboard. */
 export function formatObserverConnection(connection: ObserverConnection): string {
   const parsed = observerConnectionSchema.parse(connection);
-  return `password "${parsed.password}"; connect ${parsed.programEndpoint}`;
+  const password =
+    !parsed.password || /\s/.test(parsed.password) ? `"${parsed.password}"` : parsed.password;
+  return `connect ${parsed.programEndpoint};password ${password}`;
 }
 
 export const assistSnapshotSchema = localSnapshotEnvelopeSchema.extend({

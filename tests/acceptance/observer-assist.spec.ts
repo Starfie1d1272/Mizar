@@ -365,7 +365,7 @@ for (const useMulnx of [false, true]) {
     if (!useMulnx) {
       await dialog.getByRole('button', { name: '复制游戏连接命令' }).click();
       expect(await task.evaluate(() => navigator.clipboard.readText())).toBe(
-        'password "synthetic"; connect 127.0.0.1:27026',
+        'connect 127.0.0.1:27026;password synthetic',
       );
     }
     if (process.env.MIZAR_GOTV_SCREENSHOTS) {
