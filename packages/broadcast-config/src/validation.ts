@@ -269,3 +269,11 @@ export function parseBroadcastConfigDocument(input: unknown): BroadcastConfigDoc
   for (const item of parsed.presets) boundModules(item, parsed.modules);
   return parsed;
 }
+
+export function parseModuleRecord(input: unknown): import('./index.js').ModuleRecord {
+  return module.parse(input) as import('./index.js').ModuleRecord;
+}
+
+export function parseBroadcastPreset(input: unknown): import('./index.js').BroadcastPreset {
+  return preset.parse(input);
+}

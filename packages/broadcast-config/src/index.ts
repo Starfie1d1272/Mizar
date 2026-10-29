@@ -173,14 +173,14 @@ export interface BroadcastConfigDocument {
 export interface ApplyPresetRequest {
   presetId: string;
   expectedRevision: Revision;
-  expectedModuleRevisions: Partial<Record<ModuleKind, Revision>>;
+  expectedModuleRevisions: Partial<Record<ModuleKind, Revision | undefined>>;
   expectedActiveRevision: Revision;
   requestId: string;
 }
 export interface ClonePresetRequest {
   sourceId: string;
   expectedRevision: Revision;
-  expectedModuleRevisions: Partial<Record<ModuleKind, Revision>>;
+  expectedModuleRevisions: Partial<Record<ModuleKind, Revision | undefined>>;
   name: string;
 }
 
@@ -211,7 +211,7 @@ function checkRevisions(
   preset: BroadcastPreset,
   modules: Map<ModuleKind, ModuleRecord | null>,
   revision: Revision,
-  expected: Partial<Record<ModuleKind, Revision>>,
+  expected: Partial<Record<ModuleKind, Revision | undefined>>,
 ) {
   if (preset.revision !== revision) throw new Error('revision_conflict');
   for (const [kind, module] of modules) {

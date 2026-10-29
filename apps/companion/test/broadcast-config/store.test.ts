@@ -1,3 +1,6 @@
+import Fastify from 'fastify';
+import { createLocalWebOriginPolicy } from '../../src/local-web/origin-policy.js';
+import { registerBroadcastConfigRoutes } from '../../src/broadcast-config/routes.js';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -154,5 +157,36 @@ describe('BroadcastConfigStore', () => {
       store.save({ preset, expectedPresetRevision: 'p1', modules: [] }),
     ).rejects.toThrow();
     expect(store.snapshot).toEqual(initial);
+  });
+  it('allows read-only preview without publishing it and rejects foreign write origins', async () => {
+    const { store, initial } = await setup();
+    const app = Fastify();
+    registerBroadcastConfigRoutes(app, store, createLocalWebOriginPolicy());
+    const request = {
+      presetId: initial.presets[0]!.id,
+      expectedRevision: 'p1',
+      expectedModuleRevisions: { hud: 'h1', program: 'p1' },
+      expectedActiveRevision: 'active',
+      requestId: randomUUID(),
+    };
+    try {
+      const denied = await app.inject({
+        method: 'POST',
+        url: '/operator/broadcast-presets/apply',
+        headers: { origin: 'https://foreign.test' },
+        payload: request,
+      });
+      expect(denied.statusCode).toBe(403);
+      const preview = await app.inject({
+        method: 'POST',
+        url: '/operator/broadcast-presets/preview',
+        headers: { origin: 'http://127.0.0.1:3000' },
+        payload: request,
+      });
+      expect(preview.statusCode).toBe(200);
+      expect(store.snapshot.active.revision).toBe('active');
+    } finally {
+      await app.close();
+    }
   });
 });
