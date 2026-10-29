@@ -35,6 +35,11 @@ export interface BroadcastConfigStoreOptions {
   resolver: PresetResolver;
   /** Serializes changes to resource references with provider removal. */
   withReferenceGuard<T>(operation: () => Promise<T>): Promise<T>;
+  /** Reject references being added to versions marked for deletion; missing external dependencies may remain drafts. */
+  assertReferenceCommitAllowed(
+    previous: BroadcastConfigDocument,
+    next: BroadcastConfigDocument,
+  ): Promise<void>;
   /** Holds the production lifecycle and exposes a synchronous final readiness check. */
   withApplyGuard<T>(operation: (canCommit: () => boolean) => Promise<T>): Promise<T>;
   onApplied?(active: ActiveBroadcastSnapshot, previous: ActiveBroadcastSnapshot): void;
@@ -119,6 +124,7 @@ export class BroadcastConfigStore {
         const copy = clonePreset(next.document, request, randomUUID);
         next.document.modules.push(...copy.modules);
         next.document.presets.push(copy.preset);
+        await this.options.assertReferenceCommitAllowed(this.envelope.document, next.document);
         await this.commit(next);
         return { presetId: copy.preset.id };
       }),
@@ -168,6 +174,7 @@ export class BroadcastConfigStore {
         if (index < 0) next.document.presets.push(preset);
         else next.document.presets[index] = preset;
         for (const item of next.document.presets) boundModules(item, next.document.modules);
+        await this.options.assertReferenceCommitAllowed(this.envelope.document, next.document);
         await this.commit(next);
         return this.snapshot;
       }),
@@ -207,6 +214,7 @@ export class BroadcastConfigStore {
           next.document.previousActive = structuredClone(previous);
           next.document.active = active;
           next.receipts[request.requestId] = { fingerprint, active };
+          await this.options.assertReferenceCommitAllowed(this.envelope.document, next.document);
           try {
             await this.commit(next, canCommit);
           } catch (error) {

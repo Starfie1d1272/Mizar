@@ -125,6 +125,7 @@ async function setup() {
         Promise.resolve({ resolved: initial.active.resolved, lock: initial.active.lock }),
     },
     withReferenceGuard: <T>(operation: () => Promise<T>) => operation(),
+    assertReferenceCommitAllowed: () => Promise.resolve(),
     withApplyGuard: <T>(operation: (canCommit: () => boolean) => Promise<T>) =>
       operation(() => true),
   };
