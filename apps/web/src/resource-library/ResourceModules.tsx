@@ -56,7 +56,11 @@ function download(blob: Blob, name: string) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = name.replace(/[\\/:*?"<>|\x00-\x1f]/g, '_');
+  link.download = [...name]
+    .map((character) =>
+      character.charCodeAt(0) < 32 || '/\\:*?"<>|'.includes(character) ? '_' : character,
+    )
+    .join('');
   link.click();
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
