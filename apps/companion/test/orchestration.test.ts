@@ -85,7 +85,8 @@ async function rig(nativeRequired = false) {
     },
     packStatus: (): Promise<{ active: string | null; empty: boolean } | null> =>
       Promise.resolve({ active: '测试包', empty: true }),
-    trackedStatus: () => Promise.resolve({ generation: 0, current: null }),
+    trackedStatus: (): Promise<TrackedStatus | null> =>
+      Promise.resolve({ generation: 0, current: null }),
     cancelTracked: async (generation: number): Promise<TrackedStatus | null> => {
       const result = tracked ? await provider.send('CamPlay/ClearForce') : 'queued';
       tracked = undefined;
@@ -345,6 +346,15 @@ it('waits for the first play acknowledgement when pause completion arrives early
   await r.tick();
   expect(r.calls.at(-1)).toEqual({ type: 'CamMacro/Play', macro: '暂停二' });
 });
+it('does not apply a pack while an unrelated tracked task is active', async () => {
+  const r = await rig();
+  const send = vi.spyOn(r.provider, 'send');
+  r.provider.trackedStatus = () =>
+    Promise.resolve({ generation: 2, current: { requestId: 44, generation: 2, state: 'started' } });
+  await expect(r.resume()).rejects.toThrow('camera_busy');
+  expect(send).not.toHaveBeenCalled();
+  expect(r.director.get()).toMatchObject({ otherCurrent: true, preparation: 'error' });
+});
 it('reads the tracked token before the pack and uses that token for playback', async () => {
   const r = await rig();
   await r.resume();
@@ -377,6 +387,10 @@ it('does not start a round shot if freeze time ends while the pack is checked', 
   finish({ active: '测试包', empty: true });
   await r.tick();
   expect(r.calls.filter((call) => call.type === 'CamMacro/Play')).toEqual([]);
+  expect(r.director.get()).toMatchObject({
+    request: 'idle',
+    message: '镜头窗口已结束，等待下一次触发。',
+  });
 });
 it.each([0, 9])('does not replace another current task at generation %s', async (generation) => {
   const r = await rig();

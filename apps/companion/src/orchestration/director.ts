@@ -344,6 +344,10 @@ export class CameraDirector {
       !this.clearing;
     const work = async () => {
       try {
+        const before = await this.provider.trackedStatus();
+        if (!before || !valid()) throw new Error('camera_status_unconfirmed');
+        this.otherCurrent = before.current !== null;
+        if (before.current) throw new Error('camera_busy');
         if ((await this.provider.send('CamPack/Apply', pack)) !== 'queued')
           throw new Error('camera_pack_apply_unconfirmed');
         if (!valid()) throw new Error('camera_context_changed');
@@ -550,7 +554,18 @@ export class CameraDirector {
       if (revision !== this.revision || connection !== this.provider.generation || this.closed)
         return false;
       this.request = 'unknown';
-      if (!valid()) return false;
+      if (!valid()) {
+        if (
+          key !== 'audition' &&
+          !this.held &&
+          (this.edge(this.truth()).key !== edge ||
+            (key.startsWith('round:') && this.truth().program.clock?.phase !== 'freezetime'))
+        ) {
+          this.request = 'idle';
+          this.message = '镜头窗口已结束，等待下一次触发。';
+        }
+        return false;
+      }
       this.preparation = 'error';
       this.message =
         error instanceof Error && error.message === 'camera_busy'
