@@ -155,13 +155,13 @@ async function rig(nativeRequired = false) {
     calls,
     provider,
     director,
-    emit: (state: TrackedState['state']) => {
+    emit: (state: TrackedState['state'], reason = '') => {
       if (!tracked) throw new Error('missing tracked request');
       trackedListener?.({
         requestId: tracked.id,
         generation: tracked.generation,
         state,
-        reason: '',
+        reason,
       });
     },
     resume,
@@ -294,19 +294,47 @@ it('replaces manual playback after confirmed cancellation and continues a pause 
   ]);
   await r.director.command('resume', r.director.get());
   expect(r.director.get().held).toBe(false);
+  let generation = 7;
+  const generations: number[] = [];
+  r.provider.trackedStatus = () => Promise.resolve({ generation, current: null });
+  const play = r.provider.playTracked;
+  r.provider.playTracked = (macro, id, token) => {
+    generations.push(token);
+    return play(macro, id, token);
+  };
   r.program.map.phase = 'live';
   r.program.map.roundNumber = 4;
   r.program.clock = { phase: 'timeout_ct', endsInSeconds: 30 };
   await r.tick();
   expect(r.calls.at(-1)).toEqual({ type: 'CamMacro/Play', macro: '暂停一' });
+  generation++;
   r.emit('completed');
   await r.tick();
   expect(r.calls.at(-1)).toEqual({ type: 'CamMacro/Play', macro: '暂停二' });
+  expect(generations).toEqual([7, 8]);
   r.emit('completed');
   await r.tick();
   const count = r.calls.length;
   await r.tick();
   expect(r.calls).toHaveLength(count);
+});
+it('queries a new token after an upstream no-frame failure', async () => {
+  const r = await rig();
+  await r.resume();
+  let generation = 12;
+  const generations: number[] = [];
+  r.provider.trackedStatus = () => Promise.resolve({ generation, current: null });
+  const play = r.provider.playTracked;
+  r.provider.playTracked = (macro, id, token) => {
+    generations.push(token);
+    return play(macro, id, token);
+  };
+  await r.director.audition({ macro: '一', maxMs: 6000 }, r.director.get());
+  generation++;
+  r.emit('failed', 'no_frame');
+  expect(r.director.get()).toMatchObject({ execution: 'failed', current: null });
+  await r.director.audition({ macro: '二', maxMs: 6000 }, r.director.get());
+  expect(generations).toEqual([12, 13]);
 });
 it('waits for the first play acknowledgement when pause completion arrives early', async () => {
   const r = await rig();
