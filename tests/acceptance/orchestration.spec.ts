@@ -280,6 +280,10 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
     expect(store.presets.at(-1)?.preset.maps).toEqual([]);
     expect(store.preset).toEqual(modified);
     await page.getByRole('button', { name: '返回运镜设置' }).click();
+    await page.getByRole('combobox', { name: '选择预设' }).selectOption(store.presets[count]!.id);
+    await page.getByRole('button', { name: '管理与编辑预设' }).click();
+    await expect(page.getByLabel('预设名称')).toHaveValue(modified.name);
+    await page.getByRole('button', { name: '返回运镜设置' }).click();
     await page.getByRole('combobox', { name: '选择预设' }).selectOption(store.activePresetId);
     await page.screenshot({ path: testInfo.outputPath('camera-common-populated.png') });
     const exportedLogs = await app.inject({
