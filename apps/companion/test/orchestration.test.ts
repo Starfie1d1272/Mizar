@@ -278,6 +278,21 @@ it('only arms after the applied pack and empty lists are read back in the same c
   await expect(stale).rejects.toThrow('camera_pack_unconfirmed');
   expect(r.director.get()).toMatchObject({ held: true, preparation: 'waiting' });
 });
+it('newer manual intent wins while automatic resume awaits preparation', async () => {
+  const r = await rig();
+  let finish!: (status: { active: string | null; empty: boolean } | null) => void;
+  r.provider.packStatus = () =>
+    new Promise((resolve) => {
+      finish = resolve;
+    });
+  const resume = r.resume();
+  await Promise.resolve();
+  const audition = r.director.audition({ macro: '手动', maxMs: 2000 }, r.director.get());
+  finish({ active: '测试包', empty: true });
+  await expect(resume).rejects.toThrow('camera_context_changed');
+  await audition;
+  expect(r.director.get()).toMatchObject({ held: true, current: '手动' });
+});
 it('persists validated drafts, rejects malformed imports and forbids remote control', async () => {
   const r = await rig();
   const music = new MusicStore(join(r.root, 'music'));
@@ -333,6 +348,7 @@ it('persists validated drafts, rejects malformed imports and forbids remote cont
   expect(restored.preset.name).toBe('RC 候选');
   expect(restored.automaticEnabled).toBe(true);
   r.truth.production = true;
+  r.director.beginProduction();
   await r.tick();
   expect(r.director.get().held).toBe(false);
   expect((await post({ action: 'set-automatic', enabled: false })).statusCode).toBe(400);
@@ -344,6 +360,7 @@ it('persists validated drafts, rejects malformed imports and forbids remote cont
   await r.tick();
   expect((await post({ action: 'set-automatic', enabled: false })).statusCode).toBe(200);
   r.truth.production = true;
+  r.director.beginProduction();
   await r.tick();
   expect(r.director.get().held).toBe(true);
   await writeFile(join(r.store.directory, 'preset.json'), '{broken');

@@ -87,6 +87,7 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
     },
     {
       controlToken: undefined,
+      canPrepare: () => true,
       configure: (revision, commit) => {
         if (revision !== preparationRevision) throw new Error('preparation changed');
         commit();
@@ -119,53 +120,81 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
   );
   try {
     await page.goto('/settings?tab=music&section=camera');
+    await expect(page.getByText('我的编排', { exact: true })).toBeVisible();
+    const automatic = page.getByLabel('开启自动运镜');
+    await expect(automatic).toBeEnabled();
+    await automatic.click();
+    await expect.poll(() => store.automaticEnabled).toBe(true);
+    expect(calls).toEqual([]);
+    await expect(automatic).toBeChecked();
+    await automatic.click();
+    await expect.poll(() => store.automaticEnabled).toBe(false);
+    await page.screenshot({ path: testInfo.outputPath('camera-common.png') });
+    await page.getByRole('button', { name: '管理与编辑预设', exact: true }).click();
+    await page.screenshot({ path: testInfo.outputPath('camera-advanced.png') });
     await page.getByRole('button', { name: '添加地图', exact: true }).click();
     await page.getByLabel('地图', { exact: true }).fill(program.map.name!);
-    await page.getByLabel('MulNX 活动包名称').fill(pack.name);
-    await page.getByLabel('开场宏', { exact: true }).fill('候选镜头');
-    await page.getByRole('button', { name: '保存预设', exact: true }).click();
-    await expect(page.getByText('已保存；自动运镜需重新启用。', { exact: true })).toBeVisible();
+    await page.getByLabel('镜头包名称').fill(pack.name);
+    await page.getByLabel('开场镜头名称', { exact: true }).fill('候选镜头');
+    await page.getByText('镜头时限', { exact: true }).click();
+    await page.getByLabel('最多持续（秒）').fill('1.0035');
+    await page.getByRole('button', { name: '启用预设', exact: true }).click();
+    await expect(page.getByRole('alert')).toBeVisible();
+    expect(store.preset.maps).toHaveLength(0);
+    await page.getByLabel('最多持续（秒）').fill('1.003');
+    await page.getByRole('button', { name: '启用预设', exact: true }).click();
+    await expect.poll(() => store.preset.maps[0]?.opening?.maxMs).toBe(1003);
+    await expect.poll(() => store.preset.maps.length).toBe(1);
     expect(calls).toEqual([]);
-    await expect(page.getByRole('button', { name: '连接 MulNX', exact: true })).toBeDisabled();
-    await page.getByText('浏览器联调', { exact: true }).click();
-    await page.getByRole('button', { name: '使用浏览器联调模式', exact: true }).click();
-    await expect(page.getByRole('button', { name: '连接 MulNX', exact: true })).toBeEnabled();
-    expect(director.get().control).toEqual({ mode: 'browser', state: 'ready' });
-    await page.getByRole('button', { name: '连接 MulNX', exact: true }).click();
-    await page.getByText('游戏内筛选', { exact: true }).click();
-    await expect(
-      page.getByRole('button', { name: '确认活动隔离包并试播', exact: true }),
-    ).toBeDisabled();
-    await expect(
-      page.getByRole('button', { name: '准备隔离包并启用自动', exact: true }),
-    ).toBeDisabled();
+    director.useBrowser();
+    await director.command('connect');
     packRoot = root;
-    await expect(page.getByText(/隔离文件已验证/)).toBeVisible();
-    await page.getByRole('button', { name: '确认活动隔离包并试播', exact: true }).click();
-    await expect(page.getByText('试播请求已提交，请在游戏内核对。', { exact: true })).toBeVisible();
+    await page.route('**/local/v1/demo-test', (route) =>
+      route.fulfill({
+        json: {
+          active: true,
+          phase: 'playing',
+          requestId: 'test',
+          teamAName: 'A',
+          teamBName: 'B',
+          dataReady: true,
+        },
+      }),
+    );
+    await page.addInitScript(() =>
+      Object.assign(window, {
+        __TAURI_INTERNALS__: { invoke: () => Promise.resolve({ running: true }) },
+      }),
+    );
+    await page.goto('/?demoTest');
+    await page.getByText('筛选运镜镜头', { exact: true }).click();
+    await expect(page.getByRole('button', { name: '播放', exact: true })).toBeEnabled();
+    await page.screenshot({ path: testInfo.outputPath('camera-demo-screening.png') });
+    await page.getByRole('button', { name: '播放', exact: true }).click();
+    await expect.poll(() => calls.at(-1)).toBe('CamMacro/Play');
     expect(calls).toContain('CamPack/Apply');
-    expect(calls.at(-1)).toBe('CamMacro/Play');
     expect(director.get()).toMatchObject({
       held: true,
       execution: 'unconfirmed',
       request: 'queued',
     });
-    await page.getByRole('button', { name: '接管运镜', exact: true }).click();
+    await page.getByRole('button', { name: '停止', exact: true }).click();
     await expect.poll(() => calls.at(-1)).toBe('CamPlay/ClearForce');
+    await page.goto('/settings?tab=camera');
+    await page.getByRole('button', { name: '管理与编辑预设' }).click();
     await page.getByText('导入与导出', { exact: true }).click();
     const downloadPromise = page.waitForEvent('download');
     await page.getByRole('button', { name: '导出预设', exact: true }).click();
     const download = await downloadPromise;
     const exported = await readFile(await download.path(), 'utf8');
     expect(JSON.parse(exported)).toEqual(store.preset);
+    await page.getByRole('button', { name: '返回运镜设置' }).click();
     await page.getByLabel('导入预设到草稿').setInputFiles({
       name: 'invalid.json',
       mimeType: 'application/json',
       buffer: Buffer.from('{bad'),
     });
-    await expect(
-      page.getByText('预设未应用，请检查字段、文件与本机音频。', { exact: true }),
-    ).toBeVisible();
+    await expect(page.getByRole('alert')).toBeVisible();
     const modified = { ...store.preset, name: '游戏内筛选候选' };
     await page.getByLabel('导入预设到草稿').setInputFiles({
       name: 'candidate.json',
@@ -174,16 +203,48 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
     });
     await expect(page.getByLabel('预设名称')).toHaveValue('游戏内筛选候选');
     expect(store.preset.name).toBe('我的编排');
-    await page.getByRole('button', { name: '保存预设', exact: true }).click();
+    await page.getByRole('button', { name: '启用预设', exact: true }).click();
     await expect.poll(() => store.preset.name).toBe('游戏内筛选候选');
     const reloaded = new OrchestrationStore(store.directory);
     await reloaded.load();
     expect(reloaded.preset).toEqual(modified);
-    await page.getByRole('heading', { name: '地图自动编排' }).scrollIntoViewIfNeeded();
+    await page.getByRole('button', { name: '添加地图', exact: true }).click();
+    const maps = page.locator('.settings-card');
+    const first = maps.nth(0);
+    const second = maps.nth(1);
+    await second.getByLabel('地图', { exact: true }).fill('de_nuke');
+    await second.getByLabel('镜头包名称').fill(pack.name);
+    await second.getByLabel('开场镜头名称').fill('开场镜头');
+    await page.getByLabel('预设名称').scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath('camera-advanced-top.png') });
+    const rounds = first
+      .locator('details')
+      .filter({ has: page.getByText('回合开局 · 随机列表', { exact: false }) });
+    await rounds.locator('summary').click();
+    await rounds.getByRole('button', { name: '添加候选' }).click();
+    await rounds.getByLabel('候选 1').fill('回合镜头');
+    await rounds.getByText('镜头时限', { exact: true }).click();
+    const tactical = first
+      .locator('details')
+      .filter({ has: page.getByText('战术暂停候选', { exact: false }) });
+    await tactical.locator('summary').click();
+    await tactical.getByRole('button', { name: '添加候选' }).click();
+    await tactical.getByLabel('候选 1').fill('战术暂停镜头');
+    const technical = first
+      .locator('details')
+      .filter({ has: page.getByText('技术暂停候选', { exact: false }) });
+    await technical.locator('summary').click();
+    await technical.getByRole('button', { name: '添加候选' }).click();
+    await technical.getByLabel('候选 1').fill('技术暂停镜头');
+    await page.screenshot({
+      path: testInfo.outputPath('camera-advanced-filled.png'),
+      fullPage: true,
+    });
+    await page.evaluate(() => window.scrollTo(0, 0));
     await page.screenshot({ path: testInfo.outputPath('orchestration-1920.png') });
     await page.setViewportSize({ width: 1280, height: 720 });
-    await page.getByRole('button', { name: '保存预设', exact: true }).focus();
-    await expect(page.getByRole('button', { name: '保存预设', exact: true })).toBeFocused();
+    await page.getByRole('button', { name: '启用预设', exact: true }).focus();
+    await expect(page.getByRole('button', { name: '启用预设', exact: true })).toBeFocused();
     await page.screenshot({ path: testInfo.outputPath('orchestration-1280.png') });
     const exportedLogs = await app.inject({
       method: 'POST',
@@ -307,8 +368,9 @@ test('native camera settings never adopt an independently running game', async (
     });
   });
   await page.goto('/settings?tab=camera');
-  await expect(page.getByRole('heading', { name: '运镜', exact: true })).toBeVisible();
-  await expect(page.getByRole('region', { name: 'MulNX 启动管理' })).toBeAttached();
+  await expect(page.getByRole('heading', { name: '运镜', exact: true, level: 1 })).toBeVisible();
+  await page.getByRole('button', { name: '管理与编辑预设' }).click();
+  await expect(page.getByRole('region', { name: 'MulNX 启动管理' })).toHaveCount(0);
   for (const name of ['检查游戏实例', '借用此游戏并进入工作台', '运镜试播'])
     await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0);
   const calls = await page.evaluate(
@@ -361,7 +423,7 @@ test('explicit MulNX stop confirms production effects, shows ownership errors, a
       },
     }),
   );
-  await page.goto('/settings?tab=camera');
+  await page.goto('/settings?tab=advanced');
   await page.getByText('停止控制', { exact: true }).click();
   const stop = page.getByRole('button', { name: '停止 MulNX 控制', exact: true });
   const confirmation = page.getByRole('dialog', { name: '停止 MulNX 控制', exact: true });

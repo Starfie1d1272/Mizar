@@ -1014,6 +1014,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       if (cameraDirector?.store.saving) throw new Error('camera_settings_saving');
       demoTest?.openFormalBoundary();
     },
+    onEnter: () => cameraDirector?.beginProduction(),
     beforeFinish: () => {
       cameraDirector?.finishProduction();
       observerSettings.endProduction();
@@ -1229,7 +1230,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       () => ({
         program: projectionCoordinator.getCurrent().program,
         active: sceneController.get().active,
-        sessionActive: production.get().mode !== 'preparation',
         production:
           production.get().mode !== 'preparation' &&
           !waitingObserverMap &&

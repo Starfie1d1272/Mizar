@@ -13,6 +13,7 @@ export function registerProductionRoutes(
     scenes: ProgramSceneController;
     release: () => Promise<void>;
     beforeEnter?: () => void;
+    onEnter?: () => void;
     beforeFinish?: () => void;
     finishTrial?: () => Promise<void>;
   },
@@ -52,6 +53,7 @@ export function registerProductionRoutes(
       if (body?.action === 'enter') {
         if (!options.hasContext()) return { code: 409, value: { message: '请先选择或创建比赛。' } };
         options.beforeEnter?.();
+        if (mode === 'preparation') options.onEnter?.();
         mode = 'live';
       } else if (body?.action === 'hide') {
         if (mode === 'live') mode = 'hidden';
