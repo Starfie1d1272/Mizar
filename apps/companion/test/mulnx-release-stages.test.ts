@@ -187,6 +187,12 @@ it('prepares without selecting and publishes a configured instance only after se
     'mulnx_prepared_integrity',
   );
   expect(await restarted.listPreparedReleases()).toEqual([
+    {
+      preparedId: `prepared-${release.sha256}-00000000-0000-4000-8000-000000000000`,
+      tag: null,
+      archiveSha256: null,
+      state: 'damaged',
+    },
     { preparedId: prepared.preparedId, tag: null, archiveSha256: null, state: 'damaged' },
   ]);
   await expect(restarted.selectRelease(prepared.preparedId, 'D:\\Steam\\cs2.exe')).rejects.toThrow(
