@@ -30,7 +30,7 @@ it('reads the exact package version when file IDs coincide', async () => {
   const resources = new MusicPackResources(root);
   const packageId = randomUUID();
   const first = Buffer.from(
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aXcAAAAASUVORK5CYII=',
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNg+M8AAAICAQB7CYF4AAAAAElFTkSuQmCC',
     'base64',
   );
   const second = Buffer.from(
@@ -382,7 +382,7 @@ it('round trips real music owner configuration to independent drafts without act
     const programModule = schemeDocument.modules.find((item) => item.kind === 'program');
     if (!programModule || programModule.kind !== 'program') throw new Error('missing program');
     const image = Buffer.from(
-      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aXcAAAAASUVORK5CYII=',
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNg+M8AAAICAQB7CYF4AAAAAElFTkSuQmCC',
       'base64',
     );
     const imagePath = 'assets/background.png';
@@ -566,6 +566,12 @@ it('round trips real music owner configuration to independent drafts without act
       expect(response.headers.get('x-content-type-options')).toBe('nosniff');
       expect(Buffer.from(await response.arrayBuffer())).toEqual(image);
       query.set('digest', '0'.repeat(64));
+      expect((await fetch(`${address}/local/v1/broadcast-assets?${query}`)).status).toBe(422);
+      query.set('digest', importedImage.resource.digest);
+      const filename = `${createHash('sha256')
+        .update(JSON.stringify([importedImage.resource.id, importedImage.resource.version]))
+        .digest('hex')}.mizarpack`;
+      await writeFile(join(freshPath, filename), Buffer.from('damaged zip'));
       expect((await fetch(`${address}/local/v1/broadcast-assets?${query}`)).status).toBe(422);
     } finally {
       await assetApp.close();

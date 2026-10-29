@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { link, lstat, open, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
+import { crc32 } from 'node:zlib';
 import { PACK_LIMITS, readPackArchive } from '@mizar/broadcast-pack';
 import type { AssetRef, ResourceRef } from '@mizar/broadcast-config';
 import { SerialCommitQueue } from '../match-context/serial-commit.js';
@@ -27,6 +28,11 @@ export function validPackImage(bytes: Buffer, mediaType: string): boolean {
     while (offset + 12 <= bytes.length) {
       const length = bytes.readUInt32BE(offset);
       if (length > bytes.length - offset - 12) return false;
+      if (
+        crc32(bytes.subarray(offset + 4, offset + 8 + length)) !==
+        bytes.readUInt32BE(offset + 8 + length)
+      )
+        return false;
       const type = bytes.toString('ascii', offset + 4, offset + 8);
       if (type === 'IDAT') imageData = true;
       offset += length + 12;
@@ -124,7 +130,13 @@ export class MusicPackResources {
   private async readArchive(ref: ResourceRef) {
     if (!/^local:mizar-pack:[0-9a-f-]{36}$/i.test(ref.id) || !/^[a-f0-9]{64}$/.test(ref.digest))
       throw new Error('resource_missing');
-    const archive = await this.readStored(this.filename(ref.id, ref.version));
+    let archive: Awaited<ReturnType<MusicPackResources['readStored']>>;
+    try {
+      archive = await this.readStored(this.filename(ref.id, ref.version));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('resource_missing');
+      throw new Error('resource_damaged', { cause: error });
+    }
     if (
       `local:mizar-pack:${archive.manifest.packageId}` !== ref.id ||
       archive.manifest.version !== ref.version ||
