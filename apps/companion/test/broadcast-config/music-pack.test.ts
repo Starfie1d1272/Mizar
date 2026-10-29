@@ -395,7 +395,8 @@ it('round trips real music owner configuration to independent drafts without act
       (item) => item.id === resharedResult.mapping.presetEntries.main,
     )!;
     const resharedBinding = resharedPreset.bindings.find((item) => item.kind === 'camera');
-    if (!resharedBinding || resharedBinding.mode !== 'use') throw new Error('missing camera binding');
+    if (!resharedBinding || resharedBinding.mode !== 'use')
+      throw new Error('missing camera binding');
     const resharedCamera = store.snapshot.modules.find(
       (item) => item.id === resharedBinding.moduleId,
     );
