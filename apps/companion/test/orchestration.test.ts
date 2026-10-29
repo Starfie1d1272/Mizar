@@ -165,9 +165,10 @@ it('new round shots draw once, continue into live play and clear at their deadli
   expect(r.calls).toHaveLength(count + 1);
   expect(r.calls.at(-1)).toEqual({ type: 'CamMacro/Play', macro: 'A' });
   await r.advance(6001);
+  const beforeLateRound = r.calls.length;
   r.program.map.roundNumber = 4;
   await r.live();
-  expect(r.calls.at(-1)).toEqual({ type: 'CamMacro/Play', macro: 'B' });
+  expect(r.calls).toHaveLength(beforeLateRound);
 });
 it('hold, skip and resume consume current edges without catch-up', async () => {
   const r = await rig();
@@ -457,6 +458,8 @@ it('audition works during live rounds and manual scene control without arming au
     request: 'queued',
     execution: 'unconfirmed',
   });
+  r.director.opening();
+  expect(r.calls).toEqual([{ type: 'CamMacro/Play', macro: '自选镜头' }]);
   await r.advance(2100);
   expect(r.calls.at(-1)).toEqual({ type: 'CamPlay/ClearForce' });
   await r.round(1);
@@ -503,8 +506,9 @@ it('cannot arm while preset persistence is pending or with an earlier saved revi
 });
 it('an automatic opening can play in a live round and is not repeated after reconnect or preset revision', async () => {
   const r = await rig();
-  await r.resume();
+  r.program.cursor.mapEpoch++;
   await r.round(0);
+  await r.resume();
   await r.live();
   r.director.opening();
   await r.tick();
