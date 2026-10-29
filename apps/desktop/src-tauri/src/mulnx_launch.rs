@@ -123,6 +123,13 @@ pub fn resume_demo(app: &tauri::AppHandle, log: &DesktopLog, request_id: &str) -
     Ok(resume_pending_launch(log, &managed, Some(request_id))?.unwrap_or_else(|| json!({"result":"not-found"})))
 }
 
+pub fn prepare_release(app: &tauri::AppHandle, log: &DesktopLog) -> Result<Value, String> {
+    let _launch = demo_launch_guard()?;
+    app.state::<production_exit::ExitGate>().check()?;
+    app.state::<updates::PendingUpdate>().check()?;
+    production_exit::prepare_mulnx_release(log)
+}
+
 pub fn update(app: &tauri::AppHandle, log: &DesktopLog) -> Result<Value, String> {
     launch_operation(app, log, false, true, false, None, false)
 }

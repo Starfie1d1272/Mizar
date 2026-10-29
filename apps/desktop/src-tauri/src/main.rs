@@ -650,6 +650,7 @@ async fn mulnx_control(window: tauri::WebviewWindow, app: tauri::AppHandle,
     log.event("mulnx_control", "begin", Some(&format!("action={action}")));
     let result = tauri::async_runtime::spawn_blocking(move || match action.as_str() {
         "update" => mulnx_launch::update(&app, &log),
+        "prepare" => mulnx_launch::prepare_release(&app, &log),
         "stop" => mulnx_launch::stop_control(&app, &log),
         _ => Err("请选择更新或停止 MulNX 控制。".into()),
     }).await.unwrap_or_else(|error| Err(format!("MulNX 操作失败：{error}")));

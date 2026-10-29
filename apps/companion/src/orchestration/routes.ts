@@ -123,6 +123,45 @@ export function registerOrchestrationRoutes(
       return reply.code(409).send({ error: 'camera_native_session_invalid' });
     }
   });
+  app.post(
+    '/operator/runtime/mulnx-prepare-release',
+    { bodyLimit: 1024 },
+    async (request, reply) => {
+      const expected = Buffer.from(session?.controlToken ?? '');
+      const token = request.headers['x-runtime-token'];
+      const supplied = Buffer.from(typeof token === 'string' ? token : '');
+      if (
+        policy.mode !== 'loopback' ||
+        request.headers.origin !== undefined ||
+        !expected.length ||
+        expected.length !== supplied.length ||
+        !timingSafeEqual(expected, supplied)
+      )
+        return reply.code(403).send({ error: 'runtime-control-denied' });
+      try {
+        z.strictObject({}).parse(request.body);
+        if (!tool) throw new Error('mulnx_bundle_unavailable');
+        const result = await tool.prepareRelease();
+        return {
+          preparedId: result.preparedId,
+          tag: result.release.tag,
+          archiveSha256: result.release.sha256,
+        };
+      } catch (error) {
+        request.log.error(
+          { stage: 'mulnx_prepare_release', err: error, result: 'failure' },
+          'MulNX 下载失败',
+        );
+        return reply
+          .code(409)
+          .send({
+            error: 'mulnx_prepare_failed',
+            message: 'MulNX 下载或校验失败，请检查网络后重试。',
+            requestId: request.id,
+          });
+      }
+    },
+  );
   app.post('/operator/runtime/mulnx-prepare', { bodyLimit: 4096 }, async (request, reply) => {
     const expected = Buffer.from(session?.controlToken ?? '');
     const supplied = Buffer.from(
