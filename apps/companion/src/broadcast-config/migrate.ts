@@ -134,7 +134,12 @@ export async function migrateLegacyBroadcast(
     ],
   };
   const resolved: ActiveBroadcastSnapshot['resolved'] = {
-    hud: { renderer: 'native', config: structuredClone(input.hud.resolved) },
+    hud: {
+      renderer: 'native',
+      config: structuredClone(input.hud.resolved),
+      overlays: structuredClone(input.overlays),
+      accent: { source: 'event', fallback: input.hud.resolved.theme.brandColor },
+    },
     program,
     music: structuredClone(musicModule.value),
     camera: await input.cameraConfig(input.camera.active, input.camera.automaticEnabled),

@@ -96,7 +96,15 @@ function fixture(): BroadcastConfigDocument {
       adjusted: false,
       moduleRevisions: { hud: 'h', program: 'p', music: 'm', camera: 'c' },
       resolved: {
-        hud: { renderer: 'native', config: getBuiltinResolvedPreset() },
+        hud: {
+          renderer: 'native',
+          config: getBuiltinResolvedPreset(),
+          overlays: {
+            pause: { enabled: true, visual: 'default' },
+            chat: { enabled: true, placement: Object.values(layout.widgets)[0]! },
+          },
+          accent: { source: 'event', fallback: getBuiltinTheme().brandColor },
+        },
         program,
         music: null,
         camera: null,

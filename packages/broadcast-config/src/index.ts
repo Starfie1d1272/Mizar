@@ -137,7 +137,15 @@ export interface BroadcastPreset {
   opaqueModules: OpaqueModuleRef[];
 }
 export type ResolvedHudModule =
-  | { renderer: 'native'; config: HudResolvedPreset }
+  | {
+      renderer: 'native';
+      config: HudResolvedPreset;
+      overlays: {
+        pause: { enabled: boolean; visual: string };
+        chat: { enabled: boolean; placement: HudWidgetPlacement };
+      };
+      accent: VisualColor;
+    }
   | { renderer: 'web-hud'; config: Extract<HudModule, { renderer: { kind: 'web-hud' } }> };
 export interface ActiveBroadcastSnapshot {
   schemaVersion: 1;

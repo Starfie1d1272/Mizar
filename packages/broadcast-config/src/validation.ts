@@ -219,6 +219,8 @@ const preset = z.strictObject({
 const resolvedHud = z.union([
   z.strictObject({
     renderer: z.literal('native'),
+    overlays: nativeHud.shape.overlays,
+    accent: visualColor,
     config: hudResolvedPresetSchema.superRefine((value, ctx) => {
       try {
         parseHudResolvedPreset(value);
