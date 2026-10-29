@@ -149,7 +149,9 @@ export async function reconcileManagedAudio(
           .inputSettings as Record<string, unknown>;
         if (settings?.capture_audio !== true) continue;
         if (references.some((container) => container.otherRoots.size))
-          throw new Error('audio_video_path_unresolved');
+          throw new Error(
+            `audio_video_path_unresolved:${encodeURIComponent(String(input.inputName))}:${encodeURIComponent(references.flatMap((container) => [...container.otherRoots]).join('、'))}`,
+          );
         captureAudio.push({
           inputUuid: input.inputUuid,
           inputKind: input.inputKind,
@@ -178,7 +180,10 @@ export async function reconcileManagedAudio(
         }
         if (!audioKinds.has(String(input.inputKind))) continue;
         if (desktopUuid && !ids.microphone && input.inputKind === 'wasapi_input_capture') continue;
-        if (container.otherRoots.size) throw new Error('audio_nested_shared_path');
+        if (container.otherRoots.size)
+          throw new Error(
+            `audio_nested_shared_path:${encodeURIComponent(String(input.inputName))}:${encodeURIComponent([...container.otherRoots].join('、'))}`,
+          );
         desktop.push({
           sceneName: container.name,
           sceneItemId: item.sceneItemId,

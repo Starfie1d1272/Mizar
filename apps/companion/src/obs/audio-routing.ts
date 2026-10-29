@@ -382,7 +382,7 @@ export class ObsAudioRouting {
   }
   async read(obs: ObsRpc, endpoint: string): Promise<ObsAudioRoutingStatus> {
     const state = await this.load();
-    const { collection, inputs, candidates } = await this.inputs(obs);
+    const { collection, candidates } = await this.inputs(obs);
     for (const [id, selection] of this.selections)
       if (selection.until <= this.now()) this.selections.delete(id);
     const choices = candidates.map((input) => {
@@ -407,55 +407,6 @@ export class ObsAudioRouting {
       }),
     ) as ObsAudioRoutingStatus['bindings'];
     const findings: string[] = [];
-    const specials = await obs.call('GetSpecialInputs');
-    if (
-      Object.entries(specials).some(
-        ([key, value]) => key.startsWith('desktop') && typeof value === 'string' && value,
-      )
-    )
-      findings.push(
-        'OBS 全局桌面音频可能重复采集应用和监听声音。请在 OBS 设置 → 音频中核对并自行迁移。',
-      );
-    for (const input of candidates.filter((i) => videoKinds.has(i.inputKind)))
-      findings.push(`${input.inputName} 已启用捕获音频；请核对是否与应用音频或桌面音频重复。`);
-    if (inputs.some((i) => i.inputKind === 'wasapi_output_capture'))
-      findings.push('桌面音频可能包含应用音频和音乐监听；请在 OBS 中核对并自行迁移。');
-    const scenes = (await obs.call('GetSceneList')).scenes;
-    if (!Array.isArray(scenes)) throw new Error('audio_scenes_unknown');
-    for (const scene of records(scenes)) {
-      if (typeof scene?.sceneName !== 'string') continue;
-      const counts = new Map<string, number>();
-      const walk = async (name: string, group: boolean, ancestors: Set<string>): Promise<void> => {
-        if (ancestors.has(name) || ancestors.size >= 16) return;
-        const next = new Set(ancestors).add(name);
-        const result = await obs.call(group ? 'GetGroupSceneItemList' : 'GetSceneItemList', {
-          sceneName: name,
-        });
-        if (!Array.isArray(result.sceneItems)) throw new Error('audio_scene_items_unknown');
-        for (const item of records(result.sceneItems)) {
-          if (item.sceneItemEnabled !== true) continue;
-          if (
-            typeof item.sourceUuid === 'string' &&
-            candidates.some((i) => i.inputUuid === item.sourceUuid)
-          )
-            counts.set(item.sourceUuid, (counts.get(item.sourceUuid) ?? 0) + 1);
-          if (
-            typeof item.sourceName === 'string' &&
-            (item.isGroup === true || item.sourceType === 'OBS_SOURCE_TYPE_SCENE')
-          )
-            await walk(item.sourceName, item.isGroup === true, next);
-        }
-      };
-      await walk(scene.sceneName, false, new Set());
-      for (const [uuid, count] of counts)
-        if (count > 1) {
-          const input = candidates.find((i) => i.inputUuid === uuid)!;
-          findings.push(
-            `${scene.sceneName} 中 ${input.inputName} 出现 ${count} 次（含嵌套场景）；请在 OBS 核对重复路径。`,
-          );
-        }
-    }
-    findings.push('请在 OBS 核对监听回灌及输出音轨，并录制试听。');
     return {
       revision: state.revision,
       endpoint,
@@ -550,6 +501,11 @@ export class ObsAudioRouting {
     let desktop: State['desktop'] = null;
     let desktopMicrophone: State['desktopMicrophone'] = null;
     if (mode === 'independent') {
+      if (
+        !state.bindings.remoteCommentary ||
+        (await this.invalidBindings(obs, endpoint)).includes('remoteCommentary')
+      )
+        throw new Error('audio_commentary_unavailable');
       const managed = await this.managedBindings(obs, endpoint);
       if (!managed) throw new Error('audio_bindings_incomplete');
       ids = managed.ids;
