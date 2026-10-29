@@ -192,7 +192,7 @@ WebSocket 子协议为 `mizar.local.v1`，路由为 `/local/v1/{channel}`。
 
 `GET /local/v1/broadcast-assets?resourceId=…&version=…&digest=…&fileId=…` 按完整 `AssetRef` 读取已安装包中的音频或 PNG、JPEG、WebP 图片，查询值分别 URL 编码。成功响应包含实际 `Content-Type` 和 `X-Content-Type-Options: nosniff`；缺失、损坏、不支持分别返回 404、422、415。此接口不接受磁盘路径，也不安装或枚举包。场景图片槽位为 `pulse.background`；配置保存资源引用，页面以完整引用构造本机 URL，预览和正式节目及 BP 共用此映射。Pulse 渲染器支持 `pulse.white`、`pulse.blue`、`pulse.gold`、`pulse.muted`、`pulse.canvas` 和 `pulse.shell` 颜色字段，网页遇到其他字段或图片槽时拒绝预览及从资源页使用。
 
-Pulse 场景仅支持 `pulse.background` 图片槽，不支持其他素材槽；当前服务端也拒绝所有自定义 token；使用含不支持内容的场景返回 422 `capability_unsupported`。已活动场景素材损坏时，保留原活动快照和引用锁，迁移状态报告 `program_dependency_unavailable`，显示配置端点返回同名 503；模块目录和独立 HUD 操作仍可用。修复素材或编辑场景后需显式使用场景，重新验证后恢复显示。
+Pulse 场景仅支持 `pulse.background` 图片槽，不支持其他素材槽；当前服务端也拒绝所有自定义 token；使用含不支持内容的场景返回 422 `capability_unsupported`。已活动场景素材损坏时，保留原活动快照和引用锁，迁移状态报告 `program_dependency_unavailable`；显示配置仍返回真实快照供 HUD 使用，并通过响应头 `X-Mizar-Program-Status: dependency_missing` 标明场景不可用，页面须据此显示错误而非呈现替代场景。模块目录和独立 HUD 操作仍可用。修复素材或编辑场景后需显式使用场景，重新验证后恢复显示。
 
 资源释放检查包含草稿、活动及上一个活动快照，以及持久化使用回执所引用的资源。即使随后切换并删除了原模块，对同一 `requestId` 的合法重试仍返回原回执，不重新切换活动配置。
 
