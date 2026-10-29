@@ -11,7 +11,6 @@ import {
 } from './broadcast-config/runtime.js';
 import { createBroadcastResolver } from './broadcast-config/resolver.js';
 import { registerBroadcastConfigRoutes } from './broadcast-config/routes.js';
-import { broadcastResourceReferences } from './broadcast-config/reference-queue.js';
 import type { ResourceRef } from '@mizar/broadcast-config';
 import {
   registerBroadcastMigrationStatus,
@@ -1356,7 +1355,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       waitForBroadcast = () => broadcastRuntime.waitForApply();
       getBroadcastReferences = () => {
         if (!broadcastRuntime.ready) throw new Error('broadcast_config_unavailable');
-        return broadcastResourceReferences(broadcastRuntime.store.snapshot);
+        return broadcastRuntime.store.referencedResources();
       };
       getBroadcastMigrationStatus = () => broadcastRuntime.status;
       if (supportsMusicPacks)

@@ -25,6 +25,7 @@ import {
 import { durableJsonByteLength, replaceDurableJson } from '../match-context/durable-json.js';
 import { SerialCommitQueue } from '../match-context/serial-commit.js';
 import { addMissingBuiltinModules, isBuiltinModuleId } from './builtin-modules.js';
+import { broadcastResourceReferences } from './reference-queue.js';
 import { cameraCatalogSchema } from '../orchestration/store.js';
 
 interface Receipt {
@@ -52,6 +53,7 @@ interface Envelope {
   document: BroadcastConfigDocument;
   receipts: Record<string, Receipt>;
   imports: BroadcastImportMapping[];
+  builtinsNormalized?: boolean | undefined;
   pendingLegacyCamera?: PendingLegacyCamera | undefined;
   restoredLegacyCamera?:
     Array<{ legacyId: string; moduleId: string; activeSnapshot: boolean }> | undefined;
@@ -125,6 +127,7 @@ export class BroadcastConfigStore {
             'document',
             'receipts',
             'imports',
+            'builtinsNormalized',
             'pendingLegacyCamera',
             'restoredLegacyCamera',
           ].includes(key),
@@ -186,6 +189,9 @@ export class BroadcastConfigStore {
       if (
         Object.keys(mapping.moduleOwners ?? {}).some(
           (id) => !Object.values(mapping.moduleEntries).some((ids) => ids.includes(id)),
+        ) ||
+        Object.values(mapping.moduleOwners ?? {}).some(
+          (owner) => owner !== null && !(owner in mapping.presetEntries),
         )
       )
         throw new Error('broadcast_import_index_invalid');
@@ -196,11 +202,13 @@ export class BroadcastConfigStore {
     const restoredLegacyCamera = restoredLegacyCameraSchema
       .optional()
       .parse(value.restoredLegacyCamera);
+    const builtinsNormalized = z.boolean().optional().parse(value.builtinsNormalized);
     return {
       version: 1,
       document,
       receipts,
       imports,
+      ...(builtinsNormalized !== undefined ? { builtinsNormalized } : {}),
       ...(pendingLegacyCamera ? { pendingLegacyCamera } : {}),
       ...(restoredLegacyCamera ? { restoredLegacyCamera } : {}),
     };
@@ -232,7 +240,11 @@ export class BroadcastConfigStore {
         this.envelope = await this.read();
       }
       const next = structuredClone(this.envelope);
-      if (addMissingBuiltinModules(next.document)) await this.commit(next);
+      if (!next.builtinsNormalized) {
+        addMissingBuiltinModules(next.document);
+        next.builtinsNormalized = true;
+        await this.commit(next);
+      } else if (addMissingBuiltinModules(next.document, false)) await this.commit(next);
     });
   }
   hasReceipt(requestId: string): boolean {
@@ -242,8 +254,67 @@ export class BroadcastConfigStore {
     if (!this.envelope) throw new Error('broadcast_config_unavailable');
     return structuredClone(this.envelope.document);
   }
+  /** Include resources exposed by durable apply receipts as well as the current document. */
+  referencedResources(): ResourceRef[] {
+    if (!this.envelope) throw new Error('broadcast_config_unavailable');
+    const refs = new Map(
+      broadcastResourceReferences(this.envelope.document).map((ref) => [canonicalJson(ref), ref]),
+    );
+    for (const receipt of Object.values(this.envelope.receipts))
+      for (const ref of receipt.active.lock.resources) refs.set(canonicalJson(ref), ref);
+    return structuredClone([...refs.values()]);
+  }
   get pendingLegacyCamera(): PendingLegacyCamera | undefined {
     return structuredClone(this.envelope?.pendingLegacyCamera);
+  }
+  /** Read-only hints for package inspection; importBatch rechecks under the commit queue. */
+  inspectImport(source: ResourceRef): {
+    modules: Record<
+      string,
+      Array<{ id: string; owner: string | null; state: 'existing' | 'removed' }>
+    >;
+    presets: Record<string, { id: string; state: 'existing' | 'removed' }>;
+  } | null {
+    if (!this.envelope) throw new Error('broadcast_config_unavailable');
+    const mapping = this.envelope.imports.find(
+      (entry) => entry.source.id === source.id && entry.source.version === source.version,
+    );
+    if (!mapping) return null;
+    if (mapping.source.digest !== source.digest) throw new Error('identity_conflict');
+    const owners = { ...mapping.moduleOwners };
+    for (const [entryId, presetId] of Object.entries(mapping.presetEntries)) {
+      const preset = this.envelope.document.presets.find((item) => item.id === presetId);
+      for (const binding of preset?.bindings ?? [])
+        if (
+          binding.mode === 'use' &&
+          Object.values(mapping.moduleEntries).some((ids) => ids.includes(binding.moduleId))
+        )
+          if (!Object.hasOwn(owners, binding.moduleId)) owners[binding.moduleId] = entryId;
+    }
+    const modules = Object.fromEntries(
+      Object.entries(mapping.moduleEntries).map(([entryId, ids]) => [
+        entryId,
+        ids.map((id) => ({
+          id,
+          owner: owners[id] ?? null,
+          state: this.envelope!.document.modules.some((item) => item.id === id)
+            ? ('existing' as const)
+            : ('removed' as const),
+        })),
+      ]),
+    );
+    const presets = Object.fromEntries(
+      Object.entries(mapping.presetEntries).map(([entryId, id]) => [
+        entryId,
+        {
+          id,
+          state: this.envelope!.document.presets.some((item) => item.id === id)
+            ? ('existing' as const)
+            : ('removed' as const),
+        },
+      ]),
+    );
+    return { modules, presets };
   }
   async restoreLegacyCamera(
     convert: (
@@ -365,6 +436,7 @@ export class BroadcastConfigStore {
           actual.every((id) => mapped.includes(id));
         if (
           (!moduleIds.length && !presetIds.length) ||
+          moduleIds.some(isBuiltinModuleId) ||
           !sameIds(moduleIds, mappedModules) ||
           !sameIds(presetIds, mappedPresets)
         )
@@ -395,7 +467,8 @@ export class BroadcastConfigStore {
               binding.mode === 'use' &&
               Object.values(result.moduleEntries).some((ids) => ids.includes(binding.moduleId))
             )
-              result.moduleOwners[binding.moduleId] ??= entryId;
+              if (!Object.hasOwn(result.moduleOwners, binding.moduleId))
+                result.moduleOwners[binding.moduleId] = entryId;
         }
         const substitutions = new Map<string, string>();
         let added = false;
@@ -666,11 +739,16 @@ export class BroadcastConfigStore {
             const module = this.envelope.document.modules.find(
               (item) => item.id === input.moduleId,
             );
-            if (!module) throw new Error('module_missing');
+            const kind =
+              module?.kind ??
+              (Object.entries(receipt.active.sourceModuleIds ?? {}).find(
+                ([, id]) => id === input.moduleId,
+              )?.[0] as ModuleKind | undefined);
+            if (!kind) throw new Error('module_missing');
             return {
               active: structuredClone(receipt.active),
               previous: structuredClone(this.envelope.document.previousActive ?? receipt.active),
-              kind: module.kind,
+              kind,
             };
           }
           const module = this.envelope.document.modules.find((item) => item.id === input.moduleId);

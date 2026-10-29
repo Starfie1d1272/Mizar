@@ -53,6 +53,7 @@ export function createBroadcastRuntime(input: {
   let ready = false;
   let syncError: Error | undefined;
   let cameraUnavailable = false;
+  let cameraAvailable = () => true;
   async function verifyWithoutCamera(active: ActiveBroadcastSnapshot) {
     const resolved = { ...active.resolved, camera: null };
     const lock = await deps.lockForActive(resolved);
@@ -108,7 +109,7 @@ export function createBroadcastRuntime(input: {
         syncError = new Error('broadcast_owner_sync_failed', { cause: failed.reason });
         throw syncError;
       }
-      if (!kind || kind === 'camera') cameraUnavailable = false;
+      if (!kind || kind === 'camera') cameraUnavailable = !cameraAvailable();
       syncError = undefined;
       ready = true;
       status =
@@ -174,7 +175,7 @@ export function createBroadcastRuntime(input: {
         cameraUnavailable = true;
         input.diagnostic(error);
       }
-      for (const ref of broadcastResourceReferences(store.snapshot))
+      for (const ref of store.referencedResources())
         if (await deps.isDeleting(ref)) throw new Error('resource_deleting');
     }
     const hudPersistence = createHudConfigPersistence(store, async (value, current) => {
@@ -195,12 +196,14 @@ export function createBroadcastRuntime(input: {
       (ref) => deps.localTrackId(ref),
     );
     const cameraPersistence = createCameraConfigPersistence(store, deps.camera);
+    cameraAvailable = () => cameraPersistence.available;
     if (existing) await hud.restorePersistence(hudPersistence);
     else await hud.adoptPersistence(hudPersistence);
     if (music.ready && !music.failure) await music.adoptPersistence(musicPersistence);
     else await music.loadWithPersistence(musicPersistence);
     if (camera.ready) await camera.adoptPersistence(cameraPersistence);
     else await camera.loadWithPersistence(cameraPersistence);
+    cameraUnavailable ||= !cameraPersistence.available && !store.pendingLegacyCamera;
     ready = true;
     status =
       store.pendingLegacyCamera || cameraUnavailable
