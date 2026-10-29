@@ -7,6 +7,8 @@ import type { OrchestrationStore } from './store.js';
 export interface CameraTruth extends MusicTruth {
   /** Present only during an isolated external Demo trial; true requires fresh map/player data. */
   demoAudition?: boolean | undefined;
+  /** Production lifecycle, independent of telemetry readiness. */
+  sessionActive?: boolean | undefined;
 }
 /** Consume authoritative projections; never become a second match / timing authority. */
 export class CameraDirector {
@@ -17,6 +19,7 @@ export class CameraDirector {
   private execution = '';
   private connection = -1;
   private held = true;
+  private sessionActive = false;
   private preparation: OrchestrationStatus['preparation'] = 'waiting';
   private preparationKey = '';
   private preparationEpoch = 0;
@@ -181,8 +184,14 @@ export class CameraDirector {
   tick() {
     if (this.closed) return;
     this.nativeReady();
-    const t = this.truth(),
-      context = this.identity(t);
+    const t = this.truth();
+    const sessionActive = t.sessionActive ?? t.production;
+    if (!sessionActive) this.sessionActive = false;
+    else if (!this.sessionActive && this.store.ready) {
+      this.sessionActive = true;
+      this.held = t.demoAudition !== undefined || !this.store.automaticEnabled;
+    }
+    const context = this.identity(t);
     if (context !== this.context || this.connection !== this.provider.generation) {
       const execution = this.executionIdentity(t);
       const mapChanged = execution !== this.execution;
