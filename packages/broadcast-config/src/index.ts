@@ -162,6 +162,19 @@ export interface ActiveBroadcastSnapshot {
   };
   lock: { resources: ResourceRef[]; tools: MulnxToolRef[] };
 }
+/** Public display projection; production audio and camera data remain private. */
+export interface BroadcastDisplayConfig {
+  activeRevision: Revision;
+  hud: ResolvedHudModule;
+  program: ProgramVisualConfigV1;
+}
+export function displayConfig(snapshot: ActiveBroadcastSnapshot): BroadcastDisplayConfig {
+  return structuredClone({
+    activeRevision: snapshot.revision,
+    hud: snapshot.resolved.hud,
+    program: snapshot.resolved.program,
+  });
+}
 export interface BroadcastConfigDocument {
   schemaVersion: 1;
   modules: ModuleRecord[];

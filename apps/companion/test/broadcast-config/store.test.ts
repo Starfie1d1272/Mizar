@@ -184,6 +184,16 @@ describe('BroadcastConfigStore', () => {
         payload: request,
       });
       expect(denied.statusCode).toBe(403);
+      const privateRead = await app.inject({
+        url: '/local/v1/broadcast-presets',
+        headers: { origin: 'https://foreign.test' },
+      });
+      expect(privateRead.statusCode).toBe(403);
+      const display = await app.inject('/local/v1/broadcast-display-config');
+      expect(display.statusCode).toBe(200);
+      expect(Object.keys(display.json()).sort()).toEqual(['activeRevision', 'hud', 'program']);
+      expect(display.json()).toMatchObject({ activeRevision: initial.active.revision });
+
       const preview = await app.inject({
         method: 'POST',
         url: '/operator/broadcast-presets/preview',

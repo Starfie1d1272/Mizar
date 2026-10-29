@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z, ZodError } from 'zod';
-import { parseBroadcastPreset, parseModuleRecord } from '@mizar/broadcast-config';
+import { displayConfig, parseBroadcastPreset, parseModuleRecord } from '@mizar/broadcast-config';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 import type { BroadcastConfigStore } from './store.js';
 
@@ -37,11 +37,21 @@ export function registerBroadcastConfigRoutes(
   store: BroadcastConfigStore,
   originPolicy: LocalWebOriginPolicy,
 ): void {
-  app.get('/local/v1/broadcast-presets', (_request, reply) =>
-    reply.header('cache-control', 'no-store').send(store.snapshot),
-  );
   const authorized = (origin: string | undefined) =>
     originPolicy.mode === 'loopback' && checkLocalWebOrigin(originPolicy, origin).allowed;
+  app.get('/local/v1/broadcast-display-config', (_request, reply) =>
+    reply.header('cache-control', 'no-store').send(displayConfig(store.snapshot.active)),
+  );
+  app.get('/local/v1/broadcast-presets', (request, reply) => {
+    if (
+      originPolicy.mode !== 'loopback' ||
+      !['127.0.0.1', 'localhost', '[::1]', '::1'].includes(request.hostname) ||
+      request.headers['sec-fetch-site'] === 'cross-site' ||
+      (request.headers.origin && !authorized(request.headers.origin))
+    )
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    return reply.header('cache-control', 'no-store').send(store.snapshot);
+  });
   const failure = (error: unknown) => {
     if (error instanceof ZodError) return { status: 400, code: 'invalid_request' };
     const code = error instanceof Error ? error.message : '';
