@@ -231,5 +231,10 @@ test('16:9 workspace scales the native regions and keeps scene controls inside t
     // Leave room for the keyboard focus outline inside the native window.
     expect(exit.y + exit.height).toBeLessThanOrEqual(viewport.height - 2);
     expect(exit.x + exit.width).toBeLessThanOrEqual(viewport.width - 2);
+    for (const summary of await page.locator('.workspace-secondary > summary').all()) {
+      const rect = (await summary.boundingBox())!;
+      expect(rect.height).toBeGreaterThanOrEqual(32);
+      expect(rect.y + rect.height).toBeLessThanOrEqual(exit.y);
+    }
   }
 });
