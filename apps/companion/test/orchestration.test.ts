@@ -144,6 +144,16 @@ async function rig(nativeRequired = false) {
     },
   };
 }
+it('marks the automatic preference as saving until it is persisted', async () => {
+  const r = await rig();
+  await r.store.saveAutomaticEnabled(true);
+  const pending = r.store.saveAutomaticEnabled(false);
+  expect(r.store.saving).toBe(true);
+  await pending;
+  expect(r.store.saving).toBe(false);
+  expect(r.store.automaticEnabled).toBe(false);
+});
+
 it('keeps the current shot while drafts are written', async () => {
   const r = await rig();
   await r.resume();
@@ -393,8 +403,10 @@ it('persists validated drafts, rejects malformed imports and forbids remote cont
     automaticEnabled: true,
   });
   const activeId = r.store.activePresetId;
-  const created = (await post({ action: 'create-preset', sourceId: activeId })).json();
-  const id = created.createdPresetId as string;
+  const created = (await post({ action: 'create-preset', sourceId: activeId })).json<{
+    createdPresetId: string;
+  }>();
+  const id = created.createdPresetId;
   expect(id).not.toBe(activeId);
   expect(
     (await post({ action: 'save-preset', id, preset: { ...exported, name: '草稿' } })).statusCode,

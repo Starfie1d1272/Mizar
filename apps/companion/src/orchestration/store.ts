@@ -63,6 +63,7 @@ export class OrchestrationStore {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
+    let migrate = false;
     try {
       const file = await safePath(this.directory, 'presets.json');
       const stat = await lstat(file);
@@ -74,6 +75,9 @@ export class OrchestrationStore {
       this.presets = catalog.presets;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      migrate = true;
+    }
+    if (migrate) {
       try {
         const file = await safePath(this.directory, 'preset.json');
         const stat = await lstat(file);
@@ -186,6 +190,7 @@ export class OrchestrationStore {
     });
   }
   saveAutomaticEnabled(automaticEnabled: boolean) {
+    this.pendingWrites++;
     const result = this.queue.then(async () => {
       if (!this.ready) throw new Error('camera_storage_unavailable');
       await safePath(this.directory);
@@ -193,7 +198,9 @@ export class OrchestrationStore {
       this.automaticEnabled = automaticEnabled;
     });
     this.queue = result.catch(() => {});
-    return result;
+    return result.finally(() => {
+      this.pendingWrites--;
+    });
   }
   map(name: string | null): OrchestrationPreset['maps'][number] | undefined {
     return this.preset.maps.find((m) => m.map === name);
