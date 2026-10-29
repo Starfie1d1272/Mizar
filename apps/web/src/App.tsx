@@ -1,3 +1,4 @@
+import { useRadarViewSource } from './realtime/radar-view-source';
 import { useLocalRead } from './preparation/client';
 import type { OverlayPolicy } from './preparation/desktop-overlay';
 import { ToolShell } from './patterns';
@@ -157,6 +158,7 @@ function ProgramRoute() {
     return () => window.removeEventListener('resize', resize);
   }, []);
   const radarClient = useLocalChannelConnection('radar');
+  const radarSource = useRadarViewSource(radarClient);
   const programClient = useLocalChannelConnection('program');
   const programConnection = useSyncExternalStore(
     programClient.subscribe,
@@ -232,7 +234,7 @@ function ProgramRoute() {
   const program = (
     <ProgramCueRendererBridge client={cueClient}>
       <ProgramPage
-        radarClient={radarClient}
+        radarSource={radarSource}
         connectionState={programConnection.state}
         resolvedPreset={resolved}
         snapshot={activeSnapshot}
