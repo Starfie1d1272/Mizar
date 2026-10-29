@@ -74,7 +74,8 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
     !preview &&
     (sceneId === 'waiting' || sceneId === 'intermap') &&
     scenes?.active === sceneId &&
-    scenes.director?.mode === 'auto' &&
+    (scenes.director?.mode === 'auto' ||
+      (scenes.director?.mode === 'blocked' && scenes.director.blockCause === 'telemetry')) &&
     !scenes.preparing &&
     clock !== 'paused' &&
     clock !== 'timeout_ct' &&

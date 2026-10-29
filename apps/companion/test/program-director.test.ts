@@ -93,6 +93,28 @@ function rig() {
 }
 
 describe('automatic Program choreography', () => {
+  it('identifies telemetry-only blocking without overriding manual hold or other blockers', async () => {
+    const r = rig();
+    r.program.status.telemetry = 'awaiting';
+    r.program.series!.bindingState = 'unbound';
+    await r.step();
+    expect(r.director.get()).toMatchObject({ mode: 'blocked', blockCause: 'telemetry' });
+    r.director.hold();
+    await r.step();
+    expect(r.director.get()).toMatchObject({ mode: 'manual', blockCause: null });
+    r.director.resume();
+    r.program.status.identity = 'mismatch';
+    await r.step();
+    expect(r.director.get()).toMatchObject({ mode: 'blocked', blockCause: null });
+    r.program.status.identity = 'unbound';
+    r.program.series!.bindingState = 'needs_operator';
+    await r.step();
+    expect(r.director.get()).toMatchObject({ mode: 'blocked', blockCause: null });
+    r.program.series!.bindingState = 'unbound';
+    r.program.status.context = 'stale';
+    await r.step();
+    expect(r.director.get()).toMatchObject({ mode: 'blocked', blockCause: null });
+  });
   it('re-evaluates a cancelled Take even when facts change again before its rejection', async () => {
     const r = rig();
     let release!: () => void;

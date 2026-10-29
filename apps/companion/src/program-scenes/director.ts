@@ -95,6 +95,7 @@ export class ProgramDirector {
     this.view = {
       ...this.view,
       mode: 'manual',
+      blockCause: null,
       readyToTake: null,
       reason: '手动保持，恢复自动后继续。',
     };
@@ -232,6 +233,7 @@ export class ProgramDirector {
       this.view = {
         ...this.view,
         mode: 'preparation',
+        blockCause: null,
         reason: null,
       };
       return;
@@ -241,7 +243,7 @@ export class ProgramDirector {
       if (!this.manual) this.resume();
     }
     if (this.failure && !this.manual) {
-      this.view = { ...this.view, mode: 'blocked', reason: this.failure };
+      this.view = { ...this.view, mode: 'blocked', reason: this.failure, blockCause: null };
       return;
     }
     const matchKey = this.contextKey(p);
@@ -277,6 +279,14 @@ export class ProgramDirector {
       this.view = {
         ...this.view,
         mode: this.manual ? 'manual' : 'blocked',
+        blockCause:
+          !this.manual &&
+          p.status.telemetry !== 'fresh' &&
+          p.status.context === 'fresh' &&
+          p.status.identity !== 'mismatch' &&
+          p.series?.bindingState !== 'needs_operator'
+            ? 'telemetry'
+            : null,
         reason: '比赛数据过期或归属未确认，保持当前画面。',
       };
       return;
@@ -285,6 +295,7 @@ export class ProgramDirector {
       this.view = {
         ...this.view,
         mode: this.manual ? 'manual' : 'blocked',
+        blockCause: null,
         reason: '比赛暂停，保持当前画面。',
       };
       return;
@@ -292,6 +303,7 @@ export class ProgramDirector {
     this.view = {
       ...this.view,
       mode: this.manual ? 'manual' : 'auto',
+      blockCause: null,
       reason: this.manual ? '手动保持，恢复自动后继续。' : null,
     };
     if (!paused && !this.manual) this.elapsed += delta;
