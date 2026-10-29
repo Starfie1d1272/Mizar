@@ -305,7 +305,7 @@ for (const useMulnx of [false, true]) {
           if (name === 'observer_command' && args?.action === 'connection-mode')
             return { useMulnx: preferMulnx };
           if (name === 'observer_command' && args?.action === 'start-configured') {
-            if (host.failConnection) throw new Error('游戏观战连接未确认，请检查后重试。');
+            if (host.failConnection) throw '游戏观战连接未确认，请检查后重试。';
             if (args?.expectedRevision !== '10000000-0000-4000-8000-000000000002')
               throw new Error('连接版本未传递');
             return { useMulnx: preferMulnx };
@@ -362,11 +362,25 @@ for (const useMulnx of [false, true]) {
     await expect(dialog.getByRole('button', { name: '复制游戏连接命令' })).toHaveCount(
       useMulnx ? 0 : 1,
     );
+    if (!useMulnx) {
+      await dialog.getByRole('button', { name: '复制游戏连接命令' }).click();
+      expect(await task.evaluate(() => navigator.clipboard.readText())).toBe(
+        'password "synthetic"; connect 127.0.0.1:27026',
+      );
+    }
+    if (process.env.MIZAR_GOTV_SCREENSHOTS) {
+      await task.screenshot({
+        path: `${process.env.MIZAR_GOTV_SCREENSHOTS}/${useMulnx ? 'mulnx' : 'standard'}.png`,
+      });
+    }
     await task.evaluate(() => {
       (window as typeof window & { failConnection: boolean }).failConnection = true;
     });
     await dialog.getByRole('button', { name: '确认本图连接' }).click();
-    await expect(dialog).toContainText('游戏观战连接未确认');
+    await expect(dialog).toContainText('游戏观战连接未确认，请检查后重试。');
+    await expect(dialog.getByRole('textbox').first()).toHaveValue(
+      'connect 127.0.0.1:27025;password synthetic',
+    );
     expect(writes).toHaveLength(1);
     await task.evaluate(() => {
       (window as typeof window & { failConnection: boolean }).failConnection = false;
