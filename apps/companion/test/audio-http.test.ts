@@ -133,6 +133,7 @@ test('HTTP audio mode switches all managed scenes while simulated OBS outputs ar
       } else if (type === 'GetInputDefaultSettings')
         result = { defaultInputSettings: { device_id: 'default' } };
       else if (type === 'GetProfileParameter') result = { parameterValue: 'default' };
+      else if (type === 'SetSceneItemTransform') result = {};
       else if (type === 'GetInputVolume') result = { inputVolumeMul: 0.75 };
       else if (type === 'GetInputMute') result = { inputMuted: false };
       else if (type === 'GetInputAudioMonitorType')
@@ -316,6 +317,97 @@ test('HTTP audio mode switches all managed scenes while simulated OBS outputs ar
         ).length,
         1,
       );
+    for (const list of items.values())
+      list.push({
+        sourceUuid: 'group',
+        sourceName: 'visual-group',
+        sceneItemId: nextId++,
+        sceneItemEnabled: true,
+        isGroup: true,
+      } as (typeof list)[number]);
+    inputs.push(
+      { inputUuid: 'bgm', inputName: '音乐', inputKind: 'ffmpeg_source' },
+      { inputUuid: 'stinger', inputName: '音效', inputKind: 'ffmpeg_source' },
+    );
+    for (const list of items.values())
+      for (const uuid of ['bgm', 'stinger']) {
+        const input = inputs.find((value) => value.inputUuid === uuid)!;
+        list.push({
+          sourceUuid: uuid,
+          sourceName: input.inputName,
+          sceneItemId: nextId++,
+          sceneItemEnabled: true,
+        });
+      }
+    const musicStore = new MusicStore(join(directory, 'music'));
+    await musicStore.load();
+    await musicStore.update((state) => {
+      state.sources = { bgm: 'bgm', stinger: 'stinger' };
+      state.monitorPreference = true;
+    });
+    const client = new OBSWebSocket();
+    await client.connect(`ws://127.0.0.1:${port}`, '', { rpcVersion: 1 });
+    const rpc: ObsRpc = {
+      call: (type, data) =>
+        (
+          client.call as (
+            name: string,
+            data?: Record<string, unknown>,
+          ) => Promise<Record<string, unknown>>
+        )(type, data),
+    };
+    try {
+      const safe = () =>
+        routing.musicMonitorSafe(rpc, `ws://127.0.0.1:${port}`, {
+          owner: musicStore.state.owner,
+          sources: musicStore.state.sources,
+          baseUrl: 'http://127.0.0.1',
+        });
+      assert.equal(await safe(), true);
+      const director = new MusicDirector(
+        musicStore,
+        { session: <T>(run: (obs: ObsRpc, epoch: number) => Promise<T>) => run(rpc, 1) } as never,
+        () => {
+          throw new Error('unexpected truth');
+        },
+        Date.now,
+        Math.random,
+        safe,
+        async () => 'independent',
+      );
+      await (
+        director as unknown as {
+          configureDefaultMonitor: (obs: ObsRpc, valid: () => boolean) => Promise<void>;
+        }
+      ).configureDefaultMonitor(rpc, () => true);
+      assert.equal(monitorModes.get('bgm'), 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT');
+      assert.equal(monitorModes.get('stinger'), 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT');
+      const musicApp = Fastify();
+      registerMusicRoutes(musicApp, musicStore, director, createLocalWebOriginPolicy());
+      registerMixerRoutes(musicApp, adapter, director, gameAudio, createLocalWebOriginPolicy());
+      const musicAddress = await musicApp.listen({ host: '127.0.0.1', port: 0 });
+      try {
+        const musicResponse = await fetch(`${musicAddress}/operator/music`, {
+          method: 'POST',
+          headers: { origin: musicAddress, 'content-type': 'application/json' },
+          body: JSON.stringify({ action: 'monitor', enabled: true }),
+        });
+        assert.equal(musicResponse.status, 200, await musicResponse.text());
+        const mixerResponse = await fetch(`${musicAddress}/local/v1/mixer`);
+        assert.equal(mixerResponse.status, 200);
+        const mixer = (await mixerResponse.json()) as {
+          channels: { remoteCommentary: { control: string; volume: number | null } };
+        };
+        assert.equal(mixer.channels.remoteCommentary.control, 'available');
+        assert.equal(mixer.channels.remoteCommentary.volume, 0.75);
+        assert.equal(monitorModes.get('bgm'), 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT');
+        assert.equal(monitorModes.get('stinger'), 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT');
+      } finally {
+        await musicApp.close();
+      }
+    } finally {
+      await client.disconnect();
+    }
     assert.equal(
       requests.some((type) => /StopStream|StopRecord/.test(type)),
       false,
@@ -323,6 +415,7 @@ test('HTTP audio mode switches all managed scenes while simulated OBS outputs ar
   } finally {
     await app.close();
     await adapter.close();
+    for (const socket of server.clients) socket.terminate();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await rm(directory, { recursive: true, force: true });
   }
