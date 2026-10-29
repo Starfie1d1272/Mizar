@@ -1,7 +1,7 @@
 import { PresetVisualPreview } from './PresetVisualPreview';
 import { useState } from 'react';
 import { useLocalRead } from '../preparation/client';
-import { Button, Checkbox, Panel, Select, StatusBanner } from '../ui';
+import { Button, Checkbox, Field, Panel, Select, StatusBanner } from '../ui';
 
 type Kind = 'hud' | 'program' | 'music' | 'camera';
 type Module = { id: string; kind: Kind; name: string; revision: string; value?: unknown };
@@ -87,6 +87,72 @@ function BindingEditor({
   );
 }
 
+function CreatePreset({
+  modules,
+  busy,
+  create,
+}: {
+  modules: Module[];
+  busy: boolean;
+  create: (name: string, bindings: Binding[]) => void;
+}) {
+  const [name, setName] = useState('');
+  const [selection, setSelection] = useState<Record<Kind, string>>({
+    hud: '',
+    program: '',
+    music: '',
+    camera: '',
+  });
+  const kinds: Kind[] = ['hud', 'program', 'music', 'camera'];
+  return (
+    <details>
+      <summary>创建方案</summary>
+      <p>选择资源并保存，使用方案时才切换播出。</p>
+      <Field
+        label="方案名称"
+        value={name}
+        maxLength={120}
+        onChange={(event) => setName(event.currentTarget.value)}
+      />
+      {kinds.map((kind) => (
+        <Select
+          key={kind}
+          label={labels[kind]}
+          value={selection[kind]}
+          onChange={(event) => {
+            const selected = event.currentTarget.value;
+            setSelection((value) => ({ ...value, [kind]: selected }));
+          }}
+        >
+          <option value="">{kind === 'hud' || kind === 'program' ? '请选择' : '关闭'}</option>
+          {modules
+            .filter((module) => module.kind === kind)
+            .map((module) => (
+              <option key={module.id} value={module.id}>
+                {module.name}
+              </option>
+            ))}
+        </Select>
+      ))}
+      <Button
+        disabled={busy || !name.trim() || !selection.hud || !selection.program}
+        onClick={() =>
+          create(
+            name.trim(),
+            kinds.map((kind): Binding =>
+              selection[kind]
+                ? { kind, mode: 'use', moduleId: selection[kind] }
+                : { kind, mode: 'off' },
+            ),
+          )
+        }
+      >
+        保存新方案
+      </Button>
+    </details>
+  );
+}
+
 export function BroadcastPresets({ query }: { query: string }) {
   const [refresh, setRefresh] = useState(0);
   const view = useLocalRead<View>('/local/v1/broadcast-presets', 2000, refresh);
@@ -97,6 +163,45 @@ export function BroadcastPresets({ query }: { query: string }) {
   const [notice, setNotice] = useState<{ tone: 'success' | 'danger'; message: string } | null>(
     null,
   );
+  async function createPreset(name: string, bindings: Binding[]) {
+    if (!view || busy) return;
+    setBusy(true);
+    setNotice(null);
+    try {
+      const id = crypto.randomUUID();
+      const response = await fetch('/operator/broadcast-presets/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          preset: {
+            schemaVersion: 1,
+            id,
+            revision: crypto.randomUUID(),
+            name,
+            origin: null,
+            bindings,
+            opaqueModules: [],
+          },
+          expectedPresetRevision: null,
+          modules: [],
+        }),
+      });
+      if (!response.ok)
+        throw new Error(
+          response.status === 409 ? '配置已变化，请刷新后重试。' : '方案未保存，请检查选择后重试。',
+        );
+      setExpanded((previous) => new Set(previous).add(id));
+      setNotice({ tone: 'success', message: `已保存「${name}」，尚未使用。` });
+    } catch (error) {
+      setNotice({
+        tone: 'danger',
+        message: error instanceof Error ? error.message : '方案未保存，请重试。',
+      });
+    } finally {
+      setBusy(false);
+      setRefresh((value) => value + 1);
+    }
+  }
   async function saveBindings(preset: Preset, bindings: Binding[]) {
     if (!view || busy) return;
     setBusy(true);
@@ -135,7 +240,10 @@ export function BroadcastPresets({ query }: { query: string }) {
           (item) => item.id === binding.moduleId && item.kind === binding.kind,
         );
         if (!module) {
-          setNotice({ tone: 'danger', message: '方案配置不完整，请刷新后检查。' });
+          setNotice({
+            tone: 'danger',
+            message: `方案缺少${labels[binding.kind]}，请在方案配置中选择可用资源。`,
+          });
           return null;
         }
         revisions[binding.kind] = module.revision;
@@ -356,6 +464,13 @@ export function BroadcastPresets({ query }: { query: string }) {
           ) : null}
         </div>
       </div>
+      {view && (
+        <CreatePreset
+          modules={view.modules}
+          busy={busy}
+          create={(name, bindings) => void createPreset(name, bindings)}
+        />
+      )}
       {notice ? <StatusBanner tone={notice.tone}>{notice.message}</StatusBanner> : null}
       {!view ? (
         <StatusBanner tone="warning">播出方案暂不可用，请检查本地制播服务。</StatusBanner>

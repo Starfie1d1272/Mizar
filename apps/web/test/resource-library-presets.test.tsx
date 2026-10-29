@@ -50,7 +50,7 @@ it('uses the inspected scheme and module revisions only on an explicit action', 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(element.textContent).toContain('已修改，尚未使用');
     expect(element.textContent).not.toContain('当前使用');
-    const select = [...element.querySelectorAll('select')][2]!;
+    const select = [...element.querySelectorAll('.resource-library__preset select')][2]!;
     await act(async () => {
       select.value = 'm';
       select.dispatchEvent(new Event('change', { bubbles: true }));
@@ -186,6 +186,71 @@ it('exports selected schemes together without using them', async () => {
     act(() => root.unmount());
     element.remove();
     click.mockRestore();
+    vi.unstubAllGlobals();
+  }
+});
+
+it('creates a saved scheme without activating it', async () => {
+  const view = {
+    modules: [
+      { id: 'h', kind: 'hud', name: 'HUD', revision: 'hr' },
+      { id: 'p', kind: 'program', name: 'Pulse', revision: 'pr' },
+    ],
+    presets: [],
+    active: { revision: 'active', sourcePreset: null, adjusted: false },
+  };
+  const fetchMock = vi.fn((path: string, options?: RequestInit) => {
+    void options;
+    return Promise.resolve({ ok: true, json: async () => view });
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  const element = document.createElement('div');
+  document.body.append(element);
+  const root = createRoot(element);
+  try {
+    await act(async () => {
+      root.render(<BroadcastPresets query="" />);
+      await Promise.resolve();
+    });
+    const input = element.querySelector('input')!;
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+    act(() => {
+      setter.call(input, '新方案');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const selects = element.querySelectorAll('select');
+    act(() => {
+      selects[0]!.value = 'h';
+      selects[0]!.dispatchEvent(new Event('change', { bubbles: true }));
+      selects[1]!.value = 'p';
+      selects[1]!.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await act(async () => {
+      [...element.querySelectorAll('button')]
+        .find((button) => button.textContent === '保存新方案')!
+        .click();
+      await Promise.resolve();
+    });
+    const call = fetchMock.mock.calls.find(
+      ([path]) => path === '/operator/broadcast-presets/save',
+    )!;
+    expect(JSON.parse(call[1]!.body as string)).toMatchObject({
+      expectedPresetRevision: null,
+      modules: [],
+      preset: {
+        name: '新方案',
+        bindings: [
+          { kind: 'hud', mode: 'use', moduleId: 'h' },
+          { kind: 'program', mode: 'use', moduleId: 'p' },
+          { kind: 'music', mode: 'off' },
+          { kind: 'camera', mode: 'off' },
+        ],
+      },
+    });
+    expect(fetchMock.mock.calls.some(([path]) => path.endsWith('/apply'))).toBe(false);
+  } finally {
+    act(() => root.unmount());
+    element.remove();
     vi.unstubAllGlobals();
   }
 });
