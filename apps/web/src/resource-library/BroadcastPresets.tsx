@@ -158,10 +158,10 @@ function CreatePreset({
 
 export function BroadcastPresets({
   query,
-  focusPresetId,
+  focusPreset,
 }: {
   query: string;
-  focusPresetId?: string | null;
+  focusPreset?: { id: string; request: number } | null;
 }) {
   const [refresh, setRefresh] = useState(0);
   const view = useLocalRead<View>('/local/v1/broadcast-presets', 2000, refresh);
@@ -175,19 +175,20 @@ export function BroadcastPresets({
   );
   const focusedPreset = useRef<string | null>(null);
   useEffect(() => {
-    if (!focusPresetId) {
+    if (!focusPreset) {
       focusedPreset.current = null;
       return;
     }
+    const token = `${focusPreset.id}:${focusPreset.request}`;
     if (
-      focusedPreset.current === focusPresetId ||
-      !view?.presets.some((preset) => preset.id === focusPresetId)
+      focusedPreset.current === token ||
+      !view?.presets.some((preset) => preset.id === focusPreset.id)
     )
       return;
-    focusedPreset.current = focusPresetId;
-    setExpanded((previous) => new Set(previous).add(focusPresetId));
-    document.getElementById(`preset-${focusPresetId}`)?.scrollIntoView?.({ block: 'nearest' });
-  }, [focusPresetId, view]);
+    focusedPreset.current = token;
+    setExpanded((previous) => new Set(previous).add(focusPreset.id));
+    document.getElementById(`preset-${focusPreset.id}`)?.scrollIntoView?.({ block: 'nearest' });
+  }, [focusPreset, view]);
   async function createPreset(name: string, bindings: Binding[]) {
     if (!view || busy) return;
     setBusy(true);

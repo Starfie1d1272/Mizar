@@ -6,6 +6,7 @@ import fixture from '../../../tests/fixtures/rivalhub-provider-stats-v1.json';
 
 const controls = vi.hoisted(() => ({
   mode: 'auto',
+  unavailable: false,
   matchId: '00000000-0000-4000-8000-000000000001',
 }));
 vi.mock('@mizar/protocol/program-scenes', () => ({
@@ -24,18 +25,20 @@ vi.mock('../src/realtime/hud-config-client', () => ({
 vi.mock('../src/realtime/broadcast-display-client', () => ({
   useBroadcastDisplayConfig: () => ({
     status: 'ready',
-    current: {
-      hud: { renderer: 'native', config: {} },
-      program: {
-        tokens: {},
-        assets: {
-          'pulse.background': {
-            resource: { id: 'local:test', version: '1', digest: 'a'.repeat(64) },
-            fileId: 'background',
+    current: controls.unavailable
+      ? null
+      : {
+          hud: { renderer: 'native', config: {} },
+          program: {
+            tokens: {},
+            assets: {
+              'pulse.background': {
+                resource: { id: 'local:test', version: '1', digest: 'a'.repeat(64) },
+                fileId: 'background',
+              },
+            },
           },
         },
-      },
-    },
   }),
 }));
 vi.mock('../src/realtime', () => {
@@ -58,6 +61,7 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   controls.mode = 'auto';
+  controls.unavailable = false;
 });
 it('preserves the configured background when the statistics rotation starts and stops', async () => {
   vi.useFakeTimers();
@@ -96,6 +100,31 @@ it('preserves the configured background when the statistics rotation starts and 
     expect(host.querySelector('[data-testid=scene]')?.getAttribute('data-background')).toContain(
       '/local/v1/broadcast-assets?',
     );
+  } finally {
+    act(() => root.unmount());
+  }
+});
+
+it('does not render a default scene when the saved scene has not been verified', async () => {
+  controls.unavailable = true;
+  vi.stubGlobal('matchMedia', () => ({
+    matches: false,
+    addEventListener() {},
+    removeEventListener() {},
+  }));
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => Response.json({ match: { matchId: controls.matchId } })),
+  );
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  try {
+    await act(async () => {
+      root.render(<ProgramScenePage sceneId="waiting" />);
+      await Promise.resolve();
+    });
+    expect(host.querySelector('[data-testid=scene]')).toBeNull();
+    expect(host.querySelector('[data-testid=insert]')).toBeNull();
   } finally {
     act(() => root.unmount());
   }
