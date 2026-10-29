@@ -662,7 +662,9 @@ export function App() {
   if (pathname === '/program/bp-compact') return <BpPage compact />;
   if (pathname === '/workspace') return <WorkspacePreview />;
   if (pathname === '/workspace/review')
-    return new URLSearchParams(window.location.search).get('kind') === 'connection' ? null : (
+    return ['connection', 'next-connection'].includes(
+      new URLSearchParams(window.location.search).get('kind') ?? '',
+    ) ? null : (
       <WorkspaceReview />
     );
   if (pathname === '/workspace/left') return <WorkspaceLeft />;
