@@ -31,6 +31,13 @@ const commandSchema = z.discriminatedUnion('action', [
     })
     .strict(),
   z.object({ action: z.literal('configure'), preset: orchestrationPresetSchema }).strict(),
+  z.strictObject({ action: z.literal('create-preset'), sourceId: z.uuid().optional() }),
+  z.strictObject({
+    action: z.literal('save-preset'),
+    id: z.uuid(),
+    preset: orchestrationPresetSchema,
+  }),
+  z.strictObject({ action: z.literal('activate-preset'), id: z.uuid() }),
   z.object({ action: z.enum(['connect', 'disconnect', 'hold', 'skip']) }).strict(),
   z
     .object({
@@ -63,6 +70,8 @@ export function registerOrchestrationRoutes(
     policy.mode === 'loopback' && checkLocalWebOrigin(policy, origin).allowed;
   const view = () => ({
     preset: director.store.preset,
+    activePresetId: director.store.activePresetId,
+    presets: director.store.presets,
     automaticEnabled: director.store.automaticEnabled,
     ready: director.store.ready,
     status: director.get(),
@@ -164,7 +173,22 @@ export function registerOrchestrationRoutes(
     let checkingTool = false;
     try {
       const body = commandSchema.parse(request.body);
-      if (body.action === 'set-automatic') {
+      let createdPresetId: string | undefined;
+      if (body.action === 'create-preset') {
+        createdPresetId = await director.store.createPreset(body.sourceId);
+      } else if (body.action === 'save-preset') {
+        await director.store.savePreset(body.id, body.preset);
+      } else if (body.action === 'activate-preset') {
+        director.invalidatePreparation('正在启用预设。');
+        try {
+          await director.store.activatePreset(body.id, async (preset) => {
+            for (const map of preset.maps)
+              if (map.openingSound) await music.trackPath(map.openingSound.id);
+          });
+        } finally {
+          director.invalidatePreparation('正在准备运镜。');
+        }
+      } else if (body.action === 'set-automatic') {
         if (!session?.canPrepare?.()) throw new Error('camera_settings_preparation_required');
         await director.store.saveAutomaticEnabled(body.enabled);
       } else if (body.action === 'check-tool') {
@@ -196,7 +220,7 @@ export function registerOrchestrationRoutes(
         director.invalidatePreparation('预设已保存，正在准备运镜。');
       } else
         await director.command(body.action, body.action === 'resume' ? body.expected : undefined);
-      return view();
+      return { ...view(), ...(createdPresetId ? { createdPresetId } : {}) };
     } catch (error) {
       request.log.error(
         { stage: 'camera_operation', err: error, result: 'failure' },
@@ -212,13 +236,19 @@ export function registerOrchestrationRoutes(
             ? '请先结束制作，再修改自动运镜设置。'
             : error instanceof Error && error.message === 'camera_audition_unavailable'
               ? '镜头暂不能播放，请先停止当前镜头并检查连接。'
-              : error instanceof Error && error.message === 'camera_pack_apply_unconfirmed'
-                ? '运镜准备失败，请检查游戏连接后重试。'
-                : error instanceof Error && error.message === 'camera_pack_unconfirmed'
-                  ? '运镜准备未完成，请检查当前地图和预设后重试。'
-                  : error instanceof Error && error.message === 'camera_prepare_unavailable'
-                    ? '暂不能准备运镜，请检查游戏连接和当前地图。'
-                    : '操作未完成，请检查当前地图、连接、预设与本机音频。',
+              : error instanceof Error && error.message === 'camera_stop_unconfirmed'
+                ? '停止未确认，请检查游戏连接后重试。'
+                : error instanceof Error && error.message === 'camera_status_unsupported'
+                  ? '当前运镜工具版本不支持此功能，请更新至支持的版本。'
+                  : error instanceof Error && error.message === 'camera_status_unconfirmed'
+                    ? '无法确认运镜状态，请检查游戏连接和工具版本。'
+                    : error instanceof Error && error.message === 'camera_pack_apply_unconfirmed'
+                      ? '运镜准备失败，请检查游戏连接后重试。'
+                      : error instanceof Error && error.message === 'camera_pack_unconfirmed'
+                        ? '运镜准备未完成，请检查当前地图和预设后重试。'
+                        : error instanceof Error && error.message === 'camera_prepare_unavailable'
+                          ? '暂不能准备运镜，请检查游戏连接和当前地图。'
+                          : '操作未完成，请检查当前地图、连接、预设与本机音频。',
         requestId: request.id,
       });
     }

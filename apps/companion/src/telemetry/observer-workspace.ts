@@ -16,9 +16,9 @@ import type { ObserverSettingsStore } from './observer-settings.js';
 import { sendObserverGameCommand, observerConnectCommand } from './observer-game-control.js';
 import { MatchNameSync, matchNames } from './match-names.js';
 import type { MatchContextBinding } from '../match-context/lkg-store.js';
+import observerComponent from './observer-component.json' with { type: 'json' };
 
-export const OBSERVER_VERSION = '1.0.0';
-const SOURCE_SHA = '4b07fd0ddfb775d8fa1548bddfd98dc78c7fce93';
+export const OBSERVER_VERSION = observerComponent.version;
 /** Create only controlled ancestors; the pinned driver owns the unique final directory. */
 export async function prepareObserverOutputParent(state: string): Promise<string> {
   await safePath(state);
@@ -300,7 +300,7 @@ export function installedWorkspaceObserver(
         .parse(JSON.parse(await readFile(join(component, 'manifest.json'), 'utf8')) as unknown);
       if (
         manifest.componentVersion !== OBSERVER_VERSION ||
-        manifest.sourceSha !== SOURCE_SHA ||
+        manifest.sourceSha !== observerComponent.sourceSha ||
         manifest.distribution !== 'external-node'
       )
         throw new Error('observer_component_version');
