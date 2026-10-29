@@ -176,7 +176,10 @@ export function registerOrchestrationRoutes(
             ? map?.opening
             : body.stage === 'round'
               ? map?.rounds[body.index ?? -1]
-              : map?.stages[body.stage];
+              : (body.stage === 'tactical' || body.stage === 'technical') &&
+                  body.index !== undefined
+                ? map?.pauseCandidates[body.stage][body.index]
+                : map?.stages[body.stage];
         if (!shot) throw new Error('camera_shot_missing');
         await director.audition(shot, body.expected);
       } else if (body.action === 'configure') {

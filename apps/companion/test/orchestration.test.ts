@@ -216,6 +216,16 @@ it('map/source changes and reconnect invalidate readiness while preserving autom
 });
 it('pause labels share one instance and halftime wins over paused', async () => {
   const r = await rig();
+  const map = r.store.preset.maps[0]!;
+  await r.store.save({
+    ...r.store.preset,
+    maps: [
+      {
+        ...map,
+        pauseCandidates: { tactical: [{ macro: '暂停候选', maxMs: 2000 }], technical: [] },
+      },
+    ],
+  });
   await r.resume();
   r.program.map.phase = 'live';
   r.program.map.roundNumber = 5;
@@ -224,7 +234,7 @@ it('pause labels share one instance and halftime wins over paused', async () => 
     endsInSeconds: 30,
   };
   await r.tick();
-  expect(r.calls.at(-1)).toEqual({ type: 'CamMacro/Play', macro: '暂停' });
+  expect(r.calls.at(-1)).toEqual({ type: 'CamMacro/Play', macro: '暂停候选' });
   r.program.clock.phase = 'timeout_t';
   await r.tick();
   expect(r.calls).toHaveLength(1);

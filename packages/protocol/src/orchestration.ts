@@ -28,6 +28,13 @@ export const cameraMapSchema = z
     opening: cameraShotSchema.nullable().default(null),
     openingSound: musicTrackSchema.nullable().default(null),
     rounds: z.array(cameraShotSchema).max(64).default([]),
+    pauseCandidates: z
+      .object({
+        tactical: z.array(cameraShotSchema).max(64).default([]),
+        technical: z.array(cameraShotSchema).max(64).default([]),
+      })
+      .strict()
+      .default({ tactical: [], technical: [] }),
     stages: z
       .object({
         warmup: cameraShotSchema.nullable().default(null),

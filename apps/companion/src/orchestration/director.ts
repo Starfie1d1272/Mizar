@@ -239,6 +239,9 @@ export class CameraDirector {
           : map.rounds;
       if (!candidates.length) candidates.push(...map.rounds);
       shot = candidates[Math.floor(this.random() * candidates.length)] ?? null;
+    } else if (edge.stage === 'tactical' || edge.stage === 'technical') {
+      const candidates = map.pauseCandidates[edge.stage];
+      shot = candidates[Math.floor(this.random() * candidates.length)] ?? map.stages[edge.stage];
     } else if (edge.stage in map.stages) shot = map.stages[edge.stage as keyof typeof map.stages];
     if (shot) this.dispatch(shot, edge.key, edge.key);
   }
