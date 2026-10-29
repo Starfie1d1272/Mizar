@@ -185,7 +185,7 @@ export function DiagnosticDeliverySettings({
       {value?.deletionPending ? (
         <StatusBanner tone="warning">删除请求等待同步。</StatusBanner>
       ) : null}
-      {value?.error && value.closedReason !== 'policy_changed' ? (
+      {(value?.error || value?.transportFailure) && value.closedReason !== 'policy_changed' ? (
         <StatusBanner tone="warning">
           {value.transportFailure
             ? `${{ enrollment: '登记', permit: '发送许可', upload: '上传', withdrawal: '删除请求' }[value.transportFailure.phase]}未确认${value.transportFailure.status ? `（HTTP ${value.transportFailure.status}）` : ''}；将按计划重试。`
