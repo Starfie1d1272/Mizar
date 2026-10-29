@@ -66,14 +66,22 @@ function releaseTool(resource: ResourceRef): MulnxToolRef {
 /** Export one complete scheme from a single configuration snapshot. */
 export async function exportPresetPack(input: {
   document: BroadcastConfigDocument;
-  presetId: string;
+  presetId?: string;
   presetIds?: string[];
+  moduleIds?: string[];
   music: MusicStore;
   resources: MusicPackResources;
   metadata: { packageId: string; version: string; name: string; author: string };
 }): Promise<Buffer> {
-  const ids = input.presetIds ?? [input.presetId];
-  if (!ids.length || ids.length > 32 || new Set(ids).size !== ids.length)
+  const ids = input.presetIds ?? (input.presetId ? [input.presetId] : []);
+  const requestedModules = input.moduleIds ?? [];
+  if (
+    (!ids.length && !requestedModules.length) ||
+    ids.length > 32 ||
+    requestedModules.length > 128 ||
+    new Set(ids).size !== ids.length ||
+    new Set(requestedModules).size !== requestedModules.length
+  )
     throw new Error('invalid_request');
   const presets = ids.map((id) => {
     const preset = input.document.presets.find((item) => item.id === id);
@@ -81,6 +89,14 @@ export async function exportPresetPack(input: {
     if (preset.opaqueModules.length) throw new Error('capability_unsupported');
     return { preset, bound: boundModules(preset, input.document.modules) };
   });
+  const modules = new Map(
+    input.document.modules
+      .filter((item) => requestedModules.includes(item.id))
+      .map((item) => [item.id, item]),
+  );
+  if (modules.size !== requestedModules.length) throw new Error('module_missing');
+  for (const { bound } of presets)
+    for (const module of bound.values()) if (module) modules.set(module.id, module);
   const audio = new Map<string, { id: string; path: string; data: Buffer }>();
   const addAudio = async (ref: AssetRef) => {
     if (audio.has(assetKey(ref))) return;
@@ -94,14 +110,12 @@ export async function exportPresetPack(input: {
       data: file.bytes,
     });
   };
-  for (const { bound } of presets) {
-    const music = bound.get('music'),
-      camera = bound.get('camera');
-    if (music?.kind === 'music')
+  for (const module of modules.values()) {
+    if (module.kind === 'music')
       for (const group of MUSIC_GROUPS)
-        for (const track of music.value.groups[group].tracks) await addAudio(track.asset);
-    if (camera?.kind === 'camera')
-      for (const map of camera.value.maps) {
+        for (const track of module.value.groups[group].tracks) await addAudio(track.asset);
+    if (module.kind === 'camera')
+      for (const map of module.value.maps) {
         if (map.openingSound) await addAudio(map.openingSound.asset);
       }
   }
@@ -132,39 +146,38 @@ export async function exportPresetPack(input: {
   const files: FileEntry[] = [];
   const moduleIds = new Map<string, string>();
   const presetEntries: { entryId: string; schemaVersion: 1; fileId: string }[] = [];
-  for (const [index, { preset, bound }] of presets.entries()) {
-    for (const module of bound.values()) {
-      if (!module || moduleIds.has(module.id)) continue;
-      const entryId = `module-${moduleIds.size + 1}`;
-      moduleIds.set(module.id, entryId);
-      const template = exportModule(module, {
-        asset(ref) {
-          const local = audio.get(assetKey(ref));
-          return local
-            ? { package: '$self', fileId: local.id }
-            : { package: alias(ref.resource), fileId: ref.fileId };
-        },
-        resource(ref) {
-          return { package: alias(ref) };
-        },
-        tool(ref) {
-          return { package: alias(releaseResource(ref)) };
-        },
-      });
-      entries.push({
-        entryId,
-        module: module.kind,
-        schemaVersion: module.schemaVersion,
-        fileId: entryId,
-        required: true,
-      });
-      files.push({
-        id: entryId,
-        path: `modules/${entryId}.json`,
-        mediaType: 'application/json',
-        data: Buffer.from(JSON.stringify(template)),
-      });
-    }
+  for (const module of modules.values()) {
+    const entryId = `module-${moduleIds.size + 1}`;
+    moduleIds.set(module.id, entryId);
+    const template = exportModule(module, {
+      asset(ref) {
+        const local = audio.get(assetKey(ref));
+        return local
+          ? { package: '$self', fileId: local.id }
+          : { package: alias(ref.resource), fileId: ref.fileId };
+      },
+      resource(ref) {
+        return { package: alias(ref) };
+      },
+      tool(ref) {
+        return { package: alias(releaseResource(ref)) };
+      },
+    });
+    entries.push({
+      entryId,
+      module: module.kind,
+      schemaVersion: module.schemaVersion,
+      fileId: entryId,
+      required: true,
+    });
+    files.push({
+      id: entryId,
+      path: `modules/${entryId}.json`,
+      mediaType: 'application/json',
+      data: Buffer.from(JSON.stringify(template)),
+    });
+  }
+  for (const [index, { preset }] of presets.entries()) {
     const entryId = index === 0 ? 'main' : `preset-${index + 1}`;
     const fileId = `file-${entryId}`;
     const bindings = preset.bindings.map((binding) =>
@@ -186,7 +199,7 @@ export async function exportPresetPack(input: {
     format: 'mizar.pack',
     formatVersion: 1,
     ...input.metadata,
-    defaultPreset: 'main',
+    ...(presetEntries.length ? { defaultPreset: 'main' } : {}),
     modules: entries,
     presets: presetEntries,
     dependencies: [...dependencies.values()],
@@ -213,7 +226,10 @@ export async function importPresetPack(input: {
 }) {
   const archive = await readPackArchive(input.zip);
   const { manifest } = archive;
-  if (!manifest.presets.length || manifest.dependencies.some((d) => d.delivery.kind !== 'external'))
+  if (
+    (!manifest.presets.length && !manifest.modules.length) ||
+    manifest.dependencies.some((d) => d.delivery.kind !== 'external')
+  )
     throw new Error('capability_unsupported');
   const jsonIds = new Set([...manifest.modules, ...manifest.presets].map((entry) => entry.fileId));
   const audioIds = new Set<string>();

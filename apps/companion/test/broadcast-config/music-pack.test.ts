@@ -145,6 +145,44 @@ it('round trips real music owner configuration to independent drafts without act
         payload: exported.rawPayload,
       });
       expect(importedHttp.statusCode).toBe(200);
+      // The same endpoints accept each standalone module without creating a scheme.
+      for (const module of initial.modules) {
+        const exportedModule = await app.inject({
+          method: 'POST',
+          url: '/operator/resource-library/export-pack',
+          headers: { origin: 'http://127.0.0.1:3000' },
+          payload: {
+            modules: [{ moduleId: module.id, expectedRevision: module.revision }],
+            presets: [],
+          },
+        });
+        expect(exportedModule.statusCode).toBe(200);
+        const archive = await readPackArchive(exportedModule.rawPayload);
+        expect(archive.manifest.modules.map((item) => item.module)).toEqual([module.kind]);
+        expect(archive.manifest.presets).toHaveLength(0);
+        const importedModule = await app.inject({
+          method: 'POST',
+          url: '/operator/resource-library/import-pack',
+          headers: { origin: 'http://127.0.0.1:3000', 'content-type': 'application/x-mizarpack' },
+          payload: exportedModule.rawPayload,
+        });
+        expect(importedModule.statusCode).toBe(200);
+        const result = importedModule.json();
+        expect(result.reused).toBe(false);
+        expect(
+          store.snapshot.modules.find(
+            (item) => item.id === result.mapping.moduleEntries['module-1'][0],
+          )?.kind,
+        ).toBe(module.kind);
+        const repeatedModule = await app.inject({
+          method: 'POST',
+          url: '/operator/resource-library/import-pack',
+          headers: { origin: 'http://127.0.0.1:3000', 'content-type': 'application/x-mizarpack' },
+          payload: exportedModule.rawPayload,
+        });
+        expect(repeatedModule.json()).toEqual({ mapping: result.mapping, reused: true });
+      }
+      expect(store.snapshot.active).toEqual(before);
       const originalPreset = initial.presets[0]!;
       const moduleRevisions = Object.fromEntries(
         originalPreset.bindings.flatMap((binding) =>
@@ -198,9 +236,10 @@ it('round trips real music owner configuration to independent drafts without act
       );
       const bundle = await app.inject({
         method: 'POST',
-        url: '/operator/resource-library/export-preset-bundle',
+        url: '/operator/resource-library/export-pack',
         headers: { origin: 'http://127.0.0.1:3000' },
         payload: {
+          modules: [],
           presets: [
             {
               presetId: originalPreset.id,

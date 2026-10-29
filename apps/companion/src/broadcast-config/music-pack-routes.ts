@@ -40,6 +40,105 @@ export function registerMusicPackRoutes(
     (_request, body, done) => done(null, body),
   );
   app.post(
+    '/operator/resource-library/import-pack',
+    { bodyLimit: PACK_LIMITS.total },
+    async (request, reply) => {
+      if (!allowed(request.headers.origin))
+        return reply.code(403).send({ error: 'operator_origin_forbidden' });
+      if (!ready()) return reply.code(503).send({ error: 'broadcast_config_unavailable' });
+      try {
+        if (!Buffer.isBuffer(request.body)) throw new Error('package_invalid');
+        return await importPresetPack({ zip: request.body, store, resources });
+      } catch (error) {
+        if (error instanceof Error && error.message === 'identity_conflict')
+          return reply.code(409).send({ error: 'identity_conflict' });
+        return reply.code(400).send({ error: 'package_invalid' });
+      }
+    },
+  );
+  app.post(
+    '/operator/resource-library/export-pack',
+    { bodyLimit: 32 * 1024 },
+    async (request, reply) => {
+      if (!allowed(request.headers.origin))
+        return reply.code(403).send({ error: 'operator_origin_forbidden' });
+      if (!ready()) return reply.code(503).send({ error: 'broadcast_config_unavailable' });
+      const parsed = z
+        .strictObject({
+          modules: z.array(exportRequest).max(128),
+          presets: z.array(presetExportRequest).max(32),
+        })
+        .safeParse(request.body);
+      if (
+        !parsed.success ||
+        (!parsed.data.modules.length && !parsed.data.presets.length) ||
+        new Set(parsed.data.modules.map((item) => item.moduleId)).size !==
+          parsed.data.modules.length ||
+        new Set(parsed.data.presets.map((item) => item.presetId)).size !==
+          parsed.data.presets.length
+      )
+        return reply.code(400).send({ error: 'invalid_request' });
+      const document = store.snapshot;
+      try {
+        const modules = parsed.data.modules.map((item) => {
+          const module = document.modules.find((value) => value.id === item.moduleId);
+          if (!module) throw new Error('module_missing');
+          if (module.revision !== item.expectedRevision) throw new Error('revision_conflict');
+          return module;
+        });
+        const presets = parsed.data.presets.map((item) => {
+          const preset = document.presets.find((value) => value.id === item.presetId);
+          if (!preset) throw new Error('preset_missing');
+          if (preset.revision !== item.expectedRevision) throw new Error('revision_conflict');
+          const bound = boundModules(preset, document.modules);
+          for (const [kind, module] of bound)
+            if (module && item.expectedModuleRevisions[kind] !== module.revision)
+              throw new Error('revision_conflict');
+          return { preset, bound };
+        });
+        const zip = await exportPresetPack({
+          document,
+          moduleIds: modules.map((item) => item.id),
+          presetIds: presets.map(({ preset }) => preset.id),
+          music,
+          resources,
+          metadata: {
+            packageId: randomUUID(),
+            version: '1.0.0',
+            name: presets[0]?.preset.name ?? modules[0]!.name,
+            author: '',
+          },
+        });
+        const current = store.snapshot;
+        if (
+          modules.some(
+            (item) => current.modules.find((m) => m.id === item.id)?.revision !== item.revision,
+          ) ||
+          presets.some(
+            ({ preset, bound }) =>
+              current.presets.find((p) => p.id === preset.id)?.revision !== preset.revision ||
+              [...bound.values()].some(
+                (item) =>
+                  item && current.modules.find((m) => m.id === item.id)?.revision !== item.revision,
+              ),
+          )
+        )
+          throw new Error('revision_conflict');
+        return reply
+          .header('cache-control', 'no-store')
+          .header('content-disposition', 'attachment; filename="resource.mizarpack"')
+          .type('application/x-mizarpack')
+          .send(zip);
+      } catch (error) {
+        if (error instanceof Error && error.message === 'revision_conflict')
+          return reply.code(409).send({ error: 'revision_conflict' });
+        if (error instanceof Error && ['module_missing', 'preset_missing'].includes(error.message))
+          return reply.code(404).send({ error: error.message });
+        return reply.code(422).send({ error: 'export_failed' });
+      }
+    },
+  );
+  app.post(
     '/operator/resource-library/import-music-pack',
     { bodyLimit: PACK_LIMITS.total },
     async (request, reply) => {
