@@ -4,6 +4,8 @@ export {
   selectProgramSafeRuntimeView,
 } from './program-safe-runtime.js';
 export { projectObserverAssist, ObserverHintTimeline } from './observer-assist.js';
+export { ProgramClockTracker } from './program-clock.js';
+export type { ProgramClockSample } from './program-clock.js';
 export { projectProgram, projectSeries } from './program.js';
 export {
   observedPlayerDisplayName,
@@ -22,7 +24,7 @@ export type {
   ProgramSafeRuntimeFreshness,
   ProgramSafeRuntimeView,
 } from './program-safe-runtime.js';
-export type { ObserverAssistProjection } from './observer-assist.js';
+export type { ObserverAssistProjection, ProgramClock } from './observer-assist.js';
 export type {
   ProgramBombProjection,
   ProgramBombActionProjection,
