@@ -26,7 +26,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   sync:
-    if: github.repository == 'Starfie1d1272/Mizar' && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.path == '.github/workflows/release-promotion.yml' && contains(fromJSON('["workflow_dispatch","workflow_run"]'), github.event.workflow_run.event)))
+    if: github.repository == 'Starfie1d1272/Mizar' && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && !startsWith(github.event.workflow_run.display_title, 'Stage draft ') && github.event.workflow_run.path == '.github/workflows/release-promotion.yml' && contains(fromJSON('["workflow_dispatch","workflow_run"]'), github.event.workflow_run.event)))
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:

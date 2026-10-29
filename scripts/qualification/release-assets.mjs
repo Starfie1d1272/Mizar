@@ -106,11 +106,104 @@ export async function reconcileAssets(release, ref, identity, expected, readExis
   for (const asset of missing) await upload(asset.path);
   return missing;
 }
+// Drafts without a tag are addressed by release ID; never publish or create a tag here.
+export async function stageDraftAssets(releaseId, identity, expected) {
+  if (
+    !/^\d+$/.test(releaseId) ||
+    !/^v\d+\.\d+\.\d+$/.test(identity.tag) ||
+    !/^[a-f0-9]{40}$/.test(identity.gitSha) ||
+    expected.length !== 6 ||
+    new Set(expected.map((asset) => asset.name)).size !== expected.length
+  )
+    throw new Error('Invalid draft identity or asset inventory');
+  const api = (args) =>
+    execFileSync('gh', ['api', ...args], {
+      stdio: 'pipe',
+      timeout: 600000,
+      maxBuffer: 256 * 1024 * 1024,
+    });
+  try {
+    api([`repos/${repo}/git/ref/tags/${identity.tag}`]);
+    throw new Error('Tag already exists; use normal reconciliation');
+  } catch (error) {
+    if (!error.stderr?.toString().includes('(HTTP 404)')) throw error;
+  }
+  const getDraft = () => {
+    const release = JSON.parse(api([`repos/${repo}/releases/${releaseId}`]).toString());
+    if (
+      String(release.id) !== releaseId ||
+      release.draft !== true ||
+      release.prerelease !== false ||
+      release.tag_name !== identity.tag ||
+      release.target_commitish !== identity.gitSha ||
+      !Array.isArray(release.assets) ||
+      release.assets.some((item) => !expected.some((asset) => asset.name === item.name)) ||
+      new Set(release.assets.map((item) => item.name)).size !== release.assets.length
+    )
+      throw new Error('Draft identity or contents differ; preserve it');
+    return release;
+  };
+  const verify = (item, asset) => {
+    if (
+      item.state !== 'uploaded' ||
+      item.size !== asset.size ||
+      item.digest !== `sha256:${asset.sha256}` ||
+      !Number.isSafeInteger(item.id)
+    )
+      throw new Error(`Draft asset metadata differs: ${asset.name}`);
+    const bytes = api([
+      '-H',
+      'Accept: application/octet-stream',
+      `repos/${repo}/releases/assets/${item.id}`,
+    ]);
+    if (bytes.length !== asset.size || hash(bytes) !== asset.sha256)
+      throw new Error(`Draft asset bytes differ: ${asset.name}`);
+  };
+  for (const asset of expected) {
+    const release = getDraft();
+    const item = release.assets.find((entry) => entry.name === asset.name);
+    if (item) {
+      verify(item, asset);
+      continue;
+    }
+    api([
+      '--method',
+      'POST',
+      '-H',
+      'Content-Type: application/octet-stream',
+      '--input',
+      asset.path,
+      `https://uploads.github.com/repos/${repo}/releases/${releaseId}/assets?name=${encodeURIComponent(asset.name)}`,
+    ]);
+    const uploaded = getDraft().assets.find((entry) => entry.name === asset.name);
+    if (!uploaded) throw new Error(`Uploaded draft asset not found: ${asset.name}`);
+    verify(uploaded, asset);
+  }
+  const final = getDraft();
+  if (final.assets.length !== expected.length) throw new Error('Draft asset inventory incomplete');
+  for (const asset of expected)
+    verify(
+      final.assets.find((item) => item.name === asset.name),
+      asset,
+    );
+}
+
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const [mode, product, ...args] = process.argv.slice(2);
   const paths = await publicProductAssets(product);
   if (mode === 'assets') console.log(JSON.stringify(paths));
-  else if (mode === 'reconcile') {
+  else if (mode === 'draft-stage') {
+    const [identityPath, resources, releaseId] = args;
+    const { readdir } = await import('node:fs/promises');
+    const archives = (await readdir(resources)).filter((name) => name.endsWith('.zip'));
+    if (archives.length !== 1) throw new Error('Expected one frozen resource archive');
+    paths.push(join(resources, archives[0]));
+    await stageDraftAssets(
+      releaseId,
+      JSON.parse(await readFile(identityPath)),
+      await assetInventory(paths),
+    );
+  } else if (mode === 'reconcile') {
     const [releasePath, refPath, identityPath, resources] = args;
     if (resources && resources !== '-') {
       const { readdir } = await import('node:fs/promises');

@@ -1,5 +1,5 @@
 name: Release Promotion
-run-name: Release Promotion
+run-name: ${{ inputs.draft_release_id && format('Stage draft {0}', inputs.tag) || 'Release Promotion' }}
 on:
   workflow_run:
     workflows: [Release Qualification]
@@ -19,6 +19,10 @@ on:
         required: false
         default: false
         type: boolean
+      draft_release_id:
+        description: Stage verified assets into this existing unpublished draft without creating a tag
+        required: false
+        type: string
 permissions:
   contents: write
   actions: read
@@ -39,6 +43,7 @@ jobs:
       RUN_ID: ${{ inputs.qualification_run || github.event.workflow_run.id }}
       RELEASE_TAG: ${{ inputs.tag || github.event.workflow_run.display_title }}
       RELEASE_RECOVERY: ${{ github.event_name == 'workflow_dispatch' && inputs.recovery && 'true' || 'false' }}
+      RELEASE_DRAFT_ID: ${{ inputs.draft_release_id }}
       RELEASE_BUDGET_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.recovery && github.run_id || inputs.qualification_run || github.event.workflow_run.id }}
       RESOURCE_PUBLISHER_ROOT: ${{ github.workspace }}/.agent-tmp/resource-publisher-source
       RESOURCE_ROOT: ${{ github.workspace }}/qualified-resources
@@ -248,19 +253,28 @@ jobs:
               if ($LASTEXITCODE -ne 0) { throw "Original installer/update metadata provenance failed: $subject" }
             }
           }
+      - name: Stage verified assets into an existing draft
+        if: ${{ env.RELEASE_DRAFT_ID != '' }}
+        shell: pwsh
+        run: |
+          if ($env:RELEASE_RECOVERY -ne 'true' -or $env:RELEASE_DRAFT_ID -notmatch '^\d+$' -or $env:RESOURCE_ENABLED -ne 'true') { throw 'Draft staging requires an explicit resource-aware recovery' }
+          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-assets.mjs" draft-stage product promotion-identity.json "$env:RESOURCE_FROZEN_ROOT" $env:RELEASE_DRAFT_ID
+          if ($LASTEXITCODE -ne 0) { throw 'Draft staging failed; preserve existing assets for verification' }
       - name: Resolve release and tag existence without treating API failure as absence
+        if: ${{ env.RELEASE_DRAFT_ID == '' }}
         shell: pwsh
         run: |
           node "$env:RESOURCE_PUBLISHER_ROOT/scripts/ci/resource-release.mjs" lookup-release product product/release-manifest.json existing-release.json
           if ($LASTEXITCODE -ne 0) { throw 'Release/tag existence is unknown or conflicts; refusing mutation' }
       - name: Prepare prerelease original machine carrier
-        if: ${{ contains(env.RELEASE_TAG, '-') && env.RESOURCE_ENABLED == 'true' }}
+        if: ${{ env.RELEASE_DRAFT_ID == '' && contains(env.RELEASE_TAG, '-') && env.RESOURCE_ENABLED == 'true' }}
         shell: pwsh
         run: |
           node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/machine-metadata.mjs" product "$env:RESOURCE_FROZEN_ROOT" - product/machine-metadata.json
           if ($LASTEXITCODE -ne 0) { throw 'Prerelease original carrier failed' }
 
       - name: Bound Publish exact qualified assets to remaining time
+        if: ${{ env.RELEASE_DRAFT_ID == '' }}
         id: budget_publish
         shell: pwsh
         run: |
@@ -270,6 +284,7 @@ jobs:
           if ($minutes -lt 1) { throw 'Less than one minute remains in release budget' }
           "minutes=$minutes" >> $env:GITHUB_OUTPUT
       - name: Publish exact qualified assets
+        if: ${{ env.RELEASE_DRAFT_ID == '' }}
         timeout-minutes: ${{ fromJSON(steps.budget_publish.outputs.minutes) }}
         shell: pwsh
         run: |
@@ -308,7 +323,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Publication failed; retry retains original assets' }
           }
       - name: Verify actual public resource assets before downstream authorization
-        if: ${{ env.RESOURCE_ENABLED == 'true' }}
+        if: ${{ env.RELEASE_DRAFT_ID == '' && env.RESOURCE_ENABLED == 'true' }}
         shell: pwsh
         run: |
           gh api "repos/$env:GH_REPO/releases/tags/$env:RELEASE_TAG" > resource-published-release.json
@@ -316,7 +331,7 @@ jobs:
           node "$env:RESOURCE_PUBLISHER_ROOT/scripts/ci/resource-release.mjs" published-release "$env:RESOURCE_FROZEN_ROOT" product/core-release-manifest.json resource-published-release.json
           if ($LASTEXITCODE -ne 0) { throw 'Public resources differ from the signed immutable candidate' }
       - name: Confirm the published Stable and prepare its authorization
-        if: ${{ !contains(env.RELEASE_TAG, '-') && env.RELEASE_ALREADY_PUBLISHED != 'true' }}
+        if: ${{ env.RELEASE_DRAFT_ID == '' && !contains(env.RELEASE_TAG, '-') && env.RELEASE_ALREADY_PUBLISHED != 'true' }}
         shell: pwsh
         run: |
           if ([DateTimeOffset]::UtcNow -gt [DateTimeOffset]::Parse($env:RELEASE_DEADLINE)) { throw 'Release 600-second budget exceeded' }
@@ -327,14 +342,14 @@ jobs:
           node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/update-publication.mjs" create published-release.json published-ref.json $env:RELEASE_TAG product update-publication.json
           if ($LASTEXITCODE -ne 0) { throw 'Published Stable authorization preparation failed' }
       - name: Attest the actual Stable publication
-        if: ${{ !contains(env.RELEASE_TAG, '-') && env.RELEASE_ALREADY_PUBLISHED != 'true' }}
+        if: ${{ env.RELEASE_DRAFT_ID == '' && !contains(env.RELEASE_TAG, '-') && env.RELEASE_ALREADY_PUBLISHED != 'true' }}
         id: publication-provenance
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
           subject-path: update-publication.json
       - name: Bound Upload and verify publication authorization to remaining time
         id: budget_authorize
-        if: ${{ !contains(env.RELEASE_TAG, '-') && env.RELEASE_ALREADY_PUBLISHED != 'true' }}
+        if: ${{ env.RELEASE_DRAFT_ID == '' && !contains(env.RELEASE_TAG, '-') && env.RELEASE_ALREADY_PUBLISHED != 'true' }}
         shell: pwsh
         run: |
           $created = gh api "repos/$env:GH_REPO/actions/runs/$env:RELEASE_BUDGET_RUN" --jq .created_at
@@ -344,7 +359,7 @@ jobs:
           "minutes=$minutes" >> $env:GITHUB_OUTPUT
       - name: Upload and verify publication authorization
         timeout-minutes: ${{ fromJSON(steps.budget_authorize.outputs.minutes) }}
-        if: ${{ !contains(env.RELEASE_TAG, '-') && env.RELEASE_ALREADY_PUBLISHED != 'true' }}
+        if: ${{ env.RELEASE_DRAFT_ID == '' && !contains(env.RELEASE_TAG, '-') && env.RELEASE_ALREADY_PUBLISHED != 'true' }}
         shell: pwsh
         env:
           PUBLICATION_BUNDLE: ${{ steps.publication-provenance.outputs.bundle-path }}
@@ -366,7 +381,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Published asset readback verification failed' }
 
       - name: Record qualification trigger through verified publication timing
-        if: ${{ !contains(env.RELEASE_TAG, '-') }}
+        if: ${{ env.RELEASE_DRAFT_ID == '' && !contains(env.RELEASE_TAG, '-') }}
         shell: pwsh
         run: |
           if (!(Test-Path -LiteralPath 'evidence-extracted/build-timings.json' -PathType Leaf)) { throw 'Qualified evidence is missing build timing' }
