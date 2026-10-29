@@ -43,17 +43,19 @@ test('uncertain Steam launch recovery stays visible after navigation and require
     route.fulfill({ json: { mode: 'preparation', revision: 'recovery-1', canEnter: false } }),
   );
   await page.goto('/');
-  await expect(page.getByText('正在等待 Steam 启动 CS2', { exact: true })).toBeVisible();
+  await expect(page.getByText('游戏启动结果待确认', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '恢复配置备份' })).toBeDisabled();
   await page.getByRole('link', { name: '设置', exact: true }).click();
-  await expect(page.getByText('正在等待 Steam 启动 CS2', { exact: true })).toBeVisible();
+  await expect(page.getByText('游戏启动结果待确认', { exact: true })).toBeVisible();
   await page.reload();
   await expect(page.getByRole('button', { name: '恢复配置备份' })).toBeDisabled();
   await expect(page.getByText('恢复配置备份只恢复设置，不会启动或关闭游戏。')).toBeVisible();
   await page
     .getByRole('region', { name: '配置与恢复', exact: true })
     .screenshot({ path: testInfo.outputPath('cs2-recovery-steam-pending.png') });
-  await page.getByRole('checkbox', { name: '已取消 Steam 启动请求，并确认 CS2 已关闭' }).check();
+  await page
+    .getByRole('checkbox', { name: '已取消启动请求，并确认 CS2 与 MulNX 启动器已关闭' })
+    .check();
   await page.getByRole('button', { name: '恢复配置备份' }).click();
   await expect(page.getByRole('button', { name: '恢复配置备份' })).toHaveCount(0);
   await expect(page.getByText('原设置已恢复', { exact: true })).toBeVisible();

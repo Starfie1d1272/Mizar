@@ -105,7 +105,7 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
           {!exit.busy ? (
             <p>
               {uncertain
-                ? '先取消 Steam 启动请求并确认游戏已关闭，再恢复配置备份。'
+                ? '先取消启动请求并确认 CS2 与 MulNX 启动器已关闭，再恢复配置备份。'
                 : '按上面的原因处理后重试；再次失败时，在运行诊断中导出诊断包反馈。'}
             </p>
           ) : null}
@@ -211,7 +211,7 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
                   ? '游戏借用已结束'
                   : status?.pending
                     ? uncertain
-                      ? '正在等待 Steam 启动 CS2'
+                      ? '游戏启动结果待确认'
                       : status.running
                         ? status.preserveSettings
                           ? 'CS2 正在运行，已保持原游戏设置'
@@ -248,7 +248,7 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
         ) : null}
         {uncertain ? (
           <Checkbox
-            label="已取消 Steam 启动请求，并确认 CS2 已关闭"
+            label="已取消启动请求，并确认 CS2 与 MulNX 启动器已关闭"
             checked={cancelled}
             onChange={(event) => setCancelled(event.target.checked)}
           />

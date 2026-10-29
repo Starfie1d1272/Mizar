@@ -709,7 +709,8 @@ impl ManagedCs2 {
                 || requires_service,
             running: any_cs2_running(&self.log)?,
             uncertain: journal.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch)
-                || self.store.mulnx_observer_unconfirmed()?,
+                || self.store.mulnx_observer_unconfirmed()?
+                || (journal.is_some() && self.log.state_root.join("data/mulnx-launch/pending.json").exists()),
             requires_service,
         })
     }
@@ -816,7 +817,8 @@ impl ManagedCs2 {
         let preferences = self.store.preferences()?;
         let borrowed_observer = running && self.external.as_ref().is_some_and(|external| external.console_source["spectatorCfg"] == true);
         let borrowed_hud = self.external.as_ref().is_some_and(|external| external.console_source["nativeHudToggle"] == true);
-        let mulnx_uncertain = self.store.mulnx_observer_unconfirmed()?;
+        let mulnx_uncertain = self.store.mulnx_observer_unconfirmed()?
+            || (pending.is_some() && self.log.state_root.join("data/mulnx-launch/pending.json").exists());
         Ok(
             json!({"qualityPreset": preferences.quality.name(), "preferMulnx":preferences.prefer_mulnx, "frameRateLimit":preferences.frame_rate_limit, "nativeHudToggle": running && (borrowed_hud || pending.as_ref().is_some_and(|v| v["nativeHudToggle"] == true && v["spectatorCfg"] == true)), "spectatorRecoveryPending": (self.store.spectator_pending() || self.store.full_spectator_pending()) && pending.is_none() && !borrowed_observer, "demoCleanupPending": self.store.playback_cleanup_pending() && pending.is_none(), "spectatorWarning":self.store.spectator_warning().or_else(|| pending.as_ref().and_then(|value| value["spectatorWarning"].as_str()).map(str::to_string)), "canPreserve": self.can_preserve && pending.is_none(), "preserveSettings": borrowed || pending.as_ref().is_some_and(|v| v["preserveSettings"] == true), "pending":pending.is_some(), "borrowed":borrowed, "externalDetached":self.external_preservation && !borrowed, "running":running, "message":self.message, "busy":false, "phase": if mulnx_uncertain || pending.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch) {"uncertain"} else if running {"running"} else if pending.is_some() {"pending"} else {"idle"}}),
         )
@@ -2060,6 +2062,22 @@ mod tests {
         assert!(managed
             .validate_demo_running(&crate::demo_test::request_id().unwrap())
             .is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn pending_mulnx_launch_exposes_uncertain_recovery() {
+        let root = std::env::temp_dir().join(format!("mizar-mulnx-uncertain-{}", std::process::id()));
+        let log = crate::startup_log::DesktopLog::new(&root, None).unwrap();
+        let managed = ManagedCs2::new(log);
+        let video = root.join("cs2_video.txt");
+        std::fs::write(&video, b"\"video.cfg\" { \"setting.defaultres\" \"1280\" \"setting.defaultresheight\" \"960\" \"setting.fullscreen\" \"1\" }").unwrap();
+        managed.store.prepare(&video, &root.join("absent/cs2.exe"), crate::cs2_video::VideoSize::new(1920, 1080).unwrap()).unwrap();
+        let launch = managed.log.state_root.join("data/mulnx-launch");
+        std::fs::create_dir_all(&launch).unwrap();
+        std::fs::write(launch.join("pending.json"), b"{}").unwrap();
+        assert_eq!(managed.status().unwrap()["phase"], "uncertain");
+        assert!(managed.startup_recovery_status().unwrap().uncertain);
         std::fs::remove_dir_all(root).unwrap();
     }
 
