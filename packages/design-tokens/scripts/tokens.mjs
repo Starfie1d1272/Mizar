@@ -8,6 +8,7 @@ export const RUNTIME_COLORS = new Set([
   '--mizar-asset-ewc-contour',
   '--mizar-asset-esl-texture',
   '--mizar-event-accent',
+  '--mizar-hud-accent',
   '--mizar-entrant-a',
   '--mizar-entrant-b',
   '--mizar-side-ct',

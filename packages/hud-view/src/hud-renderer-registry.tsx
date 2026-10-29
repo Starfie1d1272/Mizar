@@ -29,6 +29,7 @@ interface HudWidgetRendererBaseProps {
   readonly settings: HudWidgetSettings;
   readonly presentationRevision?: number;
   readonly gg?: boolean;
+  readonly chatEnabled?: boolean | undefined;
 }
 
 /** Program-owned widgets cannot access Radar-only spatial truth by type. */
