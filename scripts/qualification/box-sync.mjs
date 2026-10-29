@@ -213,6 +213,12 @@ function retryAfterMs(value) {
   const date = Date.parse(value);
   return Number.isFinite(date) ? Math.max(0, date - Date.now()) : 0;
 }
+let uploadRecoveryStartedAt;
+
+function recordUploadRecovery() {
+  uploadRecoveryStartedAt ??= new Date().toISOString();
+}
+
 async function retryWait(attempt, reason, deadline, retryAfter, signal) {
   const delay = Math.max(Math.ceil(Math.random() * 1000 * 2 ** attempt), retryAfterMs(retryAfter));
   requireValue(delay < deadline - Date.now(), '重试等待超出本次恢复预算；保留现有文件');
@@ -486,6 +492,7 @@ export class BoxClient {
         } catch (error) {
           if (!error.uploadOutcomeUnknown || error.httpStatus === 401 || error.httpStatus === 403)
             throw error;
+          recordUploadRecovery();
           // Reconcile before replay. replace=0 prevents overwriting a late commit;
           // a conflicting file is never replaced.
           let confirmed;
@@ -513,6 +520,7 @@ export class BoxClient {
           }
           if ((!error.retrySafeUpload && !error.uploadTimedOut) || replace || attempt === 2)
             throw error;
+          recordUploadRecovery();
           await retryWait(attempt, '上传后目标缺失', deadline, undefined, signal);
         }
       }
@@ -969,6 +977,7 @@ async function uploadRuntimeChunks(box, folder, file) {
         error.retryableRead = false;
         throw error;
       }
+      recordUploadRecovery();
       let confirmed;
       try {
         confirmed = await waitForWrittenFile(box, staging, file.name, file);
@@ -978,6 +987,7 @@ async function uploadRuntimeChunks(box, folder, file) {
       }
       if (!confirmed) {
         if (attempt === 2) throw error;
+        recordUploadRecovery();
         console.log(`Box 分块结果未落盘，使用新暂存目录重试 ${attempt + 1}/2`);
         continue;
       }
@@ -1575,6 +1585,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       await appendFile(
         process.env.GITHUB_STEP_SUMMARY,
         `镜像未完成：${message}。GitHub Release 保持可用，修正后重试 Box Sync。\n`,
+      );
+  } finally {
+    if (process.env.GITHUB_OUTPUT && uploadRecoveryStartedAt)
+      await appendFile(
+        process.env.GITHUB_OUTPUT,
+        `recovery_started_at=${uploadRecoveryStartedAt}\n`,
       );
   }
 }
