@@ -67,9 +67,11 @@ export function createProductionBroadcastDependencies(
     musicAutomaticEnabled: true,
     references,
     isDeleting: (ref) =>
-      ref.id.startsWith('local:music:') || (ref.id.startsWith('local:mizar-pack:') && musicPacks)
+      ref.id.startsWith('local:music:')
         ? Promise.resolve(false)
-        : Promise.reject(new Error('provider_unavailable')),
+        : ref.id.startsWith('local:mizar-pack:') && musicPacks
+          ? musicPacks.isDeleting(ref)
+          : Promise.reject(new Error('provider_unavailable')),
     resolve: {
       asset,
       hud: () => Promise.reject(new Error('capability_unsupported')),

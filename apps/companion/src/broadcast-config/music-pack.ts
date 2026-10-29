@@ -143,14 +143,15 @@ export async function importMusicPack(input: {
       supports: () => false,
     });
   prepare(expected);
-  const installed = await input.resources.install(input.zip);
-  if (
-    installed.id !== expected.id ||
-    installed.version !== expected.version ||
-    installed.digest !== expected.digest
-  )
-    throw new Error('package_identity_mismatch');
-  return input.store.importBatch(prepare(installed));
+  return input.resources.installAndCommit(input.zip, async (installed) => {
+    if (
+      installed.id !== expected.id ||
+      installed.version !== expected.version ||
+      installed.digest !== expected.digest
+    )
+      throw new Error('package_identity_mismatch');
+    return input.store.importBatch(prepare(installed));
+  });
 }
 
 /** Allocate a new package identity for an explicitly new export. */

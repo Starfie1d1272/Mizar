@@ -140,6 +140,8 @@ it('imports multiple independent draft copies from a verified archive', async ()
     supports: () => true,
   });
   expect(analyzed.entries.find((entry) => entry.entryId === 'unknown')?.status).toBe('unsupported');
+  expect(analyzed.entries.find((entry) => entry.entryId === 'unknown')?.name).toBe('HUD');
+  expect(analyzed.entries.find((entry) => entry.entryId === 'live')?.name).toBe('Live');
   expect(analyzed.entries.find((entry) => entry.entryId === 'broken')?.status).toBe('invalid');
   const selected = analyzed.prepare({ modules: ['unknown'], presets: ['live'] });
   expect(selected.presets).toHaveLength(1);

@@ -36,7 +36,8 @@ export type PackEntryStatus = 'ready' | 'dependency_missing' | 'unsupported' | '
 export interface PackEntryAnalysis {
   entryId: string;
   type: 'module' | 'preset';
-  kind?: string;
+  name: string;
+  kind: string;
   status: PackEntryStatus;
   reason?: string;
   dependencies: string[];
@@ -71,6 +72,17 @@ export function analyzePackDrafts(input: PackDraftInput): {
       throw new Error('package_invalid');
     return parsePackJson(bytes, 256 * 1024);
   };
+  const displayName = (value: unknown, fallback: string) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return fallback;
+    const name = (value as { name?: unknown }).name;
+    if (typeof name !== 'string') return fallback;
+    const trimmed = name.trim();
+    return trimmed &&
+      trimmed.length <= 120 &&
+      [...trimmed].every((char) => char.charCodeAt(0) >= 32 && char.charCodeAt(0) !== 127)
+      ? trimmed
+      : fallback;
+  };
   const requirementError = (entryId: string) =>
     manifest.requirements.some(
       (r) =>
@@ -93,12 +105,15 @@ export function analyzePackDrafts(input: PackDraftInput): {
     const analysis: PackEntryAnalysis = {
       entryId: entry.entryId,
       type: 'module',
+      name: '未命名模块',
       kind: entry.module,
       status: 'ready',
       dependencies: [],
     };
     entries.push(analysis);
     try {
+      const value = read(entry.fileId);
+      analysis.name = displayName(value, analysis.name);
       if (
         requirementError(entry.entryId) ||
         !['hud', 'program', 'music', 'camera'].includes(entry.module)
@@ -111,7 +126,7 @@ export function analyzePackDrafts(input: PackDraftInput): {
           name: z.string(),
           value: z.unknown(),
         })
-        .parse(read(entry.fileId));
+        .parse(value);
       if (parsed.module !== entry.module || parsed.schemaVersion !== entry.schemaVersion)
         throw new Error('package_invalid');
       const resolveResource = (alias: string) => {
@@ -160,13 +175,17 @@ export function analyzePackDrafts(input: PackDraftInput): {
     const analysis: PackEntryAnalysis = {
       entryId: entry.entryId,
       type: 'preset',
+      name: '未命名方案',
+      kind: 'preset',
       status: 'ready',
       dependencies: [],
     };
     entries.push(analysis);
     try {
+      const value = read(entry.fileId);
+      analysis.name = displayName(value, analysis.name);
       if (requirementError(entry.entryId)) throw new Error('capability_unsupported');
-      const template = presetTemplate.parse(read(entry.fileId));
+      const template = presetTemplate.parse(value);
       const modules: ModuleRecord[] = [];
       const bindings = template.bindings.map((binding) => {
         if (binding.mode === 'off') return binding;
