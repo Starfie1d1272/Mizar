@@ -124,7 +124,7 @@ function DesktopUpdateNotification() {
       status.notificationSafe &&
       tool?.notificationIdentity &&
       tool.latest &&
-      !mulnxNotice &&
+      (!mulnxNotice || mulnxNotice.identity !== tool.notificationIdentity) &&
       dismissedMulnx !== tool.notificationIdentity &&
       canInterrupt()
     ) {
@@ -147,12 +147,7 @@ function DesktopUpdateNotification() {
     mulnxNotice !== null &&
     status?.mulnxNotificationPending &&
     mulnxNotice.identity === status.mulnx?.notificationIdentity;
-  const open = Boolean(
-    (mizarOpen || mulnxOpen) &&
-    status?.notificationSafe &&
-    document.hasFocus() &&
-    document.visibilityState === 'visible',
-  );
+  const open = Boolean((mizarOpen || mulnxOpen) && status?.notificationSafe && canInterrupt());
   const dismissMizar = () => {
     if (!notice || !mizarOpen) return;
     setDismissed(notice.version);
