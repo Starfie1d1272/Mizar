@@ -355,10 +355,10 @@ it('keeps calibrated anchors and buffered kills when the lead window is reprojec
     send(121000, [8]);
     send(122000, [8, 9]);
     expect(coordinator.getCurrent().assist.observer).toMatchObject({
-      state: 'ready',
+      state: 'unavailable',
       timingBasis: 'estimated',
-      waitingReason: 'buffering',
-      nextWindowSeconds: 1,
+      waitingReason: 'calibration-pending',
+      nextWindowSeconds: null,
       measuredDelaySeconds: null,
       hints: [],
     });
@@ -371,26 +371,19 @@ it('keeps calibrated anchors and buffered kills when the lead window is reprojec
     const radar = structuredClone(coordinator.getPublisher('radar').getCurrent());
     expect(coordinator.getPublisher('assist').getCurrent()!.payload.observer).toMatchObject({
       timingBasis: 'estimated',
-      nextWindowSeconds: 1,
+      nextWindowSeconds: null,
     });
     const before = coordinator.getPublisher('assist').getCurrent()!.channelSeq;
     settings.leadSeconds = 10;
     coordinator.refreshAssist();
     expect(coordinator.getCurrent().assist.observer).toMatchObject({
-      state: 'ready',
+      state: 'unavailable',
       measuredDelaySeconds: null,
-      hints: [{ remainingSeconds: 8, victim: { observerSlot: 7 } }],
+      hints: [],
     });
     expect(coordinator.getPublisher('assist').getCurrent()!.channelSeq).toBeGreaterThan(before);
     expect(coordinator.getPublisher('program').getCurrent()).toEqual(program);
     expect(coordinator.getPublisher('radar').getCurrent()).toEqual(radar);
-    settings.expectedDelaySeconds = 130;
-    coordinator.refreshAssist();
-    expect(coordinator.getCurrent().assist.observer).toMatchObject({
-      state: 'ready',
-      measuredDelaySeconds: null,
-      hints: [{ remainingSeconds: 8, victim: { observerSlot: 7 } }],
-    });
     live.mockReturnValue({
       ...health,
       state: 'live',
@@ -407,7 +400,7 @@ it('keeps calibrated anchors and buffered kills when the lead window is reprojec
       },
     });
     coordinator.refreshAssist();
-    expect(coordinator.getCurrent().assist.observer?.state).toBe('ready');
+    expect(coordinator.getCurrent().assist.observer?.waitingReason).toBe('calibration-pending');
     live.mockReturnValue({
       ...health,
       state: 'live',
@@ -456,9 +449,10 @@ it('keeps calibrated anchors and buffered kills when the lead window is reprojec
     const freshEvent = now + 1000;
     kill(4, 6, freshEvent);
     send(freshEvent + 120000);
-    expect(coordinator.getCurrent().assist.observer?.hints).toMatchObject([
-      { victim: { observerSlot: 6 } },
-    ]);
+    expect(coordinator.getCurrent().assist.observer).toMatchObject({
+      waitingReason: 'calibration-pending',
+      hints: [],
+    });
   } finally {
     await coordinator.close();
     live.mockRestore();
@@ -552,8 +546,8 @@ it('uses actual observer cursor reception without kills and detects an open but 
       lookahead.consumeObserverRecord(cursor(id));
       sendProgram();
       expect(coordinator.getCurrent().assist.observer).toMatchObject({
-        state: 'ready',
-        waitingReason: 'waiting-event',
+        state: 'unavailable',
+        waitingReason: 'calibration-pending',
         hints: [],
       });
       expect(diagnostics.mock.lastCall?.[0].source).toMatchObject({
@@ -580,7 +574,7 @@ it('uses actual observer cursor reception without kills and detects an open but 
     expect(lookahead.getHealth().lastReceiveMonotonicMs).toBe(120000);
     lookahead.consumeObserverRecord(cursor(15));
     sendProgram();
-    expect(coordinator.getCurrent().assist.observer?.state).toBe('ready');
+    expect(coordinator.getCurrent().assist.observer?.waitingReason).toBe('calibration-pending');
     lookahead.consumeObserverRecord({ ...cursor(16), map: 'de_nuke' });
     sendProgram();
     expect(coordinator.getCurrent().assist.observer).toMatchObject({

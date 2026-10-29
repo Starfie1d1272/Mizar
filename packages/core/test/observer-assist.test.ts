@@ -4,7 +4,7 @@ import {
   type ObserverProgramView,
 } from '../src/projection/observer-assist.js';
 import type { PlayerDeathGameEvent } from '../src/game-events/index.js';
-const settings = { enabled: true, expectedDelaySeconds: 120, leadSeconds: 7 };
+const settings = { enabled: true, leadSeconds: 7 };
 const source = { connected: true, generation: 1, fresh: true };
 function program(sequence: number, dead: number[] = []): ObserverProgramView {
   return {
@@ -189,7 +189,7 @@ describe('private observer hints against Program', () => {
         reset.project(change(program(3, [8, 9])), settings, 123000, source).observer?.hints,
       ).toEqual([]);
       expect(reset.project(program(4, [8, 9]), settings, 123200, source).observer).toMatchObject({
-        state: 'ready',
+        state: 'unavailable',
         hints: [],
       });
     }
@@ -258,7 +258,7 @@ describe('private observer hints against Program', () => {
       source,
     );
     expect(timeline.project(program(3, [8, 9]), settings, 122000, source).observer?.state).toBe(
-      'ready',
+      'unavailable',
     );
     expect(aligned().project(program(3, [8, 9]), settings, 303000, source).observer?.state).toBe(
       'unavailable',
@@ -266,64 +266,16 @@ describe('private observer hints against Program', () => {
   });
 });
 
-it.each([0, 1])('estimates the 113-second window with %i anchors', (anchors) => {
+it('waits for clock calibration without guessing a countdown', () => {
   const timeline = new ObserverHintTimeline();
   timeline.project(program(1), settings, 0, source);
-  if (anchors) timeline.consume(kill(1, 8, 1000));
-  timeline.consume(kill(2, 7, 10000));
-  const frame = program(2, anchors ? [8] : []);
-  timeline.project(frame, settings, 120000, source); // 119-second reference, if present
-  expect(timeline.project(frame, settings, 122999, source).observer?.hints).toEqual([]);
-  expect(timeline.project(frame, settings, 123000, source).observer).toMatchObject({
-    timingBasis: 'estimated',
-    expectedDelaySeconds: 120,
-    measuredDelaySeconds: null,
-    hints: [{ remainingSeconds: 7 }],
+  timeline.consume(kill(1, 7, 10000));
+  expect(timeline.project(program(2), settings, 123000, source).observer).toMatchObject({
+    state: 'unavailable',
+    waitingReason: 'calibration-pending',
+    effectiveDelaySeconds: null,
+    hints: [],
   });
-});
-
-it('retires expired and currently dead hints without deleting later events for the same victim', () => {
-  const timeline = new ObserverHintTimeline();
-  timeline.project(program(1, [7]), settings, 0, source);
-  timeline.consume(kill(1, 7, 1000));
-  timeline.consume(kill(2, 7, 50000));
-  timeline.project(program(2, [7]), settings, 114000, source);
-  expect(timeline.getDiagnostics().discarded['victim-already-dead']).toBe(1);
-  expect(timeline.project(program(3), settings, 115000, source).observer?.hints).toEqual([]);
-  expect(timeline.project(program(3), settings, 163000, source).observer?.hints).toMatchObject([
-    { id: '1:2', remainingSeconds: 7 },
-  ]);
-  timeline.project(program(3), settings, 170000, source);
-  // Expiry is permanent even if a caller supplies a larger expected delay directly.
-  expect(
-    timeline.project(
-      program(3),
-      { ...settings, expectedDelaySeconds: 125, leadSeconds: 10 },
-      171000,
-      source,
-    ).observer?.hints,
-  ).toEqual([]);
-  timeline.consume(kill(2, 7, 50000));
-  expect(
-    timeline.project(program(3), { ...settings, expectedDelaySeconds: 125 }, 172000, source)
-      .observer?.hints,
-  ).toEqual([]);
-});
-
-it('keeps settings changes without clearing buffered events', () => {
-  const timeline = new ObserverHintTimeline();
-  timeline.project(program(1), settings, 0, source);
-  timeline.consume(kill(1, 7, 1000));
-  expect(timeline.project(program(1), settings, 111000, source).observer?.hints).toEqual([]);
-  expect(
-    timeline.project(program(1), { ...settings, leadSeconds: 10 }, 111000, source).observer?.hints,
-  ).toHaveLength(1);
-  timeline.consume(kill(1, 7, 1000));
-  expect(
-    timeline.project(program(1), { ...settings, expectedDelaySeconds: 125 }, 120000, source)
-      .observer?.hints,
-  ).toMatchObject([{ id: '1:1', remainingSeconds: 1 }]);
-  expect(timeline.getDiagnostics().discarded['duplicate']).toBe(1);
 });
 
 it('reports counts and explicit blocks without identity or raw event payloads', () => {
@@ -338,7 +290,7 @@ it('reports counts and explicit blocks without identity or raw event payloads', 
     discarded: { 'missing-identity': 1 },
     pending: 1,
     anchors: 0,
-    nextWindowInMs: 112000,
+    nextWindowInMs: null,
   });
   expect(
     timeline.project(program(1), settings, 4000, { ...source, fresh: false }).observer
@@ -357,17 +309,6 @@ it('reports counts and explicit blocks without identity or raw event payloads', 
   expect(
     Object.values(timeline.getDiagnostics().eventCounts).reduce((sum, count) => sum + count, 0),
   ).toBe(64);
-});
-
-it('opens the 120/5 estimate 115 seconds after receiving a kill', () => {
-  const timeline = new ObserverHintTimeline();
-  const fiveSeconds = { ...settings, leadSeconds: 5 };
-  timeline.project(program(1), fiveSeconds, 0, source);
-  timeline.consume(kill(1, 7, 1000));
-  expect(timeline.project(program(1), fiveSeconds, 115999, source).observer?.hints).toEqual([]);
-  expect(timeline.project(program(1), fiveSeconds, 116000, source).observer?.hints).toMatchObject([
-    { remainingSeconds: 5 },
-  ]);
 });
 
 function feedSourceClock(
@@ -426,7 +367,7 @@ it('does not calibrate from deaths when the source has no clock', () => {
   expect(result.observer).toMatchObject({
     calibrationState: 'uncalibrated',
     measuredDelaySeconds: null,
-    effectiveDelaySeconds: 120,
+    effectiveDelaySeconds: null,
   });
 });
 
@@ -637,13 +578,12 @@ it('does not count a burst as multiple independent clock samples', () => {
 });
 
 it('does not retire an unseen future death for the same player', () => {
-  const timeline = new ObserverHintTimeline();
-  timeline.project(program(1), settings, 0, source);
-  timeline.consume(kill(1, 7, 200000));
-  timeline.project(program(2, [7]), settings, 270000, source);
-  timeline.project(program(3), settings, 300000, source);
-  expect(timeline.project(program(4), settings, 313000, source).observer?.hints).toMatchObject([
-    { id: '1:1', remainingSeconds: 7 },
+  const timeline = aligned();
+  timeline.consume(kill(4, 7, 20000));
+  timeline.project(program(4, [7]), settings, 125000, source);
+  timeline.project(program(5), settings, 130000, source);
+  expect(timeline.project(program(6), settings, 133000, source).observer?.hints).toMatchObject([
+    { id: '1:4', remainingSeconds: 7 },
   ]);
 });
 
@@ -666,7 +606,7 @@ it('keeps early new-map events while Program catches up, then discards the previ
   expect(
     timeline.project(next, settings, 115000, { ...source, sameMap: true, mapName: 'de_nuke' })
       .observer?.hints,
-  ).toMatchObject([{ id: '1:2', remainingSeconds: 7 }]);
+  ).toEqual([]);
 });
 
 it('does not mix executions when the early source restarts on the next map before Program arrives', () => {
@@ -718,7 +658,7 @@ it('does not carry pending map execution conflicts into a different match', () =
     3000,
     { sourceExecution: 2 },
   );
-  expect(result.observer?.state).toBe('ready');
+  expect(result.observer?.waitingReason).toBe('calibration-pending');
 });
 
 describe('explicit program playback clock', () => {
