@@ -142,22 +142,7 @@ function ContextPanel({
       </div>
       <div className="workspace-context__actions">
         <Button onClick={() => void openPreparation('/matches')}>比赛资料</Button>
-        <MatchConnectionControl
-          nextMapKey={
-            program?.status.telemetry === 'fresh' &&
-            program.map.phase === 'gameover' &&
-            operator?.seriesProgress &&
-            Math.max(operator.seriesProgress.score.a, operator.seriesProgress.score.b) <
-              operator.seriesProgress.requiredWins &&
-            operator.seriesProgress.maps.some((map) => map.status === 'pending')
-              ? JSON.stringify([
-                  operator.matchContext.summary?.matchId,
-                  programCursor?.liveSessionId,
-                  programCursor?.mapEpoch,
-                ])
-              : null
-          }
-        />
+        <MatchConnectionControl />
         {operator?.matchContext.rosterAuthority !== 'rivalhub' ? (
           <>
             <Button onClick={() => setCaptureOpen(true)}>
