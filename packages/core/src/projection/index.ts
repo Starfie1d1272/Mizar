@@ -18,7 +18,7 @@ export type {
   ProgramSafeRuntimeFreshness,
   ProgramSafeRuntimeView,
 } from './program-safe-runtime.js';
-export type { ObserverAssistProjection } from './observer-assist.js';
+export type { ObserverAssistProjection, ProgramClock } from './observer-assist.js';
 export type {
   ProgramBombProjection,
   ProgramBombActionProjection,
