@@ -989,7 +989,6 @@ async function uploadRuntimeChunks(box, folder, file) {
     );
     if (target.length) await verifyRemote(box, `${folder}/${file.name}`, file);
     else await moveVerified(box, staging, folder, file);
-    await verifyRemote(box, `${folder}/${file.name}`, file);
     if ((await box.list(staging)).length === 0) await box.api('dir', staging, 'DELETE');
     return;
   }
