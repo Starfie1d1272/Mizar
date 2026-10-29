@@ -518,16 +518,13 @@ export class BoxClient {
       }
     });
   }
-  // Probe-only: one fresh temporary name and sequential chunks, never retry a
-  // final chunk whose commit result is uncertain.
-  async probeChunks(path, name, bytes) {
+  // A fresh temporary directory isolates each attempt. Never replay an uncertain chunk.
+  async uploadChunks(path, name, bytes, chunkSize = 4 * 1024 * 1024) {
     const url = this.temporaryUrl(await this.api('upload-link', path));
     url.searchParams.set('ret-json', '1');
-    const split = Math.ceil(bytes.length / 2);
-    for (const [start, end] of [
-      [0, split],
-      [split, bytes.length],
-    ]) {
+    for (let start = 0; start < bytes.length; start += chunkSize) {
+      const end = Math.min(start + chunkSize, bytes.length);
+      console.log(`Box 分块 ${start}-${end - 1}/${bytes.length}`);
       const form = new FormData();
       form.set('parent_dir', path);
       form.set('replace', '0');
@@ -958,6 +955,45 @@ export async function syncResourceFiles({
     await verifyRemote(box, `${folder}/${file.name}`, file);
   }
 }
+// A unique staging directory avoids mixing chunks from previous attempts. Only
+// a fully read-back match may enter Runtime; failed staging is left untouched.
+async function uploadRuntimeChunks(box, folder, file) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const staging = `/Archive/mizar-runtime-${randomUUID()}`;
+    await box.api('dir', staging, 'POST', { operation: 'mkdir' });
+    try {
+      await box.uploadChunks(staging, file.name, file.bytes);
+      await verifyRemote(box, `${staging}/${file.name}`, file);
+    } catch (error) {
+      if (!error.uploadOutcomeUnknown) {
+        error.retryableRead = false;
+        throw error;
+      }
+      let confirmed;
+      try {
+        confirmed = await waitForWrittenFile(box, staging, file.name, file);
+      } catch (readError) {
+        readError.retryableRead = false;
+        throw readError;
+      }
+      if (!confirmed) {
+        if (attempt === 2) throw error;
+        console.log(`Box 分块结果未落盘，使用新暂存目录重试 ${attempt + 1}/2`);
+        continue;
+      }
+    }
+    const target = (await box.list(folder)).filter((entry) => entry.name === file.name);
+    requireValue(
+      target.length <= 1 && target.every((entry) => entry.type === 'file'),
+      'Runtime 目标无效',
+    );
+    if (target.length) await verifyRemote(box, `${folder}/${file.name}`, file);
+    else await moveVerified(box, staging, folder, file);
+    await verifyRemote(box, `${folder}/${file.name}`, file);
+    if ((await box.list(staging)).length === 0) await box.api('dir', staging, 'DELETE');
+    return;
+  }
+}
 export async function syncRuntimeFiles({ box, version, files }) {
   requireValue(
     /^\d+\.\d+\.\d+$/.test(version) &&
@@ -993,7 +1029,8 @@ export async function syncRuntimeFiles({ box, version, files }) {
   for (const file of files.filter((f) => existing.some((e) => e.name === f.name)))
     await verifyRemote(box, folder + '/' + file.name, file);
   for (const file of files.filter((f) => !existing.some((e) => e.name === f.name))) {
-    await box.upload(folder, file.name, file.bytes);
+    if (file.name === MACHINE_METADATA_NAME) await box.upload(folder, file.name, file.bytes);
+    else await uploadRuntimeChunks(box, folder, file);
     await verifyRemote(box, folder + '/' + file.name, file);
   }
 }
@@ -1097,7 +1134,7 @@ export async function probe(box) {
   const expected = { size: bytes.length, sha256: digest(bytes) };
   await box.api('dir', folder, 'POST', { operation: 'mkdir' });
   try {
-    await box.probeChunks(folder, name, bytes);
+    await box.uploadChunks(folder, name, bytes, Math.ceil(bytes.length / 2));
     await verifyRemote(box, `${folder}/${name}`, expected);
     const metadata = await box.api('file', `${folder}/${name}`);
     requireValue(metadata, '探测文件元数据读取失败');
