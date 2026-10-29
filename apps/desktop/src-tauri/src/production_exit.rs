@@ -399,6 +399,11 @@ fn confirm_local_match_exit(
     }
 }
 
+fn settle_local_match_exit(log: &DesktopLog, qualification: &serde_json::Value) -> Result<(), String> {
+    let response = exit_request(log, serde_json::json!({"action": "settle", "qualification": qualification}))?;
+    if response["ok"] == true { Ok(()) } else { Err("本场退出状态未能确认。".into()) }
+}
+
 pub fn invalidate_local_match_exit(log: &DesktopLog) -> Result<(), String> {
     let response =
         exit_request(log, serde_json::json!({"action": "invalidate"})).map_err(|_| {
@@ -414,13 +419,17 @@ pub fn invalidate_local_match_exit(log: &DesktopLog) -> Result<(), String> {
 fn finish_with_qualification(
     prepare: impl FnOnce() -> Result<Option<serde_json::Value>, String>,
     finish: impl FnOnce(bool) -> Result<(), String>,
+    settle: impl FnOnce(&serde_json::Value) -> Result<(), String>,
     confirm: impl FnOnce(serde_json::Value) -> Result<(), String>,
 ) -> Result<(), String> {
     let qualification = prepare();
     // Cleanup is required even if the private Companion handshake is unavailable.
     finish(matches!(&qualification, Ok(Some(_))))?;
     match qualification {
-        Ok(Some(qualification)) => confirm(qualification).map_err(|_| EXIT_UNCONFIRMED.into()),
+        Ok(Some(qualification)) => {
+            settle(&qualification).map_err(|_| EXIT_UNCONFIRMED.to_string())?;
+            confirm(qualification).map_err(|_| EXIT_UNCONFIRMED.into())
+        },
         Ok(None) => Ok(()),
         Err(_) => Err(EXIT_UNCONFIRMED.into()),
     }
@@ -434,6 +443,7 @@ pub fn finish_managed_game(
     finish_with_qualification(
         || prepare_local_match_exit(log),
         finish,
+        |qualification| settle_local_match_exit(log, qualification),
         |qualification| confirm_local_match_exit(log, qualification),
     )
 }
@@ -575,6 +585,7 @@ mod tests {
                     assert!(requires_proof);
                     Err(error.into())
                 },
+                |_| panic!("must not settle before successful cleanup"),
                 |_| {
                     confirmed.set(true);
                     Ok(())
@@ -591,6 +602,7 @@ mod tests {
                 calls.borrow_mut().extend(["cleanup", "process-check"]);
                 Ok(())
             },
+            |_| { calls.borrow_mut().push("settle"); Ok(()) },
             |captured| {
                 assert_eq!(captured, serde_json::json!({"ticket": "private-ticket", "matchId": "match-7", "contextRevision": "revision-9"}));
                 calls.borrow_mut().push("confirm");
@@ -599,8 +611,15 @@ mod tests {
         ).unwrap();
         assert_eq!(
             *calls.borrow(),
-            ["prepare", "cleanup", "process-check", "confirm"]
+            ["prepare", "cleanup", "process-check", "settle", "confirm"]
         );
+        let result = finish_with_qualification(
+            || Ok(Some(qualification())),
+            |_| Ok(()),
+            |_| Err("identity changed".into()),
+            |_| panic!("must not confirm after settlement failure"),
+        );
+        assert_eq!(result.unwrap_err(), EXIT_UNCONFIRMED);
     }
 
 

@@ -318,11 +318,28 @@ it('uses only a private Host acknowledgement to recycle the last match after acc
     const changedGame = await prepare();
     await game();
     expect((await confirm(changedGame)).statusCode).toBe(409);
+    // Host has finished native cleanup and checked that no CS2 remains.
+    expect(
+      (await privateRequest({ action: 'settle', qualification: changedGame })).statusCode,
+    ).toBe(200);
+    expect(
+      (await privateRequest({ action: 'settle', qualification: changedGame })).statusCode,
+    ).toBe(409);
+    expect((await confirm(changedGame)).statusCode).toBe(200);
+    const afterSettlement = await prepare();
+    expect(
+      (await privateRequest({ action: 'settle', qualification: afterSettlement })).statusCode,
+    ).toBe(200);
+    await game();
+    expect((await confirm(afterSettlement)).statusCode).toBe(409);
     expect((await confirm(await prepare())).statusCode).toBe(200);
     expect((await privateRequest({ action: 'invalidate' })).statusCode).toBe(200);
     expect((await trash()).statusCode).toBe(409);
     const beforeEnter = await prepare();
     expect((await production('enter')).statusCode).toBe(200);
+    expect(
+      (await privateRequest({ action: 'settle', qualification: beforeEnter })).statusCode,
+    ).toBe(409);
     expect((await confirm(beforeEnter)).statusCode).toBe(409);
     expect((await privateRequest({ action: 'prepare' })).json()).toEqual({ qualification: null });
     expect((await trash()).statusCode).toBe(409);
