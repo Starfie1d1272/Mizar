@@ -201,7 +201,16 @@ export function PreparationPage() {
         ) : null}
 
         {!(path === '/settings' && tab === 'gsi') ? <Cs2Recovery production={production} /> : null}
-        {message ? <StatusBanner tone="danger">{message}</StatusBanner> : null}
+        {message ? (
+          <StatusBanner tone="danger">
+            {message}
+            {message.includes('CS2 启动设置') ? (
+              <p>
+                <a href="/settings?tab=gsi">打开游戏启动设置</a>
+              </p>
+            ) : null}
+          </StatusBanner>
+        ) : null}
         {options ? (
           <nav className="preparation-tabs" aria-label="页面分区">
             {options.map(([key, label]) => (
