@@ -96,24 +96,20 @@ test('HTTP audio mode switches all managed scenes while simulated OBS outputs ar
           inputKind: 'wasapi_output_capture',
         };
         inputs.push(input);
-        items
-          .get(data.sceneName as string)!
-          .push({
-            sourceUuid: input.inputUuid,
-            sourceName: input.inputName,
-            sceneItemId: 2,
-            sceneItemEnabled: false,
-          });
+        items.get(data.sceneName as string)!.push({
+          sourceUuid: input.inputUuid,
+          sourceName: input.inputName,
+          sceneItemId: 2,
+          sceneItemEnabled: false,
+        });
         result = { inputUuid: input.inputUuid, sceneItemId: 2 };
       } else if (type === 'CreateSceneItem') {
-        items
-          .get(data.sceneName as string)!
-          .push({
-            sourceUuid: 'desktop',
-            sourceName: data.sourceName as string,
-            sceneItemId: 2,
-            sceneItemEnabled: false,
-          });
+        items.get(data.sceneName as string)!.push({
+          sourceUuid: 'desktop',
+          sourceName: data.sourceName as string,
+          sceneItemId: 2,
+          sceneItemEnabled: false,
+        });
         result = { sceneItemId: 2 };
       } else if (type === 'SetSceneItemEnabled') {
         const item = items
