@@ -301,7 +301,11 @@ for (const useMulnx of [false, true]) {
           if (name === 'observer_command' && args?.action === 'connection-mode')
             return { useMulnx: preferMulnx };
           if (name === 'observer_command' && args?.action === 'start-configured') {
-            if (host.failConnection) throw '游戏观战连接未确认，请检查后重试。';
+            if (host.failConnection) {
+              // Native invoke can reject with a string; exercise the actual error contract.
+              // eslint-disable-next-line @typescript-eslint/only-throw-error
+              throw '游戏观战连接未确认，请检查后重试。';
+            }
             if (args?.expectedRevision !== '10000000-0000-4000-8000-000000000002')
               throw new Error('连接版本未传递');
             return { useMulnx: preferMulnx };
