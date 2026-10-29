@@ -72,7 +72,7 @@ Companion 组装运行时、持久化和接口
 
 Core 只维护一份 `RuntimeState`，通过 `ProgramProjection`、`RadarFrame`、`OperatorProjection`、`ObserverAssistProjection` 和 `DebugProjection` 提供不同视图。
 
-- 渲染层只消费自己需要的投影，不重新解释生死、名单、伤害统计或游戏时钟。
+- 渲染层只消费自己需要的投影，不重新解释生死、名单、伤害统计或游戏时钟。 Web 的 `ProgramView` 接收 HUD、节目场景或 BP 展示输入；实时订阅和雷达通道适配留在宿主，导演进度由场景状态传入。
 - 诊断可以看到更多信息，但不成为正式节目的数据源。
 - 选手稳定身份使用 Steam64，阵营与参赛方身份分开。名单和统计算法由[遥测语义](telemetry.md#名单与伤害统计)统一说明。
 - 展示配置故障不改变比赛数据；展示摘要也不向领域状态回写。
