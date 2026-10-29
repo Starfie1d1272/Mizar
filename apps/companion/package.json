@@ -23,6 +23,7 @@
     "fastify": "catalog:",
     "obs-websocket-js": "5.0.8",
     "sigstore": "5.0.0",
+    "yaml": "2.9.1",
     "zod": "catalog:"
   },
   "devDependencies": {

@@ -363,6 +363,8 @@ it('real websocket separates ACK, rejection and unrelated broadcasts; disconnect
   await provider.connect(port);
   expect(await provider.send('CS2BootLoader/Launch')).toBe('queued');
   expect(JSON.parse(wires.shift()!)).toEqual({ type: 'CS2BootLoader/Launch', payload: '' });
+  expect(await provider.send('CamPack/Apply', 'Mizar_pack')).toBe('queued');
+  expect(JSON.parse(wires.shift()!)).toEqual({ type: 'CamPack/Apply', payload: '"Mizar_pack"' });
   expect(await provider.send('CamMacro/Play', '中文 "宏" \\')).toBe('queued');
   expect(JSON.parse(wires[0]!)).toEqual({ type: 'CamMacro/Play', payload: '"中文 \\"宏\\" \\\\"' });
   replyMode = 'silent';

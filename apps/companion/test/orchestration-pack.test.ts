@@ -225,6 +225,17 @@ it('copies user resources into a unique pack with no automatic lists and leaves 
   ].join('\r\n');
   await writeFile(path, rewritten);
   expect(verifyIsolatedPack(root, pack.name)).toBe(true);
+  await writeFile(
+    path,
+    `# MulNX metadata\nOnRoundEnd: []\nname: '${pack.name}'\nKCP: { usable: false, ctrl: true }\nOnRoundStart: [ ]\nOnNewRound: [] # empty\n`,
+  );
+  expect(verifyIsolatedPack(root, pack.name)).toBe(true);
+  await writeFile(path, rewritten + '\nOnNewRound: [begin]\n');
+  expect(verifyIsolatedPack(root, pack.name)).toBe(false);
+  await writeFile(path, rewritten.replace('  usable: false', '  usable: "false"'));
+  expect(verifyIsolatedPack(root, pack.name)).toBe(false);
+  await writeFile(path, rewritten.replace('OnRoundEnd:', 'Other:'));
+  expect(verifyIsolatedPack(root, pack.name)).toBe(false);
   await writeFile(path, rewritten.replace('  []', '  - begin'));
   expect(verifyIsolatedPack(root, pack.name)).toBe(false);
   await writeFile(path, rewritten.replace('usable: false', 'usable: true'));
