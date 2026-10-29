@@ -114,6 +114,7 @@ export class ObserverHintTimeline {
     segment: number;
   }[] = [];
   private effectiveDelayMs: number | null = null;
+  private lastMatchedDeathOffsetMs: number | null = null;
   private lastEvidenceAt: number | null = null;
   private evidenceCount = 0;
   private evidenceSpreadMs: number | null = null;
@@ -173,6 +174,7 @@ export class ObserverHintTimeline {
       calibration: {
         state: this.calibrationState(this.lastNow),
         effectiveDelayMs: this.effectiveDelayMs,
+        lastMatchedDeathOffsetMs: this.lastMatchedDeathOffsetMs,
         evidenceCount: this.evidenceCount,
         evidenceSpreadMs: this.evidenceSpreadMs,
         lastEvidenceMonotonicMs: this.lastEvidenceAt,
@@ -213,6 +215,7 @@ export class ObserverHintTimeline {
     this.clockEvidence = [];
     this.clockSegment++;
     this.effectiveDelayMs = null;
+    this.lastMatchedDeathOffsetMs = null;
     this.lastEvidenceAt = null;
     this.evidenceCount = 0;
     this.evidenceSpreadMs = null;
@@ -757,7 +760,13 @@ export class ObserverHintTimeline {
             programReceiveMs >= kill.shownDueMs - settings.leadSeconds * 1000 &&
             programReceiveMs <= kill.shownDueMs + 1000,
         );
-        if (candidates.length === 1) candidates[0]!.matched = true;
+        if (candidates.length === 1) {
+          const match = candidates[0]!;
+          match.matched = true;
+          if (this.effectiveDelayMs !== null)
+            this.lastMatchedDeathOffsetMs =
+              programReceiveMs - match.sourceMs - this.effectiveDelayMs;
+        }
       }
       this.previous = alive;
       this.seenReceive = program.cursor.programReceiveSequence;

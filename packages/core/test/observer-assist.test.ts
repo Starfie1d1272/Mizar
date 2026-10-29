@@ -101,6 +101,7 @@ describe('private observer hints against Program', () => {
     expect(result.observer?.hints).toEqual([]);
     expect(result.observer?.state).toBe('ready');
     expect(result.observer?.measuredDelaySeconds).toBe(120);
+    expect(timeline.getDiagnostics().calibration.lastMatchedDeathOffsetMs).toBe(-1000);
 
     // Duplicate delivery and repeated projection cannot reintroduce the matched event.
     timeline.consume(event);
