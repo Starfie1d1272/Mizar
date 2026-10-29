@@ -14,9 +14,16 @@ import { desktopInvoke } from '../workspace/client';
 export function MulnxToolControls({
   tool,
   allowStop = true,
+  runtimeOnly = false,
+  maintenanceOnly = false,
 }: {
   allowStop?: boolean;
-  tool: MulnxToolView | undefined;
+  runtimeOnly?: boolean;
+  maintenanceOnly?: boolean;
+  tool:
+    | (Pick<MulnxToolView, 'installed' | 'latest' | 'busy'> &
+        Partial<Pick<MulnxToolView, 'message' | 'packs'>>)
+    | undefined;
 }) {
   const production = useLocalRead<Production>('/local/v1/production');
   const [busy, setBusy] = useState(false);
@@ -80,23 +87,36 @@ export function MulnxToolControls({
   }
   return (
     <div>
-      <p>
-        启动前请先退出完美世界竞技平台、其他竞技平台和游戏，Mizar 会调用 MulNX
-        完成环境检查。仅用于离线 Demo 或已授权观战。
-      </p>
-      <p>
-        MulNX · {tool.installed ?? '首次启动时准备'}
-        {tool.latest && tool.latest !== tool.installed ? ` · 可更新至 ${tool.latest}` : ''}
-      </p>
-      <Button disabled={busy || tool.busy} onClick={() => void run('check')}>
-        检查更新
-      </Button>
-      {window.__TAURI_INTERNALS__ ? (
-        <Button disabled={busy || tool.busy} onClick={() => void run('update')}>
-          更新或重新准备 MulNX
+      {!runtimeOnly && !maintenanceOnly ? (
+        <p>
+          启动前请先退出完美世界竞技平台、其他竞技平台和游戏，Mizar 会调用 MulNX
+          完成环境检查。仅用于离线 Demo 或已授权观战。
+        </p>
+      ) : null}
+      {!runtimeOnly && !maintenanceOnly ? (
+        <p>
+          MulNX · {tool.installed ?? '首次启动时准备'}
+          {tool.latest && tool.latest !== tool.installed ? ` · 可更新至 ${tool.latest}` : ''}
+        </p>
+      ) : null}
+      {!runtimeOnly ? (
+        <Button disabled={busy || tool.busy} onClick={() => void run('check')}>
+          检查更新
         </Button>
       ) : null}
-      {window.__TAURI_INTERNALS__ ? (
+      {maintenanceOnly && !tool.latest ? <span>检查后可选择安装或更新。</span> : null}
+      {!runtimeOnly && window.__TAURI_INTERNALS__ && (!maintenanceOnly || tool.latest) ? (
+        <Button disabled={busy || tool.busy} onClick={() => void run('update')}>
+          {maintenanceOnly
+            ? !tool.installed
+              ? '安装'
+              : tool.installed === tool.latest
+                ? '重新安装'
+                : '更新'
+            : '更新或重新准备 MulNX'}
+        </Button>
+      ) : null}
+      {!runtimeOnly && !maintenanceOnly && window.__TAURI_INTERNALS__ ? (
         <Button
           disabled={busy || tool.busy || !production?.canEnter || production.mode !== 'preparation'}
           onClick={() => void run('open')}
@@ -104,7 +124,7 @@ export function MulnxToolControls({
           启动 MulNX 工作台
         </Button>
       ) : null}
-      {window.__TAURI_INTERNALS__ && allowStop ? (
+      {!maintenanceOnly && window.__TAURI_INTERNALS__ && allowStop ? (
         <details>
           <summary>停止控制</summary>
           <Button
@@ -115,22 +135,30 @@ export function MulnxToolControls({
           </Button>
         </details>
       ) : null}
-      <Dialog
-        open={confirmStop}
-        title="停止 MulNX 控制"
-        onClose={() => setConfirmStop(false)}
-        canClose={() => !busy}
-      >
-        <p>
-          将结束本场制作、恢复游戏 HUD，并解除 MulNX 控制；CS2 保持运行。停止结果需要在游戏内核对。
-        </p>
-        <Button disabled={busy} onClick={() => setConfirmStop(false)}>
-          取消
-        </Button>
-        <Button variant="primary" disabled={busy} aria-busy={busy} onClick={() => void run('stop')}>
-          {busy ? '正在请求停止…' : '结束制作并停止控制'}
-        </Button>
-      </Dialog>
+      {!maintenanceOnly ? (
+        <Dialog
+          open={confirmStop}
+          title="停止 MulNX 控制"
+          onClose={() => setConfirmStop(false)}
+          canClose={() => !busy}
+        >
+          <p>
+            将结束本场制作、恢复游戏 HUD，并解除 MulNX 控制；CS2
+            保持运行。停止结果需要在游戏内核对。
+          </p>
+          <Button disabled={busy} onClick={() => setConfirmStop(false)}>
+            取消
+          </Button>
+          <Button
+            variant="primary"
+            disabled={busy}
+            aria-busy={busy}
+            onClick={() => void run('stop')}
+          >
+            {busy ? '正在请求停止…' : '结束制作并停止控制'}
+          </Button>
+        </Dialog>
+      ) : null}
       {message ? <StatusBanner tone={failed ? 'danger' : 'info'}>{message}</StatusBanner> : null}
     </div>
   );
