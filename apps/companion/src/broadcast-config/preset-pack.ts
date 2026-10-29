@@ -4,6 +4,7 @@ import {
   boundModules,
   type AssetRef,
   type BroadcastConfigDocument,
+  type MulnxToolRef,
   type ResourceRef,
 } from '@mizar/broadcast-config';
 import {
@@ -21,6 +22,46 @@ import type { BroadcastConfigStore } from './store.js';
 const resourceKey = (ref: ResourceRef) => JSON.stringify([ref.id, ref.version, ref.digest]);
 const assetKey = (ref: AssetRef) => JSON.stringify([resourceKey(ref.resource), ref.fileId]);
 type FileEntry = { id: string; path: string; mediaType: string; data: Buffer };
+
+// The external dependency records acquisition, not proof that a local tool is installed.
+function releaseResource(tool: MulnxToolRef): ResourceRef {
+  if (tool.kind !== 'upstream') throw new Error('capability_unsupported');
+  const { releaseId, assetId, tag, archiveSha256 } = tool.release;
+  if (
+    !Number.isSafeInteger(releaseId) ||
+    releaseId <= 0 ||
+    !Number.isSafeInteger(assetId) ||
+    assetId <= 0 ||
+    !tag ||
+    tag.length > 128 ||
+    !/^[a-f0-9]{64}$/.test(archiveSha256)
+  )
+    throw new Error('package_invalid');
+  return {
+    id: `upstream:mulnx:${releaseId}:${assetId}`,
+    version: tag,
+    digest: archiveSha256,
+  };
+}
+
+function releaseTool(resource: ResourceRef): MulnxToolRef {
+  const match = /^upstream:mulnx:([1-9][0-9]*):([1-9][0-9]*)$/.exec(resource.id);
+  if (!match) throw new Error('capability_unsupported');
+  const releaseId = Number(match[1]),
+    assetId = Number(match[2]);
+  if (!Number.isSafeInteger(releaseId) || !Number.isSafeInteger(assetId))
+    throw new Error('package_invalid');
+  return {
+    kind: 'upstream',
+    release: {
+      repository: 'Co1Swet/MulNX_CS2',
+      releaseId,
+      assetId,
+      tag: resource.version,
+      archiveSha256: resource.digest,
+    },
+  };
+}
 
 /** Export one complete scheme from a single configuration snapshot. */
 export async function exportPresetPack(input: {
@@ -55,8 +96,6 @@ export async function exportPresetPack(input: {
   if (camera?.kind === 'camera')
     for (const map of camera.value.maps) {
       if (map.openingSound) await addAudio(map.openingSound.asset);
-      // Tool acquisitions need a verified provider mapping before they can be exported.
-      throw new Error('capability_unsupported');
     }
   const dependencies = new Map<
     string,
@@ -100,8 +139,8 @@ export async function exportPresetPack(input: {
       resource(ref) {
         return { package: alias(ref) };
       },
-      tool() {
-        throw new Error('capability_unsupported');
+      tool(ref) {
+        return { package: alias(releaseResource(ref)) };
       },
     });
     const id = `module-${kind}`;
@@ -199,8 +238,8 @@ export async function importPresetPack(input: {
         resource(ref) {
           return lookup(ref.package);
         },
-        tool() {
-          throw new Error('capability_unsupported');
+        tool(ref) {
+          return releaseTool(lookup(ref.package));
         },
       },
       supports: () => false,
