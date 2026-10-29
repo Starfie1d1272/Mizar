@@ -50,7 +50,8 @@ export function projectLhm(
       player.state.burning === null ||
       player.state.hasHelmet === null ||
       Object.values(player.matchStats).some((value) => value === null) ||
-      !player.weaponsAvailable
+      !player.weaponsAvailable ||
+      player.weapons.some((weapon) => !weapon.name)
     ) {
       missing.push(`player:${player.sourcePlayerId}`);
       continue;
@@ -95,6 +96,24 @@ export function projectLhm(
       ),
     };
   }
+  const bombState = program.bomb?.state;
+  const bombCountdown =
+    bombState === 'planting'
+      ? program.bomb?.action?.kind === 'plant'
+        ? program.bomb.action.remainingSeconds
+        : null
+      : bombState === 'defusing'
+        ? program.bomb?.action?.kind === 'defuse'
+          ? program.bomb.action.remainingSeconds
+          : null
+        : bombState === 'planted'
+          ? program.bomb?.explosion?.remainingSeconds
+          : undefined;
+  if (
+    (bombState === 'planting' || bombState === 'defusing' || bombState === 'planted') &&
+    bombCountdown == null
+  )
+    missing.push('bomb:countdown');
   if (missing.length) return { available: false, missing };
   const observed = program.observedPlayerSourceId && players[program.observedPlayerSourceId];
   const bombPosition = radar.bomb?.position;
@@ -109,9 +128,7 @@ export function projectLhm(
           state: program.bomb.state,
           position: `${bombPosition.x}, ${bombPosition.y}, ${bombPosition.z}`,
           ...(program.bomb.sourcePlayerId ? { player: program.bomb.sourcePlayerId } : {}),
-          ...(program.bomb.explosion?.remainingSeconds != null
-            ? { countdown: String(program.bomb.explosion.remainingSeconds) }
-            : {}),
+          ...(bombCountdown != null ? { countdown: String(bombCountdown) } : {}),
         }
       : undefined;
   const team = (side: 'ct' | 't') => ({

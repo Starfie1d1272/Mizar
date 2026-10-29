@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { programPayloadSchema } from '@mizar/protocol/program';
-import { radarPayloadSchema } from '@mizar/protocol/radar';
+import { programPayloadSchema, programSnapshotSchema } from '@mizar/protocol/program';
+import { radarPayloadSchema, radarSnapshotSchema } from '@mizar/protocol/radar';
 import { projectLhm } from '../src/hud-compat/projection.js';
 
 const programFixtures = JSON.parse(
@@ -43,6 +43,49 @@ describe('LHM projection', () => {
         },
       },
     });
+  });
+  it('preserves bomb clocks in all 19 cursor-matched replay projections', () => {
+    const radars = Object.values(radarFixtures.fixtures).flatMap((fixture) =>
+      fixture.samples.map((sample) => radarSnapshotSchema.parse(sample.snapshot)),
+    );
+    const programs = Object.values(programFixtures.fixtures).map((fixture) =>
+      programSnapshotSchema.parse(fixture.snapshot),
+    );
+    expect(programs).toHaveLength(19);
+    for (const snapshot of programs) {
+      const matching = radars.find(
+        (candidate) => JSON.stringify(candidate.cursor) === JSON.stringify(snapshot.cursor),
+      );
+      expect(matching, `missing radar for ${snapshot.cursor.programReceiveSequence}`).toBeDefined();
+      if (!matching) continue;
+      const result = projectLhm(snapshot.payload, matching.payload);
+      expect(result.available, `frame ${snapshot.cursor.programReceiveSequence}`).toBe(true);
+      const state = snapshot.payload.bomb?.state;
+      if (state !== 'planting' && state !== 'defusing' && state !== 'planted') continue;
+      expect(result.available, `${state} ${snapshot.cursor.programReceiveSequence}`).toBe(true);
+      if (!result.available) continue;
+      const expected =
+        state === 'planted'
+          ? snapshot.payload.bomb?.explosion?.remainingSeconds
+          : snapshot.payload.bomb?.action?.remainingSeconds;
+      expect(result.raw).toMatchObject({ bomb: { state, countdown: String(expected) } });
+    }
+  });
+  it('rejects missing required bomb time and weapon name', () => {
+    const planting = programPayloadSchema.parse(
+      programFixtures.fixtures['real-planting']!.snapshot.payload,
+    );
+    if (!planting.bomb) throw new Error('fixture missing bomb');
+    planting.bomb.action = null;
+    const result = projectLhm(planting, radar);
+    expect(result.available).toBe(false);
+    if (!result.available) expect(result.missing).toContain('bomb:countdown');
+    const missingWeapon = structuredClone(program);
+    missingWeapon.players[0]!.weapons[0]!.name = null;
+    const weapons = projectLhm(missingWeapon, radar);
+    expect(weapons.available).toBe(false);
+    if (!weapons.available)
+      expect(weapons.missing).toContain(`player:${program.players[0]!.sourcePlayerId}`);
   });
   it('reports missing or stale data instead of manufacturing it', () => {
     const stale = projectLhm(program, { ...radar, telemetryFreshness: 'stale' });
