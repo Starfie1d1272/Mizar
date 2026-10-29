@@ -100,3 +100,111 @@ it('boots the coordinator with verified owners and exposes only display configur
     await rm(root, { recursive: true, force: true });
   }
 });
+
+it('boots built-in providers without custom injection when legacy dependencies are available', async () => {
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { HudConfigStore } = await import('../../src/hud-config/store.js');
+  const root = await mkdtemp(join(tmpdir(), 'broadcast-builtins-'));
+  const hud = new HudConfigStore();
+  await hud.load();
+  const app = buildApp({ obsConfigPath: join(root, 'obs.json'), hudConfigStore: hud });
+  try {
+    const status = await app.inject('/local/v1/broadcast-config/migration');
+    expect(status.json()).toEqual({ state: 'ready' });
+    const display = await app.inject('/local/v1/broadcast-display-config');
+    expect(display.statusCode).toBe(200);
+    expect(display.json()).toMatchObject({
+      hud: {
+        renderer: 'native',
+        overlays: { chat: { placement: 'auto' }, pause: { visual: 'legacy' } },
+        accent: { source: 'fixed' },
+      },
+    });
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it('preserves the existing music owner state during built-in production migration', async () => {
+  const { mkdtemp, readFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { HudConfigStore } = await import('../../src/hud-config/store.js');
+  const { MusicStore } = await import('../../src/music/store.js');
+  const { musicWav } = await import('../music-fixtures.js');
+  const root = await mkdtemp(join(tmpdir(), 'broadcast-real-music-'));
+  const music = new MusicStore(join(root, 'music'));
+  await music.load();
+  const track = await music.add('sample.wav', musicWav());
+  const config = structuredClone(music.state.config);
+  config.groups.waiting.tracks = [track];
+  await music.configure(config);
+  await music.update((state) => {
+    state.master = 0.3;
+    state.muted = true;
+  });
+  const revision = music.state.configRevision;
+  const oldState = await readFile(join(root, 'music', 'state.json'), 'utf8');
+  const hud = new HudConfigStore();
+  await hud.load();
+  const app = buildApp({ obsConfigPath: join(root, 'obs.json'), hudConfigStore: hud });
+  try {
+    expect((await app.inject('/local/v1/broadcast-config/migration')).json()).toEqual({
+      state: 'ready',
+    });
+    const presets = await app.inject('/local/v1/broadcast-presets');
+    expect(presets.json()).toMatchObject({
+      active: {
+        moduleRevisions: { music: revision },
+        resolved: { music: { groups: { waiting: { tracks: [{ name: 'sample.wav' }] } } } },
+      },
+    });
+    expect(await readFile(join(root, 'music', 'state.json'), 'utf8')).toBe(oldState);
+    const runtime = JSON.parse(
+      await readFile(join(root, 'music', 'runtime.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    expect(runtime).toMatchObject({ master: 0.3, muted: true });
+    expect(runtime).not.toHaveProperty('config');
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it('leaves real legacy files in place when a camera source cannot yet be verified', async () => {
+  const { mkdtemp, readFile, rm, stat } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { HudConfigStore } = await import('../../src/hud-config/store.js');
+  const { OrchestrationStore } = await import('../../src/orchestration/store.js');
+  const root = await mkdtemp(join(tmpdir(), 'broadcast-real-camera-'));
+  const camera = new OrchestrationStore(join(root, 'orchestration'));
+  await camera.load();
+  await camera.save({
+    format: 'mizar.orchestration',
+    version: 1,
+    name: 'Current',
+    maps: [{ map: 'de_mirage', pack: 'Mizar_test' }],
+  });
+  const oldState = await readFile(join(camera.directory, 'presets.json'), 'utf8');
+  const hud = new HudConfigStore();
+  await hud.load();
+  const app = buildApp({ obsConfigPath: join(root, 'obs.json'), hudConfigStore: hud });
+  try {
+    expect((await app.inject('/local/v1/broadcast-config/migration')).json()).toEqual({
+      state: 'pending',
+      reason: 'camera_identity_unavailable',
+    });
+    expect((await app.inject('/local/v1/broadcast-display-config')).statusCode).toBe(503);
+    expect(await readFile(join(camera.directory, 'presets.json'), 'utf8')).toBe(oldState);
+    await expect(stat(join(root, 'broadcast-config.json'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

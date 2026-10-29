@@ -1,3 +1,4 @@
+import { createProductionBroadcastDependencies } from './broadcast-config/production.js';
 import {
   createBroadcastRuntime,
   type BroadcastRuntimeDependencies,
@@ -249,6 +250,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   const demoRecovery = readDemoTestRecovery(demoMarkerPath);
   const formalMutations = new Set<string>();
   let resources: ResourceStore | undefined;
+  let broadcastConfig = options.broadcastConfig;
   let getBroadcastReferences: (() => ResourceRef[]) | undefined;
   let recorder = options.recorder ?? createDisabledRecorder('recorder_not_configured');
   const currentRecorder = (): CaptureRecorder => recorder;
@@ -739,7 +741,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   registerBroadcastMigrationStatus(app, localWebTransport.getOriginPolicy(), () =>
     getBroadcastMigrationStatus(),
   );
-  if (!options.broadcastConfig || !options.obsConfigPath)
+  if (!options.obsConfigPath)
     app.get('/local/v1/broadcast-display-config', (_request, reply) =>
       reply.code(503).send({ error: 'broadcast_config_unavailable' }),
     );
@@ -1117,11 +1119,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
               : undefined,
           ),
           activateWhenSafe: (commit) => production.withResourceActivation(commit),
-          ...(options.broadcastConfig
+          ...(broadcastConfig
             ? {
                 references: {
                   run: <T>(operation: () => Promise<T>) =>
-                    options.broadcastConfig!.references.run(operation),
+                    broadcastConfig!.references.run(operation),
                   isReferenced: (ref: ResourceRef) => {
                     if (!getBroadcastReferences) throw new Error('broadcast_config_unavailable');
                     return Promise.resolve(
@@ -1264,29 +1266,35 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       join(dirname(options.obsConfigPath), 'orchestration'),
       (stage, evidence) => sessionJournal?.record(stage, evidence),
     );
-    const broadcastRuntime = options.broadcastConfig
+    broadcastConfig ??= createProductionBroadcastDependencies(
+      dirname(options.obsConfigPath),
+      musicStore,
+    );
+    const broadcastRuntime = broadcastConfig
       ? createBroadcastRuntime({
           hud: hudConfigStore,
           music: musicStore,
           camera: cameraStore,
           dependencies: {
-            ...options.broadcastConfig,
-            hudPath: options.broadcastConfig.hudPath ?? options.hudConfigPath,
+            ...broadcastConfig,
+            hudPath: broadcastConfig.hudPath ?? options.hudConfigPath,
             isDeleting: async (ref) => {
-              if (ref.id !== PACK_ID) return options.broadcastConfig!.isDeleting(ref);
+              if (ref.id !== PACK_ID) return broadcastConfig!.isDeleting(ref);
               if (!resources) throw new Error('resource_store_unavailable');
               return resources.isDeleting(ref);
             },
             resolve: {
-              ...options.broadcastConfig.resolve,
+              scene: (value) => broadcastConfig!.resolve.scene(value),
+              camera: (value) => broadcastConfig!.resolve.camera(value),
+              hud: (value) => broadcastConfig!.resolve.hud(value),
               asset: async (ref) => {
-                if (ref.resource.id !== PACK_ID) return options.broadcastConfig!.resolve.asset(ref);
+                if (ref.resource.id !== PACK_ID) return broadcastConfig!.resolve.asset(ref);
                 if (!resources) throw new Error('resource_store_unavailable');
                 await resources.readExact(ref.resource, ref.fileId);
               },
             },
             verifyActive: async (active) => {
-              await options.broadcastConfig!.verifyActive(active);
+              await broadcastConfig!.verifyActive(active);
               for (const ref of active.lock.resources) {
                 if (ref.id !== PACK_ID) continue;
                 if (!resources) throw new Error('resource_store_unavailable');

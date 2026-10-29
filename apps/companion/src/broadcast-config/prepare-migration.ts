@@ -74,7 +74,13 @@ export async function prepareLegacyMigration(input: {
       lock: input.lock ?? localLock,
     });
     return { state: 'ready', document };
-  } catch {
-    return { state: 'pending', reason: 'dependency_unavailable' };
+  } catch (error) {
+    return {
+      state: 'pending',
+      reason:
+        error instanceof Error && error.message === 'camera_identity_unavailable'
+          ? 'camera_identity_unavailable'
+          : 'dependency_unavailable',
+    };
   }
 }
