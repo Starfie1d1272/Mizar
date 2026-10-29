@@ -195,3 +195,31 @@ it('rejects unsupported background slots without affecting HUD support', async (
   expect(supportsBroadcastDisplay(config, 'waiting')).toBe(false);
   expect(supportsBroadcastDisplay(config, 'gameplay')).toBe(true);
 });
+
+it('keeps HUD available while rejecting a scene marked unavailable by the server', async () => {
+  const fetcher = vi.fn(async () => ({
+    ok: true,
+    headers: new Headers({ 'x-mizar-program-status': 'dependency_missing' }),
+    json: async () => projection,
+  }));
+  vi.stubGlobal('fetch', fetcher);
+  let hud: BroadcastDisplayClientState | undefined;
+  let scene: BroadcastDisplayClientState | undefined;
+  function Probe() {
+    hud = useBroadcastDisplayConfig(true, 'gameplay');
+    scene = useBroadcastDisplayConfig(true, 'waiting');
+    return null;
+  }
+  const root = createRoot(document.createElement('div'));
+  try {
+    await act(async () => {
+      root.render(<Probe />);
+      await Promise.resolve();
+    });
+    expect(hud?.status).toBe('ready');
+    expect(hud?.current?.activeRevision).toBe('active-1');
+    expect(scene).toEqual({ status: 'unavailable', current: null });
+  } finally {
+    act(() => root.unmount());
+  }
+});
