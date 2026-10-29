@@ -426,9 +426,10 @@ export async function importPresetPack(input: {
       reused: false,
       entries: makeEntries(before),
     };
-  const installed = await input.resources.install(input.zip);
-  if (resourceKey(installed) !== resourceKey(inspected.source))
-    throw new Error('package_identity_mismatch');
-  const result = await input.store.importBatch(batch);
+  const result = await input.resources.installAndCommit(input.zip, async (installed) => {
+    if (resourceKey(installed) !== resourceKey(inspected.source))
+      throw new Error('package_identity_mismatch');
+    return input.store.importBatch(batch);
+  });
   return { ...result, entries: makeEntries(input.store.snapshot) };
 }

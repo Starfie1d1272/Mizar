@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { link, lstat, open, unlink } from 'node:fs/promises';
+import { link, lstat, open, rename, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { crc32 } from 'node:zlib';
 import { PACK_LIMITS, readPackArchive } from '@mizar/broadcast-pack';
@@ -134,7 +134,8 @@ export class MusicPackResources {
     try {
       archive = await this.readStored(this.filename(ref.id, ref.version));
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('resource_missing');
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT')
+        throw new Error('resource_missing', { cause: error });
       throw new Error('resource_damaged', { cause: error });
     }
     if (
@@ -146,6 +147,10 @@ export class MusicPackResources {
     return archive;
   }
   async install(zip: Buffer): Promise<ResourceRef> {
+    return this.installAndCommit(zip, async (ref) => ref);
+  }
+  /** Serialize installation through the configuration commit with explicit removal. */
+  async installAndCommit<T>(zip: Buffer, commit: (ref: ResourceRef) => Promise<T>): Promise<T> {
     return this.queue.run(async () => {
       const bytes = Buffer.from(zip);
       const archive = await readPackArchive(bytes);
@@ -156,6 +161,7 @@ export class MusicPackResources {
       };
       await ensureDirectory(this.root);
       const filename = this.filename(ref.id, ref.version);
+      if (await this.isDeleting(ref)) throw new Error('resource_deleting');
       const target = join(this.root, filename);
       const temporary = join(this.root, `tmp-${randomUUID()}`);
       try {
@@ -189,8 +195,73 @@ export class MusicPackResources {
           throw new Error('identity_conflict', { cause: error });
         throw error;
       }
-      return ref;
+      return commit(ref);
     });
+  }
+  async isDeleting(ref: ResourceRef): Promise<boolean> {
+    try {
+      await lstat(join(this.root, `${this.filename(ref.id, ref.version)}.deleting`));
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      throw error;
+    }
+  }
+  /** The caller's reference guard serializes the last reference check and deletion mark. */
+  async remove(
+    ref: ResourceRef,
+    guard: <T>(operation: () => Promise<T>) => Promise<T>,
+    referenced: () => ResourceRef[],
+  ): Promise<void> {
+    await this.queue.run(() =>
+      guard(async () => {
+        const marker = join(this.root, `${this.filename(ref.id, ref.version)}.deleting`);
+        if (
+          referenced().some(
+            (item) =>
+              item.id === ref.id && item.version === ref.version && item.digest === ref.digest,
+          )
+        )
+          throw new Error('resource_in_use');
+        if (await this.isDeleting(ref)) {
+          const handle = await open(marker, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+          let saved: ResourceRef;
+          try {
+            const stat = await handle.stat();
+            if (!stat.isFile() || stat.nlink !== 1 || stat.size > 1024)
+              throw new Error('resource_damaged');
+            saved = JSON.parse(await handle.readFile('utf8')) as ResourceRef;
+          } finally {
+            await handle.close();
+          }
+          if (saved.id !== ref.id || saved.version !== ref.version || saved.digest !== ref.digest)
+            throw new Error('resource_deleting');
+        } else {
+          await this.readArchive(ref);
+          const temporary = join(this.root, `tmp-${randomUUID()}`);
+          try {
+            const handle = await open(temporary, 'wx', 0o600);
+            try {
+              await handle.writeFile(JSON.stringify(ref));
+              await handle.sync();
+            } finally {
+              await handle.close();
+            }
+            await rename(temporary, marker);
+          } finally {
+            await unlink(temporary).catch((error: NodeJS.ErrnoException) => {
+              if (error.code !== 'ENOENT') throw error;
+            });
+          }
+        }
+        await unlink(join(this.root, this.filename(ref.id, ref.version))).catch(
+          (error: NodeJS.ErrnoException) => {
+            if (error.code !== 'ENOENT') throw error;
+          },
+        );
+        await unlink(marker);
+      }),
+    );
   }
   async read(ref: AssetRef): Promise<{ name: string; bytes: Buffer }> {
     const asset = await this.readAsset(ref);
