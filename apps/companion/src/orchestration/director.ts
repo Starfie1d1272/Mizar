@@ -1,7 +1,7 @@
-import { randomUUID } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 import type { CameraShot, OrchestrationStatus } from '@mizar/protocol/orchestration';
 import { musicCue, musicMapKey, musicPause, musicSafe, type MusicTruth } from '../music/cues.js';
-import type { MulnxProvider } from './provider.js';
+import type { MulnxProvider, TrackedState } from './provider.js';
 import type { OrchestrationStore } from './store.js';
 
 export interface CameraTruth extends MusicTruth {
@@ -18,6 +18,7 @@ export class CameraDirector {
   private connection = -1;
   private held = true;
   private intentRevision = 0;
+  private readonly unsubscribeTracked: () => void;
   private preparation: OrchestrationStatus['preparation'] = 'waiting';
   private preparationKey = '';
   private preparationEpoch = 0;
@@ -30,7 +31,20 @@ export class CameraDirector {
   private seen = new Set<string>();
   private highestRound = -1;
   private previousMacro = '';
-  private current: { key: string; macro: string; until: number; edge: string } | null = null;
+  private current: {
+    key: string;
+    macro: string;
+    until: number;
+    edge: string;
+    id: number;
+    generation: number;
+    connection: number;
+  } | null = null;
+  private trackedGeneration: number | null = null;
+  private cameraExecution: OrchestrationStatus['execution'] = 'unconfirmed';
+  private stopping: Promise<boolean> | null = null;
+  private pauseRemaining: { edge: string; shots: CameraShot[] } | null = null;
+  private pendingContinuation: { key: string; edge: string } | null = null;
   private handoff: {
     shot: CameraShot;
     key: string;
@@ -46,7 +60,16 @@ export class CameraDirector {
     readonly store: OrchestrationStore,
     readonly provider: Pick<
       MulnxProvider,
-      'generation' | 'connected' | 'send' | 'connect' | 'close' | 'packStatus'
+      | 'generation'
+      | 'connected'
+      | 'send'
+      | 'connect'
+      | 'close'
+      | 'packStatus'
+      | 'trackedStatus'
+      | 'cancelTracked'
+      | 'playTracked'
+      | 'onTracked'
     >,
     private readonly truth: () => CameraTruth,
     private readonly diagnostic: (stage: string, evidence: unknown) => void = () => {},
@@ -54,7 +77,9 @@ export class CameraDirector {
     private readonly random = Math.random,
     private readonly isolated: (pack: string) => boolean = () => false,
     private nativeMode = false,
-  ) {}
+  ) {
+    this.unsubscribeTracked = this.provider.onTracked((state) => this.trackedState(state));
+  }
   /** Authenticated Host lifecycle; never a source of match or upstream execution facts. */
   hostStarted(host: string) {
     this.host = host;
@@ -168,7 +193,7 @@ export class CameraDirector {
       held: this.held,
       preparation: this.preparation,
       request: this.request,
-      execution: 'unconfirmed',
+      execution: this.cameraExecution,
       current: this.current?.macro ?? null,
       message: this.message,
     };
@@ -189,6 +214,15 @@ export class CameraDirector {
     const t = this.truth();
     const context = this.identity(t);
     if (context !== this.context || this.connection !== this.provider.generation) {
+      if (this.connection !== this.provider.generation) {
+        this.revision++;
+        this.current = null;
+        this.trackedGeneration = null;
+        this.cameraExecution = 'unconfirmed';
+        this.clearing = false;
+        this.stopping = null;
+        this.request = 'unknown';
+      }
       const execution = this.executionIdentity(t);
       const mapChanged = execution !== this.execution;
       this.execution = execution;
@@ -219,6 +253,7 @@ export class CameraDirector {
     const edge = this.edge(t);
     if (
       this.current &&
+      !this.clearing &&
       (this.now() >= this.current.until ||
         (this.current.key !== 'audition' && this.current.edge !== edge.key))
     )
@@ -245,14 +280,18 @@ export class CameraDirector {
       if (!candidates.length) candidates.push(...map.rounds);
       shot = candidates[Math.floor(this.random() * candidates.length)] ?? null;
     } else if (edge.stage === 'tactical' || edge.stage === 'technical') {
-      const candidates = map.pauseCandidates[edge.stage];
-      shot = candidates[Math.floor(this.random() * candidates.length)] ?? map.stages[edge.stage];
+      const candidates = [...map.pauseCandidates[edge.stage]];
+      const index = Math.floor(this.random() * candidates.length);
+      shot = candidates.splice(index, 1)[0] ?? map.stages[edge.stage];
+      this.pauseRemaining = { edge: edge.key, shots: candidates };
     } else if (edge.stage in map.stages) shot = map.stages[edge.stage as keyof typeof map.stages];
     if (shot) this.dispatch(shot, edge.key, edge.key);
   }
   /** Invalidate readiness without changing the operator's automatic/manual choice. */
   invalidatePreparation(message = '正在准备运镜。') {
     this.preparationEpoch++;
+    this.pauseRemaining = null;
+    this.pendingContinuation = null;
     this.preparationKey = '';
     this.preparation = 'waiting';
     this.stop(message);
@@ -298,6 +337,12 @@ export class CameraDirector {
         const status = await this.provider.packStatus();
         if (!status || status.active !== pack || !status.empty || !valid())
           throw new Error('camera_pack_unconfirmed');
+        const tracked = await this.provider.trackedStatus();
+        if (!tracked || !valid()) throw new Error('camera_status_unconfirmed');
+        const cancelled = await this.provider.cancelTracked(tracked.generation);
+        if (!cancelled?.matched || !valid()) throw new Error('camera_stop_unconfirmed');
+        this.trackedGeneration = cancelled.generation;
+        this.cameraExecution = 'unconfirmed';
         this.preparationKey = context;
         this.preparation = 'ready';
         this.message = this.held ? '运镜已准备，可选择镜头。' : '运镜已准备，等待下一次触发。';
@@ -339,13 +384,25 @@ export class CameraDirector {
       expected.context !== this.context ||
       expected.connection !== this.provider.generation ||
       !this.safe(this.truth(), true) ||
-      !this.provider.connected ||
-      this.current ||
-      this.request === 'submitted'
+      !this.provider.connected
     )
       throw new Error('camera_audition_unavailable');
     this.held = true;
+    this.handoff = null;
+    this.pauseRemaining = null;
+    this.pendingContinuation = null;
     const intent = ++this.intentRevision;
+    if (
+      (this.current || this.stopping || (this.request === 'submitted' && !this.preparing)) &&
+      !(await this.cancelCurrent())
+    )
+      throw new Error('camera_stop_unconfirmed');
+    if (
+      intent !== this.intentRevision ||
+      expected.context !== this.identity(this.truth()) ||
+      expected.connection !== this.provider.generation
+    )
+      throw new Error('camera_context_changed');
     const revision = this.revision;
     await this.prepare(true);
     if (
@@ -398,69 +455,161 @@ export class CameraDirector {
       !this.provider.connected ||
       !this.store.ready ||
       this.store.saving ||
-      !this.packReady()
+      !this.packReady() ||
+      this.current ||
+      this.clearing ||
+      this.trackedGeneration === null
     )
       return false;
-    // Only dispatch can retain one bounded transition behind an in-flight clear.
-    if (this.current || this.request === 'submitted') return false;
-    const maxMs = shot.maxMs;
-    const revision = ++this.revision;
-    this.current = { key, macro: shot.macro, until: this.now() + maxMs, edge };
+    const pack = this.store.map(t.program.map.name)!.pack;
+    const id = randomInt(1, 2 ** 48),
+      generation = this.trackedGeneration;
+    const revision = ++this.revision,
+      connection = this.provider.generation;
+    this.current = {
+      key,
+      macro: shot.macro,
+      until: this.now() + shot.maxMs,
+      edge,
+      id,
+      generation,
+      connection,
+    };
     this.previousMacro = shot.macro;
+    this.cameraExecution = 'unconfirmed';
     this.request = 'submitted';
-    this.message = '请求已提交，执行未确认';
+    this.message = '镜头请求已提交。';
     this.diagnostic('camera_cue', { context: this.context, key, shot, result: 'submitted' });
-    void this.provider.send('CamMacro/Play', shot.macro).then((result) => {
-      if (revision !== this.revision || this.closed) return;
+    void this.provider.playTracked(shot.macro, pack, id, generation).then((result) => {
+      if (revision !== this.revision || this.closed || connection !== this.provider.generation)
+        return;
       this.request = result;
-      this.message =
-        result === 'queued' ? '请求已入队，执行未确认' : '运镜请求未确认，请在游戏内检查。';
+      if (result === 'queued') this.continuePause();
       if (result !== 'queued') {
+        this.cameraExecution = 'unconfirmed';
         this.preparation = 'error';
-        this.stop(this.message);
+        this.message = '镜头请求未确认，请检查连接。';
       }
     });
     return true;
   }
-  private stop(message: string) {
-    this.handoff = null;
-    if (this.clearing && !this.current) {
-      this.message = message;
+  private trackedState(state: TrackedState) {
+    const current = this.current;
+    if (
+      !current ||
+      current.id !== state.requestId ||
+      current.generation !== state.generation ||
+      current.connection !== this.provider.generation ||
+      this.context !== this.identity(this.truth())
+    )
+      return;
+    this.cameraExecution = state.state;
+    if (state.state === 'started') {
+      this.message = '镜头正在播放。';
       return;
     }
-    this.clearing = false;
-    const hadCurrent = this.current !== null;
-    if (hadCurrent)
+    this.current = null;
+    if (state.state === 'failed') {
+      if (
+        ['stale_generation', 'pack_changed', 'pack_mismatch', 'override_disabled', 'busy'].includes(
+          state.reason,
+        )
+      ) {
+        this.trackedGeneration = null;
+        this.preparation = 'error';
+      }
+      this.pauseRemaining = null;
+      this.message =
+        state.reason === 'macro_not_found' || state.reason === 'macro_empty'
+          ? '找不到可播放的镜头，请检查预设。'
+          : state.reason === 'path_unavailable' || state.reason === 'no_frame'
+            ? '镜头资源不可用，请检查游戏中的资源。'
+            : '镜头无法播放，请检查游戏连接和运镜设置。';
+    } else if (state.state === 'completed') {
+      this.message = '镜头已结束。';
+      this.pendingContinuation = { key: current.key, edge: current.edge };
+      this.continuePause();
+    }
+  }
+  private continuePause() {
+    const current = this.pendingContinuation,
+      next = this.pauseRemaining;
+    if (this.request === 'submitted') return;
+    this.pendingContinuation = null;
+    if (
+      this.request !== 'queued' ||
+      this.held ||
+      this.clearing ||
+      !current ||
+      !next ||
+      next.edge !== current.edge ||
+      next.edge !== this.edge(this.truth()).key ||
+      !next.shots.length
+    )
+      return;
+    const index = Math.floor(this.random() * next.shots.length);
+    const shot = next.shots.splice(index, 1)[0]!;
+    this.play(shot, current.key, current.edge);
+  }
+  private stop(message: string) {
+    this.handoff = null;
+    this.pauseRemaining = null;
+    this.pendingContinuation = null;
+    this.message = message;
+    if (this.clearing) return;
+    if (this.current) {
       this.diagnostic('camera_invalidate', {
         current: this.current,
         context: this.context,
         reason: message,
       });
-    this.current = null;
-    const revision = ++this.revision;
-    this.message = message;
-    if (!hadCurrent) {
-      if (this.request === 'submitted') this.request = 'unknown';
-      return;
+      void this.cancelCurrent();
+    } else if (this.request === 'submitted') {
+      this.revision++;
+      this.request = 'unknown';
     }
-    this.request = 'submitted';
+  }
+  private async cancelCurrent(): Promise<boolean> {
+    if (this.stopping) return this.stopping;
+    const token = this.trackedGeneration,
+      connection = this.provider.generation;
+    if (token === null || !this.provider.connected) return false;
+    const revision = ++this.revision;
     this.clearing = true;
-    const generation = this.provider.generation;
-    const epoch = this.preparationEpoch;
-    void this.provider.send('CamPlay/ClearForce').then((result) => {
-      if (revision === this.revision && !this.closed) {
+    this.request = 'submitted';
+    this.cameraExecution = 'unconfirmed';
+    const work = (async () => {
+      const result = await this.provider.cancelTracked(token);
+      if (revision !== this.revision || this.closed) return false;
+      if (connection !== this.provider.generation) {
         this.clearing = false;
-        if (generation !== this.provider.generation || epoch !== this.preparationEpoch) {
-          this.request = 'unknown';
-          return;
-        }
-        this.request = result;
-        if (result !== 'queued') {
-          this.preparation = 'error';
-          this.handoff = null;
-        } else this.releaseHandoff();
+        this.current = null;
+        this.trackedGeneration = null;
+        this.request = 'unknown';
+        return false;
       }
-    });
+      this.clearing = false;
+      if (!result?.matched) {
+        this.trackedGeneration = result?.generation ?? null;
+        this.preparation = 'error';
+        this.request = 'unknown';
+        this.message = '停止未确认，请检查连接后重试。';
+        this.handoff = null;
+        return false;
+      }
+      this.trackedGeneration = result.generation;
+      this.current = null;
+      this.cameraExecution = 'cancelled';
+      this.request = 'queued';
+      this.releaseHandoff();
+      return true;
+    })();
+    this.stopping = work;
+    try {
+      return await work;
+    } finally {
+      if (this.stopping === work) this.stopping = null;
+    }
   }
   hold(message = '人工接管；已请求清空全部运镜槽，停止未确认。') {
     this.intentRevision++;
@@ -482,16 +631,13 @@ export class CameraDirector {
       this.invalidatePreparation();
       this.provider.close();
     } else if (action === 'hold') {
-      const hadCurrent = this.current !== null || this.clearing;
       this.hold();
-      if (!this.provider.connected) this.message = '人工接管 · MulNX 未连接，请在游戏内停止运镜。';
-      // Explicit takeover also clears slots started outside Mizar.
-      if (!hadCurrent) {
-        const revision = ++this.revision;
-        this.request = 'submitted';
-        const result = await this.provider.send('CamPlay/ClearForce');
-        if (revision === this.revision) this.request = result;
-      }
+      if (
+        this.provider.connected &&
+        this.trackedGeneration !== null &&
+        !(await this.cancelCurrent())
+      )
+        throw new Error('camera_stop_unconfirmed');
     } else if (action === 'skip') {
       this.intentRevision++;
       if (this.lastEdge) this.consume(this.lastEdge);
@@ -499,11 +645,8 @@ export class CameraDirector {
     } else {
       if (
         this.closed ||
-        this.current !== null ||
-        this.clearing ||
         this.truth().demoAudition !== undefined ||
         this.seen.size >= 1024 ||
-        (this.request === 'submitted' && !this.preparing) ||
         !expected ||
         expected.context !== this.context ||
         expected.connection !== this.provider.generation ||
@@ -514,7 +657,21 @@ export class CameraDirector {
         !this.packReady()
       )
         throw new Error('camera_context_changed');
+      this.handoff = null;
+      this.pauseRemaining = null;
+      this.pendingContinuation = null;
       const intent = ++this.intentRevision;
+      if (
+        (this.current || this.stopping || (this.request === 'submitted' && !this.preparing)) &&
+        !(await this.cancelCurrent())
+      )
+        throw new Error('camera_stop_unconfirmed');
+      if (
+        intent !== this.intentRevision ||
+        expected.context !== this.identity(this.truth()) ||
+        expected.connection !== this.provider.generation
+      )
+        throw new Error('camera_context_changed');
       const revision = this.revision;
       await this.prepare(true);
       if (
@@ -535,6 +692,7 @@ export class CameraDirector {
   close() {
     this.hold();
     this.closed = true;
+    this.unsubscribeTracked();
     this.provider.close();
   }
 }
