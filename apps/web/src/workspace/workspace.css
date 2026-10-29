@@ -507,6 +507,7 @@
   color: var(--mizar-fg-on-accent);
   background: var(--mizar-action-danger);
   border-color: var(--mizar-action-danger);
+  margin: 3px;
 }
 .workspace-exit.mizar-button:hover:not(:disabled) {
   background: var(--mizar-action-danger-hover);
@@ -832,8 +833,5 @@
   }
   .workspace-message {
     padding-inline: var(--mizar-layout-compact);
-  }
-  .workspace-exit {
-    margin: 3px;
   }
 }

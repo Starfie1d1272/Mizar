@@ -228,6 +228,8 @@ test('16:9 workspace scales the native regions and keeps scene controls inside t
     const exit = (await page
       .getByRole('button', { name: '退出工作台', exact: true })
       .boundingBox())!;
-    expect(exit.y + exit.height).toBeLessThanOrEqual(viewport.height + 1);
+    // Leave room for the keyboard focus outline inside the native window.
+    expect(exit.y + exit.height).toBeLessThanOrEqual(viewport.height - 2);
+    expect(exit.x + exit.width).toBeLessThanOrEqual(viewport.width - 2);
   }
 });
