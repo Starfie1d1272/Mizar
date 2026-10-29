@@ -66,7 +66,17 @@ jobs:
           New-Item -ItemType Directory -Force -Path (Split-Path $env:RESOURCE_PUBLISHER_ROOT -Parent) | Out-Null
           git worktree add --detach "$env:RESOURCE_PUBLISHER_ROOT" $env:GITHUB_SHA
           if ($LASTEXITCODE -ne 0) { throw 'Trusted publication tool snapshot failed' }
+      - name: Bound Resolve successful qualification source to remaining time
+        id: budget_resolve
+        shell: pwsh
+        run: |
+          $created = gh api "repos/$env:GH_REPO/actions/runs/$env:RUN_ID" --jq .created_at
+          if ($LASTEXITCODE -ne 0 -or !$created) { throw 'Cannot read qualification start time' }
+          $minutes = [math]::Floor((600 - ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($created)).TotalSeconds) / 60)
+          if ($minutes -lt 1) { throw 'Less than one minute remains in release budget' }
+          "minutes=$minutes" >> $env:GITHUB_OUTPUT
       - name: Resolve successful qualification source
+        timeout-minutes: ${{ fromJSON(steps.budget_resolve.outputs.minutes) }}
         shell: pwsh
         run: |
           if ($env:RUN_ID -notmatch '^\d+$') { throw 'Invalid run ID' }
@@ -233,7 +243,17 @@ jobs:
           node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/machine-metadata.mjs" product "$env:RESOURCE_FROZEN_ROOT" - product/machine-metadata.json
           if ($LASTEXITCODE -ne 0) { throw 'Prerelease original carrier failed' }
 
+      - name: Bound Publish exact qualified assets to remaining time
+        id: budget_publish
+        shell: pwsh
+        run: |
+          $created = gh api "repos/$env:GH_REPO/actions/runs/$env:RUN_ID" --jq .created_at
+          if ($LASTEXITCODE -ne 0 -or !$created) { throw 'Cannot read qualification start time' }
+          $minutes = [math]::Floor((600 - ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($created)).TotalSeconds) / 60)
+          if ($minutes -lt 1) { throw 'Less than one minute remains in release budget' }
+          "minutes=$minutes" >> $env:GITHUB_OUTPUT
       - name: Publish exact qualified assets
+        timeout-minutes: ${{ fromJSON(steps.budget_publish.outputs.minutes) }}
         shell: pwsh
         run: |
           if ([DateTimeOffset]::UtcNow -gt [DateTimeOffset]::Parse($env:RELEASE_DEADLINE)) { throw 'Release 600-second budget exceeded' }
@@ -295,7 +315,18 @@ jobs:
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
           subject-path: update-publication.json
+      - name: Bound Upload and verify publication authorization to remaining time
+        id: budget_authorize
+        if: ${{ !contains(env.RELEASE_TAG, '-') && env.RELEASE_ALREADY_PUBLISHED != 'true' }}
+        shell: pwsh
+        run: |
+          $created = gh api "repos/$env:GH_REPO/actions/runs/$env:RUN_ID" --jq .created_at
+          if ($LASTEXITCODE -ne 0 -or !$created) { throw 'Cannot read qualification start time' }
+          $minutes = [math]::Floor((600 - ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($created)).TotalSeconds) / 60)
+          if ($minutes -lt 1) { throw 'Less than one minute remains in release budget' }
+          "minutes=$minutes" >> $env:GITHUB_OUTPUT
       - name: Upload and verify publication authorization
+        timeout-minutes: ${{ fromJSON(steps.budget_authorize.outputs.minutes) }}
         if: ${{ !contains(env.RELEASE_TAG, '-') && env.RELEASE_ALREADY_PUBLISHED != 'true' }}
         shell: pwsh
         env:

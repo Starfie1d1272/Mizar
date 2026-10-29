@@ -4,10 +4,5 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "noEmit": true
   },
-  "include": [
-    "vitest.config.ts",
-    "playwright.acceptance.config.ts",
-    "tests/acceptance/**/*.ts",
-    "tests/diagnostics/**/*.ts"
-  ]
+  "include": ["tests/diagnostics/fixture.ts"]
 }

@@ -108,7 +108,19 @@ jobs:
         shell: pwsh
         run: git checkout -- pnpm-lock.yaml
 
+      - name: Bound Build exact-SHA Windows qualification bundle to remaining time
+        id: budget_build
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $created = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" --jq .created_at
+          if ($LASTEXITCODE -ne 0 -or !$created) { throw 'Cannot read release start time' }
+          $minutes = [math]::Floor((600 - ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($created)).TotalSeconds) / 60)
+          if ($minutes -lt 1) { throw 'Less than one minute remains in release budget' }
+          "minutes=$minutes" >> $env:GITHUB_OUTPUT
       - name: Build exact-SHA Windows qualification bundle
+        timeout-minutes: ${{ fromJSON(steps.budget_build.outputs.minutes) }}
         env:
           MIZAR_CARGO_REGISTRY_CACHE_HIT: ${{ steps.cargo-cache.outputs.registry-hit }}
           MIZAR_CARGO_TARGET_CACHE_HIT: ${{ steps.cargo-cache.outputs.target-hit }}
@@ -270,16 +282,41 @@ jobs:
           $coreExtract = Join-Path $env:RUNNER_TEMP 'core candidate extracted'
           & ./scripts/qualification/prepare-windows-setup.ps1 -Archive (Join-Path $env:QUALIFICATION_BUILD_ROOT $core.archive) -Destination $coreExtract
 
-      - name: Build and verify same-content NSIS installer
+      - name: Bound Build and verify same-content NSIS installer to remaining time
+        id: budget_setup
         if: ${{ matrix.lane == 'setup' }}
         shell: pwsh
-        timeout-minutes: 10
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $created = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" --jq .created_at
+          if ($LASTEXITCODE -ne 0 -or !$created) { throw 'Cannot read release start time' }
+          $minutes = [math]::Floor((600 - ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($created)).TotalSeconds) / 60)
+          if ($minutes -lt 1) { throw 'Less than one minute remains in release budget' }
+          "minutes=$minutes" >> $env:GITHUB_OUTPUT
+      - name: Build and verify same-content NSIS installer
+        timeout-minutes: ${{ fromJSON(steps.budget_setup.outputs.minutes) }}
+        if: ${{ matrix.lane == 'setup' }}
+        shell: pwsh
         run: |
           $bundle = Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP 'qualification extracted path') -Directory | Select-Object -First 1
           $extractRoot = Join-Path $env:RUNNER_TEMP 'setup extracted path'
           & ./scripts/qualification/create-windows-setup.ps1 -BundleRoot $bundle.FullName -OutputRoot $env:QUALIFICATION_BUILD_ROOT -ExtractRoot $extractRoot
           $extracted = Get-ChildItem -LiteralPath $extractRoot -Directory | Select-Object -First 1
+      - name: Bound Qualify distinct Core payload and real NSIS installation to remaining time
+        id: budget_core
+        if: ${{ matrix.lane == 'core-setup' }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $created = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" --jq .created_at
+          if ($LASTEXITCODE -ne 0 -or !$created) { throw 'Cannot read release start time' }
+          $minutes = [math]::Floor((600 - ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($created)).TotalSeconds) / 60)
+          if ($minutes -lt 1) { throw 'Less than one minute remains in release budget' }
+          "minutes=$minutes" >> $env:GITHUB_OUTPUT
       - name: Qualify distinct Core payload and real NSIS installation
+        timeout-minutes: ${{ fromJSON(steps.budget_core.outputs.minutes) }}
         if: ${{ matrix.lane == 'core-setup' }}
         shell: pwsh
         run: |
