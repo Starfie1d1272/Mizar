@@ -1,22 +1,24 @@
 import { useEffect, useRef, useState } from 'react';
 import { parseModuleRecord, type ModuleRecord } from '@mizar/broadcast-config';
 import { useLocalRead } from '../preparation/client';
-import { Button, Checkbox, Panel, Select, StatusBanner } from '../ui';
+import { Button, Checkbox, Field, Panel, Select, StatusBanner } from '../ui';
 import { PresetVisualPreview } from './PresetVisualPreview';
 import { pulseTokenStyle } from '../program/broadcast-display';
 import { exportFailure } from './export-error';
 
 type Kind = ModuleRecord['kind'];
-type Snapshot = {
+export type Snapshot = {
   modules: ModuleRecord[];
   presets: {
     id: string;
     name: string;
     revision: string;
-    bindings: { kind: Kind; mode: 'use' | 'off'; moduleId?: string }[];
+    bindings: ({ kind: Kind; mode: 'use'; moduleId: string } | { kind: Kind; mode: 'off' })[];
   }[];
   active: {
     revision: string;
+    sourcePreset: { id: string; revision: string } | null;
+    adjusted: boolean;
     sourceModuleIds?: Partial<Record<Kind, string | null>>;
     sourceModuleRevisions?: Partial<Record<Kind, string | null>>;
   };
@@ -36,7 +38,7 @@ type PackInspection = {
   source: { digest: string };
   entries: PackEntry[];
 };
-const entryKey = (entry: PackEntry) => `${entry.type}:${entry.entryId}`;
+const entryKey = (entry: Pick<PackEntry, 'type' | 'entryId'>) => `${entry.type}:${entry.entryId}`;
 const entryStatus: Record<PackEntry['status'], string> = {
   ready: '可导入',
   dependency_missing: '所需来源暂不可用，可先保存',
@@ -57,16 +59,10 @@ function entryName(entry: PackEntry, index: number): string {
   const kind = entry.type === 'preset' ? '方案' : (entry.kind && labels[entry.kind]) || '资源';
   return entry.name?.trim() || `${kind} ${index + 1}`;
 }
-function resultDescription(
-  entry: PackEntry,
-  result: ImportResult | undefined,
-  verified: boolean,
-): string {
+function resultDescription(entry: PackEntry, result: ImportResult | undefined): string {
   if (result?.result === 'imported')
-    return entry.status === 'dependency_missing'
-      ? verified
-        ? '已导入，所需来源暂不可用'
-        : '已导入，使用前请检查所需来源'
+    return (result.status ?? entry.status) === 'dependency_missing'
+      ? '已导入，使用前请检查所需来源'
       : '已导入';
   if (result?.result === 'existing') return '已存在，保留现有内容';
   const status = result?.status ?? entry.status;
@@ -76,6 +72,83 @@ function resultDescription(
     return status === 'dependency_missing' ? '未导入：所需来源不可用' : '未导入：内容暂不可用';
   if (result?.result === 'not_selected') return '未导入：未选择';
   return '未导入：结果未确认';
+}
+
+const sceneColors = [
+  ['pulse.white', '文字'],
+  ['pulse.blue', '蓝色'],
+  ['pulse.gold', '金色'],
+  ['pulse.muted', '次要文字'],
+  ['pulse.canvas', '画布'],
+  ['pulse.shell', '面板'],
+] as const;
+
+function SceneEditor({
+  module,
+  modules,
+  busy,
+  save,
+}: {
+  module: Extract<ModuleRecord, { kind: 'program' }>;
+  modules: ModuleRecord[];
+  busy: boolean;
+  save: (value: ModuleRecord) => Promise<boolean>;
+}) {
+  const [value, setValue] = useState(module.value);
+  const [open, setOpen] = useState(false);
+  const backgrounds = modules.flatMap((item) =>
+    item.kind === 'program' && item.value.assets['pulse.background']
+      ? [{ name: item.name, asset: item.value.assets['pulse.background'] }]
+      : [],
+  );
+  const selected = backgrounds.findIndex(
+    ({ asset }) => JSON.stringify(asset) === JSON.stringify(value.assets['pulse.background']),
+  );
+  const supported = pulseTokenStyle(value) !== null;
+  return (
+    <details open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary>编辑场景</summary>
+      <p>保存为草稿，不会改变当前播出。背景可选择已导入场景中的图片。</p>
+      {sceneColors.map(([key, label]) => (
+        <Field
+          key={key}
+          label={label}
+          value={String(value.tokens[key] ?? '')}
+          placeholder="#RRGGBB 或 #RRGGBBAA"
+          onChange={(event) => {
+            const tokens = { ...value.tokens };
+            const color = event.target.value.trim();
+            if (color) tokens[key] = color;
+            else delete tokens[key];
+            setValue({ ...value, tokens });
+          }}
+        />
+      ))}
+      <Select
+        label="背景图片"
+        value={selected < 0 ? '' : String(selected)}
+        onChange={(event) => {
+          const assets = { ...value.assets };
+          const index = Number(event.target.value);
+          if (event.target.value && backgrounds[index])
+            assets['pulse.background'] = backgrounds[index].asset;
+          else delete assets['pulse.background'];
+          setValue({ ...value, assets });
+        }}
+      >
+        <option value="">默认背景</option>
+        {backgrounds.map((item, index) => (
+          <option key={index} value={String(index)}>
+            {item.name}
+          </option>
+        ))}
+      </Select>
+      {!supported && <p>颜色须使用 #RRGGBB 或 #RRGGBBAA；不支持的场景字段需先修复。</p>}
+      <Button disabled={busy || !supported} onClick={() => void save({ ...module, value })}>
+        保存草稿
+      </Button>
+    </details>
+  );
 }
 
 function programUnsupported(entry: ModuleRecord): boolean {
@@ -102,20 +175,45 @@ export function ResourceModules({
   query,
   category,
   onImported,
+  sharedSnapshot,
+  onRefresh,
 }: {
   query: string;
   category: string;
   onImported: (presetId?: string) => void;
+  sharedSnapshot?: Snapshot | null;
+  onRefresh?: () => void;
 }) {
   const [refresh, setRefresh] = useState(0);
-  const snapshot = useLocalRead<Snapshot>('/local/v1/broadcast-presets', 2000, refresh);
-  const directory = useLocalRead<{
+  const localSnapshot = useLocalRead<Snapshot>(
+    sharedSnapshot === undefined ? '/local/v1/broadcast-presets' : null,
+    2000,
+    refresh,
+  );
+  const snapshot = sharedSnapshot === undefined ? localSnapshot : sharedSnapshot;
+  const refreshAll = () => {
+    setRefresh((value) => value + 1);
+    onRefresh?.();
+  };
+  const metadata = useLocalRead<{
     modules: {
-      module: ModuleRecord;
+      id: string;
+      revision: string;
       builtin: boolean;
       availability?: { state: 'ready' | 'dependency_missing'; reason?: string };
     }[];
-  }>('/local/v1/broadcast-modules', 2000, refresh);
+  }>('/local/v1/broadcast-modules?view=metadata', 2000, refresh);
+  const directory =
+    snapshot && metadata
+      ? {
+          modules: snapshot.modules.flatMap((module) => {
+            const item = metadata.modules.find(
+              (entry) => entry.id === module.id && entry.revision === module.revision,
+            );
+            return item ? [{ module, builtin: item.builtin, availability: item.availability }] : [];
+          }),
+        }
+      : null;
   const migration = useLocalRead<{ state: string; reason?: string }>(
     '/local/v1/broadcast-config/migration',
     2000,
@@ -139,7 +237,6 @@ export function ResourceModules({
   const [inspection, setInspection] = useState<PackInspection | null>(null);
   const [inspectionOpen, setInspectionOpen] = useState(false);
   const [importResults, setImportResults] = useState<ImportResult[] | null>(null);
-  const [resultEntries, setResultEntries] = useState<PackEntry[] | null>(null);
   const [importTargets, setImportTargets] = useState<
     Record<string, { type: 'module' | 'preset'; id: string }>
   >({});
@@ -164,19 +261,23 @@ export function ResourceModules({
   }, [selected, showList, directory]);
   const item = directory?.modules.find(({ module }) => module.id === selected);
   const module = item?.module;
-  const referenceView = useLocalRead<{
-    moduleId: string;
-    revision: string;
-    active: boolean;
-    presets: { id: string; name: string; revision: string }[];
-  }>(
-    selected ? `/local/v1/broadcast-modules/${encodeURIComponent(selected)}/references` : null,
-    2000,
-    refresh,
-  );
-  const referencesReady =
-    !!module && referenceView?.moduleId === module.id && referenceView.revision === module.revision;
-  const references = referencesReady ? referenceView.presets : [];
+  const referencesReady = !!module && !!snapshot;
+  const references =
+    module && snapshot
+      ? snapshot.presets.filter((preset) =>
+          preset.bindings.some(
+            (binding) => binding.mode === 'use' && binding.moduleId === module.id,
+          ),
+        )
+      : [];
+  const referenceView = {
+    active:
+      !!module &&
+      !!snapshot &&
+      (Object.values(snapshot.active.sourceModuleIds ?? {}).includes(module.id) ||
+        (snapshot.active.sourceModuleIds?.[module.kind] === undefined &&
+          references.some((preset) => preset.id === snapshot.active.sourcePreset?.id))),
+  };
   async function perform(path: string, body: unknown, message: string, filename?: string) {
     setBusy(true);
     setNotice(null);
@@ -203,14 +304,14 @@ export function ResourceModules({
       }
       if (filename) download(await response.blob(), filename);
       setNotice({ tone: 'success', message });
-      setRefresh((value) => value + 1);
+      refreshAll();
       return true;
     } catch (error) {
       setNotice({
         tone: 'danger',
         message: error instanceof Error ? error.message : '操作未完成。',
       });
-      setRefresh((value) => value + 1);
+      refreshAll();
       return false;
     } finally {
       setBusy(false);
@@ -253,7 +354,7 @@ export function ResourceModules({
       });
     } finally {
       setBusy(false);
-      setRefresh((value) => value + 1);
+      refreshAll();
     }
   }
   function navigateImportTarget(target: { type: 'module' | 'preset'; id: string }) {
@@ -286,7 +387,6 @@ export function ResourceModules({
       const result = (await response.json()) as Omit<PackInspection, 'file'>;
       setInspection({ ...result, file });
       setImportResults(null);
-      setResultEntries(null);
       setImportTargets({});
       setSelectedEntries(
         result.entries
@@ -343,71 +443,35 @@ export function ResourceModules({
       const accepted = result.entries.filter(
         (entry) => entry.result === 'imported' || entry.result === 'existing',
       );
-      const failed = inspection.entries.some((entry) => {
-        const returned = result.entries.find(
-          (item) => item.type === entry.type && item.entryId === entry.entryId,
-        );
-        return (
-          returned?.result === 'unavailable' ||
-          entry.status === 'invalid' ||
-          entry.status === 'unsupported' ||
-          !returned
-        );
+      const failed = selectedEntries.some((key) => {
+        const outcome = result.entries.find((entry) => entryKey(entry) === key);
+        return !outcome || outcome.result === 'unavailable' || outcome.result === 'not_selected';
       });
-      const refreshed = await fetch('/operator/resource-library/check-pack', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-mizarpack' },
-        body: inspection.file,
-        signal: AbortSignal.timeout(5000),
-      })
-        .then(async (check) =>
-          check.ok ? ((await check.json()) as { entries: PackEntry[] }).entries : null,
-        )
-        .catch(() => null);
-      const latest = await fetch('/local/v1/broadcast-presets', {
-        cache: 'no-store',
-        signal: AbortSignal.timeout(5000),
-      })
-        .then(async (response) => (response.ok ? ((await response.json()) as Snapshot) : null))
-        .catch(() => null);
       const targets: Record<string, { type: 'module' | 'preset'; id: string }> = {};
-      if (latest)
-        for (const entry of inspection.entries) {
-          const key = entryKey(entry);
-          const outcome = result.entries.find(
-            (item) => item.type === entry.type && item.entryId === entry.entryId,
-          );
-          if (
-            !selectedEntries.includes(key) ||
-            !outcome ||
-            !['imported', 'existing'].includes(outcome.result)
-          )
-            continue;
-          if (entry.type === 'preset') {
-            const id = result.mapping.presetEntries?.[entry.entryId];
-            if (id && latest.presets.some((preset) => preset.id === id))
-              targets[key] = { type: 'preset', id };
-          } else {
-            const ids = result.mapping.moduleEntries[entry.entryId] ?? [];
-            const copies = refreshed?.find((item) => entryKey(item) === key)?.copies ?? [];
-            const live = ids.filter((id) =>
-              latest.modules.some((module) => module.id === id && module.kind === entry.kind),
-            );
-            const standalone =
-              copies.find(
-                (copy) => copy.state === 'existing' && copy.owner == null && live.includes(copy.id),
-              )?.id ??
-              live.find((id) => result.mapping.moduleOwners?.[id] === null) ??
-              live[0];
-            if (standalone) targets[key] = { type: 'module', id: standalone };
-          }
+      for (const entry of inspection.entries) {
+        const key = entryKey(entry);
+        const outcome = result.entries.find((item) => entryKey(item) === key);
+        if (
+          !selectedEntries.includes(key) ||
+          !outcome ||
+          !['imported', 'existing'].includes(outcome.result)
+        )
+          continue;
+        if (entry.type === 'preset') {
+          const id = result.mapping.presetEntries?.[entry.entryId];
+          if (id) targets[key] = { type: 'preset', id };
+        } else {
+          const ids = result.mapping.moduleEntries[entry.entryId] ?? [];
+          const id =
+            ids.find((candidate) => result.mapping.moduleOwners?.[candidate] === null) ?? ids[0];
+          if (id) targets[key] = { type: 'module', id };
         }
+      }
       setImportTargets(targets);
       if (selectedEntries.length === 1 && selectionEpoch.current === startingEpoch) {
         const target = targets[selectedEntries[0]!];
         if (target) navigateImportTarget(target);
       }
-      setResultEntries(refreshed);
       setImportResults(result.entries);
       setNotice({
         tone: failed ? (accepted.length ? 'warning' : 'danger') : 'success',
@@ -418,7 +482,7 @@ export function ResourceModules({
           : '所选内容已保存，尚未使用。',
       });
       setInspectionOpen(false);
-      setRefresh((value) => value + 1);
+      refreshAll();
     } catch (error) {
       setNotice({ tone: 'danger', message: error instanceof Error ? error.message : '导入失败。' });
     } finally {
@@ -460,14 +524,9 @@ export function ResourceModules({
               const returned = importResults.find(
                 (item) => item.type === entry.type && item.entryId === entry.entryId,
               );
-              const checked =
-                resultEntries?.find(
-                  (item) => item.type === entry.type && item.entryId === entry.entryId,
-                ) ?? entry;
               return (
                 <li key={entryKey(entry)}>
-                  {entryName(entry, index)} · {kind}：
-                  {resultDescription(checked, returned, resultEntries !== null)}
+                  {entryName(entry, index)} · {kind}：{resultDescription(entry, returned)}
                   {importTargets[entryKey(entry)] && (
                     <Button onClick={() => navigateImportTarget(importTargets[entryKey(entry)]!)}>
                       查看{entryName(entry, index)}
@@ -636,6 +695,21 @@ export function ResourceModules({
                       </div>
                     ))}
                   </dl>
+                )}
+                {entry.kind === 'program' && !builtin && (
+                  <SceneEditor
+                    key={`${entry.id}:${entry.revision}`}
+                    module={entry}
+                    modules={snapshot?.modules ?? []}
+                    busy={busy}
+                    save={(value) =>
+                      perform(
+                        '/operator/broadcast-modules/save',
+                        { value, expectedRevision: entry.revision },
+                        '场景已保存，尚未使用。',
+                      )
+                    }
+                  />
                 )}
                 <div className="resource-library__preset-actions">
                   <Button

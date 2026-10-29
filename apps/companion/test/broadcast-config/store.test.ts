@@ -266,18 +266,17 @@ describe('BroadcastConfigStore', () => {
     const app = Fastify();
     registerBroadcastConfigRoutes(app, store, createLocalWebOriginPolicy());
     try {
-      const references = await app.inject(`/local/v1/broadcast-modules/${copy.id}/references`);
-      expect(references.statusCode).toBe(200);
-      expect(references.json()).toEqual({
-        moduleId: copy.id,
+      const metadata = await app.inject('/local/v1/broadcast-modules?view=metadata');
+      expect(metadata.statusCode).toBe(200);
+      expect(metadata.json().modules).toContainEqual({
+        id: copy.id,
         revision: copy.revision,
-        active: false,
-        presets: [{ id: current.id, name: current.name, revision: current.revision }],
+        builtin: false,
       });
       expect(
         (
           await app.inject({
-            url: `/local/v1/broadcast-modules/${copy.id}/references`,
+            url: '/local/v1/broadcast-modules?view=metadata',
             headers: { origin: 'https://foreign.test' },
           })
         ).statusCode,

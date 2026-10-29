@@ -159,12 +159,25 @@ function CreatePreset({
 export function BroadcastPresets({
   query,
   focusPreset,
+  sharedSnapshot,
+  onRefresh,
 }: {
   query: string;
   focusPreset?: { id: string; request: number } | null;
+  sharedSnapshot?: View | null;
+  onRefresh?: () => void;
 }) {
   const [refresh, setRefresh] = useState(0);
-  const view = useLocalRead<View>('/local/v1/broadcast-presets', 2000, refresh);
+  const localView = useLocalRead<View>(
+    sharedSnapshot === undefined ? '/local/v1/broadcast-presets' : null,
+    2000,
+    refresh,
+  );
+  const view = sharedSnapshot === undefined ? localView : sharedSnapshot;
+  const refreshAll = () => {
+    setRefresh((value) => value + 1);
+    onRefresh?.();
+  };
   const [busy, setBusy] = useState(false);
   const [missing, setMissing] = useState<{ id: string; name: string; kind: Kind }[]>([]);
   const [selecting, setSelecting] = useState(false);
@@ -225,7 +238,7 @@ export function BroadcastPresets({
       });
     } finally {
       setBusy(false);
-      setRefresh((value) => value + 1);
+      refreshAll();
     }
   }
   async function saveBindings(preset: Preset, bindings: Binding[]) {
@@ -247,7 +260,7 @@ export function BroadcastPresets({
           response.status === 409 ? '方案已变化，请刷新后重试。' : '方案未保存，请检查配置后重试。',
         );
       setNotice({ tone: 'success', message: '方案已保存，使用方案后生效。' });
-      setRefresh((value) => value + 1);
+      refreshAll();
     } catch (error) {
       setNotice({
         tone: 'danger',
@@ -389,7 +402,7 @@ export function BroadcastPresets({
           response.status === 409 ? '配置已变化，请刷新后重试。' : '复制失败，请重试。',
         );
       setNotice({ tone: 'success', message: `已复制「${preset.name}」，可编辑后使用。` });
-      setRefresh((value) => value + 1);
+      refreshAll();
     } catch (error) {
       setNotice({
         tone: 'danger',
@@ -415,7 +428,7 @@ export function BroadcastPresets({
       setNotice({ tone: 'danger', message: error instanceof Error ? error.message : '删除失败。' });
     } finally {
       setBusy(false);
-      setRefresh((value) => value + 1);
+      refreshAll();
     }
   }
   async function applyPreset(preset: Preset) {
@@ -493,7 +506,7 @@ export function BroadcastPresets({
       });
     } finally {
       setBusy(false);
-      setRefresh((value) => value + 1);
+      refreshAll();
     }
   }
   const presets = (view?.presets ?? []).filter((item) =>

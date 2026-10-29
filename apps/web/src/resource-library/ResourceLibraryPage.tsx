@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { BroadcastPresets } from './BroadcastPresets';
-import { ResourceModules } from './ResourceModules';
+import { ResourceModules, type Snapshot } from './ResourceModules';
 import { OperatorShell } from '../operator/OperatorShell';
 import { MulnxToolControls } from '../orchestration/MulnxToolControls';
 import { openTool, useLocalRead } from '../preparation/client';
@@ -35,6 +35,13 @@ const phases: Record<ResourceStatus['phase'], string> = {
 
 export function ResourceLibraryPage() {
   const view = useLocalRead<LibraryView>('/local/v1/resource-library', 2000);
+  const [broadcastRefresh, setBroadcastRefresh] = useState(0);
+  const broadcastSnapshot = useLocalRead<Snapshot>(
+    '/local/v1/broadcast-presets',
+    2000,
+    broadcastRefresh,
+  );
+  const refreshBroadcast = () => setBroadcastRefresh((value) => value + 1);
   const [runningVersion, setRunningVersion] = useState<string | null>(null);
   useEffect(() => {
     if (!window.__TAURI_INTERNALS__) return;
@@ -133,6 +140,8 @@ export function ResourceLibraryPage() {
         </div>
         <ResourceModules
           query={query}
+          sharedSnapshot={broadcastSnapshot}
+          onRefresh={refreshBroadcast}
           category={category}
           onImported={(presetId) => {
             setCategory('all');
@@ -142,7 +151,14 @@ export function ResourceLibraryPage() {
             );
           }}
         />
-        {showPresets ? <BroadcastPresets query={query} focusPreset={focusPreset} /> : null}
+        {showPresets ? (
+          <BroadcastPresets
+            query={query}
+            focusPreset={focusPreset}
+            sharedSnapshot={broadcastSnapshot}
+            onRefresh={refreshBroadcast}
+          />
+        ) : null}
         {!view ? (
           <StatusBanner tone="warning">
             正在连接资源状态；如果持续无法连接，请检查本地制播服务。
