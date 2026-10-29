@@ -10,7 +10,7 @@ import {
 import { atomicJson, ensureDirectory, safePath } from '../resource-store/files.js';
 
 const catalogBytes = 9 * 1024 * 1024;
-const catalogSchema = z
+export const cameraCatalogSchema = z
   .strictObject({
     activePresetId: z.uuid(),
     preset: orchestrationPresetSchema,
@@ -24,6 +24,7 @@ const catalogSchema = z
       new Set(catalog.presets.map((item) => item.id)).size === catalog.presets.length &&
       catalog.presets.some((item) => item.id === catalog.activePresetId),
   );
+const catalogSchema = cameraCatalogSchema;
 export type CameraCatalog = z.infer<typeof catalogSchema>;
 type Catalog = CameraCatalog;
 interface CameraPersistenceState {

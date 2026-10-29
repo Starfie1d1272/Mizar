@@ -1,6 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import { z, ZodError } from 'zod';
-import { displayConfig, parseBroadcastPreset, parseModuleRecord } from '@mizar/broadcast-config';
+import {
+  displayConfig,
+  parseBroadcastPreset,
+  parseModuleRecord,
+  type ModuleRecord,
+} from '@mizar/broadcast-config';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 import type { BroadcastConfigStore } from './store.js';
 import { isBuiltinModuleId } from './builtin-modules.js';
@@ -61,6 +66,12 @@ export function registerBroadcastConfigRoutes(
   store: BroadcastConfigStore,
   originPolicy: LocalWebOriginPolicy,
   isReady: () => boolean = () => true,
+  restoreLegacyCamera?: () => Promise<
+    Array<{ legacyId: string; moduleId: string; activeSnapshot: boolean }>
+  >,
+  moduleAvailability?: (
+    module: ModuleRecord,
+  ) => Promise<{ state: 'ready' | 'dependency_missing'; reason?: string }>,
 ): void {
   const authorized = (origin: string | undefined) =>
     originPolicy.mode === 'loopback' && checkLocalWebOrigin(originPolicy, origin).allowed;
@@ -79,7 +90,7 @@ export function registerBroadcastConfigRoutes(
     if (!isReady()) return reply.code(503).send({ error: 'broadcast_config_unavailable' });
     return reply.header('cache-control', 'no-store').send(store.snapshot);
   });
-  app.get('/local/v1/broadcast-modules', (request, reply) => {
+  app.get('/local/v1/broadcast-modules', async (request, reply) => {
     if (
       originPolicy.mode !== 'loopback' ||
       !['127.0.0.1', 'localhost', '[::1]', '::1'].includes(request.hostname) ||
@@ -89,12 +100,56 @@ export function registerBroadcastConfigRoutes(
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
     if (!isReady()) return reply.code(503).send({ error: 'broadcast_config_unavailable' });
     return reply.header('cache-control', 'no-store').send({
-      modules: store.snapshot.modules.map((module) => ({
-        module,
-        builtin: isBuiltinModuleId(module.id),
-      })),
+      modules: await Promise.all(
+        store.snapshot.modules.map(async (module) => ({
+          module,
+          builtin: isBuiltinModuleId(module.id),
+          ...(moduleAvailability ? { availability: await moduleAvailability(module) } : {}),
+        })),
+      ),
     });
   });
+  app.get('/local/v1/broadcast-config/pending-camera', (request, reply) => {
+    if (
+      originPolicy.mode !== 'loopback' ||
+      !['127.0.0.1', 'localhost', '[::1]', '::1'].includes(request.hostname) ||
+      request.headers['sec-fetch-site'] === 'cross-site' ||
+      (request.headers.origin && !authorized(request.headers.origin))
+    )
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    if (!isReady()) return reply.code(503).send({ error: 'broadcast_config_unavailable' });
+    return reply
+      .header('cache-control', 'no-store')
+      .send({ pending: store.pendingLegacyCamera ?? null });
+  });
+  for (const action of ['restore', 'delete'] as const) {
+    app.post(
+      `/operator/broadcast-config/pending-camera/${action}`,
+      { bodyLimit: 1024 },
+      async (request, reply) => {
+        if (!authorized(request.headers.origin))
+          return reply.code(403).send({ error: 'operator_forbidden' });
+        if (!isReady()) return reply.code(503).send({ error: 'broadcast_config_unavailable' });
+        if (!z.strictObject({}).safeParse(request.body).success)
+          return reply.code(400).send({ error: 'invalid_request' });
+        try {
+          if (action === 'delete') {
+            await store.deletePendingLegacyCamera();
+            return { ok: true };
+          }
+          if (!restoreLegacyCamera) throw new Error('camera_identity_unavailable');
+          return { restored: await restoreLegacyCamera() };
+        } catch (error) {
+          if (error instanceof Error && error.message === 'pending_camera_missing')
+            return reply.code(404).send({ error: 'pending_camera_missing' });
+          return reply.code(503).send({
+            error: 'camera_identity_unavailable',
+            message: '原运镜配置已保留，请准备 MulNX 后重试。',
+          });
+        }
+      },
+    );
+  }
   const failure = (error: unknown) => {
     if (error instanceof ZodError) return { status: 400, code: 'invalid_request' };
     const code = error instanceof Error ? error.message : '';

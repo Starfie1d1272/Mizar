@@ -34,6 +34,7 @@ export function createCameraConfigPersistence(
   store: BroadcastConfigStore,
   dependencies: CameraFacadeDependencies,
 ): CameraConfigPersistence {
+  let unavailable = false;
   async function toLocal(value: CameraModuleV2): Promise<OrchestrationPreset> {
     return orchestrationPresetSchema.parse({
       format: 'mizar.orchestration',
@@ -58,7 +59,15 @@ export function createCameraConfigPersistence(
     if (modules.some((item) => item.id === disabledId)) throw new Error('camera_preset_reserved');
     // Resolve only the active snapshot. Legacy draft rows reuse already resolved identities;
     // drafts needing other dependencies remain in the coordinator for the new editor.
-    const activePreset = active ? await toLocal(active) : null;
+    let activePreset: OrchestrationPreset | null = null;
+    unavailable = false;
+    if (active) {
+      try {
+        activePreset = await toLocal(active);
+      } catch {
+        unavailable = true;
+      }
+    }
     const packs = new Map<string, string>();
     const tracks = new Map<string, string>();
     if (active && activePreset)
@@ -137,6 +146,8 @@ export function createCameraConfigPersistence(
       const beforeDocument = store.snapshot;
       const before = beforeDocument.active;
       const current = await read();
+      if (unavailable || store.pendingLegacyCamera)
+        throw new Error('camera_dependency_unavailable');
       if (
         canonicalJson(current.catalog) !== canonicalJson(previous) ||
         current.automaticEnabled !== previousAutomaticEnabled
