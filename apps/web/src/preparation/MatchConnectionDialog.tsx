@@ -251,9 +251,7 @@ export function MatchConnectionDialog() {
           游戏观战：{endpoints.programEndpoint}
         </p>
       ) : null}
-      <p>
-        标准启动：复制连接命令，在游戏控制台执行。使用第三方 HUD 时，请按 HUD 指引隐藏游戏 HUD。
-      </p>
+      <p>标准启动：复制连接命令，在游戏控制台执行。</p>
       <p>自动启动：按游戏与观战设置连接并隐藏 HUD。观察辅助单独运行。</p>
       {connection || (mode === 'connect' && !input.trim() && request && savedView?.connection) ? (
         <Button

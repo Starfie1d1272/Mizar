@@ -44,6 +44,7 @@ function setup(
     pending?: boolean;
     busy?: boolean;
     preferMulnx?: boolean;
+    mulnxLaunchResumable?: boolean;
   }[] = [],
   observerEnabled = false,
 ) {
@@ -123,6 +124,20 @@ function setup(
 }
 
 describe('managed CS2 production entry and cleanup', () => {
+  it('resumes only the submitted MulNX launch before continuing the entry intent', async () => {
+    const calls = setup(undefined, 'preparation', false, true, [
+      { running: false, pending: true, mulnxLaunchResumable: true },
+      { running: true, pending: true },
+    ]);
+    await productionAction('enter', preparation, true);
+    expect(nativeArgs.find((value) => value.command === 'launch_mulnx')?.args).toMatchObject({
+      resumeOnly: true,
+    });
+    expect(calls.filter((call) => call === 'launch_mulnx')).toHaveLength(1);
+    expect(calls.indexOf('launch_mulnx')).toBeLessThan(calls.indexOf('start_managed_cs2'));
+    expect(calls).toContain('present_production');
+  });
+
   it.each([false, true])(
     'opens without a connection confirmation or observer start (MulNX=%s)',
     async (preferMulnx) => {

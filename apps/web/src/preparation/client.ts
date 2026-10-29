@@ -225,6 +225,7 @@ async function performProductionAction(
     action === 'enter' && window.__TAURI_INTERNALS__
       ? await desktopInvoke<{
           preferMulnx?: boolean;
+          mulnxLaunchResumable?: boolean;
           running: boolean;
           pending: boolean;
           observerHudPending?: boolean;
@@ -240,7 +241,20 @@ async function performProductionAction(
   const selectedExternal = external;
   if (action === 'enter' && window.__TAURI_INTERNALS__) {
     if (!external) {
-      if (launch?.preferMulnx && !launch.running && !launch.pending) {
+      if (launch?.mulnxLaunchResumable) {
+        const result = await desktopInvoke<{ result?: string }>(
+          'launch_mulnx',
+          { resumeOnly: true },
+          task,
+        );
+        if (result?.result === 'not-found')
+          throw new Error('启动请求已结束，请检查游戏状态后重新进入工作台。');
+        launchedMulnx = true;
+        if (cancelled() || window.location.href !== entryLocation) {
+          task.finish('cancelled', { reason: 'navigation_changed' });
+          return;
+        }
+      } else if (launch?.preferMulnx && !launch.running && !launch.pending) {
         await desktopInvoke<ExternalGameIdentity>(
           'launch_mulnx',
           { automatic: true, ...(preserveSettings ? { preserveSettings: true } : {}) },
