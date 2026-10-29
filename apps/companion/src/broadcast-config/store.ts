@@ -20,10 +20,12 @@ import {
   type PresetResolver,
   type ResourceRef,
   type ModuleKind,
+  type CameraModuleV2,
 } from '@mizar/broadcast-config';
 import { durableJsonByteLength, replaceDurableJson } from '../match-context/durable-json.js';
 import { SerialCommitQueue } from '../match-context/serial-commit.js';
 import { addMissingBuiltinModules, isBuiltinModuleId } from './builtin-modules.js';
+import { cameraCatalogSchema } from '../orchestration/store.js';
 
 interface Receipt {
   fingerprint: string;
@@ -49,12 +51,25 @@ interface Envelope {
   document: BroadcastConfigDocument;
   receipts: Record<string, Receipt>;
   imports: BroadcastImportMapping[];
+  pendingLegacyCamera?: PendingLegacyCamera | undefined;
+  restoredLegacyCamera?:
+    Array<{ legacyId: string; moduleId: string; activeSnapshot: boolean }> | undefined;
 }
+const pendingLegacyCameraSchema = z.strictObject({
+  catalog: cameraCatalogSchema,
+  automaticEnabled: z.boolean(),
+  reason: z.literal('camera_identity_unavailable'),
+});
+export type PendingLegacyCamera = z.infer<typeof pendingLegacyCameraSchema>;
+const restoredLegacyCameraSchema = z
+  .array(z.strictObject({ legacyId: z.uuid(), moduleId: z.uuid(), activeSnapshot: z.boolean() }))
+  .max(33);
 
 /** Parsing must use the registered domain codecs, including their resolved snapshot parsers. */
 export interface BroadcastConfigStoreOptions {
   filePath: string;
   createInitial(): Promise<BroadcastConfigDocument>;
+  initialPendingLegacyCamera?(): PendingLegacyCamera | undefined;
   resolver: PresetResolver;
   /** Serializes changes to resource references with provider removal. */
   withReferenceGuard<T>(operation: () => Promise<T>): Promise<T>;
@@ -64,7 +79,7 @@ export interface BroadcastConfigStoreOptions {
     next: BroadcastConfigDocument,
   ): Promise<void>;
   /** Verify all references and capabilities in an individually adjusted active snapshot. */
-  verifyLegacyActive(active: ActiveBroadcastSnapshot): Promise<void>;
+  verifyLegacyActive(active: ActiveBroadcastSnapshot, kind?: ModuleKind): Promise<void>;
   /** Holds the production lifecycle and exposes a synchronous final readiness check. */
   withApplyGuard<T>(operation: (canCommit: () => boolean) => Promise<T>): Promise<T>;
   onApplied?(
@@ -103,7 +118,15 @@ export class BroadcastConfigStore {
       typeof value.receipts !== 'object' ||
       Array.isArray(value.receipts) ||
       Object.keys(value).some(
-        (key) => !['version', 'document', 'receipts', 'imports'].includes(key),
+        (key) =>
+          ![
+            'version',
+            'document',
+            'receipts',
+            'imports',
+            'pendingLegacyCamera',
+            'restoredLegacyCamera',
+          ].includes(key),
       )
     )
       throw new Error('broadcast_config_invalid');
@@ -130,7 +153,20 @@ export class BroadcastConfigStore {
       canonicalJson([entry.source.id, entry.source.version]),
     );
     if (new Set(identities).size !== identities.length) throw new Error('broadcast_config_invalid');
-    return { version: 1, document, receipts, imports };
+    const pendingLegacyCamera = pendingLegacyCameraSchema
+      .optional()
+      .parse(value.pendingLegacyCamera);
+    const restoredLegacyCamera = restoredLegacyCameraSchema
+      .optional()
+      .parse(value.restoredLegacyCamera);
+    return {
+      version: 1,
+      document,
+      receipts,
+      imports,
+      ...(pendingLegacyCamera ? { pendingLegacyCamera } : {}),
+      ...(restoredLegacyCamera ? { restoredLegacyCamera } : {}),
+    };
   }
   private async read(): Promise<Envelope> {
     const stat = await lstat(this.options.filePath);
@@ -145,7 +181,14 @@ export class BroadcastConfigStore {
       } catch (error) {
         if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
         const document = parseBroadcastConfigDocument(await this.options.createInitial());
-        const initial: Envelope = { version: 1, document, receipts: {}, imports: [] };
+        const pendingLegacyCamera = this.options.initialPendingLegacyCamera?.();
+        const initial: Envelope = {
+          version: 1,
+          document,
+          receipts: {},
+          imports: [],
+          ...(pendingLegacyCamera ? { pendingLegacyCamera } : {}),
+        };
         if (durableJsonByteLength(initial) > 16 * 1024 * 1024)
           throw new Error('broadcast_config_too_large', { cause: error });
         await replaceDurableJson(this.options.filePath, initial);
@@ -161,6 +204,71 @@ export class BroadcastConfigStore {
   get snapshot(): BroadcastConfigDocument {
     if (!this.envelope) throw new Error('broadcast_config_unavailable');
     return structuredClone(this.envelope.document);
+  }
+  get pendingLegacyCamera(): PendingLegacyCamera | undefined {
+    return structuredClone(this.envelope?.pendingLegacyCamera);
+  }
+  async restoreLegacyCamera(
+    convert: (
+      preset: PendingLegacyCamera['catalog']['preset'],
+      automaticEnabled: boolean,
+    ) => Promise<CameraModuleV2>,
+  ): Promise<Array<{ legacyId: string; moduleId: string; activeSnapshot: boolean }>> {
+    return this.queue.run(() =>
+      this.options.withReferenceGuard(async () => {
+        if (!this.envelope?.pendingLegacyCamera) throw new Error('pending_camera_missing');
+        const pending = this.envelope.pendingLegacyCamera;
+        const modules: ModuleRecord<'camera'>[] = [];
+        const originals = pending.catalog.presets.map((item) => ({
+          ...item,
+          activeSnapshot: false,
+        }));
+        const activeDraft = originals.find((item) => item.id === pending.catalog.activePresetId);
+        if (
+          !activeDraft ||
+          canonicalJson(activeDraft.preset) !== canonicalJson(pending.catalog.preset)
+        )
+          originals.push({
+            id: pending.catalog.activePresetId,
+            preset: pending.catalog.preset,
+            activeSnapshot: true,
+          });
+        for (const item of originals) {
+          const value = await convert(item.preset, pending.automaticEnabled);
+          const module: ModuleRecord<'camera'> = {
+            id: randomUUID(),
+            revision: randomUUID(),
+            kind: 'camera',
+            schemaVersion: 2,
+            name: item.preset.name,
+            value,
+            origin: null,
+          };
+          if (!this.options.resolveModule) throw new Error('camera_identity_unavailable');
+          await this.options.resolveModule(module);
+          modules.push(module);
+        }
+        const next = structuredClone(this.envelope);
+        next.document.modules.push(...modules);
+        next.restoredLegacyCamera = modules.map((module, index) => ({
+          legacyId: originals[index]!.id,
+          moduleId: module.id,
+          activeSnapshot: originals[index]!.activeSnapshot,
+        }));
+        delete next.pendingLegacyCamera;
+        await this.options.assertReferenceCommitAllowed(this.envelope.document, next.document);
+        await this.commit(next);
+        return next.restoredLegacyCamera;
+      }),
+    );
+  }
+  async deletePendingLegacyCamera(): Promise<void> {
+    await this.queue.run(async () => {
+      if (!this.envelope?.pendingLegacyCamera) throw new Error('pending_camera_missing');
+      const next = structuredClone(this.envelope);
+      delete next.pendingLegacyCamera;
+      await this.commit(next);
+    });
   }
   private async commit(next: Envelope, canCommit?: () => boolean): Promise<void> {
     const checked = this.parseEnvelope(next);
@@ -625,7 +733,10 @@ export class BroadcastConfigStore {
           active.adjusted = true;
           next.document.previousActive = previous;
           next.document.active = active;
-          await this.options.verifyLegacyActive(parseBroadcastConfigDocument(next.document).active);
+          await this.options.verifyLegacyActive(
+            parseBroadcastConfigDocument(next.document).active,
+            kind,
+          );
         }
         await this.options.assertReferenceCommitAllowed(this.envelope.document, next.document);
         await this.commit(next);

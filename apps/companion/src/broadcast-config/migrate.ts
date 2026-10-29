@@ -29,6 +29,7 @@ export interface LegacyBroadcastMigration {
   musicConfig(value: MusicConfig): Promise<PortableMusicConfigV1>;
   cameraConfig(value: OrchestrationPreset, automaticEnabled: boolean): Promise<CameraModuleV2>;
   lock(resolved: ActiveBroadcastSnapshot['resolved']): Promise<ActiveBroadcastSnapshot['lock']>;
+  skipCamera?: boolean;
 }
 
 /** Builds a complete candidate only; callers publish it after verifying dependencies and backing up legacy files. */
@@ -82,7 +83,7 @@ export async function migrateLegacyBroadcast(
     origin: null,
   };
   const cameraModules: ModuleRecord<'camera'>[] = [];
-  for (const item of input.camera.presets)
+  for (const item of input.skipCamera ? [] : input.camera.presets)
     cameraModules.push({
       id: item.id,
       revision: randomUUID(),
@@ -93,7 +94,7 @@ export async function migrateLegacyBroadcast(
       origin: null,
     });
   const camera = cameraModules.find((item) => item.id === input.camera.activePresetId);
-  if (!camera) throw new Error('camera_preset_missing');
+  if (!camera && !input.skipCamera) throw new Error('camera_preset_missing');
   const preset = {
     schemaVersion: 1 as const,
     id: randomUUID(),
@@ -105,7 +106,9 @@ export async function migrateLegacyBroadcast(
       { kind: 'hud' as const, mode: 'use' as const, moduleId: hud.id },
       { kind: 'program' as const, mode: 'use' as const, moduleId: programModule.id },
       { kind: 'music' as const, mode: 'use' as const, moduleId: musicModule.id },
-      { kind: 'camera' as const, mode: 'use' as const, moduleId: camera.id },
+      ...(camera
+        ? [{ kind: 'camera' as const, mode: 'use' as const, moduleId: camera.id }]
+        : [{ kind: 'camera' as const, mode: 'off' as const }]),
     ],
   };
   const resolved: ActiveBroadcastSnapshot['resolved'] = {
@@ -117,7 +120,9 @@ export async function migrateLegacyBroadcast(
     },
     program,
     music: structuredClone(musicModule.value),
-    camera: await input.cameraConfig(input.camera.active, input.camera.automaticEnabled),
+    camera: camera
+      ? await input.cameraConfig(input.camera.active, input.camera.automaticEnabled)
+      : null,
   };
   const active: ActiveBroadcastSnapshot = {
     schemaVersion: 1,
@@ -133,13 +138,13 @@ export async function migrateLegacyBroadcast(
       hud: hud.id,
       program: programModule.id,
       music: musicModule.id,
-      camera: camera.id,
+      camera: camera?.id ?? null,
     },
     sourceModuleRevisions: {
       hud: hud.revision,
       program: programModule.revision,
       music: musicModule.revision,
-      camera: camera.revision,
+      camera: camera?.revision ?? null,
     },
     moduleRevisions: {
       hud: randomUUID(),

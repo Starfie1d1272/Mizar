@@ -22,6 +22,7 @@ import {
 import {
   clonePreset,
   type BroadcastConfigDocument,
+  type ModuleRecord,
   type ProgramVisualConfigV1,
 } from '@mizar/broadcast-config';
 import { BroadcastConfigStore } from '../../src/broadcast-config/store.js';
@@ -150,6 +151,50 @@ async function setup() {
   return { store, options, initial: store.snapshot };
 }
 describe('BroadcastConfigStore', () => {
+  it('retains a failed legacy camera recovery and commits verified drafts once without applying them', async () => {
+    const { options, initial } = await setup();
+    const { emptyOrchestrationPreset } = await import('@mizar/protocol/orchestration');
+    const preset = emptyOrchestrationPreset();
+    const id = randomUUID();
+    const pending = {
+      catalog: { activePresetId: id, preset, presets: [{ id, preset }] },
+      automaticEnabled: true,
+      reason: 'camera_identity_unavailable' as const,
+    };
+    let available = false;
+    const recoveryOptions = {
+      ...options,
+      filePath: pathJoin(dirname(options.filePath), 'recovery.json'),
+      createInitial: () => Promise.resolve(initial),
+      initialPendingLegacyCamera: () => pending,
+      resolveModule: async (module: ModuleRecord) => {
+        if (!available) throw new Error('camera_identity_unavailable');
+        return { value: module.value as never, lock: { resources: [], tools: [] } };
+      },
+    };
+    const store = new BroadcastConfigStore(recoveryOptions);
+    await store.load();
+    const convert = (value: typeof preset, automaticEnabled: boolean) =>
+      Promise.resolve({
+        format: 'mizar.camera-config' as const,
+        version: 2 as const,
+        name: value.name,
+        maps: [],
+        automaticEnabled,
+      });
+    await expect(store.restoreLegacyCamera(convert)).rejects.toThrow('camera_identity_unavailable');
+    expect(store.pendingLegacyCamera).toEqual(pending);
+    expect(store.snapshot.active).toEqual(initial.active);
+    available = true;
+    const restored = await store.restoreLegacyCamera(convert);
+    expect(restored).toHaveLength(1);
+    expect(store.snapshot.active).toEqual(initial.active);
+    expect(store.pendingLegacyCamera).toBeUndefined();
+    const reopened = new BroadcastConfigStore(recoveryOptions);
+    await reopened.load();
+    expect(reopened.snapshot.modules.filter((module) => module.kind === 'camera')).toHaveLength(1);
+    await expect(reopened.restoreLegacyCamera(convert)).rejects.toThrow('pending_camera_missing');
+  });
   it('claims unchanged legacy built-ins without changing the active output', () => {
     const document = fixture();
     const builtin = createBuiltinModules().find((item) => item.kind === 'hud')!;

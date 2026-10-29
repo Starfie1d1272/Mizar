@@ -1372,6 +1372,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         broadcastRuntime.store,
         localWebTransport.getOriginPolicy(),
         () => broadcastRuntime.ready,
+        () => broadcastRuntime.restoreLegacyCamera(),
+        (module) => broadcastRuntime.moduleAvailability(module),
       );
     }
     catalogTool = mulnxTool;

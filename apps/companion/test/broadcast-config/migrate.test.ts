@@ -81,11 +81,12 @@ it('reports pending when camera content cannot yet be identified', async () => {
     };
     const ready = await prepareLegacyMigration(options);
     expect(ready.state).toBe('ready');
-    camera.preset.maps.push({ map: 'de_test' } as never);
-    expect(await prepareLegacyMigration(options)).toEqual({
-      state: 'pending',
-      reason: 'camera_identity_unavailable',
-    });
+    camera.preset.maps.push({ map: 'de_test', pack: 'Mizar_test' } as never);
+    const deferred = await prepareLegacyMigration(options);
+    expect(deferred.state).toBe('ready');
+    if (deferred.state !== 'ready') throw new Error('expected deferred migration');
+    expect(deferred.pendingLegacyCamera?.catalog.preset.maps).toHaveLength(1);
+    expect(deferred.document.active.resolved.camera).toBeNull();
     expect(camera.preset.maps).toHaveLength(1);
   } finally {
     await rm(root, { recursive: true, force: true });
