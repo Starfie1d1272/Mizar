@@ -705,7 +705,6 @@ export class MusicDirector {
       (truth.program.clock?.endsInSeconds ?? 999) <= 5,
       truth.active,
       this.isHeld(),
-      this.store.automaticEnabled,
       this.store.state.config,
       this.store.state.master,
       this.store.state.muted,
@@ -768,11 +767,10 @@ export class MusicDirector {
           cue.group === 'mapVictory'
             ? { group: 'waiting', key: `waiting:${truth.program.match!.matchId}` }
             : null;
-      if (!this.store.automaticEnabled) cue = null;
       const manualUnsafe = Boolean(this.manual && !manualSafe(truth));
       if (this.manual && !manualUnsafe) cue = this.manual.cue;
       if (this.isHeld()) cue = null;
-      const opening = this.store.automaticEnabled ? this.pendingOpening : null;
+      const opening = this.pendingOpening;
       this.pendingOpening = null;
       const hasSources = Object.values(this.store.state.sources).some(Boolean);
       const configured =

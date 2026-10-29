@@ -32,12 +32,6 @@ export interface HudConfigStoreOptions {
   readonly onDiagnostic?: (code: string, error: unknown) => void;
 }
 
-/** A coordinator becomes the only writer after initialize succeeds. */
-export interface HudConfigPersistence {
-  initialize(document: HudConfigDocument): Promise<HudConfigDocument>;
-  commit(candidate: HudConfigDocument, previous: HudConfigDocument): Promise<void>;
-}
-
 export class HudConfigEditorConflictError extends Error {
   readonly expectedRevision: string;
   readonly actualRevision: string;
@@ -170,8 +164,6 @@ export class HudConfigStore {
   private readonly commits = new SerialCommitQueue();
   private document = createDefaultHudConfigDocument();
   private loaded = false;
-  private loadFailure = false;
-  private persistence: HudConfigPersistence | undefined;
   private persistenceError: string | null = null;
 
   constructor(options: HudConfigStoreOptions = {}) {
@@ -180,17 +172,6 @@ export class HudConfigStore {
   }
 
   async load(): Promise<void> {
-    if (this.persistence) {
-      await this.commits.run(async () => {
-        if (!this.persistence) throw new Error('hud_persistence_unavailable');
-        this.document = parseHudConfigDocument(
-          await this.persistence.initialize(clone(this.document)),
-        );
-        this.persistenceError = null;
-        this.loaded = true;
-      });
-      return;
-    }
     if (this.filePath === undefined) {
       this.loaded = true;
       return;
@@ -201,10 +182,8 @@ export class HudConfigStore {
       stage = 'parse';
       this.document = parseHudConfigDocument(JSON.parse(raw) as unknown);
       this.persistenceError = null;
-      this.loadFailure = false;
       this.loaded = true;
     } catch (error: unknown) {
-      this.loadFailure = !isMissingFile(error);
       this.onDiagnostic(
         isMissingFile(error)
           ? 'hud_config_missing'
@@ -218,39 +197,6 @@ export class HudConfigStore {
       // that document is the current built-in default; the malformed file is
       // deliberately left untouched for operator recovery.
     }
-  }
-
-  /** Swap writers while the legacy command queue is held; failure leaves the old writer active. */
-  async adoptPersistence(persistence: HudConfigPersistence): Promise<void> {
-    await this.commits.run(async () => {
-      if (!this.loaded || this.loadFailure || this.persistence)
-        throw new Error('hud_persistence_unavailable');
-      const document = parseHudConfigDocument(await persistence.initialize(clone(this.document)));
-      this.document = document;
-      this.persistence = persistence;
-    });
-  }
-
-  /** Recover an existing coordinator without treating the legacy file as authoritative. */
-  async restorePersistence(persistence: HudConfigPersistence): Promise<void> {
-    await this.commits.run(async () => {
-      if (this.persistence) throw new Error('hud_persistence_unavailable');
-      const document = parseHudConfigDocument(await persistence.initialize(clone(this.document)));
-      this.document = document;
-      this.persistenceError = null;
-      this.loadFailure = false;
-      this.loaded = true;
-      this.persistence = persistence;
-    });
-  }
-
-  /** Refresh the facade after the coordinator has committed an active configuration. */
-  async synchronizeFromPersistence(document: HudConfigDocument): Promise<void> {
-    await this.commits.run(() => {
-      if (!this.persistence) throw new Error('hud_persistence_unavailable');
-      this.document = parseHudConfigDocument(document);
-      this.persistenceError = null;
-    });
   }
 
   getState(): HudConfigState {
@@ -384,9 +330,7 @@ export class HudConfigStore {
         throw new HudConfigCommandError(error instanceof Error ? error.message : 'HUD 配置无效');
       }
       try {
-        if (this.persistence) {
-          await this.persistence.commit(clone(candidate), clone(this.document));
-        } else if (this.filePath !== undefined) {
+        if (this.filePath !== undefined) {
           const committed = await replaceDurableJson(this.filePath, candidate);
           if (!committed) throw new Error('HUD 配置提交已取消');
         }
@@ -403,10 +347,6 @@ export class HudConfigStore {
 
   async flush(): Promise<void> {
     await this.commits.flush();
-  }
-
-  get canMigrate(): boolean {
-    return this.loaded && !this.loadFailure;
   }
 
   get isLoaded(): boolean {

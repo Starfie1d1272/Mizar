@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z, ZodError } from 'zod';
-import { displayConfig, parseBroadcastPreset, parseModuleRecord } from '@mizar/broadcast-config';
+import { parseBroadcastPreset, parseModuleRecord } from '@mizar/broadcast-config';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 import type { BroadcastConfigStore } from './store.js';
 
@@ -36,32 +36,18 @@ export function registerBroadcastConfigRoutes(
   app: FastifyInstance,
   store: BroadcastConfigStore,
   originPolicy: LocalWebOriginPolicy,
-  isReady: () => boolean = () => true,
 ): void {
+  app.get('/local/v1/broadcast-presets', (_request, reply) =>
+    reply.header('cache-control', 'no-store').send(store.snapshot),
+  );
   const authorized = (origin: string | undefined) =>
     originPolicy.mode === 'loopback' && checkLocalWebOrigin(originPolicy, origin).allowed;
-  app.get('/local/v1/broadcast-display-config', (_request, reply) => {
-    if (!isReady()) return reply.code(503).send({ error: 'broadcast_config_unavailable' });
-    return reply.header('cache-control', 'no-store').send(displayConfig(store.snapshot.active));
-  });
-  app.get('/local/v1/broadcast-presets', (request, reply) => {
-    if (
-      originPolicy.mode !== 'loopback' ||
-      !['127.0.0.1', 'localhost', '[::1]', '::1'].includes(request.hostname) ||
-      request.headers['sec-fetch-site'] === 'cross-site' ||
-      (request.headers.origin && !authorized(request.headers.origin))
-    )
-      return reply.code(403).send({ error: 'operator_origin_forbidden' });
-    if (!isReady()) return reply.code(503).send({ error: 'broadcast_config_unavailable' });
-    return reply.header('cache-control', 'no-store').send(store.snapshot);
-  });
   const failure = (error: unknown) => {
     if (error instanceof ZodError) return { status: 400, code: 'invalid_request' };
     const code = error instanceof Error ? error.message : '';
     if (['revision_conflict', 'request_conflict', 'production_busy'].includes(code))
       return { status: 409, code };
     if (['preset_missing', 'module_missing'].includes(code)) return { status: 404, code };
-    if (code === 'broadcast_owner_sync_failed') return { status: 503, code };
     if (
       [
         'incomplete_preset',
@@ -87,17 +73,6 @@ export function registerBroadcastConfigRoutes(
               requestId: request.id,
             },
           });
-        if (!isReady()) {
-          const parsed = action === 'apply' ? apply.safeParse(request.body) : null;
-          if (!parsed?.success || !store.hasReceipt(parsed.data.requestId))
-            return reply.code(503).send({
-              error: {
-                code: 'broadcast_config_unavailable',
-                message: '播出配置尚未就绪。',
-                requestId: request.id,
-              },
-            });
-        }
         try {
           if (action === 'clone') return await store.clone(clone.parse(request.body));
           if (action === 'preview') return await store.preview(apply.parse(request.body));

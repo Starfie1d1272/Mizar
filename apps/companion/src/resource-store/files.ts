@@ -63,7 +63,6 @@ export function checkDescriptor(pack: TrustedPack, packId: string): TrustedPack 
     typeof pack.packVersion !== 'string' ||
     !pack.packVersion.length ||
     pack.packVersion.length > 128 ||
-    (pack.manifestSha256 !== undefined && !/^[a-f0-9]{64}$/.test(pack.manifestSha256)) ||
     typeof pack.compatible !== 'boolean' ||
     !Array.isArray(pack.files) ||
     !pack.files.length ||
@@ -90,13 +89,7 @@ export function checkDescriptor(pack: TrustedPack, packId: string): TrustedPack 
     return { path: file.path, bytes: file.bytes, sha256: file.sha256 };
   });
   if (total > limits.totalBytes) throw new ResourceStoreError('resource_size_exceeded');
-  return {
-    packId,
-    packVersion: pack.packVersion,
-    ...(pack.manifestSha256 === undefined ? {} : { manifestSha256: pack.manifestSha256 }),
-    compatible: pack.compatible,
-    files,
-  };
+  return { packId, packVersion: pack.packVersion, compatible: pack.compatible, files };
 }
 
 /** Recheck every ancestor, including the root. A verified fd, rather than a path, owns each read. */

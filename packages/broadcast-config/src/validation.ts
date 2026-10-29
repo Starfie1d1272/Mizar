@@ -122,10 +122,7 @@ const nativeHud = z
     theme: hudThemeSchema,
     overlays: z.strictObject({
       pause: z.strictObject({ enabled: z.boolean(), visual: z.string().min(1) }),
-      chat: z.strictObject({
-        enabled: z.boolean(),
-        placement: z.union([z.literal('auto'), hudWidgetPlacementSchema]),
-      }),
+      chat: z.strictObject({ enabled: z.boolean(), placement: hudWidgetPlacementSchema }),
     }),
     accent: visualColor,
   })
@@ -249,14 +246,6 @@ const snapshot = z.strictObject({
   revision,
   sourcePreset: z.strictObject({ id, revision }).nullable(),
   adjusted: z.boolean(),
-  sourceModuleIds: z
-    .strictObject({
-      hud: id.nullable().optional(),
-      program: id.nullable().optional(),
-      music: id.nullable().optional(),
-      camera: id.nullable().optional(),
-    })
-    .optional(),
   moduleRevisions: z.strictObject({
     hud: revision,
     program: revision,

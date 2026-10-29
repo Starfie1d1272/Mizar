@@ -1,8 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { chmod, lstat, mkdir, open, readdir, rename, rm } from 'node:fs/promises';
+import { chmod, mkdir, open, readdir, rename, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import type { ResourceRef } from '@mizar/broadcast-config';
 import {
   ResourceStoreError,
   type PreparePack,
@@ -61,7 +60,6 @@ export class ResourceStore {
   private lease: string | null = null;
   private readingBytes = 0;
   private readers = 0;
-  private readonly deletingPacks = new Set<string>();
 
   private constructor(private readonly options: StoreOptions) {
     this.root = resolve(options.root);
@@ -188,12 +186,6 @@ export class ResourceStore {
     const directory = this.directory(packId);
     await ensureDirectory(join(directory, 'versions'));
     await ensureDirectory(join(directory, 'staging'));
-    try {
-      await lstat(join(directory, 'deleting.json'));
-      this.deletingPacks.add(packId);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    }
     // A staging directory is never published. Recover interrupted transfers without touching versions.
     for (const name of await readdir(join(directory, 'staging')))
       await rm(join(directory, 'staging', name), { recursive: true, force: true });
@@ -226,7 +218,7 @@ export class ResourceStore {
         this.failed(entry, error);
       }
     }
-    const fallback = !this.deletingPacks.has(packId) && !entry.active && entry.previous !== null;
+    const fallback = !entry.active && entry.previous !== null;
     if (fallback) {
       entry.active = entry.previous;
       entry.previous = null;
@@ -247,8 +239,6 @@ export class ResourceStore {
     )
       entry.status.downloadedBytes = value.downloadedBytes;
     this.refreshVersions(entry);
-    if (this.deletingPacks.has(packId))
-      this.failed(entry, new ResourceStoreError('resource_deleting'));
     if (fallback)
       await this.persist(
         packId,
@@ -283,26 +273,6 @@ export class ResourceStore {
   }
   getStatus(packId: string): ResourceStatus {
     return { ...this.entry(packId).status };
-  }
-  getVersionRefs(packId: string): {
-    active: ResourceRef | null;
-    prepared: ResourceRef | null;
-    previous: ResourceRef | null;
-  } {
-    const entry = this.entry(packId);
-    const ref = (value: CachedPack | null): ResourceRef | null =>
-      value?.descriptor.manifestSha256
-        ? {
-            id: packId,
-            version: value.descriptor.packVersion,
-            digest: value.descriptor.manifestSha256,
-          }
-        : null;
-    return {
-      active: ref(entry.active),
-      prepared: ref(entry.prepared),
-      previous: ref(entry.previous),
-    };
   }
   cancel(packId: string): void {
     this.entry(packId);
@@ -385,7 +355,6 @@ export class ResourceStore {
     )
       throw new ResourceStoreError('resource_version_mismatch');
     return this.exclusive(async () => {
-      if (this.deletingPacks.has(packId)) throw new ResourceStoreError('resource_deleting');
       const controller = new AbortController();
       const signal = options.signal
         ? AbortSignal.any([options.signal, controller.signal])
@@ -511,7 +480,6 @@ export class ResourceStore {
     options: { signal?: AbortSignal } = {},
   ): Promise<{ status: ResourceStatus; identity: Identity } | null> {
     return this.exclusive(async () => {
-      if (this.deletingPacks.has(packId)) throw new ResourceStoreError('resource_deleting');
       const entry = this.entry(packId);
       let active = entry.active;
       if (!active) {
@@ -618,7 +586,6 @@ export class ResourceStore {
     rollback = false,
   ): Promise<boolean> {
     const entry = this.entry(packId);
-    if (this.deletingPacks.has(packId)) throw new ResourceStoreError('resource_deleting');
     const requested = rollback ? entry.previous : entry.prepared;
     if (!requested || !this.options.activateWhenSafe) return false;
     let committed = false;
@@ -660,66 +627,33 @@ export class ResourceStore {
     const entry = this.entry(packId);
     if (!entry.optional) throw new ResourceStoreError('resource_pack_required');
     return this.exclusive(async () => {
-      const remove = async () => {
-        if (this.readers) throw new ResourceStoreError('resource_operation_conflict');
-        if (!this.options.activateWhenSafe)
-          throw new ResourceStoreError('resource_activation_blocked');
-        if (this.options.references) {
-          for (const id of await readdir(join(this.directory(packId), 'versions'))) {
-            if (!versionId.test(id)) throw new ResourceStoreError('resource_pointer_invalid');
-            const candidate = await this.cached(packId, id, idleSignal());
-            const digest = candidate.descriptor.manifestSha256;
-            if (!digest) throw new ResourceStoreError('resource_identity_unavailable');
-            if (
-              await this.options.references.isReferenced({
-                id: packId,
-                version: candidate.descriptor.packVersion,
-                digest,
-              })
-            )
-              throw new ResourceStoreError('resource_in_use');
-          }
-        }
-        let committed = false;
-        const accepted = await this.options.activateWhenSafe(async () => {
-          if (committed) throw new ResourceStoreError('resource_activation_invalid');
-          if (this.readers) throw new ResourceStoreError('resource_operation_conflict');
-          this.deletingPacks.add(packId);
-          await atomicJson(join(this.directory(packId), 'deleting.json'), { version: 1 });
-          await this.persist(packId, { active: null, prepared: null, previous: null }, null, 0);
-          entry.active = null;
-          entry.prepared = null;
-          entry.previous = null;
-          entry.status = {
-            packId,
-            phase: 'missing',
-            downloadedBytes: 0,
-            activeVersion: null,
-            preparedVersion: null,
-            rollbackVersion: null,
-            failure: null,
-          };
-          committed = true;
-        });
-        if (!accepted || !committed) throw new ResourceStoreError('resource_activation_blocked');
-        // Readers own byte snapshots. No live path is unlinked before the guarded pointer is cleared.
-        for (const name of await readdir(join(this.directory(packId), 'versions')))
-          await rm(join(this.directory(packId), 'versions', name), {
-            recursive: true,
-            force: true,
-          });
-        await rm(join(this.directory(packId), 'deleting.json'), { force: true });
-        this.deletingPacks.delete(packId);
-        return this.getStatus(packId);
-      };
-      return this.options.references ? this.options.references.run(remove) : remove();
+      if (this.readers) throw new ResourceStoreError('resource_operation_conflict');
+      if (!this.options.activateWhenSafe)
+        throw new ResourceStoreError('resource_activation_blocked');
+      let committed = false;
+      const accepted = await this.options.activateWhenSafe(async () => {
+        if (committed) throw new ResourceStoreError('resource_activation_invalid');
+        await this.persist(packId, { active: null, prepared: null, previous: null }, null, 0);
+        entry.active = null;
+        entry.prepared = null;
+        entry.previous = null;
+        entry.status = {
+          packId,
+          phase: 'missing',
+          downloadedBytes: 0,
+          activeVersion: null,
+          preparedVersion: null,
+          rollbackVersion: null,
+          failure: null,
+        };
+        committed = true;
+      });
+      if (!accepted || !committed) throw new ResourceStoreError('resource_activation_blocked');
+      // Readers own byte snapshots. No live path is unlinked before the guarded pointer is cleared.
+      for (const name of await readdir(join(this.directory(packId), 'versions')))
+        await rm(join(this.directory(packId), 'versions', name), { recursive: true, force: true });
+      return this.getStatus(packId);
     });
-  }
-
-  /** A deletion marker survives interruption and blocks new references and reads. */
-  isDeleting(ref: ResourceRef): Promise<boolean> {
-    this.entry(ref.id);
-    return Promise.resolve(this.deletingPacks.has(ref.id));
   }
 
   async read(
@@ -735,61 +669,8 @@ export class ResourceStore {
     partial: boolean;
   }> {
     const entry = this.entry(packId);
-    if (this.deletingPacks.has(packId)) throw new ResourceStoreError('resource_deleting');
     const active = entry.active;
     if (!active) throw new ResourceStoreError('resource_not_ready');
-    return this.readCandidate(packId, active, relative, range);
-  }
-
-  /** Resolve an authenticated manifest identity, never a moving active pointer. */
-  private async exact(ref: ResourceRef): Promise<CachedPack> {
-    this.entry(ref.id);
-    if (this.deletingPacks.has(ref.id)) throw new ResourceStoreError('resource_deleting');
-    if (!ref.version || ref.version.length > 128 || !/^[a-f0-9]{64}$/.test(ref.digest))
-      throw new ResourceStoreError('resource_reference_invalid');
-    for (const id of await readdir(join(this.directory(ref.id), 'versions'))) {
-      if (!versionId.test(id)) continue;
-      try {
-        const candidate = await this.cached(ref.id, id, idleSignal());
-        if (
-          candidate.descriptor.packVersion === ref.version &&
-          candidate.descriptor.manifestSha256 === ref.digest
-        )
-          return candidate;
-      } catch {
-        // An unrelated damaged or unauthorized version cannot satisfy this reference.
-      }
-    }
-    throw new ResourceStoreError('resource_not_ready');
-  }
-
-  async verifyExact(ref: ResourceRef): Promise<void> {
-    if (this.readers >= 8) throw new ResourceStoreError('resource_operation_conflict');
-    this.readers++;
-    try {
-      await this.exact(ref);
-    } finally {
-      this.readers--;
-    }
-  }
-
-  async readExact(ref: ResourceRef, relative: string, range?: string) {
-    if (this.readers >= 7) throw new ResourceStoreError('resource_operation_conflict');
-    this.readers++;
-    try {
-      return await this.readCandidate(ref.id, await this.exact(ref), relative, range);
-    } finally {
-      this.readers--;
-    }
-  }
-
-  private async readCandidate(
-    packId: string,
-    active: CachedPack,
-    relative: string,
-    range?: string,
-  ) {
-    const entry = this.entry(packId);
     const file = active.descriptor.files.find((candidate) => candidate.path === relative);
     if (!file) throw new ResourceStoreError('resource_file_unknown');
     let start = 0,
@@ -847,7 +728,6 @@ export class ResourceStore {
   /** Native integration only; never reopen this path for HTTP. Use read() for a verified byte snapshot. */
   async resolveReadOnlyPath(packId: string, relative: string): Promise<string> {
     const entry = this.entry(packId);
-    if (this.deletingPacks.has(packId)) throw new ResourceStoreError('resource_deleting');
     const active = entry.active;
     const file = active?.descriptor.files.find((candidate) => candidate.path === relative);
     if (!active || !file) throw new ResourceStoreError('resource_file_unknown');

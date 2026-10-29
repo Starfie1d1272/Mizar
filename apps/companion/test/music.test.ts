@@ -1919,13 +1919,3 @@ it('finishes a track transition without applying its tail fade to the next track
   expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_PLAYING');
   await r.director.close();
 });
-
-it('disables automatic music without preventing manual playback', async () => {
-  const r = await rig();
-  r.store.automaticEnabled = false;
-  await r.step();
-  expect(r.obs.restarts()).toBe(0);
-  await r.director.manualPlay('waiting', r.tracks[0]!.id);
-  expect(r.obs.restarts()).toBe(1);
-  await r.director.close();
-});
