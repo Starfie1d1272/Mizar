@@ -27,11 +27,13 @@ const readReducedMotion = () => window.matchMedia(motionQuery).matches;
 export function PresetVisualPreview({
   bindings,
   modules,
+  mode = 'preset',
 }: {
   bindings: Binding[];
   modules: Entry[];
+  mode?: 'preset' | 'hud' | 'program';
 }) {
-  const [scene, setScene] = useState<ProgramSceneId>('gameplay');
+  const [scene, setScene] = useState<ProgramSceneId>(mode === 'program' ? 'waiting' : 'gameplay');
   const reducedMotion = useSyncExternalStore(subscribeMotion, readReducedMotion, () => false);
   const visuals = useMemo(() => {
     const get = (kind: 'hud' | 'program'): ModuleRecord | null => {
@@ -80,7 +82,11 @@ export function PresetVisualPreview({
           value={scene}
           onChange={(event) => setScene(event.currentTarget.value as ProgramSceneId)}
         >
-          {PROGRAM_SCENES.map((item) => (
+          {PROGRAM_SCENES.filter(
+            (item) =>
+              mode === 'preset' ||
+              (mode === 'hud' ? item.id === 'gameplay' : item.id !== 'gameplay'),
+          ).map((item) => (
             <option key={item.id} value={item.id}>
               {item.title}
             </option>

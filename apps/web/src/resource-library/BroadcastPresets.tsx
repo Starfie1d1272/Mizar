@@ -1,5 +1,5 @@
 import { PresetVisualPreview } from './PresetVisualPreview';
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import { useLocalRead } from '../preparation/client';
 import { Button, Checkbox, Panel, Select, StatusBanner } from '../ui';
 
@@ -89,7 +89,6 @@ function BindingEditor({
 
 export function BroadcastPresets({ query }: { query: string }) {
   const [refresh, setRefresh] = useState(0);
-  const fileInput = useRef<HTMLInputElement>(null);
   const view = useLocalRead<View>('/local/v1/broadcast-presets', 2000, refresh);
   const [busy, setBusy] = useState(false);
   const [selecting, setSelecting] = useState(false);
@@ -143,37 +142,6 @@ export function BroadcastPresets({ query }: { query: string }) {
       }
     return revisions;
   }
-  async function importFile(file: File) {
-    if (busy) return;
-    setBusy(true);
-    setNotice(null);
-    try {
-      const response = await fetch('/operator/resource-library/import-preset-pack', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-mizarpack' },
-        body: file,
-      });
-      if (!response.ok)
-        throw new Error(
-          response.status === 409
-            ? '同一版本的内容不同，请检查文件。'
-            : '导入失败，请检查播出方案文件后重试。',
-        );
-      const result = (await response.json()) as { reused: boolean };
-      setNotice({
-        tone: 'success',
-        message: result.reused ? '此播出方案已导入。' : '播出方案已保存，可查看配置后使用。',
-      });
-      setRefresh((value) => value + 1);
-    } catch (error) {
-      setNotice({
-        tone: 'danger',
-        message: error instanceof Error ? error.message : '导入失败，请重试。',
-      });
-    } finally {
-      setBusy(false);
-    }
-  }
   async function exportFile(preset: Preset) {
     if (!view || busy) return;
     const revisions = moduleRevisions(preset);
@@ -181,13 +149,18 @@ export function BroadcastPresets({ query }: { query: string }) {
     setBusy(true);
     setNotice(null);
     try {
-      const response = await fetch('/operator/resource-library/export-preset-pack', {
+      const response = await fetch('/operator/resource-library/export-pack', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          presetId: preset.id,
-          expectedRevision: preset.revision,
-          expectedModuleRevisions: revisions,
+          modules: [],
+          presets: [
+            {
+              presetId: preset.id,
+              expectedRevision: preset.revision,
+              expectedModuleRevisions: revisions,
+            },
+          ],
         }),
       });
       if (!response.ok)
@@ -238,10 +211,10 @@ export function BroadcastPresets({ query }: { query: string }) {
     setBusy(true);
     setNotice(null);
     try {
-      const response = await fetch('/operator/resource-library/export-preset-bundle', {
+      const response = await fetch('/operator/resource-library/export-pack', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ presets: requests }),
+        body: JSON.stringify({ modules: [], presets: requests }),
       });
       if (!response.ok)
         throw new Error(
@@ -302,6 +275,25 @@ export function BroadcastPresets({ query }: { query: string }) {
       setBusy(false);
     }
   }
+  async function deletePreset(preset: Preset) {
+    if (busy) return;
+    setBusy(true);
+    setNotice(null);
+    try {
+      const response = await fetch('/operator/broadcast-presets/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ presetId: preset.id, expectedRevision: preset.revision }),
+      });
+      if (!response.ok) throw new Error('方案正在使用或已变化，请刷新后重试。');
+      setNotice({ tone: 'success', message: '方案已删除，资源保留。' });
+    } catch (error) {
+      setNotice({ tone: 'danger', message: error instanceof Error ? error.message : '删除失败。' });
+    } finally {
+      setBusy(false);
+      setRefresh((value) => value + 1);
+    }
+  }
   async function applyPreset(preset: Preset) {
     if (!view || busy) return;
     const revisions = moduleRevisions(preset);
@@ -347,19 +339,6 @@ export function BroadcastPresets({ query }: { query: string }) {
           <h2>播出方案</h2>
           <p>查看配置，并在准备阶段使用方案。</p>
         </div>
-        <input
-          ref={fileInput}
-          type="file"
-          accept=".mizarpack"
-          aria-label="选择播出方案文件"
-          hidden
-          disabled={busy || !view}
-          onChange={(event) => {
-            const file = event.currentTarget.files?.[0];
-            event.currentTarget.value = '';
-            if (file) void importFile(file);
-          }}
-        />
         <div className="resource-library__preset-actions">
           <Button
             disabled={!view || busy}
@@ -375,9 +354,6 @@ export function BroadcastPresets({ query }: { query: string }) {
               分享所选（{selected.length}）
             </Button>
           ) : null}
-          <Button disabled={!view} loading={busy} onClick={() => fileInput.current?.click()}>
-            导入方案
-          </Button>
         </div>
       </div>
       {notice ? <StatusBanner tone={notice.tone}>{notice.message}</StatusBanner> : null}
@@ -475,6 +451,14 @@ export function BroadcastPresets({ query }: { query: string }) {
               ) : null}
             </details>
             <div className="resource-library__preset-actions">
+              <details>
+                <summary>删除方案</summary>
+                <p>删除方案不会删除关联资源。</p>
+                <Button disabled={busy || current} onClick={() => void deletePreset(preset)}>
+                  确认删除
+                </Button>
+                {current && <p>请先使用其他方案。</p>}
+              </details>
               <Button disabled={busy} onClick={() => void clonePreset(preset)}>
                 复制
               </Button>

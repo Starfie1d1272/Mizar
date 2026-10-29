@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { BroadcastPresets } from './BroadcastPresets';
-import { MusicPackages } from './MusicPackages';
+import { ResourceModules } from './ResourceModules';
 import { OperatorShell } from '../operator/OperatorShell';
 import { MulnxToolControls } from '../orchestration/MulnxToolControls';
 import { openTool, useLocalRead } from '../preparation/client';
@@ -63,7 +63,9 @@ export function ResourceLibraryPage() {
     };
   }, []);
   const [query, setQuery] = useState('');
-  const [category, setCategory] = useState<'all' | 'media' | 'tool' | 'music' | 'presets'>('all');
+  const [category, setCategory] = useState<
+    'all' | 'media' | 'tool' | 'music' | 'presets' | 'hud' | 'program' | 'camera'
+  >('all');
   const [preparedSession, setPreparedSession] = useState<{
     preparedId: string;
     tag: string;
@@ -75,7 +77,8 @@ export function ResourceLibraryPage() {
   );
   const showMedia = category === 'all' || category === 'media';
   const showPresets = category === 'all' || category === 'presets';
-  const showMusic = category === 'all' || category === 'music';
+  const showModules =
+    category === 'all' || ['hud', 'program', 'music', 'camera'].includes(category);
   const showTool = (category === 'all' || category === 'tool') && matches('MulNX 运镜 工具');
   return (
     <OperatorShell active="/packages">
@@ -98,9 +101,12 @@ export function ResourceLibraryPage() {
             {(
               [
                 ['all', '全部'],
-                ['presets', '播出方案'],
-                ['media', '素材'],
+                ['hud', 'HUD'],
+                ['program', '场景'],
                 ['music', '音乐'],
+                ['camera', '运镜'],
+                ['presets', '方案'],
+                ['media', '素材'],
                 ['tool', '工具'],
               ] as const
             ).map(([value, label]) => (
@@ -116,7 +122,7 @@ export function ResourceLibraryPage() {
           </div>
         </div>
         {showPresets ? <BroadcastPresets query={query} /> : null}
-        {showMusic ? <MusicPackages query={query} /> : null}
+        {showModules ? <ResourceModules query={query} category={category} /> : null}
         {!view ? (
           <StatusBanner tone="warning">
             正在连接资源状态；如果持续无法连接，请检查本地制播服务。
@@ -214,7 +220,7 @@ export function ResourceLibraryPage() {
         {view &&
         !(showMedia && (resources?.length || view.resources === null)) &&
         !showTool &&
-        !showMusic &&
+        !showModules &&
         !showPresets ? (
           <p>没有找到匹配的资源。</p>
         ) : null}
