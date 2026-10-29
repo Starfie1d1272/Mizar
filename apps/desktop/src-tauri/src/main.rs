@@ -1078,6 +1078,7 @@ async fn start_demo_test(
     team_a_name: String,
     team_b_name: String,
     preserve_settings: Option<bool>,
+    camera_trial: Option<bool>,
     diagnostic_operation_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let diagnostic_log = app.state::<DesktopLog>().inner().clone();
@@ -1100,8 +1101,36 @@ async fn start_demo_test(
             .resolve(&token, &app.state::<DesktopLog>())?;
         cs2.ensure_demo_available()?;
         let log = app.state::<DesktopLog>();
+        let launch_guard = if camera_trial.unwrap_or(false) {
+            let guard = mulnx_launch::demo_launch_guard()?;
+            if log.state_root.join("data/mulnx-launch/pending.json").exists() || cs2.mulnx_launcher_running()? {
+                return Err("请先完成上次 MulNX 启动的恢复。".into());
+            }
+            Some(guard)
+        } else { None };
         let id = demo_test::new_request_id(&log)?;
         let starting = demo_test::request(&log, "begin", &id, Some((&team_a_name, &team_b_name)))?;
+        if camera_trial.unwrap_or(false) {
+            drop(cs2);
+            let result = mulnx_launch::launch_demo(&app, &log, &path, &id, preserve_settings.unwrap_or(false), launch_guard.as_ref().unwrap());
+            let mut cs2 = managed.lock().map_err(|_| "CS2 状态不可用，请恢复试播。")?;
+            return match result {
+                Ok(_) => {
+                    if let Ok(mut tracker) = app.state::<HostState>().tracker.lock() {
+                        tracker.preserve_settings = cs2.preserve_settings();
+                    }
+                    Ok(starting)
+                }
+                Err(error) => {
+                    if !cs2.demo_launch_attempted()? {
+                        if let Err(recovery) = cs2.cancel_unsubmitted_mulnx_demo() {
+                            return Err(format!("{error}；恢复未完成：{recovery}"));
+                        }
+                    }
+                    Err(error)
+                }
+            };
+        }
         match cs2.start_demo(&path, &id, preserve_settings.unwrap_or(false)) {
             Ok(true) => {
                 if let Ok(mut tracker) = app.state::<HostState>().tracker.lock() {
@@ -1137,13 +1166,13 @@ async fn enter_demo_test(
     diagnostic_operation_id: Option<String>,
     diagnostic_task_id: Option<String>,
     diagnostic_trigger: Option<String>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let diagnostic_log = app.state::<DesktopLog>().inner().clone();
     let command_log = diagnostic_log.clone();
     let native_operation_id = diagnostic_operation_id.clone();
     let native_task_id = diagnostic_task_id.clone();
     let native_trigger = diagnostic_trigger.clone();
-    let diagnostic_result: Result<(), String> = async move {
+    let diagnostic_result: Result<bool, String> = async move {
     demo_main_window(&window)?;
     let host = app.clone();
     tauri::async_runtime::spawn_blocking({ let command_log = command_log.clone(); let native_operation_id = native_operation_id.clone(); let native_task_id = native_task_id.clone(); let native_trigger = native_trigger.clone(); move || {
@@ -1153,14 +1182,29 @@ async fn enter_demo_test(
         host.state::<production_exit::ExitGate>().check()?;
         host.state::<updates::PendingUpdate>().check()?;
         cs2.validate_demo_running(&request_id)?;
-        demo_test::request(&host.state::<DesktopLog>(), "playing", &request_id, None)?;
+        let log = host.state::<DesktopLog>();
+        let camera_trial = cs2.console_source()?.is_some_and(|(context, game)| game.owned && context["mulnxLaunch"] == true);
+        if camera_trial && cs2.managed_camera_lease().is_none() {
+            if !mulnx_launch::observer_control_available(&cs2, &log) {
+                return Err("运镜工具尚未就绪，请检查试播游戏状态。".into());
+            }
+            let game = cs2.workspace_process()?.filter(|game| game.owned && game.is_running())
+                .ok_or("试播游戏身份已变化。")?;
+            let value = production_exit::camera_session(&log, "begin-demo", None, Some(&request_id))?;
+            let lease = value["lease"].as_str().ok_or("运镜会话未确认。")?.to_owned();
+            if let Err(error) = cs2.bind_managed_camera(game, lease.clone()) {
+                let _ = production_exit::camera_session(&log, "invalidate", Some(&lease), None);
+                return Err(error);
+            }
+        }
+        demo_test::request(&log, "playing", &request_id, None)?;
         drop(cs2);
-        present_production_inner(&host, true)
+        present_production_inner(&host, true)?;
+        Ok(camera_trial)
         })
     } })
     .await
-    .map_err(|error| command_log.preserve_error("enter_demo_test", native_operation_id.as_deref(), &error, "Demo 工作台未能打开。".to_string()))??;
-    Ok(())
+    .map_err(|error| command_log.preserve_error("enter_demo_test", native_operation_id.as_deref(), &error, "Demo 工作台未能打开。".to_string()))?
 
     }.await;
     diagnostic_log.with_task(diagnostic_task_id.as_deref(), diagnostic_operation_id.as_deref(), diagnostic_trigger.as_deref(), || diagnostic_log.native_outcome("enter_demo_test", diagnostic_operation_id.as_deref(), &diagnostic_result));
