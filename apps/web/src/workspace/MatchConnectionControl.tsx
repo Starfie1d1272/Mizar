@@ -8,7 +8,7 @@ import {
 } from '../preparation/observer-preparation';
 
 /** The existing observer owner supplies status; opening a window never starts a connection. */
-export function MatchConnectionControl() {
+export function MatchConnectionControl({ primary = false }: { primary?: boolean }) {
   const view = useLocalRead<ConnectionPreparationView>('/local/v1/observer-assist');
   const runtime = useLocalRead<ObserverRuntimeView & { programCommandQueued?: boolean }>(
     '/local/v1/observer',
@@ -34,6 +34,7 @@ export function MatchConnectionControl() {
   return (
     <>
       <Button
+        variant={primary ? 'primary' : 'secondary'}
         disabled={busy || runtime?.pending}
         onClick={() => {
           if (lock.current) return;
@@ -50,7 +51,11 @@ export function MatchConnectionControl() {
             });
         }}
       >
-        本图连接 · {status}
+        {primary
+          ? runtime?.programCommandQueued
+            ? '查看本图连接'
+            : '填写 GOTV'
+          : `本图连接 · ${status}`}
       </Button>
       {runtime?.programCommandQueued || runtime?.active ? (
         <small role="status">

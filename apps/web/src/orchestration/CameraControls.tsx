@@ -42,10 +42,8 @@ export function CameraControls({
       {workspace ? (
         <div className="workspace-camera-summary">
           <StatusPill tone={s.held ? 'warning' : 'info'}>
-            {s.held ? '人工保持' : '自动运镜'}
+            {s.held ? '人工运镜' : '自动运镜'}
           </StatusPill>
-          <strong>{s.map ?? '地图待确认'}</strong>
-          <span title={s.pack ?? undefined}>{s.pack ?? '未配运镜包'}</span>
         </div>
       ) : null}
       <span
@@ -77,7 +75,7 @@ export function CameraControls({
           {s.connected ? '断开 MulNX' : '连接 MulNX'}
         </Button>
       ) : null}
-      {!s.held || s.current ? (
+      {!s.held ? (
         <>
           <Button
             disabled={busy}
@@ -86,16 +84,19 @@ export function CameraControls({
           >
             接管运镜
           </Button>
-          <Button disabled={busy || !s.connected || !s.current} onClick={() => void send('skip')}>
-            跳过本次
-          </Button>
         </>
+      ) : null}
+      {s.current ? (
+        <Button disabled={busy || !s.connected} onClick={() => void send('skip')}>
+          跳过本次
+        </Button>
       ) : null}
       {s.held ? (
         <Button
           variant="primary"
           disabled={
             busy ||
+            (workspace && Boolean(s.current)) ||
             !s.connected ||
             !view.ready ||
             !s.pack ||
@@ -105,7 +106,7 @@ export function CameraControls({
           title={`应用并核对当前地图 ${s.map ?? '未知'} 的隔离包 ${s.pack ?? '未配置'}`}
           onClick={() => void send('resume')}
         >
-          {workspace ? '准备运镜并恢复自动' : '准备隔离包并启用自动'}
+          {workspace ? '恢复运镜自动' : '准备隔离包并启用自动'}
         </Button>
       ) : null}
       {error && !workspace ? <span role="alert">{error}</span> : null}

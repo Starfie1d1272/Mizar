@@ -48,6 +48,9 @@ export function ProductionStatus({
     >
       <div className="production-status__signals" aria-label="直播状态">
         <span data-tone={obsText === '直播中' ? 'success' : 'muted'}>OBS {obsText}</span>
+        {guidance?.phase === 'match_end' ? (
+          <span>录像 {connected ? (obs?.recording ? '进行中' : '已停止') : '无法确认'}</span>
+        ) : null}
         <span data-tone={platformText === '已开播' ? 'success' : 'muted'}>
           Bilibili {platformText}
         </span>
