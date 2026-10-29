@@ -64,13 +64,9 @@ export function registerRivalHubConnectionRoutes(
     const value = await options.connection.stats(binding.context.matchId, true);
     if (!value || linkedBinding()?.context.matchId !== binding.context.matchId) {
       const retained = await options.connection.getStats(binding.context.matchId);
-      return reply
-        .code(502)
-        .send({
-          message: retained
-            ? '统计刷新失败，保留本场已有快照。'
-            : '统计刷新失败，当前没有可用快照。',
-        });
+      return reply.code(502).send({
+        message: retained ? '统计刷新失败，保留本场已有快照。' : '统计刷新失败，当前没有可用快照。',
+      });
     }
     return { ok: true };
   });
