@@ -53,7 +53,7 @@ export function MatchConnectionControl({ primary = false }: { primary?: boolean 
         {primary
           ? runtime?.programCommandQueued || view?.waitingForMap
             ? '查看本图连接'
-            : '填写 GOTV'
+            : '填写 GoTV'
           : `本图连接 · ${status}`}
       </Button>
       {!primary && (runtime?.programCommandQueued || runtime?.active) ? (
