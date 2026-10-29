@@ -15,7 +15,9 @@ import {
 import { join } from 'node:path';
 import { atomicJson, ensureDirectory, readJson, safePath } from '../resource-store/files.js';
 import { prepareIsolatedPack } from './prepare-pack.js';
-import { cameraSourceTreeSha256 } from './camera-source.js';
+import { cameraSourceTreeSha256, verifyCameraConversion } from './camera-source.js';
+import { verifyIsolatedPack } from './isolated-pack.js';
+import type { CameraSourceRef, MulnxToolRef } from '@mizar/broadcast-config';
 import {
   downloadVerified,
   extractMulnx,
@@ -128,7 +130,7 @@ export class MulnxTool {
   async cameraSource(name: string) {
     const installed = this.installed;
     const pack = installed?.packs.find((item) => item.name === name);
-    if (!installed || !pack?.treeSha256) throw new Error('mulnx_source_unverified');
+    if (!installed || !pack) throw new Error('mulnx_source_unverified');
     const root = await safePath(
       join(this.directory, installed.directory, 'MulNX/CS2OBTool/CameraSystem/CamPacks'),
     );
@@ -143,7 +145,15 @@ export class MulnxTool {
     )
       throw new Error('mulnx_source_invalid');
     const treeSha256 = await cameraSourceTreeSha256(join(root, pack.sourceName));
-    if (treeSha256 !== pack.treeSha256) throw new Error('mulnx_source_changed');
+    const expected =
+      pack.treeSha256 ?? (await this.legacySourceSha256(installed.release, pack.sourceName));
+    if (treeSha256 !== expected) throw new Error('mulnx_source_changed');
+    if (
+      this.installed !== installed ||
+      !verifyIsolatedPack(root, pack.name) ||
+      !(await verifyCameraConversion(join(root, pack.sourceName), join(root, pack.name)))
+    )
+      throw new Error('mulnx_source_unverified');
     return {
       sourceName: pack.sourceName,
       treeSha256,
@@ -159,6 +169,99 @@ export class MulnxTool {
         },
       },
     };
+  }
+  /** Revalidate old installations against locally available original bytes, without changing selection. */
+  private async legacySourceSha256(release: MulnxRelease, sourceName: string): Promise<string> {
+    const sameRelease = (candidate: MulnxRelease) =>
+      candidate.id === release.id &&
+      candidate.assetId === release.assetId &&
+      candidate.tag === release.tag &&
+      candidate.sha256 === release.sha256 &&
+      candidate.size === release.size;
+    const extractor = await safePath(this.bundle, '7zr.exe');
+    if ((await fileSha256(extractor)) !== SEVEN_ZIP.sha256)
+      throw new Error('mulnx_extractor_integrity');
+    const entries = (await readdir(this.directory)).filter((name) =>
+      new RegExp(`^prepared-${release.sha256}-[a-f0-9-]{36}$`).test(name),
+    );
+    if (entries.length > 128) throw new Error('mulnx_prepared_budget');
+    const candidates = [
+      { root: this.bundle, receipt: 'release.json' },
+      ...entries
+        .sort()
+        .map((entry) => ({ root: join(this.directory, entry), receipt: 'receipt.json' })),
+    ];
+    let failure: Error | undefined;
+    for (const candidate of candidates) {
+      try {
+        const root = await safePath(candidate.root);
+        const receipt = z
+          .object({ release: releaseSchema })
+          .parse(await readJson(root, candidate.receipt));
+        if (!sameRelease(receipt.release)) continue;
+        const archive = await safePath(root, 'MulNX.7z');
+        if (
+          (await lstat(archive)).size !== release.size ||
+          (await fileSha256(archive)) !== release.sha256
+        )
+          throw new Error('mulnx_prepared_integrity');
+        const stage = join(this.directory, `staging-${randomUUID()}`);
+        await mkdir(stage);
+        try {
+          const extracted = await extractMulnx(extractor, archive, join(stage, 'unpacked'));
+          return await cameraSourceTreeSha256(
+            join(extracted.root, 'CS2OBTool/CameraSystem/CamPacks', sourceName),
+          );
+        } finally {
+          await rm(stage, { recursive: true, force: true });
+        }
+      } catch (error) {
+        failure = error instanceof Error ? error : new Error('mulnx_source_unverified');
+      }
+    }
+    throw failure ?? new Error('mulnx_source_unverified');
+  }
+
+  /** Resolve content against the selected instance, independent of its acquisition. */
+  private async resolveCamera(
+    source: CameraSourceRef,
+  ): Promise<{ pack: string; acquisition: MulnxToolRef }> {
+    if (source.converterVersion !== 1 || !/^[a-f0-9]{64}$/.test(source.treeSha256))
+      throw new Error('mulnx_source_invalid');
+    const installed = this.installed;
+    if (!installed) throw new Error('mulnx_source_unavailable');
+    const pack =
+      installed.packs.find((item) => item.treeSha256 === source.treeSha256) ??
+      installed.packs.find((item) => !item.treeSha256 && item.sourceName === source.sourceName);
+    if (!pack) throw new Error('mulnx_source_unavailable');
+    const actual = await this.cameraSource(pack.name);
+    const root = this.camPacksRoot;
+    if (
+      this.installed !== installed ||
+      actual.treeSha256 !== source.treeSha256 ||
+      !verifyIsolatedPack(root, pack.name) ||
+      !root ||
+      !(await verifyCameraConversion(join(root, pack.sourceName), join(root, pack.name)))
+    )
+      throw new Error('mulnx_source_unavailable');
+    const launcher = await safePath(
+      join(this.directory, installed.directory),
+      'MulNX/CS2Injector/CS2Injector.exe',
+    );
+    const file = await open(launcher, 'r');
+    try {
+      await file.read(Buffer.alloc(1), 0, 1, 0);
+    } finally {
+      await file.close();
+    }
+    if (this.installed !== installed) throw new Error('mulnx_source_unavailable');
+    return { pack: pack.name, acquisition: actual.acquisition };
+  }
+  async resolveCameraSource(source: CameraSourceRef): Promise<MulnxToolRef> {
+    return (await this.resolveCamera(source)).acquisition;
+  }
+  async localPack(source: CameraSourceRef): Promise<string> {
+    return (await this.resolveCamera(source)).pack;
   }
   async load() {
     await ensureDirectory(this.directory);

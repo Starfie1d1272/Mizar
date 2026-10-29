@@ -47,6 +47,9 @@ vi.mock('../src/orchestration/tool-release.js', () => ({
   },
 }));
 import { MulnxTool } from '../src/orchestration/tool.js';
+import { CameraConfigResolver } from '../src/broadcast-config/camera.js';
+import type { MusicStore } from '../src/music/store.js';
+import { orchestrationPresetSchema } from '@mizar/protocol/orchestration';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -102,6 +105,75 @@ it('prepares without selecting and publishes a configured instance only after se
     acquisition: { kind: 'upstream', release: { archiveSha256: release.sha256 } },
   });
   expect(source.treeSha256).toMatch(/^[a-f0-9]{64}$/);
+  // Old current.json records have no content hash. Rebuild it from the verified local archive.
+  const originalReceipt = await readFile(join(data, 'current.json'), 'utf8');
+  const legacyReceipt = JSON.parse(originalReceipt) as { packs: { treeSha256?: string }[] };
+  delete legacyReceipt.packs[0]!.treeSha256;
+  await writeFile(join(data, 'current.json'), JSON.stringify(legacyReceipt));
+  // A broken bundled copy and an invalid earlier receipt must not mask the valid prepared copy.
+  await writeFile(join(bundle, 'release.json'), JSON.stringify({ release }));
+  await writeFile(join(bundle, 'MulNX.7z'), 'bad');
+  const invalid = join(data, `prepared-${release.sha256}-00000000-0000-4000-8000-000000000000`);
+  await mkdir(invalid);
+  await writeFile(join(invalid, 'receipt.json'), '{invalid');
+  const legacy = new MulnxTool(data, bundle);
+  await legacy.load();
+  const legacyResolver = new CameraConfigResolver(legacy, {} as MusicStore, () =>
+    Promise.resolve(true),
+  );
+  expect(await legacy.cameraSource(current.packs[0]!.name)).toEqual(source);
+  await expect(legacyResolver.camera(source)).resolves.toEqual(source.acquisition);
+  await expect(legacyResolver.localPack(source)).resolves.toBe(current.packs[0]!.name);
+  expect(await readFile(join(data, 'current.json'), 'utf8')).toBe(JSON.stringify(legacyReceipt));
+  await writeFile(join(data, 'current.json'), originalReceipt);
+  const resolver = new CameraConfigResolver(restarted, {} as MusicStore, () =>
+    Promise.resolve(true),
+  );
+  const preset = orchestrationPresetSchema.parse({
+    format: 'mizar.orchestration',
+    version: 1,
+    name: 'Camera',
+    maps: [{ map: 'de_dust2', pack: current.packs[0]!.name }],
+  });
+  const config = await resolver.cameraConfig(preset, true);
+  expect(config).toMatchObject({
+    format: 'mizar.camera-config',
+    version: 2,
+    automaticEnabled: true,
+    maps: [{ source, openingSound: null }],
+  });
+  const fromOlderRelease = {
+    ...source,
+    acquisition: {
+      kind: 'upstream' as const,
+      release: { ...source.acquisition.release, tag: 'Older', releaseId: 44 },
+    },
+  };
+  await expect(resolver.camera(fromOlderRelease)).resolves.toEqual(source.acquisition);
+  await expect(resolver.localPack(fromOlderRelease)).resolves.toBe(current.packs[0]!.name);
+  await expect(resolver.localPack({ ...source, treeSha256: 'b'.repeat(64) })).rejects.toThrow(
+    'mulnx_source_unavailable',
+  );
+  await expect(resolver.camera({ ...source, treeSha256: 'b'.repeat(64) })).rejects.toThrow(
+    'mulnx_source_unavailable',
+  );
+  const unsupported = new CameraConfigResolver(restarted, {} as MusicStore, () =>
+    Promise.resolve(false),
+  );
+  await expect(unsupported.camera(source)).rejects.toThrow('mulnx_capability_unavailable');
+  const isolated = join(
+    data,
+    current.directory,
+    'MulNX/CS2OBTool/CameraSystem/CamPacks',
+    current.packs[0]!.name,
+    'Campaths',
+    'extra',
+  );
+  await writeFile(isolated, 'changed');
+  await expect(resolver.camera(source)).rejects.toThrow('mulnx_source_unverified');
+  await expect(resolver.localPack(source)).rejects.toThrow('mulnx_source_unverified');
+  await rm(isolated);
+
   await writeFile(
     join(data, current.directory, 'MulNX/CS2OBTool/CameraSystem/CamPacks/Source/Source.yaml'),
     'changed',
@@ -109,8 +181,18 @@ it('prepares without selecting and publishes a configured instance only after se
   await expect(restarted.cameraSource(current.packs[0]!.name)).rejects.toThrow(
     'mulnx_source_changed',
   );
+  await expect(legacy.cameraSource(current.packs[0]!.name)).rejects.toThrow('mulnx_source_changed');
   await writeFile(join(data, prepared.preparedId, 'MulNX.7z'), 'bad');
+  await expect(legacy.cameraSource(current.packs[0]!.name)).rejects.toThrow(
+    'mulnx_prepared_integrity',
+  );
   expect(await restarted.listPreparedReleases()).toEqual([
+    {
+      preparedId: `prepared-${release.sha256}-00000000-0000-4000-8000-000000000000`,
+      tag: null,
+      archiveSha256: null,
+      state: 'damaged',
+    },
     { preparedId: prepared.preparedId, tag: null, archiveSha256: null, state: 'damaged' },
   ]);
   await expect(restarted.selectRelease(prepared.preparedId, 'D:\\Steam\\cs2.exe')).rejects.toThrow(
