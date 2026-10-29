@@ -129,6 +129,24 @@ export function registerProductionRoutes(
       // Synchronous commit shares this lifecycle owner; no separate preparation authority.
       commit();
     },
+    configureBroadcast: async <T>(commit: () => Promise<T>): Promise<T> => {
+      if (
+        mode !== 'preparation' ||
+        busy ||
+        shuttingDown ||
+        updatePending ||
+        trialPending ||
+        options.scenes.get().active !== 'waiting' ||
+        options.scenes.get().preparing !== undefined
+      )
+        throw new Error('production_busy');
+      busy = true;
+      try {
+        return await commit();
+      } finally {
+        busy = false;
+      }
+    },
     isTrialPending: () => trialPending,
     reserveTrialOperation: (allowShutdownCleanup = false) => {
       if (!trialPending || busy || (shuttingDown && !allowShutdownCleanup) || updatePending)
