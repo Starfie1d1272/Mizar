@@ -24,7 +24,21 @@ const catalogSchema = z
       new Set(catalog.presets.map((item) => item.id)).size === catalog.presets.length &&
       catalog.presets.some((item) => item.id === catalog.activePresetId),
   );
-type Catalog = z.infer<typeof catalogSchema>;
+export type CameraCatalog = z.infer<typeof catalogSchema>;
+type Catalog = CameraCatalog;
+export interface CameraConfigPersistence {
+  initialize(
+    catalog: CameraCatalog,
+    automaticEnabled: boolean,
+  ): Promise<{ catalog: CameraCatalog; automaticEnabled: boolean }>;
+  read(): Promise<{ catalog: CameraCatalog; automaticEnabled: boolean }>;
+  commit(
+    catalog: CameraCatalog,
+    automaticEnabled: boolean,
+    previous: CameraCatalog,
+    previousAutomaticEnabled: boolean,
+  ): Promise<{ catalog: CameraCatalog; automaticEnabled: boolean }>;
+}
 
 export class OrchestrationStore {
   preset = emptyOrchestrationPreset();
@@ -38,6 +52,7 @@ export class OrchestrationStore {
     return this.pendingWrites > 0;
   }
   private queue: Promise<unknown> = Promise.resolve();
+  private persistence: CameraConfigPersistence | undefined;
   constructor(
     readonly directory: string,
     private readonly diagnostic: (stage: string, evidence: unknown) => void = () => {},
@@ -45,6 +60,11 @@ export class OrchestrationStore {
   async load() {
     this.ready = false;
     await ensureDirectory(this.directory);
+    if (this.persistence) {
+      this.usePersisted(await this.persistence.read());
+      this.ready = true;
+      return;
+    }
     try {
       const file = await safePath(this.directory, 'settings.json');
       const stat = await lstat(file);
@@ -93,6 +113,60 @@ export class OrchestrationStore {
     this.ready = true;
     this.diagnostic('camera_load', { result: 'success', preset: this.preset });
   }
+  private usePersisted(value: { catalog: CameraCatalog; automaticEnabled: boolean }): void {
+    const catalog = catalogSchema.parse(value.catalog);
+    if (typeof value.automaticEnabled !== 'boolean') throw new Error('camera_settings_invalid');
+    this.activePresetId = catalog.activePresetId;
+    this.preset = catalog.preset;
+    this.presets = catalog.presets;
+    this.automaticEnabled = value.automaticEnabled;
+  }
+  async loadWithPersistence(persistence: CameraConfigPersistence): Promise<void> {
+    if (this.ready || this.persistence) throw new Error('camera_storage_unavailable');
+    await ensureDirectory(this.directory);
+    const state = await persistence.read();
+    this.usePersisted(state);
+    this.persistence = persistence;
+    this.ready = true;
+  }
+  async adoptPersistence(persistence: CameraConfigPersistence): Promise<void> {
+    const result = this.queue.then(async () => {
+      if (!this.ready || this.persistence) throw new Error('camera_storage_unavailable');
+      const value = await persistence.initialize(
+        structuredClone(this.catalog()),
+        this.automaticEnabled,
+      );
+      this.usePersisted(value);
+      this.persistence = persistence;
+    });
+    this.queue = result.catch(() => undefined);
+    return result;
+  }
+  async synchronizeFromPersistence(): Promise<void> {
+    const result = this.queue.then(async () => {
+      if (!this.ready || !this.persistence) throw new Error('camera_storage_unavailable');
+      const before = JSON.stringify({ ...this.preset, name: '' });
+      const automatic = this.automaticEnabled;
+      this.usePersisted(await this.persistence.read());
+      if (
+        before !== JSON.stringify({ ...this.preset, name: '' }) ||
+        automatic !== this.automaticEnabled
+      )
+        this.revision++;
+    });
+    this.queue = result.catch(() => undefined);
+    return result;
+  }
+  private async persistCatalog(
+    next: CameraCatalog,
+    automaticEnabled: boolean,
+  ): Promise<{ catalog: CameraCatalog; automaticEnabled: boolean }> {
+    if (this.persistence)
+      return this.persistence.commit(next, automaticEnabled, this.catalog(), this.automaticEnabled);
+    await safePath(this.directory);
+    await atomicJson(join(this.directory, 'presets.json'), next, catalogBytes);
+    return { catalog: next, automaticEnabled };
+  }
   private catalog(): Catalog {
     return { activePresetId: this.activePresetId, preset: this.preset, presets: this.presets };
   }
@@ -101,11 +175,7 @@ export class OrchestrationStore {
     const result = this.queue.then(async () => {
       if (!this.ready) throw new Error('camera_storage_unavailable');
       const next = catalogSchema.parse(change(this.catalog()));
-      await safePath(this.directory);
-      await atomicJson(join(this.directory, 'presets.json'), next, catalogBytes);
-      this.activePresetId = next.activePresetId;
-      this.preset = next.preset;
-      this.presets = next.presets;
+      this.usePersisted(await this.persistCatalog(next, this.automaticEnabled));
       if (activate) {
         this.revision++;
         this.diagnostic('camera_configure', {
@@ -171,10 +241,7 @@ export class OrchestrationStore {
       if (!item) throw new Error('camera_preset_missing');
       await validate(item.preset);
       const next = { ...this.catalog(), activePresetId: id, preset: item.preset };
-      await safePath(this.directory);
-      await atomicJson(join(this.directory, 'presets.json'), next, catalogBytes);
-      this.activePresetId = id;
-      this.preset = item.preset;
+      this.usePersisted(await this.persistCatalog(next, this.automaticEnabled));
       this.revision++;
       this.diagnostic('camera_configure', {
         result: 'success',
@@ -193,9 +260,13 @@ export class OrchestrationStore {
     this.pendingWrites++;
     const result = this.queue.then(async () => {
       if (!this.ready) throw new Error('camera_storage_unavailable');
-      await safePath(this.directory);
-      await atomicJson(join(this.directory, 'settings.json'), { automaticEnabled });
-      this.automaticEnabled = automaticEnabled;
+      if (this.persistence)
+        this.usePersisted(await this.persistCatalog(this.catalog(), automaticEnabled));
+      else {
+        await safePath(this.directory);
+        await atomicJson(join(this.directory, 'settings.json'), { automaticEnabled });
+        this.automaticEnabled = automaticEnabled;
+      }
     });
     this.queue = result.catch(() => {});
     return result.finally(() => {

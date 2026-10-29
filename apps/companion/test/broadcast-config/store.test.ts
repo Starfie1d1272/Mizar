@@ -1,3 +1,8 @@
+import { dirname, join as pathJoin } from 'node:path';
+import { MusicStore } from '../../src/music/store.js';
+import { createMusicConfigPersistence } from '../../src/broadcast-config/music-facade.js';
+import { HudConfigStore } from '../../src/hud-config/store.js';
+import { createHudConfigPersistence } from '../../src/broadcast-config/hud-facade.js';
 import Fastify from 'fastify';
 import { createLocalWebOriginPolicy } from '../../src/local-web/origin-policy.js';
 import { registerBroadcastConfigRoutes } from '../../src/broadcast-config/routes.js';
@@ -130,6 +135,7 @@ async function setup() {
     },
     withReferenceGuard: <T>(operation: () => Promise<T>) => operation(),
     assertReferenceCommitAllowed: () => Promise.resolve(),
+    verifyLegacyActive: () => Promise.resolve(),
     withApplyGuard: <T>(operation: (canCommit: () => boolean) => Promise<T>) =>
       operation(() => true),
   };
@@ -184,6 +190,16 @@ describe('BroadcastConfigStore', () => {
         payload: request,
       });
       expect(denied.statusCode).toBe(403);
+      const privateRead = await app.inject({
+        url: '/local/v1/broadcast-presets',
+        headers: { origin: 'https://foreign.test' },
+      });
+      expect(privateRead.statusCode).toBe(403);
+      const display = await app.inject('/local/v1/broadcast-display-config');
+      expect(display.statusCode).toBe(200);
+      expect(Object.keys(display.json()).sort()).toEqual(['activeRevision', 'hud', 'program']);
+      expect(display.json()).toMatchObject({ activeRevision: initial.active.revision });
+
       const preview = await app.inject({
         method: 'POST',
         url: '/operator/broadcast-presets/preview',
@@ -269,5 +285,93 @@ describe('BroadcastConfigStore', () => {
     };
     await expect(store.importBatch(batch)).rejects.toThrow('invalid_import_mapping');
     expect(store.snapshot).toEqual(initial);
+  });
+  it('enforces the size limit on the formatted bytes before initialization and save', async () => {
+    const { store, options, initial } = await setup();
+    const large = structuredClone(initial);
+    const program = large.modules.find((module) => module.kind === 'program');
+    if (!program || program.kind !== 'program') throw new Error('program missing');
+    program.value = {
+      ...program.value,
+      tokens: Object.fromEntries(
+        Array.from({ length: 100_000 }, (_, index) => [`k${index}`, 'x'.repeat(150)]),
+      ),
+    };
+    const envelope = { version: 1, document: large, receipts: {} };
+    expect(Buffer.byteLength(JSON.stringify(envelope))).toBeLessThanOrEqual(16 * 1024 * 1024);
+    expect(Buffer.byteLength(`${JSON.stringify(envelope, null, 2)}\n`)).toBeGreaterThan(
+      16 * 1024 * 1024,
+    );
+    const newStore = new BroadcastConfigStore({
+      ...options,
+      filePath: `${options.filePath}.large`,
+      createInitial: () => Promise.resolve(large),
+    });
+    await expect(newStore.load()).rejects.toThrow('broadcast_config_too_large');
+    await expect(
+      store.save({
+        preset: initial.presets[0]!,
+        expectedPresetRevision: 'p1',
+        modules: [{ value: program, expectedRevision: 'p1' }],
+      }),
+    ).rejects.toThrow('broadcast_config_too_large');
+    const reopened = new BroadcastConfigStore(options);
+    await reopened.load();
+    expect(reopened.snapshot).toEqual(initial);
+  });
+  it('commits a legacy HUD action without revising unrelated active modules', async () => {
+    const { store, initial } = await setup();
+    const hud = initial.active.resolved.hud;
+    if (hud.renderer !== 'native') throw new Error('unexpected HUD');
+    const changed = structuredClone(hud);
+    changed.overlays.pause.enabled = false;
+    const result = await store.updateFromLegacy({
+      updateDraft: (document) => {
+        document.modules[0]!.name = 'Edited';
+      },
+      active: { kind: 'hud', value: changed, lock: initial.active.lock },
+    });
+    expect(result.active.adjusted).toBe(true);
+    expect(result.active.moduleRevisions.hud).not.toBe(initial.active.moduleRevisions.hud);
+    expect(result.active.moduleRevisions.music).toBe(initial.active.moduleRevisions.music);
+    expect(result.active.moduleRevisions.camera).toBe(initial.active.moduleRevisions.camera);
+    expect(result.previousActive).toEqual(initial.active);
+    expect(result.modules[0]!.revision).not.toBe(initial.modules[0]!.revision);
+  });
+  it('delegates legacy HUD draft writes to the unified document and restores them', async () => {
+    const { store, options, initial } = await setup();
+    const hud = new HudConfigStore();
+    await hud.load();
+    await hud.adoptPersistence(
+      createHudConfigPersistence(store, (_hud, active) => Promise.resolve(active.lock)),
+    );
+    const saved = await hud.saveAs('theme', getBuiltinTheme(), hud.getState().editorRevision);
+    expect(store.snapshot.unboundHudResources?.themes).toEqual(saved.document.customThemes);
+    expect(store.snapshot.active).toEqual(initial.active);
+    const reopened = new BroadcastConfigStore(options);
+    await reopened.load();
+    const nextHud = new HudConfigStore();
+    await nextHud.load();
+    await nextHud.adoptPersistence(
+      createHudConfigPersistence(reopened, (_hud, active) => Promise.resolve(active.lock)),
+    );
+    expect(nextHud.getState().document).toEqual(saved.document);
+  });
+  it('routes a legacy music configuration write through the active coordinator', async () => {
+    const { store, options, initial } = await setup();
+    const music = new MusicStore(pathJoin(dirname(options.filePath), 'music'));
+    await music.load();
+    await music.adoptPersistence(
+      createMusicConfigPersistence(store, music, (_value, active) => Promise.resolve(active.lock)),
+    );
+    await music.update((state) => {
+      state.config.groups.waiting.volume = 0.2;
+    });
+    const active = store.snapshot.active;
+    expect(active.resolved.music?.groups.waiting.volume).toBe(0.2);
+    expect(active.resolved.music?.automaticEnabled).toBe(false);
+    expect(active.moduleRevisions.hud).toBe(initial.active.moduleRevisions.hud);
+    expect(active.moduleRevisions.camera).toBe(initial.active.moduleRevisions.camera);
+    expect(active.adjusted).toBe(true);
   });
 });

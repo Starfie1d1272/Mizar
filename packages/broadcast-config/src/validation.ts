@@ -264,6 +264,9 @@ const documentSchema = z.strictObject({
   schemaVersion: z.literal(1),
   modules: z.array(module),
   presets: z.array(preset),
+  unboundHudResources: z
+    .strictObject({ layouts: z.array(hudLayoutSchema), themes: z.array(hudThemeSchema) })
+    .optional(),
   active: snapshot,
   previousActive: snapshot.nullable(),
 });
@@ -276,6 +279,12 @@ export function parseBroadcastConfigDocument(input: unknown): BroadcastConfigDoc
   )
     throw new Error('duplicate_id');
   for (const item of parsed.presets) boundModules(item, parsed.modules);
+  if (parsed.unboundHudResources) {
+    for (const layout of parsed.unboundHudResources.layouts) parseHudLayout(layout);
+    for (const values of [parsed.unboundHudResources.layouts, parsed.unboundHudResources.themes])
+      if (new Set(values.map((item) => item.id)).size !== values.length)
+        throw new Error('duplicate_id');
+  }
   return parsed;
 }
 

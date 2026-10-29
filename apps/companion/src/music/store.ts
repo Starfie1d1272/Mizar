@@ -49,13 +49,33 @@ const stateSchema = z
     consumed: z.array(z.string().max(2000)).max(64),
   })
   .strict();
+const runtimeSchema = stateSchema.omit({ config: true, configRevision: true });
 export type MusicState = z.infer<typeof stateSchema>;
+export interface MusicConfigPersistence {
+  initialize(
+    config: MusicConfig,
+    revision: string,
+  ): Promise<{ config: MusicConfig; revision: string; automaticEnabled: boolean }>;
+  read(): Promise<{ config: MusicConfig; revision: string; automaticEnabled: boolean }>;
+  commit(
+    config: MusicConfig,
+    previous: MusicConfig,
+  ): Promise<{ config: MusicConfig; revision: string; automaticEnabled: boolean }>;
+}
+function runtimeState(state: MusicState): z.infer<typeof runtimeSchema> {
+  const value: Partial<MusicState> = structuredClone(state);
+  delete value.config;
+  delete value.configRevision;
+  return runtimeSchema.parse(value);
+}
 export type Playback = NonNullable<MusicState['bgm']>;
 
 export class MusicStore {
   ready = false;
   failure = false;
+  automaticEnabled = true;
   private importing = false;
+  private persistence: MusicConfigPersistence | undefined;
   state: MusicState = {
     version: 1,
     config: defaultMusicConfig(),
@@ -98,7 +118,9 @@ export class MusicStore {
   }
   async load() {
     try {
-      await this.stage('music_load', { directory: this.directory }, () => this.loadState());
+      await this.stage('music_load', { directory: this.directory }, () =>
+        this.persistence ? this.loadDelegatedState() : this.loadState(),
+      );
     } catch (error) {
       this.failure = true;
       this.ready = false;
@@ -158,17 +180,127 @@ export class MusicStore {
     this.ready = true;
     this.diagnostic('music_loaded_snapshot', { state: this.state });
   }
+  private async readRuntime(): Promise<z.infer<typeof runtimeSchema>> {
+    const path = await safePath(this.directory, 'runtime.json');
+    const stat = await lstat(path);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 512 * 1024)
+      throw new Error('music_state_invalid');
+    return runtimeSchema.parse(JSON.parse(await readFile(path, 'utf8')));
+  }
+  private async loadDelegatedState(): Promise<void> {
+    const persistence = this.persistence;
+    if (!persistence) throw new Error('music_state_invalid');
+    let runtime;
+    try {
+      runtime = await this.readRuntime();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      try {
+        const path = await safePath(this.directory, 'state.json');
+        const stat = await lstat(path);
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 512 * 1024)
+          throw new Error('music_state_invalid', { cause: error });
+        runtime = runtimeState(stateSchema.parse(JSON.parse(await readFile(path, 'utf8'))));
+      } catch (legacyError) {
+        if ((legacyError as NodeJS.ErrnoException).code !== 'ENOENT') throw legacyError;
+        runtime = runtimeState(this.state);
+      }
+      await atomicJson(join(this.directory, 'runtime.json'), runtime);
+    }
+    const current = await persistence.read();
+    const automaticEnabled = z.boolean().parse(current.automaticEnabled);
+    this.state = stateSchema.parse({
+      ...runtime,
+      config: current.config,
+      configRevision: current.revision,
+    });
+    this.automaticEnabled = automaticEnabled;
+    this.failure = false;
+    this.ready = true;
+  }
+  /** Restart using the coordinator and local runtime file, without reading legacy state.json. */
+  async loadWithPersistence(persistence: MusicConfigPersistence): Promise<void> {
+    await ensureDirectory(this.directory);
+    await ensureDirectory(join(this.directory, 'tracks'));
+    if (this.persistence || this.ready) throw new Error('music_state_invalid');
+    this.persistence = persistence;
+    try {
+      await this.loadDelegatedState();
+    } catch (error) {
+      this.persistence = undefined;
+      this.failure = true;
+      this.ready = false;
+      throw error;
+    }
+  }
+  /** Switch only after the coordinator has accepted the current configuration. */
+  async adoptPersistence(persistence: MusicConfigPersistence): Promise<void> {
+    const result = this.queue.then(async () => {
+      if (!this.ready || this.failure || this.persistence) throw new Error('music_state_invalid');
+      let runtime = runtimeState(this.state);
+      try {
+        runtime = await this.readRuntime();
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+      const current = await persistence.initialize(
+        structuredClone(this.state.config),
+        this.state.configRevision,
+      );
+      const automaticEnabled = z.boolean().parse(current.automaticEnabled);
+      const next = stateSchema.parse({
+        ...runtime,
+        config: current.config,
+        configRevision: current.revision,
+      });
+      await atomicJson(join(this.directory, 'runtime.json'), runtimeState(next));
+      this.state = next;
+      this.automaticEnabled = automaticEnabled;
+      this.persistence = persistence;
+    });
+    this.queue = result.catch(() => undefined);
+    return result;
+  }
+  /** Refresh the in-memory configuration after the coordinator commits a preset. */
+  async synchronizeFromPersistence(): Promise<void> {
+    const result = this.queue.then(async () => {
+      if (!this.persistence || !this.ready || this.failure) throw new Error('music_state_invalid');
+      const current = await this.persistence.read();
+      const automaticEnabled = z.boolean().parse(current.automaticEnabled);
+      this.state = stateSchema.parse({
+        ...this.state,
+        config: current.config,
+        configRevision: current.revision,
+      });
+      this.automaticEnabled = automaticEnabled;
+    });
+    this.queue = result.catch(() => undefined);
+    return result;
+  }
   update(change: (state: MusicState) => void): Promise<void> {
     const result = this.queue.then(async () => {
       if (this.failure) throw new Error('music_state_invalid');
       const next = structuredClone(this.state);
       change(next);
-      if (JSON.stringify(next.config) !== JSON.stringify(this.state.config))
-        next.configRevision = randomUUID();
       stateSchema.parse(next);
-      await this.stage('music_commit_config', { before: this.state, after: next }, () =>
-        atomicJson(join(this.directory, 'state.json'), next),
-      );
+      const configChanged = JSON.stringify(next.config) !== JSON.stringify(this.state.config);
+      if (this.persistence && configChanged) {
+        if (JSON.stringify(runtimeState(next)) !== JSON.stringify(runtimeState(this.state)))
+          throw new Error('music_mixed_update');
+        const committed = await this.persistence.commit(next.config, this.state.config);
+        next.config = musicConfigSchema.parse(committed.config);
+        next.configRevision = z.string().uuid().parse(committed.revision);
+        this.automaticEnabled = z.boolean().parse(committed.automaticEnabled);
+      } else {
+        if (configChanged) next.configRevision = randomUUID();
+        stateSchema.parse(next);
+        await this.stage('music_commit_config', { before: this.state, after: next }, () =>
+          atomicJson(
+            join(this.directory, this.persistence ? 'runtime.json' : 'state.json'),
+            this.persistence ? runtimeState(next) : next,
+          ),
+        );
+      }
       this.state = next;
     });
     this.queue = result.catch(() => undefined);

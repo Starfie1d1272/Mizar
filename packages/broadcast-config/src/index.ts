@@ -162,10 +162,25 @@ export interface ActiveBroadcastSnapshot {
   };
   lock: { resources: ResourceRef[]; tools: MulnxToolRef[] };
 }
+/** Public display projection; production audio and camera data remain private. */
+export interface BroadcastDisplayConfig {
+  activeRevision: Revision;
+  hud: ResolvedHudModule;
+  program: ProgramVisualConfigV1;
+}
+export function displayConfig(snapshot: ActiveBroadcastSnapshot): BroadcastDisplayConfig {
+  return structuredClone({
+    activeRevision: snapshot.revision,
+    hud: snapshot.resolved.hud,
+    program: snapshot.resolved.program,
+  });
+}
 export interface BroadcastConfigDocument {
   schemaVersion: 1;
   modules: ModuleRecord[];
   presets: BroadcastPreset[];
+  /** Legacy editor resources not currently bound to a preset. */
+  unboundHudResources?: { layouts: HudLayout[]; themes: HudTheme[] };
   active: ActiveBroadcastSnapshot;
   previousActive: ActiveBroadcastSnapshot | null;
 }
@@ -270,15 +285,43 @@ function effectiveModuleJson(
   kind: ModuleKind,
   value: ActiveBroadcastSnapshot['resolved'][ModuleKind],
 ): string {
+  if (kind === 'hud' && value !== null) {
+    const hud = value as ResolvedHudModule;
+    if (hud.renderer === 'native') {
+      const { schemaVersion, widgets } = hud.config.layout;
+      const { brandColor, panelStyle, cornerStyle, recipe, semantic } = hud.config.theme;
+      const layout = { schemaVersion, widgets };
+      const theme = { brandColor, panelStyle, cornerStyle, recipe, semantic };
+      return canonicalJson({
+        renderer: hud.renderer,
+        layout,
+        theme,
+        widgets: hud.config.widgets,
+        overlays: hud.overlays,
+        accent: hud.accent,
+      });
+    }
+  }
   if (kind !== 'camera' || value === null) return canonicalJson(value);
   const camera = value as CameraModuleV2;
   return canonicalJson({
-    ...camera,
+    format: camera.format,
+    version: camera.version,
+    automaticEnabled: camera.automaticEnabled,
     maps: camera.maps.map(({ source, ...map }) => ({
       ...map,
       source: { treeSha256: source.treeSha256, converterVersion: source.converterVersion },
     })),
   });
+}
+
+/** Compare effective output rather than editor identities and labels. */
+export function sameEffectiveModule<K extends ModuleKind>(
+  kind: K,
+  left: ActiveBroadcastSnapshot['resolved'][K],
+  right: ActiveBroadcastSnapshot['resolved'][K],
+): boolean {
+  return effectiveModuleJson(kind, left) === effectiveModuleJson(kind, right);
 }
 
 /** Prepare a candidate without mutating the document or any external device. */
@@ -297,10 +340,7 @@ export async function preparePreset(
   const prepared = await resolver.resolve(modules);
   const moduleRevisions = { ...document.active.moduleRevisions };
   for (const kind of MODULE_KINDS) {
-    if (
-      effectiveModuleJson(kind, prepared.resolved[kind]) !==
-      effectiveModuleJson(kind, document.active.resolved[kind])
-    )
+    if (!sameEffectiveModule(kind, prepared.resolved[kind], document.active.resolved[kind]))
       moduleRevisions[kind] = newRevision();
   }
   return {
