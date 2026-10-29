@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { BroadcastPresets } from './BroadcastPresets';
-import { HudPackages } from './HudPackages';
 import { MusicPackages } from './MusicPackages';
 import { OperatorShell } from '../operator/OperatorShell';
 import { MulnxToolControls } from '../orchestration/MulnxToolControls';
@@ -65,7 +64,7 @@ export function ResourceLibraryPage() {
   }, []);
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState<
-    'all' | 'media' | 'tool' | 'music' | 'visual' | 'presets'
+    'all' | 'media' | 'tool' | 'music' | 'presets'
   >('all');
   const [preparedSession, setPreparedSession] = useState<{
     preparedId: string;
@@ -78,7 +77,6 @@ export function ResourceLibraryPage() {
   );
   const showMedia = category === 'all' || category === 'media';
   const showPresets = category === 'all' || category === 'presets';
-  const showHud = (category === 'all' || category === 'visual') && matches('HUD 预设 视觉');
   const showMusic = category === 'all' || category === 'music';
   const showTool = (category === 'all' || category === 'tool') && matches('MulNX 运镜 工具');
   return (
@@ -105,7 +103,6 @@ export function ResourceLibraryPage() {
                 ['presets', '播出方案'],
                 ['media', '素材'],
                 ['music', '音乐'],
-                ['visual', '视觉'],
                 ['tool', '工具'],
               ] as const
             ).map(([value, label]) => (
@@ -122,7 +119,6 @@ export function ResourceLibraryPage() {
         </div>
         {showPresets ? <BroadcastPresets query={query} /> : null}
         {showMusic ? <MusicPackages query={query} /> : null}
-        {showHud ? <HudPackages /> : null}
         {!view ? (
           <StatusBanner tone="warning">
             正在连接资源状态；如果持续无法连接，请检查本地制播服务。
@@ -221,7 +217,6 @@ export function ResourceLibraryPage() {
         !(showMedia && (resources?.length || view.resources === null)) &&
         !showTool &&
         !showMusic &&
-        !showHud &&
         !showPresets ? (
           <p>没有找到匹配的资源。</p>
         ) : null}
