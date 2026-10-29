@@ -283,6 +283,45 @@ describe('BroadcastConfigStore', () => {
     );
     expect(reopened.snapshot.previousActive).toEqual(initial.active);
   });
+  it('retains receipt resources and can retry an apply after the selected module was deleted', async () => {
+    const { options } = await setup();
+    const ref = { id: 'local:test', version: '1', digest: 'a'.repeat(64) };
+    let selected = '';
+    const store = new BroadcastConfigStore({
+      ...options,
+      resolveModule: (module) =>
+        Promise.resolve({
+          value: module.value as never,
+          lock: { resources: module.id === selected ? [ref] : [], tools: [] },
+        }),
+    });
+    await store.load();
+    const builtin = store.snapshot.modules.find(
+      (item) => item.kind === 'program' && item.name === 'Pulse',
+    )!;
+    const copy = await store.cloneModule(builtin.id, builtin.revision, 'Copy');
+    selected = copy.id;
+    const request = {
+      moduleId: copy.id,
+      expectedRevision: copy.revision,
+      expectedActiveRevision: store.snapshot.active.revision,
+      requestId: randomUUID(),
+    };
+    const original = await store.applyModule(request);
+    for (let index = 0; index < 2; index++)
+      await store.applyModule({
+        moduleId: builtin.id,
+        expectedRevision: builtin.revision,
+        expectedActiveRevision: store.snapshot.active.revision,
+        requestId: randomUUID(),
+      });
+    await store.deleteModule(copy.id, copy.revision);
+    expect(store.snapshot.active.lock.resources).not.toContainEqual(ref);
+    expect(store.snapshot.previousActive?.lock.resources).not.toContainEqual(ref);
+    expect(store.referencedResources()).toContainEqual(ref);
+    expect(await store.applyModule(request)).toEqual(original);
+    expect(store.snapshot.active.sourceModuleIds?.program).toBe(builtin.id);
+  });
   it('does not publish a draft when validation fails', async () => {
     const { store, initial } = await setup();
     const preset = { ...initial.presets[0]!, bindings: initial.presets[0]!.bindings.slice(0, 3) };

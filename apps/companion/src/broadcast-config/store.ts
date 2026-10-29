@@ -25,6 +25,7 @@ import {
 import { durableJsonByteLength, replaceDurableJson } from '../match-context/durable-json.js';
 import { SerialCommitQueue } from '../match-context/serial-commit.js';
 import { addMissingBuiltinModules, isBuiltinModuleId } from './builtin-modules.js';
+import { broadcastResourceReferences } from './reference-queue.js';
 import { cameraCatalogSchema } from '../orchestration/store.js';
 
 interface Receipt {
@@ -244,6 +245,16 @@ export class BroadcastConfigStore {
   get snapshot(): BroadcastConfigDocument {
     if (!this.envelope) throw new Error('broadcast_config_unavailable');
     return structuredClone(this.envelope.document);
+  }
+  /** Include resources exposed by durable apply receipts as well as the current document. */
+  referencedResources(): ResourceRef[] {
+    if (!this.envelope) throw new Error('broadcast_config_unavailable');
+    const refs = new Map(
+      broadcastResourceReferences(this.envelope.document).map((ref) => [canonicalJson(ref), ref]),
+    );
+    for (const receipt of Object.values(this.envelope.receipts))
+      for (const ref of receipt.active.lock.resources) refs.set(canonicalJson(ref), ref);
+    return structuredClone([...refs.values()]);
   }
   get pendingLegacyCamera(): PendingLegacyCamera | undefined {
     return structuredClone(this.envelope?.pendingLegacyCamera);
@@ -720,11 +731,16 @@ export class BroadcastConfigStore {
             const module = this.envelope.document.modules.find(
               (item) => item.id === input.moduleId,
             );
-            if (!module) throw new Error('module_missing');
+            const kind =
+              module?.kind ??
+              (Object.entries(receipt.active.sourceModuleIds ?? {}).find(
+                ([, id]) => id === input.moduleId,
+              )?.[0] as ModuleKind | undefined);
+            if (!kind) throw new Error('module_missing');
             return {
               active: structuredClone(receipt.active),
               previous: structuredClone(this.envelope.document.previousActive ?? receipt.active),
-              kind: module.kind,
+              kind,
             };
           }
           const module = this.envelope.document.modules.find((item) => item.id === input.moduleId);

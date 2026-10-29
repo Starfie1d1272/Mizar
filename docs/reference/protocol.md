@@ -188,6 +188,8 @@ WebSocket 子协议为 `mizar.local.v1`，路由为 `/local/v1/{channel}`。
 
 `GET /local/v1/broadcast-modules` 返回 `{ modules: [{ module, builtin, availability }] }`；`availability` 为 `{ state: 'ready' }` 或 `{ state: 'dependency_missing', reason }`，提交使用时仍重新验证。本机操作 `POST /operator/broadcast-modules/save` 接受 `{ value, expectedRevision }`，`clone` 接受 `{ moduleId, expectedRevision, name }`，`apply` 接受 `{ moduleId, expectedRevision, expectedActiveRevision, requestId }`。`delete` 接受 `{ moduleId, expectedRevision, replacement? }`；存在方案引用时，replacement 为 `{ moduleId, expectedPresetRevisions }`，其中音乐或运镜可以用 null 关闭，HUD 和节目必须选同类替代。当前活动模块必须先替换。`POST /operator/broadcast-presets/delete` 接受 `{ presetId, expectedRevision }`，不删除模块。五套内置 HUD 和 Pulse 在服务端禁止更改和删除，复制后的模块独立编辑。
 
+资源释放检查包含草稿、活动及上一个活动快照，以及持久化使用回执所引用的资源。即使随后切换并删除了原模块，对同一 `requestId` 的合法重试仍返回原回执，不重新切换活动配置。
+
 ## BP 播放与补录
 
 `GET /local/v1/bp` 是有限的地图卡、步骤、公开标题和播放状态；不返回内部比赛 ID、名单或完整来源文档。ETag 覆盖当前播放进度，浏览器超时隐藏，恢复读取当前值，不重演旧步骤。
