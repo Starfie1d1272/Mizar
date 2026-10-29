@@ -1,4 +1,8 @@
 import {
+  registerBroadcastMigrationStatus,
+  type BroadcastMigrationStatus,
+} from './broadcast-config/migration-status.js';
+import {
   BpPresentationSettings,
   registerBpPresentationSettings,
 } from './bp/presentation-settings.js';
@@ -717,6 +721,15 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     },
   });
   registerLocalWebSocketTransport(app, localWebTransport);
+  let broadcastMigrationStatus: BroadcastMigrationStatus = {
+    state: 'pending',
+    reason: 'owner_unavailable',
+  };
+  registerBroadcastMigrationStatus(
+    app,
+    localWebTransport.getOriginPolicy(),
+    () => broadcastMigrationStatus,
+  );
   registerHudConfigRoutes(app, {
     store: hudConfigStore,
     originPolicy: localWebTransport.getOriginPolicy(),
@@ -1254,6 +1267,15 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             '运镜预设加载失败',
           ),
         );
+      if (musicStore.ready && !musicStore.failure && cameraStore.ready && hudConfigStore.isLoaded) {
+        const hasCameraSources =
+          cameraStore.preset.maps.length > 0 ||
+          cameraStore.presets.some((item) => item.preset.maps.length > 0);
+        broadcastMigrationStatus = {
+          state: 'pending',
+          reason: hasCameraSources ? 'camera_identity_unavailable' : 'facades_pending',
+        };
+      }
     });
     registerOrchestrationRoutes(
       app,
