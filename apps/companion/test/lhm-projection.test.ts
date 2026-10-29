@@ -71,21 +71,36 @@ describe('LHM projection', () => {
       expect(result.raw).toMatchObject({ bomb: { state, countdown: String(expected) } });
     }
   });
-  it('rejects missing required bomb time and weapon name', () => {
-    const planting = programPayloadSchema.parse(
-      programFixtures.fixtures['real-planting']!.snapshot.payload,
+  it('hides an unknown bomb timer or weapon while preserving the rest of the frame', () => {
+    const snapshot = programSnapshotSchema.parse(
+      programFixtures.fixtures['real-planting']!.snapshot,
     );
-    if (!planting.bomb) throw new Error('fixture missing bomb');
-    planting.bomb.action = null;
-    const result = projectLhm(planting, radar);
-    expect(result.available).toBe(false);
-    if (!result.available) expect(result.missing).toContain('bomb:countdown');
+    const matching = Object.values(radarFixtures.fixtures)
+      .flatMap((fixture) =>
+        fixture.samples.map((sample) => radarSnapshotSchema.parse(sample.snapshot)),
+      )
+      .find((candidate) => JSON.stringify(candidate.cursor) === JSON.stringify(snapshot.cursor));
+    if (!matching || !snapshot.payload.bomb) throw new Error('fixture missing matched bomb');
+    snapshot.payload.bomb.action = null;
+    const result = projectLhm(snapshot.payload, matching.payload);
+    expect(result.available).toBe(true);
+    if (!result.available) return;
+    expect(result.raw).not.toHaveProperty('bomb');
+    expect(result.raw).toHaveProperty('allplayers');
     const missingWeapon = structuredClone(program);
-    missingWeapon.players[0]!.weapons[0]!.name = null;
+    const player = missingWeapon.players[0]!;
+    const unknownWeapon = player.weapons[0]!;
+    unknownWeapon.name = null;
     const weapons = projectLhm(missingWeapon, radar);
-    expect(weapons.available).toBe(false);
-    if (!weapons.available)
-      expect(weapons.missing).toContain(`player:${program.players[0]!.sourcePlayerId}`);
+    expect(weapons.available).toBe(true);
+    if (!weapons.available) return;
+    const raw = weapons.raw as { allplayers: Record<string, { weapons: Record<string, unknown> }> };
+    expect(raw.allplayers[player.sourcePlayerId]!.weapons).not.toHaveProperty(
+      unknownWeapon.sourceWeaponId,
+    );
+    expect(Object.keys(raw.allplayers[player.sourcePlayerId]!.weapons)).toHaveLength(
+      player.weapons.length - 1,
+    );
   });
   it('reports missing or stale data instead of manufacturing it', () => {
     const stale = projectLhm(program, { ...radar, telemetryFreshness: 'stale' });

@@ -50,8 +50,7 @@ export function projectLhm(
       player.state.burning === null ||
       player.state.hasHelmet === null ||
       Object.values(player.matchStats).some((value) => value === null) ||
-      !player.weaponsAvailable ||
-      player.weapons.some((weapon) => !weapon.name)
+      !player.weaponsAvailable
     ) {
       missing.push(`player:${player.sourcePlayerId}`);
       continue;
@@ -81,18 +80,20 @@ export function projectLhm(
       },
       match_stats: stats,
       weapons: Object.fromEntries(
-        player.weapons.map((w) => [
-          w.sourceWeaponId,
-          {
-            name: w.name,
-            paintkit: w.paintKit,
-            type: w.type,
-            ammo_clip: w.ammoClip,
-            ammo_clip_max: w.ammoClipMax,
-            ammo_reserve: w.ammoReserve,
-            state: w.state,
-          },
-        ]),
+        player.weapons
+          .filter((w) => w.name)
+          .map((w) => [
+            w.sourceWeaponId,
+            {
+              name: w.name,
+              paintkit: w.paintKit,
+              type: w.type,
+              ammo_clip: w.ammoClip,
+              ammo_clip_max: w.ammoClipMax,
+              ammo_reserve: w.ammoReserve,
+              state: w.state,
+            },
+          ]),
       ),
     };
   }
@@ -109,21 +110,20 @@ export function projectLhm(
         : bombState === 'planted'
           ? program.bomb?.explosion?.remainingSeconds
           : undefined;
-  if (
-    (bombState === 'planting' || bombState === 'defusing' || bombState === 'planted') &&
-    bombCountdown == null
-  )
-    missing.push('bomb:countdown');
   if (missing.length) return { available: false, missing };
   const observed = program.observedPlayerSourceId && players[program.observedPlayerSourceId];
   const bombPosition = radar.bomb?.position;
+  // The fixed template treats a missing countdown as zero, so omit the bomb
+  // until its timed state has a real value; the rest of the frame remains live.
   const bomb =
     program.bomb &&
     radar.bomb &&
     bombPosition &&
     program.bomb.state === radar.bomb.state &&
     program.bomb.state &&
-    program.bomb.state !== 'unknown'
+    program.bomb.state !== 'unknown' &&
+    (!(bombState === 'planting' || bombState === 'defusing' || bombState === 'planted') ||
+      bombCountdown != null)
       ? {
           state: program.bomb.state,
           position: `${bombPosition.x}, ${bombPosition.y}, ${bombPosition.z}`,
