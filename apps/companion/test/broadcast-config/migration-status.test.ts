@@ -164,7 +164,7 @@ it('preserves the existing music owner state during built-in production migratio
         resolved: { music: { groups: { waiting: { tracks: [{ name: 'sample.wav' }] } } } },
       },
     });
-    const document = presets.json() as BroadcastConfigDocument;
+    const document = presets.json<BroadcastConfigDocument>();
     const preset = document.presets[0]!;
     const expectedModuleRevisions = Object.fromEntries(
       preset.bindings.flatMap((binding) => {
@@ -186,7 +186,9 @@ it('preserves the existing music owner state during built-in production migratio
       },
     });
     expect(applied.statusCode).toBe(200);
-    expect(applied.json().moduleRevisions.music).toBe(revision);
+    expect(applied.json<{ moduleRevisions: { music: string } }>().moduleRevisions.music).toBe(
+      revision,
+    );
     expect((await app.inject('/local/v1/broadcast-config/migration')).json()).toEqual({
       state: 'ready',
     });

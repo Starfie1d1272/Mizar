@@ -50,7 +50,7 @@ export function createBroadcastRuntime(input: {
   let status: BroadcastMigrationStatus = { state: 'pending', reason: 'owner_unavailable' };
   let candidate: BroadcastConfigDocument | undefined;
   let ready = false;
-  let syncError: unknown;
+  let syncError: Error | undefined;
   const store = new BroadcastConfigStore({
     filePath: deps.path,
     createInitial: () => {
