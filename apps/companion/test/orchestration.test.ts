@@ -999,3 +999,71 @@ it.each(['owned', 'external'] as const)(
     expect(readDemoTestRecovery(markerPath)).toBeUndefined();
   },
 );
+
+it('shares metadata requests and respects GitHub retry times', async () => {
+  vi.resetModules();
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce(new Response(JSON.stringify({ tag: 'v1' })))
+    .mockResolvedValueOnce(new Response('', { status: 429, headers: { 'retry-after': '120' } }))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ tag: 'v2' })));
+  vi.stubGlobal('fetch', fetchMock);
+  try {
+    const { publicJson } = await import('../src/orchestration/tool-release.js');
+    const [a, b] = await Promise.all([publicJson('release'), publicJson('release')]);
+    expect(a).toEqual(b);
+    await publicJson('release');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await expect(publicJson('notice')).rejects.toThrow('mulnx_metadata_http_429');
+    await expect(publicJson('other')).rejects.toThrow('mulnx_metadata_http_429');
+    vi.advanceTimersByTime(119_000);
+    await expect(publicJson('other')).rejects.toThrow('mulnx_metadata_http_429');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(1_000);
+    await expect(publicJson('other')).resolves.toEqual({ tag: 'v2' });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  } finally {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  }
+});
+
+it('keeps the longest concurrent GitHub secondary limit', async () => {
+  vi.resetModules();
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+  let finish!: (response: Response) => void;
+  const delayed = new Promise<Response>((resolve) => {
+    finish = resolve;
+  });
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce(
+      new Response('', {
+        status: 403,
+        headers: { 'retry-after': '300', 'x-ratelimit-remaining': '10' },
+      }),
+    )
+    .mockReturnValueOnce(delayed)
+    .mockResolvedValueOnce(new Response('{}'));
+  vi.stubGlobal('fetch', fetchMock);
+  try {
+    const { publicJson } = await import('../src/orchestration/tool-release.js');
+    const first = publicJson('first');
+    const second = publicJson('second');
+    await expect(first).rejects.toThrow('mulnx_metadata_http_403');
+    finish(new Response('', { status: 429, headers: { 'retry-after': '60' } }));
+    await expect(second).rejects.toThrow('mulnx_metadata_http_429');
+    vi.advanceTimersByTime(60_000);
+    await expect(publicJson('third')).rejects.toThrow();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(240_000);
+    await expect(publicJson('third')).resolves.toEqual({});
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  } finally {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  }
+});
