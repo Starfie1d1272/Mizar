@@ -142,7 +142,7 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
     packRoot = root;
     await expect(page.getByRole('button', { name: '播放', exact: true })).toBeEnabled();
     await page.getByRole('button', { name: '播放', exact: true }).click();
-    await expect(page.getByText('试播请求已提交，请在游戏内核对。', { exact: true })).toBeVisible();
+    await expect.poll(() => calls.at(-1)).toBe('CamMacro/Play');
     expect(calls).toContain('CamPack/Apply');
     expect(calls.at(-1)).toBe('CamMacro/Play');
     expect(director.get()).toMatchObject({

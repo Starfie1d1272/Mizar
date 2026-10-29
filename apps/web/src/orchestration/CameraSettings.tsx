@@ -58,6 +58,7 @@ export function CameraSettings() {
   const [draft, setDraft] = useState<OrchestrationPreset | null>(null);
   const [message, setMessage] = useState('');
   const [audition, setAudition] = useState('opening');
+  const [lastPlayed, setLastPlayed] = useState<{ shot: string; context: string } | null>(null);
   const [failed, setFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const config = draft ?? current?.preset;
@@ -76,12 +77,27 @@ export function CameraSettings() {
           ]
         : [],
     ),
+    ...(['tactical', 'technical'] as const).flatMap((stage) =>
+      (currentMap?.pauseCandidates[stage] ?? []).map((shot, index) => ({
+        value: `${stage}:${index}`,
+        label: `${MUSIC_LABELS[stage]} · ${shot.macro}`,
+      })),
+    ),
     ...(currentMap?.rounds.map((shot, index) => ({
       value: `round:${index}`,
       label: `回合 · ${shot.macro}`,
     })) ?? []),
   ];
   const selectedShot = shots.some((shot) => shot.value === audition) ? audition : shots[0]?.value;
+  const shotIndex = shots.findIndex((shot) => shot.value === selectedShot);
+  const playDisabled =
+    busy ||
+    !current?.ready ||
+    !current.status.connected ||
+    !current.status.isolated ||
+    !selectedShot ||
+    Boolean(current.status.current) ||
+    current.status.preparation === 'preparing';
   const tracks = [
     ...new Map(
       Object.values(music?.config.groups ?? {})
@@ -116,6 +132,19 @@ export function CameraSettings() {
         maps: config.maps.map((m, i) => (i === index ? { ...m, ...patch } : m)),
       });
   };
+  const play = (shot = selectedShot) =>
+    void action(async () => {
+      if (!current || !shot) return;
+      const [stage, index] = shot.split(':');
+      await command('/operator/orchestration', {
+        action: 'audition',
+        stage,
+        ...(index !== undefined ? { index: Number(index) } : {}),
+        expected: { context: current.status.context, connection: current.status.connection },
+      });
+      setLastPlayed({ shot, context: current.status.context });
+      setMessage('播放请求已提交，请在游戏内核对。');
+    });
   return (
     <Panel>
       <h2>{advanced ? '管理与编辑预设' : '运镜设置'}</h2>
@@ -161,34 +190,48 @@ export function CameraSettings() {
                 </option>
               ))}
             </Select>
-            <Button
-              disabled={
-                busy ||
-                !current?.ready ||
-                !current.status.connected ||
-                !current.status.isolated ||
-                !selectedShot ||
-                Boolean(current.status.current)
-              }
-              onClick={() =>
-                void action(async () => {
-                  if (!current || !selectedShot) return;
-                  const [stage, index] = selectedShot.split(':');
-                  await command('/operator/orchestration', {
-                    action: 'audition',
-                    stage,
-                    ...(index ? { index: Number(index) } : {}),
-                    expected: {
-                      context: current.status.context,
-                      connection: current.status.connection,
-                    },
-                  });
-                  setMessage('试播请求已提交，请在游戏内核对。');
-                })
-              }
-            >
+            <Button disabled={playDisabled} onClick={() => play()}>
               播放
             </Button>
+            {lastPlayed?.shot === selectedShot &&
+            lastPlayed?.context === current?.status.context ? (
+              <Button disabled={playDisabled} onClick={() => play()}>
+                重播
+              </Button>
+            ) : null}
+            <Button
+              disabled={playDisabled || shotIndex <= 0}
+              onClick={() => {
+                const shot = shots[shotIndex - 1]!.value;
+                setAudition(shot);
+                play(shot);
+              }}
+            >
+              上一条
+            </Button>
+            <Button
+              disabled={playDisabled || shotIndex < 0 || shotIndex >= shots.length - 1}
+              onClick={() => {
+                const shot = shots[shotIndex + 1]!.value;
+                setAudition(shot);
+                play(shot);
+              }}
+            >
+              下一条
+            </Button>
+            {current?.status.current ? (
+              <Button
+                disabled={busy}
+                onClick={() =>
+                  void action(async () => {
+                    await command('/operator/orchestration', { action: 'hold' });
+                    setMessage('已请求停止，请在游戏内核对。');
+                  })
+                }
+              >
+                停止
+              </Button>
+            ) : null}
             {current && !current.status.connected ? <p>请先连接运镜工具。</p> : null}
             {current?.status.connected && !current.status.isolated ? (
               <p>请先准备当前地图的镜头。</p>
@@ -307,6 +350,48 @@ export function CameraSettings() {
                         添加候选
                       </Button>
                     </details>
+                    {(['tactical', 'technical'] as const).map((stage) => (
+                      <details key={stage}>
+                        <summary>
+                          {MUSIC_LABELS[stage]}候选（{map.pauseCandidates[stage].length}）
+                        </summary>
+                        {map.pauseCandidates[stage].map((shot, i) => (
+                          <Shot
+                            key={i}
+                            label={`候选 ${i + 1}`}
+                            shot={shot}
+                            change={(next) =>
+                              update(index, {
+                                pauseCandidates: {
+                                  ...map.pauseCandidates,
+                                  [stage]: next
+                                    ? map.pauseCandidates[stage].map((item, j) =>
+                                        i === j ? next : item,
+                                      )
+                                    : map.pauseCandidates[stage].filter((_, j) => i !== j),
+                                },
+                              })
+                            }
+                          />
+                        ))}
+                        <Button
+                          disabled={map.pauseCandidates[stage].length >= 64}
+                          onClick={() =>
+                            update(index, {
+                              pauseCandidates: {
+                                ...map.pauseCandidates,
+                                [stage]: [
+                                  ...map.pauseCandidates[stage],
+                                  { macro: '', maxMs: 6000 },
+                                ],
+                              },
+                            })
+                          }
+                        >
+                          添加候选
+                        </Button>
+                      </details>
+                    ))}
                     <details>
                       <summary>其他比赛阶段</summary>
                       {CAMERA_STAGES.map((stage) => (

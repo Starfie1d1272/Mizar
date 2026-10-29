@@ -51,12 +51,15 @@ export function CameraControls({
         <span>{s.held ? '自动运镜已关闭' : '自动运镜已开启'}</span>
         <Button
           variant={s.held ? 'primary' : 'secondary'}
-          disabled={busy || (s.held && Boolean(unavailable))}
+          disabled={busy || (s.held && (Boolean(unavailable) || Boolean(s.current)))}
           onClick={() => void send(s.held ? 'resume' : 'hold')}
         >
           {s.held ? '开启自动运镜' : '关闭自动运镜'}
         </Button>
         {s.held && unavailable ? <span>{unavailable}</span> : null}
+        {s.held && s.current ? <span>请先停止当前镜头。</span> : null}
+        {s.preparation === 'preparing' ? <span>正在准备运镜…</span> : null}
+        {s.preparation === 'error' ? <span>运镜准备失败，请检查连接后重试。</span> : null}
         {error ? <span role="alert">{error}</span> : null}
       </div>
     );
