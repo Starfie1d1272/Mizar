@@ -8,17 +8,15 @@ import {
   parseObserverConnection,
   formatObserverConnection,
 } from '../src/assist.js';
-it('starts with the private feature off and editable 120/5 timing', () => {
+it('starts with the private feature enabled and a five-second lead', () => {
   expect(DEFAULT_OBSERVER_SETTINGS).toMatchObject({
-    enabled: false,
-    expectedDelaySeconds: 120,
+    enabled: true,
     leadSeconds: 5,
   });
   expect(
     observerSettingsSchema.safeParse({
       ...DEFAULT_OBSERVER_SETTINGS,
-      leadSeconds: 30,
-      expectedDelaySeconds: 10,
+      leadSeconds: 31,
     }).success,
   ).toBe(false);
 });
@@ -46,7 +44,7 @@ it('parses one authorized connection with adjacent or explicit Program endpoint'
     expect(() => parseObserverConnection(input)).toThrow();
 });
 
-it('keeps the typed snapshot input consistent with assist schema 3', () => {
+it('keeps the typed snapshot input consistent with assist schema 4', () => {
   const input: AssistSnapshotInput = {
     type: 'snapshot',
     protocolVersion: LOCAL_PROTOCOL_VERSION,
@@ -62,7 +60,7 @@ it('keeps the typed snapshot input consistent with assist schema 3', () => {
     },
     payload: { availability: 'unavailable' },
   };
-  expect(assistSnapshotSchema.parse({ ...input, channelSeq: 1 }).schemaVersion).toBe(3);
+  expect(assistSnapshotSchema.parse({ ...input, channelSeq: 1 }).schemaVersion).toBe(4);
 });
 
 it('accepts restricted commands in either order and round-trips the password-first formatter', () => {

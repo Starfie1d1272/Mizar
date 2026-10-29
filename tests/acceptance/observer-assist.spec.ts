@@ -85,7 +85,6 @@ test('keeps the full-width square radar across private hint states and desktop s
       effectiveDelaySeconds: 121,
       waitingReason: null,
       nextWindowSeconds: 0,
-      expectedDelaySeconds: 120,
       leadSeconds: 7,
       measuredDelaySeconds: 120,
       hints: [
@@ -197,9 +196,8 @@ test('observer settings show saved timing and support keyboard operation', async
     }),
   );
   await page.goto('/settings?tab=observer');
-  await expect(page.getByRole('spinbutton', { name: '两路预期延迟差（秒）' })).toHaveValue('120');
   await expect(page.getByRole('spinbutton', { name: '提示提前时间（秒）' })).toHaveValue('5');
-  await expect(page.getByRole('spinbutton')).toHaveCount(2);
+  await expect(page.getByRole('spinbutton')).toHaveCount(1);
   const toggle = page.getByRole('checkbox', { name: '启用私有观察辅助', exact: true });
   await toggle.focus();
   await page.keyboard.press('Space');
@@ -212,7 +210,6 @@ test('observer settings show saved timing and support keyboard operation', async
     saved = route.request().postDataJSON();
     await route.fulfill({ json: { ok: true } });
   });
-  await page.getByRole('spinbutton', { name: '两路预期延迟差（秒）' }).fill('90');
   await page.getByRole('spinbutton', { name: '提示提前时间（秒）' }).fill('5');
   await page.getByRole('button', { name: '保存观察辅助设置' }).click();
   await expect(page.getByText('观察辅助设置已保存。')).toBeVisible();
@@ -221,7 +218,6 @@ test('observer settings show saved timing and support keyboard operation', async
     settings: {
       ...DEFAULT_OBSERVER_SETTINGS,
       enabled: true,
-      expectedDelaySeconds: 90,
       leadSeconds: 5,
     },
   });
