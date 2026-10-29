@@ -589,6 +589,7 @@ pub struct ManagedCs2 {
     external: Option<ExternalSession>,
     camera: Option<CameraLease>,
     mulnx_launcher: Option<Arc<crate::mulnx_launch::HiddenLauncher>>,
+    pending_mulnx_stop: Option<(Value, WorkspaceProcess)>,
     // Keep window preservation after detach until a new managed launch is accepted.
     external_preservation: bool,
     #[cfg(test)]
@@ -608,6 +609,7 @@ struct LaunchFixture {
 
 /// A verified session process held open during window operations. Keeping the
 /// handle prevents PID reuse from turning a stale window into another game.
+#[derive(Clone)]
 pub struct WorkspaceProcess {
     process: Arc<Process>,
     pub owned: bool,
@@ -659,6 +661,7 @@ impl ManagedCs2 {
             external: None,
             camera: None,
             mulnx_launcher: None,
+            pending_mulnx_stop: None,
             external_preservation: false,
             #[cfg(test)]
             recovery_identity_fixture: None,
@@ -666,6 +669,13 @@ impl ManagedCs2 {
             launch_fixture: None,
         }
     }
+    pub(crate) fn pending_mulnx_stop(&self) -> Option<(Value, WorkspaceProcess)> {
+        self.pending_mulnx_stop.clone()
+    }
+    pub(crate) fn remember_mulnx_stop(&mut self, context: Value, game: WorkspaceProcess) {
+        self.pending_mulnx_stop = Some((context, game));
+    }
+    pub(crate) fn clear_mulnx_stop(&mut self) { self.pending_mulnx_stop = None; }
     pub(crate) fn remember_mulnx_launcher(&mut self, launcher: Arc<crate::mulnx_launch::HiddenLauncher>) {
         self.mulnx_launcher = Some(launcher);
     }
@@ -1075,7 +1085,11 @@ impl ManagedCs2 {
     }
     pub(crate) fn bind_managed_mulnx(&self, pid: u32, created: u64, executable: &Path) -> Result<(), String> {
         let mut journal = self.store.load()?.ok_or("CS2 配置事务缺失。")?;
-        if journal["launchAttempted"] != true || created < journal["launchTime"].as_u64().ok_or("启动时间缺失。")?
+        if (!journal["pid"].is_null() || !journal["created"].is_null())
+            && (journal["pid"].as_u64() != Some(pid as u64) || journal["created"].as_u64() != Some(created)) {
+            return Err("游戏已变化，请关闭游戏和 MulNX 后恢复设置。".into());
+        }
+        if journal["launchAttempted"] != true || created < journal["launchTime"].as_u64().ok_or("无法确认本次启动，请恢复设置。")?
             || cs2_pids(&self.log)? != vec![pid] { return Err("游戏启动身份不唯一。".into()); }
         let process = open(pid, &self.log)?.ok_or("游戏已退出。")?;
         let (actual_created, actual_executable) = identity(&process, &self.log)?;

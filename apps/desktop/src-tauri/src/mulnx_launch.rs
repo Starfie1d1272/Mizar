@@ -163,8 +163,8 @@ fn launch_operation(app: &tauri::AppHandle, log: &DesktopLog, automatic: bool, u
                 .and_then(|bytes| parse_launch_result(&bytes).ok());
             if let Some(receipt) = receipt {
                 if validate_game_identity(&actual, &receipt, &executable).is_ok() {
-                    let pid = receipt["pid"].as_u64().ok_or("MulNX 游戏身份缺失。")? as u32;
-                    let created = receipt["created"].as_str().and_then(|s| s.parse::<u64>().ok()).ok_or("MulNX 游戏创建时间缺失。")?;
+                    let pid = receipt["pid"].as_u64().ok_or("无法确认游戏，请稍后重试。")? as u32;
+                    let created = receipt["created"].as_str().and_then(|s| s.parse::<u64>().ok()).ok_or("无法确认游戏，请稍后重试。")?;
                     let matched = managed.try_lock().map_err(|_| "CS2 正忙，请稍后重试。")?.mulnx_observer_receipt_matches(pid, created, &executable)?;
                     validate_observer_reuse(status["spectatorRecoveryPending"] == true, matched, || {
                         cleanup_then_mark(
@@ -258,7 +258,7 @@ fn launch_operation(app: &tauri::AppHandle, log: &DesktopLog, automatic: bool, u
         };
         let bytes = result.to_string();
         let pid = result["pid"].as_u64().ok_or("MulNX 游戏进程身份缺失。")? as u32;
-        let created = result["created"].as_str().and_then(|s| s.parse::<u64>().ok()).ok_or("MulNX 游戏创建时间缺失。")?;
+        let created = result["created"].as_str().and_then(|s| s.parse::<u64>().ok()).ok_or("无法确认游戏，请稍后重试。")?;
         managed.try_lock().map_err(|_| "CS2 正忙，请稍后重试。")?.bind_managed_mulnx(pid, created, &executable)?;
         let temporary = results.join(format!("current-{}.tmp", log.session_id));
         std::fs::write(&temporary, bytes.as_bytes())
@@ -296,8 +296,8 @@ fn resume_pending_launch(log: &DesktopLog, managed: &Mutex<managed_cs2::ManagedC
     let process = &processes[0];
     let result = json!({"mizarLaunch":1,"pid":process["pid"],"created":process["created"]});
     validate_game_identity(&actual, &result, &executable)?;
-    let game_pid = result["pid"].as_u64().ok_or("游戏身份缺失。")? as u32;
-    let created = result["created"].as_str().and_then(|v| v.parse::<u64>().ok()).ok_or("游戏创建时间缺失。")?;
+    let game_pid = result["pid"].as_u64().ok_or("无法确认游戏，请稍后重试。")? as u32;
+    let created = result["created"].as_str().and_then(|v| v.parse::<u64>().ok()).ok_or("无法确认游戏，请稍后重试。")?;
     verify_gateway_owner(log, 55202, game_pid)?;
     if managed_cs2::process_parent(game_pid, log)? != Some(pid) || !cs2.owns_mulnx_launcher(pid)? {
         return Err("无法确认本次启动，请关闭游戏和 MulNX 后恢复设置。".into());
@@ -552,8 +552,20 @@ pub fn stop_control(app: &tauri::AppHandle, log: &DesktopLog) -> Result<Value, S
     app.state::<updates::PendingUpdate>().check()?;
     let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
     let mut cs2 = managed.lock().map_err(|_| "CS2 正忙，请稍后重试。")?;
+    if let Some((context, game)) = cs2.pending_mulnx_stop() {
+        if !game.is_running() { cs2.clear_mulnx_stop(); return Err("游戏已退出。".into()); }
+        let executable = PathBuf::from(context["executable"].as_str().ok_or("无法确认游戏位置，请检查游戏状态。")?);
+        validate_game_identity(&cs2.mulnx_handoff_status()?,
+            &json!({"pid":game.pid,"created":game.created.to_string()}), &executable)?;
+        let identity = crate::mulnx_stop::Identity { pid:game.pid, created:game.created, executable };
+        if !crate::mulnx_stop::blocked(log, &identity)? { return Err("停止状态已变化，请检查游戏状态。".into()); }
+        crate::mulnx_stop::verify_absent(&game)?;
+        crate::mulnx_stop::mark_confirmed(log, &identity)?;
+        cs2.clear_mulnx_stop();
+        return Ok(json!({"result":"unknown", "execution":"confirmed", "stopGuard":"already-submitted"}));
+    }
     let game = controlled_game(&cs2, log)?;
-    if game.owned { return Err("受管游戏请使用结束工作台；卸载确认尚不可用。".into()); }
+    if game.owned { return Err("请结束工作台后再停止游戏。".into()); }
     let (context, _) = cs2.console_source()?.ok_or("当前借用游戏身份未确认，未发送停止命令。")?;
     let identity = crate::mulnx_stop::Identity { pid:game.pid, created:game.created,
         executable:PathBuf::from(context["executable"].as_str().ok_or("当前游戏安装位置未确认。")?) };
@@ -604,11 +616,15 @@ pub fn stop_control(app: &tauri::AppHandle, log: &DesktopLog) -> Result<Value, S
     });
     let stopped = stopped.and_then(|mut value| {
         proof.confirm(&game)?;
+        crate::mulnx_stop::mark_confirmed(log, &identity)?;
         value["execution"] = "confirmed".into();
         Ok(value)
     });
     // The verified borrowed game remains alive. Safe production finish has already succeeded;
     // even HUD/transport failure must not leave the borrowed lease or workbench active.
+    if stopped.is_err() && !matches!(crate::mulnx_stop::blocked(log, &identity), Ok(false)) {
+        cs2.remember_mulnx_stop(context, game);
+    }
     let detached = cs2.finish();
     crate::refresh_finished_window_feedback(app, &cs2);
     drop(cs2);
