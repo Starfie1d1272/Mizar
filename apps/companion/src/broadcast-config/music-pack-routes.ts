@@ -59,7 +59,7 @@ export function registerMusicPackRoutes(
       if (module.revision !== input.data.expectedRevision)
         return reply.code(409).send({ error: 'revision_conflict' });
       try {
-        const zip = await exportMusicPack(music, module, {
+        const zip = await exportMusicPack(music, resources, module, {
           packageId: randomUUID(),
           version: '1.0.0',
           name: module.name,

@@ -68,8 +68,9 @@ it('round trips real music owner configuration to independent drafts without act
       withApplyGuard: (operation) => operation(() => true),
     });
     await store.load();
+    const resources = new MusicPackResources(join(root, 'packages'));
     const packageId = randomUUID();
-    const zip = await exportMusicPack(music, musicModule, {
+    const zip = await exportMusicPack(music, resources, musicModule, {
       packageId,
       version: '1.0.0',
       name: 'Music',
@@ -77,7 +78,6 @@ it('round trips real music owner configuration to independent drafts without act
     });
     const archive = await readPackArchive(zip);
     expect(archive.manifest.files).toHaveLength(2);
-    const resources = new MusicPackResources(join(root, 'packages'));
     const blocked = join(root, 'blocked');
     await writeFile(blocked, 'not a directory');
     const before = store.snapshot.active;
@@ -145,6 +145,31 @@ it('round trips real music owner configuration to independent drafts without act
     } finally {
       await app.close();
     }
+    const reexported = await exportMusicPack(music, resources, imported, {
+      packageId: randomUUID(),
+      version: '1.0.0',
+      name: '再次分享',
+      author: '',
+    });
+    const secondImport = await importMusicPack({ zip: reexported, store, resources });
+    const roundTrip = store.snapshot.modules.find(
+      (item) => item.id === secondImport.mapping.moduleEntries.music![0],
+    );
+    if (!roundTrip || roundTrip.kind !== 'music') throw new Error('missing round-trip module');
+    expect(
+      roundTrip.value.groups.waiting.tracks.map(({ name, startMs, endMs, gain }) => [
+        name,
+        startMs,
+        endMs,
+        gain,
+      ]),
+    ).toEqual([
+      ['opening.wav', 0, 100, 0.3],
+      ['opening.wav', 100, 200, 0.8],
+    ]);
+    expect(roundTrip.value.groups.waiting.tracks[0]!.asset).toEqual(
+      roundTrip.value.groups.waiting.tracks[1]!.asset,
+    );
     const ref = imported.value.groups.waiting.tracks[0]!.asset;
     const reopened = new MusicPackResources(join(root, 'packages'));
     expect((await reopened.read(ref)).bytes).toEqual(Buffer.from('RIFF0000WAVEtest'));
@@ -160,7 +185,7 @@ it('round trips real music owner configuration to independent drafts without act
     const resolved = { ...before.resolved, music: imported.value };
     const lock = await dependencies.lockForActive(resolved);
     await dependencies.verifyActive({ ...before, resolved, lock });
-    const conflicting = await exportMusicPack(music, musicModule, {
+    const conflicting = await exportMusicPack(music, resources, musicModule, {
       packageId,
       version: '1.0.0',
       name: 'Changed',

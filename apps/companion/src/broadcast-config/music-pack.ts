@@ -21,6 +21,7 @@ import type { MusicPackResources } from './music-pack-resources.js';
 /** Export one music module and its verified media, without playback or configuration changes. */
 export async function exportMusicPack(
   music: MusicStore,
+  resources: MusicPackResources,
   input: ModuleRecord<'music'>,
   metadata: { packageId: string; version: string; name: string; author: string },
 ): Promise<Buffer> {
@@ -32,9 +33,12 @@ export async function exportMusicPack(
   for (const group of MUSIC_GROUPS)
     for (const track of module.value.groups[group].tracks) {
       if (assets.has(key(track.asset))) continue;
-      const bytes = await readMusicAsset(music, track.asset);
+      const asset = track.asset.resource.id.startsWith('local:mizar-pack:')
+        ? await resources.read(track.asset)
+        : { name: track.asset.fileId, bytes: await readMusicAsset(music, track.asset) };
+      const bytes = asset.bytes;
       const id = `audio-${createHash('sha256').update(bytes).digest('hex')}`;
-      const ext = track.asset.fileId.split('.').at(-1)!;
+      const ext = asset.name.split('.').at(-1)!;
       assets.set(key(track.asset), { id, path: `assets/${id}.${ext}`, bytes });
     }
   const template = exportModule(module, {
