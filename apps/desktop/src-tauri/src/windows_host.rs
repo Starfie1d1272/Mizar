@@ -25,6 +25,7 @@ extern "system" {
     fn GetWindowRect(hwnd: Hwnd, rect: *mut WinRect) -> i32;
     fn ClientToScreen(hwnd: Hwnd, point: *mut Point) -> i32;
     fn GetWindowLongW(hwnd: Hwnd, index: i32) -> i32;
+    fn GetWindow(hwnd: Hwnd, command: u32) -> Hwnd;
     fn GetDpiForWindow(hwnd: Hwnd) -> u32;
     fn SetThreadDpiAwarenessContext(context: isize) -> isize;
     fn AdjustWindowRectExForDpi(rect: *mut WinRect, style: u32, menu: i32, ex_style: u32, dpi: u32) -> i32;
@@ -106,6 +107,8 @@ pub struct Cs2Window { pub pid: u32, pub hwnd: isize }
 
 unsafe extern "system" fn collect_window(hwnd: Hwnd, data: isize) -> i32 {
     if IsWindowVisible(hwnd) == 0 || IsIconic(hwnd) != 0 { return 1; }
+    // Owned dialogs and tool windows are not the game's rendering surface.
+    if GetWindow(hwnd, 4) != 0 || (GetWindowLongW(hwnd, -20) as u32 & 0x80) != 0 { return 1; }
     let mut pid = 0;
     GetWindowThreadProcessId(hwnd, &mut pid);
     if pid != 0 && is_cs2(pid) && client_rect(hwnd).is_some() {
@@ -409,10 +412,8 @@ impl GameTracker {
         let _coordinates = PhysicalCoordinates::enter();
         let window = self.window?;
         let client = client_rect(window.hwnd)?;
-        let mut foreground_pid = 0;
-        unsafe { GetWindowThreadProcessId(GetForegroundWindow(), &mut foreground_pid); }
-        let foreground_owned = foreground_pid == window.pid || foreground_pid == std::process::id();
-        overlay_visible(!self.preserve_settings && self.managed && self.overlay_enabled, unsafe { IsIconic(window.hwnd) != 0 }, client, foreground_owned).then_some(client)
+        let game_foreground = unsafe { GetForegroundWindow() == window.hwnd };
+        overlay_visible(!self.preserve_settings && self.managed && self.overlay_enabled, unsafe { IsIconic(window.hwnd) != 0 }, client, game_foreground).then_some(client)
     }
     pub fn restore_focus(&self, source: isize) -> bool {
         self.window.is_some_and(|window| unsafe {
