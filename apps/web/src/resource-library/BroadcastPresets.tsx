@@ -1,6 +1,7 @@
 import { PresetVisualPreview } from './PresetVisualPreview';
 import { parseModuleRecord } from '@mizar/broadcast-config';
 import { pulseTokenStyle } from '../program/broadcast-display';
+import { exportFailure } from './export-error';
 import { useState } from 'react';
 import { useLocalRead } from '../preparation/client';
 import { Button, Checkbox, Field, Panel, Select, StatusBanner } from '../ui';
@@ -274,12 +275,7 @@ export function BroadcastPresets({ query }: { query: string }) {
           ],
         }),
       });
-      if (!response.ok)
-        throw new Error(
-          response.status === 409
-            ? '配置已变化，请刷新后重试。'
-            : '方案暂时无法分享，请检查所需素材和运镜来源。',
-        );
+      if (!response.ok) throw new Error(await exportFailure(response, view.modules, view.presets));
       const url = URL.createObjectURL(await response.blob());
       try {
         const link = document.createElement('a');
@@ -327,12 +323,7 @@ export function BroadcastPresets({ query }: { query: string }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ modules: [], presets: requests }),
       });
-      if (!response.ok)
-        throw new Error(
-          response.status === 409
-            ? '配置已变化，请刷新后重新选择。'
-            : '方案暂时无法分享，请检查所需素材和运镜来源。',
-        );
+      if (!response.ok) throw new Error(await exportFailure(response, view.modules, view.presets));
       const url = URL.createObjectURL(await response.blob());
       try {
         const link = document.createElement('a');

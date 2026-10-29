@@ -155,3 +155,64 @@ it('keeps the old camera configuration visible after a failed recovery and resto
     vi.unstubAllGlobals();
   }
 });
+
+it('reports a partial import instead of claiming every resource was imported', async () => {
+  const fetchMock = vi.fn((path: string) => {
+    if (path === '/local/v1/broadcast-presets')
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ modules: [], presets: [], active: { revision: 'a1' } }),
+      });
+    if (path === '/local/v1/broadcast-modules')
+      return Promise.resolve({ ok: true, json: async () => ({ modules: [] }) });
+    if (path === '/operator/resource-library/import-pack')
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          reused: false,
+          mapping: { moduleEntries: { hud: ['new-hud'] } },
+          entries: [
+            { type: 'module', kind: 'hud', result: 'imported' },
+            { type: 'module', kind: 'camera', result: 'unavailable' },
+          ],
+        }),
+      });
+    return Promise.resolve({ ok: true, json: async () => ({ pending: null }) });
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  const element = document.createElement('div');
+  document.body.append(element);
+  const root = createRoot(element);
+  try {
+    await act(async () => {
+      root.render(<ResourceModules query="" category="all" onImported={() => {}} />);
+      await Promise.resolve();
+    });
+    const input = element.querySelector<HTMLInputElement>('input[type=file]')!;
+    Object.defineProperty(input, 'files', {
+      value: [new File(['zip'], 'pack.mizarpack')],
+      configurable: true,
+    });
+    await act(async () => {
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(element.textContent).toContain('部分资源已保存，尚未使用');
+    expect(element.textContent).toContain('运镜');
+  } finally {
+    act(() => root.unmount());
+    element.remove();
+    vi.unstubAllGlobals();
+  }
+});
+
+it('names the resource and actionable reason returned by an export failure', async () => {
+  const { exportFailure } = await import('../src/resource-library/export-error');
+  const response = {
+    status: 422,
+    json: async () => ({ entries: [{ type: 'module', id: 'one', reason: 'resource_damaged' }] }),
+  } as Response;
+  expect(await exportFailure(response, [{ id: 'one', name: '场景背景' }], [])).toBe(
+    '导出未完成：「场景背景」所需素材已损坏。',
+  );
+});

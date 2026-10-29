@@ -4,6 +4,7 @@ import { useLocalRead } from '../preparation/client';
 import { Button, Panel, Select, StatusBanner } from '../ui';
 import { PresetVisualPreview } from './PresetVisualPreview';
 import { pulseTokenStyle } from '../program/broadcast-display';
+import { exportFailure } from './export-error';
 
 type Kind = ModuleRecord['kind'];
 type Snapshot = {
@@ -58,9 +59,10 @@ export function ResourceModules({
   );
   const [replacement, setReplacement] = useState('');
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<{ tone: 'success' | 'danger'; message: string } | null>(
-    null,
-  );
+  const [notice, setNotice] = useState<{
+    tone: 'success' | 'danger' | 'warning';
+    message: string;
+  } | null>(null);
   const input = useRef<HTMLInputElement>(null);
   const showList = category === 'all' || ['hud', 'program', 'music', 'camera'].includes(category);
   const entries =
@@ -94,6 +96,10 @@ export function ResourceModules({
         body: JSON.stringify(body),
       });
       if (!response.ok) {
+        if (path === '/operator/resource-library/export-pack')
+          throw new Error(
+            await exportFailure(response, snapshot?.modules ?? [], snapshot?.presets ?? []),
+          );
         const result = (await response.json().catch(() => ({}))) as {
           error?: { message?: string };
         };
@@ -175,16 +181,37 @@ export function ResourceModules({
       const result = (await response.json()) as {
         mapping: { moduleEntries: Record<string, string[]> };
         reused: boolean;
+        entries?: {
+          type: 'module' | 'preset';
+          kind?: Kind;
+          result: 'imported' | 'existing' | 'unavailable' | 'not_selected';
+        }[];
       };
       const firstId = Object.values(result.mapping.moduleEntries).flat()[0];
       if (firstId) {
         setSelected(firstId);
         onImported();
       }
-      setNotice({
-        tone: 'success',
-        message: result.reused ? '资源已存在，已定位。' : '资源已导入，尚未使用。',
-      });
+      const unavailable = result.entries?.filter((entry) => entry.result === 'unavailable') ?? [];
+      const accepted = result.entries?.filter(
+        (entry) => entry.result === 'imported' || entry.result === 'existing',
+      );
+      const unavailableText = unavailable
+        .map((entry) => (entry.type === 'preset' ? '方案' : (labels[entry.kind as Kind] ?? '资源')))
+        .join('、');
+      setNotice(
+        unavailable.length
+          ? {
+              tone: accepted?.length ? 'warning' : 'danger',
+              message: accepted?.length
+                ? `部分资源已保存，尚未使用；以下内容无法导入：${unavailableText}。`
+                : `没有导入资源；以下内容无法导入：${unavailableText}。`,
+            }
+          : {
+              tone: 'success',
+              message: result.reused ? '资源已存在，已定位。' : '资源已导入，尚未使用。',
+            },
+      );
       setRefresh((value) => value + 1);
     } catch (error) {
       setNotice({ tone: 'danger', message: error instanceof Error ? error.message : '导入失败。' });
