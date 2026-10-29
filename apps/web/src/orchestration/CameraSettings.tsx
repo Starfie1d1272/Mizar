@@ -318,7 +318,7 @@ export function CameraSettings() {
                   void action(async () => {
                     if (file.size > 256 * 1024) throw new Error('预设超过 256 KiB');
                     setDraft(orchestrationPresetSchema.parse(JSON.parse(await file.text())));
-                    setMessage('已载入配置草稿；文件不包含镜头或音频资源，请确认资源可用后保存。');
+                    setMessage('已载入配置草稿，请确认镜头和音频资源可用后保存。');
                   });
               }}
             />
