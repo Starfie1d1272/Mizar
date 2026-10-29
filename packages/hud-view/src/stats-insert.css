@@ -144,6 +144,9 @@
 .stats-insert__rows--cells .stats-insert__metric-values {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
+.stats-insert__rows--columns:has(> .stats-insert__metric:only-child) .stats-insert__metric-values {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
 .stats-insert__metric-values > div {
   display: flex;
   flex-direction: column;
