@@ -14,7 +14,7 @@ import type { CameraCatalog, CameraConfigPersistence } from '../orchestration/st
 import type { BroadcastConfigStore } from './store.js';
 
 export interface CameraFacadeDependencies {
-  /** Resolve and verify content against the session-pinned instance, returning its isolated pack name. */
+  /** Resolve verified content to an isolated pack; execution separately pins the session instance. */
   localPack(source: CameraSourceRef): Promise<string>;
   localTrackId(asset: AssetRef): Promise<string>;
   portable(preset: OrchestrationPreset, automaticEnabled: boolean): Promise<CameraModuleV2>;

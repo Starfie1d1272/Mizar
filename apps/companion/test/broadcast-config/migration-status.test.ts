@@ -21,7 +21,7 @@ it('boots the coordinator with verified owners and exposes only display configur
   const { mkdtemp, rm } = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
-  const { getBuiltinLayout } = await import('@mizar/hud-config');
+  const { getBuiltinLayout, getBuiltinTheme } = await import('@mizar/hud-config');
   const { HudConfigStore } = await import('../../src/hud-config/store.js');
   const { BroadcastReferenceQueue } = await import('../../src/broadcast-config/reference-queue.js');
   const root = await mkdtemp(join(tmpdir(), 'broadcast-runtime-'));
@@ -71,6 +71,22 @@ it('boots the coordinator with verified owners and exposes only display configur
     expect(Object.keys(display.json()).sort()).toEqual(['activeRevision', 'hud', 'program']);
     const presets = await app.inject('/local/v1/broadcast-presets');
     expect(presets.statusCode).toBe(200);
+    const saved = await app.inject({
+      method: 'POST',
+      url: '/operator/hud-config',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: {
+        kind: 'save-as',
+        resource: 'theme',
+        value: getBuiltinTheme(),
+        expectedEditorRevision: hud.getState().editorRevision,
+      },
+    });
+    expect(saved.statusCode).toBe(200);
+    const after = await app.inject('/local/v1/broadcast-presets');
+    expect(after.json()).toMatchObject({
+      unboundHudResources: { themes: [expect.objectContaining({ name: getBuiltinTheme().name })] },
+    });
   } finally {
     await app.close();
     await rm(root, { recursive: true, force: true });
