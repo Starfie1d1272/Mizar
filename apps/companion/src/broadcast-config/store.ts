@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { lstat, readFile } from 'node:fs/promises';
 import { canonicalJson } from '@mizar/hud-config';
+import { z } from 'zod';
 import {
   boundModules,
   clonePreset,
   preparePreset,
   parseBroadcastConfigDocument,
+  resourceRefSchema,
   type ActiveBroadcastSnapshot,
   type ApplyPresetRequest,
   type BroadcastConfigDocument,
@@ -14,6 +16,7 @@ import {
   type ModuleRecord,
   type Revision,
   type PresetResolver,
+  type ResourceRef,
 } from '@mizar/broadcast-config';
 import { replaceDurableJson } from '../match-context/durable-json.js';
 import { SerialCommitQueue } from '../match-context/serial-commit.js';
@@ -22,10 +25,26 @@ interface Receipt {
   fingerprint: string;
   active: ActiveBroadcastSnapshot;
 }
+const importEntry = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/);
+const importMappingSchema = z.strictObject({
+  source: resourceRefSchema,
+  moduleEntries: z.record(importEntry, z.array(z.string().uuid()).min(1).max(128)),
+  presetEntries: z.record(importEntry, z.string().uuid()),
+});
+export type BroadcastImportMapping = z.infer<typeof importMappingSchema>;
+/** The caller must have installed and verified source before invoking this operation. */
+export interface BroadcastImportBatch {
+  source: ResourceRef;
+  modules: ModuleRecord[];
+  presets: BroadcastPreset[];
+  moduleEntries: Record<string, string[]>;
+  presetEntries: Record<string, string>;
+}
 interface Envelope {
   version: 1;
   document: BroadcastConfigDocument;
   receipts: Record<string, Receipt>;
+  imports: BroadcastImportMapping[];
 }
 
 /** Parsing must use the registered domain codecs, including their resolved snapshot parsers. */
@@ -59,7 +78,9 @@ export class BroadcastConfigStore {
       !value.receipts ||
       typeof value.receipts !== 'object' ||
       Array.isArray(value.receipts) ||
-      Object.keys(value).some((key) => !['version', 'document', 'receipts'].includes(key))
+      Object.keys(value).some(
+        (key) => !['version', 'document', 'receipts', 'imports'].includes(key),
+      )
     )
       throw new Error('broadcast_config_invalid');
     const document = parseBroadcastConfigDocument(value.document);
@@ -77,7 +98,15 @@ export class BroadcastConfigStore {
       const checked = parseBroadcastConfigDocument({ ...document, active: receipt.active });
       receipts[id] = { fingerprint: receipt.fingerprint, active: checked.active };
     }
-    return { version: 1, document, receipts };
+    const imports = z
+      .array(importMappingSchema)
+      .max(4096)
+      .parse(value.imports ?? []);
+    const identities = imports.map((entry) =>
+      canonicalJson([entry.source.id, entry.source.version]),
+    );
+    if (new Set(identities).size !== identities.length) throw new Error('broadcast_config_invalid');
+    return { version: 1, document, receipts, imports };
   }
   private async read(): Promise<Envelope> {
     const stat = await lstat(this.options.filePath);
@@ -92,7 +121,7 @@ export class BroadcastConfigStore {
       } catch (error) {
         if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
         const document = parseBroadcastConfigDocument(await this.options.createInitial());
-        const initial: Envelope = { version: 1, document, receipts: {} };
+        const initial: Envelope = { version: 1, document, receipts: {}, imports: [] };
         if (Buffer.byteLength(JSON.stringify(initial)) > 16 * 1024 * 1024)
           throw new Error('broadcast_config_too_large', { cause: error });
         await replaceDurableJson(this.options.filePath, initial);
@@ -127,6 +156,61 @@ export class BroadcastConfigStore {
         await this.options.assertReferenceCommitAllowed(this.envelope.document, next.document);
         await this.commit(next);
         return { presetId: copy.preset.id };
+      }),
+    );
+  }
+  /** Atomically installs drafts and their entry mapping without changing active configuration. */
+  async importBatch(
+    input: BroadcastImportBatch,
+  ): Promise<{ mapping: BroadcastImportMapping; reused: boolean }> {
+    return this.queue.run(() =>
+      this.options.withReferenceGuard(async () => {
+        if (!this.envelope) throw new Error('broadcast_config_unavailable');
+        const mapping = importMappingSchema.parse({
+          source: input.source,
+          moduleEntries: input.moduleEntries,
+          presetEntries: input.presetEntries,
+        });
+        const existing = this.envelope.imports.find(
+          (entry) =>
+            entry.source.id === mapping.source.id &&
+            entry.source.version === mapping.source.version,
+        );
+        if (existing) {
+          if (existing.source.digest !== mapping.source.digest)
+            throw new Error('identity_conflict');
+          return { mapping: structuredClone(existing), reused: true };
+        }
+        const moduleIds = input.modules.map((item) => item.id);
+        const presetIds = input.presets.map((item) => item.id);
+        const mappedModules = Object.values(mapping.moduleEntries).flat();
+        const mappedPresets = Object.values(mapping.presetEntries);
+        const sameIds = (actual: string[], mapped: string[]) =>
+          actual.length === mapped.length &&
+          new Set(actual).size === actual.length &&
+          new Set(mapped).size === mapped.length &&
+          actual.every((id) => mapped.includes(id));
+        if (
+          (!moduleIds.length && !presetIds.length) ||
+          !sameIds(moduleIds, mappedModules) ||
+          !sameIds(presetIds, mappedPresets)
+        )
+          throw new Error('invalid_import_mapping');
+        const used = new Set<string>();
+        for (const preset of input.presets)
+          for (const binding of preset.bindings)
+            if (binding.mode === 'use') {
+              if (!moduleIds.includes(binding.moduleId) || used.has(binding.moduleId))
+                throw new Error('invalid_import_mapping');
+              used.add(binding.moduleId);
+            }
+        const next = structuredClone(this.envelope);
+        next.document.modules.push(...structuredClone(input.modules));
+        next.document.presets.push(...structuredClone(input.presets));
+        next.imports.push(mapping);
+        await this.options.assertReferenceCommitAllowed(this.envelope.document, next.document);
+        await this.commit(next);
+        return { mapping: structuredClone(mapping), reused: false };
       }),
     );
   }
