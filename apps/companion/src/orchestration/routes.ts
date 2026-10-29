@@ -247,13 +247,19 @@ export function registerOrchestrationRoutes(
             ? '请先结束制作，再修改自动运镜设置。'
             : error instanceof Error && error.message === 'camera_audition_unavailable'
               ? '镜头暂不能播放，请先停止当前镜头并检查连接。'
-              : error instanceof Error && error.message === 'camera_pack_apply_unconfirmed'
-                ? '运镜准备失败，请检查游戏连接后重试。'
-                : error instanceof Error && error.message === 'camera_pack_unconfirmed'
-                  ? '运镜准备未完成，请检查当前地图和预设后重试。'
-                  : error instanceof Error && error.message === 'camera_prepare_unavailable'
-                    ? '暂不能准备运镜，请检查游戏连接和当前地图。'
-                    : '操作未完成，请检查当前地图、连接、预设与本机音频。',
+              : error instanceof Error && error.message === 'camera_stop_unconfirmed'
+                ? '停止未确认，请检查游戏连接后重试。'
+                : error instanceof Error && error.message === 'camera_status_unsupported'
+                  ? '当前运镜工具版本不支持此功能，请更新至支持的版本。'
+                  : error instanceof Error && error.message === 'camera_status_unconfirmed'
+                    ? '无法确认运镜状态，请检查游戏连接和工具版本。'
+                    : error instanceof Error && error.message === 'camera_pack_apply_unconfirmed'
+                      ? '运镜准备失败，请检查游戏连接后重试。'
+                      : error instanceof Error && error.message === 'camera_pack_unconfirmed'
+                        ? '运镜准备未完成，请检查当前地图和预设后重试。'
+                        : error instanceof Error && error.message === 'camera_prepare_unavailable'
+                          ? '暂不能准备运镜，请检查游戏连接和当前地图。'
+                          : '操作未完成，请检查当前地图、连接、预设与本机音频。',
         requestId: request.id,
       });
     }
