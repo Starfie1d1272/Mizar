@@ -15,7 +15,10 @@ import { inspectAudioSceneGraph } from './audio-scene-graph.js';
 
 const roles = ['game', 'remoteCommentary', 'microphone'] as const;
 const musicOriginal = z
-  .object({ uuid: z.string().min(1), mode: z.literal('OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT') })
+  .object({
+    uuid: z.string().min(1),
+    mode: z.enum(['OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT', 'OBS_MONITORING_TYPE_MONITOR_ONLY']),
+  })
   .strict()
   .nullable();
 const musicOriginals = z.object({ bgm: musicOriginal, stinger: musicOriginal }).strict();
@@ -216,14 +219,14 @@ export class ObsAudioRouting {
   }
   async invalidBindings(obs: ObsRpc, endpoint: string): Promise<ObsAudioRole[]> {
     const state = await this.load();
-    const { collection, candidates } = await this.inputs(obs);
+    const { collection, candidates, inputs } = await this.inputs(obs);
     return roles.filter((role) => {
       const binding = state.bindings[role];
       return (
         binding !== null &&
         (binding.endpoint !== endpoint ||
           binding.collection !== collection ||
-          !candidates.some(
+          ![...candidates, ...inputs.filter((input) => videoKinds.has(input.inputKind))].some(
             (input) =>
               input.inputUuid === binding.inputUuid && input.inputKind === binding.inputKind,
           ))

@@ -127,10 +127,16 @@ export function ObsAudioRouting() {
       await refresh().catch(() => undefined);
       throw new Error(result.message ?? '切换未确认，请检查 OBS。');
     }
+    const result = (await response.json()) as { monitorPending?: boolean };
     await refresh();
     setDesktopSelection('');
+    setChooseDesktop(false);
     setMessage(
-      mode === 'desktop' ? '已切换桌面混音。请录制试听。' : '已切换独立分路。请录制试听。',
+      result.monitorPending
+        ? '已切换桌面混音。音乐仍播出，本机监听待选择设备。'
+        : mode === 'desktop'
+          ? '已切换桌面混音。请录制试听。'
+          : '已切换独立分路。请录制试听。',
     );
   }
   async function bind(role: ObsAudioRole, selectionId: string | null) {

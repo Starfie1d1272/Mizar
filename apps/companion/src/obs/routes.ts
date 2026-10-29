@@ -183,7 +183,7 @@ export function registerObsRoutes(
     try {
       const music = options.musicDirector?.();
       if (!music) throw new Error('music_unavailable');
-      await options.gameAudio.switchMode(() =>
+      const result = await options.gameAudio.switchMode(() =>
         options.adapter.switchAudioMode(
           parsed.data.revision,
           parsed.data.mode,
@@ -191,7 +191,7 @@ export function registerObsRoutes(
           music,
         ),
       );
-      return { ok: true };
+      return { ok: true, ...result };
     } catch (error) {
       return reply.code(409).send({
         error:
@@ -201,16 +201,18 @@ export function registerObsRoutes(
         message:
           error instanceof Error && error.message === 'audio_desktop_choice_required'
             ? '检测到多个桌面播放设备，请选择要采集的设备。'
-            : error instanceof Error && error.message === 'audio_monitor_device_unknown'
-              ? '请在 OBS 中将桌面音频与监听设备都设为默认设备，或都选为同一个具体设备，再重试。'
-              : error instanceof Error && error.message === 'audio_microphone_monitor'
-                ? '麦克风监听会回到桌面混音；请在 OBS 关闭麦克风监听后重试。'
-                : error instanceof Error && error.message === 'audio_video_binding'
-                  ? '游戏或解说音频绑定在画面来源上；请先改为独立音频来源，避免关闭画面。'
-                  : error instanceof Error &&
-                      error.message.startsWith('audio_global_path_unresolved:')
-                    ? `OBS 全局音频来源“${error.message.slice('audio_global_path_unresolved:'.length)}”与目标重复，请在 OBS 停用该来源后重试。`
-                    : '切换未确认，请检查 OBS 音频、停止输出并重新读取来源。',
+            : error instanceof Error && error.message.startsWith('audio_monitor_shared:')
+              ? `来源“${error.message.slice('audio_monitor_shared:'.length)}”也用于其他场景或全局音频；请为 Mizar 单独设置该来源后重试。`
+              : error instanceof Error && error.message === 'audio_monitor_device_unknown'
+                ? '请在 OBS 中将桌面音频与监听设备都设为默认设备，或都选为同一个具体设备，再重试。'
+                : error instanceof Error && error.message === 'audio_microphone_monitor'
+                  ? '麦克风监听会回到桌面混音；请在 OBS 关闭麦克风监听后重试。'
+                  : error instanceof Error && error.message === 'audio_video_binding'
+                    ? '游戏或解说音频绑定在画面来源上；请先改为独立音频来源，避免关闭画面。'
+                    : error instanceof Error &&
+                        error.message.startsWith('audio_global_path_unresolved:')
+                      ? `OBS 全局音频来源“${error.message.slice('audio_global_path_unresolved:'.length)}”与目标重复，请在 OBS 停用该来源后重试。`
+                      : '切换未确认，请检查 OBS 音频、停止输出并重新读取来源。',
       });
     }
   });

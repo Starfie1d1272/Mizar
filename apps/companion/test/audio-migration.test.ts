@@ -195,6 +195,7 @@ test('mode switch disables exclusive video audio and restores it without changin
     );
     const settings: Record<string, unknown> = { capture_audio: true, window: 'keep-picture' };
     const music = { mode: 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT' };
+    const mic = { mode: 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT' };
     const obs: ObsRpc = {
       async call(type, data) {
         if (type === 'GetStreamStatus' || type === 'GetRecordStatus')
@@ -207,11 +208,17 @@ test('mode switch disables exclusive video audio and restores it without changin
           return { scenes: scenes.map(({ sceneName }) => ({ sceneName })) };
         if (type === 'GetSceneItemList')
           return { sceneItems: items.get(data?.sceneName as string)!.map((item) => ({ ...item })) };
-        if (type === 'GetInputAudioMonitorType') return { monitorType: music.mode };
+        if (type === 'GetInputAudioMonitorType')
+          return { monitorType: data?.inputUuid === 'mic' ? mic.mode : music.mode };
         if (type === 'SetInputAudioMonitorType') {
-          music.mode = data?.monitorType as string;
+          const target = data?.inputUuid === 'mic' ? mic : music;
+          target.mode = data?.monitorType as string;
           for (const listener of listeners)
-            listener({ type: 'monitor', inputUuid: 'music', monitorType: music.mode });
+            listener({
+              type: 'monitor',
+              inputUuid: data?.inputUuid as string,
+              monitorType: target.mode,
+            });
           return {};
         }
         if (type === 'GetInputSettings')
@@ -220,7 +227,7 @@ test('mode switch disables exclusive video audio and restores it without changin
             : { inputSettings: { device_id: 'device' } };
         if (type === 'GetInputDefaultSettings')
           return { defaultInputSettings: { device_id: 'device' } };
-        if (type === 'GetProfileParameter') return { parameterValue: 'another-device' };
+        if (type === 'GetProfileParameter') return { parameterValue: 'device' };
         if (type === 'SetInputSettings') {
           assert.equal(data?.overlay, true);
           Object.assign(settings, data?.inputSettings);
@@ -323,6 +330,7 @@ test('mode switch disables exclusive video audio and restores it without changin
     } as unknown as MusicDirector;
     await adapter.switchAudioMode('revision', 'desktop', 'desktop-selection', musicApi);
     assert.equal(music.mode, 'OBS_MONITORING_TYPE_MONITOR_ONLY');
+    assert.equal(mic.mode, 'OBS_MONITORING_TYPE_NONE');
     assert.deepEqual(settings, { capture_audio: false, window: 'keep-picture' });
     assert.ok(
       [...items.values()].every(
@@ -332,6 +340,7 @@ test('mode switch disables exclusive video audio and restores it without changin
     await adapter.switchAudioMode('revision', 'independent', undefined, musicApi);
     assert.deepEqual(settings, { capture_audio: true, window: 'keep-picture' });
     assert.equal(music.mode, 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT');
+    assert.equal(mic.mode, 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT');
     assert.ok(
       [...items.values()].every(
         (scene) => scene.find((item) => item.sourceUuid === 'video')!.sceneItemEnabled,
@@ -1397,3 +1406,56 @@ test('matching global desktop is reused and extra global audio blocks before wri
       }
     });
 });
+
+test('unknown monitor device plans direct music output while retaining monitor preference', async () =>
+  withJournal(async (path) => {
+    const store = new MusicStore(`${path}.music`);
+    await store.load();
+    await store.update((state) => {
+      state.sources.bgm = 'bgm';
+      state.sources.stinger = 'stinger';
+      state.monitorPreference = true;
+    });
+    const modes: Record<string, string> = {
+      bgm: 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
+      stinger: 'OBS_MONITORING_TYPE_MONITOR_ONLY',
+    };
+    const obs: ObsRpc = {
+      async call(type, data) {
+        if (type === 'GetSceneCollectionList')
+          return { currentSceneCollectionName: OBS_COLLECTION };
+        if (type === 'GetInputList')
+          return {
+            inputs: [
+              { inputUuid: 'bgm', inputName: '音乐', inputKind: 'ffmpeg_source' },
+              { inputUuid: 'stinger', inputName: '音效', inputKind: 'ffmpeg_source' },
+            ],
+          };
+        if (type === 'GetInputAudioMonitorType')
+          return { monitorType: modes[data?.inputUuid as string] };
+        throw new Error(`Unexpected write: ${type}`);
+      },
+    };
+    const director = new MusicDirector(store, {} as never, () => {
+      throw new Error('unexpected truth');
+    });
+    await director.prepareDesktopMix(obs, 'unknown', async (plan) => {
+      assert.deepEqual(
+        plan.changes.map((change) => change.applied),
+        ['OBS_MONITORING_TYPE_NONE', 'OBS_MONITORING_TYPE_NONE'],
+      );
+      assert.equal(plan.musicAfter.bgm?.mode, 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT');
+      assert.equal(plan.musicAfter.stinger?.mode, 'OBS_MONITORING_TYPE_MONITOR_ONLY');
+      await director.commitDesktopMonitorOriginals(plan.musicBefore, plan.musicAfter, 'after');
+    });
+    assert.equal(store.state.monitorPreference, true);
+    modes.bgm = modes.stinger = 'OBS_MONITORING_TYPE_NONE';
+    await director.prepareDesktopMix(obs, 'independent', async (plan) => {
+      assert.deepEqual(
+        plan.changes.map((change) => change.applied),
+        ['OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT', 'OBS_MONITORING_TYPE_MONITOR_ONLY'],
+      );
+      await director.commitDesktopMonitorOriginals(plan.musicBefore, plan.musicAfter, 'after');
+    });
+    assert.deepEqual(store.state.desktopMonitorOriginal, { bgm: null, stinger: null });
+  }));

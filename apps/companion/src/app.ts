@@ -1221,7 +1221,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         )
           throw new Error('audio_binding_changed');
         const relation = await desktopMonitorRelationship(obs, binding.inputUuid);
-        if (relation === 'unknown') throw new Error('audio_monitor_device_unknown');
+        if (relation === 'unknown') return null;
         return relation === 'same';
       },
       () => obsAudioRouting?.modePending() ?? Promise.resolve(false),

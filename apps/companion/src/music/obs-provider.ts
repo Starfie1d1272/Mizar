@@ -148,6 +148,7 @@ export async function ownedMusicInput(
   valid: () => boolean,
   attach = true,
   preservePlayback = false,
+  renameLegacy = true,
 ) {
   const assertCurrent = () => {
     if (!valid()) throw new Error('music_cancelled');
@@ -166,7 +167,7 @@ export async function ownedMusicInput(
   const expected = store.state.sources[layer];
   const found = expected ? inputs.find((i) => i.inputUuid === expected) : undefined;
   let name = found?.inputName ?? baseName;
-  if (found?.inputName === legacyName && found.inputKind === 'ffmpeg_source') {
+  if (renameLegacy && found?.inputName === legacyName && found.inputKind === 'ffmpeg_source') {
     const [stream, record] = await Promise.all([
       obs.call('GetStreamStatus'),
       obs.call('GetRecordStatus'),
