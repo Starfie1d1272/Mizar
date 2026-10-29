@@ -39,3 +39,25 @@ export function downloadHudPresetFile(preset: HudPreset, layout: HudLayout, them
     window.setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 }
+
+export async function downloadLhmHud(activeRevision: string): Promise<void> {
+  const response = await fetch('/operator/hud-config/export-lhm', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ expectedActiveRevision: activeRevision }),
+  });
+  if (response.status === 409) throw new Error('播出配置已更新，请重试。');
+  if (!response.ok) throw new Error('HUD 导出失败，请检查本地服务和资源。');
+  const url = URL.createObjectURL(await response.blob());
+  try {
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'mizar-hud.zip';
+    link.hidden = true;
+    document.body.append(link);
+    link.click();
+    link.remove();
+  } finally {
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+}

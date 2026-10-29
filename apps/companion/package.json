@@ -23,6 +23,7 @@
     "@mizar/telemetry-gsi": "workspace:*",
     "cs2-c4-damage": "0.1.1",
     "fastify": "catalog:",
+    "fflate": "0.8.3",
     "obs-websocket-js": "5.0.8",
     "sigstore": "5.0.0",
     "socket.io": "4.8.1",

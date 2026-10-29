@@ -324,6 +324,22 @@ export default defineConfig({
   plugins: [
     react(),
     {
+      name: 'mizar-lhm-export-runtime',
+      async closeBundle() {
+        await cp(
+          resolve(import.meta.dirname, '../lhm-export/dist'),
+          resolve(import.meta.dirname, 'dist/lhm-runtime'),
+          { recursive: true },
+        );
+        for (const name of ['LICENSE', 'THIRD-PARTY-NOTICES.md']) {
+          await cp(
+            resolve(repositoryRoot, name),
+            resolve(import.meta.dirname, 'dist/lhm-runtime', name),
+          );
+        }
+      },
+    },
+    {
       name: 'mizar-web-resource-mode',
       async closeBundle() {
         await writeFile(

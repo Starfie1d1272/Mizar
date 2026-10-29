@@ -751,8 +751,15 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     app.get('/local/v1/broadcast-display-config', (_request, reply) =>
       reply.code(503).send({ error: 'broadcast_config_unavailable' }),
     );
+  let waitForBroadcast: (() => Promise<void>) | undefined;
   registerHudConfigRoutes(app, {
     store: hudConfigStore,
+    webRoot: options.webRoot ?? defaultWebRoot(),
+    waitForBroadcast: async () => {
+      await waitForBroadcast?.();
+      if (options.obsConfigPath && getBroadcastMigrationStatus().state !== 'ready')
+        throw new Error('broadcast_config_unavailable');
+    },
     originPolicy: localWebTransport.getOriginPolicy(),
   });
   void app.register(async (scope) => {
@@ -1042,7 +1049,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         : reply.header('cache-control', 'no-store').send(envelope);
     });
   }
-  let waitForBroadcast: (() => Promise<void>) | undefined;
   const production = registerProductionRoutes(app, {
     originPolicy: localWebTransport.getOriginPolicy(),
     hasContext: () =>
