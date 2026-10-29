@@ -101,6 +101,7 @@ export function PreparationPage() {
   );
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const [entering, setEntering] = useState(false);
   const [demoOpen, setDemoOpen] = useState(() =>
     new URLSearchParams(window.location.search).has('demoTest'),
   );
@@ -191,9 +192,23 @@ export function PreparationPage() {
           <Button
             variant={match ? 'primary' : 'secondary'}
             disabled={busy || Boolean(exit?.busy) || !production?.canEnter}
-            onClick={() => production && void action(() => productionAction('enter', production))}
+            onClick={() =>
+              production &&
+              void action(async () => {
+                setEntering(true);
+                try {
+                  await productionAction('enter', production);
+                } finally {
+                  setEntering(false);
+                }
+              })
+            }
           >
-            打开直播工作台
+            {entering
+              ? '正在启动 CS2…'
+              : production?.mode === 'hidden'
+                ? '返回工作台'
+                : '启动并进入工作台'}
           </Button>
         </header>
         {path === '/' && production?.mode === 'preparation' && window.__TAURI_INTERNALS__ ? (
