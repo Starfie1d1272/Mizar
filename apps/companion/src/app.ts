@@ -22,6 +22,7 @@ import { CameraDirector } from './orchestration/director.js';
 import { MulnxTool } from './orchestration/tool.js';
 import { OrchestrationStore } from './orchestration/store.js';
 import { MulnxProvider } from './orchestration/provider.js';
+import { MulnxProgramClock } from './orchestration/mulnx-clock.js';
 import { registerOrchestrationRoutes } from './orchestration/routes.js';
 import { registerDiagnosticDelivery } from './support/delivery-routes.js';
 import { checkLocalWebOrigin } from './local-web/origin-policy.js';
@@ -803,6 +804,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         );
   let musicDirector: MusicDirector | undefined;
   let cameraDirector: CameraDirector | undefined;
+  let catalogTool: MulnxTool | undefined;
+  let catalogToolLoaded = false;
+  let mulnxClock: MulnxProgramClock | undefined;
+  let mulnxClockState = '';
   const bpPresentationSettings = new BpPresentationSettings(
     options.obsConfigPath
       ? join(dirname(options.obsConfigPath), 'bp-presentation.json')
@@ -1269,9 +1274,13 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           cameraEvidence,
         )
       : undefined;
+    catalogTool = mulnxTool;
+    const mulnxProvider = new MulnxProvider(cameraEvidence);
+    mulnxClock = new MulnxProgramClock(mulnxProvider);
+    app.addHook('onClose', () => mulnxClock?.close());
     cameraDirector = new CameraDirector(
       cameraStore,
-      new MulnxProvider(cameraEvidence),
+      mulnxProvider,
       () => ({
         program: projectionCoordinator.getCurrent().program,
         active: sceneController.get().active,
@@ -1288,9 +1297,14 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       options.productRuntime !== undefined,
     );
     app.addHook('onReady', async () => {
-      await mulnxTool
-        ?.load()
-        .catch((error) => app.log.error({ stage: 'mulnx_load', err: error }, 'MulNX 加载失败'));
+      if (mulnxTool) {
+        try {
+          await mulnxTool.load();
+          catalogToolLoaded = true;
+        } catch (error) {
+          app.log.error({ stage: 'mulnx_load', err: error }, 'MulNX 加载失败');
+        }
+      }
       await cameraStore
         .load()
         .catch((error) =>
@@ -1328,11 +1342,38 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       mulnxTool,
     );
   }
+  app.get('/local/v1/resource-library', (request, reply) => {
+    const policy = localWebTransport.getOriginPolicy();
+    if (
+      policy.mode !== 'loopback' ||
+      !['127.0.0.1', 'localhost', '[::1]', '::1'].includes(request.hostname) ||
+      request.headers['sec-fetch-site'] === 'cross-site' ||
+      (request.headers.origin && !checkLocalWebOrigin(policy, request.headers.origin).allowed)
+    )
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    const tool = catalogToolLoaded ? catalogTool?.view() : undefined;
+    return reply.header('cache-control', 'no-store').send({
+      resources: resources?.list() ?? null,
+      tool: tool
+        ? {
+            installed: tool.installed,
+            latest: tool.latest,
+            busy: tool.busy,
+            packs: tool.packs.map((pack) => pack.sourceName),
+          }
+        : null,
+    });
+  });
   sceneController.attachDirector(director);
   const directorTimer = setInterval(() => {
     void director.tick().catch(() => director.hold());
     void musicDirector?.tick();
     cameraDirector?.tick();
+    const clockState = mulnxClock?.current(performance.now()).state;
+    if (clockState && clockState !== mulnxClockState) {
+      mulnxClockState = clockState;
+      sessionJournal?.record('program_clock', { state: clockState });
+    }
     if (gameAudio) {
       const projection = projectionCoordinator.getCurrent();
       gameAudio.tick(
@@ -1445,7 +1486,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       const program = projectionCoordinator.getCurrent().program;
       const currentMap = program.map.name ? musicMapKey(program) : undefined;
       waitingObserverMap =
-        observerSettings.mapConnection?.nextMap && currentMap && currentMap === confirmedObserverMap
+        observerSettings.mapConnection?.nextMap &&
+        currentMap &&
+        (currentMap === confirmedObserverMap || program.map.phase === 'gameover')
           ? currentMap
           : undefined;
       confirmedObserverMap = currentMap;

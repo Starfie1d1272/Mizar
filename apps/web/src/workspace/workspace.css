@@ -334,7 +334,7 @@
 .workspace-dock > .workspace-direction {
   background: var(--mizar-bg-canvas);
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) calc(var(--mizar-layout-target) * 2);
+  grid-template-rows: auto auto minmax(0, 1fr);
 }
 .workspace-next-preview {
   display: flex;
@@ -348,6 +348,7 @@
   height: 100%;
   width: auto;
   max-width: 50%;
+  max-height: calc(var(--mizar-layout-target) * 2);
   flex: none;
 }
 .workspace-next-preview > div:last-child {
@@ -506,6 +507,7 @@
   color: var(--mizar-fg-on-accent);
   background: var(--mizar-action-danger);
   border-color: var(--mizar-action-danger);
+  margin: 3px;
 }
 .workspace-exit.mizar-button:hover:not(:disabled) {
   background: var(--mizar-action-danger-hover);
@@ -737,4 +739,106 @@
 }
 .workspace-roster-capture ul {
   padding-left: var(--mizar-layout-padding);
+}
+
+/* The native windows use CSS pixels supplied by the display scale. */
+.workspace-dock,
+.workspace-dock[data-camera='false'] {
+  grid-template-columns: minmax(340px, 2fr) minmax(220px, 1fr) minmax(220px, 1fr);
+  overflow: auto;
+}
+.workspace-dock > .workspace-spectator,
+.workspace-dock > .workspace-production {
+  justify-content: flex-start;
+}
+.workspace-camera-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.workspace-camera-summary {
+  display: flex;
+}
+.workspace-camera-controls > .music-controls__track {
+  height: auto;
+  flex-basis: 100%;
+}
+.workspace-secondary {
+  position: relative;
+}
+.workspace-secondary > summary {
+  min-height: var(--mizar-layout-target);
+  padding-block: calc(var(--mizar-layout-compact) / 2);
+  box-sizing: border-box;
+  cursor: pointer;
+  color: var(--mizar-fg-secondary);
+}
+.workspace-secondary[open] {
+  z-index: 5;
+  background: var(--mizar-bg-surface);
+}
+.workspace-left {
+  overflow-y: auto;
+}
+@media (max-width: 1000px) {
+  .workspace-dock {
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+  .workspace-dock > section {
+    padding: var(--mizar-layout-compact);
+  }
+}
+
+@media (max-height: 200px) {
+  .workspace-dock > .workspace-direction {
+    grid-template-rows: auto auto minmax(0, 1fr);
+    gap: 2px;
+  }
+  .workspace-next-preview .preparation-program-preview {
+    max-height: 36px;
+  }
+  .workspace-next-preview .mizar-field {
+    max-width: 150px;
+  }
+  .workspace-spectator,
+  .workspace-production {
+    overflow-y: auto;
+  }
+}
+
+@media (max-height: 200px) {
+  .workspace-dock,
+  .workspace-dock[data-camera='false'] {
+    grid-template-rows: minmax(0, 1fr) calc(
+        var(--mizar-layout-target) + var(--mizar-layout-compact)
+      );
+  }
+  .workspace-spectator .workspace-section-heading > small {
+    flex-basis: auto;
+  }
+  .workspace-next-preview .mizar-field {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    max-width: none;
+  }
+  .workspace-next-preview .mizar-field label {
+    white-space: nowrap;
+  }
+  .workspace-next-preview .mizar-field select {
+    width: auto;
+  }
+}
+
+@media (max-height: 200px) {
+  .workspace-dock > section {
+    padding: calc(var(--mizar-layout-compact) / 2);
+    gap: 2px;
+  }
+  .workspace-camera-controls > .music-controls__track {
+    flex-basis: auto;
+  }
+  .workspace-message {
+    padding-inline: var(--mizar-layout-compact);
+  }
 }

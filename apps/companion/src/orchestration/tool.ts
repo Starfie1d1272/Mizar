@@ -139,7 +139,13 @@ export class MulnxTool {
       return this.view();
     });
   }
-  prepare(cs2Path: string, consoleCapture = false, update = false, spectatorCfg = false) {
+  prepare(
+    cs2Path: string,
+    consoleCapture = false,
+    update = false,
+    spectatorCfg = false,
+    demoCfg?: string,
+  ) {
     return this.run('mulnx_prepare', async () => {
       // Called only by the authenticated native host after its process and install checks.
       // Entry uses prepared local bytes. The explicit update action owns network discovery.
@@ -181,7 +187,7 @@ export class MulnxTool {
       )
         await this.install(release, cs2Path);
       const root = join(this.directory, this.installed!.directory, 'MulNX');
-      await this.configureLauncher(root, cs2Path, consoleCapture, spectatorCfg);
+      await this.configureLauncher(root, cs2Path, consoleCapture, spectatorCfg, demoCfg);
       const launcher = await safePath(root, 'CS2Injector/CS2Injector.exe');
       return { launcher, version: this.installed!.release.tag };
     });
@@ -235,6 +241,7 @@ export class MulnxTool {
     cs2Path: string,
     consoleCapture = false,
     spectatorCfg = false,
+    demoCfg?: string,
   ) {
     await this.configureReflection(root, 'Config/CS2OBTool_Refl.yaml', 'UISystem.ifDrawMid');
     await this.configureReflection(
@@ -302,6 +309,7 @@ export class MulnxTool {
       !/(?:^|\s)\+exec\s+(?:"mizar_observer\.cfg"|mizar_observer\.cfg)(?=\s|$)/i.test(options)
     )
       options = `${options} +exec mizar_observer.cfg`.trim();
+    if (demoCfg) options = `${options} +exec ${demoCfg}`.trim();
     const baselineOptions = launchOptionsValue(baseline);
     const managedLine =
       options === baselineOptions ? originalLine : `launchOptions: ${JSON.stringify(options)}`;
