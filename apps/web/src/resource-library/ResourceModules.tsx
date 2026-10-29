@@ -65,10 +65,19 @@ export function ResourceModules({
     ) ?? [];
   const item = directory?.modules.find(({ module }) => module.id === selected);
   const module = item?.module;
-  const references =
-    snapshot?.presets.filter((preset) =>
-      preset.bindings.some((binding) => binding.mode === 'use' && binding.moduleId === module?.id),
-    ) ?? [];
+  const referenceView = useLocalRead<{
+    moduleId: string;
+    revision: string;
+    active: boolean;
+    presets: { id: string; name: string; revision: string }[];
+  }>(
+    selected ? `/local/v1/broadcast-modules/${encodeURIComponent(selected)}/references` : null,
+    2000,
+    refresh,
+  );
+  const referencesReady =
+    !!module && referenceView?.moduleId === module.id && referenceView.revision === module.revision;
+  const references = referencesReady ? referenceView.presets : [];
   async function perform(path: string, body: unknown, message: string, filename?: string) {
     setBusy(true);
     setNotice(null);
@@ -309,7 +318,9 @@ export function ResourceModules({
                 {!builtin && (
                   <details>
                     <summary>删除资源</summary>
-                    {snapshot?.active.sourceModuleIds?.[entry.kind] === entry.id ? (
+                    {!referencesReady ? (
+                      <p>正在检查方案引用，请等待；若持续不可用，请检查本地制播服务。</p>
+                    ) : referenceView.active ? (
                       <p>请先使用同类替代资源，再删除此资源。</p>
                     ) : (
                       <>
