@@ -143,6 +143,7 @@ import { registerStaticHost } from './local-web/static-host.js';
 import { registerOperatorCommandRoutes } from './operator/controller.js';
 import { registerHudConfigRoutes } from './hud-config/controller.js';
 import { HudConfigStore } from './hud-config/store.js';
+import { startLhmHost } from './hud-compat/host.js';
 import {
   createLocalWebSocketTransport,
   registerLocalWebSocketTransport,
@@ -150,6 +151,11 @@ import {
 } from './local-web/websocket-transport.js';
 
 export interface CompanionAppOptions {
+  readonly lhmHost?: {
+    readonly root: string;
+    readonly port: number;
+    readonly config?: Record<string, unknown>;
+  };
   readonly resources?: {
     readonly root: string;
     readonly required?: boolean;
@@ -2075,7 +2081,17 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         : null,
   });
 
+  let lhmHost: Awaited<ReturnType<typeof startLhmHost>> | undefined;
+  if (options.lhmHost) {
+    const hostOptions = options.lhmHost;
+    app.addHook('onReady', async () => {
+      lhmHost = await startLhmHost({ ...hostOptions, projections: projectionCoordinator });
+      app.log.info({ url: lhmHost.url }, 'LHM 展示宿主正在监听');
+    });
+  }
+
   app.addHook('onClose', async () => {
+    await lhmHost?.close();
     clearInterval(performanceTimer);
     clearInterval(contextTimer);
     recordPerformanceWindow('close');
