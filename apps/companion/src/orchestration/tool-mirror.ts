@@ -121,7 +121,9 @@ export async function mirrorNotice(
   const box = new BoxSource();
   const expected = index.notices[name];
   const bytes = await boundedBytes(
-    await updateRequest(await box.link(filePath(index, name), signal), signal),
+    await updateRequest(await box.link(filePath(index, name), signal), signal, undefined, {
+      allowCompressedBoxText: true,
+    }),
     expected.size,
   );
   if (

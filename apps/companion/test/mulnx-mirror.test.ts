@@ -26,7 +26,7 @@ vi.mock('@mizar/resource-pack-contract/attestation', async (original) => {
       }),
   };
 });
-import { readMulnxMirror } from '../src/orchestration/tool-mirror.js';
+import { mirrorNotice, readMulnxMirror } from '../src/orchestration/tool-mirror.js';
 const sha = 'a'.repeat(64),
   sourceSha = 'b'.repeat(40);
 function makeEnvelope(path = '.github/workflows/mulnx-sync.yml', tamper = false) {
@@ -98,4 +98,11 @@ it('accepts only the dedicated workflow subject and rejects a changed index', as
   await expect(readMulnxMirror('/tmp/mizar-test-trust')).rejects.toThrow();
   state.envelope = makeEnvelope(undefined, true);
   await expect(readMulnxMirror('/tmp/mizar-test-trust')).rejects.toThrow();
+});
+
+it('rejects notice bytes that do not match the authenticated snapshot', async () => {
+  state.envelope = makeEnvelope();
+  const index = await readMulnxMirror('/tmp/mizar-test-trust');
+  state.envelope = 'x';
+  await expect(mirrorNotice(index, 'LICENSE.txt')).rejects.toThrow('mulnx_mirror_notice_integrity');
 });
