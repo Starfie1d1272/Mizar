@@ -476,13 +476,18 @@ export class BroadcastConfigStore {
           const oldIds = result.moduleEntries[entryId] ?? [];
           for (const incomingId of incomingIds) {
             const owner = owners.get(incomingId) ?? null;
-            const prior = oldIds.find((id) => (result.moduleOwners?.[id] ?? null) === owner);
-            const live = prior && next.document.modules.find((item) => item.id === prior);
+            // A standalone selection may reuse any live copy of the selected entry.
+            // Scheme-owned selections still require their own independently editable copy.
+            const live = next.document.modules.find(
+              (item) =>
+                oldIds.includes(item.id) &&
+                (owner === null || (result.moduleOwners?.[item.id] ?? null) === owner),
+            );
             if (live) {
               substitutions.set(incomingId, live.id);
-              result.moduleOwners[live.id] = owner;
               continue;
             }
+            const prior = oldIds.find((id) => (result.moduleOwners?.[id] ?? null) === owner);
             const module = input.modules.find((item) => item.id === incomingId)!;
             if (
               isBuiltinModuleId(module.id) ||

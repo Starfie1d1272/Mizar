@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
+import type { ResourceRef } from '@mizar/broadcast-config';
 import Fastify from 'fastify';
 import { createLocalWebOriginPolicy } from '../../src/local-web/origin-policy.js';
 import {
@@ -28,6 +29,18 @@ import {
   inspectPresetPack,
 } from '../../src/broadcast-config/preset-pack.js';
 import { createProductionBroadcastDependencies } from '../../src/broadcast-config/production.js';
+
+class PausedPackResources extends MusicPackResources {
+  pause: (() => Promise<void>) | undefined;
+  override async installAndCommit<T>(
+    zip: Buffer,
+    commit: (ref: ResourceRef) => Promise<T>,
+    allowRepair?: (ref: ResourceRef) => boolean,
+  ): Promise<T> {
+    await this.pause?.();
+    return super.installAndCommit(zip, commit, allowRepair);
+  }
+}
 
 it('reads the exact package version when file IDs coincide', async () => {
   const root = await mkdtemp(join(tmpdir(), 'broadcast-image-identity-'));
@@ -176,7 +189,7 @@ it('round trips real music owner configuration to independent drafts without act
       withApplyGuard: (operation) => operation(() => true),
     });
     await store.load();
-    const resources = new MusicPackResources(join(root, 'packages'));
+    const resources = new PausedPackResources(join(root, 'packages'));
     const packageId = randomUUID();
     const zip = await exportMusicPack(music, resources, musicModule, {
       packageId,
@@ -329,6 +342,26 @@ it('round trips real music owner configuration to independent drafts without act
           ]);
           const importedId = partial.json().mapping.moduleEntries['module-1'][0] as string;
           const imported = store.snapshot.modules.find((item) => item.id === importedId)!;
+          let enter!: () => void, release!: () => void;
+          const entered = new Promise<void>((resolve) => {
+            enter = resolve;
+          });
+          const proceed = new Promise<void>((resolve) => {
+            release = resolve;
+          });
+          resources.pause = async () => {
+            enter();
+            await proceed;
+          };
+          const pending = Promise.resolve(
+            app.inject({
+              method: 'POST',
+              url: `/operator/resource-library/import-pack?${query}`,
+              headers,
+              payload: mixed,
+            }),
+          );
+          await entered;
           await store.deleteModule(imported.id, imported.revision);
           const removed = await app.inject({
             method: 'POST',
@@ -337,14 +370,16 @@ it('round trips real music owner configuration to independent drafts without act
             payload: mixed,
           });
           expect(removed.json().entries[0].status).toBe('removed');
-          const restored = await app.inject({
-            method: 'POST',
-            url: `/operator/resource-library/import-pack?${query}`,
-            headers,
-            payload: mixed,
-          });
+          resources.pause = undefined;
+          release();
+          const restored = await pending;
+          expect(restored.statusCode).toBe(200);
           expect(restored.json().entries[0].result).toBe('imported');
           expect(restored.json().mapping.moduleEntries['module-1'][0]).not.toBe(importedId);
+          const restoredId = restored.json().mapping.moduleEntries['module-1'][0] as string;
+          expect(
+            store.snapshot.modules.find((item) => item.id === restoredId)?.origin?.entryId,
+          ).toBe('module-1');
           query.set('digest', '0'.repeat(64));
           expect(
             (
