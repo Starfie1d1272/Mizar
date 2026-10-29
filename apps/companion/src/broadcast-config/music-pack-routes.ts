@@ -86,13 +86,20 @@ export function registerMusicPackRoutes(
       if (!ready()) return reply.code(503).send({ error: 'broadcast_config_unavailable' });
       try {
         if (!Buffer.isBuffer(request.body)) throw new Error('package_invalid');
-        const { prepare: _prepare, ...result } = await inspectPresetPack({
+        const result = await inspectPresetPack({
           zip: request.body,
           store,
           ...(availability ? { availability } : {}),
         });
-        return result;
-      } catch {
+        return {
+          source: result.source,
+          name: result.name,
+          dependencies: result.dependencies,
+          entries: result.entries,
+        };
+      } catch (error) {
+        if (error instanceof Error && error.message === 'identity_conflict')
+          return reply.code(409).send({ error: 'identity_conflict' });
         return reply.code(400).send({ error: 'package_invalid' });
       }
     },

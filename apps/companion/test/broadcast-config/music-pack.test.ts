@@ -209,6 +209,7 @@ it('round trips real music owner configuration to independent drafts without act
       });
       expect(importedHttp.statusCode).toBe(200);
       // The same endpoints accept each standalone module without creating a scheme.
+      let liveChecked = false;
       for (const module of initial.modules) {
         const exportedModule = await app.inject({
           method: 'POST',
@@ -223,7 +224,8 @@ it('round trips real music owner configuration to independent drafts without act
         const archive = await readPackArchive(exportedModule.rawPayload);
         expect(archive.manifest.modules.map((item) => item.module)).toEqual([module.kind]);
         expect(archive.manifest.presets).toHaveLength(0);
-        if (module.kind === 'hud') {
+        if (module.kind === 'hud' && !liveChecked) {
+          liveChecked = true;
           const manifest = structuredClone(archive.manifest);
           manifest.packageId = randomUUID();
           manifest.modules.push({ ...manifest.modules[0]!, entryId: 'future', module: 'future' });
@@ -242,6 +244,16 @@ it('round trips real music owner configuration to independent drafts without act
             payload: mixed,
           });
           expect(checked.statusCode).toBe(200);
+          const address = await app.listen({ host: '127.0.0.1', port: 0 });
+          const liveCheck = await fetch(`${address}/operator/resource-library/check-pack`, {
+            method: 'POST',
+            headers,
+            body: new Blob([new Uint8Array(mixed)]),
+          });
+          expect(liveCheck.status).toBe(200);
+          expect(((await liveCheck.json()) as { source: { digest: string } }).source.digest).toBe(
+            checked.json().source.digest,
+          );
           expect(checked.json().entries.map((entry: { status: string }) => entry.status)).toEqual([
             'ready',
             'unsupported',
@@ -259,6 +271,24 @@ it('round trips real music owner configuration to independent drafts without act
             'imported',
             'unavailable',
           ]);
+          const importedId = partial.json().mapping.moduleEntries['module-1'][0] as string;
+          const imported = store.snapshot.modules.find((item) => item.id === importedId)!;
+          await store.deleteModule(imported.id, imported.revision);
+          const removed = await app.inject({
+            method: 'POST',
+            url: '/operator/resource-library/check-pack',
+            headers,
+            payload: mixed,
+          });
+          expect(removed.json().entries[0].status).toBe('removed');
+          const restored = await app.inject({
+            method: 'POST',
+            url: `/operator/resource-library/import-pack?${query}`,
+            headers,
+            payload: mixed,
+          });
+          expect(restored.json().entries[0].result).toBe('imported');
+          expect(restored.json().mapping.moduleEntries['module-1'][0]).not.toBe(importedId);
           query.set('digest', '0'.repeat(64));
           expect(
             (
@@ -560,7 +590,22 @@ it('round trips real music owner configuration to independent drafts without act
     const sharedArchive = await readPackArchive(presetZip);
     expect(sharedArchive.manifest.presets).toHaveLength(2);
     expect(sharedArchive.manifest.modules).toHaveLength(4);
-    const presetResult = await importPresetPack({ zip: presetZip, store, resources });
+    const presetResult = await importPresetPack({
+      zip: presetZip,
+      store,
+      resources,
+      availability: async (module) => {
+        if (module.kind === 'camera') throw new Error('camera_identity_unavailable');
+      },
+    });
+    expect(presetResult.entries.find((entry) => entry.kind === 'camera')).toMatchObject({
+      status: 'dependency_missing',
+      result: 'imported',
+    });
+    expect(presetResult.entries.find((entry) => entry.type === 'preset')).toMatchObject({
+      status: 'dependency_missing',
+      result: 'imported',
+    });
     expect(Object.values(presetResult.mapping.moduleEntries).every((ids) => ids.length === 2)).toBe(
       true,
     );

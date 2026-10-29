@@ -272,7 +272,10 @@ export async function inspectPresetPack(input: {
           const bytes = file && archive.files.get(file.path);
           if (!file || !bytes) throw new Error('resource_missing');
           const ext = file.path.split('.').at(-1)?.toLowerCase();
-          if (!file.mediaType.startsWith('audio/') && !file.mediaType.startsWith('image/'))
+          if (
+            !file.mediaType.startsWith('audio/') &&
+            !['image/png', 'image/jpeg', 'image/webp'].includes(file.mediaType)
+          )
             throw new Error('capability_unsupported');
           if (
             !(file.mediaType === `audio/${ext}` && audioBytes(file.path, bytes)) &&
@@ -291,7 +294,7 @@ export async function inspectPresetPack(input: {
     },
     supports: () => false,
   });
-  const document = input.store.snapshot;
+  const index = input.store.inspectImport(source);
   const entries = await Promise.all(
     analyzed.entries.map(async (entry) => {
       let status = entry.status;
@@ -306,24 +309,40 @@ export async function inspectPresetPack(input: {
             status = reason === 'capability_unsupported' ? 'unsupported' : 'dependency_missing';
           }
       }
-      const objects = entry.type === 'module' ? document.modules : document.presets;
-      const existing = objects.some(
-        (item) =>
-          item.origin?.entryId === entry.entryId &&
-          resourceKey(item.origin.resource) === resourceKey(source),
-      );
+      const copies =
+        entry.type === 'module'
+          ? (index?.modules[entry.entryId] ?? [])
+          : index?.presets[entry.entryId]
+            ? [index.presets[entry.entryId]!]
+            : [];
+      const existing = copies.some((copy) => copy.state === 'existing');
+      const removed = copies.length > 0 && !existing;
       return {
         ...entry,
-        status: existing && status === 'ready' ? ('existing' as const) : status,
+        status:
+          status === 'ready'
+            ? existing
+              ? ('existing' as const)
+              : removed
+                ? ('removed' as const)
+                : status
+            : status,
+        copies,
         ...(reason ? { reason } : {}),
       };
     }),
   );
   for (const entry of entries)
-    if (entry.type === 'preset' && entry.status === 'ready') {
+    if (entry.type === 'preset' && ['ready', 'existing', 'removed'].includes(entry.status)) {
       const unavailable = entry.dependencies
         .map((id) => entries.find((item) => item.entryId === id))
-        .find((item) => item && item.status !== 'ready' && item.status !== 'existing');
+        .find(
+          (item) =>
+            item &&
+            item.status !== 'ready' &&
+            item.status !== 'existing' &&
+            item.status !== 'removed',
+        );
       if (unavailable) {
         entry.status =
           unavailable.status === 'dependency_missing' ? 'dependency_missing' : 'unsupported';

@@ -83,6 +83,7 @@ export function analyzePackDrafts(input: PackDraftInput): {
   const presets = new Map<string, z.infer<typeof presetTemplate>>();
   const failure = (error: unknown): { status: PackEntryStatus; reason: string } => {
     const reason = error instanceof Error ? error.message : 'package_invalid';
+    if (reason === 'package_budget_exceeded') throw error;
     if (reason === 'capability_unsupported') return { status: 'unsupported', reason };
     if (reason === 'dependency_missing' || reason === 'resource_missing')
       return { status: 'dependency_missing', reason };
