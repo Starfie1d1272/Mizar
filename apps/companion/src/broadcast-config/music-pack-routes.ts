@@ -155,4 +155,73 @@ export function registerMusicPackRoutes(
       }
     },
   );
+  app.post(
+    '/operator/resource-library/export-preset-bundle',
+    { bodyLimit: 32 * 1024 },
+    async (request, reply) => {
+      if (!allowed(request.headers.origin))
+        return reply.code(403).send({ error: 'operator_origin_forbidden' });
+      if (!ready()) return reply.code(503).send({ error: 'broadcast_config_unavailable' });
+      const parsed = z
+        .strictObject({ presets: z.array(presetExportRequest).min(1).max(32) })
+        .safeParse(request.body);
+      if (
+        !parsed.success ||
+        new Set(parsed.data.presets.map((item) => item.presetId)).size !==
+          parsed.data.presets.length
+      )
+        return reply.code(400).send({ error: 'invalid_request' });
+      const document = store.snapshot;
+      try {
+        const selected = parsed.data.presets.map((item) => {
+          const preset = document.presets.find((value) => value.id === item.presetId);
+          if (!preset) throw new Error('preset_missing');
+          if (preset.revision !== item.expectedRevision) throw new Error('revision_conflict');
+          const bound = boundModules(preset, document.modules);
+          for (const [kind, module] of bound)
+            if (module && item.expectedModuleRevisions[kind] !== module.revision)
+              throw new Error('revision_conflict');
+          return { preset, bound };
+        });
+        const zip = await exportPresetPack({
+          document,
+          presetId: selected[0]!.preset.id,
+          presetIds: selected.map((item) => item.preset.id),
+          music,
+          resources,
+          metadata: {
+            packageId: randomUUID(),
+            version: '1.0.0',
+            name: selected.length === 1 ? selected[0]!.preset.name : '播出方案',
+            author: '',
+          },
+        });
+        const current = store.snapshot;
+        if (
+          selected.some(
+            ({ preset, bound }) =>
+              current.presets.find((item) => item.id === preset.id)?.revision !== preset.revision ||
+              [...bound.values()].some(
+                (module) =>
+                  module &&
+                  current.modules.find((item) => item.id === module.id)?.revision !==
+                    module.revision,
+              ),
+          )
+        )
+          throw new Error('revision_conflict');
+        return reply
+          .header('cache-control', 'no-store')
+          .header('content-disposition', 'attachment; filename="broadcast.mizarpack"')
+          .type('application/x-mizarpack')
+          .send(zip);
+      } catch (error) {
+        if (error instanceof Error && error.message === 'revision_conflict')
+          return reply.code(409).send({ error: 'revision_conflict' });
+        if (error instanceof Error && error.message === 'preset_missing')
+          return reply.code(404).send({ error: 'preset_missing' });
+        return reply.code(422).send({ error: 'export_failed' });
+      }
+    },
+  );
 }

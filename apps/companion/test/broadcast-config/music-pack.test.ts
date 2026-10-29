@@ -176,6 +176,81 @@ it('round trips real music owner configuration to independent drafts without act
         payload: presetExport.rawPayload,
       });
       expect(presetImport.statusCode).toBe(200);
+      const copyId = await store.clone({
+        sourceId: originalPreset.id,
+        expectedRevision: originalPreset.revision,
+        expectedModuleRevisions: moduleRevisions,
+        name: '第二套',
+      });
+      const copyDocument = store.snapshot;
+      const copyPreset = copyDocument.presets.find((item) => item.id === copyId.presetId)!;
+      const copyRevisions = Object.fromEntries(
+        copyPreset.bindings.flatMap((binding) =>
+          binding.mode === 'use'
+            ? [
+                [
+                  binding.kind,
+                  copyDocument.modules.find((module) => module.id === binding.moduleId)!.revision,
+                ],
+              ]
+            : [],
+        ),
+      );
+      const bundle = await app.inject({
+        method: 'POST',
+        url: '/operator/resource-library/export-preset-bundle',
+        headers: { origin: 'http://127.0.0.1:3000' },
+        payload: {
+          presets: [
+            {
+              presetId: originalPreset.id,
+              expectedRevision: originalPreset.revision,
+              expectedModuleRevisions: moduleRevisions,
+            },
+            {
+              presetId: copyPreset.id,
+              expectedRevision: copyPreset.revision,
+              expectedModuleRevisions: copyRevisions,
+            },
+          ],
+        },
+      });
+      const staleBundle = await app.inject({
+        method: 'POST',
+        url: '/operator/resource-library/export-preset-bundle',
+        headers: { origin: 'http://127.0.0.1:3000' },
+        payload: {
+          presets: [
+            {
+              presetId: originalPreset.id,
+              expectedRevision: 'stale',
+              expectedModuleRevisions: moduleRevisions,
+            },
+            {
+              presetId: copyPreset.id,
+              expectedRevision: copyPreset.revision,
+              expectedModuleRevisions: copyRevisions,
+            },
+          ],
+        },
+      });
+      expect(staleBundle.statusCode).toBe(409);
+      expect(bundle.statusCode).toBe(200);
+      const bundleContents = await readPackArchive(bundle.rawPayload);
+      expect(bundleContents.manifest.presets).toHaveLength(2);
+      expect(
+        bundleContents.manifest.files.filter((item) => item.mediaType === 'audio/wav'),
+      ).toHaveLength(1);
+      const bundleImport = await importPresetPack({ zip: bundle.rawPayload, store, resources });
+      const firstId = bundleImport.mapping.presetEntries.main!,
+        secondId = bundleImport.mapping.presetEntries['preset-2']!;
+      const importedSchemes = store.snapshot.presets.filter(
+        (item) => item.id === firstId || item.id === secondId,
+      );
+      expect(importedSchemes).toHaveLength(2);
+      expect(importedSchemes[0]!.bindings.find((item) => item.kind === 'music')).not.toEqual(
+        importedSchemes[1]!.bindings.find((item) => item.kind === 'music'),
+      );
       expect(store.snapshot.active).toEqual(before);
     } finally {
       await app.close();
@@ -245,9 +320,17 @@ it('round trips real music owner configuration to independent drafts without act
     cameraModule.value.maps = [
       { ...map, source, openingSound: await portableMusicTrack(music, opening) },
     ];
+    const sharedPreset = {
+      ...structuredClone(schemeDocument.presets[0]!),
+      id: randomUUID(),
+      revision: randomUUID(),
+      name: '共享素材方案',
+    };
+    schemeDocument.presets.push(sharedPreset);
     const presetZip = await exportPresetPack({
       document: schemeDocument,
       presetId: initial.presets[0]!.id,
+      presetIds: [initial.presets[0]!.id, sharedPreset.id],
       music,
       resources,
       metadata: { packageId: randomUUID(), version: '1.0.0', name: '完整方案', author: '' },
@@ -275,7 +358,13 @@ it('round trips real music owner configuration to independent drafts without act
       'capability_unsupported',
     );
     expect(store.snapshot.active).toEqual(before);
+    const sharedArchive = await readPackArchive(presetZip);
+    expect(sharedArchive.manifest.presets).toHaveLength(2);
+    expect(sharedArchive.manifest.modules).toHaveLength(4);
     const presetResult = await importPresetPack({ zip: presetZip, store, resources });
+    expect(Object.values(presetResult.mapping.moduleEntries).every((ids) => ids.length === 2)).toBe(
+      true,
+    );
     const repeated = await importPresetPack({ zip: presetZip, store, resources });
     expect(repeated.reused).toBe(true);
     expect(repeated.mapping).toEqual(presetResult.mapping);
@@ -302,8 +391,13 @@ it('round trips real music owner configuration to independent drafts without act
       metadata: { packageId: randomUUID(), version: '1.0.0', name: '再次分享方案', author: '' },
     });
     const resharedResult = await importPresetPack({ zip: reshared, store, resources });
+    const resharedPreset = store.snapshot.presets.find(
+      (item) => item.id === resharedResult.mapping.presetEntries.main,
+    )!;
+    const resharedBinding = resharedPreset.bindings.find((item) => item.kind === 'camera');
+    if (!resharedBinding || resharedBinding.mode !== 'use') throw new Error('missing camera binding');
     const resharedCamera = store.snapshot.modules.find(
-      (item) => item.id === resharedResult.mapping.moduleEntries.camera![0],
+      (item) => item.id === resharedBinding.moduleId,
     );
     if (!resharedCamera || resharedCamera.kind !== 'camera')
       throw new Error('missing reshared camera');

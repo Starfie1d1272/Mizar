@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { useLocalRead } from '../preparation/client';
-import { Button, Panel, Select, StatusBanner } from '../ui';
+import { Button, Checkbox, Panel, Select, StatusBanner } from '../ui';
 
 type Kind = 'hud' | 'program' | 'music' | 'camera';
 type Module = { id: string; kind: Kind; name: string; revision: string };
@@ -67,6 +67,8 @@ export function BroadcastPresets({ query }: { query: string }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const view = useLocalRead<View>('/local/v1/broadcast-presets', 2000, refresh);
   const [busy, setBusy] = useState(false);
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]);
   const [notice, setNotice] = useState<{ tone: 'success' | 'danger'; message: string } | null>(
     null,
   );
@@ -198,6 +200,59 @@ export function BroadcastPresets({ query }: { query: string }) {
       setBusy(false);
     }
   }
+  async function exportSelected() {
+    if (!view || busy || !selected.length) return;
+    const chosen = selected.map((id) => view.presets.find((preset) => preset.id === id));
+    if (chosen.some((preset) => !preset)) {
+      setNotice({ tone: 'danger', message: '方案已变化，请刷新后重新选择。' });
+      return;
+    }
+    const requests = [];
+    for (const preset of chosen) {
+      if (!preset) return;
+      const revisions = moduleRevisions(preset);
+      if (!revisions) return;
+      requests.push({
+        presetId: preset.id,
+        expectedRevision: preset.revision,
+        expectedModuleRevisions: revisions,
+      });
+    }
+    setBusy(true);
+    setNotice(null);
+    try {
+      const response = await fetch('/operator/resource-library/export-preset-bundle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ presets: requests }),
+      });
+      if (!response.ok)
+        throw new Error(
+          response.status === 409
+            ? '配置已变化，请刷新后重新选择。'
+            : '方案暂时无法分享，请检查所需素材和运镜来源。',
+        );
+      const url = URL.createObjectURL(await response.blob());
+      try {
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = '播出方案.mizarpack';
+        link.hidden = true;
+        document.body.append(link);
+        link.click();
+        link.remove();
+      } finally {
+        window.setTimeout(() => URL.revokeObjectURL(url), 0);
+      }
+    } catch (error) {
+      setNotice({
+        tone: 'danger',
+        message: error instanceof Error ? error.message : '分享失败，请重试。',
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
   async function applyPreset(preset: Preset) {
     if (!view || busy) return;
     const revisions = moduleRevisions(preset);
@@ -256,9 +311,25 @@ export function BroadcastPresets({ query }: { query: string }) {
             if (file) void importFile(file);
           }}
         />
-        <Button disabled={!view} loading={busy} onClick={() => fileInput.current?.click()}>
-          导入方案
-        </Button>
+        <div className="resource-library__preset-actions">
+          <Button
+            disabled={!view || busy}
+            onClick={() => {
+              setSelecting((value) => !value);
+              setSelected([]);
+            }}
+          >
+            {selecting ? '取消选择' : '选择多个方案'}
+          </Button>
+          {selecting ? (
+            <Button disabled={busy || !selected.length} onClick={() => void exportSelected()}>
+              分享所选（{selected.length}）
+            </Button>
+          ) : null}
+          <Button disabled={!view} loading={busy} onClick={() => fileInput.current?.click()}>
+            导入方案
+          </Button>
+        </div>
       </div>
       {notice ? <StatusBanner tone={notice.tone}>{notice.message}</StatusBanner> : null}
       {!view ? (
@@ -288,6 +359,19 @@ export function BroadcastPresets({ query }: { query: string }) {
         return (
           <Panel className="resource-library__item resource-library__preset" key={preset.id}>
             <div>
+              {selecting ? (
+                <Checkbox
+                  label={`选择 ${preset.name}`}
+                  disabled={busy || (!selected.includes(preset.id) && selected.length >= 32)}
+                  checked={selected.includes(preset.id)}
+                  onChange={(event) => {
+                    const checked = event.currentTarget.checked;
+                    setSelected((items) =>
+                      checked ? [...items, preset.id] : items.filter((id) => id !== preset.id),
+                    );
+                  }}
+                />
+              ) : null}
               <span className="resource-library__kind">播出方案</span>
               <h2>{preset.name}</h2>
               <p>
