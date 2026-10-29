@@ -477,8 +477,6 @@ test('explicit MulNX stop confirms production effects, shows ownership errors, a
     preset,
     automaticEnabled: false,
     ready: true,
-    activePresetId: '00000000-0000-4000-8000-000000000000',
-    presets: [],
     status: {
       control: { mode: 'native', state: 'blocked' },
       connected: false,
