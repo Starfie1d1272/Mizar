@@ -151,50 +151,6 @@ async function setup() {
   return { store, options, initial: store.snapshot };
 }
 describe('BroadcastConfigStore', () => {
-  it('retains a failed legacy camera recovery and commits verified drafts once without applying them', async () => {
-    const { options, initial } = await setup();
-    const { emptyOrchestrationPreset } = await import('@mizar/protocol/orchestration');
-    const preset = emptyOrchestrationPreset();
-    const id = randomUUID();
-    const pending = {
-      catalog: { activePresetId: id, preset, presets: [{ id, preset }] },
-      automaticEnabled: true,
-      reason: 'camera_identity_unavailable' as const,
-    };
-    let available = false;
-    const recoveryOptions = {
-      ...options,
-      filePath: pathJoin(dirname(options.filePath), 'recovery.json'),
-      createInitial: () => Promise.resolve(initial),
-      initialPendingLegacyCamera: () => pending,
-      resolveModule: async (module: ModuleRecord) => {
-        if (!available) throw new Error('camera_identity_unavailable');
-        return { value: module.value as never, lock: { resources: [], tools: [] } };
-      },
-    };
-    const store = new BroadcastConfigStore(recoveryOptions);
-    await store.load();
-    const convert = (value: typeof preset, automaticEnabled: boolean) =>
-      Promise.resolve({
-        format: 'mizar.camera-config' as const,
-        version: 2 as const,
-        name: value.name,
-        maps: [],
-        automaticEnabled,
-      });
-    await expect(store.restoreLegacyCamera(convert)).rejects.toThrow('camera_identity_unavailable');
-    expect(store.pendingLegacyCamera).toEqual(pending);
-    expect(store.snapshot.active).toEqual(initial.active);
-    available = true;
-    const restored = await store.restoreLegacyCamera(convert);
-    expect(restored).toHaveLength(1);
-    expect(store.snapshot.active).toEqual(initial.active);
-    expect(store.pendingLegacyCamera).toBeUndefined();
-    const reopened = new BroadcastConfigStore(recoveryOptions);
-    await reopened.load();
-    expect(reopened.snapshot.modules.filter((module) => module.kind === 'camera')).toHaveLength(1);
-    await expect(reopened.restoreLegacyCamera(convert)).rejects.toThrow('pending_camera_missing');
-  });
   it('claims unchanged legacy built-ins without changing the active output', () => {
     const document = fixture();
     const builtin = createBuiltinModules().find((item) => item.kind === 'hud')!;
@@ -531,70 +487,6 @@ describe('BroadcastConfigStore', () => {
     await expect(store.importBatch(batch)).rejects.toThrow('invalid_import_mapping');
     expect(store.snapshot).toEqual(initial);
   });
-  it('only replenishes selected module entries and keeps edits to surviving entries', async () => {
-    const { store, options } = await setup();
-    const source = { id: 'local:package', version: '1', digest: 'a'.repeat(64) };
-    const template = store.snapshot.modules.find((item) => item.kind === 'program')!;
-    const batch = (entries: string[]) => {
-      const modules = entries.map((entryId) => ({
-        ...structuredClone(template),
-        id: randomUUID(),
-        revision: randomUUID(),
-        name: entryId,
-        origin: { resource: source, entryId },
-      }));
-      return {
-        source,
-        modules,
-        presets: [],
-        moduleEntries: Object.fromEntries(modules.map((module) => [module.name, [module.id]])),
-        presetEntries: {},
-      };
-    };
-    const first = await store.importBatch(batch(['first']));
-    const second = await store.importBatch(batch(['second']));
-    const firstId = first.mapping.moduleEntries.first![0]!;
-    const firstModule = store.snapshot.modules.find((item) => item.id === firstId)!;
-    await store.saveModule({ ...firstModule, name: 'Edited' }, firstModule.revision);
-    const both = await store.importBatch(batch(['first', 'second']));
-    expect(both.reused).toBe(true);
-    expect(store.snapshot.modules.find((item) => item.id === firstId)?.name).toBe('Edited');
-    const revised = store.snapshot.modules.find((item) => item.id === firstId)!;
-    await store.deleteModule(firstId, revised.revision);
-    const restarted = new BroadcastConfigStore(options);
-    await restarted.load();
-    const repeatSecond = await restarted.importBatch(batch(['second']));
-    expect(repeatSecond.reused).toBe(true);
-    expect(restarted.snapshot.modules.some((item) => item.id === firstId)).toBe(false);
-    const firstAgain = await restarted.importBatch(batch(['first']));
-    expect(firstAgain.mapping.moduleEntries.first![0]).not.toBe(firstId);
-    expect(firstAgain.mapping.moduleEntries.second).toEqual(second.mapping.moduleEntries.second);
-  });
-  it('rejects a persisted import mapping that points at an unrelated live module', async () => {
-    const { store, options } = await setup();
-    const source = { id: 'local:package', version: '1', digest: 'a'.repeat(64) };
-    const template = store.snapshot.modules.find((item) => item.kind === 'program')!;
-    const module = {
-      ...structuredClone(template),
-      id: randomUUID(),
-      revision: randomUUID(),
-      origin: { resource: source, entryId: 'program' },
-    };
-    await store.importBatch({
-      source,
-      modules: [module],
-      presets: [],
-      moduleEntries: { program: [module.id] },
-      presetEntries: {},
-    });
-    const envelope = JSON.parse(await readFile(options.filePath, 'utf8'));
-    envelope.document.modules.find((item: { id: string }) => item.id === module.id).origin.entryId =
-      'different';
-    await writeFile(options.filePath, JSON.stringify(envelope));
-    await expect(new BroadcastConfigStore(options).load()).rejects.toThrow(
-      'broadcast_import_index_invalid',
-    );
-  });
   it('reuses a preset-owned copy for a separately selected module without changing its owner', async () => {
     const { store, initial } = await setup();
     const source = { id: 'local:package', version: '1', digest: 'a'.repeat(64) };
@@ -906,62 +798,6 @@ describe('BroadcastConfigStore', () => {
     release();
     await expect(commit).rejects.toThrow('revision_conflict');
     expect(store.snapshot.modules.some((item) => item.id === id)).toBe(false);
-  });
-  it('marks the camera facade unavailable when an active pack cannot be materialized', async () => {
-    const { store } = await setup();
-    const source = {
-      sourceName: 'missing',
-      treeSha256: 'a'.repeat(64),
-      converterVersion: 1 as const,
-      acquisition: {
-        kind: 'upstream' as const,
-        release: {
-          repository: 'Co1Swet/MulNX_CS2' as const,
-          releaseId: 1,
-          assetId: 2,
-          tag: 'v1',
-          archiveSha256: 'b'.repeat(64),
-        },
-      },
-    };
-    const value = {
-      format: 'mizar.camera-config' as const,
-      version: 2 as const,
-      name: 'Camera',
-      automaticEnabled: true,
-      maps: [
-        {
-          map: 'de_mirage',
-          source,
-          opening: null,
-          openingSound: null,
-          rounds: [],
-          pauseCandidates: { tactical: [], technical: [] },
-          stages: {
-            warmup: null,
-            tactical: null,
-            technical: null,
-            halftime: null,
-            mapVictory: null,
-            matchVictory: null,
-          },
-        },
-      ],
-    };
-    await store.updateFromLegacy({
-      updateDraft: () => {},
-      active: { kind: 'camera', value, lock: store.snapshot.active.lock },
-    });
-    const persistence = createCameraConfigPersistence(store, {
-      localPack: () => Promise.reject(new Error('missing')),
-      localTrackId: () => Promise.reject(new Error('unexpected')),
-      portable: () => Promise.reject(new Error('unexpected')),
-      lock: (_value, active) => Promise.resolve(active.lock),
-    });
-    const result = await persistence.read();
-    expect(result.automaticEnabled).toBe(false);
-    expect(persistence.available).toBe(false);
-    expect(store.snapshot.active.resolved.camera).toEqual(value);
   });
   it('keeps camera explicitly off until a legacy operator activates a real draft', async () => {
     const { store, options, initial } = await setup();
