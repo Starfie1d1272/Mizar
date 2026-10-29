@@ -156,6 +156,12 @@ describe('broadcast preset', () => {
       music: 'am',
       camera: 'ac',
     });
+    expect(next.sourceModuleRevisions).toEqual({
+      hud: 'h1',
+      program: 'p1',
+      music: 'm1',
+      camera: null,
+    });
     expect(document.active.revision).toBe('a1');
   });
   it('does not revise camera when only the acquisition release changes', async () => {

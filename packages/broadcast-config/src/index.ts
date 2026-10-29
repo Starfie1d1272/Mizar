@@ -155,6 +155,7 @@ export interface ActiveBroadcastSnapshot {
   adjusted: boolean;
   moduleRevisions: Record<ModuleKind, Revision>;
   sourceModuleIds?: Partial<Record<ModuleKind, string | null>>;
+  sourceModuleRevisions?: Partial<Record<ModuleKind, Revision | null>>;
   resolved: {
     hud: ResolvedHudModule;
     program: ProgramVisualConfigV1;
@@ -352,6 +353,9 @@ export async function preparePreset(
     moduleRevisions,
     sourceModuleIds: Object.fromEntries(
       MODULE_KINDS.map((kind) => [kind, modules.get(kind)?.id ?? null]),
+    ),
+    sourceModuleRevisions: Object.fromEntries(
+      MODULE_KINDS.map((kind) => [kind, modules.get(kind)?.revision ?? null]),
     ),
     resolved: structuredClone(prepared.resolved),
     lock: structuredClone(prepared.lock),

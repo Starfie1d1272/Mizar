@@ -257,6 +257,14 @@ const snapshot = z.strictObject({
       camera: id.nullable().optional(),
     })
     .optional(),
+  sourceModuleRevisions: z
+    .strictObject({
+      hud: revision.nullable().optional(),
+      program: revision.nullable().optional(),
+      music: revision.nullable().optional(),
+      camera: revision.nullable().optional(),
+    })
+    .optional(),
   moduleRevisions: z.strictObject({
     hud: revision,
     program: revision,

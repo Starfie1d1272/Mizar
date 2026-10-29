@@ -63,6 +63,9 @@
 .resource-library__actions {
   grid-column: 1 / -1;
 }
+.resource-library__preset details {
+  grid-column: auto;
+}
 .resource-library__actions > div {
   display: flex;
   flex-wrap: wrap;

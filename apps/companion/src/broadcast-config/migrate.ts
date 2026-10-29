@@ -175,6 +175,12 @@ export async function migrateLegacyBroadcast(
       music: musicModule.id,
       camera: camera.id,
     },
+    sourceModuleRevisions: {
+      hud: hud.revision,
+      program: programModule.revision,
+      music: musicModule.revision,
+      camera: camera.revision,
+    },
     moduleRevisions: {
       hud: randomUUID(),
       program: randomUUID(),

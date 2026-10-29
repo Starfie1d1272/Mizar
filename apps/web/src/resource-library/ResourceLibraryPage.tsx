@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { BroadcastPresets } from './BroadcastPresets';
 import { HudPackages } from './HudPackages';
 import { MusicPackages } from './MusicPackages';
 import { OperatorShell } from '../operator/OperatorShell';
@@ -63,7 +64,9 @@ export function ResourceLibraryPage() {
     };
   }, []);
   const [query, setQuery] = useState('');
-  const [category, setCategory] = useState<'all' | 'media' | 'tool' | 'music' | 'visual'>('all');
+  const [category, setCategory] = useState<
+    'all' | 'media' | 'tool' | 'music' | 'visual' | 'presets'
+  >('all');
   const [preparedSession, setPreparedSession] = useState<{
     preparedId: string;
     tag: string;
@@ -74,6 +77,7 @@ export function ResourceLibraryPage() {
     matches(resource.packId === 'official:epl-default' ? 'EPL 官方示例 素材' : resource.packId),
   );
   const showMedia = category === 'all' || category === 'media';
+  const showPresets = category === 'all' || category === 'presets';
   const showHud = (category === 'all' || category === 'visual') && matches('HUD 预设 视觉');
   const showMusic = category === 'all' || category === 'music';
   const showTool = (category === 'all' || category === 'tool') && matches('MulNX 运镜 工具');
@@ -83,7 +87,7 @@ export function ResourceLibraryPage() {
         <header className="resource-library__heading">
           <div>
             <h1>资源管理</h1>
-            <p>查看本机素材和运镜工具的版本与状态。</p>
+            <p>查看播出方案、音乐配置、素材和运镜工具。</p>
           </div>
         </header>
         <div className="resource-library__filters">
@@ -98,6 +102,7 @@ export function ResourceLibraryPage() {
             {(
               [
                 ['all', '全部'],
+                ['presets', '播出方案'],
                 ['media', '素材'],
                 ['music', '音乐'],
                 ['visual', '视觉'],
@@ -115,6 +120,7 @@ export function ResourceLibraryPage() {
             ))}
           </div>
         </div>
+        {showPresets ? <BroadcastPresets query={query} /> : null}
         {showMusic ? <MusicPackages query={query} /> : null}
         {showHud ? <HudPackages /> : null}
         {!view ? (
@@ -215,7 +221,8 @@ export function ResourceLibraryPage() {
         !(showMedia && (resources?.length || view.resources === null)) &&
         !showTool &&
         !showMusic &&
-        !showHud ? (
+        !showHud &&
+        !showPresets ? (
           <p>没有找到匹配的资源。</p>
         ) : null}
       </main>
