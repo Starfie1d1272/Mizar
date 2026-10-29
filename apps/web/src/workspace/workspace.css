@@ -805,7 +805,9 @@
 @media (max-height: 200px) {
   .workspace-dock,
   .workspace-dock[data-camera='false'] {
-    grid-template-rows: minmax(0, 1fr) var(--mizar-layout-target);
+    grid-template-rows: minmax(0, 1fr) calc(
+        var(--mizar-layout-target) + var(--mizar-layout-compact)
+      );
   }
   .workspace-spectator .workspace-section-heading > small {
     flex-basis: auto;
@@ -821,5 +823,17 @@
   }
   .workspace-next-preview .mizar-field select {
     width: auto;
+  }
+}
+
+@media (max-height: 200px) {
+  .workspace-dock > section {
+    padding: calc(var(--mizar-layout-compact) / 2);
+  }
+  .workspace-message {
+    padding-inline: var(--mizar-layout-compact);
+  }
+  .workspace-exit {
+    margin: 3px;
   }
 }
