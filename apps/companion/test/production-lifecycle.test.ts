@@ -88,16 +88,40 @@ it('requires only match context, preserves match through hide/resume/finish, and
         })
       ).statusCode,
     ).toBe(200);
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/operator/orchestration',
+          headers,
+          payload: { action: 'set-automatic', enabled: true },
+        })
+      ).statusCode,
+    ).toBe(200);
     const document = (await app.inject('/local/v1/match-document')).json<
       ContextEnvelope<MatchDocumentV1>
     >();
     expect((await send('enter', (await get()).revision)).json()).toMatchObject({ mode: 'live' });
     expect((await send('finish', initial.revision)).statusCode).toBe(409);
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/operator/orchestration',
+          headers,
+          payload: { action: 'hold' },
+        })
+      ).statusCode,
+    ).toBe(200);
     expect((await send('hide', (await get()).revision)).json()).toMatchObject({ mode: 'hidden' });
     expect((await send('enter', (await get()).revision)).json()).toMatchObject({ mode: 'live' });
+    expect((await app.inject('/local/v1/orchestration')).json().status.held).toBe(true);
     expect((await send('finish', (await get()).revision)).json()).toMatchObject({
       mode: 'preparation',
     });
+    expect((await send('enter', (await get()).revision)).statusCode).toBe(200);
+    expect((await app.inject('/local/v1/orchestration')).json().status.held).toBe(false);
+    expect((await send('finish', (await get()).revision)).statusCode).toBe(200);
     expect((await app.inject('/local/v1/match-document')).json()).toEqual(document);
     expect((await app.inject('/local/v1/program-scenes')).json()).toMatchObject({
       active: 'waiting',

@@ -1010,7 +1010,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       matchContextController?.getActiveBinding() !== undefined &&
       matchContextController?.getActiveBinding() != null,
     scenes: sceneController,
-    beforeEnter: () => demoTest?.openFormalBoundary(),
+    beforeEnter: () => {
+      if (cameraDirector?.store.saving) throw new Error('camera_settings_saving');
+      demoTest?.openFormalBoundary();
+    },
+    onEnter: () => cameraDirector?.beginProduction(),
     beforeFinish: () => {
       cameraDirector?.finishProduction();
       observerSettings.endProduction();
@@ -1230,10 +1234,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           production.get().mode !== 'preparation' &&
           !waitingObserverMap &&
           projectionCoordinator.getCurrent().operator.matchContext.origin !== 'fixture',
-        demoAudition:
-          demoTest.get().gameOwnership === 'external'
-            ? demoTest.canUseCamera('audition')
-            : undefined,
+        demoAudition: demoTest.get().active ? demoTest.canUseCamera('audition') : undefined,
       }),
       cameraEvidence,
       undefined,

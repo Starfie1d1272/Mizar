@@ -20,6 +20,7 @@ const expectedSchema = z
   .strict();
 const commandSchema = z.discriminatedUnion('action', [
   z.strictObject({ action: z.literal('check-tool') }),
+  z.strictObject({ action: z.literal('set-automatic'), enabled: z.boolean() }),
   z.strictObject({ action: z.literal('browser'), expectedRevision: z.string().max(128) }),
   z
     .object({
@@ -62,6 +63,7 @@ export function registerOrchestrationRoutes(
     policy.mode === 'loopback' && checkLocalWebOrigin(policy, origin).allowed;
   const view = () => ({
     preset: director.store.preset,
+    automaticEnabled: director.store.automaticEnabled,
     ready: director.store.ready,
     status: director.get(),
     ...(tool ? { tool: tool.view() } : {}),
@@ -162,7 +164,10 @@ export function registerOrchestrationRoutes(
     let checkingTool = false;
     try {
       const body = commandSchema.parse(request.body);
-      if (body.action === 'check-tool') {
+      if (body.action === 'set-automatic') {
+        if (!session?.canPrepare?.()) throw new Error('camera_settings_preparation_required');
+        await director.store.saveAutomaticEnabled(body.enabled);
+      } else if (body.action === 'check-tool') {
         checkingTool = true;
         if (!tool) throw new Error('mulnx_bundle_unavailable');
         await tool.check();
@@ -203,15 +208,17 @@ export function registerOrchestrationRoutes(
           ? error instanceof Error && /^mulnx_metadata_http_(403|429)$/.test(error.message)
             ? '无法检查 MulNX 更新：GitHub 拒绝了请求，可能已达到请求次数限制。请稍后重试。'
             : '无法检查 MulNX 更新，请检查网络后重试。'
-          : error instanceof Error && error.message === 'camera_audition_unavailable'
-            ? '镜头暂不能播放，请先停止当前镜头并检查连接。'
-            : error instanceof Error && error.message === 'camera_pack_apply_unconfirmed'
-              ? '运镜准备失败，请检查游戏连接后重试。'
-              : error instanceof Error && error.message === 'camera_pack_unconfirmed'
-                ? '运镜准备未完成，请检查当前地图和预设后重试。'
-                : error instanceof Error && error.message === 'camera_prepare_unavailable'
-                  ? '暂不能准备运镜，请检查游戏连接和当前地图。'
-                  : '操作未完成，请检查当前地图、连接、预设与本机音频。',
+          : error instanceof Error && error.message === 'camera_settings_preparation_required'
+            ? '请先结束制作，再修改自动运镜设置。'
+            : error instanceof Error && error.message === 'camera_audition_unavailable'
+              ? '镜头暂不能播放，请先停止当前镜头并检查连接。'
+              : error instanceof Error && error.message === 'camera_pack_apply_unconfirmed'
+                ? '运镜准备失败，请检查游戏连接后重试。'
+                : error instanceof Error && error.message === 'camera_pack_unconfirmed'
+                  ? '运镜准备未完成，请检查当前地图和预设后重试。'
+                  : error instanceof Error && error.message === 'camera_prepare_unavailable'
+                    ? '暂不能准备运镜，请检查游戏连接和当前地图。'
+                    : '操作未完成，请检查当前地图、连接、预设与本机音频。',
         requestId: request.id,
       });
     }

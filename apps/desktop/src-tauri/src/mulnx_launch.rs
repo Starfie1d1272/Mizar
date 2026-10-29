@@ -562,6 +562,13 @@ pub fn stop_control(app: &tauri::AppHandle, log: &DesktopLog) -> Result<Value, S
     let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
     let mut cs2 = managed.lock().map_err(|_| "CS2 正忙，请稍后重试。")?;
     if let Some((context, game)) = cs2.pending_mulnx_stop() {
+        let borrowed = cs2.has_external();
+        if borrowed && !cs2.external_matches(&game) {
+            return Err("游戏状态已变化，请检查后重试。".into());
+        }
+        if !borrowed && cs2.workspace_process()?.is_some() {
+            return Err("已有其他游戏，请结束当前工作台后重试。".into());
+        }
         let exited = game.has_exited()?;
         let mut submitted = false;
         if !exited {
@@ -576,12 +583,9 @@ pub fn stop_control(app: &tauri::AppHandle, log: &DesktopLog) -> Result<Value, S
             }
         }
         let observer = crate::observer_workspace::finish(log);
-        let detached = if cs2.has_external() {
-            if !cs2.external_matches(&game) { return Err("游戏状态已变化，请检查后重试。".into()); }
+        let detached = if borrowed {
             // The same borrowed handle may already be invalidated by a failed Demo cleanup.
             cs2.finish()
-        } else if cs2.workspace_process()?.is_some() {
-            return Err("已有其他游戏，请结束当前工作台后重试。".into());
         } else { Ok(()) };
         crate::refresh_finished_window_feedback(app, &cs2);
         drop(cs2);
