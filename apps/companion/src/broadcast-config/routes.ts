@@ -109,6 +109,36 @@ export function registerBroadcastConfigRoutes(
       ),
     });
   });
+  app.get('/local/v1/broadcast-modules/:id/references', (request, reply) => {
+    if (
+      originPolicy.mode !== 'loopback' ||
+      !['127.0.0.1', 'localhost', '[::1]', '::1'].includes(request.hostname) ||
+      request.headers['sec-fetch-site'] === 'cross-site' ||
+      (request.headers.origin && !authorized(request.headers.origin))
+    )
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    if (!isReady()) return reply.code(503).send({ error: 'broadcast_config_unavailable' });
+    const id = z
+      .string()
+      .uuid()
+      .safeParse((request.params as { id?: unknown }).id);
+    if (!id.success) return reply.code(400).send({ error: 'invalid_request' });
+    const document = store.snapshot;
+    const module = document.modules.find((item) => item.id === id.data);
+    if (!module) return reply.code(404).send({ error: 'module_missing' });
+    const presets = document.presets
+      .filter((preset) =>
+        preset.bindings.some((binding) => binding.mode === 'use' && binding.moduleId === module.id),
+      )
+      .map(({ id, name, revision }) => ({ id, name, revision }));
+    const active =
+      Object.values(document.active.sourceModuleIds ?? {}).includes(module.id) ||
+      (document.active.sourceModuleIds?.[module.kind] === undefined &&
+        presets.some((preset) => preset.id === document.active.sourcePreset?.id));
+    return reply
+      .header('cache-control', 'no-store')
+      .send({ moduleId: module.id, revision: module.revision, active, presets });
+  });
   app.get('/local/v1/broadcast-config/pending-camera', (request, reply) => {
     if (
       originPolicy.mode !== 'loopback' ||

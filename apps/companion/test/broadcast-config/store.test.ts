@@ -252,6 +252,28 @@ describe('BroadcastConfigStore', () => {
     );
     await store.save({ preset, expectedPresetRevision: null, modules: [] });
     const current = store.snapshot.presets.find((item) => item.id === preset.id)!;
+    const app = Fastify();
+    registerBroadcastConfigRoutes(app, store, createLocalWebOriginPolicy());
+    try {
+      const references = await app.inject(`/local/v1/broadcast-modules/${copy.id}/references`);
+      expect(references.statusCode).toBe(200);
+      expect(references.json()).toEqual({
+        moduleId: copy.id,
+        revision: copy.revision,
+        active: false,
+        presets: [{ id: current.id, name: current.name, revision: current.revision }],
+      });
+      expect(
+        (
+          await app.inject({
+            url: `/local/v1/broadcast-modules/${copy.id}/references`,
+            headers: { origin: 'https://foreign.test' },
+          })
+        ).statusCode,
+      ).toBe(403);
+    } finally {
+      await app.close();
+    }
     await expect(store.deleteModule(copy.id, copy.revision)).rejects.toThrow('module_referenced');
     await store.deleteModule(copy.id, copy.revision, {
       moduleId: builtin.id,
