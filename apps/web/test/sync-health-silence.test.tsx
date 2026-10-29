@@ -61,7 +61,7 @@ it('silences repeated sync incidents for this match and keeps manual review avai
       .click(),
   );
   const silence = [...element.querySelectorAll('button')].find(
-    (b) => b.textContent === '本场比赛不再自动弹出',
+    (b) => b.textContent === '本场不再弹出提示和警告',
   )!;
   act(() => silence.click());
   expect(localStorage.getItem(SILENCED_MATCH_KEY)).toBe('match-a');

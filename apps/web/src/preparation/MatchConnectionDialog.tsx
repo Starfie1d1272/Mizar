@@ -36,7 +36,6 @@ export function MatchConnectionDialog() {
   const [modeCheck, setModeCheck] = useState(0);
   const [confirmed, setConfirmed] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [mode, setMode] = useState<'connect' | 'seamless'>('connect');
   const [nextMap, setNextMap] = useState(false);
   useEffect(() => {
     const unregister = registerObserverPreparation(
@@ -55,8 +54,7 @@ export function MatchConnectionDialog() {
           }
           draftRevision.current = view.revision;
           mapId.current = crypto.randomUUID();
-          setMode('connect');
-          setNextMap(false);
+          setNextMap(Boolean(view.nextMapRequested));
           pending.current?.resolve(false);
           const next = { view, resolve };
           setSavedView(view);
@@ -69,9 +67,15 @@ export function MatchConnectionDialog() {
     );
     if (
       isReviewWindow() &&
-      new URLSearchParams(window.location.search).get('kind') === 'connection'
+      ['connection', 'next-connection'].includes(
+        new URLSearchParams(window.location.search).get('kind') ?? '',
+      )
     ) {
-      void flushObserverPreparation(false, true).catch((reason: unknown) =>
+      void flushObserverPreparation(
+        false,
+        true,
+        new URLSearchParams(window.location.search).get('kind') === 'next-connection',
+      ).catch((reason: unknown) =>
         setError(reason instanceof Error ? reason.message : '本图连接未读取，请重试。'),
       );
     }
@@ -116,7 +120,7 @@ export function MatchConnectionDialog() {
   };
   let connection: ReturnType<typeof parseObserverConnection> | null = null;
   try {
-    if (mode === 'connect' && input.trim())
+    if (input.trim())
       connection = parseObserverConnection(
         input,
         advanced ? program : undefined,
@@ -131,8 +135,9 @@ export function MatchConnectionDialog() {
     setBusy(true);
     setError('');
     try {
-      if (!input.trim() && !savedView?.connection) throw new Error('请填写本图授权的观战连接。');
-      if (mode === 'connect' && input.trim()) {
+      if (!input.trim() && (nextMap || !savedView?.connection))
+        throw new Error('请填写本图授权的观战连接。');
+      if (input.trim()) {
         if (advanced && (!early.trim() || !program.trim())) throw new Error('请填写两路观战地址。');
       }
       const resultView = saved
@@ -140,10 +145,10 @@ export function MatchConnectionDialog() {
         : ((await command('/operator/observer-assist', {
             action: 'map-connection',
             id: mapId.current,
-            mode,
+            mode: 'connect',
             nextMap,
             expectedRevision: requireConnectionRevision(draftRevision.current),
-            ...(mode === 'connect' && input.trim()
+            ...(input.trim()
               ? {
                   connection: parseObserverConnection(
                     input,
@@ -179,7 +184,7 @@ export function MatchConnectionDialog() {
       setBusy(false);
     }
   };
-  const endpoints = connection ?? savedView?.connection;
+  const endpoints = connection ?? (nextMap ? null : savedView?.connection);
   if (!request && error && isReviewWindow())
     return (
       <div role="alert">
@@ -189,51 +194,39 @@ export function MatchConnectionDialog() {
   return (
     <Dialog
       open={Boolean(request)}
-      title="本图观战连接"
+      title={nextMap ? '下一图 GoTV 连接' : '本图观战连接'}
       className="mizar-surface match-connection-dialog"
       onClose={close}
       canClose={() => !operation.current}
       showCloseButton={false}
     >
       <Field
-        label="本图观战连接"
+        label={nextMap ? '下一图 GoTV 连接' : '本图观战连接'}
         value={input}
         autoComplete="off"
-        disabled={busy || saved || confirmed || mode === 'seamless'}
+        disabled={busy || saved || confirmed}
         onChange={(event) => {
           mapId.current = crypto.randomUUID();
           setInput(event.target.value);
           setCopied(false);
         }}
         placeholder="connect IP:27025;password 密码"
-        message="粘贴本图授权连接；留空可沿用上次确认的地址和密码。"
+        message={
+          nextMap ? '粘贴下一图的 GoTV 连接。' : '粘贴本图 GoTV 连接；留空可沿用本图已确认的连接。'
+        }
       />
-      {request && savedView?.connection ? (
+      {request && savedView?.connection && !request.view.nextMapRequested ? (
         <label>
           <input
             type="checkbox"
-            checked={nextMap || mode === 'seamless'}
-            disabled={busy || saved || confirmed || mode === 'seamless'}
+            checked={nextMap}
+            disabled={busy || saved || confirmed || Boolean(request.view.nextMapRequested)}
             onChange={(event) => {
               mapId.current = crypto.randomUUID();
               setNextMap(event.target.checked);
             }}
           />
           这是下一张地图
-        </label>
-      ) : null}
-      {request && savedView?.connection ? (
-        <label>
-          <input
-            type="checkbox"
-            checked={mode === 'seamless'}
-            disabled={busy || saved || confirmed}
-            onChange={(event) => {
-              mapId.current = crypto.randomUUID();
-              setMode(event.target.checked ? 'seamless' : 'connect');
-            }}
-          />
-          服务器已无缝换图，保持现有连接
         </label>
       ) : null}
       <details
@@ -247,7 +240,7 @@ export function MatchConnectionDialog() {
         <Field
           label="观察辅助 IPv4:端口"
           value={early}
-          disabled={busy || saved || confirmed || mode === 'seamless'}
+          disabled={busy || saved || confirmed}
           onChange={(event) => {
             mapId.current = crypto.randomUUID();
             setEarly(event.target.value);
@@ -256,7 +249,7 @@ export function MatchConnectionDialog() {
         <Field
           label="游戏观战 IPv4:端口"
           value={program}
-          disabled={busy || saved || confirmed || mode === 'seamless'}
+          disabled={busy || saved || confirmed}
           onChange={(event) => {
             mapId.current = crypto.randomUUID();
             setProgram(event.target.value);
@@ -275,7 +268,7 @@ export function MatchConnectionDialog() {
       ) : null}
       {automatic === false ? <p>复制游戏连接命令，在 CS2 控制台执行。</p> : null}
       {automatic === false &&
-      (connection || (mode === 'connect' && !input.trim() && request && savedView?.connection)) ? (
+      (connection || (!nextMap && !input.trim() && request && savedView?.connection)) ? (
         <Button
           disabled={busy}
           onClick={() => {

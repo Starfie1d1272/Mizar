@@ -52,7 +52,7 @@ export function ReviewDialog({
     <Dialog
       {...props}
       modal={!isReviewWindow()}
-      className={`workspace-review-dialog ${props.className ?? ''}`}
+      className={`mizar-surface workspace-review-dialog ${props.className ?? ''}`}
       onClose={() => {
         props.onClose();
         void closeReviewWindow().catch((failure) => setError(String(failure)));

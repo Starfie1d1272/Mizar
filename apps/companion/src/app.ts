@@ -1385,7 +1385,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       const program = projectionCoordinator.getCurrent().program;
       const currentMap = program.map.name ? musicMapKey(program) : undefined;
       waitingObserverMap =
-        observerSettings.mapConnection?.nextMap && currentMap && currentMap === confirmedObserverMap
+        observerSettings.mapConnection?.nextMap &&
+        currentMap &&
+        (currentMap === confirmedObserverMap || program.map.phase === 'gameover')
           ? currentMap
           : undefined;
       confirmedObserverMap = currentMap;
