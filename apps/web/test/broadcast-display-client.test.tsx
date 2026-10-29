@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, expect, it, vi } from 'vitest';
-import { DEFAULT_PLACEMENTS, getBuiltinResolvedPreset } from '@mizar/hud-config';
+import { DEFAULT_PLACEMENTS, getBuiltinResolvedPreset, getBuiltinTheme } from '@mizar/hud-config';
 import {
   useBroadcastDisplayConfig,
   type BroadcastDisplayClientState,
@@ -18,7 +18,7 @@ const projection = {
       pause: { enabled: true, visual: 'default' },
       chat: { enabled: true, placement: DEFAULT_PLACEMENTS['team-t-rail'] },
     },
-    accent: { source: 'fixed', value: '#123456' },
+    accent: { source: 'fixed', value: getBuiltinTheme().brandColor },
   },
   program: {
     scenes: {
