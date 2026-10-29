@@ -52,12 +52,12 @@ export function MatchConnectionControl({ primary = false }: { primary?: boolean 
         }}
       >
         {primary
-          ? runtime?.programCommandQueued && !view?.waitingForMap
+          ? runtime?.programCommandQueued || view?.waitingForMap
             ? '查看本图连接'
             : '填写 GOTV'
           : `本图连接 · ${status}`}
       </Button>
-      {runtime?.programCommandQueued || runtime?.active ? (
+      {!primary && (runtime?.programCommandQueued || runtime?.active) ? (
         <small role="status">
           节目：{runtime.programCommandQueued ? '命令已提交，实际连接请在游戏内核对' : '请手动连接'}
           ； 早源：

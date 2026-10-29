@@ -73,10 +73,12 @@ function ContextPanel({
   operator,
   program,
   programCursor,
+  connectionInRadar,
 }: {
   readonly operator: OperatorPayload | null;
   readonly program: ProgramPayload | null;
   readonly programCursor: ProgramSnapshot['cursor'] | null;
+  readonly connectionInRadar: boolean;
 }) {
   const match = operator?.matchContext.summary;
   const score = workspaceMatchScore(program);
@@ -146,7 +148,7 @@ function ContextPanel({
       </div>
       <div className="workspace-context__actions">
         <Button onClick={() => void openPreparation('/matches')}>比赛资料</Button>
-        <MatchConnectionControl />
+        {!connectionInRadar ? <MatchConnectionControl /> : null}
         {operator?.matchContext.rosterAuthority !== 'rivalhub' ? (
           <>
             <Button onClick={() => setCaptureOpen(true)}>
@@ -309,6 +311,17 @@ function WorkspaceLeftContent() {
       ? plannedMap?.mapName
       : (payload?.runtime.mapName ?? plannedMap?.mapName);
   const artwork = map ? getRadarArtwork(map)?.artwork.overview : null;
+  const interrupted =
+    guidance?.phase !== 'map_end' &&
+    guidance?.phase !== 'match_end' &&
+    payload?.runtime.telemetryFreshness === 'stale' &&
+    !connection?.waitingForMap &&
+    !observer?.programCommandQueued;
+  const connectionInRadar =
+    !liveRadar &&
+    guidance?.phase !== 'match_end' &&
+    (guidance?.phase === 'map_end' || payload?.runtime.telemetryFreshness !== 'fresh') &&
+    !interrupted;
   return (
     <main className="workspace-left mizar-surface" aria-label="现场工作区">
       <div className="workspace-left__top">
@@ -330,42 +343,41 @@ function WorkspaceLeftContent() {
                   <strong>
                     {guidance?.phase === 'match_end'
                       ? '比赛已结束'
-                      : guidance?.phase === 'map_end'
-                        ? plannedMap
-                          ? `准备第 ${plannedMap.mapOrder} 图`
-                          : '准备下一图'
-                        : payload?.runtime.telemetryFreshness === 'fresh'
-                          ? '本图已连接 · 等待雷达画面'
-                          : observer?.programCommandQueued
-                            ? '等待本图数据'
-                            : payload?.runtime.telemetryFreshness === 'stale' &&
-                                !connection?.waitingForMap
-                              ? '游戏数据已中断'
-                              : '等待第一图 GOTV'}
+                      : guidance?.phase === 'map_end' && connection?.waitingForMap
+                        ? '等待本图数据'
+                        : guidance?.phase === 'map_end'
+                          ? plannedMap
+                            ? `准备第 ${plannedMap.mapOrder} 图`
+                            : '准备下一图'
+                          : payload?.runtime.telemetryFreshness === 'fresh'
+                            ? '本图已连接 · 等待雷达画面'
+                            : observer?.programCommandQueued
+                              ? '等待本图数据'
+                              : payload?.runtime.telemetryFreshness === 'stale' &&
+                                  !connection?.waitingForMap
+                                ? '游戏数据已中断'
+                                : '等待第一图 GOTV'}
                   </strong>
                   <p>
                     {guidance?.phase === 'match_end'
                       ? '请核对直播与录像状态'
-                      : guidance?.phase === 'map_end'
-                        ? '填写本图新的 GOTV'
-                        : payload?.runtime.telemetryFreshness === 'fresh'
-                          ? '等待雷达画面更新'
-                          : observer?.programCommandQueued
-                            ? '连接已提交，请等待游戏数据'
-                            : '连接 GOTV 后显示比赛画面'}
+                      : guidance?.phase === 'map_end' && connection?.waitingForMap
+                        ? '连接已提交，请等待游戏数据'
+                        : guidance?.phase === 'map_end'
+                          ? '填写本图新的 GOTV'
+                          : payload?.runtime.telemetryFreshness === 'fresh'
+                            ? '等待雷达画面更新'
+                            : observer?.programCommandQueued
+                              ? '连接已提交，请等待游戏数据'
+                              : '连接 GOTV 后显示比赛画面'}
                   </p>
-                  {guidance?.phase === 'match_end' ||
-                  (guidance?.phase !== 'map_end' &&
-                    payload?.runtime.telemetryFreshness === 'fresh') ? null : payload?.runtime
-                      .telemetryFreshness === 'stale' &&
-                    !connection?.waitingForMap &&
-                    !observer?.programCommandQueued ? (
+                  {interrupted ? (
                     <Button onClick={() => void openPreparation('/settings?tab=gsi')}>
                       检查游戏连接
                     </Button>
-                  ) : (
+                  ) : connectionInRadar ? (
                     <MatchConnectionControl primary />
-                  )}
+                  ) : null}
                 </div>
               </div>
             )}
@@ -376,6 +388,7 @@ function WorkspaceLeftContent() {
           <div className="workspace-left__context">
             <MusicControls compact />
             <ContextPanel
+              connectionInRadar={connectionInRadar}
               operator={payload}
               programCursor={
                 programState.state === 'live' ? (programState.current?.cursor ?? null) : null
