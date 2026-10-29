@@ -44,6 +44,7 @@ const serviceExit = new Promise((resolveExit) =>
   service.once('exit', (code, signal) => resolveExit({ code, signal })),
 );
 let browser;
+let browserExit;
 let socket;
 let failure;
 try {
@@ -70,6 +71,7 @@ try {
     ],
     { stdio: 'ignore' },
   );
+  browserExit = new Promise((resolveExit) => browser.once('exit', resolveExit));
   let browserError;
   browser.once('error', (error) => {
     browserError = error;
@@ -146,7 +148,15 @@ try {
   failure = error;
 } finally {
   socket?.close();
-  if (browser && browser.exitCode === null) browser.kill('SIGKILL');
+  if (browser && browser.exitCode === null && browser.signalCode === null) {
+    browser.kill('SIGTERM');
+    try {
+      await bounded(browserExit, 'Chromium exit');
+    } catch (error) {
+      browser.kill('SIGKILL');
+      failure ??= error;
+    }
+  }
   if (service.exitCode === null) service.kill('SIGTERM');
   const exit = await Promise.race([
     serviceExit,
