@@ -1,4 +1,5 @@
 import { expect, it } from 'vitest';
+import type { BroadcastConfigDocument } from '@mizar/broadcast-config';
 import { buildApp } from '../../src/app.js';
 
 it('reports pending migration without exposing or changing legacy settings', async () => {
@@ -129,6 +130,7 @@ it('boots built-in providers without custom injection when legacy dependencies a
 });
 
 it('preserves the existing music owner state during built-in production migration', async () => {
+  const { randomUUID } = await import('node:crypto');
   const { mkdtemp, readFile, rm } = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
@@ -161,6 +163,32 @@ it('preserves the existing music owner state during built-in production migratio
         moduleRevisions: { music: revision },
         resolved: { music: { groups: { waiting: { tracks: [{ name: 'sample.wav' }] } } } },
       },
+    });
+    const document = presets.json() as BroadcastConfigDocument;
+    const preset = document.presets[0]!;
+    const expectedModuleRevisions = Object.fromEntries(
+      preset.bindings.flatMap((binding) => {
+        if (binding.mode === 'off') return [];
+        const module = document.modules.find((item) => item.id === binding.moduleId)!;
+        return [[binding.kind, module.revision]];
+      }),
+    );
+    const applied = await app.inject({
+      method: 'POST',
+      url: '/operator/broadcast-presets/apply',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: {
+        presetId: preset.id,
+        expectedRevision: preset.revision,
+        expectedModuleRevisions,
+        expectedActiveRevision: document.active.revision,
+        requestId: randomUUID(),
+      },
+    });
+    expect(applied.statusCode).toBe(200);
+    expect(applied.json().moduleRevisions.music).toBe(revision);
+    expect((await app.inject('/local/v1/broadcast-config/migration')).json()).toEqual({
+      state: 'ready',
     });
     expect(await readFile(join(root, 'music', 'state.json'), 'utf8')).toBe(oldState);
     const runtime = JSON.parse(
