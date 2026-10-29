@@ -5,7 +5,11 @@ export {
 } from './program-safe-runtime.js';
 export { projectObserverAssist, ObserverHintTimeline } from './observer-assist.js';
 export { projectProgram, projectSeries } from './program.js';
-export { observedPlayerDisplayName, livePlayerDisplayName } from './player-display-name.js';
+export {
+  observedPlayerDisplayName,
+  livePlayerDisplayName,
+  matchPlayerDisplayName,
+} from './player-display-name.js';
 export { derivePlayerLifeState } from './player-life-state.js';
 export {
   getProjectionIdentityCapabilities,
