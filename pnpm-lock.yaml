@@ -304,6 +304,9 @@ importers:
       '@mizar/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@mizar/cs2-assets':
+        specifier: workspace:*
+        version: link:../../packages/cs2-assets
       '@mizar/hud-config':
         specifier: workspace:*
         version: link:../../packages/hud-config

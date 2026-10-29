@@ -6,6 +6,11 @@ import type { ProjectionCoordinator } from '../projections/projection-coordinato
 import { mapProgramProjection } from '../local-protocol/program-wire.js';
 import { mapRadarFrame } from '../local-protocol/radar-wire.js';
 import { projectLhm } from './projection.js';
+import { loadLhmMaps, type LhmMap } from './maps.js';
+import type { SteamAvatars } from '../media/steam-avatars.js';
+import { readLocalAsset } from '../match-context/local-assets.js';
+import { lhmContext } from './context.js';
+import { panelImageRefs } from './panel.js';
 
 const types: Record<string, string> = {
   '.html': 'text/html',
@@ -25,12 +30,20 @@ const types: Record<string, string> = {
 export async function startLhmHost(options: {
   root: string;
   port: number;
+  webRoot?: string;
+  steamAvatars?: SteamAvatars;
+  localAssetsDirectory?: string;
   projections: ProjectionCoordinator;
   config?: Record<string, unknown>;
 }): Promise<{ url: string; close(): Promise<void> }> {
   if (!Number.isInteger(options.port) || options.port < 1 || options.port > 65535)
     throw new Error('Invalid LHM host port');
   const root = await realpath(options.root);
+  const maps = options.webRoot ? await loadLhmMaps(options.webRoot) : new Map<string, LhmMap>();
+  const panelImages = await panelImageRefs(root, options.config ?? {});
+  let program = mapProgramProjection(options.projections.getCurrent().program);
+  let context = lhmContext(program);
+  let contextKey = JSON.stringify(context && { match: context.match, teams: context.teams });
   let current = projectLhm(
     mapProgramProjection(options.projections.getCurrent().program),
     mapRadarFrame(options.projections.getCurrent().radar),
@@ -54,11 +67,12 @@ export async function startLhmHost(options: {
       json({
         ...(current.available ? { available: true } : current),
         unsupported: [
-          'match',
           'tournament',
-          'avatars',
-          'map-directory',
-          'panel-images',
+          'external-logos-and-avatars',
+          'multi-layer-maps-derived-fallback',
+          ...(maps.has(program.map.name ?? '') ? [] : ['current-map']),
+          ...(context ? [] : ['current-match']),
+          'panel-image-import',
           'camera',
           'grenades',
           'events',
@@ -70,23 +84,114 @@ export async function startLhmHost(options: {
       json({ uuid: null, availablePlayers: [] });
       return;
     }
+    if (url.pathname === '/api/game-maps/cs2') {
+      json(
+        [...maps].map(([name, map]) => ({
+          lhmId: name,
+          name,
+          game: 'cs2',
+          radars: map.radars,
+        })),
+      );
+      return;
+    }
+    if (url.pathname === '/api/radar/maps') {
+      json(
+        Object.fromEntries(
+          [...maps]
+            .filter(([, map]) => map.config !== null)
+            .map(([name, map]) => [
+              name,
+              { config: map.config, file: `/api/game-maps/cs2/image/${name}/radar` },
+            ]),
+        ),
+      );
+      return;
+    }
+    const radarImage = /^\/api\/game-maps\/cs2\/image\/(de_[a-z0-9]+)\/radar$/.exec(url.pathname);
+    if (radarImage) {
+      const map = maps.get(radarImage[1]!);
+      if (!map) {
+        res.writeHead(404).end();
+        return;
+      }
+      res.setHeader('Content-Type', map.mime);
+      res.end(map.bytes);
+      return;
+    }
     if (url.pathname === '/api/match/current') {
-      json(null);
+      json(context?.match ?? null);
       return;
     }
-    if (url.pathname.startsWith('/api/players/avatar/steamid/')) {
-      json({ custom: null, steam: null });
+    const avatar = /^\/api\/players\/avatar\/steamid\/([^/]+)(?:\/(image))?$/.exec(url.pathname);
+    if (avatar) {
+      const player = program.players.find((item) => item.sourcePlayerId === avatar[1]);
+      const filename = /^\/local\/v1\/steam-avatar\/([a-f0-9]{64}\.jpg)$/.exec(
+        player?.avatarUrl ?? '',
+      )?.[1];
+      const bytes = filename ? await options.steamAvatars?.image(filename) : null;
+      if (avatar[2]) {
+        if (!bytes) {
+          res.writeHead(404).end();
+          return;
+        }
+        res.setHeader('Content-Type', 'image/jpeg');
+        res.end(bytes);
+        return;
+      }
+      json({
+        custom: null,
+        steam: bytes ? `/api/players/avatar/steamid/${avatar[1]}/image` : null,
+      });
       return;
     }
-    if (
-      [
-        '/api/players',
-        '/api/teams',
-        '/api/tournament',
-        '/api/game-maps/cs2',
-        '/api/radar/maps',
-      ].includes(url.pathname)
-    ) {
+    const teamLogo = /^\/api\/teams\/logo\/([^/]+)$/.exec(url.pathname);
+    const panelImage = /^\/api\/huds\/mizar\/([\w-]+)\/([\w-]+)$/.exec(url.pathname);
+    if (teamLogo || panelImage) {
+      const ref = teamLogo
+        ? context?.logos.get(teamLogo[1]!)
+        : panelImages.get(`${panelImage![1]}/${panelImage![2]}`);
+      const image =
+        ref && options.localAssetsDirectory
+          ? await readLocalAsset(options.localAssetsDirectory, ref)
+          : null;
+      if (!image) {
+        res.writeHead(404).end();
+        return;
+      }
+      res.setHeader('Content-Type', image.mime);
+      res.end(image.bytes);
+      return;
+    }
+    if (url.pathname === '/api/teams') {
+      json(context?.teams ?? []);
+      return;
+    }
+    const team = /^\/api\/teams\/([^/]+)$/.exec(url.pathname);
+    if (team) {
+      json(context?.teams.find((item) => item._id === team[1]) ?? null);
+      return;
+    }
+    if (url.pathname === '/api/players') {
+      const filter = url.searchParams.get('steamids');
+      const requested = filter === null ? null : new Set(filter.split(';'));
+      json(
+        program.players
+          .filter((player) => requested === null || requested.has(player.sourcePlayerId))
+          .map((player) => ({
+            _id: player.sourcePlayerId,
+            steamid: player.sourcePlayerId,
+            username: player.displayName,
+            firstName: '',
+            lastName: '',
+            avatar: null,
+            country: null,
+            extra: {},
+          })),
+      );
+      return;
+    }
+    if (['/api/tournament'].includes(url.pathname)) {
       json([]);
       return;
     }
@@ -137,14 +242,23 @@ export async function startLhmHost(options: {
   });
   const unsubscribe = options.projections.subscribePresentation((bundle) => {
     const wasAvailable = current.available;
-    current = projectLhm(mapProgramProjection(bundle.program), mapRadarFrame(bundle.radar));
+    program = mapProgramProjection(bundle.program);
+    context = lhmContext(program);
+    const nextContextKey = JSON.stringify(
+      context && { match: context.match, teams: context.teams },
+    );
+    current = projectLhm(program, mapRadarFrame(bundle.radar));
     if (wasAvailable && !current.available) {
       for (const socket of io.sockets.sockets.values())
         if (registered.has(socket.id)) socket.emit('refreshHUD');
     }
     if (current.available)
       for (const socket of io.sockets.sockets.values())
-        if (registered.has(socket.id)) socket.emit('update', current.raw);
+        if (registered.has(socket.id)) {
+          socket.emit('update', current.raw);
+          if (nextContextKey !== contextKey) socket.emit('match');
+        }
+    contextKey = nextContextKey;
   });
   try {
     await new Promise<void>((resolve, reject) => {

@@ -13,6 +13,7 @@
     "@fastify/static": "catalog:",
     "@fastify/websocket": "catalog:",
     "@mizar/core": "workspace:*",
+    "@mizar/cs2-assets": "workspace:*",
     "@mizar/hud-config": "workspace:*",
     "@mizar/protocol": "workspace:*",
     "@mizar/radar": "workspace:*",
