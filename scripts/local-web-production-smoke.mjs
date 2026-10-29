@@ -69,7 +69,7 @@ try {
       `--user-data-dir=${join(temporary, 'browser')}`,
       'about:blank',
     ],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', detached: true },
   );
   browserExit = new Promise((resolveExit) => browser.once('exit', resolveExit));
   let browserError;
@@ -147,16 +147,25 @@ try {
 } catch (error) {
   failure = error;
 } finally {
-  socket?.close();
   if (browser && browser.exitCode === null && browser.signalCode === null) {
-    browser.kill('SIGTERM');
+    if (socket?.readyState === globalThis.WebSocket.OPEN) {
+      socket.send(JSON.stringify({ id: 2147483647, method: 'Browser.close' }));
+    } else browser.kill('SIGTERM');
     try {
       await bounded(browserExit, 'Chromium exit');
     } catch (error) {
-      browser.kill('SIGKILL');
       failure ??= error;
+      try {
+        process.kill(-browser.pid, 'SIGKILL');
+      } catch (killError) {
+        if (killError.code !== 'ESRCH') failure ??= killError;
+      }
+      await bounded(browserExit, 'Chromium forced exit').catch((exitError) => {
+        failure ??= exitError;
+      });
     }
   }
+  socket?.close();
   if (service.exitCode === null) service.kill('SIGTERM');
   const exit = await Promise.race([
     serviceExit,
@@ -165,8 +174,13 @@ try {
   if (!exit) {
     service.kill('SIGKILL');
     failure ??= new Error('Companion did not exit');
+    await bounded(serviceExit, 'Companion forced exit').catch((error) => {
+      failure ??= error;
+    });
   }
-  await rm(temporary, { recursive: true, force: true });
+  await rm(temporary, { recursive: true, force: true }).catch((error) => {
+    console.warn(`Temporary smoke directory retained for runner cleanup: ${error.message}`);
+  });
   if (exit && exit.code !== 0)
     failure ??= new Error(`Companion exit failed: ${JSON.stringify(exit)} ${logs}`);
   if (
