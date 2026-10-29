@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button, StatusBanner } from '../ui';
 import { useLocalRead } from '../preparation/client';
 import { desktopInvoke } from './client';
@@ -9,7 +9,7 @@ import {
 } from '../preparation/observer-preparation';
 
 /** The existing observer owner supplies status; opening a window never starts a connection. */
-export function MatchConnectionControl() {
+export function MatchConnectionControl({ nextMapKey }: { nextMapKey: string | null }) {
   const view = useLocalRead<ConnectionPreparationView>('/local/v1/observer-assist');
   const runtime = useLocalRead<ObserverRuntimeView & { programCommandQueued?: boolean }>(
     '/local/v1/observer',
@@ -26,30 +26,46 @@ export function MatchConnectionControl() {
         : view?.connection
           ? '待连接'
           : '未连接';
+  const nextMapNeeded = Boolean(nextMapKey && !view?.waitingForMap);
+  const open = (next: boolean) => {
+    if (lock.current) return;
+    lock.current = true;
+    setBusy(true);
+    setError('');
+    void (
+      window.__TAURI_INTERNALS__
+        ? desktopInvoke('open_tool', {
+            tool: 'review',
+            presetId: next ? 'next-connection' : 'connection',
+          })
+        : flushObserverPreparation(false, true, next)
+    )
+      .catch((reason: unknown) =>
+        setError(reason instanceof Error ? reason.message : '本图连接未读取，请重试。'),
+      )
+      .finally(() => {
+        lock.current = false;
+        setBusy(false);
+      });
+  };
+  const prompted = useRef<string | null>(null);
+  useEffect(() => {
+    if (
+      !nextMapNeeded ||
+      !nextMapKey ||
+      !view ||
+      busy ||
+      runtime?.pending ||
+      prompted.current === nextMapKey
+    )
+      return;
+    prompted.current = nextMapKey;
+    open(true);
+  }, [nextMapKey, nextMapNeeded, view, busy, runtime?.pending]);
   return (
     <>
-      <Button
-        disabled={busy || runtime?.pending}
-        onClick={() => {
-          if (lock.current) return;
-          lock.current = true;
-          setBusy(true);
-          setError('');
-          void (
-            window.__TAURI_INTERNALS__
-              ? desktopInvoke('open_tool', { tool: 'review', presetId: 'connection' })
-              : flushObserverPreparation(false, true)
-          )
-            .catch((reason: unknown) =>
-              setError(reason instanceof Error ? reason.message : '本图连接未读取，请重试。'),
-            )
-            .finally(() => {
-              lock.current = false;
-              setBusy(false);
-            });
-        }}
-      >
-        本图连接 · {status}
+      <Button disabled={busy || runtime?.pending} onClick={() => open(nextMapNeeded)}>
+        {nextMapNeeded ? '填写下一图 GoTV' : `本图连接 · ${status}`}
       </Button>
       {runtime?.programCommandQueued || runtime?.active ? (
         <small role="status">
