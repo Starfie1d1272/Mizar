@@ -2,6 +2,21 @@ import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseDocument } from 'yaml';
 
+export function validKeyCheckPack(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const key = value as Record<string, unknown>;
+  return (
+    ['usable', 'ctrl', 'shift', 'alt'].every((field) => typeof key[field] === 'boolean') &&
+    ['vkCode', 'comboClick'].every(
+      (field) =>
+        typeof key[field] === 'number' &&
+        Number.isInteger(key[field]) &&
+        key[field] >= -2147483648 &&
+        key[field] <= 2147483647,
+    )
+  );
+}
+
 /** JSON is valid YAML for MulNX; restrict accepted metadata to known safe encodings. */
 export function isolatedMetadata(name: string) {
   return (
@@ -36,7 +51,7 @@ export function verifyIsolatedPack(root: string | undefined, name: string): bool
     const shortcut = value.KCP;
     return (
       value.name === name &&
-      Boolean(shortcut && typeof shortcut === 'object' && !Array.isArray(shortcut)) &&
+      validKeyCheckPack(shortcut) &&
       (shortcut as Record<string, unknown>).usable === false &&
       ['OnNewRound', 'OnRoundStart', 'OnRoundEnd'].every(
         (key) => Array.isArray(value[key]) && value[key].length === 0,
