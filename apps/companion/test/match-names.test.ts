@@ -86,3 +86,84 @@ it('replays after reconnect and clears only sent IDs on roster changes and finis
     '"" 76561198000000002',
   ]);
 });
+
+it('does not claim an unsent UID when the socket closes between requests', async () => {
+  let now = 0;
+  vi.spyOn(Date, 'now').mockImplementation(() => now);
+  const sent: string[] = [];
+  class Socket extends EventTarget {
+    static OPEN = 1;
+    readyState = 0;
+    constructor() {
+      super();
+      queueMicrotask(() => {
+        this.readyState = 1;
+        this.dispatchEvent(new Event('open'));
+      });
+    }
+    send(wire: string) {
+      sent.push((JSON.parse(wire) as { payload: string }).payload);
+      queueMicrotask(() => {
+        this.dispatchEvent(new MessageEvent('message', { data: '已投入消息总线' + wire }));
+        if (sent.length === 1) this.close();
+      });
+    }
+    close() {
+      this.readyState = 3;
+      this.dispatchEvent(new Event('close'));
+    }
+  }
+  vi.stubGlobal('WebSocket', Socket);
+  let entries = new Map([
+    ['76561198000000001', 'First'],
+    ['76561198000000002', 'Second'],
+  ]);
+  const sync = new MatchNameSync(() => ({ session: 'game', names: entries }));
+  await sync.tick();
+  entries = new Map();
+  now = 3001;
+  await sync.tick();
+  await sync.close();
+  expect(sent).toEqual(['"First" 76561198000000001', '"" 76561198000000001']);
+});
+
+it('stops an obsolete batch when the roster changes while awaiting acknowledgement', async () => {
+  const sent: string[] = [];
+  let entries = new Map([
+    ['76561198000000001', 'First'],
+    ['76561198000000002', 'Second'],
+  ]);
+  class Socket extends EventTarget {
+    static OPEN = 1;
+    readyState = 0;
+    constructor() {
+      super();
+      queueMicrotask(() => {
+        this.readyState = 1;
+        this.dispatchEvent(new Event('open'));
+      });
+    }
+    send(wire: string) {
+      sent.push((JSON.parse(wire) as { payload: string }).payload);
+      queueMicrotask(() => {
+        if (sent.length === 1) entries = new Map([['76561198000000003', 'New']]);
+        this.dispatchEvent(new MessageEvent('message', { data: '已投入消息总线' + wire }));
+      });
+    }
+    close() {
+      this.readyState = 3;
+      this.dispatchEvent(new Event('close'));
+    }
+  }
+  vi.stubGlobal('WebSocket', Socket);
+  const sync = new MatchNameSync(() => ({ session: 'game', names: entries }));
+  await sync.tick();
+  expect(sent).toEqual(['"First" 76561198000000001']);
+  await sync.tick();
+  expect(sent).toEqual([
+    '"First" 76561198000000001',
+    '"" 76561198000000001',
+    '"New" 76561198000000003',
+  ]);
+  await sync.close();
+});

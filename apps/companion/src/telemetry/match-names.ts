@@ -69,17 +69,26 @@ export class MatchNameSync {
         this.replay = true;
       }
       const desired = current.names;
+      const intent = JSON.stringify([...desired].sort(([a], [b]) => a.localeCompare(b)));
+      const currentIntent = () => {
+        const latest = this.snapshot();
+        return (
+          latest.session === current.session &&
+          JSON.stringify([...latest.names].sort(([a], [b]) => a.localeCompare(b))) === intent
+        );
+      };
       for (const id of this.owned.keys()) {
         if (desired.has(id)) continue;
-        if (this.snapshot().session !== current.session || !(await this.send(id, ''))) return;
+        if (!currentIntent() || !(await this.send(id, ''))) return;
         this.owned.delete(id);
+        if (!currentIntent()) return;
       }
       for (const [id, name] of desired) {
         if (!this.replay && this.owned.get(id) === name) continue;
-        if (this.snapshot().session !== current.session) return;
+        if (!currentIntent()) return;
         // A lost acknowledgement may still have reached the game; retain the UID for cleanup.
-        this.owned.set(id, name);
-        if (!(await this.send(id, name))) return;
+        if (!(await this.send(id, name, () => this.owned.set(id, name)))) return;
+        if (!currentIntent()) return;
       }
       this.replay = false;
     } finally {
@@ -107,7 +116,7 @@ export class MatchNameSync {
       socket.addEventListener('close', () => finish(false), { once: true });
     });
   }
-  private send(id: string, name: string): Promise<boolean> {
+  private send(id: string, name: string, submitted?: () => void): Promise<boolean> {
     const socket = this.socket;
     if (!socket || socket.readyState !== WebSocket.OPEN) return Promise.resolve(false);
     const wire = nameWire(id, name);
@@ -136,6 +145,7 @@ export class MatchNameSync {
       socket.addEventListener('close', closed);
       try {
         socket.send(wire);
+        submitted?.();
       } catch {
         finish(false);
       }

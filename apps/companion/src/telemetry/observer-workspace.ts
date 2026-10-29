@@ -574,6 +574,7 @@ export function registerWorkspaceObserver(
           !settings ||
           !(
             settings.settings.enabled ||
+            (body.useMulnx && matchNames(binding?.()).size > 0) ||
             (gameControl &&
               (gameControl.autoConnect || (!body.nativeHudToggle && gameControl.hideGameHud)))
           )
