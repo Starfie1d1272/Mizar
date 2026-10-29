@@ -738,3 +738,65 @@
 .workspace-roster-capture ul {
   padding-left: var(--mizar-layout-padding);
 }
+
+/* The native windows use CSS pixels supplied by the display scale. */
+.workspace-dock,
+.workspace-dock[data-camera='false'] {
+  grid-template-columns: minmax(340px, 2fr) minmax(220px, 1fr) minmax(220px, 1fr);
+  overflow: auto;
+}
+.workspace-dock > .workspace-spectator,
+.workspace-dock > .workspace-production {
+  justify-content: flex-start;
+}
+.workspace-camera-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.workspace-camera-summary {
+  display: flex;
+}
+.workspace-camera-controls > .music-controls__track {
+  height: auto;
+  flex-basis: 100%;
+}
+.workspace-secondary {
+  position: relative;
+}
+.workspace-secondary > summary {
+  cursor: pointer;
+  color: var(--mizar-fg-secondary);
+}
+.workspace-secondary[open] {
+  z-index: 5;
+  background: var(--mizar-bg-surface);
+}
+.workspace-left {
+  overflow-y: auto;
+}
+@media (max-width: 1000px) {
+  .workspace-dock {
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+  .workspace-dock > section {
+    padding: var(--mizar-layout-compact);
+  }
+}
+
+@media (max-height: 200px) {
+  .workspace-dock > .workspace-direction {
+    grid-template-rows: auto auto minmax(0, 1fr);
+    gap: 2px;
+  }
+  .workspace-next-preview .preparation-program-preview {
+    max-height: 36px;
+  }
+  .workspace-next-preview .mizar-field {
+    max-width: 150px;
+  }
+  .workspace-spectator,
+  .workspace-production {
+    overflow-y: auto;
+  }
+}
