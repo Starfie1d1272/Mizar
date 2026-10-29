@@ -330,12 +330,15 @@ fn sync_workspace_shell(app: &tauri::AppHandle) {
 }
 
 fn update_overlay(app: &tauri::AppHandle, state: &HostState) {
+    let panels: Vec<isize> = ["workspace-left", "workspace-dock"].iter()
+        .filter_map(|label| app.get_webview_window(label).and_then(|window| window.hwnd().ok()))
+        .map(|hwnd| hwnd.0 as isize).collect();
     let rect = if state.visible.load(Ordering::Relaxed) {
         state
             .tracker
             .lock()
             .ok()
-            .and_then(|tracker| tracker.overlay_rect())
+            .and_then(|tracker| tracker.overlay_rect(&panels))
     } else {
         None
     };
@@ -2546,7 +2549,7 @@ fn run_desktop(
                                 if let Some(failure) = tracker.alignment_event() {
                                     host.state::<DesktopLog>().event("cs2_window_alignment", "failure", Some(&failure.diagnostic().to_string()));
                                 }
-                                (layout, tracker.overlay_rect())
+                                (layout, tracker.overlay_rect(&panels.unwrap_or_default()))
                             })
                             .unwrap_or((None, None))
                     } else {

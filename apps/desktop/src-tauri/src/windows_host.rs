@@ -408,12 +408,13 @@ impl GameTracker {
         }
         None
     }
-    pub fn overlay_rect(&self) -> Option<Rect> {
+    pub fn overlay_rect(&self, panels: &[Hwnd]) -> Option<Rect> {
         let _coordinates = PhysicalCoordinates::enter();
         let window = self.window?;
         let client = client_rect(window.hwnd)?;
-        let game_foreground = unsafe { GetForegroundWindow() == window.hwnd };
-        overlay_visible(!self.preserve_settings && self.managed && self.overlay_enabled, unsafe { IsIconic(window.hwnd) != 0 }, client, game_foreground).then_some(client)
+        let foreground = unsafe { GetForegroundWindow() };
+        let workspace_foreground = foreground == window.hwnd || panels.contains(&foreground);
+        overlay_visible(!self.preserve_settings && self.managed && self.overlay_enabled, unsafe { IsIconic(window.hwnd) != 0 }, client, workspace_foreground).then_some(client)
     }
     pub fn restore_focus(&self, source: isize) -> bool {
         self.window.is_some_and(|window| unsafe {
