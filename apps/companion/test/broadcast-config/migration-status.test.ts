@@ -27,7 +27,7 @@ it('boots the coordinator with verified owners and exposes only display configur
   const root = await mkdtemp(join(tmpdir(), 'broadcast-runtime-'));
   const hud = new HudConfigStore();
   await hud.load();
-  const app = buildApp({
+  const options: NonNullable<Parameters<typeof buildApp>[0]> = {
     obsConfigPath: join(root, 'obs.json'),
     hudConfigStore: hud,
     broadcastConfig: {
@@ -62,7 +62,8 @@ it('boots the coordinator with verified owners and exposes only display configur
       lockForActive: () => Promise.resolve({ resources: [], tools: [] }),
       verifyActive: () => Promise.resolve(),
     },
-  });
+  };
+  const app = buildApp(options);
   try {
     const status = await app.inject('/local/v1/broadcast-config/migration');
     expect(status.json()).toEqual({ state: 'ready' });
@@ -87,6 +88,17 @@ it('boots the coordinator with verified owners and exposes only display configur
     expect(after.json()).toMatchObject({
       unboundHudResources: { themes: [expect.objectContaining({ name: getBuiltinTheme().name })] },
     });
+    await app.close();
+    const restoredHud = new HudConfigStore();
+    await restoredHud.load();
+    const restored = buildApp({ ...options, hudConfigStore: restoredHud });
+    try {
+      const resumed = await restored.inject('/local/v1/broadcast-config/migration');
+      expect(resumed.json()).toEqual({ state: 'ready' });
+      expect(restoredHud.getState().document.customThemes).toHaveLength(1);
+    } finally {
+      await restored.close();
+    }
   } finally {
     await app.close();
     await rm(root, { recursive: true, force: true });
