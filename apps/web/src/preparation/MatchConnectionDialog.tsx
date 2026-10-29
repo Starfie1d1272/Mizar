@@ -312,7 +312,7 @@ export function MatchConnectionDialog() {
         </Button>
         <Button
           variant="primary"
-          disabled={busy || saved || confirmed}
+          disabled={busy || confirmed || automatic === null}
           onClick={() => void confirm()}
         >
           {saved ? '重试观察辅助' : '确认本图连接'}

@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useLocalChannelClient } from '../realtime';
 import { Button, StatusBanner } from '../ui';
 import { useLocalRead } from '../preparation/client';
 import { desktopInvoke } from './client';
@@ -8,8 +9,27 @@ import {
   type ObserverRuntimeView,
 } from '../preparation/observer-preparation';
 
+let promptedMap: string | null = null;
 /** The existing observer owner supplies status; opening a window never starts a connection. */
-export function MatchConnectionControl({ nextMapKey }: { nextMapKey: string | null }) {
+export function MatchConnectionControl({ primary = false }: { primary?: boolean }) {
+  const client = useLocalChannelClient('program');
+  const state = useSyncExternalStore(client.subscribe, client.getSnapshot, client.getSnapshot);
+  const snapshot = state.state === 'live' ? state.current : null;
+  const program = snapshot?.payload;
+  const series = program?.series;
+  const nextMapKey =
+    program?.match &&
+    snapshot?.cursor &&
+    program.status.telemetry === 'fresh' &&
+    program.map.phase === 'gameover' &&
+    series?.status === 'live'
+      ? JSON.stringify([
+          program.match?.matchId,
+          snapshot?.cursor.producerInstanceId,
+          snapshot?.cursor.liveSessionId,
+          snapshot?.cursor.mapEpoch,
+        ])
+      : null;
   const view = useLocalRead<ConnectionPreparationView>('/local/v1/observer-assist');
   const runtime = useLocalRead<ObserverRuntimeView & { programCommandQueued?: boolean }>(
     '/local/v1/observer',
@@ -48,7 +68,6 @@ export function MatchConnectionControl({ nextMapKey }: { nextMapKey: string | nu
         setBusy(false);
       });
   };
-  const prompted = useRef<string | null>(null);
   useEffect(() => {
     if (
       !nextMapNeeded ||
@@ -56,17 +75,32 @@ export function MatchConnectionControl({ nextMapKey }: { nextMapKey: string | nu
       !view ||
       busy ||
       runtime?.pending ||
-      prompted.current === nextMapKey
+      promptedMap === nextMapKey
     )
       return;
-    prompted.current = nextMapKey;
+    promptedMap = nextMapKey;
     open(true);
   }, [nextMapKey, nextMapNeeded, view, busy, runtime?.pending]);
   return (
     <>
-      <Button disabled={busy || runtime?.pending} onClick={() => open(nextMapNeeded)}>
-        {nextMapNeeded ? '填写下一图 GoTV' : `本图连接 · ${status}`}
+      <Button
+        variant={primary ? 'primary' : 'secondary'}
+        disabled={busy || runtime?.pending}
+        onClick={() => open(nextMapNeeded)}
+      >
+        {nextMapNeeded
+          ? '填写下一图 GoTV'
+          : primary
+            ? runtime?.programCommandQueued
+              ? '查看本图连接'
+              : '填写 GoTV'
+            : `本图连接 · ${status}`}
       </Button>
+      {!nextMapNeeded && !view?.waitingForMap && series?.status !== 'completed' ? (
+        <Button disabled={busy || runtime?.pending} onClick={() => open(true)}>
+          填写下一图 GoTV
+        </Button>
+      ) : null}
       {runtime?.programCommandQueued || runtime?.active ? (
         <small role="status">
           节目：{runtime.programCommandQueued ? '命令已提交，实际连接请在游戏内核对' : '请手动连接'}
