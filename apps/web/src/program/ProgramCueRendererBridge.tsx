@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useSyncExternalStore, type ReactNode } from 'react';
 
-import { ProgramCueEffectProvider } from './ProgramCueEffectContext';
-export { ProgramCueEffectProvider } from './ProgramCueEffectContext';
+import { ProgramCueEffectProvider } from '@mizar/hud-view';
+export { ProgramCueEffectProvider } from '@mizar/hud-view';
 
 import type { ProgramCueClient } from '../realtime/program-cue-client';
 import { connectProgramCueRenderer, ProgramCueEffectStore } from './program-cue-effects';

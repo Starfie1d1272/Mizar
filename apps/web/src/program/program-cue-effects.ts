@@ -2,8 +2,8 @@ import type { ProgramCueWire } from '@mizar/protocol/program-cue';
 
 import type { ProgramCueClient } from '../realtime/program-cue-client';
 
-import type { ProgramCueEffect, ProgramCueEffectSnapshot } from './ProgramCueEffectContext';
-export type { ProgramCueEffect, ProgramCueEffectSnapshot } from './ProgramCueEffectContext';
+import type { ProgramCueEffect, ProgramCueEffectSnapshot } from '@mizar/hud-view';
+export type { ProgramCueEffect, ProgramCueEffectSnapshot } from '@mizar/hud-view';
 
 export interface ProgramCueEffectScheduler {
   setTimeout(callback: () => void, delayMs: number): unknown;
