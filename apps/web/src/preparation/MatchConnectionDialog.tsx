@@ -180,7 +180,13 @@ export function MatchConnectionDialog() {
       void closeReviewWindow();
     } catch (error) {
       if (pending.current !== request) return;
-      setError(error instanceof Error ? error.message : '请核对连接后重试。');
+      setError(
+        error instanceof Error
+          ? error.message
+          : typeof error === 'string' && error
+            ? error
+            : '请核对连接后重试。',
+      );
     } finally {
       operation.current = false;
       setBusy(false);
@@ -268,7 +274,14 @@ export function MatchConnectionDialog() {
           游戏观战：{endpoints.programEndpoint}
         </p>
       ) : null}
-      {automatic === false ? <p>复制游戏连接命令，在 CS2 控制台执行。</p> : null}
+      {automatic === false ? (
+        <p>
+          复制下方节目源命令，在 CS2
+          控制台粘贴并执行，再确认本图连接。确认后将按观察辅助设置准备早源，并等待游戏数据。
+        </p>
+      ) : automatic === true ? (
+        <p>确认后将自动连接游戏节目源，按观察辅助设置准备早源，并等待游戏数据。</p>
+      ) : null}
       {automatic === false &&
       (connection || (!nextMap && !input.trim() && request && savedView?.connection)) ? (
         <Button

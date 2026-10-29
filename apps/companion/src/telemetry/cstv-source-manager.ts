@@ -143,6 +143,7 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
   private liveDuration: number | undefined;
   private liveTickInterval: number | undefined;
   private liveCommittedTick: number | undefined;
+  private livePausedTicks: number | undefined;
   private clockExecution = 0;
   private clockHadLive = false;
   private freezeEnd: CstvSourceHealth['freezeEnd'];
@@ -298,6 +299,7 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
     this.liveDuration = undefined;
     this.liveTickInterval = undefined;
     this.liveCommittedTick = undefined;
+    this.livePausedTicks = undefined;
     this.freezeEnd = undefined;
     this.observerTicksPerSecond = undefined;
     this.recentGameEvents.length = 0;
@@ -389,6 +391,7 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
         this.liveDuration = undefined;
         this.liveTickInterval = undefined;
         this.liveCommittedTick = undefined;
+        this.livePausedTicks = undefined;
       }
       const clock =
         typeof row.roundClock === 'object' &&
@@ -434,15 +437,17 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
                 this.liveCommittedTick !== undefined &&
                 clock.committedTick < this.liveCommittedTick))) ||
           pause?.active !== false ||
-          pause.totalPausedTicks !== 0)
+          (this.livePausedTicks !== undefined && pause.totalPausedTicks !== this.livePausedTicks))
       ) {
         this.freezeEnd = undefined;
         this.liveStartTime = undefined;
         this.liveDuration = undefined;
         this.liveTickInterval = undefined;
         this.liveCommittedTick = undefined;
+        this.livePausedTicks = undefined;
       }
-      // Paused-tick adjustment is not yet verified; only accept clocks without accumulated pause.
+      // A nonzero cumulative value is usable only when the round start agrees with the
+      // observed freeze boundary; never infer an adjustment from unknown pause semantics.
       if (
         clock &&
         (clock.status === 'available' || clock.status === 'partial') &&
@@ -457,7 +462,12 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
         clock.warmupPeriod === false &&
         clock.bombPlanted === false &&
         pause?.active === false &&
-        pause.totalPausedTicks === 0 &&
+        typeof pause.totalPausedTicks === 'number' &&
+        Number.isSafeInteger(pause.totalPausedTicks) &&
+        pause.totalPausedTicks >= 0 &&
+        (pause.totalPausedTicks === 0 ||
+          (typeof clock.startTime === 'number' &&
+            Math.abs(clock.startTime - this.freezeEnd.committedTick * row.tickInterval) <= 0.35)) &&
         typeof clock.totalRoundsPlayed === 'number' &&
         Number.isSafeInteger(clock.totalRoundsPlayed) &&
         clock.totalRoundsPlayed >= 0 &&
@@ -486,6 +496,7 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
           this.liveDuration = clock.duration;
           this.liveTickInterval = row.tickInterval;
           this.liveCommittedTick = clock.committedTick;
+          this.livePausedTicks = pause.totalPausedTicks;
         }
       } else this.roundClock = undefined;
       this.observerMap = row.map;
@@ -538,6 +549,7 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
       this.liveDuration = undefined;
       this.liveTickInterval = undefined;
       this.liveCommittedTick = undefined;
+      this.livePausedTicks = undefined;
       this.roundClock = undefined;
       this.notifySnapshotChanged();
       return;
@@ -548,6 +560,7 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
       this.liveDuration = undefined;
       this.liveTickInterval = undefined;
       this.liveCommittedTick = undefined;
+      this.livePausedTicks = undefined;
       this.roundClock = undefined;
     }
     const sample = this.clock?.now() ?? {

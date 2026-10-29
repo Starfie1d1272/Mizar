@@ -66,7 +66,8 @@ export interface ProjectionPublishers {
 export interface ProjectionCoordinatorOptions {
   readonly observerSettings?: () => {
     enabled: boolean;
-    expectedDelaySeconds: number;
+    nicknameSource?: 'game' | 'website';
+
     leadSeconds: number;
   };
   readonly onObserverDiagnostics?: (
@@ -314,6 +315,7 @@ export class ProjectionCoordinator {
       const activeLineup = this.resolveActiveLineup(runtimeSnapshot, identity);
       const context = this.contextBinding?.context;
       const preferCanonicalPlayerNames =
+        this.observerSettings?.().nicknameSource === 'website' &&
         this.contextBinding !== undefined &&
         this.contextBinding.localAuthoringMode !== 'standalone' &&
         (this.contextBinding.origin === 'online' ||

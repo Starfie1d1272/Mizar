@@ -13,7 +13,6 @@ export function mapObserverAssistProjection(projection: ObserverAssistProjection
             effectiveDelaySeconds: projection.observer.effectiveDelaySeconds,
             waitingReason: projection.observer.waitingReason,
             nextWindowSeconds: projection.observer.nextWindowSeconds,
-            expectedDelaySeconds: projection.observer.expectedDelaySeconds,
             leadSeconds: projection.observer.leadSeconds,
             measuredDelaySeconds: projection.observer.measuredDelaySeconds,
             hints: projection.observer.hints.map((hint) => ({ ...hint })),

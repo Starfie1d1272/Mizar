@@ -85,7 +85,6 @@ test('keeps the full-width square radar across private hint states and desktop s
       effectiveDelaySeconds: 121,
       waitingReason: null,
       nextWindowSeconds: 0,
-      expectedDelaySeconds: 120,
       leadSeconds: 7,
       measuredDelaySeconds: 120,
       hints: [
@@ -197,9 +196,8 @@ test('observer settings show saved timing and support keyboard operation', async
     }),
   );
   await page.goto('/settings?tab=observer');
-  await expect(page.getByRole('spinbutton', { name: '两路预期延迟差（秒）' })).toHaveValue('120');
   await expect(page.getByRole('spinbutton', { name: '提示提前时间（秒）' })).toHaveValue('5');
-  await expect(page.getByRole('spinbutton')).toHaveCount(2);
+  await expect(page.getByRole('spinbutton')).toHaveCount(1);
   const toggle = page.getByRole('checkbox', { name: '启用私有观察辅助', exact: true });
   await toggle.focus();
   await page.keyboard.press('Space');
@@ -212,7 +210,6 @@ test('observer settings show saved timing and support keyboard operation', async
     saved = route.request().postDataJSON();
     await route.fulfill({ json: { ok: true } });
   });
-  await page.getByRole('spinbutton', { name: '两路预期延迟差（秒）' }).fill('90');
   await page.getByRole('spinbutton', { name: '提示提前时间（秒）' }).fill('5');
   await page.getByRole('button', { name: '保存观察辅助设置' }).click();
   await expect(page.getByText('观察辅助设置已保存。')).toBeVisible();
@@ -221,7 +218,6 @@ test('observer settings show saved timing and support keyboard operation', async
     settings: {
       ...DEFAULT_OBSERVER_SETTINGS,
       enabled: true,
-      expectedDelaySeconds: 90,
       leadSeconds: 5,
     },
   });
@@ -305,7 +301,7 @@ for (const useMulnx of [false, true]) {
           if (name === 'observer_command' && args?.action === 'connection-mode')
             return { useMulnx: preferMulnx };
           if (name === 'observer_command' && args?.action === 'start-configured') {
-            if (host.failConnection) throw new Error('游戏观战连接未确认，请检查后重试。');
+            if (host.failConnection) throw '游戏观战连接未确认，请检查后重试。';
             if (args?.expectedRevision !== '10000000-0000-4000-8000-000000000002')
               throw new Error('连接版本未传递');
             return { useMulnx: preferMulnx };
@@ -362,11 +358,25 @@ for (const useMulnx of [false, true]) {
     await expect(dialog.getByRole('button', { name: '复制游戏连接命令' })).toHaveCount(
       useMulnx ? 0 : 1,
     );
+    if (!useMulnx) {
+      await dialog.getByRole('button', { name: '复制游戏连接命令' }).click();
+      expect(await task.evaluate(() => navigator.clipboard.readText())).toBe(
+        'connect 127.0.0.1:27026;password synthetic',
+      );
+    }
+    if (process.env.MIZAR_GOTV_SCREENSHOTS) {
+      await task.screenshot({
+        path: `${process.env.MIZAR_GOTV_SCREENSHOTS}/${useMulnx ? 'mulnx' : 'standard'}.png`,
+      });
+    }
     await task.evaluate(() => {
       (window as typeof window & { failConnection: boolean }).failConnection = true;
     });
     await dialog.getByRole('button', { name: '确认本图连接' }).click();
-    await expect(dialog).toContainText('游戏观战连接未确认');
+    await expect(dialog).toContainText('游戏观战连接未确认，请检查后重试。');
+    await expect(dialog.getByRole('textbox').first()).toHaveValue(
+      'connect 127.0.0.1:27025;password synthetic',
+    );
     expect(writes).toHaveLength(1);
     await task.evaluate(() => {
       (window as typeof window & { failConnection: boolean }).failConnection = false;
