@@ -11,7 +11,7 @@ import { HudCanvasPreview } from '../operator/HudCanvasPreview';
 import { getHudEditorFixture } from '../program/fixtures';
 import { radarSnapshotForProgramFixture } from '../program/fixtures/radar-fixtures';
 import { useBpSession } from '../bp/client';
-import { BpPresentation } from '../bp/BpPresentation';
+import { BpPresentation } from '@mizar/hud-view';
 import { Button, StatusBanner } from '../ui';
 import { openTool } from './client';
 import '../operator/hud-console.css';

@@ -1,0 +1,200 @@
+import { presentationBoundaryKey } from './presentation-boundary.js';
+import type { RadarProps } from './widgets/radar/Radar.js';
+import type { CSSProperties, ReactElement } from 'react';
+
+import {
+  HUD_WIDGET_REGISTRY,
+  DEFAULT_PLACEMENTS,
+  placementToBox,
+  topScoreBarSettingsSchema,
+  type HudResolvedPreset,
+} from '@mizar/hud-config';
+import type { ProgramSnapshot } from '@mizar/protocol/program';
+
+import {
+  getHudRendererEntry,
+  HUD_RENDERER_REGISTRY,
+  type HudRendererRegistry,
+} from './hud-renderer-registry.js';
+import './gameplay-hud.css';
+import './widgets/focused-player/focused-player.css';
+import './widgets/match-header/match-header.css';
+import './widgets/player-rails/player-rails.css';
+import './widgets/player-status-effects/player-status-effects.css';
+import './designs/shared.css';
+import './designs/ewc.css';
+import './designs/iem.css';
+import './designs/esl.css';
+import './designs/perfectworld.css';
+import './designs/native.css';
+import { hudDesignForVariant } from './hud-design.js';
+import { BroadcastPause } from './widgets/broadcast-pause/BroadcastPause.js';
+import { hasSeriesMapStrip } from './widgets/match-header/presentation.js';
+import type { BroadcastBranding } from './widgets/broadcast-pause/BroadcastBrand.js';
+
+export interface GameplayHudProps {
+  readonly radarSource?: RadarProps['source'];
+  readonly radarSnapshot?: RadarProps['snapshot'];
+  readonly snapshot: ProgramSnapshot | null;
+  readonly presentationRevision?: number;
+  readonly gg?: boolean;
+  readonly resolvedPreset: HudResolvedPreset;
+  readonly broadcastBranding?: BroadcastBranding;
+  /** Test-only injection keeps the production registry closed while exercising the React seam. */
+  readonly rendererRegistry?: HudRendererRegistry;
+}
+
+export function themeStyle(theme: HudResolvedPreset['theme']): CSSProperties {
+  return {
+    '--mizar-event-accent': theme.brandColor,
+    '--mizar-hud-text-primary': theme.semantic.colors.textPrimary,
+    '--mizar-hud-text-muted': theme.semantic.colors.textMuted,
+    '--mizar-side-ct': theme.semantic.colors.sideCt,
+    '--mizar-side-t': theme.semantic.colors.sideT,
+    '--mizar-hud-state-danger': theme.semantic.colors.stateDanger,
+    '--mizar-hud-state-warning': theme.semantic.colors.stateWarning,
+    '--mizar-hud-state-success': theme.semantic.colors.stateSuccess,
+    '--mizar-hud-state-unknown': theme.semantic.colors.stateUnknown,
+    '--mizar-hud-objective-bomb': theme.semantic.colors.objectiveBomb,
+    '--mizar-hud-objective-defuse': theme.semantic.colors.objectiveDefuse,
+    '--mizar-hud-surface-primary': theme.semantic.surface.primary,
+    '--mizar-hud-surface-strong': theme.semantic.surface.strong,
+    '--mizar-hud-surface-opacity': theme.semantic.surface.opacity,
+    '--mizar-hud-border-opacity': theme.semantic.surface.borderOpacity,
+    '--mizar-hud-radius-sm': `${theme.semantic.radius.sm}px`,
+    '--mizar-hud-radius-md': `${theme.semantic.radius.md}px`,
+    '--mizar-hud-radius-lg': `${theme.semantic.radius.lg}px`,
+    '--mizar-hud-font-family': theme.semantic.fontFamily,
+  } as CSSProperties;
+}
+
+export function GameplayHud({
+  snapshot,
+  radarSource,
+  radarSnapshot,
+  resolvedPreset,
+  presentationRevision = 0,
+  gg = false,
+  rendererRegistry = HUD_RENDERER_REGISTRY,
+  broadcastBranding,
+}: GameplayHudProps) {
+  const programFresh = snapshot?.payload.status.telemetry === 'fresh';
+  const radarAvailable = radarSource !== undefined || radarSnapshot != null;
+  if (!programFresh && !radarAvailable) return null;
+
+  const score = resolvedPreset.widgets['top-score-bar'];
+  const design = hudDesignForVariant(score.variant);
+  const phase = snapshot?.payload.clock?.phase;
+  if (
+    programFresh &&
+    snapshot &&
+    resolvedPreset.layout.widgets['top-score-bar'].visible &&
+    topScoreBarSettingsSchema.parse(score.settings).showTimeout &&
+    !gg &&
+    (phase === 'paused' || phase === 'timeout_ct' || phase === 'timeout_t')
+  ) {
+    return (
+      <div
+        className="gameplay-hud"
+        data-gameplay-hud="true"
+        data-hud-preset-id={resolvedPreset.preset.id}
+        style={themeStyle(resolvedPreset.theme)}
+      >
+        <BroadcastPause
+          snapshot={snapshot}
+          resolvedPreset={resolvedPreset}
+          design={design}
+          branding={broadcastBranding}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="gameplay-hud"
+      data-gameplay-hud="true"
+      data-hud-preset-id={resolvedPreset.preset.id}
+      style={themeStyle(resolvedPreset.theme)}
+    >
+      {HUD_WIDGET_REGISTRY.map((descriptor) => {
+        const placement = resolvedPreset.layout.widgets[descriptor.id];
+        if (placement === undefined || !placement.visible) return null;
+        const rendererEntry = getHudRendererEntry(descriptor.id, rendererRegistry);
+        if (rendererEntry.renderer === null) return null;
+
+        let box = placementToBox(descriptor.id, placement);
+        if (
+          descriptor.id === 'radar' &&
+          hudDesignForVariant(resolvedPreset.widgets.radar.variant) === 'current' &&
+          placement.anchor === DEFAULT_PLACEMENTS.radar.anchor &&
+          placement.offsetX === DEFAULT_PLACEMENTS.radar.offsetX &&
+          placement.offsetY === DEFAULT_PLACEMENTS.radar.offsetY &&
+          (!programFresh ||
+            !snapshot ||
+            !resolvedPreset.layout.widgets['series-strip'].visible ||
+            !hasSeriesMapStrip(snapshot.payload))
+        ) {
+          // Only compact the standard slot. Explicit editor placements remain authoritative.
+          box = { ...box, top: DEFAULT_PLACEMENTS['series-strip'].offsetY };
+        }
+        const design = hudDesignForVariant(resolvedPreset.widgets[descriptor.id].variant);
+        let content: ReactElement;
+        if (rendererEntry.source === 'program') {
+          if (!programFresh || snapshot === null) return null;
+          const Renderer = rendererEntry.renderer;
+          content = (
+            <Renderer
+              design={design}
+              box={box}
+              placement={placement}
+              resolvedPreset={resolvedPreset}
+              settings={resolvedPreset.widgets[descriptor.id]}
+              snapshot={snapshot}
+              presentationRevision={presentationRevision}
+              gg={gg}
+              widgetId={descriptor.id}
+            />
+          );
+        } else {
+          if (!radarAvailable) return null;
+          const Renderer = rendererEntry.renderer;
+          content = (
+            <Renderer
+              box={box}
+              placement={placement}
+              radarSource={radarSource}
+              radarSnapshot={radarSnapshot}
+              presentationRevision={presentationRevision}
+              resolvedPreset={resolvedPreset}
+              settings={resolvedPreset.widgets[descriptor.id]}
+              widgetId={descriptor.id}
+            />
+          );
+        }
+
+        return (
+          <div
+            className={`gameplay-hud__widget hud-widget-design${design === 'current' ? '' : ' hud-redraw'}`}
+            data-hud-design={design}
+            data-hud-widget={descriptor.id}
+            data-renderer-availability={descriptor.rendererAvailability}
+            key={
+              rendererEntry.source === 'radar'
+                ? 'radar'
+                : `${descriptor.id}:${presentationBoundaryKey(snapshot, undefined)}`
+            }
+            style={{
+              height: `${box.height}px`,
+              left: `${box.left}px`,
+              top: `${box.top}px`,
+              width: `${box.width}px`,
+            }}
+          >
+            {content}
+          </div>
+        );
+      })}
+    </div>
+  );
+}

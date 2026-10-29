@@ -18,8 +18,8 @@ import type { ProgramPayload, ProgramSnapshot } from '@mizar/protocol/program';
 import { getRadarArtwork } from '@mizar-hud/radar-view';
 import { useBpSession } from '../bp/client';
 import { useLocalChannelClient } from '../realtime';
-import { Radar } from '../program/widgets/radar/Radar';
-import { hasRadarViewFrame } from '../program/widgets/radar/adapter';
+import { Radar } from '@mizar/hud-view';
+import { hasRadarViewFrame } from '@mizar/hud-view';
 import {
   desktopInvoke,
   HostWindowControlError,

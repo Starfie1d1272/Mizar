@@ -1,7 +1,7 @@
-import { ProgramView } from '../program/ProgramView';
+import { ProgramView } from '@mizar/hud-view';
 import { useProgramScenes } from '../workspace/client';
 import { useBpSession } from './client';
-import './bp.css';
+import '@mizar/hud-view/bp.css';
 
 export function BpPage({ compact = false }: { readonly compact?: boolean }) {
   const { snapshot, animate } = useBpSession();

@@ -2,6 +2,7 @@
   "extends": "../../tsconfig.library.json",
   "compilerOptions": {
     "rootDir": "src",
+    "composite": false,
     "outDir": "dist",
     "jsx": "react-jsx",
     "lib": ["ES2022", "DOM", "DOM.Iterable"]

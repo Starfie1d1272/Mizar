@@ -1,13 +1,13 @@
 import { getBuiltinResolvedPreset, type HudResolvedPreset } from '@mizar/hud-config';
 import type { ProgramSnapshot } from '@mizar/protocol/program';
 
-import type { RadarProps } from './widgets/radar/Radar';
+import type { RadarProps } from '@mizar/hud-view';
 import type { LocalChannelConnectionState } from '../realtime';
-import { ProgramCanvas } from './ProgramCanvas';
-import { ProgramView } from './ProgramView';
-import { hasAcceptedProgramSnapshot } from './presentation-boundary';
+import { ProgramCanvas } from '@mizar/hud-view';
+import { ProgramView } from '@mizar/hud-view';
+import { hasAcceptedProgramSnapshot } from '@mizar/hud-view';
 
-export { presentationBoundaryKey as programPresentationBoundaryKey } from './presentation-boundary';
+export { presentationBoundaryKey as programPresentationBoundaryKey } from '@mizar/hud-view';
 
 export interface ProgramPageProps {
   readonly radarSource?: RadarProps['source'];
