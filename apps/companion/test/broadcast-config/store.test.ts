@@ -595,6 +595,106 @@ describe('BroadcastConfigStore', () => {
       'broadcast_import_index_invalid',
     );
   });
+  it('reuses a preset-owned copy for a separately selected module without changing its owner', async () => {
+    const { store, initial } = await setup();
+    const source = { id: 'local:package', version: '1', digest: 'a'.repeat(64) };
+    const copy = clonePreset(
+      initial,
+      {
+        sourceId: initial.presets[0]!.id,
+        expectedRevision: 'p1',
+        expectedModuleRevisions: { hud: 'h1', program: 'p1' },
+        name: 'Imported',
+      },
+      randomUUID,
+    );
+    for (const module of copy.modules) module.origin = { resource: source, entryId: module.kind };
+    copy.preset.origin = { resource: source, entryId: 'scheme' };
+    const mapping = Object.fromEntries(copy.modules.map((module) => [module.kind, [module.id]]));
+    await store.importBatch({
+      source,
+      modules: copy.modules,
+      presets: [copy.preset],
+      moduleEntries: mapping,
+      presetEntries: { scheme: copy.preset.id },
+    });
+    const program = copy.modules.find((module) => module.kind === 'program')!;
+    const incoming = { ...structuredClone(program), id: randomUUID(), revision: randomUUID() };
+    const result = await store.importBatch({
+      source,
+      modules: [incoming],
+      presets: [],
+      moduleEntries: { program: [incoming.id] },
+      presetEntries: {},
+    });
+    expect(result.reused).toBe(true);
+    expect(result.mapping.moduleEntries.program).toEqual([program.id]);
+    expect(store.inspectImport(source)!.modules.program).toEqual([
+      { id: program.id, owner: 'scheme', state: 'existing' },
+    ]);
+  });
+  it('rechecks selected module reuse after a queued deletion before committing import', async () => {
+    const { options } = await setup();
+    let block = false;
+    let entered!: () => void;
+    let release!: () => void;
+    const reached = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const store = new BroadcastConfigStore({
+      ...options,
+      withReferenceGuard: async (operation) => {
+        if (block) {
+          block = false;
+          entered();
+          await gate;
+        }
+        return operation();
+      },
+    });
+    await store.load();
+    const source = { id: 'local:package', version: '1', digest: 'a'.repeat(64) };
+    const template = store.snapshot.modules.find((item) => item.kind === 'program')!;
+    const create = () => ({
+      ...structuredClone(template),
+      id: randomUUID(),
+      revision: randomUUID(),
+      origin: { resource: source, entryId: 'scene' },
+    });
+    const first = create();
+    await store.importBatch({
+      source,
+      modules: [first],
+      presets: [],
+      moduleEntries: { scene: [first.id] },
+      presetEntries: {},
+    });
+    expect(store.inspectImport(source)!.modules.scene![0]!.state).toBe('existing');
+    const retry = create();
+    block = true;
+    const deletion = store.deleteModule(first.id, first.revision);
+    await reached;
+    const importing = store.importBatch({
+      source,
+      modules: [retry],
+      presets: [],
+      moduleEntries: { scene: [retry.id] },
+      presetEntries: {},
+    });
+    release();
+    await deletion;
+    const imported = await importing;
+    expect(imported.reused).toBe(false);
+    expect(imported.mapping.moduleEntries.scene).toEqual([retry.id]);
+    expect(store.snapshot.modules.some((item) => item.id === first.id)).toBe(false);
+    expect(store.snapshot.modules.filter((item) => item.id === retry.id)).toHaveLength(1);
+    expect(store.inspectImport(source)!.modules.scene).toEqual([
+      { id: retry.id, owner: null, state: 'existing' },
+    ]);
+  });
   it('enforces the size limit on the formatted bytes before initialization and save', async () => {
     const { store, options, initial } = await setup();
     const large = structuredClone(initial);
