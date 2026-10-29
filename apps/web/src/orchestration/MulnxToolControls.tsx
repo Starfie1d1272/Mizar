@@ -43,17 +43,18 @@ export function MulnxToolControls({
         await desktopInvoke('mulnx_control', { action: 'update' });
         setMessage('MulNX 版本准备已完成；确认支持自动启动后，从 Mizar 启动工作台。');
       } else if (action === 'stop') {
-        const result = await desktopInvoke<{ result?: string; cleanupPending?: boolean } | null>(
-          'mulnx_control',
-          {
-            action: 'stop',
-          },
-        );
+        const result = await desktopInvoke<{
+          result?: string;
+          execution?: string;
+          cleanupPending?: boolean;
+        } | null>('mulnx_control', {
+          action: 'stop',
+        });
         setStopSubmitted(true);
         setMessage(
-          result?.result === 'queued'
-            ? '停止控制请求已入队，执行结果待确认。请返回游戏核对。该实例不再重复发送；需要继续控制时请正常重启该游戏。'
-            : '停止控制结果待确认，请勿重复发送。请返回游戏核对，需要继续控制时先正常重启该游戏。',
+          result?.execution === 'confirmed'
+            ? 'MulNX 控制已停止，CS2 保持运行。'
+            : '停止控制正在确认，请检查游戏状态。',
         );
         if (result?.cleanupPending)
           setMessage((value) => `${value} 工作台收尾尚未完成，请检查退出状态。`);

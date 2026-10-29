@@ -308,7 +308,22 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
               保持原游戏设置继续
             </Button>
           ) : null}
-          {status?.running && production ? (
+          {status?.mulnxLaunchResumable && production ? (
+            <Button
+              disabled={busy || Boolean(phase)}
+              onClick={() =>
+                void run(
+                  (task) =>
+                    productionAction('enter', production, Boolean(status.preserveSettings), task),
+                  '工作台已打开。',
+                  'workspace',
+                )
+              }
+            >
+              重试进入工作台
+            </Button>
+          ) : null}
+          {status?.running && !status.mulnxLaunchResumable && production ? (
             <Button
               disabled={busy || Boolean(phase)}
               onClick={() =>

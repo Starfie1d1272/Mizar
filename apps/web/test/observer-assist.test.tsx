@@ -249,7 +249,7 @@ it('reports unknown MulNX stop once even on double confirmation', async () => {
     await Promise.resolve();
   });
   expect(mocks.native).toHaveBeenCalledExactlyOnceWith('mulnx_control', { action: 'stop' });
-  expect(container.textContent).toContain('结果待确认');
+  expect(container.textContent).toContain('停止控制正在确认');
   expect(container.textContent).not.toContain('已卸载');
   expect(stop.disabled).toBe(true);
 });
