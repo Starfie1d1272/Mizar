@@ -38,12 +38,20 @@ function Shot({
         <details>
           <summary>镜头时限</summary>
           <Field
-            label="最多持续（毫秒）"
+            label="最多持续（秒）"
             type="number"
-            min={500}
-            max={60000}
-            value={shot.maxMs}
-            onChange={(e) => change({ ...shot, maxMs: Number(e.target.value) })}
+            min={0.5}
+            max={60}
+            step={0.001}
+            value={shot.maxMs / 1000}
+            onChange={(e) => {
+              const milliseconds = Number(e.target.value) * 1000;
+              const rounded = Math.round(milliseconds);
+              change({
+                ...shot,
+                maxMs: Math.abs(milliseconds - rounded) < 1e-7 ? rounded : milliseconds,
+              });
+            }}
           />
         </details>
       ) : null}
@@ -75,7 +83,13 @@ export function CameraSettings() {
       await run();
     } catch (e) {
       setFailed(true);
-      setMessage(e instanceof Error ? e.message : '预设操作未完成');
+      setMessage(
+        e instanceof SyntaxError || (e instanceof Error && e.name === 'ZodError')
+          ? '预设格式或内容有误，请检查后重试。'
+          : e instanceof Error
+            ? e.message
+            : '操作未完成，请重试。',
+      );
     } finally {
       setBusy(false);
     }
@@ -311,7 +325,7 @@ export function CameraSettings() {
                   void action(async () => {
                     if (file.size > 256 * 1024) throw new Error('预设超过 256 KiB');
                     setDraft(orchestrationPresetSchema.parse(JSON.parse(await file.text())));
-                    setMessage('已载入草稿，请检查后保存。');
+                    setMessage('已载入配置草稿，请确认镜头和音频资源可用后保存。');
                   });
               }}
             />
@@ -344,11 +358,7 @@ export function CameraSettings() {
           </details>
         </>
       )}
-      {message ? (
-        <StatusBanner tone={failed ? 'danger' : 'info'}>
-          {failed ? '预设未应用，请检查字段、文件与本机音频。' : message}
-        </StatusBanner>
-      ) : null}
+      {message ? <StatusBanner tone={failed ? 'danger' : 'info'}>{message}</StatusBanner> : null}
     </Panel>
   );
 }
