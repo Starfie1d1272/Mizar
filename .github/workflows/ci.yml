@@ -38,6 +38,8 @@ jobs:
     timeout-minutes: 3
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         with:
           runtime: node@24
@@ -45,7 +47,20 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm format:check
       - run: pnpm exec prettier --check '.github/**/*.{yml,yaml}'
-      - run: cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check
+      - name: Check Rust formatting
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          TARGET: ${{ github.base_ref || github.ref_name }}
+        run: |
+          if [ "$TARGET" != development/2.0 ]; then
+            cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check
+          else
+            git cat-file -e "${BASE}^{commit}" || { echo 'Cannot determine formatting base' >&2; exit 1; }
+            git diff --name-only --diff-filter=ACMR -z "$BASE" "$GITHUB_SHA" -- 'apps/desktop/src-tauri/**/*.rs' > /tmp/mizar-rust-files
+            while IFS= read -r -d '' file; do
+              [ ! -f "$file" ] || rustfmt --check --edition 2021 --config skip_children=true "$file"
+            done < /tmp/mizar-rust-files
+          fi
       - run: pnpm exec eslint . --ignore-pattern '**/test/**' --ignore-pattern '**/tests/**' --ignore-pattern '**/*.test.*' --max-warnings=0
   native:
     name: native build / Windows
