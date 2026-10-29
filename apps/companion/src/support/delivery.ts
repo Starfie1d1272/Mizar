@@ -78,6 +78,9 @@ interface State {
   consent: boolean;
   paused: boolean;
   consentAt: string | null;
+  closedReason: 'policy_changed' | 'user' | null;
+  lastAttemptAt: string | null;
+  lastConfirmedAt: string | null;
   credentials: Credentials | null;
   withdrawals: Credentials[];
   retiredIdentities: Credentials[];
@@ -111,6 +114,9 @@ const stateSchema = z
     consent: z.boolean(),
     paused: z.boolean().default(false),
     consentAt: z.iso.datetime().nullable(),
+    closedReason: z.enum(['policy_changed', 'user']).nullable().default(null),
+    lastAttemptAt: z.iso.datetime().nullable().default(null),
+    lastConfirmedAt: z.iso.datetime().nullable().default(null),
     credentials: credentialsSchema.nullable(),
     withdrawals: z.array(credentialsSchema).max(DELIVERY_LIMITS.tombstones),
     retiredIdentities: z.array(credentialsSchema).max(DELIVERY_LIMITS.tombstones).default([]),
@@ -214,6 +220,9 @@ const initial = (): State => ({
   consent: false,
   paused: false,
   consentAt: null,
+  closedReason: null,
+  lastAttemptAt: null,
+  lastConfirmedAt: null,
   credentials: null,
   withdrawals: [],
   retiredIdentities: [],
@@ -499,6 +508,12 @@ export class DiagnosticDelivery {
   private revocationFenced = false;
   private readonly fences = new Map<string, Promise<void>>();
   private error: string | null = null;
+  private transportPhase: 'enrollment' | 'permit' | 'upload' | 'withdrawal' | null = null;
+  private transportFailure: {
+    phase: NonNullable<DiagnosticDelivery['transportPhase']>;
+    status: number | null;
+    reason: string;
+  } | null = null;
   private readonly endpoint: string | undefined;
   private readonly fetcher: typeof fetch;
   private readonly now: () => number;
@@ -579,6 +594,7 @@ export class DiagnosticDelivery {
       )
         this.state.withdrawals.push(this.state.credentials);
       this.state.consent = false;
+      this.state.closedReason = preserveCopies ? 'policy_changed' : 'user';
       this.state.credentials = null;
       this.state.sessions = {};
       if (preserveCopies) {
@@ -639,6 +655,10 @@ export class DiagnosticDelivery {
       consent: this.consentActive(),
       paused: this.requestedPause,
       consentAt: this.state.consentAt,
+      closedReason: this.state.closedReason,
+      lastAttemptAt: this.state.lastAttemptAt,
+      lastConfirmedAt: this.state.lastConfirmedAt,
+      transportFailure: this.transportFailure,
       queuedBatches: this.state.queue.length,
       blockedBatches: this.state.queue.filter((value) => value.serverExpired).length,
       queuedBytes: this.state.queue.reduce((n, v) => n + v.bytes, 0),
@@ -739,6 +759,7 @@ export class DiagnosticDelivery {
         const previous = structuredClone(this.state);
         this.state.consent = true;
         this.state.consentPolicy = 3;
+        this.state.closedReason = null;
         this.state.consentAt = new Date(this.now()).toISOString();
         this.state.credentials = {
           installationId: diagnosticInstallationId(this.now(), randomBytes(16)),
@@ -753,6 +774,7 @@ export class DiagnosticDelivery {
           if (epoch === this.epoch) this.requestedConsent = false;
           throw error;
         }
+        if (this.error === 'consent_policy_changed') this.error = null;
         // Remove only fences already present at THIS enable request. A later
         // revocation has a distinct name, so an older enable cannot erase it.
         for (const [name, created] of olderFences) {
@@ -773,6 +795,7 @@ export class DiagnosticDelivery {
             this.state.withdrawals.push(retired);
         this.state.retiredIdentities = [];
         this.state.consent = false;
+        this.state.closedReason = 'user';
         if (
           prior &&
           (prior.enrollmentAttempted || prior.token) &&
@@ -1118,12 +1141,33 @@ export class DiagnosticDelivery {
     }
     return true;
   }
+  private async transportFetch(input: string, init: RequestInit) {
+    await this.transaction(async () => {
+      const previous = this.state.lastAttemptAt;
+      this.state.lastAttemptAt = new Date(this.now()).toISOString();
+      try {
+        await this.save();
+      } catch (error) {
+        this.state.lastAttemptAt = previous;
+        throw error;
+      }
+    });
+    if (init.signal?.aborted) throw new Error('transport_aborted');
+    this.transportPhase = input.includes('/enroll')
+      ? 'enrollment'
+      : input.includes('/permits/')
+        ? 'permit'
+        : input.includes('/batches/')
+          ? 'upload'
+          : 'withdrawal';
+    return this.fetcher(input, init);
+  }
   private async credentials(value: Credentials, signal: AbortSignal, deletion = false) {
     if (value.token && (value.expiresAt ?? 0) > this.now() + 60_000) return value.token;
     value.enrollmentAttempted = true;
     await this.transaction(() => this.save());
     if (signal.aborted) throw new Error('enrollment_aborted');
-    const response = await this.fetcher(`${this.endpoint}/v1/diagnostics/enroll`, {
+    const response = await this.transportFetch(`${this.endpoint}/v1/diagnostics/enroll`, {
       method: 'POST',
       redirect: 'error',
       signal,
@@ -1255,6 +1299,7 @@ export class DiagnosticDelivery {
     await this.sending;
   }
   private async send() {
+    this.transportPhase = null;
     const epoch = this.epoch;
     this.abort = new AbortController();
     const signal = AbortSignal.any([this.abort.signal, AbortSignal.timeout(15_000)]);
@@ -1262,12 +1307,15 @@ export class DiagnosticDelivery {
       for (const item of [...this.state.withdrawals]) {
         const bearer = await this.credentials(item, signal, true);
         if (bearer !== null) {
-          const response = await this.fetcher(`${this.endpoint}/v1/diagnostics/installation`, {
-            method: 'DELETE',
-            redirect: 'error',
-            signal,
-            headers: { authorization: `Bearer ${bearer}` },
-          });
+          const response = await this.transportFetch(
+            `${this.endpoint}/v1/diagnostics/installation`,
+            {
+              method: 'DELETE',
+              redirect: 'error',
+              signal,
+              headers: { authorization: `Bearer ${bearer}` },
+            },
+          );
           const ack = (await responseJson(response, signal)) as {
             installationId: string;
             revoked: boolean;
@@ -1319,15 +1367,18 @@ export class DiagnosticDelivery {
           await this.retainExpiredBatch(batch, epoch, localReason);
           return;
         }
-        const response = await this.fetcher(`${this.endpoint}/v1/diagnostics/permits/${batch.id}`, {
-          method: 'POST',
-          redirect: 'error',
-          signal,
-          headers: {
-            authorization: `Bearer ${bearer}`,
-            'x-diagnostics-created-at': String(creationTime),
+        const response = await this.transportFetch(
+          `${this.endpoint}/v1/diagnostics/permits/${batch.id}`,
+          {
+            method: 'POST',
+            redirect: 'error',
+            signal,
+            headers: {
+              authorization: `Bearer ${bearer}`,
+              'x-diagnostics-created-at': String(creationTime),
+            },
           },
-        });
+        );
         const receipt = await responseJson(response, signal);
         const permit = diagnosticPermit(receipt);
         if (
@@ -1389,18 +1440,21 @@ export class DiagnosticDelivery {
       }
 
       if (!this.consentActive() || this.requestedPause || epoch !== this.epoch) return;
-      const response = await this.fetcher(`${this.endpoint}/v1/diagnostics/batches/${batch.id}`, {
-        method: 'PUT',
-        redirect: 'error',
-        signal,
-        headers: {
-          authorization: `Bearer ${bearer}`,
-          'content-type': 'application/gzip',
-          'x-content-sha256': batch.id,
-          'x-diagnostics-index': JSON.stringify(batch.index),
+      const response = await this.transportFetch(
+        `${this.endpoint}/v1/diagnostics/batches/${batch.id}`,
+        {
+          method: 'PUT',
+          redirect: 'error',
+          signal,
+          headers: {
+            authorization: `Bearer ${bearer}`,
+            'content-type': 'application/gzip',
+            'x-content-sha256': batch.id,
+            'x-diagnostics-index': JSON.stringify(batch.index),
+          },
+          body: new Uint8Array(bytes),
         },
-        body: new Uint8Array(bytes),
-      });
+      );
       const ack = (await responseJson(response, signal)) as {
         batchId: string;
         sha256: string;
@@ -1424,9 +1478,11 @@ export class DiagnosticDelivery {
         const previous = structuredClone(this.state);
         this.state.queue = this.state.queue.filter((v) => v.id !== batch.id);
         this.state.acknowledged++;
+        this.state.lastConfirmedAt = new Date(this.now()).toISOString();
         this.state.failures = 0;
         this.state.nextAttemptAt = 0;
         this.error = null;
+        this.transportFailure = null;
         try {
           await this.save();
         } catch (error) {
@@ -1439,12 +1495,34 @@ export class DiagnosticDelivery {
       if (epoch !== this.epoch || this.requestedPause) return;
       await this.transaction(async () => {
         this.state.failures++;
+        const detail = error as { status?: unknown; reason?: unknown };
+        const reasons = [
+          'receipt_invalid',
+          'batch_retention_expired',
+          'automatic_window_expired',
+          'payload_clock_future',
+          'payload_creation_time_missing',
+        ];
+        this.transportFailure = this.transportPhase
+          ? {
+              phase: this.transportPhase,
+              status:
+                typeof detail?.status === 'number' && detail.status >= 400 && detail.status <= 599
+                  ? detail.status
+                  : null,
+              reason:
+                typeof detail?.reason === 'string' && reasons.includes(detail.reason)
+                  ? detail.reason
+                  : 'unconfirmed',
+            }
+          : null;
         this.state.nextAttemptAt =
           this.now() +
           Math.min(6 * 3600_000, 30_000 * 2 ** Math.min(this.state.failures - 1, 10)) *
             (0.8 + (randomBytes(1)[0]! / 255) * 0.4);
         this.error = error instanceof Error ? error.message : 'delivery_failed';
         this.journal.record('diagnostic_transport_failure', {
+          transportFailure: this.transportFailure,
           error: diagnosticValue(error, '', new Set(), [
             this.state.credentials?.enrollmentSecret ?? '',
             this.state.credentials?.token ?? '',

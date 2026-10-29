@@ -13,6 +13,15 @@ interface DeliveryStatus {
   deletionPending: number;
   blockedBatches?: number;
   omitted?: number;
+  closedReason?: 'policy_changed' | 'user' | null;
+  lastAttemptAt?: string | null;
+  lastConfirmedAt?: string | null;
+  nextAttemptAt?: number;
+  transportFailure?: {
+    phase: 'enrollment' | 'permit' | 'upload' | 'withdrawal';
+    status: number | null;
+    reason: string;
+  } | null;
   error?: string | null;
 }
 export function DiagnosticProblemReport() {
@@ -115,13 +124,31 @@ export function DiagnosticDeliverySettings({
     }
   }
   const unavailable = !value?.available || !value.configured;
+  const status = !value
+    ? '状态无法确认'
+    : !value.available || !value.configured
+      ? '暂不可用'
+      : !value.consent
+        ? value.closedReason === 'policy_changed'
+          ? '需重新同意'
+          : '关闭'
+        : value.paused
+          ? '已暂停'
+          : value.error || value.nextAttemptAt
+            ? '正在重试'
+            : value.queuedBatches
+              ? '等待发送'
+              : '已开启';
   return (
     <div>
       <p>
         自动发送诊断：
-        {unavailable ? '暂不可用' : !value.consent ? '关闭' : value.paused ? '已暂停' : '已开启'}
+        {status}
       </p>
-      {unavailable ? <p>仍可导出本机诊断报告。</p> : null}
+      {unavailable ? <p>状态无法确认或服务不可用，仍可导出本机诊断报告。</p> : null}
+      {value?.available && value.closedReason === 'policy_changed' && !value.consent ? (
+        <p>诊断说明已更新，自动发送已关闭；阅读并同意后可重新开启。</p>
+      ) : null}
       {value?.blockedBatches ? (
         <StatusBanner tone="warning">
           有 {value.blockedBatches} 批诊断无法继续自动发送，本机副本仍保留，可手动导出。
@@ -158,19 +185,30 @@ export function DiagnosticDeliverySettings({
       {value?.deletionPending ? (
         <StatusBanner tone="warning">删除请求等待同步。</StatusBanner>
       ) : null}
-      {value?.error ? (
-        <StatusBanner tone="warning">暂时无法发送，诊断记录保留在本机。</StatusBanner>
+      {value?.error && value.closedReason !== 'policy_changed' ? (
+        <StatusBanner tone="warning">
+          {value.transportFailure
+            ? `${{ enrollment: '登记', permit: '发送许可', upload: '上传', withdrawal: '删除请求' }[value.transportFailure.phase]}未确认${value.transportFailure.status ? `（HTTP ${value.transportFailure.status}）` : ''}；将按计划重试。`
+            : '暂时无法发送，请检查本机状态或网络。'}
+          可导出本机诊断报告。
+        </StatusBanner>
       ) : null}
       {message ? (
         <StatusBanner tone={message.error ? 'danger' : 'success'}>{message.text}</StatusBanner>
       ) : null}
       <details>
         <summary>诊断详情</summary>
-        <p>本机保留完整证据。云端拒收或网络不可用时保留待传副本，缺失范围记录在诊断中。</p>
+        <p>本机保留范围内的诊断；缺失与截断见报告。</p>
         {value ? (
           <p>
-            待传 {value.queuedBatches} 批 · 已确认 {value.acknowledged} 批
-            {value.omitted ? ` · ${value.omitted} 次缺失或预算记录` : ''}
+            待传 {value.queuedBatches} 批 · 已确认 {value.acknowledged} 批{' · '}受阻{' '}
+            {value.blockedBatches ?? 0} 批 · 遗漏 {value.omitted ?? 0} 次{' · '}删除待同步{' '}
+            {value.deletionPending} 项
+            <br />
+            最近尝试：{value.lastAttemptAt ?? '未知'} · 最近确认：{value.lastConfirmedAt ?? '未知'}
+            <br />
+            下次重试：
+            {value.nextAttemptAt ? new Date(value.nextAttemptAt).toLocaleString() : '无或未知'}
           </p>
         ) : null}
       </details>
