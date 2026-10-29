@@ -308,13 +308,19 @@ export function MusicSettings({ active = true }: { active?: boolean }) {
                         void action(async () => {
                           const tracks: MusicTrack[] = [];
                           for (const file of files) {
-                            const { portable: _portable, ...track } =
-                              await localFile<UploadedMusicTrack>(
-                                '/operator/music/track',
-                                file,
-                                'application/x-mizar-audio',
-                              );
-                            tracks.push({ ...track, entryId: crypto.randomUUID() });
+                            const track = await localFile<UploadedMusicTrack>(
+                              '/operator/music/track',
+                              file,
+                              'application/x-mizar-audio',
+                            );
+                            tracks.push({
+                              id: track.id,
+                              name: track.name,
+                              startMs: track.startMs,
+                              endMs: track.endMs,
+                              ...(track.gain === undefined ? {} : { gain: track.gain }),
+                              entryId: crypto.randomUUID(),
+                            });
                           }
                           change(group, { tracks });
                           setMessage('曲目已选，请保存音乐配置。');

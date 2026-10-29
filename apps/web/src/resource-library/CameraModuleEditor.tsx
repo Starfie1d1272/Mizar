@@ -169,14 +169,16 @@ export function CameraModuleEditor({
           (() => {
             const source = availableSources[0];
             if (!source) return;
-            const {
-              pack: _pack,
-              openingSound: _sound,
-              ...map
-            } = cameraMapSchema.parse({ map: 'de_placeholder', pack: 'placeholder' });
+            const { opening, rounds, pauseCandidates, stages } = cameraMapSchema.parse({
+              map: 'de_placeholder',
+              pack: 'placeholder',
+            });
             onChange({
               ...value,
-              maps: [...value.maps, { ...map, map: '', source, openingSound: null }],
+              maps: [
+                ...value.maps,
+                { map: '', source, openingSound: null, opening, rounds, pauseCandidates, stages },
+              ],
             });
           })()
         }

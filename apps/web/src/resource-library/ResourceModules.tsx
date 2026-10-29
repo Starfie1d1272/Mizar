@@ -1,9 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import {
-  parseModuleRecord,
-  type CameraSourceRef,
-  type ModuleRecord,
-} from '@mizar/broadcast-config';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { parseModuleRecord, type ModuleRecord } from '@mizar/broadcast-config';
 import { useLocalRead } from '../preparation/client';
 import { Button, Checkbox, Field, Panel, Select, StatusBanner } from '../ui';
 import { PresetVisualPreview } from './PresetVisualPreview';
@@ -269,17 +265,22 @@ export function ResourceModules({
       availability?: { state: 'ready' | 'dependency_missing'; reason?: string };
     }[];
   }>('/local/v1/broadcast-modules?view=metadata', 2000, refresh);
-  const directory =
-    snapshot && metadata
-      ? {
-          modules: snapshot.modules.flatMap((module) => {
-            const item = metadata.modules.find(
-              (entry) => entry.id === module.id && entry.revision === module.revision,
-            );
-            return item ? [{ module, builtin: item.builtin, availability: item.availability }] : [];
-          }),
-        }
-      : null;
+  const directory = useMemo(
+    () =>
+      snapshot && metadata
+        ? {
+            modules: snapshot.modules.flatMap((module) => {
+              const item = metadata.modules.find(
+                (entry) => entry.id === module.id && entry.revision === module.revision,
+              );
+              return item
+                ? [{ module, builtin: item.builtin, availability: item.availability }]
+                : [];
+            }),
+          }
+        : null,
+    [snapshot, metadata],
+  );
   const migration = useLocalRead<{ state: string; reason?: string }>(
     '/local/v1/broadcast-config/migration',
     2000,
