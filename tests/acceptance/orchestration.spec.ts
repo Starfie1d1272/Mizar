@@ -378,6 +378,7 @@ test('explicit MulNX stop confirms production effects, shows ownership errors, a
   const view: OrchestrationView = {
     tool: { installed: 'test', latest: null, busy: false, message: '', packs: [] },
     preset: emptyOrchestrationPreset(),
+    automaticEnabled: false,
     ready: true,
     status: {
       control: { mode: 'native', state: 'blocked' },

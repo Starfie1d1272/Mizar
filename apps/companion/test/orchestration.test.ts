@@ -284,11 +284,20 @@ it('persists validated drafts, rejects malformed imports and forbids remote cont
   await music.load();
   const app = Fastify();
   cleanup.push(() => app.close());
-  registerOrchestrationRoutes(app, r.director, music, {
-    mode: 'loopback',
-    bindHost: '127.0.0.1',
-    allowedOrigins: [],
-  });
+  registerOrchestrationRoutes(
+    app,
+    r.director,
+    music,
+    {
+      mode: 'loopback',
+      bindHost: '127.0.0.1',
+      allowedOrigins: [],
+    },
+    { controlToken: undefined, configure: () => {}, canPrepare: () => !r.truth.production },
+  );
+  r.truth.production = false;
+  await r.tick();
+  const send = vi.spyOn(r.provider, 'send');
   const post = (payload: Record<string, unknown>, origin = 'http://127.0.0.1:3000') =>
     app.inject({ method: 'POST', url: '/operator/orchestration', headers: { origin }, payload });
   const exported = orchestrationPresetSchema.parse(
@@ -315,9 +324,28 @@ it('persists validated drafts, rejects malformed imports and forbids remote cont
   expect(
     (await post({ action: 'configure', preset: { ...exported, name: 'RC 候选' } })).statusCode,
   ).toBe(200);
+  expect((await post({ action: 'set-automatic', enabled: true })).json()).toMatchObject({
+    automaticEnabled: true,
+  });
+  expect(send).not.toHaveBeenCalled();
   const restored = new OrchestrationStore(r.store.directory);
   await restored.load();
   expect(restored.preset.name).toBe('RC 候选');
+  expect(restored.automaticEnabled).toBe(true);
+  r.truth.production = true;
+  await r.tick();
+  expect(r.director.get().held).toBe(false);
+  expect((await post({ action: 'set-automatic', enabled: false })).statusCode).toBe(400);
+  r.director.hold();
+  r.provider.generation++;
+  await r.tick();
+  expect(r.director.get().held).toBe(true);
+  r.truth.production = false;
+  await r.tick();
+  expect((await post({ action: 'set-automatic', enabled: false })).statusCode).toBe(200);
+  r.truth.production = true;
+  await r.tick();
+  expect(r.director.get().held).toBe(true);
   await writeFile(join(r.store.directory, 'preset.json'), '{broken');
   await expect(restored.load()).rejects.toThrow();
   expect(restored.ready).toBe(false);
@@ -1081,7 +1109,14 @@ it.each(['owned', 'external'] as const)(
       (await demo('begin', ownership === 'external' ? { gameOwnership: 'external' } : {}))
         .statusCode,
     ).toBe(200);
+    let cameraConfigured = false;
+    trial.configureCameraSession(requestId, () => {
+      cameraConfigured = true;
+    });
+    expect(cameraConfigured).toBe(true);
+    expect(trial.canUseCamera('audition')).toBe(false);
     expect((await demo('playing')).statusCode).toBe(200);
+    expect(trial.canUseCamera('audition')).toBe(true);
     expect(trial.get()).toMatchObject({ active: true, phase: 'playing' });
     const marker = readDemoTestRecovery(markerPath);
     expect(marker?.requestId).toBe(requestId);
