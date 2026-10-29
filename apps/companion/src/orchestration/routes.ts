@@ -63,6 +63,7 @@ export function registerOrchestrationRoutes(
     configure: (revision: string, commit: () => void) => void;
     configureDemo?: (requestId: string, commit: () => void) => void;
     canPrepare?: () => boolean;
+    withSelection?: (commit: () => Promise<void>) => Promise<boolean>;
   },
   tool?: MulnxTool,
 ) {
@@ -86,6 +87,24 @@ export function registerOrchestrationRoutes(
     )
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
     return reply.header('cache-control', 'no-store').send(view());
+  });
+  app.get('/local/v1/mulnx-releases', async (request, reply) => {
+    if (
+      policy.mode !== 'loopback' ||
+      !['127.0.0.1', 'localhost', '[::1]', '::1'].includes(request.hostname) ||
+      request.headers['sec-fetch-site'] === 'cross-site' ||
+      (request.headers.origin && !allowed(request.headers.origin))
+    )
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    if (!tool) return reply.code(503).send({ error: 'mulnx_bundle_unavailable' });
+    try {
+      return reply
+        .header('cache-control', 'no-store')
+        .send({ releases: await tool.listPreparedReleases() });
+    } catch (error) {
+      request.log.error({ stage: 'mulnx_list_releases', err: error }, 'MulNX 版本读取失败');
+      return reply.code(503).send({ error: 'mulnx_list_unavailable' });
+    }
   });
   app.post('/operator/runtime/camera-session', { bodyLimit: 2048 }, (request, reply) => {
     const expected = Buffer.from(session?.controlToken ?? '');
@@ -121,6 +140,89 @@ export function registerOrchestrationRoutes(
         '原生运镜会话未确认',
       );
       return reply.code(409).send({ error: 'camera_native_session_invalid' });
+    }
+  });
+  app.post(
+    '/operator/runtime/mulnx-prepare-release',
+    { bodyLimit: 1024 },
+    async (request, reply) => {
+      const expected = Buffer.from(session?.controlToken ?? '');
+      const token = request.headers['x-runtime-token'];
+      const supplied = Buffer.from(typeof token === 'string' ? token : '');
+      if (
+        policy.mode !== 'loopback' ||
+        request.headers.origin !== undefined ||
+        !expected.length ||
+        expected.length !== supplied.length ||
+        !timingSafeEqual(expected, supplied)
+      )
+        return reply.code(403).send({ error: 'runtime-control-denied' });
+      try {
+        z.strictObject({}).parse(request.body);
+        if (!tool) throw new Error('mulnx_bundle_unavailable');
+        const result = await tool.prepareRelease();
+        return {
+          preparedId: result.preparedId,
+          tag: result.release.tag,
+          archiveSha256: result.release.sha256,
+        };
+      } catch (error) {
+        request.log.error(
+          { stage: 'mulnx_prepare_release', err: error, result: 'failure' },
+          'MulNX 下载失败',
+        );
+        return reply.code(409).send({
+          error: 'mulnx_prepare_failed',
+          message: 'MulNX 下载或校验失败，请检查网络后重试。',
+          requestId: request.id,
+        });
+      }
+    },
+  );
+  app.post('/operator/runtime/mulnx-select', { bodyLimit: 4096 }, async (request, reply) => {
+    const expected = Buffer.from(session?.controlToken ?? '');
+    const token = request.headers['x-runtime-token'];
+    const supplied = Buffer.from(typeof token === 'string' ? token : '');
+    if (
+      policy.mode !== 'loopback' ||
+      request.headers.origin !== undefined ||
+      !expected.length ||
+      expected.length !== supplied.length ||
+      !timingSafeEqual(expected, supplied)
+    )
+      return reply.code(403).send({ error: 'runtime-control-denied' });
+    try {
+      const body = z
+        .discriminatedUnion('action', [
+          z.strictObject({
+            action: z.literal('stage'),
+            preparedId: z.string().regex(/^prepared-[a-f0-9]{64}-[a-f0-9-]{36}$/),
+            cs2Path: nativeCs2PathSchema,
+            consoleCapture: z.boolean(),
+          }),
+          z.strictObject({ action: z.literal('commit'), id: z.uuid() }),
+        ])
+        .parse(request.body);
+      if (!tool) throw new Error('mulnx_bundle_unavailable');
+      if (body.action === 'stage')
+        return await tool.stageSelection(body.preparedId, body.cs2Path, body.consoleCapture);
+      let result: { version: string } | undefined;
+      if (
+        !session?.withSelection ||
+        !(await session.withSelection(async () => {
+          result = await tool.commitSelection(body.id);
+          director.invalidatePreparation('MulNX 版本已切换，请重新准备运镜。');
+        }))
+      )
+        throw new Error('mulnx_preparation_required');
+      return result;
+    } catch (error) {
+      request.log.error({ stage: 'mulnx_select', err: error, result: 'failure' }, 'MulNX 切换失败');
+      return reply.code(409).send({
+        error: 'mulnx_select_failed',
+        message: 'MulNX 版本切换未确认，请刷新并检查制作和游戏状态。',
+        requestId: request.id,
+      });
     }
   });
   app.post('/operator/runtime/mulnx-prepare', { bodyLimit: 4096 }, async (request, reply) => {

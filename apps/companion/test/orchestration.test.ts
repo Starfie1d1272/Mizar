@@ -481,6 +481,158 @@ it('reports MulNX update check failures without exposing internal errors and per
   expect(other.body).not.toContain('private diagnostic');
   expect((await post()).statusCode).toBe(200);
 });
+it('allows only the native host to prepare a MulNX release without selecting it', async () => {
+  const r = await rig();
+  const app = Fastify();
+  cleanup.push(() => app.close());
+  const music = new MusicStore(join(r.root, 'music'));
+  const tool = new MulnxTool(join(r.root, 'mulnx'), join(r.root, 'bundle'));
+  const prepare = vi.spyOn(tool, 'prepareRelease').mockResolvedValue({
+    preparedId: 'prepared-example',
+    release: {
+      id: 1,
+      assetId: 2,
+      tag: 'Beta',
+      publishedAt: '2026-01-01',
+      url: 'https://example.test/private',
+      size: 1,
+      sha256: 'a'.repeat(64),
+    },
+  });
+  registerOrchestrationRoutes(
+    app,
+    r.director,
+    music,
+    { mode: 'loopback', bindHost: '127.0.0.1', allowedOrigins: [] },
+    { controlToken: 'secret', configure: () => {} },
+    tool,
+  );
+  const post = (headers: Record<string, string>, payload: Record<string, unknown> = {}) =>
+    app.inject({
+      method: 'POST',
+      url: '/operator/runtime/mulnx-prepare-release',
+      headers,
+      payload,
+    });
+  expect((await post({})).statusCode).toBe(403);
+  expect(
+    (await post({ 'x-runtime-token': 'secret', origin: 'http://127.0.0.1:3000' })).statusCode,
+  ).toBe(403);
+  expect(
+    (await post({ 'x-runtime-token': 'secret' }, { url: 'https://example.test' })).statusCode,
+  ).toBe(409);
+  expect(prepare).not.toHaveBeenCalled();
+  const result = await post({ 'x-runtime-token': 'secret' });
+  expect(result.statusCode).toBe(200);
+  expect(result.json<unknown>()).toEqual({
+    preparedId: 'prepared-example',
+    tag: 'Beta',
+    archiveSha256: 'a'.repeat(64),
+  });
+  expect(prepare).toHaveBeenCalledOnce();
+  expect(tool.view().installed).toBeNull();
+  vi.spyOn(tool, 'listPreparedReleases').mockResolvedValue([
+    {
+      preparedId: 'prepared-example',
+      tag: 'Beta',
+      archiveSha256: 'a'.repeat(64),
+      state: 'available',
+    },
+  ]);
+  const listing = await app.inject({
+    method: 'GET',
+    url: '/local/v1/mulnx-releases',
+    headers: { host: '127.0.0.1' },
+  });
+  expect(listing.statusCode).toBe(200);
+  expect(listing.json<unknown>()).toEqual({
+    releases: [
+      {
+        preparedId: 'prepared-example',
+        tag: 'Beta',
+        archiveSha256: 'a'.repeat(64),
+        state: 'available',
+      },
+    ],
+  });
+  expect(
+    (
+      await app.inject({
+        method: 'GET',
+        url: '/local/v1/mulnx-releases',
+        headers: { host: 'remote.example' },
+      })
+    ).statusCode,
+  ).toBe(403);
+  expect(
+    (
+      await app.inject({
+        method: 'GET',
+        url: '/local/v1/mulnx-releases',
+        headers: { host: '127.0.0.1', 'sec-fetch-site': 'cross-site' },
+      })
+    ).statusCode,
+  ).toBe(403);
+});
+it('commits a prepared MulNX selection only inside the production guard', async () => {
+  const r = await rig();
+  const app = Fastify();
+  cleanup.push(() => app.close());
+  const music = new MusicStore(join(r.root, 'music'));
+  const tool = new MulnxTool(join(r.root, 'mulnx'), join(r.root, 'bundle'));
+  const id = '11111111-1111-4111-8111-111111111111';
+  const stage = vi.spyOn(tool, 'stageSelection').mockResolvedValue({ id });
+  const commit = vi.spyOn(tool, 'commitSelection').mockResolvedValue({ version: 'Beta' });
+  let allowed = false;
+  registerOrchestrationRoutes(
+    app,
+    r.director,
+    music,
+    { mode: 'loopback', bindHost: '127.0.0.1', allowedOrigins: [] },
+    {
+      controlToken: 'secret',
+      configure: () => {},
+      withSelection: async (fn) => {
+        if (!allowed) return false;
+        await fn();
+        return true;
+      },
+    },
+    tool,
+  );
+  const post = (payload: Record<string, unknown>, token = 'secret') =>
+    app.inject({
+      method: 'POST',
+      url: '/operator/runtime/mulnx-select',
+      headers: { 'x-runtime-token': token },
+      payload,
+    });
+  const preparedId = `prepared-${'a'.repeat(64)}-${id}`;
+  expect(
+    (
+      await post(
+        { action: 'stage', preparedId, cs2Path: 'D:\\Steam\\cs2.exe', consoleCapture: false },
+        'bad',
+      )
+    ).statusCode,
+  ).toBe(403);
+  expect(
+    (
+      await post({
+        action: 'stage',
+        preparedId,
+        cs2Path: 'D:\\Steam\\cs2.exe',
+        consoleCapture: false,
+      })
+    ).statusCode,
+  ).toBe(200);
+  expect(stage).toHaveBeenCalledOnce();
+  expect((await post({ action: 'commit', id })).statusCode).toBe(409);
+  expect(commit).not.toHaveBeenCalled();
+  allowed = true;
+  expect((await post({ action: 'commit', id })).statusCode).toBe(200);
+  expect(commit).toHaveBeenCalledOnce();
+});
 it('real websocket separates ACK, rejection and unrelated broadcasts; disconnect never replays', async () => {
   const app = Fastify();
   await app.register(websocket);

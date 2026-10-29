@@ -176,12 +176,24 @@ export class ResourceStore {
     signal: AbortSignal,
     purpose: 'cache' | 'rollback' = 'cache',
   ): Promise<CachedPack> {
+    const candidate = await this.cachedIdentity(packId, id, signal, purpose);
+    const directory = this.content(packId, id);
+    await checkTree(directory);
+    for (const file of candidate.descriptor.files)
+      await verifiedRead(directory, file, signal, () => {});
+    return candidate;
+  }
+
+  /** Authenticate identity without requiring the cached content to remain readable. */
+  private async cachedIdentity(
+    packId: string,
+    id: string,
+    signal: AbortSignal,
+    purpose: 'cache' | 'rollback' = 'cache',
+  ): Promise<CachedPack> {
     const directory = this.content(packId, id);
     const record = await readJson(dirname(directory), 'receipt.json');
-    const descriptor = await this.verify(packId, directory, record, signal, purpose);
-    await checkTree(directory);
-    for (const file of descriptor.files) await verifiedRead(directory, file, signal, () => {});
-    return { id, descriptor };
+    return { id, descriptor: await this.verify(packId, directory, record, signal, purpose) };
   }
 
   private async restore(packId: string): Promise<void> {
@@ -667,7 +679,7 @@ export class ResourceStore {
         if (this.options.references) {
           for (const id of await readdir(join(this.directory(packId), 'versions'))) {
             if (!versionId.test(id)) throw new ResourceStoreError('resource_pointer_invalid');
-            const candidate = await this.cached(packId, id, idleSignal());
+            const candidate = await this.cachedIdentity(packId, id, idleSignal());
             const digest = candidate.descriptor.manifestSha256;
             if (!digest) throw new ResourceStoreError('resource_identity_unavailable');
             if (

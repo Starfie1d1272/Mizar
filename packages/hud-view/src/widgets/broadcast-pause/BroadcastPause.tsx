@@ -22,11 +22,13 @@ export function BroadcastPause({
   resolvedPreset,
   design,
   branding,
+  chatEnabled,
 }: {
   readonly snapshot: ProgramSnapshot;
   readonly resolvedPreset: HudResolvedPreset;
   readonly design: HudDesign;
   readonly branding?: BroadcastBranding | undefined;
+  readonly chatEnabled?: boolean | undefined;
 }) {
   const p = buildMatchHeaderPresentation(snapshot.payload);
   const rails = buildPlayerRailsPresentation(snapshot.payload);
@@ -69,7 +71,8 @@ export function BroadcastPause({
         </div>
       ) : null}
       <PauseNotice presentation={p} />
-      {layout['team-t-rail'].visible && snapshot.payload.status.telemetry === 'fresh' ? (
+      {(chatEnabled ?? layout['team-t-rail'].visible) &&
+      snapshot.payload.status.telemetry === 'fresh' ? (
         <div
           className="broadcast-pause__chat"
           data-pause-chat-side={historySide === 'left' ? 'right' : 'left'}

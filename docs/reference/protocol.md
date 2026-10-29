@@ -299,3 +299,17 @@ RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对�
 `GET /local/v1/mixer` 返回 `MixerStatus`；`POST /operator/mixer` 接受 `MixerCommand` 并返回 `MixerCommandResult`。协议类型位于 `@mizar/protocol/mixer`。revision 标识后端观察到的绑定上下文，过期命令必须拒绝；写入结果只有经回读确认才返回 `confirmed`。前三路音量是 OBS 观察值，音乐音量是独立的本机 master 配置。音乐条目的可选 `gain` 缺省时使用所属组 `volume`，通过音乐配置保存，旧的组音量命令语义不变。
 
 `POST /operator/music` 的 `play` 动作接受 `group` 和 `entryId`；旧客户端可发送 `trackId`，仅在组内唯一匹配时有效。两个字段同时提供时必须指向同一条目。
+
+## LHM CS2 展示宿主（开发入口）
+
+设置 `MIZAR_LHM_ROOT` 为已构建 HUD 的本机目录，`MIZAR_LHM_PORT` 为独立回环端口（默认 1350），可用 `MIZAR_LHM_CONFIG` 指向按 LHM panel 分组的 JSON 值。启动 Companion 后日志给出顶层展示地址。此入口只用于本机验证已信任的构建目录，尚不提供 ZIP 导入、配置编辑、素材上传或安装管理；配置只在启动时读取。不要把目录指向包含机密的文件夹。
+
+宿主以独立 origin 提供静态文件及只读 HTTP/Socket.IO，并使用内容安全策略限制网络访问，不暴露桌面桥接或操作接口。固定身份为 `mizar`；连接与重连都要求客户端注册后发送完整 panel 值和当前正式 Program/Radar 同批投影。`GET /status` 返回当前帧可用状态及缺失项；数据过期或必需的地图、计时、玩家状态、武器覆盖和位置不可用时不发送伪造数据，并刷新已有画面。武器名称缺失时只隐藏该武器；炸弹处于计时状态但缺少相应计时时只隐藏炸弹，其他投影继续更新。当前比赛和队伍从新鲜且已匹配的正式投影生成，按观战槽位确定左右队；比分未知时不提供比赛对象。地图目录复用已核验的 Mizar 校准和图片；官方模板的 Nuke、Train 将两层图按原高度分界合成到一张图。Vertigo 的官方模板写死了专用缩放位置，暂不提供该图；派生模板的多层地图沿用它自己的内置实现，其备用接口不能通过 JSON 表示层可见性函数。队伍标志与面板图片仅使用现有本机素材引用，头像仅使用当前投影引用的 Steam 缓存。panel 图片需由 HUD 的 panel.json 声明，配置值为本机素材 URL；此入口不提供上传。外部图片、赛事、摄像头、投掷物及击杀事件尚不可用。第三方 HUD 自身可能对缺失值使用默认显示。
+
+已构建并在 Chromium 中以仓库真实回放投影试运行官方 `lexogrine/cs2-react-hud` 提交 `7874750c97fcecd8f72eb3fad382917e035ec651` 与派生 `FSA-InfoSA/cs2-react-hud` 提交 `6eb145d5c5d281641d125d8d5a4cb9fb1c121fd3`。这些结果不覆盖真实 Windows、OBS 或 LHM/JT 的验收，也不构成对其他 HUD 的兼容承诺。
+
+### 独立 LHM HUD 导出
+
+`POST /operator/hud-config/export-lhm` 接收 `{ "expectedActiveRevision": "…" }`，只允许回环操作来源。服务端捕获当前 HUD 已启用的解析配置，并在导出完成前复核修订；修订不符返回 409。成功返回 `application/zip` 文件，不更改当前配置或播放状态；缺少预构建运行时或素材时返回 503。
+
+ZIP 根目录包含 `hud.json`、`panel.json`、`keybinds.json`、`mizar-config.json`、预编译浏览器代码与内置素材。`mizar-export-report.json` 列明包含、不支持和需要绑定的项目。该阶段通过 LHM Socket.IO 或 LHM 窗口 IPC 接收 CS2 GSI，复用 Mizar 遥测、运行时和共享 HUD 展示；Mizar 不必运行。未连接比赛身份时显示中立 CT/T，比赛系列、队伍身份和标志、头像、炸弹伤害预测、音乐、运镜及节目场景不在此导出范围。实际 LHM/JT、Windows 和 OBS 验收仍需执行。

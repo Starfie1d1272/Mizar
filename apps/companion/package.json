@@ -13,6 +13,7 @@
     "@fastify/static": "catalog:",
     "@fastify/websocket": "catalog:",
     "@mizar/core": "workspace:*",
+    "@mizar/cs2-assets": "workspace:*",
     "@mizar/hud-config": "workspace:*",
     "@mizar/protocol": "workspace:*",
     "@mizar/radar": "workspace:*",
@@ -22,8 +23,10 @@
     "@mizar/telemetry-gsi": "workspace:*",
     "cs2-c4-damage": "0.1.1",
     "fastify": "catalog:",
+    "fflate": "0.8.3",
     "obs-websocket-js": "5.0.8",
     "sigstore": "5.0.0",
+    "socket.io": "4.8.1",
     "yaml": "2.9.1",
     "zod": "catalog:"
   },
@@ -35,6 +38,7 @@
     "@types/node": "catalog:",
     "@types/ws": "catalog:",
     "@typescript/native": "catalog:",
+    "socket.io-client": "4.8.1",
     "tsx": "catalog:",
     "vitest": "catalog:"
   }

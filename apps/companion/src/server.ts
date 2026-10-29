@@ -296,6 +296,21 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
         )
       : undefined;
   const app = buildApp({
+    ...(process.env.MIZAR_LHM_ROOT
+      ? {
+          lhmHost: {
+            root: resolve(process.env.MIZAR_LHM_ROOT),
+            port: Number(process.env.MIZAR_LHM_PORT ?? '1350'),
+            ...(process.env.MIZAR_LHM_CONFIG
+              ? {
+                  config: JSON.parse(
+                    await readFile(process.env.MIZAR_LHM_CONFIG, 'utf8'),
+                  ) as Record<string, unknown>,
+                }
+              : {}),
+          },
+        }
+      : {}),
     observerSettingsPath: join(captureDir, '../observer-assist.json'),
     ...(workspaceObserver ? { workspaceObserver } : {}),
     ...(supportJournal ? { supportJournal } : {}),
