@@ -731,7 +731,7 @@ describe('explicit program playback clock', () => {
       mapName: 'de_mirage',
       tick: 0,
       ticksPerSecond: 64,
-      valid: true,
+      usable: true,
     };
     const project = (tick: number, now: number, patch = {}) =>
       timeline.project(frame, settings, now, source, now, {
@@ -754,7 +754,7 @@ describe('explicit program playback clock', () => {
     expect(project(320, 202000).observer?.hints).toMatchObject([{ remainingSeconds: 5 }]);
     expect(project(320, 203000, { timeDomain: 'other' }).observer?.hints).toEqual([]);
     expect(project(320, 204000, { continuity: 'other' }).observer?.hints).toEqual([]);
-    expect(project(320, 205000, { valid: false }).observer).toMatchObject({
+    expect(project(320, 205000, { usable: false }).observer).toMatchObject({
       state: 'unavailable',
       timingBasis: 'program-clock',
       hints: [],

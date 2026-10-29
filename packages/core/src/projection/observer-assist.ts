@@ -10,7 +10,8 @@ export interface ProgramClock {
   readonly mapName: string;
   readonly tick: number;
   readonly ticksPerSecond: number;
-  readonly valid: boolean;
+  /** Set only after freshness, progress and continuity have been checked by the caller. */
+  readonly usable: boolean;
 }
 
 export interface ObserverHint {
@@ -57,7 +58,7 @@ interface BufferedKill {
   matched: boolean;
   retired: boolean;
   shownDueMs: number | null;
-  position?: Omit<ProgramClock, 'valid'>;
+  position?: Omit<ProgramClock, 'usable'>;
 }
 
 interface ClockPoint {
@@ -229,7 +230,7 @@ export class ObserverHintTimeline {
     this.nextDueMs = null;
     this.nextWindowMs = null;
   }
-  consume(event: GameEventObservation, position?: Omit<ProgramClock, 'valid'>) {
+  consume(event: GameEventObservation, position?: Omit<ProgramClock, 'usable'>) {
     if (event.cursor.role !== 'lookahead') return;
     this.lastReceivedMs = event.cursor.observedMonotonicMs;
     this.eventCounts[event.kind] = (this.eventCounts[event.kind] ?? 0) + 1;
@@ -633,7 +634,7 @@ export class ObserverHintTimeline {
     if (clock?.playback) {
       const playback = clock.playback;
       const valid =
-        playback.valid &&
+        playback.usable &&
         playback.timeDomain.length > 0 &&
         playback.continuity.length > 0 &&
         playback.mapName === program.map.name &&
