@@ -34,6 +34,7 @@ const requestId = () => randomInt(1, 2 ** 48);
 export class MulnxProvider {
   private socket: WebSocket | null = null;
   private pending: { wire: string; finish: (result: GatewayResult) => void } | null = null;
+  private unsupportedCommand = '';
   generation = 0;
   private trackedListeners = new Set<(state: TrackedState) => void>();
   onTracked(listener: (state: TrackedState) => void) {
@@ -80,7 +81,13 @@ export class MulnxProvider {
       const { wire, finish } = this.pending;
       // HSI broadcasts and unrelated / late replies are not execution evidence.
       if (text === `已投入消息总线${wire}`) finish('queued');
-      else if (text.startsWith(`error: ${wire} desc: `)) finish('rejected');
+      else if (text.startsWith(`error: ${wire} desc: `)) {
+        if (text.includes('unregister cmd: CamPlay/StatusTracked'))
+          this.unsupportedCommand = 'CamPlay/StatusTracked';
+        else if (text.includes('unregister cmd: CamPack/Status'))
+          this.unsupportedCommand = 'CamPack/Status';
+        finish('rejected');
+      }
     });
     socket.addEventListener('close', () => {
       if (this.socket === socket) this.close();
@@ -172,6 +179,7 @@ export class MulnxProvider {
     });
   }
   async packStatus(): Promise<{ active: string | null; empty: boolean } | null> {
+    this.unsupportedCommand = '';
     const socket = this.socket;
     if (!socket || !this.connected || this.pending) return null;
     const requestId = randomUUID();
@@ -215,6 +223,8 @@ export class MulnxProvider {
     const ack = await this.send('CamPack/Status', requestId);
     if (ack !== 'queued') finish(null);
     const status = await response;
+    if (ack === 'rejected' && this.unsupportedCommand === 'CamPack/Status')
+      throw new Error('camera_status_unsupported');
     return ack === 'queued' && this.socket === socket && this.generation === generation
       ? status
       : null;
@@ -223,6 +233,7 @@ export class MulnxProvider {
     type: 'CamPlay/StatusTracked' | 'CamPlay/CancelTracked',
     generation?: number,
   ) {
+    if (type === 'CamPlay/StatusTracked') this.unsupportedCommand = '';
     const socket = this.socket;
     if (!socket || !this.connected || (generation !== undefined && !isCounter(generation)))
       return null;
@@ -257,6 +268,8 @@ export class MulnxProvider {
     );
     if (ack !== 'queued') finish(null);
     const result = await response;
+    if (ack === 'rejected' && type === 'CamPlay/StatusTracked' && this.unsupportedCommand === type)
+      throw new Error('camera_status_unsupported');
     return ack === 'queued' && this.socket === socket && this.generation === connection
       ? result
       : null;

@@ -43,6 +43,7 @@ export class CameraDirector {
   private trackedGeneration: number | null = null;
   private cameraExecution: OrchestrationStatus['execution'] = 'unconfirmed';
   private stopping: Promise<boolean> | null = null;
+  private cancelBlocked = false;
   private pauseRemaining: { edge: string; shots: CameraShot[] } | null = null;
   private pendingContinuation: { key: string; edge: string } | null = null;
   private handoff: {
@@ -221,6 +222,7 @@ export class CameraDirector {
         this.cameraExecution = 'unconfirmed';
         this.clearing = false;
         this.stopping = null;
+        this.cancelBlocked = false;
         this.request = 'unknown';
       }
       const execution = this.executionIdentity(t);
@@ -297,7 +299,15 @@ export class CameraDirector {
     this.stop(message);
   }
   private prepareAutomatically() {
-    if (this.preparation !== 'waiting' || this.preparing || this.clearing || this.current) return;
+    if (
+      this.preparation !== 'waiting' ||
+      this.preparing ||
+      this.clearing ||
+      this.cancelBlocked ||
+      this.current ||
+      this.request === 'submitted'
+    )
+      return;
     if (!this.canPrepare()) return;
     void this.prepare().catch(() => {});
   }
@@ -342,6 +352,7 @@ export class CameraDirector {
         const cancelled = await this.provider.cancelTracked(tracked.generation);
         if (!cancelled?.matched || !valid()) throw new Error('camera_stop_unconfirmed');
         this.trackedGeneration = cancelled.generation;
+        this.cancelBlocked = false;
         this.cameraExecution = 'unconfirmed';
         this.preparationKey = context;
         this.preparation = 'ready';
@@ -353,7 +364,10 @@ export class CameraDirector {
           generation === this.provider.generation
         ) {
           this.preparation = 'error';
-          this.message = '运镜准备失败，请检查当前地图和连接后重试。';
+          this.message =
+            error instanceof Error && error.message === 'camera_status_unsupported'
+              ? '当前运镜工具版本不支持此功能，请更新至支持的版本。'
+              : '运镜准备未确认，请检查游戏连接后重试。';
         }
         throw error;
       }
@@ -394,7 +408,7 @@ export class CameraDirector {
     const intent = ++this.intentRevision;
     if (
       (this.current || this.stopping || (this.request === 'submitted' && !this.preparing)) &&
-      !(await this.cancelCurrent())
+      !(await this.cancelCurrent(true))
     )
       throw new Error('camera_stop_unconfirmed');
     if (
@@ -525,6 +539,16 @@ export class CameraDirector {
           : state.reason === 'path_unavailable' || state.reason === 'no_frame'
             ? '镜头资源不可用，请检查游戏中的资源。'
             : '镜头无法播放，请检查游戏连接和运镜设置。';
+    } else if (state.state === 'cancelled') {
+      this.pauseRemaining = null;
+      this.pendingContinuation = null;
+      if (!this.clearing) {
+        this.trackedGeneration = null;
+        this.preparationEpoch++;
+        this.preparationKey = '';
+        this.preparation = 'waiting';
+        this.message = '镜头已停止，正在重新准备。';
+      }
     } else if (state.state === 'completed') {
       this.message = '镜头已结束。';
       this.pendingContinuation = { key: current.key, edge: current.edge };
@@ -551,7 +575,8 @@ export class CameraDirector {
     const shot = next.shots.splice(index, 1)[0]!;
     this.play(shot, current.key, current.edge);
   }
-  private stop(message: string) {
+  private stop(message: string, explicit = false) {
+    if (this.cancelBlocked && !explicit) return;
     this.handoff = null;
     this.pauseRemaining = null;
     this.pendingContinuation = null;
@@ -563,22 +588,57 @@ export class CameraDirector {
         context: this.context,
         reason: message,
       });
-      void this.cancelCurrent();
+      void this.cancelCurrent(explicit);
     } else if (this.request === 'submitted') {
       this.revision++;
       this.request = 'unknown';
     }
   }
-  private async cancelCurrent(): Promise<boolean> {
+  private async cancelCurrent(explicit = false): Promise<boolean> {
     if (this.stopping) return this.stopping;
-    const token = this.trackedGeneration,
-      connection = this.provider.generation;
-    if (token === null || !this.provider.connected) return false;
+    if ((this.cancelBlocked && !explicit) || !this.provider.connected) return false;
+    const connection = this.provider.generation;
+    const context = this.identity(this.truth());
     const revision = ++this.revision;
     this.clearing = true;
     this.request = 'submitted';
     this.cameraExecution = 'unconfirmed';
     const work = (async () => {
+      let token = this.trackedGeneration;
+      if (this.cancelBlocked || token === null) {
+        try {
+          const status = await this.provider.trackedStatus();
+          if (
+            !status ||
+            revision !== this.revision ||
+            connection !== this.provider.generation ||
+            context !== this.identity(this.truth()) ||
+            this.closed
+          )
+            throw new Error('camera_status_unconfirmed');
+          token = status.generation;
+        } catch {
+          if (
+            revision === this.revision &&
+            connection === this.provider.generation &&
+            !this.closed
+          ) {
+            this.clearing = false;
+            this.cancelBlocked = true;
+            this.preparation = 'error';
+            this.request = 'unknown';
+            this.message = '停止未确认，请检查连接后重试。';
+          }
+          return false;
+        }
+      }
+      if (
+        revision !== this.revision ||
+        connection !== this.provider.generation ||
+        context !== this.identity(this.truth()) ||
+        this.closed
+      )
+        return false;
       const result = await this.provider.cancelTracked(token);
       if (revision !== this.revision || this.closed) return false;
       if (connection !== this.provider.generation) {
@@ -591,6 +651,7 @@ export class CameraDirector {
       this.clearing = false;
       if (!result?.matched) {
         this.trackedGeneration = result?.generation ?? null;
+        this.cancelBlocked = true;
         this.preparation = 'error';
         this.request = 'unknown';
         this.message = '停止未确认，请检查连接后重试。';
@@ -598,6 +659,7 @@ export class CameraDirector {
         return false;
       }
       this.trackedGeneration = result.generation;
+      this.cancelBlocked = false;
       this.current = null;
       this.cameraExecution = 'cancelled';
       this.request = 'queued';
@@ -614,7 +676,7 @@ export class CameraDirector {
   hold(message = '人工接管；已请求清空全部运镜槽，停止未确认。') {
     this.intentRevision++;
     this.held = true;
-    this.stop(message);
+    this.stop(message, true);
   }
   async command(
     action: 'connect' | 'disconnect' | 'resume' | 'hold' | 'skip',
@@ -635,13 +697,13 @@ export class CameraDirector {
       if (
         this.provider.connected &&
         this.trackedGeneration !== null &&
-        !(await this.cancelCurrent())
+        !(await this.cancelCurrent(true))
       )
         throw new Error('camera_stop_unconfirmed');
     } else if (action === 'skip') {
       this.intentRevision++;
       if (this.lastEdge) this.consume(this.lastEdge);
-      this.stop('已跳过本次运镜，停止结果未确认。');
+      this.stop('已跳过本次运镜，停止结果未确认。', true);
     } else {
       if (
         this.closed ||
@@ -663,7 +725,7 @@ export class CameraDirector {
       const intent = ++this.intentRevision;
       if (
         (this.current || this.stopping || (this.request === 'submitted' && !this.preparing)) &&
-        !(await this.cancelCurrent())
+        !(await this.cancelCurrent(true))
       )
         throw new Error('camera_stop_unconfirmed');
       if (

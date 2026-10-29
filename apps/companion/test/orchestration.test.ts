@@ -291,7 +291,13 @@ it('does not replace a shot when the upstream cancellation token is stale', asyn
   const r = await rig();
   await r.resume();
   await r.director.audition({ macro: '手动一', maxMs: 6000 }, r.director.get());
-  r.provider.cancelTracked = () => Promise.resolve({ generation: 9, matched: false });
+  const cancel = vi
+    .fn()
+    .mockResolvedValueOnce({ generation: 9, matched: false })
+    .mockResolvedValue({ generation: 11, matched: true });
+  r.provider.cancelTracked = cancel;
+  const status = vi.fn().mockResolvedValue({ generation: 10, current: null });
+  r.provider.trackedStatus = status;
   await expect(
     r.director.audition({ macro: '手动二', maxMs: 6000 }, r.director.get()),
   ).rejects.toThrow('camera_stop_unconfirmed');
@@ -299,6 +305,29 @@ it('does not replace a shot when the upstream cancellation token is stale', asyn
     { type: 'CamMacro/Play', macro: '手动一' },
   ]);
   expect(r.director.get()).toMatchObject({ current: '手动一', preparation: 'error', held: true });
+  await r.advance(7000);
+  await r.tick();
+  await r.tick();
+  await r.tick();
+  expect(cancel).toHaveBeenCalledTimes(1);
+  await r.director.audition({ macro: '手动二', maxMs: 6000 }, r.director.get());
+  expect(status).toHaveBeenCalled();
+  expect(cancel).toHaveBeenLastCalledWith(10);
+});
+it('invalidates preparation after an external cancellation and queries before playing again', async () => {
+  const r = await rig();
+  await r.resume();
+  await r.director.audition({ macro: '手动一', maxMs: 6000 }, r.director.get());
+  const status = vi.spyOn(r.provider, 'trackedStatus');
+  r.emit('cancelled');
+  expect(r.director.get()).toMatchObject({
+    current: null,
+    execution: 'cancelled',
+    preparation: 'waiting',
+  });
+  await r.director.audition({ macro: '手动二', maxMs: 6000 }, r.director.get());
+  expect(status).toHaveBeenCalled();
+  expect(r.calls.at(-1)).toEqual({ type: 'CamMacro/Play', macro: '手动二' });
 });
 it('keeps a pending cancellation valid when its state arrives before its reply', async () => {
   const r = await rig();
@@ -641,7 +670,9 @@ it('real websocket separates ACK, rejection and unrelated broadcasts; disconnect
       }
       if (replyMode === 'ack') {
         if (!(command.type === 'CamPack/Status' && ackFirst)) socket.send(`已投入消息总线${wire}`);
-      } else if (replyMode === 'reject') socket.send(`error: ${wire} desc: missing converter`);
+      } else if (replyMode === 'unsupported')
+        socket.send(`error: ${wire} desc: unregister cmd: ${command.type} on: fixture`);
+      else if (replyMode === 'reject') socket.send(`error: ${wire} desc: missing converter`);
       else if (replyMode !== 'silent') socket.close();
     });
   });
@@ -672,13 +703,20 @@ it('real websocket separates ACK, rejection and unrelated broadcasts; disconnect
     '"宏 \\"x\\"" "包 \\\\x" 22 5',
   );
   unsubscribe();
+  replyMode = 'unsupported';
+  await expect(provider.trackedStatus()).rejects.toThrow('camera_status_unsupported');
+  await expect(provider.packStatus()).rejects.toThrow('camera_status_unsupported');
+  replyMode = 'reject';
+  expect(await provider.trackedStatus()).toBeNull();
+  replyMode = 'ack';
+  wires.splice(0);
   ackFirst = true;
   expect(await provider.packStatus()).toEqual({ active: 'Mizar_pack', empty: true });
   wires.shift();
   expect(await provider.send('CamMacro/Play', '中文 "宏" \\')).toBe('queued');
   expect(JSON.parse(wires[0]!)).toEqual({ type: 'CamMacro/Play', payload: '"中文 \\"宏\\" \\\\"' });
   replyMode = 'silent';
-  expect(await provider.send('CamMacro/Play', '无回执')).toBe('unknown');
+  expect(await provider.trackedStatus()).toBeNull();
   expect(provider.connected).toBe(false);
   await provider.connect(port);
   replyMode = 'reject';
