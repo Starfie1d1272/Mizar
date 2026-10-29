@@ -17,6 +17,7 @@
     "@mizar/cs2-assets": "workspace:*",
     "@mizar/design-tokens": "workspace:*",
     "@mizar/hud-config": "workspace:*",
+    "@mizar/hud-view": "workspace:*",
     "@mizar/protocol": "workspace:*",
     "@mizar/radar": "workspace:*",
     "@mizar/replay": "workspace:*",

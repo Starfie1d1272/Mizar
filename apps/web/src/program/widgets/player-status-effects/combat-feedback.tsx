@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import type { ProjectionCursor } from '@mizar/protocol/shared';
 
-import { useProgramCueEffectsForPlayer } from '../../ProgramCueEffectContext';
+import { useProgramCueEffectsForPlayer } from '@mizar/hud-view';
 import { consecutivePresentationSamples } from '../../presentation-sample';
 
 export interface DamageGhostState {
