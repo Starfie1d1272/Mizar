@@ -14,10 +14,10 @@ export interface PlayerDeathGameEvent extends GameEventObservationBase {
   readonly throughSmoke: boolean;
   readonly attackerBlind: boolean;
   readonly attackerInAir: boolean;
-  readonly distance: number;
-  readonly damageHealth: number;
-  readonly damageArmor: number;
-  readonly hitgroup: number;
+  readonly distance?: number;
+  readonly damageHealth?: number;
+  readonly damageArmor?: number;
+  readonly hitgroup?: number;
 }
 
 export interface PlayerHurtGameEvent extends GameEventObservationBase {
@@ -26,9 +26,9 @@ export interface PlayerHurtGameEvent extends GameEventObservationBase {
   readonly attacker?: GameEventPlayerRef;
   readonly weapon: string;
   readonly healthRemaining: number;
-  readonly armorRemaining: number;
+  readonly armorRemaining?: number;
   readonly damageHealth: number;
-  readonly damageArmor: number;
+  readonly damageArmor?: number;
   readonly hitgroup: number;
 }
 
