@@ -115,12 +115,18 @@ it('requires only match context, preserves match through hide/resume/finish, and
     ).toBe(200);
     expect((await send('hide', (await get()).revision)).json()).toMatchObject({ mode: 'hidden' });
     expect((await send('enter', (await get()).revision)).json()).toMatchObject({ mode: 'live' });
-    expect((await app.inject('/local/v1/orchestration')).json().status.held).toBe(true);
+    expect(
+      (await app.inject('/local/v1/orchestration')).json<{ status: { held: boolean } }>().status
+        .held,
+    ).toBe(true);
     expect((await send('finish', (await get()).revision)).json()).toMatchObject({
       mode: 'preparation',
     });
     expect((await send('enter', (await get()).revision)).statusCode).toBe(200);
-    expect((await app.inject('/local/v1/orchestration')).json().status.held).toBe(false);
+    expect(
+      (await app.inject('/local/v1/orchestration')).json<{ status: { held: boolean } }>().status
+        .held,
+    ).toBe(false);
     expect((await send('finish', (await get()).revision)).statusCode).toBe(200);
     expect((await app.inject('/local/v1/match-document')).json()).toEqual(document);
     expect((await app.inject('/local/v1/program-scenes')).json()).toMatchObject({
