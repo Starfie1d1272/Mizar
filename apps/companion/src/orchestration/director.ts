@@ -41,6 +41,7 @@ export class CameraDirector {
     connection: number;
   } | null = null;
   private trackedGeneration: number | null = null;
+  private otherCurrent = false;
   private cameraExecution: OrchestrationStatus['execution'] = 'unconfirmed';
   private stopping: Promise<boolean> | null = null;
   private cancelBlocked = false;
@@ -196,6 +197,7 @@ export class CameraDirector {
       request: this.request,
       execution: this.cameraExecution,
       current: this.current?.macro ?? null,
+      otherCurrent: this.otherCurrent,
       message: this.message,
     };
   }
@@ -218,6 +220,7 @@ export class CameraDirector {
       if (this.connection !== this.provider.generation) {
         this.revision++;
         this.current = null;
+        this.otherCurrent = false;
         this.trackedGeneration = null;
         this.cameraExecution = 'unconfirmed';
         this.clearing = false;
@@ -344,13 +347,21 @@ export class CameraDirector {
         if ((await this.provider.send('CamPack/Apply', pack)) !== 'queued')
           throw new Error('camera_pack_apply_unconfirmed');
         if (!valid()) throw new Error('camera_context_changed');
+        const tracked = await this.provider.trackedStatus();
+        if (!tracked || !valid()) throw new Error('camera_status_unconfirmed');
+        this.otherCurrent = tracked.current !== null;
+        if (tracked.current) throw new Error('camera_busy');
+        const cancelled = await this.provider.cancelTracked(tracked.generation);
+        if (
+          !cancelled ||
+          cancelled.generation === tracked.generation ||
+          cancelled.current ||
+          !valid()
+        )
+          throw new Error('camera_stop_unconfirmed');
         const status = await this.provider.packStatus();
         if (!status || status.active !== pack || !status.empty || !valid())
           throw new Error('camera_pack_unconfirmed');
-        const tracked = await this.provider.trackedStatus();
-        if (!tracked || !valid()) throw new Error('camera_status_unconfirmed');
-        const cancelled = await this.provider.cancelTracked(tracked.generation);
-        if (!cancelled?.matched || !valid()) throw new Error('camera_stop_unconfirmed');
         this.trackedGeneration = cancelled.generation;
         this.cancelBlocked = false;
         this.cameraExecution = 'unconfirmed';
@@ -367,7 +378,9 @@ export class CameraDirector {
           this.message =
             error instanceof Error && error.message === 'camera_status_unsupported'
               ? '当前运镜工具版本不支持此功能，请更新至支持的版本。'
-              : '运镜准备未确认，请检查游戏连接后重试。';
+              : error instanceof Error && error.message === 'camera_busy'
+                ? '其他镜头正在播放，请先处理后重试。'
+                : '运镜准备未确认，请检查游戏连接后重试。';
         }
         throw error;
       }
@@ -424,7 +437,7 @@ export class CameraDirector {
       intent !== this.intentRevision ||
       expected.context !== this.identity(this.truth()) ||
       expected.connection !== this.provider.generation ||
-      !this.play(shot, 'audition', this.edge(this.truth()).key)
+      !(await this.play(shot, 'audition', this.edge(this.truth()).key))
     )
       throw new Error('camera_audition_unavailable');
   }
@@ -443,7 +456,7 @@ export class CameraDirector {
       };
       return;
     }
-    this.play(shot, key, edge);
+    void this.play(shot, key, edge);
   }
   private releaseHandoff() {
     const next = this.handoff;
@@ -457,9 +470,9 @@ export class CameraDirector {
       (next.key.startsWith('round:') && this.truth().program.clock?.phase !== 'freezetime')
     )
       return;
-    this.play(next.shot, next.key, next.edge);
+    void this.play(next.shot, next.key, next.edge);
   }
-  private play(shot: CameraShot, key: string, edge: string) {
+  private async play(shot: CameraShot, key: string, edge: string): Promise<boolean> {
     const t = this.truth();
     if (
       (this.held && key !== 'audition') ||
@@ -472,40 +485,81 @@ export class CameraDirector {
       !this.packReady() ||
       this.current ||
       this.clearing ||
+      this.request === 'submitted' ||
       this.trackedGeneration === null
     )
       return false;
-    const pack = this.store.map(t.program.map.name)!.pack;
-    const id = randomInt(1, 2 ** 48),
-      generation = this.trackedGeneration;
-    const revision = ++this.revision,
+    const context = this.identity(t),
       connection = this.provider.generation;
-    this.current = {
-      key,
-      macro: shot.macro,
-      until: this.now() + shot.maxMs,
-      edge,
-      id,
-      generation,
-      connection,
-    };
-    this.previousMacro = shot.macro;
-    this.cameraExecution = 'unconfirmed';
+    const pack = this.store.map(t.program.map.name)!.pack;
+    const revision = ++this.revision,
+      intent = this.intentRevision;
     this.request = 'submitted';
-    this.message = '镜头请求已提交。';
-    this.diagnostic('camera_cue', { context: this.context, key, shot, result: 'submitted' });
-    void this.provider.playTracked(shot.macro, pack, id, generation).then((result) => {
+    this.message = '正在准备镜头。';
+    const valid = () =>
+      revision === this.revision &&
+      intent === this.intentRevision &&
+      context === this.identity(this.truth()) &&
+      connection === this.provider.generation &&
+      !this.closed &&
+      !this.current &&
+      !this.clearing &&
+      this.preparation === 'ready' &&
+      (key === 'audition' ||
+        (!this.held &&
+          this.edge(this.truth()).key === edge &&
+          (!key.startsWith('round:') || this.truth().program.clock?.phase === 'freezetime'))) &&
+      this.safe(this.truth(), key === 'audition') &&
+      this.canPrepare();
+    try {
+      const tracked = await this.provider.trackedStatus();
+      if (!tracked || !valid()) throw new Error('camera_status_unconfirmed');
+      this.otherCurrent = tracked.current !== null;
+      if (tracked.current) throw new Error('camera_busy');
+      const status = await this.provider.packStatus();
+      if (!status || status.active !== pack || !status.empty || !valid())
+        throw new Error('camera_pack_unconfirmed');
+      const id = randomInt(1, 2 ** 48),
+        generation = tracked.generation;
+      this.trackedGeneration = generation;
+      this.current = {
+        key,
+        macro: shot.macro,
+        until: this.now() + shot.maxMs,
+        edge,
+        id,
+        generation,
+        connection,
+      };
+      this.previousMacro = shot.macro;
+      this.cameraExecution = 'unconfirmed';
+      this.message = '镜头请求已提交。';
+      this.diagnostic('camera_cue', { context: this.context, key, shot, result: 'submitted' });
+      const result = await this.provider.playTracked(shot.macro, id, generation);
       if (revision !== this.revision || this.closed || connection !== this.provider.generation)
-        return;
+        return false;
       this.request = result;
       if (result === 'queued') this.continuePause();
-      if (result !== 'queued') {
+      else {
         this.cameraExecution = 'unconfirmed';
         this.preparation = 'error';
         this.message = '镜头请求未确认，请检查连接。';
       }
-    });
-    return true;
+      return result === 'queued';
+    } catch (error) {
+      if (revision !== this.revision || connection !== this.provider.generation || this.closed)
+        return false;
+      this.request = 'unknown';
+      if (!valid()) return false;
+      this.preparation = 'error';
+      this.message =
+        error instanceof Error && error.message === 'camera_busy'
+          ? '其他镜头正在播放，请先处理后重试。'
+          : error instanceof Error && error.message === 'camera_status_unsupported'
+            ? '当前运镜工具版本不支持此功能，请更新至支持的版本。'
+            : '镜头准备未确认，请检查游戏连接和预设。';
+      return false;
+    }
   }
   private trackedState(state: TrackedState) {
     const current = this.current;
@@ -573,7 +627,7 @@ export class CameraDirector {
       return;
     const index = Math.floor(this.random() * next.shots.length);
     const shot = next.shots.splice(index, 1)[0]!;
-    this.play(shot, current.key, current.edge);
+    void this.play(shot, current.key, current.edge);
   }
   private stop(message: string, explicit = false) {
     if (this.cancelBlocked && !explicit) return;
@@ -605,7 +659,7 @@ export class CameraDirector {
     this.cameraExecution = 'unconfirmed';
     const work = (async () => {
       let token = this.trackedGeneration;
-      if (this.cancelBlocked || token === null) {
+      if (this.cancelBlocked || token === null || this.current === null) {
         try {
           const status = await this.provider.trackedStatus();
           if (
@@ -616,6 +670,18 @@ export class CameraDirector {
             this.closed
           )
             throw new Error('camera_status_unconfirmed');
+          if (
+            status.current &&
+            (!this.current ||
+              status.current.requestId !== this.current.id ||
+              status.current.generation !== this.current.generation)
+          ) {
+            this.otherCurrent = true;
+            if (this.current && status.current.generation !== this.current.generation)
+              this.current = null;
+            throw new Error('camera_busy');
+          }
+          this.otherCurrent = false;
           token = status.generation;
         } catch {
           if (
@@ -649,7 +715,16 @@ export class CameraDirector {
         return false;
       }
       this.clearing = false;
-      if (!result?.matched) {
+      if (!result || result.generation === token || result.current !== null) {
+        if (
+          result?.current &&
+          (!this.current ||
+            result.current.requestId !== this.current.id ||
+            result.current.generation !== this.current.generation)
+        ) {
+          this.current = null;
+          this.otherCurrent = true;
+        }
         this.trackedGeneration = result?.generation ?? null;
         this.cancelBlocked = true;
         this.preparation = 'error';
@@ -659,9 +734,10 @@ export class CameraDirector {
         return false;
       }
       this.trackedGeneration = result.generation;
+      this.otherCurrent = false;
       this.cancelBlocked = false;
       this.current = null;
-      this.cameraExecution = 'cancelled';
+      if (this.cameraExecution !== 'cancelled') this.cameraExecution = 'unconfirmed';
       this.request = 'queued';
       this.releaseHandoff();
       return true;

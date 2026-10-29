@@ -66,7 +66,7 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
     trackedStatus: () => Promise.resolve({ generation: 0, current: null }),
     cancelTracked: (generation: number) => {
       calls.push('CamPlay/ClearForce');
-      return Promise.resolve({ generation: generation + 1, matched: true });
+      return Promise.resolve({ generation: generation + 1, current: null });
     },
     playTracked: () => {
       calls.push('CamMacro/Play');
@@ -500,6 +500,7 @@ test('explicit MulNX stop confirms production effects, shows ownership errors, a
       request: 'idle',
       execution: 'unconfirmed',
       current: null,
+      otherCurrent: false,
       message: '等待本次交接',
     },
   };

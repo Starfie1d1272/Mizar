@@ -87,6 +87,7 @@ export interface OrchestrationStatus {
   request: 'idle' | 'submitted' | 'queued' | 'rejected' | 'unknown';
   execution: 'unconfirmed' | 'pending' | 'started' | 'completed' | 'failed' | 'cancelled';
   current: string | null;
+  otherCurrent: boolean;
   message: string;
 }
 export interface MulnxToolView {

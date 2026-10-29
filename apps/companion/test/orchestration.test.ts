@@ -11,6 +11,7 @@ import {
   MulnxProvider,
   type GatewayResult,
   type TrackedState,
+  type TrackedStatus,
 } from '../src/orchestration/provider.js';
 import { registerOrchestrationRoutes } from '../src/orchestration/routes.js';
 import { MulnxTool } from '../src/orchestration/tool.js';
@@ -70,7 +71,6 @@ async function rig(nativeRequired = false) {
     manual: false,
   };
   const calls: { type: string; macro?: string }[] = [];
-  let preparingCancel = false;
   let trackedListener: ((state: TrackedState) => void) | undefined;
   let tracked: { id: number; generation: number } | undefined;
   const provider = {
@@ -80,22 +80,18 @@ async function rig(nativeRequired = false) {
       type: 'CamMacro/Play' | 'CamPack/Apply' | 'CamPlay/ClearForce',
       macro?: string,
     ): Promise<GatewayResult> => {
-      if (type !== 'CamPack/Apply' && !preparingCancel)
-        calls.push({ type, ...(macro ? { macro } : {}) });
+      if (type !== 'CamPack/Apply') calls.push({ type, ...(macro ? { macro } : {}) });
       return Promise.resolve('queued');
     },
     packStatus: (): Promise<{ active: string | null; empty: boolean } | null> =>
       Promise.resolve({ active: '测试包', empty: true }),
-    trackedStatus: () => {
-      preparingCancel = true;
-      return Promise.resolve({ generation: 0, current: null });
+    trackedStatus: () => Promise.resolve({ generation: 0, current: null }),
+    cancelTracked: async (generation: number): Promise<TrackedStatus | null> => {
+      const result = tracked ? await provider.send('CamPlay/ClearForce') : 'queued';
+      tracked = undefined;
+      return result === 'queued' ? { generation: generation + 1, current: null } : null;
     },
-    cancelTracked: async (generation: number) => {
-      const result = await provider.send('CamPlay/ClearForce');
-      preparingCancel = false;
-      return result === 'queued' ? { generation: generation + 1, matched: true } : null;
-    },
-    playTracked: (macro: string, _pack: string, id: number, generation: number) => {
+    playTracked: (macro: string, id: number, generation: number) => {
       tracked = { id, generation };
       return provider.send('CamMacro/Play', macro);
     },
@@ -131,7 +127,7 @@ async function rig(nativeRequired = false) {
   const resume = () => director.command('resume', director.get());
   const tick = async () => {
     director.tick();
-    await Promise.resolve();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
   };
   const round = async (number: number, seconds = 20) => {
     program.map.phase = 'live';
@@ -349,14 +345,66 @@ it('waits for the first play acknowledgement when pause completion arrives early
   await r.tick();
   expect(r.calls.at(-1)).toEqual({ type: 'CamMacro/Play', macro: '暂停二' });
 });
+it('reads the tracked token before the pack and uses that token for playback', async () => {
+  const r = await rig();
+  await r.resume();
+  const order: string[] = [];
+  r.provider.trackedStatus = () => {
+    order.push('status');
+    return Promise.resolve({ generation: 41, current: null });
+  };
+  r.provider.packStatus = () => {
+    order.push('pack');
+    return Promise.resolve({ active: '测试包', empty: true });
+  };
+  r.provider.playTracked = (_macro, _id, generation) => {
+    order.push(`play:${generation}`);
+    return Promise.resolve('queued');
+  };
+  await r.director.audition({ macro: '手动', maxMs: 6000 }, r.director.get());
+  expect(order).toEqual(['status', 'pack', 'play:41']);
+});
+it('does not start a round shot if freeze time ends while the pack is checked', async () => {
+  const r = await rig();
+  await r.resume();
+  let finish!: (status: { active: string | null; empty: boolean }) => void;
+  r.provider.packStatus = () =>
+    new Promise((resolve) => {
+      finish = resolve;
+    });
+  await r.round(3, 0.1);
+  await r.live();
+  finish({ active: '测试包', empty: true });
+  await r.tick();
+  expect(r.calls.filter((call) => call.type === 'CamMacro/Play')).toEqual([]);
+});
+it.each([0, 9])('does not replace another current task at generation %s', async (generation) => {
+  const r = await rig();
+  await r.resume();
+  await r.director.audition({ macro: '旧镜头', maxMs: 6000 }, r.director.get());
+  r.provider.cancelTracked = () =>
+    Promise.resolve({ generation, current: { requestId: 77, generation, state: 'started' } });
+  await expect(
+    r.director.audition({ macro: '新镜头', maxMs: 6000 }, r.director.get()),
+  ).rejects.toThrow('camera_stop_unconfirmed');
+  expect(r.calls.filter((call) => call.type === 'CamMacro/Play')).toEqual([
+    { type: 'CamMacro/Play', macro: '旧镜头' },
+  ]);
+  expect(r.director.get()).toMatchObject({
+    current: null,
+    otherCurrent: true,
+    preparation: 'error',
+    execution: 'unconfirmed',
+  });
+});
 it('does not replace a shot when the upstream cancellation token is stale', async () => {
   const r = await rig();
   await r.resume();
   await r.director.audition({ macro: '手动一', maxMs: 6000 }, r.director.get());
   const cancel = vi
     .fn()
-    .mockResolvedValueOnce({ generation: 9, matched: false })
-    .mockResolvedValue({ generation: 11, matched: true });
+    .mockResolvedValueOnce({ generation: 0, current: null })
+    .mockResolvedValue({ generation: 11, current: null });
   r.provider.cancelTracked = cancel;
   const status = vi.fn().mockResolvedValue({ generation: 10, current: null });
   r.provider.trackedStatus = status;
@@ -395,7 +443,7 @@ it('keeps a pending cancellation valid when its state arrives before its reply',
   const r = await rig();
   await r.resume();
   await r.director.audition({ macro: '手动一', maxMs: 6000 }, r.director.get());
-  let finish!: (result: { generation: number; matched: boolean } | null) => void;
+  let finish!: (result: { generation: number; current: null } | null) => void;
   r.provider.cancelTracked = () =>
     new Promise((resolve) => {
       finish = resolve;
@@ -403,7 +451,7 @@ it('keeps a pending cancellation valid when its state arrives before its reply',
   const replacement = r.director.audition({ macro: '手动二', maxMs: 6000 }, r.director.get());
   r.emit('cancelled');
   r.director.hold();
-  finish({ generation: 3, matched: true });
+  finish({ generation: 3, current: null });
   await expect(replacement).rejects.toThrow('camera_context_changed');
   expect(r.director.get()).toMatchObject({ current: null, held: true, execution: 'cancelled' });
   await r.director.command('resume', r.director.get());
@@ -413,7 +461,7 @@ it('does not submit a replacement on a new connection after an old cancellation 
   const r = await rig();
   await r.resume();
   await r.director.audition({ macro: '旧镜头', maxMs: 6000 }, r.director.get());
-  let finish!: (result: { generation: number; matched: boolean } | null) => void;
+  let finish!: (result: { generation: number; current: null } | null) => void;
   r.provider.cancelTracked = () =>
     new Promise((resolve) => {
       finish = resolve;
@@ -421,7 +469,7 @@ it('does not submit a replacement on a new connection after an old cancellation 
   const pending = r.director.audition({ macro: '新镜头', maxMs: 6000 }, r.director.get());
   r.provider.close();
   await r.provider.connect();
-  finish({ generation: 3, matched: true });
+  finish({ generation: 3, current: null });
   await expect(pending).rejects.toThrow();
   expect(r.calls.filter((call) => call.type === 'CamMacro/Play')).toEqual([
     { type: 'CamMacro/Play', macro: '旧镜头' },
@@ -522,14 +570,14 @@ it('only arms after the applied pack and empty lists are read back in the same c
       finish = resolve;
     });
   const pending = r.resume();
-  await Promise.resolve();
+  for (let i = 0; i < 8; i++) await Promise.resolve();
   r.director.hold();
   finish({ active: '测试包', empty: true });
   await expect(pending).rejects.toThrow('camera_context_changed');
   expect(r.director.get().held).toBe(true);
   r.director.invalidatePreparation();
   const stale = r.resume();
-  await Promise.resolve();
+  for (let i = 0; i < 8; i++) await Promise.resolve();
   r.director.invalidatePreparation();
   finish({ active: '测试包', empty: true });
   await expect(stale).rejects.toThrow('camera_pack_unconfirmed');
@@ -543,8 +591,9 @@ it('newer manual intent wins while automatic resume awaits preparation', async (
       finish = resolve;
     });
   const resume = r.resume();
-  await Promise.resolve();
+  for (let i = 0; i < 8; i++) await Promise.resolve();
   const audition = r.director.audition({ macro: '手动', maxMs: 2000 }, r.director.get());
+  r.provider.packStatus = () => Promise.resolve({ active: '测试包', empty: true });
   finish({ active: '测试包', empty: true });
   await expect(resume).rejects.toThrow('camera_context_changed');
   await audition;
@@ -711,7 +760,12 @@ it('real websocket separates ACK, rejection and unrelated broadcasts; disconnect
       if (command.type === 'CamPlay/CancelTracked') {
         const [id, gen] = command.payload.split(' ').map(Number);
         socket.send(
-          JSON.stringify({ type: command.type, requestId: id, generation: 5, matched: gen === 4 }),
+          JSON.stringify({
+            type: command.type,
+            requestId: id,
+            generation: gen === 4 ? 5 : 4,
+            current: null,
+          }),
         );
       }
       if (command.type === 'CamPlay/Tracked') {
@@ -773,15 +827,13 @@ it('real websocket separates ACK, rejection and unrelated broadcasts; disconnect
   expect((JSON.parse(wires.shift()!) as { type: string }).type).toBe('CamPack/Status');
   expect(await provider.trackedStatus()).toEqual({ generation: 4, current: null });
   wires.shift();
-  expect(await provider.cancelTracked(4)).toEqual({ generation: 5, matched: true });
+  expect(await provider.cancelTracked(4)).toEqual({ generation: 5, current: null });
   wires.shift();
   const states: string[] = [];
   const unsubscribe = provider.onTracked((state) => states.push(state.state));
-  expect(await provider.playTracked('宏 "x"', '包 \\x', 22, 5)).toBe('queued');
+  expect(await provider.playTracked('宏 "x"', 22, 5)).toBe('queued');
   expect(states).toEqual(['started']);
-  expect((JSON.parse(wires.shift()!) as { payload: string }).payload).toBe(
-    '"宏 \\"x\\"" "包 \\\\x" 22 5',
-  );
+  expect((JSON.parse(wires.shift()!) as { payload: string }).payload).toBe('"宏 \\"x\\"" 22 5');
   unsubscribe();
   replyMode = 'unsupported';
   await expect(provider.trackedStatus()).rejects.toThrow('camera_status_unsupported');

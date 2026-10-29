@@ -29,8 +29,6 @@ export interface TrackedStatus {
     requestId: number;
     generation: number;
     state: 'pending' | 'started';
-    expectedPack: string;
-    macro: string;
   } | null;
 }
 const isCounter = (value: unknown): value is number =>
@@ -334,8 +332,7 @@ export class MulnxProvider {
       ? result
       : null;
   }
-  async trackedStatus(): Promise<TrackedStatus | null> {
-    const result = await this.trackedQuery('CamPlay/StatusTracked');
+  private parseTrackedStatus(result: Record<string, unknown> | null): TrackedStatus | null {
     if (!result || !isCounter(result.generation)) return null;
     if (result.current === null) return { generation: result.generation, current: null };
     const current = result.current;
@@ -345,29 +342,24 @@ export class MulnxProvider {
       !isCounter(v.requestId) ||
       !isCounter(v.generation) ||
       v.generation !== result.generation ||
-      (v.state !== 'pending' && v.state !== 'started') ||
-      typeof v.expectedPack !== 'string' ||
-      typeof v.macro !== 'string'
+      (v.state !== 'pending' && v.state !== 'started')
     )
       return null;
     return {
       generation: result.generation,
-      current: v as unknown as NonNullable<TrackedStatus['current']>,
+      current: { requestId: v.requestId, generation: v.generation, state: v.state },
     };
   }
-  async cancelTracked(
-    generation: number,
-  ): Promise<{ generation: number; matched: boolean } | null> {
-    const result = await this.trackedQuery('CamPlay/CancelTracked', generation);
-    return result && isCounter(result.generation) && typeof result.matched === 'boolean'
-      ? { generation: result.generation, matched: result.matched }
-      : null;
+  async trackedStatus(): Promise<TrackedStatus | null> {
+    return this.parseTrackedStatus(await this.trackedQuery('CamPlay/StatusTracked'));
   }
-  playTracked(macro: string, pack: string, id: number, generation: number) {
+  async cancelTracked(generation: number): Promise<TrackedStatus | null> {
+    return this.parseTrackedStatus(await this.trackedQuery('CamPlay/CancelTracked', generation));
+  }
+  playTracked(macro: string, id: number, generation: number) {
     if (!isCounter(id) || !isCounter(generation)) return Promise.resolve('rejected' as const);
-    // The upstream quoted parser supports escaping quotes and backslashes, not JSON control escapes.
     const quote = (s: string) => `"${s.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`;
-    return this.send('CamPlay/Tracked', `${quote(macro)} ${quote(pack)} ${id} ${generation}`);
+    return this.send('CamPlay/Tracked', `${quote(macro)} ${id} ${generation}`);
   }
   /** Upstream #9 only acknowledges queueing. Never retry or infer unload from disconnect. */
   async stopControl(): Promise<GatewayResult> {
