@@ -358,12 +358,24 @@ it('restarts only the early source when assistance is re-enabled in the leased s
     expect(await prepare()).toMatchObject({ reuse: true });
   }));
 
+it('reports a game connection failure before attempting the observer', () =>
+  configuredFixture(async ({ observer, start }) => {
+    const launch = vi.spyOn(observer, 'start');
+    commands.send.mockRejectedValueOnce(new Error('synthetic_game_failure'));
+    const failed = await start();
+    expect(failed.statusCode).toBe(409);
+    expect(failed.json<{ message: string }>().message).toContain('游戏观战连接');
+    expect(launch).not.toHaveBeenCalled();
+  }));
+
 it('retries a failed early launch without repeating the successful game command', () =>
   configuredFixture(async ({ observer, app, start }) => {
     const launch = vi
       .spyOn(observer, 'start')
       .mockRejectedValueOnce(new Error('synthetic_launch_failure'));
-    expect((await start()).statusCode).toBe(409);
+    const failed = await start();
+    expect(failed.statusCode).toBe(409);
+    expect(failed.json<{ message: string }>().message).toContain('观察辅助未能启动');
     expect((await app.inject('/local/v1/observer')).json()).toMatchObject({
       error: 'observer_operation_failed',
       retryAvailable: true,
