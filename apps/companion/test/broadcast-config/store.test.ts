@@ -372,6 +372,14 @@ describe('BroadcastConfigStore', () => {
       },
       presetEntries: { first: first.preset.id, second: second.preset.id },
     };
+    for (const [entryId, ids] of Object.entries(batch.moduleEntries))
+      for (const module of batch.modules.filter((item) => ids.includes(item.id)))
+        module.origin = { resource: batch.source, entryId };
+    for (const [entryId, id] of Object.entries(batch.presetEntries))
+      batch.presets.find((preset) => preset.id === id)!.origin = {
+        resource: batch.source,
+        entryId,
+      };
     const result = await store.importBatch(batch);
     expect(result.reused).toBe(false);
     expect(store.snapshot.active).toEqual(initial.active);
@@ -382,6 +390,40 @@ describe('BroadcastConfigStore', () => {
       reopened.importBatch({ ...batch, source: { ...batch.source, digest: 'b'.repeat(64) } }),
     ).rejects.toThrow('identity_conflict');
     expect(reopened.snapshot.presets).toHaveLength(3);
+    await reopened.deletePreset(second.preset.id, second.preset.revision);
+    await reopened.deleteModule(second.modules[0]!.id, second.modules[0]!.revision);
+    const restarted = new BroadcastConfigStore(options);
+    await restarted.load();
+    const retryFirst = clonePreset(initial, request, randomUUID);
+    const retrySecond = clonePreset(initial, { ...request, name: 'Second' }, randomUUID);
+    const retry = {
+      ...batch,
+      modules: [...retryFirst.modules, ...retrySecond.modules],
+      presets: [retryFirst.preset, retrySecond.preset],
+      moduleEntries: {
+        hud: [retryFirst.modules[0]!.id, retrySecond.modules[0]!.id],
+        program: [retryFirst.modules[1]!.id, retrySecond.modules[1]!.id],
+      },
+      presetEntries: { first: retryFirst.preset.id, second: retrySecond.preset.id },
+    };
+    for (const [entryId, ids] of Object.entries(retry.moduleEntries))
+      for (const module of retry.modules.filter((item) => ids.includes(item.id)))
+        module.origin = { resource: retry.source, entryId };
+    for (const [entryId, id] of Object.entries(retry.presetEntries))
+      retry.presets.find((preset) => preset.id === id)!.origin = {
+        resource: retry.source,
+        entryId,
+      };
+    const restored = await restarted.importBatch(retry);
+    expect(restored.reused).toBe(false);
+    expect(restored.mapping.presetEntries.first).toBe(first.preset.id);
+    expect(restored.mapping.presetEntries.second).toBe(retrySecond.preset.id);
+    expect(restored.mapping.moduleEntries.program).toContain(second.modules[1]!.id);
+    expect(restored.mapping.moduleEntries.hud).toContain(retrySecond.modules[0]!.id);
+    expect(restarted.snapshot.presets).toHaveLength(3);
+    expect(
+      restarted.snapshot.modules.filter((item) => item.id === first.modules[0]!.id),
+    ).toHaveLength(1);
   });
   it('rejects shared editable modules across imported presets without publishing either', async () => {
     const { store, initial } = await setup();

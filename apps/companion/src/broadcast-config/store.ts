@@ -36,6 +36,7 @@ const importMappingSchema = z.strictObject({
   source: resourceRefSchema,
   moduleEntries: z.record(importEntry, z.array(z.string().uuid()).min(1).max(128)),
   presetEntries: z.record(importEntry, z.string().uuid()),
+  moduleOwners: z.record(z.string().uuid(), importEntry.nullable()).optional(),
 });
 export type BroadcastImportMapping = z.infer<typeof importMappingSchema>;
 /** The caller must have installed and verified source before invoking this operation. */
@@ -153,6 +154,42 @@ export class BroadcastConfigStore {
       canonicalJson([entry.source.id, entry.source.version]),
     );
     if (new Set(identities).size !== identities.length) throw new Error('broadcast_config_invalid');
+    for (const mapping of imports) {
+      const seen = new Set<string>();
+      for (const [entryId, ids] of Object.entries(mapping.moduleEntries)) {
+        for (const id of ids) {
+          if (seen.has(id) || isBuiltinModuleId(id))
+            throw new Error('broadcast_import_index_invalid');
+          seen.add(id);
+          const module = document.modules.find((item) => item.id === id);
+          if (
+            module &&
+            (!module.origin ||
+              module.origin.entryId !== entryId ||
+              canonicalJson(module.origin.resource) !== canonicalJson(mapping.source))
+          )
+            throw new Error('broadcast_import_index_invalid');
+        }
+      }
+      for (const [entryId, id] of Object.entries(mapping.presetEntries)) {
+        if (seen.has(id)) throw new Error('broadcast_import_index_invalid');
+        seen.add(id);
+        const preset = document.presets.find((item) => item.id === id);
+        if (
+          preset &&
+          (!preset.origin ||
+            preset.origin.entryId !== entryId ||
+            canonicalJson(preset.origin.resource) !== canonicalJson(mapping.source))
+        )
+          throw new Error('broadcast_import_index_invalid');
+      }
+      if (
+        Object.keys(mapping.moduleOwners ?? {}).some(
+          (id) => !Object.values(mapping.moduleEntries).some((ids) => ids.includes(id)),
+        )
+      )
+        throw new Error('broadcast_import_index_invalid');
+    }
     const pendingLegacyCamera = pendingLegacyCameraSchema
       .optional()
       .parse(value.pendingLegacyCamera);
@@ -316,17 +353,6 @@ export class BroadcastConfigStore {
         if (existing) {
           if (existing.source.digest !== mapping.source.digest)
             throw new Error('identity_conflict');
-          const live = [
-            ...Object.values(existing.moduleEntries).flat(),
-            ...Object.values(existing.presetEntries),
-          ];
-          const available = new Set(
-            [...this.envelope.document.modules, ...this.envelope.document.presets].map(
-              (item) => item.id,
-            ),
-          );
-          if (live.every((id) => available.has(id)))
-            return { mapping: structuredClone(existing), reused: true };
         }
         const moduleIds = input.modules.map((item) => item.id);
         const presetIds = input.presets.map((item) => item.id);
@@ -344,30 +370,93 @@ export class BroadcastConfigStore {
         )
           throw new Error('invalid_import_mapping');
         const used = new Set<string>();
-        for (const preset of input.presets)
+        const owners = new Map<string, string | null>();
+        for (const [entryId, presetId] of Object.entries(mapping.presetEntries)) {
+          const preset = input.presets.find((item) => item.id === presetId)!;
           for (const binding of preset.bindings)
             if (binding.mode === 'use') {
               if (!moduleIds.includes(binding.moduleId) || used.has(binding.moduleId))
                 throw new Error('invalid_import_mapping');
               used.add(binding.moduleId);
+              owners.set(binding.moduleId, entryId);
             }
+        }
+        for (const id of moduleIds) if (!owners.has(id)) owners.set(id, null);
         const next = structuredClone(this.envelope);
+        const result = existing
+          ? structuredClone(existing)
+          : { ...mapping, moduleEntries: {}, presetEntries: {}, moduleOwners: {} };
+        result.moduleOwners ??= {};
+        // Older indices did not record ownership; infer it only from the currently bound presets.
+        for (const [entryId, presetId] of Object.entries(result.presetEntries)) {
+          const preset = next.document.presets.find((item) => item.id === presetId);
+          for (const binding of preset?.bindings ?? [])
+            if (
+              binding.mode === 'use' &&
+              Object.values(result.moduleEntries).some((ids) => ids.includes(binding.moduleId))
+            )
+              result.moduleOwners[binding.moduleId] ??= entryId;
+        }
+        const substitutions = new Map<string, string>();
+        let added = false;
+        for (const [entryId, incomingIds] of Object.entries(mapping.moduleEntries)) {
+          const oldIds = result.moduleEntries[entryId] ?? [];
+          for (const incomingId of incomingIds) {
+            const owner = owners.get(incomingId) ?? null;
+            const prior = oldIds.find((id) => (result.moduleOwners?.[id] ?? null) === owner);
+            const live = prior && next.document.modules.find((item) => item.id === prior);
+            if (live) {
+              substitutions.set(incomingId, live.id);
+              result.moduleOwners[live.id] = owner;
+              continue;
+            }
+            const module = input.modules.find((item) => item.id === incomingId)!;
+            if (
+              isBuiltinModuleId(module.id) ||
+              next.document.modules.some((item) => item.id === module.id)
+            )
+              throw new Error('invalid_import_mapping');
+            next.document.modules.push(structuredClone(module));
+            if (prior) {
+              oldIds.splice(oldIds.indexOf(prior), 1);
+              delete result.moduleOwners[prior];
+            }
+            oldIds.push(module.id);
+            result.moduleOwners[module.id] = owner;
+            substitutions.set(incomingId, module.id);
+            added = true;
+          }
+          result.moduleEntries[entryId] = oldIds;
+        }
+        for (const [entryId, presetId] of Object.entries(mapping.presetEntries)) {
+          const prior = result.presetEntries[entryId];
+          if (prior && next.document.presets.some((item) => item.id === prior)) continue;
+          const preset = structuredClone(input.presets.find((item) => item.id === presetId)!);
+          if (next.document.presets.some((item) => item.id === preset.id))
+            throw new Error('invalid_import_mapping');
+          preset.bindings = preset.bindings.map((binding) =>
+            binding.mode === 'use'
+              ? { ...binding, moduleId: substitutions.get(binding.moduleId)! }
+              : binding,
+          );
+          next.document.presets.push(preset);
+          result.presetEntries[entryId] = preset.id;
+          added = true;
+        }
+        if (!added && existing) return { mapping: result, reused: true };
         next.imports = next.imports.filter(
           (entry) =>
-            entry !== existing &&
             !(
               entry.source.id === mapping.source.id &&
               entry.source.version === mapping.source.version
             ),
         );
-        next.document.modules.push(...structuredClone(input.modules));
-        next.document.presets.push(...structuredClone(input.presets));
-        next.imports.push(mapping);
+        next.imports.push(result);
         if (input.modules.some((item) => item.kind === 'hud'))
           this.options.validateHudDraft?.(next.document);
         await this.options.assertReferenceCommitAllowed(this.envelope.document, next.document);
         await this.commit(next);
-        return { mapping: structuredClone(mapping), reused: false };
+        return { mapping: structuredClone(result), reused: false };
       }),
     );
   }
@@ -536,9 +625,6 @@ export class BroadcastConfigStore {
           }
         }
         next.document.modules = next.document.modules.filter((module) => module.id !== id);
-        next.imports = next.imports.filter(
-          (entry) => !Object.values(entry.moduleEntries).flat().includes(id),
-        );
         await this.options.assertReferenceCommitAllowed(this.envelope.document, next.document);
         await this.commit(next);
         return item.kind;
@@ -556,9 +642,6 @@ export class BroadcastConfigStore {
         if (this.envelope.document.active.sourcePreset?.id === id) throw new Error('preset_active');
         const next = structuredClone(this.envelope);
         next.document.presets = next.document.presets.filter((preset) => preset.id !== id);
-        next.imports = next.imports.filter(
-          (entry) => !Object.values(entry.presetEntries).includes(id),
-        );
         await this.options.assertReferenceCommitAllowed(this.envelope.document, next.document);
         await this.commit(next);
       }),
