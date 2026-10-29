@@ -78,6 +78,9 @@ export class BroadcastConfigStore {
   get isApplying(): boolean {
     return this.applying;
   }
+  waitForApply(): Promise<void> {
+    return this.applyQueue.flush();
+  }
   private envelope: Envelope | null = null;
   constructor(private readonly options: BroadcastConfigStoreOptions) {}
 

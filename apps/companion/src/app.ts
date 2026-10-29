@@ -1036,12 +1036,14 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         : reply.header('cache-control', 'no-store').send(envelope);
     });
   }
+  let waitForBroadcast: (() => Promise<void>) | undefined;
   const production = registerProductionRoutes(app, {
     originPolicy: localWebTransport.getOriginPolicy(),
     hasContext: () =>
       matchContextController?.getActiveBinding() !== undefined &&
       matchContextController?.getActiveBinding() != null,
     scenes: sceneController,
+    waitForBroadcast: () => waitForBroadcast?.() ?? Promise.resolve(),
     beforeEnter: () => {
       if (cameraDirector?.store.saving) throw new Error('camera_settings_saving');
       demoTest?.openFormalBoundary();
@@ -1312,6 +1314,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         })
       : undefined;
     if (broadcastRuntime) {
+      waitForBroadcast = () => broadcastRuntime.waitForApply();
       getBroadcastReferences = () => {
         if (!broadcastRuntime.ready) throw new Error('broadcast_config_unavailable');
         return broadcastResourceReferences(broadcastRuntime.store.snapshot);
