@@ -595,6 +595,15 @@ it('rejects unknown image slots and keeps the service usable after the active im
     );
     if (saved.kind !== 'program') throw new Error('expected program');
     saved.value.assets = { 'pulse.background': ref };
+    const hex = (value: string) => `#${value}`;
+    saved.value.tokens = {
+      'pulse.white': hex('112233'),
+      'pulse.blue': hex('12345678'),
+      'pulse.gold': hex('aabbcc'),
+      'pulse.muted': hex('012345'),
+      'pulse.canvas': hex('234567'),
+      'pulse.shell': hex('abcdef80'),
+    };
     saved = (await (
       await post(base, 'save', { value: saved, expectedRevision: saved.revision })
     ).json()) as ModuleRecord;
@@ -632,6 +641,7 @@ it('rejects unknown image slots and keeps the service usable after the active im
       await fetch(`${base}/local/v1/broadcast-presets`)
     ).json()) as BroadcastConfigDocument;
     expect(before.active.resolved.program.assets['pulse.background']).toEqual(ref);
+    expect(before.active.resolved.program.tokens['pulse.white']).toBe(`#${'112233'}`);
     expect(before.active.lock.resources).toContainEqual(ref.resource);
     const hud = list.modules.find(({ module }) => module.kind === 'hud')!.module;
     expect(
@@ -648,6 +658,7 @@ it('rejects unknown image slots and keeps the service usable after the active im
       await fetch(`${base}/local/v1/broadcast-presets`)
     ).json()) as BroadcastConfigDocument;
     expect(after.active.resolved.program.assets['pulse.background']).toEqual(ref);
+    expect(after.active.resolved.program.tokens).toEqual(before.active.resolved.program.tokens);
     expect(after.active.lock.resources).toContainEqual(ref.resource);
     await writeFile(path, bytes);
     expect(
