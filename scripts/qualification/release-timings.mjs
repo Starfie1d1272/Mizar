@@ -219,7 +219,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
           tag: process.env.RELEASE_TAG,
           sourceSha: current.head_sha,
           recovery,
-          freshReleaseWithin600Seconds: !recovery && durationMs <= 600000,
+          freshReleaseWithin600Seconds:
+            !recovery && process.env.BOX_OUTCOME === 'success' && durationMs <= 600000,
           triggerToBoxMs: durationMs,
           recoveryDurationMs: recovery
             ? elapsed(process.env.BOX_RECOVERY_STARTED_AT || current.run_started_at, finishedAt)
