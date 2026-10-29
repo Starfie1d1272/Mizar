@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { link, lstat, open, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
+import { crc32 } from 'node:zlib';
 import { PACK_LIMITS, readPackArchive } from '@mizar/broadcast-pack';
 import type { AssetRef, ResourceRef } from '@mizar/broadcast-config';
 import { SerialCommitQueue } from '../match-context/serial-commit.js';
@@ -27,6 +28,11 @@ export function validPackImage(bytes: Buffer, mediaType: string): boolean {
     while (offset + 12 <= bytes.length) {
       const length = bytes.readUInt32BE(offset);
       if (length > bytes.length - offset - 12) return false;
+      if (
+        crc32(bytes.subarray(offset + 4, offset + 8 + length)) !==
+        bytes.readUInt32BE(offset + 8 + length)
+      )
+        return false;
       const type = bytes.toString('ascii', offset + 4, offset + 8);
       if (type === 'IDAT') imageData = true;
       offset += length + 12;

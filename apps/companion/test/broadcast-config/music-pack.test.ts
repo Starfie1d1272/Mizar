@@ -30,7 +30,7 @@ it('reads the exact package version when file IDs coincide', async () => {
   const resources = new MusicPackResources(root);
   const packageId = randomUUID();
   const first = Buffer.from(
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aXcAAAAASUVORK5CYII=',
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNg+M8AAAICAQB7CYF4AAAAAElFTkSuQmCC',
     'base64',
   );
   const second = Buffer.from(
@@ -382,7 +382,7 @@ it('round trips real music owner configuration to independent drafts without act
     const programModule = schemeDocument.modules.find((item) => item.kind === 'program');
     if (!programModule || programModule.kind !== 'program') throw new Error('missing program');
     const image = Buffer.from(
-      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aXcAAAAASUVORK5CYII=',
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNg+M8AAAICAQB7CYF4AAAAAElFTkSuQmCC',
       'base64',
     );
     const imagePath = 'assets/background.png';
