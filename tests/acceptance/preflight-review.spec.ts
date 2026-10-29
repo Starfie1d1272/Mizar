@@ -229,6 +229,9 @@ test('preflight reviews current ten-player evidence, actual auto state, disconne
   await dialog.getByRole('button', { name: '稍后处理' }).click();
   operator.payload.activeLineup.retainedCount = 0;
   operator.payload.runtime.telemetryFreshness = 'fresh';
+  operator.payload.identity.issues = [
+    { ...operator.payload.identity.issues[0]!, code: 'lineup_differs_from_expected' },
+  ];
   publish();
   await expect(dialog).toBeVisible();
   await dialog.getByRole('button', { name: '稍后处理' }).click();
