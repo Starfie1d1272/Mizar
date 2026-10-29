@@ -573,7 +573,7 @@ pub struct ManagedCs2 {
     can_preserve: bool,
     selected_backup: Option<Value>,
     external: Option<ExternalSession>,
-    managed_camera: Option<ManagedCamera>,
+    camera: Option<CameraLease>,
     // Keep window preservation after detach until a new managed launch is accepted.
     external_preservation: bool,
     #[cfg(test)]
@@ -599,7 +599,7 @@ pub struct WorkspaceProcess {
     pub pid: u32,
     pub created: u64,
 }
-struct ManagedCamera {
+struct CameraLease {
     process: WorkspaceProcess,
     lease: String,
     invalidated: bool,
@@ -607,7 +607,6 @@ struct ManagedCamera {
 struct ExternalSession {
     console_source: Value,
     demo_request_id: Option<String>,
-    camera_lease: Option<String>,
     invalidated: bool,
     isolation_pending: bool,
     process: Arc<Process>,
@@ -643,7 +642,7 @@ impl ManagedCs2 {
             can_preserve: false,
             selected_backup: None,
             external: None,
-            managed_camera: None,
+            camera: None,
             external_preservation: false,
             #[cfg(test)]
             recovery_identity_fixture: None,
@@ -754,7 +753,7 @@ impl ManagedCs2 {
         { return Err("游戏身份或安装位置不匹配，请重新检查。".into()); }
         let console = crate::cs2_console::boundary(&self.log, &actual_executable)?;
         let console_source = json!({"executable":actual_executable.to_string_lossy(),"launchTime":crate::cs2_console::utc(),"pid":pid,"created":created.to_string(),"consoleDiagnostics":console,"ownership":"external", "nativeHudToggle":observer == Some(true), "spectatorCfg":observer.is_some()});
-        self.external = Some(ExternalSession { console_source, demo_request_id: None, camera_lease: None, invalidated: false, isolation_pending: false, process: Arc::new(process), pid, created });
+        self.external = Some(ExternalSession { console_source, demo_request_id: None, invalidated: false, isolation_pending: false, process: Arc::new(process), pid, created });
         self.external_preservation = true;
         self.can_preserve = false;
         self.message = Some("已借用外部游戏；保持原设置和窗口，退出工作台不会关闭它。".into());
@@ -954,29 +953,36 @@ impl ManagedCs2 {
         if !process.owned || !process.is_running() || cs2_pids(&self.log)? != vec![process.pid] {
             return Err("受管游戏身份已变化，运镜会话未绑定。".into());
         }
-        self.managed_camera = Some(ManagedCamera { process, lease, invalidated: false });
+        self.camera = Some(CameraLease { process, lease, invalidated: false });
         Ok(())
     }
     pub fn managed_camera_lease(&mut self) -> Option<(String, bool)> {
-        let camera = self.managed_camera.as_mut()?;
+        let camera = self.camera.as_mut()?;
+        if !camera.process.owned { return None; }
         if !camera.process.is_running() || cs2_pids(&self.log).map_or(true, |pids| pids != vec![camera.process.pid]) {
             camera.invalidated = true;
         }
         Some((camera.lease.clone(), camera.invalidated))
     }
     pub fn invalidate_managed_camera(&mut self) {
-        if let Some(camera) = &mut self.managed_camera { camera.invalidated = true; }
+        if let Some(camera) = &mut self.camera { if camera.process.owned { camera.invalidated = true; } }
     }
-    pub fn clear_managed_camera(&mut self) { self.managed_camera = None; }
+    pub fn clear_managed_camera(&mut self) {
+        if self.camera.as_ref().is_some_and(|camera| camera.process.owned) { self.camera = None; }
+    }
     pub fn bind_external_camera(&mut self, lease: String) {
-        if let Some(external) = &mut self.external { external.camera_lease = Some(lease); }
+        if let Some(external) = &self.external {
+            let process = WorkspaceProcess { process: external.process.clone(), owned: false,
+                pid: external.pid, created: external.created };
+            self.camera = Some(CameraLease { process, lease, invalidated: false });
+        }
     }
     pub fn bind_external_demo(&mut self, request_id: String) {
         if let Some(external) = &mut self.external { external.demo_request_id = Some(request_id); }
     }
     pub fn external_camera_lease(&self) -> Option<&str> {
-        self.external.as_ref().filter(|external| !external.invalidated || external.isolation_pending)
-            .and_then(|external| external.camera_lease.as_deref())
+        self.external.as_ref().filter(|external| !external.invalidated || external.isolation_pending)?;
+        self.camera.as_ref().filter(|camera| !camera.process.owned).map(|camera| camera.lease.as_str())
     }
     pub fn invalidate_external(&mut self) {
         if let Some(external) = &mut self.external {
@@ -1568,6 +1574,7 @@ impl ManagedCs2 {
 
     fn detach_external(&mut self) -> bool {
         if let Some(external) = self.external.take() {
+            if self.camera.as_ref().is_some_and(|camera| !camera.process.owned) { self.camera = None; }
             self.log.event("external_game_detach", "success", Some(&json!({"pid":external.pid,"created":external.created.to_string(),"gameStopped":false}).to_string()));
             self.message = Some("已解除游戏借用；外部游戏及设置保持不变。".into());
             return true;
