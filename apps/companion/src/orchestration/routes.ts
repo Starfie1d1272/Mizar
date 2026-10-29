@@ -178,14 +178,14 @@ export function registerOrchestrationRoutes(
               ? map?.rounds[body.index ?? -1]
               : map?.stages[body.stage];
         if (!shot) throw new Error('camera_shot_missing');
-        director.audition(shot, body.expected);
+        await director.audition(shot, body.expected);
       } else if (body.action === 'configure') {
         for (const map of body.preset.maps)
           if (map.openingSound) await music.trackPath(map.openingSound.id);
-        director.hold('预设已修改，请重新确认后启用自动。');
+        director.invalidatePreparation('预设正在保存。');
         await director.store.save(body.preset);
         // A resume submitted during persistence must not arm a different preset.
-        director.hold('预设已保存，尚未启用自动。');
+        director.invalidatePreparation('预设已保存，正在准备运镜。');
       } else
         await director.command(body.action, body.action === 'resume' ? body.expected : undefined);
       return view();
@@ -201,8 +201,14 @@ export function registerOrchestrationRoutes(
             ? '无法检查 MulNX 更新：GitHub 拒绝了请求，可能已达到请求次数限制。请稍后重试。'
             : '无法检查 MulNX 更新，请检查网络后重试。'
           : error instanceof Error && error.message === 'camera_audition_unavailable'
-            ? '镜头暂不能试播，请核对当前地图、游戏连接和活动运镜包后重试。'
-            : '操作未完成，请核对当前地图、连接、预设与本机音频。',
+            ? '镜头暂不能播放，请先停止当前镜头并检查连接。'
+            : error instanceof Error && error.message === 'camera_pack_apply_unconfirmed'
+              ? '运镜准备失败，请检查游戏连接后重试。'
+              : error instanceof Error && error.message === 'camera_pack_unconfirmed'
+                ? '运镜准备未完成，请检查当前地图和预设后重试。'
+                : error instanceof Error && error.message === 'camera_prepare_unavailable'
+                  ? '暂不能准备运镜，请检查游戏连接和当前地图。'
+                  : '操作未完成，请检查当前地图、连接、预设与本机音频。',
         requestId: request.id,
       });
     }

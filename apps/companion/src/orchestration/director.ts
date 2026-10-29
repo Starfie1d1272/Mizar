@@ -17,6 +17,10 @@ export class CameraDirector {
   private execution = '';
   private connection = -1;
   private held = true;
+  private preparation: OrchestrationStatus['preparation'] = 'waiting';
+  private preparationKey = '';
+  private preparationEpoch = 0;
+  private preparing: Promise<void> | null = null;
   private closed = false;
   private revision = 0;
   private lastEdge = '';
@@ -157,6 +161,7 @@ export class CameraDirector {
       pack: this.store.map(t.program.map.name)?.pack ?? null,
       isolated: this.packReady(),
       held: this.held,
+      preparation: this.preparation,
       request: this.request,
       execution: 'unconfirmed',
       current: this.current?.macro ?? null,
@@ -182,7 +187,7 @@ export class CameraDirector {
       const execution = this.executionIdentity(t);
       const mapChanged = execution !== this.execution;
       this.execution = execution;
-      this.hold('请确认当前地图与活动运镜包，再启用自动。');
+      this.invalidatePreparation('地图或连接已变化，正在准备运镜。');
       this.context = context;
       this.connection = this.provider.generation;
       if (mapChanged) {
@@ -198,15 +203,14 @@ export class CameraDirector {
       this.highestRound = Math.max(this.highestRound, t.program.map.roundNumber ?? -1);
       return;
     }
-    if (
-      !this.safe(t, this.current?.key === 'audition') ||
-      !this.provider.connected ||
-      !this.store.ready ||
-      this.store.saving ||
-      !this.packReady()
-    ) {
-      if (!this.held || this.current) this.hold('自动运镜已暂停，请核对连接和比赛状态。');
+    if (!this.canPrepare()) {
+      if (this.preparation !== 'waiting')
+        this.invalidatePreparation('运镜已暂停，请检查连接和游戏状态。');
+      else if (this.current) this.stop('运镜已暂停，请检查连接和游戏状态。');
+    } else if (this.current && !this.safe(t, this.current.key === 'audition')) {
+      this.stop('运镜已暂停，请检查比赛状态。');
     }
+    this.prepareAutomatically();
     const edge = this.edge(t);
     if (
       this.current &&
@@ -238,6 +242,77 @@ export class CameraDirector {
     } else if (edge.stage in map.stages) shot = map.stages[edge.stage as keyof typeof map.stages];
     if (shot) this.dispatch(shot, edge.key, edge.key);
   }
+  /** Invalidate readiness without changing the operator's automatic/manual choice. */
+  invalidatePreparation(message = '正在准备运镜。') {
+    this.preparationEpoch++;
+    this.preparationKey = '';
+    this.preparation = 'waiting';
+    this.stop(message);
+  }
+  private prepareAutomatically() {
+    if (this.preparation !== 'waiting' || this.preparing || this.clearing || this.current) return;
+    if (!this.canPrepare()) return;
+    void this.prepare().catch(() => {});
+  }
+  private canPrepare() {
+    return (
+      !this.closed &&
+      this.safe(this.truth(), true) &&
+      this.provider.connected &&
+      this.store.ready &&
+      !this.store.saving &&
+      this.packReady()
+    );
+  }
+  private async prepare(retry = false): Promise<void> {
+    if (this.preparing) return this.preparing;
+    if (this.preparation === 'ready' && this.preparationKey === this.identity(this.truth())) return;
+    if (!this.canPrepare() || this.clearing || this.current)
+      throw new Error('camera_prepare_unavailable');
+    if (this.preparation === 'error' && !retry) throw new Error('camera_pack_unconfirmed');
+    const context = this.identity(this.truth());
+    const epoch = this.preparationEpoch;
+    const generation = this.provider.generation;
+    const pack = this.store.map(this.truth().program.map.name)!.pack;
+    this.preparation = 'preparing';
+    const valid = () =>
+      epoch === this.preparationEpoch &&
+      context === this.identity(this.truth()) &&
+      generation === this.provider.generation &&
+      this.canPrepare() &&
+      !this.current &&
+      !this.clearing;
+    const work = async () => {
+      try {
+        if ((await this.provider.send('CamPack/Apply', pack)) !== 'queued')
+          throw new Error('camera_pack_apply_unconfirmed');
+        if (!valid()) throw new Error('camera_context_changed');
+        const status = await this.provider.packStatus();
+        if (!status || status.active !== pack || !status.empty || !valid())
+          throw new Error('camera_pack_unconfirmed');
+        this.preparationKey = context;
+        this.preparation = 'ready';
+        this.message = this.held ? '运镜已准备，可选择镜头。' : '运镜已准备，等待下一次触发。';
+      } catch (error) {
+        if (
+          epoch === this.preparationEpoch &&
+          context === this.identity(this.truth()) &&
+          generation === this.provider.generation
+        ) {
+          this.preparation = 'error';
+          this.message = '运镜准备失败，请检查当前地图和连接后重试。';
+        }
+        throw error;
+      }
+    };
+    const pending = work();
+    this.preparing = pending;
+    try {
+      await pending;
+    } finally {
+      if (this.preparing === pending) this.preparing = null;
+    }
+  }
   /** Only the actual current OBS Take start calls this; snapshots never synthesize openings. */
   opening() {
     this.tick();
@@ -249,7 +324,7 @@ export class CameraDirector {
     if (this.current) this.stop('开场交接，已请求清空；停止结果未确认。');
     this.dispatch(map.opening, 'opening', this.edge(t).key);
   }
-  audition(shot: CameraShot, expected: { context: string; connection: number }) {
+  async audition(shot: CameraShot, expected: { context: string; connection: number }) {
     this.tick();
     if (
       this.closed ||
@@ -261,17 +336,21 @@ export class CameraDirector {
       this.request === 'submitted'
     )
       throw new Error('camera_audition_unavailable');
-    this.held = false;
-    try {
-      if (!this.play(shot, 'audition', this.edge(this.truth()).key))
-        throw new Error('camera_audition_unavailable');
-    } finally {
-      this.held = true;
-    }
+    this.held = true;
+    const revision = this.revision;
+    await this.prepare(true);
+    if (
+      revision !== this.revision ||
+      expected.context !== this.identity(this.truth()) ||
+      expected.connection !== this.provider.generation ||
+      !this.play(shot, 'audition', this.edge(this.truth()).key)
+    )
+      throw new Error('camera_audition_unavailable');
   }
   /** One fresh transition may wait for the clear gateway ACK, never for execution or reconnect. */
   private dispatch(shot: CameraShot, key: string, edge: string) {
-    if (this.held || !this.safe(this.truth()) || !this.packReady()) return;
+    if (this.held || this.preparation !== 'ready' || !this.safe(this.truth()) || !this.packReady())
+      return;
     if (this.clearing) {
       this.handoff = {
         shot,
@@ -301,7 +380,8 @@ export class CameraDirector {
   private play(shot: CameraShot, key: string, edge: string) {
     const t = this.truth();
     if (
-      this.held ||
+      (this.held && key !== 'audition') ||
+      this.preparation !== 'ready' ||
       this.closed ||
       !this.safe(t, key === 'audition') ||
       !this.provider.connected ||
@@ -324,12 +404,19 @@ export class CameraDirector {
       this.request = result;
       this.message =
         result === 'queued' ? '请求已入队，执行未确认' : '运镜请求未确认，请在游戏内检查。';
-      if (result !== 'queued') this.hold(this.message);
+      if (result !== 'queued') {
+        this.preparation = 'error';
+        this.stop(this.message);
+      }
     });
     return true;
   }
   private stop(message: string) {
     this.handoff = null;
+    if (this.clearing && !this.current) {
+      this.message = message;
+      return;
+    }
     this.clearing = false;
     const hadCurrent = this.current !== null;
     if (hadCurrent)
@@ -347,12 +434,18 @@ export class CameraDirector {
     }
     this.request = 'submitted';
     this.clearing = true;
+    const generation = this.provider.generation;
+    const epoch = this.preparationEpoch;
     void this.provider.send('CamPlay/ClearForce').then((result) => {
       if (revision === this.revision && !this.closed) {
         this.clearing = false;
+        if (generation !== this.provider.generation || epoch !== this.preparationEpoch) {
+          this.request = 'unknown';
+          return;
+        }
         this.request = result;
         if (result !== 'queued') {
-          this.held = true;
+          this.preparation = 'error';
           this.handoff = null;
         } else this.releaseHandoff();
       }
@@ -370,14 +463,14 @@ export class CameraDirector {
     this.diagnostic('camera_command', { action, expected, before: this.get(), result: 'begin' });
     if (action === 'connect') {
       if (!this.nativeReady()) throw new Error('camera_native_session_invalid');
-      this.hold();
+      this.invalidatePreparation();
       await this.provider.connect();
       this.tick();
     } else if (action === 'disconnect') {
-      this.hold();
+      this.invalidatePreparation();
       this.provider.close();
     } else if (action === 'hold') {
-      const hadCurrent = this.current !== null;
+      const hadCurrent = this.current !== null || this.clearing;
       this.hold();
       if (!this.provider.connected) this.message = '人工接管 · MulNX 未连接，请在游戏内停止运镜。';
       // Explicit takeover also clears slots started outside Mizar.
@@ -393,9 +486,11 @@ export class CameraDirector {
     } else {
       if (
         this.closed ||
+        this.current !== null ||
+        this.clearing ||
         this.truth().demoAudition !== undefined ||
         this.seen.size >= 1024 ||
-        this.request === 'submitted' ||
+        (this.request === 'submitted' && !this.preparing) ||
         !expected ||
         expected.context !== this.context ||
         expected.connection !== this.provider.generation ||
@@ -406,29 +501,19 @@ export class CameraDirector {
         !this.packReady()
       )
         throw new Error('camera_context_changed');
-      const pack = this.store.map(this.truth().program.map.name)!.pack;
       const revision = this.revision;
-      const generation = this.provider.generation;
-      const context = this.context;
-      if ((await this.provider.send('CamPack/Apply', pack)) !== 'queued')
-        throw new Error('camera_pack_apply_unconfirmed');
-      const status = await this.provider.packStatus();
+      await this.prepare(true);
       if (
-        !status ||
-        status.active !== pack ||
-        !status.empty ||
         revision !== this.revision ||
-        generation !== this.provider.generation ||
-        context !== this.identity(this.truth()) ||
+        expected.context !== this.identity(this.truth()) ||
+        expected.connection !== this.provider.generation ||
         !this.safe(this.truth()) ||
-        !this.provider.connected ||
-        !this.store.ready ||
-        this.store.saving ||
-        !this.packReady()
+        !this.canPrepare() ||
+        this.preparation !== 'ready'
       )
-        throw new Error('camera_pack_unconfirmed');
+        throw new Error('camera_context_changed');
       this.held = false;
-      this.message = '活动包和自动列表已核对；资源加载未确认 · 等待下一个阶段';
+      this.message = '自动运镜已启用，等待下一次触发。';
     }
     this.diagnostic('camera_command', { action, after: this.get(), result: 'success' });
   }

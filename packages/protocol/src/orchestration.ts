@@ -76,6 +76,7 @@ export interface OrchestrationStatus {
   pack: string | null;
   isolated: boolean;
   held: boolean;
+  preparation: 'waiting' | 'preparing' | 'ready' | 'error';
   request: 'idle' | 'submitted' | 'queued' | 'rejected' | 'unknown';
   execution: 'unconfirmed';
   current: string | null;

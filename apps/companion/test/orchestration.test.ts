@@ -194,45 +194,25 @@ it('hold, skip and resume consume current edges without catch-up', async () => {
   await r.tick();
   expect(r.director.get().held).toBe(false);
 });
-it('map/source changes, stale data and reconnect invalidate late replies and require fresh explicit arming', async () => {
+it('map/source changes and reconnect invalidate readiness while preserving automatic intent', async () => {
   const r = await rig();
   await r.resume();
-  let reply!: (r: GatewayResult) => void;
-  r.provider.send = (type) =>
-    type === 'CamPack/Apply'
-      ? Promise.resolve('queued')
-      : new Promise((resolve) => {
-          reply = resolve;
-        });
-  await r.round(1);
-  const staleExpected = r.director.get();
-  const playbackReply = reply;
+  const old = r.director.get();
   r.program.cursor.mapEpoch++;
   await r.tick();
-  playbackReply('queued');
-  await Promise.resolve();
-  expect(r.director.get()).toMatchObject({ held: true, current: null });
-  await expect(r.director.command('resume', staleExpected)).rejects.toThrow(
-    'camera_context_changed',
-  );
-  reply('queued');
-  await Promise.resolve();
-  await r.resume();
-  r.program.status.telemetry = 'stale';
+  expect(r.director.get()).toMatchObject({ held: false, preparation: 'waiting' });
+  await expect(r.director.command('resume', old)).rejects.toThrow('camera_context_changed');
   await r.tick();
-  expect(r.director.get().held).toBe(true);
-  r.program.status.telemetry = 'fresh';
   await r.tick();
-  expect(r.director.get().held).toBe(true);
+  await r.tick();
+  expect(r.director.get()).toMatchObject({ held: false, preparation: 'ready' });
   r.provider.generation++;
   await r.tick();
-  expect(r.director.get().held).toBe(true);
-  await r.resume();
+  expect(r.director.get()).toMatchObject({ held: false, preparation: 'waiting' });
   await r.tick();
-  expect(r.director.get().current).toBeNull();
-  r.program.cursor.programSourceGeneration++;
   await r.tick();
-  expect(r.director.get().held).toBe(true);
+  await r.tick();
+  expect(r.director.get()).toMatchObject({ held: false, preparation: 'ready' });
 });
 it('pause labels share one instance and halftime wins over paused', async () => {
   const r = await rig();
@@ -262,6 +242,10 @@ it('only arms after the applied pack and empty lists are read back in the same c
   const r = await rig();
   r.provider.packStatus = () => Promise.resolve({ active: 'other', empty: true });
   await expect(r.resume()).rejects.toThrow('camera_pack_unconfirmed');
+  await expect(
+    r.director.audition({ macro: '候选', maxMs: 1000 }, r.director.get()),
+  ).rejects.toThrow('camera_pack_unconfirmed');
+  expect(r.calls).toEqual([]);
   expect(r.director.get().held).toBe(true);
   r.provider.packStatus = () => Promise.resolve({ active: '测试包', empty: false });
   await expect(r.resume()).rejects.toThrow('camera_pack_unconfirmed');
@@ -274,8 +258,15 @@ it('only arms after the applied pack and empty lists are read back in the same c
   await Promise.resolve();
   r.director.hold();
   finish({ active: '测试包', empty: true });
-  await expect(pending).rejects.toThrow('camera_pack_unconfirmed');
+  await expect(pending).rejects.toThrow('camera_context_changed');
   expect(r.director.get().held).toBe(true);
+  r.director.invalidatePreparation();
+  const stale = r.resume();
+  await Promise.resolve();
+  r.director.invalidatePreparation();
+  finish({ active: '测试包', empty: true });
+  await expect(stale).rejects.toThrow('camera_pack_unconfirmed');
+  expect(r.director.get()).toMatchObject({ held: true, preparation: 'waiting' });
 });
 it('persists validated drafts, rejects malformed imports and forbids remote control', async () => {
   const r = await rig();
@@ -451,7 +442,7 @@ it('real websocket separates ACK, rejection and unrelated broadcasts; disconnect
 });
 it('audition works during live rounds and manual scene control without arming automatic mode', async () => {
   const r = await rig();
-  r.director.audition({ macro: '自选镜头', maxMs: 2000 }, r.director.get());
+  await r.director.audition({ macro: '自选镜头', maxMs: 2000 }, r.director.get());
   await r.tick();
   expect(r.director.get()).toMatchObject({
     held: true,
@@ -467,7 +458,7 @@ it('audition works during live rounds and manual scene control without arming au
   await r.live();
   r.truth.manual = true;
   r.program.series!.bindingState = 'needs_operator';
-  r.director.audition({ macro: '自选镜头', maxMs: 2000 }, r.director.get());
+  await r.director.audition({ macro: '自选镜头', maxMs: 2000 }, r.director.get());
   await r.tick();
   expect(r.calls.at(-1)).toEqual({ type: 'CamMacro/Play', macro: '自选镜头' });
   expect(r.director.get().held).toBe(true);
@@ -615,14 +606,16 @@ it('requires verified isolation for both enabling and audition; loss of isolatio
   const r = await rig();
   r.setIsolation(false);
   await expect(r.resume()).rejects.toThrow();
-  expect(() => r.director.audition({ macro: '候选', maxMs: 1000 }, r.director.get())).toThrow();
+  await expect(
+    r.director.audition({ macro: '候选', maxMs: 1000 }, r.director.get()),
+  ).rejects.toThrow();
   expect(r.calls).toEqual([]);
   r.setIsolation(true);
   await r.resume();
   await r.round(1);
   r.setIsolation(false);
   await r.tick();
-  expect(r.director.get()).toMatchObject({ held: true, isolated: false });
+  expect(r.director.get()).toMatchObject({ held: false, isolated: false });
   expect(r.calls.at(-1)).toEqual({ type: 'CamPlay/ClearForce' });
   await r.live();
   await r.round(2);
@@ -967,12 +960,14 @@ it('auditions isolated Demo data without formal series binding and never enables
   r.director.tick();
   const { context, connection } = r.director.get();
   await expect(r.director.command('resume', { context, connection })).rejects.toThrow();
-  r.director.audition(r.store.preset.maps[0]!.opening!, { context, connection });
+  await r.director.audition(r.store.preset.maps[0]!.opening!, { context, connection });
   expect(r.director.get().held).toBe(true);
   expect(r.calls.some((call) => call.type === 'CamMacro/Play')).toBe(true);
   r.truth.demoAudition = false;
   r.director.tick();
-  expect(() => r.director.audition(r.store.preset.maps[0]!.opening!, r.director.get())).toThrow();
+  await expect(
+    r.director.audition(r.store.preset.maps[0]!.opening!, r.director.get()),
+  ).rejects.toThrow();
 });
 
 it.each(['owned', 'external'] as const)(

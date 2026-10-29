@@ -143,7 +143,8 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
     await expect(page.getByText(/隔离文件已验证/)).toBeVisible();
     await page.getByRole('button', { name: '确认活动隔离包并试播', exact: true }).click();
     await expect(page.getByText('试播请求已提交，请在游戏内核对。', { exact: true })).toBeVisible();
-    expect(calls).toEqual(['CamMacro/Play']);
+    expect(calls).toContain('CamPack/Apply');
+    expect(calls.at(-1)).toBe('CamMacro/Play');
     expect(director.get()).toMatchObject({
       held: true,
       execution: 'unconfirmed',
@@ -335,6 +336,7 @@ test('explicit MulNX stop confirms production effects, shows ownership errors, a
       pack: null,
       isolated: false,
       held: true,
+      preparation: 'waiting',
       request: 'idle',
       execution: 'unconfirmed',
       current: null,

@@ -1390,7 +1390,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           : undefined;
       confirmedObserverMap = currentMap;
       observerSettings.waitingForMap = Boolean(waitingObserverMap);
-      cameraDirector?.hold('本图连接已变更，请核对当前地图与运镜包。');
+      cameraDirector?.invalidatePreparation('本图连接已变更，正在准备运镜。');
       projectionCoordinator.resetObserverAssist();
     } else if (kind !== 'game') {
       if (kind === 'connection') confirmedObserverMap = waitingObserverMap = undefined;
