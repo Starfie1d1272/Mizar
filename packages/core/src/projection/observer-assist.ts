@@ -186,6 +186,10 @@ export class ObserverHintTimeline {
     this.earliest = now;
   }
 
+  resetForMap(now: number) {
+    this.reset('map-connection', now);
+  }
+
   clear() {
     this.kills = [];
     this.sourceClocks = [];

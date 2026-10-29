@@ -384,6 +384,7 @@ export function registerWorkspaceObserver(
   let prepared: { identity: string; settingsRevision: string; token: string } | undefined;
   let observerKey = '';
   let connectedGame = '';
+  let seamlessGame = '';
   let hiddenGame = '';
   let appliedPolicy = '';
   let epoch = 0;
@@ -418,13 +419,19 @@ export function registerWorkspaceObserver(
     const connection = settings?.configured();
     const game = JSON.stringify([value.game, value.job]);
     return {
+      game,
       observer: JSON.stringify([
         game,
         value.executable,
         connection?.earlyEndpoint,
         connection?.password,
       ]),
-      connect: JSON.stringify([game, connection?.programEndpoint, connection?.password]),
+      connect: JSON.stringify([
+        game,
+        connection?.programEndpoint,
+        connection?.password,
+        settings?.mapConnection?.id,
+      ]),
       hud: game,
     };
   };
@@ -452,10 +459,16 @@ export function registerWorkspaceObserver(
     if (kind === 'game' && !settings.gameAutomation.hideGameHud) hiddenGame = '';
     if (kind === 'settings' || kind === 'lead' || kind === 'game') return;
     const attempt = ++epoch;
-    if (kind === 'connection') host = undefined;
+    if (kind === 'map')
+      seamlessGame = settings.mapConnection?.mode === 'seamless' && host ? keys(host).game : '';
+    if (kind === 'connection' || (kind === 'map' && settings.mapConnection?.mode === 'connect'))
+      host = undefined;
     const value = host;
     const revision = settings.revision;
-    const shouldStop = kind === 'connection' || !settings.settings.enabled;
+    const shouldStop =
+      kind === 'connection' ||
+      (kind === 'map' && settings.mapConnection?.mode === 'connect') ||
+      !settings.settings.enabled;
     void serialize(async () => {
       // Stops already queued before a new preparation must finish first.
       if (shouldStop) {
@@ -580,7 +593,9 @@ export function registerWorkspaceObserver(
             (!settings.settings.enabled ||
               (observer.view().active && observerKey === activeKeys.observer)) &&
             (!gameControl ||
-              ((!gameControl.autoConnect || connectedGame === activeKeys.connect) &&
+              ((!gameControl.autoConnect ||
+                (settings.mapConnection?.mode === 'seamless' && seamlessGame === activeKeys.game) ||
+                connectedGame === activeKeys.connect) &&
                 (body.nativeHudToggle ||
                   !gameControl.hideGameHud ||
                   hiddenGame === activeKeys.hud))),
@@ -610,7 +625,12 @@ export function registerWorkspaceObserver(
             throw new Error('observer_configuration_changed');
           const value: Host = body;
           const key = keys(value);
-          const connect = Boolean(gameControl?.autoConnect && connectedGame !== key.connect);
+          if (settings.mapConnection?.mode === 'seamless' && !seamlessGame) seamlessGame = key.game;
+          const connect = Boolean(
+            gameControl?.autoConnect &&
+            !(settings.mapConnection?.mode === 'seamless' && seamlessGame === key.game) &&
+            connectedGame !== key.connect,
+          );
           const hide = Boolean(
             !body.nativeHudToggle && gameControl?.hideGameHud && hiddenGame !== key.hud,
           );

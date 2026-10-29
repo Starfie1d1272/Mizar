@@ -450,6 +450,15 @@ it('keeps calibrated anchors and buffered kills when the lead window is reprojec
       waitingReason: 'source-map-mismatch',
       hints: [],
     });
+    live.mockReturnValue({ ...health, state: 'live', generation: 1 });
+    coordinator.resetObserverAssist();
+    expect(coordinator.getCurrent().assist.observer?.hints ?? []).toEqual([]);
+    const freshEvent = now + 1000;
+    kill(4, 6, freshEvent);
+    send(freshEvent + 120000);
+    expect(coordinator.getCurrent().assist.observer?.hints).toMatchObject([
+      { victim: { observerSlot: 6 } },
+    ]);
   } finally {
     await coordinator.close();
     live.mockRestore();

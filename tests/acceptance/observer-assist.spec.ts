@@ -242,6 +242,7 @@ test('enters standard and MulNX without an address, then confirms from the workb
     };
     let production = { mode: 'preparation', revision: 'connection-test', canEnter: true };
     const writes: Record<string, unknown>[] = [];
+    let savedPassword = '';
     let omitSavedRevision = false;
     await page.route('**/local/v1/observer-assist', (route) => route.fulfill({ json: view }));
     await page.route('**/local/v1/observer', (route) =>
@@ -250,15 +251,26 @@ test('enters standard and MulNX without an address, then confirms from the workb
     await page.route('**/operator/observer-assist', (route) => {
       const body = route.request().postDataJSON() as {
         action: string;
-        connection: { earlyEndpoint: string; programEndpoint: string };
+        connection?: { earlyEndpoint: string; programEndpoint: string; password: string };
       };
+      if (body.action === 'copy-connection')
+        return route.fulfill({
+          json: {
+            command: `password "${savedPassword}"; connect ${view.connection?.programEndpoint}`,
+          },
+        });
       writes.push(body);
-      if (body.action === 'connection') {
-        const next = body.connection.programEndpoint === '127.0.0.1:27026' ? '2' : '3';
+      if (body.action === 'map-connection') {
+        const connection = body.connection ?? view.connection!;
+        if (body.connection) savedPassword = body.connection.password;
+        const next = connection.programEndpoint === '127.0.0.1:27026' ? '2' : '3';
         view = {
           ...view,
           revision: `10000000-0000-4000-8000-00000000000${next}`,
-          connection: body.connection,
+          connection: {
+            earlyEndpoint: connection.earlyEndpoint,
+            programEndpoint: connection.programEndpoint,
+          },
         };
       }
       return route.fulfill({ json: omitSavedRevision ? { ...view, revision: undefined } : view });
@@ -398,6 +410,10 @@ test('enters standard and MulNX without an address, then confirms from the workb
     await page.evaluate(() => {
       (window as typeof window & { failConnection: boolean }).failConnection = false;
     });
+    const failedId = writes.at(-1)!.id;
+    await dialog
+      .getByRole('textbox', { name: '本图观战连接', exact: true })
+      .fill('connect 127.0.0.1:27025;password updated');
     await dialog.getByRole('button', { name: '重试本图连接', exact: true }).dblclick();
     await expect(dialog).toContainText(
       useMulnx ? '本图连接操作已提交' : '当前游戏没有已验证的 MulNX 控制资格',
@@ -406,15 +422,21 @@ test('enters standard and MulNX without an address, then confirms from the workb
       (await calls()).filter((call) => call === 'observer_command/start-configured'),
     ).toHaveLength(2);
     expect(writes[0]).toMatchObject({
-      action: 'connection',
+      action: 'map-connection',
       connection: { earlyEndpoint: '127.0.0.1:27025', programEndpoint: '127.0.0.1:27026' },
     });
+    expect(writes.at(-1)!.id).not.toBe(failedId);
+    expect(writes.at(-1)!.connection).toMatchObject({ password: 'updated' });
     await dialog.getByRole('button', { name: '完成', exact: true }).click();
     await expect(dialog).not.toBeVisible();
     // Map two uses new credentials and both endpoints without another game launch.
     await expect(control).toContainText('待连接');
-    const mapOneWrites = writes.filter((body) => body.action === 'connection').length;
+    const mapOneWrites = writes.filter((body) => body.action === 'map-connection').length;
     await control.click();
+    await dialog.getByRole('button', { name: '复制节目源连接命令' }).click();
+    await expect
+      .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+      .toBe('password "updated"; connect 127.0.0.1:27026');
     await dialog
       .getByRole('textbox', { name: '本图观战连接', exact: true })
       .fill('connect 127.0.0.2:27035;password second-map');
@@ -422,7 +444,7 @@ test('enters standard and MulNX without an address, then confirms from the workb
     await dialog.getByRole('textbox', { name: '早源 IPv4:端口' }).fill('127.0.0.2:27035');
     await dialog.getByRole('textbox', { name: '节目源 IPv4:端口' }).fill('127.0.0.2:27036');
     await dialog.getByRole('button', { name: '取消', exact: true }).click();
-    expect(writes.filter((body) => body.action === 'connection')).toHaveLength(mapOneWrites);
+    expect(writes.filter((body) => body.action === 'map-connection')).toHaveLength(mapOneWrites);
     expect(view.connection?.programEndpoint).toBe('127.0.0.1:27026');
     await control.click();
     await dialog.getByRole('button', { name: '复制节目源连接命令' }).click();

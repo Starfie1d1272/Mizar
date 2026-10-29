@@ -376,6 +376,54 @@ it('retries a failed early launch without repeating the successful game command'
     ).toBeNull();
   }));
 
+it('distinguishes same-address map reconnect from a seamless transition and retries', () =>
+  configuredFixture(async ({ observer, settings, start, prepare, app }) => {
+    const launch = vi.spyOn(observer, 'start');
+    expect((await start()).statusCode).toBe(200);
+    await expect.poll(() => observer.source.getHealth().state).toBe('live');
+    const first = observer.source.getHealth().generation;
+    const map = randomUUID();
+    settings.setMapConnection(map, 'connect');
+    launch.mockRejectedValueOnce(new Error('early-source-failed'));
+    expect((await start()).statusCode).toBe(409);
+    expect(commands.send).toHaveBeenCalledTimes(2);
+    settings.setMapConnection(map, 'connect');
+    expect((await start()).statusCode).toBe(200);
+    await expect.poll(() => observer.source.getHealth().state).toBe('live');
+    expect(observer.source.getHealth().generation).toBeGreaterThan(first);
+    expect(commands.send).toHaveBeenCalledTimes(2);
+    const generation = observer.source.getHealth().generation;
+    const starts = launch.mock.calls.length;
+    settings.setMapConnection(randomUUID(), 'seamless');
+    expect((await start()).statusCode).toBe(200);
+    expect(await prepare()).toMatchObject({ reuse: true });
+    expect(commands.send).toHaveBeenCalledTimes(2);
+    expect(launch).toHaveBeenCalledTimes(starts);
+    expect(observer.source.getHealth().generation).toBe(generation);
+    expect((await app.inject('/local/v1/observer')).json()).toMatchObject({
+      programCommandQueued: false,
+    });
+    expect((await start('43-1')).statusCode).toBe(200);
+    expect(commands.send).toHaveBeenCalledTimes(3);
+  }));
+
+it('rejects seamless mode when the connection changes', () => {
+  const settings = new ObserverSettingsStore();
+  const connection = {
+    earlyEndpoint: '127.0.0.1:27020',
+    programEndpoint: '127.0.0.1:27021',
+    password: '',
+  };
+  settings.setConnection(connection);
+  expect(() =>
+    settings.setMapConnection(randomUUID(), 'seamless', {
+      ...connection,
+      programEndpoint: '127.0.0.2:27021',
+    }),
+  ).toThrow();
+  expect(settings.configured()).toEqual(connection);
+});
+
 it('rejects an old prepared game after a new game is prepared and rejects an old connection revision', () =>
   configuredFixture(async ({ settings, observer, prepare, request, start }) => {
     const previous = await prepare();
