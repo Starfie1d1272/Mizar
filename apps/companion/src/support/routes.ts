@@ -396,6 +396,37 @@ export function registerSupportRoutes(
                 configured: available ? (delivery?.configured ?? null) : null,
                 consent: available ? (delivery?.consent ?? null) : null,
                 paused: available ? (delivery?.paused ?? null) : null,
+                consentAt: available ? (delivery?.consentAt ?? null) : null,
+                closedReason: available ? (delivery?.closedReason ?? null) : null,
+                lastAttemptAt: available ? (delivery?.lastAttemptAt ?? null) : null,
+                lastConfirmedAt: available ? (delivery?.lastConfirmedAt ?? null) : null,
+                transportFailure: available ? (delivery?.transportFailure ?? null) : null,
+                omitted: available ? (delivery?.omitted ?? null) : null,
+                omissionReasons:
+                  available && delivery
+                    ? Object.fromEntries(
+                        Object.entries(delivery.omissionReasons).filter(([reason]) =>
+                          [
+                            'consent_policy_changed',
+                            'invalid_source_cursor',
+                            'chat_not_collected',
+                            'event_size_budget',
+                            'memory_budget_recoverable_from_local_journal',
+                            'unreadable_journal_record',
+                            'truncated_sealed_journal_record',
+                            'batch_size_budget',
+                            'source_sequence_gap',
+                            'installation_lease_closed',
+                            'server_retention_expired',
+                            'batch_retention_expired',
+                            'automatic_window_expired',
+                            'payload_clock_future',
+                            'payload_creation_time_missing',
+                          ].includes(reason),
+                        ),
+                      )
+                    : null,
+                deletionPending: available ? (delivery?.deletionPending ?? null) : null,
                 queuedBatches: available ? (delivery?.queuedBatches ?? null) : null,
                 blockedBatches: available ? (delivery?.blockedBatches ?? null) : null,
                 queuedBytes: available ? (delivery?.queuedBytes ?? null) : null,
