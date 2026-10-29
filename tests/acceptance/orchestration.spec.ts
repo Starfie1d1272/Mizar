@@ -63,6 +63,16 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
       return Promise.resolve('queued' as const);
     },
     packStatus: () => Promise.resolve({ active: pack.name, empty: true }),
+    trackedStatus: () => Promise.resolve({ generation: 0, current: null }),
+    cancelTracked: (generation: number) => {
+      calls.push('CamPlay/ClearForce');
+      return Promise.resolve({ generation: generation + 1, matched: true });
+    },
+    playTracked: () => {
+      calls.push('CamMacro/Play');
+      return Promise.resolve('queued' as const);
+    },
+    onTracked: () => () => {},
   };
   const director = new CameraDirector(
     store,
@@ -275,7 +285,7 @@ test('external-game browser entry uses real production lifecycle without native 
   try {
     await page.goto('/');
     expect(await page.evaluate(() => '__TAURI_INTERNALS__' in window)).toBe(false);
-    await page.getByRole('button', { name: '打开直播工作台', exact: true }).click();
+    await page.getByRole('button', { name: '启动并进入工作台', exact: true }).click();
     await expect(page).toHaveURL(/\/workspace$/);
     expect((await app.inject('/local/v1/production')).json()).toMatchObject({ mode: 'live' });
     await page.getByRole('button', { name: '退出工作台', exact: true }).click();
@@ -328,9 +338,13 @@ test('explicit MulNX stop confirms production effects, shows ownership errors, a
 }) => {
   let borrowed = false;
   let stops = 0;
+  const preset = emptyOrchestrationPreset();
+  const presetId = '00000000-0000-4000-8000-000000000001';
   const view: OrchestrationView = {
+    activePresetId: presetId,
+    presets: [{ id: presetId, preset }],
     tool: { installed: 'test', latest: null, busy: false, message: '', packs: [] },
-    preset: emptyOrchestrationPreset(),
+    preset,
     automaticEnabled: false,
     ready: true,
     status: {
@@ -382,9 +396,7 @@ test('explicit MulNX stop confirms production effects, shows ownership errors, a
   borrowed = true;
   await stop.click();
   await confirmation.getByRole('button', { name: '结束制作并停止控制', exact: true }).click();
-  await expect(
-    page.getByText(/^停止控制请求已入队，执行结果待确认。请返回游戏核对。/),
-  ).toBeVisible();
+  await expect(page.getByText('停止控制正在确认，请检查游戏状态。', { exact: true })).toBeVisible();
   await expect(stop).toBeDisabled();
   expect(stops).toBe(2);
   await expect(page.getByText('DLL 已卸载', { exact: true })).toHaveCount(0);

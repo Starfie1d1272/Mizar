@@ -358,12 +358,24 @@ it('restarts only the early source when assistance is re-enabled in the leased s
     expect(await prepare()).toMatchObject({ reuse: true });
   }));
 
+it('reports a game connection failure before attempting the observer', () =>
+  configuredFixture(async ({ observer, start }) => {
+    const launch = vi.spyOn(observer, 'start');
+    commands.send.mockRejectedValueOnce(new Error('synthetic_game_failure'));
+    const failed = await start();
+    expect(failed.statusCode).toBe(409);
+    expect(failed.json<{ message: string }>().message).toContain('游戏观战连接');
+    expect(launch).not.toHaveBeenCalled();
+  }));
+
 it('retries a failed early launch without repeating the successful game command', () =>
   configuredFixture(async ({ observer, app, start }) => {
     const launch = vi
       .spyOn(observer, 'start')
       .mockRejectedValueOnce(new Error('synthetic_launch_failure'));
-    expect((await start()).statusCode).toBe(409);
+    const failed = await start();
+    expect(failed.statusCode).toBe(409);
+    expect(failed.json<{ message: string }>().message).toContain('观察辅助未能启动');
     expect((await app.inject('/local/v1/observer')).json()).toMatchObject({
       error: 'observer_operation_failed',
       retryAvailable: true,
@@ -718,8 +730,8 @@ it.each(['portable', 'installed'])(
       await writeFile(
         join(root, 'resources/observer/manifest.json'),
         JSON.stringify({
-          componentVersion: '1.0.0',
-          sourceSha: '4b07fd0ddfb775d8fa1548bddfd98dc78c7fce93',
+          componentVersion: '1.1.0',
+          sourceSha: '7c026956fe5f44ad347bc3c7c5a48f3e21fb006d',
           distribution: 'external-node',
           entrypoints: entries,
           filesSha256: Object.fromEntries(
@@ -790,5 +802,58 @@ it('does not hide the native HUD on connect, retry or reconnect in qualified tog
     expect(commands.send).toHaveBeenCalledTimes(2);
     for (const [command] of commands.send.mock.calls) {
       expect(command).not.toContain('cl_draw_only_deathnotices');
+    }
+  }));
+
+it('enables the managed lease for website names when observer and game automation are disabled', () =>
+  fixture(async (observer) => {
+    const app = Fastify();
+    const settings = new ObserverSettingsStore();
+    await settings.configure({ ...settings.settings, enabled: false });
+    await settings.configureGame({ autoConnect: false, hideGameHud: false });
+    const binding = {
+      origin: 'online',
+      context: {
+        entrants: {
+          a: { players: [{ steam64: '76561198000000001', displayName: 'Name' }] },
+          b: { players: [] },
+        },
+      },
+    } as unknown as import('../src/match-context/lkg-store.js').MatchContextBinding;
+    registerWorkspaceObserver(
+      app,
+      observer,
+      'synthetic-capability',
+      () => true,
+      settings,
+      () => binding,
+    );
+    try {
+      const headers = { 'x-runtime-token': 'synthetic-capability' };
+      const preparation = await app.inject({
+        method: 'POST',
+        url: '/operator/runtime/observer',
+        headers,
+        payload: { action: 'prepare', game: 'game', job: 'job', useMulnx: true },
+      });
+      expect(preparation.json<{ enabled: boolean }>().enabled).toBe(true);
+      const start = await app.inject({
+        method: 'POST',
+        url: '/operator/runtime/observer',
+        headers,
+        payload: {
+          action: 'start-configured',
+          game: 'game',
+          job: 'job',
+          executable: driver,
+          useMulnx: true,
+          revision: preparation.json<{ revision: string }>().revision,
+        },
+      });
+      expect(start.statusCode).toBe(200);
+      expect(start.json<{ enabled: boolean }>().enabled).toBe(true);
+      expect(observer.view().active).toBe(false);
+    } finally {
+      await app.close();
     }
   }));

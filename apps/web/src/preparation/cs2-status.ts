@@ -13,6 +13,7 @@ export interface Cs2ConfigStatus {
   canPreserve?: boolean;
   preserveSettings?: boolean;
   pending: boolean;
+  mulnxLaunchResumable?: boolean;
   running: boolean;
   borrowed?: boolean;
   externalDetached?: boolean;

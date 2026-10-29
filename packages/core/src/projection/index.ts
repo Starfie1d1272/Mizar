@@ -7,7 +7,11 @@ export { projectObserverAssist, ObserverHintTimeline } from './observer-assist.j
 export { ProgramClockTracker } from './program-clock.js';
 export type { ProgramClockSample } from './program-clock.js';
 export { projectProgram, projectSeries } from './program.js';
-export { observedPlayerDisplayName, livePlayerDisplayName } from './player-display-name.js';
+export {
+  observedPlayerDisplayName,
+  livePlayerDisplayName,
+  matchPlayerDisplayName,
+} from './player-display-name.js';
 export { derivePlayerLifeState } from './player-life-state.js';
 export {
   getProjectionIdentityCapabilities,
