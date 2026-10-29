@@ -105,6 +105,11 @@ export function CameraSettings() {
     )
       setConfirmed(null);
   }, [confirmed, current]);
+  useEffect(() => {
+    if (!confirmed) return;
+    const timer = setTimeout(() => setConfirmed(null), 5000);
+    return () => clearTimeout(timer);
+  }, [confirmed]);
   const catalog = confirmed ?? current;
   const selected = selectedId ?? catalog?.activePresetId;
   const selectedPreset = catalog?.presets.find((item) => item.id === selected)?.preset;
