@@ -113,3 +113,91 @@ it('uses the inspected scheme and module revisions only on an explicit action', 
     vi.unstubAllGlobals();
   }
 });
+
+it('exports selected schemes together without using them', async () => {
+  const bindings = [
+    { kind: 'hud', mode: 'use', moduleId: 'h' },
+    { kind: 'program', mode: 'use', moduleId: 'p' },
+    { kind: 'music', mode: 'off' },
+    { kind: 'camera', mode: 'off' },
+  ];
+  const view = {
+    modules: [
+      { id: 'h', kind: 'hud', name: 'HUD', revision: 'hr' },
+      { id: 'p', kind: 'program', name: 'Pulse', revision: 'pr' },
+    ],
+    presets: [
+      { id: 'one', name: '标准', revision: 'one-r', bindings },
+      { id: 'two', name: '简洁', revision: 'two-r', bindings },
+    ],
+    active: { revision: 'active', sourcePreset: null, adjusted: false },
+  };
+  const fetchMock = vi.fn((path: string, options?: RequestInit) => {
+    void options;
+    return path === '/local/v1/broadcast-presets'
+      ? Promise.resolve({ ok: true, json: () => Promise.resolve(view) })
+      : Promise.resolve({ ok: true, blob: () => Promise.resolve(new Blob(['zip'])) });
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  vi.stubGlobal('URL', { createObjectURL: () => 'blob:example', revokeObjectURL: () => {} });
+  const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+  const element = document.createElement('div');
+  document.body.append(element);
+  const root = createRoot(element);
+  try {
+    await act(async () => {
+      root.render(<BroadcastPresets query="" />);
+      await Promise.resolve();
+    });
+    act(() =>
+      [...element.querySelectorAll('button')]
+        .find((button) => button.textContent === '选择多个方案')!
+        .click(),
+    );
+    const boxes = [...element.querySelectorAll<HTMLInputElement>('input[type=checkbox]')];
+    expect(boxes).toHaveLength(2);
+    act(() => {
+      boxes[0]!.click();
+      boxes[1]!.click();
+    });
+    const exportButton = [...element.querySelectorAll('button')].find(
+      (button) => button.textContent === '分享所选（2）',
+    )!;
+    await act(async () => {
+      exportButton.click();
+      await Promise.resolve();
+    });
+    const args = fetchMock.mock.calls.find(
+      ([path]) => path === '/operator/resource-library/export-preset-bundle',
+    );
+    const body = JSON.parse(args![1]!.body as string) as {
+      presets: {
+        presetId: string;
+        expectedRevision: string;
+        expectedModuleRevisions: Record<string, string>;
+      }[];
+    };
+    expect(body.presets).toEqual([
+      {
+        presetId: 'one',
+        expectedRevision: 'one-r',
+        expectedModuleRevisions: { hud: 'hr', program: 'pr' },
+      },
+      {
+        presetId: 'two',
+        expectedRevision: 'two-r',
+        expectedModuleRevisions: { hud: 'hr', program: 'pr' },
+      },
+    ]);
+    expect(
+      fetchMock.mock.calls.some(([path]) => path === '/operator/broadcast-presets/apply'),
+    ).toBe(false);
+    expect(click).toHaveBeenCalledOnce();
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+  } finally {
+    act(() => root.unmount());
+    element.remove();
+    click.mockRestore();
+    vi.unstubAllGlobals();
+  }
+});

@@ -300,6 +300,8 @@ RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对�
 
 本机配置协调器就绪时，`POST /operator/resource-library/import-preset-pack` 接收 `application/x-mizarpack`，校验、发布素材并一次保存独立方案草稿；`POST /operator/resource-library/export-preset-pack` 以方案 ID 和预期方案、模块修订导出。支持原生 HUD、节目引用、音乐和带镜头来源的运镜配置；独立开场音效随包携带，MulNX 官方发行依赖保留精确发行与归档摘要，不包含程序本体。导入只保留取得来源，使用时仍由 MulNX owner 核验本机内容与兼容性；开发测试 fork 的分享和嵌入第三方归档暂不支持。写入仅允许本机可信 Origin，导入不修改活动配置或播放状态。
 
+`POST /operator/resource-library/export-preset-bundle` 接收多套方案及各自的预期方案、模块修订，生成一个分享包；复用的模块和音频在包内去重，导入后每套方案拥有独立可编辑模块。导出期间配置发生变化时返回修订冲突。
+
 本机配置协调器就绪时，`POST /operator/resource-library/import-music-pack` 接收 `application/x-mizarpack`，校验并发布音乐素材后只创建音乐草稿；重复导入复用映射，不改变活动配置或播放。`POST /operator/resource-library/export-music-pack` 以模块 ID 和预期修订导出单个音乐模块及引用的音频。两者受本机可信 Origin 限制；当前入口不接受完整方案、外部依赖或其他媒体类型，完整分享包能力仍在建设中。
 
 `POST /operator/music` 的 `play` 动作接受 `group` 和 `entryId`；旧客户端可发送 `trackId`，仅在组内唯一匹配时有效。两个字段同时提供时必须指向同一条目。
