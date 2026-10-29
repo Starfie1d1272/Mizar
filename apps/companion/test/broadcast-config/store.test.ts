@@ -247,4 +247,27 @@ describe('BroadcastConfigStore', () => {
     ).rejects.toThrow('identity_conflict');
     expect(reopened.snapshot.presets).toHaveLength(3);
   });
+  it('rejects shared editable modules across imported presets without publishing either', async () => {
+    const { store, initial } = await setup();
+    const copy = clonePreset(
+      initial,
+      {
+        sourceId: initial.presets[0]!.id,
+        expectedRevision: 'p1',
+        expectedModuleRevisions: { hud: 'h1', program: 'p1' },
+        name: 'Imported',
+      },
+      randomUUID,
+    );
+    const second = { ...structuredClone(copy.preset), id: randomUUID(), revision: randomUUID() };
+    const batch = {
+      source: { id: 'local:package', version: '1', digest: 'a'.repeat(64) },
+      modules: copy.modules,
+      presets: [copy.preset, second],
+      moduleEntries: { hud: [copy.modules[0]!.id], program: [copy.modules[1]!.id] },
+      presetEntries: { first: copy.preset.id, second: second.id },
+    };
+    await expect(store.importBatch(batch)).rejects.toThrow('invalid_import_mapping');
+    expect(store.snapshot).toEqual(initial);
+  });
 });
