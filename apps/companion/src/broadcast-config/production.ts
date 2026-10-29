@@ -13,6 +13,7 @@ import { BroadcastReferenceQueue } from './reference-queue.js';
 import type { BroadcastRuntimeDependencies } from './runtime.js';
 import type { CameraConfigResolver } from './camera.js';
 import type { MusicPackResources } from './music-pack-resources.js';
+import { assertSupportedProgram } from './resolver.js';
 
 /** Built-in providers support native HUD, Pulse, local music and verified camera resources. */
 export function createProductionBroadcastDependencies(
@@ -35,6 +36,17 @@ export function createProductionBroadcastDependencies(
     await readMusicAsset(music, ref);
     return ref.fileId;
   };
+  const image = async (ref: AssetRef) => {
+    if (!ref.resource.id.startsWith('local:mizar-pack:') || !musicPacks)
+      throw new Error('dependency_missing');
+    const owner = musicPacks as MusicPackResources & {
+      readAsset?: (asset: AssetRef) => Promise<{ mediaType: string }>;
+    };
+    if (!owner.readAsset) throw new Error('capability_unsupported');
+    const file = await owner.readAsset(ref);
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.mediaType))
+      throw new Error('capability_unsupported');
+  };
   const lockForActive = async (resolved: ActiveBroadcastSnapshot['resolved']) => {
     if (resolved.hud.renderer !== 'native') throw new Error('capability_unsupported');
     const resources = new Map<string, ResourceRef>();
@@ -42,10 +54,14 @@ export function createProductionBroadcastDependencies(
       await asset(ref);
       resources.set(canonicalJson(ref.resource), ref.resource);
     };
+    assertSupportedProgram(resolved.program);
     for (const scene of Object.values(resolved.program.scenes))
       if (scene.kind !== 'builtin' || scene.id !== 'pulse')
         throw new Error('capability_unsupported');
-    for (const ref of Object.values(resolved.program.assets)) await add(ref);
+    for (const ref of Object.values(resolved.program.assets)) {
+      await image(ref);
+      resources.set(canonicalJson(ref.resource), ref.resource);
+    }
     if (resolved.music)
       for (const group of MUSIC_GROUPS)
         for (const track of resolved.music.groups[group].tracks) {
@@ -74,6 +90,7 @@ export function createProductionBroadcastDependencies(
           : Promise.reject(new Error('provider_unavailable')),
     resolve: {
       asset,
+      image,
       hud: () => Promise.reject(new Error('capability_unsupported')),
       scene: (value) =>
         value.kind === 'builtin' && value.id === 'pulse'

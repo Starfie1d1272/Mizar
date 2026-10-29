@@ -6,6 +6,7 @@ import type {
   CameraSourceRef,
   HudModule,
   ModuleRecord,
+  ProgramVisualConfigV1,
   MulnxToolRef,
   PresetResolver,
   ResourceRef,
@@ -15,9 +16,24 @@ import type {
 /** Each operation checks installed, verified bytes or a registered built-in capability. */
 export interface BroadcastDependencyResolver {
   asset(ref: AssetRef): Promise<void>;
+  image?(ref: AssetRef): Promise<void>;
   hud(value: Extract<HudModule, { renderer: { kind: 'web-hud' } }>): Promise<void>;
   scene(value: SceneVisualRef): Promise<void>;
   camera(source: CameraSourceRef): Promise<MulnxToolRef>;
+}
+/** The renderer implements exactly the Pulse background slot and no custom tokens. */
+export function assertSupportedProgram(value: ProgramVisualConfigV1): void {
+  if (
+    Object.keys(value.tokens).length ||
+    Object.keys(value.assets).some((key) => key !== 'pulse.background')
+  )
+    throw new Error('capability_unsupported');
+  if (
+    Object.values(value.scenes).some(
+      (scene) => scene.kind !== 'builtin' || scene.id !== 'pulse' || scene.apiVersion !== 1,
+    )
+  )
+    throw new Error('capability_unsupported');
 }
 export function createBroadcastResolver(
   dependencies: BroadcastDependencyResolver,
@@ -57,11 +73,16 @@ export function createBroadcastResolver(
         break;
       }
       case 'program':
+        assertSupportedProgram(module.value);
         for (const visual of Object.values(module.value.scenes)) {
           await dependencies.scene(visual);
           if (visual.kind === 'declarative') addResource(visual.resource);
         }
-        for (const ref of Object.values(module.value.assets)) await asset(ref);
+        for (const ref of Object.values(module.value.assets)) {
+          if (!dependencies.image) throw new Error('capability_unsupported');
+          await dependencies.image(ref);
+          addResource(ref.resource);
+        }
         value = module.value;
         break;
       case 'music':
