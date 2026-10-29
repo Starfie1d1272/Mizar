@@ -634,6 +634,11 @@ impl WorkspaceProcess {
     pub fn is_running(&self) -> bool {
         unsafe { WaitForSingleObject(self.process.0, 0) == 258 }
     }
+    pub(crate) fn has_exited(&self) -> Result<bool, String> {
+        match unsafe { WaitForSingleObject(self.process.0, 0) } {
+            0 => Ok(true), 258 => Ok(false), _ => Err("无法检查游戏状态，请重试。".into()),
+        }
+    }
 }
 pub fn verified_session_process(
     value: &Value,
@@ -765,6 +770,10 @@ impl ManagedCs2 {
     }
 
     pub fn has_external(&self) -> bool { self.external.is_some() }
+    pub(crate) fn external_matches(&self, game: &WorkspaceProcess) -> bool {
+        self.external.as_ref().is_some_and(|external|
+            external.pid == game.pid && external.created == game.created && Arc::ptr_eq(&external.process, &game.process))
+    }
     pub fn attach_external(&mut self, pid: u32, created: u64, executable: &std::path::Path) -> Result<(), String> {
         let observer = self.store.mulnx_observer_matches(pid, created, executable)?;
         if self.store.load()?.is_some() || self.store.full_spectator_pending() || (self.store.spectator_pending() && observer.is_none())
