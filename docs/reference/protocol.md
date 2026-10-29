@@ -192,6 +192,8 @@ WebSocket 子协议为 `mizar.local.v1`，路由为 `/local/v1/{channel}`。
 
 资源释放检查包含草稿、活动及上一个活动快照，以及持久化使用回执所引用的资源。即使随后切换并删除了原模块，对同一 `requestId` 的合法重试仍返回原回执，不重新切换活动配置。
 
+`GET /local/v1/broadcast-modules/:id/references` 返回 `{ moduleId, revision, active, presets: [{ id, name, revision }] }`，供删除前展示引用和提交替代时携带修订；这是提示快照，删除提交时仍检查真实引用、活动状态和修订。
+
 ## BP 播放与补录
 
 `GET /local/v1/bp` 是有限的地图卡、步骤、公开标题和播放状态；不返回内部比赛 ID、名单或完整来源文档。ETag 覆盖当前播放进度，浏览器超时隐藏，恢复读取当前值，不重演旧步骤。

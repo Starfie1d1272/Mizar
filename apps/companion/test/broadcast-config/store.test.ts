@@ -239,6 +239,17 @@ describe('BroadcastConfigStore', () => {
     await store.deleteModule(clone.id, clone.revision);
     expect(store.snapshot.modules.some((item) => item.id === clone.id)).toBe(false);
   });
+  it('keeps an identical user copy after the one-time built-in normalization', async () => {
+    const { store, options } = await setup();
+    const builtin = store.snapshot.modules.find(
+      (module) => module.kind === 'program' && module.name === 'Pulse',
+    )!;
+    const copy = await store.cloneModule(builtin.id, builtin.revision, builtin.name);
+    const reopened = new BroadcastConfigStore(options);
+    await reopened.load();
+    expect(reopened.snapshot.modules.find((module) => module.id === copy.id)).toEqual(copy);
+    await reopened.deleteModule(copy.id, copy.revision);
+  });
   it('replaces a draft reference atomically when deleting a module', async () => {
     const { store, initial } = await setup();
     const builtin = store.snapshot.modules.find(
@@ -252,6 +263,28 @@ describe('BroadcastConfigStore', () => {
     );
     await store.save({ preset, expectedPresetRevision: null, modules: [] });
     const current = store.snapshot.presets.find((item) => item.id === preset.id)!;
+    const app = Fastify();
+    registerBroadcastConfigRoutes(app, store, createLocalWebOriginPolicy());
+    try {
+      const references = await app.inject(`/local/v1/broadcast-modules/${copy.id}/references`);
+      expect(references.statusCode).toBe(200);
+      expect(references.json()).toEqual({
+        moduleId: copy.id,
+        revision: copy.revision,
+        active: false,
+        presets: [{ id: current.id, name: current.name, revision: current.revision }],
+      });
+      expect(
+        (
+          await app.inject({
+            url: `/local/v1/broadcast-modules/${copy.id}/references`,
+            headers: { origin: 'https://foreign.test' },
+          })
+        ).statusCode,
+      ).toBe(403);
+    } finally {
+      await app.close();
+    }
     await expect(store.deleteModule(copy.id, copy.revision)).rejects.toThrow('module_referenced');
     await store.deleteModule(copy.id, copy.revision, {
       moduleId: builtin.id,
@@ -773,6 +806,62 @@ describe('BroadcastConfigStore', () => {
     release();
     await expect(commit).rejects.toThrow('revision_conflict');
     expect(store.snapshot.modules.some((item) => item.id === id)).toBe(false);
+  });
+  it('marks the camera facade unavailable when an active pack cannot be materialized', async () => {
+    const { store } = await setup();
+    const source = {
+      sourceName: 'missing',
+      treeSha256: 'a'.repeat(64),
+      converterVersion: 1 as const,
+      acquisition: {
+        kind: 'upstream' as const,
+        release: {
+          repository: 'Co1Swet/MulNX_CS2' as const,
+          releaseId: 1,
+          assetId: 2,
+          tag: 'v1',
+          archiveSha256: 'b'.repeat(64),
+        },
+      },
+    };
+    const value = {
+      format: 'mizar.camera-config' as const,
+      version: 2 as const,
+      name: 'Camera',
+      automaticEnabled: true,
+      maps: [
+        {
+          map: 'de_mirage',
+          source,
+          opening: null,
+          openingSound: null,
+          rounds: [],
+          pauseCandidates: { tactical: [], technical: [] },
+          stages: {
+            warmup: null,
+            tactical: null,
+            technical: null,
+            halftime: null,
+            mapVictory: null,
+            matchVictory: null,
+          },
+        },
+      ],
+    };
+    await store.updateFromLegacy({
+      updateDraft: () => {},
+      active: { kind: 'camera', value, lock: store.snapshot.active.lock },
+    });
+    const persistence = createCameraConfigPersistence(store, {
+      localPack: () => Promise.reject(new Error('missing')),
+      localTrackId: () => Promise.reject(new Error('unexpected')),
+      portable: () => Promise.reject(new Error('unexpected')),
+      lock: (_value, active) => Promise.resolve(active.lock),
+    });
+    const result = await persistence.read();
+    expect(result.automaticEnabled).toBe(false);
+    expect(persistence.available).toBe(false);
+    expect(store.snapshot.active.resolved.camera).toEqual(value);
   });
   it('keeps camera explicitly off until a legacy operator activates a real draft', async () => {
     const { store, options, initial } = await setup();

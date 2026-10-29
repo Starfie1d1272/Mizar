@@ -33,7 +33,7 @@ function virtualActiveId(value: CameraModuleV2): string {
 export function createCameraConfigPersistence(
   store: BroadcastConfigStore,
   dependencies: CameraFacadeDependencies,
-): CameraConfigPersistence {
+): CameraConfigPersistence & { readonly available: boolean } {
   let unavailable = false;
   async function toLocal(value: CameraModuleV2): Promise<OrchestrationPreset> {
     return orchestrationPresetSchema.parse({
@@ -140,6 +140,9 @@ export function createCameraConfigPersistence(
     };
   }
   return {
+    get available() {
+      return !unavailable && !store.pendingLegacyCamera;
+    },
     initialize: () => read(),
     read,
     async commit(catalog, automaticEnabled, previous, previousAutomaticEnabled) {

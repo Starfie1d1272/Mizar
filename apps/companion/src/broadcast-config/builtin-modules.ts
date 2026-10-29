@@ -99,20 +99,25 @@ export function createBuiltinModules(): ModuleRecord[] {
 }
 
 /** Claim unchanged legacy built-ins before adding any missing identities. */
-export function addMissingBuiltinModules(document: BroadcastConfigDocument): boolean {
+export function addMissingBuiltinModules(
+  document: BroadcastConfigDocument,
+  claimLegacy = true,
+): boolean {
   const present = new Set(document.modules.map((item) => item.id));
   let changed = false;
   for (const registered of createBuiltinModules()) {
     const builtin = document.modules.find((item) => item.id === registered.id) ?? registered;
-    const legacyItems = document.modules.filter(
-      (item) =>
-        !isBuiltinModuleId(item.id) &&
-        item.origin === null &&
-        item.kind === builtin.kind &&
-        item.name === builtin.name &&
-        item.schemaVersion === builtin.schemaVersion &&
-        canonicalJson(item.value) === canonicalJson(builtin.value),
-    );
+    const legacyItems = claimLegacy
+      ? document.modules.filter(
+          (item) =>
+            !isBuiltinModuleId(item.id) &&
+            item.origin === null &&
+            item.kind === builtin.kind &&
+            item.name === builtin.name &&
+            item.schemaVersion === builtin.schemaVersion &&
+            canonicalJson(item.value) === canonicalJson(builtin.value),
+        )
+      : [];
     // Multiple identical records are ambiguous; preserve them rather than deleting copies.
     for (const legacy of legacyItems.length === 1 ? legacyItems : []) {
       for (const preset of document.presets)

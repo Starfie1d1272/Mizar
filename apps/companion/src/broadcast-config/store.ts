@@ -53,6 +53,7 @@ interface Envelope {
   document: BroadcastConfigDocument;
   receipts: Record<string, Receipt>;
   imports: BroadcastImportMapping[];
+  builtinsNormalized?: boolean | undefined;
   pendingLegacyCamera?: PendingLegacyCamera | undefined;
   restoredLegacyCamera?:
     Array<{ legacyId: string; moduleId: string; activeSnapshot: boolean }> | undefined;
@@ -126,6 +127,7 @@ export class BroadcastConfigStore {
             'document',
             'receipts',
             'imports',
+            'builtinsNormalized',
             'pendingLegacyCamera',
             'restoredLegacyCamera',
           ].includes(key),
@@ -200,11 +202,13 @@ export class BroadcastConfigStore {
     const restoredLegacyCamera = restoredLegacyCameraSchema
       .optional()
       .parse(value.restoredLegacyCamera);
+    const builtinsNormalized = z.boolean().optional().parse(value.builtinsNormalized);
     return {
       version: 1,
       document,
       receipts,
       imports,
+      ...(builtinsNormalized !== undefined ? { builtinsNormalized } : {}),
       ...(pendingLegacyCamera ? { pendingLegacyCamera } : {}),
       ...(restoredLegacyCamera ? { restoredLegacyCamera } : {}),
     };
@@ -236,7 +240,11 @@ export class BroadcastConfigStore {
         this.envelope = await this.read();
       }
       const next = structuredClone(this.envelope);
-      if (addMissingBuiltinModules(next.document)) await this.commit(next);
+      if (!next.builtinsNormalized) {
+        addMissingBuiltinModules(next.document);
+        next.builtinsNormalized = true;
+        await this.commit(next);
+      } else if (addMissingBuiltinModules(next.document, false)) await this.commit(next);
     });
   }
   hasReceipt(requestId: string): boolean {
