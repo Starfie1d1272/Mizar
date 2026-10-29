@@ -781,6 +781,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         );
   let musicDirector: MusicDirector | undefined;
   let cameraDirector: CameraDirector | undefined;
+  let catalogTool: MulnxTool | undefined;
+  let catalogToolLoaded = false;
   const bpPresentationSettings = new BpPresentationSettings(
     options.obsConfigPath
       ? join(dirname(options.obsConfigPath), 'bp-presentation.json')
@@ -1224,6 +1226,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           cameraEvidence,
         )
       : undefined;
+    catalogTool = mulnxTool;
     cameraDirector = new CameraDirector(
       cameraStore,
       new MulnxProvider(cameraEvidence),
@@ -1243,9 +1246,14 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       options.productRuntime !== undefined,
     );
     app.addHook('onReady', async () => {
-      await mulnxTool
-        ?.load()
-        .catch((error) => app.log.error({ stage: 'mulnx_load', err: error }, 'MulNX 加载失败'));
+      if (mulnxTool) {
+        try {
+          await mulnxTool.load();
+          catalogToolLoaded = true;
+        } catch (error) {
+          app.log.error({ stage: 'mulnx_load', err: error }, 'MulNX 加载失败');
+        }
+      }
       await cameraStore
         .load()
         .catch((error) =>
@@ -1269,6 +1277,28 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       mulnxTool,
     );
   }
+  app.get('/local/v1/resource-library', (request, reply) => {
+    const policy = localWebTransport.getOriginPolicy();
+    if (
+      policy.mode !== 'loopback' ||
+      !['127.0.0.1', 'localhost', '[::1]', '::1'].includes(request.hostname) ||
+      request.headers['sec-fetch-site'] === 'cross-site' ||
+      (request.headers.origin && !checkLocalWebOrigin(policy, request.headers.origin).allowed)
+    )
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    const tool = catalogToolLoaded ? catalogTool?.view() : undefined;
+    return reply.header('cache-control', 'no-store').send({
+      resources: resources?.list() ?? null,
+      tool: tool
+        ? {
+            installed: tool.installed,
+            latest: tool.latest,
+            busy: tool.busy,
+            packs: tool.packs.map((pack) => pack.sourceName),
+          }
+        : null,
+    });
+  });
   sceneController.attachDirector(director);
   const directorTimer = setInterval(() => {
     void director.tick().catch(() => director.hold());

@@ -14,9 +14,14 @@ import { desktopInvoke } from '../workspace/client';
 export function MulnxToolControls({
   tool,
   allowStop = true,
+  runtimeOnly = false,
 }: {
   allowStop?: boolean;
-  tool: MulnxToolView | undefined;
+  runtimeOnly?: boolean;
+  tool:
+    | (Pick<MulnxToolView, 'installed' | 'latest' | 'busy'> &
+        Partial<Pick<MulnxToolView, 'message' | 'packs'>>)
+    | undefined;
 }) {
   const production = useLocalRead<Production>('/local/v1/production');
   const [busy, setBusy] = useState(false);
@@ -80,23 +85,29 @@ export function MulnxToolControls({
   }
   return (
     <div>
-      <p>
-        启动前请先退出完美世界竞技平台、其他竞技平台和游戏，Mizar 会调用 MulNX
-        完成环境检查。仅用于离线 Demo 或已授权观战。
-      </p>
-      <p>
-        MulNX · {tool.installed ?? '首次启动时准备'}
-        {tool.latest && tool.latest !== tool.installed ? ` · 可更新至 ${tool.latest}` : ''}
-      </p>
-      <Button disabled={busy || tool.busy} onClick={() => void run('check')}>
-        检查更新
-      </Button>
-      {window.__TAURI_INTERNALS__ ? (
+      {!runtimeOnly ? (
+        <p>
+          启动前请先退出完美世界竞技平台、其他竞技平台和游戏，Mizar 会调用 MulNX
+          完成环境检查。仅用于离线 Demo 或已授权观战。
+        </p>
+      ) : null}
+      {!runtimeOnly ? (
+        <p>
+          MulNX · {tool.installed ?? '首次启动时准备'}
+          {tool.latest && tool.latest !== tool.installed ? ` · 可更新至 ${tool.latest}` : ''}
+        </p>
+      ) : null}
+      {!runtimeOnly ? (
+        <Button disabled={busy || tool.busy} onClick={() => void run('check')}>
+          检查更新
+        </Button>
+      ) : null}
+      {!runtimeOnly && window.__TAURI_INTERNALS__ ? (
         <Button disabled={busy || tool.busy} onClick={() => void run('update')}>
           更新或重新准备 MulNX
         </Button>
       ) : null}
-      {window.__TAURI_INTERNALS__ ? (
+      {!runtimeOnly && window.__TAURI_INTERNALS__ ? (
         <Button
           disabled={busy || tool.busy || !production?.canEnter || production.mode !== 'preparation'}
           onClick={() => void run('open')}

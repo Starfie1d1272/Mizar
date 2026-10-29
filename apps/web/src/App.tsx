@@ -2,6 +2,7 @@ import { useLocalRead } from './preparation/client';
 import type { OverlayPolicy } from './preparation/desktop-overlay';
 import { ToolShell } from './patterns';
 import { PreparationPage } from './preparation/PreparationPage';
+import { ResourceLibraryPage } from './resource-library/ResourceLibraryPage';
 import { BpPage } from './bp/BpPage';
 import { OperatorShell } from './operator/OperatorShell';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
@@ -615,6 +616,7 @@ export function DebugPage() {
 
 export function App() {
   const pathname = window.location.pathname;
+  if (pathname === '/packages') return <ResourceLibraryPage />;
   if (['/', '/operator', '/matches', '/resources', '/picture', '/settings'].includes(pathname))
     return <PreparationPage />;
   if (pathname === '/qualification')

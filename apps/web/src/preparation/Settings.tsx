@@ -1,8 +1,6 @@
 import { ObserverSettingsPanel, GameAutomationSettingsPanel } from './ObserverSettings';
 import { ObsSettings } from './ObsSettings';
 import { CameraSettings } from '../orchestration/CameraSettings';
-import { MulnxToolControls } from '../orchestration/MulnxToolControls';
-import type { OrchestrationView } from '@mizar/protocol/orchestration';
 import { Cs2ConsoleSettings } from '../debug/Cs2ConsoleSettings';
 import {
   DiagnosticDeliverySettings,
@@ -34,9 +32,6 @@ function statusReadReason(error: unknown) {
 }
 
 export function Settings({ tab }: { tab: string }) {
-  const camera = useLocalRead<OrchestrationView>(
-    tab === 'advanced' ? '/local/v1/orchestration' : null,
-  );
   const production = useLocalRead<Production>(
     window.__TAURI_INTERNALS__ ? '/local/v1/production' : null,
   );
@@ -208,7 +203,8 @@ export function Settings({ tab }: { tab: string }) {
             <ResourceSettings />
             <Panel className="settings-card">
               <h2>运镜工具维护</h2>
-              <MulnxToolControls tool={camera?.tool} />
+              <p>在资源管理中查看运镜工具版本与状态。</p>
+              <a href="/packages">管理资源</a>
             </Panel>
           </div>
           <Panel className="settings-card advanced-settings-support">
