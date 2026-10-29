@@ -873,7 +873,7 @@ impl ManagedCs2 {
                 .is_some_and(|pid| self.owns_mulnx_launcher(pid).unwrap_or(false))
         } else { false };
         Ok(
-            json!({"qualityPreset": preferences.quality.name(), "preferMulnx":preferences.prefer_mulnx, "frameRateLimit":preferences.frame_rate_limit, "nativeHudToggle": running && (borrowed_hud || pending.as_ref().is_some_and(|v| v["nativeHudToggle"] == true && v["spectatorCfg"] == true)), "spectatorRecoveryPending": (self.store.spectator_pending() || self.store.full_spectator_pending()) && pending.is_none() && !borrowed_observer, "demoCleanupPending": self.store.playback_cleanup_pending() && pending.is_none(), "spectatorWarning":self.store.spectator_warning().or_else(|| pending.as_ref().and_then(|value| value["spectatorWarning"].as_str()).map(str::to_string)), "canPreserve": self.can_preserve && pending.is_none(), "preserveSettings": borrowed || pending.as_ref().is_some_and(|v| v["preserveSettings"] == true), "pending":pending.is_some(), "mulnxLaunchResumable":mulnx_launch_resumable, "borrowed":borrowed, "externalDetached":self.external_preservation && !borrowed, "running":running, "message":self.message, "busy":false, "phase": if mulnx_uncertain || pending.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch) {"uncertain"} else if running {"running"} else if pending.is_some() {"pending"} else {"idle"}}),
+            json!({"qualityPreset": preferences.quality.name(), "preferMulnx":preferences.prefer_mulnx, "frameRateLimit":preferences.frame_rate_limit, "nativeHudToggle": running && (borrowed_hud || pending.as_ref().is_some_and(|v| v["nativeHudToggle"] == true && v["spectatorCfg"] == true)), "spectatorRecoveryPending": (self.store.spectator_pending() || self.store.full_spectator_pending()) && pending.is_none() && !borrowed_observer, "demoCleanupPending": self.store.playback_cleanup_pending() && pending.is_none(), "demoCameraRequestId": pending.as_ref().filter(|v| v["mulnxLaunch"] == true).and_then(|v| v["demoTestRequestId"].as_str()), "spectatorWarning":self.store.spectator_warning().or_else(|| pending.as_ref().and_then(|value| value["spectatorWarning"].as_str()).map(str::to_string)), "canPreserve": self.can_preserve && pending.is_none(), "preserveSettings": borrowed || pending.as_ref().is_some_and(|v| v["preserveSettings"] == true), "pending":pending.is_some(), "mulnxLaunchResumable":mulnx_launch_resumable, "borrowed":borrowed, "externalDetached":self.external_preservation && !borrowed, "running":running, "message":self.message, "busy":false, "phase": if mulnx_uncertain || pending.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch) {"uncertain"} else if running {"running"} else if pending.is_some() {"pending"} else {"idle"}}),
         )
     }
     pub fn preferences(
@@ -1086,6 +1086,18 @@ impl ManagedCs2 {
         }
         Ok(journal)
     }
+    pub(crate) fn prepare_managed_mulnx_demo(&mut self, expected: &Path, preserve: bool, path: &Path, request_id: &str) -> Result<Value, String> {
+        self.ensure_demo_available()?;
+        let argument = crate::demo_test::playdemo_argument(path, &self.log)?;
+        if !self.start_internal(preserve, Some((&argument, request_id)), true)? {
+            return Err("请先结束现有游戏并恢复配置。".into());
+        }
+        let journal = self.store.load()?.ok_or("CS2 配置事务缺失。")?;
+        if !same_executable(expected, journal["executable"].as_str().ok_or("游戏路径缺失。")?) {
+            return Err("游戏安装位置已变化，原配置备份仍保留。".into());
+        }
+        Ok(journal)
+    }
     pub(crate) fn submit_managed_mulnx(&self) -> Result<(), String> {
         let mut journal = self.store.load()?.ok_or("CS2 配置事务缺失。")?;
         let (executable, _, _) = self.recovery_identity()?;
@@ -1135,11 +1147,35 @@ impl ManagedCs2 {
         let argument = crate::demo_test::playdemo_argument(path, &self.log)?;
         self.start_internal(preserve, Some((&argument, request_id)), false)
     }
+    pub(crate) fn cancel_unsubmitted_mulnx_demo(&mut self) -> Result<(), String> {
+        if self.demo_launch_attempted()? || any_cs2_running(&self.log)? {
+            return Err("启动结果待确认，请先检查游戏后恢复。".into());
+        }
+        if let Some(launcher) = &self.mulnx_launcher {
+            launcher.stop().map_err(|_| "MulNX 启动器未能关闭，请检查后恢复。")?;
+            self.mulnx_launcher = None;
+        }
+        if self.store.load()?.is_some() {
+            self.recover(true)?;
+        } else {
+            let pending = self.log.state_root.join("data/mulnx-launch/pending.json");
+            match std::fs::remove_file(pending) {
+                Ok(()) => (),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+                Err(_) => return Err("MulNX 启动记录无法清理，请恢复设置。".into()),
+            }
+        }
+        self.finish()
+    }
     pub fn demo_launch_attempted(&self) -> Result<bool, String> {
         Ok(self
             .store
             .load()?
             .is_some_and(|v| v["launchAttempted"] == true))
+    }
+    pub(crate) fn matches_pending_demo(&self, request_id: &str) -> Result<bool, String> {
+        Ok(self.store.load()?.is_some_and(|v| v["demoTestRequestId"].as_str() == Some(request_id)
+            && v["mulnxLaunch"] == true && v["launchAttempted"] == true))
     }
     pub fn has_demo_journal(&self) -> Result<bool, String> {
         Ok(self
@@ -1791,7 +1827,7 @@ mod tests {
     #[test]
     fn standard_start_uses_single_observer_cfg_and_preserves_keys() {
         let _processes = GAME_PROCESSES.lock().unwrap();
-        for scenario in ["standard", "spawn_failure", "demo", "mulnx_preserved"] {
+        for scenario in ["standard", "spawn_failure", "demo", "mulnx_demo", "mulnx_preserved"] {
             let fail = scenario == "spawn_failure";
             let root = std::env::temp_dir().join(format!("mizar-observer-start-{}-{scenario}", std::process::id()));
             std::fs::create_dir_all(&root).unwrap();
@@ -1811,6 +1847,20 @@ mod tests {
             let submitted = Arc::new(std::sync::Mutex::new(Vec::new()));
             host.launch_fixture = Some(LaunchFixture { executable:executable.clone(), video:video.clone(), account:1, fail_submit:fail, submitted:submitted.clone() });
             host.recovery_identity_fixture = Some((executable.clone(), video.clone(), 1));
+            if scenario == "mulnx_demo" {
+                let path = root.join("fixture.dem");
+                std::fs::write(&path, b"PBDEMS2\0fixture").unwrap();
+                let id = "00000000-0000-4000-8000-000000000001";
+                let journal = host.prepare_managed_mulnx_demo(&executable, false, &path, id).unwrap();
+                assert_eq!(journal["demoTestRequestId"], id);
+                assert_eq!(journal["mulnxLaunch"], true);
+                assert_eq!(journal["launchAttempted"], false);
+                let cfg_name = journal["demoPlaybackCfg"]["name"].as_str().unwrap();
+                assert!(std::fs::read_to_string(root.join("game/csgo/cfg").join(cfg_name)).unwrap().starts_with("playdemo "));
+                assert!(submitted.lock().unwrap().is_empty());
+                std::fs::remove_dir_all(root).unwrap();
+                continue;
+            }
             if scenario == "mulnx_preserved" {
                 let before_video = std::fs::read(&video).unwrap();
                 let before_convars = std::fs::read(cfg.join("cs2_machine_convars.vcfg")).unwrap();

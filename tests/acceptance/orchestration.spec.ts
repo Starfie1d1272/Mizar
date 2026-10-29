@@ -219,7 +219,9 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
     );
     await page.addInitScript(() =>
       Object.assign(window, {
-        __TAURI_INTERNALS__: { invoke: () => Promise.resolve({ running: true }) },
+        __TAURI_INTERNALS__: {
+          invoke: () => Promise.resolve({ running: true, demoCameraRequestId: 'test' }),
+        },
       }),
     );
     await page.goto('/?demoTest');

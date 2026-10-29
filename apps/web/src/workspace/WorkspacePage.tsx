@@ -7,6 +7,11 @@ import { RosterCapture } from '../preparation/RosterCapture';
 import { DesktopCanvas } from '../patterns/DesktopCanvas';
 import { CameraControls } from '../orchestration/CameraControls';
 import type { OrchestrationView } from '@mizar/protocol/orchestration';
+import type { ProductionGuidance } from '@mizar/protocol/program-scenes';
+import type {
+  ConnectionPreparationView,
+  ObserverRuntimeView,
+} from '../preparation/observer-preparation';
 import { MusicControls } from '../music/MusicControls';
 import { ObsOutputControls } from './ObsOutputControls';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
@@ -47,7 +52,6 @@ import { ProductionStatus } from './ProductionStatus';
 import { LiveRosterAlert } from './LiveRosterAlert';
 import { SyncHealthAlert, type SyncHealth } from './SyncHealthAlert';
 import { RivalHubLiveSourcePanel } from './RivalHubLiveSourcePanel';
-import { SpectatorHudCommands } from '../preparation/SpectatorHudCommands';
 import { LocalOverlayControls } from '../preparation/LocalOverlayControls';
 import {
   useCs2Status,
@@ -70,10 +74,12 @@ function ContextPanel({
   operator,
   program,
   programCursor,
+  connectionInRadar,
 }: {
   readonly operator: OperatorPayload | null;
   readonly program: ProgramPayload | null;
   readonly programCursor: ProgramSnapshot['cursor'] | null;
+  readonly connectionInRadar: boolean;
 }) {
   const match = operator?.matchContext.summary;
   const score = workspaceMatchScore(program);
@@ -143,7 +149,7 @@ function ContextPanel({
       </div>
       <div className="workspace-context__actions">
         <Button onClick={() => void openPreparation('/matches')}>比赛资料</Button>
-        <MatchConnectionControl />
+        {!connectionInRadar ? <MatchConnectionControl /> : null}
         {operator?.matchContext.rosterAuthority !== 'rivalhub' ? (
           <>
             <Button onClick={() => setCaptureOpen(true)}>
@@ -276,6 +282,11 @@ function ObsConfidence() {
 }
 
 function WorkspaceLeftContent() {
+  const connection = useLocalRead<ConnectionPreparationView>('/local/v1/observer-assist');
+  const observer = useLocalRead<ObserverRuntimeView & { programCommandQueued?: boolean }>(
+    '/local/v1/observer',
+  );
+  const guidance = useLocalRead<ProductionGuidance>('/local/v1/production-guidance');
   const radar = useLocalChannelClient('radar');
   const radarSource = useRadarViewSource(radar);
   const operator = useLocalChannelClient('operator');
@@ -294,10 +305,26 @@ function WorkspaceLeftContent() {
   const payload = state.state === 'live' ? (state.current?.payload ?? null) : null;
   const liveRadar = hasRadarViewFrame(radarState.state === 'live' ? radarState.current : null);
   const plannedMap =
-    payload?.seriesProgress?.maps.find((map) => map.status === 'current') ??
+    (guidance?.phase === 'map_end'
+      ? payload?.seriesProgress?.maps.find((map) => map.status === 'pending')
+      : payload?.seriesProgress?.maps.find((map) => map.status === 'current')) ??
     payload?.seriesProgress?.maps.find((map) => map.status === 'pending');
-  const map = payload?.runtime.mapName ?? plannedMap?.mapName;
+  const map =
+    guidance?.phase === 'map_end'
+      ? plannedMap?.mapName
+      : (payload?.runtime.mapName ?? plannedMap?.mapName);
   const artwork = map ? getRadarArtwork(map)?.artwork.overview : null;
+  const interrupted =
+    guidance?.phase !== 'map_end' &&
+    guidance?.phase !== 'match_end' &&
+    payload?.runtime.telemetryFreshness === 'stale' &&
+    !connection?.waitingForMap &&
+    !observer?.programCommandQueued;
+  const connectionInRadar =
+    !liveRadar &&
+    guidance?.phase !== 'match_end' &&
+    (guidance?.phase === 'map_end' || payload?.runtime.telemetryFreshness !== 'fresh') &&
+    !interrupted;
   return (
     <main className="workspace-left mizar-surface" aria-label="现场工作区">
       <div className="workspace-left__top">
@@ -317,14 +344,43 @@ function WorkspaceLeftContent() {
                 )}
                 <div className="workspace-empty">
                   <strong>
-                    {payload?.identity.state === 'mismatch' ? '等待核对比赛资料' : '等待 GSI 数据'}
+                    {guidance?.phase === 'match_end'
+                      ? '比赛已结束'
+                      : guidance?.phase === 'map_end' && connection?.waitingForMap
+                        ? '等待本图数据'
+                        : guidance?.phase === 'map_end'
+                          ? plannedMap
+                            ? `准备第 ${plannedMap.mapOrder} 图`
+                            : '准备下一图'
+                          : payload?.runtime.telemetryFreshness === 'fresh'
+                            ? '本图已连接 · 等待雷达画面'
+                            : observer?.programCommandQueued
+                              ? '等待本图数据'
+                              : payload?.runtime.telemetryFreshness === 'stale' &&
+                                  !connection?.waitingForMap
+                                ? '游戏数据已中断'
+                                : '等待第一图 GOTV'}
                   </strong>
                   <p>
-                    {artwork ? '地图底图 · 实时位置尚不可用' : '进入 CS2 观战后显示地图与选手位置'}
+                    {guidance?.phase === 'match_end'
+                      ? '请核对直播与录像状态'
+                      : guidance?.phase === 'map_end' && connection?.waitingForMap
+                        ? '连接已提交，请等待游戏数据'
+                        : guidance?.phase === 'map_end'
+                          ? '填写本图新的 GOTV'
+                          : payload?.runtime.telemetryFreshness === 'fresh'
+                            ? '等待雷达画面更新'
+                            : observer?.programCommandQueued
+                              ? '连接已提交，请等待游戏数据'
+                              : '连接 GOTV 后显示比赛画面'}
                   </p>
-                  <Button onClick={() => void openPreparation('/settings?tab=gsi')}>
-                    检查游戏连接
-                  </Button>
+                  {interrupted ? (
+                    <Button onClick={() => void openPreparation('/settings?tab=gsi')}>
+                      检查游戏连接
+                    </Button>
+                  ) : connectionInRadar ? (
+                    <MatchConnectionControl primary />
+                  ) : null}
                 </div>
               </div>
             )}
@@ -335,6 +391,7 @@ function WorkspaceLeftContent() {
           <div className="workspace-left__context">
             <MusicControls compact />
             <ContextPanel
+              connectionInRadar={connectionInRadar}
               operator={payload}
               programCursor={
                 programState.state === 'live' ? (programState.current?.cursor ?? null) : null
@@ -366,6 +423,7 @@ function WorkspaceDockContent() {
     return () => clearTimeout(timer);
   }, [message]);
   const production = useLocalRead<Production>('/local/v1/production');
+  const guidance = useLocalRead<ProductionGuidance>('/local/v1/production-guidance');
   const { status: cs2 } = useCs2Status();
   const orchestration = useLocalRead<OrchestrationView>('/local/v1/orchestration');
   const showCamera = Boolean(cs2?.preferMulnx || orchestration?.status.connected);
@@ -468,25 +526,27 @@ function WorkspaceDockContent() {
           ))}
         </div>
         <div className="workspace-next-preview" aria-label="下一个场景预览">
-          <Select
-            label="热身画面"
-            disabled={busy || !sceneState?.director}
-            value={sceneState?.director?.warmupScene ?? 'waiting'}
-            onChange={(event) => {
-              const scene = event.currentTarget.value;
-              if (sceneState && (scene === 'waiting' || scene === 'gameplay'))
-                void action(() =>
-                  command('/operator/program-director', {
-                    action: 'warmup',
-                    scene,
-                    expectedRevision: sceneState.revision,
-                  }),
-                );
-            }}
-          >
-            <option value="waiting">赛前等待</option>
-            <option value="gameplay">游戏画面</option>
-          </Select>
+          {guidance?.phase === 'pre_match' ? (
+            <Select
+              label="热身播出"
+              disabled={busy || !sceneState?.director}
+              value={sceneState?.director?.warmupScene ?? 'waiting'}
+              onChange={(event) => {
+                const scene = event.currentTarget.value;
+                if (sceneState && (scene === 'waiting' || scene === 'gameplay'))
+                  void action(() =>
+                    command('/operator/program-director', {
+                      action: 'warmup',
+                      scene,
+                      expectedRevision: sceneState.revision,
+                    }),
+                  );
+              }}
+            >
+              <option value="waiting">等待画面</option>
+              <option value="gameplay">游戏画面</option>
+            </Select>
+          ) : null}
           {nextFrame ? <ScenePreviewViewport frame={nextFrame} onSettled={previewSettled} /> : null}
           <div>
             <small>{mode === 'manual' || mode === 'blocked' ? '自动推进已暂停' : '下一场景'}</small>
@@ -507,17 +567,6 @@ function WorkspaceDockContent() {
           </div>
         </div>
       </section>
-      {showCamera ? (
-        <section className="workspace-camera" aria-label="运镜控制">
-          <div className="workspace-section-heading">
-            <strong>运镜</strong>
-            <Button onClick={() => void action(() => openPreparation('/settings?tab=camera'))}>
-              配置运镜
-            </Button>
-          </div>
-          <CameraControls workspace />
-        </section>
-      ) : null}
       <section className="workspace-spectator" aria-label="观战控制">
         <div className="workspace-section-heading">
           {exit?.windowMessage ? (
@@ -558,9 +607,15 @@ function WorkspaceDockContent() {
             </span>
           ) : null}
         </div>
-        <SpectatorHudCommands compact onMessage={setMessage} />
-        <p className="workspace-command-help">复制后在 CS2 控制台执行</p>
-        <LocalOverlayControls onMessage={setMessage} />
+        {showCamera ? (
+          <div role="region" aria-label="运镜控制">
+            <CameraControls workspace />
+          </div>
+        ) : null}
+        <details className="workspace-secondary">
+          <summary>本机显示</summary>
+          <LocalOverlayControls onMessage={setMessage} />
+        </details>
       </section>
       <section className="workspace-production" aria-label="制作工具">
         <div className="workspace-section-heading">
@@ -581,32 +636,41 @@ function WorkspaceDockContent() {
           </Button>
         </div>
         <ObsOutputControls onError={setErrorMessage} />
-        <div className="workspace-tools">
-          <Button disabled={busy} onClick={() => void action(() => openTool('hud'))}>
-            HUD 编辑器
-          </Button>
-          <Button
-            onClick={() =>
-              void openTool('diagnostics').catch((reason: unknown) =>
-                setErrorMessage(reason instanceof Error ? reason.message : '诊断窗口无法打开。'),
-              )
-            }
-          >
-            运行诊断
-          </Button>
-          <Button
-            disabled={busy || !window.__TAURI_INTERNALS__}
-            onClick={() => void action(() => desktopInvoke('restore_layout'))}
-          >
-            恢复布局
-          </Button>
-          <Button
-            disabled={!production || busy}
-            onClick={() => production && void action(() => productionAction('hide', production))}
-          >
-            隐藏工作区
-          </Button>
-        </div>
+        <RivalHubLiveSourcePanel compact action={action} onMessage={setMessage} />
+        <details className="workspace-secondary">
+          <summary>更多工具</summary>
+          <div className="workspace-tools">
+            {showCamera ? (
+              <Button onClick={() => void action(() => openPreparation('/settings?tab=camera'))}>
+                配置运镜
+              </Button>
+            ) : null}
+            <Button disabled={busy} onClick={() => void action(() => openTool('hud'))}>
+              HUD 编辑器
+            </Button>
+            <Button
+              onClick={() =>
+                void openTool('diagnostics').catch((reason: unknown) =>
+                  setErrorMessage(reason instanceof Error ? reason.message : '诊断窗口无法打开。'),
+                )
+              }
+            >
+              运行诊断
+            </Button>
+            <Button
+              disabled={busy || !window.__TAURI_INTERNALS__}
+              onClick={() => void action(() => desktopInvoke('restore_layout'))}
+            >
+              恢复布局
+            </Button>
+            <Button
+              disabled={!production || busy}
+              onClick={() => production && void action(() => productionAction('hide', production))}
+            >
+              隐藏工作区
+            </Button>
+          </div>
+        </details>
       </section>
       <footer className="workspace-message" role="status">
         <span title={sceneState?.director?.reason ?? undefined}>
@@ -634,30 +698,6 @@ function WorkspaceDockContent() {
           </span>
         ) : null}
         <div className="workspace-footer-actions">
-          <RivalHubLiveSourcePanel compact action={action} onMessage={setMessage} />
-          <small className="workspace-exit-help">
-            {exit?.busy
-              ? workspaceExitLabel(exit.stage)
-              : cs2?.borrowed
-                ? '解除借用，游戏保持运行'
-                : cs2?.preserveSettings
-                  ? '关闭本次游戏，保留游戏设置'
-                  : '关闭游戏并恢复配置'}
-          </small>
-          <Button
-            disabled={busy}
-            onClick={() =>
-              void action(async () => {
-                await command('/operator/diagnostics/report', {
-                  category: 'other',
-                  observedAt: new Date().toISOString(),
-                });
-                setMessage('问题时间已在本机诊断中保存；云端接收状态可在设置中查看。');
-              })
-            }
-          >
-            标记本场问题
-          </Button>
           <Button
             className="workspace-exit"
             disabled={!production || busy || Boolean(exit?.busy)}
