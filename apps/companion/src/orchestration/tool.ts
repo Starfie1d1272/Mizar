@@ -104,7 +104,8 @@ export class MulnxTool {
       !pack.sourceName ||
       pack.sourceName.trim() !== pack.sourceName ||
       pack.sourceName.length > 120 ||
-      /[\\/\x00-\x1f]/.test(pack.sourceName) ||
+      /[\\/]/.test(pack.sourceName) ||
+      [...pack.sourceName].some((character) => character.charCodeAt(0) < 32) ||
       pack.sourceName === '.' ||
       pack.sourceName === '..'
     )

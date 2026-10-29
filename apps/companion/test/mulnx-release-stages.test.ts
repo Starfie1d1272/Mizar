@@ -14,10 +14,11 @@ const release = {
 };
 vi.mock('../src/orchestration/tool-release.js', () => ({
   SEVEN_ZIP: { sha256: 'extractor' },
-  latestMulnxRelease: async () => release,
-  fileSha256: async (path: string) => (path.endsWith('7zr.exe') ? 'extractor' : release.sha256),
+  latestMulnxRelease: () => Promise.resolve(release),
+  fileSha256: (path: string) =>
+    Promise.resolve(path.endsWith('7zr.exe') ? 'extractor' : release.sha256),
   downloadVerified: async (_url: string, path: string) => writeFile(path, 'x'),
-  upstreamNotice: async () => 'notice',
+  upstreamNotice: () => Promise.resolve('notice'),
   extractMulnx: async (_extractor: string, _archive: string, destination: string) => {
     const root = join(destination, 'MulNX');
     await mkdir(join(root, 'Config'), { recursive: true });
@@ -73,14 +74,17 @@ it('prepares without selecting and publishes a configured instance only after se
     restarted.selectRelease(prepared.preparedId, 'D:\\Steam\\cs2.exe'),
   ).resolves.toBeUndefined();
   expect(restarted.view().installed).toBe(release.tag);
-  const current = JSON.parse(await readFile(join(data, 'current.json'), 'utf8'));
+  const current = JSON.parse(await readFile(join(data, 'current.json'), 'utf8')) as {
+    directory: string;
+    packs: { name: string }[];
+  };
   expect(
     await readFile(
       join(data, current.directory, 'MulNX/CS2Injector/CS2BootLoader/Config/config.yaml'),
       'utf8',
     ),
   ).toContain('D:\\\\Steam');
-  const source = await restarted.cameraSource(current.packs[0].name);
+  const source = await restarted.cameraSource(current.packs[0]!.name);
   expect(source).toMatchObject({
     sourceName: 'Source',
     converterVersion: 1,
@@ -91,12 +95,14 @@ it('prepares without selecting and publishes a configured instance only after se
     join(data, current.directory, 'MulNX/CS2OBTool/CameraSystem/CamPacks/Source/Source.yaml'),
     'changed',
   );
-  await expect(restarted.cameraSource(current.packs[0].name)).rejects.toThrow(
+  await expect(restarted.cameraSource(current.packs[0]!.name)).rejects.toThrow(
     'mulnx_source_changed',
   );
   await writeFile(join(data, prepared.preparedId, 'MulNX.7z'), 'bad');
   await expect(restarted.selectRelease(prepared.preparedId, 'D:\\Steam\\cs2.exe')).rejects.toThrow(
     'mulnx_prepared_integrity',
   );
-  expect(JSON.parse(await readFile(join(data, 'current.json'), 'utf8'))).toEqual(current);
+  expect(JSON.parse(await readFile(join(data, 'current.json'), 'utf8')) as unknown).toEqual(
+    current,
+  );
 });
