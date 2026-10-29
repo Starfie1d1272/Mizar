@@ -364,7 +364,7 @@ it('reports a game connection failure before attempting the observer', () =>
     commands.send.mockRejectedValueOnce(new Error('synthetic_game_failure'));
     const failed = await start();
     expect(failed.statusCode).toBe(409);
-    expect(failed.json().message).toContain('游戏观战连接');
+    expect(failed.json<{ message: string }>().message).toContain('游戏观战连接');
     expect(launch).not.toHaveBeenCalled();
   }));
 
@@ -375,7 +375,7 @@ it('retries a failed early launch without repeating the successful game command'
       .mockRejectedValueOnce(new Error('synthetic_launch_failure'));
     const failed = await start();
     expect(failed.statusCode).toBe(409);
-    expect(failed.json().message).toContain('观察辅助未能启动');
+    expect(failed.json<{ message: string }>().message).toContain('观察辅助未能启动');
     expect((await app.inject('/local/v1/observer')).json()).toMatchObject({
       error: 'observer_operation_failed',
       retryAvailable: true,

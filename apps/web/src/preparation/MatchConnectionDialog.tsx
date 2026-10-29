@@ -63,6 +63,7 @@ export function MatchConnectionDialog() {
           pending.current = next;
           setRequest(next);
           setError('');
+          setAutomatic(null);
           setConfirmed(false);
           setSaved(false);
         }),
@@ -84,19 +85,20 @@ export function MatchConnectionDialog() {
   useEffect(() => {
     if (!request) return;
     let active = true;
-    setAutomatic(null);
-    if (!window.__TAURI_INTERNALS__) setAutomatic(false);
-    else
-      void desktopInvoke<{ useMulnx?: boolean }>('observer_command', { action: 'connection-mode' })
-        .then((result) => {
-          if (active)
-            setAutomatic(
-              result.useMulnx === true && request.view.gameAutomation?.autoConnect === true,
-            );
-        })
-        .catch(() => {
-          if (active) setError('无法检查游戏连接方式，请重试。');
-        });
+    void (
+      window.__TAURI_INTERNALS__
+        ? desktopInvoke<{ useMulnx?: boolean }>('observer_command', { action: 'connection-mode' })
+        : Promise.resolve({ useMulnx: false })
+    )
+      .then((result) => {
+        if (active)
+          setAutomatic(
+            result.useMulnx === true && request.view.gameAutomation?.autoConnect === true,
+          );
+      })
+      .catch(() => {
+        if (active) setError('无法检查游戏连接方式，请重试。');
+      });
     return () => {
       active = false;
     };
