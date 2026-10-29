@@ -1,4 +1,8 @@
-import { AudioMigration, type MigrationObserver } from './audio-migration.js';
+import {
+  AudioMigration,
+  type AudioMonitorChange,
+  type MigrationObserver,
+} from './audio-migration.js';
 import { inspectAudioSceneGraph } from './audio-scene-graph.js';
 import { OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
 import type { ObsRpc } from './reconcile.js';
@@ -26,6 +30,7 @@ export async function reconcileManagedAudio(
   verify: () => Promise<boolean>,
   desktopUuid?: string,
   completedPath?: string,
+  monitor: AudioMonitorChange[] = [],
 ): Promise<void> {
   if (new Set(Object.values(ids)).size !== 3) throw new Error('audio_binding_duplicate');
   const inputs = records((await obs.call('GetInputList')).inputs);
@@ -52,7 +57,7 @@ export async function reconcileManagedAudio(
     if (
       event.type !== 'item' &&
       !(preparing && event.type === 'identityChanged') &&
-      !(migrating && event.type === 'inputSettings')
+      !(migrating && (event.type === 'inputSettings' || event.type === 'monitor'))
     )
       changed = true;
   });
@@ -236,11 +241,11 @@ export async function reconcileManagedAudio(
     }
     await check();
     migrating = true;
-    if (desktop.length || independent.length || captureAudio.length)
+    if (desktop.length || independent.length || captureAudio.length || monitor.length)
       await new AudioMigration(`${journal}.migration`).migrate(
         obs,
         endpoint,
-        { endpoint, collection: OBS_COLLECTION, desktop, independent, captureAudio },
+        { endpoint, collection: OBS_COLLECTION, desktop, independent, captureAudio, monitor },
         observer,
         completedPath,
       );

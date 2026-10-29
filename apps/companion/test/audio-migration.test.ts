@@ -23,6 +23,7 @@ function fixture() {
   const listeners = new Set<(event: MigrationEvent) => void>();
   let failAfterWrite = false;
   const settings = { capture_audio: true, window: 'unchanged' };
+  const monitor = { mode: 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT' };
   const observer: MigrationObserver = {
     subscribe(listener) {
       listeners.add(listener);
@@ -33,6 +34,17 @@ function fixture() {
     async call(type, data) {
       if (type === 'GetStreamStatus' || type === 'GetRecordStatus') return { outputActive: false };
       if (type === 'GetSceneCollectionList') return { currentSceneCollectionName: 'collection' };
+      if (type === 'GetInputAudioMonitorType') return { monitorType: monitor.mode };
+      if (type === 'SetInputAudioMonitorType') {
+        monitor.mode = data?.monitorType as string;
+        for (const listener of listeners)
+          listener({ type: 'monitor', inputUuid: 'music', monitorType: monitor.mode });
+        if (failAfterWrite) {
+          failAfterWrite = false;
+          throw new Error('receipt lost');
+        }
+        return {};
+      }
       if (type === 'GetInputSettings')
         return { inputKind: 'game_capture', inputSettings: { ...settings } };
       if (type === 'SetInputSettings') {
@@ -75,6 +87,7 @@ function fixture() {
   return {
     items,
     settings,
+    monitor,
     obs,
     observer,
     plan,
@@ -177,6 +190,7 @@ test('mode switch disables exclusive video audio and restores it without changin
       ]),
     );
     const settings: Record<string, unknown> = { capture_audio: true, window: 'keep-picture' };
+    const music = { mode: 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT' };
     const obs: ObsRpc = {
       async call(type, data) {
         if (type === 'GetStreamStatus' || type === 'GetRecordStatus')
@@ -189,6 +203,13 @@ test('mode switch disables exclusive video audio and restores it without changin
           return { scenes: scenes.map(({ sceneName }) => ({ sceneName })) };
         if (type === 'GetSceneItemList')
           return { sceneItems: items.get(data?.sceneName as string)!.map((item) => ({ ...item })) };
+        if (type === 'GetInputAudioMonitorType') return { monitorType: music.mode };
+        if (type === 'SetInputAudioMonitorType') {
+          music.mode = data?.monitorType as string;
+          for (const listener of listeners)
+            listener({ type: 'monitor', inputUuid: 'music', monitorType: music.mode });
+          return {};
+        }
         if (type === 'GetInputSettings')
           return data?.inputUuid === 'video'
             ? { inputKind: 'game_capture', inputSettings: { ...settings } }
@@ -257,15 +278,26 @@ test('mode switch disables exclusive video audio and restores it without changin
         ) => operation(obs, 'endpoint', observer),
       },
     });
-    await adapter.switchAudioMode('revision', 'desktop-selection', async () => {});
+    await adapter.switchAudioMode('revision', 'desktop-selection', async (_obs, _same, apply) =>
+      apply([
+        {
+          kind: 'monitor',
+          inputUuid: 'music',
+          before: 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
+          applied: 'OBS_MONITORING_TYPE_MONITOR_ONLY',
+        },
+      ]),
+    );
+    assert.equal(music.mode, 'OBS_MONITORING_TYPE_MONITOR_ONLY');
     assert.deepEqual(settings, { capture_audio: false, window: 'keep-picture' });
     assert.ok(
       [...items.values()].every(
         (scene) => scene.find((item) => item.sourceUuid === 'video')!.sceneItemEnabled,
       ),
     );
-    await adapter.switchAudioMode('revision', null, async () => {});
+    await adapter.switchAudioMode('revision', null, async (_obs, _same, apply) => apply([]));
     assert.deepEqual(settings, { capture_audio: true, window: 'keep-picture' });
+    assert.equal(music.mode, 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT');
     assert.ok(
       [...items.values()].every(
         (scene) => scene.find((item) => item.sourceUuid === 'video')!.sceneItemEnabled,
@@ -322,4 +354,118 @@ test('restore refuses externally changed capture audio', async () =>
       /external_change/,
     );
     assert.equal(settings.capture_audio, true);
+  }));
+
+test('music monitor is journalled with scene paths and restored on switch back', async () =>
+  withJournal(async (path) => {
+    const { monitor, obs, observer, plan } = fixture();
+    const migration = new AudioMigration(path);
+    await migration.migrate(
+      obs,
+      'endpoint',
+      {
+        ...plan,
+        monitor: [
+          {
+            kind: 'monitor',
+            inputUuid: 'music',
+            before: 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
+            applied: 'OBS_MONITORING_TYPE_MONITOR_ONLY',
+          },
+        ],
+      },
+      observer,
+      `${path}.completed`,
+    );
+    assert.equal(monitor.mode, 'OBS_MONITORING_TYPE_MONITOR_ONLY');
+    await migration.restoreCompleted(obs, 'endpoint', observer, `${path}.completed`);
+    assert.equal(monitor.mode, 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT');
+  }));
+
+test('uncertain music monitor write is restored after restart', async () =>
+  withJournal(async (path) => {
+    const { monitor, obs, observer, plan, failNextWrite } = fixture();
+    failNextWrite();
+    await assert.rejects(
+      new AudioMigration(path).migrate(
+        obs,
+        'endpoint',
+        {
+          ...plan,
+          monitor: [
+            {
+              kind: 'monitor',
+              inputUuid: 'music',
+              before: 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
+              applied: 'OBS_MONITORING_TYPE_MONITOR_ONLY',
+            },
+          ],
+        },
+        observer,
+      ),
+      /write_uncertain/,
+    );
+    assert.equal(monitor.mode, 'OBS_MONITORING_TYPE_MONITOR_ONLY');
+    await new AudioMigration(path).recover(obs, 'endpoint', observer);
+    assert.equal(monitor.mode, 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT');
+  }));
+
+test('restore refuses externally changed music monitor', async () =>
+  withJournal(async (path) => {
+    const { monitor, obs, observer, plan } = fixture();
+    const migration = new AudioMigration(path);
+    await migration.migrate(
+      obs,
+      'endpoint',
+      {
+        ...plan,
+        monitor: [
+          {
+            kind: 'monitor',
+            inputUuid: 'music',
+            before: 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
+            applied: 'OBS_MONITORING_TYPE_MONITOR_ONLY',
+          },
+        ],
+      },
+      observer,
+      `${path}.completed`,
+    );
+    monitor.mode = 'OBS_MONITORING_TYPE_NONE';
+    await assert.rejects(
+      migration.restoreCompleted(obs, 'endpoint', observer, `${path}.completed`),
+      /external_change/,
+    );
+    assert.equal(monitor.mode, 'OBS_MONITORING_TYPE_NONE');
+  }));
+
+test('restart recovery refuses a third externally selected monitor mode', async () =>
+  withJournal(async (path) => {
+    const { monitor, obs, observer, plan, failNextWrite } = fixture();
+    failNextWrite();
+    await assert.rejects(
+      new AudioMigration(path).migrate(
+        obs,
+        'endpoint',
+        {
+          ...plan,
+          monitor: [
+            {
+              kind: 'monitor',
+              inputUuid: 'music',
+              before: 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
+              applied: 'OBS_MONITORING_TYPE_MONITOR_ONLY',
+            },
+          ],
+        },
+        observer,
+      ),
+      /write_uncertain/,
+    );
+    monitor.mode = 'OBS_MONITORING_TYPE_NONE';
+    await assert.rejects(
+      new AudioMigration(path).recover(obs, 'endpoint', observer),
+      /external_change/,
+    );
+    assert.equal(monitor.mode, 'OBS_MONITORING_TYPE_NONE');
   }));

@@ -22,7 +22,7 @@ import { readOwnedCommentaryTarget } from './commentary-owned-target.js';
 import { OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
 import { configureIndependentAudio } from './audio-setup.js';
 import { reconcileManagedAudio } from './managed-audio.js';
-import { AudioMigration } from './audio-migration.js';
+import { AudioMigration, type AudioMonitorChange } from './audio-migration.js';
 import { desktopMonitorRelationship } from './audio-monitor-device.js';
 import { discoverWaitingCommentary } from './remote-commentary-wait.js';
 import { AudioConfigurationConnection } from './audio-configuration-connection.js';
@@ -474,7 +474,11 @@ export class ObsAdapter {
   switchAudioMode(
     revision: string,
     selectionId: string | null,
-    prepareMusic: (obs: ObsRpc, same: boolean) => Promise<void>,
+    prepareMusic: (
+      obs: ObsRpc,
+      same: boolean,
+      apply: (changes: AudioMonitorChange[]) => Promise<void>,
+    ) => Promise<void>,
   ) {
     if (!this.audioRouting || !this.commentary) throw new Error('audio_routing_unavailable');
     return this.configurationMutation(() =>
@@ -523,28 +527,31 @@ export class ObsAdapter {
               endpoint,
               observer,
             );
-            await prepareMusic(obs, relationship === 'same');
-            if (
-              !desktop &&
-              (await new AudioMigration(`${this.commentary!.journal}.migration`).restoreCompleted(
+            await prepareMusic(obs, relationship === 'same', async (monitor) => {
+              if (
+                !desktop &&
+                (await new AudioMigration(`${this.commentary!.journal}.migration`).restoreCompleted(
+                  obs,
+                  endpoint,
+                  observer,
+                  completedPath,
+                  monitor,
+                ))
+              )
+                return;
+              await reconcileManagedAudio(
                 obs,
                 endpoint,
                 observer,
-                completedPath,
-              ))
-            )
-              return;
-            await reconcileManagedAudio(
-              obs,
-              endpoint,
-              observer,
-              this.commentary!.journal,
-              this.browserBaseUrl,
-              ids,
-              verify,
-              desktop,
-              desktop ? completedPath : undefined,
-            );
+                this.commentary!.journal,
+                this.browserBaseUrl,
+                ids,
+                verify,
+                desktop,
+                desktop ? completedPath : undefined,
+                monitor,
+              );
+            });
           },
         );
         if (!selectionId) await rm(completedPath, { force: true });

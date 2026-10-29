@@ -179,7 +179,7 @@ export function registerObsRoutes(
         options.adapter.switchAudioMode(
           parsed.data.revision,
           parsed.data.selectionId,
-          (obs, same) => music.prepareDesktopMix(obs, same),
+          (obs, same, apply) => music.prepareDesktopMix(obs, same, apply),
         ),
       );
       return { ok: true };

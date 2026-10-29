@@ -31,12 +31,37 @@ const inputField = inputRef
     externalChanged: z.boolean(),
   })
   .strict();
+const monitorMode = z.enum([
+  'OBS_MONITORING_TYPE_NONE',
+  'OBS_MONITORING_TYPE_MONITOR_ONLY',
+  'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
+]);
+const monitorRef = z
+  .object({
+    kind: z.literal('monitor'),
+    inputUuid: z.string().min(1),
+    before: monitorMode,
+    applied: monitorMode,
+  })
+  .strict();
+const monitorField = monitorRef
+  .extend({
+    phase: z.enum(['prepared', 'sent', 'confirmed', 'uncertain', 'restored']),
+    externalChanged: z.boolean(),
+  })
+  .strict();
+export type AudioMonitorChange = z.infer<typeof monitorRef>;
+type Value = boolean | z.infer<typeof monitorMode>;
+function active(value: Value): boolean {
+  return value === true || value === 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT';
+}
 const planSchema = z
   .object({
     endpoint: z.string().min(1),
     collection: z.string().min(1),
     desktop: z.array(ref),
     independent: z.array(ref),
+    monitor: z.array(monitorRef).default([]),
     captureAudio: z
       .array(inputRef.extend({ before: z.boolean(), applied: z.boolean() }).strict())
       .default([]),
@@ -46,14 +71,15 @@ const journalSchema = z
   .object({
     endpoint: z.string(),
     collection: z.string(),
-    fields: z.array(z.union([field, inputField])),
+    fields: z.array(z.union([field, inputField, monitorField])),
   })
   .strict();
 export type AudioMigrationPlan = z.input<typeof planSchema>;
-type Field = z.infer<typeof field> | z.infer<typeof inputField>;
+type Field = z.infer<typeof field> | z.infer<typeof inputField> | z.infer<typeof monitorField>;
 type Journal = z.infer<typeof journalSchema>;
 export type MigrationEvent =
   | { type: 'item'; sceneName: string; sceneItemId: number; enabled: boolean }
+  | { type: 'monitor'; inputUuid: string; monitorType: string }
   | { type: 'inputSettings'; inputUuid: string; settings: Record<string, unknown> }
   | { type: 'outputStarting' }
   | { type: 'identityChanged' }
@@ -105,6 +131,7 @@ export class AudioMigration {
     endpoint: string,
     observer: MigrationObserver,
     completedPath: string,
+    extraMonitor: AudioMonitorChange[] = [],
   ): Promise<boolean> {
     const completed = await this.readJournal(completedPath);
     if (!completed) return false;
@@ -138,13 +165,31 @@ export class AudioMigration {
     );
     // A crash may occur after all reverse writes but before the mode commit.
     // Retain the record until that commit so a retry can recognize this state.
-    if (completed.fields.every((entry, index) => values[index] === entry.before)) return true;
-    if (completed.fields.some((entry, index) => values[index] !== entry.applied))
+    const alreadyRestored = completed.fields.every(
+      (entry, index) => values[index] === entry.before,
+    );
+    if (
+      !alreadyRestored &&
+      completed.fields.some((entry, index) => values[index] !== entry.applied)
+    )
       throw new Error('audio_migration_external_change');
     const desktop: AudioMigrationPlan['desktop'] = [];
     const captureAudio: NonNullable<AudioMigrationPlan['captureAudio']> = [];
+    const monitor: NonNullable<AudioMigrationPlan['monitor']> = extraMonitor.filter(
+      (extra) =>
+        !completed.fields.some((entry) => 'kind' in entry && entry.inputUuid === extra.inputUuid),
+    );
     const independent: AudioMigrationPlan['independent'] = [];
-    for (const entry of completed.fields) {
+    for (const entry of alreadyRestored ? [] : completed.fields) {
+      if ('kind' in entry) {
+        monitor.push({
+          kind: 'monitor',
+          inputUuid: entry.inputUuid,
+          before: entry.applied,
+          applied: entry.before,
+        });
+        continue;
+      }
       if ('inputUuid' in entry) {
         captureAudio.push({
           inputUuid: entry.inputUuid,
@@ -162,6 +207,8 @@ export class AudioMigration {
       };
       (entry.before ? independent : desktop).push(ref);
     }
+    if (!desktop.length && !independent.length && !captureAudio.length && !monitor.length)
+      return true;
     await this.migrate(
       obs,
       endpoint,
@@ -171,6 +218,7 @@ export class AudioMigration {
         desktop,
         independent,
         captureAudio,
+        monitor,
       },
       observer,
     );
@@ -187,7 +235,13 @@ export class AudioMigration {
     if (idle && (stream.outputActive !== false || record.outputActive !== false))
       throw new Error('audio_migration_output_active');
   }
-  private async status(obs: ObsRpc, entry: Field): Promise<boolean> {
+  private async status(obs: ObsRpc, entry: Field): Promise<Value> {
+    if ('kind' in entry) {
+      const result = await obs.call('GetInputAudioMonitorType', { inputUuid: entry.inputUuid });
+      const parsed = monitorMode.safeParse(result.monitorType);
+      if (!parsed.success) throw new Error('audio_migration_identity_changed');
+      return parsed.data;
+    }
     if ('inputUuid' in entry) {
       const result = await obs.call('GetInputSettings', { inputUuid: entry.inputUuid });
       const settings = result.inputSettings as Record<string, unknown> | undefined;
@@ -216,32 +270,38 @@ export class AudioMigration {
     return found.sceneItemEnabled;
   }
   private matchesIdentity(event: MigrationEvent, entry: Field): boolean {
-    return 'inputUuid' in entry
-      ? event.type === 'inputSettings' && event.inputUuid === entry.inputUuid
-      : event.type === 'item' &&
+    return 'kind' in entry
+      ? event.type === 'monitor' && event.inputUuid === entry.inputUuid
+      : 'inputUuid' in entry
+        ? event.type === 'inputSettings' && event.inputUuid === entry.inputUuid
+        : event.type === 'item' &&
           event.sceneName === entry.sceneName &&
           event.sceneItemId === entry.sceneItemId;
   }
-  private matches(event: MigrationEvent, entry: Field, value: boolean): boolean {
+  private matches(event: MigrationEvent, entry: Field, value: Value): boolean {
     return (
       this.matchesIdentity(event, entry) &&
       (event.type === 'item'
         ? event.enabled === value
-        : event.type === 'inputSettings' && event.settings.capture_audio === value)
+        : event.type === 'inputSettings'
+          ? event.settings.capture_audio === value
+          : event.type === 'monitor' && event.monitorType === value)
     );
   }
-  private write(obs: ObsRpc, entry: Field, value: boolean) {
-    return 'inputUuid' in entry
-      ? obs.call('SetInputSettings', {
-          inputUuid: entry.inputUuid,
-          inputSettings: { capture_audio: value },
-          overlay: true,
-        })
-      : obs.call('SetSceneItemEnabled', {
-          sceneName: entry.sceneName,
-          sceneItemId: entry.sceneItemId,
-          sceneItemEnabled: value,
-        });
+  private write(obs: ObsRpc, entry: Field, value: Value) {
+    return 'kind' in entry
+      ? obs.call('SetInputAudioMonitorType', { inputUuid: entry.inputUuid, monitorType: value })
+      : 'inputUuid' in entry
+        ? obs.call('SetInputSettings', {
+            inputUuid: entry.inputUuid,
+            inputSettings: { capture_audio: value },
+            overlay: true,
+          })
+        : obs.call('SetSceneItemEnabled', {
+            sceneName: entry.sceneName,
+            sceneItemId: entry.sceneItemId,
+            sceneItemEnabled: value,
+          });
   }
   /** Recheck an interrupted transaction on a new observed connection and restore
    * its recorded pre-switch references before allowing another migration. */
@@ -249,12 +309,11 @@ export class AudioMigration {
     if (this.running) throw new Error('audio_migration_busy');
     this.running = true;
     let interrupted = false;
-    let expected: { entry: Field; value: boolean; seen: boolean } | undefined;
+    let expected: { entry: Field; value: Value; seen: boolean } | undefined;
     const stop = observer.subscribe((event) => {
       if (expected && !expected.seen && this.matches(event, expected.entry, expected.value)) {
         expected.seen = true;
-      } else if (event.type !== 'item' && event.type !== 'inputSettings') interrupted = true;
-      else if (event.type === 'item' || event.type === 'inputSettings') interrupted = true;
+      } else interrupted = true;
     });
     try {
       const journal = await this.pending();
@@ -262,9 +321,11 @@ export class AudioMigration {
       if (journal.fields.some((entry) => entry.externalChanged || entry.before === entry.applied))
         throw new Error('audio_migration_external_change');
       const keys = journal.fields.map((entry) =>
-        'inputUuid' in entry
-          ? `input\0${entry.inputUuid}`
-          : `item\0${entry.sceneName}\0${entry.sceneItemId}`,
+        'kind' in entry
+          ? `monitor\0${entry.inputUuid}`
+          : 'inputUuid' in entry
+            ? `input\0${entry.inputUuid}`
+            : `item\0${entry.sceneName}\0${entry.sceneItemId}`,
       );
       if (new Set(keys).size !== keys.length) throw new Error('audio_migration_duplicate');
       const plan = {
@@ -286,6 +347,7 @@ export class AudioMigration {
         initial.some(
           (value, index) =>
             value !== confirmed[index] ||
+            (value !== journal.fields[index]!.before && value !== journal.fields[index]!.applied) ||
             (['prepared', 'restored'].includes(journal.fields[index]!.phase) &&
               value !== journal.fields[index]!.before),
         )
@@ -293,7 +355,9 @@ export class AudioMigration {
         throw new Error('audio_migration_external_change');
       await check();
       // Close paths added by the interrupted switch before reopening the previous paths.
-      for (const entry of [...journal.fields].sort((a, b) => Number(a.before) - Number(b.before))) {
+      for (const entry of [...journal.fields].sort(
+        (a, b) => Number(active(a.before)) - Number(active(b.before)),
+      )) {
         await check();
         const current = await this.status(obs, entry);
         if (current !== entry.before) {
@@ -334,8 +398,13 @@ export class AudioMigration {
     this.running = true;
     const ids = [...plan.desktop, ...plan.independent]
       .map((x) => `item\0${x.sceneName}\0${x.sceneItemId}`)
-      .concat((plan.captureAudio ?? []).map((x) => `input\0${x.inputUuid}`));
-    if ((plan.captureAudio ?? []).some((entry) => entry.before === entry.applied)) {
+      .concat((plan.captureAudio ?? []).map((x) => `input\0${x.inputUuid}`))
+      .concat((plan.monitor ?? []).map((x) => `monitor\0${x.inputUuid}`));
+    if (
+      [...(plan.captureAudio ?? []), ...(plan.monitor ?? [])].some(
+        (entry) => entry.before === entry.applied,
+      )
+    ) {
       this.running = false;
       throw new Error('audio_migration_invalid_field');
     }
@@ -347,6 +416,11 @@ export class AudioMigration {
       endpoint: plan.endpoint,
       collection: plan.collection,
       fields: [
+        ...(plan.monitor ?? []).map((x) => ({
+          ...x,
+          phase: 'prepared' as const,
+          externalChanged: false,
+        })),
         ...(plan.captureAudio ?? []).map((x) => ({
           ...x,
           phase: 'prepared' as const,
@@ -366,12 +440,12 @@ export class AudioMigration {
           phase: 'prepared' as const,
           externalChanged: false,
         })),
-      ].sort((a, b) => Number(a.applied) - Number(b.applied)),
+      ].sort((a, b) => Number(active(a.applied)) - Number(active(b.applied))),
     };
     let connected = true;
     let identity = true;
     let output = false;
-    let expected: { entry: Field; value: boolean; seen: boolean } | undefined;
+    let expected: { entry: Field; value: Value; seen: boolean } | undefined;
     let persistence: Promise<void> = Promise.resolve();
     let created = false;
     let wake: (() => void) | undefined;
@@ -389,7 +463,7 @@ export class AudioMigration {
       else {
         const entry = journal.fields.find((x) => this.matchesIdentity(event, x));
         if (!entry) {
-          if (event.type === 'inputSettings') {
+          if (event.type === 'inputSettings' || event.type === 'monitor') {
             identity = false;
             wake?.();
           }
@@ -417,12 +491,7 @@ export class AudioMigration {
       await this.context(obs, plan, endpoint, idle);
       if (!available()) throw new Error('audio_migration_observation_lost');
     };
-    const send = async (
-      entry: Field,
-      value: boolean,
-      phase: 'sent' | 'restored',
-      idle: boolean,
-    ) => {
+    const send = async (entry: Field, value: Value, phase: 'sent' | 'restored', idle: boolean) => {
       await verify(idle);
       if (entry.externalChanged) throw new Error('audio_migration_external_change');
       const wantedBefore = phase === 'sent' ? entry.before : entry.applied;
@@ -510,9 +579,13 @@ export class AudioMigration {
       if (created && available() && !journal.fields.some((x) => x.phase === 'uncertain')) {
         try {
           // Close newly enabled paths before restoring old paths to avoid duplicate audio.
-          for (const entry of journal.fields.filter((x) => !x.before && x.phase === 'confirmed'))
+          for (const entry of journal.fields.filter(
+            (x) => !active(x.before) && x.phase === 'confirmed',
+          ))
             await send(entry, entry.before, 'restored', false);
-          for (const entry of journal.fields.filter((x) => x.before && x.phase === 'confirmed'))
+          for (const entry of journal.fields.filter(
+            (x) => active(x.before) && x.phase === 'confirmed',
+          ))
             await send(entry, entry.before, 'restored', false);
           if (journal.fields.every((x) => x.phase === 'prepared' || x.phase === 'restored')) {
             await rm(this.path);
