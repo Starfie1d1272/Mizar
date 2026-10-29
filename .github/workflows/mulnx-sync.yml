@@ -1,0 +1,43 @@
+name: MulNX Sync
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+concurrency:
+  group: mizar-mulnx-sync
+  cancel-in-progress: false
+jobs:
+  sync:
+    if: github.repository == 'Starfie1d1272/Mizar' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
+        with:
+          runtime: node@24
+          install: false
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @mizar/companion... --fail-if-no-match run build
+      - name: Prepare upstream snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/qualification/mulnx-sync.mjs prepare
+      - name: Attest MulNX index
+        id: proof
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: .agent-tmp/mulnx-sync/mulnx-index.json
+      - name: Publish and verify Box snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MIZAR_BOX_REPO_TOKEN: ${{ secrets.MIZAR_BOX_REPO_TOKEN }}
+          MULNX_ATTESTATION_PATH: ${{ steps.proof.outputs.bundle-path }}
+          NODE_OPTIONS: --network-family-autoselection-attempt-timeout=2000
+        run: node scripts/qualification/mulnx-sync.mjs publish
