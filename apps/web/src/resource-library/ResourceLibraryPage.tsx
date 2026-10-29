@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { MusicPackages } from './MusicPackages';
 import { OperatorShell } from '../operator/OperatorShell';
 import { MulnxToolControls } from '../orchestration/MulnxToolControls';
 import { openTool, useLocalRead } from '../preparation/client';
@@ -34,7 +35,7 @@ const phases: Record<ResourceStatus['phase'], string> = {
 export function ResourceLibraryPage() {
   const view = useLocalRead<LibraryView>('/local/v1/resource-library', 2000);
   const [query, setQuery] = useState('');
-  const [category, setCategory] = useState<'all' | 'media' | 'tool'>('all');
+  const [category, setCategory] = useState<'all' | 'media' | 'tool' | 'music'>('all');
   const [preparedSession, setPreparedSession] = useState<{
     preparedId: string;
     tag: string;
@@ -44,8 +45,9 @@ export function ResourceLibraryPage() {
   const resources = view?.resources?.filter((resource) =>
     matches(resource.packId === 'official:epl-default' ? 'EPL 官方示例 素材' : resource.packId),
   );
-  const showMedia = category !== 'tool';
-  const showTool = category !== 'media' && matches('MulNX 运镜 工具');
+  const showMedia = category === 'all' || category === 'media';
+  const showMusic = category === 'all' || category === 'music';
+  const showTool = (category === 'all' || category === 'tool') && matches('MulNX 运镜 工具');
   return (
     <OperatorShell active="/packages">
       <main className="resource-library">
@@ -68,6 +70,7 @@ export function ResourceLibraryPage() {
               [
                 ['all', '全部'],
                 ['media', '素材'],
+                ['music', '音乐'],
                 ['tool', '工具'],
               ] as const
             ).map(([value, label]) => (
@@ -82,6 +85,7 @@ export function ResourceLibraryPage() {
             ))}
           </div>
         </div>
+        {showMusic ? <MusicPackages query={query} /> : null}
         {!view ? (
           <StatusBanner tone="warning">
             正在连接资源状态；如果持续无法连接，请检查本地制播服务。
@@ -176,7 +180,10 @@ export function ResourceLibraryPage() {
         {view && showTool && !view.tool ? (
           <StatusBanner tone="warning">运镜工具状态暂不可用。</StatusBanner>
         ) : null}
-        {view && !(showMedia && (resources?.length || view.resources === null)) && !showTool ? (
+        {view &&
+        !(showMedia && (resources?.length || view.resources === null)) &&
+        !showTool &&
+        !showMusic ? (
           <p>没有找到匹配的资源。</p>
         ) : null}
       </main>
