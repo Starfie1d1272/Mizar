@@ -301,7 +301,7 @@ RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对�
 
 `GET /local/v1/mixer` 返回 `MixerStatus`；`POST /operator/mixer` 接受 `MixerCommand` 并返回 `MixerCommandResult`。协议类型位于 `@mizar/protocol/mixer`。revision 标识后端观察到的绑定上下文，过期命令必须拒绝；写入结果只有经回读确认才返回 `confirmed`。前三路音量是 OBS 观察值，音乐音量是独立的本机 master 配置。音乐条目的可选 `gain` 缺省时使用所属组 `volume`，通过音乐配置保存，旧的组音量命令语义不变。
 
-`POST /operator/resource-library/check-pack` 接收 `application/x-mizarpack`，返回 `source`（含清单摘要）、`name`、外部 `dependencies` 和 `entries`；条目列出 `entryId`、`type`、模块 `kind`、`status`、原因、依赖及现有或已删除副本。状态为 `ready`、`dependency_missing`、`unsupported`、`invalid`、`existing` 或 `removed`；检查是提示快照，提交时重新验证。损坏 ZIP、路径和预算违规或摘要错误整体拒绝，同一身份和版本的不同摘要返回 `409 identity_conflict`。
+`POST /operator/resource-library/check-pack` 接收 `application/x-mizarpack`，返回 `source`（含清单摘要）、`name`、外部 `dependencies` 和 `entries`；条目列出 `entryId`、`type`、`kind`、可显示的 `name`、`status`、原因、依赖及现有或已删除副本。`kind` 对方案为 `preset`，对模块为包中模块类型；名称不可读取时使用“未命名模块”或“未命名方案”，`entryId` 仅供选择和关联。状态为 `ready`、`dependency_missing`、`unsupported`、`invalid`、`existing` 或 `removed`；检查是提示快照，提交时重新验证。损坏 ZIP、路径和预算违规或摘要错误整体拒绝，同一身份和版本的不同摘要返回 `409 identity_conflict`。
 
 `POST /operator/resource-library/import-pack` 同样接收完整包字节；查询参数 `selection` 是分别 URL 编码的 JSON `{ "modules": [entryId], "presets": [entryId] }`，`digest` 是检查得到的清单摘要。方案自动带入其所需模块，不支持或无效条目不会阻断其他条目；可解析但本机缺依赖的草稿允许保存，使用时重新验证。响应包含 `mapping`、`reused` 和逐项 `entries`，其中 `result` 为 `imported`、`existing`、`unavailable` 或 `not_selected`。主动选择已删除条目会重新创建；存活副本复用且保留编辑。省略 selection 表示选择全部。导入不启用配置。
 

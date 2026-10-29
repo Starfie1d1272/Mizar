@@ -309,6 +309,11 @@ it('round trips real music owner configuration to independent drafts without act
             'ready',
             'unsupported',
           ]);
+          expect(checked.json().entries[0]).toMatchObject({
+            entryId: 'module-1',
+            kind: 'hud',
+            name: module.name,
+          });
           const selection = JSON.stringify({ modules: ['module-1', 'future'], presets: [] });
           const query = new URLSearchParams({ selection, digest: checked.json().source.digest });
           const partial = await app.inject({
