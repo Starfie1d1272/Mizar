@@ -22,6 +22,7 @@ import { CameraDirector } from './orchestration/director.js';
 import { MulnxTool } from './orchestration/tool.js';
 import { OrchestrationStore } from './orchestration/store.js';
 import { MulnxProvider } from './orchestration/provider.js';
+import { MulnxProgramClock } from './orchestration/mulnx-clock.js';
 import { registerOrchestrationRoutes } from './orchestration/routes.js';
 import { registerDiagnosticDelivery } from './support/delivery-routes.js';
 import { checkLocalWebOrigin } from './local-web/origin-policy.js';
@@ -803,6 +804,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         );
   let musicDirector: MusicDirector | undefined;
   let cameraDirector: CameraDirector | undefined;
+  let mulnxClock: MulnxProgramClock | undefined;
+  let mulnxClockState = '';
   const bpPresentationSettings = new BpPresentationSettings(
     options.obsConfigPath
       ? join(dirname(options.obsConfigPath), 'bp-presentation.json')
@@ -1269,9 +1272,12 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           cameraEvidence,
         )
       : undefined;
+    const mulnxProvider = new MulnxProvider(cameraEvidence);
+    mulnxClock = new MulnxProgramClock(mulnxProvider);
+    app.addHook('onClose', () => mulnxClock?.close());
     cameraDirector = new CameraDirector(
       cameraStore,
-      new MulnxProvider(cameraEvidence),
+      mulnxProvider,
       () => ({
         program: projectionCoordinator.getCurrent().program,
         active: sceneController.get().active,
@@ -1333,6 +1339,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     void director.tick().catch(() => director.hold());
     void musicDirector?.tick();
     cameraDirector?.tick();
+    const clockState = mulnxClock?.current(performance.now()).state;
+    if (clockState && clockState !== mulnxClockState) {
+      mulnxClockState = clockState;
+      sessionJournal?.record('program_clock', { state: clockState });
+    }
     if (gameAudio) {
       const projection = projectionCoordinator.getCurrent();
       gameAudio.tick(
@@ -1445,7 +1456,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       const program = projectionCoordinator.getCurrent().program;
       const currentMap = program.map.name ? musicMapKey(program) : undefined;
       waitingObserverMap =
-        observerSettings.mapConnection?.nextMap && currentMap && currentMap === confirmedObserverMap
+        observerSettings.mapConnection?.nextMap &&
+        currentMap &&
+        (currentMap === confirmedObserverMap || program.map.phase === 'gameover')
           ? currentMap
           : undefined;
       confirmedObserverMap = currentMap;

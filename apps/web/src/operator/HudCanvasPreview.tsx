@@ -11,7 +11,7 @@ import type { ProgramSnapshot } from '@mizar/protocol/program';
 
 import type { RadarProps } from '../program/widgets/radar/Radar';
 import { HudEditorOverlay } from '../program/HudEditorOverlay';
-import { GameplayHud } from '../program/GameplayHud';
+import { ProgramView } from '../program/ProgramView';
 import { hasAcceptedProgramSnapshot } from '../program/presentation-boundary';
 import type { LocalChannelConnectionState } from '../realtime';
 import { getMapThumbnail } from '@mizar/cs2-assets';
@@ -21,7 +21,7 @@ export interface HudCanvasPreviewProps {
   readonly gg?: boolean;
   readonly mapBackground?: boolean;
   readonly videoBackground?: ReactNode;
-  readonly radarClient?: RadarProps['client'];
+  readonly radarSource?: RadarProps['source'];
   readonly radarSnapshot?: RadarProps['snapshot'];
   readonly resolvedPreset: HudResolvedPreset;
   readonly snapshot: ProgramSnapshot | null;
@@ -46,7 +46,7 @@ export function HudCanvasPreview({
   mapBackground = false,
   videoBackground,
   resolvedPreset,
-  radarClient,
+  radarSource,
   radarSnapshot,
   snapshot,
   presentationRevision = 0,
@@ -109,9 +109,10 @@ export function HudCanvasPreview({
         {showSafeArea ? (
           <div className="hud-console__guide hud-console__guide--safe" style={guideStyle} />
         ) : null}
-        <GameplayHud
+        <ProgramView
+          kind="hud"
           gg={gg}
-          radarClient={radarClient}
+          radarSource={radarSource}
           radarSnapshot={radarSnapshot}
           resolvedPreset={resolvedPreset}
           snapshot={presentationSnapshot}

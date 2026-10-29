@@ -94,11 +94,6 @@ export function CameraSettings() {
   const editVersion = useRef(0);
   const [automaticOverride, setAutomaticOverride] = useState<boolean | null>(null);
   useEffect(() => {
-    if (automaticOverride === null || current?.automaticEnabled !== automaticOverride) return;
-    const timer = setTimeout(() => setAutomaticOverride(null), 0);
-    return () => clearTimeout(timer);
-  }, [automaticOverride, current?.automaticEnabled]);
-  useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => {
       if (!draft) return;
       event.preventDefault();
@@ -107,6 +102,11 @@ export function CameraSettings() {
     window.addEventListener('beforeunload', beforeUnload);
     return () => window.removeEventListener('beforeunload', beforeUnload);
   }, [draft]);
+  useEffect(() => {
+    if (automaticOverride === null || current?.automaticEnabled !== automaticOverride) return;
+    const timer = setTimeout(() => setAutomaticOverride(null), 0);
+    return () => clearTimeout(timer);
+  }, [automaticOverride, current?.automaticEnabled]);
   useEffect(() => {
     if (automaticOverride === null) return;
     const timer = setTimeout(() => setAutomaticOverride(null), 5000);

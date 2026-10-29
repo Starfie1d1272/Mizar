@@ -168,6 +168,12 @@ function ReviewSession({ operator, program, cursor, connection, onOpen }: Props)
     scenes?.director?.warmupScene,
   ]);
   const finished = ready && acknowledged === fingerprint;
+  const pendingCount =
+    Number(!complete || !identityReady) +
+    Number(!websiteReady) +
+    Number(!automatic) +
+    Number(obs?.connection !== 'connected') +
+    Number(!finished);
   // Different faults get a new review, but telemetry sequence changes do not reopen it.
   const incident =
     online && connectionObserved && !websiteReady && (warmup || !connection || !connection.paired)
@@ -181,7 +187,8 @@ function ReviewSession({ operator, program, cursor, connection, onOpen }: Props)
         setAutomaticIncident(incident);
         // The two snapshot channels can briefly be unaligned between deliveries.
         // That absence of evidence is not a new incident or a dismissal reset.
-        if (!silenced && incident && dismissed !== incident) setOpened(true);
+        if (incident && (!silenced || incident.startsWith('preflight:')) && dismissed !== incident)
+          setOpened(true);
       },
       incident.startsWith('website:') ? 1500 : 0,
     );
@@ -191,7 +198,12 @@ function ReviewSession({ operator, program, cursor, connection, onOpen }: Props)
     isReviewWindow() ||
     (opened &&
       (preparation || (online && connectionObserved && (!connection || !connection.paired)))) ||
-    Boolean(!silenced && incident && automaticIncident === incident && dismissed !== incident);
+    Boolean(
+      incident &&
+      (!silenced || incident.startsWith('preflight:')) &&
+      automaticIncident === incident &&
+      dismissed !== incident,
+    );
   const close = () => {
     setOpened(false);
     // A queued native close event may arrive while snapshot channels are unaligned.
@@ -212,12 +224,17 @@ function ReviewSession({ operator, program, cursor, connection, onOpen }: Props)
   }
   return (
     <section className="preflight-summary" aria-label="赛前核对">
-      <Button onClick={() => setOpened(true)}>
+      <Button
+        aria-label={!finished && warmup ? `赛前核对，待核对 ${pendingCount} 项` : undefined}
+        onClick={() => setOpened(true)}
+      >
         {finished
           ? '赛前核对已完成 · 查看'
-          : online && !websiteReady
-            ? '网站连接需处理'
-            : '赛前核对'}
+          : warmup
+            ? `本图已连接 · 待核对 ${pendingCount} 项`
+            : online && !websiteReady
+              ? '网站连接需处理'
+              : '赛前核对'}
       </Button>
       {!finished && !complete && warmup ? <small>等待双方十人观战数据</small> : null}
       <ReviewDialog
@@ -414,7 +431,7 @@ function ReviewSession({ operator, program, cursor, connection, onOpen }: Props)
               if (next) close();
             }}
           >
-            {silenced ? '恢复本场自动提醒' : '本场比赛不再自动弹出'}
+            {silenced ? '恢复本场自动提醒' : '本场不再弹出提示和警告'}
           </Button>
           {preparation ? (
             <Button

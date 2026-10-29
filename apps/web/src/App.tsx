@@ -1,3 +1,4 @@
+import { useRadarViewSource } from './realtime/radar-view-source';
 import { useLocalRead } from './preparation/client';
 import type { OverlayPolicy } from './preparation/desktop-overlay';
 import { ToolShell } from './patterns';
@@ -157,6 +158,7 @@ function ProgramRoute() {
     return () => window.removeEventListener('resize', resize);
   }, []);
   const radarClient = useLocalChannelConnection('radar');
+  const radarSource = useRadarViewSource(radarClient);
   const programClient = useLocalChannelConnection('program');
   const programConnection = useSyncExternalStore(
     programClient.subscribe,
@@ -232,7 +234,7 @@ function ProgramRoute() {
   const program = (
     <ProgramCueRendererBridge client={cueClient}>
       <ProgramPage
-        radarClient={radarClient}
+        radarSource={radarSource}
         connectionState={programConnection.state}
         resolvedPreset={resolved}
         snapshot={activeSnapshot}
@@ -660,7 +662,9 @@ export function App() {
   if (pathname === '/program/bp-compact') return <BpPage compact />;
   if (pathname === '/workspace') return <WorkspacePreview />;
   if (pathname === '/workspace/review')
-    return new URLSearchParams(window.location.search).get('kind') === 'connection' ? null : (
+    return ['connection', 'next-connection'].includes(
+      new URLSearchParams(window.location.search).get('kind') ?? '',
+    ) ? null : (
       <WorkspaceReview />
     );
   if (pathname === '/workspace/left') return <WorkspaceLeft />;
