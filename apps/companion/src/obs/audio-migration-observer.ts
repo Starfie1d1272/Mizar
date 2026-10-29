@@ -15,6 +15,7 @@ export function observeAudioMigration(source: MigrationEventSource): MigrationOb
       };
       const signal = (event: MigrationEvent) => () => listener(event);
       on('ConnectionClosed', signal({ type: 'disconnected' }));
+      on('CurrentProgramSceneChanged', signal({ type: 'programChanged' }));
       for (const name of [
         'CurrentSceneCollectionChanging',
         'CurrentSceneCollectionChanged',

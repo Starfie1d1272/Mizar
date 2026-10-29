@@ -69,7 +69,8 @@ export async function reconcileManagedAudio(
     if (
       event.type !== 'item' &&
       !(preparing && event.type === 'identityChanged') &&
-      !(migrating && (event.type === 'inputSettings' || event.type === 'monitor'))
+      !(migrating && (event.type === 'inputSettings' || event.type === 'monitor')) &&
+      !(modeId && event.type === 'outputStarting')
     )
       changed = true;
   });
@@ -83,8 +84,9 @@ export async function reconcileManagedAudio(
     if (
       changed ||
       !(await verify()) ||
-      stream.outputActive !== false ||
-      record.outputActive !== false ||
+      typeof stream.outputActive !== 'boolean' ||
+      typeof record.outputActive !== 'boolean' ||
+      (!modeId && (stream.outputActive !== false || record.outputActive !== false)) ||
       collection.currentSceneCollectionName !== OBS_COLLECTION
     )
       throw new Error('audio_setup_context_changed');

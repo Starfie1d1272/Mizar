@@ -561,8 +561,8 @@ export class ObsAudioRouting {
         obs.call('GetSpecialInputs'),
       ]);
       if (
-        stream.outputActive !== false ||
-        record.outputActive !== false ||
+        typeof stream.outputActive !== 'boolean' ||
+        typeof record.outputActive !== 'boolean' ||
         current.collection !== OBS_COLLECTION
       )
         throw new Error('audio_setup_context_changed');
@@ -657,8 +657,8 @@ export class ObsAudioRouting {
             obs.call('GetSceneCollectionList'),
           ]);
           if (
-            streamNow.outputActive !== false ||
-            recordNow.outputActive !== false ||
+            typeof streamNow.outputActive !== 'boolean' ||
+            typeof recordNow.outputActive !== 'boolean' ||
             collectionNow.currentSceneCollectionName !== current.collection ||
             (await this.load()).revision !== revision
           )

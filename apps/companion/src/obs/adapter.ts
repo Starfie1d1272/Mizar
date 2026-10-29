@@ -665,8 +665,8 @@ export class ObsAdapter {
               obs.call('GetInputList'),
             ]);
             if (
-              stream.outputActive !== false ||
-              record.outputActive !== false ||
+              typeof stream.outputActive !== 'boolean' ||
+              typeof record.outputActive !== 'boolean' ||
               collection.currentSceneCollectionName !== OBS_COLLECTION ||
               !Array.isArray(inputs.inputs)
             )
