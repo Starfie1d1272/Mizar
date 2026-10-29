@@ -1,4 +1,4 @@
-import type { CameraModuleV2 } from '@mizar/broadcast-config';
+import type { CameraModuleV2, CameraSourceRef } from '@mizar/broadcast-config';
 import { CAMERA_STAGES, cameraMapSchema, type CameraShot } from '@mizar/protocol/orchestration';
 import { MUSIC_LABELS } from '../music/MusicControls';
 import { Shot } from '../orchestration/CameraShotField';
@@ -9,18 +9,18 @@ export function CameraModuleEditor({
   onChange,
   onSave,
   busy,
+  sources,
 }: {
   value: CameraModuleV2;
   onChange: (value: CameraModuleV2) => void;
   onSave: () => void;
   busy: boolean;
+  sources: CameraSourceRef[];
 }) {
-  const sources = value.maps
-    .map((map) => map.source)
-    .filter(
-      (source, i, all) =>
-        all.findIndex((item) => JSON.stringify(item) === JSON.stringify(source)) === i,
-    );
+  const availableSources = [...sources, ...value.maps.map((map) => map.source)].filter(
+    (source, i, all) =>
+      all.findIndex((item) => JSON.stringify(item) === JSON.stringify(source)) === i,
+  );
   const sounds = value.maps
     .flatMap((map) => (map.openingSound ? [map.openingSound] : []))
     .filter(
@@ -91,16 +91,16 @@ export function CameraModuleEditor({
             <Select
               label="运镜包"
               value={String(
-                sources.findIndex(
+                availableSources.findIndex(
                   (source) => JSON.stringify(source) === JSON.stringify(map.source),
                 ),
               )}
               onChange={(e) => {
-                const source = sources[Number(e.target.value)];
+                const source = availableSources[Number(e.target.value)];
                 if (source) update(index, { source });
               }}
             >
-              {sources.map((source, i) => (
+              {availableSources.map((source, i) => (
                 <option key={i} value={String(i)}>
                   {source.sourceName}
                 </option>
@@ -164,10 +164,10 @@ export function CameraModuleEditor({
         ))}
       </div>
       <Button
-        disabled={busy || value.maps.length >= 32 || sources.length === 0}
+        disabled={busy || value.maps.length >= 32 || availableSources.length === 0}
         onClick={() =>
           (() => {
-            const source = sources[0];
+            const source = availableSources[0];
             if (!source) return;
             const {
               pack: _pack,
@@ -183,7 +183,7 @@ export function CameraModuleEditor({
       >
         添加地图
       </Button>
-      {sources.length === 0 && <p>此资源没有可复用的运镜来源，无法添加地图。</p>}
+      {availableSources.length === 0 && <p>请先导入含运镜来源的资源。</p>}
       <Button variant="primary" disabled={busy} onClick={onSave}>
         保存草稿
       </Button>
