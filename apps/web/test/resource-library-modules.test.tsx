@@ -275,3 +275,68 @@ it('names the resource and actionable reason returned by an export failure', asy
     '导出未完成：「场景背景」所需素材已损坏。',
   );
 });
+
+it('offers a recovery path for the unavailable active scene without blocking HUDs', async () => {
+  const module = {
+    id: 'scene-one',
+    kind: 'program',
+    name: '受损场景',
+    revision: 'p1',
+    origin: null,
+    value: {},
+  };
+  const fetchMock = vi.fn((path: string) => {
+    if (path === '/local/v1/broadcast-presets')
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          modules: [module],
+          presets: [],
+          active: { revision: 'a1', sourceModuleIds: { program: 'scene-one' } },
+        }),
+      });
+    if (path === '/local/v1/broadcast-modules')
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          modules: [{ module, builtin: false, availability: { state: 'dependency_missing' } }],
+        }),
+      });
+    if (path === '/local/v1/broadcast-config/migration')
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ state: 'pending', reason: 'program_dependency_unavailable' }),
+      });
+    return Promise.resolve({ ok: true, json: async () => ({ pending: null }) });
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  vi.stubGlobal('matchMedia', () => ({
+    matches: false,
+    addEventListener() {},
+    removeEventListener() {},
+  }));
+  const showAll = vi.fn();
+  const element = document.createElement('div');
+  document.body.append(element);
+  const root = createRoot(element);
+  try {
+    await act(async () => {
+      root.render(<ResourceModules query="" category="all" onImported={showAll} />);
+      await Promise.resolve();
+    });
+    expect(element.textContent).toContain('当前播出场景的背景不可用');
+    expect(element.textContent).toContain('HUD 可继续使用');
+    await act(async () => {
+      [...element.querySelectorAll('button')]
+        .find((button) => button.textContent === '检查场景资源')!
+        .click();
+      await Promise.resolve();
+    });
+    expect(showAll).toHaveBeenCalledOnce();
+    expect(element.textContent).toContain('所需资源不可用');
+  } finally {
+    act(() => root.unmount());
+    element.remove();
+    vi.unstubAllGlobals();
+  }
+});
