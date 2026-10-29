@@ -1233,6 +1233,9 @@ impl DemoEntryIntent {
         if current.as_deref() == Some(id) { *current = None; }
         Ok(())
     }
+    fn cancel_all(&self) {
+        *self.0.lock().unwrap_or_else(|error| error.into_inner()) = None;
+    }
     fn publish(&self, id: &str, valid_page: impl FnOnce() -> bool, show: impl FnOnce()) -> bool {
         let mut current = self.0.lock().unwrap_or_else(|error| error.into_inner());
         if current.as_deref() != Some(id) || !valid_page() { return false; }
@@ -1290,7 +1293,7 @@ async fn finish_demo_test(
     let host = app.clone();
     tauri::async_runtime::spawn_blocking({ let command_log = command_log.clone(); let native_operation_id = native_operation_id.clone(); let native_task_id = native_task_id.clone(); let native_trigger = native_trigger.clone(); move || {
         command_log.with_task(native_task_id.as_deref(), native_operation_id.as_deref(), native_trigger.as_deref(), || {
-        *host.state::<DemoEntryIntent>().0.lock().map_err(|_| "试播进入状态不可用。")? = None;
+        host.state::<DemoEntryIntent>().cancel_all();
         let managed = host.state::<Mutex<managed_cs2::ManagedCs2>>();
         let mut cs2 = managed.lock().map_err(|error| command_log.preserve_error("finish_demo_test", native_operation_id.as_deref(), &error, "CS2 配置状态不可用。"))?;
         let activity = host.state::<cs2_activity::Activity>();
@@ -1683,8 +1686,10 @@ fn present_production_inner_checked(app: &tauri::AppHandle, live: bool, expected
                 };
                 if let Some((expected, id)) = &expected_url {
                     valid_intent = host.state::<DemoEntryIntent>().publish(id, || {
-                        host.get_webview_window("main").and_then(|window| window.url().ok())
-                            .is_some_and(|url| url.as_str() == expected)
+                        host.get_webview_window("main").is_some_and(|window| {
+                            window.is_visible().ok() == Some(true)
+                                && window.url().ok().is_some_and(|url| url.as_str() == expected)
+                        })
                     }, show);
                 } else { show(); }
             });
@@ -2788,6 +2793,9 @@ fn run_desktop(
             }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
+                if window.label() == "main" {
+                    window.state::<DemoEntryIntent>().cancel_all();
+                }
                 match window.label() {
                     "tool-review" => { let _ = window.destroy(); }
                     "workspace-left" | "workspace-dock" => {
@@ -3196,6 +3204,11 @@ mod startup_tests {
         assert!(intent.publish("third", || true, || shown.set(true)));
         assert!(shown.get());
         assert!(!intent.publish("third", || true, || panic!("entry is one-shot")));
+        intent.begin("closing".into()).unwrap();
+        intent.cancel_all();
+        assert!(!intent.publish("closing", || true, || panic!("closed window must stay closed")));
+        intent.begin("reopened".into()).unwrap();
+        assert!(intent.publish("reopened", || true, || {}));
     }
 
     #[test]
