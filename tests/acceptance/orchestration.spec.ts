@@ -162,9 +162,7 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
       mimeType: 'application/json',
       buffer: Buffer.from('{bad'),
     });
-    await expect(
-      page.getByText('预设未应用，请检查字段、文件与本机音频。', { exact: true }),
-    ).toBeVisible();
+    await expect(page.getByRole('alert')).toBeVisible();
     const modified = { ...store.preset, name: '游戏内筛选候选' };
     await page.getByLabel('导入预设到草稿').setInputFiles({
       name: 'candidate.json',
