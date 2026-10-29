@@ -1,4 +1,5 @@
 import { useMusicPreview } from './useMusicPreview';
+import { MusicVolumeField } from './MusicVolumeField';
 import { controlEvidence, browserErrorEvidence } from '../debug/control-journal';
 import { useState } from 'react';
 import {
@@ -283,21 +284,15 @@ export function MusicSettings({ active = true }: { active?: boolean }) {
                             {String(index + 1).padStart(2, '0')}
                           </span>
                           <strong>{track.name}</strong>
-                          <Field
+                          <MusicVolumeField
                             label={`曲目音量 · ${Math.round((track.gain ?? spec.volume) * 100)}% · ${track.gain === undefined ? '跟随场景音量' : '单独设置'}`}
-                            aria-label={`${track.name} 音量`}
-                            type="range"
-                            min="0"
-                            max="1"
-                            step="0.05"
+                            ariaLabel={`${track.name} 音量`}
                             value={track.gain ?? spec.volume}
                             disabled={busy}
-                            onChange={(event) =>
+                            onChange={(volume) =>
                               change(group, {
                                 tracks: spec.tracks.map((entry, n) =>
-                                  n === index
-                                    ? { ...entry, gain: Number(event.target.value) }
-                                    : entry,
+                                  n === index ? { ...entry, gain: volume } : entry,
                                 ),
                               })
                             }
