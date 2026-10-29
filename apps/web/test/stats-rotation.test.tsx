@@ -16,8 +16,8 @@ it('starts on the main scene, freezes each card, and restarts after unmount', as
   vi.stubGlobal('fetch', fetcher);
   const host = document.createElement('div');
   const root = createRoot(host);
-  function Rotation() {
-    const card = useStatsRotation(true, fixture.matchId);
+  function Rotation({ enabled = true }: { enabled?: boolean }) {
+    const card = useStatsRotation(enabled, fixture.matchId);
     return <span>{card?.subtitle ?? 'MAIN'}</span>;
   }
   await act(async () => root.render(<Rotation />));
@@ -36,6 +36,11 @@ it('starts on the main scene, freezes each card, and restarts after unmount', as
     await vi.advanceTimersByTimeAsync(1);
   });
   expect(host.textContent).toBe('MAP PERFORMANCE');
+  await act(async () => root.render(<Rotation enabled={false} />));
+  await act(async () => root.render(<Rotation />));
+  expect(host.textContent).toBe('MAIN');
+  await act(async () => vi.advanceTimersByTimeAsync(19_999));
+  expect(host.textContent).toBe('MAIN');
   await act(async () => root.render(<div>MANUAL</div>));
   await act(async () => root.render(<Rotation />));
   expect(host.textContent).toBe('MAIN');

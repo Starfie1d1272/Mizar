@@ -58,6 +58,7 @@ export function useStatsRotation(enabled: boolean, matchId: string | null): Stat
     return () => {
       active = false;
       clearTimeout(timer);
+      setVisible(null);
     };
   }, [enabled, matchId]);
   return enabled && visible?.matchId === matchId ? visible.card : null;

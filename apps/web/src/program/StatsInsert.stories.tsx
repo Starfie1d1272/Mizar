@@ -50,16 +50,14 @@ export const Utility: Story = {
       scope: '本届 · 赛前',
       teams: ['Team A', 'Team B'],
       layout: 'cells',
-      rows: [
-        '道具伤害 / 回合',
-        '闪光助攻 / 100 回合',
-        '道具击杀 / 100 回合',
-        '闪光投掷 / 回合',
-      ].map((label) => ({
-        label,
-        values: ['2.0', '3.0'] as const,
-        samples: ['100 回合', '90 回合'] as const,
-      })),
+      rows: ['道具伤害 / 回合', '闪光助攻 / 回合', '敌方致盲秒数 / 颗', '敌方致盲秒数 / 回合'].map(
+        (label, index) => ({
+          label,
+          values: ['2.0', '3.0'] as const,
+          samples:
+            index === 2 ? (['100 颗', '90 颗'] as const) : (['100 回合', '90 回合'] as const),
+        }),
+      ),
     },
   },
 };
