@@ -573,6 +573,7 @@ pub struct ManagedCs2 {
     can_preserve: bool,
     selected_backup: Option<Value>,
     external: Option<ExternalSession>,
+    camera: Option<CameraLease>,
     // Keep window preservation after detach until a new managed launch is accepted.
     external_preservation: bool,
     #[cfg(test)]
@@ -598,10 +599,14 @@ pub struct WorkspaceProcess {
     pub pid: u32,
     pub created: u64,
 }
+struct CameraLease {
+    process: WorkspaceProcess,
+    lease: String,
+    invalidated: bool,
+}
 struct ExternalSession {
     console_source: Value,
     demo_request_id: Option<String>,
-    camera_lease: Option<String>,
     invalidated: bool,
     isolation_pending: bool,
     process: Arc<Process>,
@@ -637,6 +642,7 @@ impl ManagedCs2 {
             can_preserve: false,
             selected_backup: None,
             external: None,
+            camera: None,
             external_preservation: false,
             #[cfg(test)]
             recovery_identity_fixture: None,
@@ -747,7 +753,7 @@ impl ManagedCs2 {
         { return Err("游戏身份或安装位置不匹配，请重新检查。".into()); }
         let console = crate::cs2_console::boundary(&self.log, &actual_executable)?;
         let console_source = json!({"executable":actual_executable.to_string_lossy(),"launchTime":crate::cs2_console::utc(),"pid":pid,"created":created.to_string(),"consoleDiagnostics":console,"ownership":"external", "nativeHudToggle":observer == Some(true), "spectatorCfg":observer.is_some()});
-        self.external = Some(ExternalSession { console_source, demo_request_id: None, camera_lease: None, invalidated: false, isolation_pending: false, process: Arc::new(process), pid, created });
+        self.external = Some(ExternalSession { console_source, demo_request_id: None, invalidated: false, isolation_pending: false, process: Arc::new(process), pid, created });
         self.external_preservation = true;
         self.can_preserve = false;
         self.message = Some("已借用外部游戏；保持原设置和窗口，退出工作台不会关闭它。".into());
@@ -942,15 +948,41 @@ impl ManagedCs2 {
             self.message = Some(error);
         }
     }
+    /// A lease is bound to the held, verified game process, never just a PID.
+    pub fn bind_managed_camera(&mut self, process: WorkspaceProcess, lease: String) -> Result<(), String> {
+        if !process.owned || !process.is_running() || cs2_pids(&self.log)? != vec![process.pid] {
+            return Err("受管游戏身份已变化，运镜会话未绑定。".into());
+        }
+        self.camera = Some(CameraLease { process, lease, invalidated: false });
+        Ok(())
+    }
+    pub fn managed_camera_lease(&mut self) -> Option<(String, bool)> {
+        let camera = self.camera.as_mut()?;
+        if !camera.process.owned { return None; }
+        if !camera.process.is_running() || cs2_pids(&self.log).map_or(true, |pids| pids != vec![camera.process.pid]) {
+            camera.invalidated = true;
+        }
+        Some((camera.lease.clone(), camera.invalidated))
+    }
+    pub fn invalidate_managed_camera(&mut self) {
+        if let Some(camera) = &mut self.camera { if camera.process.owned { camera.invalidated = true; } }
+    }
+    pub fn clear_managed_camera(&mut self) {
+        if self.camera.as_ref().is_some_and(|camera| camera.process.owned) { self.camera = None; }
+    }
     pub fn bind_external_camera(&mut self, lease: String) {
-        if let Some(external) = &mut self.external { external.camera_lease = Some(lease); }
+        if let Some(external) = &self.external {
+            let process = WorkspaceProcess { process: external.process.clone(), owned: false,
+                pid: external.pid, created: external.created };
+            self.camera = Some(CameraLease { process, lease, invalidated: false });
+        }
     }
     pub fn bind_external_demo(&mut self, request_id: String) {
         if let Some(external) = &mut self.external { external.demo_request_id = Some(request_id); }
     }
     pub fn external_camera_lease(&self) -> Option<&str> {
-        self.external.as_ref().filter(|external| !external.invalidated || external.isolation_pending)
-            .and_then(|external| external.camera_lease.as_deref())
+        self.external.as_ref().filter(|external| !external.invalidated || external.isolation_pending)?;
+        self.camera.as_ref().filter(|camera| !camera.process.owned).map(|camera| camera.lease.as_str())
     }
     pub fn invalidate_external(&mut self) {
         if let Some(external) = &mut self.external {
@@ -1542,6 +1574,7 @@ impl ManagedCs2 {
 
     fn detach_external(&mut self) -> bool {
         if let Some(external) = self.external.take() {
+            if self.camera.as_ref().is_some_and(|camera| !camera.process.owned) { self.camera = None; }
             self.log.event("external_game_detach", "success", Some(&json!({"pid":external.pid,"created":external.created.to_string(),"gameStopped":false}).to_string()));
             self.message = Some("已解除游戏借用；外部游戏及设置保持不变。".into());
             return true;
@@ -1549,6 +1582,10 @@ impl ManagedCs2 {
         false
     }
     pub fn finish(&mut self) -> Result<(), String> {
+        self.finish_with_service_stopped(false)
+    }
+    /// Only the verified service-stop path can skip the lease expiry wait.
+    pub fn finish_with_service_stopped(&mut self, service_stopped: bool) -> Result<(), String> {
         let trial_state = if crate::demo_test::requires_recovery(&self.log, None) {
             crate::demo_test::status(&self.log)?
         } else { Value::Null };
@@ -1571,6 +1608,16 @@ impl ManagedCs2 {
         if self.detach_external() {
             // No owned journal is ever created. Releasing a query handle cannot terminate a game.
             return Ok(());
+        }
+        if let Some((lease, _)) = self.managed_camera_lease() {
+            // The caller holds the CS2 mutex, so the heartbeat cannot renew while
+            // the revoke is attempted or while an unknown outcome expires.
+            self.invalidate_managed_camera();
+            let outcome = retire_camera_before_cleanup(service_stopped,
+                || crate::production_exit::camera_session(&self.log, "invalidate", Some(&lease), None).map(|_| ()),
+                || thread::sleep(Duration::from_millis(12100)));
+            self.log.event("managed_camera_retire", outcome, None);
+            self.clear_managed_camera();
         }
         let journal = self.store.load()?;
         let trial = crate::demo_test::quarantine_if_needed(&self.log, journal.as_ref())?;
@@ -1622,12 +1669,36 @@ impl ManagedCs2 {
     }
 }
 
+/// A failed request does not prove revocation. With renewals fenced by the
+/// caller's mutex, wait for two lease periods: at most one timed-out pulse can
+/// still arrive before the current lease expires and extend it once. A verified
+/// stopped service has no live lease.
+fn retire_camera_before_cleanup(service_stopped: bool, revoke: impl FnOnce() -> Result<(), String>,
+    wait_for_expiry: impl FnOnce()) -> &'static str {
+    if service_stopped { return "service-stopped"; }
+    if revoke().is_ok() { return "revoked"; }
+    wait_for_expiry();
+    "expired-after-unknown"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     // These tests create or inspect machine-wide CS2 / Steam processes. Hold the same
     // gate so the external-game fixture cannot contaminate recovery evidence.
     static GAME_PROCESSES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    #[test]
+    fn camera_retirement_waits_only_when_revocation_is_unknown() {
+        let calls = std::cell::RefCell::new(Vec::new());
+        let outcome = retire_camera_before_cleanup(false,
+            || { calls.borrow_mut().push("revoke"); Err("service unavailable".into()) },
+            || calls.borrow_mut().push("lease-expired"));
+        calls.borrow_mut().push("game-cleanup");
+        assert_eq!(outcome, "expired-after-unknown");
+        assert_eq!(*calls.borrow(), ["revoke", "lease-expired", "game-cleanup"]);
+        assert_eq!(retire_camera_before_cleanup(false, || Ok(()), || panic!("unneeded wait")), "revoked");
+        assert_eq!(retire_camera_before_cleanup(true, || panic!("service stopped"), || panic!("unneeded wait")), "service-stopped");
+    }
     #[test]
     fn standard_start_uses_single_observer_cfg_and_preserves_keys() {
         let _processes = GAME_PROCESSES.lock().unwrap();
@@ -1931,8 +2002,19 @@ mod tests {
         assert!(!restarted.has_external());
         assert!(restarted.external_camera_lease().is_none());
         assert!(restarted.workspace_process().unwrap().is_none());
+        // The same real process identity backs an owned lease; losing it must
+        // turn the next heartbeat into an invalidation rather than a renewal.
+        let owned_log = crate::startup_log::DesktopLog::new(&external.root.join("owned-host"), None).unwrap();
+        let mut owned_host = ManagedCs2::new(owned_log);
+        owned_host.store.save(&json!({"version":1,"pid":external.child.id(),"created":created,"executable":actual_path})).unwrap();
+        let owned_process = owned_host.workspace_process().unwrap().unwrap();
+        owned_host.bind_managed_camera(owned_process, "managed-lease".into()).unwrap();
+        assert_eq!(owned_host.managed_camera_lease(), Some(("managed-lease".into(), false)));
         external.child.kill().unwrap();
         external.child.wait().unwrap();
+        assert_eq!(owned_host.managed_camera_lease(), Some(("managed-lease".into(), true)));
+        owned_host.clear_managed_camera();
+        assert!(owned_host.managed_camera_lease().is_none());
         managed.poll();
         assert!(managed.external_isolation_pending());
         assert_eq!(managed.external_camera_lease(), Some("second-lease"));

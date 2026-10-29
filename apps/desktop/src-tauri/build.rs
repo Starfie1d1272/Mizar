@@ -19,6 +19,8 @@ fn main() {
             "mulnx_control",
             "observer_command",
             "start_managed_cs2",
+            "begin_managed_camera",
+            "cancel_managed_camera",
             "attach_external_cs2",
             "finish_managed_cs2",
             "finish_workspace",

@@ -781,6 +781,49 @@ async fn start_managed_cs2(
     diagnostic_result
 }
 
+#[tauri::command]
+async fn begin_managed_camera(window: tauri::WebviewWindow, app: tauri::AppHandle, expected_revision: String) -> Result<(), String> {
+    if window.label() != "main" { return Err("请在准备中心打开工作台。".into()); }
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<production_exit::ExitGate>().check()?;
+        app.state::<updates::PendingUpdate>().check()?;
+        let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+        let mut cs2 = state.lock().map_err(|_| "CS2 状态不可用。")?;
+        let game = cs2.workspace_process()?.filter(|game| game.owned && game.is_running())
+            .ok_or("请先确认受管 CS2 已启动。")?;
+        let actual = cs2.mulnx_handoff_status()?;
+        let unique = actual["processes"].as_array().is_some_and(|processes| {
+            processes.len() == 1 && processes[0]["pid"] == game.pid
+                && processes[0]["created"].as_str() == Some(game.created.to_string().as_str())
+                && processes[0]["managed"] == true
+        });
+        if !unique { return Err("受管游戏身份不唯一，未建立运镜会话。".into()); }
+        let log = app.state::<DesktopLog>();
+        let value = production_exit::camera_session(&log, "begin", None, Some(&expected_revision))?;
+        let lease = value["lease"].as_str().ok_or("原生运镜会话未确认。")?.to_owned();
+        if let Err(error) = cs2.bind_managed_camera(game, lease.clone()) {
+            let _ = production_exit::camera_session(&log, "invalidate", Some(&lease), None);
+            return Err(error);
+        }
+        Ok(())
+    }).await.map_err(|_| "受管运镜会话未能准备。".to_string())?
+}
+
+#[tauri::command]
+async fn cancel_managed_camera(window: tauri::WebviewWindow, app: tauri::AppHandle) -> Result<(), String> {
+    if window.label() != "main" { return Err("请在准备中心取消进入工作台。".into()); }
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+        let mut cs2 = state.lock().map_err(|_| "CS2 状态不可用。")?;
+        if let Some((lease, _)) = cs2.managed_camera_lease() {
+            cs2.invalidate_managed_camera();
+            production_exit::camera_session(&app.state::<DesktopLog>(), "invalidate", Some(&lease), None)?;
+            cs2.clear_managed_camera();
+        }
+        Ok(())
+    }).await.map_err(|_| "受管运镜会话未能取消。".to_string())?
+}
+
 fn refresh_finished_window_feedback(app: &tauri::AppHandle, cs2: &managed_cs2::ManagedCs2) {
     let log = app.state::<DesktopLog>();
     log.event("workspace_exit_feedback", "begin", None);
@@ -2267,6 +2310,8 @@ fn run_desktop(
             open_mulnx_browser,
             observer_workspace::observer_command,
             start_managed_cs2,
+            begin_managed_camera,
+            cancel_managed_camera,
             attach_external_cs2,
             finish_managed_cs2,
             finish_workspace,
@@ -2409,6 +2454,18 @@ fn run_desktop(
                         {
                             cs2.poll();
                             observer_workspace::pulse(&host, &cs2);
+                            if let Some((lease, invalid)) = cs2.managed_camera_lease() {
+                                let log = host.state::<DesktopLog>();
+                                let action = if invalid { "invalidate" } else { "pulse" };
+                                match production_exit::camera_session(&log, action, Some(&lease), None) {
+                                    Ok(_) if invalid => cs2.clear_managed_camera(),
+                                    Ok(_) => (),
+                                    Err(error) => {
+                                        cs2.invalidate_managed_camera();
+                                        log.event("managed_camera_isolation", "failure", Some(&error));
+                                    }
+                                }
+                            }
                             if let Some(lease) = cs2.external_camera_lease().map(str::to_owned) {
                                 let log = host.state::<DesktopLog>();
                                 let invalid = cs2.external_isolation_pending();
@@ -2702,7 +2759,7 @@ fn run_desktop(
                                 || if cleanup_host.state::<production_exit::VerifiedStop>().complete() {
                                     observer_hud::restore(&cleanup_host.state::<DesktopLog>())
                                 } else { observer_workspace::finish(&cleanup_host.state::<DesktopLog>()) },
-                                || cs2.finish(),
+                                || cs2.finish_with_service_stopped(cleanup_host.state::<production_exit::VerifiedStop>().complete()),
                             )
                         },
                     )
