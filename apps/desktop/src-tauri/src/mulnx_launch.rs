@@ -280,25 +280,28 @@ fn resume_pending_launch(log: &DesktopLog, managed: &Mutex<managed_cs2::ManagedC
     let bytes = match std::fs::read(&pending) {
         Ok(bytes) if bytes.len() <= 16 * 1024 => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        _ => return Err("MulNX 启动记录无法读取，请检查并恢复。".into()),
+        _ => return Err("无法读取启动状态，请恢复设置。".into()),
     };
-    let record: Value = serde_json::from_slice(&bytes).map_err(|_| "MulNX 启动记录不完整，请检查并恢复。")?;
+    let record: Value = serde_json::from_slice(&bytes).map_err(|_| "启动状态不完整，请恢复设置。")?;
     if record["request"] != "submitted" { return Ok(None); }
     let pid = record["launcherPid"].as_u64().filter(|pid| *pid > 0 && *pid <= u32::MAX as u64)
-        .ok_or("MulNX 启动器身份缺失，请检查并恢复。")? as u32;
-    let executable = PathBuf::from(record["executable"].as_str().ok_or("游戏安装位置缺失，请检查并恢复。")?);
+        .ok_or("无法确认启动器，请恢复设置。")? as u32;
+    let executable = PathBuf::from(record["executable"].as_str().ok_or("无法确认游戏位置，请恢复设置。")?);
     let cs2 = managed.try_lock().map_err(|_| "CS2 正忙，请稍后重试。")?;
-    if !cs2.owns_mulnx_launcher(pid)? { return Err("上次 MulNX 启动结果待确认；请检查并退出游戏和启动器后恢复。".into()); }
+    if !cs2.owns_mulnx_launcher(pid)? { return Err("无法确认本次启动，请关闭游戏和 MulNX 后恢复设置。".into()); }
     verify_gateway_owner(log, 55203, pid)?;
     let actual = cs2.mulnx_handoff_status()?;
     let processes = actual["processes"].as_array().ok_or("CS2 实例状态不可用。")?;
-    if processes.len() != 1 { return Err("MulNX 启动结果待确认；请稍后重试或检查游戏和启动器。".into()); }
+    if processes.len() != 1 { return Err("游戏尚未就绪，请稍后重试。".into()); }
     let process = &processes[0];
     let result = json!({"mizarLaunch":1,"pid":process["pid"],"created":process["created"]});
     validate_game_identity(&actual, &result, &executable)?;
     let game_pid = result["pid"].as_u64().ok_or("游戏身份缺失。")? as u32;
     let created = result["created"].as_str().and_then(|v| v.parse::<u64>().ok()).ok_or("游戏创建时间缺失。")?;
     verify_gateway_owner(log, 55202, game_pid)?;
+    if managed_cs2::process_parent(game_pid, log)? != Some(pid) || !cs2.owns_mulnx_launcher(pid)? {
+        return Err("无法确认本次启动，请关闭游戏和 MulNX 后恢复设置。".into());
+    }
     cs2.bind_managed_mulnx(game_pid, created, &executable)?;
     crate::cs2_session::atomic_write(&results.join("current.json"), result.to_string().as_bytes())?;
     production_exit::prepare_mulnx(log, &executable, false, false)?;

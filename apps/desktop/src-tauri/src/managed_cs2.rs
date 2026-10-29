@@ -234,6 +234,20 @@ fn process_pids(name: &str, log: &crate::startup_log::DesktopLog) -> Result<Vec<
     }
     Ok(pids)
 }
+pub(crate) fn process_parent(pid: u32, log: &crate::startup_log::DesktopLog) -> Result<Option<u32>, String> {
+    let snapshot = unsafe { CreateToolhelp32Snapshot(2, 0) };
+    if snapshot == -1 { return Err(win32_failure(log, "CreateToolhelp32Snapshot", "无法检查游戏进程，请重试。")); }
+    let snapshot = Process(snapshot);
+    let mut entry: ProcessEntry = unsafe { std::mem::zeroed() };
+    entry.size = std::mem::size_of::<ProcessEntry>() as u32;
+    let mut found = unsafe { Process32FirstW(snapshot.0, &mut entry) };
+    while found != 0 {
+        if entry.pid == pid { return Ok(Some(entry.parent)); }
+        found = unsafe { Process32NextW(snapshot.0, &mut entry) };
+    }
+    if unsafe { GetLastError() } != 18 { return Err(win32_failure(log, "Process32NextW", "无法检查游戏进程，请重试。")); }
+    Ok(None)
+}
 fn open(pid: u32, log: &crate::startup_log::DesktopLog) -> Result<Option<Process>, String> {
     let handle = unsafe { OpenProcess(0x1000 | 0x100000, 0, pid) };
     if handle != 0 {
