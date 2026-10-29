@@ -4,6 +4,7 @@ import { MulnxEventSequence, parseMulnxEvent } from '../src/orchestration/mulnx-
 const hurt = {
   eventType: 'player_hurt',
   sequence: 1,
+  captureGeneration: 2,
   capturedAtUnixMs: 1700000000000,
   attackerSteamId: '0',
   victimSteamId: '76561198000000001',
@@ -16,6 +17,7 @@ const hurt = {
 it('normalizes HSI facts without inventing unavailable values', () => {
   expect(parseMulnxEvent(hurt)).toEqual({
     sequence: 1,
+    captureGeneration: 2,
     capturedAtUnixMs: 1700000000000,
     facts: {
       kind: 'player-hurt',
@@ -37,7 +39,6 @@ it('normalizes HSI facts without inventing unavailable values', () => {
     thrusmoke: 0,
     attackerblind: 0,
     attackerinair: 0,
-    eventTime: { timeDomain: 'demo_playback_tick', tick: 42 },
     clientTime: { timeDomain: 'network_game_client_tick', tick: 90 },
   });
   expect(death?.facts).toMatchObject({
@@ -46,7 +47,6 @@ it('normalizes HSI facts without inventing unavailable values', () => {
     penetratedObjects: 2,
   });
   expect(death?.facts).not.toHaveProperty('distance');
-  expect(death?.eventTime).toEqual({ timeDomain: 'demo_playback_tick', tick: 42 });
   expect(death?.clientTime).toEqual({ timeDomain: 'network_game_client_tick', tick: 90 });
   expect(parseMulnxEvent({ ...hurt, victimSteamId: 0 })).toBeNull();
   expect(parseMulnxEvent({ ...hurt, eventType: 'CamPack/Status' })).toBeNull();
@@ -69,7 +69,8 @@ it('parses clock samples without fabricating a tick or map', async () => {
         eventType: 'game_clock',
         sampledAtUnixMs: 100,
         timeDomain: 'network_game_client_tick',
-        valid: false,
+        captureGeneration: 2,
+        readSucceeded: false,
       },
       50,
     ),
@@ -77,7 +78,8 @@ it('parses clock samples without fabricating a tick or map', async () => {
     sampledAtUnixMs: 100,
     receivedMonotonicMs: 50,
     timeDomain: 'network_game_client_tick',
-    valid: false,
+    captureGeneration: 2,
+    readSucceeded: false,
   });
   expect(
     parseMulnxClock(
@@ -85,7 +87,8 @@ it('parses clock samples without fabricating a tick or map', async () => {
         eventType: 'game_clock',
         sampledAtUnixMs: 100,
         timeDomain: 'network_game_client_tick',
-        valid: true,
+        captureGeneration: 2,
+        readSucceeded: true,
       },
       50,
     ),

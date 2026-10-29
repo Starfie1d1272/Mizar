@@ -6,6 +6,7 @@ const flag = z.union([z.literal(0), z.literal(1)]);
 const playerId = z.string().regex(/^(?:0|\d{17})$/);
 const common = {
   sequence: integer.positive(),
+  captureGeneration: integer.nonnegative(),
   capturedAtUnixMs: integer.nonnegative(),
   attackerSteamId: playerId,
   victimSteamId: playerId,
@@ -13,7 +14,6 @@ const common = {
   clientTime: z
     .object({ timeDomain: z.literal('network_game_client_tick'), tick: integer })
     .optional(),
-  eventTime: z.object({ timeDomain: z.literal('demo_playback_tick'), tick: integer }).optional(),
 };
 const message = z.discriminatedUnion('eventType', [
   z.object({
@@ -42,29 +42,19 @@ const clockMessage = z
     eventType: z.literal('game_clock'),
     sampledAtUnixMs: integer.nonnegative(),
     timeDomain: z.literal('network_game_client_tick'),
-    valid: z.boolean(),
+    captureGeneration: integer.nonnegative(),
+    readSucceeded: z.boolean(),
     tick: integer.optional(),
-    demoTime: z
-      .object({
-        timeDomain: z.literal('demo_playback_tick'),
-        tick: integer,
-        paused: z.boolean().optional(),
-      })
-      .optional(),
   })
-  .refine((value) => !value.valid || value.tick !== undefined);
+  .refine((value) => value.readSucceeded === (value.tick !== undefined));
 
 export interface MulnxClockSample {
   readonly sampledAtUnixMs: number;
   readonly receivedMonotonicMs: number;
   readonly timeDomain: 'network_game_client_tick';
-  readonly valid: boolean;
+  readonly captureGeneration: number;
+  readonly readSucceeded: boolean;
   readonly tick?: number;
-  readonly demoTime?: {
-    readonly timeDomain: 'demo_playback_tick';
-    readonly tick: number;
-    readonly paused?: boolean;
-  };
 }
 
 export function parseMulnxClock(
@@ -78,26 +68,18 @@ export function parseMulnxClock(
     sampledAtUnixMs: sample.sampledAtUnixMs,
     receivedMonotonicMs,
     timeDomain: sample.timeDomain,
-    valid: sample.valid,
+    captureGeneration: sample.captureGeneration,
+    readSucceeded: sample.readSucceeded,
     ...(sample.tick === undefined ? {} : { tick: sample.tick }),
-    ...(sample.demoTime === undefined
-      ? {}
-      : {
-          demoTime: {
-            timeDomain: sample.demoTime.timeDomain,
-            tick: sample.demoTime.tick,
-            ...(sample.demoTime.paused === undefined ? {} : { paused: sample.demoTime.paused }),
-          },
-        }),
   };
 }
 
 type EventFacts = Omit<PlayerDeathGameEvent, 'cursor'> | Omit<PlayerHurtGameEvent, 'cursor'>;
 export interface MulnxEventCandidate {
   readonly sequence: number;
+  readonly captureGeneration: number;
   readonly capturedAtUnixMs: number;
   readonly clientTime?: { readonly timeDomain: 'network_game_client_tick'; readonly tick: number };
-  readonly eventTime?: { readonly timeDomain: 'demo_playback_tick'; readonly tick: number };
   readonly facts: EventFacts;
 }
 
@@ -138,9 +120,9 @@ export function parseMulnxEvent(input: unknown): MulnxEventCandidate | null {
         };
   return {
     sequence: event.sequence,
+    captureGeneration: event.captureGeneration,
     capturedAtUnixMs: event.capturedAtUnixMs,
     ...(event.clientTime === undefined ? {} : { clientTime: event.clientTime }),
-    ...(event.eventTime === undefined ? {} : { eventTime: event.eventTime }),
     facts,
   };
 }
