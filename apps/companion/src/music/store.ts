@@ -55,12 +55,12 @@ export interface MusicConfigPersistence {
   initialize(
     config: MusicConfig,
     revision: string,
-  ): Promise<{ config: MusicConfig; revision: string }>;
-  read(): Promise<{ config: MusicConfig; revision: string }>;
+  ): Promise<{ config: MusicConfig; revision: string; automaticEnabled: boolean }>;
+  read(): Promise<{ config: MusicConfig; revision: string; automaticEnabled: boolean }>;
   commit(
     config: MusicConfig,
     previous: MusicConfig,
-  ): Promise<{ config: MusicConfig; revision: string }>;
+  ): Promise<{ config: MusicConfig; revision: string; automaticEnabled: boolean }>;
 }
 function runtimeState(state: MusicState): z.infer<typeof runtimeSchema> {
   const value: Partial<MusicState> = structuredClone(state);
@@ -73,6 +73,7 @@ export type Playback = NonNullable<MusicState['bgm']>;
 export class MusicStore {
   ready = false;
   failure = false;
+  automaticEnabled = true;
   private importing = false;
   private persistence: MusicConfigPersistence | undefined;
   state: MusicState = {
@@ -207,11 +208,13 @@ export class MusicStore {
       await atomicJson(join(this.directory, 'runtime.json'), runtime);
     }
     const current = await persistence.read();
+    const automaticEnabled = z.boolean().parse(current.automaticEnabled);
     this.state = stateSchema.parse({
       ...runtime,
       config: current.config,
       configRevision: current.revision,
     });
+    this.automaticEnabled = automaticEnabled;
     this.failure = false;
     this.ready = true;
   }
@@ -234,17 +237,25 @@ export class MusicStore {
   async adoptPersistence(persistence: MusicConfigPersistence): Promise<void> {
     const result = this.queue.then(async () => {
       if (!this.ready || this.failure || this.persistence) throw new Error('music_state_invalid');
+      let runtime = runtimeState(this.state);
+      try {
+        runtime = await this.readRuntime();
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
       const current = await persistence.initialize(
         structuredClone(this.state.config),
         this.state.configRevision,
       );
+      const automaticEnabled = z.boolean().parse(current.automaticEnabled);
       const next = stateSchema.parse({
-        ...this.state,
+        ...runtime,
         config: current.config,
         configRevision: current.revision,
       });
       await atomicJson(join(this.directory, 'runtime.json'), runtimeState(next));
       this.state = next;
+      this.automaticEnabled = automaticEnabled;
       this.persistence = persistence;
     });
     this.queue = result.catch(() => undefined);
@@ -255,11 +266,13 @@ export class MusicStore {
     const result = this.queue.then(async () => {
       if (!this.persistence || !this.ready || this.failure) throw new Error('music_state_invalid');
       const current = await this.persistence.read();
+      const automaticEnabled = z.boolean().parse(current.automaticEnabled);
       this.state = stateSchema.parse({
         ...this.state,
         config: current.config,
         configRevision: current.revision,
       });
+      this.automaticEnabled = automaticEnabled;
     });
     this.queue = result.catch(() => undefined);
     return result;
@@ -277,6 +290,7 @@ export class MusicStore {
         const committed = await this.persistence.commit(next.config, this.state.config);
         next.config = musicConfigSchema.parse(committed.config);
         next.configRevision = z.string().uuid().parse(committed.revision);
+        this.automaticEnabled = z.boolean().parse(committed.automaticEnabled);
       } else {
         if (configChanged) next.configRevision = randomUUID();
         stateSchema.parse(next);

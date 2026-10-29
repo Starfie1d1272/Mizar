@@ -1,3 +1,6 @@
+import { dirname, join as pathJoin } from 'node:path';
+import { MusicStore } from '../../src/music/store.js';
+import { createMusicConfigPersistence } from '../../src/broadcast-config/music-facade.js';
 import { HudConfigStore } from '../../src/hud-config/store.js';
 import { createHudConfigPersistence } from '../../src/broadcast-config/hud-facade.js';
 import Fastify from 'fastify';
@@ -353,5 +356,22 @@ describe('BroadcastConfigStore', () => {
       createHudConfigPersistence(reopened, (_hud, active) => Promise.resolve(active.lock)),
     );
     expect(nextHud.getState().document).toEqual(saved.document);
+  });
+  it('routes a legacy music configuration write through the active coordinator', async () => {
+    const { store, options, initial } = await setup();
+    const music = new MusicStore(pathJoin(dirname(options.filePath), 'music'));
+    await music.load();
+    await music.adoptPersistence(
+      createMusicConfigPersistence(store, music, (_value, active) => Promise.resolve(active.lock)),
+    );
+    await music.update((state) => {
+      state.config.groups.waiting.volume = 0.2;
+    });
+    const active = store.snapshot.active;
+    expect(active.resolved.music?.groups.waiting.volume).toBe(0.2);
+    expect(active.resolved.music?.automaticEnabled).toBe(false);
+    expect(active.moduleRevisions.hud).toBe(initial.active.moduleRevisions.hud);
+    expect(active.moduleRevisions.camera).toBe(initial.active.moduleRevisions.camera);
+    expect(active.adjusted).toBe(true);
   });
 });

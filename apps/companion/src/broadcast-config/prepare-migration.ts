@@ -63,6 +63,7 @@ export async function prepareLegacyMigration(input: {
     const document = await migrateLegacyBroadcast({
       hud: input.hud,
       music: input.music.state.config,
+      musicRevision: input.music.state.configRevision,
       camera: {
         presets: input.camera.presets,
         activePresetId: input.camera.activePresetId,

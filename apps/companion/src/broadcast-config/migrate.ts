@@ -24,6 +24,7 @@ import type { HudConfigState } from '../hud-config/store.js';
 export interface LegacyBroadcastMigration {
   hud: HudConfigState;
   music: MusicConfig;
+  musicRevision?: string;
   camera: {
     presets: { id: string; preset: OrchestrationPreset }[];
     activePresetId: string;
@@ -157,7 +158,7 @@ export async function migrateLegacyBroadcast(
     moduleRevisions: {
       hud: randomUUID(),
       program: randomUUID(),
-      music: randomUUID(),
+      music: input.musicRevision ?? randomUUID(),
       camera: randomUUID(),
     },
     resolved,

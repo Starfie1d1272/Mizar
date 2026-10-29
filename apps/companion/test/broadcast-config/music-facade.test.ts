@@ -15,12 +15,13 @@ it('keeps playback state local while the coordinator owns music config across re
     let saved = {
       config: structuredClone(store.state.config),
       revision: store.state.configRevision,
+      automaticEnabled: true,
     };
     const owner: MusicConfigPersistence = {
       initialize: () => Promise.resolve(saved),
       read: () => Promise.resolve(saved),
       commit: (config: MusicConfig) => {
-        saved = { config: structuredClone(config), revision: randomUUID() };
+        saved = { config: structuredClone(config), revision: randomUUID(), automaticEnabled: true };
         return Promise.resolve(saved);
       },
     };
