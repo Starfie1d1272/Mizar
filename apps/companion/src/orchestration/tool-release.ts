@@ -28,9 +28,9 @@ const metadataCache = new Map<string, { value: unknown; until: number }>();
 const metadataPending = new Map<string, Promise<unknown>>();
 let metadataRetry: { until: number; status: number } | undefined;
 
-export function publicJson(url: string): Promise<unknown> {
+export function publicJson(url: string, fresh = false): Promise<unknown> {
   const cached = metadataCache.get(url);
-  if (cached && cached.until > Date.now()) return Promise.resolve(cached.value);
+  if (!fresh && cached && cached.until > Date.now()) return Promise.resolve(cached.value);
   if (metadataRetry && metadataRetry.until > Date.now())
     return Promise.reject(new Error(`mulnx_metadata_http_${metadataRetry.status}`));
   const pending = metadataPending.get(url);

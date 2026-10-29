@@ -23,6 +23,7 @@ import {
   extractMulnx,
   fileSha256,
   latestMulnxRelease,
+  publicJson,
   SEVEN_ZIP,
   upstreamNotice,
   type MulnxRelease,
@@ -354,7 +355,7 @@ export class MulnxTool {
         }
       }
       const release = update
-        ? await latestMulnxRelease()
+        ? await latestMulnxRelease((url) => publicJson(url, true))
         : (this.installed?.release ??
           z.object({ release: releaseSchema }).parse(await readJson(this.bundle, 'release.json'))
             .release);
@@ -518,7 +519,7 @@ export class MulnxTool {
   prepareRelease(update = true) {
     return this.run('mulnx_prepare_release', async () => {
       const release = update
-        ? await latestMulnxRelease()
+        ? await latestMulnxRelease((url) => publicJson(url, true))
         : z.object({ release: releaseSchema }).parse(await readJson(this.bundle, 'release.json'))
             .release;
       return this.prepareReleaseFiles(release);
