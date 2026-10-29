@@ -1,4 +1,5 @@
 import {
+  canonicalJson,
   getBuiltinLayouts,
   getBuiltinPresets,
   getBuiltinThemes,
@@ -97,10 +98,42 @@ export function createBuiltinModules(): ModuleRecord[] {
   ];
 }
 
-/** Append missing built-ins without modifying existing records or active snapshots. */
+/** Claim unchanged legacy built-ins before adding any missing identities. */
 export function addMissingBuiltinModules(document: BroadcastConfigDocument): boolean {
   const present = new Set(document.modules.map((item) => item.id));
-  const missing = createBuiltinModules().filter((item) => !present.has(item.id));
-  document.modules.push(...missing);
-  return missing.length > 0;
+  let changed = false;
+  for (const registered of createBuiltinModules()) {
+    const builtin = document.modules.find((item) => item.id === registered.id) ?? registered;
+    const legacyItems = document.modules.filter(
+      (item) =>
+        !isBuiltinModuleId(item.id) &&
+        item.origin === null &&
+        item.kind === builtin.kind &&
+        item.name === builtin.name &&
+        item.schemaVersion === builtin.schemaVersion &&
+        canonicalJson(item.value) === canonicalJson(builtin.value),
+    );
+    // Multiple identical records are ambiguous; preserve them rather than deleting copies.
+    for (const legacy of legacyItems.length === 1 ? legacyItems : []) {
+      for (const preset of document.presets)
+        for (const binding of preset.bindings)
+          if (binding.mode === 'use' && binding.moduleId === legacy.id)
+            binding.moduleId = builtin.id;
+      for (const snapshot of [document.active, document.previousActive]) {
+        if (snapshot?.sourceModuleIds?.[builtin.kind] === legacy.id) {
+          snapshot.sourceModuleIds[builtin.kind] = builtin.id;
+          if (snapshot.sourceModuleRevisions?.[builtin.kind] === legacy.revision)
+            snapshot.sourceModuleRevisions[builtin.kind] = builtin.revision;
+        }
+      }
+      document.modules.splice(document.modules.indexOf(legacy), 1);
+      changed = true;
+    }
+    if (!present.has(builtin.id)) {
+      document.modules.push(builtin);
+      present.add(builtin.id);
+      changed = true;
+    }
+  }
+  return changed;
 }
