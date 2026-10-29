@@ -756,7 +756,7 @@ export function HudConsolePage() {
     setCommandError(false);
     try {
       await downloadLhmHud(onAir.activeRevision);
-      setCommandState('已导出当前播出 HUD；队伍身份、赛事和头像暂不包含。');
+      setCommandState('已导出当前播出 HUD；比赛信息和头像由目标软件提供。');
     } catch (error) {
       setCommandError(true);
       setCommandState(error instanceof Error ? error.message : 'HUD 导出失败，请重试。');

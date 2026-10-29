@@ -9,6 +9,7 @@ import { adaptGsiPayload } from '@mizar/telemetry-gsi';
 import { projectRadarFrame } from '@mizar/radar';
 import { programSnapshotSchema } from '@mizar/protocol/program';
 import { radarSnapshotSchema } from '@mizar/protocol/radar';
+import { applyMatch, type LhmMatch } from './context';
 import {
   LOCAL_PROTOCOL_VERSION,
   PROGRAM_SCHEMA_VERSION,
@@ -21,6 +22,8 @@ export function createLhmProjection() {
   let runtime = createInitialRuntimeState('lhm-export');
   let lineup = emptyActiveLineup(0, 0);
   let sequence = 0;
+  let match: LhmMatch | null = null;
+  let avatars: ReadonlyMap<string, string> = new Map();
   const refresh = (now = performance.now()) => {
     if (!runtime.programTelemetry) return null;
     const view = selectProgramSafeRuntimeView(runtime);
@@ -49,6 +52,18 @@ export function createLhmProjection() {
       bomb: radar.bomb,
       grenades: radar.grenades,
     };
+    // Match the official csgogsi client, which uses the first observed slot per side.
+    const observed =
+      view.telemetry?.coverage.allPlayers === 'present'
+        ? (view.telemetry.telemetry.allPlayers ?? [])
+        : [];
+    const ct = observed.find(
+      (player) => player.side === 'CT' && player.observerSlot !== undefined,
+    )?.observerSlot;
+    const t = observed.find(
+      (player) => player.side === 'T' && player.observerSlot !== undefined,
+    )?.observerSlot;
+    const ctLeft = ct == null || t == null ? null : (ct || 10) <= (t || 10);
     return {
       program: programSnapshotSchema.parse({
         type: 'snapshot',
@@ -57,7 +72,12 @@ export function createLhmProjection() {
         channel: 'program',
         channelSeq: sequence,
         cursor: view.cursor,
-        payload: projection,
+        payload: applyMatch(
+          programSnapshotSchema.shape.payload.parse(projection),
+          match,
+          avatars,
+          ctLeft,
+        ),
       }),
       radar: radarSnapshotSchema.parse({
         type: 'snapshot',
@@ -102,5 +122,9 @@ export function createLhmProjection() {
     });
     return refresh(now);
   };
-  return Object.assign(accept, { refresh });
+  const setMetadata = (value: LhmMatch | null, images: ReadonlyMap<string, string>) => {
+    match = value;
+    avatars = images;
+  };
+  return Object.assign(accept, { refresh, setMetadata });
 }
