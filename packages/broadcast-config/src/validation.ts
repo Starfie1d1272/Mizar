@@ -10,7 +10,7 @@ import {
   parseHudResolvedPreset,
 } from '@mizar/hud-config';
 import { MUSIC_GROUPS, musicGroupSchema, musicTrackSchema } from '@mizar/protocol/music';
-import { cameraMapSchema } from '@mizar/protocol/orchestration';
+import { cameraMapSchema, orchestrationPresetSchema } from '@mizar/protocol/orchestration';
 import { boundModules, type BroadcastConfigDocument } from './index.js';
 
 const id = z.string().uuid();
@@ -80,7 +80,13 @@ const tool = z.discriminatedUnion('kind', [
   }),
 ]);
 const cameraSource = z.strictObject({
-  sourceName: z.string().trim().min(1).max(120),
+  sourceName: z
+    .string()
+    .trim()
+    .min(1)
+    .max(120)
+    .regex(/^[^\\/]+$/)
+    .refine((value) => [...value].every((character) => character.charCodeAt(0) >= 32)),
   treeSha256: sha,
   converterVersion: z.literal(1),
   acquisition: tool,
@@ -92,11 +98,14 @@ const camera = z
   .strictObject({
     format: z.literal('mizar.camera-config'),
     version: z.literal(2),
-    name: z.string().trim().min(1).max(120),
+    name: orchestrationPresetSchema.shape.name,
     automaticEnabled: z.boolean(),
     maps: z.array(cameraMap).max(32),
   })
-  .refine((value) => new Set(value.maps.map((map) => map.map)).size === value.maps.length);
+  .refine((value) => new Set(value.maps.map((map) => map.map)).size === value.maps.length)
+  .refine(
+    (value) => new TextEncoder().encode(JSON.stringify(value, null, 2)).byteLength <= 256 * 1024,
+  );
 const visualColor = z.discriminatedUnion('source', [
   z.strictObject({ source: z.literal('fixed'), value: z.string().regex(/^#[0-9a-fA-F]{6}$/) }),
   z.strictObject({ source: z.literal('event'), fallback: z.string().regex(/^#[0-9a-fA-F]{6}$/) }),
