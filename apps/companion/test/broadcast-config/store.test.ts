@@ -239,6 +239,17 @@ describe('BroadcastConfigStore', () => {
     await store.deleteModule(clone.id, clone.revision);
     expect(store.snapshot.modules.some((item) => item.id === clone.id)).toBe(false);
   });
+  it('keeps an identical user copy after the one-time built-in normalization', async () => {
+    const { store, options } = await setup();
+    const builtin = store.snapshot.modules.find(
+      (module) => module.kind === 'program' && module.name === 'Pulse',
+    )!;
+    const copy = await store.cloneModule(builtin.id, builtin.revision, builtin.name);
+    const reopened = new BroadcastConfigStore(options);
+    await reopened.load();
+    expect(reopened.snapshot.modules.find((module) => module.id === copy.id)).toEqual(copy);
+    await reopened.deleteModule(copy.id, copy.revision);
+  });
   it('replaces a draft reference atomically when deleting a module', async () => {
     const { store, initial } = await setup();
     const builtin = store.snapshot.modules.find(
