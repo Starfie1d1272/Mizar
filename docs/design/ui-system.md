@@ -37,13 +37,14 @@
 
 ## 颜色职责
 
-| 语义                             | 来源                                      |
-| -------------------------------- | ----------------------------------------- |
-| 产品交互、选择、焦点、主要操作   | Mizar Blue；`accent.* / focus.ring`       |
-| 赛事身份、播出画面的轻微视觉处理 | `--mizar-event-accent`                    |
-| 对阵和 BP 的双方配色             | `--mizar-entrant-a` / `--mizar-entrant-b` |
-| 游戏阵营                         | `--mizar-side-ct` / `--mizar-side-t`      |
-| 成功、警告、危险、信息           | `status.success/warning/danger/info`      |
+| 语义                           | 来源                                      |
+| ------------------------------ | ----------------------------------------- |
+| 产品交互、选择、焦点、主要操作 | Mizar Blue；`accent.* / focus.ring`       |
+| 赛事身份                       | `--mizar-event-accent`                    |
+| HUD 风格强调                   | `--mizar-hud-accent`                      |
+| 对阵和 BP 的双方配色           | `--mizar-entrant-a` / `--mizar-entrant-b` |
+| 游戏阵营                       | `--mizar-side-ct` / `--mizar-side-t`      |
+| 成功、警告、危险、信息         | `status.success/warning/danger/info`      |
 
 参赛方 A / B 按比赛身份映射 CT / T。赛事强调色服务赛事身份，Mizar Blue 服务产品操作；成功、警告、比赛进度与错误使用各自的状态表达。
 

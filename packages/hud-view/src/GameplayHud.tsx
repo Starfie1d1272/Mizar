@@ -1,3 +1,4 @@
+import type { ResolvedHudModule } from '@mizar/broadcast-config';
 import { AssetFonts, assetStyle, useAssetUrl } from './assets.js';
 import { presentationBoundaryKey } from './presentation-boundary.js';
 import type { RadarProps } from './widgets/radar/Radar.js';
@@ -29,11 +30,17 @@ import './designs/esl.css';
 import './designs/perfectworld.css';
 import './designs/native.css';
 import { hudDesignForVariant } from './hud-design.js';
+import { AllChat } from './widgets/player-rails/AllChat.js';
 import { BroadcastPause } from './widgets/broadcast-pause/BroadcastPause.js';
 import { hasSeriesMapStrip } from './widgets/match-header/presentation.js';
 import type { BroadcastBranding } from './widgets/broadcast-pause/BroadcastBrand.js';
 
+type NativeHud = Extract<ResolvedHudModule, { renderer: 'native' }>;
+
 export interface GameplayHudProps {
+  readonly overlays?: NativeHud['overlays'] | undefined;
+  readonly accent?: NativeHud['accent'] | undefined;
+  readonly eventAccent?: string | null | undefined;
   readonly radarSource?: RadarProps['source'];
   readonly radarSnapshot?: RadarProps['snapshot'];
   readonly snapshot: ProgramSnapshot | null;
@@ -45,9 +52,12 @@ export interface GameplayHudProps {
   readonly rendererRegistry?: HudRendererRegistry;
 }
 
-export function themeStyle(theme: HudResolvedPreset['theme']): CSSProperties {
+export function themeStyle(
+  theme: HudResolvedPreset['theme'],
+  accent = theme.brandColor,
+): CSSProperties {
   return {
-    '--mizar-event-accent': theme.brandColor,
+    '--mizar-hud-accent': accent,
     '--mizar-hud-text-primary': theme.semantic.colors.textPrimary,
     '--mizar-hud-text-muted': theme.semantic.colors.textMuted,
     '--mizar-side-ct': theme.semantic.colors.sideCt,
@@ -71,6 +81,9 @@ export function themeStyle(theme: HudResolvedPreset['theme']): CSSProperties {
 
 export function GameplayHud({
   snapshot,
+  overlays,
+  accent,
+  eventAccent,
   radarSource,
   radarSnapshot,
   resolvedPreset,
@@ -84,14 +97,29 @@ export function GameplayHud({
   const radarAvailable = radarSource !== undefined || radarSnapshot != null;
   if (!programFresh && !radarAvailable) return null;
 
+  const accentColor =
+    accent?.source === 'fixed'
+      ? accent.value
+      : accent?.source === 'event'
+        ? (eventAccent ?? accent.fallback)
+        : resolvedPreset.theme.brandColor;
+  const chat = overlays?.chat;
+  const autoChat = chat?.enabled === true && chat.placement === 'auto';
+  const fixedChat =
+    chat?.enabled && chat.placement !== 'auto' && chat.placement.visible ? chat.placement : null;
   const score = resolvedPreset.widgets['top-score-bar'];
-  const design = hudDesignForVariant(score.variant);
+  const design = hudDesignForVariant(
+    overlays?.pause.visual && overlays.pause.visual !== 'legacy'
+      ? overlays.pause.visual
+      : score.variant,
+  );
   const phase = snapshot?.payload.clock?.phase;
   if (
     programFresh &&
     snapshot &&
-    resolvedPreset.layout.widgets['top-score-bar'].visible &&
-    topScoreBarSettingsSchema.parse(score.settings).showTimeout &&
+    (overlays?.pause.enabled ??
+      (resolvedPreset.layout.widgets['top-score-bar'].visible &&
+        topScoreBarSettingsSchema.parse(score.settings).showTimeout)) &&
     !gg &&
     (phase === 'paused' || phase === 'timeout_ct' || phase === 'timeout_t')
   ) {
@@ -100,7 +128,7 @@ export function GameplayHud({
         className="gameplay-hud"
         data-gameplay-hud="true"
         data-hud-preset-id={resolvedPreset.preset.id}
-        style={{ ...themeStyle(resolvedPreset.theme), ...assetStyle(resolve) }}
+        style={{ ...themeStyle(resolvedPreset.theme, accentColor), ...assetStyle(resolve) }}
       >
         <AssetFonts />
         <BroadcastPause
@@ -108,7 +136,11 @@ export function GameplayHud({
           resolvedPreset={resolvedPreset}
           design={design}
           branding={broadcastBranding}
+          chatEnabled={chat ? autoChat : undefined}
         />
+        {fixedChat && snapshot ? (
+          <FixedChat snapshot={snapshot} placement={fixedChat} design={design} />
+        ) : null}
       </div>
     );
   }
@@ -118,9 +150,22 @@ export function GameplayHud({
       className="gameplay-hud"
       data-gameplay-hud="true"
       data-hud-preset-id={resolvedPreset.preset.id}
-      style={{ ...themeStyle(resolvedPreset.theme), ...assetStyle(resolve) }}
+      style={{ ...themeStyle(resolvedPreset.theme, accentColor), ...assetStyle(resolve) }}
     >
       <AssetFonts />
+      {fixedChat && snapshot && programFresh ? (
+        <FixedChat
+          snapshot={snapshot}
+          placement={fixedChat}
+          design={hudDesignForVariant(resolvedPreset.widgets['team-t-rail'].variant)}
+        />
+      ) : null}
+      {autoChat &&
+      snapshot &&
+      programFresh &&
+      !resolvedPreset.layout.widgets['team-t-rail'].visible ? (
+        <AutoChat snapshot={snapshot} resolvedPreset={resolvedPreset} />
+      ) : null}
       {HUD_WIDGET_REGISTRY.map((descriptor) => {
         const placement = resolvedPreset.layout.widgets[descriptor.id];
         if (placement === undefined || !placement.visible) return null;
@@ -157,6 +202,7 @@ export function GameplayHud({
               snapshot={snapshot}
               presentationRevision={presentationRevision}
               gg={gg}
+              chatEnabled={chat ? autoChat : undefined}
               widgetId={descriptor.id}
             />
           );
@@ -199,6 +245,48 @@ export function GameplayHud({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function FixedChat({
+  snapshot,
+  placement,
+  design,
+}: {
+  snapshot: ProgramSnapshot;
+  placement: import('@mizar/hud-config').HudWidgetPlacement;
+  design: import('./hud-design.js').HudDesign;
+}) {
+  const box = placementToBox('team-t-rail', placement);
+  return (
+    <div
+      className={`gameplay-hud__widget hud-fixed-chat hud-widget-design${design === 'current' ? '' : ' hud-redraw'}`}
+      data-hud-design={design}
+      style={{ left: box.left, top: box.top, width: box.width, height: box.height }}
+    >
+      <AllChat design={design} messages={snapshot.payload.allChat ?? []} />
+    </div>
+  );
+}
+function AutoChat({
+  snapshot,
+  resolvedPreset,
+}: {
+  snapshot: ProgramSnapshot;
+  resolvedPreset: HudResolvedPreset;
+}) {
+  const box = placementToBox('team-t-rail', resolvedPreset.layout.widgets['team-t-rail']);
+  const design = hudDesignForVariant(resolvedPreset.widgets['team-t-rail'].variant);
+  return (
+    <div
+      className={`gameplay-hud__widget hud-widget-design${design === 'current' ? '' : ' hud-redraw'}`}
+      data-hud-design={design}
+      style={{ left: box.left, top: box.top, width: box.width, height: box.height }}
+    >
+      <section className="player-rail player-rail--right" data-all-chat-host="true">
+        <AllChat design={design} messages={snapshot.payload.allChat ?? []} />
+      </section>
     </div>
   );
 }
