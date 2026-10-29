@@ -200,14 +200,15 @@ it('prepares without selecting and publishes a configured instance only after se
   await shareStore.load();
   const zip = await exportPresetPack({
     document: migrated.document,
-    presetId: migrated.document.presets[0]!.id,
+    presetIds: [migrated.document.presets[0]!.id],
     music: musicStore,
     resources: shareResources,
     metadata: { packageId: randomUUID(), version: '1.0.0', name: 'Camera', author: '' },
   });
   const imported = await importPresetPack({ zip, store: shareStore, resources: shareResources });
+  const cameraEntry = imported.entries.find((item) => item.kind === 'camera')!.entryId;
   const camera = shareStore.snapshot.modules.find(
-    (item) => item.id === imported.mapping.moduleEntries.camera![0],
+    (item) => item.id === imported.mapping.moduleEntries[cameraEntry]![0],
   );
   if (!camera || camera.kind !== 'camera') throw new Error('missing imported camera');
   expect(camera.value.maps[0]!.source).toEqual(source);

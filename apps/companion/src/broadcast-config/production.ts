@@ -83,11 +83,9 @@ export function createProductionBroadcastDependencies(
     musicAutomaticEnabled: true,
     references,
     isDeleting: (ref) =>
-      ref.id.startsWith('local:music:')
+      ref.id.startsWith('local:music:') || (ref.id.startsWith('local:mizar-pack:') && musicPacks)
         ? Promise.resolve(false)
-        : ref.id.startsWith('local:mizar-pack:') && musicPacks
-          ? musicPacks.isDeleting(ref)
-          : Promise.reject(new Error('provider_unavailable')),
+        : Promise.reject(new Error('provider_unavailable')),
     resolve: {
       asset,
       image,
