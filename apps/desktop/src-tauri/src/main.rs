@@ -643,13 +643,15 @@ async fn launch_mulnx(window: tauri::WebviewWindow, app: tauri::AppHandle,
 
 #[tauri::command]
 async fn mulnx_control(window: tauri::WebviewWindow, app: tauri::AppHandle,
-    action: String, diagnostic_operation_id: Option<String>) -> Result<serde_json::Value, String> {
+    action: String, prepared_id: Option<String>, diagnostic_operation_id: Option<String>) -> Result<serde_json::Value, String> {
     if window.label() != "main" { return Err("请在准备中心管理 MulNX。".into()); }
     let log = app.state::<DesktopLog>().inner().clone();
     let evidence = log.clone();
     log.event("mulnx_control", "begin", Some(&format!("action={action}")));
     let result = tauri::async_runtime::spawn_blocking(move || match action.as_str() {
         "update" => mulnx_launch::update(&app, &log),
+        "prepare" => mulnx_launch::prepare_release(&app, &log),
+        "select" => mulnx_launch::select_release(&app, &log, prepared_id.as_deref().ok_or("请选择已下载的 MulNX 版本。")?),
         "stop" => mulnx_launch::stop_control(&app, &log),
         _ => Err("请选择更新或停止 MulNX 控制。".into()),
     }).await.unwrap_or_else(|error| Err(format!("MulNX 操作失败：{error}")));
