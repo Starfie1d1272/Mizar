@@ -214,6 +214,17 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
     expect(draftReload.preset.name).toBe('我的编排');
     expect(draftReload.presets.some((item) => item.preset.name === '游戏内筛选候选')).toBe(true);
     expect(store.preset.name).toBe('我的编排');
+    await page.getByLabel('预设名称').fill('正在编辑的草稿');
+    await page.getByText('导入与导出', { exact: true }).click();
+    const draftDownloadPromise = page.waitForEvent('download');
+    await page.getByRole('button', { name: '导出预设', exact: true }).click();
+    const draftDownload = await draftDownloadPromise;
+    expect(JSON.parse(await readFile(await draftDownload.path(), 'utf8'))).toEqual({
+      ...modified,
+      name: '正在编辑的草稿',
+    });
+    expect(store.preset.name).toBe('我的编排');
+    await page.getByRole('button', { name: '放弃未保存更改' }).click();
     await page.getByRole('button', { name: '返回运镜设置' }).click();
     await page.getByRole('button', { name: '启用所选预设' }).click();
     await expect.poll(() => store.preset.name).toBe('游戏内筛选候选');
