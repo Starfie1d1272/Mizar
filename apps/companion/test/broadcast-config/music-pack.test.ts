@@ -1,9 +1,11 @@
-import { randomUUID } from 'node:crypto';
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
-import { getBuiltinLayout } from '@mizar/hud-config';
+import Fastify from 'fastify';
+import { createLocalWebOriginPolicy } from '../../src/local-web/origin-policy.js';
+import { registerMusicPackRoutes } from '../../src/broadcast-config/music-pack-routes.js';
 import { defaultMusicConfig } from '@mizar/protocol/music';
 import { emptyOrchestrationPreset } from '@mizar/protocol/orchestration';
 import { readPackArchive } from '@mizar/broadcast-pack';
@@ -14,6 +16,7 @@ import { migrateLegacyBroadcast } from '../../src/broadcast-config/migrate.js';
 import { BroadcastConfigStore } from '../../src/broadcast-config/store.js';
 import { exportMusicPack, importMusicPack } from '../../src/broadcast-config/music-pack.js';
 import { MusicPackResources } from '../../src/broadcast-config/music-pack-resources.js';
+import { createProductionBroadcastDependencies } from '../../src/broadcast-config/production.js';
 
 it('round trips real music owner configuration to independent drafts without activation', async () => {
   const root = await mkdtemp(join(tmpdir(), 'music-pack-'));
@@ -28,8 +31,7 @@ it('round trips real music owner configuration to independent drafts without act
     ];
     await music.configure(config);
     const id = randomUUID(),
-      camera = emptyOrchestrationPreset(),
-      layout = getBuiltinLayout();
+      camera = emptyOrchestrationPreset();
     const initial = await migrateLegacyBroadcast({
       hud: new HudConfigStore().getState(),
       music: music.state.config,
@@ -39,10 +41,6 @@ it('round trips real music owner configuration to independent drafts without act
         presets: [{ id, preset: camera }],
         active: camera,
         automaticEnabled: false,
-      },
-      overlays: {
-        pause: { enabled: true, visual: 'default' },
-        chat: { enabled: true, placement: Object.values(layout.widgets)[0]! },
       },
       musicConfig: (value) => portableMusicConfig(music, value, true),
       cameraConfig: (value, automaticEnabled) =>
@@ -108,10 +106,60 @@ it('round trips real music owner configuration to independent drafts without act
       ['opening.wav', 0, 100, 0.3],
       ['opening.wav', 100, 200, 0.8],
     ]);
+    const app = Fastify();
+    registerMusicPackRoutes(
+      app,
+      store,
+      music,
+      resources,
+      createLocalWebOriginPolicy({ host: '127.0.0.1' }),
+      () => true,
+    );
+    try {
+      const payload = { moduleId: musicModule.id, expectedRevision: musicModule.revision };
+      expect(
+        (
+          await app.inject({
+            method: 'POST',
+            url: '/operator/resource-library/export-music-pack',
+            headers: { origin: 'https://untrusted.example' },
+            payload,
+          })
+        ).statusCode,
+      ).toBe(403);
+      const exported = await app.inject({
+        method: 'POST',
+        url: '/operator/resource-library/export-music-pack',
+        headers: { origin: 'http://127.0.0.1:3000' },
+        payload,
+      });
+      expect(exported.statusCode).toBe(200);
+      const importedHttp = await app.inject({
+        method: 'POST',
+        url: '/operator/resource-library/import-music-pack',
+        headers: { origin: 'http://127.0.0.1:3000', 'content-type': 'application/x-mizarpack' },
+        payload: exported.rawPayload,
+      });
+      expect(importedHttp.statusCode).toBe(200);
+      expect(store.snapshot.active).toEqual(before);
+    } finally {
+      await app.close();
+    }
     const ref = imported.value.groups.waiting.tracks[0]!.asset;
     const reopened = new MusicPackResources(join(root, 'packages'));
     expect((await reopened.read(ref)).bytes).toEqual(Buffer.from('RIFF0000WAVEtest'));
     expect(await reopened.materialize(ref, music)).toBe(track.id);
+    const dependencies = createProductionBroadcastDependencies(
+      root,
+      music,
+      () => Promise.reject(new Error('unexpected')),
+      reopened,
+    );
+    await dependencies.resolve.asset(ref);
+    expect(await dependencies.localTrackId(ref)).toBe(track.id);
+    const resolved = { ...before.resolved, music: imported.value };
+    const lock = await dependencies.lockForActive(resolved);
+    await dependencies.verifyActive({ ...before, resolved, lock });
     const conflicting = await exportMusicPack(music, musicModule, {
       packageId,
       version: '1.0.0',
@@ -122,7 +170,9 @@ it('round trips real music owner configuration to independent drafts without act
       'identity_conflict',
     );
     expect((await reopened.read(ref)).bytes).toEqual(Buffer.from('RIFF0000WAVEtest'));
-    const file = (await readdir(join(root, 'packages')))[0]!;
+    const file = `${createHash('sha256')
+      .update(JSON.stringify([ref.resource.id, ref.resource.version]))
+      .digest('hex')}.mizarpack`;
     await writeFile(join(root, 'packages', file), 'corrupt');
     await expect(reopened.read(ref)).rejects.toThrow();
     expect(imported.value.groups.waiting.tracks[0]!.asset).toEqual(

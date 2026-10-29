@@ -1,3 +1,5 @@
+import { MusicPackResources } from './broadcast-config/music-pack-resources.js';
+import { registerMusicPackRoutes } from './broadcast-config/music-pack-routes.js';
 import { createProductionBroadcastDependencies } from './broadcast-config/production.js';
 import {
   createBroadcastRuntime,
@@ -1268,6 +1270,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       join(dirname(options.obsConfigPath), 'orchestration'),
       (stage, evidence) => sessionJournal?.record(stage, evidence),
     );
+    const supportsMusicPacks = !broadcastConfig;
+    const musicPacks = new MusicPackResources(join(dirname(options.obsConfigPath), 'music-packs'));
     broadcastConfig ??= createProductionBroadcastDependencies(
       dirname(options.obsConfigPath),
       musicStore,
@@ -1275,6 +1279,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         if (ref.resource.id !== PACK_ID || !resources) throw new Error('dependency_missing');
         await resources.readExact(ref.resource, ref.fileId);
       },
+      musicPacks,
     );
     const broadcastRuntime = broadcastConfig
       ? createBroadcastRuntime({
@@ -1320,6 +1325,15 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         return broadcastResourceReferences(broadcastRuntime.store.snapshot);
       };
       getBroadcastMigrationStatus = () => broadcastRuntime.status;
+      if (supportsMusicPacks)
+        registerMusicPackRoutes(
+          app,
+          broadcastRuntime.store,
+          musicStore,
+          musicPacks,
+          localWebTransport.getOriginPolicy(),
+          () => broadcastRuntime.ready,
+        );
       registerBroadcastConfigRoutes(
         app,
         broadcastRuntime.store,
