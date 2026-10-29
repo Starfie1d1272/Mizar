@@ -55,26 +55,45 @@ export async function enterDemoTest(
   requestId: string,
   task?: ControlTask,
   isCurrent: () => boolean = () => true,
+  signal?: AbortSignal,
 ): Promise<boolean> {
   const location = window.location.href;
-  const current = () => isCurrent() && window.location.href === location;
+  const intentId = crypto.randomUUID();
+  const current = () => !signal?.aborted && isCurrent() && window.location.href === location;
+  const cancel = () => {
+    void desktopInvoke('cancel_demo_entry', { intentId }).catch(() => {});
+  };
   if (!current()) return false;
-  const camera = await desktopInvoke<boolean>('enter_demo_test', { requestId }, task);
-  if (!current()) return false;
-  if (camera) {
-    const response = await fetch('/local/v1/demo-test', {
-      headers: task?.headers() ?? {},
-      cache: 'no-store',
-      signal: AbortSignal.timeout(5000),
-    });
-    if (!response.ok) throw new Error('试播状态未确认，请重试。');
-    const trial = (await response.json()) as DemoTestView;
-    if (!current() || !trial.active || trial.phase !== 'playing' || trial.requestId !== requestId)
-      return false;
-    await command('/operator/orchestration', { action: 'connect' }, task);
+  window.addEventListener('pagehide', cancel);
+  window.addEventListener('popstate', cancel);
+  signal?.addEventListener('abort', cancel);
+  try {
+    await desktopInvoke('begin_demo_entry', { intentId }, task);
     if (!current()) return false;
+    const camera = await desktopInvoke<boolean>('enter_demo_test', { requestId }, task);
+    if (!current()) return false;
+    await desktopInvoke('present_demo_test', { requestId, expectedUrl: location, intentId }, task);
+    if (!current()) return false;
+    if (camera) {
+      const response = await fetch('/local/v1/demo-test', {
+        headers: task?.headers() ?? {},
+        cache: 'no-store',
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!response.ok) throw new Error('试播状态未确认，请重试。');
+      const trial = (await response.json()) as DemoTestView;
+      if (!current() || !trial.active || trial.phase !== 'playing' || trial.requestId !== requestId)
+        return false;
+      await command('/operator/orchestration', { action: 'connect' }, task);
+      if (!current()) return false;
+    }
+    return true;
+  } finally {
+    window.removeEventListener('pagehide', cancel);
+    window.removeEventListener('popstate', cancel);
+    signal?.removeEventListener('abort', cancel);
+    cancel();
   }
-  return true;
 }
 
 export type Tool = 'hud' | 'bp' | 'diagnostics';

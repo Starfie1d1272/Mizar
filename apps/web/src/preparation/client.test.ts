@@ -245,6 +245,30 @@ describe('managed CS2 production entry and cleanup', () => {
     expect(await enterDemoTest('trial-id', undefined, () => current)).toBe(false);
     expect(calls).not.toContain('/operator/orchestration');
   });
+  it('revokes the native entry intent while presentation is pending', async () => {
+    const calls = setup('demo');
+    const controller = new AbortController();
+    const invoke = window.__TAURI_INTERNALS__!.invoke.bind(window.__TAURI_INTERNALS__);
+    let finishPresentation: (() => void) | undefined;
+    window.__TAURI_INTERNALS__!.invoke = async <T>(
+      name: string,
+      args?: Record<string, unknown>,
+    ) => {
+      if (name === 'present_demo_test') {
+        await new Promise<void>((resolve) => {
+          finishPresentation = resolve;
+        });
+      }
+      return invoke<T>(name, args);
+    };
+    const entry = enterDemoTest('trial-id', undefined, () => true, controller.signal);
+    await vi.waitFor(() => expect(finishPresentation).toBeDefined());
+    controller.abort();
+    expect(calls).toContain('cancel_demo_entry');
+    finishPresentation!();
+    expect(await entry).toBe(false);
+    expect(calls).not.toContain('/operator/orchestration');
+  });
   it('does not redirect an explicit external selection into an existing Demo session', async () => {
     const calls = setup('trial');
     await expect(

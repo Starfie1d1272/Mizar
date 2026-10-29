@@ -93,8 +93,9 @@ export function CameraSettings() {
   const operation = useRef(false);
   const [automaticOverride, setAutomaticOverride] = useState<boolean | null>(null);
   useEffect(() => {
-    if (automaticOverride !== null && current?.automaticEnabled === automaticOverride)
-      setAutomaticOverride(null);
+    if (automaticOverride === null || current?.automaticEnabled !== automaticOverride) return;
+    const timer = setTimeout(() => setAutomaticOverride(null), 0);
+    return () => clearTimeout(timer);
   }, [automaticOverride, current?.automaticEnabled]);
   useEffect(() => {
     if (automaticOverride === null) return;
@@ -103,13 +104,15 @@ export function CameraSettings() {
   }, [automaticOverride]);
   useEffect(() => {
     if (
-      confirmed &&
-      current &&
-      current.activePresetId === confirmed.activePresetId &&
-      JSON.stringify(current.presets) === JSON.stringify(confirmed.presets) &&
-      JSON.stringify(current.preset) === JSON.stringify(confirmed.preset)
+      !confirmed ||
+      !current ||
+      current.activePresetId !== confirmed.activePresetId ||
+      JSON.stringify(current.presets) !== JSON.stringify(confirmed.presets) ||
+      JSON.stringify(current.preset) !== JSON.stringify(confirmed.preset)
     )
-      setConfirmed(null);
+      return;
+    const timer = setTimeout(() => setConfirmed(null), 0);
+    return () => clearTimeout(timer);
   }, [confirmed, current]);
   useEffect(() => {
     if (!confirmed) return;

@@ -8,6 +8,9 @@
     "allow-start-demo-test",
     "allow-enter-demo-test",
     "allow-resume-demo-test",
+    "allow-present-demo-test",
+    "allow-begin-demo-entry",
+    "allow-cancel-demo-entry",
     "allow-finish-demo-test"
   ]
 }

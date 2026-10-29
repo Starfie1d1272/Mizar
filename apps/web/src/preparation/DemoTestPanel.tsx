@@ -86,10 +86,16 @@ export function DemoTestPanel({ forceExpanded = false }: { forceExpanded?: boole
       mounted.current = false;
     };
   }, []);
-  const enter = useCallback(
-    (requestId: string) => enterDemoTest(requestId, undefined, () => mounted.current),
-    [],
-  );
+  const entryController = useRef<AbortController | null>(null);
+  useEffect(() => {
+    if (!forceExpanded) entryController.current?.abort();
+    return () => entryController.current?.abort();
+  }, [forceExpanded]);
+  const enter = useCallback((requestId: string) => {
+    const controller = new AbortController();
+    entryController.current = controller;
+    return enterDemoTest(requestId, undefined, () => mounted.current, controller.signal);
+  }, []);
 
   useEffect(() => {
     const requestId = trial?.requestId;
@@ -186,7 +192,10 @@ export function DemoTestPanel({ forceExpanded = false }: { forceExpanded?: boole
                 : '结束试播并恢复设置'}
             </Button>
           </div>
-          {trial.phase === 'playing' && trial.dataReady ? (
+          {trial.phase === 'playing' &&
+          trial.dataReady &&
+          trial.requestId &&
+          game?.demoCameraRequestId === trial.requestId ? (
             <details>
               <summary>筛选运镜镜头</summary>
               <CameraAudition />

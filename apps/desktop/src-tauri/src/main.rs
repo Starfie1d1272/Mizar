@@ -1210,7 +1210,6 @@ async fn enter_demo_test(
         }
         demo_test::request(&log, "playing", &request_id, None)?;
         drop(cs2);
-        present_production_inner(&host, true)?;
         Ok(camera_trial)
         })
     } })
@@ -1220,6 +1219,54 @@ async fn enter_demo_test(
     }.await;
     diagnostic_log.with_task(diagnostic_task_id.as_deref(), diagnostic_operation_id.as_deref(), diagnostic_trigger.as_deref(), || diagnostic_log.native_outcome("enter_demo_test", diagnostic_operation_id.as_deref(), &diagnostic_result));
     diagnostic_result
+}
+
+#[derive(Default)]
+struct DemoEntryIntent(Mutex<Option<String>>);
+impl DemoEntryIntent {
+    fn begin(&self, id: String) -> Result<(), String> {
+        *self.0.lock().map_err(|_| "试播进入状态不可用。")? = Some(id);
+        Ok(())
+    }
+    fn cancel(&self, id: &str) -> Result<(), String> {
+        let mut current = self.0.lock().map_err(|_| "试播进入状态不可用。")?;
+        if current.as_deref() == Some(id) { *current = None; }
+        Ok(())
+    }
+    fn publish(&self, id: &str, valid_page: impl FnOnce() -> bool, show: impl FnOnce()) -> bool {
+        let mut current = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        if current.as_deref() != Some(id) || !valid_page() { return false; }
+        *current = None;
+        show();
+        true
+    }
+}
+
+#[tauri::command]
+fn begin_demo_entry(window: tauri::WebviewWindow, app: tauri::AppHandle, intent_id: String) -> Result<(), String> {
+    demo_main_window(&window)?;
+    if intent_id.len() != 36 || !intent_id.bytes().all(|c| c.is_ascii_hexdigit() || c == b'-') {
+        return Err("试播进入请求无效。".into());
+    }
+    app.state::<DemoEntryIntent>().begin(intent_id)
+}
+
+#[tauri::command]
+fn cancel_demo_entry(window: tauri::WebviewWindow, app: tauri::AppHandle, intent_id: String) -> Result<(), String> {
+    demo_main_window(&window)?;
+    app.state::<DemoEntryIntent>().cancel(&intent_id)
+}
+
+#[tauri::command]
+async fn present_demo_test(window: tauri::WebviewWindow, app: tauri::AppHandle, request_id: String, expected_url: String, intent_id: String) -> Result<(), String> {
+    demo_main_window(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = demo_test::status(&app.state::<DesktopLog>())?;
+        if state["active"] != true || state["phase"] != "playing" || state["requestId"].as_str() != Some(&request_id) {
+            return Err("试播状态已变化，请重新进入。".into());
+        }
+        present_production_inner_checked(&app, true, Some((expected_url, intent_id)))
+    }).await.map_err(|_| "试播工作台未能打开。".to_string())?
 }
 
 #[tauri::command]
@@ -1243,6 +1290,7 @@ async fn finish_demo_test(
     let host = app.clone();
     tauri::async_runtime::spawn_blocking({ let command_log = command_log.clone(); let native_operation_id = native_operation_id.clone(); let native_task_id = native_task_id.clone(); let native_trigger = native_trigger.clone(); move || {
         command_log.with_task(native_task_id.as_deref(), native_operation_id.as_deref(), native_trigger.as_deref(), || {
+        *host.state::<DemoEntryIntent>().0.lock().map_err(|_| "试播进入状态不可用。")? = None;
         let managed = host.state::<Mutex<managed_cs2::ManagedCs2>>();
         let mut cs2 = managed.lock().map_err(|error| command_log.preserve_error("finish_demo_test", native_operation_id.as_deref(), &error, "CS2 配置状态不可用。"))?;
         let activity = host.state::<cs2_activity::Activity>();
@@ -1556,6 +1604,10 @@ async fn present_production(app: tauri::AppHandle, live: bool, diagnostic_operat
 }
 
 fn present_production_inner(app: &tauri::AppHandle, live: bool) -> Result<(), String> {
+    present_production_inner_checked(app, live, None)
+}
+
+fn present_production_inner_checked(app: &tauri::AppHandle, live: bool, expected_url: Option<(String, String)>) -> Result<(), String> {
     if live {
         let ticket = app.state::<production_exit::ExitGate>().presentation_ticket()?;
         // Capture before window creation/layout work. A later foreground change
@@ -1615,18 +1667,28 @@ fn present_production_inner(app: &tauri::AppHandle, live: bool) -> Result<(), St
         app.run_on_main_thread(move || {
             // Check and publish under the same gate on the actual UI thread.
             // An exit begun during readiness invalidates this callback even after it finishes.
+            let mut valid_intent = true;
             let result = host.state::<production_exit::ExitGate>().publish(ticket, || {
-                host.state::<production_exit::WorkspaceExit>().complete(&Ok(()));
-                show_workspace(&host);
-                if let Some(request) = request {
-                    let focused = attempt_game_focus(&host, request);
-                    host.state::<DesktopLog>().event("workspace_entry_focus",
-                        if focused { "focused" } else { "not_focused" }, None);
-                }
-                if let Some(main) = host.get_webview_window("main") {
-                    let _ = window_presentation::set_visible(&main, false);
-                }
+                let show = || {
+                    host.state::<production_exit::WorkspaceExit>().complete(&Ok(()));
+                    show_workspace(&host);
+                    if let Some(request) = request {
+                        let focused = attempt_game_focus(&host, request);
+                        host.state::<DesktopLog>().event("workspace_entry_focus",
+                            if focused { "focused" } else { "not_focused" }, None);
+                    }
+                    if let Some(main) = host.get_webview_window("main") {
+                        let _ = window_presentation::set_visible(&main, false);
+                    }
+                };
+                if let Some((expected, id)) = &expected_url {
+                    valid_intent = host.state::<DemoEntryIntent>().publish(id, || {
+                        host.get_webview_window("main").and_then(|window| window.url().ok())
+                            .is_some_and(|url| url.as_str() == expected)
+                    }, show);
+                } else { show(); }
             });
+            let result = result.and_then(|()| if valid_intent { Ok(()) } else { Err("进入试播的页面已变化，请重新进入。".into()) });
             let _ = published.send(result);
         }).map_err(|error| error.to_string())?;
         completion.recv().map_err(|_| "现场窗口呈现未能完成，请在准备中心重新进入工作台。".to_string())??;
@@ -2346,6 +2408,7 @@ fn run_desktop(
         .manage(Mutex::new(demo_test::Selection::default()))
         .manage(cs2_activity::Activity::default())
         .manage(production_exit::ExitGate::default())
+        .manage(DemoEntryIntent::default())
         .manage(production_exit::WorkspaceExit::default())
         .manage(production_exit::VerifiedStop::default())
         .manage(updates::PendingUpdate::new(update_stage))
@@ -2386,6 +2449,9 @@ fn run_desktop(
             start_demo_test,
             enter_demo_test,
             resume_demo_test,
+            present_demo_test,
+            begin_demo_entry,
+            cancel_demo_entry,
             finish_demo_test,
             restore_cs2_backup,
             open_cs2_backup,
@@ -3115,6 +3181,22 @@ fn main() {
 #[cfg(test)]
 mod startup_tests {
     use super::*;
+
+    #[test]
+    fn demo_entry_cancellation_and_page_change_block_publication() {
+        let intent = DemoEntryIntent::default();
+        let shown = std::cell::Cell::new(false);
+        intent.begin("first".into()).unwrap();
+        intent.cancel("first").unwrap();
+        assert!(!intent.publish("first", || true, || shown.set(true)));
+        intent.begin("second".into()).unwrap();
+        assert!(!intent.publish("second", || false, || shown.set(true)));
+        intent.begin("third".into()).unwrap();
+        intent.cancel("second").unwrap();
+        assert!(intent.publish("third", || true, || shown.set(true)));
+        assert!(shown.get());
+        assert!(!intent.publish("third", || true, || panic!("entry is one-shot")));
+    }
 
     #[test]
     fn review_capability_matches_the_windows_ipc_origin() {

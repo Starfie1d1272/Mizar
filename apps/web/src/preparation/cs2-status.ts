@@ -8,6 +8,7 @@ export interface Cs2ConfigStatus {
   spectatorRecoveryPending?: boolean;
   nativeHudToggle?: boolean;
   demoCleanupPending?: boolean;
+  demoCameraRequestId?: string | null;
   mulnxLaunchResumable?: boolean;
   observerHudPending?: boolean;
   spectatorWarning?: string | null;
