@@ -412,7 +412,7 @@ export class BoxClient {
       return checkedFetch(
         url,
         { redirect: 'error', signal },
-        600000,
+        180000,
         async (address, options) => {
           idleController = new globalThis.AbortController();
           resetIdle();
@@ -803,7 +803,7 @@ export async function verifyPublicDownloads({ bootstrap }) {
       // A redirect is expected from the shared file page; do not forward credentials.
       response = await fetch(url, {
         redirect: 'manual',
-        signal: AbortSignal.timeout(600000),
+        signal: AbortSignal.timeout(180000),
       });
       if ([301, 302, 303, 307, 308].includes(response.status)) {
         const location = response.headers.get('location');
@@ -1277,7 +1277,7 @@ async function main() {
     const run = await github(`actions/runs/${event.workflow_run.id}`);
     requireValue(
       run.conclusion === 'success' &&
-        run.event === 'workflow_dispatch' &&
+        ['workflow_dispatch', 'workflow_run'].includes(run.event) &&
         run.path === '.github/workflows/release-promotion.yml' &&
         run.repository.full_name === process.env.GITHUB_REPOSITORY,
       '触发来源不是成功的发布晋级',

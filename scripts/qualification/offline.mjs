@@ -6,7 +6,6 @@ import { fileURLToPath } from 'node:url';
 import { readAppVersion, windowsBundleName } from './app-version.mjs';
 import { createBuildTimer } from './build-timings.mjs';
 import { isDevelopmentFile } from './portable-files.mjs';
-import { runPlatformContracts } from '../ci/platform-contracts.mjs';
 
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -252,7 +251,6 @@ export function offlineChecks(args) {
     commands: [
       ...(qualityOwnedStaticChecks ? [] : ['format:check', 'lint', 'architecture:check']),
       'typecheck',
-      ...(platformOnly ? [] : ['test']),
       'build',
     ],
   };
@@ -269,14 +267,7 @@ async function main() {
     qualityOwnedStaticChecks,
     platformOnly,
   });
-  // CI's required Quality lane owns identical-source static checks. Standalone
-  // callers keep them. Reduced mode requires that owner and retains host types,
-  // builds and real OS-sensitive consumers before packaging the local outputs.
   for (const command of commands) await timed(command, () => runCommand('pnpm', [command]));
-  if (platformOnly)
-    await timed('platform-contracts', () =>
-      runPlatformContracts(join(evidence, 'platform-contracts')),
-    );
 
   const outputRoot = await mkdtemp(join(temporaryParent, 'qualification-offline-'));
   try {

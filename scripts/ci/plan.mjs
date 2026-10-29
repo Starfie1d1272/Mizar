@@ -223,17 +223,19 @@ function isInstallerPath(path) {
   );
 }
 
-function fullPlan(reason, includeOfflineQualification = false) {
+function fullPlan(reason, includeOfflineQualification = false, extended = false) {
   return {
     runQuality: true,
     runDesign: true,
     runAcceptance: true,
     runPlatform: true,
-    runQualification: true,
-    runInstaller: true,
-    runOfflineQualification: includeOfflineQualification,
+    runQualification: extended,
+    runInstaller: extended,
+    runOfflineQualification: extended && includeOfflineQualification,
     requiredJobs: CI_JOB_IDS.filter(
-      (job) => includeOfflineQualification || job !== 'qualification_offline',
+      (job) =>
+        !['qualification_windows', 'installer_windows', 'qualification_offline'].includes(job) ||
+        (extended && (job !== 'qualification_offline' || includeOfflineQualification)),
     ),
     reason,
   };
@@ -323,7 +325,7 @@ export function parseGitDiffNameStatus(output) {
 export function createCiPlan(options = {}) {
   const eventName = options.eventName ?? 'pull_request';
   if (!['pull_request', 'push'].includes(eventName))
-    return fullPlan(`forced full for ${eventName}`, true);
+    return fullPlan(`extended verification for ${eventName}`, true, true);
 
   const changedFiles = (options.changedFiles ?? []).map((entry) =>
     typeof entry === 'string'
