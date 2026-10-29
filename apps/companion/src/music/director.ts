@@ -29,6 +29,16 @@ function desiredMonitorType(relationship: MonitorRelationship, wanted: boolean):
     ? 'OBS_MONITORING_TYPE_MONITOR_ONLY'
     : 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT';
 }
+function ownedMonitorApplied(original: MonitorOriginals['bgm']): MonitorType | undefined {
+  if (!original) return undefined;
+  // v1.9.1 stored the pre-mix mode before changing it to monitor-only.
+  return (
+    original.applied ??
+    (original.mode === 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT'
+      ? 'OBS_MONITORING_TYPE_MONITOR_ONLY'
+      : undefined)
+  );
+}
 function isMonitorType(value: unknown): value is MonitorType {
   return (
     value === 'OBS_MONITORING_TYPE_NONE' ||
@@ -599,9 +609,9 @@ export class MusicDirector {
       }
       const desired = desiredMonitorType(relationship, wanted);
       if (
-        isNew
+        isNew && !original
           ? observed !== 'OBS_MONITORING_TYPE_NONE' && observed !== desired
-          : !original?.applied || original.uuid !== uuid || original.applied !== observed
+          : !original || original.uuid !== uuid || ownedMonitorApplied(original) !== observed
       ) {
         // An external edit owns this field; leave it unchanged.
         this.status.monitorPending = wanted;
@@ -668,19 +678,23 @@ export class MusicDirector {
         if (!isMonitorType(mode)) throw new Error('music_monitor_unknown');
         managedMusicUuids.push(uuid);
         if (original && original.uuid !== uuid) throw new Error('music_monitor_source_changed');
-        const held = original?.applied;
+        const held = ownedMonitorApplied(original);
         if (original && (held === undefined || held !== mode)) {
           // A later external edit owns this field; do not replay the backup.
           originals[layer] = null;
           continue;
         }
         if (relationship === 'independent') {
-          if (original && mode !== original.mode)
+          const target =
+            original && !original.applied && this.store.state.monitorPreference === false
+              ? 'OBS_MONITORING_TYPE_NONE'
+              : original?.mode;
+          if (target && mode !== target)
             changes.push({
               kind: 'monitor',
               inputUuid: uuid,
               before: mode,
-              applied: original.mode,
+              applied: target,
             });
           if (original) originals[layer] = null;
           continue;
