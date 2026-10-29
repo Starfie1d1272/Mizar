@@ -1583,7 +1583,14 @@ impl ManagedCs2 {
                     .and_then(|v| u32::try_from(v).ok())
                     .ok_or("CS2 进程记录缺失。")?;
                 let created = value["created"].as_u64().ok_or("CS2 进程记录缺失。")?;
-                if let Err(error) = close_owned_process(&process, pid, created, &self.log) {
+                // Every owned-game exit, including application shutdown and a
+                // failed workbench entry, must pass the same MulNX unload fence.
+                // External sessions have already returned through detach above.
+                let result = crate::production_exit::finish_then_restore(
+                    || self.log.step("cs2_exit_mulnx_unload", || crate::mulnx_launch::stop_managed_for_exit(self, &self.log)),
+                    || close_owned_process(&process, pid, created, &self.log),
+                );
+                if let Err(error) = result {
                     self.message = Some(error.clone());
                     return Err(error);
                 }
