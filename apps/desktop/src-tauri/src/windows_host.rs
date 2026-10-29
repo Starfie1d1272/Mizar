@@ -413,7 +413,7 @@ impl GameTracker {
         let window = self.window?;
         let client = client_rect(window.hwnd)?;
         let foreground = unsafe { GetForegroundWindow() };
-        let workspace_foreground = foreground == window.hwnd || panels.contains(&foreground);
+        let workspace_foreground = foreground != 0 && (foreground == window.hwnd || panels.contains(&foreground));
         overlay_visible(!self.preserve_settings && self.managed && self.overlay_enabled, unsafe { IsIconic(window.hwnd) != 0 }, client, workspace_foreground).then_some(client)
     }
     pub fn restore_focus(&self, source: isize) -> bool {
