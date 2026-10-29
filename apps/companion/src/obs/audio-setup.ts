@@ -476,7 +476,24 @@ export async function prepareIndependentForDesktop(
       throw new Error('audio_binding_changed');
     return binding.inputUuid;
   };
-  let commentary = omitCommentary ? undefined : validateBinding(bindings.remoteCommentary);
+  let commentary =
+    omitCommentary || preference.preference.mode === 'existingInput'
+      ? undefined
+      : validateBinding(bindings.remoteCommentary);
+  if (preference.preference.mode === 'existingInput') {
+    const binding = preference.preference.binding;
+    if (
+      binding.endpoint !== endpoint ||
+      binding.collection !== OBS_COLLECTION ||
+      !inputs.some(
+        (input) =>
+          input.inputUuid === binding.inputUuid &&
+          input.inputKind === 'wasapi_process_output_capture',
+      )
+    )
+      throw new Error('audio_binding_changed');
+    commentary = binding.inputUuid;
+  }
   if (
     commentary &&
     !(await commentaryTargetReady(obs, owner, commentary, expectedCommentaryRevision))

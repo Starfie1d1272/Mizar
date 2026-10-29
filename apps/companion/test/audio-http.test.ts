@@ -15,7 +15,12 @@ import { OBS_COLLECTION, obsDesiredScenes } from '../src/obs/desired-state.js';
 import { RemoteCommentary } from '../src/obs/remote-commentary.js';
 import { registerObsRoutes } from '../src/obs/routes.js';
 import type { GameAudioController } from '../src/obs/audio-policy-controller.js';
-import type { MusicDirector } from '../src/music/director.js';
+import { MusicDirector } from '../src/music/director.js';
+import { MusicStore } from '../src/music/store.js';
+import { registerMusicRoutes } from '../src/music/routes.js';
+import { registerMixerRoutes } from '../src/obs/mixer-routes.js';
+import { OBSWebSocket } from 'obs-websocket-js';
+import type { ObsRpc } from '../src/obs/reconcile.js';
 
 const requireFromObs = createRequire(createRequire(import.meta.url).resolve('obs-websocket-js'));
 const { WebSocketServer } = requireFromObs('ws') as typeof import('ws');
@@ -27,7 +32,16 @@ const { encode, decode } = requireFromObs('@msgpack/msgpack') as {
 test('HTTP audio mode switches all managed scenes while simulated OBS outputs are active', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'mizar-audio-http-'));
   const scenes = obsDesiredScenes('http://127.0.0.1');
-  const inputs = [{ inputUuid: 'mic', inputName: 'mic', inputKind: 'wasapi_input_capture' }];
+  const inputs = [
+    { inputUuid: 'mic', inputName: 'mic', inputKind: 'wasapi_input_capture' },
+    { inputUuid: 'picture', inputName: 'picture', inputKind: 'image_source' },
+  ];
+  const monitorModes = new Map<string, string>();
+  const settings = new Map<string, Record<string, unknown>>([
+    ['mic', { device_id: 'default' }],
+    ['picture', {}],
+  ]);
+  let nextId = 2;
   const items = new Map(
     scenes.map(({ sceneName }) => [
       sceneName,
@@ -70,6 +84,8 @@ test('HTTP audio mode switches all managed scenes while simulated OBS outputs ar
             'GetSceneItemList',
             'GetGroupSceneItemList',
             'CreateInput',
+            'GetInputKindList',
+            'GetInputPropertiesListPropertyItems',
           ],
         };
       else if (type === 'GetStreamStatus' || type === 'GetRecordStatus')
@@ -82,35 +98,75 @@ test('HTTP audio mode switches all managed scenes while simulated OBS outputs ar
         result = { scenes: scenes.map(({ sceneName }) => ({ sceneName })) };
       else if (type === 'GetSceneItemList')
         result = { sceneItems: items.get(data.sceneName as string) };
+      else if (type === 'GetGroupSceneItemList')
+        result = {
+          sceneItems: [
+            {
+              sourceUuid: 'picture',
+              sourceName: 'picture',
+              sceneItemId: 1,
+              sceneItemEnabled: true,
+            },
+          ],
+        };
+      else if (type === 'GetInputKindList')
+        result = { inputKinds: ['wasapi_process_output_capture', 'wasapi_input_capture'] };
+      else if (type === 'GetInputPropertiesListPropertyItems')
+        result = {
+          propertyItems: [
+            { itemValue: 'TeamSpeak:Qt:teamspeak.exe', itemName: 'TeamSpeak', itemEnabled: true },
+          ],
+        };
       else if (type === 'GetInputSettings')
-        result = { inputKind: 'wasapi_output_capture', inputSettings: { device_id: 'default' } };
-      else if (type === 'GetInputDefaultSettings')
+        result = { inputSettings: settings.get(data.inputUuid as string) ?? {} };
+      else if (type === 'SetInputSettings') {
+        const uuid = data.inputUuid as string;
+        Object.assign(settings.get(uuid)!, data.inputSettings);
+        send({
+          op: 5,
+          d: {
+            eventType: 'InputSettingsChanged',
+            eventIntent: 8,
+            eventData: { inputUuid: uuid, inputSettings: settings.get(uuid) },
+          },
+        });
+      } else if (type === 'GetInputDefaultSettings')
         result = { defaultInputSettings: { device_id: 'default' } };
       else if (type === 'GetProfileParameter') result = { parameterValue: 'default' };
+      else if (type === 'GetInputVolume') result = { inputVolumeMul: 0.75 };
+      else if (type === 'GetInputMute') result = { inputMuted: false };
       else if (type === 'GetInputAudioMonitorType')
-        result = { monitorType: 'OBS_MONITORING_TYPE_NONE' };
+        result = {
+          monitorType: monitorModes.get(data.inputUuid as string) ?? 'OBS_MONITORING_TYPE_NONE',
+        };
+      else if (type === 'SetInputAudioMonitorType')
+        monitorModes.set(data.inputUuid as string, data.monitorType as string);
       else if (type === 'CreateInput') {
         const input = {
-          inputUuid: 'desktop',
+          inputUuid: data.inputKind === 'wasapi_output_capture' ? 'desktop' : randomUUID(),
           inputName: data.inputName as string,
-          inputKind: 'wasapi_output_capture',
+          inputKind: data.inputKind as string,
         };
         inputs.push(input);
+        settings.set(input.inputUuid, { ...(data.inputSettings as Record<string, unknown>) });
+        const sceneItemId = nextId++;
         items.get(data.sceneName as string)!.push({
           sourceUuid: input.inputUuid,
           sourceName: input.inputName,
-          sceneItemId: 2,
-          sceneItemEnabled: false,
+          sceneItemId,
+          sceneItemEnabled: data.sceneItemEnabled as boolean,
         });
-        result = { inputUuid: input.inputUuid, sceneItemId: 2 };
+        result = { inputUuid: input.inputUuid, sceneItemId };
       } else if (type === 'CreateSceneItem') {
+        const input = inputs.find((value) => value.inputName === data.sourceName)!;
+        const sceneItemId = nextId++;
         items.get(data.sceneName as string)!.push({
-          sourceUuid: 'desktop',
-          sourceName: data.sourceName as string,
-          sceneItemId: 2,
-          sceneItemEnabled: false,
+          sourceUuid: input.inputUuid,
+          sourceName: input.inputName,
+          sceneItemId,
+          sceneItemEnabled: data.sceneItemEnabled as boolean,
         });
-        result = { sceneItemId: 2 };
+        result = { sceneItemId };
       } else if (type === 'SetSceneItemEnabled') {
         const item = items
           .get(data.sceneName as string)!
@@ -164,8 +220,9 @@ test('HTTP audio mode switches all managed scenes while simulated OBS outputs ar
     }),
   );
   const routing = new ObsAudioRouting(routingPath);
+  const owner = new RemoteCommentary(join(directory, 'commentary'));
   const adapter = new ObsAdapter(config, 'http://127.0.0.1', undefined, routing, {
-    owner: new RemoteCommentary(join(directory, 'commentary')),
+    owner,
     journal: join(directory, 'probe'),
   });
   const music = {
@@ -207,6 +264,17 @@ test('HTTP audio mode switches all managed scenes while simulated OBS outputs ar
   try {
     const address = await app.listen({ host: '127.0.0.1', port: 0 });
     const origin = address;
+    const post = (path: string, body: unknown) =>
+      fetch(`${address}${path}`, {
+        method: 'POST',
+        headers: { origin, 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    const disabled = await post('/operator/obs/remote-commentary', {
+      revision: (await owner.get()).revision,
+      mode: 'disabled',
+    });
+    assert.equal(disabled.status, 200, await disabled.text());
     const response = await fetch(`${address}/operator/obs/audio-mode`, {
       method: 'POST',
       headers: { origin, 'content-type': 'application/json' },
@@ -218,6 +286,36 @@ test('HTTP audio mode switches all managed scenes while simulated OBS outputs ar
       assert.equal(list.find((item) => item.sourceUuid === 'desktop')?.sceneItemEnabled, true);
       assert.equal(list.find((item) => item.sourceUuid === 'mic')?.sceneItemEnabled, true);
     }
+    const independent = await post('/operator/obs/audio-mode', {
+      revision: (await routing.modeRecoveryState()).revision,
+      mode: 'independent',
+    });
+    assert.equal(independent.status, 200, await independent.text());
+    assert.equal((await routing.modeRecoveryState()).independentCommentaryDisabled, true);
+    const enabled = await post('/operator/obs/remote-commentary', {
+      revision: (await owner.get()).revision,
+      mode: 'autoTeamspeak',
+    });
+    assert.equal(enabled.status, 200, await enabled.text());
+    adapter.startAudioModeRecovery(music, gameAudio);
+    const deadline = Date.now() + 3000;
+    while (
+      (await routing.modeRecoveryState()).independentCommentaryDisabled &&
+      Date.now() < deadline
+    )
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    const restored = await routing.modeRecoveryState();
+    assert.equal(restored.independentCommentaryDisabled, false);
+    assert.ok(restored.bindings.remoteCommentary);
+    for (const list of items.values())
+      assert.equal(
+        list.filter(
+          (item) =>
+            item.sourceUuid === restored.bindings.remoteCommentary!.inputUuid &&
+            item.sceneItemEnabled,
+        ).length,
+        1,
+      );
     assert.equal(
       requests.some((type) => /StopStream|StopRecord/.test(type)),
       false,

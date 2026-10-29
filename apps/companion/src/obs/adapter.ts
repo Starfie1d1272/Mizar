@@ -264,6 +264,7 @@ export class ObsAdapter {
       this.audioModeTimer = undefined;
       this.audioModeTask = (async () => {
         await this.recoverAudioMode(music);
+        await this.queueIndependentCommentary();
         const ready = await this.prepareWaitingIndependent();
         if (ready && gameAudio)
           await gameAudio.switchMode(() =>
@@ -720,10 +721,51 @@ export class ObsAdapter {
     );
     return { waiting: false, ...result };
   }
+  private async queueIndependentCommentary(): Promise<void> {
+    if (!this.audioRouting || !this.commentary) return;
+    const initial = await this.audioRouting.modeRecoveryState();
+    if (
+      initial.desktop ||
+      !initial.independentCommentaryDisabled ||
+      initial.transition ||
+      initial.waitingIndependent
+    )
+      return;
+    const preference = await this.commentary.owner.get();
+    if (preference.preference.mode === 'disabled') return;
+    await this.configurationMutation(() =>
+      this.audioConfiguration.run(async (obs, endpoint) => {
+        const current = await this.audioRouting!.modeRecoveryState();
+        if (
+          current.revision !== initial.revision ||
+          current.desktop ||
+          current.transition ||
+          current.waitingIndependent ||
+          !current.independentCommentaryDisabled ||
+          (await this.commentary!.owner.get()).revision !== preference.revision
+        )
+          return;
+        const collection = (await obs.call('GetSceneCollectionList')).currentSceneCollectionName;
+        if (typeof collection !== 'string') throw new Error('audio_setup_context_changed');
+        await this.audioRouting!.waitForIndependent(
+          current.revision,
+          endpoint,
+          collection,
+          preference.revision,
+          false,
+        );
+      }),
+    );
+  }
   private async prepareWaitingIndependent(): Promise<{ id: string; revision: string } | null> {
     if (!this.audioRouting || !this.commentary) return null;
     const initial = await this.audioRouting.modeRecoveryState();
-    if (!initial.waitingIndependent || initial.transition || !initial.desktop) return null;
+    if (
+      !initial.waitingIndependent ||
+      initial.transition ||
+      (!initial.desktop && !initial.independentCommentaryDisabled)
+    )
+      return null;
     return this.configurationMutation(() =>
       this.audioConfiguration.run(async (obs, endpoint, observer) => {
         const state = await this.audioRouting!.modeRecoveryState();
@@ -732,7 +774,7 @@ export class ObsAdapter {
           !wait ||
           wait.id !== initial.waitingIndependent!.id ||
           state.transition ||
-          !state.desktop
+          (!state.desktop && !state.independentCommentaryDisabled)
         )
           return null;
         const preference = await this.commentary!.owner.get();

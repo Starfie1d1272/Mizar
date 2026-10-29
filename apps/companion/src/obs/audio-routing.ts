@@ -362,22 +362,40 @@ export class ObsAudioRouting {
       )
     )
       return false;
-    for (const scene of obsDesiredScenes('http://127.0.0.1:3000')) {
-      const items = records(
-        (await obs.call('GetSceneItemList', { sceneName: scene.sceneName })).sceneItems,
-      );
+    const scenes = obsDesiredScenes('http://127.0.0.1:3000');
+    const graph = await inspectAudioSceneGraph(
+      obs,
+      scenes.map((scene) => scene.sceneName),
+    );
+    const containers = new Map(
+      graph.map((container) => [
+        `${container.group ? 'group' : 'scene'}\0${container.name}`,
+        container,
+      ]),
+    );
+    const activeItems = (name: string, group: boolean): (typeof graph)[number]['items'] => {
+      const container = containers.get(`${group ? 'group' : 'scene'}\0${name}`);
+      if (!container) throw new Error('audio_scene_items_unknown');
+      return container.items.flatMap((item) => {
+        if (!item.sceneItemEnabled) return [];
+        if (item.isGroup === true || item.sourceType === 'OBS_SOURCE_TYPE_SCENE')
+          return activeItems(item.sourceName, item.isGroup === true);
+        return [item];
+      });
+    };
+    for (const scene of scenes) {
+      const items = activeItems(scene.sceneName, false);
       if (
         selectedIds.some(
           (id) =>
             !globalNames.has(String(inputs.find((input) => input.inputUuid === id)?.inputName)) &&
-            items.filter((i) => i.sourceUuid === id && i.sceneItemEnabled === true).length !== 1,
+            !items.some((i) => i.sourceUuid === id && i.sceneItemEnabled === true),
         )
       )
         return false;
       for (const item of items) {
         if (typeof item.sceneItemEnabled !== 'boolean') return false;
         if (item.sceneItemEnabled !== true) continue;
-        if (item.isGroup === true || item.sourceType === 'OBS_SOURCE_TYPE_SCENE') return false;
         const input = inputs.find((i) => i.inputUuid === item.sourceUuid);
         if (!input) return false;
         const selected = selectedIds.includes(String(input.inputUuid));
@@ -557,10 +575,10 @@ export class ObsAudioRouting {
     const state = await this.load();
     if (state.revision !== revision) throw new Error('audio_revision_changed');
     if (
-      !state.desktop ||
       state.transition ||
-      state.desktop.endpoint !== endpoint ||
-      state.desktop.collection !== collection
+      (!state.desktop && !state.independentCommentaryDisabled) ||
+      (state.desktop &&
+        (state.desktop.endpoint !== endpoint || state.desktop.collection !== collection))
     )
       throw new Error('audio_mode_pending');
     const existing = state.waitingIndependent;
@@ -601,7 +619,7 @@ export class ObsAudioRouting {
       state.revision !== revision ||
       state.waitingIndependent?.id !== waitId ||
       state.transition ||
-      !state.desktop
+      (!state.desktop && !state.independentCommentaryDisabled)
     )
       throw new Error('audio_revision_changed');
     const current = await this.inputs(obs);
@@ -622,13 +640,17 @@ export class ObsAudioRouting {
       const existing = bindings[role];
       if (
         existing &&
+        !(role === 'remoteCommentary' && !state.desktop && state.independentCommentaryDisabled) &&
         (existing.inputUuid !== input.inputUuid ||
           existing.inputKind !== input.inputKind ||
           existing.endpoint !== endpoint ||
           existing.collection !== current.collection)
       )
         throw new Error('audio_binding_changed');
-      if (!existing)
+      if (
+        !existing ||
+        (role === 'remoteCommentary' && !state.desktop && state.independentCommentaryDisabled)
+      )
         bindings[role] = {
           inputUuid: input.inputUuid,
           inputKind: input.inputKind,

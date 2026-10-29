@@ -260,6 +260,33 @@ test('missing commentary waits without changing the live mix, then resumes or ca
             ).length,
             1,
           );
+        assert.equal((await routing.modeRecoveryState()).independentCommentaryDisabled, true);
+        teamspeak = true;
+        await adapter.setCommentaryMode('autoTeamspeak', (await owner.get()).revision);
+        const gameAudio = {
+          async switchMode<T>(run: () => Promise<T>) {
+            return run();
+          },
+        } as unknown as GameAudioController;
+        adapter.startAudioModeRecovery(music, gameAudio);
+        const deadline = Date.now() + 3000;
+        while (
+          (await routing.modeRecoveryState()).independentCommentaryDisabled &&
+          Date.now() < deadline
+        )
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        const reenabled = await routing.modeRecoveryState();
+        assert.equal(reenabled.independentCommentaryDisabled, false);
+        assert.ok(reenabled.bindings.remoteCommentary);
+        for (const list of lists.values())
+          assert.equal(
+            list.filter(
+              (item) =>
+                item.sourceUuid === reenabled.bindings.remoteCommentary!.inputUuid &&
+                item.sceneItemEnabled,
+            ).length,
+            1,
+          );
         await adapter.close();
         continue;
       }
