@@ -781,6 +781,10 @@ export class ProjectionCoordinator {
       }),
     );
   }
+  resetObserverAssist(): void {
+    this.observerTimeline.clear();
+    this.refreshAssist();
+  }
   private refreshOperator(): ProjectionBundle {
     if (this.closed || this.refreshing) return this.current;
     this.refreshing = true;

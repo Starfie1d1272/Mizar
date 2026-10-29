@@ -15,13 +15,15 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 
-type SettingsChange = 'settings' | 'lead' | 'enabled' | 'game' | 'connection';
+type SettingsChange = 'settings' | 'lead' | 'enabled' | 'game' | 'connection' | 'map';
 
 /** Persist operator preferences; the current match's credentials stay in memory. */
 export class ObserverSettingsStore {
   settings: ObserverSettings = { ...DEFAULT_OBSERVER_SETTINGS };
   gameAutomation: GameAutomationSettings = { ...DEFAULT_GAME_AUTOMATION_SETTINGS };
   private connection: ObserverConnection | undefined;
+  mapConnection: { id: string; mode: 'connect' | 'seamless'; nextMap: boolean } | undefined;
+  waitingForMap = false;
   revision = randomUUID();
   private listeners = new Set<(kind: SettingsChange) => void>();
   private writing = Promise.resolve();
@@ -54,6 +56,8 @@ export class ObserverSettingsStore {
       settings: this.settings,
       gameAutomation: this.gameAutomation,
       revision: this.revision,
+      mapConnection: this.mapConnection ?? null,
+      waitingForMap: this.waitingForMap,
       connection: this.connection
         ? {
             earlyEndpoint: this.connection.earlyEndpoint,
@@ -99,11 +103,36 @@ export class ObserverSettingsStore {
     const connection = observerConnectionSchema.parse(value);
     if (JSON.stringify(this.connection) === JSON.stringify(connection)) return;
     this.connection = connection;
+    this.mapConnection = undefined;
+    this.waitingForMap = false;
     this.changed('connection');
+  }
+  setMapConnection(
+    id: string,
+    mode: 'connect' | 'seamless',
+    value?: ObserverConnection,
+    nextMap = false,
+  ) {
+    if (this.mapConnection?.id === id) return;
+    const connection = value ? observerConnectionSchema.parse(value) : this.connection;
+    if (!connection) throw new Error('connection_required');
+    if (mode === 'seamless' && JSON.stringify(connection) !== JSON.stringify(this.connection))
+      throw new Error('seamless_connection_changed');
+    this.connection = connection;
+    this.mapConnection = { id, mode, nextMap: nextMap || mode === 'seamless' };
+    this.changed('map');
   }
   clearConnection() {
     if (!this.connection) return;
     this.connection = undefined;
+    this.mapConnection = undefined;
+    this.waitingForMap = false;
+    this.changed('connection');
+  }
+  endProduction() {
+    if (!this.mapConnection && !this.waitingForMap) return;
+    this.mapConnection = undefined;
+    this.waitingForMap = false;
     this.changed('connection');
   }
   subscribe(listener: (kind: SettingsChange) => void) {
@@ -134,6 +163,14 @@ export function registerObserverSettings(
       connection: observerConnectionSchema,
       expectedRevision: z.uuid().optional(),
     }),
+    z.strictObject({
+      action: z.literal('map-connection'),
+      id: z.uuid(),
+      mode: z.enum(['connect', 'seamless']),
+      nextMap: z.boolean().default(false),
+      connection: observerConnectionSchema.optional(),
+      expectedRevision: z.uuid(),
+    }),
     z.strictObject({ action: z.literal('configure-game'), settings: gameAutomationSettingsSchema }),
   ]);
   app.post('/operator/observer-assist', { bodyLimit: 4096 }, async (request, reply) => {
@@ -150,7 +187,18 @@ export function registerObserverSettings(
         return reply
           .code(409)
           .send({ message: '本场连接或比赛已变化，请重新打开本场连接后确认。' });
-      store.setConnection(parsed.data.connection);
+      if (parsed.data.action === 'map-connection') {
+        try {
+          store.setMapConnection(
+            parsed.data.id,
+            parsed.data.mode,
+            parsed.data.connection,
+            parsed.data.nextMap,
+          );
+        } catch {
+          return reply.code(400).send({ message: '请填写本图连接；无缝换图只能沿用已有连接。' });
+        }
+      } else store.setConnection(parsed.data.connection);
     }
     return store.view();
   });

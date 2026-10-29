@@ -16,17 +16,21 @@ export function MatchConnectionControl() {
   const lock = useRef(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const status = runtime?.pending
-    ? '连接中'
-    : runtime?.error || runtime?.failed
-      ? '连接失败，可重试'
-      : runtime?.programCommandQueued
-        ? '节目命令已提交'
-        : runtime?.active
-          ? '早源已启动'
-          : view?.connection
-            ? '待连接'
-            : '未连接';
+  const status = view?.waitingForMap
+    ? '等待新图数据'
+    : runtime?.pending
+      ? '连接中'
+      : runtime?.error || runtime?.failed
+        ? '连接失败，可重试'
+        : runtime?.programCommandQueued
+          ? '节目命令已提交'
+          : view?.mapConnection?.mode === 'seamless'
+            ? '保持现有连接'
+            : runtime?.active
+              ? '早源已启动'
+              : view?.connection
+                ? '待连接'
+                : '未连接';
   return (
     <>
       <Button

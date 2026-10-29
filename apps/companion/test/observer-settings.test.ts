@@ -114,6 +114,48 @@ it('rejects a stale workbench draft after the current match connection changes',
   }
 });
 
+it('confirms a map with the saved private connection and keeps retries idempotent', async () => {
+  const app = Fastify(),
+    store = new ObserverSettingsStore();
+  registerObserverSettings(app, store, {
+    mode: 'loopback',
+    bindHost: '127.0.0.1',
+    allowedOrigins: [],
+  });
+  const connection = {
+    earlyEndpoint: '127.0.0.1:27025',
+    programEndpoint: '127.0.0.1:27026',
+    password: 'synthetic',
+  };
+  store.setConnection(connection);
+  const id = crypto.randomUUID();
+  const write = (revision: string, mode: string, value?: typeof connection) =>
+    app.inject({
+      method: 'POST',
+      url: '/operator/observer-assist',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: {
+        action: 'map-connection',
+        id,
+        mode,
+        expectedRevision: revision,
+        ...(value ? { connection: value } : {}),
+      },
+    });
+  try {
+    expect((await write(store.revision, 'connect')).statusCode).toBe(200);
+    const revision = store.revision;
+    expect((await write(revision, 'connect')).statusCode).toBe(200);
+    expect(store.revision).toBe(revision);
+    expect(JSON.stringify((await app.inject('/local/v1/observer-assist')).json())).not.toContain(
+      'synthetic',
+    );
+    expect(store.configured()).toEqual(connection);
+  } finally {
+    await app.close();
+  }
+});
+
 it('keeps equivalent saves idempotent and timing separate from Host preparation revisions', async () => {
   const store = new ObserverSettingsStore();
   const changes: string[] = [];

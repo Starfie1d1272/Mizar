@@ -22,6 +22,7 @@ import { NativeSource } from './support/native-source.js';
 import { ProgramChat } from './projections/program-chat.js';
 import { MusicStore } from './music/store.js';
 import { MusicDirector } from './music/director.js';
+import { musicMapKey } from './music/cues.js';
 import { ObsMusicProvider } from './music/obs-provider.js';
 import { registerMusicRoutes } from './music/routes.js';
 import {
@@ -621,6 +622,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     );
   };
   let observerMatchId: string | null | undefined;
+  let confirmedObserverMap: string | undefined;
+  let waitingObserverMap: string | undefined;
   let observerDiagnosticKey = '';
   let observerDiagnosticLoggedAt = -Infinity;
   const projectionCoordinator =
@@ -628,7 +631,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     createProjectionCoordinator({
       observerSettings: () => ({
         ...observerSettings.settings,
-        enabled: observerSettings.settings.enabled && observerEligible(),
+        enabled: observerSettings.settings.enabled && observerEligible() && !waitingObserverMap,
       }),
       programChat: (cursor, fresh) => programChat.view(cursor, fresh),
       ...(options.steamAvatars ? { avatars: options.steamAvatars } : {}),
@@ -658,9 +661,21 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       onDiagnostic: ({ code }) =>
         recordRuntimeDiagnostic(code, 'projection', projectionDiagnosticDegradesRuntime(code)),
       onProjection: (bundle) => {
+        if (
+          waitingObserverMap &&
+          bundle.program.map.name &&
+          musicMapKey(bundle.program) !== waitingObserverMap
+        ) {
+          waitingObserverMap = undefined;
+          confirmedObserverMap = musicMapKey(bundle.program);
+          observerSettings.waitingForMap = false;
+          projectionCoordinator.resetObserverAssist();
+        }
         const matchId = bundle.program.match?.matchId ?? null;
-        if (observerMatchId !== undefined && observerMatchId !== matchId)
+        if (observerMatchId !== undefined && observerMatchId !== matchId) {
           observerSettings.clearConnection();
+          confirmedObserverMap = waitingObserverMap = undefined;
+        }
         observerMatchId = matchId;
         outputService.setCurrent(bundle, outputBinding);
       },
@@ -996,7 +1011,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       matchContextController?.getActiveBinding() != null,
     scenes: sceneController,
     beforeEnter: () => demoTest?.openFormalBoundary(),
-    beforeFinish: () => cameraDirector?.finishProduction(),
+    beforeFinish: () => {
+      cameraDirector?.finishProduction();
+      observerSettings.endProduction();
+    },
     finishTrial: async () => {
       await demoTest?.finish();
     },
@@ -1210,6 +1228,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         active: sceneController.get().active,
         production:
           production.get().mode !== 'preparation' &&
+          !waitingObserverMap &&
           projectionCoordinator.getCurrent().operator.matchContext.origin !== 'fixture',
         manual: director.get().mode === 'manual',
         demoAudition:
@@ -1363,7 +1382,21 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     !demoTest.get().active;
   registerObserverSettings(app, observerSettings, localWebTransport.getOriginPolicy());
   const observerSettingsUnsubscribe = observerSettings.subscribe((kind) => {
-    if (kind !== 'game') projectionCoordinator.refreshAssist();
+    if (kind === 'map') {
+      const program = projectionCoordinator.getCurrent().program;
+      const currentMap = program.map.name ? musicMapKey(program) : undefined;
+      waitingObserverMap =
+        observerSettings.mapConnection?.nextMap && currentMap && currentMap === confirmedObserverMap
+          ? currentMap
+          : undefined;
+      confirmedObserverMap = currentMap;
+      observerSettings.waitingForMap = Boolean(waitingObserverMap);
+      cameraDirector?.hold('本图连接已变更，请核对当前地图与运镜包。');
+      projectionCoordinator.resetObserverAssist();
+    } else if (kind !== 'game') {
+      if (kind === 'connection') confirmedObserverMap = waitingObserverMap = undefined;
+      projectionCoordinator.refreshAssist();
+    }
   });
   app.addHook('onClose', () => {
     observerSettingsUnsubscribe();

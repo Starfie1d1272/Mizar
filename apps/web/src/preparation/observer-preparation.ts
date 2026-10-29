@@ -4,6 +4,8 @@ export type ConnectionPreparationView = {
   settings: ObserverSettings;
   gameAutomation?: GameAutomationSettings;
   connection: { earlyEndpoint: string; programEndpoint: string } | null;
+  mapConnection?: { id: string; mode: 'connect' | 'seamless' } | null;
+  waitingForMap?: boolean;
   gameRunning?: boolean;
 };
 /** Refuse incomplete replies rather than silently dropping the concurrency guard. */
