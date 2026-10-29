@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import type { BroadcastConfigDocument } from '@mizar/broadcast-config';
+import type { BroadcastConfigDocument, ModuleRecord } from '@mizar/broadcast-config';
 import { buildApp } from '../../src/app.js';
 
 it('reports pending migration without exposing or changing legacy settings', async () => {
@@ -123,6 +123,93 @@ it('boots built-in providers without custom injection when legacy dependencies a
         accent: { source: 'fixed' },
       },
     });
+    const modules = (await app.inject('/local/v1/broadcast-modules')).json<{
+      modules: Array<{ module: { id: string; kind: string; revision: string }; builtin: boolean }>;
+    }>().modules;
+    expect(modules.filter((item) => item.builtin && item.module.kind === 'hud')).toHaveLength(5);
+    expect(modules.filter((item) => item.builtin && item.module.kind === 'program')).toHaveLength(
+      1,
+    );
+    const original = modules.find((item) => item.builtin && item.module.kind === 'hud')!.module;
+    const post = (action: string, payload: object) =>
+      app.inject({
+        method: 'POST',
+        url: `/operator/broadcast-modules/${action}`,
+        headers: { origin: 'http://127.0.0.1:3000' },
+        payload,
+      });
+    expect(
+      (await post('delete', { moduleId: original.id, expectedRevision: original.revision }))
+        .statusCode,
+    ).toBe(409);
+    const cloned = await post('clone', {
+      moduleId: original.id,
+      expectedRevision: original.revision,
+      name: '我的 HUD',
+    });
+    expect(cloned.statusCode).toBe(200);
+    const copy = cloned.json<{ id: string; revision: string }>();
+    const otherResponse = await post('clone', {
+      moduleId: original.id,
+      expectedRevision: original.revision,
+      name: '另一 HUD',
+    });
+    const other = otherResponse.json<ModuleRecord>();
+    const drafts = (
+      await app.inject('/local/v1/broadcast-presets')
+    ).json<BroadcastConfigDocument>();
+    const first = drafts.modules.find((module) => module.id === copy.id)!;
+    if (
+      first.kind !== 'hud' ||
+      !('preset' in first.value) ||
+      other.kind !== 'hud' ||
+      !('preset' in other.value)
+    )
+      throw new Error('expected native HUD');
+    other.value.layout.id = first.value.layout.id;
+    other.value.preset.layoutId = first.value.layout.id;
+    other.value.layout.widgets.radar.offsetX += 1;
+    expect(
+      (await post('save', { value: other, expectedRevision: other.revision })).statusCode,
+    ).toBe(409);
+    const unchanged = (
+      await app.inject('/local/v1/broadcast-presets')
+    ).json<BroadcastConfigDocument>();
+    expect(unchanged.modules.find((item) => item.id === other.id)?.revision).toBe(other.revision);
+    expect(
+      (await post('delete', { moduleId: other.id, expectedRevision: other.revision })).statusCode,
+    ).toBe(200);
+    const before = (await app.inject('/local/v1/broadcast-presets')).json<BroadcastConfigDocument>()
+      .active;
+    const { randomUUID } = await import('node:crypto');
+    const applied = await post('apply', {
+      moduleId: copy.id,
+      expectedRevision: copy.revision,
+      expectedActiveRevision: before.revision,
+      requestId: randomUUID(),
+    });
+    expect(applied.statusCode).toBe(200);
+    const active = applied.json<BroadcastConfigDocument['active']>();
+    expect(active.sourceModuleIds?.hud).toBe(copy.id);
+    expect(active.moduleRevisions.music).toBe(before.moduleRevisions.music);
+    expect(active.moduleRevisions.camera).toBe(before.moduleRevisions.camera);
+    expect(
+      (await post('delete', { moduleId: copy.id, expectedRevision: copy.revision })).statusCode,
+    ).toBe(409);
+    expect(
+      (
+        await post('apply', {
+          moduleId: original.id,
+          expectedRevision: original.revision,
+          expectedActiveRevision: active.revision,
+          requestId: randomUUID(),
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(
+      (await post('delete', { moduleId: copy.id, expectedRevision: copy.revision })).statusCode,
+    ).toBe(200);
+    expect(hud.getState().document.customPresets).toHaveLength(0);
   } finally {
     await app.close();
     await rm(root, { recursive: true, force: true });
@@ -204,7 +291,7 @@ it('preserves the existing music owner state during built-in production migratio
   }
 });
 
-it('leaves real legacy files in place when a camera source cannot yet be verified', async () => {
+it('preserves legacy camera data while allowing HUD use when its source is unavailable', async () => {
   const { mkdtemp, readFile, rm, stat } = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
@@ -228,11 +315,165 @@ it('leaves real legacy files in place when a camera source cannot yet be verifie
       state: 'pending',
       reason: 'camera_identity_unavailable',
     });
-    expect((await app.inject('/local/v1/broadcast-display-config')).statusCode).toBe(503);
+    expect((await app.inject('/local/v1/broadcast-display-config')).statusCode).toBe(200);
     expect(await readFile(join(camera.directory, 'presets.json'), 'utf8')).toBe(oldState);
-    await expect(stat(join(root, 'broadcast-config.json'))).rejects.toMatchObject({
-      code: 'ENOENT',
+    expect((await stat(join(root, 'broadcast-config.json'))).isFile()).toBe(true);
+    const pending = (await app.inject('/local/v1/broadcast-config/pending-camera')).json();
+    expect(pending.pending.catalog.preset.maps[0]).toMatchObject({
+      map: 'de_mirage',
+      pack: 'Mizar_test',
     });
+    const modules = (await app.inject('/local/v1/broadcast-modules')).json<{
+      modules: Array<{ module: ModuleRecord }>;
+    }>().modules;
+    const hudModule = modules.find(({ module }) => module.kind === 'hud')!.module;
+    const document = (
+      await app.inject('/local/v1/broadcast-presets')
+    ).json<BroadcastConfigDocument>();
+    expect(document.active.resolved.camera).toBeNull();
+    const { randomUUID } = await import('node:crypto');
+    const address = await app.listen({ host: '127.0.0.1', port: 0 });
+    expect((await fetch(`${address}/local/v1/broadcast-modules`)).status).toBe(200);
+    const applied = await fetch(`${address}/operator/broadcast-modules/apply`, {
+      method: 'POST',
+      headers: { origin: 'http://127.0.0.1:3000', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        moduleId: hudModule.id,
+        expectedRevision: hudModule.revision,
+        expectedActiveRevision: document.active.revision,
+        requestId: randomUUID(),
+      }),
+    });
+    expect(applied.status).toBe(200);
+    const recovery = await fetch(`${address}/operator/broadcast-config/pending-camera/restore`, {
+      method: 'POST',
+      headers: { origin: 'http://127.0.0.1:3000', 'content-type': 'application/json' },
+      body: '{}',
+    });
+    expect(recovery.status).toBe(503);
+    await app.close();
+    const resumedHud = new HudConfigStore();
+    await resumedHud.load();
+    const resumed = buildApp({ obsConfigPath: join(root, 'obs.json'), hudConfigStore: resumedHud });
+    try {
+      const resumedAddress = await resumed.listen({ host: '127.0.0.1', port: 0 });
+      expect((await fetch(`${resumedAddress}/local/v1/broadcast-modules`)).status).toBe(200);
+      const restored = (await (
+        await fetch(`${resumedAddress}/local/v1/broadcast-config/pending-camera`)
+      ).json()) as { pending: { catalog: { preset: { maps: Array<{ pack: string }> } } } };
+      expect(restored.pending.catalog.preset.maps[0]!.pack).toBe('Mizar_test');
+    } finally {
+      await resumed.close();
+    }
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it('keeps an existing active camera snapshot when MulNX disappears and still applies a HUD', async () => {
+  const { mkdtemp, readFile, writeFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { randomUUID } = await import('node:crypto');
+  const { HudConfigStore } = await import('../../src/hud-config/store.js');
+  const root = await mkdtemp(join(tmpdir(), 'broadcast-missing-tool-'));
+  const makeApp = async () => {
+    const hud = new HudConfigStore();
+    await hud.load();
+    return buildApp({ obsConfigPath: join(root, 'obs.json'), hudConfigStore: hud });
+  };
+  const initial = await makeApp();
+  try {
+    expect((await initial.inject('/local/v1/broadcast-modules')).statusCode).toBe(200);
+  } finally {
+    await initial.close();
+  }
+  const path = join(root, 'broadcast-config.json');
+  const envelope = JSON.parse(await readFile(path, 'utf8'));
+  const id = randomUUID();
+  const release = {
+    repository: 'Co1Swet/MulNX_CS2',
+    releaseId: 1,
+    assetId: 2,
+    tag: 'v1',
+    archiveSha256: 'b'.repeat(64),
+  };
+  const tool = { kind: 'upstream', release };
+  const source = {
+    sourceName: 'missing',
+    treeSha256: 'a'.repeat(64),
+    converterVersion: 1,
+    acquisition: tool,
+  };
+  const map = {
+    map: 'de_mirage',
+    source,
+    opening: null,
+    openingSound: null,
+    rounds: [],
+    pauseCandidates: { tactical: [], technical: [] },
+    stages: {
+      warmup: null,
+      tactical: null,
+      technical: null,
+      halftime: null,
+      mapVictory: null,
+      matchVictory: null,
+    },
+  };
+  const value = {
+    format: 'mizar.camera-config',
+    version: 2,
+    name: 'Camera',
+    automaticEnabled: true,
+    maps: [map],
+  };
+  const module = {
+    id,
+    revision: randomUUID(),
+    kind: 'camera',
+    schemaVersion: 2,
+    name: 'Camera',
+    value,
+    origin: null,
+  };
+  envelope.document.modules.push(module);
+  envelope.document.presets[0].bindings = envelope.document.presets[0].bindings.map(
+    (binding: { kind: string }) =>
+      binding.kind === 'camera' ? { kind: 'camera', mode: 'use', moduleId: id } : binding,
+  );
+  envelope.document.active.resolved.camera = value;
+  envelope.document.active.sourceModuleIds.camera = id;
+  envelope.document.active.sourceModuleRevisions.camera = module.revision;
+  envelope.document.active.lock.tools = [tool];
+  await writeFile(path, JSON.stringify(envelope));
+  const app = await makeApp();
+  try {
+    const address = await app.listen({ host: '127.0.0.1', port: 0 });
+    const list = await fetch(`${address}/local/v1/broadcast-modules`);
+    expect(list.status).toBe(200);
+    const data = (await list.json()) as { modules: Array<{ module: ModuleRecord }> };
+    const hud = data.modules.find((entry) => entry.module.kind === 'hud')!.module;
+    const document = (await (
+      await fetch(`${address}/local/v1/broadcast-presets`)
+    ).json()) as BroadcastConfigDocument;
+    expect(document.active.resolved.camera).toEqual(value);
+    const response = await fetch(`${address}/operator/broadcast-modules/apply`, {
+      method: 'POST',
+      headers: { origin: 'http://127.0.0.1:3000', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        moduleId: hud.id,
+        expectedRevision: hud.revision,
+        expectedActiveRevision: document.active.revision,
+        requestId: randomUUID(),
+      }),
+    });
+    expect(response.status).toBe(200);
+    const applied = (await response.json()) as BroadcastConfigDocument['active'];
+    expect(applied.resolved.camera).toEqual(value);
+    expect(applied.lock.tools).toEqual([tool]);
+    expect((await fetch(`${address}/local/v1/broadcast-config/migration`)).status).toBe(200);
   } finally {
     await app.close();
     await rm(root, { recursive: true, force: true });

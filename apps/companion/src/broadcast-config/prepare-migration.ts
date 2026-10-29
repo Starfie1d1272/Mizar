@@ -11,9 +11,10 @@ import type { MusicStore } from '../music/store.js';
 import type { OrchestrationStore } from '../orchestration/store.js';
 import { migrateLegacyBroadcast, type LegacyBroadcastMigration } from './migrate.js';
 import { portableMusicConfig } from './music-assets.js';
+import type { PendingLegacyCamera } from './store.js';
 
 export type PreparedLegacyMigration =
-  | { state: 'ready'; document: BroadcastConfigDocument }
+  | { state: 'ready'; document: BroadcastConfigDocument; pendingLegacyCamera?: PendingLegacyCamera }
   | {
       state: 'pending';
       reason: 'owner_unavailable' | 'camera_identity_unavailable' | 'dependency_unavailable';
@@ -38,8 +39,6 @@ export async function prepareLegacyMigration(input: {
   const hasCameraSource =
     input.camera.preset.maps.length > 0 ||
     input.camera.presets.some((item) => item.preset.maps.length > 0);
-  if (hasCameraSource && (!input.cameraConfig || !input.lock))
-    return { state: 'pending', reason: 'camera_identity_unavailable' };
   const emptyCamera: LegacyBroadcastMigration['cameraConfig'] = (preset, automaticEnabled) =>
     Promise.resolve({
       format: 'mizar.camera-config',
@@ -58,8 +57,8 @@ export async function prepareLegacyMigration(input: {
           refs.set(canonicalJson(track.asset.resource), track.asset.resource);
     return Promise.resolve({ resources: [...refs.values()], tools: [] });
   };
-  try {
-    const document = await migrateLegacyBroadcast({
+  const migrate = (skipCamera: boolean) =>
+    migrateLegacyBroadcast({
       hud: input.hud,
       music: input.music.state.config,
       musicRevision: input.music.state.configRevision,
@@ -72,9 +71,33 @@ export async function prepareLegacyMigration(input: {
       musicConfig: (value) => portableMusicConfig(input.music, value, input.musicAutomaticEnabled),
       cameraConfig: input.cameraConfig ?? emptyCamera,
       lock: input.lock ?? localLock,
+      skipCamera,
     });
-    return { state: 'ready', document };
+  try {
+    if (hasCameraSource && (!input.cameraConfig || !input.lock))
+      throw new Error('camera_identity_unavailable');
+    return { state: 'ready', document: await migrate(false) };
   } catch (error) {
+    if (hasCameraSource) {
+      try {
+        const document = await migrate(true);
+        return {
+          state: 'ready',
+          document,
+          pendingLegacyCamera: {
+            catalog: {
+              presets: structuredClone(input.camera.presets),
+              activePresetId: input.camera.activePresetId,
+              preset: structuredClone(input.camera.preset),
+            },
+            automaticEnabled: input.camera.automaticEnabled,
+            reason: 'camera_identity_unavailable',
+          },
+        };
+      } catch {
+        // A non-camera dependency is unavailable too; retain the legacy owners.
+      }
+    }
     return {
       state: 'pending',
       reason:

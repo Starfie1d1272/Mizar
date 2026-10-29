@@ -22,9 +22,14 @@ import {
 import {
   clonePreset,
   type BroadcastConfigDocument,
+  type ModuleRecord,
   type ProgramVisualConfigV1,
 } from '@mizar/broadcast-config';
 import { BroadcastConfigStore } from '../../src/broadcast-config/store.js';
+import {
+  addMissingBuiltinModules,
+  createBuiltinModules,
+} from '../../src/broadcast-config/builtin-modules.js';
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -143,9 +148,122 @@ async function setup() {
   };
   const store = new BroadcastConfigStore(options);
   await store.load();
-  return { store, options, initial };
+  return { store, options, initial: store.snapshot };
 }
 describe('BroadcastConfigStore', () => {
+  it('retains a failed legacy camera recovery and commits verified drafts once without applying them', async () => {
+    const { options, initial } = await setup();
+    const { emptyOrchestrationPreset } = await import('@mizar/protocol/orchestration');
+    const preset = emptyOrchestrationPreset();
+    const id = randomUUID();
+    const pending = {
+      catalog: { activePresetId: id, preset, presets: [{ id, preset }] },
+      automaticEnabled: true,
+      reason: 'camera_identity_unavailable' as const,
+    };
+    let available = false;
+    const recoveryOptions = {
+      ...options,
+      filePath: pathJoin(dirname(options.filePath), 'recovery.json'),
+      createInitial: () => Promise.resolve(initial),
+      initialPendingLegacyCamera: () => pending,
+      resolveModule: async (module: ModuleRecord) => {
+        if (!available) throw new Error('camera_identity_unavailable');
+        return { value: module.value as never, lock: { resources: [], tools: [] } };
+      },
+    };
+    const store = new BroadcastConfigStore(recoveryOptions);
+    await store.load();
+    const convert = (value: typeof preset, automaticEnabled: boolean) =>
+      Promise.resolve({
+        format: 'mizar.camera-config' as const,
+        version: 2 as const,
+        name: value.name,
+        maps: [],
+        automaticEnabled,
+      });
+    await expect(store.restoreLegacyCamera(convert)).rejects.toThrow('camera_identity_unavailable');
+    expect(store.pendingLegacyCamera).toEqual(pending);
+    expect(store.snapshot.active).toEqual(initial.active);
+    available = true;
+    const restored = await store.restoreLegacyCamera(convert);
+    expect(restored).toHaveLength(1);
+    expect(store.snapshot.active).toEqual(initial.active);
+    expect(store.pendingLegacyCamera).toBeUndefined();
+    const reopened = new BroadcastConfigStore(recoveryOptions);
+    await reopened.load();
+    expect(reopened.snapshot.modules.filter((module) => module.kind === 'camera')).toHaveLength(1);
+    await expect(reopened.restoreLegacyCamera(convert)).rejects.toThrow('pending_camera_missing');
+  });
+  it('claims unchanged legacy built-ins without changing the active output', () => {
+    const document = fixture();
+    const builtin = createBuiltinModules().find((item) => item.kind === 'hud')!;
+    const oldId = randomUUID();
+    const legacy = { ...structuredClone(builtin), id: oldId, revision: 'old' };
+    document.modules.push(legacy);
+    document.presets[0]!.bindings[0] = { kind: 'hud', mode: 'use', moduleId: oldId };
+    document.active.sourceModuleIds = { hud: oldId, program: null, music: null, camera: null };
+    document.active.sourceModuleRevisions = {
+      hud: 'old',
+      program: null,
+      music: null,
+      camera: null,
+    };
+    const resolved = structuredClone(document.active.resolved);
+    expect(addMissingBuiltinModules(document)).toBe(true);
+    expect(document.modules.some((item) => item.id === oldId)).toBe(false);
+    expect(document.presets[0]!.bindings[0]).toEqual({
+      kind: 'hud',
+      mode: 'use',
+      moduleId: builtin.id,
+    });
+    expect(document.active.sourceModuleIds.hud).toBe(builtin.id);
+    expect(document.active.sourceModuleRevisions.hud).toBe(builtin.revision);
+    expect(document.active.resolved).toEqual(resolved);
+    expect(document.active.revision).toBe('active');
+    expect(addMissingBuiltinModules(document)).toBe(false);
+  });
+  it('protects built-ins and refuses removal of active or referenced modules', async () => {
+    const { store, initial } = await setup();
+    const builtin = store.snapshot.modules.find(
+      (item) => item.id === 'fb81f5a0-9e35-4ae5-8f15-000000000001',
+    )!;
+    await expect(store.deleteModule(builtin.id, builtin.revision)).rejects.toThrow(
+      'builtin_immutable',
+    );
+    await expect(store.saveModule(builtin, builtin.revision)).rejects.toThrow('builtin_immutable');
+    const bound = initial.modules[0]!;
+    await expect(store.deleteModule(bound.id, bound.revision)).rejects.toThrow('module_active');
+    const clone = await store.cloneModule(builtin.id, builtin.revision, '可编辑 HUD');
+    expect(clone.id).not.toBe(builtin.id);
+    await store.deleteModule(clone.id, clone.revision);
+    expect(store.snapshot.modules.some((item) => item.id === clone.id)).toBe(false);
+  });
+  it('replaces a draft reference atomically when deleting a module', async () => {
+    const { store, initial } = await setup();
+    const builtin = store.snapshot.modules.find(
+      (item) => item.id === 'fb81f5a0-9e35-4ae5-8f15-000000000001',
+    )!;
+    const copy = await store.cloneModule(builtin.id, builtin.revision, '草稿 HUD');
+    const preset = structuredClone(initial.presets[0]!);
+    preset.id = randomUUID();
+    preset.bindings = preset.bindings.map((binding) =>
+      binding.kind === 'hud' ? { kind: 'hud', mode: 'use', moduleId: copy.id } : binding,
+    );
+    await store.save({ preset, expectedPresetRevision: null, modules: [] });
+    const current = store.snapshot.presets.find((item) => item.id === preset.id)!;
+    await expect(store.deleteModule(copy.id, copy.revision)).rejects.toThrow('module_referenced');
+    await store.deleteModule(copy.id, copy.revision, {
+      moduleId: builtin.id,
+      expectedPresetRevisions: { [current.id]: current.revision },
+    });
+    expect(store.snapshot.presets.find((item) => item.id === preset.id)?.bindings).toContainEqual({
+      kind: 'hud',
+      mode: 'use',
+      moduleId: builtin.id,
+    });
+    expect(store.snapshot.modules.some((item) => item.id === copy.id)).toBe(false);
+  });
   it('commits an apply once and recovers its receipt after restart', async () => {
     const { store, options, initial } = await setup();
     const request = {
@@ -254,6 +372,14 @@ describe('BroadcastConfigStore', () => {
       },
       presetEntries: { first: first.preset.id, second: second.preset.id },
     };
+    for (const [entryId, ids] of Object.entries(batch.moduleEntries))
+      for (const module of batch.modules.filter((item) => ids.includes(item.id)))
+        module.origin = { resource: batch.source, entryId };
+    for (const [entryId, id] of Object.entries(batch.presetEntries))
+      batch.presets.find((preset) => preset.id === id)!.origin = {
+        resource: batch.source,
+        entryId,
+      };
     const result = await store.importBatch(batch);
     expect(result.reused).toBe(false);
     expect(store.snapshot.active).toEqual(initial.active);
@@ -264,6 +390,40 @@ describe('BroadcastConfigStore', () => {
       reopened.importBatch({ ...batch, source: { ...batch.source, digest: 'b'.repeat(64) } }),
     ).rejects.toThrow('identity_conflict');
     expect(reopened.snapshot.presets).toHaveLength(3);
+    await reopened.deletePreset(second.preset.id, second.preset.revision);
+    await reopened.deleteModule(second.modules[0]!.id, second.modules[0]!.revision);
+    const restarted = new BroadcastConfigStore(options);
+    await restarted.load();
+    const retryFirst = clonePreset(initial, request, randomUUID);
+    const retrySecond = clonePreset(initial, { ...request, name: 'Second' }, randomUUID);
+    const retry = {
+      ...batch,
+      modules: [...retryFirst.modules, ...retrySecond.modules],
+      presets: [retryFirst.preset, retrySecond.preset],
+      moduleEntries: {
+        hud: [retryFirst.modules[0]!.id, retrySecond.modules[0]!.id],
+        program: [retryFirst.modules[1]!.id, retrySecond.modules[1]!.id],
+      },
+      presetEntries: { first: retryFirst.preset.id, second: retrySecond.preset.id },
+    };
+    for (const [entryId, ids] of Object.entries(retry.moduleEntries))
+      for (const module of retry.modules.filter((item) => ids.includes(item.id)))
+        module.origin = { resource: retry.source, entryId };
+    for (const [entryId, id] of Object.entries(retry.presetEntries))
+      retry.presets.find((preset) => preset.id === id)!.origin = {
+        resource: retry.source,
+        entryId,
+      };
+    const restored = await restarted.importBatch(retry);
+    expect(restored.reused).toBe(false);
+    expect(restored.mapping.presetEntries.first).toBe(first.preset.id);
+    expect(restored.mapping.presetEntries.second).toBe(retrySecond.preset.id);
+    expect(restored.mapping.moduleEntries.program).toContain(second.modules[1]!.id);
+    expect(restored.mapping.moduleEntries.hud).toContain(retrySecond.modules[0]!.id);
+    expect(restarted.snapshot.presets).toHaveLength(3);
+    expect(
+      restarted.snapshot.modules.filter((item) => item.id === first.modules[0]!.id),
+    ).toHaveLength(1);
   });
   it('rejects shared editable modules across imported presets without publishing either', async () => {
     const { store, initial } = await setup();
@@ -442,6 +602,63 @@ describe('BroadcastConfigStore', () => {
     });
     await camera.synchronizeFromPersistence();
     expect(camera.revision).toBe(cameraRevision);
+  });
+  it('does not resurrect a camera draft deleted during legacy conversion', async () => {
+    const { store } = await setup();
+    const id = randomUUID();
+    await store.updateFromLegacy({
+      updateDraft(document) {
+        document.modules.push({
+          id,
+          kind: 'camera',
+          schemaVersion: 2,
+          revision: 'camera-revision',
+          name: 'Camera',
+          origin: null,
+          value: {
+            format: 'mizar.camera-config',
+            version: 2,
+            name: 'Camera',
+            maps: [],
+            automaticEnabled: false,
+          },
+        });
+      },
+    });
+    let release!: () => void;
+    let started!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const converting = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const persistence = createCameraConfigPersistence(store, {
+      localPack: () => Promise.reject(new Error('unexpected')),
+      localTrackId: () => Promise.reject(new Error('unexpected')),
+      portable: async (preset, automaticEnabled) => {
+        started();
+        await waiting;
+        return {
+          format: 'mizar.camera-config',
+          version: 2,
+          name: preset.name,
+          maps: [],
+          automaticEnabled,
+        };
+      },
+      lock: (_value, active) => Promise.resolve(active.lock),
+    });
+    const before = await persistence.read();
+    const changed = structuredClone(before.catalog);
+    changed.presets.find((item) => item.id === id)!.preset.name = 'Edited';
+    const commit = persistence.commit(changed, false, before.catalog, false);
+    await converting;
+    const module = store.snapshot.modules.find((item) => item.id === id)!;
+    await store.deleteModule(id, module.revision);
+    release();
+    await expect(commit).rejects.toThrow('revision_conflict');
+    expect(store.snapshot.modules.some((item) => item.id === id)).toBe(false);
   });
   it('keeps camera explicitly off until a legacy operator activates a real draft', async () => {
     const { store, options, initial } = await setup();
