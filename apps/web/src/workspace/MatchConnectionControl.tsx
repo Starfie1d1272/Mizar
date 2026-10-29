@@ -52,7 +52,7 @@ export function MatchConnectionControl({ primary = false }: { primary?: boolean 
         }}
       >
         {primary
-          ? runtime?.programCommandQueued
+          ? runtime?.programCommandQueued && !view?.waitingForMap
             ? '查看本图连接'
             : '填写 GOTV'
           : `本图连接 · ${status}`}
