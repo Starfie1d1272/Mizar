@@ -1,9 +1,10 @@
+import { PresetVisualPreview } from './PresetVisualPreview';
 import { useRef, useState } from 'react';
 import { useLocalRead } from '../preparation/client';
 import { Button, Panel, Select, StatusBanner } from '../ui';
 
 type Kind = 'hud' | 'program' | 'music' | 'camera';
-type Module = { id: string; kind: Kind; name: string; revision: string };
+type Module = { id: string; kind: Kind; name: string; revision: string; value?: unknown };
 type Binding = { kind: Kind; mode: 'off' } | { kind: Kind; mode: 'use'; moduleId: string };
 type Preset = { id: string; name: string; revision: string; bindings: Binding[] };
 type View = {
@@ -67,6 +68,7 @@ export function BroadcastPresets({ query }: { query: string }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const view = useLocalRead<View>('/local/v1/broadcast-presets', 2000, refresh);
   const [busy, setBusy] = useState(false);
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [notice, setNotice] = useState<{ tone: 'success' | 'danger'; message: string } | null>(
     null,
   );
@@ -302,7 +304,17 @@ export function BroadcastPresets({ query }: { query: string }) {
                         : '当前使用'}
               </p>
             </div>
-            <details>
+            <details
+              onToggle={(event) => {
+                const open = event.currentTarget.open;
+                setExpanded((previous) => {
+                  const next = new Set(previous);
+                  if (open) next.add(preset.id);
+                  else next.delete(preset.id);
+                  return next;
+                });
+              }}
+            >
               <summary>查看配置</summary>
               <dl>
                 {preset.bindings.map((binding) => (
@@ -318,6 +330,9 @@ export function BroadcastPresets({ query }: { query: string }) {
                   </div>
                 ))}
               </dl>
+              {view && expanded.has(preset.id) ? (
+                <PresetVisualPreview bindings={preset.bindings} modules={view.modules} />
+              ) : null}
               {view ? (
                 <MusicBindingEditor
                   key={`${preset.id}:${preset.revision}`}
