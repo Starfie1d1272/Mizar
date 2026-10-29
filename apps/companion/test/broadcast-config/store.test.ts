@@ -25,6 +25,10 @@ import {
   type ProgramVisualConfigV1,
 } from '@mizar/broadcast-config';
 import { BroadcastConfigStore } from '../../src/broadcast-config/store.js';
+import {
+  addMissingBuiltinModules,
+  createBuiltinModules,
+} from '../../src/broadcast-config/builtin-modules.js';
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -146,6 +150,34 @@ async function setup() {
   return { store, options, initial: store.snapshot };
 }
 describe('BroadcastConfigStore', () => {
+  it('claims unchanged legacy built-ins without changing the active output', () => {
+    const document = fixture();
+    const builtin = createBuiltinModules().find((item) => item.kind === 'hud')!;
+    const oldId = randomUUID();
+    const legacy = { ...structuredClone(builtin), id: oldId, revision: 'old' };
+    document.modules.push(legacy);
+    document.presets[0]!.bindings[0] = { kind: 'hud', mode: 'use', moduleId: oldId };
+    document.active.sourceModuleIds = { hud: oldId, program: null, music: null, camera: null };
+    document.active.sourceModuleRevisions = {
+      hud: 'old',
+      program: null,
+      music: null,
+      camera: null,
+    };
+    const resolved = structuredClone(document.active.resolved);
+    expect(addMissingBuiltinModules(document)).toBe(true);
+    expect(document.modules.some((item) => item.id === oldId)).toBe(false);
+    expect(document.presets[0]!.bindings[0]).toEqual({
+      kind: 'hud',
+      mode: 'use',
+      moduleId: builtin.id,
+    });
+    expect(document.active.sourceModuleIds.hud).toBe(builtin.id);
+    expect(document.active.sourceModuleRevisions.hud).toBe(builtin.revision);
+    expect(document.active.resolved).toEqual(resolved);
+    expect(document.active.revision).toBe('active');
+    expect(addMissingBuiltinModules(document)).toBe(false);
+  });
   it('protects built-ins and refuses removal of active or referenced modules', async () => {
     const { store, initial } = await setup();
     const builtin = store.snapshot.modules.find(
@@ -483,6 +515,63 @@ describe('BroadcastConfigStore', () => {
     });
     await camera.synchronizeFromPersistence();
     expect(camera.revision).toBe(cameraRevision);
+  });
+  it('does not resurrect a camera draft deleted during legacy conversion', async () => {
+    const { store } = await setup();
+    const id = randomUUID();
+    await store.updateFromLegacy({
+      updateDraft(document) {
+        document.modules.push({
+          id,
+          kind: 'camera',
+          schemaVersion: 2,
+          revision: 'camera-revision',
+          name: 'Camera',
+          origin: null,
+          value: {
+            format: 'mizar.camera-config',
+            version: 2,
+            name: 'Camera',
+            maps: [],
+            automaticEnabled: false,
+          },
+        });
+      },
+    });
+    let release!: () => void;
+    let started!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const converting = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const persistence = createCameraConfigPersistence(store, {
+      localPack: () => Promise.reject(new Error('unexpected')),
+      localTrackId: () => Promise.reject(new Error('unexpected')),
+      portable: async (preset, automaticEnabled) => {
+        started();
+        await waiting;
+        return {
+          format: 'mizar.camera-config',
+          version: 2,
+          name: preset.name,
+          maps: [],
+          automaticEnabled,
+        };
+      },
+      lock: (_value, active) => Promise.resolve(active.lock),
+    });
+    const before = await persistence.read();
+    const changed = structuredClone(before.catalog);
+    changed.presets.find((item) => item.id === id)!.preset.name = 'Edited';
+    const commit = persistence.commit(changed, false, before.catalog, false);
+    await converting;
+    const module = store.snapshot.modules.find((item) => item.id === id)!;
+    await store.deleteModule(id, module.revision);
+    release();
+    await expect(commit).rejects.toThrow('revision_conflict');
+    expect(store.snapshot.modules.some((item) => item.id === id)).toBe(false);
   });
   it('keeps camera explicitly off until a legacy operator activates a real draft', async () => {
     const { store, options, initial } = await setup();

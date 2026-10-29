@@ -207,6 +207,12 @@ export function createCameraConfigPersistence(
           if (document.active.revision !== before.revision) throw new Error('revision_conflict');
           for (const draft of changedDrafts) {
             const module = document.modules.find((item) => item.id === draft.id);
+            const beforeModule = beforeDocument.modules.find((item) => item.id === draft.id);
+            if (
+              (beforeModule && (!module || module.revision !== beforeModule.revision)) ||
+              (!beforeModule && module)
+            )
+              throw new Error('revision_conflict');
             if (module && module.kind !== 'camera') throw new Error('revision_conflict');
             if (module?.kind === 'camera') {
               module.value = draft.value;
