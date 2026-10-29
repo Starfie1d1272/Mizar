@@ -48,7 +48,9 @@ pub fn pulse(app: &tauri::AppHandle, cs2: &managed_cs2::ManagedCs2) {
 #[tauri::command]
 pub async fn observer_command(window: tauri::WebviewWindow, app: tauri::AppHandle,
     action: String, endpoint: Option<String>, password: Option<String>, expected_revision: Option<String>) -> Result<serde_json::Value, String> {
-    if !["main", "workspace-left", "workspace-dock"].contains(&window.label()) {
+    if !["main", "workspace-left", "workspace-dock"].contains(&window.label())
+        && !(window.label() == "tool-review" && action == "start-configured"
+            && window.url().ok().is_some_and(|url| url.path() == "/workspace/review" && url.query() == Some("kind=connection"))) {
         return Err("请在制播工作台操作观察辅助。".into());
     }
     tauri::async_runtime::spawn_blocking(move || {
