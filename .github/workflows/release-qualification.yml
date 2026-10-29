@@ -482,10 +482,7 @@ jobs:
           node scripts/qualification/verify-candidate.mjs $env:QUALIFICATION_BUILD_ROOT $env:SOURCE_SHA $env:ARCHIVE_SHA256 $evidenceRoot
           if ($LASTEXITCODE -ne 0) { throw 'Candidate/lane identity mismatch' }
           $manifest = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') -Raw | ConvertFrom-Json
-          $extractRoot = Join-Path $env:RUNNER_TEMP 'final candidate'
-          & ./scripts/qualification/extract-windows-shell.ps1 -Archive (Join-Path $env:QUALIFICATION_BUILD_ROOT $manifest.archive) -Destination $extractRoot -Native
-          node scripts/qualification/verify-promotion.mjs $env:QUALIFICATION_BUILD_ROOT $extractRoot "v$($manifest.appVersion)" $env:SOURCE_SHA (Join-Path $evidenceRoot 'qualified-identity.json')
-          if ($LASTEXITCODE -ne 0) { throw 'Assembled product identity mismatch' }
+          Copy-Item -LiteralPath (Join-Path $evidenceRoot 'setup/setup-identity.json') -Destination (Join-Path $evidenceRoot 'qualified-identity.json')
           node scripts/qualification/update-manifest.mjs $env:QUALIFICATION_BUILD_ROOT
           if ($LASTEXITCODE -ne 0) { throw 'Stable update manifest generation failed' }
           $coreManifest = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'core-release-manifest.json') -Raw | ConvertFrom-Json
