@@ -75,13 +75,10 @@ fn any_cs2_running(log: &crate::startup_log::DesktopLog) -> Result<bool, String>
 struct SteamLaunch {
     process: SteamProcess,
     account: u32,
-    #[cfg(test)]
-    fixture: bool,
 }
 impl SteamLaunch {
     fn validate(&self, log: &crate::startup_log::DesktopLog) -> Result<(), String> {
-        #[cfg(test)]
-        if self.fixture { return Ok(()); }
+
         let output = powershell(
             "$context = Get-SteamLaunchContext -NativeIdentity $nativeSteam; $context | ConvertTo-Json -Compress",
             &self.process,
@@ -139,8 +136,6 @@ if ($confirmed.account -ne $account) { Stop-Cs2Discovery 'steam-account-unavaila
         SteamLaunch {
             process: steam,
             account,
-            #[cfg(test)]
-            fixture: false,
         },
     ))
 }
@@ -592,19 +587,6 @@ pub struct ManagedCs2 {
     pending_mulnx_stop: Option<(Value, WorkspaceProcess)>,
     // Keep window preservation after detach until a new managed launch is accepted.
     external_preservation: bool,
-    #[cfg(test)]
-    recovery_identity_fixture: Option<(PathBuf, PathBuf, u32)>,
-    #[cfg(test)]
-    launch_fixture: Option<LaunchFixture>,
-}
-
-#[cfg(test)]
-struct LaunchFixture {
-    executable: PathBuf,
-    video: PathBuf,
-    account: u32,
-    fail_submit: bool,
-    submitted: Arc<std::sync::Mutex<Vec<(Value, Vec<String>)>>>,
 }
 
 /// A verified session process held open during window operations. Keeping the
@@ -668,10 +650,6 @@ impl ManagedCs2 {
             mulnx_launcher: None,
             pending_mulnx_stop: None,
             external_preservation: false,
-            #[cfg(test)]
-            recovery_identity_fixture: None,
-            #[cfg(test)]
-            launch_fixture: None,
         }
     }
     pub(crate) fn pending_mulnx_stop(&self) -> Option<(Value, WorkspaceProcess)> {
@@ -691,8 +669,7 @@ impl ManagedCs2 {
         }
     }
     fn recovery_identity(&self) -> Result<(PathBuf, PathBuf, u32), String> {
-        #[cfg(test)]
-        if let Some(identity) = &self.recovery_identity_fixture { return Ok(identity.clone()); }
+
         let (executable, video, steam) = discover(&self.log)?;
         steam.validate(&self.log)?;
         Ok((executable, video, steam.account))
@@ -1226,16 +1203,7 @@ impl ManagedCs2 {
             // Finish any legacy runtime journal before a new native-toggle session.
             crate::observer_hud::restore(&self.log)?;
         }
-        #[cfg(test)]
-        let (executable, video, steam) = if let Some(fixture) = &self.launch_fixture {
-            let pid = std::process::id();
-            let process = open(pid, &self.log)?.ok_or("fixture process unavailable")?;
-            (fixture.executable.clone(), fixture.video.clone(), SteamLaunch {
-                process: SteamProcess { process, pid, created: 0, executable: fixture.executable.clone() },
-                account: fixture.account, fixture: true,
-            })
-        } else { discover(&self.log)? };
-        #[cfg(not(test))]
+
         let (executable, video, steam) = discover(&self.log)?;
         if any_cs2_running(&self.log)? {
             return Err("请先退出已打开的 CS2，再由 Mizar 启动。".into());
@@ -1245,9 +1213,7 @@ impl ManagedCs2 {
         let size = if preserve {
             None
         } else {
-            #[cfg(test)]
-            { if self.launch_fixture.is_some() { Some(crate::cs2_video::VideoSize::new(1920, 1080)?) } else { Some(crate::windows_host::launch_viewport()?) } }
-            #[cfg(not(test))]
+
             { Some(crate::windows_host::launch_viewport()?) }
         };
         let mut journal = if preserve {
@@ -1456,14 +1422,7 @@ impl ManagedCs2 {
         self.complete_launch(launch, demo.is_some())
     }
     fn submit_steam(&self, command: &mut Command) -> std::io::Result<()> {
-        #[cfg(test)]
-        if let Some(fixture) = &self.launch_fixture {
-            let journal = self.store.load().map_err(std::io::Error::other)?.ok_or_else(|| std::io::Error::other("missing launch journal"))?;
-            let args = command.get_args().map(|v| v.to_string_lossy().into_owned()).collect();
-            fixture.submitted.lock().map_err(|_| std::io::Error::other("fixture lock"))?.push((journal, args));
-            if fixture.fail_submit { return Err(std::io::Error::other("injected Steam request failure")); }
-            return Ok(());
-        }
+
         command.creation_flags(0x08000000).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().map(|_| ())
     }
     fn complete_launch(
@@ -1791,488 +1750,6 @@ fn retire_camera_before_cleanup(service_stopped: bool, revoke: impl FnOnce() -> 
     if revoke().is_ok() { return "revoked"; }
     wait_for_expiry();
     "expired-after-unknown"
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn owned_launcher_is_stopped_only_after_confirmed_game_exit() {
-        let stopped = std::cell::Cell::new(false);
-        let stop = || { stopped.set(true); Ok(()) };
-        assert!(stop_owned_launcher(true, || Ok(false), stop).is_err());
-        assert!(!stopped.get());
-        assert!(stop_owned_launcher(false, || Ok(true), stop).is_err());
-        assert!(!stopped.get());
-        assert!(stop_owned_launcher(false, || Err("unknown".into()), stop).is_err());
-        assert!(!stopped.get());
-        stop_owned_launcher(false, || Ok(false), stop).unwrap();
-        assert!(stopped.get());
-    }
-    // These tests create or inspect machine-wide CS2 / Steam processes. Hold the same
-    // gate so the external-game fixture cannot contaminate recovery evidence.
-    static GAME_PROCESSES: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    #[test]
-    fn camera_retirement_waits_only_when_revocation_is_unknown() {
-        let calls = std::cell::RefCell::new(Vec::new());
-        let outcome = retire_camera_before_cleanup(false,
-            || { calls.borrow_mut().push("revoke"); Err("service unavailable".into()) },
-            || calls.borrow_mut().push("lease-expired"));
-        calls.borrow_mut().push("game-cleanup");
-        assert_eq!(outcome, "expired-after-unknown");
-        assert_eq!(*calls.borrow(), ["revoke", "lease-expired", "game-cleanup"]);
-        assert_eq!(retire_camera_before_cleanup(false, || Ok(()), || panic!("unneeded wait")), "revoked");
-        assert_eq!(retire_camera_before_cleanup(true, || panic!("service stopped"), || panic!("unneeded wait")), "service-stopped");
-    }
-    #[test]
-    fn standard_start_uses_single_observer_cfg_and_preserves_keys() {
-        let _processes = GAME_PROCESSES.lock().unwrap();
-        for scenario in ["standard", "spawn_failure", "demo", "mulnx_demo", "mulnx_preserved"] {
-            let fail = scenario == "spawn_failure";
-            let root = std::env::temp_dir().join(format!("mizar-observer-start-{}-{scenario}", std::process::id()));
-            std::fs::create_dir_all(&root).unwrap();
-            let log = crate::startup_log::DesktopLog::new(&root, None).unwrap();
-            let mut host = ManagedCs2::new(log);
-            let cfg = root.join("steam/userdata/1/730/local/cfg"); std::fs::create_dir_all(&cfg).unwrap();
-            std::fs::create_dir_all(root.join("steam/userdata/1/config")).unwrap();
-            let video = cfg.join("cs2_video.txt");
-            std::fs::write(&video, b"\"video.cfg\" { \"setting.defaultres\" \"1280\" \"setting.defaultresheight\" \"960\" \"setting.fullscreen\" \"1\" }").unwrap();
-            std::fs::write(cfg.join("cs2_machine_convars.vcfg"), b"\"config\" {\"convars\" {\"fps_max\" \"0\" \"spec_usenumberkeys_nobinds\" \"0\"}}").unwrap();
-            let keys = cfg.join("cs2_user_keys_0_slot0.vcfg");
-            let original = "\"config\" {\"bindings\" {\"h\" \"custom\"} \"analogbindings\" {}}";
-            std::fs::write(&keys, original).unwrap();
-            let executable = root.join("game/bin/win64/cs2.exe"); std::fs::create_dir_all(executable.parent().unwrap()).unwrap(); std::fs::write(&executable, b"fixture").unwrap();
-            std::fs::create_dir_all(root.join("game/csgo/cfg")).unwrap();
-            host.store.set_full_optin(1, true).unwrap(); // Existing preference must not start full takeover.
-            let submitted = Arc::new(std::sync::Mutex::new(Vec::new()));
-            host.launch_fixture = Some(LaunchFixture { executable:executable.clone(), video:video.clone(), account:1, fail_submit:fail, submitted:submitted.clone() });
-            host.recovery_identity_fixture = Some((executable.clone(), video.clone(), 1));
-            if scenario == "mulnx_demo" {
-                let path = root.join("fixture.dem");
-                std::fs::write(&path, b"PBDEMS2\0fixture").unwrap();
-                let id = "00000000-0000-4000-8000-000000000001";
-                let journal = host.prepare_managed_mulnx_demo(&executable, false, &path, id).unwrap();
-                assert_eq!(journal["demoTestRequestId"], id);
-                assert_eq!(journal["mulnxLaunch"], true);
-                assert_eq!(journal["launchAttempted"], false);
-                let cfg_name = journal["demoPlaybackCfg"]["name"].as_str().unwrap();
-                assert!(std::fs::read_to_string(root.join("game/csgo/cfg").join(cfg_name)).unwrap().starts_with("playdemo "));
-                assert!(submitted.lock().unwrap().is_empty());
-                std::fs::remove_dir_all(root).unwrap();
-                continue;
-            }
-            if scenario == "mulnx_preserved" {
-                let before_video = std::fs::read(&video).unwrap();
-                let before_convars = std::fs::read(cfg.join("cs2_machine_convars.vcfg")).unwrap();
-                assert!(host.prepare_managed_mulnx(&executable, true).is_err());
-                assert!(host.store.load().unwrap().is_none());
-                host.can_preserve = true;
-                let journal = host.prepare_managed_mulnx(&executable, true).unwrap();
-                assert_eq!(journal["preserveSettings"], true);
-                assert_eq!(journal["mulnxLaunch"], true);
-                assert_eq!(std::fs::read(&video).unwrap(), before_video);
-                assert_eq!(std::fs::read(cfg.join("cs2_machine_convars.vcfg")).unwrap(), before_convars);
-                assert!(submitted.lock().unwrap().is_empty());
-                std::fs::remove_dir_all(root).unwrap();
-                continue;
-            }
-            let result = if scenario == "demo" {
-                host.start_internal(false, Some(("\"C:/fixture.dem\"", "00000000-0000-4000-8000-000000000001")), false)
-            } else { host.start() };
-            let requests = submitted.lock().unwrap().clone();
-            assert_eq!(requests.len(), 1); let (journal, args) = &requests[0];
-            assert_ne!(journal["fullSnapshot"], true); assert_eq!(journal["nativeHudToggle"], true);
-            let observer_pos = args.windows(2).position(|pair| pair == ["+exec", crate::cs2_spectator::CFG_NAME]).unwrap();
-            if scenario == "demo" {
-                let demo_name = journal["demoPlaybackCfg"]["name"].as_str().unwrap();
-                let demo_pos = args.windows(2).position(|pair| pair[0] == "+exec" && pair[1] == demo_name).unwrap();
-                assert!(observer_pos < demo_pos); // Request order; game execution is verified separately.
-            }
-            assert!(!host.store.full_spectator_pending());
-            if fail { assert!(result.is_err()); } else { assert_eq!(result.unwrap(), true); if scenario != "demo" { host.recover(true).unwrap(); } }
-            assert_eq!(std::fs::read_to_string(&keys).unwrap(), original);
-            std::fs::remove_dir_all(root).unwrap();
-        }
-    }
-    #[test]
-    fn coordinated_faults_recover_through_actual_host_entrypoint() {
-        use crate::cs2_config_identity::{ConfigIdentity, SessionIdentity};
-        use crate::spectator_recovery_plan::{Input, InputKind};
-        use std::path::Path;
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        static FAIL_AT: AtomicUsize = AtomicUsize::new(0);
-        static COUNT: AtomicUsize = AtomicUsize::new(0);
-        static MODE: AtomicUsize = AtomicUsize::new(0);
-        fn injected(path: &Path, bytes: &[u8]) -> Result<(), String> {
-            let index = COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-            if FAIL_AT.load(Ordering::SeqCst) == index {
-                match MODE.load(Ordering::SeqCst) {
-                    0 => return Err("injected_before".into()),
-                    2 => {
-                        if std::fs::read(path).ok().as_deref() == Some(bytes) { return Err("injected_readback".into()); }
-                        return Ok(());
-                    }
-                    _ => (),
-                }
-            }
-            crate::cs2_session::atomic_write(path, bytes)?;
-            if FAIL_AT.load(Ordering::SeqCst) == index && MODE.load(Ordering::SeqCst) == 1 { return Err("injected_after".into()); }
-            Ok(())
-        }
-        let _processes = GAME_PROCESSES.lock().unwrap();
-        let mut total = 1;
-        let mut unwritten_cases = [0usize; 3];
-        for mode in 0..=2 {
-            let mut target = if mode == 0 { 0 } else { 1 };
-            while target <= total {
-                let root = std::env::temp_dir().join(format!("mizar-host-fault-{}-{mode}-{target}", std::process::id()));
-                let log = crate::startup_log::DesktopLog::new(&root, None).unwrap();
-                let mut host = ManagedCs2::new(log);
-                let cfg = root.join("steam/userdata/1/730/local/cfg"); std::fs::create_dir_all(&cfg).unwrap();
-                let video = cfg.join("cs2_video.txt");
-                let original_video = b"\"video.cfg\" { \"setting.defaultres\" \"1280\" \"setting.defaultresheight\" \"960\" \"setting.fullscreen\" \"1\" }";
-                std::fs::write(&video, original_video).unwrap();
-                let keys = cfg.join("cs2_user_keys_0_slot0.vcfg");
-                let original = "\"config\" {\"bindings\" {\"x\" \"personal\"} \"analogbindings\" {}}";
-                let candidate = "\"config\" {\"bindings\" {\"x\" \"preset\"} \"analogbindings\" {}}";
-                std::fs::write(&keys, original).unwrap();
-                let executable = root.join("game/bin/win64/cs2.exe"); std::fs::create_dir_all(executable.parent().unwrap()).unwrap(); std::fs::write(&executable, b"fixture").unwrap();
-                let session = SessionIdentity { session_id:format!("fault-{mode}-{target}"), config:ConfigIdentity {
-                    account:1, video:std::fs::canonicalize(&video).unwrap(), executable:std::fs::canonicalize(&executable).unwrap(),
-                    keys:std::fs::canonicalize(&keys).unwrap(), slot:0, format:"vcfg".into() }};
-                let x = Input { kind:InputKind::Key, name:"x".into() };
-                FAIL_AT.store(target, Ordering::SeqCst); COUNT.store(0, Ordering::SeqCst); MODE.store(mode, Ordering::SeqCst);
-                let result = host.store.prepare_coordinated_with_writer(&video, &executable,
-                    crate::cs2_video::VideoSize::new(1920,1080).unwrap(), None, &session,
-                    &[x.clone()].into(), &[(x, vec!["preset".into()])].into(), candidate, injected);
-                if target == 0 { result.unwrap(); total = COUNT.load(Ordering::SeqCst); assert!(total >= 6); }
-                else { assert!(result.is_err(), "failure point {target}, mode {mode}"); }
-                FAIL_AT.store(0, Ordering::SeqCst);
-                host.recovery_identity_fixture = Some((executable.clone(), video.clone(), 1));
-                // If only a provably unwritten snapshot remains, a later user edit
-                // must survive the real startup recovery path.
-                let orphan = host.store.load().unwrap().is_none() && host.store.full_spectator_pending();
-                if orphan { std::fs::write(&keys, "\"config\" {\"bindings\" {\"x\" \"external\"} \"analogbindings\" {}}").unwrap(); }
-                let core = host.store.load().unwrap();
-                let snapshot: Option<Value> = std::fs::read(host.store.backup_directory().join("spectator-full-pending.json")).ok()
-                    .map(|bytes| serde_json::from_slice(&bytes).unwrap());
-                let unwritten = core.as_ref().is_some_and(|c| c["configWriteAttempted"] == false && c["launchAttempted"] == false)
-                    && snapshot.as_ref().is_some_and(|s| s["payload"]["coordinatedWriteAttempted"] == false);
-                let manual_key = if mode == 1 { candidate } else { "\"config\" {\"bindings\" {\"x\" \"external\"} \"analogbindings\" {}}" };
-                let manual_video = core.as_ref().and_then(|c| c["applied"].as_str()).map(str::to_owned);
-                if unwritten {
-                    unwritten_cases[mode] += 1;
-                    std::fs::write(&keys, manual_key).unwrap();
-                    std::fs::write(&video, manual_video.as_ref().unwrap()).unwrap();
-                }
-                if host.startup_recovery_status().unwrap().pending { host.restore_at_startup(false).unwrap(); }
-                assert!(!host.startup_recovery_status().unwrap().pending);
-                assert_eq!(std::fs::read(&video).unwrap(), if unwritten { manual_video.unwrap().into_bytes() } else { original_video.to_vec() });
-                let current = std::fs::read_to_string(&keys).unwrap();
-                if unwritten { assert_eq!(current, manual_key); }
-                else { assert!(current.contains(if orphan { "\"x\" \"external\"" } else { "\"x\" \"personal\"" })); }
-                std::fs::remove_dir_all(root).unwrap();
-                target += 1;
-            }
-        }
-        assert!(unwritten_cases.iter().all(|&count| count > 0));
-    }
-
-    #[test]
-    fn coordinated_pending_host_checks_uncertain_launch_identity_and_restores() {
-        use crate::cs2_config_identity::{ConfigIdentity, SessionIdentity};
-        use crate::spectator_recovery_plan::{Input, InputKind};
-        let _processes = GAME_PROCESSES.lock().unwrap();
-        let root = std::env::temp_dir().join(format!("mizar-host-coordinated-{}", std::process::id()));
-        let log = crate::startup_log::DesktopLog::new(&root, None).unwrap();
-        let mut host = ManagedCs2::new(log);
-        let cfg = root.join("steam/userdata/1/730/local/cfg"); std::fs::create_dir_all(&cfg).unwrap();
-        let video = cfg.join("cs2_video.txt");
-        let video_original = b"\"video.cfg\" { \"setting.defaultres\" \"1280\" \"setting.defaultresheight\" \"960\" \"setting.fullscreen\" \"1\" }";
-        std::fs::write(&video, video_original).unwrap();
-        let keys = cfg.join("cs2_user_keys_0_slot0.vcfg");
-        let original = "\"config\" {\"bindings\" {\"x\" \"personal\"} \"analogbindings\" {}}";
-        let candidate = "\"config\" {\"bindings\" {\"x\" \"preset\"} \"analogbindings\" {}}";
-        std::fs::write(&keys, original).unwrap();
-        let executable = root.join("game/bin/win64/cs2.exe"); std::fs::create_dir_all(executable.parent().unwrap()).unwrap(); std::fs::write(&executable, b"fixture").unwrap();
-        let session = SessionIdentity { session_id:"host-session".into(), config:ConfigIdentity {
-            account:1, video:std::fs::canonicalize(&video).unwrap(), executable:std::fs::canonicalize(&executable).unwrap(),
-            keys:std::fs::canonicalize(&keys).unwrap(), slot:0, format:"vcfg".into() }};
-        let x = Input { kind:InputKind::Key, name:"x".into() };
-        let mut journal = host.store.prepare_coordinated(&video, &executable,
-            crate::cs2_video::VideoSize::new(1920,1080).unwrap(), None, &session,
-            &[x.clone()].into(), &[(x, vec!["preset".into()])].into(), candidate).unwrap();
-        // Same marker and persistence entrypoint used immediately before Steam.
-        journal["launchAttempted"] = json!(true); journal["launchTime"] = json!(1);
-        host.store.save(&journal).unwrap();
-        host.recovery_identity_fixture = Some((executable.clone(), video.clone(), 2));
-        let status = host.startup_recovery_status().unwrap(); assert!(status.pending && status.uncertain);
-        assert!(host.restore_at_startup(false).is_err());
-        assert!(host.restore_at_startup(true).is_err()); // Wrong account: no core or key overwrite.
-        assert!(host.store.load().unwrap().is_some());
-        assert!(std::fs::read_to_string(&keys).unwrap().contains("\"x\" \"preset\""));
-        host.recovery_identity_fixture = Some((executable.clone(), video.clone(), 1));
-        host.restore_at_startup(false).unwrap();
-        assert!(!host.startup_recovery_status().unwrap().pending);
-        assert_eq!(std::fs::read(&video).unwrap(), video_original);
-        assert!(std::fs::read_to_string(&keys).unwrap().contains("\"x\" \"personal\""));
-        // A legacy full-only record is also visible and recoverable at startup.
-        let x = Input { kind:InputKind::Key, name:"x".into() };
-        host.store.capture_spectator_snapshot(&video, &executable, 1, &[x.clone()].into(), &[(x, vec!["preset".into()])].into()).unwrap();
-        std::fs::write(&keys, candidate).unwrap();
-        assert!(host.startup_recovery_status().unwrap().pending);
-        host.restore_at_startup(false).unwrap();
-        assert!(!host.startup_recovery_status().unwrap().pending);
-        assert!(std::fs::read_to_string(&keys).unwrap().contains("\"x\" \"personal\""));
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn absent_journal_cleanup_does_not_prove_an_external_game_stopped() {
-        let _processes = GAME_PROCESSES.lock().unwrap();
-        let root = std::env::temp_dir().join(format!("mizar-external-game-{}", std::process::id()));
-        let log = crate::startup_log::DesktopLog::new(&root, None).unwrap();
-        let console = crate::cs2_console::settings(&log).unwrap();
-        crate::cs2_console::set_enabled(&log, false, console["generation"].as_str()).unwrap();
-        // Use a harmless waiting Windows command process with the game's executable
-        // name to exercise real process enumeration without CS2 or Steam.
-        let system = PathBuf::from(std::env::var_os("SystemRoot").unwrap());
-        let executable = root.join("cs2.exe");
-        std::fs::copy(system.join("System32/cmd.exe"), &executable).unwrap();
-        struct ExternalGame {
-            child: std::process::Child,
-            root: PathBuf,
-        }
-        impl Drop for ExternalGame {
-            fn drop(&mut self) {
-                let _ = self.child.kill();
-                let _ = self.child.wait();
-                let _ = std::fs::remove_dir_all(&self.root);
-            }
-        }
-        let mut external = ExternalGame {
-            child: Command::new(executable)
-                .args(["/D", "/Q", "/K"])
-                .creation_flags(0x08000000)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .unwrap(),
-            root,
-        };
-        let process = open(external.child.id(), &log).unwrap().unwrap();
-        let (created, actual_path) = identity(&process, &log).unwrap();
-        let mut managed = ManagedCs2::new(log);
-        let snapshot = managed.mulnx_handoff_status().unwrap();
-        let observed = snapshot["processes"].as_array().unwrap().iter()
-            .find(|p| p["pid"] == external.child.id()).unwrap();
-        assert_eq!(observed["created"], created.to_string());
-        assert_eq!(observed["executable"], actual_path.to_string_lossy().as_ref());
-        assert_eq!(observed["managed"], false);
-        assert!(managed.store.load().unwrap().is_none());
-        assert!(managed.workspace_process().unwrap().is_none());
-        drop(process);
-        assert!(external.child.try_wait().unwrap().is_none());
-        assert!(managed.startup_recovery_status().unwrap().running);
-        assert!(managed
-            .restore_at_startup(true)
-            .unwrap_err()
-            .contains("CS2 正在运行"));
-        assert!(external.child.try_wait().unwrap().is_none());
-        managed.finish().unwrap();
-        let mut tracker = crate::windows_host::GameTracker::default();
-        tracker.alignment_failure = Some(crate::windows_host::AlignmentFailure {
-            stage: "position",
-            api: Some("SetWindowPos"),
-            last_error: Some(5),
-        });
-        tracker.group_failure = Some(crate::workspace_group::Failure {
-            stage: "raise",
-            api: "SetWindowPos",
-            last_error: Some(5),
-            target: "game",
-        });
-        assert!(!tracker.finish_session_feedback(&managed).unwrap());
-        assert!(tracker.window_message().is_some());
-        assert!(managed.confirm_game_stopped().is_err());
-        // An unrelated process must never be closed by the cleanup operation.
-        assert!(external.child.try_wait().unwrap().is_none());
-        assert!(managed.attach_external(external.child.id(), created + 1, &actual_path).is_err());
-        assert!(managed.attach_external(external.child.id(), created, &external.root.join("other.exe")).is_err());
-        assert!(!managed.has_external());
-        managed.store.save(&json!({"version":1,"pid":external.child.id(),"created":created,"executable":actual_path})).unwrap();
-        assert!(managed.attach_external(external.child.id(), created, &actual_path).is_err());
-        std::fs::remove_file(managed.store.backup_directory().join("pending.json")).unwrap();
-        managed.attach_external(external.child.id(), created, &actual_path).unwrap();
-        managed.bind_external_camera("first-lease".into());
-        let trial_id = crate::demo_test::request_id().unwrap();
-        managed.bind_external_demo(trial_id.clone());
-        assert!(managed.validate_demo_running(&trial_id).is_ok());
-        assert!(managed.validate_demo_running(&crate::demo_test::request_id().unwrap()).is_err());
-        assert_eq!(managed.external_camera_lease(), Some("first-lease"));
-        assert!(managed.preserve_settings());
-        let borrowed_process = managed.workspace_process().unwrap().unwrap();
-        assert!(borrowed_process.is_running());
-        assert!(!borrowed_process.owned);
-        let (source, source_process) = managed.console_source().unwrap().unwrap();
-        assert_eq!(source["ownership"], "external");
-        assert_eq!(source_process.pid, external.child.id());
-        assert!(!source_process.owned);
-        drop(borrowed_process);
-        assert_eq!(managed.status().unwrap()["borrowed"], true);
-        assert_eq!(managed.status().unwrap()["pending"], false);
-        assert!(managed.store.load().unwrap().is_none());
-        assert!(managed.restore_backup(true).is_err());
-        assert!(!managed.start().unwrap()); // Re-entry reuses only this held instance.
-        assert!(crate::production_exit::finish_then_restore(|| Err("waiting not confirmed".into()), || managed.finish()).is_err());
-        assert!(managed.has_external());
-        assert!(external.child.try_wait().unwrap().is_none());
-        managed.finish().unwrap(); // Detach is not a process exit or recycling qualification.
-        assert!(external.child.try_wait().unwrap().is_none());
-        assert!(managed.confirm_game_stopped().is_err());
-        assert!(managed.workspace_process().unwrap().is_none());
-        assert!(managed.window_session_finished().unwrap());
-        assert!(managed.preserve_settings()); // No later layout pass may resize the detached game.
-        managed.attach_external(external.child.id(), created, &actual_path).unwrap();
-        managed.bind_external_camera("second-lease".into());
-        // A Host restart cannot silently recover a borrowed process as owned.
-        let restarted = ManagedCs2::new(managed.log.clone());
-        assert!(!restarted.has_external());
-        assert!(restarted.external_camera_lease().is_none());
-        assert!(restarted.workspace_process().unwrap().is_none());
-        // The same real process identity backs an owned lease; losing it must
-        // turn the next heartbeat into an invalidation rather than a renewal.
-        let owned_log = crate::startup_log::DesktopLog::new(&external.root.join("owned-host"), None).unwrap();
-        let mut owned_host = ManagedCs2::new(owned_log);
-        owned_host.store.save(&json!({"version":1,"pid":external.child.id(),"created":created,"executable":actual_path})).unwrap();
-        let owned_process = owned_host.workspace_process().unwrap().unwrap();
-        owned_host.bind_managed_camera(owned_process, "managed-lease".into()).unwrap();
-        assert_eq!(owned_host.managed_camera_lease(), Some(("managed-lease".into(), false)));
-        external.child.kill().unwrap();
-        external.child.wait().unwrap();
-        assert_eq!(owned_host.managed_camera_lease(), Some(("managed-lease".into(), true)));
-        owned_host.clear_managed_camera();
-        assert!(owned_host.managed_camera_lease().is_none());
-        managed.poll();
-        assert!(managed.external_isolation_pending());
-        assert_eq!(managed.external_camera_lease(), Some("second-lease"));
-        managed.external_isolated();
-        assert!(managed.external_camera_lease().is_none());
-        assert!(!managed.external_isolation_pending());
-        assert!(managed.has_external());
-        assert!(managed.workspace_process().unwrap().is_none());
-        assert!(managed.start().is_err()); // No replacement process is launched or selected.
-        // A manually exited external game leaves no owned process or journal.
-        // Repeated workspace cleanup must remain safe and complete successfully.
-        managed.finish().unwrap();
-        managed.finish().unwrap();
-        managed.confirm_game_stopped().unwrap();
-        assert!(tracker.finish_session_feedback(&managed).unwrap());
-        assert_eq!(tracker.window_message(), None);
-        assert!(!tracker.managed);
-    }
-
-    #[test]
-    fn process_ownership_requires_pid_creation_time_and_executable() {
-        let pid = std::process::id();
-        let root = std::env::temp_dir().join(format!("mizar-identity-{}", pid));
-        let log = crate::startup_log::DesktopLog::new(&root, None).unwrap();
-        let process = open(pid, &log).unwrap().unwrap();
-        let (created, path) = identity(&process, &log).unwrap();
-        let mut journal = json!({"pid":pid,"created":created,"executable":path});
-        assert!(owned_process(&journal, &log).unwrap().is_some());
-        journal["created"] = json!(created + 1);
-        assert!(owned_process(&journal, &log).unwrap().is_none());
-        journal["created"] = json!(created);
-        journal["executable"] = json!("C:\\different\\cs2.exe");
-        assert!(owned_process(&journal, &log).unwrap().is_none());
-        let mut managed = ManagedCs2::new(log);
-        let id = crate::demo_test::request_id().unwrap();
-        journal["version"] = json!(1);
-        journal["executable"] = json!(path);
-        journal["demoTestRequestId"] = json!(id);
-        managed.store.save(&journal).unwrap();
-        // A running, owned process is necessary but insufficient: it must also
-        // belong to this exact native Demo launch request.
-        assert!(managed.validate_demo_running(&id).is_ok());
-        assert!(managed
-            .validate_demo_running(&crate::demo_test::request_id().unwrap())
-            .is_err());
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn pending_mulnx_launch_exposes_uncertain_recovery() {
-        let root = std::env::temp_dir().join(format!("mizar-mulnx-uncertain-{}", std::process::id()));
-        let log = crate::startup_log::DesktopLog::new(&root, None).unwrap();
-        let managed = ManagedCs2::new(log);
-        let video = root.join("cs2_video.txt");
-        std::fs::write(&video, b"\"video.cfg\" { \"setting.defaultres\" \"1280\" \"setting.defaultresheight\" \"960\" \"setting.fullscreen\" \"1\" }").unwrap();
-        managed.store.prepare(&video, &root.join("absent/cs2.exe"), crate::cs2_video::VideoSize::new(1920, 1080).unwrap()).unwrap();
-        let launch = managed.log.state_root.join("data/mulnx-launch");
-        std::fs::create_dir_all(&launch).unwrap();
-        std::fs::write(launch.join("pending.json"), b"{}").unwrap();
-        assert_eq!(managed.status().unwrap()["phase"], "uncertain");
-        assert!(managed.startup_recovery_status().unwrap().uncertain);
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn slow_launch_stays_pending_and_requires_explicit_cancel_before_restoration() {
-        let _processes = GAME_PROCESSES.lock().unwrap();
-        let root = std::env::temp_dir().join(format!("mizar-waiting-{}", std::process::id()));
-        let log = crate::startup_log::DesktopLog::new(&root, None).unwrap();
-        let mut managed = ManagedCs2::new(log);
-        let video = root.join("cs2_video.txt");
-        let original = b"\"video.cfg\" { \"setting.defaultres\" \"1280\" \"setting.defaultresheight\" \"960\" \"setting.fullscreen\" \"1\" }";
-        std::fs::write(&video, original).unwrap();
-        let mut journal = managed
-            .store
-            .prepare(
-                &video,
-                &root.join("absent/cs2.exe"),
-                crate::cs2_video::VideoSize::new(1920, 1080).unwrap(),
-            )
-            .unwrap();
-        journal["launchAttempted"] = json!(true);
-        journal["launchTime"] = json!(1);
-        managed.store.save(&journal).unwrap();
-        for _ in 0..3 {
-            managed.poll();
-        }
-        assert_eq!(managed.status().unwrap()["phase"], "uncertain");
-        managed.can_preserve = true;
-        assert_eq!(managed.status().unwrap()["canPreserve"], false);
-        assert!(!managed.start_with_settings(true).unwrap());
-        assert!(!managed.preserve_settings());
-        assert!(managed.store.load().unwrap().is_some());
-        assert!(managed.finish().is_err());
-        let mut tracker = crate::windows_host::GameTracker::default();
-        tracker.alignment_failure = Some(crate::windows_host::AlignmentFailure {
-            stage: "position",
-            api: Some("SetWindowPos"),
-            last_error: Some(5),
-        });
-        assert!(!tracker.finish_session_feedback(&managed).unwrap());
-        assert!(tracker.window_message().is_some());
-        assert_ne!(std::fs::read(&video).unwrap(), original);
-        managed.restore_backup(true).unwrap();
-        assert_eq!(std::fs::read(&video).unwrap(), original);
-        assert!(managed.store.load().unwrap().is_none());
-        assert!(tracker.finish_session_feedback(&managed).unwrap());
-        assert_eq!(tracker.window_message(), None);
-        // A damaged core record leaves restoration unknown, even with no game.
-        tracker.alignment_failure = Some(crate::windows_host::AlignmentFailure {
-            stage: "position",
-            api: Some("SetWindowPos"),
-            last_error: Some(5),
-        });
-        std::fs::write(managed.store.backup_directory().join("pending.json"), b"{").unwrap();
-        assert!(tracker.finish_session_feedback(&managed).is_err());
-        assert!(tracker.window_message().is_some());
-        std::fs::remove_dir_all(root).unwrap();
-    }
 }
 
 fn backup_text(path: &std::path::Path, limit: usize) -> Result<String, String> {

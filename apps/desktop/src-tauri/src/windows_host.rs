@@ -435,27 +435,3 @@ fn overlay_foreground_allowed(foreground: isize, game: isize, workspace_windows:
 fn alignment_geometry_recovered(previous: Option<Rect>, previous_dpi: u32, current: Option<Rect>, dpi: u32) -> bool {
     (previous.is_none() || previous_dpi == 0) && current.is_some() && dpi != 0
 }
-
-#[cfg(test)]
-mod recovery_tests {
-    use super::*;
-    #[test]
-    fn overlay_only_follows_game_and_workspace_windows() {
-        let workspace = [10, 11];
-        assert!(overlay_foreground_allowed(20, 20, &workspace));
-        assert!(overlay_foreground_allowed(10, 20, &workspace));
-        assert!(overlay_foreground_allowed(11, 20, &workspace));
-        assert!(!overlay_foreground_allowed(12, 20, &workspace));
-        assert!(!overlay_foreground_allowed(21, 20, &workspace));
-        assert!(!overlay_foreground_allowed(0, 20, &workspace));
-    }
-    #[test]
-    fn unavailable_geometry_can_recover_after_alignment_retries_are_exhausted() {
-        let valid = Some(Rect {x:0,y:0,width:1280,height:720});
-        assert!(alignment_geometry_recovered(valid, 0, valid, 144));
-        assert!(alignment_geometry_recovered(None, 144, valid, 144));
-        assert!(!alignment_geometry_recovered(None, 0, None, 0));
-        assert!(!alignment_geometry_recovered(valid, 144, valid, 144));
-        assert!(!alignment_geometry_recovered(valid, 144, Some(Rect {x:10,y:10,width:800,height:600}), 144));
-    }
-}

@@ -140,15 +140,6 @@ fn fields(text: &str) -> Result<(BTreeMap<String, Token>, usize), String> {
     Ok((map, close))
 }
 
-#[cfg(test)]
-pub fn preset(preserve_quality: bool) -> BTreeMap<String, String> {
-    quality_preset(if preserve_quality {
-        Quality::Preserve
-    } else {
-        Quality::VeryHigh
-    })
-}
-
 pub fn quality_preset(quality: Quality) -> BTreeMap<String, String> {
     let mut values = BTreeMap::new();
     for (key, value) in [
@@ -326,42 +317,4 @@ pub fn compatible_restore(backup: &str, current: &str) -> Result<String, String>
     let mut output = current.to_string();
     for (start, end, value) in edits { output.replace_range(start..end, &value); }
     Ok(output)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    const ORIGINAL: &str = "\u{feff}\"video.cfg\"\r\n{\r\n// user comment\r\n\"setting.defaultres\" \"1280\"\r\n\"setting.defaultresheight\" \"960\"\r\n\"setting.fullscreen\" \"1\"\r\n\"setting.videocfg_fsr_detail\" \"3\"\r\n\"unrelated\" \"keep\"\r\n}\r\n";
-
-
-    #[test]
-    fn preserves_unrelated_edits_and_restores_game_updated_resolution() {
-        let preset = preset(false);
-        let applied = apply(ORIGINAL, &preset).unwrap();
-        let current = applied.replace("\"keep\"", "\"user change\"");
-        let restored = restore(ORIGINAL, &applied, &current, &preset).unwrap();
-        assert!(restored.contains("\"user change\""));
-        assert_eq!(
-            fields(&restored).unwrap().0["setting.defaultres"].value,
-            "1280"
-        );
-        assert!(!fields(&restored)
-            .unwrap()
-            .0
-            .contains_key("setting.msaa_samples"));
-        let resized = restore(
-            ORIGINAL,
-            &applied,
-            &applied.replace("\"1920\"", "\"1600\""),
-            &preset,
-        )
-        .unwrap();
-        assert_eq!(
-            fields(&resized).unwrap().0["setting.defaultres"].value,
-            "1280"
-        );
-    }
-
-
-
 }

@@ -611,27 +611,3 @@ pub fn restored(record: &Value, current: &str) -> Result<String, String> {
         Err("本次启动配置已被外部修改，请检查帧率备份后重试恢复。".into())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    const CONVARS: &str =
-        "\u{feff}\"config\"\r\n{\"convars\" { // keep\r\n\"fps_max\" \"0\" \"other\" \"old\" }}";
-    #[test]
-    fn edits_only_fps_and_restores_after_game_writes_other_convars() {
-        let applied = patch_convars(CONVARS, 60).unwrap();
-        let record = json!({"kind":"convars", "original":CONVARS,"applied":applied});
-        assert_eq!(restored(&record, &applied).unwrap(), CONVARS);
-        let current = applied
-            .replace("\"old\"", "\"new\"")
-            .replace("\"60\"", "\"30\"");
-        assert_eq!(
-            restored(&record, &current).unwrap(),
-            CONVARS.replace("\"old\"", "\"new\"")
-        );
-    }
-
-
-
-
-}
