@@ -149,10 +149,7 @@ export class MusicPackResources {
       throw new Error('resource_damaged');
     return archive;
   }
-  async install(zip: Buffer): Promise<ResourceRef> {
-    return this.installAndCommit(zip, async (ref) => ref);
-  }
-  /** Serialize installation through the configuration commit with explicit removal. */
+  /** Serialize installation through the configuration commit. */
   async installAndCommit<T>(
     zip: Buffer,
     commit: (ref: ResourceRef) => Promise<T>,
@@ -168,7 +165,6 @@ export class MusicPackResources {
       };
       await ensureDirectory(this.root);
       const filename = this.filename(ref.id, ref.version);
-      if (await this.isDeleting(ref)) throw new Error('resource_deleting');
       const target = join(this.root, filename);
       const temporary = join(this.root, `tmp-${randomUUID()}`);
       try {
@@ -207,71 +203,6 @@ export class MusicPackResources {
       await this.readArchive(ref);
       return commit(ref);
     });
-  }
-  async isDeleting(ref: ResourceRef): Promise<boolean> {
-    try {
-      await lstat(join(this.root, `${this.filename(ref.id, ref.version)}.deleting`));
-      return true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
-      throw error;
-    }
-  }
-  /** The caller's reference guard serializes the last reference check and deletion mark. */
-  async remove(
-    ref: ResourceRef,
-    guard: <T>(operation: () => Promise<T>) => Promise<T>,
-    referenced: () => ResourceRef[],
-  ): Promise<void> {
-    await this.queue.run(() =>
-      guard(async () => {
-        const marker = join(this.root, `${this.filename(ref.id, ref.version)}.deleting`);
-        if (
-          referenced().some(
-            (item) =>
-              item.id === ref.id && item.version === ref.version && item.digest === ref.digest,
-          )
-        )
-          throw new Error('resource_in_use');
-        if (await this.isDeleting(ref)) {
-          const handle = await open(marker, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-          let saved: ResourceRef;
-          try {
-            const stat = await handle.stat();
-            if (!stat.isFile() || stat.nlink !== 1 || stat.size > 1024)
-              throw new Error('resource_damaged');
-            saved = JSON.parse(await handle.readFile('utf8')) as ResourceRef;
-          } finally {
-            await handle.close();
-          }
-          if (saved.id !== ref.id || saved.version !== ref.version || saved.digest !== ref.digest)
-            throw new Error('resource_deleting');
-        } else {
-          await this.readArchive(ref);
-          const temporary = join(this.root, `tmp-${randomUUID()}`);
-          try {
-            const handle = await open(temporary, 'wx', 0o600);
-            try {
-              await handle.writeFile(JSON.stringify(ref));
-              await handle.sync();
-            } finally {
-              await handle.close();
-            }
-            await rename(temporary, marker);
-          } finally {
-            await unlink(temporary).catch((error: NodeJS.ErrnoException) => {
-              if (error.code !== 'ENOENT') throw error;
-            });
-          }
-        }
-        await unlink(join(this.root, this.filename(ref.id, ref.version))).catch(
-          (error: NodeJS.ErrnoException) => {
-            if (error.code !== 'ENOENT') throw error;
-          },
-        );
-        await unlink(marker);
-      }),
-    );
   }
   async read(ref: AssetRef): Promise<{ name: string; bytes: Buffer }> {
     const asset = await this.readAsset(ref);

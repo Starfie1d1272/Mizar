@@ -23,6 +23,15 @@ import type { BroadcastConfigStore, BroadcastImportMapping } from './store.js';
 const resourceKey = (ref: ResourceRef) => JSON.stringify([ref.id, ref.version, ref.digest]);
 const assetKey = (ref: AssetRef) => JSON.stringify([resourceKey(ref.resource), ref.fileId]);
 type FileEntry = { id: string; path: string; mediaType: string; data: Buffer };
+export class PackExportError extends Error {
+  constructor(
+    readonly type: 'module' | 'preset',
+    readonly id: string,
+    cause: unknown,
+  ) {
+    super('export_failed', { cause });
+  }
+}
 
 // The external dependency records acquisition, not proof that a local tool is installed.
 function releaseResource(tool: MulnxToolRef): ResourceRef {
@@ -67,14 +76,13 @@ function releaseTool(resource: ResourceRef): MulnxToolRef {
 /** Export one complete scheme from a single configuration snapshot. */
 export async function exportPresetPack(input: {
   document: BroadcastConfigDocument;
-  presetId?: string;
   presetIds?: string[];
   moduleIds?: string[];
   music: MusicStore;
   resources: MusicPackResources;
   metadata: { packageId: string; version: string; name: string; author: string };
 }): Promise<Buffer> {
-  const ids = input.presetIds ?? (input.presetId ? [input.presetId] : []);
+  const ids = input.presetIds ?? [];
   const requestedModules = input.moduleIds ?? [];
   if (
     (!ids.length && !requestedModules.length) ||
@@ -87,7 +95,8 @@ export async function exportPresetPack(input: {
   const presets = ids.map((id) => {
     const preset = input.document.presets.find((item) => item.id === id);
     if (!preset) throw new Error('preset_missing');
-    if (preset.opaqueModules.length) throw new Error('capability_unsupported');
+    if (preset.opaqueModules.length)
+      throw new PackExportError('preset', preset.id, new Error('capability_unsupported'));
     return { preset, bound: boundModules(preset, input.document.modules) };
   });
   const modules = new Map(
@@ -127,17 +136,21 @@ export async function exportPresetPack(input: {
     });
   };
   for (const module of modules.values()) {
-    if (module.kind === 'program')
-      for (const ref of Object.values(module.value.assets)) await addImage(ref);
-    if (module.kind === 'hud' && !('preset' in module.value))
-      for (const ref of Object.values(module.value.panelAssets)) await addImage(ref);
-    if (module.kind === 'music')
-      for (const group of MUSIC_GROUPS)
-        for (const track of module.value.groups[group].tracks) await addAudio(track.asset);
-    if (module.kind === 'camera')
-      for (const map of module.value.maps) {
-        if (map.openingSound) await addAudio(map.openingSound.asset);
-      }
+    try {
+      if (module.kind === 'program')
+        for (const ref of Object.values(module.value.assets)) await addImage(ref);
+      if (module.kind === 'hud' && !('preset' in module.value))
+        for (const ref of Object.values(module.value.panelAssets)) await addImage(ref);
+      if (module.kind === 'music')
+        for (const group of MUSIC_GROUPS)
+          for (const track of module.value.groups[group].tracks) await addAudio(track.asset);
+      if (module.kind === 'camera')
+        for (const map of module.value.maps) {
+          if (map.openingSound) await addAudio(map.openingSound.asset);
+        }
+    } catch (error) {
+      throw new PackExportError('module', module.id, error);
+    }
   }
   const dependencies = new Map<
     string,
@@ -169,20 +182,25 @@ export async function exportPresetPack(input: {
   for (const module of modules.values()) {
     const entryId = `module-${moduleIds.size + 1}`;
     moduleIds.set(module.id, entryId);
-    const template = exportModule(module, {
-      asset(ref) {
-        const local = audio.get(assetKey(ref)) ?? images.get(assetKey(ref));
-        return local
-          ? { package: '$self', fileId: local.id }
-          : { package: alias(ref.resource), fileId: ref.fileId };
-      },
-      resource(ref) {
-        return { package: alias(ref) };
-      },
-      tool(ref) {
-        return { package: alias(releaseResource(ref)) };
-      },
-    });
+    let template: ReturnType<typeof exportModule>;
+    try {
+      template = exportModule(module, {
+        asset(ref) {
+          const local = audio.get(assetKey(ref)) ?? images.get(assetKey(ref));
+          return local
+            ? { package: '$self', fileId: local.id }
+            : { package: alias(ref.resource), fileId: ref.fileId };
+        },
+        resource(ref) {
+          return { package: alias(ref) };
+        },
+        tool(ref) {
+          return { package: alias(releaseResource(ref)) };
+        },
+      });
+    } catch (error) {
+      throw new PackExportError('module', module.id, error);
+    }
     entries.push({
       entryId,
       module: module.kind,
@@ -394,30 +412,69 @@ export async function importPresetPack(input: {
     modules: selected.modules.filter(allowed),
     presets: selected.presets.filter(allowed),
   });
-  const makeEntries = (mapping: BroadcastImportMapping) =>
-    inspected.entries.map((entry) => ({
-      ...entry,
-      selected: (entry.type === 'module' ? selected.modules : selected.presets).includes(
-        entry.entryId,
-      ),
-      result: (
+  const makeEntries = (mapping: BroadcastImportMapping) => {
+    const document = input.store.snapshot;
+    return inspected.entries.map((entry) => {
+      const selectedEntry = (
+        entry.type === 'module' ? selected.modules : selected.presets
+      ).includes(entry.entryId);
+      const ids =
+        entry.type === 'module'
+          ? (mapping.moduleEntries[entry.entryId] ?? [])
+          : [mapping.presetEntries[entry.entryId]].filter((id): id is string => !!id);
+      const objects = entry.type === 'module' ? document.modules : document.presets;
+      const included =
         entry.type === 'module'
           ? batch.moduleEntries[entry.entryId]
-          : batch.presetEntries[entry.entryId]
-      )
-        ? (
-            entry.type === 'module'
-              ? batch.moduleEntries[entry.entryId]?.some((id) =>
-                  mapping.moduleEntries[entry.entryId]?.includes(id),
-                )
-              : mapping.presetEntries[entry.entryId] === batch.presetEntries[entry.entryId]
-          )
-          ? ('imported' as const)
-          : ('existing' as const)
-        : (entry.type === 'module' ? selected.modules : selected.presets).includes(entry.entryId)
-          ? ('unavailable' as const)
-          : ('not_selected' as const),
-    }));
+          : batch.presetEntries[entry.entryId];
+      const createdIds =
+        entry.type === 'module'
+          ? (batch.moduleEntries[entry.entryId] ?? [])
+          : [batch.presetEntries[entry.entryId]].filter((id): id is string => !!id);
+      const targetId =
+        selectedEntry && included
+          ? (objects.find((item) => ids.includes(item.id) && createdIds.includes(item.id))?.id ??
+            objects.find((item) => ids.includes(item.id))?.id)
+          : undefined;
+      const copies = ids.map((id) => ({
+        id,
+        ...(entry.type === 'module' ? { owner: mapping.moduleOwners?.[id] ?? null } : {}),
+        state: objects.some((item) => item.id === id)
+          ? ('existing' as const)
+          : ('removed' as const),
+      }));
+      const status =
+        ['ready', 'existing', 'removed'].includes(entry.status) && copies.length
+          ? copies.some((copy) => copy.state === 'existing')
+            ? ('existing' as const)
+            : ('removed' as const)
+          : entry.status;
+      return {
+        ...entry,
+        status,
+        copies: copies.length ? copies : entry.copies,
+        selected: selectedEntry,
+        ...(targetId ? { targetId } : {}),
+        result: (
+          entry.type === 'module'
+            ? batch.moduleEntries[entry.entryId]
+            : batch.presetEntries[entry.entryId]
+        )
+          ? (
+              entry.type === 'module'
+                ? batch.moduleEntries[entry.entryId]?.some((id) =>
+                    mapping.moduleEntries[entry.entryId]?.includes(id),
+                  )
+                : mapping.presetEntries[entry.entryId] === batch.presetEntries[entry.entryId]
+            )
+            ? ('imported' as const)
+            : ('existing' as const)
+          : (entry.type === 'module' ? selected.modules : selected.presets).includes(entry.entryId)
+            ? ('unavailable' as const)
+            : ('not_selected' as const),
+      };
+    });
+  };
   if (!batch.modules.length && !batch.presets.length) {
     const mapping: BroadcastImportMapping = {
       source: inspected.source,

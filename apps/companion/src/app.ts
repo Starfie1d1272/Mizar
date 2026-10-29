@@ -1385,7 +1385,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             });
             await resolver.resolveModule(module);
           },
-          (operation) => broadcastConfig!.references.run(operation),
         );
       registerBroadcastConfigRoutes(
         app,
