@@ -405,6 +405,21 @@ it('keeps the downloaded version available when native selection is blocked', as
   expect(container.textContent).toContain('请先退出 CS2');
   expect(container.textContent).toContain('已下载：new');
 });
+it('shows the recorded running version independently of the selected version', async () => {
+  window.__TAURI_INTERNALS__ = {
+    invoke: <T,>() => Promise.resolve({ runningVersion: 'running-v1' } as T),
+  };
+  await act(async () => {
+    root.render(<ResourceLibraryPage />);
+    await Promise.resolve();
+  });
+  const rows = [...container.querySelectorAll('dl div')];
+  expect(rows.find((row) => row.textContent?.includes('已选版本'))?.textContent).toContain('old');
+  expect(rows.find((row) => row.textContent?.includes('运行版本'))?.textContent).toContain(
+    'running-v1',
+  );
+});
+
 it('retains the download receipt when filtering the resource catalog', async () => {
   window.__TAURI_INTERNALS__ = { invoke: <T,>() => Promise.resolve(undefined as T) };
   mocks.native.mockResolvedValueOnce({ preparedId: 'prepared-id', tag: 'new' });
