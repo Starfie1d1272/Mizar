@@ -23,7 +23,13 @@ it('uses the inspected scheme and module revisions only on an explicit action', 
         ],
       },
     ],
-    active: { revision: 'active', sourcePreset: null, adjusted: false },
+    active: {
+      revision: 'active',
+      sourcePreset: { id: 'preset', revision: 'revision' },
+      sourceModuleIds: { hud: 'h', program: 'p', music: null, camera: null },
+      sourceModuleRevisions: { hud: 'old', program: 'pr', music: null, camera: null },
+      adjusted: false,
+    },
   };
   const fetchMock = vi.fn((path: string, options?: RequestInit) => {
     void options;
@@ -41,6 +47,8 @@ it('uses the inspected scheme and module revisions only on an explicit action', 
       await Promise.resolve();
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(element.textContent).toContain('已修改，尚未使用');
+    expect(element.textContent).not.toContain('当前使用');
     const button = [...element.querySelectorAll('button')].find(
       (item) => item.textContent === '使用方案',
     )!;

@@ -192,7 +192,8 @@ export function ResourceLibraryPage() {
         !(showMedia && (resources?.length || view.resources === null)) &&
         !showTool &&
         !showMusic &&
-        !showHud ? (
+        !showHud &&
+        !showPresets ? (
           <p>没有找到匹配的资源。</p>
         ) : null}
       </main>

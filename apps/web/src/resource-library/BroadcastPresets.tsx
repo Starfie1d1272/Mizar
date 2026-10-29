@@ -9,7 +9,13 @@ type Preset = { id: string; name: string; revision: string; bindings: Binding[] 
 type View = {
   modules: Module[];
   presets: Preset[];
-  active: { revision: string; sourcePreset: { id: string } | null; adjusted: boolean };
+  active: {
+    revision: string;
+    sourcePreset: { id: string; revision: string } | null;
+    sourceModuleIds?: Partial<Record<Kind, string | null>>;
+    sourceModuleRevisions?: Partial<Record<Kind, string | null>>;
+    adjusted: boolean;
+  };
 };
 const labels: Record<Kind, string> = {
   hud: 'HUD',
@@ -87,13 +93,41 @@ export function BroadcastPresets({ query }: { query: string }) {
       ) : null}
       {view && presets.length === 0 ? <p>没有找到匹配的播出方案。</p> : null}
       {presets.map((preset) => {
-        const current = view?.active.sourcePreset?.id === preset.id;
+        const active = view?.active;
+        const current = active?.sourcePreset?.id === preset.id;
+        const known = active?.sourceModuleIds && active.sourceModuleRevisions;
+        const changed =
+          current &&
+          known &&
+          (active.sourcePreset!.revision !== preset.revision ||
+            preset.bindings.some((binding) => {
+              const id = binding.mode === 'use' ? binding.moduleId : null;
+              const revision =
+                binding.mode === 'use'
+                  ? view?.modules.find((item) => item.id === id && item.kind === binding.kind)
+                      ?.revision
+                  : null;
+              return (
+                active.sourceModuleIds?.[binding.kind] !== id ||
+                active.sourceModuleRevisions?.[binding.kind] !== revision
+              );
+            }));
         return (
           <Panel className="resource-library__item resource-library__preset" key={preset.id}>
             <div>
               <span className="resource-library__kind">播出方案</span>
               <h2>{preset.name}</h2>
-              <p>{current ? (view.active.adjusted ? '当前方案，已调整' : '当前使用') : '已保存'}</p>
+              <p>
+                {!current
+                  ? '已保存'
+                  : !known
+                    ? '状态待确认'
+                    : changed
+                      ? '已修改，尚未使用'
+                      : active.adjusted
+                        ? '当前方案，已调整'
+                        : '当前使用'}
+              </p>
             </div>
             <details>
               <summary>查看配置</summary>
