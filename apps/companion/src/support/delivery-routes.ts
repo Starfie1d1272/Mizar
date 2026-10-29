@@ -25,7 +25,6 @@ export function registerDiagnosticDelivery(
   const incidents = options.directory ? new IncidentStore(options.directory) : undefined;
   const status = () => ({
     available: ready,
-    error: failure,
     ...(delivery?.status() ?? {
       configured: false,
       consent: false,
@@ -34,6 +33,7 @@ export function registerDiagnosticDelivery(
       acknowledged: 0,
       deletionPending: 0,
     }),
+    error: failure ?? delivery?.status().error ?? null,
   });
   app.addHook('onReady', () => {
     if (!options.directory || !options.journal) {
