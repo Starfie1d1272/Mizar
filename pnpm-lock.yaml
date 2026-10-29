@@ -298,9 +298,6 @@ importers:
       '@fastify/websocket':
         specifier: 'catalog:'
         version: 11.3.3
-      '@mizar/broadcast-config':
-        specifier: workspace:*
-        version: link:../../packages/broadcast-config
       '@mizar/core':
         specifier: workspace:*
         version: link:../../packages/core
