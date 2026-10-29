@@ -89,7 +89,7 @@ export function BroadcastPresets({ query }: { query: string }) {
       {presets.map((preset) => {
         const current = view?.active.sourcePreset?.id === preset.id;
         return (
-          <Panel className="resource-library__item" key={preset.id}>
+          <Panel className="resource-library__item resource-library__preset" key={preset.id}>
             <div>
               <span className="resource-library__kind">播出方案</span>
               <h2>{preset.name}</h2>

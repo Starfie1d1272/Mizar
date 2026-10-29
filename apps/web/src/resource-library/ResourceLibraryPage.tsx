@@ -58,7 +58,7 @@ export function ResourceLibraryPage() {
         <header className="resource-library__heading">
           <div>
             <h1>资源管理</h1>
-            <p>查看本机素材和运镜工具的版本与状态。</p>
+            <p>查看播出方案、音乐配置、素材和运镜工具。</p>
           </div>
         </header>
         <div className="resource-library__filters">
