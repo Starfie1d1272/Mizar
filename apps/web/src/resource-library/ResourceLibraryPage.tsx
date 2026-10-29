@@ -140,6 +140,10 @@ export function ResourceLibraryPage() {
                   <dd>{view.tool.latest}</dd>
                 </div>
               ) : null}
+              <div>
+                <dt>运行版本</dt>
+                <dd>未确认</dd>
+              </div>
             </dl>
             <div className="resource-library__actions">
               <MulnxToolControls

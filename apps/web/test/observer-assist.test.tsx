@@ -359,6 +359,33 @@ it('shows the available MulNX maintenance action after checking versions', () =>
     [...container.querySelectorAll('button')].some((button) => button.textContent === '更新'),
   ).toBe(true);
 });
+it('keeps the downloaded version available when native selection is blocked', async () => {
+  window.__TAURI_INTERNALS__ = { invoke: <T,>() => Promise.resolve(undefined as T) };
+  mocks.native.mockResolvedValueOnce({ preparedId: 'prepared-id', tag: 'new' });
+  mocks.native.mockRejectedValueOnce(new Error('请先退出 CS2'));
+  act(() =>
+    root.render(
+      <MulnxToolControls maintenanceOnly tool={{ installed: 'old', latest: null, busy: false }} />,
+    ),
+  );
+  const button = (label: string) =>
+    [...container.querySelectorAll('button')].find((item) => item.textContent === label)!;
+  await act(async () => {
+    button('下载最新版本').click();
+    await Promise.resolve();
+  });
+  expect(container.textContent).toContain('本次下载：new');
+  await act(async () => {
+    button('使用此版本').click();
+    await Promise.resolve();
+  });
+  expect(mocks.native).toHaveBeenLastCalledWith('mulnx_control', {
+    action: 'select',
+    preparedId: 'prepared-id',
+  });
+  expect(container.textContent).toContain('请先退出 CS2');
+  expect(container.textContent).toContain('本次下载：new');
+});
 it('gives specific repair guidance for known startup causes and diagnostic context for unknown failures', () => {
   const view: ObserverRuntimeView = {
     active: false,
