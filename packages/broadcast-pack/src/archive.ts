@@ -93,3 +93,54 @@ export async function readPackArchive(zip: Buffer) {
   verifyFiles(parsed.manifest, entries);
   return { ...parsed, manifestBytes, files: entries };
 }
+
+/** Write a deterministic ZIP32 container after checking the supplied manifest and files. */
+export function writePackArchive(
+  manifestBytes: Buffer,
+  files: ReadonlyMap<string, Uint8Array>,
+): Buffer {
+  const { manifest } = parseManifest(manifestBytes);
+  verifyFiles(manifest, files);
+  const entries: [string, Uint8Array][] = [
+    ['manifest.json', manifestBytes],
+    ...manifest.files.map((file): [string, Uint8Array] => [file.path, files.get(file.path)!]),
+  ];
+  const locals: Buffer[] = [];
+  const directory: Buffer[] = [];
+  let offset = 0;
+  for (const [name, data] of entries) {
+    const nameBytes = Buffer.from(name, 'utf8');
+    const checksum = crc32(data);
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(0x800, 6);
+    local.writeUInt32LE(checksum, 14);
+    local.writeUInt32LE(data.byteLength, 18);
+    local.writeUInt32LE(data.byteLength, 22);
+    local.writeUInt16LE(nameBytes.length, 26);
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(20, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(0x800, 8);
+    central.writeUInt32LE(checksum, 16);
+    central.writeUInt32LE(data.byteLength, 20);
+    central.writeUInt32LE(data.byteLength, 24);
+    central.writeUInt16LE(nameBytes.length, 28);
+    central.writeUInt32LE(offset, 42);
+    locals.push(local, nameBytes, Buffer.from(data));
+    directory.push(central, nameBytes);
+    offset += local.length + nameBytes.length + data.byteLength;
+  }
+  const centralBytes = Buffer.concat(directory);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(entries.length, 8);
+  end.writeUInt16LE(entries.length, 10);
+  end.writeUInt32LE(centralBytes.length, 12);
+  end.writeUInt32LE(offset, 16);
+  if (offset + centralBytes.length + end.length > PACK_LIMITS.total)
+    throw new Error('package_budget_exceeded');
+  return Buffer.concat([...locals, centralBytes, end]);
+}
