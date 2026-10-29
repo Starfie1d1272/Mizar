@@ -127,9 +127,50 @@ it('prepares the installed launcher locally and preserves upstream options', asy
   await expect(missing.prepare('D:\\Steam\\game\\bin\\win64\\cs2.exe')).rejects.toThrow(
     '启动程序缺失或无法读取',
   );
+  const attempts = vi.mocked(fetch).mock.calls.length;
   await expect(
     missing.prepare('D:\\Steam\\game\\bin\\win64\\cs2.exe', false, true),
-  ).rejects.toThrow('启动程序缺失或无法读取');
+  ).rejects.toThrow('mulnx_metadata_http_403');
+  expect(vi.mocked(fetch).mock.calls.length).toBe(attempts + 1);
+  expect(await readFile(join(root, 'current.json'), 'utf8')).toContain(directory);
+  vi.mocked(fetch).mockResolvedValueOnce(
+    new Response(
+      JSON.stringify([
+        {
+          id: 1,
+          draft: false,
+          published_at: '2026-10-23T08:54:04Z',
+          tag_name: 'BetaFixture',
+          assets: [
+            {
+              id: 2,
+              name: 'MulNX.7z',
+              digest: `sha256:${'a'.repeat(64)}`,
+              size: 1,
+              browser_download_url:
+                'https://github.com/Co1Swet/MulNX_CS2/releases/download/BetaFixture/MulNX.7z',
+            },
+          ],
+        },
+      ]),
+    ),
+  );
+  const install = vi
+    .spyOn(
+      missing as unknown as { install: (release: unknown, path: string) => Promise<void> },
+      'install',
+    )
+    .mockImplementation(async () => {
+      await writeFile(launcher, 'fixture, reinstalled');
+    });
+  await writeFile(config, owned);
+  await expect(
+    missing.prepare('D:\\Steam\\game\\bin\\win64\\cs2.exe', false, true),
+  ).resolves.toMatchObject({ version: 'BetaFixture' });
+  expect(install).toHaveBeenCalledOnce();
+  expect(await readFile(join(root, 'current.json'), 'utf8')).toContain(directory);
+  install.mockRestore();
+
   await writeFile(launcher, 'fixture, restored');
   await writeFile(config, owned);
   await expect(missing.prepare('D:\\Steam\\game\\bin\\win64\\cs2.exe')).resolves.toMatchObject({

@@ -135,6 +135,7 @@ export class MulnxTool {
     return this.run('mulnx_prepare', async () => {
       // Called only by the authenticated native host after its process and install checks.
       // Entry uses prepared local bytes. The explicit update action owns network discovery.
+      let launcherUnavailable = false;
       if (this.installed) {
         // Recheck the actual file on every attempt; the receipt alone cannot prove it is usable.
         try {
@@ -149,12 +150,14 @@ export class MulnxTool {
             await file.close();
           }
         } catch (error) {
-          if (['ENOENT', 'EACCES', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? ''))
+          if (!['ENOENT', 'EACCES', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? ''))
+            throw error;
+          if (!update)
             throw new Error(
-              'MulNX 启动程序缺失或无法读取。请核对官方来源及 Windows 安全中心的检测记录；处理后重新进入工作台以检查文件。旧版本文件和设置已保留。仍无法使用时，可在“设置 → 游戏与观战 → CS2 启动设置”选择标准启动并保存。',
+              'MulNX 启动程序缺失或无法读取。请核对官方来源及 Windows 安全中心的检测记录；处理后重新进入工作台以检查文件；文件已删除时，可在“设置 → 运镜”点击更新 MulNX 重新安装。旧版本文件和设置已保留。仍无法使用时，可在“设置 → 游戏与观战 → CS2 启动设置”选择标准启动并保存。',
               { cause: error },
             );
-          throw error;
+          launcherUnavailable = true;
         }
       }
       const release = update
@@ -162,7 +165,11 @@ export class MulnxTool {
         : (this.installed?.release ??
           z.object({ release: releaseSchema }).parse(await readJson(this.bundle, 'release.json'))
             .release);
-      if (!this.installed || this.installed.release.sha256 !== release.sha256)
+      if (
+        launcherUnavailable ||
+        !this.installed ||
+        this.installed.release.sha256 !== release.sha256
+      )
         await this.install(release, cs2Path);
       const root = join(this.directory, this.installed!.directory, 'MulNX');
       await this.configureLauncher(root, cs2Path, consoleCapture, spectatorCfg);
