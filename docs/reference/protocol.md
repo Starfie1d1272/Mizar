@@ -305,7 +305,7 @@ RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对�
 
 `POST /operator/resource-library/import-pack` 同样接收完整包字节；查询参数 `selection` 是分别 URL 编码的 JSON `{ "modules": [entryId], "presets": [entryId] }`，`digest` 是检查得到的清单摘要。方案自动带入其所需模块，不支持或无效条目不会阻断其他条目；可解析但本机缺依赖的草稿允许保存，使用时重新验证。响应包含 `mapping`、`reused` 和逐项 `entries`，其中 `result` 为 `imported`、`existing`、`unavailable` 或 `not_selected`。主动选择已删除条目会重新创建；存活副本复用且保留编辑。省略 selection 表示选择全部。导入不启用配置。
 
-`POST /operator/resource-library/export-pack` 接收 `modules`（每项 `moduleId`、`expectedRevision`）及 `presets`（每项 `presetId`、`expectedRevision`、`expectedModuleRevisions`）数组，至少选择一项；导出前后核对修订。
+`POST /operator/resource-library/export-pack` 接收 `modules`（每项 `moduleId`、`expectedRevision`）及 `presets`（每项 `presetId`、`expectedRevision`、`expectedModuleRevisions`）数组，至少选择一项；导出前后核对修订。不能编码时返回 `422 export_failed`，`entries` 列出无法导出的选择及原因，不生成缺项的成功包。
 
 本机配置协调器就绪时，`POST /operator/resource-library/import-preset-pack` 接收 `application/x-mizarpack`，校验、发布素材并一次保存独立方案草稿；`POST /operator/resource-library/export-preset-pack` 以方案 ID 和预期方案、模块修订导出。支持原生 HUD、节目引用、音乐和带镜头来源的运镜配置；独立开场音效随包携带，MulNX 官方发行依赖保留精确发行与归档摘要，不包含程序本体。导入只保留取得来源，使用时仍由 MulNX owner 核验本机内容与兼容性；开发测试 fork 的分享和嵌入第三方归档暂不支持。写入仅允许本机可信 Origin，导入不修改活动配置或播放状态。
 

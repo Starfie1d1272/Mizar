@@ -224,7 +224,34 @@ export function registerMusicPackRoutes(
           return reply.code(409).send({ error: 'revision_conflict' });
         if (error instanceof Error && ['module_missing', 'preset_missing'].includes(error.message))
           return reply.code(404).send({ error: error.message });
-        return reply.code(422).send({ error: 'export_failed' });
+        const entries: Array<{ type: 'module' | 'preset'; id: string; reason: string }> = [];
+        for (const item of [
+          ...parsed.data.modules.map(({ moduleId }) => ({ type: 'module' as const, id: moduleId })),
+          ...parsed.data.presets.map(({ presetId }) => ({ type: 'preset' as const, id: presetId })),
+        ]) {
+          try {
+            await exportPresetPack({
+              document,
+              ...(item.type === 'module' ? { moduleIds: [item.id] } : { presetIds: [item.id] }),
+              music,
+              resources,
+              metadata: { packageId: randomUUID(), version: '1.0.0', name: '检查', author: '' },
+            });
+          } catch (cause) {
+            const code = cause instanceof Error ? cause.message : '';
+            const reason = [
+              'capability_unsupported',
+              'resource_missing',
+              'resource_damaged',
+              'resource_unsupported',
+              'dependency_missing',
+            ].includes(code)
+              ? code
+              : 'export_failed';
+            entries.push({ ...item, reason });
+          }
+        }
+        return reply.code(422).send({ error: 'export_failed', entries });
       }
     },
   );

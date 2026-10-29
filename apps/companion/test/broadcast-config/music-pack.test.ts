@@ -333,6 +333,31 @@ it('round trips real music owner configuration to independent drafts without act
         });
         expect(repeatedModule.json()).toMatchObject({ mapping: result.mapping, reused: true });
       }
+      const originalProgram = initial.modules.find((item) => item.kind === 'program')!;
+      const copiedProgram = await store.cloneModule(
+        originalProgram.id,
+        originalProgram.revision,
+        '不可分享图片',
+      );
+      if (copiedProgram.kind !== 'program') throw new Error('missing program');
+      copiedProgram.value.assets['pulse.background'] = {
+        resource: { id: 'external:test', version: '1', digest: '0'.repeat(64) },
+        fileId: 'image',
+      };
+      const unsendable = await store.saveModule(copiedProgram, copiedProgram.revision);
+      const failedExport = await app.inject({
+        method: 'POST',
+        url: '/operator/resource-library/export-pack',
+        headers: { origin: 'http://127.0.0.1:3000' },
+        payload: {
+          modules: [{ moduleId: unsendable.id, expectedRevision: unsendable.revision }],
+          presets: [],
+        },
+      });
+      expect(failedExport.statusCode).toBe(422);
+      expect(failedExport.json().entries).toEqual([
+        { type: 'module', id: unsendable.id, reason: 'capability_unsupported' },
+      ]);
       expect(store.snapshot.active).toEqual(before);
       const originalPreset = initial.presets[0]!;
       const moduleRevisions = Object.fromEntries(

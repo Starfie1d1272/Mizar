@@ -305,8 +305,14 @@ export async function inspectPresetPack(input: {
           try {
             await input.availability(module, source);
           } catch (error) {
-            reason = error instanceof Error ? error.message : 'dependency_missing';
-            status = reason === 'capability_unsupported' ? 'unsupported' : 'dependency_missing';
+            const code = error instanceof Error ? error.message : '';
+            status = code === 'capability_unsupported' ? 'unsupported' : 'dependency_missing';
+            reason =
+              status === 'unsupported'
+                ? 'capability_unsupported'
+                : module.kind === 'camera'
+                  ? 'camera_identity_unavailable'
+                  : 'dependency_unavailable';
           }
       }
       const copies =
