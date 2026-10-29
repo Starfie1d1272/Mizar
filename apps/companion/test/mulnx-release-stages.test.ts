@@ -13,6 +13,15 @@ const release = {
   size: 1,
   sha256: 'a'.repeat(64),
 };
+vi.mock('../src/orchestration/tool-mirror.js', () => ({
+  readMulnxMirror: () => Promise.reject(new Error('mirror unavailable')),
+  sameMulnxAsset: (a: typeof release, b: typeof release) =>
+    a.id === b.id &&
+    a.assetId === b.assetId &&
+    a.sha256 === b.sha256 &&
+    a.size === b.size &&
+    a.tag === b.tag,
+}));
 vi.mock('../src/orchestration/tool-release.js', () => ({
   SEVEN_ZIP: { sha256: 'extractor' },
   latestMulnxRelease: () => Promise.resolve(release),
@@ -207,7 +216,9 @@ it('prepares without selecting and publishes a configured instance only after se
   });
   const imported = await importPresetPack({ zip, store: shareStore, resources: shareResources });
   const camera = shareStore.snapshot.modules.find(
-    (item) => item.id === imported.mapping.moduleEntries.camera![0],
+    (item) =>
+      item.kind === 'camera' &&
+      Object.values(imported.mapping.moduleEntries).flat().includes(item.id),
   );
   if (!camera || camera.kind !== 'camera') throw new Error('missing imported camera');
   expect(camera.value.maps[0]!.source).toEqual(source);

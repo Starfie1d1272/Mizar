@@ -105,7 +105,7 @@ export function MulnxToolControls({
         );
         if (result?.cleanupPending)
           setMessage((value) => `${value} 工作台收尾尚未完成，请检查退出状态。`);
-      } else await command('/operator/orchestration', { action: 'check-tool' });
+      } else await command('/operator/orchestration', { action: 'check-tool' }, undefined, 60_000);
     } catch (error) {
       setFailed(true);
       setMessage(
@@ -136,7 +136,7 @@ export function MulnxToolControls({
       {!runtimeOnly && !maintenanceOnly ? (
         <p>
           已选版本：{tool.installed ?? '首次启动时准备'}
-          {tool.latest && tool.latest !== tool.installed ? ` · 可更新至 ${tool.latest}` : ''}
+          {tool.latest && tool.latest !== tool.installed ? ` · 可用版本 ${tool.latest}` : ''}
         </p>
       ) : null}
       {!runtimeOnly && !maintenanceOnly ? <p>运行版本：未确认</p> : null}
@@ -149,6 +149,7 @@ export function MulnxToolControls({
       {tool.phase === 'downloading' ? (
         <p>
           正在从 {tool.source} 下载：{tool.downloadedBytes ?? 0} / {tool.totalBytes ?? 0} 字节{' '}
+          {tool.sourceMessage ? <span>{tool.sourceMessage} </span> : null}
           <Button
             onClick={() =>
               void command('/operator/orchestration', { action: 'cancel-tool-download' })
@@ -192,9 +193,11 @@ export function MulnxToolControls({
           {maintenanceOnly
             ? !tool.installed
               ? '安装'
-              : tool.installed === tool.latest
-                ? '重新安装'
-                : '更新'
+              : tool.checkResult === 'available'
+                ? '更新'
+                : tool.installed === tool.latest
+                  ? '重新安装'
+                  : '更新'
             : '更新或重新准备 MulNX'}
         </Button>
       ) : null}

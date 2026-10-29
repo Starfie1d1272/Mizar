@@ -142,7 +142,9 @@ export async function downloadVerified(
   sha256: string,
   expectedSize?: number,
   signal: AbortSignal = AbortSignal.timeout(120_000),
-  progress?: (bytes: number) => void,
+  progress?: (bytes: number, source: number) => void,
+  mirror?: (signal: AbortSignal) => Promise<Response>,
+  fallback?: (error: unknown) => void,
 ) {
   await transfer({
     target,
@@ -151,8 +153,10 @@ export async function downloadVerified(
     sha256,
     integrityError: 'mulnx_download_integrity',
     signal,
-    progress: (bytes) => progress?.(bytes),
+    progress: (bytes, source) => progress?.(bytes, source),
+    fallback: (error) => fallback?.(error),
     sources: [
+      ...(mirror ? [mirror] : []),
       async (attempt) => {
         let current = new URL(url);
         for (let redirects = 0; redirects < 5; redirects++) {

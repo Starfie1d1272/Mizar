@@ -1402,7 +1402,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           catalogToolLoaded = true;
           options.updates?.registerCompanionCheck(async (force) => {
             if (force) mulnxTool.resetNotification();
-            if (mulnxTool.view().busy) return false;
+            if (mulnxTool.view().busy) return mulnxTool.view().phase === 'checking';
             await mulnxTool.check().catch(() => undefined);
             return true;
           });

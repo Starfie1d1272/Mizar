@@ -24,8 +24,13 @@ export interface UpdateStatus {
     installed: string | null;
     latest: string | null;
     notificationIdentity: string | null;
+    checkedAt: number | null;
+    checkResult: 'unchecked' | 'current' | 'available' | 'error';
+    phase: string;
+    busy: boolean;
   } | null;
   currentVersion: string;
+  lastCheckedAt?: number | null;
   distribution: 'installed' | 'portable';
   error: string | null;
   failureDetails?: {
@@ -37,6 +42,7 @@ export interface UpdateStatus {
   }[];
   downloadedBytes: number;
   downloadSource?: string | null;
+  sourceMessage?: string;
   candidate: null | { version: string; notes: string; installer: { bytes: number } };
   installBlockedReason?: string | null;
   canResumeAutomatic?: boolean;
@@ -290,7 +296,10 @@ export function UpdateSettings({ children }: { children?: ReactNode }) {
         <div className="settings-update-progress">
           <progress
             aria-label="更新下载进度"
-            value={status?.downloadedBytes ?? 0}
+            value={Math.min(
+              status?.downloadedBytes ?? 0,
+              Math.max(0, (status?.candidate?.installer.bytes ?? 1) - 1),
+            )}
             max={status?.candidate?.installer.bytes ?? 1}
           />
           <span>
@@ -306,6 +315,7 @@ export function UpdateSettings({ children }: { children?: ReactNode }) {
           </span>
         </div>
       ) : null}
+      {downloading && status?.sourceMessage ? <p>{status.sourceMessage}</p> : null}
       {blocked && phase === 'ready' ? (
         <StatusBanner tone="warning">{status.installBlockedReason}</StatusBanner>
       ) : null}

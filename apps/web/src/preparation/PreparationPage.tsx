@@ -14,7 +14,7 @@ import type { ContextEnvelope } from '@mizar/core/match-context';
 import type { MatchDocumentV1 } from '@mizar/protocol/context';
 import type { ProductionGuidance } from '@mizar/protocol/program-scenes';
 import { MatchDocumentView, type MatchSection } from './MatchDocumentView';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { OperatorShell } from '../operator/OperatorShell';
 import { RivalHubPreparationPanel } from '../operator/RivalHubPreparationPanel';
 import { RivalHubSyncControls } from '../operator/RivalHubSyncControls';
@@ -27,6 +27,7 @@ import { useLocalTournament } from './tournament';
 import { openTool, productionAction, useLocalRead, type Production } from './client';
 import { Settings } from './Settings';
 import { UpdateNotification } from './UpdateNotification';
+import type { UpdateStatus } from './UpdateSettings';
 import { DiagnosticDeliveryNotice } from '../debug/DiagnosticDeliveryNotice';
 import { SpectatorHudCommands } from './SpectatorHudCommands';
 import { Cs2Recovery } from './Cs2Recovery';
@@ -96,6 +97,31 @@ export function PreparationPage() {
   const local = envelope?.source === 'local' && view?.activeLocalMatchId === match?.matchId;
   const exit = useWorkspaceExitStatus();
   const production = useLocalRead<Production>('/local/v1/production');
+  const updates = useLocalRead<UpdateStatus>(
+    window.__TAURI_INTERNALS__ ? '/local/v1/updates' : null,
+    3000,
+  );
+  const checkedOnEntry = useRef(false);
+  useEffect(() => {
+    if (path !== '/') {
+      checkedOnEntry.current = false;
+      return;
+    }
+    const tool = updates?.mulnx;
+    if (
+      checkedOnEntry.current ||
+      !tool ||
+      tool.busy ||
+      (tool.checkedAt && Date.now() - tool.checkedAt < 5 * 60_000)
+    )
+      return;
+    checkedOnEntry.current = true;
+    void fetch('/operator/orchestration', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'check-tool' }),
+    }).catch(() => undefined);
+  }, [updates, path]);
   const rivalhub = useLocalRead<{ paired: boolean; displayName?: string | null }>(
     '/local/v1/rivalhub-connection',
   );
@@ -158,6 +184,22 @@ export function PreparationPage() {
     >('/local/v1/readiness');
 
   const problems = (capabilities ?? []).filter((item) => !item.ready && item.action);
+  if (updates?.mulnx?.installed && updates.mulnx.checkResult === 'available')
+    problems.push({
+      label: 'MulNX',
+      ready: false,
+      reason: `发现新版 ${updates.mulnx.latest}，建议开播前更新。`,
+      href: '/packages',
+      action: '更新 MulNX',
+    });
+  else if (updates?.mulnx?.installed && updates.mulnx.checkResult === 'error')
+    problems.push({
+      label: 'MulNX',
+      ready: false,
+      reason: '未能确认最新版，请重新检查。',
+      href: '/packages',
+      action: '检查 MulNX',
+    });
   const pending = (capabilities ?? []).filter((item) => !item.ready && !item.action);
   const completed = (capabilities ?? []).filter((item) => item.ready);
   const settingsTitle: Record<string, string> = {
@@ -454,6 +496,45 @@ export function PreparationPage() {
                 </a>
               </nav>
             ) : null}
+            {updates ? (
+              <Panel>
+                <h2>版本与更新</h2>
+                <p>
+                  Mizar：当前 {updates.currentVersion} ·{' '}
+                  {updates.phase === 'checking'
+                    ? '正在检查'
+                    : updates.phase === 'error'
+                      ? '未能确认最新版'
+                      : updates.candidate
+                        ? `可用 ${updates.candidate.version}`
+                        : updates.phase === 'current'
+                          ? '已是最新'
+                          : '未能确认最新版'}
+                  {updates.lastCheckedAt
+                    ? ` · 检查于 ${new Date(updates.lastCheckedAt).toLocaleString()}`
+                    : ''}
+                </p>
+                {updates.mulnx ? (
+                  <p>
+                    MulNX：当前 {updates.mulnx.installed ?? '尚未安装'} ·{' '}
+                    {updates.mulnx.checkResult === 'available'
+                      ? `可用 ${updates.mulnx.latest}`
+                      : updates.mulnx.checkResult === 'current'
+                        ? '已是最新'
+                        : updates.mulnx.phase === 'checking'
+                          ? '正在检查'
+                          : '未能确认最新版'}
+                    {updates.mulnx.checkedAt
+                      ? ` · 检查于 ${new Date(updates.mulnx.checkedAt).toLocaleString()}`
+                      : ''}
+                  </p>
+                ) : null}
+                <div className="preparation-actions">
+                  <a href="/settings?tab=advanced">Mizar 更新</a>
+                  <a href="/packages">MulNX 更新</a>
+                </div>
+              </Panel>
+            ) : null}
             <div className="preparation-overview">
               {match ? (
                 <Panel>
@@ -514,7 +595,13 @@ export function PreparationPage() {
                         <strong>{label === '比赛上下文' ? '比赛资料' : label}</strong>
                         <p>{reason}</p>
                       </div>
-                      <span className="mizar-button">{label === 'OBS' ? '配置' : '检查'}</span>
+                      <span className="mizar-button">
+                        {label === 'OBS'
+                          ? '配置'
+                          : label === 'MulNX' && updates?.mulnx?.checkResult === 'available'
+                            ? '更新'
+                            : '检查'}
+                      </span>
                     </a>
                   ))}
                   {pending.length ? (

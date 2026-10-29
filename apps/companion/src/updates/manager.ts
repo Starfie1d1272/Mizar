@@ -54,6 +54,7 @@ export class UpdateManager {
   private ready: z.infer<typeof readySchema> | null = null;
   private downloaded = 0;
   private downloadSource: string | null = null;
+  private sourceMessage = '';
   private abort: AbortController | undefined;
   private task: Promise<void> | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
@@ -344,6 +345,7 @@ export class UpdateManager {
       lastCheckedAt: this.config.lastAttempt || null,
       downloadedBytes: this.downloaded,
       downloadSource: this.downloadSource,
+      sourceMessage: this.sourceMessage,
       candidate: this.candidate,
       notificationPending:
         this.config.automatic &&
@@ -494,6 +496,7 @@ export class UpdateManager {
     this.error = null;
     this.downloaded = 0;
     this.downloadSource = null;
+    this.sourceMessage = '';
     const abort = new AbortController();
     this.abort = abort;
     this.task = this.doDownload(
@@ -535,6 +538,7 @@ export class UpdateManager {
           this.downloadSource = source === 0 ? '南大云盘' : 'GitHub';
         },
         fallback: (error) => {
+          this.sourceMessage = '南大云盘连接或文件校验失败，已切换至 GitHub。';
           this.failure('box_download', error);
           this.event('download', 'mirror_fallback');
         },

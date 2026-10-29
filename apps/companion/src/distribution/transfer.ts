@@ -63,6 +63,7 @@ export async function transfer(options: {
         if (bytes > (options.bytes ?? options.maxBytes ?? 0))
           throw new Error(options.integrityError ?? 'transfer_integrity');
         hash.update(chunk.value);
+        clearTimeout(timer);
         try {
           await file.writeFile(chunk.value);
         } catch (error) {
@@ -70,6 +71,7 @@ export async function transfer(options: {
           throw error;
         }
         options.progress?.(bytes, index);
+        arm(STALL_TIMEOUT);
       }
       if (
         (options.bytes !== undefined && bytes !== options.bytes) ||
@@ -78,6 +80,7 @@ export async function transfer(options: {
         throw new Error(options.integrityError ?? 'transfer_integrity');
       try {
         await file.sync();
+        signal.throwIfAborted();
         await file.close();
         file = undefined;
       } catch (error) {

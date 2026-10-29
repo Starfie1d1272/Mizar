@@ -26,6 +26,7 @@ function DesktopUpdateNotification() {
   const latest = useRef(status);
   const request = useRef<AbortController | null>(null);
   const acknowledging = useRef(false);
+  const acknowledgingMulnx = useRef(false);
   useEffect(() => {
     latest.current = status;
   }, [status]);
@@ -48,6 +49,31 @@ function DesktopUpdateNotification() {
       acknowledging.current = false;
     }
   }, []);
+  const acknowledgeMulnx = useCallback(async (identity: string) => {
+    if (acknowledgingMulnx.current) return;
+    acknowledgingMulnx.current = true;
+    try {
+      await fetch('/operator/updates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'dismiss-mulnx-notification', identity }),
+        keepalive: true,
+        signal: AbortSignal.timeout(8000),
+      });
+    } catch {
+      /* Retry on a subsequent poll. */
+    } finally {
+      acknowledgingMulnx.current = false;
+    }
+  }, []);
+  useEffect(() => {
+    if (
+      dismissedMulnx &&
+      status?.mulnxNotificationPending &&
+      status.mulnx?.notificationIdentity === dismissedMulnx
+    )
+      void acknowledgeMulnx(dismissedMulnx);
+  }, [status, dismissedMulnx, acknowledgeMulnx]);
   useEffect(() => {
     if (!status?.notificationPending || !status.candidate) return;
     const version = status.candidate.version;
@@ -127,26 +153,21 @@ function DesktopUpdateNotification() {
     document.hasFocus() &&
     document.visibilityState === 'visible',
   );
+  const dismissMizar = () => {
+    if (!notice || !mizarOpen) return;
+    setDismissed(notice.version);
+    setNotice(null);
+    void acknowledge(notice.version);
+  };
+  const dismissMulnx = () => {
+    if (!mulnxNotice || !mulnxOpen) return;
+    setDismissedMulnx(mulnxNotice.identity);
+    setMulnxNotice(null);
+    void acknowledgeMulnx(mulnxNotice.identity);
+  };
   const dismiss = () => {
-    if (notice && mizarOpen) {
-      setDismissed(notice.version);
-      setNotice(null);
-      void acknowledge(notice.version);
-    }
-    if (mulnxNotice && mulnxOpen) {
-      setDismissedMulnx(mulnxNotice.identity);
-      setMulnxNotice(null);
-      void fetch('/operator/updates', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'dismiss-mulnx-notification',
-          identity: mulnxNotice.identity,
-        }),
-        keepalive: true,
-        signal: AbortSignal.timeout(8000),
-      }).catch(() => undefined);
-    }
+    dismissMizar();
+    dismissMulnx();
   };
   return (
     <Dialog
@@ -169,7 +190,7 @@ function DesktopUpdateNotification() {
           <Button
             variant="primary"
             onClick={() => {
-              dismiss();
+              dismissMizar();
               window.location.assign('/settings?tab=advanced');
             }}
           >
@@ -180,8 +201,8 @@ function DesktopUpdateNotification() {
           <Button
             variant="primary"
             onClick={() => {
-              dismiss();
-              window.location.assign('/resources');
+              dismissMulnx();
+              window.location.assign('/packages');
             }}
           >
             查看 MulNX 更新

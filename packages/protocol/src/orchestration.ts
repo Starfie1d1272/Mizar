@@ -98,6 +98,7 @@ export interface MulnxToolView {
   downloadedBytes?: number;
   totalBytes?: number;
   source?: string | null;
+  sourceMessage?: string;
   message: string;
   packs: { name: string; sourceName: string }[];
 }
