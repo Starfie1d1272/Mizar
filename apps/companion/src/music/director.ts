@@ -7,6 +7,7 @@ import type {
 } from '@mizar/protocol/music';
 import type { ObsRpc } from '../obs/reconcile.js';
 import type { AudioMonitorChange } from '../obs/audio-migration.js';
+import type { MonitorOriginals } from '../obs/audio-routing.js';
 import { isRegulationHalftime } from '../program-scenes/presentation.js';
 import {
   musicCue,
@@ -133,6 +134,7 @@ export class MusicDirector {
     private readonly monitorSafe: (obs: ObsRpc) => Promise<boolean> = () => Promise.resolve(false),
     private readonly desktopMonitorOnly: (obs: ObsRpc) => Promise<boolean> = () =>
       Promise.resolve(false),
+    private readonly audioModePending: () => Promise<boolean> = () => Promise.resolve(false),
   ) {
     this.preview = new MusicPreview(store, now);
   }
@@ -597,7 +599,11 @@ export class MusicDirector {
   async prepareDesktopMix<T>(
     obs: ObsRpc,
     sameDevice: boolean,
-    apply: (changes: AudioMonitorChange[]) => Promise<T>,
+    apply: (plan: {
+      changes: AudioMonitorChange[];
+      musicBefore: MonitorOriginals;
+      musicAfter: MonitorOriginals;
+    }) => Promise<T>,
   ): Promise<T> {
     if (this.closed || !this.store.ready || this.store.failure)
       throw new Error('music_unavailable');
@@ -610,6 +616,7 @@ export class MusicDirector {
     this.inFlight = true;
     try {
       const changes: AudioMonitorChange[] = [];
+      const musicBefore = structuredClone(this.store.state.desktopMonitorOriginal);
       const originals: Partial<
         Record<MusicLayer, { uuid: string; mode: 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT' } | null>
       > = {};
@@ -643,18 +650,52 @@ export class MusicDirector {
         }
       }
       if (!current()) throw new Error('music_cancelled');
-      const result = await apply(changes);
-      await this.store.update((state) => {
-        for (const layer of ['bgm', 'stinger'] as const)
-          if (originals[layer] !== undefined)
-            state.desktopMonitorOriginal[layer] = originals[layer]!;
-      });
-      return result;
+      const musicAfter = structuredClone(musicBefore);
+      for (const layer of ['bgm', 'stinger'] as const)
+        if (originals[layer] !== undefined) musicAfter[layer] = originals[layer]!;
+      return await apply({ changes, musicBefore, musicAfter });
     } finally {
       this.inFlight = false;
     }
   }
+  async withAudioModeRecovery<T>(run: () => Promise<T>): Promise<T> {
+    if (this.closed || !this.store.ready || this.store.failure)
+      throw new Error('music_unavailable');
+    const revision = ++this.commandRevision;
+    this.invalidate();
+    while (this.inFlight && revision === this.commandRevision && !this.closed)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    if (this.closed || revision !== this.commandRevision) throw new Error('music_cancelled');
+    this.inFlight = true;
+    try {
+      return await run();
+    } finally {
+      this.inFlight = false;
+    }
+  }
+  async commitDesktopMonitorOriginals(
+    before: MonitorOriginals,
+    after: MonitorOriginals,
+    side: 'before' | 'after',
+  ) {
+    if (this.closed || !this.store.ready || this.store.failure)
+      throw new Error('music_unavailable');
+    await this.store.update((state) => {
+      for (const layer of ['bgm', 'stinger'] as const) {
+        const current = state.desktopMonitorOriginal[layer];
+        const equal = (a: typeof current, b: typeof current) =>
+          JSON.stringify(a) === JSON.stringify(b);
+        if (!equal(current, before[layer]) && !equal(current, after[layer]))
+          throw new Error(`music_monitor_conflict:${layer}`);
+        for (const value of [before[layer], after[layer]])
+          if (value && state.sources[layer] !== value.uuid)
+            throw new Error(`music_monitor_source_changed:${layer}`);
+      }
+      state.desktopMonitorOriginal = structuredClone(side === 'before' ? before : after);
+    });
+  }
   async monitor(enabled: boolean) {
+    if (await this.audioModePending()) throw new Error('audio_mode_pending');
     if (this.closed || !this.store.ready || this.store.failure)
       throw new Error('music_unavailable');
     const revision = ++this.commandRevision;
@@ -663,6 +704,7 @@ export class MusicDirector {
       await new Promise((resolve) => setTimeout(resolve, 10));
     const current = () => !this.closed && revision === this.commandRevision;
     if (!current()) return;
+    if (await this.audioModePending()) throw new Error('audio_mode_pending');
     this.inFlight = true;
     this.status.monitor = 'unknown';
     try {
@@ -762,7 +804,7 @@ export class MusicDirector {
     ]!;
   }
   async tick(): Promise<void> {
-    if (this.closed) return;
+    if (this.closed || (await this.audioModePending().catch(() => true))) return;
     if (this.store.failure && this.preview.busy) this.preview.cancel('storage_unavailable');
     if (this.store.failure && !this.preview.busy) {
       this.status.connection = 'unavailable';

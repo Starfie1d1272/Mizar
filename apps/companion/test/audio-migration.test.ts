@@ -14,6 +14,8 @@ import { OBS_COLLECTION, obsDesiredScenes } from '../src/obs/desired-state.js';
 import { reconcileManagedAudio } from '../src/obs/managed-audio.js';
 import type { ObsConfigStore } from '../src/obs/config.js';
 import { ObsAudioRouting } from '../src/obs/audio-routing.js';
+import { MusicDirector } from '../src/music/director.js';
+import { MusicStore } from '../src/music/store.js';
 import type { RemoteCommentary } from '../src/obs/remote-commentary.js';
 import type { ObsRpc } from '../src/obs/reconcile.js';
 
@@ -244,6 +246,9 @@ test('mode switch disables exclusive video audio and restores it without changin
       },
     };
     const routing = {
+      async modeRecoveryState() {
+        return { revision: 'revision', desktop: null, transition: null, bindings: {} };
+      },
       async switchMode(
         _obs: ObsRpc,
         _endpoint: string,
@@ -254,12 +259,19 @@ test('mode switch disables exclusive video audio and restores it without changin
           ids: Record<string, string>,
           desktop: string | undefined,
           verify: () => Promise<boolean>,
+          begin: (
+            before: { bgm: null; stinger: null },
+            after: { bgm: null; stinger: null },
+          ) => Promise<string>,
+          commit: (id: string) => Promise<void>,
         ) => Promise<void>,
       ) {
         await apply(
           { game: 'game', remoteCommentary: 'voice', microphone: 'mic' },
           mode === 'desktop' ? 'desktop' : undefined,
           async () => true,
+          async () => randomUUID(),
+          async () => {},
         );
       },
     } as unknown as ObsAudioRouting;
@@ -281,20 +293,35 @@ test('mode switch disables exclusive video audio and restores it without changin
         ) => operation(obs, 'endpoint', observer),
       },
     });
-    await adapter.switchAudioMode(
-      'revision',
-      'desktop',
-      'desktop-selection',
-      async (_obs, _same, apply) =>
-        apply([
-          {
-            kind: 'monitor',
-            inputUuid: 'music',
-            before: 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
-            applied: 'OBS_MONITORING_TYPE_MONITOR_ONLY',
-          },
-        ]),
-    );
+    const musicApi = {
+      async prepareDesktopMix(
+        _obs: ObsRpc,
+        _same: boolean,
+        apply: (plan: unknown) => Promise<void>,
+      ) {
+        const changes =
+          music.mode === 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT'
+            ? [
+                {
+                  kind: 'monitor',
+                  inputUuid: 'music',
+                  before: 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
+                  applied: 'OBS_MONITORING_TYPE_MONITOR_ONLY',
+                },
+              ]
+            : [];
+        await apply({
+          changes,
+          musicBefore: { bgm: null, stinger: null },
+          musicAfter: { bgm: null, stinger: null },
+        });
+      },
+      async withAudioModeRecovery(run: () => Promise<void>) {
+        await run();
+      },
+      async commitDesktopMonitorOriginals() {},
+    } as unknown as MusicDirector;
+    await adapter.switchAudioMode('revision', 'desktop', 'desktop-selection', musicApi);
     assert.equal(music.mode, 'OBS_MONITORING_TYPE_MONITOR_ONLY');
     assert.deepEqual(settings, { capture_audio: false, window: 'keep-picture' });
     assert.ok(
@@ -302,12 +329,7 @@ test('mode switch disables exclusive video audio and restores it without changin
         (scene) => scene.find((item) => item.sourceUuid === 'video')!.sceneItemEnabled,
       ),
     );
-    await adapter.switchAudioMode(
-      'revision',
-      'independent',
-      undefined,
-      async (_obs, _same, apply) => apply([]),
-    );
+    await adapter.switchAudioMode('revision', 'independent', undefined, musicApi);
     assert.deepEqual(settings, { capture_audio: true, window: 'keep-picture' });
     assert.equal(music.mode, 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT');
     assert.ok(
@@ -597,10 +619,11 @@ test('automatic desktop selection creates a disabled default source without comm
       revision,
       'desktop',
       undefined,
-      async (ids, desktop) => {
+      async (ids, desktop, _verify, begin, commit) => {
         assert.equal(desktop, 'new-desktop');
         assert.equal(ids.microphone, 'mic');
         assert.equal(ids.remoteCommentary, undefined);
+        const modeId = await begin({ bgm: null, stinger: null }, { bgm: null, stinger: null });
         await reconcileManagedAudio(
           obs,
           'endpoint',
@@ -610,8 +633,11 @@ test('automatic desktop selection creates a disabled default source without comm
           ids,
           async () => true,
           desktop,
-          `${path}.completed`,
+          undefined,
+          [],
+          modeId,
         );
+        await commit(modeId);
       },
     );
     assert.ok(
@@ -687,3 +713,556 @@ test('different managed desktop devices require selection before any write', asy
     );
     assert.equal(await routing.modePending(), false);
   }));
+
+test('mode recovery resolves persisted intent and completed journal without replaying writes', async () => {
+  for (const stage of ['intent', 'applied', 'backup', 'music', 'committed', 'external'] as const) {
+    await withJournal(async (path) => {
+      const routingPath = `${path}.routing`;
+      const revision = randomUUID();
+      const scenes = obsDesiredScenes('http://127.0.0.1');
+      const inputs = [
+        { inputUuid: 'game', inputName: 'game', inputKind: 'wasapi_process_output_capture' },
+        { inputUuid: 'voice', inputName: 'voice', inputKind: 'wasapi_process_output_capture' },
+        { inputUuid: 'mic', inputName: 'mic', inputKind: 'wasapi_input_capture' },
+        { inputUuid: 'desktop', inputName: 'desktop', inputKind: 'wasapi_output_capture' },
+      ];
+      const binding = (uuid: string) => ({
+        ...inputs.find((input) => input.inputUuid === uuid)!,
+        endpoint: 'endpoint',
+        collection: OBS_COLLECTION,
+      });
+      const asBinding = (uuid: string) => {
+        const value = binding(uuid);
+        return {
+          inputUuid: value.inputUuid,
+          inputKind: value.inputKind,
+          endpoint: value.endpoint,
+          collection: value.collection,
+        };
+      };
+      await writeFile(
+        routingPath,
+        JSON.stringify({
+          revision,
+          desktop: null,
+          transition: false,
+          bindings: {
+            game: asBinding('game'),
+            remoteCommentary: asBinding('voice'),
+            microphone: asBinding('mic'),
+          },
+        }),
+      );
+      const lists = new Map(
+        scenes.map((scene) => [
+          scene.sceneName,
+          inputs.map((input, index) => ({
+            sourceUuid: input.inputUuid,
+            sourceName: input.inputName,
+            sceneItemId: index + 1,
+            sceneItemEnabled: input.inputUuid !== 'desktop',
+          })),
+        ]),
+      );
+      const listeners = new Set<(event: MigrationEvent) => void>();
+      const observer: MigrationObserver = {
+        subscribe(listener) {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      };
+      let writes = 0;
+      const obs: ObsRpc = {
+        async call(type, data) {
+          if (type === 'GetStreamStatus' || type === 'GetRecordStatus')
+            return { outputActive: false };
+          if (type === 'GetSceneCollectionList')
+            return { currentSceneCollectionName: OBS_COLLECTION };
+          if (type === 'GetSpecialInputs') return {};
+          if (type === 'GetVersion')
+            return {
+              availableRequests: [
+                'GetInputList',
+                'GetInputSettings',
+                'GetSceneCollectionList',
+                'GetSpecialInputs',
+                'GetSceneList',
+                'GetSceneItemList',
+                'GetGroupSceneItemList',
+              ],
+            };
+          if (type === 'GetInputList') return { inputs };
+          if (type === 'GetSceneList')
+            return { scenes: scenes.map(({ sceneName }) => ({ sceneName })) };
+          if (type === 'GetSceneItemList')
+            return {
+              sceneItems: lists.get(data?.sceneName as string)!.map((item) => ({ ...item })),
+            };
+          if (type === 'SetSceneItemEnabled') {
+            const item = lists
+              .get(data?.sceneName as string)!
+              .find((entry) => entry.sceneItemId === data?.sceneItemId)!;
+            item.sceneItemEnabled = data?.sceneItemEnabled as boolean;
+            writes++;
+            for (const listener of listeners)
+              listener({
+                type: 'item',
+                sceneName: data?.sceneName as string,
+                sceneItemId: item.sceneItemId,
+                enabled: item.sceneItemEnabled,
+              });
+            return {};
+          }
+          throw new Error(`Unexpected request ${type}`);
+        },
+      };
+      const before = { bgm: null, stinger: null };
+      const after = {
+        bgm: { uuid: 'music', mode: 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT' as const },
+        stinger: null,
+      };
+      let stored = structuredClone(before) as typeof before | typeof after;
+      const routing = new ObsAudioRouting(routingPath);
+      await assert.rejects(
+        routing.switchMode(
+          obs,
+          'endpoint',
+          revision,
+          'desktop',
+          undefined,
+          async (_ids, _desktop, _verify, begin, commit) => {
+            const modeId = await begin(before, after);
+            if (stage !== 'intent') {
+              const migration = new AudioMigration(`${path}.migration`);
+              await migration.migrate(
+                obs,
+                'endpoint',
+                {
+                  endpoint: 'endpoint',
+                  collection: OBS_COLLECTION,
+                  desktop: scenes.flatMap(({ sceneName }) =>
+                    [1, 2].map((sceneItemId) => ({
+                      sceneName,
+                      sceneItemId,
+                      sourceUuid: sceneItemId === 1 ? 'game' : 'voice',
+                    })),
+                  ),
+                  independent: scenes.map(({ sceneName }) => ({
+                    sceneName,
+                    sceneItemId: 4,
+                    sourceUuid: 'desktop',
+                  })),
+                },
+                observer,
+                undefined,
+                modeId,
+              );
+              if (stage === 'backup' || stage === 'music' || stage === 'committed')
+                await migration.saveModeBackup(`${path}.migration-mode`, modeId);
+              if (stage === 'music' || stage === 'committed') stored = structuredClone(after);
+              if (stage === 'committed') await commit(modeId);
+            }
+            throw new Error('simulated process exit');
+          },
+        ),
+        /simulated process exit/,
+      );
+      if (stage === 'external') lists.get(scenes[0]!.sceneName)![0]!.sceneItemEnabled = true;
+      const writesBeforeRecovery = writes;
+      const restarted = new ObsAudioRouting(routingPath);
+      const adapter = new ObsAdapter(
+        {} as ObsConfigStore,
+        'http://127.0.0.1',
+        undefined,
+        restarted,
+        { owner: {} as RemoteCommentary, journal: path },
+      );
+      Object.assign(adapter, {
+        audioConfiguration: {
+          run: (
+            operation: (
+              obs: ObsRpc,
+              endpoint: string,
+              observer: MigrationObserver,
+            ) => Promise<unknown>,
+          ) => operation(obs, 'endpoint', observer),
+        },
+      });
+      const music = {
+        async withAudioModeRecovery(run: () => Promise<void>) {
+          await run();
+        },
+        async commitDesktopMonitorOriginals(
+          _before: typeof before,
+          _after: typeof after,
+          side: 'before' | 'after',
+        ) {
+          stored = structuredClone(side === 'before' ? before : after);
+        },
+      } as unknown as MusicDirector;
+      if (stage === 'external') {
+        await assert.rejects(adapter.recoverAudioMode(music), /audio_migration_external_change/);
+        assert.equal(await restarted.modePending(), true);
+        assert.equal(writes, writesBeforeRecovery);
+        return;
+      }
+      await adapter.recoverAudioMode(music);
+      assert.equal(await restarted.modePending(), false, stage);
+      assert.equal(Boolean(await restarted.desktopBinding()), stage !== 'intent', stage);
+      assert.deepEqual(stored, stage === 'intent' ? before : after, stage);
+      assert.equal(writes, writesBeforeRecovery, stage);
+      assert.equal(await new AudioMigration(`${path}.migration`).pending(), null, stage);
+    });
+  }
+});
+
+test('interrupted switch back either restores desktop or commits independent mode', async () => {
+  for (const stage of ['partial', 'complete'] as const)
+    await withJournal(async (path) => {
+      const routingPath = `${path}.routing`;
+      const scenes = obsDesiredScenes('http://127.0.0.1');
+      const inputs = [
+        { inputUuid: 'game', inputName: 'game', inputKind: 'wasapi_process_output_capture' },
+        { inputUuid: 'voice', inputName: 'voice', inputKind: 'wasapi_process_output_capture' },
+        { inputUuid: 'mic', inputName: 'mic', inputKind: 'wasapi_input_capture' },
+        { inputUuid: 'desktop', inputName: 'desktop', inputKind: 'wasapi_output_capture' },
+      ];
+      const binding = (uuid: string) => ({
+        inputUuid: uuid,
+        inputKind: inputs.find((input) => input.inputUuid === uuid)!.inputKind,
+        endpoint: 'endpoint',
+        collection: OBS_COLLECTION,
+      });
+      const lists = new Map(
+        scenes.map((scene) => [
+          scene.sceneName,
+          inputs.map((input, index) => ({
+            sourceUuid: input.inputUuid,
+            sourceName: input.inputName,
+            sceneItemId: index + 1,
+            sceneItemEnabled: input.inputUuid !== 'desktop',
+          })),
+        ]),
+      );
+      const listeners = new Set<(event: MigrationEvent) => void>();
+      const observer: MigrationObserver = {
+        subscribe(listener) {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      };
+      let failAfter = 0;
+      const obs: ObsRpc = {
+        async call(type, data) {
+          if (type === 'GetStreamStatus' || type === 'GetRecordStatus')
+            return { outputActive: false };
+          if (type === 'GetSceneCollectionList')
+            return { currentSceneCollectionName: OBS_COLLECTION };
+          if (type === 'GetVersion')
+            return {
+              availableRequests: [
+                'GetInputList',
+                'GetInputSettings',
+                'GetSceneCollectionList',
+                'GetSpecialInputs',
+                'GetSceneList',
+                'GetSceneItemList',
+                'GetGroupSceneItemList',
+              ],
+            };
+          if (type === 'GetSpecialInputs') return {};
+          if (type === 'GetInputList') return { inputs };
+          if (type === 'GetSceneList')
+            return { scenes: scenes.map(({ sceneName }) => ({ sceneName })) };
+          if (type === 'GetSceneItemList')
+            return {
+              sceneItems: lists.get(data?.sceneName as string)!.map((item) => ({ ...item })),
+            };
+          if (type === 'SetSceneItemEnabled') {
+            const item = lists
+              .get(data?.sceneName as string)!
+              .find((entry) => entry.sceneItemId === data?.sceneItemId)!;
+            item.sceneItemEnabled = data?.sceneItemEnabled as boolean;
+            for (const listener of listeners)
+              listener({
+                type: 'item',
+                sceneName: data?.sceneName as string,
+                sceneItemId: item.sceneItemId,
+                enabled: item.sceneItemEnabled,
+              });
+            if (failAfter && --failAfter === 0) throw new Error('receipt lost');
+            return {};
+          }
+          throw new Error(`Unexpected request ${type}`);
+        },
+      };
+      const migration = new AudioMigration(`${path}.migration`);
+      const originalId = randomUUID();
+      await migration.migrate(
+        obs,
+        'endpoint',
+        {
+          endpoint: 'endpoint',
+          collection: OBS_COLLECTION,
+          desktop: scenes.flatMap(({ sceneName }) =>
+            [1, 2].map((sceneItemId) => ({
+              sceneName,
+              sceneItemId,
+              sourceUuid: sceneItemId === 1 ? 'game' : 'voice',
+            })),
+          ),
+          independent: scenes.map(({ sceneName }) => ({
+            sceneName,
+            sceneItemId: 4,
+            sourceUuid: 'desktop',
+          })),
+        },
+        observer,
+        undefined,
+        originalId,
+      );
+      await migration.saveModeBackup(`${path}.migration-mode`, originalId);
+      await migration.clearMode(originalId);
+      const revision = randomUUID();
+      await writeFile(
+        routingPath,
+        JSON.stringify({
+          revision,
+          desktop: binding('desktop'),
+          transition: false,
+          bindings: {
+            game: binding('game'),
+            remoteCommentary: binding('voice'),
+            microphone: binding('mic'),
+          },
+        }),
+      );
+      const before = {
+        bgm: { uuid: 'music', mode: 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT' as const },
+        stinger: null,
+      };
+      const after = { bgm: null, stinger: null };
+      let stored: typeof before | typeof after = structuredClone(before);
+      const routing = new ObsAudioRouting(routingPath);
+      await assert.rejects(
+        routing.switchMode(
+          obs,
+          'endpoint',
+          revision,
+          'independent',
+          undefined,
+          async (_ids, _desktop, _verify, begin) => {
+            const modeId = await begin(before, after);
+            if (stage === 'partial') failAfter = 2;
+            await migration.restoreCompleted(
+              obs,
+              'endpoint',
+              observer,
+              `${path}.migration-mode`,
+              [],
+              modeId,
+            );
+            throw new Error('simulated process exit');
+          },
+        ),
+      );
+      const restarted = new ObsAudioRouting(routingPath);
+      const adapter = new ObsAdapter(
+        {} as ObsConfigStore,
+        'http://127.0.0.1',
+        undefined,
+        restarted,
+        { owner: {} as RemoteCommentary, journal: path },
+      );
+      Object.assign(adapter, {
+        audioConfiguration: {
+          run: (
+            operation: (
+              obs: ObsRpc,
+              endpoint: string,
+              observer: MigrationObserver,
+            ) => Promise<unknown>,
+          ) => operation(obs, 'endpoint', observer),
+        },
+      });
+      const music = {
+        async withAudioModeRecovery(run: () => Promise<void>) {
+          await run();
+        },
+        async commitDesktopMonitorOriginals(
+          _before: typeof before,
+          _after: typeof after,
+          side: 'before' | 'after',
+        ) {
+          stored = structuredClone(side === 'before' ? before : after);
+        },
+      } as unknown as MusicDirector;
+      await adapter.recoverAudioMode(music);
+      assert.equal(await restarted.modePending(), false);
+      assert.equal(Boolean(await restarted.desktopBinding()), stage === 'partial');
+      assert.deepEqual(stored, stage === 'partial' ? before : after);
+      for (const list of lists.values()) {
+        assert.equal(
+          list.find((entry) => entry.sourceUuid === 'desktop')!.sceneItemEnabled,
+          stage === 'partial',
+        );
+        assert.equal(
+          list.find((entry) => entry.sourceUuid === 'game')!.sceneItemEnabled,
+          stage === 'complete',
+        );
+        assert.equal(
+          list.find((entry) => entry.sourceUuid === 'voice')!.sceneItemEnabled,
+          stage === 'complete',
+        );
+      }
+      const { readFile } = await import('node:fs/promises');
+      if (stage === 'partial') assert.ok(await readFile(`${path}.migration-mode`, 'utf8'));
+      else await assert.rejects(readFile(`${path}.migration-mode`, 'utf8'), { code: 'ENOENT' });
+    });
+});
+
+test('music metadata commits idempotently and refuses an external source change', async () =>
+  withJournal(async (path) => {
+    const store = new MusicStore(`${path}.music`);
+    await store.load();
+    await store.update((state) => {
+      state.sources.bgm = 'music';
+    });
+    const director = new MusicDirector(store, {} as never, () => {
+      throw new Error('unexpected truth');
+    });
+    const before = { bgm: null, stinger: null };
+    const after = {
+      bgm: { uuid: 'music', mode: 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT' as const },
+      stinger: null,
+    };
+    await director.commitDesktopMonitorOriginals(before, after, 'after');
+    await director.commitDesktopMonitorOriginals(before, after, 'after');
+    const restartedStore = new MusicStore(`${path}.music`);
+    await restartedStore.load();
+    assert.deepEqual(restartedStore.state.desktopMonitorOriginal, after);
+    await store.update((state) => {
+      state.sources.bgm = 'replacement';
+    });
+    await assert.rejects(
+      director.commitDesktopMonitorOriginals(before, after, 'before'),
+      /music_monitor_source_changed/,
+    );
+    assert.deepEqual(store.state.desktopMonitorOriginal, after);
+  }));
+
+test('exclusive nested audio is restored and a group shared with another scene is left untouched', async () => {
+  for (const shared of [false, true])
+    await withJournal(async (path) => {
+      const scenes = obsDesiredScenes('http://127.0.0.1');
+      const inputs = [
+        { inputUuid: 'game', inputName: 'game', inputKind: 'wasapi_process_output_capture' },
+        { inputUuid: 'voice', inputName: 'voice', inputKind: 'wasapi_process_output_capture' },
+        { inputUuid: 'mic', inputName: 'mic', inputKind: 'wasapi_input_capture' },
+        { inputUuid: 'desktop', inputName: 'desktop', inputKind: 'wasapi_output_capture' },
+      ];
+      const group = [
+        { sourceUuid: 'game', sourceName: 'game', sceneItemId: 1, sceneItemEnabled: true },
+      ];
+      const roots = new Map(
+        scenes.map(({ sceneName }) => [
+          sceneName,
+          [
+            {
+              sourceUuid: 'group',
+              sourceName: 'group',
+              sceneItemId: 10,
+              sceneItemEnabled: true,
+              isGroup: true,
+            },
+            ...inputs.slice(1).map((input, index) => ({
+              sourceUuid: input.inputUuid,
+              sourceName: input.inputName,
+              sceneItemId: index + 2,
+              sceneItemEnabled: input.inputUuid !== 'desktop',
+              isGroup: false,
+            })),
+          ],
+        ]),
+      );
+      if (shared)
+        roots.set('other', [
+          {
+            sourceUuid: 'group',
+            sourceName: 'group',
+            sceneItemId: 10,
+            sceneItemEnabled: true,
+            isGroup: true,
+          },
+        ]);
+      const listeners = new Set<(event: MigrationEvent) => void>();
+      const observer: MigrationObserver = {
+        subscribe(listener) {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      };
+      let writes = 0;
+      const obs: ObsRpc = {
+        async call(type, data) {
+          if (type === 'GetStreamStatus' || type === 'GetRecordStatus')
+            return { outputActive: false };
+          if (type === 'GetSceneCollectionList')
+            return { currentSceneCollectionName: OBS_COLLECTION };
+          if (type === 'GetSpecialInputs') return {};
+          if (type === 'GetInputList') return { inputs };
+          if (type === 'GetSceneList')
+            return { scenes: [...roots.keys()].map((sceneName) => ({ sceneName })) };
+          if (type === 'GetSceneItemList')
+            return {
+              sceneItems: roots.get(data?.sceneName as string)!.map((item) => ({ ...item })),
+            };
+          if (type === 'GetGroupSceneItemList')
+            return { sceneItems: group.map((item) => ({ ...item })) };
+          if (type === 'SetSceneItemEnabled') {
+            const items =
+              data?.sceneName === 'group' ? group : roots.get(data?.sceneName as string)!;
+            const item = items.find((entry) => entry.sceneItemId === data?.sceneItemId)!;
+            item.sceneItemEnabled = data?.sceneItemEnabled as boolean;
+            writes++;
+            for (const listener of listeners)
+              listener({
+                type: 'item',
+                sceneName: data?.sceneName as string,
+                sceneItemId: item.sceneItemId,
+                enabled: item.sceneItemEnabled,
+              });
+            return {};
+          }
+          throw new Error(`Unexpected request ${type}`);
+        },
+      };
+      const run = () =>
+        reconcileManagedAudio(
+          obs,
+          'endpoint',
+          observer,
+          path,
+          'http://127.0.0.1',
+          { game: 'game', remoteCommentary: 'voice', microphone: 'mic' },
+          async () => true,
+          'desktop',
+          `${path}.completed`,
+        );
+      if (shared) {
+        await assert.rejects(run(), /audio_nested_shared_path/);
+        assert.equal(writes, 0);
+        assert.equal(group[0]!.sceneItemEnabled, true);
+      } else {
+        await run();
+        assert.equal(group[0]!.sceneItemEnabled, false);
+        await new AudioMigration(`${path}.migration`).restoreCompleted(
+          obs,
+          'endpoint',
+          observer,
+          `${path}.completed`,
+        );
+        assert.equal(group[0]!.sceneItemEnabled, true);
+      }
+    });
+});

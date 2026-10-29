@@ -31,6 +31,7 @@ export async function reconcileManagedAudio(
   desktopUuid?: string,
   completedPath?: string,
   monitor: AudioMonitorChange[] = [],
+  modeId?: string,
 ): Promise<void> {
   const roleIds = Object.values(ids);
   if (new Set(roleIds).size !== roleIds.length) throw new Error('audio_binding_duplicate');
@@ -155,7 +156,7 @@ export async function reconcileManagedAudio(
         if (!item.sceneItemEnabled) continue;
         const input = inputs.find((value) => value.inputUuid === item.sourceUuid);
         if (!input) continue;
-        if (wantedIds.includes(item.sourceUuid)) throw new Error('audio_nested_target_unresolved');
+        if (wantedIds.includes(item.sourceUuid)) continue;
         if (['game_capture', 'window_capture'].includes(String(input.inputKind))) {
           const settings = (await obs.call('GetInputSettings', { inputUuid: item.sourceUuid }))
             .inputSettings as Record<string, unknown>;
@@ -166,10 +167,14 @@ export async function reconcileManagedAudio(
             throw new Error('audio_video_path_unresolved');
         }
         if (!audioKinds.has(String(input.inputKind))) continue;
+        if (desktopUuid && !ids.microphone && input.inputKind === 'wasapi_input_capture') continue;
         if (container.otherRoots.size) throw new Error('audio_nested_shared_path');
-        // Restoring an existing nested reference needs a persistent reverse plan;
-        // do not replace it with a new direct scene reference in the meantime.
-        throw new Error('audio_nested_path_unresolved');
+        desktop.push({
+          sceneName: container.name,
+          sceneItemId: item.sceneItemId,
+          sourceUuid: item.sourceUuid,
+          ...(container.group ? { group: true } : {}),
+        });
       }
       snapshots.set(
         `${container.group ? 'group' : 'scene'}\0${container.name}`,
@@ -182,7 +187,19 @@ export async function reconcileManagedAudio(
       for (const input of selected) {
         const count = items.filter((item) => item.sourceUuid === input.inputUuid).length;
         if (count > 1) throw new Error('audio_duplicate_path');
-        if (count === 0 && (!desktopUuid || input.inputUuid !== ids.microphone || microphoneActive))
+        const coveredByNested = graph.some(
+          (container) =>
+            container.name !== sceneName &&
+            container.activeManagedRoots.has(sceneName) &&
+            container.items.some(
+              (item) => item.sourceUuid === input.inputUuid && item.sceneItemEnabled,
+            ),
+        );
+        if (
+          count === 0 &&
+          !coveredByNested &&
+          (!desktopUuid || input.inputUuid !== ids.microphone || microphoneActive)
+        )
           missing.push({ sceneName, input });
       }
       snapshots.set(`scene\0${sceneName}`, JSON.stringify(items));
@@ -212,9 +229,18 @@ export async function reconcileManagedAudio(
         )
           throw new Error('audio_response_unknown');
         const ref = { sceneName, sceneItemId: item.sceneItemId, sourceUuid: item.sourceUuid };
+        const nestedAlreadyActive = graph.some(
+          (container) =>
+            container.name !== sceneName &&
+            container.activeManagedRoots.has(sceneName) &&
+            container.items.some(
+              (nested) => nested.sourceUuid === input.inputUuid && nested.sceneItemEnabled,
+            ),
+        );
         if (
           wanted &&
           !item.sceneItemEnabled &&
+          !nestedAlreadyActive &&
           (!desktopUuid || input.inputUuid !== ids.microphone)
         )
           independent.push(ref);
@@ -263,16 +289,70 @@ export async function reconcileManagedAudio(
     }
     await check();
     migrating = true;
-    if (desktop.length || independent.length || captureAudio.length || monitor.length)
+    if (modeId || desktop.length || independent.length || captureAudio.length || monitor.length)
       await new AudioMigration(`${journal}.migration`).migrate(
         obs,
         endpoint,
         { endpoint, collection: OBS_COLLECTION, desktop, independent, captureAudio, monitor },
         observer,
         completedPath,
+        modeId,
       );
     await check();
   } finally {
     stop();
   }
+}
+
+/** Verify the effective managed paths before committing a mode. */
+export async function verifyManagedAudioMode(
+  obs: ObsRpc,
+  baseUrl: string,
+  ids: Partial<Record<ObsAudioRole, string>>,
+  desktop?: string,
+): Promise<boolean> {
+  const inputs = records((await obs.call('GetInputList')).inputs);
+  const specials = await obs.call('GetSpecialInputs');
+  if (Object.values(specials).some((value) => typeof value === 'string' && value)) return false;
+  const wanted = desktop ? [desktop] : [ids.game, ids.remoteCommentary];
+  if (wanted.some((uuid) => !uuid || !inputs.some((input) => input.inputUuid === uuid)))
+    return false;
+  if (
+    desktop &&
+    inputs.find((input) => input.inputUuid === desktop)?.inputKind !== 'wasapi_output_capture'
+  )
+    return false;
+  const names = obsDesiredScenes(baseUrl).map((scene) => scene.sceneName);
+  const graph = await inspectAudioSceneGraph(obs, names);
+  for (const name of names) {
+    const active = graph
+      .filter((container) => container.activeManagedRoots.has(name))
+      .flatMap((container) => container.items.filter((item) => item.sceneItemEnabled));
+    if (wanted.some((uuid) => !active.some((item) => item.sourceUuid === uuid))) return false;
+    for (const item of active) {
+      const input = inputs.find((entry) => entry.inputUuid === item.sourceUuid);
+      if (!input) continue;
+      if (
+        audioKinds.has(String(input.inputKind)) &&
+        !wanted.includes(item.sourceUuid) &&
+        item.sourceUuid !== ids.microphone &&
+        !(input.inputKind === 'wasapi_input_capture' && !ids.microphone)
+      )
+        return false;
+      if (desktop && ['game_capture', 'window_capture'].includes(String(input.inputKind))) {
+        const settings = (await obs.call('GetInputSettings', { inputUuid: item.sourceUuid }))
+          .inputSettings as Record<string, unknown> | undefined;
+        if (!settings) return false;
+        let captured = settings.capture_audio;
+        if (captured === undefined) {
+          const defaults = (
+            await obs.call('GetInputDefaultSettings', { inputKind: input.inputKind })
+          ).defaultInputSettings as Record<string, unknown> | undefined;
+          captured = defaults?.capture_audio;
+        }
+        if (captured !== false) return false;
+      }
+    }
+  }
+  return true;
 }

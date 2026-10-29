@@ -847,6 +847,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     app.addHook('onListen', () => {
       obsAdapter.startBrowserRecovery();
       obsAdapter.startCommentaryRecovery();
+      if (musicDirector) obsAdapter.startAudioModeRecovery(musicDirector);
       return Promise.resolve();
     });
     registerObsRoutes(app, {
@@ -1223,6 +1224,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         if (relation === 'unknown') throw new Error('audio_monitor_device_unknown');
         return relation === 'same';
       },
+      () => obsAudioRouting?.modePending() ?? Promise.resolve(false),
     );
     registerMusicRoutes(app, musicStore, musicDirector, localWebTransport.getOriginPolicy());
     if (obsAdapter)

@@ -167,17 +167,15 @@ export function registerObsRoutes(
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
     const parsed = z
-      .union([
+      .discriminatedUnion('mode', [
         z
           .object({
             revision: z.string().uuid(),
-            mode: z.enum(['desktop', 'independent']),
+            mode: z.literal('desktop'),
             selectionId: z.string().uuid().optional(),
           })
           .strict(),
-        z
-          .object({ revision: z.string().uuid(), selectionId: z.string().uuid().nullable() })
-          .strict(),
+        z.object({ revision: z.string().uuid(), mode: z.literal('independent') }).strict(),
       ])
       .safeParse(request.body);
     if (!parsed.success || !options.gameAudio)
@@ -188,13 +186,9 @@ export function registerObsRoutes(
       await options.gameAudio.switchMode(() =>
         options.adapter.switchAudioMode(
           parsed.data.revision,
-          'mode' in parsed.data
-            ? parsed.data.mode
-            : parsed.data.selectionId
-              ? 'desktop'
-              : 'independent',
-          parsed.data.selectionId ?? undefined,
-          (obs, same, apply) => music.prepareDesktopMix(obs, same, apply),
+          parsed.data.mode,
+          parsed.data.mode === 'desktop' ? parsed.data.selectionId : undefined,
+          music,
         ),
       );
       return { ok: true };

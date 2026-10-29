@@ -14,13 +14,34 @@ import { BP_COMPACT_INPUT, BP_COMPACT_PATH } from './bp-overlay.js';
 import { inspectAudioSceneGraph } from './audio-scene-graph.js';
 
 const roles = ['game', 'remoteCommentary', 'microphone'] as const;
+const musicOriginal = z
+  .object({ uuid: z.string().min(1), mode: z.literal('OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT') })
+  .strict()
+  .nullable();
+const musicOriginals = z.object({ bgm: musicOriginal, stinger: musicOriginal }).strict();
+export type MonitorOriginals = z.infer<typeof musicOriginals>;
+const modeTransition = z
+  .object({
+    id: z.string().uuid(),
+    endpoint: z.string().min(1),
+    collection: z.string().min(1),
+    targetDesktop: obsAudioBindingSchema.nullable(),
+    targetMicrophone: obsAudioBindingSchema.nullable(),
+    musicBefore: musicOriginals,
+    musicAfter: musicOriginals,
+  })
+  .strict();
+export type ModeTransition = z.infer<typeof modeTransition>;
 const stateSchema = z
   .object({
     revision: z.string().uuid(),
     desktop: obsAudioBindingSchema.nullable().default(null),
     lastDesktop: obsAudioBindingSchema.nullable().default(null),
     desktopMicrophone: obsAudioBindingSchema.nullable().default(null),
-    transition: z.boolean().default(false),
+    transition: z
+      .union([modeTransition, z.boolean(), z.null()])
+      .default(null)
+      .transform((value) => (value === false ? null : value)),
     bindings: z
       .object({
         game: obsAudioBindingSchema.nullable(),
@@ -85,7 +106,7 @@ export class ObsAudioRouting {
         desktop: null,
         lastDesktop: null,
         desktopMicrophone: null,
-        transition: false,
+        transition: null,
         bindings: { game: null, remoteCommentary: null, microphone: null },
       };
       this.automaticEligible = true;
@@ -139,7 +160,7 @@ export class ObsAudioRouting {
       desktop: null,
       lastDesktop: state.lastDesktop,
       desktopMicrophone: state.desktopMicrophone,
-      transition: false,
+      transition: null,
       bindings,
     };
     await mkdir(dirname(this.path), { recursive: true });
@@ -445,7 +466,7 @@ export class ObsAudioRouting {
               )?.inputName ?? null,
           }
         : null,
-      transition: state.transition,
+      transition: Boolean(state.transition),
       bindings,
       candidates: choices,
       findings,
@@ -455,7 +476,43 @@ export class ObsAudioRouting {
     return (await this.load()).desktop;
   }
   async modePending() {
-    return (await this.load()).transition;
+    return Boolean((await this.load()).transition);
+  }
+  async modeRecoveryState() {
+    const state = await this.load();
+    return {
+      revision: state.revision,
+      desktop: state.desktop,
+      transition: state.transition,
+      bindings: state.bindings,
+    };
+  }
+  private async saveState(next: State) {
+    await mkdir(dirname(this.path), { recursive: true });
+    const temp = `${this.path}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temp, `${JSON.stringify(next)}\n`, { mode: 0o600 });
+      await rename(temp, this.path);
+    } finally {
+      await rm(temp, { force: true });
+    }
+    this.state = next;
+    for (const listener of this.listeners) listener();
+  }
+  async commitModeTransition(id: string, side: 'before' | 'after') {
+    const state = await this.load();
+    const transition = state.transition;
+    if (!transition || transition === true || transition.id !== id)
+      throw new Error('audio_mode_transition_changed');
+    const desktop = side === 'after' ? transition.targetDesktop : state.desktop;
+    await this.saveState({
+      ...state,
+      revision: id,
+      desktop,
+      lastDesktop: desktop ?? state.desktop ?? state.lastDesktop,
+      desktopMicrophone: side === 'after' ? transition.targetMicrophone : state.desktopMicrophone,
+      transition: null,
+    });
   }
   async switchMode(
     obs: ObsRpc,
@@ -467,10 +524,14 @@ export class ObsAudioRouting {
       ids: Partial<Record<ObsAudioRole, string>>,
       desktopUuid: string | undefined,
       verify: () => Promise<boolean>,
+      begin: (before: MonitorOriginals, after: MonitorOriginals) => Promise<string>,
+      commit: (id: string) => Promise<void>,
     ) => Promise<void>,
   ) {
     const state = await this.load();
     if (state.revision !== revision) throw new Error('audio_revision_changed');
+    if (state.transition) throw new Error('audio_mode_pending');
+    if (mode === 'desktop' && state.desktop) throw new Error('audio_mode_already_desktop');
     let ids: Partial<Record<ObsAudioRole, string>> = {};
     let desktop: State['desktop'] = null;
     let desktopMicrophone: State['desktopMicrophone'] = null;
@@ -616,38 +677,37 @@ export class ObsAudioRouting {
         collection: current.collection,
       };
     }
-    if (!state.transition) {
-      const pending = { ...state, transition: true };
-      await mkdir(dirname(this.path), { recursive: true });
-      const temp = `${this.path}.${randomUUID()}.tmp`;
-      try {
-        await writeFile(temp, `${JSON.stringify(pending)}\n`, { mode: 0o600 });
-        await rename(temp, this.path);
-      } finally {
-        await rm(temp, { force: true });
-      }
-      this.state = pending;
-      for (const listener of this.listeners) listener();
-    }
-    await apply(ids, desktop?.inputUuid, async () => (await this.load()).revision === revision);
-    const next: State = {
-      ...state,
-      revision: randomUUID(),
-      desktop,
-      lastDesktop: desktop ?? state.desktop ?? state.lastDesktop,
-      desktopMicrophone,
-      transition: false,
+    let modeId: string | undefined;
+    const begin = async (musicBefore: MonitorOriginals, musicAfter: MonitorOriginals) => {
+      if (modeId || (await this.load()).revision !== revision || (await this.load()).transition)
+        throw new Error('audio_mode_transition_changed');
+      modeId = randomUUID();
+      await this.saveState({
+        ...state,
+        transition: {
+          id: modeId,
+          endpoint,
+          collection: desktop?.collection ?? OBS_COLLECTION,
+          targetDesktop: desktop,
+          targetMicrophone: desktopMicrophone,
+          musicBefore,
+          musicAfter,
+        },
+      });
+      return modeId;
     };
-    await mkdir(dirname(this.path), { recursive: true });
-    const temp = `${this.path}.${randomUUID()}.tmp`;
-    try {
-      await writeFile(temp, `${JSON.stringify(next)}\n`, { mode: 0o600 });
-      await rename(temp, this.path);
-    } finally {
-      await rm(temp, { force: true });
-    }
-    this.state = next;
-    for (const listener of this.listeners) listener();
+    await apply(
+      ids,
+      desktop?.inputUuid,
+      async () => (await this.load()).revision === revision,
+      begin,
+      async (id) => {
+        if (id !== modeId) throw new Error('audio_mode_transition_changed');
+        await this.commitModeTransition(id, 'after');
+      },
+    );
+    if (!modeId || (await this.load()).revision !== modeId || (await this.load()).transition)
+      throw new Error('audio_mode_unconfirmed');
   }
   async bind(
     obs: ObsRpc,

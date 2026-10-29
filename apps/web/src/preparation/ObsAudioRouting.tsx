@@ -158,7 +158,6 @@ export function ObsAudioRouting() {
       <p>
         桌面混音包含游戏与其他解说，无法分别调节；麦克风仍单独控制，本机监听的音乐也可能进入混音。
       </p>
-      <p>TeamSpeak 6 beta5 的应用捕获可能只有提示音，请核对版本并录制真人语音试听。</p>
       <Button disabled={busy} onClick={() => void run(refresh)}>
         读取 OBS 音频来源
       </Button>
@@ -166,11 +165,7 @@ export function ObsAudioRouting() {
         <>
           <p>
             当前模式：
-            {status.transition
-              ? '切换待完成，请重新选择并切换'
-              : status.desktop
-                ? '桌面混音'
-                : '独立分路'}
+            {status.transition ? '正在核对切换状态' : status.desktop ? '桌面混音' : '独立分路'}
           </p>
           {chooseDesktop && (
             <Select
@@ -190,7 +185,11 @@ export function ObsAudioRouting() {
             </Select>
           )}{' '}
           <Button
-            disabled={busy || (chooseDesktop && !desktopSelection)}
+            disabled={
+              busy ||
+              Boolean(status.desktop && !status.transition) ||
+              (chooseDesktop && !desktopSelection)
+            }
             onClick={() => void run(() => switchMode('desktop'))}
           >
             切换桌面混音

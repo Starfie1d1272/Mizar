@@ -71,6 +71,7 @@ const journalSchema = z
   .object({
     endpoint: z.string(),
     collection: z.string(),
+    modeId: z.string().uuid().optional(),
     fields: z.array(z.union([field, inputField, monitorField])),
   })
   .strict();
@@ -123,6 +124,91 @@ export class AudioMigration {
       throw error;
     }
   }
+  /** Read back a mode journal without replaying any write. */
+  async inspectMode(
+    obs: ObsRpc,
+    endpoint: string,
+    observer: MigrationObserver,
+    modeId: string,
+  ): Promise<'applied' | 'before' | 'mixed'> {
+    const journal = await this.pending();
+    if (!journal || journal.modeId !== modeId) throw new Error('audio_migration_mode_mismatch');
+    if (journal.fields.some((entry) => entry.externalChanged || entry.before === entry.applied))
+      throw new Error('audio_migration_external_change');
+    let changed = false;
+    const stop = observer.subscribe(() => {
+      changed = true;
+    });
+    try {
+      const plan = {
+        endpoint: journal.endpoint,
+        collection: journal.collection,
+        desktop: [],
+        independent: [],
+      };
+      await this.context(obs, plan, endpoint, true);
+      const first = await Promise.all(journal.fields.map((entry) => this.status(obs, entry)));
+      const second = await Promise.all(journal.fields.map((entry) => this.status(obs, entry)));
+      await this.context(obs, plan, endpoint, true);
+      if (
+        changed ||
+        first.some((value, index) => {
+          const entry = journal.fields[index]!;
+          return (
+            value !== second[index] ||
+            (value !== entry.before && value !== entry.applied) ||
+            (['prepared', 'restored'].includes(entry.phase) && value !== entry.before) ||
+            (entry.phase === 'confirmed' && value !== entry.applied)
+          );
+        })
+      )
+        throw new Error('audio_migration_external_change');
+      if (journal.fields.every((entry, index) => first[index] === entry.applied)) {
+        for (const entry of journal.fields) entry.phase = 'confirmed';
+        await this.save(journal);
+        if (changed) throw new Error('audio_migration_external_change');
+        return 'applied';
+      }
+      return journal.fields.every((entry, index) => first[index] === entry.before)
+        ? 'before'
+        : 'mixed';
+    } finally {
+      stop();
+    }
+  }
+  async saveModeBackup(completedPath: string, modeId: string): Promise<void> {
+    const journal = await this.pending();
+    if (
+      !journal ||
+      journal.modeId !== modeId ||
+      journal.fields.some((entry) => entry.phase !== 'confirmed' || entry.externalChanged)
+    )
+      throw new Error('audio_migration_mode_mismatch');
+    try {
+      await link(this.path, completedPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      const existing = await this.readJournal(completedPath);
+      if (
+        !existing ||
+        existing.modeId !== modeId ||
+        JSON.stringify(existing) !== JSON.stringify(journal)
+      )
+        throw new Error('audio_migration_backup_conflict', { cause: error });
+    }
+  }
+  async clearMode(modeId: string): Promise<void> {
+    const journal = await this.pending();
+    if (!journal) return;
+    if (journal.modeId !== modeId) throw new Error('audio_migration_mode_mismatch');
+    await rm(this.path);
+  }
+  async clearModeBackup(completedPath: string, modeId?: string): Promise<void> {
+    const journal = await this.readJournal(completedPath);
+    if (!journal) return;
+    if (modeId && journal.modeId !== modeId) return;
+    await rm(completedPath);
+  }
   /** Restore a completed switch only while every recorded item still has the
    * value written by that switch. The ordinary migration journal protects the
    * reverse operation itself if its outcome becomes uncertain. */
@@ -132,6 +218,7 @@ export class AudioMigration {
     observer: MigrationObserver,
     completedPath: string,
     extraMonitor: AudioMonitorChange[] = [],
+    modeId?: string,
   ): Promise<boolean> {
     const completed = await this.readJournal(completedPath);
     if (!completed) return false;
@@ -168,6 +255,8 @@ export class AudioMigration {
     const alreadyRestored = completed.fields.every(
       (entry, index) => values[index] === entry.before,
     );
+    if (modeId && alreadyRestored && completed.fields.length)
+      throw new Error('audio_migration_external_change');
     if (
       !alreadyRestored &&
       completed.fields.some((entry, index) => values[index] !== entry.applied)
@@ -207,7 +296,13 @@ export class AudioMigration {
       };
       (entry.before ? independent : desktop).push(ref);
     }
-    if (!desktop.length && !independent.length && !captureAudio.length && !monitor.length)
+    if (
+      !modeId &&
+      !desktop.length &&
+      !independent.length &&
+      !captureAudio.length &&
+      !monitor.length
+    )
       return true;
     await this.migrate(
       obs,
@@ -221,6 +316,8 @@ export class AudioMigration {
         monitor,
       },
       observer,
+      undefined,
+      modeId,
     );
     return true;
   }
@@ -305,7 +402,12 @@ export class AudioMigration {
   }
   /** Recheck an interrupted transaction on a new observed connection and restore
    * its recorded pre-switch references before allowing another migration. */
-  async recover(obs: ObsRpc, endpoint: string, observer: MigrationObserver): Promise<void> {
+  async recover(
+    obs: ObsRpc,
+    endpoint: string,
+    observer: MigrationObserver,
+    retain = false,
+  ): Promise<void> {
     if (this.running) throw new Error('audio_migration_busy');
     this.running = true;
     let interrupted = false;
@@ -349,7 +451,9 @@ export class AudioMigration {
             value !== confirmed[index] ||
             (value !== journal.fields[index]!.before && value !== journal.fields[index]!.applied) ||
             (['prepared', 'restored'].includes(journal.fields[index]!.phase) &&
-              value !== journal.fields[index]!.before),
+              value !== journal.fields[index]!.before) ||
+            (journal.fields[index]!.phase === 'confirmed' &&
+              value !== journal.fields[index]!.applied),
         )
       )
         throw new Error('audio_migration_external_change');
@@ -380,7 +484,7 @@ export class AudioMigration {
           throw new Error('audio_migration_external_change');
       await check();
       stop();
-      await rename(this.path, `${this.path}.recovered-${randomUUID()}.json`);
+      if (!retain) await rename(this.path, `${this.path}.recovered-${randomUUID()}.json`);
     } finally {
       stop();
       this.running = false;
@@ -392,6 +496,7 @@ export class AudioMigration {
     raw: AudioMigrationPlan,
     observer: MigrationObserver,
     completedPath?: string,
+    modeId?: string,
   ): Promise<void> {
     if (this.running) throw new Error('audio_migration_busy');
     const plan = planSchema.parse(raw);
@@ -415,6 +520,7 @@ export class AudioMigration {
     const journal: Journal = {
       endpoint: plan.endpoint,
       collection: plan.collection,
+      ...(modeId ? { modeId } : {}),
       fields: [
         ...(plan.monitor ?? []).map((x) => ({
           ...x,
@@ -566,7 +672,9 @@ export class AudioMigration {
         throw new Error('audio_migration_external_change');
       unsubscribe();
       // Keep the original reference states as an audit/restore backup after a successful change.
-      if (completedPath) {
+      if (modeId) {
+        // The mode coordinator owns finalization after its durable commit.
+      } else if (completedPath) {
         // Do not replace the only restore record from an earlier switch.
         await link(this.path, completedPath);
         await rm(this.path);
@@ -588,7 +696,7 @@ export class AudioMigration {
           ))
             await send(entry, entry.before, 'restored', false);
           if (journal.fields.every((x) => x.phase === 'prepared' || x.phase === 'restored')) {
-            await rm(this.path);
+            if (!modeId) await rm(this.path);
             created = false;
           }
         } catch {

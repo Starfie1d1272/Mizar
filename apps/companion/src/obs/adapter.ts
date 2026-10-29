@@ -3,12 +3,17 @@ import { ObsActionError } from './action-error.js';
 import { assertBpCompactOff, BpOverlayOwner } from './bp-overlay.js';
 import { diagnosticValue } from '../support/session-journal.js';
 import { createHash, randomUUID } from 'node:crypto';
-import { readFile, rm } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { dirname } from 'node:path';
 import { OBSWebSocket } from 'obs-websocket-js';
 import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
-import type { ObsAudioBindCommand, ObsOutputCommand, ObsOutputsStatus } from '@mizar/protocol/obs';
+import type {
+  ObsAudioBindCommand,
+  ObsAudioRole,
+  ObsOutputCommand,
+  ObsOutputsStatus,
+} from '@mizar/protocol/obs';
 import type { ObsAudioRouting } from './audio-routing.js';
 import type { GameAudioController } from './audio-policy-controller.js';
 import type { MixerChannelStatus, MixerCommand, MixerCommandResult } from '@mizar/protocol/mixer';
@@ -21,8 +26,9 @@ import {
 import { readOwnedCommentaryTarget } from './commentary-owned-target.js';
 import { OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
 import { configureIndependentAudio } from './audio-setup.js';
-import { reconcileManagedAudio } from './managed-audio.js';
-import { AudioMigration, type AudioMonitorChange } from './audio-migration.js';
+import { reconcileManagedAudio, verifyManagedAudioMode } from './managed-audio.js';
+import { AudioMigration, type MigrationObserver } from './audio-migration.js';
+import type { MusicDirector } from '../music/director.js';
 import { desktopMonitorRelationship } from './audio-monitor-device.js';
 import { discoverWaitingCommentary } from './remote-commentary-wait.js';
 import { AudioConfigurationConnection } from './audio-configuration-connection.js';
@@ -101,6 +107,8 @@ export class ObsAdapter {
     { code: 'configuration_unchecked', message: '请检查 OBS 场景配置。' },
   ];
   private commentaryTimer: ReturnType<typeof setTimeout> | undefined;
+  private audioModeTimer: ReturnType<typeof setTimeout> | undefined;
+  private audioModeTask: Promise<void> | undefined;
   private commentaryTask: Promise<void> | undefined;
   private recoveryTimer: ReturnType<typeof setTimeout> | undefined;
   private recoveryClosed = false;
@@ -223,8 +231,157 @@ export class ObsAdapter {
     attempt();
   }
 
+  startAudioModeRecovery(
+    music: Pick<MusicDirector, 'withAudioModeRecovery' | 'commitDesktopMonitorOriginals'>,
+  ): void {
+    if (
+      !this.audioRouting ||
+      !this.commentary ||
+      this.recoveryClosed ||
+      this.audioModeTimer ||
+      this.audioModeTask
+    )
+      return;
+    const attempt = () => {
+      if (this.recoveryClosed) return;
+      this.audioModeTimer = undefined;
+      this.audioModeTask = this.recoverAudioMode(music)
+        .catch((error) => this.diagnostic('audio_mode_recovery', error))
+        .finally(() => {
+          this.audioModeTask = undefined;
+          if (!this.recoveryClosed) {
+            this.audioModeTimer = setTimeout(attempt, 5000);
+            this.audioModeTimer.unref();
+          }
+        });
+    };
+    attempt();
+  }
+  async recoverAudioMode(
+    music: Pick<MusicDirector, 'withAudioModeRecovery' | 'commitDesktopMonitorOriginals'>,
+  ): Promise<void> {
+    if (!this.audioRouting || !this.commentary) return;
+    const state = await this.audioRouting.modeRecoveryState();
+    const migration = new AudioMigration(`${this.commentary.journal}.migration`);
+    const pending = await migration.pending();
+    if (!state.transition && !pending?.modeId) return;
+    await this.configurationMutation(() =>
+      this.audioConfiguration.run((obs, endpoint, observer) =>
+        music.withAudioModeRecovery(() =>
+          this.recoverAudioModeOnConnection(obs, endpoint, observer, music),
+        ),
+      ),
+    );
+  }
+  private async recoverAudioModeOnConnection(
+    obs: ObsRpc,
+    endpoint: string,
+    observer: MigrationObserver,
+    music: Pick<MusicDirector, 'commitDesktopMonitorOriginals'>,
+  ) {
+    const routing = this.audioRouting!;
+    const state = await routing.modeRecoveryState();
+    const migration = new AudioMigration(`${this.commentary!.journal}.migration`);
+    const completedPath = `${this.commentary!.journal}.migration-mode`;
+    const pending = await migration.pending();
+    if (!state.transition) {
+      if (!pending?.modeId) return;
+      if (pending.modeId !== state.revision) throw new Error('audio_migration_mode_mismatch');
+      if (!state.desktop) await migration.clearModeBackup(completedPath);
+      await migration.clearMode(pending.modeId);
+      return;
+    }
+    if (state.transition === true) throw new Error('audio_mode_legacy_pending');
+    const transition = state.transition;
+    if (
+      transition.endpoint !== endpoint ||
+      (await obs.call('GetSceneCollectionList')).currentSceneCollectionName !==
+        transition.collection
+    )
+      throw new Error('audio_migration_identity_changed');
+    if (pending && pending.modeId !== transition.id)
+      throw new Error('audio_migration_mode_mismatch');
+    const outcome = pending
+      ? await migration.inspectMode(obs, endpoint, observer, transition.id)
+      : 'before';
+    let side: 'before' | 'after' = 'before';
+    let targetIds: Partial<Record<ObsAudioRole, string>> = {};
+    if (pending && outcome === 'applied') {
+      const inputList = (await obs.call('GetInputList')).inputs;
+      if (!Array.isArray(inputList)) throw new Error('audio_response_unknown');
+      const ids: Partial<Record<ObsAudioRole, string>> = {};
+      for (const role of ['game', 'remoteCommentary', 'microphone'] as const) {
+        const binding =
+          role === 'microphone' && transition.targetDesktop
+            ? transition.targetMicrophone
+            : state.bindings[role];
+        if (
+          binding &&
+          binding.endpoint === endpoint &&
+          binding.collection === transition.collection &&
+          inputList.some(
+            (value: Record<string, unknown>) =>
+              value.inputUuid === binding.inputUuid && value.inputKind === binding.inputKind,
+          )
+        )
+          ids[role] = binding.inputUuid;
+      }
+      if (
+        !(await verifyManagedAudioMode(
+          obs,
+          this.browserBaseUrl,
+          ids,
+          transition.targetDesktop?.inputUuid,
+        ))
+      )
+        throw new Error('audio_mode_target_changed');
+      if (transition.targetDesktop) await migration.saveModeBackup(completedPath, transition.id);
+      targetIds = ids;
+      side = 'after';
+    } else if (pending && outcome === 'mixed') {
+      await migration.recover(obs, endpoint, observer, true);
+    }
+    let changed = false;
+    const stop = observer.subscribe(() => {
+      changed = true;
+    });
+    try {
+      await music.commitDesktopMonitorOriginals(
+        transition.musicBefore,
+        transition.musicAfter,
+        side,
+      );
+      if (
+        pending &&
+        (await migration.inspectMode(obs, endpoint, observer, transition.id)) !==
+          (side === 'after' ? 'applied' : 'before')
+      )
+        throw new Error('audio_mode_target_changed');
+      if (
+        side === 'after' &&
+        !(await verifyManagedAudioMode(
+          obs,
+          this.browserBaseUrl,
+          targetIds,
+          transition.targetDesktop?.inputUuid,
+        ))
+      )
+        throw new Error('audio_mode_target_changed');
+      if (changed) throw new Error('audio_migration_external_change');
+      await routing.commitModeTransition(transition.id, side);
+    } finally {
+      stop();
+    }
+    if (side === 'after' && !transition.targetDesktop)
+      await migration.clearModeBackup(completedPath);
+    if (side === 'before' && !state.desktop)
+      await migration.clearModeBackup(completedPath, transition.id);
+    await migration.clearMode(transition.id);
+  }
   async close(): Promise<void> {
     this.recoveryClosed = true;
+    if (this.audioModeTimer) clearTimeout(this.audioModeTimer);
+    await this.audioModeTask;
     if (this.commentaryTimer) clearTimeout(this.commentaryTimer);
     await this.commentaryTask;
     await this.outputs.close();
@@ -475,23 +632,25 @@ export class ObsAdapter {
     revision: string,
     mode: 'desktop' | 'independent',
     selectionId: string | undefined,
-    prepareMusic: (
-      obs: ObsRpc,
-      same: boolean,
-      apply: (changes: AudioMonitorChange[]) => Promise<void>,
-    ) => Promise<void>,
+    music: Pick<
+      MusicDirector,
+      'prepareDesktopMix' | 'withAudioModeRecovery' | 'commitDesktopMonitorOriginals'
+    >,
   ) {
     if (!this.audioRouting || !this.commentary) throw new Error('audio_routing_unavailable');
     return this.configurationMutation(() =>
       this.audioConfiguration.run(async (obs, endpoint, observer) => {
         const completedPath = `${this.commentary!.journal}.migration-mode`;
+        await music.withAudioModeRecovery(() =>
+          this.recoverAudioModeOnConnection(obs, endpoint, observer, music),
+        );
         await this.audioRouting!.switchMode(
           obs,
           endpoint,
           revision,
           mode,
           selectionId,
-          async (ids, desktop, verify) => {
+          async (ids, desktop, verify, begin, commit) => {
             const [stream, record, collection, inputs] = await Promise.all([
               obs.call('GetStreamStatus'),
               obs.call('GetRecordStatus'),
@@ -529,34 +688,66 @@ export class ObsAdapter {
               endpoint,
               observer,
             );
-            await prepareMusic(obs, relationship === 'same', async (monitor) => {
+            await music.prepareDesktopMix(obs, relationship === 'same', async (plan) => {
+              const modeId = await begin(plan.musicBefore, plan.musicAfter);
+              const migration = new AudioMigration(`${this.commentary!.journal}.migration`);
               if (
                 !desktop &&
-                (await new AudioMigration(`${this.commentary!.journal}.migration`).restoreCompleted(
+                (await migration.restoreCompleted(
                   obs,
                   endpoint,
                   observer,
                   completedPath,
-                  monitor,
+                  plan.changes,
+                  modeId,
                 ))
-              )
-                return;
-              await reconcileManagedAudio(
-                obs,
-                endpoint,
-                observer,
-                this.commentary!.journal,
-                this.browserBaseUrl,
-                ids,
-                verify,
-                desktop,
-                desktop ? completedPath : undefined,
-                monitor,
-              );
+              ) {
+                // Reverse migration stays pending until the routing state is committed.
+              } else {
+                await reconcileManagedAudio(
+                  obs,
+                  endpoint,
+                  observer,
+                  this.commentary!.journal,
+                  this.browserBaseUrl,
+                  ids,
+                  verify,
+                  desktop,
+                  undefined,
+                  plan.changes,
+                  modeId,
+                );
+              }
+              let changed = false;
+              const stop = observer.subscribe(() => {
+                changed = true;
+              });
+              try {
+                if ((await migration.inspectMode(obs, endpoint, observer, modeId)) !== 'applied')
+                  throw new Error('audio_mode_unconfirmed');
+                if (!(await verifyManagedAudioMode(obs, this.browserBaseUrl, ids, desktop)))
+                  throw new Error('audio_mode_target_changed');
+                if (desktop) await migration.saveModeBackup(completedPath, modeId);
+                await music.commitDesktopMonitorOriginals(
+                  plan.musicBefore,
+                  plan.musicAfter,
+                  'after',
+                );
+                if (
+                  changed ||
+                  (await migration.inspectMode(obs, endpoint, observer, modeId)) !== 'applied'
+                )
+                  throw new Error('audio_migration_external_change');
+                if (changed) throw new Error('audio_migration_external_change');
+                await commit(modeId);
+              } finally {
+                stop();
+              }
+              if (!desktop) await migration.clearModeBackup(completedPath);
+              await migration.clearMode(modeId);
             });
           },
         );
-        if (mode === 'independent') await rm(completedPath, { force: true });
       }),
     );
   }
