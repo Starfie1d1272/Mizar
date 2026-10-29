@@ -90,15 +90,13 @@ export function registerBroadcastConfigRoutes(
         if (!isReady()) {
           const parsed = action === 'apply' ? apply.safeParse(request.body) : null;
           if (!parsed?.success || !store.hasReceipt(parsed.data.requestId))
-            return reply
-              .code(503)
-              .send({
-                error: {
-                  code: 'broadcast_config_unavailable',
-                  message: '播出配置尚未就绪。',
-                  requestId: request.id,
-                },
-              });
+            return reply.code(503).send({
+              error: {
+                code: 'broadcast_config_unavailable',
+                message: '播出配置尚未就绪。',
+                requestId: request.id,
+              },
+            });
         }
         try {
           if (action === 'clone') return await store.clone(clone.parse(request.body));
