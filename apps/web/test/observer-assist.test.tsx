@@ -317,6 +317,13 @@ it('keeps a downloaded MulNX version available when selection is blocked', async
   });
   expect(container.textContent).toContain('请先退出 CS2');
   expect(container.textContent).toContain('已下载版本：new');
+  mocks.native.mockResolvedValueOnce({ version: 'new', cameraReady: false });
+  await act(async () => {
+    button('使用已下载版本').click();
+    await Promise.resolve();
+  });
+  expect(container.textContent).toContain('已选择 new');
+  expect(container.textContent).toContain('镜头资源已变化');
 });
 it('shows prepared versions read from storage after reopening the controls', async () => {
   window.__TAURI_INTERNALS__ = { invoke: <T,>() => Promise.resolve(undefined as T) };

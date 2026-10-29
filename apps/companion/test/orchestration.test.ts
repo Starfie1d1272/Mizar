@@ -39,7 +39,10 @@ it('migrates the legacy active preset and retains its identity on restart', asyn
   expect(restored.activePresetId).toBe(store.activePresetId);
   expect(restored.presets).toEqual([{ id: store.activePresetId, preset }]);
 });
-async function rig(nativeRequired = false) {
+async function rig(
+  nativeRequired = false,
+  verifyPack: () => Promise<boolean> = () => Promise.resolve(true),
+) {
   const root = await mkdtemp(join(tmpdir(), 'mizar-camera-'));
   cleanup.push(() => rm(root, { recursive: true, force: true }));
   const store = new OrchestrationStore(join(root, 'orchestration'));
@@ -99,6 +102,7 @@ async function rig(nativeRequired = false) {
     () => 0,
     () => isolation,
     nativeRequired,
+    verifyPack,
   );
   director.tick();
   const resume = () => director.command('resume', director.get());
@@ -144,6 +148,21 @@ async function rig(nativeRequired = false) {
     },
   };
 }
+it('rechecks camera content before applying a pack after version changes', async () => {
+  let matches = true;
+  const r = await rig(false, () => Promise.resolve(matches));
+  await r.resume();
+  r.director.invalidatePreparation('版本已切换');
+  matches = false;
+  const send = vi.spyOn(r.provider, 'send');
+  await expect(r.resume()).rejects.toThrow('camera_source_changed');
+  expect(send).not.toHaveBeenCalledWith('CamPack/Apply', expect.anything());
+  expect(r.director.get().message).toContain('镜头资源已变化');
+  matches = true;
+  r.director.invalidatePreparation('版本已切换');
+  await r.resume();
+  expect(send).toHaveBeenCalledWith('CamPack/Apply', '测试包');
+});
 it('marks the automatic preference as saving until it is persisted', async () => {
   const r = await rig();
   await r.store.saveAutomaticEnabled(true);
@@ -321,36 +340,37 @@ it('only arms after the applied pack and empty lists are read back in the same c
   expect(r.director.get().held).toBe(true);
   r.provider.packStatus = () => Promise.resolve({ active: '测试包', empty: false });
   await expect(r.resume()).rejects.toThrow('camera_pack_unconfirmed');
-  let finish!: (status: { active: string | null; empty: boolean } | null) => void;
+  let finish: ((status: { active: string | null; empty: boolean } | null) => void) | undefined;
   r.provider.packStatus = () =>
     new Promise((resolve) => {
       finish = resolve;
     });
   const pending = r.resume();
-  await Promise.resolve();
+  await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
   r.director.hold();
-  finish({ active: '测试包', empty: true });
+  finish!({ active: '测试包', empty: true });
   await expect(pending).rejects.toThrow('camera_context_changed');
   expect(r.director.get().held).toBe(true);
   r.director.invalidatePreparation();
+  finish = undefined;
   const stale = r.resume();
-  await Promise.resolve();
+  await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
   r.director.invalidatePreparation();
-  finish({ active: '测试包', empty: true });
+  finish!({ active: '测试包', empty: true });
   await expect(stale).rejects.toThrow('camera_pack_unconfirmed');
   expect(r.director.get()).toMatchObject({ held: true, preparation: 'waiting' });
 });
 it('newer manual intent wins while automatic resume awaits preparation', async () => {
   const r = await rig();
-  let finish!: (status: { active: string | null; empty: boolean } | null) => void;
+  let finish: ((status: { active: string | null; empty: boolean } | null) => void) | undefined;
   r.provider.packStatus = () =>
     new Promise((resolve) => {
       finish = resolve;
     });
   const resume = r.resume();
-  await Promise.resolve();
+  await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
   const audition = r.director.audition({ macro: '手动', maxMs: 2000 }, r.director.get());
-  finish({ active: '测试包', empty: true });
+  finish!({ active: '测试包', empty: true });
   await expect(resume).rejects.toThrow('camera_context_changed');
   await audition;
   expect(r.director.get()).toMatchObject({ held: true, current: '手动' });
@@ -584,6 +604,7 @@ it('commits a prepared MulNX selection only inside the production guard', async 
   const stage = vi.spyOn(tool, 'stageSelection').mockResolvedValue({ id });
   const commit = vi.spyOn(tool, 'commitSelection').mockResolvedValue({ version: 'Beta' });
   let allowed = false;
+  let cameraReady = false;
   registerOrchestrationRoutes(
     app,
     r.director,
@@ -597,6 +618,7 @@ it('commits a prepared MulNX selection only inside the production guard', async 
         await fn();
         return true;
       },
+      reconcileSelection: () => Promise.resolve(cameraReady),
     },
     tool,
   );
@@ -630,8 +652,15 @@ it('commits a prepared MulNX selection only inside the production guard', async 
   expect((await post({ action: 'commit', id })).statusCode).toBe(409);
   expect(commit).not.toHaveBeenCalled();
   allowed = true;
-  expect((await post({ action: 'commit', id })).statusCode).toBe(200);
+  const selected = await post({ action: 'commit', id });
+  expect(selected.statusCode).toBe(200);
+  expect(selected.json<unknown>()).toEqual({ version: 'Beta', cameraReady: false });
   expect(commit).toHaveBeenCalledOnce();
+  cameraReady = true;
+  expect((await post({ action: 'commit', id })).json<unknown>()).toEqual({
+    version: 'Beta',
+    cameraReady: true,
+  });
 });
 it('real websocket separates ACK, rejection and unrelated broadcasts; disconnect never replays', async () => {
   const app = Fastify();

@@ -1374,6 +1374,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       undefined,
       (pack) => verifyIsolatedPack(options.mulnxCamPacksRoot ?? mulnxTool?.camPacksRoot, pack),
       options.productRuntime !== undefined,
+      (map, pack) => {
+        if (!cameraStore.hasPersistence) return Promise.resolve(true);
+        return broadcastRuntime?.verifyCameraPack(map, pack) ?? Promise.resolve(false);
+      },
     );
     app.addHook('onReady', async () => {
       if (mulnxTool) {
@@ -1418,6 +1422,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         configureDemo: (requestId, commit) => demoTest.configureCameraSession(requestId, commit),
         canPrepare: () => production.get().mode === 'preparation',
         withSelection: production.withResourceActivation,
+        reconcileSelection: async () => {
+          if (!cameraStore.hasPersistence) return true;
+          await cameraStore.synchronizeFromPersistence();
+          return true;
+        },
       },
       mulnxTool,
     );

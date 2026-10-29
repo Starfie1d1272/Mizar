@@ -71,11 +71,15 @@ export function MulnxToolControls({
         setMessage(`已下载 ${result.tag}，可以在退出游戏后使用。`);
       } else if (action === 'select') {
         if (!selection) return;
-        await desktopInvoke('mulnx_control', {
+        const result = await desktopInvoke<{ cameraReady?: boolean }>('mulnx_control', {
           action: 'select',
           preparedId: selection.preparedId,
         });
-        setMessage(`已选择 ${selection.tag}，下次启动时使用。`);
+        setMessage(
+          result?.cameraReady === false
+            ? `已选择 ${selection.tag}。镜头资源已变化，请重新选择或使用方案。`
+            : `已选择 ${selection.tag}，下次启动时使用。`,
+        );
         setRefresh((value) => value + 1);
       } else if (action === 'stop') {
         const result = await desktopInvoke<{

@@ -50,6 +50,9 @@ export class OrchestrationStore {
   automaticEnabled = false;
   revision = 0;
   private pendingWrites = 0;
+  get hasPersistence() {
+    return this.persistence !== undefined;
+  }
   get saving() {
     return this.pendingWrites > 0;
   }

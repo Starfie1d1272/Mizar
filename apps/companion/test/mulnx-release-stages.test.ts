@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it, vi } from 'vitest';
 
+const fixture = vi.hoisted(() => ({ source: 'source' }));
 const release = {
   id: 1,
   assetId: 2,
@@ -28,7 +29,10 @@ vi.mock('../src/orchestration/tool-release.js', () => ({
       recursive: true,
     });
     await mkdir(join(root, 'CS2OBTool/CameraSystem/CamPacks/Source/Campaths'));
-    await writeFile(join(root, 'CS2OBTool/CameraSystem/CamPacks/Source/Source.yaml'), 'source');
+    await writeFile(
+      join(root, 'CS2OBTool/CameraSystem/CamPacks/Source/Source.yaml'),
+      fixture.source,
+    );
     await writeFile(join(root, 'Config/CS2OBTool_Refl.yaml'), 'UISystem.ifDrawMid: true\n');
     await writeFile(
       join(root, 'Config/CS2Injector_Refl.yaml'),
@@ -192,10 +196,21 @@ it('prepares without selecting and publishes a configured instance only after se
   await writeFile(join(data, 'current.json'), JSON.stringify(legacyReceipt));
   const hud = new HudConfigStore();
   await hud.load();
+  await writeFile(
+    join(bundle, 'release.json'),
+    JSON.stringify({ release: { ...release, sha256: 'b'.repeat(64) } }),
+  );
   const app = buildApp({
     obsConfigPath: join(root, 'obs.json'),
     hudConfigStore: hud,
     mulnxBundle: bundle,
+    productRuntime: {
+      artifactSha256: 'a'.repeat(64),
+      gitSha: 'b'.repeat(40),
+      instanceId: 'fixture',
+      controlToken: 'c'.repeat(64),
+      stop: () => {},
+    },
   });
   try {
     const status = await app.inject('/local/v1/broadcast-config/migration');
@@ -213,6 +228,45 @@ it('prepares without selecting and publishes a configured instance only after se
         },
       },
     });
+    const headers = { 'x-runtime-token': 'c'.repeat(64) };
+    const switchRelease = async (contents: string) => {
+      fixture.source = contents;
+      const downloaded = await app.inject({
+        method: 'POST',
+        url: '/operator/runtime/mulnx-prepare-release',
+        headers,
+        payload: {},
+      });
+      expect(downloaded.statusCode).toBe(200);
+      const preparedId = downloaded.json<{ preparedId: string }>().preparedId;
+      const staged = await app.inject({
+        method: 'POST',
+        url: '/operator/runtime/mulnx-select',
+        headers,
+        payload: {
+          action: 'stage',
+          preparedId,
+          cs2Path: 'D:\\Steam\\cs2.exe',
+          consoleCapture: false,
+        },
+      });
+      expect(staged.statusCode).toBe(200);
+      const committed = await app.inject({
+        method: 'POST',
+        url: '/operator/runtime/mulnx-select',
+        headers,
+        payload: { action: 'commit', id: staged.json<{ id: string }>().id },
+      });
+      expect(committed.statusCode).toBe(200);
+      return committed.json<{ cameraReady: boolean }>().cameraReady;
+    };
+    expect(await switchRelease('different source')).toBe(false);
+    expect((await app.inject('/local/v1/broadcast-presets')).json<unknown>()).toMatchObject({
+      active: {
+        resolved: { camera: { maps: [{ source: { treeSha256: source.treeSha256 } }] } },
+      },
+    });
+    expect(await switchRelease('source')).toBe(true);
   } finally {
     await app.close();
     await writeFile(join(data, 'current.json'), originalReceipt);
@@ -265,22 +319,36 @@ it('prepares without selecting and publishes a configured instance only after se
   );
   await expect(legacy.cameraSource(current.packs[0]!.name)).rejects.toThrow('mulnx_source_changed');
   await writeFile(join(data, prepared.preparedId, 'MulNX.7z'), 'bad');
-  await expect(legacy.cameraSource(current.packs[0]!.name)).rejects.toThrow(
-    'mulnx_prepared_integrity',
+  await expect(legacy.cameraSource(current.packs[0]!.name)).rejects.toThrow('mulnx_source_changed');
+  expect(await restarted.listPreparedReleases()).toEqual(
+    expect.arrayContaining([
+      {
+        preparedId: `prepared-${release.sha256}-00000000-0000-4000-8000-000000000000`,
+        tag: null,
+        archiveSha256: null,
+        state: 'damaged',
+      },
+      { preparedId: prepared.preparedId, tag: null, archiveSha256: null, state: 'damaged' },
+    ]),
   );
-  expect(await restarted.listPreparedReleases()).toEqual([
-    {
-      preparedId: `prepared-${release.sha256}-00000000-0000-4000-8000-000000000000`,
-      tag: null,
-      archiveSha256: null,
-      state: 'damaged',
-    },
-    { preparedId: prepared.preparedId, tag: null, archiveSha256: null, state: 'damaged' },
-  ]);
   await expect(restarted.selectRelease(prepared.preparedId, 'D:\\Steam\\cs2.exe')).rejects.toThrow(
     'mulnx_prepared_integrity',
   );
   expect(JSON.parse(await readFile(join(data, 'current.json'), 'utf8')) as unknown).toEqual(
     current,
   );
+  // Identical local pack names must not hide different source contents after a version switch.
+  await writeFile(
+    join(bundle, 'release.json'),
+    JSON.stringify({ release: { ...release, sha256: 'b'.repeat(64) } }),
+  );
+  fixture.source = 'different source';
+  const changedRelease = await restarted.prepareRelease();
+  await restarted.selectRelease(changedRelease.preparedId, 'D:\\Steam\\cs2.exe');
+  expect(restarted.view().packs[0]!.name).toBe(current.packs[0]!.name);
+  await expect(resolver.localPack(source)).rejects.toThrow('mulnx_source_unavailable');
+  fixture.source = 'source';
+  const compatibleRelease = await restarted.prepareRelease();
+  await restarted.selectRelease(compatibleRelease.preparedId, 'D:\\Steam\\cs2.exe');
+  await expect(resolver.localPack(source)).resolves.toBe(current.packs[0]!.name);
 });
