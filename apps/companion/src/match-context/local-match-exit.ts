@@ -12,6 +12,7 @@ const qualificationSchema = z.strictObject({
 const commandSchema = z.discriminatedUnion('action', [
   z.strictObject({ action: z.literal('prepare') }),
   z.strictObject({ action: z.literal('invalidate') }),
+  z.strictObject({ action: z.literal('settle'), qualification: qualificationSchema }),
   z.strictObject({ action: z.literal('confirm'), qualification: qualificationSchema }),
 ]);
 
@@ -37,7 +38,9 @@ export function registerLocalMatchExitRoutes(
   },
 ) {
   let hostConfirmationRequired = false;
-  let pending: { readonly ticket: string; readonly witness: ExitWitness } | undefined;
+  let pending:
+    | { readonly ticket: string; readonly witness: ExitWitness; readonly settled: boolean }
+    | undefined;
   let confirmed: ExitWitness | undefined;
   const witness = (): ExitWitness | undefined => {
     const binding = options.controller.getActiveBinding();
@@ -57,12 +60,15 @@ export function registerLocalMatchExitRoutes(
       receivedMonotonicMs: source.lastAccepted?.receivedMonotonicMs ?? null,
     };
   };
-  const matches = (expected: ExitWitness, current: ExitWitness | undefined) =>
+  const matchesIdentity = (expected: ExitWitness, current: ExitWitness | undefined) =>
     current !== undefined &&
     expected.matchId === current.matchId &&
     expected.contextRevision === current.contextRevision &&
     expected.productionRevision === current.productionRevision &&
-    expected.sourceGeneration === current.sourceGeneration &&
+    expected.sourceGeneration === current.sourceGeneration;
+  const matches = (expected: ExitWitness, current: ExitWitness | undefined) =>
+    matchesIdentity(expected, current) &&
+    current !== undefined &&
     expected.receiveSequence === current.receiveSequence &&
     expected.receivedMonotonicMs === current.receivedMonotonicMs;
   const requireHostConfirmation = () => {
@@ -95,7 +101,7 @@ export function registerLocalMatchExitRoutes(
       const current = witness();
       requireHostConfirmation();
       if (!current) return { qualification: null };
-      pending = { ticket: randomUUID(), witness: current };
+      pending = { ticket: randomUUID(), witness: current, settled: false };
       return {
         qualification: {
           ticket: pending.ticket,
@@ -104,16 +110,31 @@ export function registerLocalMatchExitRoutes(
         },
       };
     }
+    const current = witness();
     if (
       !pending ||
       body.qualification.ticket !== pending.ticket ||
       body.qualification.matchId !== pending.witness.matchId ||
       body.qualification.contextRevision !== pending.witness.contextRevision ||
-      !matches(pending.witness, witness())
+      !(body.action === 'settle'
+        ? !pending.settled &&
+          matchesIdentity(pending.witness, current) &&
+          (pending.witness.receiveSequence === null ||
+            (current?.receiveSequence !== null &&
+              current?.receiveSequence !== undefined &&
+              current.receiveSequence >= pending.witness.receiveSequence &&
+              current.receivedMonotonicMs !== null &&
+              pending.witness.receivedMonotonicMs !== null &&
+              current.receivedMonotonicMs >= pending.witness.receivedMonotonicMs))
+        : matches(pending.witness, current))
     )
       return reply
         .code(409)
         .send({ message: '比赛或制作状态已变化，退出资格未确认。请通过桌面重新关闭游戏并确认。' });
+    if (body.action === 'settle') {
+      pending = { ticket: pending.ticket, witness: current!, settled: true };
+      return { ok: true };
+    }
     confirmed = pending.witness;
     pending = undefined;
     return { ok: true };
