@@ -11,7 +11,7 @@ import type { ProgramSnapshot } from '@mizar/protocol/program';
 
 import type { RadarProps } from '@mizar/hud-view';
 import { HudEditorOverlay } from '../program/HudEditorOverlay';
-import { ProgramView } from '@mizar/hud-view';
+import { ProgramView, type GameplayHudProps } from '@mizar/hud-view';
 import { hasAcceptedProgramSnapshot } from '@mizar/hud-view';
 import type { LocalChannelConnectionState } from '../realtime';
 import { getMapThumbnail } from '@mizar/cs2-assets';
@@ -19,6 +19,8 @@ import type { ReactNode } from 'react';
 
 export interface HudCanvasPreviewProps {
   readonly gg?: boolean;
+  readonly overlays?: GameplayHudProps['overlays'];
+  readonly accent?: GameplayHudProps['accent'];
   readonly mapBackground?: boolean;
   readonly videoBackground?: ReactNode;
   readonly radarSource?: RadarProps['source'];
@@ -43,6 +45,8 @@ export interface HudCanvasPreviewProps {
 
 export function HudCanvasPreview({
   gg = false,
+  overlays,
+  accent,
   mapBackground = false,
   videoBackground,
   resolvedPreset,
@@ -112,6 +116,8 @@ export function HudCanvasPreview({
         <ProgramView
           kind="hud"
           gg={gg}
+          overlays={overlays}
+          accent={accent}
           radarSource={radarSource}
           radarSnapshot={radarSnapshot}
           resolvedPreset={resolvedPreset}
