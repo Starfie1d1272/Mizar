@@ -3,7 +3,12 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it, vi } from 'vitest';
 
-const fixture = vi.hoisted(() => ({ source: 'source' }));
+const fixture = vi.hoisted(() => ({
+  source: 'source',
+  candidate: null as null | typeof release,
+  hash: null as null | string,
+  fail: false,
+}));
 const release = {
   id: 1,
   assetId: 2,
@@ -24,9 +29,12 @@ vi.mock('../src/orchestration/tool-mirror.js', () => ({
 }));
 vi.mock('../src/orchestration/tool-release.js', () => ({
   SEVEN_ZIP: { sha256: 'extractor' },
-  latestMulnxRelease: () => Promise.resolve(release),
+  latestMulnxRelease: () =>
+    fixture.fail
+      ? Promise.reject(new Error('upstream unavailable'))
+      : Promise.resolve(fixture.candidate ?? release),
   fileSha256: (path: string) =>
-    Promise.resolve(path.endsWith('7zr.exe') ? 'extractor' : release.sha256),
+    Promise.resolve(path.endsWith('7zr.exe') ? 'extractor' : (fixture.hash ?? release.sha256)),
   downloadVerified: async (_url: string, path: string) => writeFile(path, 'x'),
   upstreamNotice: () => Promise.resolve('notice'),
   extractMulnx: async (_extractor: string, _archive: string, destination: string) => {
@@ -75,6 +83,9 @@ import { orchestrationPresetSchema } from '@mizar/protocol/orchestration';
 
 const roots: string[] = [];
 afterEach(async () => {
+  fixture.candidate = null;
+  fixture.hash = null;
+  fixture.fail = false;
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
 });
 it('prepares without selecting and publishes a configured instance only after selection succeeds', async () => {
@@ -400,4 +411,59 @@ it('prepares without selecting and publishes a configured instance only after se
   const compatibleRelease = await restarted.prepareRelease();
   await restarted.selectRelease(compatibleRelease.preparedId, 'D:\\Steam\\cs2.exe');
   await expect(resolver.localPack(source)).resolves.toBe(current.packs[0]!.name);
+});
+
+it('recomputes update status after committing a selection without inventing a successful check', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mizar-mulnx-status-'));
+  roots.push(root);
+  const bundle = join(root, 'bundle');
+  const data = join(root, 'mulnx');
+  await mkdir(bundle);
+  await writeFile(join(bundle, '7zr.exe'), 'fixture');
+  await writeFile(
+    join(bundle, 'release.json'),
+    JSON.stringify({ release: { ...release, sha256: 'c'.repeat(64) } }),
+  );
+  const old = {
+    ...release,
+    id: 3,
+    assetId: 4,
+    tag: 'Older',
+    publishedAt: '2026-10-22',
+    sha256: 'b'.repeat(64),
+  };
+  const tool = new MulnxTool(data, bundle);
+  await tool.load();
+  fixture.candidate = old;
+  fixture.hash = old.sha256;
+  const older = await tool.prepareRelease();
+  fixture.candidate = release;
+  fixture.hash = release.sha256;
+  const newest = await tool.prepareRelease();
+  expect(tool.view().checkResult).toBe('available');
+  const latestStage = await tool.stageSelection(newest.preparedId, 'D:\\Steam\\cs2.exe', false);
+  await tool.commitSelection(latestStage.id);
+  expect(tool.view()).toMatchObject({
+    installed: release.tag,
+    checkResult: 'current',
+    notificationIdentity: null,
+  });
+  expect(JSON.parse(await readFile(join(data, 'current.json'), 'utf8')).release.tag).toBe(
+    release.tag,
+  );
+  fixture.hash = old.sha256;
+  const oldStage = await tool.stageSelection(older.preparedId, 'D:\\Steam\\cs2.exe', false);
+  await tool.commitSelection(oldStage.id);
+  expect(tool.view()).toMatchObject({ installed: old.tag, checkResult: 'available' });
+  expect(tool.view().notificationIdentity).toContain(release.sha256);
+  fixture.fail = true;
+  await expect(tool.check()).rejects.toThrow();
+  fixture.hash = release.sha256;
+  const unknownStage = await tool.stageSelection(newest.preparedId, 'D:\\Steam\\cs2.exe', false);
+  await tool.commitSelection(unknownStage.id);
+  expect(tool.view()).toMatchObject({
+    installed: release.tag,
+    checkResult: 'error',
+    notificationIdentity: null,
+  });
 });

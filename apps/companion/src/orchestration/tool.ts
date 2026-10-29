@@ -702,6 +702,8 @@ export class MulnxTool {
       if (JSON.stringify(persisted) !== JSON.stringify(installed)) throw error;
     }
     this.installed = installed;
+    if (this.latest && (this.checkResult === 'current' || this.checkResult === 'available'))
+      this.checkResult = sameMulnxAsset(installed.release, this.latest) ? 'current' : 'available';
   }
 
   private async install(
