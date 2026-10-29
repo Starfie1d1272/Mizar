@@ -33,7 +33,7 @@ import { hasSeriesMapStrip } from './widgets/match-header/presentation';
 import type { BroadcastBranding } from './widgets/broadcast-pause/BroadcastBrand';
 
 export interface GameplayHudProps {
-  readonly radarClient?: RadarProps['client'];
+  readonly radarSource?: RadarProps['source'];
   readonly radarSnapshot?: RadarProps['snapshot'];
   readonly snapshot: ProgramSnapshot | null;
   readonly presentationRevision?: number;
@@ -70,7 +70,7 @@ export function themeStyle(theme: HudResolvedPreset['theme']): CSSProperties {
 
 export function GameplayHud({
   snapshot,
-  radarClient,
+  radarSource,
   radarSnapshot,
   resolvedPreset,
   presentationRevision = 0,
@@ -79,7 +79,7 @@ export function GameplayHud({
   broadcastBranding,
 }: GameplayHudProps) {
   const programFresh = snapshot?.payload.status.telemetry === 'fresh';
-  const radarAvailable = radarClient !== undefined || radarSnapshot != null;
+  const radarAvailable = radarSource !== undefined || radarSnapshot != null;
   if (!programFresh && !radarAvailable) return null;
 
   const score = resolvedPreset.widgets['top-score-bar'];
@@ -163,7 +163,7 @@ export function GameplayHud({
             <Renderer
               box={box}
               placement={placement}
-              radarClient={radarClient}
+              radarSource={radarSource}
               radarSnapshot={radarSnapshot}
               presentationRevision={presentationRevision}
               resolvedPreset={resolvedPreset}

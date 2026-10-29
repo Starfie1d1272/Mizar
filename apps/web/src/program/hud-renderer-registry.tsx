@@ -16,7 +16,7 @@ import { SeriesOverview } from './widgets/match-header/SeriesOverview';
 import { RoundHistory, SeriesStrip, TopScoreBar } from './widgets/match-header';
 import { FocusedPlayer } from './widgets/focused-player/FocusedPlayer';
 import type { RadarSnapshot } from '@mizar/protocol/radar';
-import type { LocalChannelClient } from '../realtime';
+import type { RadarViewSource } from '@mizar-hud/radar-view';
 import { RadarWidget } from './widgets/radar/Radar';
 import { PlayerRail } from './widgets/player-rails';
 
@@ -39,7 +39,7 @@ export interface HudWidgetRendererProps extends HudWidgetRendererBaseProps {
 /** Radar owns an independent source contract and does not require ProgramSnapshot. */
 export interface RadarHudWidgetRendererProps extends HudWidgetRendererBaseProps {
   readonly radarSnapshot?: RadarSnapshot | null | undefined;
-  readonly radarClient?: LocalChannelClient<'radar'> | undefined;
+  readonly radarSource?: RadarViewSource | undefined;
 }
 
 export type HudRendererEntry =
