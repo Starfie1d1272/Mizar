@@ -15,6 +15,7 @@ import {
 import { join } from 'node:path';
 import { atomicJson, ensureDirectory, readJson, safePath } from '../resource-store/files.js';
 import { prepareIsolatedPack } from './prepare-pack.js';
+import { cameraSourceTreeSha256 } from './camera-source.js';
 import {
   downloadVerified,
   extractMulnx,
@@ -28,7 +29,7 @@ import {
 interface InstalledTool {
   release: MulnxRelease;
   directory: string;
-  packs: { name: string; sourceName: string }[];
+  packs: { name: string; sourceName: string; treeSha256?: string | undefined }[];
 }
 const releaseSchema = z.object({
   id: z.number().int().positive(),
@@ -91,6 +92,41 @@ export class MulnxTool {
       packs: this.installed?.packs ?? [],
     };
   }
+  /** Return a portable source only after checking the selected instance's original bytes. */
+  async cameraSource(name: string) {
+    const installed = this.installed;
+    const pack = installed?.packs.find((item) => item.name === name);
+    if (!installed || !pack?.treeSha256) throw new Error('mulnx_source_unverified');
+    const root = await safePath(
+      join(this.directory, installed.directory, 'MulNX/CS2OBTool/CameraSystem/CamPacks'),
+    );
+    if (
+      !pack.sourceName ||
+      pack.sourceName.trim() !== pack.sourceName ||
+      pack.sourceName.length > 120 ||
+      /[\\/\x00-\x1f]/.test(pack.sourceName) ||
+      pack.sourceName === '.' ||
+      pack.sourceName === '..'
+    )
+      throw new Error('mulnx_source_invalid');
+    const treeSha256 = await cameraSourceTreeSha256(join(root, pack.sourceName));
+    if (treeSha256 !== pack.treeSha256) throw new Error('mulnx_source_changed');
+    return {
+      sourceName: pack.sourceName,
+      treeSha256,
+      converterVersion: 1 as const,
+      acquisition: {
+        kind: 'upstream' as const,
+        release: {
+          repository: 'Co1Swet/MulNX_CS2' as const,
+          releaseId: installed.release.id,
+          assetId: installed.release.assetId,
+          tag: installed.release.tag,
+          archiveSha256: installed.release.sha256,
+        },
+      },
+    };
+  }
   async load() {
     await ensureDirectory(this.directory);
     try {
@@ -103,6 +139,10 @@ export class MulnxTool {
               z.object({
                 name: z.string().regex(/^Mizar_[a-f0-9]{24}$/),
                 sourceName: z.string().min(1).max(256),
+                treeSha256: z
+                  .string()
+                  .regex(/^[a-f0-9]{64}$/)
+                  .optional(),
               }),
             )
             .max(128),
@@ -461,8 +501,9 @@ export class MulnxTool {
       for (const entry of entries) {
         if (!entry.isDirectory() || entry.name.startsWith('Mizar_')) continue;
         const name = `Mizar_${createHash('sha256').update(entry.name).digest('hex').slice(0, 24)}`;
+        const treeSha256 = await cameraSourceTreeSha256(join(packsRoot, entry.name));
         await prepareIsolatedPack(join(packsRoot, entry.name), packsRoot, name);
-        packs.push({ name, sourceName: entry.name });
+        packs.push({ name, sourceName: entry.name, treeSha256 });
       }
       await this.configureLauncher(extracted.root, cs2Path, consoleCapture, spectatorCfg, demoCfg);
       const directory = `release-${release.sha256}-${randomUUID()}`;

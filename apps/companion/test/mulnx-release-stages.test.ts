@@ -23,6 +23,11 @@ vi.mock('../src/orchestration/tool-release.js', () => ({
     await mkdir(join(root, 'Config'), { recursive: true });
     await mkdir(join(root, 'CS2Injector/CS2BootLoader/Config'), { recursive: true });
     await mkdir(join(root, 'CS2OBTool/CameraSystem/CamPacks'), { recursive: true });
+    await mkdir(join(root, 'CS2OBTool/CameraSystem/CamPacks/Source/CamMacros'), {
+      recursive: true,
+    });
+    await mkdir(join(root, 'CS2OBTool/CameraSystem/CamPacks/Source/Campaths'));
+    await writeFile(join(root, 'CS2OBTool/CameraSystem/CamPacks/Source/Source.yaml'), 'source');
     await writeFile(join(root, 'Config/CS2OBTool_Refl.yaml'), 'UISystem.ifDrawMid: true\n');
     await writeFile(
       join(root, 'Config/CS2Injector_Refl.yaml'),
@@ -75,6 +80,20 @@ it('prepares without selecting and publishes a configured instance only after se
       'utf8',
     ),
   ).toContain('D:\\\\Steam');
+  const source = await restarted.cameraSource(current.packs[0].name);
+  expect(source).toMatchObject({
+    sourceName: 'Source',
+    converterVersion: 1,
+    acquisition: { kind: 'upstream', release: { archiveSha256: release.sha256 } },
+  });
+  expect(source.treeSha256).toMatch(/^[a-f0-9]{64}$/);
+  await writeFile(
+    join(data, current.directory, 'MulNX/CS2OBTool/CameraSystem/CamPacks/Source/Source.yaml'),
+    'changed',
+  );
+  await expect(restarted.cameraSource(current.packs[0].name)).rejects.toThrow(
+    'mulnx_source_changed',
+  );
   await writeFile(join(data, prepared.preparedId, 'MulNX.7z'), 'bad');
   await expect(restarted.selectRelease(prepared.preparedId, 'D:\\Steam\\cs2.exe')).rejects.toThrow(
     'mulnx_prepared_integrity',
