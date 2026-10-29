@@ -107,6 +107,7 @@ export function registerBroadcastConfigRoutes(
         'module_active',
         'module_referenced',
         'preset_active',
+        'hud_resource_conflict',
       ].includes(code)
     )
       return { status: 409, code };

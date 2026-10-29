@@ -71,6 +71,9 @@ export function createBroadcastRuntime(input: {
       assertReferenceCommitAllowed(previous, next, (ref) => deps.isDeleting(ref)),
     withApplyGuard: (operation) => input.withApplyGuard(operation),
     verifyLegacyActive: (active) => deps.verifyActive(active),
+    validateHudDraft: (document) => {
+      hudDocumentFromBroadcast(document);
+    },
     onDraftChanged: async (kind) => {
       if (kind === 'hud') await hud.synchronizeFromPersistence(hudDocument());
     },

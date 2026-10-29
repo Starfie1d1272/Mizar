@@ -77,6 +77,7 @@ export interface BroadcastConfigStoreOptions {
     lock: ActiveBroadcastSnapshot['lock'];
   }>;
   onDraftChanged?(kind: ModuleKind): Promise<void>;
+  validateHudDraft?(document: BroadcastConfigDocument): void;
 }
 
 export class BroadcastConfigStore {
@@ -254,6 +255,8 @@ export class BroadcastConfigStore {
         next.document.modules.push(...structuredClone(input.modules));
         next.document.presets.push(...structuredClone(input.presets));
         next.imports.push(mapping);
+        if (input.modules.some((item) => item.kind === 'hud'))
+          this.options.validateHudDraft?.(next.document);
         await this.options.assertReferenceCommitAllowed(this.envelope.document, next.document);
         await this.commit(next);
         return { mapping: structuredClone(mapping), reused: false };
@@ -305,6 +308,8 @@ export class BroadcastConfigStore {
         if (index < 0) next.document.presets.push(preset);
         else next.document.presets[index] = preset;
         for (const item of next.document.presets) boundModules(item, next.document.modules);
+        if (input.modules.some((item) => item.value.kind === 'hud'))
+          this.options.validateHudDraft?.(next.document);
         await this.options.assertReferenceCommitAllowed(this.envelope.document, next.document);
         await this.commit(next);
         return this.snapshot;
@@ -329,6 +334,7 @@ export class BroadcastConfigStore {
             : randomUUID();
         if (index < 0) next.document.modules.push(saved);
         else next.document.modules[index] = saved;
+        if (saved.kind === 'hud') this.options.validateHudDraft?.(next.document);
         await this.options.assertReferenceCommitAllowed(this.envelope.document, next.document);
         await this.commit(next);
         return structuredClone(saved);
@@ -360,6 +366,7 @@ export class BroadcastConfigStore {
         }
         const next = structuredClone(this.envelope);
         next.document.modules.push(copy);
+        if (copy.kind === 'hud') this.options.validateHudDraft?.(next.document);
         await this.options.assertReferenceCommitAllowed(this.envelope.document, next.document);
         await this.commit(next);
         return structuredClone(copy);

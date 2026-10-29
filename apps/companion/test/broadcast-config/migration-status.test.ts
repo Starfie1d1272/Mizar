@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import type { BroadcastConfigDocument } from '@mizar/broadcast-config';
+import type { BroadcastConfigDocument, ModuleRecord } from '@mizar/broadcast-config';
 import { buildApp } from '../../src/app.js';
 
 it('reports pending migration without exposing or changing legacy settings', async () => {
@@ -149,6 +149,36 @@ it('boots built-in providers without custom injection when legacy dependencies a
     });
     expect(cloned.statusCode).toBe(200);
     const copy = cloned.json<{ id: string; revision: string }>();
+    const otherResponse = await post('clone', {
+      moduleId: original.id,
+      expectedRevision: original.revision,
+      name: '另一 HUD',
+    });
+    const other = otherResponse.json<ModuleRecord>();
+    const drafts = (
+      await app.inject('/local/v1/broadcast-presets')
+    ).json<BroadcastConfigDocument>();
+    const first = drafts.modules.find((module) => module.id === copy.id)!;
+    if (
+      first.kind !== 'hud' ||
+      !('preset' in first.value) ||
+      other.kind !== 'hud' ||
+      !('preset' in other.value)
+    )
+      throw new Error('expected native HUD');
+    other.value.layout.id = first.value.layout.id;
+    other.value.preset.layoutId = first.value.layout.id;
+    other.value.layout.widgets.radar.offsetX += 1;
+    expect(
+      (await post('save', { value: other, expectedRevision: other.revision })).statusCode,
+    ).toBe(409);
+    const unchanged = (
+      await app.inject('/local/v1/broadcast-presets')
+    ).json<BroadcastConfigDocument>();
+    expect(unchanged.modules.find((item) => item.id === other.id)?.revision).toBe(other.revision);
+    expect(
+      (await post('delete', { moduleId: other.id, expectedRevision: other.revision })).statusCode,
+    ).toBe(200);
     const before = (await app.inject('/local/v1/broadcast-presets')).json<BroadcastConfigDocument>()
       .active;
     const { randomUUID } = await import('node:crypto');
