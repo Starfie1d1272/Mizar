@@ -194,7 +194,9 @@ export class MulnxTool {
     }
   }
   /** Resolve content against the selected instance, independent of its acquisition. */
-  async resolveCameraSource(source: CameraSourceRef): Promise<MulnxToolRef> {
+  private async resolveCamera(
+    source: CameraSourceRef,
+  ): Promise<{ pack: string; acquisition: MulnxToolRef }> {
     if (source.converterVersion !== 1 || !/^[a-f0-9]{64}$/.test(source.treeSha256))
       throw new Error('mulnx_source_invalid');
     const installed = this.installed;
@@ -224,7 +226,13 @@ export class MulnxTool {
       await file.close();
     }
     if (this.installed !== installed) throw new Error('mulnx_source_unavailable');
-    return actual.acquisition;
+    return { pack: pack.name, acquisition: actual.acquisition };
+  }
+  async resolveCameraSource(source: CameraSourceRef): Promise<MulnxToolRef> {
+    return (await this.resolveCamera(source)).acquisition;
+  }
+  async localPack(source: CameraSourceRef): Promise<string> {
+    return (await this.resolveCamera(source)).pack;
   }
   async load() {
     await ensureDirectory(this.directory);

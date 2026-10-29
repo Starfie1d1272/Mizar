@@ -109,6 +109,7 @@ it('prepares without selecting and publishes a configured instance only after se
   );
   expect(await legacy.cameraSource(current.packs[0]!.name)).toEqual(source);
   await expect(legacyResolver.camera(source)).resolves.toEqual(source.acquisition);
+  await expect(legacyResolver.localPack(source)).resolves.toBe(current.packs[0]!.name);
   expect(await readFile(join(data, 'current.json'), 'utf8')).toBe(JSON.stringify(legacyReceipt));
   await writeFile(join(data, 'current.json'), originalReceipt);
   const resolver = new CameraConfigResolver(restarted, {} as MusicStore, () =>
@@ -135,6 +136,10 @@ it('prepares without selecting and publishes a configured instance only after se
     },
   };
   await expect(resolver.camera(fromOlderRelease)).resolves.toEqual(source.acquisition);
+  await expect(resolver.localPack(fromOlderRelease)).resolves.toBe(current.packs[0]!.name);
+  await expect(resolver.localPack({ ...source, treeSha256: 'b'.repeat(64) })).rejects.toThrow(
+    'mulnx_source_unavailable',
+  );
   await expect(resolver.camera({ ...source, treeSha256: 'b'.repeat(64) })).rejects.toThrow(
     'mulnx_source_unavailable',
   );
@@ -152,6 +157,7 @@ it('prepares without selecting and publishes a configured instance only after se
   );
   await writeFile(isolated, 'changed');
   await expect(resolver.camera(source)).rejects.toThrow('mulnx_source_unverified');
+  await expect(resolver.localPack(source)).rejects.toThrow('mulnx_source_unverified');
   await rm(isolated);
 
   await writeFile(

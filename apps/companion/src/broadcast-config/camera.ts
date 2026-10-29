@@ -27,6 +27,11 @@ export class CameraConfigResolver {
     return { format: 'mizar.camera-config', version: 2, name: preset.name, automaticEnabled, maps };
   }
 
+  /** Resolve verified local bytes without starting the tool or connecting to a game. */
+  localPack(source: CameraSourceRef): Promise<string> {
+    return this.tool.localPack(source);
+  }
+
   async camera(source: CameraSourceRef): Promise<MulnxToolRef> {
     const selected = await this.tool.resolveCameraSource(source);
     if (!(await this.supportsCamera(selected))) throw new Error('mulnx_capability_unavailable');
