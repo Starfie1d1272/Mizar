@@ -27,6 +27,7 @@ type PackEntry = {
   kind?: Kind;
   name?: string;
   status: 'ready' | 'dependency_missing' | 'unsupported' | 'invalid' | 'existing' | 'removed';
+  reason?: string;
 };
 type PackInspection = {
   file: File;
@@ -44,6 +45,38 @@ const entryStatus: Record<PackEntry['status'], string> = {
   removed: '曾删除，可重新导入',
 };
 const labels: Record<Kind, string> = { hud: 'HUD', program: '场景', music: '音乐', camera: '运镜' };
+type ImportResult = {
+  entryId: string;
+  type: 'module' | 'preset';
+  result: 'imported' | 'existing' | 'unavailable' | 'not_selected';
+  status?: PackEntry['status'];
+  reason?: string;
+};
+function entryName(entry: PackEntry, index: number): string {
+  const kind = entry.type === 'preset' ? '方案' : (entry.kind && labels[entry.kind]) || '资源';
+  return entry.name?.trim() || `${kind} ${index + 1}`;
+}
+function resultDescription(
+  entry: PackEntry,
+  result: ImportResult | undefined,
+  verified: boolean,
+): string {
+  if (result?.result === 'imported')
+    return entry.status === 'dependency_missing'
+      ? verified
+        ? '已导入，所需来源暂不可用'
+        : '已导入，使用前请检查所需来源'
+      : '已导入';
+  if (result?.result === 'existing') return '已存在，保留现有内容';
+  const status = result?.status ?? entry.status;
+  if (status === 'invalid') return '未导入：内容无效';
+  if (status === 'unsupported') return '未导入：暂不支持此内容';
+  if (result?.result === 'unavailable')
+    return status === 'dependency_missing' ? '未导入：所需来源不可用' : '未导入：内容暂不可用';
+  if (result?.result === 'not_selected') return '未导入：未选择';
+  return '未导入：结果未确认';
+}
+
 function programUnsupported(entry: ModuleRecord): boolean {
   try {
     const parsed = parseModuleRecord(entry);
@@ -104,6 +137,8 @@ export function ResourceModules({
   } | null>(null);
   const [inspection, setInspection] = useState<PackInspection | null>(null);
   const [inspectionOpen, setInspectionOpen] = useState(false);
+  const [importResults, setImportResults] = useState<ImportResult[] | null>(null);
+  const [resultEntries, setResultEntries] = useState<PackEntry[] | null>(null);
   const [selectedEntries, setSelectedEntries] = useState<string[]>([]);
   const input = useRef<HTMLInputElement>(null);
   const scrollToSelection = useRef(false);
@@ -234,6 +269,8 @@ export function ResourceModules({
         );
       const result = (await response.json()) as Omit<PackInspection, 'file'>;
       setInspection({ ...result, file });
+      setImportResults(null);
+      setResultEntries(null);
       setSelectedEntries(
         result.entries
           .filter((entry) => ['ready', 'existing', 'dependency_missing'].includes(entry.status))
@@ -282,11 +319,7 @@ export function ResourceModules({
           presetEntries?: Record<string, string>;
         };
         reused: boolean;
-        entries?: {
-          type: 'module' | 'preset';
-          kind?: Kind;
-          result: 'imported' | 'existing' | 'unavailable' | 'not_selected';
-        }[];
+        entries: ImportResult[];
       };
       const presetId = inspection.entries.find(
         (entry) =>
@@ -302,30 +335,41 @@ export function ResourceModules({
         setSelected(firstId);
         onImported();
       }
-      const unavailable = result.entries?.filter((entry) => entry.result === 'unavailable') ?? [];
-      const accepted = result.entries?.filter(
+      const accepted = result.entries.filter(
         (entry) => entry.result === 'imported' || entry.result === 'existing',
       );
-      const unavailableText = unavailable
-        .map((entry) => (entry.type === 'preset' ? '方案' : (labels[entry.kind as Kind] ?? '资源')))
-        .join('、');
-      setNotice(
-        unavailable.length
-          ? {
-              tone: accepted?.length ? 'warning' : 'danger',
-              message: accepted?.length
-                ? `部分资源已保存，尚未使用；以下内容无法导入：${unavailableText}。`
-                : `没有导入资源；以下内容无法导入：${unavailableText}。`,
-            }
-          : {
-              tone: 'success',
-              message: result.reused ? '资源已存在，已定位。' : '资源已导入，尚未使用。',
-            },
-      );
-      if (!unavailable.length || accepted?.length) {
-        setInspection(null);
-        setInspectionOpen(false);
-      }
+      const failed = inspection.entries.some((entry) => {
+        const returned = result.entries.find(
+          (item) => item.type === entry.type && item.entryId === entry.entryId,
+        );
+        return (
+          returned?.result === 'unavailable' ||
+          entry.status === 'invalid' ||
+          entry.status === 'unsupported' ||
+          !returned
+        );
+      });
+      const refreshed = await fetch('/operator/resource-library/check-pack', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-mizarpack' },
+        body: inspection.file,
+        signal: AbortSignal.timeout(5000),
+      })
+        .then(async (check) =>
+          check.ok ? ((await check.json()) as { entries: PackEntry[] }).entries : null,
+        )
+        .catch(() => null);
+      setResultEntries(refreshed);
+      setImportResults(result.entries);
+      setNotice({
+        tone: failed ? (accepted.length ? 'warning' : 'danger') : 'success',
+        message: failed
+          ? accepted.length
+            ? '部分所选内容已保存，其他内容未导入；请查看逐项结果。'
+            : '没有内容导入；请查看逐项结果。'
+          : '所选内容已保存，尚未使用。',
+      });
+      setInspectionOpen(false);
       setRefresh((value) => value + 1);
     } catch (error) {
       setNotice({ tone: 'danger', message: error instanceof Error ? error.message : '导入失败。' });
@@ -358,6 +402,30 @@ export function ResourceModules({
         </Button>
       </div>
       {notice && <StatusBanner tone={notice.tone}>{notice.message}</StatusBanner>}
+      {inspection && importResults && (
+        <Panel className="resource-library__import-results" aria-label="导入结果">
+          <h3>导入结果</h3>
+          <ul>
+            {inspection.entries.map((entry, index) => {
+              const kind =
+                entry.type === 'preset' ? '方案' : (entry.kind && labels[entry.kind]) || '资源';
+              const returned = importResults.find(
+                (item) => item.type === entry.type && item.entryId === entry.entryId,
+              );
+              const checked =
+                resultEntries?.find(
+                  (item) => item.type === entry.type && item.entryId === entry.entryId,
+                ) ?? entry;
+              return (
+                <li key={entryKey(entry)}>
+                  {entryName(entry, index)} · {kind}：
+                  {resultDescription(checked, returned, resultEntries !== null)}
+                </li>
+              );
+            })}
+          </ul>
+        </Panel>
+      )}
       {inspection && !inspectionOpen && (
         <Button disabled={busy} onClick={() => setInspectionOpen(true)}>
           继续选择资源
@@ -370,7 +438,7 @@ export function ResourceModules({
           {inspection.entries.map((entry, index) => {
             const kind =
               entry.type === 'preset' ? '方案' : (entry.kind && labels[entry.kind]) || '资源';
-            const name = entry.name?.trim() || `${kind} ${index + 1}`;
+            const name = entryName(entry, index);
             const key = entryKey(entry);
             const disabled = entry.status === 'unsupported' || entry.status === 'invalid';
             return (

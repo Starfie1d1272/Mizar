@@ -187,6 +187,22 @@ it('reports a partial import instead of claiming every resource was imported', a
               name: '已删除音乐',
               status: 'removed',
             },
+            {
+              entryId: 'bad-1',
+              type: 'module',
+              kind: 'hud',
+              name: '损坏 HUD 一',
+              status: 'invalid',
+              reason: 'package_invalid',
+            },
+            {
+              entryId: 'bad-2',
+              type: 'module',
+              kind: 'hud',
+              name: '损坏 HUD 二',
+              status: 'invalid',
+              reason: 'package_invalid',
+            },
           ],
         }),
       });
@@ -197,8 +213,23 @@ it('reports a partial import instead of claiming every resource was imported', a
           reused: false,
           mapping: { moduleEntries: { hud: ['new-hud'] } },
           entries: [
-            { type: 'module', kind: 'hud', result: 'imported' },
-            { type: 'module', kind: 'camera', result: 'unavailable' },
+            { entryId: 'hud', type: 'module', kind: 'hud', result: 'imported' },
+            { entryId: 'camera', type: 'module', kind: 'camera', result: 'unavailable' },
+            { entryId: 'old', type: 'module', kind: 'music', result: 'not_selected' },
+            {
+              entryId: 'bad-1',
+              type: 'module',
+              kind: 'hud',
+              status: 'invalid',
+              result: 'not_selected',
+            },
+            {
+              entryId: 'bad-2',
+              type: 'module',
+              kind: 'hud',
+              status: 'invalid',
+              result: 'not_selected',
+            },
           ],
         }),
       });
@@ -225,7 +256,7 @@ it('reports a partial import instead of claiming every resource was imported', a
     expect(element.textContent).toContain('实况 HUD');
     expect(element.textContent).toContain('所需来源暂不可用，可先保存');
     const boxes = [...element.querySelectorAll<HTMLInputElement>('input[type=checkbox]')];
-    expect(boxes.map((box) => box.checked)).toEqual([true, true, false]);
+    expect(boxes.map((box) => box.checked)).toEqual([true, true, false, false, false]);
     await act(async () => {
       [...element.querySelectorAll('button')]
         .find((button) => button.textContent === '稍后继续')!
@@ -240,7 +271,7 @@ it('reports a partial import instead of claiming every resource was imported', a
       [...element.querySelectorAll<HTMLInputElement>('input[type=checkbox]')].map(
         (box) => box.checked,
       ),
-    ).toEqual([true, true, false]);
+    ).toEqual([true, true, false, false, false]);
     await act(async () => {
       [...element.querySelectorAll('button')]
         .find((button) => button.textContent === '导入所选')!
@@ -256,8 +287,22 @@ it('reports a partial import instead of claiming every resource was imported', a
       presets: [],
     });
     expect(query.get('digest')).toBe('a'.repeat(64));
-    expect(element.textContent).toContain('部分资源已保存，尚未使用');
-    expect(element.textContent).toContain('运镜');
+    expect(element.textContent).toContain('部分所选内容已保存');
+    expect(element.textContent).toContain('实况 HUD · HUD：已导入');
+    expect(element.textContent).toContain('损坏 HUD 一 · HUD：未导入：内容无效');
+    expect(element.textContent).toContain('损坏 HUD 二 · HUD：未导入：内容无效');
+    expect(element.textContent).toContain('镜头 · 运镜：未导入：所需来源不可用');
+    expect(element.textContent).not.toContain('bad-1');
+    await act(async () => {
+      [...element.querySelectorAll('button')]
+        .find((button) => button.textContent === '继续选择资源')!
+        .click();
+    });
+    expect(
+      [...element.querySelectorAll<HTMLInputElement>('input[type=checkbox]')].map(
+        (box) => box.checked,
+      ),
+    ).toEqual([true, true, false, false, false]);
   } finally {
     act(() => root.unmount());
     element.remove();
