@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { HudPackages } from './HudPackages';
 import { MusicPackages } from './MusicPackages';
 import { OperatorShell } from '../operator/OperatorShell';
@@ -35,6 +35,33 @@ const phases: Record<ResourceStatus['phase'], string> = {
 
 export function ResourceLibraryPage() {
   const view = useLocalRead<LibraryView>('/local/v1/resource-library', 2000);
+  const [runningVersion, setRunningVersion] = useState<string | null>(null);
+  useEffect(() => {
+    if (!window.__TAURI_INTERNALS__) return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const refresh = async () => {
+      try {
+        const status = await window.__TAURI_INTERNALS__!.invoke<{ runningVersion?: string | null }>(
+          'mulnx_handoff_status',
+          {},
+        );
+        if (active)
+          setRunningVersion(
+            typeof status?.runningVersion === 'string' ? status.runningVersion : null,
+          );
+      } catch {
+        if (active) setRunningVersion(null);
+      } finally {
+        if (active) timer = setTimeout(() => void refresh(), 5000);
+      }
+    };
+    void refresh();
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, []);
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState<'all' | 'media' | 'tool' | 'music' | 'visual'>('all');
   const [preparedSession, setPreparedSession] = useState<{
@@ -143,7 +170,7 @@ export function ResourceLibraryPage() {
             </div>
             <dl>
               <div>
-                <dt>当前版本</dt>
+                <dt>已选版本</dt>
                 <dd>{view.tool.installed ?? '尚未安装'}</dd>
               </div>
               {view.tool.latest ? (
@@ -154,7 +181,7 @@ export function ResourceLibraryPage() {
               ) : null}
               <div>
                 <dt>运行版本</dt>
-                <dd>未确认</dd>
+                <dd>{runningVersion ?? '未确认'}</dd>
               </div>
             </dl>
             <div className="resource-library__actions">

@@ -840,11 +840,14 @@ async fn mulnx_control(
 async fn mulnx_handoff_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
-        let result = state
+        let mut result = state
             .try_lock()
             .map_err(|_| "CS2 正忙，请稍后检查。".to_string())?
-            .mulnx_handoff_status();
-        result
+            .mulnx_handoff_status()?;
+        let log = app.state::<DesktopLog>();
+        let running_version = mulnx_launch::running_version(&log, &result);
+        result["runningVersion"] = running_version.into();
+        Ok(result)
     })
     .await
     .map_err(|_| "无法读取 CS2 进程身份。".to_string())?

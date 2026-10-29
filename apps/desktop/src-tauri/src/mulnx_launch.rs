@@ -195,6 +195,55 @@ pub fn verify_managed_launch(
     validate_game_identity(actual, &receipt, executable).map_err(|_| denied.into())
 }
 
+/// Report only the version captured for an owned launch whose game identity still matches.
+pub fn running_version(log: &DesktopLog, actual: &Value) -> Option<String> {
+    let bytes = std::fs::read(log.state_root.join("data/mulnx-launch/current.json")).ok()?;
+    let receipt = parse_launch_result(&bytes).ok()?;
+    recorded_running_version(actual, &receipt)
+}
+
+fn recorded_running_version(actual: &Value, receipt: &Value) -> Option<String> {
+    let processes = actual["processes"].as_array()?;
+    if processes.len() != 1
+        || processes[0]["managed"] != true
+        || processes[0]["borrowed"] == true
+        || processes[0]["pid"] != receipt["pid"]
+        || processes[0]["created"] != receipt["created"]
+    {
+        return None;
+    }
+    validated_tool_identity(&receipt["tool"]).map(|(_, version)| version.to_owned())
+}
+
+fn validated_tool_identity(value: &Value) -> Option<(&str, &str)> {
+    let id = value["instanceId"].as_str()?;
+    let version = value["version"].as_str()?;
+    let id_valid = regex::Regex::new(r"^release-[a-f0-9]{64}-[a-f0-9-]{36}$")
+        .ok()?
+        .is_match(id);
+    let version_valid = !version.is_empty()
+        && version.len() <= 100
+        && version
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'+' | b'-'));
+    (id_valid && version_valid).then_some((id, version))
+}
+
+fn launch_tool_identity(root: &Path, launcher: &Path, prepared: &Value) -> Value {
+    let identity = (|| {
+        let relative = launcher.strip_prefix(root).ok()?;
+        let mut parts = relative.components();
+        let instance = parts.next()?.as_os_str().to_str()?;
+        if parts.as_path() != Path::new("MulNX/CS2Injector/CS2Injector.exe") {
+            return None;
+        }
+        let value = json!({"instanceId":instance,"version":prepared["version"]});
+        validated_tool_identity(&value)?;
+        Some(value)
+    })();
+    identity.unwrap_or(Value::Null)
+}
+
 pub fn launch(
     app: &tauri::AppHandle,
     log: &DesktopLog,
@@ -521,6 +570,7 @@ fn launch_operation(
     {
         return Err("MulNX 启动路径无效。".into());
     }
+    let tool_identity = launch_tool_identity(&root, &launcher, &prepared);
     app.state::<production_exit::ExitGate>().check()?;
     app.state::<updates::PendingUpdate>().check()?;
     no_game()?;
@@ -561,7 +611,8 @@ fn launch_operation(
             .remember_mulnx_launcher(Arc::clone(&child));
         std::fs::write(
             &pending,
-            json!({"launcherPid":child.pid, "executable":executable}).to_string(),
+            json!({"launcherPid":child.pid, "executable":executable, "tool":tool_identity})
+                .to_string(),
         )
         .map_err(|error| {
             log.preserve_error(
@@ -607,14 +658,8 @@ fn launch_operation(
             .env_remove("NODE_PATH")
             .creation_flags(0x08000000);
         let mut record = std::fs::File::create(&pending).map_err(|e| e.to_string())?;
-        record
-            .write_all(
-                json!({"launcherPid":child.pid, "executable":executable, "request":"submitted"})
-                    .to_string()
-                    .as_bytes(),
-            )
-            .and_then(|()| record.sync_all())
-            .map_err(|e| e.to_string())?;
+        record.write_all(json!({"launcherPid":child.pid, "executable":executable, "request":"submitted", "tool":tool_identity}).to_string().as_bytes())
+            .and_then(|()| record.sync_all()).map_err(|e| e.to_string())?;
         managed
             .try_lock()
             .map_err(|_| "CS2 正忙，请稍后重试。")?
@@ -635,8 +680,7 @@ fn launch_operation(
             if let Some(processes) = actual["processes"].as_array() {
                 if processes.len() == 1 {
                     let process = &processes[0];
-                    let candidate =
-                        json!({"mizarLaunch":1,"pid":process["pid"],"created":process["created"]});
+                    let candidate = json!({"mizarLaunch":1,"pid":process["pid"],"created":process["created"],"tool":tool_identity});
                     if validate_game_identity(&actual, &candidate, &executable).is_ok()
                         && verify_gateway_owner(
                             log,
@@ -740,7 +784,7 @@ fn resume_pending_launch(
         return Err("游戏尚未就绪，请稍后重试。".into());
     }
     let process = &processes[0];
-    let result = json!({"mizarLaunch":1,"pid":process["pid"],"created":process["created"]});
+    let result = json!({"mizarLaunch":1,"pid":process["pid"],"created":process["created"],"tool":record["tool"]});
     validate_game_identity(&actual, &result, &executable)?;
     let game_pid = result["pid"].as_u64().ok_or("无法确认游戏，请稍后重试。")? as u32;
     let created = result["created"]
@@ -856,6 +900,51 @@ fn validate_game_identity(status: &Value, result: &Value, executable: &Path) -> 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn running_version_requires_the_recorded_owned_game_identity() {
+        let id = format!(
+            "release-{}-11111111-1111-4111-8111-111111111111",
+            "a".repeat(64)
+        );
+        let root = PathBuf::from(r"C:\Mizar\data\mulnx");
+        let launcher = root.join(&id).join("MulNX/CS2Injector/CS2Injector.exe");
+        let tool = launch_tool_identity(&root, &launcher, &json!({"version":"Beta17"}));
+        assert_eq!(tool["instanceId"], id);
+        let receipt = json!({"mizarLaunch":1,"pid":12,"created":"123","tool":tool});
+        let owned =
+            json!({"processes":[{"pid":12,"created":"123","managed":true,"borrowed":false}]});
+        assert_eq!(
+            recorded_running_version(&owned, &receipt).as_deref(),
+            Some("Beta17")
+        );
+        assert_eq!(
+            recorded_running_version(
+                &json!({"processes":[{"pid":12,"created":"123","managed":false,"borrowed":true}]}),
+                &receipt
+            ),
+            None
+        );
+        assert_eq!(
+            recorded_running_version(
+                &json!({"processes":[{"pid":12,"created":"456","managed":true}]}),
+                &receipt
+            ),
+            None
+        );
+        assert_eq!(
+            recorded_running_version(&owned, &json!({"pid":12,"created":"123"})),
+            None
+        );
+        assert_eq!(
+            launch_tool_identity(
+                &root,
+                &root.join("other/CS2Injector.exe"),
+                &json!({"version":"Beta17"})
+            ),
+            Value::Null
+        );
+    }
+
     #[test]
     fn windows_security_block_has_actionable_message() {
         for code in [225, 226] {
