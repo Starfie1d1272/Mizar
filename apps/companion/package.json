@@ -28,7 +28,8 @@
     "sigstore": "5.0.0",
     "socket.io": "4.8.1",
     "yaml": "2.9.1",
-    "zod": "catalog:"
+    "zod": "catalog:",
+    "@mizar/broadcast-pack": "workspace:*"
   },
   "devDependencies": {
     "@mizar/testkit": "workspace:*",

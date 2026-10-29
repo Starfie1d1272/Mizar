@@ -298,6 +298,8 @@ RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对�
 
 `GET /local/v1/mixer` 返回 `MixerStatus`；`POST /operator/mixer` 接受 `MixerCommand` 并返回 `MixerCommandResult`。协议类型位于 `@mizar/protocol/mixer`。revision 标识后端观察到的绑定上下文，过期命令必须拒绝；写入结果只有经回读确认才返回 `confirmed`。前三路音量是 OBS 观察值，音乐音量是独立的本机 master 配置。音乐条目的可选 `gain` 缺省时使用所属组 `volume`，通过音乐配置保存，旧的组音量命令语义不变。
 
+本机配置协调器就绪时，`POST /operator/resource-library/import-music-pack` 接收 `application/x-mizarpack`，校验并发布音乐素材后只创建音乐草稿；重复导入复用映射，不改变活动配置或播放。`POST /operator/resource-library/export-music-pack` 以模块 ID 和预期修订导出单个音乐模块及引用的音频。两者受本机可信 Origin 限制；当前入口不接受完整方案、外部依赖或其他媒体类型，完整分享包能力仍在建设中。
+
 `POST /operator/music` 的 `play` 动作接受 `group` 和 `entryId`；旧客户端可发送 `trackId`，仅在组内唯一匹配时有效。两个字段同时提供时必须指向同一条目。
 
 ## LHM CS2 展示宿主（开发入口）

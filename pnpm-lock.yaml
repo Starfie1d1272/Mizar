@@ -301,6 +301,9 @@ importers:
       '@mizar/broadcast-config':
         specifier: workspace:*
         version: link:../../packages/broadcast-config
+      '@mizar/broadcast-pack':
+        specifier: workspace:*
+        version: link:../../packages/broadcast-pack
       '@mizar/core':
         specifier: workspace:*
         version: link:../../packages/core
@@ -555,6 +558,9 @@ importers:
 
   packages/broadcast-pack:
     dependencies:
+      '@mizar/broadcast-config':
+        specifier: workspace:*
+        version: link:../broadcast-config
       jsonc-parser:
         specifier: 3.3.1
         version: 3.3.1
