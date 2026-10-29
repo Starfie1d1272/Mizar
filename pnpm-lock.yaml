@@ -301,6 +301,9 @@ importers:
       '@mizar/broadcast-config':
         specifier: workspace:*
         version: link:../../packages/broadcast-config
+      '@mizar/broadcast-pack':
+        specifier: workspace:*
+        version: link:../../packages/broadcast-pack
       '@mizar/core':
         specifier: workspace:*
         version: link:../../packages/core
