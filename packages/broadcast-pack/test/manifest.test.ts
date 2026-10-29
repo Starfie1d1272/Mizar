@@ -43,7 +43,16 @@ describe('pack manifest', () => {
         ),
       ),
     ).toThrow();
-    for (const path of ['../x', 'C:/x', 'assets/CON.txt', 'assets/example.wav/x']) {
+    for (const path of [
+      '../x',
+      'C:/x',
+      'assets/CON.txt',
+      'MANIFEST.JSON/x',
+      'assets/COM¹.txt',
+      'assets/lpt²',
+      'assets/COM³/file',
+      'assets/example.wav/x',
+    ]) {
       expect(() =>
         parseManifest(
           encode({ ...base, files: [...base.files, { ...base.files[0], id: 'other', path }] }),
