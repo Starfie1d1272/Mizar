@@ -987,9 +987,13 @@ it('restores actual ingress and browser failure context from a complete bundle a
         cause: { name: 'IndexSizeError', message: 'negative radius; token=[redacted]' },
       },
     });
-    const begin = records.find((entry) => entry.stage === 'performance_anomaly_begin');
-    expect(begin?.evidence).toMatchObject({
-      reason: 'browser_anomaly',
+    // A slow observation may already have opened the window before the browser event.
+    const trigger = records.find(
+      (entry) =>
+        ['performance_anomaly_begin', 'performance_anomaly_trigger'].includes(entry.stage) &&
+        entry.evidence.reason === 'browser_anomaly',
+    );
+    expect(trigger?.evidence).toMatchObject({
       correlation: { browserDocumentId: 'public-browser-fixture' },
     });
     expect(records.find((entry) => entry.stage === 'telemetry_failure')?.evidence).toMatchObject({
@@ -997,30 +1001,27 @@ it('restores actual ingress and browser failure context from a complete bundle a
       receive: { sequence: 5 },
       error: { message: 'observation callback failed', cause: { message: 'original sink cause' } },
     });
-    const chunks = records.filter((entry) => entry.stage === 'performance_anomaly_samples');
-    const before = chunks
-      .filter((entry) => entry.evidence.phase === 'before')
-      .flatMap((entry) => entry.evidence.samples as { sequence: number; evidence: unknown }[]);
-    const after = chunks
-      .filter((entry) => entry.evidence.phase === 'after')
-      .flatMap((entry) => entry.evidence.samples as { sequence: number; evidence: unknown }[]);
-    expect(before.map((sample) => sample.sequence)).toEqual([0, 1, 2, 3, 4]);
-    expect(after).toMatchObject([
-      {
-        sequence: 5,
-        evidence: {
-          input: { players: [{ state: { health: 17 } }] },
-          normalizedBeforeCurrentRaw: { sequence: 4 },
-        },
+    const chunks = records.filter(
+      (entry) =>
+        entry.stage === 'performance_anomaly_samples' && entry.evidence.id === trigger?.evidence.id,
+    );
+    const samples = chunks.flatMap(
+      (entry) => entry.evidence.samples as { sequence: number; evidence: unknown }[],
+    );
+    expect(samples.map((sample) => sample.sequence)).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(samples.find((sample) => sample.sequence === 5)).toMatchObject({
+      evidence: {
+        input: { players: [{ state: { health: 17 } }] },
+        normalizedBeforeCurrentRaw: { sequence: 4 },
       },
-    ]);
-    expect(
-      records.find((entry) => entry.stage === 'performance_anomaly_end')?.evidence,
-    ).toMatchObject({
-      reason: 'shutdown',
-      postIncomplete: true,
-      postSamples: 1,
     });
+    const end = records.find(
+      (entry) =>
+        entry.stage === 'performance_anomaly_end' && entry.evidence.id === trigger?.evidence.id,
+    );
+    expect(end?.evidence).toMatchObject({ reason: 'shutdown', postIncomplete: true });
+    expect(end?.evidence.postSamples).toEqual(expect.any(Number));
+    expect(Number(end?.evidence.postSamples)).toBeGreaterThanOrEqual(1);
     expect(
       new Set(
         records

@@ -234,6 +234,20 @@ fn process_pids(name: &str, log: &crate::startup_log::DesktopLog) -> Result<Vec<
     }
     Ok(pids)
 }
+pub(crate) fn process_parent(pid: u32, log: &crate::startup_log::DesktopLog) -> Result<Option<u32>, String> {
+    let snapshot = unsafe { CreateToolhelp32Snapshot(2, 0) };
+    if snapshot == -1 { return Err(win32_failure(log, "CreateToolhelp32Snapshot", "无法检查游戏进程，请重试。")); }
+    let snapshot = Process(snapshot);
+    let mut entry: ProcessEntry = unsafe { std::mem::zeroed() };
+    entry.size = std::mem::size_of::<ProcessEntry>() as u32;
+    let mut found = unsafe { Process32FirstW(snapshot.0, &mut entry) };
+    while found != 0 {
+        if entry.pid == pid { return Ok(Some(entry.parent)); }
+        found = unsafe { Process32NextW(snapshot.0, &mut entry) };
+    }
+    if unsafe { GetLastError() } != 18 { return Err(win32_failure(log, "Process32NextW", "无法检查游戏进程，请重试。")); }
+    Ok(None)
+}
 fn open(pid: u32, log: &crate::startup_log::DesktopLog) -> Result<Option<Process>, String> {
     let handle = unsafe { OpenProcess(0x1000 | 0x100000, 0, pid) };
     if handle != 0 {
@@ -575,6 +589,7 @@ pub struct ManagedCs2 {
     external: Option<ExternalSession>,
     camera: Option<CameraLease>,
     mulnx_launcher: Option<Arc<crate::mulnx_launch::HiddenLauncher>>,
+    pending_mulnx_stop: Option<(Value, WorkspaceProcess)>,
     // Keep window preservation after detach until a new managed launch is accepted.
     external_preservation: bool,
     #[cfg(test)]
@@ -594,6 +609,7 @@ struct LaunchFixture {
 
 /// A verified session process held open during window operations. Keeping the
 /// handle prevents PID reuse from turning a stale window into another game.
+#[derive(Clone)]
 pub struct WorkspaceProcess {
     process: Arc<Process>,
     pub owned: bool,
@@ -617,6 +633,11 @@ struct ExternalSession {
 impl WorkspaceProcess {
     pub fn is_running(&self) -> bool {
         unsafe { WaitForSingleObject(self.process.0, 0) == 258 }
+    }
+    pub(crate) fn has_exited(&self) -> Result<bool, String> {
+        match unsafe { WaitForSingleObject(self.process.0, 0) } {
+            0 => Ok(true), 258 => Ok(false), _ => Err("无法检查游戏状态，请重试。".into()),
+        }
     }
 }
 pub fn verified_session_process(
@@ -645,6 +666,7 @@ impl ManagedCs2 {
             external: None,
             camera: None,
             mulnx_launcher: None,
+            pending_mulnx_stop: None,
             external_preservation: false,
             #[cfg(test)]
             recovery_identity_fixture: None,
@@ -652,8 +674,21 @@ impl ManagedCs2 {
             launch_fixture: None,
         }
     }
+    pub(crate) fn pending_mulnx_stop(&self) -> Option<(Value, WorkspaceProcess)> {
+        self.pending_mulnx_stop.clone()
+    }
+    pub(crate) fn remember_mulnx_stop(&mut self, context: Value, game: WorkspaceProcess) {
+        self.pending_mulnx_stop = Some((context, game));
+    }
+    pub(crate) fn clear_mulnx_stop(&mut self) { self.pending_mulnx_stop = None; }
     pub(crate) fn remember_mulnx_launcher(&mut self, launcher: Arc<crate::mulnx_launch::HiddenLauncher>) {
         self.mulnx_launcher = Some(launcher);
+    }
+    pub(crate) fn owns_mulnx_launcher(&self, pid: u32) -> Result<bool, String> {
+        match &self.mulnx_launcher {
+            Some(launcher) if launcher.pid() == pid => launcher.running().map_err(|e| e.to_string()),
+            _ => Ok(false),
+        }
     }
     fn recovery_identity(&self) -> Result<(PathBuf, PathBuf, u32), String> {
         #[cfg(test)]
@@ -735,6 +770,10 @@ impl ManagedCs2 {
     }
 
     pub fn has_external(&self) -> bool { self.external.is_some() }
+    pub(crate) fn external_matches(&self, game: &WorkspaceProcess) -> bool {
+        self.external.as_ref().is_some_and(|external|
+            external.pid == game.pid && external.created == game.created && Arc::ptr_eq(&external.process, &game.process))
+    }
     pub fn attach_external(&mut self, pid: u32, created: u64, executable: &std::path::Path) -> Result<(), String> {
         let observer = self.store.mulnx_observer_matches(pid, created, executable)?;
         if self.store.load()?.is_some() || self.store.full_spectator_pending() || (self.store.spectator_pending() && observer.is_none())
@@ -824,8 +863,17 @@ impl ManagedCs2 {
         let borrowed_hud = self.external.as_ref().is_some_and(|external| external.console_source["nativeHudToggle"] == true);
         let mulnx_uncertain = self.store.mulnx_observer_unconfirmed()?
             || (pending.is_some() && self.log.state_root.join("data/mulnx-launch/pending.json").exists());
+        let mulnx_launch_resumable = if pending.as_ref().is_some_and(|v| v["mulnxLaunch"] == true && v["launchAttempted"] == true) {
+            std::fs::read(self.log.state_root.join("data/mulnx-launch/pending.json")).ok()
+                .filter(|bytes| bytes.len() <= 16 * 1024)
+                .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                .filter(|record| record["request"] == "submitted" && record["executable"].as_str().is_some_and(|path|
+                    pending.as_ref().and_then(|v| v["executable"].as_str()).is_some_and(|expected| path.eq_ignore_ascii_case(expected))))
+                .and_then(|record| record["launcherPid"].as_u64().filter(|pid| *pid > 0).and_then(|pid| u32::try_from(pid).ok()))
+                .is_some_and(|pid| self.owns_mulnx_launcher(pid).unwrap_or(false))
+        } else { false };
         Ok(
-            json!({"qualityPreset": preferences.quality.name(), "preferMulnx":preferences.prefer_mulnx, "frameRateLimit":preferences.frame_rate_limit, "nativeHudToggle": running && (borrowed_hud || pending.as_ref().is_some_and(|v| v["nativeHudToggle"] == true && v["spectatorCfg"] == true)), "spectatorRecoveryPending": (self.store.spectator_pending() || self.store.full_spectator_pending()) && pending.is_none() && !borrowed_observer, "demoCleanupPending": self.store.playback_cleanup_pending() && pending.is_none(), "spectatorWarning":self.store.spectator_warning().or_else(|| pending.as_ref().and_then(|value| value["spectatorWarning"].as_str()).map(str::to_string)), "canPreserve": self.can_preserve && pending.is_none(), "preserveSettings": borrowed || pending.as_ref().is_some_and(|v| v["preserveSettings"] == true), "pending":pending.is_some(), "borrowed":borrowed, "externalDetached":self.external_preservation && !borrowed, "running":running, "message":self.message, "busy":false, "phase": if mulnx_uncertain || pending.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch) {"uncertain"} else if running {"running"} else if pending.is_some() {"pending"} else {"idle"}}),
+            json!({"qualityPreset": preferences.quality.name(), "preferMulnx":preferences.prefer_mulnx, "frameRateLimit":preferences.frame_rate_limit, "nativeHudToggle": running && (borrowed_hud || pending.as_ref().is_some_and(|v| v["nativeHudToggle"] == true && v["spectatorCfg"] == true)), "spectatorRecoveryPending": (self.store.spectator_pending() || self.store.full_spectator_pending()) && pending.is_none() && !borrowed_observer, "demoCleanupPending": self.store.playback_cleanup_pending() && pending.is_none(), "spectatorWarning":self.store.spectator_warning().or_else(|| pending.as_ref().and_then(|value| value["spectatorWarning"].as_str()).map(str::to_string)), "canPreserve": self.can_preserve && pending.is_none(), "preserveSettings": borrowed || pending.as_ref().is_some_and(|v| v["preserveSettings"] == true), "pending":pending.is_some(), "mulnxLaunchResumable":mulnx_launch_resumable, "borrowed":borrowed, "externalDetached":self.external_preservation && !borrowed, "running":running, "message":self.message, "busy":false, "phase": if mulnx_uncertain || pending.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch) {"uncertain"} else if running {"running"} else if pending.is_some() {"pending"} else {"idle"}}),
         )
     }
     pub fn preferences(
@@ -1055,7 +1103,11 @@ impl ManagedCs2 {
     }
     pub(crate) fn bind_managed_mulnx(&self, pid: u32, created: u64, executable: &Path) -> Result<(), String> {
         let mut journal = self.store.load()?.ok_or("CS2 配置事务缺失。")?;
-        if journal["launchAttempted"] != true || created < journal["launchTime"].as_u64().ok_or("启动时间缺失。")?
+        if (!journal["pid"].is_null() || !journal["created"].is_null())
+            && (journal["pid"].as_u64() != Some(pid as u64) || journal["created"].as_u64() != Some(created)) {
+            return Err("游戏已变化，请关闭游戏和 MulNX 后恢复设置。".into());
+        }
+        if journal["launchAttempted"] != true || created < journal["launchTime"].as_u64().ok_or("无法确认本次启动，请恢复设置。")?
             || cs2_pids(&self.log)? != vec![pid] { return Err("游戏启动身份不唯一。".into()); }
         let process = open(pid, &self.log)?.ok_or("游戏已退出。")?;
         let (actual_created, actual_executable) = identity(&process, &self.log)?;
