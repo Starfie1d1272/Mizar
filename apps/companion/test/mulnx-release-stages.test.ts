@@ -70,6 +70,14 @@ it('prepares without selecting and publishes a configured instance only after se
   await expect(readFile(join(data, 'current.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   const restarted = new MulnxTool(data, bundle);
   await restarted.load();
+  expect(await restarted.listPreparedReleases()).toEqual([
+    {
+      preparedId: prepared.preparedId,
+      tag: release.tag,
+      archiveSha256: release.sha256,
+      state: 'available',
+    },
+  ]);
   const staged = await restarted.stageSelection(prepared.preparedId, 'D:\\Steam\\cs2.exe', false);
   expect(restarted.view().installed).toBeNull();
   await expect(restarted.commitSelection('wrong')).rejects.toThrow('mulnx_selection_changed');
@@ -102,6 +110,9 @@ it('prepares without selecting and publishes a configured instance only after se
     'mulnx_source_changed',
   );
   await writeFile(join(data, prepared.preparedId, 'MulNX.7z'), 'bad');
+  expect(await restarted.listPreparedReleases()).toEqual([
+    { preparedId: prepared.preparedId, tag: null, archiveSha256: null, state: 'damaged' },
+  ]);
   await expect(restarted.selectRelease(prepared.preparedId, 'D:\\Steam\\cs2.exe')).rejects.toThrow(
     'mulnx_prepared_integrity',
   );

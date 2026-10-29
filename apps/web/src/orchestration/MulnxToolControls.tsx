@@ -19,6 +19,10 @@ export function MulnxToolControls({
   tool: MulnxToolView | undefined;
 }) {
   const production = useLocalRead<Production>('/local/v1/production');
+  const [refresh, setRefresh] = useState(0);
+  const inventory = useLocalRead<{
+    releases: { preparedId: string; tag: string | null; state: 'available' | 'damaged' }[];
+  }>('/local/v1/mulnx-releases', 10000, refresh);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [failed, setFailed] = useState(false);
@@ -27,7 +31,15 @@ export function MulnxToolControls({
   const [stopSubmitted, setStopSubmitted] = useState(false);
   const running = useRef(false);
   if (!tool) return null;
-  async function run(action: 'check' | 'open' | 'update' | 'prepare' | 'select' | 'stop') {
+  const releases = inventory?.releases ?? [];
+  const available =
+    prepared && !releases.some((item) => item.preparedId === prepared.preparedId)
+      ? [...releases, { ...prepared, state: 'available' as const }]
+      : releases;
+  async function run(
+    action: 'check' | 'open' | 'update' | 'prepare' | 'select' | 'stop',
+    selection?: { preparedId: string; tag: string },
+  ) {
     if (running.current) return;
     running.current = true;
     setBusy(true);
@@ -48,12 +60,16 @@ export function MulnxToolControls({
           action: 'prepare',
         });
         setPrepared(result);
+        setRefresh((value) => value + 1);
         setMessage(`已下载 ${result.tag}，可以在退出游戏后使用。`);
       } else if (action === 'select') {
-        if (!prepared) return;
-        await desktopInvoke('mulnx_control', { action: 'select', preparedId: prepared.preparedId });
-        setMessage(`已选择 ${prepared.tag}，下次启动时使用。`);
-        setPrepared(null);
+        if (!selection) return;
+        await desktopInvoke('mulnx_control', {
+          action: 'select',
+          preparedId: selection.preparedId,
+        });
+        setMessage(`已选择 ${selection.tag}，下次启动时使用。`);
+        setRefresh((value) => value + 1);
       } else if (action === 'stop') {
         const result = await desktopInvoke<{
           result?: string;
@@ -101,7 +117,7 @@ export function MulnxToolControls({
         {tool.latest && tool.latest !== tool.installed ? ` · 可更新至 ${tool.latest}` : ''}
       </p>
       <p>运行版本：未确认</p>
-      {prepared ? <p>已下载版本：{prepared.tag}</p> : null}
+
       <Button disabled={busy || tool.busy} onClick={() => void run('check')}>
         检查更新
       </Button>
@@ -110,14 +126,19 @@ export function MulnxToolControls({
           下载最新版本
         </Button>
       ) : null}
-      {window.__TAURI_INTERNALS__ && prepared ? (
-        <Button
-          disabled={busy || tool.busy || production?.mode !== 'preparation'}
-          onClick={() => void run('select')}
-        >
-          使用已下载版本
-        </Button>
-      ) : null}
+      {available.map((item) => (
+        <div key={item.preparedId}>
+          <p>已下载版本：{item.tag ?? '文件损坏'}</p>
+          {window.__TAURI_INTERNALS__ && item.tag && item.state === 'available' ? (
+            <Button
+              disabled={busy || tool.busy || production?.mode !== 'preparation'}
+              onClick={() => void run('select', { preparedId: item.preparedId, tag: item.tag! })}
+            >
+              使用已下载版本
+            </Button>
+          ) : null}
+        </div>
+      ))}
       {window.__TAURI_INTERNALS__ ? (
         <Button disabled={busy || tool.busy} onClick={() => void run('update')}>
           更新或重新准备 MulNX

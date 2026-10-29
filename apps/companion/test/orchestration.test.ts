@@ -726,6 +726,48 @@ it('allows only the native host to prepare a MulNX release without selecting it'
   });
   expect(prepare).toHaveBeenCalledOnce();
   expect(tool.view().installed).toBeNull();
+  vi.spyOn(tool, 'listPreparedReleases').mockResolvedValue([
+    {
+      preparedId: 'prepared-example',
+      tag: 'Beta',
+      archiveSha256: 'a'.repeat(64),
+      state: 'available',
+    },
+  ]);
+  const listing = await app.inject({
+    method: 'GET',
+    url: '/local/v1/mulnx-releases',
+    headers: { host: '127.0.0.1' },
+  });
+  expect(listing.statusCode).toBe(200);
+  expect(listing.json<unknown>()).toEqual({
+    releases: [
+      {
+        preparedId: 'prepared-example',
+        tag: 'Beta',
+        archiveSha256: 'a'.repeat(64),
+        state: 'available',
+      },
+    ],
+  });
+  expect(
+    (
+      await app.inject({
+        method: 'GET',
+        url: '/local/v1/mulnx-releases',
+        headers: { host: 'remote.example' },
+      })
+    ).statusCode,
+  ).toBe(403);
+  expect(
+    (
+      await app.inject({
+        method: 'GET',
+        url: '/local/v1/mulnx-releases',
+        headers: { host: '127.0.0.1', 'sec-fetch-site': 'cross-site' },
+      })
+    ).statusCode,
+  ).toBe(403);
 });
 it('commits a prepared MulNX selection only inside the production guard', async () => {
   const r = await rig();
