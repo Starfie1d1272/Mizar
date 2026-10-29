@@ -1,4 +1,13 @@
 import {
+  createBroadcastRuntime,
+  type BroadcastRuntimeDependencies,
+} from './broadcast-config/runtime.js';
+import { registerBroadcastConfigRoutes } from './broadcast-config/routes.js';
+import {
+  registerBroadcastMigrationStatus,
+  type BroadcastMigrationStatus,
+} from './broadcast-config/migration-status.js';
+import {
   BpPresentationSettings,
   registerBpPresentationSettings,
 } from './bp/presentation-settings.js';
@@ -191,6 +200,7 @@ export interface CompanionAppOptions {
   readonly clock?: GsiClock;
   readonly qualificationMode?: boolean;
   readonly qualificationControlToken?: string;
+  readonly broadcastConfig?: BroadcastRuntimeDependencies;
   readonly hudConfigPath?: string;
   readonly hudConfigStore?: HudConfigStore;
   readonly obsConfigPath?: string;
@@ -718,6 +728,18 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     },
   });
   registerLocalWebSocketTransport(app, localWebTransport);
+  let broadcastMigrationStatus: BroadcastMigrationStatus = {
+    state: 'pending',
+    reason: 'owner_unavailable',
+  };
+  let getBroadcastMigrationStatus = () => broadcastMigrationStatus;
+  registerBroadcastMigrationStatus(app, localWebTransport.getOriginPolicy(), () =>
+    getBroadcastMigrationStatus(),
+  );
+  if (!options.broadcastConfig || !options.obsConfigPath)
+    app.get('/local/v1/broadcast-display-config', (_request, reply) =>
+      reply.code(503).send({ error: 'broadcast_config_unavailable' }),
+    );
   registerHudConfigRoutes(app, {
     store: hudConfigStore,
     originPolicy: localWebTransport.getOriginPolicy(),
@@ -1218,6 +1240,29 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       join(dirname(options.obsConfigPath), 'orchestration'),
       (stage, evidence) => sessionJournal?.record(stage, evidence),
     );
+    const broadcastRuntime = options.broadcastConfig
+      ? createBroadcastRuntime({
+          hud: hudConfigStore,
+          music: musicStore,
+          camera: cameraStore,
+          dependencies: {
+            ...options.broadcastConfig,
+            hudPath: options.broadcastConfig.hudPath ?? options.hudConfigPath,
+          },
+          withApplyGuard: (operation) => production.configureBroadcast(operation),
+          diagnostic: (error) =>
+            app.log.error({ stage: 'broadcast_owner_sync', err: error }, '播出配置同步失败'),
+        })
+      : undefined;
+    if (broadcastRuntime) {
+      getBroadcastMigrationStatus = () => broadcastRuntime.status;
+      registerBroadcastConfigRoutes(
+        app,
+        broadcastRuntime.store,
+        localWebTransport.getOriginPolicy(),
+        () => broadcastRuntime.ready,
+      );
+    }
     const cameraEvidence = (stage: string, evidence: unknown) =>
       sessionJournal?.record(stage, evidence);
     const mulnxTool = options.mulnxBundle
@@ -1260,7 +1305,21 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             '运镜预设加载失败',
           ),
         );
+      if (musicStore.ready && !musicStore.failure && cameraStore.ready && hudConfigStore.isLoaded) {
+        const hasCameraSources =
+          cameraStore.preset.maps.length > 0 ||
+          cameraStore.presets.some((item) => item.preset.maps.length > 0);
+        broadcastMigrationStatus = {
+          state: 'pending',
+          reason: hasCameraSources ? 'camera_identity_unavailable' : 'facades_pending',
+        };
+      }
     });
+    if (broadcastRuntime)
+      app.addHook('onReady', async () => {
+        await broadcastRuntime.initialize();
+        broadcastMigrationStatus = broadcastRuntime.status;
+      });
     registerOrchestrationRoutes(
       app,
       cameraDirector,
