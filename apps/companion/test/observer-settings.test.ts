@@ -42,7 +42,10 @@ it('persists operator timing and keeps per-match connection credentials in memor
     expect(await readFile(path, 'utf8')).not.toMatch(/password|127\.0\.0\.1/);
     const legacy: Partial<typeof store.settings> = { ...store.settings, enabled: false };
     delete legacy.nicknameSource;
-    await writeFile(path, JSON.stringify({ ...legacy, expectedDelaySeconds: 120, displaySeconds: 10 }));
+    await writeFile(
+      path,
+      JSON.stringify({ ...legacy, expectedDelaySeconds: 120, displaySeconds: 10 }),
+    );
     const restart = new ObserverSettingsStore(path);
     await restart.load();
     expect(restart.settings).toEqual({ enabled: false, leadSeconds: 7, nicknameSource: 'game' });

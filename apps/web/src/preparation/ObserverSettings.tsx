@@ -64,7 +64,6 @@ export function ObserverSettingsPanel() {
         />
         <Button disabled={busy || runtime?.pending || !view} onClick={() => void save()}>
           保存昵称设置
-
         </Button>
       </Panel>
       <Panel className="settings-card">

@@ -212,7 +212,7 @@ test('observer settings show saved timing and support keyboard operation', async
   });
   await page.getByRole('spinbutton', { name: '提示提前时间（秒）' }).fill('5');
   await page.getByRole('button', { name: '保存观察辅助设置' }).click();
-  await expect(page.getByText('观察辅助设置已保存。')).toBeVisible();
+  await expect(page.getByText('设置已保存。')).toBeVisible();
   expect(saved).toEqual({
     action: 'configure',
     settings: {
