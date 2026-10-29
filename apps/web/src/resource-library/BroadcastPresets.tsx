@@ -2,7 +2,7 @@ import { PresetVisualPreview } from './PresetVisualPreview';
 import { parseModuleRecord } from '@mizar/broadcast-config';
 import { pulseTokenStyle } from '../program/broadcast-display';
 import { exportFailure } from './export-error';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLocalRead } from '../preparation/client';
 import { Button, Checkbox, Field, Panel, Select, StatusBanner } from '../ui';
 
@@ -156,7 +156,13 @@ function CreatePreset({
   );
 }
 
-export function BroadcastPresets({ query }: { query: string }) {
+export function BroadcastPresets({
+  query,
+  focusPresetId,
+}: {
+  query: string;
+  focusPresetId?: string | null;
+}) {
   const [refresh, setRefresh] = useState(0);
   const view = useLocalRead<View>('/local/v1/broadcast-presets', 2000, refresh);
   const [busy, setBusy] = useState(false);
@@ -167,6 +173,21 @@ export function BroadcastPresets({ query }: { query: string }) {
   const [notice, setNotice] = useState<{ tone: 'success' | 'danger'; message: string } | null>(
     null,
   );
+  const focusedPreset = useRef<string | null>(null);
+  useEffect(() => {
+    if (!focusPresetId) {
+      focusedPreset.current = null;
+      return;
+    }
+    if (
+      focusedPreset.current === focusPresetId ||
+      !view?.presets.some((preset) => preset.id === focusPresetId)
+    )
+      return;
+    focusedPreset.current = focusPresetId;
+    setExpanded((previous) => new Set(previous).add(focusPresetId));
+    document.getElementById(`preset-${focusPresetId}`)?.scrollIntoView?.({ block: 'nearest' });
+  }, [focusPresetId, view]);
   async function createPreset(name: string, bindings: Binding[]) {
     if (!view || busy) return;
     setBusy(true);
@@ -545,7 +566,11 @@ export function BroadcastPresets({ query }: { query: string }) {
               );
             }));
         return (
-          <Panel className="resource-library__item resource-library__preset" key={preset.id}>
+          <Panel
+            className="resource-library__item resource-library__preset"
+            key={preset.id}
+            id={`preset-${preset.id}`}
+          >
             <div>
               {selecting ? (
                 <Checkbox
@@ -575,6 +600,7 @@ export function BroadcastPresets({ query }: { query: string }) {
               </p>
             </div>
             <details
+              open={expanded.has(preset.id)}
               onToggle={(event) => {
                 const open = event.currentTarget.open;
                 setExpanded((previous) => {

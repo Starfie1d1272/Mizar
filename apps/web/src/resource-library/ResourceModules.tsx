@@ -59,7 +59,7 @@ export function ResourceModules({
 }: {
   query: string;
   category: string;
-  onImported: () => void;
+  onImported: (presetId?: string) => void;
 }) {
   const [refresh, setRefresh] = useState(0);
   const snapshot = useLocalRead<Snapshot>('/local/v1/broadcast-presets', 2000, refresh);
@@ -251,7 +251,10 @@ export function ResourceModules({
           response.status === 409 ? '同一版本的内容不同，请检查文件。' : '导入失败，请检查资源包。',
         );
       const result = (await response.json()) as {
-        mapping: { moduleEntries: Record<string, string[]> };
+        mapping: {
+          moduleEntries: Record<string, string[]>;
+          presetEntries?: Record<string, string>;
+        };
         reused: boolean;
         entries?: {
           type: 'module' | 'preset';
@@ -259,8 +262,17 @@ export function ResourceModules({
           result: 'imported' | 'existing' | 'unavailable' | 'not_selected';
         }[];
       };
+      const presetId = inspection.entries.find(
+        (entry) =>
+          entry.type === 'preset' &&
+          selectedEntries.includes(entryKey(entry)) &&
+          result.mapping.presetEntries?.[entry.entryId],
+      );
       const firstId = Object.values(result.mapping.moduleEntries).flat()[0];
-      if (firstId) {
+      if (presetId) {
+        setSelected(null);
+        onImported(result.mapping.presetEntries?.[presetId.entryId]);
+      } else if (firstId) {
         setSelected(firstId);
         onImported();
       }

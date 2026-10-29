@@ -63,6 +63,7 @@ export function ResourceLibraryPage() {
     };
   }, []);
   const [query, setQuery] = useState('');
+  const [focusPresetId, setFocusPresetId] = useState<string | null>(null);
   const [category, setCategory] = useState<
     'all' | 'media' | 'tool' | 'music' | 'presets' | 'hud' | 'program' | 'camera'
   >('all');
@@ -133,12 +134,13 @@ export function ResourceLibraryPage() {
         <ResourceModules
           query={query}
           category={category}
-          onImported={() => {
+          onImported={(presetId) => {
             setCategory('all');
             setQuery('');
+            setFocusPresetId(presetId ?? null);
           }}
         />
-        {showPresets ? <BroadcastPresets query={query} /> : null}
+        {showPresets ? <BroadcastPresets query={query} focusPresetId={focusPresetId} /> : null}
         {!view ? (
           <StatusBanner tone="warning">
             正在连接资源状态；如果持续无法连接，请检查本地制播服务。
