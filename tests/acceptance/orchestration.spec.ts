@@ -87,6 +87,7 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
     },
     {
       controlToken: undefined,
+      canPrepare: () => true,
       configure: (revision, commit) => {
         if (revision !== preparationRevision) throw new Error('preparation changed');
         commit();
@@ -120,6 +121,14 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
   try {
     await page.goto('/settings?tab=music&section=camera');
     await expect(page.getByText('我的编排', { exact: true })).toBeVisible();
+    const automatic = page.getByLabel('开启自动运镜');
+    await expect(automatic).toBeEnabled();
+    await automatic.click();
+    await expect.poll(() => store.automaticEnabled).toBe(true);
+    expect(calls).toEqual([]);
+    await expect(automatic).toBeChecked();
+    await automatic.click();
+    await expect.poll(() => store.automaticEnabled).toBe(false);
     await page.screenshot({ path: testInfo.outputPath('camera-common.png') });
     await page.getByRole('button', { name: '管理与编辑预设', exact: true }).click();
     await page.screenshot({ path: testInfo.outputPath('camera-advanced.png') });
@@ -214,6 +223,7 @@ test('edits and imports saved map presets, audits them, and keeps manual ownersh
     await rounds.locator('summary').click();
     await rounds.getByRole('button', { name: '添加候选' }).click();
     await rounds.getByLabel('候选 1').fill('回合镜头');
+    await rounds.getByText('镜头时限', { exact: true }).click();
     const tactical = first
       .locator('details')
       .filter({ has: page.getByText('战术暂停候选', { exact: false }) });

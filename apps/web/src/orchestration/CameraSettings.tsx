@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   CAMERA_STAGES,
   cameraMapSchema,
@@ -8,8 +8,8 @@ import {
   type OrchestrationPreset,
   type OrchestrationView,
 } from '@mizar/protocol/orchestration';
-import { Button, Field, Panel, Select, StatusBanner } from '../ui';
-import { command, useLocalRead } from '../preparation/client';
+import { Button, Checkbox, Field, Panel, Select, StatusBanner } from '../ui';
+import { command, useLocalRead, type Production } from '../preparation/client';
 import { MUSIC_LABELS, type MusicView } from '../music/MusicControls';
 
 function ImportPreset({ disabled, onFile }: { disabled: boolean; onFile: (file: File) => void }) {
@@ -81,12 +81,18 @@ function Shot({
 }
 export function CameraSettings() {
   const current = useLocalRead<OrchestrationView>('/local/v1/orchestration', 1500);
+  const production = useLocalRead<Production>('/local/v1/production', 1500);
   const music = useLocalRead<MusicView>('/local/v1/music', 2000);
   const [advanced, setAdvanced] = useState(false);
   const [draft, setDraft] = useState<OrchestrationPreset | null>(null);
   const [message, setMessage] = useState('');
   const [failed, setFailed] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [automaticOverride, setAutomaticOverride] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (automaticOverride !== null && current?.automaticEnabled === automaticOverride)
+      setAutomaticOverride(null);
+  }, [automaticOverride, current?.automaticEnabled]);
   const config = draft ?? current?.preset;
   const tracks = [
     ...new Map(
@@ -136,6 +142,24 @@ export function CameraSettings() {
       ) : null}
       {!advanced ? (
         <>
+          <Checkbox
+            label="开启自动运镜"
+            checked={automaticOverride ?? current?.automaticEnabled ?? false}
+            disabled={busy || !current?.ready || production?.mode !== 'preparation'}
+            message={
+              production && production.mode !== 'preparation'
+                ? '结束本场制作后可修改。'
+                : '下次进入工作台时使用此设置。'
+            }
+            onChange={(event) => {
+              const enabled = event.target.checked;
+              void action(async () => {
+                await command('/operator/orchestration', { action: 'set-automatic', enabled });
+                setAutomaticOverride(enabled);
+                setMessage('自动运镜设置已保存。');
+              });
+            }}
+          />
           <h3>当前预设</h3>
           <p>{current?.preset.name ?? '正在读取预设…'}</p>
           <p>适用地图：{current?.preset.maps.map((map) => map.map).join('、') || '暂无'}</p>
@@ -151,6 +175,7 @@ export function CameraSettings() {
             }}
           />
           <p>导入后可检查并启用预设。</p>
+          {draft ? <p>有未启用的预设更改，可返回管理页继续编辑。</p> : null}
           <Button onClick={() => setAdvanced(true)}>管理与编辑预设</Button>
         </>
       ) : (
@@ -260,23 +285,36 @@ export function CameraSettings() {
                           {MUSIC_LABELS[stage]}候选（{map.pauseCandidates[stage].length}）
                         </summary>
                         {map.pauseCandidates[stage].map((shot, i) => (
-                          <Shot
-                            key={i}
-                            label={`候选 ${i + 1}`}
-                            shot={shot}
-                            change={(next) =>
-                              update(index, {
-                                pauseCandidates: {
-                                  ...map.pauseCandidates,
-                                  [stage]: next
-                                    ? map.pauseCandidates[stage].map((item, j) =>
-                                        i === j ? next : item,
-                                      )
-                                    : map.pauseCandidates[stage].filter((_, j) => i !== j),
-                                },
-                              })
-                            }
-                          />
+                          <div key={i}>
+                            <Shot
+                              label={`候选 ${i + 1}`}
+                              shot={shot}
+                              change={(next) =>
+                                update(index, {
+                                  pauseCandidates: {
+                                    ...map.pauseCandidates,
+                                    [stage]: next
+                                      ? map.pauseCandidates[stage].map((item, j) =>
+                                          i === j ? next : item,
+                                        )
+                                      : map.pauseCandidates[stage].filter((_, j) => i !== j),
+                                  },
+                                })
+                              }
+                            />
+                            <Button
+                              onClick={() =>
+                                update(index, {
+                                  pauseCandidates: {
+                                    ...map.pauseCandidates,
+                                    [stage]: map.pauseCandidates[stage].filter((_, j) => i !== j),
+                                  },
+                                })
+                              }
+                            >
+                              移除候选 {i + 1}
+                            </Button>
+                          </div>
                         ))}
                         <Button
                           disabled={map.pauseCandidates[stage].length >= 64}
@@ -345,7 +383,7 @@ export function CameraSettings() {
                     const preset = orchestrationPresetSchema.parse(config);
                     await command('/operator/orchestration', { action: 'configure', preset });
                     setDraft(null);
-                    setMessage('预设已启用。');
+                    setMessage('预设已保存。');
                   })
                 }
               >

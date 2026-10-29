@@ -97,7 +97,9 @@ export function CameraAudition() {
         <Button disabled={playDisabled} onClick={() => play()}>
           播放
         </Button>
-        {lastPlayed && lastPlayed.shot === selectedShot && lastPlayed.context === current?.status.context ? (
+        {lastPlayed &&
+        lastPlayed.shot === selectedShot &&
+        lastPlayed.context === current?.status.context ? (
           <Button disabled={playDisabled} onClick={() => play()}>
             重播
           </Button>
