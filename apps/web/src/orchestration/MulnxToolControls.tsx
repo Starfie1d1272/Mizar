@@ -184,7 +184,12 @@ export function MulnxToolControls({
               <li key={item.preparedId}>
                 已下载：{item.tag ?? '文件损坏'}{' '}
                 {window.__TAURI_INTERNALS__ && item.tag && item.state === 'available' ? (
-                  <Button disabled={busy || tool.busy || production?.mode !== 'preparation'} onClick={() => void run('select', { preparedId: item.preparedId, tag: item.tag! })}>
+                  <Button
+                    disabled={busy || tool.busy || production?.mode !== 'preparation'}
+                    onClick={() =>
+                      void run('select', { preparedId: item.preparedId, tag: item.tag! })
+                    }
+                  >
                     使用此版本
                   </Button>
                 ) : null}

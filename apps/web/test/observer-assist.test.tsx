@@ -29,7 +29,9 @@ const mocks = vi.hoisted(() => ({
   },
   cs2Status: null as null | { preferMulnx: boolean; running: boolean; observerHudPending: boolean },
   production: { mode: 'preparation' },
-  inventory: { releases: [] as { preparedId: string; tag: string; state: 'available' }[] },
+  inventory: {
+    releases: [] as { preparedId: string; tag: string | null; state: 'available' | 'damaged' }[],
+  },
   catalog: {
     resources: [],
     tool: { installed: 'old', latest: 'new', busy: false, packs: [] },
@@ -42,11 +44,11 @@ vi.mock('../src/preparation/client', () => ({
       ? mocks.catalog
       : path === '/local/v1/mulnx-releases'
         ? mocks.inventory
-      : path === '/local/v1/observer'
-        ? mocks.runtime
-        : path === '/local/v1/production'
-          ? mocks.production
-          : mocks.view,
+        : path === '/local/v1/observer'
+          ? mocks.runtime
+          : path === '/local/v1/production'
+            ? mocks.production
+            : mocks.view,
   command: mocks.command,
 }));
 vi.mock('../src/workspace/client', () => ({ desktopInvoke: mocks.native }));
@@ -418,6 +420,28 @@ it('retains the download receipt when filtering the resource catalog', async () 
   expect(mocks.native).toHaveBeenLastCalledWith('mulnx_control', {
     action: 'select',
     preparedId: 'prepared-id',
+  });
+});
+it('shows saved and damaged versions from the owner in the resource catalog', async () => {
+  window.__TAURI_INTERNALS__ = { invoke: <T,>() => Promise.resolve(undefined as T) };
+  mocks.inventory.releases = [
+    { preparedId: 'saved', tag: 'saved-version', state: 'available' },
+    { preparedId: 'damaged', tag: null, state: 'damaged' },
+  ];
+  act(() => root.render(<ResourceLibraryPage />));
+  expect(container.textContent).toContain('已下载：saved-version');
+  expect(container.textContent).toContain('已下载：文件损坏');
+  const buttons = [...container.querySelectorAll('button')].filter(
+    (item) => item.textContent === '使用此版本',
+  );
+  expect(buttons).toHaveLength(1);
+  await act(async () => {
+    buttons[0]!.click();
+    await Promise.resolve();
+  });
+  expect(mocks.native).toHaveBeenLastCalledWith('mulnx_control', {
+    action: 'select',
+    preparedId: 'saved',
   });
 });
 it('gives specific repair guidance for known startup causes and diagnostic context for unknown failures', () => {
