@@ -64,7 +64,8 @@ export function createMusicConfigPersistence(
     initialize: () => read(),
     read,
     async commit(config, previous) {
-      const active = store.snapshot.active;
+      const document = store.snapshot;
+      const active = document.active;
       if (canonicalJson(await toLocal(active.resolved.music)) !== canonicalJson(previous))
         throw new Error('revision_conflict');
       const value = await portableMusicConfig(
@@ -73,22 +74,33 @@ export function createMusicConfigPersistence(
         active.resolved.music?.automaticEnabled ?? false,
       );
       const lock = await lockFor(value, active);
+      const captured = document.modules.find(
+        (item) => item.id === active.sourceModuleIds?.music && item.kind === 'music',
+      );
+      const usages = captured
+        ? document.presets.filter((preset) =>
+            preset.bindings.some(
+              (binding) => binding.mode === 'use' && binding.moduleId === captured.id,
+            ),
+          ).length
+        : 0;
+      const reusable =
+        captured?.kind === 'music' &&
+        usages <= 1 &&
+        canonicalJson(captured.value) === canonicalJson(active.resolved.music);
+      const moduleId = reusable ? captured.id : randomUUID();
       await store.updateFromLegacy({
-        updateDraft(document) {
-          if (document.active.revision !== active.revision) throw new Error('revision_conflict');
-          const preset = document.presets.find((item) => item.id === active.sourcePreset?.id);
-          const binding = preset?.bindings.find((item) => item.kind === 'music');
-          const module =
-            binding?.mode === 'use'
-              ? document.modules.find(
-                  (item) => item.id === binding.moduleId && item.kind === 'music',
-                )
-              : undefined;
-          if (module?.kind === 'music') module.value = value;
-          else if (preset) {
-            const id = randomUUID();
-            document.modules.push({
-              id,
+        updateDraft(next) {
+          if (next.active.revision !== active.revision) throw new Error('revision_conflict');
+          const existing = next.modules.find((item) => item.id === moduleId);
+          if (reusable) {
+            if (!existing || existing.kind !== 'music' || existing.revision !== captured.revision)
+              throw new Error('revision_conflict');
+            existing.value = value;
+          } else {
+            if (existing) throw new Error('revision_conflict');
+            next.modules.push({
+              id: moduleId,
               kind: 'music',
               schemaVersion: 1,
               revision: randomUUID(),
@@ -96,12 +108,9 @@ export function createMusicConfigPersistence(
               value,
               origin: null,
             });
-            preset.bindings = preset.bindings.map((item) =>
-              item.kind === 'music' ? { kind: 'music', mode: 'use', moduleId: id } : item,
-            );
           }
         },
-        active: { kind: 'music', value, lock },
+        active: { kind: 'music', value, lock, moduleId },
       });
       return read();
     },

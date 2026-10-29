@@ -222,17 +222,6 @@ export function createCameraConfigPersistence(
                 origin: null,
               });
           }
-          if (activeChanged) {
-            const source = document.presets.find((item) => item.id === before.sourcePreset?.id);
-            if (!source) throw new Error('camera_active_unavailable');
-            source.bindings = source.bindings.map((binding) =>
-              binding.kind === 'camera'
-                ? catalog.activePresetId === disabledId
-                  ? { kind: 'camera', mode: 'off' }
-                  : { kind: 'camera', mode: 'use', moduleId: committedId }
-                : binding,
-            );
-          }
         },
         ...(activeChanged
           ? {

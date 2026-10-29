@@ -375,6 +375,10 @@ describe('BroadcastConfigStore', () => {
     expect(active.moduleRevisions.hud).toBe(initial.active.moduleRevisions.hud);
     expect(active.moduleRevisions.camera).toBe(initial.active.moduleRevisions.camera);
     expect(active.adjusted).toBe(true);
+    expect(store.snapshot.presets[0]!.bindings.find((binding) => binding.kind === 'music')).toEqual(
+      { kind: 'music', mode: 'off' },
+    );
+    expect(active.sourceModuleIds?.music).toBeTruthy();
   });
   it('delegates camera drafts and automatic strategy without touching other active modules', async () => {
     const { store, options } = await setup();
@@ -620,5 +624,10 @@ describe('BroadcastConfigStore', () => {
     expect(view.catalog.preset.name).toBe('Active');
     expect(view.catalog.presets.some((preset) => preset.id === missingId)).toBe(false);
     expect(store.snapshot.modules.some((module) => module.id === missingId)).toBe(true);
+    await persistence.commit(view.catalog, true, view.catalog, false);
+    expect(
+      store.snapshot.presets[0]!.bindings.find((binding) => binding.kind === 'camera'),
+    ).toEqual({ kind: 'camera', mode: 'use', moduleId: missingId });
+    expect(store.snapshot.active.sourceModuleIds?.camera).toBe(activeId);
   });
 });
