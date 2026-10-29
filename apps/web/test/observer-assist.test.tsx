@@ -225,6 +225,7 @@ it('reports unknown MulNX stop once even on double confirmation', async () => {
   act(() =>
     root.render(
       <MulnxToolControls
+        runtimeOnly
         tool={{
           installed: 'test',
           latest: 'test',
@@ -259,6 +260,7 @@ it('explains a rejected MulNX update check and allows retry', async () => {
   act(() =>
     root.render(
       <MulnxToolControls
+        maintenanceOnly
         tool={{ installed: 'old', latest: null, busy: false, message: '', packs: [] }}
       />,
     ),
@@ -266,6 +268,8 @@ it('explains a rejected MulNX update check and allows retry', async () => {
   const update = [...container.querySelectorAll('button')].find(
     (button) => button.textContent === '更新或重新准备 MulNX',
   )!;
+  expect(container.textContent).not.toContain('启动 MulNX 工作台');
+  expect(container.textContent).not.toContain('停止 MulNX 控制');
   await act(async () => {
     update.click();
     await Promise.resolve();

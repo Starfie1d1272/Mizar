@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { OperatorShell } from '../operator/OperatorShell';
 import { MulnxToolControls } from '../orchestration/MulnxToolControls';
-import { command, openTool, useLocalRead } from '../preparation/client';
+import { openTool, useLocalRead } from '../preparation/client';
 import { Button, Field, Panel, StatusBanner } from '../ui';
 import './resource-library.css';
 
@@ -35,9 +35,6 @@ export function ResourceLibraryPage() {
   const view = useLocalRead<LibraryView>('/local/v1/resource-library', 2000);
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState<'all' | 'media' | 'tool'>('all');
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState('');
-  const [failed, setFailed] = useState(false);
   const matches = (name: string) =>
     name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
   const resources = view?.resources?.filter((resource) =>
@@ -45,20 +42,6 @@ export function ResourceLibraryPage() {
   );
   const showMedia = category !== 'tool';
   const showTool = category !== 'media' && matches('MulNX 运镜 工具');
-  async function checkTool() {
-    setBusy(true);
-    setMessage('');
-    try {
-      await command('/operator/orchestration', { action: 'check-tool' });
-      setFailed(false);
-      setMessage('已检查 MulNX 更新。');
-    } catch {
-      setFailed(true);
-      setMessage('无法检查 MulNX 更新，请稍后重试。');
-    } finally {
-      setBusy(false);
-    }
-  }
   return (
     <OperatorShell active="/packages">
       <main className="resource-library">
@@ -95,7 +78,6 @@ export function ResourceLibraryPage() {
             ))}
           </div>
         </div>
-        {message ? <StatusBanner tone={failed ? 'danger' : 'info'}>{message}</StatusBanner> : null}
         {!view ? (
           <StatusBanner tone="warning">
             正在连接资源状态；如果持续无法连接，请检查本地制播服务。
@@ -159,21 +141,16 @@ export function ResourceLibraryPage() {
                 </div>
               ) : null}
             </dl>
-            <Button disabled={busy || view.tool.busy} onClick={() => void checkTool()}>
-              检查更新
-            </Button>
-            {window.__TAURI_INTERNALS__ ? (
-              <div className="resource-library__runtime">
-                <MulnxToolControls
-                  tool={{
-                    installed: view.tool.installed,
-                    latest: view.tool.latest,
-                    busy: view.tool.busy,
-                  }}
-                  runtimeOnly
-                />
-              </div>
-            ) : null}
+            <div className="resource-library__actions">
+              <MulnxToolControls
+                tool={{
+                  installed: view.tool.installed,
+                  latest: view.tool.latest,
+                  busy: view.tool.busy,
+                }}
+                maintenanceOnly
+              />
+            </div>
             {view.tool.packs.length ? (
               <details>
                 <summary>镜头内容（{view.tool.packs.length}）</summary>

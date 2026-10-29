@@ -57,9 +57,13 @@
   margin: var(--mizar-layout-compact) 0 0;
   overflow-wrap: anywhere;
 }
-.resource-library__item details,
-.resource-library__runtime {
+.resource-library__item details {
   grid-column: 1 / -1;
+}
+.resource-library__actions > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--mizar-layout-compact);
 }
 @media (max-width: 800px) {
   .resource-library__item {
