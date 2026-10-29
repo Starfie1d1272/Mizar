@@ -5,7 +5,10 @@ import { join } from 'node:path';
 import { buildApp } from '../../apps/companion/src/app.js';
 import { HudConfigStore } from '../../apps/companion/src/hud-config/store.js';
 import { parseRealProgramArtifact } from '../../apps/web/src/program/fixtures/real-program-fixtures.js';
-import { type HudResolvedPreset } from '../../packages/hud-config/src/index.js';
+import {
+  getBuiltinResolvedPreset,
+  type HudResolvedPreset,
+} from '../../packages/hud-config/src/index.js';
 import { expect, test as baseTest } from './companion-isolation.js';
 
 interface TaskRecord {
@@ -394,4 +397,100 @@ test('picture selection previews without activation, then applies explicitly and
     await app.close();
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test('Program adopts complete active display configuration and retains it when unavailable', async ({
+  page,
+  context,
+}) => {
+  const artifact = parseRealProgramArtifact(
+    JSON.parse(
+      await readFile(
+        new URL(
+          '../../apps/web/src/program/fixtures/generated/real-program-fixtures.generated.json',
+          import.meta.url,
+        ),
+        'utf8',
+      ),
+    ) as unknown,
+  );
+  const snapshot = structuredClone(artifact.fixtures['real-live-rich']!.snapshot);
+  snapshot.payload.allChat = [
+    {
+      id: 'display-chat',
+      sender: 'Player',
+      text: 'message',
+      expiresAt: '2099-01-01T00:00:00.000Z',
+    },
+  ];
+  await context.routeWebSocket(/\/local\/v1\/program$/, (socket) =>
+    socket.send(JSON.stringify(snapshot)),
+  );
+  const initial = getBuiltinResolvedPreset();
+  const next = getBuiltinResolvedPreset('builtin:esl-preset');
+  const visual = { kind: 'builtin', id: 'pulse', apiVersion: 1 };
+  const config = {
+    activeRevision: 'active-1',
+    hud: {
+      renderer: 'native',
+      config: initial,
+      overlays: {
+        pause: { enabled: true, visual: 'legacy' },
+        chat: { enabled: true, placement: 'auto' },
+      },
+      accent: { source: 'fixed', value: initial.theme.brandColor },
+    },
+    program: {
+      scenes: {
+        waiting: visual,
+        matchup: visual,
+        bp: visual,
+        halftime: visual,
+        map_result: visual,
+        intermap: visual,
+        match_result: visual,
+      },
+      tokens: {},
+      assets: {},
+    },
+  };
+  let available = true;
+  let unavailableRequests = 0;
+  await page.route('**/local/v1/broadcast-display-config', async (route) => {
+    if (!available) unavailableRequests++;
+    await route.fulfill(
+      available ? { json: config } : { status: 503, json: { error: 'unavailable' } },
+    );
+  });
+  await page.goto('/program?hud-config=companion');
+  const hud = page.locator('[data-gameplay-hud]');
+  await expect(hud).toHaveAttribute('data-hud-preset-id', initial.preset.id);
+  config.activeRevision = 'active-2';
+  config.hud.config = next;
+  await expect(hud).toHaveAttribute('data-hud-preset-id', next.preset.id);
+  available = false;
+  await expect.poll(() => unavailableRequests).toBeGreaterThan(0);
+  await expect(hud).toHaveAttribute('data-hud-preset-id', next.preset.id);
+  const desktop = await context.newPage();
+  await desktop.addInitScript(() =>
+    Object.defineProperty(window, '__TAURI_INTERNALS__', {
+      value: { invoke: () => Promise.resolve() },
+    }),
+  );
+  let desktopEnabled = false;
+  await desktop.route('**/local/v1/broadcast-display-config', (route) =>
+    route.fulfill({ json: config }),
+  );
+  await desktop.route('**/local/v1/desktop-overlay', (route) =>
+    route.fulfill({ json: { revision: '1', enabled: desktopEnabled, visibility: {} } }),
+  );
+  await desktop.goto('/program?hud-config=companion&host=desktop');
+  await expect(desktop.locator('[data-gameplay-hud]')).toHaveAttribute(
+    'data-hud-preset-id',
+    next.preset.id,
+  );
+  await expect(desktop.locator('.all-chat')).toHaveCount(0);
+  desktopEnabled = true;
+  await expect(desktop.locator('.all-chat')).toBeVisible();
+  await desktop.close();
 });

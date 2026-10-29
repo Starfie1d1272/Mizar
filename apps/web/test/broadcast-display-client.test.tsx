@@ -15,7 +15,7 @@ const projection = {
     renderer: 'native',
     config: getBuiltinResolvedPreset(),
     overlays: {
-      pause: { enabled: true, visual: 'default' },
+      pause: { enabled: true, visual: 'legacy' },
       chat: { enabled: true, placement: DEFAULT_PLACEMENTS['team-t-rail'] },
     },
     accent: { source: 'fixed', value: getBuiltinTheme().brandColor },
@@ -48,6 +48,14 @@ it('accepts a complete display projection and retains it across an unavailable o
     .mockResolvedValueOnce({
       ok: true,
       json: () => Promise.resolve({ ...projection, program: {} }),
+    })
+    .mockResolvedValueOnce({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          ...projection,
+          program: { ...projection.program, tokens: { unknown: 1 } },
+        }),
     });
   vi.stubGlobal('fetch', fetch);
   let state: BroadcastDisplayClientState | undefined;
@@ -71,5 +79,43 @@ it('accepts a complete display projection and retains it across an unavailable o
     await vi.advanceTimersByTimeAsync(500);
   });
   expect(state).toEqual({ status: 'unavailable', current: accepted });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(500);
+  });
+  expect(state).toEqual({ status: 'unsupported', current: accepted });
+  act(() => root.unmount());
+});
+
+it('does not substitute legacy visuals after the active configuration is known to be unsupported', async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal(
+    'fetch',
+    vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            ...projection,
+            program: { ...projection.program, tokens: { unknown: 1 } },
+          }),
+      })
+      .mockResolvedValueOnce({ ok: false }),
+  );
+  let state: BroadcastDisplayClientState | undefined;
+  function Probe() {
+    state = useBroadcastDisplayConfig();
+    return null;
+  }
+  const root = createRoot(document.createElement('div'));
+  await act(async () => {
+    root.render(<Probe />);
+    await Promise.resolve();
+  });
+  expect(state).toEqual({ status: 'unsupported', current: null });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(500);
+  });
+  expect(state).toEqual({ status: 'unsupported', current: null });
   act(() => root.unmount());
 });

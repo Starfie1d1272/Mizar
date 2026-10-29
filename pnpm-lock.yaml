@@ -532,6 +532,9 @@ importers:
       '@mizar-hud/radar-view':
         specifier: workspace:*
         version: link:../radar-view
+      '@mizar/broadcast-config':
+        specifier: workspace:*
+        version: link:../broadcast-config
       '@mizar/cs2-assets':
         specifier: workspace:*
         version: link:../cs2-assets

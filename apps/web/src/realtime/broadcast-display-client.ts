@@ -1,8 +1,9 @@
+import { supportsBroadcastDisplay } from '../program/broadcast-display';
 import { useEffect, useState } from 'react';
 import { parseBroadcastDisplayConfig, type BroadcastDisplayConfig } from '@mizar/broadcast-config';
 
 export interface BroadcastDisplayClientState {
-  readonly status: 'loading' | 'ready' | 'unavailable';
+  readonly status: 'loading' | 'ready' | 'unavailable' | 'unsupported';
   readonly current: BroadcastDisplayConfig | null;
 }
 
@@ -24,9 +25,25 @@ export function useBroadcastDisplayConfig(enabled = true): BroadcastDisplayClien
         });
         if (!response.ok) throw new Error('display configuration unavailable');
         const current = parseBroadcastDisplayConfig(await response.json());
-        if (active) setValue({ status: 'ready', current });
+        if (!supportsBroadcastDisplay(current)) {
+          if (active)
+            setValue((previous) => ({ status: 'unsupported', current: previous.current }));
+          return;
+        }
+        if (active)
+          setValue((previous) =>
+            previous.status === 'ready' &&
+            previous.current?.activeRevision === current.activeRevision
+              ? previous
+              : { status: 'ready', current },
+          );
       } catch {
-        if (active) setValue((previous) => ({ status: 'unavailable', current: previous.current }));
+        if (active)
+          setValue((previous) =>
+            previous.status === 'unsupported'
+              ? previous
+              : { status: 'unavailable', current: previous.current },
+          );
       } finally {
         if (active) timer = setTimeout(() => void poll(), 500);
       }
