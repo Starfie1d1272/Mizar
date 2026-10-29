@@ -9,6 +9,7 @@ import {
 } from '@mizar/protocol/orchestration';
 import { atomicJson, ensureDirectory, safePath } from '../resource-store/files.js';
 
+const catalogBytes = 9 * 1024 * 1024;
 const catalogSchema = z
   .strictObject({
     activePresetId: z.uuid(),
@@ -62,10 +63,11 @@ export class OrchestrationStore {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
+    let migrate = false;
     try {
       const file = await safePath(this.directory, 'presets.json');
       const stat = await lstat(file);
-      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 9 * 1024 * 1024)
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > catalogBytes)
         throw new Error('camera_catalog_invalid');
       const catalog = catalogSchema.parse(JSON.parse(await readFile(file, 'utf8')));
       this.activePresetId = catalog.activePresetId;
@@ -73,6 +75,9 @@ export class OrchestrationStore {
       this.presets = catalog.presets;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      migrate = true;
+    }
+    if (migrate) {
       try {
         const file = await safePath(this.directory, 'preset.json');
         const stat = await lstat(file);
@@ -83,7 +88,7 @@ export class OrchestrationStore {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       }
       this.presets = [{ id: this.activePresetId, preset: this.preset }];
-      await atomicJson(join(this.directory, 'presets.json'), this.catalog());
+      await atomicJson(join(this.directory, 'presets.json'), this.catalog(), catalogBytes);
     }
     this.ready = true;
     this.diagnostic('camera_load', { result: 'success', preset: this.preset });
@@ -92,12 +97,12 @@ export class OrchestrationStore {
     return { activePresetId: this.activePresetId, preset: this.preset, presets: this.presets };
   }
   private writeCatalog(change: (catalog: Catalog) => Catalog, activate = false) {
-    this.pendingWrites++;
+    if (activate) this.pendingWrites++;
     const result = this.queue.then(async () => {
       if (!this.ready) throw new Error('camera_storage_unavailable');
       const next = catalogSchema.parse(change(this.catalog()));
       await safePath(this.directory);
-      await atomicJson(join(this.directory, 'presets.json'), next);
+      await atomicJson(join(this.directory, 'presets.json'), next, catalogBytes);
       this.activePresetId = next.activePresetId;
       this.preset = next.preset;
       this.presets = next.presets;
@@ -114,7 +119,7 @@ export class OrchestrationStore {
       this.diagnostic('camera_configure', { result: 'failure', error });
     });
     return result.finally(() => {
-      this.pendingWrites--;
+      if (activate) this.pendingWrites--;
     });
   }
   save(input: unknown) {
@@ -167,7 +172,7 @@ export class OrchestrationStore {
       await validate(item.preset);
       const next = { ...this.catalog(), activePresetId: id, preset: item.preset };
       await safePath(this.directory);
-      await atomicJson(join(this.directory, 'presets.json'), next);
+      await atomicJson(join(this.directory, 'presets.json'), next, catalogBytes);
       this.activePresetId = id;
       this.preset = item.preset;
       this.revision++;
