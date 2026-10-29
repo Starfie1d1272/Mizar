@@ -18,6 +18,10 @@ export function CameraControls({
       <p className="workspace-camera-empty">运镜状态暂不可用，请检查本地服务。</p>
     ) : null;
   const s = view.status;
+  // #566 adds preparation to the existing status; older companions omit it.
+  const preparation = (
+    s as typeof s & { preparation?: 'waiting' | 'preparing' | 'ready' | 'error' }
+  ).preparation;
   const send = async (action: string) => {
     setBusy(true);
     setError('');
@@ -46,21 +50,33 @@ export function CameraControls({
           </StatusPill>
         </div>
       ) : null}
-      <span
-        className="music-controls__track"
-        title={error || s.message}
-        role={workspace && error ? 'alert' : undefined}
-      >
-        {workspace && error ? (
-          error
-        ) : (
-          <>
-            {workspace ? '本次请求' : `运镜 · ${s.held ? '人工' : '自动'}`}
-            {s.current ? ` · ${s.current}` : ''} ·{' '}
-            {s.control.state === 'blocked' ? '原生交接待确认' : s.message}
-          </>
-        )}
-      </span>
+      {!workspace || error || s.current || preparation !== 'ready' ? (
+        <span
+          className="music-controls__track"
+          title={error || s.message}
+          role={workspace && error ? 'alert' : undefined}
+        >
+          {workspace && error ? (
+            error
+          ) : (
+            <>
+              {workspace
+                ? s.current
+                  ? `已提交 · ${s.current}`
+                  : preparation === 'preparing'
+                    ? '正在准备运镜'
+                    : preparation === 'error'
+                      ? s.message
+                      : preparation === 'waiting'
+                        ? '等待运镜准备'
+                        : preparation === 'ready'
+                          ? '运镜已就绪'
+                          : s.message
+                : `运镜 · ${s.held ? '人工' : '自动'}${s.current ? ` · ${s.current}` : ''} · ${s.control.state === 'blocked' ? '原生交接待确认' : s.message}`}
+            </>
+          )}
+        </span>
+      ) : null}
       {setup ? (
         <span>
           {s.map ?? '地图待确认'} · {s.pack ?? '未配运镜包'} ·{' '}
@@ -97,6 +113,7 @@ export function CameraControls({
           disabled={
             busy ||
             (workspace && Boolean(s.current)) ||
+            (workspace && preparation === 'preparing') ||
             !s.connected ||
             !view.ready ||
             !s.pack ||

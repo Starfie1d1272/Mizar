@@ -199,7 +199,10 @@ test('16:9 workspace scales the native regions and keeps scene controls inside t
     expect(bounds.y).toBeCloseTo((height! * 3) / 4, 0);
     expect(bounds.width).toBeCloseTo((width! * 3) / 4, 0);
     expect(bounds.height).toBeCloseTo(height! / 4, 0);
-    const resume = (await page.getByRole('button', { name: '准备运镜并恢复自动' }).boundingBox())!;
+    const resume = (await page
+      .locator('.workspace-camera-controls')
+      .getByRole('button', { name: /恢复/ })
+      .boundingBox())!;
     const footer = (await page.locator('.workspace-message').boundingBox())!;
     expect(resume.y + resume.height).toBeLessThanOrEqual(footer.y);
     const buttons = page.getByLabel('手动切换场景').getByRole('button');

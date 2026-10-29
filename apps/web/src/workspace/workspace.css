@@ -334,7 +334,7 @@
 .workspace-dock > .workspace-direction {
   background: var(--mizar-bg-canvas);
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) calc(var(--mizar-layout-target) * 2);
+  grid-template-rows: auto auto minmax(0, 1fr);
 }
 .workspace-next-preview {
   display: flex;
@@ -348,6 +348,7 @@
   height: 100%;
   width: auto;
   max-width: 50%;
+  max-height: calc(var(--mizar-layout-target) * 2);
   flex: none;
 }
 .workspace-next-preview > div:last-child {
@@ -798,5 +799,27 @@
   .workspace-spectator,
   .workspace-production {
     overflow-y: auto;
+  }
+}
+
+@media (max-height: 200px) {
+  .workspace-dock,
+  .workspace-dock[data-camera='false'] {
+    grid-template-rows: minmax(0, 1fr) var(--mizar-layout-target);
+  }
+  .workspace-spectator .workspace-section-heading > small {
+    flex-basis: auto;
+  }
+  .workspace-next-preview .mizar-field {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    max-width: none;
+  }
+  .workspace-next-preview .mizar-field label {
+    white-space: nowrap;
+  }
+  .workspace-next-preview .mizar-field select {
+    width: auto;
   }
 }

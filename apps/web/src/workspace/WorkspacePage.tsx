@@ -305,7 +305,10 @@ function WorkspaceLeftContent() {
       ? payload?.seriesProgress?.maps.find((map) => map.status === 'pending')
       : payload?.seriesProgress?.maps.find((map) => map.status === 'current')) ??
     payload?.seriesProgress?.maps.find((map) => map.status === 'pending');
-  const map = payload?.runtime.mapName ?? plannedMap?.mapName;
+  const map =
+    guidance?.phase === 'map_end'
+      ? plannedMap?.mapName
+      : (payload?.runtime.mapName ?? plannedMap?.mapName);
   const artwork = map ? getRadarArtwork(map)?.artwork.overview : null;
   return (
     <main className="workspace-left mizar-surface" aria-label="现场工作区">
@@ -326,24 +329,38 @@ function WorkspaceLeftContent() {
                 )}
                 <div className="workspace-empty">
                   <strong>
-                    {guidance?.phase === 'map_end'
-                      ? `准备第 ${plannedMap?.mapOrder ?? '下一'} 图`
-                      : observer?.programCommandQueued
-                        ? '等待本图数据'
-                        : payload?.runtime.lastAccepted && !connection?.waitingForMap
-                          ? '游戏数据已中断'
-                          : '等待第一图 GOTV'}
+                    {guidance?.phase === 'match_end'
+                      ? '比赛已结束'
+                      : guidance?.phase === 'map_end'
+                        ? plannedMap
+                          ? `准备第 ${plannedMap.mapOrder} 图`
+                          : '准备下一图'
+                        : payload?.runtime.telemetryFreshness === 'fresh'
+                          ? '本图已连接 · 等待雷达画面'
+                          : observer?.programCommandQueued
+                            ? '等待本图数据'
+                            : payload?.runtime.telemetryFreshness === 'stale' &&
+                                !connection?.waitingForMap
+                              ? '游戏数据已中断'
+                              : '等待第一图 GOTV'}
                   </strong>
                   <p>
-                    {guidance?.phase === 'map_end'
-                      ? '填写本图新的 GOTV'
-                      : observer?.programCommandQueued
-                        ? '连接已提交，请等待游戏数据'
-                        : '连接 GOTV 后显示比赛画面'}
+                    {guidance?.phase === 'match_end'
+                      ? '请核对直播与录像状态'
+                      : guidance?.phase === 'map_end'
+                        ? '填写本图新的 GOTV'
+                        : payload?.runtime.telemetryFreshness === 'fresh'
+                          ? '等待雷达画面更新'
+                          : observer?.programCommandQueued
+                            ? '连接已提交，请等待游戏数据'
+                            : '连接 GOTV 后显示比赛画面'}
                   </p>
-                  {payload?.runtime.lastAccepted &&
-                  !connection?.waitingForMap &&
-                  !observer?.programCommandQueued ? (
+                  {guidance?.phase === 'match_end' ||
+                  (guidance?.phase !== 'map_end' &&
+                    payload?.runtime.telemetryFreshness === 'fresh') ? null : payload?.runtime
+                      .telemetryFreshness === 'stale' &&
+                    !connection?.waitingForMap &&
+                    !observer?.programCommandQueued ? (
                     <Button onClick={() => void openPreparation('/settings?tab=gsi')}>
                       检查游戏连接
                     </Button>
@@ -608,6 +625,11 @@ function WorkspaceDockContent() {
         <details className="workspace-secondary">
           <summary>更多工具</summary>
           <div className="workspace-tools">
+            {showCamera ? (
+              <Button onClick={() => void action(() => openPreparation('/settings?tab=camera'))}>
+                配置运镜
+              </Button>
+            ) : null}
             <Button disabled={busy} onClick={() => void action(() => openTool('hud'))}>
               HUD 编辑器
             </Button>
