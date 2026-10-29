@@ -88,7 +88,7 @@ pnpm --filter @mizar/companion... --fail-if-no-match run build
 
 ## 常规 CI
 
-main 与 development/2.0 的 PR 和推送执行构建、类型检查、启动页面冒烟、格式与 lint；Windows 原生改动编译宿主。`ci-gate` 要求各任务成功，且从工作流创建到门禁不超过 180 秒。保留的历史测试按改动风险定向运行，常规 CI 不执行旧业务测试矩阵；发行资格仍由独立工作流负责。
+main 与 development/2.0 的 PR 和推送执行构建、类型检查、启动页面冒烟、格式与 lint；Windows 原生改动编译宿主。`ci-gate` 要求各任务成功，且从工作流创建到门禁不超过 180 秒。development/2.0 对 PR 和推送中变更的 Rust 文件检查格式，手动运行对照当前提交的第一父提交；main 仍检查整个 Rust 工程。保留的历史测试按改动风险定向运行，常规 CI 不执行旧业务测试矩阵；发行资格仍由独立工作流负责。
 
 ## 样例、重放与来源
 
