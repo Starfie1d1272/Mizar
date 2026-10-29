@@ -10,7 +10,7 @@ import {
 } from '../src/assist.js';
 it('starts with the private feature off and editable 120/5 timing', () => {
   expect(DEFAULT_OBSERVER_SETTINGS).toMatchObject({
-    enabled: false,
+    enabled: true,
     expectedDelaySeconds: 120,
     leadSeconds: 5,
   });

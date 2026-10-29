@@ -49,7 +49,7 @@ export const observerSettingsSchema = z
   .refine((v) => v.leadSeconds < v.expectedDelaySeconds, '提前时间应小于两路延迟差');
 export type ObserverSettings = z.infer<typeof observerSettingsSchema>;
 export const DEFAULT_OBSERVER_SETTINGS: ObserverSettings = {
-  enabled: false,
+  enabled: true,
   expectedDelaySeconds: 120,
   leadSeconds: 5,
 };

@@ -2308,16 +2308,16 @@ mod tests {
     #[test]
     fn launch_preferences_survive_restart_and_game_config_recovery() {
         let (root, video, store) = setup();
-        assert!(store.preferences().unwrap().prefer_mulnx);
+        assert!(!store.preferences().unwrap().prefer_mulnx);
         fs::create_dir_all(&store.root).unwrap();
-        // Existing settings migrate once to MulNX; a later explicit choice survives restart.
+        // Existing settings without a choice retain standard launch.
         fs::write(
             store.root.join("preferences.json"),
             br#"{"qualityPreset":"high","frameRateLimit":30}"#,
         )
         .unwrap();
-        assert!(store.preferences().unwrap().prefer_mulnx);
-        // Choices saved after migration remain authoritative, including after recovery.
+        assert!(!store.preferences().unwrap().prefer_mulnx);
+        // Saved choices remain authoritative, including after recovery.
         for prefer_mulnx in [true, false] {
             let mut saved = Preferences::new("medium", 30).unwrap();
             saved.prefer_mulnx = prefer_mulnx;
