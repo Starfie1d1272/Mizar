@@ -33,6 +33,8 @@ export interface ObsAudioRoutingStatus {
   revision: string;
   endpoint: string;
   collection: string;
+  desktop: ObsAudioBinding | null;
+  transition: boolean;
   bindings: Record<
     ObsAudioRole,
     (ObsAudioBinding & { valid: boolean; name: string | null }) | null

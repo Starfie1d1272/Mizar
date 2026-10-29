@@ -68,7 +68,8 @@ export function Mixer({ musicOnly = false }: { musicOnly?: boolean }) {
           const available =
             item?.control === 'available' && item.volume !== null && item.muted !== null;
           const value = draft?.channel === channel ? draft.volume : item?.volume;
-          const label = labels[channel];
+          const label =
+            channel === 'game' && item?.name === '桌面混音' ? '桌面混音' : labels[channel];
           const status =
             item?.control === 'held'
               ? '手动'

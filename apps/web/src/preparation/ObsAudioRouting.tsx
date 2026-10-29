@@ -30,12 +30,14 @@ export function ObsAudioRouting() {
     candidates: { id: string; label: string }[];
   } | null>(null);
   const [application, setApplication] = useState('');
+  const [desktopSelection, setDesktopSelection] = useState('');
   async function refreshCommentary() {
     const response = await fetch('/local/v1/obs/remote-commentary', { cache: 'no-store' });
     if (!response.ok) throw new Error('无法读取远端解说设置。');
     setCommentary((await response.json()) as typeof commentary);
   }
   useEffect(() => {
+    void refresh().catch(() => setMessage('无法读取 OBS 音频来源，请检查连接。'));
     void Promise.resolve()
       .then(() => fetch('/local/v1/obs/remote-commentary', { cache: 'no-store' }))
       .then((response) => {
@@ -107,6 +109,22 @@ export function ObsAudioRouting() {
       setBusy(false);
     }
   }
+  async function switchMode(selectionId: string | null) {
+    if (!status) return;
+    const response = await fetch('/operator/obs/audio-mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ revision: status.revision, selectionId }),
+    });
+    if (!response.ok) {
+      const result = (await response.json()) as { message?: string };
+      await refresh().catch(() => undefined);
+      throw new Error(result.message ?? '切换未确认，请检查 OBS。');
+    }
+    await refresh();
+    setDesktopSelection('');
+    setMessage(selectionId ? '已切换桌面混音。请录制试听。' : '已切换独立分路。请录制试听。');
+  }
   async function bind(role: ObsAudioRole, selectionId: string | null) {
     if (!status) return;
     const response = await fetch('/operator/obs/audio-routing', {
@@ -128,6 +146,53 @@ export function ObsAudioRouting() {
   }
   return (
     <div>
+      <h3>音频模式</h3>
+      <p>
+        桌面混音包含游戏与其他解说，无法分别调节；麦克风仍单独控制，本机监听的音乐也可能进入混音。
+      </p>
+      <p>TeamSpeak 6 beta5 的应用捕获可能只有提示音，请核对版本并录制真人语音试听。</p>
+      <Button disabled={busy} onClick={() => void run(refresh)}>
+        读取 OBS 音频来源
+      </Button>
+      {status && (
+        <>
+          <p>
+            当前模式：
+            {status.transition
+              ? '切换待完成，请重新选择并切换'
+              : status.desktop
+                ? '桌面混音'
+                : '独立分路'}
+          </p>
+          <Select
+            label="桌面音频来源"
+            value={desktopSelection}
+            disabled={busy}
+            onChange={(event) => setDesktopSelection(event.target.value)}
+          >
+            <option value="">请选择 OBS 桌面音频来源</option>
+            {status.candidates
+              .filter((candidate) => candidate.kind === 'wasapi_output_capture')
+              .map((candidate) => (
+                <option key={candidate.selectionId} value={candidate.selectionId}>
+                  {candidate.name}
+                </option>
+              ))}
+          </Select>{' '}
+          <Button
+            disabled={busy || !desktopSelection}
+            onClick={() => void run(() => switchMode(desktopSelection))}
+          >
+            切换桌面混音
+          </Button>{' '}
+          <Button
+            disabled={busy || (!status.desktop && !status.transition)}
+            onClick={() => void run(() => switchMode(null))}
+          >
+            切回独立分路
+          </Button>
+        </>
+      )}
       <h3>远端解说音频</h3>
       <p className="obs-audio-commentary-current">
         当前：
@@ -145,18 +210,31 @@ export function ObsAudioRouting() {
           : '读取中'}
       </p>
       <Button
-        disabled={busy || !commentary || commentary.preference.mode === 'autoTeamspeak'}
+        disabled={
+          busy ||
+          Boolean(status?.desktop || status?.transition) ||
+          !commentary ||
+          commentary.preference.mode === 'autoTeamspeak'
+        }
         onClick={() => void run(() => setMode('autoTeamspeak'))}
       >
         自动识别 TeamSpeak
       </Button>{' '}
       <Button
-        disabled={busy || !commentary || commentary.preference.mode === 'disabled'}
+        disabled={
+          busy ||
+          Boolean(status?.desktop || status?.transition) ||
+          !commentary ||
+          commentary.preference.mode === 'disabled'
+        }
         onClick={() => void run(() => setMode('disabled'))}
       >
         停用远端解说
       </Button>{' '}
-      <Button disabled={busy} onClick={() => void run(listApplications)}>
+      <Button
+        disabled={busy || Boolean(status?.desktop || status?.transition)}
+        onClick={() => void run(listApplications)}
+      >
         选择其他应用
       </Button>
       {applications && (
@@ -209,7 +287,7 @@ export function ObsAudioRouting() {
               <div key={role}>
                 <Select
                   label={labels[role]}
-                  disabled={busy}
+                  disabled={busy || Boolean(status.desktop || status.transition)}
                   value=""
                   onChange={(event) => void run(() => bind(role, event.target.value || null))}
                 >
@@ -226,7 +304,9 @@ export function ObsAudioRouting() {
                   ))}
                 </Select>{' '}
                 <Button
-                  disabled={busy || !status.bindings[role]}
+                  disabled={
+                    busy || Boolean(status.desktop || status.transition) || !status.bindings[role]
+                  }
                   onClick={() => void run(() => bind(role, null))}
                 >
                   解除绑定
@@ -245,16 +325,6 @@ export function ObsAudioRouting() {
                 <li key={finding}>{finding}</li>
               ))}
             </ul>
-            <details>
-              <summary>来源技术详情</summary>
-              <ul>
-                {status.candidates.map((candidate) => (
-                  <li key={candidate.selectionId}>
-                    {candidate.name} · {candidate.kind} · {candidate.uuid}
-                  </li>
-                ))}
-              </ul>
-            </details>
           </>
         )}
       </details>

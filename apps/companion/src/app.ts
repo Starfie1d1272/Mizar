@@ -77,6 +77,7 @@ import { ObsConfigStore } from './obs/config.js';
 import { ObsAudioRouting } from './obs/audio-routing.js';
 import { GameAudioController } from './obs/audio-policy-controller.js';
 import { gameAudioTruth } from './obs/audio-policy-truth.js';
+import { desktopMonitorRelationship } from './obs/audio-monitor-device.js';
 import type { ObsNativeEvidence } from './obs/native-evidence.js';
 import { registerObsRoutes } from './obs/routes.js';
 import { registerMixerRoutes } from './obs/mixer-routes.js';
@@ -853,6 +854,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       configStore: obsConfigStore,
       adapter: obsAdapter,
       ...(gameAudio ? { gameAudio } : {}),
+      musicDirector: () => musicDirector,
       ...(options.readObsCaptureEvidence
         ? { readCaptureEvidence: options.readObsCaptureEvidence }
         : {}),
@@ -1205,6 +1207,21 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             baseUrl: `http://${options.host ?? '127.0.0.1'}:${options.port ?? 3000}`,
           })) ?? false
         );
+      },
+      async (obs) => {
+        if (await obsAudioRouting?.modePending()) throw new Error('audio_mode_pending');
+        const binding = await obsAudioRouting?.desktopBinding();
+        if (!binding) return false;
+        const config = await obsConfigStore.read();
+        if (
+          binding.endpoint !== `ws://${config.host}:${config.port}` ||
+          (await obs.call('GetSceneCollectionList')).currentSceneCollectionName !==
+            binding.collection
+        )
+          throw new Error('audio_binding_changed');
+        const relation = await desktopMonitorRelationship(obs, binding.inputUuid);
+        if (relation === 'unknown') throw new Error('audio_monitor_device_unknown');
+        return relation === 'same';
       },
     );
     registerMusicRoutes(app, musicStore, musicDirector, localWebTransport.getOriginPolicy());

@@ -23,10 +23,21 @@ export async function reconcileManagedAudio(
   baseUrl: string,
   ids: Record<ObsAudioRole, string>,
   verify: () => Promise<boolean>,
+  desktopUuid?: string,
 ): Promise<void> {
   if (new Set(Object.values(ids)).size !== 3) throw new Error('audio_binding_duplicate');
   const inputs = records((await obs.call('GetInputList')).inputs);
-  const selected = Object.values(ids).map((uuid) => {
+  if (desktopUuid) {
+    if (Object.values(ids).includes(desktopUuid)) throw new Error('audio_binding_duplicate');
+    if (
+      !inputs.some(
+        (input) => input.inputUuid === desktopUuid && input.inputKind === 'wasapi_output_capture',
+      )
+    )
+      throw new Error('audio_desktop_missing');
+  }
+  const wantedIds = desktopUuid ? [desktopUuid, ids.microphone] : Object.values(ids);
+  const selected = wantedIds.map((uuid) => {
     const input = inputs.find((value) => value.inputUuid === uuid);
     if (!input || typeof input.inputName !== 'string') throw new Error('audio_selection_changed');
     return input;
@@ -86,7 +97,7 @@ export async function reconcileManagedAudio(
       for (const item of items) {
         const input = inputs.find((value) => value.inputUuid === item.sourceUuid);
         if (!input) continue;
-        const wanted = Object.values(ids).includes(String(input.inputUuid));
+        const wanted = wantedIds.includes(String(input.inputUuid));
         if (
           ['game_capture', 'window_capture'].includes(String(input.inputKind)) &&
           !wanted &&

@@ -36,6 +36,17 @@ const stateSchema = z
     master: z.number().finite().min(0).max(1).default(1),
     muted: z.boolean().default(false),
     monitorPreference: z.boolean().nullable().default(null),
+    desktopMonitorOriginal: z
+      .object({
+        bgm: z
+          .object({ uuid: z.string(), mode: z.literal('OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT') })
+          .nullable(),
+        stinger: z
+          .object({ uuid: z.string(), mode: z.literal('OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT') })
+          .nullable(),
+      })
+      .strict()
+      .default({ bgm: null, stinger: null }),
     monitorConfigured: z
       .object({ bgm: z.string().nullable(), stinger: z.string().nullable() })
       .strict()
@@ -63,6 +74,7 @@ export class MusicStore {
     master: 1,
     muted: false,
     monitorPreference: true,
+    desktopMonitorOriginal: { bgm: null, stinger: null },
     monitorConfigured: { bgm: null, stinger: null },
     held: false,
     owner: randomUUID(),

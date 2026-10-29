@@ -7,6 +7,7 @@ import {
   obsOutputCommandSchema,
 } from '@mizar/protocol/obs';
 import type { GameAudioController } from './audio-policy-controller.js';
+import type { MusicDirector } from '../music/director.js';
 import { ObsOutputError } from './outputs.js';
 import { ObsActionError, obsActionMessage } from './action-error.js';
 import type { ObsNativeEvidence } from './native-evidence.js';
@@ -42,6 +43,7 @@ export function registerObsRoutes(
     readonly originPolicy: LocalWebOriginPolicy;
     readonly activeScene: () => ProgramSceneId;
     readonly gameAudio?: GameAudioController;
+    readonly musicDirector?: () => MusicDirector | undefined;
     readonly readCaptureEvidence?: () => Promise<ObsNativeEvidence>;
   },
 ) {
@@ -66,11 +68,15 @@ export function registerObsRoutes(
       return false;
     }
   };
-  app.get('/local/v1/obs/game-audio-policy', (request, reply) => {
+  app.get('/local/v1/obs/game-audio-policy', async (request, reply) => {
     if (!allowedRead(request)) return reply.code(403).send({ error: 'operator_origin_forbidden' });
     return reply
       .header('cache-control', 'no-store')
-      .send(options.gameAudio?.status() ?? { ready: false });
+      .send(
+        options.gameAudio
+          ? { ...options.gameAudio.status(), desktopMix: await options.gameAudio.desktopMix() }
+          : { ready: false },
+      );
   });
   app.post('/operator/obs/game-audio-policy', { bodyLimit: 2048 }, async (request, reply) => {
     if (!allowed(request.headers.origin))
@@ -157,6 +163,45 @@ export function registerObsRoutes(
       }
     },
   );
+  app.post('/operator/obs/audio-mode', { bodyLimit: 2048 }, async (request, reply) => {
+    if (!allowed(request.headers.origin))
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    const parsed = z
+      .object({ revision: z.string().uuid(), selectionId: z.string().uuid().nullable() })
+      .strict()
+      .safeParse(request.body);
+    if (!parsed.success || !options.gameAudio)
+      return reply.code(400).send({ error: 'audio_mode_invalid' });
+    try {
+      if (options.gameAudio.status().ownership !== 'idle') throw new Error('audio_policy_active');
+      const music = options.musicDirector?.();
+      if (!music) throw new Error('music_unavailable');
+      await options.gameAudio.manual(() =>
+        options.adapter.switchAudioMode(
+          parsed.data.revision,
+          parsed.data.selectionId,
+          (obs, same) => music.prepareDesktopMix(obs, same),
+        ),
+      );
+      return { ok: true };
+    } catch (error) {
+      return reply.code(409).send({
+        error: 'audio_mode_unavailable',
+        message:
+          error instanceof Error && error.message === 'audio_policy_active'
+            ? '请先恢复游戏音频自动控制，再切换模式。'
+            : error instanceof Error && error.message === 'audio_monitor_device_unknown'
+              ? '请在 OBS 中将桌面音频与监听设备都设为默认设备，或都选为同一个具体设备，再重试。'
+              : error instanceof Error && error.message === 'audio_microphone_monitor'
+                ? '麦克风监听会回到桌面混音；请在 OBS 关闭麦克风监听后重试。'
+                : error instanceof Error && error.message === 'audio_video_binding'
+                  ? '游戏或解说音频绑定在画面来源上；请先改为独立音频来源，避免关闭画面。'
+                  : error instanceof Error && error.message === 'audio_global_path_unresolved'
+                    ? '请在 OBS 设置 → 音频关闭全局音频来源，再切换。'
+                    : '切换未确认，请检查 OBS 音频、停止输出并重新读取来源。',
+      });
+    }
+  });
   app.get('/local/v1/obs/audio-routing', async (request, reply) => {
     if (!allowedRead(request)) return reply.code(403).send({ error: 'operator_origin_forbidden' });
     try {
