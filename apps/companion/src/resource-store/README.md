@@ -20,7 +20,7 @@ Server 使用独立持久目录，并从已通过 Core 内容身份校验的 bun
 
 `list()` / `getStatus(packId)` 是唯一状态入口，阶段为 `missing | downloading | verifying | ready | failed | incompatible`。状态包含已下载字节、active / prepared / rollback 版本及受限错误码。`ready` 表示验证完成；`activeVersion` 为空时素材尚未激活。更新失败可以同时存在 `failed` 和仍可读取的 `activeVersion`。
 
-`installVerified(packId, prepare, {packVersion?, signal?, force?})` 默认复验并复用 active；请求不同版本时必须传 `packVersion`。`repair` 强制重新准备。`cancel(packId)` 取消正在运行的安装。并发安装/删除/切换明确拒绝，不创建并行状态机。
+`installVerified(packId, prepare, {packVersion?, signal?, force?, activation?})` 默认复验并复用 active；请求不同版本时必须传 `packVersion`。默认在安全时启用，`activation: 'prepare-only'` 则只准备版本，缓存命中也不启用。`repair` 强制重新准备，也支持该选项。`cancel(packId)` 取消正在运行的安装。并发安装/删除/切换明确拒绝，不创建并行状态机。
 
 `reuseActive(packId, createActivePolicyVerifier(currentPolicy), {signal?})` 是原生安装桥的离线重装入口。现有互斥保护覆盖当前 active 的 receipt、本次认证策略和全部文件复验，期间安装/回退不能切换身份。没有 active 返回 null；通过返回 `{status, identity: {packId, packVersion, sourceSha, promotionSha, manifestSha256}}`，没有下载器或网络调用。身份与实际字节不符明确拒绝，不能仅凭 activeVersion 相等复用。该原生回调不暴露给 renderer。
 

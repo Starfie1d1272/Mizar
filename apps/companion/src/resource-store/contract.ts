@@ -32,6 +32,7 @@ export interface ResourceInstallOptions {
   signal?: AbortSignal;
   packVersion?: string;
   force?: boolean;
+  activation?: 'when-safe' | 'prepare-only';
 }
 
 /** Native installer supplies its current authenticated policy verifier; no renderer input. */
