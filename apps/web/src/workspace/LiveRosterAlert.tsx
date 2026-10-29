@@ -1,5 +1,6 @@
 import { ReviewDialog } from './ReviewDialog';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { SILENCED_MATCH_KEY, SILENCE_CHANGED } from './review-silence';
 import { Button, StatusBanner } from '../ui';
 import type { LiveRosterAlert as Alert, LiveRosterDifference } from './live-roster-model';
 
@@ -26,20 +27,45 @@ export function LiveRosterAlert({
   error,
   recovered,
   suppressAutomatic = false,
+  matchId,
 }: {
   alert: Alert | null;
   recovered: boolean;
   suppressAutomatic?: boolean;
+  matchId?: string | undefined;
   onReview: () => void;
   error: string | null;
 }) {
   const [requested, setRequested] = useState(false);
   const [dismissedKey, setDismissedKey] = useState<string | null>(null);
+  const [silenced, setSilenced] = useState(() => {
+    try {
+      return Boolean(matchId && localStorage.getItem(SILENCED_MATCH_KEY) === matchId);
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    const update = () => {
+      try {
+        setSilenced(Boolean(matchId && localStorage.getItem(SILENCED_MATCH_KEY) === matchId));
+      } catch {
+        setSilenced(false);
+      }
+    };
+    update();
+    window.addEventListener('storage', update);
+    window.addEventListener(SILENCE_CHANGED, update);
+    return () => {
+      window.removeEventListener('storage', update);
+      window.removeEventListener(SILENCE_CHANGED, update);
+    };
+  }, [matchId]);
   // Temporary missing HTTP/telemetry data does not erase an acknowledgement.
   // Only a positively recovered current lineup permits the same difference to alert again.
   if (recovered && dismissedKey !== null) setDismissedKey(null);
   if (!alert) return null;
-  const open = requested || (!suppressAutomatic && dismissedKey !== alert.key);
+  const open = requested || (!suppressAutomatic && !silenced && dismissedKey !== alert.key);
   return (
     <>
       <StatusBanner tone="warning">
