@@ -375,7 +375,8 @@ export class CameraDirector {
       this.now() >= next.until ||
       next.context !== this.identity(this.truth()) ||
       next.connection !== this.provider.generation ||
-      next.edge !== this.edge(this.truth()).key
+      next.edge !== this.edge(this.truth()).key ||
+      (next.key.startsWith('round:') && this.truth().program.clock?.phase !== 'freezetime')
     )
       return;
     this.play(next.shot, next.key, next.edge);
