@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it, vi } from 'vitest';
 import { prepareIsolatedPack } from '../src/orchestration/prepare-pack.js';
+import { cameraSourceTreeSha256 } from '../src/orchestration/camera-source.js';
 import { verifyIsolatedPack } from '../src/orchestration/isolated-pack.js';
 import { consoleLaunchOptions, firstDemoOptions, MulnxTool } from '../src/orchestration/tool.js';
 import { nativeCs2PathSchema } from '../src/orchestration/routes.js';
@@ -293,4 +294,15 @@ it('rejects linked resources and never seals a failed copy', async () => {
   const createLink = process.platform === 'win32' ? link : symlink;
   await createLink(join(source, 'Mtp.yaml'), join(source, 'CamMacros', 'link.yaml'));
   await expect(prepareIsolatedPack(source, root)).rejects.toThrow('pack_unsafe_entry');
+});
+
+it('identifies source contents independently of location and rejects unsafe trees', async () => {
+  const first = await fixture();
+  const second = await fixture();
+  const digest = await cameraSourceTreeSha256(first.source);
+  expect(await cameraSourceTreeSha256(second.source)).toBe(digest);
+  await writeFile(join(second.source, 'Campaths', 'path.yaml'), 'different');
+  expect(await cameraSourceTreeSha256(second.source)).not.toBe(digest);
+  await symlink(join(first.source, 'Mtp.yaml'), join(first.source, 'link'));
+  await expect(cameraSourceTreeSha256(first.source)).rejects.toThrow('pack_unsafe_entry');
 });
