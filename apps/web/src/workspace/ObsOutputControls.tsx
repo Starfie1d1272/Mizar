@@ -69,7 +69,9 @@ export function ObsOutputControls({ onError }: { onError: (message: string) => v
                 else void run(command);
               }}
             >
-              {label(kind, state, pending)}
+              {state?.active && state.phase === 'active' && !busy
+                ? `${kind === 'stream' ? '直播中' : '录像中'} · 停止`
+                : label(kind, state, pending)}
             </Button>
           );
         })}

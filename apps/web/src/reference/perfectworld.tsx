@@ -3,10 +3,10 @@ import { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { getBuiltinResolvedPreset } from '@mizar/hud-config';
 import '@mizar/design-tokens/tokens.css';
-import { GameplayHud } from '../program/GameplayHud';
+import { GameplayHud } from '@mizar/hud-view';
 import { getProgramFixture, type ProgramFixtureId } from '../program/fixtures';
 import { radarSnapshotForProgramFixture } from '../program/fixtures/radar-fixtures';
-import '../program/program-scenes.css';
+import '@mizar/hud-view/program-scenes.css';
 import './perfectworld.css';
 
 const scenes: readonly { id: ProgramFixtureId; label: string }[] = [

@@ -1,0 +1,38 @@
+{
+  "name": "@mizar/hud-view",
+  "private": true,
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./bp.css": "./dist/bp.css",
+    "./broadcast-material.css": "./dist/broadcast-material.css",
+    "./program-scenes.css": "./dist/program-scenes.css"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-css.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@mizar/protocol": "workspace:*",
+    "@mizar/cs2-assets": "workspace:*",
+    "@mizar/hud-config": "workspace:*",
+    "@mizar/radar": "workspace:*",
+    "@mizar-hud/radar-view": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "catalog:",
+    "@typescript/native": "catalog:"
+  },
+  "sideEffects": [
+    "**/*.css"
+  ]
+}

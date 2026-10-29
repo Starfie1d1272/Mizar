@@ -1,4 +1,4 @@
-import { buildMatchHeaderPresentation } from '../src/program/widgets/match-header/presentation';
+import { buildMatchHeaderPresentation } from '@mizar/hud-view';
 import { describe, expect, it } from 'vitest';
 import {
   HUD_EDITOR_DEFAULT_FIXTURE_ID,

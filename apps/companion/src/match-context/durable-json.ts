@@ -13,6 +13,11 @@ export interface DurableJsonReplaceOptions {
   readonly faultInjector?: DurableJsonFaultInjector;
 }
 
+/** Size of the exact UTF-8 representation written by replaceDurableJson. */
+export function durableJsonByteLength(value: unknown): number {
+  return Buffer.byteLength(`${JSON.stringify(value, null, 2)}\n`, 'utf8');
+}
+
 /**
  * Replace one JSON document through a same-directory temporary file and one
  * atomic rename. The optional guard is checked again immediately before the

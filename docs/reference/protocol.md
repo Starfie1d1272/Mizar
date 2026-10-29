@@ -4,6 +4,8 @@
 
 产品运行时的 `/health.product.appVersion` 来自同包 artifact 元数据，与 `gitSha` 一同供高级设置展示；开发运行或旧包缺少版本号时明确显示不可用。
 
+`GET /local/v1/resource-library` 面向本机受信任页面，汇总示例素材状态及 MulNX 当前版本、已检查版本和镜头来源名称。对应提供方不可用时返回 `null`，不推断安装状态；该查询不返回路径，也不修改资源。MulNX 更新检查继续使用现有 `/operator/orchestration` 控制入口。
+
 ## 契约来源
 
 | 契约 | 代码入口 |
@@ -183,6 +185,8 @@ WebSocket 子协议为 `mizar.local.v1`，路由为 `/local/v1/{channel}`。
 
 预设文件只包含已声明的预设、布局和外观，导入原子创建新副本并重写引用，不启用、不执行代码、不携带比赛数据或图片。精确格式和上限见[配置包](../../packages/hud-config/src/index.ts)，可编辑样例见 [perfectworld.mizar-hud.json](../examples/perfectworld.mizar-hud.json)。
 
+播出配置协调器启用时，`GET /local/v1/broadcast-display-config` 返回 `{activeRevision, hud, program}`，三个字段来自同一活动快照；音乐、运镜、设备状态和路径不进入此响应。协调器未就绪时返回 `503`。`GET /local/v1/broadcast-config/migration` 是本机受限的迁移状态查询，依赖未验证时保留旧配置。`GET /local/v1/broadcast-presets` 和 `POST /operator/broadcast-presets/{save,clone,preview,apply}` 仅在协调器装配后注册并受本机来源限制；预览不提交活动配置，使用请求由服务端在生产与资源引用守卫内准备并提交。进入制作等待正在进行的使用请求完成 owner 同步；同步失败时保持准备状态并返回错误。生产启动支持原生 HUD、Pulse、本机音乐和空运镜；其余 provider 尚未就绪时保留旧配置并报告待完成，不启用方案写入口。
+
 ## BP 播放与补录
 
 `GET /local/v1/bp` 是有限的地图卡、步骤、公开标题和播放状态；不返回内部比赛 ID、名单或完整来源文档。ETag 覆盖当前播放进度，浏览器超时隐藏，恢复读取当前值，不重演旧步骤。
@@ -267,7 +271,7 @@ RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对�
 
 ## 本机地图编排控制
 
-`GET /local/v1/orchestration` 读取私有预设与请求状态；`POST /operator/orchestration` 接收 configure、create-preset、save-preset、activate-preset、set-automatic、connect、disconnect、resume、hold、skip、audition、browser。`activePresetId` 标识活动预设，`presets` 包含各预设的 `id` 和 `preset` 草稿，`preset` 为独立活动快照。`create-preset` 可带 `sourceId` 复制草稿，省略则创建空预设，响应返回 `createdPresetId`；`save-preset` 带 `id` 和 `preset`，`activate-preset` 带 `id`，仅启用会更新活动快照。旧 `configure` 仍直接更新活动配置。`automaticEnabled` 是持久偏好，`set-automatic` 带布尔 `enabled`，仅准备阶段保存且不发送游戏命令；进入制作时采纳，现场 hold/resume 只改变本次意图。仅回环模式及允许来源可写，恢复/试播绑定当前上下文与连接代际。JSON 上限 256 KiB，严格结构由 `@mizar/protocol/orchestration` 和 Companion 路由共同校验。不接受任意 Provider 地址、控制台命令或文件路径；`isolated` 仅表示专用包磁盘文件符合隔离要求；`held` 表示人工意图，`preparation` 为 waiting / preparing / ready / error，独立表示准备状态。连接与地图变化后自动应用预设并查询活动包和自动列表；自动及手动播放均要求回读成功，状态查询不证明资源加载成功。`request` 的 queued 只表示网关入队；`execution` 的 started/completed/failed/cancelled 只来自同请求同连接的上游反馈，结果未知保持 unconfirmed。`audition` 通过 `stage` 和 `index` 选择本图已保存镜头：开场及单个阶段镜头不传索引，回合使用 `round` 与索引，暂停候选使用 `tactical` / `technical` 与索引。上一条、下一条和重播由客户端保存选择并再次提交；`hold` 停止并保留人工意图。具体语义及候选实机验收见[地图自动编排](orchestration.md)。
+`GET /local/v1/orchestration` 读取私有预设与请求状态；`POST /operator/orchestration` 接收 configure、create-preset、save-preset、activate-preset、set-automatic、connect、disconnect、resume、hold、skip、audition、browser。`activePresetId` 标识活动预设，`presets` 包含各预设的 `id` 和 `preset` 草稿，`preset` 为独立活动快照。`create-preset` 可带 `sourceId` 复制草稿，省略则创建空预设，响应返回 `createdPresetId`；`save-preset` 带 `id` 和 `preset`，`activate-preset` 带 `id`，仅启用会更新活动快照。旧 `configure` 仍直接更新活动配置。`automaticEnabled` 是持久偏好，`set-automatic` 带布尔 `enabled`，仅准备阶段保存且不发送游戏命令；进入制作时采纳，现场 hold/resume 只改变本次意图。仅回环模式及允许来源可写，恢复/试播绑定当前上下文与连接代际。JSON 上限 256 KiB，严格结构由 `@mizar/protocol/orchestration` 和 Companion 路由共同校验。不接受任意 Provider 地址、控制台命令或文件路径；`isolated` 仅表示专用包磁盘文件符合隔离要求；`held` 表示人工意图，`preparation` 为 waiting / preparing / ready / error，独立表示准备状态。连接与地图变化后自动应用预设并查询活动包和自动列表；自动及手动播放均要求回读成功，状态查询不证明资源加载成功。`request` 的 queued 只表示网关入队，不证明实际播放或停止。`audition` 通过 `stage` 和 `index` 选择本图已保存镜头：开场及单个阶段镜头不传索引，回合使用 `round` 与索引，暂停候选使用 `tactical` / `technical` 与索引。上一条、下一条和重播由客户端保存选择并再次提交；`hold` 停止并保留人工意图。具体语义及候选实机验收见[地图自动编排](orchestration.md)。
 
 桌面 `attach_external_cs2` 仅允许准备中心调用，参数为所选 PID、创建标识和制作修订；可执行路径由 Host 既有安装发现读取。`cs2_config_status` 的 `borrowed` 表示仍持有外部借用意图，`externalDetached` 表示已解除；`running` 只描述本次可用实例，均不代替全机 CS2 停机证明。借用不写受管事务；退出沿用 `finish_workspace` 安全制作收尾后解除，失败保留待重试状态。实际边界见[地图自动编排](orchestration.md)。
 
