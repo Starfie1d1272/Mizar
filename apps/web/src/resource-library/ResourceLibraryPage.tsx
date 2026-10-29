@@ -37,7 +37,9 @@ const phases: Record<ResourceStatus['phase'], string> = {
 export function ResourceLibraryPage() {
   const view = useLocalRead<LibraryView>('/local/v1/resource-library', 2000);
   const [query, setQuery] = useState('');
-  const [category, setCategory] = useState<'all' | 'media' | 'tool' | 'music' | 'visual' | 'presets'>('all');
+  const [category, setCategory] = useState<
+    'all' | 'media' | 'tool' | 'music' | 'visual' | 'presets'
+  >('all');
   const [preparedSession, setPreparedSession] = useState<{
     preparedId: string;
     tag: string;
