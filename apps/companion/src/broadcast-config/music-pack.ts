@@ -16,6 +16,7 @@ import { audioBytes } from '../music/archive.js';
 import type { MusicStore } from '../music/store.js';
 import { readMusicAsset } from './music-assets.js';
 import type { BroadcastConfigStore } from './store.js';
+import type { MusicPackResources } from './music-pack-resources.js';
 
 /** Export one music module and its verified media, without playback or configuration changes. */
 export async function exportMusicPack(
@@ -86,7 +87,7 @@ export async function exportMusicPack(
 export async function importMusicPack(input: {
   zip: Buffer;
   store: BroadcastConfigStore;
-  install(archive: Awaited<ReturnType<typeof readPackArchive>>): Promise<ResourceRef>;
+  resources: MusicPackResources;
 }) {
   const archive = await readPackArchive(input.zip);
   const { manifest } = archive;
@@ -98,6 +99,7 @@ export async function importMusicPack(input: {
     manifest.requirements.length
   )
     throw new Error('capability_unsupported');
+  const audioIds = new Set<string>();
   for (const file of manifest.files) {
     if (file.id === manifest.modules[0].fileId) {
       if (file.mediaType !== 'application/json' || !file.path.endsWith('.json'))
@@ -107,6 +109,7 @@ export async function importMusicPack(input: {
       const ext = file.path.split('.').at(-1)?.toLowerCase();
       if (!bytes || file.mediaType !== `audio/${ext}` || !audioBytes(file.path, bytes))
         throw new Error('package_invalid');
+      audioIds.add(file.id);
     }
   }
   const expected: ResourceRef = {
@@ -121,7 +124,11 @@ export async function importMusicPack(input: {
       files: archive.files,
       source,
       refs: {
-        asset: (ref) => ({ resource: source, fileId: ref.fileId }),
+        asset: (ref) => {
+          if (ref.package !== '$self' || !audioIds.has(ref.fileId))
+            throw new Error('resource_missing');
+          return { resource: source, fileId: ref.fileId };
+        },
         resource: () => {
           throw new Error('capability_unsupported');
         },
@@ -132,7 +139,7 @@ export async function importMusicPack(input: {
       supports: () => false,
     });
   prepare(expected);
-  const installed = await input.install(archive);
+  const installed = await input.resources.install(input.zip);
   if (
     installed.id !== expected.id ||
     installed.version !== expected.version ||
