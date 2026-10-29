@@ -71,7 +71,7 @@ export function ObserverSettingsPanel() {
         value={settings.expectedDelaySeconds}
         disabled={busy || runtime?.pending || !settings.enabled}
         onChange={(e) => edit({ expectedDelaySeconds: Number(e.target.value) })}
-        message="按此延迟差估算提示时间；后台测量仅供参考，不会自动修改。"
+        message="自动根据回合倒计时校准延迟差；校准完成前使用此预期延迟估算提示时间。"
       />
       <Field
         label="提示提前时间（秒）"
