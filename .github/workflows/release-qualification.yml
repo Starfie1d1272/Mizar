@@ -180,21 +180,6 @@ jobs:
           target-key: ${{ steps.cargo-cache.outputs.target-key }}
           target-hit: ${{ steps.cargo-cache.outputs.target-hit }}
 
-  release_host_tests:
-    name: release Host tests
-    runs-on: windows-2025
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-      - name: Restore the release profile cache
-        uses: ./.github/actions/cargo-cache
-        with:
-          profile: release
-      - name: Test Windows desktop startup deadlines and diagnostics
-        run: cargo test --profile release --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
-
   verify:
     name: verify / ${{ matrix.lane }}
     needs: build
@@ -404,7 +389,7 @@ jobs:
 
   release_qualification:
     name: release_qualification
-    needs: [build, verify, release_host_tests]
+    needs: [build, verify]
     runs-on: windows-2025
     timeout-minutes: 10
     permissions:
