@@ -8,6 +8,11 @@ import {
   type MigrationEvent,
   type MigrationObserver,
 } from '../src/obs/audio-migration.js';
+import { ObsAdapter } from '../src/obs/adapter.js';
+import { OBS_COLLECTION, obsDesiredScenes } from '../src/obs/desired-state.js';
+import type { ObsConfigStore } from '../src/obs/config.js';
+import type { ObsAudioRouting } from '../src/obs/audio-routing.js';
+import type { RemoteCommentary } from '../src/obs/remote-commentary.js';
 import type { ObsRpc } from '../src/obs/reconcile.js';
 
 function fixture() {
@@ -17,6 +22,7 @@ function fixture() {
   ];
   const listeners = new Set<(event: MigrationEvent) => void>();
   let failAfterWrite = false;
+  const settings = { capture_audio: true, window: 'unchanged' };
   const observer: MigrationObserver = {
     subscribe(listener) {
       listeners.add(listener);
@@ -27,6 +33,19 @@ function fixture() {
     async call(type, data) {
       if (type === 'GetStreamStatus' || type === 'GetRecordStatus') return { outputActive: false };
       if (type === 'GetSceneCollectionList') return { currentSceneCollectionName: 'collection' };
+      if (type === 'GetInputSettings')
+        return { inputKind: 'game_capture', inputSettings: { ...settings } };
+      if (type === 'SetInputSettings') {
+        assert.equal(data?.overlay, true);
+        Object.assign(settings, data?.inputSettings);
+        for (const listener of listeners)
+          listener({ type: 'inputSettings', inputUuid: 'video', settings: { ...settings } });
+        if (failAfterWrite) {
+          failAfterWrite = false;
+          throw new Error('receipt lost');
+        }
+        return {};
+      }
       if (type === 'GetSceneItemList') return { sceneItems: items.map((item) => ({ ...item })) };
       if (type === 'SetSceneItemEnabled') {
         const item = items.find((value) => value.sceneItemId === data?.sceneItemId)!;
@@ -55,6 +74,7 @@ function fixture() {
   };
   return {
     items,
+    settings,
     obs,
     observer,
     plan,
@@ -126,4 +146,180 @@ test('completed restore does not overwrite an externally changed field', async (
       items.map((item) => item.sceneItemEnabled),
       [true, true],
     );
+  }));
+
+test('mode switch disables exclusive video audio and restores it without changing picture settings', async () =>
+  withJournal(async (path) => {
+    const listeners = new Set<(event: MigrationEvent) => void>();
+    const observer: MigrationObserver = {
+      subscribe(listener) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    };
+    const scenes = obsDesiredScenes('http://127.0.0.1:1234');
+    const inputs = [
+      { inputUuid: 'game', inputName: 'game', inputKind: 'wasapi_process_output_capture' },
+      { inputUuid: 'voice', inputName: 'voice', inputKind: 'wasapi_process_output_capture' },
+      { inputUuid: 'mic', inputName: 'mic', inputKind: 'wasapi_input_capture' },
+      { inputUuid: 'desktop', inputName: 'desktop', inputKind: 'wasapi_output_capture' },
+      { inputUuid: 'video', inputName: 'video', inputKind: 'game_capture' },
+    ];
+    const items = new Map(
+      scenes.map((scene) => [
+        scene.sceneName,
+        inputs.map((input, index) => ({
+          sourceUuid: input.inputUuid,
+          sourceName: input.inputName,
+          sceneItemId: index + 1,
+          sceneItemEnabled: input.inputUuid !== 'desktop',
+        })),
+      ]),
+    );
+    const settings: Record<string, unknown> = { capture_audio: true, window: 'keep-picture' };
+    const obs: ObsRpc = {
+      async call(type, data) {
+        if (type === 'GetStreamStatus' || type === 'GetRecordStatus')
+          return { outputActive: false };
+        if (type === 'GetSceneCollectionList')
+          return { currentSceneCollectionName: OBS_COLLECTION };
+        if (type === 'GetInputList') return { inputs };
+        if (type === 'GetSpecialInputs') return {};
+        if (type === 'GetSceneList')
+          return { scenes: scenes.map(({ sceneName }) => ({ sceneName })) };
+        if (type === 'GetSceneItemList')
+          return { sceneItems: items.get(data?.sceneName as string)!.map((item) => ({ ...item })) };
+        if (type === 'GetInputSettings')
+          return data?.inputUuid === 'video'
+            ? { inputKind: 'game_capture', inputSettings: { ...settings } }
+            : { inputSettings: { device_id: 'device' } };
+        if (type === 'GetInputDefaultSettings')
+          return { defaultInputSettings: { device_id: 'device' } };
+        if (type === 'GetProfileParameter') return { parameterValue: 'another-device' };
+        if (type === 'SetInputSettings') {
+          assert.equal(data?.overlay, true);
+          Object.assign(settings, data?.inputSettings);
+          for (const listener of listeners)
+            listener({ type: 'inputSettings', inputUuid: 'video', settings: { ...settings } });
+          return {};
+        }
+        if (type === 'SetSceneItemEnabled') {
+          const item = items
+            .get(data?.sceneName as string)!
+            .find((value) => value.sceneItemId === data?.sceneItemId)!;
+          item.sceneItemEnabled = data?.sceneItemEnabled as boolean;
+          for (const listener of listeners)
+            listener({
+              type: 'item',
+              sceneName: data?.sceneName as string,
+              sceneItemId: item.sceneItemId,
+              enabled: item.sceneItemEnabled,
+            });
+          return {};
+        }
+        throw new Error(`Unexpected request ${type}`);
+      },
+    };
+    const routing = {
+      async switchMode(
+        _obs: ObsRpc,
+        _endpoint: string,
+        _revision: string,
+        selection: string | null,
+        apply: (
+          ids: Record<string, string>,
+          desktop: string | undefined,
+          verify: () => Promise<boolean>,
+        ) => Promise<void>,
+      ) {
+        await apply(
+          { game: 'game', remoteCommentary: 'voice', microphone: 'mic' },
+          selection ? 'desktop' : undefined,
+          async () => true,
+        );
+      },
+    } as unknown as ObsAudioRouting;
+    const adapter = new ObsAdapter(
+      {} as ObsConfigStore,
+      'http://127.0.0.1:1234',
+      undefined,
+      routing,
+      { owner: {} as RemoteCommentary, journal: path },
+    );
+    Object.assign(adapter, {
+      audioConfiguration: {
+        run: (
+          operation: (
+            obs: ObsRpc,
+            endpoint: string,
+            observer: MigrationObserver,
+          ) => Promise<unknown>,
+        ) => operation(obs, 'endpoint', observer),
+      },
+    });
+    await adapter.switchAudioMode('revision', 'desktop-selection', async () => {});
+    assert.deepEqual(settings, { capture_audio: false, window: 'keep-picture' });
+    assert.ok(
+      [...items.values()].every(
+        (scene) => scene.find((item) => item.sourceUuid === 'video')!.sceneItemEnabled,
+      ),
+    );
+    await adapter.switchAudioMode('revision', null, async () => {});
+    assert.deepEqual(settings, { capture_audio: true, window: 'keep-picture' });
+    assert.ok(
+      [...items.values()].every(
+        (scene) => scene.find((item) => item.sourceUuid === 'video')!.sceneItemEnabled,
+      ),
+    );
+  }));
+
+test('uncertain capture audio write is restored after restart', async () =>
+  withJournal(async (path) => {
+    const { items, settings, obs, observer, plan, failNextWrite } = fixture();
+    failNextWrite();
+    await assert.rejects(
+      new AudioMigration(path).migrate(
+        obs,
+        'endpoint',
+        {
+          ...plan,
+          captureAudio: [
+            { inputUuid: 'video', inputKind: 'game_capture', before: true, applied: false },
+          ],
+        },
+        observer,
+      ),
+      /write_uncertain/,
+    );
+    assert.equal(settings.capture_audio, false);
+    await new AudioMigration(path).recover(obs, 'endpoint', observer);
+    assert.deepEqual(settings, { capture_audio: true, window: 'unchanged' });
+    assert.deepEqual(
+      items.map((item) => item.sceneItemEnabled),
+      [true, false],
+    );
+  }));
+
+test('restore refuses externally changed capture audio', async () =>
+  withJournal(async (path) => {
+    const { settings, obs, observer, plan } = fixture();
+    const migration = new AudioMigration(path);
+    await migration.migrate(
+      obs,
+      'endpoint',
+      {
+        ...plan,
+        captureAudio: [
+          { inputUuid: 'video', inputKind: 'game_capture', before: true, applied: false },
+        ],
+      },
+      observer,
+      `${path}.completed`,
+    );
+    settings.capture_audio = true;
+    await assert.rejects(
+      migration.restoreCompleted(obs, 'endpoint', observer, `${path}.completed`),
+      /external_change/,
+    );
+    assert.equal(settings.capture_audio, true);
   }));

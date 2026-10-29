@@ -25,6 +25,7 @@ export async function reconcileManagedAudio(
   ids: Record<ObsAudioRole, string>,
   verify: () => Promise<boolean>,
   desktopUuid?: string,
+  completedPath?: string,
 ): Promise<void> {
   if (new Set(Object.values(ids)).size !== 3) throw new Error('audio_binding_duplicate');
   const inputs = records((await obs.call('GetInputList')).inputs);
@@ -45,9 +46,15 @@ export async function reconcileManagedAudio(
   });
   let changed = false;
   let preparing = true;
+  let migrating = false;
   const snapshots = new Map<string, string>();
   const stop = observer.subscribe((event) => {
-    if (event.type !== 'item' && !(preparing && event.type === 'identityChanged')) changed = true;
+    if (
+      event.type !== 'item' &&
+      !(preparing && event.type === 'identityChanged') &&
+      !(migrating && event.type === 'inputSettings')
+    )
+      changed = true;
   });
   const check = async () => {
     const [stream, record, collection, specials] = await Promise.all([
@@ -81,6 +88,45 @@ export async function reconcileManagedAudio(
       obs,
       desired.map((scene) => scene.sceneName),
     );
+    const captureAudio: {
+      inputUuid: string;
+      inputKind: 'game_capture' | 'window_capture';
+      before: boolean;
+      applied: boolean;
+    }[] = [];
+    if (desktopUuid) {
+      for (const input of inputs) {
+        if (
+          (input.inputKind !== 'game_capture' && input.inputKind !== 'window_capture') ||
+          typeof input.inputUuid !== 'string'
+        )
+          continue;
+        const references = graph.filter((container) =>
+          container.items.some((item) => item.sourceUuid === input.inputUuid),
+        );
+        if (
+          !references.some(
+            (container) =>
+              container.activeManagedRoots.size &&
+              container.items.some(
+                (item) => item.sourceUuid === input.inputUuid && item.sceneItemEnabled,
+              ),
+          )
+        )
+          continue;
+        const settings = (await obs.call('GetInputSettings', { inputUuid: input.inputUuid }))
+          .inputSettings as Record<string, unknown>;
+        if (settings?.capture_audio !== true) continue;
+        if (references.some((container) => container.otherRoots.size))
+          throw new Error('audio_video_path_unresolved');
+        captureAudio.push({
+          inputUuid: input.inputUuid,
+          inputKind: input.inputKind,
+          before: true,
+          applied: false,
+        });
+      }
+    }
     // Check nested paths before creating or changing any scene references.
     for (const container of graph) {
       if (!container.activeManagedRoots.size || desired.some((s) => s.sceneName === container.name))
@@ -93,7 +139,11 @@ export async function reconcileManagedAudio(
         if (['game_capture', 'window_capture'].includes(String(input.inputKind))) {
           const settings = (await obs.call('GetInputSettings', { inputUuid: item.sourceUuid }))
             .inputSettings as Record<string, unknown>;
-          if (settings?.capture_audio === true) throw new Error('audio_video_path_unresolved');
+          if (
+            settings?.capture_audio === true &&
+            !captureAudio.some((entry) => entry.inputUuid === item.sourceUuid)
+          )
+            throw new Error('audio_video_path_unresolved');
         }
         if (!audioKinds.has(String(input.inputKind))) continue;
         if (container.otherRoots.size) throw new Error('audio_nested_shared_path');
@@ -126,7 +176,11 @@ export async function reconcileManagedAudio(
         ) {
           const settings = (await obs.call('GetInputSettings', { inputUuid: input.inputUuid }))
             .inputSettings as Record<string, unknown>;
-          if (settings?.capture_audio === true) throw new Error('audio_video_path_unresolved');
+          if (
+            settings?.capture_audio === true &&
+            !captureAudio.some((entry) => entry.inputUuid === input.inputUuid)
+          )
+            throw new Error('audio_video_path_unresolved');
         }
         if (!wanted && !audioKinds.has(String(input.inputKind))) continue;
         if (
@@ -181,12 +235,14 @@ export async function reconcileManagedAudio(
         throw new Error('audio_scene_changed');
     }
     await check();
-    if (desktop.length || independent.length)
+    migrating = true;
+    if (desktop.length || independent.length || captureAudio.length)
       await new AudioMigration(`${journal}.migration`).migrate(
         obs,
         endpoint,
-        { endpoint, collection: OBS_COLLECTION, desktop, independent },
+        { endpoint, collection: OBS_COLLECTION, desktop, independent, captureAudio },
         observer,
+        completedPath,
       );
     await check();
   } finally {

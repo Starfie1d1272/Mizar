@@ -20,19 +20,37 @@ const field = ref
     externalChanged: z.boolean(),
   })
   .strict();
+const inputRef = z
+  .object({ inputUuid: z.string().min(1), inputKind: z.enum(['game_capture', 'window_capture']) })
+  .strict();
+const inputField = inputRef
+  .extend({
+    before: z.boolean(),
+    applied: z.boolean(),
+    phase: z.enum(['prepared', 'sent', 'confirmed', 'uncertain', 'restored']),
+    externalChanged: z.boolean(),
+  })
+  .strict();
 const planSchema = z
   .object({
     endpoint: z.string().min(1),
     collection: z.string().min(1),
     desktop: z.array(ref),
     independent: z.array(ref),
+    captureAudio: z
+      .array(inputRef.extend({ before: z.boolean(), applied: z.boolean() }).strict())
+      .default([]),
   })
   .strict();
 const journalSchema = z
-  .object({ endpoint: z.string(), collection: z.string(), fields: z.array(field) })
+  .object({
+    endpoint: z.string(),
+    collection: z.string(),
+    fields: z.array(z.union([field, inputField])),
+  })
   .strict();
-export type AudioMigrationPlan = z.infer<typeof planSchema>;
-type Field = z.infer<typeof field>;
+export type AudioMigrationPlan = z.input<typeof planSchema>;
+type Field = z.infer<typeof field> | z.infer<typeof inputField>;
 type Journal = z.infer<typeof journalSchema>;
 export type MigrationEvent =
   | { type: 'item'; sceneName: string; sceneItemId: number; enabled: boolean }
@@ -95,15 +113,47 @@ export class AudioMigration {
       completed.fields.some((entry) => entry.externalChanged || entry.phase !== 'confirmed')
     )
       throw new Error('audio_migration_external_change');
+    await this.context(
+      obs,
+      {
+        endpoint: completed.endpoint,
+        collection: completed.collection,
+        desktop: [],
+        independent: [],
+      },
+      endpoint,
+      true,
+    );
     const values = await Promise.all(completed.fields.map((entry) => this.status(obs, entry)));
+    await this.context(
+      obs,
+      {
+        endpoint: completed.endpoint,
+        collection: completed.collection,
+        desktop: [],
+        independent: [],
+      },
+      endpoint,
+      true,
+    );
     // A crash may occur after all reverse writes but before the mode commit.
     // Retain the record until that commit so a retry can recognize this state.
     if (completed.fields.every((entry, index) => values[index] === entry.before)) return true;
     if (completed.fields.some((entry, index) => values[index] !== entry.applied))
       throw new Error('audio_migration_external_change');
     const desktop: AudioMigrationPlan['desktop'] = [];
+    const captureAudio: NonNullable<AudioMigrationPlan['captureAudio']> = [];
     const independent: AudioMigrationPlan['independent'] = [];
     for (const entry of completed.fields) {
+      if ('inputUuid' in entry) {
+        captureAudio.push({
+          inputUuid: entry.inputUuid,
+          inputKind: entry.inputKind,
+          before: entry.applied,
+          applied: entry.before,
+        });
+        continue;
+      }
       const ref = {
         sceneName: entry.sceneName,
         sceneItemId: entry.sceneItemId,
@@ -120,6 +170,7 @@ export class AudioMigration {
         collection: completed.collection,
         desktop,
         independent,
+        captureAudio,
       },
       observer,
     );
@@ -137,6 +188,13 @@ export class AudioMigration {
       throw new Error('audio_migration_output_active');
   }
   private async status(obs: ObsRpc, entry: Field): Promise<boolean> {
+    if ('inputUuid' in entry) {
+      const result = await obs.call('GetInputSettings', { inputUuid: entry.inputUuid });
+      const settings = result.inputSettings as Record<string, unknown> | undefined;
+      if (result.inputKind !== entry.inputKind || typeof settings?.capture_audio !== 'boolean')
+        throw new Error('audio_migration_identity_changed');
+      return settings.capture_audio;
+    }
     const raw = (
       await obs.call(entry.group ? 'GetGroupSceneItemList' : 'GetSceneItemList', {
         sceneName: entry.sceneName,
@@ -157,35 +215,57 @@ export class AudioMigration {
       throw new Error('audio_migration_identity_changed');
     return found.sceneItemEnabled;
   }
+  private matchesIdentity(event: MigrationEvent, entry: Field): boolean {
+    return 'inputUuid' in entry
+      ? event.type === 'inputSettings' && event.inputUuid === entry.inputUuid
+      : event.type === 'item' &&
+          event.sceneName === entry.sceneName &&
+          event.sceneItemId === entry.sceneItemId;
+  }
+  private matches(event: MigrationEvent, entry: Field, value: boolean): boolean {
+    return (
+      this.matchesIdentity(event, entry) &&
+      (event.type === 'item'
+        ? event.enabled === value
+        : event.type === 'inputSettings' && event.settings.capture_audio === value)
+    );
+  }
+  private write(obs: ObsRpc, entry: Field, value: boolean) {
+    return 'inputUuid' in entry
+      ? obs.call('SetInputSettings', {
+          inputUuid: entry.inputUuid,
+          inputSettings: { capture_audio: value },
+          overlay: true,
+        })
+      : obs.call('SetSceneItemEnabled', {
+          sceneName: entry.sceneName,
+          sceneItemId: entry.sceneItemId,
+          sceneItemEnabled: value,
+        });
+  }
   /** Recheck an interrupted transaction on a new observed connection and restore
    * its recorded pre-switch references before allowing another migration. */
   async recover(obs: ObsRpc, endpoint: string, observer: MigrationObserver): Promise<void> {
     if (this.running) throw new Error('audio_migration_busy');
     this.running = true;
     let interrupted = false;
-    let expected:
-      { sceneName: string; sceneItemId: number; enabled: boolean; seen: boolean } | undefined;
+    let expected: { entry: Field; value: boolean; seen: boolean } | undefined;
     const stop = observer.subscribe((event) => {
-      if (event.type !== 'item') {
-        interrupted = true;
-        return;
-      }
-      if (
-        expected &&
-        !expected.seen &&
-        event.sceneName === expected.sceneName &&
-        event.sceneItemId === expected.sceneItemId &&
-        event.enabled === expected.enabled
-      )
+      if (expected && !expected.seen && this.matches(event, expected.entry, expected.value)) {
         expected.seen = true;
-      else interrupted = true;
+      } else if (event.type !== 'item' && event.type !== 'inputSettings') interrupted = true;
+      else if (event.type === 'item' || event.type === 'inputSettings') interrupted = true;
     });
     try {
       const journal = await this.pending();
       if (!journal) return;
       if (journal.fields.some((entry) => entry.externalChanged || entry.before === entry.applied))
         throw new Error('audio_migration_external_change');
-      const keys = journal.fields.map((entry) => `${entry.sceneName}\0${entry.sceneItemId}`);
+      const keys = journal.fields.map((entry) =>
+        'inputUuid' in entry
+          ? `input\0${entry.inputUuid}`
+          : `item\0${entry.sceneName}\0${entry.sceneItemId}`,
+      );
       if (new Set(keys).size !== keys.length) throw new Error('audio_migration_duplicate');
       const plan = {
         endpoint: journal.endpoint,
@@ -220,17 +300,8 @@ export class AudioMigration {
           entry.phase = 'uncertain';
           await this.save(journal);
           await check();
-          expected = {
-            sceneName: entry.sceneName,
-            sceneItemId: entry.sceneItemId,
-            enabled: entry.before,
-            seen: false,
-          };
-          await obs.call('SetSceneItemEnabled', {
-            sceneName: entry.sceneName,
-            sceneItemId: entry.sceneItemId,
-            sceneItemEnabled: entry.before,
-          });
+          expected = { entry, value: entry.before, seen: false };
+          await this.write(obs, entry, entry.before);
           await check();
           if ((await this.status(obs, entry)) !== entry.before)
             throw new Error('audio_migration_write_uncertain');
@@ -261,9 +332,13 @@ export class AudioMigration {
     if (this.running) throw new Error('audio_migration_busy');
     const plan = planSchema.parse(raw);
     this.running = true;
-    const ids = [...plan.desktop, ...plan.independent].map(
-      (x) => `${x.sceneName}\0${x.sceneItemId}`,
-    );
+    const ids = [...plan.desktop, ...plan.independent]
+      .map((x) => `item\0${x.sceneName}\0${x.sceneItemId}`)
+      .concat((plan.captureAudio ?? []).map((x) => `input\0${x.inputUuid}`));
+    if ((plan.captureAudio ?? []).some((entry) => entry.before === entry.applied)) {
+      this.running = false;
+      throw new Error('audio_migration_invalid_field');
+    }
     if (new Set(ids).size !== ids.length) {
       this.running = false;
       throw new Error('audio_migration_duplicate');
@@ -272,6 +347,11 @@ export class AudioMigration {
       endpoint: plan.endpoint,
       collection: plan.collection,
       fields: [
+        ...(plan.captureAudio ?? []).map((x) => ({
+          ...x,
+          phase: 'prepared' as const,
+          externalChanged: false,
+        })),
         ...plan.desktop.map((x) => ({
           ...x,
           before: true,
@@ -286,7 +366,7 @@ export class AudioMigration {
           phase: 'prepared' as const,
           externalChanged: false,
         })),
-      ],
+      ].sort((a, b) => Number(a.applied) - Number(b.applied)),
     };
     let connected = true;
     let identity = true;
@@ -302,16 +382,24 @@ export class AudioMigration {
       if (event.type === 'disconnected') {
         connected = false;
         wake?.();
-      } else if (event.type === 'identityChanged' || event.type === 'inputSettings') {
+      } else if (event.type === 'identityChanged') {
         identity = false;
         wake?.();
       } else if (event.type === 'outputStarting') output = true;
       else {
-        const entry = journal.fields.find(
-          (x) => x.sceneName === event.sceneName && x.sceneItemId === event.sceneItemId,
-        );
-        if (!entry) return;
-        if (expected?.entry === entry && !expected.seen && event.enabled === expected.value)
+        const entry = journal.fields.find((x) => this.matchesIdentity(event, x));
+        if (!entry) {
+          if (event.type === 'inputSettings') {
+            identity = false;
+            wake?.();
+          }
+          return;
+        }
+        if (
+          expected?.entry === entry &&
+          !expected.seen &&
+          this.matches(event, entry, expected.value)
+        )
           expected.seen = true;
         else {
           entry.externalChanged = true;
@@ -361,11 +449,7 @@ export class AudioMigration {
       const interrupted = new Promise<'lost'>((resolve) => {
         wake = () => resolve('lost');
       });
-      const call = obs.call('SetSceneItemEnabled', {
-        sceneName: entry.sceneName,
-        sceneItemId: entry.sceneItemId,
-        sceneItemEnabled: value,
-      });
+      const call = this.write(obs, entry, value);
       const result = await Promise.race([
         call.then(
           () => 'ok' as const,

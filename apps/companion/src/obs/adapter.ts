@@ -3,7 +3,7 @@ import { ObsActionError } from './action-error.js';
 import { assertBpCompactOff, BpOverlayOwner } from './bp-overlay.js';
 import { diagnosticValue } from '../support/session-journal.js';
 import { createHash, randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { dirname } from 'node:path';
 import { OBSWebSocket } from 'obs-websocket-js';
@@ -478,8 +478,9 @@ export class ObsAdapter {
   ) {
     if (!this.audioRouting || !this.commentary) throw new Error('audio_routing_unavailable');
     return this.configurationMutation(() =>
-      this.audioConfiguration.run((obs, endpoint, observer) =>
-        this.audioRouting!.switchMode(
+      this.audioConfiguration.run(async (obs, endpoint, observer) => {
+        const completedPath = `${this.commentary!.journal}.migration-mode`;
+        await this.audioRouting!.switchMode(
           obs,
           endpoint,
           revision,
@@ -523,6 +524,16 @@ export class ObsAdapter {
               observer,
             );
             await prepareMusic(obs, relationship === 'same');
+            if (
+              !desktop &&
+              (await new AudioMigration(`${this.commentary!.journal}.migration`).restoreCompleted(
+                obs,
+                endpoint,
+                observer,
+                completedPath,
+              ))
+            )
+              return;
             await reconcileManagedAudio(
               obs,
               endpoint,
@@ -532,10 +543,12 @@ export class ObsAdapter {
               ids,
               verify,
               desktop,
+              desktop ? completedPath : undefined,
             );
           },
-        ),
-      ),
+        );
+        if (!selectionId) await rm(completedPath, { force: true });
+      }),
     );
   }
   private mixerRevision(routing: { revision: string; endpoint: string; collection: string }) {
