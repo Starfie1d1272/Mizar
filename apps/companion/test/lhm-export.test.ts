@@ -16,6 +16,7 @@ it('exports the selected active HUD with a guarded revision and no live data', a
   await writeFile(join(root, 'brand/test.svg'), '<svg/>');
   await writeFile(join(root, 'assets/cs2/test.png'), 'test');
   const store = new HudConfigStore();
+  await store.load();
   const app = Fastify();
   registerHudConfigRoutes(app, {
     store,

@@ -1,6 +1,6 @@
 import { useRadarViewSource } from '../realtime/radar-view-source';
 import { SessionContext } from '../preparation/SessionContext';
-import { downloadHudPresetFile, readHudPresetFile } from './hud-preset-file';
+import { downloadHudPresetFile, downloadLhmHud, readHudPresetFile } from './hud-preset-file';
 import { Button, Select } from '../ui';
 import { ResourceSettings } from '../preparation/ResourceSettings';
 import { ToolShell, Workbench } from '../patterns';
@@ -749,6 +749,22 @@ export function HudConsolePage() {
     }
   }
 
+  async function exportLhm(): Promise<void> {
+    if (busy || onAir.status !== 'ready' || onAir.activeRevision === null) return;
+    setBusy(true);
+    setCommandState(null);
+    setCommandError(false);
+    try {
+      await downloadLhmHud(onAir.activeRevision);
+      setCommandState('已导出当前播出 HUD；队伍身份、赛事和头像暂不包含。');
+    } catch (error) {
+      setCommandError(true);
+      setCommandState(error instanceof Error ? error.message : 'HUD 导出失败，请重试。');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function activateSelectedPreset(): Promise<void> {
     if (activationReasons.length > 0 || hudEditor.revision === null) return;
     setBusy(true);
@@ -974,6 +990,16 @@ export function HudConsolePage() {
               </span>
             )}
           </div>
+          <Button
+            disabled={
+              busy || visualFixtureMode || onAir.status !== 'ready' || onAir.activeRevision === null
+            }
+            onClick={() => {
+              void exportLhm();
+            }}
+          >
+            导出 LHM HUD
+          </Button>
           <Button
             disabled={
               activationReasons.length > 0 ||

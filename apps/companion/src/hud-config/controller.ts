@@ -17,6 +17,7 @@ export interface HudConfigControllerOptions {
   readonly store: HudConfigStore;
   readonly originPolicy: LocalWebOriginPolicy;
   readonly webRoot?: string;
+  readonly waitForBroadcast?: () => Promise<void>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -81,12 +82,20 @@ export function registerHudConfigRoutes(
     const body: unknown = request.body;
     if (!isRecord(body) || typeof body.expectedActiveRevision !== 'string')
       return reply.code(400).send({ error: 'invalid_hud_config_command' });
+    try {
+      await options.waitForBroadcast?.();
+    } catch {
+      return reply.code(503).send({ error: 'broadcast_config_unavailable' });
+    }
+    if (!options.store.canMigrate) return reply.code(503).send({ error: 'hud_config_unavailable' });
     const state = options.store.getState();
+    if (state.persistenceError) return reply.code(503).send({ error: 'hud_config_unavailable' });
     if (state.activeRevision !== body.expectedActiveRevision)
       return reply.code(409).send({ error: 'hud_config_active_conflict' });
     if (!options.webRoot) return reply.code(503).send({ error: 'lhm_export_runtime_unavailable' });
     try {
       const archive = await exportLhmHud(options.webRoot, state.resolved);
+      await options.waitForBroadcast?.();
       if (options.store.getState().activeRevision !== body.expectedActiveRevision)
         return reply.code(409).send({ error: 'hud_config_active_conflict' });
       return reply
