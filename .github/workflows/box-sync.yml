@@ -1,8 +1,19 @@
 name: Box Sync
 on:
-  workflow_run:
-    workflows: [Release Promotion]
-    types: [completed]
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      qualification_run:
+        required: true
+        type: string
+      qualification_attempt:
+        required: true
+        type: string
+    secrets:
+      MIZAR_BOX_REPO_TOKEN:
+        required: true
   workflow_dispatch:
     inputs:
       tag:
@@ -26,13 +37,13 @@ concurrency:
   cancel-in-progress: false
 jobs:
   sync:
-    if: github.repository == 'Starfie1d1272/Mizar' && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && !startsWith(github.event.workflow_run.display_title, 'Stage draft ') && github.event.workflow_run.path == '.github/workflows/release-promotion.yml' && contains(fromJSON('["workflow_dispatch","workflow_run"]'), github.event.workflow_run.event)))
+    if: github.repository == 'Starfie1d1272/Mizar'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          ref: ${{ github.sha }}
           persist-credentials: false
       - name: 同步与校验云盘
         id: mirror
@@ -46,11 +57,16 @@ jobs:
           BOX_SYNC_MODE: ${{ inputs.mode || 'sync' }}
         run: node scripts/qualification/box-sync.mjs
       - name: Record complete qualification trigger through Box verification timing
-        if: steps.mirror.outputs.prerelease == 'false'
+        if: always() && (steps.mirror.outputs.prerelease == 'false' || steps.mirror.outcome == 'failure')
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          QUALIFICATION_RUN: ${{ inputs.qualification_run }}
+          QUALIFICATION_ATTEMPT: ${{ inputs.qualification_attempt }}
+          BOX_OUTCOME: ${{ steps.mirror.outcome }}
+          BOX_RECOVERY_STARTED_AT: ${{ steps.mirror.outputs.recovery_started_at }}
         run: node scripts/qualification/release-timings.mjs box release-timings.json
-      - if: always() && steps.mirror.outputs.prerelease == 'false'
+      - if: always() && (steps.mirror.outputs.prerelease == 'false' || steps.mirror.outcome == 'failure')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-timings-${{ github.run_id }}-${{ github.run_attempt }}

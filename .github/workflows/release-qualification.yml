@@ -162,7 +162,14 @@ jobs:
                 $resourceArtifacts = @($available.artifacts | Where-Object { !$_.expired -and $_.name.StartsWith('promotion-resources-') })
                 if ($available.total_count -gt 100 -or $resourceArtifacts.Count -ne 1) { throw 'Specify the exact original publication artifact; automatic selection is ambiguous' }
                 $artifactName = $resourceArtifacts[0].name
-              } else { $artifactName = 'release-qualified-resources' }
+              } else {
+                $available = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:RESOURCE_SOURCE_RUN/artifacts?per_page=100" | ConvertFrom-Json
+                if ($LASTEXITCODE -ne 0 -or $available.total_count -gt 100) { throw 'Original resource artifact lookup failed or ambiguous' }
+                $currentName = "release-qualified-resources-$($run.run_attempt)"
+                $matches = @($available.artifacts | Where-Object { !$_.expired -and $_.name -in @($currentName, 'release-qualified-resources') })
+                if ($matches.Count -ne 1) { throw 'Specify the exact original resource artifact; automatic selection is ambiguous' }
+                $artifactName = $matches[0].name
+              }
             }
             $original = Join-Path $env:RUNNER_TEMP 'original-resource-artifact'
             gh run download $env:RESOURCE_SOURCE_RUN --repo $env:GITHUB_REPOSITORY --name "$artifactName" --dir "$original"
@@ -185,7 +192,7 @@ jobs:
       - name: Upload unqualified candidate
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-candidate
+          name: release-candidate-${{ github.run_attempt }}
           path: |
             ${{ env.QUALIFICATION_BUILD_ROOT }}/*.zip
             ${{ env.QUALIFICATION_BUILD_ROOT }}/*.zip.sha256
@@ -199,7 +206,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-build-evidence
+          name: release-build-evidence-${{ github.run_attempt }}
           path: ${{ env.QUALIFICATION_BUILD_ROOT }}/build-timings.json
           if-no-files-found: warn
 
@@ -239,7 +246,7 @@ jobs:
           ref: ${{ needs.build.outputs.source_sha }}
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          name: release-candidate
+          name: release-candidate-${{ github.run_attempt }}
           path: ${{ env.QUALIFICATION_BUILD_ROOT }}
       - name: Verify candidate transfer before extraction
         run: node scripts/qualification/verify-candidate.mjs "$env:QUALIFICATION_BUILD_ROOT" "$env:SOURCE_SHA" "$env:ARCHIVE_SHA256"
@@ -347,7 +354,7 @@ jobs:
         if: ${{ matrix.lane == 'setup' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-setup-setup
+          name: release-setup-setup-${{ github.run_attempt }}
           path: |
             ${{ env.QUALIFICATION_BUILD_ROOT }}/Mizar-*.exe
             ${{ env.QUALIFICATION_BUILD_ROOT }}/Mizar-*.exe.sha256
@@ -360,7 +367,7 @@ jobs:
         if: ${{ matrix.lane == 'core-setup' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-setup-core-setup
+          name: release-setup-core-setup-${{ github.run_attempt }}
           path: |
             ${{ env.QUALIFICATION_BUILD_ROOT }}/Mizar-*-Core-Setup.exe
             ${{ env.QUALIFICATION_BUILD_ROOT }}/Mizar-*-Core-Setup.exe.sha256
@@ -406,7 +413,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-evidence-${{ matrix.lane }}
+          name: release-evidence-${{ matrix.lane }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/Mizar-*-evidence.zip
           if-no-files-found: error
 
@@ -443,21 +450,21 @@ jobs:
           install: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          name: release-candidate
+          name: release-candidate-${{ github.run_attempt }}
           path: ${{ env.QUALIFICATION_BUILD_ROOT }}
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          pattern: release-setup-*
+          pattern: release-setup-*-${{ github.run_attempt }}
           merge-multiple: true
           path: ${{ env.QUALIFICATION_BUILD_ROOT }}
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          pattern: release-evidence-*
+          pattern: release-evidence-*-${{ github.run_attempt }}
           path: ${{ runner.temp }}/lane-evidence
           merge-multiple: true
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          name: release-build-evidence
+          name: release-build-evidence-${{ github.run_attempt }}
           path: ${{ runner.temp }}/build-evidence
       - name: Download exact resource candidate built by this source job
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
@@ -554,7 +561,7 @@ jobs:
       - name: Upload original qualified resources (not publication authorization)
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-qualified-resources
+          name: release-qualified-resources-${{ github.run_attempt }}
           path: ${{ env.RESOURCE_BUILD_ROOT }}/*
           compression-level: 0
           if-no-files-found: error
@@ -578,7 +585,7 @@ jobs:
       - name: Upload qualified portable product
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-portable-product
+          name: release-portable-product-${{ github.run_attempt }}
           # ZIP and Setup are already compressed; preserve their original bytes.
           compression-level: 0
           path: |
@@ -601,6 +608,57 @@ jobs:
       - name: Upload release qualification evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-qualification-evidence
+          name: release-qualification-evidence-${{ github.run_attempt }}
           path: ${{ runner.temp }}/Mizar-*-evidence.zip
+          if-no-files-found: error
+
+  promotion:
+    needs: release_qualification
+    uses: ./.github/workflows/release-promotion.yml
+    permissions:
+      contents: write
+      actions: read
+      id-token: write
+      attestations: write
+    with:
+      qualification_run: ${{ github.run_id }}
+      qualification_attempt: ${{ github.run_attempt }}
+      tag: ${{ inputs.tag }}
+
+  box:
+    needs: promotion
+    uses: ./.github/workflows/box-sync.yml
+    permissions:
+      contents: read
+      actions: read
+    with:
+      tag: ${{ inputs.tag }}
+      qualification_run: ${{ github.run_id }}
+      qualification_attempt: ${{ github.run_attempt }}
+    secrets: inherit
+
+  delivery_result:
+    if: ${{ always() }}
+    needs: [build, verify, release_qualification, promotion, box]
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Record stage results and original run timing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" > release-run.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" > release-jobs.json
+          printf 'Release stage results:\n```json\n%s\n```\n' "$RESULTS" >> "$GITHUB_STEP_SUMMARY"
+          jq '{id, run_attempt, created_at, run_started_at, status, conclusion}' release-run.json >> "$GITHUB_STEP_SUMMARY"
+          jq '.jobs | map({name, status, conclusion, started_at, completed_at})' release-jobs.json >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-stage-results-${{ github.run_attempt }}
+          path: |
+            release-run.json
+            release-jobs.json
           if-no-files-found: error

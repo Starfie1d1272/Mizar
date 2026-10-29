@@ -1,14 +1,26 @@
 name: Release Promotion
 run-name: ${{ inputs.draft_release_id && format('Stage draft {0}', inputs.tag) || 'Release Promotion' }}
 on:
-  workflow_run:
-    workflows: [Release Qualification]
-    types: [completed]
+  workflow_call:
+    inputs:
+      qualification_run:
+        required: true
+        type: string
+      qualification_attempt:
+        required: true
+        type: string
+      tag:
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       qualification_run:
         description: Successful Release Qualification run ID
         required: true
+        type: string
+      qualification_attempt:
+        description: Exact attempt for a same-run qualification (blank for historical runs)
+        required: false
         type: string
       tag:
         description: Exact application version tag (stable, alpha.N, beta.N or rc.N)
@@ -34,12 +46,12 @@ concurrency:
 jobs:
   promote:
     name: 发布 Mizar ${{ inputs.tag || github.event.workflow_run.display_title }}
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.path == '.github/workflows/release-qualification.yml' && github.event.workflow_run.event == 'workflow_dispatch') }}
     runs-on: windows-2025
     timeout-minutes: 15
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
+      QUALIFICATION_ATTEMPT: ${{ inputs.qualification_attempt }}
       RUN_ID: ${{ inputs.qualification_run || github.event.workflow_run.id }}
       RELEASE_TAG: ${{ inputs.tag || github.event.workflow_run.display_title }}
       RELEASE_RECOVERY: ${{ github.event_name == 'workflow_dispatch' && inputs.recovery && 'true' || 'false' }}
@@ -83,7 +95,7 @@ jobs:
         shell: pwsh
         run: |
           $run = gh api "repos/$env:GH_REPO/actions/runs/$env:RUN_ID" | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.event -ne 'workflow_dispatch' -or $run.path -ne '.github/workflows/release-qualification.yml' -or $run.head_branch -ne 'main' -or $run.head_repository.full_name -ne $env:GH_REPO) { throw 'Recovery requires a successful original main qualification' }
+          if ($LASTEXITCODE -ne 0 -or (!$env:QUALIFICATION_ATTEMPT -and ($run.status -ne 'completed' -or $run.conclusion -ne 'success')) -or $run.event -ne 'workflow_dispatch' -or $run.path -ne '.github/workflows/release-qualification.yml' -or $run.head_branch -ne 'main' -or $run.head_repository.full_name -ne $env:GH_REPO) { throw 'Recovery requires a successful original main qualification' }
           if (([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($run.created_at)).TotalSeconds -le 600) { throw 'Recovery requires the original release budget to have expired' }
           Write-Output 'Explicit recovery: original fresh-release budget was not met.'
       - name: Bound Resolve successful qualification source to remaining time
@@ -100,15 +112,24 @@ jobs:
         shell: pwsh
         run: |
           if ($env:RUN_ID -notmatch '^\d+$') { throw 'Invalid run ID' }
-          $run = gh api "repos/$env:GH_REPO/actions/runs/$env:RUN_ID" | ConvertFrom-Json
-          if ($run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.path -ne '.github/workflows/release-qualification.yml' -or $run.event -ne 'workflow_dispatch' -or $run.head_branch -ne 'main' -or $run.head_repository.full_name -ne $env:GH_REPO) { throw 'Not a successful main qualification run' }
+          if ($env:QUALIFICATION_ATTEMPT -and $env:QUALIFICATION_ATTEMPT -notmatch '^[1-9]\d*$') { throw 'Invalid qualification attempt' }
+          $runPath = "repos/$env:GH_REPO/actions/runs/$env:RUN_ID"
+          if ($env:QUALIFICATION_ATTEMPT) { $runPath += "/attempts/$env:QUALIFICATION_ATTEMPT" }
+          $run = gh api $runPath | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Qualification run lookup failed' }
+          if ((!$env:QUALIFICATION_ATTEMPT -and ($run.status -ne 'completed' -or $run.conclusion -ne 'success')) -or $run.path -ne '.github/workflows/release-qualification.yml' -or $run.event -ne 'workflow_dispatch' -or $run.head_branch -ne 'main' -or $run.head_repository.full_name -ne $env:GH_REPO) { throw 'Not a successful main qualification run' }
           $budgetCreated = gh api "repos/$env:GH_REPO/actions/runs/$env:RELEASE_BUDGET_RUN" --jq .created_at
           if ($LASTEXITCODE -ne 0 -or !$budgetCreated) { throw 'Cannot read release budget start time' }
           $elapsed = ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($budgetCreated)).TotalSeconds
           if ($elapsed -gt 600) { throw "Release budget exceeded before promotion: $elapsed seconds" }
           "RELEASE_DEADLINE=$(([DateTimeOffset]::Parse($budgetCreated).AddSeconds(600)).ToString('o'))" >> $env:GITHUB_ENV
           $run | ConvertTo-Json -Depth 50 | Set-Content qualification-run.json -Encoding utf8
-          node scripts/qualification/download-qualified-artifacts.mjs $env:RUN_ID "$env:RESOURCE_ROOT"
+          if ($env:QUALIFICATION_ATTEMPT) {
+            if ($env:QUALIFICATION_ATTEMPT -notmatch '^[1-9]\d*$' -or $run.run_attempt -ne [int]$env:QUALIFICATION_ATTEMPT) { throw 'Qualification attempt mismatch' }
+            gh api "repos/$env:GH_REPO/actions/runs/$env:RUN_ID/attempts/$env:QUALIFICATION_ATTEMPT/jobs?per_page=100" > qualification-jobs.json
+            if ($LASTEXITCODE -ne 0) { throw 'Qualification stage lookup failed' }
+          }
+          node scripts/qualification/download-qualified-artifacts.mjs $env:RUN_ID "$env:RESOURCE_ROOT" $env:QUALIFICATION_ATTEMPT
           if ($LASTEXITCODE -ne 0) { throw 'Qualified product/evidence download failed' }
           if (!(Test-Path -LiteralPath product/qualification-provenance.json -PathType Leaf)) { throw 'Original qualification provenance bundle is required' }
           $manifest = Get-Content product/release-manifest.json -Raw | ConvertFrom-Json
@@ -384,7 +405,7 @@ jobs:
         shell: pwsh
         run: |
           if (!(Test-Path -LiteralPath 'evidence-extracted/build-timings.json' -PathType Leaf)) { throw 'Qualified evidence is missing build timing' }
-          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-timings.mjs" promotion release-timings.json
+          if (!$env:QUALIFICATION_ATTEMPT -or $env:RUN_ID -ne $env:GITHUB_RUN_ID) { node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-timings.mjs" promotion release-timings.json }
           if ($LASTEXITCODE -ne 0) { throw 'Release timing identity/path validation failed' }
       - name: Preserve maintainer promotion records in CI only
         if: ${{ always() }}
