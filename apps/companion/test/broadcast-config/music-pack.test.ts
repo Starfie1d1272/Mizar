@@ -71,15 +71,56 @@ it('reads the exact package version when file IDs coincide', async () => {
   try {
     const one = await resources.install(await pack('1.0.0', first));
     const two = await resources.install(await pack('2.0.0', second));
+    const guard = <T>(operation: () => Promise<T>) => operation();
     expect((await resources.readAsset({ resource: one, fileId: 'background' })).bytes).toEqual(
       first,
     );
+    let enter!: () => void, release!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      enter = resolve;
+    });
+    const proceed = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let referenced = false;
+    const importing = resources.installAndCommit(await pack('1.0.0', first), async (ref) => {
+      enter();
+      await proceed;
+      referenced = true;
+      return ref;
+    });
+    await entered;
+    const deleting = resources.remove(one, guard, () => (referenced ? [one] : []));
+    release();
+    await importing;
+    await expect(deleting).rejects.toThrow('resource_in_use');
     expect((await resources.readAsset({ resource: two, fileId: 'background' })).bytes).toEqual(
       second,
     );
     await expect(
       resources.readAsset({ resource: { ...one, digest: two.digest }, fileId: 'background' }),
     ).rejects.toThrow('resource_damaged');
+    await expect(resources.remove(one, guard, () => [one])).rejects.toThrow('resource_in_use');
+    expect((await resources.readAsset({ resource: one, fileId: 'background' })).bytes).toEqual(
+      first,
+    );
+    const marker = `${createHash('sha256')
+      .update(JSON.stringify([one.id, one.version]))
+      .digest('hex')}.mizarpack.deleting`;
+    await writeFile(join(root, marker), JSON.stringify(one));
+    const restarted = new MusicPackResources(root);
+    expect(await restarted.isDeleting(one)).toBe(true);
+    await expect(restarted.install(await pack('1.0.0', first))).rejects.toThrow(
+      'resource_deleting',
+    );
+    await restarted.remove(one, guard, () => []);
+    expect(await restarted.isDeleting(one)).toBe(false);
+    await expect(restarted.readAsset({ resource: one, fileId: 'background' })).rejects.toThrow(
+      'resource_missing',
+    );
+    expect((await restarted.readAsset({ resource: two, fileId: 'background' })).bytes).toEqual(
+      second,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -181,8 +222,18 @@ it('round trips real music owner configuration to independent drafts without act
       resources,
       createLocalWebOriginPolicy({ host: '127.0.0.1' }),
       () => true,
+      undefined,
+      (operation) => operation(),
     );
     try {
+      const retained = await app.inject({
+        method: 'POST',
+        url: '/operator/resource-library/delete-pack',
+        headers: { origin: 'http://127.0.0.1:3000' },
+        payload: first.mapping.source,
+      });
+      expect(retained.statusCode).toBe(409);
+      expect(retained.json().error).toBe('resource_in_use');
       const payload = { moduleId: musicModule.id, expectedRevision: musicModule.revision };
       expect(
         (

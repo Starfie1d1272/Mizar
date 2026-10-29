@@ -307,6 +307,8 @@ RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对�
 
 `POST /operator/resource-library/export-pack` 接收 `modules`（每项 `moduleId`、`expectedRevision`）及 `presets`（每项 `presetId`、`expectedRevision`、`expectedModuleRevisions`）数组，至少选择一项；导出前后核对修订。不能编码时返回 `422 export_failed`，`entries` 列出无法导出的选择及原因，不生成缺项的成功包。
 
+`POST /operator/resource-library/delete-pack` 接收完整包 `ResourceRef`，在共享引用队列内检查草稿、活动、上一个活动快照及使用回执；仍有引用时返回 `409 resource_in_use`，文件保留。无引用时先持久标记删除，再清理包字节；清理中断后可重试同一请求。清理不会创建或恢复目录项。
+
 本机配置协调器就绪时，`POST /operator/resource-library/import-preset-pack` 接收 `application/x-mizarpack`，校验、发布素材并一次保存独立方案草稿；`POST /operator/resource-library/export-preset-pack` 以方案 ID 和预期方案、模块修订导出。支持原生 HUD、节目引用、音乐和带镜头来源的运镜配置；独立开场音效随包携带，MulNX 官方发行依赖保留精确发行与归档摘要，不包含程序本体。导入只保留取得来源，使用时仍由 MulNX owner 核验本机内容与兼容性；开发测试 fork 的分享和嵌入第三方归档暂不支持。写入仅允许本机可信 Origin，导入不修改活动配置或播放状态。
 
 `POST /operator/resource-library/export-preset-bundle` 接收多套方案及各自的预期方案、模块修订，生成一个分享包；复用的模块和音频在包内去重，导入后每套方案拥有独立可编辑模块。导出期间配置发生变化时返回修订冲突。

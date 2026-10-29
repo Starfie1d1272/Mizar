@@ -5,6 +5,7 @@ import { PACK_LIMITS } from '@mizar/broadcast-pack';
 import {
   assetRefSchema,
   boundModules,
+  resourceRefSchema,
   type ModuleRecord,
   type ResourceRef,
 } from '@mizar/broadcast-config';
@@ -69,6 +70,7 @@ export function registerMusicPackRoutes(
   origin: LocalWebOriginPolicy,
   ready: () => boolean,
   availability?: (module: ModuleRecord, source: ResourceRef) => Promise<void>,
+  withReferenceGuard?: <T>(operation: () => Promise<T>) => Promise<T>,
 ): void {
   const allowed = (value: string | undefined) =>
     origin.mode === 'loopback' && checkLocalWebOrigin(origin, value).allowed;
@@ -76,6 +78,29 @@ export function registerMusicPackRoutes(
     'application/x-mizarpack',
     { parseAs: 'buffer', bodyLimit: PACK_LIMITS.total },
     (_request, body, done) => done(null, body),
+  );
+  app.post(
+    '/operator/resource-library/delete-pack',
+    { bodyLimit: 4096 },
+    async (request, reply) => {
+      if (!allowed(request.headers.origin))
+        return reply.code(403).send({ error: 'operator_origin_forbidden' });
+      if (!ready()) return reply.code(503).send({ error: 'broadcast_config_unavailable' });
+      const parsed = resourceRefSchema.safeParse(request.body);
+      if (!parsed.success || !parsed.data.id.startsWith('local:mizar-pack:'))
+        return reply.code(400).send({ error: 'invalid_request' });
+      if (!withReferenceGuard) return reply.code(503).send({ error: 'provider_unavailable' });
+      try {
+        await resources.remove(parsed.data, withReferenceGuard, () => store.referencedResources());
+        return { deleted: true };
+      } catch (error) {
+        const code = error instanceof Error ? error.message : '';
+        if (code === 'resource_in_use' || code === 'resource_deleting')
+          return reply.code(409).send({ error: code });
+        if (code === 'resource_missing') return reply.code(404).send({ error: code });
+        return reply.code(422).send({ error: 'resource_damaged' });
+      }
+    },
   );
   app.post(
     '/operator/resource-library/check-pack',
