@@ -26,16 +26,19 @@ export async function reconcileManagedAudio(
   observer: MigrationObserver,
   journal: string,
   baseUrl: string,
-  ids: Record<ObsAudioRole, string>,
+  ids: Partial<Record<ObsAudioRole, string>>,
   verify: () => Promise<boolean>,
   desktopUuid?: string,
   completedPath?: string,
   monitor: AudioMonitorChange[] = [],
 ): Promise<void> {
-  if (new Set(Object.values(ids)).size !== 3) throw new Error('audio_binding_duplicate');
+  const roleIds = Object.values(ids);
+  if (new Set(roleIds).size !== roleIds.length) throw new Error('audio_binding_duplicate');
+  if (!desktopUuid && (!ids.game || !ids.remoteCommentary || !ids.microphone))
+    throw new Error('audio_bindings_incomplete');
   const inputs = records((await obs.call('GetInputList')).inputs);
   if (desktopUuid) {
-    if (Object.values(ids).includes(desktopUuid)) throw new Error('audio_binding_duplicate');
+    if (ids.microphone === desktopUuid) throw new Error('audio_binding_duplicate');
     if (
       !inputs.some(
         (input) => input.inputUuid === desktopUuid && input.inputKind === 'wasapi_output_capture',
@@ -43,7 +46,9 @@ export async function reconcileManagedAudio(
     )
       throw new Error('audio_desktop_missing');
   }
-  const wantedIds = desktopUuid ? [desktopUuid, ids.microphone] : Object.values(ids);
+  const wantedIds = desktopUuid
+    ? [desktopUuid, ...(ids.microphone ? [ids.microphone] : [])]
+    : roleIds;
   const selected = wantedIds.map((uuid) => {
     const input = inputs.find((value) => value.inputUuid === uuid);
     if (!input || typeof input.inputName !== 'string') throw new Error('audio_selection_changed');
@@ -92,6 +97,16 @@ export async function reconcileManagedAudio(
     const graph = await inspectAudioSceneGraph(
       obs,
       desired.map((scene) => scene.sceneName),
+    );
+    const microphoneActive = Boolean(
+      ids.microphone &&
+      graph.some(
+        (container) =>
+          container.activeManagedRoots.size &&
+          container.items.some(
+            (item) => item.sourceUuid === ids.microphone && item.sceneItemEnabled,
+          ),
+      ),
     );
     const captureAudio: {
       inputUuid: string;
@@ -167,7 +182,8 @@ export async function reconcileManagedAudio(
       for (const input of selected) {
         const count = items.filter((item) => item.sourceUuid === input.inputUuid).length;
         if (count > 1) throw new Error('audio_duplicate_path');
-        if (count === 0) missing.push({ sceneName, input });
+        if (count === 0 && (!desktopUuid || input.inputUuid !== ids.microphone || microphoneActive))
+          missing.push({ sceneName, input });
       }
       snapshots.set(`scene\0${sceneName}`, JSON.stringify(items));
       for (const item of items) {
@@ -188,6 +204,7 @@ export async function reconcileManagedAudio(
             throw new Error('audio_video_path_unresolved');
         }
         if (!wanted && !audioKinds.has(String(input.inputKind))) continue;
+        if (desktopUuid && !ids.microphone && input.inputKind === 'wasapi_input_capture') continue;
         if (
           typeof item.sceneItemId !== 'number' ||
           typeof item.sourceUuid !== 'string' ||
@@ -195,7 +212,12 @@ export async function reconcileManagedAudio(
         )
           throw new Error('audio_response_unknown');
         const ref = { sceneName, sceneItemId: item.sceneItemId, sourceUuid: item.sourceUuid };
-        if (wanted && !item.sceneItemEnabled) independent.push(ref);
+        if (
+          wanted &&
+          !item.sceneItemEnabled &&
+          (!desktopUuid || input.inputUuid !== ids.microphone)
+        )
+          independent.push(ref);
         if (!wanted && item.sceneItemEnabled) desktop.push(ref);
       }
     }

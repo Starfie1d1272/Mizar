@@ -31,6 +31,7 @@ export function ObsAudioRouting() {
   } | null>(null);
   const [application, setApplication] = useState('');
   const [desktopSelection, setDesktopSelection] = useState('');
+  const [chooseDesktop, setChooseDesktop] = useState(false);
   async function refreshCommentary() {
     const response = await fetch('/local/v1/obs/remote-commentary', { cache: 'no-store' });
     if (!response.ok) throw new Error('无法读取远端解说设置。');
@@ -109,21 +110,28 @@ export function ObsAudioRouting() {
       setBusy(false);
     }
   }
-  async function switchMode(selectionId: string | null) {
+  async function switchMode(mode: 'desktop' | 'independent') {
     if (!status) return;
     const response = await fetch('/operator/obs/audio-mode', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ revision: status.revision, selectionId }),
+      body: JSON.stringify({
+        revision: status.revision,
+        mode,
+        ...(mode === 'desktop' && desktopSelection ? { selectionId: desktopSelection } : {}),
+      }),
     });
     if (!response.ok) {
-      const result = (await response.json()) as { message?: string };
+      const result = (await response.json()) as { error?: string; message?: string };
+      if (result.error === 'audio_desktop_choice_required') setChooseDesktop(true);
       await refresh().catch(() => undefined);
       throw new Error(result.message ?? '切换未确认，请检查 OBS。');
     }
     await refresh();
     setDesktopSelection('');
-    setMessage(selectionId ? '已切换桌面混音。请录制试听。' : '已切换独立分路。请录制试听。');
+    setMessage(
+      mode === 'desktop' ? '已切换桌面混音。请录制试听。' : '已切换独立分路。请录制试听。',
+    );
   }
   async function bind(role: ObsAudioRole, selectionId: string | null) {
     if (!status) return;
@@ -164,30 +172,32 @@ export function ObsAudioRouting() {
                 ? '桌面混音'
                 : '独立分路'}
           </p>
-          <Select
-            label="桌面音频来源"
-            value={desktopSelection}
-            disabled={busy}
-            onChange={(event) => setDesktopSelection(event.target.value)}
-          >
-            <option value="">请选择 OBS 桌面音频来源</option>
-            {status.candidates
-              .filter((candidate) => candidate.kind === 'wasapi_output_capture')
-              .map((candidate) => (
-                <option key={candidate.selectionId} value={candidate.selectionId}>
-                  {candidate.name}
-                </option>
-              ))}
-          </Select>{' '}
+          {chooseDesktop && (
+            <Select
+              label="桌面音频来源"
+              value={desktopSelection}
+              disabled={busy}
+              onChange={(event) => setDesktopSelection(event.target.value)}
+            >
+              <option value="">自动选择桌面音频来源</option>
+              {status.candidates
+                .filter((candidate) => candidate.kind === 'wasapi_output_capture')
+                .map((candidate) => (
+                  <option key={candidate.selectionId} value={candidate.selectionId}>
+                    {candidate.name}
+                  </option>
+                ))}
+            </Select>
+          )}{' '}
           <Button
-            disabled={busy || !desktopSelection}
-            onClick={() => void run(() => switchMode(desktopSelection))}
+            disabled={busy || (chooseDesktop && !desktopSelection)}
+            onClick={() => void run(() => switchMode('desktop'))}
           >
             切换桌面混音
           </Button>{' '}
           <Button
             disabled={busy || (!status.desktop && !status.transition)}
-            onClick={() => void run(() => switchMode(null))}
+            onClick={() => void run(() => switchMode('independent'))}
           >
             切回独立分路
           </Button>

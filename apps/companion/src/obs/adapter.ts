@@ -473,7 +473,8 @@ export class ObsAdapter {
   }
   switchAudioMode(
     revision: string,
-    selectionId: string | null,
+    mode: 'desktop' | 'independent',
+    selectionId: string | undefined,
     prepareMusic: (
       obs: ObsRpc,
       same: boolean,
@@ -488,6 +489,7 @@ export class ObsAdapter {
           obs,
           endpoint,
           revision,
+          mode,
           selectionId,
           async (ids, desktop, verify) => {
             const [stream, record, collection, inputs] = await Promise.all([
@@ -517,7 +519,7 @@ export class ObsAdapter {
               ? await desktopMonitorRelationship(obs, desktop)
               : 'different';
             if (relationship === 'unknown') throw new Error('audio_monitor_device_unknown');
-            if (desktop && relationship === 'same') {
+            if (desktop && relationship === 'same' && ids.microphone) {
               const mic = await obs.call('GetInputAudioMonitorType', { inputUuid: ids.microphone });
               if (mic.monitorType !== 'OBS_MONITORING_TYPE_NONE')
                 throw new Error('audio_microphone_monitor');
@@ -554,7 +556,7 @@ export class ObsAdapter {
             });
           },
         );
-        if (!selectionId) await rm(completedPath, { force: true });
+        if (mode === 'independent') await rm(completedPath, { force: true });
       }),
     );
   }

@@ -11,12 +11,15 @@ import {
 import type { ObsRpc } from './reconcile.js';
 import { OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
 import { BP_COMPACT_INPUT, BP_COMPACT_PATH } from './bp-overlay.js';
+import { inspectAudioSceneGraph } from './audio-scene-graph.js';
 
 const roles = ['game', 'remoteCommentary', 'microphone'] as const;
 const stateSchema = z
   .object({
     revision: z.string().uuid(),
     desktop: obsAudioBindingSchema.nullable().default(null),
+    lastDesktop: obsAudioBindingSchema.nullable().default(null),
+    desktopMicrophone: obsAudioBindingSchema.nullable().default(null),
     transition: z.boolean().default(false),
     bindings: z
       .object({
@@ -80,6 +83,8 @@ export class ObsAudioRouting {
       this.state = {
         revision: randomUUID(),
         desktop: null,
+        lastDesktop: null,
+        desktopMicrophone: null,
         transition: false,
         bindings: { game: null, remoteCommentary: null, microphone: null },
       };
@@ -129,7 +134,14 @@ export class ObsAudioRouting {
       (await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== current.collection
     )
       throw new Error('audio_selection_changed');
-    const next: State = { revision: randomUUID(), desktop: null, transition: false, bindings };
+    const next: State = {
+      revision: randomUUID(),
+      desktop: null,
+      lastDesktop: state.lastDesktop,
+      desktopMicrophone: state.desktopMicrophone,
+      transition: false,
+      bindings,
+    };
     await mkdir(dirname(this.path), { recursive: true });
     const temp = `${this.path}.${randomUUID()}.tmp`;
     try {
@@ -221,18 +233,21 @@ export class ObsAudioRouting {
     },
   ): Promise<boolean> {
     const state = await this.load();
-    const managed = await this.managedBindings(obs, endpoint);
+    const managed = state.desktop ? null : await this.managedBindings(obs, endpoint);
     if (
       state.transition ||
-      !managed ||
+      (!state.desktop && !managed) ||
       (await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== OBS_COLLECTION ||
       (state.desktop &&
         (state.desktop.endpoint !== endpoint || state.desktop.collection !== OBS_COLLECTION))
     )
       return false;
     const selectedIds = state.desktop
-      ? [state.desktop.inputUuid, managed.ids.microphone]
-      : Object.values(managed.ids);
+      ? [
+          state.desktop.inputUuid,
+          ...(state.desktopMicrophone ? [state.desktopMicrophone.inputUuid] : []),
+        ]
+      : Object.values(managed!.ids);
     const specials = await obs.call('GetSpecialInputs');
     if (
       Object.entries(specials).some(
@@ -323,11 +338,10 @@ export class ObsAudioRouting {
         return false;
       }
     }
-    const current = await this.managedBindings(obs, endpoint);
     const after = await this.load();
     return (
       !after.transition &&
-      current?.revision === managed.revision &&
+      after.revision === state.revision &&
       after.desktop?.inputUuid === state.desktop?.inputUuid
     );
   }
@@ -428,34 +442,154 @@ export class ObsAudioRouting {
     obs: ObsRpc,
     endpoint: string,
     revision: string,
-    selectionId: string | null,
+    mode: 'desktop' | 'independent',
+    selectionId: string | undefined,
     apply: (
-      ids: Record<ObsAudioRole, string>,
+      ids: Partial<Record<ObsAudioRole, string>>,
       desktopUuid: string | undefined,
       verify: () => Promise<boolean>,
     ) => Promise<void>,
   ) {
     const state = await this.load();
     if (state.revision !== revision) throw new Error('audio_revision_changed');
-    const managed = await this.managedBindings(obs, endpoint);
-    if (!managed) throw new Error('audio_bindings_incomplete');
+    let ids: Partial<Record<ObsAudioRole, string>> = {};
     let desktop: State['desktop'] = null;
-    if (selectionId) {
-      const selected = this.selections.get(selectionId);
-      const current = await this.inputs(obs);
-      const input = current.candidates.find(
-        (value) =>
-          value.inputUuid === selected?.input.inputUuid &&
-          value.inputKind === 'wasapi_output_capture',
-      );
+    let desktopMicrophone: State['desktopMicrophone'] = null;
+    if (mode === 'independent') {
+      const managed = await this.managedBindings(obs, endpoint);
+      if (!managed) throw new Error('audio_bindings_incomplete');
+      ids = managed.ids;
+    } else {
+      const [stream, record, current, specials] = await Promise.all([
+        obs.call('GetStreamStatus'),
+        obs.call('GetRecordStatus'),
+        this.inputs(obs),
+        obs.call('GetSpecialInputs'),
+      ]);
       if (
-        !selected ||
-        selected.until <= this.now() ||
-        !input ||
-        selected.endpoint !== endpoint ||
-        selected.collection !== current.collection
+        stream.outputActive !== false ||
+        record.outputActive !== false ||
+        current.collection !== OBS_COLLECTION
       )
-        throw new Error('audio_selection_changed');
+        throw new Error('audio_setup_context_changed');
+      if (Object.values(specials).some((value) => typeof value === 'string' && value))
+        throw new Error('audio_global_path_unresolved');
+      const managedNames = obsDesiredScenes('http://127.0.0.1').map((scene) => scene.sceneName);
+      const graph = await inspectAudioSceneGraph(obs, managedNames);
+      const managedIds = new Set(
+        graph
+          .filter((container) => container.managedRoots.size)
+          .flatMap((container) => container.items.map((item) => item.sourceUuid)),
+      );
+      for (const role of roles) {
+        const binding = state.bindings[role];
+        if (
+          binding &&
+          binding.endpoint === endpoint &&
+          binding.collection === current.collection &&
+          current.candidates.some(
+            (input) =>
+              input.inputUuid === binding.inputUuid && input.inputKind === binding.inputKind,
+          )
+        )
+          ids[role] = binding.inputUuid;
+      }
+      if (!ids.microphone) {
+        const microphones = current.candidates.filter(
+          (input) => input.inputKind === 'wasapi_input_capture' && managedIds.has(input.inputUuid),
+        );
+        if (microphones.length === 1) ids.microphone = microphones[0]!.inputUuid;
+      }
+      let input: Input | undefined;
+      if (selectionId) {
+        const selected = this.selections.get(selectionId);
+        input = current.candidates.find(
+          (value) =>
+            value.inputUuid === selected?.input.inputUuid &&
+            value.inputKind === 'wasapi_output_capture',
+        );
+        if (
+          !selected ||
+          selected.until <= this.now() ||
+          !input ||
+          selected.endpoint !== endpoint ||
+          selected.collection !== current.collection
+        )
+          throw new Error('audio_selection_changed');
+      } else {
+        const prior = state.desktop ?? state.lastDesktop;
+        if (prior?.endpoint === endpoint && prior.collection === current.collection)
+          input = current.candidates.find(
+            (value) =>
+              value.inputUuid === prior.inputUuid && value.inputKind === 'wasapi_output_capture',
+          );
+        if (!input) {
+          const candidates = current.candidates.filter(
+            (value) =>
+              value.inputKind === 'wasapi_output_capture' && managedIds.has(value.inputUuid),
+          );
+          if (candidates.length > 1) {
+            const deviceIds = await Promise.all(
+              candidates.map(async (candidate) => {
+                const result = await obs.call('GetInputSettings', {
+                  inputUuid: candidate.inputUuid,
+                });
+                const settings = result.inputSettings as Record<string, unknown> | undefined;
+                return typeof settings?.device_id === 'string' && settings.device_id
+                  ? settings.device_id.toLowerCase()
+                  : null;
+              }),
+            );
+            if (deviceIds.some((id) => !id) || new Set(deviceIds).size !== 1)
+              throw new Error('audio_desktop_choice_required');
+          }
+          input = candidates[0];
+        }
+        if (!input) {
+          const [streamNow, recordNow, collectionNow] = await Promise.all([
+            obs.call('GetStreamStatus'),
+            obs.call('GetRecordStatus'),
+            obs.call('GetSceneCollectionList'),
+          ]);
+          if (
+            streamNow.outputActive !== false ||
+            recordNow.outputActive !== false ||
+            collectionNow.currentSceneCollectionName !== current.collection ||
+            (await this.load()).revision !== revision
+          )
+            throw new Error('audio_setup_context_changed');
+          const names = new Set(current.inputs.map((value) => value.inputName));
+          let name = '桌面声音';
+          for (let suffix = 2; names.has(name); suffix++) name = `桌面声音 ${suffix}`;
+          const created = await obs.call('CreateInput', {
+            sceneName: managedNames[0],
+            inputName: name,
+            inputKind: 'wasapi_output_capture',
+            inputSettings: { device_id: 'default' },
+            sceneItemEnabled: false,
+          });
+          const updated = await this.inputs(obs);
+          input = updated.candidates.find(
+            (value) =>
+              value.inputUuid === created.inputUuid &&
+              value.inputName === name &&
+              value.inputKind === 'wasapi_output_capture',
+          );
+          if (!input || updated.collection !== current.collection)
+            throw new Error('audio_selection_changed');
+        }
+      }
+      if (ids.microphone) {
+        const microphone = current.candidates.find(
+          (candidate) => candidate.inputUuid === ids.microphone,
+        )!;
+        desktopMicrophone = {
+          inputUuid: microphone.inputUuid,
+          inputKind: microphone.inputKind,
+          endpoint,
+          collection: current.collection,
+        };
+      }
       desktop = {
         inputUuid: input.inputUuid,
         inputKind: input.inputKind,
@@ -476,12 +610,15 @@ export class ObsAudioRouting {
       this.state = pending;
       for (const listener of this.listeners) listener();
     }
-    await apply(
-      managed.ids,
-      desktop?.inputUuid,
-      async () => (await this.load()).revision === revision,
-    );
-    const next: State = { ...state, revision: randomUUID(), desktop, transition: false };
+    await apply(ids, desktop?.inputUuid, async () => (await this.load()).revision === revision);
+    const next: State = {
+      ...state,
+      revision: randomUUID(),
+      desktop,
+      lastDesktop: desktop ?? state.desktop ?? state.lastDesktop,
+      desktopMicrophone,
+      transition: false,
+    };
     await mkdir(dirname(this.path), { recursive: true });
     const temp = `${this.path}.${randomUUID()}.tmp`;
     try {
@@ -537,6 +674,8 @@ export class ObsAudioRouting {
     const next: State = {
       revision: randomUUID(),
       desktop: state.desktop,
+      lastDesktop: state.lastDesktop,
+      desktopMicrophone: state.desktopMicrophone,
       transition: state.transition,
       bindings: { ...state.bindings, [command.role]: binding },
     };

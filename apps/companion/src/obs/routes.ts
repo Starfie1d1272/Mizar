@@ -167,8 +167,18 @@ export function registerObsRoutes(
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
     const parsed = z
-      .object({ revision: z.string().uuid(), selectionId: z.string().uuid().nullable() })
-      .strict()
+      .union([
+        z
+          .object({
+            revision: z.string().uuid(),
+            mode: z.enum(['desktop', 'independent']),
+            selectionId: z.string().uuid().optional(),
+          })
+          .strict(),
+        z
+          .object({ revision: z.string().uuid(), selectionId: z.string().uuid().nullable() })
+          .strict(),
+      ])
       .safeParse(request.body);
     if (!parsed.success || !options.gameAudio)
       return reply.code(400).send({ error: 'audio_mode_invalid' });
@@ -178,24 +188,34 @@ export function registerObsRoutes(
       await options.gameAudio.switchMode(() =>
         options.adapter.switchAudioMode(
           parsed.data.revision,
-          parsed.data.selectionId,
+          'mode' in parsed.data
+            ? parsed.data.mode
+            : parsed.data.selectionId
+              ? 'desktop'
+              : 'independent',
+          parsed.data.selectionId ?? undefined,
           (obs, same, apply) => music.prepareDesktopMix(obs, same, apply),
         ),
       );
       return { ok: true };
     } catch (error) {
       return reply.code(409).send({
-        error: 'audio_mode_unavailable',
+        error:
+          error instanceof Error && error.message === 'audio_desktop_choice_required'
+            ? 'audio_desktop_choice_required'
+            : 'audio_mode_unavailable',
         message:
-          error instanceof Error && error.message === 'audio_monitor_device_unknown'
-            ? '请在 OBS 中将桌面音频与监听设备都设为默认设备，或都选为同一个具体设备，再重试。'
-            : error instanceof Error && error.message === 'audio_microphone_monitor'
-              ? '麦克风监听会回到桌面混音；请在 OBS 关闭麦克风监听后重试。'
-              : error instanceof Error && error.message === 'audio_video_binding'
-                ? '游戏或解说音频绑定在画面来源上；请先改为独立音频来源，避免关闭画面。'
-                : error instanceof Error && error.message === 'audio_global_path_unresolved'
-                  ? '请在 OBS 设置 → 音频关闭全局音频来源，再切换。'
-                  : '切换未确认，请检查 OBS 音频、停止输出并重新读取来源。',
+          error instanceof Error && error.message === 'audio_desktop_choice_required'
+            ? '检测到多个桌面播放设备，请选择要采集的设备。'
+            : error instanceof Error && error.message === 'audio_monitor_device_unknown'
+              ? '请在 OBS 中将桌面音频与监听设备都设为默认设备，或都选为同一个具体设备，再重试。'
+              : error instanceof Error && error.message === 'audio_microphone_monitor'
+                ? '麦克风监听会回到桌面混音；请在 OBS 关闭麦克风监听后重试。'
+                : error instanceof Error && error.message === 'audio_video_binding'
+                  ? '游戏或解说音频绑定在画面来源上；请先改为独立音频来源，避免关闭画面。'
+                  : error instanceof Error && error.message === 'audio_global_path_unresolved'
+                    ? '请在 OBS 设置 → 音频关闭全局音频来源，再切换。'
+                    : '切换未确认，请检查 OBS 音频、停止输出并重新读取来源。',
       });
     }
   });
