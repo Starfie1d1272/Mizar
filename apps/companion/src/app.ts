@@ -78,7 +78,10 @@ import { OutputService, type OutputServiceOptions } from './output/service.js';
 import { outboxLocalError, ReliableOutbox } from './output/reliable-outbox.js';
 import type { OnlineManifestConfig } from './match-context/http-source.js';
 import { registerOnlineManifestRoutes } from './match-context/online-routes.js';
-import { registerRivalHubConnectionRoutes } from './match-context/rivalhub-routes.js';
+import {
+  registerHistoricalStatsPresentationRoute,
+  registerRivalHubConnectionRoutes,
+} from './match-context/rivalhub-routes.js';
 import type { RivalHubConnection } from './match-context/rivalhub-connection.js';
 import {
   RivalsRehearsal,
@@ -1250,6 +1253,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         ? localTournamentStore?.scheduleWindow(document.competition?.competitionId)
         : options.rivalhubConnection?.getSchedule();
     return reply.header('cache-control', 'no-store').send(presentation.get(document, schedule));
+  });
+  registerHistoricalStatsPresentationRoute(app, {
+    connection: options.rivalhubConnection,
+    getBinding: () => matchContextController?.getActiveBinding() ?? options.matchContextBinding,
   });
   app.get('/local/v1/broadcast-stats', async (_request, reply) => {
     const binding = matchContextController?.getActiveBinding() ?? options.matchContextBinding;
