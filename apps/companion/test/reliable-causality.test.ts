@@ -783,3 +783,62 @@ test('scope disposition reports durable event receipts, not a local flush as an 
   assert.equal(disposition.needsAttention, 1);
   assert.equal(disposition.pending, 0);
 });
+
+test('source settlement waits for the reliable owner to dispose pending events', async (t) => {
+  const { outbox, event } = await setup(t);
+  const { OutputService } = await import('../src/output/service.js');
+  const pending = event('map_started', 'release-pending');
+  await outbox.enqueue(pending, now);
+  const service = new OutputService({ outbox, now: () => now });
+  t.after(() => service.close());
+  const scope = {
+    matchId: pending.matchId,
+    producerInstanceId: pending.cursor.producerInstanceId,
+    liveSessionId: pending.cursor.liveSessionId!,
+  };
+  assert.equal(await service.settleSourceForRelease(scope), false);
+  await outbox.flush({ now, isCurrent: () => true, sink: { send: async () => 'accepted' } });
+  assert.equal(await service.settleSourceForRelease(scope), true);
+});
+
+test('source settlement waits for a reliable request already in flight', async (t) => {
+  const { outbox, event } = await setup(t);
+  const { OutputService } = await import('../src/output/service.js');
+  const pending = event('map_started', 'release-inflight');
+  await outbox.enqueue(pending, now);
+  let acknowledge!: () => void;
+  let started!: () => void;
+  const begun = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const sending = outbox.flush({
+    now,
+    isCurrent: () => true,
+    sink: {
+      send: () =>
+        new Promise<'accepted'>((resolve) => {
+          acknowledge = () => resolve('accepted');
+          started();
+        }),
+    },
+  });
+  await begun;
+  const service = new OutputService({ outbox, now: () => now });
+  t.after(() => service.close());
+  let settled = false;
+  const settling = service
+    .settleSourceForRelease({
+      matchId: pending.matchId,
+      producerInstanceId: pending.cursor.producerInstanceId,
+      liveSessionId: pending.cursor.liveSessionId!,
+    })
+    .then((result) => {
+      settled = true;
+      return result;
+    });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  acknowledge();
+  await sending;
+  assert.equal(await settling, true);
+});

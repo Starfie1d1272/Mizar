@@ -28,6 +28,7 @@ const stages = [
   'business_runtime',
   'business_delivery',
   'business_claim',
+  'business_source_cleanup',
   'business_live',
   'business_reliable',
   'business_guard',
