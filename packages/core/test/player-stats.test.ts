@@ -260,7 +260,7 @@ it('settles missing final evidence only with the same terminal score and roster 
         p.sourcePlayerId === PLAYER_A
           ? {
               ...p,
-              state: { roundTotalDamage: p.state!.roundTotalDamage!, money: p.state!.money! },
+              state: { health: p.state!.health!, money: p.state!.money! },
             }
           : p,
       ),
@@ -269,6 +269,18 @@ it('settles missing final evidence only with the same terminal score and roster 
   state = accept(state, incomplete).state;
   expect(getPlayerCompletedAdr(state.playerStats, PLAYER_A)).toBeNull();
   const final = withScore(frame(4, 4, 'over', 24, 80));
+  const wrongScore = {
+    ...final,
+    telemetry: {
+      ...final.telemetry,
+      map: {
+        ...final.telemetry.map!,
+        phase: 'gameover' as const,
+        sides: { ct: { score: 13 }, t: { score: 10 } },
+      },
+    },
+  };
+  expect(getPlayerCompletedAdr(accept(state, wrongScore).state.playerStats, PLAYER_A)).toBeNull();
   state = accept(state, {
     ...final,
     telemetry: { ...final.telemetry, map: { ...final.telemetry.map!, phase: 'gameover' } },
@@ -285,18 +297,16 @@ it('excludes an incomplete round without losing later valid ADR samples', async 
     phase: 'freezetime' | 'live' | 'over',
     round: number,
     damage: number,
-    missingHealth = false,
+    missingDamage = false,
   ) => {
     const obs = frame(sequence, sequence, phase, round, damage);
-    const observation: TelemetryObservation = missingHealth
+    const observation: TelemetryObservation = missingDamage
       ? {
           ...obs,
           telemetry: {
             ...obs.telemetry,
             allPlayers: obs.telemetry.allPlayers!.map((p) =>
-              p.sourcePlayerId === PLAYER_B
-                ? { ...p, state: { roundTotalDamage: p.state!.roundTotalDamage! } }
-                : p,
+              p.sourcePlayerId === PLAYER_B ? { ...p, state: { health: p.state!.health! } } : p,
             ),
           },
         }
@@ -356,5 +366,113 @@ it('does not treat a missing current damage field as the earlier freezetime zero
   expect(stats.includingCurrentRound.adr).toMatchObject({
     value: 80,
     basis: { rounds: 1, coverage: 'partial' },
+  });
+});
+
+it('uses complete damage for ADR independently of missing survival evidence', async () => {
+  const { projectPlayerStatistics } = await import('../src/runtime/index.js');
+  let state = createInitialRuntimeState('adr-without-health');
+  state = accept(state, frame(1, 1, 'freezetime', 0, 0)).state;
+  state = accept(state, frame(2, 2, 'live', 0, 80)).state;
+  const end = frame(3, 3, 'over', 0, 80);
+  const missingHealth: TelemetryObservation = {
+    ...end,
+    telemetry: {
+      ...end.telemetry,
+      allPlayers: end.telemetry.allPlayers!.map((p) =>
+        p.sourcePlayerId === PLAYER_B
+          ? { ...p, state: { roundTotalDamage: p.state!.roundTotalDamage! } }
+          : p,
+      ),
+    },
+  };
+  state = accept(state, missingHealth).state;
+  const stats = projectPlayerStatistics(state.playerStats, PLAYER_A, undefined, null);
+  expect(stats.completed.adr).toMatchObject({
+    value: 80,
+    basis: { rounds: 1, coverage: 'complete' },
+  });
+  expect(stats.completed.kastPercent.value).toBeNull();
+  expect(stats.completed.rating2Approx.value).toBeNull();
+});
+
+it('keeps ten-player ADR samples after one player lacks terminal damage in the middle round', async () => {
+  const { projectPlayerStatistics } = await import('../src/runtime/index.js');
+  let state = createInitialRuntimeState('ten-player-adr');
+  const push = (
+    seq: number,
+    round: number,
+    phase: 'freezetime' | 'live' | 'over',
+    missing = false,
+  ) => {
+    const obs = frame(seq, seq, phase, round);
+    const players: ObservedPlayer[] = Array.from({ length: 10 }, (_, index) => ({
+      sourcePlayerId: (76561198000000001n + BigInt(index)).toString(),
+      side: index < 5 ? 'CT' : 'T',
+      state:
+        missing && index === 9
+          ? { health: 100 }
+          : { health: 100, roundTotalDamage: phase === 'freezetime' ? 0 : 80 },
+    }));
+    state = accept(state, { ...obs, telemetry: { ...obs.telemetry, allPlayers: players } }).state;
+  };
+  const adr = () =>
+    projectPlayerStatistics(state.playerStats, PLAYER_A, undefined, null).completed.adr;
+  push(1, 0, 'freezetime');
+  push(2, 0, 'live');
+  push(3, 0, 'over');
+  expect(adr()).toMatchObject({ value: 80, basis: { rounds: 1, coverage: 'complete' } });
+  push(4, 1, 'freezetime');
+  push(5, 1, 'live');
+  push(6, 1, 'over', true);
+  expect(adr()).toMatchObject({ value: 80, basis: { rounds: 1, coverage: 'partial' } });
+  push(7, 2, 'freezetime');
+  push(8, 2, 'live');
+  push(9, 2, 'over');
+  expect(adr()).toMatchObject({ value: 80, basis: { rounds: 2, coverage: 'partial' } });
+});
+
+it('settles terminal damage without inventing missing health', async () => {
+  const { projectPlayerStatistics } = await import('../src/runtime/index.js');
+  const withScore = (obs: TelemetryObservation): TelemetryObservation => ({
+    ...obs,
+    telemetry: {
+      ...obs.telemetry,
+      map: { ...obs.telemetry.map!, sides: { ct: { score: 13 }, t: { score: 11 } } },
+    },
+  });
+  let state = createInitialRuntimeState('terminal-adr-only');
+  state = accept(state, withScore(frame(1, 1, 'freezetime', 23, 0))).state;
+  state = accept(state, withScore(frame(2, 2, 'live', 23, 80))).state;
+  const over = withScore(frame(3, 3, 'over', 24, 80));
+  state = accept(state, {
+    ...over,
+    telemetry: {
+      ...over.telemetry,
+      allPlayers: over.telemetry.allPlayers!.map((p) =>
+        p.sourcePlayerId === PLAYER_A ? { ...p, state: { health: 100 } } : p,
+      ),
+    },
+  }).state;
+  expect(getPlayerCompletedAdr(state.playerStats, PLAYER_A)).toBeNull();
+  const final = withScore(frame(4, 4, 'over', 24, 80));
+  state = accept(state, {
+    ...final,
+    telemetry: {
+      ...final.telemetry,
+      map: { ...final.telemetry.map!, phase: 'gameover' },
+      allPlayers: final.telemetry.allPlayers!.map((p) =>
+        p.sourcePlayerId === PLAYER_B
+          ? { ...p, state: { roundTotalDamage: p.state!.roundTotalDamage! } }
+          : p,
+      ),
+    },
+  }).state;
+  const stats = projectPlayerStatistics(state.playerStats, PLAYER_A, undefined, null);
+  expect(stats.completed.adr.value).toBe(80);
+  expect(stats.completed.kastPercent.value).toBeNull();
+  expect(state.playerStats.completedRounds[0]).toMatchObject({
+    damageComplete: true,
+    complete: false,
   });
 });
