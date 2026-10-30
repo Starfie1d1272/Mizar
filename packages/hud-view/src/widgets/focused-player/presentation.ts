@@ -73,8 +73,8 @@ export function buildFocusedPlayerPresentation(payload: ProgramPayload) {
   const team =
     player.side === 'CT' ? payload.teams.ct : player.side === 'T' ? payload.teams.t : null;
   const hasC4 = !dead && player.equipment.hasC4 === true;
-  const weapons = player.equipment.available ? player.weapons.map(weaponPresentation) : [];
-  const active = heldWeapon(player, payload.status.telemetry === 'fresh');
+  const weapons = player.weapons.map(weaponPresentation);
+  const active = heldWeapon(player);
   const resolved = active === null ? null : weaponPresentation(active);
   const activeItem =
     dead || resolved?.item == null || (resolved.item.kind === 'objective' && !hasC4)
@@ -121,7 +121,9 @@ export function buildFocusedPlayerPresentation(payload: ProgramPayload) {
           )
         : null,
     utility: dead ? [] : utilityPresentation(player, player.side === 'T' ? 'T' : 'CT', weapons),
-    zeus: dead ? null : (weapons.find((w) => w.item?.canonicalKey === 'utility.taser') ?? null),
+    zeus: dead
+      ? null
+      : (weapons.find((w) => w.sourceWeaponId === player.equipment.zeusWeaponId) ?? null),
     kit:
       !dead && player.state.hasDefuser === true
         ? assetForCanonicalKey('equipment.defuse-kit')

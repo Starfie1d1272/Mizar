@@ -53,11 +53,13 @@ function fixture(): ProgramPayload {
           primary: 'rifle',
           secondary: 'pistol',
           heldWeaponId: 'rifle',
+          zeusWeaponId: 'zeus',
           utility: { smoke: 0, fire: 0, flash: 2, he: 0 },
           hasC4: true,
         },
         weaponsAvailable: true,
         weapons: [
+          { sourceWeaponId: 'zeus', name: 'weapon_taser', state: 'holstered', ammoReserve: null },
           {
             sourceWeaponId: 'rifle',
             name: 'weapon_ak47',
@@ -99,6 +101,7 @@ describe('Program facts in HUD presentation', () => {
     expect(rails.ct.players[0]).toMatchObject({
       stats: { kills: 7, assists: 2, deaths: 3 },
       hasC4: true,
+      zeus: { sourceWeaponId: 'zeus' },
       primaryWeapon: { sourceWeaponId: 'rifle', active: true },
       secondaryWeapon: { sourceWeaponId: 'pistol' },
       utility: [{ family: 'flash', count: 2 }],
@@ -106,8 +109,18 @@ describe('Program facts in HUD presentation', () => {
     expect(buildFocusedPlayerPresentation(payload)).toMatchObject({
       stats: { kills: 7 },
       c4: { canonicalKey: 'objective.c4' },
+      zeus: { sourceWeaponId: 'zeus' },
       activeItem: { sourceWeaponId: 'rifle' },
     });
+  });
+
+  it('uses known selected equipment even if the rest of the catalog is incomplete', () => {
+    const payload = fixture();
+    payload.players[0]!.equipment.available = false;
+    expect(buildFocusedPlayerPresentation(payload)?.zeus?.sourceWeaponId).toBe('zeus');
+    payload.players[0]!.equipment.zeusWeaponId = null;
+    expect(buildPlayerRailsPresentation(payload).ct.players[0]?.zeus).toBeNull();
+    expect(buildFocusedPlayerPresentation(payload)?.zeus).toBeNull();
   });
 
   it('uses projected alive counts and hides unknown counts', () => {
