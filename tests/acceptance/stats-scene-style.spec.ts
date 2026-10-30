@@ -3,7 +3,7 @@ import {
   DEFAULT_PLACEMENTS,
   getBuiltinResolvedPreset,
 } from '../../packages/hud-config/src/index.js';
-import stats from '../fixtures/mizar-broadcast-stats-presentation-v1.json' with { type: 'json' };
+import stats from '../../apps/web/test/fixtures/stats-program.json' with { type: 'json' };
 
 const visual = { kind: 'builtin', id: 'pulse', apiVersion: 1 };
 const sceneNames = [
@@ -87,7 +87,7 @@ test('statistics follow scene appearance through rotation, standalone and failed
             },
       );
     if (path === '/local/v1/broadcast-display-config') return route.fulfill({ json: display() });
-    if (path === '/local/v1/broadcast-stats-presentation') return route.fulfill({ json: stats });
+    if (path === '/local/v1/broadcast-stats-program') return route.fulfill({ json: stats });
     if (path === '/local/v1/program-presentation') return route.fulfill({ json: presentation });
     if (path === '/local/v1/program-scenes')
       return route.fulfill({
@@ -197,11 +197,11 @@ test('statistics follow scene appearance through rotation, standalone and failed
   expect(await readPalette()).toEqual({ canvas: color, ...palette });
   await page.screenshot({ path: testInfo.outputPath('standalone.png') });
   await page.goto('/program/stats?card=PLAYER%20ATTRIBUTES');
-  await expect(canvas.locator('.stats-insert__radar')).toBeVisible();
-  const sides = canvas.locator('.stats-insert__radar polygon[stroke-width="3"]');
-  await expect(sides.nth(0)).toHaveAttribute('stroke', 'var(--mizar-broadcast-pulse-blue)');
-  await expect(sides.nth(1)).toHaveAttribute('stroke', 'var(--mizar-broadcast-pulse-gold)');
-  await expect(sides.nth(1)).toHaveAttribute('stroke-dasharray', '10 6');
+  await expect(canvas.locator('.stats-radar')).toBeVisible();
+  const sides = canvas.locator('.stats-radar polygon[stroke-width="3"]');
+  await expect(sides.nth(0)).toHaveAttribute('stroke', /var\(--mizar-broadcast-pulse-blue\)/);
+  await expect(sides.nth(1)).toHaveAttribute('stroke', '#c6d7e9');
+  await expect(sides.nth(1)).not.toHaveAttribute('stroke-dasharray');
   await page.screenshot({ path: testInfo.outputPath('radar.png') });
   const oldBackground = await canvas.evaluate((node) => getComputedStyle(node).backgroundImage);
   color = '#008800';

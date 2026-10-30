@@ -133,6 +133,11 @@ const metricSample = (key: string, value: Metric) => {
   };
   if (key === 'rating' && value.denominator != null) return `${number(value.denominator)} 样本`;
   if (key === 'awp-kills' && value.denominator != null) return `${number(value.denominator)} 回合`;
+  if (['enemy-blind-per-flash', 'enemy-blind-per-round', 'team-blind-per-round'].includes(key)) {
+    if (key === 'enemy-blind-per-flash')
+      return value.denominator == null ? '' : `${number(value.denominator)} 颗`;
+    return value.numerator == null ? '' : `${number(value.numerator, 2)} 秒`;
+  }
   const unit = units[key];
   return unit && value.numerator != null ? `${number(value.numerator)} ${unit}` : fraction(value);
 };
@@ -208,6 +213,31 @@ export function statsProgramInserts(
         ? '半场数据'
         : `${topicPrefix}${defaultTitle}`;
     const chosen = byPage(page);
+    const teamScoped = [
+      'lineup',
+      'maps',
+      'map-profile',
+      'veto',
+      'recent',
+      'overview',
+      'economy',
+      'opening',
+      'advantage',
+      'utility',
+      'flash',
+      'weapons',
+      'awp',
+      'conversion',
+    ].includes(page.kind);
+    const singleSide = visible.length === 1 && teamScoped ? visible[0] : undefined;
+    const singleRounds = singleSide == null ? null : bundle.records[singleSide].rounds;
+    const singleRail: StatsInsert['rail'] =
+      singleSide == null
+        ? undefined
+        : [
+            names[singleSide],
+            singleRounds != null && singleRounds > 0 ? `${singleRounds} 回合` : '',
+          ];
     const base: StatsInsert & { id: string } = {
       id: page.id,
       title,
@@ -220,6 +250,7 @@ export function statsProgramInserts(
       matchTeams: names,
       matchLogos: logos,
       visibleSides: visible,
+      ...(singleRail ? { rail: singleRail } : {}),
       rows: [],
       phaseFormat: [phaseNames[bundle.phase][1], bundle.program?.match?.format.toUpperCase()]
         .filter(Boolean)
@@ -315,6 +346,8 @@ export function statsProgramInserts(
         break;
       case 'maps-info':
         content = { kind: 'maps-info', maps: page.maps.map((m) => mapPhoto(m.name)) };
+        rail = ['', ''];
+        railCenter = `${page.maps.length} MAPS`;
         break;
       case 'maps':
         return {
@@ -340,7 +373,7 @@ export function statsProgramInserts(
           rail:
             visible.length === 2
               ? [`上排 · ${names[visible[0]!]}`, `下排 · ${names[visible[1]!]}`]
-              : [names[visible[0] ?? 0], ''],
+              : (singleRail ?? [names[visible[0] ?? 0], '']),
         };
       case 'lineup':
         content = {
@@ -401,6 +434,7 @@ export function statsProgramInserts(
         };
         break;
       case 'bp':
+        rail = ['', ''];
         content = {
           kind: 'bp',
           steps: page.vetoSteps.map((step) => {
