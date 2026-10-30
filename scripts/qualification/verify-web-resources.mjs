@@ -42,16 +42,21 @@ export async function verifyWebResources(root, requestedMode) {
   if (hasMarker && (!marker || marker.schemaVersion !== 1 || marker.resourceMode !== mode)) {
     throw new Error('Web resource mode does not match the requested bundle');
   }
-  await verifyCoreFiles(
-    fileURLToPath(new URL('../../apps/lhm-export/dist/', import.meta.url)),
-    resolve(root, 'lhm-runtime'),
-  );
-  for (const name of ['LICENSE', 'THIRD-PARTY-NOTICES.md']) {
-    const [source, packaged] = await Promise.all([
-      readFile(fileURLToPath(new URL(`../../${name}`, import.meta.url))),
-      readFile(resolve(root, 'lhm-runtime', name)),
-    ]);
-    if (!source.equals(packaged)) throw new Error(`LHM runtime notice differs: ${name}`);
+  // Qualification may inspect a downloaded candidate on a machine without build output.
+  const lhmRoot = resolve(root, 'lhm-runtime');
+  const index = await readFile(resolve(lhmRoot, 'index.html'), 'utf8');
+  const references = [
+    ...index.matchAll(/(?:src|href)="(\.\/assets\/[A-Za-z0-9_.-]+\.(?:js|css))"/g),
+  ].map((match) => match[1]);
+  if (
+    !references.some((name) => name.endsWith('.js')) ||
+    !references.some((name) => name.endsWith('.css'))
+  )
+    throw new Error('LHM runtime entry assets are missing');
+  for (const name of ['index.html', 'LICENSE', 'THIRD-PARTY-NOTICES.md', ...references]) {
+    const entry = await lstat(resolve(lhmRoot, name));
+    if (!entry.isFile() || entry.isSymbolicLink())
+      throw new Error(`Invalid LHM runtime file: ${name}`);
   }
   if (mode !== 'full') {
     for (const entry of await readdir(root, { withFileTypes: true })) {
