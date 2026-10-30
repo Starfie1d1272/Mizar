@@ -372,6 +372,13 @@ export function ObsSettings() {
                                     : 'Mizar 配置检查通过，请核对实际音画。'}
                     </StatusBanner>
                   )}
+                  {obs.findings
+                    .filter((finding) => finding.code === 'audio_teamspeak_compatibility')
+                    .map((finding) => (
+                      <StatusBanner key={finding.code} tone="warning">
+                        {finding.message} 声音设置中可切换音频模式。
+                      </StatusBanner>
+                    ))}
                   {sceneRepairNeeded && !sceneRepairBlocked && !preparing ? (
                     <Button
                       variant="primary"

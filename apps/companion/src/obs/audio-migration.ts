@@ -53,7 +53,11 @@ const monitorField = monitorRef
 export type AudioMonitorChange = z.infer<typeof monitorRef>;
 type Value = boolean | z.infer<typeof monitorMode>;
 function active(value: Value): boolean {
-  return value === true || value === 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT';
+  return (
+    value === true ||
+    value === 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT' ||
+    value === 'OBS_MONITORING_TYPE_MONITOR_ONLY'
+  );
 }
 const planSchema = z
   .object({
@@ -230,6 +234,8 @@ export class AudioMigration {
     modeId: string,
     extraIndependent: AudioMigrationPlan['independent'] = [],
     managedMusicUuids: readonly string[] = [],
+    extraDesktop: AudioMigrationPlan['desktop'] = [],
+    allowedRestoredSources?: readonly string[],
   ): Promise<boolean> {
     const completed = await this.readJournal(completedPath);
     if (!completed) return false;
@@ -241,6 +247,19 @@ export class AudioMigration {
       fields.some((entry) => entry.externalChanged || entry.phase !== 'confirmed')
     )
       throw new Error('audio_migration_external_change');
+    if (
+      allowedRestoredSources &&
+      fields.some(
+        (entry) =>
+          ('sceneName' in entry &&
+            entry.before &&
+            !allowedRestoredSources.includes(entry.sourceUuid)) ||
+          ('inputKind' in entry &&
+            entry.before &&
+            !allowedRestoredSources.includes(entry.inputUuid)),
+      )
+    )
+      throw new Error('audio_mode_target_changed');
     await this.context(
       obs,
       {
@@ -270,7 +289,16 @@ export class AudioMigration {
     if (alreadyRestored && fields.length) throw new Error('audio_migration_external_change');
     if (!alreadyRestored && fields.some((entry, index) => values[index] !== entry.applied))
       throw new Error('audio_migration_external_change');
-    const desktop: AudioMigrationPlan['desktop'] = [];
+    const desktop: AudioMigrationPlan['desktop'] = extraDesktop.filter(
+      (extra) =>
+        !completed.fields.some(
+          (entry) =>
+            'sceneName' in entry &&
+            entry.sceneName === extra.sceneName &&
+            entry.sceneItemId === extra.sceneItemId &&
+            Boolean(entry.group) === Boolean(extra.group),
+        ),
+    );
     const captureAudio: NonNullable<AudioMigrationPlan['captureAudio']> = [];
     const monitor: NonNullable<AudioMigrationPlan['monitor']> = extraMonitor.filter(
       (extra) => !fields.some((entry) => 'kind' in entry && entry.inputUuid === extra.inputUuid),
@@ -281,7 +309,8 @@ export class AudioMigration {
           (entry) =>
             'sceneName' in entry &&
             entry.sceneName === extra.sceneName &&
-            entry.sceneItemId === extra.sceneItemId,
+            entry.sceneItemId === extra.sceneItemId &&
+            Boolean(entry.group) === Boolean(extra.group),
         ),
     );
     for (const entry of alreadyRestored ? [] : fields) {

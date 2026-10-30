@@ -35,6 +35,11 @@ export function isTeamspeak(window: unknown): boolean {
     exe !== null && ['ts3client_win64.exe', 'ts3client_win32.exe', 'teamspeak.exe'].includes(exe)
   );
 }
+// OBS exposes an executable, not a trustworthy TeamSpeak version. The modern
+// executable is treated conservatively until a verified fix can be identified.
+export function isModernTeamspeak(window: unknown): boolean {
+  return executable(window) === 'teamspeak.exe';
+}
 function records(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value)
     ? value.filter((x): x is Record<string, unknown> => typeof x === 'object' && x !== null)
