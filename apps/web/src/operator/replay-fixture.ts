@@ -1,5 +1,6 @@
 import { programSnapshotSchema, type ProgramSnapshot } from '@mizar/protocol/program';
 import { radarSnapshotSchema, type RadarSnapshot } from '@mizar/protocol/radar';
+import { PROGRAM_SCHEMA_VERSION } from '@mizar/protocol/version';
 import type { ReplayVideoSource } from './ReplayVideoBackground';
 import {
   createReplaySession,
@@ -150,6 +151,69 @@ function cursorKey(snapshot: ProgramSnapshot | RadarSnapshot): string {
   ].join(':');
 }
 
+// These v8 projections are preserved evidence; they lack the v9 derived facts.
+function legacyProgramV8(value: unknown): unknown {
+  const snapshot = value as { schemaVersion?: unknown; payload?: { players?: unknown } };
+  if (snapshot?.schemaVersion !== 8 || !Array.isArray(snapshot.payload?.players)) return value;
+  const metric = (source: string, window: string, definition: string) => ({
+    value: null,
+    basis: { source, window, definition, rounds: null, coverage: 'unavailable' },
+    reason: 'missing-input',
+  });
+  const scoreboard = (definition: string) => metric('gsi', 'map-scoreboard', definition);
+  const completed = (definition: string, source = 'gsi-and-program-events') =>
+    metric(source, 'completed-observed-rounds', definition);
+  const statistics = {
+    scoreboard: {
+      kills: scoreboard('scoreboard-count.v1'),
+      assists: scoreboard('scoreboard-count.v1'),
+      deaths: scoreboard('scoreboard-count.v1'),
+      kdRatio: scoreboard('kd-ratio.v1'),
+    },
+    completed: {
+      adr: completed('adr.v1', 'gsi'),
+      kastPercent: completed('kast-percent.v1'),
+      impactApprox: completed('impact-approx.v1'),
+      rating2Approx: completed('rating2-approx.v1'),
+    },
+    includingCurrentRound: { adr: metric('gsi', 'completed-plus-current', 'adr.v1') },
+    currentRound: {
+      damage: metric('gsi', 'current-round', 'round-damage.v1'),
+      moneySpent: metric('gsi', 'current-round', 'round-money-spent.v1'),
+    },
+  };
+  const equipment = {
+    available: false,
+    primary: null,
+    secondary: null,
+    heldWeaponId: null,
+    zeusWeaponId: null,
+    utility: null,
+    hasC4: null,
+  };
+  const economy = {
+    lineupComplete: false,
+    alive: null,
+    money: null,
+    equipmentValue: null,
+    lossBonus: null,
+    utility: null,
+  };
+  return {
+    ...snapshot,
+    schemaVersion: PROGRAM_SCHEMA_VERSION,
+    payload: {
+      ...snapshot.payload,
+      teamEconomy: { ct: economy, t: economy },
+      players: snapshot.payload.players.map((player: object) => ({
+        ...player,
+        statistics,
+        equipment,
+      })),
+    },
+  };
+}
+
 export interface LoadedReplayFixture {
   readonly video?: ReplayVideoSource;
   readonly id: ReplaySourceId;
@@ -267,7 +331,12 @@ export async function loadReplayFixture(id: ReplaySourceId): Promise<LoadedRepla
     `${id}/timeline`,
   ).map((frame) => ({
     ...frame,
-    program: programSnapshotSchema.parse(frame.program),
+    program: programSnapshotSchema.parse(
+      (id === 'epl-inferno-video' && recordedProjections) ||
+        (id === 'nuke-demo-round-01' && demoDerived)
+        ? legacyProgramV8(frame.program)
+        : frame.program,
+    ),
     radar: radarSnapshotSchema.parse(frame.radar),
   }));
   const events = parseJsonLines<ReplaySessionEvent>(
