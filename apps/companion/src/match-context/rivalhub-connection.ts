@@ -1551,7 +1551,8 @@ export class RivalHubConnection {
       producerInstanceId: snapshot.cursor.producerInstanceId,
       liveSessionId: snapshot.cursor.liveSessionId,
     };
-    const matchingRecords = (await this.sourceState.snapshot()).records.filter(
+    const durableState = await this.sourceState.snapshot();
+    const matchingRecords = durableState.records.filter(
       (record) =>
         record.identity.baseUrl === scope.baseUrl &&
         record.identity.installationId === scope.installationId &&
@@ -1563,6 +1564,16 @@ export class RivalHubConnection {
     if (matchingRecords.some((record) => record.state !== 'owned'))
       throw new Error('原数据源尚待释放或核对，请处理后重新认领。');
     const priorRevisions = matchingRecords.map((record) => record.identity.authorityRevision);
+    for (const item of durableState.watermarks)
+      if (
+        item.baseUrl === scope.baseUrl &&
+        item.installationId === scope.installationId &&
+        item.competitionId === scope.competitionId &&
+        item.matchId === scope.matchId &&
+        item.producerInstanceId === scope.producerInstanceId &&
+        item.liveSessionId === scope.liveSessionId
+      )
+        priorRevisions.push(item.authorityRevision);
     const intent = await this.sourceState.beginClaim(
       scope,
       priorRevisions.length ? Math.max(...priorRevisions) : null,

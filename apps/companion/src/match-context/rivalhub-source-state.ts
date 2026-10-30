@@ -72,6 +72,7 @@ const envelopeSchema = z
     version: z.literal(1),
     records: z.array(recordSchema).max(MAX_RECORDS),
     intent: intentSchema.nullable(),
+    watermarks: z.array(exactSchema).max(MAX_RECORDS).default([]),
   })
   .strict()
   .superRefine((state, ctx) => {
@@ -137,7 +138,7 @@ export class RivalHubSourceState {
         }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-        this.state = { version: 1, records: [], intent: null };
+        this.state = { version: 1, records: [], intent: null, watermarks: [] };
         return structuredClone(this.state);
       }
       this.state = envelopeSchema.parse(JSON.parse(bytes.toString('utf8')) as unknown);
@@ -178,6 +179,26 @@ export class RivalHubSourceState {
     return this.change((state) => {
       if (state.intent) throw new Error('source claim requires reconciliation');
       const validScope = scopeSchema.parse(scope);
+      // Producer identities are newly generated per process. Old producer watermarks
+      // cannot describe a new claim, while unresolved records remain untouched.
+      state.watermarks = state.watermarks.filter(
+        (item) => item.producerInstanceId === validScope.producerInstanceId,
+      );
+      const scopes = [...state.watermarks, ...state.records.map((record) => record.identity)];
+      const scopeKeys = new Set(
+        scopes.map((item) =>
+          JSON.stringify([
+            item.baseUrl,
+            item.competitionId,
+            item.installationId,
+            item.matchId,
+            item.producerInstanceId,
+            item.liveSessionId,
+          ]),
+        ),
+      );
+      if (scopeKeys.size >= MAX_RECORDS && !scopes.some((item) => sameScope(item, validScope)))
+        throw new Error('source state capacity exceeded');
       const owned = state.records.find((record) => record.state === 'owned');
       if (owned && !sameScope(owned.identity, validScope)) {
         owned.state = 'release_pending';
@@ -185,10 +206,14 @@ export class RivalHubSourceState {
       }
       // Reserve a slot before contacting the server; unresolved identities are never evicted.
       if (state.records.length >= MAX_RECORDS) throw new Error('source state capacity exceeded');
+      const known = scopes
+        .filter((item) => sameScope(item, validScope))
+        .map((item) => item.authorityRevision);
+      if (previousAuthorityRevision !== null) known.push(previousAuthorityRevision);
       const intent = intentSchema.parse({
         id: randomUUID(),
         scope: validScope,
-        previousAuthorityRevision,
+        previousAuthorityRevision: known.length ? Math.max(...known) : null,
       });
       state.intent = intent;
       return intent;
@@ -288,6 +313,17 @@ export class RivalHubSourceState {
       );
       if (index < 0 || state.records[index]?.state === 'owned')
         throw new Error('source is not pending');
+      const watermark = state.watermarks.find((item) => sameScope(item, identity));
+      if (watermark)
+        watermark.authorityRevision = Math.max(
+          watermark.authorityRevision,
+          identity.authorityRevision,
+        );
+      else {
+        if (state.watermarks.length >= MAX_RECORDS)
+          throw new Error('source state capacity exceeded');
+        state.watermarks.push(identity);
+      }
       state.records.splice(index, 1);
     });
   }
@@ -302,6 +338,7 @@ export class RivalHubSourceState {
         value.competitionId === scope.competitionId &&
         value.installationId === scope.installationId;
       state.records = state.records.filter((record) => !matches(record.identity));
+      state.watermarks = state.watermarks.filter((item) => !matches(item));
       if (state.intent && matches(state.intent.scope)) state.intent = null;
     });
   }

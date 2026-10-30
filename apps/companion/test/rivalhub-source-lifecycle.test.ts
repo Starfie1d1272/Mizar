@@ -46,6 +46,7 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
   let reliableStatus = 204;
   let loseClaim = false;
   let ambiguous = false;
+  let staleStatus = false;
   let liveGate: Promise<void> | null = null;
   let claimGate: Promise<void> | null = null;
   let notifyClaim!: () => void;
@@ -96,7 +97,12 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
         ambiguous
           ? { status: 'ambiguous' }
           : serverClaim
-            ? { status: 'found', source: serverClaim }
+            ? {
+                status: 'found',
+                source: staleStatus
+                  ? { ...serverClaim, authorityRevision: 1, state: 'closed' }
+                  : serverClaim,
+              }
             : { status: 'not_found' },
       );
     if (url.pathname.endsWith('/reliable')) return new Response(null, { status: reliableStatus });
@@ -162,6 +168,9 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
     },
     setAmbiguous: (v: boolean) => {
       ambiguous = v;
+    },
+    setStaleStatus: (v: boolean) => {
+      staleStatus = v;
     },
     setLiveGate: (v: Promise<void>) => {
       liveGate = v;
@@ -295,6 +304,19 @@ test('an ambiguous claim status is retained and does not release', async (t) => 
   await assert.rejects(restarted.release(), /待重试或核对/);
   assert.equal(h.releases.length, 0);
   assert.equal(restarted.view().sourceCleanup.claimIntent, true);
+});
+
+test('a previously released authority cannot resolve a later uncertain claim', async (t) => {
+  const h = await setup(t);
+  await h.connection.claim(h.snapshot, 'revision', false);
+  await h.connection.release();
+  h.setLose(true);
+  await assert.rejects(h.connection.claim(h.snapshot, 'revision', false));
+  h.setStaleStatus(true);
+  const restarted = await h.restart();
+  await assert.rejects(restarted.release(), /待重试或核对/);
+  assert.equal(restarted.view().sourceCleanup.claimIntent, true);
+  assert.equal(h.releases.length, 1);
 });
 
 test('release waits for an already in-flight LIVE request', async (t) => {
