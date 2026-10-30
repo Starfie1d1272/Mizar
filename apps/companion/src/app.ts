@@ -1642,7 +1642,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     !demoTest.get().active;
   registerObserverSettings(app, observerSettings, localWebTransport.getOriginPolicy());
   const observerSettingsUnsubscribe = observerSettings.subscribe((kind) => {
-    if (kind === 'map') {
+    if (kind === 'name') {
+      projectionCoordinator.refresh();
+    } else if (kind === 'map') {
       const program = projectionCoordinator.getCurrent().program;
       const currentMap = program.map.name ? musicMapKey(program) : undefined;
       waitingObserverMap =

@@ -36,15 +36,15 @@ it('persists operator timing and keeps per-match connection credentials in memor
     await writeFile(
       path,
       JSON.stringify({
-        ...store.settings,
         enabled: false,
+        leadSeconds: 7,
         expectedDelaySeconds: 120,
         displaySeconds: 10,
       }),
     );
     const restart = new ObserverSettingsStore(path);
     await restart.load();
-    expect(restart.settings).toEqual({ enabled: false, leadSeconds: 7 });
+    expect(restart.settings).toEqual({ enabled: false, nicknameSource: 'website', leadSeconds: 7 });
     expect(restart.settings).not.toHaveProperty('expectedDelaySeconds');
     expect(restart.settings).not.toHaveProperty('displaySeconds');
     expect(restart.configured()).toBeUndefined();
@@ -52,6 +52,43 @@ it('persists operator timing and keeps per-match connection credentials in memor
     expect(store.view().connection).toBeNull();
     await store.configure({ ...store.settings, enabled: false });
     expect(store.configured()?.earlyEndpoint).toBeUndefined();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+it('loads and saves main preferences without resetting the other settings', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-observer-compat-'));
+  const path = join(directory, 'observer-assist.json');
+  try {
+    const saved = {
+      settings: { enabled: false, nicknameSource: 'game', leadSeconds: 9 },
+      gameAutomation: { autoConnect: false, hideGameHud: false },
+    };
+    await writeFile(path, JSON.stringify(saved));
+    const store = new ObserverSettingsStore(path);
+    await store.load();
+    expect(store.view()).toMatchObject(saved);
+    await store.configure({ ...store.settings, nicknameSource: 'website' });
+    const restart = new ObserverSettingsStore(path);
+    await restart.load();
+    expect(restart.view()).toMatchObject({
+      ...saved,
+      settings: { ...saved.settings, nicknameSource: 'website' },
+    });
+    await restart.configure({ ...restart.settings, nicknameSource: 'game' });
+    const gameRestart = new ObserverSettingsStore(path);
+    await gameRestart.load();
+    expect(gameRestart.view()).toMatchObject(saved);
+    await writeFile(
+      path,
+      JSON.stringify({ ...saved, settings: { ...saved.settings, nicknameSource: 'invalid' } }),
+    );
+    await expect(new ObserverSettingsStore(path).load()).rejects.toThrow();
+    await writeFile(
+      path,
+      JSON.stringify({ ...saved, settings: { enabled: false, leadSeconds: 9, unexpected: true } }),
+    );
+    await expect(new ObserverSettingsStore(path).load()).rejects.toThrow();
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
