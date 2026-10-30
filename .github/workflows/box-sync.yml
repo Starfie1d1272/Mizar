@@ -26,17 +26,19 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - name: Download original qualified asset
+      - name: Download official 1.9.1 original
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh run download 41015011840 --repo Starfie1d1272/Mizar --name release-portable-product --dir "$RUNNER_TEMP/qualified-original"
+        run: |
+          gh release download v1.9.1 --repo Starfie1d1272/Mizar --pattern 'Mizar-v1.9.1-Windows-x64-WebInstaller.exe' --pattern machine-metadata.json --dir "$RUNNER_TEMP/original-191"
+          node --input-type=module -e "import { readFileSync, writeFileSync } from 'node:fs'; const m=JSON.parse(readFileSync(process.argv[1])); const p=m.files.filter(f=>f.name==='qualification-provenance.json'); if(p.length!==1) throw Error('Qualification proof missing or ambiguous'); writeFileSync(process.argv[2],Buffer.from(p[0].bytesBase64,'base64'));" "$RUNNER_TEMP/original-191/machine-metadata.json" "$RUNNER_TEMP/original-191/qualification-provenance.json"
       - name: Verify original qualification signature
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh attestation verify "$RUNNER_TEMP/qualified-original/Mizar-v1.9.2-Windows-x64-WebInstaller.exe" --repo Starfie1d1272/Mizar --signer-workflow 'Starfie1d1272/Mizar/.github/workflows/release-qualification.yml@refs/heads/main' --source-ref refs/heads/main --source-digest 3fe8ea49fa34cbcb7d11022735f52f77220c6607 --bundle "$RUNNER_TEMP/qualified-original/qualification-provenance.json"
-      - name: Isolate exact withdrawn public installer
+          gh attestation verify "$RUNNER_TEMP/original-191/Mizar-v1.9.1-Windows-x64-WebInstaller.exe" --repo Starfie1d1272/Mizar --signer-workflow 'Starfie1d1272/Mizar/.github/workflows/release-qualification.yml@refs/heads/main' --source-ref refs/heads/main --source-digest b0da60a45d93294043bbb24e34cdd4b70bcbc9e8 --bundle "$RUNNER_TEMP/original-191/qualification-provenance.json"
+      - name: Restore and verify original 1.9.1 download
         env:
           NODE_OPTIONS: --network-family-autoselection-attempt-timeout=2000
           MIZAR_BOX_REPO_TOKEN: ${{ secrets.MIZAR_BOX_REPO_TOKEN }}
-        run: node scripts/qualification/inspect-192-runtime.mjs "$RUNNER_TEMP/qualified-original/Mizar-v1.9.2-Windows-x64-WebInstaller.exe"
+        run: node scripts/qualification/inspect-192-runtime.mjs "$RUNNER_TEMP/original-191/Mizar-v1.9.1-Windows-x64-WebInstaller.exe"
