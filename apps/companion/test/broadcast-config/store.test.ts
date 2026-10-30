@@ -4,7 +4,10 @@ import { dirname, join as pathJoin } from 'node:path';
 import { MusicStore } from '../../src/music/store.js';
 import { createMusicConfigPersistence } from '../../src/broadcast-config/music-facade.js';
 import { HudConfigStore } from '../../src/hud-config/store.js';
-import { createHudConfigPersistence } from '../../src/broadcast-config/hud-facade.js';
+import {
+  createHudConfigPersistence,
+  hudDocumentFromBroadcast,
+} from '../../src/broadcast-config/hud-facade.js';
 import Fastify from 'fastify';
 import { createLocalWebOriginPolicy } from '../../src/local-web/origin-policy.js';
 import { registerBroadcastConfigRoutes } from '../../src/broadcast-config/routes.js';
@@ -21,9 +24,11 @@ import {
 } from '@mizar/hud-config';
 import {
   clonePreset,
+  parseModuleRecord,
   type BroadcastConfigDocument,
   type ProgramVisualConfigV1,
 } from '@mizar/broadcast-config';
+import { defaultMusicConfig } from '@mizar/protocol/music';
 import { BroadcastConfigStore } from '../../src/broadcast-config/store.js';
 import {
   addMissingBuiltinModules,
@@ -150,6 +155,141 @@ async function setup() {
   return { store, options, initial: store.snapshot };
 }
 describe('BroadcastConfigStore', () => {
+  it('synchronizes imported and batch-edited HUD drafts with the editor without activation', async () => {
+    const { options, initial } = await setup();
+    const hud = new HudConfigStore();
+    await hud.load();
+    let notifications = 0;
+    const store = new BroadcastConfigStore({
+      ...options,
+      filePath: join(dirname(options.filePath), 'hud-sync.json'),
+      onDraftChanged: async (kind) => {
+        expect(kind).toBe('hud');
+        notifications++;
+        await hud.synchronizeFromPersistence(hudDocumentFromBroadcast(store.snapshot));
+      },
+    });
+    await store.load();
+    await hud.adoptPersistence(
+      createHudConfigPersistence(store, async (_hud, active) => active.lock),
+    );
+    const active = store.snapshot.active;
+    const copy = clonePreset(
+      initial,
+      {
+        sourceId: initial.presets[0]!.id,
+        expectedRevision: 'p1',
+        expectedModuleRevisions: { hud: 'h1', program: 'p1' },
+        name: '导入 HUD',
+      },
+      randomUUID,
+    );
+    const module = copy.modules.find((item) => item.kind === 'hud')!;
+    if (module.kind !== 'hud' || !('preset' in module.value)) throw new Error('missing native HUD');
+    const batch = {
+      source: { id: 'local:hud-import', version: '1', digest: 'a'.repeat(64) },
+      modules: [module],
+      presets: [],
+      moduleEntries: { hud: [module.id] },
+      presetEntries: {},
+    };
+    module.origin = { resource: batch.source, entryId: 'hud' };
+    await store.importBatch(batch);
+    expect(hud.getState().document.customPresets).toContainEqual(module.value.preset);
+    expect(store.snapshot.active).toEqual(active);
+    expect(notifications).toBe(1);
+    await store.importBatch(batch);
+    expect(notifications).toBe(2);
+
+    const edited = structuredClone(module);
+    if (edited.kind !== 'hud' || !('preset' in edited.value)) throw new Error('missing native HUD');
+    const presetId = edited.value.preset.id;
+    edited.value.preset.widgets['team-ct-rail'].settings.showLoadout = false;
+    const preset = structuredClone(copy.preset);
+    preset.bindings = preset.bindings.map((binding) =>
+      binding.kind === 'program' ? initial.presets[0]!.bindings[1]! : binding,
+    );
+    await store.save({
+      preset,
+      expectedPresetRevision: null,
+      modules: [{ value: edited, expectedRevision: module.revision }],
+    });
+    expect(
+      hud.getState().document.customPresets.find((item) => item.id === presetId)?.widgets[
+        'team-ct-rail'
+      ].settings.showLoadout,
+    ).toBe(false);
+    expect(store.snapshot.active).toEqual(active);
+    expect(notifications).toBe(3);
+    await store.save({
+      preset: store.snapshot.presets.find((item) => item.id === preset.id)!,
+      expectedPresetRevision: store.snapshot.presets.find((item) => item.id === preset.id)!
+        .revision,
+      modules: [],
+    });
+    expect(notifications).toBe(3);
+    const program = copy.modules.find((item) => item.kind === 'program')!;
+    program.origin = {
+      resource: { id: 'local:program-import', version: '1', digest: 'b'.repeat(64) },
+      entryId: 'program',
+    };
+    await store.importBatch({
+      source: { id: 'local:program-import', version: '1', digest: 'b'.repeat(64) },
+      modules: [program],
+      presets: [],
+      moduleEntries: { program: [program.id] },
+      presetEntries: {},
+    });
+    expect(notifications).toBe(3);
+    const otherSource = { id: 'local:other-import', version: '1', digest: 'c'.repeat(64) };
+    const camera = parseModuleRecord({
+      id: randomUUID(),
+      kind: 'camera',
+      schemaVersion: 2,
+      revision: randomUUID(),
+      name: 'Camera',
+      origin: { resource: otherSource, entryId: 'camera' },
+      value: {
+        format: 'mizar.camera-config',
+        version: 2,
+        name: 'Camera',
+        maps: [],
+        automaticEnabled: false,
+      },
+    });
+    const music = parseModuleRecord({
+      id: randomUUID(),
+      kind: 'music',
+      schemaVersion: 1,
+      revision: randomUUID(),
+      name: 'Music',
+      origin: { resource: otherSource, entryId: 'music' },
+      value: { ...defaultMusicConfig(), automaticEnabled: false },
+    });
+    await store.importBatch({
+      source: otherSource,
+      modules: [camera, music],
+      presets: [],
+      moduleEntries: { camera: [camera.id], music: [music.id] },
+      presetEntries: {},
+    });
+    expect(notifications).toBe(3);
+    const cloned = await store.clone({
+      sourceId: initial.presets[0]!.id,
+      expectedRevision: 'p1',
+      expectedModuleRevisions: { hud: 'h1', program: 'p1' },
+      name: '复制方案',
+    });
+    const clonedPreset = store.snapshot.presets.find((item) => item.id === cloned.presetId)!;
+    const hudBinding = clonedPreset.bindings.find((binding) => binding.kind === 'hud');
+    if (!hudBinding || hudBinding.mode !== 'use') throw new Error('missing HUD binding');
+    const clonedHud = store.snapshot.modules.find((item) => item.id === hudBinding.moduleId);
+    if (!clonedHud || clonedHud.kind !== 'hud' || !('preset' in clonedHud.value))
+      throw new Error('missing native HUD');
+    expect(hud.getState().document.customPresets).toContainEqual(clonedHud.value.preset);
+    expect(notifications).toBe(4);
+    expect(store.snapshot.active).toEqual(active);
+  });
   it('claims unchanged legacy built-ins without changing the active output', () => {
     const document = fixture();
     const builtin = createBuiltinModules().find((item) => item.kind === 'hud')!;
