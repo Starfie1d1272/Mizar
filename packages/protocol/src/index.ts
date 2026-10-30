@@ -79,5 +79,11 @@ export type {
 export { metricNumberSchema, playerStatisticsSchema } from './statistics.js';
 export type { MetricNumber, PlayerStatistics } from './statistics.js';
 
-export { broadcastStatsPresentationSchema } from './broadcast-stats-presentation.js';
-export type { BroadcastStatsPresentation } from './broadcast-stats-presentation.js';
+export {
+  broadcastStatsPresentationSchema,
+  broadcastStatsProgramSchema,
+} from './broadcast-stats-presentation.js';
+export type {
+  BroadcastStatsPresentation,
+  BroadcastStatsProgram,
+} from './broadcast-stats-presentation.js';
