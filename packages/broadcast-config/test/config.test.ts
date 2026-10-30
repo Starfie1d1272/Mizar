@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { getBuiltinResolvedPreset, getBuiltinTheme } from '@mizar/hud-config';
+import {
+  getBuiltinLayout,
+  getBuiltinPreset,
+  getBuiltinResolvedPreset,
+  getBuiltinTheme,
+} from '@mizar/hud-config';
 import {
   boundModules,
   clonePreset,
@@ -19,9 +24,14 @@ function fixture(): BroadcastConfigDocument {
       origin: null,
       value: {
         renderer: { kind: 'native', id: 'mizar.hud', apiVersion: 1 },
-        preset: { id: 'p', layoutId: 'l', themeId: 't' },
-        layout: { id: 'l' },
-        theme: { id: 't' },
+        preset: getBuiltinPreset(),
+        layout: getBuiltinLayout(),
+        theme: getBuiltinTheme(),
+        overlays: {
+          pause: { enabled: true, visual: 'legacy' },
+          chat: { enabled: true, placement: 'auto' },
+        },
+        accent: { source: 'fixed', value: getBuiltinTheme().brandColor },
       },
     },
     {
@@ -72,7 +82,10 @@ function fixture(): BroadcastConfigDocument {
         hud: {
           renderer: 'native',
           config: getBuiltinResolvedPreset(),
-          overlays: { pause: { enabled: true, visual: 'default' } },
+          overlays: {
+            pause: { enabled: true, visual: 'legacy' },
+            chat: { enabled: true, placement: 'auto' },
+          },
           accent: { source: 'fixed', value: getBuiltinTheme().brandColor },
         },
         program: {},
@@ -104,11 +117,11 @@ describe('broadcast preset', () => {
     if (hud.kind !== 'hud' || !('preset' in hud.value)) throw new Error('unexpected HUD');
     expect(hud.value.preset.layoutId).toBe(hud.value.layout.id);
     expect(hud.value.preset.themeId).toBe(hud.value.theme.id);
-    expect(hud.value.preset.id).not.toBe('p');
+    expect(hud.value.preset.id).not.toBe(getBuiltinPreset().id);
     hud.value.preset.name = 'Edited';
-    expect(
-      (document.modules[0]!.value as { preset: { name?: string } }).preset.name,
-    ).toBeUndefined();
+    expect((document.modules[0]!.value as { preset: { name?: string } }).preset.name).toBe(
+      getBuiltinPreset().name,
+    );
     expect(() =>
       clonePreset(
         document,
@@ -134,7 +147,10 @@ describe('broadcast preset', () => {
       ...document.active.resolved,
       hud: {
         ...document.active.resolved.hud,
-        overlays: { pause: { enabled: false, visual: 'default' } },
+        overlays: {
+          pause: { enabled: false, visual: 'legacy' },
+          chat: { enabled: true, placement: 'auto' },
+        },
       },
     } as unknown as typeof document.active.resolved;
     let id = 0;

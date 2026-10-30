@@ -35,7 +35,11 @@ export interface HudConfigStoreOptions {
 /** A coordinator becomes the only writer after initialize succeeds. */
 export interface HudConfigPersistence {
   initialize(document: HudConfigDocument): Promise<HudConfigDocument>;
-  commit(candidate: HudConfigDocument, previous: HudConfigDocument): Promise<void>;
+  commit(
+    candidate: HudConfigDocument,
+    previous: HudConfigDocument,
+    command: HudConfigCommandResult,
+  ): Promise<void>;
 }
 
 export class HudConfigEditorConflictError extends Error {
@@ -385,7 +389,7 @@ export class HudConfigStore {
       }
       try {
         if (this.persistence) {
-          await this.persistence.commit(clone(candidate), clone(this.document));
+          await this.persistence.commit(clone(candidate), clone(this.document), command);
         } else if (this.filePath !== undefined) {
           const committed = await replaceDurableJson(this.filePath, candidate);
           if (!committed) throw new Error('HUD 配置提交已取消');

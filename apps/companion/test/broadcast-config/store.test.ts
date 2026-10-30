@@ -11,8 +11,9 @@ import {
 import Fastify from 'fastify';
 import { createLocalWebOriginPolicy } from '../../src/local-web/origin-policy.js';
 import { registerBroadcastConfigRoutes } from '../../src/broadcast-config/routes.js';
+import { registerHudConfigRoutes } from '../../src/hud-config/controller.js';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -193,6 +194,80 @@ describe('HUD pause capability compatibility', () => {
       }),
     ).rejects.toThrow('capability_unsupported');
     expect(store.snapshot).toEqual(before);
+  });
+
+  it('allows a no-op legacy activation of a supported HUD', async () => {
+    const { store } = await setup();
+    const hud = new HudConfigStore();
+    await hud.load();
+    await hud.restorePersistence(
+      createHudConfigPersistence(store, async (_value, active) => active.lock),
+    );
+    const before = store.snapshot.active;
+    const state = hud.getState();
+    await hud.activatePreset(state.document.activePreset.sourceId, state.editorRevision);
+    expect(store.snapshot.active).toEqual(before);
+  });
+
+  it('rejects a no-op legacy HUD activation before writing, while allowing unrelated edits', async () => {
+    const { options } = await setup();
+    const old = fixture();
+    const module = old.modules[0]!;
+    if (
+      module.kind !== 'hud' ||
+      !('preset' in module.value) ||
+      old.active.resolved.hud.renderer !== 'native'
+    )
+      throw new Error('expected native HUD');
+    module.value.overlays.pause.visual = 'future-unsupported';
+    old.active.resolved.hud.overlays.pause.visual = 'future-unsupported';
+    const path = join(dirname(options.filePath), 'legacy-activation.json');
+    const store = new BroadcastConfigStore({
+      ...options,
+      filePath: path,
+      createInitial: () => Promise.resolve(old),
+    });
+    await store.load();
+    const hud = new HudConfigStore();
+    await hud.load();
+    await hud.restorePersistence(
+      createHudConfigPersistence(store, async (_value, active) => active.lock),
+    );
+    const before = store.snapshot;
+    const beforeHud = hud.getState();
+    const beforeBytes = await readFile(path);
+    const app = Fastify();
+    registerHudConfigRoutes(app, { store: hud, originPolicy: createLocalWebOriginPolicy() });
+    try {
+      const headers = { origin: 'http://127.0.0.1:3000' };
+      const response = await app.inject({
+        method: 'POST',
+        url: '/operator/hud-config',
+        headers,
+        payload: {
+          kind: 'activate-preset',
+          sourceId: beforeHud.document.activePreset.sourceId,
+          expectedEditorRevision: beforeHud.editorRevision,
+        },
+      });
+      expect(response.statusCode).toBe(422);
+      expect(response.json().error).toBe('capability_unsupported');
+      expect(store.snapshot).toEqual(before);
+      expect(hud.getState()).toEqual(beforeHud);
+      expect(await readFile(path)).toEqual(beforeBytes);
+      await store.updateFromLegacy({
+        updateDraft(document) {
+          const program = document.modules.find(
+            (item) => item.kind === 'program' && item.id === old.modules[1]!.id,
+          );
+          if (!program) throw new Error('expected program');
+          program.name = 'unrelated program edit';
+        },
+      });
+      expect(store.snapshot.active).toEqual(before.active);
+    } finally {
+      await app.close();
+    }
   });
 
   it('reads historical unknown styles, projects only the pause fallback and refuses to clone or activate them', async () => {
