@@ -6,9 +6,14 @@ import { isSourceSha, isSha256, requireValue } from './index.mjs';
 import { sha256 } from './content.mjs';
 import { REPOSITORY } from './publication.mjs';
 export const signerIdentity = (workflow) => {
-  requireValue(['qualification', 'promotion'].includes(workflow), '不允许的 Mizar 签发角色');
-  return `https://github.com/${REPOSITORY}/.github/workflows/release-${workflow}.yml@refs/heads/main`;
+  requireValue(
+    ['qualification', 'promotion', 'mulnx-sync'].includes(workflow),
+    '不允许的 Mizar 签发角色',
+  );
+  return `https://github.com/${REPOSITORY}/${workflowPath(workflow)}@refs/heads/main`;
 };
+const workflowPath = (workflow) =>
+  `.github/workflows/${workflow === 'mulnx-sync' ? workflow : `release-${workflow}`}.yml`;
 // Fulcio 通用 OID 值为 DER UTF8String；当前固定 URI/ref/SHA 均是短 ASCII 字符串。
 // https://github.com/sigstore/fulcio/blob/main/docs/oid-info.md
 const derString = (value) => {
@@ -101,7 +106,7 @@ export function verifyMizarAttestationDigest(
     statement?._type === 'https://in-toto.io/Statement/v1' &&
       statement?.predicateType === 'https://slsa.dev/provenance/v1' &&
       context?.repository === `https://github.com/${REPOSITORY}` &&
-      context?.path === `.github/workflows/release-${workflow}.yml` &&
+      context?.path === workflowPath(workflow) &&
       context?.ref === 'refs/heads/main',
     '资源 provenance 不是预期 main 工作流',
   );

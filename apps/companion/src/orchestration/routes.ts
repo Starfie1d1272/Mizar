@@ -20,6 +20,7 @@ const expectedSchema = z
   .strict();
 const commandSchema = z.discriminatedUnion('action', [
   z.strictObject({ action: z.literal('check-tool') }),
+  z.strictObject({ action: z.literal('cancel-tool-download') }),
   z.strictObject({ action: z.literal('set-automatic'), enabled: z.boolean() }),
   z.strictObject({ action: z.literal('browser'), expectedRevision: z.string().max(128) }),
   z
@@ -174,7 +175,10 @@ export function registerOrchestrationRoutes(
         );
         return reply.code(409).send({
           error: 'mulnx_prepare_failed',
-          message: 'MulNX 下载或校验失败，请检查网络后重试。',
+          message:
+            tool?.view().phase === 'cancelled'
+              ? 'MulNX 下载已取消，旧版本和配置已保留。'
+              : 'MulNX 下载或校验失败，请检查网络后重试。',
           requestId: request.id,
         });
       }
@@ -198,15 +202,12 @@ export function registerOrchestrationRoutes(
           z.strictObject({
             action: z.literal('stage'),
             preparedId: z.string().regex(/^prepared-[a-f0-9]{64}-[a-f0-9-]{36}$/),
-            cs2Path: nativeCs2PathSchema,
-            consoleCapture: z.boolean(),
           }),
           z.strictObject({ action: z.literal('commit'), id: z.uuid() }),
         ])
         .parse(request.body);
       if (!tool) throw new Error('mulnx_bundle_unavailable');
-      if (body.action === 'stage')
-        return await tool.stageSelection(body.preparedId, body.cs2Path, body.consoleCapture);
+      if (body.action === 'stage') return await tool.stageSelection(body.preparedId);
       let result: { version: string; cameraReady?: boolean } | undefined;
       if (
         !session?.withSelection ||
@@ -322,6 +323,9 @@ export function registerOrchestrationRoutes(
         checkingTool = true;
         if (!tool) throw new Error('mulnx_bundle_unavailable');
         await tool.check();
+      } else if (body.action === 'cancel-tool-download') {
+        if (!tool) throw new Error('mulnx_bundle_unavailable');
+        tool.cancelDownload();
       } else if (body.action === 'browser') {
         if (!session) throw new Error('camera_production_unavailable');
         session.configure(body.expectedRevision, () => director.useBrowser());

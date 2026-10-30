@@ -4,7 +4,7 @@ export function createTufVerifier(
   options: VerifyOptions,
   signal?: AbortSignal,
 ): Promise<BundleVerifier>;
-export type MizarSignerRole = 'qualification' | 'promotion';
+export type MizarSignerRole = 'qualification' | 'promotion' | 'mulnx-sync';
 export function signerIdentity(workflow: MizarSignerRole): string;
 export function createMizarVerifier(
   workflow: MizarSignerRole,

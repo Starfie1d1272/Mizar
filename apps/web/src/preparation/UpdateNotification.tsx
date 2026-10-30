@@ -10,7 +10,7 @@ function canInterrupt() {
   return (
     document.hasFocus() &&
     document.visibilityState === 'visible' &&
-    !document.querySelector('dialog[open]') &&
+    !document.querySelector('dialog[open]:not(.updates-notification)') &&
     !document.activeElement?.matches('input, textarea, select, [contenteditable="true"]')
   );
 }
@@ -19,9 +19,14 @@ function DesktopUpdateNotification() {
   const status = useLocalRead<UpdateStatus>('/local/v1/updates', 3000);
   const [notice, setNotice] = useState<Notification | null>(null);
   const [dismissed, setDismissed] = useState<string | null>(null);
+  const [dismissedMulnx, setDismissedMulnx] = useState<string | null>(null);
+  const [mulnxNotice, setMulnxNotice] = useState<{ identity: string; version: string } | null>(
+    null,
+  );
   const latest = useRef(status);
   const request = useRef<AbortController | null>(null);
   const acknowledging = useRef(false);
+  const acknowledgingMulnx = useRef(false);
   useEffect(() => {
     latest.current = status;
   }, [status]);
@@ -44,6 +49,31 @@ function DesktopUpdateNotification() {
       acknowledging.current = false;
     }
   }, []);
+  const acknowledgeMulnx = useCallback(async (identity: string) => {
+    if (acknowledgingMulnx.current) return;
+    acknowledgingMulnx.current = true;
+    try {
+      await fetch('/operator/updates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'dismiss-mulnx-notification', identity }),
+        keepalive: true,
+        signal: AbortSignal.timeout(8000),
+      });
+    } catch {
+      /* Retry on a subsequent poll. */
+    } finally {
+      acknowledgingMulnx.current = false;
+    }
+  }, []);
+  useEffect(() => {
+    if (
+      dismissedMulnx &&
+      status?.mulnxNotificationPending &&
+      status.mulnx?.notificationIdentity === dismissedMulnx
+    )
+      void acknowledgeMulnx(dismissedMulnx);
+  }, [status, dismissedMulnx, acknowledgeMulnx]);
   useEffect(() => {
     if (!status?.notificationPending || !status.candidate) return;
     const version = status.candidate.version;
@@ -87,39 +117,92 @@ function DesktopUpdateNotification() {
         if (request.current === pending) request.current = null;
       });
   }, [status, notice, dismissed, acknowledge]);
-  const open =
+  useEffect(() => {
+    const tool = status?.mulnx;
+    if (
+      status?.mulnxNotificationPending &&
+      status.notificationSafe &&
+      tool?.notificationIdentity &&
+      tool.latest &&
+      (!mulnxNotice || mulnxNotice.identity !== tool.notificationIdentity) &&
+      dismissedMulnx !== tool.notificationIdentity &&
+      canInterrupt()
+    ) {
+      const identity = tool.notificationIdentity;
+      const version = tool.latest;
+      let cancelled = false;
+      void Promise.resolve().then(() => {
+        if (!cancelled && canInterrupt()) setMulnxNotice({ identity, version });
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+  }, [status, mulnxNotice, dismissedMulnx, notice]);
+  const mizarOpen =
     notice !== null &&
     notice.version === status?.candidate?.version &&
-    dismissed !== notice.version &&
-    status.notificationSafe === true &&
-    document.hasFocus() &&
-    document.visibilityState === 'visible';
-  const dismiss = () => {
-    if (!notice) return;
+    dismissed !== notice.version;
+  const mulnxOpen =
+    mulnxNotice !== null &&
+    status?.mulnxNotificationPending &&
+    mulnxNotice.identity === status.mulnx?.notificationIdentity;
+  const open = Boolean((mizarOpen || mulnxOpen) && status?.notificationSafe && canInterrupt());
+  const dismissMizar = () => {
+    if (!notice || !mizarOpen) return;
     setDismissed(notice.version);
     setNotice(null);
     void acknowledge(notice.version);
   };
+  const dismissMulnx = () => {
+    if (!mulnxNotice || !mulnxOpen) return;
+    setDismissedMulnx(mulnxNotice.identity);
+    setMulnxNotice(null);
+    void acknowledgeMulnx(mulnxNotice.identity);
+  };
+  const dismiss = () => {
+    dismissMizar();
+    dismissMulnx();
+  };
   return (
     <Dialog
       open={open}
-      title={notice ? `发现新版 v${notice.version}` : '应用更新'}
+      title="发现新版"
+      className="updates-notification"
       onClose={() => {
         if (open) dismiss();
       }}
     >
-      <p>更新已通过来源验证，可以查看更新说明并决定是否更新。</p>
-      <div className="settings-update-notes">{notice?.notes}</div>
+      {mizarOpen ? (
+        <>
+          <p>Mizar v{notice?.version} 可更新。</p>
+          <div className="settings-update-notes">{notice?.notes}</div>
+        </>
+      ) : null}
+      {mulnxOpen ? <p>MulNX {mulnxNotice?.version} 可更新，建议开播前更新。</p> : null}
       <div className="preparation-actions">
-        <Button
-          variant="primary"
-          onClick={() => {
-            dismiss();
-            window.location.assign('/settings?tab=advanced');
-          }}
-        >
-          查看更新
-        </Button>
+        {mizarOpen ? (
+          <Button
+            variant="primary"
+            onClick={() => {
+              dismissMizar();
+              window.location.assign('/settings?tab=advanced');
+            }}
+          >
+            查看 Mizar 更新
+          </Button>
+        ) : null}
+        {mulnxOpen ? (
+          <Button
+            variant="primary"
+            onClick={() => {
+              dismissMulnx();
+              window.location.assign('/packages');
+            }}
+          >
+            查看 MulNX 更新
+          </Button>
+        ) : null}
         <Button onClick={dismiss}>稍后</Button>
       </div>
     </Dialog>

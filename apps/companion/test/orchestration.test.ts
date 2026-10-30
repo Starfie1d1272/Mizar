@@ -630,25 +630,16 @@ it('commits a prepared MulNX selection only inside the production guard', async 
       payload,
     });
   const preparedId = `prepared-${'a'.repeat(64)}-${id}`;
-  expect(
-    (
-      await post(
-        { action: 'stage', preparedId, cs2Path: 'D:\\Steam\\cs2.exe', consoleCapture: false },
-        'bad',
-      )
-    ).statusCode,
-  ).toBe(403);
+  expect((await post({ action: 'stage', preparedId }, 'bad')).statusCode).toBe(403);
   expect(
     (
       await post({
         action: 'stage',
         preparedId,
-        cs2Path: 'D:\\Steam\\cs2.exe',
-        consoleCapture: false,
       })
     ).statusCode,
   ).toBe(200);
-  expect(stage).toHaveBeenCalledOnce();
+  expect(stage).toHaveBeenCalledExactlyOnceWith(preparedId);
   expect((await post({ action: 'commit', id })).statusCode).toBe(409);
   expect(commit).not.toHaveBeenCalled();
   allowed = true;
@@ -1460,6 +1451,26 @@ it('shares metadata requests and respects GitHub retry times', async () => {
   } finally {
     vi.unstubAllGlobals();
     vi.useRealTimers();
+  }
+});
+
+it('refreshes cached release metadata before an explicit update while respecting rate limits', async () => {
+  vi.resetModules();
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce(new Response(JSON.stringify({ tag: 'v1' })))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ tag: 'v2' })))
+    .mockResolvedValueOnce(new Response('', { status: 429, headers: { 'retry-after': '120' } }));
+  vi.stubGlobal('fetch', fetchMock);
+  try {
+    const { publicJson } = await import('../src/orchestration/tool-release.js');
+    await publicJson('release');
+    await expect(publicJson('release', true)).resolves.toEqual({ tag: 'v2' });
+    await expect(publicJson('other', true)).rejects.toThrow('mulnx_metadata_http_429');
+    await expect(publicJson('release', true)).rejects.toThrow('mulnx_metadata_http_429');
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  } finally {
+    vi.unstubAllGlobals();
   }
 });
 

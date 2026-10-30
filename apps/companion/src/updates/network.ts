@@ -25,6 +25,7 @@ export async function updateRequest(
   input: string,
   signal: AbortSignal,
   fetcher: UpdateFetch = globalThis.fetch,
+  options?: { allowCompressedBoxText?: boolean },
 ): Promise<Response> {
   let url = new URL(input);
   for (let redirects = 0; redirects < 5; redirects++) {
@@ -67,7 +68,13 @@ export async function updateRequest(
       response.headers.get('content-encoding') !== 'identity'
     ) {
       // JSON can be encoded; installer byte counts always apply to the decoded stream.
-      if (!response.headers.get('content-type')?.includes('json')) {
+      const boxText =
+        options?.allowCompressedBoxText &&
+        url.origin === 'https://box.nju.edu.cn' &&
+        url.pathname.startsWith('/seafhttp/files/') &&
+        response.headers.get('content-encoding')?.toLowerCase() === 'gzip' &&
+        /^text\/plain(?:\s*;|$)/i.test(response.headers.get('content-type') ?? '');
+      if (!response.headers.get('content-type')?.includes('json') && !boxText) {
         await response.body.cancel();
         throw new Error('update_encoding_invalid');
       }
@@ -78,7 +85,9 @@ export async function updateRequest(
 }
 export async function boundedBytes(response: Response, limit: number): Promise<Buffer> {
   const size = Number(response.headers.get('content-length'));
-  if (Number.isFinite(size) && size > limit) {
+  const encoding = response.headers.get('content-encoding');
+  // Fetch exposes decompressed bytes while Content-Length describes the wire representation.
+  if ((!encoding || encoding === 'identity') && Number.isFinite(size) && size > limit) {
     await response.body?.cancel();
     throw new Error('update_response_too_large');
   }
