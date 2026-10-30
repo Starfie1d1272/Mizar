@@ -40,3 +40,5 @@ Image URLs in the two supplied JSONs are the only external asset requests: `cach
 - Source titles and facts can have justified differences: in particular the current lineup is labelled `本场阵容` because the current contract does not prove it was formally submitted. Inspect long names, unavailable images, missing values, real zeroes, one-sided data, pagination, custom Program themes and HUD isolation separately; the 29 pairs are not a complete edge-case matrix.
 
 The original task requested screenshot delivery through Library. The prepared batch failed with HTTP 401 during app discovery; no successful screenshot upload was confirmed. These scripts generate local review artifacts only. They do not retry that failed upload, publish anything, or make local paths available to a different container.
+
+On the author's clean reproduction, all 58 synthetic images and 23 of the 24 real images were byte-identical to the preceding captures. The remaining real `2000-ranking` image differed only within a 40×40-pixel region; the cause was not established. This comparison is an observation from that run, not a requirement that independent browsers produce byte-identical PNGs.
