@@ -458,6 +458,8 @@ export function registerObsRoutes(
         }
       } catch (error: unknown) {
         if (error instanceof ObsOutputError) return reply.code(409).send(outputFailure(error));
+        if (error instanceof ObsVideoError)
+          return reply.code(409).send({ error: error.code, message: error.message });
         if (error instanceof ObsActionError)
           return reply.code(409).send({
             error: 'obs_action_failed',

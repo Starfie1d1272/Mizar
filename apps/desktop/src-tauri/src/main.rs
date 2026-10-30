@@ -22,6 +22,7 @@ mod observer_hud;
 mod observer_job;
 mod observer_workspace;
 mod powershell;
+mod preparation_gate;
 mod production_exit;
 mod spectator_eligibility;
 mod spectator_recovery_plan;
@@ -44,7 +45,6 @@ use desktop_worker::DesktopWorker;
 use geometry::{Layout, Rect};
 use startup_log::DesktopLog;
 use std::{
-    collections::HashSet,
     fs,
     hash::{Hash, Hasher},
     io::{Read, Write},
@@ -71,22 +71,12 @@ use windows_startup::{failure_dialog, DesktopMutex, ExitRequest, ExitSignal, Run
 const BASE: &str = "http://127.0.0.1:3000";
 static GSI_OPERATION_LOCK: Mutex<()> = Mutex::new(());
 
-#[derive(Default)]
-struct CancelledPreparations(Mutex<HashSet<String>>);
-
 fn check_preparation(app: &tauri::AppHandle, id: Option<&str>) -> Result<(), String> {
-    if let Some(id) = id {
-        let cancellations = app.state::<CancelledPreparations>();
-        let cancelled = cancellations.0.lock().map_err(|_| "启动取消状态不可用。")?;
-        if cancelled.contains(id) {
-            return Err("本次启动已取消，请重新启动工作台。".into());
-        }
-    }
-    Ok(())
+    app.state::<preparation_gate::PreparationGate>().check(id)
 }
 
 #[tauri::command]
-fn cancel_cs2_preparation(
+async fn cancel_cs2_preparation(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     preparation_id: String,
@@ -102,13 +92,12 @@ fn cancel_cs2_preparation(
     {
         return Err("启动事务标识无效。".into());
     }
-    let cancellations = app.state::<CancelledPreparations>();
-    let mut cancelled = cancellations.0.lock().map_err(|_| "启动取消状态不可用。")?;
-    if cancelled.len() >= 1024 && !cancelled.contains(&preparation_id) {
-        return Err("启动取消记录已满，请重新启动 Mizar。".into());
-    }
-    cancelled.insert(preparation_id);
-    Ok(())
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<preparation_gate::PreparationGate>()
+            .cancel(preparation_id)
+    })
+    .await
+    .map_err(|_| "启动取消状态不可用。".to_string())?
 }
 
 #[link(name = "shell32")]
@@ -900,15 +889,19 @@ async fn replace_external_cs2(
             .transpose()?;
         let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
         let mut cs2 = state.lock().map_err(|_| "CS2 状态不可用。")?;
-        let check = || check_preparation(&app, Some(&preparation_id));
-        check()?;
+        let gate = app.state::<preparation_gate::PreparationGate>();
+        let guard = preparation_gate::PreparationGuard {
+            gate: Some(gate.inner()),
+            id: Some(&preparation_id),
+        };
+        guard.check()?;
         let activity = app.state::<cs2_activity::Activity>();
         let _activity = activity.begin(3);
         let snapshot = cs2.preflight_replacement()?;
         if snapshot["target"]["managed"] == true
             && snapshot["preparationId"].as_str() == Some(preparation_id.as_str())
         {
-            return cs2.replace_for_preparation(expected_pid, created, &preparation_id, &check);
+            return cs2.replace_for_preparation(expected_pid, created, &preparation_id, &guard);
         }
         if let Some(pid) = snapshot["target"]["pid"].as_u64() {
             if Some(pid) != expected_pid.map(u64::from)
@@ -920,7 +913,7 @@ async fn replace_external_cs2(
         app.state::<production_exit::ExitGate>().check()?;
         app.state::<updates::PendingUpdate>().check()?;
         production_exit::prepare_external_entry(&log, &expected_revision)?;
-        cs2.replace_for_preparation(expected_pid, created, &preparation_id, &check)
+        cs2.replace_for_preparation(expected_pid, created, &preparation_id, &guard)
     })
     .await
     .map_err(|_| "游戏替换未完成，请重试。".to_string())?;
@@ -1165,12 +1158,16 @@ async fn start_managed_cs2(
                         app.state::<production_exit::ExitGate>().check()?;
                         app.state::<updates::PendingUpdate>().check()?;
                         production_exit::invalidate_local_match_exit(&app.state::<DesktopLog>())?;
-                        let check = || check_preparation(&app, preparation_id.as_deref());
-                        check()?;
+                        let gate = app.state::<preparation_gate::PreparationGate>();
+                        let guard = preparation_gate::PreparationGuard {
+                            gate: Some(gate.inner()),
+                            id: preparation_id.as_deref(),
+                        };
+                        guard.check()?;
                         let result = cs2.start_preparation(
                             preserve_settings.unwrap_or(false),
                             preparation_id.as_deref(),
-                            &check,
+                            &guard,
                         );
                         if let Ok(mut tracker) = app.state::<HostState>().tracker.lock() {
                             tracker.preserve_settings = cs2.preserve_settings();
@@ -3668,7 +3665,7 @@ fn run_desktop(
         .manage(DemoEntryIntent::default())
         .manage(production_exit::WorkspaceExit::default())
         .manage(production_exit::VerifiedStop::default())
-        .manage(CancelledPreparations::default())
+        .manage(preparation_gate::PreparationGate::default())
         .manage(updates::PendingUpdate::new(update_stage))
         .invoke_handler(|invoke| {
             let command = invoke.message.command();

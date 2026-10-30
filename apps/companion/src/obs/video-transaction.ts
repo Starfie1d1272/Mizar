@@ -76,7 +76,23 @@ function changes(before: Video, after: Video): Partial<Video> {
     }
   return result;
 }
-async function assertNoVideoOutput(obs: ObsRpc): Promise<void> {
+
+function targetVideo(before: Video): Video {
+  // Equivalent fractions represent the same FPS. Preserve the operator's exact pair.
+  return before.fpsNumerator === 60 * before.fpsDenominator
+    ? { ...desired, fpsNumerator: before.fpsNumerator, fpsDenominator: before.fpsDenominator }
+    : desired;
+}
+function reusable(journal: Journal, state: { profile: string; video: Video }, endpoint: string) {
+  return (
+    journal.phase === 'confirmed' &&
+    journal.endpoint === endpoint &&
+    journal.profile === state.profile &&
+    pairs.every((pair) => samePair(journal.applied, state.video, pair)) &&
+    Object.keys(changes(state.video, targetVideo(state.video))).length === 0
+  );
+}
+export async function assertNoVideoOutput(obs: ObsRpc): Promise<void> {
   const list = (await obs.call('GetOutputList')).outputs;
   if (!Array.isArray(list))
     throw new ObsVideoError('outputs_unknown', '无法确认 OBS 输出状态，请重新连接后重试。');
@@ -129,19 +145,50 @@ export class ObsVideoTransaction {
   async preflight(obs: ObsRpc, endpoint: string): Promise<void> {
     const previous = await this.read();
     const state = await current(obs);
-    if (previous && (previous.endpoint !== endpoint || previous.profile !== state.profile))
+    if (
+      previous &&
+      previous.phase !== 'prepared' &&
+      (previous.endpoint !== endpoint || previous.profile !== state.profile)
+    )
       throw new ObsVideoError(
         'restore_profile_changed',
         '上次 OBS 视频设置待恢复；请切回原配置档后重试。',
       );
-    if (previous || Object.keys(changes(state.video, desired)).length)
+    if (
+      (previous && previous.phase !== 'prepared' && !reusable(previous, state, endpoint)) ||
+      Object.keys(changes(state.video, targetVideo(state.video))).length
+    )
       await assertNoVideoOutput(obs);
   }
   async prepare(obs: ObsRpc, endpoint: string, valid: () => boolean): Promise<string | null> {
     const previous = await this.read();
+    if (previous?.phase === 'confirmed') {
+      const state = await current(obs);
+      if (reusable(previous, state, endpoint)) {
+        const latest = await current(obs);
+        if (!valid() || !reusable(previous, latest, endpoint))
+          throw new ObsVideoError('video_changed', 'OBS 视频设置已变化，请重试。');
+        // A delayed cancellation from the old attempt must not revoke this one.
+        previous.id = randomUUID();
+        await this.save(previous);
+        if (!valid()) {
+          try {
+            await this.restore(obs, endpoint, previous.id);
+          } catch (error) {
+            throw new ObsVideoError(
+              'restore_pending',
+              'OBS 视频设置恢复待完成，请检查输出和配置档后重试。',
+              { cause: error },
+            );
+          }
+          throw new ObsVideoError('cancelled', '准备已取消。');
+        }
+        return previous.id;
+      }
+    }
     if (previous) await this.restore(obs, endpoint, undefined, valid);
     const initial = await current(obs);
-    const patch = changes(initial.video, desired);
+    const patch = changes(initial.video, targetVideo(initial.video));
     if (!Object.keys(patch).length) return null;
     await assertNoVideoOutput(obs);
     const journal: Journal = {
@@ -234,7 +281,19 @@ export class ObsVideoTransaction {
       )
         throw new ObsVideoError('video_changed', 'OBS 视频设置已变化，请重试恢复。');
       if (!valid()) throw new ObsVideoError('cancelled', '准备已取消。');
-      await obs.call('SetVideoSettings', patch);
+      try {
+        await obs.call('SetVideoSettings', patch);
+      } catch (error) {
+        // An output can start after the read. Reinspect to give the affected output
+        // when OBS rejects the write; never stop it or retry the mutation.
+        try {
+          await assertNoVideoOutput(obs);
+        } catch (outputError) {
+          if (outputError instanceof ObsVideoError && outputError.code === 'video_output_active')
+            throw outputError;
+        }
+        throw error;
+      }
       const result = await current(obs);
       if (
         result.profile !== journal.profile ||

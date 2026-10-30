@@ -16,8 +16,16 @@ test('passive OBS preparation never takes another collection, including while ou
           currentSceneCollectionName: 'Personal',
           sceneCollections: ['Personal', 'Mizar'],
         });
-      if (type === 'GetStreamStatus') return Promise.resolve({ outputActive: true });
-      if (type === 'GetRecordStatus') return Promise.resolve({ outputActive: false });
+      if (type === 'GetOutputList')
+        return Promise.resolve({
+          outputs: [
+            {
+              outputName: 'Virtual camera',
+              outputActive: true,
+              outputFlags: { OBS_OUTPUT_VIDEO: true },
+            },
+          ],
+        });
       throw new Error(`Unexpected OBS request: ${type}`);
     },
   };

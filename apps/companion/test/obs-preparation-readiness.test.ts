@@ -2,7 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { obsReadiness } from '../src/program-scenes/readiness.js';
 import { obsFindingReadiness } from '../src/obs/prepare-readiness.js';
-import { ensureObsConfiguration, type ObsRpc } from '../src/obs/reconcile.js';
+import {
+  ensureObsConfiguration,
+  guardedPreparationWrites,
+  type ObsRpc,
+} from '../src/obs/reconcile.js';
+import { ensureObsAudio } from '../src/obs/audio.js';
 import { obsDesiredScenes } from '../src/obs/desired-state.js';
 import type { ObsStatus } from '../src/obs/adapter.js';
 import type { ObsAdapter } from '../src/obs/adapter.js';
@@ -101,6 +106,7 @@ test('explicit ensure repairs legacy names even when no other finding requires r
     { inputName: 'Mizar · Desktop Audio', inputKind: 'wasapi_output_capture' },
   ];
   let outputActive = false;
+  let startAfterRename = false;
   const calls: string[] = [];
   const obs: ObsRpc = {
     call: async (type, data = {}) => {
@@ -180,12 +186,17 @@ test('explicit ensure repairs legacy names even when no other finding requires r
                 },
         };
       }
-      if (type === 'GetStreamStatus') return { outputActive };
-      if (type === 'GetRecordStatus') return { outputActive: false };
+      if (type === 'GetOutputList')
+        return {
+          outputs: [
+            { outputName: 'Virtual camera', outputActive, outputFlags: { OBS_OUTPUT_VIDEO: true } },
+          ],
+        };
       if (type === 'SetInputName') {
         inputs.find((item) => item.inputName === data.inputName)!.inputName = String(
           data.newInputName,
         );
+        if (startAfterRename) outputActive = true;
         return {};
       }
       if (['SetInputSettings', 'SetSceneItemTransform', 'SetSceneItemIndex'].includes(type))
@@ -196,9 +207,18 @@ test('explicit ensure repairs legacy names even when no other finding requires r
   outputActive = true;
   await assert.rejects(
     ensureObsConfiguration(obs, baseUrl, () => activeScene, true),
-    /输出/,
+    /Virtual camera/,
   );
   assert.equal(calls.includes('SetInputName'), false);
+  outputActive = false;
+  startAfterRename = true;
+  await assert.rejects(
+    ensureObsConfiguration(obs, baseUrl, () => activeScene, true),
+    /Virtual camera/,
+  );
+  assert.equal(calls.includes('SetInputSettings'), false);
+  inputs.find((input) => input.inputName === '桌面声音')!.inputName = 'Mizar · Desktop Audio';
+  startAfterRename = false;
   outputActive = false;
   const findings = await ensureObsConfiguration(obs, baseUrl, () => activeScene, true);
   assert.equal(
@@ -211,4 +231,70 @@ test('explicit ensure repairs legacy names even when no other finding requires r
     calls.some((type) => type.startsWith('Stop')),
     false,
   );
+});
+
+test('automatic audio preparation cannot modify scenes while an extra video output is active', async () => {
+  const calls: string[] = [];
+  const obs: ObsRpc = {
+    call: async (type) => {
+      calls.push(type);
+      if (type === 'GetInputList') return { inputs: [] };
+      if (type === 'GetSpecialInputs') return {};
+      if (type === 'GetSceneItemList') return { sceneItems: [] };
+      if (type === 'GetStreamStatus' || type === 'GetRecordStatus') return { outputActive: false };
+      if (type === 'GetSceneCollectionList') return { currentSceneCollectionName: 'Mizar' };
+      if (type === 'GetOutputList')
+        return {
+          outputs: [
+            {
+              outputName: 'Plugin video',
+              outputActive: true,
+              outputFlags: { OBS_OUTPUT_VIDEO: true },
+            },
+          ],
+        };
+      throw new Error(`Unexpected request ${type}`);
+    },
+  };
+  await assert.rejects(ensureObsAudio(guardedPreparationWrites(obs), baseUrl), /Plugin video/);
+  assert.equal(calls.includes('CreateInput'), false);
+  assert.equal(
+    calls.some((type) => type.startsWith('Stop')),
+    false,
+  );
+});
+
+test('already prepared audio is checked without requiring an active stream to stop', async () => {
+  const calls: string[] = [];
+  const obs: ObsRpc = {
+    call: async (type) => {
+      calls.push(type);
+      if (type === 'GetInputList')
+        return {
+          inputs: [
+            { inputName: '桌面声音', inputKind: 'wasapi_output_capture' },
+            { inputName: '麦克风', inputKind: 'wasapi_input_capture' },
+          ],
+        };
+      if (type === 'GetSpecialInputs') return {};
+      if (type === 'GetSceneItemList')
+        return {
+          sceneItems: [
+            { sourceName: '桌面声音', sceneItemEnabled: true },
+            { sourceName: '麦克风', sceneItemEnabled: true },
+          ],
+        };
+      if (type === 'GetInputMute') return { inputMuted: false };
+      if (type === 'GetInputVolume') return { inputVolumeMul: 1 };
+      if (type === 'GetInputAudioTracks') return { inputAudioTracks: { 1: true } };
+      throw new Error(`Unexpected request ${type}`);
+    },
+  };
+  assert.deepEqual(await ensureObsAudio(guardedPreparationWrites(obs), baseUrl), []);
+  assert.equal(
+    calls.every((type) => type.startsWith('Get')),
+    true,
+  );
+  assert.equal(calls.includes('GetOutputList'), false);
+  assert.equal(calls.includes('GetStreamStatus'), false);
 });

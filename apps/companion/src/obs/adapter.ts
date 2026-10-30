@@ -1,7 +1,7 @@
 import { gameBackgroundReady } from './game-background.js';
 import { readCaptureInitialization, type CaptureInitialization } from './capture-initialization.js';
 import type { ObsCaptureDiagnostic } from '@mizar/protocol/obs';
-import { ObsVideoTransaction } from './video-transaction.js';
+import { ObsVideoError, ObsVideoTransaction } from './video-transaction.js';
 import { ObsActionError } from './action-error.js';
 import { assertBpCompactOff, BpOverlayOwner } from './bp-overlay.js';
 import { diagnosticValue } from '../support/session-journal.js';
@@ -57,6 +57,7 @@ import {
   ObsExitSafetyError,
   checkObsConfiguration,
   ensureObsConfiguration,
+  guardedPreparationWrites,
   repairObsConfiguration,
   refreshObsBrowserSources,
   switchObsScene,
@@ -1840,7 +1841,7 @@ export class ObsAdapter {
         ) {
           audio = await checkObsAudio(obs);
           audio.push(...(await this.bindingFindings(obs, endpoint)));
-        } else audio = await ensureObsAudio(obs, this.browserBaseUrl);
+        } else audio = await ensureObsAudio(guardedPreparationWrites(obs), this.browserBaseUrl);
         return { findings: [...visual, ...audio], ready: true };
       }, 30_000);
       if (!current()) throw new Error('OBS 准备请求已失效，请重试。');
@@ -1862,7 +1863,7 @@ export class ObsAdapter {
         try {
           const commentary = await this.audioConfiguration.run((connection, endpoint, observer) =>
             configureIndependentAudio(
-              guardedObs(connection, current),
+              guardedPreparationWrites(guardedObs(connection, current)),
               endpoint,
               observer,
               this.commentary!.owner,
@@ -1893,6 +1894,7 @@ export class ObsAdapter {
           this.findings = [...this.findings, ...commentary];
         } catch (error) {
           if (!current()) throw error;
+          if (error instanceof ObsVideoError) throw error;
           this.diagnostic('obs_commentary_prepare', obsErrorEvidence(error));
           const audioReason = error instanceof Error ? error.message : '';
           const audioHelp: Record<string, string> = {
@@ -2078,7 +2080,10 @@ export class ObsAdapter {
   setupAudio(): Promise<void> {
     return this.configurationMutation(async () => {
       if (await this.audioRouting?.enabled()) throw new ObsActionError('audio_routing_enabled');
-      await this.withObs((obs) => setupObsAudio(obs, this.browserBaseUrl), 12_000);
+      await this.withObs(
+        (obs) => setupObsAudio(guardedPreparationWrites(obs), this.browserBaseUrl),
+        12_000,
+      );
     });
   }
   async launchTarget(): Promise<string> {

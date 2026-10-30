@@ -275,8 +275,12 @@ fn launch_operation(
     guarded: bool,
     preparation_id: Option<&str>,
 ) -> Result<Value, String> {
-    let check_cancelled = || crate::check_preparation(app, preparation_id);
-    check_cancelled()?;
+    let gate = app.state::<crate::preparation_gate::PreparationGate>();
+    let guard = crate::preparation_gate::PreparationGuard {
+        gate: Some(gate.inner()),
+        id: preparation_id,
+    };
+    guard.check()?;
     let _launch = if guarded {
         None
     } else {
@@ -450,27 +454,63 @@ fn launch_operation(
     std::fs::create_dir_all(&results).map_err(|e| e.to_string())?;
     let pending = results.join("pending.json");
     crate::cs2_session::atomic_write(&pending, b"{}")?;
-    let journal = {
+    let journal_result = (|| {
         let mut cs2 = managed.try_lock().map_err(|_| "CS2 正忙，请稍后重试。")?;
         if let Some((path, id)) = demo {
-            cs2.prepare_managed_mulnx_demo(&executable, preserve, path, id)?
+            cs2.prepare_managed_mulnx_demo(&executable, preserve, path, id)
         } else {
-            cs2.prepare_managed_mulnx(&executable, preserve, preparation_id, &check_cancelled)?
+            cs2.prepare_managed_mulnx(&executable, preserve, preparation_id, &guard)
         }
+    })();
+    let journal = match journal_result {
+        Ok(journal) => journal,
+        Err(error) if demo.is_none() && guard.check().is_err() => {
+            managed
+                .lock()
+                .map_err(|_| "CS2 状态不可用。")?
+                .cancel_unsubmitted_mulnx()
+                .map_err(|cleanup| format!("{error}；原配置恢复未完成：{cleanup}"))?;
+            return Err(error);
+        }
+        Err(error) => return Err(error),
     };
     let spectator_cfg = journal["spectatorCfg"] == true;
     let demo_cfg = journal["demoPlaybackCfg"]["name"].as_str();
-    let configured =
-        production_exit::prepare_mulnx_with_demo(log, &executable, false, spectator_cfg, demo_cfg)?;
+    let configured = match production_exit::prepare_mulnx_with_demo(
+        log,
+        &executable,
+        false,
+        spectator_cfg,
+        demo_cfg,
+    ) {
+        Ok(configured) => configured,
+        Err(error) if demo.is_none() && guard.check().is_err() => {
+            managed
+                .lock()
+                .map_err(|_| "CS2 状态不可用。")?
+                .cancel_unsubmitted_mulnx()
+                .map_err(|cleanup| format!("{error}；原配置恢复未完成：{cleanup}"))?;
+            return Err(error);
+        }
+        Err(error) => return Err(error),
+    };
     if configured["launcher"] != prepared["launcher"]
         || configured["version"] != prepared["version"]
     {
+        if demo.is_none() && guard.check().is_err() {
+            managed
+                .lock()
+                .map_err(|_| "CS2 状态不可用。")?
+                .cancel_unsubmitted_mulnx()
+                .map_err(|error| format!("启动已取消，但原配置恢复未完成：{error}"))?;
+        }
         return Err("启动器身份或版本已变化；原配置备份仍保留。".into());
     }
+    let mut submitted = false;
     let outcome = (|| -> Result<Value, String> {
         app.state::<production_exit::ExitGate>().check()?;
         app.state::<updates::PendingUpdate>().check()?;
-        check_cancelled()?;
+        guard.check()?;
         no_game()?;
         std::fs::create_dir_all(&results).map_err(|error| {
             log.preserve_error("mulnx_launch", None, &error, "无法准备 MulNX 启动记录。")
@@ -529,21 +569,28 @@ fn launch_operation(
             .env_remove("NODE_OPTIONS")
             .env_remove("NODE_PATH")
             .creation_flags(0x08000000);
-        check_cancelled()?;
-        let mut record = std::fs::File::create(&pending).map_err(|e| e.to_string())?;
-        record
-            .write_all(
-                json!({"launcherPid":child.pid, "executable":executable, "request":"submitted"})
-                    .to_string()
-                    .as_bytes(),
-            )
-            .and_then(|()| record.sync_all())
-            .map_err(|e| e.to_string())?;
-        managed
-            .try_lock()
-            .map_err(|_| "CS2 正忙，请稍后重试。")?
-            .submit_managed_mulnx()?;
-        let response = powershell::run(request, log, "请求 MulNX 启动", Duration::from_secs(8));
+        let response = guard.commit(|| {
+            let mut record = std::fs::File::create(&pending).map_err(|e| e.to_string())?;
+            record
+                .write_all(
+                    json!({"launcherPid":child.pid, "executable":executable, "request":"submitted"})
+                        .to_string()
+                        .as_bytes(),
+                )
+                .and_then(|()| record.sync_all())
+                .map_err(|e| e.to_string())?;
+            managed
+                .try_lock()
+                .map_err(|_| "CS2 正忙，请稍后重试。")?
+                .submit_managed_mulnx()?;
+            submitted = true;
+            Ok(powershell::run(
+                request,
+                log,
+                "请求 MulNX 启动",
+                Duration::from_secs(8),
+            ))
+        })?;
         log.event(
             "mulnx_launch_request",
             "submitted",
@@ -607,6 +654,17 @@ fn launch_operation(
     if let Err(error) = cleanup {
         return Err(format!("MulNX 启动参数清理失败，原备份仍保留：{error}"));
     }
+    let outcome = crate::preparation_gate::recover_cancelled_unsubmitted(
+        outcome,
+        submitted,
+        demo.is_none() && guard.check().is_err(),
+        || {
+            managed
+                .lock()
+                .map_err(|_| "CS2 状态不可用。".to_string())?
+                .cancel_unsubmitted_mulnx()
+        },
+    );
     if outcome.is_ok() {
         std::fs::remove_file(&pending).map_err(|e| e.to_string())?;
     }

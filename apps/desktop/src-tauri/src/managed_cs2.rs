@@ -912,7 +912,7 @@ impl ManagedCs2 {
         expected_pid: Option<u32>,
         expected_created: Option<u64>,
         preparation_id: &str,
-        check_cancelled: &dyn Fn() -> Result<(), String>,
+        guard: &crate::preparation_gate::PreparationGuard<'_>,
     ) -> Result<bool, String> {
         if !valid_preparation_id(preparation_id) {
             return Err("启动事务或游戏身份无效，请重试。".into());
@@ -937,8 +937,8 @@ impl ManagedCs2 {
         }
         if target.as_ref().is_some_and(|target| target.managed) {
             crate::production_exit::finish_managed_game(&self.log.clone(), |requires_proof| {
-                check_cancelled()?;
-                self.finish_with_guard(false, check_cancelled)?;
+                guard.check()?;
+                self.finish_with_guard(false, guard)?;
                 if requires_proof {
                     self.confirm_game_stopped()?;
                 }
@@ -946,7 +946,7 @@ impl ManagedCs2 {
             })?;
         } else {
             if self.has_external() {
-                check_cancelled()?;
+                guard.check()?;
                 self.finish()?;
             }
             if let Some(target) = target {
@@ -967,8 +967,9 @@ impl ManagedCs2 {
                         &json!({"pid":target.pid,"created":target.created.to_string()}).to_string(),
                     ),
                 );
-                check_cancelled()?;
-                close_owned_process(&target.process, target.pid, target.created, &self.log)?;
+                guard.commit(|| {
+                    close_owned_process(&target.process, target.pid, target.created, &self.log)
+                })?;
                 self.log.event(
                     "external_game_replace",
                     "success",
@@ -1435,13 +1436,20 @@ impl ManagedCs2 {
         self.start_with_settings(false)
     }
     pub fn start_with_settings(&mut self, preserve: bool) -> Result<bool, String> {
-        self.start_preparation(preserve, None, &|| Ok(()))
+        self.start_preparation(
+            preserve,
+            None,
+            &crate::preparation_gate::PreparationGuard {
+                gate: None,
+                id: None,
+            },
+        )
     }
     pub fn start_preparation(
         &mut self,
         preserve: bool,
         preparation_id: Option<&str>,
-        check_cancelled: &dyn Fn() -> Result<(), String>,
+        guard: &crate::preparation_gate::PreparationGuard<'_>,
     ) -> Result<bool, String> {
         if self.has_external() {
             self.poll();
@@ -1461,7 +1469,7 @@ impl ManagedCs2 {
         {
             return Err("请先结束 Demo 试播并恢复游戏配置。".into());
         }
-        self.start_internal(preserve, None, false, preparation_id, check_cancelled)
+        self.start_internal(preserve, None, false, preparation_id, guard)
     }
     /// Prepare the same configuration transaction as Steam without submitting a launch.
     pub(crate) fn prepare_managed_mulnx(
@@ -1469,9 +1477,9 @@ impl ManagedCs2 {
         expected: &Path,
         preserve: bool,
         preparation_id: Option<&str>,
-        check_cancelled: &dyn Fn() -> Result<(), String>,
+        guard: &crate::preparation_gate::PreparationGuard<'_>,
     ) -> Result<Value, String> {
-        if !self.start_internal(preserve, None, true, preparation_id, check_cancelled)? {
+        if !self.start_internal(preserve, None, true, preparation_id, guard)? {
             return Err("请先结束现有游戏并恢复配置。".into());
         }
         let journal = self.store.load()?.ok_or("CS2 配置事务缺失。")?;
@@ -1492,9 +1500,16 @@ impl ManagedCs2 {
     ) -> Result<Value, String> {
         self.ensure_demo_available()?;
         let argument = crate::demo_test::playdemo_argument(path, &self.log)?;
-        if !self.start_internal(preserve, Some((&argument, request_id)), true, None, &|| {
-            Ok(())
-        })? {
+        if !self.start_internal(
+            preserve,
+            Some((&argument, request_id)),
+            true,
+            None,
+            &crate::preparation_gate::PreparationGuard {
+                gate: None,
+                id: None,
+            },
+        )? {
             return Err("请先结束现有游戏并恢复配置。".into());
         }
         let journal = self.store.load()?.ok_or("CS2 配置事务缺失。")?;
@@ -1584,10 +1599,16 @@ impl ManagedCs2 {
             Some((&argument, request_id)),
             false,
             None,
-            &|| Ok(()),
+            &crate::preparation_gate::PreparationGuard {
+                gate: None,
+                id: None,
+            },
         )
     }
     pub(crate) fn cancel_unsubmitted_mulnx_demo(&mut self) -> Result<(), String> {
+        self.cancel_unsubmitted_mulnx()
+    }
+    pub(crate) fn cancel_unsubmitted_mulnx(&mut self) -> Result<(), String> {
         if self.demo_launch_attempted()? || any_cs2_running(&self.log)? {
             return Err("启动结果待确认，请先检查游戏后恢复。".into());
         }
@@ -1656,9 +1677,9 @@ impl ManagedCs2 {
         demo: Option<(&str, &str)>,
         prepare_only: bool,
         preparation_id: Option<&str>,
-        check_cancelled: &dyn Fn() -> Result<(), String>,
+        guard: &crate::preparation_gate::PreparationGuard<'_>,
     ) -> Result<bool, String> {
-        check_cancelled()?;
+        guard.check()?;
         if preparation_id.is_some_and(|id| !valid_preparation_id(id)) {
             return Err("启动事务标识无效。".into());
         }
@@ -1894,38 +1915,40 @@ impl ManagedCs2 {
             let launch_time = ((time.high as u64) << 32) | time.low as u64;
             journal["launchTime"] = json!(launch_time);
             journal["launchAttempted"] = json!(true);
-            check_cancelled()?;
-            self.store.save(&journal)?;
-            self.submit_steam(&mut command).map_err(|error| {
-                self.log.event(
-                    "cs2_launch",
-                    "failure",
-                    Some(&format!(
-                        "stage=steam_spawn; launchTime={launch_time}; code={:?}; cause={error:?}",
-                        error.raw_os_error()
-                    )),
-                );
-                if journal["fullSnapshot"] == true {
-                    journal["launchCancelled"] = json!(true);
-                } else {
-                    journal["launchAttempted"] = json!(false);
-                }
-                if journal["spectatorCfg"] == true {
-                    if let Err(error) = self.store.spectator_load_attempted(false) {
-                        self.log
-                            .event("cs2_spectator_restore", "failure", Some(&error));
-                    }
-                }
-                if let Err(save_error) = self.store.save(&journal) {
+            guard.commit(|| {
+                self.store.save(&journal)?;
+                self.submit_steam(&mut command).map_err(|error| {
                     self.log.event(
                         "cs2_launch",
                         "failure",
                         Some(&format!(
-                            "stage=journal_after_spawn_failure; cause={save_error}"
-                        )),
+                        "stage=steam_spawn; launchTime={launch_time}; code={:?}; cause={error:?}",
+                        error.raw_os_error()
+                    )),
                     );
-                }
-                "CS2 未能启动。"
+                    if journal["fullSnapshot"] == true {
+                        journal["launchCancelled"] = json!(true);
+                    } else {
+                        journal["launchAttempted"] = json!(false);
+                    }
+                    if journal["spectatorCfg"] == true {
+                        if let Err(error) = self.store.spectator_load_attempted(false) {
+                            self.log
+                                .event("cs2_spectator_restore", "failure", Some(&error));
+                        }
+                    }
+                    if let Err(save_error) = self.store.save(&journal) {
+                        self.log.event(
+                            "cs2_launch",
+                            "failure",
+                            Some(&format!(
+                                "stage=journal_after_spawn_failure; cause={save_error}"
+                            )),
+                        );
+                    }
+                    "CS2 未能启动。"
+                })?;
+                Ok(())
             })?;
             // Steam's launcher PID is not the game PID. Commit the pending
             // request and release the command lock; the existing background poll
@@ -2256,12 +2279,18 @@ impl ManagedCs2 {
     }
     /// Only the verified service-stop path can skip the lease expiry wait.
     pub fn finish_with_service_stopped(&mut self, service_stopped: bool) -> Result<(), String> {
-        self.finish_with_guard(service_stopped, &|| Ok(()))
+        self.finish_with_guard(
+            service_stopped,
+            &crate::preparation_gate::PreparationGuard {
+                gate: None,
+                id: None,
+            },
+        )
     }
     fn finish_with_guard(
         &mut self,
         service_stopped: bool,
-        check_cancelled: &dyn Fn() -> Result<(), String>,
+        guard: &crate::preparation_gate::PreparationGuard<'_>,
     ) -> Result<(), String> {
         let trial_state = if crate::demo_test::requires_recovery(&self.log, None) {
             crate::demo_test::status(&self.log)?
@@ -2334,10 +2363,7 @@ impl ManagedCs2 {
                             crate::mulnx_launch::stop_managed_for_exit(self, &self.log)
                         })
                     },
-                    || {
-                        check_cancelled()?;
-                        close_owned_process(&process, pid, created, &self.log)
-                    },
+                    || guard.commit(|| close_owned_process(&process, pid, created, &self.log)),
                 );
                 if let Err(error) = result {
                     self.message = Some(error.clone());

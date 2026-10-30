@@ -6,7 +6,7 @@ import {
   obsDesiredScenes,
 } from './desired-state.js';
 import type { ProgramSceneId, ProgramTransition } from '@mizar/protocol/program-scenes';
-import { ObsActionError } from './action-error.js';
+import { assertNoVideoOutput } from './video-transaction.js';
 import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
 
 export interface ObsRpc {
@@ -186,12 +186,14 @@ function sceneTransforms(
     : [[scene.browserInput, BROWSER_TRANSFORM]];
 }
 
-async function outputActive(obs: ObsRpc): Promise<boolean> {
-  const [stream, record] = await Promise.all([
-    obs.call('GetStreamStatus'),
-    obs.call('GetRecordStatus'),
-  ]);
-  return stream.outputActive === true || record.outputActive === true;
+export function guardedPreparationWrites(obs: ObsRpc): ObsRpc {
+  return {
+    ...obs,
+    call: async (type, data) => {
+      if (/^(Create|Set|Remove)/.test(type)) await assertNoVideoOutput(obs);
+      return obs.call(type, data);
+    },
+  };
 }
 
 export async function checkObsConfiguration(obs: ObsRpc, baseUrl: string): Promise<ObsFinding[]> {
@@ -357,7 +359,8 @@ export async function repairObsConfiguration(
     return before;
   if (!before.some((finding) => !['video_settings', 'transition_missing'].includes(finding.code)))
     return before;
-  if (await outputActive(obs)) throw new ObsActionError('output_active_repair');
+  await assertNoVideoOutput(obs);
+  obs = guardedPreparationWrites(obs);
   const collections = await obs.call('GetSceneCollectionList');
   const exists = collectionNames(collections.sceneCollections).includes(OBS_COLLECTION);
   if (
@@ -623,8 +626,8 @@ export async function ensureObsConfiguration(
         ['scene_missing', 'source_kind_conflict', 'transition_missing'].includes(item.code),
       )
     ) {
-      if (await outputActive(obs)) throw new ObsActionError('output_active_switch');
-      await switchObsScene(obs, activeScene());
+      await assertNoVideoOutput(obs);
+      await switchObsScene(guardedPreparationWrites(obs), activeScene());
     }
     return repaired;
   }
