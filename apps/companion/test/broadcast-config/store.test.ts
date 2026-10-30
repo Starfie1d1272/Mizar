@@ -9,7 +9,7 @@ import Fastify from 'fastify';
 import { createLocalWebOriginPolicy } from '../../src/local-web/origin-policy.js';
 import { registerBroadcastConfigRoutes } from '../../src/broadcast-config/routes.js';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -22,9 +22,14 @@ import {
 import {
   clonePreset,
   type BroadcastConfigDocument,
+  type ModuleRecord,
   type ProgramVisualConfigV1,
 } from '@mizar/broadcast-config';
 import { BroadcastConfigStore } from '../../src/broadcast-config/store.js';
+import {
+  addMissingBuiltinModules,
+  createBuiltinModules,
+} from '../../src/broadcast-config/builtin-modules.js';
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -143,9 +148,110 @@ async function setup() {
   };
   const store = new BroadcastConfigStore(options);
   await store.load();
-  return { store, options, initial };
+  return { store, options, initial: store.snapshot };
 }
 describe('BroadcastConfigStore', () => {
+  it('claims unchanged legacy built-ins without changing the active output', () => {
+    const document = fixture();
+    const builtin = createBuiltinModules().find((item) => item.kind === 'hud')!;
+    const oldId = randomUUID();
+    const legacy = { ...structuredClone(builtin), id: oldId, revision: 'old' };
+    document.modules.push(legacy);
+    document.presets[0]!.bindings[0] = { kind: 'hud', mode: 'use', moduleId: oldId };
+    document.active.sourceModuleIds = { hud: oldId, program: null, music: null, camera: null };
+    document.active.sourceModuleRevisions = {
+      hud: 'old',
+      program: null,
+      music: null,
+      camera: null,
+    };
+    const resolved = structuredClone(document.active.resolved);
+    expect(addMissingBuiltinModules(document)).toBe(true);
+    expect(document.modules.some((item) => item.id === oldId)).toBe(false);
+    expect(document.presets[0]!.bindings[0]).toEqual({
+      kind: 'hud',
+      mode: 'use',
+      moduleId: builtin.id,
+    });
+    expect(document.active.sourceModuleIds.hud).toBe(builtin.id);
+    expect(document.active.sourceModuleRevisions.hud).toBe(builtin.revision);
+    expect(document.active.resolved).toEqual(resolved);
+    expect(document.active.revision).toBe('active');
+    expect(addMissingBuiltinModules(document)).toBe(false);
+  });
+  it('protects built-ins and refuses removal of active or referenced modules', async () => {
+    const { store, initial } = await setup();
+    const builtin = store.snapshot.modules.find(
+      (item) => item.id === 'fb81f5a0-9e35-4ae5-8f15-000000000001',
+    )!;
+    await expect(store.deleteModule(builtin.id, builtin.revision)).rejects.toThrow(
+      'builtin_immutable',
+    );
+    await expect(store.saveModule(builtin, builtin.revision)).rejects.toThrow('builtin_immutable');
+    const bound = initial.modules[0]!;
+    await expect(store.deleteModule(bound.id, bound.revision)).rejects.toThrow('module_active');
+    const clone = await store.cloneModule(builtin.id, builtin.revision, '可编辑 HUD');
+    expect(clone.id).not.toBe(builtin.id);
+    await store.deleteModule(clone.id, clone.revision);
+    expect(store.snapshot.modules.some((item) => item.id === clone.id)).toBe(false);
+  });
+  it('keeps an identical user copy after the one-time built-in normalization', async () => {
+    const { store, options } = await setup();
+    const builtin = store.snapshot.modules.find(
+      (module) => module.kind === 'program' && module.name === 'Pulse',
+    )!;
+    const copy = await store.cloneModule(builtin.id, builtin.revision, builtin.name);
+    const reopened = new BroadcastConfigStore(options);
+    await reopened.load();
+    expect(reopened.snapshot.modules.find((module) => module.id === copy.id)).toEqual(copy);
+    await reopened.deleteModule(copy.id, copy.revision);
+  });
+  it('replaces a draft reference atomically when deleting a module', async () => {
+    const { store, initial } = await setup();
+    const builtin = store.snapshot.modules.find(
+      (item) => item.id === 'fb81f5a0-9e35-4ae5-8f15-000000000001',
+    )!;
+    const copy = await store.cloneModule(builtin.id, builtin.revision, '草稿 HUD');
+    const preset = structuredClone(initial.presets[0]!);
+    preset.id = randomUUID();
+    preset.bindings = preset.bindings.map((binding) =>
+      binding.kind === 'hud' ? { kind: 'hud', mode: 'use', moduleId: copy.id } : binding,
+    );
+    await store.save({ preset, expectedPresetRevision: null, modules: [] });
+    const current = store.snapshot.presets.find((item) => item.id === preset.id)!;
+    const app = Fastify();
+    registerBroadcastConfigRoutes(app, store, createLocalWebOriginPolicy());
+    try {
+      const metadata = await app.inject('/local/v1/broadcast-modules?view=metadata');
+      expect(metadata.statusCode).toBe(200);
+      expect(metadata.json().modules).toContainEqual({
+        id: copy.id,
+        revision: copy.revision,
+        builtin: false,
+      });
+      expect(
+        (
+          await app.inject({
+            url: '/local/v1/broadcast-modules?view=metadata',
+            headers: { origin: 'https://foreign.test' },
+          })
+        ).statusCode,
+      ).toBe(403);
+    } finally {
+      await app.close();
+    }
+    await expect(store.deleteModule(copy.id, copy.revision)).rejects.toThrow('module_referenced');
+    await store.deleteModule(copy.id, copy.revision, {
+      moduleId: builtin.id,
+      expectedPresetRevisions: { [current.id]: current.revision },
+    });
+    expect(store.snapshot.presets.find((item) => item.id === preset.id)?.bindings).toContainEqual({
+      kind: 'hud',
+      mode: 'use',
+      moduleId: builtin.id,
+    });
+    expect(store.snapshot.modules.some((item) => item.id === copy.id)).toBe(false);
+  });
   it('commits an apply once and recovers its receipt after restart', async () => {
     const { store, options, initial } = await setup();
     const request = {
@@ -164,6 +270,45 @@ describe('BroadcastConfigStore', () => {
       'request_conflict',
     );
     expect(reopened.snapshot.previousActive).toEqual(initial.active);
+  });
+  it('retains receipt resources and can retry an apply after the selected module was deleted', async () => {
+    const { options } = await setup();
+    const ref = { id: 'local:test', version: '1', digest: 'a'.repeat(64) };
+    let selected = '';
+    const store = new BroadcastConfigStore({
+      ...options,
+      resolveModule: (module) =>
+        Promise.resolve({
+          value: module.value as never,
+          lock: { resources: module.id === selected ? [ref] : [], tools: [] },
+        }),
+    });
+    await store.load();
+    const builtin = store.snapshot.modules.find(
+      (item) => item.kind === 'program' && item.name === 'Pulse',
+    )!;
+    const copy = await store.cloneModule(builtin.id, builtin.revision, 'Copy');
+    selected = copy.id;
+    const request = {
+      moduleId: copy.id,
+      expectedRevision: copy.revision,
+      expectedActiveRevision: store.snapshot.active.revision,
+      requestId: randomUUID(),
+    };
+    const original = await store.applyModule(request);
+    for (let index = 0; index < 2; index++)
+      await store.applyModule({
+        moduleId: builtin.id,
+        expectedRevision: builtin.revision,
+        expectedActiveRevision: store.snapshot.active.revision,
+        requestId: randomUUID(),
+      });
+    await store.deleteModule(copy.id, copy.revision);
+    expect(store.snapshot.active.lock.resources).not.toContainEqual(ref);
+    expect(store.snapshot.previousActive?.lock.resources).not.toContainEqual(ref);
+    expect(store.referencedResources()).toContainEqual(ref);
+    expect(await store.applyModule(request)).toEqual(original);
+    expect(store.snapshot.active.sourceModuleIds?.program).toBe(builtin.id);
   });
   it('does not publish a draft when validation fails', async () => {
     const { store, initial } = await setup();
@@ -254,6 +399,14 @@ describe('BroadcastConfigStore', () => {
       },
       presetEntries: { first: first.preset.id, second: second.preset.id },
     };
+    for (const [entryId, ids] of Object.entries(batch.moduleEntries))
+      for (const module of batch.modules.filter((item) => ids.includes(item.id)))
+        module.origin = { resource: batch.source, entryId };
+    for (const [entryId, id] of Object.entries(batch.presetEntries))
+      batch.presets.find((preset) => preset.id === id)!.origin = {
+        resource: batch.source,
+        entryId,
+      };
     const result = await store.importBatch(batch);
     expect(result.reused).toBe(false);
     expect(store.snapshot.active).toEqual(initial.active);
@@ -264,6 +417,51 @@ describe('BroadcastConfigStore', () => {
       reopened.importBatch({ ...batch, source: { ...batch.source, digest: 'b'.repeat(64) } }),
     ).rejects.toThrow('identity_conflict');
     expect(reopened.snapshot.presets).toHaveLength(3);
+    await reopened.deletePreset(second.preset.id, second.preset.revision);
+    await reopened.deleteModule(second.modules[0]!.id, second.modules[0]!.revision);
+    const restarted = new BroadcastConfigStore(options);
+    await restarted.load();
+    const inspection = restarted.inspectImport(batch.source)!;
+    expect(inspection.presets.second?.state).toBe('removed');
+    expect(inspection.presets.first?.state).toBe('existing');
+    expect(inspection.modules.hud).toContainEqual({
+      id: second.modules[0]!.id,
+      owner: 'second',
+      state: 'removed',
+    });
+    expect(() => restarted.inspectImport({ ...batch.source, digest: 'b'.repeat(64) })).toThrow(
+      'identity_conflict',
+    );
+    const retryFirst = clonePreset(initial, request, randomUUID);
+    const retrySecond = clonePreset(initial, { ...request, name: 'Second' }, randomUUID);
+    const retry = {
+      ...batch,
+      modules: [...retryFirst.modules, ...retrySecond.modules],
+      presets: [retryFirst.preset, retrySecond.preset],
+      moduleEntries: {
+        hud: [retryFirst.modules[0]!.id, retrySecond.modules[0]!.id],
+        program: [retryFirst.modules[1]!.id, retrySecond.modules[1]!.id],
+      },
+      presetEntries: { first: retryFirst.preset.id, second: retrySecond.preset.id },
+    };
+    for (const [entryId, ids] of Object.entries(retry.moduleEntries))
+      for (const module of retry.modules.filter((item) => ids.includes(item.id)))
+        module.origin = { resource: retry.source, entryId };
+    for (const [entryId, id] of Object.entries(retry.presetEntries))
+      retry.presets.find((preset) => preset.id === id)!.origin = {
+        resource: retry.source,
+        entryId,
+      };
+    const restored = await restarted.importBatch(retry);
+    expect(restored.reused).toBe(false);
+    expect(restored.mapping.presetEntries.first).toBe(first.preset.id);
+    expect(restored.mapping.presetEntries.second).toBe(retrySecond.preset.id);
+    expect(restored.mapping.moduleEntries.program).toContain(second.modules[1]!.id);
+    expect(restored.mapping.moduleEntries.hud).toContain(retrySecond.modules[0]!.id);
+    expect(restarted.snapshot.presets).toHaveLength(3);
+    expect(
+      restarted.snapshot.modules.filter((item) => item.id === first.modules[0]!.id),
+    ).toHaveLength(1);
   });
   it('rejects shared editable modules across imported presets without publishing either', async () => {
     const { store, initial } = await setup();
@@ -287,6 +485,106 @@ describe('BroadcastConfigStore', () => {
     };
     await expect(store.importBatch(batch)).rejects.toThrow('invalid_import_mapping');
     expect(store.snapshot).toEqual(initial);
+  });
+  it('reuses a preset-owned copy for a separately selected module without changing its owner', async () => {
+    const { store, initial } = await setup();
+    const source = { id: 'local:package', version: '1', digest: 'a'.repeat(64) };
+    const copy = clonePreset(
+      initial,
+      {
+        sourceId: initial.presets[0]!.id,
+        expectedRevision: 'p1',
+        expectedModuleRevisions: { hud: 'h1', program: 'p1' },
+        name: 'Imported',
+      },
+      randomUUID,
+    );
+    for (const module of copy.modules) module.origin = { resource: source, entryId: module.kind };
+    copy.preset.origin = { resource: source, entryId: 'scheme' };
+    const mapping = Object.fromEntries(copy.modules.map((module) => [module.kind, [module.id]]));
+    await store.importBatch({
+      source,
+      modules: copy.modules,
+      presets: [copy.preset],
+      moduleEntries: mapping,
+      presetEntries: { scheme: copy.preset.id },
+    });
+    const program = copy.modules.find((module) => module.kind === 'program')!;
+    const incoming = { ...structuredClone(program), id: randomUUID(), revision: randomUUID() };
+    const result = await store.importBatch({
+      source,
+      modules: [incoming],
+      presets: [],
+      moduleEntries: { program: [incoming.id] },
+      presetEntries: {},
+    });
+    expect(result.reused).toBe(true);
+    expect(result.mapping.moduleEntries.program).toEqual([program.id]);
+    expect(store.inspectImport(source)!.modules.program).toEqual([
+      { id: program.id, owner: 'scheme', state: 'existing' },
+    ]);
+  });
+  it('rechecks selected module reuse after a queued deletion before committing import', async () => {
+    const { options } = await setup();
+    let block = false;
+    let entered!: () => void;
+    let release!: () => void;
+    const reached = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const store = new BroadcastConfigStore({
+      ...options,
+      withReferenceGuard: async (operation) => {
+        if (block) {
+          block = false;
+          entered();
+          await gate;
+        }
+        return operation();
+      },
+    });
+    await store.load();
+    const source = { id: 'local:package', version: '1', digest: 'a'.repeat(64) };
+    const template = store.snapshot.modules.find((item) => item.kind === 'program')!;
+    const create = () => ({
+      ...structuredClone(template),
+      id: randomUUID(),
+      revision: randomUUID(),
+      origin: { resource: source, entryId: 'scene' },
+    });
+    const first = create();
+    await store.importBatch({
+      source,
+      modules: [first],
+      presets: [],
+      moduleEntries: { scene: [first.id] },
+      presetEntries: {},
+    });
+    expect(store.inspectImport(source)!.modules.scene![0]!.state).toBe('existing');
+    const retry = create();
+    block = true;
+    const deletion = store.deleteModule(first.id, first.revision);
+    await reached;
+    const importing = store.importBatch({
+      source,
+      modules: [retry],
+      presets: [],
+      moduleEntries: { scene: [retry.id] },
+      presetEntries: {},
+    });
+    release();
+    await deletion;
+    const imported = await importing;
+    expect(imported.reused).toBe(false);
+    expect(imported.mapping.moduleEntries.scene).toEqual([retry.id]);
+    expect(store.snapshot.modules.some((item) => item.id === first.id)).toBe(false);
+    expect(store.snapshot.modules.filter((item) => item.id === retry.id)).toHaveLength(1);
+    expect(store.inspectImport(source)!.modules.scene).toEqual([
+      { id: retry.id, owner: null, state: 'existing' },
+    ]);
   });
   it('enforces the size limit on the formatted bytes before initialization and save', async () => {
     const { store, options, initial } = await setup();
@@ -442,6 +740,63 @@ describe('BroadcastConfigStore', () => {
     });
     await camera.synchronizeFromPersistence();
     expect(camera.revision).toBe(cameraRevision);
+  });
+  it('does not resurrect a camera draft deleted during legacy conversion', async () => {
+    const { store } = await setup();
+    const id = randomUUID();
+    await store.updateFromLegacy({
+      updateDraft(document) {
+        document.modules.push({
+          id,
+          kind: 'camera',
+          schemaVersion: 2,
+          revision: 'camera-revision',
+          name: 'Camera',
+          origin: null,
+          value: {
+            format: 'mizar.camera-config',
+            version: 2,
+            name: 'Camera',
+            maps: [],
+            automaticEnabled: false,
+          },
+        });
+      },
+    });
+    let release!: () => void;
+    let started!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const converting = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const persistence = createCameraConfigPersistence(store, {
+      localPack: () => Promise.reject(new Error('unexpected')),
+      localTrackId: () => Promise.reject(new Error('unexpected')),
+      portable: async (preset, automaticEnabled) => {
+        started();
+        await waiting;
+        return {
+          format: 'mizar.camera-config',
+          version: 2,
+          name: preset.name,
+          maps: [],
+          automaticEnabled,
+        };
+      },
+      lock: (_value, active) => Promise.resolve(active.lock),
+    });
+    const before = await persistence.read();
+    const changed = structuredClone(before.catalog);
+    changed.presets.find((item) => item.id === id)!.preset.name = 'Edited';
+    const commit = persistence.commit(changed, false, before.catalog, false);
+    await converting;
+    const module = store.snapshot.modules.find((item) => item.id === id)!;
+    await store.deleteModule(id, module.revision);
+    release();
+    await expect(commit).rejects.toThrow('revision_conflict');
+    expect(store.snapshot.modules.some((item) => item.id === id)).toBe(false);
   });
   it('keeps camera explicitly off until a legacy operator activates a real draft', async () => {
     const { store, options, initial } = await setup();

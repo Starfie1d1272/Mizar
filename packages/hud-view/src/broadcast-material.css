@@ -1,12 +1,22 @@
 /* Native broadcast artwork; product UI and other HUD recipes never consume it. */
 .program-scene:not(.program-scene--matchup):not(.program-scene--gameplay),
 .bp-canvas .bp-scene {
-  background: linear-gradient(
-    120deg,
-    var(--mizar-broadcast-pulse-canvas),
-    color-mix(in srgb, var(--mizar-broadcast-pulse-blue) 6%, var(--mizar-broadcast-pulse-canvas))
+  background-image: var(
+    --pulse-background-image,
+    linear-gradient(
+      120deg,
+      var(--mizar-broadcast-pulse-canvas),
+      color-mix(in srgb, var(--mizar-broadcast-pulse-blue) 6%, var(--mizar-broadcast-pulse-canvas))
+    )
   );
+  background-size: cover;
+  background-position: center;
   background-color: var(--mizar-broadcast-pulse-canvas);
+}
+.program-scene--matchup {
+  background-image: var(--pulse-background-image, none);
+  background-size: cover;
+  background-position: center;
 }
 .broadcast-arc,
 .bp-canvas .bp-scene > .broadcast-arc {

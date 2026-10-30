@@ -17,9 +17,13 @@ import {
 } from '../../src/broadcast-config/music-assets.js';
 import { migrateLegacyBroadcast } from '../../src/broadcast-config/migrate.js';
 import { BroadcastConfigStore } from '../../src/broadcast-config/store.js';
-import { exportMusicPack, importMusicPack } from '../../src/broadcast-config/music-pack.js';
+import type { ModuleRecord } from '@mizar/broadcast-config';
 import { MusicPackResources } from '../../src/broadcast-config/music-pack-resources.js';
-import { exportPresetPack, importPresetPack } from '../../src/broadcast-config/preset-pack.js';
+import {
+  exportPresetPack,
+  importPresetPack,
+  inspectPresetPack,
+} from '../../src/broadcast-config/preset-pack.js';
 import { createProductionBroadcastDependencies } from '../../src/broadcast-config/production.js';
 
 it('round trips real music owner configuration to independent drafts without activation', async () => {
@@ -73,8 +77,19 @@ it('round trips real music owner configuration to independent drafts without act
     });
     await store.load();
     const resources = new MusicPackResources(join(root, 'packages'));
+    const exportMusic = (
+      module: ModuleRecord,
+      metadata: { packageId: string; version: string; name: string; author: string },
+    ) =>
+      exportPresetPack({
+        document: store.snapshot,
+        moduleIds: [module.id],
+        music,
+        resources,
+        metadata,
+      });
     const packageId = randomUUID();
-    const zip = await exportMusicPack(music, resources, musicModule, {
+    const zip = await exportMusic(musicModule, {
       packageId,
       version: '1.0.0',
       name: 'Music',
@@ -86,17 +101,21 @@ it('round trips real music owner configuration to independent drafts without act
     await writeFile(blocked, 'not a directory');
     const before = store.snapshot.active;
     await expect(
-      importMusicPack({ zip, store, resources: new MusicPackResources(join(blocked, 'packages')) }),
+      importPresetPack({
+        zip,
+        store,
+        resources: new MusicPackResources(join(blocked, 'packages')),
+      }),
     ).rejects.toThrow();
     expect(store.snapshot).toEqual(initial);
-    const first = await importMusicPack({ zip, store, resources });
-    const second = await importMusicPack({ zip, store, resources });
+    const first = await importPresetPack({ zip, store, resources });
+    const second = await importPresetPack({ zip, store, resources });
     expect(first.reused).toBe(false);
     expect(second.reused).toBe(true);
     expect(second.mapping).toEqual(first.mapping);
     expect(store.snapshot.active).toEqual(before);
     const imported = store.snapshot.modules.find(
-      (item) => item.id === first.mapping.moduleEntries.music![0],
+      (item) => item.id === first.mapping.moduleEntries['module-1']![0],
     );
     if (!imported || imported.kind !== 'music') throw new Error('missing imported module');
     expect(
@@ -120,150 +139,46 @@ it('round trips real music owner configuration to independent drafts without act
       () => true,
     );
     try {
-      const payload = { moduleId: musicModule.id, expectedRevision: musicModule.revision };
-      expect(
-        (
-          await app.inject({
-            method: 'POST',
-            url: '/operator/resource-library/export-music-pack',
-            headers: { origin: 'https://untrusted.example' },
-            payload,
-          })
-        ).statusCode,
-      ).toBe(403);
+      const payload = {
+        modules: [{ moduleId: musicModule.id, expectedRevision: musicModule.revision }],
+        presets: [],
+      };
+      const forbidden = await app.inject({
+        method: 'POST',
+        url: '/operator/resource-library/export-pack',
+        headers: { origin: 'https://untrusted.example' },
+        payload,
+      });
+      expect(forbidden.statusCode).toBe(403);
       const exported = await app.inject({
         method: 'POST',
-        url: '/operator/resource-library/export-music-pack',
+        url: '/operator/resource-library/export-pack',
         headers: { origin: 'http://127.0.0.1:3000' },
         payload,
       });
       expect(exported.statusCode).toBe(200);
-      const importedHttp = await app.inject({
+      const result = await app.inject({
         method: 'POST',
-        url: '/operator/resource-library/import-music-pack',
+        url: '/operator/resource-library/import-pack',
         headers: { origin: 'http://127.0.0.1:3000', 'content-type': 'application/x-mizarpack' },
         payload: exported.rawPayload,
       });
-      expect(importedHttp.statusCode).toBe(200);
-      const originalPreset = initial.presets[0]!;
-      const moduleRevisions = Object.fromEntries(
-        originalPreset.bindings.flatMap((binding) =>
-          binding.mode === 'use'
-            ? [
-                [
-                  binding.kind,
-                  initial.modules.find((module) => module.id === binding.moduleId)!.revision,
-                ],
-              ]
-            : [],
-        ),
+      expect(result.statusCode).toBe(200);
+      expect(result.json().entries[0].targetId).toBe(
+        result.json().mapping.moduleEntries['module-1'][0],
       );
-      const presetExport = await app.inject({
-        method: 'POST',
-        url: '/operator/resource-library/export-preset-pack',
-        headers: { origin: 'http://127.0.0.1:3000' },
-        payload: {
-          presetId: originalPreset.id,
-          expectedRevision: originalPreset.revision,
-          expectedModuleRevisions: moduleRevisions,
-        },
-      });
-      expect(presetExport.statusCode).toBe(200);
-      const presetImport = await app.inject({
-        method: 'POST',
-        url: '/operator/resource-library/import-preset-pack',
-        headers: { origin: 'http://127.0.0.1:3000', 'content-type': 'application/x-mizarpack' },
-        payload: presetExport.rawPayload,
-      });
-      expect(presetImport.statusCode).toBe(200);
-      const copyId = await store.clone({
-        sourceId: originalPreset.id,
-        expectedRevision: originalPreset.revision,
-        expectedModuleRevisions: moduleRevisions,
-        name: '第二套',
-      });
-      const copyDocument = store.snapshot;
-      const copyPreset = copyDocument.presets.find((item) => item.id === copyId.presetId)!;
-      const copyRevisions = Object.fromEntries(
-        copyPreset.bindings.flatMap((binding) =>
-          binding.mode === 'use'
-            ? [
-                [
-                  binding.kind,
-                  copyDocument.modules.find((module) => module.id === binding.moduleId)!.revision,
-                ],
-              ]
-            : [],
-        ),
-      );
-      const bundle = await app.inject({
-        method: 'POST',
-        url: '/operator/resource-library/export-preset-bundle',
-        headers: { origin: 'http://127.0.0.1:3000' },
-        payload: {
-          presets: [
-            {
-              presetId: originalPreset.id,
-              expectedRevision: originalPreset.revision,
-              expectedModuleRevisions: moduleRevisions,
-            },
-            {
-              presetId: copyPreset.id,
-              expectedRevision: copyPreset.revision,
-              expectedModuleRevisions: copyRevisions,
-            },
-          ],
-        },
-      });
-      const staleBundle = await app.inject({
-        method: 'POST',
-        url: '/operator/resource-library/export-preset-bundle',
-        headers: { origin: 'http://127.0.0.1:3000' },
-        payload: {
-          presets: [
-            {
-              presetId: originalPreset.id,
-              expectedRevision: 'stale',
-              expectedModuleRevisions: moduleRevisions,
-            },
-            {
-              presetId: copyPreset.id,
-              expectedRevision: copyPreset.revision,
-              expectedModuleRevisions: copyRevisions,
-            },
-          ],
-        },
-      });
-      expect(staleBundle.statusCode).toBe(409);
-      expect(bundle.statusCode).toBe(200);
-      const bundleContents = await readPackArchive(bundle.rawPayload);
-      expect(bundleContents.manifest.presets).toHaveLength(2);
-      expect(
-        bundleContents.manifest.files.filter((item) => item.mediaType === 'audio/wav'),
-      ).toHaveLength(1);
-      const bundleImport = await importPresetPack({ zip: bundle.rawPayload, store, resources });
-      const firstId = bundleImport.mapping.presetEntries.main!,
-        secondId = bundleImport.mapping.presetEntries['preset-2']!;
-      const importedSchemes = store.snapshot.presets.filter(
-        (item) => item.id === firstId || item.id === secondId,
-      );
-      expect(importedSchemes).toHaveLength(2);
-      expect(importedSchemes[0]!.bindings.find((item) => item.kind === 'music')).not.toEqual(
-        importedSchemes[1]!.bindings.find((item) => item.kind === 'music'),
-      );
-      expect(store.snapshot.active).toEqual(before);
     } finally {
       await app.close();
     }
-    const reexported = await exportMusicPack(music, resources, imported, {
+    const reexported = await exportMusic(imported, {
       packageId: randomUUID(),
       version: '1.0.0',
       name: '再次分享',
       author: '',
     });
-    const secondImport = await importMusicPack({ zip: reexported, store, resources });
+    const secondImport = await importPresetPack({ zip: reexported, store, resources });
     const roundTrip = store.snapshot.modules.find(
-      (item) => item.id === secondImport.mapping.moduleEntries.music![0],
+      (item) => item.id === secondImport.mapping.moduleEntries['module-1']![0],
     );
     if (!roundTrip || roundTrip.kind !== 'music') throw new Error('missing round-trip module');
     expect(
@@ -283,11 +198,44 @@ it('round trips real music owner configuration to independent drafts without act
     const schemeDocument = structuredClone(initial);
     const programModule = schemeDocument.modules.find((item) => item.kind === 'program');
     if (!programModule || programModule.kind !== 'program') throw new Error('missing program');
-    const official = {
-      resource: { id: 'official:epl-default', version: '1.0.0', digest: 'a'.repeat(64) },
-      fileId: 'fixtures/epl/team.png',
+    const image = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNg+M8AAAICAQB7CYF4AAAAAElFTkSuQmCC',
+      'base64',
+    );
+    const imagePath = 'assets/background.png';
+    const imageSource = await resources.installAndCommit(
+      await writePackArchive(
+        Buffer.from(
+          JSON.stringify({
+            format: 'mizar.pack',
+            formatVersion: 1,
+            packageId: randomUUID(),
+            version: '1.0.0',
+            name: 'Image',
+            author: '',
+            modules: [],
+            presets: [],
+            dependencies: [],
+            requirements: [],
+            files: [
+              {
+                id: 'background',
+                path: imagePath,
+                mediaType: 'image/png',
+                bytes: image.length,
+                sha256: createHash('sha256').update(image).digest('hex'),
+              },
+            ],
+          }),
+        ),
+        new Map([[imagePath, image]]),
+      ),
+      async (ref) => ref,
+    );
+    programModule.value.assets['pulse.background'] = {
+      resource: imageSource,
+      fileId: 'background',
     };
-    programModule.value.assets.logo = official;
     const opening = await music.add('camera.wav', Buffer.from('RIFF1111WAVEcamera'));
     const cameraModule = schemeDocument.modules.find((item) => item.kind === 'camera');
     if (!cameraModule || cameraModule.kind !== 'camera') throw new Error('missing camera');
@@ -329,7 +277,6 @@ it('round trips real music owner configuration to independent drafts without act
     schemeDocument.presets.push(sharedPreset);
     const presetZip = await exportPresetPack({
       document: schemeDocument,
-      presetId: initial.presets[0]!.id,
       presetIds: [initial.presets[0]!.id, sharedPreset.id],
       music,
       resources,
@@ -354,8 +301,10 @@ it('round trips real music owner configuration to independent drafts without act
       Buffer.from(JSON.stringify(invalidManifest)),
       presetArchive.files,
     );
-    await expect(importPresetPack({ zip: invalidZip, store, resources })).rejects.toThrow(
-      'capability_unsupported',
+    const invalid = await inspectPresetPack({ zip: invalidZip, store });
+    expect(invalid.entries.find((entry) => entry.kind === 'camera')?.status).toBe('unsupported');
+    expect(invalid.entries.some((entry) => entry.kind === 'hud' && entry.status === 'ready')).toBe(
+      true,
     );
     expect(store.snapshot.active).toEqual(before);
     const sharedArchive = await readPackArchive(presetZip);
@@ -385,7 +334,7 @@ it('round trips real music owner configuration to independent drafts without act
     expect((await resources.read(sound.asset)).bytes).toEqual(Buffer.from('RIFF1111WAVEcamera'));
     const reshared = await exportPresetPack({
       document: store.snapshot,
-      presetId: importedPreset.id,
+      presetIds: [importedPreset.id],
       music,
       resources,
       metadata: { packageId: randomUUID(), version: '1.0.0', name: '再次分享方案', author: '' },
@@ -414,7 +363,29 @@ it('round trips real music owner configuration to independent drafts without act
     );
     if (!importedProgram || importedProgram.kind !== 'program')
       throw new Error('missing program module');
-    expect(importedProgram.value.assets.logo).toEqual(official);
+    expect(
+      (await resources.readAsset(importedProgram.value.assets['pulse.background']!)).bytes,
+    ).toEqual(image);
+    const filename = `${createHash('sha256')
+      .update(JSON.stringify([presetResult.mapping.source.id, presetResult.mapping.source.version]))
+      .digest('hex')}.mizarpack`;
+    await writeFile(join(root, 'packages', filename), Buffer.from('damaged'));
+    const programEntry = sharedArchive.manifest.modules.find(
+      (entry) => entry.module === 'program',
+    )!.entryId;
+    const repaired = await importPresetPack({
+      zip: presetZip,
+      store,
+      resources,
+      selection: { modules: [programEntry], presets: [] },
+    });
+    expect(repaired.reused).toBe(true);
+    expect(
+      store.snapshot.modules.filter((module) => module.id === importedProgram.id),
+    ).toHaveLength(1);
+    expect(
+      (await resources.readAsset(importedProgram.value.assets['pulse.background']!)).bytes,
+    ).toEqual(image);
     const importedMusicId = importedPreset.bindings.find((item) => item.kind === 'music');
     if (!importedMusicId || importedMusicId.mode !== 'use') throw new Error('missing preset music');
     const presetMusic = store.snapshot.modules.find((item) => item.id === importedMusicId.moduleId);
@@ -443,13 +414,13 @@ it('round trips real music owner configuration to independent drafts without act
     const resolved = { ...before.resolved, music: imported.value };
     const lock = await dependencies.lockForActive(resolved);
     await dependencies.verifyActive({ ...before, resolved, lock });
-    const conflicting = await exportMusicPack(music, resources, musicModule, {
+    const conflicting = await exportMusic(musicModule, {
       packageId,
       version: '1.0.0',
       name: 'Changed',
       author: 'Test',
     });
-    await expect(importMusicPack({ zip: conflicting, store, resources })).rejects.toThrow(
+    await expect(importPresetPack({ zip: conflicting, store, resources })).rejects.toThrow(
       'identity_conflict',
     );
     expect((await reopened.read(ref)).bytes).toEqual(Buffer.from('RIFF0000WAVEtest'));

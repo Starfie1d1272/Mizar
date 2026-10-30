@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { io } from 'socket.io-client';
-import { parseHudResolvedPreset, type HudResolvedPreset } from '@mizar/hud-config';
+import { resolvedHudSchema, type ResolvedHudModule } from '@mizar/broadcast-config';
 import { getObjectiveClockLeaseMs } from '@mizar/core/runtime';
 import { AssetProvider, ProgramCanvas, ProgramView } from '@mizar/hud-view';
 import { createLhmProjection } from './projection';
@@ -17,7 +17,9 @@ const resolveAssetUrl = (path: string) =>
   new URL(`./mizar-assets/${path.replace(/^\/+/, '')}`, window.location.href).href;
 type Snapshot = NonNullable<ReturnType<ReturnType<typeof createLhmProjection>>>;
 function App() {
-  const [preset, setPreset] = useState<HudResolvedPreset | null>(null);
+  const [preset, setPreset] = useState<Extract<ResolvedHudModule, { renderer: 'native' }> | null>(
+    null,
+  );
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [scale, setScale] = useState(() =>
     Math.min(window.innerWidth / 1920, window.innerHeight / 1080),
@@ -32,7 +34,9 @@ function App() {
         return response.json() as Promise<unknown>;
       })
       .then((value) => {
-        if (alive) setPreset(parseHudResolvedPreset(value));
+        const parsed = resolvedHudSchema.parse(value);
+        if (parsed.renderer !== 'native') throw new Error('unsupported HUD');
+        if (alive) setPreset(parsed);
       })
       .catch(() => {
         if (alive) setPreset(null);
@@ -164,7 +168,9 @@ function App() {
             kind="hud"
             snapshot={snapshot?.program ?? null}
             radarSnapshot={snapshot?.radar ?? null}
-            resolvedPreset={preset}
+            resolvedPreset={preset.config}
+            overlays={preset.overlays}
+            accent={preset.accent}
             resolveAssetUrl={resolveAssetUrl}
           />
         </ProgramCanvas>

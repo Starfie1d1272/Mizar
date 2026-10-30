@@ -1,4 +1,5 @@
-import { supportsBroadcastDisplay } from '../program/broadcast-display';
+import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
+import { pulseBackgroundUrl, supportsBroadcastDisplay } from '../program/broadcast-display';
 import { useEffect, useState } from 'react';
 import { parseBroadcastDisplayConfig, type BroadcastDisplayConfig } from '@mizar/broadcast-config';
 
@@ -8,7 +9,10 @@ export interface BroadcastDisplayClientState {
 }
 
 /** Poll an atomic display projection; retain the last complete value across transient failures. */
-export function useBroadcastDisplayConfig(enabled = true): BroadcastDisplayClientState {
+export function useBroadcastDisplayConfig(
+  enabled = true,
+  scene: ProgramSceneId = 'gameplay',
+): BroadcastDisplayClientState {
   const [value, setValue] = useState<BroadcastDisplayClientState>({
     status: 'loading',
     current: null,
@@ -17,6 +21,7 @@ export function useBroadcastDisplayConfig(enabled = true): BroadcastDisplayClien
     if (!enabled) return;
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
+    let verifiedBackground: string | null = null;
     const poll = async () => {
       try {
         const response = await fetch('/local/v1/broadcast-display-config', {
@@ -24,11 +29,23 @@ export function useBroadcastDisplayConfig(enabled = true): BroadcastDisplayClien
           signal: AbortSignal.timeout(2000),
         });
         if (!response.ok) throw new Error('display configuration unavailable');
+        if (
+          scene !== 'gameplay' &&
+          response.headers?.get('x-mizar-program-status') === 'dependency_missing'
+        )
+          throw new Error('scene dependency unavailable');
         const current = parseBroadcastDisplayConfig(await response.json());
-        if (!supportsBroadcastDisplay(current)) {
+        if (!supportsBroadcastDisplay(current, scene)) {
           if (active)
             setValue((previous) => ({ status: 'unsupported', current: previous.current }));
           return;
+        }
+        const background = scene === 'gameplay' ? null : pulseBackgroundUrl(current.program);
+        if (background && background !== verifiedBackground) {
+          const image = await fetch(background, { signal: AbortSignal.timeout(2000) });
+          if (!image.ok || !image.headers.get('content-type')?.startsWith('image/'))
+            throw new Error('background unavailable');
+          verifiedBackground = background;
         }
         if (active)
           setValue((previous) =>
@@ -53,6 +70,6 @@ export function useBroadcastDisplayConfig(enabled = true): BroadcastDisplayClien
       active = false;
       clearTimeout(timer);
     };
-  }, [enabled]);
+  }, [enabled, scene]);
   return value;
 }

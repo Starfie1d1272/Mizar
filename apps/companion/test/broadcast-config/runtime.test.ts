@@ -8,7 +8,7 @@ import { OrchestrationStore } from '../../src/orchestration/store.js';
 import { BroadcastReferenceQueue } from '../../src/broadcast-config/reference-queue.js';
 import { createBroadcastRuntime } from '../../src/broadcast-config/runtime.js';
 
-it('leaves legacy owners and files intact if camera source verification cannot finish', async () => {
+it('preserves legacy camera data and disables its facade until sources can be verified', async () => {
   const root = await mkdtemp(join(tmpdir(), 'broadcast-runtime-pending-'));
   try {
     const hud = new HudConfigStore();
@@ -54,12 +54,16 @@ it('leaves legacy owners and files intact if camera source verification cannot f
       },
     });
     await runtime.initialize();
-    expect(runtime.status).toEqual({ state: 'pending', reason: 'dependency_unavailable' });
-    expect(runtime.ready).toBe(false);
-    await expect(stat(path)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(runtime.status).toEqual({ state: 'pending', reason: 'camera_identity_unavailable' });
+    expect(runtime.ready).toBe(true);
+    expect((await stat(path)).isFile()).toBe(true);
+    expect(runtime.store.pendingLegacyCamera?.catalog.preset.maps[0]?.pack).toBe('Mizar_test');
+    expect(runtime.store.snapshot.active.resolved.camera).toBeNull();
     expect(await readFile(join(camera.directory, 'presets.json'), 'utf8')).toBe(legacy);
-    await camera.saveAutomaticEnabled(true);
-    expect(camera.automaticEnabled).toBe(true);
+    await expect(camera.saveAutomaticEnabled(true)).rejects.toThrow(
+      'camera_dependency_unavailable',
+    );
+    expect(camera.automaticEnabled).toBe(false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

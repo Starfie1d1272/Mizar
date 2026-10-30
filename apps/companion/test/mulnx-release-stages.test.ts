@@ -223,14 +223,15 @@ it('prepares without selecting and publishes a configured instance only after se
   await shareStore.load();
   const zip = await exportPresetPack({
     document: migrated.document,
-    presetId: migrated.document.presets[0]!.id,
+    presetIds: [migrated.document.presets[0]!.id],
     music: musicStore,
     resources: shareResources,
     metadata: { packageId: randomUUID(), version: '1.0.0', name: 'Camera', author: '' },
   });
   const imported = await importPresetPack({ zip, store: shareStore, resources: shareResources });
+  const presetEntry = imported.entries.find((item) => item.type === 'preset')!.entryId;
   const importedPreset = shareStore.snapshot.presets.find(
-    (item) => item.id === imported.mapping.presetEntries.main,
+    (item) => item.id === imported.mapping.presetEntries[presetEntry],
   );
   const cameraBinding = importedPreset?.bindings.find((binding) => binding.kind === 'camera');
   if (!cameraBinding || cameraBinding.mode !== 'use') throw new Error('missing camera binding');
@@ -322,12 +323,19 @@ it('prepares without selecting and publishes a configured instance only after se
       return committed.json<{ cameraReady: boolean }>().cameraReady;
     };
     expect(await switchRelease('different source')).toBe(false);
+    expect((await app.inject('/local/v1/orchestration')).json<unknown>()).toMatchObject({
+      preset: { name: '已关闭', maps: [] },
+      automaticEnabled: false,
+    });
     expect((await app.inject('/local/v1/broadcast-presets')).json<unknown>()).toMatchObject({
       active: {
         resolved: { camera: { maps: [{ source: { treeSha256: source.treeSha256 } }] } },
       },
     });
     expect(await switchRelease('source')).toBe(true);
+    expect((await app.inject('/local/v1/orchestration')).json<unknown>()).toMatchObject({
+      preset: { maps: [{ map: 'de_dust2', pack: current.packs[0]!.name }] },
+    });
   } finally {
     await app.close();
     await writeFile(join(data, 'current.json'), originalReceipt);
@@ -442,7 +450,7 @@ it('recomputes update status after committing a selection without inventing a su
   fixture.hash = release.sha256;
   const newest = await tool.prepareRelease();
   expect(tool.view().checkResult).toBe('available');
-  const latestStage = await tool.stageSelection(newest.preparedId, 'D:\\Steam\\cs2.exe', false);
+  const latestStage = await tool.stageSelection(newest.preparedId);
   await tool.commitSelection(latestStage.id);
   expect(tool.view()).toMatchObject({
     installed: release.tag,
@@ -453,14 +461,14 @@ it('recomputes update status after committing a selection without inventing a su
     release.tag,
   );
   fixture.hash = old.sha256;
-  const oldStage = await tool.stageSelection(older.preparedId, 'D:\\Steam\\cs2.exe', false);
+  const oldStage = await tool.stageSelection(older.preparedId);
   await tool.commitSelection(oldStage.id);
   expect(tool.view()).toMatchObject({ installed: old.tag, checkResult: 'available' });
   expect(tool.view().notificationIdentity).toContain(release.sha256);
   fixture.fail = true;
   await expect(tool.check()).rejects.toThrow();
   fixture.hash = release.sha256;
-  const unknownStage = await tool.stageSelection(newest.preparedId, 'D:\\Steam\\cs2.exe', false);
+  const unknownStage = await tool.stageSelection(newest.preparedId);
   await tool.commitSelection(unknownStage.id);
   expect(tool.view()).toMatchObject({
     installed: release.tag,

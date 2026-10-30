@@ -8,6 +8,7 @@ export type BroadcastMigrationStatus =
       reason:
         | 'owner_unavailable'
         | 'camera_identity_unavailable'
+        | 'program_dependency_unavailable'
         | 'facades_pending'
         | 'dependency_unavailable'
         | 'owner_sync_pending';

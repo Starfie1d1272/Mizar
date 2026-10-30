@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { MulnxToolView } from '@mizar/protocol/orchestration';
 import { BroadcastPresets } from './BroadcastPresets';
-import { MusicPackages } from './MusicPackages';
+import { ResourceModules, type Snapshot } from './ResourceModules';
 import { OperatorShell } from '../operator/OperatorShell';
 import { MulnxToolControls } from '../orchestration/MulnxToolControls';
 import { openTool, useLocalRead } from '../preparation/client';
@@ -31,6 +31,13 @@ const phases: Record<ResourceStatus['phase'], string> = {
 
 export function ResourceLibraryPage() {
   const view = useLocalRead<LibraryView>('/local/v1/resource-library', 2000);
+  const [broadcastRefresh, setBroadcastRefresh] = useState(0);
+  const broadcastSnapshot = useLocalRead<Snapshot>(
+    '/local/v1/broadcast-presets',
+    2000,
+    broadcastRefresh,
+  );
+  const refreshBroadcast = () => setBroadcastRefresh((value) => value + 1);
   const [runningVersion, setRunningVersion] = useState<string | null>(null);
   useEffect(() => {
     if (!window.__TAURI_INTERNALS__) return;
@@ -59,7 +66,10 @@ export function ResourceLibraryPage() {
     };
   }, []);
   const [query, setQuery] = useState('');
-  const [category, setCategory] = useState<'all' | 'media' | 'tool' | 'music' | 'presets'>('all');
+  const [focusPreset, setFocusPreset] = useState<{ id: string; request: number } | null>(null);
+  const [category, setCategory] = useState<
+    'all' | 'media' | 'tool' | 'music' | 'presets' | 'hud' | 'program' | 'camera'
+  >('all');
   const [preparedSession, setPreparedSession] = useState<{
     preparedId: string;
     tag: string;
@@ -71,7 +81,8 @@ export function ResourceLibraryPage() {
   );
   const showMedia = category === 'all' || category === 'media';
   const showPresets = category === 'all' || category === 'presets';
-  const showMusic = category === 'all' || category === 'music';
+  const showModules =
+    category === 'all' || ['hud', 'program', 'music', 'camera'].includes(category);
   const showTool = (category === 'all' || category === 'tool') && matches('MulNX 运镜 工具');
   return (
     <OperatorShell active="/packages">
@@ -82,6 +93,15 @@ export function ResourceLibraryPage() {
             <p>查看播出方案、音乐配置、素材和运镜工具。</p>
           </div>
         </header>
+        <details>
+          <summary>创建和制作</summary>
+          <p>在制作入口创建或编辑内容，保存后返回资源管理。</p>
+          <div className="resource-library__actions">
+            <a href="/operator/hud">HUD 编辑器</a>
+            <a href="/settings?tab=music">音乐制作</a>
+            <a href="/settings?tab=camera">运镜制作</a>
+          </div>
+        </details>
         <div className="resource-library__filters">
           <Field
             label="搜索资源"
@@ -94,9 +114,12 @@ export function ResourceLibraryPage() {
             {(
               [
                 ['all', '全部'],
-                ['presets', '播出方案'],
-                ['media', '素材'],
+                ['hud', 'HUD'],
+                ['program', '场景'],
                 ['music', '音乐'],
+                ['camera', '运镜'],
+                ['presets', '方案'],
+                ['media', '素材'],
                 ['tool', '工具'],
               ] as const
             ).map(([value, label]) => (
@@ -111,8 +134,27 @@ export function ResourceLibraryPage() {
             ))}
           </div>
         </div>
-        {showPresets ? <BroadcastPresets query={query} /> : null}
-        {showMusic ? <MusicPackages query={query} /> : null}
+        <ResourceModules
+          query={query}
+          sharedSnapshot={broadcastSnapshot}
+          onRefresh={refreshBroadcast}
+          category={category}
+          onImported={(presetId) => {
+            setCategory('all');
+            setQuery('');
+            setFocusPreset((previous) =>
+              presetId ? { id: presetId, request: (previous?.request ?? 0) + 1 } : null,
+            );
+          }}
+        />
+        {showPresets ? (
+          <BroadcastPresets
+            query={query}
+            focusPreset={focusPreset}
+            sharedSnapshot={broadcastSnapshot}
+            onRefresh={refreshBroadcast}
+          />
+        ) : null}
         {!view ? (
           <StatusBanner tone="warning">
             正在连接资源状态；如果持续无法连接，请检查本地制播服务。
@@ -206,7 +248,7 @@ export function ResourceLibraryPage() {
         {view &&
         !(showMedia && (resources?.length || view.resources === null)) &&
         !showTool &&
-        !showMusic &&
+        !showModules &&
         !showPresets ? (
           <p>没有找到匹配的资源。</p>
         ) : null}
