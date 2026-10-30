@@ -64,6 +64,7 @@ import {
   ObsExitSafetyError,
   checkObsConfiguration,
   ensureObsConfiguration,
+  alignPreparationScene,
   guardedPreparationWrites,
   repairObsConfiguration,
   refreshObsBrowserSources,
@@ -2094,6 +2095,7 @@ export class ObsAdapter {
           )
         )
           return { findings: visual, ready: false };
+        await alignPreparationScene(obs, activeScene, current);
         let audio: ObsFinding[];
         if (
           (await this.audioRouting?.enabled()) ||

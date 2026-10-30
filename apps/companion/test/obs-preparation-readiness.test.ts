@@ -4,6 +4,7 @@ import { obsReadiness } from '../src/program-scenes/readiness.js';
 import { obsFindingReadiness } from '../src/obs/prepare-readiness.js';
 import {
   ensureObsConfiguration,
+  alignPreparationScene,
   guardedPreparationWrites,
   type ObsRpc,
 } from '../src/obs/reconcile.js';
@@ -18,6 +19,97 @@ import { createLocalWebOriginPolicy } from '../src/local-web/origin-policy.js';
 
 const activeScene = 'waiting';
 const baseUrl = 'http://127.0.0.1:3000';
+
+test('explicit preparation aligns an existing Mizar scene only with idle output and a valid lease', async () => {
+  const desired = obsDesiredScenes(baseUrl);
+  const waiting = desired.find((scene) => scene.id === 'waiting')!.sceneName;
+  const gameplay = desired.find((scene) => scene.id === 'gameplay')!.sceneName;
+  let current = gameplay;
+  let outputActive = false;
+  let valid = true;
+  let takeover = false;
+  const calls: string[] = [];
+  const obs: ObsRpc = {
+    call: async (type, data = {}) => {
+      calls.push(type);
+      if (type === 'GetCurrentProgramScene') return { currentProgramSceneName: current };
+      if (type === 'GetSceneCollectionList') return { currentSceneCollectionName: 'Mizar' };
+      if (type === 'GetSceneList')
+        return {
+          scenes: desired.map((scene) => ({ sceneName: scene.sceneName })),
+          currentProgramSceneName: current,
+        };
+      if (type === 'GetSceneTransitionList')
+        return { transitions: [{ transitionKind: 'cut_transition', transitionName: 'Cut' }] };
+      if (type === 'GetOutputList')
+        return {
+          outputs: [
+            { outputName: 'Virtual camera', outputActive, outputFlags: { OBS_OUTPUT_VIDEO: true } },
+          ],
+        };
+      if (type === 'SetSceneSceneTransitionOverride') {
+        if (takeover) current = 'Personal scene';
+        return {};
+      }
+      if (type === 'SetCurrentProgramScene') {
+        current = String(data.sceneName);
+        return {};
+      }
+      throw new Error(`Unexpected request ${type}`);
+    },
+  };
+  outputActive = true;
+  await assert.rejects(
+    alignPreparationScene(
+      obs,
+      () => 'waiting',
+      () => valid,
+    ),
+    /Virtual camera/,
+  );
+  assert.equal(current, gameplay);
+  outputActive = false;
+  takeover = true;
+  await assert.rejects(
+    alignPreparationScene(
+      obs,
+      () => 'waiting',
+      () => valid,
+    ),
+    /场景已变化/,
+  );
+  assert.equal(current, 'Personal scene');
+  assert.equal(calls.filter((call) => call === 'SetCurrentProgramScene').length, 0);
+  current = gameplay;
+  takeover = false;
+  valid = false;
+  await assert.rejects(
+    alignPreparationScene(
+      obs,
+      () => 'waiting',
+      () => valid,
+    ),
+    /失效/,
+  );
+  valid = true;
+  await alignPreparationScene(
+    obs,
+    () => 'waiting',
+    () => valid,
+  );
+  assert.equal(current, waiting);
+  outputActive = true;
+  await alignPreparationScene(
+    obs,
+    () => 'waiting',
+    () => valid,
+  );
+  assert.equal(calls.filter((call) => call === 'SetCurrentProgramScene').length, 1);
+  assert.equal(
+    calls.some((call) => call.startsWith('Stop')),
+    false,
+  );
+});
 
 test('audio preferences remain visible without masking actual setup failures', () => {
   const findings = [

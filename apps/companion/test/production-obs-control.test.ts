@@ -260,7 +260,7 @@ test('browser recovery is granted after entering and revoked on exit intent', as
   await app.close();
 });
 
-test('video restoration runs after the safe scene and blocks release on failure', async () => {
+test('video restoration failure after the safe scene defers recovery and releases production', async () => {
   const app = Fastify();
   const calls: string[] = [];
   const scenes = {
@@ -290,7 +290,8 @@ test('video restoration runs after the safe scene and blocks release on failure'
     headers: { origin: 'http://127.0.0.1:3000' },
     payload: { action: 'finish', expectedRevision: production.get().revision },
   });
-  assert.equal(response.statusCode, 409);
-  assert.deepEqual(calls, ['waiting', 'restore']);
+  assert.equal(response.statusCode, 200);
+  assert.equal(production.get().mode, 'preparation');
+  assert.deepEqual(calls, ['waiting', 'restore', 'release']);
   await app.close();
 });

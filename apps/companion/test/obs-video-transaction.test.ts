@@ -5,6 +5,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ObsVideoTransaction } from '../src/obs/video-transaction.js';
 import type { ObsRpc } from '../src/obs/reconcile.js';
+import Fastify from 'fastify';
+import { createLocalWebOriginPolicy } from '../src/local-web/origin-policy.js';
+import { registerProductionRoutes } from '../src/program-scenes/production.js';
+import type { ProgramSceneController } from '../src/program-scenes/controller.js';
 
 const original = {
   baseWidth: 2560,
@@ -68,6 +72,69 @@ async function usingTest(
   }
 }
 const endpoint = 'ws://127.0.0.1:4455';
+
+for (const condition of ['external output', 'OBS closed'] as const) {
+  test(`safe production exit defers video restoration for ${condition}`, async () =>
+    usingTest(async (tx, f) => {
+      await tx.prepare(f.obs, endpoint, () => true);
+      const prepared = { ...f.settings };
+      if (condition === 'external output')
+        f.outputs = [
+          { outputName: 'Live', outputActive: true, outputFlags: { OBS_OUTPUT_VIDEO: true } },
+        ];
+      const app = Fastify();
+      let released = false;
+      const scenes = {
+        get: () => ({ active: 'waiting', revision: 'scene' }),
+        holdAutomatic: () => undefined,
+        controlValid: () => () => true,
+        // Models the separate exit proof: external takeover or confirmed absent OBS.
+        selectWaitingForExit: async () => ({ ok: true }),
+      } as unknown as ProgramSceneController;
+      const production = registerProductionRoutes(app, {
+        originPolicy: createLocalWebOriginPolicy(),
+        hasContext: () => true,
+        scenes,
+        afterSafeScene: () =>
+          condition === 'OBS closed'
+            ? tx.restore(
+                {
+                  call: async () => {
+                    throw new Error('OBS unavailable');
+                  },
+                },
+                endpoint,
+              )
+            : tx.restore(f.obs, endpoint),
+        release: async () => {
+          released = true;
+        },
+      });
+      try {
+        const response = await app.inject({
+          method: 'POST',
+          url: '/operator/production',
+          headers: { origin: 'http://127.0.0.1:3000' },
+          payload: { action: 'finish', expectedRevision: production.get().revision },
+        });
+        assert.equal(response.statusCode, 200);
+        assert.equal(released, true);
+        assert.equal(production.get().mode, 'preparation');
+        assert.equal(await tx.pending(), true);
+        assert.deepEqual(f.settings, prepared);
+        assert.equal(
+          f.calls.some(({ type }) => type.startsWith('Stop')),
+          false,
+        );
+        f.outputs = [];
+        await tx.restore(f.obs, endpoint);
+        assert.equal(await tx.pending(), false);
+        assert.deepEqual(f.settings, original);
+      } finally {
+        await app.close();
+      }
+    }));
+}
 
 test('preflight rejects an active video output without touching OBS or creating a journal', async () =>
   usingTest(async (tx, f) => {

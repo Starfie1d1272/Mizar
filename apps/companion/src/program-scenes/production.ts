@@ -110,7 +110,20 @@ export function registerProductionRoutes(
           if (!result.ok) return { code: 409, value: { message: result.message } };
         }
         stage = 'production_video_restore';
-        await options.afterSafeScene?.();
+        try {
+          await options.afterSafeScene?.();
+        } catch (error) {
+          // The safe-scene/absence proof has already passed. Video restoration keeps
+          // its own journal for a later retry and must not prevent releasing control.
+          app.log.warn(
+            {
+              event: 'production',
+              stage,
+              diagnostic: { operationId, error: diagnosticValue(error) },
+            },
+            'OBS video restoration deferred',
+          );
+        }
         stage = 'production_release';
         if (!controlValid())
           return { code: 409, value: { message: 'OBS 播出状态已变化，请核对后重试。' } };
@@ -141,15 +154,11 @@ export function registerProductionRoutes(
       const message =
         error instanceof Error && error.message === 'camera_settings_saving'
           ? '运镜设置正在保存，请稍后重试。'
-          : stage === 'production_video_restore'
-            ? error instanceof Error && error.name === 'ObsVideoError'
-              ? error.message
-              : 'OBS 视频设置恢复未完成，请连接 OBS 并检查配置后重试结束制作。'
-            : stage === 'production_release'
-              ? '等待画面已保留，但数据源释放失败，制作状态仍保留。请查看诊断，处理记录的问题后再结束制作。'
-              : stage === 'production_safe_scene'
-                ? '切换等待画面失败，制作尚未结束。请查看诊断，处理记录的问题后再结束制作。'
-                : '比赛状态读取失败，当前状态和具体原因未确认。请复制诊断信息后排查。';
+          : stage === 'production_release'
+            ? '等待画面已保留，但数据源释放失败，制作状态仍保留。请查看诊断，处理记录的问题后再结束制作。'
+            : stage === 'production_safe_scene'
+              ? '切换等待画面失败，制作尚未结束。请查看诊断，处理记录的问题后再结束制作。'
+              : '比赛状态读取失败，当前状态和具体原因未确认。请复制诊断信息后排查。';
       return { code: 409, value: { message } };
     } finally {
       if (shutdown && !committed) shuttingDown = false;

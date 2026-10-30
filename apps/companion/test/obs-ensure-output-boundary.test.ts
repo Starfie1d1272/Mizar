@@ -13,9 +13,10 @@ import { registerObsRoutes } from '../src/obs/routes.js';
 import { createLocalWebOriginPolicy } from '../src/local-web/origin-policy.js';
 
 it.each([
-  { preparedAudio: false, label: 'default audio sources' },
-  { preparedAudio: true, label: 'automatic TeamSpeak probe' },
-])('ensure reports the active plugin output before writing $label', async ({ preparedAudio }) => {
+  { preparedAudio: false, align: false, label: 'active output and default audio sources' },
+  { preparedAudio: true, align: false, label: 'active output and automatic TeamSpeak probe' },
+  { preparedAudio: true, align: true, label: 'idle output and an existing gameplay scene' },
+])('explicit ensure handles $label', async ({ preparedAudio, align }) => {
   const directory = await mkdtemp(join(tmpdir(), 'mizar-ensure-output-'));
   const server = Fastify();
   const app = Fastify();
@@ -23,6 +24,7 @@ it.each([
   const desired = obsDesiredScenes(baseUrl);
   const requests: string[] = [];
   const unexpected: string[] = [];
+  let currentScene = obsSceneName(align ? 'gameplay' : 'waiting');
   await server.register(websocket);
   server.get('/', { websocket: true }, (socket) => {
     socket.send(JSON.stringify({ op: 0, d: { obsWebSocketVersion: '5.6.3', rpcVersion: 1 } }));
@@ -51,8 +53,8 @@ it.each([
         case 'GetSceneTransitionList':
           responseData = {
             transitions: [
-              { transitionKind: 'fade_transition' },
-              { transitionKind: 'cut_transition' },
+              { transitionKind: 'fade_transition', transitionName: 'Fade' },
+              { transitionKind: 'cut_transition', transitionName: 'Cut' },
             ],
           };
           break;
@@ -68,9 +70,17 @@ it.each([
           break;
         case 'GetSceneList':
           responseData = {
-            currentProgramSceneName: obsSceneName('waiting'),
+            currentProgramSceneName: currentScene,
             scenes: desired.map((item) => ({ sceneName: item.sceneName })),
           };
+          break;
+        case 'GetCurrentProgramScene':
+          responseData = { currentProgramSceneName: currentScene };
+          break;
+        case 'SetSceneSceneTransitionOverride':
+          break;
+        case 'SetCurrentProgramScene':
+          currentScene = String(requestData.sceneName);
           break;
         case 'GetInputList':
           responseData = {
@@ -188,7 +198,7 @@ it.each([
                 outputKind: 'plugin_output',
                 outputWidth: 1920,
                 outputHeight: 1080,
-                outputActive: true,
+                outputActive: !align,
                 outputFlags: {
                   OBS_OUTPUT_VIDEO: true,
                   OBS_OUTPUT_AUDIO: true,
@@ -226,7 +236,7 @@ it.each([
     baseUrl,
     undefined,
     undefined,
-    preparedAudio
+    preparedAudio && !align
       ? {
           owner: new RemoteCommentary(join(directory, 'commentary.json')),
           journal: join(directory, 'commentary-probe.json'),
@@ -247,6 +257,14 @@ it.each([
       headers: { origin: baseUrl },
       payload: { expectedRevision: 'revision' },
     });
+    if (align) {
+      expect(response.statusCode).toBe(200);
+      expect(currentScene).toBe(obsSceneName('waiting'));
+      expect(requests.filter((type) => type === 'SetCurrentProgramScene')).toHaveLength(1);
+      expect(requests.some((type) => type.startsWith('Stop'))).toBe(false);
+      expect(unexpected).toEqual([]);
+      return;
+    }
     expect(response.statusCode).toBe(409);
     expect(response.json()).toMatchObject({
       error: 'video_output_active',

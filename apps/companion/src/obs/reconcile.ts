@@ -607,6 +607,31 @@ export async function switchObsScene(
   }
 }
 
+/** Align the explicit preparation target only while its original scene and lease remain valid. */
+export async function alignPreparationScene(
+  obs: ObsRpc,
+  activeScene: () => Parameters<typeof import('./desired-state.js').obsSceneName>[0],
+  valid: () => boolean,
+): Promise<void> {
+  const target = activeScene();
+  const initial = (await obs.call('GetCurrentProgramScene')).currentProgramSceneName;
+  if (typeof initial !== 'string') throw new Error('OBS 当前场景状态未确认。');
+  if (!valid() || activeScene() !== target) throw new Error('OBS 准备请求已失效，请重试。');
+  if (initial === desiredSceneName(target)) return;
+  const stable: ObsRpc = guardedPreparationWrites({
+    ...obs,
+    call: async (type, data) => {
+      if (type === 'SetCurrentProgramScene') {
+        const current = (await obs.call('GetCurrentProgramScene')).currentProgramSceneName;
+        if (current !== initial) throw new Error('OBS 当前场景已变化，请重试。');
+      }
+      if (!valid() || activeScene() !== target) throw new Error('OBS 准备请求已失效，请重试。');
+      return obs.call(type, data);
+    },
+  });
+  await switchObsScene(stable, target, { transition: { kind: 'cut', durationMs: 0 }, valid });
+}
+
 function desiredSceneName(id: Parameters<typeof import('./desired-state.js').obsSceneName>[0]) {
   const scene = obsDesiredScenes('http://127.0.0.1:3000').find((item) => item.id === id);
   if (!scene || !ownedScene(scene.sceneName)) throw new Error('未知 OBS 场景。');
