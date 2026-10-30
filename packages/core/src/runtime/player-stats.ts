@@ -15,15 +15,67 @@ export interface MapPlayerStatsCurrentRound {
   readonly invalidated: boolean;
   readonly hasCompleteEvidence: boolean;
   readonly damageBySteam64: DamageBySteam64;
+  readonly roster: Readonly<Record<string, 'CT' | 'T'>>;
   /** First healthy freezetime money observation for this round. */
   readonly startMoneyBySteam64: Readonly<Record<string, number>>;
+}
+
+/** Parser-neutral subset of a death event; adapters preserve the original game cursor. */
+export interface ProgramRoundDeathEvent {
+  readonly kind: 'player-death';
+  readonly cursor: {
+    readonly kind: 'cs2-cstv';
+    readonly role: 'program' | 'lookahead';
+    readonly generation: number;
+    readonly sequence: number;
+    readonly tick: number;
+    readonly observedAt: string;
+    readonly observedMonotonicMs: number;
+    readonly mapName?: string;
+    readonly ticksPerSecond?: number;
+  };
+  readonly victim: { readonly sourcePlayerId?: string };
+  readonly attacker?: { readonly sourcePlayerId?: string };
+  readonly assister?: { readonly sourcePlayerId?: string };
+}
+
+export interface CompletedPlayerRound {
+  readonly roundNumberHint: number | null;
+  readonly complete: boolean;
+  readonly roster: Readonly<Record<string, 'CT' | 'T'>>;
+  readonly damageBySteam64: DamageBySteam64;
+  readonly terminalScore: { readonly ct: number; readonly t: number } | null;
+  readonly players: Readonly<
+    Record<
+      string,
+      { readonly side: 'CT' | 'T'; readonly damage: number; readonly survived: boolean }
+    >
+  >;
+  readonly deaths: readonly ProgramRoundDeathEvent[] | null;
+}
+
+/** Adapter asserts complete event coverage and alignment to this GSI map execution/round. */
+export interface TrustedProgramRoundEvents {
+  readonly mapEpoch: number;
+  readonly roundNumberHint: number;
+  readonly coverage: 'complete';
+  readonly source: {
+    readonly role: 'program';
+    readonly generation: number;
+    readonly ticksPerSecond: number;
+    readonly startTick: number;
+    readonly endTick: number;
+  };
+  readonly deaths: readonly ProgramRoundDeathEvent[];
 }
 
 export interface MapPlayerStatsAccumulator {
   readonly mapEpoch: number;
   readonly countedCompletedRounds: number;
+  readonly coverage: 'complete' | 'partial';
   readonly currentRound: MapPlayerStatsCurrentRound | null;
   readonly completedDamageBySteam64: DamageBySteam64;
+  readonly completedRounds: readonly CompletedPlayerRound[];
 }
 
 export type MapPlayerStatsFrameContinuity =
@@ -76,6 +128,13 @@ function createCurrentRound(
     invalidated,
     hasCompleteEvidence: !invalidated && hasCompleteAllPlayersEvidence(observation),
     damageBySteam64: emptyDamage(),
+    roster: Object.fromEntries(
+      (observation.telemetry.allPlayers ?? []).flatMap((p) =>
+        isValidSteam64(p.sourcePlayerId) && (p.side === 'CT' || p.side === 'T')
+          ? [[p.sourcePlayerId, p.side]]
+          : [],
+      ),
+    ),
     startMoneyBySteam64: {},
   };
 }
@@ -135,7 +194,11 @@ function copyStartMoney(
 function addCompletedRound(
   accumulator: MapPlayerStatsAccumulator,
   currentRound: MapPlayerStatsCurrentRound,
+  observation: TelemetryObservation,
 ): MapPlayerStatsAccumulator {
+  const players = observation.telemetry.allPlayers ?? [];
+  const ct = observation.telemetry.map?.sides?.ct?.score;
+  const t = observation.telemetry.map?.sides?.t?.score;
   const completed = { ...accumulator.completedDamageBySteam64 };
   for (const [sourcePlayerId, damage] of Object.entries(currentRound.damageBySteam64)) {
     if (
@@ -151,6 +214,55 @@ function addCompletedRound(
     countedCompletedRounds: accumulator.countedCompletedRounds + 1,
     currentRound: null,
     completedDamageBySteam64: sortedDamage(completed),
+    completedRounds: [
+      ...accumulator.completedRounds,
+      {
+        roundNumberHint: currentRound.roundNumberHint,
+        roster: currentRound.roster,
+        damageBySteam64: currentRound.damageBySteam64,
+        terminalScore:
+          ct !== undefined &&
+          t !== undefined &&
+          Number.isSafeInteger(ct) &&
+          ct >= 0 &&
+          Number.isSafeInteger(t) &&
+          t >= 0
+            ? { ct, t }
+            : null,
+        complete:
+          players.length > 0 &&
+          new Set(players.map((p) => p.sourcePlayerId)).size === players.length &&
+          players.every(
+            (p) =>
+              isValidSteam64(p.sourcePlayerId) &&
+              (p.side === 'CT' || p.side === 'T') &&
+              currentRound.damageBySteam64[p.sourcePlayerId] !== undefined &&
+              p.state?.roundTotalDamage !== undefined &&
+              Number.isFinite(p.state.roundTotalDamage) &&
+              p.state.roundTotalDamage >= 0 &&
+              p.state?.health !== undefined &&
+              Number.isFinite(p.state.health) &&
+              p.state.health >= 0,
+          ),
+        players: Object.fromEntries(
+          players.flatMap((player) => {
+            const damage = currentRound.damageBySteam64[player.sourcePlayerId];
+            const health = player.state?.health;
+            if (
+              !isValidSteam64(player.sourcePlayerId) ||
+              (player.side !== 'CT' && player.side !== 'T') ||
+              damage === undefined ||
+              health === undefined ||
+              !Number.isFinite(health) ||
+              health < 0
+            )
+              return [];
+            return [[player.sourcePlayerId, { side: player.side, damage, survived: health > 0 }]];
+          }),
+        ),
+        deaths: null,
+      },
+    ],
   };
 }
 
@@ -175,8 +287,12 @@ function invalidateCurrentRound(
 export function invalidateMapPlayerStats(
   accumulator: MapPlayerStatsAccumulator,
 ): MapPlayerStatsAccumulator {
-  if (accumulator.currentRound === null) return accumulator;
-  return { ...accumulator, currentRound: invalidateCurrentRound(accumulator.currentRound) };
+  if (accumulator.currentRound === null) return { ...accumulator, coverage: 'partial' };
+  return {
+    ...accumulator,
+    coverage: 'partial',
+    currentRound: invalidateCurrentRound(accumulator.currentRound),
+  };
 }
 
 function sameRoundHint(
@@ -211,8 +327,10 @@ export function createMapPlayerStatsAccumulator(mapEpoch = 0): MapPlayerStatsAcc
   return {
     mapEpoch,
     countedCompletedRounds: 0,
+    coverage: 'complete',
     currentRound: null,
     completedDamageBySteam64: emptyDamage(),
+    completedRounds: [],
   };
 }
 
@@ -221,7 +339,7 @@ export function reduceMapPlayerStats(
   input: MapPlayerStatsTelemetryInput,
 ): MapPlayerStatsAccumulator {
   const startsNewMap = previous.mapEpoch !== input.mapEpoch;
-  const accumulator = startsNewMap ? createMapPlayerStatsAccumulator(input.mapEpoch) : previous;
+  let accumulator = startsNewMap ? createMapPlayerStatsAccumulator(input.mapEpoch) : previous;
   const phase = roundPhaseFromObservation(input.observation);
   const mapEnded =
     input.observation.coverage.map === 'present' &&
@@ -233,6 +351,13 @@ export function reduceMapPlayerStats(
   const completeEvidence = hasCompleteAllPlayersEvidence(input.observation);
 
   let currentRound = accumulator.currentRound;
+  if (
+    !healthyFrame ||
+    (accumulator.countedCompletedRounds === 0 &&
+      currentRound === null &&
+      ((roundNumberHint !== null && roundNumberHint > 0) || phase === 'live' || endsRound))
+  )
+    accumulator = { ...accumulator, coverage: 'partial' };
   if (!startsNewMap && !healthyFrame && currentRound !== null) {
     currentRound = invalidateCurrentRound(currentRound);
   }
@@ -257,16 +382,29 @@ export function reduceMapPlayerStats(
     }
   }
 
-  if (currentRound === null && (phase === 'freezetime' || phase === 'live')) {
+  if (currentRound === null && !mapEnded && (phase === 'freezetime' || phase === 'live')) {
     currentRound = createCurrentRound(
       input.observation,
       !healthyFrame || !completeEvidence || phase === 'live',
     );
   }
 
-  if (currentRound === null) return { ...accumulator, currentRound: null };
+  if (currentRound === null) {
+    return settleTerminalRound(accumulator, input);
+  }
 
-  const invalidated = currentRound.invalidated || !healthyFrame || !completeEvidence;
+  const observedPlayers = input.observation.telemetry.allPlayers ?? [];
+  const sameRoster =
+    observedPlayers.length > 0 &&
+    observedPlayers.length === Object.keys(currentRound.roster).length &&
+    new Set(observedPlayers.map((p) => p.sourcePlayerId)).size === observedPlayers.length &&
+    observedPlayers.every(
+      (p) =>
+        currentRound!.roster[p.sourcePlayerId] !== undefined &&
+        currentRound!.roster[p.sourcePlayerId] === p.side,
+    );
+  const invalidated = currentRound.invalidated || !healthyFrame || !completeEvidence || !sameRoster;
+  if (invalidated) accumulator = { ...accumulator, coverage: 'partial' };
   const phaseForState = phase === 'unknown' ? currentRound.phase : phase;
   const canPromoteToEligible =
     !invalidated &&
@@ -300,12 +438,80 @@ export function reduceMapPlayerStats(
 
   if (endsRound) {
     if (currentRound.eligible && currentRound.hasCompleteEvidence && !currentRound.invalidated) {
-      return addCompletedRound(accumulator, currentRound);
+      return addCompletedRound(accumulator, currentRound, input.observation);
     }
     return { ...accumulator, currentRound: null };
   }
 
   return { ...accumulator, currentRound };
+}
+
+/** Late gameover observations can fill an incomplete terminal sample only under the same score, roster and contiguous GSI source. */
+function settleTerminalRound(
+  accumulator: MapPlayerStatsAccumulator,
+  input: MapPlayerStatsTelemetryInput,
+): MapPlayerStatsAccumulator {
+  if (
+    input.continuity !== 'contiguous' ||
+    input.observation.coverage.map !== 'present' ||
+    input.observation.telemetry.map?.phase !== 'gameover' ||
+    input.observation.coverage.allPlayers !== 'present'
+  )
+    return accumulator;
+  const round = accumulator.completedRounds.at(-1);
+  const players = input.observation.telemetry.allPlayers;
+  const map = input.observation.telemetry.map;
+  if (
+    !round ||
+    round.complete ||
+    round.roundNumberHint === null ||
+    round.terminalScore === null ||
+    !players ||
+    map.sides?.ct?.score !== round.terminalScore.ct ||
+    map.sides.t?.score !== round.terminalScore.t ||
+    (map.roundNumber !== round.roundNumberHint && map.roundNumber !== round.roundNumberHint + 1) ||
+    players.length !== Object.keys(round.roster).length ||
+    new Set(players.map((p) => p.sourcePlayerId)).size !== players.length ||
+    !players.every(
+      (p) =>
+        round.roster[p.sourcePlayerId] === p.side &&
+        p.state?.roundTotalDamage !== undefined &&
+        Number.isFinite(p.state.roundTotalDamage) &&
+        p.state.roundTotalDamage >= 0 &&
+        p.state.health !== undefined &&
+        Number.isFinite(p.state.health) &&
+        p.state.health >= 0 &&
+        round.damageBySteam64[p.sourcePlayerId] !== undefined,
+    )
+  )
+    return accumulator;
+  const damage = copyPlayerDamage(round.damageBySteam64, players);
+  const completedDamage = { ...accumulator.completedDamageBySteam64 };
+  for (const p of players)
+    completedDamage[p.sourcePlayerId] =
+      (completedDamage[p.sourcePlayerId] ?? 0) +
+      damage[p.sourcePlayerId]! -
+      round.damageBySteam64[p.sourcePlayerId]!;
+  const settled: CompletedPlayerRound = {
+    ...round,
+    complete: true,
+    damageBySteam64: damage,
+    players: Object.fromEntries(
+      players.map((p) => [
+        p.sourcePlayerId,
+        {
+          side: round.roster[p.sourcePlayerId]!,
+          damage: damage[p.sourcePlayerId]!,
+          survived: p.state!.health! > 0,
+        },
+      ]),
+    ),
+  };
+  return {
+    ...accumulator,
+    completedDamageBySteam64: sortedDamage(completedDamage),
+    completedRounds: [...accumulator.completedRounds.slice(0, -1), settled],
+  };
 }
 
 function currentRoundIsCounted(accumulator: MapPlayerStatsAccumulator): boolean {
@@ -321,9 +527,13 @@ export function getPlayerCompletedAdr(
   sourcePlayerId: string,
 ): number | null {
   if (!isValidSteam64(sourcePlayerId) || accumulator.countedCompletedRounds === 0) return null;
-  return (
-    (accumulator.completedDamageBySteam64[sourcePlayerId] ?? 0) / accumulator.countedCompletedRounds
-  );
+  if (
+    accumulator.completedRounds.some(
+      (round) => !round.complete || round.players[sourcePlayerId] === undefined,
+    )
+  )
+    return null;
+  return accumulator.completedDamageBySteam64[sourcePlayerId]! / accumulator.countedCompletedRounds;
 }
 
 export function getPlayerLiveAdr(
@@ -334,8 +544,19 @@ export function getPlayerLiveAdr(
   const includesCurrentRound = currentRoundIsCounted(accumulator);
   const denominator = accumulator.countedCompletedRounds + (includesCurrentRound ? 1 : 0);
   if (denominator === 0) return null;
+  if (
+    accumulator.completedRounds.some(
+      (round) => !round.complete || round.players[sourcePlayerId] === undefined,
+    )
+  )
+    return null;
+  if (
+    includesCurrentRound &&
+    accumulator.currentRound?.damageBySteam64[sourcePlayerId] === undefined
+  )
+    return null;
   const currentDamage = includesCurrentRound
-    ? (accumulator.currentRound?.damageBySteam64[sourcePlayerId] ?? 0)
+    ? accumulator.currentRound!.damageBySteam64[sourcePlayerId]!
     : 0;
   return (
     ((accumulator.completedDamageBySteam64[sourcePlayerId] ?? 0) + currentDamage) / denominator
@@ -383,4 +604,74 @@ export function getPlayerCurrentRoundMoneySpent(
   const startMoney = currentRound.startMoneyBySteam64[sourcePlayerId];
   if (startMoney === undefined) return null;
   return Math.max(0, startMoney - currentMoney);
+}
+
+/** Attach a sealed, adapter-verified complete event batch to one completed GSI round. */
+export function reduceTrustedProgramRoundEvents(
+  accumulator: MapPlayerStatsAccumulator,
+  input: TrustedProgramRoundEvents,
+): MapPlayerStatsAccumulator {
+  if (
+    input.mapEpoch !== accumulator.mapEpoch ||
+    input.coverage !== 'complete' ||
+    input.deaths.length > 128 ||
+    input.source.role !== 'program' ||
+    !Number.isSafeInteger(input.source.generation) ||
+    input.source.generation < 0 ||
+    !Number.isFinite(input.source.ticksPerSecond) ||
+    input.source.ticksPerSecond <= 0 ||
+    !Number.isSafeInteger(input.source.startTick) ||
+    !Number.isSafeInteger(input.source.endTick) ||
+    input.source.startTick < 0 ||
+    input.source.endTick < input.source.startTick
+  )
+    return accumulator;
+  const matches = accumulator.completedRounds.filter(
+    (round) => round.roundNumberHint === input.roundNumberHint,
+  );
+  if (matches.length !== 1 || matches[0]!.deaths !== null) return accumulator;
+  const round = matches[0]!;
+  let generation: number | undefined;
+  let ticksPerSecond: number | undefined;
+  let lastTick = -1;
+  let lastSequence = -1;
+  for (const event of input.deaths) {
+    const cursor = event.cursor;
+    const victim = event.victim.sourcePlayerId;
+    const attacker = event.attacker?.sourcePlayerId;
+    const assister = event.assister?.sourcePlayerId;
+    if (
+      cursor.kind !== 'cs2-cstv' ||
+      cursor.role !== 'program' ||
+      cursor.generation !== input.source.generation ||
+      cursor.ticksPerSecond !== input.source.ticksPerSecond ||
+      cursor.tick < input.source.startTick ||
+      cursor.tick > input.source.endTick ||
+      !Number.isSafeInteger(cursor.tick) ||
+      cursor.tick < lastTick ||
+      !Number.isSafeInteger(cursor.sequence) ||
+      cursor.sequence <= lastSequence ||
+      !Number.isFinite(cursor.ticksPerSecond) ||
+      cursor.ticksPerSecond! <= 0 ||
+      (generation !== undefined && generation !== cursor.generation) ||
+      (ticksPerSecond !== undefined && ticksPerSecond !== cursor.ticksPerSecond) ||
+      victim === undefined ||
+      round.players[victim] === undefined ||
+      (event.attacker !== undefined &&
+        (attacker === undefined || round.players[attacker] === undefined)) ||
+      (event.assister !== undefined &&
+        (assister === undefined || round.players[assister] === undefined))
+    )
+      return accumulator;
+    generation = cursor.generation;
+    ticksPerSecond = cursor.ticksPerSecond;
+    lastTick = cursor.tick;
+    lastSequence = cursor.sequence;
+  }
+  return {
+    ...accumulator,
+    completedRounds: accumulator.completedRounds.map((candidate) =>
+      candidate === round ? { ...candidate, deaths: [...input.deaths] } : candidate,
+    ),
+  };
 }

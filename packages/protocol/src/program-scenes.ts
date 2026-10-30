@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { playerStatisticsSchema } from './statistics.js';
 import { programPayloadSchema } from './program.js';
 import { projectionCursorSchema } from './shared.js';
 
@@ -92,6 +93,7 @@ const summaryPlayerSchema = z.object({
   kills: z.number().nullable(),
   assists: z.number().nullable(),
   deaths: z.number().nullable(),
+  statistics: playerStatisticsSchema,
 });
 export const mapSummarySchema = z.object({
   matchId: z.string(),
@@ -116,7 +118,7 @@ const scheduleCardSchema = z.object({
 });
 export const programPresentationSchema = z
   .object({
-    schemaVersion: z.literal('mizar.program-presentation.v1'),
+    schemaVersion: z.literal('mizar.program-presentation.v2'),
     packageId: z.literal('builtin:mizar-default'),
     match: programPayloadSchema.shape.match,
     series: programPayloadSchema.shape.series,
