@@ -33,3 +33,31 @@ it('labels radar sides and hides a failed image until it loads again', async () 
   expect(image.style.visibility).toBe('');
   await act(async () => root.unmount());
 });
+
+it('draws the radar from numeric values even when labels are formatted differently', async () => {
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  await act(async () =>
+    root.render(
+      <StatsInsertView
+        insert={{
+          title: '画像',
+          subtitle: 'PLAYER ATTRIBUTES',
+          scope: '本届',
+          teams: ['A', 'B'],
+          layout: 'radar',
+          rows: Array.from({ length: 7 }, (_, i) => ({
+            label: String(i),
+            values: ['50 分', '75 分'] as const,
+            numericValues: [50, 75] as const,
+          })),
+        }}
+      />,
+    ),
+  );
+  const polygons = host.querySelectorAll('.stats-insert__radar polygon');
+  expect(polygons[5]?.getAttribute('points')).toContain('450,187.5');
+  expect(polygons[6]?.getAttribute('points')).toContain('450,136.25');
+  expect(host.textContent).toContain('50 分 / 75 分');
+  await act(async () => root.unmount());
+});

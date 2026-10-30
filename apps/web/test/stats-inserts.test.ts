@@ -13,7 +13,12 @@ it('renders complete comparisons without borrowing missing statistics or treatin
   const cards = statsInserts(input);
   expect(cards[0]?.rows[0]?.values).toEqual(['50.0%', '0.0%']);
   expect(cards.some((card) => card.subtitle === 'PLAYER COMPARISON')).toBe(true);
-  expect(cards.find((card) => card.subtitle === 'PLAYER ATTRIBUTES')?.scope).toContain('本届');
+  const portrait = cards.find((card) => card.id === 'player-attributes');
+  expect(portrait?.scope).toContain('本届');
+  expect(portrait?.rows[0]?.numericValues).toEqual([
+    input.entrants[0]!.playerPerformance.players[0]!.attributes.values[0]!.score,
+    input.entrants[1]!.playerPerformance.players[0]!.attributes.values[0]!.score,
+  ]);
   input.entrants[1]!.playerPerformance.players[1]!.rating = 2;
   const next = statsInserts(input);
   expect(next.find((card) => card.subtitle === 'PLAYER COMPARISON')?.teams[1]).toBe(

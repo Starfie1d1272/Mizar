@@ -29,6 +29,7 @@ export type StatsInsert = {
     readonly label: string;
     readonly artwork?: string;
     readonly values: readonly [string, string];
+    readonly numericValues?: readonly [number, number];
     readonly samples?: readonly [string, string];
     readonly portraits?: readonly [string | null, string | null];
   }[];
@@ -111,24 +112,27 @@ export function StatsInsertView({
                   stroke="var(--mizar-broadcast-pulse-muted)"
                 />
               ))}
-              {[0, 1].map((side) => (
-                <polygon
-                  key={side}
-                  points={insert.rows
-                    .map((row, i) => radarPoint(i, Number(row.values[side]), 7).join(','))
-                    .join(' ')}
-                  fill={
-                    side
-                      ? 'color-mix(in srgb, var(--mizar-broadcast-pulse-gold) 12%, transparent)'
-                      : 'color-mix(in srgb, var(--mizar-broadcast-pulse-blue) 20%, transparent)'
-                  }
-                  stroke={
-                    side ? 'var(--mizar-broadcast-pulse-gold)' : 'var(--mizar-broadcast-pulse-blue)'
-                  }
-                  strokeDasharray={side ? '10 6' : undefined}
-                  strokeWidth="3"
-                />
-              ))}
+              {insert.rows.every((row) => row.numericValues) &&
+                ([0, 1] as const).map((side) => (
+                  <polygon
+                    key={side}
+                    points={insert.rows
+                      .map((row, i) => radarPoint(i, row.numericValues![side], 7).join(','))
+                      .join(' ')}
+                    fill={
+                      side
+                        ? 'color-mix(in srgb, var(--mizar-broadcast-pulse-gold) 12%, transparent)'
+                        : 'color-mix(in srgb, var(--mizar-broadcast-pulse-blue) 20%, transparent)'
+                    }
+                    stroke={
+                      side
+                        ? 'var(--mizar-broadcast-pulse-gold)'
+                        : 'var(--mizar-broadcast-pulse-blue)'
+                    }
+                    strokeDasharray={side ? '10 6' : undefined}
+                    strokeWidth="3"
+                  />
+                ))}
               {insert.rows.map((row, i) => {
                 const [x, y] = radarPoint(i, 127, 7);
                 return (

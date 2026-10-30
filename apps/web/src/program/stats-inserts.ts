@@ -1,6 +1,18 @@
 import type { BroadcastStats } from '@mizar/protocol/broadcast-stats';
 import type { StatsInsert } from '@mizar/hud-view';
 
+export type StatsCard = StatsInsert & {
+  readonly id:
+    | 'maps'
+    | 'recent'
+    | 'pistol'
+    | 'economy'
+    | 'utility'
+    | 'lineups'
+    | 'player-comparison'
+    | 'player-attributes';
+};
+
 type Entrant = BroadcastStats['entrants'][number];
 type Player = Entrant['playerPerformance']['players'][number];
 const labels: Record<string, string> = {
@@ -15,7 +27,7 @@ const labels: Record<string, string> = {
 const cleanMap = (value: string) => value.replace(/^de_/, '').toUpperCase();
 
 /** Select only complete comparisons. Statistics remain website-owned values. */
-export function statsInserts(bundle: BroadcastStats): StatsInsert[] {
+export function statsInserts(bundle: BroadcastStats): StatsCard[] {
   const [a, b] = bundle.entrants;
   if (!a || !b || a.entryId === b.entryId) return [];
   const base = {
@@ -23,7 +35,7 @@ export function statsInserts(bundle: BroadcastStats): StatsInsert[] {
     teams: [a.name, b.name] as const,
     logos: [a.logoUrl, b.logoUrl] as const,
   };
-  const result: StatsInsert[] = [];
+  const result: StatsCard[] = [];
   const maps = a.mapPerformance.maps.flatMap((left) => {
     const right = b.mapPerformance.maps.find((map) => map.mapName === left.mapName);
     if (
@@ -56,6 +68,7 @@ export function statsInserts(bundle: BroadcastStats): StatsInsert[] {
     result.push({
       ...base,
       scope: pages > 1 ? `${base.scope} · ${start / mapPageSize + 1} / ${pages} 页` : base.scope,
+      id: 'maps',
       title: '地图表现',
       subtitle: 'MAP PERFORMANCE',
       rows: maps.slice(start, start + mapPageSize),
@@ -76,6 +89,7 @@ export function statsInserts(bundle: BroadcastStats): StatsInsert[] {
     result.push({
       ...base,
       scope: '本届 · 最近 5 图',
+      id: 'recent',
       title: '近期战绩',
       subtitle: 'RECENT MAPS',
       rows: [],
@@ -113,7 +127,7 @@ export function statsInserts(bundle: BroadcastStats): StatsInsert[] {
         },
       ];
     });
-    if (rows.length) result.push({ ...base, title, subtitle, layout: 'columns', rows });
+    if (rows.length) result.push({ ...base, id: kind, title, subtitle, layout: 'columns', rows });
   };
   winCard(
     'pistol',
@@ -155,7 +169,14 @@ export function statsInserts(bundle: BroadcastStats): StatsInsert[] {
       ];
     });
     if (rows.length)
-      result.push({ ...base, title: '道具支援', subtitle: 'UTILITY', layout: 'cells', rows });
+      result.push({
+        ...base,
+        id: 'utility',
+        title: '道具支援',
+        subtitle: 'UTILITY',
+        layout: 'cells',
+        rows,
+      });
   }
   if (
     a.starters.length === 5 &&
@@ -165,6 +186,7 @@ export function statsInserts(bundle: BroadcastStats): StatsInsert[] {
   ) {
     result.push({
       ...base,
+      id: 'lineups',
       title: '本场阵容',
       subtitle: 'LINEUPS',
       rows: a.starters.map((player, i) => ({
@@ -202,6 +224,7 @@ export function statsInserts(bundle: BroadcastStats): StatsInsert[] {
     };
     result.push({
       ...playerBase,
+      id: 'player-comparison',
       title: '选手对比',
       subtitle: 'PLAYER COMPARISON',
       rows: [
@@ -257,11 +280,13 @@ export function statsInserts(bundle: BroadcastStats): StatsInsert[] {
       teams: [ls.nickname, rs.nickname],
       logos: [ls.avatarUrl, rs.avatarUrl],
       scope: `本届 · 全站历史基准 · ${lp.attributes.sample.rounds} / ${rp.attributes.sample.rounds} 回合 · 0–100`,
+      id: 'player-attributes',
       title: '选手画像',
       subtitle: 'PLAYER ATTRIBUTES',
       layout: 'radar',
       rows: keys.map((key, i) => ({
         label: labels[key]!,
+        numericValues: [lv[i]!.score!, rv[i]!.score!] as const,
         values: [String(lv[i]!.score), String(rv[i]!.score)] as const,
         samples: [
           `${lp.attributes.sample.rounds} 回合`,

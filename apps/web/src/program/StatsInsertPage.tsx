@@ -79,7 +79,18 @@ export function StatsInsertPage() {
   const cards =
     bundle && (!connection.current || observedMatch === bundle.matchId) ? statsInserts(bundle) : [];
   const requested = new URLSearchParams(window.location.search).get('card');
-  const card = requested ? cards.find((item) => item.subtitle === requested) : cards[0];
+  const legacyIds: Record<string, string> = {
+    'MAP PERFORMANCE': 'maps',
+    'RECENT MAPS': 'recent',
+    'PISTOL & CONVERSION': 'pistol',
+    ECONOMY: 'economy',
+    UTILITY: 'utility',
+    LINEUPS: 'lineups',
+    'PLAYER COMPARISON': 'player-comparison',
+    'PLAYER ATTRIBUTES': 'player-attributes',
+  };
+  const id = requested ? (legacyIds[requested] ?? requested) : null;
+  const card = id ? cards.find((item) => item.id === id) : cards[0];
   if (card && !display.current) return null;
   return card ? (
     <StatsInsertView
