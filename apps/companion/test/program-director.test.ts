@@ -25,12 +25,14 @@ function sample(id = 'real-live-rich') {
   p.series!.bindingState = 'bound';
   return p;
 }
-function rig() {
-  const program = sample();
-  program.map.phase = 'live';
-  program.map.roundNumber = 0;
-  program.round = { phase: 'freezetime', winnerSide: 'unknown' };
-  program.clock = { phase: 'freezetime', endsInSeconds: 40 };
+function rig(id = 'real-live-rich') {
+  const program = sample(id);
+  if (id === 'real-live-rich') {
+    program.map.phase = 'live';
+    program.map.roundNumber = 0;
+    program.round = { phase: 'freezetime', winnerSide: 'unknown' };
+    program.clock = { phase: 'freezetime', endsInSeconds: 40 };
+  }
   const operator = {
     runtime: { telemetryFreshness: 'fresh' },
     matchContext: { freshness: 'fresh', origin: 'local' },
@@ -93,6 +95,82 @@ function rig() {
 }
 
 describe('automatic Program choreography', () => {
+  it('keeps a consumed result through a long source interruption and manual pause', async () => {
+    const r = rig('real-gameover');
+    await r.step();
+    expect(r.scenes.get().active).toBe('map_result');
+    await r.pass(12_000);
+    expect(r.scenes.get().active).toBe('intermap');
+    r.program.status.telemetry = 'stale';
+    await r.pass(21_000);
+    r.program.cursor = { ...r.program.cursor, programSourceGeneration: 1 };
+    r.program.status.telemetry = 'fresh';
+    await r.step();
+    expect(r.scenes.get().active).toBe('intermap');
+    r.director.hold();
+    await r.step();
+    r.director.resume();
+    await r.step();
+    expect(r.scenes.get().active).toBe('intermap');
+    expect(r.switchObs.mock.calls.filter(([id]) => id === 'map_result')).toHaveLength(1);
+  });
+  it('replays results for a different map, a new execution, and a new match', async () => {
+    const r = rig('real-gameover');
+    await r.step();
+    await r.pass(12_000);
+    expect(r.scenes.get().active).toBe('intermap');
+    const second = r.program.series!.maps[1]!;
+    second.status = 'completed';
+    second.finalScore = { a: 13, b: 8 };
+    r.program.series!.currentMapOrder = 2;
+    r.program.map.name = second.mapName;
+    r.program.cursor = { ...r.program.cursor, mapEpoch: r.program.cursor.mapEpoch + 1 };
+    await r.step();
+    expect(r.scenes.get().active).toBe('map_result');
+    await r.pass(12_000);
+    r.program.cursor = { ...r.program.cursor, mapEpoch: r.program.cursor.mapEpoch + 1 };
+    await r.step();
+    expect(r.scenes.get().active).toBe('map_result');
+    await r.pass(12_000);
+    r.program.match!.matchId = 'another-match';
+    await r.step();
+    expect(r.scenes.get().active).toBe('map_result');
+    expect(r.switchObs.mock.calls.filter(([id]) => id === 'map_result')).toHaveLength(4);
+  });
+  it('pauses and resumes the result timer without consuming another result', async () => {
+    const r = rig('real-gameover');
+    await r.step();
+    await r.pass(6000);
+    r.program.clock = { phase: 'paused', endsInSeconds: null };
+    await r.pass(20_000);
+    expect(r.scenes.get().active).toBe('map_result');
+    r.program.clock = { phase: 'live', endsInSeconds: null };
+    await r.pass(6000);
+    expect(r.scenes.get().active).toBe('intermap');
+    expect(r.switchObs.mock.calls.filter(([id]) => id === 'map_result')).toHaveLength(1);
+  });
+  it('invalidates an in-flight take when the source generation changes', async () => {
+    const r = rig('real-gameover');
+    let release!: () => void;
+    let valid: (() => boolean) | undefined;
+    r.switchObs.mockImplementationOnce(async (_id, options) => {
+      valid = options?.valid;
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    });
+    const pending = r.step();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(valid?.()).toBe(true);
+    r.program.cursor = { ...r.program.cursor, programSourceGeneration: 1 };
+    expect(valid?.()).toBe(false);
+    release();
+    await pending;
+    expect(r.scenes.get().active).toBe('waiting');
+    await r.step();
+    expect(r.scenes.get().active).toBe('map_result');
+  });
   it('identifies telemetry-only blocking without overriding manual hold or other blockers', async () => {
     const r = rig();
     r.program.status.telemetry = 'awaiting';

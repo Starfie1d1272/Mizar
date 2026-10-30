@@ -180,7 +180,7 @@ CS2 的自动发现、手动安装选择和 GSI 配置目录统一由 Host 管�
 
 现场窗口采用窗口级全屏 Shell 标记，让任务栏在现场处于活动状态时退到其后，不修改系统自动隐藏设置；隐藏、退出或更换游戏窗口撤销标记。标记成功后按完整显示器边界排布，失败沿用工作区。受管理 CS2 使用无边框窗口，启动参数与临时视频配置都使用既有工作台布局算出的游戏尺寸，保持 75% 上限与 16:9 客户区，左栏贴屏幕底部，与游戏、底栏连续平铺；游戏拒绝无边框时保留原生外框避让。外框缩放成功不代替客户区对齐；游戏拒绝运行中的分辨率变更时不再次缩小无边框外框，本机覆盖保持隐藏并提示重新进入工作台。DPI 与窗口变化共用同一 Host 物理布局；现场 WebView 自身的缩放变化也通过既有工作线程合并重排，不依赖游戏窗口同时改变尺寸或 DPI，隐藏期间的变化在恢复现场时处理。决策及异常退出边界见 [ADR-0030](https://github.com/Starfie1d1272/Mizar/blob/3b187e168ad755ede595eb8371bfaf5933c044fa/docs/decisions/0030-workspace-fullscreen-shell.md)、[ADR-0031](https://github.com/Starfie1d1272/Mizar/blob/3b187e168ad755ede595eb8371bfaf5933c044fa/docs/decisions/0031-borderless-workspace-game.md)与[ADR-0036](https://github.com/Starfie1d1272/Mizar/blob/3b187e168ad755ede595eb8371bfaf5933c044fa/docs/decisions/0036-workspace-sized-cs2-launch.md)。
 
-`ProgramDirector` 消费既有投影与 BP，通过唯一 `ProgramSceneController` 请求 OBS 切场。现场默认自动，手动操作保持到显式恢复。自动切场最多一个在途请求、不离线排队；切换前后检查上下文、代际、版本与时限。失败停止自动推进。具体节目顺序与时长来源见[节目规范](../design/program-direction-v1.md)。
+`ProgramDirector` 消费既有投影与 BP，通过唯一 `ProgramSceneController` 请求 OBS 切场。现场默认自动，手动操作保持到显式恢复。节目消费进度属于地图执行，来源重连不重播已消费的单图结果；实际执行或比赛变化时重新开始。自动切场最多一个在途请求、不离线排队；切换前后检查上下文、来源代际、版本与时限。失败停止自动推进。具体节目顺序与时长来源见[节目规范](../design/program-direction-v1.md)。
 
 OBS 外部切场撤销已排队或在途的旧切场与退出意图，也撤销后台恢复的准备资格；后台恢复在每次实际 OBS 请求前复核代际，新的显式准备可重新授权。
 
