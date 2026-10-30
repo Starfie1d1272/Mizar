@@ -243,6 +243,10 @@ export class ObsAdapter {
     return this.recoveryPrepared;
   }
 
+  async settleAutomatic(): Promise<void> {
+    await Promise.all([this.queue, this.recoveryTask, this.commentaryTask]);
+  }
+
   startBrowserRecovery(): void {
     if (
       this.recoveryClosed ||

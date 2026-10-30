@@ -14,7 +14,7 @@ export function registerProductionRoutes(
     release: () => Promise<void>;
     beforeEnter?: () => void;
     onEnter?: () => void;
-    beforeFinish?: () => void;
+    beforeFinish?: () => void | Promise<void>;
     beforeExit?: () => void;
     finishTrial?: () => Promise<void>;
   },
@@ -76,7 +76,7 @@ export function registerProductionRoutes(
       } else if (body?.action === 'hide') {
         if (mode === 'live') mode = 'hidden';
       } else {
-        options.beforeFinish?.();
+        await options.beforeFinish?.();
         if (trialPending) {
           stage = 'production_safe_scene';
           await options.finishTrial?.();

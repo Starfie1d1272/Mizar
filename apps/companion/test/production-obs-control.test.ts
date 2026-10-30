@@ -38,11 +38,20 @@ test('begin exit revokes old preparation and holds the director even when cleanu
       holds++;
     },
   } as unknown as ProgramSceneController;
+  let settle!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    settle = resolve;
+  });
+  let released = false;
   const production = registerProductionRoutes(app, {
     originPolicy: createLocalWebOriginPolicy(),
     hasContext: () => true,
     scenes,
-    release: () => Promise.reject(new Error('release failed')),
+    beforeFinish: () => pending,
+    release: () => {
+      released = true;
+      return Promise.reject(new Error('release failed'));
+    },
   });
   const revision = production.get().revision;
   const valid = production.preparationValid(revision);
@@ -56,7 +65,11 @@ test('begin exit revokes old preparation and holds the director even when cleanu
   assert.equal(begin.statusCode, 200);
   assert.equal(valid(), false);
   assert.equal(production.preparationValid(revision)(), false);
-  const result = await production.shutdown();
+  const shutdown = production.shutdown();
+  await Promise.resolve();
+  assert.equal(released, false);
+  settle();
+  const result = await shutdown;
   assert.equal(result.code, 409);
   assert.equal(production.get().mode, 'preparation');
   assert.equal(valid(), false);

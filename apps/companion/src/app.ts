@@ -1045,6 +1045,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       cameraDirector?.finishProduction();
       observerSettings.endProduction();
     },
+    beforeFinish: () => obsAdapter?.settleAutomatic(),
     finishTrial: async () => {
       await demoTest?.finish();
     },
