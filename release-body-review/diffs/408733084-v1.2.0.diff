@@ -1,6 +1,6 @@
 --- original/408733084-v1.2.0.md
 +++ candidates/408733084-v1.2.0.md
-@@ -1,3 +1,15 @@
+@@ -1,10 +1,20 @@
 +### 新增功能
 +
 +- 提供约 180 KB 的轻量安装器，优先从南大 Box 下载，失败时回退 GitHub。
@@ -9,10 +9,17 @@
 +
 +- 已下载的素材缓存可在后续安装和更新时复用。
 +
-+---
++## 下载与版本说明
 +
-+### 当时的发行记录（含旧版变更，待去重审查）
++以下保留本版发布时的下载、资格与实机说明，验收状态反映当时的记录。
 +
  **Windows 安装器**：[Box 国内优先](https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/) · [GitHub 兜底](https://github.com/Starfie1d1272/Mizar/releases/download/v1.2.0/Mizar-v1.2.0-Windows-x64-WebInstaller.exe)
  
  **完整离线 ZIP**：[Box 国内优先](https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/) · [GitHub 兜底](https://github.com/Starfie1d1272/Mizar/releases/download/v1.2.0/Mizar-v1.2.0-Windows-x64.zip)
+ 
+ Box 同步可能稍晚，请以版本号为准。[安装与使用手册](https://github.com/Starfie1d1272/Mizar/blob/678e54ccd32c0bf6e52d1ad8d4a0183b99b25eaf/docs/guide/quick-start.md)。
+-
+-全新轻量安装器，体积仅约 180 KB，支持南大 Box 优先下载与 GitHub 自动回退；素材缓存可复用，后续更新更轻便。
+ 
+ ## 发行文件
+ 

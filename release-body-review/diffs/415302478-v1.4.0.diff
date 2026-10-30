@@ -1,6 +1,6 @@
 --- original/415302478-v1.4.0.md
 +++ candidates/415302478-v1.4.0.md
-@@ -1,3 +1,21 @@
+@@ -1,24 +1,26 @@
 +### 新增功能
 +
 +- 支持按比赛阶段自动播放音乐，可使用本地曲目或导入音乐包。
@@ -15,10 +15,31 @@
 +
 +- 修复烟雾提前展开及显示位置偏离的问题。
 +
-+---
++## 下载与版本说明
 +
-+### 当时的发行记录（含旧版变更，待去重审查）
++以下保留本版发布时的下载、资格与实机说明，验收状态反映当时的记录。
 +
  **Windows 安装器**：[Box 国内优先](https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/?p=/Downloads) · [GitHub 兜底](https://github.com/Starfie1d1272/Mizar/releases/download/v1.4.0/Mizar-v1.4.0-Windows-x64-WebInstaller.exe)
  
  **完整离线 ZIP**：[Box 国内优先](https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/?p=/Downloads) · [GitHub 兜底](https://github.com/Starfie1d1272/Mizar/releases/download/v1.4.0/Mizar-v1.4.0-Windows-x64.zip)
+ 
+ Box 同步可能稍晚，请以版本号为准。[安装与使用手册](https://github.com/Starfie1d1272/Mizar/blob/49c83b0460cd7c86f1bedce347fcd421799487ff/docs/guide/quick-start.md)。
+-
+-### 新增
+-
+-- 支持按比赛阶段自动播放音乐，可选择本地曲目或导入音乐包。
+-- 等待、BP、热身和图间共用曲库，战术暂停、技术暂停、中场和胜利音乐分别设置。
+-- 支持循环、随机、淡入淡出及开场音效。
+-- 网站同步异常时主动提醒，并提供重试、重新连接等操作。
+-
+-### 改进
+-
+-- 同步状态根据网站实际接收情况显示。
+-- 诊断包保留更完整的故障记录，方便排查同步、名单和连接问题。
+-
+-### 修复
+-
+-- 修复烟雾提前展开及位置偏离的问题。
+ 
+ ## 发行文件
+ 

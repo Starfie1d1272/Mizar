@@ -1,0 +1,1234 @@
+{
+  "count": 64,
+  "remote_fields_compared": [
+    "tag_name",
+    "target_commitish",
+    "created_at",
+    "published_at",
+    "draft",
+    "prerelease",
+    "name",
+    "body",
+    "assets"
+  ],
+  "unique_original_github_download_links": 65,
+  "asset_name_exception": "RC10 Box original alias Mizar-v1.0.0-rc.10-Windows-x64.exe differs from GitHub asset; original wording retains this distinction.",
+  "records": [
+    {
+      "id": 428076993,
+      "tag": "v1.9.1",
+      "asset_count": 7,
+      "original_download_links": 0,
+      "candidate_download_links": 0,
+      "box_links": 0,
+      "asset_names_retained": 0,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 427954397,
+      "tag": "v1.9.0",
+      "asset_count": 7,
+      "original_download_links": 2,
+      "candidate_download_links": 2,
+      "box_links": 1,
+      "asset_names_retained": 2,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 427019994,
+      "tag": "v1.8.2",
+      "asset_count": 7,
+      "original_download_links": 2,
+      "candidate_download_links": 2,
+      "box_links": 1,
+      "asset_names_retained": 2,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 426535387,
+      "tag": "v1.8.1",
+      "asset_count": 7,
+      "original_download_links": 2,
+      "candidate_download_links": 2,
+      "box_links": 1,
+      "asset_names_retained": 2,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 426237182,
+      "tag": "v1.8.0",
+      "asset_count": 7,
+      "original_download_links": 2,
+      "candidate_download_links": 2,
+      "box_links": 1,
+      "asset_names_retained": 2,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 424119745,
+      "tag": "v1.7.2",
+      "asset_count": 7,
+      "original_download_links": 2,
+      "candidate_download_links": 2,
+      "box_links": 1,
+      "asset_names_retained": 2,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 423895213,
+      "tag": "v1.7.1",
+      "asset_count": 7,
+      "original_download_links": 2,
+      "candidate_download_links": 2,
+      "box_links": 1,
+      "asset_names_retained": 2,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 423813691,
+      "tag": "v1.7.0",
+      "asset_count": 7,
+      "original_download_links": 2,
+      "candidate_download_links": 2,
+      "box_links": 1,
+      "asset_names_retained": 2,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 423445511,
+      "tag": "v2.0.0-alpha.4",
+      "asset_count": 5,
+      "original_download_links": 2,
+      "candidate_download_links": 2,
+      "box_links": 0,
+      "asset_names_retained": 2,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 423238397,
+      "tag": "v2.0.0-alpha.3",
+      "asset_count": 5,
+      "original_download_links": 2,
+      "candidate_download_links": 2,
+      "box_links": 0,
+      "asset_names_retained": 2,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 422617218,
+      "tag": "v1.6.4",
+      "asset_count": 7,
+      "original_download_links": 2,
+      "candidate_download_links": 2,
+      "box_links": 1,
+      "asset_names_retained": 2,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 422523252,
+      "tag": "v1.6.3",
+      "asset_count": 7,
+      "original_download_links": 2,
+      "candidate_download_links": 2,
+      "box_links": 1,
+      "asset_names_retained": 2,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 421859532,
+      "tag": "v1.6.2",
+      "asset_count": 7,
+      "original_download_links": 2,
+      "candidate_download_links": 2,
+      "box_links": 1,
+      "asset_names_retained": 2,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 421486181,
+      "tag": "v1.6.1",
+      "asset_count": 7,
+      "original_download_links": 2,
+      "candidate_download_links": 2,
+      "box_links": 1,
+      "asset_names_retained": 2,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 419228872,
+      "tag": "v1.6.0",
+      "asset_count": 7,
+      "original_download_links": 2,
+      "candidate_download_links": 2,
+      "box_links": 1,
+      "asset_names_retained": 2,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 417751248,
+      "tag": "v2.0.0-alpha.2",
+      "asset_count": 5,
+      "original_download_links": 2,
+      "candidate_download_links": 2,
+      "box_links": 0,
+      "asset_names_retained": 2,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 416500604,
+      "tag": "v2.0.0-alpha.1",
+      "asset_count": 5,
+      "original_download_links": 2,
+      "candidate_download_links": 2,
+      "box_links": 0,
+      "asset_names_retained": 2,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 416489565,
+      "tag": "v1.5.1",
+      "asset_count": 7,
+      "original_download_links": 2,
+      "candidate_download_links": 2,
+      "box_links": 1,
+      "asset_names_retained": 2,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 416259794,
+      "tag": "v1.5.0",
+      "asset_count": 7,
+      "original_download_links": 2,
+      "candidate_download_links": 2,
+      "box_links": 1,
+      "asset_names_retained": 2,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 415302478,
+      "tag": "v1.4.0",
+      "asset_count": 7,
+      "original_download_links": 2,
+      "candidate_download_links": 2,
+      "box_links": 1,
+      "asset_names_retained": 2,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 412330961,
+      "tag": "v1.3.4",
+      "asset_count": 7,
+      "original_download_links": 2,
+      "candidate_download_links": 2,
+      "box_links": 1,
+      "asset_names_retained": 2,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 411031220,
+      "tag": "v1.3.3",
+      "asset_count": 7,
+      "original_download_links": 2,
+      "candidate_download_links": 2,
+      "box_links": 1,
+      "asset_names_retained": 2,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 410206996,
+      "tag": "v1.3.2",
+      "asset_count": 7,
+      "original_download_links": 2,
+      "candidate_download_links": 2,
+      "box_links": 1,
+      "asset_names_retained": 2,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 409623775,
+      "tag": "v1.3.1",
+      "asset_count": 7,
+      "original_download_links": 2,
+      "candidate_download_links": 2,
+      "box_links": 1,
+      "asset_names_retained": 2,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 409446172,
+      "tag": "v1.3.0",
+      "asset_count": 7,
+      "original_download_links": 2,
+      "candidate_download_links": 2,
+      "box_links": 1,
+      "asset_names_retained": 2,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 408930999,
+      "tag": "v1.2.1",
+      "asset_count": 7,
+      "original_download_links": 2,
+      "candidate_download_links": 2,
+      "box_links": 1,
+      "asset_names_retained": 2,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 408733084,
+      "tag": "v1.2.0",
+      "asset_count": 7,
+      "original_download_links": 2,
+      "candidate_download_links": 2,
+      "box_links": 1,
+      "asset_names_retained": 2,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 408266575,
+      "tag": "v1.1.0",
+      "asset_count": 14,
+      "original_download_links": 2,
+      "candidate_download_links": 2,
+      "box_links": 0,
+      "asset_names_retained": 2,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 408035803,
+      "tag": "v1.1.0-rc.1",
+      "asset_count": 10,
+      "original_download_links": 2,
+      "candidate_download_links": 2,
+      "box_links": 0,
+      "asset_names_retained": 2,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 407514564,
+      "tag": "v1.0.0",
+      "asset_count": 10,
+      "original_download_links": 2,
+      "candidate_download_links": 2,
+      "box_links": 1,
+      "asset_names_retained": 2,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 407180224,
+      "tag": "v1.0.0-rc.33",
+      "asset_count": 10,
+      "original_download_links": 0,
+      "candidate_download_links": 0,
+      "box_links": 0,
+      "asset_names_retained": 0,
+      "source_or_digest_values_retained": 2,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 407138154,
+      "tag": "v1.0.0-rc.32",
+      "asset_count": 10,
+      "original_download_links": 0,
+      "candidate_download_links": 0,
+      "box_links": 0,
+      "asset_names_retained": 0,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 407095481,
+      "tag": "v1.0.0-rc.31",
+      "asset_count": 10,
+      "original_download_links": 0,
+      "candidate_download_links": 0,
+      "box_links": 0,
+      "asset_names_retained": 0,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 407043942,
+      "tag": "v1.0.0-rc.30",
+      "asset_count": 10,
+      "original_download_links": 0,
+      "candidate_download_links": 0,
+      "box_links": 0,
+      "asset_names_retained": 0,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 406830297,
+      "tag": "v1.0.0-rc.29",
+      "asset_count": 11,
+      "original_download_links": 0,
+      "candidate_download_links": 0,
+      "box_links": 1,
+      "asset_names_retained": 1,
+      "source_or_digest_values_retained": 3,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 406774045,
+      "tag": "v1.0.0-rc.28",
+      "asset_count": 11,
+      "original_download_links": 0,
+      "candidate_download_links": 0,
+      "box_links": 1,
+      "asset_names_retained": 1,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 406328451,
+      "tag": "v1.0.0-rc.27",
+      "asset_count": 10,
+      "original_download_links": 0,
+      "candidate_download_links": 0,
+      "box_links": 0,
+      "asset_names_retained": 2,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 406165418,
+      "tag": "v1.0.0-rc.26",
+      "asset_count": 10,
+      "original_download_links": 0,
+      "candidate_download_links": 0,
+      "box_links": 0,
+      "asset_names_retained": 0,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 405779231,
+      "tag": "v1.0.0-rc.25",
+      "asset_count": 10,
+      "original_download_links": 0,
+      "candidate_download_links": 0,
+      "box_links": 0,
+      "asset_names_retained": 1,
+      "source_or_digest_values_retained": 4,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 405665398,
+      "tag": "v1.0.0-rc.24",
+      "asset_count": 10,
+      "original_download_links": 0,
+      "candidate_download_links": 0,
+      "box_links": 0,
+      "asset_names_retained": 0,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 405628587,
+      "tag": "v1.0.0-rc.23",
+      "asset_count": 10,
+      "original_download_links": 0,
+      "candidate_download_links": 0,
+      "box_links": 0,
+      "asset_names_retained": 0,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 405407181,
+      "tag": "v1.0.0-rc.22",
+      "asset_count": 10,
+      "original_download_links": 0,
+      "candidate_download_links": 0,
+      "box_links": 0,
+      "asset_names_retained": 0,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 405354519,
+      "tag": "v1.0.0-rc.21",
+      "asset_count": 10,
+      "original_download_links": 0,
+      "candidate_download_links": 0,
+      "box_links": 0,
+      "asset_names_retained": 0,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 405292127,
+      "tag": "v1.0.0-rc.20",
+      "asset_count": 10,
+      "original_download_links": 0,
+      "candidate_download_links": 0,
+      "box_links": 0,
+      "asset_names_retained": 0,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 404471195,
+      "tag": "v1.0.0-rc.9",
+      "asset_count": 5,
+      "original_download_links": 4,
+      "candidate_download_links": 4,
+      "box_links": 0,
+      "asset_names_retained": 4,
+      "source_or_digest_values_retained": 3,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 404340806,
+      "tag": "v1.0.0-rc.8",
+      "asset_count": 5,
+      "original_download_links": 0,
+      "candidate_download_links": 0,
+      "box_links": 0,
+      "asset_names_retained": 0,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 405230188,
+      "tag": "v1.0.0-rc.19",
+      "asset_count": 10,
+      "original_download_links": 0,
+      "candidate_download_links": 0,
+      "box_links": 0,
+      "asset_names_retained": 0,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 405201832,
+      "tag": "v1.0.0-rc.18",
+      "asset_count": 10,
+      "original_download_links": 0,
+      "candidate_download_links": 0,
+      "box_links": 0,
+      "asset_names_retained": 0,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 405166290,
+      "tag": "v1.0.0-rc.17",
+      "asset_count": 10,
+      "original_download_links": 0,
+      "candidate_download_links": 0,
+      "box_links": 0,
+      "asset_names_retained": 0,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 405113124,
+      "tag": "v1.0.0-rc.16",
+      "asset_count": 10,
+      "original_download_links": 0,
+      "candidate_download_links": 0,
+      "box_links": 0,
+      "asset_names_retained": 0,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 405045948,
+      "tag": "v1.0.0-rc.15",
+      "asset_count": 10,
+      "original_download_links": 0,
+      "candidate_download_links": 0,
+      "box_links": 0,
+      "asset_names_retained": 0,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 404905914,
+      "tag": "v1.0.0-rc.14",
+      "asset_count": 10,
+      "original_download_links": 0,
+      "candidate_download_links": 0,
+      "box_links": 0,
+      "asset_names_retained": 0,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 404714067,
+      "tag": "v1.0.0-rc.13",
+      "asset_count": 10,
+      "original_download_links": 0,
+      "candidate_download_links": 0,
+      "box_links": 0,
+      "asset_names_retained": 2,
+      "source_or_digest_values_retained": 4,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 404685549,
+      "tag": "v1.0.0-rc.12",
+      "asset_count": 10,
+      "original_download_links": 0,
+      "candidate_download_links": 0,
+      "box_links": 0,
+      "asset_names_retained": 0,
+      "source_or_digest_values_retained": 1,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 404651648,
+      "tag": "v1.0.0-rc.11",
+      "asset_count": 10,
+      "original_download_links": 2,
+      "candidate_download_links": 2,
+      "box_links": 0,
+      "asset_names_retained": 2,
+      "source_or_digest_values_retained": 4,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 404556842,
+      "tag": "v1.0.0-rc.10",
+      "asset_count": 10,
+      "original_download_links": 1,
+      "candidate_download_links": 1,
+      "box_links": 1,
+      "asset_names_retained": 1,
+      "source_or_digest_values_retained": 3,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 404292213,
+      "tag": "v1.0.0-rc.7",
+      "asset_count": 5,
+      "original_download_links": 0,
+      "candidate_download_links": 0,
+      "box_links": 0,
+      "asset_names_retained": 2,
+      "source_or_digest_values_retained": 3,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 403979219,
+      "tag": "v1.0.0-rc.6",
+      "asset_count": 4,
+      "original_download_links": 0,
+      "candidate_download_links": 0,
+      "box_links": 0,
+      "asset_names_retained": 1,
+      "source_or_digest_values_retained": 3,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 403953726,
+      "tag": "v1.0.0-rc.5",
+      "asset_count": 4,
+      "original_download_links": 0,
+      "candidate_download_links": 0,
+      "box_links": 0,
+      "asset_names_retained": 1,
+      "source_or_digest_values_retained": 3,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 403847825,
+      "tag": "v1.0.0-rc.4",
+      "asset_count": 4,
+      "original_download_links": 0,
+      "candidate_download_links": 0,
+      "box_links": 0,
+      "asset_names_retained": 1,
+      "source_or_digest_values_retained": 3,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 403810397,
+      "tag": "v1.0.0-rc.3",
+      "asset_count": 4,
+      "original_download_links": 0,
+      "candidate_download_links": 0,
+      "box_links": 0,
+      "asset_names_retained": 1,
+      "source_or_digest_values_retained": 3,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 403693383,
+      "tag": "v1.0.0-rc.2",
+      "asset_count": 4,
+      "original_download_links": 0,
+      "candidate_download_links": 0,
+      "box_links": 0,
+      "asset_names_retained": 1,
+      "source_or_digest_values_retained": 3,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 403626349,
+      "tag": "v1.0.0-rc.1",
+      "asset_count": 4,
+      "original_download_links": 0,
+      "candidate_download_links": 0,
+      "box_links": 0,
+      "asset_names_retained": 1,
+      "source_or_digest_values_retained": 3,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    },
+    {
+      "id": 403589195,
+      "tag": "v1.0.0-rc.0",
+      "asset_count": 4,
+      "original_download_links": 0,
+      "candidate_download_links": 0,
+      "box_links": 0,
+      "asset_names_retained": 1,
+      "source_or_digest_values_retained": 3,
+      "errors": {
+        "remote_changed": [],
+        "lost_downloads": [],
+        "unmatched_downloads": [],
+        "lost_box": [],
+        "lost_asset_names": [],
+        "lost_identifiers": [],
+        "unknown_product_names": []
+      }
+    }
+  ]
+}
