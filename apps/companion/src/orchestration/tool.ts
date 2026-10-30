@@ -12,7 +12,14 @@ import {
   rm,
   writeFile,
 } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import {
+  readMulnxMirror,
+  mirrorArchive,
+  mirrorNotice,
+  sameMulnxAsset,
+  type MulnxMirror,
+} from './tool-mirror.js';
 import { atomicJson, ensureDirectory, readJson, safePath } from '../resource-store/files.js';
 import { prepareIsolatedPack } from './prepare-pack.js';
 import {
@@ -20,6 +27,7 @@ import {
   extractMulnx,
   fileSha256,
   latestMulnxRelease,
+  publicJson,
   SEVEN_ZIP,
   upstreamNotice,
   type MulnxRelease,
@@ -70,6 +78,24 @@ export function firstDemoOptions(source: string): string {
 export class MulnxTool {
   private installed: InstalledTool | undefined;
   private latest: MulnxRelease | undefined;
+  private mirror: MulnxMirror | undefined;
+  private sourceName: string | null = null;
+  private sourceMessage = '';
+  private checkResult: 'unchecked' | 'current' | 'available' | 'error' = 'unchecked';
+  private checkedAt: number | null = null;
+  private phase:
+    | 'idle'
+    | 'checking'
+    | 'downloading'
+    | 'verifying'
+    | 'installing'
+    | 'complete'
+    | 'error'
+    | 'cancelled' = 'idle';
+  private downloadedBytes = 0;
+  private downloadTotal = 0;
+  private downloadAbort: AbortController | undefined;
+  private notifiedIdentity: string | null = null;
   private pending: Promise<unknown> | undefined;
   private message = '';
   constructor(
@@ -88,6 +114,21 @@ export class MulnxTool {
       latest: this.latest?.tag ?? null,
       busy: Boolean(this.pending),
       message: this.message,
+      phase: this.phase,
+      checkedAt: this.checkedAt,
+      checkResult: this.checkResult,
+      downloadedBytes: this.downloadedBytes,
+      totalBytes: this.downloadTotal,
+      notificationIdentity:
+        this.installed &&
+        this.latest &&
+        !sameMulnxAsset(this.installed.release, this.latest) &&
+        this.checkResult === 'available'
+          ? `${this.latest.id}:${this.latest.assetId}:${this.latest.sha256}`
+          : null,
+      notifiedIdentity: this.notifiedIdentity,
+      source: this.phase === 'downloading' || this.phase === 'verifying' ? this.sourceName : null,
+      sourceMessage: this.sourceMessage,
       packs: this.installed?.packs ?? [],
     };
   }
@@ -133,11 +174,100 @@ export class MulnxTool {
     this.pending = task;
     return task;
   }
+  private async resolveRelease(fresh = false) {
+    const [mirrorResult, upstreamResult] = await Promise.allSettled([
+      readMulnxMirror(join(dirname(this.directory), 'updates', 'trust')),
+      latestMulnxRelease((url) => publicJson(url, fresh)),
+    ]);
+    const mirror = mirrorResult.status === 'fulfilled' ? mirrorResult.value : undefined;
+    if (mirrorResult.status === 'rejected')
+      this.diagnostic('mulnx_mirror_check', { result: 'failure', error: mirrorResult.reason });
+    if (
+      upstreamResult.status === 'rejected' &&
+      upstreamResult.reason instanceof Error &&
+      upstreamResult.reason.message === 'mulnx_latest_release_incomplete'
+    )
+      throw upstreamResult.reason;
+    const upstream = upstreamResult.status === 'fulfilled' ? upstreamResult.value : undefined;
+    if (!upstream && !mirror)
+      throw upstreamResult.status === 'rejected'
+        ? upstreamResult.reason
+        : new Error('mulnx_metadata_unavailable');
+    if (
+      upstream &&
+      mirror &&
+      upstream.id === mirror.release.id &&
+      upstream.assetId === mirror.release.assetId &&
+      !sameMulnxAsset(upstream, mirror.release)
+    )
+      throw new Error('mulnx_identity_changed');
+    const release = upstream ?? mirror!.release;
+    let highest: MulnxRelease | undefined;
+    try {
+      highest = releaseSchema.parse(await readJson(this.directory, 'highest.json'));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    const installed = this.installed?.release;
+    for (const previous of [highest, installed]) {
+      if (!previous) continue;
+      if (
+        release.id === previous.id &&
+        release.assetId === previous.assetId &&
+        !sameMulnxAsset(release, previous)
+      )
+        throw new Error('mulnx_identity_changed');
+      if (Date.parse(release.publishedAt) < Date.parse(previous.publishedAt))
+        throw new Error('mulnx_release_rollback');
+    }
+    if (!highest || !sameMulnxAsset(highest, release))
+      await atomicJson(join(this.directory, 'highest.json'), release);
+    this.mirror = mirror && sameMulnxAsset(release, mirror.release) ? mirror : undefined;
+    const recentlyChecked = Boolean(
+      upstream || (mirror && Date.now() - Date.parse(mirror.checkedAt) <= 2 * 60 * 60_000),
+    );
+    this.latest = release;
+    this.checkedAt = Date.now();
+    this.checkResult = !recentlyChecked
+      ? 'error'
+      : this.installed && sameMulnxAsset(this.installed.release, release)
+        ? 'current'
+        : 'available';
+    return { release, recentlyChecked };
+  }
   check() {
+    if (this.phase === 'checking' && this.pending)
+      return this.pending as Promise<ReturnType<MulnxTool['view']>>;
     return this.run('mulnx_check', async () => {
-      this.latest = await latestMulnxRelease();
+      this.phase = 'checking';
+      try {
+        const result = await this.resolveRelease();
+        this.latest = result.release;
+        this.checkResult = !result.recentlyChecked
+          ? 'error'
+          : this.installed && sameMulnxAsset(this.installed.release, this.latest)
+            ? 'current'
+            : 'available';
+        this.phase = 'idle';
+      } catch (error) {
+        this.checkResult = 'error';
+        this.phase = 'error';
+        throw error;
+      } finally {
+        this.checkedAt = Date.now();
+      }
       return this.view();
     });
+  }
+  resetNotification() {
+    this.notifiedIdentity = null;
+  }
+  dismissNotification(identity: string) {
+    if (this.view().notificationIdentity === identity) this.notifiedIdentity = identity;
+  }
+  cancelDownload() {
+    if (!this.downloadAbort) throw new Error('mulnx_download_not_active');
+    this.downloadAbort.abort();
   }
   prepare(
     cs2Path: string,
@@ -175,7 +305,7 @@ export class MulnxTool {
         }
       }
       const release = update
-        ? await latestMulnxRelease()
+        ? (await this.resolveRelease(true)).release
         : (this.installed?.release ??
           z.object({ release: releaseSchema }).parse(await readJson(this.bundle, 'release.json'))
             .release);
@@ -341,7 +471,7 @@ export class MulnxTool {
     try {
       const archive = join(stage, 'MulNX.7z');
       const bundled = (await readJson(this.bundle, 'release.json')) as { release?: MulnxRelease };
-      const usingBundle = bundled?.release?.sha256 === release.sha256;
+      const usingBundle = Boolean(bundled?.release && sameMulnxAsset(bundled.release, release));
       if (usingBundle) {
         const source = await safePath(this.bundle, 'MulNX.7z');
         await copyFile(source, archive);
@@ -350,7 +480,46 @@ export class MulnxTool {
           (await fileSha256(archive)) !== release.sha256
         )
           throw new Error('mulnx_bundle_integrity');
-      } else await downloadVerified(release.url, archive, release.sha256, release.size);
+      } else {
+        const abort = new AbortController();
+        this.downloadAbort = abort;
+        this.phase = 'downloading';
+        this.downloadedBytes = 0;
+        this.downloadTotal = release.size;
+        this.sourceMessage = '';
+        this.sourceName = null;
+        try {
+          await downloadVerified(
+            release.url,
+            archive,
+            release.sha256,
+            release.size,
+            AbortSignal.any([abort.signal, AbortSignal.timeout(120_000)]),
+            (bytes, _source, name) => {
+              this.phase = 'downloading';
+              this.downloadedBytes = bytes;
+              this.sourceName = name;
+            },
+            this.mirror && sameMulnxAsset(this.mirror.release, release)
+              ? (signal, end) => mirrorArchive(this.mirror!, signal, end)
+              : undefined,
+            (error, name) => {
+              this.sourceMessage = `${name}连接或文件校验失败，正在切换来源。`;
+              this.diagnostic('mulnx_source_download', { result: 'failure', source: name, error });
+            },
+            () => {
+              this.phase = 'verifying';
+            },
+            true,
+          );
+        } catch (error) {
+          this.phase = abort.signal.aborted ? 'cancelled' : 'error';
+          throw error;
+        } finally {
+          this.downloadAbort = undefined;
+        }
+      }
+      this.phase = 'installing';
       const unpacked = join(stage, 'unpacked');
       const extracted = await extractMulnx(extractor, archive, unpacked);
       const notices = join(extracted.root, 'Mizar-Upstream-Notices');
@@ -359,7 +528,20 @@ export class MulnxTool {
         ['LICENSE.txt', 'COPYRIGHT.md', 'SECURITY.md'].map(async (name) => {
           const content = usingBundle
             ? await readFile(await safePath(this.bundle, `MulNX-${name}`))
-            : await upstreamNotice(name, release.tag);
+            : this.mirror && sameMulnxAsset(this.mirror.release, release)
+              ? await mirrorNotice(this.mirror, name as keyof MulnxMirror['notices']).catch(
+                  async () => {
+                    const upstream = await upstreamNotice(name, release.tag);
+                    const expected = this.mirror!.notices[name as keyof MulnxMirror['notices']];
+                    if (
+                      upstream.length !== expected.size ||
+                      createHash('sha256').update(upstream).digest('hex') !== expected.sha256
+                    )
+                      throw new Error('mulnx_notice_integrity');
+                    return upstream;
+                  },
+                )
+              : await upstreamNotice(name, release.tag);
           await writeFile(join(notices, name), content, { flag: 'wx' });
         }),
       );
@@ -386,6 +568,12 @@ export class MulnxTool {
       const installed = { release, directory, packs };
       await atomicJson(join(this.directory, 'current.json'), installed);
       this.installed = installed;
+      if (this.latest && (this.checkResult === 'current' || this.checkResult === 'available'))
+        this.checkResult = sameMulnxAsset(installed.release, this.latest) ? 'current' : 'available';
+      this.phase = 'complete';
+    } catch (error) {
+      if (this.phase !== 'cancelled') this.phase = 'error';
+      throw error;
     } finally {
       await rm(stage, { recursive: true, force: true });
     }

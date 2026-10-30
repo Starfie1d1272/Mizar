@@ -1123,6 +1123,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       production,
       scenes: sceneController,
       obs: async () => obsAdapter?.status(),
+      mulnx: () => (catalogToolLoaded ? catalogTool : undefined),
     });
   const guidance = new ProductionGuidanceStore();
   const bilibili = new BilibiliStatus();
@@ -1277,6 +1278,12 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         try {
           await mulnxTool.load();
           catalogToolLoaded = true;
+          options.updates?.registerCompanionCheck(async (force) => {
+            if (force) mulnxTool.resetNotification();
+            if (mulnxTool.view().busy) return mulnxTool.view().phase === 'checking';
+            await mulnxTool.check().catch(() => undefined);
+            return true;
+          });
         } catch (error) {
           app.log.error({ stage: 'mulnx_load', err: error }, 'MulNX 加载失败');
         }
@@ -1318,9 +1325,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       resources: resources?.list() ?? null,
       tool: tool
         ? {
-            installed: tool.installed,
-            latest: tool.latest,
-            busy: tool.busy,
+            ...tool,
             packs: tool.packs.map((pack) => pack.sourceName),
           }
         : null,

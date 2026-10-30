@@ -19,7 +19,18 @@ export interface UpdateStatus {
   automatic: boolean;
   notificationPending?: boolean;
   notificationSafe?: boolean;
+  mulnxNotificationPending?: boolean;
+  mulnx?: {
+    installed: string | null;
+    latest: string | null;
+    notificationIdentity: string | null;
+    checkedAt: number | null;
+    checkResult: 'unchecked' | 'current' | 'available' | 'error';
+    phase: string;
+    busy: boolean;
+  } | null;
   currentVersion: string;
+  lastCheckedAt?: number | null;
   distribution: 'installed' | 'portable';
   error: string | null;
   failureDetails?: {
@@ -30,6 +41,9 @@ export interface UpdateStatus {
     operationId: string;
   }[];
   downloadedBytes: number;
+  downloadSource?: string | null;
+  sourceMessage?: string;
+  transferStage?: 'downloading' | 'verifying';
   candidate: null | { version: string; notes: string; installer: { bytes: number } };
   installBlockedReason?: string | null;
   canResumeAutomatic?: boolean;
@@ -281,14 +295,20 @@ export function UpdateSettings({ children }: { children?: ReactNode }) {
       ) : null}
       {downloading ? (
         <div className="settings-update-progress">
+          {status?.transferStage === 'verifying' ? <span>正在校验</span> : null}
           <progress
             aria-label="更新下载进度"
-            value={status?.downloadedBytes ?? 0}
+            value={Math.min(
+              status?.downloadedBytes ?? 0,
+              Math.max(0, (status?.candidate?.installer.bytes ?? 1) - 1),
+            )}
             max={status?.candidate?.installer.bytes ?? 1}
           />
           <span>
+            {status?.downloadSource ? `${status.downloadSource} · ` : ''}
+            {status?.downloadedBytes ?? 0} / {status?.candidate?.installer.bytes ?? 0} 字节 ·{' '}
             {Math.min(
-              100,
+              99,
               Math.floor(
                 ((status?.downloadedBytes ?? 0) / (status?.candidate?.installer.bytes ?? 1)) * 100,
               ),
@@ -297,6 +317,7 @@ export function UpdateSettings({ children }: { children?: ReactNode }) {
           </span>
         </div>
       ) : null}
+      {downloading && status?.sourceMessage ? <p>{status.sourceMessage}</p> : null}
       {blocked && phase === 'ready' ? (
         <StatusBanner tone="warning">{status.installBlockedReason}</StatusBanner>
       ) : null}
@@ -365,7 +386,7 @@ export function UpdateSettings({ children }: { children?: ReactNode }) {
           <details className="settings-update-options">
             <summary>更新设置</summary>
             <Checkbox
-              label="自动检查更新"
+              label="自动检查 Mizar 和 MulNX 更新"
               checked={status.automatic}
               disabled={waiting || downloading || requested}
               onChange={(event) => void action('automatic', event.target.checked)}
