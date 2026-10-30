@@ -1,0 +1,27 @@
+--- original/423238397-v2.0.0-alpha.3.md
++++ candidates/423238397-v2.0.0-alpha.3.md
+@@ -1,3 +1,24 @@
++2026-10-25 · 预发布
++
++### 新增功能
++
++- 工作台加入私有击杀提示及提前数据连接；与左侧雷达分别显示，正式播出画面保持节目时间。
++
++### 体验改进
++
++- 进入工作台前集中确认本场连接，可设置端口；赛前核对可按比赛记住提醒选择。
++- 收录 1.6.1–1.6.4 的公共聊天、音乐播放、比赛列表和核对窗口修复。
++
++### 升级提醒
++
++- 本版需从 GitHub 手动安装，升级或回退前备份资料。
++- 当时的 MulNX Beta16.1 需从官方启动器手动启动，再在 Mizar 明确交接游戏；结束后从官方入口退出。
++- 音乐可自行导入；推荐运镜包仍待提供。
++
++---
++
++### 当时的发行记录（含旧版变更，待去重审查）
++
+ **完整 Windows 安装器**：[GitHub 下载](https://github.com/Starfie1d1272/Mizar/releases/download/v2.0.0-alpha.3/Mizar-v2.0.0-alpha.3-Windows-x64-Setup.exe)
+ 
+ **完整离线 ZIP**：[GitHub 下载](https://github.com/Starfie1d1272/Mizar/releases/download/v2.0.0-alpha.3/Mizar-v2.0.0-alpha.3-Windows-x64.zip)

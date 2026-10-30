@@ -1,0 +1,31 @@
+--- original/410206996-v1.3.2.md
++++ candidates/410206996-v1.3.2.md
+@@ -1,3 +1,28 @@
++### 新增功能
++
++- 更新期间提供独立状态窗口，显示下载、安装、恢复进度和日志入口，完成后再自动打开 Mizar。
++- 轻量安装器在下载源支持时可断点续传。
++
++### 体验改进
++
++- 本场页面直接显示错图、名单或资料来源问题，并进入相应核对操作。
++- 诊断补充 OBS 捕获状态；下载、安装和恢复失败时分别显示原因。
++
++### 问题修复
++
++- 修复 OBS 未运行时仍阻止安装更新或安全退出的问题。
++- 再次手动选择当前场景时可重新核实并恢复 OBS 播出，保留有效的 CS2 捕获目标。
++- 修复更新初始化失败阻断 Mizar 启动，以及重复启动干扰未完成更新的问题。
++- 网站待发送记录损坏时保留原文件，能确认完整备份时恢复，否则提示核对送达情况。
++
++### 升级提醒
++
++- 从 1.3.1 及更早版本升级，建议备份资料并正常退出后手动安装。使用应用内更新时，请等待完成后自动打开；已有更新或恢复失败时先保留记录。
++
++---
++
++### 当时的发行记录（含旧版变更，待去重审查）
++
+ **Windows 安装器**：[Box 国内优先](https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/?p=/Downloads) · [GitHub 兜底](https://github.com/Starfie1d1272/Mizar/releases/download/v1.3.2/Mizar-v1.3.2-Windows-x64-WebInstaller.exe)
+ 
+ **完整离线 ZIP**：[Box 国内优先](https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/?p=/Downloads) · [GitHub 兜底](https://github.com/Starfie1d1272/Mizar/releases/download/v1.3.2/Mizar-v1.3.2-Windows-x64.zip)

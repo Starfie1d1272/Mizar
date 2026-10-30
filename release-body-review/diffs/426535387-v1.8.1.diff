@@ -1,0 +1,31 @@
+--- original/426535387-v1.8.1.md
++++ candidates/426535387-v1.8.1.md
+@@ -1,3 +1,28 @@
++### 新增功能
++
++- 五套 HUD 的当前主武器按弹匣剩余子弹比例高亮，换弹和空弹匣状态同步更新。
++
++### 体验改进
++
++- “聊天上屏”统一控制 ALL 公共聊天及其采集，默认开启，保留已有关闭选择。
++- BP 播出样式移到“HUD 与画面”，未使用 MulNX 时隐藏工作台运镜入口。
++- 已有自定义 OBS 音源可绑定为游戏、其他解说或麦克风，并用于 Mizar 场景。
++- 正式音乐暂时无法播放时说明原因，并提供曲目试听入口。
++
++### 问题修复
++
++- 修复 OBS 自动准备反复执行，导致 Demo 试播提示比赛资料被占用的问题。
++- 修复个人启动配置覆盖 H 键，以及部分 Steam、Windows 应用数据路径导致聊天无法采集的问题。
++- 修复音乐已在 OBS 暂停，但 Mizar 仍提示操作失败的问题。
++
++### 升级提醒
++
++- 游戏统一从 Mizar 启动，移除手动复制解说配置和接管外部游戏的入口。进入工作台前，请先退出自行启动的 CS2；MulNX 不支持自动启动时可改用标准启动。
++
++---
++
++### 当时的发行记录（含旧版变更，待去重审查）
++
+ **Windows 安装器**：[Box 国内优先](https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/?p=/Downloads) · [GitHub 兜底](https://github.com/Starfie1d1272/Mizar/releases/download/v1.8.1/Mizar-v1.8.1-Windows-x64-WebInstaller.exe)
+ 
+ **完整离线 ZIP**：[GitHub 下载](https://github.com/Starfie1d1272/Mizar/releases/download/v1.8.1/Mizar-v1.8.1-Windows-x64.zip)

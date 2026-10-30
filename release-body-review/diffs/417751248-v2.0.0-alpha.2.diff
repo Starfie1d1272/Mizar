@@ -1,0 +1,26 @@
+--- original/417751248-v2.0.0-alpha.2.md
++++ candidates/417751248-v2.0.0-alpha.2.md
+@@ -1,3 +1,23 @@
++2026-10-19 · 预发布
++
++### 新增功能
++
++- 可通过 MulNX 加载 Demo 后直接试播运镜，无需创建比赛，结束后保留游戏运行。
++
++### 体验改进
++
++- 回合开场镜头可从冻结时间延续到选手出门。
++- 重新整理本场、比赛库、HUD 与设置，适配 16:9 桌面布局。
++- 旧备份支持按字段恢复，诊断保留游戏警告及配置读取失败原因。
++
++### 升级提醒
++
++- 本版需从 GitHub 手动安装，安装版沿用已有资料位置，升级或回退前请备份。
++
++---
++
++### 当时的发行记录（含旧版变更，待去重审查）
++
+ **完整 Windows 安装器**：[GitHub 下载](https://github.com/Starfie1d1272/Mizar/releases/download/v2.0.0-alpha.2/Mizar-v2.0.0-alpha.2-Windows-x64-Setup.exe)
+ 
+ **完整离线 ZIP**：[GitHub 下载](https://github.com/Starfie1d1272/Mizar/releases/download/v2.0.0-alpha.2/Mizar-v2.0.0-alpha.2-Windows-x64.zip)

@@ -1,0 +1,17 @@
+--- original/407095481-v1.0.0-rc.31.md
++++ candidates/407095481-v1.0.0-rc.31.md
+@@ -1,3 +1,14 @@
++2026-10-08 · 预发布
++
++### 问题修复
++
++- 修复安装器中文乱码。
++- 网站实时数据等待当前地图开始确认后再发送，避免刚连接就失去数据源。
++
++---
++
++### 当时的发行记录（含旧版变更，待去重审查）
++
+ Exact qualified source: d6ae1ea6260cd86938b206094e44b130ebd1ae70
+ Qualification: https://github.com/Starfie1d1272/Mizar/actions/runs/37815566616
+ 

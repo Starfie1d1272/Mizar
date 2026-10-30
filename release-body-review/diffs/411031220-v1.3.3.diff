@@ -1,0 +1,20 @@
+--- original/411031220-v1.3.3.md
++++ candidates/411031220-v1.3.3.md
+@@ -1,3 +1,17 @@
++### 体验改进
++
++- OBS 捕获文件被占用时显示具体原因和恢复步骤；诊断补充节目场景、图层和捕获状态。
++- CS2 窗口定位、布局或权限异常时给出具体提示。
++- 游戏退出失败时区分关闭请求失败、等待超时等情况，保留配置备份和重试入口。
++
++### 问题修复
++
++- 修复无法发送游戏关闭请求或没有可关闭窗口时，仍额外等待 15 秒的问题。
++
++---
++
++### 当时的发行记录（含旧版变更，待去重审查）
++
+ **Windows 安装器**：[Box 国内优先](https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/?p=/Downloads) · [GitHub 兜底](https://github.com/Starfie1d1272/Mizar/releases/download/v1.3.3/Mizar-v1.3.3-Windows-x64-WebInstaller.exe)
+ 
+ **完整离线 ZIP**：[Box 国内优先](https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/?p=/Downloads) · [GitHub 兜底](https://github.com/Starfie1d1272/Mizar/releases/download/v1.3.3/Mizar-v1.3.3-Windows-x64.zip)

@@ -1,0 +1,24 @@
+--- original/403589195-v1.0.0-rc.0.md
++++ candidates/403589195-v1.0.0-rc.0.md
+@@ -1,3 +1,21 @@
++2026-10-05 · 预发布
++
++### 新增功能
++
++- 首个 Windows 便携候选版，提供制播工作台、自动节目流程、Mizar Pulse 等 HUD、雷达、本地比赛与 RivalHub 连接。
++
++### 问题修复
++
++- 同图断流恢复后重新确认地图开始，避免沿用旧的发送状态。
++
++### 升级提醒
++
++- 完整解压到可写目录后运行 `Mizar.exe`，需要 Windows WebView2 Runtime。
++
++---
++
++### 当时的发行记录（含旧版变更，待去重审查）
++
+ 用于 #112 原 Windows 机器冷启动复验与 #35 Windows + CS2 + OBS 实机验收的 RC0；尚未完成生产实机验收。
+ 
+ 下载 **Mizar-RC0-win-x64-portable-26605da.zip** → 完整解压到可写目录 → 双击 `Mizar.exe`。请完整保留 resources/ 与 state/，不要在 ZIP 内运行。无需自行安装 Node 或 pnpm；Windows 需要可用的 WebView2 Runtime。evidence.zip 供维护者核查，用户无需下载。

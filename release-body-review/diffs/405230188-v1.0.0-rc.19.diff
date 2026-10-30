@@ -1,0 +1,16 @@
+--- original/405230188-v1.0.0-rc.19.md
++++ candidates/405230188-v1.0.0-rc.19.md
+@@ -1,3 +1,13 @@
++2026-10-06 · 预发布
++
++### 问题修复
++
++- 修复同一地图重新开赛时沿用上一场历史的问题，有完整热身信息时重新建立本图记录。
++
++---
++
++### 当时的发行记录（含旧版变更，待去重审查）
++
+ Exact qualified source: e1a4bd9be76fdd9d7409f97602c7b824cefac012
+ Qualification: https://github.com/Starfie1d1272/Mizar/actions/runs/37548521803
+ Automated qualification passed; see evidence for real-environment limits.

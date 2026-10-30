@@ -1,0 +1,25 @@
+--- original/407514564-v1.0.0.md
++++ candidates/407514564-v1.0.0.md
+@@ -1,3 +1,22 @@
++Mizar 首个正式版本，面向校园与社区 CS2 赛事。
++
++### 新增功能
++
++- 提供从赛前等待、BP、对阵开场到局内、半场、单图及整场结果的节目流程，可自动推进或人工接管。
++- 制播工作台集中显示 CS2、大雷达、比赛资料、制作提示和 OBS 状态。
++- 提供 Mizar Pulse、EWC、IEM、Perfect World、ESL 五套 HUD，支持预览、组件设置、布局调整和预设分享。
++- 支持本地管理赛事、队伍、名单和 BP；连接 RivalHub 后可读取比赛资料并提供网站实时画面与雷达。
++- 提供配置备份、连接恢复、未保存草稿保护和诊断导出。
++
++### 升级提醒
++
++- 支持 Windows x64、CS2 和 OBS。安装版资料保存在 `%LOCALAPPDATA%/Mizar`，便携版保存在 `state/`；从便携版迁移前请备份。
++- 本版通过手动安装新版更新。整场结果的选手表使用最后一图数据。
++
++---
++
++### 当时的发行记录（含旧版变更，待去重审查）
++
+ > 让校园赛事，也有职业赛场的转播呈现。
+ 
+ **[下载 Windows 安装包](https://github.com/Starfie1d1272/Mizar/releases/download/v1.0.0/Mizar-v1.0.0-Windows-x64-Setup.exe)** · **[国内下载（南大云盘）](https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/)** · [安装与使用手册](https://github.com/Starfie1d1272/Mizar/blob/e46dcf7ff5bf01703da2ee40491f503d1fc4d76b/docs/guide/quick-start.md)

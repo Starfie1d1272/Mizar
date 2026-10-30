@@ -1,0 +1,33 @@
+--- original/409446172-v1.3.0.md
++++ candidates/409446172-v1.3.0.md
+@@ -1,3 +1,30 @@
++### 新增功能
++
++- 支持本地 CS2 Demo 试播，无需创建比赛即可检查 HUD、雷达和 OBS 画面。
++- 工作台可开始、停止 OBS 直播与录像，停止前确认，并同步 OBS 中的操作状态。
++- 本地比赛支持移入回收站和恢复，正在制作的比赛受到保护。
++- 从 Mizar 启动游戏时自动准备数字键观战配置，退出后恢复。
++
++### 体验改进
++
++- 切回游戏或工作台时联动恢复现场窗口，显示或隐藏本机 HUD 时保持当前焦点。
++- 播出画面优先显示游戏实时昵称。
++- 新安装默认启动检查更新，并每六小时复查，空闲时提醒；已关闭的选择保留。
++- 安装失败时提供离线包入口；游戏配置无法接管时可选择保留原设置进入。
++
++### 问题修复
++
++- 修复小数帧率设置无法正确备份和恢复的问题。
++- 恢复读取含旧式直播链接的 RC29 本地比赛资料，迁移前保留备份。
++
++### 升级提醒
++
++- RC29 便携版迁移到安装版时，请先备份并完整迁移原 `state` 目录。
++
++---
++
++### 当时的发行记录（含旧版变更，待去重审查）
++
+ **Windows 安装器**：[Box 国内优先](https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/?p=/Downloads) · [GitHub 兜底](https://github.com/Starfie1d1272/Mizar/releases/download/v1.3.0/Mizar-v1.3.0-Windows-x64-WebInstaller.exe)
+ 
+ **完整离线 ZIP**：[Box 国内优先](https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/?p=/Downloads) · [GitHub 兜底](https://github.com/Starfie1d1272/Mizar/releases/download/v1.3.0/Mizar-v1.3.0-Windows-x64.zip)

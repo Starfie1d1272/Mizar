@@ -1,0 +1,20 @@
+--- original/405628587-v1.0.0-rc.23.md
++++ candidates/405628587-v1.0.0-rc.23.md
+@@ -1,3 +1,17 @@
++2026-10-07 · 预发布
++
++### 新增功能
++
++- 本地赛事可设置 BO3 最后两次禁图顺序及决胜图选边规则，包括在游戏内决定阵营。
++
++### 体验改进
++
++- 五套 HUD 统一显示当前与结算回合序号，比赛资料刷新后同步队名和队标。
++
++---
++
++### 当时的发行记录（含旧版变更，待去重审查）
++
+ Exact qualified source: 9d5af903544caba3123bc36789c6d0cc0af14502
+ Qualification: https://github.com/Starfie1d1272/Mizar/actions/runs/37604634647
+ Automated qualification passed; see evidence for real-environment limits.
