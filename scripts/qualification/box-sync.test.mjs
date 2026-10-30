@@ -8,7 +8,7 @@ import { PassThrough, Writable } from 'node:stream';
 import { BoxClient } from './box-sync.mjs';
 import { curlMultipartUpload } from './box-curl-upload.mjs';
 
-const { AbortSignal, Blob, FormData, Response } = globalThis;
+const { AbortController, AbortSignal, Blob, FormData, Response } = globalThis;
 
 function client(transport) {
   const box = new BoxClient('test-token', transport);
@@ -82,6 +82,31 @@ test('upload link and all chunks share the 180-second deadline', async (t) => {
     /预算已用完/,
   );
   assert.deepEqual(ranges, ['bytes 0-1/4']);
+});
+
+test('deadline abort during a chunk stops the transfer as an uncertain write', async (t) => {
+  const controller = new AbortController();
+  const timeout = AbortSignal.timeout.bind(AbortSignal);
+  let budgetSignals = 0;
+  t.mock.method(AbortSignal, 'timeout', (milliseconds) => {
+    if (milliseconds === 180000) {
+      budgetSignals++;
+      return controller.signal;
+    }
+    return timeout(milliseconds);
+  });
+  let calls = 0;
+  const box = client(async (_url, options) => {
+    calls++;
+    controller.abort();
+    options.signal.throwIfAborted();
+  });
+  await assert.rejects(box.uploadChunks('/Archive/test', 'payload', Buffer.from('abcd'), 2), {
+    uploadOutcomeUnknown: true,
+    retrySafeUpload: false,
+  });
+  assert.ok(budgetSignals >= 1);
+  assert.equal(calls, 1);
 });
 
 test('real curl TLS failure reports zero sent bytes as safe to retry', async () => {
