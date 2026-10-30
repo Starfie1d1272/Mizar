@@ -195,6 +195,7 @@ export interface CompanionAppOptions {
   readonly hudConfigPath?: string;
   readonly hudConfigStore?: HudConfigStore;
   readonly obsConfigPath?: string;
+  readonly builtinMusicPack?: string;
   readonly mulnxCamPacksRoot?: string;
   readonly mulnxBundle?: string;
   readonly readObsCaptureEvidence?: () => Promise<ObsNativeEvidence>;
@@ -1178,6 +1179,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     const musicStore = new MusicStore(
       join(dirname(options.obsConfigPath), 'music'),
       (stage, evidence) => sessionJournal?.record(stage, evidence),
+      options.builtinMusicPack,
     );
     app.addHook('onReady', async () => {
       await musicStore.load().catch((error) => {
