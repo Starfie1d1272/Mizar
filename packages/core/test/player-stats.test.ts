@@ -498,3 +498,37 @@ it.each([1, 2])(
     });
   },
 );
+
+it('marks coverage partial if a round ends without an observed live phase', async () => {
+  const { projectPlayerStatistics } = await import('../src/runtime/index.js');
+  let state = createInitialRuntimeState('live-phase-missing');
+  state = accept(state, frame(1, 1, 'freezetime', 0, 0)).state;
+  state = accept(state, frame(2, 2, 'live', 0, 80)).state;
+  state = accept(state, frame(3, 3, 'over', 0, 80)).state;
+  state = accept(state, frame(4, 4, 'freezetime', 1, 0)).state;
+  state = accept(state, frame(5, 5, 'over', 1, 0)).state;
+  state = accept(state, frame(6, 6, 'freezetime', 2, 0)).state;
+  state = accept(state, frame(7, 7, 'live', 2, 60)).state;
+  state = accept(state, frame(8, 8, 'over', 2, 60)).state;
+  expect(
+    projectPlayerStatistics(state.playerStats, PLAYER_A, undefined, null).completed.adr,
+  ).toMatchObject({
+    value: 70,
+    basis: { rounds: 2, coverage: 'partial' },
+  });
+});
+
+it('marks a proven round jump partial when no round was in flight', async () => {
+  const { projectPlayerStatistics } = await import('../src/runtime/index.js');
+  let state = createInitialRuntimeState('round-end-jump');
+  state = accept(state, frame(1, 1, 'freezetime', 0, 0)).state;
+  state = accept(state, frame(2, 2, 'live', 0, 80)).state;
+  state = accept(state, frame(3, 3, 'over', 0, 80)).state;
+  state = accept(state, frame(4, 4, 'over', 3, 0)).state;
+  expect(
+    projectPlayerStatistics(state.playerStats, PLAYER_A, undefined, null).completed.adr,
+  ).toMatchObject({
+    value: 80,
+    basis: { rounds: 1, coverage: 'partial' },
+  });
+});

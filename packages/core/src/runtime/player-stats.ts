@@ -409,6 +409,15 @@ export function reduceMapPlayerStats(
   }
 
   if (currentRound === null) {
+    const previousRoundHint = accumulator.completedRounds.at(-1)?.roundNumberHint;
+    if (
+      endsRound &&
+      previousRoundHint != null &&
+      roundNumberHint !== null &&
+      roundNumberHint > previousRoundHint + 1
+    ) {
+      accumulator = { ...accumulator, coverage: 'partial' };
+    }
     return settleTerminalRound(accumulator, input);
   }
 
@@ -462,7 +471,7 @@ export function reduceMapPlayerStats(
     if (currentRound.eligible && currentRound.hasCompleteEvidence && !currentRound.invalidated) {
       return addCompletedRound(accumulator, currentRound, input.observation);
     }
-    return { ...accumulator, currentRound: null };
+    return { ...accumulator, coverage: 'partial', currentRound: null };
   }
 
   return { ...accumulator, currentRound };
