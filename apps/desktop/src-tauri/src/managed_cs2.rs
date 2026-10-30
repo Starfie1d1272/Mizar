@@ -19,6 +19,15 @@ pub const LAUNCH_ARGS: &[&str] = &[
     "-allow_third_party_software",
     "-worldwide",
 ];
+// Preserving video settings still requires the capture compatibility flag for
+// this launch. These arguments never change Steam's saved launch options.
+const PRESERVED_LAUNCH_ARGS: &[&str] = &[
+    "-applaunch",
+    "730",
+    "-console",
+    "-allow_third_party_software",
+    "-worldwide",
+];
 
 const DISCOVERY: &str = include_str!("../../../../scripts/qualification/bundle/gsi-discovery.ps1");
 
@@ -1630,6 +1639,18 @@ impl ManagedCs2 {
         }
         self.finish()
     }
+    pub(crate) fn cancel_unsubmitted_mulnx_for(&mut self, expected: &str) -> Result<(), String> {
+        if let Some(journal) = self.store.load()? {
+            if !crate::preparation_gate::may_recover_mulnx_journal(
+                Some(expected),
+                journal["preparationId"].as_str(),
+                journal["mulnxLaunch"] == true,
+            ) {
+                return Err("游戏事务已变化，未恢复其他启动的配置。".into());
+            }
+        }
+        self.cancel_unsubmitted_mulnx()
+    }
     pub fn demo_launch_attempted(&self) -> Result<bool, String> {
         Ok(self
             .store
@@ -1740,6 +1761,9 @@ impl ManagedCs2 {
             }
         };
         self.can_preserve = false;
+        if prepare_only {
+            journal["mulnxLaunch"] = json!(true);
+        }
         if let Some(id) = preparation_id {
             journal["preparationId"] = json!(id);
             // Durable before any Steam or MulNX launch request is submitted.
@@ -1811,9 +1835,6 @@ impl ManagedCs2 {
                     json!({"code":"source_prepare_failed","error":error});
             }
         }
-        if prepare_only {
-            journal["mulnxLaunch"] = json!(true);
-        }
         self.store.save(&journal)?;
         if prepare_only {
             return Ok(true);
@@ -1846,7 +1867,7 @@ impl ManagedCs2 {
                         .to_string(),
                 ]);
             } else {
-                command.args(["-applaunch", "730"]);
+                command.args(PRESERVED_LAUNCH_ARGS);
             }
             if journal["spectatorCfg"] == true {
                 match self.store.spectator_load_attempted(true) {
@@ -2424,7 +2445,18 @@ impl ManagedCs2 {
 
 #[cfg(test)]
 mod replacement_tests {
-    use super::replacement_decision;
+    use super::{replacement_decision, LAUNCH_ARGS, PRESERVED_LAUNCH_ARGS};
+
+    #[test]
+    fn both_standard_launch_modes_enable_game_capture_without_forcing_preserved_video_settings() {
+        for arguments in [LAUNCH_ARGS, PRESERVED_LAUNCH_ARGS] {
+            for required in ["-console", "-allow_third_party_software", "-worldwide"] {
+                assert!(arguments.contains(&required));
+            }
+        }
+        assert!(!PRESERVED_LAUNCH_ARGS.contains(&"-windowed"));
+        assert!(!PRESERVED_LAUNCH_ARGS.contains(&"+fps_max"));
+    }
 
     #[test]
     fn replacement_requires_the_preflight_identity_and_only_reuses_its_managed_transaction() {

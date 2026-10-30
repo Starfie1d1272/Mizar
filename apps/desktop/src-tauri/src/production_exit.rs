@@ -482,7 +482,7 @@ pub fn prepare_mulnx(
     update: bool,
     spectator_cfg: bool,
 ) -> Result<serde_json::Value, String> {
-    prepare_mulnx_with_demo(log, cs2, update, spectator_cfg, None)
+    prepare_mulnx_with_demo(log, cs2, update, spectator_cfg, None, false)
 }
 
 pub fn prepare_mulnx_with_demo(
@@ -491,11 +491,12 @@ pub fn prepare_mulnx_with_demo(
     update: bool,
     spectator_cfg: bool,
     demo_cfg: Option<&str>,
+    capture_compatibility: bool,
 ) -> Result<serde_json::Value, String> {
     let token = runtime_token(log)?;
     let console_capture = crate::cs2_console::settings(log)?["enabled"] == true;
-    log.event("mulnx_prepare_request", "begin", Some(&serde_json::json!({"cs2Path":cs2.to_string_lossy(),"consoleCapture":console_capture,"update":update,"spectatorCfg":spectator_cfg}).to_string()));
-    let body = serde_json::json!({"cs2Path": cs2.to_string_lossy(),"consoleCapture":console_capture,"update":update,"spectatorCfg":spectator_cfg,"demoCfg":demo_cfg}).to_string();
+    log.event("mulnx_prepare_request", "begin", Some(&serde_json::json!({"cs2Path":cs2.to_string_lossy(),"consoleCapture":console_capture,"update":update,"spectatorCfg":spectator_cfg,"captureCompatibility":capture_compatibility}).to_string()));
+    let body = serde_json::json!({"cs2Path": cs2.to_string_lossy(),"consoleCapture":console_capture,"update":update,"spectatorCfg":spectator_cfg,"demoCfg":demo_cfg,"captureCompatibility":capture_compatibility}).to_string();
     let (code, value) = request_with_identity(
         log,
         "POST",

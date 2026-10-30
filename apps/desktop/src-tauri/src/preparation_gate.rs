@@ -53,14 +53,13 @@ impl PreparationGuard<'_> {
 }
 
 /// A submitted request may still start the game; its durable record must stay.
-pub fn recover_cancelled_unsubmitted<T>(
+pub fn recover_unsubmitted<T>(
     outcome: Result<T, String>,
     submitted: bool,
-    cancelled: bool,
     recover: impl FnOnce() -> Result<(), String>,
 ) -> Result<T, String> {
     match outcome {
-        Err(error) if !submitted && cancelled => {
+        Err(error) if !submitted => {
             recover().map_err(|cause| format!("{error}；原配置恢复未完成：{cause}"))?;
             Err(error)
         }
@@ -68,9 +67,24 @@ pub fn recover_cancelled_unsubmitted<T>(
     }
 }
 
+/// A late game launch can still consume the launcher's options after a timeout.
+pub fn may_restore_launch_options(submitted: bool, confirmed: bool) -> bool {
+    !submitted || confirmed
+}
+
+pub fn may_recover_mulnx_journal(
+    expected: Option<&str>,
+    actual: Option<&str>,
+    mulnx: bool,
+) -> bool {
+    expected.is_none() || (mulnx && expected == actual)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{recover_cancelled_unsubmitted, PreparationGate};
+    use super::{
+        may_recover_mulnx_journal, may_restore_launch_options, recover_unsubmitted, PreparationGate,
+    };
     use std::{
         sync::{mpsc, Arc},
         thread,
@@ -123,28 +137,51 @@ mod tests {
     }
 
     #[test]
-    fn cancellation_only_recovers_a_request_that_was_never_submitted() {
+    fn failure_only_recovers_a_request_that_was_never_submitted() {
         use std::cell::Cell;
         let recovered = Cell::new(0);
-        let result: Result<(), String> =
-            recover_cancelled_unsubmitted(Err("cancelled".into()), false, true, || {
-                recovered.set(recovered.get() + 1);
-                Ok(())
-            });
-        assert_eq!(result, Err("cancelled".into()));
+        let result: Result<(), String> = recover_unsubmitted(Err("failed".into()), false, || {
+            recovered.set(recovered.get() + 1);
+            Ok(())
+        });
+        assert_eq!(result, Err("failed".into()));
         assert_eq!(recovered.get(), 1);
-        let result: Result<(), String> =
-            recover_cancelled_unsubmitted(Err("uncertain".into()), true, true, || {
-                panic!("submitted request must remain pending")
-            });
+        let result: Result<(), String> = recover_unsubmitted(Err("uncertain".into()), true, || {
+            panic!("submitted request must remain pending")
+        });
         assert_eq!(result, Err("uncertain".into()));
         let result: Result<(), String> =
-            recover_cancelled_unsubmitted(Err("cancelled".into()), false, true, || {
-                Err("restore failed".into())
-            });
+            recover_unsubmitted(Err("failed".into()), false, || Err("restore failed".into()));
         assert_eq!(
             result,
-            Err("cancelled；原配置恢复未完成：restore failed".into())
+            Err("failed；原配置恢复未完成：restore failed".into())
         );
+    }
+
+    #[test]
+    fn uncertain_submitted_launch_keeps_options_until_its_result_is_known() {
+        assert!(may_restore_launch_options(false, false));
+        assert!(may_restore_launch_options(true, true));
+        assert!(!may_restore_launch_options(true, false));
+    }
+
+    #[test]
+    fn recovery_cannot_take_another_launch_transaction() {
+        assert!(may_recover_mulnx_journal(
+            Some("entry"),
+            Some("entry"),
+            true
+        ));
+        assert!(!may_recover_mulnx_journal(
+            Some("entry"),
+            Some("other"),
+            true
+        ));
+        assert!(!may_recover_mulnx_journal(
+            Some("entry"),
+            Some("entry"),
+            false
+        ));
+        assert!(!may_recover_mulnx_journal(Some("entry"), None, true));
     }
 }

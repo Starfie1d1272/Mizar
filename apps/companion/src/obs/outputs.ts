@@ -97,6 +97,15 @@ export class ObsOutputController {
   private closed = false;
   private ready = false;
   private hasConnected = false;
+  // Broader than the UI output revision: every observed takeover invalidates a
+  // capture warmup, even when its final output state matches the prior snapshot.
+  private warmupGeneration = 0;
+  private readonly warmupExtraOutputs: Record<
+    'replay' | 'virtual',
+    'idle' | 'starting' | 'active' | 'stopping' | 'unknown'
+  > = { replay: 'idle', virtual: 'idle' };
+  private warmupCollectionChanging = false;
+  private warmupExitStarted = false;
 
   constructor(
     private readonly config: ObsConfigStore,
@@ -114,6 +123,52 @@ export class ObsOutputController {
     });
   }
 
+  captureWarmupGeneration(): number | null {
+    return this.captureWarmupBlockReason() === null ? this.warmupGeneration : null;
+  }
+
+  captureWarmupBlockReason(): string | null {
+    if (!this.ready || this.closed) return 'OBS 连接状态未确认，请检查连接后重试。';
+    if (this.warmupExitStarted) return 'OBS 正在退出，请等待结束后重试。';
+    if (this.warmupCollectionChanging) return 'OBS 场景集合正在切换，请等待切换完成后重试。';
+    const message = (
+      name: string,
+      phase: string,
+      active: boolean | null,
+      pending?: string | null,
+    ) => {
+      if (phase === 'starting' || pending === 'start')
+        return `OBS ${name}正在开始，请等待状态稳定后重试。`;
+      if (phase === 'stopping' || pending === 'stop')
+        return `OBS ${name}正在停止，请等待状态稳定后重试。`;
+      if (active === true || phase === 'active' || phase === 'paused' || phase === 'reconnecting')
+        return `OBS ${name}正在运行，请停止${name}后重试。`;
+      if (active !== false || phase !== 'idle') return `OBS ${name}状态未确认，请检查 OBS 后重试。`;
+      return null;
+    };
+    for (const [kind, name] of [
+      ['stream', '直播'],
+      ['record', '录制'],
+    ] as const) {
+      const state = this.values[kind];
+      const reason = message(name, state.phase, state.active, state.pending);
+      if (reason) return reason;
+    }
+    for (const [kind, name] of [
+      ['replay', '回放缓冲'],
+      ['virtual', '虚拟摄像头'],
+    ] as const) {
+      const phase = this.warmupExtraOutputs[kind];
+      const reason = message(
+        name,
+        phase,
+        phase === 'active' ? true : phase === 'unknown' ? null : false,
+      );
+      if (reason) return reason;
+    }
+    return null;
+  }
+
   snapshot(): ObsOutputsStatus {
     return { stream: { ...this.values.stream }, record: { ...this.values.record } };
   }
@@ -121,11 +176,17 @@ export class ObsOutputController {
   private update(kind: ObsOutputKind, phase: ObsOutputPhase, active: boolean | null): void {
     const previous = this.values[kind];
     if (previous.phase === phase && previous.active === active) return;
+    this.warmupGeneration++;
     this.values[kind] = { ...previous, phase, active, revision: randomUUID() };
   }
 
   private invalidate(client?: OBSWebSocket): void {
     if (client && this.client !== client) return;
+    this.warmupGeneration++;
+    this.warmupExtraOutputs.replay = 'idle';
+    this.warmupExtraOutputs.virtual = 'idle';
+    this.warmupCollectionChanging = false;
+    this.warmupExitStarted = false;
     const old = this.client;
     this.client = undefined;
     if (this.ready) this.observeProgram('disconnected');
@@ -158,6 +219,7 @@ export class ObsOutputController {
   }
 
   private event(kind: ObsOutputKind, event: { outputState: string; outputActive: boolean }): void {
+    this.warmupGeneration++;
     this.events[kind]++;
     const phases: Record<string, ObsOutputPhase> = {
       OBS_WEBSOCKET_OUTPUT_STARTING: 'starting',
@@ -191,13 +253,56 @@ export class ObsOutputController {
       if (current()) this.event('record', event);
     });
     client.on('CurrentProgramSceneChanged', (event) => {
-      if (current()) this.observeProgram('scene', event.sceneName);
+      if (current()) {
+        this.warmupGeneration++;
+        this.observeProgram('scene', event.sceneName);
+      }
     });
     client.on('CurrentSceneCollectionChanged', (event) => {
-      if (current()) this.observeProgram('collection', event.sceneCollectionName);
+      if (current()) {
+        this.warmupGeneration++;
+        this.warmupCollectionChanging = false;
+        this.observeProgram('collection', event.sceneCollectionName);
+      }
     });
     client.on('CurrentSceneCollectionChanging', (event) => {
-      if (current()) this.observeProgram('collection-changing', event.sceneCollectionName);
+      if (current()) {
+        this.warmupGeneration++;
+        this.warmupCollectionChanging = true;
+        this.observeProgram('collection-changing', event.sceneCollectionName);
+      }
+    });
+    const invalidateWarmup = () => {
+      if (current()) this.warmupGeneration++;
+    };
+    const extraOutput = (
+      kind: 'replay' | 'virtual',
+      event: { outputActive: boolean; outputState: string },
+    ) => {
+      if (!current()) return;
+      this.warmupGeneration++;
+      const phases: Record<string, typeof this.warmupExtraOutputs.replay> = {
+        OBS_WEBSOCKET_OUTPUT_STARTING: 'starting',
+        OBS_WEBSOCKET_OUTPUT_STARTED: 'active',
+        OBS_WEBSOCKET_OUTPUT_STOPPING: 'stopping',
+        OBS_WEBSOCKET_OUTPUT_STOPPED: 'idle',
+        OBS_WEBSOCKET_OUTPUT_RECONNECTING: 'active',
+        OBS_WEBSOCKET_OUTPUT_RECONNECTED: 'active',
+      };
+      const phase = phases[event.outputState] ?? 'unknown';
+      this.warmupExtraOutputs[kind] =
+        phase === 'idle' && event.outputActive !== false ? 'unknown' : phase;
+    };
+    client.on('ReplayBufferStateChanged', (event) => extraOutput('replay', event));
+    client.on('VirtualcamStateChanged', (event) => extraOutput('virtual', event));
+    client.on('InputSettingsChanged', invalidateWarmup);
+    client.on('InputRemoved', invalidateWarmup);
+    client.on('InputNameChanged', invalidateWarmup);
+    client.on('ExitStarted', () => {
+      if (current()) {
+        this.warmupGeneration++;
+        this.warmupExitStarted = true;
+      }
     });
     client.on('ConnectionClosed', () => {
       if (current()) this.invalidate(client);
@@ -212,7 +317,11 @@ export class ObsOutputController {
           client
             .connect(`ws://${config.host}:${config.port}`, config.password, {
               eventSubscriptions:
-                EventSubscription.Outputs | EventSubscription.Scenes | EventSubscription.Config,
+                EventSubscription.Outputs |
+                EventSubscription.Scenes |
+                EventSubscription.Config |
+                EventSubscription.Inputs |
+                EventSubscription.General,
             })
             .then(async (result) => {
               if (!current()) await client.disconnect();
@@ -316,6 +425,7 @@ export class ObsOutputController {
     const generation = this.generation;
     const client = this.client!;
     this.values[output] = { ...state, pending: action };
+    this.warmupGeneration++;
     const reached = () => {
       const current = this.values[output];
       return action === 'start'

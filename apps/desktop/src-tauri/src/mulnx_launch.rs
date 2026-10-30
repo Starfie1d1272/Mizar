@@ -454,6 +454,13 @@ fn launch_operation(
     std::fs::create_dir_all(&results).map_err(|e| e.to_string())?;
     let pending = results.join("pending.json");
     crate::cs2_session::atomic_write(&pending, b"{}")?;
+    let recover_unsubmitted = || -> Result<(), String> {
+        let mut cs2 = managed.lock().map_err(|_| "CS2 状态不可用。".to_string())?;
+        match preparation_id {
+            Some(id) => cs2.cancel_unsubmitted_mulnx_for(id),
+            None => cs2.cancel_unsubmitted_mulnx(),
+        }
+    };
     let journal_result = (|| {
         let mut cs2 = managed.try_lock().map_err(|_| "CS2 正忙，请稍后重试。")?;
         if let Some((path, id)) = demo {
@@ -464,15 +471,13 @@ fn launch_operation(
     })();
     let journal = match journal_result {
         Ok(journal) => journal,
-        Err(error) if demo.is_none() && guard.check().is_err() => {
-            managed
-                .lock()
-                .map_err(|_| "CS2 状态不可用。")?
-                .cancel_unsubmitted_mulnx()
-                .map_err(|cleanup| format!("{error}；原配置恢复未完成：{cleanup}"))?;
-            return Err(error);
+        Err(error) => {
+            return crate::preparation_gate::recover_unsubmitted(
+                Err(error),
+                demo.is_some(),
+                &recover_unsubmitted,
+            )
         }
-        Err(error) => return Err(error),
     };
     let spectator_cfg = journal["spectatorCfg"] == true;
     let demo_cfg = journal["demoPlaybackCfg"]["name"].as_str();
@@ -482,29 +487,25 @@ fn launch_operation(
         false,
         spectator_cfg,
         demo_cfg,
+        true,
     ) {
         Ok(configured) => configured,
-        Err(error) if demo.is_none() && guard.check().is_err() => {
-            managed
-                .lock()
-                .map_err(|_| "CS2 状态不可用。")?
-                .cancel_unsubmitted_mulnx()
-                .map_err(|cleanup| format!("{error}；原配置恢复未完成：{cleanup}"))?;
-            return Err(error);
+        Err(error) => {
+            return crate::preparation_gate::recover_unsubmitted(
+                Err(error),
+                demo.is_some(),
+                &recover_unsubmitted,
+            )
         }
-        Err(error) => return Err(error),
     };
     if configured["launcher"] != prepared["launcher"]
         || configured["version"] != prepared["version"]
     {
-        if demo.is_none() && guard.check().is_err() {
-            managed
-                .lock()
-                .map_err(|_| "CS2 状态不可用。")?
-                .cancel_unsubmitted_mulnx()
-                .map_err(|error| format!("启动已取消，但原配置恢复未完成：{error}"))?;
-        }
-        return Err("启动器身份或版本已变化；原配置备份仍保留。".into());
+        return crate::preparation_gate::recover_unsubmitted(
+            Err("启动器身份或版本已变化。".into()),
+            demo.is_some(),
+            &recover_unsubmitted,
+        );
     }
     let mut submitted = false;
     let outcome = (|| -> Result<Value, String> {
@@ -515,13 +516,16 @@ fn launch_operation(
         std::fs::create_dir_all(&results).map_err(|error| {
             log.preserve_error("mulnx_launch", None, &error, "无法准备 MulNX 启动记录。")
         })?;
-        let child = Arc::new(HiddenLauncher::spawn(&launcher).map_err(|error| {
-            log.preserve_error("mulnx_launch", None, &error, launcher_start_message(&error))
-        })?);
-        managed
-            .lock()
-            .map_err(|_| "CS2 状态不可用，请关闭本次 MulNX 启动器后恢复。")?
-            .remember_mulnx_launcher(Arc::clone(&child));
+        let child = {
+            let mut cs2 = managed.lock().map_err(|_| "CS2 状态不可用，请稍后重试。")?;
+            guard.commit(|| {
+                let child = Arc::new(HiddenLauncher::spawn(&launcher).map_err(|error| {
+                    log.preserve_error("mulnx_launch", None, &error, launcher_start_message(&error))
+                })?);
+                cs2.remember_mulnx_launcher(Arc::clone(&child));
+                Ok(child)
+            })?
+        };
         std::fs::write(
             &pending,
             json!({"launcherPid":child.pid, "executable":executable}).to_string(),
@@ -541,6 +545,7 @@ fn launch_operation(
         );
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
+            guard.check()?;
             if !child.running().map_err(|e| e.to_string())? {
                 return Err("MulNX 启动器已退出，请检查游戏状态。".into());
             }
@@ -650,20 +655,26 @@ fn launch_operation(
             })?;
         Ok(result)
     })();
+    if !crate::preparation_gate::may_restore_launch_options(submitted, outcome.is_ok()) {
+        log.event(
+            "mulnx_launch_options",
+            "preserved",
+            Some("launch result unconfirmed; pending options remain until recovery"),
+        );
+        return outcome;
+    }
     let cleanup = production_exit::prepare_mulnx(log, &executable, false, false);
     if let Err(error) = cleanup {
-        return Err(format!("MulNX 启动参数清理失败，原备份仍保留：{error}"));
+        return crate::preparation_gate::recover_unsubmitted(
+            Err(format!("MulNX 启动参数清理失败：{error}")),
+            submitted || demo.is_some(),
+            &recover_unsubmitted,
+        );
     }
-    let outcome = crate::preparation_gate::recover_cancelled_unsubmitted(
+    let outcome = crate::preparation_gate::recover_unsubmitted(
         outcome,
-        submitted,
-        demo.is_none() && guard.check().is_err(),
-        || {
-            managed
-                .lock()
-                .map_err(|_| "CS2 状态不可用。".to_string())?
-                .cancel_unsubmitted_mulnx()
-        },
+        submitted || demo.is_some(),
+        &recover_unsubmitted,
     );
     if outcome.is_ok() {
         std::fs::remove_file(&pending).map_err(|e| e.to_string())?;

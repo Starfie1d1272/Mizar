@@ -99,6 +99,7 @@ import { registerBpWorkspaceRoutes } from './bp/workspace-controller.js';
 import { ObsAdapter, obsErrorEvidence } from './obs/adapter.js';
 import { ObsConfigStore } from './obs/config.js';
 import { ObsVideoTransaction } from './obs/video-transaction.js';
+import { ObsCaptureWarmup } from './obs/capture-warmup.js';
 import { ObsAudioRouting } from './obs/audio-routing.js';
 import { GameAudioController } from './obs/audio-policy-controller.js';
 import { gameAudioTruth } from './obs/audio-policy-truth.js';
@@ -833,6 +834,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             journal: `${options.obsConfigPath}.commentary-probe.json`,
           },
           new ObsVideoTransaction(`${options.obsConfigPath}.video-transaction.json`),
+          new ObsCaptureWarmup(`${options.obsConfigPath}.capture-warmup.json`),
         );
   if (obsAdapter)
     app.addHook('onReady', async () => {

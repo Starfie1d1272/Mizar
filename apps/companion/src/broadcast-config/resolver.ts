@@ -1,5 +1,6 @@
 import { canonicalJson, resolveHudPreset } from '@mizar/hud-config';
 import { MUSIC_GROUPS } from '@mizar/protocol/music';
+import { assertSupportedHudModule } from '@mizar/broadcast-config';
 import type {
   ActiveBroadcastSnapshot,
   AssetRef,
@@ -69,6 +70,7 @@ export function createBroadcastResolver(
     let value: ActiveBroadcastSnapshot['resolved'][ModuleRecord['kind']];
     switch (module.kind) {
       case 'hud': {
+        assertSupportedHudModule(module);
         const hudValue = module.value;
         if ('preset' in hudValue) {
           value = {

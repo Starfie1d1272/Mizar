@@ -59,7 +59,7 @@ export function Mixer({ musicOnly = false }: { musicOnly?: boolean }) {
       {!musicOnly && (
         <div className="audio-mixer__heading">
           <h2>音频混音</h2>
-          <span>调整节目输出音量</span>
+          <span>开播前录制试听游戏、麦克风与其他解说；已连接不代表人声已录入。</span>
         </div>
       )}
       <div className="audio-mixer__channels">

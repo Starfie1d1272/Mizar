@@ -1,4 +1,4 @@
-import { canonicalJson } from '@mizar/hud-config';
+import { canonicalJson, HUD_BROADCAST_STYLES } from '@mizar/hud-config';
 import type {
   HudLayout,
   HudPreset,
@@ -27,6 +27,37 @@ export type VisualColor =
   { source: 'fixed'; value: string } | { source: 'event'; fallback: string };
 export type PanelValue =
   string | number | boolean | null | { entity: 'player' | 'match'; binding: string };
+export const HUD_PAUSE_VISUALS = ['legacy', 'current', ...HUD_BROADCAST_STYLES] as const;
+export type HudPauseVisual = (typeof HUD_PAUSE_VISUALS)[number];
+export function isSupportedHudPauseVisual(value: string): value is HudPauseVisual {
+  return (HUD_PAUSE_VISUALS as readonly string[]).includes(value);
+}
+
+/** Capability validation is separate from the persistent structural codec. */
+export function assertSupportedHudModule(module: ModuleRecord): void {
+  if (
+    module.kind === 'hud' &&
+    'preset' in module.value &&
+    !isSupportedHudPauseVisual(module.value.overlays.pause.visual)
+  )
+    throw new Error('capability_unsupported');
+}
+
+/** Preserve every other setting while adapting a historical native HUD for display. */
+export function fallbackHudPauseVisual(hud: ResolvedHudModule): {
+  hud: ResolvedHudModule;
+  reason: 'unsupported_pause_visual' | null;
+} {
+  if (hud.renderer !== 'native' || isSupportedHudPauseVisual(hud.overlays.pause.visual))
+    return { hud, reason: null };
+  return {
+    hud: {
+      ...hud,
+      overlays: { ...hud.overlays, pause: { ...hud.overlays.pause, visual: 'legacy' } },
+    },
+    reason: 'unsupported_pause_visual',
+  };
+}
 export type HudModule =
   | {
       renderer: { kind: 'native'; id: 'mizar.hud'; apiVersion: 1 };
@@ -339,6 +370,7 @@ export async function preparePreset(
     throw new Error('revision_conflict');
   const modules = boundModules(preset, document.modules);
   checkRevisions(preset, modules, request.expectedRevision, request.expectedModuleRevisions);
+  for (const module of modules.values()) if (module) assertSupportedHudModule(module);
   const prepared = await resolver.resolve(modules);
   const moduleRevisions = { ...document.active.moduleRevisions };
   for (const kind of MODULE_KINDS) {

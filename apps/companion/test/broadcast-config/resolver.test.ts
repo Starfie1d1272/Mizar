@@ -47,7 +47,7 @@ it('checks every referenced asset before returning a candidate', async () => {
       layout,
       theme: getBuiltinTheme(),
       overlays: {
-        pause: { enabled: true, visual: 'default' },
+        pause: { enabled: true, visual: 'legacy' },
         chat: { enabled: true, placement: Object.values(layout.widgets)[0] },
       },
       accent: { source: 'event', fallback: getBuiltinTheme().brandColor },

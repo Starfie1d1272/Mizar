@@ -53,6 +53,33 @@ test('audio preferences remain visible without masking actual setup failures', (
   assert.equal(obsReadiness({ ...status, currentScene: 'Personal' }, activeScene).ready, false);
 });
 
+test('TeamSpeak compatibility stays visible as a warning without masking structural failures', () => {
+  const warning = {
+    code: 'audio_teamspeak_compatibility',
+    message: 'TeamSpeak 独立采集可能没有远端人声，请录制试听。',
+  };
+  const status: ObsStatus = {
+    connection: 'connected',
+    currentScene: obsDesiredScenes(baseUrl).find((scene) => scene.id === activeScene)!.sceneName,
+    port: 4455,
+    streaming: false,
+    recording: false,
+    passwordConfigured: false,
+    video: null,
+    findings: [warning],
+  };
+  const ready = obsReadiness(status, activeScene);
+  assert.equal(ready.ready, true);
+  assert.deepEqual(ready.warnings, [warning]);
+  assert.deepEqual(ready.blockingFindings, []);
+  const failure = { code: 'source_missing', message: '比赛画面来源缺失' };
+  const blocked = obsReadiness({ ...status, findings: [warning, failure] }, activeScene);
+  assert.equal(blocked.ready, false);
+  assert.equal(blocked.reason, failure.message);
+  assert.deepEqual(blocked.warnings, [warning]);
+  assert.deepEqual(blocked.blockingFindings, [failure]);
+});
+
 test('OBS status and explicit ensure expose the same blocking and warning facts', async () => {
   const app = Fastify();
   const findings = [

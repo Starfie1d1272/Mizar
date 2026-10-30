@@ -182,6 +182,8 @@ WebSocket 子协议为 `mizar.local.v1`，路由为 `/local/v1/{channel}`。
 
 保存不改变播出快照。启用相同解析内容保持播出 ETag，不同内容才产生新快照。每次修改带 `expectedEditorRevision`，在串行提交队列内比较；过期返回 `409`，无效命令 `400`，持久化失败 `500`。冲突保留本地草稿，不自动覆盖或重试；错误响应不泄露底层敏感信息。创建响应明确返回资源身份，不能靠前后列表差推断。
 
+播出配置的原生 HUD 暂停样式支持 `legacy`、`current`、`ewc`、`iem`、`perfectworld`、`esl`。新保存、导入、克隆、预览和启用不支持的样式返回 `capability_unsupported`；提交前拒绝，不改变活动配置或资源。历史持久配置仍按结构读取：仅样式不支持时，显示投影将该字段回退为 `legacy`，通过 `x-mizar-hud-fallback: unsupported_pause_visual` 标明原因，不覆盖原文件，也不改变暂停、聊天、布局及桌面显示策略。缺字段或不支持的渲染器不能作为此降级处理。浏览器保留最近有效显示配置，首次读取不可用时沿用原 HUD 配置回退。
+
 内置资源只读；配置损坏或暂不可读时保留最近有效配置。自定义启用快照独立验证版本、引用、设置、几何和语义值，不用新外观方案重算旧内容；重新启用才更新。内置引用启动时解析当前代码。1.0 前不承诺旧格式迁移，缺字段不静默套默认值。
 
 预设文件只包含已声明的预设、布局和外观，导入原子创建新副本并重写引用，不启用、不执行代码、不携带比赛数据或图片。精确格式和上限见[配置包](../../packages/hud-config/src/index.ts)，可编辑样例见 [perfectworld.mizar-hud.json](../examples/perfectworld.mizar-hud.json)。
@@ -229,6 +231,8 @@ Host 私有 `POST /operator/runtime/local-match-exit` 仅允许回环监听、�
 ### OBS 配置实例归属
 
 本机操作员 `POST /operator/obs/audio-mode` 接收音频绑定修订、明确的 `mode`（`desktop`、`independent` 或取消等待的 `cancel`）和可选的桌面来源短期选择标识；省略标识时自动选择或创建默认桌面来源。直播或录制中也可切换；场景引用迁移和受管音乐监听转换须完成并回读，切换中断保留待处理状态。独立配置缺失时自动准备，解说应用未运行时返回等待状态并保持桌面混音；用户可取消等待；取消只撤销当前等待，保持实际模式及来源。切换结果和设备关系仅为本机配置，不进入公开节目投影；桌面混音不能分别控制游戏与解说。
+
+自动准备对识别到的新版 TeamSpeak 可返回 `audio_teamspeak_compatibility` 检查提示；它不表示远端人声已被捕获。仅在初始桌面声路径可证明且尚无保存路由时记录桌面模式；设备和现场试听仍需使用者核对。
 
 本机操作员 `POST /operator/obs/remote-commentary/applications` 读取 OBS 应用音频的窗口候选，返回偏好修订与短期候选标识；必要时在空闲的 Mizar 场景集合中创建禁用探测来源。`POST /operator/obs/remote-commentary/application` 接收修订和候选标识，重新核对当前 OBS 连接、集合、探测来源与窗口后保存应用偏好。候选标识一次性使用，过期或上下文变化时拒绝；这些接口要求受信任的本机 Origin，不向公共节目接口暴露窗口信息。
 
@@ -300,7 +304,9 @@ RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对�
 
 OBS 自动准备使用中文场景与来源名称：游戏画面、游戏声音、其他解说、桌面声音、麦克风、音乐和音效。旧版固定名称在停止输出后原位更新，已记录的音频来源按 UUID 复用；名称冲突时保留已有来源并提示处理，自动创建的音频来源使用可读数字后缀。来源配置、音轨和实际声音仍需在 OBS 试听核对。
 
-工作台启动使用本机 `POST /operator/obs/video-preflight`、`video-prepare` 与 `video-restore` 管理配置档绑定的视频设置事务；准备带制作修订，恢复带事务 ID。`POST /operator/obs/capture-initialization` 带制作修订与本次游戏启动时间，只返回当前捕获确认、等待、失败或未知，不依赖比赛 GSI。未显示的来源、零尺寸、过期日志和无法唯一确认的窗口均不证明捕获成功。`GET /local/v1/obs` 与准备中心共享 OBS 就绪判断，保留静音和音轨提醒。
+工作台启动使用本机 `POST /operator/obs/video-preflight`、`video-prepare` 与 `video-restore` 管理配置档绑定的视频设置事务；准备带制作修订，恢复带事务 ID。`POST /operator/obs/capture-warmup` 带制作修订和准备事务 ID，返回临时捕获租约及开始时间；`capture-initialization` 使用该租约和时间检查本次捕获，`capture-warmup-release` 按租约清理。捕获确认不依赖比赛 GSI；未显示的来源、零尺寸、过期日志和无法唯一确认的窗口均不证明捕获成功。`GET /local/v1/obs` 与准备中心共享 OBS 就绪判断，保留静音和音轨提醒。
+
+Host 的私有 `/operator/runtime/mulnx-prepare` 可带 `captureCompatibility`，仅对本次受管工作台启动临时补入捕获兼容参数；原 `launchOptions` 由既有所有权记录恢复，不能覆盖期间的用户修改。
 
 ### Program 统计与装备事实
 

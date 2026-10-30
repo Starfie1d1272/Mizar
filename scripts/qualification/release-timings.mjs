@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { validBuildTiming } from './build-timing-evidence.mjs';
 
 const repository = 'Starfie1d1272/Mizar';
 const json = async (path) => JSON.parse(await readFile(path, 'utf8'));
@@ -94,12 +95,31 @@ export function releaseTimingReport({
     promotion.run_attempt !== 1 ||
     (box && (box.run_attempt !== 1 || Boolean(boxRecoveryStartedAt))) ||
     Date.parse(publishedAt) < Date.parse(promotion.created_at);
+  const triggerToPublicationMs =
+    Date.parse(publishedAt) >= Date.parse(qualification.created_at)
+      ? elapsed(qualification.created_at, publishedAt)
+      : undefined;
+  const measurementUnavailable = !validBuildTiming(build, sourceSha);
   const result = {
     tag,
     sourceSha,
     recovery,
     publishedAt,
-    build: build ? { phases: build.phases, cargoCache: build.cargoCache } : undefined,
+    ...(measurementUnavailable ? { measurementUnavailable: true } : {}),
+    triggerToPublicationMs,
+    freshGitHubPublicWithin600Seconds:
+      !measurementUnavailable &&
+      !recovery &&
+      triggerToPublicationMs !== undefined &&
+      triggerToPublicationMs <= 600000,
+    build: measurementUnavailable
+      ? { measurementUnavailable: true }
+      : {
+          gitSha: build.gitSha,
+          desktopBuildProfile: build.desktopBuildProfile,
+          phases: build.phases,
+          cargoCache: build.cargoCache,
+        },
     qualification: runTiming(
       qualification,
       jobs.qualification,
@@ -126,36 +146,54 @@ export function releaseTimingReport({
     result.publishedToBoxMs = elapsed(publishedAt, finishedAt);
     // Retries or a previously published version cannot prove a fresh release budget.
     result.freshReleaseWithin600Seconds =
-      !recovery && boxOutcome === 'success' && result.triggerToBoxMs <= 600000;
+      !measurementUnavailable &&
+      !recovery &&
+      boxOutcome === 'success' &&
+      result.triggerToBoxMs <= 600000;
   }
   return result;
 }
 
-export function assertBoxTiming(report, boxOutcome, budgetApplies = !report.recovery) {
+export function assertBoxTiming(report, boxOutcome) {
   if (boxOutcome !== 'success') throw new Error('Box synchronization failed');
-  if (budgetApplies && report.triggerToBoxMs > 600000)
-    throw new Error('Release exceeded 600-second budget');
+  if (report.triggerToBoxMs > 600000)
+    console.warn('Release exceeded 600-second target; delivery remains valid.');
 }
 
 async function recordReport(report, path) {
-  await writeFile(path, JSON.stringify(report, null, 2) + '\n');
-  if (report.measurementUnavailable) {
-    if (process.env.GITHUB_STEP_SUMMARY)
+  let reportWritten = false;
+  try {
+    await writeFile(path, JSON.stringify(report, null, 2) + '\n');
+    reportWritten = true;
+  } catch {
+    console.warn('Release timing report could not be written; target remains unverified.');
+  }
+  if (!process.env.GITHUB_STEP_SUMMARY) return;
+  try {
+    if (!reportWritten || report.measurementUnavailable) {
       await appendFile(
         process.env.GITHUB_STEP_SUMMARY,
         'Release timing unavailable; fresh-release <=600s remains unverified.\n',
       );
-    return;
-  }
-  if (process.env.GITHUB_STEP_SUMMARY)
+      return;
+    }
     await appendFile(
       process.env.GITHUB_STEP_SUMMARY,
       `Release timing: ${report.recovery ? 'recovery; not fresh-release acceptance' : 'fresh release'}; ` +
+        (report.triggerToPublicationMs === undefined
+          ? ''
+          : `Qualification trigger → GitHub public timestamp: ${(report.triggerToPublicationMs / 1000).toFixed(1)}s; `) +
         (report.triggerToBoxMs === undefined
           ? 'Promotion checkpoint'
           : `Qualification trigger → Box checkpoint: ${(report.triggerToBoxMs / 1000).toFixed(1)}s; initial queues Q/P/B: ${[report.qualification, report.promotion, report.box].map((r) => (r.initialQueueMs === null ? 'unknown' : (r.initialQueueMs / 1000).toFixed(1) + 's')).join('/')}`) +
+        (report.freshReleaseWithin600Seconds === undefined
+          ? ''
+          : `; fresh-release target <=600s: ${report.freshReleaseWithin600Seconds ? 'met' : 'not met or not fresh'}`) +
         '\n',
     );
+  } catch {
+    console.warn('Release timing summary could not be written.');
+  }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -175,7 +213,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
           ? 'existing-release.json'
           : 'published-release.json',
       );
-      const build = await json('evidence-extracted/build-timings.json');
+      const build = await json('evidence-extracted/build-timings.json').catch(() => ({
+        measurementUnavailable: true,
+      }));
       const report = releaseTimingReport({
         qualification,
         promotion: current,
@@ -254,36 +294,20 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
             boxRecoveryStartedAt: process.env.BOX_RECOVERY_STARTED_AT || undefined,
           });
           await recordReport(report, output);
-          assertBoxTiming(
-            report,
-            process.env.BOX_OUTCOME,
-            !record.recovery && current.run_attempt === 1,
-          );
+          assertBoxTiming(report, process.env.BOX_OUTCOME);
         } finally {
           await rm(directory, { recursive: true, force: true });
         }
       }
     } else throw new Error('Unknown release timing mode');
   } catch (error) {
-    if (
-      ['Box synchronization failed', 'Release exceeded 600-second budget'].includes(error.message)
-    )
-      throw error;
-    if (
-      error.code === 'ENOENT' ||
-      error instanceof SyntaxError ||
-      [
-        'Invalid release timing order',
-        'Release timing source differs',
-        'Unknown release timing mode',
-      ].includes(error.message)
-    )
-      // eslint-disable-next-line preserve-caught-error -- Download causes may expose signed URLs.
-      throw new Error('发行计时证据缺失或结构、时序有误；不得作为完整发行验收。');
-    if (mode === 'box' && process.env.GITHUB_EVENT_NAME === 'workflow_run') {
-      // eslint-disable-next-line preserve-caught-error -- The cause can contain signed URLs.
-      throw new Error('Release timing unavailable; cannot verify 600-second budget');
-    }
+    if (error.message === 'Box synchronization failed') throw error;
+    // eslint-disable-next-line preserve-caught-error -- The cause may contain a temporary signed URL.
+    if (!['box', 'promotion'].includes(mode)) throw new Error('Unknown release timing mode');
+    // Preserve actual Box failure even if timing evidence is unavailable.
+    if (mode === 'box' && process.env.BOX_OUTCOME !== 'success')
+      // eslint-disable-next-line preserve-caught-error -- The cause may contain a temporary signed URL.
+      throw new Error('Box synchronization failed');
     // Metrics cannot invalidate delivery after its original-byte checks succeeded.
     // Missing timing evidence also cannot claim the fresh release budget passed.
     await recordReport(

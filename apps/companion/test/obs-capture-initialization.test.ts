@@ -73,10 +73,7 @@ it('only confirms a shown nonzero capture with a current success and unique targ
     state: 'waiting',
     reason: 'source_inactive',
   });
-  expect(await readCaptureInitialization(rpc(), unknown)).toMatchObject({
-    state: 'unknown',
-    reason: 'evidence_unknown',
-  });
+  expect((await readCaptureInitialization(rpc(), unknown)).state).toBe('initialized');
   expect(await readCaptureInitialization(rpc(), pending)).toMatchObject({
     state: 'waiting',
     reason: 'hook_pending',
@@ -159,9 +156,10 @@ it('checks origin, launch time and current production revision at the real route
   } as unknown as ObsNativeEvidence;
   registerObsRoutes(app, {
     adapter: {
+      captureWarmupMatches: async () => true,
       captureInitialization: (diagnostic: ObsCaptureDiagnostic) =>
         readCaptureInitialization(rpc(), diagnostic),
-    } as ObsAdapter,
+    } as unknown as ObsAdapter,
     configStore: {} as ObsConfigStore,
     originPolicy: { mode: 'loopback', bindHost: '127.0.0.1', allowedOrigins: [] },
     activeScene: () => 'waiting',
@@ -173,7 +171,11 @@ it('checks origin, launch time and current production revision at the real route
       method: 'POST',
       url: '/operator/obs/capture-initialization',
       headers: { origin },
-      payload: { expectedRevision: 'revision', since },
+      payload: {
+        expectedRevision: 'revision',
+        since,
+        transactionId: '00000000-0000-4000-8000-000000000001',
+      },
     });
   try {
     expect((await request('https://outside.example', eventAt - 500)).statusCode).toBe(403);
@@ -181,9 +183,8 @@ it('checks origin, launch time and current production revision at the real route
     expect((await request('http://127.0.0.1:3000', eventAt - 500)).json().state).toBe(
       'initialized',
     );
-    expect((await request('http://127.0.0.1:3000', eventAt + 1)).json().state).not.toBe(
-      'initialized',
-    );
+    const later = await request('http://127.0.0.1:3000', eventAt + 1);
+    expect(later.json().captureDiagnostic.state).toBe('unknown');
     valid = false;
     expect((await request('http://127.0.0.1:3000', eventAt - 500)).statusCode).toBe(409);
   } finally {

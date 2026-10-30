@@ -77,6 +77,29 @@ it('round trips real music owner configuration to independent drafts without act
     });
     await store.load();
     const resources = new MusicPackResources(join(root, 'packages'));
+    const historic = structuredClone(store.snapshot);
+    const historicHud = historic.modules.find((module) => module.kind === 'hud');
+    if (!historicHud || historicHud.kind !== 'hud' || !('preset' in historicHud.value))
+      throw new Error('missing native HUD');
+    historicHud.value.overlays.pause.visual = 'future-unsupported';
+    const futureHudZip = await exportPresetPack({
+      document: historic,
+      moduleIds: [historicHud.id],
+      music,
+      resources,
+      metadata: { packageId: randomUUID(), version: '1.0.0', name: 'Future HUD', author: 'Test' },
+    });
+    const inspectedFutureHud = await inspectPresetPack({ zip: futureHudZip, store });
+    expect(inspectedFutureHud.entries[0]).toMatchObject({
+      status: 'unsupported',
+      reason: 'capability_unsupported',
+    });
+    const beforeInvalidImport = store.snapshot;
+    await expect(importPresetPack({ zip: futureHudZip, store, resources })).rejects.toThrow(
+      'capability_unsupported',
+    );
+    expect(store.snapshot).toEqual(beforeInvalidImport);
+    expect(store.inspectImport(inspectedFutureHud.source)).toBeNull();
     const exportMusic = (
       module: ModuleRecord,
       metadata: { packageId: string; version: string; name: string; author: string },

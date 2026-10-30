@@ -176,17 +176,21 @@ async function verifyExistingPublication(release, identity, product) {
         assets.length === 1 && assets[0].size <= (name.includes('provenance') ? 2097152 : 65536),
         `已发布版本缺少唯一发布确认：${name}`,
       );
-      execFileSync('gh', [
-        'release',
-        'download',
-        identity.tag,
-        '--repo',
-        repository,
-        '--pattern',
-        name,
-        '--dir',
-        directory,
-      ]);
+      execFileSync(
+        'gh',
+        [
+          'release',
+          'download',
+          identity.tag,
+          '--repo',
+          repository,
+          '--pattern',
+          name,
+          '--dir',
+          directory,
+        ],
+        { timeout: 180000, stdio: 'pipe' },
+      );
       const bytes = await readFile(join(directory, name));
       assertPublishedAssets(
         release,
@@ -210,7 +214,7 @@ async function verifyExistingPublication(release, identity, product) {
         join(directory, 'update-publication-provenance.json'),
         'promotion',
       ),
-      { stdio: 'inherit' },
+      { stdio: 'inherit', timeout: 60000 },
     );
   } finally {
     await rm(directory, { recursive: true, force: true });

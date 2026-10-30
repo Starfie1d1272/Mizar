@@ -6,7 +6,7 @@ import {
   obsDesiredScenes,
 } from './desired-state.js';
 import type { ProgramSceneId, ProgramTransition } from '@mizar/protocol/program-scenes';
-import { assertNoVideoOutput } from './video-transaction.js';
+import { assertNoVideoOutput, ObsPreparationWriteBlocked } from './video-transaction.js';
 import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
 
 export interface ObsRpc {
@@ -190,7 +190,13 @@ export function guardedPreparationWrites(obs: ObsRpc): ObsRpc {
   return {
     ...obs,
     call: async (type, data) => {
-      if (/^(Create|Set|Remove)/.test(type)) await assertNoVideoOutput(obs);
+      if (/^(Create|Set|Remove)/.test(type)) {
+        try {
+          await assertNoVideoOutput(obs);
+        } catch (error) {
+          throw new ObsPreparationWriteBlocked(error);
+        }
+      }
       return obs.call(type, data);
     },
   };

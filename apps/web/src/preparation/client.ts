@@ -8,9 +8,14 @@ import { prepareObs } from '../workspace/obs-preparation';
 import { obsCommand, type ObsStatus } from '../workspace/obs-client';
 
 export function useLocalReadWithTime<T>(path: string | null, interval = 2000, refresh = 0) {
-  const [value, setValue] = useState<{ value: T | null; updatedAt: number | null }>({
+  const [value, setValue] = useState<{
+    value: T | null;
+    updatedAt: number | null;
+    status: 'loading' | 'ready' | 'unavailable';
+  }>({
     value: null,
     updatedAt: null,
+    status: 'loading',
   });
   useEffect(() => {
     if (path === null) return;
@@ -24,9 +29,9 @@ export function useLocalReadWithTime<T>(path: string | null, interval = 2000, re
         });
         if (!response.ok) throw new Error('unavailable');
         const next = (await response.json()) as T;
-        if (active) setValue({ value: next, updatedAt: Date.now() });
+        if (active) setValue({ value: next, updatedAt: Date.now(), status: 'ready' });
       } catch {
-        if (active) setValue({ value: null, updatedAt: null });
+        if (active) setValue({ value: null, updatedAt: null, status: 'unavailable' });
       } finally {
         if (active) timer = setTimeout(() => void poll(), interval);
       }
@@ -696,37 +701,66 @@ async function performProductionAction(
   }
   if (action === 'enter' && window.__TAURI_INTERNALS__ && state.mode === 'preparation') {
     if (!entry?.since) throw new Error('本次游戏启动时间未确认，请结束本次游戏后重试。');
-    const deadline = Date.now() + 60_000;
+    const warmup = await entryCommand<{ transactionId: string; startedAt: number }>(
+      '/operator/obs/capture-warmup',
+      { expectedRevision: state.revision, preparationId: entry.id },
+      entrySignal,
+    );
+    const deadline = warmup.startedAt + 60_000;
     let reason = 'evidence_unknown';
     let initialized = false;
-    while (Date.now() < deadline && !entrySignal.aborted) {
-      const capture = await entryCommand<{ state: string; reason: string | null }>(
-        '/operator/obs/capture-initialization',
-        { expectedRevision: state.revision, since: entry.since },
-        entrySignal,
-      );
-      if (capture.state === 'initialized') {
-        initialized = true;
-        break;
+    let failure: unknown;
+    try {
+      while (Date.now() < deadline && !entrySignal.aborted) {
+        const capture = await entryCommand<{ state: string; reason: string | null }>(
+          '/operator/obs/capture-initialization',
+          {
+            expectedRevision: state.revision,
+            since: warmup.startedAt,
+            transactionId: warmup.transactionId,
+          },
+          entrySignal,
+        );
+        if (capture.state === 'initialized') {
+          initialized = true;
+          break;
+        }
+        reason = capture.reason ?? 'evidence_unknown';
+        if (capture.state === 'failed' || reason === 'source_inactive') break;
+        await new Promise<void>((resolve) => setTimeout(resolve, 1000));
       }
-      reason = capture.reason ?? 'evidence_unknown';
-      if (capture.state === 'failed') break;
-      await new Promise<void>((resolve) => setTimeout(resolve, 1000));
+      if (!initialized) {
+        if (entrySignal.aborted) throw new Error('启动已取消。');
+        const messages: Record<string, string> = {
+          source_unavailable: 'OBS 游戏采集来源不可用。',
+          target_unavailable: '未找到 CS2 窗口。',
+          target_ambiguous: '发现多个 CS2 窗口，无法确认采集目标。',
+          source_inactive: 'OBS 游戏采集准备已失效，无法确认画面。',
+          zero_size: 'OBS 游戏采集画面仍为 0×0。',
+          hook_pending: 'OBS 游戏采集仍在重试。',
+          hook_failed: 'OBS 游戏采集初始化失败。',
+          evidence_unknown: 'OBS 游戏采集状态未确认。',
+        };
+        throw new Error(`${messages[reason] ?? messages.evidence_unknown} 请检查原因后重试。`);
+      }
+    } catch (error) {
+      failure = error;
     }
-    if (!initialized) {
-      if (entrySignal.aborted) throw new Error('启动已取消。');
-      const messages: Record<string, string> = {
-        source_unavailable: 'OBS 游戏采集来源不可用。',
-        target_unavailable: '未找到 CS2 窗口。',
-        target_ambiguous: '发现多个 CS2 窗口，无法确认采集目标。',
-        source_inactive: 'OBS 尚未激活游戏采集来源，无法确认画面。',
-        zero_size: 'OBS 游戏采集画面仍为 0×0。',
-        hook_pending: 'OBS 游戏采集仍在重试。',
-        hook_failed: 'OBS 游戏采集初始化失败。',
-        evidence_unknown: 'OBS 游戏采集状态未确认。',
-      };
-      throw new Error(`${messages[reason] ?? messages.evidence_unknown} 请检查原因后重试。`);
+    try {
+      await entryCommand('/operator/obs/capture-warmup-release', {
+        transactionId: warmup.transactionId,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '临时捕获来源清理未确认。';
+      throw new Error(`${failure instanceof Error ? `${failure.message} ` : ''}${message}`, {
+        cause: error,
+      });
     }
+    if (failure) throw failure;
+  }
+  if (action === 'enter' && (cancelled() || window.location.href !== entryLocation)) {
+    task.finish('cancelled', { reason: 'navigation_changed' });
+    return;
   }
   if (action === 'enter' && window.__TAURI_INTERNALS__ && state.mode === 'preparation') {
     await desktopInvoke('begin_managed_camera', { expectedRevision: state.revision }, task);

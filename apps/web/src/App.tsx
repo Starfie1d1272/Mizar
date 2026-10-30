@@ -1,6 +1,7 @@
 import { useBroadcastDisplayConfig } from './realtime/broadcast-display-client';
 import { useRadarViewSource } from './realtime/radar-view-source';
-import { useLocalRead } from './preparation/client';
+import { useLocalReadWithTime } from './preparation/client';
+import { nativeSnapshot } from './debug/control-journal';
 import { overlayGroups, type OverlayPolicy } from './preparation/desktop-overlay';
 import { ToolShell } from './patterns';
 import { PreparationPage } from './preparation/PreparationPage';
@@ -199,10 +200,46 @@ function ProgramRoute() {
   const desktop =
     window.__TAURI_INTERNALS__ !== undefined &&
     new URLSearchParams(window.location.search).get('host') === 'desktop';
-  const policy = useLocalRead<OverlayPolicy>(
+  const policyRead = useLocalReadWithTime<OverlayPolicy>(
     desktop ? '/local/v1/desktop-overlay' : null,
     desktop ? 1000 : 60000,
   );
+  const policy = policyRead.value;
+  useEffect(() => {
+    const observe = () =>
+      nativeSnapshot('program_display', {
+        hostRole: desktop ? 'desktop' : 'browser',
+        policyRead: desktop ? policyRead.status : 'not_applicable',
+        policyRevision: policy?.revision ?? null,
+        policyEnabled: policy?.enabled ?? null,
+        displayStatus: display.status,
+        displaySource: display.current
+          ? 'broadcast_display'
+          : display.status === 'unsupported'
+            ? 'none'
+            : 'legacy',
+        legacyStatus: hudConfig.status,
+        legacyRevision: hudConfig.activeRevision,
+        displayRevision: display.current?.activeRevision ?? null,
+        displayReason: display.reason ?? null,
+        hudRoot: !!document.querySelector('.gameplay-hud'),
+        widgets: [...document.querySelectorAll('[data-hud-widget]')].map((node) =>
+          node.getAttribute('data-hud-widget'),
+        ),
+        radar: !!document.querySelector('[data-hud-widget="radar"]'),
+      });
+    observe();
+    const timer = setInterval(observe, 1000);
+    return () => clearInterval(timer);
+  }, [
+    desktop,
+    policyRead.status,
+    policy?.revision,
+    policy?.enabled,
+    display,
+    hudConfig.status,
+    hudConfig.activeRevision,
+  ]);
   const resolved = desktop
     ? {
         ...selectedHud,

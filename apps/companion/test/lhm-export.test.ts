@@ -115,3 +115,33 @@ it('exports the selected active HUD with a guarded revision and no live data', a
     await rm(root, { recursive: true, force: true });
   }
 });
+
+it('reports unsupported legacy edits without changing editor state or persistence health', async () => {
+  const store = new HudConfigStore();
+  await store.load();
+  await store.adoptPersistence({
+    initialize: (document) => Promise.resolve(document),
+    commit: () => Promise.reject(new Error('capability_unsupported')),
+  });
+  const before = store.getState();
+  const app = Fastify();
+  registerHudConfigRoutes(app, { store, originPolicy: createLocalWebOriginPolicy() });
+  try {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/operator/hud-config',
+      headers: { origin: 'http://127.0.0.1' },
+      payload: {
+        kind: 'save-as',
+        resource: 'theme',
+        value: getBuiltinThemes()[0],
+        expectedEditorRevision: before.editorRevision,
+      },
+    });
+    expect(response.statusCode).toBe(422);
+    expect(response.json().error).toBe('capability_unsupported');
+    expect(store.getState()).toEqual(before);
+  } finally {
+    await app.close();
+  }
+});

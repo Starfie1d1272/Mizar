@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z, ZodError } from 'zod';
 import {
   displayConfig,
+  fallbackHudPauseVisual,
   parseBroadcastPreset,
   parseModuleRecord,
   type ModuleRecord,
@@ -80,7 +81,10 @@ export function registerBroadcastConfigRoutes(
   app.get('/local/v1/broadcast-display-config', (_request, reply) => {
     if (!isReady()) return reply.code(503).send({ error: 'broadcast_config_unavailable' });
     if (!displayAvailable()) reply.header('x-mizar-program-status', 'dependency_missing');
-    return reply.header('cache-control', 'no-store').send(displayConfig(store.snapshot.active));
+    const display = displayConfig(store.snapshot.active);
+    const fallback = fallbackHudPauseVisual(display.hud);
+    if (fallback.reason) reply.header('x-mizar-hud-fallback', fallback.reason);
+    return reply.header('cache-control', 'no-store').send({ ...display, hud: fallback.hud });
   });
   app.get('/local/v1/broadcast-presets', (request, reply) => {
     if (

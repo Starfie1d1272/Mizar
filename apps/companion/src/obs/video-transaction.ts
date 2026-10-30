@@ -51,6 +51,18 @@ export class ObsVideoError extends Error {
   }
 }
 
+/** Output precheck failed before the guarded OBS mutation was dispatched. */
+export class ObsPreparationWriteBlocked extends ObsVideoError {
+  constructor(cause: unknown) {
+    super(
+      cause instanceof ObsVideoError ? cause.code : 'outputs_unknown',
+      cause instanceof ObsVideoError ? cause.message : '无法确认 OBS 输出状态，请重新连接后重试。',
+      { cause },
+    );
+    this.name = 'ObsPreparationWriteBlocked';
+  }
+}
+
 function video(value: Record<string, unknown>): Video {
   return videoSchema.parse(
     Object.fromEntries(Object.keys(desired).map((key) => [key, value[key]])),

@@ -21,6 +21,7 @@ import {
 import { ObsAdapter, obsFailureKind, obsErrorEvidence } from './adapter.js';
 import { ObsConfigStore, validateObsConfig } from './config.js';
 import { ObsVideoError } from './video-transaction.js';
+import { ObsCaptureWarmupError } from './capture-warmup.js';
 import { obsSceneName } from './desired-state.js';
 import { obsFindingReadiness } from './prepare-readiness.js';
 import { obsReadiness } from '../program-scenes/readiness.js';
@@ -292,7 +293,11 @@ export function registerObsRoutes(
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
     const body = z
-      .object({ expectedRevision: z.unknown(), since: z.number().finite() })
+      .object({
+        expectedRevision: z.unknown(),
+        since: z.number().finite(),
+        transactionId: z.string().uuid(),
+      })
       .strict()
       .safeParse(request.body);
     const now = Date.now();
@@ -300,13 +305,22 @@ export function registerObsRoutes(
       return reply.code(400).send({ error: 'capture_check_invalid' });
     const valid = options.preparationValid(body.data.expectedRevision);
     if (!valid()) return reply.code(409).send({ error: 'preparation_changed' });
+    if (!(await options.adapter.captureWarmupMatches(body.data.transactionId, body.data.since)))
+      return reply
+        .code(409)
+        .send({ error: 'capture_warmup_changed', message: 'OBS 临时采集已失效，请重试。' });
     const diagnostic = await captureDiagnostic(true, body.data.since);
     try {
-      const status = await options.adapter.captureInitialization(diagnostic);
+      const status = await options.adapter.captureInitialization(
+        diagnostic,
+        body.data.transactionId,
+      );
       if (!valid() || request.raw.aborted || reply.raw.destroyed)
         return reply.code(409).send({ error: 'preparation_changed' });
       return reply.header('cache-control', 'no-store').send(status);
-    } catch {
+    } catch (error) {
+      if (error instanceof ObsCaptureWarmupError || error instanceof ObsVideoError)
+        return reply.code(409).send({ error: error.code, message: error.message });
       return reply.header('cache-control', 'no-store').send({
         state: 'unknown',
         reason: 'evidence_unknown',
@@ -314,6 +328,77 @@ export function registerObsRoutes(
       });
     }
   });
+  for (const action of ['capture-warmup', 'capture-warmup-release'] as const) {
+    app.post(`/operator/obs/${action}`, { bodyLimit: 2048 }, async (request, reply) => {
+      if (!allowed(request.headers.origin))
+        return reply.code(403).send({ error: 'operator_origin_forbidden' });
+      const body = request.body as {
+        expectedRevision?: unknown;
+        preparationId?: unknown;
+        transactionId?: unknown;
+      } | null;
+      const valid = options.preparationValid(body?.expectedRevision);
+      const connected = () => !request.raw.aborted && !reply.raw.destroyed;
+      let id: string | undefined;
+      let finished = false;
+      reply.raw.once('finish', () => {
+        finished = true;
+      });
+      reply.raw.once('close', () => {
+        if (!finished && id) void options.adapter.releaseCaptureWarmup(id).catch(() => {});
+      });
+      try {
+        if (action === 'capture-warmup-release') {
+          const parsed = z.string().uuid().safeParse(body?.transactionId);
+          if (!parsed.success) return reply.code(400).send({ error: 'capture_warmup_invalid' });
+          await options.adapter.releaseCaptureWarmup(parsed.data);
+          return { ok: true };
+        }
+        const parsed = z.string().uuid().safeParse(body?.preparationId);
+        if (!parsed.success) return reply.code(400).send({ error: 'capture_warmup_invalid' });
+        if (!valid() || !connected())
+          return reply
+            .code(409)
+            .send({ error: 'preparation_changed', message: '制作状态已变化，请重试。' });
+        const result = await options.adapter.beginCaptureWarmup(
+          parsed.data,
+          () => valid() && connected(),
+        );
+        id = result.transactionId;
+        if (!valid() || !connected()) {
+          await options.adapter.releaseCaptureWarmup(id);
+          return reply
+            .code(409)
+            .send({ error: 'preparation_changed', message: '制作状态已变化，请重试。' });
+        }
+        return result;
+      } catch (error) {
+        if (
+          error instanceof ObsCaptureWarmupError ||
+          error instanceof ObsVideoError ||
+          error instanceof ObsOutputError
+        )
+          return reply.code(409).send({ error: error.code, message: error.message });
+        request.log.error(
+          {
+            event: 'obs',
+            stage: action,
+            diagnostic: {
+              error: obsErrorEvidence(
+                error,
+                (await options.configStore.read().catch(() => undefined))?.password,
+              ),
+            },
+          },
+          'OBS capture warmup failed',
+        );
+        return reply.code(409).send({
+          error: 'capture_warmup_failed',
+          message: 'OBS 临时采集未确认，请检查状态后重试。',
+        });
+      }
+    });
+  }
   app.post('/operator/obs/configure', { bodyLimit: 4096 }, async (request, reply) => {
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ error: 'operator_origin_forbidden' });

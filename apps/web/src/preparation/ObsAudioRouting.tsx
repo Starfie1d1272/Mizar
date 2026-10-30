@@ -57,7 +57,7 @@ export function ObsAudioRouting() {
         .then((current) => {
           if (active && commentaryPreparing && commentaryReady(current)) {
             setCommentaryPreparing(false);
-            setMessage('解说音频已接入。');
+            setMessage('解说来源已绑定，请录制试听确认人声。');
           }
         })
         .catch(() => undefined);
@@ -120,7 +120,7 @@ export function ObsAudioRouting() {
     );
     const current = await refresh();
     if (wasReenabling || (!current.desktop && current.independentCommentaryDisabled)) {
-      if (commentaryReady(current)) setMessage('解说音频已接入。');
+      if (commentaryReady(current)) setMessage('解说来源已绑定，请录制试听确认人声。');
       else {
         setCommentaryPreparing(true);
         setMessage('');
@@ -211,7 +211,12 @@ export function ObsAudioRouting() {
     <div>
       <h3>音频模式</h3>
       <p>
-        桌面混音包含游戏与其他解说，无法分别调节；麦克风仍单独控制，本机监听的音乐也可能进入混音。
+        桌面混音采集所选播放设备上的声音，无法分别调节游戏与解说；麦克风仍单独控制，本机监听的音乐也可能进入混音。
+      </p>
+      <p>
+        如果使用 TeamSpeak 6，独立采集可能缺少远端人声。
+        {status?.desktop ? '当前使用桌面混音；' : '可切换桌面混音；'}确认游戏和 TeamSpeak
+        使用所采集的播放设备，并在开播前录制试听。
       </p>
       <Button disabled={busy} onClick={() => void run(refresh)}>
         读取 OBS 音频来源
@@ -228,7 +233,11 @@ export function ObsAudioRouting() {
                   : '独立分路，等待解说应用后启用'
                 : status.desktop
                   ? '桌面混音'
-                  : '独立分路'}
+                  : !status.bindings.game &&
+                      !status.bindings.remoteCommentary &&
+                      !status.bindings.microphone
+                    ? '未确认，请检查 OBS'
+                    : '独立分路'}
           </p>
           {chooseDesktop && (
             <Select

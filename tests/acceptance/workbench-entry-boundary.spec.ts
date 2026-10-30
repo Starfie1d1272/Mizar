@@ -50,9 +50,12 @@ test.afterAll(() => {
 // A browser harness mounts the real productionAction entry function. HTTP and Tauri
 // are simulated; this does not claim to test Win32, an OBS process, or real CS2.
 type Scenario = {
-  capture?: 'initialized' | 'zero' | 'fail-once';
+  capture?: 'initialized' | 'zero' | 'fail-once' | 'inactive';
   failEnsure?: boolean;
   holdEnsure?: boolean;
+  holdCapture?: boolean;
+  holdWarmupRelease?: boolean;
+  failWarmupRelease?: boolean;
   activeOutput?: boolean;
   readinessBlocked?: boolean;
   external?: { pid: number; created: string };
@@ -61,10 +64,19 @@ type Scenario = {
 
 async function setup(page: Page, scenario: Scenario = {}) {
   const requests: string[] = [];
-  const captureBodies: { expectedRevision: string; since: number }[] = [];
+  const captureBodies: { expectedRevision: string; since: number; transactionId: string }[] = [];
+  const warmups: { transactionId: string; startedAt: number }[] = [];
   let releaseEnsure!: () => void;
   const held = new Promise<void>((resolve) => {
     releaseEnsure = resolve;
+  });
+  let releaseCapture!: () => void;
+  const heldCapture = new Promise<void>((resolve) => {
+    releaseCapture = resolve;
+  });
+  let releaseWarmup!: () => void;
+  const heldWarmup = new Promise<void>((resolve) => {
+    releaseWarmup = resolve;
   });
   let mode = scenario.hidden ? 'hidden' : 'preparation';
   let captureChecks = 0;
@@ -107,17 +119,34 @@ async function setup(page: Page, scenario: Scenario = {}) {
           status = 409;
           body = { message: '场景自动配置失败。' };
         } else body = { ok: true, findings: [] };
+      } else if (path === '/operator/obs/capture-warmup') {
+        const warmup = { transactionId: `warmup-${warmups.length + 1}`, startedAt: Date.now() };
+        warmups.push(warmup);
+        body = warmup;
       } else if (path === '/operator/obs/capture-initialization') {
+        if (scenario.holdCapture) await heldCapture;
         captureBodies.push(
-          route.request().postDataJSON() as { expectedRevision: string; since: number },
+          route.request().postDataJSON() as {
+            expectedRevision: string;
+            since: number;
+            transactionId: string;
+          },
         );
         captureChecks++;
         body =
           scenario.capture === 'fail-once' && captureChecks === 1
             ? { state: 'failed', reason: 'hook_failed' }
-            : scenario.capture === 'zero'
-              ? { state: 'waiting', reason: 'zero_size' }
-              : { state: 'initialized', reason: null };
+            : scenario.capture === 'inactive'
+              ? { state: 'unknown', reason: 'source_inactive' }
+              : scenario.capture === 'zero'
+                ? { state: 'waiting', reason: 'zero_size' }
+                : { state: 'initialized', reason: null };
+      } else if (path === '/operator/obs/capture-warmup-release') {
+        if (scenario.holdWarmupRelease) await heldWarmup;
+        if (scenario.failWarmupRelease) {
+          status = 409;
+          body = { message: '临时捕获来源清理待完成。' };
+        }
       } else if (path === '/operator/production') mode = 'live';
       try {
         await route.fulfill({ status, json: body });
@@ -206,7 +235,16 @@ async function setup(page: Page, scenario: Scenario = {}) {
         (window as unknown as { details: { name: string; args: Record<string, unknown> }[] })
           .details,
     );
-  return { requests, calls, details, captureBodies, releaseEnsure };
+  return {
+    requests,
+    calls,
+    details,
+    captureBodies,
+    warmups,
+    releaseEnsure,
+    releaseCapture,
+    releaseWarmup,
+  };
 }
 
 test('double click reuses one launch transaction, and menu without GSI can enter', async ({
@@ -224,6 +262,16 @@ test('double click reuses one launch transaction, and menu without GSI can enter
   expect(calls.filter((name) => name === 'start_managed_cs2')).toHaveLength(1);
   expect(calls.filter((name) => name === 'present_production')).toHaveLength(1);
   expect(rig.requests.filter((path) => path === '/operator/production')).toHaveLength(1);
+  expect(rig.requests.indexOf('/operator/obs/capture-initialization')).toBeLessThan(
+    rig.requests.indexOf('/operator/obs/capture-warmup-release'),
+  );
+  expect(rig.requests.indexOf('/operator/obs/capture-warmup-release')).toBeLessThan(
+    rig.requests.indexOf('/operator/production'),
+  );
+  expect(rig.captureBodies[0]).toMatchObject({
+    transactionId: rig.warmups[0]?.transactionId,
+    since: rig.warmups[0]?.startedAt,
+  });
   expect(rig.requests.some((path) => /telemetry|\/gsi/.test(path))).toBe(false);
 });
 
@@ -263,7 +311,9 @@ test('capture failure retry retains the transaction and does not close or restar
   expect(details.filter((item) => item.name === 'replace_external_cs2')).toHaveLength(1);
   expect(details.filter((item) => item.name === 'start_managed_cs2')).toHaveLength(1);
   expect(rig.captureBodies).toHaveLength(2);
-  expect(rig.captureBodies[1]?.since).toBe(rig.captureBodies[0]?.since);
+  expect(rig.captureBodies.map(({ transactionId }) => transactionId)).toEqual(
+    rig.warmups.map(({ transactionId }) => transactionId),
+  );
   const replace = details.find((item) => item.name === 'replace_external_cs2');
   const start = details.find((item) => item.name === 'start_managed_cs2');
   expect(start?.args.preparationId).toBe(replace?.args.preparationId);
@@ -342,4 +392,47 @@ test('a persistently zero-sized capture never enters the workbench', async ({ pa
   expect(rig.requests).not.toContain('/operator/production');
   expect(await rig.calls()).not.toContain('present_production');
   expect(rig.requests.filter((path) => path === '/operator/obs/video-restore')).toHaveLength(1);
+  expect(
+    rig.requests.filter((path) => path === '/operator/obs/capture-warmup-release'),
+  ).toHaveLength(1);
+});
+
+test('an inactive or revoked warmup fails immediately and cleans up', async ({ page }) => {
+  const rig = await setup(page, { capture: 'inactive' });
+  await page.getByRole('button', { name: '启动工作台' }).click();
+  await expect(page.locator('output')).toContainText('游戏采集准备已失效');
+  expect(rig.captureBodies).toHaveLength(1);
+  expect(rig.requests).toContain('/operator/obs/capture-warmup-release');
+  expect(rig.requests).not.toContain('/operator/production');
+});
+
+test('leaving while capture is checked releases the warmup and never enters', async ({ page }) => {
+  const rig = await setup(page, { holdCapture: true });
+  await page.getByRole('button', { name: '启动工作台' }).click();
+  await expect.poll(() => rig.requests.includes('/operator/obs/capture-initialization')).toBe(true);
+  await page.evaluate(() => window.dispatchEvent(new PopStateEvent('popstate')));
+  rig.releaseCapture();
+  await expect.poll(() => rig.requests.includes('/operator/obs/capture-warmup-release')).toBe(true);
+  expect(rig.requests).not.toContain('/operator/production');
+  expect(await rig.calls()).not.toContain('present_production');
+});
+
+test('a failed warmup release blocks entry and surfaces the cleanup issue', async ({ page }) => {
+  const rig = await setup(page, { failWarmupRelease: true });
+  await page.getByRole('button', { name: '启动工作台' }).click();
+  await expect(page.locator('output')).toContainText('临时捕获来源清理待完成');
+  expect(rig.requests).not.toContain('/operator/production');
+  expect(await rig.calls()).not.toContain('present_production');
+});
+
+test('cancelling while warmup is released does not start the camera or enter', async ({ page }) => {
+  const rig = await setup(page, { holdWarmupRelease: true });
+  await page.getByRole('button', { name: '启动工作台' }).click();
+  await expect.poll(() => rig.requests.includes('/operator/obs/capture-warmup-release')).toBe(true);
+  await page.evaluate(() => window.dispatchEvent(new PopStateEvent('popstate')));
+  rig.releaseWarmup();
+  await expect(page.locator('output')).toHaveText('cancelled');
+  expect(await rig.calls()).toContain('cancel_cs2_preparation');
+  expect(await rig.calls()).not.toContain('begin_managed_camera');
+  expect(rig.requests).not.toContain('/operator/production');
 });

@@ -7,6 +7,7 @@ import { inspectLegacyAudioTemplate } from './audio-template.js';
 import { AudioMigration, type MigrationObserver } from './audio-migration.js';
 import {
   createCommentaryProbe,
+  isModernTeamspeak,
   isTeamspeak,
   renameLegacyProbe,
   RemoteCommentary,
@@ -144,6 +145,16 @@ export async function configureIndependentAudio(
       throw new Error('commentary_target_changed');
     const commentarySnapshot = JSON.stringify(commentarySettings);
     const selected = await managedBindings?.();
+    const modernTeamspeak = isModernTeamspeak(currentWindow);
+    const compatibilityFinding: ObsFinding = {
+      code: 'audio_teamspeak_compatibility',
+      message: 'TeamSpeak 新版独立采集可能没有远端人声；建议使用桌面混音，并在开播前录制试听。',
+    };
+    // Existing routing may represent an explicit choice. Keep it, but warn.
+    // Without a binding, leave the initial desktop path intact for the safe
+    // desktop adoption performed by the caller.
+    if (modernTeamspeak && preference.preference.mode === 'autoTeamspeak' && !selected)
+      return [compatibilityFinding];
     if (selected) {
       if (selected.ids.remoteCommentary !== target)
         throw new Error('commentary_binding_target_changed');
@@ -165,7 +176,7 @@ export async function configureIndependentAudio(
       );
       await rememberOwnedTarget(() => false);
       await rm(`${journal}.waiting`, { force: true });
-      return [];
+      return modernTeamspeak ? [compatibilityFinding] : [];
     }
     let legacy = await inspectLegacyAudioTemplate(obs, baseUrl, target);
     if (!legacy) {

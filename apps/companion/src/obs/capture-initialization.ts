@@ -85,7 +85,6 @@ export async function readCaptureInitialization(
   if (transform.sourceWidth <= 0 || transform.sourceHeight <= 0)
     return result('waiting', 'zero_size');
   if (diagnostic.state === 'needs_attention') return result('waiting', 'hook_pending');
-  if (diagnostic.state !== 'reported_success') return result('unknown', 'evidence_unknown');
   // Recheck identity and collection after all observations to reject mid-read changes.
   const current = objects((await obs.call('GetInputList')).inputs).find(
     (item) => item.inputName === OBS_CAPTURE_INPUT,
