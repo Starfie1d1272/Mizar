@@ -176,7 +176,7 @@ export function PresetVisualPreview({
                   }
                   sceneId={scene}
                   data={presentationPreview(scene, null)}
-                  snapshot={programPreviewSnapshot('gameplay', null)}
+                  snapshot={programPreviewSnapshot(scene, null)}
                   scenes={null}
                   resolvedPreset={visuals.hud?.config ?? getBuiltinResolvedPreset()}
                   overlays={visuals.hud?.overlays}
