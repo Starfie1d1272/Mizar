@@ -131,7 +131,7 @@ export function displayPlayers(
             metric(facts?.kd, 'number'),
           ),
         },
-        attributes,
+        attributes: attributes.filter((item) => item.score !== null),
         profileMode,
         limited: attributes.some((a) => a.status === 'limited'),
         clutch: clutchValues,
@@ -142,12 +142,13 @@ export function displayPlayers(
 
 type Map = Page['maps'][number];
 function mapsFor(names: string[], histories: [Team, Team]): Map[] {
+  const key = (name: string) => name.toLowerCase().replace(/^de_/, '');
   return names.map((name) => ({
     name,
     sides: sides.map((side) => {
       const team = histories[side];
-      const perf = team?.mapPerformance.maps.find((m) => m.mapName === name);
-      const detail = team?.facts?.maps.find((m) => m.mapName === name);
+      const perf = team?.mapPerformance.maps.find((m) => key(m.mapName) === key(name));
+      const detail = team?.facts?.maps.find((m) => key(m.mapName) === key(name));
       const played = detail?.results?.played ?? perf?.played ?? null;
       const wins = detail?.results?.wins ?? perf?.wins ?? null;
       const losses =
@@ -158,7 +159,9 @@ function mapsFor(names: string[], histories: [Team, Team]): Map[] {
         wins,
         losses,
         winRate: metric(
-          perf?.played && perf.winRate !== null ? perf.winRate * 100 : null,
+          perf?.played && perf.wins <= perf.played && perf.winRate !== null
+            ? perf.winRate * 100
+            : null,
           'percent',
           wins,
           played,
@@ -184,6 +187,9 @@ function mapsFor(names: string[], histories: [Team, Team]): Map[] {
 function teamMetric(team: Team, key: string): Metric {
   const facts = team?.facts;
   const u = facts?.utility;
+  const awp = facts?.weapons?.find((weapon) => weapon.weapon.toUpperCase() === 'AWP');
+  const knownMissingAwp =
+    facts?.weaponsCoverage?.completeness === 'complete' && facts.weapons !== null && !awp;
   switch (key) {
     case 'rating':
       return metric(facts?.teamRating?.rating, 'number', null, facts?.teamRating?.ratingSamples);
@@ -253,6 +259,31 @@ function teamMetric(team: Team, key: string): Metric {
       return w(team?.economy.ecoSemiUpset);
     case 'comeback':
       return q(facts?.opening?.comebackRate, 'percent', 100);
+    case 'awp-kills':
+      return metric(
+        awp?.kills ?? (knownMissingAwp ? 0 : null),
+        'count',
+        null,
+        facts?.weaponsCoverage?.rounds,
+      );
+    case 'awp-per100':
+      return awp
+        ? per100(awp.killsPerRound)
+        : metric(
+            knownMissingAwp && facts?.weaponsCoverage?.rounds ? 0 : null,
+            'per100',
+            knownMissingAwp ? 0 : null,
+            facts?.weaponsCoverage?.rounds,
+          );
+    case 'awp-share':
+      return awp
+        ? q(awp.killShare, 'percent', 100)
+        : metric(
+            knownMissingAwp && facts?.weaponsCoverage?.totalKills ? 0 : null,
+            'percent',
+            knownMissingAwp ? 0 : null,
+            facts?.weaponsCoverage?.totalKills,
+          );
     default:
       return empty();
   }
@@ -265,6 +296,7 @@ const keys: Partial<Record<Page['kind'], string[]>> = {
   utility: ['utility-damage', 'flash-assists', 'utility-kills', 'flashes-thrown'],
   flash: ['enemy-blind-per-flash', 'enemy-blind-per-round', 'team-blind-per-round'],
   conversion: ['plant-conversion', 'eco-semi', 'comeback'],
+  awp: ['awp-kills', 'awp-per100', 'awp-share'],
 };
 function row(
   key: string,
@@ -321,7 +353,9 @@ export function preparePage(page: Page, histories: [Team, Team], players: Player
   return {
     ...page,
     metricRows: [...teamRows, ...playerRows, ...clutchRows],
-    maps: mapsFor(page.mapNames, histories),
+    maps: ['maps', 'maps-info', 'map-profile', 'veto'].includes(page.kind)
+      ? mapsFor(page.mapNames, histories)
+      : [],
     lineupHasStats: sides.map((side) =>
       selected.some(
         (p) =>
@@ -329,5 +363,28 @@ export function preparePage(page: Page, histories: [Team, Team], players: Player
       ),
     ) as [boolean, boolean],
     profileDefaultId: page.kind === 'profile' ? (page.playerIds[0] ?? null) : null,
+    weapons: sides.map((side) =>
+      page.kind === 'weapons' && page.teamIndices.includes(side)
+        ? [...(histories[side]?.facts?.weapons ?? [])]
+            .sort((a, b) => b.kills - a.kills || a.weapon.localeCompare(b.weapon))
+            .slice(0, 5)
+            .map((weapon) => ({
+              weapon: weapon.weapon,
+              kills: weapon.kills,
+              share: q(weapon.killShare, 'percent', 100),
+              per100: per100(weapon.killsPerRound),
+            }))
+        : [],
+    ) as Page['weapons'],
+    weaponCoverage: sides.map((side) => {
+      const facts = histories[side]?.facts;
+      if (!facts?.weapons) return null;
+      return {
+        completeness: facts.weaponsCoverage?.completeness ?? 'unknown',
+        totalKills:
+          facts.weaponsCoverage?.totalKills ?? facts.weapons[0]?.killShare.attempts ?? null,
+        rounds: facts.weaponsCoverage?.rounds ?? facts.weapons[0]?.killsPerRound.attempts ?? null,
+      };
+    }) as Page['weaponCoverage'],
   };
 }

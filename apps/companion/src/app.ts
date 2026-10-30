@@ -1252,7 +1252,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         'initial',
     );
   });
-  app.get('/local/v1/program-presentation', (_request, reply) => {
+  const currentPresentation = () => {
     const envelope = matchContextController?.getActiveDocumentEnvelope();
     const document = envelope?.freshness === 'fresh' ? envelope.document : null;
     const schedule = demoTest.get().active
@@ -1260,7 +1260,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       : envelope?.source === 'local' && document?.competition
         ? localTournamentStore?.scheduleWindow(document.competition?.competitionId)
         : options.rivalhubConnection?.getSchedule();
-    return reply.header('cache-control', 'no-store').send(presentation.get(document, schedule));
+    return presentation.get(document, schedule);
+  };
+  app.get('/local/v1/program-presentation', (_request, reply) => {
+    return reply.header('cache-control', 'no-store').send(currentPresentation());
   });
   registerHistoricalStatsPresentationRoute(app, {
     connection: options.rivalhubConnection,
@@ -1269,7 +1272,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   registerHistoricalStatsProgramRoute(app, {
     connection: options.rivalhubConnection,
     getBinding: () => matchContextController?.getActiveBinding() ?? options.matchContextBinding,
-    getProgram: () => presentation.get(),
+    getProgram: currentPresentation,
     getScene: () => sceneController.get().active,
   });
   app.get('/local/v1/broadcast-stats', async (_request, reply) => {

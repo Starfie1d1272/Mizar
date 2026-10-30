@@ -263,6 +263,32 @@ const historyPage = z.object({
   maps: z.array(displayMap).max(7),
   lineupHasStats: z.tuple([z.boolean(), z.boolean()]),
   profileDefaultId: id.nullable(),
+  ranks: z.array(z.object({ userId: id, place: z.number().int().positive() })),
+  totalItems: count,
+  weapons: z.tuple([
+    z
+      .array(z.object({ weapon: name, kills: count, share: displayMetric, per100: displayMetric }))
+      .max(5),
+    z
+      .array(z.object({ weapon: name, kills: count, share: displayMetric, per100: displayMetric }))
+      .max(5),
+  ]),
+  weaponCoverage: z.tuple([
+    z
+      .object({
+        completeness: z.enum(['unknown', 'complete']),
+        totalKills: count.nullable(),
+        rounds: count.nullable(),
+      })
+      .nullable(),
+    z
+      .object({
+        completeness: z.enum(['unknown', 'complete']),
+        totalKills: count.nullable(),
+        rounds: count.nullable(),
+      })
+      .nullable(),
+  ]),
   pageNumber: z.number().int().positive(),
   pageCount: z.number().int().positive(),
 });
@@ -273,8 +299,28 @@ export const broadcastStatsProgramSchema = z.object({
   competitionId: id.nullable(),
   sourceRevision: id.nullable(),
   sourceGeneratedAt: z.iso.datetime().nullable(),
+  phase: z.enum(['prematch', 'bp', 'live', 'halftime', 'intermap', 'postmatch']),
   teams: z.tuple([historyIdentity, historyIdentity]),
   displayPlayers: z.array(displayPlayer).max(20),
+  records: z.tuple([
+    z.object({
+      series: z.object({ wins: count, losses: count }).nullable(),
+      maps: z.object({ wins: count, losses: count }).nullable(),
+      rounds: count.nullable(),
+    }),
+    z.object({
+      series: z.object({ wins: count, losses: count }).nullable(),
+      maps: z.object({ wins: count, losses: count }).nullable(),
+      rounds: count.nullable(),
+    }),
+  ]),
+  matchScore: z.object({ a: count, b: count }).nullable(),
+  communityDisplay: z
+    .object({
+      total: z.string(),
+      percentages: z.tuple([z.number().nullable(), z.number().nullable()]),
+    })
+    .nullable(),
   history: z.tuple([
     broadcastStatsEntrantSchema.nullable(),
     broadcastStatsEntrantSchema.nullable(),
@@ -283,10 +329,24 @@ export const broadcastStatsProgramSchema = z.object({
   support: broadcastStatsSchema.shape.support,
   program: programPresentationSchema.nullable(),
   selectedMap: mapSummarySchema.nullable(),
+  summaryHasKAD: z.boolean(),
   selectedPlayerIds: z.tuple([id, id]).nullable(),
   radar: z
     .object({
       mode: z.enum(['radar', 'bars']),
+      visibleKeys: z
+        .array(
+          z.enum([
+            'firepower',
+            'entrying',
+            'trading',
+            'opening',
+            'clutching',
+            'sniping',
+            'utility',
+          ]),
+        )
+        .max(7),
       values: z
         .array(
           z.object({

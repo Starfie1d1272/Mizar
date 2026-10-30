@@ -159,6 +159,16 @@ export const broadcastStatsFactsSchema = z.object({
     .array(z.object({ weapon: name, kills: count, killShare: quantity, killsPerRound: quantity }))
     .max(128)
     .nullable(),
+  weaponsCoverage: z
+    .object({
+      completeness: z.enum(['unknown', 'complete']),
+      completedMaps: count,
+      detailedMaps: count,
+      totalKills: count.nullable(),
+      rounds: count,
+    })
+    .nullable()
+    .optional(),
   players: z
     .array(
       z.object({

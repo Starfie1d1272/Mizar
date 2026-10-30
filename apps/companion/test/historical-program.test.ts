@@ -121,6 +121,114 @@ it('projects scoreboard values and their own samples without requiring detailed 
   expect(comparison.metricRows.find((item) => item.key === 'kast')?.values[0].value).toBe(50);
 });
 
+it('selects team and map display fields with their actual samples', () => {
+  const input = broadcastStatsSchema.parse(extended);
+  const output = projectHistoricalProgram(binding(input), input, null, 'waiting');
+  const lookup = (kind: string, key: string) =>
+    output.pages.find((page) => page.kind === kind)?.metricRows.find((row) => row.key === key)
+      ?.values[0];
+  expect(lookup('overview', 'round-win')).toMatchObject({
+    numerator: 13,
+    denominator: 21,
+    unit: 'percent',
+  });
+  expect(lookup('overview', 'round-win')?.value).toBeCloseTo((13 / 21) * 100);
+  expect(lookup('opening', 'trade')).toMatchObject({
+    numerator: 3,
+    denominator: 21,
+    unit: 'per100',
+  });
+  expect(lookup('utility', 'flashes-thrown')).toMatchObject({
+    numerator: 10,
+    denominator: 21,
+    unit: 'per-round',
+  });
+  expect(lookup('flash', 'enemy-blind-per-flash')).toMatchObject({
+    value: 2,
+    numerator: 20,
+    denominator: 10,
+  });
+  expect(lookup('conversion', 'plant-conversion')).toMatchObject({
+    value: 60,
+    numerator: 3,
+    denominator: 5,
+  });
+  expect(output.pages.find((page) => page.kind === 'map-profile')?.maps[0]?.sides[0]).toMatchObject(
+    {
+      played: 1,
+      wins: 1,
+      losses: 0,
+      ct: { numerator: 7, denominator: 12 },
+      picks: 1,
+    },
+  );
+  expect(output.pages.find((page) => page.kind === 'ranking')?.ranks[0]?.place).toBe(1);
+  expect(output.communityDisplay?.percentages[0]).toBeCloseTo(66.6666666);
+  expect(output.communityDisplay?.percentages[1]).toBeCloseTo(33.3333333);
+});
+
+it('selects the 22 requested prematch kinds with the extended synthetic snapshot', () => {
+  const input = broadcastStatsSchema.parse(extended);
+  const output = projectHistoricalProgram(binding(input), input, null, 'waiting');
+  const kinds = new Set(output.pages.map((page) => page.kind));
+  for (const kind of [
+    'match',
+    'lineup',
+    'maps',
+    'map-profile',
+    'veto',
+    'recent',
+    'players',
+    'radar',
+    'profile',
+    'ranking',
+    'multikill',
+    'overview',
+    'economy',
+    'opening',
+    'advantage',
+    'utility',
+    'flash',
+    'weapons',
+    'awp',
+    'conversion',
+    'clutch',
+    'community',
+  ])
+    expect(kinds.has(kind as (typeof output.pages)[number]['kind'])).toBe(true);
+  expect(output.pages.filter((page) => page.kind === 'map-profile')).toHaveLength(2);
+});
+
+it('shows observed weapon rows but infers a missing AWP as zero only with explicit completeness', () => {
+  const input = broadcastStatsSchema.parse(extended);
+  input.entrants[1]!.facts!.weapons![0]!.weapon = 'ak47';
+  let output = projectHistoricalProgram(binding(input), input, null, 'waiting');
+  const weapons = output.pages.find((page) => page.kind === 'weapons')!;
+  expect(weapons.teamIndices).toEqual([0, 1]);
+  expect(weapons.weaponCoverage[1]).toMatchObject({
+    completeness: 'unknown',
+    totalKills: 15,
+    rounds: 21,
+  });
+  expect(weapons.weapons[1][0]).toMatchObject({
+    weapon: 'ak47',
+    kills: 3,
+    share: { value: 20, denominator: 15 },
+  });
+  let awp = output.pages.find((page) => page.kind === 'awp')!;
+  expect(awp.teamIndices).toEqual([0]);
+  expect(awp.metricRows.find((row) => row.key === 'awp-kills')?.values[1].value).toBeNull();
+  input.entrants[1]!.facts!.weaponsCoverage!.completeness = 'complete';
+  output = projectHistoricalProgram(binding(input), input, null, 'waiting');
+  awp = output.pages.find((page) => page.kind === 'awp')!;
+  expect(awp.teamIndices).toEqual([0, 1]);
+  expect(awp.metricRows.find((row) => row.key === 'awp-kills')?.values[1].value).toBe(0);
+  expect(awp.metricRows.find((row) => row.key === 'awp-per100')?.values[1]).toMatchObject({
+    value: 0,
+    denominator: 21,
+  });
+});
+
 it('uses the local series, veto and last map summary without recomputing the website snapshot', () => {
   const input = broadcastStatsSchema.parse(extended);
   const summary = (order: number) => ({
@@ -233,7 +341,7 @@ it('serves identity immediately while the website snapshot is absent, without fe
 it('retains old v1 available topics when optional extended blocks are absent', () => {
   const input = broadcastStatsSchema.parse(legacy);
   const output = projectHistoricalProgram(binding(input), input, null, 'waiting');
-  expect(output.pages.some((page) => page.kind === 'maps')).toBe(true);
+  expect(output.pages.some((page) => page.kind === 'maps')).toBe(false);
   expect(output.pages.some((page) => page.kind === 'utility')).toBe(true);
   expect(output.pages.some((page) => page.kind === 'flash')).toBe(true);
   expect(output.sourceRevision).toBe(input.revision);

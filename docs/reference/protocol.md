@@ -343,3 +343,7 @@ Program schema 9 为每位选手提供必需的 `statistics` 和 `equipment`，�
 地图摘要使用 `mizar.program-presentation.v2`，选手摘要必需包含同一 `statistics` 结构。该版本变更需要同步更新冻结器及消费者；Radar、Assist 和网站 broadcast-stats 契约未因此改变。
 
 历史统计的本机展示选择使用独立的 `mizar.broadcast-stats-presentation.v1`，契约位于 `@mizar/protocol/broadcast-stats-presentation`。该结构保留网站快照的比赛、赛事、修订和生成时间，以及两队与选定的两位选手；各固定专题携带稳定 ID、资格与原因、已选行和原始数值及样本。地图分页、手枪／经济／道具字段和七维画像均为固定字段，数值格式化由展示层完成。网站 `rivalhub.broadcast-stats.v1` 仍是原始来源，不用展示筛选结果伪造或覆盖该文档。
+
+节目插页使用 `/local/v1/broadcast-stats-program` 的 `mizar.broadcast-stats-program.v1`。`pages` 是已确定资格及顺序的页面；其中 `playerIds`、`ranks`、`maps`、`recentItems` 和 `vetoSteps` 已按页面筛选及分页。`displayPlayers` 提供当前首发的身份、画像及已选指标；单人介绍的 `profileDefaultId` 与 `playerIds` 分别是默认选手和可选名单。`lineupHasStats`、`profileMode`、`radar.mode` 和 `metricRows` 的存在性由 Companion 判定。每个展示指标包含 `value`、`unit`、`numerator`、`denominator`；百分数为 0–100，`per100` 为每百回合，`per-round` 为每回合，null 是未知而非零。`metricRows.max` 是已算好的比较尺度，`ranks.place` 是名次，展示层仅选择字段和格式化。原始 `history` 为兼容消费者保留，不作为页面自行推导的输入。缺少赛事地图池时不从历史地图推造地图池。
+
+武器页展示已有观测行中按击杀排序的前五项；`weaponCoverage` 明示样本完整性，未知时不能将这些行称为完整武器列表。AWP 仅在已有观测行时展示已知值；只有来源明确标记完整且列表缺行时，才可将该武器计为零。网站当前对武器完整性报告 `unknown`，空列表和缺行不证明零击杀。

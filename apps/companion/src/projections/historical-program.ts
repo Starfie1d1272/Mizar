@@ -38,6 +38,10 @@ const page = (kind: Page['kind'], options: Partial<Omit<Page, 'kind'>> = {}): Pa
   maps: [],
   lineupHasStats: [false, false],
   profileDefaultId: null,
+  ranks: [],
+  totalItems: 0,
+  weapons: [[], []],
+  weaponCoverage: [null, null],
   pageNumber: 1,
   pageCount: 1,
   ...options,
@@ -130,13 +134,7 @@ export function projectHistoricalProgram(
         (map) => map.played > 0 && map.winRate !== null && map.wins <= map.played,
       ),
   );
-  const mapNames = pool.length
-    ? [...pool]
-    : [
-        ...new Set(
-          histories.flatMap((team) => team?.mapPerformance.maps.map((map) => map.mapName) ?? []),
-        ),
-      ];
+  const mapNames = [...pool];
   const mapPages = chunks(mapNames, 7);
   mapPages.forEach((items, i) =>
     pages.push(
@@ -252,6 +250,9 @@ export function projectHistoricalProgram(
             ? ('radar' as const)
             : ('bars' as const),
           values: radarValues,
+          visibleKeys: radarValues
+            .filter((value) => value.values.some((number) => number !== null))
+            .map((value) => value.key),
         }
       : null;
   if (radar && selected) pages.push(page('radar', { teamIndices: [0, 1], playerIds: selected }));
@@ -275,6 +276,11 @@ export function projectHistoricalProgram(
         page('ranking', {
           id: i ? `ranking-${i + 1}` : 'ranking',
           playerIds: items.map((player) => player.userId),
+          ranks: items.map((player, index) => ({
+            userId: player.userId,
+            place: i * 10 + index + 1,
+          })),
+          totalItems: ranked.length,
           teamIndices: [0, 1],
           pageNumber: i + 1,
           pageCount: all.length,
@@ -294,6 +300,11 @@ export function projectHistoricalProgram(
         page('multikill', {
           id: i ? `multikill-${i + 1}` : 'multikill',
           playerIds: items.map((player) => player.userId),
+          ranks: items.map((player, index) => ({
+            userId: player.userId,
+            place: i * 10 + index + 1,
+          })),
+          totalItems: multiRanked.length,
           teamIndices: sides.filter((side) =>
             items.some((player) =>
               teams[side].starters.some((starter) => starter.userId === player.userId),
@@ -339,6 +350,7 @@ export function projectHistoricalProgram(
           (rate(team.utility.enemyBlindSecondsPerFlash) ||
             rate(team.utility.enemyBlindSecondsPerRound))),
     ],
+    ['weapons', (team) => !!team.facts?.weapons?.some((weapon) => weapon.killShare.attempts > 0)],
     [
       'awp',
       (team) =>
@@ -346,7 +358,10 @@ export function projectHistoricalProgram(
           (weapon) =>
             weapon.weapon.toUpperCase() === 'AWP' &&
             (rate(weapon.killsPerRound) || rate(weapon.killShare)),
-        ),
+        ) ||
+        (team.facts?.weaponsCoverage?.completeness === 'complete' &&
+          team.facts.weapons !== null &&
+          team.facts.weaponsCoverage.rounds > 0),
     ],
     [
       'conversion',
@@ -370,6 +385,9 @@ export function projectHistoricalProgram(
       pages.push(page('clutch', { teamIndices: [0, 1], playerIds: selected }));
   }
   const support = bound?.support ?? null;
+  const supportSides = teams.map(
+    (team) => support?.sides.find((side) => side.entryId === team.entryId)?.ratio ?? null,
+  ) as [number | null, number | null];
   if (
     support &&
     /[1-9]/.test(support.total) &&
@@ -388,8 +406,39 @@ export function projectHistoricalProgram(
     competitionId: context.competition?.competitionId ?? null,
     sourceRevision: bound?.revision ?? null,
     sourceGeneratedAt: bound?.generatedAt ?? null,
+    phase:
+      scene === 'bp'
+        ? 'bp'
+        : scene === 'halftime'
+          ? 'halftime'
+          : scene === 'match_result'
+            ? 'postmatch'
+            : scene === 'map_result' || scene === 'intermap'
+              ? 'intermap'
+              : scene === 'gameplay'
+                ? 'live'
+                : 'prematch',
     teams,
     displayPlayers: displays,
+    records: histories.map((entry) => ({
+      series: entry?.facts?.results
+        ? { wins: entry.facts.results.matchWins, losses: entry.facts.results.matchLosses }
+        : null,
+      maps: entry?.facts?.results
+        ? { wins: entry.facts.results.mapWins, losses: entry.facts.results.mapLosses }
+        : null,
+      rounds: entry?.facts?.rounds?.rounds ?? null,
+    })),
+    matchScore:
+      (scene === 'intermap' || scene === 'map_result' || scene === 'match_result') && local?.series
+        ? local.series.score
+        : null,
+    communityDisplay: support
+      ? {
+          total: support.total,
+          percentages: supportSides.map((value) => (value === null ? null : value * 100)),
+        }
+      : null,
     history: histories,
     mapPool: pool,
     support,
@@ -397,6 +446,11 @@ export function projectHistoricalProgram(
     selectedPlayerIds: selected,
     radar,
     selectedMap: summary ?? null,
+    summaryHasKAD:
+      !!summary &&
+      [...summary.players.a, ...summary.players.b].some(
+        (player) => player.kills !== null || player.assists !== null || player.deaths !== null,
+      ),
     pages: pages.map((item) => preparePage(item, histories, displays)),
   });
 }
