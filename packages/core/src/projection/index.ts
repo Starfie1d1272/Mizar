@@ -65,3 +65,13 @@ export type {
   BombDamageResource,
   BombDamageProjection,
 } from './bomb-damage.js';
+export { projectPlayerEquipment, projectTeamEconomy } from './equipment.js';
+export type {
+  EquipmentCatalog,
+  EquipmentMetadata,
+  PlayerEquipmentContext,
+  PlayerEquipmentProjection,
+  TeamEconomyPlayer,
+  TeamEconomyProjection,
+  UtilityCounts,
+} from './equipment.js';

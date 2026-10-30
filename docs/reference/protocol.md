@@ -335,3 +335,11 @@ RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对�
 `POST /operator/hud-config/export-lhm` 接收 `{ "expectedActiveRevision": "…" }`，只允许回环操作来源。服务端捕获当前 HUD 已启用的解析配置，并在导出完成前复核修订；修订不符返回 409。成功返回 `application/zip` 文件，不更改当前配置或播放状态；缺少预构建运行时或素材时返回 503。
 
 ZIP 根目录包含 `hud.json`、`panel.json`、`keybinds.json`、`mizar-config.json`、预编译浏览器代码与内置素材。`mizar-export-report.json` 列明包含、不支持和需要绑定的项目。该阶段通过 LHM Socket.IO 或 LHM 窗口 IPC 接收 CS2 GSI，复用 Mizar 遥测、运行时和共享 HUD 展示；Mizar 不必运行。BO1、BO3、BO5 比赛系列、队伍身份、标志和选手头像在目标宿主提供时从其只读接口读取，BO2 尚不支持；未绑定或无法确认换边时显示中立 CT/T；目标宿主的比赛数据和媒体不写入 ZIP。炸弹伤害预测、音乐、运镜及节目场景不在此导出范围。实际 LHM/JT、Windows 和 OBS 验收仍需执行。
+
+### Program 统计与装备事实
+
+Program schema 9 为每位选手提供必需的 `statistics` 和 `equipment`，并提供每侧 `teamEconomy`。`statistics` 的数值携带来源、固定窗口和定义版本、回合数、覆盖程度与不可用原因；旧 ADR、伤害、花费及 K/A/D 字段从同一结果映射。`equipment` 包含主副武器、手持武器、Zeus 的武器 ID、道具数量与 C4 事实，完整武器数组仍保留。手持武器要求新鲜、当前且存活的选手有唯一 active 或 reloading 武器；C4 根据炸弹持有者和 carried／planting 状态判断，未知时保留空值。Companion 向 Core 传入按 GSI 武器名称索引的纯语义目录（canonicalKey、kind、family），不向 Core 传图片路径；语义不完整时不能将未知道具当作零。队伍经济只有完整当前五人名单和相应字段可用时才求和。
+
+地图摘要使用 `mizar.program-presentation.v2`，选手摘要必需包含同一 `statistics` 结构。该版本变更需要同步更新冻结器及消费者；Radar、Assist 和网站 broadcast-stats 契约未因此改变。
+
+历史统计的本机展示选择使用独立的 `mizar.broadcast-stats-presentation.v1`，契约位于 `@mizar/protocol/broadcast-stats-presentation`。该结构保留网站快照的比赛、赛事、修订和生成时间，以及两队与选定的两位选手；各固定专题携带稳定 ID、资格与原因、已选行和原始数值及样本。地图分页、手枪／经济／道具字段和七维画像均为固定字段，数值格式化由展示层完成。网站 `rivalhub.broadcast-stats.v1` 仍是原始来源，不用展示筛选结果伪造或覆盖该文档。

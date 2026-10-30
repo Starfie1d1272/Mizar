@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { playerStatisticsSchema } from './statistics.js';
 
 import {
   localSnapshotEnvelopeSchema,
@@ -119,6 +120,30 @@ const weaponSchema = z.object({
   state: z.enum(['active', 'holstered', 'reloading', 'unknown']).nullable(),
 });
 
+export const utilityCountsSchema = z.object({
+  smoke: z.number().int().nonnegative(),
+  fire: z.number().int().nonnegative(),
+  flash: z.number().int().nonnegative(),
+  he: z.number().int().nonnegative(),
+});
+export const playerEquipmentSchema = z.object({
+  available: z.boolean(),
+  primary: nullableString,
+  secondary: nullableString,
+  heldWeaponId: nullableString,
+  zeusWeaponId: nullableString,
+  utility: utilityCountsSchema.nullable(),
+  hasC4: nullableBoolean,
+});
+export const teamEconomySchema = z.object({
+  lineupComplete: z.boolean(),
+  alive: nullableNumber,
+  money: nullableNumber,
+  equipmentValue: nullableNumber,
+  lossBonus: nullableNumber,
+  utility: utilityCountsSchema.nullable(),
+});
+
 const playerSchema = z.object({
   sourcePlayerId: z.string(),
   canonicalPlayerId: nullableString,
@@ -131,6 +156,8 @@ const playerSchema = z.object({
   observerSlot: nullableNumber,
   activity: nullableString,
   lifeState: z.enum(['alive', 'dead', 'unknown']),
+  statistics: playerStatisticsSchema,
+  equipment: playerEquipmentSchema,
   liveAdr: nullableNumber,
   completedAdr: nullableNumber,
   weaponsAvailable: z.boolean(),
@@ -250,6 +277,7 @@ export const programPayloadSchema = z.object({
     })
     .nullable(),
   teams: z.object({ ct: teamSchema, t: teamSchema }),
+  teamEconomy: z.object({ ct: teamEconomySchema, t: teamEconomySchema }),
   series: seriesProjectionSchema.nullable(),
   map: z.object({
     roundHistory: z
