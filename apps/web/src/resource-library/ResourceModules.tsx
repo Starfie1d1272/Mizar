@@ -258,6 +258,7 @@ export function ResourceModules({
     onRefresh?.();
   };
   const metadata = useLocalRead<{
+    builtinMusicAvailable?: boolean;
     modules: {
       id: string;
       revision: string;
@@ -310,7 +311,9 @@ export function ResourceModules({
   >({});
   const [selectedEntries, setSelectedEntries] = useState<string[]>([]);
   const input = useRef<HTMLInputElement>(null);
-  const scrollToSelection = useRef(false);
+  const scrollToSelection = useRef(
+    Boolean(new URLSearchParams(window.location.search).get('resource')),
+  );
   const selectionEpoch = useRef(0);
   const showList = category === 'all' || ['hud', 'program', 'music', 'camera'].includes(category);
   const entries =
@@ -319,6 +322,12 @@ export function ResourceModules({
         (category === 'all' || category === module.kind) &&
         module.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()),
     ) ?? [];
+  const builtinMusicMissing =
+    !!directory &&
+    metadata?.builtinMusicAvailable === false &&
+    !directory.modules.some(({ module }) => module.id === 'fb81f5a0-9e35-4ae5-8f15-000000000008') &&
+    (category === 'all' || category === 'music') &&
+    '内置节目音乐'.includes(query.trim());
   useEffect(() => {
     if (!scrollToSelection.current || !selected || !showList) return;
     const target = document.getElementById(`resource-${selected}`);
@@ -685,10 +694,23 @@ export function ResourceModules({
           </details>
         </Panel>
       )}
+      {builtinMusicMissing && (
+        <Panel
+          className="resource-library__item"
+          id="resource-fb81f5a0-9e35-4ae5-8f15-000000000008"
+        >
+          <div>
+            <span className="resource-library__kind">音乐 · 内置</span>
+            <h3>内置节目音乐</h3>
+            <p>内置音乐暂不可用，请检查安装包后重试。</p>
+          </div>
+        </Panel>
+      )}
       {showList &&
         snapshot &&
         directory &&
         !entries.length &&
+        !builtinMusicMissing &&
         !((category === 'all' || category === 'camera') && pendingCamera?.pending) && (
           <p>没有找到匹配的资源，可导入资源包。</p>
         )}

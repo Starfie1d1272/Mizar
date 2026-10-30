@@ -73,6 +73,7 @@ export function registerBroadcastConfigRoutes(
     module: ModuleRecord,
   ) => Promise<{ state: 'ready' | 'dependency_missing'; reason?: string }>,
   displayAvailable: () => boolean = () => true,
+  builtinMusicAvailable?: () => boolean,
 ): void {
   const authorized = (origin: string | undefined) =>
     originPolicy.mode === 'loopback' && checkLocalWebOrigin(originPolicy, origin).allowed;
@@ -102,6 +103,7 @@ export function registerBroadcastConfigRoutes(
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
     if (!isReady()) return reply.code(503).send({ error: 'broadcast_config_unavailable' });
     return reply.header('cache-control', 'no-store').send({
+      ...(builtinMusicAvailable ? { builtinMusicAvailable: builtinMusicAvailable() } : {}),
       modules: await Promise.all(
         store.snapshot.modules.map(async (module) => ({
           ...((request.query as { view?: string }).view === 'metadata'

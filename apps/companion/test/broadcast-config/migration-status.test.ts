@@ -136,6 +136,63 @@ it('boots built-in providers without custom injection when legacy dependencies a
   }
 });
 
+it('keeps broadcast resources available when the bundled music is missing or invalid', async () => {
+  const { mkdtemp, rm, writeFile } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { HudConfigStore } = await import('../../src/hud-config/store.js');
+  for (const invalid of [false, true]) {
+    const root = await mkdtemp(join(tmpdir(), 'broadcast-music-unavailable-'));
+    const hud = new HudConfigStore();
+    await hud.load();
+    const pack = join(root, 'builtin.zip');
+    if (invalid) await writeFile(pack, 'invalid ZIP');
+    const app = buildApp({
+      obsConfigPath: join(root, 'obs.json'),
+      hudConfigStore: hud,
+      builtinMusicPack: pack,
+    });
+    try {
+      expect((await app.inject('/local/v1/broadcast-display-config')).statusCode).toBe(200);
+      expect((await app.inject('/local/v1/broadcast-presets')).statusCode).toBe(200);
+      const response = await app.inject('/local/v1/broadcast-modules?view=metadata');
+      expect(response.statusCode).toBe(200);
+      expect(response.json().builtinMusicAvailable).toBe(false);
+      expect(
+        response.json().modules.filter((item: { builtin: boolean }) => item.builtin),
+      ).toHaveLength(6);
+    } finally {
+      await app.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+});
+
+it('does not replace a damaged existing music state with the bundled pack', async () => {
+  const { mkdir, mkdtemp, readFile, rm, writeFile } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join, resolve } = await import('node:path');
+  const { HudConfigStore } = await import('../../src/hud-config/store.js');
+  const root = await mkdtemp(join(tmpdir(), 'broadcast-music-invalid-state-'));
+  const hud = new HudConfigStore();
+  await hud.load();
+  await mkdir(join(root, 'music'));
+  const state = join(root, 'music', 'state.json');
+  await writeFile(state, '{broken');
+  const app = buildApp({
+    obsConfigPath: join(root, 'obs.json'),
+    hudConfigStore: hud,
+    builtinMusicPack: resolve('apps/companion/builtin-music.zip'),
+  });
+  try {
+    await app.ready();
+    expect(await readFile(state, 'utf8')).toBe('{broken');
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 it('preserves the existing music owner state during built-in production migration', async () => {
   const { randomUUID } = await import('node:crypto');
   const { mkdtemp, readFile, rm } = await import('node:fs/promises');

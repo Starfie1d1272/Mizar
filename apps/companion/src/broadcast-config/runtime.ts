@@ -1,4 +1,6 @@
-import { lstat } from 'node:fs/promises';
+import { lstat, readFile } from 'node:fs/promises';
+import { BUILTIN_MODULE_IDS, BUILTIN_REVISION } from './builtin-modules.js';
+import { portableMusicConfig } from './music-assets.js';
 import { join } from 'node:path';
 import type {
   ActiveBroadcastSnapshot,
@@ -45,12 +47,14 @@ export function createBroadcastRuntime(input: {
   dependencies: BroadcastRuntimeDependencies;
   withApplyGuard<T>(operation: (canCommit: () => boolean) => Promise<T>): Promise<T>;
   diagnostic(error: unknown): void;
+  builtinMusicPack?: string | undefined;
 }) {
   const { hud, music, camera, dependencies: deps } = input;
   let status: BroadcastMigrationStatus = { state: 'pending', reason: 'owner_unavailable' };
   let candidate: BroadcastConfigDocument | undefined;
   let pendingLegacyCamera: PendingLegacyCamera | undefined;
   let ready = false;
+  let builtinMusicAvailable = false;
   let syncError: Error | undefined;
   let cameraUnavailable = false;
   let programUnavailable = false;
@@ -257,6 +261,24 @@ export function createBroadcastRuntime(input: {
     if (camera.ready) await camera.adoptPersistence(cameraPersistence);
     else await camera.loadWithPersistence(cameraPersistence);
     cameraUnavailable ||= !cameraPersistence.available && !store.pendingLegacyCamera;
+    if (input.builtinMusicPack) {
+      try {
+        const config = await music.prepareImport(await readFile(input.builtinMusicPack));
+        const value = await portableMusicConfig(music, config, true);
+        await store.addBuiltinMusic({
+          id: BUILTIN_MODULE_IDS.music,
+          revision: BUILTIN_REVISION,
+          kind: 'music',
+          schemaVersion: 1,
+          name: '内置节目音乐',
+          origin: null,
+          value,
+        });
+        builtinMusicAvailable = true;
+      } catch (error) {
+        input.diagnostic(error);
+      }
+    }
     ready = true;
     status = readyStatus();
   }
@@ -297,6 +319,9 @@ export function createBroadcastRuntime(input: {
     restoreLegacyCamera: () => store.restoreLegacyCamera(deps.camera.portable),
     get displayAvailable() {
       return !programUnavailable;
+    },
+    get builtinMusicAvailable() {
+      return builtinMusicAvailable;
     },
     async moduleAvailability(module: import('@mizar/broadcast-config').ModuleRecord) {
       try {
