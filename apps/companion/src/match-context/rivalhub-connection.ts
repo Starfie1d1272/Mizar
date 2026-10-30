@@ -408,6 +408,13 @@ export class RivalHubConnection {
       ? this.statsScope.fetchedAt
       : null;
   }
+  /** Read the current snapshot without waiting for or starting a website request. */
+  getStatsSnapshot(matchId: string): BroadcastStats | null {
+    const scope = this.statsScope;
+    return scope && scope.installation === this.installation && scope.matchId === matchId
+      ? scope.value
+      : null;
+  }
   async getStats(matchId: string): Promise<BroadcastStats | null> {
     const scope = this.statsScope;
     if (!scope || scope.installation !== this.installation || scope.matchId !== matchId)

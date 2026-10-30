@@ -42,6 +42,14 @@ export function bindHistoricalStats(
     );
     return {
       ...entry,
+      ...(entry.facts
+        ? {
+            facts: {
+              ...entry.facts,
+              players: entry.facts.players.filter((player) => starters.has(player.userId)),
+            },
+          }
+        : {}),
       starters: entry.starters.filter((player) => starters.has(player.userId)),
       playerPerformance: {
         ...entry.playerPerformance,

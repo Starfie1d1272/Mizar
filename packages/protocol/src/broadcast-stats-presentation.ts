@@ -1,4 +1,10 @@
 import { z } from 'zod';
+import {
+  broadcastStatsEntrantSchema,
+  broadcastStatsFactsSchema,
+  broadcastStatsSchema,
+} from './broadcast-stats.js';
+import { mapSummarySchema, programPresentationSchema } from './program-scenes.js';
 
 // Local, selected presentation facts. The source broadcast-stats.v1 document stays canonical.
 const id = z.string().min(1).max(128);
@@ -107,3 +113,128 @@ export const broadcastStatsPresentationSchema = z.object({
   }),
 });
 export type BroadcastStatsPresentation = z.infer<typeof broadcastStatsPresentationSchema>;
+
+// Fixed v2 topics and already-selected records for the historical program insert.
+// Website statistics are kept in their canonical form; this plan contains no
+// user-defined fields or formulas.
+const historyPageKind = z.enum([
+  'match',
+  'current-map',
+  'series',
+  'bp',
+  'lineup',
+  'maps',
+  'maps-info',
+  'map-profile',
+  'veto',
+  'recent',
+  'players',
+  'radar',
+  'profile',
+  'ranking',
+  'multikill',
+  'overview',
+  'economy',
+  'opening',
+  'advantage',
+  'utility',
+  'flash',
+  'weapons',
+  'awp',
+  'conversion',
+  'clutch',
+  'community',
+]);
+const historyIdentity = z.object({
+  entryId: id,
+  name,
+  logoUrl: media,
+  starters: z
+    .array(z.object({ userId: id, nickname: z.string().nullable(), avatarUrl: media }))
+    .max(10),
+});
+const historyPage = z.object({
+  id: z.string().min(1),
+  kind: historyPageKind,
+  teamIndices: z.array(z.union([z.literal(0), z.literal(1)])).max(2),
+  playerIds: z.array(id).max(20),
+  mapNames: z.array(name).max(32),
+  recentIds: z.tuple([z.array(id).max(2), z.array(id).max(2)]),
+  recentItems: z.tuple([
+    z
+      .array(
+        z.discriminatedUnion('kind', [
+          z.object({
+            kind: z.literal('series'),
+            value: broadcastStatsFactsSchema.shape.series.shape.matches.element,
+          }),
+          z.object({
+            kind: z.literal('map'),
+            value: broadcastStatsEntrantSchema.shape.recentResults.shape.results.element,
+          }),
+        ]),
+      )
+      .max(2),
+    z
+      .array(
+        z.discriminatedUnion('kind', [
+          z.object({
+            kind: z.literal('series'),
+            value: broadcastStatsFactsSchema.shape.series.shape.matches.element,
+          }),
+          z.object({
+            kind: z.literal('map'),
+            value: broadcastStatsEntrantSchema.shape.recentResults.shape.results.element,
+          }),
+        ]),
+      )
+      .max(2),
+  ]),
+  vetoSteps: programPresentationSchema.shape.series.unwrap().shape.veto.max(10),
+  pageNumber: z.number().int().positive(),
+  pageCount: z.number().int().positive(),
+});
+
+export const broadcastStatsProgramSchema = z.object({
+  schemaVersion: z.literal('mizar.broadcast-stats-program.v1'),
+  matchId: id,
+  competitionId: id.nullable(),
+  sourceRevision: id.nullable(),
+  sourceGeneratedAt: z.iso.datetime().nullable(),
+  teams: z.tuple([historyIdentity, historyIdentity]),
+  history: z.tuple([
+    broadcastStatsEntrantSchema.nullable(),
+    broadcastStatsEntrantSchema.nullable(),
+  ]),
+  mapPool: z.array(name).max(32),
+  support: broadcastStatsSchema.shape.support,
+  program: programPresentationSchema.nullable(),
+  selectedMap: mapSummarySchema.nullable(),
+  selectedPlayerIds: z.tuple([id, id]).nullable(),
+  radar: z
+    .object({
+      mode: z.enum(['radar', 'bars']),
+      values: z
+        .array(
+          z.object({
+            key: z.enum([
+              'firepower',
+              'entrying',
+              'trading',
+              'opening',
+              'clutching',
+              'sniping',
+              'utility',
+            ]),
+            values: z.tuple([
+              z.number().min(0).max(100).nullable(),
+              z.number().min(0).max(100).nullable(),
+            ]),
+          }),
+        )
+        .length(7),
+    })
+    .nullable(),
+  pages: z.array(historyPage),
+});
+export type BroadcastStatsProgram = z.infer<typeof broadcastStatsProgramSchema>;

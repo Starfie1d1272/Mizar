@@ -1,5 +1,7 @@
 import { sourceErrorEvidence } from './source-error.js';
 import { bindHistoricalStats, projectHistoricalStats } from '../projections/historical-stats.js';
+import { projectHistoricalProgram } from '../projections/historical-program.js';
+import type { ProgramPresentation, ProgramSceneId } from '@mizar/protocol/program-scenes';
 import type { FastifyInstance } from 'fastify';
 import type { LiveSnapshotV1 } from '@mizar/protocol/output';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
@@ -465,5 +467,30 @@ export function registerHistoricalStatsPresentationRoute(
     return reply
       .header('cache-control', 'no-store')
       .send(bound ? projectHistoricalStats(bound) : null);
+  });
+}
+
+/** Fixed program-insert facts, including identity when no historical snapshot exists. */
+export function registerHistoricalStatsProgramRoute(
+  app: FastifyInstance,
+  options: {
+    connection: RivalHubConnection | undefined;
+    getBinding: () => import('./lkg-store.js').MatchContextBinding | undefined;
+    getProgram: () => ProgramPresentation | null;
+    getScene: () => ProgramSceneId;
+  },
+) {
+  app.get('/local/v1/broadcast-stats-program', (_request, reply) => {
+    const binding = options.getBinding();
+    if (!binding) return reply.header('cache-control', 'no-store').send(null);
+    const online =
+      binding.origin === 'online' ||
+      (binding.origin === 'cache' && binding.cachedFrom === 'online');
+    const snapshot = online
+      ? (options.connection?.getStatsSnapshot(binding.context.matchId) ?? null)
+      : null;
+    return reply
+      .header('cache-control', 'no-store')
+      .send(projectHistoricalProgram(binding, snapshot, options.getProgram(), options.getScene()));
   });
 }
