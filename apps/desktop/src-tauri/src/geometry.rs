@@ -7,8 +7,12 @@ pub struct Rect {
 }
 
 impl Rect {
-    pub fn right(self) -> i32 { self.x + self.width }
-    pub fn bottom(self) -> i32 { self.y + self.height }
+    pub fn right(self) -> i32 {
+        self.x + self.width
+    }
+    pub fn bottom(self) -> i32 {
+        self.y + self.height
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,11 +28,26 @@ pub fn workspace_layout(work: Rect) -> Layout {
     let units = (max_width / 16).min(max_height / 9);
     let width = units * 16;
     let height = units * 9;
-    let game = Rect { x: work.right() - width, y: work.y, width, height };
+    let game = Rect {
+        x: work.right() - width,
+        y: work.y,
+        width,
+        height,
+    };
     Layout {
         game,
-        left: Rect { x: work.x, y: work.y, width: game.x - work.x, height: work.height },
-        dock: Rect { x: game.x, y: game.bottom(), width: game.width, height: work.bottom() - game.bottom() },
+        left: Rect {
+            x: work.x,
+            y: work.y,
+            width: game.x - work.x,
+            height: work.height,
+        },
+        dock: Rect {
+            x: game.x,
+            y: game.bottom(),
+            width: game.width,
+            height: work.bottom() - game.bottom(),
+        },
     }
 }
 

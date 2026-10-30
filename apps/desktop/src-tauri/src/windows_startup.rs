@@ -111,7 +111,9 @@ impl Drop for DesktopMutex {
 /// The runtime wrapper waits for assignment before starting Companion.
 pub struct RuntimeJob(isize);
 impl RuntimeJob {
-    pub fn new() -> io::Result<Self> { Self::create(std::ptr::null()) }
+    pub fn new() -> io::Result<Self> {
+        Self::create(std::ptr::null())
+    }
     pub fn named(name: &str) -> io::Result<Self> {
         let wide: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
         Self::create(wide.as_ptr())
@@ -160,7 +162,9 @@ impl RuntimeJob {
     pub fn assign_current(&self) -> io::Result<()> {
         if unsafe { AssignProcessToJobObject(self.0, GetCurrentProcess()) } == 0 {
             Err(io::Error::last_os_error())
-        } else { Ok(()) }
+        } else {
+            Ok(())
+        }
     }
 }
 impl Drop for RuntimeJob {
@@ -626,7 +630,6 @@ mod tests {
         time::{Duration, Instant},
     };
 
-
     fn owned_child(job: &RuntimeJob) -> Child {
         let child = Command::new("cmd.exe")
             .args(["/D", "/Q", "/K"])
@@ -666,10 +669,6 @@ mod tests {
         assert!(child.try_wait().unwrap().is_some());
     }
 
-
-
-
-
     #[test]
     fn termination_does_not_touch_a_borrowed_process() {
         let outside = RuntimeJob::new().unwrap();
@@ -687,6 +686,4 @@ mod tests {
 #[cfg(test)]
 mod webview_recovery_tests {
     use super::*;
-
-
 }

@@ -94,10 +94,6 @@ mod tests {
         created: 100,
     };
 
-
-
-
-
     #[test]
     fn queued_request_cannot_override_new_selection_exit_or_reused_pid() {
         for (session, foreground, eligible) in [
@@ -120,6 +116,4 @@ mod tests {
             ));
         }
     }
-
-
 }

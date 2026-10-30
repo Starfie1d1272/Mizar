@@ -734,6 +734,9 @@ mod tests {
         fs::copy(&path, &replacement).unwrap();
         fs::remove_file(&path).unwrap();
         fs::rename(&replacement, &path).unwrap();
-        assert_eq!(revalidate(&first.fingerprint, &f.video, &f.exe, 42).err(), Some(Reason::Changed));
+        assert_eq!(
+            revalidate(&first.fingerprint, &f.video, &f.exe, 42).err(),
+            Some(Reason::Changed)
+        );
     }
 }
