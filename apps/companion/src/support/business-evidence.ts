@@ -336,6 +336,8 @@ export function businessEvidenceHasFailure(value: unknown): boolean {
         'restored',
         'receiver_accepted',
         'claim_accepted',
+        'release_attempt',
+        'release_confirmed',
         'contiguous',
         'baseline',
         'request_started',
