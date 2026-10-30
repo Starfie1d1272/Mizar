@@ -1,0 +1,219 @@
+.stats-insert {
+  color: var(--mizar-broadcast-pulse-white);
+  font-family: var(--mizar-type-family-body);
+}
+.stats-insert__content {
+  position: absolute;
+  inset: 92px 120px 68px;
+  display: flex;
+  flex-direction: column;
+}
+.stats-insert header span {
+  color: var(--mizar-broadcast-pulse-blue);
+  font-size: 24px;
+  letter-spacing: 0.12em;
+}
+.stats-insert h1 {
+  margin: 10px 0 24px;
+  font-size: 64px;
+}
+.stats-insert__teams {
+  display: grid;
+  grid-template-columns: 1fr 220px 1fr;
+  align-items: center;
+  text-align: center;
+  border-block: 2px solid var(--mizar-broadcast-pulse-blue);
+  padding: 18px;
+  font-size: 32px;
+}
+.stats-insert__teams span {
+  color: var(--mizar-broadcast-pulse-blue);
+  font-size: 24px;
+}
+.stats-insert__teams strong {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  min-width: 0;
+}
+.stats-insert__teams img {
+  width: 60px;
+  height: 60px;
+  object-fit: contain;
+}
+.stats-insert__key {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  background: var(--mizar-broadcast-pulse-blue);
+}
+.stats-insert__key--right {
+  background: var(--mizar-broadcast-pulse-gold);
+  border: 2px dashed var(--mizar-broadcast-pulse-canvas);
+}
+.stats-insert__portrait {
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: 4px;
+  vertical-align: middle;
+  margin-right: 18px;
+}
+.stats-insert__row > div:not(.stats-insert__label) strong {
+  display: inline-block;
+  max-width: 85%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.stats-insert__row small {
+  display: block;
+}
+.stats-insert__rows {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.stats-insert__radar {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  font: 25px var(--mizar-type-family-body);
+  fill: var(--mizar-broadcast-pulse-white);
+}
+.stats-insert__radar-values {
+  font: 700 27px var(--mizar-type-family-display);
+  fill: var(--mizar-broadcast-pulse-blue);
+}
+.stats-insert__recent {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  align-content: center;
+}
+.stats-insert__recent section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.stats-insert__recent-item {
+  background: var(--mizar-broadcast-pulse-shell);
+  min-height: 94px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 12px 24px;
+}
+.stats-insert__recent-item img {
+  width: 55px;
+  height: 55px;
+  object-fit: contain;
+}
+.stats-insert__recent-item strong {
+  font-size: 28px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stats-insert__recent-item small {
+  margin-left: auto;
+  color: var(--mizar-broadcast-pulse-muted);
+  font-size: 20px;
+}
+.stats-insert__rows--columns,
+.stats-insert__rows--cells {
+  display: grid;
+  align-content: center;
+  gap: 18px;
+}
+.stats-insert__rows--columns {
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+}
+.stats-insert__rows--cells {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.stats-insert__metric {
+  background: var(--mizar-broadcast-pulse-shell);
+  padding: 30px 36px;
+  min-width: 0;
+}
+.stats-insert__metric h2 {
+  margin: 0 0 26px;
+  font-size: 27px;
+  color: var(--mizar-broadcast-pulse-muted);
+}
+.stats-insert__metric-values {
+  display: grid;
+  gap: 24px;
+}
+.stats-insert__rows--cells .stats-insert__metric-values {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.stats-insert__rows--columns:has(> .stats-insert__metric:only-child) .stats-insert__metric-values {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.stats-insert__metric-values > div {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.stats-insert__metric-values span,
+.stats-insert__metric-values small {
+  font-size: 21px;
+  color: var(--mizar-broadcast-pulse-muted);
+}
+.stats-insert__metric-values strong {
+  font: 700 76px var(--mizar-type-family-display);
+}
+.stats-insert__row {
+  display: grid;
+  grid-template-columns: 1fr 360px 1fr;
+  align-items: center;
+  min-height: 82px;
+  text-align: center;
+  background: var(--mizar-broadcast-pulse-canvas);
+}
+.stats-insert__row:nth-child(even) {
+  background: var(--mizar-broadcast-pulse-shell);
+}
+.stats-insert__row strong {
+  display: block;
+  font: 700 50px var(--mizar-type-family-display);
+}
+.stats-insert__row small {
+  color: var(--mizar-broadcast-pulse-muted);
+  font-size: 20px;
+}
+.stats-insert__label {
+  height: 100%;
+  position: relative;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  font-weight: 700;
+  font-size: 28px;
+}
+.stats-insert__label img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.25;
+}
+.stats-insert__label span {
+  position: relative;
+}
+.stats-insert footer {
+  display: flex;
+  justify-content: space-between;
+  padding-top: 24px;
+  color: var(--mizar-broadcast-pulse-muted);
+  font-size: 22px;
+}

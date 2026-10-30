@@ -1,3 +1,4 @@
+import type { TrustedProgramRoundEvents } from './player-stats.js';
 import type { SourceSide } from '../telemetry/map.js';
 import type { TelemetryObservation } from '../telemetry/observation.js';
 import { createMapPlayerStatsAccumulator, type MapPlayerStatsAccumulator } from './player-stats.js';
@@ -54,6 +55,7 @@ export interface RuntimeContinuityPolicy {
 export type MapExecutionResetReason = 'same-map-restart' | 'restore' | 'operator-correction';
 
 export type RuntimeInput =
+  | { readonly kind: 'program-round-events'; readonly events: TrustedProgramRoundEvents }
   | {
       readonly kind: 'program-telemetry';
       readonly sourceGeneration: number;
@@ -137,7 +139,8 @@ type RuntimeAcceptedDisposition =
       readonly missingSequenceRange?: RuntimeSequenceRange;
     }
   | { readonly kind: 'accepted'; readonly reason: 'source-generation-advanced' }
-  | { readonly kind: 'accepted'; readonly reason: 'map-execution-reset' };
+  | { readonly kind: 'accepted'; readonly reason: 'map-execution-reset' }
+  | { readonly kind: 'accepted'; readonly reason: 'program-round-events' };
 
 type RuntimeIgnoredReason =
   | 'duplicate'
@@ -146,7 +149,8 @@ type RuntimeIgnoredReason =
   | 'stale-generation'
   | 'generation-ahead'
   | 'invalid-generation-advance'
-  | 'map-not-established';
+  | 'map-not-established'
+  | 'untrusted-round-events';
 
 interface RuntimeIgnoredDisposition {
   readonly kind: 'ignored';

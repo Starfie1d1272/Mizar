@@ -64,6 +64,8 @@ export function registerOrchestrationRoutes(
     configure: (revision: string, commit: () => void) => void;
     configureDemo?: (requestId: string, commit: () => void) => void;
     canPrepare?: () => boolean;
+    withSelection?: (commit: () => Promise<void>) => Promise<boolean>;
+    reconcileSelection?: () => Promise<boolean>;
   },
   tool?: MulnxTool,
 ) {
@@ -87,6 +89,24 @@ export function registerOrchestrationRoutes(
     )
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
     return reply.header('cache-control', 'no-store').send(view());
+  });
+  app.get('/local/v1/mulnx-releases', async (request, reply) => {
+    if (
+      policy.mode !== 'loopback' ||
+      !['127.0.0.1', 'localhost', '[::1]', '::1'].includes(request.hostname) ||
+      request.headers['sec-fetch-site'] === 'cross-site' ||
+      (request.headers.origin && !allowed(request.headers.origin))
+    )
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    if (!tool) return reply.code(503).send({ error: 'mulnx_bundle_unavailable' });
+    try {
+      return reply
+        .header('cache-control', 'no-store')
+        .send({ releases: await tool.listPreparedReleases() });
+    } catch (error) {
+      request.log.error({ stage: 'mulnx_list_releases', err: error }, 'MulNX 版本读取失败');
+      return reply.code(503).send({ error: 'mulnx_list_unavailable' });
+    }
   });
   app.post('/operator/runtime/camera-session', { bodyLimit: 2048 }, (request, reply) => {
     const expected = Buffer.from(session?.controlToken ?? '');
@@ -124,6 +144,95 @@ export function registerOrchestrationRoutes(
       return reply.code(409).send({ error: 'camera_native_session_invalid' });
     }
   });
+  app.post(
+    '/operator/runtime/mulnx-prepare-release',
+    { bodyLimit: 1024 },
+    async (request, reply) => {
+      const expected = Buffer.from(session?.controlToken ?? '');
+      const token = request.headers['x-runtime-token'];
+      const supplied = Buffer.from(typeof token === 'string' ? token : '');
+      if (
+        policy.mode !== 'loopback' ||
+        request.headers.origin !== undefined ||
+        !expected.length ||
+        expected.length !== supplied.length ||
+        !timingSafeEqual(expected, supplied)
+      )
+        return reply.code(403).send({ error: 'runtime-control-denied' });
+      try {
+        z.strictObject({}).parse(request.body);
+        if (!tool) throw new Error('mulnx_bundle_unavailable');
+        const result = await tool.prepareRelease();
+        return {
+          preparedId: result.preparedId,
+          tag: result.release.tag,
+          archiveSha256: result.release.sha256,
+        };
+      } catch (error) {
+        request.log.error(
+          { stage: 'mulnx_prepare_release', err: error, result: 'failure' },
+          'MulNX 下载失败',
+        );
+        return reply.code(409).send({
+          error: 'mulnx_prepare_failed',
+          message:
+            tool?.view().phase === 'cancelled'
+              ? 'MulNX 下载已取消，旧版本和配置已保留。'
+              : 'MulNX 下载或校验失败，请检查网络后重试。',
+          requestId: request.id,
+        });
+      }
+    },
+  );
+  app.post('/operator/runtime/mulnx-select', { bodyLimit: 4096 }, async (request, reply) => {
+    const expected = Buffer.from(session?.controlToken ?? '');
+    const token = request.headers['x-runtime-token'];
+    const supplied = Buffer.from(typeof token === 'string' ? token : '');
+    if (
+      policy.mode !== 'loopback' ||
+      request.headers.origin !== undefined ||
+      !expected.length ||
+      expected.length !== supplied.length ||
+      !timingSafeEqual(expected, supplied)
+    )
+      return reply.code(403).send({ error: 'runtime-control-denied' });
+    try {
+      const body = z
+        .discriminatedUnion('action', [
+          z.strictObject({
+            action: z.literal('stage'),
+            preparedId: z.string().regex(/^prepared-[a-f0-9]{64}-[a-f0-9-]{36}$/),
+          }),
+          z.strictObject({ action: z.literal('commit'), id: z.uuid() }),
+        ])
+        .parse(request.body);
+      if (!tool) throw new Error('mulnx_bundle_unavailable');
+      if (body.action === 'stage') return await tool.stageSelection(body.preparedId);
+      let result: { version: string; cameraReady?: boolean } | undefined;
+      if (
+        !session?.withSelection ||
+        !(await session.withSelection(async () => {
+          result = await tool.commitSelection(body.id);
+          director.invalidatePreparation('MulNX 版本已切换，请重新准备运镜。');
+          if (session.reconcileSelection) {
+            const cameraReady = await session.reconcileSelection().catch(() => false);
+            result = { ...result, cameraReady };
+            if (!cameraReady)
+              director.invalidatePreparation('镜头资源已变化，请重新选择或使用方案。');
+          }
+        }))
+      )
+        throw new Error('mulnx_preparation_required');
+      return result;
+    } catch (error) {
+      request.log.error({ stage: 'mulnx_select', err: error, result: 'failure' }, 'MulNX 切换失败');
+      return reply.code(409).send({
+        error: 'mulnx_select_failed',
+        message: 'MulNX 版本切换未确认，请刷新并检查制作和游戏状态。',
+        requestId: request.id,
+      });
+    }
+  });
   app.post('/operator/runtime/mulnx-prepare', { bodyLimit: 4096 }, async (request, reply) => {
     const expected = Buffer.from(session?.controlToken ?? '');
     const supplied = Buffer.from(
@@ -155,13 +264,20 @@ export function registerOrchestrationRoutes(
         })
         .parse(request.body);
       director.hold('正在准备 MulNX');
-      return await tool.prepare(
+      const previous = tool.selectionId;
+      const result = await tool.prepare(
         body.cs2Path,
         body.consoleCapture,
         body.update,
         body.spectatorCfg,
         body.demoCfg ?? undefined,
       );
+      if (previous !== tool.selectionId) {
+        director.invalidatePreparation('MulNX 版本已切换，请重新准备运镜。');
+        if (session.reconcileSelection && !(await session.reconcileSelection().catch(() => false)))
+          director.invalidatePreparation('镜头资源已变化，请重新选择或使用方案。');
+      }
+      return result;
     } catch (error) {
       request.log.error(
         { stage: 'mulnx_prepare', err: error, result: 'failure' },
@@ -251,21 +367,23 @@ export function registerOrchestrationRoutes(
             : '无法检查 MulNX 更新，请检查网络后重试。'
           : error instanceof Error && error.message === 'camera_settings_preparation_required'
             ? '请先结束制作，再修改自动运镜设置。'
-            : error instanceof Error && error.message === 'camera_audition_unavailable'
-              ? '镜头暂不能播放，请先停止当前镜头并检查连接。'
-              : error instanceof Error && error.message === 'camera_stop_unconfirmed'
-                ? '停止未确认，请检查游戏连接后重试。'
-                : error instanceof Error && error.message === 'camera_status_unsupported'
-                  ? '当前运镜工具版本不支持此功能，请更新至支持的版本。'
-                  : error instanceof Error && error.message === 'camera_status_unconfirmed'
-                    ? '无法确认运镜状态，请检查游戏连接和工具版本。'
-                    : error instanceof Error && error.message === 'camera_pack_apply_unconfirmed'
-                      ? '运镜准备失败，请检查游戏连接后重试。'
-                      : error instanceof Error && error.message === 'camera_pack_unconfirmed'
-                        ? '运镜准备未完成，请检查当前地图和预设后重试。'
-                        : error instanceof Error && error.message === 'camera_prepare_unavailable'
-                          ? '暂不能准备运镜，请检查游戏连接和当前地图。'
-                          : '操作未完成，请检查当前地图、连接、预设与本机音频。',
+            : error instanceof Error && error.message === 'camera_source_changed'
+              ? '镜头资源已变化，请重新选择或使用方案。'
+              : error instanceof Error && error.message === 'camera_audition_unavailable'
+                ? '镜头暂不能播放，请先停止当前镜头并检查连接。'
+                : error instanceof Error && error.message === 'camera_stop_unconfirmed'
+                  ? '停止未确认，请检查游戏连接后重试。'
+                  : error instanceof Error && error.message === 'camera_status_unsupported'
+                    ? '当前运镜工具版本不支持此功能，请更新至支持的版本。'
+                    : error instanceof Error && error.message === 'camera_status_unconfirmed'
+                      ? '无法确认运镜状态，请检查游戏连接和工具版本。'
+                      : error instanceof Error && error.message === 'camera_pack_apply_unconfirmed'
+                        ? '运镜准备失败，请检查游戏连接后重试。'
+                        : error instanceof Error && error.message === 'camera_pack_unconfirmed'
+                          ? '运镜准备未完成，请检查当前地图和预设后重试。'
+                          : error instanceof Error && error.message === 'camera_prepare_unavailable'
+                            ? '暂不能准备运镜，请检查游戏连接和当前地图。'
+                            : '操作未完成，请检查当前地图、连接、预设与本机音频。',
         requestId: request.id,
       });
     }

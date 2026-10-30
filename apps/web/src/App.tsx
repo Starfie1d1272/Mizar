@@ -1,6 +1,7 @@
+import { useBroadcastDisplayConfig } from './realtime/broadcast-display-client';
 import { useRadarViewSource } from './realtime/radar-view-source';
 import { useLocalRead } from './preparation/client';
-import type { OverlayPolicy } from './preparation/desktop-overlay';
+import { overlayGroups, type OverlayPolicy } from './preparation/desktop-overlay';
 import { ToolShell } from './patterns';
 import { PreparationPage } from './preparation/PreparationPage';
 import { ResourceLibraryPage } from './resource-library/ResourceLibraryPage';
@@ -25,6 +26,7 @@ import { RadarVisualFixturePage } from './program/testing/RadarVisualFixturePage
 import { ProgramPage } from './program/ProgramPage';
 import { getHudEditorFixture, HUD_EDITOR_DEFAULT_FIXTURE_ID } from './program/fixtures/index.js';
 import { ProgramScenePage } from './program/ProgramScenePage';
+import { StatsInsertPage } from './program/StatsInsertPage';
 import { programSceneForPath } from '@mizar/protocol/program-scenes';
 import {
   WorkspaceDock,
@@ -166,10 +168,15 @@ function ProgramRoute() {
     programClient.getSnapshot,
     programClient.getSnapshot,
   );
-  const hudConfig = useHudConfigClient(
+  const useCompanionConfig =
     import.meta.env.VITE_VISUAL_FIXTURES !== '1' ||
-      new URLSearchParams(window.location.search).get('hud-config') === 'companion',
+    new URLSearchParams(window.location.search).get('hud-config') === 'companion';
+  const display = useBroadcastDisplayConfig(useCompanionConfig);
+  const hudConfig = useHudConfigClient(
+    useCompanionConfig && display.current === null && display.status !== 'unsupported',
   );
+  const activeHud = display.current?.hud.renderer === 'native' ? display.current.hud : null;
+  const selectedHud = activeHud?.config ?? hudConfig.current;
   const cueClient = useMemo(
     () =>
       createProgramCueClient({
@@ -198,11 +205,11 @@ function ProgramRoute() {
   );
   const resolved = desktop
     ? {
-        ...hudConfig.current,
+        ...selectedHud,
         layout: {
-          ...hudConfig.current.layout,
+          ...selectedHud.layout,
           widgets: Object.fromEntries(
-            Object.entries(hudConfig.current.layout.widgets).map(([id, placement]) => [
+            Object.entries(selectedHud.layout.widgets).map(([id, placement]) => [
               id,
               {
                 ...placement,
@@ -210,10 +217,17 @@ function ProgramRoute() {
                   policy !== null && policy.enabled && (policy.visibility[id] ?? placement.visible),
               },
             ]),
-          ) as typeof hudConfig.current.layout.widgets,
+          ) as typeof selectedHud.layout.widgets,
         },
       }
-    : hudConfig.current;
+    : selectedHud;
+  const overlays =
+    activeHud && desktop && (!policy || !overlayGroups(policy).hud)
+      ? {
+          pause: { ...activeHud.overlays.pause, enabled: false },
+          chat: { ...activeHud.overlays.chat, enabled: false },
+        }
+      : activeHud?.overlays;
   const isPreview =
     typeof window !== 'undefined' &&
     new URLSearchParams(window.location.search).get('preview') === '1';
@@ -234,17 +248,21 @@ function ProgramRoute() {
 
   const program = (
     <ProgramCueRendererBridge client={cueClient}>
-      <ProgramPage
-        radarSource={radarSource}
-        connectionState={programConnection.state}
-        resolvedPreset={resolved}
-        snapshot={activeSnapshot}
-        gg={
-          scenes?.active === 'gameplay' &&
-          (scenes.director?.gg?.remainingMs ?? 0) > 0 &&
-          scenes.director?.gg?.mapEpoch === activeSnapshot?.cursor.mapEpoch
-        }
-      />
+      {display.status === 'unsupported' && display.current === null ? null : (
+        <ProgramPage
+          radarSource={radarSource}
+          connectionState={programConnection.state}
+          resolvedPreset={resolved}
+          overlays={overlays}
+          accent={activeHud?.accent}
+          snapshot={activeSnapshot}
+          gg={
+            scenes?.active === 'gameplay' &&
+            (scenes.director?.gg?.remainingMs ?? 0) > 0 &&
+            scenes.director?.gg?.mapEpoch === activeSnapshot?.cursor.mapEpoch
+          }
+        />
+      )}
     </ProgramCueRendererBridge>
   );
   return window.__TAURI_INTERNALS__ ? (
@@ -671,6 +689,7 @@ export function App() {
     );
   if (pathname === '/workspace/left') return <WorkspaceLeft />;
   if (pathname === '/workspace/dock') return <WorkspaceDock />;
+  if (pathname === '/program/stats') return <StatsInsertPage />;
   const programScene = programSceneForPath(pathname);
   if (
     programScene?.id === 'gameplay' &&

@@ -1,3 +1,4 @@
+import type { ResolvedHudModule } from '@mizar/broadcast-config';
 import { assetCssUrl, useAssetUrl } from './assets.js';
 import { useEffect, useEffectEvent, useRef, useState } from 'react';
 import { getMapThumbnail } from '@mizar/cs2-assets';
@@ -170,11 +171,11 @@ function SummaryBoard({ data, scene }: { data: ProgramPresentation; scene: Progr
                 </div>
                 <strong className="summary-player-name">{player.name ?? 'UNKNOWN PLAYER'}</strong>
                 <div className="summary-player-stats" aria-label="Kills / Deaths">
-                  <span>{number(player.kills)}</span>
+                  <span>{number(player.statistics.scoreboard.kills.value)}</span>
                   <span className="summary-stat-separator" aria-hidden="true">
                     –
                   </span>
-                  <span>{number(player.deaths)}</span>
+                  <span>{number(player.statistics.scoreboard.deaths.value)}</span>
                 </div>
               </div>
             ))}
@@ -186,31 +187,11 @@ function SummaryBoard({ data, scene }: { data: ProgramPresentation; scene: Progr
       </div>
       {data.series ? (
         <footer className="summary-footer">
-          <strong
-            data-winner={
-              data.series.status === 'completed' &&
-              data.series.score.a !== null &&
-              data.series.score.b !== null &&
-              data.series.score.a >= data.series.requiredWins &&
-              data.series.score.a > data.series.score.b
-            }
-          >
-            {data.series.entrants.a.name}
-          </strong>
+          <strong data-winner={data.seriesWinner === 'a'}>{data.series.entrants.a.name}</strong>
           <span>
             {data.series.score.a ?? '—'} : {data.series.score.b ?? '—'}
           </span>
-          <strong
-            data-winner={
-              data.series.status === 'completed' &&
-              data.series.score.a !== null &&
-              data.series.score.b !== null &&
-              data.series.score.b >= data.series.requiredWins &&
-              data.series.score.b > data.series.score.a
-            }
-          >
-            {data.series.entrants.b.name}
-          </strong>
+          <strong data-winner={data.seriesWinner === 'b'}>{data.series.entrants.b.name}</strong>
         </footer>
       ) : null}
     </>
@@ -342,6 +323,8 @@ export interface ProgramSceneViewProps {
   readonly snapshot: ProgramSnapshot | null;
   readonly scenes: ProgramSceneState | null;
   readonly resolvedPreset: HudResolvedPreset;
+  readonly overlays?: Extract<ResolvedHudModule, { renderer: 'native' }>['overlays'] | undefined;
+  readonly accent?: Extract<ResolvedHudModule, { renderer: 'native' }>['accent'] | undefined;
   readonly preview: boolean;
   readonly shortIntro: boolean;
   readonly previewBackground: boolean;
@@ -355,6 +338,8 @@ export function ProgramSceneView({
   snapshot,
   scenes,
   resolvedPreset,
+  overlays,
+  accent,
   preview,
   shortIntro,
   previewBackground,
@@ -596,6 +581,8 @@ export function ProgramSceneView({
           <GameplayHud
             snapshot={snapshot}
             resolvedPreset={resolvedPreset}
+            overlays={overlays}
+            accent={accent}
             gg={
               scenes?.active === 'gameplay' &&
               (scenes.director?.gg?.remainingMs ?? 0) > 0 &&
@@ -609,7 +596,12 @@ export function ProgramSceneView({
               className="intro-hud"
               style={{ animationDelay: `${Math.max(0, duration - 600)}ms` }}
             >
-              <GameplayHud snapshot={snapshot} resolvedPreset={resolvedPreset} />
+              <GameplayHud
+                snapshot={snapshot}
+                resolvedPreset={resolvedPreset}
+                overlays={overlays}
+                accent={accent}
+              />
             </div>
             <div
               ref={intro}
@@ -652,7 +644,12 @@ export function ProgramSceneView({
       ) : sceneId === 'waiting' ? (
         <h1 className="waiting-neutral">BROADCAST STARTING SOON</h1>
       ) : sceneId === 'gameplay' ? (
-        <GameplayHud snapshot={snapshot} resolvedPreset={resolvedPreset} />
+        <GameplayHud
+          snapshot={snapshot}
+          resolvedPreset={resolvedPreset}
+          overlays={overlays}
+          accent={accent}
+        />
       ) : null}
     </ProgramCanvas>
   );

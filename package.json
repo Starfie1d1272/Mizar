@@ -60,6 +60,9 @@
     "typescript": "catalog:",
     "typescript-eslint": "catalog:",
     "miniflare": "4.20260730.0",
-    "esbuild": "0.28.2"
+    "esbuild": "0.28.2",
+    "vitest": "catalog:",
+    "@playwright/test": "catalog:",
+    "jsdom": "catalog:"
   }
 }

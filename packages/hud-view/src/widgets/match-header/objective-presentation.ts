@@ -59,22 +59,11 @@ export function buildObjectiveCenterPresentation(
                   ? 'defusing'
                   : 'normal'
               : 'normal';
-  const ct = payload.players.filter((p) => p.side === 'CT');
-  const t = payload.players.filter((p) => p.side === 'T');
-  const complete =
-    ct.length === 5 &&
-    t.length === 5 &&
-    new Set(payload.players.map((p) => p.sourcePlayerId)).size === 10 &&
-    [...ct, ...t].every(
-      (p) => p.lineupEvidence === 'current' && (p.lifeState === 'alive' || p.lifeState === 'dead'),
-    );
-  const alive = {
-    CT: ct.filter((p) => p.lifeState === 'alive').length,
-    T: t.filter((p) => p.lifeState === 'alive').length,
-  };
+  const alive = { CT: payload.teamEconomy.ct.alive, T: payload.teamEconomy.t.alive };
   const showAlive =
     payload.status.telemetry === 'fresh' &&
-    complete &&
+    alive.CT !== null &&
+    alive.T !== null &&
     !paused &&
     !terminal &&
     phase !== 'timeout_ct' &&

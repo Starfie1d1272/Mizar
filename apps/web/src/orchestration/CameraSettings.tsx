@@ -4,12 +4,12 @@ import {
   cameraMapSchema,
   orchestrationPresetSchema,
   type CameraMap,
-  type CameraShot,
   type OrchestrationPreset,
   type OrchestrationView,
 } from '@mizar/protocol/orchestration';
 import { Button, Checkbox, Field, Panel, Select, StatusBanner } from '../ui';
 import { command, useLocalRead, type Production } from '../preparation/client';
+import { Shot } from './CameraShotField';
 import { MUSIC_LABELS, type MusicView } from '../music/MusicControls';
 
 function ImportPreset({ disabled, onFile }: { disabled: boolean; onFile: (file: File) => void }) {
@@ -36,49 +36,6 @@ function ImportPreset({ disabled, onFile }: { disabled: boolean; onFile: (file: 
   );
 }
 
-function Shot({
-  label,
-  shot,
-  change,
-}: {
-  label: string;
-  shot: CameraShot | null;
-  change: (shot: CameraShot | null) => void;
-}) {
-  return (
-    <div>
-      <Field
-        label={label}
-        value={shot?.macro ?? ''}
-        placeholder="留空不触发"
-        onChange={(e) =>
-          change(e.target.value ? { macro: e.target.value, maxMs: shot?.maxMs ?? 6000 } : null)
-        }
-      />
-      {shot ? (
-        <details>
-          <summary>镜头时限</summary>
-          <Field
-            label="最多持续（秒）"
-            type="number"
-            min={0.5}
-            max={60}
-            step={0.001}
-            value={shot.maxMs / 1000}
-            onChange={(e) => {
-              const milliseconds = Number(e.target.value) * 1000;
-              const rounded = Math.round(milliseconds);
-              change({
-                ...shot,
-                maxMs: Math.abs(milliseconds - rounded) < 1e-7 ? rounded : milliseconds,
-              });
-            }}
-          />
-        </details>
-      ) : null}
-    </div>
-  );
-}
 export function CameraSettings() {
   const current = useLocalRead<OrchestrationView>('/local/v1/orchestration', 1500);
   const production = useLocalRead<Production>('/local/v1/production', 1500);

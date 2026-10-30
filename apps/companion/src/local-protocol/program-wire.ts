@@ -42,6 +42,7 @@ export function mapProgramProjection(projection: ProgramProjection): ProgramPayl
     },
     match: projection.match,
     teams: projection.teams,
+    teamEconomy: projection.teamEconomy,
     series: mapSeries(projection.series),
     map: {
       ...projection.map,

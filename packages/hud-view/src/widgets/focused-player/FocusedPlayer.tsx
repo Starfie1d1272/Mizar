@@ -249,7 +249,7 @@ function FocusedPlayerFace({
             <span>
               <small>ADR</small>
               <b>
-                {(design === 'perfectworld' ? (p.liveAdr ?? p.completedAdr) : p.completedAdr)
+                {(design === 'perfectworld' ? p.liveAdr : p.completedAdr)
                   ?.toFixed(design === 'perfectworld' ? 0 : 1)
                   .replace(/\.0$/, '') ?? '—'}
               </b>

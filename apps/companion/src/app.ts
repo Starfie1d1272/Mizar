@@ -1,3 +1,22 @@
+import { lstat, readFile } from 'node:fs/promises';
+import { CameraConfigResolver } from './broadcast-config/camera.js';
+import { MusicPackResources } from './broadcast-config/music-pack-resources.js';
+import {
+  registerBroadcastAssetRoutes,
+  registerMusicPackRoutes,
+} from './broadcast-config/music-pack-routes.js';
+import { createProductionBroadcastDependencies } from './broadcast-config/production.js';
+import {
+  createBroadcastRuntime,
+  type BroadcastRuntimeDependencies,
+} from './broadcast-config/runtime.js';
+import { createBroadcastResolver } from './broadcast-config/resolver.js';
+import { registerBroadcastConfigRoutes } from './broadcast-config/routes.js';
+import type { ResourceRef } from '@mizar/broadcast-config';
+import {
+  registerBroadcastMigrationStatus,
+  type BroadcastMigrationStatus,
+} from './broadcast-config/migration-status.js';
 import {
   BpPresentationSettings,
   registerBpPresentationSettings,
@@ -22,6 +41,7 @@ import { PerformanceWindow, selectedGsiContext } from './support/performance-win
 import { NativeSource } from './support/native-source.js';
 import { ProgramChat } from './projections/program-chat.js';
 import { MusicStore } from './music/store.js';
+import { readMusicPack } from './music/archive.js';
 import { MusicDirector } from './music/director.js';
 import { musicMapKey } from './music/cues.js';
 import { ObsMusicProvider } from './music/obs-provider.js';
@@ -61,7 +81,11 @@ import { OutputService, type OutputServiceOptions } from './output/service.js';
 import { outboxLocalError, ReliableOutbox } from './output/reliable-outbox.js';
 import type { OnlineManifestConfig } from './match-context/http-source.js';
 import { registerOnlineManifestRoutes } from './match-context/online-routes.js';
-import { registerRivalHubConnectionRoutes } from './match-context/rivalhub-routes.js';
+import {
+  registerHistoricalStatsProgramRoute,
+  registerHistoricalStatsPresentationRoute,
+  registerRivalHubConnectionRoutes,
+} from './match-context/rivalhub-routes.js';
 import type { RivalHubConnection } from './match-context/rivalhub-connection.js';
 import {
   RivalsRehearsal,
@@ -128,7 +152,7 @@ import {
   type GsiSequenceSource,
   type ObservationSink,
 } from './telemetry/gsi-ingress.js';
-import { registerStaticHost } from './local-web/static-host.js';
+import { defaultWebRoot, registerStaticHost } from './local-web/static-host.js';
 import { registerOperatorCommandRoutes } from './operator/controller.js';
 import { registerHudConfigRoutes } from './hud-config/controller.js';
 import { HudConfigStore } from './hud-config/store.js';
@@ -192,6 +216,7 @@ export interface CompanionAppOptions {
   readonly clock?: GsiClock;
   readonly qualificationMode?: boolean;
   readonly qualificationControlToken?: string;
+  readonly broadcastConfig?: BroadcastRuntimeDependencies;
   readonly hudConfigPath?: string;
   readonly hudConfigStore?: HudConfigStore;
   readonly obsConfigPath?: string;
@@ -239,6 +264,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   const demoRecovery = readDemoTestRecovery(demoMarkerPath);
   const formalMutations = new Set<string>();
   let resources: ResourceStore | undefined;
+  let broadcastConfig = options.broadcastConfig;
+  let getBroadcastReferences: (() => ResourceRef[]) | undefined;
   let recorder = options.recorder ?? createDisabledRecorder('recorder_not_configured');
   const currentRecorder = (): CaptureRecorder => recorder;
   const programRuntime =
@@ -720,8 +747,30 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     },
   });
   registerLocalWebSocketTransport(app, localWebTransport);
+  let broadcastMigrationStatus: BroadcastMigrationStatus = {
+    state: 'pending',
+    reason: 'owner_unavailable',
+  };
+  let getBroadcastMigrationStatus = () => broadcastMigrationStatus;
+  registerBroadcastMigrationStatus(app, localWebTransport.getOriginPolicy(), () =>
+    getBroadcastMigrationStatus(),
+  );
+  if (!options.obsConfigPath)
+    app.get('/local/v1/broadcast-display-config', (_request, reply) =>
+      reply.code(503).send({ error: 'broadcast_config_unavailable' }),
+    );
+  let waitForBroadcast: (() => Promise<void>) | undefined;
+  let getExportBroadcastDocument:
+    (() => import('@mizar/broadcast-config').BroadcastConfigDocument) | undefined;
   registerHudConfigRoutes(app, {
     store: hudConfigStore,
+    getBroadcastDocument: () => getExportBroadcastDocument?.(),
+    webRoot: options.webRoot ?? defaultWebRoot(),
+    waitForBroadcast: async () => {
+      await waitForBroadcast?.();
+      if (options.obsConfigPath && getBroadcastMigrationStatus().state !== 'ready')
+        throw new Error('broadcast_config_unavailable');
+    },
     originPolicy: localWebTransport.getOriginPolicy(),
   });
   void app.register(async (scope) => {
@@ -863,6 +912,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     });
   }
   let previousBindingOrigin: string | undefined = options.matchContextBinding?.origin;
+  let statsProductionActive = false;
   // The binding listener must retire fixture state on the way out, but it is created
   // before the rehearsal exists; this slot carries the later-constructed instance.
   const fixtureLifecycle: { rehearsal: RivalsRehearsal | undefined } = { rehearsal: undefined };
@@ -880,6 +930,18 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             outputBinding = binding;
             outputService.setBinding(binding);
             projectionCoordinator.setMatchContextBinding(binding);
+            if (
+              statsProductionActive &&
+              (binding?.origin === 'online' ||
+                (binding?.origin === 'cache' && binding.cachedFrom === 'online'))
+            )
+              void options.rivalhubConnection?.stats(binding.context.matchId);
+            else if (
+              !binding ||
+              (binding.origin !== 'online' &&
+                !(binding.origin === 'cache' && binding.cachedFrom === 'online'))
+            )
+              options.rivalhubConnection?.clearStats();
 
             // Leaving the Rivals sample by any route retires fixture runtime state
             // without waiting for an explicit "stop rehearsal" action.
@@ -1018,11 +1080,25 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       matchContextController?.getActiveBinding() !== undefined &&
       matchContextController?.getActiveBinding() != null,
     scenes: sceneController,
+    waitForBroadcast: () => waitForBroadcast?.() ?? Promise.resolve(),
     beforeEnter: () => {
       if (cameraDirector?.store.saving) throw new Error('camera_settings_saving');
       demoTest?.openFormalBoundary();
     },
-    onEnter: () => cameraDirector?.beginProduction(),
+    onEnter: () => {
+      cameraDirector?.beginProduction();
+      statsProductionActive = true;
+      const binding = matchContextController?.getActiveBinding() ?? options.matchContextBinding;
+      if (
+        binding?.origin === 'online' ||
+        (binding?.origin === 'cache' && binding.cachedFrom === 'online')
+      )
+        void options.rivalhubConnection?.stats(binding.context.matchId);
+    },
+    onFinish: () => {
+      statsProductionActive = false;
+      options.rivalhubConnection?.clearStats();
+    },
     beforeFinish: () => {
       cameraDirector?.finishProduction();
       observerSettings.endProduction();
@@ -1095,6 +1171,25 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
               : undefined,
           ),
           activateWhenSafe: (commit) => production.withResourceActivation(commit),
+          ...(options.obsConfigPath
+            ? {
+                references: {
+                  run: <T>(operation: () => Promise<T>) =>
+                    broadcastConfig!.references.run(operation),
+                  isReferenced: (ref: ResourceRef) => {
+                    if (!getBroadcastReferences) throw new Error('broadcast_config_unavailable');
+                    return Promise.resolve(
+                      getBroadcastReferences().some(
+                        (used) =>
+                          used.id === ref.id &&
+                          used.version === ref.version &&
+                          used.digest === ref.digest,
+                      ),
+                    );
+                  },
+                },
+              }
+            : {}),
         });
       } catch (error) {
         app.log.warn(
@@ -1159,7 +1254,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         'initial',
     );
   });
-  app.get('/local/v1/program-presentation', (_request, reply) => {
+  const currentPresentation = () => {
     const envelope = matchContextController?.getActiveDocumentEnvelope();
     const document = envelope?.freshness === 'fresh' ? envelope.document : null;
     const schedule = demoTest.get().active
@@ -1167,7 +1262,75 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       : envelope?.source === 'local' && document?.competition
         ? localTournamentStore?.scheduleWindow(document.competition?.competitionId)
         : options.rivalhubConnection?.getSchedule();
-    return reply.header('cache-control', 'no-store').send(presentation.get(document, schedule));
+    return presentation.get(document, schedule);
+  };
+  app.get('/local/v1/program-presentation', (_request, reply) => {
+    return reply.header('cache-control', 'no-store').send(currentPresentation());
+  });
+  registerHistoricalStatsPresentationRoute(app, {
+    connection: options.rivalhubConnection,
+    getBinding: () => matchContextController?.getActiveBinding() ?? options.matchContextBinding,
+  });
+  registerHistoricalStatsProgramRoute(app, {
+    connection: options.rivalhubConnection,
+    getBinding: () => matchContextController?.getActiveBinding() ?? options.matchContextBinding,
+    getProgram: currentPresentation,
+    getScene: () => sceneController.get().active,
+  });
+  app.get('/local/v1/broadcast-stats', async (_request, reply) => {
+    const binding = matchContextController?.getActiveBinding() ?? options.matchContextBinding;
+    if (
+      !binding ||
+      (binding.origin !== 'online' &&
+        !(binding.origin === 'cache' && binding.cachedFrom === 'online')) ||
+      !options.rivalhubConnection
+    )
+      return reply.header('cache-control', 'no-store').send(null);
+    const value = await options.rivalhubConnection.getStats(binding.context.matchId);
+    const current = matchContextController?.getActiveBinding() ?? options.matchContextBinding;
+    const ids = [binding.manifest.entrants.a.entryId, binding.manifest.entrants.b.entryId];
+    if (
+      current !== binding ||
+      !value ||
+      value.competitionId !== binding.context.competition?.competitionId ||
+      value.entrants.length !== 2 ||
+      new Set(value.entrants.map((entry) => entry.entryId)).size !== 2 ||
+      !ids.every((id) => value.entrants.some((entry) => entry.entryId === id))
+    )
+      return reply.header('cache-control', 'no-store').send(null);
+    const entrants = [binding.manifest.entrants.a, binding.manifest.entrants.b].map((canonical) => {
+      const entry = value.entrants.find((candidate) => candidate.entryId === canonical.entryId)!;
+      const ids = new Set(
+        canonical.roster.players
+          .filter((player) => player.isStarter)
+          .map((player) => player.playerId),
+      );
+      return {
+        ...entry,
+        ...(entry.facts
+          ? {
+              facts: {
+                ...entry.facts,
+                players: entry.facts.players.filter((player) => ids.has(player.userId)),
+              },
+            }
+          : {}),
+        starters: entry.starters.filter((player) => ids.has(player.userId)),
+        playerPerformance: {
+          ...entry.playerPerformance,
+          players: entry.playerPerformance.players.filter((player) => ids.has(player.userId)),
+        },
+      };
+    });
+    return reply.header('cache-control', 'no-store').send({ ...value, entrants });
+  });
+  app.get('/local/v1/broadcast-stats-status', (_request, reply) => {
+    const binding = matchContextController?.getActiveBinding() ?? options.matchContextBinding;
+    return reply.header('cache-control', 'no-store').send({
+      fetchedAt: binding
+        ? (options.rivalhubConnection?.statsFetchedAt(binding.context.matchId) ?? null)
+        : null,
+    });
   });
   const director = new ProgramDirector(
     projectionCoordinator,
@@ -1182,10 +1345,36 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       options.builtinMusicPack,
     );
     app.addHook('onReady', async () => {
-      await musicStore.load().catch((error) => {
+      try {
+        const missing = async (path: string) =>
+          lstat(path).then(
+            () => false,
+            (error: NodeJS.ErrnoException) => {
+              if (error.code === 'ENOENT') return true;
+              throw error;
+            },
+          );
+        const fresh =
+          options.builtinMusicPack &&
+          broadcastConfig &&
+          (await missing(join(musicStore.directory, 'state.json'))) &&
+          (await missing(broadcastConfig.path));
+        let initialPack: Buffer | undefined;
+        if (fresh) {
+          try {
+            initialPack = await readFile(options.builtinMusicPack!);
+            await readMusicPack(initialPack);
+          } catch (error) {
+            initialPack = undefined;
+            app.log.error({ stage: 'music_builtin', err: error }, '内置音乐不可用');
+          }
+        }
+        await musicStore.load(initialPack);
+      } catch (error) {
         app.log.error({ stage: 'music_load', err: error, result: 'failure' }, '音乐配置加载失败');
         musicStore.failure = true;
-      });
+        musicStore.ready = false;
+      }
     });
     musicDirector = new MusicDirector(
       musicStore,
@@ -1251,6 +1440,109 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           cameraEvidence,
         )
       : undefined;
+    // This checks the fixed upstream adapter, not whether a game is connected.
+    // Actual PackStatus readiness is checked by the existing camera director.
+    const cameraResolver = mulnxTool
+      ? new CameraConfigResolver(mulnxTool, musicStore, (tool) =>
+          Promise.resolve(
+            tool.kind === 'upstream' && tool.release.repository === 'Co1Swet/MulNX_CS2',
+          ),
+        )
+      : undefined;
+    const supportsMusicPacks = !broadcastConfig;
+    const musicPacks = new MusicPackResources(join(dirname(options.obsConfigPath), 'music-packs'));
+    registerBroadcastAssetRoutes(app, musicPacks);
+    broadcastConfig ??= createProductionBroadcastDependencies(
+      dirname(options.obsConfigPath),
+      musicStore,
+      async (ref) => {
+        if (ref.resource.id !== PACK_ID || !resources) throw new Error('dependency_missing');
+        await resources.readExact(ref.resource, ref.fileId);
+      },
+      musicPacks,
+      cameraResolver,
+    );
+    const broadcastRuntime = broadcastConfig
+      ? createBroadcastRuntime({
+          hud: hudConfigStore,
+          music: musicStore,
+          camera: cameraStore,
+          builtinMusicPack: options.builtinMusicPack,
+          dependencies: {
+            ...broadcastConfig,
+            hudPath: broadcastConfig.hudPath ?? options.hudConfigPath,
+            isDeleting: async (ref) => {
+              if (ref.id !== PACK_ID) return broadcastConfig!.isDeleting(ref);
+              if (!resources) throw new Error('resource_store_unavailable');
+              return resources.isDeleting(ref);
+            },
+            resolve: {
+              scene: (value) => broadcastConfig!.resolve.scene(value),
+              camera: (value) => broadcastConfig!.resolve.camera(value),
+              hud: (value) => broadcastConfig!.resolve.hud(value),
+              ...(broadcastConfig.resolve.image
+                ? { image: (value) => broadcastConfig!.resolve.image!(value) }
+                : {}),
+              asset: async (ref) => {
+                if (ref.resource.id !== PACK_ID) return broadcastConfig!.resolve.asset(ref);
+                if (!resources) throw new Error('resource_store_unavailable');
+                await resources.readExact(ref.resource, ref.fileId);
+              },
+            },
+            verifyActive: async (active) => {
+              await broadcastConfig!.verifyActive(active);
+              for (const ref of active.lock.resources) {
+                if (ref.id !== PACK_ID) continue;
+                if (!resources) throw new Error('resource_store_unavailable');
+                await resources.verifyExact(ref);
+              }
+            },
+          },
+          withApplyGuard: (operation) => production.configureBroadcast(operation),
+          diagnostic: (error) =>
+            app.log.error({ stage: 'broadcast_owner_sync', err: error }, '播出配置同步失败'),
+        })
+      : undefined;
+    if (broadcastRuntime) {
+      getExportBroadcastDocument = () => broadcastRuntime.store.snapshot;
+      waitForBroadcast = () => broadcastRuntime.waitForApply();
+      getBroadcastReferences = () => {
+        if (!broadcastRuntime.ready) throw new Error('broadcast_config_unavailable');
+        return broadcastRuntime.store.referencedResources();
+      };
+      getBroadcastMigrationStatus = () => broadcastRuntime.status;
+      if (supportsMusicPacks)
+        registerMusicPackRoutes(
+          app,
+          broadcastRuntime.store,
+          musicStore,
+          musicPacks,
+          localWebTransport.getOriginPolicy(),
+          () => broadcastRuntime.ready,
+          async (module, source) => {
+            const resolver = createBroadcastResolver({
+              ...broadcastConfig!.resolve,
+              asset: (ref) =>
+                ref.resource.id === source.id &&
+                ref.resource.version === source.version &&
+                ref.resource.digest === source.digest
+                  ? Promise.resolve()
+                  : broadcastConfig!.resolve.asset(ref),
+            });
+            await resolver.resolveModule(module);
+          },
+        );
+      registerBroadcastConfigRoutes(
+        app,
+        broadcastRuntime.store,
+        localWebTransport.getOriginPolicy(),
+        () => broadcastRuntime.ready,
+        () => broadcastRuntime.restoreLegacyCamera(),
+        (module) => broadcastRuntime.moduleAvailability(module),
+        () => broadcastRuntime.displayAvailable,
+        () => broadcastRuntime.builtinMusicAvailable,
+      );
+    }
     catalogTool = mulnxTool;
     const mulnxProvider = new MulnxProvider(cameraEvidence);
     mulnxClock = new MulnxProgramClock(mulnxProvider);
@@ -1272,6 +1564,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       undefined,
       (pack) => verifyIsolatedPack(options.mulnxCamPacksRoot ?? mulnxTool?.camPacksRoot, pack),
       options.productRuntime !== undefined,
+      (map, pack) => {
+        if (!cameraStore.hasPersistence) return Promise.resolve(true);
+        return broadcastRuntime?.verifyCameraPack(map, pack) ?? Promise.resolve(false);
+      },
     );
     app.addHook('onReady', async () => {
       if (mulnxTool) {
@@ -1296,7 +1592,21 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             '运镜预设加载失败',
           ),
         );
+      if (musicStore.ready && !musicStore.failure && cameraStore.ready && hudConfigStore.isLoaded) {
+        const hasCameraSources =
+          cameraStore.preset.maps.length > 0 ||
+          cameraStore.presets.some((item) => item.preset.maps.length > 0);
+        broadcastMigrationStatus = {
+          state: 'pending',
+          reason: hasCameraSources ? 'camera_identity_unavailable' : 'facades_pending',
+        };
+      }
     });
+    if (broadcastRuntime)
+      app.addHook('onReady', async () => {
+        await broadcastRuntime.initialize();
+        broadcastMigrationStatus = broadcastRuntime.status;
+      });
     registerOrchestrationRoutes(
       app,
       cameraDirector,
@@ -1307,6 +1617,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         configure: production.configureCameraSession,
         configureDemo: (requestId, commit) => demoTest.configureCameraSession(requestId, commit),
         canPrepare: () => production.get().mode === 'preparation',
+        withSelection: production.withResourceActivation,
+        reconcileSelection: async () => {
+          if (!cameraStore.hasPersistence) return true;
+          return (await broadcastRuntime?.reconcileCameraSelection()) ?? false;
+        },
       },
       mulnxTool,
     );
@@ -1372,6 +1687,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       connection: options.rivalhubConnection,
       canClaim: () => !production.isTrialPending() && production.get().mode === 'live',
       canUpdatePlan: () => !production.isTrialPending() && programRuntime.canUpdateSeriesPlan(),
+      canFetchStats: () => statsProductionActive,
       controller: matchContextController,
       currentSnapshot: () => outputService.current(true),
       originPolicy: localWebTransport.getOriginPolicy(),

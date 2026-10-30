@@ -5,6 +5,8 @@ export type ResourcePhase =
 export interface TrustedPack {
   packId: string;
   packVersion: string;
+  /** Digest of the authenticated manifest bytes, when provided by the verifier. */
+  manifestSha256?: string;
   compatible: boolean;
   files: readonly { path: string; bytes: number; sha256: string }[];
 }
@@ -49,6 +51,11 @@ export interface StoreOptions {
   root: string;
   diagnostic?: (packId: string, error: unknown) => void;
   packs?: readonly { packId: string; optional?: boolean }[];
+  /** Shared with configuration commits; reference checks and deletion marking run inside it. */
+  references?: {
+    run<T>(operation: () => Promise<T>): Promise<T>;
+    isReferenced(ref: ResourceRef): Promise<boolean>;
+  };
   /** Must verify authorization and compatibility offline from the persisted receipt on cache hits. */
   verifyTrustedPack: (input: {
     directory: string;
@@ -70,3 +77,4 @@ export class ResourceStoreError extends Error {
     super(code, options);
   }
 }
+import type { ResourceRef } from '@mizar/broadcast-config';

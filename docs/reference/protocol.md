@@ -48,6 +48,8 @@ RivalHub 输入同时接受 `rivalhub.broadcast-manifest.v1` 与 `.v2`。v1 的�
 
 RivalHub 资料先经过结构与语义校验，阻断错误不进入 Core。比赛与赛程分别维护最近有效缓存（LKG），恢复重新解析、校验和转换。赛程缓存按赛事与请求时间窗口核对兼容性。
 
+广播统计使用独立的 `rivalhub.broadcast-stats.v1`，由 RivalHub 提供当前赛事统计快照。Companion 在进入制作并激活在线比赛或其在线缓存时使用已配对 installation 读取 `/api/mizar/stats?matchId=...`，按安装和比赛隔离内存缓存。失败或无效响应在制作期间按冷却及 `Retry-After` 持续重试，成功取得有效快照（包括合法空统计）后停止自动刷新；明确的权限拒绝阻断自动获取，直到授权恢复。换比赛、重新进入制作或明确刷新可重新获取，退出制作清除本次快照。本机 `/local/v1/broadcast-stats` 仅读取匹配赛事、双方及首发身份的数据。统计不进入比赛文档、赛程或 Gameplay 投影。自动模式下等待及图间从主画面开始轮播可用统计卡，卡片采用当前节目场景外观而非 HUD 外观；手动模式、暂停与其它节目场景优先。每张卡固定快照，下一张卡才采用刷新。数据不足的专题跳过，设置中的统计状态和刷新属于现有 RivalHub 区域。
+
 同场刷新失败可保留当前绑定并标记过期；切换到另一场失败不能残留上一场。旧请求晚返回不能覆盖新选择；赛程获取失败不清除当前比赛。在线候选恢复后不静默覆盖本地选择，需明确确认。
 
 ### 本机头像设置
@@ -297,3 +299,19 @@ RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对�
 `POST /operator/music` 的 `play` 动作接受 `group` 和 `entryId`；旧客户端可发送 `trackId`，仅在组内唯一匹配时有效。两个字段同时提供时必须指向同一条目。
 
 OBS 自动准备使用中文场景与来源名称：游戏画面、游戏声音、其他解说、桌面声音、麦克风、音乐和音效。旧版固定名称在停止输出后原位更新，已记录的音频来源按 UUID 复用；名称冲突时保留已有来源并提示处理，自动创建的音频来源使用可读数字后缀。来源配置、音轨和实际声音仍需在 OBS 试听核对。
+
+### Program 统计与装备事实
+
+Program schema 9 为每位选手提供必需的 `statistics` 和 `equipment`，并提供每侧 `teamEconomy`。`statistics` 的数值携带来源、固定窗口和定义版本、回合数、覆盖程度与不可用原因；旧 ADR、伤害、花费及 K/A/D 字段从同一结果映射。`equipment` 包含主副武器、手持武器、Zeus 的武器 ID、道具数量与 C4 事实，完整武器数组仍保留。手持武器要求新鲜、当前且存活的选手有唯一 active 或 reloading 武器；C4 根据炸弹持有者和 carried／planting 状态判断，未知时保留空值。Companion 向 Core 传入按 GSI 武器名称索引的纯语义目录（canonicalKey、kind、family），不向 Core 传图片路径；语义不完整时不能将未知道具当作零。队伍经济只有完整当前五人名单和相应字段可用时才求和。
+
+地图摘要使用 `mizar.program-presentation.v2`，选手摘要必需包含同一 `statistics` 结构；`seriesWinner` 是 Core 根据已结束系列赛及有效比分判定的胜方，未知时为空，渲染层不再自行判定。该版本变更需要同步更新冻结器及消费者；Radar、Assist 和网站 broadcast-stats 契约未因此改变。
+
+历史统计的本机展示选择使用独立的 `mizar.broadcast-stats-presentation.v1`，契约位于 `@mizar/protocol/broadcast-stats-presentation`。该结构保留网站快照的比赛、赛事、修订和生成时间，以及两队与选定的两位选手；各固定专题携带稳定 ID、资格与原因、已选行和原始数值及样本。地图分页、手枪／经济／道具字段和七维画像均为固定字段，数值格式化由展示层完成。网站 `rivalhub.broadcast-stats.v1` 仍是原始来源，不用展示筛选结果伪造或覆盖该文档。
+
+节目插页使用 `/local/v1/broadcast-stats-program` 的 `mizar.broadcast-stats-program.v1`。`pages` 是已确定资格及顺序的页面；其中 `playerIds`、`ranks`、`maps`、`recentItems` 和 `vetoSteps` 已按页面筛选及分页。`displayPlayers` 提供当前首发的身份、画像及已选指标；单人介绍的 `profileDefaultId` 与 `playerIds` 分别是默认选手和可选名单。`lineupHasStats`、`profileMode`、`radar.mode` 和 `metricRows` 的存在性由 Companion 判定。每个展示指标包含 `value`、`unit`、`numerator`、`denominator`；百分数为 0–100，`per100` 为每百回合，`per-round` 为每回合，null 是未知而非零。`metricRows.max` 是已算好的比较尺度，`ranks.place` 是名次，展示层仅选择字段和格式化。原始 `history` 为兼容消费者保留，不作为页面自行推导的输入。缺少赛事地图池时不从历史地图推造地图池。
+
+武器页展示已有观测行中按击杀排序的前五项；`weaponCoverage` 明示样本完整性，未知时不能将这些行称为完整武器列表。AWP 仅在已有观测行时展示已知值；只有来源明确标记完整且列表缺行时，才可将该武器计为零。网站当前对武器完整性报告 `unknown`，空列表和缺行不证明零击杀。
+
+### 原生 HUD 导出
+
+`POST /operator/hud-config/export-lhm` 仅接受回环操作来源，按指定活动修订或 HUD 模块修订导出原生 HUD，并在完成前再次核对修订；缺少运行文件或修订冲突时不更改活动配置。导出包包含预编译展示代码和所需素材，不包含音乐、运镜或节目场景。
