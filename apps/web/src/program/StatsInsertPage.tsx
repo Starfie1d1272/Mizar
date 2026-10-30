@@ -1,5 +1,8 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import { broadcastStatsSchema, type BroadcastStats } from '@mizar/protocol/broadcast-stats';
+import {
+  broadcastStatsPresentationSchema,
+  type BroadcastStatsPresentation,
+} from '@mizar/protocol/broadcast-stats-presentation';
 import { StatsInsertView } from '@mizar/hud-view';
 import { statsInserts } from './stats-inserts';
 import { programPresentationSchema } from '@mizar/protocol/program-scenes';
@@ -10,7 +13,7 @@ import { useBroadcastDisplayConfig } from '../realtime/broadcast-display-client'
 import { pulseTokenStyle } from './broadcast-display';
 
 export function StatsInsertPage() {
-  const [bundle, setBundle] = useState<BroadcastStats | null>(null);
+  const [bundle, setBundle] = useState<BroadcastStatsPresentation | null>(null);
   const scenes = useProgramScenes();
   const sceneId = scenes?.active === 'intermap' ? 'intermap' : 'waiting';
   const display = useBroadcastDisplayConfig(true, sceneId);
@@ -20,8 +23,11 @@ export function StatsInsertPage() {
     let active = true;
     let current: string | null = null;
     let generation = 0;
-    let timer: ReturnType<typeof setTimeout>;
+    let presentationRequest = 0;
+    let acceptedPresentation = 0;
+    let statsRequest = 0;
     const poll = async () => {
+      const request = ++presentationRequest;
       try {
         const response = await fetch('/local/v1/program-presentation', {
           cache: 'no-store',
@@ -31,7 +37,8 @@ export function StatsInsertPage() {
           ? programPresentationSchema.parse(await response.json())
           : null;
         const matchId = presentation?.match?.matchId ?? null;
-        if (!active) return;
+        if (!active || request < acceptedPresentation) return;
+        acceptedPresentation = request;
         if (matchId !== current) {
           current = matchId;
           generation++;
@@ -39,17 +46,25 @@ export function StatsInsertPage() {
         }
         if (matchId) {
           const requestGeneration = generation;
+          const statsSequence = ++statsRequest;
           try {
-            const stats = await fetch('/local/v1/broadcast-stats', {
+            const stats = await fetch('/local/v1/broadcast-stats-presentation', {
               cache: 'no-store',
               signal: AbortSignal.timeout(5000),
             });
             const data = stats.ok ? await stats.json() : undefined;
-            if (active && requestGeneration === generation && data === null) setBundle(null);
-            const parsed = broadcastStatsSchema.safeParse(data);
             if (
               active &&
               requestGeneration === generation &&
+              statsSequence === statsRequest &&
+              data === null
+            )
+              setBundle(null);
+            const parsed = broadcastStatsPresentationSchema.safeParse(data);
+            if (
+              active &&
+              requestGeneration === generation &&
+              statsSequence === statsRequest &&
               parsed.success &&
               parsed.data.matchId === matchId
             )
@@ -59,20 +74,20 @@ export function StatsInsertPage() {
           }
         }
       } catch {
-        if (active) {
+        if (active && request >= acceptedPresentation) {
+          acceptedPresentation = request;
           current = null;
           generation++;
           setBundle(null);
         }
-      } finally {
-        if (active) timer = setTimeout(() => void poll(), 2000);
       }
     };
     void poll();
+    const timer = setInterval(() => void poll(), 2000);
     return () => {
       active = false;
       generation++;
-      clearTimeout(timer);
+      clearInterval(timer);
     };
   }, []);
   const observedMatch = connection.current?.payload.match?.matchId;

@@ -3,7 +3,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, expect, it, vi } from 'vitest';
 import { useStatsRotation } from '../src/program/useStatsRotation';
-import fixture from '../../../tests/fixtures/rivalhub-provider-stats-v1.json';
+import fixture from '../../../tests/fixtures/mizar-broadcast-stats-presentation-v1.json';
 
 afterEach(() => {
   vi.useRealTimers();
@@ -50,9 +50,7 @@ it('starts on the main scene, freezes each card, and restarts after unmount', as
 it('shows each map page before continuing the rotation', async () => {
   vi.useFakeTimers();
   const data = structuredClone(fixture);
-  for (let i = 0; i < 8; i++)
-    for (const team of data.entrants)
-      team.mapPerformance.maps.push({ mapName: `de_extra_${i}`, played: 1, wins: 0, winRate: 0 });
+  data.maps.pages.push({ page: 2, rows: data.maps.pages[0]!.rows });
   vi.stubGlobal(
     'fetch',
     vi.fn(async () => Response.json(data)),
@@ -70,5 +68,29 @@ it('shows each map page before continuing the rotation', async () => {
   expect(host.textContent).toContain('2 / 2 页');
   await act(async () => vi.advanceTimersByTimeAsync(15_000));
   expect(host.textContent).toContain('RECENT MAPS');
+  await act(async () => root.unmount());
+});
+
+it('keeps the displayed card unchanged until its next boundary reads the newer revision', async () => {
+  vi.useFakeTimers();
+  const data = structuredClone(fixture);
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => Response.json(data)),
+  );
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  function Rotation() {
+    const card = useStatsRotation(true, fixture.matchId);
+    return <span>{card ? `${card.subtitle} ${card.teams[0]}` : 'MAIN'}</span>;
+  }
+  await act(async () => root.render(<Rotation />));
+  await act(async () => vi.advanceTimersByTimeAsync(20_000));
+  expect(host.textContent).toContain(`LINEUPS ${fixture.teams[0]!.name}`);
+  data.teams[0]!.name = 'Updated team';
+  await act(async () => vi.advanceTimersByTimeAsync(11_999));
+  expect(host.textContent).toContain(`LINEUPS ${fixture.teams[0]!.name}`);
+  await act(async () => vi.advanceTimersByTimeAsync(1));
+  expect(host.textContent).toContain('MAP PERFORMANCE Updated team');
   await act(async () => root.unmount());
 });

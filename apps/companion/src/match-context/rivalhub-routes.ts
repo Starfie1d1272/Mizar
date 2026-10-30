@@ -1,4 +1,5 @@
 import { sourceErrorEvidence } from './source-error.js';
+import { bindHistoricalStats, projectHistoricalStats } from '../projections/historical-stats.js';
 import type { FastifyInstance } from 'fastify';
 import type { LiveSnapshotV1 } from '@mizar/protocol/output';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
@@ -424,5 +425,33 @@ export function registerRivalHubConnectionRoutes(
     } finally {
       sourceCommand = null;
     }
+  });
+}
+
+/** Local, read-only historical presentation. The raw statistics endpoint remains unchanged. */
+export function registerHistoricalStatsPresentationRoute(
+  app: FastifyInstance,
+  options: {
+    connection: RivalHubConnection | undefined;
+    getBinding: () => import('./lkg-store.js').MatchContextBinding | undefined;
+  },
+) {
+  app.get('/local/v1/broadcast-stats-presentation', async (_request, reply) => {
+    const binding = options.getBinding();
+    const connection = options.connection;
+    if (
+      !binding ||
+      !connection ||
+      (binding.origin !== 'online' &&
+        !(binding.origin === 'cache' && binding.cachedFrom === 'online'))
+    )
+      return reply.header('cache-control', 'no-store').send(null);
+    const value = await connection.getStats(binding.context.matchId);
+    if (options.getBinding() !== binding || !value || value.matchId !== binding.context.matchId)
+      return reply.header('cache-control', 'no-store').send(null);
+    const bound = bindHistoricalStats(value, binding.manifest);
+    return reply
+      .header('cache-control', 'no-store')
+      .send(bound ? projectHistoricalStats(bound) : null);
   });
 }
