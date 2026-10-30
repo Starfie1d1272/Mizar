@@ -11,6 +11,7 @@ import {
 it('starts with the private feature enabled and a five-second lead', () => {
   expect(DEFAULT_OBSERVER_SETTINGS).toMatchObject({
     enabled: true,
+    nicknameSource: 'website',
     leadSeconds: 5,
   });
   expect(
@@ -18,6 +19,13 @@ it('starts with the private feature enabled and a five-second lead', () => {
       ...DEFAULT_OBSERVER_SETTINGS,
       leadSeconds: 31,
     }).success,
+  ).toBe(false);
+  expect(observerSettingsSchema.parse({ enabled: false, leadSeconds: 9 }).nicknameSource).toBe(
+    'website',
+  );
+  expect(
+    observerSettingsSchema.safeParse({ ...DEFAULT_OBSERVER_SETTINGS, nicknameSource: 'invalid' })
+      .success,
   ).toBe(false);
 });
 it('parses one authorized connection with adjacent or explicit Program endpoint', () => {

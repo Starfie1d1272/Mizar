@@ -65,7 +65,7 @@ impl Preferences {
                 Some(value) => Some(value.as_bool().ok_or("CS2 启动方式无法读取。")?),
             };
             preferences.prefer_mulnx = match value.get("launchPreferenceVersion") {
-                None => true,
+                None => saved.unwrap_or(true),
                 Some(version) if version == 2 => saved.ok_or("CS2 启动方式无法读取。")?,
                 Some(_) => return Err("CS2 启动方式版本无法读取。".into()),
             };
@@ -115,7 +115,20 @@ mod tests {
             assert!(old.prefer_mulnx);
             assert_eq!(old.quality == Quality::Preserve, preserve);
         }
-        assert!(Preferences::from_json(&json!({"qualityPreset":"high","frameRateLimit":30,"preferMulnx":false})).unwrap().prefer_mulnx);
+        for saved in [false, true] {
+            assert_eq!(
+                Preferences::from_json(
+                    &json!({"qualityPreset":"high","frameRateLimit":30,"preferMulnx":saved})
+                )
+                .unwrap()
+                .prefer_mulnx,
+                saved
+            );
+        }
+        assert!(Preferences::from_json(
+            &json!({"qualityPreset":"high","frameRateLimit":30,"launchPreferenceVersion":2})
+        )
+        .is_err());
         let mut invalid = legacy;
         invalid["preferMulnx"] = json!("true");
         assert!(Preferences::from_json(&invalid).is_err());
