@@ -83,7 +83,7 @@ import {
   registerHistoricalStatsPresentationRoute,
   registerRivalHubConnectionRoutes,
 } from './match-context/rivalhub-routes.js';
-import type { RivalHubConnection } from './match-context/rivalhub-connection.js';
+import { statsTarget, type RivalHubConnection } from './match-context/rivalhub-connection.js';
 import {
   RivalsRehearsal,
   registerRivalsRehearsalRoutes,
@@ -933,13 +933,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
               (binding?.origin === 'online' ||
                 (binding?.origin === 'cache' && binding.cachedFrom === 'online'))
             )
-              void options.rivalhubConnection?.stats(binding.context.matchId);
-            else if (
-              !binding ||
-              (binding.origin !== 'online' &&
-                !(binding.origin === 'cache' && binding.cachedFrom === 'online'))
-            )
-              options.rivalhubConnection?.clearStats();
+              void options.rivalhubConnection?.stats(statsTarget(binding.context));
+            else options.rivalhubConnection?.clearStats();
 
             // Leaving the Rivals sample by any route retires fixture runtime state
             // without waiting for an explicit "stop rehearsal" action.
@@ -1091,7 +1086,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         binding?.origin === 'online' ||
         (binding?.origin === 'cache' && binding.cachedFrom === 'online')
       )
-        void options.rivalhubConnection?.stats(binding.context.matchId);
+        void options.rivalhubConnection?.stats(statsTarget(binding.context));
     },
     onFinish: () => {
       statsProductionActive = false;
@@ -1284,7 +1279,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       !options.rivalhubConnection
     )
       return reply.header('cache-control', 'no-store').send(null);
-    const value = await options.rivalhubConnection.getStats(binding.context.matchId);
+    const value = await options.rivalhubConnection.getStats(statsTarget(binding.context));
     const current = matchContextController?.getActiveBinding() ?? options.matchContextBinding;
     const ids = [binding.manifest.entrants.a.entryId, binding.manifest.entrants.b.entryId];
     if (
@@ -1326,7 +1321,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     const binding = matchContextController?.getActiveBinding() ?? options.matchContextBinding;
     return reply.header('cache-control', 'no-store').send({
       fetchedAt: binding
-        ? (options.rivalhubConnection?.statsFetchedAt(binding.context.matchId) ?? null)
+        ? (options.rivalhubConnection?.statsFetchedAt(statsTarget(binding.context)) ?? null)
         : null,
     });
   });

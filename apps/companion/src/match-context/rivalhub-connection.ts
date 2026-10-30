@@ -6,7 +6,7 @@ import { readFile, rename, writeFile, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import type { LiveSnapshotV1, ReliableEventV1 } from '@mizar/protocol/output';
-import type { ScheduleWindowV1 } from '@mizar/core/match-context';
+import type { MatchContext, ScheduleWindowV1 } from '@mizar/core/match-context';
 import {
   toScheduleWindowV1,
   validateBroadcastScheduleWindow,
@@ -28,6 +28,26 @@ type Installation = {
   displayName: string;
   authorizedUser?: { userId: string; displayName: string } | undefined;
 };
+
+export type StatsTarget = {
+  matchId: string;
+  competitionId: string;
+  entrantIds: readonly [string, string];
+};
+
+/** Bind the cache to the currently active match identity, independent of side order. */
+export function statsTarget(
+  context: Pick<MatchContext, 'matchId' | 'competition' | 'entrants'>,
+): StatsTarget | null {
+  const competitionId = context.competition?.competitionId;
+  const entrantIds = [context.entrants.a.entryId, context.entrants.b.entryId] as const;
+  if (!competitionId || !entrantIds[0] || !entrantIds[1] || entrantIds[0] === entrantIds[1])
+    return null;
+  return { matchId: context.matchId, competitionId, entrantIds };
+}
+
+const statsTargetKey = (target: StatsTarget) =>
+  JSON.stringify([target.matchId, target.competitionId, ...[...target.entrantIds].sort()]);
 type PendingPairing = {
   pairingId: string;
   pollToken: string;
@@ -292,7 +312,7 @@ export class RivalHubConnection {
   private statsAuthorizationBlocked: Installation | null = null;
   private statsScope: {
     installation: Installation;
-    matchId: string;
+    targetKey: string;
     value: BroadcastStats | null;
     etag: string | null;
     pending: Promise<BroadcastStats | null> | null;
@@ -304,14 +324,28 @@ export class RivalHubConnection {
   } | null = null;
 
   /** Called at production entry and maintenance ticks, never by a local reader. */
-  async stats(matchId: string, refresh = false): Promise<BroadcastStats | null> {
+  async stats(target: StatsTarget | null, refresh = false): Promise<BroadcastStats | null> {
     const installation = this.installation;
-    if (!installation || !/^[A-Za-z0-9_-]{1,128}$/.test(matchId)) return null;
-    if (this.statsScope?.installation !== installation || this.statsScope.matchId !== matchId) {
+    if (
+      !installation ||
+      !target ||
+      target.competitionId !== installation.competitionId ||
+      !/^[A-Za-z0-9_-]{1,128}$/.test(target.matchId) ||
+      !target.entrantIds[0] ||
+      !target.entrantIds[1] ||
+      target.entrantIds[0] === target.entrantIds[1]
+    ) {
+      this.clearStats();
+      return null;
+    }
+    const { matchId } = target;
+    const entrantIds = [...target.entrantIds] as [string, string];
+    const targetKey = statsTargetKey(target);
+    if (this.statsScope?.installation !== installation || this.statsScope.targetKey !== targetKey) {
       this.clearStats();
       this.statsScope = {
         installation,
-        matchId,
+        targetKey,
         value: null,
         etag: null,
         pending: null,
@@ -370,7 +404,9 @@ export class RivalHubConnection {
         if (
           !parsed.success ||
           parsed.data.matchId !== matchId ||
-          parsed.data.competitionId !== installation.competitionId
+          parsed.data.competitionId !== installation.competitionId ||
+          parsed.data.entrants.length !== 2 ||
+          !entrantIds.every((id) => parsed.data.entrants.some((entry) => entry.entryId === id))
         ) {
           invalid();
           return null;
@@ -397,22 +433,31 @@ export class RivalHubConnection {
     this.statsScope?.abort.abort();
     this.statsScope = null;
   }
-  statsFetchedAt(matchId: string): string | null {
+  statsFetchedAt(target: StatsTarget | null): string | null {
     return this.statsScope?.installation === this.installation &&
-      this.statsScope.matchId === matchId
+      target &&
+      this.statsScope.targetKey === statsTargetKey(target)
       ? this.statsScope.fetchedAt
       : null;
   }
   /** Read the current snapshot without waiting for or starting a website request. */
-  getStatsSnapshot(matchId: string): BroadcastStats | null {
+  getStatsSnapshot(target: StatsTarget | null): BroadcastStats | null {
     const scope = this.statsScope;
-    return scope && scope.installation === this.installation && scope.matchId === matchId
+    return scope &&
+      target &&
+      scope.installation === this.installation &&
+      scope.targetKey === statsTargetKey(target)
       ? scope.value
       : null;
   }
-  async getStats(matchId: string): Promise<BroadcastStats | null> {
+  async getStats(target: StatsTarget | null): Promise<BroadcastStats | null> {
     const scope = this.statsScope;
-    if (!scope || scope.installation !== this.installation || scope.matchId !== matchId)
+    if (
+      !scope ||
+      !target ||
+      scope.installation !== this.installation ||
+      scope.targetKey !== statsTargetKey(target)
+    )
       return null;
     return scope.value ?? (scope.pending ? await scope.pending : null);
   }

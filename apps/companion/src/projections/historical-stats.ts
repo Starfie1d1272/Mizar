@@ -7,6 +7,13 @@ import {
 
 type Entrant = BroadcastStats['entrants'][number];
 type Player = Entrant['playerPerformance']['players'][number];
+export const hasRatingSample = (player: Player) =>
+  player.sample.maps > 0 &&
+  player.sample.ratingMaps > 0 &&
+  player.sample.ratingMaps <= player.sample.maps &&
+  player.rating !== null;
+export const hasAdrSample = (player: Player) =>
+  player.adr !== null && player.sample.adrRounds !== null && player.sample.adrRounds > 0;
 type Rate = NonNullable<Entrant['pistol']['pistol']>;
 type Quantity = NonNullable<Entrant['utility']['utilityDamagePerRound']>;
 const attributeKeys = [
@@ -173,10 +180,7 @@ export function projectHistoricalStats(bundle: BroadcastStats): BroadcastStatsPr
       .filter(
         (player) =>
           entry.starters.some((starter) => starter.userId === player.userId) &&
-          player.sample.maps > 0 &&
-          player.sample.ratingMaps > 0 &&
-          player.sample.ratingMaps <= player.sample.maps &&
-          player.rating !== null,
+          hasRatingSample(player),
       )
       .sort(
         (x, y) => y.rating! - x.rating! || (x.userId < y.userId ? -1 : x.userId > y.userId ? 1 : 0),
@@ -208,15 +212,10 @@ export function projectHistoricalStats(bundle: BroadcastStats): BroadcastStatsPr
             { value: right.rating!, sampleMaps: right.sample.ratingMaps },
           ] as const,
           adr:
-            left.adr !== null &&
-            right.adr !== null &&
-            left.sample.adrRounds !== null &&
-            left.sample.adrRounds > 0 &&
-            right.sample.adrRounds !== null &&
-            right.sample.adrRounds > 0
+            hasAdrSample(left) && hasAdrSample(right)
               ? ([
-                  { value: left.adr, sampleRounds: left.sample.adrRounds },
-                  { value: right.adr, sampleRounds: right.sample.adrRounds },
+                  { value: left.adr!, sampleRounds: left.sample.adrRounds! },
+                  { value: right.adr!, sampleRounds: right.sample.adrRounds! },
                 ] as const)
               : null,
         }

@@ -6,6 +6,65 @@ import { RivalHubConnection } from '../src/match-context/rivalhub-connection.js'
 import { projectHistoricalStats } from '../src/projections/historical-stats.js';
 import fixture from '../../../tests/fixtures/rivalhub-provider-stats-v1.json' with { type: 'json' };
 
+const target = (matchId = fixture.matchId) => ({
+  matchId,
+  competitionId: fixture.competitionId,
+  entrantIds: [fixture.entrants[0]!.entryId, fixture.entrants[1]!.entryId] as const,
+});
+
+it('cancels an in-flight snapshot when the same match binds different entrants', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-stats-entrants-'));
+  try {
+    const path = join(directory, 'connection.json');
+    await writeFile(
+      path,
+      JSON.stringify({
+        baseUrl: 'https://match.starfie1d.top',
+        credential: 'secret',
+        installationId: 'install',
+        competitionId: fixture.competitionId,
+        displayName: 'test',
+      }),
+    );
+    let oldSignal!: AbortSignal;
+    let release!: (response: Response) => void;
+    const changed = structuredClone(fixture);
+    changed.entrants[1]!.entryId = 'replacement-team';
+    const changedTarget = {
+      ...target(),
+      entrantIds: [fixture.entrants[0]!.entryId, 'replacement-team'] as const,
+    };
+    const fetcher = vi
+      .fn()
+      .mockImplementationOnce((_url: string, init: RequestInit) => {
+        oldSignal = init.signal!;
+        return new Promise<Response>((resolve) => {
+          release = resolve;
+        });
+      })
+      .mockResolvedValueOnce(Response.json(changed));
+    const connection = new RivalHubConnection(path, fetcher as typeof fetch);
+    await connection.load();
+    const old = connection.stats(target());
+    expect(await connection.stats(changedTarget)).toMatchObject({ matchId: fixture.matchId });
+    expect(oldSignal.aborted).toBe(true);
+    release(Response.json(fixture));
+    expect(await old).toBeNull();
+    expect(await connection.getStats(target())).toBeNull();
+    expect(
+      (
+        await connection.stats({
+          ...changedTarget,
+          entrantIds: [...changedTarget.entrantIds].reverse() as [string, string],
+        })
+      )?.entrants[1]?.entryId,
+    ).toBe('replacement-team');
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 it('keeps a match snapshot until an explicit refresh and revalidates with ETag', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'mizar-stats-'));
   try {
@@ -30,27 +89,27 @@ it('keeps a match snapshot until an explicit refresh and revalidates with ETag',
       .mockResolvedValueOnce(Response.json(fixture));
     const connection = new RivalHubConnection(path, fetcher as typeof fetch, undefined, () => now);
     await connection.load();
-    expect(await connection.stats(fixture.matchId)).toMatchObject({ revision: 'example' });
-    expect(await connection.stats(fixture.matchId)).toMatchObject({ revision: 'example' });
+    expect(await connection.stats(target())).toMatchObject({ revision: 'example' });
+    expect(await connection.stats(target())).toMatchObject({ revision: 'example' });
     expect(fetcher).toHaveBeenCalledTimes(1);
     now = 60_001;
-    expect(await connection.stats(fixture.matchId)).toMatchObject({ revision: 'example' });
+    expect(await connection.stats(target())).toMatchObject({ revision: 'example' });
     expect(fetcher).toHaveBeenCalledTimes(1);
-    expect(await connection.stats(fixture.matchId, true)).toMatchObject({ revision: 'example' });
+    expect(await connection.stats(target(), true)).toMatchObject({ revision: 'example' });
     expect(fetcher.mock.calls[1]![1].headers).toMatchObject({
       'if-none-match': '"one"',
       authorization: 'Bearer secret',
     });
-    expect(await connection.stats(fixture.matchId, true)).toBeNull();
-    expect(await connection.getStats(fixture.matchId)).toMatchObject({ revision: 'example' });
+    expect(await connection.stats(target(), true)).toBeNull();
+    expect(await connection.getStats(target())).toMatchObject({ revision: 'example' });
     now += 30_000;
-    expect(await connection.stats(fixture.matchId, true)).toBeNull();
-    expect(await connection.getStats(fixture.matchId)).toBeNull();
+    expect(await connection.stats(target(), true)).toBeNull();
+    expect(await connection.getStats(target())).toBeNull();
     connection.clearStats();
-    expect(await connection.stats(fixture.matchId)).toBeNull();
+    expect(await connection.stats(target())).toBeNull();
     await connection.load();
-    expect(await connection.stats(fixture.matchId)).toBeNull();
-    expect(await connection.stats('another-match')).toBeNull();
+    expect(await connection.stats(target())).toBeNull();
+    expect(await connection.stats(target('another-match'))).toBeNull();
     expect(fetcher).toHaveBeenCalledTimes(4);
     await writeFile(
       path,
@@ -63,7 +122,7 @@ it('keeps a match snapshot until an explicit refresh and revalidates with ETag',
       }),
     );
     await connection.load();
-    expect(await connection.stats(fixture.matchId)).toMatchObject({ revision: 'example' });
+    expect(await connection.stats(target())).toMatchObject({ revision: 'example' });
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -92,8 +151,8 @@ it('joins an in-flight request for concurrent manual refresh', async () => {
     );
     const connection = new RivalHubConnection(path, fetcher as typeof fetch);
     await connection.load();
-    const first = connection.stats(fixture.matchId);
-    const manual = connection.stats(fixture.matchId, true);
+    const first = connection.stats(target());
+    const manual = connection.stats(target(), true);
     expect(fetcher).toHaveBeenCalledTimes(1);
     resolveOld(Response.json(fixture));
     expect(await first).toMatchObject({ revision: 'example' });
@@ -134,26 +193,26 @@ it('uses one real HTTP snapshot for repeated local readers and refreshes only on
     let now = 0;
     const connection = new RivalHubConnection(path, fetch, undefined, () => now);
     await connection.load();
-    await Promise.all(Array.from({ length: 4 }, () => connection.stats(fixture.matchId)));
+    await Promise.all(Array.from({ length: 4 }, () => connection.stats(target())));
     for (let i = 0; i < 20; i++)
-      expect(await connection.getStats(fixture.matchId)).toMatchObject({
+      expect(await connection.getStats(target())).toMatchObject({
         revision: fixture.revision,
       });
     expect(requests).toBe(1);
     status = 503;
-    expect(await connection.stats(fixture.matchId, true)).toBeNull();
-    expect(await connection.getStats(fixture.matchId)).toMatchObject({
+    expect(await connection.stats(target(), true)).toBeNull();
+    expect(await connection.getStats(target())).toMatchObject({
       revision: fixture.revision,
     });
     status = 304;
     now += 30_000;
-    expect(await connection.stats(fixture.matchId, true)).toMatchObject({
+    expect(await connection.stats(target(), true)).toMatchObject({
       revision: fixture.revision,
     });
     expect(headers).toEqual([undefined, '"snapshot"', '"snapshot"']);
     status = 403;
-    await connection.stats(fixture.matchId, true);
-    expect(await connection.getStats(fixture.matchId)).toBeNull();
+    await connection.stats(target(), true);
+    expect(await connection.getStats(target())).toBeNull();
     expect(requests).toBe(4);
   } finally {
     await new Promise<void>((resolve, reject) =>
@@ -197,16 +256,16 @@ it('rejects a late real HTTP response after switching matches', async () => {
     );
     const connection = new RivalHubConnection(path);
     await connection.load();
-    const old = connection.stats(fixture.matchId);
+    const old = connection.stats(target());
     await received;
-    expect(await connection.stats('other')).toMatchObject({
+    expect(await connection.stats(target('other'))).toMatchObject({
       matchId: 'other',
       revision: 'new-match',
     });
     releaseOld();
     expect(await old).toBeNull();
-    expect(await connection.getStats(fixture.matchId)).toBeNull();
-    expect(await connection.getStats('other')).toMatchObject({ revision: 'new-match' });
+    expect(await connection.getStats(target())).toBeNull();
+    expect(await connection.getStats(target('other'))).toMatchObject({ revision: 'new-match' });
   } finally {
     await new Promise<void>((resolve, reject) =>
       server.close((error) => (error ? reject(error) : resolve())),
@@ -257,27 +316,27 @@ it('retries indefinitely on transient failures with shared cooldown and stops on
       .mockResolvedValueOnce(new Response(null, { status: 503 }));
     const connection = new RivalHubConnection(path, fetcher as typeof fetch, undefined, () => now);
     await connection.load();
-    expect(await connection.stats(fixture.matchId)).toBeNull();
+    expect(await connection.stats(target())).toBeNull();
     now = 29_999;
-    expect(await connection.stats(fixture.matchId, true)).toBeNull();
+    expect(await connection.stats(target(), true)).toBeNull();
     expect(fetcher).toHaveBeenCalledTimes(1);
     now = 30_000;
-    expect(await connection.stats(fixture.matchId)).toBeNull();
+    expect(await connection.stats(target())).toBeNull();
     now = 60_000;
-    expect(await connection.stats(fixture.matchId)).toBeNull();
+    expect(await connection.stats(target())).toBeNull();
     now = 179_999;
-    expect(await connection.stats(fixture.matchId)).toBeNull();
+    expect(await connection.stats(target())).toBeNull();
     expect(fetcher).toHaveBeenCalledTimes(3);
     now = 180_000;
-    expect(await connection.stats(fixture.matchId)).toBeNull();
+    expect(await connection.stats(target())).toBeNull();
     now = 479_999;
-    expect(await connection.stats(fixture.matchId)).toBeNull();
+    expect(await connection.stats(target())).toBeNull();
     expect(fetcher).toHaveBeenCalledTimes(4);
     now = 480_000;
-    expect(await connection.stats(fixture.matchId)).toMatchObject({
+    expect(await connection.stats(target())).toMatchObject({
       entrants: [{ starters: [] }, { starters: [] }],
     });
-    const emptyProjection = projectHistoricalStats((await connection.getStats(fixture.matchId))!)!;
+    const emptyProjection = projectHistoricalStats((await connection.getStats(target()))!)!;
     expect(
       [
         emptyProjection.maps,
@@ -291,15 +350,15 @@ it('retries indefinitely on transient failures with shared cooldown and stops on
       ].every((topic) => !topic.eligible),
     ).toBe(true);
     now += 1_000_000;
-    expect(await connection.stats(fixture.matchId)).toMatchObject({ revision: fixture.revision });
+    expect(await connection.stats(target())).toMatchObject({ revision: fixture.revision });
     expect(fetcher).toHaveBeenCalledTimes(5);
-    expect(await connection.stats(fixture.matchId, true)).toBeNull();
-    expect(await connection.getStats(fixture.matchId)).toMatchObject({
+    expect(await connection.stats(target(), true)).toBeNull();
+    expect(await connection.getStats(target())).toMatchObject({
       revision: fixture.revision,
     });
-    expect(await connection.stats(fixture.matchId, true)).toBeNull();
+    expect(await connection.stats(target(), true)).toBeNull();
     now += 1_000_000;
-    expect(await connection.stats(fixture.matchId)).toMatchObject({ revision: fixture.revision });
+    expect(await connection.stats(target())).toMatchObject({ revision: fixture.revision });
     expect(fetcher).toHaveBeenCalledTimes(6);
   } finally {
     clock.mockRestore();
@@ -329,16 +388,16 @@ it('retries invalid identity and oversized data until a valid snapshot arrives',
       .mockResolvedValueOnce(Response.json(fixture));
     const connection = new RivalHubConnection(path, fetcher as typeof fetch, undefined, () => now);
     await connection.load();
-    expect(await connection.stats(fixture.matchId)).toBeNull();
+    expect(await connection.stats(target())).toBeNull();
     now = 1_000_000;
-    expect(await connection.stats(fixture.matchId)).toBeNull();
+    expect(await connection.stats(target())).toBeNull();
     expect(fetcher).toHaveBeenCalledTimes(2);
     now += 30_000;
-    expect(await connection.stats(fixture.matchId)).toMatchObject({
+    expect(await connection.stats(target())).toMatchObject({
       revision: fixture.revision,
     });
     now += 1_000_000;
-    expect(await connection.stats(fixture.matchId)).toMatchObject({ revision: fixture.revision });
+    expect(await connection.stats(target())).toMatchObject({ revision: fixture.revision });
     expect(fetcher).toHaveBeenCalledTimes(3);
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -379,15 +438,15 @@ it('retries interrupted response streams and aborts a replaced scope', async () 
       .mockResolvedValueOnce(Response.json({ ...fixture, matchId: 'other' }));
     const connection = new RivalHubConnection(path, fetcher as typeof fetch, undefined, () => now);
     await connection.load();
-    expect(await connection.stats(fixture.matchId)).toBeNull();
+    expect(await connection.stats(target())).toBeNull();
     now = 30_000;
-    const pending = connection.stats(fixture.matchId);
+    const pending = connection.stats(target());
     expect(firstSignal.aborted).toBe(false);
-    expect(await connection.stats('other')).toMatchObject({ matchId: 'other' });
+    expect(await connection.stats(target('other'))).toMatchObject({ matchId: 'other' });
     expect(firstSignal.aborted).toBe(true);
     release(Response.json(fixture));
     expect(await pending).toBeNull();
-    expect(await connection.getStats('other')).toMatchObject({ matchId: 'other' });
+    expect(await connection.getStats(target('other'))).toMatchObject({ matchId: 'other' });
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
