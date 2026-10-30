@@ -94,3 +94,28 @@ jobs:
           elapsed=$(( $(date -u +%s) - $(date -u -d "$created" +%s) ))
           echo "CI created to gate: ${elapsed}s"
           test "$BUILD" = success && test "$QUALITY" = success && test "$NATIVE" = success && test "$elapsed" -le 180
+  temporary-release-benchmark:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'codex/release-latency'
+    runs-on: windows-2025
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/cargo-cache
+        with:
+          profile: release
+      - name: Compare release LTO with locally built binaries only
+        shell: pwsh
+        run: |
+          Write-Host "BENCH_SOURCE $(git rev-parse HEAD)"
+          foreach ($mode in @('off', 'thin', 'off')) {
+            if ($mode -eq 'off') { $env:CARGO_PROFILE_RELEASE_LTO = 'false' }
+            else { Remove-Item Env:CARGO_PROFILE_RELEASE_LTO -ErrorAction SilentlyContinue }
+            $watch = [Diagnostics.Stopwatch]::StartNew()
+            cargo build --locked --profile release --manifest-path apps/desktop/src-tauri/Cargo.toml
+            if ($LASTEXITCODE -ne 0) { throw "Cargo benchmark failed: $mode" }
+            $watch.Stop()
+            $exe = 'apps/desktop/src-tauri/target/release/mizar-desktop.exe'
+            $version = & $exe --app-version
+            if ($LASTEXITCODE -ne 0) { throw "Version check failed: $mode" }
+            Write-Host "BENCH_RESULT lto=$mode seconds=$($watch.Elapsed.TotalSeconds) bytes=$((Get-Item $exe).Length) version=$version"
+          }

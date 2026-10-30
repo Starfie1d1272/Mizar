@@ -533,6 +533,7 @@ export class BoxClient {
     const url = this.temporaryUrl(await this.api('upload-link', path, 'GET', undefined, signal));
     url.searchParams.set('ret-json', '1');
     for (let start = 0; start < bytes.length; start += chunkSize) {
+      requireValue(Date.now() < deadline, '分块上传预算已用完；保留暂存目录');
       const end = Math.min(start + chunkSize, bytes.length);
       console.log(`Box 分块 ${start}-${end - 1}/${bytes.length}`);
       const form = new FormData();
@@ -541,6 +542,7 @@ export class BoxClient {
       form.set('file', new Blob([bytes.subarray(start, end)]), name);
       let response;
       for (let attempt = 0; ; attempt++) {
+        requireValue(Date.now() < deadline, '分块上传预算已用完；保留暂存目录');
         signal.throwIfAborted();
         try {
           response = await checkedFetch(

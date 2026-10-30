@@ -2,9 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
 import { URL } from 'node:url';
+import { createServer } from 'node:net';
 import { BoxClient } from './box-sync.mjs';
+import { curlMultipartUpload } from './box-curl-upload.mjs';
 
-const { Response } = globalThis;
+const { AbortSignal, Blob, FormData, Response } = globalThis;
 
 function client(transport) {
   const box = new BoxClient('test-token', transport);
@@ -58,4 +60,47 @@ test('zero-byte retries stop after three attempts', async () => {
     retrySafeUpload: true,
   });
   assert.equal(calls, 3);
+});
+
+test('upload link and all chunks share the 180-second deadline', async (t) => {
+  let now = 1000;
+  t.mock.method(Date, 'now', () => now);
+  const ranges = [];
+  const box = client(async (_url, options) => {
+    ranges.push(options.headers['Content-Range']);
+    now += 179000;
+    return Response.json({ success: true });
+  });
+  box.api = async () => {
+    now += 1000;
+    return 'https://box.example/upload';
+  };
+  await assert.rejects(
+    box.uploadChunks('/Archive/test', 'payload', Buffer.from('abcd'), 2),
+    /预算已用完/,
+  );
+  assert.deepEqual(ranges, ['bytes 0-1/4']);
+});
+
+test('real curl TLS failure reports zero sent bytes as safe to retry', async () => {
+  const server = createServer((socket) => socket.destroy());
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  try {
+    const form = new FormData();
+    form.set('file', new Blob(['local']), 'local');
+    await assert.rejects(
+      curlMultipartUpload(`https://127.0.0.1:${server.address().port}/`, {
+        body: form,
+        signal: AbortSignal.timeout(5000),
+      }),
+      { code: 'BOX_CURL_FAILED', retrySafeUpload: true },
+    );
+  } finally {
+    await new Promise((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
 });
