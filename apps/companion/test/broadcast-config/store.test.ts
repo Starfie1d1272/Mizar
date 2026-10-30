@@ -9,7 +9,7 @@ import Fastify from 'fastify';
 import { createLocalWebOriginPolicy } from '../../src/local-web/origin-policy.js';
 import { registerBroadcastConfigRoutes } from '../../src/broadcast-config/routes.js';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -22,7 +22,6 @@ import {
 import {
   clonePreset,
   type BroadcastConfigDocument,
-  type ModuleRecord,
   type ProgramVisualConfigV1,
 } from '@mizar/broadcast-config';
 import { BroadcastConfigStore } from '../../src/broadcast-config/store.js';

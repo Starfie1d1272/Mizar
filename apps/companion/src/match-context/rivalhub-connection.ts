@@ -12,7 +12,8 @@ import {
   validateBroadcastScheduleWindow,
   validateBroadcastManifest,
 } from '@mizar/rivalhub';
-import { createOnlineManifestSource } from './http-source.js';
+import { createOnlineManifestSource, readOnlineManifestResponse } from './http-source.js';
+import { broadcastStatsSchema, type BroadcastStats } from '@mizar/protocol/broadcast-stats';
 import { redactDiagnosticText, diagnosticNetworkCode } from '../updates/diagnostics.js';
 import {
   RELIABLE_SEND_TIMEOUT_MS,
@@ -271,11 +272,92 @@ export class RivalHubConnection {
       : null;
   }
   private invalidateReadScope() {
+    this.statsScope = null;
     this.scheduleCache = null;
     this.scheduleWarning = null;
     this.browsingLibrary = null;
     this.manifestScope?.abort.abort();
     this.manifestScope = null;
+  }
+  private statsScope: {
+    installation: Installation;
+    matchId: string;
+    value: BroadcastStats | null;
+    etag: string | null;
+    pending: Promise<BroadcastStats | null> | null;
+    attempted: boolean;
+    fetchedAt: string | null;
+  } | null = null;
+
+  /** Low-frequency, installation-scoped broadcast data; never part of gameplay. */
+  async stats(matchId: string, refresh = false): Promise<BroadcastStats | null> {
+    const installation = this.installation;
+    if (!installation || !/^[A-Za-z0-9_-]{1,128}$/.test(matchId)) return null;
+    if (this.statsScope?.installation !== installation || this.statsScope.matchId !== matchId)
+      this.statsScope = {
+        installation,
+        matchId,
+        value: null,
+        etag: null,
+        pending: null,
+        attempted: false,
+        fetchedAt: null,
+      };
+    const scope = this.statsScope;
+    if (scope.pending) return scope.pending;
+    if (scope.attempted && !refresh) return scope.value;
+    scope.attempted = true;
+    scope.pending = (async () => {
+      try {
+        const response = await this.request(`stats?matchId=${encodeURIComponent(matchId)}`, {
+          headers: scope.etag ? { 'if-none-match': scope.etag } : {},
+        });
+        if (this.statsScope !== scope || this.installation !== installation) return null;
+        if (response.status === 304 && scope.value) {
+          scope.fetchedAt = new Date().toISOString();
+          return scope.value;
+        }
+        if (response.status === 401 || response.status === 403) {
+          scope.value = null;
+          scope.etag = null;
+          scope.fetchedAt = null;
+          return null;
+        }
+        if (!response.ok) return null;
+        const parsed = broadcastStatsSchema.safeParse(await readOnlineManifestResponse(response));
+        if (this.statsScope !== scope || this.installation !== installation) return null;
+        if (
+          !parsed.success ||
+          parsed.data.matchId !== matchId ||
+          parsed.data.competitionId !== installation.competitionId
+        )
+          return null;
+        scope.value = parsed.data;
+        scope.etag = response.headers.get('etag');
+        scope.fetchedAt = new Date().toISOString();
+        return scope.value;
+      } catch {
+        return null;
+      }
+    })().finally(() => {
+      scope.pending = null;
+    });
+    return scope.pending;
+  }
+  clearStats(): void {
+    this.statsScope = null;
+  }
+  statsFetchedAt(matchId: string): string | null {
+    return this.statsScope?.installation === this.installation &&
+      this.statsScope.matchId === matchId
+      ? this.statsScope.fetchedAt
+      : null;
+  }
+  async getStats(matchId: string): Promise<BroadcastStats | null> {
+    const scope = this.statsScope;
+    if (!scope || scope.installation !== this.installation || scope.matchId !== matchId)
+      return null;
+    return scope.value ?? (scope.pending ? await scope.pending : null);
   }
   private installation: Installation | null = null;
   private pendingPairing: PendingPairing | null = null;

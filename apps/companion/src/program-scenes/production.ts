@@ -15,6 +15,7 @@ export function registerProductionRoutes(
     beforeEnter?: () => void;
     waitForBroadcast?: () => Promise<void>;
     onEnter?: () => void;
+    onFinish?: () => void;
     beforeFinish?: () => void;
     finishTrial?: () => Promise<void>;
   },
@@ -82,6 +83,7 @@ export function registerProductionRoutes(
         stage = 'production_release';
         await options.release();
         mode = 'preparation';
+        options.onFinish?.();
       }
       committed = true;
       revision = randomUUID();

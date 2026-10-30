@@ -71,6 +71,8 @@ export const programSceneStateSchema = z.object({
       // A target admitted by the Director timing gates; manual hold still prevents execution.
       readyToTake: programSceneIdSchema.nullable().optional(),
       reason: z.string().nullable(),
+      // Telemetry is unavailable, with no conflicting context or identity.
+      blockCause: z.enum(['telemetry']).nullable().optional(),
       warmupScene: z.enum(['waiting', 'gameplay']).optional(),
       introDurationMs: z.number().nonnegative(),
       sceneElapsedMs: z.number().nonnegative(),

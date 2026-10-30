@@ -46,7 +46,7 @@ export function registerRivalHubConnectionRoutes(
     checkLocalWebOrigin(options.originPolicy, origin).allowed;
   let lastRefreshAt: string | null = null;
   let refreshError: string | null = null;
-  let refreshing: Promise<unknown> | null = null;
+  let refreshing: Promise<{ ok: boolean; pending: boolean; message: string }> | null = null;
   const linkedBinding = () => {
     const binding = options.controller?.getActiveBinding();
     return binding &&
@@ -56,6 +56,20 @@ export function registerRivalHubConnectionRoutes(
       ? binding
       : undefined;
   };
+  app.post('/operator/rivalhub/stats/refresh', { bodyLimit: 64 }, async (request, reply) => {
+    if (!allowed(request.headers.origin))
+      return reply.code(403).send({ message: '本机页面来源无效。' });
+    const binding = linkedBinding();
+    if (!binding) return reply.code(409).send({ message: '请先加载网站比赛资料。' });
+    const value = await options.connection.stats(binding.context.matchId, true);
+    if (!value || linkedBinding()?.context.matchId !== binding.context.matchId) {
+      const retained = await options.connection.getStats(binding.context.matchId);
+      return reply.code(502).send({
+        message: retained ? '统计刷新失败，保留本场已有快照。' : '统计刷新失败，当前没有可用快照。',
+      });
+    }
+    return { ok: true };
+  });
   const sourceFor = (matchId: string, fresh = true) => {
     const source = options.connection.matchSource(matchId, fresh);
     return {

@@ -4,6 +4,8 @@ import { switchToRivalhubBp, useBpWorkspace } from '../bp/client';
 import { Button, Panel, StatusBanner, StatusPill } from '../ui/primitives';
 import { openRivalHubAuthorization } from '../preparation/client';
 import { RivalHubSyncControls } from './RivalHubSyncControls';
+import { broadcastStatsSchema } from '@mizar/protocol/broadcast-stats';
+import { statsInserts } from '../program/stats-inserts';
 
 type Connection = {
   paired: boolean;
@@ -36,6 +38,31 @@ export function RivalHubPreparationPanel({
   const [confirming, setConfirming] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [statsSummary, setStatsSummary] = useState<{
+    fetchedAt: string | null;
+    cards: number;
+  } | null>(null);
+  const [statsRefreshing, setStatsRefreshing] = useState(false);
+  const readStats = useCallback(async () => {
+    const [status, snapshot] = await Promise.all([
+      fetch('/local/v1/broadcast-stats-status', { cache: 'no-store' }),
+      fetch('/local/v1/broadcast-stats', { cache: 'no-store' }),
+    ]);
+    const meta = status.ok
+      ? ((await status.json()) as { fetchedAt: string | null })
+      : { fetchedAt: null };
+    const parsed = broadcastStatsSchema.safeParse(snapshot.ok ? await snapshot.json() : null);
+    setStatsSummary({
+      fetchedAt: meta.fetchedAt,
+      cards: parsed.success ? statsInserts(parsed.data).length : 0,
+    });
+  }, []);
+  useEffect(() => {
+    if (mode !== 'settings' || !connection?.paired) return;
+    queueMicrotask(() => void readStats().catch(() => setStatsSummary(null)));
+    const timer = setInterval(() => void readStats().catch(() => setStatsSummary(null)), 10_000);
+    return () => clearInterval(timer);
+  }, [mode, connection?.paired, readStats]);
 
   const { workspace: bpWorkspace } = useBpWorkspace();
 
@@ -284,6 +311,35 @@ export function RivalHubPreparationPanel({
                 </Button>
               </div>
               <RivalHubSyncControls />
+              <div className="preparation-actions">
+                <span>
+                  本场统计：
+                  {statsSummary?.fetchedAt
+                    ? `${new Date(statsSummary.fetchedAt).toLocaleString()} · ${statsSummary.cards} 张可用`
+                    : '暂无快照'}
+                </span>
+                <Button
+                  disabled={statsRefreshing || !connection.activeMatchId}
+                  loading={statsRefreshing}
+                  onClick={() => {
+                    setStatsRefreshing(true);
+                    setError(null);
+                    void fetch('/operator/rivalhub/stats/refresh', { method: 'POST' })
+                      .then(async (response) => {
+                        if (!response.ok)
+                          throw new Error(
+                            ((await response.json()) as { message?: string }).message ??
+                              '统计刷新失败。',
+                          );
+                        await readStats();
+                      })
+                      .catch((reason: Error) => setError(reason.message))
+                      .finally(() => setStatsRefreshing(false));
+                  }}
+                >
+                  刷新统计
+                </Button>
+              </div>
               <details>
                 <summary>连接管理</summary>
                 <div className="preparation-actions">

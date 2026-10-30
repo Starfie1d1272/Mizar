@@ -95,7 +95,7 @@ test('previews each saved scene without applying the scheme or requiring tools',
     ['map_result', '.program-scene--map_result'],
     ['intermap', '.program-scene--intermap'],
     ['match_result', '.program-scene--match_result'],
-  ]) {
+  ] as const) {
     await scene.selectOption(id);
     await expect(frame.locator(selector)).toBeVisible();
     if (id === 'waiting') {
@@ -106,7 +106,7 @@ test('previews each saved scene without applying the scheme or requiring tools',
 });
 
 test('previews a HUD or scene independently when the other module is missing', async ({ page }) => {
-  let modules = view.modules.filter((module) => module.kind === 'hud');
+  let modules: unknown[] = view.modules.filter((module) => module.kind === 'hud');
   await page.route('**/local/v1/broadcast-presets', (route) =>
     route.fulfill({ json: { ...view, modules } }),
   );
