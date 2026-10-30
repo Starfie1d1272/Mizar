@@ -162,6 +162,7 @@ export class ObsAdapter {
           this.expectedScene = undefined;
           this.expectedCollection = undefined;
           this.programGeneration++;
+          this.recoveryPrepared = false;
           this.programChanged();
           return;
         }
@@ -178,6 +179,7 @@ export class ObsAdapter {
           return;
         }
         this.programGeneration++;
+        this.recoveryPrepared = false;
         this.programChanged();
       },
     );
@@ -259,8 +261,13 @@ export class ObsAdapter {
     const attempt = () => {
       if (this.recoveryClosed || this.recoveryPaused) return;
       const generation = this.recoveryGeneration;
+      const programGeneration = this.programGeneration;
       const valid = () =>
-        !this.recoveryClosed && !this.recoveryPaused && generation === this.recoveryGeneration;
+        !this.recoveryClosed &&
+        !this.recoveryPaused &&
+        this.recoveryPrepared &&
+        generation === this.recoveryGeneration &&
+        programGeneration === this.programGeneration;
       this.recoveryTimer = undefined;
       this.recoveryTask = this.serial(() =>
         this.withObs((obs) =>
@@ -272,7 +279,7 @@ export class ObsAdapter {
         ),
       )
         .then((complete) => {
-          this.recoveryComplete = complete;
+          if (valid()) this.recoveryComplete = complete;
         })
         .catch(() => undefined)
         .finally(() => {
@@ -309,18 +316,21 @@ export class ObsAdapter {
     const attempt = () => {
       if (this.recoveryClosed || this.recoveryPaused) return;
       const generation = this.recoveryGeneration;
+      const programGeneration = this.programGeneration;
       const valid = () =>
         !this.recoveryClosed &&
         !this.recoveryPaused &&
         generation === this.recoveryGeneration &&
+        programGeneration === this.programGeneration &&
         mayPrepare();
       this.commentaryTimer = undefined;
       this.commentaryTask = (async () => {
         if (music && this.audioRouting) {
           try {
-            await this.recoverAudioMode(music);
             if (!valid()) return;
-            await this.queueIndependentCommentary();
+            await this.recoverAudioMode(music, valid);
+            if (!valid()) return;
+            await this.queueIndependentCommentary(valid);
             if (!valid()) return;
             const ready = await this.prepareWaitingIndependent(valid);
             if (valid() && ready && gameAudio)
@@ -379,6 +389,7 @@ export class ObsAdapter {
       MusicDirector,
       'withAudioModeRecovery' | 'commitDesktopMonitorOriginals' | 'monitorPlanCompatible'
     >,
+    valid: () => boolean = () => true,
   ): Promise<void> {
     if (!this.audioRouting || !this.commentary) return;
     const state = await this.audioRouting.modeRecoveryState();
@@ -388,7 +399,13 @@ export class ObsAdapter {
     await this.configurationMutation(() =>
       this.audioConfiguration.run((obs, endpoint, observer) =>
         music.withAudioModeRecovery(() =>
-          this.recoverAudioModeOnConnection(obs, endpoint, observer, music),
+          this.recoverAudioModeOnConnection(
+            guardedObs(obs, valid),
+            endpoint,
+            observer,
+            music,
+            valid,
+          ),
         ),
       ),
     );
@@ -398,6 +415,7 @@ export class ObsAdapter {
     endpoint: string,
     observer: MigrationObserver,
     music: Pick<MusicDirector, 'commitDesktopMonitorOriginals' | 'monitorPlanCompatible'>,
+    valid: () => boolean = () => true,
   ) {
     const routing = this.audioRouting!;
     const state = await routing.modeRecoveryState();
@@ -507,7 +525,7 @@ export class ObsAdapter {
         ))
       )
         throw new Error('audio_mode_target_changed');
-      if (changed) throw new Error('audio_migration_external_change');
+      if (changed || !valid()) throw new Error('audio_migration_external_change');
       await routing.commitModeTransition(transition.id, side);
     } finally {
       stop();
@@ -838,7 +856,7 @@ export class ObsAdapter {
     );
     return { waiting: false, ...result };
   }
-  private async queueIndependentCommentary(): Promise<void> {
+  private async queueIndependentCommentary(valid: () => boolean = () => true): Promise<void> {
     if (!this.audioRouting || !this.commentary) return;
     const initial = await this.audioRouting.modeRecoveryState();
     if (
@@ -855,7 +873,8 @@ export class ObsAdapter {
     )
       return;
     await this.configurationMutation(() =>
-      this.audioConfiguration.run(async (obs, endpoint) => {
+      this.audioConfiguration.run(async (connection, endpoint) => {
+        const obs = guardedObs(connection, valid);
         const current = await this.audioRouting!.modeRecoveryState();
         if (
           current.revision !== initial.revision ||
@@ -868,6 +887,7 @@ export class ObsAdapter {
           return;
         const collection = (await obs.call('GetSceneCollectionList')).currentSceneCollectionName;
         if (typeof collection !== 'string') throw new Error('audio_setup_context_changed');
+        if (!valid()) throw new Error('OBS 准备请求已失效，请重试。');
         await this.audioRouting!.waitForIndependent(
           current.revision,
           endpoint,

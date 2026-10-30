@@ -827,7 +827,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   );
   obsAdapter?.onBpDisconnect(() => sceneController.compactDisconnected());
   obsAdapter?.onProgramChanged(() => {
-    if (production?.get().mode !== 'preparation') sceneController.holdAutomatic();
+    sceneController.holdAutomatic();
   });
   if (options.steamAvatars) {
     options.steamAvatars.onChanged(() => projectionCoordinator.refresh());
