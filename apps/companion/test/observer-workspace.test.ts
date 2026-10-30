@@ -809,6 +809,29 @@ it('enables the managed lease for website names when observer and game automatio
   fixture(async (observer) => {
     const app = Fastify();
     const settings = new ObserverSettingsStore();
+    const sent: string[] = [];
+    class Socket extends EventTarget {
+      static OPEN = 1;
+      readyState = 0;
+      constructor() {
+        super();
+        queueMicrotask(() => {
+          this.readyState = 1;
+          this.dispatchEvent(new Event('open'));
+        });
+      }
+      send(wire: string) {
+        sent.push((JSON.parse(wire) as { payload: string }).payload);
+        queueMicrotask(() =>
+          this.dispatchEvent(new MessageEvent('message', { data: '已投入消息总线' + wire })),
+        );
+      }
+      close() {
+        this.readyState = 3;
+        this.dispatchEvent(new Event('close'));
+      }
+    }
+    vi.stubGlobal('WebSocket', Socket);
     await settings.configure({ ...settings.settings, enabled: false });
     await settings.configureGame({ autoConnect: false, hideGameHud: false });
     const binding = {
@@ -853,7 +876,28 @@ it('enables the managed lease for website names when observer and game automatio
       expect(start.statusCode).toBe(200);
       expect(start.json<{ enabled: boolean }>().enabled).toBe(true);
       expect(observer.view().active).toBe(false);
+      await expect
+        .poll(() => sent.slice(), { timeout: 2500, interval: 50 })
+        .toEqual(['"Name" 76561198000000001']);
+      const revision = settings.revision;
+      await settings.configure({ ...settings.settings, nicknameSource: 'game' });
+      expect(settings.revision).toBe(revision);
+      await expect
+        .poll(() => sent.slice(), { timeout: 2500, interval: 50 })
+        .toEqual(['"Name" 76561198000000001', '"" 76561198000000001']);
+      const gamePreparation = await app.inject({
+        method: 'POST',
+        url: '/operator/runtime/observer',
+        headers,
+        payload: { action: 'prepare', game: 'game', job: 'job', useMulnx: true },
+      });
+      expect(gamePreparation.json<{ enabled: boolean }>().enabled).toBe(false);
+      await settings.configure({ ...settings.settings, nicknameSource: 'website' });
+      await expect
+        .poll(() => sent.slice(), { timeout: 2500, interval: 50 })
+        .toEqual(['"Name" 76561198000000001', '"" 76561198000000001', '"Name" 76561198000000001']);
     } finally {
       await app.close();
+      vi.unstubAllGlobals();
     }
   }));

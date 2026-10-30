@@ -41,11 +41,13 @@ export const assistPayloadSchema = z.object({
 
 export const observerSettingsSchema = z.strictObject({
   enabled: z.boolean(),
+  nicknameSource: z.enum(['game', 'website']).default('website'),
   leadSeconds: z.number().int().min(1).max(30),
 });
 export type ObserverSettings = z.infer<typeof observerSettingsSchema>;
 export const DEFAULT_OBSERVER_SETTINGS: ObserverSettings = {
   enabled: true,
+  nicknameSource: 'website',
   leadSeconds: 5,
 };
 

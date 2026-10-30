@@ -420,7 +420,10 @@ export function registerWorkspaceObserver(
     performance.now() - hostLease <= 6000;
   const names = new MatchNameSync(() => ({
     session: leased() && host?.useMulnx ? JSON.stringify([host.game, host.job]) : null,
-    names: canStart() ? matchNames(binding?.()) : new Map<string, string>(),
+    names:
+      canStart() && settings?.settings.nicknameSource !== 'game'
+        ? matchNames(binding?.())
+        : new Map<string, string>(),
   }));
   const namesTimer = setInterval(() => {
     void names.tick().catch(() => app.log.error({ stage: 'match_names' }, '游戏昵称同步失败'));
@@ -468,7 +471,7 @@ export function registerWorkspaceObserver(
   };
   const unsubscribe = settings?.subscribe((kind) => {
     if (kind === 'game' && !settings.gameAutomation.hideGameHud) hiddenGame = '';
-    if (kind === 'lead' || kind === 'game') return;
+    if (kind === 'lead' || kind === 'name' || kind === 'game') return;
     const attempt = ++epoch;
     if (kind === 'map')
       seamlessGame = settings.mapConnection?.mode === 'seamless' && host ? keys(host).game : '';
@@ -575,7 +578,9 @@ export function registerWorkspaceObserver(
           !settings ||
           !(
             settings.settings.enabled ||
-            (body.useMulnx && matchNames(binding?.()).size > 0) ||
+            (body.useMulnx &&
+              settings.settings.nicknameSource === 'website' &&
+              matchNames(binding?.()).size > 0) ||
             (gameControl &&
               (gameControl.autoConnect || (!body.nativeHudToggle && gameControl.hideGameHud)))
           )

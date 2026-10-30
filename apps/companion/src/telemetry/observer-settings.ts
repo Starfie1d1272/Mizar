@@ -16,7 +16,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 
-type SettingsChange = 'lead' | 'enabled' | 'game' | 'connection' | 'map';
+type SettingsChange = 'lead' | 'name' | 'enabled' | 'game' | 'connection' | 'map';
 
 /** Persist operator preferences; the current match's credentials stay in memory. */
 export class ObserverSettingsStore {
@@ -78,9 +78,16 @@ export class ObserverSettingsStore {
       if (JSON.stringify(this.settings) === JSON.stringify(value)) return;
       if (this.path)
         await atomicJson(this.path, { settings: value, gameAutomation: this.gameAutomation });
-      const kind = this.settings.enabled !== value.enabled ? 'enabled' : 'lead';
+      const nameChanged = this.settings.nicknameSource !== value.nicknameSource;
+      const kind =
+        this.settings.enabled !== value.enabled
+          ? 'enabled'
+          : this.settings.leadSeconds !== value.leadSeconds
+            ? 'lead'
+            : undefined;
       this.settings = value;
-      this.changed(kind);
+      if (nameChanged) this.changed('name');
+      if (kind) this.changed(kind);
     });
     this.writing = next.catch(() => {});
     return next;
@@ -148,7 +155,7 @@ export class ObserverSettingsStore {
   }
   private changed(kind: SettingsChange) {
     // Timing preferences affect projection calculation, never Host preparation.
-    if (kind !== 'lead') this.revision = randomUUID();
+    if (kind !== 'lead' && kind !== 'name') this.revision = randomUUID();
     this.listeners.forEach((f) => f(kind));
   }
 }
