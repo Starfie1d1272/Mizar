@@ -1298,6 +1298,7 @@ async fn finish_workspace(
         command_log.with_task(native_task_id.as_deref(), native_operation_id.as_deref(), native_trigger.as_deref(), || {
         let feedback = host.state::<production_exit::WorkspaceExit>();
         let log = host.state::<DesktopLog>();
+        production_exit::set_exit_intent(&log, "begin-exit")?;
         let managed = host.state::<Mutex<managed_cs2::ManagedCs2>>();
         let mut cs2 = log.step("workspace_exit_lock", || managed.lock().map_err(|error| command_log.preserve_error("finish_workspace", native_operation_id.as_deref(), &error, "CS2 配置状态不可用。")))?;
         let activity = host.state::<cs2_activity::Activity>();
@@ -1362,6 +1363,10 @@ async fn finish_workspace(
         );
         Err("退出任务中断，收尾结果待确认。请重试退出；再次失败时导出诊断。".into())
     });
+    let intent_host = app.clone();
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        production_exit::set_exit_intent(&intent_host.state::<DesktopLog>(), "cancel-exit")
+    }).await;
     if let Err(error) = &result {
         app.state::<DesktopLog>().event(
             "production_finish",
@@ -3965,6 +3970,15 @@ fn run_desktop(
             tauri::async_runtime::spawn(async move {
                 let cleanup_host = host.clone();
                 let result = tauri::async_runtime::spawn_blocking(move || {
+                    if !cleanup_host
+                        .state::<production_exit::VerifiedStop>()
+                        .complete()
+                    {
+                        production_exit::set_exit_intent(
+                            &cleanup_host.state::<DesktopLog>(),
+                            "begin-exit",
+                        )?;
+                    }
                     // The gate is already closed; wait for an accepted launch,
                     // then keep its lock through safe production and game cleanup.
                     let state = cleanup_host.state::<Mutex<managed_cs2::ManagedCs2>>();
@@ -4014,6 +4028,16 @@ fn run_desktop(
                 .await
                 .unwrap_or_else(|_| Err("退出收尾未完成，请重试。".into()));
                 if let Err(error) = result {
+                    if !host.state::<production_exit::VerifiedStop>().complete() {
+                        let intent_host = host.clone();
+                        let _ = tauri::async_runtime::spawn_blocking(move || {
+                            production_exit::set_exit_intent(
+                                &intent_host.state::<DesktopLog>(),
+                                "cancel-exit",
+                            )
+                        })
+                        .await;
+                    }
                     updates::cancel(&host);
                     host.state::<DesktopLog>()
                         .event("cs2_exit_recovery", "failure", Some(&error));

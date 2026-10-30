@@ -4,6 +4,7 @@ import type { Cs2ConfigStatus } from './cs2-status';
 import type { DemoTestView } from './demo-test';
 import { useEffect, useState } from 'react';
 import { desktopInvoke } from '../workspace/client';
+import { prepareObs } from '../workspace/obs-preparation';
 
 export function useLocalReadWithTime<T>(path: string | null, interval = 2000, refresh = 0) {
   const [value, setValue] = useState<{ value: T | null; updatedAt: number | null }>({
@@ -137,7 +138,11 @@ export interface Production {
   revision: string;
   canEnter: boolean;
 }
-export async function checkObsBeforeLaunch(requireStoppedOutput = false, task?: ControlTask) {
+export async function checkObsBeforeLaunch(
+  requireStoppedOutput = false,
+  task?: ControlTask,
+  entry?: { revision: string; signal: AbortSignal },
+) {
   // Installation is checkable before launch; fresh telemetry is not.
   if (window.__TAURI_INTERNALS__) {
     const gsi = await desktopInvoke<{ installed: boolean; conflict: boolean }>(
@@ -151,21 +156,28 @@ export async function checkObsBeforeLaunch(requireStoppedOutput = false, task?: 
     }
   }
   // A fresh UI readiness check; Companion still owns the production lifecycle.
-  const obs = await fetch('/local/v1/obs', {
-    headers: task?.headers() ?? {},
-    cache: 'no-store',
-    signal: AbortSignal.timeout(6000),
-  })
-    .then(async (response) =>
-      response.ok
-        ? ((await response.json()) as {
-            connection: string;
-            findings: readonly unknown[];
-            streaming?: boolean;
-          })
-        : null,
-    )
-    .catch(() => null);
+  const readObs = () =>
+    fetch('/local/v1/obs', {
+      headers: task?.headers() ?? {},
+      cache: 'no-store',
+      signal: AbortSignal.timeout(6000),
+    })
+      .then(async (response) =>
+        response.ok
+          ? ((await response.json()) as {
+              connection: string;
+              findings: readonly unknown[];
+              streaming?: boolean;
+              recording?: boolean;
+            })
+          : null,
+      )
+      .catch(() => null);
+  let obs = await readObs();
+  if (entry && obs?.connection === 'connected' && !obs.streaming && !obs.recording) {
+    await prepareObs(entry.revision, entry.signal);
+    obs = await readObs();
+  }
   if (obs?.connection !== 'connected' || obs.findings.length > 0) {
     window.location.assign('/settings?tab=obs&prepare=1');
     return false;
@@ -377,7 +389,14 @@ async function performProductionAction(
       return;
     }
   }
-  if (action === 'enter' && !(await checkObsBeforeLaunch(false, task))) {
+  if (
+    action === 'enter' &&
+    !(await checkObsBeforeLaunch(
+      false,
+      task,
+      state.mode === 'preparation' ? { revision: state.revision, signal: entrySignal } : undefined,
+    ))
+  ) {
     task.finish('blocked', { reason: 'preflight_requires_attention' });
     return;
   }

@@ -30,6 +30,7 @@ export class ProgramSceneController {
     this.updatePending = pending;
   }
   private director: ProgramDirector | undefined;
+  private controlGeneration = 0;
   attachDirector(director: ProgramDirector): void {
     this.director = director;
   }
@@ -41,6 +42,11 @@ export class ProgramSceneController {
     return true;
   }
   cancelAutomatic(): void {
+    this.automaticSwitch?.abort();
+  }
+  holdAutomatic(): void {
+    this.controlGeneration++;
+    this.director?.hold();
     this.automaticSwitch?.abort();
   }
   setWarmupScene(scene: 'waiting' | 'gameplay', expectedRevision: string): boolean {
@@ -75,7 +81,7 @@ export class ProgramSceneController {
       options: ObsSceneSwitchOptions,
     ) => Promise<void>,
     private readonly switchObsForExit?: (options: ObsSceneSwitchOptions) => Promise<void>,
-    private readonly switchBpCompact?: (visible: boolean) => Promise<void>,
+    private readonly switchBpCompact?: (visible: boolean, valid?: () => boolean) => Promise<void>,
     private readonly bpPresentationMode: () => 'full' | 'compact' = () => 'full',
     private readonly gameBackgroundReady: () => Promise<boolean> = () => Promise.resolve(false),
   ) {}
@@ -159,8 +165,7 @@ export class ProgramSceneController {
   }
 
   forceScene(id: ProgramSceneId): void {
-    this.automaticSwitch?.abort();
-    this.director?.hold();
+    this.holdAutomatic();
     if (this.resourceActivationPending) {
       this.deferredResourceScene = id;
       return;
@@ -189,8 +194,7 @@ export class ProgramSceneController {
 
   select(id: ProgramSceneId, expectedRevision: string) {
     if (expectedRevision === this.revision) {
-      this.director?.hold();
-      this.automaticSwitch?.abort();
+      this.holdAutomatic();
     }
     const result = this.queue.then(() => this.selectSerial(id, expectedRevision));
     this.queue = result.catch(() => undefined);
@@ -270,8 +274,7 @@ export class ProgramSceneController {
 
   /** Exit has its own OBS safety proof; manual Takes still always verify OBS. */
   selectWaitingForExit(expectedRevision: string) {
-    this.director?.hold();
-    this.automaticSwitch?.abort();
+    this.holdAutomatic();
     const result = this.queue.then(() =>
       this.selectSerial('waiting', expectedRevision, undefined, false, true),
     );
@@ -297,6 +300,7 @@ export class ProgramSceneController {
     finalBp = false,
     exiting = false,
   ) {
+    const controlGeneration = this.controlGeneration;
     const switchObs =
       exiting && this.switchObsForExit
         ? async (target: ProgramSceneId, options: ObsSceneSwitchOptions) =>
@@ -314,6 +318,7 @@ export class ProgramSceneController {
       // A manual Take also restores OBS after an external scene change or reconnect.
       // Preserve presentation identity (including BP / matchup) on the same scene.
       const restoreCurrent = async () => {
+        if (controlGeneration !== this.controlGeneration) return;
         const target = this.active;
         const revision = this.revision;
         if (target !== id)
@@ -411,6 +416,12 @@ export class ProgramSceneController {
       const nextRevision = randomUUID();
       let preparedBpRevision: string | undefined;
       const rollback = async () => {
+        if (controlGeneration !== this.controlGeneration) {
+          if (this.bpCompact !== 'off' || this.compactPreparing) this.bpCompact = 'unknown';
+          if (preparedBpRevision && this.bpSession.get().revision === preparedBpRevision)
+            this.bpSession.finishSceneExit();
+          return;
+        }
         if (this.bpCompact === 'on') {
           try {
             await this.switchBpCompact?.(false);
@@ -467,11 +478,12 @@ export class ProgramSceneController {
             try {
               await switchObs('gameplay', options);
               this.compactPreparing = true;
-              await this.switchBpCompact(true);
+              await this.switchBpCompact(true, options.valid);
               this.bpCompact = 'on';
               this.bpCompactTarget = 'managed';
               compactTaken = true;
-            } catch {
+            } catch (error) {
+              if (controlGeneration !== this.controlGeneration) throw error;
               try {
                 await this.switchBpCompact(false);
                 this.bpCompact = 'off';
@@ -528,6 +540,7 @@ export function registerProgramSceneRoutes(
   options: {
     readonly originPolicy: LocalWebOriginPolicy;
     readonly controller: ProgramSceneController;
+    readonly canControl?: () => boolean;
   },
 ) {
   app.get('/local/v1/program-scenes', (_request, reply) =>
@@ -539,6 +552,8 @@ export function registerProgramSceneRoutes(
       !checkLocalWebOrigin(options.originPolicy, request.headers.origin).allowed
     )
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    if (options.canControl?.() === false)
+      return reply.code(409).send({ message: '制作正在收尾，请等待结果。' });
     const body = request.body as Record<string, unknown> | null;
     if (
       body?.action === 'warmup' &&
@@ -560,6 +575,8 @@ export function registerProgramSceneRoutes(
       !checkLocalWebOrigin(options.originPolicy, request.headers.origin).allowed
     )
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    if (options.canControl?.() === false)
+      return reply.code(409).send({ message: '制作正在收尾，请等待结果。' });
     const body = request.body as Record<string, unknown> | null;
     if (typeof body?.visible !== 'boolean' || typeof body.expectedRevision !== 'string')
       return reply.code(400).send({ error: 'invalid_bp_compact_command' });
@@ -578,6 +595,8 @@ export function registerProgramSceneRoutes(
       !checkLocalWebOrigin(options.originPolicy, request.headers.origin).allowed
     )
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    if (options.canControl?.() === false)
+      return reply.code(409).send({ message: '制作正在收尾，请等待结果。' });
     const body = request.body as Record<string, unknown> | null;
     const scene = programSceneIdSchema.safeParse(body?.sceneId);
     if (!scene.success || typeof body?.expectedRevision !== 'string')

@@ -1,15 +1,11 @@
-import { prepareObs } from '../workspace/obs-preparation';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { desktopInvoke } from '../workspace/client';
-import { readObsConfigurationContext, useObsStatus } from '../workspace/obs-client';
+import { readObsConfigurationContext } from '../workspace/obs-client';
 import { StatusBanner } from '../ui';
 
 /** Preparation owns bounded setup requests; Host and Companion own all configuration. */
 export function AutomaticPreparation({ showGsiMessage = true }: { showGsiMessage?: boolean }) {
-  const obs = useObsStatus();
-  const ensured = useRef<string | null>(null);
   const [gsiMessage, setGsiMessage] = useState('');
-  const [obsMessage, setObsMessage] = useState('');
   const [configurationMessage, setConfigurationMessage] = useState('');
   useEffect(() => {
     if (!window.__TAURI_INTERNALS__) return;
@@ -53,33 +49,12 @@ export function AutomaticPreparation({ showGsiMessage = true }: { showGsiMessage
       window.removeEventListener('mizar:gsi-configured', configured);
     };
   }, []);
-  useEffect(() => {
-    if (obs === null || obs.connection !== 'connected') {
-      ensured.current = null;
-      return;
-    }
-    if (obs.streaming || obs.recording) {
-      ensured.current = null;
-      return;
-    }
-    // Findings are results of ensure/check, not a new setup intent. Including them
-    // feeds the configured event back into ensure and can starve trial entry.
-    const signature = JSON.stringify(obs.video);
-    if (ensured.current === signature) return;
-    ensured.current = signature;
-    void prepareObs()
-      .then(() => setObsMessage(''))
-      .catch(() => setObsMessage('OBS 自动配置未完成，请在 OBS 设置中查看原因并重试。'));
-  }, [obs]);
   return (
     <>
       {configurationMessage ? (
         <StatusBanner tone="info">{configurationMessage}</StatusBanner>
       ) : null}
       {gsiMessage && showGsiMessage ? <StatusBanner tone="info">{gsiMessage}</StatusBanner> : null}
-      {obsMessage && (obs?.connection !== 'connected' || obs.findings.length > 0) ? (
-        <StatusBanner tone="warning">{obsMessage}</StatusBanner>
-      ) : null}
     </>
   );
 }

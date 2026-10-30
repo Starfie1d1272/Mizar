@@ -20,6 +20,7 @@ export function ObsSettings() {
   const sceneRepairNeeded = obs?.findings.some((item) =>
     [
       'collection_missing',
+      'collection_inactive',
       'scene_missing',
       'source_missing',
       'url_drift',
@@ -29,9 +30,7 @@ export function ObsSettings() {
       'source_disabled',
     ].includes(item.code),
   );
-  const sceneRepairBlocked = obs?.findings.some((item) =>
-    ['collection_inactive', 'source_kind_conflict'].includes(item.code),
-  );
+  const sceneRepairBlocked = obs?.findings.some((item) => item.code === 'source_kind_conflict');
   const [portOverride, setPortOverride] = useState<number | null>(null);
   const port = portOverride ?? obs?.port ?? 4455;
   const [password, setPassword] = useState('');
@@ -154,7 +153,7 @@ export function ObsSettings() {
         </StatusBanner>
       ) : null}
       {connected && outputActive && obs.findings.length > 0 ? (
-        <StatusBanner tone="info">正在直播或录制，自动配置暂缓；停止输出后继续处理。</StatusBanner>
+        <StatusBanner tone="info">正在直播或录制，停止输出后可配置 Mizar 场景。</StatusBanner>
       ) : null}
       <div className="obs-settings-columns">
         <div className="obs-settings-column">
@@ -359,11 +358,11 @@ export function ObsSettings() {
                       {(obs.streaming || obs.recording) && obs.findings.length > 0
                         ? 'OBS 正在输出，当前配置问题请在停止推流与录制后处理。'
                         : obs.findings.some((item) => item.code === 'collection_inactive')
-                          ? '请在 OBS「场景集合」中选择 Mizar，再返回继续检查。'
+                          ? '当前使用其他场景集合。可点击下方按钮配置 Mizar 场景。'
                           : obs.findings.some((item) => item.code === 'source_kind_conflict')
                             ? 'Mizar 来源名称与自定义来源冲突，请先在 OBS 重命名冲突来源。'
                             : sceneRepairNeeded
-                              ? 'Mizar 场景尚未就绪，自动处理后会复查；未完成时可重试。'
+                              ? 'Mizar 场景尚未就绪，可点击下方按钮配置并复查。'
                               : obs.findings.some((item) => item.code === 'video_settings')
                                 ? '请在 OBS「设置 → 视频」将画布和输出设为 1920×1080，常用 FPS 设为 60。返回后自动检查。'
                                 : obs.findings.some((item) => item.code === 'transition_missing')
@@ -385,7 +384,7 @@ export function ObsSettings() {
                         })
                       }
                     >
-                      重试场景自动配置
+                      配置 Mizar 场景
                     </Button>
                   ) : null}
                   {obs.findings.length ? (

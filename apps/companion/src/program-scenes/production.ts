@@ -15,6 +15,7 @@ export function registerProductionRoutes(
     beforeEnter?: () => void;
     onEnter?: () => void;
     beforeFinish?: () => void;
+    beforeExit?: () => void;
     finishTrial?: () => Promise<void>;
   },
 ) {
@@ -24,6 +25,7 @@ export function registerProductionRoutes(
   let shuttingDown = false;
   let updatePending = false;
   let trialPending = false;
+  let preparationGeneration = 0;
   const view = () => ({
     mode,
     revision,
@@ -34,10 +36,26 @@ export function registerProductionRoutes(
   );
   async function change(body: { action?: unknown; expectedRevision?: unknown } | null) {
     if (
+      body?.expectedRevision === revision &&
+      ['finish', 'shutdown', 'begin-exit'].includes(String(body.action))
+    ) {
+      preparationGeneration++;
+      options.scenes.holdAutomatic();
+      options.beforeExit?.();
+    }
+    if (body?.expectedRevision === revision && body.action === 'begin-exit') {
+      shuttingDown = true;
+      return { code: 200, value: view() };
+    }
+    if (body?.expectedRevision === revision && body.action === 'cancel-exit') {
+      shuttingDown = false;
+      return { code: 200, value: view() };
+    }
+    if (
       busy ||
       (trialPending && !['finish', 'shutdown'].includes(String(body?.action))) ||
       (updatePending && body?.action !== 'shutdown') ||
-      (shuttingDown && body?.action !== 'shutdown') ||
+      (shuttingDown && !['shutdown', 'finish'].includes(String(body?.action))) ||
       body?.expectedRevision !== revision
     )
       return { code: 409, value: { message: '制作状态已变化，请刷新后重试。' } };
@@ -115,6 +133,18 @@ export function registerProductionRoutes(
   });
   return {
     get: view,
+    canControl: () => !busy && !shuttingDown,
+    automaticAllowed: () => mode !== 'preparation' && !busy && !shuttingDown,
+    preparationValid: (expectedRevision: unknown) => {
+      const generation = preparationGeneration;
+      return () =>
+        expectedRevision === revision &&
+        generation === preparationGeneration &&
+        !busy &&
+        !shuttingDown &&
+        !updatePending &&
+        !trialPending;
+    },
     configureCameraSession: (expectedRevision: string, commit: () => void) => {
       if (
         expectedRevision !== revision ||

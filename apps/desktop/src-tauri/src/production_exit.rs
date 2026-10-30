@@ -572,6 +572,21 @@ pub fn finish_workspace_production(log: &DesktopLog) -> Result<(), String> {
     finish_production(log, "finish")
 }
 
+pub fn set_exit_intent(log: &DesktopLog, action: &str) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let (status, state) = request(log, "GET", "/local/v1/production", "", deadline)?;
+    if status != 200 {
+        return Err("无法读取制作状态，游戏仍保留。".into());
+    }
+    let revision = state["revision"].as_str().ok_or("制作状态无效。")?;
+    let body = serde_json::json!({"action": action, "expectedRevision": revision}).to_string();
+    let (status, _) = request(log, "POST", "/operator/production", &body, deadline)?;
+    if status != 200 {
+        return Err("无法确认退出准备，请重试。".into());
+    }
+    Ok(())
+}
+
 fn finish_production(log: &DesktopLog, action: &str) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_secs(15);
     for _ in 0..3 {

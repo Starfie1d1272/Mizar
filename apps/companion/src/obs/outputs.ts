@@ -100,6 +100,10 @@ export class ObsOutputController {
   constructor(
     private readonly config: ObsConfigStore,
     private readonly diagnostic: (error: unknown, password: string) => void,
+    private readonly observeProgram: (
+      kind: 'scene' | 'collection' | 'collection-changing' | 'disconnected',
+      name?: string,
+    ) => void = () => undefined,
   ) {}
 
   get busy(): boolean {
@@ -123,6 +127,7 @@ export class ObsOutputController {
     if (client && this.client !== client) return;
     const old = this.client;
     this.client = undefined;
+    if (this.ready) this.observeProgram('disconnected');
     this.ready = false;
     this.generation++;
     this.connecting = undefined;
@@ -184,6 +189,15 @@ export class ObsOutputController {
     client.on('RecordStateChanged', (event) => {
       if (current()) this.event('record', event);
     });
+    client.on('CurrentProgramSceneChanged', (event) => {
+      if (current()) this.observeProgram('scene', event.sceneName);
+    });
+    client.on('CurrentSceneCollectionChanged', (event) => {
+      if (current()) this.observeProgram('collection', event.sceneCollectionName);
+    });
+    client.on('CurrentSceneCollectionChanging', (event) => {
+      if (current()) this.observeProgram('collection-changing', event.sceneCollectionName);
+    });
     client.on('ConnectionClosed', () => {
       if (current()) this.invalidate(client);
     });
@@ -196,7 +210,8 @@ export class ObsOutputController {
         await bounded(
           client
             .connect(`ws://${config.host}:${config.port}`, config.password, {
-              eventSubscriptions: EventSubscription.Outputs,
+              eventSubscriptions:
+                EventSubscription.Outputs | EventSubscription.Scenes | EventSubscription.Config,
             })
             .then(async (result) => {
               if (!current()) await client.disconnect();
@@ -208,6 +223,15 @@ export class ObsOutputController {
           throw new Error('OBS connection superseded');
         }
         await this.refresh(client, generation);
+        if (generation > 0) {
+          await bounded(
+            Promise.all([
+              client.call('GetSceneCollectionList'),
+              client.call('GetCurrentProgramScene'),
+            ]),
+          );
+          this.observeProgram('disconnected');
+        }
         if (!current()) throw new Error('OBS connection superseded');
         this.ready = true;
       } catch (error) {

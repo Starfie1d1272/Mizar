@@ -85,8 +85,9 @@ let opening: Promise<unknown> | null = null;
 export function obsCommand(
   action: ObsAction,
   body: Record<string, unknown> = {},
+  signal?: AbortSignal,
 ): Promise<unknown> {
-  if (action !== 'open') return performObsCommand(action, body);
+  if (action !== 'open') return performObsCommand(action, body, signal);
   opening ??= performObsCommand(action, body).finally(() => {
     opening = null;
   });
@@ -96,19 +97,23 @@ export function obsCommand(
 async function performObsCommand(
   action: ObsAction,
   body: Record<string, unknown> = {},
+  signal?: AbortSignal,
 ): Promise<unknown> {
   const nativeOpen = action === 'open' && Boolean(window.__TAURI_INTERNALS__);
   const response = await fetch(`/operator/obs/${nativeOpen ? 'launch-target' : action}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(
-      action === 'ensure'
-        ? 40_000
-        : ['repair', 'check', 'audio-setup'].includes(action)
-          ? 15_000
-          : 6000,
-    ),
+    signal: AbortSignal.any([
+      ...(signal ? [signal] : []),
+      AbortSignal.timeout(
+        action === 'ensure'
+          ? 40_000
+          : ['repair', 'check', 'audio-setup'].includes(action)
+            ? 15_000
+            : 6000,
+      ),
+    ]),
   });
   const value = (await response.json().catch(() => null)) as {
     message?: string;
