@@ -93,7 +93,26 @@ export class WorkspaceObserver {
   }
   private health() {
     const health = this.current.getHealth();
-    return { ...health, generation: health.generation + this.generationBase };
+    return {
+      ...health,
+      generation: health.generation + this.generationBase,
+      ...(health.roundClock
+        ? {
+            roundClock: {
+              ...health.roundClock,
+              generation: health.roundClock.generation + this.generationBase,
+            },
+          }
+        : {}),
+      ...(health.freezeEnd
+        ? {
+            freezeEnd: {
+              ...health.freezeEnd,
+              generation: health.freezeEnd.generation + this.generationBase,
+            },
+          }
+        : {}),
+    };
   }
   readonly source: CstvSourceManager<'lookahead'>;
 
