@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { parseLiveSnapshotV1, parseReliableEventV1 } from '@mizar/protocol/output';
 import { RivalHubConnection } from '../src/match-context/rivalhub-connection.js';
+import { ReliableOutbox } from '../src/output/reliable-outbox.js';
+import { OutputService } from '../src/output/service.js';
 
 async function setup(t: { after: (fn: () => Promise<void>) => void }) {
   const dir = await mkdtemp(join(tmpdir(), 'mizar-lifecycle-'));
@@ -45,6 +47,9 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
   let liveStatus = 200;
   let reliableStatus = 204;
   let loseClaim = false;
+  let claimRefusal: (() => Response) | undefined;
+  let reliableRequests = 0;
+  let liveRequests = 0;
   let ambiguous = false;
   let staleStatus = false;
   let liveGate: Promise<void> | null = null;
@@ -75,6 +80,7 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
       });
     if (url.pathname.endsWith('/disconnect')) return Response.json({ revoked: true });
     if (url.pathname.endsWith('/claim')) {
+      if (claimRefusal) return claimRefusal();
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       revision++;
       serverClaim = {
@@ -105,8 +111,12 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
               }
             : { status: 'not_found' },
       );
-    if (url.pathname.endsWith('/reliable')) return new Response(null, { status: reliableStatus });
+    if (url.pathname.endsWith('/reliable')) {
+      reliableRequests++;
+      return new Response(null, { status: reliableStatus });
+    }
     if (url.pathname.endsWith('/live')) {
+      liveRequests++;
       if (liveGate) await liveGate;
       return liveStatus === 200
         ? Response.json({ accepted: true })
@@ -142,6 +152,8 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
     path,
     releases,
     claimStarted,
+    reliableRequests: () => reliableRequests,
+    liveRequests: () => liveRequests,
     restart: async () => {
       const restarted = new RivalHubConnection(path, fetcher, 'https://example.com');
       await restarted.load();
@@ -166,13 +178,16 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
     setLose: (v: boolean) => {
       loseClaim = v;
     },
+    setClaimRefusal: (value: (() => Response) | undefined) => {
+      claimRefusal = value;
+    },
     setAmbiguous: (v: boolean) => {
       ambiguous = v;
     },
     setStaleStatus: (v: boolean) => {
       staleStatus = v;
     },
-    setLiveGate: (v: Promise<void>) => {
+    setLiveGate: (v: Promise<void> | null) => {
       liveGate = v;
     },
     setClaimGate: (v: Promise<void>) => {
@@ -183,6 +198,67 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
     },
   };
 }
+
+test('a structured receiver validation refusal clears only the uncommitted intent', async (t) => {
+  const h = await setup(t);
+  h.setClaimRefusal(() =>
+    Response.json(
+      { code: 'VALIDATION_FAILED', error: 'stale context' },
+      {
+        status: 400,
+        headers: { 'cache-control': 'no-store' },
+      },
+    ),
+  );
+  await assert.rejects(h.connection.claim(h.snapshot, 'stale', false));
+  assert.equal(h.connection.view().sourceCleanup.claimIntent, false);
+  h.setClaimRefusal(undefined);
+  await h.connection.claim(h.snapshot, 'fresh', false);
+  await h.connection.release();
+  assert.equal(h.releases.length, 1);
+});
+
+for (const refusal of [
+  () =>
+    Response.json(
+      { code: 'VALIDATION_FAILED', error: 'stale context' },
+      { status: 500, headers: { 'cache-control': 'no-store' } },
+    ),
+  () => Response.json({ code: 'VALIDATION_FAILED', error: 'stale context' }, { status: 400 }),
+  () =>
+    new Response('invalid', {
+      status: 400,
+      headers: { 'cache-control': 'no-store', 'content-type': 'application/json' },
+    }),
+]) {
+  test('an unconfirmed claim error remains durable rather than assuming not_found', async (t) => {
+    const h = await setup(t);
+    h.setClaimRefusal(refusal);
+    await assert.rejects(h.connection.claim(h.snapshot, 'revision', false));
+    assert.equal(h.connection.view().sourceCleanup.claimIntent, true);
+    const restarted = await h.restart();
+    await assert.rejects(restarted.release());
+    assert.equal(restarted.view().sourceCleanup.claimIntent, true);
+  });
+}
+
+test('a failed same-source claim keeps the previous exact authority for release', async (t) => {
+  const h = await setup(t);
+  await h.connection.claim(h.snapshot, 'revision', false);
+  h.setClaimRefusal(() =>
+    Response.json(
+      { code: 'VALIDATION_FAILED', error: 'stale context' },
+      {
+        status: 400,
+        headers: { 'cache-control': 'no-store' },
+      },
+    ),
+  );
+  await assert.rejects(h.connection.claim(h.snapshot, 'stale', false));
+  assert.equal(h.connection.view().sourceCleanup.claimIntent, false);
+  await h.connection.release();
+  assert.equal(h.releases[0]?.authority, '1');
+});
 
 test('LIVE 403 stops delivery but finish releases the exact owned source', async (t) => {
   const h = await setup(t);
@@ -196,6 +272,106 @@ test('LIVE 403 stops delivery but finish releases the exact owned source', async
   ]);
 });
 
+for (const operation of ['finish', 'shutdown', 'pairing', 'switch', 'backoff'] as const) {
+  test(`a LIVE 403 drains the existing outbox during ${operation}`, async (t) => {
+    const h = await setup(t);
+    await h.connection.claim(h.snapshot, 'revision', false);
+    await h.connection.sendReliable(h.event, h.snapshot);
+    h.setLive(403);
+    await assert.rejects(h.connection.sendLive(h.snapshot));
+    const tail = parseReliableEventV1({
+      ...h.event,
+      kind: 'series_ended',
+      payload: { scoreA: 2, scoreB: 0 },
+      observedAt: new Date().toISOString(),
+      idempotencyKey: 'pending-series-end',
+      cursor: { ...h.event.cursor, runtimeSeq: h.event.cursor.runtimeSeq + 1 },
+    });
+    const before = h.reliableRequests();
+    assert.equal(await h.connection.sendReliable(tail, h.snapshot), 'retry');
+    assert.equal(h.reliableRequests(), before);
+    const outbox = new ReliableOutbox(join(h.path, '..', 'reliable.json'));
+    let now = new Date();
+    const output = new OutputService({
+      outbox,
+      now: () => now,
+      sink: {
+        send: (event, signal, lineup) =>
+          h.connection.sendReliable(event, h.snapshot, signal, lineup),
+      },
+    });
+    await output.start();
+    t.after(() => output.close());
+    const binding = {
+      origin: 'online',
+      freshness: 'fresh',
+      manifest: { revision: tail.contextRevision },
+      context: {
+        matchId: tail.matchId,
+        competition: { competitionId: tail.competitionId },
+        entrants: { a: { entryId: tail.entryAId }, b: { entryId: tail.entryBId } },
+      },
+    };
+    const bundle = {
+      program: {
+        cursor: h.snapshot.cursor,
+        match: { matchId: tail.matchId },
+        status: { context: 'fresh', telemetry: 'fresh', identity: 'matched' },
+        map: { phase: 'gameover', name: tail.mapName },
+        players: h.snapshot.players,
+        series: { status: 'completed', currentMapOrder: 1, maps: [] },
+      },
+      operator: { activeLineup: { ctCount: 5, tCount: 5 }, identity: { state: 'ok' } },
+      identity: { issues: [] },
+    };
+    output.setCurrent(bundle as never, binding as never);
+    await outbox.enqueue(tail, now);
+    h.connection.setSourceSettlement(
+      (scope) => output.settleSourceForRelease(scope),
+      (scope) => output.resumeSource(scope),
+    );
+    if (operation === 'finish') {
+      h.connection.stopSync(h.snapshot.matchId);
+      await h.connection.release();
+    } else if (operation === 'shutdown') {
+      await h.connection.shutdownSource();
+    } else if (operation === 'pairing') {
+      await h.connection.startPairing();
+      assert.equal(await h.connection.pollPairing(), 'authorized');
+    } else if (operation === 'switch') {
+      const next = structuredClone(h.snapshot);
+      next.matchId = 'match-b';
+      next.cursor.liveSessionId = 'live-b';
+      await h.connection.claim(next, 'revision', false);
+      assert.equal(h.connection.view().activeSourceMatchId, 'match-b');
+    } else {
+      await output.retry();
+      assert.equal(
+        outbox.getRecords().find((record) => record.event.idempotencyKey === tail.idempotencyKey)
+          ?.status,
+        'pending',
+      );
+      await assert.rejects(h.connection.release(), /可靠事件/);
+      assert.equal(h.releases.length, 0);
+      const liveBefore = h.liveRequests();
+      h.setLive(200);
+      await h.connection.sendLive(h.snapshot);
+      assert.equal(h.liveRequests(), liveBefore);
+      now = new Date(now.getTime() + 1001);
+      await output.retry();
+      await h.connection.release();
+    }
+    assert.equal(h.reliableRequests(), before + 1);
+    assert.equal(
+      outbox.getRecords().find((record) => record.event.idempotencyKey === tail.idempotencyKey)
+        ?.status,
+      'accepted',
+    );
+    assert.equal(h.releases.length, 1);
+    assert.equal(h.releases[0]?.authorization, 'Bearer old-secret');
+  });
+}
+
 test('reliable 403 retains the exact identity for finish', async (t) => {
   const h = await setup(t);
   await h.connection.claim(h.snapshot, 'revision', false);
@@ -204,6 +380,33 @@ test('reliable 403 retains the exact identity for finish', async (t) => {
   await h.connection.release();
   assert.equal(h.releases[0]?.authority, '1');
 });
+
+test(
+  'failed durable handoff never enables reliable draining after a LIVE 403',
+  {
+    skip: process.platform === 'win32' || process.getuid?.() === 0,
+  },
+  async (t) => {
+    const h = await setup(t);
+    await h.connection.claim(h.snapshot, 'revision', false);
+    await h.connection.sendReliable(h.event, h.snapshot);
+    h.setLive(403);
+    await assert.rejects(h.connection.sendLive(h.snapshot));
+    const before = h.reliableRequests();
+    const dir = join(h.path, '..');
+    await chmod(dir, 0o500);
+    try {
+      await assert.rejects(h.connection.release());
+      assert.equal(await h.connection.sendReliable(h.event, h.snapshot), 'retry');
+      assert.equal(h.reliableRequests(), before);
+      assert.equal(h.releases.length, 0);
+    } finally {
+      await chmod(dir, 0o700);
+    }
+    await h.connection.release();
+    assert.equal(h.releases.length, 1);
+  },
+);
 
 test('pending reliable scope prevents release and later retry retains identity', async (t) => {
   const h = await setup(t);
@@ -335,6 +538,43 @@ test('release waits for an already in-flight LIVE request', async (t) => {
   assert.equal(h.releases.length, 0);
   finish();
   await live;
+  await release;
+  assert.equal(h.releases.length, 1);
+});
+
+test('retirement fences new events before enabling drain while LIVE is still in flight', async (t) => {
+  const h = await setup(t);
+  await h.connection.claim(h.snapshot, 'revision', false);
+  await h.connection.sendReliable(h.event, h.snapshot);
+  let finishLive!: () => void;
+  h.setLiveGate(
+    new Promise<void>((resolve) => {
+      finishLive = resolve;
+    }),
+  );
+  const live = h.connection.sendLive(h.snapshot);
+  h.setLiveGate(null);
+  h.setLive(403);
+  await assert.rejects(h.connection.sendLive(h.snapshot));
+  let markFenced!: () => void;
+  const fenced = new Promise<void>((resolve) => {
+    markFenced = resolve;
+  });
+  h.connection.setSourceSettlement(
+    async () => {
+      markFenced();
+      return true;
+    },
+    () => undefined,
+  );
+  const release = h.connection.release();
+  await fenced;
+  const before = h.reliableRequests();
+  assert.equal(await h.connection.sendReliable(h.event, h.snapshot), 'accepted');
+  assert.equal(h.reliableRequests(), before + 1);
+  assert.equal(h.releases.length, 0);
+  finishLive();
+  await assert.rejects(live);
   await release;
   assert.equal(h.releases.length, 1);
 });

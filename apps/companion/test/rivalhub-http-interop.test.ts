@@ -63,11 +63,16 @@ test(
     const temp = await mkdtemp(join(tmpdir(), 'mizar-http-interop-'));
     t.after(() => rm(temp, { recursive: true, force: true }));
 
-    const makeConnection = async (index: number, fetcher: typeof fetch = fetch) => {
+    const makeConnection = async (
+      index: number,
+      fetcher: typeof fetch = fetch,
+      snapshotForSink: ReturnType<typeof parseLiveSnapshotV1> | null = null,
+      name = `producer-${index}`,
+    ) => {
       const p = manifest.producers[index]!;
-      const path = join(temp, `producer-${index}`, 'connection.json');
+      const path = join(temp, name, 'connection.json');
       const { mkdir } = await import('node:fs/promises');
-      await mkdir(join(temp, `producer-${index}`));
+      await mkdir(join(temp, name));
       await writeFile(
         path,
         JSON.stringify({
@@ -81,15 +86,23 @@ test(
       );
       const connection = new RivalHubConnection(path, fetcher, siteAddress.origin);
       await connection.load();
-      const outbox = new ReliableOutbox(join(temp, `producer-${index}`, 'outbox.json'));
-      const output = new OutputService({ outbox });
-      await output.start();
+      const outbox = new ReliableOutbox(join(temp, name, 'outbox.json'));
+      const output = new OutputService({
+        outbox,
+        sink: {
+          send: (event, signal, lineup) =>
+            connection.sendReliable(event, snapshotForSink, signal, lineup),
+        },
+      });
+      // Load the actual durable owner without a background tick, so the test
+      // controls when an already queued tail becomes eligible for delivery.
+      await outbox.load();
       t.after(() => output.close());
       connection.setSourceSettlement(
         (scope) => output.settleSourceForRelease(scope),
         (scope) => output.resumeSource(scope),
       );
-      return { connection, output, path };
+      return { connection, output, outbox, path };
     };
     const revision = async (index: number) => {
       const p = manifest.producers[index]!;
@@ -140,7 +153,7 @@ test(
           statuses.push({ operation: new URL(String(input)).pathname, status: response.status });
           return response;
         };
-        const { connection } = await makeConnection(0, realFetch);
+        const { connection, output, outbox } = await makeConnection(0, realFetch, snapshot);
         await connection.claim(snapshot, contextRevision, false);
         const start = parseReliableEventV1({
           ...p.reliableEnvelope.event,
@@ -182,14 +195,59 @@ test(
         );
         assert.equal(crossResponse.status, 200);
         assert.equal(((await crossResponse.json()) as { status: string }).status, 'not_found');
+        const tail = parseReliableEventV1({
+          ...start,
+          kind: 'series_ended',
+          payload: { scoreA: 2, scoreB: 0 },
+          observedAt: new Date().toISOString(),
+          idempotencyKey: randomUUID(),
+          cursor: { ...start.cursor, runtimeSeq: start.cursor.runtimeSeq + 1 },
+        });
+        const binding = {
+          origin: 'online',
+          freshness: 'fresh',
+          manifest: { revision: contextRevision },
+          context: {
+            matchId: tail.matchId,
+            competition: { competitionId: tail.competitionId },
+            entrants: { a: { entryId: tail.entryAId }, b: { entryId: tail.entryBId } },
+          },
+        };
+        const bundle = {
+          program: {
+            cursor: snapshot.cursor,
+            match: { matchId: tail.matchId },
+            status: { context: 'fresh', telemetry: 'fresh', identity: 'matched' },
+            map: { phase: 'gameover', name: tail.mapName },
+            players: snapshot.players,
+            series: { status: 'completed', currentMapOrder: 1, maps: [] },
+          },
+          operator: { activeLineup: { ctCount: 5, tCount: 5 }, identity: { state: 'ok' } },
+          identity: { issues: [] },
+        };
+        output.setCurrent(bundle as never, binding as never);
+        await outbox.enqueue(tail, new Date());
+        assert.equal(
+          outbox.getRecords().find((record) => record.event.idempotencyKey === tail.idempotencyKey)
+            ?.status,
+          'pending',
+        );
         await db.query(
-          "update matches set status='finished', completed_at=now() where id=$1 and season_id=$2",
+          "update matches set status='finished', completed_at=now(), score_a=2, score_b=0 where id=$1 and season_id=$2",
           [p.fixture.matchId, p.fixture.seasonId],
         );
         snapshot.producedAt = new Date().toISOString();
         await assert.rejects(connection.sendLive(snapshot));
         assert.ok(
           statuses.some((entry) => entry.operation.endsWith('/live') && entry.status === 403),
+        );
+        const reliableBefore = statuses.filter((entry) =>
+          entry.operation.endsWith('/reliable'),
+        ).length;
+        assert.equal(await connection.sendReliable(tail, snapshot), 'retry');
+        assert.equal(
+          statuses.filter((entry) => entry.operation.endsWith('/reliable')).length,
+          reliableBefore,
         );
         const app = Fastify();
         const scenes = {
@@ -225,6 +283,23 @@ test(
           const finished = await command('finish', production.get().revision);
           assert.equal(finished.status, 200);
           assert.equal(restorationAttempts, 1);
+          assert.equal(
+            outbox
+              .getRecords()
+              .find((record) => record.event.idempotencyKey === tail.idempotencyKey)?.status,
+            'accepted',
+          );
+          assert.equal(
+            statuses.filter(
+              (entry) => entry.operation.endsWith('/reliable') && entry.status === 200,
+            ).length,
+            reliableBefore + 1,
+          );
+          const tailIndex = statuses
+            .map((entry) => entry.operation.endsWith('/reliable'))
+            .lastIndexOf(true);
+          const releaseIndex = statuses.findIndex((entry) => entry.operation.endsWith('/release'));
+          assert.ok(tailIndex >= 0 && releaseIndex > tailIndex);
           const after = await status(
             0,
             snapshot.cursor.producerInstanceId,
@@ -247,6 +322,45 @@ test(
         }
       },
     );
+
+    await t.test('an explicit stale-context rejection permits a fresh claim', async () => {
+      const p = manifest.producers[1]!;
+      const snapshot = parseLiveSnapshotV1(p.liveTemplate);
+      snapshot.cursor.producerInstanceId = randomUUID();
+      snapshot.cursor.liveSessionId = randomUUID();
+      const claimStatuses: number[] = [];
+      const observeFetch: typeof fetch = async (input, init) => {
+        const response = await fetch(input, init);
+        if (new URL(String(input)).pathname.endsWith('/claim')) claimStatuses.push(response.status);
+        return response;
+      };
+      const { connection } = await makeConnection(1, observeFetch, null, 'stale-claim');
+      await assert.rejects(connection.claim(snapshot, 'stale-context', true));
+      assert.deepEqual(claimStatuses, [400]);
+      assert.equal(connection.view().sourceCleanup.claimIntent, false);
+      const absent = await status(
+        1,
+        snapshot.cursor.producerInstanceId,
+        snapshot.cursor.liveSessionId!,
+      );
+      assert.equal(absent.status, 'not_found');
+      await connection.claim(snapshot, await revision(1), true);
+      assert.deepEqual(claimStatuses, [400, 200]);
+      const claimed = await status(
+        1,
+        snapshot.cursor.producerInstanceId,
+        snapshot.cursor.liveSessionId!,
+      );
+      assert.equal(claimed.source?.state, 'open');
+      await connection.release();
+      const released = await status(
+        1,
+        snapshot.cursor.producerInstanceId,
+        snapshot.cursor.liveSessionId!,
+        claimed.source!.authorityRevision,
+      );
+      assert.equal(released.source?.state, 'closed');
+    });
 
     await t.test(
       'claim and release responses lost after commit are recovered with real status and idempotent release',

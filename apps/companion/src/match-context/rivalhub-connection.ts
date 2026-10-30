@@ -114,7 +114,26 @@ type Source = {
   deliveryExecution?: string;
   paused?: boolean;
   draining?: boolean;
+  drainReliable?: boolean;
 };
+
+/** Only explicit, structured receiver refusals prove that this claim did not commit. */
+function definitiveClaimRejection(response: Response, body: unknown): boolean {
+  if (!response.headers.get('content-type')?.toLowerCase().includes('application/json'))
+    return false;
+  if (!response.headers.get('cache-control')?.toLowerCase().includes('no-store')) return false;
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
+  const value = body as Record<string, unknown>;
+  if (typeof value.error !== 'string' || !value.error || typeof value.code !== 'string')
+    return false;
+  return (
+    (response.status === 400 && value.code === 'VALIDATION_FAILED') ||
+    (response.status === 401 && value.code === 'UNAUTHORIZED') ||
+    (response.status === 403 && value.code === 'FORBIDDEN') ||
+    (response.status === 404 &&
+      ['NOT_FOUND', 'MATCH_NOT_FOUND', 'SEASON_NOT_FOUND'].includes(value.code))
+  );
+}
 
 type LiveErrorEvidence = { name: string; code?: string | number; cause?: LiveErrorEvidence };
 type LiveFailure = {
@@ -897,8 +916,20 @@ export class RivalHubConnection {
             source.authorityRevision === identity.authorityRevision,
         )
         .flatMap(([, pending]) => [...pending]);
+      // The output owner fences new events synchronously on entry. Only after
+      // that fence exists may a paused source deliver its already queued tail.
+      const disposition = this.settleSource!(identity).catch(() => false);
+      const source = this.source;
+      if (
+        source?.draining &&
+        source.matchId === identity.matchId &&
+        source.producerInstanceId === identity.producerInstanceId &&
+        source.liveSessionId === identity.liveSessionId &&
+        source.authorityRevision === identity.authorityRevision
+      )
+        source.drainReliable = true;
       await Promise.allSettled(requests);
-      return this.settleSource!(identity);
+      return disposition;
     };
     let operation = this.sourceSettlements.get(key);
     if (!operation) {
@@ -1181,7 +1212,7 @@ export class RivalHubConnection {
           init.signal ?? AbortSignal.timeout(operation === 'live' ? 4000 : CONTROL_TIMEOUT_MS),
       });
       if (!response.ok && response.status !== 304) {
-        if (operation !== 'reliable') await response.body?.cancel();
+        if (operation !== 'reliable' && operation !== 'claim') await response.body?.cancel();
         this.onDiagnostic(operation, new Error(`RivalHub HTTP ${response.status}`));
       }
       return response;
@@ -1610,6 +1641,11 @@ export class RivalHubConnection {
         reason: response.ok ? 'claim_response_received' : `http_${response.status}`,
       });
       if (!response.ok) {
+        const refusal = await readReliableBody(response);
+        if (definitiveClaimRejection(response, refusal)) {
+          await this.sourceState.clearIntent(intent.id);
+          await this.updateCleanupSummary();
+        }
         this.controlFailureScope = this.failureScope(snapshot);
         this.controlFailure =
           response.status === 401
@@ -2074,7 +2110,10 @@ export class RivalHubConnection {
     signal: AbortSignal = AbortSignal.timeout(RELIABLE_SEND_TIMEOUT_MS),
     retainedLineup?: readonly string[],
   ): Promise<ReliableDeliveryResult> {
-    if ((this.stoppedMatchId === event.matchId && !this.source?.draining) || this.source?.paused)
+    if (
+      (this.stoppedMatchId === event.matchId || this.source?.paused) &&
+      !this.source?.drainReliable
+    )
       return 'retry';
     const source = this.source;
     // Durable recovery keeps the original producer evidence. A new claim cannot
@@ -2113,7 +2152,7 @@ export class RivalHubConnection {
       if (sameExecution) this.beginDeliveryExecution(source, event.cursor);
     }
     const isCurrent = () =>
-      (this.stoppedMatchId !== event.matchId || source?.draining === true) &&
+      (this.stoppedMatchId !== event.matchId || source?.drainReliable === true) &&
       this.source === source &&
       (attempt === undefined || source?.mapStartAttempt === attempt);
     const result = await this.upload(
