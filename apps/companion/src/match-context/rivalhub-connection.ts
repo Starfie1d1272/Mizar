@@ -286,6 +286,7 @@ export class RivalHubConnection {
     etag: string | null;
     pending: Promise<BroadcastStats | null> | null;
     attempted: boolean;
+    generation: number;
     fetchedAt: string | null;
   } | null = null;
 
@@ -301,18 +302,25 @@ export class RivalHubConnection {
         etag: null,
         pending: null,
         attempted: false,
+        generation: 0,
         fetchedAt: null,
       };
     const scope = this.statsScope;
-    if (scope.pending) return scope.pending;
+    if (scope.pending && !refresh) return scope.pending;
     if (scope.attempted && !refresh) return scope.value;
     scope.attempted = true;
-    scope.pending = (async () => {
+    const generation = ++scope.generation;
+    const pending = (async () => {
       try {
         const response = await this.request(`stats?matchId=${encodeURIComponent(matchId)}`, {
           headers: scope.etag ? { 'if-none-match': scope.etag } : {},
         });
-        if (this.statsScope !== scope || this.installation !== installation) return null;
+        if (
+          this.statsScope !== scope ||
+          this.installation !== installation ||
+          scope.generation !== generation
+        )
+          return null;
         if (response.status === 304 && scope.value) {
           scope.fetchedAt = new Date().toISOString();
           return scope.value;
@@ -325,7 +333,12 @@ export class RivalHubConnection {
         }
         if (!response.ok) return null;
         const parsed = broadcastStatsSchema.safeParse(await readOnlineManifestResponse(response));
-        if (this.statsScope !== scope || this.installation !== installation) return null;
+        if (
+          this.statsScope !== scope ||
+          this.installation !== installation ||
+          scope.generation !== generation
+        )
+          return null;
         if (
           !parsed.success ||
           parsed.data.matchId !== matchId ||
@@ -340,9 +353,10 @@ export class RivalHubConnection {
         return null;
       }
     })().finally(() => {
-      scope.pending = null;
+      if (scope.pending === pending) scope.pending = null;
     });
-    return scope.pending;
+    scope.pending = pending;
+    return pending;
   }
   clearStats(): void {
     this.statsScope = null;

@@ -1,22 +1,21 @@
 import { useEffect, useState } from 'react';
 import { broadcastStatsSchema } from '@mizar/protocol/broadcast-stats';
-import type { StatsInsert } from '@mizar/hud-view';
-import { statsInserts } from './stats-inserts';
+import { statsInserts, type StatsCard } from './stats-inserts';
 
 const sequence = [
-  ['LINEUPS', 12_000],
-  ['MAP PERFORMANCE', 15_000],
-  ['RECENT MAPS', 15_000],
-  ['PLAYER COMPARISON', 12_000],
-  ['PLAYER ATTRIBUTES', 15_000],
-  ['PISTOL & CONVERSION', 12_000],
-  ['ECONOMY', 12_000],
-  ['UTILITY', 12_000],
+  ['lineups', 12_000],
+  ['maps', 15_000],
+  ['recent', 15_000],
+  ['player-comparison', 12_000],
+  ['player-attributes', 15_000],
+  ['pistol', 12_000],
+  ['economy', 12_000],
+  ['utility', 12_000],
 ] as const;
 
 /** The current card is immutable; the next boundary reads the latest local snapshot. */
-export function useStatsRotation(enabled: boolean, matchId: string | null): StatsInsert | null {
-  const [visible, setVisible] = useState<{ matchId: string; card: StatsInsert } | null>(null);
+export function useStatsRotation(enabled: boolean, matchId: string | null): StatsCard | null {
+  const [visible, setVisible] = useState<{ matchId: string; card: StatsCard } | null>(null);
   useEffect(() => {
     if (!enabled || !matchId) return;
     let active = true;
@@ -44,7 +43,7 @@ export function useStatsRotation(enabled: boolean, matchId: string | null): Stat
         const cards = statsInserts(parsed.data);
         while (index < sequence.length) {
           const [name, duration] = sequence[index]!;
-          const matching = cards.filter((item) => item.subtitle === name);
+          const matching = cards.filter((item) => item.id === name);
           const card = matching[page++];
           if (page >= matching.length) {
             index++;
