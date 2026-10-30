@@ -188,6 +188,40 @@ for await (const text of inputLines) {
   };
   process.stdout.write(JSON.stringify(cursor) + '\n');
   process.stdout.write(JSON.stringify({ ...event, source, world: 1 }) + '\n');
+  if (input.endpoint === '127.0.0.25:27020') {
+    process.stdout.write(
+      JSON.stringify({
+        ...cursor,
+        kind: 'round_freeze_end',
+        type: 'raw-event',
+        name: 'round_freeze_end',
+        sequence: 9,
+        tick: 100,
+        committedTick: 100,
+        round: 6,
+      }) + '\n',
+    );
+    process.stdout.write(
+      JSON.stringify({
+        ...cursor,
+        sequence: 10,
+        tick: 164,
+        round: 6,
+        warmup: false,
+        roundClock: {
+          status: 'available',
+          totalRoundsPlayed: 6,
+          committedTick: 164,
+          freezePeriod: false,
+          warmupPeriod: false,
+          bombPlanted: false,
+          startTime: 100 / 64,
+          duration: 115,
+          pause: { active: false, totalPausedTicks: 0 },
+        },
+      }) + '\n',
+    );
+  }
   if (input.endpoint === '127.0.0.6:27020' && !retrying) {
     terminal('failed', 'native-session-closed', 1000);
     break;

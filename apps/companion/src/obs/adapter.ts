@@ -139,6 +139,8 @@ export class ObsAdapter {
   private recoveryGeneration = 0;
   private recoveryPaused = false;
   private recoveryPrepared = false;
+  private browserRecoveryPermission:
+    { recovery: number; program: number; production: () => boolean } | undefined;
   private recoveryComplete = false;
   private recoveryTask: Promise<void> | undefined;
   private readonly refreshedBrowserSources = new Set<string>();
@@ -163,6 +165,7 @@ export class ObsAdapter {
           this.expectedCollection = undefined;
           this.programGeneration++;
           this.recoveryPrepared = false;
+          this.browserRecoveryPermission = undefined;
           this.programChanged();
           return;
         }
@@ -180,6 +183,7 @@ export class ObsAdapter {
         }
         this.programGeneration++;
         this.recoveryPrepared = false;
+        this.browserRecoveryPermission = undefined;
         this.programChanged();
       },
     );
@@ -230,6 +234,7 @@ export class ObsAdapter {
   pauseAutomatic(): void {
     this.recoveryPaused = true;
     this.recoveryPrepared = false;
+    this.browserRecoveryPermission = undefined;
     this.recoveryGeneration++;
     clearTimeout(this.recoveryTimer);
     clearTimeout(this.commentaryTimer);
@@ -249,7 +254,18 @@ export class ObsAdapter {
     await Promise.all([this.queue, this.recoveryTask, this.commentaryTask]);
   }
 
-  startBrowserRecovery(): void {
+  startBrowserRecovery(production: () => boolean = () => true): void {
+    if (this.recoveryClosed || this.recoveryPaused) return;
+    this.browserRecoveryPermission = {
+      recovery: this.recoveryGeneration,
+      program: this.programGeneration,
+      production,
+    };
+    this.recoveryComplete = false;
+    this.runBrowserRecovery();
+  }
+
+  private runBrowserRecovery(): void {
     if (
       this.recoveryClosed ||
       this.recoveryPaused ||
@@ -259,34 +275,45 @@ export class ObsAdapter {
     )
       return;
     const attempt = () => {
-      if (this.recoveryClosed || this.recoveryPaused) return;
-      const generation = this.recoveryGeneration;
-      const programGeneration = this.programGeneration;
+      const permission = this.browserRecoveryPermission;
       const valid = () =>
+        permission !== undefined &&
+        this.browserRecoveryPermission === permission &&
         !this.recoveryClosed &&
         !this.recoveryPaused &&
-        this.recoveryPrepared &&
-        generation === this.recoveryGeneration &&
-        programGeneration === this.programGeneration;
+        permission.recovery === this.recoveryGeneration &&
+        permission.program === this.programGeneration &&
+        permission.production();
       this.recoveryTimer = undefined;
-      this.recoveryTask = this.serial(() =>
-        this.withObs((obs) =>
-          refreshObsBrowserSources(
-            guardedObs(obs, valid),
-            this.browserBaseUrl,
-            this.refreshedBrowserSources,
-          ),
-        ),
-      )
+      if (permission === undefined) return;
+      this.recoveryTask = this.serial(async () => {
+        // Keep the existing program observer connected across recovery retries.
+        await this.outputs.read();
+        if (!valid()) return false;
+        return this.withObs(
+          (obs) =>
+            refreshObsBrowserSources(
+              guardedObs(obs, valid),
+              this.browserBaseUrl,
+              this.refreshedBrowserSources,
+            ),
+          TIMEOUT_MS,
+          undefined,
+          false,
+          true,
+        );
+      })
         .then((complete) => {
           if (valid()) this.recoveryComplete = complete;
         })
         .catch(() => undefined)
         .finally(() => {
           this.recoveryTask = undefined;
-          if (!this.recoveryClosed && !this.recoveryPaused && !this.recoveryComplete) {
+          if (valid() && !this.recoveryComplete) {
             this.recoveryTimer = setTimeout(attempt, 5000);
             this.recoveryTimer.unref();
+          } else if (this.browserRecoveryPermission !== permission) {
+            this.runBrowserRecovery();
           }
         });
     };
@@ -560,6 +587,7 @@ export class ObsAdapter {
     timeoutMs = TIMEOUT_MS,
     diagnosticStage?: string,
     observeAudioIdentity = false,
+    observeBrowserIdentity = false,
   ): Promise<T> {
     const config = await this.configStore.read();
     const client = new OBSWebSocket();
@@ -568,6 +596,10 @@ export class ObsAdapter {
     let active = true;
     const invalidateAudio = () => {
       active = false;
+    };
+    const invalidateBrowser = () => {
+      active = false;
+      this.browserRecoveryPermission = undefined;
     };
     try {
       const task = (async () => {
@@ -578,6 +610,11 @@ export class ObsAdapter {
           client.on('InputRemoved', invalidateAudio);
           client.on('InputSettingsChanged', invalidateAudio);
           client.on('ConnectionClosed', invalidateAudio);
+        }
+        if (observeBrowserIdentity) {
+          client.on('InputRemoved', invalidateBrowser);
+          client.on('InputSettingsChanged', invalidateBrowser);
+          client.on('ConnectionClosed', invalidateBrowser);
         }
         stage = 'obs_request';
         const rpc: ObsRpc = {
@@ -639,6 +676,11 @@ export class ObsAdapter {
         client.off('InputRemoved', invalidateAudio);
         client.off('InputSettingsChanged', invalidateAudio);
         client.off('ConnectionClosed', invalidateAudio);
+      }
+      if (observeBrowserIdentity) {
+        client.off('InputRemoved', invalidateBrowser);
+        client.off('InputSettingsChanged', invalidateBrowser);
+        client.off('ConnectionClosed', invalidateBrowser);
       }
       await client.disconnect().catch(() => undefined);
     }
