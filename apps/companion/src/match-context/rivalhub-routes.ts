@@ -13,6 +13,7 @@ export function registerRivalHubConnectionRoutes(
     connection: RivalHubConnection;
     canClaim?: () => boolean;
     canUpdatePlan?: () => boolean;
+    canFetchStats?: () => boolean;
     controller: MatchContextController | null;
     currentSnapshot: () => LiveSnapshotV1 | null;
     originPolicy: LocalWebOriginPolicy;
@@ -128,6 +129,14 @@ export function registerRivalHubConnectionRoutes(
     return refreshing;
   };
   const timer = setInterval(() => {
+    const statsBinding = linkedBinding();
+    if (
+      options.canFetchStats?.() &&
+      statsBinding &&
+      (statsBinding.origin === 'online' ||
+        (statsBinding.origin === 'cache' && statsBinding.cachedFrom === 'online'))
+    )
+      void options.connection.stats(statsBinding.context.matchId);
     if (linkedBinding() && !options.controller?.isOnlineCandidateLoading())
       void Promise.resolve()
         .then(() => refresh(false))
@@ -139,7 +148,10 @@ export function registerRivalHubConnectionRoutes(
   }, 60_000);
   libraryTimer.unref();
   app.addHook('onClose', () => clearInterval(libraryTimer));
-  app.addHook('onClose', () => clearInterval(timer));
+  app.addHook('onClose', () => {
+    clearInterval(timer);
+    options.connection.clearStats();
+  });
   const observedLineupReady = () => {
     const snapshot = options.currentSnapshot();
     return (

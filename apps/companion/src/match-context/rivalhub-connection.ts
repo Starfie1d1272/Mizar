@@ -35,6 +35,15 @@ type PendingPairing = {
 };
 export const OFFICIAL_RIVALHUB_URL = 'https://match.starfie1d.top';
 const CONTROL_TIMEOUT_MS = 15_000;
+const STATS_RETRY_MS = 30_000;
+
+function statsRetryDelay(header: string | null): number {
+  if (!header) return STATS_RETRY_MS;
+  const value = header.trim();
+  const delay = /^\d+$/.test(value) ? Number(value) * 1000 : Date.parse(value) - Date.now();
+  if (delay === Infinity) return Number.MAX_VALUE;
+  return Number.isFinite(delay) && delay >= 0 ? Math.max(STATS_RETRY_MS, delay) : STATS_RETRY_MS;
+}
 type PairingStatus = 'idle' | 'pending' | 'expired' | 'authorized';
 type Source = {
   matchId: string;
@@ -272,84 +281,115 @@ export class RivalHubConnection {
       : null;
   }
   private invalidateReadScope() {
-    this.statsScope = null;
+    this.clearStats();
+    this.statsAuthorizationBlocked = null;
     this.scheduleCache = null;
     this.scheduleWarning = null;
     this.browsingLibrary = null;
     this.manifestScope?.abort.abort();
     this.manifestScope = null;
   }
+  private statsAuthorizationBlocked: Installation | null = null;
   private statsScope: {
     installation: Installation;
     matchId: string;
     value: BroadcastStats | null;
     etag: string | null;
     pending: Promise<BroadcastStats | null> | null;
-    attempted: boolean;
     generation: number;
     fetchedAt: string | null;
+    retryAt: number;
+    blocked: 'authorization' | 'invalid-response' | null;
+    abort: AbortController;
   } | null = null;
 
-  /** Low-frequency, installation-scoped broadcast data; never part of gameplay. */
+  /** Called at production entry and maintenance ticks, never by a local reader. */
   async stats(matchId: string, refresh = false): Promise<BroadcastStats | null> {
     const installation = this.installation;
     if (!installation || !/^[A-Za-z0-9_-]{1,128}$/.test(matchId)) return null;
-    if (this.statsScope?.installation !== installation || this.statsScope.matchId !== matchId)
+    if (this.statsScope?.installation !== installation || this.statsScope.matchId !== matchId) {
+      this.clearStats();
       this.statsScope = {
         installation,
         matchId,
         value: null,
         etag: null,
         pending: null,
-        attempted: false,
         generation: 0,
         fetchedAt: null,
+        retryAt: 0,
+        blocked: this.statsAuthorizationBlocked === installation ? 'authorization' : null,
+        abort: new AbortController(),
       };
+    }
     const scope = this.statsScope;
-    if (scope.pending && !refresh) return scope.pending;
-    if (scope.attempted && !refresh) return scope.value;
-    scope.attempted = true;
+    if (scope.pending) return scope.pending;
+    if (scope.blocked === 'authorization') return null;
+    if (!refresh && (scope.value || scope.blocked)) return scope.value;
+    if (this.monotonicNow() < scope.retryAt) return refresh ? null : scope.value;
+    if (refresh) scope.blocked = null;
     const generation = ++scope.generation;
+    const current = () =>
+      this.statsScope === scope &&
+      this.installation === installation &&
+      scope.generation === generation &&
+      !scope.abort.signal.aborted;
+    const retry = (header: string | null = null) => {
+      if (current()) scope.retryAt = this.monotonicNow() + statsRetryDelay(header);
+    };
+    const invalid = () => {
+      if (current()) {
+        scope.blocked = 'invalid-response';
+        scope.retryAt = this.monotonicNow() + STATS_RETRY_MS;
+      }
+    };
     const pending = (async () => {
       try {
         const response = await this.request(`stats?matchId=${encodeURIComponent(matchId)}`, {
           headers: scope.etag ? { 'if-none-match': scope.etag } : {},
+          signal: AbortSignal.any([scope.abort.signal, AbortSignal.timeout(CONTROL_TIMEOUT_MS)]),
         });
-        if (
-          this.statsScope !== scope ||
-          this.installation !== installation ||
-          scope.generation !== generation
-        )
-          return null;
+        if (!current()) return null;
         if (response.status === 304 && scope.value) {
           scope.fetchedAt = new Date().toISOString();
+          scope.retryAt = 0;
+          scope.blocked = null;
           return scope.value;
         }
         if (response.status === 401 || response.status === 403) {
           scope.value = null;
           scope.etag = null;
           scope.fetchedAt = null;
+          scope.blocked = 'authorization';
+          this.statsAuthorizationBlocked = installation;
           return null;
         }
-        if (!response.ok) return null;
-        const parsed = broadcastStatsSchema.safeParse(await readOnlineManifestResponse(response));
-        if (
-          this.statsScope !== scope ||
-          this.installation !== installation ||
-          scope.generation !== generation
-        )
+        if (!response.ok) {
+          if ([408, 429, 500, 502, 503, 504].includes(response.status))
+            retry(response.headers.get('retry-after'));
+          else invalid();
           return null;
+        }
+        const parsed = broadcastStatsSchema.safeParse(await readOnlineManifestResponse(response));
+        if (!current()) return null;
         if (
           !parsed.success ||
           parsed.data.matchId !== matchId ||
           parsed.data.competitionId !== installation.competitionId
-        )
+        ) {
+          invalid();
           return null;
+        }
         scope.value = parsed.data;
         scope.etag = response.headers.get('etag');
         scope.fetchedAt = new Date().toISOString();
+        scope.retryAt = 0;
+        scope.blocked = null;
         return scope.value;
-      } catch {
+      } catch (error) {
+        if (!current()) return null;
+        if (error instanceof SourceLoadError && error.code === 'invalid_response') invalid();
+        else retry();
         return null;
       }
     })().finally(() => {
@@ -359,6 +399,7 @@ export class RivalHubConnection {
     return pending;
   }
   clearStats(): void {
+    this.statsScope?.abort.abort();
     this.statsScope = null;
   }
   statsFetchedAt(matchId: string): string | null {
@@ -556,12 +597,20 @@ export class RivalHubConnection {
         // A malformed URL exception may echo credential-bearing input.
         throw new Error('RivalHub connection setting has an invalid base URL');
       }
+      const blocked = this.statsAuthorizationBlocked;
+      const sameBlockedInstallation =
+        blocked !== null &&
+        blocked.baseUrl === baseUrl &&
+        blocked.installationId === parsed.installationId &&
+        blocked.competitionId === parsed.competitionId &&
+        blocked.credential === parsed.credential;
       this.invalidateReadScope();
       this.installation = {
         ...parsed,
         baseUrl,
         authorizedUser: authorizedUser(parsed.authorizedUser),
       };
+      if (sameBlockedInstallation) this.statsAuthorizationBlocked = this.installation;
     } catch (error) {
       if (stage === 'connection_read' && (error as NodeJS.ErrnoException)?.code === 'ENOENT')
         return;
