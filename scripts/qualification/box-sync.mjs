@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { setTimeout as sleep } from 'node:timers/promises';
+import timers from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { Buffer, Blob } from 'node:buffer';
 import { URL } from 'node:url';
@@ -241,7 +241,7 @@ async function retryWait(attempt, reason, deadline, retryAfter, signal) {
   const delay = Math.max(Math.ceil(Math.random() * 1000 * 2 ** attempt), retryAfterMs(retryAfter));
   requireValue(delay < deadline - Date.now(), '重试等待超出本次恢复预算；保留现有文件');
   console.log(`Box 暂态失败（${reason}），${delay}ms 后重试 ${attempt + 1}/2`);
-  await sleep(delay, undefined, { signal });
+  await timers.setTimeout(delay, undefined, { signal });
 }
 
 // An accepted write can become visible after the connection has failed. Observe
@@ -260,7 +260,7 @@ async function waitForWrittenFile(
   const delays = delayed ? reconciliationDelays : [0];
   const recoverySignal = AbortSignal.any([AbortSignal.timeout(90000), ...(signal ? [signal] : [])]);
   for (const delay of delays) {
-    if (delay) await sleep(delay, undefined, { signal: recoverySignal });
+    if (delay) await timers.setTimeout(delay, undefined, { signal: recoverySignal });
     recoverySignal.throwIfAborted();
     const matches = (await box.list(folder, recoverySignal)).filter((entry) => entry.name === name);
     requireValue(
@@ -601,8 +601,9 @@ export class BoxClient {
             console.log('Box 上传回执丢失，远端原字节已核验，跳过重传');
             return;
           }
-          if ((!error.retrySafeUpload && !error.uploadTimedOut) || replace || attempt === 2)
-            throw error;
+          // Absence after a timeout does not prove that a late server-side write
+          // cannot still appear. Only explicit zero-byte evidence permits replay.
+          if (!error.retrySafeUpload || replace || attempt === 2) throw error;
           recordRecovery();
           await retryWait(attempt, '上传后目标缺失', deadline, undefined, signal);
         }
@@ -710,7 +711,7 @@ async function moveVerified(box, from, to, identity) {
     try {
       const signal = AbortSignal.timeout(90000);
       for (const delay of reconciliationDelays) {
-        if (delay) await sleep(delay, undefined, { signal });
+        if (delay) await timers.setTimeout(delay, undefined, { signal });
         const source = (await box.list(from, signal)).filter(
           (entry) => entry.name === identity.name,
         );

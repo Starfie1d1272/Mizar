@@ -5,6 +5,7 @@ import { URL } from 'node:url';
 import { createServer } from 'node:net';
 import { EventEmitter } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
+import { setImmediate } from 'node:timers/promises';
 import { BoxClient } from './box-sync.mjs';
 import { curlMultipartUpload } from './box-curl-upload.mjs';
 
@@ -382,6 +383,55 @@ test('upload-link timeout retries before any upload using a fresh deadline', asy
   await box.upload('/Archive/test', 'payload', Buffer.from('a'));
   assert.equal(links, 2);
   assert.equal(uploads, 1);
+});
+
+test('an uncertain timed-out upload is reconciled but never replayed when absent', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let uploads = 0;
+  let reads = 0;
+  const box = client(async () => {
+    uploads++;
+    throw Object.assign(new Error('connection timed out'), { code: 'ETIMEDOUT' });
+  });
+  box.list = async () => {
+    reads++;
+    return [];
+  };
+  let settled = false;
+  const result = box
+    .upload('/Archive/test', 'payload', Buffer.from('a'))
+    .then(
+      () => ({ success: true }),
+      (error) => ({ error }),
+    )
+    .finally(() => {
+      settled = true;
+    });
+  for (let i = 0; i < 20 && !settled; i++) {
+    await setImmediate();
+    t.mock.timers.tick(15000);
+  }
+  const outcome = await result;
+  assert.equal(outcome.error?.uploadOutcomeUnknown, true);
+  assert.ok(reads > 1);
+  assert.equal(uploads, 1);
+});
+
+test('a timeout with proven zero bytes can retry after an absent destination', async (t) => {
+  t.mock.method(Math, 'random', () => 0);
+  let uploads = 0;
+  const box = client(async () => {
+    uploads++;
+    if (uploads === 1)
+      throw Object.assign(new Error('connection timed out'), {
+        code: 'ETIMEDOUT',
+        retrySafeUpload: true,
+      });
+    return Response.json([{ name: 'payload' }]);
+  });
+  box.list = async () => [];
+  await box.upload('/Archive/test', 'payload', Buffer.from('a'));
+  assert.equal(uploads, 2);
 });
 
 test('readback transient failures use one retry owner and stop after three attempts', async (t) => {
