@@ -233,7 +233,11 @@ export function ObsAudioRouting() {
                   : '独立分路，等待解说应用后启用'
                 : status.desktop
                   ? '桌面混音'
-                  : '独立分路'}
+                  : !status.bindings.game &&
+                      !status.bindings.remoteCommentary &&
+                      !status.bindings.microphone
+                    ? '未确认，请检查 OBS'
+                    : '独立分路'}
           </p>
           {chooseDesktop && (
             <Select
