@@ -1,4 +1,5 @@
 import { useMusicPreview } from './useMusicPreview';
+import { loadBuiltinMusic } from './builtin';
 import { controlEvidence, browserErrorEvidence } from '../debug/control-journal';
 import { useState } from 'react';
 import {
@@ -156,11 +157,7 @@ export function MusicSettings({ active = true }: { active?: boolean }) {
                   onClick={() =>
                     void action(async () => {
                       await preview.stop();
-                      const result = (await command('/operator/music/builtin')) as {
-                        config?: MusicConfig;
-                      };
-                      const parsed = musicConfigSchema.parse(result.config);
-                      setConfig(parsed);
+                      setConfig(await loadBuiltinMusic());
                       setDirty(false);
                       setMessage('内置音乐已加载并保存。');
                     })

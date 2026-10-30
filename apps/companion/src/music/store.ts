@@ -149,6 +149,23 @@ export class MusicStore {
   private async loadState() {
     await ensureDirectory(this.directory);
     await ensureDirectory(join(this.directory, 'tracks'));
+    await safePath(this.directory);
+    const statePath = join(this.directory, 'state.json');
+    const exists = await lstat(statePath).then(
+      () => true,
+      (error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return false;
+        throw error;
+      },
+    );
+    if (!exists) {
+      this.failure = false;
+      this.ready = true;
+      if (this.builtinPack) await this.import(await readFile(this.builtinPack));
+      else await this.update(() => undefined);
+      this.diagnostic('music_loaded_snapshot', { state: this.state });
+      return;
+    }
     try {
       const path = await safePath(this.directory, 'state.json');
       const stat = await lstat(path);
@@ -190,12 +207,7 @@ export class MusicStore {
       }
       if (migrated) await atomicJson(path, this.state);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
-        throw new Error('music_state_invalid', { cause: error });
-      this.failure = false;
-      this.ready = true;
-      if (this.builtinPack) await this.import(await readFile(this.builtinPack));
-      else await this.update(() => undefined);
+      throw new Error('music_state_invalid', { cause: error });
     }
     this.failure = false;
     this.ready = true;
