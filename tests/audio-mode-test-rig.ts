@@ -266,6 +266,7 @@ export async function audioModeRig(initialMonitor = 'OBS_MONITORING_TYPE_MONITOR
     app.inject({ method, url, headers, ...(payload ? { payload } : {}) });
   return {
     request,
+    listen: () => app.listen({ host: '127.0.0.1', port: 0 }),
     dir,
     routing,
     adapter,
