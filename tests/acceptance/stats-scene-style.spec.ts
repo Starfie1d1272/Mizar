@@ -3,7 +3,7 @@ import {
   DEFAULT_PLACEMENTS,
   getBuiltinResolvedPreset,
 } from '../../packages/hud-config/src/index.js';
-import stats from '../fixtures/rivalhub-provider-stats-v1.json' with { type: 'json' };
+import stats from '../fixtures/mizar-broadcast-stats-presentation-v1.json' with { type: 'json' };
 
 const visual = { kind: 'builtin', id: 'pulse', apiVersion: 1 };
 const sceneNames = [
@@ -63,7 +63,7 @@ test('statistics follow scene appearance through rotation, standalone and failed
     },
   });
   const presentation = {
-    schemaVersion: 'mizar.program-presentation.v1',
+    schemaVersion: 'mizar.program-presentation.v2',
     packageId: 'builtin:mizar-default',
     match: { matchId: stats.matchId, competition: null, format: 'bo3', stage: null },
     series: null,
@@ -87,7 +87,7 @@ test('statistics follow scene appearance through rotation, standalone and failed
             },
       );
     if (path === '/local/v1/broadcast-display-config') return route.fulfill({ json: display() });
-    if (path === '/local/v1/broadcast-stats') return route.fulfill({ json: stats });
+    if (path === '/local/v1/broadcast-stats-presentation') return route.fulfill({ json: stats });
     if (path === '/local/v1/program-presentation') return route.fulfill({ json: presentation });
     if (path === '/local/v1/program-scenes')
       return route.fulfill({
