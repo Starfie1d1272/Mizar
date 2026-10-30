@@ -315,3 +315,71 @@ test('remote readback link and body share the 180-second deadline', async (t) =>
   await assert.rejects(box.hash('/Archive/payload'));
   assert.equal(downloadCalls, 0);
 });
+
+test('readback retries the link and body with a fresh 180-second deadline', async (t) => {
+  const timeout = AbortSignal.timeout.bind(AbortSignal);
+  const timers = [];
+  t.mock.method(AbortSignal, 'timeout', (milliseconds) => {
+    if (milliseconds === 180000) {
+      const controller = new AbortController();
+      timers.push(controller);
+      return controller.signal;
+    }
+    return timeout(milliseconds);
+  });
+  t.mock.method(Math, 'random', () => 0);
+  let links = 0,
+    downloads = 0;
+  const box = client();
+  box.api = async () => {
+    links++;
+    return 'https://box.example/download';
+  };
+  box.downloadTransport = async (_url, { signal }) => {
+    downloads++;
+    if (downloads === 1) {
+      timers[0].abort();
+      signal.throwIfAborted();
+    }
+    assert.equal(signal.aborted, false);
+    return new Response(Buffer.from('ok'));
+  };
+  assert.deepEqual(await box.hash('/Archive/payload'), {
+    size: 2,
+    sha256: (await import('./box-sync.mjs')).digest(Buffer.from('ok')),
+  });
+  assert.equal(links, 2);
+  assert.equal(downloads, 2);
+});
+
+test('upload-link timeout retries before any upload using a fresh deadline', async (t) => {
+  const timeout = AbortSignal.timeout.bind(AbortSignal);
+  const timers = [];
+  t.mock.method(AbortSignal, 'timeout', (milliseconds) => {
+    if (milliseconds === 180000) {
+      const controller = new AbortController();
+      timers.push(controller);
+      return controller.signal;
+    }
+    return timeout(milliseconds);
+  });
+  t.mock.method(Math, 'random', () => 0);
+  let links = 0,
+    uploads = 0;
+  const box = client(async () => {
+    uploads++;
+    return Response.json([{ name: 'payload' }]);
+  });
+  box.api = async (_endpoint, _path, _method, _body, signal) => {
+    links++;
+    if (links === 1) {
+      timers[0].abort();
+      signal.throwIfAborted();
+    }
+    assert.equal(signal.aborted, false);
+    return 'https://box.example/upload';
+  };
+  await box.upload('/Archive/test', 'payload', Buffer.from('a'));
+  assert.equal(links, 2);
+  assert.equal(uploads, 1);
+});

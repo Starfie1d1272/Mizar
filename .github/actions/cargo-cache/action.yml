@@ -29,9 +29,10 @@ runs:
         $hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($version))).ToLowerInvariant()
         "fingerprint=$hash" >> $env:GITHUB_OUTPUT
         # Separate builds whose compiler flags or profile overrides differ.
-        $parameters = Get-ChildItem Env: | Where-Object { $_.Name -match '^(RUSTFLAGS|CARGO_ENCODED_RUSTFLAGS|CARGO_BUILD_RUSTFLAGS|CARGO_TARGET_.*_RUSTFLAGS|CARGO_PROFILE_.*)$' } | Sort-Object Name | ForEach-Object { "$($_.Name)=$($_.Value)" }
+        $parameters = @(Get-ChildItem Env: | Where-Object { $_.Name -match '^(RUSTFLAGS|CARGO_ENCODED_RUSTFLAGS|CARGO_BUILD_RUSTFLAGS|CARGO_TARGET_.*_RUSTFLAGS|CARGO_PROFILE_.*)$' } | Sort-Object Name | ForEach-Object { "$($_.Name)=$($_.Value)" })
         $parametersHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes(($parameters -join "`n")))).ToLowerInvariant()
         "parameters=$parametersHash" >> $env:GITHUB_OUTPUT
+        "parameters_default=$(($parameters.Count -eq 0).ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
     - name: Fingerprint version-independent Cargo inputs
       id: cargo-key
       shell: pwsh
@@ -47,6 +48,19 @@ runs:
         key: cargo-v4-${{ runner.os }}-${{ runner.arch }}-registry-${{ steps.cargo-key.outputs.lock }}
         restore-keys: |
           cargo-v4-${{ runner.os }}-${{ runner.arch }}-registry-
+    # v3 used a different path list, so it has a different Actions cache version.
+    # Restore it separately only when v4 is absent; the next main run saves v4.
+    - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      id: legacy-registry
+      if: ${{ !steps.registry.outputs.cache-matched-key }}
+      with:
+        path: |
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+        key: cargo-v3-${{ runner.os }}-${{ runner.arch }}-registry-${{ steps.cargo-key.outputs.lock }}
+        restore-keys: |
+          cargo-v3-${{ runner.os }}-${{ runner.arch }}-registry-
     - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       id: target
       with:
@@ -54,12 +68,13 @@ runs:
         key: cargo-v4-${{ runner.os }}-${{ runner.arch }}-${{ inputs.profile }}-${{ steps.rust.outputs.fingerprint }}-${{ steps.rust.outputs.parameters }}-${{ steps.cargo-key.outputs.lock }}-${{ steps.cargo-key.outputs.manifest }}-${{ hashFiles('.cargo/config', '.cargo/config.toml', 'rust-toolchain', 'rust-toolchain.toml', 'apps/desktop/src-tauri/build.rs') }}
         restore-keys: |
           cargo-v4-${{ runner.os }}-${{ runner.arch }}-${{ inputs.profile }}-${{ steps.rust.outputs.fingerprint }}-${{ steps.rust.outputs.parameters }}-${{ steps.cargo-key.outputs.lock }}-
+          ${{ steps.rust.outputs.parameters_default == 'true' && format('cargo-v3-{0}-{1}-{2}-{3}-{4}-', runner.os, runner.arch, inputs.profile, steps.rust.outputs.fingerprint, steps.cargo-key.outputs.lock) || '' }}
     - name: Record cache observations
       shell: pwsh
       env:
         PROFILE: ${{ inputs.profile }}
         REGISTRY_HIT: ${{ steps.registry.outputs.cache-hit }}
-        REGISTRY_MATCH: ${{ steps.registry.outputs.cache-matched-key }}
+        REGISTRY_MATCH: ${{ steps.registry.outputs.cache-matched-key || steps.legacy-registry.outputs.cache-matched-key }}
         TARGET_HIT: ${{ steps.target.outputs.cache-hit }}
         TARGET_MATCH: ${{ steps.target.outputs.cache-matched-key }}
       run: |

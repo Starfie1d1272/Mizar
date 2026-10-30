@@ -205,10 +205,6 @@ jobs:
           & (Join-Path $env:RESOURCE_PUBLISHER_ROOT 'scripts/qualification/extract-windows-shell.ps1') -Archive "product/$env:PRODUCT_ARCHIVE" -Destination extracted -Native
           node scripts/qualification/verify-promotion.mjs product extracted $env:RELEASE_TAG $env:SOURCE_SHA promotion-identity.json
           if ($LASTEXITCODE -ne 0) { throw 'Promotion identity verification failed' }
-          foreach ($subject in @("product/$env:PRODUCT_ARCHIVE", 'product/release-manifest.json')) {
-            node scripts/qualification/release-identity.mjs attestation $subject $env:SOURCE_SHA --bundle product/qualification-provenance.json
-            if ($LASTEXITCODE -ne 0) { throw "Qualified ZIP or source/version manifest provenance verification failed: $subject" }
-          }
       - name: Verify distinct qualified Core original bytes and provenance
         shell: pwsh
         run: |
@@ -219,41 +215,23 @@ jobs:
           if ($roots.Count -ne 1) { throw 'Core extraction is ambiguous' }
           node scripts/qualification/verify-core-candidate.mjs product $roots[0].FullName $env:SOURCE_SHA
           if ($LASTEXITCODE -ne 0) { throw 'Original Core identity verification failed' }
-          $subjects = @($core.archive, 'core-release-manifest.json', 'core-distribution-manifest.json', ($core.archive -replace '\.zip$', '-Setup.exe')) | ForEach-Object { Join-Path product $_ }
-          foreach ($subject in $subjects) {
-            node scripts/qualification/release-identity.mjs attestation $subject $env:SOURCE_SHA --bundle product/qualification-provenance.json
-            if ($LASTEXITCODE -ne 0) { throw "Original Core qualification provenance failed: $subject" }
-          }
-
-      - name: Verify qualified installer provenance
+      - name: Verify qualified installer and update contract
         shell: pwsh
         run: |
-          $distributionPath = 'product/distribution-manifest.json'
-          $subjects = @()
-          if (Test-Path -LiteralPath $distributionPath) {
-            $distribution = Get-Content $distributionPath -Raw | ConvertFrom-Json
-            $subjects += @("product/$($distribution.archive)", $distributionPath)
-          }
-          $updatePath = 'product/update-manifest.json'
           if ($env:RELEASE_TAG -match '^v\d+\.\d+\.\d+$') {
-            if (!(Test-Path -LiteralPath $updatePath)) { throw 'Stable update manifest is required' }
-            node scripts/qualification/release-identity.mjs attestation $updatePath $env:SOURCE_SHA --bundle product/update-provenance.json
-            if ($LASTEXITCODE -ne 0) { throw 'Original update verification bundle failed' }
-            $bootstrap = "product/Mizar-v$($distribution.appVersion)-Windows-x64-WebInstaller.exe"
+            if (!(Test-Path -LiteralPath 'product/update-manifest.json')) { throw 'Stable update manifest is required' }
             node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-assets.mjs" assets product > public-assets.json
             if ($LASTEXITCODE -ne 0) { throw 'Native candidate identity failed' }
-            # The update manifest was already verified above with the original
-            # client bundle, including for historical recovery candidates.
-            $subjects += @($bootstrap, 'product/web-installer-build.json')
             node scripts/qualification/update-manifest.mjs product --check
             if ($LASTEXITCODE -ne 0) { throw 'Stable update contract validation failed' }
           }
-          if ($subjects.Count -gt 0) {
-            foreach ($subject in $subjects) {
-              node scripts/qualification/release-identity.mjs attestation $subject $env:SOURCE_SHA --bundle product/qualification-provenance.json
-              if ($LASTEXITCODE -ne 0) { throw "Original installer/update metadata provenance failed: $subject" }
-            }
-          }
+      - name: Freeze original product and verify grouped provenance
+        shell: pwsh
+        run: |
+          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/promotion-snapshot.mjs" product product-verified $env:SOURCE_SHA $env:RELEASE_TAG
+          if ($LASTEXITCODE -ne 0) { throw 'Frozen product provenance verification failed' }
+          Move-Item -LiteralPath product -Destination product-before-provenance
+          Move-Item -LiteralPath product-verified -Destination product
       - name: Stage verified assets into an existing draft
         if: ${{ env.RELEASE_DRAFT_ID != '' }}
         shell: pwsh
