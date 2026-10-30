@@ -336,6 +336,6 @@ ZIP 根目录包含 `hud.json`、`panel.json`、`keybinds.json`、`mizar-config.
 
 ### Program 统计与装备事实
 
-Program schema 9 为每位选手提供必需的 `statistics` 和 `equipment`，并提供每侧 `teamEconomy`。`statistics` 的数值携带来源、固定窗口和定义版本、回合数、覆盖程度与不可用原因；旧 ADR、伤害、花费及 K/A/D 字段从同一结果映射。`equipment` 包含主副武器、手持武器、道具数量与 C4 事实，完整武器数组仍保留。Companion 向 Core 传入按 GSI 武器名称索引的纯语义目录（canonicalKey、kind、family），不向 Core 传图片路径；语义不完整时不能将未知道具当作零。队伍经济只有完整当前五人名单和相应字段可用时才求和。
+Program schema 9 为每位选手提供必需的 `statistics` 和 `equipment`，并提供每侧 `teamEconomy`。`statistics` 的数值携带来源、固定窗口和定义版本、回合数、覆盖程度与不可用原因；旧 ADR、伤害、花费及 K/A/D 字段从同一结果映射。`equipment` 包含主副武器、手持武器、Zeus 的武器 ID、道具数量与 C4 事实，完整武器数组仍保留。手持武器要求新鲜、当前且存活的选手有唯一 active 或 reloading 武器；C4 根据炸弹持有者和 carried／planting 状态判断，未知时保留空值。Companion 向 Core 传入按 GSI 武器名称索引的纯语义目录（canonicalKey、kind、family），不向 Core 传图片路径；语义不完整时不能将未知道具当作零。队伍经济只有完整当前五人名单和相应字段可用时才求和。
 
 地图摘要使用 `mizar.program-presentation.v2`，选手摘要必需包含同一 `statistics` 结构。该版本变更需要同步更新冻结器及消费者；Radar、Assist 和网站 broadcast-stats 契约未因此改变。

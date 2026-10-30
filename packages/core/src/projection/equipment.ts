@@ -1,4 +1,4 @@
-import type { ObservedWeapon, RoundPhase } from '../telemetry/index.js';
+import type { BombState, ObservedWeapon, RoundPhase } from '../telemetry/index.js';
 
 /** Semantic catalog only. The adapter supplies these facts without asset paths. */
 export interface EquipmentMetadata {
@@ -18,6 +18,7 @@ export interface PlayerEquipmentProjection {
   readonly primary: string | null;
   readonly secondary: string | null;
   readonly heldWeaponId: string | null;
+  readonly zeusWeaponId: string | null;
   readonly utility: UtilityCounts | null;
   readonly hasC4: boolean | null;
 }
@@ -30,18 +31,40 @@ export interface TeamEconomyProjection {
   readonly utility: UtilityCounts | null;
 }
 
+export interface PlayerEquipmentContext {
+  readonly sourcePlayerId: string;
+  readonly bomb: {
+    readonly state: BombState | null;
+    readonly sourcePlayerId: string | null;
+  } | null;
+  readonly telemetryFresh: boolean;
+  readonly lineupCurrent: boolean;
+  readonly lifeState: 'alive' | 'dead' | 'unknown';
+}
+
+function playerHasC4(context: PlayerEquipmentContext): boolean | null {
+  if (context.lifeState === 'dead') return false;
+  const bomb = context.bomb;
+  if (bomb === null || bomb.state === null || bomb.state === 'unknown') return null;
+  if (bomb.state !== 'carried' && bomb.state !== 'planting') return false;
+  return bomb.sourcePlayerId === null ? null : bomb.sourcePlayerId === context.sourcePlayerId;
+}
+
 export function projectPlayerEquipment(
   weapons: readonly ObservedWeapon[] | undefined,
   catalog: EquipmentCatalog | undefined,
+  context: PlayerEquipmentContext,
 ): PlayerEquipmentProjection {
+  const hasC4 = playerHasC4(context);
   if (weapons === undefined)
     return {
       available: false,
       primary: null,
       secondary: null,
       heldWeaponId: null,
+      zeusWeaponId: null,
       utility: null,
-      hasC4: null,
+      hasC4,
     };
   const sorted = [...weapons].sort((a, b) => a.sourceWeaponId.localeCompare(b.sourceWeaponId));
   const known = sorted.map((weapon) => ({
@@ -51,7 +74,8 @@ export function projectPlayerEquipment(
   const available = known.every(({ item }) => item !== undefined);
   const firearms = known.filter(({ item }) => item?.kind === 'firearm' && item.family !== 'pistol');
   const pistols = known.filter(({ item }) => item?.kind === 'firearm' && item.family === 'pistol');
-  const active = sorted.filter((weapon) => weapon.state === 'active');
+  const held = sorted.filter((weapon) => weapon.state === 'active' || weapon.state === 'reloading');
+  const zeus = known.find(({ item }) => item?.canonicalKey === 'utility.taser');
   const utility = { smoke: 0, fire: 0, flash: 0, he: 0 };
   let utilityKnown = available;
   for (const { weapon, item } of known) {
@@ -75,7 +99,6 @@ export function projectPlayerEquipment(
       else utility[family] += weapon.ammoReserve;
     }
   }
-  const hasC4 = known.some(({ item }) => item?.canonicalKey === 'objective.c4');
   return {
     available,
     primary: available
@@ -83,9 +106,16 @@ export function projectPlayerEquipment(
       : null,
     secondary:
       available && firearms.length > 0 ? (pistols[0]?.weapon.sourceWeaponId ?? null) : null,
-    heldWeaponId: active.length === 1 ? active[0]!.sourceWeaponId : null,
+    heldWeaponId:
+      context.telemetryFresh &&
+      context.lineupCurrent &&
+      context.lifeState === 'alive' &&
+      held.length === 1
+        ? held[0]!.sourceWeaponId
+        : null,
+    zeusWeaponId: zeus?.weapon.sourceWeaponId ?? null,
     utility: utilityKnown ? utility : null,
-    hasC4: hasC4 ? true : available ? false : null,
+    hasC4,
   };
 }
 

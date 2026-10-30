@@ -131,6 +131,7 @@ export const playerEquipmentSchema = z.object({
   primary: nullableString,
   secondary: nullableString,
   heldWeaponId: nullableString,
+  zeusWeaponId: nullableString,
   utility: utilityCountsSchema.nullable(),
   hasC4: nullableBoolean,
 });
