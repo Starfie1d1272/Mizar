@@ -17,7 +17,12 @@ import type {
 import type { ObsAudioRouting } from './audio-routing.js';
 import type { GameAudioController } from './audio-policy-controller.js';
 import type { MixerChannelStatus, MixerCommand, MixerCommandResult } from '@mizar/protocol/mixer';
-import { createCommentaryProbe, isTeamspeak, RemoteCommentary } from './remote-commentary.js';
+import {
+  createCommentaryProbe,
+  isModernTeamspeak,
+  isTeamspeak,
+  RemoteCommentary,
+} from './remote-commentary.js';
 import {
   AUTO_TEAMSPEAK_TARGET,
   readCommentarySwitch,
@@ -39,6 +44,7 @@ import {
 import type { MusicDirector } from '../music/director.js';
 import { desktopMonitorRelationship } from './audio-monitor-device.js';
 import { inspectAudioSceneGraph } from './audio-scene-graph.js';
+import { inspectLegacyAudioTemplate } from './audio-template.js';
 import { discoverWaitingCommentary } from './remote-commentary-wait.js';
 import { AudioConfigurationConnection } from './audio-configuration-connection.js';
 import { ObsOutputController, ObsOutputError } from './outputs.js';
@@ -395,7 +401,30 @@ export class ObsAdapter {
               ),
             ),
           );
-          if (result === 'complete' && valid()) await this.check();
+          if (result === 'complete' && valid()) {
+            const adopted = await this.configurationMutation(() =>
+              this.audioConfiguration.run((connection, endpoint, observer) =>
+                this.adoptInitialTeamspeakDesktop(
+                  guardedObs(connection, valid),
+                  endpoint,
+                  observer,
+                  valid,
+                ),
+              ),
+            );
+            if (valid()) {
+              await this.check();
+              if (adopted)
+                this.findings = [
+                  ...this.findings,
+                  {
+                    code: 'audio_teamspeak_compatibility',
+                    message:
+                      '已保留桌面混音。请确认游戏与 TeamSpeak 输出到所采集的设备，并在开播前录制试听。',
+                  },
+                ];
+            }
+          }
         } catch {
           // Commentary discovery is retried independently of mode recovery.
         }
@@ -1743,6 +1772,102 @@ export class ObsAdapter {
       }),
     );
   }
+  private async adoptInitialTeamspeakDesktop(
+    obs: ObsRpc,
+    endpoint: string,
+    observer: MigrationObserver,
+    valid: () => boolean,
+  ): Promise<boolean> {
+    if (!this.audioRouting || !this.commentary) return false;
+    const revision = await this.audioRouting.automaticDesktopRevision();
+    const preference = await this.commentary.owner.get();
+    if (!revision || preference.preference.mode !== 'autoTeamspeak') return false;
+    let changed = false;
+    const stop = observer.subscribe((event) => {
+      if (event.type !== 'programChanged') changed = true;
+    });
+    try {
+      const inputs = (await obs.call('GetInputList')).inputs;
+      if (!Array.isArray(inputs)) return false;
+      const processInputs = inputs.filter(
+        (input: Record<string, unknown>) =>
+          input.inputKind === 'wasapi_process_output_capture' &&
+          typeof input.inputUuid === 'string',
+      );
+      const candidates: string[] = [];
+      for (const input of processInputs) {
+        const settings = (await obs.call('GetInputSettings', { inputUuid: input.inputUuid }))
+          .inputSettings;
+        if (
+          settings &&
+          typeof settings === 'object' &&
+          isModernTeamspeak((settings as Record<string, unknown>).window)
+        )
+          candidates.push(input.inputUuid as string);
+      }
+      if (candidates.length !== 1) return false;
+      const legacy = await inspectLegacyAudioTemplate(obs, this.browserBaseUrl, candidates[0]!);
+      if (!legacy || !legacy.desktop.length) return false;
+      for (const scene of obsDesiredScenes(this.browserBaseUrl)) {
+        const items = (await obs.call('GetSceneItemList', { sceneName: scene.sceneName }))
+          .sceneItems;
+        if (
+          !Array.isArray(items) ||
+          items.some(
+            (item: Record<string, unknown>) =>
+              item.sourceUuid === candidates[0] && item.sceneItemEnabled !== false,
+          )
+        )
+          return false;
+      }
+      const desktopUuid = legacy.desktop[0]!.sourceUuid;
+      if (legacy.desktop.some((ref) => ref.sourceUuid !== desktopUuid)) return false;
+      const desktop = inputs.find(
+        (input: Record<string, unknown>) => input.inputUuid === desktopUuid,
+      );
+      const microphone = inputs.find(
+        (input: Record<string, unknown>) => input.inputUuid === legacy.microphoneUuid,
+      );
+      if (
+        desktop?.inputKind !== 'wasapi_output_capture' ||
+        microphone?.inputKind !== 'wasapi_input_capture'
+      )
+        return false;
+      const [stream, record] = await Promise.all([
+        obs.call('GetStreamStatus'),
+        obs.call('GetRecordStatus'),
+      ]);
+      const currentPreference = await this.commentary.owner.get();
+      const currentRevision = await this.audioRouting.automaticDesktopRevision();
+      if (
+        changed ||
+        !valid() ||
+        stream.outputActive !== false ||
+        record.outputActive !== false ||
+        currentPreference.revision !== preference.revision ||
+        currentRevision !== revision
+      )
+        return false;
+      await this.audioRouting.adoptInitialDesktop(
+        revision,
+        {
+          inputUuid: desktopUuid,
+          inputKind: 'wasapi_output_capture',
+          endpoint,
+          collection: OBS_COLLECTION,
+        },
+        {
+          inputUuid: legacy.microphoneUuid,
+          inputKind: 'wasapi_input_capture',
+          endpoint,
+          collection: OBS_COLLECTION,
+        },
+      );
+      return true;
+    } finally {
+      stop();
+    }
+  }
   ensure(
     activeScene: () => ProgramSceneId = () => 'waiting',
     valid: () => boolean = () => false,
@@ -1796,35 +1921,54 @@ export class ObsAdapter {
         !(await this.audioRouting?.modePending())
       ) {
         try {
-          const commentary = await this.audioConfiguration.run((connection, endpoint, observer) =>
-            configureIndependentAudio(
-              guardedObs(connection, current),
-              endpoint,
-              observer,
-              this.commentary!.owner,
-              this.commentary!.journal,
-              this.browserBaseUrl,
-              async (ids) =>
-                this.audioRouting?.seedAutomatic(guardedObs(connection, current), endpoint, ids),
-              async () => !(await this.audioRouting?.enabled()),
-              async (plan) => {
-                const routing = await this.audioRouting?.commentaryBinding();
-                return Boolean(
-                  routing &&
-                  routing.revision === plan.routingRevision &&
-                  routing.binding?.inputUuid === plan.uuid &&
-                  routing.binding.endpoint === plan.endpoint &&
-                  routing.binding.collection === plan.collection &&
-                  routing.game?.inputUuid !== plan.uuid &&
-                  routing.microphone?.inputUuid !== plan.uuid,
-                );
-              },
-              async () =>
-                (await this.audioRouting?.managedBindings(
+          const commentary = await this.audioConfiguration.run(
+            async (connection, endpoint, observer) => {
+              const findings = await configureIndependentAudio(
+                guardedObs(connection, current),
+                endpoint,
+                observer,
+                this.commentary!.owner,
+                this.commentary!.journal,
+                this.browserBaseUrl,
+                async (ids) =>
+                  this.audioRouting?.seedAutomatic(guardedObs(connection, current), endpoint, ids),
+                async () => !(await this.audioRouting?.enabled()),
+                async (plan) => {
+                  const routing = await this.audioRouting?.commentaryBinding();
+                  return Boolean(
+                    routing &&
+                    routing.revision === plan.routingRevision &&
+                    routing.binding?.inputUuid === plan.uuid &&
+                    routing.binding.endpoint === plan.endpoint &&
+                    routing.binding.collection === plan.collection &&
+                    routing.game?.inputUuid !== plan.uuid &&
+                    routing.microphone?.inputUuid !== plan.uuid,
+                  );
+                },
+                async () =>
+                  (await this.audioRouting?.managedBindings(
+                    guardedObs(connection, current),
+                    endpoint,
+                  )) ?? null,
+              );
+              if (findings.some((finding) => finding.code === 'audio_teamspeak_compatibility')) {
+                const adopted = await this.adoptInitialTeamspeakDesktop(
                   guardedObs(connection, current),
                   endpoint,
-                )) ?? null,
-            ),
+                  observer,
+                  current,
+                );
+                if (adopted)
+                  return [
+                    {
+                      code: 'audio_teamspeak_compatibility',
+                      message:
+                        '已保留桌面混音。请确认游戏与 TeamSpeak 输出到所采集的设备，并在开播前录制试听。',
+                    },
+                  ];
+              }
+              return findings;
+            },
           );
           this.findings = [...this.findings, ...commentary];
         } catch (error) {
