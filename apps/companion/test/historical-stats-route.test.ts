@@ -45,7 +45,7 @@ it('serves bound projections over local HTTP without new upstream requests', asy
     });
     let binding = {
       origin: 'online',
-      context: { matchId: fixture.matchId },
+      context: { matchId: fixture.matchId, competition: { competitionId: fixture.competitionId } },
       manifest: {
         match: { matchId: fixture.matchId },
         entrants: { a: canonical(fixture.entrants[0]!), b: canonical(fixture.entrants[1]!) },
@@ -63,6 +63,16 @@ it('serves bound projections over local HTTP without new upstream requests', asy
       expect(data.playerComparison.eligible).toBe(true);
     }
     expect(upstreamRequests).toBe(1);
+    binding = {
+      ...binding,
+      context: {
+        ...binding.context,
+        competition: { ...binding.context.competition!, competitionId: 'other-competition' },
+      },
+    };
+    expect(
+      await (await fetch(`${address}/local/v1/broadcast-stats-presentation`)).json(),
+    ).toBeNull();
     binding = { ...binding, origin: 'local' };
     expect(
       await (await fetch(`${address}/local/v1/broadcast-stats-presentation`)).json(),

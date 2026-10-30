@@ -1290,6 +1290,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     if (
       current !== binding ||
       !value ||
+      value.competitionId !== binding.context.competition?.competitionId ||
       value.entrants.length !== 2 ||
       new Set(value.entrants.map((entry) => entry.entryId)).size !== 2 ||
       !ids.every((id) => value.entrants.some((entry) => entry.entryId === id))

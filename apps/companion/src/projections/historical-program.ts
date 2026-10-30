@@ -61,7 +61,9 @@ export function projectHistoricalProgram(
 ): BroadcastStatsProgram {
   const context = binding.context;
   const candidate =
-    raw?.matchId === context.matchId ? bindHistoricalStats(raw, binding.manifest) : null;
+    raw?.matchId === context.matchId && context.competition?.competitionId === raw.competitionId
+      ? bindHistoricalStats(raw, binding.manifest)
+      : null;
   const bound =
     candidate &&
     candidate.entrants[0]?.entryId === context.entrants.a.entryId &&

@@ -70,6 +70,15 @@ it('preserves identity cards when historical data is missing and chooses one-sid
   ]);
 });
 
+it('does not attach a snapshot from another competition even when match and entrant IDs match', () => {
+  const input = broadcastStatsSchema.parse(extended);
+  const other = { ...input, competitionId: 'different-competition' };
+  const output = projectHistoricalProgram(binding(input), other, null, 'waiting');
+  expect(output.history).toEqual([null, null]);
+  expect(output.sourceRevision).toBeNull();
+  expect(output.pages.some((page) => page.kind === 'overview')).toBe(false);
+});
+
 it('keeps the highest sampled Rating players through missing ADR and partial radar', () => {
   const input = broadcastStatsSchema.parse(extended);
   const top = input.entrants[1]!.playerPerformance.players[1]!;

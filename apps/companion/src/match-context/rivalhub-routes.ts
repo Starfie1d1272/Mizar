@@ -461,7 +461,12 @@ export function registerHistoricalStatsPresentationRoute(
     )
       return reply.header('cache-control', 'no-store').send(null);
     const value = await connection.getStats(binding.context.matchId);
-    if (options.getBinding() !== binding || !value || value.matchId !== binding.context.matchId)
+    if (
+      options.getBinding() !== binding ||
+      !value ||
+      value.matchId !== binding.context.matchId ||
+      value.competitionId !== binding.context.competition?.competitionId
+    )
       return reply.header('cache-control', 'no-store').send(null);
     const bound = bindHistoricalStats(value, binding.manifest);
     return reply
