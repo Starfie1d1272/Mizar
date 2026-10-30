@@ -1,6 +1,7 @@
-import type { CSSProperties, SyntheticEvent } from 'react';
+import { Fragment, type CSSProperties, type SyntheticEvent } from 'react';
 import { getMapThumbnail } from '@mizar/cs2-assets';
 import { BroadcastArc } from './BroadcastArc.js';
+import { StatsInsertSupplementView, type StatsInsertSupplement } from './StatsInsertSupplement.js';
 import { ProgramCanvas } from './ProgramCanvas.js';
 import { useAssetUrl } from './assets.js';
 import './broadcast-material.css';
@@ -18,11 +19,21 @@ type Row = {
   readonly label: string;
   readonly artwork?: string;
   readonly values: Pair<string>;
-  readonly numericValues?: Pair<number>;
+  readonly numericValues?: Pair<number | null>;
+  readonly barWidths?: Pair<number | null>;
   readonly samples?: Pair<string>;
   readonly portraits?: Pair<string | null>;
 };
 export type StatsInsert = {
+  readonly content?: StatsInsertSupplement;
+  readonly event?: string;
+  readonly stage?: string;
+  readonly phaseFormat?: string;
+  readonly pageCount?: string;
+  readonly rail?: Pair<string>;
+  readonly railCenter?: string;
+  readonly visibleSides?: readonly (0 | 1)[];
+  readonly playerSamples?: Pair<string>;
   readonly title: string;
   readonly subtitle: string;
   readonly scope: string;
@@ -86,6 +97,7 @@ export function StatsInsertView({
   const resolve = useAssetUrl();
   const matchTeams = insert.matchTeams ?? insert.teams;
   const matchLogos = insert.matchLogos ?? insert.logos;
+  const sides = insert.visibleSides ?? ([0, 1] as const);
   const mapAsset = (name?: string) => {
     const map = name ? getMapThumbnail(name) : null;
     return map ? resolve(map.outputPath) : null;
@@ -96,40 +108,54 @@ export function StatsInsertView({
         <BroadcastArc />
         <div className="stats-top">
           <span>{matchTeams[0]}</span>
-          <span />
+          <span className="stats-top-center">{insert.phaseFormat}</span>
           <span>{matchTeams[1]}</span>
         </div>
-        <header className="stats-heading">
-          <div>
-            <p>{insert.subtitle}</p>
-            <h1>{insert.title}</h1>
+        {insert.content?.kind !== 'match' && (
+          <header className="stats-heading">
+            <div>
+              <p>{insert.subtitle}</p>
+              <h1>{insert.title}</h1>
+            </div>
+            <div className="stats-logos">
+              {sides.map((side, index) => (
+                <span className="stats-heading-logo" key={side}>
+                  {index > 0 && matchLogos?.[sides[0]!] && matchLogos?.[side] && <span>VS</span>}
+                  <Picture src={matchLogos?.[side]} />
+                </span>
+              ))}
+            </div>
+          </header>
+        )}
+        {insert.content?.kind !== 'match' && (
+          <div className="stats-rail">
+            <span>
+              {insert.rail
+                ? insert.rail[0]
+                : insert.layout === 'maps'
+                  ? `上排 · ${matchTeams[0]}`
+                  : insert.layout === 'radar'
+                    ? '七维 · 0–100'
+                    : insert.teams[0]}
+            </span>
+            <span className="stats-rail-center">{insert.railCenter}</span>
+            <span>
+              {insert.rail
+                ? insert.rail[1]
+                : insert.layout === 'maps'
+                  ? `下排 · ${matchTeams[1]}`
+                  : insert.layout === 'radar'
+                    ? '历史基准'
+                    : insert.teams[1]}
+            </span>
           </div>
-          <div className="stats-logos">
-            <Picture src={matchLogos?.[0]} />
-            {matchLogos?.[0] && matchLogos?.[1] && <span>VS</span>}
-            <Picture src={matchLogos?.[1]} />
-          </div>
-        </header>
-        <div className="stats-rail">
-          <span>
-            {insert.layout === 'maps'
-              ? `上排 · ${matchTeams[0]}`
-              : insert.layout === 'radar'
-                ? '七维 · 0–100'
-                : insert.teams[0]}
-          </span>
-          <span>
-            {insert.layout === 'maps'
-              ? `下排 · ${matchTeams[1]}`
-              : insert.layout === 'radar'
-                ? '历史基准'
-                : insert.teams[1]}
-          </span>
-        </div>
+        )}
         <main className="stats-body">
-          {insert.layout === 'maps' ? (
+          {insert.content ? (
+            <StatsInsertSupplementView content={insert.content} />
+          ) : insert.layout === 'maps' ? (
             <div
-              className="stats-maps"
+              className={`stats-maps ${sides.length === 1 ? 'single' : ''}`}
               style={{
                 gridTemplateColumns: `repeat(${Math.max(1, insert.rows.length)}, minmax(0, 1fr))`,
               }}
@@ -140,33 +166,39 @@ export function StatsInsertView({
                     <Picture src={mapAsset(row.artwork)} />
                   </div>
                   <h3>{row.label}</h3>
-                  {row.values.map((value, side) => (
-                    <div className="stats-map-number" key={side}>
-                      <strong>
-                        {value.endsWith('%') ? (
-                          <>
-                            {value.slice(0, -1)}
-                            <sup>%</sup>
-                          </>
-                        ) : (
-                          value
-                        )}
-                      </strong>
-                      <small>{row.samples?.[side]}</small>
-                    </div>
-                  ))}
+                  {sides.map((side) => {
+                    const value = row.values[side];
+                    return (
+                      <div
+                        className={`stats-map-number ${value === '—' ? 'missing' : ''}`}
+                        key={side}
+                      >
+                        <strong>
+                          {value.endsWith('%') ? (
+                            <>
+                              {value.slice(0, -1)}
+                              <sup>%</sup>
+                            </>
+                          ) : (
+                            value
+                          )}
+                        </strong>
+                        <small>{row.samples?.[side]}</small>
+                      </div>
+                    );
+                  })}
                 </article>
               ))}
             </div>
           ) : insert.recent ? (
             <div
-              className="stats-recent"
+              className={`stats-recent ${sides.length === 1 ? 'single' : ''}`}
               data-count={Math.max(...insert.recent.map((items) => items.length))}
             >
-              {insert.recent.map((items, side) => (
+              {sides.map((side) => (
                 <section key={side}>
                   <div className="stats-recent-team">{matchTeams[side]}</div>
-                  {items.map((item, i) => (
+                  {insert.recent![side].map((item, i) => (
                     <article className="stats-recent-match" key={i}>
                       <div className="stats-recent-top">
                         <span>单图</span>
@@ -184,9 +216,12 @@ export function StatsInsertView({
               ))}
             </div>
           ) : insert.layout === 'lineups' ? (
-            <div className="stats-rosters">
-              {([0, 1] as const).map((side) => (
-                <section className={`stats-roster ${side ? 'right' : ''}`} key={side}>
+            <div className={`stats-rosters ${sides.length === 1 ? 'single' : ''}`}>
+              {sides.map((side, index) => (
+                <section
+                  className={`stats-roster ${index && sides.length > 1 ? 'right' : ''}`}
+                  key={side}
+                >
                   <div className="stats-roster-columns" />
                   {insert.rows.map((row, i) => (
                     <div className="stats-roster-row" key={i}>
@@ -204,11 +239,38 @@ export function StatsInsertView({
               ))}
             </div>
           ) : insert.layout === 'players' ? (
-            <div className="stats-players">
-              <PlayerSide insert={insert} side={0} />
-              <div className="stats-versus">VS</div>
-              <PlayerSide insert={insert} side={1} />
+            <div className={`stats-players ${sides.length === 1 ? 'single' : ''}`}>
+              {sides.map((side, index) => (
+                <Fragment key={side}>
+                  {index > 0 && <div className="stats-versus">VS</div>}
+                  <PlayerSide insert={insert} side={side} />
+                </Fragment>
+              ))}
             </div>
+          ) : insert.layout === 'radar' && sides.length === 1 ? (
+            <StatsInsertSupplementView
+              content={{
+                kind: 'profile',
+                person: {
+                  name: insert.teams[sides[0]!],
+                  avatar: insert.logos?.[sides[0]!] ?? null,
+                  team: matchTeams[sides[0]!],
+                  sample: insert.rows[0]?.samples?.[sides[0]!] ?? '',
+                  metrics: (['rating', 'adr'] as const).flatMap((key) => {
+                    const value = insert.playerMetrics?.[sides[0]!]?.[key];
+                    return value == null
+                      ? []
+                      : [{ label: key === 'rating' ? 'Rating' : 'ADR', value }];
+                  }),
+                  attributes: insert.rows.flatMap((row) => {
+                    const value = row.numericValues?.[sides[0]!];
+                    return value == null
+                      ? []
+                      : [{ label: row.label, value: row.values[sides[0]!], width: value }];
+                  }),
+                },
+              }}
+            />
           ) : insert.layout === 'radar' ? (
             <div className="stats-radar-layout">
               <RadarPerson insert={insert} side={0} />
@@ -235,12 +297,12 @@ export function StatsInsertView({
               {insert.rows.map((row, i) => (
                 <article className="stats-column" key={i}>
                   <h3>{row.label}</h3>
-                  {row.values.map((value, side) => (
+                  {sides.map((side) => (
                     <div className="stats-column-block" key={side}>
                       <span>{insert.teams[side]}</span>
-                      <strong>{value}</strong>
+                      <strong>{row.values[side]}</strong>
                       <small>{row.samples?.[side]}</small>
-                      {row.numericValues && (
+                      {row.numericValues?.[side] != null && (
                         <div className="stats-mini-bar">
                           <i
                             style={{
@@ -255,15 +317,15 @@ export function StatsInsertView({
               ))}
             </div>
           ) : insert.layout === 'cells' ? (
-            <div className="stats-cells">
+            <div className="stats-cells" data-count={insert.rows.length}>
               {insert.rows.map((row, i) => (
                 <article className="stats-cell" key={i}>
                   <h3>{row.label}</h3>
                   <div>
-                    {row.values.map((value, side) => (
+                    {sides.map((side, index) => (
                       <div key={side}>
-                        {side === 1 && <span className="stats-cell-vs">VS</span>}
-                        <strong>{value}</strong>
+                        {index === 1 && <span className="stats-cell-vs">VS</span>}
+                        <strong>{row.values[side]}</strong>
                         <span>{row.samples?.[side]}</span>
                       </div>
                     ))}
@@ -274,10 +336,13 @@ export function StatsInsertView({
           ) : (
             <div className="stats-comparison">
               {insert.rows.map((row, i) => (
-                <div className="stats-comparison-row" key={i}>
-                  <CompareValue row={row} side={0} />
+                <div
+                  className={`stats-comparison-row ${sides.length === 1 ? 'single' : ''}`}
+                  key={i}
+                >
+                  {sides.length > 1 && <CompareValue row={row} side={sides[0]!} />}
                   <div className="stats-metric-name">{row.label}</div>
-                  <CompareValue row={row} side={1} />
+                  {sides.length > 0 && <CompareValue row={row} side={sides[sides.length - 1]!} />}
                 </div>
               ))}
             </div>
@@ -285,9 +350,12 @@ export function StatsInsertView({
         </main>
         <footer className="stats-footer">
           <div>
+            <strong>{insert.event}</strong>
+            <span>{insert.stage}</span>
             <span>{insert.scope}</span>
           </div>
           <div>
+            {insert.pageCount && <span className="stats-footer-page">{insert.pageCount}</span>}
             <Picture src={resolve('/brand/mizar-mark-mono.svg')} />
             <span>MIZAR</span>
           </div>
@@ -298,12 +366,16 @@ export function StatsInsertView({
 }
 function CompareValue({ row, side }: { readonly row: Row; readonly side: 0 | 1 }) {
   return (
-    <div className="stats-compare-value">
+    <div className={`stats-compare-value ${row.values[side] === '—' ? 'missing' : ''}`}>
       <strong>{row.values[side]}</strong>
       <span>{row.samples?.[side]}</span>
-      {row.numericValues && (
+      {(row.barWidths?.[side] ?? row.numericValues?.[side]) != null && (
         <div>
-          <i style={{ width: `${Math.max(0, Math.min(100, row.numericValues[side]))}%` }} />
+          <i
+            style={{
+              width: `${Math.max(0, Math.min(100, (row.barWidths?.[side] ?? row.numericValues?.[side])!))}%`,
+            }}
+          />
         </div>
       )}
     </div>
@@ -318,10 +390,11 @@ function PlayerSide({ insert, side }: { readonly insert: StatsInsert; readonly s
           <h2>{insert.teams[side]}</h2>
           <p>{insert.matchTeams?.[side]}</p>
           <small>
-            {insert.rows
-              .map((row) => row.samples?.[side])
-              .filter(Boolean)
-              .join(' · ')}
+            {insert.playerSamples?.[side] ??
+              insert.rows
+                .map((row) => row.samples?.[side])
+                .filter(Boolean)
+                .join(' · ')}
           </small>
         </div>
       </div>
@@ -342,19 +415,14 @@ function RadarPerson({ insert, side }: { readonly insert: StatsInsert; readonly 
       <Picture src={insert.logos?.[side]} />
       <h2>{insert.teams[side]}</h2>
       <div>{insert.matchTeams?.[side]}</div>
-      {insert.playerMetrics?.[side] && (
-        <div className="stats-radar-values">
-          {(['rating', 'adr'] as const).map((key) => {
-            const value = insert.playerMetrics?.[side]?.[key];
-            return value == null ? null : (
-              <div key={key}>
-                <strong>{value}</strong>
-                <span>{key === 'rating' ? 'Rating' : 'ADR'}</span>
-              </div>
-            );
-          })}
-        </div>
-      )}
+      <div className="stats-radar-values">
+        {(['rating', 'adr'] as const).map((key) => (
+          <div key={key}>
+            <strong>{insert.playerMetrics?.[side]?.[key] ?? '—'}</strong>
+            <span>{key === 'rating' ? 'Rating' : 'ADR'}</span>
+          </div>
+        ))}
+      </div>
       <small>{insert.rows[0]?.samples?.[side]}</small>
     </div>
   );
@@ -364,6 +432,32 @@ function radarPoint(index: number, value: number, count: number): [number, numbe
   return [400 + (Math.cos(angle) * 212 * value) / 100, 284 + (Math.sin(angle) * 212 * value) / 100];
 }
 function Radar({ rows }: { readonly rows: readonly Row[] }) {
+  const complete =
+    rows.length > 0 && rows.every((row) => row.numericValues?.every((value) => value != null));
+  if (!complete)
+    return (
+      <div className="stats-attribute-comparison">
+        {rows.map((row, i) => (
+          <div className="stats-attribute-pair" key={i}>
+            <span>{row.label}</span>
+            <strong>{row.values[0]}</strong>
+            <div className="stats-attribute-dual-bars">
+              {([0, 1] as const).map((side) => {
+                const value = row.numericValues?.[side];
+                return value == null ? null : (
+                  <i
+                    key={side}
+                    className={side ? 'right' : 'left'}
+                    style={{ width: `${Math.max(0, Math.min(100, value))}%` }}
+                  />
+                );
+              })}
+            </div>
+            <strong>{row.values[1]}</strong>
+          </div>
+        ))}
+      </div>
+    );
   return (
     <svg
       className="stats-radar"
@@ -384,15 +478,19 @@ function Radar({ rows }: { readonly rows: readonly Row[] }) {
         const [x, y] = radarPoint(i, 100, rows.length);
         return <line key={row.label} x1="400" y1="284" x2={x} y2={y} stroke="#28384b" />;
       })}
-      {rows.every((row) => row.numericValues) &&
+      {complete &&
         ([0, 1] as const).map((side) => (
           <polygon
             key={side}
             points={rows
-              .map((row, i) => radarPoint(i, row.numericValues![side], rows.length).join(','))
+              .map((row, i) => radarPoint(i, row.numericValues![side]!, rows.length).join(','))
               .join(' ')}
             fill={side ? '#c6d7e90f' : '#59a8ff26'}
-            stroke={side ? '#c6d7e9' : 'var(--mizar-broadcast-pulse-blue)'}
+            stroke={
+              side
+                ? '#c6d7e9'
+                : 'rgb(from var(--mizar-broadcast-pulse-blue) calc(r + 44) calc(g + 41) calc(b + 6) / alpha)'
+            }
             strokeWidth="3"
           />
         ))}
@@ -404,7 +502,9 @@ function Radar({ rows }: { readonly rows: readonly Row[] }) {
               {row.label}
             </text>
             <text x={x} y={y + 23} className="stats-radar-score">
-              <tspan fill="var(--mizar-broadcast-pulse-blue)">{row.values[0]}</tspan>
+              <tspan fill="rgb(from var(--mizar-broadcast-pulse-blue) calc(r + 44) calc(g + 41) calc(b + 6) / alpha)">
+                {row.values[0]}
+              </tspan>
               <tspan fill="#667d95"> / </tspan>
               <tspan fill="#dbe7f5">{row.values[1]}</tspan>
             </text>
