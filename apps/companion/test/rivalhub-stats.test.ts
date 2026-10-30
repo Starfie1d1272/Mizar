@@ -147,3 +147,55 @@ it('uses one real HTTP snapshot for repeated local readers and refreshes only on
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+it('rejects a late real HTTP response after switching matches', async () => {
+  const { createServer } = await import('node:http');
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-stats-switch-'));
+  let releaseOld!: () => void;
+  let receivedOld!: () => void;
+  const received = new Promise<void>((resolve) => {
+    receivedOld = resolve;
+  });
+  const server = createServer((request, response) => {
+    const matchId = new URL(request.url!, 'http://127.0.0.1').searchParams.get('matchId');
+    if (matchId === fixture.matchId) {
+      releaseOld = () => response.end(JSON.stringify(fixture));
+      receivedOld();
+      return;
+    }
+    response.end(JSON.stringify({ ...fixture, matchId, revision: 'new-match' }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('missing HTTP address');
+    const path = join(directory, 'connection.json');
+    await writeFile(
+      path,
+      JSON.stringify({
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        credential: 'secret',
+        installationId: 'install',
+        competitionId: fixture.competitionId,
+        displayName: 'test',
+      }),
+    );
+    const connection = new RivalHubConnection(path);
+    await connection.load();
+    const old = connection.stats(fixture.matchId);
+    await received;
+    expect(await connection.stats('other')).toMatchObject({
+      matchId: 'other',
+      revision: 'new-match',
+    });
+    releaseOld();
+    expect(await old).toBeNull();
+    expect(await connection.getStats(fixture.matchId)).toBeNull();
+    expect(await connection.getStats('other')).toMatchObject({ revision: 'new-match' });
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+    await rm(directory, { recursive: true, force: true });
+  }
+});
