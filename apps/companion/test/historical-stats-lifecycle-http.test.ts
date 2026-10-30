@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { expect, it } from 'vitest';
+import { broadcastStatsSchema } from '@mizar/protocol/broadcast-stats';
 import { toMatchContext, type BroadcastManifest } from '@mizar/rivalhub';
 import { buildApp } from '../src/app.js';
 import { RivalHubConnection } from '../src/match-context/rivalhub-connection.js';
@@ -42,6 +43,9 @@ it('keeps one snapshot through map changes, refreshes and cancels across match a
     ...snapshot.entrants[0]!.facts.players[0]!,
     userId: benchId,
   });
+  const wrongTeams = structuredClone(snapshot);
+  wrongTeams.entrants[0]!.entryId = 'other-team';
+  expect(broadcastStatsSchema.safeParse(wrongTeams).success).toBe(true);
   let statsRequests = 0;
   let failures = 1;
   let hold = false;
@@ -75,7 +79,7 @@ it('keeps one snapshot through map changes, refreshes and cancels across match a
     }
     if (failures > 0) {
       failures--;
-      response.end(JSON.stringify({ invalid: true }));
+      response.end(JSON.stringify({ ...wrongTeams, matchId: url.searchParams.get('matchId') }));
       return;
     }
     response.end(
@@ -102,6 +106,11 @@ it('keeps one snapshot through map changes, refreshes and cancels across match a
     }),
   );
   let now = 0;
+  const target = (matchId = snapshot.matchId) => ({
+    matchId,
+    competitionId: snapshot.competitionId,
+    entrantIds: [manifest.entrants.a.entryId, manifest.entrants.b.entryId] as const,
+  });
   const connection = new RivalHubConnection(connectionPath, fetch, undefined, () => now);
   await connection.load();
   const app = buildApp({
@@ -136,14 +145,14 @@ it('keeps one snapshot through map changes, refreshes and cancels across match a
     };
     expect((await production('enter')).status).toBe(200);
     await waitUntil(() => statsRequests === 1);
-    await waitUntil(() => connection.getStatsSnapshot(snapshot.matchId) === null);
+    await waitUntil(() => connection.getStatsSnapshot(target()) === null);
     for (let i = 0; i < 12; i++) {
       failures = 1;
       now += 3_600_000;
-      expect(await connection.stats(snapshot.matchId)).toBeNull();
+      expect(await connection.stats(target())).toBeNull();
     }
     now += 3_600_000;
-    expect((await connection.stats(snapshot.matchId))?.matchId).toBe(snapshot.matchId);
+    expect((await connection.stats(target()))?.matchId).toBe(snapshot.matchId);
     const initialCount = statsRequests;
     for (const name of ['de_ancient', 'de_nuke']) {
       const response = await post('/gsi', {
@@ -178,12 +187,12 @@ it('keeps one snapshot through map changes, refreshes and cancels across match a
       activate: true,
     });
     expect(selected.status).toBe(200);
-    await waitUntil(() => connection.getStatsSnapshot('match-next') !== null);
+    await waitUntil(() => connection.getStatsSnapshot(target('match-next')) !== null);
     expect(statsRequests).toBe(initialCount + 3);
     await waitUntil(() => aborted >= 1);
     releaseHeld(snapshot);
     await lateRefresh;
-    expect(connection.getStatsSnapshot('match-next')?.matchId).toBe('match-next');
+    expect(connection.getStatsSnapshot(target('match-next'))?.matchId).toBe('match-next');
     hold = true;
     delete held.response;
     const lateOnExit = post('/operator/rivalhub/stats/refresh', {});
@@ -192,7 +201,7 @@ it('keeps one snapshot through map changes, refreshes and cancels across match a
     await waitUntil(() => aborted >= 2);
     releaseHeld({ ...snapshot, matchId: 'match-next' });
     await lateOnExit;
-    expect(connection.getStatsSnapshot('match-next')).toBeNull();
+    expect(connection.getStatsSnapshot(target('match-next'))).toBeNull();
   } finally {
     await app.close();
     await new Promise<void>((resolveClose, reject) =>

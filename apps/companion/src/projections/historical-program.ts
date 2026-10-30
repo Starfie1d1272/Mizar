@@ -5,7 +5,7 @@ import {
 } from '@mizar/protocol/broadcast-stats-presentation';
 import type { ProgramPresentation, ProgramSceneId } from '@mizar/protocol/program-scenes';
 import type { MatchContextBinding } from '../match-context/lkg-store.js';
-import { bindHistoricalStats } from './historical-stats.js';
+import { bindHistoricalStats, hasRatingSample } from './historical-stats.js';
 import { displayPlayers, preparePage } from './historical-program-display.js';
 
 type Entrant = BroadcastStats['entrants'][number];
@@ -216,14 +216,7 @@ export function projectHistoricalProgram(
   const candidates = sides.map((side) => {
     const roster = new Set(teams[side].starters.map((player) => player.userId));
     return (histories[side]?.playerPerformance.players ?? [])
-      .filter(
-        (player) =>
-          roster.has(player.userId) &&
-          player.sample.maps > 0 &&
-          player.sample.ratingMaps > 0 &&
-          player.sample.ratingMaps <= player.sample.maps &&
-          player.rating !== null,
-      )
+      .filter((player) => roster.has(player.userId) && hasRatingSample(player))
       .sort(
         (a, b) => b.rating! - a.rating! || (a.userId < b.userId ? -1 : a.userId > b.userId ? 1 : 0),
       );

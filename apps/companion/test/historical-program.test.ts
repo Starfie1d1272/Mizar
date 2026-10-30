@@ -3,6 +3,7 @@ import { broadcastStatsSchema, type BroadcastStats } from '@mizar/protocol/broad
 import { programPresentationSchema } from '@mizar/protocol/program-scenes';
 import type { MatchContextBinding } from '../src/match-context/lkg-store.js';
 import { projectHistoricalProgram } from '../src/projections/historical-program.js';
+import { projectHistoricalStats } from '../src/projections/historical-stats.js';
 import legacy from '../../../tests/fixtures/rivalhub-provider-stats-v1.json' with { type: 'json' };
 import extended from '../../../tests/fixtures/rivalhub-provider-stats-v1-extended.json' with { type: 'json' };
 import single from '../../../tests/fixtures/rivalhub-provider-stats-v1-single-sided.json' with { type: 'json' };
@@ -92,6 +93,42 @@ it('keeps the highest sampled Rating players through missing ADR and partial rad
   expect(output.pages.find((page) => page.kind === 'radar')?.playerIds[1]).toBe(top.userId);
   expect(output.radar?.mode).toBe('bars');
   expect(output.radar?.values[0]?.values[1]).toBeNull();
+});
+
+it('requires Rating and ADR samples consistently in both local presentation contracts', () => {
+  const input = broadcastStatsSchema.parse(extended);
+  const invalid = input.entrants[0]!.playerPerformance.players[0]!;
+  const valid = input.entrants[0]!.playerPerformance.players[1]!;
+  invalid.rating = 10;
+  invalid.sample.ratingMaps = 0;
+  invalid.adr = 80;
+  invalid.sample.adrRounds = null;
+  valid.rating = 3;
+  valid.sample.ratingMaps = 1;
+  valid.adr = 90;
+  valid.sample.adrRounds = 0;
+  const old = projectHistoricalStats(input)!;
+  const output = projectHistoricalProgram(binding(input), input, null, 'waiting');
+  expect(old.selectedPlayers?.[0].userId).toBe(valid.userId);
+  expect(old.playerComparison.adr).toBeNull();
+  expect(output.selectedPlayerIds?.[0]).toBe(valid.userId);
+  expect(output.displayPlayers.find((p) => p.userId === invalid.userId)?.metrics).toMatchObject({
+    rating: { value: null, denominator: 0 },
+    adr: { value: null, denominator: null },
+  });
+  expect(output.displayPlayers.find((p) => p.userId === valid.userId)?.metrics.adr).toMatchObject({
+    value: null,
+    denominator: 0,
+  });
+  expect(output.pages.find((page) => page.kind === 'ranking')?.playerIds).not.toContain(
+    invalid.userId,
+  );
+  invalid.sample.ratingMaps = invalid.sample.maps + 1;
+  expect(
+    projectHistoricalProgram(binding(input), input, null, 'waiting').displayPlayers.find(
+      (p) => p.userId === invalid.userId,
+    )?.metrics.rating.value,
+  ).toBeNull();
 });
 
 it('orders only current starters by the confirmed scoreboard multi-kill rate', () => {

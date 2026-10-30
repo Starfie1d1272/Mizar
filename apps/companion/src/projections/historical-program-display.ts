@@ -1,5 +1,6 @@
 import type { BroadcastStats } from '@mizar/protocol/broadcast-stats';
 import type { BroadcastStatsProgram } from '@mizar/protocol/broadcast-stats-presentation';
+import { hasAdrSample, hasRatingSample } from './historical-stats.js';
 
 type Team = BroadcastStats['entrants'][number] | null;
 type Player = BroadcastStatsProgram['displayPlayers'][number];
@@ -69,8 +70,18 @@ export function displayPlayers(
       const facts = histories[side]?.facts?.players.find((p) => p.userId === identity.userId);
       const board = facts?.scoreboard;
       const detail = facts?.detailed;
-      const rating = metric(performance?.rating, 'number', null, performance?.sample.ratingMaps);
-      const adr = metric(performance?.adr, 'number', null, performance?.sample.adrRounds);
+      const rating = metric(
+        performance && hasRatingSample(performance) ? performance.rating : null,
+        'number',
+        null,
+        performance?.sample.ratingMaps,
+      );
+      const adr = metric(
+        performance && hasAdrSample(performance) ? performance.adr : null,
+        'number',
+        null,
+        performance?.sample.adrRounds,
+      );
       const kast = first(sampled(board?.kast, 'percent', 100), q(detail?.kast, 'percent', 100));
       const attributes = performance?.attributes.values ?? [];
       const profileMode = attributes.some((a) => a.score !== null)

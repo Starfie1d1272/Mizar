@@ -6,7 +6,11 @@ import type { FastifyInstance } from 'fastify';
 import type { LiveSnapshotV1 } from '@mizar/protocol/output';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 import type { MatchContextController } from './controller.js';
-import { OFFICIAL_RIVALHUB_URL, type RivalHubConnection } from './rivalhub-connection.js';
+import {
+  OFFICIAL_RIVALHUB_URL,
+  statsTarget,
+  type RivalHubConnection,
+} from './rivalhub-connection.js';
 import { isStandaloneLocalMatch } from './lkg-store.js';
 
 export function registerRivalHubConnectionRoutes(
@@ -56,7 +60,9 @@ export function registerRivalHubConnectionRoutes(
     return binding &&
       !isStandaloneLocalMatch(binding) &&
       binding.origin !== 'fixture' &&
-      binding.manifest.match.competition?.competitionId === options.connection.view().competitionId
+      binding.manifest.match.competition?.competitionId ===
+        options.connection.view().competitionId &&
+      binding.context.competition?.competitionId === options.connection.view().competitionId
       ? binding
       : undefined;
   };
@@ -65,9 +71,15 @@ export function registerRivalHubConnectionRoutes(
       return reply.code(403).send({ message: '本机页面来源无效。' });
     const binding = linkedBinding();
     if (!binding) return reply.code(409).send({ message: '请先加载网站比赛资料。' });
-    const value = await options.connection.stats(binding.context.matchId, true);
-    if (!value || linkedBinding()?.context.matchId !== binding.context.matchId) {
-      const retained = await options.connection.getStats(binding.context.matchId);
+    const target = statsTarget(binding.context);
+    const value = await options.connection.stats(target, true);
+    const current = linkedBinding();
+    if (
+      !value ||
+      !current ||
+      options.connection.getStatsSnapshot(statsTarget(current.context)) !== value
+    ) {
+      const retained = await options.connection.getStats(target);
       return reply.code(502).send({
         message: retained ? '统计刷新失败，保留本场已有快照。' : '统计刷新失败，当前没有可用快照。',
       });
@@ -138,7 +150,7 @@ export function registerRivalHubConnectionRoutes(
       (statsBinding.origin === 'online' ||
         (statsBinding.origin === 'cache' && statsBinding.cachedFrom === 'online'))
     )
-      void options.connection.stats(statsBinding.context.matchId);
+      void options.connection.stats(statsTarget(statsBinding.context));
     if (linkedBinding() && !options.controller?.isOnlineCandidateLoading())
       void Promise.resolve()
         .then(() => refresh(false))
@@ -460,7 +472,7 @@ export function registerHistoricalStatsPresentationRoute(
         !(binding.origin === 'cache' && binding.cachedFrom === 'online'))
     )
       return reply.header('cache-control', 'no-store').send(null);
-    const value = await connection.getStats(binding.context.matchId);
+    const value = await connection.getStats(statsTarget(binding.context));
     if (
       options.getBinding() !== binding ||
       !value ||
@@ -492,7 +504,7 @@ export function registerHistoricalStatsProgramRoute(
       binding.origin === 'online' ||
       (binding.origin === 'cache' && binding.cachedFrom === 'online');
     const snapshot = online
-      ? (options.connection?.getStatsSnapshot(binding.context.matchId) ?? null)
+      ? (options.connection?.getStatsSnapshot(statsTarget(binding.context)) ?? null)
       : null;
     return reply
       .header('cache-control', 'no-store')

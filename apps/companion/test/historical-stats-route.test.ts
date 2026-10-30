@@ -36,7 +36,11 @@ it('serves bound projections over local HTTP without new upstream requests', asy
     );
     const connection = new RivalHubConnection(path);
     await connection.load();
-    await connection.stats(fixture.matchId);
+    await connection.stats({
+      matchId: fixture.matchId,
+      competitionId: fixture.competitionId,
+      entrantIds: [fixture.entrants[0]!.entryId, fixture.entrants[1]!.entryId],
+    });
     const canonical = (entry: (typeof fixture.entrants)[number]) => ({
       entryId: entry.entryId,
       roster: {
@@ -45,7 +49,14 @@ it('serves bound projections over local HTTP without new upstream requests', asy
     });
     let binding = {
       origin: 'online',
-      context: { matchId: fixture.matchId, competition: { competitionId: fixture.competitionId } },
+      context: {
+        matchId: fixture.matchId,
+        competition: { competitionId: fixture.competitionId },
+        entrants: {
+          a: { entryId: fixture.entrants[0]!.entryId },
+          b: { entryId: fixture.entrants[1]!.entryId },
+        },
+      },
       manifest: {
         match: { matchId: fixture.matchId },
         entrants: { a: canonical(fixture.entrants[0]!), b: canonical(fixture.entrants[1]!) },
