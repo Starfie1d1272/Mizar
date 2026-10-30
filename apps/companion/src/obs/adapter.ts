@@ -1975,7 +1975,26 @@ export class ObsAdapter {
               return obs.call(type, data);
             },
           };
-          return this.videoTransaction.prepare(guarded, endpoint, () => valid() && lease());
+          const id = await this.videoTransaction.prepare(
+            guarded,
+            endpoint,
+            () => valid() && lease(),
+          );
+          if (!valid() || !lease()) {
+            if (id) {
+              try {
+                await this.videoTransaction.restore(guarded, endpoint, id);
+              } catch (error) {
+                throw new ObsVideoError(
+                  'restore_pending',
+                  'OBS 视频设置恢复待完成，请检查输出后重试。',
+                  { cause: error },
+                );
+              }
+            }
+            throw new ObsVideoError('preparation_output_changed', 'OBS 输出状态已变化，请重试。');
+          }
+          return id;
         },
         12000,
         undefined,

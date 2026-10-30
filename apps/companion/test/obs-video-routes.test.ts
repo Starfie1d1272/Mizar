@@ -11,7 +11,8 @@ import { ObsVideoTransaction } from '../src/obs/video-transaction.js';
 import { registerObsRoutes } from '../src/obs/routes.js';
 import { createLocalWebOriginPolicy } from '../src/local-web/origin-policy.js';
 
-it.each([false, true])('video guard streaming=%s', async (streaming) => {
+it.each(['idle', 'streaming', 'late'])('video guard %s', async (scenario) => {
+  const streaming = scenario === 'streaming';
   const directory = await mkdtemp(join(tmpdir(), 'mizar-video-routes-'));
   const server = Fastify();
   const app = Fastify();
@@ -24,16 +25,17 @@ it.each([false, true])('video guard streaming=%s', async (streaming) => {
     fpsNumerator: 30,
     fpsDenominator: 1,
   };
-  let settings = streaming
-    ? {
-        baseWidth: 1920,
-        baseHeight: 1080,
-        outputWidth: 1920,
-        outputHeight: 1080,
-        fpsNumerator: 60,
-        fpsDenominator: 1,
-      }
-    : { ...original };
+  let settings =
+    scenario !== 'idle'
+      ? {
+          baseWidth: 1920,
+          baseHeight: 1080,
+          outputWidth: 1920,
+          outputHeight: 1080,
+          fpsNumerator: 60,
+          fpsDenominator: 1,
+        }
+      : { ...original };
   let valid = true;
   let release!: () => void;
   let reached!: () => void;
@@ -44,7 +46,12 @@ it.each([false, true])('video guard streaming=%s', async (streaming) => {
     reached = resolve;
   });
   const calls: string[] = [];
+  let preflightDone = false;
+  let emitStarting: () => Promise<void> = async () => {};
+  const sockets = new Set<{ send: (data: string) => void }>();
   server.get('/', { websocket: true }, (socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
     socket.send(JSON.stringify({ op: 0, d: { obsWebSocketVersion: '5.6.3', rpcVersion: 1 } }));
     socket.on('message', (raw) => {
       const message = JSON.parse(raw.toString()) as {
@@ -67,8 +74,13 @@ it.each([false, true])('video guard streaming=%s', async (streaming) => {
             outputPaused: false,
             outputReconnecting: false,
           };
-        else if (requestType === 'GetVideoSettings') responseData = { ...settings };
-        else if (requestType === 'GetOutputList') responseData = { outputs: [] };
+        else if (requestType === 'GetVideoSettings') {
+          responseData = { ...settings };
+          if (scenario === 'late' && preflightDone) {
+            preflightDone = false;
+            await emitStarting();
+          }
+        } else if (requestType === 'GetOutputList') responseData = { outputs: [] };
         else if (requestType === 'SetVideoSettings') {
           settings = { ...settings, ...requestData };
           if (settings.baseWidth === 1920) {
@@ -109,6 +121,21 @@ it.each([false, true])('video guard streaming=%s', async (streaming) => {
     undefined,
     journal,
   );
+  emitStarting = async () => {
+    const lease = await adapter.captureWarmupGuard();
+    for (const socket of sockets)
+      socket.send(
+        JSON.stringify({
+          op: 5,
+          d: {
+            eventType: 'StreamStateChanged',
+            eventIntent: 64,
+            eventData: { outputActive: false, outputState: 'OBS_WEBSOCKET_OUTPUT_STARTING' },
+          },
+        }),
+      );
+    await vi.waitFor(() => expect(lease()).toBe(false));
+  };
   registerObsRoutes(app, {
     adapter,
     configStore: config,
@@ -132,12 +159,20 @@ it.each([false, true])('video guard streaming=%s', async (streaming) => {
       return;
     }
     expect(preflight.statusCode).toBe(200);
+    preflightDone = true;
     const request = app.inject({
       method: 'POST',
       url: '/operator/obs/video-prepare',
       headers,
       payload: { expectedRevision: 'revision' },
     });
+    if (scenario === 'late') {
+      const response = await request;
+      expect(response.statusCode).toBe(409);
+      expect(await journal.pending()).toBe(false);
+      expect(calls.some((value) => /^(Set|Create|Remove|Stop)/.test(value))).toBe(false);
+      return;
+    }
     await entered;
     valid = false;
     release();

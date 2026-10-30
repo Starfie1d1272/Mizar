@@ -3560,6 +3560,9 @@ async fn ensure_gsi(
                 }
                 let output = gsi_script("gsi-status.ps1", None, Duration::from_secs(20), &log)?;
                 let result = powershell::parse(&log, "GSI 检测", &output)?;
+                if preparation_id.is_some() {
+                    guard.check()?;
+                }
                 Ok(cs2_diagnostics::gsi_status(&result))
             }
         })
