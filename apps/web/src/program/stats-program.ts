@@ -56,8 +56,8 @@ const attrLabels: Record<string, string> = {
 };
 const titles: Record<Page['kind'], readonly [string, string]> = {
   match: ['对阵', 'MATCH'],
-  'current-map': ['单图结果', 'MAP RESULT'],
-  series: ['系列赛', 'SERIES'],
+  'current-map': ['单图数据', 'MAP RESULT'],
+  series: ['地图顺序', 'SERIES'],
   bp: ['本场选禁', 'MAP VETO'],
   lineup: ['本场阵容', 'LINEUPS'],
   maps: ['地图表现', 'MAP POOL'],
@@ -69,17 +69,17 @@ const titles: Record<Page['kind'], readonly [string, string]> = {
   radar: ['打法画像', 'PLAYER ATTRIBUTES'],
   profile: ['选手介绍', 'PLAYER SHOWCASE'],
   ranking: ['阵容排行', 'LINEUP LEADERBOARD'],
-  multikill: ['多杀与残局', 'MULTIKILL & CLUTCH'],
-  overview: ['队伍表现', 'TEAM OVERVIEW'],
+  multikill: ['多杀排行', 'MULTIKILL & CLUTCH'],
+  overview: ['整体表现', 'TEAM OVERVIEW'],
   economy: ['手枪局与第二回合', 'PISTOL & CONVERSION'],
   opening: ['首杀与补枪', 'OPENING & TRADING'],
   advantage: ['人数优势与逆转', 'ADVANTAGE & COMEBACK'],
   utility: ['道具支援', 'UTILITY'],
   flash: ['闪光效果', 'FLASH OUTPUT'],
   weapons: ['武器构成', 'WEAPON PROFILE'],
-  awp: ['AWP 击杀', 'AWP IMPACT'],
+  awp: ['AWP 产出', 'AWP IMPACT'],
   conversion: ['回合兑现', 'ROUND CONVERSION'],
-  clutch: ['残局记录', 'CLUTCH'],
+  clutch: ['选手残局', 'CLUTCH'],
   community: ['观众支持', 'COMMUNITY SUPPORT'],
 };
 const phaseNames: Record<BroadcastStatsProgram['phase'], readonly [string, string]> = {
@@ -205,7 +205,7 @@ export function statsProgramInserts(
         : '';
     const title =
       page.kind === 'current-map' && bundle.phase === 'halftime'
-        ? '半场表现'
+        ? '半场数据'
         : `${topicPrefix}${defaultTitle}`;
     const chosen = byPage(page);
     const base: StatsInsert & { id: string } = {
