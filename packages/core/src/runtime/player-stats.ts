@@ -43,6 +43,8 @@ export interface ProgramRoundDeathEvent {
 
 export interface CompletedPlayerRound {
   readonly roundNumberHint: number | null;
+  /** Damage evidence for the full round is independent of survival evidence. */
+  readonly damageComplete: boolean;
   readonly complete: boolean;
   readonly roster: Readonly<Record<string, 'CT' | 'T'>>;
   readonly damageBySteam64: DamageBySteam64;
@@ -203,6 +205,18 @@ function addCompletedRound(
   const players = observation.telemetry.allPlayers ?? [];
   const ct = observation.telemetry.map?.sides?.ct?.score;
   const t = observation.telemetry.map?.sides?.t?.score;
+  const damageComplete =
+    players.length > 0 &&
+    new Set(players.map((p) => p.sourcePlayerId)).size === players.length &&
+    players.every(
+      (p) =>
+        isValidSteam64(p.sourcePlayerId) &&
+        (p.side === 'CT' || p.side === 'T') &&
+        currentRound.damageBySteam64[p.sourcePlayerId] !== undefined &&
+        p.state?.roundTotalDamage !== undefined &&
+        Number.isFinite(p.state.roundTotalDamage) &&
+        p.state.roundTotalDamage >= 0,
+    );
   const completed = { ...accumulator.completedDamageBySteam64 };
   for (const [sourcePlayerId, damage] of Object.entries(currentRound.damageBySteam64)) {
     if (
@@ -233,17 +247,11 @@ function addCompletedRound(
           t >= 0
             ? { ct, t }
             : null,
+        damageComplete,
         complete:
-          players.length > 0 &&
-          new Set(players.map((p) => p.sourcePlayerId)).size === players.length &&
+          damageComplete &&
           players.every(
             (p) =>
-              isValidSteam64(p.sourcePlayerId) &&
-              (p.side === 'CT' || p.side === 'T') &&
-              currentRound.damageBySteam64[p.sourcePlayerId] !== undefined &&
-              p.state?.roundTotalDamage !== undefined &&
-              Number.isFinite(p.state.roundTotalDamage) &&
-              p.state.roundTotalDamage >= 0 &&
               p.state?.health !== undefined &&
               Number.isFinite(p.state.health) &&
               p.state.health >= 0,
@@ -486,9 +494,6 @@ function settleTerminalRound(
         p.state?.roundTotalDamage !== undefined &&
         Number.isFinite(p.state.roundTotalDamage) &&
         p.state.roundTotalDamage >= 0 &&
-        p.state.health !== undefined &&
-        Number.isFinite(p.state.health) &&
-        p.state.health >= 0 &&
         round.damageBySteam64[p.sourcePlayerId] !== undefined,
     )
   )
@@ -502,17 +507,27 @@ function settleTerminalRound(
       round.damageBySteam64[p.sourcePlayerId]!;
   const settled: CompletedPlayerRound = {
     ...round,
-    complete: true,
+    damageComplete: true,
+    complete: players.every(
+      (p) =>
+        p.state?.health !== undefined && Number.isFinite(p.state.health) && p.state.health >= 0,
+    ),
     damageBySteam64: damage,
     players: Object.fromEntries(
-      players.map((p) => [
-        p.sourcePlayerId,
-        {
-          side: round.roster[p.sourcePlayerId]!,
-          damage: damage[p.sourcePlayerId]!,
-          survived: p.state!.health! > 0,
-        },
-      ]),
+      players.flatMap((p) =>
+        p.state?.health === undefined || !Number.isFinite(p.state.health) || p.state.health < 0
+          ? []
+          : [
+              [
+                p.sourcePlayerId,
+                {
+                  side: round.roster[p.sourcePlayerId]!,
+                  damage: damage[p.sourcePlayerId]!,
+                  survived: p.state.health > 0,
+                },
+              ],
+            ],
+      ),
     ),
   };
   return {
@@ -541,12 +556,12 @@ export function selectPlayerAdrSample(
   let rounds = 0;
   let partial = accumulator.coverage === 'partial';
   for (const round of accumulator.completedRounds) {
-    const player = round.players[sourcePlayerId];
-    if (!round.complete || player === undefined) {
+    const roundDamage = round.damageBySteam64[sourcePlayerId];
+    if (!round.damageComplete || roundDamage === undefined) {
       partial = true;
       continue;
     }
-    damage += player.damage;
+    damage += roundDamage;
     rounds++;
   }
   const current = accumulator.currentRound;
