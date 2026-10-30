@@ -105,14 +105,19 @@ function requestFailureReason(error: unknown): string {
     e.name === 'TypeError' || (e.cause !== undefined && network(e.cause));
   return network(evidence) ? 'network_failed' : 'unknown';
 }
+function rootNetworkCode(evidence: LiveErrorEvidence): string | undefined {
+  return (
+    (evidence.cause ? rootNetworkCode(evidence.cause) : undefined) ??
+    diagnosticNetworkCode(evidence.code)
+  );
+}
+
 function requestFailureCode(error: unknown): string | undefined {
   if (error instanceof Error && 'rootCauseCode' in error) {
     const code = diagnosticNetworkCode(error.rootCauseCode);
     if (code) return code;
   }
-  const root = (evidence: LiveErrorEvidence): string | undefined =>
-    (evidence.cause ? root(evidence.cause) : undefined) ?? diagnosticNetworkCode(evidence.code);
-  return root(liveErrorEvidence(error));
+  return rootNetworkCode(liveErrorEvidence(error));
 }
 
 function executionKey(cursor: LiveSnapshotV1['cursor']): string {
@@ -292,6 +297,7 @@ export class RivalHubConnection {
   }
   private nextLiveAt = 0;
   private liveFailures = 0;
+  private liveFailureKind: 'transport' | 'receiver' | null = null;
   private syncWatch: {
     key: string;
     matchId: string;
@@ -378,6 +384,7 @@ export class RivalHubConnection {
   retryLive(): void {
     this.nextLiveAt = 0;
     this.liveFailures = 0;
+    this.liveFailureKind = null;
   }
 
   hasCurrentStart(snapshot: LiveSnapshotV1): boolean {
@@ -1074,6 +1081,7 @@ export class RivalHubConnection {
     const execution = executionKey(cursor);
     if (source.deliveryExecution === execution) return;
     source.deliveryExecution = execution;
+    this.retryLive();
     this.liveDelivery = {
       cursor,
       status: 'idle',
@@ -1256,9 +1264,29 @@ export class RivalHubConnection {
       return;
     }
     if (!dropped) {
-      this.liveFailures += 1;
+      // Only pre-response, transient transport failures use the fast recovery lane.
+      // Receiver failures keep the longer budget; a new frame is always sent.
+      const code = failure ? rootNetworkCode(failure.error) : undefined;
+      const transientNetwork =
+        httpStatus === null &&
+        (reason === 'timeout' ||
+          (reason === 'network_failed' &&
+            [
+              'ECONNRESET',
+              'ECONNREFUSED',
+              'ENETUNREACH',
+              'EHOSTUNREACH',
+              'EAI_AGAIN',
+              'ETIMEDOUT',
+              'UND_ERR_SOCKET',
+              'UND_ERR_CONNECT_TIMEOUT',
+            ].includes(code ?? '')));
+      const kind = transientNetwork ? 'transport' : 'receiver';
+      this.liveFailures = this.liveFailureKind === kind ? this.liveFailures + 1 : 1;
+      this.liveFailureKind = kind;
       this.nextLiveAt =
-        this.monotonicNow() + Math.min(8_000, 500 * 2 ** Math.min(this.liveFailures, 4));
+        this.monotonicNow() +
+        Math.min(transientNetwork ? 2_000 : 8_000, 500 * 2 ** Math.min(this.liveFailures, 4));
       this.controlFailureScope = this.failureScope(snapshot);
       this.controlFailure =
         reason === 'http_401'
