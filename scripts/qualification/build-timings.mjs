@@ -4,6 +4,7 @@ import { performance } from 'node:perf_hooks';
 
 export function createBuildTimer(output, identity) {
   const phases = [];
+  let pendingWrite = Promise.resolve();
   return async (phase, operation) => {
     const start = performance.now();
     let status = 'success';
@@ -15,17 +16,20 @@ export function createBuildTimer(output, identity) {
     } finally {
       const durationMs = Math.round(performance.now() - start);
       phases.push({ phase, durationMs, status });
-      await writeFile(
-        join(output, 'build-timings.json'),
-        `${JSON.stringify({ ...identity, phases }, null, 2)}\n`,
-      );
-      console.log(`BUILD_TIMING ${phase}: ${durationMs} ms (${status})`);
-      if (process.env.GITHUB_STEP_SUMMARY) {
-        await appendFile(
-          process.env.GITHUB_STEP_SUMMARY,
-          `- Build ${phase}: ${(durationMs / 1000).toFixed(2)} s (${status})\n`,
+      pendingWrite = pendingWrite.then(async () => {
+        await writeFile(
+          join(output, 'build-timings.json'),
+          `${JSON.stringify({ ...identity, phases }, null, 2)}\n`,
         );
-      }
+        console.log(`BUILD_TIMING ${phase}: ${durationMs} ms (${status})`);
+        if (process.env.GITHUB_STEP_SUMMARY) {
+          await appendFile(
+            process.env.GITHUB_STEP_SUMMARY,
+            `- Build ${phase}: ${(durationMs / 1000).toFixed(2)} s (${status})\n`,
+          );
+        }
+      });
+      await pendingWrite;
     }
   };
 }

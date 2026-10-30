@@ -198,6 +198,7 @@ async function boxStage(stage, action) {
         {
           uploadOutcomeUnknown: error.uploadOutcomeUnknown,
           retrySafeUpload: error.retrySafeUpload,
+          uploadTimedOut: error.uploadTimedOut,
           retryableRead: error.retryableRead,
         },
       );
@@ -405,7 +406,7 @@ export class BoxClient {
     return url;
   }
   async hash(path, signal) {
-    return boxStage(`回读/${directoryCategory(path)}`, async () => {
+    return boxStage(`回读/${directoryCategory(path)}/${path.split('/').at(-1)}`, async () => {
       const url = this.temporaryUrl(
         await this.api('download-link', path, 'GET', undefined, signal),
       );
@@ -462,7 +463,7 @@ export class BoxClient {
     });
   }
   async upload(path, name, bytes, replace = false) {
-    return boxStage(`上传/${directoryCategory(path)}`, async () => {
+    return boxStage(`上传/${directoryCategory(path)}/${name}`, async () => {
       const deadline = Date.now() + 900000;
       const signal = AbortSignal.timeout(900000);
       for (let attempt = 0; attempt < 3; attempt++) {
@@ -476,14 +477,16 @@ export class BoxClient {
         form.set('replace', replace ? '1' : '0');
         form.set('file', new Blob([bytes]), name);
         try {
-          const result = await (
-            await checkedFetch(
-              url,
-              { method: 'POST', body: form, redirect: 'error', signal },
-              Math.min(180000, Math.max(1, deadline - Date.now())),
-              this.uploadTransport,
-            )
-          ).json();
+          const result = await boxStage(`上传尝试/${name}/${attempt + 1}`, async () =>
+            (
+              await checkedFetch(
+                url,
+                { method: 'POST', body: form, redirect: 'error', signal },
+                Math.min(180000, Math.max(1, deadline - Date.now())),
+                this.uploadTransport,
+              )
+            ).json(),
+          );
           requireValue(
             Array.isArray(result) && result.length === 1 && result[0].name === name,
             '上传回执不一致；检查目录后重试',
@@ -1207,7 +1210,7 @@ async function github(path) {
     })
   ).json();
 }
-async function downloadReleaseAsset(release, tag, name, maximum = 65536) {
+export async function downloadReleaseAsset(release, tag, name, maximum = 65536, transport = fetch) {
   const assets = release.assets.filter((asset) => asset.name === name);
   requireValue(
     assets.length === 1 &&
@@ -1218,15 +1221,18 @@ async function downloadReleaseAsset(release, tag, name, maximum = 65536) {
         `https://github.com/Starfie1d1272/Mizar/releases/download/${tag}/${name}`,
     'Release 资产名称、大小或地址无效',
   );
-  const response = await checkedFetch(assets[0].browser_download_url, {}, 600000);
-  const chunks = [];
-  let size = 0;
-  for await (const chunk of response.body) {
-    size += chunk.length;
-    requireValue(size <= assets[0].size && size <= maximum, 'Release 下载字节超限');
-    chunks.push(chunk);
-  }
-  const bytes = Buffer.concat(chunks);
+  const bytes = await boxStage(`Release 下载/${name}`, () =>
+    checkedFetch(assets[0].browser_download_url, {}, 180000, transport, async (response) => {
+      const chunks = [];
+      let size = 0;
+      for await (const chunk of response.body) {
+        size += chunk.length;
+        requireValue(size <= assets[0].size && size <= maximum, 'Release 下载字节超限');
+        chunks.push(chunk);
+      }
+      return Buffer.concat(chunks);
+    }),
+  );
   requireValue(
     bytes.length === assets[0].size && assets[0].digest === `sha256:${digest(bytes)}`,
     'Release 下载身份不一致',

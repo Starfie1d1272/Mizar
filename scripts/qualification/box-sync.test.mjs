@@ -202,3 +202,40 @@ test('a timed-out zero-byte chunk retries with a fresh attempt signal', async (t
   assert.equal(observedSignals.length, 2);
   assert.notEqual(observedSignals[0], observedSignals[1]);
 });
+
+test('release asset deadline includes reading the body', async (t) => {
+  const { downloadReleaseAsset } = await import('./box-sync.mjs');
+  const controller = new AbortController();
+  const timeout = AbortSignal.timeout.bind(AbortSignal);
+  let bounded = false;
+  t.mock.method(AbortSignal, 'timeout', (milliseconds) => {
+    if (milliseconds === 180000) {
+      bounded = true;
+      return controller.signal;
+    }
+    return timeout(milliseconds);
+  });
+  const name = 'asset.json';
+  const release = {
+    assets: [
+      {
+        name,
+        size: 1,
+        digest: `sha256:${'0'.repeat(64)}`,
+        browser_download_url: `https://github.com/Starfie1d1272/Mizar/releases/download/v1.10.0/${name}`,
+      },
+    ],
+  };
+  const transport = async (_url, { signal }) => ({
+    ok: true,
+    body: {
+      async *[Symbol.asyncIterator]() {
+        yield Buffer.alloc(0);
+        controller.abort();
+        signal.throwIfAborted();
+      },
+    },
+  });
+  await assert.rejects(downloadReleaseAsset(release, 'v1.10.0', name, 100, transport), /超时/);
+  assert.ok(bounded);
+});
