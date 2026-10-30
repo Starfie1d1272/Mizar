@@ -515,7 +515,7 @@ export class RivalHubConnection {
   private source: Source | null = null;
   private readonly liveInFlight = new Map<Source, Set<Promise<void>>>();
   private readonly sourceSettlements = new Map<string, Promise<boolean>>();
-  private readonly cleanupAttempts = new Map<string, number>();
+  private readonly cleanupAttempts = new Map<string, { count: number; nextCycleAt: number }>();
   private readonly sourceCommands = new SerialCommitQueue();
   private readonly sourceState: RivalHubSourceState;
   private cleanupTimer: ReturnType<typeof setInterval> | undefined;
@@ -1029,13 +1029,19 @@ export class RivalHubConnection {
       }
       const attemptKey = JSON.stringify(record.identity);
       if (record.retryAfterAt && Date.parse(record.retryAfterAt) > Date.now()) continue;
-      if (!force && (this.cleanupAttempts.get(attemptKey) ?? 0) >= 8) continue;
-      if (force) this.cleanupAttempts.delete(attemptKey);
+      const cycle = this.cleanupAttempts.get(attemptKey);
+      if (!force && cycle && cycle.count >= 8 && Date.now() < cycle.nextCycleAt) continue;
+      if (force || (cycle && cycle.count >= 8)) this.cleanupAttempts.delete(attemptKey);
       if (!force && record.nextAttemptAt && Date.parse(record.nextAttemptAt) > Date.now()) continue;
       const identity = record.identity;
       if (!(await this.settle(identity, Math.min(2500, deadline - Date.now())))) continue;
       if (Date.now() >= deadline) break;
-      this.cleanupAttempts.set(attemptKey, (this.cleanupAttempts.get(attemptKey) ?? 0) + 1);
+      const count = (this.cleanupAttempts.get(attemptKey)?.count ?? 0) + 1;
+      this.cleanupAttempts.set(attemptKey, {
+        count,
+        // A later bounded round probes for network recovery; no identity is discarded.
+        nextCycleAt: count >= 8 ? Date.now() + 600_000 : 0,
+      });
       try {
         this.cleanupEvidence(identity, 'release_attempt', record.attempts + 1);
         const response = await this.request('release', {
