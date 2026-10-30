@@ -77,6 +77,7 @@ export function registerProductionRoutes(
     let committed = false;
     let stage = 'production_context';
     const operationId = randomUUID();
+    const controlValid = options.scenes.controlValid();
     try {
       if (body?.action === 'enter') {
         if (!options.hasContext()) return { code: 409, value: { message: '请先选择或创建比赛。' } };
@@ -87,6 +88,8 @@ export function registerProductionRoutes(
         if (mode === 'live') mode = 'hidden';
       } else {
         await options.beforeFinish?.();
+        if (!controlValid())
+          return { code: 409, value: { message: 'OBS 播出状态已变化，请核对后重试。' } };
         if (trialPending) {
           stage = 'production_safe_scene';
           await options.finishTrial?.();
@@ -95,11 +98,18 @@ export function registerProductionRoutes(
         // An idle Host can quit without requiring an OBS connection.
         if (mode !== 'preparation' || options.scenes.get().active !== 'waiting' || !shutdown) {
           stage = 'production_safe_scene';
-          const result = await options.scenes.selectWaitingForExit(options.scenes.get().revision);
+          const result = await options.scenes.selectWaitingForExit(
+            options.scenes.get().revision,
+            controlValid,
+          );
           if (!result.ok) return { code: 409, value: { message: result.message } };
         }
         stage = 'production_release';
+        if (!controlValid())
+          return { code: 409, value: { message: 'OBS 播出状态已变化，请核对后重试。' } };
         await options.release();
+        if (!controlValid())
+          return { code: 409, value: { message: 'OBS 播出状态已变化，请核对后重试。' } };
         mode = 'preparation';
         options.onFinish?.();
       }

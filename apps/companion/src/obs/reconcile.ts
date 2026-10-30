@@ -563,6 +563,7 @@ export async function switchObsScene(
     }
     assertCurrent();
     const current = await obs.call('GetCurrentProgramScene');
+    assertCurrent();
     if (current.currentProgramSceneName !== name) throw new Error('OBS 未切入目标场景。');
     options.onCompleted?.();
   } finally {

@@ -37,6 +37,7 @@ test('begin exit revokes old preparation and holds the director even when cleanu
     holdAutomatic: () => {
       holds++;
     },
+    controlValid: () => () => true,
   } as unknown as ProgramSceneController;
   let settle!: () => void;
   const pending = new Promise<void>((resolve) => {
@@ -74,6 +75,96 @@ test('begin exit revokes old preparation and holds the director even when cleanu
   assert.equal(production.get().mode, 'preparation');
   assert.equal(valid(), false);
   assert.ok(holds >= 1);
+  await app.close();
+});
+
+test('external hold invalidates a manual take queued behind another operation', async () => {
+  const { ProgramSceneController } = await import('../src/program-scenes/controller.js');
+  const projections = {
+    getBpAssessment: () => ({ readiness: 'not_ready' }),
+    getCurrent: () => ({
+      operator: {
+        runtime: { telemetryFreshness: 'fresh' },
+        matchContext: { freshness: 'fresh', origin: 'local' },
+        identity: { state: 'ok' },
+      },
+      program: { series: null, round: null, clock: null },
+    }),
+  };
+  let started!: () => void;
+  let resume!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const pending = new Promise<void>((resolve) => {
+    resume = resolve;
+  });
+  const writes: string[] = [];
+  const scenes = new ProgramSceneController(
+    projections as never,
+    {} as never,
+    async (id, options) => {
+      started();
+      await pending;
+      if (options.valid?.()) writes.push(id);
+    },
+  );
+  const revision = scenes.get().revision;
+  const first = scenes.select('gameplay', revision);
+  await entered;
+  const queued = scenes.select('waiting', revision);
+  scenes.holdAutomatic();
+  resume();
+  assert.equal((await first).ok, false);
+  assert.equal((await queued).ok, false);
+  assert.deepEqual(writes, []);
+});
+
+test('exit waiting for background work fails after external control changes', async () => {
+  const app = Fastify();
+  let generation = 0;
+  let resume!: () => void;
+  let started!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const pending = new Promise<void>((resolve) => {
+    resume = resolve;
+  });
+  let writes = 0;
+  const scenes = {
+    get: () => ({ active: 'gameplay', revision: 'scene' }),
+    holdAutomatic: () => {
+      generation++;
+    },
+    controlValid: () => {
+      const captured = generation;
+      return () => captured === generation;
+    },
+    selectWaitingForExit: () => {
+      writes++;
+      return Promise.resolve({ ok: true });
+    },
+  } as unknown as ProgramSceneController;
+  const production = registerProductionRoutes(app, {
+    originPolicy: createLocalWebOriginPolicy(),
+    hasContext: () => true,
+    scenes,
+    beforeFinish: async () => {
+      started();
+      await pending;
+    },
+    release: () => {
+      writes++;
+      return Promise.resolve();
+    },
+  });
+  const exit = production.shutdown();
+  await entered;
+  scenes.holdAutomatic();
+  resume();
+  assert.equal((await exit).code, 409);
+  assert.equal(writes, 0);
   await app.close();
 });
 
