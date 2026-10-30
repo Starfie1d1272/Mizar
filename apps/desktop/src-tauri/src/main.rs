@@ -21,6 +21,7 @@ mod obs_configuration;
 mod observer_hud;
 mod observer_job;
 mod observer_workspace;
+mod overlay_recovery;
 mod powershell;
 mod preparation_gate;
 mod production_exit;
@@ -53,7 +54,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
     thread,
@@ -118,6 +119,14 @@ struct HostState {
     layout_dirty: Arc<AtomicBool>,
     running: Arc<AtomicBool>,
     live_window_lock: Mutex<()>,
+    overlay_generation: AtomicU64,
+    overlay_ready: AtomicU64,
+    overlay_epoch: AtomicU64,
+    overlay_recovering: AtomicBool,
+    overlay_presentation: Mutex<()>,
+    workspace_epoch: AtomicU64,
+    overlay_observation: Mutex<String>,
+    overlay_document: AtomicU64,
     fullscreen_scope: Mutex<workspace_shell::FullscreenScope>,
     window_group: Mutex<workspace_group::Group>,
     entry_focus: Mutex<workspace_focus::Entry>,
@@ -373,8 +382,9 @@ fn overlay_workspace_windows(app: &tauri::AppHandle) -> Vec<isize> {
 }
 
 fn update_overlay(app: &tauri::AppHandle, state: &HostState) {
+    let epoch = state.overlay_epoch.load(Ordering::Acquire);
     let workspace_windows = overlay_workspace_windows(app);
-    let rect = if state.visible.load(Ordering::Relaxed) {
+    let rect = if state.visible.load(Ordering::Acquire) {
         state
             .tracker
             .lock()
@@ -383,19 +393,96 @@ fn update_overlay(app: &tauri::AppHandle, state: &HostState) {
     } else {
         None
     };
-    present_overlay(app, rect);
+    present_overlay(app, rect, epoch);
 }
 
-fn present_overlay(app: &tauri::AppHandle, rect: Option<Rect>) {
-    let Some(overlay) = app.get_webview_window("program-overlay") else {
+fn observe_overlay(
+    app: &tauri::AppHandle,
+    overlay: &tauri::WebviewWindow,
+    desired: Option<Rect>,
+    phase: &str,
+) {
+    let state = app.state::<HostState>();
+    let game = state
+        .tracker
+        .try_lock()
+        .ok()
+        .and_then(|tracker| tracker.window.map(|window| window.hwnd));
+    let Ok(hwnd) = overlay.hwnd() else {
         return;
     };
-    if let Some(rect) = rect {
-        placement(&overlay, rect);
-        let _ = window_presentation::set_overlay_visible(&overlay, true);
-    } else {
-        let _ = window_presentation::set_overlay_visible(&overlay, false);
-    }
+    let mut detail =
+        windows_host::overlay_diagnostic(hwnd.0 as isize, game, &overlay_workspace_windows(app));
+    detail["generation"] = state.overlay_generation.load(Ordering::Acquire).into();
+    detail["desiredRect"] = desired
+        .map(|rect| [rect.x, rect.y, rect.width, rect.height])
+        .into();
+    detail["desiredVisible"] = desired.is_some().into();
+    detail["documentReady"] = (state.overlay_ready.load(Ordering::Acquire)
+        == state.overlay_generation.load(Ordering::Acquire))
+    .into();
+    let signature = detail.to_string();
+    if let Ok(mut previous) = state.overlay_observation.lock() {
+        if phase != "tick" || *previous != signature {
+            app.state::<DesktopLog>()
+                .event("program_overlay_snapshot", phase, Some(&signature));
+            *previous = signature;
+        }
+    };
+}
+
+fn present_overlay(app: &tauri::AppHandle, rect: Option<Rect>, epoch: u64) {
+    let ticket = app
+        .state::<production_exit::ExitGate>()
+        .presentation_ticket()
+        .ok();
+    let host = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let state = host.state::<HostState>();
+        let Ok(_presentation) = state.overlay_presentation.lock() else {
+            return;
+        };
+        if state.overlay_epoch.load(Ordering::Acquire) != epoch {
+            return;
+        }
+        let Some(overlay) = host.get_webview_window("program-overlay") else {
+            return;
+        };
+        let generation = state.overlay_generation.load(Ordering::Acquire);
+        let game_allowed = state
+            .tracker
+            .try_lock()
+            .is_ok_and(|tracker| tracker.overlay_still_allowed(&overlay_workspace_windows(&host)));
+        let allowed = overlay_recovery::may_present(
+            state.visible.load(Ordering::Acquire),
+            state.overlay_recovering.load(Ordering::Acquire),
+            generation,
+            state.overlay_ready.load(Ordering::Acquire),
+            game_allowed,
+        );
+        let desired = rect.filter(|_| allowed);
+        let presented = ticket.is_some_and(|ticket| {
+            host.state::<production_exit::ExitGate>()
+                .publish(ticket, || {
+                    if let Some(rect) = desired {
+                        placement(&overlay, rect);
+                        let _ = window_presentation::set_overlay_visible(&overlay, true);
+                    } else {
+                        let _ = window_presentation::set_overlay_visible(&overlay, false);
+                    }
+                })
+                .is_ok()
+        });
+        if !presented {
+            let _ = window_presentation::set_overlay_visible(&overlay, false);
+        }
+        observe_overlay(
+            &host,
+            &overlay,
+            if presented { desired } else { None },
+            "tick",
+        );
+    });
 }
 
 #[tauri::command]
@@ -2400,7 +2487,15 @@ fn trusted_navigation(url: &tauri::Url) -> bool {
 
 fn show_workspace(app: &tauri::AppHandle) {
     let state = app.state::<HostState>();
-    state.visible.store(true, Ordering::Relaxed);
+    {
+        let _presentation = state
+            .overlay_presentation
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.workspace_epoch.fetch_add(1, Ordering::AcqRel);
+        state.overlay_epoch.fetch_add(1, Ordering::AcqRel);
+        state.visible.store(true, Ordering::Release);
+    }
     sync_workspace_shell(app);
     // Native window calls can synchronously dispatch window events. Release
     // the tracker before presenting any WebView or posting HUD visibility.
@@ -2417,12 +2512,20 @@ fn show_workspace(app: &tauri::AppHandle) {
             let _ = window_presentation::show_without_activation(&window);
         }
     }
-    update_overlay(app, &state);
+    // The existing worker presents the HUD after the exit publication gate is released.
 }
 
 fn hide_workspace(app: &tauri::AppHandle) -> Result<(), String> {
     let state = app.state::<HostState>();
-    state.visible.store(false, Ordering::Relaxed);
+    {
+        let _presentation = state
+            .overlay_presentation
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.workspace_epoch.fetch_add(1, Ordering::AcqRel);
+        state.overlay_epoch.fetch_add(1, Ordering::AcqRel);
+        state.visible.store(false, Ordering::Release);
+    }
     if let Ok(mut group) = state.window_group.lock() {
         *group = workspace_group::Group::default();
     }
@@ -2450,7 +2553,7 @@ fn hide_workspace(app: &tauri::AppHandle) -> Result<(), String> {
     if let Some(review) = app.get_webview_window("tool-review") {
         let _ = review.destroy();
     }
-    present_overlay(app, None);
+    present_overlay(app, None, state.overlay_epoch.load(Ordering::Acquire));
     result
 }
 
@@ -2741,6 +2844,267 @@ fn present_production_inner_checked(
     Ok(())
 }
 
+// Only the fixed Program surface is constructed here. Both paths use the same options.
+fn create_program_overlay(app: &tauri::AppHandle) -> Result<(), String> {
+    let state = app.state::<HostState>();
+    let generation = state.overlay_generation.fetch_add(1, Ordering::AcqRel) + 1;
+    state.overlay_ready.store(0, Ordering::Release);
+    state.overlay_epoch.fetch_add(1, Ordering::AcqRel);
+    let script = format!("window.__MIZAR_OVERLAY_GENERATION__ = {generation};");
+    let overlay = WebviewWindowBuilder::new(app, "program-overlay", local_url("/program?host=desktop"))
+        .title("Mizar · Program HUD")
+        .decorations(false).shadow(false).resizable(false).transparent(true)
+        .always_on_top(true).focusable(false).focused(false).skip_taskbar(true).visible(false)
+        .initialization_script(&script)
+        .on_navigation(trusted_navigation)
+        .on_page_load(move |window, payload| {
+            let state = window.state::<HostState>();
+            if state.overlay_generation.load(Ordering::Acquire) != generation { return; }
+            if payload.event() == tauri::webview::PageLoadEvent::Started {
+                let _presentation = state.overlay_presentation.lock().unwrap_or_else(|error| error.into_inner());
+                if state.overlay_generation.load(Ordering::Acquire) != generation { return; }
+                state.overlay_ready.store(0, Ordering::Release);
+                state.overlay_epoch.fetch_add(1, Ordering::AcqRel);
+                state.overlay_document.fetch_add(1, Ordering::AcqRel);
+            } else if payload.event() == tauri::webview::PageLoadEvent::Finished {
+                let document_id = state.overlay_document.load(Ordering::Acquire);
+                let script = format!("window.__MIZAR_OVERLAY_DOCUMENT__ = {document_id}; window.dispatchEvent(new Event('mizar-overlay-document'));");
+                if let Err(error) = window.eval(&script) {
+                    window.state::<DesktopLog>().event("program_overlay_document", "failure", Some(&error.to_string()));
+                }
+            }
+            window.state::<DesktopLog>().event("program_overlay_navigation", "observed",
+                Some(&serde_json::json!({"generation":generation,"documentId":state.overlay_document.load(Ordering::Acquire),"event":format!("{:?}", payload.event())}).to_string()));
+        })
+        .build().map_err(|error| error.to_string())?;
+    if let Err(error) = window_presentation::observe_process_failure(&overlay, generation) {
+        let _ = overlay.destroy();
+        return Err(error);
+    }
+    if let Err(error) = overlay.set_ignore_cursor_events(true) {
+        let _ = overlay.destroy();
+        return Err(error.to_string());
+    }
+    if let Ok(hwnd) = overlay.hwnd() {
+        window_frame::square_window(hwnd.0 as isize);
+    }
+    if let Err(error) = window_presentation::sync_visibility(&overlay) {
+        let _ = overlay.destroy();
+        return Err(error.to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn program_overlay_ready(
+    window: tauri::WebviewWindow,
+    generation: u64,
+    document_id: u64,
+) -> Result<(), String> {
+    if window.label() != "program-overlay" {
+        return Err("窗口无权报告 HUD 状态。".into());
+    }
+    let app = window.app_handle();
+    let state = app.state::<HostState>();
+    {
+        let _presentation = state
+            .overlay_presentation
+            .lock()
+            .map_err(|_| "HUD 文档状态不可用。")?;
+        let current = app
+            .get_webview_window("program-overlay")
+            .ok_or("HUD 窗口已失效。")?;
+        if generation != state.overlay_generation.load(Ordering::Acquire)
+            || !current
+                .hwnd()
+                .ok()
+                .zip(window.hwnd().ok())
+                .is_some_and(|(a, b)| a == b)
+        {
+            return Err("HUD 文档已失效。".into());
+        }
+        if document_id == 0 || document_id != state.overlay_document.load(Ordering::Acquire) {
+            return Err("HUD 文档已失效。".into());
+        }
+        state.overlay_ready.store(generation, Ordering::Release);
+    }
+    app.state::<DesktopLog>().event(
+        "program_overlay_document",
+        "ready",
+        Some(&serde_json::json!({"generation":generation,"documentId":document_id}).to_string()),
+    );
+    update_overlay(app, &state);
+    Ok(())
+}
+
+struct OverlayRecoveryGuard<'a> {
+    state: &'a HostState,
+    app: &'a tauri::AppHandle,
+}
+impl Drop for OverlayRecoveryGuard<'_> {
+    fn drop(&mut self) {
+        self.state
+            .overlay_recovering
+            .store(false, Ordering::Release);
+        update_overlay(self.app, self.state);
+    }
+}
+
+#[tauri::command]
+async fn recover_program_overlay(
+    window: tauri::WebviewWindow,
+    diagnostic_operation_id: Option<String>,
+) -> Result<String, String> {
+    if !matches!(window.label(), "workspace-left" | "workspace-dock") {
+        return Err("请从现场工作台恢复本机 HUD。".into());
+    }
+    let app = window.app_handle().clone();
+    let log = app.state::<DesktopLog>().inner().clone();
+    log.event(
+        "recover_program_overlay",
+        "begin",
+        Some(&serde_json::json!({"operationId":diagnostic_operation_id}).to_string()),
+    );
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<HostState>();
+        let _guard = overlay_recovery::try_lock(&state.live_window_lock)?;
+        let caller = app
+            .get_webview_window(window.label())
+            .ok_or("工作台窗口已失效。")?;
+        if !caller
+            .hwnd()
+            .ok()
+            .zip(window.hwnd().ok())
+            .is_some_and(|(a, b)| a == b)
+        {
+            return Err("工作台窗口已失效。".into());
+        }
+        let ticket = app
+            .state::<production_exit::ExitGate>()
+            .presentation_ticket()?;
+        if !state.visible.load(Ordering::Acquire) {
+            return Err("工作台已隐藏，请重新进入后再试。".into());
+        }
+        let workspace_epoch = state.workspace_epoch.load(Ordering::Acquire);
+        let presentation = state
+            .overlay_presentation
+            .lock()
+            .map_err(|_| "HUD 窗口状态不可用。")?;
+        state.overlay_recovering.store(true, Ordering::Release);
+        let epoch = state.overlay_epoch.fetch_add(1, Ordering::AcqRel) + 1;
+        drop(presentation);
+        let _recovery = OverlayRecoveryGuard {
+            state: &state,
+            app: &app,
+        };
+        let valid = || {
+            overlay_recovery::workspace_valid(
+                state.visible.load(Ordering::Acquire),
+                workspace_epoch,
+                state.workspace_epoch.load(Ordering::Acquire),
+                app.state::<production_exit::ExitGate>()
+                    .publish(ticket, || {})
+                    .is_ok(),
+            ) && state.overlay_epoch.load(Ordering::Acquire) == epoch
+        };
+        let old = app.get_webview_window("program-overlay");
+        if let Some(old) = &old {
+            let workspace_windows = overlay_workspace_windows(&app);
+            let desired = state
+                .tracker
+                .lock()
+                .ok()
+                .and_then(|tracker| tracker.overlay_rect(&workspace_windows));
+            observe_overlay(&app, old, desired, "before_recovery");
+            if let Err(error) = window_presentation::snapshot_controller(old) {
+                app.state::<DesktopLog>().event(
+                    "program_overlay_snapshot",
+                    "failure",
+                    Some(&error),
+                );
+            }
+        }
+        overlay_recovery::replace(
+            || {
+                if !valid() {
+                    return Err("恢复已取消。".into());
+                }
+                if let Some(old) = old {
+                    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+                    old.on_window_event(move |event| {
+                        if matches!(event, tauri::WindowEvent::Destroyed) {
+                            let _ = sender.try_send(());
+                        }
+                    });
+                    old.destroy()
+                        .map_err(|error| format!("HUD 窗口销毁失败：{error}"))?;
+                    receiver
+                        .recv_timeout(Duration::from_secs(5))
+                        .map_err(|_| "未确认旧 HUD 窗口销毁，请重试。")?;
+                }
+                Ok(())
+            },
+            || {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while app.get_webview_window("program-overlay").is_some() {
+                    if !valid() {
+                        return Err("恢复已取消。".into());
+                    }
+                    if Instant::now() >= deadline {
+                        return Err("旧 HUD 窗口仍在释放，请重试。".into());
+                    }
+                    thread::sleep(Duration::from_millis(25));
+                }
+                Ok(())
+            },
+            || {
+                if !valid() {
+                    return Err("恢复已取消。".into());
+                }
+                create_program_overlay(&app)
+            },
+        )?;
+        let generation = state.overlay_generation.load(Ordering::Acquire);
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            if !overlay_recovery::workspace_valid(
+                state.visible.load(Ordering::Acquire),
+                workspace_epoch,
+                state.workspace_epoch.load(Ordering::Acquire),
+                app.state::<production_exit::ExitGate>()
+                    .publish(ticket, || {})
+                    .is_ok(),
+            ) || state.overlay_generation.load(Ordering::Acquire) != generation
+            {
+                if state.overlay_generation.load(Ordering::Acquire) == generation {
+                    if let Some(current) = app.get_webview_window("program-overlay") {
+                        let _ = current.destroy();
+                    }
+                }
+                return Err("恢复已取消。".into());
+            }
+            if state.overlay_ready.load(Ordering::Acquire) == generation {
+                return Ok("HUD 文档和策略已就绪；是否显示取决于当前游戏窗口条件。".into());
+            }
+            if Instant::now() >= deadline {
+                if let Some(current) = app.get_webview_window("program-overlay") {
+                    let _ = current.destroy();
+                }
+                return Err("HUD 文档或策略未能就绪，请检查运行诊断后重试。".into());
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    log.native_outcome(
+        "recover_program_overlay",
+        diagnostic_operation_id.as_deref(),
+        &result,
+    );
+    result
+}
+
 fn ensure_live_windows(app: &tauri::AppHandle) -> Result<(), String> {
     let state = app.state::<HostState>();
     let _guard = state
@@ -2754,49 +3118,41 @@ fn ensure_live_windows(app: &tauri::AppHandle) -> Result<(), String> {
         return Ok(());
     }
     let log = app.state::<DesktopLog>();
+    let mut created = Vec::new();
     let result = (|| {
-        log.step("workspace_left", || {
-            WebviewWindowBuilder::new(app, "workspace-left", local_url("/workspace/left"))
-                .title("Mizar · 工作区")
-                .decorations(false)
-                .shadow(false)
-                .resizable(false)
-                .visible(false)
-                .focused(false)
-                .on_navigation(trusted_navigation)
-                .build()
-        })?;
-        log.step("workspace_dock", || {
-            WebviewWindowBuilder::new(app, "workspace-dock", local_url("/workspace/dock"))
-                .title("Mizar · 现场控制")
-                .decorations(false)
-                .shadow(false)
-                .resizable(false)
-                .visible(false)
-                .focused(false)
-                .on_navigation(trusted_navigation)
-                .build()
-        })?;
-        let overlay = log.step("program_overlay", || {
-            WebviewWindowBuilder::new(app, "program-overlay", local_url("/program?host=desktop"))
-                .title("Mizar · Program HUD")
-                .decorations(false)
-                .shadow(false)
-                .resizable(false)
-                .transparent(true)
-                .always_on_top(true)
-                .focusable(false)
-                .focused(false)
-                .skip_taskbar(true)
-                .visible(false)
-                .on_navigation(trusted_navigation)
-                .build()
-        })?;
-        let _ = window_presentation::sync_visibility(&overlay);
-        log.step("overlay_cursor_passthrough", || {
-            overlay.set_ignore_cursor_events(true)
-        })?;
-        for label in ["workspace-left", "workspace-dock", "program-overlay"] {
+        if app.get_webview_window("workspace-left").is_none() {
+            log.step("workspace_left", || {
+                WebviewWindowBuilder::new(app, "workspace-left", local_url("/workspace/left"))
+                    .title("Mizar · 工作区")
+                    .decorations(false)
+                    .shadow(false)
+                    .resizable(false)
+                    .visible(false)
+                    .focused(false)
+                    .on_navigation(trusted_navigation)
+                    .build()
+            })?;
+            created.push("workspace-left");
+        }
+        if app.get_webview_window("workspace-dock").is_none() {
+            log.step("workspace_dock", || {
+                WebviewWindowBuilder::new(app, "workspace-dock", local_url("/workspace/dock"))
+                    .title("Mizar · 现场控制")
+                    .decorations(false)
+                    .shadow(false)
+                    .resizable(false)
+                    .visible(false)
+                    .focused(false)
+                    .on_navigation(trusted_navigation)
+                    .build()
+            })?;
+            created.push("workspace-dock");
+        }
+        if app.get_webview_window("program-overlay").is_none() {
+            create_program_overlay(app)?;
+            created.push("program-overlay");
+        }
+        for label in &created {
             if let Some(hwnd) = app
                 .get_webview_window(label)
                 .and_then(|window| window.hwnd().ok())
@@ -2807,15 +3163,14 @@ fn ensure_live_windows(app: &tauri::AppHandle) -> Result<(), String> {
         Ok(())
     })();
     if result.is_err() {
-        // Creation is transactional at the host boundary. A retry starts clean;
-        // Companion still owns production mode and the Main UI remains available.
-        for label in ["workspace-left", "workspace-dock", "program-overlay"] {
+        for label in &created {
             if let Some(window) = app.get_webview_window(label) {
                 let _ = window.destroy();
             }
         }
         log.event("live_windows_rollback", "success", None);
     }
+
     result
 }
 
@@ -3685,6 +4040,14 @@ fn run_desktop(
         layout_dirty: Arc::new(AtomicBool::new(false)),
         running: running.clone(),
         live_window_lock: Mutex::new(()),
+        overlay_generation: AtomicU64::new(0),
+        overlay_ready: AtomicU64::new(0),
+        overlay_epoch: AtomicU64::new(0),
+        overlay_recovering: AtomicBool::new(false),
+        overlay_presentation: Mutex::new(()),
+        workspace_epoch: AtomicU64::new(0),
+        overlay_observation: Mutex::new(String::new()),
+        overlay_document: AtomicU64::new(0),
         fullscreen_scope: Mutex::new(workspace_shell::FullscreenScope::default()),
         window_group: Mutex::new(workspace_group::Group::default()),
         entry_focus: Mutex::new(workspace_focus::Entry::default()),
@@ -3716,6 +4079,8 @@ fn run_desktop(
             }
             let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
             restore_layout,
+            recover_program_overlay,
+            program_overlay_ready,
             restore_cs2_focus,
             set_program_overlay_enabled,
             cs2_host_status,
@@ -3950,6 +4315,7 @@ fn run_desktop(
                     }
 
                     // Cross-process CS2 calls stay off the Tauri main loop.
+                    let overlay_epoch = host.state::<HostState>().overlay_epoch.load(Ordering::Acquire);
                     let (layout, rect) = if !pending.load(Ordering::Relaxed)
                         && worker_visible.load(Ordering::Relaxed)
                         && !exit_signal.requested()
@@ -4032,9 +4398,9 @@ fn run_desktop(
                                             if let Some(layout) = layout {
                                                 apply_layout(&tick_host, layout);
                                             }
-                                            present_overlay(&tick_host, rect);
+                                            present_overlay(&tick_host, rect, overlay_epoch);
                                         } else {
-                                            present_overlay(&tick_host, None);
+                                            present_overlay(&tick_host, None, overlay_epoch);
                                         }
                                         window_presentation::sync_all(&tick_host);
                                     }

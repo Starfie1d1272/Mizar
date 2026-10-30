@@ -69,6 +69,8 @@ runs:
         restore-keys: |
           cargo-v4-${{ runner.os }}-${{ runner.arch }}-${{ inputs.profile }}-${{ steps.rust.outputs.fingerprint }}-${{ steps.rust.outputs.parameters }}-${{ steps.cargo-key.outputs.lock }}-
           ${{ steps.rust.outputs.parameters_default == 'true' && format('cargo-v3-{0}-{1}-{2}-{3}-{4}-', runner.os, runner.arch, inputs.profile, steps.rust.outputs.fingerprint, steps.cargo-key.outputs.lock) || '' }}
+          cargo-v4-${{ runner.os }}-${{ runner.arch }}-${{ inputs.profile }}-${{ steps.rust.outputs.fingerprint }}-${{ steps.rust.outputs.parameters }}-
+          ${{ steps.rust.outputs.parameters_default == 'true' && format('cargo-v3-{0}-{1}-{2}-{3}-', runner.os, runner.arch, inputs.profile, steps.rust.outputs.fingerprint) || '' }}
     - name: Record cache observations
       shell: pwsh
       env:

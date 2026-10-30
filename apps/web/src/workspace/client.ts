@@ -61,6 +61,8 @@ interface TauriInternals {
 declare global {
   interface Window {
     __TAURI_INTERNALS__?: TauriInternals;
+    __MIZAR_OVERLAY_GENERATION__?: number;
+    __MIZAR_OVERLAY_DOCUMENT__?: number;
   }
 }
 
