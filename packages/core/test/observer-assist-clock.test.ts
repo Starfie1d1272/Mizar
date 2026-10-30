@@ -67,6 +67,8 @@ function run(
     sourceRemaining?: number;
     programRemaining?: number;
     round?: number;
+    victimDead?: boolean;
+    programGeneration?: number;
   } = {},
 ) {
   const generation = options.generation ?? 1;
@@ -78,7 +80,17 @@ function run(
     generation,
     lastReceiveMonotonicMs: now,
   };
-  return timeline.project(program(now, options.epoch), settings, now, source, now, {
+  const base = program(now, options.epoch);
+  const view: ObserverProgramView = {
+    ...base,
+    cursor: { ...base.cursor, programSourceGeneration: options.programGeneration ?? 1 },
+    players: options.victimDead
+      ? base.players.map((player) =>
+          player.sourcePlayerId === 'player-1' ? { ...player, lifeState: 'dead' } : player,
+        )
+      : base.players,
+  };
+  return timeline.project(view, settings, now, source, now, {
     sourceExecution: options.execution ?? 1,
     source: {
       round,
@@ -100,6 +112,31 @@ function run(
 }
 
 describe('observer clock recovery', () => {
+  it.each(['source', 'program', 'map'] as const)(
+    'records only a uniquely matched shown death and clears it at the %s boundary',
+    (boundary) => {
+      const timeline = new ObserverHintTimeline();
+      for (let now = 0; now <= 10000; now += 100)
+        run(timeline, now, {
+          sourceRemaining: 100 - now / 1000,
+          ...(now >= 2000 ? { programRemaining: 100 - (now - 2000) / 1000 } : {}),
+        });
+      timeline.consume(death(1, 1, 10000));
+      expect(run(timeline, 10100).observer?.hints).toHaveLength(1);
+      expect(run(timeline, 11500, { victimDead: true }).observer?.hints).toHaveLength(0);
+      expect(timeline.getDiagnostics().calibration.lastMatchedDeathOffsetMs).toBeCloseTo(-500);
+      run(timeline, 11600);
+      timeline.consume(death(1, 2, 11600));
+      timeline.consume(death(1, 3, 11700));
+      expect(run(timeline, 11700).observer?.hints).toHaveLength(2);
+      run(timeline, 12000, { victimDead: true });
+      expect(timeline.getDiagnostics().calibration.lastMatchedDeathOffsetMs).toBeCloseTo(-500);
+      if (boundary === 'source') run(timeline, 12100, { generation: 2 });
+      if (boundary === 'program') run(timeline, 12100, { programGeneration: 2 });
+      if (boundary === 'map') timeline.resetForMap(12100);
+      expect(timeline.getDiagnostics().calibration.lastMatchedDeathOffsetMs).toBeNull();
+    },
+  );
   it('calibrates a 120 second delay with 50 Hz quantized clocks', () => {
     const timeline = new ObserverHintTimeline();
     let result;
