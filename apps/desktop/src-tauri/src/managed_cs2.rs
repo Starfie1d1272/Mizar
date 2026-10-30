@@ -19,6 +19,15 @@ pub const LAUNCH_ARGS: &[&str] = &[
     "-allow_third_party_software",
     "-worldwide",
 ];
+// Preserving video settings still requires the capture compatibility flag for
+// this launch. These arguments never change Steam's saved launch options.
+const PRESERVED_LAUNCH_ARGS: &[&str] = &[
+    "-applaunch",
+    "730",
+    "-console",
+    "-allow_third_party_software",
+    "-worldwide",
+];
 
 const DISCOVERY: &str = include_str!("../../../../scripts/qualification/bundle/gsi-discovery.ps1");
 
@@ -510,7 +519,7 @@ unsafe extern "system" fn close_window(window: isize, data: isize) -> i32 {
     1
 }
 
-/// Called only with the held, identity-verified process from owned_process.
+/// Called only with a held, identity-verified process selected for this operation.
 fn close_owned_process(
     process: &Process,
     pid: u32,
@@ -633,6 +642,36 @@ struct ExternalSession {
     process: Arc<Process>,
     pid: u32,
     created: u64,
+}
+
+struct ReplacementTarget {
+    process: Process,
+    pid: u32,
+    created: u64,
+    managed: bool,
+}
+
+fn valid_preparation_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
+fn replacement_decision(
+    current: Option<(u32, u64, bool)>,
+    expected_pid: Option<u32>,
+    expected_created: Option<u64>,
+    same_preparation: bool,
+) -> Result<bool, String> {
+    if expected_pid.is_some() != expected_created.is_some() {
+        return Err("游戏身份无效，请重试。".into());
+    }
+    if let Some((pid, created, managed)) = current {
+        if Some(pid) != expected_pid || Some(created) != expected_created {
+            return Err("游戏实例已变化，未关闭游戏；请重新检查后重试。".into());
+        }
+        return Ok(managed && same_preparation);
+    }
+    // The selected process may have already exited; no process is closed here.
+    Ok(false)
 }
 impl WorkspaceProcess {
     pub fn is_running(&self) -> bool {
@@ -826,6 +865,137 @@ impl ManagedCs2 {
     pub fn has_external(&self) -> bool {
         self.external.is_some()
     }
+
+    // Discovery and process identity are repeated at the mutation boundary. The
+    // webview never chooses an executable or gains authority from a bare PID.
+    fn replacement_target(&self) -> Result<Option<ReplacementTarget>, String> {
+        let (executable, _, steam) = discover(&self.log)?;
+        steam.validate(&self.log)?;
+        let journal = self.store.load()?;
+        if journal
+            .as_ref()
+            .is_some_and(crate::cs2_session::unconfirmed_launch)
+        {
+            return Err("上次游戏启动仍待确认，请等待游戏身份确认后重试。".into());
+        }
+        let pids = cs2_pids(&self.log)?;
+        let pid = match pids.as_slice() {
+            [] => return Ok(None),
+            [pid] => *pid,
+            _ => return Err("检测到多个 CS2 实例，无法安全确定要关闭的游戏。".into()),
+        };
+        let process = open(pid, &self.log)?.ok_or("游戏实例已变化，请重试。")?;
+        let (created, actual) = identity(&process, &self.log)?;
+        if unsafe { WaitForSingleObject(process.0, 0) } != 258
+            || !same_executable(&actual, &executable.to_string_lossy())
+            || cs2_pids(&self.log)? != vec![pid]
+        {
+            return Err("游戏身份或所选安装位置已变化，未关闭游戏。".into());
+        }
+        let managed = journal.as_ref().is_some_and(|v| {
+            v["pid"].as_u64() == Some(u64::from(pid))
+                && v["created"].as_u64() == Some(created)
+                && v["executable"]
+                    .as_str()
+                    .is_some_and(|v| same_executable(&actual, v))
+        });
+        Ok(Some(ReplacementTarget {
+            process,
+            pid,
+            created,
+            managed,
+        }))
+    }
+
+    pub fn preflight_replacement(&self) -> Result<Value, String> {
+        let target = self.replacement_target()?;
+        let journal = self.store.load()?;
+        Ok(json!({
+            "target": target.map(|p| json!({"pid":p.pid,"created":p.created.to_string(),"managed":p.managed})),
+            "preparationId": journal.as_ref().and_then(|v| v["preparationId"].as_str()),
+        }))
+    }
+
+    pub fn replace_for_preparation(
+        &mut self,
+        expected_pid: Option<u32>,
+        expected_created: Option<u64>,
+        preparation_id: &str,
+        guard: &crate::preparation_gate::PreparationGuard<'_>,
+    ) -> Result<bool, String> {
+        if !valid_preparation_id(preparation_id) {
+            return Err("启动事务或游戏身份无效，请重试。".into());
+        }
+        let target = self.replacement_target()?;
+        let same_preparation = self
+            .store
+            .load()?
+            .as_ref()
+            .is_some_and(|v| v["preparationId"] == preparation_id);
+        if replacement_decision(
+            target.as_ref().map(|p| (p.pid, p.created, p.managed)),
+            expected_pid,
+            expected_created,
+            same_preparation,
+        )? {
+            return Ok(true);
+        }
+        let journal = self.store.load()?;
+        if journal.is_some() && target.as_ref().is_some_and(|target| !target.managed) {
+            return Err("已有游戏配置恢复尚未完成，未关闭外部游戏。".into());
+        }
+        if target.as_ref().is_some_and(|target| target.managed) {
+            crate::production_exit::finish_managed_game(&self.log.clone(), |requires_proof| {
+                guard.check()?;
+                self.finish_with_guard(false, guard)?;
+                if requires_proof {
+                    self.confirm_game_stopped()?;
+                }
+                Ok(())
+            })?;
+        } else {
+            if self.has_external() {
+                guard.check()?;
+                self.finish()?;
+            }
+            if let Some(target) = target {
+                let (created, actual) = identity(&target.process, &self.log)?;
+                if cs2_pids(&self.log)? != vec![target.pid]
+                    || created != target.created
+                    || !actual
+                        .file_name()
+                        .is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case("cs2.exe"))
+                    || unsafe { WaitForSingleObject(target.process.0, 0) } != 258
+                {
+                    return Err("游戏实例已变化，未关闭游戏；请重试。".into());
+                }
+                self.log.event(
+                    "external_game_replace",
+                    "begin",
+                    Some(
+                        &json!({"pid":target.pid,"created":target.created.to_string()}).to_string(),
+                    ),
+                );
+                guard.commit(|| {
+                    close_owned_process(&target.process, target.pid, target.created, &self.log)
+                })?;
+                self.log.event(
+                    "external_game_replace",
+                    "success",
+                    Some(
+                        &json!({"pid":target.pid,"created":target.created.to_string()}).to_string(),
+                    ),
+                );
+            }
+            self.confirm_game_stopped()?;
+            self.restore_backup(false)?;
+        }
+        self.confirm_game_stopped()?;
+        if self.startup_recovery_status()?.pending {
+            return Err("原游戏配置仍待恢复，请重试。".into());
+        }
+        Ok(false)
+    }
     pub(crate) fn external_matches(&self, game: &WorkspaceProcess) -> bool {
         self.external.as_ref().is_some_and(|external| {
             external.pid == game.pid
@@ -1017,7 +1187,7 @@ impl ManagedCs2 {
             false
         };
         Ok(
-            json!({"qualityPreset": preferences.quality.name(), "preferMulnx":preferences.prefer_mulnx, "frameRateLimit":preferences.frame_rate_limit, "nativeHudToggle": running && (borrowed_hud || pending.as_ref().is_some_and(|v| v["nativeHudToggle"] == true && v["spectatorCfg"] == true)), "spectatorRecoveryPending": (self.store.spectator_pending() || self.store.full_spectator_pending()) && pending.is_none() && !borrowed_observer, "demoCleanupPending": self.store.playback_cleanup_pending() && pending.is_none(), "demoCameraRequestId": pending.as_ref().filter(|v| v["mulnxLaunch"] == true).and_then(|v| v["demoTestRequestId"].as_str()), "spectatorWarning":self.store.spectator_warning().or_else(|| pending.as_ref().and_then(|value| value["spectatorWarning"].as_str()).map(str::to_string)), "canPreserve": self.can_preserve && pending.is_none(), "preserveSettings": borrowed || pending.as_ref().is_some_and(|v| v["preserveSettings"] == true), "pending":pending.is_some(), "mulnxLaunchResumable":mulnx_launch_resumable, "borrowed":borrowed, "externalDetached":self.external_preservation && !borrowed, "running":running, "message":self.message, "busy":false, "phase": if mulnx_uncertain || pending.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch) {"uncertain"} else if running {"running"} else if pending.is_some() {"pending"} else {"idle"}}),
+            json!({"qualityPreset": preferences.quality.name(), "preferMulnx":preferences.prefer_mulnx, "frameRateLimit":preferences.frame_rate_limit, "nativeHudToggle": running && (borrowed_hud || pending.as_ref().is_some_and(|v| v["nativeHudToggle"] == true && v["spectatorCfg"] == true)), "spectatorRecoveryPending": (self.store.spectator_pending() || self.store.full_spectator_pending()) && pending.is_none() && !borrowed_observer, "demoCleanupPending": self.store.playback_cleanup_pending() && pending.is_none(), "demoCameraRequestId": pending.as_ref().filter(|v| v["mulnxLaunch"] == true).and_then(|v| v["demoTestRequestId"].as_str()), "spectatorWarning":self.store.spectator_warning().or_else(|| pending.as_ref().and_then(|value| value["spectatorWarning"].as_str()).map(str::to_string)), "canPreserve": self.can_preserve && pending.is_none(), "preserveSettings": borrowed || pending.as_ref().is_some_and(|v| v["preserveSettings"] == true), "pending":pending.is_some(), "preparationId":pending.as_ref().and_then(|v| v["preparationId"].as_str()), "mulnxLaunchResumable":mulnx_launch_resumable, "borrowed":borrowed, "externalDetached":self.external_preservation && !borrowed, "running":running, "message":self.message, "busy":false, "phase": if mulnx_uncertain || pending.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch) {"uncertain"} else if running {"running"} else if pending.is_some() {"pending"} else {"idle"}}),
         )
     }
     pub fn preferences(
@@ -1275,6 +1445,22 @@ impl ManagedCs2 {
         self.start_with_settings(false)
     }
     pub fn start_with_settings(&mut self, preserve: bool) -> Result<bool, String> {
+        self.start_preparation(
+            preserve,
+            None,
+            &crate::preparation_gate::PreparationGuard {
+                gate: None,
+                id: None,
+                verify: None,
+            },
+        )
+    }
+    pub fn start_preparation(
+        &mut self,
+        preserve: bool,
+        preparation_id: Option<&str>,
+        guard: &crate::preparation_gate::PreparationGuard<'_>,
+    ) -> Result<bool, String> {
         if self.has_external() {
             self.poll();
             if self.workspace_process()?.is_none() {
@@ -1283,20 +1469,27 @@ impl ManagedCs2 {
             return Ok(false);
         }
         let journal = self.store.load()?;
+        if let (Some(id), Some(existing)) = (preparation_id, journal.as_ref()) {
+            if existing["preparationId"] != id {
+                return Err("已有其他游戏事务，请先完成原配置恢复。".into());
+            }
+        }
         if crate::demo_test::requires_recovery(&self.log, journal.as_ref())
             && crate::demo_test::status(&self.log)?["active"] == true
         {
             return Err("请先结束 Demo 试播并恢复游戏配置。".into());
         }
-        self.start_internal(preserve, None, false)
+        self.start_internal(preserve, None, false, preparation_id, guard)
     }
     /// Prepare the same configuration transaction as Steam without submitting a launch.
     pub(crate) fn prepare_managed_mulnx(
         &mut self,
         expected: &Path,
         preserve: bool,
+        preparation_id: Option<&str>,
+        guard: &crate::preparation_gate::PreparationGuard<'_>,
     ) -> Result<Value, String> {
-        if !self.start_internal(preserve, None, true)? {
+        if !self.start_internal(preserve, None, true, preparation_id, guard)? {
             return Err("请先结束现有游戏并恢复配置。".into());
         }
         let journal = self.store.load()?.ok_or("CS2 配置事务缺失。")?;
@@ -1317,7 +1510,17 @@ impl ManagedCs2 {
     ) -> Result<Value, String> {
         self.ensure_demo_available()?;
         let argument = crate::demo_test::playdemo_argument(path, &self.log)?;
-        if !self.start_internal(preserve, Some((&argument, request_id)), true)? {
+        if !self.start_internal(
+            preserve,
+            Some((&argument, request_id)),
+            true,
+            None,
+            &crate::preparation_gate::PreparationGuard {
+                gate: None,
+                id: None,
+                verify: None,
+            },
+        )? {
             return Err("请先结束现有游戏并恢复配置。".into());
         }
         let journal = self.store.load()?.ok_or("CS2 配置事务缺失。")?;
@@ -1402,9 +1605,22 @@ impl ManagedCs2 {
     ) -> Result<bool, String> {
         self.ensure_demo_available()?;
         let argument = crate::demo_test::playdemo_argument(path, &self.log)?;
-        self.start_internal(preserve, Some((&argument, request_id)), false)
+        self.start_internal(
+            preserve,
+            Some((&argument, request_id)),
+            false,
+            None,
+            &crate::preparation_gate::PreparationGuard {
+                gate: None,
+                id: None,
+                verify: None,
+            },
+        )
     }
     pub(crate) fn cancel_unsubmitted_mulnx_demo(&mut self) -> Result<(), String> {
+        self.cancel_unsubmitted_mulnx()
+    }
+    pub(crate) fn cancel_unsubmitted_mulnx(&mut self) -> Result<(), String> {
         if self.demo_launch_attempted()? || any_cs2_running(&self.log)? {
             return Err("启动结果待确认，请先检查游戏后恢复。".into());
         }
@@ -1425,6 +1641,18 @@ impl ManagedCs2 {
             }
         }
         self.finish()
+    }
+    pub(crate) fn cancel_unsubmitted_mulnx_for(&mut self, expected: &str) -> Result<(), String> {
+        if let Some(journal) = self.store.load()? {
+            if !crate::preparation_gate::may_recover_mulnx_journal(
+                Some(expected),
+                journal["preparationId"].as_str(),
+                journal["mulnxLaunch"] == true,
+            ) {
+                return Err("游戏事务已变化，未恢复其他启动的配置。".into());
+            }
+        }
+        self.cancel_unsubmitted_mulnx()
     }
     pub fn demo_launch_attempted(&self) -> Result<bool, String> {
         Ok(self
@@ -1472,7 +1700,13 @@ impl ManagedCs2 {
         preserve: bool,
         demo: Option<(&str, &str)>,
         prepare_only: bool,
+        preparation_id: Option<&str>,
+        guard: &crate::preparation_gate::PreparationGuard<'_>,
     ) -> Result<bool, String> {
+        guard.check()?;
+        if preparation_id.is_some_and(|id| !valid_preparation_id(id)) {
+            return Err("启动事务标识无效。".into());
+        }
         if preserve && !self.can_preserve {
             return Err("请先检查配置接管结果，再选择保持原游戏设置继续。".into());
         }
@@ -1530,6 +1764,14 @@ impl ManagedCs2 {
             }
         };
         self.can_preserve = false;
+        if prepare_only {
+            journal["mulnxLaunch"] = json!(true);
+        }
+        if let Some(id) = preparation_id {
+            journal["preparationId"] = json!(id);
+            // Durable before any Steam or MulNX launch request is submitted.
+            self.store.save(&journal)?;
+        }
         if journal["spectatorCfg"] == true {
             if let Err(error) = (|| {
                 self.store.validate_spectator_launch()?;
@@ -1596,9 +1838,6 @@ impl ManagedCs2 {
                     json!({"code":"source_prepare_failed","error":error});
             }
         }
-        if prepare_only {
-            journal["mulnxLaunch"] = json!(true);
-        }
         self.store.save(&journal)?;
         if prepare_only {
             return Ok(true);
@@ -1631,7 +1870,7 @@ impl ManagedCs2 {
                         .to_string(),
                 ]);
             } else {
-                command.args(["-applaunch", "730"]);
+                command.args(PRESERVED_LAUNCH_ARGS);
             }
             if journal["spectatorCfg"] == true {
                 match self.store.spectator_load_attempted(true) {
@@ -1700,37 +1939,40 @@ impl ManagedCs2 {
             let launch_time = ((time.high as u64) << 32) | time.low as u64;
             journal["launchTime"] = json!(launch_time);
             journal["launchAttempted"] = json!(true);
-            self.store.save(&journal)?;
-            self.submit_steam(&mut command).map_err(|error| {
-                self.log.event(
-                    "cs2_launch",
-                    "failure",
-                    Some(&format!(
-                        "stage=steam_spawn; launchTime={launch_time}; code={:?}; cause={error:?}",
-                        error.raw_os_error()
-                    )),
-                );
-                if journal["fullSnapshot"] == true {
-                    journal["launchCancelled"] = json!(true);
-                } else {
-                    journal["launchAttempted"] = json!(false);
-                }
-                if journal["spectatorCfg"] == true {
-                    if let Err(error) = self.store.spectator_load_attempted(false) {
-                        self.log
-                            .event("cs2_spectator_restore", "failure", Some(&error));
-                    }
-                }
-                if let Err(save_error) = self.store.save(&journal) {
+            guard.commit(|| {
+                self.store.save(&journal)?;
+                self.submit_steam(&mut command).map_err(|error| {
                     self.log.event(
                         "cs2_launch",
                         "failure",
                         Some(&format!(
-                            "stage=journal_after_spawn_failure; cause={save_error}"
-                        )),
+                        "stage=steam_spawn; launchTime={launch_time}; code={:?}; cause={error:?}",
+                        error.raw_os_error()
+                    )),
                     );
-                }
-                "CS2 未能启动。"
+                    if journal["fullSnapshot"] == true {
+                        journal["launchCancelled"] = json!(true);
+                    } else {
+                        journal["launchAttempted"] = json!(false);
+                    }
+                    if journal["spectatorCfg"] == true {
+                        if let Err(error) = self.store.spectator_load_attempted(false) {
+                            self.log
+                                .event("cs2_spectator_restore", "failure", Some(&error));
+                        }
+                    }
+                    if let Err(save_error) = self.store.save(&journal) {
+                        self.log.event(
+                            "cs2_launch",
+                            "failure",
+                            Some(&format!(
+                                "stage=journal_after_spawn_failure; cause={save_error}"
+                            )),
+                        );
+                    }
+                    "CS2 未能启动。"
+                })?;
+                Ok(())
             })?;
             // Steam's launcher PID is not the game PID. Commit the pending
             // request and release the command lock; the existing background poll
@@ -2061,6 +2303,20 @@ impl ManagedCs2 {
     }
     /// Only the verified service-stop path can skip the lease expiry wait.
     pub fn finish_with_service_stopped(&mut self, service_stopped: bool) -> Result<(), String> {
+        self.finish_with_guard(
+            service_stopped,
+            &crate::preparation_gate::PreparationGuard {
+                gate: None,
+                id: None,
+                verify: None,
+            },
+        )
+    }
+    fn finish_with_guard(
+        &mut self,
+        service_stopped: bool,
+        guard: &crate::preparation_gate::PreparationGuard<'_>,
+    ) -> Result<(), String> {
         let trial_state = if crate::demo_test::requires_recovery(&self.log, None) {
             crate::demo_test::status(&self.log)?
         } else {
@@ -2132,7 +2388,7 @@ impl ManagedCs2 {
                             crate::mulnx_launch::stop_managed_for_exit(self, &self.log)
                         })
                     },
-                    || close_owned_process(&process, pid, created, &self.log),
+                    || guard.commit(|| close_owned_process(&process, pid, created, &self.log)),
                 );
                 if let Err(error) = result {
                     self.message = Some(error.clone());
@@ -2188,6 +2444,45 @@ impl ManagedCs2 {
                 Err(error)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod replacement_tests {
+    use super::{replacement_decision, LAUNCH_ARGS, PRESERVED_LAUNCH_ARGS};
+
+    #[test]
+    fn both_standard_launch_modes_enable_game_capture_without_forcing_preserved_video_settings() {
+        for arguments in [LAUNCH_ARGS, PRESERVED_LAUNCH_ARGS] {
+            for required in ["-console", "-allow_third_party_software", "-worldwide"] {
+                assert!(arguments.contains(&required));
+            }
+        }
+        assert!(!PRESERVED_LAUNCH_ARGS.contains(&"-windowed"));
+        assert!(!PRESERVED_LAUNCH_ARGS.contains(&"+fps_max"));
+    }
+
+    #[test]
+    fn replacement_requires_the_preflight_identity_and_only_reuses_its_managed_transaction() {
+        assert_eq!(
+            replacement_decision(Some((10, 20, true)), Some(10), Some(20), true),
+            Ok(true)
+        );
+        assert_eq!(
+            replacement_decision(Some((10, 20, true)), Some(10), Some(20), false),
+            Ok(false)
+        );
+        assert_eq!(
+            replacement_decision(Some((10, 20, false)), Some(10), Some(20), true),
+            Ok(false)
+        );
+        assert!(replacement_decision(Some((10, 21, false)), Some(10), Some(20), false).is_err());
+        assert!(replacement_decision(Some((11, 20, false)), Some(10), Some(20), false).is_err());
+        assert!(replacement_decision(Some((10, 20, false)), None, None, false).is_err());
+        assert_eq!(
+            replacement_decision(None, Some(10), Some(20), false),
+            Ok(false)
+        );
     }
 }
 

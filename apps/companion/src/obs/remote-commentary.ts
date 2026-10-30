@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { link, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { z } from 'zod';
+import { ObsPreparationWriteBlocked } from './video-transaction.js';
 import type { ObsRpc } from './reconcile.js';
 
 const binding = z
@@ -316,13 +317,24 @@ export async function createCommentaryProbe(
     await rm(journalPath, { force: true });
     throw error;
   }
-  const created = await obs.call('CreateInput', {
-    sceneName: context.sceneName,
-    inputName: name,
-    inputKind: 'wasapi_process_output_capture',
-    inputSettings: {},
-    sceneItemEnabled: false,
-  });
+  let created: Record<string, unknown>;
+  try {
+    created = await obs.call('CreateInput', {
+      sceneName: context.sceneName,
+      inputName: name,
+      inputKind: 'wasapi_process_output_capture',
+      inputSettings: {},
+      sceneItemEnabled: false,
+    });
+  } catch (error) {
+    if (error instanceof ObsPreparationWriteBlocked) {
+      // The output guard ran before dispatch. Remove only the exact journal we
+      // created; a changed or unreadable record remains available for recovery.
+      const current = await readFile(journalPath, 'utf8').catch(() => null);
+      if (current === `${JSON.stringify(planned)}\n`) await rm(journalPath);
+    }
+    throw error;
+  }
   if (typeof created.inputUuid !== 'string' || !created.inputUuid)
     throw new Error('commentary_probe_creation_uncertain');
   const temp = `${journalPath}.${randomUUID()}.tmp`;

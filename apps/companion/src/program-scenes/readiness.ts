@@ -2,18 +2,20 @@ import type { ProjectionBundle } from '../projections/projection-coordinator.js'
 import type { ProgramSceneController } from './controller.js';
 import type { ObsStatus } from '../obs/adapter.js';
 import { obsSceneName } from '../obs/desired-state.js';
+import { obsFindingReadiness } from '../obs/prepare-readiness.js';
 
 export function obsReadiness(
   status: ObsStatus | undefined,
   active: Parameters<typeof obsSceneName>[0],
 ) {
+  const { blockingFindings, warnings } = obsFindingReadiness(status?.findings ?? []);
   const ready =
     status?.connection === 'connected' &&
     status.currentScene === obsSceneName(active) &&
-    status.findings.length === 0;
+    blockingFindings.length === 0;
   const reason =
     status?.connection === 'connected'
-      ? (status.findings[0]?.message ??
+      ? (blockingFindings[0]?.message ??
         (status.currentScene === obsSceneName(active) ? '已就绪' : '当前场景与播出场景不一致'))
       : status?.connection === 'password_required'
         ? '需要密码'
@@ -26,6 +28,8 @@ export function obsReadiness(
     reason,
     href: '/settings?tab=obs',
     action: ready ? null : '检查 OBS 连接与配置',
+    blockingFindings,
+    warnings,
   };
 }
 

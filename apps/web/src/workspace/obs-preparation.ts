@@ -22,7 +22,11 @@ export function useObsPreparation() {
   );
 }
 /** Request progress only; OBS findings remain the authority for readiness. */
-export function prepareObs(expectedRevision?: string, signal?: AbortSignal) {
+export function prepareObs(
+  expectedRevision?: string,
+  signal?: AbortSignal,
+  preparationId?: string,
+) {
   if (pending) return pending;
   const abort = new AbortController();
   const cancel = () => abort.abort();
@@ -40,7 +44,11 @@ export function prepareObs(expectedRevision?: string, signal?: AbortSignal) {
         if (!response.ok) throw new Error('制作状态未确认，请重试。');
         return ((await response.json()) as { revision: string }).revision;
       }));
-    return obsCommand('ensure', { expectedRevision: revision }, current);
+    return obsCommand(
+      'ensure',
+      { expectedRevision: revision, ...(preparationId ? { preparationId } : {}) },
+      current,
+    );
   })()
     .then(() => {
       publish({ phase: 'completed', message: '' });

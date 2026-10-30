@@ -2,9 +2,8 @@ import { diagnosticValue } from '../support/session-journal.js';
 import { randomUUID, createHash } from 'node:crypto';
 import { SourceLoadError } from './source-error.js';
 import { RivalHubLibrary } from './rivalhub-library.js';
-import { readFile, rename, writeFile, unlink } from 'node:fs/promises';
+import { readFile, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { mkdir } from 'node:fs/promises';
 import type { LiveSnapshotV1, ReliableEventV1 } from '@mizar/protocol/output';
 import type { MatchContext, ScheduleWindowV1 } from '@mizar/core/match-context';
 import {
@@ -17,8 +16,48 @@ import { broadcastStatsSchema, type BroadcastStats } from '@mizar/protocol/broad
 import { redactDiagnosticText, diagnosticNetworkCode } from '../updates/diagnostics.js';
 import {
   RELIABLE_SEND_TIMEOUT_MS,
+  parseReliableRejection,
   type ReliableDeliveryResult,
 } from '../output/reliable-outbox.js';
+import { SerialCommitQueue } from './serial-commit.js';
+import { replaceDurableJson } from './durable-json.js';
+import {
+  RivalHubSourceState,
+  type ExactSource,
+  type SourceScope,
+} from './rivalhub-source-state.js';
+
+// Read only a small, time-limited classified rejection. Never retain raw body text.
+async function readReliableBody(response: Response): Promise<unknown> {
+  const reader = response.body?.getReader();
+  if (!reader) return undefined;
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  const timeout = AbortSignal.timeout(1000);
+  const deadline = new Promise<never>((_, reject) =>
+    timeout.addEventListener('abort', () => reject(new Error('timeout')), { once: true }),
+  );
+  try {
+    for (;;) {
+      const part = await Promise.race([reader.read(), deadline]);
+      if (part.done) break;
+      size += part.value.byteLength;
+      if (size > 4096) return undefined;
+      chunks.push(part.value);
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+  } catch {
+    return undefined;
+  } finally {
+    void reader.cancel().catch(() => undefined);
+  }
+}
 
 type Installation = {
   baseUrl: string;
@@ -73,7 +112,28 @@ type Source = {
   acknowledgedExecution?: string;
   mapStartAttempt?: symbol;
   deliveryExecution?: string;
+  paused?: boolean;
+  draining?: boolean;
+  drainReliable?: boolean;
 };
+
+/** Only explicit, structured receiver refusals prove that this claim did not commit. */
+function definitiveClaimRejection(response: Response, body: unknown): boolean {
+  if (!response.headers.get('content-type')?.toLowerCase().includes('application/json'))
+    return false;
+  if (!response.headers.get('cache-control')?.toLowerCase().includes('no-store')) return false;
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
+  const value = body as Record<string, unknown>;
+  if (typeof value.error !== 'string' || !value.error || typeof value.code !== 'string')
+    return false;
+  return (
+    (response.status === 400 && value.code === 'VALIDATION_FAILED') ||
+    (response.status === 401 && value.code === 'UNAUTHORIZED') ||
+    (response.status === 403 && value.code === 'FORBIDDEN') ||
+    (response.status === 404 &&
+      ['NOT_FOUND', 'MATCH_NOT_FOUND', 'SEASON_NOT_FOUND'].includes(value.code))
+  );
+}
 
 type LiveErrorEvidence = { name: string; code?: string | number; cause?: LiveErrorEvidence };
 type LiveFailure = {
@@ -253,6 +313,7 @@ export class RivalHubConnection {
         operation,
         error: diagnosticValue(error, '', new Set(), [
           this.installation?.credential ?? '',
+          this.authorizedPairing?.credential ?? '',
           this.pendingPairing?.pollToken ?? '',
         ]),
       });
@@ -468,8 +529,19 @@ export class RivalHubConnection {
   }
   private installation: Installation | null = null;
   private pendingPairing: PendingPairing | null = null;
+  private authorizedPairing: Installation | null = null;
   private pairingPoll: Promise<PairingStatus> | null = null;
   private source: Source | null = null;
+  private readonly liveInFlight = new Map<Source, Set<Promise<void>>>();
+  private readonly sourceSettlements = new Map<string, Promise<boolean>>();
+  private readonly cleanupAttempts = new Map<string, { count: number; nextCycleAt: number }>();
+  private readonly sourceCommands = new SerialCommitQueue();
+  private readonly sourceState: RivalHubSourceState;
+  private cleanupTimer: ReturnType<typeof setInterval> | undefined;
+  private cleanupSummary = { pending: 0, blocked: 0, claimIntent: false };
+  private settleSource: ((scope: SourceScope) => Promise<boolean>) | undefined;
+  private resumeSource: ((scope: SourceScope) => void) | undefined;
+  private bindingGeneration = 0;
   private activeDeviceName: string | null = null;
   private activeDeviceMatchId: string | null = null;
   private claimRevision = 0;
@@ -565,6 +637,22 @@ export class RivalHubConnection {
     return result('attention', reason);
   }
 
+  setContextRecoveryProgress(
+    event: ReliableEventV1,
+    authority: string,
+    state:
+      | 'context_refreshing'
+      | 'context_reconfirming'
+      | 'context_recovery_blocked'
+      | 'continuity_chain_missing'
+      | 'continuity_waiting',
+  ): void {
+    if (this.reliableAuthorityScope() !== authority || this.stoppedMatchId === event.matchId)
+      return;
+    this.controlFailureScope = this.failureScope(event);
+    this.controlFailure = state;
+  }
+
   retryLive(): void {
     this.nextLiveAt = 0;
     this.liveFailures = 0;
@@ -617,9 +705,14 @@ export class RivalHubConnection {
     private readonly fetchImpl: typeof fetch = fetch,
     private readonly baseUrl = OFFICIAL_RIVALHUB_URL,
     private readonly monotonicNow = () => performance.now(),
-  ) {}
+  ) {
+    this.sourceState = new RivalHubSourceState(join(dirname(path), 'rivalhub-source-state.json'));
+  }
 
   async load(): Promise<void> {
+    await this.sourceState.load();
+    await this.sourceState.recover();
+    await this.updateCleanupSummary();
     let stage = 'connection_read';
     try {
       const raw = await readFile(this.path, 'utf8');
@@ -685,6 +778,7 @@ export class RivalHubConnection {
       activeDeviceMatchId: this.activeDeviceMatchId,
       pairing: this.pendingPairing === null ? 'idle' : 'pending',
       stoppedMatchId: this.stoppedMatchId,
+      sourceCleanup: this.cleanupSummary,
       liveDelivery:
         this.source === null
           ? { status: 'idle', cursor: null, reason: null, consecutiveUnaccepted: 0, durationMs: 0 }
@@ -702,20 +796,426 @@ export class RivalHubConnection {
     };
   }
 
-  async disconnect(): Promise<void> {
-    if (this.installation) {
+  setSourceSettlement(
+    settle: (scope: SourceScope) => Promise<boolean>,
+    resume: (scope: SourceScope) => void,
+  ): void {
+    this.settleSource = settle;
+    this.resumeSource = resume;
+  }
+
+  startSourceCleanup(): void {
+    if (this.cleanupTimer) return;
+    this.cleanupTimer = setInterval(() => {
+      void this.sourceCommands
+        .run(() => this.cleanup(false))
+        .catch((error: unknown) => this.onDiagnostic('source_cleanup', error));
+    }, 10_000);
+    this.cleanupTimer.unref();
+    void this.sourceCommands
+      .run(() => this.cleanup(false))
+      .catch((error: unknown) => this.onDiagnostic('source_cleanup', error));
+  }
+
+  bindingChanged(matchId: string | null): void {
+    const generation = ++this.bindingGeneration;
+    if (this.source && this.source.matchId !== matchId) this.source.draining = true;
+    void this.sourceCommands
+      .run(async () => {
+        if (
+          generation !== this.bindingGeneration ||
+          !this.source ||
+          this.source.matchId === matchId
+        )
+          return;
+        await this.retireCurrent('switch');
+        await this.cleanup(false);
+      })
+      .catch((error: unknown) => this.onDiagnostic('source_switch', error));
+  }
+
+  async shutdownSource(): Promise<void> {
+    if (this.cleanupTimer) clearInterval(this.cleanupTimer);
+    this.cleanupTimer = undefined;
+    return this.sourceCommands.run(async () => {
+      const deadline = Date.now() + 8000;
+      await this.retireCurrent('shutdown');
+      await this.cleanup(true, deadline);
+      if (
+        this.cleanupSummary.pending ||
+        this.cleanupSummary.blocked ||
+        this.cleanupSummary.claimIntent
+      )
+        throw new Error('数据源释放待重试或核对。');
+    });
+  }
+
+  private async updateCleanupSummary(): Promise<void> {
+    const state = await this.sourceState.snapshot();
+    this.cleanupSummary = {
+      pending: state.records.filter((item) => item.state === 'release_pending').length,
+      blocked: state.records.filter((item) => item.state === 'blocked').length,
+      claimIntent: state.intent !== null,
+    };
+  }
+
+  private cleanupEvidence(identity: ExactSource, reason: string, attempts: number): void {
+    try {
+      this.businessHandler?.('business_source_cleanup', {
+        matchId: identity.matchId,
+        competitionId: identity.competitionId,
+        installationId: identity.installationId,
+        producerInstanceId: identity.producerInstanceId,
+        liveSessionId: identity.liveSessionId,
+        authorityRevision: identity.authorityRevision,
+        reason,
+        attempts,
+      });
+    } catch {
+      /* Diagnostics cannot change cleanup. */
+    }
+  }
+
+  private scopeMatches(scope: SourceScope): boolean {
+    return (
+      this.installation !== null &&
+      scope.baseUrl === this.installation.baseUrl &&
+      scope.competitionId === this.installation.competitionId &&
+      scope.installationId === this.installation.installationId
+    );
+  }
+
+  private exactSource(source: Source): ExactSource {
+    if (!this.installation) throw new Error('请先连接 RivalHub。');
+    return {
+      baseUrl: this.installation.baseUrl,
+      competitionId: this.installation.competitionId,
+      installationId: this.installation.installationId,
+      matchId: source.matchId,
+      producerInstanceId: source.producerInstanceId,
+      liveSessionId: source.liveSessionId,
+      authorityRevision: source.authorityRevision,
+    };
+  }
+
+  private async settle(identity: ExactSource, budgetMs = 2500): Promise<boolean> {
+    if (!this.settleSource) return false;
+    const key = JSON.stringify([
+      identity.matchId,
+      identity.producerInstanceId,
+      identity.liveSessionId,
+      identity.authorityRevision,
+    ]);
+    const drain = async () => {
+      const requests = [...this.liveInFlight.entries()]
+        .filter(
+          ([source]) =>
+            source.matchId === identity.matchId &&
+            source.producerInstanceId === identity.producerInstanceId &&
+            source.liveSessionId === identity.liveSessionId &&
+            source.authorityRevision === identity.authorityRevision,
+        )
+        .flatMap(([, pending]) => [...pending]);
+      // The output owner fences new events synchronously on entry. Only after
+      // that fence exists may a paused source deliver its already queued tail.
+      const disposition = this.settleSource!(identity).catch(() => false);
+      const source = this.source;
+      if (
+        source?.draining &&
+        source.matchId === identity.matchId &&
+        source.producerInstanceId === identity.producerInstanceId &&
+        source.liveSessionId === identity.liveSessionId &&
+        source.authorityRevision === identity.authorityRevision
+      )
+        source.drainReliable = true;
+      await Promise.allSettled(requests);
+      return disposition;
+    };
+    let operation = this.sourceSettlements.get(key);
+    if (!operation) {
+      operation = drain().catch(() => false);
+      this.sourceSettlements.set(key, operation);
+      void operation.then(() => {
+        if (this.sourceSettlements.get(key) === operation) this.sourceSettlements.delete(key);
+      });
+    }
+    return Promise.race([
+      operation,
+      new Promise<boolean>((resolve) => {
+        const timer = setTimeout(() => resolve(false), Math.max(1, budgetMs));
+        timer.unref();
+      }),
+    ]);
+  }
+
+  private async retireCurrent(cause: 'finish' | 'switch' | 'shutdown'): Promise<void> {
+    const source = this.source;
+    if (!source) return;
+    const identity = this.exactSource(source);
+    source.draining = true;
+    await this.sourceState.handoff(identity, cause);
+    await this.updateCleanupSummary();
+    if (!(await this.settle(identity))) throw new Error('可靠事件仍待确认，数据源释放待重试。');
+    if (this.source === source) this.source = null;
+  }
+
+  private async reconcileIntent(deadline: number): Promise<void> {
+    const state = await this.sourceState.snapshot();
+    const intent = state.intent;
+    if (!intent || !this.scopeMatches(intent.scope) || Date.now() >= deadline) return;
+    const query = new URLSearchParams({
+      matchId: intent.scope.matchId,
+      producerInstanceId: intent.scope.producerInstanceId,
+      liveSessionId: intent.scope.liveSessionId,
+    });
+    const response = await this.request(`source-status?${query}`, {
+      signal: AbortSignal.timeout(Math.max(1, Math.min(4000, deadline - Date.now()))),
+    });
+    if (!response.ok) return;
+    const result = (await readReliableBody(response)) as
+      | {
+          status?: unknown;
+          source?: Record<string, unknown>;
+        }
+      | undefined;
+    if (result?.status !== 'found' || !result.source) return;
+    const found = result.source;
+    if (
+      found.installationId !== intent.scope.installationId ||
+      found.competitionId !== intent.scope.competitionId ||
+      found.matchId !== intent.scope.matchId ||
+      found.producerInstanceId !== intent.scope.producerInstanceId ||
+      found.liveSessionId !== intent.scope.liveSessionId ||
+      !Number.isSafeInteger(found.authorityRevision) ||
+      (found.authorityRevision as number) <= 0 ||
+      (found.state !== 'open' && found.state !== 'closed')
+    )
+      return;
+    const revision = found.authorityRevision as number;
+    // An equal revision is conclusive only when this claim started while that
+    // exact authority was held. A watermark by itself proves no such thing.
+    const legacyHeld = state.records.some(
+      ({ identity }) =>
+        identity.baseUrl === intent.scope.baseUrl &&
+        identity.competitionId === intent.scope.competitionId &&
+        identity.installationId === intent.scope.installationId &&
+        identity.matchId === intent.scope.matchId &&
+        identity.producerInstanceId === intent.scope.producerInstanceId &&
+        identity.liveSessionId === intent.scope.liveSessionId &&
+        identity.authorityRevision === revision &&
+        !state.watermarks.some(
+          (item) =>
+            item.baseUrl === identity.baseUrl &&
+            item.competitionId === identity.competitionId &&
+            item.installationId === identity.installationId &&
+            item.matchId === identity.matchId &&
+            item.producerInstanceId === identity.producerInstanceId &&
+            item.liveSessionId === identity.liveSessionId &&
+            item.authorityRevision >= revision,
+        ),
+    );
+    if (intent.previousAuthorityRevision !== null && revision <= intent.previousAuthorityRevision) {
+      if (
+        revision !== intent.previousAuthorityRevision ||
+        (intent.idempotentAuthorityRevision !== revision &&
+          !(intent.idempotentAuthorityRevision === undefined && legacyHeld))
+      )
+        return;
+    }
+    if (found.state === 'closed') {
+      await this.sourceState.clearIntent(intent.id);
+    } else {
+      const identity = await this.sourceState.confirmClaim(
+        intent.id,
+        found.authorityRevision as number,
+      );
+      await this.sourceState.handoff(identity, 'recovery');
+      // Reconciliation can also run in the original process after a lost
+      // idempotent response. Fence its live source so the output owner can
+      // finish its existing reliable tail before cleanup releases it.
+      if (this.source && JSON.stringify(this.exactSource(this.source)) === JSON.stringify(identity))
+        this.source.draining = true;
+    }
+  }
+
+  private async cleanup(force: boolean, deadline = Date.now() + 7000): Promise<void> {
+    try {
+      await this.reconcileIntent(deadline);
+    } catch (error) {
+      this.onDiagnostic('source_status', error);
+    }
+    const state = await this.sourceState.snapshot();
+    for (const record of state.records) {
+      if (Date.now() >= deadline) break;
+      if (record.state === 'owned') continue;
+      if (!this.scopeMatches(record.identity)) {
+        if (record.state === 'release_pending')
+          await this.sourceState.failure(record.identity, 'installation_mismatch', null, true);
+        continue;
+      }
+      if (record.state === 'blocked') {
+        if (!force) continue;
+        const identity = record.identity;
+        const query = new URLSearchParams({
+          matchId: identity.matchId,
+          producerInstanceId: identity.producerInstanceId,
+          liveSessionId: identity.liveSessionId,
+          authorityRevision: String(identity.authorityRevision),
+        });
+        try {
+          const response = await this.request(`source-status?${query}`, {
+            signal: AbortSignal.timeout(Math.max(1, Math.min(4000, deadline - Date.now()))),
+          });
+          if (!response.ok) continue;
+          const result = (await readReliableBody(response)) as
+            | {
+                status?: unknown;
+                source?: Record<string, unknown>;
+              }
+            | undefined;
+          const found = result?.source;
+          if (
+            result?.status === 'found' &&
+            found?.state === 'closed' &&
+            found.installationId === identity.installationId &&
+            found.competitionId === identity.competitionId &&
+            found.matchId === identity.matchId &&
+            found.producerInstanceId === identity.producerInstanceId &&
+            found.liveSessionId === identity.liveSessionId &&
+            found.authorityRevision === identity.authorityRevision
+          )
+            await this.sourceState.complete(identity);
+        } catch (error) {
+          this.onDiagnostic('source_status', error);
+        }
+        continue;
+      }
+      const attemptKey = JSON.stringify(record.identity);
+      if (record.retryAfterAt && Date.parse(record.retryAfterAt) > Date.now()) continue;
+      const cycle = this.cleanupAttempts.get(attemptKey);
+      if (!force && cycle && cycle.count >= 8 && Date.now() < cycle.nextCycleAt) continue;
+      if (force || (cycle && cycle.count >= 8)) this.cleanupAttempts.delete(attemptKey);
+      if (!force && record.nextAttemptAt && Date.parse(record.nextAttemptAt) > Date.now()) continue;
+      const identity = record.identity;
+      if (!(await this.settle(identity, Math.min(2500, deadline - Date.now())))) continue;
+      if (Date.now() >= deadline) break;
+      const count = (this.cleanupAttempts.get(attemptKey)?.count ?? 0) + 1;
+      this.cleanupAttempts.set(attemptKey, {
+        count,
+        // A later bounded round probes for network recovery; no identity is discarded.
+        nextCycleAt: count >= 8 ? Date.now() + 600_000 : 0,
+      });
       try {
-        await this.release();
+        this.cleanupEvidence(identity, 'release_attempt', record.attempts + 1);
+        const response = await this.request('release', {
+          method: 'POST',
+          signal: AbortSignal.timeout(Math.max(1, Math.min(4000, deadline - Date.now()))),
+          headers: {
+            'content-type': 'application/json',
+            'x-rivalhub-authority': String(identity.authorityRevision),
+          },
+          body: JSON.stringify({
+            matchId: identity.matchId,
+            producerInstanceId: identity.producerInstanceId,
+            liveSessionId: identity.liveSessionId,
+          }),
+        });
+        const result = response.ok ? await readReliableBody(response) : undefined;
+        if (
+          response.ok &&
+          result &&
+          typeof result === 'object' &&
+          'released' in result &&
+          result.released === true
+        ) {
+          if (
+            this.source &&
+            JSON.stringify(this.exactSource(this.source)) === JSON.stringify(identity)
+          )
+            this.source = null;
+          await this.sourceState.complete(identity);
+          this.cleanupAttempts.delete(attemptKey);
+          this.cleanupEvidence(identity, 'release_confirmed', record.attempts + 1);
+          continue;
+        }
+        if (response.ok) {
+          await this.sourceState.failure(
+            identity,
+            'invalid_response',
+            new Date(Date.now() + 5000).toISOString(),
+            false,
+          );
+          this.cleanupEvidence(identity, 'release_pending', record.attempts + 1);
+          continue;
+        }
+        const retryable =
+          response.status === 408 || response.status === 429 || response.status >= 500;
+        const delay = Math.floor(
+          Math.max(1000, Math.min(60_000, 1000 * 2 ** Math.min(record.attempts, 6))) *
+            (0.8 + Math.random() * 0.4),
+        );
+        const header = response.headers.get('retry-after');
+        const retryAfter = header
+          ? /^\d+$/.test(header.trim())
+            ? Number(header) * 1000
+            : Date.parse(header) - Date.now()
+          : 0;
+        const serverDelay = Number.isFinite(retryAfter)
+          ? Math.max(0, Math.min(retryAfter, 253_402_300_799_000 - Date.now()))
+          : 0;
+        await this.sourceState.failure(
+          identity,
+          `http_${response.status}`,
+          retryable ? new Date(Date.now() + Math.max(delay, serverDelay)).toISOString() : null,
+          !retryable,
+          retryable && serverDelay > 0 ? new Date(Date.now() + serverDelay).toISOString() : null,
+        );
+        this.cleanupEvidence(
+          identity,
+          retryable ? 'release_pending' : 'release_blocked',
+          record.attempts + 1,
+        );
+      } catch (error) {
+        this.onDiagnostic('source_release', error);
+        await this.sourceState.failure(
+          identity,
+          'network_failed',
+          new Date(Date.now() + 5000).toISOString(),
+          false,
+        );
+        this.cleanupEvidence(identity, 'release_pending', record.attempts + 1);
+      }
+    }
+    await this.updateCleanupSummary();
+  }
+
+  async disconnect(): Promise<void> {
+    return this.sourceCommands.run(() => this.disconnectLocked());
+  }
+
+  private async disconnectLocked(): Promise<void> {
+    if (this.installation) {
+      const installation = this.installation;
+      try {
+        await this.releaseLocked();
       } catch {
         // active source release is best-effort
       }
       const response = await this.request('disconnect', {
         method: 'POST',
       });
-      await response.body?.cancel();
-      if (!response.ok) {
+      const result = response.ok ? await readReliableBody(response) : undefined;
+      if (
+        !response.ok ||
+        !result ||
+        typeof result !== 'object' ||
+        !('revoked' in result) ||
+        result.revoked !== true
+      ) {
         throw new Error('断开连接失败，请稍后重试。');
       }
+      await this.sourceState.completeRevokedInstallation(installation);
+      await this.updateCleanupSummary();
     }
     await unlink(this.path).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== 'ENOENT') throw error;
@@ -726,14 +1226,11 @@ export class RivalHubConnection {
     this.source = null;
     this.activeDeviceName = null;
     this.pendingPairing = null;
+    this.authorizedPairing = null;
   }
 
-  private async persist(): Promise<void> {
-    if (!this.installation) return;
-    await mkdir(dirname(this.path), { recursive: true });
-    const temp = join(dirname(this.path), `.rivalhub-${randomUUID()}.tmp`);
-    await writeFile(temp, JSON.stringify(this.installation), { mode: 0o600 });
-    await rename(temp, this.path);
+  private async persist(installation: Installation): Promise<void> {
+    await replaceDurableJson(this.path, installation);
   }
 
   private async request(operation: string, init: RequestInit = {}): Promise<Response> {
@@ -747,7 +1244,7 @@ export class RivalHubConnection {
           init.signal ?? AbortSignal.timeout(operation === 'live' ? 4000 : CONTROL_TIMEOUT_MS),
       });
       if (!response.ok && response.status !== 304) {
-        await response.body?.cancel();
+        if (operation !== 'reliable' && operation !== 'claim') await response.body?.cancel();
         this.onDiagnostic(operation, new Error(`RivalHub HTTP ${response.status}`));
       }
       return response;
@@ -771,6 +1268,10 @@ export class RivalHubConnection {
   }
 
   async startPairing(): Promise<{ authorizeUrl: string; expiresAt: string }> {
+    return this.sourceCommands.run(() => this.startPairingLocked());
+  }
+
+  private async startPairingLocked(): Promise<{ authorizeUrl: string; expiresAt: string }> {
     const baseUrl = normalizeBaseUrl(this.baseUrl);
     const response = await this.fetchImpl(`${baseUrl}/api/mizar/pairing/start`, {
       method: 'POST',
@@ -813,18 +1314,22 @@ export class RivalHubConnection {
       pollToken: value.pollToken,
       expiresAt: value.expiresAt,
     };
+    this.authorizedPairing = null;
     return { authorizeUrl: authorizeUrl.toString(), expiresAt: value.expiresAt };
   }
 
   pollPairing(): Promise<PairingStatus> {
     if (!this.pairingPoll)
-      this.pairingPoll = this.pollPairingOnce().finally(() => {
-        this.pairingPoll = null;
-      });
+      this.pairingPoll = this.sourceCommands
+        .run(() => this.pollPairingOnce())
+        .finally(() => {
+          this.pairingPoll = null;
+        });
     return this.pairingPoll;
   }
 
   private async pollPairingOnce(): Promise<PairingStatus> {
+    if (this.authorizedPairing) return this.commitPairing(this.authorizedPairing);
     const pending = this.pendingPairing;
     if (pending === null) return 'idle';
     if (Date.parse(pending.expiresAt) <= Date.now()) {
@@ -868,14 +1373,7 @@ export class RivalHubConnection {
     const rawDisplayName = typeof value.displayName === 'string' ? value.displayName.trim() : '';
     const displayName = rawDisplayName.length > 0 ? rawDisplayName : '赛事管理员';
 
-    try {
-      await this.release();
-    } catch {
-      // Safe cleanup by correct owner: new installation persistence must not be blocked by release failure
-    }
-    this.source = null;
-    this.invalidateReadScope();
-    this.installation = {
+    this.authorizedPairing = {
       baseUrl,
       credential: value.credential,
       installationId: value.installationId,
@@ -883,7 +1381,16 @@ export class RivalHubConnection {
       displayName,
       authorizedUser: authorizedUser(value.authorizedUser),
     };
-    await this.persist();
+    return this.commitPairing(this.authorizedPairing);
+  }
+
+  private async commitPairing(installation: Installation): Promise<PairingStatus> {
+    await this.releaseLocked();
+    await this.persist(installation);
+    this.source = null;
+    this.invalidateReadScope();
+    this.installation = installation;
+    this.authorizedPairing = null;
     this.pendingPairing = null;
     return 'authorized';
   }
@@ -917,8 +1424,12 @@ export class RivalHubConnection {
           acquiredAt: this.monotonicNow(),
         };
       }
-      this.installation.authorizedUser = authorizedUser(result.value.viewer);
-      await this.persist();
+      await this.sourceCommands.run(async () => {
+        if (this.installation !== installation) return;
+        const user = authorizedUser(result.value.viewer);
+        await this.persist({ ...installation, authorizedUser: user });
+        installation.authorizedUser = user;
+      });
     }
     return result.value;
   }
@@ -1066,12 +1577,72 @@ export class RivalHubConnection {
   }
 
   async claim(snapshot: LiveSnapshotV1, contextRevision: string, takeover: boolean) {
+    const generation = this.bindingGeneration;
+    return this.sourceCommands.run(() =>
+      this.claimLocked(snapshot, contextRevision, takeover, generation),
+    );
+  }
+
+  private async claimLocked(
+    snapshot: LiveSnapshotV1,
+    contextRevision: string,
+    takeover: boolean,
+    generation: number,
+  ) {
     if (
       !this.installation ||
       snapshot.competitionId !== this.installation.competitionId ||
       !snapshot.cursor.liveSessionId
     )
       throw new Error('当前比赛尚未准备好连接。');
+    const installation = this.installation;
+    if (
+      this.source &&
+      (this.source.matchId !== snapshot.matchId ||
+        this.source.producerInstanceId !== snapshot.cursor.producerInstanceId ||
+        this.source.liveSessionId !== snapshot.cursor.liveSessionId)
+    ) {
+      await this.retireCurrent('switch');
+      await this.cleanup(false);
+    }
+    if (generation !== this.bindingGeneration) throw new Error('比赛已变化，请重新认领数据源。');
+    const scope: SourceScope = {
+      baseUrl: installation.baseUrl,
+      competitionId: installation.competitionId,
+      installationId: installation.installationId,
+      matchId: snapshot.matchId,
+      producerInstanceId: snapshot.cursor.producerInstanceId,
+      liveSessionId: snapshot.cursor.liveSessionId,
+    };
+    const durableState = await this.sourceState.snapshot();
+    const matchingRecords = durableState.records.filter(
+      (record) =>
+        record.identity.baseUrl === scope.baseUrl &&
+        record.identity.installationId === scope.installationId &&
+        record.identity.competitionId === scope.competitionId &&
+        record.identity.matchId === scope.matchId &&
+        record.identity.producerInstanceId === scope.producerInstanceId &&
+        record.identity.liveSessionId === scope.liveSessionId,
+    );
+    if (matchingRecords.some((record) => record.state !== 'owned'))
+      throw new Error('原数据源尚待释放或核对，请处理后重新认领。');
+    const priorRevisions = matchingRecords.map((record) => record.identity.authorityRevision);
+    for (const item of durableState.watermarks)
+      if (
+        item.baseUrl === scope.baseUrl &&
+        item.installationId === scope.installationId &&
+        item.competitionId === scope.competitionId &&
+        item.matchId === scope.matchId &&
+        item.producerInstanceId === scope.producerInstanceId &&
+        item.liveSessionId === scope.liveSessionId
+      )
+        priorRevisions.push(item.authorityRevision);
+    const intent = await this.sourceState.beginClaim(
+      scope,
+      priorRevisions.length ? Math.max(...priorRevisions) : null,
+    );
+    if (this.source) this.source.paused = true;
+    await this.updateCleanupSummary();
     this.business('business_claim', snapshot, { contextRevision, reason: 'claim_attempt' });
     try {
       const lineupSteam64 = snapshot.players
@@ -1102,6 +1673,11 @@ export class RivalHubConnection {
         reason: response.ok ? 'claim_response_received' : `http_${response.status}`,
       });
       if (!response.ok) {
+        const refusal = await readReliableBody(response);
+        if (definitiveClaimRejection(response, refusal)) {
+          await this.sourceState.clearIntent(intent.id);
+          await this.updateCleanupSummary();
+        }
         this.controlFailureScope = this.failureScope(snapshot);
         this.controlFailure =
           response.status === 401
@@ -1118,7 +1694,18 @@ export class RivalHubConnection {
         authorityRevision: number;
         activeDeviceName?: string;
       };
-      if (result.claimed) {
+      if (result.claimed === true) {
+        if (!Number.isSafeInteger(result.authorityRevision) || result.authorityRevision <= 0)
+          throw new Error('数据源授权响应无效，等待核对。');
+        const identity = await this.sourceState.confirmClaim(intent.id, result.authorityRevision);
+        if (generation !== this.bindingGeneration) {
+          await this.sourceState.handoff(identity, 'switch');
+          this.source = null;
+          await this.updateCleanupSummary();
+          throw new Error('比赛已变化，原数据源待释放。');
+        }
+        await this.updateCleanupSummary();
+        this.resumeSource?.(scope);
         this.stoppedMatchId = null;
         this.controlFailure = null;
         this.retryLive();
@@ -1139,11 +1726,15 @@ export class RivalHubConnection {
         };
         this.activeDeviceName = null;
         this.activeDeviceMatchId = null;
-      } else {
-        this.source = null;
+      } else if (result.claimed === false) {
+        await this.sourceState.clearIntent(intent.id);
+        await this.updateCleanupSummary();
+        if (generation !== this.bindingGeneration)
+          throw new Error('比赛已变化，请重新认领数据源。');
+        if (this.source) this.source.paused = true;
         this.activeDeviceName = result.activeDeviceName ?? '另一台制播设备';
         this.activeDeviceMatchId = snapshot.matchId;
-      }
+      } else throw new Error('数据源认领响应无效，等待核对。');
       this.business('business_claim', snapshot, {
         contextRevision,
         reason: result.claimed ? 'claim_accepted' : 'claim_rejected',
@@ -1165,25 +1756,19 @@ export class RivalHubConnection {
   }
 
   async release(): Promise<void> {
-    if (!this.source) return;
-    const source = this.source;
-    const response = await this.request('release', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-rivalhub-authority': String(source.authorityRevision),
-      },
-      body: JSON.stringify({
-        matchId: source.matchId,
-        producerInstanceId: source.producerInstanceId,
-        liveSessionId: source.liveSessionId,
-      }),
-    });
-    await response.body?.cancel();
-    if (!response.ok) throw new Error('当前数据源停止未确认。');
-    // Only clear the binding that was actually released. A concurrent claim may
-    // already have installed a newer local source while this request was in flight.
-    if (this.source === source) this.source = null;
+    return this.sourceCommands.run(() => this.releaseLocked());
+  }
+
+  private async releaseLocked(): Promise<void> {
+    const deadline = Date.now() + 8000;
+    await this.retireCurrent('finish');
+    await this.cleanup(true, deadline);
+    if (
+      this.cleanupSummary.pending ||
+      this.cleanupSummary.blocked ||
+      this.cleanupSummary.claimIntent
+    )
+      throw new Error('数据源释放待重试或核对。');
   }
 
   private async upload(
@@ -1219,34 +1804,51 @@ export class RivalHubConnection {
         },
         body: JSON.stringify(body),
       });
-      await response.body?.cancel();
+      const readBody =
+        response.ok ||
+        (response.status !== 408 && response.status !== 429 && response.status < 500);
+      const responseData = readBody ? await readReliableBody(response) : undefined;
+      const rejection = !response.ok ? parseReliableRejection(responseData) : undefined;
+      const needsAttention =
+        response.ok &&
+        responseData !== null &&
+        typeof responseData === 'object' &&
+        !Array.isArray(responseData) &&
+        (responseData as Record<string, unknown>).outcome === 'needs_attention';
+      if (!readBody) await response.body?.cancel().catch(() => undefined);
       if (signal?.aborted || !isCurrent()) return 'retry';
       evidence({
+        receiverOutcome: needsAttention ? 'needs_attention' : undefined,
+        rejectionReason: rejection?.reason,
+        requestId: rejection?.requestId,
+        recovery: rejection?.recovery,
         reason: response.ok ? 'receiver_accepted' : `http_${response.status}`,
         httpStatus: response.status,
         acknowledgedAt: response.ok ? new Date().toISOString() : null,
       });
-      if (response.ok) return 'accepted';
+      if (response.ok)
+        return needsAttention ? { status: 'accepted', outcome: 'needs_attention' } : 'accepted';
       if (event.kind === 'map_started' && source.deliveryExecution === executionKey(event.cursor)) {
         this.controlFailureScope = this.failureScope(event);
         this.controlFailure =
-          response.status === 401
+          rejection?.reason ??
+          (response.status === 401
             ? 'authorization_expired'
             : response.status === 403
               ? 'permission_denied'
               : response.status === 409
                 ? 'context_conflict'
-                : `http_${response.status}`;
+                : `http_${response.status}`);
       }
       if (response.status === 403) {
         if (this.source === source) {
-          this.source = null;
+          source.paused = true;
         }
         return 'rejected';
       }
       return response.status === 408 || response.status === 429 || response.status >= 500
         ? 'retry'
-        : 'rejected';
+        : (rejection ?? 'rejected');
     } catch (error) {
       if (
         isCurrent() &&
@@ -1285,11 +1887,26 @@ export class RivalHubConnection {
   }
 
   async sendLive(snapshot: LiveSnapshotV1): Promise<void> {
+    const source = this.source;
+    const pending = this.sendLiveOnce(snapshot);
+    if (!source) return pending;
+    const inFlight = this.liveInFlight.get(source) ?? new Set<Promise<void>>();
+    inFlight.add(pending);
+    this.liveInFlight.set(source, inFlight);
+    try {
+      await pending;
+    } finally {
+      inFlight.delete(pending);
+      if (!inFlight.size) this.liveInFlight.delete(source);
+    }
+  }
+
+  private async sendLiveOnce(snapshot: LiveSnapshotV1): Promise<void> {
     // Claiming a source does not establish the website's map/identity evidence.
     // Keep the disposable lane behind the reliable start acknowledgement, also
     // after re-claim, generation advance and map change. No old snapshot is queued.
     const source = this.source;
-    if (this.stoppedMatchId === snapshot.matchId) return;
+    if (this.stoppedMatchId === snapshot.matchId || source?.paused || source?.draining) return;
     if (
       !source ||
       source.matchId !== snapshot.matchId ||
@@ -1422,7 +2039,7 @@ export class RivalHubConnection {
     if (this.source !== source || source.deliveryExecution !== execution)
       throw new Error('rivalhub_live_unavailable');
     if (lostAuthority) {
-      this.source = null;
+      source.paused = true;
     }
     this.business('business_live', snapshot, {
       reason: accepted ? 'receiver_accepted' : reason,
@@ -1525,7 +2142,11 @@ export class RivalHubConnection {
     signal: AbortSignal = AbortSignal.timeout(RELIABLE_SEND_TIMEOUT_MS),
     retainedLineup?: readonly string[],
   ): Promise<ReliableDeliveryResult> {
-    if (this.stoppedMatchId === event.matchId) return 'retry';
+    if (
+      (this.stoppedMatchId === event.matchId || this.source?.paused) &&
+      !this.source?.drainReliable
+    )
+      return 'retry';
     const source = this.source;
     // Durable recovery keeps the original producer evidence. A new claim cannot
     // authorize that old producer, even when the live session was restored.
@@ -1563,7 +2184,7 @@ export class RivalHubConnection {
       if (sameExecution) this.beginDeliveryExecution(source, event.cursor);
     }
     const isCurrent = () =>
-      this.stoppedMatchId !== event.matchId &&
+      (this.stoppedMatchId !== event.matchId || source?.drainReliable === true) &&
       this.source === source &&
       (attempt === undefined || source?.mapStartAttempt === attempt);
     const result = await this.upload(
@@ -1573,12 +2194,44 @@ export class RivalHubConnection {
       signal,
       isCurrent,
     );
+    if (
+      typeof result === 'object' &&
+      result.status === 'accepted' &&
+      sameExecution &&
+      isCurrent() &&
+      !signal.aborted
+    ) {
+      this.controlFailureScope = this.failureScope(event);
+      this.controlFailure = 'reliable_needs_attention';
+      this.liveDelivery = {
+        ...this.liveDelivery,
+        cursor: event.cursor,
+        status: 'failing',
+        reason: 'reliable_needs_attention',
+        since: this.monotonicNow(),
+      };
+    }
+    if (
+      typeof result === 'object' &&
+      result.status === 'rejected' &&
+      sameExecution &&
+      isCurrent() &&
+      !signal.aborted &&
+      (event.kind === 'source_generation_changed' || event.kind === 'map_epoch_changed')
+    ) {
+      this.controlFailureScope = this.failureScope(event);
+      this.controlFailure = result.reason;
+    }
     if (attempt && source && isCurrent() && !signal.aborted) {
-      if (result === 'accepted') {
+      if (result === 'accepted' || (typeof result === 'object' && result.status === 'accepted')) {
         source.acknowledgedExecution = executionKey(event.cursor);
-        if (source.deliveryExecution === executionKey(event.cursor)) this.controlFailure = null;
+        if (source.deliveryExecution === executionKey(event.cursor)) {
+          if (typeof result === 'object' && result.status === 'accepted')
+            this.controlFailure = 'reliable_needs_attention';
+          else if (this.controlFailure !== 'context_reconfirming') this.controlFailure = null;
+        }
       } else if (
-        result === 'rejected' &&
+        (result === 'rejected' || (typeof result === 'object' && result.status === 'rejected')) &&
         sameExecution &&
         source.deliveryExecution === executionKey(event.cursor)
       )

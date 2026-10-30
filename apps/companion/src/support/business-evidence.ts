@@ -97,6 +97,7 @@ export function businessEvidence(value: unknown) {
     schema: input.schema === 2 ? 2 : 1,
     matchId: businessId(input.matchId),
     competitionId: businessId(input.competitionId),
+    installationId: businessId(input.installationId),
     contextRevision: businessId(input.contextRevision),
     eventId: businessId(input.eventId),
     idempotencyKey: businessId(input.idempotencyKey),
@@ -210,6 +211,31 @@ export function businessEvidence(value: unknown) {
     binding: pick(input.binding, ['bound', 'unbound', 'needs_operator']),
     telemetry: pick(input.telemetry, ['awaiting', 'fresh', 'stale']),
     status: pick(input.status, ['pending', 'accepted', 'rejected', 'expired', 'superseded']),
+    receiverOutcome: pick(input.receiverOutcome, ['needs_attention']),
+    recoveryState: pick(input.recoveryState, [
+      'refreshing',
+      'awaiting_boundary',
+      'awaiting_observation',
+      'blocked',
+      'proof_queued',
+    ]),
+    rejectionReason: pick(input.rejectionReason, [
+      'context_stale',
+      'sequence_stale',
+      'generation_fence',
+      'epoch_fence',
+      'authority_changed',
+      'idempotency_conflict',
+      'invalid_schema',
+    ]),
+    recovery: pick(input.recovery, ['refresh_context', 'reconcile', 'none']),
+    requestId:
+      typeof input.requestId === 'string' &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        input.requestId,
+      )
+        ? input.requestId
+        : null,
     reason: isReason(input.reason) ? input.reason : null,
     issues: Array.isArray(input.issues)
       ? [
@@ -287,6 +313,10 @@ const isReason = (value: unknown): value is string =>
       'canonical_result_changed',
       'mismatch_no_longer_current',
       'claim_response_received',
+      'release_attempt',
+      'release_confirmed',
+      'release_pending',
+      'release_blocked',
       'request_started',
       'request_aborted',
     ].includes(value) ||
@@ -306,6 +336,8 @@ export function businessEvidenceHasFailure(value: unknown): boolean {
         'restored',
         'receiver_accepted',
         'claim_accepted',
+        'release_attempt',
+        'release_confirmed',
         'contiguous',
         'baseline',
         'request_started',

@@ -3,7 +3,7 @@ import { bindHistoricalStats, projectHistoricalStats } from '../projections/hist
 import { projectHistoricalProgram } from '../projections/historical-program.js';
 import type { ProgramPresentation, ProgramSceneId } from '@mizar/protocol/program-scenes';
 import type { FastifyInstance } from 'fastify';
-import type { LiveSnapshotV1 } from '@mizar/protocol/output';
+import type { LiveSnapshotV1, ReliableEventV1 } from '@mizar/protocol/output';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 import type { MatchContextController } from './controller.js';
 import {
@@ -22,6 +22,9 @@ export function registerRivalHubConnectionRoutes(
     canFetchStats?: () => boolean;
     controller: MatchContextController | null;
     currentSnapshot: () => LiveSnapshotV1 | null;
+    setContextRecoveryHandler?: (
+      handler: (event: ReliableEventV1, authority: string) => Promise<boolean>,
+    ) => void;
     originPolicy: LocalWebOriginPolicy;
   },
 ) {
@@ -188,6 +191,54 @@ export function registerRivalHubConnectionRoutes(
   };
   const syncExpected = () => Boolean(linkedBinding() && (!options.canClaim || options.canClaim()));
   let sourceCommand: Promise<unknown> | null = null;
+  options.setContextRecoveryHandler?.(async (event, authority) => {
+    const sameExecution = () => {
+      const snapshot = options.currentSnapshot();
+      const view = options.connection.view();
+      const c = snapshot?.cursor;
+      const original = event.cursor;
+      return (
+        syncExpected() &&
+        options.connection.reliableAuthorityScope() === authority &&
+        view.stoppedMatchId !== event.matchId &&
+        !view.activeDeviceName &&
+        view.activeSourceMatchId === event.matchId &&
+        !sourceCommand &&
+        linkedBinding()?.origin === 'online' &&
+        snapshot?.matchId === event.matchId &&
+        snapshot.map.phase === 'live' &&
+        snapshot.map.name === event.mapName &&
+        c?.producerInstanceId === original.producerInstanceId &&
+        c.liveSessionId === original.liveSessionId &&
+        c.programSourceGeneration === original.programSourceGeneration &&
+        c.mapEpoch === original.mapEpoch &&
+        snapshot.capability.identity === 'matched' &&
+        observedLineupReady()
+      );
+    };
+    if (!sameExecution()) return false;
+    options.connection.setContextRecoveryProgress(event, authority, 'context_refreshing');
+    try {
+      // An older background refresh cannot prove it started after this refusal.
+      if (refreshing) await refreshing.catch(() => undefined);
+      if (!sameExecution()) {
+        options.connection.setContextRecoveryProgress(event, authority, 'context_recovery_blocked');
+        return false;
+      }
+      const result = await refresh(true);
+      const valid = !result.pending && sameExecution();
+      options.connection.setContextRecoveryProgress(
+        event,
+        authority,
+        valid ? 'context_reconfirming' : 'context_recovery_blocked',
+      );
+      return valid;
+    } catch {
+      options.connection.setContextRecoveryProgress(event, authority, 'context_recovery_blocked');
+      return false;
+    }
+  });
+
   app.post('/operator/rivalhub/refresh', { bodyLimit: 64 }, async (request, reply) => {
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ message: '本机页面来源无效。' });
@@ -447,7 +498,10 @@ export function registerRivalHubConnectionRoutes(
       return options.connection.view();
     } catch (error) {
       request.log.error({ err: error }, 'RivalHub operation failed');
-      return reply.code(502).send({ message: '数据源停止未确认，请稍后再试。' });
+      return reply.code(502).send({
+        message: '数据源停止未确认，请稍后再试。',
+        sourceCleanup: options.connection.view().sourceCleanup,
+      });
     } finally {
       sourceCommand = null;
     }

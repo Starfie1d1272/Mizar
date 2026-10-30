@@ -96,8 +96,10 @@ import { registerBpDemoRoute } from './bp/demo-controller.js';
 import { getBpDemoProjection } from './bp/demo-projection.js';
 import { BpDemoStateController } from './bp/demo-state.js';
 import { registerBpWorkspaceRoutes } from './bp/workspace-controller.js';
-import { ObsAdapter } from './obs/adapter.js';
+import { ObsAdapter, obsErrorEvidence } from './obs/adapter.js';
 import { ObsConfigStore } from './obs/config.js';
+import { ObsVideoTransaction } from './obs/video-transaction.js';
+import { ObsCaptureWarmup } from './obs/capture-warmup.js';
 import { ObsAudioRouting } from './obs/audio-routing.js';
 import { GameAudioController } from './obs/audio-policy-controller.js';
 import { gameAudioTruth } from './obs/audio-policy-truth.js';
@@ -373,6 +375,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     },
     onDiagnostic: (code) => recordRuntimeDiagnostic(`output-${code}`, 'projection', false),
     onBusinessEvidence: (stage, evidence) => businessJournal?.write(stage, evidence),
+    onRecoveryProgress: (event, state) => {
+      const connection = options.rivalhubConnection;
+      const authority = connection?.reliableAuthorityScope();
+      if (authority) connection?.setContextRecoveryProgress(event, authority, state);
+    },
   });
   if (demoRecovery)
     void outputService.setQuarantined(true).catch((error) =>
@@ -831,7 +838,24 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             owner: new RemoteCommentary(`${options.obsConfigPath}.commentary.json`),
             journal: `${options.obsConfigPath}.commentary-probe.json`,
           },
+          new ObsVideoTransaction(`${options.obsConfigPath}.video-transaction.json`),
+          new ObsCaptureWarmup(`${options.obsConfigPath}.capture-warmup.json`),
         );
+  if (obsAdapter)
+    app.addHook('onReady', async () => {
+      await obsAdapter.restoreVideo().catch(async (error: unknown) =>
+        app.log.warn(
+          {
+            event: 'obs',
+            stage: 'video_recovery',
+            diagnostic: {
+              error: obsErrorEvidence(error, (await obsConfigStore?.read())?.password),
+            },
+          },
+          'OBS video recovery pending',
+        ),
+      );
+    });
   let musicDirector: MusicDirector | undefined;
   let cameraDirector: CameraDirector | undefined;
   let catalogTool: MulnxTool | undefined;
@@ -918,6 +942,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         : {}),
       activeScene: () => sceneController.get().active,
       preparationValid: (revision) => production.preparationValid(revision),
+      ...(options.productRuntime
+        ? { runtimeControlToken: options.productRuntime.controlToken }
+        : {}),
     });
   }
   let previousBindingOrigin: string | undefined = options.matchContextBinding?.origin;
@@ -934,6 +961,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             ? {}
             : { initialBinding: options.matchContextBinding }),
           onBindingChanged: (binding) => {
+            options.rivalhubConnection?.bindingChanged?.(binding?.context.matchId ?? null);
             const previousOrigin = previousBindingOrigin;
             previousBindingOrigin = binding?.origin;
             outputBinding = binding;
@@ -1118,6 +1146,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       observerSettings.endProduction();
     },
     beforeFinish: () => obsAdapter?.settleAutomatic(),
+    afterSafeScene: () => obsAdapter?.restoreVideo(),
     finishTrial: async () => {
       await demoTest?.finish();
     },
@@ -1702,6 +1731,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       canFetchStats: () => statsProductionActive,
       controller: matchContextController,
       currentSnapshot: () => outputService.current(true),
+      setContextRecoveryHandler: (handler) => outputService.setContextRecoveryHandler(handler),
       originPolicy: localWebTransport.getOriginPolicy(),
     });
   const restoreFormal = async (trial = false) => {
@@ -1863,6 +1893,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   app.addHook('onReady', async () => {
     outputService.setCurrent(projectionCoordinator.getCurrent(), outputBinding);
     await outputService.start();
+    options.rivalhubConnection?.setSourceSettlement?.(
+      (scope) => outputService.settleSourceForRelease(scope),
+      (scope) => outputService.resumeSource(scope),
+    );
+    options.rivalhubConnection?.startSourceCleanup?.();
     businessJournal?.runtime(
       projectionCoordinator.getCurrent(),
       outputBinding,
@@ -2323,8 +2358,12 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       cstvSources.program.stop(),
       cstvSources.lookahead.stop(),
       ...deliveryConsumers.map((consumer) => consumer.close()),
-      outputService.close(),
     ]);
+    const releaseCleanup = await Promise.allSettled([
+      options.rivalhubConnection?.shutdownSource?.(),
+    ]);
+    sourceCleanup.push(...releaseCleanup);
+    sourceCleanup.push(...(await Promise.allSettled([outputService.close()])));
     await Promise.all([projectionCoordinator.close(), programCueCoordinator.close()]);
     await programRuntime.close();
     await localWebTransport.close();
