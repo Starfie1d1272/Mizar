@@ -14,6 +14,7 @@ type Person = {
   readonly team?: string;
   readonly teamLogo?: string | null;
   readonly sample?: string;
+  readonly profileMode?: 'identity' | 'stats' | 'attributes';
   readonly metrics?: readonly DisplayMetric[];
   readonly attributes?: readonly DisplayMetric[];
 };
@@ -27,6 +28,7 @@ type Side = {
   readonly name: string;
   readonly logo?: string | null;
   readonly players: readonly RosterPlayer[];
+  readonly showStats?: boolean;
 };
 type MapPhoto = { readonly name: string; readonly artwork: string };
 export type StatsInsertSupplement =
@@ -215,7 +217,7 @@ export function StatsInsertSupplementView({
         className={`stats-rosters stats-full-rosters ${content.sides.length === 1 ? 'single' : ''}`}
       >
         {content.sides.map((side, i) => {
-          const hasStats = side.players.some((player) => player.values?.length);
+          const hasStats = side.showStats ?? side.players.some((player) => player.values?.length);
           return (
             <section
               className={`stats-roster ${i && content.sides.length > 1 ? 'right' : ''} ${hasStats ? '' : 'identity-only'}`}
@@ -406,7 +408,10 @@ export function StatsInsertSupplementView({
   }
   if (content.kind === 'profile') {
     const p = content.person,
-      hasDetails = Boolean(p.attributes?.length || p.metrics?.length);
+      mode =
+        p.profileMode ??
+        (p.attributes?.length ? 'attributes' : p.metrics?.length ? 'stats' : 'identity'),
+      hasDetails = mode !== 'identity';
     return (
       <div className={`stats-feature ${hasDetails ? '' : 'identity-only'}`}>
         <section className="stats-feature-person">
@@ -417,7 +422,7 @@ export function StatsInsertSupplementView({
             {p.team}
           </div>
           {p.sample && <div className="stats-feature-sample">{p.sample}</div>}
-          {Boolean(p.attributes?.length) && (
+          {mode === 'attributes' && (
             <div className="stats-feature-numbers">
               {p.metrics?.map((item, i) => (
                 <div key={i}>
@@ -428,7 +433,7 @@ export function StatsInsertSupplementView({
             </div>
           )}
         </section>
-        {p.attributes?.length ? (
+        {mode === 'attributes' && p.attributes?.length ? (
           <div className="stats-feature-bars">
             {p.attributes.map((item, i) => (
               <div className="stats-feature-row" key={i}>
@@ -438,7 +443,7 @@ export function StatsInsertSupplementView({
               </div>
             ))}
           </div>
-        ) : p.metrics?.length ? (
+        ) : mode === 'stats' && p.metrics?.length ? (
           <div className="stats-profile-values">
             {p.metrics.map((item, i) => (
               <div key={i}>

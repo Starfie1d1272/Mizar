@@ -17,6 +17,7 @@ function showLoadedImage(event: SyntheticEvent<HTMLImageElement>) {
 type Pair<T> = readonly [T, T];
 type Row = {
   readonly label: string;
+  readonly unit?: string;
   readonly artwork?: string;
   readonly values: Pair<string>;
   readonly numericValues?: Pair<number | null>;
@@ -34,6 +35,7 @@ export type StatsInsert = {
   readonly railCenter?: string;
   readonly visibleSides?: readonly (0 | 1)[];
   readonly playerSamples?: Pair<string>;
+  readonly radarMode?: 'radar' | 'bars';
   readonly title: string;
   readonly subtitle: string;
   readonly scope: string;
@@ -274,7 +276,7 @@ export function StatsInsertView({
           ) : insert.layout === 'radar' ? (
             <div className="stats-radar-layout">
               <RadarPerson insert={insert} side={0} />
-              <Radar rows={insert.rows} />
+              <Radar rows={insert.rows} mode={insert.radarMode} />
               <RadarPerson insert={insert} side={1} />
               <div className="stats-radar-key">
                 <span>
@@ -341,7 +343,10 @@ export function StatsInsertView({
                   key={i}
                 >
                   {sides.length > 1 && <CompareValue row={row} side={sides[0]!} />}
-                  <div className="stats-metric-name">{row.label}</div>
+                  <div className="stats-metric-name">
+                    {row.label}
+                    {row.unit && <small>{row.unit}</small>}
+                  </div>
                   {sides.length > 0 && <CompareValue row={row} side={sides[sides.length - 1]!} />}
                 </div>
               ))}
@@ -431,9 +436,17 @@ function radarPoint(index: number, value: number, count: number): [number, numbe
   const angle = -Math.PI / 2 + (index * Math.PI * 2) / count;
   return [400 + (Math.cos(angle) * 212 * value) / 100, 284 + (Math.sin(angle) * 212 * value) / 100];
 }
-function Radar({ rows }: { readonly rows: readonly Row[] }) {
+function Radar({
+  rows,
+  mode,
+}: {
+  readonly rows: readonly Row[];
+  readonly mode?: 'radar' | 'bars' | undefined;
+}) {
   const complete =
-    rows.length > 0 && rows.every((row) => row.numericValues?.every((value) => value != null));
+    mode !== 'bars' &&
+    rows.length > 0 &&
+    rows.every((row) => row.numericValues?.every((value) => value != null));
   if (!complete)
     return (
       <div className="stats-attribute-comparison">

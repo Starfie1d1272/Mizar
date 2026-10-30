@@ -1,0 +1,4158 @@
+{
+  "schemaVersion": "mizar.broadcast-stats-program.v1",
+  "matchId": "00000000-0000-4000-8000-000000000001",
+  "competitionId": "00000000-0000-4000-8000-000000000002",
+  "sourceRevision": "example",
+  "sourceGeneratedAt": "2026-10-29T12:00:00.000Z",
+  "phase": "prematch",
+  "teams": [
+    {
+      "entryId": "00000000-0000-4000-8000-000000000003",
+      "name": "Example 1",
+      "logoUrl": null,
+      "starters": [
+        {
+          "userId": "00000000-0000-4000-8001-000000000001",
+          "nickname": "Player 1",
+          "avatarUrl": null
+        },
+        {
+          "userId": "00000000-0000-4000-8001-000000000002",
+          "nickname": "Player 2",
+          "avatarUrl": null
+        },
+        {
+          "userId": "00000000-0000-4000-8001-000000000003",
+          "nickname": "Player 3",
+          "avatarUrl": null
+        },
+        {
+          "userId": "00000000-0000-4000-8001-000000000004",
+          "nickname": "Player 4",
+          "avatarUrl": null
+        },
+        {
+          "userId": "00000000-0000-4000-8001-000000000005",
+          "nickname": "Player 5",
+          "avatarUrl": null
+        }
+      ]
+    },
+    {
+      "entryId": "00000000-0000-4000-8000-000000000004",
+      "name": "Example 2",
+      "logoUrl": null,
+      "starters": [
+        {
+          "userId": "00000000-0000-4000-8001-000000000006",
+          "nickname": "Player 6",
+          "avatarUrl": null
+        },
+        {
+          "userId": "00000000-0000-4000-8001-000000000007",
+          "nickname": "Player 7",
+          "avatarUrl": null
+        },
+        {
+          "userId": "00000000-0000-4000-8001-000000000008",
+          "nickname": "Player 8",
+          "avatarUrl": null
+        },
+        {
+          "userId": "00000000-0000-4000-8001-000000000009",
+          "nickname": "Player 9",
+          "avatarUrl": null
+        },
+        {
+          "userId": "00000000-0000-4000-8001-000000000010",
+          "nickname": "Player 10",
+          "avatarUrl": null
+        }
+      ]
+    }
+  ],
+  "displayPlayers": [
+    {
+      "userId": "00000000-0000-4000-8001-000000000001",
+      "teamIndex": 0,
+      "nickname": "Player 1",
+      "avatarUrl": null,
+      "maps": 1,
+      "rounds": 21,
+      "metrics": {
+        "rating": {
+          "value": 1.12,
+          "numerator": null,
+          "denominator": 1,
+          "unit": "number"
+        },
+        "adr": {
+          "value": 75.5,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "number"
+        },
+        "kpr": {
+          "value": 0.14285714285714285,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "per-round"
+        },
+        "kast": {
+          "value": 71.42857142857143,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "percent"
+        },
+        "opening": {
+          "value": 50,
+          "numerator": 1,
+          "denominator": 2,
+          "unit": "percent"
+        },
+        "trade": {
+          "value": 4.761904761904762,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "per100"
+        },
+        "multikill": {
+          "value": 4.761904761904762,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "per100"
+        },
+        "headshot": {
+          "value": 33.333333333333336,
+          "numerator": null,
+          "denominator": 3,
+          "unit": "percent"
+        },
+        "kd": {
+          "value": 1,
+          "numerator": null,
+          "denominator": 3,
+          "unit": "number"
+        }
+      },
+      "attributes": [
+        {
+          "key": "firepower",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "entrying",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "trading",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "opening",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "clutching",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "sniping",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "utility",
+          "score": 50,
+          "status": "qualified"
+        }
+      ],
+      "profileMode": "attributes",
+      "limited": false,
+      "clutch": [
+        {
+          "opponents": 0,
+          "metric": {
+            "value": 100,
+            "numerator": 1,
+            "denominator": 1,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 1,
+          "metric": {
+            "value": 100,
+            "numerator": 1,
+            "denominator": 1,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 2,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 3,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 4,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 5,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        }
+      ]
+    },
+    {
+      "userId": "00000000-0000-4000-8001-000000000002",
+      "teamIndex": 0,
+      "nickname": "Player 2",
+      "avatarUrl": null,
+      "maps": 1,
+      "rounds": 21,
+      "metrics": {
+        "rating": {
+          "value": 1.12,
+          "numerator": null,
+          "denominator": 1,
+          "unit": "number"
+        },
+        "adr": {
+          "value": 75.5,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "number"
+        },
+        "kpr": {
+          "value": 0.14285714285714285,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "per-round"
+        },
+        "kast": {
+          "value": 71.42857142857143,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "percent"
+        },
+        "opening": {
+          "value": 50,
+          "numerator": 1,
+          "denominator": 2,
+          "unit": "percent"
+        },
+        "trade": {
+          "value": 4.761904761904762,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "per100"
+        },
+        "multikill": {
+          "value": 4.761904761904762,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "per100"
+        },
+        "headshot": {
+          "value": 33.333333333333336,
+          "numerator": null,
+          "denominator": 3,
+          "unit": "percent"
+        },
+        "kd": {
+          "value": 1,
+          "numerator": null,
+          "denominator": 3,
+          "unit": "number"
+        }
+      },
+      "attributes": [
+        {
+          "key": "firepower",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "entrying",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "trading",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "opening",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "clutching",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "sniping",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "utility",
+          "score": 50,
+          "status": "qualified"
+        }
+      ],
+      "profileMode": "attributes",
+      "limited": false,
+      "clutch": [
+        {
+          "opponents": 0,
+          "metric": {
+            "value": 100,
+            "numerator": 1,
+            "denominator": 1,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 1,
+          "metric": {
+            "value": 100,
+            "numerator": 1,
+            "denominator": 1,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 2,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 3,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 4,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 5,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        }
+      ]
+    },
+    {
+      "userId": "00000000-0000-4000-8001-000000000003",
+      "teamIndex": 0,
+      "nickname": "Player 3",
+      "avatarUrl": null,
+      "maps": 1,
+      "rounds": 21,
+      "metrics": {
+        "rating": {
+          "value": 1.12,
+          "numerator": null,
+          "denominator": 1,
+          "unit": "number"
+        },
+        "adr": {
+          "value": 75.5,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "number"
+        },
+        "kpr": {
+          "value": 0.14285714285714285,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "per-round"
+        },
+        "kast": {
+          "value": 71.42857142857143,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "percent"
+        },
+        "opening": {
+          "value": 50,
+          "numerator": 1,
+          "denominator": 2,
+          "unit": "percent"
+        },
+        "trade": {
+          "value": 4.761904761904762,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "per100"
+        },
+        "multikill": {
+          "value": 4.761904761904762,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "per100"
+        },
+        "headshot": {
+          "value": 33.333333333333336,
+          "numerator": null,
+          "denominator": 3,
+          "unit": "percent"
+        },
+        "kd": {
+          "value": 1,
+          "numerator": null,
+          "denominator": 3,
+          "unit": "number"
+        }
+      },
+      "attributes": [
+        {
+          "key": "firepower",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "entrying",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "trading",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "opening",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "clutching",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "sniping",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "utility",
+          "score": 50,
+          "status": "qualified"
+        }
+      ],
+      "profileMode": "attributes",
+      "limited": false,
+      "clutch": [
+        {
+          "opponents": 0,
+          "metric": {
+            "value": 100,
+            "numerator": 1,
+            "denominator": 1,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 1,
+          "metric": {
+            "value": 100,
+            "numerator": 1,
+            "denominator": 1,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 2,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 3,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 4,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 5,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        }
+      ]
+    },
+    {
+      "userId": "00000000-0000-4000-8001-000000000004",
+      "teamIndex": 0,
+      "nickname": "Player 4",
+      "avatarUrl": null,
+      "maps": 1,
+      "rounds": 21,
+      "metrics": {
+        "rating": {
+          "value": 1.12,
+          "numerator": null,
+          "denominator": 1,
+          "unit": "number"
+        },
+        "adr": {
+          "value": 75.5,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "number"
+        },
+        "kpr": {
+          "value": 0.14285714285714285,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "per-round"
+        },
+        "kast": {
+          "value": 71.42857142857143,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "percent"
+        },
+        "opening": {
+          "value": 50,
+          "numerator": 1,
+          "denominator": 2,
+          "unit": "percent"
+        },
+        "trade": {
+          "value": 4.761904761904762,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "per100"
+        },
+        "multikill": {
+          "value": 4.761904761904762,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "per100"
+        },
+        "headshot": {
+          "value": 33.333333333333336,
+          "numerator": null,
+          "denominator": 3,
+          "unit": "percent"
+        },
+        "kd": {
+          "value": 1,
+          "numerator": null,
+          "denominator": 3,
+          "unit": "number"
+        }
+      },
+      "attributes": [
+        {
+          "key": "firepower",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "entrying",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "trading",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "opening",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "clutching",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "sniping",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "utility",
+          "score": 50,
+          "status": "qualified"
+        }
+      ],
+      "profileMode": "attributes",
+      "limited": false,
+      "clutch": [
+        {
+          "opponents": 0,
+          "metric": {
+            "value": 100,
+            "numerator": 1,
+            "denominator": 1,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 1,
+          "metric": {
+            "value": 100,
+            "numerator": 1,
+            "denominator": 1,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 2,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 3,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 4,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 5,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        }
+      ]
+    },
+    {
+      "userId": "00000000-0000-4000-8001-000000000005",
+      "teamIndex": 0,
+      "nickname": "Player 5",
+      "avatarUrl": null,
+      "maps": 1,
+      "rounds": 21,
+      "metrics": {
+        "rating": {
+          "value": 1.12,
+          "numerator": null,
+          "denominator": 1,
+          "unit": "number"
+        },
+        "adr": {
+          "value": 75.5,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "number"
+        },
+        "kpr": {
+          "value": 0.14285714285714285,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "per-round"
+        },
+        "kast": {
+          "value": 71.42857142857143,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "percent"
+        },
+        "opening": {
+          "value": 50,
+          "numerator": 1,
+          "denominator": 2,
+          "unit": "percent"
+        },
+        "trade": {
+          "value": 4.761904761904762,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "per100"
+        },
+        "multikill": {
+          "value": 4.761904761904762,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "per100"
+        },
+        "headshot": {
+          "value": 33.333333333333336,
+          "numerator": null,
+          "denominator": 3,
+          "unit": "percent"
+        },
+        "kd": {
+          "value": 1,
+          "numerator": null,
+          "denominator": 3,
+          "unit": "number"
+        }
+      },
+      "attributes": [
+        {
+          "key": "firepower",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "entrying",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "trading",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "opening",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "clutching",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "sniping",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "utility",
+          "score": 50,
+          "status": "qualified"
+        }
+      ],
+      "profileMode": "attributes",
+      "limited": false,
+      "clutch": [
+        {
+          "opponents": 0,
+          "metric": {
+            "value": 100,
+            "numerator": 1,
+            "denominator": 1,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 1,
+          "metric": {
+            "value": 100,
+            "numerator": 1,
+            "denominator": 1,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 2,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 3,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 4,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 5,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        }
+      ]
+    },
+    {
+      "userId": "00000000-0000-4000-8001-000000000006",
+      "teamIndex": 1,
+      "nickname": "Player 6",
+      "avatarUrl": null,
+      "maps": 1,
+      "rounds": 21,
+      "metrics": {
+        "rating": {
+          "value": 1.12,
+          "numerator": null,
+          "denominator": 1,
+          "unit": "number"
+        },
+        "adr": {
+          "value": 75.5,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "number"
+        },
+        "kpr": {
+          "value": 0.14285714285714285,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "per-round"
+        },
+        "kast": {
+          "value": 71.42857142857143,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "percent"
+        },
+        "opening": {
+          "value": 50,
+          "numerator": 1,
+          "denominator": 2,
+          "unit": "percent"
+        },
+        "trade": {
+          "value": 4.761904761904762,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "per100"
+        },
+        "multikill": {
+          "value": 4.761904761904762,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "per100"
+        },
+        "headshot": {
+          "value": 33.333333333333336,
+          "numerator": null,
+          "denominator": 3,
+          "unit": "percent"
+        },
+        "kd": {
+          "value": 1,
+          "numerator": null,
+          "denominator": 3,
+          "unit": "number"
+        }
+      },
+      "attributes": [
+        {
+          "key": "firepower",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "entrying",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "trading",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "opening",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "clutching",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "sniping",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "utility",
+          "score": 50,
+          "status": "qualified"
+        }
+      ],
+      "profileMode": "attributes",
+      "limited": false,
+      "clutch": [
+        {
+          "opponents": 0,
+          "metric": {
+            "value": 100,
+            "numerator": 1,
+            "denominator": 1,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 1,
+          "metric": {
+            "value": 100,
+            "numerator": 1,
+            "denominator": 1,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 2,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 3,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 4,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 5,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        }
+      ]
+    },
+    {
+      "userId": "00000000-0000-4000-8001-000000000007",
+      "teamIndex": 1,
+      "nickname": "Player 7",
+      "avatarUrl": null,
+      "maps": 1,
+      "rounds": 21,
+      "metrics": {
+        "rating": {
+          "value": 1.12,
+          "numerator": null,
+          "denominator": 1,
+          "unit": "number"
+        },
+        "adr": {
+          "value": 75.5,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "number"
+        },
+        "kpr": {
+          "value": 0.14285714285714285,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "per-round"
+        },
+        "kast": {
+          "value": 71.42857142857143,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "percent"
+        },
+        "opening": {
+          "value": 50,
+          "numerator": 1,
+          "denominator": 2,
+          "unit": "percent"
+        },
+        "trade": {
+          "value": 4.761904761904762,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "per100"
+        },
+        "multikill": {
+          "value": 4.761904761904762,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "per100"
+        },
+        "headshot": {
+          "value": 33.333333333333336,
+          "numerator": null,
+          "denominator": 3,
+          "unit": "percent"
+        },
+        "kd": {
+          "value": 1,
+          "numerator": null,
+          "denominator": 3,
+          "unit": "number"
+        }
+      },
+      "attributes": [
+        {
+          "key": "firepower",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "entrying",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "trading",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "opening",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "clutching",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "sniping",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "utility",
+          "score": 50,
+          "status": "qualified"
+        }
+      ],
+      "profileMode": "attributes",
+      "limited": false,
+      "clutch": [
+        {
+          "opponents": 0,
+          "metric": {
+            "value": 100,
+            "numerator": 1,
+            "denominator": 1,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 1,
+          "metric": {
+            "value": 100,
+            "numerator": 1,
+            "denominator": 1,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 2,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 3,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 4,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 5,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        }
+      ]
+    },
+    {
+      "userId": "00000000-0000-4000-8001-000000000008",
+      "teamIndex": 1,
+      "nickname": "Player 8",
+      "avatarUrl": null,
+      "maps": 1,
+      "rounds": 21,
+      "metrics": {
+        "rating": {
+          "value": 1.12,
+          "numerator": null,
+          "denominator": 1,
+          "unit": "number"
+        },
+        "adr": {
+          "value": 75.5,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "number"
+        },
+        "kpr": {
+          "value": 0.14285714285714285,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "per-round"
+        },
+        "kast": {
+          "value": 71.42857142857143,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "percent"
+        },
+        "opening": {
+          "value": 50,
+          "numerator": 1,
+          "denominator": 2,
+          "unit": "percent"
+        },
+        "trade": {
+          "value": 4.761904761904762,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "per100"
+        },
+        "multikill": {
+          "value": 4.761904761904762,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "per100"
+        },
+        "headshot": {
+          "value": 33.333333333333336,
+          "numerator": null,
+          "denominator": 3,
+          "unit": "percent"
+        },
+        "kd": {
+          "value": 1,
+          "numerator": null,
+          "denominator": 3,
+          "unit": "number"
+        }
+      },
+      "attributes": [
+        {
+          "key": "firepower",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "entrying",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "trading",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "opening",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "clutching",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "sniping",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "utility",
+          "score": 50,
+          "status": "qualified"
+        }
+      ],
+      "profileMode": "attributes",
+      "limited": false,
+      "clutch": [
+        {
+          "opponents": 0,
+          "metric": {
+            "value": 100,
+            "numerator": 1,
+            "denominator": 1,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 1,
+          "metric": {
+            "value": 100,
+            "numerator": 1,
+            "denominator": 1,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 2,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 3,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 4,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 5,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        }
+      ]
+    },
+    {
+      "userId": "00000000-0000-4000-8001-000000000009",
+      "teamIndex": 1,
+      "nickname": "Player 9",
+      "avatarUrl": null,
+      "maps": 1,
+      "rounds": 21,
+      "metrics": {
+        "rating": {
+          "value": 1.12,
+          "numerator": null,
+          "denominator": 1,
+          "unit": "number"
+        },
+        "adr": {
+          "value": 75.5,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "number"
+        },
+        "kpr": {
+          "value": 0.14285714285714285,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "per-round"
+        },
+        "kast": {
+          "value": 71.42857142857143,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "percent"
+        },
+        "opening": {
+          "value": 50,
+          "numerator": 1,
+          "denominator": 2,
+          "unit": "percent"
+        },
+        "trade": {
+          "value": 4.761904761904762,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "per100"
+        },
+        "multikill": {
+          "value": 4.761904761904762,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "per100"
+        },
+        "headshot": {
+          "value": 33.333333333333336,
+          "numerator": null,
+          "denominator": 3,
+          "unit": "percent"
+        },
+        "kd": {
+          "value": 1,
+          "numerator": null,
+          "denominator": 3,
+          "unit": "number"
+        }
+      },
+      "attributes": [
+        {
+          "key": "firepower",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "entrying",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "trading",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "opening",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "clutching",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "sniping",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "utility",
+          "score": 50,
+          "status": "qualified"
+        }
+      ],
+      "profileMode": "attributes",
+      "limited": false,
+      "clutch": [
+        {
+          "opponents": 0,
+          "metric": {
+            "value": 100,
+            "numerator": 1,
+            "denominator": 1,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 1,
+          "metric": {
+            "value": 100,
+            "numerator": 1,
+            "denominator": 1,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 2,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 3,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 4,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 5,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        }
+      ]
+    },
+    {
+      "userId": "00000000-0000-4000-8001-000000000010",
+      "teamIndex": 1,
+      "nickname": "Player 10",
+      "avatarUrl": null,
+      "maps": 1,
+      "rounds": 21,
+      "metrics": {
+        "rating": {
+          "value": 1.12,
+          "numerator": null,
+          "denominator": 1,
+          "unit": "number"
+        },
+        "adr": {
+          "value": 75.5,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "number"
+        },
+        "kpr": {
+          "value": 0.14285714285714285,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "per-round"
+        },
+        "kast": {
+          "value": 71.42857142857143,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "percent"
+        },
+        "opening": {
+          "value": 50,
+          "numerator": 1,
+          "denominator": 2,
+          "unit": "percent"
+        },
+        "trade": {
+          "value": 4.761904761904762,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "per100"
+        },
+        "multikill": {
+          "value": 4.761904761904762,
+          "numerator": null,
+          "denominator": 21,
+          "unit": "per100"
+        },
+        "headshot": {
+          "value": 33.333333333333336,
+          "numerator": null,
+          "denominator": 3,
+          "unit": "percent"
+        },
+        "kd": {
+          "value": 1,
+          "numerator": null,
+          "denominator": 3,
+          "unit": "number"
+        }
+      },
+      "attributes": [
+        {
+          "key": "firepower",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "entrying",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "trading",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "opening",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "clutching",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "sniping",
+          "score": 50,
+          "status": "qualified"
+        },
+        {
+          "key": "utility",
+          "score": 50,
+          "status": "qualified"
+        }
+      ],
+      "profileMode": "attributes",
+      "limited": false,
+      "clutch": [
+        {
+          "opponents": 0,
+          "metric": {
+            "value": 100,
+            "numerator": 1,
+            "denominator": 1,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 1,
+          "metric": {
+            "value": 100,
+            "numerator": 1,
+            "denominator": 1,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 2,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 3,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 4,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        },
+        {
+          "opponents": 5,
+          "metric": {
+            "value": null,
+            "numerator": 0,
+            "denominator": 0,
+            "unit": "percent"
+          }
+        }
+      ]
+    }
+  ],
+  "records": [
+    {
+      "series": {
+        "wins": 1,
+        "losses": 0
+      },
+      "maps": {
+        "wins": 1,
+        "losses": 0
+      },
+      "rounds": 21
+    },
+    {
+      "series": {
+        "wins": 0,
+        "losses": 1
+      },
+      "maps": {
+        "wins": 0,
+        "losses": 1
+      },
+      "rounds": 21
+    }
+  ],
+  "matchScore": null,
+  "communityDisplay": {
+    "total": "90071992547409930",
+    "percentages": [
+      66.6666666,
+      33.3333333
+    ]
+  },
+  "history": [
+    null,
+    null
+  ],
+  "mapPool": [
+    "de_dust2",
+    "de_nuke"
+  ],
+  "support": {
+    "total": "90071992547409930",
+    "sides": [
+      {
+        "entryId": "00000000-0000-4000-8000-000000000003",
+        "amount": "60047995031606620",
+        "ratio": 0.666666666
+      },
+      {
+        "entryId": "00000000-0000-4000-8000-000000000004",
+        "amount": "30023997515803310",
+        "ratio": 0.333333333
+      }
+    ]
+  },
+  "program": null,
+  "selectedMap": null,
+  "summaryHasKAD": false,
+  "selectedPlayerIds": [
+    "00000000-0000-4000-8001-000000000001",
+    "00000000-0000-4000-8001-000000000006"
+  ],
+  "radar": {
+    "mode": "radar",
+    "visibleKeys": [
+      "firepower",
+      "entrying",
+      "trading",
+      "opening",
+      "clutching",
+      "sniping",
+      "utility"
+    ],
+    "values": [
+      {
+        "key": "firepower",
+        "values": [
+          50,
+          50
+        ]
+      },
+      {
+        "key": "entrying",
+        "values": [
+          50,
+          50
+        ]
+      },
+      {
+        "key": "trading",
+        "values": [
+          50,
+          50
+        ]
+      },
+      {
+        "key": "opening",
+        "values": [
+          50,
+          50
+        ]
+      },
+      {
+        "key": "clutching",
+        "values": [
+          50,
+          50
+        ]
+      },
+      {
+        "key": "sniping",
+        "values": [
+          50,
+          50
+        ]
+      },
+      {
+        "key": "utility",
+        "values": [
+          50,
+          50
+        ]
+      }
+    ]
+  },
+  "pages": [
+    {
+      "id": "match",
+      "kind": "match",
+      "teamIndices": [
+        0,
+        1
+      ],
+      "playerIds": [],
+      "mapNames": [],
+      "recentIds": [
+        [],
+        []
+      ],
+      "recentItems": [
+        [],
+        []
+      ],
+      "vetoSteps": [],
+      "metricRows": [],
+      "maps": [],
+      "lineupHasStats": [
+        false,
+        false
+      ],
+      "profileDefaultId": null,
+      "ranks": [],
+      "totalItems": 0,
+      "weapons": [
+        [],
+        []
+      ],
+      "weaponCoverage": [
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        },
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        }
+      ],
+      "pageNumber": 1,
+      "pageCount": 1
+    },
+    {
+      "id": "lineup",
+      "kind": "lineup",
+      "teamIndices": [
+        0,
+        1
+      ],
+      "playerIds": [
+        "00000000-0000-4000-8001-000000000001",
+        "00000000-0000-4000-8001-000000000002",
+        "00000000-0000-4000-8001-000000000003",
+        "00000000-0000-4000-8001-000000000004",
+        "00000000-0000-4000-8001-000000000005",
+        "00000000-0000-4000-8001-000000000006",
+        "00000000-0000-4000-8001-000000000007",
+        "00000000-0000-4000-8001-000000000008",
+        "00000000-0000-4000-8001-000000000009",
+        "00000000-0000-4000-8001-000000000010"
+      ],
+      "mapNames": [],
+      "recentIds": [
+        [],
+        []
+      ],
+      "recentItems": [
+        [],
+        []
+      ],
+      "vetoSteps": [],
+      "metricRows": [],
+      "maps": [],
+      "lineupHasStats": [
+        true,
+        true
+      ],
+      "profileDefaultId": null,
+      "ranks": [],
+      "totalItems": 0,
+      "weapons": [
+        [],
+        []
+      ],
+      "weaponCoverage": [
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        },
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        }
+      ],
+      "pageNumber": 1,
+      "pageCount": 1
+    },
+    {
+      "id": "maps",
+      "kind": "maps",
+      "teamIndices": [
+        0,
+        1
+      ],
+      "playerIds": [],
+      "mapNames": [
+        "de_dust2",
+        "de_nuke"
+      ],
+      "recentIds": [
+        [],
+        []
+      ],
+      "recentItems": [
+        [],
+        []
+      ],
+      "vetoSteps": [],
+      "metricRows": [],
+      "maps": [
+        {
+          "name": "de_dust2",
+          "sides": [
+            {
+              "played": 1,
+              "wins": 1,
+              "losses": 0,
+              "winRate": {
+                "value": 100,
+                "numerator": 1,
+                "denominator": 1,
+                "unit": "percent"
+              },
+              "rounds": {
+                "value": 61.904761904761905,
+                "numerator": 13,
+                "denominator": 21,
+                "unit": "percent"
+              },
+              "ct": {
+                "value": 58.333333333333336,
+                "numerator": 7,
+                "denominator": 12,
+                "unit": "percent"
+              },
+              "t": {
+                "value": 66.66666666666666,
+                "numerator": 6,
+                "denominator": 9,
+                "unit": "percent"
+              },
+              "picks": 1,
+              "bans": 0,
+              "deciders": 0
+            },
+            {
+              "played": 1,
+              "wins": 0,
+              "losses": 1,
+              "winRate": {
+                "value": 0,
+                "numerator": 0,
+                "denominator": 1,
+                "unit": "percent"
+              },
+              "rounds": {
+                "value": 38.095238095238095,
+                "numerator": 8,
+                "denominator": 21,
+                "unit": "percent"
+              },
+              "ct": {
+                "value": 22.22222222222222,
+                "numerator": 2,
+                "denominator": 9,
+                "unit": "percent"
+              },
+              "t": {
+                "value": 50,
+                "numerator": 6,
+                "denominator": 12,
+                "unit": "percent"
+              },
+              "picks": 1,
+              "bans": 0,
+              "deciders": 0
+            }
+          ]
+        },
+        {
+          "name": "de_nuke",
+          "sides": [
+            {
+              "played": null,
+              "wins": null,
+              "losses": null,
+              "winRate": {
+                "value": null,
+                "numerator": null,
+                "denominator": null,
+                "unit": "percent"
+              },
+              "rounds": {
+                "value": null,
+                "numerator": null,
+                "denominator": null,
+                "unit": "percent"
+              },
+              "ct": {
+                "value": null,
+                "numerator": null,
+                "denominator": null,
+                "unit": "percent"
+              },
+              "t": {
+                "value": null,
+                "numerator": null,
+                "denominator": null,
+                "unit": "percent"
+              },
+              "picks": null,
+              "bans": null,
+              "deciders": null
+            },
+            {
+              "played": null,
+              "wins": null,
+              "losses": null,
+              "winRate": {
+                "value": null,
+                "numerator": null,
+                "denominator": null,
+                "unit": "percent"
+              },
+              "rounds": {
+                "value": null,
+                "numerator": null,
+                "denominator": null,
+                "unit": "percent"
+              },
+              "ct": {
+                "value": null,
+                "numerator": null,
+                "denominator": null,
+                "unit": "percent"
+              },
+              "t": {
+                "value": null,
+                "numerator": null,
+                "denominator": null,
+                "unit": "percent"
+              },
+              "picks": null,
+              "bans": null,
+              "deciders": null
+            }
+          ]
+        }
+      ],
+      "lineupHasStats": [
+        false,
+        false
+      ],
+      "profileDefaultId": null,
+      "ranks": [],
+      "totalItems": 0,
+      "weapons": [
+        [],
+        []
+      ],
+      "weaponCoverage": [
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        },
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        }
+      ],
+      "pageNumber": 1,
+      "pageCount": 1
+    },
+    {
+      "id": "maps-a-1",
+      "kind": "map-profile",
+      "teamIndices": [
+        0
+      ],
+      "playerIds": [],
+      "mapNames": [
+        "de_dust2"
+      ],
+      "recentIds": [
+        [],
+        []
+      ],
+      "recentItems": [
+        [],
+        []
+      ],
+      "vetoSteps": [],
+      "metricRows": [],
+      "maps": [
+        {
+          "name": "de_dust2",
+          "sides": [
+            {
+              "played": 1,
+              "wins": 1,
+              "losses": 0,
+              "winRate": {
+                "value": 100,
+                "numerator": 1,
+                "denominator": 1,
+                "unit": "percent"
+              },
+              "rounds": {
+                "value": 61.904761904761905,
+                "numerator": 13,
+                "denominator": 21,
+                "unit": "percent"
+              },
+              "ct": {
+                "value": 58.333333333333336,
+                "numerator": 7,
+                "denominator": 12,
+                "unit": "percent"
+              },
+              "t": {
+                "value": 66.66666666666666,
+                "numerator": 6,
+                "denominator": 9,
+                "unit": "percent"
+              },
+              "picks": 1,
+              "bans": 0,
+              "deciders": 0
+            },
+            {
+              "played": 1,
+              "wins": 0,
+              "losses": 1,
+              "winRate": {
+                "value": 0,
+                "numerator": 0,
+                "denominator": 1,
+                "unit": "percent"
+              },
+              "rounds": {
+                "value": 38.095238095238095,
+                "numerator": 8,
+                "denominator": 21,
+                "unit": "percent"
+              },
+              "ct": {
+                "value": 22.22222222222222,
+                "numerator": 2,
+                "denominator": 9,
+                "unit": "percent"
+              },
+              "t": {
+                "value": 50,
+                "numerator": 6,
+                "denominator": 12,
+                "unit": "percent"
+              },
+              "picks": 1,
+              "bans": 0,
+              "deciders": 0
+            }
+          ]
+        }
+      ],
+      "lineupHasStats": [
+        false,
+        false
+      ],
+      "profileDefaultId": null,
+      "ranks": [],
+      "totalItems": 0,
+      "weapons": [
+        [],
+        []
+      ],
+      "weaponCoverage": [
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        },
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        }
+      ],
+      "pageNumber": 1,
+      "pageCount": 1
+    },
+    {
+      "id": "maps-b-1",
+      "kind": "map-profile",
+      "teamIndices": [
+        1
+      ],
+      "playerIds": [],
+      "mapNames": [
+        "de_dust2"
+      ],
+      "recentIds": [
+        [],
+        []
+      ],
+      "recentItems": [
+        [],
+        []
+      ],
+      "vetoSteps": [],
+      "metricRows": [],
+      "maps": [
+        {
+          "name": "de_dust2",
+          "sides": [
+            {
+              "played": 1,
+              "wins": 1,
+              "losses": 0,
+              "winRate": {
+                "value": 100,
+                "numerator": 1,
+                "denominator": 1,
+                "unit": "percent"
+              },
+              "rounds": {
+                "value": 61.904761904761905,
+                "numerator": 13,
+                "denominator": 21,
+                "unit": "percent"
+              },
+              "ct": {
+                "value": 58.333333333333336,
+                "numerator": 7,
+                "denominator": 12,
+                "unit": "percent"
+              },
+              "t": {
+                "value": 66.66666666666666,
+                "numerator": 6,
+                "denominator": 9,
+                "unit": "percent"
+              },
+              "picks": 1,
+              "bans": 0,
+              "deciders": 0
+            },
+            {
+              "played": 1,
+              "wins": 0,
+              "losses": 1,
+              "winRate": {
+                "value": 0,
+                "numerator": 0,
+                "denominator": 1,
+                "unit": "percent"
+              },
+              "rounds": {
+                "value": 38.095238095238095,
+                "numerator": 8,
+                "denominator": 21,
+                "unit": "percent"
+              },
+              "ct": {
+                "value": 22.22222222222222,
+                "numerator": 2,
+                "denominator": 9,
+                "unit": "percent"
+              },
+              "t": {
+                "value": 50,
+                "numerator": 6,
+                "denominator": 12,
+                "unit": "percent"
+              },
+              "picks": 1,
+              "bans": 0,
+              "deciders": 0
+            }
+          ]
+        }
+      ],
+      "lineupHasStats": [
+        false,
+        false
+      ],
+      "profileDefaultId": null,
+      "ranks": [],
+      "totalItems": 0,
+      "weapons": [
+        [],
+        []
+      ],
+      "weaponCoverage": [
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        },
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        }
+      ],
+      "pageNumber": 1,
+      "pageCount": 1
+    },
+    {
+      "id": "veto",
+      "kind": "veto",
+      "teamIndices": [
+        0,
+        1
+      ],
+      "playerIds": [],
+      "mapNames": [
+        "de_dust2",
+        "de_nuke"
+      ],
+      "recentIds": [
+        [],
+        []
+      ],
+      "recentItems": [
+        [],
+        []
+      ],
+      "vetoSteps": [],
+      "metricRows": [],
+      "maps": [
+        {
+          "name": "de_dust2",
+          "sides": [
+            {
+              "played": 1,
+              "wins": 1,
+              "losses": 0,
+              "winRate": {
+                "value": 100,
+                "numerator": 1,
+                "denominator": 1,
+                "unit": "percent"
+              },
+              "rounds": {
+                "value": 61.904761904761905,
+                "numerator": 13,
+                "denominator": 21,
+                "unit": "percent"
+              },
+              "ct": {
+                "value": 58.333333333333336,
+                "numerator": 7,
+                "denominator": 12,
+                "unit": "percent"
+              },
+              "t": {
+                "value": 66.66666666666666,
+                "numerator": 6,
+                "denominator": 9,
+                "unit": "percent"
+              },
+              "picks": 1,
+              "bans": 0,
+              "deciders": 0
+            },
+            {
+              "played": 1,
+              "wins": 0,
+              "losses": 1,
+              "winRate": {
+                "value": 0,
+                "numerator": 0,
+                "denominator": 1,
+                "unit": "percent"
+              },
+              "rounds": {
+                "value": 38.095238095238095,
+                "numerator": 8,
+                "denominator": 21,
+                "unit": "percent"
+              },
+              "ct": {
+                "value": 22.22222222222222,
+                "numerator": 2,
+                "denominator": 9,
+                "unit": "percent"
+              },
+              "t": {
+                "value": 50,
+                "numerator": 6,
+                "denominator": 12,
+                "unit": "percent"
+              },
+              "picks": 1,
+              "bans": 0,
+              "deciders": 0
+            }
+          ]
+        },
+        {
+          "name": "de_nuke",
+          "sides": [
+            {
+              "played": null,
+              "wins": null,
+              "losses": null,
+              "winRate": {
+                "value": null,
+                "numerator": null,
+                "denominator": null,
+                "unit": "percent"
+              },
+              "rounds": {
+                "value": null,
+                "numerator": null,
+                "denominator": null,
+                "unit": "percent"
+              },
+              "ct": {
+                "value": null,
+                "numerator": null,
+                "denominator": null,
+                "unit": "percent"
+              },
+              "t": {
+                "value": null,
+                "numerator": null,
+                "denominator": null,
+                "unit": "percent"
+              },
+              "picks": null,
+              "bans": null,
+              "deciders": null
+            },
+            {
+              "played": null,
+              "wins": null,
+              "losses": null,
+              "winRate": {
+                "value": null,
+                "numerator": null,
+                "denominator": null,
+                "unit": "percent"
+              },
+              "rounds": {
+                "value": null,
+                "numerator": null,
+                "denominator": null,
+                "unit": "percent"
+              },
+              "ct": {
+                "value": null,
+                "numerator": null,
+                "denominator": null,
+                "unit": "percent"
+              },
+              "t": {
+                "value": null,
+                "numerator": null,
+                "denominator": null,
+                "unit": "percent"
+              },
+              "picks": null,
+              "bans": null,
+              "deciders": null
+            }
+          ]
+        }
+      ],
+      "lineupHasStats": [
+        false,
+        false
+      ],
+      "profileDefaultId": null,
+      "ranks": [],
+      "totalItems": 0,
+      "weapons": [
+        [],
+        []
+      ],
+      "weaponCoverage": [
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        },
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        }
+      ],
+      "pageNumber": 1,
+      "pageCount": 1
+    },
+    {
+      "id": "recent",
+      "kind": "recent",
+      "teamIndices": [
+        0,
+        1
+      ],
+      "playerIds": [],
+      "mapNames": [],
+      "recentIds": [
+        [
+          "00000000-0000-4000-8000-000000000010"
+        ],
+        [
+          "00000000-0000-4000-8000-000000000010"
+        ]
+      ],
+      "recentItems": [
+        [
+          {
+            "kind": "series",
+            "value": {
+              "matchId": "00000000-0000-4000-8000-000000000010",
+              "stage": "swiss",
+              "round": 1,
+              "completedAt": "2026-10-28T10:00:00.000Z",
+              "opponent": {
+                "entryId": "00000000-0000-4000-8000-000000000004",
+                "name": "Example 2",
+                "logoUrl": null
+              },
+              "score": 1,
+              "opponentScore": 0,
+              "maps": [
+                {
+                  "mapName": "de_dust2",
+                  "completedAt": "2026-10-28T10:00:00.000Z",
+                  "score": 13,
+                  "opponentScore": 8
+                }
+              ]
+            }
+          }
+        ],
+        [
+          {
+            "kind": "series",
+            "value": {
+              "matchId": "00000000-0000-4000-8000-000000000010",
+              "stage": "swiss",
+              "round": 1,
+              "completedAt": "2026-10-28T10:00:00.000Z",
+              "opponent": {
+                "entryId": "00000000-0000-4000-8000-000000000003",
+                "name": "Example 1",
+                "logoUrl": null
+              },
+              "score": 0,
+              "opponentScore": 1,
+              "maps": [
+                {
+                  "mapName": "de_dust2",
+                  "completedAt": "2026-10-28T10:00:00.000Z",
+                  "score": 8,
+                  "opponentScore": 13
+                }
+              ]
+            }
+          }
+        ]
+      ],
+      "vetoSteps": [],
+      "metricRows": [],
+      "maps": [],
+      "lineupHasStats": [
+        false,
+        false
+      ],
+      "profileDefaultId": null,
+      "ranks": [],
+      "totalItems": 0,
+      "weapons": [
+        [],
+        []
+      ],
+      "weaponCoverage": [
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        },
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        }
+      ],
+      "pageNumber": 1,
+      "pageCount": 1
+    },
+    {
+      "id": "players",
+      "kind": "players",
+      "teamIndices": [
+        0,
+        1
+      ],
+      "playerIds": [
+        "00000000-0000-4000-8001-000000000001",
+        "00000000-0000-4000-8001-000000000006"
+      ],
+      "mapNames": [],
+      "recentIds": [
+        [],
+        []
+      ],
+      "recentItems": [
+        [],
+        []
+      ],
+      "vetoSteps": [],
+      "metricRows": [
+        {
+          "key": "rating",
+          "values": [
+            {
+              "value": 1.12,
+              "numerator": null,
+              "denominator": 1,
+              "unit": "number"
+            },
+            {
+              "value": 1.12,
+              "numerator": null,
+              "denominator": 1,
+              "unit": "number"
+            }
+          ],
+          "max": 1.5
+        },
+        {
+          "key": "adr",
+          "values": [
+            {
+              "value": 75.5,
+              "numerator": null,
+              "denominator": 21,
+              "unit": "number"
+            },
+            {
+              "value": 75.5,
+              "numerator": null,
+              "denominator": 21,
+              "unit": "number"
+            }
+          ],
+          "max": 80
+        },
+        {
+          "key": "kpr",
+          "values": [
+            {
+              "value": 0.14285714285714285,
+              "numerator": null,
+              "denominator": 21,
+              "unit": "per-round"
+            },
+            {
+              "value": 0.14285714285714285,
+              "numerator": null,
+              "denominator": 21,
+              "unit": "per-round"
+            }
+          ],
+          "max": 0.15000000000000002
+        },
+        {
+          "key": "kast",
+          "values": [
+            {
+              "value": 71.42857142857143,
+              "numerator": null,
+              "denominator": 21,
+              "unit": "percent"
+            },
+            {
+              "value": 71.42857142857143,
+              "numerator": null,
+              "denominator": 21,
+              "unit": "percent"
+            }
+          ],
+          "max": 100
+        },
+        {
+          "key": "opening",
+          "values": [
+            {
+              "value": 50,
+              "numerator": 1,
+              "denominator": 2,
+              "unit": "percent"
+            },
+            {
+              "value": 50,
+              "numerator": 1,
+              "denominator": 2,
+              "unit": "percent"
+            }
+          ],
+          "max": 100
+        },
+        {
+          "key": "trade",
+          "values": [
+            {
+              "value": 4.761904761904762,
+              "numerator": null,
+              "denominator": 21,
+              "unit": "per100"
+            },
+            {
+              "value": 4.761904761904762,
+              "numerator": null,
+              "denominator": 21,
+              "unit": "per100"
+            }
+          ],
+          "max": 5
+        }
+      ],
+      "maps": [],
+      "lineupHasStats": [
+        true,
+        true
+      ],
+      "profileDefaultId": null,
+      "ranks": [],
+      "totalItems": 0,
+      "weapons": [
+        [],
+        []
+      ],
+      "weaponCoverage": [
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        },
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        }
+      ],
+      "pageNumber": 1,
+      "pageCount": 1
+    },
+    {
+      "id": "radar",
+      "kind": "radar",
+      "teamIndices": [
+        0,
+        1
+      ],
+      "playerIds": [
+        "00000000-0000-4000-8001-000000000001",
+        "00000000-0000-4000-8001-000000000006"
+      ],
+      "mapNames": [],
+      "recentIds": [
+        [],
+        []
+      ],
+      "recentItems": [
+        [],
+        []
+      ],
+      "vetoSteps": [],
+      "metricRows": [],
+      "maps": [],
+      "lineupHasStats": [
+        true,
+        true
+      ],
+      "profileDefaultId": null,
+      "ranks": [],
+      "totalItems": 0,
+      "weapons": [
+        [],
+        []
+      ],
+      "weaponCoverage": [
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        },
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        }
+      ],
+      "pageNumber": 1,
+      "pageCount": 1
+    },
+    {
+      "id": "profile",
+      "kind": "profile",
+      "teamIndices": [
+        0,
+        1
+      ],
+      "playerIds": [
+        "00000000-0000-4000-8001-000000000001",
+        "00000000-0000-4000-8001-000000000002",
+        "00000000-0000-4000-8001-000000000003",
+        "00000000-0000-4000-8001-000000000004",
+        "00000000-0000-4000-8001-000000000005",
+        "00000000-0000-4000-8001-000000000006",
+        "00000000-0000-4000-8001-000000000007",
+        "00000000-0000-4000-8001-000000000008",
+        "00000000-0000-4000-8001-000000000009",
+        "00000000-0000-4000-8001-000000000010"
+      ],
+      "mapNames": [],
+      "recentIds": [
+        [],
+        []
+      ],
+      "recentItems": [
+        [],
+        []
+      ],
+      "vetoSteps": [],
+      "metricRows": [],
+      "maps": [],
+      "lineupHasStats": [
+        true,
+        true
+      ],
+      "profileDefaultId": "00000000-0000-4000-8001-000000000001",
+      "ranks": [],
+      "totalItems": 0,
+      "weapons": [
+        [],
+        []
+      ],
+      "weaponCoverage": [
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        },
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        }
+      ],
+      "pageNumber": 1,
+      "pageCount": 1
+    },
+    {
+      "id": "ranking",
+      "kind": "ranking",
+      "teamIndices": [
+        0,
+        1
+      ],
+      "playerIds": [
+        "00000000-0000-4000-8001-000000000001",
+        "00000000-0000-4000-8001-000000000002",
+        "00000000-0000-4000-8001-000000000003",
+        "00000000-0000-4000-8001-000000000004",
+        "00000000-0000-4000-8001-000000000005",
+        "00000000-0000-4000-8001-000000000006",
+        "00000000-0000-4000-8001-000000000007",
+        "00000000-0000-4000-8001-000000000008",
+        "00000000-0000-4000-8001-000000000009",
+        "00000000-0000-4000-8001-000000000010"
+      ],
+      "mapNames": [],
+      "recentIds": [
+        [],
+        []
+      ],
+      "recentItems": [
+        [],
+        []
+      ],
+      "vetoSteps": [],
+      "metricRows": [],
+      "maps": [],
+      "lineupHasStats": [
+        true,
+        true
+      ],
+      "profileDefaultId": null,
+      "ranks": [
+        {
+          "userId": "00000000-0000-4000-8001-000000000001",
+          "place": 1
+        },
+        {
+          "userId": "00000000-0000-4000-8001-000000000002",
+          "place": 2
+        },
+        {
+          "userId": "00000000-0000-4000-8001-000000000003",
+          "place": 3
+        },
+        {
+          "userId": "00000000-0000-4000-8001-000000000004",
+          "place": 4
+        },
+        {
+          "userId": "00000000-0000-4000-8001-000000000005",
+          "place": 5
+        },
+        {
+          "userId": "00000000-0000-4000-8001-000000000006",
+          "place": 6
+        },
+        {
+          "userId": "00000000-0000-4000-8001-000000000007",
+          "place": 7
+        },
+        {
+          "userId": "00000000-0000-4000-8001-000000000008",
+          "place": 8
+        },
+        {
+          "userId": "00000000-0000-4000-8001-000000000009",
+          "place": 9
+        },
+        {
+          "userId": "00000000-0000-4000-8001-000000000010",
+          "place": 10
+        }
+      ],
+      "totalItems": 10,
+      "weapons": [
+        [],
+        []
+      ],
+      "weaponCoverage": [
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        },
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        }
+      ],
+      "pageNumber": 1,
+      "pageCount": 1
+    },
+    {
+      "id": "multikill",
+      "kind": "multikill",
+      "teamIndices": [
+        0,
+        1
+      ],
+      "playerIds": [
+        "00000000-0000-4000-8001-000000000001",
+        "00000000-0000-4000-8001-000000000002",
+        "00000000-0000-4000-8001-000000000003",
+        "00000000-0000-4000-8001-000000000004",
+        "00000000-0000-4000-8001-000000000005",
+        "00000000-0000-4000-8001-000000000006",
+        "00000000-0000-4000-8001-000000000007",
+        "00000000-0000-4000-8001-000000000008",
+        "00000000-0000-4000-8001-000000000009",
+        "00000000-0000-4000-8001-000000000010"
+      ],
+      "mapNames": [],
+      "recentIds": [
+        [],
+        []
+      ],
+      "recentItems": [
+        [],
+        []
+      ],
+      "vetoSteps": [],
+      "metricRows": [],
+      "maps": [],
+      "lineupHasStats": [
+        true,
+        true
+      ],
+      "profileDefaultId": null,
+      "ranks": [
+        {
+          "userId": "00000000-0000-4000-8001-000000000001",
+          "place": 1
+        },
+        {
+          "userId": "00000000-0000-4000-8001-000000000002",
+          "place": 2
+        },
+        {
+          "userId": "00000000-0000-4000-8001-000000000003",
+          "place": 3
+        },
+        {
+          "userId": "00000000-0000-4000-8001-000000000004",
+          "place": 4
+        },
+        {
+          "userId": "00000000-0000-4000-8001-000000000005",
+          "place": 5
+        },
+        {
+          "userId": "00000000-0000-4000-8001-000000000006",
+          "place": 6
+        },
+        {
+          "userId": "00000000-0000-4000-8001-000000000007",
+          "place": 7
+        },
+        {
+          "userId": "00000000-0000-4000-8001-000000000008",
+          "place": 8
+        },
+        {
+          "userId": "00000000-0000-4000-8001-000000000009",
+          "place": 9
+        },
+        {
+          "userId": "00000000-0000-4000-8001-000000000010",
+          "place": 10
+        }
+      ],
+      "totalItems": 10,
+      "weapons": [
+        [],
+        []
+      ],
+      "weaponCoverage": [
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        },
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        }
+      ],
+      "pageNumber": 1,
+      "pageCount": 1
+    },
+    {
+      "id": "overview",
+      "kind": "overview",
+      "teamIndices": [
+        0,
+        1
+      ],
+      "playerIds": [],
+      "mapNames": [],
+      "recentIds": [
+        [],
+        []
+      ],
+      "recentItems": [
+        [],
+        []
+      ],
+      "vetoSteps": [],
+      "metricRows": [
+        {
+          "key": "rating",
+          "values": [
+            {
+              "value": 1.12,
+              "numerator": null,
+              "denominator": 5,
+              "unit": "number"
+            },
+            {
+              "value": 1.12,
+              "numerator": null,
+              "denominator": 5,
+              "unit": "number"
+            }
+          ],
+          "max": 1.5
+        },
+        {
+          "key": "round-win",
+          "values": [
+            {
+              "value": 61.904761904761905,
+              "numerator": 13,
+              "denominator": 21,
+              "unit": "percent"
+            },
+            {
+              "value": 38.095238095238095,
+              "numerator": 8,
+              "denominator": 21,
+              "unit": "percent"
+            }
+          ],
+          "max": 100
+        },
+        {
+          "key": "ct",
+          "values": [
+            {
+              "value": 58.333333333333336,
+              "numerator": 7,
+              "denominator": 12,
+              "unit": "percent"
+            },
+            {
+              "value": 22.22222222222222,
+              "numerator": 2,
+              "denominator": 9,
+              "unit": "percent"
+            }
+          ],
+          "max": 100
+        },
+        {
+          "key": "t",
+          "values": [
+            {
+              "value": 66.66666666666666,
+              "numerator": 6,
+              "denominator": 9,
+              "unit": "percent"
+            },
+            {
+              "value": 50,
+              "numerator": 6,
+              "denominator": 12,
+              "unit": "percent"
+            }
+          ],
+          "max": 100
+        }
+      ],
+      "maps": [],
+      "lineupHasStats": [
+        false,
+        false
+      ],
+      "profileDefaultId": null,
+      "ranks": [],
+      "totalItems": 0,
+      "weapons": [
+        [],
+        []
+      ],
+      "weaponCoverage": [
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        },
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        }
+      ],
+      "pageNumber": 1,
+      "pageCount": 1
+    },
+    {
+      "id": "economy",
+      "kind": "economy",
+      "teamIndices": [
+        0,
+        1
+      ],
+      "playerIds": [],
+      "mapNames": [],
+      "recentIds": [
+        [],
+        []
+      ],
+      "recentItems": [
+        [],
+        []
+      ],
+      "vetoSteps": [],
+      "metricRows": [
+        {
+          "key": "pistol",
+          "values": [
+            {
+              "value": 66.66666666666666,
+              "numerator": 2,
+              "denominator": 3,
+              "unit": "percent"
+            },
+            {
+              "value": 66.66666666666666,
+              "numerator": 2,
+              "denominator": 3,
+              "unit": "percent"
+            }
+          ],
+          "max": 100
+        },
+        {
+          "key": "pistol-conversion",
+          "values": [
+            {
+              "value": 66.66666666666666,
+              "numerator": 2,
+              "denominator": 3,
+              "unit": "percent"
+            },
+            {
+              "value": 66.66666666666666,
+              "numerator": 2,
+              "denominator": 3,
+              "unit": "percent"
+            }
+          ],
+          "max": 100
+        },
+        {
+          "key": "pistol-break",
+          "values": [
+            {
+              "value": 66.66666666666666,
+              "numerator": 2,
+              "denominator": 3,
+              "unit": "percent"
+            },
+            {
+              "value": 66.66666666666666,
+              "numerator": 2,
+              "denominator": 3,
+              "unit": "percent"
+            }
+          ],
+          "max": 100
+        }
+      ],
+      "maps": [],
+      "lineupHasStats": [
+        false,
+        false
+      ],
+      "profileDefaultId": null,
+      "ranks": [],
+      "totalItems": 0,
+      "weapons": [
+        [],
+        []
+      ],
+      "weaponCoverage": [
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        },
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        }
+      ],
+      "pageNumber": 1,
+      "pageCount": 1
+    },
+    {
+      "id": "opening",
+      "kind": "opening",
+      "teamIndices": [
+        0,
+        1
+      ],
+      "playerIds": [],
+      "mapNames": [],
+      "recentIds": [
+        [],
+        []
+      ],
+      "recentItems": [
+        [],
+        []
+      ],
+      "vetoSteps": [],
+      "metricRows": [
+        {
+          "key": "opening",
+          "values": [
+            {
+              "value": 50,
+              "numerator": 3,
+              "denominator": 6,
+              "unit": "percent"
+            },
+            {
+              "value": 50,
+              "numerator": 3,
+              "denominator": 6,
+              "unit": "percent"
+            }
+          ],
+          "max": 100
+        },
+        {
+          "key": "win-after-opening",
+          "values": [
+            {
+              "value": 66.66666666666666,
+              "numerator": 2,
+              "denominator": 3,
+              "unit": "percent"
+            },
+            {
+              "value": 66.66666666666666,
+              "numerator": 2,
+              "denominator": 3,
+              "unit": "percent"
+            }
+          ],
+          "max": 100
+        },
+        {
+          "key": "trade",
+          "values": [
+            {
+              "value": 14.285714285714285,
+              "numerator": 3,
+              "denominator": 21,
+              "unit": "per100"
+            },
+            {
+              "value": 14.285714285714285,
+              "numerator": 3,
+              "denominator": 21,
+              "unit": "per100"
+            }
+          ],
+          "max": 15
+        },
+        {
+          "key": "opening-death-traded",
+          "values": [
+            {
+              "value": 33.33333333333333,
+              "numerator": 1,
+              "denominator": 3,
+              "unit": "percent"
+            },
+            {
+              "value": 33.33333333333333,
+              "numerator": 1,
+              "denominator": 3,
+              "unit": "percent"
+            }
+          ],
+          "max": 100
+        }
+      ],
+      "maps": [],
+      "lineupHasStats": [
+        false,
+        false
+      ],
+      "profileDefaultId": null,
+      "ranks": [],
+      "totalItems": 0,
+      "weapons": [
+        [],
+        []
+      ],
+      "weaponCoverage": [
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        },
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        }
+      ],
+      "pageNumber": 1,
+      "pageCount": 1
+    },
+    {
+      "id": "advantage",
+      "kind": "advantage",
+      "teamIndices": [
+        0,
+        1
+      ],
+      "playerIds": [],
+      "mapNames": [],
+      "recentIds": [
+        [],
+        []
+      ],
+      "recentItems": [
+        [],
+        []
+      ],
+      "vetoSteps": [],
+      "metricRows": [
+        {
+          "key": "5v4",
+          "values": [
+            {
+              "value": 60,
+              "numerator": 6,
+              "denominator": 10,
+              "unit": "percent"
+            },
+            {
+              "value": 60,
+              "numerator": 6,
+              "denominator": 10,
+              "unit": "percent"
+            }
+          ],
+          "max": 100
+        },
+        {
+          "key": "4v5",
+          "values": [
+            {
+              "value": 60,
+              "numerator": 6,
+              "denominator": 10,
+              "unit": "percent"
+            },
+            {
+              "value": 60,
+              "numerator": 6,
+              "denominator": 10,
+              "unit": "percent"
+            }
+          ],
+          "max": 100
+        },
+        {
+          "key": "5v3",
+          "values": [
+            {
+              "value": 60,
+              "numerator": 6,
+              "denominator": 10,
+              "unit": "percent"
+            },
+            {
+              "value": 60,
+              "numerator": 6,
+              "denominator": 10,
+              "unit": "percent"
+            }
+          ],
+          "max": 100
+        },
+        {
+          "key": "3v5",
+          "values": [
+            {
+              "value": 60,
+              "numerator": 6,
+              "denominator": 10,
+              "unit": "percent"
+            },
+            {
+              "value": 60,
+              "numerator": 6,
+              "denominator": 10,
+              "unit": "percent"
+            }
+          ],
+          "max": 100
+        }
+      ],
+      "maps": [],
+      "lineupHasStats": [
+        false,
+        false
+      ],
+      "profileDefaultId": null,
+      "ranks": [],
+      "totalItems": 0,
+      "weapons": [
+        [],
+        []
+      ],
+      "weaponCoverage": [
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        },
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        }
+      ],
+      "pageNumber": 1,
+      "pageCount": 1
+    },
+    {
+      "id": "utility",
+      "kind": "utility",
+      "teamIndices": [
+        0,
+        1
+      ],
+      "playerIds": [],
+      "mapNames": [],
+      "recentIds": [
+        [],
+        []
+      ],
+      "recentItems": [
+        [],
+        []
+      ],
+      "vetoSteps": [],
+      "metricRows": [
+        {
+          "key": "utility-damage",
+          "values": [
+            {
+              "value": 2.857142857142857,
+              "numerator": 60,
+              "denominator": 21,
+              "unit": "per-round"
+            },
+            {
+              "value": 2.857142857142857,
+              "numerator": 60,
+              "denominator": 21,
+              "unit": "per-round"
+            }
+          ],
+          "max": 3
+        },
+        {
+          "key": "flash-assists",
+          "values": [
+            {
+              "value": 14.285714285714285,
+              "numerator": 3,
+              "denominator": 21,
+              "unit": "per100"
+            },
+            {
+              "value": 14.285714285714285,
+              "numerator": 3,
+              "denominator": 21,
+              "unit": "per100"
+            }
+          ],
+          "max": 15
+        },
+        {
+          "key": "utility-kills",
+          "values": [
+            {
+              "value": 4.761904761904762,
+              "numerator": 1,
+              "denominator": 21,
+              "unit": "per100"
+            },
+            {
+              "value": 4.761904761904762,
+              "numerator": 1,
+              "denominator": 21,
+              "unit": "per100"
+            }
+          ],
+          "max": 5
+        },
+        {
+          "key": "flashes-thrown",
+          "values": [
+            {
+              "value": 0.47619047619047616,
+              "numerator": 10,
+              "denominator": 21,
+              "unit": "per-round"
+            },
+            {
+              "value": 0.47619047619047616,
+              "numerator": 10,
+              "denominator": 21,
+              "unit": "per-round"
+            }
+          ],
+          "max": 0.5
+        }
+      ],
+      "maps": [],
+      "lineupHasStats": [
+        false,
+        false
+      ],
+      "profileDefaultId": null,
+      "ranks": [],
+      "totalItems": 0,
+      "weapons": [
+        [],
+        []
+      ],
+      "weaponCoverage": [
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        },
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        }
+      ],
+      "pageNumber": 1,
+      "pageCount": 1
+    },
+    {
+      "id": "flash",
+      "kind": "flash",
+      "teamIndices": [
+        0,
+        1
+      ],
+      "playerIds": [],
+      "mapNames": [],
+      "recentIds": [
+        [],
+        []
+      ],
+      "recentItems": [
+        [],
+        []
+      ],
+      "vetoSteps": [],
+      "metricRows": [
+        {
+          "key": "enemy-blind-per-flash",
+          "values": [
+            {
+              "value": 2,
+              "numerator": 20,
+              "denominator": 10,
+              "unit": "seconds"
+            },
+            {
+              "value": 2,
+              "numerator": 20,
+              "denominator": 10,
+              "unit": "seconds"
+            }
+          ],
+          "max": 2
+        },
+        {
+          "key": "enemy-blind-per-round",
+          "values": [
+            {
+              "value": 0.9523809523809523,
+              "numerator": 20,
+              "denominator": 21,
+              "unit": "seconds"
+            },
+            {
+              "value": 0.9523809523809523,
+              "numerator": 20,
+              "denominator": 21,
+              "unit": "seconds"
+            }
+          ],
+          "max": 1
+        },
+        {
+          "key": "team-blind-per-round",
+          "values": [
+            {
+              "value": 0.09523809523809523,
+              "numerator": 2,
+              "denominator": 21,
+              "unit": "seconds"
+            },
+            {
+              "value": 0.09523809523809523,
+              "numerator": 2,
+              "denominator": 21,
+              "unit": "seconds"
+            }
+          ],
+          "max": 0.1
+        }
+      ],
+      "maps": [],
+      "lineupHasStats": [
+        false,
+        false
+      ],
+      "profileDefaultId": null,
+      "ranks": [],
+      "totalItems": 0,
+      "weapons": [
+        [],
+        []
+      ],
+      "weaponCoverage": [
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        },
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        }
+      ],
+      "pageNumber": 1,
+      "pageCount": 1
+    },
+    {
+      "id": "weapons",
+      "kind": "weapons",
+      "teamIndices": [
+        0,
+        1
+      ],
+      "playerIds": [],
+      "mapNames": [],
+      "recentIds": [
+        [],
+        []
+      ],
+      "recentItems": [
+        [],
+        []
+      ],
+      "vetoSteps": [],
+      "metricRows": [],
+      "maps": [],
+      "lineupHasStats": [
+        false,
+        false
+      ],
+      "profileDefaultId": null,
+      "ranks": [],
+      "totalItems": 0,
+      "weapons": [
+        [
+          {
+            "weapon": "awp",
+            "kills": 3,
+            "share": {
+              "value": 20,
+              "numerator": 3,
+              "denominator": 15,
+              "unit": "percent"
+            },
+            "per100": {
+              "value": 14.285714285714285,
+              "numerator": 3,
+              "denominator": 21,
+              "unit": "per100"
+            }
+          }
+        ],
+        [
+          {
+            "weapon": "awp",
+            "kills": 3,
+            "share": {
+              "value": 20,
+              "numerator": 3,
+              "denominator": 15,
+              "unit": "percent"
+            },
+            "per100": {
+              "value": 14.285714285714285,
+              "numerator": 3,
+              "denominator": 21,
+              "unit": "per100"
+            }
+          }
+        ]
+      ],
+      "weaponCoverage": [
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        },
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        }
+      ],
+      "pageNumber": 1,
+      "pageCount": 1
+    },
+    {
+      "id": "awp",
+      "kind": "awp",
+      "teamIndices": [
+        0,
+        1
+      ],
+      "playerIds": [],
+      "mapNames": [],
+      "recentIds": [
+        [],
+        []
+      ],
+      "recentItems": [
+        [],
+        []
+      ],
+      "vetoSteps": [],
+      "metricRows": [
+        {
+          "key": "awp-kills",
+          "values": [
+            {
+              "value": 3,
+              "numerator": null,
+              "denominator": 21,
+              "unit": "count"
+            },
+            {
+              "value": 3,
+              "numerator": null,
+              "denominator": 21,
+              "unit": "count"
+            }
+          ],
+          "max": 3
+        },
+        {
+          "key": "awp-per100",
+          "values": [
+            {
+              "value": 14.285714285714285,
+              "numerator": 3,
+              "denominator": 21,
+              "unit": "per100"
+            },
+            {
+              "value": 14.285714285714285,
+              "numerator": 3,
+              "denominator": 21,
+              "unit": "per100"
+            }
+          ],
+          "max": 15
+        },
+        {
+          "key": "awp-share",
+          "values": [
+            {
+              "value": 20,
+              "numerator": 3,
+              "denominator": 15,
+              "unit": "percent"
+            },
+            {
+              "value": 20,
+              "numerator": 3,
+              "denominator": 15,
+              "unit": "percent"
+            }
+          ],
+          "max": 100
+        }
+      ],
+      "maps": [],
+      "lineupHasStats": [
+        false,
+        false
+      ],
+      "profileDefaultId": null,
+      "ranks": [],
+      "totalItems": 0,
+      "weapons": [
+        [],
+        []
+      ],
+      "weaponCoverage": [
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        },
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        }
+      ],
+      "pageNumber": 1,
+      "pageCount": 1
+    },
+    {
+      "id": "conversion",
+      "kind": "conversion",
+      "teamIndices": [
+        0,
+        1
+      ],
+      "playerIds": [],
+      "mapNames": [],
+      "recentIds": [
+        [],
+        []
+      ],
+      "recentItems": [
+        [],
+        []
+      ],
+      "vetoSteps": [],
+      "metricRows": [
+        {
+          "key": "plant-conversion",
+          "values": [
+            {
+              "value": 60,
+              "numerator": 3,
+              "denominator": 5,
+              "unit": "percent"
+            },
+            {
+              "value": 60,
+              "numerator": 3,
+              "denominator": 5,
+              "unit": "percent"
+            }
+          ],
+          "max": 100
+        },
+        {
+          "key": "eco-semi",
+          "values": [
+            {
+              "value": 66.66666666666666,
+              "numerator": 2,
+              "denominator": 3,
+              "unit": "percent"
+            },
+            {
+              "value": 66.66666666666666,
+              "numerator": 2,
+              "denominator": 3,
+              "unit": "percent"
+            }
+          ],
+          "max": 100
+        },
+        {
+          "key": "comeback",
+          "values": [
+            {
+              "value": 33.33333333333333,
+              "numerator": 1,
+              "denominator": 3,
+              "unit": "percent"
+            },
+            {
+              "value": 33.33333333333333,
+              "numerator": 1,
+              "denominator": 3,
+              "unit": "percent"
+            }
+          ],
+          "max": 100
+        }
+      ],
+      "maps": [],
+      "lineupHasStats": [
+        false,
+        false
+      ],
+      "profileDefaultId": null,
+      "ranks": [],
+      "totalItems": 0,
+      "weapons": [
+        [],
+        []
+      ],
+      "weaponCoverage": [
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        },
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        }
+      ],
+      "pageNumber": 1,
+      "pageCount": 1
+    },
+    {
+      "id": "clutch",
+      "kind": "clutch",
+      "teamIndices": [
+        0,
+        1
+      ],
+      "playerIds": [
+        "00000000-0000-4000-8001-000000000001",
+        "00000000-0000-4000-8001-000000000006"
+      ],
+      "mapNames": [],
+      "recentIds": [
+        [],
+        []
+      ],
+      "recentItems": [
+        [],
+        []
+      ],
+      "vetoSteps": [],
+      "metricRows": [
+        {
+          "key": "1vx",
+          "values": [
+            {
+              "value": 100,
+              "numerator": 1,
+              "denominator": 1,
+              "unit": "percent"
+            },
+            {
+              "value": 100,
+              "numerator": 1,
+              "denominator": 1,
+              "unit": "percent"
+            }
+          ],
+          "max": 100
+        },
+        {
+          "key": "1v1",
+          "values": [
+            {
+              "value": 100,
+              "numerator": 1,
+              "denominator": 1,
+              "unit": "percent"
+            },
+            {
+              "value": 100,
+              "numerator": 1,
+              "denominator": 1,
+              "unit": "percent"
+            }
+          ],
+          "max": 100
+        }
+      ],
+      "maps": [],
+      "lineupHasStats": [
+        true,
+        true
+      ],
+      "profileDefaultId": null,
+      "ranks": [],
+      "totalItems": 0,
+      "weapons": [
+        [],
+        []
+      ],
+      "weaponCoverage": [
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        },
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        }
+      ],
+      "pageNumber": 1,
+      "pageCount": 1
+    },
+    {
+      "id": "community",
+      "kind": "community",
+      "teamIndices": [
+        0,
+        1
+      ],
+      "playerIds": [],
+      "mapNames": [],
+      "recentIds": [
+        [],
+        []
+      ],
+      "recentItems": [
+        [],
+        []
+      ],
+      "vetoSteps": [],
+      "metricRows": [],
+      "maps": [],
+      "lineupHasStats": [
+        false,
+        false
+      ],
+      "profileDefaultId": null,
+      "ranks": [],
+      "totalItems": 0,
+      "weapons": [
+        [],
+        []
+      ],
+      "weaponCoverage": [
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        },
+        {
+          "completeness": "unknown",
+          "totalKills": 15,
+          "rounds": 21
+        }
+      ],
+      "pageNumber": 1,
+      "pageCount": 1
+    }
+  ]
+}

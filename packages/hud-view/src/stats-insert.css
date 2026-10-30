@@ -1741,3 +1741,10 @@
   transform: translate(-50%, -50%);
   font-size: 18px !important;
 }
+
+.stats-metric-name small {
+  display: block;
+  font-size: 16px;
+  color: var(--mizar-broadcast-pulse-muted);
+  margin-top: 9px;
+}
