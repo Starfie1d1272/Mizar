@@ -1,3 +1,12 @@
+import type { ObservedMatchStats } from '../telemetry/index.js';
+import {
+  getPlayerCompletedAdr,
+  getPlayerCurrentRoundDamage,
+  getPlayerCurrentRoundMoneySpent,
+  getPlayerLiveAdr,
+  type MapPlayerStatsAccumulator,
+} from './player-stats.js';
+
 /** Fixed, source-labelled facts shared by all Program consumers. */
 export type MetricSource = 'gsi' | 'program-events' | 'gsi-and-program-events';
 export type MetricWindow =
@@ -73,7 +82,10 @@ export function calculateRating2Approx(sample: Rating2Sample): Rating2Approximat
   if (
     !Number.isSafeInteger(rounds) ||
     rounds <= 0 ||
-    ![kills, assists, deaths, damage, kastRounds].every((x) => Number.isFinite(x) && x >= 0) ||
+    ![kills, assists, deaths, kastRounds].every((x) => Number.isSafeInteger(x) && x >= 0) ||
+    !Number.isFinite(damage) ||
+    damage < 0 ||
+    deaths > rounds ||
     kastRounds > rounds
   )
     return null;
@@ -96,15 +108,6 @@ export function calculateRating2Approx(sample: Rating2Sample): Rating2Approximat
       0.1587,
   };
 }
-
-import type { ObservedMatchStats } from '../telemetry/index.js';
-import {
-  getPlayerCompletedAdr,
-  getPlayerCurrentRoundDamage,
-  getPlayerCurrentRoundMoneySpent,
-  getPlayerLiveAdr,
-  type MapPlayerStatsAccumulator,
-} from './player-stats.js';
 
 function metric(
   value: number | null,
@@ -137,7 +140,7 @@ export function projectPlayerStatistics(
 ): PlayerStatistics {
   const count = (value: number | undefined) =>
     metric(
-      value !== undefined && Number.isFinite(value) && value >= 0 ? value : null,
+      value !== undefined && Number.isSafeInteger(value) && value >= 0 ? value : null,
       'gsi',
       'map-scoreboard',
       'scoreboard-count.v1',
@@ -268,7 +271,7 @@ export function projectPlayerStatistics(
         'completed-plus-current',
         'adr.v1',
         rounds + (includes ? 1 : 0),
-        'no-rounds',
+        rounds + (includes ? 1 : 0) === 0 ? 'no-rounds' : 'missing-input',
         accumulator.coverage === 'partial',
       ),
     },

@@ -355,7 +355,7 @@ export function reduceMapPlayerStats(
     !healthyFrame ||
     (accumulator.countedCompletedRounds === 0 &&
       currentRound === null &&
-      ((roundNumberHint !== null && roundNumberHint > 0) || phase === 'live' || endsRound))
+      (roundNumberHint === null || roundNumberHint > 0 || phase === 'live' || endsRound))
   )
     accumulator = { ...accumulator, coverage: 'partial' };
   if (!startsNewMap && !healthyFrame && currentRound !== null) {
