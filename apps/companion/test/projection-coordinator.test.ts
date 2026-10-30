@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
-import type { BroadcastManifest } from '@mizar/rivalhub';
+import { toMatchContext, type BroadcastManifest } from '@mizar/rivalhub';
 import { describe, expect, it, vi } from 'vitest';
 import { BombDamageResources } from '../src/projections/bomb-damage-resources.js';
 
@@ -230,6 +230,55 @@ describe('ProjectionCoordinator', () => {
       }
     },
   );
+});
+
+it('projects the selected website or game nickname', async () => {
+  const manifest = await readManifest();
+  const runtime = createProgramRuntime('nickname-source');
+  const settings: { enabled: boolean; leadSeconds: number; nicknameSource?: 'game' | 'website' } = {
+    enabled: true,
+    leadSeconds: 5,
+  };
+  const coordinator = createProjectionCoordinator({
+    programRuntime: runtime,
+    cstvSources: createCstvSourceManagers({}),
+    matchContextBinding: {
+      manifest,
+      context: toMatchContext(manifest),
+      origin: 'online',
+      freshness: 'fresh',
+      diagnostics: [],
+    },
+    observerSettings: () => settings,
+    nowMonotonicMs: () => 0,
+  });
+  try {
+    const frame = matchedObservation(manifest);
+    const players = frame.telemetry.allPlayers!.map((player) => ({
+      ...player,
+      displayName: 'Game Name',
+    }));
+    coordinator.afterRuntimeMutation(
+      runtime.acceptObservation({
+        ...frame,
+        telemetry: { ...frame.telemetry, allPlayers: players, player: players[0]! },
+      }),
+    );
+    const player = () =>
+      coordinator
+        .getCurrent()
+        .program.players.find((p) => p.sourcePlayerId === players[0]!.sourcePlayerId)!;
+    expect(player().displayName).toBe(manifest.entrants.a.roster.players[0]!.displayName);
+    expect(player().displayNameSource).toBe('canonical');
+    settings.nicknameSource = 'game';
+    coordinator.refresh();
+    expect(player()).toMatchObject({ displayName: 'Game Name', displayNameSource: 'observed' });
+    settings.nicknameSource = 'website';
+    coordinator.refresh();
+    expect(player().displayNameSource).toBe('canonical');
+  } finally {
+    await coordinator.close();
+  }
 });
 
 it('publishes assist refreshes independently of Program and public radar snapshots', async () => {
