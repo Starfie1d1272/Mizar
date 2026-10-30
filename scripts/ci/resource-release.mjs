@@ -338,8 +338,11 @@ async function withVerifiedSnapshot(
     await rm(directory, { recursive: true, force: true });
   }
 }
-export async function verifyQualifiedResources(folder, manifest) {
-  return withVerifiedSnapshot(folder, manifest, false, (candidate) => candidate);
+export async function verifyQualifiedResources(folder, manifest, requireExactFiles = false) {
+  return withVerifiedSnapshot(folder, manifest, false, async (candidate) => {
+    if (requireExactFiles) await assertFileSet(folder, expectedResourceNames(candidate, false));
+    return candidate;
+  });
 }
 export async function verifyPublishedResources(folder, manifest) {
   return withVerifiedSnapshot(folder, manifest, true, (candidate) => candidate);
