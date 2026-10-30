@@ -11,6 +11,7 @@ export {
   getPlayerLiveAdr,
   invalidateMapPlayerStats,
   reduceMapPlayerStats,
+  reduceTrustedProgramRoundEvents,
 } from './player-stats.js';
 export {
   createObjectiveTimingState,
@@ -25,6 +26,9 @@ export type {
   RuntimeObjectiveTimingState,
 } from './objective-timing.js';
 export type {
+  CompletedPlayerRound,
+  ProgramRoundDeathEvent,
+  TrustedProgramRoundEvents,
   DamageBySteam64,
   MapPlayerStatsAccumulator,
   MapPlayerStatsCurrentRound,
@@ -48,3 +52,14 @@ export type {
   RuntimeTime,
   RuntimeTransition,
 } from './types.js';
+export { calculateRating2Approx, projectPlayerStatistics } from './statistics.js';
+export type {
+  MetricDefinition,
+  MetricNumber,
+  MetricReason,
+  MetricSource,
+  MetricWindow,
+  PlayerStatistics,
+  Rating2Approximation,
+  Rating2Sample,
+} from './statistics.js';

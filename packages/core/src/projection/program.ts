@@ -1,4 +1,11 @@
 import {
+  projectPlayerEquipment,
+  projectTeamEconomy,
+  type EquipmentCatalog,
+  type PlayerEquipmentProjection,
+  type TeamEconomyProjection,
+} from './equipment.js';
+import {
   projectBombDamage,
   type BombDamageProjection,
   type BombDamageResource,
@@ -27,10 +34,8 @@ import type {
   WeaponState,
 } from '../telemetry/index.js';
 import {
-  getPlayerCompletedAdr,
-  getPlayerCurrentRoundDamage,
-  getPlayerCurrentRoundMoneySpent,
-  getPlayerLiveAdr,
+  projectPlayerStatistics,
+  type PlayerStatistics,
   getObjectiveClockLeaseMs,
   remainingFromObjectiveAnchor,
   type RuntimeContinuityPolicy,
@@ -162,6 +167,8 @@ export interface ProgramPlayerProjection {
   readonly observerSlot: number | null;
   readonly activity: string | null;
   readonly lifeState: PlayerLifeState;
+  readonly statistics: PlayerStatistics;
+  readonly equipment: PlayerEquipmentProjection;
   readonly liveAdr: number | null;
   readonly completedAdr: number | null;
   readonly weaponsAvailable: boolean;
@@ -222,6 +229,7 @@ export interface ProgramProjection {
     readonly ct: ProgramTeamPresentation;
     readonly t: ProgramTeamPresentation;
   };
+  readonly teamEconomy: { readonly ct: TeamEconomyProjection; readonly t: TeamEconomyProjection };
   readonly series: ProgramSeriesProjection | null;
   readonly map: {
     readonly roundHistory?:
@@ -267,6 +275,7 @@ export interface ProgramProjection {
 }
 
 export interface ProgramProjectionInput {
+  readonly equipmentCatalog?: EquipmentCatalog;
   readonly preferCanonicalPlayerNames?: boolean;
   readonly presentationRole?: 'gameplay';
   readonly bombDamageResource?: BombDamageResource;
@@ -455,6 +464,9 @@ function projectPlayer(
   observedTeamName: string | undefined,
   liveNameIsCurrent: boolean,
   preferCanonicalPlayerNames: boolean,
+  equipmentCatalog: EquipmentCatalog | undefined,
+  telemetryFresh: boolean,
+  bomb: ProgramBombProjection | null,
 ): ProgramPlayerProjection {
   const player = lineupPlayer.observed;
   const canonical = canonicalPlayerFor(lineupPlayer.sourcePlayerId, identity, identityIsCurrent);
@@ -490,17 +502,24 @@ function projectPlayer(
           roundKillHeadshots: nullable(player.state.roundKillHeadshots),
           equipValue: nullable(player.state.equipValue),
         };
+  const statistics = projectPlayerStatistics(
+    playerStats,
+    lineupPlayer.sourcePlayerId,
+    player?.matchStats,
+    state?.money,
+  );
   const matchStats =
     player === null || player.matchStats === undefined
       ? null
       : {
-          kills: nullable(player.matchStats.kills),
-          assists: nullable(player.matchStats.assists),
-          deaths: nullable(player.matchStats.deaths),
+          kills: statistics.scoreboard.kills.value,
+          assists: statistics.scoreboard.assists.value,
+          deaths: statistics.scoreboard.deaths.value,
           mvps: nullable(player.matchStats.mvps),
           score: nullable(player.matchStats.score),
         };
 
+  const lifeState = player === null ? 'unknown' : derivePlayerLifeState(player.state?.health);
   return {
     sourcePlayerId: lineupPlayer.sourcePlayerId,
     canonicalPlayerId: canonical?.canonicalPlayerId ?? null,
@@ -515,16 +534,20 @@ function projectPlayer(
     side: lineupPlayer.side,
     observerSlot: player === null ? null : nullable(player.observerSlot),
     activity: player === null ? null : nullable(player.activity),
-    lifeState: player === null ? 'unknown' : derivePlayerLifeState(player.state?.health),
-    liveAdr: getPlayerLiveAdr(playerStats, lineupPlayer.sourcePlayerId),
-    completedAdr: getPlayerCompletedAdr(playerStats, lineupPlayer.sourcePlayerId),
+    lifeState,
+    statistics,
+    equipment: projectPlayerEquipment(player?.weapons, equipmentCatalog, {
+      sourcePlayerId: lineupPlayer.sourcePlayerId,
+      bomb,
+      telemetryFresh,
+      lineupCurrent: lineupPlayer.lineupEvidence === 'current',
+      lifeState,
+    }),
+    liveAdr: statistics.includingCurrentRound.adr.value,
+    completedAdr: statistics.completed.adr.value,
     weaponsAvailable: player !== null && player.weapons !== undefined,
-    currentRoundDamage: getPlayerCurrentRoundDamage(playerStats, lineupPlayer.sourcePlayerId),
-    roundMoneySpent: getPlayerCurrentRoundMoneySpent(
-      playerStats,
-      lineupPlayer.sourcePlayerId,
-      state?.money,
-    ),
+    currentRoundDamage: statistics.currentRound.damage.value,
+    roundMoneySpent: statistics.currentRound.moneySpent.value,
     state,
     matchStats,
     weapons: [...(player?.weapons ?? [])]
@@ -683,6 +706,47 @@ export function projectProgram(input: ProgramProjectionInput): ProgramProjection
       )
     : [];
 
+  const bomb = projectBomb(input.runtime, input.nowMonotonicMs, input.continuityPolicy);
+  const projectedPlayers = players.map((player) =>
+    projectPlayer(
+      player,
+      input.identity,
+      identityIsCurrent && !unboundGameplay,
+      input.runtime.playerStats,
+      input.context,
+      telemetryFreshness === 'fresh' &&
+        telemetry?.coverage.map === 'present' &&
+        player.observed?.side === player.side
+        ? player.side === 'CT'
+          ? map?.sides?.ct?.name
+          : map?.sides?.t?.name
+        : undefined,
+      telemetryFreshness === 'fresh' && telemetry?.coverage.allPlayers === 'present',
+      input.preferCanonicalPlayerNames === true,
+      input.equipmentCatalog,
+      telemetryFreshness === 'fresh',
+      bomb,
+    ),
+  );
+  const economyFor = (side: 'CT' | 'T') =>
+    projectTeamEconomy(
+      projectedPlayers
+        .filter((p) => p.side === side)
+        .map((p) => ({
+          current: p.lineupEvidence === 'current' && telemetryFreshness === 'fresh',
+          lifeState: p.lifeState,
+          money: p.state?.money ?? null,
+          equipmentValue: p.state?.equipValue ?? null,
+          equipment: p.equipment,
+        })),
+      round?.phase ?? null,
+      telemetryFreshness !== 'fresh'
+        ? null
+        : side === 'CT'
+          ? (map?.sides?.ct?.consecutiveRoundLosses ?? null)
+          : (map?.sides?.t?.consecutiveRoundLosses ?? null),
+    );
+
   return {
     cursor: input.runtime.cursor,
     bombDamage: projectBombDamage(input),
@@ -751,25 +815,9 @@ export function projectProgram(input: ProgramProjectionInput): ProgramProjection
         ? null
         : { phase: nullable(countdown.phase), endsInSeconds: nullable(countdown.endsInSeconds) },
     observedPlayerSourceId: telemetry?.telemetry.player?.sourcePlayerId ?? null,
-    players: players.map((player) =>
-      projectPlayer(
-        player,
-        input.identity,
-        identityIsCurrent && !unboundGameplay,
-        input.runtime.playerStats,
-        input.context,
-        telemetryFreshness === 'fresh' &&
-          telemetry?.coverage.map === 'present' &&
-          player.observed?.side === player.side
-          ? player.side === 'CT'
-            ? map?.sides?.ct?.name
-            : map?.sides?.t?.name
-          : undefined,
-        telemetryFreshness === 'fresh' && telemetry?.coverage.allPlayers === 'present',
-        input.preferCanonicalPlayerNames === true,
-      ),
-    ),
-    bomb: projectBomb(input.runtime, input.nowMonotonicMs, input.continuityPolicy),
+    players: projectedPlayers,
+    teamEconomy: { ct: economyFor('CT'), t: economyFor('T') },
+    bomb,
     coverage: {
       map: telemetry?.coverage.map ?? 'absent',
       round: telemetry?.coverage.round ?? 'absent',

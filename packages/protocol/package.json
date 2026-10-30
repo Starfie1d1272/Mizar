@@ -26,6 +26,10 @@
       "types": "./dist/shared.d.ts",
       "import": "./dist/shared.js"
     },
+    "./broadcast-stats-presentation": {
+      "types": "./dist/broadcast-stats-presentation.d.ts",
+      "import": "./dist/broadcast-stats-presentation.js"
+    },
     "./program": {
       "types": "./dist/program.d.ts",
       "import": "./dist/program.js"
@@ -61,6 +65,10 @@
     "./program-scenes": {
       "types": "./dist/program-scenes.d.ts",
       "import": "./dist/program-scenes.js"
+    },
+    "./broadcast-stats": {
+      "types": "./dist/broadcast-stats.d.ts",
+      "import": "./dist/broadcast-stats.js"
     },
     "./obs": {
       "types": "./dist/obs.d.ts",

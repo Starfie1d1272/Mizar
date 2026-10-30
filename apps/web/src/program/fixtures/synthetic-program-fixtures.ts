@@ -1,3 +1,10 @@
+import {
+  projectPlayerEquipment,
+  projectTeamEconomy,
+  type EquipmentCatalog,
+} from '@mizar/core/projection';
+import { createMapPlayerStatsAccumulator, projectPlayerStatistics } from '@mizar/core/runtime';
+import { resolveCs2ItemByGsiName } from '@mizar/cs2-assets';
 import { LOCAL_PROTOCOL_VERSION, PROGRAM_SCHEMA_VERSION } from '@mizar/protocol';
 import {
   programSnapshotSchema,
@@ -39,6 +46,25 @@ const LIVE_COVERAGE = {
 } satisfies ProgramPayload['coverage'];
 
 const BOMB_COVERAGE: ProgramPayload['coverage'] = { ...LIVE_COVERAGE, bomb: 'present' };
+
+const EMPTY_ECONOMY: ProgramPayload['teamEconomy']['ct'] = {
+  lineupComplete: false,
+  alive: null,
+  money: null,
+  equipmentValue: null,
+  lossBonus: null,
+  utility: null,
+};
+const EMPTY_EQUIPMENT: ProgramPlayer['equipment'] = {
+  available: false,
+  primary: null,
+  secondary: null,
+  heldWeaponId: null,
+  zeusWeaponId: null,
+  utility: null,
+  hasC4: null,
+};
+const EMPTY_STATS = projectPlayerStatistics(createMapPlayerStatsAccumulator(), '', undefined, null);
 
 const DEFAULT_PLAYER_STATE: PlayerState = {
   health: 100,
@@ -140,6 +166,8 @@ function makePlayer(
     observerSlot,
     activity: 'playing',
     lifeState: 'alive',
+    statistics: EMPTY_STATS,
+    equipment: EMPTY_EQUIPMENT,
     liveAdr: null,
     completedAdr: null,
     weaponsAvailable: true,
@@ -590,6 +618,7 @@ function makeLivePayload({
     status: { telemetry: 'fresh', context, identity },
     match,
     teams,
+    teamEconomy: { ct: EMPTY_ECONOMY, t: EMPTY_ECONOMY },
     series,
     map: {
       name: mapName,
@@ -610,6 +639,67 @@ function makeLivePayload({
 }
 
 function makeSnapshot(payload: ProgramPayload): ProgramSnapshot {
+  // Synthetic inputs use the same Core projection as live data; do not derive facts in the preview.
+  const players = payload.players.map((player) => {
+    const catalog: Record<string, EquipmentCatalog[string]> = {};
+    const weapons = player.weaponsAvailable
+      ? player.weapons.map((weapon) => {
+          if (weapon.name !== null) {
+            const resolved = resolveCs2ItemByGsiName(weapon.name);
+            if (resolved.kind === 'known') catalog[weapon.name] = resolved.item;
+          }
+          return {
+            sourceWeaponId: weapon.sourceWeaponId,
+            ...(weapon.name === null ? {} : { name: weapon.name }),
+            ...(weapon.ammoReserve === null ? {} : { ammoReserve: weapon.ammoReserve }),
+            ...(weapon.state === null ? {} : { state: weapon.state }),
+          };
+        })
+      : undefined;
+    const stats = player.matchStats;
+    const scoreboard =
+      stats === null
+        ? undefined
+        : {
+            ...(stats.kills === null ? {} : { kills: stats.kills }),
+            ...(stats.assists === null ? {} : { assists: stats.assists }),
+            ...(stats.deaths === null ? {} : { deaths: stats.deaths }),
+          };
+    return {
+      ...player,
+      equipment: projectPlayerEquipment(weapons, catalog, {
+        sourcePlayerId: player.sourcePlayerId,
+        bomb:
+          payload.bomb === null
+            ? null
+            : { state: payload.bomb.state, sourcePlayerId: payload.bomb.sourcePlayerId },
+        telemetryFresh: payload.status.telemetry === 'fresh',
+        lineupCurrent: player.lineupEvidence === 'current',
+        lifeState: player.lifeState,
+      }),
+      statistics: projectPlayerStatistics(
+        createMapPlayerStatsAccumulator(),
+        player.sourcePlayerId,
+        scoreboard,
+        player.state?.money,
+      ),
+    };
+  });
+  const economy = (side: 'CT' | 'T') =>
+    projectTeamEconomy(
+      players
+        .filter((player) => player.side === side)
+        .map((player) => ({
+          current: player.lineupEvidence === 'current',
+          lifeState: player.lifeState,
+          money: player.state?.money ?? null,
+          equipmentValue: player.state?.equipValue ?? null,
+          equipment: player.equipment,
+        })),
+      payload.round?.phase ?? null,
+      payload.map.consecutiveRoundLosses[side === 'CT' ? 'ct' : 't'],
+    );
+  payload = { ...payload, players, teamEconomy: { ct: economy('CT'), t: economy('T') } };
   return programSnapshotSchema.parse({
     type: 'snapshot',
     protocolVersion: LOCAL_PROTOCOL_VERSION,
@@ -627,6 +717,7 @@ function awaitingPayload(): ProgramPayload {
     status: { telemetry: 'awaiting', context: 'unbound', identity: 'unbound' },
     match: null,
     teams: { ct: neutralTeam('CT'), t: neutralTeam('T') },
+    teamEconomy: { ct: EMPTY_ECONOMY, t: EMPTY_ECONOMY },
     series: null,
     map: {
       name: null,

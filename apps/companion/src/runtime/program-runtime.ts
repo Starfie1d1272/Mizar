@@ -15,6 +15,7 @@ import {
   type RuntimeState,
   type RuntimeTime,
   type RuntimeTransition,
+  type TrustedProgramRoundEvents,
 } from '@mizar/core/runtime';
 import type { MatchContext } from '@mizar/core/match-context';
 import {
@@ -148,6 +149,11 @@ export class ProgramRuntime {
       sourceGeneration: this.state.programSource.generation,
       observation,
     });
+  }
+
+  /** Accept only batches already sealed by a source that proves round coverage. */
+  acceptTrustedRoundEvents(events: TrustedProgramRoundEvents): RuntimeReduceResult {
+    return this.apply({ kind: 'program-round-events', events });
   }
 
   advanceProgramSourceGeneration(at: RuntimeTime): RuntimeReduceResult {

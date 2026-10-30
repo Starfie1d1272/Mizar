@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { playerStatisticsSchema } from './statistics.js';
 import { programPayloadSchema } from './program.js';
 import { projectionCursorSchema } from './shared.js';
 
@@ -71,6 +72,8 @@ export const programSceneStateSchema = z.object({
       // A target admitted by the Director timing gates; manual hold still prevents execution.
       readyToTake: programSceneIdSchema.nullable().optional(),
       reason: z.string().nullable(),
+      // Telemetry is unavailable, with no conflicting context or identity.
+      blockCause: z.enum(['telemetry']).nullable().optional(),
       warmupScene: z.enum(['waiting', 'gameplay']).optional(),
       introDurationMs: z.number().nonnegative(),
       sceneElapsedMs: z.number().nonnegative(),
@@ -92,6 +95,7 @@ const summaryPlayerSchema = z.object({
   kills: z.number().nullable(),
   assists: z.number().nullable(),
   deaths: z.number().nullable(),
+  statistics: playerStatisticsSchema,
 });
 export const mapSummarySchema = z.object({
   matchId: z.string(),
@@ -116,10 +120,11 @@ const scheduleCardSchema = z.object({
 });
 export const programPresentationSchema = z
   .object({
-    schemaVersion: z.literal('mizar.program-presentation.v1'),
+    schemaVersion: z.literal('mizar.program-presentation.v2'),
     packageId: z.literal('builtin:mizar-default'),
     match: programPayloadSchema.shape.match,
     series: programPayloadSchema.shape.series,
+    seriesWinner: z.enum(['a', 'b']).nullable().default(null),
     halftime: mapSummarySchema.nullable(),
     completed: z.array(mapSummarySchema).max(5),
     eventLogoUrl: z.string().nullable(),

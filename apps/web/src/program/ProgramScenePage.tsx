@@ -1,4 +1,12 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { pulseTokenStyle } from './broadcast-display';
+import { useBroadcastDisplayConfig } from '../realtime/broadcast-display-client';
+import {
+  useEffect,
+  useState,
+  useSyncExternalStore,
+  type CSSProperties,
+  type ReactNode,
+} from 'react';
 import {
   programPresentationSchema,
   type ProgramPresentation,
@@ -8,7 +16,8 @@ import { useHudConfigClient } from '../realtime/hud-config-client';
 import { useLocalChannelClient } from '../realtime';
 import { useProgramScenes } from '../workspace/client';
 import { presentationPreview, programPreviewSnapshot } from './presentation-preview';
-import { ProgramView } from '@mizar/hud-view';
+import { ProgramView, StatsInsertView } from '@mizar/hud-view';
+import { useStatsRotation } from './useStatsRotation';
 
 const motionQuery = '(prefers-reduced-motion: reduce)';
 const subscribeMotion = (notify: () => void) => {
@@ -56,24 +65,73 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
   const data = preview ? presentationPreview(sceneId, params.get('variant')) : liveData;
   const scenes = useProgramScenes();
   const reducedMotion = useSyncExternalStore(subscribeMotion, readReducedMotion, () => false);
-  const hud = useHudConfigClient();
+  const display = useBroadcastDisplayConfig(!preview, sceneId);
+  const hud = useHudConfigClient(
+    preview || (display.current === null && display.status !== 'unsupported'),
+  );
+  const activeHud =
+    !preview && display.current?.hud.renderer === 'native' ? display.current.hud : null;
   const client = useLocalChannelClient('program');
   const connection = useSyncExternalStore(client.subscribe, client.getSnapshot, client.getSnapshot);
   const snapshot = preview
     ? programPreviewSnapshot('gameplay', params.get('variant'))
     : connection.current;
-  return (
+  const clock = snapshot?.payload.clock?.phase;
+  const canRotate =
+    !preview &&
+    (sceneId === 'waiting' || sceneId === 'intermap') &&
+    scenes?.active === sceneId &&
+    (scenes.director?.mode === 'auto' ||
+      (scenes.director?.mode === 'blocked' && scenes.director.blockCause === 'telemetry')) &&
+    !scenes.preparing &&
+    clock !== 'paused' &&
+    clock !== 'timeout_ct' &&
+    clock !== 'timeout_t';
+  const matchId = data?.match?.matchId ?? null;
+  const observedMatch = connection.current?.payload.match?.matchId;
+  if (!preview && display.current === null) return null;
+  const sceneStyle = display.current
+    ? (pulseTokenStyle(display.current.program) ?? undefined)
+    : undefined;
+  const scene = (
     <ProgramView
       kind="scene"
+      sceneStyle={sceneStyle}
       sceneId={sceneId}
       data={data}
       snapshot={snapshot ?? null}
       scenes={scenes}
-      resolvedPreset={hud.current}
+      resolvedPreset={activeHud?.config ?? hud.current}
+      overlays={activeHud?.overlays}
+      accent={activeHud?.accent}
       reducedMotion={reducedMotion}
       preview={preview}
       shortIntro={params.get('intro') === 'short'}
       previewBackground={params.get('background') !== 'transparent'}
     />
   );
+  return canRotate && (!connection.current || observedMatch === matchId) && matchId ? (
+    <RotatingScene
+      key={JSON.stringify([sceneId, matchId])}
+      matchId={matchId}
+      sceneStyle={sceneStyle}
+    >
+      {scene}
+    </RotatingScene>
+  ) : (
+    scene
+  );
+}
+
+function RotatingScene({
+  matchId,
+  children,
+  sceneStyle,
+}: {
+  readonly matchId: string;
+  readonly children: ReactNode;
+  readonly sceneStyle?: CSSProperties | undefined;
+}) {
+  const insert = useStatsRotation(true, matchId);
+  return insert ? <StatsInsertView insert={insert} sceneStyle={sceneStyle} /> : children;
 }

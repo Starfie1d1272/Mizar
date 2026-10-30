@@ -13,8 +13,11 @@ export function registerProductionRoutes(
     scenes: ProgramSceneController;
     release: () => Promise<void>;
     beforeEnter?: () => void;
+    waitForBroadcast?: () => Promise<void>;
     onEnter?: () => void;
-    beforeFinish?: () => void;
+    onFinish?: () => void;
+    beforeFinish?: () => void | Promise<void>;
+    beforeExit?: () => void;
     finishTrial?: () => Promise<void>;
   },
 ) {
@@ -24,6 +27,7 @@ export function registerProductionRoutes(
   let shuttingDown = false;
   let updatePending = false;
   let trialPending = false;
+  let preparationGeneration = 0;
   const view = () => ({
     mode,
     revision,
@@ -33,11 +37,35 @@ export function registerProductionRoutes(
     reply.header('cache-control', 'no-store').send(view()),
   );
   async function change(body: { action?: unknown; expectedRevision?: unknown } | null) {
+    if (body?.action === 'enter') {
+      try {
+        await options.waitForBroadcast?.();
+      } catch (error) {
+        app.log.error({ stage: 'broadcast_owner_sync', err: error }, '播出配置同步失败');
+        return { code: 409, value: { message: '播出配置同步失败，请重试使用方案。' } };
+      }
+    }
+    if (
+      body?.expectedRevision === revision &&
+      ['finish', 'shutdown', 'begin-exit'].includes(String(body.action))
+    ) {
+      preparationGeneration++;
+      options.scenes.holdAutomatic();
+      options.beforeExit?.();
+    }
+    if (body?.expectedRevision === revision && body.action === 'begin-exit') {
+      shuttingDown = true;
+      return { code: 200, value: view() };
+    }
+    if (body?.expectedRevision === revision && body.action === 'cancel-exit') {
+      shuttingDown = false;
+      return { code: 200, value: view() };
+    }
     if (
       busy ||
       (trialPending && !['finish', 'shutdown'].includes(String(body?.action))) ||
       (updatePending && body?.action !== 'shutdown') ||
-      (shuttingDown && body?.action !== 'shutdown') ||
+      (shuttingDown && !['shutdown', 'finish'].includes(String(body?.action))) ||
       body?.expectedRevision !== revision
     )
       return { code: 409, value: { message: '制作状态已变化，请刷新后重试。' } };
@@ -49,6 +77,7 @@ export function registerProductionRoutes(
     let committed = false;
     let stage = 'production_context';
     const operationId = randomUUID();
+    const controlValid = options.scenes.controlValid();
     try {
       if (body?.action === 'enter') {
         if (!options.hasContext()) return { code: 409, value: { message: '请先选择或创建比赛。' } };
@@ -58,7 +87,9 @@ export function registerProductionRoutes(
       } else if (body?.action === 'hide') {
         if (mode === 'live') mode = 'hidden';
       } else {
-        options.beforeFinish?.();
+        await options.beforeFinish?.();
+        if (!controlValid())
+          return { code: 409, value: { message: 'OBS 播出状态已变化，请核对后重试。' } };
         if (trialPending) {
           stage = 'production_safe_scene';
           await options.finishTrial?.();
@@ -67,12 +98,20 @@ export function registerProductionRoutes(
         // An idle Host can quit without requiring an OBS connection.
         if (mode !== 'preparation' || options.scenes.get().active !== 'waiting' || !shutdown) {
           stage = 'production_safe_scene';
-          const result = await options.scenes.selectWaitingForExit(options.scenes.get().revision);
+          const result = await options.scenes.selectWaitingForExit(
+            options.scenes.get().revision,
+            controlValid,
+          );
           if (!result.ok) return { code: 409, value: { message: result.message } };
         }
         stage = 'production_release';
+        if (!controlValid())
+          return { code: 409, value: { message: 'OBS 播出状态已变化，请核对后重试。' } };
         await options.release();
+        if (!controlValid())
+          return { code: 409, value: { message: 'OBS 播出状态已变化，请核对后重试。' } };
         mode = 'preparation';
+        options.onFinish?.();
       }
       committed = true;
       revision = randomUUID();
@@ -115,6 +154,18 @@ export function registerProductionRoutes(
   });
   return {
     get: view,
+    canControl: () => !busy && !shuttingDown,
+    automaticAllowed: () => mode !== 'preparation' && !busy && !shuttingDown,
+    preparationValid: (expectedRevision: unknown) => {
+      const generation = preparationGeneration;
+      return () =>
+        expectedRevision === revision &&
+        generation === preparationGeneration &&
+        !busy &&
+        !shuttingDown &&
+        !updatePending &&
+        !trialPending;
+    },
     configureCameraSession: (expectedRevision: string, commit: () => void) => {
       if (
         expectedRevision !== revision ||
@@ -128,6 +179,32 @@ export function registerProductionRoutes(
         throw new Error('camera_production_changed');
       // Synchronous commit shares this lifecycle owner; no separate preparation authority.
       commit();
+    },
+    configureBroadcast: async <T>(commit: (canCommit: () => boolean) => Promise<T>): Promise<T> => {
+      if (
+        mode !== 'preparation' ||
+        busy ||
+        shuttingDown ||
+        updatePending ||
+        trialPending ||
+        options.scenes.get().active !== 'waiting' ||
+        options.scenes.get().preparing !== undefined
+      )
+        throw new Error('production_busy');
+      busy = true;
+      try {
+        return await commit(
+          () =>
+            mode === 'preparation' &&
+            !shuttingDown &&
+            !updatePending &&
+            !trialPending &&
+            options.scenes.get().active === 'waiting' &&
+            options.scenes.get().preparing === undefined,
+        );
+      } finally {
+        busy = false;
+      }
     },
     isTrialPending: () => trialPending,
     reserveTrialOperation: (allowShutdownCleanup = false) => {

@@ -4,6 +4,7 @@ import {
   createMapPlayerStatsAccumulator,
   invalidateMapPlayerStats,
   reduceMapPlayerStats,
+  reduceTrustedProgramRoundEvents,
 } from './player-stats.js';
 import { createObjectiveTimingState, reduceObjectiveTiming } from './objective-timing.js';
 import {
@@ -264,6 +265,20 @@ export function reduceRuntime(
 ): RuntimeReduceResult {
   assertRuntimeContinuityPolicy(policy);
   switch (input.kind) {
+    case 'program-round-events': {
+      if (
+        input.events.deaths.some(
+          (event) => event.cursor.mapName !== undefined && event.cursor.mapName !== state.map.name,
+        )
+      )
+        return ignored(state, 'untrusted-round-events');
+      const playerStats = reduceTrustedProgramRoundEvents(state.playerStats, input.events);
+      if (playerStats === state.playerStats) return ignored(state, 'untrusted-round-events');
+      return accepted(
+        { ...state, runtimeSeq: state.runtimeSeq + 1, playerStats },
+        { kind: 'accepted', reason: 'program-round-events' },
+      );
+    }
     case 'program-telemetry':
       return reduceProgramTelemetry(state, input, policy);
     case 'advance-program-source-generation':

@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import type { MulnxToolView } from '@mizar/protocol/orchestration';
+import { BroadcastPresets } from './BroadcastPresets';
+import { ResourceModules, type Snapshot } from './ResourceModules';
 import { OperatorShell } from '../operator/OperatorShell';
 import { MulnxToolControls } from '../orchestration/MulnxToolControls';
 import { openTool, useLocalRead } from '../preparation/client';
-import { loadBuiltinMusic } from '../music/builtin';
 import { Button, Field, Panel, StatusBanner } from '../ui';
 import './resource-library.css';
 
@@ -30,29 +31,46 @@ const phases: Record<ResourceStatus['phase'], string> = {
 
 export function ResourceLibraryPage() {
   const view = useLocalRead<LibraryView>('/local/v1/resource-library', 2000);
+  const [broadcastRefresh, setBroadcastRefresh] = useState(0);
+  const broadcastSnapshot = useLocalRead<Snapshot>(
+    '/local/v1/broadcast-presets',
+    2000,
+    broadcastRefresh,
+  );
+  const refreshBroadcast = () => setBroadcastRefresh((value) => value + 1);
   const [query, setQuery] = useState('');
-  const [category, setCategory] = useState<'all' | 'media' | 'tool' | 'music'>('all');
-  const [musicBusy, setMusicBusy] = useState(false);
-  const [musicMessage, setMusicMessage] = useState('');
-  const [musicFailed, setMusicFailed] = useState(false);
+  const [focusPreset, setFocusPreset] = useState<{ id: string; request: number } | null>(null);
+  const [category, setCategory] = useState<
+    'all' | 'media' | 'tool' | 'music' | 'presets' | 'hud' | 'program' | 'camera'
+  >('all');
   const matches = (name: string) =>
     name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
   const resources = view?.resources?.filter((resource) =>
     matches(resource.packId === 'official:epl-default' ? 'EPL 官方示例 素材' : resource.packId),
   );
   const showMedia = category === 'all' || category === 'media';
+  const showPresets = category === 'all' || category === 'presets';
+  const showModules =
+    category === 'all' || ['hud', 'program', 'music', 'camera'].includes(category);
   const showTool = (category === 'all' || category === 'tool') && matches('MulNX 运镜 工具');
-  const showMusic =
-    (category === 'all' || category === 'music') && matches('内置节目音乐 音乐 6首 七组');
   return (
     <OperatorShell active="/packages">
       <main className="resource-library">
         <header className="resource-library__heading">
           <div>
             <h1>资源管理</h1>
-            <p>查看本机素材、音乐和运镜工具。</p>
+            <p>查看播出方案、音乐配置、素材和运镜工具。</p>
           </div>
         </header>
+        <details>
+          <summary>创建和制作</summary>
+          <p>在制作入口创建或编辑内容，保存后返回资源管理。</p>
+          <div className="resource-library__actions">
+            <a href="/operator/hud">HUD 编辑器</a>
+            <a href="/settings?tab=music">音乐制作</a>
+            <a href="/settings?tab=camera">运镜制作</a>
+          </div>
+        </details>
         <div className="resource-library__filters">
           <Field
             label="搜索资源"
@@ -65,8 +83,12 @@ export function ResourceLibraryPage() {
             {(
               [
                 ['all', '全部'],
-                ['media', '素材'],
+                ['hud', 'HUD'],
+                ['program', '场景'],
                 ['music', '音乐'],
+                ['camera', '运镜'],
+                ['presets', '方案'],
+                ['media', '素材'],
                 ['tool', '工具'],
               ] as const
             ).map(([value, label]) => (
@@ -81,6 +103,27 @@ export function ResourceLibraryPage() {
             ))}
           </div>
         </div>
+        <ResourceModules
+          query={query}
+          sharedSnapshot={broadcastSnapshot}
+          onRefresh={refreshBroadcast}
+          category={category}
+          onImported={(presetId) => {
+            setCategory('all');
+            setQuery('');
+            setFocusPreset((previous) =>
+              presetId ? { id: presetId, request: (previous?.request ?? 0) + 1 } : null,
+            );
+          }}
+        />
+        {showPresets ? (
+          <BroadcastPresets
+            query={query}
+            focusPreset={focusPreset}
+            sharedSnapshot={broadcastSnapshot}
+            onRefresh={refreshBroadcast}
+          />
+        ) : null}
         {!view ? (
           <StatusBanner tone="warning">
             正在连接资源状态；如果持续无法连接，请检查本地制播服务。
@@ -125,42 +168,6 @@ export function ResourceLibraryPage() {
               )}
             </Panel>
           ))}
-        {view && showMusic ? (
-          <Panel className="resource-library__item">
-            <div>
-              <span className="resource-library__kind">音乐</span>
-              <h2>内置节目音乐</h2>
-              <p>6 首曲目，覆盖七组节目场景。来源及使用授权尚未核实。</p>
-            </div>
-            <p>使用后会替换当前七组音乐配置。</p>
-            <div className="resource-library__actions">
-              <Button
-                disabled={musicBusy}
-                onClick={() => {
-                  if (!window.confirm('使用内置节目音乐将替换当前七组音乐配置，继续吗？')) return;
-                  setMusicBusy(true);
-                  setMusicMessage('');
-                  setMusicFailed(false);
-                  void loadBuiltinMusic()
-                    .then(() => setMusicMessage('内置音乐已加载并保存。'))
-                    .catch((error: unknown) => {
-                      setMusicFailed(true);
-                      setMusicMessage(
-                        error instanceof Error ? error.message : '内置音乐未加载，原配置已保留。',
-                      );
-                    })
-                    .finally(() => setMusicBusy(false));
-                }}
-              >
-                使用内置音乐
-              </Button>
-              <a href="/settings?tab=music">编辑音乐设置</a>
-              {musicMessage ? (
-                <StatusBanner tone={musicFailed ? 'danger' : 'info'}>{musicMessage}</StatusBanner>
-              ) : null}
-            </div>
-          </Panel>
-        ) : null}
         {view && showTool && view.tool ? (
           <Panel className="resource-library__item">
             <div>
@@ -170,7 +177,7 @@ export function ResourceLibraryPage() {
             </div>
             <dl>
               <div>
-                <dt>当前版本</dt>
+                <dt>已选版本</dt>
                 <dd>{view.tool.installed ?? '尚未安装'}</dd>
               </div>
               {view.tool.latest ? (
@@ -201,7 +208,8 @@ export function ResourceLibraryPage() {
         {view &&
         !(showMedia && (resources?.length || view.resources === null)) &&
         !showTool &&
-        !showMusic ? (
+        !showModules &&
+        !showPresets ? (
           <p>没有找到匹配的资源。</p>
         ) : null}
       </main>

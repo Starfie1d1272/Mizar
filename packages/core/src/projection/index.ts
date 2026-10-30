@@ -7,6 +7,7 @@ export { projectObserverAssist, ObserverHintTimeline } from './observer-assist.j
 export { ProgramClockTracker } from './program-clock.js';
 export type { ProgramClockSample } from './program-clock.js';
 export { projectProgram, projectSeries } from './program.js';
+export { seriesWinnerSide } from './series-winner.js';
 export {
   observedPlayerDisplayName,
   livePlayerDisplayName,
@@ -65,3 +66,13 @@ export type {
   BombDamageResource,
   BombDamageProjection,
 } from './bomb-damage.js';
+export { projectPlayerEquipment, projectTeamEconomy } from './equipment.js';
+export type {
+  EquipmentCatalog,
+  EquipmentMetadata,
+  PlayerEquipmentContext,
+  PlayerEquipmentProjection,
+  TeamEconomyPlayer,
+  TeamEconomyProjection,
+  UtilityCounts,
+} from './equipment.js';

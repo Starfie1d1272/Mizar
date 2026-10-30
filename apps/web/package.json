@@ -12,17 +12,19 @@
   },
   "dependencies": {
     "@fontsource/inter": "catalog:",
+    "@mizar/broadcast-config": "workspace:*",
+    "@mizar-hud/radar-view": "workspace:*",
     "@mizar/core": "workspace:*",
     "@mizar/cs2-assets": "workspace:*",
     "@mizar/design-tokens": "workspace:*",
     "@mizar/hud-config": "workspace:*",
     "@mizar/hud-view": "workspace:*",
+    "@mizar/lhm-export": "workspace:*",
     "@mizar/protocol": "workspace:*",
     "@mizar/radar": "workspace:*",
     "@mizar/replay": "workspace:*",
     "react": "catalog:",
-    "react-dom": "catalog:",
-    "@mizar-hud/radar-view": "workspace:*"
+    "react-dom": "catalog:"
   },
   "devDependencies": {
     "@storybook/addon-a11y": "10.6.1",

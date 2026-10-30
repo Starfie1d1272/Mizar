@@ -75,3 +75,15 @@ export type {
   ProgramCueMessageV1,
   ProgramCueWire,
 } from './program-cue.js';
+
+export { metricNumberSchema, playerStatisticsSchema } from './statistics.js';
+export type { MetricNumber, PlayerStatistics } from './statistics.js';
+
+export {
+  broadcastStatsPresentationSchema,
+  broadcastStatsProgramSchema,
+} from './broadcast-stats-presentation.js';
+export type {
+  BroadcastStatsPresentation,
+  BroadcastStatsProgram,
+} from './broadcast-stats-presentation.js';

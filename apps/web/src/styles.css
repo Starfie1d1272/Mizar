@@ -419,3 +419,11 @@ h1 {
     transition-duration: 0.01ms !important;
   }
 }
+
+.stats-insert-status {
+  position: absolute;
+  left: 120px;
+  bottom: 40px;
+  color: var(--mizar-broadcast-pulse-muted);
+  font-size: 20px;
+}

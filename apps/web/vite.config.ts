@@ -324,6 +324,22 @@ export default defineConfig({
   plugins: [
     react(),
     {
+      name: 'mizar-lhm-export-runtime',
+      async closeBundle() {
+        await cp(
+          resolve(import.meta.dirname, '../lhm-export/dist'),
+          resolve(import.meta.dirname, 'dist/lhm-runtime'),
+          { recursive: true },
+        );
+        for (const name of ['LICENSE', 'THIRD-PARTY-NOTICES.md']) {
+          await cp(
+            resolve(repositoryRoot, name),
+            resolve(import.meta.dirname, 'dist/lhm-runtime', name),
+          );
+        }
+      },
+    },
+    {
       name: 'mizar-web-resource-mode',
       async closeBundle() {
         await writeFile(
@@ -359,6 +375,12 @@ export default defineConfig({
       '/operator/production': 'http://127.0.0.1:3000',
       '/operator/desktop-overlay': 'http://127.0.0.1:3000',
       '/operator/hud-config': 'http://127.0.0.1:3000',
+      '/operator/broadcast-presets': 'http://127.0.0.1:3000',
+      '/operator/broadcast-modules': 'http://127.0.0.1:3000',
+      '/operator/broadcast-config': 'http://127.0.0.1:3000',
+      '/operator/music': 'http://127.0.0.1:3000',
+      '/operator/orchestration': 'http://127.0.0.1:3000',
+      '/operator/resource-library': 'http://127.0.0.1:3000',
       '/operator/bp-local-save': 'http://127.0.0.1:3000',
       '/operator/bp-rivalhub': 'http://127.0.0.1:3000',
       '/operator/bp-command': 'http://127.0.0.1:3000',

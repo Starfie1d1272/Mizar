@@ -1,9 +1,16 @@
 import { sourceErrorEvidence } from './source-error.js';
+import { bindHistoricalStats, projectHistoricalStats } from '../projections/historical-stats.js';
+import { projectHistoricalProgram } from '../projections/historical-program.js';
+import type { ProgramPresentation, ProgramSceneId } from '@mizar/protocol/program-scenes';
 import type { FastifyInstance } from 'fastify';
 import type { LiveSnapshotV1 } from '@mizar/protocol/output';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 import type { MatchContextController } from './controller.js';
-import { OFFICIAL_RIVALHUB_URL, type RivalHubConnection } from './rivalhub-connection.js';
+import {
+  OFFICIAL_RIVALHUB_URL,
+  statsTarget,
+  type RivalHubConnection,
+} from './rivalhub-connection.js';
 import { isStandaloneLocalMatch } from './lkg-store.js';
 
 export function registerRivalHubConnectionRoutes(
@@ -12,6 +19,7 @@ export function registerRivalHubConnectionRoutes(
     connection: RivalHubConnection;
     canClaim?: () => boolean;
     canUpdatePlan?: () => boolean;
+    canFetchStats?: () => boolean;
     controller: MatchContextController | null;
     currentSnapshot: () => LiveSnapshotV1 | null;
     originPolicy: LocalWebOriginPolicy;
@@ -46,16 +54,38 @@ export function registerRivalHubConnectionRoutes(
     checkLocalWebOrigin(options.originPolicy, origin).allowed;
   let lastRefreshAt: string | null = null;
   let refreshError: string | null = null;
-  let refreshing: Promise<unknown> | null = null;
+  let refreshing: Promise<{ ok: boolean; pending: boolean; message: string }> | null = null;
   const linkedBinding = () => {
     const binding = options.controller?.getActiveBinding();
     return binding &&
       !isStandaloneLocalMatch(binding) &&
       binding.origin !== 'fixture' &&
-      binding.manifest.match.competition?.competitionId === options.connection.view().competitionId
+      binding.manifest.match.competition?.competitionId ===
+        options.connection.view().competitionId &&
+      binding.context.competition?.competitionId === options.connection.view().competitionId
       ? binding
       : undefined;
   };
+  app.post('/operator/rivalhub/stats/refresh', { bodyLimit: 64 }, async (request, reply) => {
+    if (!allowed(request.headers.origin))
+      return reply.code(403).send({ message: '本机页面来源无效。' });
+    const binding = linkedBinding();
+    if (!binding) return reply.code(409).send({ message: '请先加载网站比赛资料。' });
+    const target = statsTarget(binding.context);
+    const value = await options.connection.stats(target, true);
+    const current = linkedBinding();
+    if (
+      !value ||
+      !current ||
+      options.connection.getStatsSnapshot(statsTarget(current.context)) !== value
+    ) {
+      const retained = await options.connection.getStats(target);
+      return reply.code(502).send({
+        message: retained ? '统计刷新失败，保留本场已有快照。' : '统计刷新失败，当前没有可用快照。',
+      });
+    }
+    return { ok: true };
+  });
   const sourceFor = (matchId: string, fresh = true) => {
     const source = options.connection.matchSource(matchId, fresh);
     return {
@@ -113,6 +143,14 @@ export function registerRivalHubConnectionRoutes(
     return refreshing;
   };
   const timer = setInterval(() => {
+    const statsBinding = linkedBinding();
+    if (
+      options.canFetchStats?.() &&
+      statsBinding &&
+      (statsBinding.origin === 'online' ||
+        (statsBinding.origin === 'cache' && statsBinding.cachedFrom === 'online'))
+    )
+      void options.connection.stats(statsTarget(statsBinding.context));
     if (linkedBinding() && !options.controller?.isOnlineCandidateLoading())
       void Promise.resolve()
         .then(() => refresh(false))
@@ -124,7 +162,10 @@ export function registerRivalHubConnectionRoutes(
   }, 60_000);
   libraryTimer.unref();
   app.addHook('onClose', () => clearInterval(libraryTimer));
-  app.addHook('onClose', () => clearInterval(timer));
+  app.addHook('onClose', () => {
+    clearInterval(timer);
+    options.connection.clearStats();
+  });
   const observedLineupReady = () => {
     const snapshot = options.currentSnapshot();
     return (
@@ -410,5 +451,63 @@ export function registerRivalHubConnectionRoutes(
     } finally {
       sourceCommand = null;
     }
+  });
+}
+
+/** Local, read-only historical presentation. The raw statistics endpoint remains unchanged. */
+export function registerHistoricalStatsPresentationRoute(
+  app: FastifyInstance,
+  options: {
+    connection: RivalHubConnection | undefined;
+    getBinding: () => import('./lkg-store.js').MatchContextBinding | undefined;
+  },
+) {
+  app.get('/local/v1/broadcast-stats-presentation', async (_request, reply) => {
+    const binding = options.getBinding();
+    const connection = options.connection;
+    if (
+      !binding ||
+      !connection ||
+      (binding.origin !== 'online' &&
+        !(binding.origin === 'cache' && binding.cachedFrom === 'online'))
+    )
+      return reply.header('cache-control', 'no-store').send(null);
+    const value = await connection.getStats(statsTarget(binding.context));
+    if (
+      options.getBinding() !== binding ||
+      !value ||
+      value.matchId !== binding.context.matchId ||
+      value.competitionId !== binding.context.competition?.competitionId
+    )
+      return reply.header('cache-control', 'no-store').send(null);
+    const bound = bindHistoricalStats(value, binding.manifest);
+    return reply
+      .header('cache-control', 'no-store')
+      .send(bound ? projectHistoricalStats(bound) : null);
+  });
+}
+
+/** Fixed program-insert facts, including identity when no historical snapshot exists. */
+export function registerHistoricalStatsProgramRoute(
+  app: FastifyInstance,
+  options: {
+    connection: RivalHubConnection | undefined;
+    getBinding: () => import('./lkg-store.js').MatchContextBinding | undefined;
+    getProgram: () => ProgramPresentation | null;
+    getScene: () => ProgramSceneId;
+  },
+) {
+  app.get('/local/v1/broadcast-stats-program', (_request, reply) => {
+    const binding = options.getBinding();
+    if (!binding) return reply.header('cache-control', 'no-store').send(null);
+    const online =
+      binding.origin === 'online' ||
+      (binding.origin === 'cache' && binding.cachedFrom === 'online');
+    const snapshot = online
+      ? (options.connection?.getStatsSnapshot(statsTarget(binding.context)) ?? null)
+      : null;
+    return reply
+      .header('cache-control', 'no-store')
+      .send(projectHistoricalProgram(binding, snapshot, options.getProgram(), options.getScene()));
   });
 }

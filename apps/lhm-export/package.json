@@ -1,0 +1,31 @@
+{
+  "name": "@mizar/lhm-export",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@fontsource/inter": "catalog:",
+    "@mizar/broadcast-config": "workspace:*",
+    "@mizar/core": "workspace:*",
+    "@mizar/design-tokens": "workspace:*",
+    "@mizar/hud-config": "workspace:*",
+    "@mizar/hud-view": "workspace:*",
+    "@mizar/protocol": "workspace:*",
+    "@mizar/radar": "workspace:*",
+    "@mizar/telemetry-gsi": "workspace:*",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "socket.io-client": "4.8.1"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@typescript/native": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  }
+}

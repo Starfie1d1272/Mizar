@@ -30,6 +30,7 @@ export class ProgramSceneController {
     this.updatePending = pending;
   }
   private director: ProgramDirector | undefined;
+  private controlGeneration = 0;
   attachDirector(director: ProgramDirector): void {
     this.director = director;
   }
@@ -42,6 +43,15 @@ export class ProgramSceneController {
   }
   cancelAutomatic(): void {
     this.automaticSwitch?.abort();
+  }
+  holdAutomatic(): void {
+    this.controlGeneration++;
+    this.director?.hold();
+    this.automaticSwitch?.abort();
+  }
+  controlValid(): () => boolean {
+    const generation = this.controlGeneration;
+    return () => generation === this.controlGeneration;
   }
   setWarmupScene(scene: 'waiting' | 'gameplay', expectedRevision: string): boolean {
     if (
@@ -75,7 +85,7 @@ export class ProgramSceneController {
       options: ObsSceneSwitchOptions,
     ) => Promise<void>,
     private readonly switchObsForExit?: (options: ObsSceneSwitchOptions) => Promise<void>,
-    private readonly switchBpCompact?: (visible: boolean) => Promise<void>,
+    private readonly switchBpCompact?: (visible: boolean, valid?: () => boolean) => Promise<void>,
     private readonly bpPresentationMode: () => 'full' | 'compact' = () => 'full',
     private readonly gameBackgroundReady: () => Promise<boolean> = () => Promise.resolve(false),
   ) {}
@@ -159,8 +169,7 @@ export class ProgramSceneController {
   }
 
   forceScene(id: ProgramSceneId): void {
-    this.automaticSwitch?.abort();
-    this.director?.hold();
+    this.holdAutomatic();
     if (this.resourceActivationPending) {
       this.deferredResourceScene = id;
       return;
@@ -189,10 +198,12 @@ export class ProgramSceneController {
 
   select(id: ProgramSceneId, expectedRevision: string) {
     if (expectedRevision === this.revision) {
-      this.director?.hold();
-      this.automaticSwitch?.abort();
+      this.holdAutomatic();
     }
-    const result = this.queue.then(() => this.selectSerial(id, expectedRevision));
+    const current = this.controlValid();
+    const result = this.queue.then(() =>
+      this.selectSerial(id, expectedRevision, undefined, false, false, current),
+    );
     this.queue = result.catch(() => undefined);
     return result;
   }
@@ -269,11 +280,13 @@ export class ProgramSceneController {
   }
 
   /** Exit has its own OBS safety proof; manual Takes still always verify OBS. */
-  selectWaitingForExit(expectedRevision: string) {
-    this.director?.hold();
-    this.automaticSwitch?.abort();
+  selectWaitingForExit(expectedRevision: string, current?: () => boolean) {
+    if (!current) {
+      this.holdAutomatic();
+      current = this.controlValid();
+    }
     const result = this.queue.then(() =>
-      this.selectSerial('waiting', expectedRevision, undefined, false, true),
+      this.selectSerial('waiting', expectedRevision, undefined, false, true, current),
     );
     this.queue = result.catch(() => undefined);
     return result;
@@ -285,7 +298,10 @@ export class ProgramSceneController {
     valid: () => boolean,
     finalBp = false,
   ) {
-    const result = this.queue.then(() => this.selectSerial(id, expectedRevision, valid, finalBp));
+    const current = this.controlValid();
+    const result = this.queue.then(() =>
+      this.selectSerial(id, expectedRevision, valid, finalBp, false, current),
+    );
     this.queue = result.catch(() => undefined);
     return result;
   }
@@ -296,6 +312,7 @@ export class ProgramSceneController {
     automaticValid?: () => boolean,
     finalBp = false,
     exiting = false,
+    current: () => boolean = this.controlValid(),
   ) {
     const switchObs =
       exiting && this.switchObsForExit
@@ -304,7 +321,7 @@ export class ProgramSceneController {
               ? this.switchObsForExit!(options)
               : this.switchObs?.(target, options)
         : this.switchObs;
-    const valid = automaticValid ?? (() => true);
+    const valid = () => current() && (automaticValid?.() ?? true);
     if (!valid()) return { ok: false as const, message: '自动编排请求已失效，保持当前场景。' };
     if (expectedRevision !== this.revision)
       return { ok: false as const, message: '播出场景已变化，请核对后重试。' };
@@ -314,12 +331,13 @@ export class ProgramSceneController {
       // A manual Take also restores OBS after an external scene change or reconnect.
       // Preserve presentation identity (including BP / matchup) on the same scene.
       const restoreCurrent = async () => {
+        if (!current()) return;
         const target = this.active;
         const revision = this.revision;
         if (target !== id)
           await switchObs?.(target, {
             transition: programTransition(id, target, true),
-            valid: () => this.active === target && this.revision === revision,
+            valid: () => current() && this.active === target && this.revision === revision,
           }).catch(() => undefined);
       };
       let restartedBp = false;
@@ -331,7 +349,7 @@ export class ProgramSceneController {
           // before starting a fresh session; an uncertain close cannot be success.
           if (this.bpCompact === 'unknown') {
             if (!this.switchBpCompact) throw new Error('紧凑 BP 状态待确认。');
-            await this.switchBpCompact(false);
+            await this.switchBpCompact(false, valid);
             this.bpCompact = 'off';
           }
           const wantsCompact = this.bpPresentationMode() === 'compact';
@@ -342,7 +360,7 @@ export class ProgramSceneController {
             (await this.gameBackgroundReady());
           if (!ready && this.bpCompact === 'on') {
             if (!this.switchBpCompact) throw new Error('紧凑 BP 状态待确认。');
-            await this.switchBpCompact(false);
+            await this.switchBpCompact(false, valid);
             this.bpCompact = 'off';
           }
           const bp = this.bpSession.get();
@@ -358,21 +376,22 @@ export class ProgramSceneController {
         }
         await switchObs?.(physical, {
           transition: programTransition(id, id, true),
-          valid: () => expectedRevision === this.revision && this.blockedReason(id) === null,
+          valid: () =>
+            valid() && expectedRevision === this.revision && this.blockedReason(id) === null,
         });
         if (physical === 'gameplay' && id === 'bp') {
           this.bpCompact = 'unknown';
           this.compactPreparing = true;
           try {
-            await this.switchBpCompact!(true);
-            if (expectedRevision !== this.revision) throw new Error('OBS 状态已变化。');
+            await this.switchBpCompact!(true, valid);
+            if (!valid() || expectedRevision !== this.revision) throw new Error('OBS 状态已变化。');
             this.bpCompact = 'on';
             this.bpCompactTarget = 'managed';
           } finally {
             this.compactPreparing = false;
           }
         }
-        if (expectedRevision !== this.revision || this.blockedReason(id) !== null) {
+        if (!valid() || expectedRevision !== this.revision || this.blockedReason(id) !== null) {
           if (restartedBp) this.bpSession.finishSceneExit();
           await restoreCurrent();
           return { ok: false as const, message: '播出状态已变化，请核对后重试。' };
@@ -394,7 +413,7 @@ export class ProgramSceneController {
       try {
         if (this.bpCompactTarget === 'managed') {
           if (!this.switchBpCompact) throw new Error('OBS 状态待确认。');
-          await this.switchBpCompact(false);
+          await this.switchBpCompact(false, valid);
         }
         this.bpCompact = 'off';
         this.bpSession.finishSceneExit();
@@ -411,9 +430,15 @@ export class ProgramSceneController {
       const nextRevision = randomUUID();
       let preparedBpRevision: string | undefined;
       const rollback = async () => {
+        if (!current()) {
+          if (this.bpCompact !== 'off' || this.compactPreparing) this.bpCompact = 'unknown';
+          if (preparedBpRevision && this.bpSession.get().revision === preparedBpRevision)
+            this.bpSession.finishSceneExit();
+          return;
+        }
         if (this.bpCompact === 'on') {
           try {
-            await this.switchBpCompact?.(false);
+            await this.switchBpCompact?.(false, current);
             this.bpCompact = 'off';
           } catch {
             this.bpCompact = 'unknown';
@@ -422,6 +447,7 @@ export class ProgramSceneController {
         // A Cut is not delayed by the obsolete automatic transition or its signal.
         await switchObs?.(this.active, {
           transition: programTransition(id, this.active, true),
+          valid: current,
         }).catch(() => undefined);
         if (preparedBpRevision && this.bpSession.get().revision === preparedBpRevision)
           this.bpSession.finishSceneExit();
@@ -467,13 +493,14 @@ export class ProgramSceneController {
             try {
               await switchObs('gameplay', options);
               this.compactPreparing = true;
-              await this.switchBpCompact(true);
+              await this.switchBpCompact(true, options.valid);
               this.bpCompact = 'on';
               this.bpCompactTarget = 'managed';
               compactTaken = true;
-            } catch {
+            } catch (error) {
+              if (!current()) throw error;
               try {
-                await this.switchBpCompact(false);
+                await this.switchBpCompact(false, current);
                 this.bpCompact = 'off';
               } catch {
                 this.bpCompact = 'unknown';
@@ -528,6 +555,7 @@ export function registerProgramSceneRoutes(
   options: {
     readonly originPolicy: LocalWebOriginPolicy;
     readonly controller: ProgramSceneController;
+    readonly canControl?: () => boolean;
   },
 ) {
   app.get('/local/v1/program-scenes', (_request, reply) =>
@@ -539,6 +567,8 @@ export function registerProgramSceneRoutes(
       !checkLocalWebOrigin(options.originPolicy, request.headers.origin).allowed
     )
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    if (options.canControl?.() === false)
+      return reply.code(409).send({ message: '制作正在收尾，请等待结果。' });
     const body = request.body as Record<string, unknown> | null;
     if (
       body?.action === 'warmup' &&
@@ -560,6 +590,8 @@ export function registerProgramSceneRoutes(
       !checkLocalWebOrigin(options.originPolicy, request.headers.origin).allowed
     )
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    if (options.canControl?.() === false)
+      return reply.code(409).send({ message: '制作正在收尾，请等待结果。' });
     const body = request.body as Record<string, unknown> | null;
     if (typeof body?.visible !== 'boolean' || typeof body.expectedRevision !== 'string')
       return reply.code(400).send({ error: 'invalid_bp_compact_command' });
@@ -578,6 +610,8 @@ export function registerProgramSceneRoutes(
       !checkLocalWebOrigin(options.originPolicy, request.headers.origin).allowed
     )
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    if (options.canControl?.() === false)
+      return reply.code(409).send({ message: '制作正在收尾，请等待结果。' });
     const body = request.body as Record<string, unknown> | null;
     const scene = programSceneIdSchema.safeParse(body?.sceneId);
     if (!scene.success || typeof body?.expectedRevision !== 'string')

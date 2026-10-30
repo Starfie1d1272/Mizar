@@ -4,6 +4,7 @@ import type {
   MapSummary,
 } from '@mizar/protocol/program-scenes';
 import type { ProgramSnapshot } from '@mizar/protocol/program';
+import { seriesWinnerSide } from '@mizar/core/projection';
 import { getProgramFixture } from './fixtures';
 import waitingSchedule from './fixtures/waiting-schedule.json';
 
@@ -76,9 +77,10 @@ export function presentationPreview(
         id: player.sourcePlayerId,
         name: player.displayName,
         avatarUrl: player.avatarUrl,
-        kills: player.matchStats?.kills ?? null,
-        assists: player.matchStats?.assists ?? null,
-        deaths: player.matchStats?.deaths ?? null,
+        kills: player.statistics.scoreboard.kills.value,
+        assists: player.statistics.scoreboard.assists.value,
+        deaths: player.statistics.scoreboard.deaths.value,
+        statistics: player.statistics,
       }));
   };
   const summary: MapSummary = {
@@ -126,10 +128,11 @@ export function presentationPreview(
         score: result ? `${match.scoreA} : ${match.scoreB}` : null,
       });
       return {
-        schemaVersion: 'mizar.program-presentation.v1',
+        schemaVersion: 'mizar.program-presentation.v2',
         packageId: 'builtin:mizar-default',
         match: p.match,
         series: p.series,
+        seriesWinner: seriesWinnerSide(p.series),
         halftime: null,
         completed: [],
         eventLogoUrl: waitingSchedule.competition.logoUrl,
@@ -140,10 +143,11 @@ export function presentationPreview(
     }
   }
   return {
-    schemaVersion: 'mizar.program-presentation.v1',
+    schemaVersion: 'mizar.program-presentation.v2',
     packageId: 'builtin:mizar-default',
     match: p.match,
     series: p.series,
+    seriesWinner: seriesWinnerSide(p.series),
     halftime: summary,
     completed: scene === 'halftime' ? [] : [summary],
     eventLogoUrl: variant === 'no-media' ? null : waitingSchedule.competition.logoUrl,

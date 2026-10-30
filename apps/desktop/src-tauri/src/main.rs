@@ -88,7 +88,6 @@ struct HostState {
     layout_dirty: Arc<AtomicBool>,
     running: Arc<AtomicBool>,
     live_window_lock: Mutex<()>,
-    tray_available: AtomicBool,
     fullscreen_scope: Mutex<workspace_shell::FullscreenScope>,
     window_group: Mutex<workspace_group::Group>,
     entry_focus: Mutex<workspace_focus::Entry>,
@@ -1299,6 +1298,7 @@ async fn finish_workspace(
         command_log.with_task(native_task_id.as_deref(), native_operation_id.as_deref(), native_trigger.as_deref(), || {
         let feedback = host.state::<production_exit::WorkspaceExit>();
         let log = host.state::<DesktopLog>();
+        production_exit::set_exit_intent(&log, "begin-exit")?;
         let managed = host.state::<Mutex<managed_cs2::ManagedCs2>>();
         let mut cs2 = log.step("workspace_exit_lock", || managed.lock().map_err(|error| command_log.preserve_error("finish_workspace", native_operation_id.as_deref(), &error, "CS2 配置状态不可用。")))?;
         let activity = host.state::<cs2_activity::Activity>();
@@ -1363,6 +1363,11 @@ async fn finish_workspace(
         );
         Err("退出任务中断，收尾结果待确认。请重试退出；再次失败时导出诊断。".into())
     });
+    let intent_host = app.clone();
+    let intent_result = tauri::async_runtime::spawn_blocking(move || {
+        production_exit::set_exit_intent(&intent_host.state::<DesktopLog>(), "cancel-exit")
+    }).await.unwrap_or_else(|_| Err("制作退出状态未能恢复，请重试。".into()));
+    let result = production_exit::cleanup_results(result, intent_result);
     if let Err(error) = &result {
         app.state::<DesktopLog>().event(
             "production_finish",
@@ -3513,7 +3518,6 @@ fn run_desktop(
         layout_dirty: Arc::new(AtomicBool::new(false)),
         running: running.clone(),
         live_window_lock: Mutex::new(()),
-        tray_available: AtomicBool::new(false),
         fullscreen_scope: Mutex::new(workspace_shell::FullscreenScope::default()),
         window_group: Mutex::new(workspace_group::Group::default()),
         entry_focus: Mutex::new(workspace_focus::Entry::default()),
@@ -3675,13 +3679,9 @@ fn run_desktop(
                     .build(handle)?;
                 Ok(())
             });
-            handle
-                .state::<HostState>()
-                .tray_available
-                .store(tray.is_ok(), Ordering::Relaxed);
             if tray.is_err() {
                 if let Some(main) = handle.get_webview_window("main") {
-                    let _ = main.set_title("Mizar · 托盘不可用，关闭主窗口将退出");
+                    let _ = main.set_title("Mizar · 托盘不可用");
                 }
             }
             setup_log.event("setup_complete", "success", None);
@@ -3913,28 +3913,7 @@ fn run_desktop(
                 }
                 match window.label() {
                     "tool-review" => { let _ = window.destroy(); }
-                    "workspace-left" | "workspace-dock" => {
-                        let _ = hide_workspace(window.app_handle());
-                        if let Some(dock) = window.app_handle().get_webview_window("workspace-dock")
-                        {
-                            let _ = dock.eval("window.dispatchEvent(new Event('mizar-hide'))");
-                        }
-                        if !window
-                            .state::<HostState>()
-                            .tray_available
-                            .load(Ordering::Relaxed)
-                        {
-                            let _ = open_main(window.app_handle().clone(), None, None);
-                        }
-                    }
-                    "main"
-                        if !window
-                            .state::<HostState>()
-                            .tray_available
-                            .load(Ordering::Relaxed) =>
-                    {
-                        window.app_handle().exit(0)
-                    }
+                    "main" | "workspace-left" | "workspace-dock" => window.app_handle().exit(0),
                     _ => {
                         let _ = window.hide();
                         if let Some(webview) =
@@ -3992,6 +3971,15 @@ fn run_desktop(
             tauri::async_runtime::spawn(async move {
                 let cleanup_host = host.clone();
                 let result = tauri::async_runtime::spawn_blocking(move || {
+                    if !cleanup_host
+                        .state::<production_exit::VerifiedStop>()
+                        .complete()
+                    {
+                        production_exit::set_exit_intent(
+                            &cleanup_host.state::<DesktopLog>(),
+                            "begin-exit",
+                        )?;
+                    }
                     // The gate is already closed; wait for an accepted launch,
                     // then keep its lock through safe production and game cleanup.
                     let state = cleanup_host.state::<Mutex<managed_cs2::ManagedCs2>>();
@@ -4041,6 +4029,16 @@ fn run_desktop(
                 .await
                 .unwrap_or_else(|_| Err("退出收尾未完成，请重试。".into()));
                 if let Err(error) = result {
+                    if !host.state::<production_exit::VerifiedStop>().complete() {
+                        let intent_host = host.clone();
+                        let _ = tauri::async_runtime::spawn_blocking(move || {
+                            production_exit::set_exit_intent(
+                                &intent_host.state::<DesktopLog>(),
+                                "cancel-exit",
+                            )
+                        })
+                        .await;
+                    }
                     updates::cancel(&host);
                     host.state::<DesktopLog>()
                         .event("cs2_exit_recovery", "failure", Some(&error));

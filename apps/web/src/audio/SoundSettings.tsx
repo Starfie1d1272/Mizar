@@ -34,7 +34,7 @@ export function SoundSettings() {
   return (
     <div className="sound-settings">
       {outputActive && findings.length > 0 && (
-        <StatusBanner tone="info">正在直播或录制，自动配置暂缓；停止输出后继续处理。</StatusBanner>
+        <StatusBanner tone="info">正在直播或录制，停止输出后可重新配置。</StatusBanner>
       )}
       <Mixer />
       <nav className="obs-settings-tabs" aria-label="声音设置分区">
