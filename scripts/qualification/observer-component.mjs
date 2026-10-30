@@ -31,6 +31,7 @@ export async function stageReleasedObserver(resourcesDirectory, temporaryDirecto
   const archive = join(temporaryDirectory, pin.asset);
   const response = await globalThis.fetch(
     `https://github.com/Starfie1d1272/cs2-headless-observer/releases/download/v${pin.version}/${pin.asset}`,
+    { signal: globalThis.AbortSignal.timeout(180000) },
   );
   if (!response.ok) throw new Error(`observer_download_http_${response.status}`);
   const bytes = Buffer.from(await response.arrayBuffer());

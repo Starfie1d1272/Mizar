@@ -25,34 +25,296 @@ concurrency:
   group: mizar-box-stable
   cancel-in-progress: false
 jobs:
-  sync:
+  prepare:
     if: github.repository == 'Starfie1d1272/Mizar' && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && !startsWith(github.event.workflow_run.display_title, 'Stage draft ') && github.event.workflow_run.path == '.github/workflows/release-promotion.yml' && contains(fromJSON('["workflow_dispatch","workflow_run"]'), github.event.workflow_run.event)))
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 10
+    outputs:
+      sync: ${{ steps.read_release.outputs.sync }}
+      prerelease: ${{ steps.read_release.outputs.prerelease || steps.special.outputs.prerelease }}
+      plan_sha256: ${{ steps.plan.outputs.plan_sha256 }}
+      plan_artifact: ${{ steps.plan_artifact.outputs.artifact-id }}
+      source_sha: ${{ steps.source.outputs.sha }}
+      recovery: ${{ steps.read_release.outputs.recovery_started_at || steps.plan.outputs.recovery_started_at || steps.special.outputs.recovery_started_at }}
+    env:
+      NODE_OPTIONS: --network-family-autoselection-attempt-timeout=2000
+      BOX_UPLOAD_TRANSPORT: ${{ inputs.transport || 'curl' }}
+      BOX_SYNC_MODE: ${{ inputs.mode || 'sync' }}
+      RELEASE_TAG: ${{ inputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           persist-credentials: false
-      - name: 同步与校验云盘
-        id: mirror
+      - name: 固定本次阶段工具源码
+        id: source
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: 探测或只读核验入口
+        if: ${{ env.BOX_SYNC_MODE != 'sync' }}
+        id: special
         env:
-          # 跨境往返可能超过 Node 默认的 250 毫秒地址选择等待时间。
-          NODE_OPTIONS: --network-family-autoselection-attempt-timeout=2000
           GH_TOKEN: ${{ github.token }}
           MIZAR_BOX_REPO_TOKEN: ${{ secrets.MIZAR_BOX_REPO_TOKEN }}
-          RELEASE_TAG: ${{ inputs.tag }}
-          BOX_UPLOAD_TRANSPORT: ${{ inputs.transport || 'curl' }}
-          BOX_SYNC_MODE: ${{ inputs.mode || 'sync' }}
         run: node scripts/qualification/box-sync.mjs
-      - name: Record complete qualification trigger through Box verification timing
-        if: always() && (steps.mirror.outputs.prerelease == 'false' || steps.mirror.outcome == 'failure')
+      - name: 读取并核对 Release 与标签
+        if: ${{ env.BOX_SYNC_MODE == 'sync' }}
+        id: read_release
         env:
           GH_TOKEN: ${{ github.token }}
-          BOX_OUTCOME: ${{ steps.mirror.outcome }}
-          BOX_RECOVERY_STARTED_AT: ${{ steps.mirror.outputs.recovery_started_at }}
-        run: node scripts/qualification/release-timings.mjs box release-timings.json
-      - if: always() && (steps.mirror.outputs.prerelease == 'false' || steps.mirror.outcome == 'failure')
+        run: node scripts/qualification/box-phases.mjs read-release "$RUNNER_TEMP/box-release.json"
+      - name: 下载并验证签名元数据
+        if: ${{ steps.read_release.outputs.sync == 'true' }}
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/qualification/box-phases.mjs prepare "$RUNNER_TEMP/box-plan" "$RUNNER_TEMP/box-release.json"
+      - name: 保存本次资产计划
+        if: ${{ steps.read_release.outputs.sync == 'true' }}
+        id: plan_artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: box-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/box-plan/*
+          retention-days: 7
+          if-no-files-found: error
+  runtime:
+    needs: prepare
+    if: ${{ needs.prepare.outputs.sync == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      receipt: ${{ steps.receipt.outputs.artifact-id }}
+      recovery: ${{ steps.download_metadata.outputs.recovery_started_at || steps.download.outputs.recovery_started_at || steps.transfer_metadata.outputs.recovery_started_at || steps.transfer.outputs.recovery_started_at || steps.verify_metadata.outputs.recovery_started_at || steps.verify.outputs.recovery_started_at }}
+    env:
+      NODE_OPTIONS: --network-family-autoselection-attempt-timeout=2000
+      BOX_PLAN_SHA256: ${{ needs.prepare.outputs.plan_sha256 }}
+      BOX_UPLOAD_TRANSPORT: ${{ inputs.transport || 'curl' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+          persist-credentials: false
+      - name: 读取已认证资产计划
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          artifact-ids: ${{ needs.prepare.outputs.plan_artifact }}
+          path: ${{ runner.temp }}/box-plan
+      - name: 核对机器元数据原字节
+        id: download_metadata
+        run: node scripts/qualification/box-phases.mjs download "$RUNNER_TEMP/box-plan" runtime metadata
+      - name: 下载并验证 Core 安装包来源
+        id: download
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/qualification/box-phases.mjs download "$RUNNER_TEMP/box-plan" runtime core
+      - name: 上传并核对机器元数据
+        id: transfer_metadata
+        env:
+          MIZAR_BOX_REPO_TOKEN: ${{ secrets.MIZAR_BOX_REPO_TOKEN }}
+        run: node scripts/qualification/box-phases.mjs transfer "$RUNNER_TEMP/box-plan" runtime metadata
+      - name: 上传并分块核对 Core 安装包
+        id: transfer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MIZAR_BOX_REPO_TOKEN: ${{ secrets.MIZAR_BOX_REPO_TOKEN }}
+        run: node scripts/qualification/box-phases.mjs transfer "$RUNNER_TEMP/box-plan" runtime core
+      - name: 完整回读机器元数据
+        id: verify_metadata
+        env:
+          MIZAR_BOX_REPO_TOKEN: ${{ secrets.MIZAR_BOX_REPO_TOKEN }}
+        run: node scripts/qualification/box-phases.mjs verify "$RUNNER_TEMP/box-plan" runtime metadata
+      - name: 完整回读 Core 安装包并生成回执
+        id: verify
+        env:
+          MIZAR_BOX_REPO_TOKEN: ${{ secrets.MIZAR_BOX_REPO_TOKEN }}
+        run: node scripts/qualification/box-phases.mjs verify "$RUNNER_TEMP/box-plan" runtime core
+      - name: 保存 Core 与机器元数据阶段回执
+        id: receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: box-receipt-runtime-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/box-plan/receipt/runtime.json
+          retention-days: 7
+          if-no-files-found: error
+  resources:
+    needs: prepare
+    if: ${{ needs.prepare.outputs.sync == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      receipt: ${{ steps.receipt.outputs.artifact-id }}
+      recovery: ${{ steps.download.outputs.recovery_started_at || steps.transfer.outputs.recovery_started_at || steps.verify.outputs.recovery_started_at }}
+    env:
+      NODE_OPTIONS: --network-family-autoselection-attempt-timeout=2000
+      BOX_PLAN_SHA256: ${{ needs.prepare.outputs.plan_sha256 }}
+      BOX_UPLOAD_TRANSPORT: ${{ inputs.transport || 'curl' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+          persist-credentials: false
+      - name: 读取已认证资产计划
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          artifact-ids: ${{ needs.prepare.outputs.plan_artifact }}
+          path: ${{ runner.temp }}/box-plan
+      - name: 下载并验证独立资源原始资产
+        id: download
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/qualification/box-phases.mjs download "$RUNNER_TEMP/box-plan" resources
+      - name: 上传或复制并核对资源归档
+        id: transfer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MIZAR_BOX_REPO_TOKEN: ${{ secrets.MIZAR_BOX_REPO_TOKEN }}
+        run: node scripts/qualification/box-phases.mjs transfer "$RUNNER_TEMP/box-plan" resources
+      - name: 完整回读核对独立资源
+        id: verify
+        env:
+          MIZAR_BOX_REPO_TOKEN: ${{ secrets.MIZAR_BOX_REPO_TOKEN }}
+        run: node scripts/qualification/box-phases.mjs verify "$RUNNER_TEMP/box-plan" resources
+      - name: 保存独立资源阶段回执
+        id: receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: box-receipt-resources-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/box-plan/receipt/resources.json
+          retention-days: 7
+          if-no-files-found: error
+  downloads:
+    needs: prepare
+    if: ${{ needs.prepare.outputs.sync == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      receipt: ${{ steps.receipt.outputs.artifact-id }}
+      recovery: ${{ steps.download.outputs.recovery_started_at || steps.transfer.outputs.recovery_started_at || steps.verify.outputs.recovery_started_at }}
+    env:
+      NODE_OPTIONS: --network-family-autoselection-attempt-timeout=2000
+      BOX_PLAN_SHA256: ${{ needs.prepare.outputs.plan_sha256 }}
+      BOX_UPLOAD_TRANSPORT: ${{ inputs.transport || 'curl' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+          persist-credentials: false
+      - name: 读取已认证资产计划
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          artifact-ids: ${{ needs.prepare.outputs.plan_artifact }}
+          path: ${{ runner.temp }}/box-plan
+      - name: 下载并验证用户下载入口原始资产
+        id: download
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/qualification/box-phases.mjs download "$RUNNER_TEMP/box-plan" downloads
+      - name: 上传并整理轻量安装器
+        id: transfer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MIZAR_BOX_REPO_TOKEN: ${{ secrets.MIZAR_BOX_REPO_TOKEN }}
+        run: node scripts/qualification/box-phases.mjs transfer "$RUNNER_TEMP/box-plan" downloads
+      - name: 完整回读核对用户下载入口
+        id: verify
+        env:
+          MIZAR_BOX_REPO_TOKEN: ${{ secrets.MIZAR_BOX_REPO_TOKEN }}
+        run: node scripts/qualification/box-phases.mjs verify "$RUNNER_TEMP/box-plan" downloads
+      - name: 保存用户下载入口阶段回执
+        id: receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: box-receipt-downloads-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/box-plan/receipt/downloads.json
+          retention-days: 7
+          if-no-files-found: error
+  finalize:
+    needs: [prepare, runtime, resources, downloads]
+    if: ${{ always() && (needs.prepare.outputs.sync == 'true' || needs.prepare.result == 'failure') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      NODE_OPTIONS: --network-family-autoselection-attempt-timeout=2000
+      BOX_PLAN_SHA256: ${{ needs.prepare.outputs.plan_sha256 }}
+      BOX_UPLOAD_TRANSPORT: ${{ inputs.transport || 'curl' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha || 'main' }}
+          persist-credentials: false
+      - name: 汇总本次恢复起点
+        if: always()
+        env:
+          PREPARE_RECOVERY: ${{ needs.prepare.outputs.recovery }}
+          RUNTIME_RECOVERY: ${{ needs.runtime.outputs.recovery }}
+          RESOURCE_RECOVERY: ${{ needs.resources.outputs.recovery }}
+          DOWNLOAD_RECOVERY: ${{ needs.downloads.outputs.recovery }}
+        run: |
+          earliest=""
+          for value in "$PREPARE_RECOVERY" "$RUNTIME_RECOVERY" "$RESOURCE_RECOVERY" "$DOWNLOAD_RECOVERY"; do
+            if [[ -n "$value" && ( -z "$earliest" || "$value" < "$earliest" ) ]]; then earliest="$value"; fi
+          done
+          echo "BOX_RECOVERY_STARTED_AT=$earliest" >> "$GITHUB_ENV"
+      - name: 读取已认证资产计划
+        if: ${{ needs.prepare.result == 'success' && needs.runtime.result == 'success' && needs.resources.result == 'success' && needs.downloads.result == 'success' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          artifact-ids: ${{ needs.prepare.outputs.plan_artifact }}
+          path: ${{ runner.temp }}/box-plan
+      - name: 读取 runtime 阶段回执
+        if: ${{ needs.prepare.result == 'success' && needs.runtime.result == 'success' && needs.resources.result == 'success' && needs.downloads.result == 'success' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          artifact-ids: ${{ needs.runtime.outputs.receipt }}
+          path: ${{ runner.temp }}/box-receipts
+      - name: 读取 resources 阶段回执
+        if: ${{ needs.prepare.result == 'success' && needs.runtime.result == 'success' && needs.resources.result == 'success' && needs.downloads.result == 'success' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          artifact-ids: ${{ needs.resources.outputs.receipt }}
+          path: ${{ runner.temp }}/box-receipts
+      - name: 读取 downloads 阶段回执
+        if: ${{ needs.prepare.result == 'success' && needs.runtime.result == 'success' && needs.resources.result == 'success' && needs.downloads.result == 'success' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          artifact-ids: ${{ needs.downloads.outputs.receipt }}
+          path: ${{ runner.temp }}/box-receipts
+      - name: 复核全部回执、匿名入口和远端原字节
+        id: final_check
+        if: ${{ needs.prepare.result == 'success' && needs.runtime.result == 'success' && needs.resources.result == 'success' && needs.downloads.result == 'success' }}
+        env:
+          MIZAR_BOX_REPO_TOKEN: ${{ secrets.MIZAR_BOX_REPO_TOKEN }}
+        run: node scripts/qualification/box-phases.mjs final-check "$RUNNER_TEMP/box-plan" "$RUNNER_TEMP/box-receipts"
+      - name: 发布更新索引
+        id: index_update
+        if: ${{ needs.prepare.result == 'success' && needs.runtime.result == 'success' && needs.resources.result == 'success' && needs.downloads.result == 'success' }}
+        env:
+          MIZAR_BOX_REPO_TOKEN: ${{ secrets.MIZAR_BOX_REPO_TOKEN }}
+        run: node scripts/qualification/box-phases.mjs index-update "$RUNNER_TEMP/box-plan" "$RUNNER_TEMP/box-receipts"
+      - name: 完整回读更新索引
+        id: index_verify
+        if: ${{ needs.prepare.result == 'success' && needs.runtime.result == 'success' && needs.resources.result == 'success' && needs.downloads.result == 'success' }}
+        env:
+          MIZAR_BOX_REPO_TOKEN: ${{ secrets.MIZAR_BOX_REPO_TOKEN }}
+        run: node scripts/qualification/box-phases.mjs index-verify "$RUNNER_TEMP/box-plan" "$RUNNER_TEMP/box-receipts"
+      - name: 匿名完整下载用户入口
+        id: anonymous
+        if: ${{ needs.prepare.result == 'success' && needs.runtime.result == 'success' && needs.resources.result == 'success' && needs.downloads.result == 'success' }}
+        env:
+          MIZAR_BOX_REPO_TOKEN: ${{ secrets.MIZAR_BOX_REPO_TOKEN }}
+        run: node scripts/qualification/box-phases.mjs anonymous "$RUNNER_TEMP/box-plan" "$RUNNER_TEMP/box-receipts"
+      - name: Record complete qualification trigger through Box verification timing
+        if: always() && (needs.prepare.outputs.prerelease == 'false' || needs.prepare.result == 'failure')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BOX_OUTCOME: ${{ needs.prepare.result == 'success' && needs.runtime.result == 'success' && needs.resources.result == 'success' && needs.downloads.result == 'success' && steps.final_check.outcome == 'success' && steps.index_update.outcome == 'success' && steps.index_verify.outcome == 'success' && steps.anonymous.outcome == 'success' && 'success' || 'failure' }}
+        run: |
+          for value in "${{ steps.final_check.outputs.recovery_started_at }}" "${{ steps.index_update.outputs.recovery_started_at }}" "${{ steps.index_verify.outputs.recovery_started_at }}" "${{ steps.anonymous.outputs.recovery_started_at }}"; do
+            if [[ -n "$value" && ( -z "$BOX_RECOVERY_STARTED_AT" || "$value" < "$BOX_RECOVERY_STARTED_AT" ) ]]; then BOX_RECOVERY_STARTED_AT="$value"; fi
+          done
+          export BOX_RECOVERY_STARTED_AT
+          node scripts/qualification/release-timings.mjs box release-timings.json
+      - if: always() && (needs.prepare.outputs.prerelease == 'false' || needs.prepare.result == 'failure')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-timings-${{ github.run_id }}-${{ github.run_attempt }}

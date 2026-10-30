@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { setTimeout as sleep } from 'node:timers/promises';
+import timers from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { Buffer, Blob } from 'node:buffer';
 import { URL } from 'node:url';
@@ -32,7 +32,7 @@ const bootstrapPattern = /^Mizar-v(\d+\.\d+\.\d+)-Windows-x64-WebInstaller\.exe$
 const setupPattern = /^Mizar-v(\d+\.\d+\.\d+)-Windows-x64-Setup\.exe$/;
 const shaPattern = /^[a-f0-9]{64}$/;
 export const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
-class MirrorError extends Error {
+export class MirrorError extends Error {
   constructor(message, httpStatus) {
     super(message);
     this.httpStatus = httpStatus;
@@ -41,7 +41,7 @@ class MirrorError extends Error {
 const requireValue = (ok, message) => {
   if (!ok) throw new MirrorError(message);
 };
-const older = (a, b) => {
+export const older = (a, b) => {
   const x = a.split('.').map(Number),
     y = b.split('.').map(Number);
   for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] < y[i];
@@ -182,29 +182,45 @@ function directoryCategory(path) {
     ? category
     : 'root';
 }
-async function boxStage(stage, action) {
+export async function boxStage(stage, action, deadlineMs) {
   const started = globalThis.performance.now();
-  console.log(`Box ${stage} 开始`);
+  const deadline = deadlineMs === undefined ? 'unknown' : `${deadlineMs}ms`;
+  const heartbeat = globalThis.setInterval(() => {
+    const elapsed = Math.round(globalThis.performance.now() - started);
+    const remaining =
+      deadlineMs === undefined ? 'unknown' : `${Math.max(0, deadlineMs - elapsed)}ms`;
+    console.log(
+      `Box ${stage} 运行中 elapsed=${elapsed}ms deadline=${deadline} remaining=${remaining} bytes=unknown`,
+    );
+  }, 30000);
+  heartbeat.unref();
+  console.log(`Box ${stage} 开始 ${new Date().toISOString()} deadline=${deadline}`);
   try {
     const result = await action();
-    console.log(`Box ${stage} 完成（${Math.round(globalThis.performance.now() - started)}ms）`);
+    console.log(
+      `Box ${stage} 完成 ${new Date().toISOString()}（${Math.round(globalThis.performance.now() - started)}ms）`,
+    );
     return result;
   } catch (error) {
     const elapsed = Math.round(globalThis.performance.now() - started);
-    console.log(`Box ${stage} 失败（${elapsed}ms）`);
+    console.log(`Box ${stage} 失败 ${new Date().toISOString()}（${elapsed}ms）`);
     if (error instanceof MirrorError)
       throw Object.assign(
         new MirrorError(`Box ${stage}（${elapsed}ms）：${error.message}`, error.httpStatus),
         {
           uploadOutcomeUnknown: error.uploadOutcomeUnknown,
           retrySafeUpload: error.retrySafeUpload,
+          uploadTimedOut: error.uploadTimedOut,
           retryableRead: error.retryableRead,
+          retryAfter: error.retryAfter,
         },
       );
     const code = safeNetworkCode(error);
     if (code !== 'network')
       throw new MirrorError(`Box ${stage}（${elapsed}ms）：网络请求失败（${code}）；保留现有文件`);
     throw error;
+  } finally {
+    globalThis.clearInterval(heartbeat);
   }
 }
 function retryAfterMs(value) {
@@ -213,17 +229,19 @@ function retryAfterMs(value) {
   const date = Date.parse(value);
   return Number.isFinite(date) ? Math.max(0, date - Date.now()) : 0;
 }
-let uploadRecoveryStartedAt;
+let recoveryStartedAt;
+export const getBoxRecoveryStartedAt = () => recoveryStartedAt;
 
-function recordUploadRecovery() {
-  uploadRecoveryStartedAt ??= new Date().toISOString();
+function recordRecovery() {
+  recoveryStartedAt ??= new Date().toISOString();
 }
 
 async function retryWait(attempt, reason, deadline, retryAfter, signal) {
+  recordRecovery();
   const delay = Math.max(Math.ceil(Math.random() * 1000 * 2 ** attempt), retryAfterMs(retryAfter));
   requireValue(delay < deadline - Date.now(), '重试等待超出本次恢复预算；保留现有文件');
   console.log(`Box 暂态失败（${reason}），${delay}ms 后重试 ${attempt + 1}/2`);
-  await sleep(delay, undefined, { signal });
+  await timers.setTimeout(delay, undefined, { signal });
 }
 
 // An accepted write can become visible after the connection has failed. Observe
@@ -238,10 +256,11 @@ async function waitForWrittenFile(
   allowPrevious = false,
   delayed = true,
 ) {
+  recordRecovery();
   const delays = delayed ? reconciliationDelays : [0];
   const recoverySignal = AbortSignal.any([AbortSignal.timeout(90000), ...(signal ? [signal] : [])]);
   for (const delay of delays) {
-    if (delay) await sleep(delay, undefined, { signal: recoverySignal });
+    if (delay) await timers.setTimeout(delay, undefined, { signal: recoverySignal });
     recoverySignal.throwIfAborted();
     const matches = (await box.list(folder, recoverySignal)).filter((entry) => entry.name === name);
     requireValue(
@@ -255,7 +274,14 @@ async function waitForWrittenFile(
   }
   return false;
 }
-async function checkedFetch(url, options = {}, timeout = 120000, transport = fetch, consume) {
+async function checkedFetch(
+  url,
+  options = {},
+  timeout = 120000,
+  transport = fetch,
+  consume,
+  maxAttempts = 3,
+) {
   // Error text and response bodies may contain temporary upload URLs or credentials.
   const readOnlyBox =
     ['GET', 'HEAD'].includes((options.method ?? 'GET').toUpperCase()) &&
@@ -278,7 +304,7 @@ async function checkedFetch(url, options = {}, timeout = 120000, transport = fet
       if (
         (readOnlyBox || (new URL(url).origin === origin && error?.retrySafeMutation === true)) &&
         (networkCodes.has(code) || (code === 'timeout' && signal.aborted)) &&
-        attempt < 2 &&
+        attempt + 1 < maxAttempts &&
         !options.signal?.aborted
       ) {
         await retryWait(attempt, code, deadline, undefined, options.signal);
@@ -303,7 +329,7 @@ async function checkedFetch(url, options = {}, timeout = 120000, transport = fet
     }
     if (!response.ok) {
       await response.body?.cancel().catch(() => undefined);
-      if (readOnlyBox && temporaryStatuses.has(response.status) && attempt < 2) {
+      if (readOnlyBox && temporaryStatuses.has(response.status) && attempt + 1 < maxAttempts) {
         await retryWait(
           attempt,
           `HTTP ${response.status}`,
@@ -318,11 +344,25 @@ async function checkedFetch(url, options = {}, timeout = 120000, transport = fet
           `远端请求失败（HTTP ${response.status}，已尝试${attempt + 1}次）；保留现有文件`,
           response.status,
         ),
-        { retryableRead: readOnlyBox && temporaryStatuses.has(response.status) },
+        {
+          retryableRead: readOnlyBox && temporaryStatuses.has(response.status),
+          retryAfter: response.headers.get('retry-after'),
+        },
       );
     }
     return response;
   }
+}
+
+async function boundedJson(response, maximum) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of response.body) {
+    size += chunk.length;
+    requireValue(size <= maximum, 'JSON 响应字节超限');
+    chunks.push(chunk);
+  }
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
 
 export class BoxClient {
@@ -338,7 +378,7 @@ export class BoxClient {
     this.apiTransport = apiTransport;
     this.downloadTransport = downloadTransport;
   }
-  async api(endpoint, path, method = 'GET', body, signal) {
+  async api(endpoint, path, method = 'GET', body, signal, maxAttempts = 3) {
     const safeEndpoint = [
       'repo-info',
       'dir',
@@ -366,6 +406,8 @@ export class BoxClient {
         },
         20000,
         this.apiTransport,
+        undefined,
+        maxAttempts,
       );
       try {
         return await response.json();
@@ -405,94 +447,135 @@ export class BoxClient {
     return url;
   }
   async hash(path, signal) {
-    return boxStage(`回读/${directoryCategory(path)}`, async () => {
-      const url = this.temporaryUrl(
-        await this.api('download-link', path, 'GET', undefined, signal),
-      );
-      let idleController, idleTimer;
-      const resetIdle = () => {
-        globalThis.clearTimeout(idleTimer);
-        idleTimer = globalThis.setTimeout(() => idleController.abort(), 60000);
-      };
-      const stopIdle = () => globalThis.clearTimeout(idleTimer);
-      return checkedFetch(
-        url,
-        { redirect: 'error', signal },
-        180000,
-        async (address, options) => {
-          idleController = new globalThis.AbortController();
-          resetIdle();
-          try {
-            const response = await this.downloadTransport(address, {
-              ...options,
-              signal: AbortSignal.any([options.signal, idleController.signal]),
-            });
-            if (!response.ok) stopIdle();
-            return response;
-          } catch (error) {
-            stopIdle();
-            if (idleController.signal.aborted && !options.signal.aborted)
-              throw Object.assign(new Error('Box download stalled'), {
-                code: 'UND_ERR_BODY_TIMEOUT',
-              });
-            throw error;
-          }
-        },
-        async (response) => {
-          try {
-            const hash = createHash('sha256');
-            let size = 0;
-            for await (const chunk of response.body) {
-              resetIdle();
-              hash.update(chunk);
-              size += chunk.length;
-            }
-            return { sha256: hash.digest('hex'), size };
-          } catch (error) {
-            if (idleController.signal.aborted && !signal?.aborted)
-              throw Object.assign(new Error('Box download stalled'), {
-                code: 'UND_ERR_BODY_TIMEOUT',
-              });
-            throw error;
-          } finally {
-            stopIdle();
-          }
-        },
-      );
-    });
+    const deadline = Date.now() + 570000;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      signal?.throwIfAborted();
+      const requestSignal = AbortSignal.any([
+        AbortSignal.timeout(180000),
+        ...(signal ? [signal] : []),
+      ]);
+      try {
+        return await boxStage(
+          `回读/${directoryCategory(path)}/${path.split('/').at(-1)}/尝试${attempt + 1}`,
+          async () => {
+            const url = this.temporaryUrl(
+              await this.api('download-link', path, 'GET', undefined, requestSignal, 1),
+            );
+            let idleController, idleTimer;
+            const resetIdle = () => {
+              globalThis.clearTimeout(idleTimer);
+              idleTimer = globalThis.setTimeout(() => idleController.abort(), 60000);
+            };
+            const stopIdle = () => globalThis.clearTimeout(idleTimer);
+            return checkedFetch(
+              url,
+              { redirect: 'error', signal: requestSignal },
+              180000,
+              async (address, options) => {
+                idleController = new globalThis.AbortController();
+                resetIdle();
+                try {
+                  const response = await this.downloadTransport(address, {
+                    ...options,
+                    signal: AbortSignal.any([options.signal, idleController.signal]),
+                  });
+                  if (!response.ok) stopIdle();
+                  return response;
+                } catch (error) {
+                  stopIdle();
+                  if (idleController.signal.aborted && !options.signal.aborted)
+                    throw Object.assign(new Error('Box download stalled'), {
+                      code: 'UND_ERR_BODY_TIMEOUT',
+                    });
+                  throw error;
+                }
+              },
+              async (response) => {
+                try {
+                  const hash = createHash('sha256');
+                  let size = 0;
+                  for await (const chunk of response.body) {
+                    resetIdle();
+                    hash.update(chunk);
+                    size += chunk.length;
+                  }
+                  return { sha256: hash.digest('hex'), size };
+                } catch (error) {
+                  if (idleController.signal.aborted && !requestSignal.aborted)
+                    throw Object.assign(new Error('Box download stalled'), {
+                      code: 'UND_ERR_BODY_TIMEOUT',
+                    });
+                  throw error;
+                } finally {
+                  stopIdle();
+                }
+              },
+              1,
+            );
+          },
+          180000,
+        );
+      } catch (error) {
+        if ((!error.retryableRead && !requestSignal.aborted) || attempt === 2 || signal?.aborted)
+          throw error;
+        await retryWait(attempt, '完整回读失败', deadline, error.retryAfter, signal);
+      }
+    }
   }
+
   async upload(path, name, bytes, replace = false) {
-    return boxStage(`上传/${directoryCategory(path)}`, async () => {
+    return boxStage(`上传/${directoryCategory(path)}/${name}`, async () => {
       const deadline = Date.now() + 900000;
       const signal = AbortSignal.timeout(900000);
       for (let attempt = 0; attempt < 3; attempt++) {
         signal.throwIfAborted();
-        const url = this.temporaryUrl(
-          await this.api('upload-link', path, 'GET', undefined, signal),
-        );
-        url.searchParams.set('ret-json', '1');
-        const form = new FormData();
-        form.set('parent_dir', path);
-        form.set('replace', replace ? '1' : '0');
-        form.set('file', new Blob([bytes]), name);
+        const attemptDeadline = Date.now() + Math.min(180000, Math.max(1, deadline - Date.now()));
+        const attemptSignal = AbortSignal.any([
+          signal,
+          AbortSignal.timeout(Math.max(1, attemptDeadline - Date.now())),
+        ]);
+        let startedUpload = false;
         try {
-          const result = await (
-            await checkedFetch(
-              url,
-              { method: 'POST', body: form, redirect: 'error', signal },
-              Math.min(180000, Math.max(1, deadline - Date.now())),
-              this.uploadTransport,
-            )
-          ).json();
+          const url = this.temporaryUrl(
+            await this.api('upload-link', path, 'GET', undefined, attemptSignal, 1),
+          );
+          url.searchParams.set('ret-json', '1');
+          const form = new FormData();
+          form.set('parent_dir', path);
+          form.set('replace', replace ? '1' : '0');
+          form.set('file', new Blob([bytes]), name);
+          startedUpload = true;
+          const result = await boxStage(
+            `上传尝试/${name}/${attempt + 1}`,
+            async () =>
+              await checkedFetch(
+                url,
+                { method: 'POST', body: form, redirect: 'error', signal: attemptSignal },
+                Math.max(1, attemptDeadline - Date.now()),
+                this.uploadTransport,
+                (response) => response.json(),
+                1,
+              ),
+            Math.max(1, attemptDeadline - Date.now()),
+          );
           requireValue(
             Array.isArray(result) && result.length === 1 && result[0].name === name,
             '上传回执不一致；检查目录后重试',
           );
           return;
         } catch (error) {
+          if (
+            !startedUpload &&
+            (error.retryableRead || attemptSignal.aborted) &&
+            !signal.aborted &&
+            attempt < 2
+          ) {
+            await retryWait(attempt, '上传链接读取失败', deadline, error.retryAfter, signal);
+            continue;
+          }
           if (!error.uploadOutcomeUnknown || error.httpStatus === 401 || error.httpStatus === 403)
             throw error;
-          recordUploadRecovery();
+          recordRecovery();
           // Reconcile before replay. replace=0 prevents overwriting a late commit;
           // a conflicting file is never replaced.
           let confirmed;
@@ -518,9 +601,10 @@ export class BoxClient {
             console.log('Box 上传回执丢失，远端原字节已核验，跳过重传');
             return;
           }
-          if ((!error.retrySafeUpload && !error.uploadTimedOut) || replace || attempt === 2)
-            throw error;
-          recordUploadRecovery();
+          // Absence after a timeout does not prove that a late server-side write
+          // cannot still appear. Only explicit zero-byte evidence permits replay.
+          if (!error.retrySafeUpload || replace || attempt === 2) throw error;
+          recordRecovery();
           await retryWait(attempt, '上传后目标缺失', deadline, undefined, signal);
         }
       }
@@ -547,28 +631,29 @@ export class BoxClient {
         const started = Date.now();
         const attemptTimeout = Math.min(180000, Math.max(1, deadline - started));
         const attemptSignal = AbortSignal.any([signal, AbortSignal.timeout(attemptTimeout)]);
+        if (process.env.GITHUB_ACTIONS)
+          console.log(`::group::Box ${name} chunk ${start}-${end - 1} attempt ${attempt + 1}`);
         try {
-          console.log(
-            `Box 分块 ${name} ${start}-${end - 1} 尝试 ${attempt + 1} 开始（单次上限 180000ms）`,
-          );
-          result = await checkedFetch(
-            url,
-            {
-              method: 'POST',
-              body: form,
-              redirect: 'error',
-              signal: attemptSignal,
-              headers: {
-                'Content-Range': `bytes ${start}-${end - 1}/${bytes.length}`,
-                'Content-Disposition': `attachment; filename="${name}"`,
-              },
-            },
+          result = await boxStage(
+            `分块/${name}/${start}-${end - 1}/尝试${attempt + 1}`,
+            () =>
+              checkedFetch(
+                url,
+                {
+                  method: 'POST',
+                  body: form,
+                  redirect: 'error',
+                  signal: attemptSignal,
+                  headers: {
+                    'Content-Range': `bytes ${start}-${end - 1}/${bytes.length}`,
+                    'Content-Disposition': `attachment; filename="${name}"`,
+                  },
+                },
+                attemptTimeout,
+                this.uploadTransport,
+                (response) => response.json(),
+              ),
             attemptTimeout,
-            this.uploadTransport,
-            (response) => response.json(),
-          );
-          console.log(
-            `Box 分块 ${name} ${start}-${end - 1} 尝试 ${attempt + 1} 完成（${Date.now() - started}ms）`,
           );
           break;
         } catch (error) {
@@ -576,8 +661,10 @@ export class BoxClient {
             `Box 分块 ${name} ${start}-${end - 1} 尝试 ${attempt + 1} 失败（${Date.now() - started}ms）`,
           );
           if (!error.retrySafeUpload || attempt === 2 || signal.aborted) throw error;
-          recordUploadRecovery();
+          recordRecovery();
           await retryWait(attempt, '分块发送 0 字节', deadline, undefined, signal);
+        } finally {
+          if (process.env.GITHUB_ACTIONS) console.log('::endgroup::');
         }
       }
       requireValue(
@@ -607,7 +694,7 @@ export class BoxClient {
   }
 }
 
-async function verifyRemote(box, path, identity, signal) {
+export async function verifyRemote(box, path, identity, signal) {
   const actual = await (signal ? box.hash(path, signal) : box.hash(path));
   requireValue(
     actual.sha256 === identity.sha256 && actual.size === identity.size,
@@ -620,10 +707,11 @@ async function moveVerified(box, from, to, identity) {
     await box.move(from, to, identity.name);
   } catch (error) {
     if (!error.uploadOutcomeUnknown) throw error;
+    recordRecovery();
     try {
       const signal = AbortSignal.timeout(90000);
       for (const delay of reconciliationDelays) {
-        if (delay) await sleep(delay, undefined, { signal });
+        if (delay) await timers.setTimeout(delay, undefined, { signal });
         const source = (await box.list(from, signal)).filter(
           (entry) => entry.name === identity.name,
         );
@@ -814,13 +902,13 @@ export async function syncUserDownloads({
 // It cannot list private folders or authorize a write; every retired file still
 // requires its original signed release identity and authenticated full-byte readback.
 export async function readPublicDownloadDirectory(signal) {
-  const listing = await (
-    await checkedFetch(
-      'https://box.nju.edu.cn/api/v2.1/share-links/91dec4c27e5d47f38fcf/dirents/?path=%2FDownloads%2F',
-      { redirect: 'error', cache: 'no-store', signal },
-      20000,
-    )
-  ).json();
+  const listing = await checkedFetch(
+    'https://box.nju.edu.cn/api/v2.1/share-links/91dec4c27e5d47f38fcf/dirents/?path=%2FDownloads%2F',
+    { redirect: 'error', cache: 'no-store', signal },
+    20000,
+    fetch,
+    (response) => boundedJson(response, 2 * 1024 * 1024),
+  );
   requireValue(
     listing.dir_path === downloadsFolder + '/' &&
       Array.isArray(listing.dirent_list) &&
@@ -846,9 +934,12 @@ export async function readPublicDownloadDirectory(signal) {
 }
 
 // Anonymous access is a separate acceptance boundary, never inferred from the upload token.
-export async function verifyPublicDownloads({ bootstrap }) {
+export async function verifyPublicDownloads(
+  { bootstrap },
+  { readDirectory = readPublicDownloadDirectory, transport = fetch } = {},
+) {
   requireValue(bootstrap?.identity, '匿名验收缺少原文件身份');
-  const listing = await readPublicDownloadDirectory();
+  const listing = await readDirectory();
   const files = [bootstrap.identity];
   requireValue(
     listing.length === 1 &&
@@ -856,47 +947,53 @@ export async function verifyPublicDownloads({ bootstrap }) {
       listing[0].size === bootstrap.identity.size,
     '匿名用户入口未就绪或文件不一致',
   );
-  for (const identity of files) {
-    let url = new URL('files/', publicShare);
-    url.searchParams.set('p', '/Downloads/' + identity.name);
-    url.searchParams.set('dl', '1');
-    let response;
-    for (let redirects = 0; redirects < 5; redirects++) {
-      requireValue(
-        url.origin === origin &&
-          !url.username &&
-          !url.password &&
-          (url.pathname.startsWith('/d/91dec4c27e5d47f38fcf/files/') ||
-            url.pathname.startsWith('/seafhttp/files/')),
-        '匿名下载地址超出允许范围',
-      );
-      // A redirect is expected from the shared file page; do not forward credentials.
-      response = await fetch(url, {
-        redirect: 'manual',
-        signal: AbortSignal.timeout(180000),
-      });
-      if ([301, 302, 303, 307, 308].includes(response.status)) {
-        const location = response.headers.get('location');
-        await response.body?.cancel();
-        requireValue(location, '匿名下载重定向无效');
-        url = new URL(location, url);
-        continue;
-      }
-      break;
-    }
-    requireValue(response?.ok && response.body, '匿名下载未完成');
-    const hash = createHash('sha256');
-    let size = 0;
-    for await (const chunk of response.body) {
-      size += chunk.length;
-      requireValue(size <= identity.size, '匿名文件大小不一致');
-      hash.update(chunk);
-    }
-    requireValue(
-      size === identity.size && hash.digest('hex') === identity.sha256,
-      '匿名下载原字节不一致',
+  for (const identity of files)
+    await boxStage(
+      `匿名下载/${identity.name}`,
+      async () => {
+        let url = new URL('files/', publicShare);
+        url.searchParams.set('p', '/Downloads/' + identity.name);
+        url.searchParams.set('dl', '1');
+        let response;
+        const downloadSignal = AbortSignal.timeout(180000);
+        for (let redirects = 0; redirects < 5; redirects++) {
+          requireValue(
+            url.origin === origin &&
+              !url.username &&
+              !url.password &&
+              (url.pathname.startsWith('/d/91dec4c27e5d47f38fcf/files/') ||
+                url.pathname.startsWith('/seafhttp/files/')),
+            '匿名下载地址超出允许范围',
+          );
+          // A redirect is expected from the shared file page; do not forward credentials.
+          response = await transport(url, {
+            redirect: 'manual',
+            signal: downloadSignal,
+          });
+          if ([301, 302, 303, 307, 308].includes(response.status)) {
+            const location = response.headers.get('location');
+            await response.body?.cancel();
+            requireValue(location, '匿名下载重定向无效');
+            url = new URL(location, url);
+            continue;
+          }
+          break;
+        }
+        requireValue(response?.ok && response.body, '匿名下载未完成');
+        const hash = createHash('sha256');
+        let size = 0;
+        for await (const chunk of response.body) {
+          size += chunk.length;
+          requireValue(size <= identity.size, '匿名文件大小不一致');
+          hash.update(chunk);
+        }
+        requireValue(
+          size === identity.size && hash.digest('hex') === identity.sha256,
+          '匿名下载原字节不一致',
+        );
+      },
+      180000,
     );
-  }
   return '匿名验收成功：用户入口仅提供轻量 EXE，下载原字节一致；完整离线 ZIP 由 GitHub 提供。';
 }
 
@@ -1011,7 +1108,7 @@ async function uploadRuntimeChunks(box, folder, file) {
         error.retryableRead = false;
         throw error;
       }
-      recordUploadRecovery();
+      recordRecovery();
       let confirmed;
       try {
         confirmed = await waitForWrittenFile(box, staging, file.name, file);
@@ -1021,7 +1118,7 @@ async function uploadRuntimeChunks(box, folder, file) {
       }
       if (!confirmed) {
         if (attempt === 2) throw error;
-        recordUploadRecovery();
+        recordRecovery();
         console.log(`Box 分块结果未落盘，使用新暂存目录重试 ${attempt + 1}/2`);
         continue;
       }
@@ -1037,7 +1134,7 @@ async function uploadRuntimeChunks(box, folder, file) {
     return;
   }
 }
-export async function syncRuntimeFiles({ box, version, files }) {
+export async function syncRuntimeFiles({ box, version, files, selected }) {
   requireValue(
     /^\d+\.\d+\.\d+$/.test(version) &&
       files.length === 2 &&
@@ -1048,6 +1145,7 @@ export async function syncRuntimeFiles({ box, version, files }) {
     'Invalid immutable Runtime files',
   );
   readMachineMetadata(files.find((f) => f.name === MACHINE_METADATA_NAME).bytes);
+  requireValue(!selected || files.some((file) => file.name === selected), 'Unknown Runtime asset');
   const root = await box.list('/');
   const runtime = root.filter((e) => e.name === 'Runtime');
   requireValue(
@@ -1071,12 +1169,74 @@ export async function syncRuntimeFiles({ box, version, files }) {
   );
   for (const file of files.filter((f) => existing.some((e) => e.name === f.name)))
     await verifyRemote(box, folder + '/' + file.name, file);
-  for (const file of files.filter((f) => !existing.some((e) => e.name === f.name))) {
+  for (const file of files.filter(
+    (f) => (!selected || f.name === selected) && !existing.some((e) => e.name === f.name),
+  )) {
     if (file.name === MACHINE_METADATA_NAME) await box.upload(folder, file.name, file.bytes);
     else await uploadRuntimeChunks(box, folder, file);
     await verifyRemote(box, folder + '/' + file.name, file);
   }
 }
+const settle = async (tasks) => {
+  const results = await Promise.allSettled(tasks);
+  // Never restart after a sibling's uncertain write merely because a read
+  // happened to fail first. Every in-flight operation has settled here.
+  const failed =
+    results.find((result) => result.status === 'rejected' && !result.reason?.retryableRead) ??
+    results.find((result) => result.status === 'rejected');
+  if (failed) throw failed.reason;
+  return results.map((result) => result.value);
+};
+
+export async function verifyStableReadbacks({ box, identity, bootstrap, resources, runtime }) {
+  // A pointer is published only after upload/hash verification and complete
+  // archival. Failed cleanup never advertises a new update to clients.
+  const readbacks = [
+    [`${downloadsFolder}/${bootstrap.identity.name}`, bootstrap.identity],
+    ...(resources ?? []).map((file) => [`/Resources/v${identity.version}/${file.name}`, file]),
+    ...(runtime ?? []).map((file) => [`/Runtime/v${identity.version}/${file.name}`, file]),
+  ];
+  // Complete every post-write full hash before publishing. Bound only independent
+  // reads; a failed batch joins its active siblings and starts no further batch.
+  await boxStage('发布前完整回读', async () => {
+    for (let offset = 0; offset < readbacks.length; offset += 3)
+      await settle(
+        readbacks.slice(offset, offset + 3).map(([path, file]) => verifyRemote(box, path, file)),
+      );
+  });
+}
+export async function publishStablePointer({ box, updateIndex }) {
+  const root = await box.list('/');
+  const updates = root.find((e) => e.name === 'Updates');
+  requireValue(!updates || updates.type === 'dir', 'Updates 必须是独立目录');
+  if (!updates) await box.api('dir', '/Updates', 'POST', { operation: 'mkdir' });
+  const indexIdentity = { size: updateIndex.length, sha256: digest(updateIndex) };
+  const entries = await box.list('/Updates');
+  if (entries.some((e) => e.name === 'latest.json')) {
+    const previous = await box.hash('/Updates/latest.json');
+    if (previous.sha256 === indexIdentity.sha256 && previous.size === indexIdentity.size)
+      return '拆分分发已核验，更新清单保持一致。';
+  }
+  // Seafile replace=1 publishes one complete file after its upload completes;
+  // the signature and original manifest travel in this one atomic envelope.
+  await box.upload('/Updates', 'latest.json', updateIndex, true);
+  return '更新清单已提交；等待完整回读核验。';
+}
+export async function verifyStablePointer({ box, updateIndex }) {
+  await verifyRemote(box, '/Updates/latest.json', {
+    size: updateIndex.length,
+    sha256: digest(updateIndex),
+  });
+}
+export async function finalizeStableRelease(options) {
+  await verifyStableReadbacks(options);
+  const result = await publishStablePointer(options);
+  await verifyStablePointer(options);
+  return result === '更新清单已提交；等待完整回读核验。'
+    ? '同步成功：拆分分发与历史归档已核验，Updates 最新清单已发布并核对。'
+    : result;
+}
+
 async function syncStableReleaseOnce({
   box,
   identity,
@@ -1101,16 +1261,7 @@ async function syncStableReleaseOnce({
   );
   await box.initialize();
   // Wait for every writer before reporting failure. No failed sibling may publish the pointer.
-  const settle = async (tasks) => {
-    const results = await Promise.allSettled(tasks);
-    // Never restart after a sibling's uncertain write merely because a read
-    // happened to fail first. Every in-flight operation has settled here.
-    const failed =
-      results.find((result) => result.status === 'rejected' && !result.reason?.retryableRead) ??
-      results.find((result) => result.status === 'rejected');
-    if (failed) throw failed.reason;
-    return results.map((result) => result.value);
-  };
+
   await settle([
     runtime ? syncRuntimeFiles({ box, version: identity.version, files: runtime }) : undefined,
     resources
@@ -1124,49 +1275,11 @@ async function syncStableReleaseOnce({
       : undefined,
     syncUserDownloads({ box, bootstrap, resolveIdentity, accept }),
   ]);
-  // A pointer is published only after upload/hash verification and complete
-  // archival. Failed cleanup never advertises a new update to clients.
-  const readbacks = [
-    [`${downloadsFolder}/${bootstrap.identity.name}`, bootstrap.identity],
-    ...(resources ?? []).map((file) => [`/Resources/v${identity.version}/${file.name}`, file]),
-    ...(runtime ?? []).map((file) => [`/Runtime/v${identity.version}/${file.name}`, file]),
-  ];
-  // Complete every post-write full hash before publishing. Bound only independent
-  // reads; a failed batch joins its active siblings and starts no further batch.
-  await boxStage('发布前完整回读', async () => {
-    for (let offset = 0; offset < readbacks.length; offset += 3)
-      await settle(
-        readbacks.slice(offset, offset + 3).map(([path, file]) => verifyRemote(box, path, file)),
-      );
-  });
-  const root = await box.list('/');
-  const updates = root.find((e) => e.name === 'Updates');
-  requireValue(!updates || updates.type === 'dir', 'Updates 必须是独立目录');
-  if (!updates) await box.api('dir', '/Updates', 'POST', { operation: 'mkdir' });
-  const indexIdentity = { size: updateIndex.length, sha256: digest(updateIndex) };
-  const entries = await box.list('/Updates');
-  if (entries.some((e) => e.name === 'latest.json')) {
-    const previous = await box.hash('/Updates/latest.json');
-    if (previous.sha256 === indexIdentity.sha256 && previous.size === indexIdentity.size)
-      return '拆分分发已核验，更新清单保持一致。';
-  }
-  // Seafile replace=1 publishes one complete file after its upload completes;
-  // the signature and original manifest travel in this one atomic envelope.
-  await box.upload('/Updates', 'latest.json', updateIndex, true);
-  await verifyRemote(box, '/Updates/latest.json', indexIdentity);
-  return '同步成功：拆分分发与历史归档已核验，Updates 最新清单已发布并核对。';
+  return finalizeStableRelease({ box, identity, bootstrap, resources, runtime, updateIndex });
 }
 
 export async function syncStableRelease(options) {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return await syncStableReleaseOnce(options);
-    } catch (error) {
-      if (!error.retryableRead || attempt >= 2) throw error;
-      console.log(`Box 读取暂态失败，核对已有文件后重新同步（${attempt + 1}/2）`);
-      await sleep(1000 * 2 ** attempt);
-    }
-  }
+  return syncStableReleaseOnce(options);
 }
 
 export async function probe(box) {
@@ -1195,19 +1308,23 @@ export async function probe(box) {
   return '接口探测通过：列目录、分块上传、元数据、下载校验、移动与删除；Stable 保持原样。';
 }
 
-async function github(path) {
+export async function github(path) {
   const repo = process.env.GITHUB_REPOSITORY;
   requireValue(repo === 'Starfie1d1272/Mizar', '仅允许 Mizar 发布仓库');
-  return (
-    await checkedFetch(`https://api.github.com/repos/${repo}/${path}`, {
+  return checkedFetch(
+    `https://api.github.com/repos/${repo}/${path}`,
+    {
       headers: {
         Authorization: `Bearer ${process.env.GH_TOKEN}`,
         Accept: 'application/vnd.github+json',
       },
-    })
-  ).json();
+    },
+    120000,
+    fetch,
+    (response) => boundedJson(response, 4 * 1024 * 1024),
+  );
 }
-async function downloadReleaseAsset(release, tag, name, maximum = 65536) {
+export async function downloadReleaseAsset(release, tag, name, maximum = 65536, transport = fetch) {
   const assets = release.assets.filter((asset) => asset.name === name);
   requireValue(
     assets.length === 1 &&
@@ -1218,26 +1335,40 @@ async function downloadReleaseAsset(release, tag, name, maximum = 65536) {
         `https://github.com/Starfie1d1272/Mizar/releases/download/${tag}/${name}`,
     'Release 资产名称、大小或地址无效',
   );
-  const response = await checkedFetch(assets[0].browser_download_url, {}, 600000);
-  const chunks = [];
-  let size = 0;
-  for await (const chunk of response.body) {
-    size += chunk.length;
-    requireValue(size <= assets[0].size && size <= maximum, 'Release 下载字节超限');
-    chunks.push(chunk);
-  }
-  const bytes = Buffer.concat(chunks);
+  const bytes = await boxStage(
+    `Release 下载/${name}`,
+    () =>
+      checkedFetch(assets[0].browser_download_url, {}, 180000, transport, async (response) => {
+        const chunks = [];
+        let size = 0;
+        for await (const chunk of response.body) {
+          size += chunk.length;
+          requireValue(size <= assets[0].size && size <= maximum, 'Release 下载字节超限');
+          chunks.push(chunk);
+        }
+        return Buffer.concat(chunks);
+      }),
+    180000,
+  );
   requireValue(
     bytes.length === assets[0].size && assets[0].digest === `sha256:${digest(bytes)}`,
     'Release 下载身份不一致',
   );
   return bytes;
 }
-async function releaseIdentity(tag) {
+export async function readReleaseInfo(tag) {
   requireValue(/^v\d+\.\d+\.\d+$/.test(tag), '无效正式版本标签');
   const release = await github(`releases/tags/${tag}`);
   const ref = await github(`git/ref/tags/${tag}`);
   requireValue(ref.object.type === 'commit', '发布标签必须直接指向已验源码');
+  return { tag, release, ref };
+}
+export async function releaseIdentity(tag, { runtime = true, bootstrap = true, releaseInfo } = {}) {
+  const { release, ref, tag: infoTag } = releaseInfo ?? (await readReleaseInfo(tag));
+  requireValue(
+    infoTag === tag && /^v\d+\.\d+\.\d+$/.test(tag) && ref.object.type === 'commit',
+    '发布标签身份无效',
+  );
   const carrier = release.assets.some((a) => a.name === MACHINE_METADATA_NAME)
     ? await downloadReleaseAsset(release, tag, MACHINE_METADATA_NAME, MACHINE_METADATA_MAX_BYTES)
     : undefined;
@@ -1302,6 +1433,18 @@ async function releaseIdentity(tag) {
         distribution.appVersion === core.appVersion,
       'Core and Full identities differ',
     );
+    const backendAssets = release.assets.filter((asset) => asset.name === distribution.archive);
+    requireValue(
+      backendAssets.length === 1 &&
+        Number.isSafeInteger(distribution.archiveBytes) &&
+        distribution.archiveBytes > 0 &&
+        backendAssets[0].size === distribution.archiveBytes &&
+        shaPattern.test(distribution.archiveSha256) &&
+        backendAssets[0].digest === `sha256:${distribution.archiveSha256}` &&
+        backendAssets[0].browser_download_url ===
+          `https://github.com/Starfie1d1272/Mizar/releases/download/${tag}/${distribution.archive}`,
+      'Core backend release identity differs',
+    );
     const temp = await mkdtemp(join(tmpdir(), 'mizar-core-publication-proof-'));
     try {
       for (const [name, data] of [
@@ -1311,22 +1454,25 @@ async function releaseIdentity(tag) {
         await writeFile(join(temp, name), data);
         await promisify(execFile)('gh', releaseAttestationArgs(join(temp, name), core.gitSha));
       }
-      const backend = await downloadReleaseAsset(
-        release,
-        tag,
-        distribution.archive,
-        distribution.archiveBytes,
-      );
-      requireValue(
-        digest(backend) === distribution.archiveSha256 &&
-          backend.length === distribution.archiveBytes,
-        'Core backend original bytes differ',
-      );
-      await writeFile(join(temp, distribution.archive), backend);
-      await promisify(execFile)(
-        'gh',
-        releaseAttestationArgs(join(temp, distribution.archive), core.gitSha),
-      );
+      let backend;
+      if (runtime) {
+        backend = await downloadReleaseAsset(
+          release,
+          tag,
+          distribution.archive,
+          distribution.archiveBytes,
+        );
+        requireValue(
+          digest(backend) === distribution.archiveSha256 &&
+            backend.length === distribution.archiveBytes,
+          'Core backend original bytes differ',
+        );
+        await writeFile(join(temp, distribution.archive), backend);
+        await promisify(execFile)(
+          'gh',
+          releaseAttestationArgs(join(temp, distribution.archive), core.gitSha),
+        );
+      }
       identity.runtime = [
         {
           name: MACHINE_METADATA_NAME,
@@ -1336,9 +1482,9 @@ async function releaseIdentity(tag) {
         },
         {
           name: distribution.archive,
-          size: backend.length,
-          sha256: digest(backend),
-          bytes: backend,
+          size: distribution.archiveBytes,
+          sha256: distribution.archiveSha256,
+          ...(backend ? { bytes: backend } : {}),
         },
       ];
       identity.core = core;
@@ -1348,94 +1494,48 @@ async function releaseIdentity(tag) {
     }
   }
   const bootstrapName = `Mizar-v${identity.version}-Windows-x64-WebInstaller.exe`;
-  if (release.assets.some((a) => a.name === bootstrapName)) {
-    const data = await downloadReleaseAsset(release, tag, bootstrapName, 16777216);
-    const proof = await mkdtemp(join(tmpdir(), 'mizar-bootstrap-proof-'));
-    try {
-      await writeFile(join(proof, bootstrapName), data);
-      await promisify(execFile)(
-        'gh',
-        releaseAttestationArgs(join(proof, bootstrapName), manifest.gitSha),
-      );
-    } finally {
-      await rm(proof, { recursive: true, force: true });
+  const bootstrapAssets = release.assets.filter((asset) => asset.name === bootstrapName);
+  if (bootstrapAssets.length) {
+    requireValue(
+      bootstrapAssets.length === 1 &&
+        Number.isSafeInteger(bootstrapAssets[0].size) &&
+        bootstrapAssets[0].size > 0 &&
+        bootstrapAssets[0].size <= 16777216 &&
+        /^sha256:[a-f0-9]{64}$/.test(bootstrapAssets[0].digest) &&
+        bootstrapAssets[0].browser_download_url ===
+          `https://github.com/Starfie1d1272/Mizar/releases/download/${tag}/${bootstrapName}`,
+      'Bootstrap release identity differs',
+    );
+    let data;
+    if (bootstrap) {
+      data = await downloadReleaseAsset(release, tag, bootstrapName, 16777216);
+      const proof = await mkdtemp(join(tmpdir(), 'mizar-bootstrap-proof-'));
+      try {
+        await writeFile(join(proof, bootstrapName), data);
+        await promisify(execFile)(
+          'gh',
+          releaseAttestationArgs(join(proof, bootstrapName), manifest.gitSha),
+        );
+      } finally {
+        await rm(proof, { recursive: true, force: true });
+      }
     }
     identity.bootstrap = {
       name: bootstrapName,
       version: identity.version,
       gitSha: identity.gitSha,
       releaseId: release.id,
-      size: data.length,
-      sha256: digest(data),
-      data,
+      size: bootstrapAssets[0].size,
+      sha256: bootstrapAssets[0].digest.slice(7),
+      ...(data ? { data } : {}),
     };
   }
   return identity;
 }
 
-export function cacheReleaseIdentities(resolveIdentity) {
-  const identities = new Map();
-  return (tag) => {
-    if (!identities.has(tag))
-      identities.set(
-        tag,
-        Promise.resolve().then(() => resolveIdentity(tag)),
-      );
-    return identities.get(tag);
-  };
-}
-
-async function main() {
-  const mode = process.env.BOX_SYNC_MODE || 'sync';
-  requireValue(['sync', 'probe', 'verify-downloads'].includes(mode), '未知镜像操作');
-  let tag = process.env.RELEASE_TAG;
-  if (process.env.GITHUB_EVENT_NAME === 'workflow_run') {
-    const event = JSON.parse(await readFile(process.env.GITHUB_EVENT_PATH, 'utf8'));
-    const run = await github(`actions/runs/${event.workflow_run.id}`);
-    requireValue(
-      run.conclusion === 'success' &&
-        ['workflow_dispatch', 'workflow_run'].includes(run.event) &&
-        run.path === '.github/workflows/release-promotion.yml' &&
-        run.repository.full_name === process.env.GITHUB_REPOSITORY,
-      '触发来源不是成功的发布晋级',
-    );
-    const { jobs } = await github(`actions/runs/${run.id}/jobs?per_page=100`);
-    tag = promotionTag(run, jobs);
-  }
-  const prerelease = /^v\d+\.\d+\.\d+-(?:alpha|beta|rc)\.[1-9]\d*$/.test(tag ?? '');
-  if (process.env.GITHUB_OUTPUT)
-    await appendFile(process.env.GITHUB_OUTPUT, `prerelease=${prerelease}\n`);
-  if (prerelease) return '预发布版本：Box Stable、Downloads、Updates 与 Archive 保持原样。';
-  const box =
-    mode === 'verify-downloads'
-      ? undefined
-      : new BoxClient(
-          process.env.MIZAR_BOX_REPO_TOKEN,
-          process.env.BOX_UPLOAD_TRANSPORT === 'native' ? multipartUpload : curlMultipartUpload,
-        );
-  if (mode === 'probe') return probe(box);
-  const resolveIdentity = cacheReleaseIdentities(releaseIdentity);
-  const identity = await resolveIdentity(tag);
-  const downloads = {
-    box,
-    identity,
-    bootstrap: identity.bootstrap
-      ? { identity: identity.bootstrap, bytes: identity.bootstrap.data }
-      : undefined,
-  };
-  if (mode === 'verify-downloads') return verifyPublicDownloads(downloads);
-  requireValue(mode === 'sync', '不支持该同步模式');
-
-  requireValue(
-    identity.asset.browser_download_url ===
-      `https://github.com/Starfie1d1272/Mizar/releases/download/${tag}/${identity.name}`,
-    '安装包地址不一致',
-  );
+// Verify both original update signatures before the index can authorize a pointer.
+export async function verifiedUpdateIndex(identity, tag) {
   const release = identity.release;
-  requireValue(
-    identity.runtime && identity.bootstrap && !older(identity.version, '1.6.0'),
-    '仅同步 1.6.0 及以后的拆分发行',
-  );
   const metadata = release.assets.filter((a) =>
     [
       'update-manifest.json',
@@ -1542,6 +1642,79 @@ async function main() {
       await rm(directory, { recursive: true, force: true });
     }
   }
+  requireValue(updateIndex, '正式发行缺少已签更新信封');
+  return updateIndex;
+}
+
+export function cacheReleaseIdentities(resolveIdentity) {
+  const identities = new Map();
+  return (tag) => {
+    if (!identities.has(tag))
+      identities.set(
+        tag,
+        Promise.resolve().then(() => resolveIdentity(tag)),
+      );
+    return identities.get(tag);
+  };
+}
+
+export async function resolveBoxTag() {
+  let tag = process.env.RELEASE_TAG;
+  if (process.env.GITHUB_EVENT_NAME === 'workflow_run') {
+    const event = JSON.parse(await readFile(process.env.GITHUB_EVENT_PATH, 'utf8'));
+    const run = await github(`actions/runs/${event.workflow_run.id}`);
+    requireValue(
+      run.conclusion === 'success' &&
+        ['workflow_dispatch', 'workflow_run'].includes(run.event) &&
+        run.path === '.github/workflows/release-promotion.yml' &&
+        run.repository.full_name === process.env.GITHUB_REPOSITORY,
+      '触发来源不是成功的发布晋级',
+    );
+    const { jobs } = await github(`actions/runs/${run.id}/jobs?per_page=100`);
+    tag = promotionTag(run, jobs);
+  }
+  return tag;
+}
+
+async function main() {
+  const mode = process.env.BOX_SYNC_MODE || 'sync';
+  requireValue(['sync', 'probe', 'verify-downloads'].includes(mode), '未知镜像操作');
+  const tag = await resolveBoxTag();
+  const prerelease = /^v\d+\.\d+\.\d+-(?:alpha|beta|rc)\.[1-9]\d*$/.test(tag ?? '');
+  if (process.env.GITHUB_OUTPUT)
+    await appendFile(process.env.GITHUB_OUTPUT, `prerelease=${prerelease}\n`);
+  if (prerelease) return '预发布版本：Box Stable、Downloads、Updates 与 Archive 保持原样。';
+  const box =
+    mode === 'verify-downloads'
+      ? undefined
+      : new BoxClient(
+          process.env.MIZAR_BOX_REPO_TOKEN,
+          process.env.BOX_UPLOAD_TRANSPORT === 'native' ? multipartUpload : curlMultipartUpload,
+        );
+  if (mode === 'probe') return probe(box);
+  const resolveIdentity = cacheReleaseIdentities(releaseIdentity);
+  const identity = await resolveIdentity(tag);
+  const downloads = {
+    box,
+    identity,
+    bootstrap: identity.bootstrap
+      ? { identity: identity.bootstrap, bytes: identity.bootstrap.data }
+      : undefined,
+  };
+  if (mode === 'verify-downloads') return verifyPublicDownloads(downloads);
+  requireValue(mode === 'sync', '不支持该同步模式');
+
+  requireValue(
+    identity.asset.browser_download_url ===
+      `https://github.com/Starfie1d1272/Mizar/releases/download/${tag}/${identity.name}`,
+    '安装包地址不一致',
+  );
+  const release = identity.release;
+  requireValue(
+    identity.runtime && identity.bootstrap && !older(identity.version, '1.6.0'),
+    '仅同步 1.6.0 及以后的拆分发行',
+  );
+  const updateIndex = await verifiedUpdateIndex(identity, tag);
   let resources, resourceReuseVersion;
   if (identity.originals || release.assets.some((a) => a.name === resourceNames.descriptor)) {
     const directory = await mkdtemp(join(tmpdir(), 'mizar-mirror-resources-'));
@@ -1621,10 +1794,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
         `镜像未完成：${message}。GitHub Release 保持可用，修正后重试 Box Sync。\n`,
       );
   } finally {
-    if (process.env.GITHUB_OUTPUT && uploadRecoveryStartedAt)
-      await appendFile(
-        process.env.GITHUB_OUTPUT,
-        `recovery_started_at=${uploadRecoveryStartedAt}\n`,
-      );
+    if (process.env.GITHUB_OUTPUT && recoveryStartedAt)
+      await appendFile(process.env.GITHUB_OUTPUT, `recovery_started_at=${recoveryStartedAt}\n`);
   }
 }

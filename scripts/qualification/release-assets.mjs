@@ -4,8 +4,26 @@ import { join, basename, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { validateReleaseTag } from './app-version.mjs';
 const repo = 'Starfie1d1272/Mizar';
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
+const githubApi = (args) => {
+  try {
+    return execFileSync('gh', ['api', ...args], {
+      stdio: 'pipe',
+      timeout: 180000,
+      maxBuffer: 256 * 1024 * 1024,
+    });
+  } catch (error) {
+    const status = /\(HTTP ([1-5]\d\d)\)/.exec(error.stderr?.toString() ?? '')?.[1];
+    // Raw gh errors can include temporary download URLs or authorization headers.
+    const safe = new Error(
+      `GitHub release API failed${status ? ` (HTTP ${status})` : ''}; reconcile remote state before retry`,
+    );
+    if (status === '404') safe.stderr = '(HTTP 404)';
+    throw safe;
+  }
+};
 export async function publicProductAssets(product) {
   const manifest = JSON.parse(await readFile(join(product, 'release-manifest.json')));
   const paths = [manifest.archive];
@@ -107,33 +125,30 @@ export async function reconcileAssets(release, ref, identity, expected, readExis
   return missing;
 }
 // Drafts without a tag are addressed by release ID; never publish or create a tag here.
-export async function stageDraftAssets(releaseId, identity, expected) {
+export async function stageDraftAssets(releaseId, identity, expected, api = githubApi) {
+  validateReleaseTag(identity.tag, identity.tag.slice(1));
   if (
     !/^\d+$/.test(releaseId) ||
-    !/^v\d+\.\d+\.\d+$/.test(identity.tag) ||
     !/^[a-f0-9]{40}$/.test(identity.gitSha) ||
-    expected.length !== 6 ||
+    expected.length === 0 ||
     new Set(expected.map((asset) => asset.name)).size !== expected.length
   )
     throw new Error('Invalid draft identity or asset inventory');
-  const api = (args) =>
-    execFileSync('gh', ['api', ...args], {
-      stdio: 'pipe',
-      timeout: 600000,
-      maxBuffer: 256 * 1024 * 1024,
-    });
-  try {
-    api([`repos/${repo}/git/ref/tags/${identity.tag}`]);
-    throw new Error('Tag already exists; use normal reconciliation');
-  } catch (error) {
-    if (!error.stderr?.toString().includes('(HTTP 404)')) throw error;
-  }
+  const ensureNoTag = () => {
+    try {
+      api([`repos/${repo}/git/ref/tags/${identity.tag}`]);
+      throw new Error('Tag already exists; use normal reconciliation');
+    } catch (error) {
+      if (!error.stderr?.toString().includes('(HTTP 404)')) throw error;
+    }
+  };
+  ensureNoTag();
   const getDraft = () => {
     const release = JSON.parse(api([`repos/${repo}/releases/${releaseId}`]).toString());
     if (
       String(release.id) !== releaseId ||
       release.draft !== true ||
-      release.prerelease !== false ||
+      release.prerelease !== !/^v\d+\.\d+\.\d+$/.test(identity.tag) ||
       release.tag_name !== identity.tag ||
       release.target_commitish !== identity.gitSha ||
       !Array.isArray(release.assets) ||
@@ -159,7 +174,15 @@ export async function stageDraftAssets(releaseId, identity, expected) {
     if (bytes.length !== asset.size || hash(bytes) !== asset.sha256)
       throw new Error(`Draft asset bytes differ: ${asset.name}`);
   };
+  // Check every pre-existing asset before adding any missing one.
+  const initial = getDraft();
   for (const asset of expected) {
+    const item = initial.assets.find((entry) => entry.name === asset.name);
+    if (item) verify(item, asset);
+  }
+  for (const asset of expected.filter(
+    (entry) => !initial.assets.some((item) => item.name === entry.name),
+  )) {
     const release = getDraft();
     const item = release.assets.find((entry) => entry.name === asset.name);
     if (item) {
@@ -186,23 +209,63 @@ export async function stageDraftAssets(releaseId, identity, expected) {
       final.assets.find((item) => item.name === asset.name),
       asset,
     );
+  ensureNoTag();
+}
+
+// Publish only the exact draft just fully checked; an uncertain PATCH is never replayed here.
+export async function publishDraftAssets(releaseId, identity, expected, api = githubApi) {
+  await stageDraftAssets(releaseId, identity, expected, api);
+  const args = ['--method', 'PATCH', `repos/${repo}/releases/${releaseId}`, '-F', 'draft=false'];
+  if (!/^v\d+\.\d+\.\d+$/.test(identity.tag)) args.push('-f', 'make_latest=false');
+  api(args);
+  const release = JSON.parse(api([`repos/${repo}/releases/tags/${identity.tag}`]).toString());
+  const ref = JSON.parse(api([`repos/${repo}/git/ref/tags/${identity.tag}`]).toString());
+  if (String(release.id) !== releaseId || release.draft !== false)
+    throw new Error('Published release ID differs from verified draft');
+  await reconcileAssets(
+    release,
+    ref,
+    identity,
+    expected,
+    async (name) => {
+      const items = release.assets.filter((item) => item.name === name);
+      if (items.length !== 1 || !Number.isSafeInteger(items[0].id) || items[0].id <= 0)
+        throw new Error('Published asset ID is invalid');
+      return api([
+        '-H',
+        'Accept: application/octet-stream',
+        `repos/${repo}/releases/assets/${items[0].id}`,
+      ]);
+    },
+    async () => {
+      throw new Error('Published release is missing a staged asset');
+    },
+  );
+  return { release, ref };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const [mode, product, ...args] = process.argv.slice(2);
   const paths = await publicProductAssets(product);
   if (mode === 'assets') console.log(JSON.stringify(paths));
-  else if (mode === 'draft-stage') {
-    const [identityPath, resources, releaseId] = args;
+  else if (mode === 'draft-stage' || mode === 'publish-draft') {
+    const [identityPath, resources, releaseId, releaseOutput, refOutput] = args;
     const { readdir } = await import('node:fs/promises');
-    const archives = (await readdir(resources)).filter((name) => name.endsWith('.zip'));
-    if (archives.length !== 1) throw new Error('Expected one frozen resource archive');
-    paths.push(join(resources, archives[0]));
-    await stageDraftAssets(
-      releaseId,
-      JSON.parse(await readFile(identityPath)),
-      await assetInventory(paths),
-    );
+    if (resources !== '-') {
+      const archives = (await readdir(resources)).filter((name) => name.endsWith('.zip'));
+      if (archives.length !== 1) throw new Error('Expected one frozen resource archive');
+      paths.push(join(resources, archives[0]));
+    }
+    const identity = JSON.parse(await readFile(identityPath));
+    const expected = await assetInventory(paths);
+    if (mode === 'draft-stage') await stageDraftAssets(releaseId, identity, expected);
+    else {
+      if (!releaseOutput || !refOutput) throw new Error('Published readback output is required');
+      const result = await publishDraftAssets(releaseId, identity, expected);
+      const { writeFile } = await import('node:fs/promises');
+      await writeFile(releaseOutput, JSON.stringify(result.release));
+      await writeFile(refOutput, JSON.stringify(result.ref));
+    }
   } else if (mode === 'reconcile') {
     const [releasePath, refPath, identityPath, resources] = args;
     if (resources && resources !== '-') {
@@ -224,14 +287,14 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
           execFileSync(
             'gh',
             ['release', 'download', identity.tag, '--repo', repo, '--pattern', name, '--dir', temp],
-            { stdio: 'pipe', timeout: 600000 },
+            { stdio: 'pipe', timeout: 180000 },
           );
           return readFile(join(temp, name));
         },
         async (path) => {
           execFileSync('gh', ['release', 'upload', identity.tag, path, '--repo', repo], {
             stdio: 'inherit',
-            timeout: 600000,
+            timeout: 180000,
           });
         },
       );

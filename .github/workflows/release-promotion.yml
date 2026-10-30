@@ -15,7 +15,7 @@ on:
         required: true
         type: string
       recovery:
-        description: Resume an expired qualified release with a separate recovery budget
+        description: Resume an already qualified release after interruption
         required: false
         default: false
         type: boolean
@@ -44,7 +44,6 @@ jobs:
       RELEASE_TAG: ${{ inputs.tag || github.event.workflow_run.display_title }}
       RELEASE_RECOVERY: ${{ github.event_name == 'workflow_dispatch' && inputs.recovery && 'true' || 'false' }}
       RELEASE_DRAFT_ID: ${{ inputs.draft_release_id }}
-      RELEASE_BUDGET_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.recovery && github.run_id || inputs.qualification_run || github.event.workflow_run.id }}
       RESOURCE_PUBLISHER_ROOT: ${{ github.workspace }}/.agent-tmp/resource-publisher-source
       RESOURCE_ROOT: ${{ github.workspace }}/qualified-resources
       RESOURCE_FROZEN_ROOT: ${{ github.workspace }}/frozen-resources
@@ -66,7 +65,7 @@ jobs:
         run: |
           gh version
           for ($attempt = 1; $attempt -le 3; $attempt++) {
-            gh attestation trusted-root --verify-only
+            node scripts/qualification/bounded-gh.mjs attestation trusted-root --verify-only
             if ($LASTEXITCODE -eq 0) { break }
             if ($attempt -eq 3) { throw 'Official Sigstore TUF initialization failed; provenance verification remains required' }
             Write-Warning "Official trust cache initialization failed (attempt $attempt); retrying after 10 seconds"
@@ -82,31 +81,15 @@ jobs:
         if: ${{ env.RELEASE_RECOVERY == 'true' }}
         shell: pwsh
         run: |
-          $run = gh api "repos/$env:GH_REPO/actions/runs/$env:RUN_ID" | ConvertFrom-Json
+          $run = node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/bounded-gh.mjs" api "repos/$env:GH_REPO/actions/runs/$env:RUN_ID" | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.event -ne 'workflow_dispatch' -or $run.path -ne '.github/workflows/release-qualification.yml' -or $run.head_branch -ne 'main' -or $run.head_repository.full_name -ne $env:GH_REPO) { throw 'Recovery requires a successful original main qualification' }
-          if (([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($run.created_at)).TotalSeconds -le 600) { throw 'Recovery requires the original release budget to have expired' }
-          Write-Output 'Explicit recovery: original fresh-release budget was not met.'
-      - name: Bound Resolve successful qualification source to remaining time
-        id: budget_resolve
-        shell: pwsh
-        run: |
-          $created = gh api "repos/$env:GH_REPO/actions/runs/$env:RELEASE_BUDGET_RUN" --jq .created_at
-          if ($LASTEXITCODE -ne 0 -or !$created) { throw 'Cannot read qualification start time' }
-          $minutes = [math]::Floor((600 - ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($created)).TotalSeconds) / 60)
-          if ($minutes -lt 1) { throw 'Less than one minute remains in release budget' }
-          "minutes=$minutes" >> $env:GITHUB_OUTPUT
+          Write-Output 'Explicit recovery: original attempt remains separately recorded.'
       - name: Resolve successful qualification source
-        timeout-minutes: ${{ fromJSON(steps.budget_resolve.outputs.minutes) }}
         shell: pwsh
         run: |
           if ($env:RUN_ID -notmatch '^\d+$') { throw 'Invalid run ID' }
-          $run = gh api "repos/$env:GH_REPO/actions/runs/$env:RUN_ID" | ConvertFrom-Json
+          $run = node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/bounded-gh.mjs" api "repos/$env:GH_REPO/actions/runs/$env:RUN_ID" | ConvertFrom-Json
           if ($run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.path -ne '.github/workflows/release-qualification.yml' -or $run.event -ne 'workflow_dispatch' -or $run.head_branch -ne 'main' -or $run.head_repository.full_name -ne $env:GH_REPO) { throw 'Not a successful main qualification run' }
-          $budgetCreated = gh api "repos/$env:GH_REPO/actions/runs/$env:RELEASE_BUDGET_RUN" --jq .created_at
-          if ($LASTEXITCODE -ne 0 -or !$budgetCreated) { throw 'Cannot read release budget start time' }
-          $elapsed = ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($budgetCreated)).TotalSeconds
-          if ($elapsed -gt 600) { throw "Release budget exceeded before promotion: $elapsed seconds" }
-          "RELEASE_DEADLINE=$(([DateTimeOffset]::Parse($budgetCreated).AddSeconds(600)).ToString('o'))" >> $env:GITHUB_ENV
           $run | ConvertTo-Json -Depth 50 | Set-Content qualification-run.json -Encoding utf8
           node scripts/qualification/download-qualified-artifacts.mjs $env:RUN_ID "$env:RESOURCE_ROOT"
           if ($LASTEXITCODE -ne 0) { throw 'Qualified product/evidence download failed' }
@@ -199,16 +182,19 @@ jobs:
         run: |
           git checkout --detach $env:SOURCE_SHA
           if ($LASTEXITCODE -ne 0) { throw 'Source checkout failed' }
+      - name: Freeze original product and verify grouped provenance
+        shell: pwsh
+        run: |
+          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/promotion-snapshot.mjs" product product-verified $env:SOURCE_SHA $env:RELEASE_TAG
+          if ($LASTEXITCODE -ne 0) { throw 'Frozen product provenance verification failed' }
+          Move-Item -LiteralPath product -Destination product-before-provenance
+          Move-Item -LiteralPath product-verified -Destination product
       - name: Verify original ZIP, payload, compiled version and tag
         shell: pwsh
         run: |
           & (Join-Path $env:RESOURCE_PUBLISHER_ROOT 'scripts/qualification/extract-windows-shell.ps1') -Archive "product/$env:PRODUCT_ARCHIVE" -Destination extracted -Native
           node scripts/qualification/verify-promotion.mjs product extracted $env:RELEASE_TAG $env:SOURCE_SHA promotion-identity.json
           if ($LASTEXITCODE -ne 0) { throw 'Promotion identity verification failed' }
-          foreach ($subject in @("product/$env:PRODUCT_ARCHIVE", 'product/release-manifest.json')) {
-            node scripts/qualification/release-identity.mjs attestation $subject $env:SOURCE_SHA --bundle product/qualification-provenance.json
-            if ($LASTEXITCODE -ne 0) { throw "Qualified ZIP or source/version manifest provenance verification failed: $subject" }
-          }
       - name: Verify distinct qualified Core original bytes and provenance
         shell: pwsh
         run: |
@@ -219,40 +205,15 @@ jobs:
           if ($roots.Count -ne 1) { throw 'Core extraction is ambiguous' }
           node scripts/qualification/verify-core-candidate.mjs product $roots[0].FullName $env:SOURCE_SHA
           if ($LASTEXITCODE -ne 0) { throw 'Original Core identity verification failed' }
-          $subjects = @($core.archive, 'core-release-manifest.json', 'core-distribution-manifest.json', ($core.archive -replace '\.zip$', '-Setup.exe')) | ForEach-Object { Join-Path product $_ }
-          foreach ($subject in $subjects) {
-            node scripts/qualification/release-identity.mjs attestation $subject $env:SOURCE_SHA --bundle product/qualification-provenance.json
-            if ($LASTEXITCODE -ne 0) { throw "Original Core qualification provenance failed: $subject" }
-          }
-
-      - name: Verify qualified installer provenance
+      - name: Verify qualified installer and update contract
         shell: pwsh
         run: |
-          $distributionPath = 'product/distribution-manifest.json'
-          $subjects = @()
-          if (Test-Path -LiteralPath $distributionPath) {
-            $distribution = Get-Content $distributionPath -Raw | ConvertFrom-Json
-            $subjects += @("product/$($distribution.archive)", $distributionPath)
-          }
-          $updatePath = 'product/update-manifest.json'
           if ($env:RELEASE_TAG -match '^v\d+\.\d+\.\d+$') {
-            if (!(Test-Path -LiteralPath $updatePath)) { throw 'Stable update manifest is required' }
-            node scripts/qualification/release-identity.mjs attestation $updatePath $env:SOURCE_SHA --bundle product/update-provenance.json
-            if ($LASTEXITCODE -ne 0) { throw 'Original update verification bundle failed' }
-            $bootstrap = "product/Mizar-v$($distribution.appVersion)-Windows-x64-WebInstaller.exe"
+            if (!(Test-Path -LiteralPath 'product/update-manifest.json')) { throw 'Stable update manifest is required' }
             node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-assets.mjs" assets product > public-assets.json
             if ($LASTEXITCODE -ne 0) { throw 'Native candidate identity failed' }
-            # The update manifest was already verified above with the original
-            # client bundle, including for historical recovery candidates.
-            $subjects += @($bootstrap, 'product/web-installer-build.json')
             node scripts/qualification/update-manifest.mjs product --check
             if ($LASTEXITCODE -ne 0) { throw 'Stable update contract validation failed' }
-          }
-          if ($subjects.Count -gt 0) {
-            foreach ($subject in $subjects) {
-              node scripts/qualification/release-identity.mjs attestation $subject $env:SOURCE_SHA --bundle product/qualification-provenance.json
-              if ($LASTEXITCODE -ne 0) { throw "Original installer/update metadata provenance failed: $subject" }
-            }
           }
       - name: Stage verified assets into an existing draft
         if: ${{ env.RELEASE_DRAFT_ID != '' }}
@@ -274,60 +235,48 @@ jobs:
           node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/machine-metadata.mjs" product "$env:RESOURCE_FROZEN_ROOT" - product/machine-metadata.json
           if ($LASTEXITCODE -ne 0) { throw 'Prerelease original carrier failed' }
 
-      - name: Bound Publish exact qualified assets to remaining time
-        if: ${{ env.RELEASE_DRAFT_ID == '' }}
-        id: budget_publish
-        shell: pwsh
-        run: |
-          $created = gh api "repos/$env:GH_REPO/actions/runs/$env:RELEASE_BUDGET_RUN" --jq .created_at
-          if ($LASTEXITCODE -ne 0 -or !$created) { throw 'Cannot read qualification start time' }
-          $minutes = [math]::Floor((600 - ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($created)).TotalSeconds) / 60)
-          if ($minutes -lt 1) { throw 'Less than one minute remains in release budget' }
-          "minutes=$minutes" >> $env:GITHUB_OUTPUT
       - name: Publish exact qualified assets
         if: ${{ env.RELEASE_DRAFT_ID == '' }}
-        timeout-minutes: ${{ fromJSON(steps.budget_publish.outputs.minutes) }}
         shell: pwsh
         run: |
-          if ([DateTimeOffset]::UtcNow -gt [DateTimeOffset]::Parse($env:RELEASE_DEADLINE)) { throw 'Release 600-second budget exceeded' }
           $prereleaseFlags = @()
           if ($env:RELEASE_TAG -match '-(?:alpha|beta|rc)\.[1-9]\d*$') { $prereleaseFlags = @('--prerelease', '--latest=false') }
-          $assets = @(node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-assets.mjs" assets product | ConvertFrom-Json)
-          if ($LASTEXITCODE -ne 0) { throw 'Consumer asset selection failed' }
-          if ($env:RESOURCE_ENABLED -eq 'true') { $assets += @((Get-ChildItem -LiteralPath $env:RESOURCE_FROZEN_ROOT -Filter '*.zip' -File).FullName) }
           if ($env:RELEASE_FOUND -eq 'true') {
-            gh api "repos/$env:GH_REPO/git/ref/tags/$env:RELEASE_TAG" > existing-ref.json
-            if ($LASTEXITCODE -ne 0) { throw 'Existing tag lookup failed' }
-            $resources = if ($env:RESOURCE_ENABLED -eq 'true') { $env:RESOURCE_FROZEN_ROOT } else { '-' }
-            node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-assets.mjs" reconcile product existing-release.json existing-ref.json promotion-identity.json $resources
-            if ($LASTEXITCODE -ne 0) { throw 'Existing asset mismatch or missing-asset upload failed; no overwrite' }
-            gh release edit $env:RELEASE_TAG --draft=false @prereleaseFlags
-            if ($LASTEXITCODE -ne 0) { throw 'Draft completion failed' }
-            gh api "repos/$env:GH_REPO/releases/tags/$env:RELEASE_TAG" > existing-release.json
-            if ($LASTEXITCODE -ne 0) { throw 'Existing release readback failed' }
-            $existing = Get-Content existing-release.json -Raw | ConvertFrom-Json
-            if (@($existing.assets | Where-Object { $_.name -in @('machine-metadata.json', 'update-index.json') }).Count) {
-              $resourceArgument = if ($env:RESOURCE_ENABLED -eq 'true') { $env:RESOURCE_FROZEN_ROOT } else { '-' }
-              node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/update-publication.mjs" verify-existing existing-release.json existing-ref.json $env:RELEASE_TAG product "$resourceArgument"
-              if ($LASTEXITCODE -ne 0) { throw 'Existing authorization invalid; refusing replacement' }
-              'RELEASE_ALREADY_PUBLISHED=true' >> $env:GITHUB_ENV
-            }
+            $release = Get-Content existing-release.json -Raw | ConvertFrom-Json
           } else {
             $identity = Get-Content promotion-identity.json -Raw | ConvertFrom-Json
             node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-notes.mjs" $identity.appVersion $env:SOURCE_SHA $env:RUN_ID release-notes.md
             if ($LASTEXITCODE -ne 0) { throw 'Release notes generation failed' }
-            $args = @('release','create',$env:RELEASE_TAG,'--target',$env:SOURCE_SHA,'--draft','--title',"Mizar $env:RELEASE_TAG",'--notes-file','release-notes.md') + $assets
-            $args += $prereleaseFlags
-            gh @args
-            if ($LASTEXITCODE -ne 0) { throw 'Draft upload incomplete; retry verifies original bytes and adds missing assets' }
-            gh release edit $env:RELEASE_TAG --draft=false @prereleaseFlags
-            if ($LASTEXITCODE -ne 0) { throw 'Publication failed; retry retains original assets' }
+            $releaseArguments = @('release','create',$env:RELEASE_TAG,'--target',$env:SOURCE_SHA,'--draft','--title',"Mizar $env:RELEASE_TAG",'--notes-file','release-notes.md') + $prereleaseFlags
+            node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/bounded-gh.mjs" @releaseArguments
+            if ($LASTEXITCODE -ne 0) { throw 'Draft creation uncertain; retry must reconcile original assets' }
+            node "$env:RESOURCE_PUBLISHER_ROOT/scripts/ci/resource-release.mjs" lookup-release product product/release-manifest.json existing-release.json
+            if ($LASTEXITCODE -ne 0) { throw 'Created draft identity is unknown or ambiguous' }
+            $release = Get-Content existing-release.json -Raw | ConvertFrom-Json
+            if (!$release.draft) { throw 'Created release is not an unpublished draft' }
+          }
+          $resources = if ($env:RESOURCE_ENABLED -eq 'true') { $env:RESOURCE_FROZEN_ROOT } else { '-' }
+          if ($release.draft) {
+            if ("$($release.id)" -notmatch '^\d+$') { throw 'Invalid draft release ID' }
+            node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-assets.mjs" publish-draft product promotion-identity.json "$resources" "$($release.id)" existing-release.json existing-ref.json
+            if ($LASTEXITCODE -ne 0) { throw 'Draft publication or its verified readback failed; reconcile before retry' }
+          } else {
+            node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/bounded-gh.mjs" api "repos/$env:GH_REPO/git/ref/tags/$env:RELEASE_TAG" > existing-ref.json
+            if ($LASTEXITCODE -ne 0) { throw 'Existing tag lookup failed' }
+            node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-assets.mjs" reconcile product existing-release.json existing-ref.json promotion-identity.json "$resources"
+            if ($LASTEXITCODE -ne 0) { throw 'Existing asset mismatch or missing-asset upload failed; no overwrite' }
+          }
+          $existing = Get-Content existing-release.json -Raw | ConvertFrom-Json
+          if ($env:RELEASE_TAG -notmatch '-' -and @($existing.assets | Where-Object { $_.name -in @('machine-metadata.json', 'update-index.json') }).Count) {
+            node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/update-publication.mjs" verify-existing existing-release.json existing-ref.json $env:RELEASE_TAG product "$resources"
+            if ($LASTEXITCODE -ne 0) { throw 'Existing authorization invalid; refusing replacement' }
+            'RELEASE_ALREADY_PUBLISHED=true' >> $env:GITHUB_ENV
           }
       - name: Verify actual public resource assets before downstream authorization
         if: ${{ env.RELEASE_DRAFT_ID == '' && env.RESOURCE_ENABLED == 'true' }}
         shell: pwsh
         run: |
-          gh api "repos/$env:GH_REPO/releases/tags/$env:RELEASE_TAG" > resource-published-release.json
+          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/bounded-gh.mjs" api "repos/$env:GH_REPO/releases/tags/$env:RELEASE_TAG" > resource-published-release.json
           if ($LASTEXITCODE -ne 0) { throw 'Published resource readback failed' }
           node "$env:RESOURCE_PUBLISHER_ROOT/scripts/ci/resource-release.mjs" published-release "$env:RESOURCE_FROZEN_ROOT" product/core-release-manifest.json resource-published-release.json
           if ($LASTEXITCODE -ne 0) { throw 'Public resources differ from the signed immutable candidate' }
@@ -335,10 +284,9 @@ jobs:
         if: ${{ env.RELEASE_DRAFT_ID == '' && !contains(env.RELEASE_TAG, '-') && env.RELEASE_ALREADY_PUBLISHED != 'true' }}
         shell: pwsh
         run: |
-          if ([DateTimeOffset]::UtcNow -gt [DateTimeOffset]::Parse($env:RELEASE_DEADLINE)) { throw 'Release 600-second budget exceeded' }
-          gh api "repos/$env:GH_REPO/releases/tags/$env:RELEASE_TAG" > published-release.json
+          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/bounded-gh.mjs" api "repos/$env:GH_REPO/releases/tags/$env:RELEASE_TAG" > published-release.json
           if ($LASTEXITCODE -ne 0) { throw 'Published release lookup failed' }
-          gh api "repos/$env:GH_REPO/git/ref/tags/$env:RELEASE_TAG" > published-ref.json
+          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/bounded-gh.mjs" api "repos/$env:GH_REPO/git/ref/tags/$env:RELEASE_TAG" > published-ref.json
           if ($LASTEXITCODE -ne 0) { throw 'Published tag lookup failed' }
           node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/update-publication.mjs" create published-release.json published-ref.json $env:RELEASE_TAG product update-publication.json
           if ($LASTEXITCODE -ne 0) { throw 'Published Stable authorization preparation failed' }
@@ -348,34 +296,22 @@ jobs:
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
           subject-path: update-publication.json
-      - name: Bound Upload and verify publication authorization to remaining time
-        id: budget_authorize
-        if: ${{ env.RELEASE_DRAFT_ID == '' && !contains(env.RELEASE_TAG, '-') && env.RELEASE_ALREADY_PUBLISHED != 'true' }}
-        shell: pwsh
-        run: |
-          $created = gh api "repos/$env:GH_REPO/actions/runs/$env:RELEASE_BUDGET_RUN" --jq .created_at
-          if ($LASTEXITCODE -ne 0 -or !$created) { throw 'Cannot read qualification start time' }
-          $minutes = [math]::Floor((600 - ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($created)).TotalSeconds) / 60)
-          if ($minutes -lt 1) { throw 'Less than one minute remains in release budget' }
-          "minutes=$minutes" >> $env:GITHUB_OUTPUT
       - name: Upload and verify publication authorization
-        timeout-minutes: ${{ fromJSON(steps.budget_authorize.outputs.minutes) }}
         if: ${{ env.RELEASE_DRAFT_ID == '' && !contains(env.RELEASE_TAG, '-') && env.RELEASE_ALREADY_PUBLISHED != 'true' }}
         shell: pwsh
         env:
           PUBLICATION_BUNDLE: ${{ steps.publication-provenance.outputs.bundle-path }}
         run: |
-          if ([DateTimeOffset]::UtcNow -gt [DateTimeOffset]::Parse($env:RELEASE_DEADLINE)) { throw 'Release 600-second budget exceeded' }
           Copy-Item -LiteralPath $env:PUBLICATION_BUNDLE -Destination update-publication-provenance.json
-          gh attestation verify update-publication.json --repo $env:GH_REPO --signer-workflow "$env:GH_REPO/.github/workflows/release-promotion.yml@refs/heads/main" --source-ref refs/heads/main --source-digest $env:GITHUB_SHA --bundle update-publication-provenance.json
+          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/bounded-gh.mjs" attestation verify update-publication.json --repo $env:GH_REPO --signer-workflow "$env:GH_REPO/.github/workflows/release-promotion.yml@refs/heads/main" --source-ref refs/heads/main --source-digest $env:GITHUB_SHA --bundle update-publication-provenance.json
           if ($LASTEXITCODE -ne 0) { throw 'Publication authorization verification failed' }
           node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/update-index.mjs" product/update-manifest.json product/update-provenance.json update-publication.json update-publication-provenance.json update-index.json
           if ($LASTEXITCODE -ne 0) { throw 'Original dual-signature envelope preparation failed' }
           node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/machine-metadata.mjs" product "$env:RESOURCE_FROZEN_ROOT" update-index.json machine-metadata.json
           if ($LASTEXITCODE -ne 0) { throw 'Original machine metadata aggregation failed' }
-          gh release upload $env:RELEASE_TAG machine-metadata.json
+          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/bounded-gh.mjs" release upload $env:RELEASE_TAG machine-metadata.json
           if ($LASTEXITCODE -ne 0) { throw 'Publication authorization upload failed; do not overwrite assets' }
-          gh api "repos/$env:GH_REPO/releases/tags/$env:RELEASE_TAG" > published-release.json
+          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/bounded-gh.mjs" api "repos/$env:GH_REPO/releases/tags/$env:RELEASE_TAG" > published-release.json
           if ($LASTEXITCODE -ne 0) { throw 'Publication authorization readback failed' }
           $resourceArgument = if ($env:RESOURCE_ENABLED -eq 'true') { $env:RESOURCE_FROZEN_ROOT } else { '-' }
           node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/update-publication.mjs" verify-existing published-release.json published-ref.json $env:RELEASE_TAG product "$resourceArgument"
@@ -385,7 +321,6 @@ jobs:
         if: ${{ env.RELEASE_DRAFT_ID == '' && !contains(env.RELEASE_TAG, '-') }}
         shell: pwsh
         run: |
-          if (!(Test-Path -LiteralPath 'evidence-extracted/build-timings.json' -PathType Leaf)) { throw 'Qualified evidence is missing build timing' }
           node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-timings.mjs" promotion release-timings.json
           if ($LASTEXITCODE -ne 0) { throw 'Release timing identity/path validation failed' }
       - name: Preserve maintainer promotion records in CI only

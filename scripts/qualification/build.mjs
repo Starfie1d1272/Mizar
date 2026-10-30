@@ -115,9 +115,34 @@ function runCommand(command, args, options = {}) {
         stderr += String(chunk);
       });
     }
-    processHandle.once('error', reject);
-    processHandle.once('exit', (code, signal) => {
-      if (code === 0) resolvePromise({ stdout, stderr });
+    let spawnError;
+    let termination = Promise.resolve();
+    const abort = () => {
+      if (process.platform === 'win32' && processHandle.pid) {
+        // Cargo may have compiler and linker descendants; terminate the whole tree.
+        const killer = spawn('taskkill', ['/pid', String(processHandle.pid), '/t', '/f'], {
+          stdio: 'ignore',
+          windowsHide: true,
+        });
+        termination = new Promise((done) => {
+          killer.once('error', () => processHandle.kill());
+          killer.once('close', (code) => {
+            if (code !== 0) processHandle.kill();
+            done();
+          });
+        });
+      } else processHandle.kill();
+    };
+    options.signal?.addEventListener('abort', abort, { once: true });
+    if (options.signal?.aborted) abort();
+    processHandle.once('error', (error) => {
+      spawnError = error;
+    });
+    processHandle.once('close', async (code, signal) => {
+      options.signal?.removeEventListener('abort', abort);
+      await termination;
+      if (spawnError) reject(spawnError);
+      else if (code === 0 && !options.signal?.aborted) resolvePromise({ stdout, stderr });
       else
         reject(
           new Error(
@@ -143,8 +168,8 @@ async function ensureCleanCheckout(allowDirty) {
   }
 }
 
-async function fetchResponse(url) {
-  const response = await globalThis.fetch(url);
+export async function fetchResponse(url) {
+  const response = await globalThis.fetch(url, { signal: globalThis.AbortSignal.timeout(180000) });
   if (!response.ok || response.body === null)
     throw new Error(`下载失败：${url}（HTTP ${response.status}）`);
   return response;
@@ -329,6 +354,58 @@ async function main() {
       if (error?.code !== 'ENOENT') throw error;
     }
   }
+  const cargoAbort = new globalThis.AbortController();
+  const desktopDir = join(rootDir, 'apps', 'desktop', 'src-tauri');
+  // Attach a rejection handler immediately while independent assembly runs.
+  const cargoResult =
+    process.platform === 'win32' && !options.skipNodeRuntime
+      ? timed('desktop-cargo-build', () =>
+          runCommand(
+            'cargo',
+            [
+              'build',
+              '--profile',
+              options.desktopProfile,
+              '--locked',
+              '--manifest-path',
+              join(desktopDir, 'Cargo.toml'),
+            ],
+            { signal: cargoAbort.signal },
+          ),
+        ).then(
+          () => ({ ok: true }),
+          (error) => ({ ok: false, error }),
+        )
+      : null;
+  try {
+    await assemble({
+      options,
+      gitSha,
+      shortSha,
+      appVersion,
+      bundleName,
+      bundleDir,
+      timed,
+      cargoResult,
+      desktopDir,
+    });
+  } finally {
+    cargoAbort.abort();
+    if (cargoResult) await cargoResult;
+  }
+}
+
+async function assemble({
+  options,
+  gitSha,
+  shortSha,
+  appVersion,
+  bundleName,
+  bundleDir,
+  timed,
+  cargoResult,
+  desktopDir,
+}) {
   if (!options.skipBuild)
     await timed('workspace-build', () =>
       runCommand('pnpm', ['build'], { env: { MIZAR_WEB_RESOURCE_MODE: options.resourceMode } }),
@@ -493,17 +570,8 @@ async function main() {
     if (!developmentOnly)
       await timed('mulnx-bundle', () => stageMulnxBundle(rootDir, join(resourcesDir, 'mulnx')));
     if (process.platform === 'win32' && !options.skipNodeRuntime) {
-      const desktopDir = join(rootDir, 'apps', 'desktop', 'src-tauri');
-      await timed('desktop-cargo-build', () =>
-        runCommand('cargo', [
-          'build',
-          '--profile',
-          options.desktopProfile,
-          '--locked',
-          '--manifest-path',
-          join(desktopDir, 'Cargo.toml'),
-        ]),
-      );
+      const result = await cargoResult;
+      if (!result.ok) throw result.error;
       await cp(
         join(desktopDir, 'target', options.desktopProfile, 'mizar-desktop.exe'),
         join(stagingDir, 'Mizar.exe'),
