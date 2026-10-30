@@ -627,3 +627,33 @@ it('shows recalibration as unavailable rather than ready with a stale delay', ()
   expect(container.textContent).toContain('正在重新校准延迟');
   expect(container.textContent).not.toContain('保持上次校准');
 });
+
+it('shows MulNX download progress and cancellation in resource management', async () => {
+  window.__TAURI_INTERNALS__ = { invoke: <T,>() => Promise.resolve(undefined as T) };
+  Object.assign(mocks.catalog.tool, {
+    phase: 'downloading',
+    source: '南大云盘',
+    downloadedBytes: 12,
+    totalBytes: 34,
+    busy: true,
+  });
+  try {
+    await act(async () => {
+      root.render(<ResourceLibraryPage />);
+      await Promise.resolve();
+    });
+    expect(container.textContent).toContain('南大云盘');
+    expect(container.textContent).toContain('12 / 34 字节');
+    expect(
+      [...container.querySelectorAll('button')].some((button) => button.textContent === '取消下载'),
+    ).toBe(true);
+  } finally {
+    Object.assign(mocks.catalog.tool, {
+      phase: 'idle',
+      source: null,
+      downloadedBytes: 0,
+      totalBytes: 0,
+      busy: false,
+    });
+  }
+});

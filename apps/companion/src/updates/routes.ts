@@ -7,6 +7,7 @@ import { diagnosticValue } from '../support/session-journal.js';
 import type { ProgramSceneController } from '../program-scenes/controller.js';
 import type { registerProductionRoutes } from '../program-scenes/production.js';
 import { UpdateManager, safeCode, updateFailure } from './manager.js';
+import type { MulnxTool } from '../orchestration/tool.js';
 
 export function installBlockReason(
   production: { mode: string },
@@ -34,6 +35,7 @@ export function registerUpdateRoutes(
     scenes: ProgramSceneController;
     obs: () => Promise<ObsStatus | undefined>;
     obsProcessRunning?: () => Promise<boolean>;
+    mulnx?: () => MulnxTool | undefined;
   },
 ) {
   const { manager, production, scenes } = options;
@@ -71,15 +73,22 @@ export function registerUpdateRoutes(
   };
   const publicView = async () => {
     const status = manager.status();
+    const tool = options.mulnx?.()?.view();
     const reminderPhase = ['available', 'manual', 'ready'].includes(status.phase);
-    const blocked = status.phase === 'ready' || reminderPhase ? await assess() : null;
+    const mulnxPending = Boolean(
+      tool?.notificationIdentity && tool.notificationIdentity !== tool.notifiedIdentity,
+    );
+    const blocked =
+      status.phase === 'ready' || reminderPhase || mulnxPending ? await assess() : null;
     const installBlockedReason = status.phase === 'ready' ? blocked : null;
     const scene = scenes.get();
     return {
       ...status,
+      mulnx: tool ?? null,
+      mulnxNotificationPending: mulnxPending,
       productionRevision: production.get().revision,
       installBlockedReason,
-      notificationSafe: status.automatic && reminderPhase && blocked === null,
+      notificationSafe: status.automatic && (reminderPhase || mulnxPending) && blocked === null,
       canResumeAutomatic:
         production.get().mode === 'preparation' &&
         scene.active === 'waiting' &&
@@ -96,7 +105,12 @@ export function registerUpdateRoutes(
       !checkLocalWebOrigin(options.originPolicy, request.headers.origin).allowed
     )
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
-    const body = request.body as { action?: unknown; enabled?: unknown; version?: unknown } | null;
+    const body = request.body as {
+      action?: unknown;
+      enabled?: unknown;
+      version?: unknown;
+      identity?: unknown;
+    } | null;
     try {
       if (body?.action === 'check') await manager.check();
       else if (body?.action === 'download') await manager.download();
@@ -108,6 +122,11 @@ export function registerUpdateRoutes(
         return { ...(await publicView()), notification };
       } else if (body?.action === 'dismiss-notification' && typeof body.version === 'string') {
         manager.dismissNotification(body.version);
+      } else if (
+        body?.action === 'dismiss-mulnx-notification' &&
+        typeof body.identity === 'string'
+      ) {
+        options.mulnx?.()?.dismissNotification(body.identity);
       } else if (body?.action === 'resume') {
         const scene = scenes.get();
         if (

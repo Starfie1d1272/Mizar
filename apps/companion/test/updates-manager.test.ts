@@ -192,3 +192,17 @@ it('logs the original long update cause chain while keeping public failure detai
     32 * 1024,
   );
 });
+
+it('shares desktop startup deduplication and automatic preference with the companion check', async () => {
+  const { manager } = await setup();
+  const check = vi.fn(() => Promise.resolve(true));
+  manager.registerCompanionCheck(check);
+  manager.desktopStartup('same-session');
+  manager.desktopStartup('same-session');
+  await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(1));
+  await vi.waitFor(() => expect(manager.status().phase).not.toBe('checking'));
+  await manager.setAutomatic(false);
+  manager.desktopStartup('next-session');
+  await Promise.resolve();
+  expect(check).toHaveBeenCalledTimes(1);
+});
