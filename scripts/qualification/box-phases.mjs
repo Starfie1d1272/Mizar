@@ -1,10 +1,8 @@
 import { Buffer } from 'node:buffer';
-import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { promisify } from 'node:util';
 import {
   MACHINE_METADATA_NAME,
   readMachineMetadata,
@@ -15,7 +13,7 @@ import {
 } from '../../packages/resource-pack-contract/catalog.mjs';
 import { requireValue } from '../../packages/resource-pack-contract/index.mjs';
 import { resourceAssetInventory } from '../ci/resource-release.mjs';
-import { releaseAttestationArgs } from './release-identity.mjs';
+import { verifyReleaseAttestations } from './release-identity.mjs';
 import { multipartUpload } from './box-upload.mjs';
 import { curlMultipartUpload } from './box-curl-upload.mjs';
 import {
@@ -46,7 +44,6 @@ import {
   readBoxPlan,
 } from './box-phase-contract.mjs';
 
-const exec = promisify(execFile);
 const identityOf = ({ name, size, sha256 }) => ({ name, size, sha256 });
 const assetBytes = (name, bytes) => ({ name, size: bytes.length, sha256: digest(bytes) });
 const envAttempt = () => Number(process.env.GITHUB_RUN_ATTEMPT);
@@ -60,12 +57,14 @@ const boxClient = () =>
 const proof = async (file, sha, bundle, workflow) =>
   boxStage(
     `来源证明/${basename(file)}`,
-    () =>
-      exec('gh', releaseAttestationArgs(file, sha, bundle, workflow), {
-        timeout: 60000,
-        maxBuffer: 2 * 1024 * 1024,
-        windowsHide: true,
-      }),
+    async () => {
+      try {
+        await verifyReleaseAttestations([{ file, sourceSha: sha, bundle, workflow }]);
+      } catch (error) {
+        // The shared verifier has already removed tokens and signed URL queries.
+        throw new MirrorError(error.message);
+      }
+    },
     60000,
   );
 
@@ -153,10 +152,18 @@ export async function readRelease(path) {
   await writeNew(path, Buffer.from(JSON.stringify(info)));
   return { prerelease: false, tag };
 }
-export async function prepare(root, infoPath) {
+export async function prepare(
+  root,
+  infoPath,
+  {
+    loadIdentity = releaseIdentity,
+    loadIndex = verifiedUpdateIndex,
+    verifyResources = verifyResourceMetadata,
+  } = {},
+) {
   const info = JSON.parse(await readFile(infoPath));
   const { tag } = info;
-  const identity = await releaseIdentity(tag, {
+  const identity = await loadIdentity(tag, {
     runtime: false,
     bootstrap: false,
     releaseInfo: info,
@@ -169,8 +176,8 @@ export async function prepare(root, infoPath) {
       !older(identity.version, '1.6.0'),
     '仅同步已签拆分发行',
   );
-  const index = await verifiedUpdateIndex(identity, tag);
-  const resources = await verifyResourceMetadata(identity);
+  const index = await loadIndex(identity, tag);
+  const resources = await verifyResources(identity);
   const archive = resources.entry.archive;
   const matching = identity.release.assets.filter((asset) => asset.name === archive.name);
   requireValue(

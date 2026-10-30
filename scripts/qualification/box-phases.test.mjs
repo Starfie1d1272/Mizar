@@ -184,3 +184,66 @@ test('separate lanes reuse verified files and publish only after receipts and fu
   await verifyEntry(root, receipts, async () => {});
   assert.deepEqual(box.files.get('/Updates/latest.json'), index);
 });
+
+test('prepare writes only metadata and the exact authenticated asset plan', async (t) => {
+  const { prepare } = await import('./box-phases.mjs');
+  const { readBoxPlan } = await import('./box-phase-contract.mjs');
+  const root = await mkdtemp(join(tmpdir(), 'mizar-box-plan-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const before = [process.env.GITHUB_RUN_ID, process.env.GITHUB_RUN_ATTEMPT];
+  t.after(() => {
+    for (const [index, key] of ['GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT'].entries())
+      if (before[index] === undefined) delete process.env[key];
+      else process.env[key] = before[index];
+  });
+  process.env.GITHUB_RUN_ID = '123';
+  process.env.GITHUB_RUN_ATTEMPT = '1';
+  const tag = 'v1.10.0',
+    sha = 'b'.repeat(40),
+    coreSha = 'c'.repeat(64);
+  const carrier = Buffer.from('small-metadata'),
+    backend = item(`Mizar-${tag}-Windows-x64-Core-Setup.exe`, Buffer.from('core'));
+  const bootstrap = item(`Mizar-${tag}-Windows-x64-WebInstaller.exe`, Buffer.from('web'));
+  const pack = item('Mizar-official-epl-default-1.0.0.zip', Buffer.from('pack'));
+  const release = {
+    id: 7,
+    assets: [
+      {
+        name: pack.name,
+        size: pack.size,
+        digest: `sha256:${pack.sha256}`,
+        browser_download_url: `https://github.com/Starfie1d1272/Mizar/releases/download/${tag}/${pack.name}`,
+      },
+    ],
+  };
+  const identity = {
+    version: '1.10.0',
+    gitSha: sha,
+    core: { archiveSha256: coreSha },
+    originals: new Map(),
+    runtime: [{ ...item('machine-metadata.json', carrier), bytes: carrier }, backend],
+    bootstrap,
+    release,
+  };
+  const input = join(root, 'release.json');
+  await writeFile(input, JSON.stringify({ tag }));
+  const destination = join(root, 'plan');
+  const result = await prepare(destination, input, {
+    loadIdentity: async (_tag, options) => {
+      assert.equal(options.runtime, false);
+      assert.equal(options.bootstrap, false);
+      return identity;
+    },
+    loadIndex: async () => Buffer.from('index'),
+    verifyResources: async () => ({
+      entry: { archive: { name: pack.name, bytes: pack.size, sha256: pack.sha256 } },
+    }),
+  });
+  const bytes = await readFile(join(destination, 'plan.json'));
+  assert.equal(result.planSha256, digest(bytes));
+  const plan = readBoxPlan(bytes);
+  assert.deepEqual(plan.assets.runtime, [item('machine-metadata.json', carrier), backend]);
+  assert.deepEqual(plan.assets.resources, [pack]);
+  assert.deepEqual(plan.assets.downloads, [bootstrap]);
+  await assert.rejects(readFile(join(destination, backend.name)), { code: 'ENOENT' });
+});

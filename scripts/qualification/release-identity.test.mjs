@@ -64,6 +64,13 @@ test('same signed bytes share one gh verification, every named snapshot is check
     }),
     /bundle 已变化/,
   );
+  await writeFile(join(dir, 'proof-b'), bytes);
+  await assert.rejects(
+    verifyGroupedReleaseAttestations(subjects, async () => {
+      await writeFile(join(dir, 'one'), 'raced');
+    }),
+    /字节不一致/,
+  );
 });
 
 test('different original bundle bytes and workflow/source identities remain separate', async (t) => {
@@ -82,6 +89,15 @@ test('different original bundle bytes and workflow/source identities remain sepa
       workflow: 'promotion',
     },
   ];
+  const distinctBundles = subjects.map((entry) => ({
+    ...entry,
+    sourceSha: sha,
+    workflow: 'qualification',
+  }));
+  assert.deepEqual(await verifyGroupedReleaseAttestations(distinctBundles, async () => {}), {
+    groups: 2,
+    calls: 2,
+  });
   const calls = [];
   assert.deepEqual(
     await verifyGroupedReleaseAttestations(subjects, async (_name, args) => calls.push(args)),

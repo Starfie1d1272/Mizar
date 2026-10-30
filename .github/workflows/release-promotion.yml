@@ -199,6 +199,13 @@ jobs:
         run: |
           git checkout --detach $env:SOURCE_SHA
           if ($LASTEXITCODE -ne 0) { throw 'Source checkout failed' }
+      - name: Freeze original product and verify grouped provenance
+        shell: pwsh
+        run: |
+          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/promotion-snapshot.mjs" product product-verified $env:SOURCE_SHA $env:RELEASE_TAG
+          if ($LASTEXITCODE -ne 0) { throw 'Frozen product provenance verification failed' }
+          Move-Item -LiteralPath product -Destination product-before-provenance
+          Move-Item -LiteralPath product-verified -Destination product
       - name: Verify original ZIP, payload, compiled version and tag
         shell: pwsh
         run: |
@@ -225,13 +232,6 @@ jobs:
             node scripts/qualification/update-manifest.mjs product --check
             if ($LASTEXITCODE -ne 0) { throw 'Stable update contract validation failed' }
           }
-      - name: Freeze original product and verify grouped provenance
-        shell: pwsh
-        run: |
-          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/promotion-snapshot.mjs" product product-verified $env:SOURCE_SHA $env:RELEASE_TAG
-          if ($LASTEXITCODE -ne 0) { throw 'Frozen product provenance verification failed' }
-          Move-Item -LiteralPath product -Destination product-before-provenance
-          Move-Item -LiteralPath product-verified -Destination product
       - name: Stage verified assets into an existing draft
         if: ${{ env.RELEASE_DRAFT_ID != '' }}
         shell: pwsh

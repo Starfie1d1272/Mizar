@@ -52,7 +52,8 @@ jobs:
                 using (var client = new WebClient()) {
                   client.Headers.Add("User-Agent", "Mizar-PERF-ONLY");
                   client.Headers.Add("Accept", "application/vnd.github+json");
-                  Console.Write(client.DownloadString("https://api.github.com" + args[3]));
+                  var bytes = client.DownloadData("https://api.github.com" + args[3]);
+                  using (var output = Console.OpenStandardOutput()) output.Write(bytes, 0, bytes.Length);
                 }
                 return 0;
               } catch (WebException error) {
@@ -181,7 +182,8 @@ jobs:
                 using (var client = new WebClient()) {
                   client.Headers.Add("User-Agent", "Mizar-PERF-ONLY");
                   client.Headers.Add("Accept", "application/vnd.github+json");
-                  Console.Write(client.DownloadString("https://api.github.com" + args[3]));
+                  var bytes = client.DownloadData("https://api.github.com" + args[3]);
+                  using (var output = Console.OpenStandardOutput()) output.Write(bytes, 0, bytes.Length);
                 }
                 return 0;
               } catch (WebException error) {

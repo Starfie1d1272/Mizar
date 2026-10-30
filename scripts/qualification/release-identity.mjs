@@ -199,9 +199,11 @@ export async function verifyGroupedReleaseAttestations(subjects, execute = promi
     const raw = Buffer.from(envelope.payload, 'base64');
     if (!raw.length || raw.toString('base64') !== envelope.payload)
       throw new Error('来源 DSSE 编码无效');
+    const payloadText = raw.toString('utf8');
+    if (!Buffer.from(payloadText, 'utf8').equals(raw)) throw new Error('来源 DSSE UTF-8 无效');
     let statement;
     try {
-      statement = JSON.parse(raw.toString('utf8'));
+      statement = JSON.parse(payloadText);
     } catch {
       throw new Error('来源 DSSE 内容无效');
     }
