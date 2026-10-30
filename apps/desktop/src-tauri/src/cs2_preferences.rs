@@ -116,9 +116,19 @@ mod tests {
             assert_eq!(old.quality == Quality::Preserve, preserve);
         }
         for saved in [false, true] {
-            assert_eq!(Preferences::from_json(&json!({"qualityPreset":"high","frameRateLimit":30,"preferMulnx":saved})).unwrap().prefer_mulnx, saved);
+            assert_eq!(
+                Preferences::from_json(
+                    &json!({"qualityPreset":"high","frameRateLimit":30,"preferMulnx":saved})
+                )
+                .unwrap()
+                .prefer_mulnx,
+                saved
+            );
         }
-        assert!(Preferences::from_json(&json!({"qualityPreset":"high","frameRateLimit":30,"launchPreferenceVersion":2})).is_err());
+        assert!(Preferences::from_json(
+            &json!({"qualityPreset":"high","frameRateLimit":30,"launchPreferenceVersion":2})
+        )
+        .is_err());
         let mut invalid = legacy;
         invalid["preferMulnx"] = json!("true");
         assert!(Preferences::from_json(&invalid).is_err());
