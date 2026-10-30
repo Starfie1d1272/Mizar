@@ -12,6 +12,7 @@ import {
   type HudPreset,
   type HudTheme,
 } from '@mizar/hud-config';
+import { assertSupportedHudModule, isSupportedHudPauseVisual } from '@mizar/broadcast-config';
 import type {
   ActiveBroadcastSnapshot,
   BroadcastConfigDocument,
@@ -67,7 +68,7 @@ export function createHudConfigPersistence(
 ): HudConfigPersistence {
   return {
     initialize: () => Promise.resolve(hudDocumentFromBroadcast(store.snapshot)),
-    async commit(candidate, previous) {
+    async commit(candidate, previous, command) {
       const current = store.snapshot;
       const activeChanged =
         canonicalJson(candidate.activePreset) !== canonicalJson(previous.activePreset);
@@ -88,6 +89,12 @@ export function createHudConfigPersistence(
         overlays: targetValue?.overlays ?? oldHud.overlays,
         accent: targetValue?.accent ?? oldHud.accent,
       };
+      if (command.kind === 'activate-preset') {
+        if (target) assertSupportedHudModule(target);
+        const selectedHud = activeChanged ? nextHud : oldHud;
+        if (!isSupportedHudPauseVisual(selectedHud.overlays.pause.visual))
+          throw new Error('capability_unsupported');
+      }
       const lock = activeChanged ? await lockFor(nextHud, current.active) : current.active.lock;
       await store.updateFromLegacy({
         updateDraft(document) {

@@ -4,15 +4,12 @@ import type {
   ProgramVisualConfigV1,
   ResolvedHudModule,
 } from '@mizar/broadcast-config';
-import { HUD_BROADCAST_STYLES } from '@mizar/hud-config';
+import { isSupportedHudPauseVisual } from '@mizar/broadcast-config';
 import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
 
 export function supportsHud(hud: ResolvedHudModule): boolean {
   if (hud.renderer !== 'native') return false;
-  const visual = hud.overlays.pause.visual;
-  return (
-    visual === 'legacy' || visual === 'current' || HUD_BROADCAST_STYLES.some((id) => id === visual)
-  );
+  return isSupportedHudPauseVisual(hud.overlays.pause.visual);
 }
 
 const pulseTokens = {

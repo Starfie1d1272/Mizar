@@ -7,9 +7,14 @@ import { desktopInvoke } from '../workspace/client';
 import { prepareObs } from '../workspace/obs-preparation';
 
 export function useLocalReadWithTime<T>(path: string | null, interval = 2000, refresh = 0) {
-  const [value, setValue] = useState<{ value: T | null; updatedAt: number | null }>({
+  const [value, setValue] = useState<{
+    value: T | null;
+    updatedAt: number | null;
+    status: 'loading' | 'ready' | 'unavailable';
+  }>({
     value: null,
     updatedAt: null,
+    status: 'loading',
   });
   useEffect(() => {
     if (path === null) return;
@@ -23,9 +28,9 @@ export function useLocalReadWithTime<T>(path: string | null, interval = 2000, re
         });
         if (!response.ok) throw new Error('unavailable');
         const next = (await response.json()) as T;
-        if (active) setValue({ value: next, updatedAt: Date.now() });
+        if (active) setValue({ value: next, updatedAt: Date.now(), status: 'ready' });
       } catch {
-        if (active) setValue({ value: null, updatedAt: null });
+        if (active) setValue({ value: null, updatedAt: null, status: 'unavailable' });
       } finally {
         if (active) timer = setTimeout(() => void poll(), interval);
       }

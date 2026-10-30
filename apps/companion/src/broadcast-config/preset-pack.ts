@@ -1,3 +1,4 @@
+import { assertSupportedHudModule } from '@mizar/broadcast-config';
 import { createHash } from 'node:crypto';
 import { MUSIC_GROUPS } from '@mizar/protocol/music';
 import {
@@ -317,11 +318,12 @@ export async function inspectPresetPack(input: {
     analyzed.entries.map(async (entry) => {
       let status = entry.status;
       let reason = entry.reason;
-      if (entry.type === 'module' && status === 'ready' && input.availability) {
+      if (entry.type === 'module' && status === 'ready') {
         const module = analyzed.prepare({ modules: [entry.entryId], presets: [] }).modules[0];
         if (module)
           try {
-            await input.availability(module, source);
+            assertSupportedHudModule(module);
+            await input.availability?.(module, source);
           } catch (error) {
             const code = error instanceof Error ? error.message : '';
             status = code === 'capability_unsupported' ? 'unsupported' : 'dependency_missing';
@@ -402,8 +404,9 @@ export async function importPresetPack(input: {
       .filter((entry) => entry.type === 'preset')
       .map((entry) => entry.entryId),
   };
-  // Validate the complete requested selection before excluding unsupported entries.
-  inspected.prepare(selected);
+  // Reject an unsupported pause visual before installing resources or committing drafts.
+  const requested = inspected.prepare(selected);
+  requested.modules.forEach(assertSupportedHudModule);
   const allowed = (id: string) => {
     const entry = inspected.entries.find((item) => item.entryId === id);
     return entry && entry.status !== 'unsupported' && entry.status !== 'invalid';

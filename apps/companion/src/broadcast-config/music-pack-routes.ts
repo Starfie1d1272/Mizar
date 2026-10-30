@@ -146,6 +146,8 @@ export function registerMusicPackRoutes(
       } catch (error) {
         if (error instanceof Error && error.message === 'identity_conflict')
           return reply.code(409).send({ error: 'identity_conflict' });
+        if (error instanceof Error && error.message === 'capability_unsupported')
+          return reply.code(422).send({ error: 'capability_unsupported' });
         return reply.code(400).send({ error: 'package_invalid' });
       }
     },
