@@ -402,7 +402,7 @@ export class ObsAdapter {
             ),
           );
           if (result === 'complete' && valid()) {
-            const adopted = await this.configurationMutation(() =>
+            await this.configurationMutation(() =>
               this.audioConfiguration.run((connection, endpoint, observer) =>
                 this.adoptInitialTeamspeakDesktop(
                   guardedObs(connection, valid),
@@ -412,18 +412,7 @@ export class ObsAdapter {
                 ),
               ),
             );
-            if (valid()) {
-              await this.check();
-              if (adopted)
-                this.findings = [
-                  ...this.findings,
-                  {
-                    code: 'audio_teamspeak_compatibility',
-                    message:
-                      '已保留桌面混音。请确认游戏与 TeamSpeak 输出到所采集的设备，并在开播前录制试听。',
-                  },
-                ];
-            }
+            if (valid()) await this.check();
           }
         } catch {
           // Commentary discovery is retried independently of mode recovery.
@@ -730,6 +719,93 @@ export class ObsAdapter {
       message: `${role} 音频来源已失效，请在音频分路中核对。`,
     }));
   }
+  private async microphoneMonitorSafe(obs: ObsRpc, desktop: string, microphone: string) {
+    try {
+      const monitor = await obs.call('GetInputAudioMonitorType', { inputUuid: microphone });
+      if (monitor.monitorType === 'OBS_MONITORING_TYPE_NONE') return true;
+      if (monitor.monitorType !== 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT') return false;
+      return (await desktopMonitorRelationship(obs, desktop)) === 'different';
+    } catch {
+      return false;
+    }
+  }
+  private async teamspeakCompatibilityFindings(
+    obs: ObsRpc,
+    endpoint: string,
+  ): Promise<ObsFinding[]> {
+    if (!this.commentary || !this.audioRouting) return [];
+    const preference = await this.commentary.owner.get();
+    if (preference.preference.mode === 'disabled') return [];
+    const routing = await this.audioRouting.modeRecoveryState();
+    const collection = (await obs.call('GetSceneCollectionList')).currentSceneCollectionName;
+    if (collection !== OBS_COLLECTION) return [];
+    const inputs = (await obs.call('GetInputList')).inputs;
+    if (!Array.isArray(inputs)) throw new Error('commentary_obs_response_invalid');
+    let candidates = inputs.filter(
+      (input: Record<string, unknown>) =>
+        input.inputKind === 'wasapi_process_output_capture' && typeof input.inputUuid === 'string',
+    );
+    const selected =
+      preference.preference.mode === 'existingInput'
+        ? preference.preference.binding
+        : !routing.desktop
+          ? routing.bindings.remoteCommentary
+          : null;
+    if (selected) {
+      if (selected.endpoint !== endpoint || selected.collection !== collection) return [];
+      candidates = candidates.filter(
+        (input: Record<string, unknown>) => input.inputUuid === selected.inputUuid,
+      );
+    }
+    if (
+      preference.preference.mode === 'application' &&
+      !isModernTeamspeak(preference.preference.window)
+    )
+      return [];
+    let modern = preference.preference.mode === 'application';
+    let target: string | undefined;
+    for (const input of candidates) {
+      const settings = (await obs.call('GetInputSettings', { inputUuid: input.inputUuid }))
+        .inputSettings;
+      if (
+        settings &&
+        typeof settings === 'object' &&
+        isModernTeamspeak((settings as Record<string, unknown>).window)
+      ) {
+        modern = true;
+        target = input.inputUuid as string;
+        break;
+      }
+    }
+    if (!modern) return [];
+    let desktop = routing.desktop?.inputUuid;
+    let microphone = routing.desktopMicrophone?.inputUuid;
+    if (!desktop && !selected && target) {
+      const legacy = await inspectLegacyAudioTemplate(obs, this.browserBaseUrl, target);
+      if (
+        legacy &&
+        legacy.desktop.length &&
+        legacy.desktop.every((ref) => ref.sourceUuid === legacy.desktop[0]!.sourceUuid)
+      ) {
+        desktop = legacy.desktop[0]!.sourceUuid;
+        microphone = legacy.microphoneUuid;
+      }
+    }
+    const monitorRisk =
+      desktop && microphone && !(await this.microphoneMonitorSafe(obs, desktop, microphone));
+    return [
+      {
+        code: 'audio_teamspeak_compatibility',
+        message: monitorRisk
+          ? routing.desktop
+            ? '麦克风监听可能导致重复或未进入节目，请在 OBS 核对监听与设备；开播前录制试听其他解说。'
+            : '麦克风监听可能导致重复或未进入节目。请在声音设置切换桌面混音，或在 OBS 核对监听与设备；开播前录制试听其他解说。'
+          : routing.desktop
+            ? '当前为桌面混音。请确认游戏与 TeamSpeak 输出到所采集的设备，并在开播前录制试听。'
+            : 'TeamSpeak 新版独立采集可能没有远端人声；可在声音设置切换桌面混音，并在开播前录制试听。',
+      },
+    ];
+  }
   private async configurationFindings(
     obs: ObsRpc,
     endpoint: string,
@@ -744,6 +820,12 @@ export class ObsAdapter {
           ...findings,
           ...(await checkObsAudio(obs)),
           ...(await this.bindingFindings(obs, endpoint)),
+          ...(await this.teamspeakCompatibilityFindings(obs, endpoint).catch(() => [
+            {
+              code: 'audio_teamspeak_compatibility',
+              message: '解说音频兼容状态未确认，请在声音设置检查来源并在开播前录制试听。',
+            },
+          ])),
         ];
   }
 
@@ -1833,6 +1915,8 @@ export class ObsAdapter {
         microphone?.inputKind !== 'wasapi_input_capture'
       )
         return false;
+      if (!(await this.microphoneMonitorSafe(obs, desktopUuid, legacy.microphoneUuid)))
+        return false;
       const [stream, record] = await Promise.all([
         obs.call('GetStreamStatus'),
         obs.call('GetRecordStatus'),
@@ -1952,20 +2036,22 @@ export class ObsAdapter {
                   )) ?? null,
               );
               if (findings.some((finding) => finding.code === 'audio_teamspeak_compatibility')) {
-                const adopted = await this.adoptInitialTeamspeakDesktop(
+                await this.adoptInitialTeamspeakDesktop(
                   guardedObs(connection, current),
                   endpoint,
                   observer,
                   current,
                 );
-                if (adopted)
-                  return [
-                    {
-                      code: 'audio_teamspeak_compatibility',
-                      message:
-                        '已保留桌面混音。请确认游戏与 TeamSpeak 输出到所采集的设备，并在开播前录制试听。',
-                    },
-                  ];
+                const compatibility = await this.teamspeakCompatibilityFindings(
+                  guardedObs(connection, current),
+                  endpoint,
+                ).catch(() =>
+                  findings.filter((finding) => finding.code === 'audio_teamspeak_compatibility'),
+                );
+                return [
+                  ...findings.filter((finding) => finding.code !== 'audio_teamspeak_compatibility'),
+                  ...compatibility,
+                ];
               }
               return findings;
             },

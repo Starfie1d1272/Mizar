@@ -17,7 +17,17 @@ afterEach(async () => {
 const base = 'http://127.0.0.1:3000';
 const scenes = obsDesiredScenes(base);
 
-async function fixture(options: { active?: boolean; duplicate?: boolean; changed?: boolean } = {}) {
+async function fixture(
+  options: {
+    active?: boolean;
+    duplicate?: boolean;
+    changed?: boolean;
+    monitor?: string;
+    monitorDevice?: string;
+    captureDevice?: string;
+    monitorFailure?: boolean;
+  } = {},
+) {
   const dir = await mkdtemp(join(tmpdir(), 'mizar-ts-compat-'));
   dirs.push(dir);
   const routing = new ObsAudioRouting(join(dir, 'routing.json'));
@@ -51,11 +61,24 @@ async function fixture(options: { active?: boolean; duplicate?: boolean; changed
     { inputName: '桌面声音', inputKind: 'wasapi_output_capture', inputUuid: 'desktop' },
     { inputName: '麦克风', inputKind: 'wasapi_input_capture', inputUuid: 'mic' },
     { inputName: '其他解说', inputKind: 'wasapi_process_output_capture', inputUuid: 'ts' },
+    { inputName: 'CS2 process', inputKind: 'wasapi_process_output_capture', inputUuid: 'game' },
   ];
   const calls: string[] = [];
   const obs: ObsRpc = {
     async call(type, data = {}) {
       calls.push(type);
+      if (type === 'GetVersion')
+        return {
+          availableRequests: [
+            'GetInputList',
+            'GetInputSettings',
+            'GetSceneCollectionList',
+            'GetSpecialInputs',
+            'GetSceneList',
+            'GetSceneItemList',
+            'GetGroupSceneItemList',
+          ],
+        };
       if (type === 'GetSceneCollectionList') return { currentSceneCollectionName: 'Mizar' };
       if (type === 'GetSpecialInputs') return {};
       if (type === 'GetInputList') return { inputs };
@@ -64,6 +87,9 @@ async function fixture(options: { active?: boolean; duplicate?: boolean; changed
       if (type === 'GetInputSettings') {
         if (data.inputUuid === 'ts')
           return { inputSettings: { window: 'TeamSpeak:Qt:teamspeak.exe' } };
+        if (data.inputUuid === 'game') return { inputSettings: { window: 'CS2:SDL:cs2.exe' } };
+        if (data.inputUuid === 'desktop')
+          return { inputSettings: { device_id: options.captureDevice ?? 'default' } };
         if (data.inputUuid === 'video') return { inputSettings: { capture_audio: false } };
         return {
           inputSettings: {
@@ -71,6 +97,17 @@ async function fixture(options: { active?: boolean; duplicate?: boolean; changed
           },
         };
       }
+      if (type === 'GetInputAudioMonitorType') {
+        if (options.monitorFailure) throw new Error('unavailable');
+        return { monitorType: options.monitor ?? 'OBS_MONITORING_TYPE_NONE' };
+      }
+      if (type === 'GetInputDefaultSettings')
+        return { defaultInputSettings: { device_id: 'default' } };
+      if (type === 'GetProfileParameter')
+        return { parameterValue: options.monitorDevice ?? 'default' };
+      if (type === 'GetInputMute') return { inputMuted: false };
+      if (type === 'GetInputVolume') return { inputVolumeMul: 1 };
+      if (type === 'GetInputAudioTracks') return { inputAudioTracks: { 1: true } };
       if (type === 'GetSceneItemList') {
         const scene = scenes.find((entry) => entry.sceneName === data.sceneName)!;
         return {
@@ -115,8 +152,19 @@ async function fixture(options: { active?: boolean; duplicate?: boolean; changed
       ): Promise<boolean>;
     }
   ).adoptInitialTeamspeakDesktop.bind(adapter);
+  const check = (
+    adapter as unknown as {
+      configurationFindings(
+        obs: ObsRpc,
+        endpoint: string,
+        visual: [],
+      ): Promise<{ code: string; message: string }[]>;
+    }
+  ).configurationFindings.bind(adapter);
   return {
     adopt: () => adopt(obs, 'ws://127.0.0.1:4455', observer, () => true),
+    check: () => check(obs, 'ws://127.0.0.1:4455', []),
+    obs,
     routing,
     owner,
     calls,
@@ -151,6 +199,67 @@ it.each([{ active: true }, { duplicate: true }, { changed: true }])(
     expect(await f.routing.automaticDesktopRevision()).not.toBeNull();
   },
 );
+
+it.each([
+  {
+    monitor: 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
+    captureDevice: 'default',
+    monitorDevice: 'default',
+  },
+  {
+    monitor: 'OBS_MONITORING_TYPE_MONITOR_ONLY',
+    captureDevice: 'device-a',
+    monitorDevice: 'default',
+  },
+  { monitorFailure: true },
+])(
+  'keeps routing unconfirmed and warns when microphone monitoring may loop: %j',
+  async (options) => {
+    const f = await fixture(options);
+    expect(await f.adopt()).toBe(false);
+    expect(await f.routing.desktopBinding()).toBeNull();
+    const warning = (await f.check()).filter(
+      (finding) => finding.code === 'audio_teamspeak_compatibility',
+    );
+    expect(warning).toHaveLength(1);
+    expect(warning[0]?.message).toContain('麦克风监听可能');
+    expect(f.calls.every((call) => call.startsWith('Get'))).toBe(true);
+  },
+);
+
+it('allows monitoring when capture and monitoring devices are known to differ', async () => {
+  const f = await fixture({
+    monitor: 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
+    captureDevice: 'device-a',
+    monitorDevice: 'device-b',
+  });
+  expect(await f.adopt()).toBe(true);
+});
+
+it('retains one compatibility warning across repeated status checks for desktop and independent modes', async () => {
+  const desktop = await fixture();
+  expect(await desktop.adopt()).toBe(true);
+  for (let i = 0; i < 2; i++) {
+    const warnings = (await desktop.check()).filter(
+      (finding) => finding.code === 'audio_teamspeak_compatibility',
+    );
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.message).toContain('当前为桌面混音');
+  }
+  const independent = await fixture();
+  await independent.routing.seedAutomatic(independent.obs, 'ws://127.0.0.1:4455', {
+    game: 'game',
+    remoteCommentary: 'ts',
+    microphone: 'mic',
+  });
+  for (let i = 0; i < 2; i++) {
+    const warnings = (await independent.check()).filter(
+      (finding) => finding.code === 'audio_teamspeak_compatibility',
+    );
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.message).toContain('独立采集可能没有远端人声');
+  }
+});
 
 it('preserves explicitly selected commentary and any previously saved routing', async () => {
   const f = await fixture();
