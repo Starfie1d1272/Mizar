@@ -116,6 +116,7 @@ export class ObserverHintTimeline {
     segment: number;
   }[] = [];
   private effectiveDelayMs: number | null = null;
+  private lastMatchedDeathOffsetMs: number | null = null;
   private lastEvidenceAt: number | null = null;
   private evidenceCount = 0;
   private evidenceSpreadMs: number | null = null;
@@ -175,6 +176,7 @@ export class ObserverHintTimeline {
       calibration: {
         state: this.calibrationState(this.lastNow),
         effectiveDelayMs: this.effectiveDelayMs,
+        lastMatchedDeathOffsetMs: this.lastMatchedDeathOffsetMs,
         evidenceCount: this.evidenceCount,
         evidenceSpreadMs: this.evidenceSpreadMs,
         lastEvidenceMonotonicMs: this.lastEvidenceAt,
@@ -216,6 +218,7 @@ export class ObserverHintTimeline {
     this.clockEvidence = [];
     this.clockSegment++;
     this.effectiveDelayMs = null;
+    this.lastMatchedDeathOffsetMs = null;
     this.lastEvidenceAt = null;
     this.evidenceCount = 0;
     this.evidenceSpreadMs = null;
@@ -249,6 +252,7 @@ export class ObserverHintTimeline {
     if (this.generation !== event.cursor.generation) {
       this.generation = event.cursor.generation;
       this.lastSourceReceiveMs = null;
+      this.lastMatchedDeathOffsetMs = null;
     }
     if (event.kind !== 'player-death') return;
     if (!event.attacker?.sourcePlayerId || !event.victim.sourcePlayerId) {
@@ -539,6 +543,7 @@ export class ObserverHintTimeline {
       this.lastProgramSequence = null;
       this.seenReceive = null;
       this.previous.clear();
+      this.lastMatchedDeathOffsetMs = null;
     }
     this.programSource = {
       generation: program.cursor.programSourceGeneration,
@@ -616,6 +621,7 @@ export class ObserverHintTimeline {
     if (this.generation === undefined || source.generation > this.generation) {
       this.generation = source.generation;
       this.lastSourceReceiveMs = null;
+      this.lastMatchedDeathOffsetMs = null;
     }
     if (!source.connected) {
       this.blocked = 'source-disconnected';
@@ -796,7 +802,13 @@ export class ObserverHintTimeline {
             programReceiveMs >= kill.shownDueMs - settings.leadSeconds * 1000 &&
             programReceiveMs <= kill.shownDueMs + 1000,
         );
-        if (candidates.length === 1) candidates[0]!.matched = true;
+        if (candidates.length === 1) {
+          const match = candidates[0]!;
+          match.matched = true;
+          if (this.effectiveDelayMs !== null)
+            this.lastMatchedDeathOffsetMs =
+              programReceiveMs - match.sourceMs - this.effectiveDelayMs;
+        }
       }
       this.previous = alive;
       this.seenReceive = program.cursor.programReceiveSequence;
