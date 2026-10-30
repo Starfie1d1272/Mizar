@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import type { MulnxToolView } from '@mizar/protocol/orchestration';
 import { OperatorShell } from '../operator/OperatorShell';
 import { MulnxToolControls } from '../orchestration/MulnxToolControls';
 import { openTool, useLocalRead } from '../preparation/client';
@@ -15,12 +16,7 @@ type ResourceStatus = {
 };
 type LibraryView = {
   resources: ResourceStatus[] | null;
-  tool: {
-    installed: string | null;
-    latest: string | null;
-    busy: boolean;
-    packs: string[];
-  } | null;
+  tool: (Omit<MulnxToolView, 'packs'> & { packs: string[] }) | null;
 };
 const phases: Record<ResourceStatus['phase'], string> = {
   missing: '暂无独立缓存',
@@ -142,14 +138,7 @@ export function ResourceLibraryPage() {
               ) : null}
             </dl>
             <div className="resource-library__actions">
-              <MulnxToolControls
-                tool={{
-                  installed: view.tool.installed,
-                  latest: view.tool.latest,
-                  busy: view.tool.busy,
-                }}
-                maintenanceOnly
-              />
+              <MulnxToolControls tool={{ ...view.tool, packs: [] }} maintenanceOnly />
             </div>
             {view.tool.packs.length ? (
               <details>

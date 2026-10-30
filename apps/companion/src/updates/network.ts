@@ -25,10 +25,27 @@ export async function updateRequest(
   input: string,
   signal: AbortSignal,
   fetcher: UpdateFetch = globalThis.fetch,
+  options?: { allowCompressedBoxText?: boolean; rangeEnd?: number; proxyAsset?: string },
 ): Promise<Response> {
+  if (
+    options?.rangeEnd !== undefined &&
+    (!Number.isInteger(options.rangeEnd) || options.rangeEnd < 0 || options.rangeEnd >= 64 * 1024)
+  )
+    throw new Error('update_range_invalid');
   let url = new URL(input);
   for (let redirects = 0; redirects < 5; redirects++) {
-    if (!allowedUpdateUrl(url)) throw new Error('update_url_forbidden');
+    const original = options?.proxyAsset ? new URL(options.proxyAsset) : null;
+    const isProxyAsset =
+      original?.origin === 'https://github.com' &&
+      allowedUpdateUrl(original) &&
+      !original.search &&
+      url.href === `https://gh-proxy.com/${original.href}`;
+    const proxyRedirect =
+      original &&
+      (url.href === original.href ||
+        (url.hostname === 'release-assets.githubusercontent.com' && allowedUpdateUrl(url)));
+    if (options?.proxyAsset ? !(isProxyAsset || proxyRedirect) : !allowedUpdateUrl(url))
+      throw new Error('update_url_forbidden');
     const response = await fetcher(url, {
       redirect: 'manual',
       signal,
@@ -41,6 +58,7 @@ export async function updateRequest(
           ? { Authorization: `Token ${BOX_READ_TOKEN}` }
           : {}),
         Accept: url.hostname === 'api.github.com' ? 'application/vnd.github+json' : '*/*',
+        ...(options?.rangeEnd !== undefined ? { Range: `bytes=0-${options.rangeEnd}` } : {}),
         'User-Agent': 'Mizar-Stable-Updater',
       },
     }).catch((cause: unknown) => {
@@ -67,7 +85,13 @@ export async function updateRequest(
       response.headers.get('content-encoding') !== 'identity'
     ) {
       // JSON can be encoded; installer byte counts always apply to the decoded stream.
-      if (!response.headers.get('content-type')?.includes('json')) {
+      const boxText =
+        options?.allowCompressedBoxText &&
+        url.origin === 'https://box.nju.edu.cn' &&
+        url.pathname.startsWith('/seafhttp/files/') &&
+        response.headers.get('content-encoding')?.toLowerCase() === 'gzip' &&
+        /^text\/plain(?:\s*;|$)/i.test(response.headers.get('content-type') ?? '');
+      if (!response.headers.get('content-type')?.includes('json') && !boxText) {
         await response.body.cancel();
         throw new Error('update_encoding_invalid');
       }
@@ -78,7 +102,9 @@ export async function updateRequest(
 }
 export async function boundedBytes(response: Response, limit: number): Promise<Buffer> {
   const size = Number(response.headers.get('content-length'));
-  if (Number.isFinite(size) && size > limit) {
+  const encoding = response.headers.get('content-encoding');
+  // Fetch exposes decompressed bytes while Content-Length describes the wire representation.
+  if ((!encoding || encoding === 'identity') && Number.isFinite(size) && size > limit) {
     await response.body?.cancel();
     throw new Error('update_response_too_large');
   }

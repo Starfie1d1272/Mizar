@@ -1,17 +1,7 @@
 import { diagnosticValue } from '../support/session-journal.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import {
-  lstat,
-  mkdir,
-  mkdtemp,
-  open,
-  readFile,
-  readdir,
-  rename,
-  rm,
-  writeFile,
-} from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 import {
@@ -22,6 +12,8 @@ import {
   type UpdateManifest,
 } from './contract.js';
 import { updateRequest, type UpdateFetch } from './network.js';
+import { transfer } from '../distribution/transfer.js';
+import { sourceOrder, forgetSourceOrder } from '../distribution/sources.js';
 import { installerUrl, StableSource } from './source.js';
 import { BoxSource } from './box.js';
 
@@ -62,12 +54,19 @@ export class UpdateManager {
   private candidate: UpdateManifest | null = null;
   private ready: z.infer<typeof readySchema> | null = null;
   private downloaded = 0;
+  private downloadSource: string | null = null;
+  private sourceMessage = '';
+  private transferStage: 'downloading' | 'verifying' = 'downloading';
   private abort: AbortController | undefined;
   private task: Promise<void> | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private started = false;
   private startupSession: string | undefined;
   private startupPending = false;
+  private companionCheck: ((force: boolean) => Promise<boolean>) | undefined;
+  private companionStartupPending = false;
+  private companionLastAttempt = 0;
+  private companionRunning = false;
   private notifiedVersion: string | null = null;
   private closed = false;
   private prepared = false;
@@ -258,6 +257,7 @@ export class UpdateManager {
     this.started = true;
     const tick = async () => {
       if (this.closed) return;
+      void this.checkCompanion();
       if (this.startupPending || this.now() - this.config.lastAttempt >= CHECK_INTERVAL)
         await this.automaticCheck(this.startupPending ? 'startup' : 'periodic');
       if (!this.closed) {
@@ -274,12 +274,44 @@ export class UpdateManager {
     this.startupSession = session;
     this.notifiedVersion = null;
     this.startupPending = true;
+    this.companionStartupPending = true;
+    void this.checkCompanion();
     if (this.task || this.prepared || this.planning)
       this.event(
         'check',
         this.phase === 'checking' ? 'update_check_startup_shared' : 'update_check_startup_deferred',
       );
     void this.automaticCheck('startup');
+  }
+  registerCompanionCheck(check: (force: boolean) => Promise<boolean>) {
+    this.companionCheck = check;
+    if (this.companionStartupPending) void this.checkCompanion();
+  }
+  private async checkCompanion() {
+    if (
+      !this.companionCheck ||
+      this.companionRunning ||
+      !this.config.automatic ||
+      this.settingsInvalid ||
+      this.initializationError ||
+      this.closed
+    )
+      return;
+    const force = this.companionStartupPending;
+    if (!force && this.now() - this.companionLastAttempt < CHECK_INTERVAL) return;
+    // Reserve before awaiting so repeated ticks do not start a second check.
+    this.companionStartupPending = false;
+    this.companionLastAttempt = this.now();
+    this.companionRunning = true;
+    try {
+      const attempted = await this.companionCheck(force).catch(() => true);
+      if (!attempted) {
+        this.companionStartupPending ||= force;
+        this.companionLastAttempt = 0;
+      }
+    } finally {
+      this.companionRunning = false;
+    }
   }
   private async automaticCheck(reason: 'startup' | 'periodic') {
     if (!this.config.automatic || this.settingsInvalid || this.initializationError || this.closed) {
@@ -314,6 +346,9 @@ export class UpdateManager {
       automatic: this.config.automatic,
       lastCheckedAt: this.config.lastAttempt || null,
       downloadedBytes: this.downloaded,
+      downloadSource: this.downloadSource,
+      sourceMessage: this.sourceMessage,
+      transferStage: this.transferStage,
       candidate: this.candidate,
       notificationPending:
         this.config.automatic &&
@@ -463,6 +498,8 @@ export class UpdateManager {
     this.phase = 'downloading';
     this.error = null;
     this.downloaded = 0;
+    this.downloadSource = null;
+    this.sourceMessage = '';
     const abort = new AbortController();
     this.abort = abort;
     this.task = this.doDownload(
@@ -484,74 +521,78 @@ export class UpdateManager {
       await this.discard();
       directory = await mkdtemp(join(this.root, 'download-'));
       const path = join(directory, manifest.installer.name);
-      const sources = [null, installerUrl(manifest)];
-      for (let i = 0; i < sources.length; i++) {
-        try {
-          this.downloaded = 0;
-          const attempt = AbortSignal.any([
-            signal,
-            AbortSignal.timeout(i === 0 ? 120_000 : 10 * 60_000),
-          ]);
-          const url =
-            i === 0
-              ? await new BoxSource(this.options.fetcher).installer(manifest, attempt)
-              : sources[i]!;
-          const response = await updateRequest(url, attempt, this.options.fetcher);
-          const length = response.headers.get('content-length');
-          if (
-            (length && Number(length) !== manifest.installer.bytes) ||
-            response.headers.get('content-type')?.includes('text/html')
-          ) {
-            await response.body?.cancel();
-            throw new Error('update_download_corrupt');
-          }
-          const file = await open(path, 'wx', 0o600);
-          const reader = response.body!.getReader() as ReadableStreamDefaultReader<Uint8Array>,
-            hash = createHash('sha256');
-          let transferError: unknown;
-          try {
-            for (;;) {
-              attempt.throwIfAborted();
-              const chunk = await reader.read();
-              if (chunk.done) break;
-              this.downloaded += chunk.value.length;
-              if (this.downloaded > manifest.installer.bytes)
-                throw new Error('update_download_corrupt');
-              hash.update(chunk.value);
-              await file.writeFile(chunk.value);
-            }
-            if (
-              this.downloaded !== manifest.installer.bytes ||
-              hash.digest('hex') !== manifest.installer.sha256
-            )
-              throw new Error('update_download_corrupt');
-            await file.sync();
-          } catch (error) {
-            transferError = error;
-            throw error;
-          } finally {
-            await reader
-              .cancel()
-              .catch((error: unknown) => this.failure('download_cleanup', error));
-            await file.close().catch((error: unknown) => {
-              throw transferError === undefined
-                ? error
-                : new AggregateError([transferError, error], 'update_download_failed');
-            });
-          }
-          this.event('download', i === 0 ? 'mirror_verified' : 'github_verified');
-          break;
-        } catch (e) {
-          this.failure(i === 0 ? 'box_download' : 'github_download', e);
-          await rm(path, { force: true }).catch((cleanup: unknown) => {
-            this.failure('download_cleanup', cleanup);
-            throw new AggregateError([e, cleanup], 'update_cleanup_failed');
-          });
-          signal.throwIfAborted();
-          if (i === sources.length - 1) throw e;
-          this.event('download', 'mirror_fallback');
-        }
+      const origin = installerUrl(manifest);
+      const sources = [
+        {
+          name: 'GitHub',
+          stage: 'github_download',
+          request: (attempt: AbortSignal, end?: number) =>
+            updateRequest(
+              origin,
+              attempt,
+              this.options.fetcher,
+              end === undefined ? undefined : { rangeEnd: end },
+            ),
+        },
+        {
+          name: 'GitHub 加速',
+          stage: 'proxy_download',
+          request: (attempt: AbortSignal, end?: number) =>
+            updateRequest(`https://gh-proxy.com/${origin}`, attempt, this.options.fetcher, {
+              proxyAsset: origin,
+              ...(end === undefined ? {} : { rangeEnd: end }),
+            }),
+        },
+        {
+          name: '南大云盘',
+          stage: 'box_download',
+          request: async (attempt: AbortSignal, end?: number) =>
+            updateRequest(
+              await new BoxSource(this.options.fetcher).installer(manifest, attempt),
+              attempt,
+              this.options.fetcher,
+              end === undefined ? undefined : { rangeEnd: end },
+            ),
+        },
+      ];
+      const key = `mizar:${origin}:${manifest.installer.sha256}:${manifest.installer.bytes}:${sources.map((source) => source.name).join(',')}`;
+      this.sourceMessage = '正在测试下载来源…';
+      const order = await sourceOrder(
+        key,
+        manifest.installer.bytes,
+        signal,
+        sources.map((source) => source.request),
+      );
+      this.sourceMessage = '';
+      try {
+        await transfer({
+          target: path,
+          bytes: manifest.installer.bytes,
+          sha256: manifest.installer.sha256,
+          integrityError: 'update_download_corrupt',
+          signal,
+          sources: order.map((index) => (attempt) => sources[index]!.request(attempt)),
+          progress: (bytes, source) => {
+            this.transferStage = 'downloading';
+            this.downloaded = bytes;
+            this.downloadSource = sources[order[source]!]!.name;
+          },
+          verifying: () => {
+            this.transferStage = 'verifying';
+          },
+          fallback: (error, source) => {
+            const failed = sources[order[source]!]!;
+            forgetSourceOrder(key);
+            this.sourceMessage = `${failed.name}连接或文件校验失败，正在切换来源。`;
+            this.failure(failed.stage, error);
+            this.event('download', 'mirror_fallback');
+          },
+        });
+      } catch (error) {
+        if (!signal.aborted) forgetSourceOrder(key);
+        throw error;
       }
+      this.event('download', 'verified');
       signal.throwIfAborted();
       this.ready = { directory: directory.slice(this.root.length + 1), manifest };
       await writeFile(join(this.root, 'ready.tmp'), JSON.stringify(this.ready), { mode: 0o600 });
