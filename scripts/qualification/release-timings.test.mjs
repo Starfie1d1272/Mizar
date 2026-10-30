@@ -1,12 +1,29 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath, URL } from 'node:url';
 import { promisify } from 'node:util';
 import { assertBoxTiming, releaseTimingReport } from './release-timings.mjs';
+
+const validBuild = (gitSha) => ({
+  gitSha,
+  desktopBuildProfile: 'release',
+  phases: [
+    'workspace-build',
+    'deploy-production-dependencies',
+    'node-runtime',
+    'observer-component',
+    'mulnx-bundle',
+    'desktop-cargo-build',
+    'content-digest',
+    'payload-checksums',
+    'zip-archive',
+  ].map((phase) => ({ phase, durationMs: 1, status: 'success' })),
+  cargoCache: { registry: 'true', target: 'true' },
+});
 
 test('failed Box remains a failure and recovery cannot pass first-release budget', () => {
   const sha = 'a'.repeat(40);
@@ -66,12 +83,52 @@ test('failed Box remains a failure and recovery cannot pass first-release budget
     sourceSha: sha,
     recovery: false,
     boxOutcome: 'success',
+    build: validBuild(sha),
   });
   assert.equal(slowSuccess.triggerToBoxMs, 601000);
   assert.equal(slowSuccess.triggerToPublicationMs, 90000);
   assert.equal(slowSuccess.freshGitHubPublicWithin600Seconds, true);
   assert.equal(slowSuccess.freshReleaseWithin600Seconds, false);
   assert.doesNotThrow(() => assertBoxTiming(slowSuccess, 'success'));
+  const early = { ...slowSuccess, triggerToBoxMs: 300000 };
+  assert.doesNotThrow(() => assertBoxTiming(early, 'success'));
+  for (const invalid of [
+    undefined,
+    null,
+    {},
+    { ...validBuild(sha), gitSha: 'b'.repeat(40) },
+    { ...validBuild(sha), phases: validBuild(sha).phases.slice(1) },
+  ]) {
+    const report = releaseTimingReport({
+      qualification,
+      promotion,
+      box,
+      jobs: { qualification: [], promotion: [], box: [] },
+      finishedAt: '2026-01-01T00:05:00Z',
+      publishedAt: '2026-01-01T00:01:30Z',
+      sourceSha: sha,
+      recovery: false,
+      boxOutcome: 'success',
+      build: invalid,
+    });
+    assert.equal(report.measurementUnavailable, true);
+    assert.equal(report.freshGitHubPublicWithin600Seconds, false);
+    assert.equal(report.freshReleaseWithin600Seconds, false);
+  }
+  const propagated = releaseTimingReport({
+    qualification,
+    promotion,
+    box,
+    jobs: { qualification: [], promotion: [], box: [] },
+    finishedAt: '2026-01-01T00:05:00Z',
+    publishedAt: '2026-01-01T00:01:30Z',
+    sourceSha: sha,
+    recovery: false,
+    boxOutcome: 'success',
+    build: slowSuccess.build,
+  });
+  assert.equal(propagated.measurementUnavailable, undefined);
+  assert.equal(propagated.freshReleaseWithin600Seconds, true);
   const unavailable = releaseTimingReport({
     qualification,
     promotion,
@@ -130,24 +187,62 @@ test(
       );
       const output = join(directory, 'timing.json');
       const script = fileURLToPath(new URL('./release-timings.mjs', import.meta.url));
-      await promisify(execFile)(process.execPath, [script, 'promotion', output], {
-        cwd: directory,
-        env: {
-          ...process.env,
-          PATH: `${directory}${delimiter}${process.env.PATH}`,
-          GH_TOKEN: '',
-          GITHUB_TOKEN: '',
-          GITHUB_STEP_SUMMARY: '',
-          GITHUB_RUN_ID: '2',
-          RELEASE_TAG: 'v1.10.1',
-          SOURCE_SHA: sha,
-          FAKE_PROMOTION: JSON.stringify(current),
-        },
-      });
-      const report = JSON.parse(await readFile(output, 'utf8'));
+      const run = promisify(execFile);
+      const env = {
+        ...process.env,
+        PATH: `${directory}${delimiter}${process.env.PATH}`,
+        GH_TOKEN: '',
+        GITHUB_TOKEN: '',
+        GITHUB_STEP_SUMMARY: '',
+        GITHUB_RUN_ID: '2',
+        RELEASE_TAG: 'v1.10.1',
+        SOURCE_SHA: sha,
+        FAKE_PROMOTION: JSON.stringify(current),
+      };
+      const call = (mode, target, customEnv = env) =>
+        run(process.execPath, [script, mode, target], { cwd: directory, env: customEnv });
+      await call('promotion', output);
+      let report = JSON.parse(await readFile(output, 'utf8'));
       assert.equal(report.measurementUnavailable, true);
       assert.equal(report.qualification.id, 1);
       assert.equal(report.freshGitHubPublicWithin600Seconds, false);
+
+      const evidence = join(directory, 'evidence-extracted');
+      await mkdir(evidence);
+      for (const value of [
+        {},
+        { ...validBuild(sha), gitSha: 'b'.repeat(40) },
+        { ...validBuild(sha), phases: validBuild(sha).phases.slice(1) },
+      ]) {
+        await writeFile(join(evidence, 'build-timings.json'), JSON.stringify(value));
+        await call('promotion', output);
+        report = JSON.parse(await readFile(output, 'utf8'));
+        assert.equal(report.measurementUnavailable, true);
+        assert.equal(report.freshGitHubPublicWithin600Seconds, false);
+      }
+      await writeFile(join(evidence, 'build-timings.json'), JSON.stringify(validBuild(sha)));
+      await call('promotion', output);
+      report = JSON.parse(await readFile(output, 'utf8'));
+      assert.equal(report.measurementUnavailable, undefined);
+      assert.equal(report.freshGitHubPublicWithin600Seconds, true);
+
+      // Directory paths are reliably unwritable as files, even when tests run as root.
+      const summary = join(directory, 'summary.txt');
+      await call('promotion', directory, { ...env, GITHUB_STEP_SUMMARY: summary });
+      assert.match(await readFile(summary, 'utf8'), /unavailable/);
+      await call('promotion', output, { ...env, GITHUB_STEP_SUMMARY: directory });
+      report = JSON.parse(await readFile(output, 'utf8'));
+      assert.equal(report.freshGitHubPublicWithin600Seconds, true);
+      const boxEnv = {
+        ...env,
+        GITHUB_EVENT_NAME: 'workflow_dispatch',
+        GITHUB_STEP_SUMMARY: directory,
+      };
+      await call('box', directory, { ...boxEnv, BOX_OUTCOME: 'success' });
+      await assert.rejects(
+        call('box', directory, { ...boxEnv, BOX_OUTCOME: 'failure' }),
+        /Box synchronization failed/,
+      );
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

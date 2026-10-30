@@ -47,7 +47,9 @@ test('missing, malformed or unrelated build timing is recorded as unavailable', 
     for (const value of [
       null,
       'invalid json',
+      '{}',
       JSON.stringify({ gitSha: 'b'.repeat(40), desktopBuildProfile: 'release', phases: [] }),
+      JSON.stringify({ gitSha: sha, desktopBuildProfile: 'release', phases: [] }),
     ]) {
       if (value !== null) await writeFile(source, value);
       const result = await preserveBuildTiming(source, destination, sha);
@@ -58,9 +60,16 @@ test('missing, malformed or unrelated build timing is recorded as unavailable', 
       gitSha: sha,
       desktopBuildProfile: 'release',
       phases: [
-        { phase: 'desktop-cargo-build', durationMs: 1, status: 'success' },
-        { phase: 'zip-archive', durationMs: 1, status: 'success' },
-      ],
+        'workspace-build',
+        'deploy-production-dependencies',
+        'node-runtime',
+        'observer-component',
+        'mulnx-bundle',
+        'desktop-cargo-build',
+        'content-digest',
+        'payload-checksums',
+        'zip-archive',
+      ].map((phase) => ({ phase, durationMs: 1, status: 'success' })),
     };
     await writeFile(source, JSON.stringify(good));
     assert.deepEqual(await preserveBuildTiming(source, destination, sha), good);

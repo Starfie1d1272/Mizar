@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { validBuildTiming } from './build-timing-evidence.mjs';
 
 const repository = 'Starfie1d1272/Mizar';
 const json = async (path) => JSON.parse(await readFile(path, 'utf8'));
@@ -98,7 +99,7 @@ export function releaseTimingReport({
     Date.parse(publishedAt) >= Date.parse(qualification.created_at)
       ? elapsed(qualification.created_at, publishedAt)
       : undefined;
-  const measurementUnavailable = build?.measurementUnavailable === true;
+  const measurementUnavailable = !validBuildTiming(build, sourceSha);
   const result = {
     tag,
     sourceSha,
@@ -113,9 +114,12 @@ export function releaseTimingReport({
       triggerToPublicationMs <= 600000,
     build: measurementUnavailable
       ? { measurementUnavailable: true }
-      : build
-        ? { phases: build.phases, cargoCache: build.cargoCache }
-        : undefined,
+      : {
+          gitSha: build.gitSha,
+          desktopBuildProfile: build.desktopBuildProfile,
+          phases: build.phases,
+          cargoCache: build.cargoCache,
+        },
     qualification: runTiming(
       qualification,
       jobs.qualification,
@@ -157,16 +161,22 @@ export function assertBoxTiming(report, boxOutcome) {
 }
 
 async function recordReport(report, path) {
-  await writeFile(path, JSON.stringify(report, null, 2) + '\n');
-  if (report.measurementUnavailable) {
-    if (process.env.GITHUB_STEP_SUMMARY)
+  let reportWritten = false;
+  try {
+    await writeFile(path, JSON.stringify(report, null, 2) + '\n');
+    reportWritten = true;
+  } catch {
+    console.warn('Release timing report could not be written; target remains unverified.');
+  }
+  if (!process.env.GITHUB_STEP_SUMMARY) return;
+  try {
+    if (!reportWritten || report.measurementUnavailable) {
       await appendFile(
         process.env.GITHUB_STEP_SUMMARY,
         'Release timing unavailable; fresh-release <=600s remains unverified.\n',
       );
-    return;
-  }
-  if (process.env.GITHUB_STEP_SUMMARY)
+      return;
+    }
     await appendFile(
       process.env.GITHUB_STEP_SUMMARY,
       `Release timing: ${report.recovery ? 'recovery; not fresh-release acceptance' : 'fresh release'}; ` +
@@ -181,6 +191,9 @@ async function recordReport(report, path) {
           : `; fresh-release target <=600s: ${report.freshReleaseWithin600Seconds ? 'met' : 'not met or not fresh'}`) +
         '\n',
     );
+  } catch {
+    console.warn('Release timing summary could not be written.');
+  }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
