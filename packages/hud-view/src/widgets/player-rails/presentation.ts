@@ -237,7 +237,7 @@ function playerPresentation(
   phase: PlayerRailsPhase,
   payload: ProgramPayload,
 ): PlayerCardPresentation {
-  const held = heldWeapon(player, payload.status.telemetry === 'fresh');
+  const held = heldWeapon(player);
   const weapons = player.weapons.map((weapon) => {
     const presented = weaponPresentation(weapon);
     const active = weapon === held;
@@ -298,7 +298,7 @@ function playerPresentation(
     secondaryWeapon: dead ? null : secondary,
     zeus: dead
       ? null
-      : (weapons.find((weapon) => weapon.item?.canonicalKey === 'utility.taser') ?? null),
+      : (weapons.find((weapon) => weapon.sourceWeaponId === player.equipment.zeusWeaponId) ?? null),
     utility: dead ? [] : utilityPresentation(player, player.side === 'T' ? 'T' : 'CT', weapons),
     money: player.state?.money ?? null,
     roundMoneySpent: player.statistics.currentRound.moneySpent.value,

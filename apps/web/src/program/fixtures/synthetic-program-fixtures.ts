@@ -60,6 +60,7 @@ const EMPTY_EQUIPMENT: ProgramPlayer['equipment'] = {
   primary: null,
   secondary: null,
   heldWeaponId: null,
+  zeusWeaponId: null,
   utility: null,
   hasC4: null,
 };
@@ -666,7 +667,16 @@ function makeSnapshot(payload: ProgramPayload): ProgramSnapshot {
           };
     return {
       ...player,
-      equipment: projectPlayerEquipment(weapons, catalog),
+      equipment: projectPlayerEquipment(weapons, catalog, {
+        sourcePlayerId: player.sourcePlayerId,
+        bomb:
+          payload.bomb === null
+            ? null
+            : { state: payload.bomb.state, sourcePlayerId: payload.bomb.sourcePlayerId },
+        telemetryFresh: payload.status.telemetry === 'fresh',
+        lineupCurrent: player.lineupEvidence === 'current',
+        lifeState: player.lifeState,
+      }),
       statistics: projectPlayerStatistics(
         createMapPlayerStatsAccumulator(),
         player.sourcePlayerId,
