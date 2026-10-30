@@ -6,6 +6,15 @@ export interface OverlayPolicy {
   visibility: Record<string, boolean>;
 }
 
+/** Missing or disabled policy never exposes a desktop HUD widget. */
+export function desktopWidgetVisible(
+  policy: OverlayPolicy | null,
+  id: string,
+  presetVisible: boolean,
+) {
+  return policy !== null && policy.enabled && (policy.visibility[id] ?? presetVisible);
+}
+
 export function overlayGroups(policy: OverlayPolicy, presetRadar = false) {
   return {
     radar: policy.enabled && (policy.visibility.radar ?? presetRadar),

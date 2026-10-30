@@ -2,7 +2,11 @@ import { useBroadcastDisplayConfig } from './realtime/broadcast-display-client';
 import { useRadarViewSource } from './realtime/radar-view-source';
 import { useLocalReadWithTime } from './preparation/client';
 import { nativeSnapshot } from './debug/control-journal';
-import { overlayGroups, type OverlayPolicy } from './preparation/desktop-overlay';
+import {
+  desktopWidgetVisible,
+  overlayGroups,
+  type OverlayPolicy,
+} from './preparation/desktop-overlay';
 import { ToolShell } from './patterns';
 import { PreparationPage } from './preparation/PreparationPage';
 import { ResourceLibraryPage } from './resource-library/ResourceLibraryPage';
@@ -35,7 +39,7 @@ import {
   WorkspacePreview,
   WorkspaceReview,
 } from './workspace/WorkspacePage';
-import { useProgramScenes } from './workspace/client';
+import { desktopInvoke, useProgramScenes } from './workspace/client';
 import { HudConsolePage } from './operator/HudConsolePage';
 import { useHudConfigClient } from './realtime/hud-config-client';
 import {
@@ -205,10 +209,31 @@ function ProgramRoute() {
     desktop ? 1000 : 60000,
   );
   const policy = policyRead.value;
+  const [documentId, setDocumentId] = useState(window.__MIZAR_OVERLAY_DOCUMENT__);
+  useEffect(() => {
+    const update = () => setDocumentId(window.__MIZAR_OVERLAY_DOCUMENT__);
+    window.addEventListener('mizar-overlay-document', update);
+    update();
+    return () => window.removeEventListener('mizar-overlay-document', update);
+  }, []);
+  useEffect(() => {
+    const generation = window.__MIZAR_OVERLAY_GENERATION__;
+    if (
+      !desktop ||
+      !generation ||
+      !documentId ||
+      policyRead.status !== 'ready' ||
+      !(display.status === 'ready' || hudConfig.status === 'ready')
+    )
+      return;
+    void desktopInvoke('program_overlay_ready', { generation, documentId }).catch(() => {});
+  }, [desktop, documentId, policyRead.status, display.status, hudConfig.status]);
   useEffect(() => {
     const observe = () =>
       nativeSnapshot('program_display', {
         hostRole: desktop ? 'desktop' : 'browser',
+        overlayGeneration: desktop ? (window.__MIZAR_OVERLAY_GENERATION__ ?? null) : null,
+        overlayDocument: desktop ? (documentId ?? null) : null,
         policyRead: desktop ? policyRead.status : 'not_applicable',
         policyRevision: policy?.revision ?? null,
         policyEnabled: policy?.enabled ?? null,
@@ -233,6 +258,7 @@ function ProgramRoute() {
     return () => clearInterval(timer);
   }, [
     desktop,
+    documentId,
     policyRead.status,
     policy?.revision,
     policy?.enabled,
@@ -250,8 +276,7 @@ function ProgramRoute() {
               id,
               {
                 ...placement,
-                visible:
-                  policy !== null && policy.enabled && (policy.visibility[id] ?? placement.visible),
+                visible: desktopWidgetVisible(policy, id, placement.visible),
               },
             ]),
           ) as typeof selectedHud.layout.widgets,

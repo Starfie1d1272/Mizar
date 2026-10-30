@@ -69,23 +69,146 @@ fn visibility_change(
 
 /// Read visibility inside the UI-thread closure, not before it is dispatched.
 /// No controller reference escapes its apartment and no UI-thread wait is added.
-pub fn sync_visibility(window: &WebviewWindow) -> tauri::Result<()> {
+static CONTROLLER_OBSERVATIONS: std::sync::Mutex<Vec<(String, String)>> =
+    std::sync::Mutex::new(Vec::new());
+
+fn dispatch_visibility(
+    window: &WebviewWindow,
+    completed: Option<std::sync::mpsc::SyncSender<()>>,
+) -> tauri::Result<()> {
     let current = window.clone();
+    let force_snapshot = completed.is_some();
+    let generation = (window.label() == "program-overlay").then(|| {
+        window
+            .state::<crate::HostState>()
+            .overlay_generation
+            .load(std::sync::atomic::Ordering::Acquire)
+    });
     window.with_webview(move |platform| {
-        let (Ok(visible), Ok(minimized)) = (current.is_visible(), current.is_minimized()) else {
+        if generation.is_some_and(|generation| current.state::<crate::HostState>().overlay_generation.load(std::sync::atomic::Ordering::Acquire) != generation) {
+            if let Some(sender) = completed { let _ = sender.send(()); }
             return;
-        };
+        }
+        let visible = current.is_visible().map_err(|error| error.to_string());
+        let minimized = current.is_minimized().map_err(|error| error.to_string());
         unsafe {
             let controller = platform.controller();
             let mut actual = Default::default();
-            if controller.IsVisible(&mut actual).is_ok() {
-                if let Some(desired) = visibility_change(visible, minimized, actual.as_bool()) {
-                    // A failed setter is retried by the existing bounded Host tick.
-                    let _ = controller.SetIsVisible(desired);
+            let read = controller.IsVisible(&mut actual);
+            let mut bounds = Default::default();
+            let bounds_read = generation.map(|_| controller.Bounds(&mut bounds));
+            let desired = visible.as_ref().ok().zip(minimized.as_ref().ok()).map(|(visible, minimized)| *visible && !*minimized);
+            let setter = match (desired, &read) {
+                (Some(desired), Ok(())) => visibility_change(desired, false, actual.as_bool())
+                    .map(|value| controller.SetIsVisible(value)),
+                _ => None,
+            };
+            let mut after = Default::default();
+            let after_read = controller.IsVisible(&mut after);
+            let hresult = |error: &windows::core::Error| format!("0x{:08X}", error.code().0 as u32);
+            let failed = visible.is_err() || minimized.is_err() || read.is_err() || bounds_read.as_ref().is_some_and(|result| result.is_err())
+                || setter.as_ref().is_some_and(|result| result.is_err()) || after_read.is_err();
+            if current.label() == "program-overlay" || failed {
+                let detail = serde_json::json!({
+                    "label":current.label(), "generation":generation,
+                    "desired":desired, "visible":read.as_ref().ok().map(|_| actual.as_bool()),
+                    "after":after_read.as_ref().ok().map(|_| after.as_bool()),
+                    "bounds":bounds_read.as_ref().and_then(|result| result.as_ref().ok()).map(|_| [bounds.left, bounds.top, bounds.right, bounds.bottom]),
+                    "windowError":visible.err(), "minimizedError":minimized.err(),
+                    "visibleHresult":read.as_ref().err().map(hresult),
+                    "boundsHresult":bounds_read.as_ref().and_then(|result| result.as_ref().err()).map(hresult),
+                    "setHresult":setter.as_ref().and_then(|result| result.as_ref().err()).map(hresult),
+                    "afterHresult":after_read.as_ref().err().map(hresult)
+                }).to_string();
+                let mut last = CONTROLLER_OBSERVATIONS.lock().unwrap_or_else(|error| error.into_inner());
+                let previous = last.iter_mut().find(|(label, _)| label == current.label());
+                let changed = if let Some((_, value)) = previous {
+                    if *value == detail { false } else { *value = detail.clone(); true }
+                } else { last.push((current.label().to_string(), detail.clone())); true };
+                if changed || force_snapshot {
+                    current.state::<crate::startup_log::DesktopLog>().event("webview_controller_visibility", if failed { "failure" } else { "snapshot" }, Some(&detail));
                 }
             }
         }
+        if let Some(sender) = completed { let _ = sender.send(()); }
     })
+}
+
+/// Observe only this overlay's WebView2. Never terminate the shared browser process.
+pub fn observe_process_failure(window: &WebviewWindow, generation: u64) -> Result<(), String> {
+    let current = window.clone();
+    window.with_webview(move |platform| unsafe {
+        let log = current.state::<crate::startup_log::DesktopLog>();
+        let result = (|| -> windows::core::Result<()> {
+            let webview = platform.controller().CoreWebView2()?;
+            let host = current.app_handle().clone();
+            let handler = webview2_com::ProcessFailedEventHandler::create(Box::new(move |_sender, args| {
+                let state = host.state::<crate::HostState>();
+                let mut kind = Default::default();
+                let result = args.as_ref().map(|args| args.ProcessFailedKind(&mut kind));
+                let document = (state.overlay_generation.load(std::sync::atomic::Ordering::Acquire) == generation).then(|| state.overlay_document.load(std::sync::atomic::Ordering::Acquire));
+                host.state::<crate::startup_log::DesktopLog>().event("program_overlay_process_failed", "failure",
+                    Some(&serde_json::json!({"generation":generation,"documentId":document,"kind":result.as_ref().and_then(|value| value.as_ref().ok()).map(|_| kind.0),"hresult":result.as_ref().and_then(|value| value.as_ref().err()).map(|error| format!("0x{:08X}", error.code().0 as u32))}).to_string()));
+                if result.as_ref().is_some_and(|result| result.is_ok()) && (kind.0 == 0 || kind.0 == 1) {
+                    let _presentation = state.overlay_presentation.lock().unwrap_or_else(|error| error.into_inner());
+                    if state.overlay_generation.load(std::sync::atomic::Ordering::Acquire) == generation {
+                        state.overlay_ready.store(0, std::sync::atomic::Ordering::Release);
+                        state.overlay_document.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                        state.overlay_epoch.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                    }
+                }
+                Ok(())
+            }));
+            let mut token = 0;
+            webview.add_ProcessFailed(&handler, &mut token)?;
+            Ok(())
+        })();
+        if let Err(error) = result {
+            log.event("program_overlay_process_observer", "failure", Some(&format!("generation={generation}; hresult=0x{:08X}", error.code().0 as u32)));
+        }
+    }).map_err(|error| error.to_string())
+}
+
+/// The controller runs on its apartment; failures are retained in the native log.
+pub fn sync_visibility(window: &WebviewWindow) -> tauri::Result<()> {
+    let result = dispatch_visibility(window, None);
+    let key = format!("dispatch:{}", window.label());
+    let mut observations = CONTROLLER_OBSERVATIONS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if let Err(error) = &result {
+        let detail =
+            serde_json::json!({"label": window.label(), "error": error.to_string()}).to_string();
+        if let Some((_, previous)) = observations.iter_mut().find(|(label, _)| label == &key) {
+            if *previous != detail {
+                *previous = detail.clone();
+                window.state::<crate::startup_log::DesktopLog>().event(
+                    "webview_controller_dispatch",
+                    "failure",
+                    Some(&detail),
+                );
+            }
+        } else {
+            observations.push((key, detail.clone()));
+            window.state::<crate::startup_log::DesktopLog>().event(
+                "webview_controller_dispatch",
+                "failure",
+                Some(&detail),
+            );
+        }
+    } else {
+        observations.retain(|(label, _)| label != &key);
+    }
+    result
+}
+
+/// Called only by the recovery worker, never by the UI thread.
+pub fn snapshot_controller(window: &WebviewWindow) -> Result<(), String> {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    dispatch_visibility(window, Some(sender)).map_err(|error| error.to_string())?;
+    receiver
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .map_err(|_| "WebView2 快照超时。".into())
 }
 
 pub fn set_visible(window: &WebviewWindow, visible: bool) -> tauri::Result<()> {

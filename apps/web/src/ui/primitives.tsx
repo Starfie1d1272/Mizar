@@ -30,7 +30,7 @@ export function Button({
       {...props}
       type={type}
       disabled={disabled || loading}
-      aria-busy={loading || undefined}
+      aria-busy={loading || props['aria-busy'] || undefined}
       className={`mizar-button ${className}`}
       data-variant={variant}
     >
