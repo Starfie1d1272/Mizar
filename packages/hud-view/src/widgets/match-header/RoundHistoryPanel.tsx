@@ -1,3 +1,4 @@
+import './round-history.css';
 import { assetCssUrl, useAssetUrl } from '../../assets.js';
 import type { CSSProperties } from 'react';
 import { assetForCanonicalKey } from '../player-rails/presentation.js';
