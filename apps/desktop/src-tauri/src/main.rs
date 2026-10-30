@@ -890,9 +890,11 @@ async fn replace_external_cs2(
         let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
         let mut cs2 = state.lock().map_err(|_| "CS2 状态不可用。")?;
         let gate = app.state::<preparation_gate::PreparationGate>();
+        let verify_output = || production_exit::check_obs_entry(&log, &preparation_id);
         let guard = preparation_gate::PreparationGuard {
             gate: Some(gate.inner()),
             id: Some(&preparation_id),
+            verify: Some(&verify_output),
         };
         guard.check()?;
         let activity = app.state::<cs2_activity::Activity>();
@@ -1159,9 +1161,18 @@ async fn start_managed_cs2(
                         app.state::<updates::PendingUpdate>().check()?;
                         production_exit::invalidate_local_match_exit(&app.state::<DesktopLog>())?;
                         let gate = app.state::<preparation_gate::PreparationGate>();
+                        let verify_output = || {
+                            production_exit::check_obs_entry(
+                                &command_log,
+                                preparation_id.as_deref().ok_or("启动事务标识缺失。")?,
+                            )
+                        };
                         let guard = preparation_gate::PreparationGuard {
                             gate: Some(gate.inner()),
                             id: preparation_id.as_deref(),
+                            verify: preparation_id
+                                .as_ref()
+                                .map(|_| &verify_output as &dyn Fn() -> Result<(), String>),
                         };
                         guard.check()?;
                         let result = cs2.start_preparation(
@@ -3503,7 +3514,9 @@ async fn open_cs2_config_directory(
 
 #[tauri::command]
 async fn ensure_gsi(
+    app: tauri::AppHandle,
     log: tauri::State<'_, DesktopLog>,
+    preparation_id: Option<String>,
     diagnostic_operation_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let diagnostic_log = log.inner().clone();
@@ -3523,7 +3536,28 @@ async fn ensure_gsi(
                         "GSI 操作状态不可用。",
                     )
                 })?;
-                gsi_script("ensure-gsi.ps1", None, Duration::from_secs(45), &log)?;
+                let gate = app.state::<preparation_gate::PreparationGate>();
+                let verify_output = || {
+                    production_exit::check_obs_entry(
+                        &log,
+                        preparation_id.as_deref().ok_or("启动事务标识缺失。")?,
+                    )
+                };
+                let guard = preparation_gate::PreparationGuard {
+                    gate: Some(gate.inner()),
+                    id: preparation_id.as_deref(),
+                    verify: preparation_id
+                        .as_ref()
+                        .map(|_| &verify_output as &dyn Fn() -> Result<(), String>),
+                };
+                if preparation_id.is_some() {
+                    guard.commit(|| {
+                        gsi_script("ensure-gsi.ps1", None, Duration::from_secs(45), &log)
+                            .map(|_| ())
+                    })?;
+                } else {
+                    gsi_script("ensure-gsi.ps1", None, Duration::from_secs(45), &log)?;
+                }
                 let output = gsi_script("gsi-status.ps1", None, Duration::from_secs(20), &log)?;
                 let result = powershell::parse(&log, "GSI 检测", &output)?;
                 Ok(cs2_diagnostics::gsi_status(&result))

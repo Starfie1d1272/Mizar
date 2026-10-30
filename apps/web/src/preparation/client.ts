@@ -541,13 +541,6 @@ async function performProductionAction(
     const issue = gsiProblem(gsi);
     if (issue) throw new Error(issue);
     await current();
-    const configured = await desktopInvoke<GsiStatus>('ensure_gsi', undefined, task);
-    if (gsiProblem(configured) || !configured.installed || configured.conflict)
-      throw new Error(
-        gsiProblem(configured) ?? configured.issues?.[0]?.message ?? 'GSI 自动配置未完成，请重试。',
-      );
-    window.dispatchEvent(new Event('mizar:gsi-configured'));
-    await current();
     const video = await entryCommand<{ transactionId: string | null }>(
       '/operator/obs/video-prepare',
       { expectedRevision: state.revision },
@@ -555,11 +548,22 @@ async function performProductionAction(
     );
     onVideoPrepared?.(video.transactionId);
     await current();
-    await prepareObs(state.revision, entrySignal);
+    await prepareObs(state.revision, entrySignal, entry.id);
     const prepared = await readObsForEntry(entrySignal);
     if (prepared?.connection !== 'connected') throw new Error('OBS 连接已中断，请重试。');
     if (!prepared.readiness?.ready)
       throw new Error(prepared.readiness?.reason ?? 'OBS 准备状态未确认，请重试。');
+    await current();
+    const configured = await desktopInvoke<GsiStatus>(
+      'ensure_gsi',
+      { preparationId: entry.id },
+      task,
+    );
+    if (gsiProblem(configured) || !configured.installed || configured.conflict)
+      throw new Error(
+        gsiProblem(configured) ?? configured.issues?.[0]?.message ?? 'GSI 自动配置未完成，请重试。',
+      );
+    window.dispatchEvent(new Event('mizar:gsi-configured'));
     await current();
     if (!resuming) {
       const target = replacement?.target ?? null;

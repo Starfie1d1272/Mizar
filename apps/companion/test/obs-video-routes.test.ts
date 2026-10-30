@@ -11,7 +11,7 @@ import { ObsVideoTransaction } from '../src/obs/video-transaction.js';
 import { registerObsRoutes } from '../src/obs/routes.js';
 import { createLocalWebOriginPolicy } from '../src/local-web/origin-policy.js';
 
-it('routes use the real OBS client and roll back when preparation is invalidated in flight', async () => {
+it.each([false, true])('video guard streaming=%s', async (streaming) => {
   const directory = await mkdtemp(join(tmpdir(), 'mizar-video-routes-'));
   const server = Fastify();
   const app = Fastify();
@@ -24,7 +24,16 @@ it('routes use the real OBS client and roll back when preparation is invalidated
     fpsNumerator: 30,
     fpsDenominator: 1,
   };
-  let settings = { ...original };
+  let settings = streaming
+    ? {
+        baseWidth: 1920,
+        baseHeight: 1080,
+        outputWidth: 1920,
+        outputHeight: 1080,
+        fpsNumerator: 60,
+        fpsDenominator: 1,
+      }
+    : { ...original };
   let valid = true;
   let release!: () => void;
   let reached!: () => void;
@@ -52,6 +61,12 @@ it('routes use the real OBS client and roll back when preparation is invalidated
         calls.push(requestType);
         let responseData: Record<string, unknown> = {};
         if (requestType === 'GetProfileList') responseData = { currentProfileName: 'Personal' };
+        else if (requestType === 'GetStreamStatus' || requestType === 'GetRecordStatus')
+          responseData = {
+            outputActive: streaming && requestType === 'GetStreamStatus',
+            outputPaused: false,
+            outputReconnecting: false,
+          };
         else if (requestType === 'GetVideoSettings') responseData = { ...settings };
         else if (requestType === 'GetOutputList') responseData = { outputs: [] };
         else if (requestType === 'SetVideoSettings') {
@@ -64,7 +79,12 @@ it('routes use the real OBS client and roll back when preparation is invalidated
         socket.send(
           JSON.stringify({
             op: 7,
-            d: { requestType, requestId, requestStatus: { result: true, code: 100 }, responseData },
+            d: {
+              requestType,
+              requestId,
+              requestStatus: { result: true, code: 100 },
+              responseData,
+            },
           }),
         );
       })().catch(() => socket.close());
@@ -74,7 +94,12 @@ it('routes use the real OBS client and roll back when preparation is invalidated
   const address = server.server.address();
   if (!address || typeof address === 'string') throw new Error('address unavailable');
   const config = new ObsConfigStore(join(directory, 'obs.json'));
-  await config.save({ host: '127.0.0.1', port: address.port, password: '', executablePath: null });
+  await config.save({
+    host: '127.0.0.1',
+    port: address.port,
+    password: '',
+    executablePath: null,
+  });
   const journal = new ObsVideoTransaction(join(directory, 'video.json'));
   const adapter = new ObsAdapter(
     config,
@@ -99,6 +124,13 @@ it('routes use the real OBS client and roll back when preparation is invalidated
       headers,
       payload: { expectedRevision: 'revision' },
     });
+    if (streaming) {
+      expect(preflight.statusCode).toBe(409);
+      expect(preflight.json().message).toContain('直播');
+      expect(calls.some((value) => /^(Set|Create|Remove|Stop)/.test(value))).toBe(false);
+      expect(await journal.pending()).toBe(false);
+      return;
+    }
     expect(preflight.statusCode).toBe(200);
     const request = app.inject({
       method: 'POST',

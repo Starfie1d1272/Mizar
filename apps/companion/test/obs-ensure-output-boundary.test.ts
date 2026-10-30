@@ -64,7 +64,30 @@ it.each([
     label: 'external collection takeover',
   },
   { preparedAudio: true, align: true, event: 'ExitStarted', label: 'OBS exit' },
-])('explicit ensure handles $label', async ({ preparedAudio, align, event, late, transient }) => {
+  {
+    preparedAudio: true,
+    align: false,
+    event: '',
+    entryMode: 'streaming',
+    label: 'entry with an active stream and no scene writes',
+  },
+  {
+    preparedAudio: true,
+    align: false,
+    event: '',
+    entryMode: 'idle',
+    label: 'idle entry receives a native permit',
+  },
+  {
+    preparedAudio: true,
+    align: false,
+    event: 'StreamStateChanged',
+    late: true,
+    entryMode: 'idle',
+    label: 'entry output starts at the final no-write check',
+  },
+])('explicit ensure handles $label', async (scenario) => {
+  const { preparedAudio, align, event, late, transient, entryMode } = scenario;
   const directory = await mkdtemp(join(tmpdir(), 'mizar-ensure-output-'));
   const server = Fastify();
   const app = Fastify();
@@ -98,7 +121,11 @@ it.each([
       switch (type) {
         case 'GetStreamStatus':
         case 'GetRecordStatus':
-          responseData = { outputActive: false, outputPaused: false, outputReconnecting: false };
+          responseData = {
+            outputActive: type === 'GetStreamStatus' && entryMode === 'streaming',
+            outputPaused: false,
+            outputReconnecting: false,
+          };
           break;
         case 'GetSceneCollectionList':
           responseData = { currentSceneCollectionName: 'Mizar', sceneCollections: ['Mizar'] };
@@ -251,7 +278,7 @@ it.each([
                 outputKind: 'plugin_output',
                 outputWidth: 1920,
                 outputHeight: 1080,
-                outputActive: !align,
+                outputActive: !align && !entryMode,
                 outputFlags: {
                   OBS_OUTPUT_VIDEO: true,
                   OBS_OUTPUT_AUDIO: true,
@@ -287,13 +314,18 @@ it.each([
   const address = server.server.address();
   if (!address || typeof address === 'string') throw new Error('address unavailable');
   const config = new ObsConfigStore(join(directory, 'obs.json'));
-  await config.save({ host: '127.0.0.1', port: address.port, password: '', executablePath: null });
+  await config.save({
+    host: '127.0.0.1',
+    port: address.port,
+    password: '',
+    executablePath: null,
+  });
   const adapter = new ObsAdapter(
     config,
     baseUrl,
     undefined,
     undefined,
-    preparedAudio && !align
+    preparedAudio && !align && !entryMode
       ? {
           owner: new RemoteCommentary(join(directory, 'commentary.json')),
           journal: join(directory, 'commentary-probe.json'),
@@ -342,27 +374,57 @@ it.each([
     originPolicy: createLocalWebOriginPolicy(),
     activeScene: () => 'waiting',
     preparationValid: (revision) => () => revision === 'revision',
+    runtimeControlToken: 'a'.repeat(64),
   });
   try {
     const response = await app.inject({
       method: 'POST',
       url: '/operator/obs/ensure',
       headers: { origin: baseUrl },
-      payload: { expectedRevision: 'revision' },
+      payload: {
+        expectedRevision: 'revision',
+        ...(entryMode ? { preparationId: '19ba601e-84c3-4adc-b6f5-ab29bf92ca49' } : {}),
+      },
     });
+    if (entryMode === 'streaming') {
+      expect(response.statusCode).toBe(409);
+      expect(response.json().message).toContain('直播');
+      expect(requests.filter((type) => /^(Set|Create|Remove|Stop)/.test(type))).toEqual([]);
+      return;
+    }
     if (event) {
       expect(response.statusCode).toBe(409);
       if (event.endsWith('StateChanged'))
         expect(response.json()).toMatchObject({ error: 'preparation_output_changed' });
       expect(currentScene).toBe(
-        event === 'CurrentProgramSceneChanged' ? '外部场景' : obsSceneName('gameplay'),
+        event === 'CurrentProgramSceneChanged'
+          ? '外部场景'
+          : obsSceneName(align ? 'gameplay' : 'waiting'),
       );
       expect(requests.filter((type) => type === 'SetCurrentProgramScene')).toHaveLength(0);
       expect(requests.filter((type) => type === 'SetSceneSceneTransitionOverride')).toHaveLength(
-        late ? 1 : 0,
+        late && !entryMode ? 1 : 0,
       );
       expect(requests.some((type) => type.startsWith('Stop'))).toBe(false);
       expect(unexpected).toEqual([]);
+      return;
+    }
+    if (entryMode === 'idle') {
+      expect(response.statusCode).toBe(200);
+      const native = async (preparationId: string, token = 'a'.repeat(64)) =>
+        app.inject({
+          method: 'POST',
+          url: '/operator/runtime/obs-entry-permit',
+          headers: { 'x-runtime-token': token },
+          payload: { preparationId },
+        });
+      const id = '19ba601e-84c3-4adc-b6f5-ab29bf92ca49';
+      expect((await native(id)).statusCode).toBe(200);
+      expect((await native(id, 'wrong')).statusCode).toBe(403);
+      expect((await native('2a49514a-1452-4162-b296-a6a4ec2a8b67')).statusCode).toBe(409);
+      await waitForEvent('StreamStateChanged', false);
+      expect((await native(id)).statusCode).toBe(409);
+      expect(requests.some((type) => /^(Set|Create|Remove|Stop)/.test(type))).toBe(false);
       return;
     }
     if (align) {

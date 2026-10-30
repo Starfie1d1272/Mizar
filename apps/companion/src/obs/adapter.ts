@@ -3,10 +3,12 @@ import { ObsCaptureWarmup, ObsCaptureWarmupError } from './capture-warmup.js';
 import { readCaptureInitialization, type CaptureInitialization } from './capture-initialization.js';
 import type { ObsCaptureDiagnostic } from '@mizar/protocol/obs';
 import {
+  assertNoVideoOutput,
   ObsPreparationWriteBlocked,
   ObsVideoError,
   ObsVideoTransaction,
 } from './video-transaction.js';
+import { obsFindingReadiness } from './prepare-readiness.js';
 import { ObsActionError } from './action-error.js';
 import { assertBpCompactOff, BpOverlayOwner } from './bp-overlay.js';
 import { diagnosticValue } from '../support/session-journal.js';
@@ -135,6 +137,9 @@ export class ObsAdapter {
   private expectedScene: string | undefined;
   private expectedCollection: string | undefined;
   private programGeneration = 0;
+  private entryPermit:
+    | { id: string; outputEpoch: number; programGeneration: number; valid: () => boolean }
+    | undefined;
   onProgramChanged(callback: () => void): void {
     this.programChanged = callback;
   }
@@ -1932,9 +1937,14 @@ export class ObsAdapter {
       this.withObs(
         async (obs, endpoint) => {
           if (!valid()) throw new Error('OBS 准备请求已失效，请重试。');
+          const lease = await this.captureWarmupGuard();
+          await assertNoVideoOutput(obs);
+          if (!valid() || !lease())
+            throw new ObsVideoError('preparation_output_changed', 'OBS 输出状态已变化，请重试。');
           if (!this.videoTransaction) throw new Error('OBS 视频准备不可用。');
           await this.videoTransaction.preflight(obs, endpoint);
-          if (!valid()) throw new Error('OBS 准备请求已失效，请重试。');
+          if (!valid() || !lease())
+            throw new ObsVideoError('preparation_output_changed', 'OBS 输出状态已变化，请重试。');
         },
         12000,
         undefined,
@@ -1951,7 +1961,21 @@ export class ObsAdapter {
         async (obs, endpoint) => {
           if (!valid()) throw new Error('OBS 准备请求已失效，请重试。');
           if (!this.videoTransaction) throw new Error('OBS 视频准备不可用。');
-          return this.videoTransaction.prepare(obs, endpoint, valid);
+          const lease = await this.captureWarmupGuard();
+          await assertNoVideoOutput(obs);
+          if (!lease())
+            throw new ObsVideoError('preparation_output_changed', 'OBS 输出状态已变化，请重试。');
+          const guarded: ObsRpc = {
+            ...obs,
+            call: (type, data) => {
+              if (/^(Create|Set|Remove)/.test(type) && !lease())
+                throw new ObsPreparationWriteBlocked(
+                  new ObsVideoError('preparation_output_changed', 'OBS 输出状态已变化，请重试。'),
+                );
+              return obs.call(type, data);
+            },
+          };
+          return this.videoTransaction.prepare(guarded, endpoint, () => valid() && lease());
         },
         12000,
         undefined,
@@ -1965,8 +1989,26 @@ export class ObsAdapter {
   restoreVideo(id?: string): Promise<void> {
     return this.configurationMutation(async () => {
       if (!this.videoTransaction || !(await this.videoTransaction.pending())) return;
+      const lease = await this.captureWarmupGuard();
       await this.withObs(
-        (obs, endpoint) => this.videoTransaction!.restore(obs, endpoint, id),
+        (obs, endpoint) =>
+          this.videoTransaction!.restore(
+            {
+              ...obs,
+              call: (type, data) => {
+                if (/^(Create|Set|Remove)/.test(type) && !lease())
+                  throw new ObsPreparationWriteBlocked(
+                    new ObsVideoError(
+                      'preparation_output_changed',
+                      'OBS 输出状态已变化，视频设置待恢复。',
+                    ),
+                  );
+                return obs.call(type, data);
+              },
+            },
+            endpoint,
+            id,
+          ),
         12000,
         undefined,
         false,
@@ -2077,14 +2119,32 @@ export class ObsAdapter {
   ensure(
     activeScene: () => ProgramSceneId = () => 'waiting',
     valid: () => boolean = () => false,
+    entry?: { id: string; valid: () => boolean },
   ): Promise<readonly ObsFinding[]> {
     const generation = this.programGeneration;
     const current = () => valid() && generation === this.programGeneration;
     return this.configurationMutation(async () => {
+      if (entry) this.entryPermit = undefined;
       if (!current()) throw new Error('OBS 准备请求已失效，请重试。');
       await this.outputs.read();
       if (!current()) throw new Error('OBS 准备请求已失效，请重试。');
       const outputEpoch = this.outputs.preparationOutputEpoch();
+      const checkOutput = () => {
+        const reason = this.outputs.captureWarmupBlockReason();
+        if (reason || this.outputs.preparationOutputEpoch() !== outputEpoch)
+          throw new ObsVideoError(
+            'preparation_output_changed',
+            reason ?? 'OBS 输出状态已变化，请重试。',
+          );
+      };
+      const confirmOutput = async (obs: ObsRpc) => {
+        checkOutput();
+        await assertNoVideoOutput(obs);
+        checkOutput();
+        if (!current() || (entry && !entry.valid()))
+          throw new Error('OBS 准备请求已失效，请重试。');
+      };
+      if (entry) await this.withObs(confirmOutput);
       const preparationObs = (connection: ObsRpc): ObsRpc => {
         const obs = guardedObs(connection, current);
         return {
@@ -2230,8 +2290,45 @@ export class ObsAdapter {
         }
       }
       if (!current()) throw new Error('OBS 准备请求已失效，请重试。');
+      if (entry) {
+        await this.withObs(confirmOutput);
+        if (prepared.ready && obsFindingReadiness(this.findings).blockingFindings.length === 0)
+          this.entryPermit = {
+            id: entry.id,
+            outputEpoch,
+            programGeneration: generation,
+            valid: entry.valid,
+          };
+      }
       this.recoveryPrepared = true;
       return this.findings;
+    });
+  }
+  verifyEntryPermit(id: string): Promise<void> {
+    return this.serial(async () => {
+      const permit = this.entryPermit;
+      const check = () => {
+        const reason = this.outputs.captureWarmupBlockReason();
+        if (
+          !permit ||
+          permit.id !== id ||
+          this.entryPermit !== permit ||
+          !permit.valid() ||
+          permit.programGeneration !== this.programGeneration ||
+          permit.outputEpoch !== this.outputs.preparationOutputEpoch() ||
+          reason
+        )
+          throw new ObsVideoError(
+            'preparation_output_changed',
+            reason ?? '启动准备已失效，请重新启动工作台。',
+          );
+      };
+      check();
+      await this.withObs(async (obs) => {
+        await assertNoVideoOutput(obs);
+        check();
+      });
+      check();
     });
   }
   repair(

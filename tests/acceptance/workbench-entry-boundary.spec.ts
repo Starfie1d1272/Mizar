@@ -258,6 +258,11 @@ test('double click reuses one launch transaction, and menu without GSI can enter
   rig.releaseEnsure();
   await expect(page.locator('output')).toHaveText('confirmed');
   const calls = await rig.calls();
+  const details = await rig.details();
+  const gsi = details.find((item) => item.name === 'ensure_gsi');
+  const replacement = details.find((item) => item.name === 'replace_external_cs2');
+  expect(gsi?.args.preparationId).toBe(replacement?.args.preparationId);
+  expect(details.indexOf(gsi!)).toBeLessThan(details.indexOf(replacement!));
   expect(calls.filter((name) => name === 'ensure_gsi')).toHaveLength(1);
   expect(calls.filter((name) => name === 'start_managed_cs2')).toHaveLength(1);
   expect(calls.filter((name) => name === 'present_production')).toHaveLength(1);

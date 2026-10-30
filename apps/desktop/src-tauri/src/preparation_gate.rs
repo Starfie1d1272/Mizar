@@ -35,6 +35,7 @@ impl PreparationGate {
 pub struct PreparationGuard<'a> {
     pub gate: Option<&'a PreparationGate>,
     pub id: Option<&'a str>,
+    pub verify: Option<&'a dyn Fn() -> Result<(), String>>,
 }
 
 impl PreparationGuard<'_> {
@@ -42,12 +43,26 @@ impl PreparationGuard<'_> {
         match self.gate {
             Some(gate) => gate.check(self.id),
             None => Ok(()),
+        }?;
+        if let Some(verify) = self.verify {
+            verify()?;
         }
+        Ok(())
     }
     pub fn commit<T>(&self, action: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
         match self.gate {
-            Some(gate) => gate.commit(self.id, action),
-            None => action(),
+            Some(gate) => gate.commit(self.id, || {
+                if let Some(verify) = self.verify {
+                    verify()?;
+                }
+                action()
+            }),
+            None => {
+                if let Some(verify) = self.verify {
+                    verify()?;
+                }
+                action()
+            }
         }
     }
 }
@@ -83,7 +98,8 @@ pub fn may_recover_mulnx_journal(
 #[cfg(test)]
 mod tests {
     use super::{
-        may_recover_mulnx_journal, may_restore_launch_options, recover_unsubmitted, PreparationGate,
+        may_recover_mulnx_journal, may_restore_launch_options, recover_unsubmitted,
+        PreparationGate, PreparationGuard,
     };
     use std::{
         sync::{mpsc, Arc},
@@ -101,6 +117,33 @@ mod tests {
             })
             .is_err());
         assert_eq!(gate.commit(Some("other"), || Ok(42)), Ok(42));
+    }
+
+    #[test]
+    fn native_submission_revalidates_output_and_refuses_a_stale_permit() {
+        use std::cell::Cell;
+        let gate = PreparationGate::default();
+        let active = Cell::new(false);
+        let verify = || {
+            if active.get() {
+                Err("OBS 输出已启动".to_string())
+            } else {
+                Ok(())
+            }
+        };
+        let guard = PreparationGuard {
+            gate: Some(&gate),
+            id: Some("entry"),
+            verify: Some(&verify),
+        };
+        guard.check().unwrap();
+        active.set(true);
+        assert_eq!(
+            guard.commit(|| -> Result<(), String> { panic!("must not submit") }),
+            Err("OBS 输出已启动".into())
+        );
+        active.set(false);
+        assert_eq!(guard.commit(|| Ok(42)), Ok(42));
     }
 
     #[test]

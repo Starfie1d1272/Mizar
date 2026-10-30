@@ -72,6 +72,9 @@ it('invalidates the capture lease on OBS output, takeover, input, disconnect and
     });
     await vi.waitFor(() => expect(starting()).toBe(false));
     await expect(adapter.captureWarmupGuard()).rejects.toThrow('直播正在开始');
+    const time = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 9000);
+    expect((await adapter.outputStatus()).stream.phase).toBe('starting');
+    time.mockRestore();
     sendEvent('StreamStateChanged', 64, {
       outputActive: false,
       outputState: 'OBS_WEBSOCKET_OUTPUT_STOPPED',

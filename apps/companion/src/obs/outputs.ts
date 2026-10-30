@@ -396,9 +396,10 @@ export class ObsOutputController {
       // A transitional event is stronger evidence than a snapshot of the old active bit.
       const previous = this.values[kind].phase;
       if (
-        Date.now() - this.transitionAt[kind] < CONFIRM_MS &&
-        ((previous === 'starting' && !value.outputActive) ||
-          (previous === 'stopping' && value.outputActive))
+        (previous === 'starting' && !value.outputActive) ||
+        (Date.now() - this.transitionAt[kind] < CONFIRM_MS &&
+          previous === 'stopping' &&
+          value.outputActive)
       )
         continue;
       this.update(kind, phase, value.outputActive);
@@ -471,7 +472,8 @@ export class ObsOutputController {
           throw rejectedOutput(failure);
         await new Promise((resolve) => setTimeout(resolve, 200));
       }
-      if (this.generation === generation) this.update(output, 'unknown', null);
+      if (this.generation === generation && this.values[output].phase !== 'starting')
+        this.update(output, 'unknown', null);
       throw new ObsOutputError(
         'obs_output_unconfirmed',
         '操作结果尚未确认，正在核实 OBS 状态。请勿重复操作。',

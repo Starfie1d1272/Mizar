@@ -1451,6 +1451,7 @@ impl ManagedCs2 {
             &crate::preparation_gate::PreparationGuard {
                 gate: None,
                 id: None,
+                verify: None,
             },
         )
     }
@@ -1517,6 +1518,7 @@ impl ManagedCs2 {
             &crate::preparation_gate::PreparationGuard {
                 gate: None,
                 id: None,
+                verify: None,
             },
         )? {
             return Err("请先结束现有游戏并恢复配置。".into());
@@ -1611,6 +1613,7 @@ impl ManagedCs2 {
             &crate::preparation_gate::PreparationGuard {
                 gate: None,
                 id: None,
+                verify: None,
             },
         )
     }
@@ -2305,6 +2308,7 @@ impl ManagedCs2 {
             &crate::preparation_gate::PreparationGuard {
                 gate: None,
                 id: None,
+                verify: None,
             },
         )
     }

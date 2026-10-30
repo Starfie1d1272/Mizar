@@ -937,6 +937,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         : {}),
       activeScene: () => sceneController.get().active,
       preparationValid: (revision) => production.preparationValid(revision),
+      ...(options.productRuntime
+        ? { runtimeControlToken: options.productRuntime.controlToken }
+        : {}),
     });
   }
   let previousBindingOrigin: string | undefined = options.matchContextBinding?.origin;

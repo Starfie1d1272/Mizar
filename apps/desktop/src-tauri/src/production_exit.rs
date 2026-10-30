@@ -475,6 +475,27 @@ pub fn prepare_external_entry(log: &DesktopLog, expected_revision: &str) -> Resu
     invalidate_local_match_exit(log)
 }
 
+/// The Host asks Companion directly immediately before each game submission.
+pub fn check_obs_entry(log: &DesktopLog, preparation_id: &str) -> Result<(), String> {
+    let token = runtime_token(log)?;
+    let body = serde_json::json!({"preparationId": preparation_id}).to_string();
+    let (status, value) = request_with_identity(
+        log,
+        "POST",
+        "/operator/runtime/obs-entry-permit",
+        &body,
+        Instant::now() + Duration::from_secs(6),
+        Some(&token),
+    )?;
+    if status == 200 && value["ok"] == true {
+        return Ok(());
+    }
+    Err(value["message"]
+        .as_str()
+        .unwrap_or("OBS 启动准备已失效，请重试。")
+        .to_string())
+}
+
 /// Existing private runtime identity; browsers cannot renew a native lease.
 pub fn prepare_mulnx(
     log: &DesktopLog,

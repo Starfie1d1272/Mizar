@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { timingSafeEqual } from 'node:crypto';
 import { createObsCaptureDiagnosticReader } from './capture-diagnostic.js';
 import {
   obsAudioBindCommandSchema,
@@ -47,11 +48,35 @@ export function registerObsRoutes(
     readonly originPolicy: LocalWebOriginPolicy;
     readonly activeScene: () => ProgramSceneId;
     readonly preparationValid: (revision: unknown) => () => boolean;
+    readonly runtimeControlToken?: string;
     readonly gameAudio?: GameAudioController;
     readonly musicDirector?: () => MusicDirector | undefined;
     readonly readCaptureEvidence?: () => Promise<ObsNativeEvidence>;
   },
 ) {
+  app.post('/operator/runtime/obs-entry-permit', { bodyLimit: 1024 }, async (request, reply) => {
+    const token = request.headers['x-runtime-token'];
+    const expected = Buffer.from(options.runtimeControlToken ?? '');
+    const supplied = Buffer.from(typeof token === 'string' ? token : '');
+    if (
+      options.originPolicy.mode !== 'loopback' ||
+      request.headers.origin !== undefined ||
+      expected.length === 0 ||
+      supplied.length !== expected.length ||
+      !timingSafeEqual(expected, supplied)
+    )
+      return reply.code(403).send({ error: 'runtime-control-denied' });
+    const body = z.object({ preparationId: z.string().uuid() }).strict().safeParse(request.body);
+    if (!body.success) return reply.code(400).send({ error: 'preparation_invalid' });
+    try {
+      await options.adapter.verifyEntryPermit(body.data.preparationId);
+      return { ok: true };
+    } catch (error) {
+      return reply.code(409).send({
+        message: error instanceof ObsVideoError ? error.message : 'OBS 启动准备未确认，请重试。',
+      });
+    }
+  });
   const captureDiagnostic = createObsCaptureDiagnosticReader(options.readCaptureEvidence);
   const allowed = (origin: string | undefined) =>
     options.originPolicy.mode === 'loopback' &&
@@ -503,14 +528,27 @@ export function registerObsRoutes(
             { event: 'obs', stage: 'obs_preparation_start', action },
             'OBS preparation started',
           );
-          const body = request.body as { expectedRevision?: unknown } | null;
+          const body = request.body as {
+            expectedRevision?: unknown;
+            preparationId?: unknown;
+          } | null;
+          const entryId =
+            body?.preparationId === undefined
+              ? undefined
+              : z.string().uuid().safeParse(body.preparationId);
+          if (entryId && !entryId.success)
+            return reply.code(400).send({ error: 'preparation_invalid' });
           const valid = options.preparationValid(body?.expectedRevision);
           const connected = () => !request.raw.aborted && !reply.raw.destroyed;
           if (action !== 'check' && (!valid() || !connected()))
             return reply.code(409).send({ message: '制作状态已变化，请刷新后重试。' });
           const findings =
             action === 'ensure'
-              ? await options.adapter.ensure(options.activeScene, () => valid() && connected())
+              ? await options.adapter.ensure(
+                  options.activeScene,
+                  () => valid() && connected(),
+                  entryId?.success ? { id: entryId.data, valid } : undefined,
+                )
               : action === 'repair'
                 ? await options.adapter.repair(options.activeScene, () => valid() && connected())
                 : await options.adapter.check();
@@ -523,11 +561,20 @@ export function registerObsRoutes(
             },
             'OBS preparation checked',
           );
+          const readiness = obsFindingReadiness(findings);
+          const diagnostic = await captureDiagnostic(true);
+          if (action === 'ensure' && entryId?.success) {
+            if (readiness.blockingFindings.length)
+              return reply.code(409).send({ message: readiness.blockingFindings[0]!.message });
+            await options.adapter.verifyEntryPermit(entryId.data);
+            if (!valid() || !connected())
+              return reply.code(409).send({ message: '制作状态已变化，请刷新后重试。' });
+          }
           return {
             ok: true,
             findings,
-            ...obsFindingReadiness(findings),
-            captureDiagnostic: await captureDiagnostic(true),
+            ...readiness,
+            captureDiagnostic: diagnostic,
           };
         }
         if (action === 'audio-setup') {
