@@ -30,9 +30,9 @@ async function rig(blockSettings = false) {
     reached = resolve;
   });
   let currentCollection = 'Mizar';
-  let notifyScene: (() => void) | undefined;
+  const notifyScene: (() => void)[] = [];
   server.get('/', { websocket: true }, (socket) => {
-    notifyScene = () =>
+    notifyScene.push(() =>
       socket.send(
         JSON.stringify({
           op: 5,
@@ -42,7 +42,8 @@ async function rig(blockSettings = false) {
             eventData: { sceneName: 'Personal' },
           },
         }),
-      );
+      ),
+    );
     socket.send(JSON.stringify({ op: 0, d: { obsWebSocketVersion: '5.6.3', rpcVersion: 1 } }));
     socket.on('message', (raw) => {
       const request = JSON.parse(raw.toString()) as {
@@ -112,7 +113,7 @@ async function rig(blockSettings = false) {
     calls,
     waiting,
     release,
-    notifyScene: () => notifyScene?.(),
+    notifyScene: () => notifyScene.forEach((notify) => notify()),
     setCollection: (name: string) => {
       currentCollection = name;
     },

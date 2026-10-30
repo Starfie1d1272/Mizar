@@ -612,8 +612,6 @@ export class ObsAdapter {
           client.on('ConnectionClosed', invalidateAudio);
         }
         if (observeBrowserIdentity) {
-          client.on('CurrentProgramSceneChanged', invalidateBrowser);
-          client.on('CurrentSceneCollectionChanging', invalidateBrowser);
           client.on('InputRemoved', invalidateBrowser);
           client.on('InputSettingsChanged', invalidateBrowser);
           client.on('ConnectionClosed', invalidateBrowser);
@@ -680,8 +678,6 @@ export class ObsAdapter {
         client.off('ConnectionClosed', invalidateAudio);
       }
       if (observeBrowserIdentity) {
-        client.off('CurrentProgramSceneChanged', invalidateBrowser);
-        client.off('CurrentSceneCollectionChanging', invalidateBrowser);
         client.off('InputRemoved', invalidateBrowser);
         client.off('InputSettingsChanged', invalidateBrowser);
         client.off('ConnectionClosed', invalidateBrowser);
