@@ -256,6 +256,7 @@ export function registerOrchestrationRoutes(
           consoleCapture: z.boolean().default(false),
           update: z.boolean().default(false),
           spectatorCfg: z.boolean().default(false),
+          captureCompatibility: z.boolean().default(false),
           demoCfg: z
             .string()
             .regex(/^mizar_demo_[0-9a-f-]{36}\.cfg$/i)
@@ -271,6 +272,7 @@ export function registerOrchestrationRoutes(
         body.update,
         body.spectatorCfg,
         body.demoCfg ?? undefined,
+        body.captureCompatibility,
       );
       if (previous !== tool.selectionId) {
         director.invalidatePreparation('MulNX 版本已切换，请重新准备运镜。');

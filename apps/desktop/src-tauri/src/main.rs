@@ -22,6 +22,7 @@ mod observer_hud;
 mod observer_job;
 mod observer_workspace;
 mod powershell;
+mod preparation_gate;
 mod production_exit;
 mod spectator_eligibility;
 mod spectator_recovery_plan;
@@ -69,6 +70,35 @@ use windows_startup::{failure_dialog, DesktopMutex, ExitRequest, ExitSignal, Run
 
 const BASE: &str = "http://127.0.0.1:3000";
 static GSI_OPERATION_LOCK: Mutex<()> = Mutex::new(());
+
+fn check_preparation(app: &tauri::AppHandle, id: Option<&str>) -> Result<(), String> {
+    app.state::<preparation_gate::PreparationGate>().check(id)
+}
+
+#[tauri::command]
+async fn cancel_cs2_preparation(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    preparation_id: String,
+) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("请在准备中心取消启动。".into());
+    }
+    if preparation_id.is_empty()
+        || preparation_id.len() > 64
+        || !preparation_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    {
+        return Err("启动事务标识无效。".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<preparation_gate::PreparationGate>()
+            .cancel(preparation_id)
+    })
+    .await
+    .map_err(|_| "启动取消状态不可用。".to_string())?
+}
 
 #[link(name = "shell32")]
 extern "system" {
@@ -777,6 +807,7 @@ async fn launch_mulnx(
     automatic: Option<bool>,
     preserve_settings: Option<bool>,
     resume_only: Option<bool>,
+    preparation_id: Option<String>,
     diagnostic_operation_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
     if window.label() != "main" {
@@ -785,6 +816,15 @@ async fn launch_mulnx(
     let log = app.state::<DesktopLog>().inner().clone();
     let evidence = log.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
+        check_preparation(&app, preparation_id.as_deref())?;
+        if let Some(id) = preparation_id.as_deref() {
+            let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+            let cs2 = state.lock().map_err(|_| "CS2 状态不可用。")?;
+            let status = cs2.status()?;
+            if status["pending"] == true && status["preparationId"] != id {
+                return Err("已有其他游戏事务，请先完成原配置恢复。".into());
+            }
+        }
         if resume_only.unwrap_or(false) {
             mulnx_launch::resume(&app, &log)
         } else {
@@ -793,12 +833,97 @@ async fn launch_mulnx(
                 &log,
                 automatic.unwrap_or(true),
                 preserve_settings.unwrap_or(false),
+                preparation_id.as_deref(),
             )
         }
     })
     .await
     .unwrap_or_else(|error| Err(format!("MulNX 启动任务失败：{error}")));
     evidence.native_outcome("launch_mulnx", diagnostic_operation_id.as_deref(), &result);
+    result
+}
+
+#[tauri::command]
+async fn preflight_cs2_replacement(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<serde_json::Value, String> {
+    if window.label() != "main" {
+        return Err("请在准备中心启动工作台。".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<production_exit::ExitGate>().check()?;
+        app.state::<updates::PendingUpdate>().check()?;
+        let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+        let cs2 = state.lock().map_err(|_| "CS2 状态不可用。")?;
+        cs2.preflight_replacement()
+    })
+    .await
+    .map_err(|_| "无法检查游戏安装和实例。".to_string())?
+}
+
+#[tauri::command]
+async fn replace_external_cs2(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    expected_pid: Option<u32>,
+    expected_created: Option<String>,
+    expected_revision: String,
+    preparation_id: String,
+    diagnostic_operation_id: Option<String>,
+) -> Result<bool, String> {
+    if window.label() != "main" {
+        return Err("请在准备中心启动工作台。".into());
+    }
+    let log = app.state::<DesktopLog>().inner().clone();
+    let evidence = log.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        app.state::<production_exit::ExitGate>().check()?;
+        app.state::<updates::PendingUpdate>().check()?;
+        let created = expected_created
+            .as_deref()
+            .map(|v| {
+                v.parse::<u64>()
+                    .map_err(|_| "游戏创建标识无效。".to_string())
+            })
+            .transpose()?;
+        let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+        let mut cs2 = state.lock().map_err(|_| "CS2 状态不可用。")?;
+        let gate = app.state::<preparation_gate::PreparationGate>();
+        let verify_output = || production_exit::check_obs_entry(&log, &preparation_id);
+        let guard = preparation_gate::PreparationGuard {
+            gate: Some(gate.inner()),
+            id: Some(&preparation_id),
+            verify: Some(&verify_output),
+        };
+        guard.check()?;
+        let activity = app.state::<cs2_activity::Activity>();
+        let _activity = activity.begin(3);
+        let snapshot = cs2.preflight_replacement()?;
+        if snapshot["target"]["managed"] == true
+            && snapshot["preparationId"].as_str() == Some(preparation_id.as_str())
+        {
+            return cs2.replace_for_preparation(expected_pid, created, &preparation_id, &guard);
+        }
+        if let Some(pid) = snapshot["target"]["pid"].as_u64() {
+            if Some(pid) != expected_pid.map(u64::from)
+                || snapshot["target"]["created"].as_str() != expected_created.as_deref()
+            {
+                return Err("游戏实例已变化，未关闭游戏；请重新检查后重试。".into());
+            }
+        }
+        app.state::<production_exit::ExitGate>().check()?;
+        app.state::<updates::PendingUpdate>().check()?;
+        production_exit::prepare_external_entry(&log, &expected_revision)?;
+        cs2.replace_for_preparation(expected_pid, created, &preparation_id, &guard)
+    })
+    .await
+    .map_err(|_| "游戏替换未完成，请重试。".to_string())?;
+    evidence.native_outcome(
+        "replace_external_cs2",
+        diagnostic_operation_id.as_deref(),
+        &result,
+    );
     result
 }
 
@@ -998,6 +1123,7 @@ async fn attach_external_cs2(
 async fn start_managed_cs2(
     app: tauri::AppHandle,
     preserve_settings: Option<bool>,
+    preparation_id: Option<String>,
     diagnostic_operation_id: Option<String>,
     diagnostic_task_id: Option<String>,
     diagnostic_trigger: Option<String>,
@@ -1034,11 +1160,26 @@ async fn start_managed_cs2(
                         app.state::<production_exit::ExitGate>().check()?;
                         app.state::<updates::PendingUpdate>().check()?;
                         production_exit::invalidate_local_match_exit(&app.state::<DesktopLog>())?;
-                        let result = if preserve_settings.unwrap_or(false) {
-                            cs2.start_with_settings(true)
-                        } else {
-                            cs2.start()
+                        let gate = app.state::<preparation_gate::PreparationGate>();
+                        let verify_output = || {
+                            production_exit::check_obs_entry(
+                                &command_log,
+                                preparation_id.as_deref().ok_or("启动事务标识缺失。")?,
+                            )
                         };
+                        let guard = preparation_gate::PreparationGuard {
+                            gate: Some(gate.inner()),
+                            id: preparation_id.as_deref(),
+                            verify: preparation_id
+                                .as_ref()
+                                .map(|_| &verify_output as &dyn Fn() -> Result<(), String>),
+                        };
+                        guard.check()?;
+                        let result = cs2.start_preparation(
+                            preserve_settings.unwrap_or(false),
+                            preparation_id.as_deref(),
+                            &guard,
+                        );
                         if let Ok(mut tracker) = app.state::<HostState>().tracker.lock() {
                             tracker.preserve_settings = cs2.preserve_settings();
                         }
@@ -3373,7 +3514,9 @@ async fn open_cs2_config_directory(
 
 #[tauri::command]
 async fn ensure_gsi(
+    app: tauri::AppHandle,
     log: tauri::State<'_, DesktopLog>,
+    preparation_id: Option<String>,
     diagnostic_operation_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let diagnostic_log = log.inner().clone();
@@ -3393,9 +3536,33 @@ async fn ensure_gsi(
                         "GSI 操作状态不可用。",
                     )
                 })?;
-                gsi_script("ensure-gsi.ps1", None, Duration::from_secs(45), &log)?;
+                let gate = app.state::<preparation_gate::PreparationGate>();
+                let verify_output = || {
+                    production_exit::check_obs_entry(
+                        &log,
+                        preparation_id.as_deref().ok_or("启动事务标识缺失。")?,
+                    )
+                };
+                let guard = preparation_gate::PreparationGuard {
+                    gate: Some(gate.inner()),
+                    id: preparation_id.as_deref(),
+                    verify: preparation_id
+                        .as_ref()
+                        .map(|_| &verify_output as &dyn Fn() -> Result<(), String>),
+                };
+                if preparation_id.is_some() {
+                    guard.commit(|| {
+                        gsi_script("ensure-gsi.ps1", None, Duration::from_secs(45), &log)
+                            .map(|_| ())
+                    })?;
+                } else {
+                    gsi_script("ensure-gsi.ps1", None, Duration::from_secs(45), &log)?;
+                }
                 let output = gsi_script("gsi-status.ps1", None, Duration::from_secs(20), &log)?;
                 let result = powershell::parse(&log, "GSI 检测", &output)?;
+                if preparation_id.is_some() {
+                    guard.check()?;
+                }
                 Ok(cs2_diagnostics::gsi_status(&result))
             }
         })
@@ -3535,6 +3702,7 @@ fn run_desktop(
         .manage(DemoEntryIntent::default())
         .manage(production_exit::WorkspaceExit::default())
         .manage(production_exit::VerifiedStop::default())
+        .manage(preparation_gate::PreparationGate::default())
         .manage(updates::PendingUpdate::new(update_stage))
         .invoke_handler(|invoke| {
             let command = invoke.message.command();
@@ -3563,6 +3731,9 @@ fn run_desktop(
             open_mulnx_browser,
             observer_workspace::observer_command,
             start_managed_cs2,
+            preflight_cs2_replacement,
+            replace_external_cs2,
+            cancel_cs2_preparation,
             begin_managed_camera,
             cancel_managed_camera,
             attach_external_cs2,

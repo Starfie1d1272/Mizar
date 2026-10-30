@@ -179,6 +179,18 @@ export async function ensureObsAudio(obs: ObsRpc, baseUrl: string): Promise<ObsF
         message: 'Mizar 默认音频来源名称已被其他类型占用，请在 OBS 重命名冲突来源后重试自动配置。',
       },
     ];
+  // Existing scene references already express the operator's choice. Do not
+  // demand idle output when preparation has no audio writes to perform.
+  if (MANAGED.every((managed) => inputs.some((input) => input.inputName === managed.name))) {
+    const present = await Promise.all(
+      obsDesiredScenes(baseUrl).map(async (scene) => {
+        const items = (await obs.call('GetSceneItemList', { sceneName: scene.sceneName }))
+          .sceneItems as { sourceName: string }[];
+        return MANAGED.every((managed) => items.some((item) => item.sourceName === managed.name));
+      }),
+    );
+    if (present.every(Boolean)) return checkObsAudio(obs);
+  }
   await setupObsAudio(obs, baseUrl);
   return checkObsAudio(obs);
 }

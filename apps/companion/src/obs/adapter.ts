@@ -1,4 +1,14 @@
 import { gameBackgroundReady } from './game-background.js';
+import { ObsCaptureWarmup, ObsCaptureWarmupError } from './capture-warmup.js';
+import { readCaptureInitialization, type CaptureInitialization } from './capture-initialization.js';
+import type { ObsCaptureDiagnostic } from '@mizar/protocol/obs';
+import {
+  assertNoVideoOutput,
+  ObsPreparationWriteBlocked,
+  ObsVideoError,
+  ObsVideoTransaction,
+} from './video-transaction.js';
+import { obsFindingReadiness } from './prepare-readiness.js';
 import { ObsActionError } from './action-error.js';
 import { assertBpCompactOff, BpOverlayOwner } from './bp-overlay.js';
 import { diagnosticValue } from '../support/session-journal.js';
@@ -60,6 +70,8 @@ import {
   ObsExitSafetyError,
   checkObsConfiguration,
   ensureObsConfiguration,
+  alignPreparationScene,
+  guardedPreparationWrites,
   repairObsConfiguration,
   refreshObsBrowserSources,
   switchObsScene,
@@ -125,6 +137,9 @@ export class ObsAdapter {
   private expectedScene: string | undefined;
   private expectedCollection: string | undefined;
   private programGeneration = 0;
+  private entryPermit:
+    | { id: string; outputEpoch: number; programGeneration: number; valid: () => boolean }
+    | undefined;
   onProgramChanged(callback: () => void): void {
     this.programChanged = callback;
   }
@@ -160,6 +175,8 @@ export class ObsAdapter {
     private readonly diagnostic: (stage: string, error: unknown) => void = () => undefined,
     private readonly audioRouting?: ObsAudioRouting,
     private readonly commentary?: { owner: RemoteCommentary; journal: string },
+    private readonly videoTransaction?: ObsVideoTransaction,
+    private readonly captureWarmup?: ObsCaptureWarmup,
   ) {
     this.audioConfiguration = new AudioConfigurationConnection(configStore);
     this.outputs = new ObsOutputController(
@@ -193,6 +210,26 @@ export class ObsAdapter {
         this.programChanged();
       },
     );
+  }
+
+  /** Guard an explicit capture warmup against output, ownership and exit changes. */
+  async captureWarmupGuard(): Promise<() => boolean> {
+    const status = await this.outputs.read();
+    const idle = (value: ObsOutputsStatus) =>
+      [value.stream, value.record].every(
+        (output) => output.active === false && output.phase === 'idle' && output.pending === null,
+      );
+    const outputGeneration = this.outputs.captureWarmupGeneration();
+    if (outputGeneration === null || !idle(status))
+      throw new ObsVideoError(
+        'capture_output_unavailable',
+        this.outputs.captureWarmupBlockReason() ?? 'OBS 输出状态正在变化，请等待稳定后重试。',
+      );
+    const recoveryGeneration = this.recoveryGeneration;
+    return () =>
+      this.outputs.captureWarmupGeneration() === outputGeneration &&
+      this.recoveryGeneration === recoveryGeneration &&
+      idle(this.outputs.snapshot());
   }
 
   async outputStatus(): Promise<ObsOutputsStatus> {
@@ -609,6 +646,7 @@ export class ObsAdapter {
     diagnosticStage?: string,
     observeAudioIdentity = false,
     observeBrowserIdentity = false,
+    observeVideoIdentity = false,
   ): Promise<T> {
     const config = await this.configStore.read();
     const client = new OBSWebSocket();
@@ -636,6 +674,11 @@ export class ObsAdapter {
           client.on('InputRemoved', invalidateBrowser);
           client.on('InputSettingsChanged', invalidateBrowser);
           client.on('ConnectionClosed', invalidateBrowser);
+        }
+        if (observeVideoIdentity) {
+          client.on('CurrentProfileChanging', invalidateAudio);
+          client.on('CurrentProfileChanged', invalidateAudio);
+          client.on('ConnectionClosed', invalidateAudio);
         }
         stage = 'obs_request';
         const rpc: ObsRpc = {
@@ -702,6 +745,11 @@ export class ObsAdapter {
         client.off('InputRemoved', invalidateBrowser);
         client.off('InputSettingsChanged', invalidateBrowser);
         client.off('ConnectionClosed', invalidateBrowser);
+      }
+      if (observeVideoIdentity) {
+        client.off('CurrentProfileChanging', invalidateAudio);
+        client.off('CurrentProfileChanged', invalidateAudio);
+        client.off('ConnectionClosed', invalidateAudio);
       }
       await client.disconnect().catch(() => undefined);
     }
@@ -1884,6 +1932,111 @@ export class ObsAdapter {
       }),
     );
   }
+  videoPreflight(valid: () => boolean): Promise<void> {
+    return this.serial(() =>
+      this.withObs(
+        async (obs, endpoint) => {
+          if (!valid()) throw new Error('OBS 准备请求已失效，请重试。');
+          const lease = await this.captureWarmupGuard();
+          await assertNoVideoOutput(obs);
+          if (!valid() || !lease())
+            throw new ObsVideoError('preparation_output_changed', 'OBS 输出状态已变化，请重试。');
+          if (!this.videoTransaction) throw new Error('OBS 视频准备不可用。');
+          await this.videoTransaction.preflight(obs, endpoint);
+          if (!valid() || !lease())
+            throw new ObsVideoError('preparation_output_changed', 'OBS 输出状态已变化，请重试。');
+        },
+        12000,
+        undefined,
+        false,
+        false,
+        true,
+      ),
+    );
+  }
+
+  prepareVideo(valid: () => boolean): Promise<string | null> {
+    return this.configurationMutation(() =>
+      this.withObs(
+        async (obs, endpoint) => {
+          if (!valid()) throw new Error('OBS 准备请求已失效，请重试。');
+          if (!this.videoTransaction) throw new Error('OBS 视频准备不可用。');
+          const lease = await this.captureWarmupGuard();
+          await assertNoVideoOutput(obs);
+          if (!lease())
+            throw new ObsVideoError('preparation_output_changed', 'OBS 输出状态已变化，请重试。');
+          const guarded: ObsRpc = {
+            ...obs,
+            call: (type, data) => {
+              if (/^(Create|Set|Remove)/.test(type) && !lease())
+                throw new ObsPreparationWriteBlocked(
+                  new ObsVideoError('preparation_output_changed', 'OBS 输出状态已变化，请重试。'),
+                );
+              return obs.call(type, data);
+            },
+          };
+          const id = await this.videoTransaction.prepare(
+            guarded,
+            endpoint,
+            () => valid() && lease(),
+          );
+          if (!valid() || !lease()) {
+            if (id) {
+              try {
+                await this.videoTransaction.restore(guarded, endpoint, id);
+              } catch (error) {
+                throw new ObsVideoError(
+                  'restore_pending',
+                  'OBS 视频设置恢复待完成，请检查输出后重试。',
+                  { cause: error },
+                );
+              }
+            }
+            throw new ObsVideoError('preparation_output_changed', 'OBS 输出状态已变化，请重试。');
+          }
+          return id;
+        },
+        12000,
+        undefined,
+        false,
+        false,
+        true,
+      ),
+    );
+  }
+
+  restoreVideo(id?: string): Promise<void> {
+    return this.configurationMutation(async () => {
+      if (!this.videoTransaction || !(await this.videoTransaction.pending())) return;
+      const lease = await this.captureWarmupGuard();
+      await this.withObs(
+        (obs, endpoint) =>
+          this.videoTransaction!.restore(
+            {
+              ...obs,
+              call: (type, data) => {
+                if (/^(Create|Set|Remove)/.test(type) && !lease())
+                  throw new ObsPreparationWriteBlocked(
+                    new ObsVideoError(
+                      'preparation_output_changed',
+                      'OBS 输出状态已变化，视频设置待恢复。',
+                    ),
+                  );
+                return obs.call(type, data);
+              },
+            },
+            endpoint,
+            id,
+          ),
+        12000,
+        undefined,
+        false,
+        false,
+        true,
+      );
+    });
+  }
+
   private async adoptInitialTeamspeakDesktop(
     obs: ObsRpc,
     endpoint: string,
@@ -1985,15 +2138,53 @@ export class ObsAdapter {
   ensure(
     activeScene: () => ProgramSceneId = () => 'waiting',
     valid: () => boolean = () => false,
+    entry?: { id: string; valid: () => boolean },
   ): Promise<readonly ObsFinding[]> {
     const generation = this.programGeneration;
     const current = () => valid() && generation === this.programGeneration;
     return this.configurationMutation(async () => {
+      if (entry) this.entryPermit = undefined;
       if (!current()) throw new Error('OBS 准备请求已失效，请重试。');
       await this.outputs.read();
       if (!current()) throw new Error('OBS 准备请求已失效，请重试。');
-      const prepared = await this.withObs(async (connection, endpoint) => {
+      const outputEpoch = this.outputs.preparationOutputEpoch();
+      const checkOutput = () => {
+        const reason = this.outputs.captureWarmupBlockReason();
+        if (reason || this.outputs.preparationOutputEpoch() !== outputEpoch)
+          throw new ObsVideoError(
+            'preparation_output_changed',
+            reason ?? 'OBS 输出状态已变化，请重试。',
+          );
+      };
+      const confirmOutput = async (obs: ObsRpc) => {
+        checkOutput();
+        await assertNoVideoOutput(obs);
+        checkOutput();
+        if (!current() || (entry && !entry.valid()))
+          throw new Error('OBS 准备请求已失效，请重试。');
+      };
+      if (entry) await this.withObs(confirmOutput);
+      const preparationObs = (connection: ObsRpc): ObsRpc => {
         const obs = guardedObs(connection, current);
+        return {
+          ...obs,
+          call: (type, data) => {
+            if (/^(Create|Set|Remove)/.test(type)) {
+              const reason = this.outputs.captureWarmupBlockReason();
+              if (reason || this.outputs.preparationOutputEpoch() !== outputEpoch)
+                throw new ObsPreparationWriteBlocked(
+                  new ObsVideoError(
+                    'preparation_output_changed',
+                    reason ?? 'OBS 输出状态已变化，请重试。',
+                  ),
+                );
+            }
+            return obs.call(type, data);
+          },
+        };
+      };
+      const prepared = await this.withObs(async (connection, endpoint) => {
+        const obs = preparationObs(connection);
         await assertBpCompactOff(obs);
         const visual = await ensureObsConfiguration(obs, this.browserBaseUrl, activeScene, true);
         if (
@@ -2007,6 +2198,7 @@ export class ObsAdapter {
           )
         )
           return { findings: visual, ready: false };
+        await alignPreparationScene(obs, activeScene, current);
         let audio: ObsFinding[];
         if (
           (await this.audioRouting?.enabled()) ||
@@ -2015,7 +2207,7 @@ export class ObsAdapter {
         ) {
           audio = await checkObsAudio(obs);
           audio.push(...(await this.bindingFindings(obs, endpoint)));
-        } else audio = await ensureObsAudio(obs, this.browserBaseUrl);
+        } else audio = await ensureObsAudio(guardedPreparationWrites(obs), this.browserBaseUrl);
         return { findings: [...visual, ...audio], ready: true };
       }, 30_000);
       if (!current()) throw new Error('OBS 准备请求已失效，请重试。');
@@ -2038,14 +2230,14 @@ export class ObsAdapter {
           const commentary = await this.audioConfiguration.run(
             async (connection, endpoint, observer) => {
               const findings = await configureIndependentAudio(
-                guardedObs(connection, current),
+                guardedPreparationWrites(preparationObs(connection)),
                 endpoint,
                 observer,
                 this.commentary!.owner,
                 this.commentary!.journal,
                 this.browserBaseUrl,
                 async (ids) =>
-                  this.audioRouting?.seedAutomatic(guardedObs(connection, current), endpoint, ids),
+                  this.audioRouting?.seedAutomatic(preparationObs(connection), endpoint, ids),
                 async () => !(await this.audioRouting?.enabled()),
                 async (plan) => {
                   const routing = await this.audioRouting?.commentaryBinding();
@@ -2061,19 +2253,19 @@ export class ObsAdapter {
                 },
                 async () =>
                   (await this.audioRouting?.managedBindings(
-                    guardedObs(connection, current),
+                    preparationObs(connection),
                     endpoint,
                   )) ?? null,
               );
               if (findings.some((finding) => finding.code === 'audio_teamspeak_compatibility')) {
                 await this.adoptInitialTeamspeakDesktop(
-                  guardedObs(connection, current),
+                  preparationObs(connection),
                   endpoint,
                   observer,
                   current,
                 );
                 const compatibility = await this.teamspeakCompatibilityFindings(
-                  guardedObs(connection, current),
+                  preparationObs(connection),
                   endpoint,
                 ).catch(() =>
                   findings.filter((finding) => finding.code === 'audio_teamspeak_compatibility'),
@@ -2089,6 +2281,7 @@ export class ObsAdapter {
           this.findings = [...this.findings, ...commentary];
         } catch (error) {
           if (!current()) throw error;
+          if (error instanceof ObsVideoError) throw error;
           this.diagnostic('obs_commentary_prepare', obsErrorEvidence(error));
           const audioReason = error instanceof Error ? error.message : '';
           const audioHelp: Record<string, string> = {
@@ -2116,8 +2309,45 @@ export class ObsAdapter {
         }
       }
       if (!current()) throw new Error('OBS 准备请求已失效，请重试。');
+      if (entry) {
+        await this.withObs(confirmOutput);
+        if (prepared.ready && obsFindingReadiness(this.findings).blockingFindings.length === 0)
+          this.entryPermit = {
+            id: entry.id,
+            outputEpoch,
+            programGeneration: generation,
+            valid: entry.valid,
+          };
+      }
       this.recoveryPrepared = true;
       return this.findings;
+    });
+  }
+  verifyEntryPermit(id: string): Promise<void> {
+    return this.serial(async () => {
+      const permit = this.entryPermit;
+      const check = () => {
+        const reason = this.outputs.captureWarmupBlockReason();
+        if (
+          !permit ||
+          permit.id !== id ||
+          this.entryPermit !== permit ||
+          !permit.valid() ||
+          permit.programGeneration !== this.programGeneration ||
+          permit.outputEpoch !== this.outputs.preparationOutputEpoch() ||
+          reason
+        )
+          throw new ObsVideoError(
+            'preparation_output_changed',
+            reason ?? '启动准备已失效，请重新启动工作台。',
+          );
+      };
+      check();
+      await this.withObs(async (obs) => {
+        await assertNoVideoOutput(obs);
+        check();
+      });
+      check();
     });
   }
   repair(
@@ -2143,6 +2373,47 @@ export class ObsAdapter {
   }
   gameBackgroundReady(): Promise<boolean> {
     return this.serial(() => this.withObs((obs) => gameBackgroundReady(obs)).catch(() => false));
+  }
+  beginCaptureWarmup(preparationId: string, valid: () => boolean) {
+    return this.configurationMutation(async () => {
+      if (!this.captureWarmup)
+        throw new ObsCaptureWarmupError('capture_warmup_unavailable', 'OBS 临时采集不可用。');
+      const lease = await this.captureWarmupGuard();
+      return this.withObs(
+        (obs, endpoint) => this.captureWarmup!.begin(obs, endpoint, preparationId, valid, lease),
+        30_000,
+      );
+    });
+  }
+  releaseCaptureWarmup(id: string): Promise<void> {
+    return this.configurationMutation(async () => {
+      if (!this.captureWarmup)
+        throw new ObsCaptureWarmupError('capture_warmup_unavailable', 'OBS 临时采集不可用。');
+      if (!(await this.captureWarmup.pending(id))) return;
+      const lease = await this.captureWarmupGuard();
+      return this.withObs(
+        (obs, endpoint) => this.captureWarmup!.release(obs, endpoint, id, lease),
+        12_000,
+      );
+    });
+  }
+  async captureWarmupMatches(id: string, since: number): Promise<boolean> {
+    return this.captureWarmup?.matches(id, since) ?? false;
+  }
+  captureInitialization(
+    diagnostic: ObsCaptureDiagnostic,
+    id: string,
+  ): Promise<CaptureInitialization> {
+    return this.serial(() =>
+      this.withObs(async (obs) => {
+        if (!this.captureWarmup || !(await this.captureWarmup.confirm(obs, id)))
+          throw new ObsCaptureWarmupError('capture_warmup_changed', 'OBS 临时采集已失效，请重试。');
+        const result = await readCaptureInitialization(obs, diagnostic);
+        if (!(await this.captureWarmup.confirm(obs, id)))
+          throw new ObsCaptureWarmupError('capture_warmup_changed', 'OBS 临时采集已失效，请重试。');
+        return result;
+      }),
+    );
   }
   setBpCompactVisible(visible: boolean, valid: () => boolean = () => true): Promise<void> {
     return this.serial(async () => {
@@ -2271,7 +2542,10 @@ export class ObsAdapter {
   setupAudio(): Promise<void> {
     return this.configurationMutation(async () => {
       if (await this.audioRouting?.enabled()) throw new ObsActionError('audio_routing_enabled');
-      await this.withObs((obs) => setupObsAudio(obs, this.browserBaseUrl), 12_000);
+      await this.withObs(
+        (obs) => setupObsAudio(guardedPreparationWrites(obs), this.browserBaseUrl),
+        12_000,
+      );
     });
   }
   async launchTarget(): Promise<string> {

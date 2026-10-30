@@ -18,6 +18,7 @@ export function registerProductionRoutes(
     onEntered?: () => void;
     onFinish?: () => void;
     beforeFinish?: () => void | Promise<void>;
+    afterSafeScene?: () => void | Promise<void>;
     beforeExit?: () => void;
     finishTrial?: () => Promise<void>;
   },
@@ -107,6 +108,21 @@ export function registerProductionRoutes(
             controlValid,
           );
           if (!result.ok) return { code: 409, value: { message: result.message } };
+        }
+        stage = 'production_video_restore';
+        try {
+          await options.afterSafeScene?.();
+        } catch (error) {
+          // The safe-scene/absence proof has already passed. Video restoration keeps
+          // its own journal for a later retry and must not prevent releasing control.
+          app.log.warn(
+            {
+              event: 'production',
+              stage,
+              diagnostic: { operationId, error: diagnosticValue(error) },
+            },
+            'OBS video restoration deferred',
+          );
         }
         stage = 'production_release';
         if (!controlValid())
