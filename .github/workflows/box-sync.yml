@@ -12,6 +12,7 @@ on:
         options: [curl, native]
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: mizar-box-stable
   cancel-in-progress: false
@@ -25,8 +26,17 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - name: Read only 1.9.2 Runtime and staging state
+      - name: Download original qualified asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download 41015011840 --repo Starfie1d1272/Mizar --name release-portable-product --dir "$RUNNER_TEMP/qualified-original"
+      - name: Verify original qualification signature
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh attestation verify "$RUNNER_TEMP/qualified-original/Mizar-v1.9.2-Windows-x64-WebInstaller.exe" --repo Starfie1d1272/Mizar --signer-workflow 'Starfie1d1272/Mizar/.github/workflows/release-qualification.yml@refs/heads/main' --source-ref refs/heads/main --source-digest 3fe8ea49fa34cbcb7d11022735f52f77220c6607 --bundle "$RUNNER_TEMP/qualified-original/qualification-provenance.json"
+      - name: Isolate exact withdrawn public installer
         env:
           NODE_OPTIONS: --network-family-autoselection-attempt-timeout=2000
           MIZAR_BOX_REPO_TOKEN: ${{ secrets.MIZAR_BOX_REPO_TOKEN }}
-        run: node scripts/qualification/inspect-192-runtime.mjs
+        run: node scripts/qualification/inspect-192-runtime.mjs "$RUNNER_TEMP/qualified-original/Mizar-v1.9.2-Windows-x64-WebInstaller.exe"
