@@ -8,13 +8,14 @@ import { appendFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'no
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { tmpdir } from 'node:os';
+import { setTimeout as wait } from 'node:timers/promises';
 import { buildOfficialPack, verifyPackBytes, jsonBytes, sha256 } from '../asset-packs/pack.mjs';
 import { makePublication } from '../qualification/resource-provenance/create.mjs';
 import { verifyResourcePublication } from '../qualification/resource-provenance/verify.mjs';
 import { boundedRead } from '../qualification/resource-provenance/io.mjs';
 import { releaseAttestationArgs } from '../qualification/release-identity.mjs';
 import { validateReleaseTag } from '../qualification/app-version.mjs';
-import { lookupRelease } from '../qualification/release-lookup.mjs';
+import { lookupCreatedDraft, lookupRelease } from '../qualification/release-lookup.mjs';
 import {
   LIMITS,
   requireValue,
@@ -652,11 +653,19 @@ async function preparePublicationParameters(folder, candidate, argument) {
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const [mode, folder, manifestPath, argument, sequence] = process.argv.slice(2);
   const manifest = JSON.parse(await boundedRead(manifestPath, 64 * 1024));
-  if (mode === 'lookup-release') {
+  if (mode === 'lookup-release' || mode === 'lookup-created-draft') {
     coreIdentity(manifest);
     requireValue(process.env.RELEASE_TAG === `v${manifest.appVersion}`, '查询标签与候选版本不一致');
     requireValue(process.env.GITHUB_ENV, '发行工作流环境缺失');
-    const release = lookupRelease(process.env.RELEASE_TAG, manifest.gitSha, lookupGithubObject);
+    const release =
+      mode === 'lookup-created-draft'
+        ? await lookupCreatedDraft(
+            process.env.RELEASE_TAG,
+            manifest.gitSha,
+            lookupGithubObject,
+            wait,
+          )
+        : lookupRelease(process.env.RELEASE_TAG, manifest.gitSha, lookupGithubObject);
     if (release !== null) await writeFile(argument, jsonBytes(release), { flag: 'wx' });
     await appendFile(process.env.GITHUB_ENV, `RELEASE_FOUND=${release !== null}\n`);
   } else if (mode === 'prepare') {

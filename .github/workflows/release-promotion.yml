@@ -250,7 +250,7 @@ jobs:
             $releaseArguments = @('release','create',$env:RELEASE_TAG,'--target',$env:SOURCE_SHA,'--draft','--title',"Mizar $env:RELEASE_TAG",'--notes-file','release-notes.md') + $prereleaseFlags
             node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/bounded-gh.mjs" @releaseArguments
             if ($LASTEXITCODE -ne 0) { throw 'Draft creation uncertain; retry must reconcile original assets' }
-            node "$env:RESOURCE_PUBLISHER_ROOT/scripts/ci/resource-release.mjs" lookup-release product product/release-manifest.json existing-release.json
+            node "$env:RESOURCE_PUBLISHER_ROOT/scripts/ci/resource-release.mjs" lookup-created-draft product product/release-manifest.json existing-release.json
             if ($LASTEXITCODE -ne 0) { throw 'Created draft identity is unknown or ambiguous' }
             $release = Get-Content existing-release.json -Raw | ConvertFrom-Json
             if (!$release.draft) { throw 'Created release is not an unpublished draft' }

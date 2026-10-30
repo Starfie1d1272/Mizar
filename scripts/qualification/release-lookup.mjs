@@ -57,3 +57,17 @@ export function lookupRelease(tag, sourceSha, lookup) {
   }
   return release;
 }
+
+// A newly created draft may not yet appear in the authenticated listing.
+// Retry only a confirmed absence; API errors and identity conflicts fail immediately.
+export async function lookupCreatedDraft(tag, sourceSha, lookup, wait) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const release = lookupRelease(tag, sourceSha, lookup);
+    if (release) {
+      if (!release.draft) throw new Error('Created release is not a draft');
+      return release;
+    }
+    if (attempt < 4) await wait(2000);
+  }
+  throw new Error('Created draft not visible; reconcile before retry');
+}
