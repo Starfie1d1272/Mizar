@@ -1091,7 +1091,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     },
     onEnter: () => {
       obsAdapter?.resumeAutomatic();
-      obsAdapter?.startBrowserRecovery();
       obsAdapter?.startCommentaryRecovery(
         musicDirector,
         gameAudio,
@@ -1105,6 +1104,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         (binding?.origin === 'cache' && binding.cachedFrom === 'online')
       )
         void options.rivalhubConnection?.stats(statsTarget(binding.context));
+    },
+    onEntered: () => {
+      obsAdapter?.startBrowserRecovery(production.sessionValid());
     },
     onFinish: () => {
       statsProductionActive = false;

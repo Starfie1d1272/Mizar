@@ -96,6 +96,7 @@ export class ObsOutputController {
   private retry: ReturnType<typeof setTimeout> | undefined;
   private closed = false;
   private ready = false;
+  private hasConnected = false;
 
   constructor(
     private readonly config: ObsConfigStore,
@@ -230,10 +231,11 @@ export class ObsOutputController {
               client.call('GetCurrentProgramScene'),
             ]),
           );
-          this.observeProgram('disconnected');
+          if (this.hasConnected) this.observeProgram('disconnected');
         }
         if (!current()) throw new Error('OBS connection superseded');
         this.ready = true;
+        this.hasConnected = true;
       } catch (error) {
         this.diagnostic(error, config.password);
         if (current()) this.invalidate(client);
