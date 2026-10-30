@@ -15,6 +15,8 @@ export interface MapPlayerStatsCurrentRound {
   readonly invalidated: boolean;
   readonly hasCompleteEvidence: boolean;
   readonly damageBySteam64: DamageBySteam64;
+  /** Damage fields actually present in the most recent accepted frame. */
+  readonly latestDamageBySteam64: DamageBySteam64;
   readonly roster: Readonly<Record<string, 'CT' | 'T'>>;
   /** First healthy freezetime money observation for this round. */
   readonly startMoneyBySteam64: Readonly<Record<string, number>>;
@@ -72,6 +74,7 @@ export interface TrustedProgramRoundEvents {
 export interface MapPlayerStatsAccumulator {
   readonly mapEpoch: number;
   readonly countedCompletedRounds: number;
+  /** Source continuity; metric projections also account for incomplete round samples. */
   readonly coverage: 'complete' | 'partial';
   readonly currentRound: MapPlayerStatsCurrentRound | null;
   readonly completedDamageBySteam64: DamageBySteam64;
@@ -128,6 +131,7 @@ function createCurrentRound(
     invalidated,
     hasCompleteEvidence: !invalidated && hasCompleteAllPlayersEvidence(observation),
     damageBySteam64: emptyDamage(),
+    latestDamageBySteam64: emptyDamage(),
     roster: Object.fromEntries(
       (observation.telemetry.allPlayers ?? []).flatMap((p) =>
         isValidSteam64(p.sourcePlayerId) && (p.side === 'CT' || p.side === 'T')
@@ -275,6 +279,7 @@ function invalidateCurrentRound(
     invalidated: true,
     hasCompleteEvidence: false,
     damageBySteam64: emptyDamage(),
+    latestDamageBySteam64: emptyDamage(),
     startMoneyBySteam64: {},
   };
 }
@@ -433,6 +438,9 @@ export function reduceMapPlayerStats(
     invalidated,
     hasCompleteEvidence,
     damageBySteam64,
+    latestDamageBySteam64: invalidated
+      ? emptyDamage()
+      : copyPlayerDamage(emptyDamage(), observedPlayers),
     startMoneyBySteam64,
   };
 
@@ -522,45 +530,57 @@ function currentRoundIsCounted(accumulator: MapPlayerStatsAccumulator): boolean 
   );
 }
 
+/** Compute one ADR sample from complete, player-observed rounds. */
+export function selectPlayerAdrSample(
+  accumulator: MapPlayerStatsAccumulator,
+  sourcePlayerId: string,
+  includeCurrentRound: boolean,
+): { readonly value: number | null; readonly rounds: number; readonly partial: boolean } {
+  if (!isValidSteam64(sourcePlayerId)) return { value: null, rounds: 0, partial: true };
+  let damage = 0;
+  let rounds = 0;
+  let partial = accumulator.coverage === 'partial';
+  for (const round of accumulator.completedRounds) {
+    const player = round.players[sourcePlayerId];
+    if (!round.complete || player === undefined) {
+      partial = true;
+      continue;
+    }
+    damage += player.damage;
+    rounds++;
+  }
+  const current = accumulator.currentRound;
+  if (includeCurrentRound && current !== null) {
+    if (currentRoundIsCounted(accumulator)) {
+      const currentDamage = current.damageBySteam64[sourcePlayerId];
+      if (
+        currentDamage === undefined ||
+        current.latestDamageBySteam64[sourcePlayerId] === undefined
+      ) {
+        partial = true;
+      } else {
+        damage += currentDamage;
+        rounds++;
+      }
+    } else if (current.invalidated) {
+      partial = true;
+    }
+  }
+  return { value: rounds === 0 ? null : damage / rounds, rounds, partial };
+}
+
 export function getPlayerCompletedAdr(
   accumulator: MapPlayerStatsAccumulator,
   sourcePlayerId: string,
 ): number | null {
-  if (!isValidSteam64(sourcePlayerId) || accumulator.countedCompletedRounds === 0) return null;
-  if (
-    accumulator.completedRounds.some(
-      (round) => !round.complete || round.players[sourcePlayerId] === undefined,
-    )
-  )
-    return null;
-  return accumulator.completedDamageBySteam64[sourcePlayerId]! / accumulator.countedCompletedRounds;
+  return selectPlayerAdrSample(accumulator, sourcePlayerId, false).value;
 }
 
 export function getPlayerLiveAdr(
   accumulator: MapPlayerStatsAccumulator,
   sourcePlayerId: string,
 ): number | null {
-  if (!isValidSteam64(sourcePlayerId)) return null;
-  const includesCurrentRound = currentRoundIsCounted(accumulator);
-  const denominator = accumulator.countedCompletedRounds + (includesCurrentRound ? 1 : 0);
-  if (denominator === 0) return null;
-  if (
-    accumulator.completedRounds.some(
-      (round) => !round.complete || round.players[sourcePlayerId] === undefined,
-    )
-  )
-    return null;
-  if (
-    includesCurrentRound &&
-    accumulator.currentRound?.damageBySteam64[sourcePlayerId] === undefined
-  )
-    return null;
-  const currentDamage = includesCurrentRound
-    ? accumulator.currentRound!.damageBySteam64[sourcePlayerId]!
-    : 0;
-  return (
-    ((accumulator.completedDamageBySteam64[sourcePlayerId] ?? 0) + currentDamage) / denominator
-  );
+  return selectPlayerAdrSample(accumulator, sourcePlayerId, true).value;
 }
 
 /**
@@ -576,6 +596,7 @@ export function getPlayerCurrentRoundDamage(
   if (currentRound === null || currentRound.invalidated || !currentRound.hasCompleteEvidence) {
     return null;
   }
+  if (currentRound.latestDamageBySteam64[sourcePlayerId] === undefined) return null;
   return currentRound.damageBySteam64[sourcePlayerId] ?? null;
 }
 
