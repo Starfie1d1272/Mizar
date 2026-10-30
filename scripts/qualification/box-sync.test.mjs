@@ -239,3 +239,79 @@ test('release asset deadline includes reading the body', async (t) => {
   await assert.rejects(downloadReleaseAsset(release, 'v1.10.0', name, 100, transport), /超时/);
   assert.ok(bounded);
 });
+
+test('upload link and transfer share one 180-second attempt signal', async (t) => {
+  const controller = new AbortController();
+  const timeout = AbortSignal.timeout.bind(AbortSignal);
+  t.mock.method(AbortSignal, 'timeout', (milliseconds) =>
+    milliseconds === 180000 ? controller.signal : timeout(milliseconds),
+  );
+  let uploadCalls = 0;
+  const box = client(async () => {
+    uploadCalls++;
+  });
+  box.api = async (_endpoint, _path, _method, _body, signal) => {
+    controller.abort();
+    signal.throwIfAborted();
+  };
+  await assert.rejects(box.upload('/Archive/test', 'payload', Buffer.from('a')));
+  assert.equal(uploadCalls, 0);
+});
+
+test('anonymous redirects and body share one download deadline', async (t) => {
+  const { verifyPublicDownloads } = await import('./box-sync.mjs');
+  const controller = new AbortController();
+  const timeout = AbortSignal.timeout.bind(AbortSignal);
+  t.mock.method(AbortSignal, 'timeout', (milliseconds) =>
+    milliseconds === 180000 ? controller.signal : timeout(milliseconds),
+  );
+  const signals = [];
+  const identity = { name: 'Mizar.exe', size: 1, sha256: '0'.repeat(64) };
+  const transport = async (_url, { signal }) => {
+    signals.push(signal);
+    if (signals.length === 1)
+      return new Response(null, { status: 302, headers: { location: '/seafhttp/files/next' } });
+    return {
+      ok: true,
+      body: {
+        async *[Symbol.asyncIterator]() {
+          yield Buffer.alloc(0);
+          controller.abort();
+          signal.throwIfAborted();
+        },
+      },
+    };
+  };
+  await assert.rejects(
+    verifyPublicDownloads(
+      { bootstrap: { identity } },
+      {
+        readDirectory: async () => [{ name: identity.name, size: 1 }],
+        transport,
+      },
+    ),
+  );
+  assert.equal(signals.length, 2);
+  assert.equal(signals[0], signals[1]);
+});
+
+test('remote readback link and body share the 180-second deadline', async (t) => {
+  const controller = new AbortController();
+  const timeout = AbortSignal.timeout.bind(AbortSignal);
+  t.mock.method(AbortSignal, 'timeout', (milliseconds) =>
+    milliseconds === 180000 ? controller.signal : timeout(milliseconds),
+  );
+  const box = client();
+  box.api = async (_endpoint, _path, _method, _body, signal) => {
+    assert.equal(signal.aborted, false);
+    controller.abort();
+    return 'https://box.example/download';
+  };
+  let downloadCalls = 0;
+  box.downloadTransport = async (_url, { signal }) => {
+    downloadCalls++;
+    signal.throwIfAborted();
+  };
+  await assert.rejects(box.hash('/Archive/payload'));
+  assert.equal(downloadCalls, 0);
+});
