@@ -119,7 +119,7 @@ export async function stageDraftAssets(releaseId, identity, expected) {
   const api = (args) =>
     execFileSync('gh', ['api', ...args], {
       stdio: 'pipe',
-      timeout: 600000,
+      timeout: 180000,
       maxBuffer: 256 * 1024 * 1024,
     });
   try {
@@ -224,14 +224,14 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
           execFileSync(
             'gh',
             ['release', 'download', identity.tag, '--repo', repo, '--pattern', name, '--dir', temp],
-            { stdio: 'pipe', timeout: 600000 },
+            { stdio: 'pipe', timeout: 180000 },
           );
           return readFile(join(temp, name));
         },
         async (path) => {
           execFileSync('gh', ['release', 'upload', identity.tag, path, '--repo', repo], {
             stdio: 'inherit',
-            timeout: 600000,
+            timeout: 180000,
           });
         },
       );

@@ -215,13 +215,24 @@ export async function prepare(
 export async function downloadLane(
   root,
   lane,
+  selected,
   { download = downloadReleaseAsset, verify = proof, inventory = resourceAssetInventory } = {},
 ) {
   const { plan, release, carrier, originals, core } = await readContext(root);
   requireValue(['runtime', 'resources', 'downloads'].includes(lane), '未知分发通道');
   const output = join(root, 'payload', lane);
   await mkdir(output, { recursive: true });
-  for (const expected of plan.assets[lane]) {
+  if (lane === 'runtime')
+    requireValue(['metadata', 'core'].includes(selected), 'Runtime 资产选择无效');
+  const selectedName =
+    selected === 'metadata'
+      ? MACHINE_METADATA_NAME
+      : `Mizar-${plan.tag}-Windows-x64-Core-Setup.exe`;
+  const assets =
+    lane === 'runtime'
+      ? plan.assets[lane].filter((asset) => asset.name === selectedName)
+      : plan.assets[lane];
+  for (const expected of assets) {
     const bytes =
       expected.name === MACHINE_METADATA_NAME
         ? carrier
@@ -317,16 +328,45 @@ const remotePath = (plan, lane, name) =>
 export async function verifyLane(
   root,
   lane,
+  selected,
   box = boxClient(),
   publicVerify = verifyPublicDownloads,
 ) {
   const { bytes, plan } = await readContext(root);
   requireValue(['runtime', 'resources', 'downloads'].includes(lane), '未知分发通道');
   await box.initialize();
-  for (const asset of plan.assets[lane])
+  if (lane === 'runtime') {
+    requireValue(['metadata', 'core'].includes(selected), 'Runtime 资产选择无效');
+    const name =
+      selected === 'metadata'
+        ? MACHINE_METADATA_NAME
+        : `Mizar-${plan.tag}-Windows-x64-Core-Setup.exe`;
+    const asset = plan.assets.runtime.find((item) => item.name === name);
     await verifyRemote(box, remotePath(plan, lane, asset.name), asset);
-  if (lane === 'downloads')
-    await publicVerify({ bootstrap: { identity: bootstrapIdentity(plan) } });
+    const marker = (item) =>
+      Buffer.from(
+        JSON.stringify({
+          runId: plan.runId,
+          attempt: envAttempt(),
+          planSha256: digest(bytes),
+          asset: item,
+        }),
+      );
+    const markers = join(root, 'verified');
+    await mkdir(markers, { recursive: true });
+    await writeNew(join(markers, `${selected}.json`), marker(asset));
+    if (selected === 'metadata') return;
+    const metadata = plan.assets.runtime.find((item) => item.name === MACHINE_METADATA_NAME);
+    requireValue(
+      (await readFile(join(markers, 'metadata.json'))).equals(marker(metadata)),
+      '机器元数据回读记录不一致',
+    );
+  } else {
+    for (const asset of plan.assets[lane])
+      await verifyRemote(box, remotePath(plan, lane, asset.name), asset);
+    if (lane === 'downloads')
+      await publicVerify({ bootstrap: { identity: bootstrapIdentity(plan) } });
+  }
   const receipt = makeBoxReceipt(
     bytes,
     lane,
@@ -337,6 +377,7 @@ export async function verifyLane(
   await mkdir(join(root, 'receipt'), { recursive: true });
   await writeNew(join(root, 'receipt', `${lane}.json`), receipt);
 }
+
 async function finalContext(root, receipts) {
   const { bytes, plan } = await readContext(root);
   for (const lane of ['runtime', 'resources', 'downloads'])
@@ -422,9 +463,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
           `prerelease=${result.prerelease}\nsync=${!result.prerelease}\n${result.planSha256 ? `plan_sha256=${result.planSha256}\n` : ''}`,
         );
       }
-    } else if (phase === 'download') await downloadLane(root, argument);
+    } else if (phase === 'download') await downloadLane(root, argument, selected);
     else if (phase === 'transfer') await transferLane(root, argument, selected);
-    else if (phase === 'verify') await verifyLane(root, argument);
+    else if (phase === 'verify') await verifyLane(root, argument, selected);
     else if (phase === 'final-check') await finalCheck(root, argument);
     else if (phase === 'index-update') console.log(await updatePointer(root, argument));
     else if (phase === 'index-verify') await verifyPointer(root, argument);

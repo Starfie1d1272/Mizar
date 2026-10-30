@@ -141,7 +141,9 @@ test('separate lanes reuse verified files and publish only after receipts and fu
     verify: async () => {},
     inventory: async () => assets.resources,
   };
-  for (const lane of ['runtime', 'resources', 'downloads']) await downloadLane(root, lane, options);
+  await downloadLane(root, 'runtime', 'metadata', options);
+  await downloadLane(root, 'runtime', 'core', options);
+  for (const lane of ['resources', 'downloads']) await downloadLane(root, lane, undefined, options);
 
   const box = fakeBox();
   const bootstrapPath = join(root, 'payload', 'downloads', assets.downloads[0].name);
@@ -161,8 +163,16 @@ test('separate lanes reuse verified files and publish only after receipts and fu
   await assert.rejects(transferLane(root, 'runtime', 'core', box), /内容冲突/);
   assert.equal(box.writes.length, beforeRetry);
   box.files.set(corePath, Buffer.from('core'));
-  for (const lane of ['runtime', 'resources', 'downloads'])
-    await verifyLane(root, lane, box, async () => {});
+  await assert.rejects(
+    verifyLane(root, 'runtime', 'core', box, async () => {}),
+    { code: 'ENOENT' },
+  );
+  await assert.rejects(readFile(join(root, 'receipt', 'runtime.json')), { code: 'ENOENT' });
+  await rm(join(root, 'verified', 'core.json'));
+  await verifyLane(root, 'runtime', 'metadata', box, async () => {});
+  await verifyLane(root, 'runtime', 'core', box, async () => {});
+  for (const lane of ['resources', 'downloads'])
+    await verifyLane(root, lane, undefined, box, async () => {});
   const receipts = join(root, 'receipt');
   const resourcePath = `/Resources/v1.10.0/${assets.resources[0].name}`;
   box.files.set(resourcePath, Buffer.from('changed'));

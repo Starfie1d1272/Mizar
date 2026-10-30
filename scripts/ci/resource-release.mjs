@@ -602,7 +602,7 @@ async function resolvePublishedResourceFiles(folder, manifest) {
           '--dir',
           recovery,
         ],
-        { stdio: 'pipe', timeout: 600000 },
+        { stdio: 'pipe', timeout: 180000 },
       );
       await resourceAssetInventory(recovery, manifest, true);
       for (const name of authorizationNames)

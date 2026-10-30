@@ -60,6 +60,7 @@ jobs:
       resource_artifact: ${{ steps.resources.outputs.artifact }}
     steps:
       - name: Check remaining release budget
+        timeout-minutes: 3
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -114,7 +115,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $created = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" --jq .created_at
+          $created = node scripts/qualification/bounded-gh.mjs api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" --jq .created_at
           if ($LASTEXITCODE -ne 0 -or !$created) { throw 'Cannot read release start time' }
           $minutes = [math]::Floor((600 - ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($created)).TotalSeconds) / 60)
           if ($minutes -lt 1) { throw 'Less than one minute remains in release budget' }
@@ -152,12 +153,12 @@ jobs:
         run: |
           if ($env:RESOURCE_SOURCE_RUN) {
             if ($env:RESOURCE_SOURCE_RUN -notmatch '^\d+$') { throw 'Invalid original run' }
-            $run = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:RESOURCE_SOURCE_RUN" | ConvertFrom-Json
+            $run = node scripts/qualification/bounded-gh.mjs api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:RESOURCE_SOURCE_RUN" | ConvertFrom-Json
             if ($LASTEXITCODE -ne 0 -or $run.conclusion -ne 'success' -or $run.head_branch -ne 'main' -or $run.path -notin @('.github/workflows/release-qualification.yml','.github/workflows/release-promotion.yml')) { throw 'Resource reuse requires a successful original main workflow' }
             $artifactName = $env:RESOURCE_SOURCE_ARTIFACT
             if (!$artifactName) {
               if ($run.path -eq '.github/workflows/release-promotion.yml') {
-                $available = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:RESOURCE_SOURCE_RUN/artifacts?per_page=100" | ConvertFrom-Json
+                $available = node scripts/qualification/bounded-gh.mjs api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:RESOURCE_SOURCE_RUN/artifacts?per_page=100" | ConvertFrom-Json
                 if ($LASTEXITCODE -ne 0) { throw 'Original resource artifact lookup failed' }
                 $resourceArtifacts = @($available.artifacts | Where-Object { !$_.expired -and $_.name.StartsWith('promotion-resources-') })
                 if ($available.total_count -gt 100 -or $resourceArtifacts.Count -ne 1) { throw 'Specify the exact original publication artifact; automatic selection is ambiguous' }
@@ -165,7 +166,7 @@ jobs:
               } else { $artifactName = 'release-qualified-resources' }
             }
             $original = Join-Path $env:RUNNER_TEMP 'original-resource-artifact'
-            gh run download $env:RESOURCE_SOURCE_RUN --repo $env:GITHUB_REPOSITORY --name "$artifactName" --dir "$original"
+            node scripts/qualification/bounded-gh.mjs run download $env:RESOURCE_SOURCE_RUN --repo $env:GITHUB_REPOSITORY --name "$artifactName" --dir "$original"
             if ($LASTEXITCODE -ne 0) { throw 'Original resource artifact unavailable' }
             node scripts/ci/resource-release.mjs reuse "$env:RESOURCE_BUILD_ROOT" (Join-Path $env:QUALIFICATION_BUILD_ROOT 'core-release-manifest.json') "$original" "$env:RESOURCE_SEQUENCE"
           } else {
@@ -233,7 +234,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $created = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" --jq .created_at
+          $created = node scripts/qualification/bounded-gh.mjs api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" --jq .created_at
           if ($LASTEXITCODE -ne 0 -or !$created) { throw 'Cannot read release start time' }
           if (([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($created)).TotalSeconds -gt 600) { throw 'Release 600-second budget exceeded' }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -293,7 +294,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $created = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" --jq .created_at
+          $created = node scripts/qualification/bounded-gh.mjs api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" --jq .created_at
           if ($LASTEXITCODE -ne 0 -or !$created) { throw 'Cannot read release start time' }
           $minutes = [math]::Floor((600 - ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($created)).TotalSeconds) / 60)
           if ($minutes -lt 1) { throw 'Less than one minute remains in release budget' }
@@ -314,7 +315,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $created = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" --jq .created_at
+          $created = node scripts/qualification/bounded-gh.mjs api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" --jq .created_at
           if ($LASTEXITCODE -ne 0 -or !$created) { throw 'Cannot read release start time' }
           $minutes = [math]::Floor((600 - ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($created)).TotalSeconds) / 60)
           if ($minutes -lt 1) { throw 'Less than one minute remains in release budget' }
@@ -432,7 +433,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $created = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" --jq .created_at
+          $created = node scripts/qualification/bounded-gh.mjs api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" --jq .created_at
           if ($LASTEXITCODE -ne 0 -or !$created) { throw 'Cannot read release start time' }
           if (([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($created)).TotalSeconds -gt 600) { throw 'Release 600-second budget exceeded' }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -509,7 +510,7 @@ jobs:
       - name: Check budget before signing
         shell: pwsh
         run: |
-          $created = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" --jq .created_at
+          $created = node scripts/qualification/bounded-gh.mjs api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" --jq .created_at
           if ($LASTEXITCODE -ne 0 -or !$created -or ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($created)).TotalSeconds -gt 600) { throw 'Release budget exceeded or unavailable' }
       - name: Attest qualified products and current resource provenance
         id: qualified-provenance

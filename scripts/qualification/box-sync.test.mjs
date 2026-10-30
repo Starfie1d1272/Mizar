@@ -383,3 +383,14 @@ test('upload-link timeout retries before any upload using a fresh deadline', asy
   assert.equal(links, 2);
   assert.equal(uploads, 1);
 });
+
+test('readback transient failures use one retry owner and stop after three attempts', async (t) => {
+  t.mock.method(Math, 'random', () => 0);
+  let calls = 0;
+  const box = new BoxClient('test-token', undefined, async () => {
+    calls++;
+    return new Response(null, { status: 503, headers: { 'Retry-After': '0' } });
+  });
+  await assert.rejects(box.hash('/Archive/payload'), { retryableRead: true });
+  assert.equal(calls, 3);
+});

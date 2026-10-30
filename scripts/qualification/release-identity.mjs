@@ -141,6 +141,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
 // A successful gh verification authenticates the complete DSSE payload, after which
 // this code checks every requested name and the SHA-256 of its snapshotted bytes.
 export async function verifyGroupedReleaseAttestations(subjects, execute = promisify(execFile)) {
+  const started = globalThis.performance.now();
   const { createHash } = await import('node:crypto');
   const { createReadStream } = await import('node:fs');
   const { basename } = await import('node:path');
@@ -169,64 +170,71 @@ export async function verifyGroupedReleaseAttestations(subjects, execute = promi
     });
   }
   let calls = 0;
-  const started = globalThis.performance.now();
-  for (const group of groups.values()) {
-    const names = new Set();
-    for (const subject of group.subjects) {
-      if (names.has(subject.name)) throw new Error('重复待验证资产名称');
-      names.add(subject.name);
-    }
-    const representative = group.subjects[0];
-    await verifyReleaseAttestations([representative], async (...args) => {
-      calls++;
-      return execute(...args);
-    });
-    for (const subject of group.subjects) {
-      const after = await readFile(subject.bundle);
-      if (!after.equals(group.bytes)) throw new Error('验证期间来源 bundle 已变化');
-    }
-    let envelope;
-    try {
-      envelope = JSON.parse(group.bytes.toString('utf8')).dsseEnvelope;
-    } catch {
-      throw new Error('来源 bundle 格式无效');
-    }
-    if (
-      envelope?.payloadType !== 'application/vnd.in-toto+json' ||
-      typeof envelope.payload !== 'string'
-    )
-      throw new Error('来源 DSSE 信封无效');
-    const raw = Buffer.from(envelope.payload, 'base64');
-    if (!raw.length || raw.toString('base64') !== envelope.payload)
-      throw new Error('来源 DSSE 编码无效');
-    const payloadText = raw.toString('utf8');
-    if (!Buffer.from(payloadText, 'utf8').equals(raw)) throw new Error('来源 DSSE UTF-8 无效');
-    let statement;
-    try {
-      statement = JSON.parse(payloadText);
-    } catch {
-      throw new Error('来源 DSSE 内容无效');
-    }
-    if (statement?._type !== 'https://in-toto.io/Statement/v1' || !Array.isArray(statement.subject))
-      throw new Error('来源 subject 格式无效');
-    const statementNames = statement.subject.map((entry) => entry?.name);
-    if (
-      statementNames.some((name) => typeof name !== 'string') ||
-      new Set(statementNames).size !== statementNames.length
-    )
-      throw new Error('来源 subject 名称无效或重复');
-    for (const subject of group.subjects) {
-      const matches = statement.subject.filter((entry) => entry?.name === subject.name);
+  let status = 'failure';
+  try {
+    for (const group of groups.values()) {
+      const names = new Set();
+      for (const subject of group.subjects) {
+        if (names.has(subject.name)) throw new Error('重复待验证资产名称');
+        names.add(subject.name);
+      }
+      const representative = group.subjects[0];
+      await verifyReleaseAttestations([representative], async (...args) => {
+        calls++;
+        return execute(...args);
+      });
+      for (const subject of group.subjects) {
+        const after = await readFile(subject.bundle);
+        if (!after.equals(group.bytes)) throw new Error('验证期间来源 bundle 已变化');
+      }
+      let envelope;
+      try {
+        envelope = JSON.parse(group.bytes.toString('utf8')).dsseEnvelope;
+      } catch {
+        throw new Error('来源 bundle 格式无效');
+      }
       if (
-        matches.length !== 1 ||
-        matches[0]?.digest?.sha256 !== subject.sha256 ||
-        (await sha256(subject.file)) !== subject.sha256
+        envelope?.payloadType !== 'application/vnd.in-toto+json' ||
+        typeof envelope.payload !== 'string'
       )
-        throw new Error(`来源 subject 缺失、重复或字节不一致：${subject.name}`);
+        throw new Error('来源 DSSE 信封无效');
+      const raw = Buffer.from(envelope.payload, 'base64');
+      if (!raw.length || raw.toString('base64') !== envelope.payload)
+        throw new Error('来源 DSSE 编码无效');
+      const payloadText = raw.toString('utf8');
+      if (!Buffer.from(payloadText, 'utf8').equals(raw)) throw new Error('来源 DSSE UTF-8 无效');
+      let statement;
+      try {
+        statement = JSON.parse(payloadText);
+      } catch {
+        throw new Error('来源 DSSE 内容无效');
+      }
+      if (
+        statement?._type !== 'https://in-toto.io/Statement/v1' ||
+        !Array.isArray(statement.subject)
+      )
+        throw new Error('来源 subject 格式无效');
+      const statementNames = statement.subject.map((entry) => entry?.name);
+      if (
+        statementNames.some((name) => typeof name !== 'string') ||
+        new Set(statementNames).size !== statementNames.length
+      )
+        throw new Error('来源 subject 名称无效或重复');
+      for (const subject of group.subjects) {
+        const matches = statement.subject.filter((entry) => entry?.name === subject.name);
+        if (
+          matches.length !== 1 ||
+          matches[0]?.digest?.sha256 !== subject.sha256 ||
+          (await sha256(subject.file)) !== subject.sha256
+        )
+          throw new Error(`来源 subject 缺失、重复或字节不一致：${subject.name}`);
+      }
     }
+    status = 'success';
+    return { groups: groups.size, calls };
+  } finally {
+    console.log(
+      `PROVENANCE_GROUPS groups=${groups.size} gh_calls=${calls} elapsed_ms=${Math.round(globalThis.performance.now() - started)} status=${status}`,
+    );
   }
-  console.log(
-    `PROVENANCE_GROUPS groups=${groups.size} gh_calls=${calls} elapsed_ms=${Math.round(globalThis.performance.now() - started)}`,
-  );
-  return { groups: groups.size, calls };
 }

@@ -21,6 +21,7 @@ export async function freezePromotionProduct(
     !/^v\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.[1-9]\d*)?$/.test(tag)
   )
     throw new Error('非法晋级身份');
+  const started = globalThis.performance.now();
   const entries = await readdir(source, { withFileTypes: true });
   if (
     !entries.length ||
@@ -84,8 +85,14 @@ export async function freezePromotionProduct(
         bundle: join(destination, 'update-provenance.json'),
       });
     await verify(subjects);
+    console.log(
+      `PROVENANCE_SNAPSHOT subjects=${subjects.length} elapsed_ms=${Math.round(globalThis.performance.now() - started)}`,
+    );
     return { subjectCount: subjects.length };
   } catch (error) {
+    console.log(
+      `PROVENANCE_SNAPSHOT status=failure elapsed_ms=${Math.round(globalThis.performance.now() - started)}`,
+    );
     await rm(destination, { recursive: true, force: true });
     throw error;
   }
