@@ -1364,9 +1364,10 @@ async fn finish_workspace(
         Err("退出任务中断，收尾结果待确认。请重试退出；再次失败时导出诊断。".into())
     });
     let intent_host = app.clone();
-    let _ = tauri::async_runtime::spawn_blocking(move || {
+    let intent_result = tauri::async_runtime::spawn_blocking(move || {
         production_exit::set_exit_intent(&intent_host.state::<DesktopLog>(), "cancel-exit")
-    }).await;
+    }).await.unwrap_or_else(|_| Err("制作退出状态未能恢复，请重试。".into()));
+    let result = production_exit::cleanup_results(result, intent_result);
     if let Err(error) = &result {
         app.state::<DesktopLog>().event(
             "production_finish",
