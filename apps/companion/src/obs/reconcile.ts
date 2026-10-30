@@ -245,7 +245,8 @@ export async function checkObsConfiguration(obs: ObsRpc, baseUrl: string): Promi
       'Mizar · Microphone',
       'Mizar · BP 紧凑底栏',
       ...PROGRAM_SCENES.map((scene) => `Mizar · ${scene.id} · Program`),
-    ].some((name) => inputKinds.has(name))
+    ].some((name) => inputKinds.has(name)) ||
+    PROGRAM_SCENES.some((scene) => sceneNames.includes(`Mizar · ${scene.title}`))
   )
     findings.push({
       code: 'legacy_names',
@@ -628,6 +629,7 @@ export async function ensureObsConfiguration(
     return repaired;
   }
   const repairable = new Set([
+    'legacy_names',
     'scene_missing',
     'source_missing',
     'url_drift',

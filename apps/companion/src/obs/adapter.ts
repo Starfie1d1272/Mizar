@@ -1,4 +1,7 @@
 import { gameBackgroundReady } from './game-background.js';
+import { readCaptureInitialization, type CaptureInitialization } from './capture-initialization.js';
+import type { ObsCaptureDiagnostic } from '@mizar/protocol/obs';
+import { ObsVideoTransaction } from './video-transaction.js';
 import { ObsActionError } from './action-error.js';
 import { assertBpCompactOff, BpOverlayOwner } from './bp-overlay.js';
 import { diagnosticValue } from '../support/session-journal.js';
@@ -154,6 +157,7 @@ export class ObsAdapter {
     private readonly diagnostic: (stage: string, error: unknown) => void = () => undefined,
     private readonly audioRouting?: ObsAudioRouting,
     private readonly commentary?: { owner: RemoteCommentary; journal: string },
+    private readonly videoTransaction?: ObsVideoTransaction,
   ) {
     this.audioConfiguration = new AudioConfigurationConnection(configStore);
     this.outputs = new ObsOutputController(
@@ -588,6 +592,7 @@ export class ObsAdapter {
     diagnosticStage?: string,
     observeAudioIdentity = false,
     observeBrowserIdentity = false,
+    observeVideoIdentity = false,
   ): Promise<T> {
     const config = await this.configStore.read();
     const client = new OBSWebSocket();
@@ -615,6 +620,11 @@ export class ObsAdapter {
           client.on('InputRemoved', invalidateBrowser);
           client.on('InputSettingsChanged', invalidateBrowser);
           client.on('ConnectionClosed', invalidateBrowser);
+        }
+        if (observeVideoIdentity) {
+          client.on('CurrentProfileChanging', invalidateAudio);
+          client.on('CurrentProfileChanged', invalidateAudio);
+          client.on('ConnectionClosed', invalidateAudio);
         }
         stage = 'obs_request';
         const rpc: ObsRpc = {
@@ -681,6 +691,11 @@ export class ObsAdapter {
         client.off('InputRemoved', invalidateBrowser);
         client.off('InputSettingsChanged', invalidateBrowser);
         client.off('ConnectionClosed', invalidateBrowser);
+      }
+      if (observeVideoIdentity) {
+        client.off('CurrentProfileChanging', invalidateAudio);
+        client.off('CurrentProfileChanged', invalidateAudio);
+        client.off('ConnectionClosed', invalidateAudio);
       }
       await client.disconnect().catch(() => undefined);
     }
@@ -1743,6 +1758,55 @@ export class ObsAdapter {
       }),
     );
   }
+  videoPreflight(valid: () => boolean): Promise<void> {
+    return this.serial(() =>
+      this.withObs(
+        async (obs, endpoint) => {
+          if (!valid()) throw new Error('OBS 准备请求已失效，请重试。');
+          if (!this.videoTransaction) throw new Error('OBS 视频准备不可用。');
+          await this.videoTransaction.preflight(obs, endpoint);
+          if (!valid()) throw new Error('OBS 准备请求已失效，请重试。');
+        },
+        12000,
+        undefined,
+        false,
+        false,
+        true,
+      ),
+    );
+  }
+
+  prepareVideo(valid: () => boolean): Promise<string | null> {
+    return this.configurationMutation(() =>
+      this.withObs(
+        async (obs, endpoint) => {
+          if (!valid()) throw new Error('OBS 准备请求已失效，请重试。');
+          if (!this.videoTransaction) throw new Error('OBS 视频准备不可用。');
+          return this.videoTransaction.prepare(obs, endpoint, valid);
+        },
+        12000,
+        undefined,
+        false,
+        false,
+        true,
+      ),
+    );
+  }
+
+  restoreVideo(id?: string): Promise<void> {
+    return this.configurationMutation(async () => {
+      if (!this.videoTransaction || !(await this.videoTransaction.pending())) return;
+      await this.withObs(
+        (obs, endpoint) => this.videoTransaction!.restore(obs, endpoint, id),
+        12000,
+        undefined,
+        false,
+        false,
+        true,
+      );
+    });
+  }
+
   ensure(
     activeScene: () => ProgramSceneId = () => 'waiting',
     valid: () => boolean = () => false,
@@ -1883,6 +1947,9 @@ export class ObsAdapter {
   }
   gameBackgroundReady(): Promise<boolean> {
     return this.serial(() => this.withObs((obs) => gameBackgroundReady(obs)).catch(() => false));
+  }
+  captureInitialization(diagnostic: ObsCaptureDiagnostic): Promise<CaptureInitialization> {
+    return this.serial(() => this.withObs((obs) => readCaptureInitialization(obs, diagnostic)));
   }
   setBpCompactVisible(visible: boolean, valid: () => boolean = () => true): Promise<void> {
     return this.serial(async () => {

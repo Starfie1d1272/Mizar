@@ -251,3 +251,38 @@ test('browser recovery is granted after entering and revoked on exit intent', as
   assert.equal(valid?.(), false);
   await app.close();
 });
+
+test('video restoration runs after the safe scene and blocks release on failure', async () => {
+  const app = Fastify();
+  const calls: string[] = [];
+  const scenes = {
+    get: () => ({ active: 'waiting', revision: 'scene' }),
+    holdAutomatic: () => undefined,
+    controlValid: () => () => true,
+    selectWaitingForExit: async () => {
+      calls.push('waiting');
+      return { ok: true };
+    },
+  } as unknown as ProgramSceneController;
+  const production = registerProductionRoutes(app, {
+    originPolicy: createLocalWebOriginPolicy(),
+    hasContext: () => true,
+    scenes,
+    afterSafeScene: () => {
+      calls.push('restore');
+      throw new Error('restore failed');
+    },
+    release: async () => {
+      calls.push('release');
+    },
+  });
+  const response = await app.inject({
+    method: 'POST',
+    url: '/operator/production',
+    headers: { origin: 'http://127.0.0.1:3000' },
+    payload: { action: 'finish', expectedRevision: production.get().revision },
+  });
+  assert.equal(response.statusCode, 409);
+  assert.deepEqual(calls, ['waiting', 'restore']);
+  await app.close();
+});

@@ -200,11 +200,12 @@ pub fn launch(
     log: &DesktopLog,
     automatic: bool,
     preserve: bool,
+    preparation_id: Option<&str>,
 ) -> Result<Value, String> {
     if !automatic {
         return Err("请从 Mizar 自动启动 MulNX 工作台。".into());
     }
-    launch_operation(app, log, true, false, preserve, None, false)
+    launch_operation(app, log, true, false, preserve, None, false, preparation_id)
 }
 
 /// Only reconcile an existing submitted request; absence never starts a new one.
@@ -235,7 +236,7 @@ pub fn resume_demo(
 }
 
 pub fn update(app: &tauri::AppHandle, log: &DesktopLog) -> Result<Value, String> {
-    launch_operation(app, log, false, true, false, None, false)
+    launch_operation(app, log, false, true, false, None, false, None)
 }
 
 pub fn demo_launch_guard() -> Result<std::sync::MutexGuard<'static, ()>, String> {
@@ -260,6 +261,7 @@ pub fn launch_demo(
         preserve,
         Some((path, request_id)),
         true,
+        None,
     )
 }
 
@@ -271,7 +273,10 @@ fn launch_operation(
     preserve: bool,
     demo: Option<(&Path, &str)>,
     guarded: bool,
+    preparation_id: Option<&str>,
 ) -> Result<Value, String> {
+    let check_cancelled = || crate::check_preparation(app, preparation_id);
+    check_cancelled()?;
     let _launch = if guarded {
         None
     } else {
@@ -450,7 +455,7 @@ fn launch_operation(
         if let Some((path, id)) = demo {
             cs2.prepare_managed_mulnx_demo(&executable, preserve, path, id)?
         } else {
-            cs2.prepare_managed_mulnx(&executable, preserve)?
+            cs2.prepare_managed_mulnx(&executable, preserve, preparation_id, &check_cancelled)?
         }
     };
     let spectator_cfg = journal["spectatorCfg"] == true;
@@ -465,6 +470,7 @@ fn launch_operation(
     let outcome = (|| -> Result<Value, String> {
         app.state::<production_exit::ExitGate>().check()?;
         app.state::<updates::PendingUpdate>().check()?;
+        check_cancelled()?;
         no_game()?;
         std::fs::create_dir_all(&results).map_err(|error| {
             log.preserve_error("mulnx_launch", None, &error, "无法准备 MulNX 启动记录。")
@@ -523,6 +529,7 @@ fn launch_operation(
             .env_remove("NODE_OPTIONS")
             .env_remove("NODE_PATH")
             .creation_flags(0x08000000);
+        check_cancelled()?;
         let mut record = std::fs::File::create(&pending).map_err(|e| e.to_string())?;
         record
             .write_all(

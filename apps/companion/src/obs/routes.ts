@@ -20,7 +20,10 @@ import {
 } from '../local-web/origin-policy.js';
 import { ObsAdapter, obsFailureKind, obsErrorEvidence } from './adapter.js';
 import { ObsConfigStore, validateObsConfig } from './config.js';
+import { ObsVideoError } from './video-transaction.js';
 import { obsSceneName } from './desired-state.js';
+import { obsFindingReadiness } from './prepare-readiness.js';
+import { obsReadiness } from '../program-scenes/readiness.js';
 
 const outputMessages: Record<ObsOutputError['code'], string> = {
   obs_output_busy: 'OBS 正在处理操作，请等待状态确认后重试。',
@@ -276,6 +279,7 @@ export function registerObsRoutes(
     const status = await options.adapter.status();
     return reply.header('cache-control', 'no-store').send({
       ...status,
+      readiness: obsReadiness(status, options.activeScene()),
       captureDiagnostic: await diagnostic,
       expectedScene: obsSceneName(options.activeScene()),
       sceneAligned:
@@ -283,6 +287,32 @@ export function registerObsRoutes(
           ? status.currentScene === obsSceneName(options.activeScene())
           : null,
     });
+  });
+  app.post('/operator/obs/capture-initialization', { bodyLimit: 2048 }, async (request, reply) => {
+    if (!allowed(request.headers.origin))
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    const body = z
+      .object({ expectedRevision: z.unknown(), since: z.number().finite() })
+      .strict()
+      .safeParse(request.body);
+    const now = Date.now();
+    if (!body.success || body.data.since > now || body.data.since < now - 600_000)
+      return reply.code(400).send({ error: 'capture_check_invalid' });
+    const valid = options.preparationValid(body.data.expectedRevision);
+    if (!valid()) return reply.code(409).send({ error: 'preparation_changed' });
+    const diagnostic = await captureDiagnostic(true, body.data.since);
+    try {
+      const status = await options.adapter.captureInitialization(diagnostic);
+      if (!valid() || request.raw.aborted || reply.raw.destroyed)
+        return reply.code(409).send({ error: 'preparation_changed' });
+      return reply.header('cache-control', 'no-store').send(status);
+    } catch {
+      return reply.header('cache-control', 'no-store').send({
+        state: 'unknown',
+        reason: 'evidence_unknown',
+        captureDiagnostic: diagnostic,
+      });
+    }
   });
   app.post('/operator/obs/configure', { bodyLimit: 4096 }, async (request, reply) => {
     if (!allowed(request.headers.origin))
@@ -304,6 +334,73 @@ export function registerObsRoutes(
       return reply.code(400).send({ error: 'obs_config_invalid', message: 'OBS 配置格式有误。' });
     }
   });
+  for (const action of ['video-preflight', 'video-prepare', 'video-restore'] as const) {
+    app.post(`/operator/obs/${action}`, { bodyLimit: 2048 }, async (request, reply) => {
+      if (!allowed(request.headers.origin))
+        return reply.code(403).send({ error: 'operator_origin_forbidden' });
+      const body = request.body as { expectedRevision?: unknown; transactionId?: unknown } | null;
+      const valid = options.preparationValid(body?.expectedRevision);
+      const connected = () => !request.raw.aborted && !reply.raw.destroyed;
+      let preparedId: string | null = null;
+      let responseFinished = false;
+      if (action === 'video-prepare') {
+        reply.raw.once('finish', () => {
+          responseFinished = true;
+        });
+        reply.raw.once('close', () => {
+          if (!responseFinished && preparedId)
+            void options.adapter.restoreVideo(preparedId).catch(async (error: unknown) => {
+              const password = (await options.configStore.read().catch(() => undefined))?.password;
+              request.log.error(
+                {
+                  event: 'obs',
+                  stage: 'video_disconnect_restore',
+                  diagnostic: { error: obsErrorEvidence(error, password) },
+                },
+                'OBS video restore pending',
+              );
+            });
+        });
+      }
+      try {
+        if (action === 'video-restore') {
+          if (!z.string().uuid().safeParse(body?.transactionId).success)
+            return reply.code(400).send({ error: 'obs_video_transaction_invalid' });
+          await options.adapter.restoreVideo(body!.transactionId as string);
+          return { ok: true };
+        }
+        if (!valid() || !connected())
+          return reply
+            .code(409)
+            .send({ error: 'preparation_changed', message: '制作状态已变化，请重试。' });
+        if (action === 'video-preflight') {
+          await options.adapter.videoPreflight(() => valid() && connected());
+          return { ok: true };
+        }
+        const transactionId = await options.adapter.prepareVideo(() => valid() && connected());
+        preparedId = transactionId;
+        if (!valid() || !connected()) {
+          if (transactionId) await options.adapter.restoreVideo(transactionId);
+          return reply
+            .code(409)
+            .send({ error: 'preparation_changed', message: '制作状态已变化，请重试。' });
+        }
+        return { ok: true, transactionId };
+      } catch (error) {
+        const password = (await options.configStore.read().catch(() => undefined))?.password;
+        request.log.error(
+          { event: 'obs', stage: action, diagnostic: { error: obsErrorEvidence(error, password) } },
+          'OBS video preparation failed',
+        );
+        if (error instanceof ObsVideoError)
+          return reply.code(409).send({ error: error.code, message: error.message });
+        return reply.code(409).send({
+          error: 'obs_video_unavailable',
+          message: 'OBS 视频设置未确认，请检查连接后重试。',
+        });
+      }
+    });
+  }
   for (const action of [
     'check',
     'ensure',
@@ -341,7 +438,12 @@ export function registerObsRoutes(
             },
             'OBS preparation checked',
           );
-          return { ok: true, findings, captureDiagnostic: await captureDiagnostic(true) };
+          return {
+            ok: true,
+            findings,
+            ...obsFindingReadiness(findings),
+            captureDiagnostic: await captureDiagnostic(true),
+          };
         }
         if (action === 'audio-setup') {
           await options.adapter.setupAudio();

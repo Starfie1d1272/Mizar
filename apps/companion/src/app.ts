@@ -96,8 +96,9 @@ import { registerBpDemoRoute } from './bp/demo-controller.js';
 import { getBpDemoProjection } from './bp/demo-projection.js';
 import { BpDemoStateController } from './bp/demo-state.js';
 import { registerBpWorkspaceRoutes } from './bp/workspace-controller.js';
-import { ObsAdapter } from './obs/adapter.js';
+import { ObsAdapter, obsErrorEvidence } from './obs/adapter.js';
 import { ObsConfigStore } from './obs/config.js';
+import { ObsVideoTransaction } from './obs/video-transaction.js';
 import { ObsAudioRouting } from './obs/audio-routing.js';
 import { GameAudioController } from './obs/audio-policy-controller.js';
 import { gameAudioTruth } from './obs/audio-policy-truth.js';
@@ -831,7 +832,23 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             owner: new RemoteCommentary(`${options.obsConfigPath}.commentary.json`),
             journal: `${options.obsConfigPath}.commentary-probe.json`,
           },
+          new ObsVideoTransaction(`${options.obsConfigPath}.video-transaction.json`),
         );
+  if (obsAdapter)
+    app.addHook('onReady', async () => {
+      await obsAdapter.restoreVideo().catch(async (error: unknown) =>
+        app.log.warn(
+          {
+            event: 'obs',
+            stage: 'video_recovery',
+            diagnostic: {
+              error: obsErrorEvidence(error, (await obsConfigStore?.read())?.password),
+            },
+          },
+          'OBS video recovery pending',
+        ),
+      );
+    });
   let musicDirector: MusicDirector | undefined;
   let cameraDirector: CameraDirector | undefined;
   let catalogTool: MulnxTool | undefined;
@@ -1118,6 +1135,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       observerSettings.endProduction();
     },
     beforeFinish: () => obsAdapter?.settleAutomatic(),
+    afterSafeScene: () => obsAdapter?.restoreVideo(),
     finishTrial: async () => {
       await demoTest?.finish();
     },

@@ -44,6 +44,7 @@ use desktop_worker::DesktopWorker;
 use geometry::{Layout, Rect};
 use startup_log::DesktopLog;
 use std::{
+    collections::HashSet,
     fs,
     hash::{Hash, Hasher},
     io::{Read, Write},
@@ -69,6 +70,43 @@ use windows_startup::{failure_dialog, DesktopMutex, ExitRequest, ExitSignal, Run
 
 const BASE: &str = "http://127.0.0.1:3000";
 static GSI_OPERATION_LOCK: Mutex<()> = Mutex::new(());
+
+#[derive(Default)]
+struct CancelledPreparations(Mutex<HashSet<String>>);
+
+fn check_preparation(app: &tauri::AppHandle, id: Option<&str>) -> Result<(), String> {
+    if let Some(id) = id {
+        let cancellations = app.state::<CancelledPreparations>();
+        let cancelled = cancellations.0.lock().map_err(|_| "启动取消状态不可用。")?;
+        if cancelled.contains(id) {
+            return Err("本次启动已取消，请重新启动工作台。".into());
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn cancel_cs2_preparation(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    preparation_id: String,
+) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("请在准备中心取消启动。".into());
+    }
+    if preparation_id.is_empty() || preparation_id.len() > 64
+        || !preparation_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    {
+        return Err("启动事务标识无效。".into());
+    }
+    let cancellations = app.state::<CancelledPreparations>();
+    let mut cancelled = cancellations.0.lock().map_err(|_| "启动取消状态不可用。")?;
+    if cancelled.len() >= 1024 && !cancelled.contains(&preparation_id) {
+        return Err("启动取消记录已满，请重新启动 Mizar。".into());
+    }
+    cancelled.insert(preparation_id);
+    Ok(())
+}
 
 #[link(name = "shell32")]
 extern "system" {
@@ -777,6 +815,7 @@ async fn launch_mulnx(
     automatic: Option<bool>,
     preserve_settings: Option<bool>,
     resume_only: Option<bool>,
+    preparation_id: Option<String>,
     diagnostic_operation_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
     if window.label() != "main" {
@@ -785,6 +824,15 @@ async fn launch_mulnx(
     let log = app.state::<DesktopLog>().inner().clone();
     let evidence = log.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
+        check_preparation(&app, preparation_id.as_deref())?;
+        if let Some(id) = preparation_id.as_deref() {
+            let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+            let cs2 = state.lock().map_err(|_| "CS2 状态不可用。")?;
+            let status = cs2.status()?;
+            if status["pending"] == true && status["preparationId"] != id {
+                return Err("已有其他游戏事务，请先完成原配置恢复。".into());
+            }
+        }
         if resume_only.unwrap_or(false) {
             mulnx_launch::resume(&app, &log)
         } else {
@@ -793,12 +841,88 @@ async fn launch_mulnx(
                 &log,
                 automatic.unwrap_or(true),
                 preserve_settings.unwrap_or(false),
+                preparation_id.as_deref(),
             )
         }
     })
     .await
     .unwrap_or_else(|error| Err(format!("MulNX 启动任务失败：{error}")));
     evidence.native_outcome("launch_mulnx", diagnostic_operation_id.as_deref(), &result);
+    result
+}
+
+#[tauri::command]
+async fn preflight_cs2_replacement(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<serde_json::Value, String> {
+    if window.label() != "main" {
+        return Err("请在准备中心启动工作台。".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<production_exit::ExitGate>().check()?;
+        app.state::<updates::PendingUpdate>().check()?;
+        let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+        let cs2 = state.lock().map_err(|_| "CS2 状态不可用。")?;
+        cs2.preflight_replacement()
+    })
+    .await
+    .map_err(|_| "无法检查游戏安装和实例。".to_string())?
+}
+
+#[tauri::command]
+async fn replace_external_cs2(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    expected_pid: Option<u32>,
+    expected_created: Option<String>,
+    expected_revision: String,
+    preparation_id: String,
+    diagnostic_operation_id: Option<String>,
+) -> Result<bool, String> {
+    if window.label() != "main" {
+        return Err("请在准备中心启动工作台。".into());
+    }
+    let log = app.state::<DesktopLog>().inner().clone();
+    let evidence = log.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        app.state::<production_exit::ExitGate>().check()?;
+        app.state::<updates::PendingUpdate>().check()?;
+        let created = expected_created
+            .as_deref()
+            .map(|v| v.parse::<u64>().map_err(|_| "游戏创建标识无效。".to_string()))
+            .transpose()?;
+        let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+        let mut cs2 = state.lock().map_err(|_| "CS2 状态不可用。")?;
+        let check = || check_preparation(&app, Some(&preparation_id));
+        check()?;
+        let activity = app.state::<cs2_activity::Activity>();
+        let _activity = activity.begin(3);
+        let snapshot = cs2.preflight_replacement()?;
+        if snapshot["target"]["managed"] == true
+            && snapshot["preparationId"].as_str() == Some(preparation_id.as_str())
+        {
+            return cs2.replace_for_preparation(expected_pid, created, &preparation_id, &check);
+        }
+        if let Some(pid) = snapshot["target"]["pid"].as_u64() {
+            if Some(pid) != expected_pid.map(u64::from)
+                || snapshot["target"]["created"].as_str() != expected_created.as_deref()
+            {
+                return Err("游戏实例已变化，未关闭游戏；请重新检查后重试。".into());
+            }
+        }
+        app.state::<production_exit::ExitGate>().check()?;
+        app.state::<updates::PendingUpdate>().check()?;
+        production_exit::prepare_external_entry(&log, &expected_revision)?;
+        cs2.replace_for_preparation(expected_pid, created, &preparation_id, &check)
+    })
+    .await
+    .map_err(|_| "游戏替换未完成，请重试。".to_string())?;
+    evidence.native_outcome(
+        "replace_external_cs2",
+        diagnostic_operation_id.as_deref(),
+        &result,
+    );
     result
 }
 
@@ -998,6 +1122,7 @@ async fn attach_external_cs2(
 async fn start_managed_cs2(
     app: tauri::AppHandle,
     preserve_settings: Option<bool>,
+    preparation_id: Option<String>,
     diagnostic_operation_id: Option<String>,
     diagnostic_task_id: Option<String>,
     diagnostic_trigger: Option<String>,
@@ -1034,11 +1159,13 @@ async fn start_managed_cs2(
                         app.state::<production_exit::ExitGate>().check()?;
                         app.state::<updates::PendingUpdate>().check()?;
                         production_exit::invalidate_local_match_exit(&app.state::<DesktopLog>())?;
-                        let result = if preserve_settings.unwrap_or(false) {
-                            cs2.start_with_settings(true)
-                        } else {
-                            cs2.start()
-                        };
+                        let check = || check_preparation(&app, preparation_id.as_deref());
+                        check()?;
+                        let result = cs2.start_preparation(
+                            preserve_settings.unwrap_or(false),
+                            preparation_id.as_deref(),
+                            &check,
+                        );
                         if let Ok(mut tracker) = app.state::<HostState>().tracker.lock() {
                             tracker.preserve_settings = cs2.preserve_settings();
                         }
@@ -3535,6 +3662,7 @@ fn run_desktop(
         .manage(DemoEntryIntent::default())
         .manage(production_exit::WorkspaceExit::default())
         .manage(production_exit::VerifiedStop::default())
+        .manage(CancelledPreparations::default())
         .manage(updates::PendingUpdate::new(update_stage))
         .invoke_handler(|invoke| {
             let command = invoke.message.command();
@@ -3563,6 +3691,9 @@ fn run_desktop(
             open_mulnx_browser,
             observer_workspace::observer_command,
             start_managed_cs2,
+            preflight_cs2_replacement,
+            replace_external_cs2,
+            cancel_cs2_preparation,
             begin_managed_camera,
             cancel_managed_camera,
             attach_external_cs2,

@@ -5,6 +5,7 @@ export interface Cs2ConfigStatus {
   qualityPreset: 'very-high' | 'high' | 'medium' | 'preserve';
   frameRateLimit: 0 | 30 | 60;
   preferMulnx?: boolean;
+  preparationId?: string | null;
   spectatorRecoveryPending?: boolean;
   nativeHudToggle?: boolean;
   demoCleanupPending?: boolean;

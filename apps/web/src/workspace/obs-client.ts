@@ -3,6 +3,7 @@ import type { ObsOutputCommand, ObsOutputsStatus, ObsCaptureDiagnostic } from '@
 import { desktopInvoke } from './client';
 
 export interface ObsStatus {
+  readonly readiness?: { readonly ready: boolean; readonly reason: string };
   readonly captureDiagnostic?: ObsCaptureDiagnostic | null;
   readonly connectionFailure?: 'authentication' | 'refused' | 'timeout' | 'unknown';
   readonly connection: 'connected' | 'unavailable' | 'password_required' | 'invalid_password';

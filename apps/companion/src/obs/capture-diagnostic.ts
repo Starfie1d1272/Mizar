@@ -17,6 +17,7 @@ function reason(event: ObsNativeLogEvent): ObsCaptureDiagnostic['reason'] {
 export function projectObsCaptureDiagnostic(
   evidence: ObsNativeEvidence,
   now = Date.now(),
+  since = 0,
 ): ObsCaptureDiagnostic {
   const unknown: ObsCaptureDiagnostic = {
     state: 'unknown',
@@ -44,7 +45,12 @@ export function projectObsCaptureDiagnostic(
     return unknown;
   const event = log.latestCaptureEvent;
   const eventTime = event.occurredAt ? Date.parse(event.occurredAt) : NaN;
-  if (!Number.isFinite(eventTime) || now - eventTime > 30000 || eventTime > now + 60000)
+  if (
+    !Number.isFinite(eventTime) ||
+    eventTime < since ||
+    now - eventTime > 30000 ||
+    eventTime > now + 60000
+  )
     return unknown;
   const lastFailure = log.latestCaptureFailure;
   if (event.outcome === 'success')
@@ -68,7 +74,19 @@ export function createObsCaptureDiagnosticReader(
   let refreshPending: Promise<ObsCaptureDiagnostic> | null = null;
   let cached: ObsCaptureDiagnostic | null = null;
   let expires = 0;
-  const read = (refresh = false): Promise<ObsCaptureDiagnostic> => {
+  const read = (refresh = false, since = 0): Promise<ObsCaptureDiagnostic> => {
+    if (since) {
+      // Entry verification is tied to the new game launch, never a cached prior session.
+      return collect({ budgetMs: 3500 })
+        .then((e) => projectObsCaptureDiagnostic(e, now(), since))
+        .catch(() => ({
+          state: 'unknown',
+          reason: null,
+          code: null,
+          lastFailure: null,
+          owner: 'unknown',
+        }));
+    }
     if (refresh) {
       // A manual recheck must read after any earlier poll, not consume its older snapshot.
       refreshPending ??= (pending ?? Promise.resolve())

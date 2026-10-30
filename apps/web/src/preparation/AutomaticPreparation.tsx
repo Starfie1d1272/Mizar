@@ -1,11 +1,9 @@
 import { useEffect, useState } from 'react';
-import { desktopInvoke } from '../workspace/client';
 import { readObsConfigurationContext } from '../workspace/obs-client';
 import { StatusBanner } from '../ui';
 
-/** Preparation owns bounded setup requests; Host and Companion own all configuration. */
-export function AutomaticPreparation({ showGsiMessage = true }: { showGsiMessage?: boolean }) {
-  const [gsiMessage, setGsiMessage] = useState('');
+/** Show the Host's existing OBS configuration outcome. */
+export function AutomaticPreparation() {
   const [configurationMessage, setConfigurationMessage] = useState('');
   useEffect(() => {
     if (!window.__TAURI_INTERNALS__) return;
@@ -32,29 +30,11 @@ export function AutomaticPreparation({ showGsiMessage = true }: { showGsiMessage
     window.addEventListener('mizar:obs-configuration-finished', finished);
     return () => window.removeEventListener('mizar:obs-configuration-finished', finished);
   }, []);
-  useEffect(() => {
-    if (!window.__TAURI_INTERNALS__) return;
-    let active = true;
-    const configured = () => setGsiMessage('');
-    window.addEventListener('mizar:gsi-configured', configured);
-    void desktopInvoke('ensure_gsi')
-      .then(() => {
-        if (active) window.dispatchEvent(new Event('mizar:gsi-configured'));
-      })
-      .catch(() => {
-        if (active) setGsiMessage('GSI 自动配置未完成，请在游戏设置中检查安装位置或配置冲突。');
-      });
-    return () => {
-      active = false;
-      window.removeEventListener('mizar:gsi-configured', configured);
-    };
-  }, []);
   return (
     <>
       {configurationMessage ? (
         <StatusBanner tone="info">{configurationMessage}</StatusBanner>
       ) : null}
-      {gsiMessage && showGsiMessage ? <StatusBanner tone="info">{gsiMessage}</StatusBanner> : null}
     </>
   );
 }

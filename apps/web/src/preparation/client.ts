@@ -5,6 +5,7 @@ import type { DemoTestView } from './demo-test';
 import { useEffect, useState } from 'react';
 import { desktopInvoke } from '../workspace/client';
 import { prepareObs } from '../workspace/obs-preparation';
+import { obsCommand, type ObsStatus } from '../workspace/obs-client';
 
 export function useLocalReadWithTime<T>(path: string | null, interval = 2000, refresh = 0) {
   const [value, setValue] = useState<{ value: T | null; updatedAt: number | null }>({
@@ -189,6 +190,65 @@ export async function checkObsBeforeLaunch(
 
 export type ExternalGameIdentity = { pid: number; created: string };
 
+type GsiStatus = {
+  detected: boolean;
+  installed: boolean;
+  conflict: boolean;
+  readFailed: boolean;
+  issues?: readonly { message: string }[];
+};
+
+async function readObsForEntry(signal: AbortSignal): Promise<ObsStatus | null> {
+  return fetch('/local/v1/obs', {
+    cache: 'no-store',
+    signal: AbortSignal.any([signal, AbortSignal.timeout(6000)]),
+  })
+    .then((response) => (response.ok ? (response.json() as Promise<ObsStatus>) : null))
+    .catch(() => null);
+}
+
+async function ensureEntryObs(signal: AbortSignal) {
+  let obs = await readObsForEntry(signal);
+  if (signal.aborted) throw new Error('启动已取消。');
+  if (obs?.connection === 'connected') return;
+  if (obs?.connection === 'password_required' || obs?.connection === 'invalid_password')
+    throw new Error('OBS WebSocket 密码未配置或不正确，请核对后重试。');
+  await obsCommand('open', {}, signal);
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline && !signal.aborted) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 1000));
+    obs = await readObsForEntry(signal);
+    if (obs?.connection === 'connected') return;
+    if (obs?.connection === 'password_required' || obs?.connection === 'invalid_password')
+      throw new Error('OBS WebSocket 密码未配置或不正确，请核对后重试。');
+  }
+  throw new Error(signal.aborted ? '启动已取消。' : 'OBS 未能连接，请检查 OBS 状态后重试。');
+}
+
+function gsiProblem(status: GsiStatus): string | null {
+  if (status.readFailed || !status.detected)
+    return status.issues?.[0]?.message ?? '无法确认 CS2 安装或 GSI 配置，请检查后重试。';
+  return null;
+}
+
+async function entryCommand<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
+  const response = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: signal
+      ? AbortSignal.any([signal, AbortSignal.timeout(40_000)])
+      : AbortSignal.timeout(40_000),
+  });
+  const value = (await response.json().catch(() => ({}))) as T & { message?: string };
+  if (!response.ok) throw new Error(value.message ?? '自动准备未完成，请重试。');
+  return value;
+}
+
+async function restoreEntryVideo(transactionId: string) {
+  await entryCommand('/operator/obs/video-restore', { transactionId });
+}
+
 let entering: Promise<ControlTask['result']> | undefined;
 let cancelPendingEntry: (() => void) | undefined;
 export function cancelProductionEntry() {
@@ -233,9 +293,12 @@ async function runProductionAction(
   );
   let cancelled = false;
   const entryAbort = new AbortController();
+  let videoTransactionId: string | null = null;
+  let cancelNativeEntry: (() => void) | undefined;
   const cancelEntry = () => {
     cancelled = true;
     entryAbort.abort();
+    cancelNativeEntry?.();
   };
   if (action === 'enter') {
     cancelPendingEntry = cancelEntry;
@@ -252,11 +315,39 @@ async function runProductionAction(
       () => cancelled,
       entryAbort.signal,
       onChecking,
+      (id) => {
+        videoTransactionId = id;
+      },
+      (cancel) => {
+        cancelNativeEntry = cancel;
+      },
     );
+    if (action === 'enter' && task.result !== 'confirmed' && videoTransactionId) {
+      const current = await fetch('/local/v1/production', { cache: 'no-store' })
+        .then((response) => (response.ok ? (response.json() as Promise<Production>) : null))
+        .catch(() => null);
+      if (current?.mode === 'preparation') await restoreEntryVideo(videoTransactionId);
+    }
     return task.result;
   } catch (error) {
-    task.fail(error);
-    throw error;
+    let failure = error;
+    if (action === 'enter' && videoTransactionId) {
+      const current = await fetch('/local/v1/production', { cache: 'no-store' })
+        .then((response) => (response.ok ? (response.json() as Promise<Production>) : null))
+        .catch(() => null);
+      if (current?.mode === 'preparation') {
+        try {
+          await restoreEntryVideo(videoTransactionId);
+        } catch (restoreError) {
+          failure = new Error(
+            `${error instanceof Error ? error.message : '启动未完成。'} OBS 视频设置恢复未确认：${restoreError instanceof Error ? restoreError.message : '请重试。'}`,
+            { cause: error },
+          );
+        }
+      }
+    }
+    task.fail(failure);
+    throw failure;
   } finally {
     entryAbort.abort();
     if (cancelPendingEntry === cancelEntry) cancelPendingEntry = undefined;
@@ -273,6 +364,8 @@ async function performProductionAction(
   cancelled: () => boolean,
   entrySignal: AbortSignal,
   onChecking?: (checking: boolean) => void,
+  onVideoPrepared?: (id: string | null) => void,
+  onNativeEntry?: (cancel: () => void) => void,
 ) {
   const entryLocation = window.location.href;
   const entryStillCurrent = async () => {
@@ -360,6 +453,12 @@ async function performProductionAction(
     task.finish('confirmed', { confirmation: 'host_finish_workspace_ack' });
     return;
   }
+  if (window.__TAURI_INTERNALS__ && action === 'enter' && state.mode === 'hidden') {
+    await command('/operator/production', { action, expectedRevision: state.revision }, task);
+    await desktopInvoke('present_production', { live: true }, task);
+    task.finish('confirmed', { confirmation: 'production_command_ack_and_presentation', action });
+    return;
+  }
   if (window.__TAURI_INTERNALS__ && action !== 'hide') {
     const response = await fetch('/local/v1/demo-test', {
       headers: task.headers(),
@@ -389,8 +488,101 @@ async function performProductionAction(
       return;
     }
   }
+  let entry: { id: string; since: number | null } | undefined;
+  let replacement: { target: (ExternalGameIdentity & { managed: boolean }) | null } | undefined;
+  if (window.__TAURI_INTERNALS__ && action === 'enter' && state.mode === 'preparation') {
+    const storageKey = `mizar:workspace-entry:${state.revision}`;
+    try {
+      const stored = JSON.parse(sessionStorage.getItem(storageKey) ?? 'null') as typeof entry;
+      if (stored && typeof stored.id === 'string') entry = stored;
+    } catch {
+      /* A damaged intent is never treated as proof of ownership. */
+    }
+    entry ??= { id: crypto.randomUUID(), since: null };
+    sessionStorage.setItem(storageKey, JSON.stringify(entry));
+    const preparationId = entry.id;
+    onNativeEntry?.(() => {
+      sessionStorage.removeItem(storageKey);
+      void desktopInvoke('cancel_cs2_preparation', { preparationId }, task).catch(() => {});
+    });
+    const current = async () => {
+      if (!(await entryStillCurrent())) throw new Error('启动已取消或制作状态已变化，请重试。');
+    };
+    const launchStatus = await desktopInvoke<Cs2ConfigStatus>('cs2_config_status', undefined, task);
+    const resuming =
+      launchStatus.preparationId === entry.id &&
+      (launchStatus.running || launchStatus.pending || launchStatus.mulnxLaunchResumable);
+    if (!resuming)
+      replacement = await desktopInvoke<typeof replacement>(
+        'preflight_cs2_replacement',
+        undefined,
+        task,
+      );
+    await current();
+    const obsTarget = await entryCommand<{ executablePath?: string }>(
+      '/operator/obs/launch-target',
+      {},
+      entrySignal,
+    );
+    if (!obsTarget.executablePath) throw new Error('未找到 OBS 可执行文件，请检查安装后重试。');
+    await ensureEntryObs(entrySignal);
+    await current();
+    await entryCommand(
+      '/operator/obs/video-preflight',
+      { expectedRevision: state.revision },
+      entrySignal,
+    );
+    const gsi = await desktopInvoke<GsiStatus>('gsi_status', undefined, task);
+    const issue = gsiProblem(gsi);
+    if (issue) throw new Error(issue);
+    await current();
+    const configured = await desktopInvoke<GsiStatus>('ensure_gsi', undefined, task);
+    if (gsiProblem(configured) || !configured.installed || configured.conflict)
+      throw new Error(
+        gsiProblem(configured) ?? configured.issues?.[0]?.message ?? 'GSI 自动配置未完成，请重试。',
+      );
+    window.dispatchEvent(new Event('mizar:gsi-configured'));
+    await current();
+    const video = await entryCommand<{ transactionId: string | null }>(
+      '/operator/obs/video-prepare',
+      { expectedRevision: state.revision },
+      entrySignal,
+    );
+    onVideoPrepared?.(video.transactionId);
+    await current();
+    await prepareObs(state.revision, entrySignal);
+    const prepared = await readObsForEntry(entrySignal);
+    if (prepared?.connection !== 'connected') throw new Error('OBS 连接已中断，请重试。');
+    if (!prepared.readiness?.ready)
+      throw new Error(prepared.readiness?.reason ?? 'OBS 准备状态未确认，请重试。');
+    await current();
+    if (!resuming) {
+      const target = replacement?.target ?? null;
+      if (
+        external &&
+        (!target || external.pid !== target.pid || external.created !== target.created)
+      )
+        throw new Error('所选游戏实例已变化，未关闭游戏；请重试。');
+      const reused = await desktopInvoke<boolean>(
+        'replace_external_cs2',
+        {
+          expectedPid: target?.pid ?? null,
+          expectedCreated: target?.created ?? null,
+          expectedRevision: state.revision,
+          preparationId: entry.id,
+        },
+        task,
+      );
+      if (!reused) {
+        entry.since = Date.now();
+        sessionStorage.setItem(storageKey, JSON.stringify(entry));
+      }
+      await current();
+    }
+  }
   if (
     action === 'enter' &&
+    !window.__TAURI_INTERNALS__ &&
     !(await checkObsBeforeLaunch(
       false,
       task,
@@ -419,50 +611,51 @@ async function performProductionAction(
     return;
   }
   let newlyStarted = false;
-  let borrowed = Boolean(external);
+  let borrowed = false;
   let launchedMulnx = false;
-  const selectedExternal = external;
   if (action === 'enter' && window.__TAURI_INTERNALS__) {
-    if (!external) {
-      if (launch?.mulnxLaunchResumable) {
-        const result = await desktopInvoke<{ result?: string }>(
-          'launch_mulnx',
-          { resumeOnly: true },
-          task,
-        );
-        if (result?.result === 'not-found')
-          throw new Error('启动请求已结束，请检查游戏状态后重新进入工作台。');
-        launchedMulnx = true;
-        if (cancelled() || window.location.href !== entryLocation) {
-          task.finish('cancelled', { reason: 'navigation_changed' });
-          return;
-        }
-      } else if (launch?.preferMulnx && !launch.running && !launch.pending) {
-        await desktopInvoke<ExternalGameIdentity>(
-          'launch_mulnx',
-          { automatic: true, ...(preserveSettings ? { preserveSettings: true } : {}) },
-          task,
-        );
-        launchedMulnx = true;
-        if (cancelled() || window.location.href !== entryLocation) {
-          task.finish('cancelled', { reason: 'navigation_changed' });
-          return;
-        }
+    if (launch?.mulnxLaunchResumable) {
+      const result = await desktopInvoke<{ result?: string }>(
+        'launch_mulnx',
+        { resumeOnly: true, preparationId: entry?.id },
+        task,
+      );
+      if (result?.result === 'not-found')
+        throw new Error('启动请求已结束，请检查游戏状态后重新进入工作台。');
+      launchedMulnx = true;
+      if (cancelled() || window.location.href !== entryLocation) {
+        task.finish('cancelled', { reason: 'navigation_changed' });
+        return;
+      }
+    } else if (launch?.preferMulnx && !launch.running && !launch.pending) {
+      await desktopInvoke<ExternalGameIdentity>(
+        'launch_mulnx',
+        {
+          automatic: true,
+          preparationId: entry?.id,
+          ...(preserveSettings ? { preserveSettings: true } : {}),
+        },
+        task,
+      );
+      launchedMulnx = true;
+      if (cancelled() || window.location.href !== entryLocation) {
+        task.finish('cancelled', { reason: 'navigation_changed' });
+        return;
       }
     }
     if (launchedMulnx && !(await entryStillCurrent())) {
       task.finish('cancelled', { reason: 'production_changed' });
       return;
     }
-    newlyStarted = await desktopInvoke<boolean>(
-      selectedExternal ? 'attach_external_cs2' : 'start_managed_cs2',
-      selectedExternal
-        ? { ...selectedExternal, expectedRevision: state.revision }
-        : preserveSettings && !launchedMulnx
-          ? { preserveSettings: true }
-          : undefined,
-      task,
-    );
+    if ((!launch?.running && !launch?.pending) || launchedMulnx)
+      newlyStarted = await desktopInvoke<boolean>(
+        'start_managed_cs2',
+        {
+          preparationId: entry?.id,
+          ...(preserveSettings && !launchedMulnx ? { preserveSettings: true } : {}),
+        },
+        task,
+      );
     let gameStatus = await desktopInvoke<Cs2ConfigStatus>('cs2_config_status', undefined, task);
     borrowed = gameStatus.borrowed ?? borrowed;
     // Preserve this one entry intent while the native command lock is free.
@@ -501,12 +694,41 @@ async function performProductionAction(
     task.finish('cancelled', { reason: 'navigation_changed' });
     return;
   }
-  if (
-    action === 'enter' &&
-    window.__TAURI_INTERNALS__ &&
-    !external &&
-    state.mode === 'preparation'
-  ) {
+  if (action === 'enter' && window.__TAURI_INTERNALS__ && state.mode === 'preparation') {
+    if (!entry?.since) throw new Error('本次游戏启动时间未确认，请结束本次游戏后重试。');
+    const deadline = Date.now() + 60_000;
+    let reason = 'evidence_unknown';
+    let initialized = false;
+    while (Date.now() < deadline && !entrySignal.aborted) {
+      const capture = await entryCommand<{ state: string; reason: string | null }>(
+        '/operator/obs/capture-initialization',
+        { expectedRevision: state.revision, since: entry.since },
+        entrySignal,
+      );
+      if (capture.state === 'initialized') {
+        initialized = true;
+        break;
+      }
+      reason = capture.reason ?? 'evidence_unknown';
+      if (capture.state === 'failed') break;
+      await new Promise<void>((resolve) => setTimeout(resolve, 1000));
+    }
+    if (!initialized) {
+      if (entrySignal.aborted) throw new Error('启动已取消。');
+      const messages: Record<string, string> = {
+        source_unavailable: 'OBS 游戏采集来源不可用。',
+        target_unavailable: '未找到 CS2 窗口。',
+        target_ambiguous: '发现多个 CS2 窗口，无法确认采集目标。',
+        source_inactive: 'OBS 尚未激活游戏采集来源，无法确认画面。',
+        zero_size: 'OBS 游戏采集画面仍为 0×0。',
+        hook_pending: 'OBS 游戏采集仍在重试。',
+        hook_failed: 'OBS 游戏采集初始化失败。',
+        evidence_unknown: 'OBS 游戏采集状态未确认。',
+      };
+      throw new Error(`${messages[reason] ?? messages.evidence_unknown} 请检查原因后重试。`);
+    }
+  }
+  if (action === 'enter' && window.__TAURI_INTERNALS__ && state.mode === 'preparation') {
     await desktopInvoke('begin_managed_camera', { expectedRevision: state.revision }, task);
     if (cancelled() || window.location.href !== entryLocation) {
       await desktopInvoke('cancel_managed_camera', undefined, task);
@@ -518,7 +740,7 @@ async function performProductionAction(
   try {
     await command('/operator/production', { action, expectedRevision: state.revision }, task);
     if (action === 'enter' && (cancelled() || window.location.href !== entryLocation)) {
-      if (window.__TAURI_INTERNALS__ && !external && state.mode === 'preparation')
+      if (window.__TAURI_INTERNALS__ && state.mode === 'preparation')
         await desktopInvoke('cancel_managed_camera', undefined, task);
       task.finish('cancelled', { reason: 'navigation_changed' });
       return;
