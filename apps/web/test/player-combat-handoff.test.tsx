@@ -3,6 +3,8 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { ProgramSnapshot } from '@mizar/protocol/program';
+import { projectPlayerEquipment, type EquipmentCatalog } from '@mizar/core/projection';
+import { resolveCs2ItemByGsiName } from '@mizar/cs2-assets';
 import { getProgramFixture } from '../src/program/fixtures';
 import { ProgramCueEffectProvider } from '../src/program/ProgramCueRendererBridge';
 import { FocusedPlayerCard } from '@mizar/hud-view';
@@ -39,30 +41,56 @@ afterEach(() => vi.useRealTimers());
 it('shows current primary magazine evidence and clears it on equipment and telemetry boundaries', () => {
   const original = fixture.payload.players.find((player) => player.sourcePlayerId === playerId)!;
   const rifle = {
-    ...original.weapons[0]!,
+    sourceWeaponId: 'test-rifle',
+    paintKit: null,
+    type: 'rifle',
+    ammoReserve: 60,
     name: 'weapon_ak47',
     state: 'active' as const,
     ammoClip: 15,
     ammoClipMax: 30,
   };
   const present = (weapons = [rifle], overrides: Partial<typeof original> = {}, fresh = true) => {
+    const player = {
+      ...original,
+      lifeState: 'alive' as const,
+      lineupEvidence: 'current' as const,
+      weaponsAvailable: true,
+      weapons,
+      ...overrides,
+    };
+    const catalog: Record<string, EquipmentCatalog[string]> = {};
+    const observedWeapons = player.weapons.map((weapon) => {
+      if (weapon.name !== null) {
+        const resolved = resolveCs2ItemByGsiName(weapon.name);
+        if (resolved.kind === 'known') catalog[weapon.name] = resolved.item;
+      }
+      return {
+        sourceWeaponId: weapon.sourceWeaponId,
+        ...(weapon.name === null ? {} : { name: weapon.name }),
+        ...(weapon.ammoReserve === null ? {} : { ammoReserve: weapon.ammoReserve }),
+        ...(weapon.state === null ? {} : { state: weapon.state }),
+      };
+    });
+    player.equipment = projectPlayerEquipment(
+      player.weaponsAvailable ? observedWeapons : undefined,
+      catalog,
+      {
+        sourcePlayerId: player.sourcePlayerId,
+        bomb: fixture.payload.bomb,
+        telemetryFresh: fresh,
+        lineupCurrent: player.lineupEvidence === 'current',
+        lifeState: player.lifeState,
+      },
+    );
     const payload = {
       ...fixture.payload,
       status: {
         ...fixture.payload.status,
         telemetry: fresh ? ('fresh' as const) : ('stale' as const),
       },
-      players: fixture.payload.players.map((player) =>
-        player.sourcePlayerId === playerId
-          ? {
-              ...player,
-              lifeState: 'alive' as const,
-              lineupEvidence: 'current' as const,
-              weaponsAvailable: true,
-              weapons,
-              ...overrides,
-            }
-          : player,
+      players: fixture.payload.players.map((candidate) =>
+        candidate.sourcePlayerId === playerId ? player : candidate,
       ),
     };
     const rails = buildPlayerRailsPresentation(payload);
@@ -83,7 +111,7 @@ it('shows current primary magazine evidence and clears it on equipment and telem
   expect(
     present([rifle, { ...rifle, sourceWeaponId: 'second' }]).primaryWeapon?.clipFill,
   ).toBeNull();
-  expect(present([rifle], { weaponsAvailable: false }).primaryWeapon?.clipFill).toBeNull();
+  expect(present([rifle], { weaponsAvailable: false }).primaryWeapon).toBeNull();
   expect(present([rifle], {}, false).primaryWeapon?.clipFill).toBeNull();
   expect(present([rifle], { lifeState: 'dead' }).primaryWeapon).toBeNull();
   expect(present([{ ...rifle, ammoClipMax: 0 }]).primaryWeapon?.clipFill).toBeNull();
