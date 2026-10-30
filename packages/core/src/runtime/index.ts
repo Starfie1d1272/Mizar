@@ -48,3 +48,5 @@ export type {
   RuntimeTime,
   RuntimeTransition,
 } from './types.js';
+export { calculateRating2Approx } from './statistics.js';
+export type { MetricDefinition, MetricNumber, MetricReason, MetricSource, MetricWindow, PlayerStatistics, Rating2Approximation, Rating2Sample } from './statistics.js';
