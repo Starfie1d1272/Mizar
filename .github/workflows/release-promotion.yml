@@ -242,7 +242,9 @@ jobs:
             $bootstrap = "product/Mizar-v$($distribution.appVersion)-Windows-x64-WebInstaller.exe"
             node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-assets.mjs" assets product > public-assets.json
             if ($LASTEXITCODE -ne 0) { throw 'Native candidate identity failed' }
-            $subjects += @($updatePath, $bootstrap, 'product/web-installer-build.json')
+            # The update manifest was already verified above with the original
+            # client bundle, including for historical recovery candidates.
+            $subjects += @($bootstrap, 'product/web-installer-build.json')
             node scripts/qualification/update-manifest.mjs product --check
             if ($LASTEXITCODE -ne 0) { throw 'Stable update contract validation failed' }
           }

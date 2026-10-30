@@ -88,7 +88,7 @@ try {
     )
       throw new Error('Qualified artifact differs');
   }
-  const candidate = await verifyQualifiedResources(resources, core);
+  const candidate = await verifyQualifiedResources(resources, core, true);
   const descriptorVerifier = await createMizarVerifier(
     'qualification',
     core.gitSha,

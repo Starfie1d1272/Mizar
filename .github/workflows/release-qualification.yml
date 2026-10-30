@@ -549,15 +549,6 @@ jobs:
         run: |
           if (!$env:RESOURCE_SOURCE_RUN) { Copy-Item -LiteralPath $env:RESOURCE_QUALIFICATION_BUNDLE -Destination (Join-Path $env:RESOURCE_BUILD_ROOT 'resource-pack-provenance.json') }
           Copy-Item -LiteralPath $env:RESOURCE_QUALIFICATION_BUNDLE -Destination (Join-Path $env:RESOURCE_BUILD_ROOT 'resource-descriptor-qualification-provenance.json')
-          node scripts/ci/resource-release.mjs qualified "$env:RESOURCE_BUILD_ROOT" (Join-Path $env:QUALIFICATION_BUILD_ROOT 'core-release-manifest.json')
-          if ($LASTEXITCODE -ne 0) { throw 'Original resource Qualification proof validation failed' }
-      - name: Upload original qualified resources (not publication authorization)
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: release-qualified-resources
-          path: ${{ env.RESOURCE_BUILD_ROOT }}/*
-          compression-level: 0
-          if-no-files-found: error
 
       - name: Preserve original update verification bundle
         shell: pwsh
@@ -574,6 +565,14 @@ jobs:
         run: |
           node scripts/qualification/verify-qualified-install.mjs "$env:QUALIFICATION_BUILD_ROOT" "$env:RESOURCE_BUILD_ROOT" "$env:QUALIFIED_CORE_DIRECTORY"
           if ($LASTEXITCODE -ne 0) { throw 'Pre-publication client signature verification failed' }
+
+      - name: Upload original qualified resources (not publication authorization)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-qualified-resources
+          path: ${{ env.RESOURCE_BUILD_ROOT }}/*
+          compression-level: 0
+          if-no-files-found: error
 
       - name: Upload qualified portable product
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

@@ -528,7 +528,9 @@ export class BoxClient {
   }
   // A fresh temporary directory isolates each attempt. Never replay an uncertain chunk.
   async uploadChunks(path, name, bytes, chunkSize = 4 * 1024 * 1024) {
-    const url = this.temporaryUrl(await this.api('upload-link', path));
+    const deadline = Date.now() + 180000;
+    const signal = AbortSignal.timeout(180000);
+    const url = this.temporaryUrl(await this.api('upload-link', path, 'GET', undefined, signal));
     url.searchParams.set('ret-json', '1');
     for (let start = 0; start < bytes.length; start += chunkSize) {
       const end = Math.min(start + chunkSize, bytes.length);
@@ -537,20 +539,32 @@ export class BoxClient {
       form.set('parent_dir', path);
       form.set('replace', '0');
       form.set('file', new Blob([bytes.subarray(start, end)]), name);
-      const response = await checkedFetch(
-        url,
-        {
-          method: 'POST',
-          body: form,
-          redirect: 'error',
-          headers: {
-            'Content-Range': `bytes ${start}-${end - 1}/${bytes.length}`,
-            'Content-Disposition': `attachment; filename="${name}"`,
-          },
-        },
-        180000,
-        this.uploadTransport,
-      );
+      let response;
+      for (let attempt = 0; ; attempt++) {
+        signal.throwIfAborted();
+        try {
+          response = await checkedFetch(
+            url,
+            {
+              method: 'POST',
+              body: form,
+              redirect: 'error',
+              signal,
+              headers: {
+                'Content-Range': `bytes ${start}-${end - 1}/${bytes.length}`,
+                'Content-Disposition': `attachment; filename="${name}"`,
+              },
+            },
+            Math.max(1, deadline - Date.now()),
+            this.uploadTransport,
+          );
+          break;
+        } catch (error) {
+          if (!error.retrySafeUpload || attempt === 2 || signal.aborted) throw error;
+          recordUploadRecovery();
+          await retryWait(attempt, '分块发送 0 字节', deadline, undefined, signal);
+        }
+      }
       const result = await response.json();
       requireValue(
         end === bytes.length
@@ -973,6 +987,12 @@ async function uploadRuntimeChunks(box, folder, file) {
       await box.uploadChunks(staging, file.name, file.bytes);
       await verifyRemote(box, `${staging}/${file.name}`, file);
     } catch (error) {
+      // No request body reached the server, so no completed file can result
+      // from this failed chunk. Do not wait for an impossible late commit.
+      if (error.retrySafeUpload) {
+        error.retryableRead = false;
+        throw error;
+      }
       if (!error.uploadOutcomeUnknown) {
         error.retryableRead = false;
         throw error;
