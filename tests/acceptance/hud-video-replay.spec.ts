@@ -38,6 +38,8 @@ test('plays real game background with live HUD and seeks both to the recorded C4
     .poll(() => video.evaluate((element: HTMLVideoElement) => element.paused))
     .toBe(false);
   await replay.getByRole('button', { name: '暂停', exact: true }).click();
+  const karrigan = page.locator('.player-rail__card').filter({ hasText: 'karrigan' });
+  await expect(karrigan.getByLabel('Kills and deaths')).toHaveText('613');
   const events = (
     await (await page.request.get('/fixtures/epl-inferno-video/replay/events.jsonl')).text()
   )

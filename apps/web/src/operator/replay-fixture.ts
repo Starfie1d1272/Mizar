@@ -160,16 +160,24 @@ function legacyProgramV8(value: unknown): unknown {
     basis: { source, window, definition, rounds: null, coverage: 'unavailable' },
     reason: 'missing-input',
   });
-  const scoreboard = (definition: string) => metric('gsi', 'map-scoreboard', definition);
+  const scoreboard = (value: unknown) => {
+    const known = typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+    return {
+      ...metric('gsi', 'map-scoreboard', 'scoreboard-count.v1'),
+      value: known ? value : null,
+      basis: {
+        source: 'gsi',
+        window: 'map-scoreboard',
+        definition: 'scoreboard-count.v1',
+        rounds: null,
+        coverage: known ? 'complete' : 'unavailable',
+      },
+      reason: known ? null : 'missing-input',
+    };
+  };
   const completed = (definition: string, source = 'gsi-and-program-events') =>
     metric(source, 'completed-observed-rounds', definition);
   const statistics = {
-    scoreboard: {
-      kills: scoreboard('scoreboard-count.v1'),
-      assists: scoreboard('scoreboard-count.v1'),
-      deaths: scoreboard('scoreboard-count.v1'),
-      kdRatio: scoreboard('kd-ratio.v1'),
-    },
     completed: {
       adr: completed('adr.v1', 'gsi'),
       kastPercent: completed('kast-percent.v1'),
@@ -205,11 +213,23 @@ function legacyProgramV8(value: unknown): unknown {
     payload: {
       ...snapshot.payload,
       teamEconomy: { ct: economy, t: economy },
-      players: snapshot.payload.players.map((player: object) => ({
-        ...player,
-        statistics,
-        equipment,
-      })),
+      players: snapshot.payload.players.map(
+        (player: {
+          matchStats?: { kills?: unknown; assists?: unknown; deaths?: unknown } | null;
+        }) => ({
+          ...player,
+          statistics: {
+            ...statistics,
+            scoreboard: {
+              kills: scoreboard(player.matchStats?.kills),
+              assists: scoreboard(player.matchStats?.assists),
+              deaths: scoreboard(player.matchStats?.deaths),
+              kdRatio: metric('gsi', 'map-scoreboard', 'kd-ratio.v1'),
+            },
+          },
+          equipment,
+        }),
+      ),
     },
   };
 }

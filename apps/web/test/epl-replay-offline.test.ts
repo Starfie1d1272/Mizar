@@ -53,6 +53,17 @@ it('loads the original v8 recorded video without inventing v9 facts', async () =
     expect(current.program.payload.players[0]!.matchStats).toEqual(
       recorded.program.payload.players[0].matchStats,
     );
+    for (const [index, player] of current.program.payload.players.entries()) {
+      const original = recorded.program.payload.players[index].matchStats;
+      expect(player.statistics.scoreboard.kills).toMatchObject({
+        value: original.kills,
+        basis: { source: 'gsi', coverage: 'complete' },
+        reason: null,
+      });
+      expect(player.statistics.scoreboard.assists.value).toBe(original.assists);
+      expect(player.statistics.scoreboard.deaths.value).toBe(original.deaths);
+      expect(player.statistics.scoreboard.kdRatio.value).toBeNull();
+    }
     expect(current.program.payload.players[0]!.statistics.completed.rating2Approx).toMatchObject({
       value: null,
       reason: 'missing-input',
@@ -81,6 +92,8 @@ it('loads the preserved demo reference with unavailable v9 facts', async () => {
   const fixture = await loadReplayFixture(id);
   try {
     const player = fixture.session.getSnapshot().current!.program.payload.players[0]!;
+    expect(player.statistics.scoreboard.kills.value).toBe(0);
+    expect(player.statistics.scoreboard.deaths.value).toBe(0);
     expect(player.statistics.completed.rating2Approx.value).toBeNull();
     expect(player.equipment.available).toBe(false);
   } finally {
