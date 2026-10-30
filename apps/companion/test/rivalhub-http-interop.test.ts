@@ -1,5 +1,6 @@
 /** Opt-in: requires the disposable RivalHub HTTP fixture and loopback PostgreSQL. */
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -302,6 +303,106 @@ test(
         });
       },
     );
+
+    await t.test('a killed process recovers its committed claim through exact status', async () => {
+      const p = manifest.producers[1]!;
+      const snapshot = parseLiveSnapshotV1(p.liveTemplate);
+      snapshot.cursor.producerInstanceId = randomUUID();
+      snapshot.cursor.liveSessionId = randomUUID();
+      const path = join(temp, 'producer-1', 'connection.json');
+      const childInput = join(temp, 'kill-claim.json');
+      const childScript = join(temp, 'kill-claim.mjs');
+      await writeFile(
+        childInput,
+        JSON.stringify({
+          snapshot,
+          revision: await revision(1),
+          path,
+          baseUrl: siteAddress.origin,
+        }),
+        { mode: 0o600 },
+      );
+      await writeFile(
+        childScript,
+        `
+        import { readFile } from 'node:fs/promises';
+        import { RivalHubConnection } from ${JSON.stringify(new URL('../src/match-context/rivalhub-connection.ts', import.meta.url).href)};
+        const input = JSON.parse(await readFile(process.argv[2], 'utf8'));
+        const receiver = async (url, init) => {
+          const response = await fetch(url, init);
+          if (new URL(String(url)).pathname.endsWith('/claim')) {
+            if (!response.ok) throw new Error('local claim failed');
+            await response.body?.cancel();
+            process.stdout.write('CLAIM_COMMITTED\\n');
+            return await new Promise(() => { setInterval(() => {}, 1000); });
+          }
+          return response;
+        };
+        const connection = new RivalHubConnection(input.path, receiver, input.baseUrl);
+        await connection.load();
+        await connection.claim(input.snapshot, input.revision, true);
+      `,
+        { mode: 0o600 },
+      );
+      const tsxLoader = createRequire(import.meta.url).resolve('tsx/esm');
+      const child = spawn(process.execPath, ['--import', tsxLoader, childScript, childInput], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      child.stderr.resume();
+      const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+        (resolve, reject) => {
+          child.once('error', reject);
+          child.once('exit', (code, signal) => resolve({ code, signal }));
+        },
+      );
+      const committed = new Promise<void>((resolve) => {
+        child.stdout.setEncoding('utf8');
+        child.stdout.on('data', (chunk: string) => {
+          if (chunk.includes('CLAIM_COMMITTED')) resolve();
+        });
+      });
+      try {
+        await Promise.race([
+          committed,
+          exited.then(() => {
+            throw new Error('child exited before claim commit');
+          }),
+          new Promise<never>((_, reject) => {
+            const timer = setTimeout(() => reject(new Error('claim commit timed out')), 15_000);
+            timer.unref();
+          }),
+        ]);
+        child.kill('SIGKILL');
+        assert.equal((await exited).signal, 'SIGKILL');
+      } finally {
+        if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      }
+      const before = await status(
+        1,
+        snapshot.cursor.producerInstanceId,
+        snapshot.cursor.liveSessionId!,
+      );
+      assert.equal(before.source?.state, 'open');
+      const restarted = new RivalHubConnection(path, fetch, siteAddress.origin);
+      await restarted.load();
+      const outbox = new ReliableOutbox(join(temp, 'killed-outbox.json'));
+      const output = new OutputService({ outbox });
+      await output.start();
+      t.after(() => output.close());
+      restarted.setSourceSettlement(
+        (scope) => output.settleSourceForRelease(scope),
+        (scope) => output.resumeSource(scope),
+      );
+      await restarted.release();
+      const after = await status(
+        1,
+        snapshot.cursor.producerInstanceId,
+        snapshot.cursor.liveSessionId!,
+        before.source!.authorityRevision,
+      );
+      assert.equal(after.source?.state, 'closed');
+      assert.equal(after.source?.closeReason, 'released');
+    });
 
     await t.test('Companion onClose releases the source over real HTTP', async () => {
       const p = manifest.producers[1]!;
