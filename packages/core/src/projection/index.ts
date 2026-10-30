@@ -69,6 +69,7 @@ export { projectPlayerEquipment, projectTeamEconomy } from './equipment.js';
 export type {
   EquipmentCatalog,
   EquipmentMetadata,
+  PlayerEquipmentContext,
   PlayerEquipmentProjection,
   TeamEconomyPlayer,
   TeamEconomyProjection,

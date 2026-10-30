@@ -272,3 +272,49 @@ describe('Program-safe projections', () => {
     expect(runtime.telemetry).toBeNull();
   });
 });
+
+it('projects held reload, bomb carrier and Zeus facts from the live observation', () => {
+  const base = observation();
+  const input: TelemetryObservation = {
+    ...base,
+    telemetry: {
+      ...base.telemetry,
+      bomb: { state: 'carried', sourcePlayerId: steam64(1) },
+      allPlayers: base.telemetry.allPlayers!.map((p) =>
+        p.sourcePlayerId !== steam64(1)
+          ? p
+          : {
+              ...p,
+              weapons: [
+                { sourceWeaponId: 'rifle', name: 'weapon_ak47', state: 'reloading' },
+                { sourceWeaponId: 'zeus', name: 'weapon_taser', state: 'holstered' },
+              ],
+            },
+      ),
+    },
+  };
+  const context = contextFixture();
+  const state = acceptedState(input);
+  const identity = matchedIdentity(context, input);
+  const args = {
+    runtime: selectProgramSafeRuntimeView(state),
+    context,
+    identity,
+    activeLineup: resolvedLineup(state, input, identity, context),
+    continuityPolicy: POLICY,
+    equipmentCatalog: {
+      weapon_ak47: { canonicalKey: 'firearm.ak47', kind: 'firearm' as const, family: 'rifle' },
+      weapon_taser: { canonicalKey: 'utility.taser', kind: 'utility' as const, family: 'taser' },
+    },
+  };
+  const live = projectProgram({ ...args, nowMonotonicMs: 7 });
+  expect(live.players.find((p) => p.sourcePlayerId === steam64(1))?.equipment).toMatchObject({
+    heldWeaponId: 'rifle',
+    hasC4: true,
+    zeusWeaponId: 'zeus',
+  });
+  const stale = projectProgram({ ...args, nowMonotonicMs: 108 });
+  expect(
+    stale.players.find((p) => p.sourcePlayerId === steam64(1))?.equipment.heldWeaponId,
+  ).toBeNull();
+});

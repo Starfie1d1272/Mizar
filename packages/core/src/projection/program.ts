@@ -465,6 +465,8 @@ function projectPlayer(
   liveNameIsCurrent: boolean,
   preferCanonicalPlayerNames: boolean,
   equipmentCatalog: EquipmentCatalog | undefined,
+  telemetryFresh: boolean,
+  bomb: ProgramBombProjection | null,
 ): ProgramPlayerProjection {
   const player = lineupPlayer.observed;
   const canonical = canonicalPlayerFor(lineupPlayer.sourcePlayerId, identity, identityIsCurrent);
@@ -517,6 +519,7 @@ function projectPlayer(
           score: nullable(player.matchStats.score),
         };
 
+  const lifeState = player === null ? 'unknown' : derivePlayerLifeState(player.state?.health);
   return {
     sourcePlayerId: lineupPlayer.sourcePlayerId,
     canonicalPlayerId: canonical?.canonicalPlayerId ?? null,
@@ -531,9 +534,15 @@ function projectPlayer(
     side: lineupPlayer.side,
     observerSlot: player === null ? null : nullable(player.observerSlot),
     activity: player === null ? null : nullable(player.activity),
-    lifeState: player === null ? 'unknown' : derivePlayerLifeState(player.state?.health),
+    lifeState,
     statistics,
-    equipment: projectPlayerEquipment(player?.weapons, equipmentCatalog),
+    equipment: projectPlayerEquipment(player?.weapons, equipmentCatalog, {
+      sourcePlayerId: lineupPlayer.sourcePlayerId,
+      bomb,
+      telemetryFresh,
+      lineupCurrent: lineupPlayer.lineupEvidence === 'current',
+      lifeState,
+    }),
     liveAdr: statistics.includingCurrentRound.adr.value,
     completedAdr: statistics.completed.adr.value,
     weaponsAvailable: player !== null && player.weapons !== undefined,
@@ -697,6 +706,7 @@ export function projectProgram(input: ProgramProjectionInput): ProgramProjection
       )
     : [];
 
+  const bomb = projectBomb(input.runtime, input.nowMonotonicMs, input.continuityPolicy);
   const projectedPlayers = players.map((player) =>
     projectPlayer(
       player,
@@ -714,6 +724,8 @@ export function projectProgram(input: ProgramProjectionInput): ProgramProjection
       telemetryFreshness === 'fresh' && telemetry?.coverage.allPlayers === 'present',
       input.preferCanonicalPlayerNames === true,
       input.equipmentCatalog,
+      telemetryFreshness === 'fresh',
+      bomb,
     ),
   );
   const economyFor = (side: 'CT' | 'T') =>
@@ -805,7 +817,7 @@ export function projectProgram(input: ProgramProjectionInput): ProgramProjection
     observedPlayerSourceId: telemetry?.telemetry.player?.sourcePlayerId ?? null,
     players: projectedPlayers,
     teamEconomy: { ct: economyFor('CT'), t: economyFor('T') },
-    bomb: projectBomb(input.runtime, input.nowMonotonicMs, input.continuityPolicy),
+    bomb,
     coverage: {
       map: telemetry?.coverage.map ?? 'absent',
       round: telemetry?.coverage.round ?? 'absent',

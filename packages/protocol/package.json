@@ -26,6 +26,10 @@
       "types": "./dist/shared.d.ts",
       "import": "./dist/shared.js"
     },
+    "./broadcast-stats-presentation": {
+      "types": "./dist/broadcast-stats-presentation.d.ts",
+      "import": "./dist/broadcast-stats-presentation.js"
+    },
     "./program": {
       "types": "./dist/program.d.ts",
       "import": "./dist/program.js"
