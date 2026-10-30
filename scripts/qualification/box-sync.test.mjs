@@ -172,3 +172,33 @@ test('partial or malformed curl metrics never authorize replay', async () => {
     );
   }
 });
+
+test('a timed-out zero-byte chunk retries with a fresh attempt signal', async (t) => {
+  const timeout = AbortSignal.timeout.bind(AbortSignal);
+  const timers = [];
+  t.mock.method(AbortSignal, 'timeout', (milliseconds) => {
+    if (milliseconds === 180000) {
+      const controller = new AbortController();
+      timers.push(controller);
+      return controller.signal;
+    }
+    return timeout(milliseconds);
+  });
+  const observedSignals = [];
+  const box = client(async (_url, { signal }) => {
+    observedSignals.push(signal);
+    if (observedSignals.length === 1) {
+      timers[0].abort();
+      throw Object.assign(new Error('zero bytes sent'), {
+        code: 'BOX_CURL_FAILED',
+        retrySafeUpload: true,
+        uploadTimedOut: true,
+      });
+    }
+    assert.equal(signal.aborted, false);
+    return Response.json([{ name: 'payload' }]);
+  });
+  await box.uploadChunks('/Archive/test', 'payload', Buffer.from('a'));
+  assert.equal(observedSignals.length, 2);
+  assert.notEqual(observedSignals[0], observedSignals[1]);
+});

@@ -545,6 +545,8 @@ export class BoxClient {
         requireValue(Date.now() < deadline, '分块上传预算已用完；保留暂存目录');
         signal.throwIfAborted();
         const started = Date.now();
+        const attemptTimeout = Math.min(180000, Math.max(1, deadline - started));
+        const attemptSignal = AbortSignal.any([signal, AbortSignal.timeout(attemptTimeout)]);
         try {
           console.log(
             `Box 分块 ${name} ${start}-${end - 1} 尝试 ${attempt + 1} 开始（单次上限 180000ms）`,
@@ -555,13 +557,13 @@ export class BoxClient {
               method: 'POST',
               body: form,
               redirect: 'error',
-              signal,
+              signal: attemptSignal,
               headers: {
                 'Content-Range': `bytes ${start}-${end - 1}/${bytes.length}`,
                 'Content-Disposition': `attachment; filename="${name}"`,
               },
             },
-            Math.min(180000, Math.max(1, deadline - Date.now())),
+            attemptTimeout,
             this.uploadTransport,
             (response) => response.json(),
           );
