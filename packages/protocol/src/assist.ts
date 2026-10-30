@@ -12,12 +12,11 @@ export const assistPayloadSchema = z.object({
   observer: z
     .object({
       state: z.enum(['connecting', 'ready', 'paused', 'unavailable']),
-      timingBasis: z.literal('estimated'),
+      timingBasis: z.enum(['estimated', 'program-clock']),
       calibrationState: z.enum(['uncalibrated', 'measured', 'held', 'reacquiring']).optional(),
-      effectiveDelaySeconds: z.number().finite().nonnegative().optional(),
+      effectiveDelaySeconds: z.number().finite().nonnegative().nullable(),
       waitingReason: z.string().max(64).nullable(),
       nextWindowSeconds: z.number().finite().nonnegative().nullable(),
-      expectedDelaySeconds: z.number().finite(),
       leadSeconds: z.number().finite(),
       measuredDelaySeconds: z.number().finite().nullable(),
       hints: z
@@ -40,17 +39,16 @@ export const assistPayloadSchema = z.object({
     .optional(),
 });
 
-export const observerSettingsSchema = z
-  .strictObject({
-    enabled: z.boolean(),
-    expectedDelaySeconds: z.number().int().min(10).max(600),
-    leadSeconds: z.number().int().min(1).max(30),
-  })
-  .refine((v) => v.leadSeconds < v.expectedDelaySeconds, '提前时间应小于两路延迟差');
+export const observerSettingsSchema = z.strictObject({
+  enabled: z.boolean(),
+  nicknameSource: z.enum(['game', 'website']).default('game'),
+  leadSeconds: z.number().int().min(1).max(30),
+});
 export type ObserverSettings = z.infer<typeof observerSettingsSchema>;
 export const DEFAULT_OBSERVER_SETTINGS: ObserverSettings = {
-  enabled: false,
-  expectedDelaySeconds: 120,
+  enabled: true,
+  nicknameSource: 'game',
+
   leadSeconds: 5,
 };
 
@@ -128,7 +126,9 @@ export function parseObserverConnection(
 /** Safe console output shared by native automation and the connection clipboard. */
 export function formatObserverConnection(connection: ObserverConnection): string {
   const parsed = observerConnectionSchema.parse(connection);
-  return `password "${parsed.password}"; connect ${parsed.programEndpoint}`;
+  const password =
+    !parsed.password || /\s/.test(parsed.password) ? `"${parsed.password}"` : parsed.password;
+  return `connect ${parsed.programEndpoint};password ${password}`;
 }
 
 export const assistSnapshotSchema = localSnapshotEnvelopeSchema.extend({

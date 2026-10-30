@@ -8,8 +8,7 @@
     "dev": "vite --host 127.0.0.1 --port 4173",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "storybook": "storybook dev --host 127.0.0.1 --port 6006 --no-open --disable-telemetry",
-    "storybook:build": "storybook build --output-dir ../../.agent-tmp/storybook --disable-telemetry",
-    "storybook:test": "vitest run --config vitest.design.config.ts"
+    "storybook:build": "storybook build --output-dir ../../.agent-tmp/storybook --disable-telemetry"
   },
   "dependencies": {
     "@fontsource/inter": "catalog:",
@@ -17,6 +16,7 @@
     "@mizar/cs2-assets": "workspace:*",
     "@mizar/design-tokens": "workspace:*",
     "@mizar/hud-config": "workspace:*",
+    "@mizar/hud-view": "workspace:*",
     "@mizar/protocol": "workspace:*",
     "@mizar/radar": "workspace:*",
     "@mizar/replay": "workspace:*",
@@ -32,10 +32,7 @@
     "@types/react-dom": "catalog:",
     "@typescript/native": "catalog:",
     "@vitejs/plugin-react": "catalog:",
-    "@vitest/browser-playwright": "5.0.3",
-    "axe-core": "4.13.0",
     "storybook": "10.6.1",
-    "vite": "catalog:",
-    "vitest": "catalog:"
+    "vite": "catalog:"
   }
 }

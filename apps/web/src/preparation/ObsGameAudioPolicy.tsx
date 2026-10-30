@@ -4,6 +4,7 @@ import { Button, Field, Select } from '../ui';
 type Policy = { mode: 'keep' | 'mute' } | { mode: 'attenuate'; db: number };
 type Status = {
   ready: boolean;
+  desktopMix?: boolean;
   revision: string;
   policy: Policy;
   ownership: 'idle' | 'intent' | 'owned' | 'held';
@@ -134,6 +135,9 @@ export function ObsGameAudioPolicy() {
   return (
     <div className="game-audio-policy">
       <h3>中场游戏音频</h3>
+      {status?.desktopMix && (
+        <p>桌面混音无法单独控制游戏；中场游戏音频策略暂停，切回独立分路后恢复。</p>
+      )}
       <p>
         只调整已绑定的游戏来源，不调整解说和麦克风来源。默认保持游戏音量不变；请在 OBS
         核对实际声音。
@@ -144,7 +148,7 @@ export function ObsGameAudioPolicy() {
       <Select
         label="中场策略"
         value={mode}
-        disabled={busy || !status?.ready}
+        disabled={busy || !status?.ready || status.desktopMix}
         onChange={(e) => {
           setMessage(null);
           setMode(e.target.value as Policy['mode']);
@@ -162,7 +166,7 @@ export function ObsGameAudioPolicy() {
           max="60"
           step="0.1"
           value={db}
-          disabled={busy || !status?.ready}
+          disabled={busy || !status?.ready || status.desktopMix}
           onChange={(e) => {
             setMessage(null);
             setDb(Number(e.target.value));
@@ -170,7 +174,12 @@ export function ObsGameAudioPolicy() {
         />
       )}
       <Button
-        disabled={busy || !status?.ready || (mode === 'attenuate' && !(db > 0 && db <= 60))}
+        disabled={
+          busy ||
+          !status?.ready ||
+          status.desktopMix ||
+          (mode === 'attenuate' && !(db > 0 && db <= 60))
+        }
         onClick={() =>
           void send(
             '/operator/obs/game-audio-policy',

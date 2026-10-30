@@ -16,6 +16,7 @@ export class ObsMusicProvider {
   constructor(
     private readonly config: ObsConfigStore,
     private readonly diagnostic: (stage: string, evidence: unknown) => void = () => {},
+    private readonly onMonitorSettingsChanged: () => void = () => {},
   ) {}
   private trace(stage: string, evidence: unknown, secrets = this.knownSecrets) {
     try {
@@ -34,6 +35,8 @@ export class ObsMusicProvider {
       this.trace('music_obs_connect', { result: 'begin', host: config.host, port: config.port });
       const client = new OBSWebSocket();
       this.client = client;
+      client.on('InputAudioMonitorTypeChanged', () => this.onMonitorSettingsChanged());
+      client.on('CurrentProfileChanged', () => this.onMonitorSettingsChanged());
       client.on('ConnectionClosed', (error) => {
         if (this.client === client) {
           this.connected = false;
@@ -148,6 +151,7 @@ export async function ownedMusicInput(
   valid: () => boolean,
   attach = true,
   preservePlayback = false,
+  renameLegacy = true,
 ) {
   const assertCurrent = () => {
     if (!valid()) throw new Error('music_cancelled');
@@ -156,14 +160,43 @@ export async function ownedMusicInput(
   const collection = await obs.call('GetSceneCollectionList');
   if (collection.currentSceneCollectionName !== OBS_COLLECTION)
     throw new Error('music_collection_inactive');
-  const name = `Mizar · ${layer === 'bgm' ? 'BGM' : 'Stinger'} · ${store.state.owner}`;
+  const legacyName = `Mizar · ${layer === 'bgm' ? 'BGM' : 'Stinger'} · ${store.state.owner}`;
+  const baseName = layer === 'bgm' ? '音乐' : '音效';
   const inputs = (await obs.call('GetInputList')).inputs as {
     inputName: string;
     inputKind: string;
     inputUuid?: string;
   }[];
-  const found = inputs.find((i) => i.inputName === name);
   const expected = store.state.sources[layer];
+  const found = expected ? inputs.find((i) => i.inputUuid === expected) : undefined;
+  let name = found?.inputName ?? baseName;
+  if (renameLegacy && found?.inputName === legacyName && found.inputKind === 'ffmpeg_source') {
+    const [stream, record] = await Promise.all([
+      obs.call('GetStreamStatus'),
+      obs.call('GetRecordStatus'),
+    ]);
+    if (stream.outputActive === false && record.outputActive === false) {
+      name = baseName;
+      for (let index = 2; inputs.some((input) => input.inputName === name); index++)
+        name = `${baseName} ${index}`;
+      assertCurrent();
+      await obs.call('SetInputName', { inputUuid: expected, newInputName: name });
+    }
+  } else if (!found) {
+    if (
+      inputs.some(
+        (i) =>
+          i.inputName === legacyName ||
+          (expected &&
+            (i.inputName === baseName ||
+              (i.inputName.startsWith(`${baseName} `) &&
+                /^\d+$/.test(i.inputName.slice(baseName.length + 1))))),
+      )
+    )
+      throw new Error('music_source_conflict');
+    for (let index = 2; inputs.some((input) => input.inputName === name); index++)
+      name = `${baseName} ${index}`;
+  }
   if (found) {
     if (!expected || found.inputUuid !== expected || found.inputKind !== 'ffmpeg_source')
       throw new Error('music_source_conflict');

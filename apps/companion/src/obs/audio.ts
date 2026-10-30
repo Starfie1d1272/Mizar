@@ -10,8 +10,8 @@ const AUDIO_KINDS = new Set([
 ]);
 const VIDEO_AUDIO_KINDS = new Set(['game_capture', 'window_capture']);
 const MANAGED = [
-  { name: 'Mizar · Desktop Audio', kind: 'wasapi_output_capture' },
-  { name: 'Mizar · Microphone', kind: 'wasapi_input_capture' },
+  { name: '桌面声音', kind: 'wasapi_output_capture' },
+  { name: '麦克风', kind: 'wasapi_input_capture' },
 ] as const;
 
 async function activeManagedInputs(obs: ObsRpc, inputs: Input[]): Promise<Input[]> {

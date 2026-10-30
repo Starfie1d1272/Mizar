@@ -66,7 +66,8 @@ export interface ProjectionPublishers {
 export interface ProjectionCoordinatorOptions {
   readonly observerSettings?: () => {
     enabled: boolean;
-    expectedDelaySeconds: number;
+    nicknameSource?: 'game' | 'website';
+
     leadSeconds: number;
   };
   readonly onObserverDiagnostics?: (
@@ -313,6 +314,13 @@ export class ProjectionCoordinator {
       const identity = this.resolveIdentity(runtimeSnapshot);
       const activeLineup = this.resolveActiveLineup(runtimeSnapshot, identity);
       const context = this.contextBinding?.context;
+      const preferCanonicalPlayerNames =
+        this.observerSettings?.().nicknameSource === 'website' &&
+        this.contextBinding !== undefined &&
+        this.contextBinding.localAuthoringMode !== 'standalone' &&
+        (this.contextBinding.origin === 'online' ||
+          this.contextBinding.cachedFrom === 'online' ||
+          this.contextBinding.localAuthoringMode === 'bound-overlay');
       const seriesProgress = this.programRuntime.synchronizeSeriesProgress(
         context,
         seriesSideProofFor(runtimeSnapshot, identity),
@@ -320,6 +328,7 @@ export class ProjectionCoordinator {
       );
       const nowMonotonicMs = this.nowMonotonicMs();
       const programInput = {
+        preferCanonicalPlayerNames,
         runtime: runtimeView,
         bombDamageResource: this.bombDamageResources.get(
           runtimeView.telemetry?.telemetry.map?.name ?? null,
@@ -353,6 +362,7 @@ export class ProjectionCoordinator {
           .map((player) => player.sourcePlayerId),
       );
       const radar = projectRadarFrame({
+        preferCanonicalPlayerNames,
         ...(context === undefined ? {} : { context }),
         runtime: runtimeView,
         identity,

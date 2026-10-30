@@ -2,14 +2,8 @@ import type { ProgramCueWire } from '@mizar/protocol/program-cue';
 
 import type { ProgramCueClient } from '../realtime/program-cue-client';
 
-export interface ProgramCueEffect {
-  readonly cue: ProgramCueWire;
-  readonly expiresAtMonotonicMs: number;
-}
-
-export interface ProgramCueEffectSnapshot {
-  readonly effects: readonly ProgramCueEffect[];
-}
+import type { ProgramCueEffect, ProgramCueEffectSnapshot } from '@mizar/hud-view';
+export type { ProgramCueEffect, ProgramCueEffectSnapshot } from '@mizar/hud-view';
 
 export interface ProgramCueEffectScheduler {
   setTimeout(callback: () => void, delayMs: number): unknown;

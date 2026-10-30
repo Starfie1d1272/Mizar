@@ -383,7 +383,8 @@ export class ResourceStore {
               prepared: entry.prepared?.id ?? null,
               previous: entry.previous?.id ?? null,
             });
-          if (entry.prepared?.id === available.id) await this.activate(packId, signal);
+          if (options.activation !== 'prepare-only' && entry.prepared?.id === available.id)
+            await this.activate(packId, signal);
           return this.getStatus(packId);
         }
         const id = randomUUID();
@@ -442,7 +443,7 @@ export class ResourceStore {
         entry.status.phase = 'ready';
         entry.status.failure = null;
         this.refreshVersions(entry);
-        await this.activate(packId, signal);
+        if (options.activation !== 'prepare-only') await this.activate(packId, signal);
         return this.getStatus(packId);
       } catch (error) {
         this.failed(entry, error);
@@ -467,7 +468,7 @@ export class ResourceStore {
   async repair(
     packId: string,
     prepare: PreparePack,
-    options: { signal?: AbortSignal; packVersion?: string } = {},
+    options: Pick<ResourceInstallOptions, 'signal' | 'packVersion' | 'activation'> = {},
   ): Promise<ResourceStatus> {
     return this.installVerified(packId, prepare, { ...options, force: true });
   }

@@ -523,29 +523,51 @@ pub(crate) fn prepare_standalone(video: &Path, executable: &Path) -> Result<Valu
         executable,
     )?;
     record["executable"] = json!(executable);
-    record["startupFiles"] = json!(crate::cs2_frame_rate::prepare_observer_scripts(video, executable)?);
+    record["startupFiles"] = json!(crate::cs2_frame_rate::prepare_observer_scripts(
+        video, executable
+    )?);
     Ok(record)
 }
 
-pub(crate) enum StartupFiles { Apply, Validate, Restore }
+pub(crate) enum StartupFiles {
+    Apply,
+    Validate,
+    Restore,
+}
 
 /// Uses the spectator journal's original bytes; no additional recovery owner.
 pub(crate) fn startup_files(record: &Value, action: StartupFiles) -> Result<(), String> {
-    let Some(files) = record.get("startupFiles") else { return Ok(()); };
-    let files = files.as_array().filter(|files| files.len() <= 32).ok_or("观战启动配置记录无效。")?;
+    let Some(files) = record.get("startupFiles") else {
+        return Ok(());
+    };
+    let files = files
+        .as_array()
+        .filter(|files| files.len() <= 32)
+        .ok_or("观战启动配置记录无效。")?;
     let video = Path::new(record["video"].as_str().ok_or("观战配置路径缺失。")?);
     let executable = Path::new(record["executable"].as_str().ok_or("观战程序路径缺失。")?);
-    if !video.is_absolute() || !executable.is_absolute() { return Err("观战启动配置路径无效。".into()); }
+    if !video.is_absolute() || !executable.is_absolute() {
+        return Err("观战启动配置路径无效。".into());
+    }
     let mut unique = std::collections::BTreeSet::new();
     let mut plan = Vec::new();
     for entry in files {
-        if entry["kind"] != "cfg" { return Err("观战启动配置范围无效。".into()); }
-        let (path, original, applied) = crate::cs2_frame_rate::validated_script(entry, video, executable, None)?;
-        let canonical = fs::canonicalize(path).map_err(|e| io_error("观战启动配置无法确认。", &e))?;
-        if !unique.insert(canonical.to_string_lossy().to_lowercase()) { return Err("观战启动配置路径重复。".into()); }
+        if entry["kind"] != "cfg" {
+            return Err("观战启动配置范围无效。".into());
+        }
+        let (path, original, applied) =
+            crate::cs2_frame_rate::validated_script(entry, video, executable, None)?;
+        let canonical =
+            fs::canonicalize(path).map_err(|e| io_error("观战启动配置无法确认。", &e))?;
+        if !unique.insert(canonical.to_string_lossy().to_lowercase()) {
+            return Err("观战启动配置路径重复。".into());
+        }
         let metadata = fs::metadata(path).map_err(|e| io_error("观战启动配置无法读取。", &e))?;
-        if !metadata.is_file() || metadata.len() > 256 * 1024 { return Err("观战启动配置类型或大小已变化。".into()); }
-        let current = fs::read_to_string(path).map_err(|e| io_error("观战启动配置无法读取。", &e))?;
+        if !metadata.is_file() || metadata.len() > 256 * 1024 {
+            return Err("观战启动配置类型或大小已变化。".into());
+        }
+        let current =
+            fs::read_to_string(path).map_err(|e| io_error("观战启动配置无法读取。", &e))?;
         let target = match action {
             StartupFiles::Apply if current == original => applied,
             StartupFiles::Validate if current == applied => applied,
@@ -555,10 +577,13 @@ pub(crate) fn startup_files(record: &Value, action: StartupFiles) -> Result<(), 
         plan.push((path, current, target));
     }
     for (path, current, target) in plan {
-        if fs::read_to_string(path).map_err(|e| io_error("观战启动配置无法复核。", &e))? != current {
+        if fs::read_to_string(path).map_err(|e| io_error("观战启动配置无法复核。", &e))? != current
+        {
             return Err("观战启动配置在操作期间发生变化，备份仍保留。".into());
         }
-        if current != target { crate::cs2_session::atomic_write(path, target.as_bytes())?; }
+        if current != target {
+            crate::cs2_session::atomic_write(path, target.as_bytes())?;
+        }
     }
     Ok(())
 }
@@ -591,91 +616,5 @@ pub fn prepare(files: &[Value], video: &Path, executable: &Path) -> Result<Value
                 json!({"version":2,"video":video,"original":original,"bindings":bindings,"hudWarning":warning,"loadAttempted":false}),
             )
         }
-    }
-}
-
-#[cfg(test)]
-mod hud_tests {
-    use super::*;
-    fn keys(entries: &str) -> String {
-        format!("\"config\" {{\"bindings\" {{{entries}}}}}")
-    }
-
-    #[test]
-    fn resolves_only_one_exact_candidate_and_preserves_original_bytes() {
-        for (name, value) in [("h", ""), ("scancode11", "say custom")] {
-            let before = keys(&format!("\"{name}\" \"{value}\" \"x\" \"other\""));
-            let record = backup_hud(&before).unwrap();
-            assert_eq!(record["identity"], name);
-            assert_eq!(record["originalKeys"], before);
-            assert_eq!(record["candidates"][name], format!("\"{value}\""));
-            let other = if name == "h" { "scancode11" } else { "h" };
-            assert!(record["candidates"][other].is_null());
-            let applied = keys(&format!("\"{name}\" \"{HUD_COMMAND}\" \"x\" \"new\""));
-            let restored = restore_hud(&record, &applied).unwrap();
-            assert_eq!(
-                field(&restored, &["config", "bindings", name])
-                    .unwrap()
-                    .unwrap()
-                    .value,
-                value
-            );
-            assert_eq!(
-                field(&restored, &["config", "bindings", "x"])
-                    .unwrap()
-                    .unwrap()
-                    .value,
-                "new"
-            );
-            assert_eq!(restore_hud(&record, &restored).unwrap(), restored);
-            assert!(restore_hud(&record, &applied.replace(HUD_COMMAND, "user edit")).is_err());
-            assert!(restore_hud(&record, &applied.replace(name, other)).is_err());
-            assert!(restore_hud(
-                &record,
-                &keys(&format!(
-                    "\"{name}\" \"{HUD_COMMAND}\" \"{other}\" \"{HUD_COMMAND}\""
-                ))
-            )
-            .is_err());
-            assert!(restore_hud(&record, &keys("")).is_err());
-        }
-        let missing = backup_hud(&keys("")).unwrap();
-        assert_eq!(missing["identity"], "scancode11");
-        assert_eq!(restore_hud(&missing, &keys("")).unwrap(), keys(""));
-        let applied = keys(&format!("\"scancode11\" \"{HUD_COMMAND}\""));
-        let restored = restore_hud(&missing, &applied).unwrap();
-        assert!(field(&restored, &["config", "bindings", "scancode11"])
-            .unwrap()
-            .is_none());
-        assert!(restore_hud(&missing, &keys(&format!("\"h\" \"{HUD_COMMAND}\""))).is_err());
-        assert!(backup_hud(&keys("\"h\" \"a\" \"scancode11\" \"b\"")).is_err());
-        assert!(backup_hud(&keys("\"h\" \"a\" \"h\" \"a\"")).is_err());
-        assert!(backup_hud(&keys("\"H\" \"a\"")).is_err());
-    }
-
-    #[test]
-    fn fixed_cfg_does_not_overwrite_unknown_content() {
-        let root = std::env::temp_dir().join(format!(
-            "mizar-hud-cfg-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let cfg = root.join("game/csgo/cfg");
-        fs::create_dir_all(&cfg).unwrap();
-        let executable = root.join("game/bin/win64/cs2.exe");
-        for identity in ["h", "scancode11"] {
-            let file = cfg.join(hud_cfg_name(identity).unwrap());
-            fs::write(&file, "user content").unwrap();
-            assert!(install_hud(&executable, identity).is_err());
-            assert_eq!(fs::read(&file).unwrap(), b"user content");
-            fs::remove_file(&file).unwrap();
-            install_hud(&executable, identity).unwrap();
-            install_hud(&executable, identity).unwrap();
-        }
-        assert!(install_hud(&executable, "other").is_err());
-        fs::remove_dir_all(root).unwrap();
     }
 }

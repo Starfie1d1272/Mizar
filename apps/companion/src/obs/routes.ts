@@ -7,6 +7,7 @@ import {
   obsOutputCommandSchema,
 } from '@mizar/protocol/obs';
 import type { GameAudioController } from './audio-policy-controller.js';
+import type { MusicDirector } from '../music/director.js';
 import { ObsOutputError } from './outputs.js';
 import { ObsActionError, obsActionMessage } from './action-error.js';
 import type { ObsNativeEvidence } from './native-evidence.js';
@@ -42,6 +43,7 @@ export function registerObsRoutes(
     readonly originPolicy: LocalWebOriginPolicy;
     readonly activeScene: () => ProgramSceneId;
     readonly gameAudio?: GameAudioController;
+    readonly musicDirector?: () => MusicDirector | undefined;
     readonly readCaptureEvidence?: () => Promise<ObsNativeEvidence>;
   },
 ) {
@@ -66,11 +68,15 @@ export function registerObsRoutes(
       return false;
     }
   };
-  app.get('/local/v1/obs/game-audio-policy', (request, reply) => {
+  app.get('/local/v1/obs/game-audio-policy', async (request, reply) => {
     if (!allowedRead(request)) return reply.code(403).send({ error: 'operator_origin_forbidden' });
     return reply
       .header('cache-control', 'no-store')
-      .send(options.gameAudio?.status() ?? { ready: false });
+      .send(
+        options.gameAudio
+          ? { ...options.gameAudio.status(), desktopMix: await options.gameAudio.desktopMix() }
+          : { ready: false },
+      );
   });
   app.post('/operator/obs/game-audio-policy', { bodyLimit: 2048 }, async (request, reply) => {
     if (!allowed(request.headers.origin))
@@ -157,6 +163,65 @@ export function registerObsRoutes(
       }
     },
   );
+  app.post('/operator/obs/audio-mode', { bodyLimit: 2048 }, async (request, reply) => {
+    if (!allowed(request.headers.origin))
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    const parsed = z
+      .discriminatedUnion('mode', [
+        z
+          .object({
+            revision: z.string().uuid(),
+            mode: z.literal('desktop'),
+            selectionId: z.string().uuid().optional(),
+          })
+          .strict(),
+        z.object({ revision: z.string().uuid(), mode: z.literal('independent') }).strict(),
+        z.object({ revision: z.string().uuid(), mode: z.literal('cancel') }).strict(),
+      ])
+      .safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'audio_mode_invalid' });
+    try {
+      if (parsed.data.mode === 'cancel')
+        return { ok: true, ...(await options.adapter.cancelAudioWait(parsed.data.revision)) };
+      if (!options.gameAudio) throw new Error('audio_policy_unavailable');
+      const command = parsed.data;
+      const music = options.musicDirector?.();
+      if (!music) throw new Error('music_unavailable');
+      const result = await options.gameAudio.switchMode(() =>
+        command.mode === 'independent'
+          ? options.adapter.requestIndependentMode(command.revision, music)
+          : options.adapter.switchAudioMode(
+              command.revision,
+              'desktop',
+              command.selectionId,
+              music,
+            ),
+      );
+      return { ok: true, ...result };
+    } catch (error) {
+      return reply.code(409).send({
+        error:
+          error instanceof Error && error.message === 'audio_desktop_choice_required'
+            ? 'audio_desktop_choice_required'
+            : 'audio_mode_unavailable',
+        message:
+          error instanceof Error && error.message === 'audio_desktop_choice_required'
+            ? '检测到多个桌面播放设备，请选择要采集的设备。'
+            : error instanceof Error && error.message === 'audio_commentary_unavailable'
+              ? '解说来源尚未就绪，桌面混音仍可用。'
+              : error instanceof Error &&
+                  (error.message.startsWith('audio_nested_shared_path:') ||
+                    error.message.startsWith('audio_video_path_unresolved:'))
+                ? `来源“${decodeURIComponent(error.message.split(':')[1] ?? '')}”也用于场景“${decodeURIComponent(error.message.split(':')[2] ?? '')}”；请为 Mizar 单独设置该来源后重试。`
+                : error instanceof Error && error.message.startsWith('audio_monitor_shared:')
+                  ? `来源“${error.message.slice('audio_monitor_shared:'.length)}”也用于其他场景或全局音频；请为 Mizar 单独设置该来源后重试。`
+                  : error instanceof Error &&
+                      error.message.startsWith('audio_global_path_unresolved:')
+                    ? `OBS 全局音频来源“${error.message.slice('audio_global_path_unresolved:'.length)}”与目标重复，请在 OBS 停用该来源后重试。`
+                    : '切换未确认，请检查 OBS 音频后重试。',
+      });
+    }
+  });
   app.get('/local/v1/obs/audio-routing', async (request, reply) => {
     if (!allowedRead(request)) return reply.code(403).send({ error: 'operator_origin_forbidden' });
     try {

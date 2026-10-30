@@ -13,6 +13,7 @@ import { CameraDirector } from './orchestration/director.js';
 import { MulnxTool } from './orchestration/tool.js';
 import { OrchestrationStore } from './orchestration/store.js';
 import { MulnxProvider } from './orchestration/provider.js';
+import { MulnxProgramClock } from './orchestration/mulnx-clock.js';
 import { registerOrchestrationRoutes } from './orchestration/routes.js';
 import { registerDiagnosticDelivery } from './support/delivery-routes.js';
 import { checkLocalWebOrigin } from './local-web/origin-policy.js';
@@ -76,6 +77,7 @@ import { ObsConfigStore } from './obs/config.js';
 import { ObsAudioRouting } from './obs/audio-routing.js';
 import { GameAudioController } from './obs/audio-policy-controller.js';
 import { gameAudioTruth } from './obs/audio-policy-truth.js';
+import { desktopMonitorRelationship } from './obs/audio-monitor-device.js';
 import type { ObsNativeEvidence } from './obs/native-evidence.js';
 import { registerObsRoutes } from './obs/routes.js';
 import { registerMixerRoutes } from './obs/mixer-routes.js';
@@ -782,6 +784,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         );
   let musicDirector: MusicDirector | undefined;
   let cameraDirector: CameraDirector | undefined;
+  let catalogTool: MulnxTool | undefined;
+  let catalogToolLoaded = false;
+  let mulnxClock: MulnxProgramClock | undefined;
+  let mulnxClockState = '';
   const bpPresentationSettings = new BpPresentationSettings(
     options.obsConfigPath
       ? join(dirname(options.obsConfigPath), 'bp-presentation.json')
@@ -841,7 +847,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     // Chromium's connection-error page and never run the WebSocket retry code.
     app.addHook('onListen', () => {
       obsAdapter.startBrowserRecovery();
-      obsAdapter.startCommentaryRecovery();
+      obsAdapter.startCommentaryRecovery(musicDirector, gameAudio);
       return Promise.resolve();
     });
     registerObsRoutes(app, {
@@ -849,6 +855,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       configStore: obsConfigStore,
       adapter: obsAdapter,
       ...(gameAudio ? { gameAudio } : {}),
+      musicDirector: () => musicDirector,
       ...(options.readObsCaptureEvidence
         ? { readCaptureEvidence: options.readObsCaptureEvidence }
         : {}),
@@ -1011,7 +1018,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       matchContextController?.getActiveBinding() !== undefined &&
       matchContextController?.getActiveBinding() != null,
     scenes: sceneController,
-    beforeEnter: () => demoTest?.openFormalBoundary(),
+    beforeEnter: () => {
+      if (cameraDirector?.store.saving) throw new Error('camera_settings_saving');
+      demoTest?.openFormalBoundary();
+    },
+    onEnter: () => cameraDirector?.beginProduction(),
     beforeFinish: () => {
       cameraDirector?.finishProduction();
       observerSettings.endProduction();
@@ -1177,8 +1188,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     });
     musicDirector = new MusicDirector(
       musicStore,
-      new ObsMusicProvider(obsConfigStore, (stage, evidence) =>
-        sessionJournal?.record(stage, evidence),
+      new ObsMusicProvider(
+        obsConfigStore,
+        (stage, evidence) => sessionJournal?.record(stage, evidence),
+        () => musicDirector?.noteMonitorSettingsChanged(),
       ),
       () => ({
         program: projectionCoordinator.getCurrent().program,
@@ -1199,6 +1212,21 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           })) ?? false
         );
       },
+      async (obs) => {
+        if (await obsAudioRouting?.modePending()) throw new Error('audio_mode_pending');
+        const binding = await obsAudioRouting?.desktopBinding();
+        if (!binding) return 'independent';
+        const config = await obsConfigStore.read();
+        if (
+          binding.endpoint !== `ws://${config.host}:${config.port}` ||
+          (await obs.call('GetSceneCollectionList')).currentSceneCollectionName !==
+            binding.collection
+        )
+          throw new Error('audio_binding_changed');
+        const relation = await desktopMonitorRelationship(obs, binding.inputUuid);
+        return relation;
+      },
+      () => obsAudioRouting?.modePending() ?? Promise.resolve(false),
     );
     registerMusicRoutes(app, musicStore, musicDirector, localWebTransport.getOriginPolicy());
     if (obsAdapter)
@@ -1222,9 +1250,13 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           cameraEvidence,
         )
       : undefined;
+    catalogTool = mulnxTool;
+    const mulnxProvider = new MulnxProvider(cameraEvidence);
+    mulnxClock = new MulnxProgramClock(mulnxProvider);
+    app.addHook('onClose', () => mulnxClock?.close());
     cameraDirector = new CameraDirector(
       cameraStore,
-      new MulnxProvider(cameraEvidence),
+      mulnxProvider,
       () => ({
         program: projectionCoordinator.getCurrent().program,
         active: sceneController.get().active,
@@ -1232,10 +1264,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           production.get().mode !== 'preparation' &&
           !waitingObserverMap &&
           projectionCoordinator.getCurrent().operator.matchContext.origin !== 'fixture',
-        demoAudition:
-          demoTest.get().gameOwnership === 'external'
-            ? demoTest.canUseCamera('audition')
-            : undefined,
+        demoAudition: demoTest.get().active ? demoTest.canUseCamera('audition') : undefined,
       }),
       cameraEvidence,
       undefined,
@@ -1244,9 +1273,14 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       options.productRuntime !== undefined,
     );
     app.addHook('onReady', async () => {
-      await mulnxTool
-        ?.load()
-        .catch((error) => app.log.error({ stage: 'mulnx_load', err: error }, 'MulNX 加载失败'));
+      if (mulnxTool) {
+        try {
+          await mulnxTool.load();
+          catalogToolLoaded = true;
+        } catch (error) {
+          app.log.error({ stage: 'mulnx_load', err: error }, 'MulNX 加载失败');
+        }
+      }
       await cameraStore
         .load()
         .catch((error) =>
@@ -1270,11 +1304,38 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       mulnxTool,
     );
   }
+  app.get('/local/v1/resource-library', (request, reply) => {
+    const policy = localWebTransport.getOriginPolicy();
+    if (
+      policy.mode !== 'loopback' ||
+      !['127.0.0.1', 'localhost', '[::1]', '::1'].includes(request.hostname) ||
+      request.headers['sec-fetch-site'] === 'cross-site' ||
+      (request.headers.origin && !checkLocalWebOrigin(policy, request.headers.origin).allowed)
+    )
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    const tool = catalogToolLoaded ? catalogTool?.view() : undefined;
+    return reply.header('cache-control', 'no-store').send({
+      resources: resources?.list() ?? null,
+      tool: tool
+        ? {
+            installed: tool.installed,
+            latest: tool.latest,
+            busy: tool.busy,
+            packs: tool.packs.map((pack) => pack.sourceName),
+          }
+        : null,
+    });
+  });
   sceneController.attachDirector(director);
   const directorTimer = setInterval(() => {
     void director.tick().catch(() => director.hold());
     void musicDirector?.tick();
     cameraDirector?.tick();
+    const clockState = mulnxClock?.current(performance.now()).state;
+    if (clockState && clockState !== mulnxClockState) {
+      mulnxClockState = clockState;
+      sessionJournal?.record('program_clock', { state: clockState });
+    }
     if (gameAudio) {
       const projection = projectionCoordinator.getCurrent();
       gameAudio.tick(
@@ -1383,16 +1444,20 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     !demoTest.get().active;
   registerObserverSettings(app, observerSettings, localWebTransport.getOriginPolicy());
   const observerSettingsUnsubscribe = observerSettings.subscribe((kind) => {
-    if (kind === 'map') {
+    if (kind === 'name') {
+      projectionCoordinator.refresh();
+    } else if (kind === 'map') {
       const program = projectionCoordinator.getCurrent().program;
       const currentMap = program.map.name ? musicMapKey(program) : undefined;
       waitingObserverMap =
-        observerSettings.mapConnection?.nextMap && currentMap && currentMap === confirmedObserverMap
+        observerSettings.mapConnection?.nextMap &&
+        currentMap &&
+        (currentMap === confirmedObserverMap || program.map.phase === 'gameover')
           ? currentMap
           : undefined;
       confirmedObserverMap = currentMap;
       observerSettings.waitingForMap = Boolean(waitingObserverMap);
-      cameraDirector?.hold('本图连接已变更，请核对当前地图与运镜包。');
+      cameraDirector?.invalidatePreparation('本图连接已变更，正在准备运镜。');
       projectionCoordinator.resetObserverAssist();
     } else if (kind !== 'game') {
       if (kind === 'connection') confirmedObserverMap = waitingObserverMap = undefined;
@@ -1409,6 +1474,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       options.productRuntime.controlToken,
       observerEligible,
       observerSettings,
+      () => matchContextController?.getActiveBinding() ?? undefined,
     );
   app.addHook('onRequest', async (request, reply) => {
     if (['GET', 'HEAD'].includes(request.method)) return;
@@ -1720,6 +1786,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         : null,
     pendingPerformanceEvidence: () => performanceContext?.exportMemory() ?? [],
     pendingJournalEvidence: () => sessionJournal?.pendingEvidence() ?? [],
+    diagnosticDelivery: () => diagnosticDelivery.snapshotStatus(),
     retainedDiagnosticBatches: () => diagnosticDelivery.retainedBatches(),
     beginPerformanceExport: () =>
       performanceContext?.beginExport() ?? Promise.resolve(async () => {}),

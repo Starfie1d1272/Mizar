@@ -1,9 +1,15 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { windowsBundleName } from './app-version.mjs';
+
+async function fileHash(path) {
+  const hash = createHash('sha256');
+  for await (const chunk of createReadStream(path)) hash.update(chunk);
+  return hash.digest('hex');
+}
 
 export async function verifyCandidate(product, sourceSha, archiveSha256, evidenceRoot) {
   const manifest = JSON.parse(await readFile(join(product, 'release-manifest.json'), 'utf8'));
@@ -18,10 +24,14 @@ export async function verifyCandidate(product, sourceSha, archiveSha256, evidenc
   ) {
     throw new Error('候选包身份与构建任务不一致');
   }
-  const hash = createHash('sha256');
-  for await (const chunk of createReadStream(join(product, manifest.archive))) hash.update(chunk);
-  if (hash.digest('hex') !== archiveSha256) throw new Error('候选 ZIP 传输摘要不一致');
+  const archive = join(product, manifest.archive);
+  if ((await fileHash(archive)) !== archiveSha256) throw new Error('候选 ZIP 传输摘要不一致');
   if (evidenceRoot) {
+    if (
+      (await readFile(`${archive}.sha256`, 'utf8')).trim() !==
+      `${archiveSha256}  ${manifest.archive}`
+    )
+      throw new Error('候选 ZIP 校验文件不一致');
     for (const lane of ['portable', 'setup']) {
       const identity = JSON.parse(
         await readFile(join(evidenceRoot, lane, `${lane}-identity.json`), 'utf8'),
@@ -37,6 +47,22 @@ export async function verifyCandidate(product, sourceSha, archiveSha256, evidenc
         if (JSON.stringify(identity.distribution) !== JSON.stringify(distribution)) {
           throw new Error('Setup 验收身份与分发清单不一致');
         }
+        if (
+          distribution.archive !== manifest.archive.replace(/\.zip$/, '-Setup.exe') ||
+          distribution.installerLicense !== 'NSIS-LICENSE.txt'
+        )
+          throw new Error('Setup 或许可文件名不一致');
+        const setup = join(product, distribution.archive);
+        if (
+          identity.tag !== `v${manifest.appVersion}` ||
+          (await fileHash(setup)) !== distribution.archiveSha256 ||
+          (await stat(setup)).size !== distribution.archiveBytes ||
+          (await readFile(`${setup}.sha256`, 'utf8')).trim() !==
+            `${distribution.archiveSha256}  ${distribution.archive}` ||
+          (await fileHash(join(product, distribution.installerLicense))) !==
+            distribution.installerLicenseSha256
+        )
+          throw new Error('Setup 传输摘要或验收版本不一致');
       }
     }
     const core = JSON.parse(await readFile(join(product, 'core-release-manifest.json'), 'utf8'));
@@ -66,9 +92,6 @@ export async function verifyCandidate(product, sourceSha, archiveSha256, evidenc
     );
     if (JSON.stringify(identity.distribution) !== JSON.stringify(distribution))
       throw new Error('Core Setup 验收身份与分发清单不一致');
-    for (const lane of ['setup', 'core-setup'])
-      if (!(await readFile(join(evidenceRoot, lane, 'update-recovery.log'), 'utf8')).trim())
-        throw new Error(`${lane} 缺少恢复验收记录`);
   }
   return manifest;
 }

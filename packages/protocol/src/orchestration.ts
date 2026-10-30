@@ -28,6 +28,13 @@ export const cameraMapSchema = z
     opening: cameraShotSchema.nullable().default(null),
     openingSound: musicTrackSchema.nullable().default(null),
     rounds: z.array(cameraShotSchema).max(64).default([]),
+    pauseCandidates: z
+      .object({
+        tactical: z.array(cameraShotSchema).max(64).default([]),
+        technical: z.array(cameraShotSchema).max(64).default([]),
+      })
+      .strict()
+      .default({ tactical: [], technical: [] }),
     stages: z
       .object({
         warmup: cameraShotSchema.nullable().default(null),
@@ -76,8 +83,8 @@ export interface OrchestrationStatus {
   pack: string | null;
   isolated: boolean;
   held: boolean;
+  preparation: 'waiting' | 'preparing' | 'ready' | 'error';
   request: 'idle' | 'submitted' | 'queued' | 'rejected' | 'unknown';
-  execution: 'unconfirmed';
   current: string | null;
   message: string;
 }
@@ -91,6 +98,9 @@ export interface MulnxToolView {
 export interface OrchestrationView {
   tool?: MulnxToolView;
   preset: OrchestrationPreset;
+  activePresetId: string;
+  presets: { id: string; preset: OrchestrationPreset }[];
+  automaticEnabled: boolean;
   ready: boolean;
   status: OrchestrationStatus;
 }

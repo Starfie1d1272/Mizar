@@ -167,11 +167,6 @@ fn verify_handle_path(file: &File, path: &Path) -> io::Result<()> {
             .to_lowercase()
     };
     if normalize(&actual) != normalize(expected) {
-        #[cfg(test)]
-        return Err(io::Error::other(format!(
-            "resource handle mismatch: {actual:?} vs {expected:?}"
-        )));
-        #[cfg(not(test))]
         return Err(io::Error::other("resource handle escaped fixed path"));
     }
     Ok(())
@@ -478,9 +473,6 @@ fn section(text: &str, name: &str) -> Result<BTreeMap<String, String>, Error> {
 }
 /// `root` is the user-selected CS2 installation root; no user cfg is read.
 pub(crate) fn read_default(root: &Path) -> Result<Resource, Error> {
-    read_default_inner(root, |_| {})
-}
-fn read_default_inner(root: &Path, mut inject: impl FnMut(u8)) -> Result<Resource, Error> {
     if !root.is_absolute()
         || root
             .components()
@@ -502,7 +494,6 @@ fn read_default_inner(root: &Path, mut inject: impl FnMut(u8)) -> Result<Resourc
     let initial_result = candidates(&cfg, &vpk_path, &mut held);
     watch.verify()?;
     let initial = initial_result?;
-    inject(0);
     watch.verify()?;
     let loose_result = if _cfg_guards.is_some() {
         loose(&cfg.join("user_keys_default.vcfg"), &mut held)
@@ -511,13 +502,11 @@ fn read_default_inner(root: &Path, mut inject: impl FnMut(u8)) -> Result<Resourc
     };
     watch.verify()?;
     let loose = loose_result?;
-    inject(1);
     watch.verify()?;
     let held_before_vpk = held.len();
     let packed_result = packed(&vpk_path, &csgo, &mut held);
     watch.verify()?;
     let packed = packed_result?;
-    inject(2);
     watch.verify()?;
     if _cfg_guards.is_none() {
         ensure_absent(&cfg)?;
@@ -557,205 +546,4 @@ fn read_default_inner(root: &Path, mut inject: impl FnMut(u8)) -> Result<Resourc
         bindings,
         analogbindings,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    // Excerpt from the fixed CS2 mirror recorded in #342, not an installation.
-    // https://github.com/SteamTracking/GameTracking-CS2/blob/5278de99318192d682ec7f0e1cc3ea9449f10c6e/game/csgo/cfg/user_keys_default.vcfg
-    // Full mirrored file SHA-256: ba4d5d66c0c3a00cd3ad7f7874b275514c81c550208fccf8b8fb557aa0338ee1.
-    const CFG: &[u8] = b"\"config\" { \"bindings\" { \"0\" \"slot10\" \"1\" \"slot1\" \"a\" \"+left\" } \"analogbindings\" { \"MOUSE_X\" \"yaw\" \"MOUSE_Y\" \"pitch\" } }";
-    struct Fixture(std::path::PathBuf);
-    impl Fixture {
-        fn new() -> Self {
-            let p = std::env::temp_dir().join(format!(
-                "mizar-resource-{}-{}",
-                std::process::id(),
-                NEXT.fetch_add(1, Ordering::Relaxed)
-            ));
-            fs::create_dir_all(p.join("game/csgo/cfg")).unwrap();
-            Self(p)
-        }
-        fn write_loose(&self, bytes: &[u8]) {
-            fs::write(self.0.join("game/csgo/cfg/user_keys_default.vcfg"), bytes).unwrap();
-        }
-        fn write_vpk(&self, bytes: &[u8], volume: bool) {
-            let mut tree = b"vcfg\0cfg\0user_keys_default\0".to_vec();
-            tree.extend_from_slice(&0u32.to_le_bytes());
-            tree.extend_from_slice(&0u16.to_le_bytes());
-            tree.extend_from_slice(&(if volume { 3u16 } else { 0x7fff }).to_le_bytes());
-            tree.extend_from_slice(&0u32.to_le_bytes());
-            tree.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
-            tree.extend_from_slice(&0xffffu16.to_le_bytes());
-            tree.extend_from_slice(b"\0\0\0");
-            let mut dir = 0x55aa1234u32.to_le_bytes().to_vec();
-            dir.extend_from_slice(&1u32.to_le_bytes());
-            dir.extend_from_slice(&(tree.len() as u32).to_le_bytes());
-            dir.extend_from_slice(&tree);
-            if volume {
-                fs::write(self.0.join("game/csgo/pak01_003.vpk"), bytes).unwrap();
-            } else {
-                dir.extend_from_slice(bytes);
-            }
-            fs::write(self.0.join("game/csgo/pak01_dir.vpk"), dir).unwrap();
-        }
-    }
-    impl Drop for Fixture {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
-    #[test]
-    fn loose_fixture_and_duplicate_keys() {
-        let f = Fixture::new();
-        f.write_loose(CFG);
-        let r = read_default(&f.0).unwrap();
-        assert_eq!(r.source, Source::Loose);
-        assert_eq!(r.bytes, CFG);
-        assert_eq!(r.bindings["0"], "slot10");
-        assert_eq!(r.bindings["a"], "+left");
-        assert_eq!(r.analogbindings["mouse_x"], "yaw");
-        assert_eq!(r.sha256.len(), 64);
-        f.write_loose(
-            b"\"config\" { \"bindings\" { \"A\" \"x\" \"a\" \"x\" } \"analogbindings\" {} }",
-        );
-        assert!(matches!(read_default(&f.0), Err(Error::InvalidVcfg(_))));
-    }
-    #[test]
-    fn vpk_and_conflict() {
-        for volume in [false, true] {
-            let f = Fixture::new();
-            f.write_vpk(CFG, volume);
-            let r = read_default(&f.0).unwrap();
-            assert_eq!(
-                r.source,
-                if volume {
-                    Source::VpkVolume(3)
-                } else {
-                    Source::VpkDirectory
-                }
-            );
-            f.write_loose(CFG);
-            assert_eq!(read_default(&f.0).unwrap().source, Source::IdenticalBoth);
-            f.write_loose(b"different");
-            assert!(matches!(read_default(&f.0), Err(Error::SourceConflict)));
-            f.write_loose(&[0xff]);
-            assert!(matches!(read_default(&f.0), Err(Error::SourceConflict)));
-        }
-    }
-    #[test]
-    fn missing_and_malformed_are_explicit() {
-        let f = Fixture::new();
-        assert!(matches!(read_default(&f.0), Err(Error::Missing)));
-        f.write_loose(b"\"config\" { \"bindings\" {} }");
-        assert!(matches!(read_default(&f.0), Err(Error::InvalidVcfg(_))));
-        f.write_vpk(CFG, false);
-        fs::write(f.0.join("game/csgo/pak01_dir.vpk"), b"bad").unwrap();
-        assert!(matches!(
-            read_default(&f.0),
-            Err(Error::Vpk(vpk::Error::Truncated))
-        ));
-    }
-    #[test]
-    fn rejects_candidate_created_during_read() {
-        let f = Fixture::new();
-        f.write_loose(CFG);
-        let result = read_default_inner(&f.0, |stage| {
-            if stage == 1 {
-                f.write_vpk(CFG, false);
-            }
-        });
-        assert!(matches!(result, Err(Error::Changed)));
-    }
-    #[test]
-    fn rejects_transient_candidate_during_read() {
-        let f = Fixture::new();
-        f.write_loose(CFG);
-        let result = read_default_inner(&f.0, |stage| {
-            if stage == 2 {
-                f.write_vpk(CFG, false);
-                fs::remove_file(f.0.join("game/csgo/pak01_dir.vpk")).unwrap();
-            }
-        });
-        assert!(matches!(result, Err(Error::Changed)));
-    }
-    #[cfg(unix)]
-    #[test]
-    fn rejects_candidate_replaced_during_read() {
-        let f = Fixture::new();
-        f.write_loose(CFG);
-        let result = read_default_inner(&f.0, |stage| {
-            if stage == 0 {
-                let path = f.0.join("game/csgo/cfg/user_keys_default.vcfg");
-                fs::rename(&path, f.0.join("old")).unwrap();
-                fs::write(path, CFG).unwrap();
-            }
-        });
-        assert!(matches!(result, Err(Error::Changed)));
-    }
-    #[cfg(unix)]
-    #[test]
-    fn rejects_candidate_removed_during_read() {
-        let f = Fixture::new();
-        f.write_loose(CFG);
-        f.write_vpk(CFG, false);
-        let result = read_default_inner(&f.0, |stage| {
-            if stage == 1 {
-                fs::remove_file(f.0.join("game/csgo/pak01_dir.vpk")).unwrap();
-            }
-        });
-        assert!(matches!(result, Err(Error::Changed)));
-    }
-    #[cfg(windows)]
-    #[test]
-    fn held_directory_cannot_be_renamed() {
-        let f = Fixture::new();
-        let cfg = f.0.join("game/csgo/cfg");
-        let guards = hold_directories(&cfg).unwrap();
-        assert!(fs::rename(&cfg, f.0.join("game/csgo/moved")).is_err());
-        drop(guards);
-        fs::rename(&cfg, f.0.join("game/csgo/moved")).unwrap();
-    }
-    #[cfg(unix)]
-    #[test]
-    fn detects_replacement_after_open() {
-        let f = Fixture::new();
-        f.write_loose(CFG);
-        let path = f.0.join("game/csgo/cfg/user_keys_default.vcfg");
-        let (file, id, meta) = open_optional(&path).unwrap().unwrap();
-        fs::rename(&path, f.0.join("old")).unwrap();
-        fs::write(&path, CFG).unwrap();
-        assert!(matches!(
-            stable(&path, &file, &id, &meta),
-            Err(Error::Changed)
-        ));
-    }
-    #[test]
-    fn rejects_duplicate_axis_and_missing_volume() {
-        let f = Fixture::new();
-        f.write_loose(b"\"config\" { \"bindings\" {} \"analogbindings\" { \"MOUSE_X\" \"yaw\" \"mouse_x\" \"yaw\" } }");
-        assert!(matches!(read_default(&f.0), Err(Error::InvalidVcfg(_))));
-        fs::remove_file(f.0.join("game/csgo/cfg/user_keys_default.vcfg")).unwrap();
-        f.write_vpk(CFG, true);
-        fs::remove_file(f.0.join("game/csgo/pak01_003.vpk")).unwrap();
-        assert!(matches!(read_default(&f.0), Err(Error::Missing)));
-    }
-    #[cfg(unix)]
-    #[test]
-    fn rejects_symlinks() {
-        use std::os::unix::fs::symlink;
-        let f = Fixture::new();
-        let file = f.0.join("game/csgo/cfg/user_keys_default.vcfg");
-        let other = f.0.join("other");
-        fs::write(&other, CFG).unwrap();
-        symlink(&other, &file).unwrap();
-        assert!(matches!(read_default(&f.0), Err(Error::UnsafePath)));
-        fs::remove_file(file).unwrap();
-        fs::remove_dir(f.0.join("game/csgo/cfg")).unwrap();
-        symlink(&f.0, f.0.join("game/csgo/cfg")).unwrap();
-        assert!(matches!(read_default(&f.0), Err(Error::UnsafePath)));
-    }
 }

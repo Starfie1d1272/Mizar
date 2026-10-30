@@ -1,17 +1,17 @@
 import { PROGRAM_SCENES, type ProgramSceneId } from '@mizar/protocol/program-scenes';
 
 export const OBS_COLLECTION = 'Mizar';
-export const OBS_CAPTURE_INPUT = 'Mizar · CS2 Game Capture';
+export const OBS_CAPTURE_INPUT = '游戏画面';
 export const OBS_WIDTH = 1920;
 export const OBS_HEIGHT = 1080;
 
 export function obsSceneName(sceneId: ProgramSceneId): string {
   const scene = PROGRAM_SCENES.find((item) => item.id === sceneId)!;
-  return `Mizar · ${scene.title}`;
+  return scene.id === 'bp' ? '地图禁选' : scene.title;
 }
 
 export function obsBrowserInputName(sceneId: ProgramSceneId): string {
-  return `Mizar · ${sceneId} · Program`;
+  return `${obsSceneName(sceneId)}画面`;
 }
 
 export function obsDesiredScenes(baseUrl: string) {

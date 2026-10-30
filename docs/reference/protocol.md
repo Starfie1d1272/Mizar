@@ -4,17 +4,19 @@
 
 产品运行时的 `/health.product.appVersion` 来自同包 artifact 元数据，与 `gitSha` 一同供高级设置展示；开发运行或旧包缺少版本号时明确显示不可用。
 
+`GET /local/v1/resource-library` 面向本机受信任页面，汇总示例素材状态及 MulNX 当前版本、已检查版本和镜头来源名称。对应提供方不可用时返回 `null`，不推断安装状态；该查询不返回路径，也不修改资源。MulNX 更新检查继续使用现有 `/operator/orchestration` 控制入口。
+
 ## 契约来源
 
-| 契约 | 代码入口 |
-| --- | --- |
-| 比赛文档、赛程窗口 | [context.ts](../../packages/protocol/src/context.ts) |
-| 公开快照、可靠事件 | [output.ts](../../packages/protocol/src/output.ts) |
-| 本地通道版本 | [version.ts](../../packages/protocol/src/version.ts) |
-| 本地消息与接收校验 | [协议源码](../../packages/protocol/src) |
+| 契约                     | 代码入口                                                           |
+| ------------------------ | ------------------------------------------------------------------ |
+| 比赛文档、赛程窗口       | [context.ts](../../packages/protocol/src/context.ts)               |
+| 公开快照、可靠事件       | [output.ts](../../packages/protocol/src/output.ts)                 |
+| 本地通道版本             | [version.ts](../../packages/protocol/src/version.ts)               |
+| 本地消息与接收校验       | [协议源码](../../packages/protocol/src)                            |
 | 节目场景、编排状态与展示 | [program-scenes.ts](../../packages/protocol/src/program-scenes.ts) |
-| RivalHub 来源解析 | [适配器源码](../../packages/rivalhub/src) |
-| HUD 配置与预设文件 | [配置包公共入口](../../packages/hud-config/src/index.ts) |
+| RivalHub 来源解析        | [适配器源码](../../packages/rivalhub/src)                          |
+| HUD 配置与预设文件       | [配置包公共入口](../../packages/hud-config/src/index.ts)           |
 
 Mizar 契约使用严格结构和大小限制，未知字段或不支持版本拒绝。契约分别演进，不同步提升所有通道版本；新增字段先更新契约、解析器与样例，破坏性变化升级相应版本。外部提供方 DTO 的兼容策略由其适配器维护，不能直接替代 Mizar 契约。
 
@@ -32,13 +34,13 @@ RivalHub 输入同时接受 `rivalhub.broadcast-manifest.v1` 与 `.v2`。v1 的�
 
 来源、修订号、新鲜度和诊断属于获取结果的外层信息，不进入比赛事实。Steam64 使用字符串；参赛方身份与当前 CT/T 阵营分开。身份至少区分 `unbound / resolving / matched / degraded / mismatch`。
 
-| 入口 | 用途 |
-| --- | --- |
-| `GET /local/v1/match-document` | 当前统一比赛资料及来源信息 |
-| `GET /local/v1/tournament` | 本地赛事库、当前选择和相邻赛程 |
-| `POST /operator/local-match/create`、`select`、`save` | 创建、选择、保存本地比赛 |
-| `POST /operator/local-event/save`、`/operator/local-schedule/reorder` | 赛事资料与比赛顺序 |
-| `POST /operator/local-asset` | 受大小限制的 PNG/JPEG/WebP 资源 |
+| 入口                                                                  | 用途                            |
+| --------------------------------------------------------------------- | ------------------------------- |
+| `GET /local/v1/match-document`                                        | 当前统一比赛资料及来源信息      |
+| `GET /local/v1/tournament`                                            | 本地赛事库、当前选择和相邻赛程  |
+| `POST /operator/local-match/create`、`select`、`save`                 | 创建、选择、保存本地比赛        |
+| `POST /operator/local-event/save`、`/operator/local-schedule/reorder` | 赛事资料与比赛顺序              |
+| `POST /operator/local-asset`                                          | 受大小限制的 PNG/JPEG/WebP 资源 |
 
 队伍复用通过明确 `teamId` 选择，不按同名猜测；更新模板不改写其他比赛已有快照。保存核对当前上下文修订号、结构和引用，持久化使用原子替换。
 
@@ -56,7 +58,7 @@ RivalHub 资料先经过结构与语义校验，阻断错误不进入 Core。比
 
 `GET /local/v1/observer` 提供组件版本、连接活动状态与来源健康。工作台通过原生 `observer_command` 提交连接和停止意图，Host 核对当前游戏实例后调用 `POST /operator/runtime/observer`；该接口使用本次运行的私有能力，接受启动、停止和游戏会话续约。入口、运行时、Steam API 及输出路径由安装与运行数据目录推导。连接密码经 stdin 传递，状态响应只含运行摘要。观察器事件进入 Lookahead 来源，消费边界沿用正式节目与私有辅助的独立投影。
 
-`GET /local/v1/observer-assist` 返回观察辅助 `settings`、游戏自动操作 `gameAutomation`、当前连接端点摘要与修订号。受信任本机 Origin 通过 `POST /operator/observer-assist` 通过 `configure`、`configure-game` 分别保存偏好，通过 `connection` 提交本场连接。密码仅随本次服务会话保存在内存，比赛切换清除本场连接。相同有效值再次保存不更新修订或通知消费者；提示时间只更新辅助计算：单改 `leadSeconds` 保留缓冲与测量历史并立即重新投影；改变 `expectedDelaySeconds` 清空旧缓冲与测量历史，从新收到的事件计时。`revision` 仅用于辅助启停、游戏操作与本场连接准备。
+`GET /local/v1/observer-assist` 返回观察辅助 `settings`、游戏自动操作 `gameAutomation`、当前连接端点摘要与修订号。受信任本机 Origin 通过 `POST /operator/observer-assist` 通过 `configure`、`configure-game` 分别保存偏好，通过 `connection` 提交本场连接。密码仅随本次服务会话保存在内存，比赛切换清除本场连接。相同有效值再次保存不更新修订或通知消费者；提示时间只更新辅助计算：单改 `leadSeconds` 保留缓冲与测量历史并立即重新投影；旧配置的 `expectedDelaySeconds` 读取时忽略。`revision` 仅用于辅助启停、游戏操作与本场连接准备。
 
 私有 `assist` 通道使用 schema 3；开启时携带来源状态、时间参数、`timingBasis: estimated`、只读 `measuredDelaySeconds`、`waitingReason`、距首个提示窗口的 `nextWindowSeconds` 与最多六条击杀提示，包含当前 Program 昵称、唯一观战槽位、预计发生倒计时。预告始终按配置延迟估算，测量不改变配置或阻止显示；无事件和缓冲为正常等待状态。关闭时沿用基础辅助载荷。Program、雷达和公开输出继续使用各自契约。
 
@@ -127,13 +129,13 @@ POST /operator/obs/ensure 在输出停止时自动创建／启用 Mizar 集合�
 
 WebSocket 子协议为 `mizar.local.v1`，路由为 `/local/v1/{channel}`。
 
-| 通道 | 内容 |
-| --- | --- |
-| `program` | 正式节目数据；不含未来信息或原始输入 |
-| `radar` | 雷达领域帧，不绑定具体渲染框架 |
-| `operator` | 制作控制需要的上下文、绑定与诊断 |
-| `assist` | 当前辅助通道可用性与游标；未冻结能力不预留虚构字段 |
-| `program-cue` | 正式节目精确事件形成的短时展示提示 |
+| 通道          | 内容                                               |
+| ------------- | -------------------------------------------------- |
+| `program`     | 正式节目数据；不含未来信息或原始输入               |
+| `radar`       | 雷达领域帧，不绑定具体渲染框架                     |
+| `operator`    | 制作控制需要的上下文、绑定与诊断                   |
+| `assist`      | 当前辅助通道可用性与游标；未冻结能力不预留虚构字段 |
+| `program-cue` | 正式节目精确事件形成的短时展示提示                 |
 
 前四者为完整快照，每个消费者只保留一个正在发送和一个最新待发值；新值覆盖旧待发，慢消费者不阻塞其他消费者。重连获取当前基线，不补发历史。
 
@@ -147,21 +149,20 @@ WebSocket 子协议为 `mizar.local.v1`，路由为 `/local/v1/{channel}`。
 
 `program-scenes.director.next` 仅表示后续节目预告，不是切场命令。`nextStatus` 区分 `predicted / awaiting / complete`，`nextReason` 解释证据不足或节目结束；`readyToTake` 是编排服务已满足计时门槛的候选，仍受手动保持、数据有效性与 OBS 确认约束。客户端不得根据预告自行切场或推导比赛阶段。新增字段保持可选以兼容旧快照；当前服务始终提供明确预告状态。
 
-
-| 入口 | 语义 |
-| --- | --- |
-| `GET /local/v1/readiness` | 汇总数据、场景和 OBS 的当前就绪情况 |
-| `GET /local/v1/production`、`POST /operator/production` | 制作生命周期及带预期修订号的 `enter / hide / finish / shutdown`（Host 正常退出复用安全收尾；成功后拒绝新进入，允许退出重试） |
-| `GET /local/v1/roster-candidate` | 当前可信首发候选 |
-| `POST /operator/local-match/capture`、`create-from-server` | 基于候选与上下文修订号保存；不信任客户端提交的玩家列表 |
-| `GET /local/v1/desktop-overlay`、`POST /operator/desktop-overlay` | 仅本机覆盖显隐策略，不更改 OBS 节目 |
-| `GET /local/v1/obs/confidence` | 当前场景缩略图；请求期间切场则返回空 |
-| `POST /operator/obs/launch-target` | 本地 Origin 保护的 OBS 程序路径解析，供桌面 Host 独立启动；不返回密码、不启动进程 |
-| `GET /local/v1/program-scenes` | 当前场景、修订号、候选、阻断与编排状态 |
-| `POST /operator/program-scene` | 有修订号校验的人工切场 |
-| `POST /operator/program-director` | `{action: "resume", expectedRevision}` 恢复自动；`{action: "warmup", scene: "waiting" \| "gameplay", expectedRevision}` 修改热身自动接续选择，不改变手动/自动模式 |
-| `GET /local/v1/program-presentation` | 有限节目摘要与相邻赛程，不返回完整比赛文档 |
-| `GET /local/v1/production-guidance` | 私有、只读、不缓存的制作提示与平台状态 |
+| 入口                                                              | 语义                                                                                                                                                              |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /local/v1/readiness`                                         | 汇总数据、场景和 OBS 的当前就绪情况                                                                                                                               |
+| `GET /local/v1/production`、`POST /operator/production`           | 制作生命周期及带预期修订号的 `enter / hide / finish / shutdown`（Host 正常退出复用安全收尾；成功后拒绝新进入，允许退出重试）                                      |
+| `GET /local/v1/roster-candidate`                                  | 当前可信首发候选                                                                                                                                                  |
+| `POST /operator/local-match/capture`、`create-from-server`        | 基于候选与上下文修订号保存；不信任客户端提交的玩家列表                                                                                                            |
+| `GET /local/v1/desktop-overlay`、`POST /operator/desktop-overlay` | 仅本机覆盖显隐策略，不更改 OBS 节目                                                                                                                               |
+| `GET /local/v1/obs/confidence`                                    | 当前场景缩略图；请求期间切场则返回空                                                                                                                              |
+| `POST /operator/obs/launch-target`                                | 本地 Origin 保护的 OBS 程序路径解析，供桌面 Host 独立启动；不返回密码、不启动进程                                                                                 |
+| `GET /local/v1/program-scenes`                                    | 当前场景、修订号、候选、阻断与编排状态                                                                                                                            |
+| `POST /operator/program-scene`                                    | 有修订号校验的人工切场                                                                                                                                            |
+| `POST /operator/program-director`                                 | `{action: "resume", expectedRevision}` 恢复自动；`{action: "warmup", scene: "waiting" \| "gameplay", expectedRevision}` 修改热身自动接续选择，不改变手动/自动模式 |
+| `GET /local/v1/program-presentation`                              | 有限节目摘要与相邻赛程，不返回完整比赛文档                                                                                                                        |
+| `GET /local/v1/production-guidance`                               | 私有、只读、不缓存的制作提示与平台状态                                                                                                                            |
 
 场景状态的可选 `introRevision` 标识一次开场 Take：准备期间使用本次 `preparing.revision`，成功切入后保留该标识；恢复自动或切到其他场景不创建新的开场实例。浏览器只保留开场标识、时长与最后接受的服务端展示位置，状态读取中断时暂停，恢复后同步 Director 锚点，不保留旧遥测或建立游戏时钟。
 
@@ -171,10 +172,10 @@ WebSocket 子协议为 `mizar.local.v1`，路由为 `/local/v1/{channel}`。
 
 ## HUD 配置
 
-| 入口 | 内容 |
-| --- | --- |
-| `GET /local/v1/hud-config` | 已启用的解析快照、修订号与 ETag |
-| `GET /operator/hud-config` | 完整编辑文档、启用状态与编辑修订号 |
+| 入口                        | 内容                                                             |
+| --------------------------- | ---------------------------------------------------------------- |
+| `GET /local/v1/hud-config`  | 已启用的解析快照、修订号与 ETag                                  |
+| `GET /operator/hud-config`  | 完整编辑文档、启用状态与编辑修订号                               |
 | `POST /operator/hud-config` | `save-resource / save-as / activate-preset / import-preset-pack` |
 
 保存不改变播出快照。启用相同解析内容保持播出 ETag，不同内容才产生新快照。每次修改带 `expectedEditorRevision`，在串行提交队列内比较；过期返回 `409`，无效命令 `400`，持久化失败 `500`。冲突保留本地草稿，不自动覆盖或重试；错误响应不泄露底层敏感信息。创建响应明确返回资源身份，不能靠前后列表差推断。
@@ -221,10 +222,11 @@ WebSocket 校验 Origin、子协议和消息大小，通道仅服务端向客户
 
 `program-scenes` 的 available.gameplay 由新鲜正式输入决定，手动选择不建立赛事绑定；自动编排和非 Gameplay 场景仍受既有可信证据门槛约束。Director 的可选 gg 为 `{ mapEpoch, remainingMs }` 或 null，表示当前自动 Gameplay 的可信单图结束过渡。消费者只在当前场景/执行匹配时显示 GG，不自行推导获胜事实或启动 3 秒倒计时。
 
-
 Host 私有 `POST /operator/runtime/local-match-exit` 仅允许回环监听、无 Origin 和有效 `x-runtime-token`。`prepare` 为处于准备状态、等待画面的本地独立比赛生成 `{ticket, matchId, contextRevision}`，非适用绑定返回空资格；Host 完成游戏收尾并确认全机没有 CS2 后，以 `settle` 原样回传资格，核对比赛、制作修订和来源代际未变化后接纳关闭期间的接收游标推进，再以 `confirm` 确认该游标。`settle` 每张票据只能成功一次；其后再有新数据、身份变化或重复确认均拒绝。`invalidate` 在新的托管游戏启动前撤销资格。票据与令牌不进入普通本机视图。资格不持久化，恢复的当前选择需通过 Host 重新确认。普通删除确认仍要求本机 Origin，并在最终持久化提交前重新验证活动引用和退出资格。
 
 ### OBS 配置实例归属
+
+本机操作员 `POST /operator/obs/audio-mode` 接收音频绑定修订、明确的 `mode`（`desktop`、`independent` 或取消等待的 `cancel`）和可选的桌面来源短期选择标识；省略标识时自动选择或创建默认桌面来源。直播或录制中也可切换；场景引用迁移和受管音乐监听转换须完成并回读，切换中断保留待处理状态。独立配置缺失时自动准备，解说应用未运行时返回等待状态并保持桌面混音；用户可取消等待；取消只撤销当前等待，保持实际模式及来源。切换结果和设备关系仅为本机配置，不进入公开节目投影；桌面混音不能分别控制游戏与解说。
 
 本机操作员 `POST /operator/obs/remote-commentary/applications` 读取 OBS 应用音频的窗口候选，返回偏好修订与短期候选标识；必要时在空闲的 Mizar 场景集合中创建禁用探测来源。`POST /operator/obs/remote-commentary/application` 接收修订和候选标识，重新核对当前 OBS 连接、集合、探测来源与窗口后保存应用偏好。候选标识一次性使用，过期或上下文变化时拒绝；这些接口要求受信任的本机 Origin，不向公共节目接口暴露窗口信息。
 
@@ -240,7 +242,6 @@ Host 私有 `POST /operator/runtime/local-match-exit` 仅允许回环监听、�
 
 私有 operator 身份诊断的 `affectsExpectedLineup` 由 identity owner 对缺少 Steam64 的 canonical 记录按 `isStarter` 赋值；`false` 保留替补技术诊断但不触发首发恢复操作，`null` 表示旧协议未提供范围；同时存在未知上场账号时先给中性资料来源核对，不断言当前账号不匹配。单独的未标范围缺失诊断不产生当前名单错误。页面不从整体 identity 状态、错图或部分观测推断缺失记录已上场，也不按昵称匹配身份。
 
-
 ### 仅名单差异的在线展示例外
 
 RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对网站首发。Mizar 仅在授权的在线本场资料新鲜、合法当前地图绑定、新鲜当前十名唯一真人且 CT/T 各五人、两方均有当前登记账号证明并与队伍阵营一致时发出。实际账号与预期首发或替补不同是唯一身份问题；资料缺项、重复账号、队伍归属歧义、阵营冲突、错图及过期输入不能获得例外。
@@ -255,7 +256,7 @@ RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对�
 
 `GET /local/v1/rivalhub-connection` 的 `syncHealth` 是仅供制作人员的连接健康投影，不进入正式节目或网站输出。沿用当前关联、现场资格与公开输出身份；有明确绑定地图、完整当前首发与正式 live 观测后开始 15 秒宽限。状态区分未启用、主动停用、其他设备归属、等待、网站正在接收与需要处理；只有当前认领、生产实例、会话、输入代际和地图执行的新 LIVE 接受回执确认恢复。可靠开局确认、认领成功、普通丢帧、旧执行回执和手动补分均不确认恢复。异常标识跨短暂读取缺失与重试保持，真实恢复后下一次异常生成新标识；切比赛或执行重新宽限。
 
-`POST /operator/rivalhub/source/retry` 复用本机来源校验与现场、名单、权限守卫。有当前开局确认时解除实时发送退避，下一次只发送最新快照；未确认开局时重新认领本场，等待新遥测建立当前授权的可靠开局，不重放历史赛果。临时 LIVE 请求失败采用最高 8 秒的有界退避，不缓存或重发旧帧。认领与停止操作在服务端互斥；主动停止先在本次服务运行中禁止本场实时和可靠发送，远端释放失败仍保留本地禁发，只有明确重新认领成功才解除。其他设备归属按比赛限定；HTTP 403 只证明权限失效，不能据此猜测另一台设备。现有诊断与可靠赛果守卫保持独立。
+`POST /operator/rivalhub/source/retry` 复用本机来源校验与现场、名单、权限守卫。有当前开局确认时解除实时发送退避，下一次只发送最新快照；未确认开局时重新认领本场，等待新遥测建立当前授权的可靠开局，不重放历史赛果。LIVE 在收到 HTTP 响应前发生明确的连接重置、连接拒绝、网络不可达、暂态 DNS 故障或超时时，采用 1 秒起、最高 2 秒的退避；服务器拒绝、响应异常、广播失败及其它未确认原因继续采用最高 8 秒退避。失败类别切换重新计数，成功接收或切换地图执行清除旧退避；新执行仍须等待其可靠开局确认。退避结束只发送最新快照，不缓存或重发旧帧。认领与停止操作在服务端互斥；主动停止先在本次服务运行中禁止本场实时和可靠发送，远端释放失败仍保留本地禁发，只有明确重新认领成功才解除。其他设备归属按比赛限定；HTTP 403 只证明权限失效，不能据此猜测另一台设备。现有诊断与可靠赛果守卫保持独立。
 
 ## 本机节目音乐
 
@@ -267,7 +268,7 @@ RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对�
 
 ## 本机地图编排控制
 
-`GET /local/v1/orchestration` 读取私有预设与请求状态；`POST /operator/orchestration` 接收 configure、connect、disconnect、resume、hold、skip、audition、browser。仅回环模式及允许来源可写，恢复/试播绑定当前上下文与连接代际。JSON 上限 256 KiB，严格结构由 `@mizar/protocol/orchestration` 和 Companion 路由共同校验。不接受任意 Provider 地址、控制台命令或文件路径；`isolated` 仅表示专用包磁盘文件符合隔离要求；恢复自动另行应用并查询活动包与自动列表，状态查询不证明资源加载成功。queued 只表示网关入队。具体语义及候选实机验收见[地图自动编排](orchestration.md)。
+`GET /local/v1/orchestration` 读取私有预设与请求状态；`POST /operator/orchestration` 接收 configure、create-preset、save-preset、activate-preset、set-automatic、connect、disconnect、resume、hold、skip、audition、browser。`activePresetId` 标识活动预设，`presets` 包含各预设的 `id` 和 `preset` 草稿，`preset` 为独立活动快照。`create-preset` 可带 `sourceId` 复制草稿，省略则创建空预设，响应返回 `createdPresetId`；`save-preset` 带 `id` 和 `preset`，`activate-preset` 带 `id`，仅启用会更新活动快照。旧 `configure` 仍直接更新活动配置。`automaticEnabled` 是持久偏好，`set-automatic` 带布尔 `enabled`，仅准备阶段保存且不发送游戏命令；进入制作时采纳，现场 hold/resume 只改变本次意图。仅回环模式及允许来源可写，恢复/试播绑定当前上下文与连接代际。JSON 上限 256 KiB，严格结构由 `@mizar/protocol/orchestration` 和 Companion 路由共同校验。不接受任意 Provider 地址、控制台命令或文件路径；`isolated` 仅表示专用包磁盘文件符合隔离要求；`held` 表示人工意图，`preparation` 为 waiting / preparing / ready / error，独立表示准备状态。连接与地图变化后自动应用预设并查询活动包和自动列表；自动及手动播放均要求回读成功，状态查询不证明资源加载成功。`request` 的 queued 只表示网关入队，不证明实际播放或停止。`audition` 通过 `stage` 和 `index` 选择本图已保存镜头：开场及单个阶段镜头不传索引，回合使用 `round` 与索引，暂停候选使用 `tactical` / `technical` 与索引。上一条、下一条和重播由客户端保存选择并再次提交；`hold` 停止并保留人工意图。具体语义及候选实机验收见[地图自动编排](orchestration.md)。
 
 桌面 `attach_external_cs2` 仅允许准备中心调用，参数为所选 PID、创建标识和制作修订；可执行路径由 Host 既有安装发现读取。`cs2_config_status` 的 `borrowed` 表示仍持有外部借用意图，`externalDetached` 表示已解除；`running` 只描述本次可用实例，均不代替全机 CS2 停机证明。借用不写受管事务；退出沿用 `finish_workspace` 安全制作收尾后解除，失败保留待重试状态。实际边界见[地图自动编排](orchestration.md)。
 
@@ -283,15 +284,16 @@ RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对�
 
 `POST /operator/local-match/create` 可选 `eventName` 用于未指定 `eventId` 时自动创建赛事（去除首尾空白、1–128 字）；已有 `eventId` 保留原赛事身份与名称。
 
-
 ### 观战连接命令
 
 端点使用规范十进制 IPv4 与有效端口；IPv4 各分段除单独的 `0` 外不得有前导零。普通输入、高级端点和命令 formatter 使用同一校验，拒绝不规范地址，不静默改写。
 
-本机观战配置接受裸数字 IPv4:port，或只含一次 `connect` 与可选一次 `password` 的受限命令；两条命令可交换顺序，支持大小写、外围空格、参数引号和一个尾分号。拒绝重复／额外命令、无效端口与注入字符，密码字符范围保持不变。27025／27026 固定映射为早源／节目源；其他端点需要显式高级配置。`@mizar/protocol/assist` 的 `formatObserverConnection` 统一输出 password-first 的安全节目源命令；高级端点往返解析需保留原显式早源与节目源配置。
+本机观战配置接受裸数字 IPv4:port，或只含一次 `connect` 与可选一次 `password` 的受限命令；两条命令可交换顺序，支持大小写、外围空格、参数引号和一个尾分号。拒绝重复／额外命令、无效端口与注入字符，密码字符范围保持不变。27025／27026 固定映射为早源／节目源；其他端点需要显式高级配置。`@mizar/protocol/assist` 的 `formatObserverConnection` 统一输出 connect 在前、password 在后的安全节目源命令；空密码和含空格密码使用引号；高级端点往返解析需保留原显式早源与节目源配置。
 
 ### 本机混音控制
 
 `GET /local/v1/mixer` 返回 `MixerStatus`；`POST /operator/mixer` 接受 `MixerCommand` 并返回 `MixerCommandResult`。协议类型位于 `@mizar/protocol/mixer`。revision 标识后端观察到的绑定上下文，过期命令必须拒绝；写入结果只有经回读确认才返回 `confirmed`。前三路音量是 OBS 观察值，音乐音量是独立的本机 master 配置。音乐条目的可选 `gain` 缺省时使用所属组 `volume`，通过音乐配置保存，旧的组音量命令语义不变。
 
 `POST /operator/music` 的 `play` 动作接受 `group` 和 `entryId`；旧客户端可发送 `trackId`，仅在组内唯一匹配时有效。两个字段同时提供时必须指向同一条目。
+
+OBS 自动准备使用中文场景与来源名称：游戏画面、游戏声音、其他解说、桌面声音、麦克风、音乐和音效。旧版固定名称在停止输出后原位更新，已记录的音频来源按 UUID 复用；名称冲突时保留已有来源并提示处理，自动创建的音频来源使用可读数字后缀。来源配置、音轨和实际声音仍需在 OBS 试听核对。

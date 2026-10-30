@@ -23,7 +23,7 @@
   "apps/companion/test/local-web-host.integration.test.ts": {
     "ARCH_DESIGN_LEGACY_NAMESPACE | source | --broadcast-shell-topbar-height": 2
   },
-  "apps/web/src/bp/bp.css": {
+  "packages/hud-view/src/bp.css": {
     "ARCH_DESIGN_RAW_COLOR | .bp-scene | background-color: #080d16": 1,
     "ARCH_DESIGN_RAW_COLOR | .bp-scene | background-image: radial-gradient(ellipse at 8% 45%, rgba(49, 152, 173, 0.18), transparent 34%),\n    radial-gradient(ellipse at 92% 52%, rgba(191, 100, 58, 0.16), transparent 35%),\n    linear-gradient(145deg, #0c1420 0%, #080d16 48%, #111018 100%)": 1,
     "ARCH_DESIGN_LEGACY_NAMESPACE | .bp-card | --bp-accent": 1,
@@ -242,8 +242,8 @@
     "ARCH_DESIGN_RAW_COLOR | .product-topbar__actions .product-output-link:hover | color: #ffffff": 1,
     "ARCH_DESIGN_LEGACY_NAMESPACE | .product-topbar :is(a, button):focus-visible | --broadcast-shell-accent": 1
   },
-  "apps/web/src/program/GameplayHud.tsx": {},
-  "apps/web/src/program/gameplay-hud.css": {},
+  "packages/hud-view/src/GameplayHud.tsx": {},
+  "packages/hud-view/src/gameplay-hud.css": {},
   "apps/web/src/program/testing/ProgramFoundationProbe.css": {
     "ARCH_DESIGN_TOKEN_OWNER | .program-foundation-probe | --rh-program-font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif": 1,
     "ARCH_DESIGN_TOKEN_OWNER | .program-foundation-probe | --rh-program-text: #f3f6fa": 1,
@@ -263,22 +263,22 @@
     "ARCH_DESIGN_TOKEN_OWNER | .program-visual-not-found | --rh-program-muted: #aab4c0": 1,
     "ARCH_DESIGN_TOKEN_OWNER | .program-visual-not-found | --rh-program-radius-md: 8px": 1
   },
-  "apps/web/src/program/widgets/focused-player/focused-player.css": {},
-  "apps/web/src/program/widgets/match-header/match-header.css": {
+  "packages/hud-view/src/widgets/focused-player/focused-player.css": {},
+  "packages/hud-view/src/widgets/match-header/match-header.css": {
     "ARCH_DESIGN_TOKEN_OWNER | .match-header__timeout-panel--a | --match-header-panel-shift: -8px": 1,
     "ARCH_DESIGN_TOKEN_OWNER | .match-header__timeout-panel--b | --match-header-panel-shift: 8px": 1
   },
-  "apps/web/src/program/widgets/player-rails/player-rails.css": {},
-  "apps/web/src/program/widgets/player-status-effects/PlayerStatusEffects.tsx": {
+  "packages/hud-view/src/widgets/player-rails/player-rails.css": {},
+  "packages/hud-view/src/widgets/player-status-effects/PlayerStatusEffects.tsx": {
     "ARCH_DESIGN_TOKEN_OWNER | source | --rh-player-status-smoke: --rh-player-status-smoke": 1,
     "ARCH_DESIGN_TOKEN_OWNER | source | --rh-player-status-burning: --rh-player-status-burning": 1,
     "ARCH_DESIGN_TOKEN_OWNER | source | --rh-player-status-flashed: --rh-player-status-flashed": 1
   },
-  "apps/web/src/program/widgets/player-status-effects/player-status-effects.css": {
+  "packages/hud-view/src/widgets/player-status-effects/player-status-effects.css": {
     "ARCH_DESIGN_TOKEN_OWNER | .player-status-effects | --rh-player-status-anchor-x: 10%": 1,
     "ARCH_DESIGN_TOKEN_OWNER | .player-status-effects[data-anchor='right'] | --rh-player-status-anchor-x: 90%": 1
   },
-  "apps/web/src/program/widgets/radar/Radar.tsx": {},
+  "packages/hud-view/src/widgets/radar/Radar.tsx": {},
   "apps/web/test/gameplay-hud.test.tsx": {},
   "apps/web/test/hud-console-drafts.test.ts": {
     "ARCH_DESIGN_RAW_COLOR | source | brandColor: #aa66ff": 2,

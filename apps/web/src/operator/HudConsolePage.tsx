@@ -1,3 +1,4 @@
+import { useRadarViewSource } from '../realtime/radar-view-source';
 import { SessionContext } from '../preparation/SessionContext';
 import { downloadHudPresetFile, readHudPresetFile } from './hud-preset-file';
 import { Button, Select } from '../ui';
@@ -49,7 +50,7 @@ import {
   type ProgramFixtureId,
 } from '../program/fixtures';
 import { radarSnapshotForProgramFixture } from '../program/fixtures/radar-fixtures';
-import { hasAcceptedProgramSnapshot } from '../program/presentation-boundary';
+import { hasAcceptedProgramSnapshot } from '@mizar/hud-view';
 
 import { HudCanvasPreview } from './HudCanvasPreview';
 import { HudConsoleWorkspaces } from './HudConsoleWorkspaces';
@@ -153,6 +154,7 @@ export function HudConsolePage() {
   const onAir = useHudConfigClient(!visualFixtureMode);
   const program = useProgramConnection();
   const radarClient = useLocalChannelClient('radar');
+  const radarSource = useRadarViewSource(radarClient);
   const radar = useSyncExternalStore(
     radarClient.subscribe,
     radarClient.getSnapshot,
@@ -1113,7 +1115,7 @@ export function HudConsolePage() {
                   }
                   mapBackground={mapBackground}
                   radarSnapshot={activeRadarSnapshot}
-                  radarClient={activePreviewSource === 'current-live' ? radarClient : undefined}
+                  radarSource={activePreviewSource === 'current-live' ? radarSource : undefined}
                   presentationRevision={
                     activePreviewSource === 'replay' ? replayState.presentationRevision : 0
                   }

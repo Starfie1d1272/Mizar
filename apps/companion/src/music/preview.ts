@@ -135,7 +135,7 @@ export class MusicPreview {
     if (
       !this.request ||
       (this.stopping &&
-        this.status?.message === '试听停止未确认，请在 OBS 停止 Mizar 音效来源；重连后优先清理。')
+        this.status?.message === '试听停止未确认，请在 OBS 停止 音效来源；重连后优先清理。')
     )
       return;
     const hadMedia = Boolean(this.uuid);
@@ -145,8 +145,8 @@ export class MusicPreview {
       ...this.status!,
       phase: this.uuid ? 'cleanup' : 'failed',
       message: hadMedia
-        ? '试听停止未确认，请在 OBS 停止 Mizar 音效来源；重连后优先清理。'
-        : 'OBS 连接不可用，未开始试听。请检查 OBS 连接和 Mizar 音效来源。',
+        ? '试听停止未确认，请在 OBS 停止 音效来源；重连后优先清理。'
+        : 'OBS 连接不可用，未开始试听。请检查 OBS 连接和 音效来源。',
     };
   }
   async reconcile(

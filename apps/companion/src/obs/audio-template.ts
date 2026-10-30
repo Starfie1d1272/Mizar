@@ -31,22 +31,25 @@ export async function inspectLegacyAudioTemplate(
     !gameAudioUuid &&
     inputs.some(
       (input) =>
-        typeof input.inputName === 'string' && input.inputName.startsWith('Mizar · Game Audio '),
+        typeof input.inputName === 'string' &&
+        (input.inputName.startsWith('Mizar · Game Audio ') ||
+          /^游戏声音(?: \d+)?$/.test(input.inputName)),
     )
   )
     return null;
   const allowedNames = new Set([
     OBS_CAPTURE_INPUT,
     ...desired.map((scene) => scene.browserInput),
-    'Mizar · Desktop Audio',
-    'Mizar · Microphone',
+    '桌面声音',
+    '麦克风',
   ]);
   const musicNames = inputs
     .filter(
       (input) =>
         input.inputKind === 'ffmpeg_source' &&
         typeof input.inputName === 'string' &&
-        /^Mizar · (BGM|Stinger) · [0-9a-f-]{36}$/.test(input.inputName),
+        (/^Mizar · (BGM|Stinger) · [0-9a-f-]{36}$/.test(input.inputName) ||
+          /^(音乐|音效)(?: \d+)?$/.test(input.inputName)),
     )
     .map((input) => String(input.inputName));
   for (const name of musicNames) allowedNames.add(name);
@@ -90,10 +93,10 @@ export async function inspectLegacyAudioTemplate(
   )
     return null;
   const desktop = inputs.find(
-    (x) => x.inputName === 'Mizar · Desktop Audio' && x.inputKind === 'wasapi_output_capture',
+    (x) => x.inputName === '桌面声音' && x.inputKind === 'wasapi_output_capture',
   );
   let microphone = inputs.find(
-    (x) => x.inputName === 'Mizar · Microphone' && x.inputKind === 'wasapi_input_capture',
+    (x) => x.inputName === '麦克风' && x.inputKind === 'wasapi_input_capture',
   );
   const activeMicrophones = new Set<string>();
   for (const scene of desired) {
@@ -107,7 +110,7 @@ export async function inspectLegacyAudioTemplate(
           (input) =>
             input.inputUuid === item.sourceUuid &&
             input.inputKind === 'wasapi_input_capture' &&
-            input.inputName !== 'Mizar · Microphone',
+            input.inputName !== '麦克风',
         )
       )
         activeMicrophones.add(String(item.sourceUuid));
@@ -185,12 +188,7 @@ export async function inspectLegacyAudioTemplate(
       return null;
     if (wanted.has(scene.sceneName)) {
       const desiredScene = desired.find((value) => value.sceneName === scene.sceneName)!;
-      const expectedNames = new Set([
-        ...desiredScene.sources,
-        'Mizar · Desktop Audio',
-        'Mizar · Microphone',
-        ...musicNames,
-      ]);
+      const expectedNames = new Set([...desiredScene.sources, '桌面声音', '麦克风', ...musicNames]);
       if (compact && desiredScene.id === 'gameplay') expectedNames.add(BP_COMPACT_INPUT);
       if (
         items.some(

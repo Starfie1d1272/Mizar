@@ -64,6 +64,8 @@ export function releaseTimingReport({
   publishedAt,
   recovery,
   build,
+  boxOutcome,
+  boxRecoveryStartedAt,
 }) {
   if (
     qualification.path !== '.github/workflows/release-qualification.yml' ||
@@ -73,7 +75,7 @@ export function releaseTimingReport({
     qualification.event !== 'workflow_dispatch' ||
     promotion.path !== '.github/workflows/release-promotion.yml' ||
     promotion.head_branch !== 'main' ||
-    promotion.event !== 'workflow_dispatch' ||
+    !['workflow_dispatch', 'workflow_run'].includes(promotion.event) ||
     (box &&
       (promotion.conclusion !== 'success' ||
         box.path !== '.github/workflows/box-sync.yml' ||
@@ -90,7 +92,7 @@ export function releaseTimingReport({
   recovery ||=
     qualification.run_attempt !== 1 ||
     promotion.run_attempt !== 1 ||
-    (box && box.run_attempt !== 1) ||
+    (box && (box.run_attempt !== 1 || Boolean(boxRecoveryStartedAt))) ||
     Date.parse(publishedAt) < Date.parse(promotion.created_at);
   const result = {
     tag,
@@ -113,11 +115,18 @@ export function releaseTimingReport({
   };
   if (box) {
     result.box = runTiming(box, jobs.box, finishedAt, jobs.boxFirstAttempt);
+    result.boxOutcome = boxOutcome;
+    if (boxRecoveryStartedAt) {
+      elapsed(box.created_at, boxRecoveryStartedAt);
+      result.boxRecoveryStartedAt = boxRecoveryStartedAt;
+      result.boxRecoveryDurationMs = elapsed(boxRecoveryStartedAt, finishedAt);
+    }
     result.triggerToBoxMs = elapsed(qualification.created_at, finishedAt);
     result.promotionToBoxMs = elapsed(promotion.created_at, finishedAt);
     result.publishedToBoxMs = elapsed(publishedAt, finishedAt);
     // Retries or a previously published version cannot prove a fresh release budget.
-    result.freshReleaseWithin600Seconds = !recovery && result.triggerToBoxMs <= 600000;
+    result.freshReleaseWithin600Seconds =
+      !recovery && boxOutcome === 'success' && result.triggerToBoxMs <= 600000;
   }
   return result;
 }
@@ -138,7 +147,7 @@ async function recordReport(report, path) {
       `Release timing: ${report.recovery ? 'recovery; not fresh-release acceptance' : 'fresh release'}; ` +
         (report.triggerToBoxMs === undefined
           ? 'Promotion checkpoint'
-          : `Qualification trigger → Box verified: ${(report.triggerToBoxMs / 1000).toFixed(1)}s; initial queues Q/P/B: ${[report.qualification, report.promotion, report.box].map((r) => (r.initialQueueMs === null ? 'unknown' : (r.initialQueueMs / 1000).toFixed(1) + 's')).join('/')}`) +
+          : `Qualification trigger → Box checkpoint: ${(report.triggerToBoxMs / 1000).toFixed(1)}s; initial queues Q/P/B: ${[report.qualification, report.promotion, report.box].map((r) => (r.initialQueueMs === null ? 'unknown' : (r.initialQueueMs / 1000).toFixed(1) + 's')).join('/')}`) +
         '\n',
     );
 }
@@ -174,7 +183,10 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         sourceSha: process.env.SOURCE_SHA,
         finishedAt: finishedAt,
         publishedAt: release.published_at,
-        recovery: process.env.RELEASE_ALREADY_PUBLISHED === 'true' || current.run_attempt !== 1,
+        recovery:
+          process.env.RELEASE_RECOVERY === 'true' ||
+          process.env.RELEASE_ALREADY_PUBLISHED === 'true' ||
+          current.run_attempt !== 1,
         build,
       });
       await recordReport(report, output);
@@ -185,6 +197,11 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
             recovery: true,
             freshReleaseWithin600Seconds: false,
             box: runTiming(current, currentJobs, finishedAt, firstAttemptJobs(current)),
+            boxOutcome: process.env.BOX_OUTCOME,
+            boxRecoveryStartedAt: process.env.BOX_RECOVERY_STARTED_AT || undefined,
+            boxRecoveryDurationMs: process.env.BOX_RECOVERY_STARTED_AT
+              ? elapsed(process.env.BOX_RECOVERY_STARTED_AT, finishedAt)
+              : undefined,
           },
           output,
         );
@@ -210,28 +227,33 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
           );
           const record = await json(join(directory, 'release-timings.json'));
           const qualification = api(`actions/runs/${record.qualification.id}`);
-          await recordReport(
-            releaseTimingReport({
-              qualification,
-              promotion,
-              box: current,
-              jobs: {
-                qualification: api(`actions/runs/${qualification.id}/jobs?per_page=100`).jobs,
-                promotion: api(`actions/runs/${promotion.id}/jobs?per_page=100`).jobs,
-                box: currentJobs,
-                qualificationFirstAttempt: firstAttemptJobs(qualification),
-                promotionFirstAttempt: firstAttemptJobs(promotion),
-                boxFirstAttempt: firstAttemptJobs(current),
-              },
-              finishedAt: finishedAt,
-              tag: record.tag,
-              sourceSha: record.sourceSha,
-              publishedAt: record.publishedAt,
-              recovery: record.recovery || current.run_attempt !== 1,
-              build: record.build,
-            }),
-            output,
-          );
+          const report = releaseTimingReport({
+            qualification,
+            promotion,
+            box: current,
+            jobs: {
+              qualification: api(`actions/runs/${qualification.id}/jobs?per_page=100`).jobs,
+              promotion: api(`actions/runs/${promotion.id}/jobs?per_page=100`).jobs,
+              box: currentJobs,
+              qualificationFirstAttempt: firstAttemptJobs(qualification),
+              promotionFirstAttempt: firstAttemptJobs(promotion),
+              boxFirstAttempt: firstAttemptJobs(current),
+            },
+            finishedAt: finishedAt,
+            tag: record.tag,
+            sourceSha: record.sourceSha,
+            publishedAt: record.publishedAt,
+            recovery: record.recovery || current.run_attempt !== 1,
+            build: record.build,
+            boxOutcome: process.env.BOX_OUTCOME,
+            boxRecoveryStartedAt: process.env.BOX_RECOVERY_STARTED_AT || undefined,
+          });
+          await recordReport(report, output);
+          if (
+            process.env.BOX_OUTCOME !== 'success' ||
+            (!record.recovery && current.run_attempt === 1 && report.triggerToBoxMs > 600000)
+          )
+            throw new Error('Release exceeded 600-second budget');
         } finally {
           await rm(directory, { recursive: true, force: true });
         }
@@ -245,10 +267,15 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         'Invalid release timing order',
         'Release timing source differs',
         'Unknown release timing mode',
+        'Release exceeded 600-second budget',
       ].includes(error.message)
     )
       // eslint-disable-next-line preserve-caught-error -- Download causes may expose signed URLs.
       throw new Error('发行计时证据缺失或结构、时序有误；不得作为完整发行验收。');
+    if (mode === 'box' && process.env.GITHUB_EVENT_NAME === 'workflow_run') {
+      // eslint-disable-next-line preserve-caught-error -- The cause can contain signed URLs.
+      throw new Error('Release timing unavailable; cannot verify 600-second budget');
+    }
     // Metrics cannot invalidate delivery after its original-byte checks succeeded.
     // Missing timing evidence also cannot claim the fresh release budget passed.
     await recordReport(

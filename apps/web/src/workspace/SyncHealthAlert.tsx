@@ -191,7 +191,7 @@ function SyncHealthIncident({
               );
             }}
           >
-            本场比赛不再自动弹出
+            本场不再弹出提示和警告
           </Button>
         ) : null}
         <RivalHubSyncControls />

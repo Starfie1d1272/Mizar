@@ -52,6 +52,9 @@ export class GameAudioController {
       revision: this.revision,
     };
   }
+  async desktopMix() {
+    return Boolean((await this.routing.desktopBinding()) || (await this.routing.modePending()));
+  }
   async releaseHeld(revision: string) {
     if (revision !== this.revision) throw new Error('audio_policy_stale');
     if (this.busy) throw new Error('audio_policy_busy');
@@ -72,6 +75,30 @@ export class GameAudioController {
       this.manualOverride = this.desired === 'halftime';
       this.invalidate();
       await this.owner.relinquish();
+      return await operation();
+    } finally {
+      this.busy = false;
+    }
+  }
+  /** Restore a still-owned automatic adjustment before changing audio modes. */
+  async switchMode<T>(operation: () => Promise<T>): Promise<T> {
+    if (!this.ready || this.closed || this.busy) throw new Error('audio_policy_busy');
+    this.busy = true;
+    try {
+      if (this.owner.status === 'owned') {
+        const { binding, revision } = await this.routing.gameBinding();
+        if (!binding) throw new Error('audio_policy_binding_changed');
+        const generation = this.generation;
+        await this.connection.run(
+          binding,
+          revision,
+          'gameplay',
+          this.policy,
+          () => !this.closed && this.generation === generation,
+        );
+        if (this.owner.status === 'owned' || this.owner.status === 'intent')
+          throw new Error('audio_policy_restore_unconfirmed');
+      }
       return await operation();
     } finally {
       this.busy = false;

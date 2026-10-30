@@ -7,5 +7,3 @@
 - [32.2.2 obs-main.cpp](https://github.com/obsproject/obs-studio/blob/32.2.2/frontend/obs-main.cpp#L1066-L1070) 明确支持 `portable_mode`、`obs_portable_mode`、`portable_mode.txt`、`obs_portable_mode.txt` 四种存在性标记。
 
 Fixture 是静态、独立预期，维护时对照上游日志调用，不由生产 parser 生成。只用合成值，无用户原生日志或真实凭据；分类表示记录到的技术事件，不证明当前帧正常或黑屏根因。
-
-目录 junction、文件替换等真实文件系统用例通过既有 `scripts/ci/platform-contracts.mjs` 在 Windows/macOS platform job 执行；报告要求本套件实际通过，不新增 skip。该 CI 证据仅验收合成文件系统边界，仍不证明真实 OBS/CS2 hook 或用户画面。

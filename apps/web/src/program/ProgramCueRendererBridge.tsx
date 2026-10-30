@@ -1,44 +1,10 @@
-import {
-  createContext,
-  useContext,
-  useEffect,
-  useMemo,
-  useSyncExternalStore,
-  type ReactNode,
-} from 'react';
+import { useEffect, useMemo, useSyncExternalStore, type ReactNode } from 'react';
+
+import { ProgramCueEffectProvider } from '@mizar/hud-view';
+export { ProgramCueEffectProvider } from '@mizar/hud-view';
 
 import type { ProgramCueClient } from '../realtime/program-cue-client';
-import {
-  connectProgramCueRenderer,
-  ProgramCueEffectStore,
-  type ProgramCueEffectSnapshot,
-} from './program-cue-effects';
-
-const EMPTY_PROGRAM_CUE_EFFECTS: ProgramCueEffectSnapshot = Object.freeze({ effects: [] });
-const ProgramCueEffectContext = createContext<ProgramCueEffectSnapshot>(EMPTY_PROGRAM_CUE_EFFECTS);
-
-export interface ProgramCueEffectProviderProps {
-  readonly snapshot: ProgramCueEffectSnapshot;
-  readonly children?: ReactNode;
-}
-
-export function ProgramCueEffectProvider({ snapshot, children }: ProgramCueEffectProviderProps) {
-  return (
-    <ProgramCueEffectContext.Provider value={snapshot}>{children}</ProgramCueEffectContext.Provider>
-  );
-}
-
-export function useProgramCueEffectsForPlayer(sourcePlayerId: string) {
-  const snapshot = useContext(ProgramCueEffectContext);
-  return useMemo(
-    () =>
-      snapshot.effects.filter(({ cue }) => {
-        if (cue.kind === 'player-impact') return cue.targetSourcePlayerId === sourcePlayerId;
-        return cue.kind === 'player-elimination' && cue.victimSourcePlayerId === sourcePlayerId;
-      }),
-    [snapshot, sourcePlayerId],
-  );
-}
+import { connectProgramCueRenderer, ProgramCueEffectStore } from './program-cue-effects';
 
 export interface ProgramCueRendererBridgeProps {
   readonly client: ProgramCueClient;

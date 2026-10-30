@@ -39,10 +39,21 @@ export function registerMixerRoutes(
     const obs = await adapter.mixerRead().catch(() => null);
     const music = director.get();
     const state = director.store.state;
+    const desktopIncludesMusic = Boolean(
+      obs?.routing.desktop &&
+      state.monitorPreference &&
+      (['bgm', 'stinger'] as const).some(
+        (layer) =>
+          state.desktopMonitorOriginal[layer]?.applied === 'OBS_MONITORING_TYPE_MONITOR_ONLY',
+      ),
+    );
     const result: MixerStatus = {
       revision: obs?.revision ?? 'unavailable',
       channels: {
-        game: obs?.channels.game ?? unknown('游戏'),
+        game: {
+          ...(obs?.channels.game ?? unknown('游戏')),
+          ...(desktopIncludesMusic ? { message: '桌面混音也包含正在监听的音乐和音效。' } : {}),
+        },
         remoteCommentary: obs?.channels.remoteCommentary ?? unknown('远端解说'),
         microphone: obs?.channels.microphone ?? unknown('麦克风'),
         music: {

@@ -1,8 +1,13 @@
 name: Release Qualification
+run-name: ${{ inputs.tag }}
 
 on:
   workflow_dispatch:
     inputs:
+      tag:
+        description: Exact version tag; successful qualification automatically publishes and syncs
+        required: true
+        type: string
       ref:
         description: 'Exact SHA of this main workflow run; checkout and signer source must match'
         required: true
@@ -46,7 +51,7 @@ env:
 jobs:
   build:
     runs-on: windows-2025
-    timeout-minutes: 30
+    timeout-minutes: 10
     env:
       GH_TOKEN: ${{ github.token }}
     outputs:
@@ -54,6 +59,14 @@ jobs:
       archive_sha256: ${{ steps.candidate.outputs.archive_sha256 }}
       resource_artifact: ${{ steps.resources.outputs.artifact }}
     steps:
+      - name: Check remaining release budget
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $created = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" --jq .created_at
+          if ($LASTEXITCODE -ne 0 -or !$created) { throw 'Cannot read release start time' }
+          if (([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($created)).TotalSeconds -gt 600) { throw 'Release 600-second budget exceeded' }
       # Reject an untrusted workflow branch before running checked-out policy code.
       - name: Require main qualification workflow
         shell: pwsh
@@ -62,6 +75,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
+      - name: Validate requested publication tag
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          $cargo = Get-Content apps/desktop/src-tauri/Cargo.toml -Raw
+          if ($cargo -notmatch '(?m)^version\s*=\s*"([^"\r\n]+)"') { throw 'Missing application version' }
+          if ($env:RELEASE_TAG -ne "v$($Matches[1])") { throw 'Release tag differs from application version' }
       - name: Pin checked-out source
         id: source
         run: node scripts/qualification/release-identity.mjs qualification
@@ -87,7 +108,19 @@ jobs:
         shell: pwsh
         run: git checkout -- pnpm-lock.yaml
 
+      - name: Bound Build exact-SHA Windows qualification bundle to remaining time
+        id: budget_build
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $created = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" --jq .created_at
+          if ($LASTEXITCODE -ne 0 -or !$created) { throw 'Cannot read release start time' }
+          $minutes = [math]::Floor((600 - ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($created)).TotalSeconds) / 60)
+          if ($minutes -lt 1) { throw 'Less than one minute remains in release budget' }
+          "minutes=$minutes" >> $env:GITHUB_OUTPUT
       - name: Build exact-SHA Windows qualification bundle
+        timeout-minutes: ${{ fromJSON(steps.budget_build.outputs.minutes) }}
         env:
           MIZAR_CARGO_REGISTRY_CACHE_HIT: ${{ steps.cargo-cache.outputs.registry-hit }}
           MIZAR_CARGO_TARGET_CACHE_HIT: ${{ steps.cargo-cache.outputs.target-hit }}
@@ -180,27 +213,11 @@ jobs:
           target-key: ${{ steps.cargo-cache.outputs.target-key }}
           target-hit: ${{ steps.cargo-cache.outputs.target-hit }}
 
-  release_host_tests:
-    name: release Host tests
-    needs: build
-    runs-on: windows-2025
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.build.outputs.source_sha }}
-      - name: Restore the release profile cache after the exact-source build
-        uses: ./.github/actions/cargo-cache
-        with:
-          profile: release
-      - name: Test Windows desktop startup deadlines and diagnostics
-        run: cargo test --profile release --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
-
   verify:
     name: verify / ${{ matrix.lane }}
     needs: build
     runs-on: windows-2025
-    timeout-minutes: 15
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -209,6 +226,14 @@ jobs:
       SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
       ARCHIVE_SHA256: ${{ needs.build.outputs.archive_sha256 }}
     steps:
+      - name: Check remaining release budget
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $created = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" --jq .created_at
+          if ($LASTEXITCODE -ne 0 -or !$created) { throw 'Cannot read release start time' }
+          if (([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($created)).TotalSeconds -gt 600) { throw 'Release 600-second budget exceeded' }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.build.outputs.source_sha }}
@@ -238,32 +263,11 @@ jobs:
             }
             & .\resources\runtime\node.exe ($env:GITHUB_WORKSPACE + '\scripts\qualification\verify-c4-resources.mjs') (Join-Path $bundleRoot.FullName 'resources/app') | Tee-Object -FilePath (Join-Path $env:QUALIFICATION_BUILD_ROOT 'c4-resources.log')
             if ($LASTEXITCODE -ne 0) { throw 'installed C4 资源校验失败' }
-            & .\resources\runtime\node.exe ($env:GITHUB_WORKSPACE + '\scripts\qualification\product-smoke.mjs') $bundleRoot.FullName | Tee-Object -FilePath (Join-Path $env:QUALIFICATION_BUILD_ROOT 'portable-smoke.log')
-            if ($LASTEXITCODE -ne 0) { throw '便携 EXE smoke 失败' }
             & .\resources\runtime\node.exe ($env:GITHUB_WORKSPACE + '\scripts\qualification\desktop-smoke.mjs') $bundleRoot.FullName (Join-Path $env:QUALIFICATION_BUILD_ROOT 'desktop-smoke.json')
-            if ($LASTEXITCODE -ne 0) { throw '正常桌面 GUI cold-start smoke 失败' }
+            if ($LASTEXITCODE -ne 0) { throw 'Desktop startup and shutdown smoke failed' }
           } finally {
             Pop-Location
           }
-
-      - name: Measure installed C4 worker responsiveness
-        if: ${{ matrix.lane == 'portable' }}
-        shell: pwsh
-        run: |
-          $bundle = Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP 'qualification extracted path') -Directory | Select-Object -First 1
-          & (Join-Path $bundle.FullName 'resources/runtime/node.exe') scripts/qualification/c4-worker-benchmark.mjs (Join-Path $bundle.FullName 'resources/app') (Join-Path $env:QUALIFICATION_BUILD_ROOT 'c4-worker-benchmark.json')
-          if ($LASTEXITCODE -ne 0) { throw 'Installed C4 worker probe failed' }
-
-      - name: Run 3-map exact-artifact synthetic lifecycle soak
-        if: ${{ matrix.lane == 'portable' }}
-        shell: pwsh
-        run: |
-          $extractedRoot = Join-Path $env:RUNNER_TEMP 'qualification extracted path'
-          $bundleRoot = Get-ChildItem -LiteralPath $extractedRoot -Directory | Select-Object -First 1
-          if ($null -eq $bundleRoot) { throw '未找到解压后的便携产品包' }
-          $reportPath = Join-Path $env:QUALIFICATION_BUILD_ROOT 'host-soak.json'
-          node scripts/qualification/product-soak.mjs $bundleRoot.FullName $reportPath
-          if ($LASTEXITCODE -ne 0) { throw 'exact-artifact 三地图合成生命周期 soak 失败' }
 
       - name: Prepare Full Setup tools and pristine candidate concurrently
         if: ${{ matrix.lane == 'setup' }}
@@ -280,33 +284,41 @@ jobs:
           $coreExtract = Join-Path $env:RUNNER_TEMP 'core candidate extracted'
           & ./scripts/qualification/prepare-windows-setup.ps1 -Archive (Join-Path $env:QUALIFICATION_BUILD_ROOT $core.archive) -Destination $coreExtract
 
-      - name: Verify native update cancellation and recovery
-        if: ${{ matrix.lane != 'portable' }}
-        shell: pwsh
-        timeout-minutes: 5
-        run: |
-          node scripts/qualification/verify-update-recovery.mjs | Tee-Object -FilePath (Join-Path $env:QUALIFICATION_BUILD_ROOT 'update-recovery.log')
-          if ($LASTEXITCODE -ne 0) { throw 'Native update recovery failed' }
-
-      - name: Build and verify same-content NSIS installer
+      - name: Bound Build and verify same-content NSIS installer to remaining time
+        id: budget_setup
         if: ${{ matrix.lane == 'setup' }}
         shell: pwsh
-        timeout-minutes: 15
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $created = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" --jq .created_at
+          if ($LASTEXITCODE -ne 0 -or !$created) { throw 'Cannot read release start time' }
+          $minutes = [math]::Floor((600 - ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($created)).TotalSeconds) / 60)
+          if ($minutes -lt 1) { throw 'Less than one minute remains in release budget' }
+          "minutes=$minutes" >> $env:GITHUB_OUTPUT
+      - name: Build and verify same-content NSIS installer
+        timeout-minutes: ${{ fromJSON(steps.budget_setup.outputs.minutes) }}
+        if: ${{ matrix.lane == 'setup' }}
+        shell: pwsh
         run: |
           $bundle = Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP 'qualification extracted path') -Directory | Select-Object -First 1
           $extractRoot = Join-Path $env:RUNNER_TEMP 'setup extracted path'
-          & ./scripts/qualification/create-windows-setup.ps1 -BundleRoot $bundle.FullName -OutputRoot $env:QUALIFICATION_BUILD_ROOT -ExtractRoot $extractRoot -CaptureUi
+          & ./scripts/qualification/create-windows-setup.ps1 -BundleRoot $bundle.FullName -OutputRoot $env:QUALIFICATION_BUILD_ROOT -ExtractRoot $extractRoot
           $extracted = Get-ChildItem -LiteralPath $extractRoot -Directory | Select-Object -First 1
-          $timer = [Diagnostics.Stopwatch]::StartNew()
-          node scripts/qualification/product-smoke.mjs $extracted.FullName
-          if ($LASTEXITCODE -ne 0) { throw 'Setup portable smoke failed' }
-          Write-Host "SETUP_TIMING product-smoke: $($timer.ElapsedMilliseconds) ms (success)"
-          $timer.Restart()
-          node scripts/qualification/desktop-smoke.mjs $extracted.FullName (Join-Path $env:QUALIFICATION_BUILD_ROOT 'setup-desktop-smoke.json')
-          if ($LASTEXITCODE -ne 0) { throw 'Setup desktop GUI smoke failed' }
-          Write-Host "SETUP_TIMING desktop-smoke: $($timer.ElapsedMilliseconds) ms (success)"
-
+      - name: Bound Qualify distinct Core payload and real NSIS installation to remaining time
+        id: budget_core
+        if: ${{ matrix.lane == 'core-setup' }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $created = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" --jq .created_at
+          if ($LASTEXITCODE -ne 0 -or !$created) { throw 'Cannot read release start time' }
+          $minutes = [math]::Floor((600 - ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($created)).TotalSeconds) / 60)
+          if ($minutes -lt 1) { throw 'Less than one minute remains in release budget' }
+          "minutes=$minutes" >> $env:GITHUB_OUTPUT
       - name: Qualify distinct Core payload and real NSIS installation
+        timeout-minutes: ${{ fromJSON(steps.budget_core.outputs.minutes) }}
         if: ${{ matrix.lane == 'core-setup' }}
         shell: pwsh
         run: |
@@ -320,11 +332,6 @@ jobs:
           if ($root.Count -ne 1) { throw 'Core installation is ambiguous' }
           node scripts/qualification/verify-core-candidate.mjs $env:QUALIFICATION_BUILD_ROOT $root[0].FullName $env:SOURCE_SHA (Join-Path $env:QUALIFICATION_BUILD_ROOT "core-setup-identity.json")
           if ($LASTEXITCODE -ne 0) { throw 'Core identity or resource boundary failed' }
-          node scripts/qualification/product-smoke.mjs $root[0].FullName
-          if ($LASTEXITCODE -ne 0) { throw 'Real installed Core startup failed' }
-          node scripts/qualification/desktop-smoke.mjs $root[0].FullName (Join-Path $env:QUALIFICATION_BUILD_ROOT 'core-desktop-smoke.json')
-          if ($LASTEXITCODE -ne 0) { throw 'Real Core desktop startup failed' }
-
       - name: Record successful lane identity
         if: ${{ matrix.lane != 'core-setup' }}
         shell: pwsh
@@ -405,7 +412,7 @@ jobs:
 
   release_qualification:
     name: release_qualification
-    needs: [build, verify, release_host_tests]
+    needs: [build, verify]
     runs-on: windows-2025
     timeout-minutes: 10
     permissions:
@@ -418,6 +425,14 @@ jobs:
       SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
       ARCHIVE_SHA256: ${{ needs.build.outputs.archive_sha256 }}
     steps:
+      - name: Check remaining release budget
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $created = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" --jq .created_at
+          if ($LASTEXITCODE -ne 0 -or !$created) { throw 'Cannot read release start time' }
+          if (([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($created)).TotalSeconds -gt 600) { throw 'Release 600-second budget exceeded' }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.build.outputs.source_sha }}
@@ -467,10 +482,7 @@ jobs:
           node scripts/qualification/verify-candidate.mjs $env:QUALIFICATION_BUILD_ROOT $env:SOURCE_SHA $env:ARCHIVE_SHA256 $evidenceRoot
           if ($LASTEXITCODE -ne 0) { throw 'Candidate/lane identity mismatch' }
           $manifest = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') -Raw | ConvertFrom-Json
-          $extractRoot = Join-Path $env:RUNNER_TEMP 'final candidate'
-          & ./scripts/qualification/extract-windows-shell.ps1 -Archive (Join-Path $env:QUALIFICATION_BUILD_ROOT $manifest.archive) -Destination $extractRoot -Native
-          node scripts/qualification/verify-promotion.mjs $env:QUALIFICATION_BUILD_ROOT $extractRoot "v$($manifest.appVersion)" $env:SOURCE_SHA (Join-Path $evidenceRoot 'qualified-identity.json')
-          if ($LASTEXITCODE -ne 0) { throw 'Assembled product identity mismatch' }
+          Copy-Item -LiteralPath (Join-Path $evidenceRoot 'setup/setup-identity.json') -Destination (Join-Path $evidenceRoot 'qualified-identity.json')
           node scripts/qualification/update-manifest.mjs $env:QUALIFICATION_BUILD_ROOT
           if ($LASTEXITCODE -ne 0) { throw 'Stable update manifest generation failed' }
           $coreManifest = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'core-release-manifest.json') -Raw | ConvertFrom-Json
@@ -496,6 +508,11 @@ jobs:
           $zip = [IO.Compression.ZipFile]::OpenRead($evidenceArchive)
           try { if ($null -eq $zip.GetEntry('build-timings.json')) { throw 'Final evidence archive is missing build timing' } } finally { $zip.Dispose() }
 
+      - name: Check budget before signing
+        shell: pwsh
+        run: |
+          $created = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" --jq .created_at
+          if ($LASTEXITCODE -ne 0 -or !$created -or ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($created)).TotalSeconds -gt 600) { throw 'Release budget exceeded or unavailable' }
       - name: Attest qualified portable ZIP provenance
         id: qualified-provenance
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3

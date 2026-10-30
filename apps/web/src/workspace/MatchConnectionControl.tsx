@@ -1,14 +1,35 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useLocalChannelClient } from '../realtime';
 import { Button, StatusBanner } from '../ui';
 import { useLocalRead } from '../preparation/client';
+import { desktopInvoke } from './client';
 import {
   flushObserverPreparation,
   type ConnectionPreparationView,
   type ObserverRuntimeView,
 } from '../preparation/observer-preparation';
 
+let promptedMap: string | null = null;
 /** The existing observer owner supplies status; opening a window never starts a connection. */
-export function MatchConnectionControl() {
+export function MatchConnectionControl({ primary = false }: { primary?: boolean }) {
+  const client = useLocalChannelClient('program');
+  const state = useSyncExternalStore(client.subscribe, client.getSnapshot, client.getSnapshot);
+  const snapshot = state.state === 'live' ? state.current : null;
+  const program = snapshot?.payload;
+  const series = program?.series;
+  const nextMapKey =
+    program?.match &&
+    snapshot?.cursor &&
+    program.status.telemetry === 'fresh' &&
+    program.map.phase === 'gameover' &&
+    series?.status === 'live'
+      ? JSON.stringify([
+          program.match?.matchId,
+          snapshot?.cursor.producerInstanceId,
+          snapshot?.cursor.liveSessionId,
+          snapshot?.cursor.mapEpoch,
+        ])
+      : null;
   const view = useLocalRead<ConnectionPreparationView>('/local/v1/observer-assist');
   const runtime = useLocalRead<ObserverRuntimeView & { programCommandQueued?: boolean }>(
     '/local/v1/observer',
@@ -17,50 +38,80 @@ export function MatchConnectionControl() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const status = view?.waitingForMap
-    ? '等待新图数据'
-    : runtime?.pending
-      ? '连接中'
-      : runtime?.error || runtime?.failed
-        ? '连接失败，可重试'
-        : runtime?.programCommandQueued
-          ? '节目命令已提交'
-          : view?.mapConnection?.mode === 'seamless'
-            ? '保持现有连接'
-            : runtime?.active
-              ? '早源已启动'
-              : view?.connection
-                ? '待连接'
-                : '未连接';
+    ? '等待本图数据'
+    : runtime?.programCommandQueued
+      ? '连接命令已提交'
+      : view?.mapConnection?.mode === 'seamless'
+        ? '保持现有连接'
+        : view?.connection
+          ? '待连接'
+          : '未连接';
+  const nextMapNeeded = Boolean(nextMapKey && !view?.waitingForMap);
+  const open = (next: boolean) => {
+    if (lock.current) return;
+    lock.current = true;
+    setBusy(true);
+    setError('');
+    void (
+      window.__TAURI_INTERNALS__
+        ? desktopInvoke('open_tool', {
+            tool: 'review',
+            presetId: next ? 'next-connection' : 'connection',
+          })
+        : flushObserverPreparation(false, true, next)
+    )
+      .catch((reason: unknown) =>
+        setError(reason instanceof Error ? reason.message : '本图连接未读取，请重试。'),
+      )
+      .finally(() => {
+        lock.current = false;
+        setBusy(false);
+      });
+  };
+  useEffect(() => {
+    if (
+      !nextMapNeeded ||
+      !nextMapKey ||
+      !view ||
+      busy ||
+      runtime?.pending ||
+      promptedMap === nextMapKey
+    )
+      return;
+    promptedMap = nextMapKey;
+    open(true);
+  }, [nextMapKey, nextMapNeeded, view, busy, runtime?.pending]);
   return (
     <>
       <Button
+        variant={primary ? 'primary' : 'secondary'}
         disabled={busy || runtime?.pending}
-        onClick={() => {
-          if (lock.current) return;
-          lock.current = true;
-          setBusy(true);
-          setError('');
-          void flushObserverPreparation(false, true)
-            .catch((reason: unknown) =>
-              setError(reason instanceof Error ? reason.message : '本图连接未读取，请重试。'),
-            )
-            .finally(() => {
-              lock.current = false;
-              setBusy(false);
-            });
-        }}
+        onClick={() => open(nextMapNeeded)}
       >
-        本图连接 · {status}
+        {nextMapNeeded
+          ? '填写下一图 GoTV'
+          : primary
+            ? runtime?.programCommandQueued || view?.waitingForMap
+              ? '查看本图连接'
+              : '填写 GoTV'
+            : `本图连接 · ${status}`}
       </Button>
-      {runtime?.programCommandQueued || runtime?.active ? (
+      {!nextMapNeeded && !view?.waitingForMap && series?.status !== 'completed' ? (
+        <Button disabled={busy || runtime?.pending} onClick={() => open(true)}>
+          填写下一图 GoTV
+        </Button>
+      ) : null}
+      {!primary && (runtime?.programCommandQueued || runtime?.active) ? (
         <small role="status">
           节目：{runtime.programCommandQueued ? '命令已提交，实际连接请在游戏内核对' : '请手动连接'}
-          ； 早源：
+          ； 观察辅助：
           {!view?.settings.enabled
-            ? '辅助关闭'
-            : runtime.health?.state === 'live'
-              ? '接收中'
-              : '等待接收'}
+            ? '已关闭'
+            : runtime.failed || runtime.error
+              ? '连接失败，请在观察辅助中重试'
+              : runtime.health?.state === 'live'
+                ? '接收中'
+                : '等待接收'}
           。 时间对齐与提示见雷达下方。
         </small>
       ) : null}

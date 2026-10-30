@@ -1,9 +1,10 @@
+import { CameraAudition } from '../orchestration/CameraAudition';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getBuiltinPresets } from '@mizar/hud-config';
 import { Button, Field, Panel, Select, StatusBanner } from '../ui';
 import { desktopInvoke } from '../workspace/client';
 import { mutateHudConfig, useHudConfigEditorClient } from '../realtime/hud-config-client';
-import { checkObsBeforeLaunch, useLocalRead } from './client';
+import { checkObsBeforeLaunch, enterDemoTest, useLocalRead } from './client';
 import { useCs2Status } from './cs2-status';
 import type { DemoTestView, SelectedDemo } from './demo-test';
 
@@ -16,6 +17,7 @@ export function DemoTestPanel({ forceExpanded = false }: { forceExpanded?: boole
   const editor = useHudConfigEditorClient(shown);
   const { status: game } = useCs2Status();
   const [selected, setSelected] = useState<SelectedDemo | null>(null);
+  const [cameraTrial, setCameraTrial] = useState(false);
   const [preset, setPreset] = useState<string | null>(null);
   const [teamAName, setTeamAName] = useState('队伍 A');
   const [teamBName, setTeamBName] = useState('队伍 B');
@@ -63,6 +65,7 @@ export function DemoTestPanel({ forceExpanded = false }: { forceExpanded?: boole
         token: selected.token,
         teamAName,
         teamBName,
+        cameraTrial,
         ...(preserveSettings ? { preserveSettings: true } : {}),
       });
       setSelected(null);
@@ -76,11 +79,57 @@ export function DemoTestPanel({ forceExpanded = false }: { forceExpanded?: boole
     !teamAName.trim() ||
     !teamBName.trim();
 
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const entryController = useRef<AbortController | null>(null);
+  useEffect(() => {
+    if (!forceExpanded) entryController.current?.abort();
+    return () => entryController.current?.abort();
+  }, [forceExpanded]);
+  const enter = useCallback((requestId: string) => {
+    const controller = new AbortController();
+    entryController.current = controller;
+    return enterDemoTest(requestId, undefined, () => mounted.current, controller.signal);
+  }, []);
+
+  useEffect(() => {
+    const requestId = trial?.requestId;
+    if (
+      !desktop ||
+      trial?.phase !== 'starting' ||
+      !requestId ||
+      !game?.mulnxLaunchResumable ||
+      game.running
+    )
+      return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const resume = async () => {
+      try {
+        await desktopInvoke('resume_demo_test', { requestId });
+      } catch {
+        /* The game may still be starting. */
+      }
+      if (active) timer = setTimeout(() => void resume(), 5000);
+    };
+    void resume();
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [desktop, trial?.phase, trial?.requestId, game?.mulnxLaunchResumable, game?.running]);
+
   // Native verifies ownership again. A PID snapshot does not authorize playback.
   useEffect(() => {
     const requestId = trial?.requestId;
     if (
       !desktop ||
+      (!forceExpanded && !expanded) ||
       trial?.phase !== 'starting' ||
       !game?.running ||
       !requestId ||
@@ -89,8 +138,18 @@ export function DemoTestPanel({ forceExpanded = false }: { forceExpanded?: boole
     )
       return;
     attemptedEntry.current = requestId;
-    void run(() => desktopInvoke('enter_demo_test', { requestId }));
-  }, [desktop, trial?.phase, trial?.requestId, game?.running, busy, run]);
+    void run(() => enter(requestId));
+  }, [
+    desktop,
+    forceExpanded,
+    expanded,
+    trial?.phase,
+    trial?.requestId,
+    game?.running,
+    busy,
+    run,
+    enter,
+  ]);
 
   const Container = forceExpanded ? 'div' : Panel;
   return (
@@ -117,7 +176,7 @@ export function DemoTestPanel({ forceExpanded = false }: { forceExpanded?: boole
                 : '请先退出 CS2，再重试恢复。'}
           </p>
           {trial.phase === 'starting' || (trial.phase === 'playing' && !trial.dataReady) ? (
-            <p>游戏运行不代表 Demo 已加载，请在 CS2 检查播放画面。</p>
+            <p>游戏已运行，请在 CS2 检查 Demo 播放画面。</p>
           ) : trial.phase === 'playing' ? (
             <p>试播保持手动编排，可检查 HUD、场景与 OBS 音画。</p>
           ) : (
@@ -128,9 +187,7 @@ export function DemoTestPanel({ forceExpanded = false }: { forceExpanded?: boole
               <Button
                 variant="primary"
                 disabled={busy || !desktop}
-                onClick={() =>
-                  void run(() => desktopInvoke('enter_demo_test', { requestId: trial.requestId }))
-                }
+                onClick={() => void run(() => enter(trial.requestId!))}
               >
                 返回试播工作台
               </Button>
@@ -146,6 +203,15 @@ export function DemoTestPanel({ forceExpanded = false }: { forceExpanded?: boole
                 : '结束试播并恢复设置'}
             </Button>
           </div>
+          {trial.phase === 'playing' &&
+          trial.dataReady &&
+          trial.requestId &&
+          game?.demoCameraRequestId === trial.requestId ? (
+            <details>
+              <summary>筛选运镜镜头</summary>
+              <CameraAudition />
+            </details>
+          ) : null}
           <p>关闭此窗口不会结束试播。</p>
         </>
       ) : (
@@ -168,6 +234,15 @@ export function DemoTestPanel({ forceExpanded = false }: { forceExpanded?: boole
             选择本地 Demo
           </Button>
           <p>{selected?.name ?? '尚未选择 .dem 文件'}</p>
+          <Select
+            label="试播用途"
+            value={cameraTrial ? 'camera' : 'hud'}
+            disabled={busy}
+            onChange={(event) => setCameraTrial(event.target.value === 'camera')}
+          >
+            <option value="hud">HUD 试播</option>
+            <option value="camera">运镜筛选（MulNX）</option>
+          </Select>
           <p>默认沿用当前 HUD，使用“队伍 A / 队伍 B”作为试播队名。</p>
           <details>
             <summary>调整队名与 HUD</summary>
@@ -226,7 +301,9 @@ export function DemoTestPanel({ forceExpanded = false }: { forceExpanded?: boole
       )}
       {!desktop ? <p>请在 Mizar 桌面准备中心选择并启动本地 Demo。</p> : null}
       {message ? <StatusBanner tone="danger">{message}</StatusBanner> : null}
-      {shown && editor.error ? <StatusBanner tone="warning">{editor.error}</StatusBanner> : null}
+      {shown && !trial?.active && editor.error ? (
+        <StatusBanner tone="warning">画面设置暂不可用，请检查本地服务后重试。</StatusBanner>
+      ) : null}
     </Container>
   );
 }

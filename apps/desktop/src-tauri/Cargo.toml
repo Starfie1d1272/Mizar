@@ -1,12 +1,8 @@
 [package]
 name = "mizar-desktop"
-version = "2.0.0-rc.1"
+version = "1.9.1"
 edition = "2021"
 build = "build.rs"
-
-[[example]]
-name = "observer-owner"
-path = "test-fixtures/observer-owner.rs"
 
 [dependencies]
 tauri = { version = "=2.12.1", features = ["tray-icon"] }

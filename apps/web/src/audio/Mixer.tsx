@@ -63,12 +63,18 @@ export function Mixer({ musicOnly = false }: { musicOnly?: boolean }) {
         </div>
       )}
       <div className="audio-mixer__channels">
-        {(musicOnly ? (['music'] as Channel[]) : channels).map((channel) => {
+        {(musicOnly
+          ? (['music'] as Channel[])
+          : state?.channels.game.name === '桌面混音'
+            ? channels.filter((channel) => channel !== 'remoteCommentary')
+            : channels
+        ).map((channel) => {
           const item = state?.channels[channel];
           const available =
             item?.control === 'available' && item.volume !== null && item.muted !== null;
           const value = draft?.channel === channel ? draft.volume : item?.volume;
-          const label = labels[channel];
+          const label =
+            channel === 'game' && item?.name === '桌面混音' ? '桌面混音' : labels[channel];
           const status =
             item?.control === 'held'
               ? '手动'

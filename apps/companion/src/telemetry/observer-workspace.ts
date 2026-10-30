@@ -14,9 +14,11 @@ import {
 } from './observer-process.js';
 import type { ObserverSettingsStore } from './observer-settings.js';
 import { sendObserverGameCommand, observerConnectCommand } from './observer-game-control.js';
+import { MatchNameSync, matchNames } from './match-names.js';
+import type { MatchContextBinding } from '../match-context/lkg-store.js';
+import observerComponent from './observer-component.json' with { type: 'json' };
 
-export const OBSERVER_VERSION = '1.0.0';
-const SOURCE_SHA = '4b07fd0ddfb775d8fa1548bddfd98dc78c7fce93';
+export const OBSERVER_VERSION = observerComponent.version;
 /** Create only controlled ancestors; the pinned driver owns the unique final directory. */
 export async function prepareObserverOutputParent(state: string): Promise<string> {
   await safePath(state);
@@ -298,7 +300,7 @@ export function installedWorkspaceObserver(
         .parse(JSON.parse(await readFile(join(component, 'manifest.json'), 'utf8')) as unknown);
       if (
         manifest.componentVersion !== OBSERVER_VERSION ||
-        manifest.sourceSha !== SOURCE_SHA ||
+        manifest.sourceSha !== observerComponent.sourceSha ||
         manifest.distribution !== 'external-node'
       )
         throw new Error('observer_component_version');
@@ -371,6 +373,7 @@ export function registerWorkspaceObserver(
   token: string,
   canStart: () => boolean = () => true,
   settings?: ObserverSettingsStore,
+  binding?: () => MatchContextBinding | undefined,
 ) {
   type Host = {
     game: string;
@@ -415,6 +418,17 @@ export function registerWorkspaceObserver(
     host !== undefined &&
     (!prepared || prepared.identity === identity(host)) &&
     performance.now() - hostLease <= 6000;
+  const names = new MatchNameSync(() => ({
+    session: leased() && host?.useMulnx ? JSON.stringify([host.game, host.job]) : null,
+    names:
+      canStart() && settings?.settings.nicknameSource === 'website'
+        ? matchNames(binding?.())
+        : new Map<string, string>(),
+  }));
+  const namesTimer = setInterval(() => {
+    void names.tick().catch(() => app.log.error({ stage: 'match_names' }, '游戏昵称同步失败'));
+  }, 1000);
+  namesTimer.unref();
   const keys = (value: Host) => {
     const connection = settings?.configured();
     const game = JSON.stringify([value.game, value.job]);
@@ -457,7 +471,8 @@ export function registerWorkspaceObserver(
   };
   const unsubscribe = settings?.subscribe((kind) => {
     if (kind === 'game' && !settings.gameAutomation.hideGameHud) hiddenGame = '';
-    if (kind === 'settings' || kind === 'lead' || kind === 'game') return;
+    if (kind === 'lead' || kind === 'name' || kind === 'game') return;
+
     const attempt = ++epoch;
     if (kind === 'map')
       seamlessGame = settings.mapConnection?.mode === 'seamless' && host ? keys(host).game : '';
@@ -487,6 +502,8 @@ export function registerWorkspaceObserver(
     });
   });
   app.addHook('onClose', async () => {
+    clearInterval(namesTimer);
+    await names.close();
     unsubscribe?.();
     ++epoch;
     host = undefined;
@@ -547,6 +564,7 @@ export function registerWorkspaceObserver(
       return reply.code(403).send({ error: 'runtime-control-denied' });
     const parsed = command.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'observer_command_invalid' });
+    const operation = { stage: 'preparation' as 'preparation' | 'game' | 'hud' | 'assist' };
     try {
       const body = parsed.data;
       if (['start', 'start-configured', 'prepare'].includes(body.action) && !canStart())
@@ -561,6 +579,9 @@ export function registerWorkspaceObserver(
           !settings ||
           !(
             settings.settings.enabled ||
+            (body.useMulnx &&
+              settings.settings.nicknameSource === 'website' &&
+              matchNames(binding?.()).size > 0) ||
             (gameControl &&
               (gameControl.autoConnect || (!body.nativeHudToggle && gameControl.hideGameHud)))
           )
@@ -644,6 +665,7 @@ export function registerWorkspaceObserver(
           // An accepted game command is retained even if a later observer launch fails.
           // Retrying the private source must not reconnect the on-air game.
           if (connect && connection) {
+            operation.stage = 'game';
             await sendObserverGameCommand(
               observerConnectCommand(
                 connection,
@@ -653,17 +675,21 @@ export function registerWorkspaceObserver(
             connectedGame = key.connect;
             if (!body.nativeHudToggle && gameControl?.hideGameHud) hiddenGame = key.hud;
           } else if (hide) {
+            operation.stage = 'hud';
             await sendObserverGameCommand('cl_draw_only_deathnotices 1');
             hiddenGame = key.hud;
           }
+          operation.stage = 'preparation';
           if (!current()) throw new Error('observer_configuration_changed');
           host = value;
           appliedPolicy = policy(value);
           hostLease = performance.now();
+          operation.stage = 'assist';
           await startAssist(value, current);
           lastError = null;
         });
       } else if (body.action === 'start') {
+        operation.stage = 'assist';
         const attempt = ++epoch;
         host = undefined;
         await serialize(async () => {
@@ -701,9 +727,16 @@ export function registerWorkspaceObserver(
         },
         '观察辅助操作需要重试',
       );
-      return reply
-        .code(409)
-        .send({ message: '请核对本场观战连接和所选启动方式的组件状态；详细阶段见运行诊断。' });
+      return reply.code(409).send({
+        message:
+          operation.stage === 'game'
+            ? '游戏观战连接未确认，请在游戏内检查连接后重试。'
+            : operation.stage === 'hud'
+              ? 'CS2 原生 HUD 设置未确认，请检查游戏画面后重试。'
+              : operation.stage === 'assist'
+                ? '观察辅助未能启动，请检查辅助设置后重试；游戏连接请在游戏内核对。'
+                : '观战准备未完成，请检查游戏连接和设置后重试。',
+      });
     }
   });
 }
