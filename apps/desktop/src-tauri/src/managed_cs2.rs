@@ -643,9 +643,7 @@ struct ReplacementTarget {
 }
 
 fn valid_preparation_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 64
-        && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
 fn replacement_decision(
@@ -962,10 +960,22 @@ impl ManagedCs2 {
                 {
                     return Err("游戏实例已变化，未关闭游戏；请重试。".into());
                 }
-                self.log.event("external_game_replace", "begin", Some(&json!({"pid":target.pid,"created":target.created.to_string()}).to_string()));
+                self.log.event(
+                    "external_game_replace",
+                    "begin",
+                    Some(
+                        &json!({"pid":target.pid,"created":target.created.to_string()}).to_string(),
+                    ),
+                );
                 check_cancelled()?;
                 close_owned_process(&target.process, target.pid, target.created, &self.log)?;
-                self.log.event("external_game_replace", "success", Some(&json!({"pid":target.pid,"created":target.created.to_string()}).to_string()));
+                self.log.event(
+                    "external_game_replace",
+                    "success",
+                    Some(
+                        &json!({"pid":target.pid,"created":target.created.to_string()}).to_string(),
+                    ),
+                );
             }
             self.confirm_game_stopped()?;
             self.restore_backup(false)?;
@@ -1482,7 +1492,9 @@ impl ManagedCs2 {
     ) -> Result<Value, String> {
         self.ensure_demo_available()?;
         let argument = crate::demo_test::playdemo_argument(path, &self.log)?;
-        if !self.start_internal(preserve, Some((&argument, request_id)), true, None, &|| Ok(()))? {
+        if !self.start_internal(preserve, Some((&argument, request_id)), true, None, &|| {
+            Ok(())
+        })? {
             return Err("请先结束现有游戏并恢复配置。".into());
         }
         let journal = self.store.load()?.ok_or("CS2 配置事务缺失。")?;
@@ -1567,7 +1579,13 @@ impl ManagedCs2 {
     ) -> Result<bool, String> {
         self.ensure_demo_available()?;
         let argument = crate::demo_test::playdemo_argument(path, &self.log)?;
-        self.start_internal(preserve, Some((&argument, request_id)), false, None, &|| Ok(()))
+        self.start_internal(
+            preserve,
+            Some((&argument, request_id)),
+            false,
+            None,
+            &|| Ok(()),
+        )
     }
     pub(crate) fn cancel_unsubmitted_mulnx_demo(&mut self) -> Result<(), String> {
         if self.demo_launch_attempted()? || any_cs2_running(&self.log)? {
@@ -2384,13 +2402,25 @@ mod replacement_tests {
 
     #[test]
     fn replacement_requires_the_preflight_identity_and_only_reuses_its_managed_transaction() {
-        assert_eq!(replacement_decision(Some((10, 20, true)), Some(10), Some(20), true), Ok(true));
-        assert_eq!(replacement_decision(Some((10, 20, true)), Some(10), Some(20), false), Ok(false));
-        assert_eq!(replacement_decision(Some((10, 20, false)), Some(10), Some(20), true), Ok(false));
+        assert_eq!(
+            replacement_decision(Some((10, 20, true)), Some(10), Some(20), true),
+            Ok(true)
+        );
+        assert_eq!(
+            replacement_decision(Some((10, 20, true)), Some(10), Some(20), false),
+            Ok(false)
+        );
+        assert_eq!(
+            replacement_decision(Some((10, 20, false)), Some(10), Some(20), true),
+            Ok(false)
+        );
         assert!(replacement_decision(Some((10, 21, false)), Some(10), Some(20), false).is_err());
         assert!(replacement_decision(Some((11, 20, false)), Some(10), Some(20), false).is_err());
         assert!(replacement_decision(Some((10, 20, false)), None, None, false).is_err());
-        assert_eq!(replacement_decision(None, Some(10), Some(20), false), Ok(false));
+        assert_eq!(
+            replacement_decision(None, Some(10), Some(20), false),
+            Ok(false)
+        );
     }
 }
 

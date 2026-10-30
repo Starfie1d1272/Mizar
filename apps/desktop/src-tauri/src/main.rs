@@ -94,8 +94,11 @@ fn cancel_cs2_preparation(
     if window.label() != "main" {
         return Err("请在准备中心取消启动。".into());
     }
-    if preparation_id.is_empty() || preparation_id.len() > 64
-        || !preparation_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    if preparation_id.is_empty()
+        || preparation_id.len() > 64
+        || !preparation_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
     {
         return Err("启动事务标识无效。".into());
     }
@@ -890,7 +893,10 @@ async fn replace_external_cs2(
         app.state::<updates::PendingUpdate>().check()?;
         let created = expected_created
             .as_deref()
-            .map(|v| v.parse::<u64>().map_err(|_| "游戏创建标识无效。".to_string()))
+            .map(|v| {
+                v.parse::<u64>()
+                    .map_err(|_| "游戏创建标识无效。".to_string())
+            })
             .transpose()?;
         let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
         let mut cs2 = state.lock().map_err(|_| "CS2 状态不可用。")?;
