@@ -86,6 +86,7 @@ export class ObserverHintTimeline {
     name: string;
     since: number;
     execution: number | undefined;
+    generation: number;
     conflicted: boolean;
   } | null = null;
   private context = '';
@@ -95,6 +96,7 @@ export class ObserverHintTimeline {
   private seenReceive: number | null = null;
   private sourceClocks: ClockPoint[] = [];
   private sourceExecution: number | undefined;
+  private sourceExecutionGeneration: number | undefined;
   private sourceExecutionChanged = false;
   private freezeEnds: ClockBoundary[] = [];
   private programPhase: {
@@ -205,6 +207,7 @@ export class ObserverHintTimeline {
     this.kills = [];
     this.sourceClocks = [];
     this.sourceExecution = undefined;
+    this.sourceExecutionGeneration = undefined;
     this.sourceExecutionChanged = false;
     this.freezeEnds = [];
     this.programPhase = null;
@@ -326,19 +329,32 @@ export class ObserverHintTimeline {
     now: number,
     freezeEnd?: ClockBoundary,
     sourceExecution?: number,
+    sourceGeneration?: number,
     phase?: { phase: string; round: number; received: number; generation: number },
   ) {
     if (sourceExecution !== undefined) {
-      if (this.sourceExecution !== undefined && sourceExecution !== this.sourceExecution) {
+      if (
+        this.sourceExecutionGeneration === sourceGeneration &&
+        this.sourceExecution !== undefined &&
+        sourceExecution !== this.sourceExecution
+      ) {
         this.sourceExecutionChanged = true;
+        this.kills = [];
+        this.effectiveDelayMs = null;
+        this.lastEvidenceAt = null;
+        this.evidenceCount = 0;
+        this.evidenceSpreadMs = null;
+        this.lastProgramClock = null;
+        this.previous.clear();
+        this.seenReceive = null;
         this.sourceClocks = [];
         this.clockEvidence = [];
         this.freezeEnds = [];
         this.freezeOffset = null;
       }
       this.sourceExecution = sourceExecution;
+      this.sourceExecutionGeneration = sourceGeneration;
     }
-    if (this.sourceExecutionChanged) return;
     if (
       freezeEnd &&
       !this.freezeEnds.some(
@@ -380,21 +396,36 @@ export class ObserverHintTimeline {
       const elapsed = last ? (source.received - last.received) / 1000 : 0;
       const advanced = last ? last.remaining - source.remaining : 0;
       if (
-        !last ||
-        source.generation !== last.generation ||
-        source.round !== last.round ||
-        elapsed <= 0 ||
-        elapsed > 2 ||
-        advanced <= 0 ||
-        Math.abs(advanced - elapsed) > 0.35
+        last &&
+        source.generation === last.generation &&
+        source.round === last.round &&
+        elapsed > 0 &&
+        elapsed <= 2 &&
+        advanced === 0
       ) {
-        this.clockSegment++;
+        // Quantized clocks may repeat between progress samples. Keep the last advancing point.
+      } else {
+        if (
+          !last ||
+          source.generation !== last.generation ||
+          source.round !== last.round ||
+          elapsed <= 0 ||
+          elapsed > 2 ||
+          advanced <= 0 ||
+          Math.abs(advanced - elapsed) > 0.35
+        ) {
+          this.clockSegment++;
+        }
+        this.sourceClocks.push({ ...source, segment: this.clockSegment });
+        this.sourceClocks = this.sourceClocks
+          .filter((p) => p.received >= now - 780000)
+          .slice(-16000);
       }
-      this.sourceClocks.push({ ...source, segment: this.clockSegment });
-      this.sourceClocks = this.sourceClocks.filter((p) => p.received >= now - 780000).slice(-16000);
     } else if (!source && last && last.segment === this.clockSegment) {
       this.clockSegment++;
     }
+    // Keep source samples while isolated, but never calibrate against the previous execution.
+    if (this.sourceExecutionChanged) return;
     if (!program) {
       this.lastProgramClock = null;
       this.clockEvidence = [];
@@ -402,17 +433,19 @@ export class ObserverHintTimeline {
     }
     if (this.lastProgramClock && program.received === this.lastProgramClock.received) return;
     const previous = this.lastProgramClock;
-    this.lastProgramClock = program;
     if (
       !previous ||
       previous.generation !== program.generation ||
       previous.round !== program.round
     ) {
+      this.lastProgramClock = program;
       this.clockEvidence = [];
       return;
     }
     const elapsed = (program.received - previous.received) / 1000;
     const advanced = previous.remaining - program.remaining;
+    if (elapsed > 0 && elapsed <= 2 && advanced === 0) return;
+    this.lastProgramClock = program;
     if (elapsed <= 0 || elapsed > 2 || advanced <= 0 || Math.abs(advanced - elapsed) > 0.35) {
       this.clockEvidence = [];
       return;
@@ -547,8 +580,10 @@ export class ObserverHintTimeline {
         prior.session === program.cursor.liveSessionId &&
         this.pendingMap?.name === program.map.name &&
         (this.pendingMap.conflicted ||
+          this.pendingMap.generation !== source.generation ||
           (this.pendingMap.execution !== undefined &&
             clock?.sourceExecution !== undefined &&
+            this.pendingMap.generation === source.generation &&
             this.pendingMap.execution !== clock.sourceExecution));
       const pending =
         prior &&
@@ -566,6 +601,7 @@ export class ObserverHintTimeline {
       this.reset('program-context', now);
       if (pendingConflict) {
         this.sourceExecution = clock?.sourceExecution;
+        this.sourceExecutionGeneration = source.generation;
         this.sourceExecutionChanged = true;
       }
       this.pendingMap = null;
@@ -608,12 +644,14 @@ export class ObserverHintTimeline {
             name: source.mapName,
             since: now,
             execution: clock?.sourceExecution,
+            generation: source.generation,
             conflicted: false,
           };
         } else if (
-          this.pendingMap.execution !== undefined &&
-          clock?.sourceExecution !== undefined &&
-          this.pendingMap.execution !== clock.sourceExecution
+          this.pendingMap.generation !== source.generation ||
+          (this.pendingMap.execution !== undefined &&
+            clock?.sourceExecution !== undefined &&
+            this.pendingMap.execution !== clock.sourceExecution)
         ) {
           this.pendingMap.conflicted = true;
         }
@@ -727,6 +765,7 @@ export class ObserverHintTimeline {
       now,
       clock?.freezeEnd,
       clock?.sourceExecution,
+      source.generation,
       clock?.phase,
     );
     if (this.sourceExecutionChanged) {
