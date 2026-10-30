@@ -198,10 +198,15 @@ test(
           controlValid: () => () => true,
           selectWaitingForExit: async () => ({ ok: true }),
         } as unknown as ProgramSceneController;
+        let restorationAttempts = 0;
         const production = registerProductionRoutes(app, {
           originPolicy: createLocalWebOriginPolicy(),
           hasContext: () => true,
           scenes,
+          afterSafeScene: () => {
+            restorationAttempts++;
+            throw new Error('synthetic video restoration deferred');
+          },
           release: () => connection.release(),
         });
         await app.listen({ host: '127.0.0.1', port: 0 });
@@ -219,6 +224,7 @@ test(
           assert.equal(entered.status, 200);
           const finished = await command('finish', production.get().revision);
           assert.equal(finished.status, 200);
+          assert.equal(restorationAttempts, 1);
           const after = await status(
             0,
             snapshot.cursor.producerInstanceId,
