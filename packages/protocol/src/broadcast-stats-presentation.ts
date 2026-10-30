@@ -153,6 +153,74 @@ const historyIdentity = z.object({
     .array(z.object({ userId: id, nickname: z.string().nullable(), avatarUrl: media }))
     .max(10),
 });
+// Display values are already selected and scaled by Companion. A null value is
+// unknown; numerator/denominator preserve the actual source sample.
+const displayMetric = z.object({
+  value: z.number().finite().nullable(),
+  numerator: z.number().finite().nullable(),
+  denominator: z.number().finite().nullable(),
+  unit: z.enum(['number', 'percent', 'per100', 'per-round', 'seconds', 'count']),
+});
+const displayPlayer = z.object({
+  userId: id,
+  teamIndex: z.union([z.literal(0), z.literal(1)]),
+  nickname: z.string().nullable(),
+  avatarUrl: media,
+  maps: count.nullable(),
+  rounds: count.nullable(),
+  metrics: z.object({
+    rating: displayMetric,
+    adr: displayMetric,
+    kpr: displayMetric,
+    kast: displayMetric,
+    opening: displayMetric,
+    trade: displayMetric,
+    multikill: displayMetric,
+    headshot: displayMetric,
+    kd: displayMetric,
+  }),
+  attributes: z
+    .array(
+      z.object({
+        key: z.enum([
+          'firepower',
+          'entrying',
+          'trading',
+          'opening',
+          'clutching',
+          'sniping',
+          'utility',
+        ]),
+        score: z.number().min(0).max(100).nullable(),
+        status: z.enum(['qualified', 'limited', 'no-data']),
+      }),
+    )
+    .max(7),
+  profileMode: z.enum(['identity', 'stats', 'attributes']),
+  limited: z.boolean(),
+  clutch: z
+    .array(z.object({ opponents: z.number().int().min(0).max(5), metric: displayMetric }))
+    .max(6),
+});
+const displayMapSide = z.object({
+  played: count.nullable(),
+  wins: count.nullable(),
+  losses: count.nullable(),
+  winRate: displayMetric,
+  rounds: displayMetric,
+  ct: displayMetric,
+  t: displayMetric,
+  picks: count.nullable(),
+  bans: count.nullable(),
+  deciders: count.nullable(),
+});
+const displayMap = z.object({ name, sides: z.tuple([displayMapSide, displayMapSide]) });
+const metricRow = z.object({
+  key: z.string().min(1),
+  values: z.tuple([displayMetric, displayMetric]),
+  // Precomputed comparison scale, in the same unit as value.
+  max: z.number().finite().positive(),
+});
 const historyPage = z.object({
   id: z.string().min(1),
   kind: historyPageKind,
@@ -191,6 +259,10 @@ const historyPage = z.object({
       .max(2),
   ]),
   vetoSteps: programPresentationSchema.shape.series.unwrap().shape.veto.max(10),
+  metricRows: z.array(metricRow),
+  maps: z.array(displayMap).max(7),
+  lineupHasStats: z.tuple([z.boolean(), z.boolean()]),
+  profileDefaultId: id.nullable(),
   pageNumber: z.number().int().positive(),
   pageCount: z.number().int().positive(),
 });
@@ -202,6 +274,7 @@ export const broadcastStatsProgramSchema = z.object({
   sourceRevision: id.nullable(),
   sourceGeneratedAt: z.iso.datetime().nullable(),
   teams: z.tuple([historyIdentity, historyIdentity]),
+  displayPlayers: z.array(displayPlayer).max(20),
   history: z.tuple([
     broadcastStatsEntrantSchema.nullable(),
     broadcastStatsEntrantSchema.nullable(),

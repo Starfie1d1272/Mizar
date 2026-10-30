@@ -96,10 +96,29 @@ it('orders only current starters by the confirmed scoreboard multi-kill rate', (
   const ranking = output.pages.find((page) => page.kind === 'multikill');
   expect(ranking?.playerIds[0]).toBe(second.userId);
   expect(ranking?.playerIds).not.toContain(first.userId);
-  expect(ranking?.teamIndices).toEqual([0]);
+  expect(ranking?.teamIndices).toEqual([0, 1]);
   expect(output.history[0]?.facts?.players.some((player) => player.userId === first.userId)).toBe(
     false,
   );
+});
+
+it('projects scoreboard values and their own samples without requiring detailed data', () => {
+  const input = broadcastStatsSchema.parse(scoreboardOnly);
+  const output = projectHistoricalProgram(binding(input), input, null, 'waiting');
+  const player = output.displayPlayers[0]!;
+  expect(player.metrics).toMatchObject({
+    kpr: { value: 0.5, denominator: 40, unit: 'per-round' },
+    kast: { value: 50, denominator: 20, unit: 'percent' },
+    trade: { value: 15, denominator: 20, unit: 'per100' },
+    multikill: { value: 10, denominator: 20, unit: 'per100' },
+    headshot: { value: 50, denominator: 10, unit: 'percent' },
+    kd: { value: 1.25, denominator: 16, unit: 'number' },
+    adr: { value: null },
+    opening: { value: null },
+  });
+  const comparison = output.pages.find((page) => page.kind === 'players')!;
+  expect(comparison.metricRows.map((item) => item.key)).toEqual(['rating', 'kpr', 'kast', 'trade']);
+  expect(comparison.metricRows.find((item) => item.key === 'kast')?.values[0].value).toBe(50);
 });
 
 it('uses the local series, veto and last map summary without recomputing the website snapshot', () => {

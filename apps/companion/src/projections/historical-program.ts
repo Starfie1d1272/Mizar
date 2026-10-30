@@ -6,6 +6,7 @@ import {
 import type { ProgramPresentation, ProgramSceneId } from '@mizar/protocol/program-scenes';
 import type { MatchContextBinding } from '../match-context/lkg-store.js';
 import { bindHistoricalStats } from './historical-stats.js';
+import { displayPlayers, preparePage } from './historical-program-display.js';
 
 type Entrant = BroadcastStats['entrants'][number];
 type Page = BroadcastStatsProgram['pages'][number];
@@ -33,6 +34,10 @@ const page = (kind: Page['kind'], options: Partial<Omit<Page, 'kind'>> = {}): Pa
   recentIds: [[], []],
   recentItems: [[], []],
   vetoSteps: [],
+  metricRows: [],
+  maps: [],
+  lineupHasStats: [false, false],
+  profileDefaultId: null,
   pageNumber: 1,
   pageCount: 1,
   ...options,
@@ -87,7 +92,10 @@ export function projectHistoricalProgram(
         : null;
   if (summary?.score.a != null && summary.score.b != null)
     pages.push(page('current-map', { teamIndices: [0, 1] }));
-  const vetoPages = chunks(local?.series?.veto ?? [], 10);
+  const vetoPages = chunks(
+    [...(local?.series?.veto ?? [])].sort((a, b) => a.stepOrder - b.stepOrder),
+    10,
+  );
   vetoPages.forEach((items, i) =>
     pages.push(
       page('bp', {
@@ -248,6 +256,7 @@ export function projectHistoricalProgram(
       : null;
   if (radar && selected) pages.push(page('radar', { teamIndices: [0, 1], playerIds: selected }));
   const allPlayers = teams.flatMap((team) => team.starters.map((player) => player.userId));
+  const displays = displayPlayers(teams, histories);
   if (allPlayers.length)
     pages.push(
       page('profile', {
@@ -272,17 +281,11 @@ export function projectHistoricalProgram(
         }),
       ),
     );
-  const multiRanked = histories
-    .flatMap((team) => team?.facts?.players ?? [])
-    .filter(
-      (player) =>
-        player.maps > 0 &&
-        player.scoreboard?.mkpr.value != null &&
-        (player.scoreboard.mkpr.rounds ?? 0) > 0,
-    )
+  const multiRanked = displays
+    .filter((player) => (player.maps ?? 0) > 0 && player.metrics.multikill.value !== null)
     .sort(
       (a, b) =>
-        b.scoreboard!.mkpr.value! - a.scoreboard!.mkpr.value! ||
+        b.metrics.multikill.value! - a.metrics.multikill.value! ||
         (a.userId < b.userId ? -1 : a.userId > b.userId ? 1 : 0),
     );
   if (multiRanked.length >= 2)
@@ -386,6 +389,7 @@ export function projectHistoricalProgram(
     sourceRevision: bound?.revision ?? null,
     sourceGeneratedAt: bound?.generatedAt ?? null,
     teams,
+    displayPlayers: displays,
     history: histories,
     mapPool: pool,
     support,
@@ -393,6 +397,6 @@ export function projectHistoricalProgram(
     selectedPlayerIds: selected,
     radar,
     selectedMap: summary ?? null,
-    pages,
+    pages: pages.map((item) => preparePage(item, histories, displays)),
   });
 }
