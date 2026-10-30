@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath, URL } from 'node:url';
 import { promisify } from 'node:util';
-import { lookupRelease } from './release-lookup.mjs';
+import { lookupCreatedDraft, lookupRelease } from './release-lookup.mjs';
 import { publishDraftAssets, reconcileAssets, stageDraftAssets } from './release-assets.mjs';
 
 const sha = 'a'.repeat(40);
@@ -132,6 +132,43 @@ test('discovers an unpublished draft, rejects ambiguity and never assumes a fail
   );
 });
 
+test('new draft lookup waits for visibility but fails closed on absence and conflicts', async () => {
+  const draft = {
+    id: 81,
+    draft: true,
+    prerelease: false,
+    tag_name: tag,
+    target_commitish: sha,
+    assets: [],
+  };
+  let lists = 0;
+  let waits = 0;
+  const wait = async () => {
+    waits++;
+  };
+  const delayed = (path) => (path.startsWith('releases?') ? (++lists < 3 ? [] : [draft]) : null);
+  assert.deepEqual(await lookupCreatedDraft(tag, sha, delayed, wait), draft);
+  assert.equal(waits, 2);
+  waits = 0;
+  await assert.rejects(
+    lookupCreatedDraft(tag, sha, (path) => (path.startsWith('releases?') ? [] : null), wait),
+    /not visible/,
+  );
+  assert.equal(waits, 4);
+  waits = 0;
+  await assert.rejects(
+    lookupCreatedDraft(
+      tag,
+      sha,
+      (path) =>
+        path.startsWith('releases?') ? [{ ...draft, target_commitish: 'b'.repeat(40) }] : null,
+      wait,
+    ),
+    /Draft source differs/,
+  );
+  assert.equal(waits, 0);
+});
+
 test(
   'production lookup-release finds an authenticated partial draft without a tag',
   { skip: process.platform === 'win32' },
@@ -185,6 +222,23 @@ test(
       );
       assert.deepEqual(JSON.parse(await readFile(output, 'utf8')), draft);
       assert.match(await readFile(envFile, 'utf8'), /RELEASE_FOUND=true/);
+      const createdOutput = join(dir, 'created-release.json');
+      await promisify(execFile)(
+        process.execPath,
+        [script, 'lookup-created-draft', dir, manifest, createdOutput],
+        {
+          env: {
+            ...process.env,
+            PATH: `${dir}${delimiter}${process.env.PATH}`,
+            GH_TOKEN: '',
+            GITHUB_TOKEN: '',
+            GITHUB_ENV: envFile,
+            RELEASE_TAG: tag,
+            FAKE_RELEASE_LIST: JSON.stringify([draft]),
+          },
+        },
+      );
+      assert.deepEqual(JSON.parse(await readFile(createdOutput, 'utf8')), draft);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
