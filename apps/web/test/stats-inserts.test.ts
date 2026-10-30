@@ -99,3 +99,49 @@ it('renders the selected map summary without inventing player statistics', async
   expect(html).toContain('13 : 5');
   expect(html).not.toContain('>K</');
 });
+
+it('formats flash samples and labels single-team and map-pool rails from the projection', async () => {
+  const { broadcastStatsProgramSchema } =
+    await import('@mizar/protocol/broadcast-stats-presentation');
+  const { statsProgramInserts } = await import('../src/program/stats-program');
+  const fixture = (await import('./fixtures/stats-program.json')).default;
+  const projection = broadcastStatsProgramSchema.parse(fixture);
+  const flash = projection.pages.find((page) => page.kind === 'flash')!;
+  const flashMetric = flash.metricRows.find((row) => row.key === 'enemy-blind-per-round')!;
+  flashMetric.values[0].numerator = 522.2460000000001;
+  flashMetric.values[0].denominator = 117;
+  flashMetric.values[1].numerator = 0;
+  flashMetric.values[1].denominator = 0;
+  const perFlash = flash.metricRows.find((row) => row.key === 'enemy-blind-per-flash')!;
+  perFlash.values[0].denominator = 379;
+  const overview = projection.pages.find((page) => page.kind === 'overview')!;
+  overview.teamIndices = [1];
+  const pool = projection.pages.find((page) => page.kind === 'maps')!;
+  projection.pages.push({ ...structuredClone(pool), id: 'maps-info-test', kind: 'maps-info' });
+  projection.pages.push({ ...structuredClone(pool), id: 'bp-test', kind: 'bp' });
+  const cards = statsProgramInserts(projection);
+  const row = cards
+    .find((card) => card.id === flash.id)!
+    .rows.find((item) => item.label === '每回合敌方致盲')!;
+  expect(row.samples).toEqual(['522.25 秒', '0.00 秒']);
+  expect(cards.find((card) => card.id === flash.id)!.rows[0]!.samples?.[0]).toBe('379 颗');
+  expect(row.numericValues).toEqual(flashMetric.values.map((value) => value.value));
+  expect(cards.find((card) => card.id === overview.id)?.rail).toEqual([
+    projection.teams[1].name,
+    `${projection.records[1].rounds} 回合`,
+  ]);
+  expect(cards.find((card) => card.id === 'maps-b-1')?.rail).toEqual([
+    projection.teams[1].name,
+    `${projection.records[1].rounds} 回合`,
+  ]);
+  expect(cards.find((card) => card.id === 'maps-info-test')).toMatchObject({
+    rail: ['', ''],
+    railCenter: `${pool.maps.length} MAPS`,
+  });
+  expect(cards.find((card) => card.id === 'bp-test')?.rail).toEqual(['', '']);
+  projection.records[1].rounds = null;
+  expect(statsProgramInserts(projection).find((card) => card.id === overview.id)?.rail).toEqual([
+    projection.teams[1].name,
+    '',
+  ]);
+});
