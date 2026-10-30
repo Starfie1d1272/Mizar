@@ -29,6 +29,18 @@ const action = defusing.payload.bomb!.action!;
 const active = focused.weapons.find((w) => w.state === 'active')!;
 const missingAmmo = playerEdge({
   completedAdr: null,
+  statistics: {
+    ...focused.statistics,
+    completed: {
+      ...focused.statistics.completed,
+      adr: {
+        ...focused.statistics.completed.adr,
+        value: null,
+        basis: { ...focused.statistics.completed.adr.basis, coverage: 'unavailable' },
+        reason: 'missing-input',
+      },
+    },
+  },
   weapons: focused.weapons.map((w) =>
     w.state === 'active' ? { ...w, ammoClipMax: null, ammoReserve: null } : w,
   ),
@@ -52,6 +64,13 @@ export const objectiveFocusedFixtures = {
   }),
   'focused-unavailable-edge': missingAmmo,
   'objective-live-4v5-edge': edge(live, {
+    teamEconomy: {
+      ...live.payload.teamEconomy,
+      [live.payload.players[0]!.side === 'T' ? 't' : 'ct']: {
+        ...live.payload.teamEconomy[live.payload.players[0]!.side === 'T' ? 't' : 'ct'],
+        alive: 4,
+      },
+    },
     players: live.payload.players.map((p, i) =>
       i === 0 ? { ...p, lifeState: 'dead', state: { ...p.state!, health: 0 } } : p,
     ),

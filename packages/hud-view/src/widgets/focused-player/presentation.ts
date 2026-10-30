@@ -72,11 +72,8 @@ export function buildFocusedPlayerPresentation(payload: ProgramPayload) {
     !dead && (payload.round?.phase === 'live' || payload.clock?.phase === 'live');
   const team =
     player.side === 'CT' ? payload.teams.ct : player.side === 'T' ? payload.teams.t : null;
-  const hasC4 =
-    !dead &&
-    payload.bomb?.sourcePlayerId === player.sourcePlayerId &&
-    (payload.bomb.state === 'carried' || payload.bomb.state === 'planting');
-  const weapons = player.weaponsAvailable ? player.weapons.map(weaponPresentation) : [];
+  const hasC4 = !dead && player.equipment.hasC4 === true;
+  const weapons = player.equipment.available ? player.weapons.map(weaponPresentation) : [];
   const active = heldWeapon(player, payload.status.telemetry === 'fresh');
   const resolved = active === null ? null : weaponPresentation(active);
   const activeItem =
@@ -102,12 +99,12 @@ export function buildFocusedPlayerPresentation(payload: ProgramPayload) {
     dead,
     statusEffects: playerStatusEffectState(player, statusEffectsVisible),
     stats: {
-      kills: player.matchStats?.kills ?? null,
-      assists: player.matchStats?.assists ?? null,
-      deaths: player.matchStats?.deaths ?? null,
+      kills: player.statistics.scoreboard.kills.value,
+      assists: player.statistics.scoreboard.assists.value,
+      deaths: player.statistics.scoreboard.deaths.value,
     },
-    completedAdr: player.completedAdr,
-    liveAdr: player.liveAdr,
+    completedAdr: player.statistics.completed.adr.value,
+    liveAdr: player.statistics.includingCurrentRound.adr.value,
     roundKills: player.state.roundKills,
     reportedHealth: dead && player.state.health !== 0 ? null : player.state.health,
     health: dead ? null : player.state.health,
@@ -123,7 +120,7 @@ export function buildFocusedPlayerPresentation(payload: ProgramPayload) {
             player.state.hasHelmet ? 'equipment.armor-helmet' : 'equipment.armor',
           )
         : null,
-    utility: dead ? [] : utilityPresentation(weapons),
+    utility: dead ? [] : utilityPresentation(player, player.side === 'T' ? 'T' : 'CT', weapons),
     zeus: dead ? null : (weapons.find((w) => w.item?.canonicalKey === 'utility.taser') ?? null),
     kit:
       !dead && player.state.hasDefuser === true
