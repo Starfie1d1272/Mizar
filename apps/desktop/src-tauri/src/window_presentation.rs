@@ -171,7 +171,35 @@ pub fn observe_process_failure(window: &WebviewWindow, generation: u64) -> Resul
 
 /// The controller runs on its apartment; failures are retained in the native log.
 pub fn sync_visibility(window: &WebviewWindow) -> tauri::Result<()> {
-    dispatch_visibility(window, None)
+    let result = dispatch_visibility(window, None);
+    let key = format!("dispatch:{}", window.label());
+    let mut observations = CONTROLLER_OBSERVATIONS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if let Err(error) = &result {
+        let detail =
+            serde_json::json!({"label": window.label(), "error": error.to_string()}).to_string();
+        if let Some((_, previous)) = observations.iter_mut().find(|(label, _)| label == &key) {
+            if *previous != detail {
+                *previous = detail.clone();
+                window.state::<crate::startup_log::DesktopLog>().event(
+                    "webview_controller_dispatch",
+                    "failure",
+                    Some(&detail),
+                );
+            }
+        } else {
+            observations.push((key, detail.clone()));
+            window.state::<crate::startup_log::DesktopLog>().event(
+                "webview_controller_dispatch",
+                "failure",
+                Some(&detail),
+            );
+        }
+    } else {
+        observations.retain(|(label, _)| label != &key);
+    }
+    result
 }
 
 /// Called only by the recovery worker, never by the UI thread.
