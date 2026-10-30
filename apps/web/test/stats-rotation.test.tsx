@@ -3,94 +3,89 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, expect, it, vi } from 'vitest';
 import { useStatsRotation } from '../src/program/useStatsRotation';
-import fixture from '../../../tests/fixtures/mizar-broadcast-stats-presentation-v1.json';
+import fixture from './fixtures/stats-program.json';
 
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
-it('starts on the main scene, freezes each card, and restarts after unmount', async () => {
+it('uses Companion page order, freezes each card, and stops on manual takeover', async () => {
   vi.useFakeTimers();
-  const fetcher = vi.fn().mockImplementation(() => Promise.resolve(Response.json(fixture)));
+  const data = structuredClone(fixture);
+  const fetcher = vi.fn(async () => Response.json(data));
   vi.stubGlobal('fetch', fetcher);
   const host = document.createElement('div');
   const root = createRoot(host);
   function Rotation({ enabled = true }: { enabled?: boolean }) {
     const card = useStatsRotation(enabled, fixture.matchId);
-    return <span>{card?.subtitle ?? 'MAIN'}</span>;
+    return <span>{card ? `${card.id} ${card.teams[0]}` : 'MAIN'}</span>;
   }
   await act(async () => root.render(<Rotation />));
   expect(host.textContent).toBe('MAIN');
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(20_000);
-  });
-  expect(host.textContent).toBe('LINEUPS');
-  expect(fetcher).toHaveBeenCalledTimes(1);
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(11_999);
-  });
-  expect(host.textContent).toBe('LINEUPS');
-  expect(fetcher).toHaveBeenCalledTimes(1);
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(1);
-  });
-  expect(host.textContent).toBe('MAP PERFORMANCE');
+  await act(async () => vi.advanceTimersByTimeAsync(20_000));
+  expect(host.textContent).toBe(`match ${fixture.teams[0]!.name}`);
+  expect(fetcher.mock.calls[0]?.[0]).toBe('/local/v1/broadcast-stats-program');
+  data.teams[0]!.name = 'Updated team';
+  await act(async () => vi.advanceTimersByTimeAsync(14_999));
+  expect(host.textContent).toBe(`match ${fixture.teams[0]!.name}`);
+  await act(async () => vi.advanceTimersByTimeAsync(1));
+  expect(host.textContent).toBe('lineup Updated team');
   await act(async () => root.render(<Rotation enabled={false} />));
-  await act(async () => root.render(<Rotation />));
   expect(host.textContent).toBe('MAIN');
+  await act(async () => root.render(<Rotation />));
   await act(async () => vi.advanceTimersByTimeAsync(19_999));
   expect(host.textContent).toBe('MAIN');
-  await act(async () => root.render(<div>MANUAL</div>));
-  await act(async () => root.render(<Rotation />));
-  expect(host.textContent).toBe('MAIN');
   await act(async () => root.unmount());
 });
 
-it('shows each map page before continuing the rotation', async () => {
+it('visits every qualified page in order, including multiple map pages, before returning to the scene', async () => {
   vi.useFakeTimers();
-  const data = structuredClone(fixture);
-  data.maps.pages.push({ page: 2, rows: data.maps.pages[0]!.rows });
   vi.stubGlobal(
     'fetch',
-    vi.fn(async () => Response.json(data)),
-  );
-  const host = document.createElement('div');
-  const root = createRoot(host);
-  function Rotation() {
-    const card = useStatsRotation(true, data.matchId);
-    return <span>{card ? `${card.subtitle} ${card.scope}` : 'MAIN'}</span>;
-  }
-  await act(async () => root.render(<Rotation />));
-  await act(async () => vi.advanceTimersByTimeAsync(32_000));
-  expect(host.textContent).toContain('1 / 2 页');
-  await act(async () => vi.advanceTimersByTimeAsync(15_000));
-  expect(host.textContent).toContain('2 / 2 页');
-  await act(async () => vi.advanceTimersByTimeAsync(15_000));
-  expect(host.textContent).toContain('RECENT MAPS');
-  await act(async () => root.unmount());
-});
-
-it('keeps the displayed card unchanged until its next boundary reads the newer revision', async () => {
-  vi.useFakeTimers();
-  const data = structuredClone(fixture);
-  vi.stubGlobal(
-    'fetch',
-    vi.fn(async () => Response.json(data)),
+    vi.fn(async () => Response.json(fixture)),
   );
   const host = document.createElement('div');
   const root = createRoot(host);
   function Rotation() {
     const card = useStatsRotation(true, fixture.matchId);
-    return <span>{card ? `${card.subtitle} ${card.teams[0]}` : 'MAIN'}</span>;
+    return <span>{card?.id ?? 'MAIN'}</span>;
   }
   await act(async () => root.render(<Rotation />));
   await act(async () => vi.advanceTimersByTimeAsync(20_000));
-  expect(host.textContent).toContain(`LINEUPS ${fixture.teams[0]!.name}`);
-  data.teams[0]!.name = 'Updated team';
-  await act(async () => vi.advanceTimersByTimeAsync(11_999));
-  expect(host.textContent).toContain(`LINEUPS ${fixture.teams[0]!.name}`);
-  await act(async () => vi.advanceTimersByTimeAsync(1));
-  expect(host.textContent).toContain('MAP PERFORMANCE Updated team');
+  for (const page of fixture.pages) {
+    expect(host.textContent).toBe(page.id);
+    const duration = ['lineup', 'players', 'economy', 'utility'].includes(page.kind)
+      ? 12_000
+      : 15_000;
+    await act(async () => vi.advanceTimersByTimeAsync(duration));
+  }
+  expect(host.textContent).toBe('MAIN');
+  await act(async () => root.unmount());
+});
+
+it('ignores a late response after a match change', async () => {
+  vi.useFakeTimers();
+  let resolveOld!: (value: Response) => void;
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveOld = resolve;
+        }),
+    ),
+  );
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  function Rotation({ matchId }: { matchId: string }) {
+    const card = useStatsRotation(true, matchId);
+    return <span>{card?.id ?? 'MAIN'}</span>;
+  }
+  await act(async () => root.render(<Rotation matchId={fixture.matchId} />));
+  await act(async () => vi.advanceTimersByTimeAsync(20_000));
+  await act(async () => root.render(<Rotation matchId="another-match" />));
+  await act(async () => resolveOld(Response.json(fixture)));
+  expect(host.textContent).toBe('MAIN');
   await act(async () => root.unmount());
 });

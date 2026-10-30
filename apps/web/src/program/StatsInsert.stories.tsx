@@ -12,7 +12,8 @@ export const MapPerformance: Story = {
   args: {
     insert: {
       title: '地图表现',
-      subtitle: 'MAP PERFORMANCE',
+      subtitle: 'MAP POOL',
+      layout: 'maps',
       scope: '本届 · 赛前',
       teams: ['Team A', 'Team B'],
       rows: ['de_mirage', 'de_ancient', 'de_dust2'].map((map) => ({

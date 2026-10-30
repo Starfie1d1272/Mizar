@@ -22,10 +22,8 @@ it('labels radar sides and hides a failed image until it loads again', async () 
       />,
     ),
   );
-  expect(host.querySelector('.stats-insert__key--left')?.parentElement?.textContent).toContain('A');
-  expect(host.querySelector('.stats-insert__key--right')?.parentElement?.textContent).toContain(
-    'B',
-  );
+  expect(host.querySelectorAll('.stats-radar-key span')[0]?.textContent).toContain('A');
+  expect(host.querySelectorAll('.stats-radar-key span')[1]?.textContent).toContain('B');
   const image = host.querySelector('img')!;
   await act(async () => image.dispatchEvent(new Event('error')));
   expect(image.style.visibility).toBe('hidden');
@@ -55,9 +53,9 @@ it('draws the radar from numeric values even when labels are formatted different
       />,
     ),
   );
-  const polygons = host.querySelectorAll('.stats-insert__radar polygon');
-  expect(polygons[5]?.getAttribute('points')).toContain('450,187.5');
-  expect(polygons[6]?.getAttribute('points')).toContain('450,136.25');
+  const polygons = host.querySelectorAll('.stats-radar polygon');
+  expect(polygons[5]?.getAttribute('points')).toContain('400,178');
+  expect(polygons[6]?.getAttribute('points')).toContain('400,125');
   expect(host.textContent).toContain('50 分 / 75 分');
   await act(async () => root.unmount());
 });

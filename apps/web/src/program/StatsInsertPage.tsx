@@ -1,10 +1,10 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import {
-  broadcastStatsPresentationSchema,
-  type BroadcastStatsPresentation,
+  broadcastStatsProgramSchema,
+  type BroadcastStatsProgram,
 } from '@mizar/protocol/broadcast-stats-presentation';
 import { StatsInsertView } from '@mizar/hud-view';
-import { statsInserts } from './stats-inserts';
+import { statsProgramInserts } from './stats-program';
 import { programPresentationSchema } from '@mizar/protocol/program-scenes';
 import { ProgramScenePage } from './ProgramScenePage';
 import { useLocalChannelClient } from '../realtime';
@@ -13,7 +13,7 @@ import { useBroadcastDisplayConfig } from '../realtime/broadcast-display-client'
 import { pulseTokenStyle } from './broadcast-display';
 
 export function StatsInsertPage() {
-  const [bundle, setBundle] = useState<BroadcastStatsPresentation | null>(null);
+  const [bundle, setBundle] = useState<BroadcastStatsProgram | null>(null);
   const scenes = useProgramScenes();
   const sceneId = scenes?.active === 'intermap' ? 'intermap' : 'waiting';
   const display = useBroadcastDisplayConfig(true, sceneId);
@@ -48,7 +48,7 @@ export function StatsInsertPage() {
           const requestGeneration = generation;
           const statsSequence = ++statsRequest;
           try {
-            const stats = await fetch('/local/v1/broadcast-stats-presentation', {
+            const stats = await fetch('/local/v1/broadcast-stats-program', {
               cache: 'no-store',
               signal: AbortSignal.timeout(5000),
             });
@@ -60,7 +60,7 @@ export function StatsInsertPage() {
               data === null
             )
               setBundle(null);
-            const parsed = broadcastStatsPresentationSchema.safeParse(data);
+            const parsed = broadcastStatsProgramSchema.safeParse(data);
             if (
               active &&
               requestGeneration === generation &&
@@ -92,17 +92,23 @@ export function StatsInsertPage() {
   }, []);
   const observedMatch = connection.current?.payload.match?.matchId;
   const cards =
-    bundle && (!connection.current || observedMatch === bundle.matchId) ? statsInserts(bundle) : [];
+    bundle && (!connection.current || observedMatch === bundle.matchId)
+      ? statsProgramInserts(bundle, new URLSearchParams(window.location.search).get('player'))
+      : [];
   const requested = new URLSearchParams(window.location.search).get('card');
   const legacyIds: Record<string, string> = {
     'MAP PERFORMANCE': 'maps',
     'RECENT MAPS': 'recent',
-    'PISTOL & CONVERSION': 'pistol',
-    ECONOMY: 'economy',
+    'PISTOL & CONVERSION': 'economy',
+    pistol: 'economy',
+    ECONOMY: 'conversion',
     UTILITY: 'utility',
-    LINEUPS: 'lineups',
-    'PLAYER COMPARISON': 'player-comparison',
-    'PLAYER ATTRIBUTES': 'player-attributes',
+    LINEUPS: 'lineup',
+    lineups: 'lineup',
+    'PLAYER COMPARISON': 'players',
+    'player-comparison': 'players',
+    'PLAYER ATTRIBUTES': 'radar',
+    'player-attributes': 'radar',
   };
   const id = requested ? (legacyIds[requested] ?? requested) : null;
   const card = id ? cards.find((item) => item.id === id) : cards[0];

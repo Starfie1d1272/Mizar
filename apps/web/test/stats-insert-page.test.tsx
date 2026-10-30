@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { expect, it, vi } from 'vitest';
-import fixture from '../../../tests/fixtures/mizar-broadcast-stats-presentation-v1.json';
+import fixture from './fixtures/stats-program.json';
 
 vi.mock('../src/workspace/client', () => ({ useProgramScenes: () => ({ active: 'waiting' }) }));
 vi.mock('../src/realtime/broadcast-display-client', () => ({
@@ -53,6 +53,11 @@ it('recovers and updates a same-match local snapshot while retaining it on read 
   data = fixture;
   await act(async () => vi.advanceTimersByTimeAsync(2000));
   expect(host.textContent).toContain(fixture.teams[0]!.name);
+  expect(
+    vi
+      .mocked(fetch)
+      .mock.calls.some(([url]) => String(url).includes('/local/v1/broadcast-stats-program')),
+  ).toBe(true);
   const refreshed = structuredClone(fixture);
   refreshed.teams[0]!.name = 'Updated team';
   data = refreshed;

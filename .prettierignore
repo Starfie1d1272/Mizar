@@ -10,3 +10,5 @@ tests/fixtures/rivalhub-provider-stats-v1-scoreboard-only.json
 tests/fixtures/rivalhub-provider-stats-v1-single-sided.json
 tests/fixtures/rivalhub-provider-stats-v1-sparse.json
 tests/fixtures/rivalhub-provider-stats-v1-zero.json
+# Keep the visual owner's shared program projection fixture byte-identical.
+apps/web/test/fixtures/stats-program.json

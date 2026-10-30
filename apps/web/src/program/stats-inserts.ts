@@ -30,6 +30,8 @@ export function statsInserts(bundle: BroadcastStatsPresentation): StatsCard[] {
     scope: '本届 · 统计快照',
     teams: [a.name, b.name] as const,
     logos: [a.logoUrl, b.logoUrl] as const,
+    matchTeams: [a.name, b.name] as const,
+    matchLogos: [a.logoUrl, b.logoUrl] as const,
   };
   const result: StatsCard[] = [];
   if (bundle.maps.eligible)
@@ -42,7 +44,8 @@ export function statsInserts(bundle: BroadcastStatsPresentation): StatsCard[] {
             ? `${base.scope} · ${page.page} / ${bundle.maps.pages.length} 页`
             : base.scope,
         title: '地图表现',
-        subtitle: 'MAP PERFORMANCE',
+        subtitle: 'MAP POOL',
+        layout: 'maps',
         rows: page.rows.map((row) => ({
           label: cleanMap(row.mapName),
           artwork: row.mapName,
@@ -57,7 +60,13 @@ export function statsInserts(bundle: BroadcastStatsPresentation): StatsCard[] {
   if (bundle.recent.eligible) {
     const format = (items: (typeof bundle.recent.results)[0]) =>
       items.map((item) => ({
-        value: `${item.score}–${item.opponentScore} · ${item.opponent.name}`,
+        value: `${item.score}–${item.opponentScore}`,
+        opponent: item.opponent.name,
+        date: new Intl.DateTimeFormat('zh-CN', {
+          timeZone: 'Asia/Shanghai',
+          month: '2-digit',
+          day: '2-digit',
+        }).format(new Date(item.completedAt)),
         sample: cleanMap(item.mapName),
         logo: item.opponent.logoUrl,
       }));
@@ -67,6 +76,7 @@ export function statsInserts(bundle: BroadcastStatsPresentation): StatsCard[] {
       scope: '本届 · 最近 5 图',
       title: '近期战绩',
       subtitle: 'RECENT MAPS',
+      layout: 'recent',
       rows: [],
       recent: [format(bundle.recent.results[0]), format(bundle.recent.results[1])],
     });
@@ -83,6 +93,7 @@ export function statsInserts(bundle: BroadcastStatsPresentation): StatsCard[] {
                 `${(values[0].rate * 100).toFixed(1)}%`,
                 `${(values[1].rate * 100).toFixed(1)}%`,
               ] as const,
+              numericValues: [values[0].rate * 100, values[1].rate * 100] as const,
               samples: [
                 `${values[0].wins} / ${values[0].opportunities}`,
                 `${values[1].wins} / ${values[1].opportunities}`,
@@ -108,10 +119,10 @@ export function statsInserts(bundle: BroadcastStatsPresentation): StatsCard[] {
     result.push({
       ...base,
       id: bundle.economy.id,
-      title: '经济局表现',
-      subtitle: 'ECONOMY',
-      layout: 'columns',
-      rows: winRows([{ label: '经济劣势取胜', values: bundle.economy.ecoSemiUpset }]),
+      title: '回合兑现',
+      subtitle: 'ROUND CONVERSION',
+      layout: 'comparison',
+      rows: winRows([{ label: '低经济获胜率 · Eco / Semi', values: bundle.economy.ecoSemiUpset }]),
     });
   if (bundle.utility.eligible) {
     const fields = [
@@ -152,6 +163,7 @@ export function statsInserts(bundle: BroadcastStatsPresentation): StatsCard[] {
       id: bundle.lineups.id,
       title: '本场阵容',
       subtitle: 'LINEUPS',
+      layout: 'lineups',
       rows: bundle.lineups.rows.map(([left, right], i) => ({
         label: String(i + 1).padStart(2, '0'),
         values: [left.nickname, right.nickname],
@@ -169,6 +181,7 @@ export function statsInserts(bundle: BroadcastStatsPresentation): StatsCard[] {
       logos: [selected[0].avatarUrl, selected[1].avatarUrl],
       title: '选手对比',
       subtitle: 'PLAYER COMPARISON',
+      layout: 'players',
       rows: [
         {
           label: 'Rating',
@@ -200,6 +213,14 @@ export function statsInserts(bundle: BroadcastStatsPresentation): StatsCard[] {
       title: '选手画像',
       subtitle: 'PLAYER ATTRIBUTES',
       layout: 'radar',
+      ...(bundle.playerComparison.eligible
+        ? {
+            playerMetrics: ([0, 1] as const).map((side) => ({
+              rating: bundle.playerComparison.rating?.[side]?.value.toFixed(2),
+              adr: bundle.playerComparison.adr?.[side]?.value.toFixed(1),
+            })),
+          }
+        : {}),
       rows: (Object.keys(labels) as Array<keyof typeof labels>).map((key) => ({
         label: labels[key],
         values: [String(values[key][0]), String(values[key][1])],
