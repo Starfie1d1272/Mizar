@@ -4,3 +4,9 @@ pnpm-lock.yaml
 # Preserve the real signed subject and original provenance bytes.
 apps/companion/test/fixtures/updates/distribution-manifest.json
 apps/companion/test/fixtures/updates/distribution.attestation.json
+# Preserve the exact RivalHub producer contract fixture bytes.
+tests/fixtures/rivalhub-provider-stats-v1-extended.json
+tests/fixtures/rivalhub-provider-stats-v1-scoreboard-only.json
+tests/fixtures/rivalhub-provider-stats-v1-single-sided.json
+tests/fixtures/rivalhub-provider-stats-v1-sparse.json
+tests/fixtures/rivalhub-provider-stats-v1-zero.json
