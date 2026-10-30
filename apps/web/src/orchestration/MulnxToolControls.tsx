@@ -22,7 +22,7 @@ export function MulnxToolControls({
   maintenanceOnly?: boolean;
   tool:
     | (Pick<MulnxToolView, 'installed' | 'latest' | 'busy'> &
-        Partial<Pick<MulnxToolView, 'message' | 'packs'>>)
+        Partial<Omit<MulnxToolView, 'installed' | 'latest' | 'busy'>>)
     | undefined;
 }) {
   const production = useLocalRead<Production>('/local/v1/production');
@@ -65,7 +65,7 @@ export function MulnxToolControls({
         );
         if (result?.cleanupPending)
           setMessage((value) => `${value} 工作台收尾尚未完成，请检查退出状态。`);
-      } else await command('/operator/orchestration', { action: 'check-tool' });
+      } else await command('/operator/updates', { action: 'check' }, undefined, 60_000);
     } catch (error) {
       setFailed(true);
       setMessage(
@@ -99,6 +99,31 @@ export function MulnxToolControls({
           {tool.latest && tool.latest !== tool.installed ? ` · 可更新至 ${tool.latest}` : ''}
         </p>
       ) : null}
+      {!runtimeOnly && tool.checkResult === 'error' ? (
+        <p>未能确认最新版，请稍后重新检查。</p>
+      ) : null}
+      {!runtimeOnly && tool.checkedAt ? (
+        <p>检查时间：{new Date(tool.checkedAt).toLocaleString()}</p>
+      ) : null}
+      {tool.phase === 'downloading' || tool.phase === 'verifying' ? (
+        <p>
+          {tool.phase === 'verifying' ? '正在校验' : `正在从 ${tool.source} 下载`}：
+          {tool.downloadedBytes ?? 0} / {tool.totalBytes ?? 0} 字节 {tool.sourceMessage}
+          <Button
+            onClick={() =>
+              void command('/operator/orchestration', { action: 'cancel-tool-download' }).catch(
+                () => {
+                  setFailed(true);
+                  setMessage('下载状态已变化，请刷新后查看。');
+                },
+              )
+            }
+          >
+            取消下载
+          </Button>
+        </p>
+      ) : null}
+      {tool.phase === 'installing' ? <p>正在准备版本…</p> : null}
       {!runtimeOnly ? (
         <Button disabled={busy || tool.busy} onClick={() => void run('check')}>
           检查更新

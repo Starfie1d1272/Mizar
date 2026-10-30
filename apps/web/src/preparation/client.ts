@@ -40,12 +40,17 @@ export function useLocalReadWithTime<T>(path: string | null, interval = 2000, re
 export function useLocalRead<T>(path: string | null, interval = 2000, refresh = 0) {
   return useLocalReadWithTime<T>(path, interval, refresh).value;
 }
-export async function command(path: string, body: unknown = {}, task?: ControlTask) {
+export async function command(
+  path: string,
+  body: unknown = {},
+  task?: ControlTask,
+  timeoutMs = 15000,
+) {
   const response = await fetch(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...task?.headers() },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(15000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   const result = (await response.json().catch(() => ({}))) as { message?: string };
   if (!response.ok) throw new Error(result.message ?? '操作未完成，请刷新后重试。');
@@ -173,21 +178,31 @@ export async function checkObsBeforeLaunch(requireStoppedOutput = false, task?: 
 export type ExternalGameIdentity = { pid: number; created: string };
 
 let entering: Promise<ControlTask['result']> | undefined;
+let cancelPendingEntry: (() => void) | undefined;
+export function cancelProductionEntry() {
+  cancelPendingEntry?.();
+}
 export function productionAction(
   action: 'enter' | 'hide' | 'finish',
   state: Production,
   preserveSettings = false,
   parentTask?: ControlTask,
   external?: ExternalGameIdentity,
+  onChecking?: (checking: boolean) => void,
 ) {
   if (action !== 'enter')
     return runProductionAction(action, state, preserveSettings, parentTask, external);
   if (entering) return entering;
-  entering = runProductionAction(action, state, preserveSettings, parentTask, external).finally(
-    () => {
-      entering = undefined;
-    },
-  );
+  entering = runProductionAction(
+    action,
+    state,
+    preserveSettings,
+    parentTask,
+    external,
+    onChecking,
+  ).finally(() => {
+    entering = undefined;
+  });
   return entering;
 }
 async function runProductionAction(
@@ -196,6 +211,7 @@ async function runProductionAction(
   preserveSettings = false,
   parentTask?: ControlTask,
   external?: ExternalGameIdentity,
+  onChecking?: (checking: boolean) => void,
 ) {
   const task = new ControlTask(
     `production_${action}`,
@@ -204,20 +220,34 @@ async function runProductionAction(
     parentTask,
   );
   let cancelled = false;
+  const entryAbort = new AbortController();
   const cancelEntry = () => {
     cancelled = true;
+    entryAbort.abort();
   };
   if (action === 'enter') {
+    cancelPendingEntry = cancelEntry;
     window.addEventListener('pagehide', cancelEntry);
     window.addEventListener('popstate', cancelEntry);
   }
   try {
-    await performProductionAction(action, state, preserveSettings, task, external, () => cancelled);
+    await performProductionAction(
+      action,
+      state,
+      preserveSettings,
+      task,
+      external,
+      () => cancelled,
+      entryAbort.signal,
+      onChecking,
+    );
     return task.result;
   } catch (error) {
     task.fail(error);
     throw error;
   } finally {
+    entryAbort.abort();
+    if (cancelPendingEntry === cancelEntry) cancelPendingEntry = undefined;
     window.removeEventListener('pagehide', cancelEntry);
     window.removeEventListener('popstate', cancelEntry);
   }
@@ -229,6 +259,8 @@ async function performProductionAction(
   task: ControlTask,
   external: ExternalGameIdentity | undefined,
   cancelled: () => boolean,
+  entrySignal: AbortSignal,
+  onChecking?: (checking: boolean) => void,
 ) {
   const entryLocation = window.location.href;
   controlEvidence('production_action', 'dispatch', {
@@ -240,6 +272,72 @@ async function performProductionAction(
     expectedRevision: state.revision,
     page: window.location.pathname,
   });
+  if (window.__TAURI_INTERNALS__ && action === 'enter' && state.mode === 'preparation') {
+    onChecking?.(true);
+    try {
+      try {
+        const response = await fetch('/operator/updates', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...task.headers() },
+          body: JSON.stringify({ action: 'entry-check' }),
+          signal: AbortSignal.any([entrySignal, AbortSignal.timeout(40_000)]),
+        });
+        if (response.ok) {
+          const updates = (await response.json()) as {
+            automatic?: boolean;
+            notificationSafe?: boolean;
+            notificationPending?: boolean;
+            mulnxNotificationPending?: boolean;
+            candidate?: { version: string; notes: string } | null;
+            mulnx?: { latest: string | null; notificationIdentity: string | null } | null;
+          };
+          if (
+            updates.automatic &&
+            updates.notificationSafe &&
+            (updates.notificationPending || updates.mulnxNotificationPending)
+          ) {
+            const proceed = await new Promise<boolean>((resolve) => {
+              if (entrySignal.aborted) {
+                resolve(false);
+                return;
+              }
+              const request = { updates, signal: entrySignal, resolve, handled: false };
+              window.dispatchEvent(new CustomEvent('mizar:entry-update', { detail: request }));
+              if (!request.handled) resolve(false);
+            });
+            if (!proceed) {
+              task.finish('cancelled', { reason: 'update_selected' });
+              return;
+            }
+          }
+        }
+      } catch {
+        /* A failed or timed-out check does not block a verified local installation. */
+      }
+      if (cancelled() || window.location.href !== entryLocation) {
+        task.finish('cancelled', { reason: 'navigation_changed' });
+        return;
+      }
+      const current = await fetch('/local/v1/production', {
+        cache: 'no-store',
+        signal: AbortSignal.timeout(5000),
+      })
+        .then((response) => (response.ok ? (response.json() as Promise<Production>) : null))
+        .catch(() => null);
+      if (
+        !current ||
+        current.revision !== state.revision ||
+        current.mode !== state.mode ||
+        cancelled() ||
+        window.location.href !== entryLocation
+      ) {
+        task.finish('cancelled', { reason: 'production_changed' });
+        return;
+      }
+    } finally {
+      onChecking?.(false);
+    }
+  }
   if (window.__TAURI_INTERNALS__ && action === 'finish') {
     await desktopInvoke('finish_workspace', undefined, task);
     task.finish('confirmed', { confirmation: 'host_finish_workspace_ack' });

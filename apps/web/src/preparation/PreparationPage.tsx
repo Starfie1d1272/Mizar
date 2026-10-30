@@ -24,7 +24,13 @@ import { Button, Dialog, Panel, StatusBanner, StatusPill } from '../ui';
 import { LocalOverlayControls } from './LocalOverlayControls';
 import { LocalMatchControls } from './LocalMatchControls';
 import { useLocalTournament } from './tournament';
-import { openTool, productionAction, useLocalRead, type Production } from './client';
+import {
+  cancelProductionEntry,
+  openTool,
+  productionAction,
+  useLocalRead,
+  type Production,
+} from './client';
 import { Settings } from './Settings';
 import { UpdateNotification } from './UpdateNotification';
 import { DiagnosticDeliveryNotice } from '../debug/DiagnosticDeliveryNotice';
@@ -102,6 +108,7 @@ export function PreparationPage() {
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [entering, setEntering] = useState(false);
+  const [checkingEntry, setCheckingEntry] = useState(false);
   const [demoOpen, setDemoOpen] = useState(() =>
     new URLSearchParams(window.location.search).has('demoTest'),
   );
@@ -197,7 +204,14 @@ export function PreparationPage() {
               void action(async () => {
                 setEntering(true);
                 try {
-                  await productionAction('enter', production);
+                  await productionAction(
+                    'enter',
+                    production,
+                    false,
+                    undefined,
+                    undefined,
+                    setCheckingEntry,
+                  );
                 } finally {
                   setEntering(false);
                 }
@@ -205,12 +219,15 @@ export function PreparationPage() {
             }
           >
             {entering
-              ? '正在启动 CS2…'
+              ? checkingEntry
+                ? '正在检查更新…'
+                : '正在启动 CS2…'
               : production?.mode === 'hidden'
                 ? '返回工作台'
                 : '启动并进入工作台'}
           </Button>
         </header>
+        {checkingEntry ? <Button onClick={cancelProductionEntry}>取消进入</Button> : null}
         {path === '/' && production?.mode === 'preparation' && window.__TAURI_INTERNALS__ ? (
           <DiagnosticDeliveryNotice />
         ) : null}
