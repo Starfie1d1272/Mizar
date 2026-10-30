@@ -454,6 +454,7 @@ export class MulnxTool {
     update = false,
     spectatorCfg = false,
     demoCfg?: string,
+    captureCompatibility = false,
   ) {
     return this.run('mulnx_prepare', async () => {
       // Called only by the authenticated native host after its process and install checks.
@@ -496,7 +497,14 @@ export class MulnxTool {
       )
         await this.install(release);
       const root = join(this.directory, this.installed!.directory, 'MulNX');
-      await this.configureLauncher(root, cs2Path, consoleCapture, spectatorCfg, demoCfg);
+      await this.configureLauncher(
+        root,
+        cs2Path,
+        consoleCapture,
+        spectatorCfg,
+        demoCfg,
+        captureCompatibility,
+      );
       const launcher = await safePath(root, 'CS2Injector/CS2Injector.exe');
       return { launcher, version: this.installed!.release.tag };
     });
@@ -551,6 +559,7 @@ export class MulnxTool {
     consoleCapture = false,
     spectatorCfg = false,
     demoCfg?: string,
+    captureCompatibility = false,
   ) {
     await this.configureReflection(root, 'Config/CS2OBTool_Refl.yaml', 'UISystem.ifDrawMid');
     await this.configureReflection(
@@ -611,6 +620,8 @@ export class MulnxTool {
     const originalLine = owned?.original ?? line;
     const baseline = withPath.replace(/^launchOptions\s*:.*$/m, originalLine);
     let options = launchOptionsValue(baseline);
+    if (captureCompatibility && !/(?:^|\s)-allow_third_party_software(?:\s|$)/i.test(options))
+      options = `${options} -allow_third_party_software`.trim();
     if (consoleCapture && !/(?:^|\s)-condebug(?:\s|$)/i.test(options))
       options = `${options} -condebug`.trim();
     if (

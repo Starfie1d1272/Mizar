@@ -47,7 +47,7 @@ import {
   type Production,
   command,
 } from '../preparation/client';
-import { Button, StatusPill, Dialog, Select } from '../ui';
+import { Button, StatusPill, StatusBanner, Dialog, Select } from '../ui';
 import { ProductionStatus } from './ProductionStatus';
 import { LiveRosterAlert } from './LiveRosterAlert';
 import { SyncHealthAlert, type SyncHealth } from './SyncHealthAlert';
@@ -635,6 +635,13 @@ function WorkspaceDockContent() {
             OBS 配置
           </Button>
         </div>
+        {obs?.findings
+          .filter((finding) => finding.code === 'audio_teamspeak_compatibility')
+          .map((finding) => (
+            <StatusBanner key={finding.code} tone="warning">
+              {finding.message}
+            </StatusBanner>
+          ))}
         <ObsOutputControls onError={setErrorMessage} />
         <RivalHubLiveSourcePanel compact action={action} onMessage={setMessage} />
         <details className="workspace-secondary">

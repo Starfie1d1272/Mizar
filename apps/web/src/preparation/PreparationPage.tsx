@@ -180,7 +180,7 @@ export function PreparationPage() {
   return (
     <OperatorShell active={path}>
       <main className="preparation" data-page={path}>
-        <AutomaticPreparation showGsiMessage={!(path === '/settings' && tab === 'gsi')} />
+        <AutomaticPreparation />
         <UpdateNotification />
         <header className="preparation-heading">
           <div>
@@ -221,13 +221,16 @@ export function PreparationPage() {
             {entering
               ? checkingEntry
                 ? '正在检查更新…'
-                : '正在启动 CS2…'
+                : '正在自动准备工作台…'
               : production?.mode === 'hidden'
                 ? '返回工作台'
                 : '启动并进入工作台'}
           </Button>
         </header>
-        {checkingEntry ? <Button onClick={cancelProductionEntry}>取消进入</Button> : null}
+        {production?.mode === 'preparation' ? (
+          <p>启动时自动准备游戏和 OBS；如已有 CS2，将正常关闭后重新启动。</p>
+        ) : null}
+        {entering ? <Button onClick={cancelProductionEntry}>取消进入</Button> : null}
         {path === '/' && production?.mode === 'preparation' && window.__TAURI_INTERNALS__ ? (
           <DiagnosticDeliveryNotice />
         ) : null}

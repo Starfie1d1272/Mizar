@@ -6,7 +6,7 @@ import {
   obsDesiredScenes,
 } from './desired-state.js';
 import type { ProgramSceneId, ProgramTransition } from '@mizar/protocol/program-scenes';
-import { ObsActionError } from './action-error.js';
+import { assertNoVideoOutput, ObsPreparationWriteBlocked } from './video-transaction.js';
 import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
 
 export interface ObsRpc {
@@ -186,12 +186,20 @@ function sceneTransforms(
     : [[scene.browserInput, BROWSER_TRANSFORM]];
 }
 
-async function outputActive(obs: ObsRpc): Promise<boolean> {
-  const [stream, record] = await Promise.all([
-    obs.call('GetStreamStatus'),
-    obs.call('GetRecordStatus'),
-  ]);
-  return stream.outputActive === true || record.outputActive === true;
+export function guardedPreparationWrites(obs: ObsRpc): ObsRpc {
+  return {
+    ...obs,
+    call: async (type, data) => {
+      if (/^(Create|Set|Remove)/.test(type)) {
+        try {
+          await assertNoVideoOutput(obs);
+        } catch (error) {
+          throw new ObsPreparationWriteBlocked(error);
+        }
+      }
+      return obs.call(type, data);
+    },
+  };
 }
 
 export async function checkObsConfiguration(obs: ObsRpc, baseUrl: string): Promise<ObsFinding[]> {
@@ -245,7 +253,8 @@ export async function checkObsConfiguration(obs: ObsRpc, baseUrl: string): Promi
       'Mizar · Microphone',
       'Mizar · BP 紧凑底栏',
       ...PROGRAM_SCENES.map((scene) => `Mizar · ${scene.id} · Program`),
-    ].some((name) => inputKinds.has(name))
+    ].some((name) => inputKinds.has(name)) ||
+    PROGRAM_SCENES.some((scene) => sceneNames.includes(`Mizar · ${scene.title}`))
   )
     findings.push({
       code: 'legacy_names',
@@ -356,7 +365,8 @@ export async function repairObsConfiguration(
     return before;
   if (!before.some((finding) => !['video_settings', 'transition_missing'].includes(finding.code)))
     return before;
-  if (await outputActive(obs)) throw new ObsActionError('output_active_repair');
+  await assertNoVideoOutput(obs);
+  obs = guardedPreparationWrites(obs);
   const collections = await obs.call('GetSceneCollectionList');
   const exists = collectionNames(collections.sceneCollections).includes(OBS_COLLECTION);
   if (
@@ -597,6 +607,31 @@ export async function switchObsScene(
   }
 }
 
+/** Align the explicit preparation target only while its original scene and lease remain valid. */
+export async function alignPreparationScene(
+  obs: ObsRpc,
+  activeScene: () => Parameters<typeof import('./desired-state.js').obsSceneName>[0],
+  valid: () => boolean,
+): Promise<void> {
+  const target = activeScene();
+  const initial = (await obs.call('GetCurrentProgramScene')).currentProgramSceneName;
+  if (typeof initial !== 'string') throw new Error('OBS 当前场景状态未确认。');
+  if (!valid() || activeScene() !== target) throw new Error('OBS 准备请求已失效，请重试。');
+  if (initial === desiredSceneName(target)) return;
+  const stable: ObsRpc = guardedPreparationWrites({
+    ...obs,
+    call: async (type, data) => {
+      if (type === 'SetCurrentProgramScene') {
+        const current = (await obs.call('GetCurrentProgramScene')).currentProgramSceneName;
+        if (current !== initial) throw new Error('OBS 当前场景已变化，请重试。');
+      }
+      if (!valid() || activeScene() !== target) throw new Error('OBS 准备请求已失效，请重试。');
+      return obs.call(type, data);
+    },
+  });
+  await switchObsScene(stable, target, { transition: { kind: 'cut', durationMs: 0 }, valid });
+}
+
 function desiredSceneName(id: Parameters<typeof import('./desired-state.js').obsSceneName>[0]) {
   const scene = obsDesiredScenes('http://127.0.0.1:3000').find((item) => item.id === id);
   if (!scene || !ownedScene(scene.sceneName)) throw new Error('未知 OBS 场景。');
@@ -622,12 +657,13 @@ export async function ensureObsConfiguration(
         ['scene_missing', 'source_kind_conflict', 'transition_missing'].includes(item.code),
       )
     ) {
-      if (await outputActive(obs)) throw new ObsActionError('output_active_switch');
-      await switchObsScene(obs, activeScene());
+      await assertNoVideoOutput(obs);
+      await switchObsScene(guardedPreparationWrites(obs), activeScene());
     }
     return repaired;
   }
   const repairable = new Set([
+    'legacy_names',
     'scene_missing',
     'source_missing',
     'url_drift',

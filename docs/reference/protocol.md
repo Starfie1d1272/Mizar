@@ -306,6 +306,10 @@ RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对�
 
 OBS 自动准备使用中文场景与来源名称：游戏画面、游戏声音、其他解说、桌面声音、麦克风、音乐和音效。旧版固定名称在停止输出后原位更新，已记录的音频来源按 UUID 复用；名称冲突时保留已有来源并提示处理，自动创建的音频来源使用可读数字后缀。来源配置、音轨和实际声音仍需在 OBS 试听核对。
 
+工作台启动使用本机 `POST /operator/obs/video-preflight`、`video-prepare` 与 `video-restore` 管理配置档绑定的视频设置事务；准备带制作修订，恢复带事务 ID。`POST /operator/obs/capture-warmup` 带制作修订和准备事务 ID，返回临时捕获租约及开始时间；`capture-initialization` 使用该租约和时间检查本次捕获，`capture-warmup-release` 按租约清理。捕获确认不依赖比赛 GSI；未显示的来源、零尺寸、过期日志和无法唯一确认的窗口均不证明捕获成功。`GET /local/v1/obs` 与准备中心共享 OBS 就绪判断，保留静音和音轨提醒。
+
+Host 的私有 `/operator/runtime/mulnx-prepare` 可带 `captureCompatibility`，仅对本次受管工作台启动临时补入捕获兼容参数；原 `launchOptions` 由既有所有权记录恢复，不能覆盖期间的用户修改。
+
 ### Program 统计与装备事实
 
 Program schema 9 为每位选手提供必需的 `statistics` 和 `equipment`，并提供每侧 `teamEconomy`。`statistics` 的数值携带来源、固定窗口和定义版本、回合数、覆盖程度与不可用原因；旧 ADR、伤害、花费及 K/A/D 字段从同一结果映射。`equipment` 包含主副武器、手持武器、Zeus 的武器 ID、道具数量与 C4 事实，完整武器数组仍保留。手持武器要求新鲜、当前且存活的选手有唯一 active 或 reloading 武器；C4 根据炸弹持有者和 carried／planting 状态判断，未知时保留空值。Companion 向 Core 传入按 GSI 武器名称索引的纯语义目录（canonicalKey、kind、family），不向 Core 传图片路径；语义不完整时不能将未知道具当作零。队伍经济只有完整当前五人名单和相应字段可用时才求和。
