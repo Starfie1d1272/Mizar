@@ -149,6 +149,35 @@ export class ObsAudioRouting {
     const state = await this.load();
     return roles.some((role) => state.bindings[role] !== null);
   }
+  async automaticDesktopRevision(): Promise<string | null> {
+    const state = await this.load();
+    return this.automaticEligible &&
+      !state.desktop &&
+      !state.transition &&
+      !state.waitingIndependent &&
+      roles.every((role) => !state.bindings[role])
+      ? state.revision
+      : null;
+  }
+  async adoptInitialDesktop(
+    revision: string,
+    desktop: State['desktop'],
+    microphone: State['desktopMicrophone'],
+  ): Promise<void> {
+    const state = await this.load();
+    if (!desktop || !microphone || (await this.automaticDesktopRevision()) !== revision)
+      throw new Error('audio_revision_changed');
+    await this.saveState(
+      {
+        ...state,
+        revision: randomUUID(),
+        desktop,
+        lastDesktop: desktop,
+        desktopMicrophone: microphone,
+      },
+      true,
+    );
+  }
   async gameBinding() {
     const state = await this.load();
     return {

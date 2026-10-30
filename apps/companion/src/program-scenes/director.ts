@@ -124,10 +124,13 @@ export class ProgramDirector {
     ]);
   }
   private executionKey(p: ProgramProjection): string {
-    return `${this.contextKey(p)}:${p.cursor.producerInstanceId}:${p.cursor.liveSessionId}:${p.cursor.programSourceGeneration}:${p.cursor.mapEpoch}:${p.series?.currentMapOrder}`;
+    return `${this.contextKey(p)}:${p.cursor.producerInstanceId}:${p.cursor.liveSessionId}:${p.cursor.mapEpoch}:${p.series?.currentMapOrder}`;
+  }
+  private requestKey(p: ProgramProjection): string {
+    return `${this.executionKey(p)}:${p.cursor.programSourceGeneration}`;
   }
   private predict(p: ProgramProjection, active: ProgramSceneId): void {
-    const key = `${this.executionKey(p)}:${active}`;
+    const key = `${this.requestKey(p)}:${active}`;
     const previous = key === this.predictionKey ? this.view.next : null;
     this.predictionKey = key;
     this.view.next = null;
@@ -446,7 +449,7 @@ export class ProgramDirector {
     }
     this.inFlight = target;
     const generation = this.generation;
-    const key = mapKey;
+    const key = this.requestKey(p);
     try {
       const result = await this.scenes.selectAutomatic(
         target,
@@ -464,7 +467,7 @@ export class ProgramDirector {
                   this.takeBudget(this.scenes.get().active, 'matchup') +
                   this.takeBudget('matchup', 'gameplay') +
                   this.timings.shortIntroMs)) &&
-          key === this.executionKey(this.projections.getCurrent().program),
+          key === this.requestKey(this.projections.getCurrent().program),
         finalBp,
       );
       if (!result.ok) {
@@ -474,7 +477,7 @@ export class ProgramDirector {
         const current = this.projections.getCurrent().program;
         if (
           generation !== this.generation ||
-          (key === this.executionKey(current) &&
+          (key === this.requestKey(current) &&
             target !== 'gameplay' &&
             this.safe(current) &&
             (this.hudDue(current, this.scenes.get().active) ||

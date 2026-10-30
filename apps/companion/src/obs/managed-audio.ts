@@ -378,10 +378,7 @@ export async function verifyManagedAudioMode(
         !(input.inputKind === 'wasapi_input_capture' && !ids.microphone)
       )
         return false;
-      if (
-        (desktop || wanted.includes(item.sourceUuid)) &&
-        ['game_capture', 'window_capture'].includes(String(input.inputKind))
-      ) {
+      if (['game_capture', 'window_capture'].includes(String(input.inputKind))) {
         const settings = (await obs.call('GetInputSettings', { inputUuid: item.sourceUuid }))
           .inputSettings as Record<string, unknown> | undefined;
         if (!settings) return false;
@@ -392,7 +389,7 @@ export async function verifyManagedAudioMode(
           ).defaultInputSettings as Record<string, unknown> | undefined;
           captured = defaults?.capture_audio;
         }
-        if (captured !== !desktop) return false;
+        if (captured !== (!desktop && wanted.includes(item.sourceUuid))) return false;
       }
     }
   }
