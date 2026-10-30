@@ -476,3 +476,25 @@ it('settles terminal damage without inventing missing health', async () => {
     complete: false,
   });
 });
+
+it.each([1, 2])(
+  'marks coverage partial when a live round has no end before freezetime (hint %s)',
+  async (nextHint) => {
+    const { projectPlayerStatistics } = await import('../src/runtime/index.js');
+    let state = createInitialRuntimeState('round-end-not-observed');
+    state = accept(state, frame(1, 1, 'freezetime', 0, 0)).state;
+    state = accept(state, frame(2, 2, 'live', 0, 80)).state;
+    state = accept(state, frame(3, 3, 'over', 0, 80)).state;
+    state = accept(state, frame(4, 4, 'freezetime', 1, 0)).state;
+    state = accept(state, frame(5, 5, 'live', 1, 30)).state;
+    state = accept(state, frame(6, 6, 'freezetime', nextHint, 0)).state;
+    state = accept(state, frame(7, 7, 'live', nextHint, 60)).state;
+    state = accept(state, frame(8, 8, 'over', nextHint, 60)).state;
+    expect(
+      projectPlayerStatistics(state.playerStats, PLAYER_A, undefined, null).completed.adr,
+    ).toMatchObject({
+      value: 70,
+      basis: { rounds: 2, coverage: 'partial' },
+    });
+  },
+);

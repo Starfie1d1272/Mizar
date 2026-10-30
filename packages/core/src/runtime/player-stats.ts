@@ -389,8 +389,14 @@ export function reduceMapPlayerStats(
       // A phase transition, rather than map.round, owns round lifecycle. A
       // new freezetime can start a fresh baseline; a jump during live is a
       // fail-closed continuity break for the current round.
-      currentRound = phase === 'freezetime' ? null : invalidateCurrentRound(currentRound);
+      if (phase === 'freezetime') {
+        accumulator = { ...accumulator, coverage: 'partial' };
+        currentRound = null;
+      } else {
+        currentRound = invalidateCurrentRound(currentRound);
+      }
     } else if (phase === 'freezetime' && currentRound.phase !== 'freezetime') {
+      accumulator = { ...accumulator, coverage: 'partial' };
       currentRound = null;
     }
   }
