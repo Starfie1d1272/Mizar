@@ -213,8 +213,14 @@ test('statistics follow scene appearance through rotation, standalone and failed
   expect(await canvas.evaluate((node) => getComputedStyle(node).backgroundImage)).toBe(
     oldBackground,
   );
-  scene = 'gameplay';
+  failImage = false;
+  revision++;
+  assetRevision++;
   await page.goto('/program/intermap');
-  await page.clock.fastForward(21_000);
+  await expect(page.locator('.program-scene--intermap')).toBeVisible();
+  await page.clock.fastForward(20_100);
+  await expect(canvas).toBeVisible();
+  scene = 'gameplay';
+  await page.clock.runFor(500);
   await expect(canvas).toHaveCount(0);
 });
