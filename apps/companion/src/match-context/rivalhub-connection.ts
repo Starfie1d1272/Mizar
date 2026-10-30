@@ -960,7 +960,8 @@ export class RivalHubConnection {
   }
 
   private async reconcileIntent(deadline: number): Promise<void> {
-    const intent = (await this.sourceState.snapshot()).intent;
+    const state = await this.sourceState.snapshot();
+    const intent = state.intent;
     if (!intent || !this.scopeMatches(intent.scope) || Date.now() >= deadline) return;
     const query = new URLSearchParams({
       matchId: intent.scope.matchId,
@@ -990,11 +991,37 @@ export class RivalHubConnection {
       (found.state !== 'open' && found.state !== 'closed')
     )
       return;
-    if (
-      intent.previousAuthorityRevision !== null &&
-      (found.authorityRevision as number) <= intent.previousAuthorityRevision
-    )
-      return;
+    const revision = found.authorityRevision as number;
+    // An equal revision is conclusive only when this claim started while that
+    // exact authority was held. A watermark by itself proves no such thing.
+    const legacyHeld = state.records.some(
+      ({ identity }) =>
+        identity.baseUrl === intent.scope.baseUrl &&
+        identity.competitionId === intent.scope.competitionId &&
+        identity.installationId === intent.scope.installationId &&
+        identity.matchId === intent.scope.matchId &&
+        identity.producerInstanceId === intent.scope.producerInstanceId &&
+        identity.liveSessionId === intent.scope.liveSessionId &&
+        identity.authorityRevision === revision &&
+        !state.watermarks.some(
+          (item) =>
+            item.baseUrl === identity.baseUrl &&
+            item.competitionId === identity.competitionId &&
+            item.installationId === identity.installationId &&
+            item.matchId === identity.matchId &&
+            item.producerInstanceId === identity.producerInstanceId &&
+            item.liveSessionId === identity.liveSessionId &&
+            item.authorityRevision >= revision,
+        ),
+    );
+    if (intent.previousAuthorityRevision !== null && revision <= intent.previousAuthorityRevision) {
+      if (
+        revision !== intent.previousAuthorityRevision ||
+        (intent.idempotentAuthorityRevision !== revision &&
+          !(intent.idempotentAuthorityRevision === undefined && legacyHeld))
+      )
+        return;
+    }
     if (found.state === 'closed') {
       await this.sourceState.clearIntent(intent.id);
     } else {
@@ -1003,6 +1030,11 @@ export class RivalHubConnection {
         found.authorityRevision as number,
       );
       await this.sourceState.handoff(identity, 'recovery');
+      // Reconciliation can also run in the original process after a lost
+      // idempotent response. Fence its live source so the output owner can
+      // finish its existing reliable tail before cleanup releases it.
+      if (this.source && JSON.stringify(this.exactSource(this.source)) === JSON.stringify(identity))
+        this.source.draining = true;
     }
   }
 

@@ -116,3 +116,14 @@ test('concurrent claims serialize and retain one unresolved intent', async (t) =
   assert.equal(outcomes.filter((result) => result.status === 'rejected').length, 1);
   assert.ok((await store.snapshot()).intent);
 });
+
+test('a pending source cannot become evidence for a later claim', async (t) => {
+  const path = await setup(t);
+  const store = new RivalHubSourceState(path);
+  await store.load();
+  const intent = await store.beginClaim(scope, null);
+  const identity = await store.confirmClaim(intent.id, 1);
+  await store.handoff(identity, 'finish');
+  await assert.rejects(store.beginClaim(scope, null), /cleanup/);
+  assert.equal((await store.snapshot()).intent, null);
+});

@@ -47,6 +47,7 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
   let liveStatus = 200;
   let reliableStatus = 204;
   let loseClaim = false;
+  let idempotentClaim = false;
   let claimRefusal: (() => Response) | undefined;
   let reliableRequests = 0;
   let liveRequests = 0;
@@ -82,7 +83,15 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
     if (url.pathname.endsWith('/claim')) {
       if (claimRefusal) return claimRefusal();
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-      revision++;
+      if (
+        !idempotentClaim ||
+        !serverClaim ||
+        serverClaim.state !== 'open' ||
+        serverClaim.matchId !== body.matchId ||
+        serverClaim.producerInstanceId !== body.producerInstanceId ||
+        serverClaim.liveSessionId !== body.liveSessionId
+      )
+        revision++;
       serverClaim = {
         ...body,
         installationId: installation.installationId,
@@ -130,12 +139,17 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
         authority: headers.get('x-rivalhub-authority'),
         authorization: headers.get('authorization'),
       });
-      return failRelease
-        ? new Response(null, {
-            status: 503,
-            ...(retryAfter ? { headers: { 'Retry-After': retryAfter } } : {}),
-          })
-        : Response.json({ released: true });
+      if (failRelease)
+        return new Response(null, {
+          status: 503,
+          ...(retryAfter ? { headers: { 'Retry-After': retryAfter } } : {}),
+        });
+      if (
+        serverClaim &&
+        headers.get('x-rivalhub-authority') === String(serverClaim.authorityRevision)
+      )
+        serverClaim = { ...serverClaim, state: 'closed', closeReason: 'released' };
+      return Response.json({ released: true });
     }
     throw new Error(`unexpected ${url.pathname}`);
   };
@@ -177,6 +191,9 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
     },
     setLose: (v: boolean) => {
       loseClaim = v;
+    },
+    setIdempotent: (v: boolean) => {
+      idempotentClaim = v;
     },
     setClaimRefusal: (value: (() => Response) | undefined) => {
       claimRefusal = value;
@@ -459,6 +476,91 @@ test('lost claim response is reconciled by exact status and released after resta
   assert.equal(h.releases.length, 1);
   assert.equal(h.releases[0]?.authority, '1');
 });
+
+test('background reconciliation can drain the held source after a lost repeated claim', async (t) => {
+  const h = await setup(t);
+  h.setIdempotent(true);
+  await h.connection.claim(h.snapshot, 'revision', false);
+  assert.equal(await h.connection.sendReliable(h.event, h.snapshot), 'accepted');
+  h.setLose(true);
+  await assert.rejects(h.connection.claim(h.snapshot, 'revision', false));
+  assert.equal(await h.connection.sendReliable(h.event, h.snapshot), 'retry');
+  let notify!: (result: unknown) => void;
+  const settled = new Promise<unknown>((resolve) => {
+    notify = resolve;
+  });
+  h.connection.setSourceSettlement(
+    async () => {
+      await Promise.resolve(); // The output owner fences the scope before its first await.
+      const result = await h.connection.sendReliable(h.event, h.snapshot);
+      notify(result);
+      return result === 'accepted';
+    },
+    () => undefined,
+  );
+  h.connection.startSourceCleanup();
+  assert.equal(await settled, 'accepted');
+  await h.connection.shutdownSource();
+  assert.equal(h.connection.view().sourceCleanup.claimIntent, false);
+  assert.equal(h.releases.length, 1);
+});
+
+for (const statusBeforeRelease of ['open', 'ambiguous'] as const) {
+  test(`lost idempotent claim survives restart and ${statusBeforeRelease} status`, async (t) => {
+    const h = await setup(t);
+    h.setIdempotent(true);
+    await h.connection.claim(h.snapshot, 'revision', false);
+    h.setLose(true);
+    await assert.rejects(h.connection.claim(h.snapshot, 'revision', false));
+    h.setAmbiguous(statusBeforeRelease === 'ambiguous');
+    const restarted = await h.restart();
+    if (statusBeforeRelease === 'ambiguous') {
+      await assert.rejects(restarted.release(), /待重试或核对/);
+      assert.equal(h.releases.length, 1);
+      assert.equal(restarted.view().sourceCleanup.claimIntent, true);
+      h.setAmbiguous(false);
+    }
+    await restarted.release();
+    assert.equal(restarted.view().sourceCleanup.claimIntent, false);
+    assert.deepEqual(
+      h.releases.map((item) => item.authority),
+      ['1'],
+    );
+    h.setLose(false);
+    await restarted.claim(h.snapshot, 'revision', false);
+    await restarted.release();
+    assert.deepEqual(
+      h.releases.map((item) => item.authority),
+      ['1', '2'],
+    );
+  });
+}
+
+for (const statusBeforeRelease of ['open', 'ambiguous'] as const) {
+  test(`legacy repeated claim retains held-authority proof with ${statusBeforeRelease} status`, async (t) => {
+    const h = await setup(t);
+    h.setIdempotent(true);
+    await h.connection.claim(h.snapshot, 'revision', false);
+    h.setLose(true);
+    await assert.rejects(h.connection.claim(h.snapshot, 'revision', false));
+    const statePath = join(h.path, '..', 'rivalhub-source-state.json');
+    const oldState = JSON.parse(await readFile(statePath, 'utf8'));
+    delete oldState.intent.idempotentAuthorityRevision;
+    await writeFile(statePath, JSON.stringify(oldState));
+    h.setAmbiguous(statusBeforeRelease === 'ambiguous');
+    const restarted = await h.restart();
+    if (statusBeforeRelease === 'ambiguous') {
+      await assert.rejects(restarted.release(), /待重试或核对/);
+      const upgraded = JSON.parse(await readFile(statePath, 'utf8'));
+      assert.equal(upgraded.intent.idempotentAuthorityRevision, 1);
+      assert.equal(upgraded.records.length, 0);
+      h.setAmbiguous(false);
+    }
+    const again = await h.restart();
+    await again.release();
+    assert.equal(again.view().sourceCleanup.claimIntent, false);
+  });
+}
 
 test('replacement pairing keeps the old credential until cleanup succeeds', async (t) => {
   const h = await setup(t);

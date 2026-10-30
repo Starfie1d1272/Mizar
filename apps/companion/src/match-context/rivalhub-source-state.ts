@@ -65,6 +65,9 @@ const intentSchema = z
     id: z.string().uuid(),
     scope: scopeSchema,
     previousAuthorityRevision: z.number().int().positive().safe().nullable(),
+    // Proof that this intent re-claimed an exact authority already held before
+    // the request. Older durable files may not have this field.
+    idempotentAuthorityRevision: z.number().int().positive().safe().optional(),
   })
   .strict();
 const envelopeSchema = z
@@ -179,6 +182,12 @@ export class RivalHubSourceState {
     return this.change((state) => {
       if (state.intent) throw new Error('source claim requires reconciliation');
       const validScope = scopeSchema.parse(scope);
+      if (
+        state.records.some(
+          (record) => sameScope(record.identity, validScope) && record.state !== 'owned',
+        )
+      )
+        throw new Error('source requires cleanup before claim');
       // Producer identities are newly generated per process. Old producer watermarks
       // cannot describe a new claim, while unresolved records remain untouched.
       state.watermarks = state.watermarks.filter(
@@ -214,6 +223,16 @@ export class RivalHubSourceState {
         id: randomUUID(),
         scope: validScope,
         previousAuthorityRevision: known.length ? Math.max(...known) : null,
+        ...(owned &&
+        sameScope(owned.identity, validScope) &&
+        Math.max(...known) === owned.identity.authorityRevision &&
+        !state.watermarks.some(
+          (item) =>
+            sameScope(item, validScope) &&
+            item.authorityRevision >= owned.identity.authorityRevision,
+        )
+          ? { idempotentAuthorityRevision: owned.identity.authorityRevision }
+          : {}),
       });
       state.intent = intent;
       return intent;
@@ -313,6 +332,19 @@ export class RivalHubSourceState {
       );
       if (index < 0 || state.records[index]?.state === 'owned')
         throw new Error('source is not pending');
+      // Upgrade legacy in-flight intents before removing their only durable
+      // proof that the equal revision was held when the claim began.
+      if (
+        state.intent &&
+        state.intent.idempotentAuthorityRevision === undefined &&
+        sameScope(state.intent.scope, identity) &&
+        state.intent.previousAuthorityRevision === identity.authorityRevision &&
+        !state.watermarks.some(
+          (item) =>
+            sameScope(item, identity) && item.authorityRevision >= identity.authorityRevision,
+        )
+      )
+        state.intent.idempotentAuthorityRevision = identity.authorityRevision;
       const watermark = state.watermarks.find((item) => sameScope(item, identity));
       if (watermark)
         watermark.authorityRevision = Math.max(

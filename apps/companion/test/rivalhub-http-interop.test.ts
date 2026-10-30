@@ -362,6 +362,99 @@ test(
       assert.equal(released.source?.state, 'closed');
     });
 
+    for (const delayedStatus of [false, true]) {
+      await t.test(
+        `lost idempotent claim is reconciled with ${delayedStatus ? 'closed' : 'open'} exact status`,
+        async () => {
+          const p = manifest.producers[1]!;
+          const snapshot = parseLiveSnapshotV1(p.liveTemplate);
+          snapshot.cursor.producerInstanceId = randomUUID();
+          snapshot.cursor.liveSessionId = randomUUID();
+          let dropRepeat = false;
+          let hideStatus = false;
+          let dropRelease = !delayedStatus;
+          let successfulClaims = 0;
+          const realFetch: typeof fetch = async (input, init) => {
+            const response = await fetch(input, init);
+            const pathname = new URL(String(input)).pathname;
+            if (pathname.endsWith('/claim') && response.ok) {
+              successfulClaims++;
+              if (dropRepeat) {
+                dropRepeat = false;
+                await response.body?.cancel();
+                throw new TypeError('lost repeated claim response after server commit');
+              }
+            }
+            if (pathname.endsWith('/source-status') && hideStatus && response.ok) {
+              await response.body?.cancel();
+              return Response.json({ status: 'ambiguous' });
+            }
+            if (pathname.endsWith('/release') && response.ok && dropRelease) {
+              dropRelease = false;
+              await response.body?.cancel();
+              throw new TypeError('lost release response after server commit');
+            }
+            return response;
+          };
+          const { connection, output, path } = await makeConnection(
+            1,
+            realFetch,
+            null,
+            `repeat-${delayedStatus}`,
+          );
+          const context = await revision(1);
+          await connection.claim(snapshot, context, true);
+          const initial = await status(
+            1,
+            snapshot.cursor.producerInstanceId,
+            snapshot.cursor.liveSessionId!,
+          );
+          assert.equal(initial.source?.state, 'open');
+          dropRepeat = true;
+          await assert.rejects(connection.claim(snapshot, context, false));
+          const repeated = await status(
+            1,
+            snapshot.cursor.producerInstanceId,
+            snapshot.cursor.liveSessionId!,
+          );
+          assert.equal(repeated.source?.state, 'open');
+          assert.equal(repeated.source?.authorityRevision, initial.source?.authorityRevision);
+          assert.equal(successfulClaims, 2);
+          hideStatus = delayedStatus;
+          const restarted = new RivalHubConnection(path, realFetch, siteAddress.origin);
+          await restarted.load();
+          restarted.setSourceSettlement(
+            (scope) => output.settleSourceForRelease(scope),
+            (scope) => output.resumeSource(scope),
+          );
+          await assert.rejects(restarted.release());
+          const closed = await status(
+            1,
+            snapshot.cursor.producerInstanceId,
+            snapshot.cursor.liveSessionId!,
+            initial.source!.authorityRevision,
+          );
+          assert.equal(closed.source?.state, 'closed');
+          if (delayedStatus) assert.equal(restarted.view().sourceCleanup.claimIntent, true);
+          hideStatus = false;
+          const again = new RivalHubConnection(path, realFetch, siteAddress.origin);
+          await again.load();
+          again.setSourceSettlement(
+            (scope) => output.settleSourceForRelease(scope),
+            (scope) => output.resumeSource(scope),
+          );
+          await again.release();
+          assert.deepEqual(again.view().sourceCleanup, {
+            pending: 0,
+            blocked: 0,
+            claimIntent: false,
+          });
+          await again.claim(snapshot, await revision(1), false);
+          await again.release();
+        },
+      );
+    }
+
     await t.test(
       'claim and release responses lost after commit are recovered with real status and idempotent release',
       async () => {
