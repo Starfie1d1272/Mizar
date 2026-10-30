@@ -90,3 +90,60 @@ it('discards an older in-flight response after a manual refresh or match switch'
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+it('uses one real HTTP snapshot for repeated local readers and refreshes only on demand', async () => {
+  const { createServer } = await import('node:http');
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-stats-http-'));
+  let requests = 0;
+  let status = 200;
+  const headers: Array<string | undefined> = [];
+  const server = createServer((request, response) => {
+    requests++;
+    headers.push(request.headers['if-none-match']);
+    response.writeHead(status, { 'content-type': 'application/json', etag: '"snapshot"' });
+    response.end(status === 200 ? JSON.stringify(fixture) : undefined);
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('missing HTTP address');
+    const path = join(directory, 'connection.json');
+    await writeFile(
+      path,
+      JSON.stringify({
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        credential: 'secret',
+        installationId: 'install',
+        competitionId: fixture.competitionId,
+        displayName: 'test',
+      }),
+    );
+    const connection = new RivalHubConnection(path);
+    await connection.load();
+    await Promise.all(Array.from({ length: 4 }, () => connection.stats(fixture.matchId)));
+    for (let i = 0; i < 20; i++)
+      expect(await connection.getStats(fixture.matchId)).toMatchObject({
+        revision: fixture.revision,
+      });
+    expect(requests).toBe(1);
+    status = 503;
+    expect(await connection.stats(fixture.matchId, true)).toBeNull();
+    expect(await connection.getStats(fixture.matchId)).toMatchObject({
+      revision: fixture.revision,
+    });
+    status = 304;
+    expect(await connection.stats(fixture.matchId, true)).toMatchObject({
+      revision: fixture.revision,
+    });
+    expect(headers).toEqual([undefined, '"snapshot"', '"snapshot"']);
+    status = 403;
+    await connection.stats(fixture.matchId, true);
+    expect(await connection.getStats(fixture.matchId)).toBeNull();
+    expect(requests).toBe(4);
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+    await rm(directory, { recursive: true, force: true });
+  }
+});
