@@ -4,7 +4,7 @@ import { switchToRivalhubBp, useBpWorkspace } from '../bp/client';
 import { Button, Panel, StatusBanner, StatusPill } from '../ui/primitives';
 import { openRivalHubAuthorization } from '../preparation/client';
 import { RivalHubSyncControls } from './RivalHubSyncControls';
-import { broadcastStatsSchema } from '@mizar/protocol/broadcast-stats';
+import { broadcastStatsPresentationSchema } from '@mizar/protocol/broadcast-stats-presentation';
 import { statsInserts } from '../program/stats-inserts';
 
 type Connection = {
@@ -46,12 +46,14 @@ export function RivalHubPreparationPanel({
   const readStats = useCallback(async () => {
     const [status, snapshot] = await Promise.all([
       fetch('/local/v1/broadcast-stats-status', { cache: 'no-store' }),
-      fetch('/local/v1/broadcast-stats', { cache: 'no-store' }),
+      fetch('/local/v1/broadcast-stats-presentation', { cache: 'no-store' }),
     ]);
     const meta = status.ok
       ? ((await status.json()) as { fetchedAt: string | null })
       : { fetchedAt: null };
-    const parsed = broadcastStatsSchema.safeParse(snapshot.ok ? await snapshot.json() : null);
+    const parsed = broadcastStatsPresentationSchema.safeParse(
+      snapshot.ok ? await snapshot.json() : null,
+    );
     setStatsSummary({
       fetchedAt: meta.fetchedAt,
       cards: parsed.success ? statsInserts(parsed.data).length : 0,
