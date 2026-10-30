@@ -4,6 +4,9 @@ import { Buffer } from 'node:buffer';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { execFile } from 'node:child_process';
+import { fileURLToPath, URL } from 'node:url';
+import { promisify } from 'node:util';
 import { makeMachineMetadata } from '../../packages/resource-pack-contract/transport.mjs';
 import { RESOURCE_ASSET_NAMES } from '../../packages/resource-pack-contract/catalog.mjs';
 import { createBoxPlan } from './box-phase-contract.mjs';
@@ -16,9 +19,44 @@ import {
   updatePointer,
   verifyPointer,
   verifyEntry,
+  boxPhaseDiagnostic,
 } from './box-phases.mjs';
 
 const item = (name, bytes) => ({ name, size: bytes.length, sha256: digest(bytes) });
+
+test('invalid plan reports a fixed reason and never echoes arbitrary external errors', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-box-invalid-'));
+  try {
+    await writeFile(join(directory, 'plan.json'), '{}\n');
+    const script = fileURLToPath(new URL('./box-phases.mjs', import.meta.url));
+    await assert.rejects(
+      promisify(execFile)(process.execPath, [script, 'download', directory, 'runtime', 'core']),
+      (error) =>
+        /reason=BOX_PLAN_IDENTITY \(Invalid Box plan identity\)/.test(error.stderr) &&
+        /lane=runtime asset=core/.test(error.stderr),
+    );
+    const secret = 'secret-token';
+    const url = 'https://host.example/private?signature=abc';
+    const text = boxPhaseDiagnostic('download', 'runtime', 'core', new Error(`${secret} ${url}`));
+    assert.match(text, /reason=BOX_PHASE_ERROR/);
+    assert.ok(!text.includes(secret));
+    assert.ok(!text.includes(url));
+    const receipt = boxPhaseDiagnostic(
+      'verify',
+      'runtime',
+      'core',
+      new Error('Invalid Box phase receipt'),
+      'Mizar-v1.10.1-Windows-x64-Core-Setup.exe',
+    );
+    assert.match(receipt, /reason=BOX_RECEIPT_INVALID/);
+    assert.match(receipt, /name=Mizar-v1\.10\.1-Windows-x64-Core-Setup\.exe/);
+    assert.ok(
+      !boxPhaseDiagnostic('verify', 'runtime', 'core', new Error('oops'), secret).includes(secret),
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 function fakeBox() {
   const directories = new Set([
     '/',

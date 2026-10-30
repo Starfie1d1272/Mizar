@@ -241,26 +241,8 @@ jobs:
         run: |
           $prereleaseFlags = @()
           if ($env:RELEASE_TAG -match '-(?:alpha|beta|rc)\.[1-9]\d*$') { $prereleaseFlags = @('--prerelease', '--latest=false') }
-          $assets = @(node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-assets.mjs" assets product | ConvertFrom-Json)
-          if ($LASTEXITCODE -ne 0) { throw 'Consumer asset selection failed' }
-          if ($env:RESOURCE_ENABLED -eq 'true') { $assets += @((Get-ChildItem -LiteralPath $env:RESOURCE_FROZEN_ROOT -Filter '*.zip' -File).FullName) }
           if ($env:RELEASE_FOUND -eq 'true') {
-            node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/bounded-gh.mjs" api "repos/$env:GH_REPO/git/ref/tags/$env:RELEASE_TAG" > existing-ref.json
-            if ($LASTEXITCODE -ne 0) { throw 'Existing tag lookup failed' }
-            $resources = if ($env:RESOURCE_ENABLED -eq 'true') { $env:RESOURCE_FROZEN_ROOT } else { '-' }
-            node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-assets.mjs" reconcile product existing-release.json existing-ref.json promotion-identity.json $resources
-            if ($LASTEXITCODE -ne 0) { throw 'Existing asset mismatch or missing-asset upload failed; no overwrite' }
-            node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/bounded-gh.mjs" release edit $env:RELEASE_TAG --draft=false @prereleaseFlags
-            if ($LASTEXITCODE -ne 0) { throw 'Draft completion failed' }
-            node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/bounded-gh.mjs" api "repos/$env:GH_REPO/releases/tags/$env:RELEASE_TAG" > existing-release.json
-            if ($LASTEXITCODE -ne 0) { throw 'Existing release readback failed' }
-            $existing = Get-Content existing-release.json -Raw | ConvertFrom-Json
-            if (@($existing.assets | Where-Object { $_.name -in @('machine-metadata.json', 'update-index.json') }).Count) {
-              $resourceArgument = if ($env:RESOURCE_ENABLED -eq 'true') { $env:RESOURCE_FROZEN_ROOT } else { '-' }
-              node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/update-publication.mjs" verify-existing existing-release.json existing-ref.json $env:RELEASE_TAG product "$resourceArgument"
-              if ($LASTEXITCODE -ne 0) { throw 'Existing authorization invalid; refusing replacement' }
-              'RELEASE_ALREADY_PUBLISHED=true' >> $env:GITHUB_ENV
-            }
+            $release = Get-Content existing-release.json -Raw | ConvertFrom-Json
           } else {
             $identity = Get-Content promotion-identity.json -Raw | ConvertFrom-Json
             node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-notes.mjs" $identity.appVersion $env:SOURCE_SHA $env:RUN_ID release-notes.md
@@ -268,10 +250,27 @@ jobs:
             $releaseArguments = @('release','create',$env:RELEASE_TAG,'--target',$env:SOURCE_SHA,'--draft','--title',"Mizar $env:RELEASE_TAG",'--notes-file','release-notes.md') + $prereleaseFlags
             node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/bounded-gh.mjs" @releaseArguments
             if ($LASTEXITCODE -ne 0) { throw 'Draft creation uncertain; retry must reconcile original assets' }
-            node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/upload-release-assets.mjs" $env:RELEASE_TAG @assets
-            if ($LASTEXITCODE -ne 0) { throw 'Draft asset upload uncertain; retry verifies remote bytes before adding missing assets' }
-            node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/bounded-gh.mjs" release edit $env:RELEASE_TAG --draft=false @prereleaseFlags
-            if ($LASTEXITCODE -ne 0) { throw 'Publication failed; retry retains original assets' }
+            node "$env:RESOURCE_PUBLISHER_ROOT/scripts/ci/resource-release.mjs" lookup-release product product/release-manifest.json existing-release.json
+            if ($LASTEXITCODE -ne 0) { throw 'Created draft identity is unknown or ambiguous' }
+            $release = Get-Content existing-release.json -Raw | ConvertFrom-Json
+            if (!$release.draft) { throw 'Created release is not an unpublished draft' }
+          }
+          $resources = if ($env:RESOURCE_ENABLED -eq 'true') { $env:RESOURCE_FROZEN_ROOT } else { '-' }
+          if ($release.draft) {
+            if ("$($release.id)" -notmatch '^\d+$') { throw 'Invalid draft release ID' }
+            node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-assets.mjs" publish-draft product promotion-identity.json "$resources" "$($release.id)" existing-release.json existing-ref.json
+            if ($LASTEXITCODE -ne 0) { throw 'Draft publication or its verified readback failed; reconcile before retry' }
+          } else {
+            node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/bounded-gh.mjs" api "repos/$env:GH_REPO/git/ref/tags/$env:RELEASE_TAG" > existing-ref.json
+            if ($LASTEXITCODE -ne 0) { throw 'Existing tag lookup failed' }
+            node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-assets.mjs" reconcile product existing-release.json existing-ref.json promotion-identity.json "$resources"
+            if ($LASTEXITCODE -ne 0) { throw 'Existing asset mismatch or missing-asset upload failed; no overwrite' }
+          }
+          $existing = Get-Content existing-release.json -Raw | ConvertFrom-Json
+          if ($env:RELEASE_TAG -notmatch '-' -and @($existing.assets | Where-Object { $_.name -in @('machine-metadata.json', 'update-index.json') }).Count) {
+            node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/update-publication.mjs" verify-existing existing-release.json existing-ref.json $env:RELEASE_TAG product "$resources"
+            if ($LASTEXITCODE -ne 0) { throw 'Existing authorization invalid; refusing replacement' }
+            'RELEASE_ALREADY_PUBLISHED=true' >> $env:GITHUB_ENV
           }
       - name: Verify actual public resource assets before downstream authorization
         if: ${{ env.RELEASE_DRAFT_ID == '' && env.RESOURCE_ENABLED == 'true' }}
@@ -322,7 +321,6 @@ jobs:
         if: ${{ env.RELEASE_DRAFT_ID == '' && !contains(env.RELEASE_TAG, '-') }}
         shell: pwsh
         run: |
-          if (!(Test-Path -LiteralPath 'evidence-extracted/build-timings.json' -PathType Leaf)) { throw 'Qualified evidence is missing build timing' }
           node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-timings.mjs" promotion release-timings.json
           if ($LASTEXITCODE -ne 0) { throw 'Release timing identity/path validation failed' }
       - name: Preserve maintainer promotion records in CI only

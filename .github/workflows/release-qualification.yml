@@ -443,15 +443,10 @@ jobs:
           }
           "QUALIFIED_CORE_DIRECTORY=$($cores[0].FullName)" >> $env:GITHUB_ENV
           $buildTimings = Join-Path $env:QUALIFICATION_BUILD_ROOT 'build-timings.json'
-          if (!(Test-Path -LiteralPath $buildTimings -PathType Leaf)) { throw 'Build measurement evidence is missing' }
-          $metrics = Get-Content -LiteralPath $buildTimings -Raw | ConvertFrom-Json
-          if ($metrics.gitSha -ne $env:SOURCE_SHA -or $metrics.desktopBuildProfile -ne 'release') { throw 'Build timing source/profile differs' }
-          Copy-Item -LiteralPath $buildTimings -Destination (Join-Path $evidenceRoot 'build-timings.json')
+          node scripts/qualification/build-timing-evidence.mjs $buildTimings (Join-Path $evidenceRoot 'build-timings.json') $env:SOURCE_SHA
           Copy-Item (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') $evidenceRoot
           $evidenceArchive = Join-Path $env:RUNNER_TEMP "Mizar-$env:RELEASE_LABEL-evidence.zip"
           Compress-Archive -Path (Join-Path $evidenceRoot '*') -DestinationPath $evidenceArchive
-          $zip = [IO.Compression.ZipFile]::OpenRead($evidenceArchive)
-          try { if ($null -eq $zip.GetEntry('build-timings.json')) { throw 'Final evidence archive is missing build timing' } } finally { $zip.Dispose() }
 
       - name: Attest qualified products and current resource provenance
         id: qualified-provenance

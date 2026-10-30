@@ -49,6 +49,86 @@ const assetBytes = (name, bytes) => ({ name, size: bytes.length, sha256: digest(
 const envAttempt = () => Number(process.env.GITHUB_RUN_ATTEMPT);
 const lanePath = (root, lane, name) => join(root, 'payload', lane, name);
 const writeNew = async (path, bytes) => writeFile(path, bytes, { flag: 'wx', mode: 0o600 });
+const phaseNames = new Set([
+  'read-release',
+  'prepare',
+  'download',
+  'transfer',
+  'verify',
+  'final-check',
+  'index-update',
+  'index-verify',
+  'anonymous',
+]);
+const safeReasons = new Map([
+  ['Invalid Box plan identity', ['BOX_PLAN_IDENTITY', 'Invalid Box plan identity']],
+  ['Invalid Box plan lane', ['BOX_PLAN_LANE', 'Invalid Box plan lane']],
+  ['Invalid Box lane inventory', ['BOX_PLAN_INVENTORY', 'Invalid Box lane inventory']],
+  ['Invalid Box plan update index', ['BOX_PLAN_INDEX', 'Invalid Box plan update index']],
+  ['Duplicate Box plan asset', ['BOX_PLAN_DUPLICATE', 'Duplicate Box plan asset']],
+  ['Invalid phase asset identity', ['BOX_ASSET_IDENTITY', 'Invalid phase asset identity']],
+  ['Invalid Box phase receipt', ['BOX_RECEIPT_INVALID', 'Invalid Box phase receipt']],
+  ['Invalid phase receipt context', ['BOX_RECEIPT_CONTEXT', 'Invalid phase receipt context']],
+  [
+    'Phase receipt asset identity differs',
+    ['BOX_RECEIPT_ASSET', 'Phase receipt asset identity differs'],
+  ],
+  ['Phase record is not canonical', ['BOX_RECORD_CANONICAL', 'Phase record is not canonical']],
+  ['Invalid phase record size', ['BOX_RECORD_SIZE', 'Invalid phase record size']],
+  ['阶段计划与本次运行不一致', ['BOX_PLAN_CONTEXT', '阶段计划与本次运行不一致']],
+  ['阶段计划缺少机器元数据', ['BOX_PLAN_METADATA', '阶段计划缺少机器元数据']],
+  ['Core 与已认证计划不一致', ['BOX_CORE_IDENTITY', 'Core 与已认证计划不一致']],
+  ['Release 与已认证计划不一致', ['BOX_RELEASE_IDENTITY', 'Release 与已认证计划不一致']],
+  ['资源声明与签发目录不一致', ['BOX_RESOURCE_PROOF', '资源声明与签发目录不一致']],
+  ['资源归档与公开 Release 不一致', ['BOX_RESOURCE_RELEASE', '资源归档与公开 Release 不一致']],
+  ['资源归档来源核验与计划不一致', ['BOX_RESOURCE_IDENTITY', '资源归档来源核验与计划不一致']],
+  ['机器元数据回读记录不一致', ['BOX_METADATA_RECEIPT', '机器元数据回读记录不一致']],
+  ['发布前完整回读记录不一致', ['BOX_FINAL_RECEIPT', '发布前完整回读记录不一致']],
+]);
+
+export function boxPhaseDiagnostic(phase, lane, selected, error, assetName) {
+  const name = phaseNames.has(phase) ? phase : 'unknown';
+  const object = ['runtime', 'resources', 'downloads'].includes(lane) ? lane : 'unknown';
+  const asset = ['metadata', 'core'].includes(selected) ? selected : 'unknown';
+  const safeAsset =
+    typeof assetName === 'string' &&
+    /^(?:machine-metadata\.json|Mizar-v\d+\.\d+\.\d+-Windows-x64-(?:Core-Setup|WebInstaller)\.exe|Mizar-official-epl-default-\d+\.\d+\.\d+\.zip)$/.test(
+      assetName,
+    )
+      ? ` name=${assetName}`
+      : '';
+  let reason = safeReasons.get(error?.message);
+  if (
+    !reason &&
+    typeof error?.message === 'string' &&
+    error.message.startsWith('资产原字节不一致：')
+  )
+    reason = ['BOX_ASSET_BYTES', '资产原字节不一致'];
+  if (!reason && error instanceof SyntaxError) reason = ['BOX_RECORD_JSON', '阶段记录 JSON 无效'];
+  if (!reason && error?.code === 'ENOENT') reason = ['BOX_FILE_MISSING', '阶段所需文件缺失'];
+  if (!reason && error instanceof MirrorError)
+    reason = ['BOX_OPERATION_FAILED', '云盘操作、来源或远端核验失败'];
+  reason ??= ['BOX_PHASE_ERROR', '阶段处理失败'];
+  const status =
+    Number.isInteger(error?.httpStatus) && error.httpStatus >= 100 && error.httpStatus <= 599
+      ? ` http_status=${error.httpStatus}`
+      : '';
+  return `Box 阶段 ${name} 失败 lane=${object} asset=${asset}${safeAsset} reason=${reason[0]} (${reason[1]})${status}；保留现有文件。`;
+}
+
+async function diagnosticAsset(root, lane, selected) {
+  try {
+    if (!['runtime', 'resources', 'downloads'].includes(lane)) return undefined;
+    const plan = readBoxPlan(await readFile(join(root, 'plan.json')));
+    if (lane !== 'runtime') return plan.assets[lane][0].name;
+    if (selected === 'metadata') return MACHINE_METADATA_NAME;
+    if (selected === 'core')
+      return plan.assets.runtime.find((asset) => asset.name !== MACHINE_METADATA_NAME)?.name;
+  } catch {
+    // Invalid or missing plans must never contribute untrusted log content.
+  }
+  return undefined;
+}
 const boxClient = () =>
   new BoxClient(
     process.env.MIZAR_BOX_REPO_TOKEN,
@@ -472,9 +552,16 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     else if (phase === 'anonymous') await verifyEntry(root, argument);
     else throw new Error('未知 Box 阶段');
   } catch (error) {
-    // Errors from gh or HTTP can contain credentials and temporary URLs.
-    console.error(`Box 阶段 ${phase} 失败；保留现有文件并核对该阶段。`);
-    if (error instanceof MirrorError) console.error(error.message);
+    // Never print arbitrary external error text, paths, tokens or temporary URLs.
+    console.error(
+      boxPhaseDiagnostic(
+        phase,
+        argument,
+        selected,
+        error,
+        await diagnosticAsset(root, argument, selected),
+      ),
+    );
     process.exitCode = 1;
   } finally {
     const recovery = getBoxRecoveryStartedAt();

@@ -98,15 +98,24 @@ export function releaseTimingReport({
     Date.parse(publishedAt) >= Date.parse(qualification.created_at)
       ? elapsed(qualification.created_at, publishedAt)
       : undefined;
+  const measurementUnavailable = build?.measurementUnavailable === true;
   const result = {
     tag,
     sourceSha,
     recovery,
     publishedAt,
+    ...(measurementUnavailable ? { measurementUnavailable: true } : {}),
     triggerToPublicationMs,
     freshGitHubPublicWithin600Seconds:
-      !recovery && triggerToPublicationMs !== undefined && triggerToPublicationMs <= 600000,
-    build: build ? { phases: build.phases, cargoCache: build.cargoCache } : undefined,
+      !measurementUnavailable &&
+      !recovery &&
+      triggerToPublicationMs !== undefined &&
+      triggerToPublicationMs <= 600000,
+    build: measurementUnavailable
+      ? { measurementUnavailable: true }
+      : build
+        ? { phases: build.phases, cargoCache: build.cargoCache }
+        : undefined,
     qualification: runTiming(
       qualification,
       jobs.qualification,
@@ -133,7 +142,10 @@ export function releaseTimingReport({
     result.publishedToBoxMs = elapsed(publishedAt, finishedAt);
     // Retries or a previously published version cannot prove a fresh release budget.
     result.freshReleaseWithin600Seconds =
-      !recovery && boxOutcome === 'success' && result.triggerToBoxMs <= 600000;
+      !measurementUnavailable &&
+      !recovery &&
+      boxOutcome === 'success' &&
+      result.triggerToBoxMs <= 600000;
   }
   return result;
 }
@@ -188,7 +200,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
           ? 'existing-release.json'
           : 'published-release.json',
       );
-      const build = await json('evidence-extracted/build-timings.json');
+      const build = await json('evidence-extracted/build-timings.json').catch(() => ({
+        measurementUnavailable: true,
+      }));
       const report = releaseTimingReport({
         qualification,
         promotion: current,

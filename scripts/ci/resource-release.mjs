@@ -14,6 +14,7 @@ import { verifyResourcePublication } from '../qualification/resource-provenance/
 import { boundedRead } from '../qualification/resource-provenance/io.mjs';
 import { releaseAttestationArgs } from '../qualification/release-identity.mjs';
 import { validateReleaseTag } from '../qualification/app-version.mjs';
+import { lookupRelease } from '../qualification/release-lookup.mjs';
 import {
   LIMITS,
   requireValue,
@@ -655,13 +656,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     coreIdentity(manifest);
     requireValue(process.env.RELEASE_TAG === `v${manifest.appVersion}`, '查询标签与候选版本不一致');
     requireValue(process.env.GITHUB_ENV, '发行工作流环境缺失');
-    const release = lookupGithubObject(`releases/tags/${process.env.RELEASE_TAG}`);
+    const release = lookupRelease(process.env.RELEASE_TAG, manifest.gitSha, lookupGithubObject);
     if (release !== null) await writeFile(argument, jsonBytes(release), { flag: 'wx' });
-    else
-      requireValue(
-        lookupGithubObject(`git/ref/tags/${process.env.RELEASE_TAG}`) === null,
-        '已有标签但无已验证发行；拒绝变更',
-      );
     await appendFile(process.env.GITHUB_ENV, `RELEASE_FOUND=${release !== null}\n`);
   } else if (mode === 'prepare') {
     const root = resolve(import.meta.dirname, '../..');
