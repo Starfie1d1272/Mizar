@@ -139,7 +139,9 @@ export function registerProductionRoutes(
         error instanceof Error && error.message === 'camera_settings_saving'
           ? '运镜设置正在保存，请稍后重试。'
           : stage === 'production_release'
-            ? '等待画面已保留，但数据源释放失败，制作状态仍保留。请查看诊断，处理记录的问题后再结束制作。'
+            ? error instanceof Error && /数据源释放待重试|可靠事件仍待确认/.test(error.message)
+              ? '等待画面已保留，数据源释放尚未确认，记录待重试或核对；制作状态仍保留。'
+              : '等待画面已保留，但数据源释放失败，制作状态仍保留。请查看诊断，处理记录的问题后再结束制作。'
             : stage === 'production_safe_scene'
               ? '切换等待画面失败，制作尚未结束。请查看诊断，处理记录的问题后再结束制作。'
               : '比赛状态读取失败，当前状态和具体原因未确认。请复制诊断信息后排查。';

@@ -97,6 +97,7 @@ export function businessEvidence(value: unknown) {
     schema: input.schema === 2 ? 2 : 1,
     matchId: businessId(input.matchId),
     competitionId: businessId(input.competitionId),
+    installationId: businessId(input.installationId),
     contextRevision: businessId(input.contextRevision),
     eventId: businessId(input.eventId),
     idempotencyKey: businessId(input.idempotencyKey),
@@ -312,6 +313,10 @@ const isReason = (value: unknown): value is string =>
       'canonical_result_changed',
       'mismatch_no_longer_current',
       'claim_response_received',
+      'release_attempt',
+      'release_confirmed',
+      'release_pending',
+      'release_blocked',
       'request_started',
       'request_aborted',
     ].includes(value) ||

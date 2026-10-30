@@ -939,6 +939,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             ? {}
             : { initialBinding: options.matchContextBinding }),
           onBindingChanged: (binding) => {
+            options.rivalhubConnection?.bindingChanged?.(binding?.context.matchId ?? null);
             const previousOrigin = previousBindingOrigin;
             previousBindingOrigin = binding?.origin;
             outputBinding = binding;
@@ -1869,6 +1870,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   app.addHook('onReady', async () => {
     outputService.setCurrent(projectionCoordinator.getCurrent(), outputBinding);
     await outputService.start();
+    options.rivalhubConnection?.setSourceSettlement?.(
+      (scope) => outputService.settleSourceForRelease(scope),
+      (scope) => outputService.resumeSource(scope),
+    );
+    options.rivalhubConnection?.startSourceCleanup?.();
     businessJournal?.runtime(
       projectionCoordinator.getCurrent(),
       outputBinding,
@@ -2329,8 +2335,12 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       cstvSources.program.stop(),
       cstvSources.lookahead.stop(),
       ...deliveryConsumers.map((consumer) => consumer.close()),
-      outputService.close(),
     ]);
+    const releaseCleanup = await Promise.allSettled([
+      options.rivalhubConnection?.shutdownSource?.(),
+    ]);
+    sourceCleanup.push(...releaseCleanup);
+    sourceCleanup.push(...(await Promise.allSettled([outputService.close()])));
     await Promise.all([projectionCoordinator.close(), programCueCoordinator.close()]);
     await programRuntime.close();
     await localWebTransport.close();

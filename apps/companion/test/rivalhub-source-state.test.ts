@@ -88,7 +88,7 @@ test('atomic write failure preserves disk and memory, and unsafe state is reject
 test('full pending state refuses a new claim without evicting identities', async (t) => {
   const path = await setup(t);
   const records = Array.from({ length: 64 }, (_, index) => ({
-    identity: { ...scope, matchId: `match-${index}`, authorityRevision: index },
+    identity: { ...scope, matchId: `match-${index}`, authorityRevision: index + 1 },
     state: 'release_pending',
     cause: 'switch',
     attempts: 0,

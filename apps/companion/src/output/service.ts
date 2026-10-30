@@ -49,6 +49,7 @@ export class OutputService {
   private binding: MatchContextBinding | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
   private closed = false;
+  private readonly retiringScopes = new Set<string>();
   private quarantined = false;
   async setQuarantined(value: boolean): Promise<void> {
     this.quarantined = value;
@@ -260,6 +261,7 @@ export class OutputService {
   }
 
   private retryPending = false;
+  private retryCompletion: Promise<void> | undefined;
   private outboundUnsubscribe: (() => Promise<void>) | undefined;
   private outboundTimer: ReturnType<typeof setInterval> | undefined;
   private lastBundleAt = 0;
@@ -532,6 +534,15 @@ export class OutputService {
     if (this.quarantined || binding?.origin === 'fixture') {
       return;
     }
+    const cursor = bundle.program.cursor;
+    if (
+      binding &&
+      cursor.liveSessionId &&
+      this.retiringScopes.has(
+        JSON.stringify([binding.context.matchId, cursor.producerInstanceId, cursor.liveSessionId]),
+      )
+    )
+      return;
 
     const continuity: DeliveryContinuity | undefined =
       binding === undefined
@@ -756,6 +767,10 @@ export class OutputService {
     }
     if (this.bundle !== undefined) this.updateMapStartScope(this.bundle, this.binding);
     this.retryPending = true;
+    let finishRetry!: () => void;
+    this.retryCompletion = new Promise<void>((resolve) => {
+      finishRetry = resolve;
+    });
     try {
       await this.reconcileFence();
       if (this.sink === undefined)
@@ -854,6 +869,8 @@ export class OutputService {
       this.onDiagnostic?.('outbox_retry_failed');
     } finally {
       this.retryPending = false;
+      finishRetry();
+      this.retryCompletion = undefined;
     }
   }
 
@@ -863,6 +880,27 @@ export class OutputService {
 
   getReliableScopeDisposition(scope: ReliableDeliveryScope) {
     return this.outbox?.getScopeDisposition(scope);
+  }
+
+  /** Stop producing this scope, then wait for the existing owner to settle its queue. */
+  async settleSourceForRelease(scope: ReliableDeliveryScope): Promise<boolean> {
+    this.retiringScopes.add(
+      JSON.stringify([scope.matchId, scope.producerInstanceId, scope.liveSessionId]),
+    );
+    if (!this.outbox) return true;
+    if (this.outbox.getRecovery()?.code === 'outbox_preserved_without_records') return false;
+    await this.outbox.flushPending();
+    await this.retryCompletion;
+    await this.retry();
+    await this.retryCompletion;
+    await this.outbox.flushPending();
+    return this.outbox.getScopeDisposition(scope).pending === 0;
+  }
+
+  resumeSource(scope: ReliableDeliveryScope): void {
+    this.retiringScopes.delete(
+      JSON.stringify([scope.matchId, scope.producerInstanceId, scope.liveSessionId]),
+    );
   }
 
   getReliableRecords() {

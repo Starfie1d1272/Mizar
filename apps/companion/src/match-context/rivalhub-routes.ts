@@ -498,7 +498,10 @@ export function registerRivalHubConnectionRoutes(
       return options.connection.view();
     } catch (error) {
       request.log.error({ err: error }, 'RivalHub operation failed');
-      return reply.code(502).send({ message: '数据源停止未确认，请稍后再试。' });
+      return reply.code(502).send({
+        message: '数据源停止未确认，请稍后再试。',
+        sourceCleanup: options.connection.view().sourceCleanup,
+      });
     } finally {
       sourceCommand = null;
     }

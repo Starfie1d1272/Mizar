@@ -43,7 +43,7 @@ const scopeSchema = z
   })
   .strict();
 const exactSchema = scopeSchema
-  .extend({ authorityRevision: z.number().int().nonnegative().safe() })
+  .extend({ authorityRevision: z.number().int().positive().safe() })
   .strict();
 const causeSchema = z.enum(['finish', 'switch', 'shutdown', 'recovery', 'authority_check']);
 const recordSchema = z
@@ -63,7 +63,7 @@ const intentSchema = z
   .object({
     id: z.string().uuid(),
     scope: scopeSchema,
-    previousAuthorityRevision: z.number().int().nonnegative().safe().nullable(),
+    previousAuthorityRevision: z.number().int().positive().safe().nullable(),
   })
   .strict();
 const envelopeSchema = z
@@ -285,6 +285,20 @@ export class RivalHubSourceState {
       if (index < 0 || state.records[index]?.state === 'owned')
         throw new Error('source is not pending');
       state.records.splice(index, 1);
+    });
+  }
+
+  /** Explicit user disconnect succeeded: the server revoked this installation and its sources. */
+  async completeRevokedInstallation(
+    scope: Pick<SourceScope, 'baseUrl' | 'competitionId' | 'installationId'>,
+  ): Promise<void> {
+    await this.change((state) => {
+      const matches = (value: SourceScope) =>
+        value.baseUrl === scope.baseUrl &&
+        value.competitionId === scope.competitionId &&
+        value.installationId === scope.installationId;
+      state.records = state.records.filter((record) => !matches(record.identity));
+      if (state.intent && matches(state.intent.scope)) state.intent = null;
     });
   }
 }
