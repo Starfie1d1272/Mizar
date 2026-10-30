@@ -60,7 +60,7 @@ it('accepts a complete display projection and retains it across an unavailable o
   vi.stubGlobal('fetch', fetch);
   let state: BroadcastDisplayClientState | undefined;
   function Probe() {
-    state = useBroadcastDisplayConfig();
+    state = useBroadcastDisplayConfig(true, 'waiting');
     return null;
   }
   const root = createRoot(document.createElement('div'));
@@ -104,7 +104,7 @@ it('does not substitute legacy visuals after the active configuration is known t
   );
   let state: BroadcastDisplayClientState | undefined;
   function Probe() {
-    state = useBroadcastDisplayConfig();
+    state = useBroadcastDisplayConfig(true, 'waiting');
     return null;
   }
   const root = createRoot(document.createElement('div'));
@@ -118,4 +118,108 @@ it('does not substitute legacy visuals after the active configuration is known t
   });
   expect(state).toEqual({ status: 'unsupported', current: null });
   act(() => root.unmount());
+});
+
+it('accepts a HUD or a selected scene independently of unsupported unrelated visuals', async () => {
+  const { supportsBroadcastDisplay } = await import('../src/program/broadcast-display');
+  const config = {
+    ...projection,
+    program: {
+      ...projection.program,
+      scenes: { ...projection.program.scenes, matchup: { ...visual, id: 'other' } },
+    },
+  } as Parameters<typeof supportsBroadcastDisplay>[0];
+  expect(supportsBroadcastDisplay(config, 'gameplay')).toBe(true);
+  expect(supportsBroadcastDisplay(config, 'waiting')).toBe(true);
+  expect(supportsBroadcastDisplay(config, 'bp')).toBe(true);
+  expect(supportsBroadcastDisplay(config, 'matchup')).toBe(false);
+});
+
+it('checks the full background reference before accepting a scene and retains the last good display on failure', async () => {
+  vi.useFakeTimers();
+  const background = {
+    resource: { id: 'local:mizar-pack:example', version: '1.0.0', digest: 'a'.repeat(64) },
+    fileId: 'background',
+  };
+  const imageConfig = {
+    ...projection,
+    activeRevision: 'active-2',
+    program: { ...projection.program, assets: { 'pulse.background': background } },
+  };
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce({ ok: true, json: async () => projection })
+    .mockResolvedValueOnce({ ok: true, json: async () => imageConfig })
+    .mockResolvedValueOnce({ ok: false });
+  vi.stubGlobal('fetch', fetchMock);
+  let state: BroadcastDisplayClientState | undefined;
+  function Probe() {
+    state = useBroadcastDisplayConfig(true, 'waiting');
+    return null;
+  }
+  const root = createRoot(document.createElement('div'));
+  await act(async () => {
+    root.render(<Probe />);
+    await Promise.resolve();
+  });
+  const previous = state?.current;
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(500);
+  });
+  expect(state).toEqual({ status: 'unavailable', current: previous });
+  const path = fetchMock.mock.calls[2]![0] as string;
+  const query = new URL(path, 'http://localhost').searchParams;
+  expect(Object.fromEntries(query)).toEqual({
+    resourceId: background.resource.id,
+    version: background.resource.version,
+    digest: background.resource.digest,
+    fileId: background.fileId,
+  });
+  act(() => root.unmount());
+});
+
+it('rejects unsupported background slots without affecting HUD support', async () => {
+  const { supportsBroadcastDisplay } = await import('../src/program/broadcast-display');
+  const config = {
+    ...projection,
+    program: {
+      ...projection.program,
+      assets: {
+        'other.slot': {
+          resource: { id: 'local:mizar-pack:example', version: '1', digest: 'a'.repeat(64) },
+          fileId: 'background',
+        },
+      },
+    },
+  } as Parameters<typeof supportsBroadcastDisplay>[0];
+  expect(supportsBroadcastDisplay(config, 'waiting')).toBe(false);
+  expect(supportsBroadcastDisplay(config, 'gameplay')).toBe(true);
+});
+
+it('keeps HUD available while rejecting a scene marked unavailable by the server', async () => {
+  const fetcher = vi.fn(async () => ({
+    ok: true,
+    headers: new Headers({ 'x-mizar-program-status': 'dependency_missing' }),
+    json: async () => projection,
+  }));
+  vi.stubGlobal('fetch', fetcher);
+  let hud: BroadcastDisplayClientState | undefined;
+  let scene: BroadcastDisplayClientState | undefined;
+  function Probe() {
+    hud = useBroadcastDisplayConfig(true, 'gameplay');
+    scene = useBroadcastDisplayConfig(true, 'waiting');
+    return null;
+  }
+  const root = createRoot(document.createElement('div'));
+  try {
+    await act(async () => {
+      root.render(<Probe />);
+      await Promise.resolve();
+    });
+    expect(hud?.status).toBe('ready');
+    expect(hud?.current?.activeRevision).toBe('active-1');
+    expect(scene).toEqual({ status: 'unavailable', current: null });
+  } finally {
+    act(() => root.unmount());
+  }
 });

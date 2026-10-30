@@ -9,7 +9,7 @@
   flex-direction: column;
 }
 .stats-insert header span {
-  color: var(--mizar-broadcast-pulse-highlight);
+  color: var(--mizar-broadcast-pulse-blue);
   font-size: 24px;
   letter-spacing: 0.12em;
 }
@@ -27,7 +27,7 @@
   font-size: 32px;
 }
 .stats-insert__teams span {
-  color: var(--mizar-broadcast-pulse-highlight);
+  color: var(--mizar-broadcast-pulse-blue);
   font-size: 24px;
 }
 .stats-insert__teams strong {
@@ -46,10 +46,11 @@
   width: 18px;
   height: 18px;
   flex: none;
-  background: #59a8ff;
+  background: var(--mizar-broadcast-pulse-blue);
 }
 .stats-insert__key--right {
-  background: #c6d7e9;
+  background: var(--mizar-broadcast-pulse-gold);
+  border: 2px dashed var(--mizar-broadcast-pulse-canvas);
 }
 .stats-insert__portrait {
   width: 64px;
@@ -85,7 +86,7 @@
 }
 .stats-insert__radar-values {
   font: 700 27px var(--mizar-type-family-display);
-  fill: var(--mizar-broadcast-pulse-highlight);
+  fill: var(--mizar-broadcast-pulse-blue);
 }
 .stats-insert__recent {
   flex: 1;
@@ -100,7 +101,7 @@
   gap: 10px;
 }
 .stats-insert__recent-item {
-  background: var(--mizar-broadcast-pulse-raised);
+  background: var(--mizar-broadcast-pulse-shell);
   min-height: 94px;
   display: flex;
   align-items: center;
@@ -137,7 +138,7 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 .stats-insert__metric {
-  background: var(--mizar-broadcast-pulse-raised);
+  background: var(--mizar-broadcast-pulse-shell);
   padding: 30px 36px;
   min-width: 0;
 }
@@ -179,7 +180,7 @@
   background: var(--mizar-broadcast-pulse-canvas);
 }
 .stats-insert__row:nth-child(even) {
-  background: var(--mizar-broadcast-pulse-raised);
+  background: var(--mizar-broadcast-pulse-shell);
 }
 .stats-insert__row strong {
   display: block;

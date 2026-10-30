@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { expect, it } from 'vitest';
 import {
+  analyzePackDrafts,
   parseManifest,
   preparePackDrafts,
   readPackArchive,
@@ -112,6 +113,39 @@ it('imports multiple independent draft copies from a verified archive', async ()
   expect(result.modules).toHaveLength(4);
   expect(result.moduleEntries.hud).toHaveLength(2);
   expect(result.presets[0]!.bindings[0]).not.toEqual(result.presets[1]!.bindings[0]);
+  const mixedManifest = structuredClone(archive.manifest);
+  mixedManifest.modules.push({
+    entryId: 'unknown',
+    module: 'future',
+    schemaVersion: 1,
+    fileId: 'file0',
+    required: true,
+  });
+  mixedManifest.presets.push({ entryId: 'broken', schemaVersion: 1, fileId: 'file0' });
+  const mixedBytes = Buffer.from(JSON.stringify(mixedManifest));
+  const mixedSource = { ...source, digest: parseManifest(mixedBytes).digest };
+  const analyzed = analyzePackDrafts({
+    manifestBytes: mixedBytes,
+    files: data,
+    source: mixedSource,
+    refs: {
+      asset: () => {
+        throw new Error('unexpected');
+      },
+      resource: () => resource,
+      tool: () => {
+        throw new Error('unexpected');
+      },
+    },
+    supports: () => true,
+  });
+  expect(analyzed.entries.find((entry) => entry.entryId === 'unknown')?.status).toBe('unsupported');
+  expect(analyzed.entries.find((entry) => entry.entryId === 'unknown')?.name).toBe('HUD');
+  expect(analyzed.entries.find((entry) => entry.entryId === 'live')?.name).toBe('Live');
+  expect(analyzed.entries.find((entry) => entry.entryId === 'broken')?.status).toBe('invalid');
+  const selected = analyzed.prepare({ modules: ['unknown'], presets: ['live'] });
+  expect(selected.presets).toHaveLength(1);
+  expect(selected.modules.map((module) => module.kind).sort()).toEqual(['hud', 'program']);
   expect(() =>
     preparePackDrafts({
       manifestBytes: archive.manifestBytes,

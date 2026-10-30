@@ -1,5 +1,12 @@
+import { pulseTokenStyle } from './broadcast-display';
 import { useBroadcastDisplayConfig } from '../realtime/broadcast-display-client';
-import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
+import {
+  useEffect,
+  useState,
+  useSyncExternalStore,
+  type CSSProperties,
+  type ReactNode,
+} from 'react';
 import {
   programPresentationSchema,
   type ProgramPresentation,
@@ -58,7 +65,7 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
   const data = preview ? presentationPreview(sceneId, params.get('variant')) : liveData;
   const scenes = useProgramScenes();
   const reducedMotion = useSyncExternalStore(subscribeMotion, readReducedMotion, () => false);
-  const display = useBroadcastDisplayConfig(!preview);
+  const display = useBroadcastDisplayConfig(!preview, sceneId);
   const hud = useHudConfigClient(
     preview || (display.current === null && display.status !== 'unsupported'),
   );
@@ -82,10 +89,14 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
     clock !== 'timeout_t';
   const matchId = data?.match?.matchId ?? null;
   const observedMatch = connection.current?.payload.match?.matchId;
-  if (!preview && display.status === 'unsupported' && display.current === null) return null;
+  if (!preview && display.current === null) return null;
+  const sceneStyle = display.current
+    ? (pulseTokenStyle(display.current.program) ?? undefined)
+    : undefined;
   const scene = (
     <ProgramView
       kind="scene"
+      sceneStyle={sceneStyle}
       sceneId={sceneId}
       data={data}
       snapshot={snapshot ?? null}
@@ -100,7 +111,11 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
     />
   );
   return canRotate && (!connection.current || observedMatch === matchId) && matchId ? (
-    <RotatingScene key={JSON.stringify([sceneId, matchId])} matchId={matchId}>
+    <RotatingScene
+      key={JSON.stringify([sceneId, matchId])}
+      matchId={matchId}
+      sceneStyle={sceneStyle}
+    >
       {scene}
     </RotatingScene>
   ) : (
@@ -111,10 +126,12 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
 function RotatingScene({
   matchId,
   children,
+  sceneStyle,
 }: {
   readonly matchId: string;
   readonly children: ReactNode;
+  readonly sceneStyle?: CSSProperties | undefined;
 }) {
   const insert = useStatsRotation(true, matchId);
-  return insert ? <StatsInsertView insert={insert} /> : children;
+  return insert ? <StatsInsertView insert={insert} sceneStyle={sceneStyle} /> : children;
 }

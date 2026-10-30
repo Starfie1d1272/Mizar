@@ -39,6 +39,10 @@ export class BoxSource {
   async link(path: string, signal: AbortSignal): Promise<string> {
     if (
       path !== '/Updates/latest.json' &&
+      path !== '/Tools/MulNX/latest.json' &&
+      !/^\/Tools\/MulNX\/[1-9][0-9]*\/[1-9][0-9]*\/(?:MulNX\.7z|LICENSE\.txt|COPYRIGHT\.md|SECURITY\.md)$/.test(
+        path,
+      ) &&
       !/^\/Stable\/Mizar-v\d+\.\d+\.\d+-Windows-x64-Setup\.exe$/.test(path) &&
       !/^\/Runtime\/v\d+\.\d+\.\d+\/(?:machine-metadata\.json|Mizar-v\d+\.\d+\.\d+-Windows-x64-Core-Setup\.exe)$/.test(
         path,

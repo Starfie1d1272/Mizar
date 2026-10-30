@@ -33,7 +33,8 @@ function virtualActiveId(value: CameraModuleV2): string {
 export function createCameraConfigPersistence(
   store: BroadcastConfigStore,
   dependencies: CameraFacadeDependencies,
-): CameraConfigPersistence {
+): CameraConfigPersistence & { readonly available: boolean } {
+  let unavailable = false;
   async function toLocal(value: CameraModuleV2): Promise<OrchestrationPreset> {
     return orchestrationPresetSchema.parse({
       format: 'mizar.orchestration',
@@ -58,7 +59,15 @@ export function createCameraConfigPersistence(
     if (modules.some((item) => item.id === disabledId)) throw new Error('camera_preset_reserved');
     // Resolve only the active snapshot. Legacy draft rows reuse already resolved identities;
     // drafts needing other dependencies remain in the coordinator for the new editor.
-    const activePreset = active ? await toLocal(active) : null;
+    let activePreset: OrchestrationPreset | null = null;
+    unavailable = false;
+    if (active) {
+      try {
+        activePreset = await toLocal(active);
+      } catch {
+        unavailable = true;
+      }
+    }
     const packs = new Map<string, string>();
     const tracks = new Map<string, string>();
     if (active && activePreset)
@@ -131,12 +140,17 @@ export function createCameraConfigPersistence(
     };
   }
   return {
+    get available() {
+      return !unavailable && !store.pendingLegacyCamera;
+    },
     initialize: () => read(),
     read,
     async commit(catalog, automaticEnabled, previous, previousAutomaticEnabled) {
       const beforeDocument = store.snapshot;
       const before = beforeDocument.active;
       const current = await read();
+      if (unavailable || store.pendingLegacyCamera)
+        throw new Error('camera_dependency_unavailable');
       if (
         canonicalJson(current.catalog) !== canonicalJson(previous) ||
         current.automaticEnabled !== previousAutomaticEnabled
@@ -207,6 +221,12 @@ export function createCameraConfigPersistence(
           if (document.active.revision !== before.revision) throw new Error('revision_conflict');
           for (const draft of changedDrafts) {
             const module = document.modules.find((item) => item.id === draft.id);
+            const beforeModule = beforeDocument.modules.find((item) => item.id === draft.id);
+            if (
+              (beforeModule && (!module || module.revision !== beforeModule.revision)) ||
+              (!beforeModule && module)
+            )
+              throw new Error('revision_conflict');
             if (module && module.kind !== 'camera') throw new Error('revision_conflict');
             if (module?.kind === 'camera') {
               module.value = draft.value;

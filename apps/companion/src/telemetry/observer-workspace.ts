@@ -468,7 +468,7 @@ export function registerWorkspaceObserver(
   };
   const unsubscribe = settings?.subscribe((kind) => {
     if (kind === 'game' && !settings.gameAutomation.hideGameHud) hiddenGame = '';
-    if (kind === 'settings' || kind === 'lead' || kind === 'game') return;
+    if (kind === 'lead' || kind === 'game') return;
     const attempt = ++epoch;
     if (kind === 'map')
       seamlessGame = settings.mapConnection?.mode === 'seamless' && host ? keys(host).game : '';

@@ -6,6 +6,11 @@ import { buildApp } from '../../apps/companion/src/app.js';
 import { RivalHubConnection } from '../../apps/companion/src/match-context/rivalhub-connection.js';
 import { toMatchContext, type BroadcastManifest } from '../../packages/rivalhub/src/index.js';
 import { broadcastStatsSchema } from '../../packages/protocol/src/broadcast-stats.js';
+import {
+  DEFAULT_PLACEMENTS,
+  getBuiltinResolvedPreset,
+  getBuiltinTheme,
+} from '../../packages/hud-config/src/index.js';
 
 test('production waiting rotates without telemetry and manual hold wins', async ({
   page,
@@ -78,6 +83,38 @@ test('production waiting rotates without telemetry and manual hold wins', async 
       async (route) => {
         const request = route.request();
         const url = new URL(request.url());
+        if (url.pathname === '/local/v1/broadcast-display-config') {
+          const visual = { kind: 'builtin', id: 'pulse', apiVersion: 1 };
+          return route.fulfill({
+            json: {
+              activeRevision: 'test',
+              hud: {
+                renderer: 'native',
+                config: getBuiltinResolvedPreset(),
+                overlays: {
+                  pause: { enabled: true, visual: 'legacy' },
+                  chat: { enabled: true, placement: DEFAULT_PLACEMENTS['team-t-rail'] },
+                },
+                accent: { source: 'fixed', value: getBuiltinTheme().brandColor },
+              },
+              program: {
+                scenes: Object.fromEntries(
+                  [
+                    'waiting',
+                    'matchup',
+                    'bp',
+                    'halftime',
+                    'map_result',
+                    'intermap',
+                    'match_result',
+                  ].map((id) => [id, visual]),
+                ),
+                tokens: {},
+                assets: {},
+              },
+            },
+          });
+        }
         const response = await app.inject({
           method: request.method() as 'GET' | 'POST',
           url: url.pathname + url.search,

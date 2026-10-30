@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import type { BroadcastConfigDocument } from '@mizar/broadcast-config';
+import type { BroadcastConfigDocument, ModuleRecord } from '@mizar/broadcast-config';
 import { buildApp } from '../../src/app.js';
 
 it('reports pending migration without exposing or changing legacy settings', async () => {
@@ -123,6 +123,13 @@ it('boots built-in providers without custom injection when legacy dependencies a
         accent: { source: 'fixed' },
       },
     });
+    const modules = (await app.inject('/local/v1/broadcast-modules')).json<{
+      modules: Array<{ module: { kind: string }; builtin: boolean }>;
+    }>().modules;
+    expect(modules.filter((item) => item.builtin && item.module.kind === 'hud')).toHaveLength(5);
+    expect(modules.filter((item) => item.builtin && item.module.kind === 'program')).toHaveLength(
+      1,
+    );
   } finally {
     await app.close();
     await rm(root, { recursive: true, force: true });
@@ -204,7 +211,7 @@ it('preserves the existing music owner state during built-in production migratio
   }
 });
 
-it('leaves real legacy files in place when a camera source cannot yet be verified', async () => {
+it('preserves legacy camera data while allowing HUD use when its source is unavailable', async () => {
   const { mkdtemp, readFile, rm, stat } = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
@@ -228,11 +235,56 @@ it('leaves real legacy files in place when a camera source cannot yet be verifie
       state: 'pending',
       reason: 'camera_identity_unavailable',
     });
-    expect((await app.inject('/local/v1/broadcast-display-config')).statusCode).toBe(503);
+    expect((await app.inject('/local/v1/broadcast-display-config')).statusCode).toBe(200);
     expect(await readFile(join(camera.directory, 'presets.json'), 'utf8')).toBe(oldState);
-    await expect(stat(join(root, 'broadcast-config.json'))).rejects.toMatchObject({
-      code: 'ENOENT',
+    expect((await stat(join(root, 'broadcast-config.json'))).isFile()).toBe(true);
+    const pending = (await app.inject('/local/v1/broadcast-config/pending-camera')).json();
+    expect(pending.pending.catalog.preset.maps[0]).toMatchObject({
+      map: 'de_mirage',
+      pack: 'Mizar_test',
     });
+    const modules = (await app.inject('/local/v1/broadcast-modules')).json<{
+      modules: Array<{ module: ModuleRecord }>;
+    }>().modules;
+    const hudModule = modules.find(({ module }) => module.kind === 'hud')!.module;
+    const document = (
+      await app.inject('/local/v1/broadcast-presets')
+    ).json<BroadcastConfigDocument>();
+    expect(document.active.resolved.camera).toBeNull();
+    const { randomUUID } = await import('node:crypto');
+    const address = await app.listen({ host: '127.0.0.1', port: 0 });
+    expect((await fetch(`${address}/local/v1/broadcast-modules`)).status).toBe(200);
+    const applied = await fetch(`${address}/operator/broadcast-modules/apply`, {
+      method: 'POST',
+      headers: { origin: 'http://127.0.0.1:3000', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        moduleId: hudModule.id,
+        expectedRevision: hudModule.revision,
+        expectedActiveRevision: document.active.revision,
+        requestId: randomUUID(),
+      }),
+    });
+    expect(applied.status).toBe(200);
+    const recovery = await fetch(`${address}/operator/broadcast-config/pending-camera/restore`, {
+      method: 'POST',
+      headers: { origin: 'http://127.0.0.1:3000', 'content-type': 'application/json' },
+      body: '{}',
+    });
+    expect(recovery.status).toBe(503);
+    await app.close();
+    const resumedHud = new HudConfigStore();
+    await resumedHud.load();
+    const resumed = buildApp({ obsConfigPath: join(root, 'obs.json'), hudConfigStore: resumedHud });
+    try {
+      const resumedAddress = await resumed.listen({ host: '127.0.0.1', port: 0 });
+      expect((await fetch(`${resumedAddress}/local/v1/broadcast-modules`)).status).toBe(200);
+      const restored = (await (
+        await fetch(`${resumedAddress}/local/v1/broadcast-config/pending-camera`)
+      ).json()) as { pending: { catalog: { preset: { maps: Array<{ pack: string }> } } } };
+      expect(restored.pending.catalog.preset.maps[0]!.pack).toBe('Mizar_test');
+    } finally {
+      await resumed.close();
+    }
   } finally {
     await app.close();
     await rm(root, { recursive: true, force: true });

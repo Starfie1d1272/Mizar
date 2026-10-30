@@ -26,7 +26,7 @@ export function MulnxToolControls({
   onPreparedSessionChange?: (value: { preparedId: string; tag: string } | null) => void;
   tool:
     | (Pick<MulnxToolView, 'installed' | 'latest' | 'busy'> &
-        Partial<Pick<MulnxToolView, 'message' | 'packs'>>)
+        Partial<Omit<MulnxToolView, 'installed' | 'latest' | 'busy'>>)
     | undefined;
 }) {
   const production = useLocalRead<Production>('/local/v1/production');
@@ -105,9 +105,9 @@ export function MulnxToolControls({
         );
         if (result?.cleanupPending)
           setMessage((value) => `${value} 工作台收尾尚未完成，请检查退出状态。`);
-      } else await command('/operator/orchestration', { action: 'check-tool' });
+      } else await command('/operator/orchestration', { action: 'check-tool' }, undefined, 60_000);
     } catch (error) {
-      setFailed(true);
+      setFailed(!(error instanceof Error && error.message.includes('已取消')));
       setMessage(
         /mulnx_metadata_http_(403|429)\b/.test(
           error instanceof Error ? error.message : String(error),
@@ -136,10 +136,36 @@ export function MulnxToolControls({
       {!runtimeOnly && !maintenanceOnly ? (
         <p>
           已选版本：{tool.installed ?? '首次启动时准备'}
-          {tool.latest && tool.latest !== tool.installed ? ` · 可更新至 ${tool.latest}` : ''}
+          {tool.latest && tool.latest !== tool.installed ? ` · 可用版本 ${tool.latest}` : ''}
         </p>
       ) : null}
       {!runtimeOnly && !maintenanceOnly ? <p>运行版本：未确认</p> : null}
+      {!runtimeOnly && tool.checkResult === 'error' ? (
+        <p>未能确认最新版，请稍后重新检查。</p>
+      ) : null}
+      {!runtimeOnly && tool.checkedAt ? (
+        <p>检查时间：{new Date(tool.checkedAt).toLocaleString()}</p>
+      ) : null}
+      {tool.phase === 'downloading' || tool.phase === 'verifying' ? (
+        <p>
+          {tool.phase === 'verifying' ? '正在校验' : `正在从 ${tool.source} 下载`}：
+          {tool.downloadedBytes ?? 0} / {tool.totalBytes ?? 0} 字节{' '}
+          {tool.sourceMessage ? <span>{tool.sourceMessage} </span> : null}
+          <Button
+            onClick={() =>
+              void command('/operator/orchestration', { action: 'cancel-tool-download' }).catch(
+                () => {
+                  setFailed(true);
+                  setMessage('下载状态已变化，请刷新后查看。');
+                },
+              )
+            }
+          >
+            取消下载
+          </Button>
+        </p>
+      ) : null}
+      {tool.phase === 'installing' ? <p>正在校验并准备版本…</p> : null}
       {!runtimeOnly ? (
         <Button disabled={busy || tool.busy} onClick={() => void run('check')}>
           检查更新
@@ -173,9 +199,11 @@ export function MulnxToolControls({
           {maintenanceOnly
             ? !tool.installed
               ? '安装'
-              : tool.installed === tool.latest
-                ? '重新安装'
-                : '更新'
+              : tool.checkResult === 'available'
+                ? '更新'
+                : tool.installed === tool.latest
+                  ? '重新安装'
+                  : '更新'
             : '更新或重新准备 MulNX'}
         </Button>
       ) : null}

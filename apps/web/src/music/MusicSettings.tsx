@@ -1,5 +1,7 @@
 import { useMusicPreview } from './useMusicPreview';
-import { controlEvidence, browserErrorEvidence } from '../debug/control-journal';
+import { MusicVolumeField } from './MusicVolumeField';
+import { controlEvidence } from '../debug/control-journal';
+import { localFile, type UploadedMusicTrack } from './music-files';
 import { useState } from 'react';
 import {
   MUSIC_GROUPS,
@@ -13,57 +15,6 @@ import { command, useLocalRead } from '../preparation/client';
 import { desktopInvoke } from '../workspace/client';
 import { MusicControls, MUSIC_LABELS, type MusicView } from './MusicControls';
 
-async function localFile(url: string, file: File, type: string) {
-  const operationId = crypto.randomUUID();
-  controlEvidence('music_file', 'selected', {
-    operationId,
-    name: file.name,
-    bytes: file.size,
-    type: file.type,
-    destination: url,
-  });
-  let body: ArrayBuffer;
-  controlEvidence('music_file', 'read_begin', { operationId, name: file.name, bytes: file.size });
-  try {
-    body = await file.arrayBuffer();
-  } catch (error) {
-    controlEvidence('music_file', 'read_failed', {
-      operationId,
-      error: browserErrorEvidence(error),
-    });
-    throw new Error('文件未能读取，请确认文件仍在原位置且可以访问后重新选择。', { cause: error });
-  }
-  controlEvidence('music_file', 'read_success', { operationId, bytes: body.byteLength });
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'content-type': type,
-        'x-mizar-filename': encodeURIComponent(file.name),
-        'x-mizar-operation-id': operationId,
-      },
-      body,
-    });
-  } catch (error) {
-    controlEvidence('music_file', 'upload_failed', {
-      operationId,
-      error: browserErrorEvidence(error),
-    });
-    throw new Error('曲目未能传到本机服务，请确认 Mizar 正在运行后重试。', { cause: error });
-  }
-  controlEvidence('music_file', 'uploaded', { operationId, status: response.status });
-  if (!response.ok) {
-    const reason = (await response.json().catch(() => null)) as { message?: string } | null;
-    throw new Error(
-      reason?.message ??
-        (url.endsWith('import')
-          ? '音乐包未导入，原配置已保留。请检查 music.json、文件格式与大小限制。'
-          : '曲目未添加，请检查音频格式与大小（最大 32 MiB）。'),
-    );
-  }
-  return response.json() as Promise<MusicView & MusicTrack>;
-}
 export function MusicSettings({ active = true }: { active?: boolean }) {
   const preview = useMusicPreview(active);
   const current = useLocalRead<MusicView>('/local/v1/music', 2000);
@@ -283,21 +234,15 @@ export function MusicSettings({ active = true }: { active?: boolean }) {
                             {String(index + 1).padStart(2, '0')}
                           </span>
                           <strong>{track.name}</strong>
-                          <Field
+                          <MusicVolumeField
                             label={`曲目音量 · ${Math.round((track.gain ?? spec.volume) * 100)}% · ${track.gain === undefined ? '跟随场景音量' : '单独设置'}`}
-                            aria-label={`${track.name} 音量`}
-                            type="range"
-                            min="0"
-                            max="1"
-                            step="0.05"
+                            ariaLabel={`${track.name} 音量`}
                             value={track.gain ?? spec.volume}
                             disabled={busy}
-                            onChange={(event) =>
+                            onChange={(volume) =>
                               change(group, {
                                 tracks: spec.tracks.map((entry, n) =>
-                                  n === index
-                                    ? { ...entry, gain: Number(event.target.value) }
-                                    : entry,
+                                  n === index ? { ...entry, gain: volume } : entry,
                                 ),
                               })
                             }
@@ -362,15 +307,21 @@ export function MusicSettings({ active = true }: { active?: boolean }) {
                       if (files.length)
                         void action(async () => {
                           const tracks: MusicTrack[] = [];
-                          for (const file of files)
+                          for (const file of files) {
+                            const track = await localFile<UploadedMusicTrack>(
+                              '/operator/music/track',
+                              file,
+                              'application/x-mizar-audio',
+                            );
                             tracks.push({
-                              ...(await localFile(
-                                '/operator/music/track',
-                                file,
-                                'application/x-mizar-audio',
-                              )),
+                              id: track.id,
+                              name: track.name,
+                              startMs: track.startMs,
+                              endMs: track.endMs,
+                              ...(track.gain === undefined ? {} : { gain: track.gain }),
                               entryId: crypto.randomUUID(),
                             });
+                          }
                           change(group, { tracks });
                           setMessage('曲目已选，请保存音乐配置。');
                         }, group);

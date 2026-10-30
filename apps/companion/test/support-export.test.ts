@@ -2030,7 +2030,7 @@ it('exports bounded observer diagnostics through the ordinary support bundle wit
   });
   await app.ready();
   const timeline = new ObserverHintTimeline();
-  const settings = { enabled: true, expectedDelaySeconds: 120, leadSeconds: 7 };
+  const settings = { enabled: true, leadSeconds: 7 };
   const source = { connected: true, fresh: true, generation: 1 };
   const program = {
     cursor: {
@@ -2135,8 +2135,8 @@ it('exports bounded observer diagnostics through the ordinary support bundle wit
       acceptedDeaths: 1,
       pending: 1,
       anchors: 0,
-      nextDueMonotonicMs: 121000,
-      nextWindowInMs: 112000,
+      nextDueMonotonicMs: null,
+      nextWindowInMs: null,
     });
     timeline.project(program, settings, 3000, { ...source, fresh: false });
     expect(await exported()).toMatchObject({

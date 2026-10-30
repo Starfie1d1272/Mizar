@@ -1,13 +1,16 @@
 import { CameraConfigResolver } from './broadcast-config/camera.js';
 import { MusicPackResources } from './broadcast-config/music-pack-resources.js';
-import { registerMusicPackRoutes } from './broadcast-config/music-pack-routes.js';
+import {
+  registerBroadcastAssetRoutes,
+  registerMusicPackRoutes,
+} from './broadcast-config/music-pack-routes.js';
 import { createProductionBroadcastDependencies } from './broadcast-config/production.js';
 import {
   createBroadcastRuntime,
   type BroadcastRuntimeDependencies,
 } from './broadcast-config/runtime.js';
+import { createBroadcastResolver } from './broadcast-config/resolver.js';
 import { registerBroadcastConfigRoutes } from './broadcast-config/routes.js';
-import { broadcastResourceReferences } from './broadcast-config/reference-queue.js';
 import type { ResourceRef } from '@mizar/broadcast-config';
 import {
   registerBroadcastMigrationStatus,
@@ -754,8 +757,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       reply.code(503).send({ error: 'broadcast_config_unavailable' }),
     );
   let waitForBroadcast: (() => Promise<void>) | undefined;
+  let getExportBroadcastDocument:
+    (() => import('@mizar/broadcast-config').BroadcastConfigDocument) | undefined;
   registerHudConfigRoutes(app, {
     store: hudConfigStore,
+    getBroadcastDocument: () => getExportBroadcastDocument?.(),
     webRoot: options.webRoot ?? defaultWebRoot(),
     waitForBroadcast: async () => {
       await waitForBroadcast?.();
@@ -1199,6 +1205,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       production,
       scenes: sceneController,
       obs: async () => obsAdapter?.status(),
+      mulnx: () => (catalogToolLoaded ? catalogTool : undefined),
     });
   const guidance = new ProductionGuidanceStore();
   const bilibili = new BilibiliStatus();
@@ -1365,6 +1372,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       : undefined;
     const supportsMusicPacks = !broadcastConfig;
     const musicPacks = new MusicPackResources(join(dirname(options.obsConfigPath), 'music-packs'));
+    registerBroadcastAssetRoutes(app, musicPacks);
     broadcastConfig ??= createProductionBroadcastDependencies(
       dirname(options.obsConfigPath),
       musicStore,
@@ -1392,6 +1400,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
               scene: (value) => broadcastConfig!.resolve.scene(value),
               camera: (value) => broadcastConfig!.resolve.camera(value),
               hud: (value) => broadcastConfig!.resolve.hud(value),
+              ...(broadcastConfig.resolve.image
+                ? { image: (value) => broadcastConfig!.resolve.image!(value) }
+                : {}),
               asset: async (ref) => {
                 if (ref.resource.id !== PACK_ID) return broadcastConfig!.resolve.asset(ref);
                 if (!resources) throw new Error('resource_store_unavailable');
@@ -1413,10 +1424,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         })
       : undefined;
     if (broadcastRuntime) {
+      getExportBroadcastDocument = () => broadcastRuntime.store.snapshot;
       waitForBroadcast = () => broadcastRuntime.waitForApply();
       getBroadcastReferences = () => {
         if (!broadcastRuntime.ready) throw new Error('broadcast_config_unavailable');
-        return broadcastResourceReferences(broadcastRuntime.store.snapshot);
+        return broadcastRuntime.store.referencedResources();
       };
       getBroadcastMigrationStatus = () => broadcastRuntime.status;
       if (supportsMusicPacks)
@@ -1427,12 +1439,27 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           musicPacks,
           localWebTransport.getOriginPolicy(),
           () => broadcastRuntime.ready,
+          async (module, source) => {
+            const resolver = createBroadcastResolver({
+              ...broadcastConfig!.resolve,
+              asset: (ref) =>
+                ref.resource.id === source.id &&
+                ref.resource.version === source.version &&
+                ref.resource.digest === source.digest
+                  ? Promise.resolve()
+                  : broadcastConfig!.resolve.asset(ref),
+            });
+            await resolver.resolveModule(module);
+          },
         );
       registerBroadcastConfigRoutes(
         app,
         broadcastRuntime.store,
         localWebTransport.getOriginPolicy(),
         () => broadcastRuntime.ready,
+        () => broadcastRuntime.restoreLegacyCamera(),
+        (module) => broadcastRuntime.moduleAvailability(module),
+        () => broadcastRuntime.displayAvailable,
       );
     }
     catalogTool = mulnxTool;
@@ -1464,6 +1491,12 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         try {
           await mulnxTool.load();
           catalogToolLoaded = true;
+          options.updates?.registerCompanionCheck(async (force) => {
+            if (force) mulnxTool.resetNotification();
+            if (mulnxTool.view().busy) return mulnxTool.view().phase === 'checking';
+            await mulnxTool.check().catch(() => undefined);
+            return true;
+          });
         } catch (error) {
           app.log.error({ stage: 'mulnx_load', err: error }, 'MulNX 加载失败');
         }
@@ -1504,8 +1537,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         withSelection: production.withResourceActivation,
         reconcileSelection: async () => {
           if (!cameraStore.hasPersistence) return true;
-          await cameraStore.synchronizeFromPersistence();
-          return true;
+          return (await broadcastRuntime?.reconcileCameraSelection()) ?? false;
         },
       },
       mulnxTool,
@@ -1525,9 +1557,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       resources: resources?.list() ?? null,
       tool: tool
         ? {
-            installed: tool.installed,
-            latest: tool.latest,
-            busy: tool.busy,
+            ...tool,
             packs: tool.packs.map((pack) => pack.sourceName),
           }
         : null,

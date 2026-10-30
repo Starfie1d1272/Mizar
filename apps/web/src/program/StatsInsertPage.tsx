@@ -5,9 +5,15 @@ import { statsInserts } from './stats-inserts';
 import { programPresentationSchema } from '@mizar/protocol/program-scenes';
 import { ProgramScenePage } from './ProgramScenePage';
 import { useLocalChannelClient } from '../realtime';
+import { useProgramScenes } from '../workspace/client';
+import { useBroadcastDisplayConfig } from '../realtime/broadcast-display-client';
+import { pulseTokenStyle } from './broadcast-display';
 
 export function StatsInsertPage() {
   const [bundle, setBundle] = useState<BroadcastStats | null>(null);
+  const scenes = useProgramScenes();
+  const sceneId = scenes?.active === 'intermap' ? 'intermap' : 'waiting';
+  const display = useBroadcastDisplayConfig(true, sceneId);
   const client = useLocalChannelClient('program');
   const connection = useSyncExternalStore(client.subscribe, client.getSnapshot, client.getSnapshot);
   useEffect(() => {
@@ -74,8 +80,12 @@ export function StatsInsertPage() {
     bundle && (!connection.current || observedMatch === bundle.matchId) ? statsInserts(bundle) : [];
   const requested = new URLSearchParams(window.location.search).get('card');
   const card = requested ? cards.find((item) => item.subtitle === requested) : cards[0];
+  if (card && !display.current) return null;
   return card ? (
-    <StatsInsertView insert={card} />
+    <StatsInsertView
+      insert={card}
+      sceneStyle={pulseTokenStyle(display.current!.program) ?? undefined}
+    />
   ) : (
     <>
       <ProgramScenePage sceneId="waiting" />

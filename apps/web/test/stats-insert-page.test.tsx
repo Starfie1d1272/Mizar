@@ -4,6 +4,10 @@ import { createRoot } from 'react-dom/client';
 import { expect, it, vi } from 'vitest';
 import fixture from '../../../tests/fixtures/rivalhub-provider-stats-v1.json';
 
+vi.mock('../src/workspace/client', () => ({ useProgramScenes: () => ({ active: 'waiting' }) }));
+vi.mock('../src/realtime/broadcast-display-client', () => ({
+  useBroadcastDisplayConfig: () => ({ current: { program: { tokens: {}, assets: {} } } }),
+}));
 vi.mock('../src/realtime', () => {
   const snapshot = { current: null };
   return {

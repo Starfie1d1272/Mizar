@@ -325,34 +325,9 @@ pub fn select_release(
         let cs2 = managed.try_lock().map_err(|_| "CS2 正忙，请稍后重试。")?;
         check_idle(&cs2)?;
     }
-    let activity = app.state::<cs2_activity::Activity>();
-    let _activity = activity.begin(3);
-    let output = gsi_script("gsi-status.ps1", None, Duration::from_secs(20), log)?;
-    let gsi = powershell::parse(log, "MulNX 游戏安装位置", &output)?;
-    if gsi["detected"] != true
-        || gsi["installed"] != true
-        || gsi["conflict"] != false
-        || gsi["readFailed"] != false
-    {
-        return Err("请先完成 CS2 的 GSI 配置。".into());
-    }
-    let cfg = PathBuf::from(gsi["cfgPath"].as_str().ok_or("CS2 安装位置未确认。")?);
-    let executable = cfg
-        .parent()
-        .and_then(Path::parent)
-        .and_then(Path::parent)
-        .ok_or("CS2 安装位置无效。")?
-        .join("bin")
-        .join("win64")
-        .join("cs2.exe");
-    if !executable.is_file() {
-        return Err("所选 CS2 程序不存在。".into());
-    }
-    let console_capture = crate::cs2_console::settings(log)?["enabled"] == true;
     let staged = production_exit::mulnx_selection(
         log,
-        &json!({"action":"stage", "preparedId":prepared_id,
-        "cs2Path":executable.to_string_lossy(), "consoleCapture":console_capture}),
+        &json!({"action":"stage", "preparedId":prepared_id}),
     )?;
     let id = staged["id"].as_str().ok_or("MulNX 准备结果无法确认。")?;
     app.state::<production_exit::ExitGate>().check()?;

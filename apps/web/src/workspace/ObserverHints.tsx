@@ -60,17 +60,19 @@ export function ObserverHints() {
     connecting: '连接早源',
     paused: '比赛暂停',
     unavailable:
-      observer?.waitingReason === 'calibration-reacquiring'
-        ? '正在重新校准延迟'
-        : observer?.waitingReason === 'source-stale'
-          ? '等待早源数据'
-          : observer?.waitingReason === 'identity-unavailable'
-            ? '等待当前选手身份'
-            : observer?.waitingReason === 'source-map-mismatch'
-              ? '等待早源切换当前地图'
-              : observer?.waitingReason === 'map-missing'
-                ? '等待当前地图'
-                : '等待节目数据',
+      observer?.waitingReason === 'calibration-pending'
+        ? '正在校准延迟'
+        : observer?.waitingReason === 'calibration-reacquiring'
+          ? '正在重新校准延迟'
+          : observer?.waitingReason === 'source-stale'
+            ? '等待早源数据'
+            : observer?.waitingReason === 'identity-unavailable'
+              ? '等待当前选手身份'
+              : observer?.waitingReason === 'source-map-mismatch'
+                ? '等待早源切换当前地图'
+                : observer?.waitingReason === 'map-missing'
+                  ? '等待当前地图'
+                  : '等待节目数据',
   };
   return (
     <section className="workspace-observer-assist" aria-label="私有观察辅助">
@@ -131,7 +133,10 @@ export function ObserverHints() {
       {observer?.state === 'ready' && !pending && !needsRecovery && !reconnecting && !connecting ? (
         <>
           <StatusPill tone="info">
-            延迟 {(observer.effectiveDelaySeconds ?? observer.expectedDelaySeconds).toFixed(1)} 秒 ·
+            {observer.effectiveDelaySeconds == null
+              ? '节目时钟'
+              : `延迟 ${observer.effectiveDelaySeconds.toFixed(1)} 秒`}{' '}
+            ·
             {observer.calibrationState === 'measured'
               ? '实时校准'
               : observer.calibrationState === 'held'

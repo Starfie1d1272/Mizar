@@ -3,7 +3,12 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it, vi } from 'vitest';
 
-const fixture = vi.hoisted(() => ({ source: 'source' }));
+const fixture = vi.hoisted(() => ({
+  source: 'source',
+  candidate: null as null | typeof release,
+  hash: null as null | string,
+  fail: false,
+}));
 const release = {
   id: 1,
   assetId: 2,
@@ -13,11 +18,23 @@ const release = {
   size: 1,
   sha256: 'a'.repeat(64),
 };
+vi.mock('../src/orchestration/tool-mirror.js', () => ({
+  readMulnxMirror: () => Promise.reject(new Error('mirror unavailable')),
+  sameMulnxAsset: (a: typeof release, b: typeof release) =>
+    a.id === b.id &&
+    a.assetId === b.assetId &&
+    a.sha256 === b.sha256 &&
+    a.size === b.size &&
+    a.tag === b.tag,
+}));
 vi.mock('../src/orchestration/tool-release.js', () => ({
   SEVEN_ZIP: { sha256: 'extractor' },
-  latestMulnxRelease: () => Promise.resolve(release),
+  latestMulnxRelease: () =>
+    fixture.fail
+      ? Promise.reject(new Error('upstream unavailable'))
+      : Promise.resolve(fixture.candidate ?? release),
   fileSha256: (path: string) =>
-    Promise.resolve(path.endsWith('7zr.exe') ? 'extractor' : release.sha256),
+    Promise.resolve(path.endsWith('7zr.exe') ? 'extractor' : (fixture.hash ?? release.sha256)),
   downloadVerified: async (_url: string, path: string) => writeFile(path, 'x'),
   upstreamNotice: () => Promise.resolve('notice'),
   extractMulnx: async (_extractor: string, _archive: string, destination: string) => {
@@ -66,6 +83,9 @@ import { orchestrationPresetSchema } from '@mizar/protocol/orchestration';
 
 const roots: string[] = [];
 afterEach(async () => {
+  fixture.candidate = null;
+  fixture.hash = null;
+  fixture.fail = false;
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
 });
 it('prepares without selecting and publishes a configured instance only after selection succeeds', async () => {
@@ -94,7 +114,7 @@ it('prepares without selecting and publishes a configured instance only after se
       state: 'available',
     },
   ]);
-  const staged = await restarted.stageSelection(prepared.preparedId, 'D:\\Steam\\cs2.exe', false);
+  const staged = await restarted.stageSelection(prepared.preparedId);
   expect(restarted.view().installed).toBeNull();
   await expect(restarted.commitSelection('wrong')).rejects.toThrow('mulnx_selection_changed');
   expect(restarted.view().installed).toBeNull();
@@ -105,12 +125,15 @@ it('prepares without selecting and publishes a configured instance only after se
     directory: string;
     packs: { name: string }[];
   };
-  expect(
-    await readFile(
-      join(data, current.directory, 'MulNX/CS2Injector/CS2BootLoader/Config/config.yaml'),
-      'utf8',
-    ),
-  ).toContain('D:\\\\Steam');
+  const launcherConfig = join(
+    data,
+    current.directory,
+    'MulNX/CS2Injector/CS2BootLoader/Config/config.yaml',
+  );
+  expect(await readFile(launcherConfig, 'utf8')).toContain('path: old');
+  await restarted.prepare('D:\\Steam\\cs2.exe', true);
+  expect(await readFile(launcherConfig, 'utf8')).toContain('D:\\\\Steam');
+  expect(await readFile(launcherConfig, 'utf8')).toContain('-condebug');
   const source = await restarted.cameraSource(current.packs[0]!.name);
   expect(source).toMatchObject({
     sourceName: 'Source',
@@ -200,15 +223,19 @@ it('prepares without selecting and publishes a configured instance only after se
   await shareStore.load();
   const zip = await exportPresetPack({
     document: migrated.document,
-    presetId: migrated.document.presets[0]!.id,
+    presetIds: [migrated.document.presets[0]!.id],
     music: musicStore,
     resources: shareResources,
     metadata: { packageId: randomUUID(), version: '1.0.0', name: 'Camera', author: '' },
   });
   const imported = await importPresetPack({ zip, store: shareStore, resources: shareResources });
-  const camera = shareStore.snapshot.modules.find(
-    (item) => item.id === imported.mapping.moduleEntries.camera![0],
+  const presetEntry = imported.entries.find((item) => item.type === 'preset')!.entryId;
+  const importedPreset = shareStore.snapshot.presets.find(
+    (item) => item.id === imported.mapping.presetEntries[presetEntry],
   );
+  const cameraBinding = importedPreset?.bindings.find((binding) => binding.kind === 'camera');
+  if (!cameraBinding || cameraBinding.mode !== 'use') throw new Error('missing camera binding');
+  const camera = shareStore.snapshot.modules.find((item) => item.id === cameraBinding.moduleId);
   if (!camera || camera.kind !== 'camera') throw new Error('missing imported camera');
   expect(camera.value.maps[0]!.source).toEqual(source);
   expect(await productionResolver.localPack(camera.value.maps[0]!.source)).toBe(
@@ -283,8 +310,6 @@ it('prepares without selecting and publishes a configured instance only after se
         payload: {
           action: 'stage',
           preparedId,
-          cs2Path: 'D:\\Steam\\cs2.exe',
-          consoleCapture: false,
         },
       });
       expect(staged.statusCode).toBe(200);
@@ -298,12 +323,19 @@ it('prepares without selecting and publishes a configured instance only after se
       return committed.json<{ cameraReady: boolean }>().cameraReady;
     };
     expect(await switchRelease('different source')).toBe(false);
+    expect((await app.inject('/local/v1/orchestration')).json<unknown>()).toMatchObject({
+      preset: { name: '已关闭', maps: [] },
+      automaticEnabled: false,
+    });
     expect((await app.inject('/local/v1/broadcast-presets')).json<unknown>()).toMatchObject({
       active: {
         resolved: { camera: { maps: [{ source: { treeSha256: source.treeSha256 } }] } },
       },
     });
     expect(await switchRelease('source')).toBe(true);
+    expect((await app.inject('/local/v1/orchestration')).json<unknown>()).toMatchObject({
+      preset: { maps: [{ map: 'de_dust2', pack: current.packs[0]!.name }] },
+    });
   } finally {
     await app.close();
     await writeFile(join(data, 'current.json'), originalReceipt);
@@ -368,7 +400,7 @@ it('prepares without selecting and publishes a configured instance only after se
       { preparedId: prepared.preparedId, tag: null, archiveSha256: null, state: 'damaged' },
     ]),
   );
-  await expect(restarted.selectRelease(prepared.preparedId, 'D:\\Steam\\cs2.exe')).rejects.toThrow(
+  await expect(restarted.selectRelease(prepared.preparedId)).rejects.toThrow(
     'mulnx_prepared_integrity',
   );
   expect(JSON.parse(await readFile(join(data, 'current.json'), 'utf8')) as unknown).toEqual(
@@ -381,11 +413,66 @@ it('prepares without selecting and publishes a configured instance only after se
   );
   fixture.source = 'different source';
   const changedRelease = await restarted.prepareRelease();
-  await restarted.selectRelease(changedRelease.preparedId, 'D:\\Steam\\cs2.exe');
+  await restarted.selectRelease(changedRelease.preparedId);
   expect(restarted.view().packs[0]!.name).toBe(current.packs[0]!.name);
   await expect(resolver.localPack(source)).rejects.toThrow('mulnx_source_unavailable');
   fixture.source = 'source';
   const compatibleRelease = await restarted.prepareRelease();
-  await restarted.selectRelease(compatibleRelease.preparedId, 'D:\\Steam\\cs2.exe');
+  await restarted.selectRelease(compatibleRelease.preparedId);
   await expect(resolver.localPack(source)).resolves.toBe(current.packs[0]!.name);
+});
+
+it('recomputes update status after committing a selection without inventing a successful check', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mizar-mulnx-status-'));
+  roots.push(root);
+  const bundle = join(root, 'bundle');
+  const data = join(root, 'mulnx');
+  await mkdir(bundle);
+  await writeFile(join(bundle, '7zr.exe'), 'fixture');
+  await writeFile(
+    join(bundle, 'release.json'),
+    JSON.stringify({ release: { ...release, sha256: 'c'.repeat(64) } }),
+  );
+  const old = {
+    ...release,
+    id: 3,
+    assetId: 4,
+    tag: 'Older',
+    publishedAt: '2026-10-22',
+    sha256: 'b'.repeat(64),
+  };
+  const tool = new MulnxTool(data, bundle);
+  await tool.load();
+  fixture.candidate = old;
+  fixture.hash = old.sha256;
+  const older = await tool.prepareRelease();
+  fixture.candidate = release;
+  fixture.hash = release.sha256;
+  const newest = await tool.prepareRelease();
+  expect(tool.view().checkResult).toBe('available');
+  const latestStage = await tool.stageSelection(newest.preparedId);
+  await tool.commitSelection(latestStage.id);
+  expect(tool.view()).toMatchObject({
+    installed: release.tag,
+    checkResult: 'current',
+    notificationIdentity: null,
+  });
+  expect(JSON.parse(await readFile(join(data, 'current.json'), 'utf8')).release.tag).toBe(
+    release.tag,
+  );
+  fixture.hash = old.sha256;
+  const oldStage = await tool.stageSelection(older.preparedId);
+  await tool.commitSelection(oldStage.id);
+  expect(tool.view()).toMatchObject({ installed: old.tag, checkResult: 'available' });
+  expect(tool.view().notificationIdentity).toContain(release.sha256);
+  fixture.fail = true;
+  await expect(tool.check()).rejects.toThrow();
+  fixture.hash = release.sha256;
+  const unknownStage = await tool.stageSelection(newest.preparedId);
+  await tool.commitSelection(unknownStage.id);
+  expect(tool.view()).toMatchObject({
+    installed: release.tag,
+    checkResult: 'error',
+    notificationIdentity: null,
+  });
 });

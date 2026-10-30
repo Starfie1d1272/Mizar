@@ -2,13 +2,27 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { zipSync } from 'fflate';
 import { parseHudResolvedPreset } from '@mizar/hud-config';
+import { resolvedHudSchema } from '@mizar/broadcast-config';
+import { legacyOverlays } from '../broadcast-config/migrate.js';
 
 const MAX_FILES = 4096;
 const MAX_BYTES = 64 * 1024 * 1024;
 
 /** Build a ZIP only from the shipped runtime, built-in media and the selected snapshot. */
 export async function exportLhmHud(webRoot: string, value: unknown): Promise<Buffer> {
-  const preset = parseHudResolvedPreset(value);
+  const parsed = resolvedHudSchema.safeParse(value);
+  const preset = parsed.success
+    ? parsed.data
+    : (() => {
+        const config = parseHudResolvedPreset(value);
+        return {
+          renderer: 'native' as const,
+          config,
+          overlays: legacyOverlays(config.layout, config.widgets),
+          accent: { source: 'fixed' as const, value: config.theme.brandColor },
+        };
+      })();
+  if (preset.renderer !== 'native') throw new Error('lhm_export_unsupported_hud');
   const files: Record<string, Uint8Array> = Object.create(null) as Record<string, Uint8Array>;
   let total = 0;
   const add = (name: string, bytes: Uint8Array) => {

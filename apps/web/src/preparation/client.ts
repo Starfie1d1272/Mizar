@@ -40,12 +40,17 @@ export function useLocalReadWithTime<T>(path: string | null, interval = 2000, re
 export function useLocalRead<T>(path: string | null, interval = 2000, refresh = 0) {
   return useLocalReadWithTime<T>(path, interval, refresh).value;
 }
-export async function command(path: string, body: unknown = {}, task?: ControlTask) {
+export async function command(
+  path: string,
+  body: unknown = {},
+  task?: ControlTask,
+  timeoutMs = 15000,
+) {
   const response = await fetch(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...task?.headers() },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(15000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   const result = (await response.json().catch(() => ({}))) as { message?: string };
   if (!response.ok) throw new Error(result.message ?? '操作未完成，请刷新后重试。');
