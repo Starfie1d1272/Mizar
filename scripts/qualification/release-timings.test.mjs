@@ -68,6 +68,8 @@ test('failed Box remains a failure and recovery cannot pass first-release budget
     boxOutcome: 'success',
   });
   assert.equal(slowSuccess.triggerToBoxMs, 601000);
+  assert.equal(slowSuccess.triggerToPublicationMs, 90000);
+  assert.equal(slowSuccess.freshGitHubPublicWithin600Seconds, true);
   assert.equal(slowSuccess.freshReleaseWithin600Seconds, false);
   assert.doesNotThrow(() => assertBoxTiming(slowSuccess, 'success'));
   assert.doesNotThrow(() => assertBoxTiming({ recovery: true, triggerToBoxMs: 600001 }, 'success'));

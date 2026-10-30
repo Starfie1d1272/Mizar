@@ -94,11 +94,18 @@ export function releaseTimingReport({
     promotion.run_attempt !== 1 ||
     (box && (box.run_attempt !== 1 || Boolean(boxRecoveryStartedAt))) ||
     Date.parse(publishedAt) < Date.parse(promotion.created_at);
+  const triggerToPublicationMs =
+    Date.parse(publishedAt) >= Date.parse(qualification.created_at)
+      ? elapsed(qualification.created_at, publishedAt)
+      : undefined;
   const result = {
     tag,
     sourceSha,
     recovery,
     publishedAt,
+    triggerToPublicationMs,
+    freshGitHubPublicWithin600Seconds:
+      !recovery && triggerToPublicationMs !== undefined && triggerToPublicationMs <= 600000,
     build: build ? { phases: build.phases, cargoCache: build.cargoCache } : undefined,
     qualification: runTiming(
       qualification,
@@ -151,6 +158,9 @@ async function recordReport(report, path) {
     await appendFile(
       process.env.GITHUB_STEP_SUMMARY,
       `Release timing: ${report.recovery ? 'recovery; not fresh-release acceptance' : 'fresh release'}; ` +
+        (report.triggerToPublicationMs === undefined
+          ? ''
+          : `Qualification trigger → GitHub public timestamp: ${(report.triggerToPublicationMs / 1000).toFixed(1)}s; `) +
         (report.triggerToBoxMs === undefined
           ? 'Promotion checkpoint'
           : `Qualification trigger → Box checkpoint: ${(report.triggerToBoxMs / 1000).toFixed(1)}s; initial queues Q/P/B: ${[report.qualification, report.promotion, report.box].map((r) => (r.initialQueueMs === null ? 'unknown' : (r.initialQueueMs / 1000).toFixed(1) + 's')).join('/')}`) +
