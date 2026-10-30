@@ -24,7 +24,11 @@ import {
 } from '@mizar/broadcast-config';
 import { durableJsonByteLength, replaceDurableJson } from '../match-context/durable-json.js';
 import { SerialCommitQueue } from '../match-context/serial-commit.js';
-import { addMissingBuiltinModules, isBuiltinModuleId } from './builtin-modules.js';
+import {
+  addMissingBuiltinModules,
+  BUILTIN_MODULE_IDS,
+  isBuiltinModuleId,
+} from './builtin-modules.js';
 import { broadcastResourceReferences } from './reference-queue.js';
 import { cameraCatalogSchema } from '../orchestration/store.js';
 
@@ -245,6 +249,16 @@ export class BroadcastConfigStore {
         next.builtinsNormalized = true;
         await this.commit(next);
       } else if (addMissingBuiltinModules(next.document, false)) await this.commit(next);
+    });
+  }
+  async addBuiltinMusic(module: ModuleRecord<'music'>): Promise<void> {
+    await this.queue.run(async () => {
+      if (!this.envelope || module.id !== BUILTIN_MODULE_IDS.music)
+        throw new Error('broadcast_config_invalid');
+      if (this.envelope.document.modules.some((item) => item.id === module.id)) return;
+      const next = structuredClone(this.envelope);
+      next.document.modules.push(module);
+      await this.commit(next);
     });
   }
   hasReceipt(requestId: string): boolean {

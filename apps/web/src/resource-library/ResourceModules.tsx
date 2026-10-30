@@ -310,7 +310,9 @@ export function ResourceModules({
   >({});
   const [selectedEntries, setSelectedEntries] = useState<string[]>([]);
   const input = useRef<HTMLInputElement>(null);
-  const scrollToSelection = useRef(false);
+  const scrollToSelection = useRef(
+    Boolean(new URLSearchParams(window.location.search).get('resource')),
+  );
   const selectionEpoch = useRef(0);
   const showList = category === 'all' || ['hud', 'program', 'music', 'camera'].includes(category);
   const entries =

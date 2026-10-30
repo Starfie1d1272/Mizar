@@ -14,6 +14,7 @@ import type {
 import type { MusicConfigPersistence, MusicStore } from '../music/store.js';
 import type { BroadcastConfigStore } from './store.js';
 import { portableMusicConfig, readMusicAsset } from './music-assets.js';
+import { isBuiltinModuleId } from './builtin-modules.js';
 
 function musicRevision(revision: string): string {
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(revision))
@@ -86,6 +87,7 @@ export function createMusicConfigPersistence(
         : 0;
       const reusable =
         captured?.kind === 'music' &&
+        !isBuiltinModuleId(captured.id) &&
         usages <= 1 &&
         canonicalJson(captured.value) === canonicalJson(active.resolved.music);
       const moduleId = reusable ? captured.id : randomUUID();

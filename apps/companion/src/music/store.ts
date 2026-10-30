@@ -116,11 +116,11 @@ export class MusicStore {
       /* Diagnostics cannot own playback. */
     }
   }
-  async load() {
+  async load(initialPack?: Buffer) {
     const run = async () => {
       try {
         await this.stage('music_load', { directory: this.directory }, () =>
-          this.persistence ? this.loadDelegatedState() : this.loadState(),
+          this.persistence ? this.loadDelegatedState() : this.loadState(initialPack),
         );
       } catch (error) {
         this.failure = true;
@@ -133,9 +133,25 @@ export class MusicStore {
     this.queue = result.catch(() => undefined);
     return result;
   }
-  private async loadState() {
+  private async loadState(initialPack?: Buffer) {
     await ensureDirectory(this.directory);
     await ensureDirectory(join(this.directory, 'tracks'));
+    await safePath(this.directory);
+    const exists = await lstat(join(this.directory, 'state.json')).then(
+      () => true,
+      (error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return false;
+        throw error;
+      },
+    );
+    if (!exists) {
+      this.failure = false;
+      this.ready = true;
+      if (initialPack) await this.import(initialPack);
+      else await this.update(() => undefined);
+      this.diagnostic('music_loaded_snapshot', { state: this.state });
+      return;
+    }
     try {
       const path = await safePath(this.directory, 'state.json');
       const stat = await lstat(path);
@@ -177,10 +193,7 @@ export class MusicStore {
       }
       if (migrated) await atomicJson(path, this.state);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
-        throw new Error('music_state_invalid', { cause: error });
-      this.failure = false;
-      await this.update(() => undefined);
+      throw new Error('music_state_invalid', { cause: error });
     }
     this.failure = false;
     this.ready = true;
@@ -405,29 +418,41 @@ export class MusicStore {
       s.config = parsed;
     });
   }
-  async import(zip: Buffer) {
+  private async prepareArchive(zip: Buffer): Promise<MusicConfig> {
     // Fully validate before staging content; the config pointer is the only activation point.
+    const { manifest, entries } = await this.stage(
+      'music_validate_archive',
+      { bytes: zip.length },
+      () => readMusicPack(zip),
+    );
+    const config = defaultMusicConfig();
+    for (const group of MUSIC_GROUPS) {
+      const spec = manifest.groups[group];
+      const tracks = [];
+      for (const track of spec.tracks)
+        tracks.push({
+          ...(await this.add(basename(track.path), entries.get(track.path)!)),
+          startMs: track.startMs,
+          endMs: track.endMs,
+        });
+      config.groups[group] = { ...spec, tracks };
+    }
+    return config;
+  }
+  async prepareImport(zip: Buffer): Promise<MusicConfig> {
     if (this.importing || this.failure || !this.ready) throw new Error('music_import_unavailable');
     this.importing = true;
     try {
-      const { manifest, entries } = await this.stage(
-        'music_validate_archive',
-        { bytes: zip.length },
-        () => readMusicPack(zip),
-      );
-      const config = defaultMusicConfig();
-      for (const group of MUSIC_GROUPS) {
-        const spec = manifest.groups[group];
-        const tracks = [];
-        for (const track of spec.tracks)
-          tracks.push({
-            ...(await this.add(basename(track.path), entries.get(track.path)!)),
-            startMs: track.startMs,
-            endMs: track.endMs,
-          });
-        config.groups[group] = { ...spec, tracks };
-      }
-      await this.configure(config, false);
+      return await this.prepareArchive(zip);
+    } finally {
+      this.importing = false;
+    }
+  }
+  async import(zip: Buffer) {
+    if (this.importing || this.failure || !this.ready) throw new Error('music_import_unavailable');
+    this.importing = true;
+    try {
+      await this.configure(await this.prepareArchive(zip), false);
     } finally {
       this.importing = false;
     }

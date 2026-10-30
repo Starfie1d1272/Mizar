@@ -1,3 +1,4 @@
+import { lstat, readFile } from 'node:fs/promises';
 import { CameraConfigResolver } from './broadcast-config/camera.js';
 import { MusicPackResources } from './broadcast-config/music-pack-resources.js';
 import {
@@ -219,6 +220,7 @@ export interface CompanionAppOptions {
   readonly hudConfigStore?: HudConfigStore;
   readonly obsConfigPath?: string;
   readonly mulnxCamPacksRoot?: string;
+  readonly builtinMusicPack?: string;
   readonly mulnxBundle?: string;
   readonly readObsCaptureEvidence?: () => Promise<ObsNativeEvidence>;
   readonly qualificationRunId?: string;
@@ -1244,10 +1246,26 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       (stage, evidence) => sessionJournal?.record(stage, evidence),
     );
     app.addHook('onReady', async () => {
-      await musicStore.load().catch((error) => {
+      try {
+        const missing = async (path: string) =>
+          lstat(path).then(
+            () => false,
+            (error: NodeJS.ErrnoException) => {
+              if (error.code === 'ENOENT') return true;
+              throw error;
+            },
+          );
+        const fresh =
+          options.builtinMusicPack &&
+          broadcastConfig &&
+          (await missing(join(musicStore.directory, 'state.json'))) &&
+          (await missing(broadcastConfig.path));
+        await musicStore.load(fresh ? await readFile(options.builtinMusicPack!) : undefined);
+      } catch (error) {
         app.log.error({ stage: 'music_load', err: error, result: 'failure' }, '音乐配置加载失败');
         musicStore.failure = true;
-      });
+        musicStore.ready = false;
+      }
     });
     musicDirector = new MusicDirector(
       musicStore,
@@ -1323,6 +1341,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           hud: hudConfigStore,
           music: musicStore,
           camera: cameraStore,
+          builtinMusicPack: options.builtinMusicPack,
           dependencies: {
             ...broadcastConfig,
             hudPath: broadcastConfig.hudPath ?? options.hudConfigPath,

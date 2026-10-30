@@ -458,6 +458,10 @@ async function main() {
       join(resourcesDir, 'scripts', 'qualification-contract.json'),
     );
     await cp(
+      join(rootDir, 'apps', 'companion', 'builtin-music.zip'),
+      join(resourcesDir, 'builtin-music.zip'),
+    );
+    await cp(
       join(rootDir, 'config', 'gamestate_integration_mizar.cfg.example'),
       join(resourcesDir, 'config', 'gamestate_integration_mizar.cfg.template'),
     );
