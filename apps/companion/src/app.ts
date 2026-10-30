@@ -927,7 +927,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             outputBinding = binding;
             outputService.setBinding(binding);
             projectionCoordinator.setMatchContextBinding(binding);
-            if (statsProductionActive && binding?.origin === 'online')
+            if (
+              statsProductionActive &&
+              (binding?.origin === 'online' ||
+                (binding?.origin === 'cache' && binding.cachedFrom === 'online'))
+            )
               void options.rivalhubConnection?.stats(binding.context.matchId);
             else if (
               !binding ||
@@ -1082,7 +1086,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       cameraDirector?.beginProduction();
       statsProductionActive = true;
       const binding = matchContextController?.getActiveBinding() ?? options.matchContextBinding;
-      if (binding?.origin === 'online')
+      if (
+        binding?.origin === 'online' ||
+        (binding?.origin === 'cache' && binding.cachedFrom === 'online')
+      )
         void options.rivalhubConnection?.stats(binding.context.matchId);
     },
     onFinish: () => {
@@ -1606,6 +1613,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       connection: options.rivalhubConnection,
       canClaim: () => !production.isTrialPending() && production.get().mode === 'live',
       canUpdatePlan: () => !production.isTrialPending() && programRuntime.canUpdateSeriesPlan(),
+      canFetchStats: () => statsProductionActive,
       controller: matchContextController,
       currentSnapshot: () => outputService.current(true),
       originPolicy: localWebTransport.getOriginPolicy(),
