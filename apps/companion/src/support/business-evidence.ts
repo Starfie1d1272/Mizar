@@ -210,6 +210,14 @@ export function businessEvidence(value: unknown) {
     binding: pick(input.binding, ['bound', 'unbound', 'needs_operator']),
     telemetry: pick(input.telemetry, ['awaiting', 'fresh', 'stale']),
     status: pick(input.status, ['pending', 'accepted', 'rejected', 'expired', 'superseded']),
+    receiverOutcome: pick(input.receiverOutcome, ['needs_attention']),
+    recoveryState: pick(input.recoveryState, [
+      'refreshing',
+      'awaiting_boundary',
+      'awaiting_observation',
+      'blocked',
+      'proof_queued',
+    ]),
     rejectionReason: pick(input.rejectionReason, [
       'context_stale',
       'sequence_stale',

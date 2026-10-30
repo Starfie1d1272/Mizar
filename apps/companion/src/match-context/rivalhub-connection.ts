@@ -22,7 +22,7 @@ import {
 } from '../output/reliable-outbox.js';
 
 // Read only a small, time-limited classified rejection. Never retain raw body text.
-async function readReliableRejection(response: Response) {
+async function readReliableBody(response: Response): Promise<unknown> {
   const reader = response.body?.getReader();
   if (!reader) return undefined;
   const chunks: Uint8Array[] = [];
@@ -45,7 +45,7 @@ async function readReliableRejection(response: Response) {
       bytes.set(chunk, offset);
       offset += chunk.byteLength;
     }
-    return parseReliableRejection(JSON.parse(new TextDecoder().decode(bytes)));
+    return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
   } catch {
     return undefined;
   } finally {
@@ -596,6 +596,22 @@ export class RivalHubConnection {
     if (now - watch.since < 15_000 && !watch.incidentId) return result('waiting', reason);
     watch.incidentId ??= randomUUID();
     return result('attention', reason);
+  }
+
+  setContextRecoveryProgress(
+    event: ReliableEventV1,
+    authority: string,
+    state:
+      | 'context_refreshing'
+      | 'context_reconfirming'
+      | 'context_recovery_blocked'
+      | 'continuity_chain_missing'
+      | 'continuity_waiting',
+  ): void {
+    if (this.reliableAuthorityScope() !== authority || this.stoppedMatchId === event.matchId)
+      return;
+    this.controlFailureScope = this.failureScope(event);
+    this.controlFailure = state;
   }
 
   retryLive(): void {
@@ -1252,13 +1268,21 @@ export class RivalHubConnection {
         },
         body: JSON.stringify(body),
       });
-      const rejection =
-        !response.ok && response.status !== 408 && response.status !== 429 && response.status < 500
-          ? await readReliableRejection(response)
-          : undefined;
-      if (!rejection) await response.body?.cancel().catch(() => undefined);
+      const readBody =
+        response.ok ||
+        (response.status !== 408 && response.status !== 429 && response.status < 500);
+      const responseData = readBody ? await readReliableBody(response) : undefined;
+      const rejection = !response.ok ? parseReliableRejection(responseData) : undefined;
+      const needsAttention =
+        response.ok &&
+        responseData !== null &&
+        typeof responseData === 'object' &&
+        !Array.isArray(responseData) &&
+        (responseData as Record<string, unknown>).outcome === 'needs_attention';
+      if (!readBody) await response.body?.cancel().catch(() => undefined);
       if (signal?.aborted || !isCurrent()) return 'retry';
       evidence({
+        receiverOutcome: needsAttention ? 'needs_attention' : undefined,
         rejectionReason: rejection?.reason,
         requestId: rejection?.requestId,
         recovery: rejection?.recovery,
@@ -1266,7 +1290,8 @@ export class RivalHubConnection {
         httpStatus: response.status,
         acknowledgedAt: response.ok ? new Date().toISOString() : null,
       });
-      if (response.ok) return 'accepted';
+      if (response.ok)
+        return needsAttention ? { status: 'accepted', outcome: 'needs_attention' } : 'accepted';
       if (event.kind === 'map_started' && source.deliveryExecution === executionKey(event.cursor)) {
         this.controlFailureScope = this.failureScope(event);
         this.controlFailure =
@@ -1616,6 +1641,24 @@ export class RivalHubConnection {
     );
     if (
       typeof result === 'object' &&
+      result.status === 'accepted' &&
+      sameExecution &&
+      isCurrent() &&
+      !signal.aborted
+    ) {
+      this.controlFailureScope = this.failureScope(event);
+      this.controlFailure = 'reliable_needs_attention';
+      this.liveDelivery = {
+        ...this.liveDelivery,
+        cursor: event.cursor,
+        status: 'failing',
+        reason: 'reliable_needs_attention',
+        since: this.monotonicNow(),
+      };
+    }
+    if (
+      typeof result === 'object' &&
+      result.status === 'rejected' &&
       sameExecution &&
       isCurrent() &&
       !signal.aborted &&
@@ -1625,9 +1668,13 @@ export class RivalHubConnection {
       this.controlFailure = result.reason;
     }
     if (attempt && source && isCurrent() && !signal.aborted) {
-      if (result === 'accepted') {
+      if (result === 'accepted' || (typeof result === 'object' && result.status === 'accepted')) {
         source.acknowledgedExecution = executionKey(event.cursor);
-        if (source.deliveryExecution === executionKey(event.cursor)) this.controlFailure = null;
+        if (source.deliveryExecution === executionKey(event.cursor)) {
+          if (typeof result === 'object' && result.status === 'accepted')
+            this.controlFailure = 'reliable_needs_attention';
+          else if (this.controlFailure !== 'context_reconfirming') this.controlFailure = null;
+        }
       } else if (
         (result === 'rejected' || (typeof result === 'object' && result.status === 'rejected')) &&
         sameExecution &&

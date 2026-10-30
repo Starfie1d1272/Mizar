@@ -23,10 +23,15 @@ export type ReliableRejectionReason =
 export interface ReliableRejection {
   readonly status: 'rejected';
   readonly reason: ReliableRejectionReason;
-  readonly requestId: string;
+  readonly requestId?: string;
   readonly recovery: 'refresh_context' | 'reconcile' | 'none';
 }
-export type ReliableDeliveryResult = 'accepted' | 'rejected' | 'retry' | ReliableRejection;
+export interface ReliableAttention {
+  readonly status: 'accepted';
+  readonly outcome: 'needs_attention';
+}
+export type ReliableDeliveryResult =
+  'accepted' | 'rejected' | 'retry' | ReliableRejection | ReliableAttention;
 
 export function parseReliableRejection(input: unknown): ReliableRejection | undefined {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
@@ -43,17 +48,18 @@ export function parseReliableRejection(input: unknown): ReliableRejection | unde
   if (
     typeof value.reason !== 'string' ||
     !Object.hasOwn(recoveryByReason, value.reason) ||
-    typeof value.requestId !== 'string' ||
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-      value.requestId,
-    ) ||
+    (value.requestId !== undefined &&
+      (typeof value.requestId !== 'string' ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+          value.requestId,
+        ))) ||
     value.recovery !== recoveryByReason[value.reason as ReliableRejectionReason]
   )
     return undefined;
   return {
     status: 'rejected',
     reason: value.reason as ReliableRejectionReason,
-    requestId: value.requestId,
+    ...(typeof value.requestId === 'string' ? { requestId: value.requestId } : {}),
     recovery: value.recovery as ReliableRejection['recovery'],
   };
 }
@@ -90,10 +96,36 @@ export interface ReliableOutboxRecord {
   readonly event: ReliableEventV1;
   readonly lineupSteam64?: readonly string[];
   readonly rejection?: ReliableRejection;
+  readonly receiverOutcome?: 'needs_attention';
+  readonly recoveryBoundaryKey?: string;
+  readonly recoveryState?:
+    'refreshing' | 'awaiting_boundary' | 'awaiting_observation' | 'blocked' | 'proof_queued';
   readonly status: ReliableDeliveryStatus;
   readonly attempts: number;
   readonly nextAttemptAt: string;
   readonly updatedAt: string;
+}
+
+export interface ReliableDeliveryScope {
+  readonly matchId: string;
+  readonly producerInstanceId: string;
+  readonly liveSessionId: string;
+}
+
+/** Persisted receipts only; an empty scope or a local queue flush is not an ACK. */
+export interface ReliableScopeDisposition {
+  readonly pending: number;
+  readonly accepted: number;
+  readonly needsAttention: number;
+  readonly rejected: number;
+  readonly superseded: number;
+  readonly expired: number;
+  readonly records: readonly {
+    readonly kind: ReliableEventV1['kind'];
+    readonly idempotencyKey: string;
+    readonly status: ReliableDeliveryStatus;
+    readonly needsAttention: boolean;
+  }[];
 }
 
 export interface DeliveryContinuity {
@@ -133,16 +165,53 @@ function parseRecord(input: unknown): ReliableOutboxRecord {
     !Number.isFinite(Date.parse(item.updatedAt))
   )
     throw new Error('outbox_record_invalid');
+  if (
+    item.receiverOutcome !== undefined &&
+    (item.receiverOutcome !== 'needs_attention' || item.status !== 'accepted')
+  )
+    throw new Error('outbox_receiver_outcome_invalid');
   const rejection =
     item.rejection === undefined ? undefined : parseReliableRejection(item.rejection);
   if (item.rejection !== undefined && (rejection === undefined || item.status !== 'rejected'))
     throw new Error('outbox_rejection_invalid');
+  if (
+    item.recoveryState !== undefined &&
+    (![
+      'refreshing',
+      'awaiting_boundary',
+      'awaiting_observation',
+      'blocked',
+      'proof_queued',
+    ].includes(String(item.recoveryState)) ||
+      !['context_stale', 'generation_fence', 'epoch_fence'].includes(rejection?.reason ?? '') ||
+      item.status !== 'rejected')
+  )
+    throw new Error('outbox_recovery_state_invalid');
+  if (
+    item.recoveryBoundaryKey !== undefined &&
+    (typeof item.recoveryBoundaryKey !== 'string' ||
+      !item.recoveryBoundaryKey ||
+      item.recoveryBoundaryKey.length > 256 ||
+      !['generation_fence', 'epoch_fence'].includes(rejection?.reason ?? ''))
+  )
+    throw new Error('outbox_recovery_boundary_invalid');
   const event = parseReliableEventV1(item.event);
   if (item.lineupSteam64 !== undefined && event.kind !== 'map_started')
     throw new Error('outbox_lineup_invalid');
   return {
     event,
     ...(rejection === undefined ? {} : { rejection }),
+    ...(typeof item.recoveryBoundaryKey === 'string'
+      ? { recoveryBoundaryKey: item.recoveryBoundaryKey }
+      : {}),
+    ...(item.receiverOutcome === 'needs_attention'
+      ? { receiverOutcome: 'needs_attention' as const }
+      : {}),
+    ...(item.recoveryState === undefined
+      ? {}
+      : {
+          recoveryState: item.recoveryState as NonNullable<ReliableOutboxRecord['recoveryState']>,
+        }),
     ...(item.lineupSteam64 === undefined ? {} : { lineupSteam64: item.lineupSteam64 as string[] }),
     status: item.status as ReliableDeliveryStatus,
     attempts: item.attempts,
@@ -410,13 +479,102 @@ export class ReliableOutbox {
     return this.records;
   }
 
+  getScopeDisposition(scope: ReliableDeliveryScope): ReliableScopeDisposition {
+    const result = {
+      pending: 0,
+      accepted: 0,
+      needsAttention: 0,
+      rejected: 0,
+      superseded: 0,
+      expired: 0,
+      records: [] as {
+        kind: ReliableEventV1['kind'];
+        idempotencyKey: string;
+        status: ReliableDeliveryStatus;
+        needsAttention: boolean;
+      }[],
+    };
+    for (const record of this.records) {
+      const c = record.event.cursor;
+      if (
+        record.event.matchId !== scope.matchId ||
+        c.producerInstanceId !== scope.producerInstanceId ||
+        c.liveSessionId !== scope.liveSessionId
+      )
+        continue;
+      result[record.status]++;
+      if (record.receiverOutcome === 'needs_attention') result.needsAttention++;
+      result.records.push({
+        kind: record.event.kind,
+        idempotencyKey: record.event.idempotencyKey,
+        status: record.status,
+        needsAttention: record.receiverOutcome === 'needs_attention',
+      });
+    }
+    return result;
+  }
+
   hasUnconfirmedBoundary(event: ReliableEventV1): boolean {
     return this.records.some(
       (record) =>
-        record.status !== 'accepted' &&
+        (record.status !== 'accepted' || record.receiverOutcome === 'needs_attention') &&
         isContinuityBoundary(record.event) &&
         dependsOnBoundary(event, record.event),
     );
+  }
+
+  /** Refusals remain authoritative for the original execution, even if context changes. */
+  startRejections(event: ReliableEventV1): readonly ReliableOutboxRecord[] {
+    const c = event.cursor;
+    return this.records.filter((record) => {
+      const previous = record.event;
+      const p = previous.cursor;
+      return (
+        record.status === 'rejected' &&
+        previous.kind === 'map_started' &&
+        previous.matchId === event.matchId &&
+        previous.mapName === event.mapName &&
+        p.producerInstanceId === c.producerInstanceId &&
+        p.liveSessionId !== null &&
+        p.liveSessionId === c.liveSessionId &&
+        p.programSourceGeneration === c.programSourceGeneration &&
+        p.mapEpoch === c.mapEpoch
+      );
+    });
+  }
+
+  async setStartRecovery(
+    key: string,
+    from: ReliableOutboxRecord['recoveryState'],
+    to: NonNullable<ReliableOutboxRecord['recoveryState']>,
+    boundaryKey?: string,
+  ): Promise<boolean> {
+    return this.queue.run(async () => {
+      const record = this.records.find((item) => item.event.idempotencyKey === key);
+      if (
+        !record ||
+        record.status !== 'rejected' ||
+        record.event.kind !== 'map_started' ||
+        !['context_stale', 'generation_fence', 'epoch_fence'].includes(
+          record.rejection?.reason ?? '',
+        ) ||
+        record.recoveryState !== from
+      )
+        return false;
+      await this.commit(
+        this.records.map((item) =>
+          item === record
+            ? {
+                ...item,
+                recoveryState: to,
+                ...(boundaryKey === undefined ? {} : { recoveryBoundaryKey: boundaryKey }),
+                updatedAt: new Date().toISOString(),
+              }
+            : item,
+        ),
+      );
+      return true;
+    });
   }
 
   getContinuity(): DeliveryContinuity | undefined {
@@ -444,6 +602,7 @@ export class ReliableOutbox {
     now = new Date(),
     continuity?: DeliveryContinuity,
     lineupSteam64?: readonly string[],
+    recoveryKey?: string,
   ): Promise<boolean> {
     return this.queue.run(async () => {
       const valid = parseReliableEventV1(event);
@@ -463,7 +622,23 @@ export class ReliableOutbox {
         nextAttemptAt: at,
         updatedAt: at,
       });
-      const records = this.trim([...this.records, next]);
+      let existing = this.records;
+      if (recoveryKey !== undefined) {
+        const rejected = this.startRejections(valid);
+        if (
+          valid.kind !== 'map_started' ||
+          rejected.length !== 1 ||
+          rejected[0]?.event.idempotencyKey !== recoveryKey ||
+          rejected[0].recoveryState !== 'awaiting_observation'
+        )
+          throw new Error('recovery_scope_invalid');
+        existing = this.records.map((item) =>
+          item === rejected[0]
+            ? { ...item, recoveryState: 'proof_queued' as const, updatedAt: at }
+            : item,
+        );
+      }
+      const records = this.trim([...existing, next]);
       if (records.length > RELIABLE_OUTBOX_MAX_RECORDS) throw new Error('reliable_outbox_full');
       await this.commit(
         records,
@@ -490,8 +665,13 @@ export class ReliableOutbox {
       let changed = false;
       const invalidatedStarts: string[] = [];
       const unconfirmedBoundaries = this.records.filter(
-        (record) => isContinuityBoundary(record.event) && record.status !== 'accepted',
+        (record) =>
+          isContinuityBoundary(record.event) &&
+          (record.status !== 'accepted' || record.receiverOutcome === 'needs_attention'),
       );
+      const rejectedStarts = this.records
+        .filter((record) => record.status === 'rejected' && record.event.kind === 'map_started')
+        .map((record) => record.event);
       const next: ReliableOutboxRecord[] = [];
       let blockedByMapEnd = false;
       // Terminal failures remain fences: a later event cannot turn a rejected or
@@ -500,12 +680,50 @@ export class ReliableOutbox {
         .filter(
           (record) =>
             isContinuityBoundary(record.event) &&
-            ['rejected', 'expired', 'superseded'].includes(record.status),
+            (['rejected', 'expired', 'superseded'].includes(record.status) ||
+              record.receiverOutcome === 'needs_attention'),
         )
         .map((record) => record.event);
       for (const record of this.records) {
         if (record.status !== 'pending') {
           next.push(record);
+          continue;
+        }
+        // A refused start never authorizes replay of a result that was already
+        // queued for that execution. Preserve the refusal and retire the result.
+        if (
+          ['map_ended', 'map_player_snapshot', 'series_ended'].includes(record.event.kind) &&
+          rejectedStarts.some((start) => {
+            const a = record.event.cursor;
+            const b = start.cursor;
+            return (
+              record.event.matchId === start.matchId &&
+              a.producerInstanceId === b.producerInstanceId &&
+              a.liveSessionId !== null &&
+              a.liveSessionId === b.liveSessionId &&
+              a.programSourceGeneration === b.programSourceGeneration &&
+              a.mapEpoch === b.mapEpoch &&
+              a.runtimeSeq >= b.runtimeSeq &&
+              ![...next, ...this.records].some((proof) => {
+                const c = proof.event.cursor;
+                return (
+                  proof.status === 'accepted' &&
+                  proof.receiverOutcome !== 'needs_attention' &&
+                  proof.event.kind === 'map_started' &&
+                  proof.event.matchId === start.matchId &&
+                  c.producerInstanceId === b.producerInstanceId &&
+                  c.liveSessionId === b.liveSessionId &&
+                  c.programSourceGeneration === b.programSourceGeneration &&
+                  c.mapEpoch === b.mapEpoch &&
+                  c.runtimeSeq > b.runtimeSeq &&
+                  c.runtimeSeq < a.runtimeSeq
+                );
+              })
+            );
+          })
+        ) {
+          next.push({ ...record, status: 'superseded', updatedAt: now.toISOString() });
+          changed = true;
           continue;
         }
         // A start observed before a boundary ACK is not a post-ACK proof,
@@ -588,17 +806,34 @@ export class ReliableOutbox {
         } finally {
           if (timeout !== undefined) clearTimeout(timeout);
         }
-        if (outcome !== 'accepted' && isContinuityBoundary(record.event))
+        const accepted =
+          outcome === 'accepted' || (typeof outcome === 'object' && outcome.status === 'accepted');
+        if (
+          (!accepted || (typeof outcome === 'object' && outcome.status === 'accepted')) &&
+          isContinuityBoundary(record.event)
+        )
           blockedBoundaries.push(record.event);
-        else if (outcome === 'retry' && ['map_ended', 'map_started'].includes(record.event.kind))
+        else if (
+          (outcome === 'retry' ||
+            (typeof outcome === 'object' &&
+              outcome.status === 'rejected' &&
+              ['generation_fence', 'epoch_fence'].includes(outcome.reason))) &&
+          ['map_ended', 'map_started'].includes(record.event.kind)
+        )
           blockedByMapEnd = true;
+        if (!accepted && outcome !== 'retry' && record.event.kind === 'map_started')
+          rejectedStarts.push(record.event);
         const attempts = record.attempts + 1;
         const delayMs = Math.min(60_000, 1_000 * 2 ** Math.min(attempts - 1, 6));
         next.push({
           ...record,
-          status:
-            outcome === 'retry' ? 'pending' : outcome === 'accepted' ? 'accepted' : 'rejected',
-          ...(typeof outcome === 'object' ? { rejection: outcome } : {}),
+          status: outcome === 'retry' ? 'pending' : accepted ? 'accepted' : 'rejected',
+          ...(typeof outcome === 'object' && outcome.status === 'rejected'
+            ? { rejection: outcome }
+            : {}),
+          ...(typeof outcome === 'object' && outcome.status === 'accepted'
+            ? { receiverOutcome: outcome.outcome }
+            : {}),
           attempts,
           nextAttemptAt: new Date(now.getTime() + delayMs).toISOString(),
           updatedAt: now.toISOString(),
@@ -653,8 +888,10 @@ export class ReliableOutbox {
     // rotates. At capacity, reject new work rather than forget the missing ACK.
     const fences = records.filter(
       (record) =>
-        isContinuityBoundary(record.event) &&
-        ['rejected', 'expired', 'superseded'].includes(record.status),
+        (isContinuityBoundary(record.event) &&
+          (['rejected', 'expired', 'superseded'].includes(record.status) ||
+            record.receiverOutcome === 'needs_attention')) ||
+        (record.event.kind === 'map_started' && record.status === 'rejected'),
     );
     const terminal = records.filter(
       (record) => record.status !== 'pending' && !fences.includes(record),

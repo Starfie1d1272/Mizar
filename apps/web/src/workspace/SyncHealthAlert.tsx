@@ -25,6 +25,18 @@ export function syncHealthText(health?: SyncHealth): string {
       return '网站授权已失效，请重新连接';
     case 'permission_denied':
       return '网站未授权本机同步，请核对权限';
+    case 'reliable_needs_attention':
+      return '网站已记录本场数据，但比赛状态需要核对。';
+    case 'continuity_chain_missing':
+      return '缺少可确认的比赛连续性记录，请核对数据源与比赛进度。';
+    case 'continuity_waiting':
+      return '正在等待网站确认比赛连续性。';
+    case 'context_refreshing':
+      return '正在刷新比赛资料。';
+    case 'context_reconfirming':
+      return '比赛资料已刷新，正在等待新比赛数据重新确认。';
+    case 'context_recovery_blocked':
+      return '比赛资料或数据源需要核对，请检查后处理。';
     case 'context_conflict':
     case 'context_stale':
       return '比赛资料需要刷新并确认；等待新比赛数据。';
@@ -192,6 +204,12 @@ function SyncHealthIncident({
             'authority_changed',
             'idempotency_conflict',
             'invalid_schema',
+            'continuity_chain_missing',
+            'continuity_waiting',
+            'context_refreshing',
+            'context_reconfirming',
+            'context_recovery_blocked',
+            'reliable_needs_attention',
             'map_start_rejected',
             'http_400',
           ].includes(reason ?? '') ? null : (

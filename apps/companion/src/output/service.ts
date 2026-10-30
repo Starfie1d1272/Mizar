@@ -9,6 +9,7 @@ import {
   ReliableOutbox,
   type DeliveryContinuity,
   type ReliableEventSink,
+  type ReliableDeliveryScope,
 } from './reliable-outbox.js';
 import {
   buildReliableEventV1,
@@ -30,6 +31,10 @@ export interface OutputServiceOptions {
   readonly authorityScope?: () => string | null;
   readonly onDiagnostic?: (code: string) => void;
   readonly onBusinessEvidence?: (stage: string, evidence: unknown) => void;
+  readonly onRecoveryProgress?: (
+    event: ReliableEventV1,
+    state: 'continuity_chain_missing' | 'continuity_waiting' | 'context_reconfirming',
+  ) => void;
 }
 
 /** One public-safe output boundary for local consumers and later outbound adapters. */
@@ -52,10 +57,208 @@ export class OutputService {
   private mapStartScope: string | undefined;
   private mapStartRevision = 0;
   private publishedMapStart: { revision: number; key: string } | undefined;
-  private pendingMapStart: { revision: number; key: string } | undefined;
+  private pendingMapStart: { revision: number; key: string; recovery?: string } | undefined;
   private lastMapObservation: ReliableEventV1['cursor'] | undefined;
   private recoveredCursor: ReliableEventV1['cursor'] | undefined;
   private readonly boundaryEnqueues = new Set<ReliableEventV1>();
+  private contextRecoveryHandler:
+    ((event: ReliableEventV1, authority: string) => Promise<boolean>) | undefined;
+  private waitingFence: { key: string; boundaryKey: string; scope: string } | undefined;
+  private approvedRecovery: { key: string; scope: string; afterRuntimeSeq: number } | undefined;
+
+  setContextRecoveryHandler(
+    handler: (event: ReliableEventV1, authority: string) => Promise<boolean>,
+  ): void {
+    this.contextRecoveryHandler = handler;
+  }
+
+  private recoveryScope(event: ReliableEventV1, lineup?: readonly string[]): string | undefined {
+    const bundle = this.bundle;
+    const binding = this.binding;
+    const authority = this.options.authorityScope?.();
+    if (
+      !bundle ||
+      !binding ||
+      binding.origin !== 'online' ||
+      binding.freshness !== 'fresh' ||
+      !authority ||
+      !lineup ||
+      lineup.length !== 10 ||
+      bundle.program.series?.status !== 'live' ||
+      bundle.program.status.telemetry !== 'fresh' ||
+      bundle.program.status.context !== 'fresh' ||
+      bundle.program.status.identity !== 'matched' ||
+      bundle.program.map.phase !== 'live' ||
+      bundle.program.match?.matchId !== event.matchId ||
+      binding.context.matchId !== event.matchId ||
+      bundle.program.map.name !== event.mapName ||
+      !this.mapStartScope
+    )
+      return undefined;
+    const c = bundle.program.cursor;
+    const e = event.cursor;
+    if (
+      !e.liveSessionId ||
+      c.producerInstanceId !== e.producerInstanceId ||
+      c.liveSessionId !== e.liveSessionId ||
+      c.programSourceGeneration !== e.programSourceGeneration ||
+      c.mapEpoch !== e.mapEpoch
+    )
+      return undefined;
+    const current = bundle.program.players
+      .filter((player) => player.lineupEvidence === 'current')
+      .map((player) => player.sourcePlayerId)
+      .sort();
+    if (current.length !== 10 || JSON.stringify(current) !== JSON.stringify([...lineup].sort()))
+      return undefined;
+    return JSON.stringify([
+      event.matchId,
+      event.mapName,
+      e.producerInstanceId,
+      e.liveSessionId,
+      e.programSourceGeneration,
+      e.mapEpoch,
+      authority,
+      current,
+    ]);
+  }
+
+  private async reconcileFence(): Promise<void> {
+    if (!this.outbox || this.closed || this.quarantined) return;
+    const waiting = this.waitingFence;
+    if (waiting) {
+      const record = this.outbox
+        .getRecords()
+        .find((item) => item.event.idempotencyKey === waiting.key);
+      const boundary = this.outbox
+        .getRecords()
+        .find((item) => item.event.idempotencyKey === waiting.boundaryKey);
+      if (
+        !record ||
+        !boundary ||
+        this.recoveryScope(record.event, record.lineupSteam64) !== waiting.scope ||
+        (boundary.status !== 'pending' &&
+          (boundary.status !== 'accepted' || boundary.receiverOutcome === 'needs_attention'))
+      ) {
+        await this.outbox.setStartRecovery(waiting.key, 'awaiting_boundary', 'blocked');
+        this.waitingFence = undefined;
+      } else if (boundary.status === 'accepted' && this.bundle) {
+        if (
+          await this.outbox.setStartRecovery(
+            waiting.key,
+            'awaiting_boundary',
+            'awaiting_observation',
+          )
+        ) {
+          this.options.onRecoveryProgress?.(record.event, 'context_reconfirming');
+          this.approvedRecovery = {
+            key: waiting.key,
+            scope: waiting.scope,
+            afterRuntimeSeq: this.bundle.program.cursor.runtimeSeq,
+          };
+          if (this.publishedMapStart?.key === waiting.key) this.publishedMapStart = undefined;
+        }
+        this.waitingFence = undefined;
+      }
+      return;
+    }
+    const record = [...this.outbox.getRecords()]
+      .reverse()
+      .find(
+        (item) =>
+          item.status === 'rejected' &&
+          item.event.kind === 'map_started' &&
+          ['generation_fence', 'epoch_fence'].includes(item.rejection?.reason ?? '') &&
+          item.recoveryState === undefined &&
+          this.recoveryScope(item.event, item.lineupSteam64) !== undefined,
+      );
+    if (!record || this.outbox.startRejections(record.event).length !== 1) return;
+    const target = record.event.cursor;
+    const matches = this.outbox.getRecords().filter((item) => {
+      const e = item.event;
+      const c = e.cursor;
+      if (
+        item.status !== 'pending' ||
+        e.matchId !== record.event.matchId ||
+        c.producerInstanceId !== target.producerInstanceId ||
+        c.liveSessionId !== target.liveSessionId ||
+        c.programSourceGeneration !== target.programSourceGeneration ||
+        c.mapEpoch !== target.mapEpoch ||
+        c.runtimeSeq > target.runtimeSeq
+      )
+        return false;
+      return record.rejection?.reason === 'generation_fence'
+        ? e.kind === 'source_generation_changed' &&
+            e.payload.previousSourceGeneration === c.programSourceGeneration - 1
+        : e.kind === 'map_epoch_changed' && e.payload.previousMapEpoch === c.mapEpoch - 1;
+    });
+    const scope = this.recoveryScope(record.event, record.lineupSteam64);
+    if (!scope) return;
+    if (matches.length !== 1) {
+      await this.outbox.setStartRecovery(record.event.idempotencyKey, undefined, 'blocked');
+      this.options.onRecoveryProgress?.(record.event, 'continuity_chain_missing');
+      return;
+    }
+    const boundaryKey = matches[0]!.event.idempotencyKey;
+    if (
+      await this.outbox.setStartRecovery(
+        record.event.idempotencyKey,
+        undefined,
+        'awaiting_boundary',
+        boundaryKey,
+      )
+    ) {
+      this.waitingFence = { key: record.event.idempotencyKey, boundaryKey, scope };
+      this.options.onRecoveryProgress?.(record.event, 'continuity_waiting');
+    }
+  }
+
+  private async recoverRejectedStart(): Promise<void> {
+    if (!this.outbox || !this.contextRecoveryHandler || this.closed || this.quarantined) return;
+    const record = [...this.outbox.getRecords()]
+      .reverse()
+      .find(
+        (item) =>
+          item.status === 'rejected' &&
+          item.event.kind === 'map_started' &&
+          item.rejection?.reason === 'context_stale' &&
+          item.recoveryState === undefined &&
+          this.recoveryScope(item.event, item.lineupSteam64) !== undefined,
+      );
+    if (!record || this.outbox.startRejections(record.event).length !== 1) return;
+    const scope = this.recoveryScope(record.event, record.lineupSteam64);
+    const authority = this.options.authorityScope?.();
+    if (
+      !scope ||
+      !authority ||
+      !(await this.outbox.setStartRecovery(record.event.idempotencyKey, undefined, 'refreshing'))
+    )
+      return;
+    let compatible: boolean;
+    try {
+      compatible = await this.contextRecoveryHandler(record.event, authority);
+    } catch {
+      compatible = false;
+    }
+    compatible =
+      compatible &&
+      !this.closed &&
+      !this.quarantined &&
+      this.recoveryScope(record.event, record.lineupSteam64) === scope;
+    const state = compatible ? 'awaiting_observation' : 'blocked';
+    if (!(await this.outbox.setStartRecovery(record.event.idempotencyKey, 'refreshing', state)))
+      return;
+    if (compatible && this.bundle) {
+      this.approvedRecovery = {
+        key: record.event.idempotencyKey,
+        scope,
+        afterRuntimeSeq: this.bundle.program.cursor.runtimeSeq,
+      };
+      if (this.publishedMapStart?.key === record.event.idempotencyKey)
+        this.publishedMapStart = undefined;
+    }
+  }
+
   private retryPending = false;
   private outboundUnsubscribe: (() => Promise<void>) | undefined;
   private outboundTimer: ReturnType<typeof setInterval> | undefined;
@@ -462,8 +665,29 @@ export class OutputService {
             candidate.cursor.programSourceGeneration <= event.cursor.programSourceGeneration &&
             candidate.cursor.mapEpoch <= event.cursor.mapEpoch,
         );
-        if (boundaries.length || this.outbox.hasUnconfirmedBoundary(event)) candidates.pop();
-        else this.pendingMapStart = { revision: this.mapStartRevision, key: event.idempotencyKey };
+        const refusals = this.outbox.startRejections(event);
+        const approval = this.approvedRecovery;
+        const recovery =
+          refusals.length === 1 &&
+          approval !== undefined &&
+          approval.key === refusals[0]?.event.idempotencyKey &&
+          refusals[0]?.recoveryState === 'awaiting_observation' &&
+          approval.scope === this.recoveryScope(refusals[0].event, refusals[0].lineupSteam64) &&
+          event.cursor.runtimeSeq > approval.afterRuntimeSeq
+            ? approval.key
+            : undefined;
+        if (
+          boundaries.length ||
+          this.outbox.hasUnconfirmedBoundary(event) ||
+          (refusals.length > 0 && !recovery)
+        )
+          candidates.pop();
+        else
+          this.pendingMapStart = {
+            revision: this.mapStartRevision,
+            key: event.idempotencyKey,
+            ...(recovery ? { recovery } : {}),
+          };
       }
     }
     if (
@@ -501,10 +725,12 @@ export class OutputService {
           this.now(),
           continuity,
           event.kind === 'map_started' ? retainedLineup : undefined,
+          start?.recovery,
         )
         .then(() => {
           if (start !== undefined && start.revision === this.mapStartRevision)
             this.publishedMapStart = start;
+          if (start?.recovery === this.approvedRecovery?.key) this.approvedRecovery = undefined;
         })
         .catch(() => {
           if (boundary) this.quarantined = true;
@@ -531,6 +757,7 @@ export class OutputService {
     if (this.bundle !== undefined) this.updateMapStartScope(this.bundle, this.binding);
     this.retryPending = true;
     try {
+      await this.reconcileFence();
       if (this.sink === undefined)
         await this.outbox.sweep(
           (event, lineup) => this.isCurrentForRetry(event, lineup),
@@ -620,6 +847,8 @@ export class OutputService {
         });
         if (this.publishedMapStart && invalidatedStarts.includes(this.publishedMapStart.key))
           this.publishedMapStart = undefined;
+        await this.reconcileFence();
+        await this.recoverRejectedStart();
       }
     } catch {
       this.onDiagnostic?.('outbox_retry_failed');
@@ -630,6 +859,10 @@ export class OutputService {
 
   getReliableRecovery() {
     return this.outbox?.getRecovery();
+  }
+
+  getReliableScopeDisposition(scope: ReliableDeliveryScope) {
+    return this.outbox?.getScopeDisposition(scope);
   }
 
   getReliableRecords() {

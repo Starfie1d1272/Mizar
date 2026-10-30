@@ -185,6 +185,14 @@ test('reliable rejection preserves only classified bounded metadata and safely h
     requestId,
     recovery: 'refresh_context',
   });
+  h.reliableBehavior(() =>
+    Response.json({ reason: 'context_stale', recovery: 'refresh_context' }, { status: 400 }),
+  );
+  assert.deepEqual(await h.connection.sendReliable(h.event, h.snapshot), {
+    status: 'rejected',
+    reason: 'context_stale',
+    recovery: 'refresh_context',
+  });
   h.reliableBehavior(() => Response.json({ error: 'old server' }, { status: 400 }));
   assert.equal(await h.connection.sendReliable(h.event, h.snapshot), 'rejected');
   h.reliableBehavior(() =>
@@ -195,4 +203,39 @@ test('reliable rejection preserves only classified bounded metadata and safely h
   assert.equal(await h.connection.sendReliable(h.event, h.snapshot), 'rejected');
   h.reliableBehavior(() => new Response(null, { status: 503 }));
   assert.equal(await h.connection.sendReliable(h.event, h.snapshot), 'retry');
+});
+
+test('200 needs_attention remains a receipt with review required until LIVE accepts', async (t) => {
+  const h = await setup(t);
+  h.snapshot.map.mapId = 'map-1';
+  h.snapshot.capability.lineupComplete = true;
+  h.connection.syncHealth(h.snapshot, true);
+  await h.connection.sendLive(h.snapshot);
+  assert.equal(h.connection.syncHealth(h.snapshot, true).status, 'healthy');
+  h.reliableBehavior(() => Response.json({ outcome: 'needs_attention', duplicate: false }));
+  assert.deepEqual(await h.connection.sendReliable(h.event, h.snapshot), {
+    status: 'accepted',
+    outcome: 'needs_attention',
+  });
+  h.advance(16000);
+  const health = h.connection.syncHealth(h.snapshot, true);
+  // A LIVE ACK from before the attention receipt cannot confirm recovery.
+  assert.notEqual(health.status, 'healthy');
+  await h.connection.sendLive(h.snapshot);
+  assert.equal(h.connection.syncHealth(h.snapshot, true).status, 'healthy');
+});
+
+test('stalled reliable rejection body is bounded and old unknown failures stay terminal', async (t) => {
+  const h = await setup(t);
+  h.reliableBehavior(
+    () =>
+      new Response(new ReadableStream<Uint8Array>({ start() {}, cancel() {} }), { status: 400 }),
+  );
+  const before = Date.now();
+  assert.equal(await h.connection.sendReliable(h.event, h.snapshot), 'rejected');
+  assert.ok(Date.now() - before < 2500);
+  for (const status of [408, 429, 503]) {
+    h.reliableBehavior(() => new Response(null, { status }));
+    assert.equal(await h.connection.sendReliable(h.event, h.snapshot), 'retry');
+  }
 });

@@ -373,6 +373,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     },
     onDiagnostic: (code) => recordRuntimeDiagnostic(`output-${code}`, 'projection', false),
     onBusinessEvidence: (stage, evidence) => businessJournal?.write(stage, evidence),
+    onRecoveryProgress: (event, state) => {
+      const connection = options.rivalhubConnection;
+      const authority = connection?.reliableAuthorityScope();
+      if (authority) connection?.setContextRecoveryProgress(event, authority, state);
+    },
   });
   if (demoRecovery)
     void outputService.setQuarantined(true).catch((error) =>
@@ -1702,6 +1707,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       canFetchStats: () => statsProductionActive,
       controller: matchContextController,
       currentSnapshot: () => outputService.current(true),
+      setContextRecoveryHandler: (handler) => outputService.setContextRecoveryHandler(handler),
       originPolicy: localWebTransport.getOriginPolicy(),
     });
   const restoreFormal = async (trial = false) => {
