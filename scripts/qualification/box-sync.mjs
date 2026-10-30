@@ -528,8 +528,8 @@ export class BoxClient {
   }
   // A fresh temporary directory isolates each attempt. Never replay an uncertain chunk.
   async uploadChunks(path, name, bytes, chunkSize = 4 * 1024 * 1024) {
-    const deadline = Date.now() + 180000;
-    const signal = AbortSignal.timeout(180000);
+    const deadline = Date.now() + 900000;
+    const signal = AbortSignal.timeout(900000);
     const url = this.temporaryUrl(await this.api('upload-link', path, 'GET', undefined, signal));
     url.searchParams.set('ret-json', '1');
     for (let start = 0; start < bytes.length; start += chunkSize) {
@@ -540,12 +540,16 @@ export class BoxClient {
       form.set('parent_dir', path);
       form.set('replace', '0');
       form.set('file', new Blob([bytes.subarray(start, end)]), name);
-      let response;
+      let result;
       for (let attempt = 0; ; attempt++) {
         requireValue(Date.now() < deadline, '分块上传预算已用完；保留暂存目录');
         signal.throwIfAborted();
+        const started = Date.now();
         try {
-          response = await checkedFetch(
+          console.log(
+            `Box 分块 ${name} ${start}-${end - 1} 尝试 ${attempt + 1} 开始（单次上限 180000ms）`,
+          );
+          result = await checkedFetch(
             url,
             {
               method: 'POST',
@@ -557,17 +561,23 @@ export class BoxClient {
                 'Content-Disposition': `attachment; filename="${name}"`,
               },
             },
-            Math.max(1, deadline - Date.now()),
+            Math.min(180000, Math.max(1, deadline - Date.now())),
             this.uploadTransport,
+            (response) => response.json(),
+          );
+          console.log(
+            `Box 分块 ${name} ${start}-${end - 1} 尝试 ${attempt + 1} 完成（${Date.now() - started}ms）`,
           );
           break;
         } catch (error) {
+          console.log(
+            `Box 分块 ${name} ${start}-${end - 1} 尝试 ${attempt + 1} 失败（${Date.now() - started}ms）`,
+          );
           if (!error.retrySafeUpload || attempt === 2 || signal.aborted) throw error;
           recordUploadRecovery();
           await retryWait(attempt, '分块发送 0 字节', deadline, undefined, signal);
         }
       }
-      const result = await response.json();
       requireValue(
         end === bytes.length
           ? Array.isArray(result) && result.length === 1 && result[0].name === name

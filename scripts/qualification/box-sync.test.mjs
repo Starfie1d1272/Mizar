@@ -64,24 +64,34 @@ test('zero-byte retries stop after three attempts', async () => {
   assert.equal(calls, 3);
 });
 
-test('upload link and all chunks share the 180-second deadline', async (t) => {
+test('each chunk has a fresh deadline while the whole upload remains bounded', async (t) => {
   let now = 1000;
   t.mock.method(Date, 'now', () => now);
   const ranges = [];
   const box = client(async (_url, options) => {
     ranges.push(options.headers['Content-Range']);
     now += 179000;
+    return Response.json(ranges.length === 3 ? [{ name: 'payload' }] : { success: true });
+  });
+  await box.uploadChunks('/Archive/test', 'payload', Buffer.from('abcdef'), 2);
+  assert.deepEqual(ranges, ['bytes 0-1/6', 'bytes 2-3/6', 'bytes 4-5/6']);
+  assert.ok(now > 180000);
+});
+
+test('the aggregate chunk upload deadline also stops further chunks', async (t) => {
+  let now = 1000;
+  t.mock.method(Date, 'now', () => now);
+  let calls = 0;
+  const box = client(async () => {
+    calls++;
+    now += 180000;
     return Response.json({ success: true });
   });
-  box.api = async () => {
-    now += 1000;
-    return 'https://box.example/upload';
-  };
   await assert.rejects(
-    box.uploadChunks('/Archive/test', 'payload', Buffer.from('abcd'), 2),
+    box.uploadChunks('/Archive/test', 'payload', Buffer.from('abcdefghijkl'), 2),
     /预算已用完/,
   );
-  assert.deepEqual(ranges, ['bytes 0-1/4']);
+  assert.equal(calls, 5);
 });
 
 test('deadline abort during a chunk stops the transfer as an uncertain write', async (t) => {
