@@ -2,7 +2,11 @@ import { gameBackgroundReady } from './game-background.js';
 import { ObsCaptureWarmup, ObsCaptureWarmupError } from './capture-warmup.js';
 import { readCaptureInitialization, type CaptureInitialization } from './capture-initialization.js';
 import type { ObsCaptureDiagnostic } from '@mizar/protocol/obs';
-import { ObsVideoError, ObsVideoTransaction } from './video-transaction.js';
+import {
+  ObsPreparationWriteBlocked,
+  ObsVideoError,
+  ObsVideoTransaction,
+} from './video-transaction.js';
 import { ObsActionError } from './action-error.js';
 import { assertBpCompactOff, BpOverlayOwner } from './bp-overlay.js';
 import { diagnosticValue } from '../support/session-journal.js';
@@ -2080,8 +2084,28 @@ export class ObsAdapter {
       if (!current()) throw new Error('OBS 准备请求已失效，请重试。');
       await this.outputs.read();
       if (!current()) throw new Error('OBS 准备请求已失效，请重试。');
-      const prepared = await this.withObs(async (connection, endpoint) => {
+      const outputEpoch = this.outputs.preparationOutputEpoch();
+      const preparationObs = (connection: ObsRpc): ObsRpc => {
         const obs = guardedObs(connection, current);
+        return {
+          ...obs,
+          call: (type, data) => {
+            if (/^(Create|Set|Remove)/.test(type)) {
+              const reason = this.outputs.captureWarmupBlockReason();
+              if (reason || this.outputs.preparationOutputEpoch() !== outputEpoch)
+                throw new ObsPreparationWriteBlocked(
+                  new ObsVideoError(
+                    'preparation_output_changed',
+                    reason ?? 'OBS 输出状态已变化，请重试。',
+                  ),
+                );
+            }
+            return obs.call(type, data);
+          },
+        };
+      };
+      const prepared = await this.withObs(async (connection, endpoint) => {
+        const obs = preparationObs(connection);
         await assertBpCompactOff(obs);
         const visual = await ensureObsConfiguration(obs, this.browserBaseUrl, activeScene, true);
         if (
@@ -2127,14 +2151,14 @@ export class ObsAdapter {
           const commentary = await this.audioConfiguration.run(
             async (connection, endpoint, observer) => {
               const findings = await configureIndependentAudio(
-                guardedPreparationWrites(guardedObs(connection, current)),
+                guardedPreparationWrites(preparationObs(connection)),
                 endpoint,
                 observer,
                 this.commentary!.owner,
                 this.commentary!.journal,
                 this.browserBaseUrl,
                 async (ids) =>
-                  this.audioRouting?.seedAutomatic(guardedObs(connection, current), endpoint, ids),
+                  this.audioRouting?.seedAutomatic(preparationObs(connection), endpoint, ids),
                 async () => !(await this.audioRouting?.enabled()),
                 async (plan) => {
                   const routing = await this.audioRouting?.commentaryBinding();
@@ -2150,19 +2174,19 @@ export class ObsAdapter {
                 },
                 async () =>
                   (await this.audioRouting?.managedBindings(
-                    guardedObs(connection, current),
+                    preparationObs(connection),
                     endpoint,
                   )) ?? null,
               );
               if (findings.some((finding) => finding.code === 'audio_teamspeak_compatibility')) {
                 await this.adoptInitialTeamspeakDesktop(
-                  guardedObs(connection, current),
+                  preparationObs(connection),
                   endpoint,
                   observer,
                   current,
                 );
                 const compatibility = await this.teamspeakCompatibilityFindings(
-                  guardedObs(connection, current),
+                  preparationObs(connection),
                   endpoint,
                 ).catch(() =>
                   findings.filter((finding) => finding.code === 'audio_teamspeak_compatibility'),

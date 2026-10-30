@@ -13,10 +13,58 @@ import { registerObsRoutes } from '../src/obs/routes.js';
 import { createLocalWebOriginPolicy } from '../src/local-web/origin-policy.js';
 
 it.each([
-  { preparedAudio: false, align: false, label: 'active output and default audio sources' },
-  { preparedAudio: true, align: false, label: 'active output and automatic TeamSpeak probe' },
-  { preparedAudio: true, align: true, label: 'idle output and an existing gameplay scene' },
-])('explicit ensure handles $label', async ({ preparedAudio, align }) => {
+  {
+    preparedAudio: false,
+    align: false,
+    event: '',
+    label: 'active output and default audio sources',
+  },
+  {
+    preparedAudio: true,
+    align: false,
+    event: '',
+    label: 'active output and automatic TeamSpeak probe',
+  },
+  {
+    preparedAudio: true,
+    align: true,
+    event: '',
+    label: 'idle output and an existing gameplay scene',
+  },
+  ...[
+    'StreamStateChanged',
+    'RecordStateChanged',
+    'ReplayBufferStateChanged',
+    'VirtualcamStateChanged',
+  ].map((event) => ({ preparedAudio: true, align: true, event, label: `${event} STARTING` })),
+  {
+    preparedAudio: true,
+    align: true,
+    event: 'StreamStateChanged',
+    late: true,
+    label: 'stream STARTING immediately before the scene switch',
+  },
+  {
+    preparedAudio: true,
+    align: true,
+    event: 'ReplayBufferStateChanged',
+    transient: true,
+    label: 'replay starting and stopping during preparation',
+  },
+  {
+    preparedAudio: true,
+    align: true,
+    event: 'CurrentProgramSceneChanged',
+    label: 'external scene takeover',
+  },
+  {
+    preparedAudio: true,
+    align: true,
+    event: 'CurrentSceneCollectionChanging',
+    label: 'external collection takeover',
+  },
+  { preparedAudio: true, align: true, event: 'ExitStarted', label: 'OBS exit' },
+])('explicit ensure handles $label', async ({ preparedAudio, align, event, late, transient }) => {
   const directory = await mkdtemp(join(tmpdir(), 'mizar-ensure-output-'));
   const server = Fastify();
   const app = Fastify();
@@ -25,8 +73,13 @@ it.each([
   const requests: string[] = [];
   const unexpected: string[] = [];
   let currentScene = obsSceneName(align ? 'gameplay' : 'waiting');
+  const sockets = new Set<{ send: (data: string) => void }>();
+  let outputReads = 0;
+  let waitForEvent: (eventType: string, transient: boolean) => Promise<void> = async () => {};
   await server.register(websocket);
   server.get('/', { websocket: true }, (socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
     socket.send(JSON.stringify({ op: 0, d: { obsWebSocketVersion: '5.6.3', rpcVersion: 1 } }));
     socket.on('message', (raw) => {
       const packet = JSON.parse(raw.toString()) as {
@@ -213,17 +266,21 @@ it.each([
         default:
           unexpected.push(type);
       }
-      socket.send(
-        JSON.stringify({
-          op: 7,
-          d: {
-            requestType: type,
-            requestId,
-            requestStatus: { result: true, code: 100 },
-            responseData,
-          },
-        }),
-      );
+      const respond = () =>
+        socket.send(
+          JSON.stringify({
+            op: 7,
+            d: {
+              requestType: type,
+              requestId,
+              requestStatus: { result: true, code: 100 },
+              responseData,
+            },
+          }),
+        );
+      if (type === 'GetOutputList' && event && ++outputReads === (late ? 2 : 1)) {
+        void waitForEvent(event, !!transient).then(respond);
+      } else respond();
     });
   });
   await server.listen({ host: '127.0.0.1', port: 0 });
@@ -243,6 +300,42 @@ it.each([
         }
       : undefined,
   );
+  waitForEvent = async (eventType, finish) => {
+    const lease = await adapter.captureWarmupGuard();
+    const emit = (eventData: Record<string, unknown>) => {
+      for (const socket of sockets)
+        socket.send(
+          JSON.stringify({
+            op: 5,
+            d: {
+              eventType,
+              eventIntent:
+                eventType === 'CurrentProgramSceneChanged'
+                  ? 4
+                  : eventType === 'CurrentSceneCollectionChanging'
+                    ? 2
+                    : eventType === 'ExitStarted'
+                      ? 1
+                      : 64,
+              eventData,
+            },
+          }),
+        );
+    };
+    if (eventType === 'CurrentProgramSceneChanged') {
+      currentScene = '外部场景';
+      emit({ sceneName: currentScene });
+    } else if (eventType === 'CurrentSceneCollectionChanging') {
+      emit({ sceneCollectionName: '外部集合' });
+    } else if (eventType === 'ExitStarted') {
+      emit({});
+    } else emit({ outputActive: false, outputState: 'OBS_WEBSOCKET_OUTPUT_STARTING' });
+    await vi.waitFor(() => expect(lease()).toBe(false));
+    if (finish) {
+      emit({ outputActive: false, outputState: 'OBS_WEBSOCKET_OUTPUT_STOPPED' });
+      await vi.waitFor(async () => expect((await adapter.captureWarmupGuard())()).toBe(true));
+    }
+  };
   registerObsRoutes(app, {
     adapter,
     configStore: config,
@@ -257,6 +350,21 @@ it.each([
       headers: { origin: baseUrl },
       payload: { expectedRevision: 'revision' },
     });
+    if (event) {
+      expect(response.statusCode).toBe(409);
+      if (event.endsWith('StateChanged'))
+        expect(response.json()).toMatchObject({ error: 'preparation_output_changed' });
+      expect(currentScene).toBe(
+        event === 'CurrentProgramSceneChanged' ? '外部场景' : obsSceneName('gameplay'),
+      );
+      expect(requests.filter((type) => type === 'SetCurrentProgramScene')).toHaveLength(0);
+      expect(requests.filter((type) => type === 'SetSceneSceneTransitionOverride')).toHaveLength(
+        late ? 1 : 0,
+      );
+      expect(requests.some((type) => type.startsWith('Stop'))).toBe(false);
+      expect(unexpected).toEqual([]);
+      return;
+    }
     if (align) {
       expect(response.statusCode).toBe(200);
       expect(currentScene).toBe(obsSceneName('waiting'));

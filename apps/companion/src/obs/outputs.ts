@@ -100,6 +100,9 @@ export class ObsOutputController {
   // Broader than the UI output revision: every observed takeover invalidates a
   // capture warmup, even when its final output state matches the prior snapshot.
   private warmupGeneration = 0;
+  // Unlike warmupGeneration, owned scene and input writes do not invalidate this
+  // lease. Every observed output transition does, even if it returns to idle.
+  private preparationOutputGeneration = 0;
   private readonly warmupExtraOutputs: Record<
     'replay' | 'virtual',
     'idle' | 'starting' | 'active' | 'stopping' | 'unknown'
@@ -125,6 +128,10 @@ export class ObsOutputController {
 
   captureWarmupGeneration(): number | null {
     return this.captureWarmupBlockReason() === null ? this.warmupGeneration : null;
+  }
+
+  preparationOutputEpoch(): number {
+    return this.preparationOutputGeneration;
   }
 
   captureWarmupBlockReason(): string | null {
@@ -176,12 +183,14 @@ export class ObsOutputController {
   private update(kind: ObsOutputKind, phase: ObsOutputPhase, active: boolean | null): void {
     const previous = this.values[kind];
     if (previous.phase === phase && previous.active === active) return;
+    this.preparationOutputGeneration++;
     this.warmupGeneration++;
     this.values[kind] = { ...previous, phase, active, revision: randomUUID() };
   }
 
   private invalidate(client?: OBSWebSocket): void {
     if (client && this.client !== client) return;
+    this.preparationOutputGeneration++;
     this.warmupGeneration++;
     this.warmupExtraOutputs.replay = 'idle';
     this.warmupExtraOutputs.virtual = 'idle';
@@ -219,6 +228,7 @@ export class ObsOutputController {
   }
 
   private event(kind: ObsOutputKind, event: { outputState: string; outputActive: boolean }): void {
+    this.preparationOutputGeneration++;
     this.warmupGeneration++;
     this.events[kind]++;
     const phases: Record<string, ObsOutputPhase> = {
@@ -280,6 +290,7 @@ export class ObsOutputController {
       event: { outputActive: boolean; outputState: string },
     ) => {
       if (!current()) return;
+      this.preparationOutputGeneration++;
       this.warmupGeneration++;
       const phases: Record<string, typeof this.warmupExtraOutputs.replay> = {
         OBS_WEBSOCKET_OUTPUT_STARTING: 'starting',
@@ -300,6 +311,7 @@ export class ObsOutputController {
     client.on('InputNameChanged', invalidateWarmup);
     client.on('ExitStarted', () => {
       if (current()) {
+        this.preparationOutputGeneration++;
         this.warmupGeneration++;
         this.warmupExitStarted = true;
       }
@@ -425,6 +437,7 @@ export class ObsOutputController {
     const generation = this.generation;
     const client = this.client!;
     this.values[output] = { ...state, pending: action };
+    this.preparationOutputGeneration++;
     this.warmupGeneration++;
     const reached = () => {
       const current = this.values[output];
