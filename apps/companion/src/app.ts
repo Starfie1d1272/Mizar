@@ -40,6 +40,7 @@ import { PerformanceWindow, selectedGsiContext } from './support/performance-win
 import { NativeSource } from './support/native-source.js';
 import { ProgramChat } from './projections/program-chat.js';
 import { MusicStore } from './music/store.js';
+import { readMusicPack } from './music/archive.js';
 import { MusicDirector } from './music/director.js';
 import { musicMapKey } from './music/cues.js';
 import { ObsMusicProvider } from './music/obs-provider.js';
@@ -1260,7 +1261,17 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           broadcastConfig &&
           (await missing(join(musicStore.directory, 'state.json'))) &&
           (await missing(broadcastConfig.path));
-        await musicStore.load(fresh ? await readFile(options.builtinMusicPack!) : undefined);
+        let initialPack: Buffer | undefined;
+        if (fresh) {
+          try {
+            initialPack = await readFile(options.builtinMusicPack!);
+            await readMusicPack(initialPack);
+          } catch (error) {
+            initialPack = undefined;
+            app.log.error({ stage: 'music_builtin', err: error }, '内置音乐不可用');
+          }
+        }
+        await musicStore.load(initialPack);
       } catch (error) {
         app.log.error({ stage: 'music_load', err: error, result: 'failure' }, '音乐配置加载失败');
         musicStore.failure = true;
@@ -1414,6 +1425,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         () => broadcastRuntime.restoreLegacyCamera(),
         (module) => broadcastRuntime.moduleAvailability(module),
         () => broadcastRuntime.displayAvailable,
+        () => broadcastRuntime.builtinMusicAvailable,
       );
     }
     catalogTool = mulnxTool;

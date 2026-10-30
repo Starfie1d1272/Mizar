@@ -54,6 +54,7 @@ export function createBroadcastRuntime(input: {
   let candidate: BroadcastConfigDocument | undefined;
   let pendingLegacyCamera: PendingLegacyCamera | undefined;
   let ready = false;
+  let builtinMusicAvailable = false;
   let syncError: Error | undefined;
   let cameraUnavailable = false;
   let programUnavailable = false;
@@ -273,6 +274,7 @@ export function createBroadcastRuntime(input: {
           origin: null,
           value,
         });
+        builtinMusicAvailable = true;
       } catch (error) {
         input.diagnostic(error);
       }
@@ -317,6 +319,9 @@ export function createBroadcastRuntime(input: {
     restoreLegacyCamera: () => store.restoreLegacyCamera(deps.camera.portable),
     get displayAvailable() {
       return !programUnavailable;
+    },
+    get builtinMusicAvailable() {
+      return builtinMusicAvailable;
     },
     async moduleAvailability(module: import('@mizar/broadcast-config').ModuleRecord) {
       try {
