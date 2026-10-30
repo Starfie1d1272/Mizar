@@ -534,11 +534,14 @@ export class ObsAdapter {
             transition.targetDesktop?.inputUuid,
             transition.omitCommentary,
           ))
-        )
-          throw new Error('audio_mode_target_changed');
-        if (transition.targetDesktop) await migration.saveModeBackup(completedPath, transition.id);
-        targetIds = ids;
-        side = 'after';
+        ) {
+          await migration.recover(obs, endpoint, observer, true);
+        } else {
+          if (transition.targetDesktop)
+            await migration.saveModeBackup(completedPath, transition.id);
+          targetIds = ids;
+          side = 'after';
+        }
       }
     } else if (pending && outcome === 'mixed') {
       await migration.recover(obs, endpoint, observer, true);
@@ -1261,6 +1264,7 @@ export class ObsAdapter {
                   sourceUuid: string;
                   group?: boolean;
                 }[] = [];
+                const extraDesktop: typeof extraIndependent = [];
                 if (!desktop) {
                   const graph = await inspectAudioSceneGraph(
                     obs,
@@ -1268,6 +1272,28 @@ export class ObsAdapter {
                   );
                   const restored = await migration.completedEnabledItems(completedPath);
                   const waiting = (await this.audioRouting!.modeRecoveryState()).waitingIndependent;
+                  const previousDesktop = (await this.audioRouting!.modeRecoveryState()).desktop;
+                  if (previousDesktop) {
+                    if (
+                      previousDesktop.endpoint !== endpoint ||
+                      previousDesktop.collection !== OBS_COLLECTION
+                    )
+                      throw new Error('audio_migration_identity_changed');
+                    for (const container of graph) {
+                      if (!container.activeManagedRoots.size) continue;
+                      for (const item of container.items) {
+                        if (item.sourceUuid !== previousDesktop.inputUuid || !item.sceneItemEnabled)
+                          continue;
+                        if (container.otherRoots.size) throw new Error('audio_nested_shared_path');
+                        extraDesktop.push({
+                          sceneName: container.name,
+                          sceneItemId: item.sceneItemId,
+                          sourceUuid: item.sourceUuid,
+                          ...(container.group ? { group: true } : {}),
+                        });
+                      }
+                    }
+                  }
                   const targetIds = [
                     ids.game,
                     ...(waiting?.omitCommentary ? [] : [ids.remoteCommentary]),
@@ -1319,6 +1345,8 @@ export class ObsAdapter {
                     modeId,
                     extraIndependent,
                     plan.managedMusicUuids ?? [],
+                    extraDesktop,
+                    Object.values(ids).filter((id): id is string => Boolean(id)),
                   ))
                 ) {
                   // Reverse migration stays pending until the routing state is committed.
@@ -1358,8 +1386,10 @@ export class ObsAdapter {
                           ?.omitCommentary,
                       ),
                     ))
-                  )
+                  ) {
+                    await migration.recover(obs, endpoint, observer, true);
                     throw new Error('audio_mode_target_changed');
+                  }
                   if (desktop) await migration.saveModeBackup(completedPath, modeId);
                   await music.commitDesktopMonitorOriginals(
                     plan.musicBefore,
