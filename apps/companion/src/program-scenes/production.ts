@@ -15,6 +15,7 @@ export function registerProductionRoutes(
     beforeEnter?: () => void;
     waitForBroadcast?: () => Promise<void>;
     onEnter?: () => void;
+    onEntered?: () => void;
     onFinish?: () => void;
     beforeFinish?: () => void | Promise<void>;
     beforeExit?: () => void;
@@ -28,6 +29,7 @@ export function registerProductionRoutes(
   let updatePending = false;
   let trialPending = false;
   let preparationGeneration = 0;
+  let sessionGeneration = 0;
   const view = () => ({
     mode,
     revision,
@@ -50,6 +52,7 @@ export function registerProductionRoutes(
       ['finish', 'shutdown', 'begin-exit'].includes(String(body.action))
     ) {
       preparationGeneration++;
+      sessionGeneration++;
       options.scenes.holdAutomatic();
       options.beforeExit?.();
     }
@@ -75,6 +78,7 @@ export function registerProductionRoutes(
     const shutdown = body?.action === 'shutdown';
     if (shutdown) shuttingDown = true;
     let committed = false;
+    const entering = body?.action === 'enter' && mode === 'preparation';
     let stage = 'production_context';
     const operationId = randomUUID();
     const controlValid = options.scenes.controlValid();
@@ -115,6 +119,10 @@ export function registerProductionRoutes(
       }
       committed = true;
       revision = randomUUID();
+      if (entering) {
+        sessionGeneration++;
+        options.onEntered?.();
+      }
       return { code: 200, value: view() };
     } catch (error) {
       app.log.error(
@@ -154,6 +162,10 @@ export function registerProductionRoutes(
   });
   return {
     get: view,
+    sessionValid: () => {
+      const generation = sessionGeneration;
+      return () => generation === sessionGeneration && mode !== 'preparation' && !shuttingDown;
+    },
     canControl: () => !busy && !shuttingDown,
     automaticAllowed: () => mode !== 'preparation' && !busy && !shuttingDown,
     preparationValid: (expectedRevision: unknown) => {

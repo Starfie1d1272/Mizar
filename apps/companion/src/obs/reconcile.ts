@@ -97,26 +97,50 @@ export async function refreshObsBrowserSources(
   if (collections.currentSceneCollectionName !== OBS_COLLECTION) return false;
   const inputs = objects((await obs.call('GetInputList')).inputs);
   for (const scene of obsDesiredScenes(baseUrl)) {
-    if (
-      refreshed.has(scene.browserInput) ||
-      !inputs.some(
-        (input) => input.inputName === scene.browserInput && input.inputKind === 'browser_source',
-      )
-    )
-      continue;
-    const result = await obs.call('GetInputSettings', { inputName: scene.browserInput });
+    const input = inputs.find(
+      (item) => item.inputName === scene.browserInput && item.inputKind === 'browser_source',
+    );
+    if (!input) continue;
+    const uuid = typeof input.inputUuid === 'string' ? input.inputUuid : undefined;
+    const key = uuid ?? scene.browserInput;
+    if (refreshed.has(key)) continue;
+    const identity = uuid ? { inputUuid: uuid } : { inputName: scene.browserInput };
+    const result = await obs.call('GetInputSettings', identity);
     const settings = result.inputSettings as Record<string, unknown> | undefined;
     if (settings?.url !== scene.browserUrl) continue;
     // Recheck ownership after reading settings: an operator may switch collections.
     const current = await obs.call('GetSceneCollectionList');
     if (current.currentSceneCollectionName !== OBS_COLLECTION) return false;
-    await obs.call('PressInputPropertiesButton', {
-      inputName: scene.browserInput,
+    const currentInputs = objects((await obs.call('GetInputList')).inputs);
+    if (
+      !currentInputs.some(
+        (item) =>
+          item.inputName === scene.browserInput &&
+          item.inputKind === 'browser_source' &&
+          (uuid === undefined || item.inputUuid === uuid),
+      )
+    )
+      continue;
+    const latest = await obs.call('GetInputSettings', identity);
+    if ((latest.inputSettings as Record<string, unknown> | undefined)?.url !== scene.browserUrl)
+      continue;
+    const press = obs.call('PressInputPropertiesButton', {
+      ...identity,
       propertyName: 'refreshnocache',
     });
-    refreshed.add(scene.browserInput);
+    // A lost reply cannot prove that OBS did not refresh. Do not replay it.
+    refreshed.add(key);
+    await press;
   }
-  return obsDesiredScenes(baseUrl).every((scene) => refreshed.has(scene.browserInput));
+  return obsDesiredScenes(baseUrl).every((scene) => {
+    const input = inputs.find(
+      (item) => item.inputName === scene.browserInput && item.inputKind === 'browser_source',
+    );
+    return (
+      input !== undefined &&
+      refreshed.has(typeof input.inputUuid === 'string' ? input.inputUuid : scene.browserInput)
+    );
+  });
 }
 
 const BROWSER_TRANSFORM = {
