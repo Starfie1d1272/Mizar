@@ -532,3 +532,74 @@ it('marks a proven round jump partial when no round was in flight', async () => 
     basis: { rounds: 1, coverage: 'partial' },
   });
 });
+
+it('retains trusted death evidence while terminal health is incomplete, then derives KAST after settlement', async () => {
+  const { projectPlayerStatistics } = await import('../src/runtime/index.js');
+  const withScore = (obs: TelemetryObservation): TelemetryObservation => ({
+    ...obs,
+    telemetry: {
+      ...obs.telemetry,
+      map: { ...obs.telemetry.map!, sides: { ct: { score: 13 }, t: { score: 11 } } },
+    },
+  });
+  let state = createInitialRuntimeState('late-health-events');
+  state = accept(state, withScore(frame(1, 1, 'freezetime', 23, 0))).state;
+  state = accept(state, withScore(frame(2, 2, 'live', 23, 80))).state;
+  const over = withScore(frame(3, 3, 'over', 24, 80));
+  state = accept(state, {
+    ...over,
+    telemetry: {
+      ...over.telemetry,
+      allPlayers: over.telemetry.allPlayers!.map((p) =>
+        p.sourcePlayerId === PLAYER_B
+          ? { ...p, state: { roundTotalDamage: p.state!.roundTotalDamage! } }
+          : p,
+      ),
+    },
+  }).state;
+  const evidence = {
+    mapEpoch: state.map.epoch,
+    roundNumberHint: 23,
+    coverage: 'complete' as const,
+    source: {
+      role: 'program' as const,
+      generation: 1,
+      ticksPerSecond: 64,
+      startTick: 1,
+      endTick: 100,
+    },
+    deaths: [
+      {
+        kind: 'player-death' as const,
+        cursor: {
+          kind: 'cs2-cstv' as const,
+          role: 'program' as const,
+          generation: 1,
+          sequence: 1,
+          tick: 30,
+          ticksPerSecond: 64,
+          observedAt: '2026-01-01T00:00:00Z',
+          observedMonotonicMs: 1,
+        },
+        victim: { sourcePlayerId: PLAYER_B },
+        attacker: { sourcePlayerId: PLAYER_A },
+      },
+    ],
+  };
+  const accepted = reduceRuntime(state, { kind: 'program-round-events', events: evidence }, POLICY);
+  expect(accepted.disposition.kind).toBe('accepted');
+  state = accepted.state;
+  expect(
+    projectPlayerStatistics(state.playerStats, PLAYER_A, undefined, null).completed.kastPercent
+      .value,
+  ).toBeNull();
+  const final = withScore(frame(4, 4, 'over', 24, 80));
+  state = accept(state, {
+    ...final,
+    telemetry: { ...final.telemetry, map: { ...final.telemetry.map!, phase: 'gameover' } },
+  }).state;
+  expect(
+    projectPlayerStatistics(state.playerStats, PLAYER_A, undefined, null).completed.kastPercent
+      .value,
+  ).toBe(100);
+});

@@ -707,11 +707,11 @@ export function reduceTrustedProgramRoundEvents(
       (generation !== undefined && generation !== cursor.generation) ||
       (ticksPerSecond !== undefined && ticksPerSecond !== cursor.ticksPerSecond) ||
       victim === undefined ||
-      round.players[victim] === undefined ||
+      round.roster[victim] === undefined ||
       (event.attacker !== undefined &&
-        (attacker === undefined || round.players[attacker] === undefined)) ||
+        (attacker === undefined || round.roster[attacker] === undefined)) ||
       (event.assister !== undefined &&
-        (assister === undefined || round.players[assister] === undefined))
+        (assister === undefined || round.roster[assister] === undefined))
     )
       return accumulator;
     generation = cursor.generation;
