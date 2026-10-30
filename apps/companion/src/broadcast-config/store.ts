@@ -5,6 +5,8 @@ import { z } from 'zod';
 import { MUSIC_GROUPS } from '@mizar/protocol/music';
 import {
   boundModules,
+  assertSupportedHudModule,
+  isSupportedHudPauseVisual,
   clonePreset,
   preparePreset,
   parseBroadcastConfigDocument,
@@ -410,6 +412,7 @@ export class BroadcastConfigStore {
         if (!this.envelope) throw new Error('broadcast_config_unavailable');
         const next = structuredClone(this.envelope);
         const copy = clonePreset(next.document, request, randomUUID);
+        copy.modules.forEach(assertSupportedHudModule);
         next.document.modules.push(...copy.modules);
         next.document.presets.push(copy.preset);
         await this.options.assertReferenceCommitAllowed(this.envelope.document, next.document);
@@ -430,6 +433,7 @@ export class BroadcastConfigStore {
     const result = await this.queue.run(() =>
       this.options.withReferenceGuard(async () => {
         if (!this.envelope) throw new Error('broadcast_config_unavailable');
+        input.modules.forEach(assertSupportedHudModule);
         const mapping = importMappingSchema.parse({
           source: input.source,
           moduleEntries: input.moduleEntries,
@@ -575,6 +579,7 @@ export class BroadcastConfigStore {
           throw new Error('revision_conflict');
         const seen = new Set<string>();
         for (const update of input.modules) {
+          assertSupportedHudModule(update.value);
           if (isBuiltinModuleId(update.value.id)) throw new Error('builtin_immutable');
           if (seen.has(update.value.id)) throw new Error('duplicate_module');
           seen.add(update.value.id);
@@ -621,6 +626,7 @@ export class BroadcastConfigStore {
       this.options.withReferenceGuard(async () => {
         if (!this.envelope) throw new Error('broadcast_config_unavailable');
         if (isBuiltinModuleId(value.id)) throw new Error('builtin_immutable');
+        assertSupportedHudModule(value);
         const next = structuredClone(this.envelope);
         const index = next.document.modules.findIndex((item) => item.id === value.id);
         const old = next.document.modules[index];
@@ -650,6 +656,7 @@ export class BroadcastConfigStore {
         const source = this.envelope.document.modules.find((item) => item.id === id);
         if (!source) throw new Error('module_missing');
         if (source.revision !== expectedRevision) throw new Error('revision_conflict');
+        assertSupportedHudModule(source);
         const copy = structuredClone(source);
         copy.id = randomUUID();
         copy.revision = randomUUID();
@@ -783,6 +790,7 @@ export class BroadcastConfigStore {
           }
           const module = this.envelope.document.modules.find((item) => item.id === input.moduleId);
           if (!module) throw new Error('module_missing');
+          assertSupportedHudModule(module);
           if (
             module.revision !== input.expectedRevision ||
             this.envelope.document.active.revision !== input.expectedActiveRevision
@@ -889,6 +897,11 @@ export class BroadcastConfigStore {
         for (const module of next.document.modules) {
           const old = this.envelope.document.modules.find((item) => item.id === module.id);
           if (old && old.kind !== module.kind) throw new Error('invalid_request');
+          if (
+            !old ||
+            canonicalJson({ ...old, revision: '' }) !== canonicalJson({ ...module, revision: '' })
+          )
+            assertSupportedHudModule(module);
           module.revision =
             old &&
             canonicalJson({ ...old, revision: '' }) === canonicalJson({ ...module, revision: '' })
@@ -911,6 +924,14 @@ export class BroadcastConfigStore {
           throw new Error('active_mutation_forbidden');
         if (input.active) {
           const { kind, value, lock } = input.active;
+          if (
+            kind === 'hud' &&
+            value &&
+            'renderer' in value &&
+            value.renderer === 'native' &&
+            !isSupportedHudPauseVisual(value.overlays.pause.visual)
+          )
+            throw new Error('capability_unsupported');
           const active = structuredClone(previous);
           if (!sameEffectiveModule(kind, previous.resolved[kind], value))
             active.moduleRevisions[kind] = randomUUID();

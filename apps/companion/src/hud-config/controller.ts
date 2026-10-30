@@ -214,6 +214,10 @@ export function registerHudConfigRoutes(
         });
       }
       if (error instanceof HudConfigPersistenceError) {
+        if (error.cause instanceof Error && error.cause.message === 'capability_unsupported')
+          return reply
+            .code(422)
+            .send({ error: 'capability_unsupported', message: 'HUD 配置包含尚不支持的暂停样式。' });
         request.log.error({ err: error.cause }, 'HUD 配置持久化失败');
         return reply.code(500).send({
           error: 'hud_config_persistence_failed',

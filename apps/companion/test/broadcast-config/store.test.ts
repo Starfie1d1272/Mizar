@@ -24,6 +24,8 @@ import {
 } from '@mizar/hud-config';
 import {
   clonePreset,
+  parseBroadcastDisplayConfig,
+  HUD_PAUSE_VISUALS,
   parseModuleRecord,
   type BroadcastConfigDocument,
   type ProgramVisualConfigV1,
@@ -76,7 +78,7 @@ function fixture(): BroadcastConfigDocument {
           layout,
           theme: getBuiltinTheme(),
           overlays: {
-            pause: { enabled: true, visual: 'default' },
+            pause: { enabled: true, visual: 'legacy' },
             chat: { enabled: true, placement: Object.values(layout.widgets)[0]! },
           },
           accent: { source: 'event', fallback: getBuiltinTheme().brandColor },
@@ -119,7 +121,7 @@ function fixture(): BroadcastConfigDocument {
           renderer: 'native',
           config: getBuiltinResolvedPreset(),
           overlays: {
-            pause: { enabled: true, visual: 'default' },
+            pause: { enabled: true, visual: 'legacy' },
             chat: { enabled: true, placement: Object.values(layout.widgets)[0]! },
           },
           accent: { source: 'event', fallback: getBuiltinTheme().brandColor },
@@ -154,6 +156,136 @@ async function setup() {
   await store.load();
   return { store, options, initial: store.snapshot };
 }
+describe('HUD pause capability compatibility', () => {
+  it('accepts each implemented style and rejects new unsupported drafts atomically', async () => {
+    const { store, initial } = await setup();
+    const source = initial.modules.find((item) => item.kind === 'hud')!;
+    if (source.kind !== 'hud' || !('preset' in source.value))
+      throw new Error('expected native HUD');
+    let copy = await store.cloneModule(source.id, source.revision, 'copy');
+    if (copy.kind !== 'hud' || !('preset' in copy.value)) throw new Error('expected native HUD');
+    for (const visual of HUD_PAUSE_VISUALS) {
+      if (copy.kind !== 'hud' || !('preset' in copy.value)) throw new Error('expected native HUD');
+      copy.value.overlays.pause.visual = visual;
+      const saved = await store.saveModule(copy, copy.revision);
+      if (saved.kind !== 'hud' || !('preset' in saved.value))
+        throw new Error('expected native HUD');
+      copy = saved;
+    }
+    const before = store.snapshot;
+    if (copy.kind !== 'hud' || !('preset' in copy.value)) throw new Error('expected native HUD');
+    copy.value.overlays.pause.visual = 'future-unsupported';
+    await expect(store.saveModule(copy, copy.revision)).rejects.toThrow('capability_unsupported');
+    await expect(
+      store.save({
+        preset: before.presets[0]!,
+        expectedPresetRevision: before.presets[0]!.revision,
+        modules: [{ value: copy, expectedRevision: copy.revision }],
+      }),
+    ).rejects.toThrow('capability_unsupported');
+    await expect(
+      store.importBatch({
+        source: { id: 'test', version: '1', digest: 'a'.repeat(64) },
+        modules: [copy],
+        presets: [],
+        moduleEntries: { hud: [copy.id] },
+        presetEntries: {},
+      }),
+    ).rejects.toThrow('capability_unsupported');
+    expect(store.snapshot).toEqual(before);
+  });
+
+  it('reads historical unknown styles, projects only the pause fallback and refuses to clone or activate them', async () => {
+    const { options } = await setup();
+    const old = fixture();
+    const hud = old.modules[0]!;
+    if (
+      hud.kind !== 'hud' ||
+      !('preset' in hud.value) ||
+      old.active.resolved.hud.renderer !== 'native'
+    )
+      throw new Error('expected native HUD');
+    hud.value.overlays.pause = { enabled: false, visual: 'future-unsupported' };
+    const oldHud = old.active.resolved.hud;
+    oldHud.overlays.pause = { enabled: false, visual: 'future-unsupported' };
+    oldHud.overlays.chat.enabled = false;
+    const store = new BroadcastConfigStore({
+      ...options,
+      filePath: join(dirname(options.filePath), 'historical.json'),
+      createInitial: () => Promise.resolve(old),
+    });
+    await store.load();
+    const before = store.snapshot;
+    const app = Fastify();
+    registerBroadcastConfigRoutes(app, store, createLocalWebOriginPolicy());
+    try {
+      const response = await app.inject('/local/v1/broadcast-display-config');
+      expect(response.headers['x-mizar-hud-fallback']).toBe('unsupported_pause_visual');
+      const display = parseBroadcastDisplayConfig(response.json());
+      expect(display.hud).toEqual({
+        ...oldHud,
+        overlays: {
+          ...oldHud.overlays,
+          pause: { enabled: false, visual: 'legacy' },
+        },
+      });
+      expect(store.snapshot).toEqual(before);
+      expect(() =>
+        parseBroadcastDisplayConfig({ ...display, hud: { ...display.hud, renderer: 'unknown' } }),
+      ).toThrow();
+      expect(() =>
+        parseBroadcastDisplayConfig({
+          ...display,
+          hud: {
+            ...display.hud,
+            overlays: {
+              ...oldHud.overlays,
+              pause: { enabled: false, visual: '' },
+            },
+          },
+        }),
+      ).toThrow();
+      await expect(store.cloneModule(hud.id, hud.revision, 'copy')).rejects.toThrow(
+        'capability_unsupported',
+      );
+      const request = {
+        presetId: old.presets[0]!.id,
+        expectedRevision: 'p1',
+        expectedModuleRevisions: { hud: 'h1', program: 'p1' },
+        expectedActiveRevision: 'active',
+        requestId: randomUUID(),
+      };
+      await expect(
+        store.clone({
+          sourceId: request.presetId,
+          expectedRevision: request.expectedRevision,
+          expectedModuleRevisions: request.expectedModuleRevisions,
+          name: 'copy',
+        }),
+      ).rejects.toThrow('capability_unsupported');
+      const response422 = await app.inject({
+        method: 'POST',
+        url: '/operator/broadcast-presets/preview',
+        headers: { origin: 'http://127.0.0.1:3000' },
+        payload: request,
+      });
+      expect(response422.statusCode).toBe(422);
+      expect(response422.json().error.code).toBe('capability_unsupported');
+      await expect(
+        store.updateFromLegacy({
+          updateDraft() {},
+          active: { kind: 'hud', value: oldHud, lock: old.active.lock },
+        }),
+      ).rejects.toThrow('capability_unsupported');
+      await expect(store.preview(request)).rejects.toThrow('capability_unsupported');
+      await expect(store.apply(request)).rejects.toThrow('capability_unsupported');
+      expect(store.snapshot).toEqual(before);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
 describe('BroadcastConfigStore', () => {
   it('synchronizes imported and batch-edited HUD drafts with the editor without activation', async () => {
     const { options, initial } = await setup();

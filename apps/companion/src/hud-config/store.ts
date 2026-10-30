@@ -393,6 +393,8 @@ export class HudConfigStore {
         this.document = candidate;
         this.persistenceError = null;
       } catch (error: unknown) {
+        if (error instanceof Error && error.message === 'capability_unsupported')
+          throw new HudConfigPersistenceError(error);
         this.persistenceError = error instanceof Error ? error.message : String(error);
         this.onDiagnostic('hud_config_persist_failed', error);
         throw new HudConfigPersistenceError(error);
