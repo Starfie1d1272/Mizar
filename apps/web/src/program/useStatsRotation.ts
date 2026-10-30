@@ -16,10 +16,10 @@ export function useStatsRotation(enabled: boolean, matchId: string | null): Card
     if (!enabled || !matchId) return;
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
-    let index = 0;
+    const shown = new Set<string>();
     const main = () => {
       setVisible(null);
-      index = 0;
+      shown.clear();
       timer = setTimeout(() => void next(), 20_000);
     };
     const next = async () => {
@@ -36,13 +36,14 @@ export function useStatsRotation(enabled: boolean, matchId: string | null): Card
           main();
           return;
         }
-        const cards = statsProgramInserts(parsed.data);
+        const index = parsed.data.pages.findIndex((page) => !shown.has(page.id));
         const page = parsed.data.pages[index];
-        const card = cards[index++];
+        const card = statsProgramInserts(parsed.data)[index];
         if (!page || !card) {
           main();
           return;
         }
+        shown.add(page.id);
         setVisible({ matchId, card });
         timer = setTimeout(() => void next(), shortPages.has(page.kind) ? 12_000 : 15_000);
       } catch {

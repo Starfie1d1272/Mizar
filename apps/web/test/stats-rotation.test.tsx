@@ -89,3 +89,25 @@ it('ignores a late response after a match change', async () => {
   expect(host.textContent).toBe('MAIN');
   await act(async () => root.unmount());
 });
+
+it('does not skip an unshown page when an earlier page disappears at refresh', async () => {
+  vi.useFakeTimers();
+  const data = structuredClone(fixture);
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => Response.json(data)),
+  );
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  function Rotation() {
+    const card = useStatsRotation(true, fixture.matchId);
+    return <span>{card?.id ?? 'MAIN'}</span>;
+  }
+  await act(async () => root.render(<Rotation />));
+  await act(async () => vi.advanceTimersByTimeAsync(20_000));
+  expect(host.textContent).toBe('match');
+  data.pages.shift();
+  await act(async () => vi.advanceTimersByTimeAsync(15_000));
+  expect(host.textContent).toBe('lineup');
+  await act(async () => root.unmount());
+});
