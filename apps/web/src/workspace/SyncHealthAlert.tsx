@@ -26,13 +26,25 @@ export function syncHealthText(health?: SyncHealth): string {
     case 'permission_denied':
       return '网站未授权本机同步，请核对权限';
     case 'context_conflict':
-      return '比赛资料需要核对，请刷新资料';
+    case 'context_stale':
+      return '比赛资料需要刷新并确认；等待新比赛数据。';
+    case 'sequence_stale':
+      return '网站记录的比赛进度与本机不一致，请核对后处理。';
+    case 'generation_fence':
+    case 'epoch_fence':
+      return '网站尚未确认比赛连续性，请核对数据源与比赛进度。';
+    case 'authority_changed':
+      return '网站数据源归属已变化，请核对当前接管设备。';
+    case 'idempotency_conflict':
+    case 'invalid_schema':
+      return '网站拒绝了本场数据，请导出诊断并核对网站状态。';
     case 'source_unavailable':
       return '本机尚未认领，本场未同步到网站';
     case 'map_start_pending':
       return '本场开局仍未获网站确认';
     case 'map_start_rejected':
-      return '网站未接受本场开局，请核对比赛资料';
+    case 'http_400':
+      return '网站未接受本场开局，请核对网站状态并导出诊断。';
     case 'network_failed':
     case 'timeout':
       return '网站同步连接未完成，请检查网络后重试';
@@ -166,7 +178,23 @@ function SyncHealthIncident({
           <Button disabled={busy} onClick={() => void run(() => onOpen('/settings?tab=gsi'))}>
             检查游戏连接
           </Button>
-        ) : (
+        ) : reason === 'context_stale' ? (
+          <Button
+            disabled={busy}
+            onClick={() => void run(() => command('/operator/rivalhub/refresh'))}
+          >
+            刷新比赛资料
+          </Button>
+        ) : [
+            'sequence_stale',
+            'generation_fence',
+            'epoch_fence',
+            'authority_changed',
+            'idempotency_conflict',
+            'invalid_schema',
+            'map_start_rejected',
+            'http_400',
+          ].includes(reason ?? '') ? null : (
           <Button
             disabled={busy}
             aria-busy={busy}

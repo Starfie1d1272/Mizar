@@ -210,6 +210,23 @@ export function businessEvidence(value: unknown) {
     binding: pick(input.binding, ['bound', 'unbound', 'needs_operator']),
     telemetry: pick(input.telemetry, ['awaiting', 'fresh', 'stale']),
     status: pick(input.status, ['pending', 'accepted', 'rejected', 'expired', 'superseded']),
+    rejectionReason: pick(input.rejectionReason, [
+      'context_stale',
+      'sequence_stale',
+      'generation_fence',
+      'epoch_fence',
+      'authority_changed',
+      'idempotency_conflict',
+      'invalid_schema',
+    ]),
+    recovery: pick(input.recovery, ['refresh_context', 'reconcile', 'none']),
+    requestId:
+      typeof input.requestId === 'string' &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        input.requestId,
+      )
+        ? input.requestId
+        : null,
     reason: isReason(input.reason) ? input.reason : null,
     issues: Array.isArray(input.issues)
       ? [

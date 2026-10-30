@@ -55,6 +55,7 @@ export class OutputService {
   private pendingMapStart: { revision: number; key: string } | undefined;
   private lastMapObservation: ReliableEventV1['cursor'] | undefined;
   private recoveredCursor: ReliableEventV1['cursor'] | undefined;
+  private readonly boundaryEnqueues = new Set<ReliableEventV1>();
   private retryPending = false;
   private outboundUnsubscribe: (() => Promise<void>) | undefined;
   private outboundTimer: ReturnType<typeof setInterval> | undefined;
@@ -423,13 +424,18 @@ export class OutputService {
       if (candidate !== null) candidates.push(candidate);
       return candidate;
     };
-    if (result.disposition.reason === 'source-generation-advanced')
-      add(
+    if (result.disposition.reason === 'source-generation-advanced') {
+      const boundary = add(
         'source_generation_changed',
         'runtime-continuity',
         null,
         Math.max(0, bundle.program.cursor.programSourceGeneration - 1),
       );
+      if (boundary) {
+        candidates.pop();
+        candidates.unshift(boundary);
+      }
+    }
     if (
       previous?.program.series?.status !== 'live' &&
       bundle.program.series?.status === 'live' &&
@@ -444,8 +450,21 @@ export class OutputService {
       this.outbox !== undefined
     ) {
       const event = add('map_started', 'runtime-transition');
-      if (event)
-        this.pendingMapStart = { revision: this.mapStartRevision, key: event.idempotencyKey };
+      if (event) {
+        const boundaries = [...this.boundaryEnqueues, ...candidates].filter(
+          (candidate) =>
+            (candidate.kind === 'source_generation_changed' ||
+              candidate.kind === 'map_epoch_changed') &&
+            candidate.matchId === event.matchId &&
+            candidate.cursor.producerInstanceId === event.cursor.producerInstanceId &&
+            candidate.cursor.liveSessionId === event.cursor.liveSessionId &&
+            candidate.cursor.runtimeSeq <= event.cursor.runtimeSeq &&
+            candidate.cursor.programSourceGeneration <= event.cursor.programSourceGeneration &&
+            candidate.cursor.mapEpoch <= event.cursor.mapEpoch,
+        );
+        if (boundaries.length || this.outbox.hasUnconfirmedBoundary(event)) candidates.pop();
+        else this.pendingMapStart = { revision: this.mapStartRevision, key: event.idempotencyKey };
+      }
     }
     if (
       previous?.program.series?.status !== 'completed' &&
@@ -473,6 +492,9 @@ export class OutputService {
         lineup.every((id) => /^\d{17}$/.test(id))
           ? lineup
           : undefined;
+      const boundary =
+        event.kind === 'source_generation_changed' || event.kind === 'map_epoch_changed';
+      if (boundary) this.boundaryEnqueues.add(event);
       void this.outbox
         ?.enqueue(
           event,
@@ -484,8 +506,12 @@ export class OutputService {
           if (start !== undefined && start.revision === this.mapStartRevision)
             this.publishedMapStart = start;
         })
-        .catch(() => this.onDiagnostic?.('outbox_enqueue_failed'))
+        .catch(() => {
+          if (boundary) this.quarantined = true;
+          this.onDiagnostic?.('outbox_enqueue_failed');
+        })
         .finally(() => {
+          if (boundary) this.boundaryEnqueues.delete(event);
           if (start !== undefined && this.pendingMapStart === start)
             this.pendingMapStart = undefined;
         });
@@ -510,8 +536,8 @@ export class OutputService {
           (event, lineup) => this.isCurrentForRetry(event, lineup),
           this.now(),
         );
-      else
-        await this.outbox.flush({
+      else {
+        const invalidatedStarts = await this.outbox.flush({
           sink: this.sink,
           now: this.now(),
           isCurrent: (event, lineup) => this.quarantined || this.isCurrentForRetry(event, lineup),
@@ -592,6 +618,9 @@ export class OutputService {
             return allowed;
           },
         });
+        if (this.publishedMapStart && invalidatedStarts.includes(this.publishedMapStart.key))
+          this.publishedMapStart = undefined;
+      }
     } catch {
       this.onDiagnostic?.('outbox_retry_failed');
     } finally {
@@ -625,6 +654,19 @@ export class OutputService {
       )
     )
       return false;
+    // Continuity transitions belong to the same producer and live session even
+    // after a compatible context refresh or a later map/generation. Preserve the
+    // original event and let the receiver acknowledge the chain in order.
+    if (
+      (event.kind === 'source_generation_changed' || event.kind === 'map_epoch_changed') &&
+      binding.context.matchId === event.matchId &&
+      bundle.program.cursor.producerInstanceId === event.cursor.producerInstanceId &&
+      event.cursor.liveSessionId !== null &&
+      bundle.program.cursor.liveSessionId === event.cursor.liveSessionId &&
+      bundle.program.cursor.programSourceGeneration >= event.cursor.programSourceGeneration &&
+      bundle.program.cursor.mapEpoch >= event.cursor.mapEpoch
+    )
+      return true;
     const recovered = this.recoveredCursor;
     const recoveredEvent =
       recovered !== undefined &&
@@ -661,6 +703,13 @@ export class OutputService {
       !this.isCurrentForRetry(event, lineup)
     )
       return false;
+    if (
+      (event.kind === 'source_generation_changed' || event.kind === 'map_epoch_changed') &&
+      (bundle.program.cursor.mapEpoch !== event.cursor.mapEpoch ||
+        bundle.program.cursor.programSourceGeneration !== event.cursor.programSourceGeneration ||
+        this.binding.manifest.revision !== event.contextRevision)
+    )
+      return event.evidence.contextFresh;
     if (
       (event.kind === 'map_player_snapshot' ||
         (['map_started', 'map_epoch_changed', 'map_ended'].includes(event.kind) &&
