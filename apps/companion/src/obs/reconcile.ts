@@ -583,12 +583,14 @@ export async function ensureObsConfiguration(
   obs: ObsRpc,
   baseUrl: string,
   activeScene: () => ProgramSceneId = () => 'waiting',
+  allowCollectionChange = false,
 ): Promise<ObsFinding[]> {
   const findings = await checkObsConfiguration(obs, baseUrl);
   if (findings.some((finding) => finding.code === 'source_kind_conflict')) return findings;
   if (
     findings.some((finding) => ['collection_missing', 'collection_inactive'].includes(finding.code))
   ) {
+    if (!allowCollectionChange) return findings;
     const repaired = await repairObsConfiguration(obs, baseUrl);
     if (
       !repaired.some((item) =>

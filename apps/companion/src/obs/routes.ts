@@ -42,6 +42,7 @@ export function registerObsRoutes(
     readonly configStore: ObsConfigStore;
     readonly originPolicy: LocalWebOriginPolicy;
     readonly activeScene: () => ProgramSceneId;
+    readonly preparationValid: (revision: unknown) => () => boolean;
     readonly gameAudio?: GameAudioController;
     readonly musicDirector?: () => MusicDirector | undefined;
     readonly readCaptureEvidence?: () => Promise<ObsNativeEvidence>;
@@ -320,11 +321,16 @@ export function registerObsRoutes(
             { event: 'obs', stage: 'obs_preparation_start', action },
             'OBS preparation started',
           );
+          const body = request.body as { expectedRevision?: unknown } | null;
+          const valid = options.preparationValid(body?.expectedRevision);
+          const connected = () => !request.raw.aborted && !reply.raw.destroyed;
+          if (action !== 'check' && (!valid() || !connected()))
+            return reply.code(409).send({ message: '制作状态已变化，请刷新后重试。' });
           const findings =
             action === 'ensure'
-              ? await options.adapter.ensure(options.activeScene)
+              ? await options.adapter.ensure(options.activeScene, () => valid() && connected())
               : action === 'repair'
-                ? await options.adapter.repair(options.activeScene)
+                ? await options.adapter.repair(options.activeScene, () => valid() && connected())
                 : await options.adapter.check();
           request.log.info(
             {

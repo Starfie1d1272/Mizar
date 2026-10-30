@@ -869,11 +869,16 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             },
           }),
     obsAdapter === undefined ? undefined : (options) => obsAdapter.switchToWaitingForExit(options),
-    obsAdapter === undefined ? undefined : (visible) => obsAdapter.setBpCompactVisible(visible),
+    obsAdapter === undefined
+      ? undefined
+      : (visible, valid) => obsAdapter.setBpCompactVisible(visible, valid),
     () => bpPresentationSettings.get().mode,
     () => obsAdapter?.gameBackgroundReady() ?? Promise.resolve(false),
   );
   obsAdapter?.onBpDisconnect(() => sceneController.compactDisconnected());
+  obsAdapter?.onProgramChanged(() => {
+    if (production?.get().mode !== 'preparation') sceneController.holdAutomatic();
+  });
   if (options.steamAvatars) {
     options.steamAvatars.onChanged(() => projectionCoordinator.refresh());
     registerSteamAvatarRoutes(app, options.steamAvatars, localWebTransport.getOriginPolicy());
@@ -891,13 +896,15 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   registerProgramSceneRoutes(app, {
     originPolicy: localWebTransport.getOriginPolicy(),
     controller: sceneController,
+    canControl: () => production.canControl(),
   });
   if (obsConfigStore !== undefined && obsAdapter !== undefined) {
-    // Browser sources that opened before HTTP readiness otherwise stay on
-    // Chromium's connection-error page and never run the WebSocket retry code.
     app.addHook('onListen', () => {
-      obsAdapter.startBrowserRecovery();
-      obsAdapter.startCommentaryRecovery(musicDirector, gameAudio);
+      obsAdapter.startCommentaryRecovery(
+        musicDirector,
+        gameAudio,
+        () => production.automaticAllowed() && obsAdapter.hasCurrentPreparation(),
+      );
       return Promise.resolve();
     });
     registerObsRoutes(app, {
@@ -910,6 +917,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         ? { readCaptureEvidence: options.readObsCaptureEvidence }
         : {}),
       activeScene: () => sceneController.get().active,
+      preparationValid: (revision) => production.preparationValid(revision),
     });
   }
   let previousBindingOrigin: string | undefined = options.matchContextBinding?.origin;
@@ -1082,6 +1090,13 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       demoTest?.openFormalBoundary();
     },
     onEnter: () => {
+      obsAdapter?.resumeAutomatic();
+      obsAdapter?.startBrowserRecovery();
+      obsAdapter?.startCommentaryRecovery(
+        musicDirector,
+        gameAudio,
+        () => production.automaticAllowed() && obsAdapter.hasCurrentPreparation(),
+      );
       cameraDirector?.beginProduction();
       statsProductionActive = true;
       const binding = matchContextController?.getActiveBinding() ?? options.matchContextBinding;
@@ -1095,10 +1110,12 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       statsProductionActive = false;
       options.rivalhubConnection?.clearStats();
     },
-    beforeFinish: () => {
+    beforeExit: () => {
+      obsAdapter?.pauseAutomatic();
       cameraDirector?.finishProduction();
       observerSettings.endProduction();
     },
+    beforeFinish: () => obsAdapter?.settleAutomatic(),
     finishTrial: async () => {
       await demoTest?.finish();
     },
@@ -1328,11 +1345,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         : null,
     });
   });
-  const director = new ProgramDirector(
-    projectionCoordinator,
-    sceneController,
-    bpSession,
-    () => production.get().mode !== 'preparation',
+  const director = new ProgramDirector(projectionCoordinator, sceneController, bpSession, () =>
+    production.automaticAllowed(),
   );
   if (obsConfigStore && options.obsConfigPath) {
     const musicStore = new MusicStore(
@@ -1383,7 +1397,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         program: projectionCoordinator.getCurrent().program,
         active: sceneController.get().active,
         production:
-          production.get().mode !== 'preparation' &&
+          production.automaticAllowed() &&
           projectionCoordinator.getCurrent().operator.matchContext.origin !== 'fixture',
       }),
       Date.now,
@@ -1551,7 +1565,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         program: projectionCoordinator.getCurrent().program,
         active: sceneController.get().active,
         production:
-          production.get().mode !== 'preparation' &&
+          production.automaticAllowed() &&
           !waitingObserverMap &&
           projectionCoordinator.getCurrent().operator.matchContext.origin !== 'fixture',
         demoAudition: demoTest.get().active ? demoTest.canUseCamera('audition') : undefined,
@@ -1659,8 +1673,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         gameAudioTruth(
           projection.program,
           sceneController.get().active,
-          production.get().mode !== 'preparation' &&
-            projection.operator.matchContext.origin !== 'fixture',
+          production.automaticAllowed() && projection.operator.matchContext.origin !== 'fixture',
         ),
       );
     }
@@ -1757,9 +1770,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   });
   registerDemoTestRoutes(app, demoTest, options.productRuntime?.controlToken);
   observerEligible = () =>
-    production.get().mode !== 'preparation' &&
-    !production.isTrialPending() &&
-    !demoTest.get().active;
+    production.automaticAllowed() && !production.isTrialPending() && !demoTest.get().active;
   registerObserverSettings(app, observerSettings, localWebTransport.getOriginPolicy());
   const observerSettingsUnsubscribe = observerSettings.subscribe((kind) => {
     if (kind === 'name') {
