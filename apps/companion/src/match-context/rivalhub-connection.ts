@@ -299,7 +299,7 @@ export class RivalHubConnection {
     generation: number;
     fetchedAt: string | null;
     retryAt: number;
-    blocked: 'authorization' | 'invalid-response' | null;
+    blocked: 'authorization' | null;
     abort: AbortController;
   } | null = null;
 
@@ -325,7 +325,7 @@ export class RivalHubConnection {
     const scope = this.statsScope;
     if (scope.pending) return scope.pending;
     if (scope.blocked === 'authorization') return null;
-    if (!refresh && (scope.value || scope.blocked)) return scope.value;
+    if (!refresh && scope.value) return scope.value;
     if (this.monotonicNow() < scope.retryAt) return refresh ? null : scope.value;
     if (refresh) scope.blocked = null;
     const generation = ++scope.generation;
@@ -337,12 +337,7 @@ export class RivalHubConnection {
     const retry = (header: string | null = null) => {
       if (current()) scope.retryAt = this.monotonicNow() + statsRetryDelay(header);
     };
-    const invalid = () => {
-      if (current()) {
-        scope.blocked = 'invalid-response';
-        scope.retryAt = this.monotonicNow() + STATS_RETRY_MS;
-      }
-    };
+    const invalid = () => retry();
     const pending = (async () => {
       try {
         const response = await this.request(`stats?matchId=${encodeURIComponent(matchId)}`, {
@@ -406,6 +401,13 @@ export class RivalHubConnection {
     return this.statsScope?.installation === this.installation &&
       this.statsScope.matchId === matchId
       ? this.statsScope.fetchedAt
+      : null;
+  }
+  /** Read the current snapshot without waiting for or starting a website request. */
+  getStatsSnapshot(matchId: string): BroadcastStats | null {
+    const scope = this.statsScope;
+    return scope && scope.installation === this.installation && scope.matchId === matchId
+      ? scope.value
       : null;
   }
   async getStats(matchId: string): Promise<BroadcastStats | null> {

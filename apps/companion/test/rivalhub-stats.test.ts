@@ -307,7 +307,7 @@ it('retries indefinitely on transient failures with shared cooldown and stops on
   }
 });
 
-it('blocks invalid identity and oversized data from automatic retries while allowing a cooled manual retry', async () => {
+it('retries invalid identity and oversized data until a valid snapshot arrives', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'mizar-stats-invalid-'));
   try {
     const path = join(directory, 'connection.json');
@@ -332,14 +332,14 @@ it('blocks invalid identity and oversized data from automatic retries while allo
     expect(await connection.stats(fixture.matchId)).toBeNull();
     now = 1_000_000;
     expect(await connection.stats(fixture.matchId)).toBeNull();
-    expect(fetcher).toHaveBeenCalledTimes(1);
-    expect(await connection.stats(fixture.matchId, true)).toBeNull();
-    now += 30_000;
-    expect(await connection.stats(fixture.matchId)).toBeNull();
     expect(fetcher).toHaveBeenCalledTimes(2);
-    expect(await connection.stats(fixture.matchId, true)).toMatchObject({
+    now += 30_000;
+    expect(await connection.stats(fixture.matchId)).toMatchObject({
       revision: fixture.revision,
     });
+    now += 1_000_000;
+    expect(await connection.stats(fixture.matchId)).toMatchObject({ revision: fixture.revision });
+    expect(fetcher).toHaveBeenCalledTimes(3);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
