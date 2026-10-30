@@ -193,6 +193,76 @@ it('freezes halftime and permits only same-execution final evidence to settle', 
     ...base,
     map: { ...base.map, phase: 'intermission' as const, score: { ct: 6, t: 6 } },
   };
+  const recovery = new ProgramPresentationStore();
+  recovery.update(
+    {
+      ...halftime,
+      players: halftime.players.map((p) => ({ ...p, lineupEvidence: 'retained' as const })),
+    },
+    'r',
+  );
+  expect(recovery.get().halftime!.players).toEqual({ a: [], b: [] });
+  const partial = {
+    ...halftime,
+    cursor: {
+      ...halftime.cursor,
+      runtimeSeq: halftime.cursor.runtimeSeq + 1,
+      programReceiveSequence: (halftime.cursor.programReceiveSequence ?? 0) + 1,
+    },
+    players: halftime.players.slice(0, 2),
+  };
+  recovery.update(partial, 'r');
+  const firstEntries = recovery.get().halftime!.players;
+  expect(firstEntries.a.length + firstEntries.b.length).toBe(2);
+  const complete = {
+    ...halftime,
+    cursor: {
+      ...halftime.cursor,
+      runtimeSeq: halftime.cursor.runtimeSeq + 2,
+      programReceiveSequence: (halftime.cursor.programReceiveSequence ?? 0) + 2,
+    },
+    players: halftime.players.map((p) => ({ ...p, displayName: 'later' })),
+  };
+  recovery.update(
+    {
+      ...complete,
+      cursor: {
+        ...complete.cursor,
+        programSourceGeneration: complete.cursor.programSourceGeneration + 1,
+      },
+    },
+    'r',
+  );
+  expect(recovery.get().halftime!.players).toEqual(firstEntries);
+  recovery.update(complete, 'r');
+  const restored = recovery.get().halftime!;
+  expect(restored.players.a).toHaveLength(5);
+  expect(restored.players.b).toHaveLength(5);
+  for (const side of ['a', 'b'] as const)
+    for (const player of firstEntries[side])
+      expect(restored.players[side].find((p) => p.id === player.id)).toEqual(player);
+  recovery.update(
+    {
+      ...complete,
+      cursor: { ...complete.cursor, runtimeSeq: complete.cursor.runtimeSeq + 1 },
+      map: { ...complete.map, phase: 'live' },
+      clock: { phase: 'live', endsInSeconds: 90 },
+      players: complete.players.map((p) => ({ ...p, displayName: 'second half' })),
+    },
+    'r',
+  );
+  expect(recovery.get().halftime).toEqual(restored);
+  recovery.update(
+    {
+      ...complete,
+      cursor: { ...complete.cursor, mapEpoch: complete.cursor.mapEpoch + 1 },
+      players: [],
+    },
+    'r',
+  );
+  const newExecution = recovery.get().halftime!;
+  recovery.update(complete, 'r');
+  expect(recovery.get().halftime).toEqual(newExecution);
   store.update(halftime, 'r');
   const frozen = store.get().halftime!;
   const changed = {
