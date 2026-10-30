@@ -155,6 +155,11 @@ export class BusinessJournal {
       ...event.evidence,
       ...payload,
       status: record.status,
+      receiverOutcome: record.receiverOutcome,
+      recoveryState: record.recoveryState,
+      rejectionReason: record.rejection?.reason,
+      requestId: record.rejection?.requestId,
+      recovery: record.rejection?.recovery,
       attempts: record.attempts,
       reason,
     });

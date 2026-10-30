@@ -25,14 +25,38 @@ export function syncHealthText(health?: SyncHealth): string {
       return '网站授权已失效，请重新连接';
     case 'permission_denied':
       return '网站未授权本机同步，请核对权限';
+    case 'reliable_needs_attention':
+      return '网站已记录本场数据，但比赛状态需要核对。';
+    case 'continuity_chain_missing':
+      return '缺少可确认的比赛连续性记录，请核对数据源与比赛进度。';
+    case 'continuity_waiting':
+      return '正在等待网站确认比赛连续性。';
+    case 'context_refreshing':
+      return '正在刷新比赛资料。';
+    case 'context_reconfirming':
+      return '比赛资料已刷新，正在等待新比赛数据重新确认。';
+    case 'context_recovery_blocked':
+      return '比赛资料或数据源需要核对，请检查后处理。';
     case 'context_conflict':
-      return '比赛资料需要核对，请刷新资料';
+    case 'context_stale':
+      return '比赛资料需要刷新并确认；等待新比赛数据。';
+    case 'sequence_stale':
+      return '网站记录的比赛进度与本机不一致，请核对后处理。';
+    case 'generation_fence':
+    case 'epoch_fence':
+      return '网站尚未确认比赛连续性，请核对数据源与比赛进度。';
+    case 'authority_changed':
+      return '网站数据源归属已变化，请核对当前接管设备。';
+    case 'idempotency_conflict':
+    case 'invalid_schema':
+      return '网站拒绝了本场数据，请导出诊断并核对网站状态。';
     case 'source_unavailable':
       return '本机尚未认领，本场未同步到网站';
     case 'map_start_pending':
       return '本场开局仍未获网站确认';
     case 'map_start_rejected':
-      return '网站未接受本场开局，请核对比赛资料';
+    case 'http_400':
+      return '网站未接受本场开局，请核对网站状态并导出诊断。';
     case 'network_failed':
     case 'timeout':
       return '网站同步连接未完成，请检查网络后重试';
@@ -166,7 +190,29 @@ function SyncHealthIncident({
           <Button disabled={busy} onClick={() => void run(() => onOpen('/settings?tab=gsi'))}>
             检查游戏连接
           </Button>
-        ) : (
+        ) : reason === 'context_stale' ? (
+          <Button
+            disabled={busy}
+            onClick={() => void run(() => command('/operator/rivalhub/refresh'))}
+          >
+            刷新比赛资料
+          </Button>
+        ) : [
+            'sequence_stale',
+            'generation_fence',
+            'epoch_fence',
+            'authority_changed',
+            'idempotency_conflict',
+            'invalid_schema',
+            'continuity_chain_missing',
+            'continuity_waiting',
+            'context_refreshing',
+            'context_reconfirming',
+            'context_recovery_blocked',
+            'reliable_needs_attention',
+            'map_start_rejected',
+            'http_400',
+          ].includes(reason ?? '') ? null : (
           <Button
             disabled={busy}
             aria-busy={busy}

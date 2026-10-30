@@ -17,8 +17,41 @@ import { broadcastStatsSchema, type BroadcastStats } from '@mizar/protocol/broad
 import { redactDiagnosticText, diagnosticNetworkCode } from '../updates/diagnostics.js';
 import {
   RELIABLE_SEND_TIMEOUT_MS,
+  parseReliableRejection,
   type ReliableDeliveryResult,
 } from '../output/reliable-outbox.js';
+
+// Read only a small, time-limited classified rejection. Never retain raw body text.
+async function readReliableBody(response: Response): Promise<unknown> {
+  const reader = response.body?.getReader();
+  if (!reader) return undefined;
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  const timeout = AbortSignal.timeout(1000);
+  const deadline = new Promise<never>((_, reject) =>
+    timeout.addEventListener('abort', () => reject(new Error('timeout')), { once: true }),
+  );
+  try {
+    for (;;) {
+      const part = await Promise.race([reader.read(), deadline]);
+      if (part.done) break;
+      size += part.value.byteLength;
+      if (size > 4096) return undefined;
+      chunks.push(part.value);
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+  } catch {
+    return undefined;
+  } finally {
+    void reader.cancel().catch(() => undefined);
+  }
+}
 
 type Installation = {
   baseUrl: string;
@@ -565,6 +598,22 @@ export class RivalHubConnection {
     return result('attention', reason);
   }
 
+  setContextRecoveryProgress(
+    event: ReliableEventV1,
+    authority: string,
+    state:
+      | 'context_refreshing'
+      | 'context_reconfirming'
+      | 'context_recovery_blocked'
+      | 'continuity_chain_missing'
+      | 'continuity_waiting',
+  ): void {
+    if (this.reliableAuthorityScope() !== authority || this.stoppedMatchId === event.matchId)
+      return;
+    this.controlFailureScope = this.failureScope(event);
+    this.controlFailure = state;
+  }
+
   retryLive(): void {
     this.nextLiveAt = 0;
     this.liveFailures = 0;
@@ -747,7 +796,7 @@ export class RivalHubConnection {
           init.signal ?? AbortSignal.timeout(operation === 'live' ? 4000 : CONTROL_TIMEOUT_MS),
       });
       if (!response.ok && response.status !== 304) {
-        await response.body?.cancel();
+        if (operation !== 'reliable') await response.body?.cancel();
         this.onDiagnostic(operation, new Error(`RivalHub HTTP ${response.status}`));
       }
       return response;
@@ -1219,24 +1268,41 @@ export class RivalHubConnection {
         },
         body: JSON.stringify(body),
       });
-      await response.body?.cancel();
+      const readBody =
+        response.ok ||
+        (response.status !== 408 && response.status !== 429 && response.status < 500);
+      const responseData = readBody ? await readReliableBody(response) : undefined;
+      const rejection = !response.ok ? parseReliableRejection(responseData) : undefined;
+      const needsAttention =
+        response.ok &&
+        responseData !== null &&
+        typeof responseData === 'object' &&
+        !Array.isArray(responseData) &&
+        (responseData as Record<string, unknown>).outcome === 'needs_attention';
+      if (!readBody) await response.body?.cancel().catch(() => undefined);
       if (signal?.aborted || !isCurrent()) return 'retry';
       evidence({
+        receiverOutcome: needsAttention ? 'needs_attention' : undefined,
+        rejectionReason: rejection?.reason,
+        requestId: rejection?.requestId,
+        recovery: rejection?.recovery,
         reason: response.ok ? 'receiver_accepted' : `http_${response.status}`,
         httpStatus: response.status,
         acknowledgedAt: response.ok ? new Date().toISOString() : null,
       });
-      if (response.ok) return 'accepted';
+      if (response.ok)
+        return needsAttention ? { status: 'accepted', outcome: 'needs_attention' } : 'accepted';
       if (event.kind === 'map_started' && source.deliveryExecution === executionKey(event.cursor)) {
         this.controlFailureScope = this.failureScope(event);
         this.controlFailure =
-          response.status === 401
+          rejection?.reason ??
+          (response.status === 401
             ? 'authorization_expired'
             : response.status === 403
               ? 'permission_denied'
               : response.status === 409
                 ? 'context_conflict'
-                : `http_${response.status}`;
+                : `http_${response.status}`);
       }
       if (response.status === 403) {
         if (this.source === source) {
@@ -1246,7 +1312,7 @@ export class RivalHubConnection {
       }
       return response.status === 408 || response.status === 429 || response.status >= 500
         ? 'retry'
-        : 'rejected';
+        : (rejection ?? 'rejected');
     } catch (error) {
       if (
         isCurrent() &&
@@ -1573,12 +1639,44 @@ export class RivalHubConnection {
       signal,
       isCurrent,
     );
+    if (
+      typeof result === 'object' &&
+      result.status === 'accepted' &&
+      sameExecution &&
+      isCurrent() &&
+      !signal.aborted
+    ) {
+      this.controlFailureScope = this.failureScope(event);
+      this.controlFailure = 'reliable_needs_attention';
+      this.liveDelivery = {
+        ...this.liveDelivery,
+        cursor: event.cursor,
+        status: 'failing',
+        reason: 'reliable_needs_attention',
+        since: this.monotonicNow(),
+      };
+    }
+    if (
+      typeof result === 'object' &&
+      result.status === 'rejected' &&
+      sameExecution &&
+      isCurrent() &&
+      !signal.aborted &&
+      (event.kind === 'source_generation_changed' || event.kind === 'map_epoch_changed')
+    ) {
+      this.controlFailureScope = this.failureScope(event);
+      this.controlFailure = result.reason;
+    }
     if (attempt && source && isCurrent() && !signal.aborted) {
-      if (result === 'accepted') {
+      if (result === 'accepted' || (typeof result === 'object' && result.status === 'accepted')) {
         source.acknowledgedExecution = executionKey(event.cursor);
-        if (source.deliveryExecution === executionKey(event.cursor)) this.controlFailure = null;
+        if (source.deliveryExecution === executionKey(event.cursor)) {
+          if (typeof result === 'object' && result.status === 'accepted')
+            this.controlFailure = 'reliable_needs_attention';
+          else if (this.controlFailure !== 'context_reconfirming') this.controlFailure = null;
+        }
       } else if (
-        result === 'rejected' &&
+        (result === 'rejected' || (typeof result === 'object' && result.status === 'rejected')) &&
         sameExecution &&
         source.deliveryExecution === executionKey(event.cursor)
       )
