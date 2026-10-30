@@ -272,6 +272,35 @@ export function projectHistoricalProgram(
         }),
       ),
     );
+  const multiRanked = histories
+    .flatMap((team) => team?.facts?.players ?? [])
+    .filter(
+      (player) =>
+        player.maps > 0 &&
+        player.scoreboard?.mkpr.value != null &&
+        (player.scoreboard.mkpr.rounds ?? 0) > 0,
+    )
+    .sort(
+      (a, b) =>
+        b.scoreboard!.mkpr.value! - a.scoreboard!.mkpr.value! ||
+        (a.userId < b.userId ? -1 : a.userId > b.userId ? 1 : 0),
+    );
+  if (multiRanked.length >= 2)
+    chunks(multiRanked, 10).forEach((items, i, all) =>
+      pages.push(
+        page('multikill', {
+          id: i ? `multikill-${i + 1}` : 'multikill',
+          playerIds: items.map((player) => player.userId),
+          teamIndices: sides.filter((side) =>
+            items.some((player) =>
+              teams[side].starters.some((starter) => starter.userId === player.userId),
+            ),
+          ),
+          pageNumber: i + 1,
+          pageCount: all.length,
+        }),
+      ),
+    );
   const specs: Array<[Page['kind'], (team: Entrant) => boolean]> = [
     ['overview', (team) => (team.facts?.rounds?.rounds ?? 0) > 0],
     ['economy', (team) => win(team.pistol.pistol)],
@@ -291,7 +320,8 @@ export function projectHistoricalProgram(
         (!!team.facts?.utility &&
           (rate(team.facts.utility.utilityDamagePerRound) ||
             rate(team.facts.utility.flashAssistsPerRound) ||
-            rate(team.facts.utility.utilityKillsPerRound))) ||
+            rate(team.facts.utility.utilityKillsPerRound) ||
+            team.facts.utility.sample.rounds > 0)) ||
         (team.utility.available &&
           (rate(team.utility.utilityDamagePerRound) || rate(team.utility.flashAssistsPerRound))),
     ],

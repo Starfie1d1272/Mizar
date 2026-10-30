@@ -79,6 +79,7 @@ import { outboxLocalError, ReliableOutbox } from './output/reliable-outbox.js';
 import type { OnlineManifestConfig } from './match-context/http-source.js';
 import { registerOnlineManifestRoutes } from './match-context/online-routes.js';
 import {
+  registerHistoricalStatsProgramRoute,
   registerHistoricalStatsPresentationRoute,
   registerRivalHubConnectionRoutes,
 } from './match-context/rivalhub-routes.js';
@@ -1265,6 +1266,12 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     connection: options.rivalhubConnection,
     getBinding: () => matchContextController?.getActiveBinding() ?? options.matchContextBinding,
   });
+  registerHistoricalStatsProgramRoute(app, {
+    connection: options.rivalhubConnection,
+    getBinding: () => matchContextController?.getActiveBinding() ?? options.matchContextBinding,
+    getProgram: () => presentation.get(),
+    getScene: () => sceneController.get().active,
+  });
   app.get('/local/v1/broadcast-stats', async (_request, reply) => {
     const binding = matchContextController?.getActiveBinding() ?? options.matchContextBinding;
     if (
@@ -1294,6 +1301,14 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       );
       return {
         ...entry,
+        ...(entry.facts
+          ? {
+              facts: {
+                ...entry.facts,
+                players: entry.facts.players.filter((player) => ids.has(player.userId)),
+              },
+            }
+          : {}),
         starters: entry.starters.filter((player) => ids.has(player.userId)),
         playerPerformance: {
           ...entry.playerPerformance,

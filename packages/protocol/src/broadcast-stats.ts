@@ -35,6 +35,22 @@ const rounds = z.object({
   t: win,
 });
 const team = z.object({ entryId: id, name, logoUrl: media });
+const scoreboardRound = z.object({
+  value: z.number().finite().nonnegative().nullable(),
+  rounds: count.nullable(),
+});
+const scoreboard = z.object({
+  source: z.literal('confirmed-scoreboard'),
+  kpr: scoreboardRound,
+  fkpr: scoreboardRound,
+  mkpr: scoreboardRound,
+  cpr: scoreboardRound,
+  fdpr: scoreboardRound,
+  tradeKpr: scoreboardRound,
+  kast: scoreboardRound,
+  avgHs: z.object({ value: z.number().finite().nonnegative().nullable(), kills: count.nullable() }),
+  kd: z.object({ value: z.number().finite().nonnegative().nullable(), deaths: count.nullable() }),
+});
 const details = z.object({
   sample: z.object({ rounds: count }),
   kast: quantity,
@@ -154,6 +170,7 @@ export const broadcastStatsFactsSchema = z.object({
         rating: z.number().finite().nonnegative().nullable(),
         adr: z.number().finite().nonnegative().nullable(),
         kd: z.number().finite().nonnegative().nullable(),
+        scoreboard: scoreboard.nullable().optional(),
         detailed: details.nullable(),
       }),
     )

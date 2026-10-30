@@ -7,8 +7,9 @@ import legacy from '../../../tests/fixtures/rivalhub-provider-stats-v1.json' wit
 import extended from '../../../tests/fixtures/rivalhub-provider-stats-v1-extended.json' with { type: 'json' };
 import single from '../../../tests/fixtures/rivalhub-provider-stats-v1-single-sided.json' with { type: 'json' };
 import zero from '../../../tests/fixtures/rivalhub-provider-stats-v1-zero.json' with { type: 'json' };
+import scoreboardOnly from '../../../tests/fixtures/rivalhub-provider-stats-v1-scoreboard-only.json' with { type: 'json' };
 
-function binding(raw: BroadcastStats): MatchContextBinding {
+function binding(raw: BroadcastStats, excluded?: string): MatchContextBinding {
   const team = (entry: BroadcastStats['entrants'][number]) => ({
     entryId: entry.entryId,
     name: entry.name,
@@ -17,13 +18,16 @@ function binding(raw: BroadcastStats): MatchContextBinding {
       playerId: player.userId,
       displayName: player.nickname,
       avatarUrl: player.avatarUrl,
-      isStarter: true,
+      isStarter: player.userId !== excluded,
     })),
   });
   const manifestTeam = (entry: BroadcastStats['entrants'][number]) => ({
     entryId: entry.entryId,
     roster: {
-      players: entry.starters.map((player) => ({ playerId: player.userId, isStarter: true })),
+      players: entry.starters.map((player) => ({
+        playerId: player.userId,
+        isStarter: player.userId !== excluded,
+      })),
     },
   });
   return {
@@ -79,6 +83,23 @@ it('keeps the highest sampled Rating players through missing ADR and partial rad
   expect(output.pages.find((page) => page.kind === 'radar')?.playerIds[1]).toBe(top.userId);
   expect(output.radar?.mode).toBe('bars');
   expect(output.radar?.values[0]?.values[1]).toBeNull();
+});
+
+it('orders only current starters by the confirmed scoreboard multi-kill rate', () => {
+  const input = broadcastStatsSchema.parse(scoreboardOnly);
+  const first = input.entrants[0]!.facts!.players[0]!;
+  const second = input.entrants[0]!.facts!.players[1]!;
+  const active = binding(input, first.userId);
+  first.scoreboard!.mkpr.value = 0.4;
+  second.scoreboard!.mkpr.value = 0.3;
+  const output = projectHistoricalProgram(active, input, null, 'waiting');
+  const ranking = output.pages.find((page) => page.kind === 'multikill');
+  expect(ranking?.playerIds[0]).toBe(second.userId);
+  expect(ranking?.playerIds).not.toContain(first.userId);
+  expect(ranking?.teamIndices).toEqual([0]);
+  expect(output.history[0]?.facts?.players.some((player) => player.userId === first.userId)).toBe(
+    false,
+  );
 });
 
 it('uses the local series, veto and last map summary without recomputing the website snapshot', () => {
