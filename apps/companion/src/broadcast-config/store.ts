@@ -391,7 +391,7 @@ export class BroadcastConfigStore {
     this.envelope = checked;
   }
   async clone(request: ClonePresetRequest): Promise<{ presetId: string }> {
-    return this.queue.run(() =>
+    const result = await this.queue.run(() =>
       this.options.withReferenceGuard(async () => {
         if (!this.envelope) throw new Error('broadcast_config_unavailable');
         const next = structuredClone(this.envelope);
@@ -400,15 +400,20 @@ export class BroadcastConfigStore {
         next.document.presets.push(copy.preset);
         await this.options.assertReferenceCommitAllowed(this.envelope.document, next.document);
         await this.commit(next);
-        return { presetId: copy.preset.id };
+        return {
+          presetId: copy.preset.id,
+          hasHud: copy.modules.some((item) => item.kind === 'hud'),
+        };
       }),
     );
+    if (result.hasHud) await this.options.onDraftChanged?.('hud');
+    return { presetId: result.presetId };
   }
   /** Atomically installs drafts and their entry mapping without changing active configuration. */
   async importBatch(
     input: BroadcastImportBatch,
   ): Promise<{ mapping: BroadcastImportMapping; reused: boolean }> {
-    return this.queue.run(() =>
+    const result = await this.queue.run(() =>
       this.options.withReferenceGuard(async () => {
         if (!this.envelope) throw new Error('broadcast_config_unavailable');
         const mapping = importMappingSchema.parse({
@@ -537,6 +542,9 @@ export class BroadcastConfigStore {
         return { mapping: structuredClone(result), reused: false };
       }),
     );
+    if (input.modules.some((item) => item.kind === 'hud'))
+      await this.options.onDraftChanged?.('hud');
+    return result;
   }
   /** Saves the preset and its edited modules in one draft-only commit. */
   async save(input: {
@@ -544,7 +552,7 @@ export class BroadcastConfigStore {
     expectedPresetRevision: Revision | null;
     modules: { value: ModuleRecord; expectedRevision: Revision | null }[];
   }): Promise<BroadcastConfigDocument> {
-    return this.queue.run(() =>
+    const result = await this.queue.run(() =>
       this.options.withReferenceGuard(async () => {
         if (!this.envelope) throw new Error('broadcast_config_unavailable');
         const next = structuredClone(this.envelope);
@@ -590,6 +598,9 @@ export class BroadcastConfigStore {
         return this.snapshot;
       }),
     );
+    if (input.modules.some((item) => item.value.kind === 'hud'))
+      await this.options.onDraftChanged?.('hud');
+    return result;
   }
   async saveModule(value: ModuleRecord, expectedRevision: Revision | null): Promise<ModuleRecord> {
     const saved = await this.queue.run(() =>
