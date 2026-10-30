@@ -47,6 +47,7 @@ export function summarizeMap(
             kills: player.matchStats?.kills ?? null,
             assists: player.matchStats?.assists ?? null,
             deaths: player.matchStats?.deaths ?? null,
+            statistics: structuredClone(player.statistics),
           }));
   };
   const score = (entryId: string) =>
@@ -70,7 +71,7 @@ export class ProgramPresentationStore {
   private value: ProgramPresentation = this.empty();
   private empty(): ProgramPresentation {
     return {
-      schemaVersion: 'mizar.program-presentation.v1',
+      schemaVersion: 'mizar.program-presentation.v2',
       packageId: 'builtin:mizar-default',
       match: null,
       series: null,
@@ -103,7 +104,12 @@ export class ProgramPresentationStore {
     this.value.match = structuredClone(p.match);
     this.value.series = programPresentationSchema.shape.series.parse(p.series);
     if (p.status.telemetry !== 'fresh' || p.series.bindingState !== 'bound') return;
-    if (isRegulationHalftime(p) && p.series.currentMapOrder !== null) {
+    if (
+      isRegulationHalftime(p) &&
+      p.series.currentMapOrder !== null &&
+      (this.value.halftime?.mapOrder !== p.series.currentMapOrder ||
+        this.value.halftime.cursor.mapEpoch !== p.cursor.mapEpoch)
+    ) {
       this.value.halftime = summarizeMap(p, p.series.currentMapOrder);
     }
     if (p.map.phase !== 'gameover') return;
@@ -131,7 +137,8 @@ export class ProgramPresentationStore {
       before.programSourceGeneration !== after.programSourceGeneration ||
       before.programReceiveSequence === null ||
       after.programReceiveSequence === null ||
-      after.programReceiveSequence <= before.programReceiveSequence ||
+      after.programReceiveSequence < before.programReceiveSequence ||
+      after.runtimeSeq <= before.runtimeSeq ||
       prior.mapName !== snapshot.mapName ||
       prior.score.a !== snapshot.score.a ||
       prior.score.b !== snapshot.score.b
@@ -147,16 +154,30 @@ export class ProgramPresentationStore {
       )
         return;
     }
-    // Keep the captured identities/media and authoritative score. Only directly
-    // observed KAD can settle; missing fields cannot erase an established value.
+    // Preserve complete metric groups if a later frame loses evidence. Each
+    // selected group is an already-computed Core result, including its basis.
     const players = (side: 'a' | 'b') =>
       prior.players[side].map((player) => {
         const latest = snapshot.players[side].find((item) => item.id === player.id)!;
+        const preserve = <T extends Record<string, { value: number | null }>>(old: T, next: T) =>
+          Object.keys(old).some((key) => old[key]!.value !== null && next[key]!.value === null)
+            ? old
+            : next;
+        const scoreboard = preserve(player.statistics.scoreboard, latest.statistics.scoreboard);
         return {
           ...player,
-          kills: latest.kills ?? player.kills,
-          assists: latest.assists ?? player.assists,
-          deaths: latest.deaths ?? player.deaths,
+          kills: scoreboard.kills.value,
+          assists: scoreboard.assists.value,
+          deaths: scoreboard.deaths.value,
+          statistics: {
+            scoreboard,
+            completed: preserve(player.statistics.completed, latest.statistics.completed),
+            includingCurrentRound: preserve(
+              player.statistics.includingCurrentRound,
+              latest.statistics.includingCurrentRound,
+            ),
+            currentRound: preserve(player.statistics.currentRound, latest.statistics.currentRound),
+          },
         };
       });
     const nextPlayers = { a: players('a'), b: players('b') };

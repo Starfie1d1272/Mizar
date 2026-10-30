@@ -20,7 +20,11 @@ import {
   type ProgramProjection,
 } from '@mizar/core/projection';
 import type { OperatorCommand, SeriesSideProof } from '@mizar/core/series-progress';
-import { getObjectiveClockLeaseMs, type RuntimeReduceResult } from '@mizar/core/runtime';
+import {
+  getObjectiveClockLeaseMs,
+  type RuntimeReduceResult,
+  type TrustedProgramRoundEvents,
+} from '@mizar/core/runtime';
 import { assistSnapshotSchema, type AssistSnapshot } from '@mizar/protocol/assist';
 import { operatorSnapshotSchema, type OperatorSnapshot } from '@mizar/protocol/operator';
 import { programSnapshotSchema, type ProgramSnapshot } from '@mizar/protocol/program';
@@ -33,6 +37,7 @@ import {
   RADAR_SCHEMA_VERSION,
 } from '@mizar/protocol/version';
 import { projectRadarFrame, type RadarFrame } from '@mizar/radar';
+import { CS2_ITEM_CATALOG } from '@mizar/cs2-assets';
 
 import type { MatchContextBinding } from '../match-context/index.js';
 import type { MatchContext } from '@mizar/core/match-context';
@@ -97,6 +102,11 @@ export interface ProjectionScheduler {
 }
 
 const defaultNowMonotonicMs = (): number => globalThis.performance.now();
+const equipmentCatalog = Object.fromEntries(
+  CS2_ITEM_CATALOG.flatMap(({ canonicalKey, kind, family, gsiWeaponNames, aliases }) =>
+    [...gsiWeaponNames, ...aliases].map((name) => [name, { canonicalKey, kind, family }]),
+  ),
+);
 const defaultScheduler: ProjectionScheduler = {
   setTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
   clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
@@ -300,7 +310,32 @@ export class ProjectionCoordinator {
         this.staleSuppressedUntilNewFrame = false;
       }
     }
-    return this.refresh();
+    return this.refresh(result?.disposition.reason === 'program-round-events');
+  }
+
+  /** Called only by a source adapter after proving full coverage and GSI binding. */
+  acceptTrustedRoundEvents(input: {
+    readonly programSourceGeneration: number;
+    readonly mapName: string;
+    readonly events: TrustedProgramRoundEvents;
+  }): boolean {
+    if (this.closed) return false;
+    const runtime = this.programRuntime.getCurrentState();
+    const source = this.cstvSources.program.getHealth();
+    if (
+      runtime.programSource.lastAccepted?.generation !== runtime.programSource.generation ||
+      runtime.programSource.generation !== input.programSourceGeneration ||
+      runtime.map.epoch !== input.events.mapEpoch ||
+      runtime.map.name !== input.mapName ||
+      source.role !== 'program' ||
+      source.generation !== input.events.source.generation ||
+      source.mapName !== input.mapName
+    )
+      return false;
+    const result = this.programRuntime.acceptTrustedRoundEvents(input.events);
+    if (result.disposition.kind !== 'accepted') return false;
+    this.afterRuntimeMutation(result);
+    return true;
   }
 
   refresh(publishWaiting = false): ProjectionBundle {
@@ -328,6 +363,7 @@ export class ProjectionCoordinator {
       const nowMonotonicMs = this.nowMonotonicMs();
       const programInput = {
         preferCanonicalPlayerNames,
+        equipmentCatalog,
         runtime: runtimeView,
         bombDamageResource: this.bombDamageResources.get(
           runtimeView.telemetry?.telemetry.map?.name ?? null,
