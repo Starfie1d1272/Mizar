@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
 import { URL } from 'node:url';
 import { createServer } from 'node:net';
+import { EventEmitter } from 'node:events';
+import { PassThrough, Writable } from 'node:stream';
 import { BoxClient } from './box-sync.mjs';
 import { curlMultipartUpload } from './box-curl-upload.mjs';
 
@@ -101,6 +103,37 @@ test('real curl TLS failure reports zero sent bytes as safe to retry', async () 
   } finally {
     await new Promise((resolve, reject) =>
       server.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+});
+
+test('partial or malformed curl metrics never authorize replay', async () => {
+  for (const metrics of ['000 0 0 0 0 0 1 2 0', '000 0 0']) {
+    const run = () => {
+      const child = new EventEmitter();
+      child.stdout = new PassThrough();
+      child.stdin = new Writable({
+        write(_chunk, _encoding, callback) {
+          callback();
+        },
+        final(callback) {
+          child.stdout.end(metrics);
+          child.emit('close', 35);
+          callback();
+        },
+      });
+      child.kill = () => {};
+      return child;
+    };
+    const form = new FormData();
+    form.set('file', new Blob(['local']), 'local');
+    await assert.rejects(
+      curlMultipartUpload(
+        'https://example.test/',
+        { body: form, signal: AbortSignal.timeout(5000) },
+        run,
+      ),
+      { code: 'BOX_CURL_FAILED', retrySafeUpload: false },
     );
   }
 });

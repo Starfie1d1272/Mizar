@@ -183,6 +183,7 @@ jobs:
           retention-days: 7
 
       - name: Upload unqualified candidate
+        id: upload_candidate
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-candidate
@@ -191,12 +192,13 @@ jobs:
             ${{ env.QUALIFICATION_BUILD_ROOT }}/*.zip.sha256
             ${{ env.QUALIFICATION_BUILD_ROOT }}/release-manifest.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/core-release-manifest.json
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/build-timings.json
           compression-level: 0
           retention-days: 7
           if-no-files-found: error
 
       - name: Upload build measurements
-        if: ${{ always() }}
+        if: ${{ always() && steps.upload_candidate.outcome != 'success' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-build-evidence
@@ -455,10 +457,6 @@ jobs:
           pattern: release-evidence-*
           path: ${{ runner.temp }}/lane-evidence
           merge-multiple: true
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          name: release-build-evidence
-          path: ${{ runner.temp }}/build-evidence
       - name: Download exact resource candidate built by this source job
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
@@ -497,7 +495,7 @@ jobs:
             if ($LASTEXITCODE) { throw 'Qualified native installer build failed' }
           }
           "QUALIFIED_CORE_DIRECTORY=$($cores[0].FullName)" >> $env:GITHUB_ENV
-          $buildTimings = Join-Path $env:RUNNER_TEMP 'build-evidence/build-timings.json'
+          $buildTimings = Join-Path $env:QUALIFICATION_BUILD_ROOT 'build-timings.json'
           if (!(Test-Path -LiteralPath $buildTimings -PathType Leaf)) { throw 'Build measurement evidence is missing' }
           $metrics = Get-Content -LiteralPath $buildTimings -Raw | ConvertFrom-Json
           if ($metrics.gitSha -ne $env:SOURCE_SHA -or $metrics.desktopBuildProfile -ne 'release') { throw 'Build timing source/profile differs' }

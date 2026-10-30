@@ -107,7 +107,10 @@ jobs:
         shell: pwsh
         run: |
           Write-Host "BENCH_SOURCE $(git rev-parse HEAD)"
-          foreach ($mode in @('off', 'thin', 'off')) {
+          $manifest = Get-Content apps/desktop/src-tauri/Cargo.toml -Raw
+          if ($manifest -notmatch '(?m)^version\s*=\s*"([^"\r\n]+)"') { throw 'Missing application version' }
+          $expected = $Matches[1]
+          foreach ($mode in @('thin', 'off')) {
             if ($mode -eq 'off') { $env:CARGO_PROFILE_RELEASE_LTO = 'false' }
             else { Remove-Item Env:CARGO_PROFILE_RELEASE_LTO -ErrorAction SilentlyContinue }
             $watch = [Diagnostics.Stopwatch]::StartNew()
@@ -115,7 +118,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "Cargo benchmark failed: $mode" }
             $watch.Stop()
             $exe = 'apps/desktop/src-tauri/target/release/mizar-desktop.exe'
-            $version = & $exe --app-version
-            if ($LASTEXITCODE -ne 0) { throw "Version check failed: $mode" }
+            $version = & node -e 'const {execFileSync} = require("node:child_process"); process.stdout.write(execFileSync(process.argv[1], ["--app-version"], {encoding:"utf8"}).trim());' (Resolve-Path $exe).Path
+            if ($LASTEXITCODE -ne 0 -or $version -ne $expected) { throw "Version check failed: $mode" }
             Write-Host "BENCH_RESULT lto=$mode seconds=$($watch.Elapsed.TotalSeconds) bytes=$((Get-Item $exe).Length) version=$version"
           }
