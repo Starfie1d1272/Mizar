@@ -487,6 +487,7 @@ export class MulnxTool {
         this.downloadedBytes = 0;
         this.downloadTotal = release.size;
         this.sourceMessage = '';
+        this.sourceName = null;
         try {
           await downloadVerified(
             release.url,
@@ -494,24 +495,22 @@ export class MulnxTool {
             release.sha256,
             release.size,
             AbortSignal.any([abort.signal, AbortSignal.timeout(120_000)]),
-            (bytes, source) => {
+            (bytes, _source, name) => {
               this.phase = 'downloading';
               this.downloadedBytes = bytes;
-              this.sourceName =
-                this.mirror && sameMulnxAsset(this.mirror.release, release) && source === 0
-                  ? '南大云盘'
-                  : 'GitHub';
+              this.sourceName = name;
             },
             this.mirror && sameMulnxAsset(this.mirror.release, release)
-              ? (signal) => mirrorArchive(this.mirror!, signal)
+              ? (signal, end) => mirrorArchive(this.mirror!, signal, end)
               : undefined,
-            (error) => {
-              this.sourceMessage = '南大云盘连接或文件校验失败，已切换至 GitHub。';
-              this.diagnostic('mulnx_mirror_download', { result: 'failure', error });
+            (error, name) => {
+              this.sourceMessage = `${name}连接或文件校验失败，正在切换来源。`;
+              this.diagnostic('mulnx_source_download', { result: 'failure', source: name, error });
             },
             () => {
               this.phase = 'verifying';
             },
+            true,
           );
         } catch (error) {
           this.phase = abort.signal.aborted ? 'cancelled' : 'error';

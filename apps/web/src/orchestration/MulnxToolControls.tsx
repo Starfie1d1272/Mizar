@@ -107,8 +107,12 @@ export function MulnxToolControls({
       ) : null}
       {tool.phase === 'downloading' || tool.phase === 'verifying' ? (
         <p>
-          {tool.phase === 'verifying' ? '正在校验' : `正在从 ${tool.source} 下载`}：
-          {tool.downloadedBytes ?? 0} / {tool.totalBytes ?? 0} 字节 {tool.sourceMessage}
+          {tool.phase === 'verifying'
+            ? '正在校验'
+            : tool.source
+              ? `正在从 ${tool.source} 下载`
+              : '正在选择下载来源…'}
+          ：{tool.downloadedBytes ?? 0} / {tool.totalBytes ?? 0} 字节 {tool.sourceMessage}
           <Button
             onClick={() =>
               void command('/operator/orchestration', { action: 'cancel-tool-download' }).catch(

@@ -263,6 +263,23 @@ async function performProductionAction(
   onChecking?: (checking: boolean) => void,
 ) {
   const entryLocation = window.location.href;
+  const entryStillCurrent = async () => {
+    if (cancelled() || window.location.href !== entryLocation) return false;
+    const current = await fetch('/local/v1/production', {
+      headers: task.headers(),
+      cache: 'no-store',
+      signal: AbortSignal.any([entrySignal, AbortSignal.timeout(5000)]),
+    })
+      .then((response) => (response.ok ? (response.json() as Promise<Production>) : null))
+      .catch(() => null);
+    return Boolean(
+      current &&
+      current.revision === state.revision &&
+      current.mode === state.mode &&
+      !cancelled() &&
+      window.location.href === entryLocation,
+    );
+  };
   controlEvidence('production_action', 'dispatch', {
     taskId: task.taskId,
     trigger: task.trigger,
@@ -318,19 +335,7 @@ async function performProductionAction(
         task.finish('cancelled', { reason: 'navigation_changed' });
         return;
       }
-      const current = await fetch('/local/v1/production', {
-        cache: 'no-store',
-        signal: AbortSignal.timeout(5000),
-      })
-        .then((response) => (response.ok ? (response.json() as Promise<Production>) : null))
-        .catch(() => null);
-      if (
-        !current ||
-        current.revision !== state.revision ||
-        current.mode !== state.mode ||
-        cancelled() ||
-        window.location.href !== entryLocation
-      ) {
+      if (!(await entryStillCurrent())) {
         task.finish('cancelled', { reason: 'production_changed' });
         return;
       }
@@ -390,6 +395,10 @@ async function performProductionAction(
     task.finish('cancelled', { reason: 'navigation_changed' });
     return;
   }
+  if (action === 'enter' && window.__TAURI_INTERNALS__ && !(await entryStillCurrent())) {
+    task.finish('cancelled', { reason: 'production_changed' });
+    return;
+  }
   let newlyStarted = false;
   let borrowed = Boolean(external);
   let launchedMulnx = false;
@@ -421,6 +430,10 @@ async function performProductionAction(
           return;
         }
       }
+    }
+    if (launchedMulnx && !(await entryStillCurrent())) {
+      task.finish('cancelled', { reason: 'production_changed' });
+      return;
     }
     newlyStarted = await desktopInvoke<boolean>(
       selectedExternal ? 'attach_external_cs2' : 'start_managed_cs2',

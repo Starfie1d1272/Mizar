@@ -25,11 +25,27 @@ export async function updateRequest(
   input: string,
   signal: AbortSignal,
   fetcher: UpdateFetch = globalThis.fetch,
-  options?: { allowCompressedBoxText?: boolean },
+  options?: { allowCompressedBoxText?: boolean; rangeEnd?: number; proxyAsset?: string },
 ): Promise<Response> {
+  if (
+    options?.rangeEnd !== undefined &&
+    (!Number.isInteger(options.rangeEnd) || options.rangeEnd < 0 || options.rangeEnd >= 64 * 1024)
+  )
+    throw new Error('update_range_invalid');
   let url = new URL(input);
   for (let redirects = 0; redirects < 5; redirects++) {
-    if (!allowedUpdateUrl(url)) throw new Error('update_url_forbidden');
+    const original = options?.proxyAsset ? new URL(options.proxyAsset) : null;
+    const isProxyAsset =
+      original?.origin === 'https://github.com' &&
+      allowedUpdateUrl(original) &&
+      !original.search &&
+      url.href === `https://gh-proxy.com/${original.href}`;
+    const proxyRedirect =
+      original &&
+      (url.href === original.href ||
+        (url.hostname === 'release-assets.githubusercontent.com' && allowedUpdateUrl(url)));
+    if (options?.proxyAsset ? !(isProxyAsset || proxyRedirect) : !allowedUpdateUrl(url))
+      throw new Error('update_url_forbidden');
     const response = await fetcher(url, {
       redirect: 'manual',
       signal,
@@ -42,6 +58,7 @@ export async function updateRequest(
           ? { Authorization: `Token ${BOX_READ_TOKEN}` }
           : {}),
         Accept: url.hostname === 'api.github.com' ? 'application/vnd.github+json' : '*/*',
+        ...(options?.rangeEnd !== undefined ? { Range: `bytes=0-${options.rangeEnd}` } : {}),
         'User-Agent': 'Mizar-Stable-Updater',
       },
     }).catch((cause: unknown) => {

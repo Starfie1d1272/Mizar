@@ -61,6 +61,25 @@ test('retries corrupt source with verified bytes and permits bounded gzip text o
       sources: [async () => new Response('evil'), async () => new Response(bytes)],
     });
     assert.deepEqual(await readFile(target), bytes);
+    let retried = false;
+    await assert.rejects(
+      transfer({
+        target,
+        bytes: bytes.length,
+        sha256: createHash('sha256').update(bytes).digest('hex'),
+        signal: new AbortController().signal,
+        sources: [
+          async () => new Response(bytes),
+          async () => {
+            retried = true;
+            return new Response(bytes);
+          },
+        ],
+      }),
+      { code: 'EEXIST' },
+    );
+    assert.equal(retried, false);
+    assert.deepEqual(await readFile(target), bytes);
     const fetcher = async () =>
       new Response(bytes, {
         headers: {
@@ -184,5 +203,70 @@ test('entry checks respect the saved preference while manual checks query both p
     assert.deepEqual([mizar, mulnx], [2, 2]);
   } finally {
     await app.close();
+  }
+});
+
+test('Mizar download sorts authenticated sources, labels fallback and verifies full bytes', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mizar-update-sources-'));
+  const bytes = Buffer.from('good');
+  const digest = createHash('sha256').update(bytes).digest('hex');
+  const manifest = {
+    schemaVersion: 'mizar.update.v1' as const,
+    repository: 'Starfie1d1272/Mizar' as const,
+    channel: 'stable' as const,
+    version: '1.9.2',
+    gitSha: 'a'.repeat(40),
+    notes: 'test',
+    compatibility: { minimumVersion: '1.0.0', maximumVersionExclusive: '2.0.0' },
+    installer: {
+      platform: 'win32-x64' as const,
+      format: 'nsis-setup' as const,
+      name: 'Mizar-v1.9.2-Windows-x64-Setup.exe',
+      bytes: bytes.length,
+      sha256: digest,
+      contentDigest: 'b'.repeat(64),
+    },
+  };
+  const full: string[] = [];
+  const fetcher: typeof fetch = async (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : input.toString());
+    const headers = new Headers(init?.headers);
+    if (url.hostname === 'box.nju.edu.cn') return new Response(null, { status: 503 });
+    const range = headers.get('range');
+    if (range && url.hostname === 'github.com')
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    if (range)
+      return new Response(bytes, { status: 206, headers: { 'content-range': 'bytes 0-3/4' } });
+    full.push(url.hostname);
+    return new Response(url.hostname === 'gh-proxy.com' ? 'evil' : bytes);
+  };
+  const manager = new UpdateManager({
+    stateRoot: root,
+    bundleRoot: root,
+    currentContentDigest: 'c'.repeat(64),
+    version: '1.9.1',
+    installed: true,
+    fetcher,
+    source: { latest: async () => ({ tag_name: 'v1.9.2' }), authenticate: async () => manifest },
+  });
+  try {
+    await manager.load();
+    await manager.check();
+    await manager.download();
+    for (let i = 0; i < 100 && manager.status().phase === 'downloading'; i++)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(manager.status().phase, 'ready');
+    assert.equal(manager.status().downloadSource, 'GitHub');
+    assert.deepEqual(full, ['gh-proxy.com', 'github.com']);
+    const ready = JSON.parse(await readFile(join(root, 'updates', 'ready.json'), 'utf8')) as {
+      directory: string;
+    };
+    assert.deepEqual(
+      await readFile(join(root, 'updates', ready.directory, manifest.installer.name)),
+      bytes,
+    );
+  } finally {
+    await manager.close();
+    await rm(root, { recursive: true, force: true });
   }
 });

@@ -5,6 +5,7 @@ import { lstat, mkdir, open, readdir, readFile } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { transfer } from '../distribution/transfer.js';
+import { sourceOrder, forgetSourceOrder } from '../distribution/sources.js';
 
 export const MULNX_REPOSITORY = 'Co1Swet/MulNX_CS2';
 export const SEVEN_ZIP = {
@@ -136,57 +137,109 @@ export async function latestMulnxRelease(readMetadata = publicJson): Promise<Mul
   };
 }
 
+async function assetRequest(input: string, signal: AbortSignal, end?: number, proxy = false) {
+  const origin = new URL(input);
+  if (
+    origin.protocol !== 'https:' ||
+    origin.hostname !== 'github.com' ||
+    origin.username ||
+    origin.password ||
+    origin.port ||
+    origin.search ||
+    origin.hash ||
+    !(
+      origin.pathname.startsWith(`/${MULNX_REPOSITORY}/releases/download/`) ||
+      origin.href === SEVEN_ZIP.url
+    )
+  )
+    throw new Error('mulnx_url_forbidden');
+  const proxyUrl = `https://gh-proxy.com/${origin.href}`;
+  let current = new URL(proxy ? proxyUrl : origin.href);
+  for (let redirects = 0; redirects < 5; redirects++) {
+    const allowed =
+      current.href === origin.href ||
+      (proxy && current.href === proxyUrl) ||
+      (current.protocol === 'https:' &&
+        current.hostname === 'release-assets.githubusercontent.com' &&
+        !current.username &&
+        !current.password &&
+        !current.port &&
+        !current.hash);
+    if (!allowed) throw new Error('mulnx_url_forbidden');
+    const response = await fetch(current, {
+      redirect: 'manual',
+      signal,
+      ...(end === undefined ? {} : { headers: { Range: `bytes=0-${end}` } }),
+    });
+    if (![301, 302, 303, 307, 308].includes(response.status)) return response;
+    const location = response.headers.get('location');
+    await response.body?.cancel();
+    if (!location) throw new Error('mulnx_redirect_invalid');
+    current = new URL(location, current);
+  }
+  throw new Error('mulnx_redirect_limit');
+}
+
 export async function downloadVerified(
   url: string,
   target: string,
   sha256: string,
   expectedSize?: number,
   signal: AbortSignal = AbortSignal.timeout(120_000),
-  progress?: (bytes: number, source: number) => void,
-  mirror?: (signal: AbortSignal) => Promise<Response>,
-  fallback?: (error: unknown) => void,
+  progress?: (bytes: number, source: number, name: string) => void,
+  mirror?: (signal: AbortSignal, end?: number) => Promise<Response>,
+  fallback?: (error: unknown, name: string) => void,
   verifying?: () => void,
+  selectSources = false,
 ) {
-  await transfer({
-    target,
-    ...(expectedSize === undefined ? {} : { bytes: expectedSize }),
-    maxBytes: MAX_ARCHIVE,
-    sha256,
-    integrityError: 'mulnx_download_integrity',
-    signal,
-    progress: (bytes, source) => progress?.(bytes, source),
-    fallback: (error) => fallback?.(error),
-    verifying: () => verifying?.(),
-    sources: [
-      ...(mirror ? [mirror] : []),
-      async (attempt) => {
-        let current = new URL(url);
-        for (let redirects = 0; redirects < 5; redirects++) {
-          if (
-            current.protocol !== 'https:' ||
-            current.username ||
-            current.password ||
-            current.port ||
-            current.hash ||
-            !(
-              (current.hostname === 'github.com' &&
-                (current.pathname.startsWith(`/${MULNX_REPOSITORY}/releases/download/`) ||
-                  current.href === SEVEN_ZIP.url)) ||
-              current.hostname === 'release-assets.githubusercontent.com'
-            )
-          )
-            throw new Error('mulnx_url_forbidden');
-          const response = await fetch(current, { redirect: 'manual', signal: attempt });
-          if (![301, 302, 303, 307, 308].includes(response.status)) return response;
-          const location = response.headers.get('location');
-          await response.body?.cancel();
-          if (!location) throw new Error('mulnx_redirect_invalid');
-          current = new URL(location, current);
-        }
-        throw new Error('mulnx_redirect_limit');
+  const isMulnx =
+    selectSources &&
+    expectedSize !== undefined &&
+    url.startsWith(`https://github.com/${MULNX_REPOSITORY}/releases/download/`);
+  const sources = [
+    {
+      name: 'GitHub',
+      request: (attempt: AbortSignal, end?: number) => assetRequest(url, attempt, end),
+    },
+    ...(isMulnx
+      ? [
+          {
+            name: 'GitHub 加速',
+            request: (attempt: AbortSignal, end?: number) => assetRequest(url, attempt, end, true),
+          },
+        ]
+      : []),
+    ...(mirror ? [{ name: '南大云盘', request: mirror }] : []),
+  ];
+  const key = `mulnx:${url}:${sha256}:${expectedSize ?? 0}:${sources.map((source) => source.name).join(',')}`;
+  const order = isMulnx
+    ? await sourceOrder(
+        key,
+        expectedSize,
+        signal,
+        sources.map((source) => source.request),
+      )
+    : sources.map((_, index) => index);
+  try {
+    await transfer({
+      target,
+      ...(expectedSize === undefined ? {} : { bytes: expectedSize }),
+      maxBytes: MAX_ARCHIVE,
+      sha256,
+      integrityError: 'mulnx_download_integrity',
+      signal,
+      progress: (bytes, source) => progress?.(bytes, source, sources[order[source]!]!.name),
+      fallback: (error, source) => {
+        forgetSourceOrder(key);
+        fallback?.(error, sources[order[source]!]!.name);
       },
-    ],
-  });
+      verifying: () => verifying?.(),
+      sources: order.map((index) => (attempt) => sources[index]!.request(attempt)),
+    });
+  } catch (error) {
+    if (!signal.aborted) forgetSourceOrder(key);
+    throw error;
+  }
 }
 
 export async function fileSha256(path: string): Promise<string> {

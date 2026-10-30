@@ -109,9 +109,18 @@ export async function readMulnxMirror(cachePath: string): Promise<MulnxMirror> {
     throw new Error('mulnx_mirror_invalid');
   return index;
 }
-export async function mirrorArchive(index: MulnxMirror, signal: AbortSignal): Promise<Response> {
+export async function mirrorArchive(
+  index: MulnxMirror,
+  signal: AbortSignal,
+  rangeEnd?: number,
+): Promise<Response> {
   const box = new BoxSource();
-  return updateRequest(await box.link(filePath(index, 'MulNX.7z'), signal), signal);
+  return updateRequest(
+    await box.link(filePath(index, 'MulNX.7z'), signal),
+    signal,
+    undefined,
+    rangeEnd === undefined ? undefined : { rangeEnd },
+  );
 }
 export async function mirrorNotice(
   index: MulnxMirror,

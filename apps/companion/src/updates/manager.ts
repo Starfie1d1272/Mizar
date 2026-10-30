@@ -13,6 +13,7 @@ import {
 } from './contract.js';
 import { updateRequest, type UpdateFetch } from './network.js';
 import { transfer } from '../distribution/transfer.js';
+import { sourceOrder, forgetSourceOrder } from '../distribution/sources.js';
 import { installerUrl, StableSource } from './source.js';
 import { BoxSource } from './box.js';
 
@@ -520,35 +521,77 @@ export class UpdateManager {
       await this.discard();
       directory = await mkdtemp(join(this.root, 'download-'));
       const path = join(directory, manifest.installer.name);
-      await transfer({
-        target: path,
-        bytes: manifest.installer.bytes,
-        sha256: manifest.installer.sha256,
-        integrityError: 'update_download_corrupt',
-        signal,
-        sources: [
-          async (attempt) =>
+      const origin = installerUrl(manifest);
+      const sources = [
+        {
+          name: 'GitHub',
+          stage: 'github_download',
+          request: (attempt: AbortSignal, end?: number) =>
+            updateRequest(
+              origin,
+              attempt,
+              this.options.fetcher,
+              end === undefined ? undefined : { rangeEnd: end },
+            ),
+        },
+        {
+          name: 'GitHub 加速',
+          stage: 'proxy_download',
+          request: (attempt: AbortSignal, end?: number) =>
+            updateRequest(`https://gh-proxy.com/${origin}`, attempt, this.options.fetcher, {
+              proxyAsset: origin,
+              ...(end === undefined ? {} : { rangeEnd: end }),
+            }),
+        },
+        {
+          name: '南大云盘',
+          stage: 'box_download',
+          request: async (attempt: AbortSignal, end?: number) =>
             updateRequest(
               await new BoxSource(this.options.fetcher).installer(manifest, attempt),
               attempt,
               this.options.fetcher,
+              end === undefined ? undefined : { rangeEnd: end },
             ),
-          (attempt) => updateRequest(installerUrl(manifest), attempt, this.options.fetcher),
-        ],
-        progress: (bytes, source) => {
-          this.transferStage = 'downloading';
-          this.downloaded = bytes;
-          this.downloadSource = source === 0 ? '南大云盘' : 'GitHub';
         },
-        verifying: () => {
-          this.transferStage = 'verifying';
-        },
-        fallback: (error) => {
-          this.sourceMessage = '南大云盘连接或文件校验失败，已切换至 GitHub。';
-          this.failure('box_download', error);
-          this.event('download', 'mirror_fallback');
-        },
-      });
+      ];
+      const key = `mizar:${origin}:${manifest.installer.sha256}:${manifest.installer.bytes}:${sources.map((source) => source.name).join(',')}`;
+      this.sourceMessage = '正在测试下载来源…';
+      const order = await sourceOrder(
+        key,
+        manifest.installer.bytes,
+        signal,
+        sources.map((source) => source.request),
+      );
+      this.sourceMessage = '';
+      try {
+        await transfer({
+          target: path,
+          bytes: manifest.installer.bytes,
+          sha256: manifest.installer.sha256,
+          integrityError: 'update_download_corrupt',
+          signal,
+          sources: order.map((index) => (attempt) => sources[index]!.request(attempt)),
+          progress: (bytes, source) => {
+            this.transferStage = 'downloading';
+            this.downloaded = bytes;
+            this.downloadSource = sources[order[source]!]!.name;
+          },
+          verifying: () => {
+            this.transferStage = 'verifying';
+          },
+          fallback: (error, source) => {
+            const failed = sources[order[source]!]!;
+            forgetSourceOrder(key);
+            this.sourceMessage = `${failed.name}连接或文件校验失败，正在切换来源。`;
+            this.failure(failed.stage, error);
+            this.event('download', 'mirror_fallback');
+          },
+        });
+      } catch (error) {
+        if (!signal.aborted) forgetSourceOrder(key);
+        throw error;
+      }
       this.event('download', 'verified');
       signal.throwIfAborted();
       this.ready = { directory: directory.slice(this.root.length + 1), manifest };
