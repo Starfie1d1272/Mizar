@@ -849,11 +849,12 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     canControl: () => production.canControl(),
   });
   if (obsConfigStore !== undefined && obsAdapter !== undefined) {
-    // Browser sources that opened before HTTP readiness otherwise stay on
-    // Chromium's connection-error page and never run the WebSocket retry code.
     app.addHook('onListen', () => {
-      obsAdapter.startBrowserRecovery();
-      obsAdapter.startCommentaryRecovery(musicDirector, gameAudio);
+      obsAdapter.startCommentaryRecovery(
+        musicDirector,
+        gameAudio,
+        () => production.automaticAllowed() && obsAdapter.hasCurrentPreparation(),
+      );
       return Promise.resolve();
     });
     registerObsRoutes(app, {
@@ -1032,11 +1033,15 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     onEnter: () => {
       obsAdapter?.resumeAutomatic();
       obsAdapter?.startBrowserRecovery();
-      obsAdapter?.startCommentaryRecovery(musicDirector, gameAudio);
+      obsAdapter?.startCommentaryRecovery(
+        musicDirector,
+        gameAudio,
+        () => production.automaticAllowed() && obsAdapter.hasCurrentPreparation(),
+      );
       cameraDirector?.beginProduction();
     },
-    beforeExit: () => obsAdapter?.pauseAutomatic(),
-    beforeFinish: () => {
+    beforeExit: () => {
+      obsAdapter?.pauseAutomatic();
       cameraDirector?.finishProduction();
       observerSettings.endProduction();
     },
@@ -1453,9 +1458,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   });
   registerDemoTestRoutes(app, demoTest, options.productRuntime?.controlToken);
   observerEligible = () =>
-    production.get().mode !== 'preparation' &&
-    !production.isTrialPending() &&
-    !demoTest.get().active;
+    production.automaticAllowed() && !production.isTrialPending() && !demoTest.get().active;
   registerObserverSettings(app, observerSettings, localWebTransport.getOriginPolicy());
   const observerSettingsUnsubscribe = observerSettings.subscribe((kind) => {
     if (kind === 'name') {

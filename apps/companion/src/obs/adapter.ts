@@ -138,6 +138,7 @@ export class ObsAdapter {
   private recoveryClosed = false;
   private recoveryGeneration = 0;
   private recoveryPaused = false;
+  private recoveryPrepared = false;
   private recoveryComplete = false;
   private recoveryTask: Promise<void> | undefined;
   private readonly refreshedBrowserSources = new Set<string>();
@@ -226,6 +227,7 @@ export class ObsAdapter {
 
   pauseAutomatic(): void {
     this.recoveryPaused = true;
+    this.recoveryPrepared = false;
     this.recoveryGeneration++;
     clearTimeout(this.recoveryTimer);
     clearTimeout(this.commentaryTimer);
@@ -235,6 +237,10 @@ export class ObsAdapter {
 
   resumeAutomatic(): void {
     this.recoveryPaused = false;
+  }
+
+  hasCurrentPreparation(): boolean {
+    return this.recoveryPrepared;
   }
 
   startBrowserRecovery(): void {
@@ -286,6 +292,7 @@ export class ObsAdapter {
       | 'store'
     >,
     gameAudio?: GameAudioController,
+    mayPrepare: () => boolean = () => true,
   ): void {
     if (
       !this.commentary ||
@@ -299,7 +306,10 @@ export class ObsAdapter {
       if (this.recoveryClosed || this.recoveryPaused) return;
       const generation = this.recoveryGeneration;
       const valid = () =>
-        !this.recoveryClosed && !this.recoveryPaused && generation === this.recoveryGeneration;
+        !this.recoveryClosed &&
+        !this.recoveryPaused &&
+        generation === this.recoveryGeneration &&
+        mayPrepare();
       this.commentaryTimer = undefined;
       this.commentaryTask = (async () => {
         if (music && this.audioRouting) {
@@ -1780,6 +1790,7 @@ export class ObsAdapter {
         }
       }
       if (!current()) throw new Error('OBS 准备请求已失效，请重试。');
+      this.recoveryPrepared = true;
       return this.findings;
     });
   }
