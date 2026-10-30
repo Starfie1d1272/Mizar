@@ -46,5 +46,4 @@ mod tests {
         assert!(validate(&BUNDLE.replace("/1", "/2")).is_err());
         assert!(validate_with_limit(&"错".repeat(512), 1024).is_err());
     }
-
 }

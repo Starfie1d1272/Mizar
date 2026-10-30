@@ -620,8 +620,6 @@ mod tests {
         (root, log)
     }
 
-
-
     #[test]
     fn helper_rejects_escape_bad_identity_and_unreadable_directory_with_guidance() {
         let (root, log) = helper_fixture();
@@ -704,10 +702,4 @@ mod tests {
         assert!(evidence.contains("helper_directory_not_plain"));
         fs::remove_dir_all(root).unwrap();
     }
-
-
-
-
-
-
 }

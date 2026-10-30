@@ -370,5 +370,4 @@ mod tests {
         }
         assert_eq!(preservation_reason(&Value::Null, &idle()), "unconfirmed");
     }
-
 }

@@ -523,29 +523,51 @@ pub(crate) fn prepare_standalone(video: &Path, executable: &Path) -> Result<Valu
         executable,
     )?;
     record["executable"] = json!(executable);
-    record["startupFiles"] = json!(crate::cs2_frame_rate::prepare_observer_scripts(video, executable)?);
+    record["startupFiles"] = json!(crate::cs2_frame_rate::prepare_observer_scripts(
+        video, executable
+    )?);
     Ok(record)
 }
 
-pub(crate) enum StartupFiles { Apply, Validate, Restore }
+pub(crate) enum StartupFiles {
+    Apply,
+    Validate,
+    Restore,
+}
 
 /// Uses the spectator journal's original bytes; no additional recovery owner.
 pub(crate) fn startup_files(record: &Value, action: StartupFiles) -> Result<(), String> {
-    let Some(files) = record.get("startupFiles") else { return Ok(()); };
-    let files = files.as_array().filter(|files| files.len() <= 32).ok_or("观战启动配置记录无效。")?;
+    let Some(files) = record.get("startupFiles") else {
+        return Ok(());
+    };
+    let files = files
+        .as_array()
+        .filter(|files| files.len() <= 32)
+        .ok_or("观战启动配置记录无效。")?;
     let video = Path::new(record["video"].as_str().ok_or("观战配置路径缺失。")?);
     let executable = Path::new(record["executable"].as_str().ok_or("观战程序路径缺失。")?);
-    if !video.is_absolute() || !executable.is_absolute() { return Err("观战启动配置路径无效。".into()); }
+    if !video.is_absolute() || !executable.is_absolute() {
+        return Err("观战启动配置路径无效。".into());
+    }
     let mut unique = std::collections::BTreeSet::new();
     let mut plan = Vec::new();
     for entry in files {
-        if entry["kind"] != "cfg" { return Err("观战启动配置范围无效。".into()); }
-        let (path, original, applied) = crate::cs2_frame_rate::validated_script(entry, video, executable, None)?;
-        let canonical = fs::canonicalize(path).map_err(|e| io_error("观战启动配置无法确认。", &e))?;
-        if !unique.insert(canonical.to_string_lossy().to_lowercase()) { return Err("观战启动配置路径重复。".into()); }
+        if entry["kind"] != "cfg" {
+            return Err("观战启动配置范围无效。".into());
+        }
+        let (path, original, applied) =
+            crate::cs2_frame_rate::validated_script(entry, video, executable, None)?;
+        let canonical =
+            fs::canonicalize(path).map_err(|e| io_error("观战启动配置无法确认。", &e))?;
+        if !unique.insert(canonical.to_string_lossy().to_lowercase()) {
+            return Err("观战启动配置路径重复。".into());
+        }
         let metadata = fs::metadata(path).map_err(|e| io_error("观战启动配置无法读取。", &e))?;
-        if !metadata.is_file() || metadata.len() > 256 * 1024 { return Err("观战启动配置类型或大小已变化。".into()); }
-        let current = fs::read_to_string(path).map_err(|e| io_error("观战启动配置无法读取。", &e))?;
+        if !metadata.is_file() || metadata.len() > 256 * 1024 {
+            return Err("观战启动配置类型或大小已变化。".into());
+        }
+        let current =
+            fs::read_to_string(path).map_err(|e| io_error("观战启动配置无法读取。", &e))?;
         let target = match action {
             StartupFiles::Apply if current == original => applied,
             StartupFiles::Validate if current == applied => applied,
@@ -555,10 +577,13 @@ pub(crate) fn startup_files(record: &Value, action: StartupFiles) -> Result<(), 
         plan.push((path, current, target));
     }
     for (path, current, target) in plan {
-        if fs::read_to_string(path).map_err(|e| io_error("观战启动配置无法复核。", &e))? != current {
+        if fs::read_to_string(path).map_err(|e| io_error("观战启动配置无法复核。", &e))? != current
+        {
             return Err("观战启动配置在操作期间发生变化，备份仍保留。".into());
         }
-        if current != target { crate::cs2_session::atomic_write(path, target.as_bytes())?; }
+        if current != target {
+            crate::cs2_session::atomic_write(path, target.as_bytes())?;
+        }
     }
     Ok(())
 }
