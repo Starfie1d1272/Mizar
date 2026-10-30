@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  createMapPlayerStatsAccumulator,
   createInitialRuntimeState,
   getPlayerCompletedAdr,
   getPlayerLiveAdr,
+  reduceMapPlayerStats,
   reduceRuntime,
   type RuntimeState,
 } from '../src/runtime/index.js';
@@ -475,4 +477,82 @@ it('settles terminal damage without inventing missing health', async () => {
     damageComplete: true,
     complete: false,
   });
+});
+
+it.each([1, 2])(
+  'marks coverage partial when a live round has no end before freezetime (hint %s)',
+  async (nextHint) => {
+    const { projectPlayerStatistics } = await import('../src/runtime/index.js');
+    let state = createInitialRuntimeState('round-end-not-observed');
+    state = accept(state, frame(1, 1, 'freezetime', 0, 0)).state;
+    state = accept(state, frame(2, 2, 'live', 0, 80)).state;
+    state = accept(state, frame(3, 3, 'over', 0, 80)).state;
+    state = accept(state, frame(4, 4, 'freezetime', 1, 0)).state;
+    state = accept(state, frame(5, 5, 'live', 1, 30)).state;
+    state = accept(state, frame(6, 6, 'freezetime', nextHint, 0)).state;
+    state = accept(state, frame(7, 7, 'live', nextHint, 60)).state;
+    state = accept(state, frame(8, 8, 'over', nextHint, 60)).state;
+    expect(
+      projectPlayerStatistics(state.playerStats, PLAYER_A, undefined, null).completed.adr,
+    ).toMatchObject({
+      value: 70,
+      basis: { rounds: 2, coverage: 'partial' },
+    });
+  },
+);
+
+it('marks coverage partial if a round ends without an observed live phase', async () => {
+  const { projectPlayerStatistics } = await import('../src/runtime/index.js');
+  let state = createInitialRuntimeState('live-phase-missing');
+  state = accept(state, frame(1, 1, 'freezetime', 0, 0)).state;
+  state = accept(state, frame(2, 2, 'live', 0, 80)).state;
+  state = accept(state, frame(3, 3, 'over', 0, 80)).state;
+  state = accept(state, frame(4, 4, 'freezetime', 1, 0)).state;
+  state = accept(state, frame(5, 5, 'over', 1, 0)).state;
+  state = accept(state, frame(6, 6, 'freezetime', 2, 0)).state;
+  state = accept(state, frame(7, 7, 'live', 2, 60)).state;
+  state = accept(state, frame(8, 8, 'over', 2, 60)).state;
+  expect(
+    projectPlayerStatistics(state.playerStats, PLAYER_A, undefined, null).completed.adr,
+  ).toMatchObject({
+    value: 70,
+    basis: { rounds: 2, coverage: 'partial' },
+  });
+});
+
+it('marks a proven round jump partial when no round was in flight', async () => {
+  const { projectPlayerStatistics } = await import('../src/runtime/index.js');
+  let state = createInitialRuntimeState('round-end-jump');
+  state = accept(state, frame(1, 1, 'freezetime', 0, 0)).state;
+  state = accept(state, frame(2, 2, 'live', 0, 80)).state;
+  state = accept(state, frame(3, 3, 'over', 0, 80)).state;
+  state = accept(state, frame(4, 4, 'over', 3, 0)).state;
+  expect(
+    projectPlayerStatistics(state.playerStats, PLAYER_A, undefined, null).completed.adr,
+  ).toMatchObject({
+    value: 80,
+    basis: { rounds: 1, coverage: 'partial' },
+  });
+});
+
+it('preserves complete coverage across repeated end frames and resets it for a new map', async () => {
+  const { projectPlayerStatistics } = await import('../src/runtime/index.js');
+  let stats = createMapPlayerStatsAccumulator();
+  const push = (mapEpoch: number, observation: TelemetryObservation) => {
+    stats = reduceMapPlayerStats(stats, { mapEpoch, observation, continuity: 'contiguous' });
+  };
+  const adr = () => projectPlayerStatistics(stats, PLAYER_A, undefined, null).completed.adr;
+  push(0, frame(1, 1, 'freezetime', 0));
+  push(0, frame(2, 2, 'live', 0, 80));
+  push(0, frame(3, 3, 'over', 0, 80));
+  push(0, frame(4, 4, 'over', 1, 80));
+  expect(adr()).toMatchObject({ value: 80, basis: { rounds: 1, coverage: 'complete' } });
+
+  push(0, frame(5, 5, 'freezetime', 1));
+  push(0, frame(6, 6, 'over', 1));
+  expect(adr().basis.coverage).toBe('partial');
+  push(1, frame(7, 7, 'freezetime', 0));
+  push(1, frame(8, 8, 'live', 0, 60));
+  push(1, frame(9, 9, 'over', 0, 60));
+  expect(adr()).toMatchObject({ value: 60, basis: { rounds: 1, coverage: 'complete' } });
 });

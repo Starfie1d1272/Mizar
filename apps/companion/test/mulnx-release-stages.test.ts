@@ -134,6 +134,40 @@ it('prepares without selecting and publishes a configured instance only after se
   await restarted.prepare('D:\\Steam\\cs2.exe', true);
   expect(await readFile(launcherConfig, 'utf8')).toContain('D:\\\\Steam');
   expect(await readFile(launcherConfig, 'utf8')).toContain('-condebug');
+  // A managed workbench launch owns only its added compatibility option.
+  // A later cleanup restores the user's original line, and a concurrent edit
+  // is never overwritten by that cleanup.
+  await restarted.prepare('D:\\Steam\\cs2.exe', false, false, false, undefined, true);
+  const captureConfig = await readFile(launcherConfig, 'utf8');
+  expect(captureConfig).toContain('launchOptions: "-novid -allow_third_party_software"');
+  const ownershipPath = join(data, current.directory, 'MulNX/mizar-console-options.json');
+  expect(JSON.parse(await readFile(ownershipPath, 'utf8'))).toMatchObject({
+    original: 'launchOptions: -novid',
+    managed: 'launchOptions: "-novid -allow_third_party_software"',
+  });
+  await writeFile(
+    launcherConfig,
+    captureConfig.replace('-novid -allow_third_party_software', '-novid -user-change'),
+  );
+  await expect(restarted.prepare('D:\\Steam\\cs2.exe')).rejects.toThrow(
+    'mulnx_console_ownership_conflict',
+  );
+  expect(await readFile(launcherConfig, 'utf8')).toContain('-user-change');
+  await writeFile(launcherConfig, captureConfig);
+  await restarted.prepare('D:\\Steam\\cs2.exe');
+  const restoredConfig = await readFile(launcherConfig, 'utf8');
+  expect(restoredConfig).toContain('launchOptions: -novid\n');
+  await expect(readFile(ownershipPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  const existingFlag = restoredConfig.replace(
+    'launchOptions: -novid',
+    'launchOptions: "-novid -ALLOW_THIRD_PARTY_SOFTWARE"',
+  );
+  await writeFile(launcherConfig, existingFlag);
+  await restarted.prepare('D:\\Steam\\cs2.exe', false, false, false, undefined, true);
+  expect(await readFile(launcherConfig, 'utf8')).toBe(existingFlag);
+  await restarted.prepare('D:\\Steam\\cs2.exe');
+  expect(await readFile(launcherConfig, 'utf8')).toBe(existingFlag);
+  await writeFile(launcherConfig, restoredConfig);
   const source = await restarted.cameraSource(current.packs[0]!.name);
   expect(source).toMatchObject({
     sourceName: 'Source',
@@ -293,6 +327,18 @@ it('prepares without selecting and publishes a configured instance only after se
       },
     });
     const headers = { 'x-runtime-token': 'c'.repeat(64) };
+    const runtimePrepare = (authenticated: boolean, captureCompatibility: boolean) =>
+      app.inject({
+        method: 'POST',
+        url: '/operator/runtime/mulnx-prepare',
+        ...(authenticated ? { headers } : {}),
+        payload: { cs2Path: 'D:\\Steam\\cs2.exe', captureCompatibility },
+      });
+    expect((await runtimePrepare(false, true)).statusCode).toBe(403);
+    expect((await runtimePrepare(true, true)).statusCode).toBe(200);
+    expect(await readFile(launcherConfig, 'utf8')).toContain('-allow_third_party_software');
+    expect((await runtimePrepare(true, false)).statusCode).toBe(200);
+    expect(await readFile(launcherConfig, 'utf8')).toContain('launchOptions: -novid\n');
     const switchRelease = async (contents: string) => {
       fixture.source = contents;
       const downloaded = await app.inject({

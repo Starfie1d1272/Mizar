@@ -16,8 +16,16 @@ test('passive OBS preparation never takes another collection, including while ou
           currentSceneCollectionName: 'Personal',
           sceneCollections: ['Personal', 'Mizar'],
         });
-      if (type === 'GetStreamStatus') return Promise.resolve({ outputActive: true });
-      if (type === 'GetRecordStatus') return Promise.resolve({ outputActive: false });
+      if (type === 'GetOutputList')
+        return Promise.resolve({
+          outputs: [
+            {
+              outputName: 'Virtual camera',
+              outputActive: true,
+              outputFlags: { OBS_OUTPUT_VIDEO: true },
+            },
+          ],
+        });
       throw new Error(`Unexpected OBS request: ${type}`);
     },
   };
@@ -249,5 +257,41 @@ test('browser recovery is granted after entering and revoked on exit intent', as
   assert.equal(valid?.(), true);
   await request('begin-exit', production.get().revision);
   assert.equal(valid?.(), false);
+  await app.close();
+});
+
+test('video restoration failure after the safe scene defers recovery and releases production', async () => {
+  const app = Fastify();
+  const calls: string[] = [];
+  const scenes = {
+    get: () => ({ active: 'waiting', revision: 'scene' }),
+    holdAutomatic: () => undefined,
+    controlValid: () => () => true,
+    selectWaitingForExit: async () => {
+      calls.push('waiting');
+      return { ok: true };
+    },
+  } as unknown as ProgramSceneController;
+  const production = registerProductionRoutes(app, {
+    originPolicy: createLocalWebOriginPolicy(),
+    hasContext: () => true,
+    scenes,
+    afterSafeScene: () => {
+      calls.push('restore');
+      throw new Error('restore failed');
+    },
+    release: async () => {
+      calls.push('release');
+    },
+  });
+  const response = await app.inject({
+    method: 'POST',
+    url: '/operator/production',
+    headers: { origin: 'http://127.0.0.1:3000' },
+    payload: { action: 'finish', expectedRevision: production.get().revision },
+  });
+  assert.equal(response.statusCode, 200);
+  assert.equal(production.get().mode, 'preparation');
+  assert.deepEqual(calls, ['waiting', 'restore', 'release']);
   await app.close();
 });
