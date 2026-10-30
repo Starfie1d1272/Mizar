@@ -402,6 +402,14 @@ export function reduceMapPlayerStats(
   }
 
   if (currentRound === null && !mapEnded && (phase === 'freezetime' || phase === 'live')) {
+    const previousRoundHint = accumulator.completedRounds.at(-1)?.roundNumberHint;
+    if (
+      previousRoundHint != null &&
+      roundNumberHint !== null &&
+      roundNumberHint > previousRoundHint + 1
+    ) {
+      accumulator = { ...accumulator, coverage: 'partial' };
+    }
     currentRound = createCurrentRound(
       input.observation,
       !healthyFrame || !completeEvidence || phase === 'live',
@@ -707,11 +715,11 @@ export function reduceTrustedProgramRoundEvents(
       (generation !== undefined && generation !== cursor.generation) ||
       (ticksPerSecond !== undefined && ticksPerSecond !== cursor.ticksPerSecond) ||
       victim === undefined ||
-      round.players[victim] === undefined ||
+      round.roster[victim] === undefined ||
       (event.attacker !== undefined &&
-        (attacker === undefined || round.players[attacker] === undefined)) ||
+        (attacker === undefined || round.roster[attacker] === undefined)) ||
       (event.assister !== undefined &&
-        (assister === undefined || round.players[assister] === undefined))
+        (assister === undefined || round.roster[assister] === undefined))
     )
       return accumulator;
     generation = cursor.generation;

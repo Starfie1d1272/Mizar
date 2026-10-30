@@ -556,3 +556,153 @@ it('preserves complete coverage across repeated end frames and resets it for a n
   push(1, frame(9, 9, 'over', 0, 60));
   expect(adr()).toMatchObject({ value: 60, basis: { rounds: 1, coverage: 'complete' } });
 });
+
+it('retains trusted death evidence while terminal health is incomplete, then derives KAST after settlement', async () => {
+  const { projectPlayerStatistics } = await import('../src/runtime/index.js');
+  const withScore = (obs: TelemetryObservation): TelemetryObservation => ({
+    ...obs,
+    telemetry: {
+      ...obs.telemetry,
+      map: { ...obs.telemetry.map!, sides: { ct: { score: 13 }, t: { score: 11 } } },
+    },
+  });
+  let state = createInitialRuntimeState('late-health-events');
+  state = accept(state, withScore(frame(1, 1, 'freezetime', 23, 0))).state;
+  state = accept(state, withScore(frame(2, 2, 'live', 23, 80))).state;
+  const over = withScore(frame(3, 3, 'over', 24, 80));
+  state = accept(state, {
+    ...over,
+    telemetry: {
+      ...over.telemetry,
+      allPlayers: over.telemetry.allPlayers!.map((p) =>
+        p.sourcePlayerId === PLAYER_B
+          ? { ...p, state: { roundTotalDamage: p.state!.roundTotalDamage! } }
+          : p,
+      ),
+    },
+  }).state;
+  const evidence = {
+    mapEpoch: state.map.epoch,
+    roundNumberHint: 23,
+    coverage: 'complete' as const,
+    source: {
+      role: 'program' as const,
+      generation: 1,
+      ticksPerSecond: 64,
+      startTick: 1,
+      endTick: 100,
+    },
+    deaths: [
+      {
+        kind: 'player-death' as const,
+        cursor: {
+          kind: 'cs2-cstv' as const,
+          role: 'program' as const,
+          generation: 1,
+          sequence: 1,
+          tick: 30,
+          ticksPerSecond: 64,
+          observedAt: '2026-01-01T00:00:00Z',
+          observedMonotonicMs: 1,
+        },
+        victim: { sourcePlayerId: PLAYER_B },
+        attacker: { sourcePlayerId: PLAYER_A },
+      },
+    ],
+  };
+  const death = evidence.deaths[0]!;
+  const outsider = { sourcePlayerId: '76561198000000003' };
+  for (const invalid of [
+    { ...death, victim: outsider },
+    { ...death, attacker: outsider },
+    { ...death, assister: outsider },
+    { ...death, cursor: { ...death.cursor, generation: 2 } },
+    { ...death, cursor: { ...death.cursor, tick: 101 } },
+  ]) {
+    expect(
+      reduceRuntime(
+        state,
+        { kind: 'program-round-events', events: { ...evidence, deaths: [invalid] } },
+        POLICY,
+      ).disposition.kind,
+    ).toBe('ignored');
+  }
+  const accepted = reduceRuntime(state, { kind: 'program-round-events', events: evidence }, POLICY);
+  expect(accepted.disposition.kind).toBe('accepted');
+  state = accepted.state;
+  expect(state.playerStats.completedRounds[0]?.deaths).toEqual(evidence.deaths);
+  expect(
+    projectPlayerStatistics(state.playerStats, PLAYER_A, undefined, null).completed.kastPercent
+      .value,
+  ).toBeNull();
+  const final = withScore(frame(4, 4, 'over', 24, 80));
+  const wrongScore = accept(state, {
+    ...final,
+    telemetry: {
+      ...final.telemetry,
+      map: {
+        ...final.telemetry.map!,
+        phase: 'gameover',
+        sides: { ct: { score: 13 }, t: { score: 10 } },
+      },
+    },
+  }).state;
+  expect(wrongScore.playerStats.completedRounds[0]?.deaths).toEqual(evidence.deaths);
+  expect(
+    projectPlayerStatistics(wrongScore.playerStats, PLAYER_A, undefined, null).completed.kastPercent
+      .value,
+  ).toBeNull();
+  state = accept(state, {
+    ...final,
+    telemetry: { ...final.telemetry, map: { ...final.telemetry.map!, phase: 'gameover' } },
+  }).state;
+  expect(
+    projectPlayerStatistics(state.playerStats, PLAYER_A, undefined, null).completed.kastPercent
+      .value,
+  ).toBe(100);
+  expect(
+    projectPlayerStatistics(state.playerStats, PLAYER_A, undefined, null).completed.rating2Approx
+      .value,
+  ).toBeCloseTo(1.911784, 6);
+});
+
+it.each([0, 1])('marks a skipped whole round partial after end hint %s', async (endHint) => {
+  const { projectPlayerStatistics } = await import('../src/runtime/index.js');
+  let state = createInitialRuntimeState('skipped-whole-round');
+  state = accept(state, frame(1, 1, 'freezetime', 0)).state;
+  state = accept(state, frame(2, 2, 'live', 0, 80)).state;
+  state = accept(state, frame(3, 3, 'over', endHint, 80)).state;
+  state = accept(state, frame(4, 4, 'freezetime', 2)).state;
+  state = accept(state, frame(5, 5, 'live', 2, 60)).state;
+  state = accept(state, frame(6, 6, 'over', 2, 60)).state;
+  expect(
+    projectPlayerStatistics(state.playerStats, PLAYER_A, undefined, null).completed.adr,
+  ).toMatchObject({ value: 70, basis: { rounds: 2, coverage: 'partial' } });
+});
+
+it.each([0, 1])('keeps adjacent rounds complete after end hint %s', async (endHint) => {
+  const { projectPlayerStatistics } = await import('../src/runtime/index.js');
+  let state = createInitialRuntimeState('adjacent-rounds');
+  state = accept(state, frame(1, 1, 'freezetime', 0)).state;
+  state = accept(state, frame(2, 2, 'live', 0, 80)).state;
+  state = accept(state, frame(3, 3, 'over', endHint, 80)).state;
+  state = accept(state, frame(4, 4, 'freezetime', 1)).state;
+  state = accept(state, frame(5, 5, 'live', 1, 60)).state;
+  state = accept(state, frame(6, 6, 'over', 1, 60)).state;
+  expect(
+    projectPlayerStatistics(state.playerStats, PLAYER_A, undefined, null).completed.adr,
+  ).toMatchObject({ value: 70, basis: { rounds: 2, coverage: 'complete' } });
+});
+
+it('does not infer a skipped round from an absent new round hint', () => {
+  let stats = createMapPlayerStatsAccumulator();
+  const push = (observation: TelemetryObservation) => {
+    stats = reduceMapPlayerStats(stats, { mapEpoch: 0, observation, continuity: 'contiguous' });
+  };
+  push(frame(1, 1, 'freezetime', 0));
+  push(frame(2, 2, 'live', 0, 80));
+  push(frame(3, 3, 'over', 1, 80));
+  const next = frame(4, 4, 'freezetime', 2);
+  push({ ...next, telemetry: { ...next.telemetry, map: { name: 'de_mirage', phase: 'live' } } });
+  expect(stats.coverage).toBe('complete');
+});
