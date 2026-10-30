@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { parseModuleRecord, type ModuleRecord } from '@mizar/broadcast-config';
+import type { MusicGroup } from '@mizar/protocol/music';
 import { useLocalRead } from '../preparation/client';
 import { Button, Checkbox, Field, Panel, Select, StatusBanner } from '../ui';
 import { PresetVisualPreview } from './PresetVisualPreview';
@@ -8,6 +9,7 @@ import { exportFailure } from './export-error';
 import { MusicModuleEditor } from './MusicModuleEditor';
 import { CameraModuleEditor } from './CameraModuleEditor';
 import { localFile, type UploadedMusicTrack } from '../music/music-files';
+import { MUSIC_LABELS } from '../music/MusicControls';
 
 type Kind = ModuleRecord['kind'];
 export type Snapshot = {
@@ -760,7 +762,7 @@ export function ResourceModules({
                   <dl>
                     {Object.entries(entry.value.groups).map(([name, group]) => (
                       <div key={name}>
-                        <dt>{name}</dt>
+                        <dt>{MUSIC_LABELS[name as MusicGroup]}</dt>
                         <dd>{group.tracks.map((track) => track.name).join('、') || '无曲目'}</dd>
                       </div>
                     ))}

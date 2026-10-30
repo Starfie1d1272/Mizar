@@ -261,6 +261,9 @@ function MapResult({ data }: { data: ProgramPresentation }) {
   const resolveAssetUrl = useAssetUrl();
   const summary = summaryForScene(data, 'map_result');
   const series = data.series;
+  const winnerEntryId = series?.maps.find(
+    (map) => map.mapOrder === summary?.mapOrder,
+  )?.winnerEntryId;
   return summary && series ? (
     <main className="result-sting">
       {getMapThumbnail(summary.mapName) ? (
@@ -277,11 +280,7 @@ function MapResult({ data }: { data: ProgramPresentation }) {
         <div
           className={`result-side result-side--${side}`}
           key={side}
-          data-winner={
-            summary.score[side] !== null &&
-            summary.score[side === 'a' ? 'b' : 'a'] !== null &&
-            summary.score[side] > summary.score[side === 'a' ? 'b' : 'a']!
-          }
+          data-winner={winnerEntryId != null && winnerEntryId === series.entrants[side].entryId}
         >
           <strong className="result-round-score">{number(summary.score[side])}</strong>
           <div className="result-logo">

@@ -269,12 +269,17 @@ it('preserves the existing music owner state during built-in production migratio
 });
 
 it('preserves legacy camera data while allowing HUD use when its source is unavailable', async () => {
-  const { mkdtemp, readFile, rm, stat } = await import('node:fs/promises');
+  const { mkdir, mkdtemp, readFile, rm, stat, writeFile } = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
   const { HudConfigStore } = await import('../../src/hud-config/store.js');
   const { OrchestrationStore } = await import('../../src/orchestration/store.js');
   const root = await mkdtemp(join(tmpdir(), 'broadcast-real-camera-'));
+  const webRoot = join(root, 'web');
+  for (const directory of ['lhm-runtime', 'brand', 'assets/cs2'])
+    await mkdir(join(webRoot, directory), { recursive: true });
+  await writeFile(join(webRoot, 'index.html'), '<html>web</html>');
+  await writeFile(join(webRoot, 'lhm-runtime/index.html'), '<html>hud</html>');
   const camera = new OrchestrationStore(join(root, 'orchestration'));
   await camera.load();
   await camera.save({
@@ -286,7 +291,7 @@ it('preserves legacy camera data while allowing HUD use when its source is unava
   const oldState = await readFile(join(camera.directory, 'presets.json'), 'utf8');
   const hud = new HudConfigStore();
   await hud.load();
-  const app = buildApp({ obsConfigPath: join(root, 'obs.json'), hudConfigStore: hud });
+  const app = buildApp({ obsConfigPath: join(root, 'obs.json'), hudConfigStore: hud, webRoot });
   try {
     expect((await app.inject('/local/v1/broadcast-config/migration')).json()).toEqual({
       state: 'pending',
@@ -311,6 +316,33 @@ it('preserves legacy camera data while allowing HUD use when its source is unava
     const { randomUUID } = await import('node:crypto');
     const address = await app.listen({ host: '127.0.0.1', port: 0 });
     expect((await fetch(`${address}/local/v1/broadcast-modules`)).status).toBe(200);
+    const statsPage = await fetch(`${address}/program/stats?kind=team-overview`);
+    expect(statsPage.status).toBe(200);
+    expect(statsPage.headers.get('cache-control')).toBe('no-store');
+    const headers = { origin: 'http://127.0.0.1:3000', 'content-type': 'application/json' };
+    const hudModules = modules
+      .map(({ module }) => module)
+      .filter((module) => module.kind === 'hud');
+    expect(hudModules.length).toBeGreaterThanOrEqual(5);
+    const clone = await fetch(`${address}/operator/broadcast-modules/clone`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        moduleId: hudModule.id,
+        expectedRevision: hudModule.revision,
+        name: 'Custom',
+      }),
+    });
+    expect(clone.status).toBe(200);
+    hudModules.push((await clone.json()) as Extract<ModuleRecord, { kind: 'hud' }>);
+    for (const module of hudModules) {
+      const exported = await fetch(`${address}/operator/hud-config/export-lhm`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ moduleId: module.id, moduleRevision: module.revision }),
+      });
+      expect(exported.status, module.name).toBe(200);
+    }
     const applied = await fetch(`${address}/operator/broadcast-modules/apply`, {
       method: 'POST',
       headers: { origin: 'http://127.0.0.1:3000', 'content-type': 'application/json' },

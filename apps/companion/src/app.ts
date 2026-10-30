@@ -762,13 +762,14 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   let waitForBroadcast: (() => Promise<void>) | undefined;
   let getExportBroadcastDocument:
     (() => import('@mizar/broadcast-config').BroadcastConfigDocument) | undefined;
+  let isExportBroadcastReady = () => false;
   registerHudConfigRoutes(app, {
     store: hudConfigStore,
     getBroadcastDocument: () => getExportBroadcastDocument?.(),
     webRoot: options.webRoot ?? defaultWebRoot(),
     waitForBroadcast: async () => {
       await waitForBroadcast?.();
-      if (options.obsConfigPath && getBroadcastMigrationStatus().state !== 'ready')
+      if (options.obsConfigPath && !isExportBroadcastReady())
         throw new Error('broadcast_config_unavailable');
     },
     originPolicy: localWebTransport.getOriginPolicy(),
@@ -1501,6 +1502,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     if (broadcastRuntime) {
       getExportBroadcastDocument = () => broadcastRuntime.store.snapshot;
       waitForBroadcast = () => broadcastRuntime.waitForApply();
+      isExportBroadcastReady = () => broadcastRuntime.ready;
       getBroadcastReferences = () => {
         if (!broadcastRuntime.ready) throw new Error('broadcast_config_unavailable');
         return broadcastRuntime.store.referencedResources();
