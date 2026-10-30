@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, chromium } from '@playwright/test';
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -181,7 +181,10 @@ test('assembled Companion serves historical cards to multiple browsers without e
     const standalone = await browserContext.newPage();
     await standalone.goto(address + '/program/stats?card=player-attributes');
     await expect(standalone.locator('.stats-insert__radar')).toBeVisible();
-    const secondContext = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+    const secondBrowser = await chromium.launch({ headless: true });
+    const secondContext = await secondBrowser.newContext({
+      viewport: { width: 1920, height: 1080 },
+    });
     try {
       const other = await secondContext.newPage();
       await other.goto(address + '/program/stats?card=maps');
@@ -194,6 +197,7 @@ test('assembled Companion serves historical cards to multiple browsers without e
       expect(upstreamRequests).toBe(1);
     } finally {
       await secondContext.close();
+      await secondBrowser.close();
     }
     const settings = await browserContext.newPage();
     await settings.goto(address + '/settings?tab=rivalhub');
