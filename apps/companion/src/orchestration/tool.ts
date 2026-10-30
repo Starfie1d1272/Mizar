@@ -364,7 +364,7 @@ export class MulnxTool {
         !this.installed ||
         this.installed.release.sha256 !== release.sha256
       )
-        await this.install(release, cs2Path, consoleCapture, spectatorCfg, demoCfg);
+        await this.install(release);
       const root = join(this.directory, this.installed!.directory, 'MulNX');
       await this.configureLauncher(root, cs2Path, consoleCapture, spectatorCfg, demoCfg);
       const launcher = await safePath(root, 'CS2Injector/CS2Injector.exe');
@@ -526,19 +526,19 @@ export class MulnxTool {
   }
 
   /** Native host must hold its launch and process/recovery guards while selecting. */
-  selectRelease(preparedId: string, cs2Path: string) {
+  selectRelease(preparedId: string) {
     return this.run('mulnx_select_release', async () => {
-      const installed = await this.selectReleaseFiles(preparedId, cs2Path);
+      const installed = await this.selectReleaseFiles(preparedId);
       await this.publishSelection(installed);
     });
   }
 
-  /** Prepare the configured instance before the native host's final process check. */
-  stageSelection(preparedId: string, cs2Path: string, consoleCapture: boolean) {
+  /** Prepare an independent instance before the native host's final process check. */
+  stageSelection(preparedId: string) {
     return this.run('mulnx_stage_selection', async () => {
       const expected = this.installed?.directory;
       this.staged = undefined;
-      const installed = await this.selectReleaseFiles(preparedId, cs2Path, consoleCapture);
+      const installed = await this.selectReleaseFiles(preparedId);
       const id = randomUUID();
       this.staged = { id, installed, expected };
       return { id };
@@ -576,21 +576,9 @@ export class MulnxTool {
     this.installed = installed;
   }
 
-  private async install(
-    release: MulnxRelease,
-    cs2Path: string,
-    consoleCapture: boolean,
-    spectatorCfg: boolean,
-    demoCfg?: string,
-  ) {
+  private async install(release: MulnxRelease) {
     const prepared = await this.prepareReleaseFiles(release);
-    const installed = await this.selectReleaseFiles(
-      prepared.preparedId,
-      cs2Path,
-      consoleCapture,
-      spectatorCfg,
-      demoCfg,
-    );
+    const installed = await this.selectReleaseFiles(prepared.preparedId);
     await this.publishSelection(installed);
   }
 
@@ -644,13 +632,7 @@ export class MulnxTool {
     }
   }
 
-  private async selectReleaseFiles(
-    preparedId: string,
-    cs2Path: string,
-    consoleCapture = false,
-    spectatorCfg = false,
-    demoCfg?: string,
-  ) {
+  private async selectReleaseFiles(preparedId: string) {
     if (!/^prepared-[a-f0-9]{64}-[a-f0-9-]{36}$/.test(preparedId))
       throw new Error('mulnx_prepared_invalid');
     const prepared = await safePath(join(this.directory, preparedId));
@@ -691,7 +673,6 @@ export class MulnxTool {
         await prepareIsolatedPack(join(packsRoot, entry.name), packsRoot, name);
         packs.push({ name, sourceName: entry.name, treeSha256 });
       }
-      await this.configureLauncher(extracted.root, cs2Path, consoleCapture, spectatorCfg, demoCfg);
       const directory = `release-${release.sha256}-${randomUUID()}`;
       await rename(unpacked, join(this.directory, directory));
       return { release, directory, packs };

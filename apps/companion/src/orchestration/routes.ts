@@ -198,15 +198,12 @@ export function registerOrchestrationRoutes(
           z.strictObject({
             action: z.literal('stage'),
             preparedId: z.string().regex(/^prepared-[a-f0-9]{64}-[a-f0-9-]{36}$/),
-            cs2Path: nativeCs2PathSchema,
-            consoleCapture: z.boolean(),
           }),
           z.strictObject({ action: z.literal('commit'), id: z.uuid() }),
         ])
         .parse(request.body);
       if (!tool) throw new Error('mulnx_bundle_unavailable');
-      if (body.action === 'stage')
-        return await tool.stageSelection(body.preparedId, body.cs2Path, body.consoleCapture);
+      if (body.action === 'stage') return await tool.stageSelection(body.preparedId);
       let result: { version: string; cameraReady?: boolean } | undefined;
       if (
         !session?.withSelection ||

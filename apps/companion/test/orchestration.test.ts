@@ -630,25 +630,16 @@ it('commits a prepared MulNX selection only inside the production guard', async 
       payload,
     });
   const preparedId = `prepared-${'a'.repeat(64)}-${id}`;
-  expect(
-    (
-      await post(
-        { action: 'stage', preparedId, cs2Path: 'D:\\Steam\\cs2.exe', consoleCapture: false },
-        'bad',
-      )
-    ).statusCode,
-  ).toBe(403);
+  expect((await post({ action: 'stage', preparedId }, 'bad')).statusCode).toBe(403);
   expect(
     (
       await post({
         action: 'stage',
         preparedId,
-        cs2Path: 'D:\\Steam\\cs2.exe',
-        consoleCapture: false,
       })
     ).statusCode,
   ).toBe(200);
-  expect(stage).toHaveBeenCalledOnce();
+  expect(stage).toHaveBeenCalledExactlyOnceWith(preparedId);
   expect((await post({ action: 'commit', id })).statusCode).toBe(409);
   expect(commit).not.toHaveBeenCalled();
   allowed = true;

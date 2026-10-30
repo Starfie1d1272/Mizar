@@ -22,7 +22,6 @@ export interface ObserverHint {
 }
 export interface ObserverHintSettings {
   readonly enabled: boolean;
-  readonly expectedDelaySeconds: number;
   readonly leadSeconds: number;
 }
 
@@ -34,7 +33,7 @@ export interface ObserverAssistProjection {
     readonly state: 'connecting' | 'ready' | 'paused' | 'unavailable';
     readonly timingBasis: 'estimated' | 'program-clock';
     readonly calibrationState: 'uncalibrated' | 'measured' | 'held' | 'reacquiring';
-    readonly effectiveDelaySeconds: number;
+    readonly effectiveDelaySeconds: number | null;
     readonly waitingReason: string | null;
     readonly nextWindowSeconds: number | null;
     readonly measuredDelaySeconds: number | null;
@@ -115,6 +114,7 @@ export class ObserverHintTimeline {
     segment: number;
   }[] = [];
   private effectiveDelayMs: number | null = null;
+  private lastMatchedDeathOffsetMs: number | null = null;
   private lastEvidenceAt: number | null = null;
   private evidenceCount = 0;
   private evidenceSpreadMs: number | null = null;
@@ -174,6 +174,7 @@ export class ObserverHintTimeline {
       calibration: {
         state: this.calibrationState(this.lastNow),
         effectiveDelayMs: this.effectiveDelayMs,
+        lastMatchedDeathOffsetMs: this.lastMatchedDeathOffsetMs,
         evidenceCount: this.evidenceCount,
         evidenceSpreadMs: this.evidenceSpreadMs,
         lastEvidenceMonotonicMs: this.lastEvidenceAt,
@@ -214,6 +215,7 @@ export class ObserverHintTimeline {
     this.clockEvidence = [];
     this.clockSegment++;
     this.effectiveDelayMs = null;
+    this.lastMatchedDeathOffsetMs = null;
     this.lastEvidenceAt = null;
     this.evidenceCount = 0;
     this.evidenceSpreadMs = null;
@@ -524,8 +526,7 @@ export class ObserverHintTimeline {
         state,
         timingBasis: clock && 'playback' in clock ? 'program-clock' : 'estimated',
         calibrationState: this.calibrationState(now),
-        effectiveDelaySeconds:
-          (this.effectiveDelayMs ?? settings.expectedDelaySeconds * 1000) / 1000,
+        effectiveDelaySeconds: this.effectiveDelayMs === null ? null : this.effectiveDelayMs / 1000,
         waitingReason: this.blocked,
         nextWindowSeconds: null,
         measuredDelaySeconds: null,
@@ -708,7 +709,7 @@ export class ObserverHintTimeline {
           timingBasis: 'program-clock',
           calibrationState: this.calibrationState(now),
           effectiveDelaySeconds:
-            (this.effectiveDelayMs ?? settings.expectedDelaySeconds * 1000) / 1000,
+            this.effectiveDelayMs === null ? null : this.effectiveDelayMs / 1000,
           waitingReason: nextWindow === null ? 'waiting-event' : hints.length ? null : 'buffering',
           nextWindowSeconds: nextWindow,
           measuredDelaySeconds:
@@ -759,17 +760,22 @@ export class ObserverHintTimeline {
             programReceiveMs >= kill.shownDueMs - settings.leadSeconds * 1000 &&
             programReceiveMs <= kill.shownDueMs + 1000,
         );
-        if (candidates.length === 1) candidates[0]!.matched = true;
+        if (candidates.length === 1) {
+          const match = candidates[0]!;
+          match.matched = true;
+          if (this.effectiveDelayMs !== null)
+            this.lastMatchedDeathOffsetMs =
+              programReceiveMs - match.sourceMs - this.effectiveDelayMs;
+        }
       }
       this.previous = alive;
       this.seenReceive = program.cursor.programReceiveSequence;
     }
-    const keepSince =
-      now -
-      (Math.max(600000, settings.expectedDelaySeconds * 1000, this.effectiveDelayMs ?? 0) + 180000);
+    const keepSince = now - 780000;
     this.kills = this.kills.filter((kill) => kill.sourceMs >= keepSince);
-    if (this.calibrationState(now) === 'reacquiring') {
-      this.blocked = 'calibration-reacquiring';
+    if (this.effectiveDelayMs === null || this.calibrationState(now) === 'reacquiring') {
+      this.blocked =
+        this.effectiveDelayMs === null ? 'calibration-pending' : 'calibration-reacquiring';
       this.nextDueMs = null;
       this.nextWindowMs = null;
       return empty('unavailable');
@@ -791,8 +797,7 @@ export class ObserverHintTimeline {
     this.nextWindowMs = null;
     for (const kill of [...this.kills].sort((a, b) => a.sourceMs - b.sourceMs)) {
       // A Program-confirmed death is never a future hint.
-      const due =
-        kill.shownDueMs ?? kill.sourceMs + (stableDelay ?? settings.expectedDelaySeconds * 1000);
+      const due = kill.shownDueMs ?? kill.sourceMs + stableDelay;
       if (now >= due && kill.shownDueMs !== null && !kill.retired) {
         kill.retired = true;
         this.discard('expired');
@@ -840,7 +845,7 @@ export class ObserverHintTimeline {
         state: 'ready',
         timingBasis: 'estimated',
         calibrationState: this.calibrationState(now),
-        effectiveDelaySeconds: (stableDelay ?? settings.expectedDelaySeconds * 1000) / 1000,
+        effectiveDelaySeconds: stableDelay / 1000,
         waitingReason:
           this.nextDueMs === null ? 'waiting-event' : hints.length ? null : 'buffering',
         nextWindowSeconds:

@@ -14,10 +14,9 @@ export const assistPayloadSchema = z.object({
       state: z.enum(['connecting', 'ready', 'paused', 'unavailable']),
       timingBasis: z.enum(['estimated', 'program-clock']),
       calibrationState: z.enum(['uncalibrated', 'measured', 'held', 'reacquiring']).optional(),
-      effectiveDelaySeconds: z.number().finite().nonnegative().optional(),
+      effectiveDelaySeconds: z.number().finite().nonnegative().nullable(),
       waitingReason: z.string().max(64).nullable(),
       nextWindowSeconds: z.number().finite().nonnegative().nullable(),
-      expectedDelaySeconds: z.number().finite(),
       leadSeconds: z.number().finite(),
       measuredDelaySeconds: z.number().finite().nullable(),
       hints: z
@@ -40,17 +39,13 @@ export const assistPayloadSchema = z.object({
     .optional(),
 });
 
-export const observerSettingsSchema = z
-  .strictObject({
-    enabled: z.boolean(),
-    expectedDelaySeconds: z.number().int().min(10).max(600),
-    leadSeconds: z.number().int().min(1).max(30),
-  })
-  .refine((v) => v.leadSeconds < v.expectedDelaySeconds, '提前时间应小于两路延迟差');
+export const observerSettingsSchema = z.strictObject({
+  enabled: z.boolean(),
+  leadSeconds: z.number().int().min(1).max(30),
+});
 export type ObserverSettings = z.infer<typeof observerSettingsSchema>;
 export const DEFAULT_OBSERVER_SETTINGS: ObserverSettings = {
-  enabled: false,
-  expectedDelaySeconds: 120,
+  enabled: true,
   leadSeconds: 5,
 };
 

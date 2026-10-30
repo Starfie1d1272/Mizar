@@ -94,7 +94,7 @@ it('prepares without selecting and publishes a configured instance only after se
       state: 'available',
     },
   ]);
-  const staged = await restarted.stageSelection(prepared.preparedId, 'D:\\Steam\\cs2.exe', false);
+  const staged = await restarted.stageSelection(prepared.preparedId);
   expect(restarted.view().installed).toBeNull();
   await expect(restarted.commitSelection('wrong')).rejects.toThrow('mulnx_selection_changed');
   expect(restarted.view().installed).toBeNull();
@@ -105,12 +105,15 @@ it('prepares without selecting and publishes a configured instance only after se
     directory: string;
     packs: { name: string }[];
   };
-  expect(
-    await readFile(
-      join(data, current.directory, 'MulNX/CS2Injector/CS2BootLoader/Config/config.yaml'),
-      'utf8',
-    ),
-  ).toContain('D:\\\\Steam');
+  const launcherConfig = join(
+    data,
+    current.directory,
+    'MulNX/CS2Injector/CS2BootLoader/Config/config.yaml',
+  );
+  expect(await readFile(launcherConfig, 'utf8')).toContain('path: old');
+  await restarted.prepare('D:\\Steam\\cs2.exe', true);
+  expect(await readFile(launcherConfig, 'utf8')).toContain('D:\\\\Steam');
+  expect(await readFile(launcherConfig, 'utf8')).toContain('-condebug');
   const source = await restarted.cameraSource(current.packs[0]!.name);
   expect(source).toMatchObject({
     sourceName: 'Source',
@@ -206,9 +209,12 @@ it('prepares without selecting and publishes a configured instance only after se
     metadata: { packageId: randomUUID(), version: '1.0.0', name: 'Camera', author: '' },
   });
   const imported = await importPresetPack({ zip, store: shareStore, resources: shareResources });
-  const camera = shareStore.snapshot.modules.find(
-    (item) => item.id === imported.mapping.moduleEntries.camera![0],
+  const importedPreset = shareStore.snapshot.presets.find(
+    (item) => item.id === imported.mapping.presetEntries.main,
   );
+  const cameraBinding = importedPreset?.bindings.find((binding) => binding.kind === 'camera');
+  if (!cameraBinding || cameraBinding.mode !== 'use') throw new Error('missing camera binding');
+  const camera = shareStore.snapshot.modules.find((item) => item.id === cameraBinding.moduleId);
   if (!camera || camera.kind !== 'camera') throw new Error('missing imported camera');
   expect(camera.value.maps[0]!.source).toEqual(source);
   expect(await productionResolver.localPack(camera.value.maps[0]!.source)).toBe(
@@ -283,8 +289,6 @@ it('prepares without selecting and publishes a configured instance only after se
         payload: {
           action: 'stage',
           preparedId,
-          cs2Path: 'D:\\Steam\\cs2.exe',
-          consoleCapture: false,
         },
       });
       expect(staged.statusCode).toBe(200);
@@ -368,7 +372,7 @@ it('prepares without selecting and publishes a configured instance only after se
       { preparedId: prepared.preparedId, tag: null, archiveSha256: null, state: 'damaged' },
     ]),
   );
-  await expect(restarted.selectRelease(prepared.preparedId, 'D:\\Steam\\cs2.exe')).rejects.toThrow(
+  await expect(restarted.selectRelease(prepared.preparedId)).rejects.toThrow(
     'mulnx_prepared_integrity',
   );
   expect(JSON.parse(await readFile(join(data, 'current.json'), 'utf8')) as unknown).toEqual(
@@ -381,11 +385,11 @@ it('prepares without selecting and publishes a configured instance only after se
   );
   fixture.source = 'different source';
   const changedRelease = await restarted.prepareRelease();
-  await restarted.selectRelease(changedRelease.preparedId, 'D:\\Steam\\cs2.exe');
+  await restarted.selectRelease(changedRelease.preparedId);
   expect(restarted.view().packs[0]!.name).toBe(current.packs[0]!.name);
   await expect(resolver.localPack(source)).rejects.toThrow('mulnx_source_unavailable');
   fixture.source = 'source';
   const compatibleRelease = await restarted.prepareRelease();
-  await restarted.selectRelease(compatibleRelease.preparedId, 'D:\\Steam\\cs2.exe');
+  await restarted.selectRelease(compatibleRelease.preparedId);
   await expect(resolver.localPack(source)).resolves.toBe(current.packs[0]!.name);
 });

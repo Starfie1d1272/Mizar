@@ -16,7 +16,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 
-type SettingsChange = 'settings' | 'lead' | 'enabled' | 'game' | 'connection' | 'map';
+type SettingsChange = 'lead' | 'enabled' | 'game' | 'connection' | 'map';
 
 /** Persist operator preferences; the current match's credentials stay in memory. */
 export class ObserverSettingsStore {
@@ -38,6 +38,7 @@ export class ObserverSettingsStore {
         const current = { ...((record.settings ?? record) as Record<string, unknown>) };
         // Read the preview format while keeping each capability's current preferences.
         const legacyHud = current.hideGameHud;
+        delete current.expectedDelaySeconds;
         delete current.displaySeconds;
         delete current.hideGameHud;
         this.settings = observerSettingsSchema.parse(current);
@@ -77,12 +78,7 @@ export class ObserverSettingsStore {
       if (JSON.stringify(this.settings) === JSON.stringify(value)) return;
       if (this.path)
         await atomicJson(this.path, { settings: value, gameAutomation: this.gameAutomation });
-      const kind =
-        this.settings.enabled !== value.enabled
-          ? 'enabled'
-          : this.settings.expectedDelaySeconds !== value.expectedDelaySeconds
-            ? 'settings'
-            : 'lead';
+      const kind = this.settings.enabled !== value.enabled ? 'enabled' : 'lead';
       this.settings = value;
       this.changed(kind);
     });
@@ -152,7 +148,7 @@ export class ObserverSettingsStore {
   }
   private changed(kind: SettingsChange) {
     // Timing preferences affect projection calculation, never Host preparation.
-    if (kind !== 'settings' && kind !== 'lead') this.revision = randomUUID();
+    if (kind !== 'lead') this.revision = randomUUID();
     this.listeners.forEach((f) => f(kind));
   }
 }

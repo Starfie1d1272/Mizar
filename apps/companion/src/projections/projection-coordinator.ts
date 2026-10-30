@@ -66,7 +66,6 @@ export interface ProjectionPublishers {
 export interface ProjectionCoordinatorOptions {
   readonly observerSettings?: () => {
     enabled: boolean;
-    expectedDelaySeconds: number;
     leadSeconds: number;
   };
   readonly onObserverDiagnostics?: (

@@ -291,6 +291,40 @@ describe('observer through the existing source owner', () => {
     });
     manager.consumeObserverRecord({ ...cursor, channel: 2, sequence: 8, roundClock });
     expect(manager.getHealth().roundClock?.remaining).toBe(114);
+    manager.consumeObserverRecord({
+      ...cursor,
+      channel: 2,
+      sequence: 9,
+      roundClock: {
+        ...roundClock,
+        committedTick: 192,
+        pause: { ...roundClock.pause, totalPausedTicks: 64 },
+      },
+    });
+    expect(manager.getHealth().roundClock).toBeUndefined();
+    manager.consumeObserverRecord({
+      ...cursor,
+      channel: 2,
+      sequence: 10,
+      type: 'raw-event',
+      kind: 'round_freeze_end',
+      name: 'round_freeze_end',
+      tick: 0,
+      committedTick: 200,
+      round: 2,
+    });
+    manager.consumeObserverRecord({
+      ...cursor,
+      channel: 2,
+      sequence: 11,
+      roundClock: {
+        ...roundClock,
+        totalRoundsPlayed: 2,
+        committedTick: 256,
+        pause: { ...roundClock.pause, totalPausedTicks: 64 },
+      },
+    });
+    expect(manager.getHealth().roundClock).toBeUndefined(); // Start time does not match the boundary.
   });
   it('keeps the initial warmup-to-match transition in the initial execution', () => {
     const { manager } = setup();
@@ -587,7 +621,7 @@ it('calibrates through the manager after first start and again in the round afte
     bombPlanted: false,
     pause: {
       active: paused,
-      totalPausedTicks: 0,
+      totalPausedTicks: round === 1 ? 64 : 0,
       startTick: null,
       technical: null,
       semantics: 'unknown',
@@ -756,5 +790,5 @@ it('retains new-map kills received by the manager before Program changes map', a
   project();
   expect(timeline.getDiagnostics().buffered).toBe(1);
   now = 115000;
-  expect(project().observer?.hints).toMatchObject([{ remainingSeconds: 7 }]);
+  expect(project().observer).toMatchObject({ waitingReason: 'calibration-pending', hints: [] });
 });

@@ -186,6 +186,33 @@ export function MatchConnectionDialog() {
       setBusy(false);
     }
   };
+  const editConnection = async () => {
+    if (operation.current || !request) return;
+    operation.current = true;
+    setBusy(true);
+    setError('');
+    try {
+      const response = await fetch('/local/v1/observer-assist', {
+        cache: 'no-store',
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!response.ok) throw new Error('本场连接设置未读取，请重试。');
+      const view = (await response.json()) as ConnectionPreparationView;
+      if (typeof view.settings?.enabled !== 'boolean') throw new Error('请刷新后重试本场连接。');
+      const revision = requireConnectionRevision(view.revision);
+      if (pending.current !== request) return;
+      draftRevision.current = revision;
+      mapId.current = crypto.randomUUID();
+      setSavedView(view);
+      setSaved(false);
+    } catch (reason) {
+      if (pending.current === request)
+        setError(reason instanceof Error ? reason.message : '本场连接设置未读取，请重试。');
+    } finally {
+      operation.current = false;
+      setBusy(false);
+    }
+  };
   const endpoints = connection ?? (nextMap ? null : savedView?.connection);
   if (!request && error && isReviewWindow())
     return (
@@ -305,6 +332,11 @@ export function MatchConnectionDialog() {
       ) : null}
       {error ? <StatusBanner tone="warning">{error}</StatusBanner> : null}
       <div className="preparation-actions">
+        {saved && error ? (
+          <Button disabled={busy} onClick={() => void editConnection()}>
+            修改连接
+          </Button>
+        ) : null}
         <Button disabled={busy} onClick={close}>
           {confirmed ? '完成' : '取消'}
         </Button>
