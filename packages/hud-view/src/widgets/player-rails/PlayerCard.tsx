@@ -203,21 +203,8 @@ function UtilityIcons({
   readonly player: PlayerCardPresentation;
   readonly presentationRevision: number;
 }) {
-  const counts = new Map<
-    PlayerCardPresentation['utility'][number]['family'],
-    { count: number; asset: PlayerRailAsset | null; active: boolean }
-  >();
-  for (const utility of player.utility) {
-    const current = counts.get(utility.family);
-    counts.set(utility.family, {
-      count: (current?.count ?? 0) + utility.count,
-      asset: current?.asset ?? utility.asset,
-      active: Boolean(current?.active || utility.active),
-    });
-  }
-
   const icons = UTILITY_FAMILIES.flatMap((family) => {
-    const utility = counts.get(family);
+    const utility = player.utility.find((item) => item.family === family);
     if (utility === undefined || utility.asset === null) return [];
     const asset = utility.asset;
     return Array.from({ length: utility.count }, (_, index) => ({
@@ -386,10 +373,15 @@ function PlayerBody({
             <div className="player-rail__dead-stats" data-dead-stats="true">
               {options.deadInformation === 'stats' ? (
                 <>
-                  {player.liveAdr === null ? null : (
+                  {(design === 'perfectworld' ? player.liveAdr : player.completedAdr) ===
+                  null ? null : (
                     <span className="player-rail__adr">
                       <small>ADR</small>
-                      <b>{displayNumber(player.liveAdr)}</b>
+                      <b>
+                        {displayNumber(
+                          design === 'perfectworld' ? player.liveAdr : player.completedAdr,
+                        )}
+                      </b>
                     </span>
                   )}
                   {player.currentRoundDamage === null ? null : (

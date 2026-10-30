@@ -171,11 +171,11 @@ function SummaryBoard({ data, scene }: { data: ProgramPresentation; scene: Progr
                 </div>
                 <strong className="summary-player-name">{player.name ?? 'UNKNOWN PLAYER'}</strong>
                 <div className="summary-player-stats" aria-label="Kills / Deaths">
-                  <span>{number(player.kills)}</span>
+                  <span>{number(player.statistics.scoreboard.kills.value)}</span>
                   <span className="summary-stat-separator" aria-hidden="true">
                     –
                   </span>
-                  <span>{number(player.deaths)}</span>
+                  <span>{number(player.statistics.scoreboard.deaths.value)}</span>
                 </div>
               </div>
             ))}

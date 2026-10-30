@@ -2,17 +2,10 @@ import type { ProgramPayload } from '@mizar/protocol/program';
 
 /** Current-frame evidence only: reloads still hold a weapon, ambiguous states do not. */
 export function heldWeapon(player: ProgramPayload['players'][number], fresh: boolean) {
-  if (
-    !fresh ||
-    player.lifeState !== 'alive' ||
-    player.lineupEvidence !== 'current' ||
-    !player.weaponsAvailable
-  )
-    return null;
-  const candidates = player.weapons.filter(
-    (weapon) => weapon.state === 'active' || weapon.state === 'reloading',
+  if (!fresh || player.lifeState !== 'alive' || player.lineupEvidence !== 'current') return null;
+  return (
+    player.weapons.find((weapon) => weapon.sourceWeaponId === player.equipment.heldWeaponId) ?? null
   );
-  return candidates.length === 1 ? candidates[0]! : null;
 }
 
 export function magazineFill(

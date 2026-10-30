@@ -80,6 +80,7 @@ export interface PlayerCardPresentation {
   readonly roundKills: number | null;
   readonly stats: PlayerRailStats;
   readonly liveAdr: number | null;
+  readonly completedAdr: number | null;
   readonly currentRoundDamage: number | null;
   readonly weaponsAvailable: boolean;
 }
@@ -117,24 +118,6 @@ export interface PlayerRailsPresentation {
   readonly t: PlayerRailPresentation;
   readonly left: PlayerRailPresentation;
   readonly right: PlayerRailPresentation;
-}
-
-const EMPTY_UTILITY: TeamUtilitySummary = Object.freeze({
-  smoke: 0,
-  fire: 0,
-  flash: 0,
-  he: 0,
-});
-
-export function lossBonusForConsecutiveRoundLosses(
-  value: number | null | undefined,
-): number | null {
-  // Pinned from Starfie1d1272/cs2-roundsense@2ca7fbe7023cd6c37f7342ecb2966b25d066b7.
-  if (value === null || value === undefined || !Number.isSafeInteger(value) || value < 0) {
-    return null;
-  }
-  if (value >= 4) return 3_400;
-  return 1_400 + value * 500;
 }
 
 export function assetForCanonicalKey(canonicalKey: string): PlayerRailAsset | null {
@@ -189,25 +172,6 @@ export function weaponPresentation(
   };
 }
 
-function knownWeapons(player: ProgramPayload['players'][number]): readonly PlayerRailWeapon[] {
-  return player.weapons.map(weaponPresentation);
-}
-
-function primaryAndSecondary(weapons: readonly PlayerRailWeapon[]): {
-  readonly primary: PlayerRailWeapon | null;
-  readonly secondary: PlayerRailWeapon | null;
-} {
-  const firearms = weapons.filter(
-    (weapon) => weapon.item?.kind === 'firearm' && weapon.item.family !== 'pistol',
-  );
-  const pistols = weapons.filter(
-    (weapon) => weapon.item?.kind === 'firearm' && weapon.item.family === 'pistol',
-  );
-  const primary = firearms[0] ?? pistols[0] ?? null;
-  const secondary = firearms.length > 0 ? (pistols[0] ?? null) : null;
-  return { primary, secondary };
-}
-
 function utilityFamily(item: Cs2ItemMetadata | null): PlayerRailUtility['family'] | null {
   if (item?.kind !== 'utility' || item.family !== 'grenade') return null;
   switch (item.canonicalKey) {
@@ -226,14 +190,28 @@ function utilityFamily(item: Cs2ItemMetadata | null): PlayerRailUtility['family'
 }
 
 export function utilityPresentation(
+  player: ProgramPayload['players'][number],
+  side: PlayerRailSide,
   weapons: readonly PlayerRailWeapon[],
 ): readonly PlayerRailUtility[] {
-  return weapons.flatMap((weapon) => {
-    const family = utilityFamily(weapon.item);
-    if (family === null) return [];
-    const count = weapon.ammoReserve === null ? 1 : Math.max(0, Math.floor(weapon.ammoReserve));
+  const counts = player.equipment.utility;
+  if (counts === null) return [];
+  return (['smoke', 'fire', 'flash', 'he'] as const).flatMap((family) => {
+    const count = counts[family];
     if (count === 0) return [];
-    return [{ ...weapon, family, count }];
+    const weapon = weapons.find((item) => utilityFamily(item.item) === family);
+    return [
+      {
+        sourceWeaponId: weapon?.sourceWeaponId ?? family,
+        name: weapon?.name ?? null,
+        item: weapon?.item ?? null,
+        asset: weapon?.asset ?? teamUtilityAsset(side, family),
+        ammoReserve: weapon?.ammoReserve ?? null,
+        active: weapon?.active ?? false,
+        family,
+        count,
+      },
+    ];
   });
 }
 
@@ -273,17 +251,17 @@ function playerPresentation(
     };
   });
   const dead = player.lifeState === 'dead';
-  const { primary, secondary } = primaryAndSecondary(weapons);
+  const primary =
+    weapons.find((weapon) => weapon.sourceWeaponId === player.equipment.primary) ?? null;
+  const secondary =
+    weapons.find((weapon) => weapon.sourceWeaponId === player.equipment.secondary) ?? null;
   const armorAsset =
     player.state?.armor !== null && player.state?.armor !== undefined && player.state.armor > 0
       ? assetForCanonicalKey(
           player.state.hasHelmet === true ? 'equipment.armor-helmet' : 'equipment.armor',
         )
       : null;
-  const hasC4 =
-    !dead &&
-    payload.bomb?.sourcePlayerId === player.sourcePlayerId &&
-    (payload.bomb.state === 'carried' || payload.bomb.state === 'planting');
+  const hasC4 = !dead && player.equipment.hasC4 === true;
   const mode = dead ? 'dead' : player.lifeState === 'alive' ? phase : 'unknown';
 
   return {
@@ -321,74 +299,32 @@ function playerPresentation(
     zeus: dead
       ? null
       : (weapons.find((weapon) => weapon.item?.canonicalKey === 'utility.taser') ?? null),
-    utility: dead ? [] : utilityPresentation(weapons),
+    utility: dead ? [] : utilityPresentation(player, player.side === 'T' ? 'T' : 'CT', weapons),
     money: player.state?.money ?? null,
-    roundMoneySpent: player.roundMoneySpent,
+    roundMoneySpent: player.statistics.currentRound.moneySpent.value,
     roundKills: player.state?.roundKills ?? null,
     stats: {
-      kills: player.matchStats?.kills ?? null,
-      assists: player.matchStats?.assists ?? null,
-      deaths: player.matchStats?.deaths ?? null,
+      kills: player.statistics.scoreboard.kills.value,
+      assists: player.statistics.scoreboard.assists.value,
+      deaths: player.statistics.scoreboard.deaths.value,
     },
-    liveAdr: player.liveAdr,
-    currentRoundDamage: player.currentRoundDamage,
-    weaponsAvailable: player.weaponsAvailable,
+    liveAdr: player.statistics.includingCurrentRound.adr.value,
+    completedAdr: player.statistics.completed.adr.value,
+    currentRoundDamage: player.statistics.currentRound.damage.value,
+    weaponsAvailable: player.equipment.available,
   };
 }
 
-function completeCurrentLineup(players: readonly ProgramPayload['players'][number][]): boolean {
-  return players.length === 5 && players.every((player) => player.lineupEvidence === 'current');
-}
-
-function numericValues(
-  players: readonly ProgramPayload['players'][number][],
-  read: (player: ProgramPayload['players'][number]) => number | null,
-): number | null {
-  if (!completeCurrentLineup(players)) return null;
-  const values = players.map(read);
-  return values.every((value): value is number => value !== null && Number.isFinite(value))
-    ? values.reduce((total, value) => total + value, 0)
-    : null;
-}
-
-function teamUtility(
-  players: readonly ProgramPayload['players'][number][],
-  phase: PlayerRailsPhase,
-): TeamUtilitySummary | null {
-  if (!completeCurrentLineup(players)) return null;
-
-  const contributors =
-    phase === 'live' ? players.filter((player) => player.lifeState === 'alive') : players;
-  if (phase === 'live' && players.some((player) => player.lifeState === 'unknown')) {
-    return null;
-  }
-  if (!contributors.every((player) => player.weaponsAvailable)) return null;
-
-  const total = { ...EMPTY_UTILITY };
-  for (const player of contributors) {
-    for (const utility of utilityPresentation(knownWeapons(player)))
-      total[utility.family] += utility.count;
-  }
-  return total;
-}
-
-function teamSummary(
-  side: PlayerRailSide,
-  players: readonly ProgramPayload['players'][number][],
-  payload: ProgramPayload,
-  phase: PlayerRailsPhase,
-): TeamSummaryPresentation {
-  const utility = teamUtility(players, phase);
+function teamSummary(side: PlayerRailSide, payload: ProgramPayload): TeamSummaryPresentation {
+  const economy = payload.teamEconomy[side === 'CT' ? 'ct' : 't'];
   return {
     side,
-    money: numericValues(players, (player) => player.state?.money ?? null),
-    equip: numericValues(players, (player) => player.state?.equipValue ?? null),
-    lossBonus: lossBonusForConsecutiveRoundLosses(
-      payload.map.consecutiveRoundLosses[side === 'CT' ? 'ct' : 't'],
-    ),
-    utility,
-    lineupComplete: completeCurrentLineup(players),
-    utilityAvailable: utility !== null,
+    money: economy.money,
+    equip: economy.equipmentValue,
+    lossBonus: economy.lossBonus,
+    utility: economy.utility,
+    lineupComplete: economy.lineupComplete,
+    utilityAvailable: economy.utility !== null,
   };
 }
 
@@ -431,7 +367,7 @@ function buildRail(
     entrantKey,
     entrantName: null,
     players: sorted.map((player) => playerPresentation(player, phase, payload)),
-    summary: teamSummary(side, sorted, payload, phase),
+    summary: teamSummary(side, payload),
   };
 }
 
