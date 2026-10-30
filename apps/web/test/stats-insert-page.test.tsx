@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { expect, it, vi } from 'vitest';
-import fixture from '../../../tests/fixtures/rivalhub-provider-stats-v1.json';
+import fixture from '../../../tests/fixtures/mizar-broadcast-stats-presentation-v1.json';
 
 vi.mock('../src/workspace/client', () => ({ useProgramScenes: () => ({ active: 'waiting' }) }));
 vi.mock('../src/realtime/broadcast-display-client', () => ({
@@ -43,9 +43,9 @@ it('recovers and updates a same-match local snapshot while retaining it on read 
   expect(host.textContent).toContain('统计暂不可用');
   data = fixture;
   await act(async () => vi.advanceTimersByTimeAsync(2000));
-  expect(host.textContent).toContain(fixture.entrants[0]!.name);
+  expect(host.textContent).toContain(fixture.teams[0]!.name);
   const refreshed = structuredClone(fixture);
-  refreshed.entrants[0]!.name = 'Updated team';
+  refreshed.teams[0]!.name = 'Updated team';
   data = refreshed;
   await act(async () => vi.advanceTimersByTimeAsync(2000));
   expect(host.textContent).toContain('Updated team');
@@ -55,6 +55,41 @@ it('recovers and updates a same-match local snapshot while retaining it on read 
   data = null;
   await act(async () => vi.advanceTimersByTimeAsync(2000));
   expect(host.textContent).toContain('统计暂不可用');
+  await act(async () => root.unmount());
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
+
+it('discards a late prior-match snapshot while the next presentation is already loaded', async () => {
+  vi.useFakeTimers();
+  let matchId = fixture.matchId;
+  let resolveOld!: (response: Response) => void;
+  const next = structuredClone(fixture);
+  next.matchId = 'other';
+  next.teams[0]!.name = 'New match team';
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((url: string) => {
+      if (url.includes('program-presentation'))
+        return Promise.resolve(Response.json({ match: { matchId } }));
+      if (matchId === fixture.matchId)
+        return new Promise<Response>((resolve) => {
+          resolveOld = resolve;
+        });
+      return Promise.resolve(Response.json(next));
+    }),
+  );
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  await act(async () => root.render(<StatsInsertPage />));
+  matchId = 'other';
+  await act(async () => vi.advanceTimersByTimeAsync(2000));
+  expect(host.textContent).toContain('New match team');
+  await act(async () => {
+    resolveOld(Response.json(fixture));
+  });
+  expect(host.textContent).toContain('New match team');
+  expect(host.textContent).not.toContain(fixture.teams[0]!.name);
   await act(async () => root.unmount());
   vi.unstubAllGlobals();
   vi.useRealTimers();

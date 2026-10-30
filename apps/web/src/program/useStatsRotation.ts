@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { broadcastStatsSchema } from '@mizar/protocol/broadcast-stats';
+import { broadcastStatsPresentationSchema } from '@mizar/protocol/broadcast-stats-presentation';
 import { statsInserts, type StatsCard } from './stats-inserts';
 
 const sequence = [
@@ -30,11 +30,13 @@ export function useStatsRotation(enabled: boolean, matchId: string | null): Stat
     };
     const next = async () => {
       try {
-        const response = await fetch('/local/v1/broadcast-stats', {
+        const response = await fetch('/local/v1/broadcast-stats-presentation', {
           cache: 'no-store',
           signal: AbortSignal.timeout(2000),
         });
-        const parsed = broadcastStatsSchema.safeParse(response.ok ? await response.json() : null);
+        const parsed = broadcastStatsPresentationSchema.safeParse(
+          response.ok ? await response.json() : null,
+        );
         if (!active) return;
         if (!parsed.success || parsed.data.matchId !== matchId) {
           main();

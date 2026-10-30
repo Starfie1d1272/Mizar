@@ -1,4 +1,9 @@
 import type { BroadcastStats } from '@mizar/protocol/broadcast-stats';
+import type { BroadcastManifest } from '@mizar/rivalhub';
+import {
+  broadcastStatsPresentationSchema,
+  type BroadcastStatsPresentation,
+} from '@mizar/protocol/broadcast-stats-presentation';
 
 type Entrant = BroadcastStats['entrants'][number];
 type Player = Entrant['playerPerformance']['players'][number];
@@ -14,9 +19,42 @@ const attributeKeys = [
   'utility',
 ] as const;
 
+/** Bind the unchanged website snapshot to the active match and its canonical starters. */
+export function bindHistoricalStats(
+  bundle: BroadcastStats,
+  manifest: BroadcastManifest,
+): BroadcastStats | null {
+  if (bundle.matchId !== manifest.match.matchId || bundle.entrants.length !== 2) return null;
+  const canonicalTeams = [manifest.entrants.a, manifest.entrants.b];
+  const ids = canonicalTeams.map((team) => team.entryId);
+  if (
+    new Set(ids).size !== 2 ||
+    new Set(bundle.entrants.map((team) => team.entryId)).size !== 2 ||
+    !ids.every((id) => bundle.entrants.some((team) => team.entryId === id))
+  )
+    return null;
+  const entrants = canonicalTeams.map((canonical) => {
+    const entry = bundle.entrants.find((team) => team.entryId === canonical.entryId)!;
+    const starters = new Set(
+      canonical.roster.players
+        .filter((player) => player.isStarter)
+        .map((player) => player.playerId),
+    );
+    return {
+      ...entry,
+      starters: entry.starters.filter((player) => starters.has(player.userId)),
+      playerPerformance: {
+        ...entry.playerPerformance,
+        players: entry.playerPerformance.players.filter((player) => starters.has(player.userId)),
+      },
+    };
+  });
+  return { ...bundle, entrants };
+}
+
 /** Select comparable website facts without deriving or recalculating historical statistics.
  * The caller must first bind entrants and starters to the active match. */
-export function projectHistoricalStats(bundle: BroadcastStats) {
+export function projectHistoricalStats(bundle: BroadcastStats): BroadcastStatsPresentation | null {
   const [a, b] = bundle.entrants;
   if (!a || !b || a.entryId === b.entryId) return null;
   const teams = [
@@ -41,8 +79,8 @@ export function projectHistoricalStats(bundle: BroadcastStats) {
       {
         mapName: left.mapName,
         values: [
-          { value: left.winRate, played: left.played },
-          { value: right.winRate, played: right.played },
+          { winRate: left.winRate, played: left.played, wins: left.wins },
+          { winRate: right.winRate, played: right.played, wins: right.wins },
         ] as const,
       },
     ];
@@ -64,8 +102,8 @@ export function projectHistoricalStats(bundle: BroadcastStats) {
     left.wins <= left.opportunities &&
     right.wins <= right.opportunities
       ? ([
-          { value: left.rate, wins: left.wins, opportunities: left.opportunities },
-          { value: right.rate, wins: right.wins, opportunities: right.opportunities },
+          { rate: left.rate, wins: left.wins, opportunities: left.opportunities },
+          { rate: right.rate, wins: right.wins, opportunities: right.opportunities },
         ] as const)
       : null;
   const pistolComparable =
@@ -90,8 +128,8 @@ export function projectHistoricalStats(bundle: BroadcastStats) {
     left.attempts > 0 &&
     right.attempts > 0
       ? ([
-          { value: left.rate, attempts: left.attempts },
-          { value: right.rate, attempts: right.attempts },
+          { rate: left.rate, attempts: left.attempts, successes: left.successes },
+          { rate: right.rate, attempts: right.attempts, successes: right.successes },
         ] as const)
       : null;
   const utilityComparable =
@@ -149,8 +187,8 @@ export function projectHistoricalStats(bundle: BroadcastStats) {
   const selected =
     left && right
       ? ([
-          a.starters.find((starter) => starter.userId === left.userId)!,
-          b.starters.find((starter) => starter.userId === right.userId)!,
+          { ...a.starters.find((starter) => starter.userId === left.userId)!, entryId: a.entryId },
+          { ...b.starters.find((starter) => starter.userId === right.userId)!, entryId: b.entryId },
         ] as const)
       : null;
   const playerComparison =
@@ -158,8 +196,8 @@ export function projectHistoricalStats(bundle: BroadcastStats) {
       ? {
           players: selected,
           rating: [
-            { value: left.rating!, maps: left.sample.ratingMaps },
-            { value: right.rating!, maps: right.sample.ratingMaps },
+            { value: left.rating!, sampleMaps: left.sample.ratingMaps },
+            { value: right.rating!, sampleMaps: right.sample.ratingMaps },
           ] as const,
           adr:
             left.adr !== null &&
@@ -169,8 +207,8 @@ export function projectHistoricalStats(bundle: BroadcastStats) {
             right.sample.adrRounds !== null &&
             right.sample.adrRounds > 0
               ? ([
-                  { value: left.adr, rounds: left.sample.adrRounds },
-                  { value: right.adr, rounds: right.sample.adrRounds },
+                  { value: left.adr, sampleRounds: left.sample.adrRounds },
+                  { value: right.adr, sampleRounds: right.sample.adrRounds },
                 ] as const)
               : null,
         }
@@ -195,11 +233,65 @@ export function projectHistoricalStats(bundle: BroadcastStats) {
           })),
         }
       : null;
-  return {
+  const eligibility = (eligible: boolean) => ({
+    eligible,
+    reason: eligible ? null : ('missing-data' as const),
+  });
+  const pages = [];
+  for (let start = 0; start < maps.length; start += 7)
+    pages.push({ page: start / 7 + 1, rows: maps.slice(start, start + 7) });
+  const attributes = playerAttributes
+    ? Object.fromEntries(playerAttributes.values.map(({ key, values }) => [key, values]))
+    : null;
+  return broadcastStatsPresentationSchema.parse({
+    schemaVersion: 'mizar.broadcast-stats-presentation.v1',
     matchId: bundle.matchId,
-    revision: bundle.revision,
-    generatedAt: bundle.generatedAt,
+    competitionId: bundle.competitionId,
+    sourceRevision: bundle.revision,
+    sourceGeneratedAt: bundle.generatedAt,
     teams,
-    topics: { maps, recent, pistol, economy, utility, lineups, playerComparison, playerAttributes },
-  };
+    selectedPlayers: selected,
+    maps: { id: 'maps', ...eligibility(pages.length > 0), pages },
+    recent: { id: 'recent', ...eligibility(recent !== null), results: recent ?? [[], []] },
+    lineups: {
+      id: 'lineups',
+      ...eligibility(lineups !== null),
+      rows: lineups
+        ? lineups[0].map((player, i) => [
+            { ...player, entryId: a.entryId },
+            { ...lineups[1][i]!, entryId: b.entryId },
+          ])
+        : [],
+    },
+    pistol: {
+      id: 'pistol',
+      ...eligibility(pistol !== null),
+      pistol: pistol?.pistol ?? null,
+      conversion: pistol?.conversion ?? null,
+      break: pistol?.break ?? null,
+    },
+    economy: { id: 'economy', ...eligibility(economy !== null), ecoSemiUpset: economy },
+    utility: {
+      id: 'utility',
+      ...eligibility(utility !== null),
+      utilityDamagePerRound: utility?.utilityDamagePerRound ?? null,
+      flashAssistsPerRound: utility?.flashAssistsPerRound ?? null,
+      enemyBlindSecondsPerFlash: utility?.enemyBlindSecondsPerFlash ?? null,
+      enemyBlindSecondsPerRound: utility?.enemyBlindSecondsPerRound ?? null,
+    },
+    playerComparison: {
+      id: 'player-comparison',
+      ...eligibility(playerComparison !== null),
+      rating: playerComparison?.rating ?? null,
+      adr: playerComparison?.adr ?? null,
+    },
+    playerAttributes: {
+      id: 'player-attributes',
+      ...eligibility(playerAttributes !== null),
+      benchmark: playerAttributes ? 'rivalhub-all-time-qualified' : null,
+      scope: playerAttributes ? 'competition' : null,
+      sampleRounds: playerAttributes?.rounds ?? null,
+      values: attributes,
+    },
+  });
 }

@@ -1,21 +1,18 @@
-import type { BroadcastStats } from '@mizar/protocol/broadcast-stats';
+import type { BroadcastStatsPresentation } from '@mizar/protocol/broadcast-stats-presentation';
 import type { StatsInsert } from '@mizar/hud-view';
 
 export type StatsCard = StatsInsert & {
-  readonly id:
+  readonly id: BroadcastStatsPresentation[
     | 'maps'
     | 'recent'
     | 'pistol'
     | 'economy'
     | 'utility'
     | 'lineups'
-    | 'player-comparison'
-    | 'player-attributes';
+    | 'playerComparison'
+    | 'playerAttributes']['id'];
 };
-
-type Entrant = BroadcastStats['entrants'][number];
-type Player = Entrant['playerPerformance']['players'][number];
-const labels: Record<string, string> = {
+const labels = {
   firepower: '火力',
   entrying: '突破',
   trading: '补枪',
@@ -23,275 +20,191 @@ const labels: Record<string, string> = {
   clutching: '残局',
   sniping: '狙击',
   utility: '道具',
-};
+} as const;
 const cleanMap = (value: string) => value.replace(/^de_/, '').toUpperCase();
 
-/** Select only complete comparisons. Statistics remain website-owned values. */
-export function statsInserts(bundle: BroadcastStats): StatsCard[] {
-  const [a, b] = bundle.entrants;
-  if (!a || !b || a.entryId === b.entryId) return [];
+/** Format and lay out the already selected local projection. */
+export function statsInserts(bundle: BroadcastStatsPresentation): StatsCard[] {
+  const [a, b] = bundle.teams;
   const base = {
     scope: '本届 · 统计快照',
     teams: [a.name, b.name] as const,
     logos: [a.logoUrl, b.logoUrl] as const,
   };
   const result: StatsCard[] = [];
-  const maps = a.mapPerformance.maps.flatMap((left) => {
-    const right = b.mapPerformance.maps.find((map) => map.mapName === left.mapName);
-    if (
-      !a.mapPerformance.available ||
-      !b.mapPerformance.available ||
-      !right ||
-      left.played <= 0 ||
-      right.played <= 0 ||
-      left.winRate === null ||
-      right.winRate === null ||
-      left.wins > left.played ||
-      right.wins > right.played
-    )
-      return [];
-    return [
-      {
-        label: cleanMap(left.mapName),
-        artwork: left.mapName,
-        values: [
-          `${(left.winRate * 100).toFixed(1)}%`,
-          `${(right.winRate * 100).toFixed(1)}%`,
-        ] as const,
-        samples: [`${left.played} 图`, `${right.played} 图`] as const,
-      },
-    ];
-  });
-  const mapPageSize = 7;
-  for (let start = 0; start < maps.length; start += mapPageSize) {
-    const pages = Math.ceil(maps.length / mapPageSize);
-    result.push({
-      ...base,
-      scope: pages > 1 ? `${base.scope} · ${start / mapPageSize + 1} / ${pages} 页` : base.scope,
-      id: 'maps',
-      title: '地图表现',
-      subtitle: 'MAP PERFORMANCE',
-      rows: maps.slice(start, start + mapPageSize),
-    });
-  }
-  if (
-    a.recentResults.available &&
-    b.recentResults.available &&
-    a.recentResults.results.length &&
-    b.recentResults.results.length
-  ) {
-    const recent = (team: Entrant) =>
-      team.recentResults.results.slice(0, 5).map((item) => ({
+  if (bundle.maps.eligible)
+    for (const page of bundle.maps.pages) {
+      result.push({
+        ...base,
+        id: bundle.maps.id,
+        scope:
+          bundle.maps.pages.length > 1
+            ? `${base.scope} · ${page.page} / ${bundle.maps.pages.length} 页`
+            : base.scope,
+        title: '地图表现',
+        subtitle: 'MAP PERFORMANCE',
+        rows: page.rows.map((row) => ({
+          label: cleanMap(row.mapName),
+          artwork: row.mapName,
+          values: [
+            `${(row.values[0].winRate * 100).toFixed(1)}%`,
+            `${(row.values[1].winRate * 100).toFixed(1)}%`,
+          ] as const,
+          samples: [`${row.values[0].played} 图`, `${row.values[1].played} 图`] as const,
+        })),
+      });
+    }
+  if (bundle.recent.eligible) {
+    const format = (items: (typeof bundle.recent.results)[0]) =>
+      items.map((item) => ({
         value: `${item.score}–${item.opponentScore} · ${item.opponent.name}`,
         sample: cleanMap(item.mapName),
         logo: item.opponent.logoUrl,
       }));
     result.push({
       ...base,
+      id: bundle.recent.id,
       scope: '本届 · 最近 5 图',
-      id: 'recent',
       title: '近期战绩',
       subtitle: 'RECENT MAPS',
       rows: [],
-      recent: [recent(a), recent(b)],
+      recent: [format(bundle.recent.results[0]), format(bundle.recent.results[1])],
     });
   }
-  const winCard = (
-    kind: 'pistol' | 'economy',
-    fields: readonly { get: (entry: Entrant) => Entrant['pistol']['pistol']; label: string }[],
-    title: string,
-    subtitle: string,
-  ) => {
-    const l = a[kind],
-      r = b[kind];
-    if (!l.available || !r.available || l.scope !== r.scope) return;
-    const rows = fields.flatMap(({ get, label }) => {
-      const x = get(a),
-        y = get(b);
-      if (
-        !x ||
-        !y ||
-        x.rate === null ||
-        y.rate === null ||
-        x.opportunities <= 0 ||
-        y.opportunities <= 0 ||
-        x.wins > x.opportunities ||
-        y.wins > y.opportunities
-      )
-        return [];
-      return [
-        {
-          label,
-          values: [`${(x.rate * 100).toFixed(1)}%`, `${(y.rate * 100).toFixed(1)}%`] as const,
-          samples: [`${x.wins} / ${x.opportunities}`, `${y.wins} / ${y.opportunities}`] as const,
-        },
-      ];
-    });
-    if (rows.length) result.push({ ...base, id: kind, title, subtitle, layout: 'columns', rows });
-  };
-  winCard(
-    'pistol',
-    [
-      { get: (e) => e.pistol.pistol, label: '手枪局' },
-      { get: (e) => e.pistol.conversion, label: '赢手枪后的第二回合' },
-      { get: (e) => e.pistol.break, label: '输手枪后的第二回合' },
-    ],
-    '手枪局与第二回合',
-    'PISTOL & CONVERSION',
-  );
-  winCard(
-    'economy',
-    [{ get: (e) => e.economy.ecoSemiUpset, label: '经济劣势取胜' }],
-    '经济局表现',
-    'ECONOMY',
-  );
-  const utilityFields = [
-    { key: 'utilityDamagePerRound', label: '道具伤害 / 回合' },
-    { key: 'flashAssistsPerRound', label: '闪光助攻 / 回合' },
-    { key: 'enemyBlindSecondsPerFlash', label: '敌方致盲秒数 / 颗' },
-    { key: 'enemyBlindSecondsPerRound', label: '敌方致盲秒数 / 回合' },
-  ] as const;
-  if (a.utility.available && b.utility.available && a.utility.scope === b.utility.scope) {
-    const rows = utilityFields.flatMap(({ key, label }) => {
-      const x = a.utility[key],
-        y = b.utility[key];
-      if (!x || !y || x.rate === null || y.rate === null || x.attempts <= 0 || y.attempts <= 0)
-        return [];
-      return [
-        {
-          label,
-          values: [x.rate.toFixed(2), y.rate.toFixed(2)] as const,
-          samples: [
-            `${x.attempts} ${key === 'enemyBlindSecondsPerFlash' ? '颗' : '回合'}`,
-            `${y.attempts} ${key === 'enemyBlindSecondsPerFlash' ? '颗' : '回合'}`,
-          ] as const,
-        },
-      ];
-    });
-    if (rows.length)
-      result.push({
-        ...base,
-        id: 'utility',
-        title: '道具支援',
-        subtitle: 'UTILITY',
-        layout: 'cells',
-        rows,
-      });
-  }
-  if (
-    a.starters.length === 5 &&
-    b.starters.length === 5 &&
-    new Set(a.starters.map((player) => player.userId)).size === 5 &&
-    new Set(b.starters.map((player) => player.userId)).size === 5
-  ) {
+  const winRows = (
+    fields: readonly { label: string; values: typeof bundle.economy.ecoSemiUpset }[],
+  ) =>
+    fields.flatMap(({ label, values }) =>
+      values
+        ? [
+            {
+              label,
+              values: [
+                `${(values[0].rate * 100).toFixed(1)}%`,
+                `${(values[1].rate * 100).toFixed(1)}%`,
+              ] as const,
+              samples: [
+                `${values[0].wins} / ${values[0].opportunities}`,
+                `${values[1].wins} / ${values[1].opportunities}`,
+              ] as const,
+            },
+          ]
+        : [],
+    );
+  if (bundle.pistol.eligible)
     result.push({
       ...base,
-      id: 'lineups',
+      id: bundle.pistol.id,
+      title: '手枪局与第二回合',
+      subtitle: 'PISTOL & CONVERSION',
+      layout: 'columns',
+      rows: winRows([
+        { label: '手枪局', values: bundle.pistol.pistol },
+        { label: '赢手枪后的第二回合', values: bundle.pistol.conversion },
+        { label: '输手枪后的第二回合', values: bundle.pistol.break },
+      ]),
+    });
+  if (bundle.economy.eligible)
+    result.push({
+      ...base,
+      id: bundle.economy.id,
+      title: '经济局表现',
+      subtitle: 'ECONOMY',
+      layout: 'columns',
+      rows: winRows([{ label: '经济劣势取胜', values: bundle.economy.ecoSemiUpset }]),
+    });
+  if (bundle.utility.eligible) {
+    const fields = [
+      { label: '道具伤害 / 回合', values: bundle.utility.utilityDamagePerRound, unit: '回合' },
+      { label: '闪光助攻 / 回合', values: bundle.utility.flashAssistsPerRound, unit: '回合' },
+      { label: '敌方致盲秒数 / 颗', values: bundle.utility.enemyBlindSecondsPerFlash, unit: '颗' },
+      {
+        label: '敌方致盲秒数 / 回合',
+        values: bundle.utility.enemyBlindSecondsPerRound,
+        unit: '回合',
+      },
+    ];
+    result.push({
+      ...base,
+      id: bundle.utility.id,
+      title: '道具支援',
+      subtitle: 'UTILITY',
+      layout: 'cells',
+      rows: fields.flatMap(({ label, values, unit }) =>
+        values
+          ? [
+              {
+                label,
+                values: [values[0].rate.toFixed(2), values[1].rate.toFixed(2)] as const,
+                samples: [
+                  `${values[0].attempts} ${unit}`,
+                  `${values[1].attempts} ${unit}`,
+                ] as const,
+              },
+            ]
+          : [],
+      ),
+    });
+  }
+  if (bundle.lineups.eligible)
+    result.push({
+      ...base,
+      id: bundle.lineups.id,
       title: '本场阵容',
       subtitle: 'LINEUPS',
-      rows: a.starters.map((player, i) => ({
+      rows: bundle.lineups.rows.map(([left, right], i) => ({
         label: String(i + 1).padStart(2, '0'),
-        values: [player.nickname, b.starters[i]!.nickname] as const,
-        portraits: [player.avatarUrl, b.starters[i]!.avatarUrl] as const,
+        values: [left.nickname, right.nickname],
+        portraits: [left.avatarUrl, right.avatarUrl],
       })),
     });
-  }
-  const focus = (team: Entrant): Player | undefined =>
-    team.playerPerformance.players
-      .filter(
-        (player) =>
-          team.starters.some((starter) => starter.userId === player.userId) &&
-          player.sample.maps > 0 &&
-          player.sample.ratingMaps > 0 &&
-          player.sample.ratingMaps <= player.sample.maps &&
-          player.rating !== null,
-      )
-      .sort(
-        (x, y) => y.rating! - x.rating! || (x.userId < y.userId ? -1 : x.userId > y.userId ? 1 : 0),
-      )[0];
-  const left = focus(a),
-    right = focus(b);
-  if (left && right) {
-    const playerName = (team: Entrant, player: Player) =>
-      team.starters.find((starter) => starter.userId === player.userId)!.nickname;
-    const playerBase = {
-      ...base,
-      teams: [playerName(a, left), playerName(b, right)] as const,
-      logos: [
-        a.starters.find((p) => p.userId === left.userId)!.avatarUrl,
-        b.starters.find((p) => p.userId === right.userId)!.avatarUrl,
-      ] as const,
-    };
+  const selected = bundle.selectedPlayers;
+  if (bundle.playerComparison.eligible && selected && bundle.playerComparison.rating) {
+    const [left, right] = bundle.playerComparison.rating;
+    const adr = bundle.playerComparison.adr;
     result.push({
-      ...playerBase,
-      id: 'player-comparison',
+      ...base,
+      id: bundle.playerComparison.id,
+      teams: [selected[0].nickname, selected[1].nickname],
+      logos: [selected[0].avatarUrl, selected[1].avatarUrl],
       title: '选手对比',
       subtitle: 'PLAYER COMPARISON',
       rows: [
         {
           label: 'Rating',
-          values: [left.rating!.toFixed(2), right.rating!.toFixed(2)],
-          samples: [`${left.sample.ratingMaps} 图`, `${right.sample.ratingMaps} 图`],
+          values: [left.value.toFixed(2), right.value.toFixed(2)],
+          samples: [`${left.sampleMaps} 图`, `${right.sampleMaps} 图`],
         },
-        ...(left.adr !== null &&
-        right.adr !== null &&
-        left.sample.adrRounds !== null &&
-        left.sample.adrRounds > 0 &&
-        right.sample.adrRounds !== null &&
-        right.sample.adrRounds > 0
+        ...(adr
           ? [
               {
                 label: 'ADR / 回合',
-                values: [left.adr.toFixed(1), right.adr.toFixed(1)] as const,
-                samples: [
-                  `${left.sample.adrRounds} 回合`,
-                  `${right.sample.adrRounds} 回合`,
-                ] as const,
+                values: [adr[0].value.toFixed(1), adr[1].value.toFixed(1)] as const,
+                samples: [`${adr[0].sampleRounds} 回合`, `${adr[1].sampleRounds} 回合`] as const,
               },
             ]
           : []),
       ],
     });
   }
-  const keys = Object.keys(labels);
-  const values = (p: Player) =>
-    keys.map((key) => p.attributes.values.find((item) => item.key === key));
-  const portrait = (p: Player) =>
-    p.attributes.available &&
-    p.attributes.values.length === 7 &&
-    new Set(p.attributes.values.map((item) => item.key)).size === 7 &&
-    values(p).every((item) => item && item.score !== null && item.status === 'qualified');
-  const lp = left,
-    rp = right;
-  if (
-    lp &&
-    rp &&
-    portrait(lp) &&
-    portrait(rp) &&
-    lp.attributes.benchmark === rp.attributes.benchmark &&
-    lp.attributes.scope === rp.attributes.scope
-  ) {
-    const lv = values(lp),
-      rv = values(rp);
-    const ls = a.starters.find((starter) => starter.userId === lp.userId)!;
-    const rs = b.starters.find((starter) => starter.userId === rp.userId)!;
+  const attributes = bundle.playerAttributes;
+  if (attributes.eligible && selected && attributes.values && attributes.sampleRounds) {
+    const rounds = attributes.sampleRounds;
+    const values = attributes.values;
     result.push({
       ...base,
-      teams: [ls.nickname, rs.nickname],
-      logos: [ls.avatarUrl, rs.avatarUrl],
-      scope: `本届 · 全站历史基准 · ${lp.attributes.sample.rounds} / ${rp.attributes.sample.rounds} 回合 · 0–100`,
-      id: 'player-attributes',
+      id: attributes.id,
+      teams: [selected[0].nickname, selected[1].nickname],
+      logos: [selected[0].avatarUrl, selected[1].avatarUrl],
+      scope: `本届 · 全站历史基准 · ${rounds[0]} / ${rounds[1]} 回合 · 0–100`,
       title: '选手画像',
       subtitle: 'PLAYER ATTRIBUTES',
       layout: 'radar',
-      rows: keys.map((key, i) => ({
-        label: labels[key]!,
-        numericValues: [lv[i]!.score!, rv[i]!.score!] as const,
-        values: [String(lv[i]!.score), String(rv[i]!.score)] as const,
-        samples: [
-          `${lp.attributes.sample.rounds} 回合`,
-          `${rp.attributes.sample.rounds} 回合`,
-        ] as const,
+      rows: (Object.keys(labels) as Array<keyof typeof labels>).map((key) => ({
+        label: labels[key],
+        values: [String(values[key][0]), String(values[key][1])],
+        numericValues: values[key],
+        samples: [`${rounds[0]} 回合`, `${rounds[1]} 回合`],
       })),
     });
   }
