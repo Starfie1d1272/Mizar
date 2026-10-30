@@ -168,8 +168,8 @@ async function ensureCleanCheckout(allowDirty) {
   }
 }
 
-async function fetchResponse(url) {
-  const response = await globalThis.fetch(url);
+export async function fetchResponse(url) {
+  const response = await globalThis.fetch(url, { signal: globalThis.AbortSignal.timeout(180000) });
   if (!response.ok || response.body === null)
     throw new Error(`下载失败：${url}（HTTP ${response.status}）`);
   return response;

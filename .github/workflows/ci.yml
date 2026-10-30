@@ -45,7 +45,7 @@ jobs:
       - run: pnpm exec prettier --check '.github/**/*.{yml,yaml}'
       - run: cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check
       - run: pnpm exec eslint . --max-warnings=0
-      - run: node --test scripts/qualification/box-sync.test.mjs scripts/qualification/build-timings.test.mjs scripts/qualification/release-timings.test.mjs scripts/qualification/release-identity.test.mjs scripts/qualification/box-phase-contract.test.mjs scripts/qualification/box-phases.test.mjs scripts/qualification/bounded-gh.test.mjs scripts/qualification/upload-release-assets.test.mjs
+      - run: node --test scripts/qualification/box-sync.test.mjs scripts/qualification/build-timings.test.mjs scripts/qualification/build-downloads.test.mjs scripts/qualification/release-timings.test.mjs scripts/qualification/release-identity.test.mjs scripts/qualification/box-phase-contract.test.mjs scripts/qualification/box-phases.test.mjs scripts/qualification/bounded-gh.test.mjs scripts/qualification/upload-release-assets.test.mjs
   native:
     name: native build / Windows
     runs-on: windows-2025
