@@ -1,9 +1,8 @@
 import type { ObservedMatchStats } from '../telemetry/index.js';
 import {
-  getPlayerCompletedAdr,
   getPlayerCurrentRoundDamage,
   getPlayerCurrentRoundMoneySpent,
-  getPlayerLiveAdr,
+  selectPlayerAdrSample,
   type MapPlayerStatsAccumulator,
 } from './player-stats.js';
 
@@ -160,11 +159,8 @@ export function projectPlayerStatistics(
     deathsCount.value === 0 ? 'zero-denominator' : 'missing-input',
   );
   const rounds = accumulator.countedCompletedRounds;
-  const completedAdr = getPlayerCompletedAdr(accumulator, playerId);
-  const liveAdr = getPlayerLiveAdr(accumulator, playerId);
-  const current = accumulator.currentRound;
-  const includes =
-    current?.eligible === true && !current.invalidated && current.hasCompleteEvidence;
+  const completedAdr = selectPlayerAdrSample(accumulator, playerId, false);
+  const liveAdr = selectPlayerAdrSample(accumulator, playerId, true);
   const validRounds = accumulator.completedRounds.filter((round) => {
     if (!round.complete || round.deaths === null || round.players[playerId] === undefined)
       return false;
@@ -252,13 +248,13 @@ export function projectPlayerStatistics(
     },
     completed: {
       adr: metric(
-        completedAdr,
+        completedAdr.value,
         'gsi',
         'completed-observed-rounds',
         'adr.v1',
-        rounds,
+        completedAdr.rounds,
         rounds === 0 ? 'no-rounds' : 'missing-input',
-        accumulator.coverage === 'partial',
+        completedAdr.partial,
       ),
       kastPercent: derived(approximation?.kastPercent, 'kast-percent.v1'),
       impactApprox: derived(approximation?.impactApprox, 'impact-approx.v1'),
@@ -266,13 +262,13 @@ export function projectPlayerStatistics(
     },
     includingCurrentRound: {
       adr: metric(
-        liveAdr,
+        liveAdr.value,
         'gsi',
         'completed-plus-current',
         'adr.v1',
-        rounds + (includes ? 1 : 0),
-        rounds + (includes ? 1 : 0) === 0 ? 'no-rounds' : 'missing-input',
-        accumulator.coverage === 'partial',
+        liveAdr.rounds,
+        rounds === 0 && accumulator.currentRound === null ? 'no-rounds' : 'missing-input',
+        liveAdr.partial,
       ),
     },
     currentRound: {
