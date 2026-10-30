@@ -628,6 +628,21 @@ impl GameTracker {
         }
         None
     }
+    /// Cheap final check on the UI thread after a worker computed the rectangle.
+    pub fn overlay_still_allowed(&self, panels: &[isize]) -> bool {
+        self.window.is_some_and(|game| {
+            let mut pid = 0;
+            unsafe {
+                GetWindowThreadProcessId(game.hwnd, &mut pid);
+            }
+            pid == game.pid
+                && !self.preserve_settings
+                && self.managed
+                && self.overlay_enabled
+                && unsafe { IsWindow(game.hwnd) != 0 && IsIconic(game.hwnd) == 0 }
+                && overlay_foreground_allowed(foreground(), game.hwnd, panels)
+        })
+    }
     pub fn overlay_rect(&self, workspace_windows: &[isize]) -> Option<Rect> {
         let _coordinates = PhysicalCoordinates::enter();
         let window = self.window?;
@@ -655,6 +670,46 @@ impl GameTracker {
                 && GetForegroundWindow() == window.hwnd
         })
     }
+}
+
+/// Compare only the two known windows; do not record intervening window identities.
+pub fn overlay_diagnostic(
+    overlay: isize,
+    game: Option<isize>,
+    panels: &[isize],
+) -> serde_json::Value {
+    let foreground = unsafe { GetForegroundWindow() };
+    let role = if Some(foreground) == game {
+        "game"
+    } else if panels.contains(&foreground) {
+        "workspace"
+    } else if foreground == overlay {
+        "overlay"
+    } else {
+        "other"
+    };
+    let mut rect = WinRect::default();
+    let rect_ok = unsafe { GetWindowRect(overlay, &mut rect) } != 0;
+    let topmost = unsafe { GetWindowLongW(overlay, -20) } & 0x00000008 != 0;
+    let above_game = game.and_then(|game| {
+        if unsafe { IsWindow(overlay) } == 0 || unsafe { IsWindow(game) } == 0 {
+            return None;
+        }
+        let mut next = overlay;
+        for _ in 0..512 {
+            next = unsafe { GetWindow(next, 2) }; // GW_HWNDNEXT
+            if next == game {
+                return Some(true);
+            }
+            if next == 0 {
+                return Some(false);
+            }
+        }
+        None
+    });
+    serde_json::json!({"visible": unsafe { IsWindowVisible(overlay) } != 0,
+        "rect": rect_ok.then_some([rect.left, rect.top, rect.right, rect.bottom]),
+        "topmost": topmost, "foregroundRole": role, "aboveGame": above_game})
 }
 
 fn overlay_foreground_allowed(foreground: isize, game: isize, workspace_windows: &[isize]) -> bool {

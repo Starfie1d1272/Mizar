@@ -417,6 +417,7 @@ function WorkspaceDockContent() {
   const [errorMessage, setErrorMessage] = useState('');
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [overlayRecovering, setOverlayRecovering] = useState(false);
   useEffect(() => {
     if (!message) return;
     const timer = setTimeout(() => setMessage(''), 6000);
@@ -662,6 +663,23 @@ function WorkspaceDockContent() {
               onClick={() => void action(() => desktopInvoke('restore_layout'))}
             >
               恢复布局
+            </Button>
+            <Button
+              disabled={busy || !window.__TAURI_INTERNALS__}
+              aria-busy={overlayRecovering}
+              onClick={() =>
+                void action(async () => {
+                  setOverlayRecovering(true);
+                  try {
+                    const result = await desktopInvoke<string>('recover_program_overlay');
+                    setMessage(result);
+                  } finally {
+                    setOverlayRecovering(false);
+                  }
+                })
+              }
+            >
+              {overlayRecovering ? '正在重建本机 HUD…' : '恢复本机 HUD'}
             </Button>
             <Button
               disabled={!production || busy}

@@ -17,6 +17,8 @@
   },
   "permissions": [
     "allow-restore-layout",
+    "allow-recover-program-overlay",
+    "allow-program-overlay-ready",
     "allow-restore-cs2-focus",
     "allow-set-program-overlay-enabled",
     "allow-cs2-host-status",
