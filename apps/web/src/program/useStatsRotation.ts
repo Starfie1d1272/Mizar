@@ -1,17 +1,9 @@
 import { useEffect, useState } from 'react';
-import { broadcastStatsPresentationSchema } from '@mizar/protocol/broadcast-stats-presentation';
-import { statsInserts, type StatsCard } from './stats-inserts';
+import { broadcastStatsProgramSchema } from '@mizar/protocol/broadcast-stats-presentation';
+import type { StatsInsert } from '@mizar/hud-view';
+import { statsProgramInserts } from './stats-program';
 
-const sequence = [
-  ['lineups', 12_000],
-  ['maps', 15_000],
-  ['recent', 15_000],
-  ['player-comparison', 12_000],
-  ['player-attributes', 15_000],
-  ['pistol', 12_000],
-  ['economy', 12_000],
-  ['utility', 12_000],
-] as const;
+type StatsCard = StatsInsert & { readonly id: string };
 
 /** The current card is immutable; the next boundary reads the latest local snapshot. */
 export function useStatsRotation(enabled: boolean, matchId: string | null): StatsCard | null {
@@ -21,20 +13,18 @@ export function useStatsRotation(enabled: boolean, matchId: string | null): Stat
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
     let index = 0;
-    let page = 0;
     const main = () => {
       setVisible(null);
       index = 0;
-      page = 0;
       timer = setTimeout(() => void next(), 20_000);
     };
     const next = async () => {
       try {
-        const response = await fetch('/local/v1/broadcast-stats-presentation', {
+        const response = await fetch('/local/v1/broadcast-stats-program', {
           cache: 'no-store',
           signal: AbortSignal.timeout(2000),
         });
-        const parsed = broadcastStatsPresentationSchema.safeParse(
+        const parsed = broadcastStatsProgramSchema.safeParse(
           response.ok ? await response.json() : null,
         );
         if (!active) return;
@@ -42,22 +32,18 @@ export function useStatsRotation(enabled: boolean, matchId: string | null): Stat
           main();
           return;
         }
-        const cards = statsInserts(parsed.data);
-        while (index < sequence.length) {
-          const [name, duration] = sequence[index]!;
-          const matching = cards.filter((item) => item.id === name);
-          const card = matching[page++];
-          if (page >= matching.length) {
-            index++;
-            page = 0;
-          }
-          if (card) {
-            setVisible({ matchId, card });
-            timer = setTimeout(() => void next(), duration);
-            return;
-          }
+        const page = parsed.data.pages[index];
+        const card = statsProgramInserts(parsed.data)[index];
+        if (!page || !card) {
+          main();
+          return;
         }
-        main();
+        index++;
+        setVisible({ matchId, card });
+        const duration = ['maps', 'maps-info', 'recent', 'radar'].includes(page.kind)
+          ? 15_000
+          : 12_000;
+        timer = setTimeout(() => void next(), duration);
       } catch {
         if (active) main();
       }
