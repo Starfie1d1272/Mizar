@@ -286,6 +286,12 @@
   text-align: right;
   padding: 0 24px 0 15px;
 }
+.stats-roster-row > .stats-roster-person:first-child {
+  padding-left: 30px;
+}
+.stats-roster.right .stats-roster-row > .stats-roster-person:first-child {
+  padding-right: 30px;
+}
 .stats-players {
   display: grid;
   grid-template-columns: 1fr 120px 1fr;
@@ -1303,6 +1309,9 @@
 .stats-roster.right .stats-summary-columns {
   flex-direction: row-reverse;
   padding: 0 98px 0 24px;
+}
+.stats-roster.right .stats-summary-columns span:first-child {
+  text-align: right;
 }
 .stats-summary-rosters .stats-roster-row {
   height: 82px;

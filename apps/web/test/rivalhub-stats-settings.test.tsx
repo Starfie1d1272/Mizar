@@ -2,9 +2,7 @@
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { expect, it, vi } from 'vitest';
-import { broadcastStatsPresentationSchema } from '@mizar/protocol/broadcast-stats-presentation';
-import { statsInserts } from '../src/program/stats-inserts';
-import fixture from '../../../tests/fixtures/mizar-broadcast-stats-presentation-v1.json';
+import fixture from './fixtures/stats-program.json';
 
 vi.mock('../src/bp/client', () => ({
   useBpWorkspace: () => ({ workspace: null }),
@@ -27,7 +25,7 @@ it('counts presentation cards and refreshes through the existing operator action
         return Response.json({ competition: { name: '赛事' }, matches: [] });
       if (url === '/local/v1/broadcast-stats-status')
         return Response.json({ fetchedAt: '2025-01-01T00:00:00.000Z' });
-      if (url === '/local/v1/broadcast-stats-presentation') return Response.json(fixture);
+      if (url === '/local/v1/broadcast-stats-program') return Response.json(fixture);
       if (url === '/operator/rivalhub/stats/refresh') return Response.json({ ok: true });
       throw new Error(`Unexpected request: ${url}`);
     }),
@@ -39,7 +37,7 @@ it('counts presentation cards and refreshes through the existing operator action
       root.render(<RivalHubPreparationPanel mode="settings" />);
       await vi.advanceTimersByTimeAsync(0);
     });
-    const count = statsInserts(broadcastStatsPresentationSchema.parse(fixture)).length;
+    const count = fixture.pages.length;
     expect(host.textContent).toContain(`${count} 张可用`);
     const button = [...host.querySelectorAll('button')].find(
       (item) => item.textContent === '刷新统计',
@@ -52,9 +50,9 @@ it('counts presentation cards and refreshes through the existing operator action
     expect(calls.filter((call) => call.path === '/operator/rivalhub/stats/refresh')).toEqual([
       { path: '/operator/rivalhub/stats/refresh', method: 'POST' },
     ]);
-    expect(
-      calls.filter((call) => call.path === '/local/v1/broadcast-stats-presentation'),
-    ).toHaveLength(2);
+    expect(calls.filter((call) => call.path === '/local/v1/broadcast-stats-program')).toHaveLength(
+      2,
+    );
     expect(
       calls.every(
         (call) => call.path.startsWith('/local/v1/') || call.path.startsWith('/operator/'),

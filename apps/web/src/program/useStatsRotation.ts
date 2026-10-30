@@ -7,7 +7,7 @@ import { statsProgramInserts } from './stats-program';
 
 type Card = ReturnType<typeof statsProgramInserts>[number];
 type PageKind = BroadcastStatsProgram['pages'][number]['kind'];
-const shortPages: ReadonlySet<PageKind> = new Set(['lineup', 'players', 'economy', 'utility']);
+const longPages: ReadonlySet<PageKind> = new Set(['maps', 'maps-info', 'recent', 'radar']);
 
 /** Freeze each displayed card; read Companion's qualified order at the next boundary. */
 export function useStatsRotation(enabled: boolean, matchId: string | null): Card | null {
@@ -45,7 +45,7 @@ export function useStatsRotation(enabled: boolean, matchId: string | null): Card
         }
         shown.add(page.id);
         setVisible({ matchId, card });
-        timer = setTimeout(() => void next(), shortPages.has(page.kind) ? 12_000 : 15_000);
+        timer = setTimeout(() => void next(), longPages.has(page.kind) ? 15_000 : 12_000);
       } catch {
         if (active) main();
       }
