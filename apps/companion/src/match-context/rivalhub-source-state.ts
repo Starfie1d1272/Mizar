@@ -53,6 +53,7 @@ const recordSchema = z
     cause: causeSchema,
     attempts: z.number().int().nonnegative().safe(),
     nextAttemptAt: z.string().datetime().nullable(),
+    retryAfterAt: z.string().datetime().nullable().optional(),
     lastFailureCode: z
       .string()
       .regex(/^[a-z0-9_]{1,64}$/)
@@ -213,6 +214,7 @@ export class RivalHubSourceState {
         existing.cause = 'recovery';
         existing.attempts = 0;
         existing.nextAttemptAt = null;
+        existing.retryAfterAt = null;
         existing.lastFailureCode = null;
       } else {
         if (state.records.length >= MAX_RECORDS) throw new Error('source state capacity exceeded');
@@ -265,6 +267,7 @@ export class RivalHubSourceState {
     code: string,
     nextAttemptAt: string | null,
     blocked: boolean,
+    retryAfterAt: string | null = null,
   ): Promise<void> {
     await this.change((state) => {
       const record = state.records.find((item) => exactKey(item.identity) === exactKey(identity));
@@ -273,6 +276,7 @@ export class RivalHubSourceState {
       record.attempts += 1;
       record.lastFailureCode = code;
       record.nextAttemptAt = nextAttemptAt;
+      record.retryAfterAt = retryAfterAt;
     });
   }
 

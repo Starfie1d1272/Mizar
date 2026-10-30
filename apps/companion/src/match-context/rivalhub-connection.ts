@@ -515,6 +515,7 @@ export class RivalHubConnection {
   private source: Source | null = null;
   private readonly liveInFlight = new Map<Source, Set<Promise<void>>>();
   private readonly sourceSettlements = new Map<string, Promise<boolean>>();
+  private readonly cleanupAttempts = new Map<string, number>();
   private readonly sourceCommands = new SerialCommitQueue();
   private readonly sourceState: RivalHubSourceState;
   private cleanupTimer: ReturnType<typeof setInterval> | undefined;
@@ -1026,10 +1027,15 @@ export class RivalHubConnection {
         }
         continue;
       }
+      const attemptKey = JSON.stringify(record.identity);
+      if (record.retryAfterAt && Date.parse(record.retryAfterAt) > Date.now()) continue;
+      if (!force && (this.cleanupAttempts.get(attemptKey) ?? 0) >= 8) continue;
+      if (force) this.cleanupAttempts.delete(attemptKey);
       if (!force && record.nextAttemptAt && Date.parse(record.nextAttemptAt) > Date.now()) continue;
       const identity = record.identity;
       if (!(await this.settle(identity, Math.min(2500, deadline - Date.now())))) continue;
       if (Date.now() >= deadline) break;
+      this.cleanupAttempts.set(attemptKey, (this.cleanupAttempts.get(attemptKey) ?? 0) + 1);
       try {
         this.cleanupEvidence(identity, 'release_attempt', record.attempts + 1);
         const response = await this.request('release', {
@@ -1059,6 +1065,7 @@ export class RivalHubConnection {
           )
             this.source = null;
           await this.sourceState.complete(identity);
+          this.cleanupAttempts.delete(attemptKey);
           this.cleanupEvidence(identity, 'release_confirmed', record.attempts + 1);
           continue;
         }
@@ -1084,15 +1091,15 @@ export class RivalHubConnection {
             ? Number(header) * 1000
             : Date.parse(header) - Date.now()
           : 0;
+        const serverDelay = Number.isFinite(retryAfter)
+          ? Math.max(0, Math.min(retryAfter, 253_402_300_799_000 - Date.now()))
+          : 0;
         await this.sourceState.failure(
           identity,
           `http_${response.status}`,
-          retryable
-            ? new Date(
-                Date.now() + Math.max(delay, Number.isFinite(retryAfter) ? retryAfter : 0),
-              ).toISOString()
-            : null,
+          retryable ? new Date(Date.now() + Math.max(delay, serverDelay)).toISOString() : null,
           !retryable,
+          retryable && serverDelay > 0 ? new Date(Date.now() + serverDelay).toISOString() : null,
         );
         this.cleanupEvidence(
           identity,

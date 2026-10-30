@@ -41,6 +41,7 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
   const releases: { matchId: string; authority: string | null; authorization: string | null }[] =
     [];
   let failRelease = false;
+  let retryAfter: string | null = null;
   let liveStatus = 200;
   let reliableStatus = 204;
   let loseClaim = false;
@@ -113,7 +114,12 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
         authority: headers.get('x-rivalhub-authority'),
         authorization: headers.get('authorization'),
       });
-      return failRelease ? new Response(null, { status: 503 }) : Response.json({ released: true });
+      return failRelease
+        ? new Response(null, {
+            status: 503,
+            ...(retryAfter ? { headers: { 'Retry-After': retryAfter } } : {}),
+          })
+        : Response.json({ released: true });
     }
     throw new Error(`unexpected ${url.pathname}`);
   };
@@ -141,6 +147,9 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
     },
     setFail: (v: boolean) => {
       failRelease = v;
+    },
+    setRetryAfter: (v: string) => {
+      retryAfter = v;
     },
     setLive: (v: number) => {
       liveStatus = v;
@@ -264,6 +273,17 @@ test('explicit disconnect can revoke an installation after release fails', async
     claimIntent: false,
   });
   await assert.rejects(readFile(h.path), { code: 'ENOENT' });
+});
+
+test('explicit retry still honors the server Retry-After delay', async (t) => {
+  const h = await setup(t);
+  await h.connection.claim(h.snapshot, 'revision', false);
+  h.setFail(true);
+  h.setRetryAfter('60');
+  await assert.rejects(h.connection.release());
+  h.setFail(false);
+  await assert.rejects(h.connection.release());
+  assert.equal(h.releases.length, 1);
 });
 
 test('an ambiguous claim status is retained and does not release', async (t) => {
