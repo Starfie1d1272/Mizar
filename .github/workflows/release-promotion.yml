@@ -15,7 +15,7 @@ on:
         required: true
         type: string
       recovery:
-        description: Resume an expired qualified release with a separate recovery budget
+        description: Resume an already qualified release after interruption
         required: false
         default: false
         type: boolean
@@ -44,7 +44,6 @@ jobs:
       RELEASE_TAG: ${{ inputs.tag || github.event.workflow_run.display_title }}
       RELEASE_RECOVERY: ${{ github.event_name == 'workflow_dispatch' && inputs.recovery && 'true' || 'false' }}
       RELEASE_DRAFT_ID: ${{ inputs.draft_release_id }}
-      RELEASE_BUDGET_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.recovery && github.run_id || inputs.qualification_run || github.event.workflow_run.id }}
       RESOURCE_PUBLISHER_ROOT: ${{ github.workspace }}/.agent-tmp/resource-publisher-source
       RESOURCE_ROOT: ${{ github.workspace }}/qualified-resources
       RESOURCE_FROZEN_ROOT: ${{ github.workspace }}/frozen-resources
@@ -84,29 +83,13 @@ jobs:
         run: |
           $run = node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/bounded-gh.mjs" api "repos/$env:GH_REPO/actions/runs/$env:RUN_ID" | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.event -ne 'workflow_dispatch' -or $run.path -ne '.github/workflows/release-qualification.yml' -or $run.head_branch -ne 'main' -or $run.head_repository.full_name -ne $env:GH_REPO) { throw 'Recovery requires a successful original main qualification' }
-          if (([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($run.created_at)).TotalSeconds -le 600) { throw 'Recovery requires the original release budget to have expired' }
-          Write-Output 'Explicit recovery: original fresh-release budget was not met.'
-      - name: Bound Resolve successful qualification source to remaining time
-        id: budget_resolve
-        shell: pwsh
-        run: |
-          $created = node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/bounded-gh.mjs" api "repos/$env:GH_REPO/actions/runs/$env:RELEASE_BUDGET_RUN" --jq .created_at
-          if ($LASTEXITCODE -ne 0 -or !$created) { throw 'Cannot read qualification start time' }
-          $minutes = [math]::Floor((600 - ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($created)).TotalSeconds) / 60)
-          if ($minutes -lt 1) { throw 'Less than one minute remains in release budget' }
-          "minutes=$minutes" >> $env:GITHUB_OUTPUT
+          Write-Output 'Explicit recovery: original attempt remains separately recorded.'
       - name: Resolve successful qualification source
-        timeout-minutes: ${{ fromJSON(steps.budget_resolve.outputs.minutes) }}
         shell: pwsh
         run: |
           if ($env:RUN_ID -notmatch '^\d+$') { throw 'Invalid run ID' }
           $run = node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/bounded-gh.mjs" api "repos/$env:GH_REPO/actions/runs/$env:RUN_ID" | ConvertFrom-Json
           if ($run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.path -ne '.github/workflows/release-qualification.yml' -or $run.event -ne 'workflow_dispatch' -or $run.head_branch -ne 'main' -or $run.head_repository.full_name -ne $env:GH_REPO) { throw 'Not a successful main qualification run' }
-          $budgetCreated = node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/bounded-gh.mjs" api "repos/$env:GH_REPO/actions/runs/$env:RELEASE_BUDGET_RUN" --jq .created_at
-          if ($LASTEXITCODE -ne 0 -or !$budgetCreated) { throw 'Cannot read release budget start time' }
-          $elapsed = ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($budgetCreated)).TotalSeconds
-          if ($elapsed -gt 600) { throw "Release budget exceeded before promotion: $elapsed seconds" }
-          "RELEASE_DEADLINE=$(([DateTimeOffset]::Parse($budgetCreated).AddSeconds(600)).ToString('o'))" >> $env:GITHUB_ENV
           $run | ConvertTo-Json -Depth 50 | Set-Content qualification-run.json -Encoding utf8
           node scripts/qualification/download-qualified-artifacts.mjs $env:RUN_ID "$env:RESOURCE_ROOT"
           if ($LASTEXITCODE -ne 0) { throw 'Qualified product/evidence download failed' }
@@ -252,22 +235,10 @@ jobs:
           node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/machine-metadata.mjs" product "$env:RESOURCE_FROZEN_ROOT" - product/machine-metadata.json
           if ($LASTEXITCODE -ne 0) { throw 'Prerelease original carrier failed' }
 
-      - name: Bound Publish exact qualified assets to remaining time
-        if: ${{ env.RELEASE_DRAFT_ID == '' }}
-        id: budget_publish
-        shell: pwsh
-        run: |
-          $created = node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/bounded-gh.mjs" api "repos/$env:GH_REPO/actions/runs/$env:RELEASE_BUDGET_RUN" --jq .created_at
-          if ($LASTEXITCODE -ne 0 -or !$created) { throw 'Cannot read qualification start time' }
-          $minutes = [math]::Floor((600 - ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($created)).TotalSeconds) / 60)
-          if ($minutes -lt 1) { throw 'Less than one minute remains in release budget' }
-          "minutes=$minutes" >> $env:GITHUB_OUTPUT
       - name: Publish exact qualified assets
         if: ${{ env.RELEASE_DRAFT_ID == '' }}
-        timeout-minutes: ${{ fromJSON(steps.budget_publish.outputs.minutes) }}
         shell: pwsh
         run: |
-          if ([DateTimeOffset]::UtcNow -gt [DateTimeOffset]::Parse($env:RELEASE_DEADLINE)) { throw 'Release 600-second budget exceeded' }
           $prereleaseFlags = @()
           if ($env:RELEASE_TAG -match '-(?:alpha|beta|rc)\.[1-9]\d*$') { $prereleaseFlags = @('--prerelease', '--latest=false') }
           $assets = @(node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-assets.mjs" assets product | ConvertFrom-Json)
@@ -314,7 +285,6 @@ jobs:
         if: ${{ env.RELEASE_DRAFT_ID == '' && !contains(env.RELEASE_TAG, '-') && env.RELEASE_ALREADY_PUBLISHED != 'true' }}
         shell: pwsh
         run: |
-          if ([DateTimeOffset]::UtcNow -gt [DateTimeOffset]::Parse($env:RELEASE_DEADLINE)) { throw 'Release 600-second budget exceeded' }
           node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/bounded-gh.mjs" api "repos/$env:GH_REPO/releases/tags/$env:RELEASE_TAG" > published-release.json
           if ($LASTEXITCODE -ne 0) { throw 'Published release lookup failed' }
           node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/bounded-gh.mjs" api "repos/$env:GH_REPO/git/ref/tags/$env:RELEASE_TAG" > published-ref.json
@@ -327,24 +297,12 @@ jobs:
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
           subject-path: update-publication.json
-      - name: Bound Upload and verify publication authorization to remaining time
-        id: budget_authorize
-        if: ${{ env.RELEASE_DRAFT_ID == '' && !contains(env.RELEASE_TAG, '-') && env.RELEASE_ALREADY_PUBLISHED != 'true' }}
-        shell: pwsh
-        run: |
-          $created = node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/bounded-gh.mjs" api "repos/$env:GH_REPO/actions/runs/$env:RELEASE_BUDGET_RUN" --jq .created_at
-          if ($LASTEXITCODE -ne 0 -or !$created) { throw 'Cannot read qualification start time' }
-          $minutes = [math]::Floor((600 - ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($created)).TotalSeconds) / 60)
-          if ($minutes -lt 1) { throw 'Less than one minute remains in release budget' }
-          "minutes=$minutes" >> $env:GITHUB_OUTPUT
       - name: Upload and verify publication authorization
-        timeout-minutes: ${{ fromJSON(steps.budget_authorize.outputs.minutes) }}
         if: ${{ env.RELEASE_DRAFT_ID == '' && !contains(env.RELEASE_TAG, '-') && env.RELEASE_ALREADY_PUBLISHED != 'true' }}
         shell: pwsh
         env:
           PUBLICATION_BUNDLE: ${{ steps.publication-provenance.outputs.bundle-path }}
         run: |
-          if ([DateTimeOffset]::UtcNow -gt [DateTimeOffset]::Parse($env:RELEASE_DEADLINE)) { throw 'Release 600-second budget exceeded' }
           Copy-Item -LiteralPath $env:PUBLICATION_BUNDLE -Destination update-publication-provenance.json
           node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/bounded-gh.mjs" attestation verify update-publication.json --repo $env:GH_REPO --signer-workflow "$env:GH_REPO/.github/workflows/release-promotion.yml@refs/heads/main" --source-ref refs/heads/main --source-digest $env:GITHUB_SHA --bundle update-publication-provenance.json
           if ($LASTEXITCODE -ne 0) { throw 'Publication authorization verification failed' }

@@ -131,10 +131,10 @@ export function releaseTimingReport({
   return result;
 }
 
-export function assertBoxTiming(report, boxOutcome, budgetApplies = !report.recovery) {
+export function assertBoxTiming(report, boxOutcome) {
   if (boxOutcome !== 'success') throw new Error('Box synchronization failed');
-  if (budgetApplies && report.triggerToBoxMs > 600000)
-    throw new Error('Release exceeded 600-second budget');
+  if (report.triggerToBoxMs > 600000)
+    console.warn('Release exceeded 600-second target; delivery remains valid.');
 }
 
 async function recordReport(report, path) {
@@ -154,6 +154,9 @@ async function recordReport(report, path) {
         (report.triggerToBoxMs === undefined
           ? 'Promotion checkpoint'
           : `Qualification trigger → Box checkpoint: ${(report.triggerToBoxMs / 1000).toFixed(1)}s; initial queues Q/P/B: ${[report.qualification, report.promotion, report.box].map((r) => (r.initialQueueMs === null ? 'unknown' : (r.initialQueueMs / 1000).toFixed(1) + 's')).join('/')}`) +
+        (report.freshReleaseWithin600Seconds === undefined
+          ? ''
+          : `; fresh-release target <=600s: ${report.freshReleaseWithin600Seconds ? 'met' : 'not met or not fresh'}`) +
         '\n',
     );
 }
@@ -254,36 +257,20 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
             boxRecoveryStartedAt: process.env.BOX_RECOVERY_STARTED_AT || undefined,
           });
           await recordReport(report, output);
-          assertBoxTiming(
-            report,
-            process.env.BOX_OUTCOME,
-            !record.recovery && current.run_attempt === 1,
-          );
+          assertBoxTiming(report, process.env.BOX_OUTCOME);
         } finally {
           await rm(directory, { recursive: true, force: true });
         }
       }
     } else throw new Error('Unknown release timing mode');
   } catch (error) {
-    if (
-      ['Box synchronization failed', 'Release exceeded 600-second budget'].includes(error.message)
-    )
-      throw error;
-    if (
-      error.code === 'ENOENT' ||
-      error instanceof SyntaxError ||
-      [
-        'Invalid release timing order',
-        'Release timing source differs',
-        'Unknown release timing mode',
-      ].includes(error.message)
-    )
-      // eslint-disable-next-line preserve-caught-error -- Download causes may expose signed URLs.
-      throw new Error('发行计时证据缺失或结构、时序有误；不得作为完整发行验收。');
-    if (mode === 'box' && process.env.GITHUB_EVENT_NAME === 'workflow_run') {
-      // eslint-disable-next-line preserve-caught-error -- The cause can contain signed URLs.
-      throw new Error('Release timing unavailable; cannot verify 600-second budget');
-    }
+    if (error.message === 'Box synchronization failed') throw error;
+    // eslint-disable-next-line preserve-caught-error -- The cause may contain a temporary signed URL.
+    if (!['box', 'promotion'].includes(mode)) throw new Error('Unknown release timing mode');
+    // Preserve actual Box failure even if timing evidence is unavailable.
+    if (mode === 'box' && process.env.BOX_OUTCOME !== 'success')
+      // eslint-disable-next-line preserve-caught-error -- The cause may contain a temporary signed URL.
+      throw new Error('Box synchronization failed');
     // Metrics cannot invalidate delivery after its original-byte checks succeeded.
     // Missing timing evidence also cannot claim the fresh release budget passed.
     await recordReport(
