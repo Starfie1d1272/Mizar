@@ -131,6 +131,12 @@ export function releaseTimingReport({
   return result;
 }
 
+export function assertBoxTiming(report, boxOutcome, budgetApplies = !report.recovery) {
+  if (boxOutcome !== 'success') throw new Error('Box synchronization failed');
+  if (budgetApplies && report.triggerToBoxMs > 600000)
+    throw new Error('Release exceeded 600-second budget');
+}
+
 async function recordReport(report, path) {
   await writeFile(path, JSON.stringify(report, null, 2) + '\n');
   if (report.measurementUnavailable) {
@@ -192,19 +198,18 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       await recordReport(report, output);
     } else if (mode === 'box') {
       if (process.env.GITHUB_EVENT_NAME !== 'workflow_run') {
-        await recordReport(
-          {
-            recovery: true,
-            freshReleaseWithin600Seconds: false,
-            box: runTiming(current, currentJobs, finishedAt, firstAttemptJobs(current)),
-            boxOutcome: process.env.BOX_OUTCOME,
-            boxRecoveryStartedAt: process.env.BOX_RECOVERY_STARTED_AT || undefined,
-            boxRecoveryDurationMs: process.env.BOX_RECOVERY_STARTED_AT
-              ? elapsed(process.env.BOX_RECOVERY_STARTED_AT, finishedAt)
-              : undefined,
-          },
-          output,
-        );
+        const report = {
+          recovery: true,
+          freshReleaseWithin600Seconds: false,
+          box: runTiming(current, currentJobs, finishedAt, firstAttemptJobs(current)),
+          boxOutcome: process.env.BOX_OUTCOME,
+          boxRecoveryStartedAt: process.env.BOX_RECOVERY_STARTED_AT || undefined,
+          boxRecoveryDurationMs: process.env.BOX_RECOVERY_STARTED_AT
+            ? elapsed(process.env.BOX_RECOVERY_STARTED_AT, finishedAt)
+            : undefined,
+        };
+        await recordReport(report, output);
+        assertBoxTiming(report, process.env.BOX_OUTCOME);
       } else {
         const event = await json(process.env.GITHUB_EVENT_PATH);
         const promotion = api(`actions/runs/${event.workflow_run.id}`);
@@ -249,11 +254,11 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
             boxRecoveryStartedAt: process.env.BOX_RECOVERY_STARTED_AT || undefined,
           });
           await recordReport(report, output);
-          if (
-            process.env.BOX_OUTCOME !== 'success' ||
-            (!record.recovery && current.run_attempt === 1 && report.triggerToBoxMs > 600000)
-          )
-            throw new Error('Release exceeded 600-second budget');
+          assertBoxTiming(
+            report,
+            process.env.BOX_OUTCOME,
+            !record.recovery && current.run_attempt === 1,
+          );
         } finally {
           await rm(directory, { recursive: true, force: true });
         }
@@ -261,13 +266,16 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     } else throw new Error('Unknown release timing mode');
   } catch (error) {
     if (
+      ['Box synchronization failed', 'Release exceeded 600-second budget'].includes(error.message)
+    )
+      throw error;
+    if (
       error.code === 'ENOENT' ||
       error instanceof SyntaxError ||
       [
         'Invalid release timing order',
         'Release timing source differs',
         'Unknown release timing mode',
-        'Release exceeded 600-second budget',
       ].includes(error.message)
     )
       // eslint-disable-next-line preserve-caught-error -- Download causes may expose signed URLs.

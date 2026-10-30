@@ -64,24 +64,34 @@ test('zero-byte retries stop after three attempts', async () => {
   assert.equal(calls, 3);
 });
 
-test('upload link and all chunks share the 180-second deadline', async (t) => {
+test('each chunk has a fresh deadline while the whole upload remains bounded', async (t) => {
   let now = 1000;
   t.mock.method(Date, 'now', () => now);
   const ranges = [];
   const box = client(async (_url, options) => {
     ranges.push(options.headers['Content-Range']);
     now += 179000;
+    return Response.json(ranges.length === 3 ? [{ name: 'payload' }] : { success: true });
+  });
+  await box.uploadChunks('/Archive/test', 'payload', Buffer.from('abcdef'), 2);
+  assert.deepEqual(ranges, ['bytes 0-1/6', 'bytes 2-3/6', 'bytes 4-5/6']);
+  assert.ok(now > 180000);
+});
+
+test('the aggregate chunk upload deadline also stops further chunks', async (t) => {
+  let now = 1000;
+  t.mock.method(Date, 'now', () => now);
+  let calls = 0;
+  const box = client(async () => {
+    calls++;
+    now += 180000;
     return Response.json({ success: true });
   });
-  box.api = async () => {
-    now += 1000;
-    return 'https://box.example/upload';
-  };
   await assert.rejects(
-    box.uploadChunks('/Archive/test', 'payload', Buffer.from('abcd'), 2),
+    box.uploadChunks('/Archive/test', 'payload', Buffer.from('abcdefghijkl'), 2),
     /预算已用完/,
   );
-  assert.deepEqual(ranges, ['bytes 0-1/4']);
+  assert.equal(calls, 5);
 });
 
 test('deadline abort during a chunk stops the transfer as an uncertain write', async (t) => {
@@ -161,4 +171,34 @@ test('partial or malformed curl metrics never authorize replay', async () => {
       { code: 'BOX_CURL_FAILED', retrySafeUpload: false },
     );
   }
+});
+
+test('a timed-out zero-byte chunk retries with a fresh attempt signal', async (t) => {
+  const timeout = AbortSignal.timeout.bind(AbortSignal);
+  const timers = [];
+  t.mock.method(AbortSignal, 'timeout', (milliseconds) => {
+    if (milliseconds === 180000) {
+      const controller = new AbortController();
+      timers.push(controller);
+      return controller.signal;
+    }
+    return timeout(milliseconds);
+  });
+  const observedSignals = [];
+  const box = client(async (_url, { signal }) => {
+    observedSignals.push(signal);
+    if (observedSignals.length === 1) {
+      timers[0].abort();
+      throw Object.assign(new Error('zero bytes sent'), {
+        code: 'BOX_CURL_FAILED',
+        retrySafeUpload: true,
+        uploadTimedOut: true,
+      });
+    }
+    assert.equal(signal.aborted, false);
+    return Response.json([{ name: 'payload' }]);
+  });
+  await box.uploadChunks('/Archive/test', 'payload', Buffer.from('a'));
+  assert.equal(observedSignals.length, 2);
+  assert.notEqual(observedSignals[0], observedSignals[1]);
 });
