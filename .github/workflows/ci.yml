@@ -1,10 +1,10 @@
 name: CI
 on:
   pull_request:
-    branches: [main]
+    branches: [main, 1.11.0]
     types: [opened, synchronize, reopened, ready_for_review]
   push:
-    branches: [main]
+    branches: [main, 1.11.0]
   workflow_dispatch:
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
