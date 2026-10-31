@@ -110,6 +110,41 @@ async fn http(
         .await
         .map_err(|_| "准备请求未完成。".to_string())?
 }
+async fn restore_video(
+    app: &tauri::AppHandle,
+    id: &str,
+    cancellation_confirmed: bool,
+) -> Result<(), String> {
+    let transaction = {
+        let mut state = TASK.lock().map_err(|_| "准备状态不可用。")?;
+        state
+            .as_mut()
+            .filter(|task| {
+                task.id == id
+                    && !task.entered
+                    && (cancellation_confirmed || (!task.cancelled && !task.enter_attempted))
+            })
+            .and_then(|task| task.video_transaction.take())
+    };
+    if let Some(transaction) = transaction {
+        if let Err(error) = http(
+            app,
+            "POST",
+            "/operator/obs/video-restore",
+            json!({"transactionId": transaction}),
+        )
+        .await
+        {
+            update(id, |task| {
+                if task.video_transaction.is_none() {
+                    task.video_transaction = Some(transaction);
+                }
+            });
+            return Err(error);
+        }
+    }
+    Ok(())
+}
 async fn controlled_post(
     app: &tauri::AppHandle,
     id: &str,
@@ -289,16 +324,7 @@ async fn run(app: tauri::AppHandle, id: String) -> Result<(), String> {
             }
             .await;
             if prepared.is_err() && !task.entered {
-                if let Some(transaction) = video["transactionId"].as_str() {
-                    http(
-                        &app,
-                        "POST",
-                        "/operator/obs/video-restore",
-                        json!({"transactionId":transaction}),
-                    )
-                    .await?;
-                    update(&id, |t| t.video_transaction = None);
-                }
+                restore_video(&app, &id, false).await?;
             }
             prepared
         }
@@ -482,23 +508,8 @@ fn spawn(app: tauri::AppHandle, id: String) {
     tauri::async_runtime::spawn(async move {
         let result = run(app.clone(), id.clone()).await;
         if let Err(mut error) = result {
-            if let Ok(Some(task)) = snapshot() {
-                if task.id == id && !task.entered && !task.enter_attempted {
-                    if let Some(transaction) = task.video_transaction {
-                        if let Err(restore) = http(
-                            &app,
-                            "POST",
-                            "/operator/obs/video-restore",
-                            json!({"transactionId":transaction}),
-                        )
-                        .await
-                        {
-                            error = format!("{error} OBS 视频设置恢复未确认：{restore}");
-                        } else {
-                            update(&id, |t| t.video_transaction = None);
-                        }
-                    }
-                }
+            if let Err(restore) = restore_video(&app, &id, false).await {
+                error = format!("{error} OBS 视频设置恢复未确认：{restore}");
             }
             publish(&app, &id, error);
         }
@@ -659,19 +670,7 @@ pub(crate) async fn preparation_cancel(
             }
             // Cancellation is acknowledged by the service before restoring: it
             // fences a delayed enter request for this same preparation ID.
-            if let Some(transaction) = snapshot()?
-                .filter(|task| task.id == preparation_id && task.enter_attempted)
-                .and_then(|task| task.video_transaction)
-            {
-                http(
-                    &app,
-                    "POST",
-                    "/operator/obs/video-restore",
-                    json!({"transactionId":transaction}),
-                )
-                .await?;
-                update(&preparation_id, |task| task.video_transaction = None);
-            }
+            restore_video(&app, &preparation_id, true).await?;
             publish(&app, &preparation_id, "准备已取消。".into());
             Ok(())
         }
