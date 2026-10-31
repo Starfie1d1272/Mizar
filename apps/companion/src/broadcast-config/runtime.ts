@@ -228,6 +228,7 @@ export function createBroadcastRuntime(input: {
       await backupLegacyConfig(join(music.directory, 'state.json'), 512 * 1024);
       await backupLegacyConfig(join(camera.directory, 'presets.json'), 9 * 1024 * 1024);
       await backupLegacyConfig(join(camera.directory, 'settings.json'), 1024);
+      await music.prepareRuntimeMigration();
     }
     await store.load();
     if (existing) {

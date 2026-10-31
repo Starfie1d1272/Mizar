@@ -144,7 +144,6 @@ export function createCameraConfigPersistence(
     },
     initialize: () => read(),
     read: () => read(),
-    readForApply: () => read(),
     readApplied: () => {
       const active = store.appliedSnapshot('camera');
       if (!active) throw new Error('camera_storage_unavailable');

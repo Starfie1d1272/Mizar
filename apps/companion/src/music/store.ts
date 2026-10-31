@@ -254,6 +254,16 @@ export class MusicStore {
       throw new Error('music_state_invalid');
     return runtimeSchema.parse(JSON.parse(await readFile(path, 'utf8')));
   }
+  /** Preserve runtime controls before the unified configuration becomes authoritative. */
+  async prepareRuntimeMigration(): Promise<void> {
+    if (!this.ready || this.failure || this.persistence) throw new Error('music_state_invalid');
+    try {
+      await this.readRuntime();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      await atomicJson(join(this.directory, 'runtime.json'), runtimeState(this.state));
+    }
+  }
   private async loadDelegatedState(): Promise<void> {
     const persistence = this.persistence;
     if (!persistence) throw new Error('music_state_invalid');

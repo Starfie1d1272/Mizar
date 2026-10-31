@@ -36,7 +36,6 @@ interface CameraPersistenceState {
 export interface CameraConfigPersistence {
   initialize(catalog: CameraCatalog, automaticEnabled: boolean): Promise<CameraPersistenceState>;
   read(): Promise<CameraPersistenceState>;
-  readForApply?(): Promise<CameraPersistenceState>;
   readApplied?(): Promise<CameraPersistenceState>;
   commit(
     catalog: CameraCatalog,
@@ -140,7 +139,7 @@ export class OrchestrationStore {
     if (this.ready || this.persistence) throw new Error('camera_storage_unavailable');
     await ensureDirectory(this.directory);
     this.persistence = persistence;
-    const state = await (persistence.readForApply?.() ?? persistence.read());
+    const state = await persistence.read();
     this.usePersisted(state);
     this.ready = true;
   }
@@ -148,8 +147,10 @@ export class OrchestrationStore {
     const result = this.queue.then(async () => {
       if (!this.ready || this.persistence) throw new Error('camera_storage_unavailable');
       this.persistence = persistence;
-      const value = await (persistence.readForApply?.() ??
-        persistence.initialize(structuredClone(this.catalog()), this.automaticEnabled));
+      const value = await persistence.initialize(
+        structuredClone(this.catalog()),
+        this.automaticEnabled,
+      );
       this.usePersisted(value);
     });
     this.queue = result.catch(() => undefined);
@@ -161,7 +162,7 @@ export class OrchestrationStore {
       const before = JSON.stringify({ ...this.preset, name: '' });
       const automatic = this.automaticEnabled;
       const revision = this.persistedRevision;
-      const current = await (this.persistence.readForApply?.() ?? this.persistence.read());
+      const current = await this.persistence.read();
       if (!canApply()) throw new Error('revision_conflict');
       this.usePersisted(current);
       this.ready = true;
