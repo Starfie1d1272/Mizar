@@ -526,10 +526,19 @@ export class MusicDirector {
     }
   }
 
-  private async readMonitor(obs: ObsRpc, valid: () => boolean) {
+  private async readMonitor(obs: ObsRpc, valid: () => boolean, readOnly = false) {
     const modes: unknown[] = [];
     for (const layer of ['bgm', 'stinger'] as const) {
-      const name = await ownedMusicInput(obs, this.store, layer, false, valid, false);
+      const name = await ownedMusicInput(
+        obs,
+        this.store,
+        layer,
+        false,
+        valid,
+        false,
+        false,
+        !readOnly,
+      );
       if (!valid()) return;
       if (!name) continue;
       const read = await obs.call('GetInputAudioMonitorType', {
@@ -985,6 +994,7 @@ export class MusicDirector {
         this.status.message = null;
         if (this.isExternalHold()) {
           await this.observeHeldPlayback(obs, valid);
+          if (valid()) await this.readMonitor(obs, valid, true);
           if (this.unknownControl && valid())
             this.status.message = '音乐控制未确认，请在 OBS 核对后停止音乐或恢复自动。';
           return;
@@ -1144,43 +1154,79 @@ export class MusicDirector {
     await this.store.hold(true);
   }
   private async observeHeldPlayback(obs: ObsRpc, valid: () => boolean) {
+    this.status.stinger = null;
     const name = await ownedMusicInput(obs, this.store, 'bgm', false, valid, false, false, false);
-    if (!name || !valid()) {
+    if (!valid()) return;
+    if (!name) {
       this.status.playback = 'unknown';
       this.status.bgm = null;
-      return;
+      this.status.cursorMs = null;
+      this.status.durationMs = null;
+      this.status.segmentStartMs = null;
+      this.status.segmentEndMs = null;
+    } else {
+      const args = { inputUuid: this.store.state.sources.bgm };
+      const [media, volume, mute, settings] = await Promise.all([
+        obs.call('GetMediaInputStatus', args),
+        obs.call('GetInputVolume', args),
+        obs.call('GetInputMute', args),
+        obs.call('GetInputSettings', args),
+      ]);
+      if (!valid()) return;
+      this.status.playback = observedPlayback(media.mediaState);
+      this.status.cursorMs = mediaMillis(media.mediaCursor);
+      this.status.durationMs = mediaMillis(media.mediaDuration);
+      const saved = this.store.state.bgm;
+      const path = saved ? await this.store.trackPath(saved.track.id).catch(() => null) : null;
+      if (!valid()) return;
+      const matches =
+        path && (settings.inputSettings as Record<string, unknown>)?.local_file === path;
+      this.status.bgm =
+        saved && matches && !saved.finished
+          ? {
+              group: saved.group,
+              track: saved.track.name,
+              playbackId: saved.key,
+              volume:
+                mute.inputMuted === true
+                  ? 0
+                  : typeof volume.inputVolumeMul === 'number' &&
+                      Number.isFinite(volume.inputVolumeMul)
+                    ? Math.min(1, Math.max(0, volume.inputVolumeMul))
+                    : this.effectiveVolume(saved.group, saved.track),
+            }
+          : null;
+      this.status.segmentStartMs = this.status.bgm ? saved!.track.startMs : null;
+      this.status.segmentEndMs = this.status.bgm ? saved!.track.endMs : null;
     }
-    const args = { inputUuid: this.store.state.sources.bgm };
-    const [media, volume, mute, settings] = await Promise.all([
-      obs.call('GetMediaInputStatus', args),
-      obs.call('GetInputVolume', args),
-      obs.call('GetInputMute', args),
-      obs.call('GetInputSettings', args),
-    ]);
-    if (!valid()) return;
-    this.status.playback = observedPlayback(media.mediaState);
-    this.status.cursorMs = mediaMillis(media.mediaCursor);
-    this.status.durationMs = mediaMillis(media.mediaDuration);
-    const saved = this.store.state.bgm;
-    const path = saved ? await this.store.trackPath(saved.track.id).catch(() => null) : null;
-    if (!valid()) return;
-    const matches =
-      path && (settings.inputSettings as Record<string, unknown>)?.local_file === path;
-    this.status.bgm =
-      saved && matches && !saved.finished
-        ? {
-            group: saved.group,
-            track: saved.track.name,
-            playbackId: saved.key,
-            volume:
-              mute.inputMuted === true
-                ? 0
-                : typeof volume.inputVolumeMul === 'number' &&
-                    Number.isFinite(volume.inputVolumeMul)
-                  ? Math.min(1, Math.max(0, volume.inputVolumeMul))
-                  : this.effectiveVolume(saved.group, saved.track),
-          }
-        : null;
+    const stinger = this.store.state.stinger;
+    if (stinger && !stinger.finished) {
+      const stingerName = await ownedMusicInput(
+        obs,
+        this.store,
+        'stinger',
+        false,
+        valid,
+        false,
+        false,
+        false,
+      );
+      if (stingerName && valid()) {
+        const stingerArgs = { inputUuid: this.store.state.sources.stinger };
+        const [stingerMedia, stingerSettings, stingerPath] = await Promise.all([
+          obs.call('GetMediaInputStatus', stingerArgs),
+          obs.call('GetInputSettings', stingerArgs),
+          this.store.trackPath(stinger.track.id).catch(() => null),
+        ]);
+        if (!valid()) return;
+        if (
+          stingerPath &&
+          (stingerSettings.inputSettings as Record<string, unknown>)?.local_file === stingerPath &&
+          ['playing', 'paused'].includes(observedPlayback(stingerMedia.mediaState))
+        )
+          this.status.stinger = stinger.track.name;
+      }
+    }
   }
   private async observeManualControls(obs: ObsRpc, valid: () => boolean, skipStinger = false) {
     if (this.isHeld()) return false;
