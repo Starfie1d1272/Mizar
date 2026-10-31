@@ -2,12 +2,14 @@ import { lstat, readFile } from 'node:fs/promises';
 import { BUILTIN_MODULE_IDS, BUILTIN_REVISION } from './builtin-modules.js';
 import { portableMusicConfig } from './music-assets.js';
 import { join } from 'node:path';
+import { MUSIC_GROUPS } from '@mizar/protocol/music';
 import type {
   ActiveBroadcastSnapshot,
   AssetRef,
   BroadcastConfigDocument,
   ResourceRef,
 } from '@mizar/broadcast-config';
+import { sameEffectiveModule } from '@mizar/broadcast-config';
 import type { HudConfigStore } from '../hud-config/store.js';
 import type { MusicStore } from '../music/store.js';
 import type { OrchestrationStore } from '../orchestration/store.js';
@@ -46,6 +48,7 @@ export function createBroadcastRuntime(input: {
   camera: OrchestrationStore;
   dependencies: BroadcastRuntimeDependencies;
   withApplyGuard<T>(operation: (canCommit: () => boolean) => Promise<T>): Promise<T>;
+  canApplyCamera?(): boolean;
   diagnostic(error: unknown): void;
   builtinMusicPack?: string | undefined;
 }) {
@@ -55,18 +58,20 @@ export function createBroadcastRuntime(input: {
   let pendingLegacyCamera: PendingLegacyCamera | undefined;
   let ready = false;
   let builtinMusicAvailable = false;
-  let syncError: Error | undefined;
   let cameraUnavailable = false;
   let programUnavailable = false;
+  let musicUnavailable = false;
   let cameraAvailable = () => true;
   async function verifyUnchanged(
     active: ActiveBroadcastSnapshot,
     skipProgram: boolean,
     skipCamera: boolean,
+    skipMusic = false,
   ) {
     const resolved = {
       ...active.resolved,
       ...(skipCamera ? { camera: null } : {}),
+      ...(skipMusic ? { music: null } : {}),
       ...(skipProgram ? { program: { ...active.resolved.program, assets: {}, tokens: {} } } : {}),
     };
     const lock = await deps.lockForActive(resolved);
@@ -95,57 +100,125 @@ export function createBroadcastRuntime(input: {
     // The legacy HUD facade cannot represent a third-party renderer yet.
     resolver,
     resolveModule: (module) => resolver.resolveModule(module),
+    canApplyModule: (kind, value) => {
+      if (kind !== 'camera') return true;
+      const applied = store.appliedSnapshot('camera');
+      return (
+        Boolean(
+          applied &&
+          sameEffectiveModule(
+            'camera',
+            applied.resolved.camera,
+            value as ActiveBroadcastSnapshot['resolved']['camera'],
+          ),
+        ) ||
+        !input.canApplyCamera ||
+        input.canApplyCamera()
+      );
+    },
     withReferenceGuard: (operation) => deps.references.run(operation),
     assertReferenceCommitAllowed: (previous, next) =>
       assertReferenceCommitAllowed(previous, next, (ref) => deps.isDeleting(ref)),
     withApplyGuard: (operation) => input.withApplyGuard(operation),
     verifyLegacyActive: async (active, kind) => {
-      if (kind === 'hud' || kind === 'program') await verifyUnchanged(active, kind === 'hud', true);
-      else await deps.verifyActive(active);
+      if (!kind) return deps.verifyActive(active);
+      await verifyUnchanged(active, kind !== 'program', kind !== 'camera', kind !== 'music');
     },
     validateHudDraft: (document) => {
       hudDocumentFromBroadcast(document);
     },
-    onDraftChanged: async (kind) => {
-      if (kind === 'hud') await hud.synchronizeFromPersistence(hudDocument());
-    },
-    onApplied: async (_active, _previous, kind) => {
-      ready = false;
-      const results = await Promise.allSettled([
-        ...(!kind || kind === 'hud'
-          ? [Promise.resolve().then(() => hud.synchronizeFromPersistence(hudDocument()))]
-          : []),
-        ...(!kind || kind === 'music'
-          ? [Promise.resolve().then(() => music.synchronizeFromPersistence())]
-          : []),
-        ...(!kind || kind === 'camera'
-          ? [Promise.resolve().then(() => camera.synchronizeFromPersistence())]
-          : []),
-      ]);
-      const failed = results.find((result) => result.status === 'rejected');
-      if (failed?.status === 'rejected') {
-        status = { state: 'pending', reason: 'dependency_unavailable' };
-        input.diagnostic(failed.reason);
-        syncError = new Error('broadcast_owner_sync_failed', { cause: failed.reason });
-        throw syncError;
+    onApplied: async (active, _previous, kind, failed = []) => {
+      const current = (item: 'hud' | 'music' | 'camera') => () =>
+        store.snapshot.active.moduleRevisions[item] === active.moduleRevisions[item];
+      const operations = {
+        hud: () => hud.synchronizeFromPersistence(hudDocument(), current('hud')),
+        music: () => music.synchronizeFromPersistence(current('music')),
+        camera: () =>
+          camera.synchronizeFromPersistence(() => {
+            const applied = store.appliedSnapshot('camera');
+            const changed =
+              !applied ||
+              !sameEffectiveModule('camera', applied.resolved.camera, active.resolved.camera);
+            return (
+              current('camera')() && (!changed || !input.canApplyCamera || input.canApplyCamera())
+            );
+          }),
+        program: async () => {
+          await resolver.resolveModule({
+            kind: 'program',
+            value: active.resolved.program,
+          } as import('@mizar/broadcast-config').ModuleRecord<'program'>);
+        },
+      };
+      const kinds = (['hud', 'music', 'camera', 'program'] as const).filter(
+        (item) => (!kind || kind === item) && !failed.includes(item),
+      );
+      let failure: unknown;
+      for (const item of kinds) {
+        const current = store.consumerStatus[item];
+        if (current?.applied === active.moduleRevisions[item] && !current.error) continue;
+        try {
+          await operations[item]();
+          if (item === 'program') programUnavailable = false;
+          if (item === 'camera') cameraUnavailable = false;
+          await store.recordConsumer(item, active, null);
+        } catch (error) {
+          if (item === 'program') programUnavailable = true;
+          if (item === 'camera') cameraUnavailable = true;
+          failure ??= error;
+          input.diagnostic(error);
+          try {
+            await store.recordConsumer(
+              item,
+              active,
+              item === 'camera' && input.canApplyCamera && !input.canApplyCamera()
+                ? 'camera_busy'
+                : 'dependency_unavailable',
+            );
+          } catch (recordError) {
+            input.diagnostic(recordError);
+          }
+        }
       }
       if (!kind || kind === 'camera') cameraUnavailable = !cameraAvailable();
-      try {
-        await resolver.resolveModule({
-          kind: 'program',
-          value: store.snapshot.active.resolved.program,
-        } as import('@mizar/broadcast-config').ModuleRecord<'program'>);
-        programUnavailable = false;
-      } catch {
-        programUnavailable = true;
-      }
-      syncError = undefined;
-      ready = true;
       status = readyStatus();
+      if (failure) throw new Error('broadcast_owner_sync_failed', { cause: failure });
     },
   });
   function hudDocument() {
     return hudDocumentFromBroadcast(store.snapshot);
+  }
+  async function lockForEdit<K extends 'hud' | 'music' | 'camera'>(
+    kind: K,
+    value: ActiveBroadcastSnapshot['resolved'][K],
+    current: ActiveBroadcastSnapshot,
+  ): Promise<ActiveBroadcastSnapshot['lock']> {
+    const resolved = {
+      ...current.resolved,
+      hud:
+        kind === 'hud'
+          ? (value as ActiveBroadcastSnapshot['resolved']['hud'])
+          : current.resolved.hud,
+      music: kind === 'music' ? (value as ActiveBroadcastSnapshot['resolved']['music']) : null,
+      camera: kind === 'camera' ? (value as ActiveBroadcastSnapshot['resolved']['camera']) : null,
+      program: { ...current.resolved.program, assets: {}, tokens: {} },
+    };
+    const lock = await deps.lockForActive(resolved);
+    const refs = new Map(lock.resources.map((ref) => [JSON.stringify(ref), ref]));
+    const add = (ref: ResourceRef) => refs.set(JSON.stringify(ref), ref);
+    for (const scene of Object.values(current.resolved.program.scenes))
+      if (scene.kind === 'declarative') add(scene.resource);
+    for (const ref of Object.values(current.resolved.program.assets)) add(ref.resource);
+    if (kind !== 'music' && current.resolved.music)
+      for (const group of MUSIC_GROUPS)
+        for (const track of current.resolved.music.groups[group].tracks) add(track.asset.resource);
+    if (kind !== 'camera' && current.resolved.camera)
+      for (const map of current.resolved.camera.maps)
+        if (map.openingSound) add(map.openingSound.asset.resource);
+    return {
+      resources: [...refs.values()],
+      tools: kind === 'camera' ? lock.tools : current.lock.tools,
+    };
   }
   const lockFor = (resolved: ActiveBroadcastSnapshot['resolved']) => deps.lockForActive(resolved);
   async function initialize(): Promise<void> {
@@ -188,6 +261,7 @@ export function createBroadcastRuntime(input: {
       await backupLegacyConfig(join(music.directory, 'state.json'), 512 * 1024);
       await backupLegacyConfig(join(camera.directory, 'presets.json'), 9 * 1024 * 1024);
       await backupLegacyConfig(join(camera.directory, 'settings.json'), 1024);
+      await music.prepareRuntimeMigration();
     }
     await store.load();
     if (existing) {
@@ -213,7 +287,17 @@ export function createBroadcastRuntime(input: {
             cameraUnavailable = true;
           }
         }
-        if (!programUnavailable && !cameraUnavailable) throw error;
+        if (active.resolved.music) {
+          try {
+            await resolver.resolveModule({
+              kind: 'music',
+              value: active.resolved.music,
+            } as import('@mizar/broadcast-config').ModuleRecord<'music'>);
+          } catch {
+            musicUnavailable = true;
+          }
+        }
+        if (!programUnavailable && !cameraUnavailable && !musicUnavailable) throw error;
         const captured = new Set(active.lock.resources.map((ref) => JSON.stringify(ref)));
         if (
           programUnavailable &&
@@ -222,45 +306,118 @@ export function createBroadcastRuntime(input: {
           )
         )
           throw new Error('broadcast_config_invalid', { cause: error });
-        await verifyUnchanged(active, programUnavailable, cameraUnavailable);
+        await verifyUnchanged(active, programUnavailable, cameraUnavailable, musicUnavailable);
         input.diagnostic(error);
       }
       for (const ref of store.referencedResources())
         if (await deps.isDeleting(ref)) throw new Error('resource_deleting');
     }
-    const hudPersistence = createHudConfigPersistence(store, async (value, current) => {
-      const lock = await lockFor({
-        ...current.resolved,
-        hud: value,
-        camera: null,
-        program: { ...current.resolved.program, assets: {}, tokens: {} },
-      });
-      const refs = new Map(lock.resources.map((ref) => [JSON.stringify(ref), ref]));
-      for (const ref of Object.values(current.resolved.program.assets))
-        refs.set(JSON.stringify(ref.resource), ref.resource);
-      for (const map of current.resolved.camera?.maps ?? [])
-        if (map.openingSound)
-          refs.set(
-            JSON.stringify(map.openingSound.asset.resource),
-            map.openingSound.asset.resource,
-          );
-      return { resources: [...refs.values()], tools: current.lock.tools };
-    });
+    const hudPersistence = createHudConfigPersistence(store, (value, current) =>
+      lockForEdit('hud', value, current),
+    );
     const musicPersistence = createMusicConfigPersistence(
       store,
       music,
-      (value, current) => lockFor({ ...current.resolved, music: value }),
+      (value, current) => lockForEdit('music', value, current),
       (ref) => deps.localTrackId(ref),
     );
-    const cameraPersistence = createCameraConfigPersistence(store, deps.camera);
+    const cameraPersistence = createCameraConfigPersistence(store, {
+      ...deps.camera,
+      lock: (value, current) => lockForEdit('camera', value, current),
+    });
     cameraAvailable = () => cameraPersistence.available;
-    if (existing) await hud.restorePersistence(hudPersistence);
-    else await hud.adoptPersistence(hudPersistence);
-    if (music.ready && !music.failure) await music.adoptPersistence(musicPersistence);
-    else await music.loadWithPersistence(musicPersistence);
-    if (camera.ready) await camera.adoptPersistence(cameraPersistence);
-    else await camera.loadWithPersistence(cameraPersistence);
-    cameraUnavailable ||= !cameraPersistence.available && !store.pendingLegacyCamera;
+    let hudUnavailable = false;
+    let hudRestored = false;
+    try {
+      if (existing) await hud.restorePersistence(hudPersistence);
+      else await hud.adoptPersistence(hudPersistence);
+    } catch (error) {
+      hudUnavailable = true;
+      input.diagnostic(error);
+      try {
+        await hud.restoreAppliedFromPersistence();
+        hudRestored = true;
+      } catch (restoreError) {
+        input.diagnostic(restoreError);
+      }
+    }
+    let musicRestored = false;
+    try {
+      if (music.ready && !music.failure) await music.adoptPersistence(musicPersistence);
+      else await music.loadWithPersistence(musicPersistence);
+      musicUnavailable = false;
+    } catch (error) {
+      musicUnavailable = true;
+      input.diagnostic(error);
+      try {
+        await music.restoreAppliedFromPersistence();
+        musicRestored = true;
+      } catch (restoreError) {
+        input.diagnostic(restoreError);
+      }
+    }
+    let cameraRestored = false;
+    try {
+      if (camera.ready) await camera.adoptPersistence(cameraPersistence);
+      else await camera.loadWithPersistence(cameraPersistence);
+      cameraUnavailable = false;
+    } catch (error) {
+      cameraUnavailable = true;
+      input.diagnostic(error);
+      try {
+        await camera.restoreAppliedFromPersistence();
+        cameraRestored = true;
+      } catch (restoreError) {
+        input.diagnostic(restoreError);
+      }
+    }
+    const initialActive = store.snapshot.active;
+    const previousStatus = store.consumerStatus;
+    const startupError = (kind: 'hud' | 'music' | 'camera' | 'program', unavailable: boolean) =>
+      unavailable ||
+      (previousStatus[kind]?.error &&
+        previousStatus[kind]?.desired !== initialActive.moduleRevisions[kind])
+        ? 'dependency_unavailable'
+        : null;
+    let programRestored = false;
+    if (programUnavailable) {
+      const previous = store.appliedSnapshot('program');
+      if (previous) {
+        try {
+          await resolver.resolveModule({
+            kind: 'program',
+            value: previous.resolved.program,
+          } as import('@mizar/broadcast-config').ModuleRecord<'program'>);
+          programRestored = true;
+        } catch (error) {
+          input.diagnostic(error);
+        }
+      }
+    }
+    await store.recordConsumer(
+      'hud',
+      initialActive,
+      startupError('hud', hudUnavailable),
+      hudUnavailable && !hudRestored,
+    );
+    await store.recordConsumer(
+      'music',
+      initialActive,
+      startupError('music', musicUnavailable),
+      musicUnavailable && !musicRestored,
+    );
+    await store.recordConsumer(
+      'camera',
+      initialActive,
+      startupError('camera', cameraUnavailable),
+      cameraUnavailable && !cameraRestored,
+    );
+    await store.recordConsumer(
+      'program',
+      initialActive,
+      startupError('program', programUnavailable),
+      programUnavailable && !programRestored,
+    );
     if (input.builtinMusicPack) {
       try {
         const config = await music.prepareImport(await readFile(input.builtinMusicPack));
@@ -286,10 +443,10 @@ export function createBroadcastRuntime(input: {
     store,
     initialize,
     async verifyCameraPack(map: string, pack: string): Promise<boolean> {
-      if (!ready || store.isApplying) return false;
-      const source = store.snapshot.active.resolved.camera?.maps.find(
-        (item) => item.map === map,
-      )?.source;
+      if (!ready) return false;
+      const source = store
+        .appliedSnapshot('camera')
+        ?.resolved.camera?.maps.find((item) => item.map === map)?.source;
       if (!source) return false;
       try {
         return (await deps.camera.localPack(source)) === pack;
@@ -299,15 +456,26 @@ export function createBroadcastRuntime(input: {
     },
     async waitForApply() {
       await store.waitForApply();
-      if (syncError) throw syncError;
     },
     async reconcileCameraSelection(): Promise<boolean> {
-      await camera.synchronizeFromPersistence();
+      const current = store.snapshot.active;
+      const state = store.consumerStatus.camera;
+      if (state?.error && state.desired !== current.moduleRevisions.camera) return false;
+      try {
+        await camera.synchronizeFromPersistence(
+          () => store.snapshot.active.moduleRevisions.camera === current.moduleRevisions.camera,
+        );
+        await store.recordConsumer('camera', current, null);
+      } catch (error) {
+        cameraUnavailable = true;
+        input.diagnostic(error);
+        return false;
+      }
       cameraUnavailable = !cameraAvailable() && !store.pendingLegacyCamera;
       return cameraAvailable();
     },
     get ready() {
-      return ready && !store.isApplying;
+      return ready;
     },
     get status() {
       return store.isApplying

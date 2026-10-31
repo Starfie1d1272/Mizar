@@ -34,7 +34,6 @@ export function createCameraConfigPersistence(
   store: BroadcastConfigStore,
   dependencies: CameraFacadeDependencies,
 ): CameraConfigPersistence & { readonly available: boolean } {
-  let unavailable = false;
   async function toLocal(value: CameraModuleV2): Promise<OrchestrationPreset> {
     return orchestrationPresetSchema.parse({
       format: 'mizar.orchestration',
@@ -52,20 +51,20 @@ export function createCameraConfigPersistence(
       ),
     });
   }
-  async function read() {
+  async function read(applied?: ActiveBroadcastSnapshot) {
     const document = store.snapshot;
+    if (applied) document.active = applied;
     const active = document.active.resolved.camera;
     const modules = document.modules.filter((item) => item.kind === 'camera');
     if (modules.some((item) => item.id === disabledId)) throw new Error('camera_preset_reserved');
     // Resolve only the active snapshot. Legacy draft rows reuse already resolved identities;
     // drafts needing other dependencies remain in the coordinator for the new editor.
     let activePreset: OrchestrationPreset | null = null;
-    unavailable = false;
     if (active) {
       try {
         activePreset = await toLocal(active);
-      } catch {
-        unavailable = true;
+      } catch (error) {
+        throw new Error('camera_dependency_unavailable', { cause: error });
       }
     }
     const packs = new Map<string, string>();
@@ -141,16 +140,20 @@ export function createCameraConfigPersistence(
   }
   return {
     get available() {
-      return !unavailable && !store.pendingLegacyCamera;
+      return !store.pendingLegacyCamera && !store.consumerStatus.camera?.error;
     },
     initialize: () => read(),
-    read,
+    read: () => read(),
+    readApplied: () => {
+      const active = store.appliedSnapshot('camera');
+      if (!active) throw new Error('camera_storage_unavailable');
+      return read(active);
+    },
     async commit(catalog, automaticEnabled, previous, previousAutomaticEnabled) {
       const beforeDocument = store.snapshot;
       const before = beforeDocument.active;
       const current = await read();
-      if (unavailable || store.pendingLegacyCamera)
-        throw new Error('camera_dependency_unavailable');
+      if (store.pendingLegacyCamera) throw new Error('camera_dependency_unavailable');
       if (
         canonicalJson(current.catalog) !== canonicalJson(previous) ||
         current.automaticEnabled !== previousAutomaticEnabled
@@ -216,45 +219,24 @@ export function createCameraConfigPersistence(
           : catalog.activePresetId;
       if (value && committedId !== catalog.activePresetId)
         changedDrafts.push({ id: committedId, value });
-      await store.updateFromLegacy({
-        updateDraft(document) {
-          if (document.active.revision !== before.revision) throw new Error('revision_conflict');
-          for (const draft of changedDrafts) {
-            const module = document.modules.find((item) => item.id === draft.id);
-            const beforeModule = beforeDocument.modules.find((item) => item.id === draft.id);
-            if (
-              (beforeModule && (!module || module.revision !== beforeModule.revision)) ||
-              (!beforeModule && module)
-            )
-              throw new Error('revision_conflict');
-            if (module && module.kind !== 'camera') throw new Error('revision_conflict');
-            if (module?.kind === 'camera') {
-              module.value = draft.value;
-              module.name = draft.value.name;
-            } else
-              document.modules.push({
-                id: draft.id,
-                kind: 'camera',
-                schemaVersion: 2,
-                revision: draft.id,
-                name: draft.value.name,
-                value: draft.value,
-                origin: null,
-              });
-          }
-        },
+      const committed = await store.applyCameraEdit({
+        expectedActiveRevision: before.revision,
+        drafts: changedDrafts.map((draft) => ({
+          ...draft,
+          expectedRevision:
+            beforeDocument.modules.find((module) => module.id === draft.id)?.revision ?? null,
+        })),
         ...(activeChanged
-          ? {
-              active: {
-                kind: 'camera' as const,
-                value,
-                lock,
-                moduleId: committedId === disabledId ? null : committedId,
-              },
-            }
+          ? { active: { value, lock, moduleId: committedId === disabledId ? null : committedId } }
           : {}),
       });
-      return read();
+      const result = await read();
+      return activeChanged
+        ? {
+            ...result,
+            confirmApplied: () => store.recordConsumer('camera', committed.active, null),
+          }
+        : result;
     },
   };
 }
