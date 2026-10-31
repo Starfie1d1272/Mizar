@@ -338,6 +338,13 @@ export function createBroadcastRuntime(input: {
     }
     cameraUnavailable ||= !cameraPersistence.available && !store.pendingLegacyCamera;
     const initialActive = store.snapshot.active;
+    const previousStatus = store.consumerStatus;
+    const startupError = (kind: 'hud' | 'music' | 'camera' | 'program', unavailable: boolean) =>
+      unavailable ||
+      (previousStatus[kind]?.error &&
+        previousStatus[kind]?.desired !== initialActive.moduleRevisions[kind])
+        ? 'dependency_unavailable'
+        : null;
     let programRestored = false;
     if (programUnavailable) {
       const previous = store.appliedSnapshot('program');
@@ -356,26 +363,26 @@ export function createBroadcastRuntime(input: {
     await store.recordConsumer(
       'hud',
       initialActive,
-      hudUnavailable ? 'dependency_unavailable' : null,
-      !hudRestored,
+      startupError('hud', hudUnavailable),
+      hudUnavailable && !hudRestored,
     );
     await store.recordConsumer(
       'music',
       initialActive,
-      musicUnavailable ? 'dependency_unavailable' : null,
-      !musicRestored,
+      startupError('music', musicUnavailable),
+      musicUnavailable && !musicRestored,
     );
     await store.recordConsumer(
       'camera',
       initialActive,
-      cameraUnavailable ? 'dependency_unavailable' : null,
-      !cameraRestored,
+      startupError('camera', cameraUnavailable),
+      cameraUnavailable && !cameraRestored,
     );
     await store.recordConsumer(
       'program',
       initialActive,
-      programUnavailable ? 'dependency_unavailable' : null,
-      !programRestored,
+      startupError('program', programUnavailable),
+      programUnavailable && !programRestored,
     );
     if (input.builtinMusicPack) {
       try {

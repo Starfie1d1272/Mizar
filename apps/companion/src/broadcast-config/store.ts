@@ -381,6 +381,7 @@ export class BroadcastConfigStore {
       next.consumers[kind] = {
         applied: error ? (reset ? null : (previous?.applied ?? null)) : active,
         error,
+        ...(error && previous?.desired ? { desired: previous.desired } : {}),
       };
       await this.commit(next);
     });
