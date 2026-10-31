@@ -174,6 +174,7 @@ export function registerBroadcastConfigRoutes(
         'revision_conflict',
         'request_conflict',
         'production_busy',
+        'camera_busy',
         'builtin_immutable',
         'module_active',
         'module_referenced',
@@ -242,9 +243,11 @@ export function registerBroadcastConfigRoutes(
               message:
                 code === 'capability_unsupported'
                   ? '该配置包含尚不支持的场景槽位或素材类型，请修改后重试。'
-                  : status === 409
-                    ? '配置正在使用或已变化，请先替换引用后重试。'
-                    : '配置暂时不可用。',
+                  : code === 'camera_busy'
+                    ? '当前镜头操作尚未结束，请稍后重试。'
+                    : status === 409
+                      ? '配置正在使用或已变化，请先替换引用后重试。'
+                      : '配置暂时不可用。',
               requestId: request.id,
             },
           });

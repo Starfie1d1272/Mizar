@@ -119,6 +119,10 @@ export interface BroadcastConfigStoreOptions {
     value: ActiveBroadcastSnapshot['resolved'][ModuleKind];
     lock: ActiveBroadcastSnapshot['lock'];
   }>;
+  canApplyModule?(
+    kind: ModuleKind,
+    value: ActiveBroadcastSnapshot['resolved'][ModuleKind],
+  ): boolean;
   validateHudDraft?(document: BroadcastConfigDocument): void;
 }
 
@@ -914,6 +918,11 @@ export class BroadcastConfigStore {
                 throw new Error('broadcast_config_unavailable');
               const previous = structuredClone(this.envelope.document.active);
               const prepared = await this.options.resolveModule(module);
+              if (
+                this.options.canApplyModule &&
+                !this.options.canApplyModule(module.kind, prepared.value)
+              )
+                throw new Error('camera_busy');
               const active = structuredClone(previous);
               const kind = module.kind;
               const keep = new Set<string>();
@@ -1264,6 +1273,7 @@ export class BroadcastConfigStore {
               const previous = this.envelope.document.active;
               const failed: ModuleKind[] = [];
               const failedDesired: Partial<Record<ModuleKind, string>> = {};
+              const failedReasons: Partial<Record<ModuleKind, string>> = {};
               const partialResolver: PresetResolver = {
                 resolve: async (modules) => {
                   if (!this.options.resolveModule) return this.options.resolver.resolve(modules);
@@ -1276,12 +1286,23 @@ export class BroadcastConfigStore {
                     const module = modules.get(kind);
                     if (!module) {
                       if (kind === 'hud' || kind === 'program') throw new Error('module_missing');
+                      if (this.options.canApplyModule && !this.options.canApplyModule(kind, null)) {
+                        failed.push(kind);
+                        failedDesired[kind] = 'off';
+                        failedReasons[kind] = 'camera_busy';
+                        continue;
+                      }
                       resolved[kind] = null;
                       if (kind === 'camera') cameraTools = [];
                       continue;
                     }
                     try {
                       const result = await this.options.resolveModule(module);
+                      if (
+                        this.options.canApplyModule &&
+                        !this.options.canApplyModule(kind, result.value)
+                      )
+                        throw new Error('camera_busy');
                       (
                         resolved as Record<
                           ModuleKind,
@@ -1291,9 +1312,13 @@ export class BroadcastConfigStore {
                       for (const ref of result.lock.resources)
                         resources.set(canonicalJson(ref), ref);
                       if (kind === 'camera') cameraTools = result.lock.tools;
-                    } catch {
+                    } catch (error) {
                       failed.push(kind);
                       failedDesired[kind] = module.revision;
+                      failedReasons[kind] =
+                        error instanceof Error && error.message === 'camera_busy'
+                          ? 'camera_busy'
+                          : 'dependency_unavailable';
                     }
                   }
                   const used = new Set<string>();
@@ -1373,7 +1398,7 @@ export class BroadcastConfigStore {
               for (const kind of failed) {
                 next.consumers[kind] = {
                   applied: next.consumers[kind]?.applied ?? null,
-                  error: 'dependency_unavailable',
+                  error: failedReasons[kind] ?? 'dependency_unavailable',
                   ...(failedDesired[kind] ? { desired: failedDesired[kind] } : {}),
                 };
               }

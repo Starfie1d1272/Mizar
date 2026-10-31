@@ -236,30 +236,9 @@ export function registerProductionRoutes(
       commit();
     },
     configureBroadcast: async <T>(commit: (canCommit: () => boolean) => Promise<T>): Promise<T> => {
-      if (
-        mode !== 'preparation' ||
-        busy ||
-        shuttingDown ||
-        updatePending ||
-        trialPending ||
-        options.scenes.get().active !== 'waiting' ||
-        options.scenes.get().preparing !== undefined
-      )
-        throw new Error('production_busy');
-      busy = true;
-      try {
-        return await commit(
-          () =>
-            mode === 'preparation' &&
-            !shuttingDown &&
-            !updatePending &&
-            !trialPending &&
-            options.scenes.get().active === 'waiting' &&
-            options.scenes.get().preparing === undefined,
-        );
-      } finally {
-        busy = false;
-      }
+      if (shuttingDown || updatePending) throw new Error('production_busy');
+      const generation = sessionGeneration;
+      return commit(() => generation === sessionGeneration && !shuttingDown && !updatePending);
     },
     isTrialPending: () => trialPending,
     reserveTrialOperation: (allowShutdownCleanup = false) => {

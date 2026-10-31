@@ -660,7 +660,9 @@ export function ResourceModules({
           <StatusBanner key={kind} tone="warning">
             {labels[kind as keyof typeof labels] ?? kind}配置未能应用；
             {state.applied ? '保留上一份可用配置。' : '当前没有可用配置。'}
-            请恢复相关资源后重新使用。
+            {state.error === 'camera_busy'
+              ? '请等待当前镜头操作结束后重试。'
+              : '请恢复相关资源后重新使用。'}
           </StatusBanner>
         ) : null,
       )}

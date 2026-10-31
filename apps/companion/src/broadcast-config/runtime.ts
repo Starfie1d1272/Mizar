@@ -9,6 +9,7 @@ import type {
   BroadcastConfigDocument,
   ResourceRef,
 } from '@mizar/broadcast-config';
+import { sameEffectiveModule } from '@mizar/broadcast-config';
 import type { HudConfigStore } from '../hud-config/store.js';
 import type { MusicStore } from '../music/store.js';
 import type { OrchestrationStore } from '../orchestration/store.js';
@@ -47,6 +48,7 @@ export function createBroadcastRuntime(input: {
   camera: OrchestrationStore;
   dependencies: BroadcastRuntimeDependencies;
   withApplyGuard<T>(operation: (canCommit: () => boolean) => Promise<T>): Promise<T>;
+  canApplyCamera?(): boolean;
   diagnostic(error: unknown): void;
   builtinMusicPack?: string | undefined;
 }) {
@@ -98,6 +100,22 @@ export function createBroadcastRuntime(input: {
     // The legacy HUD facade cannot represent a third-party renderer yet.
     resolver,
     resolveModule: (module) => resolver.resolveModule(module),
+    canApplyModule: (kind, value) => {
+      if (kind !== 'camera') return true;
+      const applied = store.appliedSnapshot('camera');
+      return (
+        Boolean(
+          applied &&
+          sameEffectiveModule(
+            'camera',
+            applied.resolved.camera,
+            value as ActiveBroadcastSnapshot['resolved']['camera'],
+          ),
+        ) ||
+        !input.canApplyCamera ||
+        input.canApplyCamera()
+      );
+    },
     withReferenceGuard: (operation) => deps.references.run(operation),
     assertReferenceCommitAllowed: (previous, next) =>
       assertReferenceCommitAllowed(previous, next, (ref) => deps.isDeleting(ref)),
@@ -115,7 +133,16 @@ export function createBroadcastRuntime(input: {
       const operations = {
         hud: () => hud.synchronizeFromPersistence(hudDocument(), current('hud')),
         music: () => music.synchronizeFromPersistence(current('music')),
-        camera: () => camera.synchronizeFromPersistence(current('camera')),
+        camera: () =>
+          camera.synchronizeFromPersistence(() => {
+            const applied = store.appliedSnapshot('camera');
+            const changed =
+              !applied ||
+              !sameEffectiveModule('camera', applied.resolved.camera, active.resolved.camera);
+            return (
+              current('camera')() && (!changed || !input.canApplyCamera || input.canApplyCamera())
+            );
+          }),
         program: async () => {
           await resolver.resolveModule({
             kind: 'program',
@@ -141,7 +168,13 @@ export function createBroadcastRuntime(input: {
           failure ??= error;
           input.diagnostic(error);
           try {
-            await store.recordConsumer(item, active, 'dependency_unavailable');
+            await store.recordConsumer(
+              item,
+              active,
+              item === 'camera' && input.canApplyCamera && !input.canApplyCamera()
+                ? 'camera_busy'
+                : 'dependency_unavailable',
+            );
           } catch (recordError) {
             input.diagnostic(recordError);
           }
@@ -410,10 +443,10 @@ export function createBroadcastRuntime(input: {
     store,
     initialize,
     async verifyCameraPack(map: string, pack: string): Promise<boolean> {
-      if (!ready || store.isApplying) return false;
-      const source = store.snapshot.active.resolved.camera?.maps.find(
-        (item) => item.map === map,
-      )?.source;
+      if (!ready) return false;
+      const source = store
+        .appliedSnapshot('camera')
+        ?.resolved.camera?.maps.find((item) => item.map === map)?.source;
       if (!source) return false;
       try {
         return (await deps.camera.localPack(source)) === pack;

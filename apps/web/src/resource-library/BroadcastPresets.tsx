@@ -483,7 +483,7 @@ export function BroadcastPresets({
       if (result.failedModules?.length) {
         setNotice({
           tone: 'warning',
-          message: `「${preset.name}」已部分应用；${result.failedModules.map((kind) => labels[kind] ?? kind).join('、')}保留原配置，请检查资源后重试。`,
+          message: `「${preset.name}」已部分应用；${result.failedModules.map((kind) => labels[kind] ?? kind).join('、')}保留原配置，请检查资源或等待当前操作结束后重试。`,
         });
       } else setNotice({ tone: 'success', message: `已使用「${preset.name}」。` });
     } catch (error) {
