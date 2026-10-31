@@ -952,7 +952,17 @@ async fn launch_mulnx(
             }
         }
         if resume_only.unwrap_or(false) {
-            mulnx_launch::resume(&app, &log)
+            match preparation_id.as_deref() {
+                Some(id) => {
+                    let ticket = preparation_ticket(&app, id)?;
+                    app.state::<preparation_gate::PreparationGate>()
+                        .commit(Some(id), || {
+                            app.state::<production_exit::ExitGate>()
+                                .commit(ticket, || mulnx_launch::resume(&app, &log))
+                        })
+                }
+                None => mulnx_launch::resume(&app, &log),
+            }
         } else {
             mulnx_launch::launch(
                 &app,

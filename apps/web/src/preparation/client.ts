@@ -311,6 +311,22 @@ export function retryPendingPreparation(): Promise<void> {
       }
     };
     try {
+      // Reconcile only the existing submitted request. The host validates its
+      // launcher, game identity, and original preparation before adopting it.
+      let game = await desktopInvoke<Cs2ConfigStatus>('cs2_config_status');
+      if (!game.running && game.preparationId === entry.id && game.mulnxLaunchResumable) {
+        if (controller.signal.aborted || lastPreparation !== entry) throw new Error('准备已取消。');
+        const receipt = await desktopInvoke<{ result?: string }>('launch_mulnx', {
+          resumeOnly: true,
+          preparationId: entry.id,
+        });
+        if (receipt.result === 'not-found')
+          throw new Error('原启动请求无法确认，请退出后重新准备。');
+        game = await desktopInvoke<Cs2ConfigStatus>('cs2_config_status');
+      }
+      if (!game.running || game.preparationId !== entry.id) {
+        throw new Error('本次游戏尚未确认；可稍后重试，或退出工作台后恢复本次准备。');
+      }
       if (!entry.obs)
         await step(async () => {
           const obs = await readObsForEntry(controller.signal);
