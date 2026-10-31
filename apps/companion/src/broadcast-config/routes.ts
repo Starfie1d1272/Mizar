@@ -294,7 +294,11 @@ export function registerBroadcastConfigRoutes(
         try {
           if (action === 'clone') return await store.clone(clone.parse(request.body));
           if (action === 'preview') return await store.preview(apply.parse(request.body));
-          if (action === 'apply') return await store.apply(apply.parse(request.body));
+          if (action === 'apply') {
+            const input = apply.parse(request.body);
+            const active = await store.apply(input);
+            return { ...active, failedModules: store.receiptFailures(input.requestId) };
+          }
           const input = save.parse(request.body);
           return await store.save({
             preset: parseBroadcastPreset(input.preset),

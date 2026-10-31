@@ -108,7 +108,7 @@ export function createBroadcastRuntime(input: {
     validateHudDraft: (document) => {
       hudDocumentFromBroadcast(document);
     },
-    onApplied: async (active, _previous, kind) => {
+    onApplied: async (active, _previous, kind, failed = []) => {
       const current = (item: 'hud' | 'music' | 'camera') => () =>
         store.snapshot.active.moduleRevisions[item] === active.moduleRevisions[item];
       const operations = {
@@ -123,7 +123,7 @@ export function createBroadcastRuntime(input: {
         },
       };
       const kinds = (['hud', 'music', 'camera', 'program'] as const).filter(
-        (item) => !kind || kind === item,
+        (item) => (!kind || kind === item) && !failed.includes(item),
       );
       let failure: unknown;
       for (const item of kinds) {
