@@ -793,7 +793,7 @@ export class RivalHubConnection {
       activeDeviceMatchId: this.activeDeviceMatchId,
       pairing: this.pendingPairing === null ? 'idle' : 'pending',
       stoppedMatchId: this.stoppedMatchId,
-      sourceCleanup: this.cleanupSummary,
+      sourceCleanup: { ...this.cleanupSummary, handoffPending: this.exitHandoffs.size },
       liveDelivery:
         this.source === null
           ? { status: 'idle', cursor: null, reason: null, consecutiveUnaccepted: 0, durationMs: 0 }

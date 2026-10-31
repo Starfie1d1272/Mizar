@@ -105,7 +105,12 @@ export function PreparationPage() {
   const rivalhub = useLocalRead<{
     paired: boolean;
     displayName?: string | null;
-    sourceCleanup?: { pending: number; blocked: number; claimIntent: boolean };
+    sourceCleanup?: {
+      pending: number;
+      blocked: number;
+      claimIntent: boolean;
+      handoffPending?: number;
+    };
   }>('/local/v1/rivalhub-connection');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
@@ -216,7 +221,8 @@ export function PreparationPage() {
         ) : null}
         {production?.mode === 'preparation' &&
         (production.releaseHandoffState === 'pending' ||
-          production.releaseHandoffState === 'unconfirmed' ||
+          (production.releaseHandoffState === 'unconfirmed' && !rivalhub?.sourceCleanup) ||
+          (rivalhub?.sourceCleanup?.handoffPending ?? 0) > 0 ||
           (rivalhub?.sourceCleanup?.pending ?? 0) > 0 ||
           (rivalhub?.sourceCleanup?.blocked ?? 0) > 0 ||
           rivalhub?.sourceCleanup?.claimIntent) ? (
