@@ -10,6 +10,9 @@ import {
   sceneMatchScope,
   sceneRequestScope,
   sceneResultScope,
+  type SceneMatchScope,
+  type SceneExecutionScope,
+  type SceneResultScope,
 } from '../scope/identities.js';
 import type { ProjectionCoordinator } from '../projections/projection-coordinator.js';
 import type { ProgramSceneController } from './controller.js';
@@ -46,13 +49,13 @@ export class ProgramDirector {
   private failure: string | null = null;
   private inFlight: ProgramSceneId | null = null;
   private warmupChoice: 'waiting' | 'gameplay' = 'waiting';
-  private warmupChoiceKey = '';
+  private warmupChoiceKey: SceneMatchScope | '' = '';
   private lastTime: number | null = null;
   private elapsed = 0;
   private scene: ProgramSceneId = 'waiting';
   private predictionKey = '';
-  private matchKey = '';
-  private mapKey = '';
+  private matchKey: SceneMatchScope | '' = '';
+  private mapKey: SceneExecutionScope | '' = '';
   private warmupPlayed = false;
   private warmupFinalElapsed = 0;
   private introStarted = false;
@@ -61,9 +64,9 @@ export class ProgramDirector {
   private resultShown = false;
   private wasProduction = false;
   private generation = 0;
-  private observedLiveMap: string | null = null;
+  private observedLiveMap: SceneResultScope | null = null;
   private ggStartedAt: number | null = null;
-  private ggConsumedMap: string | null = null;
+  private ggConsumedMap: SceneResultScope | null = null;
   constructor(
     private readonly projections: ProjectionCoordinator,
     private readonly scenes: ProgramSceneController,

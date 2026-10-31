@@ -1,7 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import type { CameraShot, OrchestrationStatus } from '@mizar/protocol/orchestration';
 import { musicCue, musicPause, musicSafe, type MusicTruth } from '../music/cues.js';
-import { cameraControlScope, cameraExecutionScope } from '../scope/identities.js';
+import {
+  cameraControlScope,
+  cameraExecutionScope,
+  type CameraControlScope,
+  type CameraExecutionScope,
+} from '../scope/identities.js';
 import type { GatewayResult, MulnxProvider } from './provider.js';
 import type { OrchestrationStore } from './store.js';
 
@@ -16,13 +21,13 @@ export class CameraDirector {
   private host = '';
   private controlEpoch = 0;
   private native: { lease: string; host: string; until: number; blocked: boolean } | null = null;
-  private context = '';
-  private execution = '';
+  private context: CameraControlScope | '' = '';
+  private execution: CameraExecutionScope | '' = '';
   private connection = -1;
   private held = true;
   private intentRevision = 0;
   private preparation: OrchestrationStatus['preparation'] = 'waiting';
-  private preparationKey = '';
+  private preparationKey: CameraControlScope | '' = '';
   private preparationEpoch = 0;
   private preparing: Promise<void> | null = null;
   private closed = false;
