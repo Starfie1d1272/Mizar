@@ -1025,8 +1025,11 @@ export class OutputService {
     });
     try {
       await this.outbox.expireBoundaryIntents(this.now());
+      if (this.closed) return;
       await this.materializeIntents();
+      if (this.closed) return;
       await this.reconcileFence();
+      if (this.closed) return;
       if (this.sink === undefined)
         await this.outbox.sweep(
           (event, lineup) => this.isCurrentForRetry(event, lineup),
@@ -1035,11 +1038,16 @@ export class OutputService {
       else {
         const source = this.options.exactSource?.();
         if (source) await this.outbox.bindUnsentSource(source);
+        if (this.closed) return;
         const invalidatedStarts = await this.outbox.flush({
           sink: this.sink,
           now: this.now(),
-          isCurrent: (event, lineup) => this.quarantined || this.isCurrentForRetry(event, lineup),
+          // Closing suppresses new sends without converting retained work into
+          // superseded records while the last in-flight send settles.
+          isCurrent: (event, lineup) =>
+            this.closed || this.quarantined || this.isCurrentForRetry(event, lineup),
           canSend: (event, lineup) => {
+            if (this.closed) return false;
             const allowed = this.canSend(event, lineup);
             if (!allowed) {
               try {
@@ -1116,9 +1124,11 @@ export class OutputService {
             return allowed;
           },
         });
+        if (this.closed) return;
         if (this.publishedMapStart && invalidatedStarts.includes(this.publishedMapStart.key))
           this.publishedMapStart = undefined;
         await this.reconcileFence();
+        if (this.closed) return;
         await this.recoverRejectedStart();
       }
     } catch {
@@ -1427,9 +1437,28 @@ export class OutputService {
     this.closed = true;
     if (this.timer !== undefined) clearInterval(this.timer);
     if (this.outboundTimer !== undefined) clearInterval(this.outboundTimer);
-    await this.outboundUnsubscribe?.();
-    await Promise.all([...this.consumers.keys()].map((consumer) => consumer.close()));
+    const results = await Promise.allSettled([
+      Promise.resolve().then(() => this.outboundUnsubscribe?.()),
+    ]);
+    results.push(
+      ...(await Promise.allSettled(
+        [...this.consumers.keys()].map((consumer) =>
+          Promise.resolve().then(() => consumer.close()),
+        ),
+      )),
+    );
     this.consumers.clear();
-    await this.outbox?.flushPending();
+    // retry() can enqueue more durable work after its current queue operation.
+    // closed prevents a new retry, but an already running retry must settle.
+    await this.retryCompletion;
+    try {
+      await this.outbox?.flushForShutdown();
+    } catch (error) {
+      results.push({ status: 'rejected', reason: error });
+    }
+    const failures = results.flatMap((result) =>
+      result.status === 'rejected' ? [result.reason] : [],
+    );
+    if (failures.length) throw new AggregateError(failures, 'output_local_shutdown_failed');
   }
 }

@@ -703,6 +703,96 @@ export class ReliableOutbox {
   private boundaryOverflowOwners: readonly string[] = [];
   private boundaryCaptureFailed = false;
   private readonly queue = new SerialCommitQueue();
+  private readonly unconfirmedWrites = new Set<string>();
+  private durabilityContext: string | undefined;
+  private readonly continuityFailures = new Map<string, number>();
+  private successfulDurableWrites = 0;
+
+  private noteUnconfirmedWrite(key: string): void {
+    if (
+      this.unconfirmedWrites.has(key) ||
+      this.unconfirmedWrites.size < RELIABLE_OUTBOX_MAX_RECORDS
+    )
+      this.unconfirmedWrites.add(key);
+    else this.unconfirmedWrites.add('unconfirmed-write-overflow');
+  }
+
+  private async trackDurability<T>(key: string, write: () => Promise<T>): Promise<T> {
+    const context = this.durabilityContext;
+    const failureKey = context ?? key;
+    try {
+      const result = await write();
+      this.successfulDurableWrites++;
+      if (!context) this.unconfirmedWrites.delete(failureKey);
+      return result;
+    } catch (error) {
+      this.noteUnconfirmedWrite(failureKey);
+      throw error;
+    }
+  }
+
+  private async durableOperation<T>(
+    key: string,
+    operation: () => Promise<T>,
+    continuitySequence?: number,
+  ): Promise<T> {
+    const previous = this.durabilityContext;
+    this.durabilityContext = key;
+    const before = this.successfulDurableWrites;
+    try {
+      const result = await operation();
+      const failedSequence = this.continuityFailures.get(key);
+      // A duplicate/no-op or older checkpoint cannot prove the failed write won.
+      if (
+        result !== false &&
+        this.successfulDurableWrites > before &&
+        (failedSequence === undefined ||
+          (continuitySequence !== undefined && continuitySequence >= failedSequence))
+      ) {
+        this.unconfirmedWrites.delete(key);
+        this.continuityFailures.delete(key);
+      }
+      return result;
+    } catch (error) {
+      if (continuitySequence !== undefined && this.unconfirmedWrites.has(key))
+        this.continuityFailures.set(
+          key,
+          Math.max(continuitySequence, this.continuityFailures.get(key) ?? 0),
+        );
+      throw error;
+    } finally {
+      this.durabilityContext = previous;
+    }
+  }
+
+  private runDurable<T>(
+    key: string,
+    operation: () => Promise<T>,
+    continuitySequence?: number,
+  ): Promise<T> {
+    return this.queue.run(() => this.durableOperation(key, operation, continuitySequence));
+  }
+
+  private persist(...args: Parameters<typeof replaceDurableJson>): Promise<boolean> {
+    let identity = args[1];
+    if (args[0] === this.filePath || args[0] === `${this.filePath}.last-good`) {
+      const file = args[1] as OutboxFile;
+      // Commit IDs and retry clocks change on a semantic retry. Preserve every
+      // event, disposition and source in the identity, but not those clocks.
+      identity = {
+        ...file,
+        commit: undefined,
+        records: file.records.map((record) => ({
+          ...record,
+          updatedAt: undefined,
+          nextAttemptAt: undefined,
+        })),
+        ...(file.continuity ? { continuity: { ...file.continuity, savedAt: undefined } } : {}),
+      };
+    }
+    const key = createHash('sha256').update(args[0]).update(JSON.stringify(identity)).digest('hex');
+    return this.trackDurability(`write:${key}`, () => replaceDurableJson(...args));
+  }
   private continuity: DeliveryContinuity | undefined;
   private continuityReference: ReliableEventV1 | undefined;
   private requestedScope: string | undefined;
@@ -858,7 +948,7 @@ export class ReliableOutbox {
       if (prior) continue;
       const key = createHash('sha256').update(record.event.idempotencyKey).digest('hex');
       try {
-        await replaceDurableJson(join(`${this.filePath}.archives`, `legacy-${scope}-${key}.json`), {
+        await this.persist(join(`${this.filePath}.archives`, `legacy-${scope}-${key}.json`), {
           record,
           sha256: createHash('sha256').update(JSON.stringify(record)).digest('hex'),
         });
@@ -893,7 +983,7 @@ export class ReliableOutbox {
         archive.identity.liveSessionId,
       );
       if (this.damagedArchiveScopes.has(scope)) throw new Error('outbox_archive_unreadable');
-      await replaceDurableJson(join(`${this.filePath}.archives`, archiveName(archive.identity)), {
+      await this.persist(join(`${this.filePath}.archives`, archiveName(archive.identity)), {
         ...archive,
         sha256: archiveDigest(archive),
       });
@@ -950,11 +1040,13 @@ export class ReliableOutbox {
       if (bytes === undefined && mirror === undefined) return;
       // Preserve exact bytes before replacing anything. Failure remains a startup error.
       const preserve = async (path: string, contents: Buffer): Promise<void> => {
-        await writeFile(`${path}.corrupt-${randomUUID()}`, contents, {
-          flag: 'wx',
-          mode: 0o600,
-          flush: true,
-        });
+        await this.trackDurability(`preserve:${path}`, () =>
+          writeFile(`${path}.corrupt-${randomUUID()}`, contents, {
+            flag: 'wx',
+            mode: 0o600,
+            flush: true,
+          }),
+        );
       };
       recoveryPhase = '另存原始文件';
       if (mirror !== undefined) await preserve(mirrorPath, mirror);
@@ -987,8 +1079,8 @@ export class ReliableOutbox {
       });
       parseOutbox(Buffer.from(JSON.stringify(file)));
       recoveryPhase = '保存恢复队列';
-      await replaceDurableJson(mirrorPath, file);
-      await replaceDurableJson(this.filePath, file);
+      await this.persist(mirrorPath, file);
+      await this.persist(this.filePath, file);
     } catch (error) {
       this.onRecovery?.(
         undefined,
@@ -1139,7 +1231,7 @@ export class ReliableOutbox {
 
   /** Called only after the release owner has confirmed this exact authority ended. */
   archiveConfirmedSource(input: ExactSource): Promise<void> {
-    return this.queue.run(async () => {
+    return this.runDurable(`archive:${sourceKey(parseSource(input))}`, async () => {
       const identity = parseSource(input);
       const key = sourceKey(identity);
       if (
@@ -1182,10 +1274,7 @@ export class ReliableOutbox {
           throw new Error('outbox_archive_too_large');
         // Publish immutable evidence first. If the active commit fails, the archive
         // still fences this scope; a retry removes the duplicate active records.
-        await replaceDurableJson(
-          join(`${this.filePath}.archives`, archiveName(identity)),
-          document,
-        );
+        await this.persist(join(`${this.filePath}.archives`, archiveName(identity)), document);
         this.archivedSources = [...this.archivedSources, saved];
       }
       if (
@@ -1208,7 +1297,7 @@ export class ReliableOutbox {
 
   /** Preserve every exact-source item without claiming remote closure or delivery. */
   isolateRevokedSource(input: ExactSource): Promise<void> {
-    return this.queue.run(async () => {
+    return this.runDurable(`revoke:${sourceKey(parseSource(input))}`, async () => {
       const identity = parseSource(input);
       const key = sourceKey(identity);
       const affected = this.records.filter(
@@ -1238,7 +1327,7 @@ export class ReliableOutbox {
         if (durableJsonByteLength(document) > 4_000_000)
           throw new Error('outbox_revoked_too_large');
         // Publish the fence and its full evidence before releasing any active slot.
-        await replaceDurableJson(join(`${this.filePath}.revoked`, archiveName(identity)), document);
+        await this.persist(join(`${this.filePath}.revoked`, archiveName(identity)), document);
         this.revokedSources = [...this.revokedSources, saved];
       }
       if (
@@ -1294,7 +1383,7 @@ export class ReliableOutbox {
 
   /** Pin unsent work to the current authority before any request can be issued. */
   bindUnsentSource(input: ExactSource): Promise<void> {
-    return this.queue.run(async () => {
+    return this.runDurable(`bind:${sourceKey(parseSource(input))}`, async () => {
       const source = parseSource(input);
       const records = this.records.map((record) => {
         if (
@@ -1700,17 +1789,30 @@ export class ReliableOutbox {
       cursor.mapEpoch,
       scope?.authorityFingerprint,
     ]);
-    return this.queue.run(async () => {
-      if (requested === this.requestedScope) return;
-      if (
-        this.records.length > 0 &&
-        !this.hasBoundaryGap(scope) &&
-        !this.getBoundaryIntents(scope).length
-      ) {
-        await this.commit(this.records, checkpoint);
-        this.requestedScope = requested;
-      }
-    });
+    const operationKey = `continuity:${createHash('sha256')
+      .update(
+        JSON.stringify([
+          requested,
+          checkpoint.mapName,
+          scope && { ...scope, runtimeSeq: undefined },
+        ]),
+      )
+      .digest('hex')}`;
+    return this.runDurable(
+      operationKey,
+      async () => {
+        if (requested === this.requestedScope && !this.unconfirmedWrites.has(operationKey)) return;
+        if (
+          this.records.length > 0 &&
+          !this.hasBoundaryGap(scope) &&
+          !this.getBoundaryIntents(scope).length
+        ) {
+          await this.commit(this.records, checkpoint);
+          this.requestedScope = requested;
+        }
+      },
+      cursor.runtimeSeq,
+    );
   }
 
   async enqueue(
@@ -1722,7 +1824,10 @@ export class ReliableOutbox {
     scope?: BoundaryScope,
     source?: ExactSource | null,
   ): Promise<boolean> {
-    return this.queue.run(async () => {
+    const operationKey = `enqueue:${createHash('sha256')
+      .update(JSON.stringify([event, lineupSteam64, recoveryKey, source]))
+      .digest('hex')}`;
+    return this.runDurable(operationKey, async () => {
       await this.archiveLegacyTerminals();
       const valid = parseReliableEventV1(event);
       if (source) source = parseSource(source);
@@ -2039,9 +2144,72 @@ export class ReliableOutbox {
         });
         changed = true;
       }
-      if (changed) await this.commit(this.trim(next));
+      if (changed) {
+        const changedRecords = next.filter((record, index) => record !== this.records[index]);
+        await this.commitStatusChanges(changedRecords, this.trim(next));
+      }
       return invalidatedStarts;
     });
+  }
+
+  private deliveryIdentity(record: ReliableOutboxRecord): string {
+    return createHash('sha256')
+      .update(
+        JSON.stringify({
+          ...record,
+          status: undefined,
+          attempts: undefined,
+          updatedAt: undefined,
+          nextAttemptAt: undefined,
+          receiverOutcome: undefined,
+          rejection: undefined,
+        }),
+      )
+      .digest('hex');
+  }
+
+  private statusWriteKey(record: ReliableOutboxRecord): string {
+    if (
+      record.status === 'pending' &&
+      record.attempts > 0 &&
+      record.receiverOutcome === undefined &&
+      record.rejection === undefined
+    )
+      return `pending-retry:${this.deliveryIdentity(record)}:${record.attempts}`;
+    return `status:${createHash('sha256')
+      .update(JSON.stringify({ ...record, updatedAt: undefined, nextAttemptAt: undefined }))
+      .digest('hex')}`;
+  }
+
+  private acknowledgeStatusWrite(record: ReliableOutboxRecord): void {
+    this.unconfirmedWrites.delete(this.statusWriteKey(record));
+    if (record.status !== 'accepted' && record.status !== 'rejected') return;
+    const prefix = `pending-retry:${this.deliveryIdentity(record)}:`;
+    for (const key of this.unconfirmedWrites) {
+      if (key.startsWith(prefix) && Number(key.slice(prefix.length)) <= record.attempts)
+        this.unconfirmedWrites.delete(key);
+    }
+  }
+
+  private async commitStatusChanges(
+    changed: readonly ReliableOutboxRecord[],
+    records: readonly ReliableOutboxRecord[],
+  ): Promise<void> {
+    const batch = `status-batch:${randomUUID()}`;
+    const previous = this.durabilityContext;
+    this.durabilityContext = batch;
+    try {
+      await this.commit(records);
+      for (const record of changed) {
+        if (records.includes(record)) this.acknowledgeStatusWrite(record);
+      }
+    } catch (error) {
+      if (this.unconfirmedWrites.delete(batch))
+        for (const record of changed) this.noteUnconfirmedWrite(this.statusWriteKey(record));
+      throw error;
+    } finally {
+      this.durabilityContext = previous;
+    }
   }
 
   async sweep(
@@ -2061,8 +2229,8 @@ export class ReliableOutbox {
           updatedAt: now.toISOString(),
         };
       });
-      if (next.some((record, index) => record !== this.records[index]))
-        await this.commit(this.trim(next));
+      const changed = next.filter((record, index) => record !== this.records[index]);
+      if (changed.length) await this.commitStatusChanges(changed, this.trim(next));
     });
   }
 
@@ -2075,13 +2243,19 @@ export class ReliableOutbox {
           ? { ...record, status: 'superseded' as const, updatedAt: now.toISOString() }
           : record,
       );
-      if (records.some((record, index) => record !== this.records[index]))
-        await this.commit(records);
+      const changed = records.filter((record, index) => record !== this.records[index]);
+      if (changed.length) await this.commitStatusChanges(changed, records);
     });
   }
 
   async flushPending(): Promise<void> {
     await this.queue.flush();
+  }
+
+  async flushForShutdown(): Promise<void> {
+    await this.queue.flush();
+    if (this.unconfirmedWrites.size || this.boundaryCaptureFailed)
+      throw new Error('outbox_durable_write_unconfirmed');
   }
 
   private trim(records: readonly ReliableOutboxRecord[]): readonly ReliableOutboxRecord[] {
@@ -2137,9 +2311,12 @@ export class ReliableOutbox {
     });
     // Persist a validated recovery copy before publishing the authoritative file.
     // A failed commit never advances the in-memory queue or reports success.
-    if (durableJsonByteLength(file) > 4_000_000) throw new Error('outbox_too_large');
-    await replaceDurableJson(`${this.filePath}.last-good`, file);
-    await replaceDurableJson(this.filePath, file);
+    if (durableJsonByteLength(file) > 4_000_000) {
+      this.noteUnconfirmedWrite(this.durabilityContext ?? 'outbox_too_large');
+      throw new Error('outbox_too_large');
+    }
+    await this.persist(`${this.filePath}.last-good`, file);
+    await this.persist(this.filePath, file);
     const previous = this.records;
     this.records = records;
     this.boundaryIntents = boundaryIntents;

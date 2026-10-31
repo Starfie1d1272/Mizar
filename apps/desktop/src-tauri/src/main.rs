@@ -156,7 +156,12 @@ fn bundle_root() -> Result<PathBuf, String> {
         .ok_or_else(|| "无法定位产品安装目录。".to_string())
 }
 
-fn supervisor(root: &Path, argument: &str, startup: Option<&DesktopLog>) -> Result<Child, String> {
+fn supervisor(
+    root: &Path,
+    argument: &str,
+    startup: Option<&DesktopLog>,
+    expected_instance: Option<&str>,
+) -> Result<Child, String> {
     let node = root.join("resources/runtime/node.exe");
     let script = root.join("resources/scripts/product-runtime.mjs");
     if !node.is_file() || !script.is_file() {
@@ -178,6 +183,11 @@ fn supervisor(root: &Path, argument: &str, startup: Option<&DesktopLog>) -> Resu
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .creation_flags(0x08000000);
+    if let Some(instance) = expected_instance {
+        command.env("MIZAR_EXPECTED_RUNTIME_INSTANCE", instance);
+    } else {
+        command.env_remove("MIZAR_EXPECTED_RUNTIME_INSTANCE");
+    }
     if let Some(log) = startup {
         command
             .env("MIZAR_STARTUP_SESSION_ID", &log.session_id)
@@ -279,9 +289,13 @@ fn wait_child(child: &mut Child, timeout: Duration) -> Result<std::process::Exit
     }
 }
 
-fn stop_runtime(root: &Path, log: Option<&DesktopLog>) -> Result<(), String> {
-    let mut child = supervisor(root, "--stop", None)?;
-    match wait_child(&mut child, Duration::from_secs(40)) {
+fn stop_runtime(
+    root: &Path,
+    log: Option<&DesktopLog>,
+    expected_instance: &str,
+) -> Result<(), String> {
+    let mut child = supervisor(root, "--stop", None, Some(expected_instance))?;
+    match wait_child(&mut child, Duration::from_secs(300)) {
         Ok(status) if status.success() => {
             if let Ok(scope) = shutdown_scope(root) {
                 ExitSignal::notify_stopped(&scope);
@@ -289,15 +303,153 @@ fn stop_runtime(root: &Path, log: Option<&DesktopLog>) -> Result<(), String> {
             Ok(())
         }
         outcome => {
-            let _ = child.kill();
-            let _ = child.wait();
-            let error = format!("停止制播服务未完成：{outcome:?}");
+            // An outer timeout could be payload verification, not Companion
+            // shutdown. Only the stop helper's own exit code proves the latter.
+            let timed_out = matches!(&outcome, Ok(status) if status.code() == Some(2));
+            if outcome.is_err() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            let error = format!(
+                "{}：{outcome:?}",
+                if timed_out {
+                    "runtime_stop_timeout: 制播服务退出未完成"
+                } else {
+                    "runtime_stop_failed: 制播服务退出未完成"
+                }
+            );
             if let Some(log) = log {
                 log.event("runtime_stop", "failure", Some(&error));
             }
             Err(error)
         }
     }
+}
+
+struct RuntimeStopTarget {
+    receipt: PathBuf,
+    host_receipt: PathBuf,
+    instance: String,
+    artifact: String,
+    pid: u64,
+}
+
+fn runtime_stop_target(root: &Path, require_pending: bool) -> Result<RuntimeStopTarget, String> {
+    let state_root = startup_log::writable_root(
+        root,
+        std::env::var_os("MIZAR_STATE_ROOT").map(PathBuf::from),
+    )
+    .map_err(|error| error.to_string())?;
+    let state: serde_json::Value = serde_json::from_slice(
+        &fs::read(state_root.join("data/runtime.json")).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    let artifact: serde_json::Value = serde_json::from_slice(
+        &fs::read(root.join("resources/metadata/artifact.json"))
+            .map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    let instance = state["instanceId"]
+        .as_str()
+        .filter(|id| id.len() == 36 && id.bytes().all(|c| c.is_ascii_hexdigit() || c == b'-'))
+        .ok_or("运行实例身份无效。")?;
+    let digest = state["artifactSha256"]
+        .as_str()
+        .filter(|digest| digest.len() == 64 && digest.bytes().all(|c| c.is_ascii_hexdigit()))
+        .ok_or("运行资源身份无效。")?;
+    if state["repository"] != "Starfie1d1272/Mizar" || artifact["artifactSha256"] != digest {
+        return Err("运行实例与此程序不匹配。".into());
+    }
+    let pid = state["pid"]
+        .as_u64()
+        .filter(|pid| *pid > 0)
+        .ok_or("运行进程身份无效。")?;
+    let receipt = state_root
+        .join("data")
+        .join(format!("runtime-exit-{instance}.json"));
+    if require_pending && receipt.exists() {
+        return Err("运行实例已退出，请等待桌面状态更新后重试。".into());
+    }
+    let host_receipt = state_root
+        .join("data")
+        .join(format!("runtime-host-exit-{instance}.json"));
+    Ok(RuntimeStopTarget {
+        receipt,
+        host_receipt,
+        instance: instance.into(),
+        artifact: digest.into(),
+        pid,
+    })
+}
+
+fn runtime_stop_receipt(target: &RuntimeStopTarget) -> Result<bool, String> {
+    let bytes = match fs::read(&target.receipt) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(format!("退出记录读取失败：{error}")),
+    };
+    let receipt: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    if receipt["instanceId"] != target.instance
+        || receipt["pid"].as_u64() != Some(target.pid)
+        || receipt["artifactSha256"] != target.artifact
+        || receipt["code"].as_i64() != Some(0)
+        || !receipt["signal"].is_null()
+        || receipt["error"] != false
+        || receipt["localComplete"] != true
+    {
+        return Err("运行实例退出或本地收尾未确认。".into());
+    }
+    Ok(true)
+}
+
+fn write_host_stop_receipt(target: &RuntimeStopTarget) -> Result<(), String> {
+    if !runtime_stop_receipt(target)? {
+        return Err("制播进程退出尚未确认。".into());
+    }
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_nanos();
+    let temporary = target
+        .host_receipt
+        .with_extension(format!("{}-{nonce}.tmp", std::process::id()));
+    let body = serde_json::to_vec(&serde_json::json!({
+        "instanceId": target.instance,
+        "artifactSha256": target.artifact,
+        "pid": target.pid,
+    }))
+    .map_err(|error| error.to_string())?;
+    let result = (|| -> Result<(), String> {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|error| error.to_string())?;
+        file.write_all(&body).map_err(|error| error.to_string())?;
+        file.sync_all().map_err(|error| error.to_string())?;
+        fs::rename(&temporary, &target.host_receipt).map_err(|error| error.to_string())?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
+fn host_stop_receipt(target: &RuntimeStopTarget) -> Result<bool, String> {
+    let bytes = match fs::read(&target.host_receipt) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(format!("桌面退出记录读取失败：{error}")),
+    };
+    let receipt: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    if receipt["instanceId"] != target.instance
+        || receipt["pid"].as_u64() != Some(target.pid)
+        || receipt["artifactSha256"] != target.artifact
+    {
+        return Err("桌面退出实例身份不匹配。".into());
+    }
+    Ok(true)
 }
 
 fn shutdown_scope(root: &Path) -> Result<String, String> {
@@ -4810,7 +4962,7 @@ fn start_gui(root: &Path, log: &DesktopLog) -> Result<(), String> {
     let _observer_job = log.step("observer_job", || observer_job::create(&log.session_id))?;
     let job = Arc::new(log.step("runtime_job", RuntimeJob::new)?);
     let mut child = log.step("runtime_spawn", || {
-        supervisor(root, "--no-browser", Some(log))
+        supervisor(root, "--no-browser", Some(log), None)
     })?;
     let outcome = (|| {
         log.step("runtime_job_assignment", || job.assign(&child))?;
@@ -4844,14 +4996,18 @@ fn start_gui(root: &Path, log: &DesktopLog) -> Result<(), String> {
     log.event(cleanup_stage, "begin", None);
     // Failure cannot stop a same-artifact runtime borrowed from another session.
     // A successful desktop session's explicit exit may stop its verified local runtime.
-    if runtime_owned(log, child.id()) || (outcome.is_ok() && health_matches(root)) {
-        let stopped = log.step("runtime_stop", || stop_runtime(root, Some(log)));
-        if stopped.is_err() {
-            if let Ok(mut pending) = update_stage.lock() {
-                if let Some(stage) = pending.take() {
-                    let _ = fs::remove_dir_all(stage);
-                }
+    let mut stopped_target = None;
+    let stop_result = if runtime_owned(log, child.id()) || (outcome.is_ok() && health_matches(root))
+    {
+        match runtime_stop_target(root, false) {
+            Ok(target) => {
+                let result = log.step("runtime_stop", || {
+                    stop_runtime(root, Some(log), &target.instance)
+                });
+                stopped_target = Some(target);
+                result
             }
+            Err(error) => Err(format!("runtime_stop_failed: {error}")),
         }
     } else {
         log.event(
@@ -4859,20 +5015,42 @@ fn start_gui(root: &Path, log: &DesktopLog) -> Result<(), String> {
             "skipped",
             Some("No runtime owned by this startup session."),
         );
-    }
-    // Only our wrapper and descendants belong to this job. After Ready, handle
-    // closure alone preserves Companion on an unexpected Host process exit.
-    let job_cleanup = log.step("runtime_job_cleanup", || job.terminate());
-    drop(job);
-    if wait_child(&mut child, Duration::from_secs(5)).is_err() {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-    if let Err(error) = job_cleanup {
+        Ok(())
+    };
+    if let Err(error) = stop_result {
+        if let Ok(mut pending) = update_stage.lock() {
+            if let Some(stage) = pending.take() {
+                let _ = fs::remove_dir_all(stage);
+            }
+        }
+        if error.starts_with("runtime_stop_timeout:") {
+            // Explicit timeout is an abnormal recovery path, never a successful flush.
+            let _ = job.terminate();
+            let _ = wait_child(&mut child, Duration::from_secs(5));
+        } else {
+            // A rejected or uncertain stop must not kill a still-flushing runtime.
+            job.kill_on_close(false).map_err(|e| e.to_string())?;
+        }
         log.event(cleanup_stage, "failure", Some(&error));
-        return Err(format!(
-            "startup_rollback_failed: {error}\nOriginal startup outcome: {outcome:?}"
-        ));
+        return Err(error);
+    }
+    // The matching Companion has exited. Its wrapper may take a moment to
+    // finish recording its result; terminate only after an explicit timeout.
+    if wait_child(&mut child, Duration::from_secs(5)).is_err() {
+        let _ = job.terminate();
+        let _ = child.wait();
+        let error = "runtime_stop_timeout: 制播监督进程未退出";
+        log.event(cleanup_stage, "failure", Some(error));
+        return Err(error.into());
+    }
+    drop(job);
+    if outcome.is_ok() {
+        if let Some(target) = &stopped_target {
+            if let Err(error) = write_host_stop_receipt(target) {
+                log.event(cleanup_stage, "failure", Some(&error));
+                return Err(format!("桌面退出未能记录完成：{error}"));
+            }
+        }
     }
     log.event(cleanup_stage, "success", None);
     if outcome.is_ok() {
@@ -4921,23 +5099,25 @@ fn main() {
         }
     };
     if args.iter().any(|arg| arg == "--stop") {
+        let mut fallback_target = None;
         let host_stop = (|| -> Result<bool, String> {
             let scope = shutdown_scope(&root)?;
             if !ExitRequest::exists(&scope).map_err(|error| error.to_string())? {
+                fallback_target = Some(runtime_stop_target(&root, false)?);
                 return Ok(false);
             }
-            // Never stop the child before the Host has restored the managed game.
-            if !health_matches(&root) {
-                return Err("无法核对此目录的制播服务，未提交退出请求。".into());
-            }
+            // The scoped Host owns the game transaction. Repeated requests can
+            // join an exit even after its HTTP listener has closed.
+            let target = runtime_stop_target(&root, true)?;
             if !ExitRequest::notify(&scope).map_err(|error| error.to_string())? {
+                fallback_target = Some(target);
                 return Ok(false);
             }
-            let deadline = Instant::now() + Duration::from_secs(40);
+            let deadline = Instant::now() + Duration::from_secs(310);
             while Instant::now() < deadline {
-                if !ExitRequest::exists(&scope).map_err(|error| error.to_string())?
-                    && !health_matches(&root)
-                {
+                // Both receipts name the original instance; a newer Host's
+                // event lifetime cannot delay or satisfy this request.
+                if runtime_stop_receipt(&target)? && host_stop_receipt(&target)? {
                     return Ok(true);
                 }
                 thread::sleep(Duration::from_millis(100));
@@ -4952,7 +5132,11 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        if let Err(error) = stop_runtime(&root, None) {
+        let Some(target) = fallback_target else {
+            eprintln!("无法确认要停止的运行实例。");
+            std::process::exit(1);
+        };
+        if let Err(error) = stop_runtime(&root, None, &target.instance) {
             eprintln!("{error}");
             std::process::exit(1);
         }
@@ -4969,7 +5153,7 @@ fn main() {
     }
     // Automation does not initialize Tauri, acquire the GUI mutex or rotate desktop logs.
     if headless {
-        let outcome = supervisor(&root, "--no-browser", None).and_then(|mut child| {
+        let outcome = supervisor(&root, "--no-browser", None, None).and_then(|mut child| {
             wait_for_runtime(&root, &mut child, None)?;
             child
                 .wait()
