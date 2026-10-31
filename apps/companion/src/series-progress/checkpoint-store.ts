@@ -1,4 +1,6 @@
 import { readFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { link, unlink, writeFile } from 'node:fs/promises';
 
 import {
   isSeriesProgressCheckpoint,
@@ -75,16 +77,42 @@ export class JsonSeriesProgressCheckpointStore implements SeriesProgressCheckpoi
                     map.roundHistory.rounds.length > 0,
                 ))))
         ) {
-          const archivePath = `${this.filePath}.unverified`;
+          const serialized = JSON.stringify(previous);
+          const identity = createHash('sha256')
+            .update(JSON.stringify([previous.identity.matchId, serialized]))
+            .digest('hex');
+          const archivePath = `${this.filePath}.unverified-${identity}.json`;
           let archived: string | undefined;
           try {
             archived = readFileSync(archivePath, 'utf8');
           } catch (error) {
             if (!isNodeError(error) || error.code !== 'ENOENT') throw error;
           }
-          if (archived === undefined) await replaceDurableJson(archivePath, previous);
-          else if (JSON.stringify(JSON.parse(archived) as unknown) !== JSON.stringify(previous))
-            throw new Error('series_unverified_history_slot_occupied');
+          if (archived === undefined) {
+            const temporary = `${archivePath}.${randomUUID()}.tmp`;
+            try {
+              await writeFile(temporary, `${JSON.stringify(previous, null, 2)}\n`, {
+                encoding: 'utf8',
+                mode: 0o600,
+                flag: 'wx',
+                flush: true,
+              });
+              try {
+                // Unlike rename, link never replaces an existing evidence file.
+                await link(temporary, archivePath);
+              } catch (error) {
+                if (!isNodeError(error) || error.code !== 'EEXIST') throw error;
+                archived = readFileSync(archivePath, 'utf8');
+              }
+            } finally {
+              await unlink(temporary).catch(() => undefined);
+            }
+          }
+          if (
+            archived !== undefined &&
+            JSON.stringify(JSON.parse(archived) as unknown) !== serialized
+          )
+            throw new Error('series_unverified_history_conflict');
         }
         await replaceDurableJson(this.filePath, checkpoint);
         this.lastWriteFailure = undefined;
