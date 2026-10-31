@@ -53,7 +53,6 @@ type Prepared = {
   sourceId: string;
   requestId: string;
   matchId: string | null;
-  revision: string;
   productionSession: string;
   plan: string | null;
   preparationId?: string;
@@ -87,16 +86,13 @@ export function registerManagedSourceRoutes(
   let retired = false;
   let activated = false;
   const binding = () => options.controller?.getActiveBinding();
-  const revision = () => options.controller?.getActiveRevision() ?? '';
   const source = () => options.runtime.getCurrentState().programSource;
   const plan = () =>
     binding() ? JSON.stringify(seriesCheckpointIdentity(binding()!.context)) : null;
   const sameOwnerPlan = (item: Prepared) =>
     (binding()?.context.matchId ?? null) === item.matchId && plan() === item.plan;
-  const sameContext = (item: Prepared) =>
-    (binding()?.context.matchId ?? null) === item.matchId && revision() === item.revision;
   const sameSelection = (item: Prepared) =>
-    sameContext(item) &&
+    sameOwnerPlan(item) &&
     options.productionSession() === item.productionSession &&
     (!item.preparationId || !preparationCancelled(item.preparationId));
   app.post('/operator/runtime/managed-source', { bodyLimit: 65536 }, (request, reply) => {
@@ -127,7 +123,6 @@ export function registerManagedSourceRoutes(
         sourceId: randomUUID(),
         requestId: body.requestId,
         matchId: binding()?.context.matchId ?? null,
-        revision: revision(),
         productionSession: options.productionSession(),
         plan: plan(),
         ...(body.preparationId ? { preparationId: body.preparationId } : {}),
@@ -163,7 +158,6 @@ export function registerManagedSourceRoutes(
         sourceId: body.sourceId,
         requestId: '',
         matchId: currentMatch,
-        revision: revision(),
         productionSession: options.productionSession(),
         plan: plan(),
         identity,

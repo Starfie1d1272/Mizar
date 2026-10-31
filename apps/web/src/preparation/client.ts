@@ -378,6 +378,10 @@ export async function productionAction(
             (updates.notificationPending || updates.mulnxNotificationPending)
           ) {
             const proceed = await new Promise<boolean>((resolve) => {
+              if (entryAbort!.signal.aborted) {
+                resolve(false);
+                return;
+              }
               entryAbort!.signal.addEventListener('abort', () => resolve(false), { once: true });
               const request = { updates, signal: entryAbort!.signal, resolve, handled: false };
               window.dispatchEvent(new CustomEvent('mizar:entry-update', { detail: request }));
