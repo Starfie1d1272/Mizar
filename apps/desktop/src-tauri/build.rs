@@ -40,7 +40,6 @@ fn main() {
             "finish_demo_test",
             "restore_cs2_backup",
             "open_cs2_backup",
-            "manage_cs2_backup",
             "set_cs2_preferences",
             "get_full_spectator_preference",
             "set_full_spectator_preference",
