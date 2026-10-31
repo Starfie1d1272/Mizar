@@ -555,6 +555,8 @@ export class BroadcastConfigStore {
       if (!this.envelope) throw new Error('broadcast_config_unavailable');
       if (this.envelope.document.active.moduleRevisions[kind] !== active.moduleRevisions[kind])
         throw new Error('revision_conflict');
+      if (kind === 'camera' && this.envelope.document.active.revision !== active.revision)
+        throw new Error('revision_conflict');
       const next = structuredClone(this.envelope);
       next.consumers ??= {};
       const previous = next.consumers[kind];

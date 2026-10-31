@@ -158,7 +158,6 @@ export class OrchestrationStore {
     return result;
   }
   async synchronizeFromPersistence(canApply: () => boolean = () => true): Promise<void> {
-    this.pendingWrites++;
     const result = this.queue.then(async () => {
       if (!this.persistence) throw new Error('camera_storage_unavailable');
       const before = JSON.stringify({ ...this.preset, name: '' });
@@ -177,9 +176,7 @@ export class OrchestrationStore {
         this.revision++;
     });
     this.queue = result.catch(() => undefined);
-    return result.finally(() => {
-      this.pendingWrites--;
-    });
+    return result;
   }
   async restoreAppliedFromPersistence(): Promise<void> {
     if (!this.persistence?.readApplied) throw new Error('camera_storage_unavailable');
