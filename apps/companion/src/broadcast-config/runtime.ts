@@ -136,10 +136,22 @@ export function createBroadcastRuntime(input: {
       hudDocumentFromBroadcast(document);
     },
     onApplied: async (active, _previous, kind, failed = []) => {
+      const sameSelection = (
+        snapshot: ActiveBroadcastSnapshot,
+        item: 'hud' | 'music' | 'camera' | 'program',
+      ) =>
+        snapshot.moduleRevisions[item] === active.moduleRevisions[item] &&
+        (snapshot.sourceModuleIds?.[item] ?? null) === (active.sourceModuleIds?.[item] ?? null) &&
+        (snapshot.sourceModuleRevisions?.[item] ?? null) ===
+          (active.sourceModuleRevisions?.[item] ?? null);
       const current = (item: 'hud' | 'music' | 'camera') => () =>
-        store.snapshot.active.moduleRevisions[item] === active.moduleRevisions[item];
+        sameSelection(store.snapshot.active, item);
       const operations = {
-        hud: () => hud.synchronizeFromPersistence(hudDocument(), current('hud')),
+        hud: () =>
+          hud.synchronizeFromPersistence(
+            hudDocumentFromBroadcast({ ...store.snapshot, active }),
+            current('hud'),
+          ),
         music: () => music.synchronizeFromPersistence(current('music')),
         camera: () => camera.synchronizeFromPersistence(() => canSynchronizeCamera(active)),
         program: async () => {
@@ -155,9 +167,12 @@ export function createBroadcastRuntime(input: {
       let failure: unknown;
       for (const item of kinds) {
         const current = store.consumerStatus[item];
+        const applied = store.appliedSnapshot(item);
         if (
           item !== 'camera' &&
           current?.applied === active.moduleRevisions[item] &&
+          applied &&
+          sameSelection(applied, item) &&
           !current.error
         )
           continue;

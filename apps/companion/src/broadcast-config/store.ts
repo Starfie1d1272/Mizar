@@ -553,7 +553,13 @@ export class BroadcastConfigStore {
   ) {
     await this.queue.run(async () => {
       if (!this.envelope) throw new Error('broadcast_config_unavailable');
-      if (this.envelope.document.active.moduleRevisions[kind] !== active.moduleRevisions[kind])
+      const desired = this.envelope.document.active;
+      if (
+        desired.moduleRevisions[kind] !== active.moduleRevisions[kind] ||
+        (desired.sourceModuleIds?.[kind] ?? null) !== (active.sourceModuleIds?.[kind] ?? null) ||
+        (desired.sourceModuleRevisions?.[kind] ?? null) !==
+          (active.sourceModuleRevisions?.[kind] ?? null)
+      )
         throw new Error('revision_conflict');
       if (kind === 'camera' && this.envelope.document.active.revision !== active.revision)
         throw new Error('revision_conflict');
@@ -1423,6 +1429,12 @@ export class BroadcastConfigStore {
             active.sourceModuleIds = {
               ...active.sourceModuleIds,
               [kind]: input.active.moduleId ?? null,
+            };
+            active.sourceModuleRevisions = {
+              ...active.sourceModuleRevisions,
+              [kind]:
+                next.document.modules.find((module) => module.id === input.active?.moduleId)
+                  ?.revision ?? null,
             };
             active.lock = structuredClone(lock);
             active.revision = randomUUID();
