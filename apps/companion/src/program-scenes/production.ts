@@ -122,13 +122,11 @@ export function registerProductionRoutes(
       return reply
         .code(lifecycleErrors.preparationIdInvalid.status)
         .send(lifecycleErrors.preparationIdInvalid);
-    return reply
-      .header('cache-control', 'no-store')
-      .send(
-        cancellationResponseSchema.parse({
-          entered: lastEnteredId === id && mode !== 'preparation',
-        }),
-      );
+    return reply.header('cache-control', 'no-store').send(
+      cancellationResponseSchema.parse({
+        entered: lastEnteredId === id && mode !== 'preparation',
+      }),
+    );
   });
   async function change(
     body: { action?: unknown; expectedRevision?: unknown; preparationId?: unknown } | null,
