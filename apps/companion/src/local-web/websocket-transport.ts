@@ -22,6 +22,8 @@ import {
   type LocalWebOriginPolicyOptions,
 } from './origin-policy.js';
 
+import { LOCAL_CHANNEL_VISIBILITY, localRouteVisibility } from './access-policy.js';
+
 const OPEN_STATE = 1;
 const READ_ONLY_CLOSE_CODE = 1008;
 const SNAPSHOT_TOO_LARGE_CLOSE_CODE = 1009;
@@ -287,6 +289,10 @@ export class LocalWebSocketTransport {
     origin: string | undefined,
     userAgent?: string,
   ): void {
+    if (this.originPolicy.mode === 'lan' && LOCAL_CHANNEL_VISIBILITY[channel] !== 'public') {
+      closeSocket(socket, READ_ONLY_CLOSE_CODE, 'private channel unavailable on public LAN');
+      return;
+    }
     if (this.closed) {
       socket.terminate();
       return;
@@ -552,13 +558,24 @@ export function registerLocalWebSocketTransport(
   app: FastifyInstance,
   transport: LocalWebSocketTransport,
 ): void {
+  const policy = transport.getOriginPolicy();
+  app.addHook('onRequest', async (request, reply) => {
+    const path = request.url.split('?', 1)[0] ?? '';
+    if (policy.mode === 'lan' && localRouteVisibility(path) !== 'public')
+      return reply.code(403).send({ error: 'private_surface_loopback_only' });
+  });
   app.get('/local/protocol', async (_request, reply) =>
     reply.header('cache-control', 'no-store').send({
       subprotocol: LOCAL_PROTOCOL_SUBPROTOCOL,
-      channels: LOCAL_CHANNEL_VERSIONS,
+      channels: Object.fromEntries(
+        Object.entries(LOCAL_CHANNEL_VERSIONS).filter(
+          ([channel]) =>
+            policy.mode !== 'lan' ||
+            LOCAL_CHANNEL_VISIBILITY[channel as LocalWebChannel] === 'public',
+        ),
+      ),
     }),
   );
-  const policy = transport.getOriginPolicy();
   app.register(fastifyWebsocket, {
     options: {
       perMessageDeflate: false,
@@ -601,6 +618,7 @@ export function registerLocalWebSocketTransport(
       LocalWebChannel,
       string,
     ][]) {
+      if (policy.mode === 'lan' && LOCAL_CHANNEL_VISIBILITY[channel] !== 'public') continue;
       instance.get(route, { websocket: true }, (socket, request) => {
         transport.attach(
           channel,
