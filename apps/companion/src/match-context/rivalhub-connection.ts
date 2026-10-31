@@ -1105,7 +1105,7 @@ export class RivalHubConnection {
             found.liveSessionId === identity.liveSessionId &&
             found.authorityRevision === identity.authorityRevision
           ) {
-              await this.archiveSource?.(identity);
+            await this.archiveSource?.(identity);
             await this.sourceState.complete(identity);
           }
         } catch (error) {
