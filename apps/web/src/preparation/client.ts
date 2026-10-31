@@ -315,7 +315,7 @@ export function retryPendingPreparation(): Promise<void> {
       // Reconcile only the existing submitted request. The host validates its
       // launcher, game identity, and original preparation before adopting it.
       let game = await desktopInvoke<Cs2ConfigStatus>('cs2_config_status');
-      if (!game.running && game.preparationId === entry.id && game.mulnxLaunchResumable) {
+      if (game.preparationId === entry.id && game.mulnxLaunchResumable) {
         if (controller.signal.aborted || lastPreparation !== entry) throw new Error('准备已取消。');
         const receipt = await desktopInvoke<{ result?: string }>('launch_mulnx', {
           resumeOnly: true,
