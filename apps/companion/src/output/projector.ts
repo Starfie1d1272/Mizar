@@ -210,14 +210,18 @@ export function buildReliableEventV1(input: {
   readonly previousMapEpoch?: number | null;
   readonly previousSourceGeneration?: number | null;
   readonly cursor?: ProjectionBundle['program']['cursor'];
+  readonly retainStaleBoundary?: boolean;
 }): ReliableEventV1 | null {
   const { binding, bundle } = input;
   if (
     binding === undefined ||
     binding.context.competition === null ||
-    binding.freshness !== 'fresh' ||
     bundle.program.match?.matchId !== binding.context.matchId ||
-    bundle.program.status.context !== 'fresh'
+    ((binding.freshness !== 'fresh' || bundle.program.status.context !== 'fresh') &&
+      !(
+        input.retainStaleBoundary &&
+        ['map_epoch_changed', 'source_generation_changed'].includes(input.kind)
+      ))
   )
     return null;
   const warning =
@@ -320,12 +324,35 @@ export function buildReliableEventV1(input: {
     evidence: {
       identity: bundle.program.status.identity,
       telemetryFresh: bundle.program.status.telemetry === 'fresh',
-      contextFresh: true,
+      contextFresh: binding.freshness === 'fresh' && bundle.program.status.context === 'fresh',
       source: input.source,
       ...(displayOnly ? { lineupMismatchOnly: true } : {}),
     },
     payload,
   });
+}
+
+/** Revision is selected once after plan verification; original observation remains unchanged. */
+export function materializeBoundaryEvent(
+  event: ReliableEventV1,
+  contextRevision: string,
+): ReliableEventV1 {
+  if (event.kind !== 'map_epoch_changed' && event.kind !== 'source_generation_changed')
+    throw new Error('boundary_kind_invalid');
+  const cursor = event.cursor;
+  const identity = {
+    kind: event.kind,
+    producerInstanceId: cursor.producerInstanceId,
+    liveSessionId: cursor.liveSessionId,
+    matchId: event.matchId,
+    contextRevision,
+    mapEpoch: cursor.mapEpoch,
+    sourceGeneration: cursor.programSourceGeneration,
+    runtimeSeq: cursor.runtimeSeq,
+    payload: event.payload,
+  };
+  const idempotencyKey = createHash('sha256').update(JSON.stringify(identity)).digest('hex');
+  return parseReliableEventV1({ ...event, contextRevision, idempotencyKey });
 }
 
 export function transitionReliableEventsV1(input: {

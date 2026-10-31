@@ -57,6 +57,7 @@ const codes = new Set([
   'operator_bind_rejected',
   'context_result_conflict',
   'current_scope_failed',
+  'boundary_unconfirmed_result',
   'send_guard_blocked',
   'receiver_accepted',
   'delivery_rejected_unknown',
