@@ -2437,14 +2437,12 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     await closeStep(() => gameAudio?.close());
     // Both waits share one deadline; adapter closure may itself enqueue a new
     // unconfirmed status after the first wait has already finished.
-    const obsExit = production as typeof production & { waitForObsExit?: () => Promise<unknown> };
     const obsExitDeadline = performance.now() + 4000;
     const waitForObsExit = async () => {
-      if (!obsExit.waitForObsExit) return;
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         await Promise.race([
-          obsExit.waitForObsExit(),
+          production.waitForObsExit(),
           new Promise<never>((_resolve, reject) => {
             timer = setTimeout(
               () => reject(new Error('OBS 收尾尚未确认')),
