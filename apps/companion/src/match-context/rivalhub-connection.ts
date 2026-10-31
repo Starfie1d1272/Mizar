@@ -542,7 +542,14 @@ export class RivalHubConnection {
   private cleanupTimer: ReturnType<typeof setInterval> | undefined;
   private cleanupSummary = { pending: 0, blocked: 0, claimIntent: false };
   private settleSource: ((scope: SourceScope) => Promise<boolean>) | undefined;
-  private archiveSource: ((identity: ExactSource) => Promise<void>) | undefined;
+  private archiveSource:
+    ((identity: ExactSource, disposition?: 'revoked') => Promise<void>) | undefined;
+  private activeReliableSources: (() => readonly ExactSource[]) | undefined;
+  private readonly isolatedRevokedSources = new Map<string, ExactSource>();
+  private readonly revokedIsolationRetry = new Map<
+    string,
+    { identity: ExactSource; retryAt: number }
+  >();
   private resumeSource: ((scope: SourceScope) => void) | undefined;
   private bindingGeneration = 0;
   private activeDeviceName: string | null = null;
@@ -820,11 +827,13 @@ export class RivalHubConnection {
   setSourceSettlement(
     settle: (scope: SourceScope) => Promise<boolean>,
     resume: (scope: SourceScope) => void,
-    archive?: (identity: ExactSource) => Promise<void>,
+    archive?: (identity: ExactSource, disposition?: 'revoked') => Promise<void>,
+    activeSources?: () => readonly ExactSource[],
   ): void {
     this.settleSource = settle;
     this.resumeSource = resume;
     this.archiveSource = archive;
+    this.activeReliableSources = activeSources;
   }
 
   startSourceCleanup(): void {
@@ -1132,6 +1141,7 @@ export class RivalHubConnection {
 
   private async cleanup(force: boolean, deadline = Date.now() + 7000): Promise<void> {
     await this.persistExitHandoffs();
+    await this.isolateRevokedSources();
     for (const identity of this.confirmedSourcesAwaitingPersistence.values()) {
       if (await this.persistConfirmedSource(identity)) await this.archiveConfirmedSource(identity);
     }
@@ -1296,6 +1306,43 @@ export class RivalHubConnection {
     await this.updateCleanupSummary();
   }
 
+  private async isolateRevokedSources(preferred: readonly ExactSource[] = []): Promise<void> {
+    if (!this.archiveSource) return;
+    const now = Date.now();
+    const cooling = [...this.revokedIsolationRetry.values()].filter((item) => item.retryAt > now);
+    const excluded = [
+      ...this.isolatedRevokedSources.values(),
+      ...cooling.map((item) => item.identity),
+    ];
+    const candidates = new Map<string, ExactSource>();
+    let backlog: readonly ExactSource[] = [];
+    try {
+      backlog = await this.sourceState.getRevokedSources(
+        excluded,
+        8,
+        this.activeReliableSources?.() ?? [],
+      );
+    } catch (error) {
+      this.onDiagnostic('source_revoked_scan', error);
+    }
+    for (const identity of [...preferred, ...backlog])
+      candidates.set(JSON.stringify(identity), identity);
+    for (const identity of candidates.values()) {
+      const key = JSON.stringify(identity);
+      if (this.isolatedRevokedSources.has(key)) continue;
+      if ((this.revokedIsolationRetry.get(key)?.retryAt ?? 0) > now) continue;
+      try {
+        await this.archiveSource(identity, 'revoked');
+        this.isolatedRevokedSources.set(key, identity);
+        this.revokedIsolationRetry.delete(key);
+      } catch (error) {
+        // Source-state evidence remains the durable retry request.
+        this.revokedIsolationRetry.set(key, { identity, retryAt: now + 30_000 });
+        this.onDiagnostic('source_revoked_isolation', error);
+      }
+    }
+  }
+
   private async persistConfirmedSource(identity: ExactSource): Promise<boolean> {
     const key = JSON.stringify(identity);
     this.confirmedSourcesAwaitingPersistence.set(key, identity);
@@ -1346,7 +1393,8 @@ export class RivalHubConnection {
       ) {
         throw new Error('断开连接失败，请稍后重试。');
       }
-      await this.sourceState.confirmRevokedInstallation(installation);
+      const revoked = await this.sourceState.confirmRevokedInstallation(installation);
+      await this.isolateRevokedSources(revoked);
       await this.updateCleanupSummary();
     }
     await unlink(this.path).catch((error: NodeJS.ErrnoException) => {
