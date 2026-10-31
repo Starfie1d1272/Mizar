@@ -74,22 +74,28 @@ export class OutputService {
     matchId: string | undefined,
     cursor: ReliableEventV1['cursor'] | undefined,
   ): BoundaryScope | undefined {
-    if (!matchId || !cursor?.liveSessionId) return undefined;
-    const authorityFingerprint = this.boundaryAuthority();
+    if (!cursor) return undefined;
+    const authorityFingerprint =
+      this.boundaryAuthority() ??
+      createHash('sha256')
+        .update(JSON.stringify([this.boundaryOwner, null]))
+        .digest('hex');
     return {
-      matchId,
+      ...(matchId ? { matchId } : {}),
       producerInstanceId: cursor.producerInstanceId,
-      liveSessionId: cursor.liveSessionId,
+      ...(cursor.liveSessionId ? { liveSessionId: cursor.liveSessionId } : {}),
+      ownerFingerprint: createHash('sha256').update(this.boundaryOwner).digest('hex'),
       runtimeSeq: cursor.runtimeSeq,
       programSourceGeneration: cursor.programSourceGeneration,
       mapEpoch: cursor.mapEpoch,
-      ...(authorityFingerprint ? { authorityFingerprint } : {}),
+      authorityFingerprint,
     };
   }
   private boundaryScopeKey(scope: BoundaryScope | undefined): string {
     return scope
       ? JSON.stringify([
           scope.matchId,
+          scope.ownerFingerprint,
           scope.producerInstanceId,
           scope.liveSessionId,
           scope.authorityFingerprint,
@@ -1107,11 +1113,21 @@ export class OutputService {
       this.outbox.getRecovery()?.code === 'outbox_preserved_without_records' ||
       this.outbox.hasBoundaryGap({
         ...scope,
-        ...(this.boundaryAuthority() ? { authorityFingerprint: this.boundaryAuthority()! } : {}),
+        ownerFingerprint: createHash('sha256').update(this.boundaryOwner).digest('hex'),
+        authorityFingerprint:
+          this.boundaryAuthority() ??
+          createHash('sha256')
+            .update(JSON.stringify([this.boundaryOwner, null]))
+            .digest('hex'),
       }) ||
       this.outbox.getBoundaryIntents({
         ...scope,
-        ...(this.boundaryAuthority() ? { authorityFingerprint: this.boundaryAuthority()! } : {}),
+        ownerFingerprint: createHash('sha256').update(this.boundaryOwner).digest('hex'),
+        authorityFingerprint:
+          this.boundaryAuthority() ??
+          createHash('sha256')
+            .update(JSON.stringify([this.boundaryOwner, null]))
+            .digest('hex'),
       }).length
     )
       return false;

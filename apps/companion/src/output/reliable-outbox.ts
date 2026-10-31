@@ -141,7 +141,11 @@ export interface DeliveryContinuity {
   readonly savedAt: string;
 }
 
-export interface BoundaryScope extends ReliableDeliveryScope {
+export interface BoundaryScope {
+  readonly matchId?: string;
+  readonly producerInstanceId: string;
+  readonly liveSessionId?: string;
+  readonly ownerFingerprint?: string;
   readonly authorityFingerprint?: string;
   readonly runtimeSeq?: number;
   readonly programSourceGeneration?: number;
@@ -161,6 +165,7 @@ interface OutboxFile {
   readonly boundaryIntents?: readonly BoundaryIntent[];
   readonly boundaryGap?: true;
   readonly boundaryGaps?: readonly BoundaryScope[];
+  readonly boundaryOverflowOwners?: readonly string[];
   readonly continuity?: DeliveryContinuity;
   readonly commit?: { readonly id: string; readonly sha256: string };
   readonly unconfirmedRecovery?: true;
@@ -290,6 +295,7 @@ function payloadDigest(value: Record<string, unknown> | OutboxFile): string {
         boundaryIntents: value.boundaryIntents,
         boundaryGap: value.boundaryGap,
         boundaryGaps: value.boundaryGaps,
+        boundaryOverflowOwners: value.boundaryOverflowOwners,
         continuity: value.continuity,
         unconfirmedRecovery: value.unconfirmedRecovery,
       }),
@@ -323,6 +329,12 @@ function parseOutbox(bytes: Buffer): OutboxFile {
     value.records.length > RELIABLE_OUTBOX_MAX_RECORDS ||
     (value.unconfirmedRecovery !== undefined && value.unconfirmedRecovery !== true) ||
     (value.boundaryGap !== undefined && value.boundaryGap !== true) ||
+    (value.boundaryOverflowOwners !== undefined &&
+      (!Array.isArray(value.boundaryOverflowOwners) ||
+        value.boundaryOverflowOwners.length > RELIABLE_OUTBOX_MAX_RECORDS ||
+        value.boundaryOverflowOwners.some(
+          (owner: unknown) => typeof owner !== 'string' || !/^[a-f0-9]{64}$/.test(owner),
+        ))) ||
     (value.boundaryGaps !== undefined &&
       (!Array.isArray(value.boundaryGaps) ||
         value.boundaryGaps.length > RELIABLE_OUTBOX_MAX_RECORDS)) ||
@@ -337,7 +349,8 @@ function parseOutbox(bytes: Buffer): OutboxFile {
       value.unconfirmedRecovery !== undefined ||
       value.boundaryIntents !== undefined ||
       value.boundaryGap !== undefined ||
-      value.boundaryGaps !== undefined)
+      value.boundaryGaps !== undefined ||
+      value.boundaryOverflowOwners !== undefined)
   )
     throw new Error('outbox_legacy_metadata_invalid');
   const commit = value.version === RELIABLE_OUTBOX_VERSION ? parseCommit(value.commit) : undefined;
@@ -349,15 +362,18 @@ function parseOutbox(bytes: Buffer): OutboxFile {
       throw new Error('boundary_gap_invalid');
     const item = raw as Record<string, unknown>;
     if (
-      typeof item.matchId !== 'string' ||
-      !item.matchId ||
-      item.matchId.length > 256 ||
+      (item.matchId !== undefined &&
+        (typeof item.matchId !== 'string' || !item.matchId || item.matchId.length > 256)) ||
       typeof item.producerInstanceId !== 'string' ||
       !item.producerInstanceId ||
       item.producerInstanceId.length > 256 ||
-      typeof item.liveSessionId !== 'string' ||
-      !item.liveSessionId ||
-      item.liveSessionId.length > 256 ||
+      (item.liveSessionId !== undefined &&
+        (typeof item.liveSessionId !== 'string' ||
+          !item.liveSessionId ||
+          item.liveSessionId.length > 256)) ||
+      (item.ownerFingerprint !== undefined &&
+        (typeof item.ownerFingerprint !== 'string' ||
+          !/^[a-f0-9]{64}$/.test(item.ownerFingerprint))) ||
       (item.authorityFingerprint !== undefined &&
         (typeof item.authorityFingerprint !== 'string' ||
           !/^[a-f0-9]{64}$/.test(item.authorityFingerprint))) ||
@@ -371,9 +387,12 @@ function parseOutbox(bytes: Buffer): OutboxFile {
     )
       throw new Error('boundary_gap_invalid');
     return {
-      matchId: item.matchId,
+      ...(typeof item.matchId === 'string' ? { matchId: item.matchId } : {}),
       producerInstanceId: item.producerInstanceId,
-      liveSessionId: item.liveSessionId,
+      ...(typeof item.liveSessionId === 'string' ? { liveSessionId: item.liveSessionId } : {}),
+      ...(typeof item.ownerFingerprint === 'string'
+        ? { ownerFingerprint: item.ownerFingerprint }
+        : {}),
       ...(typeof item.runtimeSeq === 'number' ? { runtimeSeq: item.runtimeSeq } : {}),
       ...(typeof item.programSourceGeneration === 'number'
         ? { programSourceGeneration: item.programSourceGeneration }
@@ -441,6 +460,9 @@ function parseOutbox(bytes: Buffer): OutboxFile {
     ...(boundaryIntents === undefined ? {} : { boundaryIntents }),
     ...(value.boundaryGap === true ? { boundaryGap: true } : {}),
     ...(boundaryGaps === undefined ? {} : { boundaryGaps }),
+    ...(value.boundaryOverflowOwners === undefined
+      ? {}
+      : { boundaryOverflowOwners: value.boundaryOverflowOwners as string[] }),
     ...(continuity === undefined ? {} : { continuity }),
     ...(commit === undefined ? {} : { commit }),
     ...(value.unconfirmedRecovery === true ? { unconfirmedRecovery: true } : {}),
@@ -497,6 +519,7 @@ export class ReliableOutbox {
   private boundaryIntents: readonly BoundaryIntent[] = [];
   private boundaryGap: true | undefined;
   private boundaryGaps: readonly BoundaryScope[] = [];
+  private boundaryOverflowOwners: readonly string[] = [];
   private boundaryCaptureFailed = false;
   private readonly queue = new SerialCommitQueue();
   private continuity: DeliveryContinuity | undefined;
@@ -543,6 +566,7 @@ export class ReliableOutbox {
         this.boundaryIntents = file.boundaryIntents ?? [];
         this.boundaryGap = file.boundaryGap;
         this.boundaryGaps = file.boundaryGaps ?? [];
+        this.boundaryOverflowOwners = file.boundaryOverflowOwners ?? [];
         this.continuity = file.continuity;
         this.unconfirmedRecovery = file.unconfirmedRecovery;
         if (file.unconfirmedRecovery) {
@@ -619,6 +643,7 @@ export class ReliableOutbox {
     this.boundaryIntents = file.boundaryIntents ?? [];
     this.boundaryGap = file.boundaryGap;
     this.boundaryGaps = file.boundaryGaps ?? [];
+    this.boundaryOverflowOwners = file.boundaryOverflowOwners ?? [];
     this.continuity = file.continuity;
     this.unconfirmedRecovery = file.unconfirmedRecovery;
     this.recovery = recoveryReport(file);
@@ -741,9 +766,9 @@ export class ReliableOutbox {
     scope: BoundaryScope,
   ): boolean {
     return (
-      event.matchId === scope.matchId &&
+      (!scope.matchId || event.matchId === scope.matchId) &&
       event.cursor.producerInstanceId === scope.producerInstanceId &&
-      event.cursor.liveSessionId === scope.liveSessionId &&
+      (!scope.liveSessionId || event.cursor.liveSessionId === scope.liveSessionId) &&
       (scope.runtimeSeq === undefined || event.cursor.runtimeSeq <= scope.runtimeSeq) &&
       (scope.programSourceGeneration === undefined ||
         event.cursor.programSourceGeneration <= scope.programSourceGeneration) &&
@@ -757,11 +782,21 @@ export class ReliableOutbox {
       this.boundaryCaptureFailed ||
       this.boundaryGap === true ||
       (scope
+        ? scope.ownerFingerprint
+          ? this.boundaryOverflowOwners.includes(scope.ownerFingerprint)
+          : this.boundaryOverflowOwners.length > 0
+        : this.boundaryOverflowOwners.length > 0) ||
+      (scope
         ? this.boundaryGaps.some(
             (gap) =>
-              gap.matchId === scope.matchId &&
+              (!gap.matchId || !scope.matchId || gap.matchId === scope.matchId) &&
               gap.producerInstanceId === scope.producerInstanceId &&
-              gap.liveSessionId === scope.liveSessionId &&
+              (!gap.liveSessionId ||
+                !scope.liveSessionId ||
+                gap.liveSessionId === scope.liveSessionId) &&
+              (!gap.ownerFingerprint ||
+                !scope.ownerFingerprint ||
+                gap.ownerFingerprint === scope.ownerFingerprint) &&
               (gap.runtimeSeq === undefined ||
                 scope.runtimeSeq === undefined ||
                 gap.runtimeSeq <= scope.runtimeSeq) &&
@@ -824,15 +859,26 @@ export class ReliableOutbox {
           gap && scope && this.boundaryGaps.length < RELIABLE_OUTBOX_MAX_RECORDS
             ? [...this.boundaryGaps, scope]
             : this.boundaryGaps;
-        const globalGap =
-          this.boundaryGap ||
-          (gap && (!scope || gaps.length === this.boundaryGaps.length) ? true : undefined);
+        let overflowOwners = this.boundaryOverflowOwners;
+        if (gap && scope && gaps === this.boundaryGaps) {
+          if (
+            !scope.ownerFingerprint ||
+            (overflowOwners.length >= RELIABLE_OUTBOX_MAX_RECORDS &&
+              !overflowOwners.includes(scope.ownerFingerprint))
+          )
+            throw new Error('boundary_gap_capacity_exhausted');
+          if (!overflowOwners.includes(scope.ownerFingerprint))
+            overflowOwners = [...overflowOwners, scope.ownerFingerprint];
+        }
+        if (gap && !scope) throw new Error('boundary_gap_scope_unavailable');
+        const frozen = gap || this.hasBoundaryGap(scope);
         await this.commit(
           overflow || records.length > RELIABLE_OUTBOX_MAX_RECORDS ? this.records : records,
-          gap ? this.continuity : continuity,
+          frozen ? this.continuity : continuity,
           overflow ? this.boundaryIntents : allIntents,
-          globalGap,
+          this.boundaryGap,
           gaps,
+          overflowOwners,
         );
       } catch (error) {
         this.boundaryCaptureFailed = true;
@@ -1274,6 +1320,7 @@ export class ReliableOutbox {
     boundaryIntents = this.boundaryIntents,
     boundaryGap = this.boundaryGap,
     boundaryGaps = this.boundaryGaps,
+    boundaryOverflowOwners = this.boundaryOverflowOwners,
   ): Promise<void> {
     if (this.boundaryCaptureFailed) throw new Error('boundary_capture_blocked');
     const file: OutboxFile = sealOutbox({
@@ -1282,6 +1329,7 @@ export class ReliableOutbox {
       ...(boundaryIntents.length ? { boundaryIntents } : {}),
       ...(boundaryGap ? { boundaryGap } : {}),
       ...(boundaryGaps.length ? { boundaryGaps } : {}),
+      ...(boundaryOverflowOwners.length ? { boundaryOverflowOwners } : {}),
       ...(continuity === undefined ? {} : { continuity }),
       ...(this.unconfirmedRecovery ? { unconfirmedRecovery: true } : {}),
     });
@@ -1294,6 +1342,7 @@ export class ReliableOutbox {
     this.boundaryIntents = boundaryIntents;
     this.boundaryGap = boundaryGap;
     this.boundaryGaps = boundaryGaps;
+    this.boundaryOverflowOwners = boundaryOverflowOwners;
     this.continuity = continuity;
     for (const record of records) {
       if (previous.includes(record)) continue;
