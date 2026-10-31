@@ -28,7 +28,6 @@ import {
   cancelProductionEntry,
   openTool,
   productionAction,
-  retryPendingPreparation,
   useLocalRead,
   type Production,
 } from './client';
@@ -131,18 +130,31 @@ export function PreparationPage() {
   }
 
   useEffect(() => {
-    const cancel = () => cancelProductionEntry();
-    window.addEventListener('mizar-entry-cancel', cancel);
-    const retry = () => {
-      void retryPendingPreparation().catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : '重试未完成。';
-        setMessage(message);
-        void desktopInvoke('workbench_message', { action: 'status', message }).catch(
-          () => undefined,
+    if (!window.__TAURI_INTERNALS__) return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      try {
+        const status = await desktopInvoke<{ running: boolean; message: string } | null>(
+          'preparation_status',
         );
-      });
+        if (active && status) {
+          setEntering(status.running);
+          if (!status.running && status.message) setMessage(status.message);
+        }
+      } catch {
+        /* The desktop may still be starting. */
+      }
+      if (active) timer = setTimeout(() => void poll(), 1000);
     };
-    window.addEventListener('mizar-entry-retry', retry);
+    void poll();
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, []);
+
+  useEffect(() => {
     const enter = () => {
       void fetch('/local/v1/production', { cache: 'no-store' })
         .then((response) => response.json() as Promise<Production>)
@@ -154,8 +166,6 @@ export function PreparationPage() {
     window.addEventListener('mizar-enter', enter);
     return () => {
       window.removeEventListener('mizar-enter', enter);
-      window.removeEventListener('mizar-entry-cancel', cancel);
-      window.removeEventListener('mizar-entry-retry', retry);
     };
   }, []);
 

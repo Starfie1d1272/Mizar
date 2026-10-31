@@ -24,6 +24,7 @@ mod observer_workspace;
 mod overlay_recovery;
 mod powershell;
 mod preparation_gate;
+mod preparation_task;
 mod production_exit;
 mod spectator_eligibility;
 mod spectator_recovery_plan;
@@ -1692,6 +1693,7 @@ async fn finish_workspace(
         production_exit::set_exit_intent(&intent_host.state::<DesktopLog>(), "cancel-exit")
     }).await.unwrap_or_else(|_| Err("制作退出状态未能恢复，请重试。".into()));
     let result = production_exit::cleanup_results(result, intent_result);
+    if result.is_ok() { preparation_task::retire_after_exit(); }
     if let Err(error) = &result {
         app.state::<DesktopLog>().event(
             "production_finish",
@@ -3363,34 +3365,6 @@ async fn present_workbench_panels(
     })
     .await
     .map_err(|_| "工作台面板未能打开。".to_string())?
-}
-
-#[tauri::command]
-fn workbench_message(
-    window: tauri::WebviewWindow,
-    app: tauri::AppHandle,
-    action: String,
-    message: Option<String>,
-) -> Result<(), String> {
-    if window.label() == "main" && action == "status" {
-        *app.state::<HostState>()
-            .entry_message
-            .lock()
-            .map_err(|_| "工作台状态不可用。")? = message.clone().unwrap_or_default();
-    }
-    let (target, event) = match (window.label(), action.as_str()) {
-        ("main", "status") => ("workspace-dock", "mizar-entry-status"),
-        ("workspace-dock", "retry") => ("main", "mizar-entry-retry"),
-        ("workspace-dock", "cancel") => ("main", "mizar-entry-cancel"),
-        _ => return Err("工作台请求无效。".into()),
-    };
-    let target = app.get_webview_window(target).ok_or("工作台窗口不可用。")?;
-    let data = serde_json::to_string(&message).map_err(|e| e.to_string())?;
-    target
-        .eval(&format!(
-            "window.dispatchEvent(new CustomEvent({event:?}, {{detail: {data}}}))"
-        ))
-        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

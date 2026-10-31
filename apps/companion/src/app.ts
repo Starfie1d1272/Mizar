@@ -373,6 +373,16 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       });
       return projectionCoordinator.refresh();
     },
+    isActiveOnlineBinding: (binding) =>
+      matchContextController !== null &&
+      matchContextController.getActiveBinding() === binding &&
+      !matchContextController.getPendingOnlineCandidate() &&
+      !matchContextController.isOnlineCandidateLoading() &&
+      !production.isTrialPending() &&
+      production.get().mode === 'live' &&
+      options.rivalhubConnection?.view().activeSourceMatchId === binding.context.matchId &&
+      options.rivalhubConnection?.view().stoppedMatchId !== binding.context.matchId &&
+      !options.rivalhubConnection?.view().activeDeviceName,
     onDiagnostic: (code) => recordRuntimeDiagnostic(`output-${code}`, 'projection', false),
     onBusinessEvidence: (stage, evidence) => businessJournal?.write(stage, evidence),
     onRecoveryProgress: (event, state) => {
@@ -381,6 +391,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       if (authority) connection?.setContextRecoveryProgress(event, authority, state);
     },
   });
+  options.rivalhubConnection?.setBoundaryStatusProvider?.(() => outputService.getBoundaryStatus());
   if (demoRecovery)
     void outputService.setQuarantined(true).catch((error) =>
       app.log.error(

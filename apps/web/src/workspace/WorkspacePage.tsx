@@ -1,3 +1,4 @@
+import { cancelProductionEntry, retryPendingPreparation } from '../preparation/client';
 import { useRadarViewSource } from '../realtime/radar-view-source';
 import { MatchConnectionControl } from './MatchConnectionControl';
 import { ObserverHints } from './ObserverHints';
@@ -638,12 +639,8 @@ function WorkspaceDockContent() {
         {entryNotice ? (
           <StatusBanner tone="warning">
             {entryNotice} <Button onClick={() => setEntryNotice('')}>关闭</Button>{' '}
-            <Button onClick={() => void desktopInvoke('workbench_message', { action: 'retry' })}>
-              重试准备
-            </Button>{' '}
-            <Button onClick={() => void desktopInvoke('workbench_message', { action: 'cancel' })}>
-              取消准备
-            </Button>
+            <Button onClick={() => void action(() => retryPendingPreparation())}>重试准备</Button>{' '}
+            <Button onClick={() => void action(() => cancelProductionEntry())}>取消准备</Button>
           </StatusBanner>
         ) : null}
         <div className="workspace-section-heading">
@@ -757,7 +754,7 @@ function WorkspaceDockContent() {
             onClick={() =>
               production &&
               void action(async () => {
-                await desktopInvoke('workbench_message', { action: 'cancel' }).catch(() => {});
+                await cancelProductionEntry().catch(() => {});
                 await productionAction('finish', production);
               }, true)
             }
