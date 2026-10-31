@@ -148,7 +148,7 @@ export function assertBoxReceipt(planBytes, receiptBytes, lane, runId, currentAt
       receipt.planAttempt === plan.attempt &&
       Number.isSafeInteger(receipt.attempt) &&
       receipt.attempt >= plan.attempt &&
-      receipt.attempt <= currentAttempt &&
+      receipt.attempt === currentAttempt &&
       receipt.lane === lane &&
       lanes.includes(lane) &&
       encode(receipt.assets).equals(encode(plan.assets[lane])),

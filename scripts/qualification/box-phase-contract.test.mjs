@@ -32,6 +32,7 @@ test('receipts bind the exact plan, run, attempt, lane and assets', () => {
   assert.throws(() => assertBoxReceipt(bytes, receipt, 'resources', '123', 2));
   assert.throws(() => assertBoxReceipt(bytes, receipt, 'runtime', '124', 2));
   assert.throws(() => assertBoxReceipt(bytes, receipt, 'runtime', '123', 1));
+  assert.throws(() => assertBoxReceipt(bytes, receipt, 'runtime', '123', 3));
   const changed = input();
   changed.assets.runtime[0].sha256 = 'c'.repeat(64);
   assert.throws(() => assertBoxReceipt(createBoxPlan(changed), receipt, 'runtime', '123', 2));
