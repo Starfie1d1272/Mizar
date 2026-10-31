@@ -593,9 +593,6 @@ impl StartupRecoveryStatus {
         if self.running {
             return Err("CS2 正在运行，未恢复配置。请先正常退出游戏，再重新检查。".into());
         }
-        if self.requires_service {
-            return Err("Demo 试播隔离状态需要制播服务确认；本次未恢复配置。请修复制播服务启动问题后，在准备中心恢复。".into());
-        }
         if self.uncertain && !confirm_steam_cancelled {
             return Err(
                 "Steam 启动仍待确认。请先取消启动请求并确认 CS2 已关闭，再明确确认恢复。".into(),
@@ -1393,7 +1390,9 @@ impl ManagedCs2 {
             self.commit_managed_source(&mut value)?;
             return Ok(());
         }
-        let trial = crate::demo_test::quarantine_if_needed(&self.log, Some(&value))?;
+        // A remote/OBS failure cannot prevent restoring verified local files after game exit.
+        // Keep the Demo marker; only complete its formal-data restoration after confirmation.
+        let trial = crate::demo_test::quarantine_if_needed(&self.log, Some(&value));
         if any_cs2_running(&self.log)? {
             return Err("等待 CS2 退出后恢复原配置。".into());
         }
@@ -1468,6 +1467,7 @@ impl ManagedCs2 {
         } else {
             self.store.restore()?
         };
+        let trial = trial.map_err(|error| format!("已执行本机配置恢复；Demo 资料恢复仍待确认：{error}"))?;
         if trial.is_some() && any_cs2_running(&self.log)? {
             return Err("游戏配置已恢复，请先退出 CS2 再完成 Demo 试播恢复。".into());
         }
@@ -2583,11 +2583,13 @@ impl ManagedCs2 {
         service_stopped: bool,
         guard: &crate::preparation_gate::PreparationGuard<'_>,
     ) -> Result<(), String> {
-        let trial_state = if crate::demo_test::requires_recovery(&self.log, None) {
-            crate::demo_test::status(&self.log)?
+        let trial_status = if crate::demo_test::requires_recovery(&self.log, None) {
+            crate::demo_test::status(&self.log)
         } else {
-            Value::Null
+            Ok(Value::Null)
         };
+        let unknown_trial = Value::Null;
+        let trial_state = trial_status.as_ref().unwrap_or(&unknown_trial);
         if trial_state["active"] == true && trial_state["gameOwnership"] == "external" {
             let borrowed_observer = self
                 .external
@@ -2612,7 +2614,7 @@ impl ManagedCs2 {
         }
         if self.detach_external() {
             // No owned journal is ever created. Releasing a query handle cannot terminate a game.
-            return Ok(());
+            return trial_status.map(|_| ());
         }
         if let Some((lease, _)) = self.managed_camera_lease() {
             // The caller holds the CS2 mutex, so the heartbeat cannot renew while
@@ -2635,7 +2637,7 @@ impl ManagedCs2 {
             self.clear_managed_camera();
         }
         let journal = self.store.load()?;
-        let trial = crate::demo_test::quarantine_if_needed(&self.log, journal.as_ref())?;
+        let trial = crate::demo_test::quarantine_if_needed(&self.log, journal.as_ref());
         // Poll once to adopt a uniquely identified late launch before closing it.
         self.poll();
         if let Some(value) = self.store.load()? {
@@ -2700,6 +2702,7 @@ impl ManagedCs2 {
         }
         match self.recover(false) {
             Ok(()) => {
+                let trial = trial?;
                 if trial.is_some() && any_cs2_running(&self.log)? {
                     return Err("请先退出 CS2，再完成 Demo 试播恢复。".into());
                 }

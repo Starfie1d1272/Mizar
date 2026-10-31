@@ -1183,13 +1183,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         }
       : undefined,
     originPolicy: localWebTransport.getOriginPolicy(),
-    hasContext: () =>
-      matchContextController?.getActiveBinding() !== undefined &&
-      matchContextController?.getActiveBinding() != null,
     scenes: sceneController,
     waitForBroadcast: () => waitForBroadcast?.() ?? Promise.resolve(),
     beforeEnter: () => {
-      if (cameraDirector?.store.saving) throw new Error('camera_settings_saving');
       demoTest?.openFormalBoundary();
       sceneController.holdAutomatic();
     },
