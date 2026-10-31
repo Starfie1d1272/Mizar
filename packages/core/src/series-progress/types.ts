@@ -182,7 +182,7 @@ export interface SeriesProgressCheckpoint {
 }
 
 export interface SeriesProgressCheckpointStore {
-  load(): SeriesProgressCheckpoint | undefined;
+  load(identity?: SeriesProgressCheckpoint['identity']): SeriesProgressCheckpoint | undefined;
   save(checkpoint: SeriesProgressCheckpoint): void | Promise<void>;
   flush(): Promise<void>;
 }
