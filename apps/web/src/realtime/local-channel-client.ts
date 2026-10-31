@@ -96,7 +96,6 @@ export class LocalChannelClient<C extends LocalSnapshotChannel> {
 
   start(): void {
     if (this.disposed || this.socket !== undefined || this.reconnectTimer !== undefined) return;
-    if (this.store.getSnapshot().state === 'protocol-error') return;
     this.connect();
   }
 
@@ -173,7 +172,7 @@ export class LocalChannelClient<C extends LocalSnapshotChannel> {
 
   private handleMessage(generation: number, socket: BrowserWebSocketLike, data: unknown): void {
     if (typeof data !== 'string') {
-      this.handleProtocolError(generation, socket, 'binary/non-text application message');
+      this.rejectFrame('binary/non-text application message');
       return;
     }
 
@@ -181,7 +180,7 @@ export class LocalChannelClient<C extends LocalSnapshotChannel> {
     try {
       parsed = JSON.parse(data) as unknown;
     } catch {
-      this.handleProtocolError(generation, socket, 'invalid JSON snapshot');
+      this.rejectFrame('invalid JSON snapshot');
       return;
     }
 
@@ -208,7 +207,23 @@ export class LocalChannelClient<C extends LocalSnapshotChannel> {
       }
       return;
     }
-    this.handleProtocolError(generation, socket, `snapshot ${result.reason}`);
+    if (result.reason === 'schema-invalid') {
+      // A malformed envelope could also be an incompatible producer. Request a
+      // fresh baseline instead of continuing to present the old snapshot as live.
+      this.handleRetry(generation, 'snapshot schema-invalid');
+      try {
+        socket.close(1002, 'snapshot schema-invalid');
+      } catch {
+        // Retry has already been scheduled.
+      }
+      return;
+    }
+    this.rejectFrame(`snapshot ${result.reason}`);
+  }
+
+  private rejectFrame(reason: string): void {
+    // Keep the last accepted snapshot and cursor: a bad frame is not a new fact.
+    this.store.setState(this.store.getSnapshot().state, reason);
   }
 
   private handleProtocolError(
