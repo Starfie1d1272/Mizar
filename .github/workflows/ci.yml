@@ -150,6 +150,75 @@ jobs:
           path: ${{ runner.temp }}/temporary-output/*
           if-no-files-found: error
           retention-days: 7
+  temporary-workbench-installer:
+    if: github.event_name == 'pull_request' && github.event.pull_request.number == 690
+    needs: ci-gate
+    runs-on: windows-2025
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 3152bc32eda533dab56add5d01a35229db47d7f7
+      - name: Read existing verified temporary bundle
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: workbench-temporary-bundle-41196973340-1
+          run-id: 41196973340
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/temporary-bundle
+      - name: Build complete temporary installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $inputDir = Join-Path $env:RUNNER_TEMP 'temporary-bundle'
+          $identity = Get-Content -Raw -LiteralPath (Join-Path $inputDir 'identity.txt') | ConvertFrom-StringData
+          $zip = Join-Path $inputDir 'Mizar-1.10.2-workbench-temporary.zip'
+          if ($identity.PR_HEAD -ne '3152bc32eda533dab56add5d01a35229db47d7f7' -or $identity.UNSIGNED_TEMPORARY_BUILD -ne 'true' -or (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant() -ne $identity.SHA256) { throw 'Temporary bundle identity differs' }
+          $extract = Join-Path $env:RUNNER_TEMP 'temporary-extracted'
+          Expand-Archive -LiteralPath $zip -DestinationPath $extract
+          $source = Join-Path $extract 'Mizar-v1.10.2-Windows-x64'
+          if (!(Test-Path -LiteralPath (Join-Path $source 'Mizar.exe'))) { throw 'Temporary product missing' }
+          $compiler = Join-Path ${env:ProgramFiles(x86)} 'NSIS/makensis.exe'
+          if (!(Test-Path -LiteralPath $compiler)) {
+            choco install nsis --version=3.11 -y --no-progress
+            if ($LASTEXITCODE -ne 0) { throw 'NSIS installation failed' }
+          }
+          if ((& $compiler /VERSION | Out-String).Trim() -ne 'v3.11') { throw 'Unexpected NSIS version' }
+          function Escape-Nsis([string]$text) { $text.Replace('$', '$$').Replace('"', '$\"') }
+          $remove = Join-Path $env:RUNNER_TEMP 'temporary-remove.nsh'
+          $files = @(Get-ChildItem -LiteralPath $source -Recurse -File)
+          $lines = @($files | ForEach-Object { 'Delete "$INSTDIR\' + (Escape-Nsis ([IO.Path]::GetRelativePath($source, $_.FullName))) + '"' })
+          $lines += @(Get-ChildItem -LiteralPath $source -Recurse -Directory | Sort-Object { $_.FullName.Length } -Descending | ForEach-Object { 'RMDir "$INSTDIR\' + (Escape-Nsis ([IO.Path]::GetRelativePath($source, $_.FullName))) + '"' })
+          $lines | Set-Content -LiteralPath $remove -Encoding utf8
+          $installer = Join-Path $env:RUNNER_TEMP 'Mizar-1.10.2-workbench-temporary-Setup.exe'
+          $icon = Join-Path $env:GITHUB_WORKSPACE 'apps/desktop/src-tauri/icons/icon.ico'
+          $assets = Join-Path $env:GITHUB_WORKSPACE 'scripts/qualification/installer-assets'
+          $script = Join-Path $env:GITHUB_WORKSPACE 'scripts/qualification/windows-setup.nsi'
+          & $compiler /INPUTCHARSET UTF8 "/DPAYLOAD=$source" "/DOUTPUT=$installer" '/DVERSION=1.10.2' "/DICON=$icon" "/DINSTALLER_ASSETS=$assets" "/DREMOVE_FILES=$remove" $script
+          if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $installer)) { throw 'Temporary installer compilation failed' }
+          $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToLowerInvariant()
+          "TEMP_INSTALLER_SHA256=$digest" >> $env:GITHUB_ENV
+      - name: Publish temporary installer on GitHub
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = "temporary-workbench-$env:GITHUB_RUN_ID"
+          $installer = Join-Path $env:RUNNER_TEMP 'Mizar-1.10.2-workbench-temporary-Setup.exe'
+          $notes = Join-Path $env:RUNNER_TEMP 'temporary-notes.txt'
+          @"
+          临时现场修复，非正式版本。基于 1.10.2 原资源与工作台权限修复，CI 构建，未经正式发行签名或 Windows/CS2/OBS 实机验收。
+          使用前正常退出 Mizar 并备份 %LOCALAPPDATA%\Mizar；直播或录制进行中不要安装。
+          安装包 SHA-256: $env:TEMP_INSTALLER_SHA256
+          "@ | Set-Content -Encoding utf8 $notes
+          gh release create $tag $installer --repo Starfie1d1272/Mizar --target 3152bc32eda533dab56add5d01a35229db47d7f7 --title 'Mizar 工作台临时修复' --notes-file $notes --prerelease --latest=false
+          if ($LASTEXITCODE -ne 0) { throw 'Temporary publication failed; reconcile before retry' }
+          gh release view $tag --repo Starfie1d1272/Mizar
+          if ($LASTEXITCODE -ne 0) { throw 'Temporary publication readback failed' }
   ci-gate:
     name: ci-gate
     if: always()
