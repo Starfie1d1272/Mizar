@@ -200,8 +200,12 @@ type PreparationStatus = {
   message: string;
 };
 
+let pendingEntry: AbortController | undefined;
+let pendingStart: Promise<unknown> | undefined;
 export async function cancelProductionEntry() {
   if (!window.__TAURI_INTERNALS__) return;
+  pendingEntry?.abort();
+  await pendingStart?.catch(() => {});
   const status = await desktopInvoke<PreparationStatus | null>('preparation_status');
   if (status) await desktopInvoke('preparation_cancel', { preparationId: status.id });
 }
@@ -225,6 +229,9 @@ export async function productionAction(
     { ...state, preserveSettings, external },
     parentTask,
   );
+  const entryAbort =
+    action === 'enter' && state.mode === 'preparation' ? new AbortController() : undefined;
+  if (entryAbort) pendingEntry = entryAbort;
   try {
     if (window.__TAURI_INTERNALS__ && action === 'finish') {
       await desktopInvoke('finish_workspace', undefined, task);
@@ -235,7 +242,7 @@ export async function productionAction(
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...task.headers() },
           body: JSON.stringify({ action: 'entry-check' }),
-          signal: AbortSignal.timeout(40_000),
+          signal: AbortSignal.any([entryAbort!.signal, AbortSignal.timeout(40_000)]),
         });
         if (response.ok) {
           const updates = await response.json();
@@ -244,9 +251,9 @@ export async function productionAction(
             updates.notificationSafe &&
             (updates.notificationPending || updates.mulnxNotificationPending)
           ) {
-            const abort = new AbortController();
             const proceed = await new Promise<boolean>((resolve) => {
-              const request = { updates, signal: abort.signal, resolve, handled: false };
+              entryAbort!.signal.addEventListener('abort', () => resolve(false), { once: true });
+              const request = { updates, signal: entryAbort!.signal, resolve, handled: false };
               window.dispatchEvent(new CustomEvent('mizar:entry-update', { detail: request }));
               if (!request.handled) resolve(false);
             });
@@ -257,24 +264,39 @@ export async function productionAction(
           }
         }
       } catch {
+        if (entryAbort?.signal.aborted) {
+          task.finish('cancelled', { reason: 'entry_cancelled' });
+          return task.result;
+        }
         /* Update checks do not block a local installation. */
       } finally {
         onChecking?.(false);
       }
+      if (entryAbort?.signal.aborted) {
+        task.finish('cancelled', { reason: 'entry_cancelled' });
+        return task.result;
+      }
       const response = await fetch('/local/v1/demo-test', {
         cache: 'no-store',
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.any([entryAbort!.signal, AbortSignal.timeout(5000)]),
       });
       if (!response.ok) throw new Error('试播状态未确认，请检查本地服务后重试。');
       const trial = (await response.json()) as DemoTestView;
       if (trial.active) {
         if (external) throw new Error('请先结束 Demo 试播，再选择外部游戏。');
-        if (!trial.requestId || !(await enterDemoTest(trial.requestId, task))) {
+        if (
+          !trial.requestId ||
+          !(await enterDemoTest(trial.requestId, task, () => true, entryAbort?.signal))
+        ) {
           task.finish('cancelled', { reason: 'demo_entry_changed' });
           return task.result;
         }
       } else {
-        await desktopInvoke(
+        if (entryAbort?.signal.aborted) {
+          task.finish('cancelled', { reason: 'entry_cancelled' });
+          return task.result;
+        }
+        const start = desktopInvoke(
           'preparation_start',
           {
             preparationId: crypto.randomUUID(),
@@ -285,6 +307,12 @@ export async function productionAction(
           },
           task,
         );
+        pendingStart = start;
+        try {
+          await start;
+        } finally {
+          if (pendingStart === start) pendingStart = undefined;
+        }
       }
     } else {
       if (
@@ -314,7 +342,13 @@ export async function productionAction(
     });
     return task.result;
   } catch (error) {
+    if (entryAbort?.signal.aborted) {
+      task.finish('cancelled', { reason: 'entry_cancelled' });
+      return task.result;
+    }
     task.fail(error);
     throw error;
+  } finally {
+    if (pendingEntry === entryAbort) pendingEntry = undefined;
   }
 }
