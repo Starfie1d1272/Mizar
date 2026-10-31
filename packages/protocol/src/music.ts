@@ -86,6 +86,7 @@ export function defaultMusicConfig(): MusicConfig {
 }
 export interface MusicStatus {
   held: boolean;
+  stingerHeld?: boolean;
   connection: 'idle' | 'connected' | 'unavailable';
   message: string | null;
   bgm: { group: MusicGroup; track: string; volume: number; playbackId: string } | null;
