@@ -113,6 +113,281 @@ pub struct SessionStore {
     root: PathBuf,
 }
 impl SessionStore {
+    pub(crate) fn pending_source_retire(&self) -> Result<Option<Value>, String> {
+        match fs::read(self.root.join("gsi-source-retire.json")) {
+            Ok(bytes) if bytes.len() <= 4096 => serde_json::from_slice(&bytes)
+                .map(Some)
+                .map_err(|_| "受管来源退出记录无效。".into()),
+            Ok(_) => Err("受管来源退出记录无效。".into()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(_) => Err("受管来源退出记录不可读。".into()),
+        }
+    }
+
+    pub(crate) fn remember_source_retire(&self, record: &Value) -> Result<(), String> {
+        if let Some(previous) = self.pending_source_retire()? {
+            if previous["sourceId"] != record["sourceId"] {
+                return Err("已有其他受管来源退出待处理。".into());
+            }
+            if previous["ticket"].is_string() {
+                if record["ticket"].is_null() {
+                    return Ok(());
+                }
+                if previous["ticket"] != record["ticket"]
+                    && previous["runtimeInstanceId"] == record["runtimeInstanceId"]
+                {
+                    return Err("受管来源退出资格已变化。".into());
+                }
+            }
+        }
+        atomic_write(
+            &self.root.join("gsi-source-retire.json"),
+            &serde_json::to_vec(record).map_err(|_| "受管来源退出记录无法保存。")?,
+        )
+    }
+
+    pub(crate) fn clear_source_retire(&self) -> Result<(), String> {
+        match fs::remove_file(self.root.join("gsi-source-retire.json")) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(_) => Err("受管来源退出记录无法移除。".into()),
+        }
+    }
+
+    fn validate_gsi_token(&self, installation: &Value) -> Result<(), String> {
+        let token = installation["gsiToken"]
+            .as_str()
+            .filter(|value| value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit()))
+            .ok_or("GSI 安装记录无效。")?;
+        if installation["schemaVersion"] != 1 {
+            return Err("GSI 安装记录无效。".into());
+        }
+        let path = self
+            .root
+            .parent()
+            .ok_or("来源配置路径无效。")?
+            .join("gsi-token.txt");
+        let recorded = fs::read(&path).map_err(|_| "GSI 安装记录不可用。")?;
+        if recorded.len() > 256 || std::str::from_utf8(&recorded).ok().map(str::trim) != Some(token)
+        {
+            return Err("GSI 安装记录不一致。".into());
+        }
+        Ok(())
+    }
+
+    /// Only a missing installation record and a missing owned sender together
+    /// establish that this installation has no managed GSI configuration.
+    pub(crate) fn gsi_is_uninstalled(&self, journal: &Value) -> Result<bool, String> {
+        fn missing(path: &Path) -> Result<bool, String> {
+            match fs::symlink_metadata(path) {
+                Ok(_) => Ok(false),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+                Err(_) => Err("GSI 配置状态不可读取。".into()),
+            }
+        }
+        let executable = Path::new(journal["executable"].as_str().ok_or("游戏路径缺失。")?);
+        let game = executable.ancestors().nth(3).ok_or("游戏路径无效。")?;
+        fs::canonicalize(game).map_err(|_| "游戏安装位置无法确认。")?;
+        let state = self
+            .root
+            .parent()
+            .ok_or("来源配置路径无效。")?
+            .join("gsi-install/install.json");
+        let sender = game.join("csgo/cfg/gamestate_integration_mizar.cfg");
+        Ok(missing(&state)? && missing(&sender)?)
+    }
+
+    pub(crate) fn pending_source_cancel(&self) -> Result<Option<Value>, String> {
+        match fs::read(self.root.join("gsi-source-cancel.json")) {
+            Ok(bytes) if bytes.len() <= 4096 => serde_json::from_slice(&bytes)
+                .map(Some)
+                .map_err(|_| "受管来源清理记录无效。".into()),
+            Ok(_) => Err("受管来源清理记录无效。".into()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(_) => Err("受管来源清理记录不可读。".into()),
+        }
+    }
+
+    pub(crate) fn remember_source_cancel(&self, request: &Value) -> Result<(), String> {
+        if let Some(previous) = self.pending_source_cancel()? {
+            if previous != *request {
+                return Err("已有受管来源清理待处理。".into());
+            }
+            return Ok(());
+        }
+        atomic_write(
+            &self.root.join("gsi-source-cancel.json"),
+            &serde_json::to_vec(request).map_err(|_| "受管来源清理记录无法保存。")?,
+        )
+    }
+
+    pub(crate) fn clear_source_cancel(&self) -> Result<(), String> {
+        match fs::remove_file(self.root.join("gsi-source-cancel.json")) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(_) => Err("受管来源清理记录无法移除。".into()),
+        }
+    }
+
+    /// Add one per-launch source marker to the owned GSI sender. The durable
+    /// session journal precedes both mutations so recovery can restore either
+    /// side of an interrupted config/installation-record update.
+    pub(crate) fn prepare_gsi_source(
+        &self,
+        journal: &mut Value,
+        ticket: &str,
+        source_id: &str,
+        uri: &str,
+    ) -> Result<(), String> {
+        use sha2::{Digest, Sha256};
+        if source_id.len() != 36
+            || !source_id
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() || b == b'-')
+            || uri != format!("http://127.0.0.1:3000/gsi?source={source_id}")
+        {
+            return Err("受管游戏来源响应无效。".into());
+        }
+        let state_path = self
+            .root
+            .parent()
+            .ok_or("来源配置路径无效。")?
+            .join("gsi-install/install.json");
+        let installation_bytes = fs::read(&state_path).map_err(|_| "GSI 安装记录不可用。")?;
+        let mut installation: Value =
+            serde_json::from_slice(&installation_bytes).map_err(|_| "GSI 安装记录不可用。")?;
+        self.validate_gsi_token(&installation)?;
+        let cfg = PathBuf::from(
+            installation["cfgPath"]
+                .as_str()
+                .ok_or("GSI 配置路径缺失。")?,
+        );
+        if cfg.file_name().and_then(|x| x.to_str()) != Some("gamestate_integration_mizar.cfg") {
+            return Err("GSI 配置路径无效。".into());
+        }
+        let executable = Path::new(journal["executable"].as_str().ok_or("游戏路径缺失。")?);
+        let game = executable.ancestors().nth(3).ok_or("游戏路径无效。")?;
+        let expected_cfg = game.join("csgo/cfg/gamestate_integration_mizar.cfg");
+        if fs::canonicalize(&cfg).ok() != fs::canonicalize(&expected_cfg).ok()
+            || fs::canonicalize(&cfg).is_err()
+        {
+            return Err("GSI 配置不属于本次游戏安装。".into());
+        }
+        let original = fs::read(&cfg).map_err(|_| "GSI 配置不可读。")?;
+        if original.len() > 64 * 1024
+            || format!("{:x}", Sha256::digest(&original))
+                != installation["cfgFingerprint"].as_str().unwrap_or("")
+        {
+            return Err("GSI 配置已变化，未修改。".into());
+        }
+        let text = std::str::from_utf8(&original).map_err(|_| "GSI 配置不可读。")?;
+        let token = installation["gsiToken"]
+            .as_str()
+            .ok_or("GSI 安装记录无效。")?;
+        if text.matches(&format!("\"{token}\"")).count() != 1 {
+            return Err("GSI 配置与安装记录不一致。".into());
+        }
+        let old_uri = "http://127.0.0.1:3000/gsi";
+        if text.matches(old_uri).count() != 1 || text.contains("/gsi?source=") {
+            return Err("GSI 配置不支持受管来源，请先恢复。".into());
+        }
+        let applied = text.replacen(old_uri, uri, 1);
+        let original_hash = format!("{:x}", Sha256::digest(&original));
+        let applied_hash = format!("{:x}", Sha256::digest(applied.as_bytes()));
+        let backup = self.root.join("gsi-source-original.cfg");
+        atomic_write(&backup, &original)?;
+        journal["gsiSource"] = json!({"ticket":ticket,"sourceId":source_id,"cfgPath":cfg,"originalHash":original_hash,"appliedHash":applied_hash});
+        self.save(journal)?;
+        unchanged(&cfg, &original)?;
+        atomic_write(&cfg, applied.as_bytes())?;
+        unchanged(&state_path, &installation_bytes)?;
+        installation["cfgFingerprint"] = json!(applied_hash);
+        atomic_write(
+            &state_path,
+            &serde_json::to_vec_pretty(&installation).map_err(|_| "GSI 安装记录无法保存。")?,
+        )?;
+        Ok(())
+    }
+
+    /// Called only after the managed game has been confirmed stopped.
+    pub(crate) fn restore_gsi_source(&self, journal: &mut Value) -> Result<(), String> {
+        use sha2::{Digest, Sha256};
+        if journal["gsiSource"].is_null() {
+            return Ok(());
+        }
+        let source = &journal["gsiSource"];
+        let original_hash = source["originalHash"]
+            .as_str()
+            .ok_or("GSI 恢复记录无效。")?;
+        let applied_hash = source["appliedHash"].as_str().ok_or("GSI 恢复记录无效。")?;
+        let cfg = PathBuf::from(source["cfgPath"].as_str().ok_or("GSI 恢复记录无效。")?);
+        let state_path = self
+            .root
+            .parent()
+            .ok_or("来源配置路径无效。")?
+            .join("gsi-install/install.json");
+        let installation_bytes = fs::read(&state_path).map_err(|_| "GSI 安装记录不可用。")?;
+        let mut installation: Value =
+            serde_json::from_slice(&installation_bytes).map_err(|_| "GSI 安装记录不可用。")?;
+        if installation["cfgPath"].as_str() != cfg.to_str() {
+            return Err("GSI 恢复目标已变化。".into());
+        }
+        let backup = self.root.join("gsi-source-original.cfg");
+        let original = fs::read(&backup).map_err(|_| "GSI 原配置备份不可读。")?;
+        let current = fs::read(&cfg).map_err(|_| "GSI 配置不可读。")?;
+        let current_hash = format!("{:x}", Sha256::digest(&current));
+        let recorded_hash = installation["cfgFingerprint"].as_str().unwrap_or("");
+        if format!("{:x}", Sha256::digest(&original)) != original_hash
+            || (current_hash != original_hash && current_hash != applied_hash)
+            || (recorded_hash != original_hash && recorded_hash != applied_hash)
+        {
+            return Err("GSI 配置已变化，原备份仍保留。".into());
+        }
+        if current_hash != original_hash {
+            atomic_write(&cfg, &original)?;
+        }
+        unchanged(&state_path, &installation_bytes)?;
+        installation["cfgFingerprint"] = json!(original_hash);
+        atomic_write(
+            &state_path,
+            &serde_json::to_vec_pretty(&installation).map_err(|_| "GSI 安装记录无法保存。")?,
+        )?;
+        journal
+            .as_object_mut()
+            .ok_or("GSI 恢复记录无效。")?
+            .remove("gsiSource");
+        self.save(journal)?;
+        fs::remove_file(backup).map_err(|_| "GSI 备份清理失败。")?;
+        Ok(())
+    }
+
+    pub(crate) fn verify_gsi_source(&self, journal: &Value) -> Result<(), String> {
+        use sha2::{Digest, Sha256};
+        let source = &journal["gsiSource"];
+        let source_id = source["sourceId"].as_str().ok_or("受管来源记录无效。")?;
+        let cfg = PathBuf::from(source["cfgPath"].as_str().ok_or("受管来源记录无效。")?);
+        let applied_hash = source["appliedHash"].as_str().ok_or("受管来源记录无效。")?;
+        let state_path = self
+            .root
+            .parent()
+            .ok_or("来源配置路径无效。")?
+            .join("gsi-install/install.json");
+        let installation: Value =
+            serde_json::from_slice(&fs::read(state_path).map_err(|_| "GSI 安装记录不可用。")?)
+                .map_err(|_| "GSI 安装记录不可用。")?;
+        self.validate_gsi_token(&installation)?;
+        let bytes = fs::read(&cfg).map_err(|_| "GSI 配置不可读。")?;
+        if installation["cfgPath"].as_str() != cfg.to_str()
+            || installation["cfgFingerprint"].as_str() != Some(applied_hash)
+            || format!("{:x}", Sha256::digest(&bytes)) != applied_hash
+            || !std::str::from_utf8(&bytes)
+                .map_err(|_| "GSI 配置不可读。")?
+                .contains(&format!("http://127.0.0.1:3000/gsi?source={source_id}"))
+        {
+            return Err("受管 GSI 配置已变化。".into());
+        }
+        Ok(())
+    }
     pub fn new(root: PathBuf) -> Self {
         Self {
             root: root.join("data/cs2-session"),

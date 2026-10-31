@@ -38,6 +38,9 @@ export interface OutputServiceOptions {
   readonly authorityScope?: () => string | null;
   readonly exactSource?: () => ExactSource | undefined;
   readonly isActiveOnlineBinding?: (binding: MatchContextBinding) => boolean;
+  readonly isExecutionOwnedBy?: (binding: MatchContextBinding) => boolean;
+  readonly executionOwnerMatchId?: (runtimeSeq: number) => string | undefined;
+  readonly managedSourceId?: () => string | undefined;
   readonly onDiagnostic?: (code: string) => void;
   readonly onBusinessEvidence?: (stage: string, evidence: unknown) => void;
   readonly onRecoveryProgress?: (
@@ -432,7 +435,8 @@ export class OutputService {
         id: 'cloud-live',
         send: (snapshot) => {
           const current = this.current(true);
-          return this.getBoundaryStatus() === null &&
+          return this.executionEligible(this.binding) &&
+            this.getBoundaryStatus() === null &&
             current !== null &&
             current.cursor.liveSessionId === snapshot.cursor.liveSessionId
             ? this.options.liveSink!.send(current)
@@ -464,6 +468,10 @@ export class OutputService {
     this.binding = binding;
   }
 
+  private executionEligible(binding: MatchContextBinding | undefined): boolean {
+    return binding !== undefined && (this.options.isExecutionOwnedBy?.(binding) ?? true);
+  }
+
   setCurrent(bundle: ProjectionBundle, binding: MatchContextBinding | undefined): void {
     if (this.closed) return;
     this.bundle = bundle;
@@ -476,6 +484,7 @@ export class OutputService {
     const players = bundle.program.players.filter((p) => p.lineupEvidence === 'current');
     if (
       scope &&
+      this.executionEligible(binding) &&
       bundle.program.status.context === 'fresh' &&
       bundle.program.status.telemetry === 'fresh' &&
       bundle.program.status.identity === 'matched' &&
@@ -647,6 +656,40 @@ export class OutputService {
       return;
     }
     const cursor = bundle.program.cursor;
+    if (binding && !this.executionEligible(binding)) {
+      if (
+        this.outbox &&
+        (result.disposition.reason === 'source-generation-advanced' ||
+          result.transitions.some((transition) => transition.kind === 'map_execution_changed'))
+      ) {
+        const priorScope = this.boundaryScope(
+          this.options.executionOwnerMatchId?.(cursor.runtimeSeq),
+          cursor,
+        );
+        // Current binding authority may belong to a different match than this execution.
+        let scope: BoundaryScope | undefined;
+        if (priorScope) {
+          const { authorityFingerprint, ...rest } = priorScope;
+          void authorityFingerprint;
+          scope = rest;
+        }
+        const key = this.boundaryScopeKey(scope);
+        this.boundaryCommits.set(key, (this.boundaryCommits.get(key) ?? 0) + 1);
+        void this.outbox
+          .captureBoundaries([], [], undefined, true, this.now(), scope)
+          .then(() => this.onDiagnostic?.('outbox_boundary_gap'))
+          .catch(() => {
+            this.quarantined = true;
+            this.onDiagnostic?.('outbox_boundary_capture_failed');
+          })
+          .finally(() => {
+            const remaining = (this.boundaryCommits.get(key) ?? 1) - 1;
+            if (remaining) this.boundaryCommits.set(key, remaining);
+            else this.boundaryCommits.delete(key);
+          });
+      }
+      return;
+    }
     if (
       binding &&
       cursor.liveSessionId &&
@@ -656,6 +699,7 @@ export class OutputService {
     )
       return;
 
+    const managedSourceId = this.options.managedSourceId?.();
     const continuity: DeliveryContinuity | undefined =
       binding === undefined
         ? undefined
@@ -665,6 +709,7 @@ export class OutputService {
             cursor: bundle.program.cursor,
             mapName: result.state.map.name ?? null,
             savedAt: now,
+            ...(managedSourceId ? { managedSourceId } : {}),
           };
     const transitions = result.transitions.filter(
       (transition) => transition.kind === 'map_execution_changed',
@@ -1256,6 +1301,8 @@ export class OutputService {
 
   private canSend(event: ReliableEventV1, lineup?: readonly string[]): boolean {
     const bundle = this.bundle;
+    if (this.binding?.context.matchId === event.matchId && !this.executionEligible(this.binding))
+      return false;
     const recorded = this.outbox
       ?.getRecords()
       .find((record) => record.event.idempotencyKey === event.idempotencyKey);

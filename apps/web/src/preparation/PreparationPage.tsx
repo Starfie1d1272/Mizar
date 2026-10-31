@@ -29,6 +29,7 @@ import {
   openTool,
   productionAction,
   retryObsExit,
+  enterProductionManually,
   useLocalRead,
   type Production,
 } from './client';
@@ -308,7 +309,22 @@ export function PreparationPage() {
           </Button>
         </header>
         {production?.mode === 'preparation' ? (
-          <p>启动时自动准备游戏和 OBS；如已有 CS2，将正常关闭后重新启动。</p>
+          <>
+            <p>启动时自动准备游戏和 OBS；如已有 CS2，将正常关闭后重新启动。</p>
+            {window.__TAURI_INTERNALS__ ? (
+              <Button
+                disabled={busy || entering || Boolean(exit?.busy)}
+                onClick={() =>
+                  void action(async () => {
+                    await enterProductionManually(production);
+                  })
+                }
+              >
+                手动进入工作台
+              </Button>
+            ) : null}
+            {window.__TAURI_INTERNALS__ ? <p>手动进入不会自动启动游戏或配置 OBS。</p> : null}
+          </>
         ) : null}
         {entering ? <Button onClick={cancelProductionEntry}>取消进入</Button> : null}
         {path === '/' && production?.mode === 'preparation' && window.__TAURI_INTERNALS__ ? (
@@ -768,8 +784,15 @@ export function PreparationPage() {
                 contextRevision={view?.contextRevision}
               />
             ) : null}
-            {tab === 'details' && production && production.mode !== 'preparation' ? (
-              <details>
+            {tab === 'details' && match ? (
+              <details
+                id="series-binding"
+                open={
+                  window.location.hash === '#series-binding' ||
+                  query.get('tab') === 'maps' ||
+                  undefined
+                }
+              >
                 <summary>现场地图对应（异常时处理）</summary>
                 <SeriesBindingControls />
               </details>

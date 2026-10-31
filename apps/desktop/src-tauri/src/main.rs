@@ -2671,6 +2671,7 @@ fn main_path_allowed(path: &str) -> bool {
         "/matches?tab=roster",
         "/matches?tab=maps",
         "/matches#match-bp",
+        "/matches#series-binding",
         "/picture",
         "/picture?tab=overlay",
         "/settings",

@@ -75,6 +75,7 @@ import { MatchContextController, MatchManifestLkgStore } from './match-context/i
 import { LocalTournamentStore } from './match-context/local-tournament-store.js';
 import { registerLocalTournamentRoutes } from './match-context/local-tournament-routes.js';
 import { registerLocalMatchExitRoutes } from './match-context/local-match-exit.js';
+import { registerManagedSourceRoutes } from './match-context/managed-source.js';
 import { registerLocalAssetRoutes } from './match-context/local-assets.js';
 import { dirname, join } from 'node:path';
 import { toMatchDocumentV1 } from '@mizar/rivalhub';
@@ -373,9 +374,14 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       programRuntime.restoreDeliveryContinuity({
         ...checkpoint.cursor,
         mapName: checkpoint.mapName,
+        ...(checkpoint.managedSourceId ? { managedSourceId: checkpoint.managedSourceId } : {}),
       });
       return projectionCoordinator.refresh();
     },
+    isExecutionOwnedBy: (binding) =>
+      programRuntime.isExecutionOwnedBy(binding.context.matchId, binding.origin),
+    executionOwnerMatchId: (runtimeSeq) => programRuntime.getExecutionOwnerMatchId(runtimeSeq),
+    managedSourceId: () => programRuntime.getManagedSourceId(),
     isActiveOnlineBinding: (binding) =>
       matchContextController !== null &&
       matchContextController.getActiveBinding() === binding &&
@@ -1009,13 +1015,17 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   const dispatchObservation = (
     observation: TelemetryObservation,
     sampleStageBinding?: { mapOrder: number },
-  ): void => {
+    managedBoundary?: NonNullable<ReturnType<ProgramRuntime['activateManagedSource']>>['boundary'],
+    managedSourceId?: string,
+    managedActivation = false,
+  ): boolean => {
     const processingStarted = performance.now();
     latestInput = observation.receive;
     try {
       const source = programRuntime.getCurrentState().programSource;
       const lastAccepted = source.lastAccepted;
       if (
+        !managedActivation &&
         lastAccepted !== undefined &&
         observation.receive.receivedMonotonicMs - lastAccepted.receivedMonotonicMs >
           programRuntime.getSnapshot().continuityPolicy.staleAfterMs
@@ -1030,7 +1040,18 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         programCueCoordinator.afterRuntimeMutation(changed);
       }
       outputService.beforeRuntimeMutation();
-      const result = programRuntime.acceptObservation(observation);
+      const accepted = programRuntime.acceptObservation(observation);
+      if (
+        managedSourceId &&
+        !managedActivation &&
+        !managedSource.sourceMatchesSelection(managedSourceId) &&
+        accepted.transitions.some((transition) => transition.kind === 'map_execution_changed')
+      )
+        programRuntime.markUnverifiedNewExecution();
+      const result =
+        managedBoundary && accepted.disposition.kind === 'accepted'
+          ? { ...accepted, transitions: [...managedBoundary.transitions, ...accepted.transitions] }
+          : accepted;
       if (result.disposition.kind === 'ignored')
         performanceContext?.trigger('observation_ignored', {
           receive: observation.receive,
@@ -1049,6 +1070,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       debugEvidenceStore.recordNormalizedObservation(observation);
       debugEvidenceStore.recordRuntime(programRuntime.getSnapshot());
       demoTest?.observationAccepted();
+      return accepted.disposition.kind === 'accepted';
     } catch (error) {
       sessionJournal?.record('observation_failure', { error, receive: observation.receive });
       performanceContext?.trigger('observation_failure', {
@@ -1224,6 +1246,13 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           isPreparation: () => production.get().mode === 'preparation',
           productionSession: production.sessionId,
         });
+  const managedSource = registerManagedSourceRoutes(app, {
+    controlToken: options.productRuntime?.controlToken,
+    loopback: localWebTransport.getOriginPolicy().mode === 'loopback',
+    controller: matchContextController,
+    runtime: programRuntime,
+    productionSession: production.sessionId,
+  });
   if (localTournamentStore !== null && matchContextController !== null) {
     registerLocalTournamentRoutes(app, {
       store: localTournamentStore,
@@ -2249,8 +2278,15 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   });
 
   if (options.gsiToken !== undefined) {
+    let pendingManagedBoundary:
+      | {
+          sourceId: string;
+          result: NonNullable<ReturnType<ProgramRuntime['activateManagedSource']>>;
+        }
+      | undefined;
     registerGsiIngress(app, {
       gsiToken: options.gsiToken,
+      classifySource: (sourceId) => managedSource.classify(sourceId),
       canAccept: () => demoTest?.canAcceptGsi() ?? true,
       canRecord: () => demoTest?.get().active !== true,
       recorder: currentRecorder,
@@ -2292,8 +2328,39 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         options.onAcceptedRaw?.(input);
       },
       ...(options.clock === undefined ? {} : { clock: options.clock }),
-      onObservation: (observation) => {
-        dispatchObservation(observation);
+      onObservation: (observation, sourceId) => {
+        if (
+          (sourceId &&
+            !managedSource.sourceMatchesSelection(sourceId) &&
+            (!outputBinding ||
+              !programRuntime.isExplicitSourceOwner(sourceId, outputBinding.context.matchId))) ||
+          (!sourceId && managedSource.unverifiedExternal())
+        )
+          programRuntime.markSourceUnverified();
+        if (pendingManagedBoundary && pendingManagedBoundary.sourceId !== sourceId)
+          pendingManagedBoundary = undefined;
+        const owner = managedSource.ownerForFirstObservation(sourceId);
+        if (owner && sourceId && observation.telemetry.map?.name && !pendingManagedBoundary) {
+          const activation = programRuntime.activateManagedSource(
+            owner.matchId,
+            sourceId,
+            observation,
+          );
+          if (activation) pendingManagedBoundary = { sourceId, result: activation };
+        }
+        const boundary =
+          pendingManagedBoundary && pendingManagedBoundary.sourceId === sourceId
+            ? pendingManagedBoundary.result.boundary
+            : undefined;
+        const activating = Boolean(sourceId && pendingManagedBoundary?.sourceId === sourceId);
+        if (
+          dispatchObservation(observation, undefined, boundary, sourceId, activating) &&
+          activating &&
+          sourceId
+        ) {
+          managedSource.confirmFirstObservation(sourceId);
+          pendingManagedBoundary = undefined;
+        }
         options.onObservation?.(observation);
       },
       onGsiDiagnostics: (diagnostics) => {
@@ -2413,6 +2480,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         ? {
             contextRevision: matchContextController.getActiveRevision(),
             operator: projectionCoordinator.getCurrent().operator,
+            ownership: programRuntime.getExecutionOwnership(
+              matchContextController.getActiveBinding()!.context.matchId,
+            ),
           }
         : null,
   });

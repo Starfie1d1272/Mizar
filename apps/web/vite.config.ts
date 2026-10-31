@@ -392,6 +392,7 @@ export default defineConfig({
       '/operator/program-director': 'http://127.0.0.1:3000',
       '/operator/rivals-rehearsal/': 'http://127.0.0.1:3000',
       '/operator/production': 'http://127.0.0.1:3000',
+      '/operator/preparation-cancel': 'http://127.0.0.1:3000',
       '/operator/desktop-overlay': 'http://127.0.0.1:3000',
       '/operator/hud-config': 'http://127.0.0.1:3000',
       '/operator/broadcast-presets': 'http://127.0.0.1:3000',
