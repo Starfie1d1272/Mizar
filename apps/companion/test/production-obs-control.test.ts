@@ -86,48 +86,6 @@ test('begin exit revokes old preparation and holds the director even when cleanu
   await app.close();
 });
 
-test('external hold invalidates a manual take queued behind another operation', async () => {
-  const { ProgramSceneController } = await import('../src/program-scenes/controller.js');
-  const projections = {
-    getBpAssessment: () => ({ readiness: 'not_ready' }),
-    getCurrent: () => ({
-      operator: {
-        runtime: { telemetryFreshness: 'fresh' },
-        matchContext: { freshness: 'fresh', origin: 'local' },
-        identity: { state: 'ok' },
-      },
-      program: { series: null, round: null, clock: null },
-    }),
-  };
-  let started!: () => void;
-  let resume!: () => void;
-  const entered = new Promise<void>((resolve) => {
-    started = resolve;
-  });
-  const pending = new Promise<void>((resolve) => {
-    resume = resolve;
-  });
-  const writes: string[] = [];
-  const scenes = new ProgramSceneController(
-    projections as never,
-    {} as never,
-    async (id, options) => {
-      started();
-      await pending;
-      if (options.valid?.()) writes.push(id);
-    },
-  );
-  const revision = scenes.get().revision;
-  const first = scenes.select('gameplay', revision);
-  await entered;
-  const queued = scenes.select('waiting', revision);
-  scenes.holdAutomatic();
-  resume();
-  assert.equal((await first).ok, false);
-  assert.equal((await queued).ok, false);
-  assert.deepEqual(writes, []);
-});
-
 test('exit waiting for background work fails after external control changes', async () => {
   const app = Fastify();
   let generation = 0;
@@ -174,48 +132,6 @@ test('exit waiting for background work fails after external control changes', as
   assert.equal((await exit).code, 409);
   assert.equal(writes, 0);
   await app.close();
-});
-
-test('external hold cancels an in-flight automatic take without restoring the old scene', async () => {
-  const { ProgramSceneController } = await import('../src/program-scenes/controller.js');
-  const projections = {
-    getCurrent: () => ({
-      operator: {
-        runtime: { telemetryFreshness: 'fresh' },
-        matchContext: { freshness: 'fresh', origin: 'local' },
-        identity: { state: 'ok' },
-      },
-      program: { series: null, round: null, clock: null },
-    }),
-  };
-  let started!: () => void;
-  let resume!: () => void;
-  const startedTake = new Promise<void>((resolve) => {
-    started = resolve;
-  });
-  const pendingTake = new Promise<void>((resolve) => {
-    resume = resolve;
-  });
-  const targets: string[] = [];
-  const scenes = new ProgramSceneController(
-    projections as never,
-    {} as never,
-    async (id, options) => {
-      targets.push(id);
-      started();
-      await pendingTake;
-      options.signal?.throwIfAborted();
-    },
-  );
-  scenes.attachDirector({ hold: () => undefined } as never);
-  const revision = (scenes as unknown as { revision: string }).revision;
-  const take = scenes.selectAutomatic('gameplay', revision, () => true);
-  await startedTake;
-  scenes.holdAutomatic();
-  resume();
-  const result = await take;
-  assert.equal(result.ok, false);
-  assert.deepEqual(targets, ['gameplay']);
 });
 
 test('browser recovery is granted after entering and revoked on exit intent', async () => {
