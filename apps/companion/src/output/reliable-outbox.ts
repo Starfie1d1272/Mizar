@@ -96,6 +96,10 @@ export interface ReliableOutboxRecord {
   readonly event: ReliableEventV1;
   readonly lineupSteam64?: readonly string[];
   readonly rejection?: ReliableRejection;
+  readonly boundaryQualification?: {
+    readonly planFingerprint: string;
+    readonly authorityFingerprint: string;
+  };
   readonly receiverOutcome?: 'needs_attention';
   readonly recoveryBoundaryKey?: string;
   readonly recoveryState?:
@@ -136,9 +140,17 @@ export interface DeliveryContinuity {
   readonly savedAt: string;
 }
 
+export interface BoundaryIntent {
+  readonly event: ReliableEventV1;
+  readonly planFingerprint: string;
+  readonly authorityFingerprint: string;
+}
+
 interface OutboxFile {
   readonly version: typeof RELIABLE_OUTBOX_VERSION;
   readonly records: readonly ReliableOutboxRecord[];
+  readonly boundaryIntents?: readonly BoundaryIntent[];
+  readonly boundaryGap?: true;
   readonly continuity?: DeliveryContinuity;
   readonly commit?: { readonly id: string; readonly sha256: string };
   readonly unconfirmedRecovery?: true;
@@ -195,11 +207,35 @@ function parseRecord(input: unknown): ReliableOutboxRecord {
       !['generation_fence', 'epoch_fence'].includes(rejection?.reason ?? ''))
   )
     throw new Error('outbox_recovery_boundary_invalid');
+  let boundaryQualification: ReliableOutboxRecord['boundaryQualification'];
+  if (item.boundaryQualification !== undefined) {
+    if (
+      !item.boundaryQualification ||
+      typeof item.boundaryQualification !== 'object' ||
+      Array.isArray(item.boundaryQualification)
+    )
+      throw new Error('boundary_qualification_invalid');
+    const q = item.boundaryQualification as Record<string, unknown>;
+    if (
+      typeof q.planFingerprint !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(q.planFingerprint) ||
+      typeof q.authorityFingerprint !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(q.authorityFingerprint)
+    )
+      throw new Error('boundary_qualification_invalid');
+    boundaryQualification = {
+      planFingerprint: q.planFingerprint,
+      authorityFingerprint: q.authorityFingerprint,
+    };
+  }
   const event = parseReliableEventV1(item.event);
+  if (boundaryQualification && (!isContinuityBoundary(event) || event.evidence.contextFresh))
+    throw new Error('boundary_qualification_invalid');
   if (item.lineupSteam64 !== undefined && event.kind !== 'map_started')
     throw new Error('outbox_lineup_invalid');
   return {
     event,
+    ...(boundaryQualification ? { boundaryQualification } : {}),
     ...(rejection === undefined ? {} : { rejection }),
     ...(typeof item.recoveryBoundaryKey === 'string'
       ? { recoveryBoundaryKey: item.recoveryBoundaryKey }
@@ -233,6 +269,8 @@ function payloadDigest(value: Record<string, unknown> | OutboxFile): string {
     .update(
       JSON.stringify({
         records: value.records,
+        boundaryIntents: value.boundaryIntents,
+        boundaryGap: value.boundaryGap,
         continuity: value.continuity,
         unconfirmedRecovery: value.unconfirmedRecovery,
       }),
@@ -264,18 +302,52 @@ function parseOutbox(bytes: Buffer): OutboxFile {
     ![RELIABLE_OUTBOX_VERSION, 'mizar.reliable-outbox.v1'].includes(value.version as string) ||
     !Array.isArray(value.records) ||
     value.records.length > RELIABLE_OUTBOX_MAX_RECORDS ||
-    (value.unconfirmedRecovery !== undefined && value.unconfirmedRecovery !== true)
+    (value.unconfirmedRecovery !== undefined && value.unconfirmedRecovery !== true) ||
+    (value.boundaryGap !== undefined && value.boundaryGap !== true) ||
+    (value.boundaryIntents !== undefined &&
+      (!Array.isArray(value.boundaryIntents) ||
+        value.boundaryIntents.length > RELIABLE_OUTBOX_MAX_PENDING))
   )
     throw new Error('outbox_invalid');
   if (
     value.version === 'mizar.reliable-outbox.v1' &&
-    (value.commit !== undefined || value.unconfirmedRecovery !== undefined)
+    (value.commit !== undefined ||
+      value.unconfirmedRecovery !== undefined ||
+      value.boundaryIntents !== undefined ||
+      value.boundaryGap !== undefined)
   )
     throw new Error('outbox_legacy_metadata_invalid');
   const commit = value.version === RELIABLE_OUTBOX_VERSION ? parseCommit(value.commit) : undefined;
   if (commit !== undefined && commit.sha256 !== payloadDigest(value))
     throw new Error('outbox_checksum_mismatch');
   const records = value.records.map(parseRecord);
+  const boundaryIntents = (value.boundaryIntents as unknown[] | undefined)?.map(
+    (raw): BoundaryIntent => {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw))
+        throw new Error('boundary_intent_invalid');
+      const item = raw as Record<string, unknown>;
+      if (
+        typeof item.planFingerprint !== 'string' ||
+        !/^[a-f0-9]{64}$/.test(item.planFingerprint) ||
+        typeof item.authorityFingerprint !== 'string' ||
+        !/^[a-f0-9]{64}$/.test(item.authorityFingerprint)
+      )
+        throw new Error('boundary_intent_invalid');
+      const event = parseReliableEventV1(item.event);
+      if (
+        !isContinuityBoundary(event) ||
+        event.evidence.contextFresh ||
+        !event.cursor.liveSessionId
+      )
+        throw new Error('boundary_intent_invalid');
+      return {
+        event,
+        planFingerprint: item.planFingerprint,
+        authorityFingerprint: item.authorityFingerprint,
+      };
+    },
+  );
+
   let continuity: DeliveryContinuity | undefined;
   if (value.continuity !== undefined) {
     const checkpoint = value.continuity as DeliveryContinuity;
@@ -285,7 +357,7 @@ function parseOutbox(bytes: Buffer): OutboxFile {
       Object.keys(checkpoint).sort().join(',') !== 'contextRevision,cursor,mapName,matchId,savedAt'
     )
       throw new Error('outbox_continuity_invalid');
-    const reference = records.at(-1)?.event;
+    const reference = records.at(-1)?.event ?? boundaryIntents?.at(-1)?.event;
     if (reference === undefined || !Number.isFinite(Date.parse(checkpoint.savedAt)))
       throw new Error('outbox_continuity_invalid');
     parseReliableEventV1({
@@ -301,6 +373,8 @@ function parseOutbox(bytes: Buffer): OutboxFile {
   return {
     version: RELIABLE_OUTBOX_VERSION,
     records,
+    ...(boundaryIntents === undefined ? {} : { boundaryIntents }),
+    ...(value.boundaryGap === true ? { boundaryGap: true } : {}),
     ...(continuity === undefined ? {} : { continuity }),
     ...(commit === undefined ? {} : { commit }),
     ...(value.unconfirmedRecovery === true ? { unconfirmedRecovery: true } : {}),
@@ -354,6 +428,8 @@ export function outboxLocalError(error: unknown, depth = 0): unknown {
 
 export class ReliableOutbox {
   private records: readonly ReliableOutboxRecord[] = [];
+  private boundaryIntents: readonly BoundaryIntent[] = [];
+  private boundaryGap: true | undefined;
   private readonly queue = new SerialCommitQueue();
   private continuity: DeliveryContinuity | undefined;
   private requestedScope: string | undefined;
@@ -396,6 +472,8 @@ export class ReliableOutbox {
       }
       if (file !== undefined) {
         this.records = file.records;
+        this.boundaryIntents = file.boundaryIntents ?? [];
+        this.boundaryGap = file.boundaryGap;
         this.continuity = file.continuity;
         this.unconfirmedRecovery = file.unconfirmedRecovery;
         if (file.unconfirmedRecovery) {
@@ -469,6 +547,8 @@ export class ReliableOutbox {
     }
     if (file === undefined) throw new Error('outbox_recovery_missing');
     this.records = file.records;
+    this.boundaryIntents = file.boundaryIntents ?? [];
+    this.boundaryGap = file.boundaryGap;
     this.continuity = file.continuity;
     this.unconfirmedRecovery = file.unconfirmedRecovery;
     this.recovery = recoveryReport(file);
@@ -577,6 +657,131 @@ export class ReliableOutbox {
     });
   }
 
+  getBoundaryIntents(): readonly BoundaryIntent[] {
+    return this.boundaryIntents;
+  }
+
+  hasBoundaryGap(): boolean {
+    return this.boundaryGap === true;
+  }
+
+  /** Capture every boundary from one runtime mutation in the same durable commit as its cursor. */
+  captureBoundaries(
+    events: readonly ReliableEventV1[],
+    intents: readonly BoundaryIntent[],
+    continuity: DeliveryContinuity | undefined,
+    missing: boolean,
+    now = new Date(),
+  ): Promise<void> {
+    return this.queue.run(async () => {
+      const at = now.toISOString();
+      const added = events.map((event) =>
+        parseRecord({ event, status: 'pending', attempts: 0, nextAttemptAt: at, updatedAt: at }),
+      );
+      if (added.some((record) => !isContinuityBoundary(record.event)))
+        throw new Error('boundary_capture_invalid');
+      const allIntents = [...this.boundaryIntents, ...intents];
+      const overflow =
+        allIntents.length > RELIABLE_OUTBOX_MAX_PENDING ||
+        this.records.filter((r) => r.status === 'pending').length +
+          added.length +
+          allIntents.length >
+          RELIABLE_OUTBOX_MAX_PENDING;
+      const boundaries = [...events, ...intents.map((intent) => intent.event)];
+      const previous = this.records.map((record): ReliableOutboxRecord =>
+        record.status === 'pending' &&
+        ['map_ended', 'map_player_snapshot', 'series_ended'].includes(record.event.kind) &&
+        boundaries.some((boundary) => dependsOnBoundary(record.event, boundary))
+          ? { ...record, status: 'superseded', updatedAt: at }
+          : record,
+      );
+      const records = this.trim([...previous, ...(overflow ? [] : added)]);
+      const gap =
+        missing ||
+        overflow ||
+        this.boundaryGap === true ||
+        records.length > RELIABLE_OUTBOX_MAX_RECORDS;
+      // Retain the old checkpoint if the boundary cannot be recorded.
+      await this.commit(
+        overflow || records.length > RELIABLE_OUTBOX_MAX_RECORDS ? this.records : records,
+        gap ? this.continuity : continuity,
+        overflow ? this.boundaryIntents : allIntents,
+        gap ? true : undefined,
+      );
+    });
+  }
+
+  expireBoundaryIntents(now = new Date()): Promise<void> {
+    return this.queue.run(async () => {
+      if (
+        !this.boundaryGap &&
+        this.boundaryIntents.some(
+          (intent) =>
+            now.getTime() - Date.parse(intent.event.observedAt) >= RELIABLE_OUTBOX_RETENTION_MS,
+        )
+      )
+        await this.commit(this.records, this.continuity, this.boundaryIntents, true);
+    });
+  }
+
+  materializeBoundary(
+    intent: BoundaryIntent,
+    event: ReliableEventV1,
+    now = new Date(),
+  ): Promise<boolean> {
+    return this.queue.run(async () => {
+      if (this.boundaryGap || !this.boundaryIntents.includes(intent)) return false;
+      if (now.getTime() - Date.parse(intent.event.observedAt) >= RELIABLE_OUTBOX_RETENTION_MS) {
+        await this.commit(this.records, this.continuity, this.boundaryIntents, true);
+        return false;
+      }
+      const valid = parseReliableEventV1(event);
+      const original = intent.event;
+      if (
+        !isContinuityBoundary(valid) ||
+        valid.kind !== original.kind ||
+        JSON.stringify(valid.cursor) !== JSON.stringify(original.cursor) ||
+        JSON.stringify(valid.payload) !== JSON.stringify(original.payload) ||
+        JSON.stringify(valid.evidence) !== JSON.stringify(original.evidence) ||
+        valid.observedAt !== original.observedAt ||
+        valid.mapName !== original.mapName ||
+        valid.matchId !== original.matchId ||
+        valid.competitionId !== original.competitionId ||
+        valid.entryAId !== original.entryAId ||
+        valid.entryBId !== original.entryBId ||
+        valid.mapId !== original.mapId
+      )
+        throw new Error('boundary_materialization_invalid');
+      if (this.records.some((record) => record.event.idempotencyKey === valid.idempotencyKey))
+        throw new Error('boundary_duplicate');
+      const at = now.toISOString();
+      const next = parseRecord({
+        event: valid,
+        boundaryQualification: {
+          planFingerprint: intent.planFingerprint,
+          authorityFingerprint: intent.authorityFingerprint,
+        },
+        status: 'pending',
+        attempts: 0,
+        nextAttemptAt: at,
+        updatedAt: at,
+      });
+      const ordered = [...this.records];
+      const position = ordered.findIndex(
+        (item) => item.status === 'pending' && dependsOnBoundary(item.event, valid),
+      );
+      ordered.splice(position < 0 ? ordered.length : position, 0, next);
+      const records = this.trim(ordered);
+      if (records.length > RELIABLE_OUTBOX_MAX_RECORDS) throw new Error('reliable_outbox_full');
+      await this.commit(
+        records,
+        this.continuity,
+        this.boundaryIntents.filter((item) => item !== intent),
+      );
+      return true;
+    });
+  }
+
   getContinuity(): DeliveryContinuity | undefined {
     return this.continuity;
   }
@@ -593,7 +798,8 @@ export class ReliableOutbox {
     if (scope === this.requestedScope) return Promise.resolve();
     this.requestedScope = scope;
     return this.queue.run(async () => {
-      if (this.records.length > 0) await this.commit(this.records, checkpoint);
+      if (this.records.length > 0 && !this.boundaryGap && !this.boundaryIntents.length)
+        await this.commit(this.records, checkpoint);
     });
   }
 
@@ -609,7 +815,8 @@ export class ReliableOutbox {
       if (this.records.some((record) => record.event.idempotencyKey === valid.idempotencyKey))
         return false;
       if (
-        this.records.filter((record) => record.status === 'pending').length >=
+        this.records.filter((record) => record.status === 'pending').length +
+          this.boundaryIntents.length >=
         RELIABLE_OUTBOX_MAX_PENDING
       )
         throw new Error('reliable_outbox_full');
@@ -642,13 +849,15 @@ export class ReliableOutbox {
       if (records.length > RELIABLE_OUTBOX_MAX_RECORDS) throw new Error('reliable_outbox_full');
       await this.commit(
         records,
-        continuity ?? {
-          matchId: valid.matchId,
-          contextRevision: valid.contextRevision,
-          cursor: valid.cursor,
-          mapName: valid.mapName,
-          savedAt: at,
-        },
+        this.boundaryGap || this.boundaryIntents.length
+          ? this.continuity
+          : (continuity ?? {
+              matchId: valid.matchId,
+              contextRevision: valid.contextRevision,
+              cursor: valid.cursor,
+              mapName: valid.mapName,
+              savedAt: at,
+            }),
       );
       return true;
     });
@@ -906,10 +1115,14 @@ export class ReliableOutbox {
   private async commit(
     records: readonly ReliableOutboxRecord[],
     continuity = this.continuity,
+    boundaryIntents = this.boundaryIntents,
+    boundaryGap = this.boundaryGap,
   ): Promise<void> {
     const file: OutboxFile = sealOutbox({
       version: RELIABLE_OUTBOX_VERSION,
       records,
+      ...(boundaryIntents.length ? { boundaryIntents } : {}),
+      ...(boundaryGap ? { boundaryGap } : {}),
       ...(continuity === undefined ? {} : { continuity }),
       ...(this.unconfirmedRecovery ? { unconfirmedRecovery: true } : {}),
     });
@@ -919,6 +1132,8 @@ export class ReliableOutbox {
     await replaceDurableJson(this.filePath, file);
     const previous = this.records;
     this.records = records;
+    this.boundaryIntents = boundaryIntents;
+    this.boundaryGap = boundaryGap;
     this.continuity = continuity;
     for (const record of records) {
       if (previous.includes(record)) continue;

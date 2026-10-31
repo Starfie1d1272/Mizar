@@ -1,7 +1,9 @@
+import { createHash, randomUUID } from 'node:crypto';
 import type { RuntimeReduceResult } from '@mizar/core/runtime';
 import type { LiveSnapshotV1, ReliableEventV1 } from '@mizar/protocol/output';
 
 import type { MatchContextBinding } from '../match-context/index.js';
+import { manifestPlanFingerprint } from '../match-context/manifest-plan.js';
 import { hasLineupMismatchOnly } from './lineup-mismatch.js';
 import type { ProjectionBundle } from '../projections/projection-coordinator.js';
 import { createLatestWinsConsumer, type LatestWinsConsumer } from '../runtime/latest-wins.js';
@@ -10,9 +12,11 @@ import {
   type DeliveryContinuity,
   type ReliableEventSink,
   type ReliableDeliveryScope,
+  type BoundaryIntent,
 } from './reliable-outbox.js';
 import {
   buildReliableEventV1,
+  materializeBoundaryEvent,
   buildMapPlayerSnapshotV1,
   projectLiveSnapshotV1,
   transitionReliableEventsV1,
@@ -29,6 +33,7 @@ export interface OutputServiceOptions {
   readonly liveSink?: LiveSnapshotConsumer;
   readonly now?: () => Date;
   readonly authorityScope?: () => string | null;
+  readonly isActiveOnlineBinding?: (binding: MatchContextBinding) => boolean;
   readonly onDiagnostic?: (code: string) => void;
   readonly onBusinessEvidence?: (stage: string, evidence: unknown) => void;
   readonly onRecoveryProgress?: (
@@ -62,6 +67,59 @@ export class OutputService {
   private lastMapObservation: ReliableEventV1['cursor'] | undefined;
   private recoveredCursor: ReliableEventV1['cursor'] | undefined;
   private readonly boundaryEnqueues = new Set<ReliableEventV1>();
+  private readonly boundaryOwner = randomUUID();
+  private boundaryCommitPending = 0;
+
+  private boundaryAuthority(): string | undefined {
+    const scope = this.options.authorityScope?.();
+    return scope
+      ? createHash('sha256')
+          .update(JSON.stringify([this.boundaryOwner, scope]))
+          .digest('hex')
+      : undefined;
+  }
+
+  private async materializeIntents(): Promise<void> {
+    const binding = this.binding;
+    const bundle = this.bundle;
+    const authority = this.boundaryAuthority();
+    if (
+      !this.outbox ||
+      this.outbox.hasBoundaryGap() ||
+      !binding ||
+      binding.origin !== 'online' ||
+      binding.freshness !== 'fresh' ||
+      !bundle ||
+      bundle.program.status.context !== 'fresh' ||
+      bundle.program.series?.status === 'completed' ||
+      !authority ||
+      !this.options.isActiveOnlineBinding?.(binding)
+    )
+      return;
+    for (const intent of this.outbox.getBoundaryIntents()) {
+      const c = bundle.program.cursor;
+      const e = intent.event.cursor;
+      if (
+        intent.authorityFingerprint !== authority ||
+        intent.planFingerprint !== manifestPlanFingerprint(binding.manifest) ||
+        binding.context.matchId !== intent.event.matchId ||
+        binding.context.competition?.competitionId !== intent.event.competitionId ||
+        binding.context.entrants.a.entryId !== intent.event.entryAId ||
+        binding.context.entrants.b.entryId !== intent.event.entryBId ||
+        c.producerInstanceId !== e.producerInstanceId ||
+        c.liveSessionId !== e.liveSessionId ||
+        c.programSourceGeneration !== e.programSourceGeneration ||
+        c.mapEpoch < e.mapEpoch
+      )
+        return;
+      await this.outbox.materializeBoundary(
+        intent,
+        materializeBoundaryEvent(intent.event, binding.manifest.revision),
+        this.now(),
+      );
+    }
+  }
+
   private contextRecoveryHandler:
     ((event: ReliableEventV1, authority: string) => Promise<boolean>) | undefined;
   private waitingFence: { key: string; boundaryKey: string; scope: string } | undefined;
@@ -322,7 +380,9 @@ export class OutputService {
         id: 'cloud-live',
         send: (snapshot) => {
           const current = this.current(true);
-          return current !== null && current.cursor.liveSessionId === snapshot.cursor.liveSessionId
+          return this.getBoundaryStatus() === null &&
+            current !== null &&
+            current.cursor.liveSessionId === snapshot.cursor.liveSessionId
             ? this.options.liveSink!.send(current)
             : Promise.resolve();
         },
@@ -554,7 +614,12 @@ export class OutputService {
             mapName: result.state.map.name ?? null,
             savedAt: now,
           };
-    if (continuity !== undefined)
+    const transitions = result.transitions.filter(
+      (transition) => transition.kind === 'map_execution_changed',
+    );
+    const generationAdvanced = result.disposition.reason === 'source-generation-advanced';
+    const hasBoundary = transitions.length > 0 || generationAdvanced;
+    if (!hasBoundary && continuity !== undefined)
       void this.outbox
         ?.updateContinuity(continuity)
         .catch(() => this.onDiagnostic?.('outbox_continuity_write_failed'));
@@ -589,6 +654,7 @@ export class OutputService {
     }
     const newMapObservation = this.newMapObservation(result, bundle);
     let candidates: ReliableEventV1[];
+    let projectionFailed = false;
     try {
       candidates = [
         ...transitionReliableEventsV1({
@@ -599,7 +665,87 @@ export class OutputService {
       ];
     } catch {
       this.onDiagnostic?.('event_projection_failed');
-      return;
+      if (!hasBoundary) return;
+      candidates = [];
+      projectionFailed = true;
+    }
+    if (hasBoundary && this.outbox) {
+      const entries: {
+        kind: 'map_epoch_changed' | 'source_generation_changed';
+        previous?: number | null;
+        reason?: string | null;
+        observedAt: string;
+      }[] = transitions.map((transition) => ({
+        kind: 'map_epoch_changed',
+        previous: transition.previousMapEpoch,
+        reason: transition.reason,
+        observedAt: transition.at.utc,
+      }));
+      if (generationAdvanced)
+        entries.unshift({
+          kind: 'source_generation_changed',
+          previous: Math.max(0, bundle.program.cursor.programSourceGeneration - 1),
+          observedAt: result.state.programTelemetry?.receive.receivedAt ?? now,
+        });
+      const events: ReliableEventV1[] = [];
+      const intents: BoundaryIntent[] = [];
+      let missing = projectionFailed;
+      for (const entry of entries) {
+        try {
+          const candidate = buildReliableEventV1({
+            kind: entry.kind,
+            bundle,
+            binding,
+            observedAt: entry.observedAt,
+            source:
+              entry.kind === 'map_epoch_changed' ? 'runtime-transition' : 'runtime-continuity',
+            ...(entry.kind === 'map_epoch_changed'
+              ? { previousMapEpoch: entry.previous ?? null, reason: entry.reason ?? null }
+              : { previousSourceGeneration: entry.previous ?? null }),
+            retainStaleBoundary: true,
+          });
+          if (!candidate) {
+            missing = true;
+            continue;
+          }
+          if (candidate.evidence.contextFresh) events.push(candidate);
+          else {
+            const authorityFingerprint = this.boundaryAuthority();
+            if (
+              !binding ||
+              binding.origin !== 'online' ||
+              !authorityFingerprint ||
+              !candidate.cursor.liveSessionId
+            ) {
+              missing = true;
+              continue;
+            }
+            intents.push({
+              event: candidate,
+              planFingerprint: manifestPlanFingerprint(binding.manifest),
+              authorityFingerprint,
+            });
+          }
+        } catch {
+          missing = true;
+        }
+      }
+      this.boundaryCommitPending++;
+      void this.outbox
+        .captureBoundaries(events, intents, continuity, missing, this.now())
+        .then(() => {
+          if (missing || this.outbox?.hasBoundaryGap()) this.onDiagnostic?.('outbox_boundary_gap');
+        })
+        .catch(() => {
+          this.quarantined = true;
+          this.onDiagnostic?.('outbox_boundary_capture_failed');
+        })
+        .finally(() => {
+          this.boundaryCommitPending--;
+        });
+      candidates = candidates.filter(
+        (event) => event.kind !== 'map_epoch_changed' && event.kind !== 'source_generation_changed',
+      );
     }
     const ended = candidates.find(
       (event): event is Extract<ReliableEventV1, { kind: 'map_ended' }> =>
@@ -638,18 +784,6 @@ export class OutputService {
       if (candidate !== null) candidates.push(candidate);
       return candidate;
     };
-    if (result.disposition.reason === 'source-generation-advanced') {
-      const boundary = add(
-        'source_generation_changed',
-        'runtime-continuity',
-        null,
-        Math.max(0, bundle.program.cursor.programSourceGeneration - 1),
-      );
-      if (boundary) {
-        candidates.pop();
-        candidates.unshift(boundary);
-      }
-    }
     if (
       previous?.program.series?.status !== 'live' &&
       bundle.program.series?.status === 'live' &&
@@ -658,6 +792,10 @@ export class OutputService {
       add('match_started', 'series-progress');
     if (
       newMapObservation &&
+      !hasBoundary &&
+      this.boundaryCommitPending === 0 &&
+      !this.outbox?.hasBoundaryGap() &&
+      !this.outbox?.getBoundaryIntents().length &&
       this.mapStartScope !== undefined &&
       this.publishedMapStart?.revision !== this.mapStartRevision &&
       this.pendingMapStart?.revision !== this.mapStartRevision &&
@@ -716,6 +854,15 @@ export class OutputService {
       bundle.identity.issues.some((issue) => issue.code === 'lineup_differs_from_expected')
     )
       add('lineup_mismatch', 'identity', 'lineup_differs_from_expected');
+    candidates = candidates.filter(
+      (event) =>
+        !['map_ended', 'map_player_snapshot', 'series_ended'].includes(event.kind) ||
+        (!hasBoundary &&
+          !this.boundaryCommitPending &&
+          !this.outbox?.hasBoundaryGap() &&
+          !this.outbox?.getBoundaryIntents().length &&
+          !this.outbox?.hasUnconfirmedBoundary(event)),
+    );
     for (const event of candidates) {
       const start = event.kind === 'map_started' ? this.pendingMapStart : undefined;
       const lineup = bundle.program.players
@@ -772,6 +919,8 @@ export class OutputService {
       finishRetry = resolve;
     });
     try {
+      await this.outbox.expireBoundaryIntents(this.now());
+      await this.materializeIntents();
       await this.reconcileFence();
       if (this.sink === undefined)
         await this.outbox.sweep(
@@ -874,6 +1023,37 @@ export class OutputService {
     }
   }
 
+  getBoundaryStatus(): 'continuity_chain_missing' | 'continuity_waiting' | null {
+    if (this.quarantined || this.outbox?.hasBoundaryGap()) return 'continuity_chain_missing';
+    const authority = this.boundaryAuthority();
+    if (
+      this.outbox?.getBoundaryIntents().some((intent) => intent.authorityFingerprint !== authority)
+    )
+      return 'continuity_chain_missing';
+    if (
+      this.outbox
+        ?.getRecords()
+        .some(
+          (record) =>
+            record.boundaryQualification &&
+            ((record.status === 'pending' &&
+              record.boundaryQualification.authorityFingerprint !== authority) ||
+              ['rejected', 'expired', 'superseded'].includes(record.status) ||
+              record.receiverOutcome === 'needs_attention'),
+        )
+    )
+      return 'continuity_chain_missing';
+    if (
+      this.boundaryCommitPending ||
+      this.outbox?.getBoundaryIntents().length ||
+      this.outbox
+        ?.getRecords()
+        .some((record) => record.boundaryQualification && record.status === 'pending')
+    )
+      return 'continuity_waiting';
+    return null;
+  }
+
   getReliableRecovery() {
     return this.outbox?.getRecovery();
   }
@@ -888,7 +1068,12 @@ export class OutputService {
       JSON.stringify([scope.matchId, scope.producerInstanceId, scope.liveSessionId]),
     );
     if (!this.outbox) return true;
-    if (this.outbox.getRecovery()?.code === 'outbox_preserved_without_records') return false;
+    if (
+      this.outbox.getRecovery()?.code === 'outbox_preserved_without_records' ||
+      this.outbox.hasBoundaryGap() ||
+      this.outbox.getBoundaryIntents().length
+    )
+      return false;
     await this.outbox.flushPending();
     await this.retryCompletion;
     await this.retry();
@@ -938,6 +1123,15 @@ export class OutputService {
       bundle.program.cursor.mapEpoch >= event.cursor.mapEpoch
     )
       return true;
+    if (
+      this.outbox
+        ?.getRecords()
+        .some(
+          (record) =>
+            record.event.idempotencyKey === event.idempotencyKey && record.boundaryQualification,
+        )
+    )
+      return true;
     const recovered = this.recoveredCursor;
     const recoveredEvent =
       recovered !== undefined &&
@@ -967,6 +1161,31 @@ export class OutputService {
 
   private canSend(event: ReliableEventV1, lineup?: readonly string[]): boolean {
     const bundle = this.bundle;
+    if (this.boundaryCommitPending || this.outbox?.hasBoundaryGap()) return false;
+    if (this.outbox?.getBoundaryIntents().length) return false;
+    const qualification = this.outbox
+      ?.getRecords()
+      .find(
+        (record) => record.event.idempotencyKey === event.idempotencyKey,
+      )?.boundaryQualification;
+    if (qualification)
+      return Boolean(
+        !this.quarantined &&
+        this.binding &&
+        this.binding.context.matchId === event.matchId &&
+        bundle?.program.cursor.producerInstanceId === event.cursor.producerInstanceId &&
+        bundle.program.cursor.liveSessionId === event.cursor.liveSessionId &&
+        bundle.program.cursor.programSourceGeneration === event.cursor.programSourceGeneration &&
+        bundle.program.cursor.mapEpoch >= event.cursor.mapEpoch &&
+        this.binding.origin === 'online' &&
+        this.binding.freshness === 'fresh' &&
+        bundle?.program.status.context === 'fresh' &&
+        bundle.program.series?.status !== 'completed' &&
+        this.options.isActiveOnlineBinding?.(this.binding) &&
+        qualification.authorityFingerprint === this.boundaryAuthority() &&
+        qualification.planFingerprint === manifestPlanFingerprint(this.binding.manifest) &&
+        this.isCurrentForRetry(event, lineup),
+      );
     if (
       this.quarantined ||
       bundle === undefined ||
