@@ -77,6 +77,24 @@ jobs:
           profile: ci
       - if: steps.select.outputs.native == 'true'
         run: cargo build --locked --profile ci --manifest-path apps/desktop/src-tauri/Cargo.toml
+      - name: Record temporary workbench build identity
+        if: github.event_name == 'pull_request' && github.event.pull_request.number == 690 && steps.select.outputs.native == 'true'
+        shell: pwsh
+        run: |
+          $exe = 'apps/desktop/src-tauri/target/ci/mizar-desktop.exe'
+          if (!(Test-Path -LiteralPath $exe)) { throw 'Windows desktop executable missing' }
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP/workbench-build" | Out-Null
+          Copy-Item -LiteralPath $exe -Destination "$env:RUNNER_TEMP/workbench-build/mizar-desktop.exe"
+          $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $exe).Hash.ToLowerInvariant()
+          "SHA256=$digest`nGITHUB_SHA=$env:GITHUB_SHA`nPR_HEAD=${{ github.event.pull_request.head.sha }}`nPROFILE=ci" | Set-Content -Encoding utf8 "$env:RUNNER_TEMP/workbench-build/identity.txt"
+      - name: Preserve temporary workbench build
+        if: github.event_name == 'pull_request' && github.event.pull_request.number == 690 && steps.select.outputs.native == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: workbench-ci-desktop-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/workbench-build/*
+          if-no-files-found: error
+          retention-days: 7
   ci-gate:
     name: ci-gate
     if: always()
