@@ -535,6 +535,7 @@ export class RivalHubConnection {
   private readonly liveInFlight = new Map<Source, Set<Promise<void>>>();
   private readonly sourceSettlements = new Map<string, Promise<boolean>>();
   private readonly cleanupAttempts = new Map<string, { count: number; nextCycleAt: number }>();
+  private readonly confirmedSourcesAwaitingPersistence = new Map<string, ExactSource>();
   private readonly exitHandoffs = new Map<string, ExactSource>();
   private readonly sourceCommands = new SerialCommitQueue();
   private readonly sourceState: RivalHubSourceState;
@@ -1125,6 +1126,9 @@ export class RivalHubConnection {
 
   private async cleanup(force: boolean, deadline = Date.now() + 7000): Promise<void> {
     await this.persistExitHandoffs();
+    for (const identity of this.confirmedSourcesAwaitingPersistence.values()) {
+      if (await this.persistConfirmedSource(identity)) await this.archiveConfirmedSource(identity);
+    }
     try {
       await this.reconcileIntent(deadline);
     } catch (error) {
@@ -1140,6 +1144,7 @@ export class RivalHubConnection {
     for (const record of state.records) {
       if (Date.now() >= deadline) break;
       if (record.state === 'owned' || record.state === 'archive_pending') continue;
+      if (this.confirmedSourcesAwaitingPersistence.has(JSON.stringify(record.identity))) continue;
       if (!this.scopeMatches(record.identity)) {
         if (record.state === 'release_pending')
           await this.sourceState.failure(record.identity, 'installation_mismatch', null, true);
@@ -1176,8 +1181,8 @@ export class RivalHubConnection {
             found.liveSessionId === identity.liveSessionId &&
             found.authorityRevision === identity.authorityRevision
           ) {
-            await this.sourceState.confirmReleased(identity);
-            await this.archiveConfirmedSource(identity);
+            if (await this.persistConfirmedSource(identity))
+              await this.archiveConfirmedSource(identity);
           }
         } catch (error) {
           this.onDiagnostic('source_status', error);
@@ -1227,14 +1232,7 @@ export class RivalHubConnection {
             JSON.stringify(this.exactSource(this.source)) === JSON.stringify(identity)
           )
             this.source = null;
-          try {
-            await this.sourceState.confirmReleased(identity);
-          } catch (error) {
-            // The remote result is known in this process, but a failed durable
-            // write cannot be represented as a network failure or success.
-            this.onDiagnostic('source_release_confirmation', error);
-            continue;
-          }
+          if (!(await this.persistConfirmedSource(identity))) continue;
           if (await this.archiveConfirmedSource(identity)) {
             this.cleanupAttempts.delete(attemptKey);
             this.cleanupEvidence(identity, 'release_confirmed', record.attempts + 1);
@@ -1290,6 +1288,19 @@ export class RivalHubConnection {
       }
     }
     await this.updateCleanupSummary();
+  }
+
+  private async persistConfirmedSource(identity: ExactSource): Promise<boolean> {
+    const key = JSON.stringify(identity);
+    this.confirmedSourcesAwaitingPersistence.set(key, identity);
+    try {
+      await this.sourceState.confirmReleased(identity);
+      this.confirmedSourcesAwaitingPersistence.delete(key);
+      return true;
+    } catch (error) {
+      this.onDiagnostic('source_release_confirmation', error);
+      return false;
+    }
   }
 
   private async archiveConfirmedSource(identity: ExactSource): Promise<boolean> {
