@@ -146,6 +146,7 @@ export interface BoundaryScope {
   readonly producerInstanceId: string;
   readonly liveSessionId?: string;
   readonly ownerFingerprint?: string;
+  readonly overflow?: true;
   readonly authorityFingerprint?: string;
   readonly runtimeSeq?: number;
   readonly programSourceGeneration?: number;
@@ -371,6 +372,7 @@ function parseOutbox(bytes: Buffer): OutboxFile {
         (typeof item.liveSessionId !== 'string' ||
           !item.liveSessionId ||
           item.liveSessionId.length > 256)) ||
+      (item.overflow !== undefined && item.overflow !== true) ||
       (item.ownerFingerprint !== undefined &&
         (typeof item.ownerFingerprint !== 'string' ||
           !/^[a-f0-9]{64}$/.test(item.ownerFingerprint))) ||
@@ -393,6 +395,7 @@ function parseOutbox(bytes: Buffer): OutboxFile {
       ...(typeof item.ownerFingerprint === 'string'
         ? { ownerFingerprint: item.ownerFingerprint }
         : {}),
+      ...(item.overflow === true ? { overflow: true as const } : {}),
       ...(typeof item.runtimeSeq === 'number' ? { runtimeSeq: item.runtimeSeq } : {}),
       ...(typeof item.programSourceGeneration === 'number'
         ? { programSourceGeneration: item.programSourceGeneration }
@@ -814,6 +817,26 @@ export class ReliableOutbox {
     );
   }
 
+  hasBoundaryOverflow(scope: BoundaryScope | undefined): boolean {
+    if (!scope)
+      return (
+        this.boundaryOverflowOwners.length > 0 || this.boundaryGaps.some((gap) => gap.overflow)
+      );
+    return Boolean(
+      (scope.ownerFingerprint && this.boundaryOverflowOwners.includes(scope.ownerFingerprint)) ||
+      this.boundaryGaps.some(
+        (gap) =>
+          gap.overflow &&
+          gap.producerInstanceId === scope.producerInstanceId &&
+          (!gap.ownerFingerprint ||
+            !scope.ownerFingerprint ||
+            gap.ownerFingerprint === scope.ownerFingerprint) &&
+          (!gap.matchId || !scope.matchId || gap.matchId === scope.matchId) &&
+          (!gap.liveSessionId || !scope.liveSessionId || gap.liveSessionId === scope.liveSessionId),
+      ),
+    );
+  }
+
   /** Capture every boundary from one runtime mutation in the same durable commit as its cursor. */
   captureBoundaries(
     events: readonly ReliableEventV1[],
@@ -857,7 +880,12 @@ export class ReliableOutbox {
         // Retain the old checkpoint if the boundary cannot be recorded.
         const gaps =
           gap && scope && this.boundaryGaps.length < RELIABLE_OUTBOX_MAX_RECORDS
-            ? [...this.boundaryGaps, scope]
+            ? [
+                ...this.boundaryGaps,
+                ...(overflow || records.length > RELIABLE_OUTBOX_MAX_RECORDS
+                  ? [{ ...scope, overflow: true as const }]
+                  : [scope]),
+              ]
             : this.boundaryGaps;
         let overflowOwners = this.boundaryOverflowOwners;
         if (gap && scope && gaps === this.boundaryGaps) {

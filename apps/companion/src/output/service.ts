@@ -779,7 +779,9 @@ export class OutputService {
       void this.outbox
         .captureBoundaries(events, intents, continuity, missing, this.now(), outputScope)
         .then(() => {
-          if (missing || this.outbox?.hasBoundaryGap(outputScope))
+          if (this.outbox?.hasBoundaryOverflow(outputScope))
+            this.onDiagnostic?.('outbox_boundary_overflow');
+          else if (missing || this.outbox?.hasBoundaryGap(outputScope))
             this.onDiagnostic?.('outbox_boundary_gap');
         })
         .catch(() => {
