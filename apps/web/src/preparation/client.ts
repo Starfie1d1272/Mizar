@@ -139,9 +139,53 @@ export async function openRivalHubAuthorization(url: string, popup?: Window | nu
 export interface Production {
   mode: 'preparation' | 'live' | 'hidden';
   revision: string;
+  sessionId?: string;
   canEnter: boolean;
   releaseHandoffState?: 'idle' | 'pending' | 'recorded' | 'confirmed' | 'unconfirmed';
   obsExitState?: 'idle' | 'pending' | 'confirmed' | 'unconfirmed';
+}
+
+/** Retry only the Companion OBS exit task; do not repeat Host game cleanup. */
+export async function retryObsExit(state: Production): Promise<void> {
+  const latest = await fetch('/local/v1/production', {
+    cache: 'no-store',
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!latest.ok) throw new Error('OBS 收尾状态未确认，请检查后重试。');
+  const currentState = (await latest.json()) as Production;
+  if (state.mode !== 'preparation' || currentState.mode !== 'preparation')
+    throw new Error('制作状态已变化，请检查 OBS。');
+  if (!state.sessionId || currentState.sessionId !== state.sessionId)
+    throw new Error('制作状态已变化，请检查 OBS。');
+  if (currentState.obsExitState !== 'unconfirmed')
+    throw new Error('OBS 收尾状态已变化，请刷新后核对。');
+  const response = await fetch('/operator/production', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'finish', expectedRevision: currentState.revision }),
+    signal: AbortSignal.timeout(10000),
+  });
+  let current = (await response.json().catch(() => ({}))) as Partial<Production> & {
+    message?: string;
+  };
+  if (!response.ok) throw new Error(current.message ?? 'OBS 收尾重试未完成。');
+  if (current.mode !== 'preparation') throw new Error('制作状态已变化，请检查 OBS。');
+  const retryRevision = current.revision;
+  if (!retryRevision) throw new Error('OBS 收尾状态未确认，请检查后重试。');
+  const deadline = Date.now() + 30000;
+  while (current.obsExitState === 'pending' && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const status = await fetch('/local/v1/production', {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!status.ok) throw new Error('OBS 收尾状态未确认，请检查后重试。');
+    current = (await status.json()) as Production;
+    if (current.mode !== 'preparation' || current.revision !== retryRevision)
+      throw new Error('制作状态已变化，请检查 OBS。');
+  }
+  if (current.obsExitState !== 'confirmed')
+    throw new Error('OBS 等待画面尚未确认，请检查连接和当前场景后重试。');
 }
 export async function checkObsBeforeLaunch(
   requireStoppedOutput = false,
