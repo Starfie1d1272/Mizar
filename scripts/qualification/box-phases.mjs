@@ -54,6 +54,7 @@ const phaseNames = new Set([
   'prepare',
   'download',
   'transfer',
+  'transfer-verified-runtime',
   'verify',
   'final-check',
   'index-update',

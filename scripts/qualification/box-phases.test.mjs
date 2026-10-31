@@ -42,6 +42,28 @@ test('invalid plan reports a fixed reason and never echoes arbitrary external er
     assert.match(text, /reason=BOX_PHASE_ERROR/);
     assert.ok(!text.includes(secret));
     assert.ok(!text.includes(url));
+    const missing = boxPhaseDiagnostic(
+      'transfer-verified-runtime',
+      'runtime',
+      'core',
+      Object.assign(new Error(`${secret} ${url}`), { code: 'ENOENT' }),
+    );
+    assert.match(
+      missing,
+      /transfer-verified-runtime.*lane=runtime asset=core.*reason=BOX_FILE_MISSING/,
+    );
+    const external = boxPhaseDiagnostic(
+      'transfer-verified-runtime',
+      'runtime',
+      'core',
+      new Error(`${secret} ${url}`),
+    );
+    assert.match(
+      external,
+      /transfer-verified-runtime.*lane=runtime asset=core.*reason=BOX_PHASE_ERROR/,
+    );
+    assert.ok(!missing.includes(secret) && !missing.includes(url));
+    assert.ok(!external.includes(secret) && !external.includes(url));
     const receipt = boxPhaseDiagnostic(
       'verify',
       'runtime',
