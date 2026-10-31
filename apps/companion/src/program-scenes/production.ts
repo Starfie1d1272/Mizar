@@ -107,11 +107,13 @@ export function registerProductionRoutes(
         }
       },
       (error: unknown) => {
-        if (generation === obsExitGeneration) obsExitState = 'unconfirmed';
-        if (sceneRequired)
-          void options
-            .recordObsExit?.('unconfirmed')
-            .catch((error: unknown) => app.log.warn({ err: error }, 'OBS exit status not saved'));
+        if (generation === obsExitGeneration) {
+          obsExitState = 'unconfirmed';
+          if (sceneRequired)
+            void options
+              .recordObsExit?.('unconfirmed')
+              .catch((error: unknown) => app.log.warn({ err: error }, 'OBS exit status not saved'));
+        }
         app.log.warn({ stage: 'production_safe_scene', err: error }, 'OBS exit state unconfirmed');
       },
     );
