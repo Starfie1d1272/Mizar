@@ -77,6 +77,7 @@ const intentSchema = z
 const quarantineSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('source'), record: recordSchema }).strict(),
   z.object({ kind: z.literal('intent'), intent: intentSchema }).strict(),
+  z.object({ kind: z.literal('watermark'), identity: exactSchema }).strict(),
 ]);
 const envelopeSchema = z
   .object({
@@ -152,7 +153,7 @@ export class RivalHubSourceState {
   private async quarantineNames(): Promise<string[]> {
     try {
       return (await readdir(`${this.path}.revoked`)).filter((name) =>
-        /^[a-f0-9]{64}-[a-f0-9]{64}-[a-f0-9]{64}\.json$/.test(name),
+        /^[a-f0-9]{64}-[siw]-[a-f0-9]{64}-[a-f0-9]{64}\.json$/.test(name),
       );
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
@@ -164,14 +165,21 @@ export class RivalHubSourceState {
     const bytes = await readFile(join(`${this.path}.revoked`, name));
     if (bytes.length > MAX_BYTES) throw new Error('revoked evidence too large');
     const evidence = quarantineSchema.parse(JSON.parse(bytes.toString('utf8')) as unknown);
-    const scope = evidence.kind === 'source' ? evidence.record.identity : evidence.intent.scope;
+    const scope =
+      evidence.kind === 'source'
+        ? evidence.record.identity
+        : evidence.kind === 'intent'
+          ? evidence.intent.scope
+          : evidence.identity;
     const itemKey =
       evidence.kind === 'source'
         ? `source:${exactKey(evidence.record.identity)}`
-        : `intent:${evidence.intent.id}`;
+        : evidence.kind === 'intent'
+          ? `intent:${evidence.intent.id}`
+          : `watermark:${exactKey(evidence.identity)}`;
     if (
       name !==
-      `${digest(scopeKey(scope))}-${digest(itemKey)}-${digest(JSON.stringify(evidence))}.json`
+      `${digest(scopeKey(scope))}-${evidence.kind[0]}-${digest(itemKey)}-${digest(JSON.stringify(evidence))}.json`
     )
       throw new Error('revoked evidence invalid');
     return evidence;
@@ -179,12 +187,19 @@ export class RivalHubSourceState {
 
   private async quarantine(evidence: QuarantineEvidence): Promise<void> {
     const valid = quarantineSchema.parse(evidence);
-    const scope = valid.kind === 'source' ? valid.record.identity : valid.intent.scope;
+    const scope =
+      valid.kind === 'source'
+        ? valid.record.identity
+        : valid.kind === 'intent'
+          ? valid.intent.scope
+          : valid.identity;
     const itemKey =
       valid.kind === 'source'
         ? `source:${exactKey(valid.record.identity)}`
-        : `intent:${valid.intent.id}`;
-    const name = `${digest(scopeKey(scope))}-${digest(itemKey)}-${digest(JSON.stringify(valid))}.json`;
+        : valid.kind === 'intent'
+          ? `intent:${valid.intent.id}`
+          : `watermark:${exactKey(valid.identity)}`;
+    const name = `${digest(scopeKey(scope))}-${valid.kind[0]}-${digest(itemKey)}-${digest(JSON.stringify(valid))}.json`;
     try {
       const existing = await this.readQuarantine(name);
       if (JSON.stringify(existing) !== JSON.stringify(valid))
@@ -205,13 +220,15 @@ export class RivalHubSourceState {
   /** Retained unknown sources/claims never count toward the active source limit. */
   async quarantineCount(): Promise<number> {
     const names = await this.quarantineNames();
-    return new Set(names.map((name) => name.slice(0, 129))).size;
+    return new Set(names.filter((name) => name[65] !== 'w').map((name) => name.slice(0, 131))).size;
   }
 
   async hasQuarantinedSource(identity: ExactSource): Promise<boolean> {
     return (await this.evidenceForScope(identity)).some(
       (evidence) =>
-        evidence.kind === 'source' && exactKey(evidence.record.identity) === exactKey(identity),
+        (evidence.kind === 'source' && exactKey(evidence.record.identity) === exactKey(identity)) ||
+        (evidence.kind === 'watermark' &&
+          evidence.identity.authorityRevision >= identity.authorityRevision),
     );
   }
 
@@ -264,6 +281,24 @@ export class RivalHubSourceState {
       changed = true;
     }
     state.records = records;
+    const watermarks: ExactSource[] = [];
+    for (const identity of state.watermarks) {
+      try {
+        const evidence = await this.evidenceForScope(identity);
+        if (
+          evidence.some(
+            (item) => item.kind === 'watermark' && exactKey(item.identity) === exactKey(identity),
+          )
+        ) {
+          changed = true;
+          continue;
+        }
+      } catch {
+        // Keep the active confirmation when its separate evidence is unreadable.
+      }
+      watermarks.push(identity);
+    }
+    state.watermarks = watermarks;
     if (state.intent) {
       let evidence: QuarantineEvidence[];
       try {
@@ -367,7 +402,8 @@ export class RivalHubSourceState {
       await this.reconcileQuarantine(state);
       if (state.intent) throw new Error('source claim requires reconciliation');
       const validScope = scopeSchema.parse(scope);
-      if ((await this.evidenceForScope(validScope)).length)
+      const quarantined = await this.evidenceForScope(validScope);
+      if (quarantined.some((item) => item.kind !== 'watermark'))
         throw new Error('source requires cleanup before claim');
       if (
         state.records.some(
@@ -405,6 +441,11 @@ export class RivalHubSourceState {
       const known = scopes
         .filter((item) => sameScope(item, validScope))
         .map((item) => item.authorityRevision);
+      known.push(
+        ...quarantined.flatMap((item) =>
+          item.kind === 'watermark' ? [item.identity.authorityRevision] : [],
+        ),
+      );
       if (previousAuthorityRevision !== null) known.push(previousAuthorityRevision);
       const intent = intentSchema.parse({
         id: randomUUID(),
@@ -417,6 +458,11 @@ export class RivalHubSourceState {
           (item) =>
             sameScope(item, validScope) &&
             item.authorityRevision >= owned.identity.authorityRevision,
+        ) &&
+        !quarantined.some(
+          (item) =>
+            item.kind === 'watermark' &&
+            item.identity.authorityRevision >= owned.identity.authorityRevision,
         )
           ? { idempotentAuthorityRevision: owned.identity.authorityRevision }
           : {}),
@@ -526,7 +572,7 @@ export class RivalHubSourceState {
 
   /** Remove only the exact record confirmed released or terminal by the server. */
   async complete(identity: ExactSource): Promise<void> {
-    await this.change((state) => {
+    await this.change(async (state) => {
       const index = state.records.findIndex(
         (item) => exactKey(item.identity) === exactKey(identity),
       );
@@ -545,16 +591,20 @@ export class RivalHubSourceState {
         )
       )
         state.intent.idempotentAuthorityRevision = identity.authorityRevision;
-      const watermark = state.watermarks.find((item) => sameScope(item, identity));
-      if (watermark)
-        watermark.authorityRevision = Math.max(
-          watermark.authorityRevision,
-          identity.authorityRevision,
-        );
-      else {
-        if (state.watermarks.length >= MAX_RECORDS)
-          throw new Error('source state capacity exceeded');
-        state.watermarks.push(identity);
+      if (state.records[index]?.installationRevoked) {
+        await this.quarantine({ kind: 'watermark', identity });
+      } else {
+        const watermark = state.watermarks.find((item) => sameScope(item, identity));
+        if (watermark)
+          watermark.authorityRevision = Math.max(
+            watermark.authorityRevision,
+            identity.authorityRevision,
+          );
+        else {
+          if (state.watermarks.length >= MAX_RECORDS)
+            throw new Error('source state capacity exceeded');
+          state.watermarks.push(identity);
+        }
       }
       state.records.splice(index, 1);
     });
@@ -592,6 +642,12 @@ export class RivalHubSourceState {
         });
       }
       state.records = remaining;
+      const watermarks: ExactSource[] = [];
+      for (const identity of state.watermarks) {
+        if (matches(identity)) await this.quarantine({ kind: 'watermark', identity });
+        else watermarks.push(identity);
+      }
+      state.watermarks = watermarks;
       if (state.intent && matches(state.intent.scope)) {
         await this.quarantine({ kind: 'intent', intent: state.intent });
         state.intent = null;

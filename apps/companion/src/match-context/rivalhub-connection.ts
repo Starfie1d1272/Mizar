@@ -1027,6 +1027,7 @@ export class RivalHubConnection {
     )
       return;
     const revision = found.authorityRevision as number;
+    const quarantined = await this.sourceState.getQuarantined(intent.scope);
     // An equal revision is conclusive only when this claim started while that
     // exact authority was held. A watermark by itself proves no such thing.
     const legacyHeld = state.records.some(
@@ -1038,6 +1039,9 @@ export class RivalHubConnection {
         identity.producerInstanceId === intent.scope.producerInstanceId &&
         identity.liveSessionId === intent.scope.liveSessionId &&
         identity.authorityRevision === revision &&
+        !quarantined.some(
+          (item) => item.kind === 'watermark' && item.identity.authorityRevision >= revision,
+        ) &&
         !state.watermarks.some(
           (item) =>
             item.baseUrl === identity.baseUrl &&
