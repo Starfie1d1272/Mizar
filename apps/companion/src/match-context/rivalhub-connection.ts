@@ -1969,7 +1969,13 @@ export class RivalHubConnection {
         originalObservedAt: event.observedAt,
         ...fields,
       });
-    const source = retainedSource ?? this.source;
+    const source =
+      retainedSource &&
+      (!this.source ||
+        !this.scopeMatches(retainedSource) ||
+        JSON.stringify(this.exactSource(this.source)) !== JSON.stringify(retainedSource))
+        ? retainedSource
+        : this.source;
     if (!source) {
       evidence({ reason: 'source_unavailable' });
       return 'retry';
