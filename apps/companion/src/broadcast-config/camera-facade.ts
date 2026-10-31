@@ -139,6 +139,7 @@ export function createCameraConfigPersistence(
     };
   }
   return {
+    canChange: () => store.canChangeCamera(),
     get available() {
       return !store.pendingLegacyCamera && !store.consumerStatus.camera?.error;
     },

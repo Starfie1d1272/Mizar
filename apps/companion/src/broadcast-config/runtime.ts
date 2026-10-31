@@ -116,6 +116,7 @@ export function createBroadcastRuntime(input: {
         input.canApplyCamera()
       );
     },
+    canChangeCamera: () => input.canApplyCamera?.() ?? true,
     withReferenceGuard: (operation) => deps.references.run(operation),
     assertReferenceCommitAllowed: (previous, next) =>
       assertReferenceCommitAllowed(previous, next, (ref) => deps.isDeleting(ref)),
