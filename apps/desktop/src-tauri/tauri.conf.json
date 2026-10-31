@@ -11,6 +11,8 @@
     "security": {
       "capabilities": [
         "workspace",
+        "workbench-main",
+        "workbench-dock",
         "review",
         "demo-test",
         "demo-test-workspace",
