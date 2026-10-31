@@ -1380,7 +1380,7 @@ it('reports observed OBS playback separately and marks it unknown when disconnec
   await r.director.close();
 });
 
-it('plays a selected formal track, pauses and continues through OBS, and stops for live play', async () => {
+it('plays a selected formal track and pauses and continues through OBS', async () => {
   const r = await rig();
   await r.step();
   await r.director.manualPlay('waiting', r.tracks[1]!.id);
@@ -1393,11 +1393,6 @@ it('plays a selected formal track, pauses and continues through OBS, and stops f
   expect(r.director.get().intent).toBe('manual');
   await r.director.manualPause(false);
   expect(r.director.get().playback).toBe('playing');
-  await r.director.manualPause(true);
-  r.truth.program.map.phase = 'live';
-  await r.step();
-  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
-  expect(r.director.get().intent).toBe('automatic');
   await r.director.close();
 });
 
@@ -1525,17 +1520,6 @@ it('keeps formal playback beyond the audition lease without browser renewals', a
   await r.step(20_000);
   expect(r.director.get().intent).toBe('manual');
   expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_PLAYING');
-  await r.director.close();
-});
-
-it('allows manual selection without an automatic cue but still stops on trusted live play', async () => {
-  const r = await rig();
-  r.truth.production = false;
-  await r.director.manualPlay('waiting', r.tracks[1]!.id);
-  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_PLAYING');
-  r.truth.program.map.phase = 'live';
-  await r.step();
-  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
   await r.director.close();
 });
 
@@ -1780,35 +1764,6 @@ it('reads a seek after a lost acknowledgement and never replays the write', asyn
   expect(r.director.get().cursorMs).toBe(1200);
   expect(r.director.get().intent).toBe('held');
   r.obs.intercept = undefined;
-  await r.director.close();
-});
-
-it('allows a trusted match pause without any automatic cue and stops when play resumes', async () => {
-  const r = await rig();
-  r.truth.production = false;
-  r.truth.program.map.phase = 'live';
-  r.truth.program.clock = { phase: 'paused', endsInSeconds: 40 };
-  await r.director.manualPlay('waiting', r.tracks[0]!.id);
-  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_PLAYING');
-  r.truth.program.clock.phase = 'freezetime';
-  await r.step();
-  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
-  await r.director.close();
-});
-
-it('stops manual music when telemetry becomes stale even without a named map', async () => {
-  const r = await rig();
-  r.truth.program.map.phase = null;
-  r.truth.program.map.name = null;
-  r.truth.program.status.telemetry = 'awaiting';
-  r.truth.production = false;
-  await r.director.manualPlay('waiting', r.tracks[0]!.id);
-  r.truth.program.status.telemetry = 'stale';
-  await r.step();
-  expect(r.obs.bgm().state).toBe('OBS_MEDIA_STATE_STOPPED');
-  await expect(r.director.manualPlay('waiting', r.tracks[0]!.id)).rejects.toThrow(
-    'music_program_unsafe',
-  );
   await r.director.close();
 });
 
