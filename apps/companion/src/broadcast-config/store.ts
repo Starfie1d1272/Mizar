@@ -62,6 +62,7 @@ type ConsumerApplied = {
 };
 type ConsumerState = {
   applied: ConsumerApplied | null;
+  rollback?: ConsumerApplied;
   error: string | null;
   desired?: string;
 };
@@ -164,8 +165,13 @@ function releaseSettledRollback(envelope: Envelope): void {
   const active = envelope.document.active;
   for (const kind of ['hud', 'program', 'music', 'camera'] as const) {
     const state = envelope.consumers?.[kind];
-    if (!state?.applied) return;
-    if (!state.error && state.applied.moduleRevision !== active.moduleRevisions[kind]) return;
+    if (!state || (!state.error && !state.applied)) return;
+    if (!state.error && state.applied?.moduleRevision !== active.moduleRevisions[kind]) return;
+  }
+  for (const kind of ['hud', 'program', 'music', 'camera'] as const) {
+    const state = envelope.consumers![kind]!;
+    if (state.error && !state.applied && !state.rollback)
+      state.rollback = compactConsumer(kind, envelope.document.previousActive);
   }
   envelope.document.previousActive = null;
 }
@@ -272,16 +278,16 @@ export class BroadcastConfigStore {
         const entry = z
           .strictObject({
             applied: z.unknown(),
+            rollback: z.unknown().optional(),
             error: z.string().nullable(),
             desired: z.string().optional(),
           })
           .parse(raw);
         const kind = key as ConsumerKind;
-        let applied: ConsumerApplied | null = null;
-        if (entry.applied !== null) {
-          const raw = z.record(z.string(), z.unknown()).parse(entry.applied);
+        const parseApplied = (input: unknown): ConsumerApplied => {
+          const raw = z.record(z.string(), z.unknown()).parse(input);
           if (raw.schemaVersion === 1) {
-            applied = compactConsumer(
+            return compactConsumer(
               kind,
               parseBroadcastConfigDocument({ ...document, active: raw }).active,
             );
@@ -297,14 +303,17 @@ export class BroadcastConfigStore {
               })
               .parse(raw);
             const expanded = expandConsumer(kind, value as ConsumerApplied, document.active);
-            applied = compactConsumer(
+            return compactConsumer(
               kind,
               parseBroadcastConfigDocument({ ...document, active: expanded }).active,
             );
           }
-        }
+        };
+        const applied = entry.applied === null ? null : parseApplied(entry.applied);
+        const rollback = entry.rollback === undefined ? undefined : parseApplied(entry.rollback);
         consumers[kind] = {
           applied,
+          ...(rollback ? { rollback } : {}),
           error: entry.error,
           ...(entry.desired ? { desired: entry.desired } : {}),
         };
@@ -509,6 +518,12 @@ export class BroadcastConfigStore {
     const applied = this.envelope.consumers?.[kind]?.applied;
     return applied ? expandConsumer(kind, applied, this.envelope.document.active) : null;
   }
+  fallbackSnapshot(kind: ConsumerKind): ActiveBroadcastSnapshot | null {
+    if (!this.envelope) throw new Error('broadcast_config_unavailable');
+    const state = this.envelope.consumers?.[kind];
+    const fallback = state?.applied ?? state?.rollback;
+    return fallback ? expandConsumer(kind, fallback, this.envelope.document.active) : null;
+  }
   get appliedDisplay(): ActiveBroadcastSnapshot {
     if (!this.envelope) throw new Error('broadcast_config_unavailable');
     const active = structuredClone(this.envelope.document.active);
@@ -534,6 +549,7 @@ export class BroadcastConfigStore {
     active: ActiveBroadcastSnapshot,
     error: string | null,
     reset = false,
+    restored = false,
   ) {
     await this.queue.run(async () => {
       if (!this.envelope) throw new Error('broadcast_config_unavailable');
@@ -542,12 +558,21 @@ export class BroadcastConfigStore {
       const next = structuredClone(this.envelope);
       next.consumers ??= {};
       const previous = next.consumers[kind];
+      const rollback =
+        previous?.applied ??
+        previous?.rollback ??
+        (next.document.previousActive
+          ? compactConsumer(kind, next.document.previousActive)
+          : undefined);
       next.consumers[kind] = {
         applied: error
-          ? reset
-            ? null
-            : (previous?.applied ?? null)
+          ? restored
+            ? (rollback ?? null)
+            : reset
+              ? null
+              : (previous?.applied ?? null)
           : compactConsumer(kind, active),
+        ...(error && !restored && (reset || !previous?.applied) && rollback ? { rollback } : {}),
         error,
         ...(error && previous?.desired ? { desired: previous.desired } : {}),
       };
@@ -563,6 +588,8 @@ export class BroadcastConfigStore {
     );
     for (const state of Object.values(this.envelope.consumers ?? {}))
       for (const ref of state.applied?.lock.resources ?? []) refs.set(canonicalJson(ref), ref);
+    for (const state of Object.values(this.envelope.consumers ?? {}))
+      for (const ref of state.rollback?.lock.resources ?? []) refs.set(canonicalJson(ref), ref);
     return structuredClone([...refs.values()]);
   }
   get pendingLegacyCamera(): PendingLegacyCamera | undefined {
@@ -1586,6 +1613,9 @@ export class BroadcastConfigStore {
               for (const kind of failed) {
                 next.consumers[kind] = {
                   applied: next.consumers[kind]?.applied ?? null,
+                  ...(next.consumers[kind]?.rollback
+                    ? { rollback: next.consumers[kind]!.rollback }
+                    : {}),
                   error: failedReasons[kind] ?? 'dependency_unavailable',
                   ...(failedDesired[kind] ? { desired: failedDesired[kind] } : {}),
                 };

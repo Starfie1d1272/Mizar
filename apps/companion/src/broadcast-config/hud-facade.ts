@@ -66,7 +66,7 @@ export function createHudConfigPersistence(
       return parseHudConfigDocument({ ...result, activePreset: current.activePreset });
     },
     readApplied: () => {
-      const active = store.appliedSnapshot('hud');
+      const active = store.fallbackSnapshot('hud');
       if (!active) throw new Error('hud_persistence_unavailable');
       return Promise.resolve(hudDocumentFromBroadcast({ ...store.snapshot, active }));
     },

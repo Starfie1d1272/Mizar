@@ -382,7 +382,7 @@ export function createBroadcastRuntime(input: {
         : null;
     let programRestored = false;
     if (programUnavailable) {
-      const previous = store.appliedSnapshot('program');
+      const previous = store.fallbackSnapshot('program');
       if (previous) {
         try {
           await resolver.resolveModule({
@@ -400,24 +400,28 @@ export function createBroadcastRuntime(input: {
       initialActive,
       startupError('hud', hudUnavailable),
       hudUnavailable && !hudRestored,
+      hudRestored,
     );
     await store.recordConsumer(
       'music',
       initialActive,
       startupError('music', musicUnavailable),
       musicUnavailable && !musicRestored,
+      musicRestored,
     );
     await store.recordConsumer(
       'camera',
       initialActive,
       startupError('camera', cameraUnavailable),
       cameraUnavailable && !cameraRestored,
+      cameraRestored,
     );
     await store.recordConsumer(
       'program',
       initialActive,
       startupError('program', programUnavailable),
       programUnavailable && !programRestored,
+      programRestored,
     );
     if (input.builtinMusicPack) {
       try {
