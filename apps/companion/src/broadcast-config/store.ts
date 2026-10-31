@@ -159,6 +159,16 @@ function archivePendingReceipt(envelope: Envelope): void {
   envelope.receipts[envelope.pendingReceipt.requestId] = envelope.pendingReceipt.receipt;
   delete envelope.pendingReceipt;
 }
+function releaseSettledRollback(envelope: Envelope): void {
+  if (!envelope.document.previousActive) return;
+  const active = envelope.document.active;
+  for (const kind of ['hud', 'program', 'music', 'camera'] as const) {
+    const state = envelope.consumers?.[kind];
+    if (!state?.applied) return;
+    if (!state.error && state.applied.moduleRevision !== active.moduleRevisions[kind]) return;
+  }
+  envelope.document.previousActive = null;
+}
 const pendingLegacyCameraSchema = z.strictObject({
   catalog: cameraCatalogSchema,
   automaticEnabled: z.boolean(),
@@ -541,6 +551,7 @@ export class BroadcastConfigStore {
         error,
         ...(error && previous?.desired ? { desired: previous.desired } : {}),
       };
+      releaseSettledRollback(next);
       await this.commit(next);
     });
   }
@@ -1579,6 +1590,7 @@ export class BroadcastConfigStore {
                   ...(failedDesired[kind] ? { desired: failedDesired[kind] } : {}),
                 };
               }
+              releaseSettledRollback(next);
               await this.options.assertReferenceCommitAllowed(
                 this.envelope.document,
                 next.document,
