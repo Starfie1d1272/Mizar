@@ -116,6 +116,20 @@ export function registerProductionRoutes(
   app.get('/local/v1/production', (_request, reply) =>
     reply.header('cache-control', 'no-store').send(view()),
   );
+  app.get('/local/v1/preparation-status', (request, reply) => {
+    const id = (request.query as { preparationId?: unknown }).preparationId;
+    if (typeof id !== 'string' || !/^[a-zA-Z0-9-]{1,64}$/.test(id))
+      return reply
+        .code(lifecycleErrors.preparationIdInvalid.status)
+        .send(lifecycleErrors.preparationIdInvalid);
+    return reply
+      .header('cache-control', 'no-store')
+      .send(
+        cancellationResponseSchema.parse({
+          entered: lastEnteredId === id && mode !== 'preparation',
+        }),
+      );
+  });
   async function change(
     body: { action?: unknown; expectedRevision?: unknown; preparationId?: unknown } | null,
   ) {
@@ -125,6 +139,9 @@ export function registerProductionRoutes(
         code: lifecycleErrors.preparationCancelled.status,
         value: { ...lifecycleErrors.preparationCancelled, message: '准备已取消。' },
       };
+    // A lost response must not turn an already committed entry into a new entry.
+    if (body?.action === 'enter' && entryId && lastEnteredId === entryId && mode !== 'preparation')
+      return { code: 200, value: view() };
     if (body?.action === 'enter') {
       try {
         await options.waitForBroadcast?.();
@@ -292,7 +309,9 @@ export function registerProductionRoutes(
         }
       }
       committed = true;
-      revision = randomUUID();
+      // Hiding the workspace while preparing changes no production state and
+      // must not invalidate the preparation owner's in-flight operations.
+      if (body?.action !== 'hide' || mode !== 'preparation') revision = randomUUID();
       if (entering) {
         sessionGeneration++;
         options.onEntered?.();

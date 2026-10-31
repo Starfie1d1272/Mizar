@@ -17,6 +17,7 @@ struct Task {
     camera: bool,
     camera_uncertain: bool,
     entered: bool,
+    enter_attempted: bool,
     presented: bool,
     video_transaction: Option<String>,
     message: String,
@@ -63,7 +64,7 @@ fn check(app: &tauri::AppHandle, id: &str) -> Result<(), String> {
     let production = request(app, "GET", "/local/v1/production", json!({}))?;
     let production = crate::lifecycle_contract::production_view(&production)?;
     let valid = if t.entered {
-        production.mode == "live" || production.mode == "hidden"
+        (production.mode == "live" || production.mode == "hidden") && entered(app, id)?
     } else {
         production.mode == "preparation" && production.revision == t.revision
     };
@@ -71,6 +72,15 @@ fn check(app: &tauri::AppHandle, id: &str) -> Result<(), String> {
         return Err("制作状态已变化，请重试。".into());
     }
     Ok(())
+}
+fn entered(app: &tauri::AppHandle, id: &str) -> Result<bool, String> {
+    let status = request(
+        app,
+        "GET",
+        &format!("/local/v1/preparation-status?preparationId={id}"),
+        json!({}),
+    )?;
+    crate::lifecycle_contract::cancellation_entered(&status)
 }
 fn request(app: &tauri::AppHandle, method: &str, path: &str, body: Value) -> Result<Value, String> {
     let (status, value) = production_exit::request_with_identity(
@@ -160,6 +170,11 @@ fn current_revision(app: &tauri::AppHandle) -> Result<String, String> {
     Ok(crate::lifecycle_contract::production_view(&value)?.revision)
 }
 async fn run(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    if snapshot()?.is_some_and(|task| task.id == id && task.enter_attempted && !task.entered)
+        && entered(&app, &id)?
+    {
+        update(&id, |task| task.entered = true);
+    }
     let task = snapshot()?
         .filter(|t| t.id == id)
         .ok_or("准备任务不存在。")?;
@@ -444,6 +459,9 @@ async fn run(app: tauri::AppHandle, id: String) -> Result<(), String> {
     }
     check(&app, &id)?;
     if !task.entered {
+        // Until the service confirms the outcome, never roll back resources:
+        // the enter request may have committed even if its response was lost.
+        update(&id, |t| t.enter_attempted = true);
         controlled_post(
             &app,
             &id,
@@ -465,7 +483,7 @@ fn spawn(app: tauri::AppHandle, id: String) {
         let result = run(app.clone(), id.clone()).await;
         if let Err(mut error) = result {
             if let Ok(Some(task)) = snapshot() {
-                if task.id == id && !task.entered {
+                if task.id == id && !task.entered && !task.enter_attempted {
                     if let Some(transaction) = task.video_transaction {
                         if let Err(restore) = http(
                             &app,
@@ -563,6 +581,7 @@ pub(crate) fn preparation_start(
         camera: false,
         camera_uncertain: false,
         entered: false,
+        enter_attempted: false,
         presented: false,
         video_transaction: None,
         message: "正在准备游戏和 OBS…".into(),
@@ -638,6 +657,21 @@ pub(crate) async fn preparation_cancel(
             Err("制作已进入，请退出工作台。".into())
         }
         Ok(false) => {
+            // Cancellation is acknowledged by the service before restoring: it
+            // fences a delayed enter request for this same preparation ID.
+            if let Some(transaction) = snapshot()?
+                .filter(|task| task.id == preparation_id && task.enter_attempted)
+                .and_then(|task| task.video_transaction)
+            {
+                http(
+                    &app,
+                    "POST",
+                    "/operator/obs/video-restore",
+                    json!({"transactionId":transaction}),
+                )
+                .await?;
+                update(&preparation_id, |task| task.video_transaction = None);
+            }
             publish(&app, &preparation_id, "准备已取消。".into());
             Ok(())
         }
