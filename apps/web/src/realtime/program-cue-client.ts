@@ -8,7 +8,11 @@ import type {
   ProgramCueWire,
 } from '@mizar/protocol/program-cue';
 import type { ProgramSnapshot } from '@mizar/protocol/program';
-import { LOCAL_PROTOCOL_SUBPROTOCOL } from '@mizar/protocol/version';
+import {
+  LOCAL_PROTOCOL_SUBPROTOCOL,
+  LOCAL_PROTOCOL_VERSION,
+  PROGRAM_CUE_SCHEMA_VERSION,
+} from '@mizar/protocol/version';
 
 import {
   localWebSocketUrl,
@@ -16,6 +20,7 @@ import {
   type BrowserWebSocketLike,
   type WebSocketFactory,
 } from './local-channel-client';
+import { recoverChannelVersion, reserveReload } from './version-recovery';
 
 export const PROGRAM_CUE_RECONNECT_BACKOFF_MS = [250, 500, 1_000, 2_000, 5_000] as const;
 
@@ -118,6 +123,7 @@ export class ProgramCueClient {
   private connectionGeneration = 0;
   private reconnectTimer: unknown;
   private reconnectIndex = 0;
+  private checkingVersion = false;
   private disposed = false;
 
   constructor(options: ProgramCueClientOptions = {}) {
@@ -151,8 +157,13 @@ export class ProgramCueClient {
   }
 
   start(): void {
-    if (this.disposed || this.socket !== undefined || this.reconnectTimer !== undefined) return;
-    if (this.snapshot.state === 'protocol-error') return;
+    if (
+      this.disposed ||
+      this.socket !== undefined ||
+      this.reconnectTimer !== undefined ||
+      this.checkingVersion
+    )
+      return;
     this.connect();
   }
 
@@ -191,11 +202,14 @@ export class ProgramCueClient {
   }
 
   private resubscribeAfterProgramSnapshotReset(): void {
+    if (this.snapshot.state === 'reconnecting') {
+      this.resetEphemeral('program-snapshot-reset');
+      return;
+    }
     const shouldReconnect =
       this.snapshot.state === 'connecting' ||
       this.snapshot.state === 'awaiting-baseline' ||
-      this.snapshot.state === 'live' ||
-      this.snapshot.state === 'reconnecting';
+      this.snapshot.state === 'live';
 
     if (this.reconnectTimer !== undefined) {
       this.scheduler.clearTimeout(this.reconnectTimer);
@@ -206,6 +220,7 @@ export class ProgramCueClient {
     this.socket = undefined;
     this.acceptance = undefined;
     this.connectionGeneration += 1;
+    this.checkingVersion = false;
     this.reconnectIndex = 0;
 
     this.resetEphemeral('program-snapshot-reset');
@@ -244,7 +259,7 @@ export class ProgramCueClient {
     socket.onopen = () => {
       if (!this.isCurrent(generation, socket)) return;
       if (socket.protocol !== LOCAL_PROTOCOL_SUBPROTOCOL) {
-        this.handleProtocolError(generation, socket, 'subprotocol mismatch');
+        this.checkVersionAndRetry(generation, socket, 'subprotocol mismatch');
         return;
       }
       this.update({ state: 'awaiting-baseline', baseline: null, error: null });
@@ -258,32 +273,67 @@ export class ProgramCueClient {
     };
     socket.onclose = () => {
       if (!this.isCurrent(generation, socket)) return;
-      this.socket = undefined;
-      this.handleRetry(generation, 'WebSocket closed');
+      this.checkVersionAndRetry(generation, socket, 'WebSocket closed');
     };
   }
 
   private handleMessage(generation: number, socket: BrowserWebSocketLike, data: unknown): void {
     if (typeof data !== 'string') {
-      this.handleProtocolError(generation, socket, 'binary/non-text application message');
+      if (this.snapshot.baseline === null) {
+        this.checkVersionAndRetry(generation, socket, 'binary/non-text cue baseline');
+        return;
+      }
+      this.update({ error: 'binary/non-text application message' });
       return;
     }
     let parsed: unknown;
     try {
       parsed = JSON.parse(data) as unknown;
     } catch {
-      this.handleProtocolError(generation, socket, 'invalid JSON cue message');
+      if (this.snapshot.baseline === null) {
+        this.checkVersionAndRetry(generation, socket, 'invalid JSON cue baseline');
+        return;
+      }
+      this.update({ error: 'invalid JSON cue message' });
       return;
     }
     const acceptance = this.acceptance;
     if (acceptance === undefined) {
-      this.handleProtocolError(generation, socket, 'cue arrived before connection setup');
+      this.checkVersionAndRetry(generation, socket, 'cue arrived before connection setup');
       return;
     }
     const result = acceptance.accept(parsed);
-    if (result.kind === 'ignored') return;
+    if (result.kind === 'ignored') {
+      if (result.reason === 'cue-before-baseline') {
+        this.checkVersionAndRetry(generation, socket, 'cue before baseline');
+      }
+      return;
+    }
     if (result.kind === 'rejected') {
-      this.handleProtocolError(generation, socket, `cue ${result.reason}`);
+      if (result.reason === 'schema-invalid') {
+        const envelope =
+          typeof parsed === 'object' && parsed !== null
+            ? (parsed as Record<string, unknown>)
+            : null;
+        if (
+          this.snapshot.baseline !== null &&
+          envelope?.type === 'cue' &&
+          envelope.channel === 'program-cue' &&
+          envelope.protocolVersion === LOCAL_PROTOCOL_VERSION &&
+          envelope.schemaVersion === PROGRAM_CUE_SCHEMA_VERSION
+        ) {
+          this.update({ error: 'invalid cue message' });
+        } else {
+          this.checkVersionAndRetry(generation, socket, `cue ${result.reason}`);
+        }
+      } else {
+        this.handleRetry(generation, `cue ${result.reason}`);
+        try {
+          socket.close(1002, result.reason);
+        } catch {
+          /* Already closed. */
+        }
+      }
       return;
     }
     if (result.message.type === 'cue-baseline') {
@@ -292,6 +342,7 @@ export class ProgramCueClient {
       if (result.reset) this.resetEphemeral('baseline');
       return;
     }
+    if (this.snapshot.error !== null) this.update({ error: null });
     const programSnapshot =
       this.getProgramSnapshot === undefined
         ? this.currentProgramSnapshot
@@ -310,7 +361,7 @@ export class ProgramCueClient {
     this.emitCue(result.message.cue);
   }
 
-  private handleProtocolError(
+  private checkVersionAndRetry(
     generation: number,
     socket: BrowserWebSocketLike,
     reason: string,
@@ -319,13 +370,53 @@ export class ProgramCueClient {
     this.socket = undefined;
     this.connectionGeneration += 1;
     this.acceptance = undefined;
-    this.resetEphemeral('protocol-error');
-    this.update({ state: 'protocol-error', baseline: null, error: reason });
+    this.checkingVersion = true;
+    this.resetEphemeral('reconnect');
+    this.update({ state: 'reconnecting', baseline: null, error: reason });
     try {
       socket.close(1002, reason);
     } catch {
       // The connection may already be closed.
     }
+    this.checkVersion(this.connectionGeneration, reason);
+  }
+
+  private checkVersion(generation: number, reason: string, knownMismatch = false): void {
+    void recoverChannelVersion('program-cue', knownMismatch).then((result) => {
+      if (this.disposed || generation !== this.connectionGeneration) return;
+      this.checkingVersion = false;
+      if (result === 'retry') {
+        this.handleRetry(generation, reason);
+      } else if (result === 'recheck') {
+        const delay =
+          PROGRAM_CUE_RECONNECT_BACKOFF_MS[
+            Math.min(this.reconnectIndex, PROGRAM_CUE_RECONNECT_BACKOFF_MS.length - 1)
+          ]!;
+        this.reconnectIndex = Math.min(
+          this.reconnectIndex + 1,
+          PROGRAM_CUE_RECONNECT_BACKOFF_MS.length - 1,
+        );
+        this.reconnectTimer = this.scheduler.setTimeout(() => {
+          this.reconnectTimer = undefined;
+          this.checkingVersion = true;
+          this.checkVersion(generation, reason, true);
+        }, delay);
+      } else {
+        this.resetEphemeral('protocol-error');
+        this.update({
+          state: 'protocol-error',
+          baseline: null,
+          error: 'local channel version incompatible',
+        });
+        if (
+          !this.disposed &&
+          generation === this.connectionGeneration &&
+          typeof result === 'object' &&
+          reserveReload(result.reload)
+        )
+          window.location.reload();
+      }
+    });
   }
 
   private handleRetry(generation: number, reason: string): void {

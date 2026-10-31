@@ -1,12 +1,12 @@
 import {
   LOCAL_PROTOCOL_SUBPROTOCOL,
-  LOCAL_SNAPSHOT_VERSIONS,
-  type LocalSnapshotChannel,
+  LOCAL_CHANNEL_VERSIONS,
+  type LocalChannel,
 } from '@mizar/protocol/version';
 
 interface ProtocolIdentity {
   readonly subprotocol: string;
-  readonly channels: Partial<Record<LocalSnapshotChannel, number>>;
+  readonly channels: Partial<Record<LocalChannel, number>>;
 }
 
 function identity(value: unknown): ProtocolIdentity | null {
@@ -31,7 +31,7 @@ function identity(value: unknown): ProtocolIdentity | null {
 function matches(
   server: ProtocolIdentity,
   client: ProtocolIdentity,
-  channel: LocalSnapshotChannel,
+  channel: LocalChannel,
 ): boolean {
   return (
     server.subprotocol === client.subprotocol &&
@@ -40,34 +40,74 @@ function matches(
   );
 }
 
-async function fetchNoCache(url: string): Promise<Response> {
+async function fetchBody(url: string): Promise<string> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 3000);
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    return await fetch(url, { cache: 'no-store', signal: controller.signal });
+    return await Promise.race([
+      (async () => {
+        const response = await fetch(url, { cache: 'no-store', signal: controller.signal });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.text();
+      })(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new Error('version request timeout'));
+        }, 3000);
+      }),
+    ]);
   } finally {
-    clearTimeout(timeout);
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
 
-/** Returns retry on an unavailable/unrecognized endpoint, never guessing compatibility. */
+export function reserveReload(target: string): boolean {
+  try {
+    const key = 'mizar.local.protocol.reload-attempts';
+    const raw = sessionStorage.getItem(key);
+    const attempts: unknown = raw === null ? [] : JSON.parse(raw);
+    if (!Array.isArray(attempts) || attempts.length >= 64) return false;
+    if (
+      !attempts.every(
+        (item) =>
+          typeof item === 'object' &&
+          item !== null &&
+          typeof item.target === 'string' &&
+          typeof item.at === 'number',
+      )
+    )
+      return false;
+    const now = Date.now();
+    if (attempts.some((item) => item.target === target)) return false;
+    if (attempts.filter((item) => now - item.at < 60_000).length >= 3) return false;
+    sessionStorage.setItem(key, JSON.stringify([...attempts, { target, at: now }]));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Recheck a known mismatch without reconnecting while its page is unavailable. */
 export async function recoverChannelVersion(
-  channel: LocalSnapshotChannel,
-): Promise<'retry' | 'incompatible' | 'reload'> {
+  channel: LocalChannel,
+  knownMismatch = false,
+): Promise<'retry' | 'recheck' | 'incompatible' | { readonly reload: string }> {
   if (typeof window === 'undefined') return 'retry';
   let server: ProtocolIdentity | null;
   try {
-    const response = await fetchNoCache('/local/protocol');
-    if (!response.ok) return 'retry';
-    server = identity(await response.json());
+    server = identity(JSON.parse(await fetchBody('/local/protocol')) as unknown);
   } catch {
-    return 'retry';
+    return knownMismatch ? 'recheck' : 'retry';
   }
-  if (server === null) return 'retry';
+  if (server === null) return knownMismatch ? 'recheck' : 'retry';
+  // Older servers advertise only snapshot channels; absence does not prove cue incompatibility.
+  if (server.subprotocol === LOCAL_PROTOCOL_SUBPROTOCOL && server.channels[channel] === undefined)
+    return knownMismatch ? 'recheck' : 'retry';
   if (
     matches(
       server,
-      { subprotocol: LOCAL_PROTOCOL_SUBPROTOCOL, channels: LOCAL_SNAPSHOT_VERSIONS },
+      { subprotocol: LOCAL_PROTOCOL_SUBPROTOCOL, channels: LOCAL_CHANNEL_VERSIONS },
       channel,
     )
   )
@@ -75,11 +115,9 @@ export async function recoverChannelVersion(
 
   let page: string;
   try {
-    const response = await fetchNoCache(window.location.pathname + window.location.search);
-    if (!response.ok) return 'incompatible';
-    page = await response.text();
+    page = await fetchBody(window.location.pathname + window.location.search);
   } catch {
-    return 'incompatible';
+    return 'recheck';
   }
   try {
     const html = new DOMParser().parseFromString(page, 'text/html');
@@ -97,13 +135,9 @@ export async function recoverChannelVersion(
       nextUrl.href === currentUrl.href
     )
       return 'incompatible';
-    // A single attempt per tab remains bounded even if versions or asset names oscillate.
-    const key = 'mizar.local.protocol.reload-attempted';
-    if (sessionStorage.getItem(key) !== null) return 'incompatible';
-    sessionStorage.setItem(key, '1');
-    return 'reload';
+    return { reload: nextUrl.href };
   } catch {
-    // Without durable session storage a reload loop cannot be ruled out.
+    // A reload without a durable budget risks a loop.
     return 'incompatible';
   }
 }
