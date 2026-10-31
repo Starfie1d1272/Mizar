@@ -4,8 +4,14 @@ import { join, resolve } from 'node:path';
 import { contentDigest, writeShaSums } from './build.mjs';
 import { verifyPayload } from './product-runtime.mjs';
 
-const [directory, executable, head] = process.argv.slice(2);
-if (!directory || !executable || !/^[a-f0-9]{40}$/.test(head ?? ''))
+const [directory, executable, head, baseVersion, baseSha] = process.argv.slice(2);
+if (
+  !directory ||
+  !executable ||
+  !/^[a-f0-9]{40}$/.test(head ?? '') ||
+  !/^[a-f0-9]{40}$/.test(baseSha ?? '') ||
+  !/^\d+\.\d+\.\d+$/.test(baseVersion ?? '')
+)
   throw new Error('Invalid temporary bundle input');
 const root = resolve(directory);
 if (
@@ -13,13 +19,13 @@ if (
     encoding: 'utf8',
     windowsHide: true,
     timeout: 20000,
-  }).trim() !== '1.10.2'
+  }).trim() !== baseVersion
 )
   throw new Error('Temporary executable version differs');
 const original = await verifyPayload(root);
 if (
-  original.appVersion !== '1.10.2' ||
-  original.gitSha !== '77dddfa61fac235fc9da82eab03437c7ad501b99' ||
+  original.appVersion !== baseVersion ||
+  original.gitSha !== baseSha ||
   original.resourceMode !== 'full' ||
   original.desktopBuildProfile !== 'release'
 )
