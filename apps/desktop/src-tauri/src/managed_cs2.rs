@@ -1467,7 +1467,8 @@ impl ManagedCs2 {
         } else {
             self.store.restore()?
         };
-        let trial = trial.map_err(|error| format!("已执行本机配置恢复；Demo 资料恢复仍待确认：{error}"))?;
+        let trial =
+            trial.map_err(|error| format!("已执行本机配置恢复；Demo 资料恢复仍待确认：{error}"))?;
         if trial.is_some() && any_cs2_running(&self.log)? {
             return Err("游戏配置已恢复，请先退出 CS2 再完成 Demo 试播恢复。".into());
         }
