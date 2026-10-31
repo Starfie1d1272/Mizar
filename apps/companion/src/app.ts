@@ -331,18 +331,27 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
               event: Parameters<NonNullable<OutputServiceOptions['sink']>['send']>[0],
               signal?: AbortSignal,
               retainedLineup?: readonly string[],
+              retainedSource?: import('./match-context/rivalhub-source-state.js').ExactSource,
             ) =>
-              options.rivalhubConnection!.view().paired &&
-              outputBinding?.origin === 'online' &&
-              outputBinding.context.matchId === event.matchId
-                ? options.rivalhubConnection!.sendReliable(
+              retainedSource
+                ? options.rivalhubConnection!.sendRetainedReliable(
                     event,
+                    retainedSource,
                     outputService.current(true),
                     signal,
                     retainedLineup,
                   )
-                : (options.reliableSink?.send(event, signal) ??
-                  Promise.resolve('rejected' as const)),
+                : options.rivalhubConnection!.view().paired &&
+                    outputBinding?.origin === 'online' &&
+                    outputBinding.context.matchId === event.matchId
+                  ? options.rivalhubConnection!.sendReliable(
+                      event,
+                      outputService.current(true),
+                      signal,
+                      retainedLineup,
+                    )
+                  : (options.reliableSink?.send(event, signal) ??
+                    Promise.resolve('retry' as const)),
           },
         }
       : options.reliableSink === undefined

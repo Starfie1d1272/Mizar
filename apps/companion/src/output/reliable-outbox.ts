@@ -91,6 +91,7 @@ export interface ReliableEventSink {
     event: ReliableEventV1,
     signal?: AbortSignal,
     lineupSteam64?: readonly string[],
+    source?: ExactSource,
   ): Promise<ReliableDeliveryResult>;
 }
 
@@ -707,6 +708,11 @@ export class ReliableOutbox {
   private durabilityContext: string | undefined;
   private readonly continuityFailures = new Map<string, number>();
   private successfulDurableWrites = 0;
+  private pendingReplay: Promise<void> | undefined;
+  private readonly pendingEnqueues = new Map<
+    string,
+    { event: ReliableEventV1; retry: () => Promise<boolean> }
+  >();
 
   private noteUnconfirmedWrite(key: string): void {
     if (
@@ -1230,7 +1236,9 @@ export class ReliableOutbox {
   }
 
   /** Called only after the release owner has confirmed this exact authority ended. */
-  archiveConfirmedSource(input: ExactSource): Promise<void> {
+  async archiveConfirmedSource(input: ExactSource): Promise<void> {
+    await this.retryPendingEnqueues();
+    if (this.hasPendingEnqueues(input)) throw new Error('outbox_source_unsettled');
     return this.runDurable(`archive:${sourceKey(parseSource(input))}`, async () => {
       const identity = parseSource(input);
       const key = sourceKey(identity);
@@ -1296,7 +1304,9 @@ export class ReliableOutbox {
   }
 
   /** Preserve every exact-source item without claiming remote closure or delivery. */
-  isolateRevokedSource(input: ExactSource): Promise<void> {
+  async isolateRevokedSource(input: ExactSource): Promise<void> {
+    await this.retryPendingEnqueues();
+    if (this.hasPendingEnqueues(input)) throw new Error('outbox_source_unsettled');
     return this.runDurable(`revoke:${sourceKey(parseSource(input))}`, async () => {
       const identity = parseSource(input);
       const key = sourceKey(identity);
@@ -1404,6 +1414,12 @@ export class ReliableOutbox {
   }
 
   hasUnconfirmedBoundary(event: ReliableEventV1): boolean {
+    if (
+      [...this.pendingEnqueues.values()].some(
+        (item) => isContinuityBoundary(item.event) && dependsOnBoundary(event, item.event),
+      )
+    )
+      return true;
     return [
       ...this.records,
       ...this.legacyRecords,
@@ -1823,11 +1839,28 @@ export class ReliableOutbox {
     recoveryKey?: string,
     scope?: BoundaryScope,
     source?: ExactSource | null,
+    replaying = false,
   ): Promise<boolean> {
+    event = parseReliableEventV1(event);
     const operationKey = `enqueue:${createHash('sha256')
       .update(JSON.stringify([event, lineupSteam64, recoveryKey, source]))
       .digest('hex')}`;
+    const retryArgs = structuredClone([
+      event,
+      now,
+      continuity,
+      lineupSteam64,
+      recoveryKey,
+      scope,
+      source,
+    ] as const);
+    if (!replaying && this.pendingEnqueues.size) await this.retryPendingEnqueues();
     return this.runDurable(operationKey, async () => {
+      // Do not replace a recovery mirror with unrelated work while an original write is missing.
+      if (!replaying && this.pendingEnqueues.size) {
+        this.noteUnconfirmedWrite(operationKey);
+        throw new Error('outbox_preceding_write_unconfirmed');
+      }
       await this.archiveLegacyTerminals();
       const valid = parseReliableEventV1(event);
       if (source) source = parseSource(source);
@@ -1842,8 +1875,13 @@ export class ReliableOutbox {
         this.revokedSources.some((archive) =>
           archive.intents.some((intent) => intent.event.idempotencyKey === valid.idempotencyKey),
         )
-      )
+      ) {
+        if (this.unconfirmedWrites.has(operationKey)) {
+          await this.commit(this.records, this.continuity);
+          return true;
+        }
         return false;
+      }
       if (
         this.records.filter((record) => record.status === 'pending').length +
           this.boundaryIntents.length >=
@@ -1913,7 +1951,54 @@ export class ReliableOutbox {
             }),
       );
       return true;
-    });
+    }).then(
+      (result) => {
+        this.pendingEnqueues.delete(operationKey);
+        return result;
+      },
+      (error: unknown) => {
+        if (this.unconfirmedWrites.has(operationKey))
+          this.pendingEnqueues.set(operationKey, {
+            event: retryArgs[0],
+            retry: () => this.enqueue(...retryArgs, true),
+          });
+        throw error;
+      },
+    );
+  }
+
+  hasPendingEnqueues(scope: ReliableDeliveryScope): boolean {
+    return [...this.pendingEnqueues.values()].some(
+      ({ event }) =>
+        event.matchId === scope.matchId &&
+        event.cursor.producerInstanceId === scope.producerInstanceId &&
+        event.cursor.liveSessionId === scope.liveSessionId,
+    );
+  }
+
+  hasPendingEnqueue(idempotencyKey: string): boolean {
+    return [...this.pendingEnqueues.values()].some(
+      (item) => item.event.idempotencyKey === idempotencyKey,
+    );
+  }
+
+  async retryPendingEnqueues(): Promise<void> {
+    if (this.pendingReplay) return this.pendingReplay;
+    const replay = (async () => {
+      for (const pending of [...this.pendingEnqueues.values()]) {
+        try {
+          await pending.retry();
+        } catch {
+          break;
+        } // Keep every original request; retry storage later, not a newer replacement.
+      }
+    })();
+    this.pendingReplay = replay;
+    try {
+      await replay;
+    } finally {
+      if (this.pendingReplay === replay) this.pendingReplay = undefined;
+    }
   }
 
   async flush(input: {
@@ -1940,7 +2025,13 @@ export class ReliableOutbox {
         .filter((record) => record.status === 'rejected' && record.event.kind === 'map_started')
         .map((record) => record.event);
       const next: ReliableOutboxRecord[] = [];
-      let blockedByMapEnd = false;
+      const blockedByMapEnd = new Set<string>();
+      const deliveryScope = (event: ReliableEventV1) =>
+        JSON.stringify([
+          event.matchId,
+          event.cursor.producerInstanceId,
+          event.cursor.liveSessionId,
+        ]);
       // Terminal failures remain fences: a later event cannot turn a rejected or
       // expired continuity transition into an implicit acknowledgement.
       const blockedBoundaries = [
@@ -2039,7 +2130,7 @@ export class ReliableOutbox {
           continue;
         }
         if (
-          blockedByMapEnd ||
+          blockedByMapEnd.has(deliveryScope(record.event)) ||
           blockedBoundaries.some((boundary) => dependsOnBoundary(record.event, boundary))
         ) {
           if (isContinuityBoundary(record.event)) blockedBoundaries.push(record.event);
@@ -2079,13 +2170,15 @@ export class ReliableOutbox {
         if (input.canSend !== undefined && !input.canSend(record.event, record.lineupSteam64)) {
           this.evidence(record, 'send_guard_blocked');
           if (isContinuityBoundary(record.event)) blockedBoundaries.push(record.event);
-          else if (['map_ended', 'map_started'].includes(record.event.kind)) blockedByMapEnd = true;
+          else if (['map_ended', 'map_started'].includes(record.event.kind))
+            blockedByMapEnd.add(deliveryScope(record.event));
           next.push(record);
           continue;
         }
         if (Date.parse(record.nextAttemptAt) > now.getTime()) {
           if (isContinuityBoundary(record.event)) blockedBoundaries.push(record.event);
-          else if (['map_ended', 'map_started'].includes(record.event.kind)) blockedByMapEnd = true;
+          else if (['map_ended', 'map_started'].includes(record.event.kind))
+            blockedByMapEnd.add(deliveryScope(record.event));
           next.push(record);
           continue;
         }
@@ -2094,9 +2187,7 @@ export class ReliableOutbox {
         const controller = new AbortController();
         try {
           outcome = await Promise.race([
-            record.lineupSteam64 === undefined
-              ? input.sink.send(record.event, controller.signal)
-              : input.sink.send(record.event, controller.signal, record.lineupSteam64),
+            input.sink.send(record.event, controller.signal, record.lineupSteam64, record.source),
             new Promise<'retry'>((resolve) => {
               timeout = setTimeout(() => {
                 controller.abort(new DOMException('Reliable delivery timed out', 'TimeoutError'));
@@ -2124,7 +2215,7 @@ export class ReliableOutbox {
               ['generation_fence', 'epoch_fence'].includes(outcome.reason))) &&
           ['map_ended', 'map_started'].includes(record.event.kind)
         )
-          blockedByMapEnd = true;
+          blockedByMapEnd.add(deliveryScope(record.event));
         if (!accepted && outcome !== 'retry' && record.event.kind === 'map_started')
           rejectedStarts.push(record.event);
         const attempts = record.attempts + 1;
@@ -2254,7 +2345,8 @@ export class ReliableOutbox {
 
   async flushForShutdown(): Promise<void> {
     await this.queue.flush();
-    if (this.unconfirmedWrites.size || this.boundaryCaptureFailed)
+    await this.retryPendingEnqueues();
+    if (this.unconfirmedWrites.size || this.boundaryCaptureFailed || this.pendingEnqueues.size)
       throw new Error('outbox_durable_write_unconfirmed');
   }
 
