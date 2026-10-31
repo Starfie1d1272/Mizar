@@ -143,6 +143,9 @@ export interface DeliveryContinuity {
 
 export interface BoundaryScope extends ReliableDeliveryScope {
   readonly authorityFingerprint?: string;
+  readonly runtimeSeq?: number;
+  readonly programSourceGeneration?: number;
+  readonly mapEpoch?: number;
 }
 
 export interface BoundaryIntent {
@@ -357,13 +360,25 @@ function parseOutbox(bytes: Buffer): OutboxFile {
       item.liveSessionId.length > 256 ||
       (item.authorityFingerprint !== undefined &&
         (typeof item.authorityFingerprint !== 'string' ||
-          !/^[a-f0-9]{64}$/.test(item.authorityFingerprint)))
+          !/^[a-f0-9]{64}$/.test(item.authorityFingerprint))) ||
+      ['runtimeSeq', 'programSourceGeneration', 'mapEpoch'].some(
+        (key) =>
+          item[key] !== undefined &&
+          (typeof item[key] !== 'number' ||
+            !Number.isSafeInteger(item[key]) ||
+            (item[key] as number) < 0),
+      )
     )
       throw new Error('boundary_gap_invalid');
     return {
       matchId: item.matchId,
       producerInstanceId: item.producerInstanceId,
       liveSessionId: item.liveSessionId,
+      ...(typeof item.runtimeSeq === 'number' ? { runtimeSeq: item.runtimeSeq } : {}),
+      ...(typeof item.programSourceGeneration === 'number'
+        ? { programSourceGeneration: item.programSourceGeneration }
+        : {}),
+      ...(typeof item.mapEpoch === 'number' ? { mapEpoch: item.mapEpoch } : {}),
       ...(typeof item.authorityFingerprint === 'string'
         ? { authorityFingerprint: item.authorityFingerprint }
         : {}),
@@ -729,6 +744,10 @@ export class ReliableOutbox {
       event.matchId === scope.matchId &&
       event.cursor.producerInstanceId === scope.producerInstanceId &&
       event.cursor.liveSessionId === scope.liveSessionId &&
+      (scope.runtimeSeq === undefined || event.cursor.runtimeSeq <= scope.runtimeSeq) &&
+      (scope.programSourceGeneration === undefined ||
+        event.cursor.programSourceGeneration <= scope.programSourceGeneration) &&
+      (scope.mapEpoch === undefined || event.cursor.mapEpoch <= scope.mapEpoch) &&
       (!authority || !scope.authorityFingerprint || authority === scope.authorityFingerprint)
     );
   }
@@ -743,6 +762,15 @@ export class ReliableOutbox {
               gap.matchId === scope.matchId &&
               gap.producerInstanceId === scope.producerInstanceId &&
               gap.liveSessionId === scope.liveSessionId &&
+              (gap.runtimeSeq === undefined ||
+                scope.runtimeSeq === undefined ||
+                gap.runtimeSeq <= scope.runtimeSeq) &&
+              (gap.programSourceGeneration === undefined ||
+                scope.programSourceGeneration === undefined ||
+                gap.programSourceGeneration <= scope.programSourceGeneration) &&
+              (gap.mapEpoch === undefined ||
+                scope.mapEpoch === undefined ||
+                gap.mapEpoch <= scope.mapEpoch) &&
               (!gap.authorityFingerprint ||
                 !scope.authorityFingerprint ||
                 gap.authorityFingerprint === scope.authorityFingerprint),
@@ -898,6 +926,7 @@ export class ReliableOutbox {
     const requested = JSON.stringify([
       checkpoint.matchId,
       checkpoint.contextRevision,
+      cursor.producerInstanceId,
       cursor.liveSessionId,
       cursor.programSourceGeneration,
       cursor.mapEpoch,

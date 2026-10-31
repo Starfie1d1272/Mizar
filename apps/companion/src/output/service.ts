@@ -80,11 +80,21 @@ export class OutputService {
       matchId,
       producerInstanceId: cursor.producerInstanceId,
       liveSessionId: cursor.liveSessionId,
+      runtimeSeq: cursor.runtimeSeq,
+      programSourceGeneration: cursor.programSourceGeneration,
+      mapEpoch: cursor.mapEpoch,
       ...(authorityFingerprint ? { authorityFingerprint } : {}),
     };
   }
   private boundaryScopeKey(scope: BoundaryScope | undefined): string {
-    return scope ? JSON.stringify(scope) : '*';
+    return scope
+      ? JSON.stringify([
+          scope.matchId,
+          scope.producerInstanceId,
+          scope.liveSessionId,
+          scope.authorityFingerprint,
+        ])
+      : '*';
   }
   private boundaryCommitIsPending(scope: BoundaryScope | undefined): boolean {
     return (
