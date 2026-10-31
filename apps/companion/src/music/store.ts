@@ -81,6 +81,7 @@ const stateSchema = z
       .default({ bgm: null, stinger: null }),
     held: z.boolean(),
     holdReason: z.enum(['external', 'stop']).optional(),
+    stingerHeld: z.boolean().optional(),
     owner: z.string().uuid(),
     sources: z.object({ bgm: z.string().nullable(), stinger: z.string().nullable() }).strict(),
     bgm: playbackSchema.nullable(),
@@ -549,11 +550,13 @@ export class MusicStore {
       this.importing = false;
     }
   }
-  async hold(held: boolean, reason: 'external' | 'stop' = 'external') {
+  async hold(held: boolean, reason: 'external' | 'stop' = 'external', preserveStinger = false) {
     await this.update((s) => {
       s.held = held;
       if (held) s.holdReason = reason;
       else delete s.holdReason;
+      if ((held && reason === 'external') || preserveStinger) s.stingerHeld = true;
+      else delete s.stingerHeld;
     });
   }
   async consume(key: string) {

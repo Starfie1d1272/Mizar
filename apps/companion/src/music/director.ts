@@ -161,6 +161,12 @@ export class MusicDirector {
       (this.holdReasonOverride ?? this.store.state.holdReason ?? 'external') === 'external'
     );
   }
+  private isStingerHeld() {
+    return (
+      Boolean(this.store.state.stingerHeld) &&
+      !(this.isHeld() && (this.holdReasonOverride ?? this.store.state.holdReason) === 'stop')
+    );
+  }
   private effectiveVolume(group: MusicGroup, track: MusicTrack) {
     const state = this.store.state;
     const spec = state.config.groups[group];
@@ -173,6 +179,7 @@ export class MusicDirector {
     return {
       ...this.status,
       held: this.isHeld(),
+      stingerHeld: Boolean(this.isStingerHeld()),
       intent: this.isHeld() ? 'held' : this.manual ? 'manual' : 'automatic',
       ...(this.preview.status ? { preview: this.preview.status } : {}),
     };
@@ -195,7 +202,7 @@ export class MusicDirector {
   }
   async previewRequest(request: MusicPreviewRequest) {
     if (this.closed) throw new Error('music_preview_closed');
-    if (request.action === 'start' && this.isExternalHold())
+    if (request.action === 'start' && (this.isExternalHold() || this.isStingerHeld()))
       throw new Error('music_preview_channel_busy');
     if (
       request.action === 'start' &&
@@ -218,15 +225,10 @@ export class MusicDirector {
       if (!looping(group)) throw new Error('music_next_invalid');
       const track = this.choose(group, this.manual.cue.key, this.manual.cue.track, true);
       if (!track) throw new Error('music_track_invalid');
-      if (this.manual.paused) {
-        const stopRevision = this.commandRevision + 1;
-        await this.command('stop');
-        if (this.closed || this.commandRevision !== stopRevision) return;
-      }
       await this.manualPlay(group, track.id, track.entryId);
       return;
     }
-    this.preview.cancel('operator_command');
+    this.preview.cancel(action === 'stop' ? 'explicit_stop' : 'operator_command');
     if (action !== 'next') {
       this.manual = null;
       this.unknownControl = false;
@@ -288,6 +290,7 @@ export class MusicDirector {
     );
     const track = matches.length === 1 ? matches[0] : undefined;
     if (!track || group === 'opening') throw new Error('music_track_invalid');
+    const preserveStinger = this.isExternalHold() || Boolean(this.isStingerHeld());
     const revision = ++this.commandRevision;
     this.unknownControl = false;
     this.invalidate();
@@ -295,7 +298,7 @@ export class MusicDirector {
     this.pendingOpening = null;
     this.fades = {};
     this.heldOverride = true;
-    await this.store.hold(false);
+    await this.store.hold(false, 'external', preserveStinger);
     if (revision !== this.commandRevision || this.closed) return;
     this.heldOverride = false;
     this.holdReasonOverride = null;
@@ -537,7 +540,7 @@ export class MusicDirector {
         valid,
         false,
         false,
-        !readOnly,
+        !readOnly && !(layer === 'stinger' && this.isStingerHeld()),
       );
       if (!valid()) return;
       if (!name) continue;
@@ -575,6 +578,7 @@ export class MusicDirector {
   private async configureDefaultMonitor(obs: ObsRpc, valid: () => boolean, recheck = false) {
     const wanted = this.store.state.monitorPreference;
     const pending = (['bgm', 'stinger'] as const).filter((layer) => {
+      if (layer === 'stinger' && this.isStingerHeld()) return false;
       const uuid = this.store.state.sources[layer];
       return uuid && this.store.state.monitorConfigured[layer] !== uuid;
     });
@@ -590,6 +594,7 @@ export class MusicDirector {
       return;
     }
     for (const layer of ['bgm', 'stinger'] as const) {
+      if (layer === 'stinger' && this.isStingerHeld()) continue;
       const uuid = this.store.state.sources[layer];
       const original = this.store.state.desktopMonitorOriginal[layer];
       const isNew = pending.includes(layer);
@@ -828,6 +833,7 @@ export class MusicDirector {
       this.closed ||
       this.isHeld() ||
       this.manual ||
+      this.isStingerHeld() ||
       !t.production ||
       !musicSafe(t.program) ||
       t.program.status.telemetry !== 'fresh'
@@ -920,7 +926,7 @@ export class MusicDirector {
             valid,
             false,
             (uuid) => this.expectedStops.set('stinger', uuid),
-            () => this.holdForObsControl(),
+            () => this.holdForPreviewControl(valid),
           );
         });
         return;
@@ -1014,7 +1020,7 @@ export class MusicDirector {
           valid,
           previewSafe,
           (uuid) => this.expectedStops.set('stinger', uuid),
-          () => this.holdForObsControl(),
+          () => this.holdForPreviewControl(valid),
         );
         const monitorRecheck = reconnect || this.monitorSettingsChanged;
         this.monitorSettingsChanged = false;
@@ -1059,7 +1065,7 @@ export class MusicDirector {
             configChanged,
             reconnect,
           );
-        } else if (!previewOwned) {
+        } else if (!previewOwned && !this.isStingerHeld()) {
           const stinger = this.store.state.stinger;
           const safe =
             !this.manual &&
@@ -1153,6 +1159,13 @@ export class MusicDirector {
     this.invalidate();
     await this.store.hold(true);
   }
+  private async holdForPreviewControl(valid: () => boolean) {
+    if (!valid()) return;
+    if (!this.manual) return this.holdForObsControl();
+    await this.store.update((state) => {
+      if (valid()) state.stingerHeld = true;
+    });
+  }
   private async observeHeldPlayback(obs: ObsRpc, valid: () => boolean) {
     this.status.stinger = null;
     const name = await ownedMusicInput(obs, this.store, 'bgm', false, valid, false, false, false);
@@ -1231,7 +1244,7 @@ export class MusicDirector {
   private async observeManualControls(obs: ObsRpc, valid: () => boolean, skipStinger = false) {
     if (this.isHeld()) return false;
     for (const layer of ['bgm', 'stinger'] as const) {
-      if (skipStinger && layer === 'stinger') continue;
+      if ((skipStinger || this.isStingerHeld()) && layer === 'stinger') continue;
       if (!this.store.state.sources[layer] || this.resumeLayers.has(layer)) continue;
       const name = await ownedMusicInput(obs, this.store, layer, false, valid);
       if (!name) continue;
@@ -1682,6 +1695,7 @@ export class MusicDirector {
       await this.provider
         .session(async (obs) => {
           for (const layer of ['bgm', 'stinger'] as const) {
+            if (layer === 'stinger' && this.isStingerHeld()) continue;
             const name = await ownedMusicInput(obs, this.store, layer, false, () => true);
             if (name) {
               const media = await obs.call('GetMediaInputStatus', {
