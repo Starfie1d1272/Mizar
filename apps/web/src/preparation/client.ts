@@ -140,6 +140,8 @@ export interface Production {
   mode: 'preparation' | 'live' | 'hidden';
   revision: string;
   canEnter: boolean;
+  releaseHandoffState?: 'idle' | 'pending' | 'recorded' | 'confirmed' | 'unconfirmed';
+  obsExitState?: 'idle' | 'confirmed' | 'unconfirmed';
 }
 export async function checkObsBeforeLaunch(
   requireStoppedOutput = false,

@@ -4667,22 +4667,24 @@ fn run_desktop(
             tauri::async_runtime::spawn(async move {
                 let cleanup_host = host.clone();
                 let result = tauri::async_runtime::spawn_blocking(move || {
-                    if !cleanup_host
+                    let exit_intent = if !cleanup_host
                         .state::<production_exit::VerifiedStop>()
                         .complete()
                     {
                         production_exit::set_exit_intent(
                             &cleanup_host.state::<DesktopLog>(),
                             "begin-exit",
-                        )?;
-                    }
+                        )
+                    } else {
+                        Ok(())
+                    };
                     // The gate is already closed; wait for an accepted launch,
                     // then keep its lock through safe production and game cleanup.
                     let state = cleanup_host.state::<Mutex<managed_cs2::ManagedCs2>>();
                     let mut cs2 = state.lock().map_err(|_| "CS2 配置状态不可用。")?;
                     let activity = cleanup_host.state::<cs2_activity::Activity>();
                     let _activity = activity.begin(if cs2.has_external() { 3 } else { 2 });
-                    production_exit::finish_then_restore(
+                    let cleanup = production_exit::restore_then_cleanup(
                         || {
                             // --stop already completed the same safe transaction before
                             // stopping the verified service; no HTTP request can follow it.
@@ -4720,7 +4722,8 @@ fn run_desktop(
                                 },
                             )
                         },
-                    )
+                    );
+                    production_exit::cleanup_results(exit_intent, cleanup)
                 })
                 .await
                 .unwrap_or_else(|_| Err("退出收尾未完成，请重试。".into()));

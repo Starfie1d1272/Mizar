@@ -1765,7 +1765,12 @@ export class RivalHubConnection {
         const identity = await this.sourceState.confirmClaim(intent.id, result.authorityRevision);
         if (generation !== this.bindingGeneration) {
           await this.sourceState.handoff(identity, 'switch');
-          this.source = null;
+          // The previous source may still own an unsettled tail. Keep its
+          // exact identity fenced until its own cleanup has confirmed release.
+          if (this.source) {
+            this.source.draining = true;
+            this.source.paused = true;
+          }
           await this.updateCleanupSummary();
           throw new Error('比赛已变化，原数据源待释放。');
         }
