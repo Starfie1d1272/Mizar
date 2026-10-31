@@ -12,6 +12,7 @@ import {
   type LocalChannelStoreListener,
   type LocalChannelStoreSnapshot,
 } from './local-channel-store';
+import { recoverChannelVersion } from './version-recovery';
 
 export const RECONNECT_BACKOFF_MS = [250, 500, 1_000, 2_000, 5_000] as const;
 
@@ -76,6 +77,7 @@ export class LocalChannelClient<C extends LocalSnapshotChannel> {
   private connectionGeneration = 0;
   private reconnectTimer: unknown;
   private reconnectIndex = 0;
+  private checkingVersion = false;
   private disposed = false;
 
   constructor(channel: C, options: LocalChannelClientOptions = {}) {
@@ -95,7 +97,13 @@ export class LocalChannelClient<C extends LocalSnapshotChannel> {
   }
 
   start(): void {
-    if (this.disposed || this.socket !== undefined || this.reconnectTimer !== undefined) return;
+    if (
+      this.disposed ||
+      this.socket !== undefined ||
+      this.reconnectTimer !== undefined ||
+      this.checkingVersion
+    )
+      return;
     this.connect();
   }
 
@@ -137,7 +145,7 @@ export class LocalChannelClient<C extends LocalSnapshotChannel> {
     socket.onopen = () => {
       if (!this.isCurrent(generation, socket)) return;
       if (socket.protocol !== LOCAL_PROTOCOL_SUBPROTOCOL) {
-        this.handleProtocolError(generation, socket, 'subprotocol mismatch');
+        this.checkVersionAndRetry(generation, socket, 'subprotocol mismatch');
         return;
       }
       this.store.setState('awaiting-baseline');
@@ -165,8 +173,7 @@ export class LocalChannelClient<C extends LocalSnapshotChannel> {
     };
     socket.onclose = () => {
       if (!this.isCurrent(generation, socket)) return;
-      this.socket = undefined;
-      this.handleRetry(generation, 'WebSocket closed');
+      this.checkVersionAndRetry(generation, socket, 'WebSocket closed');
     };
   }
 
@@ -210,12 +217,7 @@ export class LocalChannelClient<C extends LocalSnapshotChannel> {
     if (result.reason === 'schema-invalid') {
       // A malformed envelope could also be an incompatible producer. Request a
       // fresh baseline instead of continuing to present the old snapshot as live.
-      this.handleRetry(generation, 'snapshot schema-invalid');
-      try {
-        socket.close(1002, 'snapshot schema-invalid');
-      } catch {
-        // Retry has already been scheduled.
-      }
+      this.checkVersionAndRetry(generation, socket, 'snapshot schema-invalid');
       return;
     }
     this.rejectFrame(`snapshot ${result.reason}`);
@@ -224,6 +226,33 @@ export class LocalChannelClient<C extends LocalSnapshotChannel> {
   private rejectFrame(reason: string): void {
     // Keep the last accepted snapshot and cursor: a bad frame is not a new fact.
     this.store.setState(this.store.getSnapshot().state, reason);
+  }
+
+  private checkVersionAndRetry(
+    generation: number,
+    socket: BrowserWebSocketLike,
+    reason: string,
+  ): void {
+    if (!this.isCurrent(generation, socket)) return;
+    this.invalidateCurrentSocket(generation, socket);
+    const checkingGeneration = this.connectionGeneration;
+    this.checkingVersion = true;
+    this.store.setState('reconnecting', reason);
+    try {
+      socket.close(1002, reason);
+    } catch {
+      // A closed socket needs no further cleanup.
+    }
+    void recoverChannelVersion(this.channel).then((result) => {
+      if (this.disposed || checkingGeneration !== this.connectionGeneration) return;
+      this.checkingVersion = false;
+      if (result === 'retry') {
+        this.handleRetry(checkingGeneration, reason);
+      } else {
+        this.store.setState('protocol-error', 'local channel version incompatible');
+        if (result === 'reload') window.location.reload();
+      }
+    });
   }
 
   private handleProtocolError(

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import fastifyWebsocket from '@fastify/websocket';
 import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 import type { WebSocket as WsSocket } from 'ws';
+import { LOCAL_PROTOCOL_SUBPROTOCOL, LOCAL_SNAPSHOT_VERSIONS } from '@mizar/protocol/version';
 
 import type { LocalWebOutboundPublisher } from '../local-protocol/channel-publisher.js';
 import {
@@ -551,6 +552,12 @@ export function registerLocalWebSocketTransport(
   app: FastifyInstance,
   transport: LocalWebSocketTransport,
 ): void {
+  app.get('/local/protocol', async (_request, reply) =>
+    reply.header('cache-control', 'no-store').send({
+      subprotocol: LOCAL_PROTOCOL_SUBPROTOCOL,
+      channels: LOCAL_SNAPSHOT_VERSIONS,
+    }),
+  );
   const policy = transport.getOriginPolicy();
   app.register(fastifyWebsocket, {
     options: {
