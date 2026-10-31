@@ -276,13 +276,20 @@ fn launch_operation(
     preparation_id: Option<&str>,
 ) -> Result<Value, String> {
     let gate = app.state::<crate::preparation_gate::PreparationGate>();
-    let verify_output = || {
-        crate::production_exit::check_obs_entry(log, preparation_id.ok_or("启动事务标识缺失。")?)
+    let exit_ticket = match preparation_id {
+        Some(id) => crate::preparation_ticket(app, id)?,
+        None => app
+            .state::<production_exit::ExitGate>()
+            .presentation_ticket()?,
+    };
+    let verify_exit = || {
+        app.state::<production_exit::ExitGate>()
+            .check_ticket(exit_ticket)
     };
     let guard = crate::preparation_gate::PreparationGuard {
         gate: Some(gate.inner()),
         id: preparation_id,
-        verify: preparation_id.map(|_| &verify_output as &dyn Fn() -> Result<(), String>),
+        verify: preparation_id.map(|_| &verify_exit as &dyn Fn() -> Result<(), String>),
     };
     guard.check()?;
     let _launch = if guarded {

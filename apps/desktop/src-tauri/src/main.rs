@@ -116,6 +116,9 @@ extern "system" {
 struct HostState {
     tracker: Arc<Mutex<GameTracker>>,
     visible: Arc<AtomicBool>,
+    panels_only: AtomicBool,
+    entry_ticket: Mutex<Option<(String, u64)>>,
+    entry_message: Mutex<String>,
     layout_dirty: Arc<AtomicBool>,
     running: Arc<AtomicBool>,
     live_window_lock: Mutex<()>,
@@ -130,6 +133,17 @@ struct HostState {
     fullscreen_scope: Mutex<workspace_shell::FullscreenScope>,
     window_group: Mutex<workspace_group::Group>,
     entry_focus: Mutex<workspace_focus::Entry>,
+}
+
+pub(crate) fn preparation_ticket(app: &tauri::AppHandle, id: &str) -> Result<u64, String> {
+    app.state::<HostState>()
+        .entry_ticket
+        .lock()
+        .map_err(|_| "启动状态不可用。")?
+        .as_ref()
+        .filter(|(saved, _)| saved == id)
+        .map(|(_, ticket)| *ticket)
+        .ok_or_else(|| "本次启动已失效，请重新进入工作台。".into())
 }
 
 fn bundle_root() -> Result<PathBuf, String> {
@@ -355,9 +369,11 @@ fn sync_workspace_shell(app: &tauri::AppHandle) {
                 windows.push(hwnd.0 as isize);
             }
         }
-        if let Ok(tracker) = state.tracker.lock() {
-            if let Some(game) = tracker.window {
-                windows.push(game.hwnd);
+        if !state.panels_only.load(Ordering::Acquire) {
+            if let Ok(tracker) = state.tracker.lock() {
+                if let Some(game) = tracker.owned_window() {
+                    windows.push(game.hwnd);
+                }
             }
         }
     }
@@ -495,6 +511,29 @@ fn restore_layout(
     let command_log = diagnostic_log.clone();
     let native_operation_id = diagnostic_operation_id.clone();
     let diagnostic_result: Result<(), serde_json::Value> = (|| {
+        if state.panels_only.load(Ordering::Acquire) {
+            let main = app
+                .get_webview_window("main")
+                .ok_or_else(|| serde_json::json!("无法读取显示器工作区。"))?;
+            let monitor = main
+                .current_monitor()
+                .ok()
+                .flatten()
+                .or_else(|| main.primary_monitor().ok().flatten())
+                .ok_or_else(|| serde_json::json!("无法读取显示器工作区。"))?;
+            let position = monitor.position();
+            let size = monitor.size();
+            apply_layout(
+                &app,
+                geometry::workspace_layout(Rect {
+                    x: position.x,
+                    y: position.y,
+                    width: size.width as i32,
+                    height: size.height as i32,
+                }),
+            );
+            return Ok(());
+        }
         let layout = state
             .tracker
             .lock()
@@ -977,11 +1016,15 @@ async fn replace_external_cs2(
         let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
         let mut cs2 = state.lock().map_err(|_| "CS2 状态不可用。")?;
         let gate = app.state::<preparation_gate::PreparationGate>();
-        let verify_output = || production_exit::check_obs_entry(&log, &preparation_id);
+        let exit_ticket = preparation_ticket(&app, &preparation_id)?;
+        let verify_exit = || {
+            app.state::<production_exit::ExitGate>()
+                .check_ticket(exit_ticket)
+        };
         let guard = preparation_gate::PreparationGuard {
             gate: Some(gate.inner()),
             id: Some(&preparation_id),
-            verify: Some(&verify_output),
+            verify: Some(&verify_exit),
         };
         guard.check()?;
         let activity = app.state::<cs2_activity::Activity>();
@@ -1248,18 +1291,22 @@ async fn start_managed_cs2(
                         app.state::<updates::PendingUpdate>().check()?;
                         production_exit::invalidate_local_match_exit(&app.state::<DesktopLog>())?;
                         let gate = app.state::<preparation_gate::PreparationGate>();
-                        let verify_output = || {
-                            production_exit::check_obs_entry(
-                                &command_log,
-                                preparation_id.as_deref().ok_or("启动事务标识缺失。")?,
-                            )
+                        let exit_ticket = match preparation_id.as_deref() {
+                            Some(id) => preparation_ticket(&app, id)?,
+                            None => app
+                                .state::<production_exit::ExitGate>()
+                                .presentation_ticket()?,
+                        };
+                        let verify_exit = || {
+                            app.state::<production_exit::ExitGate>()
+                                .check_ticket(exit_ticket)
                         };
                         let guard = preparation_gate::PreparationGuard {
                             gate: Some(gate.inner()),
                             id: preparation_id.as_deref(),
                             verify: preparation_id
                                 .as_ref()
-                                .map(|_| &verify_output as &dyn Fn() -> Result<(), String>),
+                                .map(|_| &verify_exit as &dyn Fn() -> Result<(), String>),
                         };
                         guard.check()?;
                         let result = cs2.start_preparation(
@@ -1306,12 +1353,17 @@ async fn begin_managed_camera(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     expected_revision: String,
+    preparation_id: String,
 ) -> Result<(), String> {
     if window.label() != "main" {
         return Err("请在准备中心打开工作台。".into());
     }
     tauri::async_runtime::spawn_blocking(move || {
-        app.state::<production_exit::ExitGate>().check()?;
+        let ticket = preparation_ticket(&app, &preparation_id)?;
+        app.state::<production_exit::ExitGate>()
+            .check_ticket(ticket)?;
+        app.state::<preparation_gate::PreparationGate>()
+            .check(Some(&preparation_id))?;
         app.state::<updates::PendingUpdate>().check()?;
         let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
         let mut cs2 = state.lock().map_err(|_| "CS2 状态不可用。")?;
@@ -1335,6 +1387,17 @@ async fn begin_managed_camera(
             .as_str()
             .ok_or("原生运镜会话未确认。")?
             .to_owned();
+        if let Err(error) = app
+            .state::<production_exit::ExitGate>()
+            .check_ticket(ticket)
+            .and_then(|_| {
+                app.state::<preparation_gate::PreparationGate>()
+                    .check(Some(&preparation_id))
+            })
+        {
+            let _ = production_exit::camera_session(&log, "invalidate", Some(&lease), None);
+            return Err(error);
+        }
         if let Err(error) = cs2.bind_managed_camera(game, lease.clone()) {
             let _ = production_exit::camera_session(&log, "invalidate", Some(&lease), None);
             return Err(error);
@@ -2034,7 +2097,7 @@ async fn present_demo_test(
         {
             return Err("试播状态已变化，请重新进入。".into());
         }
-        present_production_inner_checked(&app, true, Some((expected_url, intent_id)))
+        present_production_inner_checked(&app, true, Some((expected_url, intent_id)), None)
     })
     .await
     .map_err(|_| "试播工作台未能打开。".to_string())?
@@ -2487,6 +2550,7 @@ fn trusted_navigation(url: &tauri::Url) -> bool {
 
 fn show_workspace(app: &tauri::AppHandle) {
     let state = app.state::<HostState>();
+    state.panels_only.store(false, Ordering::Release);
     {
         let _presentation = state
             .overlay_presentation
@@ -2643,6 +2707,7 @@ fn open_main(
 async fn present_production(
     app: tauri::AppHandle,
     live: bool,
+    preparation_id: Option<String>,
     diagnostic_operation_id: Option<String>,
     diagnostic_task_id: Option<String>,
     diagnostic_trigger: Option<String>,
@@ -2661,7 +2726,17 @@ async fn present_production(
                     native_task_id.as_deref(),
                     operation.as_deref(),
                     native_trigger.as_deref(),
-                    || present_production_inner(&app, live),
+                    || {
+                        let ticket = match preparation_id.as_deref() {
+                            Some(id) => {
+                                app.state::<preparation_gate::PreparationGate>()
+                                    .check(Some(id))?;
+                                Some(preparation_ticket(&app, id)?)
+                            }
+                            None => None,
+                        };
+                        present_production_inner_checked(&app, live, None, ticket)
+                    },
                 )
             }
         })
@@ -2692,18 +2767,26 @@ async fn present_production(
 }
 
 fn present_production_inner(app: &tauri::AppHandle, live: bool) -> Result<(), String> {
-    present_production_inner_checked(app, live, None)
+    present_production_inner_checked(app, live, None, None)
 }
 
 fn present_production_inner_checked(
     app: &tauri::AppHandle,
     live: bool,
     expected_url: Option<(String, String)>,
+    entry_ticket: Option<u64>,
 ) -> Result<(), String> {
     if live {
-        let ticket = app
-            .state::<production_exit::ExitGate>()
-            .presentation_ticket()?;
+        let ticket = match entry_ticket {
+            Some(ticket) => {
+                app.state::<production_exit::ExitGate>()
+                    .check_ticket(ticket)?;
+                ticket
+            }
+            None => app
+                .state::<production_exit::ExitGate>()
+                .presentation_ticket()?,
+        };
         // Capture before window creation/layout work. A later foreground change
         // cancels this one-shot intent; showing the panels must not select them.
         let source = app
@@ -2778,7 +2861,7 @@ fn present_production_inner_checked(
         {
             return Err("游戏启动已取消或正在恢复，请完成收尾后重新进入工作台。".into());
         }
-        ensure_live_windows(&app).map_err(|error| {
+        ensure_live_windows(&app, true).map_err(|error| {
             format!("现场窗口未能打开，准备中心仍可使用。请打开运行日志后重试。\n{error}")
         })?;
         let host = app.clone();
@@ -3105,15 +3188,16 @@ async fn recover_program_overlay(
     result
 }
 
-fn ensure_live_windows(app: &tauri::AppHandle) -> Result<(), String> {
+fn ensure_live_windows(app: &tauri::AppHandle, overlay: bool) -> Result<(), String> {
     let state = app.state::<HostState>();
     let _guard = state
         .live_window_lock
         .lock()
         .map_err(|_| "现场窗口状态不可用。")?;
-    if ["workspace-left", "workspace-dock", "program-overlay"]
+    if ["workspace-left", "workspace-dock"]
         .iter()
         .all(|label| app.get_webview_window(label).is_some())
+        && (!overlay || app.get_webview_window("program-overlay").is_some())
     {
         return Ok(());
     }
@@ -3148,7 +3232,7 @@ fn ensure_live_windows(app: &tauri::AppHandle) -> Result<(), String> {
             })?;
             created.push("workspace-dock");
         }
-        if app.get_webview_window("program-overlay").is_none() {
+        if overlay && app.get_webview_window("program-overlay").is_none() {
             create_program_overlay(app)?;
             created.push("program-overlay");
         }
@@ -3172,6 +3256,110 @@ fn ensure_live_windows(app: &tauri::AppHandle) -> Result<(), String> {
     }
 
     result
+}
+
+#[tauri::command]
+async fn present_workbench_panels(
+    app: tauri::AppHandle,
+    preparation_id: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let ticket = app
+            .state::<production_exit::ExitGate>()
+            .presentation_ticket()?;
+        app.state::<preparation_gate::PreparationGate>()
+            .check(Some(&preparation_id))?;
+        {
+            let state = app.state::<HostState>();
+            let mut entry = state.entry_ticket.lock().map_err(|_| "启动状态不可用。")?;
+            if let Some((saved, previous)) =
+                entry.as_ref().filter(|(saved, _)| saved == &preparation_id)
+            {
+                app.state::<production_exit::ExitGate>()
+                    .check_ticket(*previous)?;
+                let _ = saved;
+            } else {
+                *entry = Some((preparation_id, ticket));
+            }
+        }
+        ensure_live_windows(&app, false).map_err(|error| error.to_string())?;
+        let main = app.get_webview_window("main").ok_or("准备中心不可用。")?;
+        let monitor = main
+            .current_monitor()
+            .map_err(|e| e.to_string())?
+            .or_else(|| main.primary_monitor().ok().flatten())
+            .ok_or("无法确定工作台屏幕。")?;
+        let pos = monitor.position();
+        let size = monitor.size();
+        let layout = geometry::workspace_layout(Rect {
+            x: pos.x,
+            y: pos.y,
+            width: size.width as i32,
+            height: size.height as i32,
+        });
+        let host = app.clone();
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        app.run_on_main_thread(move || {
+            let result = host
+                .state::<production_exit::ExitGate>()
+                .publish(ticket, || {
+                    let state = host.state::<HostState>();
+                    state.panels_only.store(true, Ordering::Release);
+                    state.visible.store(true, Ordering::Release);
+                    apply_layout(&host, layout);
+                    for label in ["workspace-left", "workspace-dock"] {
+                        if let Some(window) = host.get_webview_window(label) {
+                            let _ = window_presentation::show_without_activation(&window);
+                        }
+                    }
+                    let _ = window_presentation::set_visible(&main, false);
+                });
+            let _ = sender.send(result);
+        })
+        .map_err(|e| e.to_string())?;
+        receiver
+            .recv()
+            .map_err(|_| "工作台面板未能打开。".to_string())?
+    })
+    .await
+    .map_err(|_| "工作台面板未能打开。".to_string())?
+}
+
+#[tauri::command]
+fn workbench_message(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    action: String,
+    message: Option<String>,
+) -> Result<(), String> {
+    if window.label() == "main" && action == "status" {
+        *app.state::<HostState>()
+            .entry_message
+            .lock()
+            .map_err(|_| "工作台状态不可用。")? = message.clone().unwrap_or_default();
+    }
+    let (target, event) = match (window.label(), action.as_str()) {
+        ("main", "status") => ("workspace-dock", "mizar-entry-status"),
+        ("workspace-dock", "retry") => ("main", "mizar-entry-retry"),
+        ("workspace-dock", "cancel") => ("main", "mizar-entry-cancel"),
+        _ => return Err("工作台请求无效。".into()),
+    };
+    let target = app.get_webview_window(target).ok_or("工作台窗口不可用。")?;
+    let data = serde_json::to_string(&message).map_err(|e| e.to_string())?;
+    target
+        .eval(&format!(
+            "window.dispatchEvent(new CustomEvent({event:?}, {{detail: {data}}}))"
+        ))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn workbench_status(app: tauri::AppHandle) -> Result<String, String> {
+    app.state::<HostState>()
+        .entry_message
+        .lock()
+        .map(|value| value.clone())
+        .map_err(|_| "工作台状态不可用。".into())
 }
 
 // Review windows are centered on the workspace monitor, independently of the left panel.
@@ -3892,18 +4080,22 @@ async fn ensure_gsi(
                     )
                 })?;
                 let gate = app.state::<preparation_gate::PreparationGate>();
-                let verify_output = || {
-                    production_exit::check_obs_entry(
-                        &log,
-                        preparation_id.as_deref().ok_or("启动事务标识缺失。")?,
-                    )
+                let exit_ticket = match preparation_id.as_deref() {
+                    Some(id) => preparation_ticket(&app, id)?,
+                    None => app
+                        .state::<production_exit::ExitGate>()
+                        .presentation_ticket()?,
+                };
+                let verify_exit = || {
+                    app.state::<production_exit::ExitGate>()
+                        .check_ticket(exit_ticket)
                 };
                 let guard = preparation_gate::PreparationGuard {
                     gate: Some(gate.inner()),
                     id: preparation_id.as_deref(),
                     verify: preparation_id
                         .as_ref()
-                        .map(|_| &verify_output as &dyn Fn() -> Result<(), String>),
+                        .map(|_| &verify_exit as &dyn Fn() -> Result<(), String>),
                 };
                 if preparation_id.is_some() {
                     guard.commit(|| {
@@ -4037,6 +4229,9 @@ fn run_desktop(
     let state = HostState {
         tracker: Arc::new(Mutex::new(tracker)),
         visible: Arc::new(AtomicBool::new(false)),
+        panels_only: AtomicBool::new(false),
+        entry_ticket: Mutex::new(None),
+        entry_message: Mutex::new(String::new()),
         layout_dirty: Arc::new(AtomicBool::new(false)),
         running: running.clone(),
         live_window_lock: Mutex::new(()),
@@ -4121,6 +4316,9 @@ fn run_desktop(
             set_cs2_console_capture,
             open_main,
             present_production,
+            present_workbench_panels,
+            workbench_message,
+            workbench_status,
             open_tool,
             close_review,
             open_rivalhub_authorization,
@@ -4271,6 +4469,7 @@ fn run_desktop(
                             refresh_finished_window_feedback(&host, &cs2);
                             if let Ok(mut tracker) = worker_tracker.lock() {
                                 tracker.preserve_settings = cs2.preserve_settings();
+                                tracker.set_owner(cs2.workspace_process().ok().flatten());
                             }
                         }
                         cs2_check = Instant::now();
@@ -4281,6 +4480,7 @@ fn run_desktop(
                     let allowed = || {
                         worker_running.load(Ordering::Acquire)
                             && worker_visible.load(Ordering::Acquire)
+                            && !host.state::<HostState>().panels_only.load(Ordering::Acquire)
                             && !exit_signal.requested()
                             && host.state::<production_exit::ExitGate>().check().is_ok()
                             && host.state::<cs2_activity::Activity>().phase() == "idle"
@@ -4318,6 +4518,7 @@ fn run_desktop(
                     let overlay_epoch = host.state::<HostState>().overlay_epoch.load(Ordering::Acquire);
                     let (layout, rect) = if !pending.load(Ordering::Relaxed)
                         && worker_visible.load(Ordering::Relaxed)
+                        && !host.state::<HostState>().panels_only.load(Ordering::Acquire)
                         && !exit_signal.requested()
                     {
                         let workspace_windows = overlay_workspace_windows(&host);

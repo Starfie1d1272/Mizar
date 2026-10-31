@@ -1116,6 +1116,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     beforeEnter: () => {
       if (cameraDirector?.store.saving) throw new Error('camera_settings_saving');
       demoTest?.openFormalBoundary();
+      sceneController.holdAutomatic();
     },
     onEnter: () => {
       obsAdapter?.resumeAutomatic();

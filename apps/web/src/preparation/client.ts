@@ -256,8 +256,147 @@ async function restoreEntryVideo(transactionId: string) {
 
 let entering: Promise<ControlTask['result']> | undefined;
 let cancelPendingEntry: (() => void) | undefined;
+let lastPreparation: {
+  id: string;
+  since: number | null;
+  obs: boolean;
+  gsi: boolean;
+  capture: boolean;
+  camera: boolean;
+  cameraUncertain: boolean;
+} | null = null;
 export function cancelProductionEntry() {
   cancelPendingEntry?.();
+}
+let retryingPreparation: Promise<void> | undefined;
+export function retryPendingPreparation(): Promise<void> {
+  if (retryingPreparation) return retryingPreparation;
+  retryingPreparation = (async () => {
+    const production = await fetch('/local/v1/production', { cache: 'no-store' }).then(
+      (r) => r.json() as Promise<Production>,
+    );
+    if (production.mode === 'preparation') {
+      await productionAction('enter', production);
+      return;
+    }
+    const entry = lastPreparation;
+    if (!entry) throw new Error('本次准备记录不可用，请返回准备中心。');
+    const controller = new AbortController();
+    const cancel = () => {
+      controller.abort();
+      lastPreparation = null;
+      void desktopInvoke('cancel_cs2_preparation', { preparationId: entry.id }).catch(() => {});
+    };
+    cancelPendingEntry = cancel;
+    const errors: string[] = [];
+    const check = async () => {
+      if (controller.signal.aborted || lastPreparation !== entry) throw new Error('准备已取消。');
+      const game = await desktopInvoke<Cs2ConfigStatus>('cs2_config_status');
+      if (!game.running || game.preparationId !== entry.id)
+        throw new Error('本次受管游戏已变化，请重新进入。');
+      const now = await fetch('/local/v1/production', { cache: 'no-store' }).then(
+        (r) => r.json() as Promise<Production>,
+      );
+      if (now.revision !== production.revision || now.mode !== production.mode)
+        throw new Error('制作状态已变化，请重试。');
+    };
+    const step = async (run: () => Promise<void>) => {
+      try {
+        await check();
+        await run();
+        await check();
+      } catch (error) {
+        if (controller.signal.aborted) throw error;
+        errors.push(error instanceof Error ? error.message : '准备未完成。');
+      }
+    };
+    try {
+      if (!entry.obs)
+        await step(async () => {
+          const obs = await readObsForEntry(controller.signal);
+          if (obs?.connection === 'connected' && obs.sceneAligned === false)
+            throw new Error('OBS 场景已由操作者接管，未自动切换。');
+          await ensureEntryObs(controller.signal);
+          await entryCommand(
+            '/operator/obs/video-preflight',
+            { expectedRevision: production.revision },
+            controller.signal,
+          );
+          await entryCommand(
+            '/operator/obs/video-prepare',
+            { expectedRevision: production.revision },
+            controller.signal,
+          );
+          await prepareObs(production.revision, controller.signal, entry.id);
+          entry.obs = true;
+        });
+      if (!entry.gsi)
+        await step(async () => {
+          const current = await desktopInvoke<GsiStatus>('gsi_status');
+          if (gsiProblem(current)) throw new Error(gsiProblem(current)!);
+          if (current.installed && !current.conflict) {
+            entry.gsi = true;
+            return;
+          }
+          const result = await desktopInvoke<GsiStatus>('ensure_gsi', { preparationId: entry.id });
+          if (gsiProblem(result) || !result.installed || result.conflict)
+            throw new Error(gsiProblem(result) ?? 'GSI 自动配置未完成。');
+          entry.gsi = true;
+        });
+      if (!entry.capture)
+        await step(async () => {
+          const warmup = await entryCommand<{ transactionId: string; startedAt: number }>(
+            '/operator/obs/capture-warmup',
+            { expectedRevision: production.revision, preparationId: entry.id },
+            controller.signal,
+          );
+          try {
+            const deadline = warmup.startedAt + 60_000;
+            while (Date.now() < deadline) {
+              await check();
+              const result = await entryCommand<{ state: string; reason: string | null }>(
+                '/operator/obs/capture-initialization',
+                {
+                  expectedRevision: production.revision,
+                  since: warmup.startedAt,
+                  transactionId: warmup.transactionId,
+                },
+                controller.signal,
+              );
+              if (result.state === 'initialized') {
+                entry.capture = true;
+                break;
+              }
+              if (result.state === 'failed' || result.reason === 'source_inactive')
+                throw new Error('OBS 游戏捕获未确认，请检查后重试。');
+              await new Promise<void>((resolve) => setTimeout(resolve, 1000));
+            }
+            if (!entry.capture) throw new Error('OBS 游戏捕获未确认，请检查后重试。');
+          } finally {
+            await entryCommand('/operator/obs/capture-warmup-release', {
+              transactionId: warmup.transactionId,
+            });
+          }
+        });
+      if (!entry.camera)
+        await step(async () => {
+          if (entry.cameraUncertain) throw new Error('上次运镜准备结果未确认，请先核对当前状态。');
+          entry.cameraUncertain = true;
+          await desktopInvoke('begin_managed_camera', {
+            expectedRevision: production.revision,
+            preparationId: entry.id,
+          });
+          entry.camera = true;
+          entry.cameraUncertain = false;
+        });
+      await desktopInvoke('workbench_message', { action: 'status', message: errors.join('；') });
+    } finally {
+      if (cancelPendingEntry === cancel) cancelPendingEntry = undefined;
+    }
+  })().finally(() => {
+    retryingPreparation = undefined;
+  });
+  return retryingPreparation;
 }
 export function productionAction(
   action: 'enter' | 'hide' | 'finish',
@@ -299,6 +438,7 @@ async function runProductionAction(
   let cancelled = false;
   const entryAbort = new AbortController();
   let videoTransactionId: string | null = null;
+  const warnings: string[] = [];
   let cancelNativeEntry: (() => void) | undefined;
   const cancelEntry = () => {
     cancelled = true;
@@ -311,6 +451,32 @@ async function runProductionAction(
     window.addEventListener('popstate', cancelEntry);
   }
   try {
+    if (action === 'enter' && window.__TAURI_INTERNALS__ && state.mode === 'preparation') {
+      const key = `mizar:workspace-entry:${state.revision}`;
+      let intent: { id: string; since: number | null } | null = null;
+      try {
+        intent = JSON.parse(sessionStorage.getItem(key) ?? 'null');
+      } catch {
+        /* discard invalid intent */
+      }
+      if (!intent || typeof intent.id !== 'string')
+        intent = { id: crypto.randomUUID(), since: null };
+      if (!lastPreparation || lastPreparation.id !== intent.id)
+        lastPreparation = {
+          ...intent,
+          obs: false,
+          gsi: false,
+          capture: false,
+          camera: false,
+          cameraUncertain: false,
+        };
+      sessionStorage.setItem(key, JSON.stringify(intent));
+      await desktopInvoke('present_workbench_panels', { preparationId: intent.id }, task);
+      void desktopInvoke('workbench_message', {
+        action: 'status',
+        message: '正在准备游戏和 OBS…',
+      }).catch(() => {});
+    }
     await performProductionAction(
       action,
       state,
@@ -326,7 +492,16 @@ async function runProductionAction(
       (cancel) => {
         cancelNativeEntry = cancel;
       },
+      (message) => {
+        warnings.push(message);
+        void desktopInvoke('workbench_message', {
+          action: 'status',
+          message: warnings.join('；'),
+        }).catch(() => {});
+      },
     );
+    if (action === 'enter' && window.__TAURI_INTERNALS__ && warnings.length === 0)
+      void desktopInvoke('workbench_message', { action: 'status', message: '' }).catch(() => {});
     if (action === 'enter' && task.result !== 'confirmed' && videoTransactionId) {
       const current = await fetch('/local/v1/production', { cache: 'no-store' })
         .then((response) => (response.ok ? (response.json() as Promise<Production>) : null))
@@ -352,6 +527,11 @@ async function runProductionAction(
       }
     }
     task.fail(failure);
+    if (action === 'enter' && window.__TAURI_INTERNALS__)
+      void desktopInvoke('workbench_message', {
+        action: 'status',
+        message: failure instanceof Error ? failure.message : '准备未完成。',
+      }).catch(() => {});
     throw failure;
   } finally {
     entryAbort.abort();
@@ -371,6 +551,7 @@ async function performProductionAction(
   onChecking?: (checking: boolean) => void,
   onVideoPrepared?: (id: string | null) => void,
   onNativeEntry?: (cancel: () => void) => void,
+  onWarning?: (message: string) => void,
 ) {
   const entryLocation = window.location.href;
   const entryStillCurrent = async () => {
@@ -508,6 +689,7 @@ async function performProductionAction(
     const preparationId = entry.id;
     onNativeEntry?.(() => {
       sessionStorage.removeItem(storageKey);
+      lastPreparation = null;
       void desktopInvoke('cancel_cs2_preparation', { preparationId }, task).catch(() => {});
     });
     const current = async () => {
@@ -523,47 +705,6 @@ async function performProductionAction(
         undefined,
         task,
       );
-    await current();
-    const obsTarget = await entryCommand<{ executablePath?: string }>(
-      '/operator/obs/launch-target',
-      {},
-      entrySignal,
-    );
-    if (!obsTarget.executablePath) throw new Error('未找到 OBS 可执行文件，请检查安装后重试。');
-    await ensureEntryObs(entrySignal);
-    await current();
-    await entryCommand(
-      '/operator/obs/video-preflight',
-      { expectedRevision: state.revision },
-      entrySignal,
-    );
-    const gsi = await desktopInvoke<GsiStatus>('gsi_status', undefined, task);
-    const issue = gsiProblem(gsi);
-    if (issue) throw new Error(issue);
-    await current();
-    const video = await entryCommand<{ transactionId: string | null }>(
-      '/operator/obs/video-prepare',
-      { expectedRevision: state.revision },
-      entrySignal,
-    );
-    onVideoPrepared?.(video.transactionId);
-    await current();
-    await prepareObs(state.revision, entrySignal, entry.id);
-    const prepared = await readObsForEntry(entrySignal);
-    if (prepared?.connection !== 'connected') throw new Error('OBS 连接已中断，请重试。');
-    if (!prepared.readiness?.ready)
-      throw new Error(prepared.readiness?.reason ?? 'OBS 准备状态未确认，请重试。');
-    await current();
-    const configured = await desktopInvoke<GsiStatus>(
-      'ensure_gsi',
-      { preparationId: entry.id },
-      task,
-    );
-    if (gsiProblem(configured) || !configured.installed || configured.conflict)
-      throw new Error(
-        gsiProblem(configured) ?? configured.issues?.[0]?.message ?? 'GSI 自动配置未完成，请重试。',
-      );
-    window.dispatchEvent(new Event('mizar:gsi-configured'));
     await current();
     if (!resuming) {
       const target = replacement?.target ?? null;
@@ -584,10 +725,67 @@ async function performProductionAction(
       );
       if (!reused) {
         entry.since = Date.now();
+        if (lastPreparation?.id === entry.id) lastPreparation.since = entry.since;
         sessionStorage.setItem(storageKey, JSON.stringify(entry));
       }
       await current();
     }
+    try {
+      const obsTarget = await entryCommand<{ executablePath?: string }>(
+        '/operator/obs/launch-target',
+        {},
+        entrySignal,
+      );
+      if (!obsTarget.executablePath) throw new Error('未找到 OBS 可执行文件，请检查安装后重试。');
+      await ensureEntryObs(entrySignal);
+      await current();
+      await entryCommand(
+        '/operator/obs/video-preflight',
+        { expectedRevision: state.revision },
+        entrySignal,
+      );
+      await current();
+      const video = await entryCommand<{ transactionId: string | null }>(
+        '/operator/obs/video-prepare',
+        { expectedRevision: state.revision },
+        entrySignal,
+      );
+      onVideoPrepared?.(video.transactionId);
+      await current();
+      await prepareObs(state.revision, entrySignal, entry.id);
+      const prepared = await readObsForEntry(entrySignal);
+      if (prepared?.connection !== 'connected') throw new Error('OBS 连接已中断，请重试。');
+      if (!prepared.readiness?.ready)
+        throw new Error(prepared.readiness?.reason ?? 'OBS 准备状态未确认，请重试。');
+      if (lastPreparation?.id === entry.id) lastPreparation.obs = true;
+      await current();
+    } catch (error) {
+      if (cancelled() || entrySignal.aborted) throw error;
+      onWarning?.(error instanceof Error ? error.message : 'OBS 准备未完成。');
+      await current();
+    }
+    try {
+      const gsi = await desktopInvoke<GsiStatus>('gsi_status', undefined, task);
+      const issue = gsiProblem(gsi);
+      if (issue) throw new Error(issue);
+      const configured = await desktopInvoke<GsiStatus>(
+        'ensure_gsi',
+        { preparationId: entry.id },
+        task,
+      );
+      if (gsiProblem(configured) || !configured.installed || configured.conflict)
+        throw new Error(
+          gsiProblem(configured) ??
+            configured.issues?.[0]?.message ??
+            'GSI 自动配置未完成，请重试。',
+        );
+      window.dispatchEvent(new Event('mizar:gsi-configured'));
+      if (lastPreparation?.id === entry.id) lastPreparation.gsi = true;
+    } catch (error) {
+      if (cancelled() || entrySignal.aborted) throw error;
+      onWarning?.(error instanceof Error ? error.message : 'GSI 准备未完成。');
+    }
+    await current();
   }
   if (
     action === 'enter' &&
@@ -704,70 +902,91 @@ async function performProductionAction(
     return;
   }
   if (action === 'enter' && window.__TAURI_INTERNALS__ && state.mode === 'preparation') {
-    if (!entry?.since) throw new Error('本次游戏启动时间未确认，请结束本次游戏后重试。');
-    const warmup = await entryCommand<{ transactionId: string; startedAt: number }>(
-      '/operator/obs/capture-warmup',
-      { expectedRevision: state.revision, preparationId: entry.id },
-      entrySignal,
-    );
-    const deadline = warmup.startedAt + 60_000;
-    let reason = 'evidence_unknown';
-    let initialized = false;
-    let failure: unknown;
     try {
-      while (Date.now() < deadline && !entrySignal.aborted) {
-        const capture = await entryCommand<{ state: string; reason: string | null }>(
-          '/operator/obs/capture-initialization',
-          {
-            expectedRevision: state.revision,
-            since: warmup.startedAt,
-            transactionId: warmup.transactionId,
-          },
-          entrySignal,
-        );
-        if (capture.state === 'initialized') {
-          initialized = true;
-          break;
+      if (!entry?.since) throw new Error('本次游戏启动时间未确认，请结束本次游戏后重试。');
+      const warmup = await entryCommand<{ transactionId: string; startedAt: number }>(
+        '/operator/obs/capture-warmup',
+        { expectedRevision: state.revision, preparationId: entry.id },
+        entrySignal,
+      );
+      const deadline = warmup.startedAt + 60_000;
+      let reason = 'evidence_unknown';
+      let initialized = false;
+      let failure: unknown;
+      try {
+        while (Date.now() < deadline && !entrySignal.aborted) {
+          const capture = await entryCommand<{ state: string; reason: string | null }>(
+            '/operator/obs/capture-initialization',
+            {
+              expectedRevision: state.revision,
+              since: warmup.startedAt,
+              transactionId: warmup.transactionId,
+            },
+            entrySignal,
+          );
+          if (capture.state === 'initialized') {
+            initialized = true;
+            break;
+          }
+          reason = capture.reason ?? 'evidence_unknown';
+          if (capture.state === 'failed' || reason === 'source_inactive') break;
+          await new Promise<void>((resolve) => setTimeout(resolve, 1000));
         }
-        reason = capture.reason ?? 'evidence_unknown';
-        if (capture.state === 'failed' || reason === 'source_inactive') break;
-        await new Promise<void>((resolve) => setTimeout(resolve, 1000));
+        if (!initialized) {
+          if (entrySignal.aborted) throw new Error('启动已取消。');
+          const messages: Record<string, string> = {
+            source_unavailable: 'OBS 游戏采集来源不可用。',
+            target_unavailable: '未找到 CS2 窗口。',
+            target_ambiguous: '发现多个 CS2 窗口，无法确认采集目标。',
+            source_inactive: 'OBS 游戏采集准备已失效，无法确认画面。',
+            zero_size: 'OBS 游戏采集画面仍为 0×0。',
+            hook_pending: 'OBS 游戏采集仍在重试。',
+            hook_failed: 'OBS 游戏采集初始化失败。',
+            evidence_unknown: 'OBS 游戏采集状态未确认。',
+          };
+          throw new Error(`${messages[reason] ?? messages.evidence_unknown} 请检查原因后重试。`);
+        }
+      } catch (error) {
+        failure = error;
       }
-      if (!initialized) {
-        if (entrySignal.aborted) throw new Error('启动已取消。');
-        const messages: Record<string, string> = {
-          source_unavailable: 'OBS 游戏采集来源不可用。',
-          target_unavailable: '未找到 CS2 窗口。',
-          target_ambiguous: '发现多个 CS2 窗口，无法确认采集目标。',
-          source_inactive: 'OBS 游戏采集准备已失效，无法确认画面。',
-          zero_size: 'OBS 游戏采集画面仍为 0×0。',
-          hook_pending: 'OBS 游戏采集仍在重试。',
-          hook_failed: 'OBS 游戏采集初始化失败。',
-          evidence_unknown: 'OBS 游戏采集状态未确认。',
-        };
-        throw new Error(`${messages[reason] ?? messages.evidence_unknown} 请检查原因后重试。`);
+      try {
+        await entryCommand('/operator/obs/capture-warmup-release', {
+          transactionId: warmup.transactionId,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '临时捕获来源清理未确认。';
+        throw new Error(`${failure instanceof Error ? `${failure.message} ` : ''}${message}`, {
+          cause: error,
+        });
       }
+      if (failure) throw failure;
+      if (lastPreparation?.id === entry.id) lastPreparation.capture = true;
     } catch (error) {
-      failure = error;
+      if (cancelled() || entrySignal.aborted) throw error;
+      onWarning?.(error instanceof Error ? error.message : '游戏捕获未确认。');
     }
-    try {
-      await entryCommand('/operator/obs/capture-warmup-release', {
-        transactionId: warmup.transactionId,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '临时捕获来源清理未确认。';
-      throw new Error(`${failure instanceof Error ? `${failure.message} ` : ''}${message}`, {
-        cause: error,
-      });
-    }
-    if (failure) throw failure;
   }
   if (action === 'enter' && (cancelled() || window.location.href !== entryLocation)) {
     task.finish('cancelled', { reason: 'navigation_changed' });
     return;
   }
   if (action === 'enter' && window.__TAURI_INTERNALS__ && state.mode === 'preparation') {
-    await desktopInvoke('begin_managed_camera', { expectedRevision: state.revision }, task);
+    await desktopInvoke(
+      'begin_managed_camera',
+      { expectedRevision: state.revision, preparationId: entry?.id },
+      task,
+    )
+      .then(() => {
+        if (lastPreparation && entry && lastPreparation.id === entry.id) {
+          lastPreparation.camera = true;
+          lastPreparation.cameraUncertain = false;
+        }
+      })
+      .catch((error: unknown) => {
+        if (lastPreparation && entry && lastPreparation.id === entry.id)
+          lastPreparation.cameraUncertain = true;
+        onWarning?.(error instanceof Error ? error.message : '运镜未准备完成。');
+      });
     if (cancelled() || window.location.href !== entryLocation) {
       await desktopInvoke('cancel_managed_camera', undefined, task);
       task.finish('cancelled', { reason: 'navigation_changed' });
@@ -784,7 +1003,11 @@ async function performProductionAction(
       return;
     }
     if (window.__TAURI_INTERNALS__) {
-      await desktopInvoke('present_production', { live: action === 'enter' }, task);
+      await desktopInvoke(
+        'present_production',
+        { live: action === 'enter', ...(entry ? { preparationId: entry.id } : {}) },
+        task,
+      );
       presented = true;
     } else window.location.assign(action === 'enter' ? '/workspace' : '/');
     task.finish('confirmed', { confirmation: 'production_command_ack_and_presentation', action });

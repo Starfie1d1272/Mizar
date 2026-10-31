@@ -101,7 +101,7 @@ export function registerProductionRoutes(
         }
         // Both normal exit paths use this same safe-scene/release transaction.
         // An idle Host can quit without requiring an OBS connection.
-        if (mode !== 'preparation' || options.scenes.get().active !== 'waiting' || !shutdown) {
+        if (mode !== 'preparation') {
           stage = 'production_safe_scene';
           const result = await options.scenes.selectWaitingForExit(
             options.scenes.get().revision,
@@ -199,7 +199,6 @@ export function registerProductionRoutes(
     configureCameraSession: (expectedRevision: string, commit: () => void) => {
       if (
         expectedRevision !== revision ||
-        mode !== 'preparation' ||
         busy ||
         shuttingDown ||
         updatePending ||

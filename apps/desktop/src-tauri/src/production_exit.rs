@@ -45,6 +45,13 @@ impl ExitGate {
         self.check()?;
         Ok(self.generation.load(Ordering::Acquire))
     }
+    pub fn check_ticket(&self, ticket: u64) -> Result<(), String> {
+        self.check()?;
+        if self.generation.load(Ordering::Acquire) != ticket {
+            return Err("此前的进入操作已因退出而取消，请重新进入工作台。".into());
+        }
+        Ok(())
+    }
     /// Serialize the actual main-thread window publication with starting an exit.
     pub fn publish(&self, ticket: u64, present: impl FnOnce()) -> Result<(), String> {
         let _publication = self.publication.lock().unwrap_or_else(|e| e.into_inner());

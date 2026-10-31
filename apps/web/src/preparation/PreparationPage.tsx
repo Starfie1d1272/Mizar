@@ -28,6 +28,7 @@ import {
   cancelProductionEntry,
   openTool,
   productionAction,
+  retryPendingPreparation,
   useLocalRead,
   type Production,
 } from './client';
@@ -130,6 +131,18 @@ export function PreparationPage() {
   }
 
   useEffect(() => {
+    const cancel = () => cancelProductionEntry();
+    window.addEventListener('mizar-entry-cancel', cancel);
+    const retry = () => {
+      void retryPendingPreparation().catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : '重试未完成。';
+        setMessage(message);
+        void desktopInvoke('workbench_message', { action: 'status', message }).catch(
+          () => undefined,
+        );
+      });
+    };
+    window.addEventListener('mizar-entry-retry', retry);
     const enter = () => {
       void fetch('/local/v1/production', { cache: 'no-store' })
         .then((response) => response.json() as Promise<Production>)
@@ -139,7 +152,11 @@ export function PreparationPage() {
         });
     };
     window.addEventListener('mizar-enter', enter);
-    return () => window.removeEventListener('mizar-enter', enter);
+    return () => {
+      window.removeEventListener('mizar-enter', enter);
+      window.removeEventListener('mizar-entry-cancel', cancel);
+      window.removeEventListener('mizar-entry-retry', retry);
+    };
   }, []);
 
   const tools = (
@@ -198,7 +215,7 @@ export function PreparationPage() {
           </div>
           <Button
             variant={match ? 'primary' : 'secondary'}
-            disabled={busy || Boolean(exit?.busy) || !production?.canEnter}
+            disabled={busy || Boolean(exit?.busy) || !production}
             onClick={() =>
               production &&
               void action(async () => {
