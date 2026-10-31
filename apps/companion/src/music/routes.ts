@@ -130,10 +130,7 @@ export function registerMusicRoutes(
       return reply.code(400).send({
         error: 'music_operation_failed',
         requestId: request.id,
-        message:
-          error instanceof Error && error.message === 'music_program_unsafe'
-            ? '当前比赛数据未就绪或处于对战阶段，暂不能正式播放音乐。准备音乐时请使用曲目旁的“试听”。'
-            : '音乐操作未完成，原配置已保留。请检查文件与 OBS 后重试。',
+        message: '音乐操作未完成，原配置已保留。请检查文件与 OBS 后重试。',
       });
     }
   });
