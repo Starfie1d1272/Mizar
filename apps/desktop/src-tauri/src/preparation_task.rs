@@ -10,6 +10,7 @@ struct Task {
     external: Option<(u32, String)>,
     running: bool,
     cancelled: bool,
+    cancellation_confirmed: bool,
     obs: bool,
     obs_owned: bool,
     gsi: bool,
@@ -122,7 +123,9 @@ async fn restore_video(
             .filter(|task| {
                 task.id == id
                     && !task.entered
-                    && (cancellation_confirmed || (!task.cancelled && !task.enter_attempted))
+                    && (cancellation_confirmed
+                        || task.cancellation_confirmed
+                        || (!task.cancelled && !task.enter_attempted))
             })
             .and_then(|task| task.video_transaction.take())
     };
@@ -585,6 +588,7 @@ pub(crate) fn preparation_start(
         external,
         running: true,
         cancelled: false,
+        cancellation_confirmed: false,
         obs: false,
         obs_owned: false,
         gsi: false,
@@ -665,6 +669,7 @@ pub(crate) async fn preparation_cancel(
             Err("制作已进入，请退出工作台。".into())
         }
         Ok(false) => {
+            update(&preparation_id, |task| task.cancellation_confirmed = true);
             if let Ok(window) = main_window(&app) {
                 cancel_managed_camera(window, app.clone()).await?;
             }
