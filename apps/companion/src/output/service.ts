@@ -13,6 +13,7 @@ import {
   type ReliableEventSink,
   type ReliableDeliveryScope,
   type BoundaryIntent,
+  type BoundaryScope,
 } from './reliable-outbox.js';
 import {
   buildReliableEventV1,
@@ -68,7 +69,31 @@ export class OutputService {
   private recoveredCursor: ReliableEventV1['cursor'] | undefined;
   private readonly boundaryEnqueues = new Set<ReliableEventV1>();
   private readonly boundaryOwner = randomUUID();
-  private boundaryCommitPending = 0;
+  private readonly boundaryCommits = new Map<string, number>();
+  private boundaryScope(
+    matchId: string | undefined,
+    cursor: ReliableEventV1['cursor'] | undefined,
+  ): BoundaryScope | undefined {
+    if (!matchId || !cursor?.liveSessionId) return undefined;
+    const authorityFingerprint = this.boundaryAuthority();
+    return {
+      matchId,
+      producerInstanceId: cursor.producerInstanceId,
+      liveSessionId: cursor.liveSessionId,
+      ...(authorityFingerprint ? { authorityFingerprint } : {}),
+    };
+  }
+  private boundaryScopeKey(scope: BoundaryScope | undefined): string {
+    return scope ? JSON.stringify(scope) : '*';
+  }
+  private boundaryCommitIsPending(scope: BoundaryScope | undefined): boolean {
+    return (
+      this.boundaryCommits.has('*') ||
+      (scope
+        ? this.boundaryCommits.has(this.boundaryScopeKey(scope))
+        : this.boundaryCommits.size > 0)
+    );
+  }
 
   private boundaryAuthority(): string | undefined {
     const scope = this.options.authorityScope?.();
@@ -85,7 +110,6 @@ export class OutputService {
     const authority = this.boundaryAuthority();
     if (
       !this.outbox ||
-      this.outbox.hasBoundaryGap() ||
       !binding ||
       binding.origin !== 'online' ||
       binding.freshness !== 'fresh' ||
@@ -96,10 +120,13 @@ export class OutputService {
       !this.options.isActiveOnlineBinding?.(binding)
     )
       return;
-    for (const intent of this.outbox.getBoundaryIntents()) {
+    const scope = this.boundaryScope(binding.context.matchId, bundle.program.cursor);
+    if (!scope || this.outbox.hasBoundaryGap(scope)) return;
+    for (const intent of this.outbox.getBoundaryIntents(scope)) {
       const c = bundle.program.cursor;
       const e = intent.event.cursor;
       if (
+        intent.expired ||
         intent.authorityFingerprint !== authority ||
         intent.planFingerprint !== manifestPlanFingerprint(binding.manifest) ||
         binding.context.matchId !== intent.event.matchId ||
@@ -619,9 +646,10 @@ export class OutputService {
     );
     const generationAdvanced = result.disposition.reason === 'source-generation-advanced';
     const hasBoundary = transitions.length > 0 || generationAdvanced;
+    const outputScope = this.boundaryScope(binding?.context.matchId, bundle.program.cursor);
     if (!hasBoundary && continuity !== undefined)
       void this.outbox
-        ?.updateContinuity(continuity)
+        ?.updateContinuity(continuity, outputScope)
         .catch(() => this.onDiagnostic?.('outbox_continuity_write_failed'));
     if (bundle.program.status.telemetry === 'fresh' && bundle.program.map.phase === 'gameover') {
       const cursor = bundle.program.cursor;
@@ -730,18 +758,22 @@ export class OutputService {
           missing = true;
         }
       }
-      this.boundaryCommitPending++;
+      const pendingKey = this.boundaryScopeKey(outputScope);
+      this.boundaryCommits.set(pendingKey, (this.boundaryCommits.get(pendingKey) ?? 0) + 1);
       void this.outbox
-        .captureBoundaries(events, intents, continuity, missing, this.now())
+        .captureBoundaries(events, intents, continuity, missing, this.now(), outputScope)
         .then(() => {
-          if (missing || this.outbox?.hasBoundaryGap()) this.onDiagnostic?.('outbox_boundary_gap');
+          if (missing || this.outbox?.hasBoundaryGap(outputScope))
+            this.onDiagnostic?.('outbox_boundary_gap');
         })
         .catch(() => {
           this.quarantined = true;
           this.onDiagnostic?.('outbox_boundary_capture_failed');
         })
         .finally(() => {
-          this.boundaryCommitPending--;
+          const remaining = (this.boundaryCommits.get(pendingKey) ?? 1) - 1;
+          if (remaining) this.boundaryCommits.set(pendingKey, remaining);
+          else this.boundaryCommits.delete(pendingKey);
         });
       candidates = candidates.filter(
         (event) => event.kind !== 'map_epoch_changed' && event.kind !== 'source_generation_changed',
@@ -793,9 +825,9 @@ export class OutputService {
     if (
       newMapObservation &&
       !hasBoundary &&
-      this.boundaryCommitPending === 0 &&
-      !this.outbox?.hasBoundaryGap() &&
-      !this.outbox?.getBoundaryIntents().length &&
+      !this.boundaryCommitIsPending(outputScope) &&
+      !this.outbox?.hasBoundaryGap(outputScope) &&
+      !this.outbox?.getBoundaryIntents(outputScope).length &&
       this.mapStartScope !== undefined &&
       this.publishedMapStart?.revision !== this.mapStartRevision &&
       this.pendingMapStart?.revision !== this.mapStartRevision &&
@@ -854,15 +886,6 @@ export class OutputService {
       bundle.identity.issues.some((issue) => issue.code === 'lineup_differs_from_expected')
     )
       add('lineup_mismatch', 'identity', 'lineup_differs_from_expected');
-    candidates = candidates.filter(
-      (event) =>
-        !['map_ended', 'map_player_snapshot', 'series_ended'].includes(event.kind) ||
-        (!hasBoundary &&
-          !this.boundaryCommitPending &&
-          !this.outbox?.hasBoundaryGap() &&
-          !this.outbox?.getBoundaryIntents().length &&
-          !this.outbox?.hasUnconfirmedBoundary(event)),
-    );
     for (const event of candidates) {
       const start = event.kind === 'map_started' ? this.pendingMapStart : undefined;
       const lineup = bundle.program.players
@@ -884,6 +907,7 @@ export class OutputService {
           continuity,
           event.kind === 'map_started' ? retainedLineup : undefined,
           start?.recovery,
+          this.boundaryScope(event.matchId, event.cursor),
         )
         .then(() => {
           if (start !== undefined && start.revision === this.mapStartRevision)
@@ -1024,31 +1048,32 @@ export class OutputService {
   }
 
   getBoundaryStatus(): 'continuity_chain_missing' | 'continuity_waiting' | null {
-    if (this.quarantined || this.outbox?.hasBoundaryGap()) return 'continuity_chain_missing';
-    const authority = this.boundaryAuthority();
+    if (this.quarantined) return 'continuity_chain_missing';
+    const scope = this.boundaryScope(this.binding?.context.matchId, this.bundle?.program.cursor);
+    if (!scope) return null;
+    if (this.outbox?.hasBoundaryGap(scope)) return 'continuity_chain_missing';
+    const intents = this.outbox?.getBoundaryIntents(scope) ?? [];
+    if (intents.some((intent) => intent.expired)) return 'continuity_chain_missing';
+    const records = (this.outbox?.getRecords() ?? []).filter(
+      (record) =>
+        record.event.matchId === scope.matchId &&
+        record.event.cursor.producerInstanceId === scope.producerInstanceId &&
+        record.event.cursor.liveSessionId === scope.liveSessionId &&
+        record.boundaryQualification !== undefined &&
+        record.boundaryQualification.authorityFingerprint === scope.authorityFingerprint,
+    );
     if (
-      this.outbox?.getBoundaryIntents().some((intent) => intent.authorityFingerprint !== authority)
+      records.some(
+        (record) =>
+          ['rejected', 'expired', 'superseded'].includes(record.status) ||
+          record.receiverOutcome === 'needs_attention',
+      )
     )
       return 'continuity_chain_missing';
     if (
-      this.outbox
-        ?.getRecords()
-        .some(
-          (record) =>
-            record.boundaryQualification &&
-            ((record.status === 'pending' &&
-              record.boundaryQualification.authorityFingerprint !== authority) ||
-              ['rejected', 'expired', 'superseded'].includes(record.status) ||
-              record.receiverOutcome === 'needs_attention'),
-        )
-    )
-      return 'continuity_chain_missing';
-    if (
-      this.boundaryCommitPending ||
-      this.outbox?.getBoundaryIntents().length ||
-      this.outbox
-        ?.getRecords()
-        .some((record) => record.boundaryQualification && record.status === 'pending')
+      this.boundaryCommitIsPending(scope) ||
+      intents.length ||
+      records.some((record) => record.status === 'pending')
     )
       return 'continuity_waiting';
     return null;
@@ -1070,8 +1095,14 @@ export class OutputService {
     if (!this.outbox) return true;
     if (
       this.outbox.getRecovery()?.code === 'outbox_preserved_without_records' ||
-      this.outbox.hasBoundaryGap() ||
-      this.outbox.getBoundaryIntents().length
+      this.outbox.hasBoundaryGap({
+        ...scope,
+        ...(this.boundaryAuthority() ? { authorityFingerprint: this.boundaryAuthority()! } : {}),
+      }) ||
+      this.outbox.getBoundaryIntents({
+        ...scope,
+        ...(this.boundaryAuthority() ? { authorityFingerprint: this.boundaryAuthority()! } : {}),
+      }).length
     )
       return false;
     await this.outbox.flushPending();
@@ -1161,8 +1192,14 @@ export class OutputService {
 
   private canSend(event: ReliableEventV1, lineup?: readonly string[]): boolean {
     const bundle = this.bundle;
-    if (this.boundaryCommitPending || this.outbox?.hasBoundaryGap()) return false;
-    if (this.outbox?.getBoundaryIntents().length) return false;
+    const scope = this.boundaryScope(event.matchId, event.cursor);
+    if (this.boundaryCommitIsPending(scope) || this.outbox?.hasBoundaryGap(scope)) return false;
+    if (
+      this.outbox
+        ?.getBoundaryIntents(scope)
+        .some((intent) => intent.event.cursor.runtimeSeq <= event.cursor.runtimeSeq)
+    )
+      return false;
     const qualification = this.outbox
       ?.getRecords()
       .find(
