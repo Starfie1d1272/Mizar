@@ -274,6 +274,7 @@ export function createBroadcastRuntime(input: {
       hudUnavailable = true;
       input.diagnostic(error);
     }
+    let musicRestored = false;
     try {
       if (music.ready && !music.failure) await music.adoptPersistence(musicPersistence);
       else await music.loadWithPersistence(musicPersistence);
@@ -281,16 +282,44 @@ export function createBroadcastRuntime(input: {
     } catch (error) {
       musicUnavailable = true;
       input.diagnostic(error);
+      try {
+        await music.restoreAppliedFromPersistence();
+        musicRestored = true;
+      } catch (restoreError) {
+        input.diagnostic(restoreError);
+      }
     }
+    let cameraRestored = false;
     try {
       if (camera.ready) await camera.adoptPersistence(cameraPersistence);
       else await camera.loadWithPersistence(cameraPersistence);
     } catch (error) {
       cameraUnavailable = true;
       input.diagnostic(error);
+      try {
+        await camera.restoreAppliedFromPersistence();
+        cameraRestored = true;
+      } catch (restoreError) {
+        input.diagnostic(restoreError);
+      }
     }
     cameraUnavailable ||= !cameraPersistence.available && !store.pendingLegacyCamera;
     const initialActive = store.snapshot.active;
+    let programRestored = false;
+    if (programUnavailable) {
+      const previous = store.appliedSnapshot('program');
+      if (previous) {
+        try {
+          await resolver.resolveModule({
+            kind: 'program',
+            value: previous.resolved.program,
+          } as import('@mizar/broadcast-config').ModuleRecord<'program'>);
+          programRestored = true;
+        } catch (error) {
+          input.diagnostic(error);
+        }
+      }
+    }
     await store.recordConsumer(
       'hud',
       initialActive,
@@ -301,19 +330,19 @@ export function createBroadcastRuntime(input: {
       'music',
       initialActive,
       musicUnavailable ? 'dependency_unavailable' : null,
-      true,
+      !musicRestored,
     );
     await store.recordConsumer(
       'camera',
       initialActive,
       cameraUnavailable ? 'dependency_unavailable' : null,
-      true,
+      !cameraRestored,
     );
     await store.recordConsumer(
       'program',
       initialActive,
       programUnavailable ? 'dependency_unavailable' : null,
-      true,
+      !programRestored,
     );
     if (input.builtinMusicPack) {
       try {

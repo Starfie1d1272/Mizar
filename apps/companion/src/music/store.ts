@@ -96,10 +96,16 @@ export interface MusicConfigPersistence {
     revision: string,
   ): Promise<{ config: MusicConfig; revision: string; automaticEnabled: boolean }>;
   read(): Promise<{ config: MusicConfig; revision: string; automaticEnabled: boolean }>;
+  readApplied?(): Promise<{ config: MusicConfig; revision: string; automaticEnabled: boolean }>;
   commit(
     config: MusicConfig,
     previous: MusicConfig,
-  ): Promise<{ config: MusicConfig; revision: string; automaticEnabled: boolean }>;
+  ): Promise<{
+    config: MusicConfig;
+    revision: string;
+    automaticEnabled: boolean;
+    confirmApplied?: () => Promise<void>;
+  }>;
 }
 function runtimeState(state: MusicState): z.infer<typeof runtimeSchema> {
   const value: Partial<MusicState> = structuredClone(state);
@@ -339,6 +345,18 @@ export class MusicStore {
     this.queue = result.catch(() => undefined);
     return result;
   }
+  async restoreAppliedFromPersistence(): Promise<void> {
+    if (!this.persistence?.readApplied) throw new Error('music_state_invalid');
+    const current = await this.persistence.readApplied();
+    this.state = stateSchema.parse({
+      ...this.state,
+      config: current.config,
+      configRevision: current.revision,
+    });
+    this.automaticEnabled = z.boolean().parse(current.automaticEnabled);
+    this.failure = false;
+    this.ready = true;
+  }
   update(change: (state: MusicState) => void): Promise<void> {
     const result = this.queue.then(async () => {
       if (this.failure) throw new Error('music_state_invalid');
@@ -346,6 +364,7 @@ export class MusicStore {
       change(next);
       stateSchema.parse(next);
       const configChanged = JSON.stringify(next.config) !== JSON.stringify(this.state.config);
+      let confirmApplied: (() => Promise<void>) | undefined;
       if (this.persistence && configChanged) {
         if (JSON.stringify(runtimeState(next)) !== JSON.stringify(runtimeState(this.state)))
           throw new Error('music_mixed_update');
@@ -353,6 +372,7 @@ export class MusicStore {
         next.config = musicConfigSchema.parse(committed.config);
         next.configRevision = z.string().uuid().parse(committed.revision);
         this.automaticEnabled = z.boolean().parse(committed.automaticEnabled);
+        confirmApplied = committed.confirmApplied;
       } else {
         if (configChanged) next.configRevision = randomUUID();
         stateSchema.parse(next);
@@ -364,6 +384,7 @@ export class MusicStore {
         );
       }
       this.state = next;
+      await confirmApplied?.();
     });
     this.queue = result.catch(() => undefined);
     return result;

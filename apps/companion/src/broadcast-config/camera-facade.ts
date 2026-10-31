@@ -52,8 +52,9 @@ export function createCameraConfigPersistence(
       ),
     });
   }
-  async function read(requireAvailable = false) {
+  async function read(requireAvailable = false, applied?: ActiveBroadcastSnapshot) {
     const document = store.snapshot;
+    if (applied) document.active = applied;
     const active = document.active.resolved.camera;
     const modules = document.modules.filter((item) => item.kind === 'camera');
     if (modules.some((item) => item.id === disabledId)) throw new Error('camera_preset_reserved');
@@ -147,6 +148,11 @@ export function createCameraConfigPersistence(
     initialize: () => read(),
     read: () => read(),
     readForApply: () => read(true),
+    readApplied: () => {
+      const active = store.appliedSnapshot('camera');
+      if (!active) throw new Error('camera_storage_unavailable');
+      return read(true, active);
+    },
     async commit(catalog, automaticEnabled, previous, previousAutomaticEnabled) {
       const beforeDocument = store.snapshot;
       const before = beforeDocument.active;
@@ -218,7 +224,7 @@ export function createCameraConfigPersistence(
           : catalog.activePresetId;
       if (value && committedId !== catalog.activePresetId)
         changedDrafts.push({ id: committedId, value });
-      await store.updateFromLegacy({
+      const committed = await store.updateFromLegacy({
         updateDraft(document) {
           if (document.active.revision !== before.revision) throw new Error('revision_conflict');
           for (const draft of changedDrafts) {
@@ -256,7 +262,13 @@ export function createCameraConfigPersistence(
             }
           : {}),
       });
-      return read();
+      const result = await read(true);
+      return activeChanged
+        ? {
+            ...result,
+            confirmApplied: () => store.recordConsumer('camera', committed.active, null),
+          }
+        : result;
     },
   };
 }

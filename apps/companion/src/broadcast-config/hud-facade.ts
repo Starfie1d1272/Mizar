@@ -96,7 +96,7 @@ export function createHudConfigPersistence(
           throw new Error('capability_unsupported');
       }
       const lock = activeChanged ? await lockFor(nextHud, current.active) : current.active.lock;
-      await store.updateFromLegacy({
+      const committed = await store.updateFromLegacy({
         updateDraft(document) {
           if (canonicalJson(hudDocumentFromBroadcast(document)) !== canonicalJson(previous))
             throw new Error('revision_conflict');
@@ -149,6 +149,7 @@ export function createHudConfigPersistence(
           ? { active: { kind: 'hud' as const, moduleId: target?.id, value: nextHud, lock } }
           : {}),
       });
+      if (activeChanged) return () => store.recordConsumer('hud', committed.active, null);
     },
   };
 }

@@ -39,7 +39,7 @@ export interface HudConfigPersistence {
     candidate: HudConfigDocument,
     previous: HudConfigDocument,
     command: HudConfigCommandResult,
-  ): Promise<void>;
+  ): Promise<void | (() => Promise<void>)>;
 }
 
 export class HudConfigEditorConflictError extends Error {
@@ -388,14 +388,16 @@ export class HudConfigStore {
         throw new HudConfigCommandError(error instanceof Error ? error.message : 'HUD 配置无效');
       }
       try {
+        let confirm: void | (() => Promise<void>) = undefined;
         if (this.persistence) {
-          await this.persistence.commit(clone(candidate), clone(this.document), command);
+          confirm = await this.persistence.commit(clone(candidate), clone(this.document), command);
         } else if (this.filePath !== undefined) {
           const committed = await replaceDurableJson(this.filePath, candidate);
           if (!committed) throw new Error('HUD 配置提交已取消');
         }
         this.document = candidate;
         this.persistenceError = null;
+        await confirm?.();
       } catch (error: unknown) {
         if (error instanceof Error && error.message === 'capability_unsupported')
           throw new HudConfigPersistenceError(error);

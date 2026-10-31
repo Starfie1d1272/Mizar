@@ -53,8 +53,7 @@ export function createMusicConfigPersistence(
     }
     return musicConfigSchema.parse(config);
   }
-  async function read() {
-    const active = store.snapshot.active;
+  async function read(active = store.snapshot.active) {
     return {
       config: await toLocal(active.resolved.music),
       revision: musicRevision(active.moduleRevisions.music),
@@ -64,6 +63,11 @@ export function createMusicConfigPersistence(
   return {
     initialize: () => read(),
     read,
+    readApplied: () => {
+      const active = store.appliedSnapshot('music');
+      if (!active) throw new Error('music_state_invalid');
+      return read(active);
+    },
     async commit(config, previous) {
       const document = store.snapshot;
       const active = document.active;
@@ -91,7 +95,7 @@ export function createMusicConfigPersistence(
         usages <= 1 &&
         canonicalJson(captured.value) === canonicalJson(active.resolved.music);
       const moduleId = reusable ? captured.id : randomUUID();
-      await store.updateFromLegacy({
+      const committed = await store.updateFromLegacy({
         updateDraft(next) {
           if (next.active.revision !== active.revision) throw new Error('revision_conflict');
           const existing = next.modules.find((item) => item.id === moduleId);
@@ -114,7 +118,10 @@ export function createMusicConfigPersistence(
         },
         active: { kind: 'music', value, lock, moduleId },
       });
-      return read();
+      return {
+        ...(await read()),
+        confirmApplied: () => store.recordConsumer('music', committed.active, null),
+      };
     },
   };
 }

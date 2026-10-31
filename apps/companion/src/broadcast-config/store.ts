@@ -311,6 +311,10 @@ export class BroadcastConfigStore {
       }),
     );
   }
+  appliedSnapshot(kind: ConsumerKind): ActiveBroadcastSnapshot | null {
+    if (!this.envelope) throw new Error('broadcast_config_unavailable');
+    return structuredClone(this.envelope.consumers?.[kind]?.applied ?? null);
+  }
   get appliedDisplay(): ActiveBroadcastSnapshot {
     if (!this.envelope) throw new Error('broadcast_config_unavailable');
     const active = structuredClone(this.envelope.document.active);
