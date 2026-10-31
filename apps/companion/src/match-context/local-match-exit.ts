@@ -15,7 +15,7 @@ const commandSchema = z.discriminatedUnion('action', [
 interface ExitWitness {
   readonly matchId: string;
   readonly contextRevision: string;
-  readonly productionRevision: string;
+  readonly productionSession: string;
   readonly sourceGeneration: number;
   readonly receiveSequence: number | null;
   readonly receivedMonotonicMs: number | null;
@@ -29,8 +29,9 @@ export function registerLocalMatchExitRoutes(
     readonly loopback: boolean;
     readonly controller: MatchContextController;
     readonly runtime: ProgramRuntime;
-    readonly isPreparationWaiting: () => boolean;
-    readonly productionRevision: () => string;
+    readonly eligibleSession: () => boolean;
+    readonly isPreparation: () => boolean;
+    readonly productionSession: () => string;
   },
 ) {
   let hostConfirmationRequired = false;
@@ -41,7 +42,7 @@ export function registerLocalMatchExitRoutes(
   const witness = (): ExitWitness | undefined => {
     const binding = options.controller.getActiveBinding();
     if (
-      !options.isPreparationWaiting() ||
+      !options.eligibleSession() ||
       binding?.origin !== 'local' ||
       binding.localAuthoringMode !== 'standalone'
     )
@@ -50,7 +51,7 @@ export function registerLocalMatchExitRoutes(
     return {
       matchId: binding.context.matchId,
       contextRevision: options.controller.getActiveRevision(),
-      productionRevision: options.productionRevision(),
+      productionSession: options.productionSession(),
       sourceGeneration: source.generation,
       receiveSequence: source.lastAccepted?.sequence ?? null,
       receivedMonotonicMs: source.lastAccepted?.receivedMonotonicMs ?? null,
@@ -60,7 +61,7 @@ export function registerLocalMatchExitRoutes(
     current !== undefined &&
     expected.matchId === current.matchId &&
     expected.contextRevision === current.contextRevision &&
-    expected.productionRevision === current.productionRevision &&
+    expected.productionSession === current.productionSession &&
     expected.sourceGeneration === current.sourceGeneration;
   const matches = (expected: ExitWitness, current: ExitWitness | undefined) =>
     matchesIdentity(expected, current) &&
@@ -146,6 +147,7 @@ export function registerLocalMatchExitRoutes(
     requireHostConfirmation,
     canConfirmLocalExit: () => Boolean(options.controlToken) && witness() !== undefined,
     canReleaseLocalSelection: () => {
+      if (!options.isPreparation()) return false;
       const current = witness();
       if (!current) return false;
       return (
