@@ -1,4 +1,5 @@
 import { gameBackgroundReady } from './game-background.js';
+import { prepareCaptureAudio } from './capture-audio-preparation.js';
 import { ObsCaptureWarmup, ObsCaptureWarmupError } from './capture-warmup.js';
 import { readCaptureInitialization, type CaptureInitialization } from './capture-initialization.js';
 import type { ObsCaptureDiagnostic } from '@mizar/protocol/obs';
@@ -2198,6 +2199,7 @@ export class ObsAdapter {
           )
         )
           return { findings: visual, ready: false };
+        if (entry) await prepareCaptureAudio(obs);
         await alignPreparationScene(obs, activeScene, current);
         let audio: ObsFinding[];
         if (
