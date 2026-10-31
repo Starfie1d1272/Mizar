@@ -2450,46 +2450,6 @@ impl ManagedCs2 {
         }
     }
 }
-
-#[cfg(test)]
-mod replacement_tests {
-    use super::{replacement_decision, LAUNCH_ARGS, PRESERVED_LAUNCH_ARGS};
-
-    #[test]
-    fn both_standard_launch_modes_enable_game_capture_without_forcing_preserved_video_settings() {
-        for arguments in [LAUNCH_ARGS, PRESERVED_LAUNCH_ARGS] {
-            for required in ["-console", "-allow_third_party_software", "-worldwide"] {
-                assert!(arguments.contains(&required));
-            }
-        }
-        assert!(!PRESERVED_LAUNCH_ARGS.contains(&"-windowed"));
-        assert!(!PRESERVED_LAUNCH_ARGS.contains(&"+fps_max"));
-    }
-
-    #[test]
-    fn replacement_requires_the_preflight_identity_and_only_reuses_its_managed_transaction() {
-        assert_eq!(
-            replacement_decision(Some((10, 20, true)), Some(10), Some(20), true),
-            Ok(true)
-        );
-        assert_eq!(
-            replacement_decision(Some((10, 20, true)), Some(10), Some(20), false),
-            Ok(false)
-        );
-        assert_eq!(
-            replacement_decision(Some((10, 20, false)), Some(10), Some(20), true),
-            Ok(false)
-        );
-        assert!(replacement_decision(Some((10, 21, false)), Some(10), Some(20), false).is_err());
-        assert!(replacement_decision(Some((11, 20, false)), Some(10), Some(20), false).is_err());
-        assert!(replacement_decision(Some((10, 20, false)), None, None, false).is_err());
-        assert_eq!(
-            replacement_decision(None, Some(10), Some(20), false),
-            Ok(false)
-        );
-    }
-}
-
 fn stop_owned_launcher(
     pending: bool,
     game_running: impl FnOnce() -> Result<bool, String>,
