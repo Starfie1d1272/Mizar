@@ -137,6 +137,7 @@ export function registerProductionRoutes(
         // Local cleanup must continue if an OBS operation cannot be confirmed.
         // Shutdown keeps its synchronous contract because the service is about to stop.
         let safeScene = true;
+        const sceneRequired = mode !== 'preparation';
         try {
           await options.beforeFinish?.();
           if (!controlValid()) throw new Error('OBS 播出状态已变化。');
@@ -157,7 +158,7 @@ export function registerProductionRoutes(
           safeScene = false;
           app.log.warn({ stage, err: error }, 'OBS exit state unconfirmed');
         }
-        obsExitState = safeScene ? 'confirmed' : 'unconfirmed';
+        obsExitState = safeScene ? (sceneRequired ? 'confirmed' : 'idle') : 'unconfirmed';
         if (safeScene) {
           stage = 'production_video_restore';
           try {
