@@ -54,6 +54,7 @@ const phaseNames = new Set([
   'prepare',
   'download',
   'transfer',
+  'transfer-verified-runtime',
   'verify',
   'final-check',
   'index-update',
@@ -405,6 +406,51 @@ const remotePath = (plan, lane, name) =>
     : lane === 'resources'
       ? `/Resources/${plan.tag}/${name}`
       : `/Stable/Downloads/${name}`;
+async function recordRuntimeReadback(root, bytes, plan, selected) {
+  requireValue(['metadata', 'core'].includes(selected), 'Runtime 资产选择无效');
+  const name =
+    selected === 'metadata'
+      ? MACHINE_METADATA_NAME
+      : `Mizar-${plan.tag}-Windows-x64-Core-Setup.exe`;
+  const marker = (asset) =>
+    Buffer.from(
+      JSON.stringify({
+        runId: plan.runId,
+        attempt: envAttempt(),
+        planSha256: digest(bytes),
+        asset,
+      }),
+    );
+  const markers = join(root, 'verified');
+  await mkdir(markers, { recursive: true });
+  await writeNew(
+    join(markers, `${selected}.json`),
+    marker(plan.assets.runtime.find((item) => item.name === name)),
+  );
+  if (selected === 'metadata') return;
+  const metadata = plan.assets.runtime.find((item) => item.name === MACHINE_METADATA_NAME);
+  requireValue(
+    (await readFile(join(markers, 'metadata.json'))).equals(marker(metadata)),
+    '机器元数据回读记录不一致',
+  );
+  await writeLaneReceipt(root, bytes, plan, 'runtime');
+}
+async function writeLaneReceipt(root, bytes, plan, lane) {
+  const receipt = makeBoxReceipt(
+    bytes,
+    lane,
+    process.env.GITHUB_RUN_ID,
+    envAttempt(),
+    plan.assets[lane],
+  );
+  await mkdir(join(root, 'receipt'), { recursive: true });
+  await writeNew(join(root, 'receipt', `${lane}.json`), receipt);
+}
+export async function transferVerifiedRuntime(root, selected, box = boxClient()) {
+  await transferLane(root, 'runtime', selected, box);
+  const { bytes, plan } = await readContext(root);
+  await recordRuntimeReadback(root, bytes, plan, selected);
+}
 export async function verifyLane(
   root,
   lane,
@@ -423,39 +469,15 @@ export async function verifyLane(
         : `Mizar-${plan.tag}-Windows-x64-Core-Setup.exe`;
     const asset = plan.assets.runtime.find((item) => item.name === name);
     await verifyRemote(box, remotePath(plan, lane, asset.name), asset);
-    const marker = (item) =>
-      Buffer.from(
-        JSON.stringify({
-          runId: plan.runId,
-          attempt: envAttempt(),
-          planSha256: digest(bytes),
-          asset: item,
-        }),
-      );
-    const markers = join(root, 'verified');
-    await mkdir(markers, { recursive: true });
-    await writeNew(join(markers, `${selected}.json`), marker(asset));
-    if (selected === 'metadata') return;
-    const metadata = plan.assets.runtime.find((item) => item.name === MACHINE_METADATA_NAME);
-    requireValue(
-      (await readFile(join(markers, 'metadata.json'))).equals(marker(metadata)),
-      '机器元数据回读记录不一致',
-    );
+    await recordRuntimeReadback(root, bytes, plan, selected);
+    return;
   } else {
     for (const asset of plan.assets[lane])
       await verifyRemote(box, remotePath(plan, lane, asset.name), asset);
     if (lane === 'downloads')
       await publicVerify({ bootstrap: { identity: bootstrapIdentity(plan) } });
   }
-  const receipt = makeBoxReceipt(
-    bytes,
-    lane,
-    process.env.GITHUB_RUN_ID,
-    envAttempt(),
-    plan.assets[lane],
-  );
-  await mkdir(join(root, 'receipt'), { recursive: true });
-  await writeNew(join(root, 'receipt', `${lane}.json`), receipt);
+  await writeLaneReceipt(root, bytes, plan, lane);
 }
 
 async function finalContext(root, receipts) {
@@ -545,7 +567,10 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       }
     } else if (phase === 'download') await downloadLane(root, argument, selected);
     else if (phase === 'transfer') await transferLane(root, argument, selected);
-    else if (phase === 'verify') await verifyLane(root, argument, selected);
+    else if (phase === 'transfer-verified-runtime') {
+      requireValue(argument === 'runtime', '未知分发通道');
+      await transferVerifiedRuntime(root, selected);
+    } else if (phase === 'verify') await verifyLane(root, argument, selected);
     else if (phase === 'final-check') await finalCheck(root, argument);
     else if (phase === 'index-update') console.log(await updatePointer(root, argument));
     else if (phase === 'index-verify') await verifyPointer(root, argument);

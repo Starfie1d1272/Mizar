@@ -6,10 +6,63 @@ import { createServer } from 'node:net';
 import { EventEmitter } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
 import { setImmediate } from 'node:timers/promises';
-import { BoxClient } from './box-sync.mjs';
+import { BoxClient, verifyStableReadbacks } from './box-sync.mjs';
 import { curlMultipartUpload } from './box-curl-upload.mjs';
 
 const { AbortController, AbortSignal, Blob, FormData, Response } = globalThis;
+
+test('final readbacks start Core in first batch, join failures and cover every asset', async () => {
+  const asset = (name) => ({ name, size: 1, sha256: 'a'.repeat(64) });
+  const metadata = asset('machine-metadata.json');
+  const core = asset('Mizar-v1.10.0-Windows-x64-Core-Setup.exe');
+  const options = {
+    identity: { version: '1.10.0' },
+    bootstrap: { identity: asset('web.exe') },
+    resources: [asset('pack.zip')],
+    runtime: [metadata, core],
+  };
+  const paths = [];
+  await verifyStableReadbacks({
+    ...options,
+    box: {
+      hash: async (path) => {
+        paths.push(path);
+        return { size: 1, sha256: 'a'.repeat(64) };
+      },
+    },
+  });
+  assert.equal(paths.length, 4);
+  assert.ok(paths[0].endsWith(core.name));
+  assert.deepEqual(
+    new Set(paths.map((path) => path.split('/').pop())),
+    new Set([core.name, metadata.name, 'web.exe', 'pack.zip']),
+  );
+  let finish;
+  const pending = new Promise((resolve) => {
+    finish = resolve;
+  });
+  const started = [];
+  let settled = false;
+  const failed = verifyStableReadbacks({
+    ...options,
+    box: {
+      hash: async (path) => {
+        started.push(path);
+        if (path.endsWith(core.name)) throw new Error('failure');
+        await pending;
+        return { size: 1, sha256: 'a'.repeat(64) };
+      },
+    },
+  }).finally(() => {
+    settled = true;
+  });
+  await setImmediate();
+  assert.equal(started.length, 3);
+  assert.equal(settled, false);
+  finish();
+  await assert.rejects(failed, /failure/);
+  assert.equal(started.length, 3);
+});
 
 function client(transport) {
   const box = new BoxClient('test-token', transport);

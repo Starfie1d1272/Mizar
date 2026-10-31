@@ -84,7 +84,7 @@ jobs:
     timeout-minutes: 30
     outputs:
       receipt: ${{ steps.receipt.outputs.artifact-id }}
-      recovery: ${{ steps.download_metadata.outputs.recovery_started_at || steps.download.outputs.recovery_started_at || steps.transfer_metadata.outputs.recovery_started_at || steps.transfer.outputs.recovery_started_at || steps.verify_metadata.outputs.recovery_started_at || steps.verify.outputs.recovery_started_at }}
+      recovery: ${{ steps.download_metadata.outputs.recovery_started_at || steps.download.outputs.recovery_started_at || steps.transfer_metadata.outputs.recovery_started_at || steps.transfer.outputs.recovery_started_at }}
     env:
       NODE_OPTIONS: --network-family-autoselection-attempt-timeout=2000
       BOX_PLAN_SHA256: ${{ needs.prepare.outputs.plan_sha256 }}
@@ -111,23 +111,13 @@ jobs:
         id: transfer_metadata
         env:
           MIZAR_BOX_REPO_TOKEN: ${{ secrets.MIZAR_BOX_REPO_TOKEN }}
-        run: node scripts/qualification/box-phases.mjs transfer "$RUNNER_TEMP/box-plan" runtime metadata
+        run: node scripts/qualification/box-phases.mjs transfer-verified-runtime "$RUNNER_TEMP/box-plan" runtime metadata
       - name: 上传并分块核对 Core 安装包
         id: transfer
         env:
           GH_TOKEN: ${{ github.token }}
           MIZAR_BOX_REPO_TOKEN: ${{ secrets.MIZAR_BOX_REPO_TOKEN }}
-        run: node scripts/qualification/box-phases.mjs transfer "$RUNNER_TEMP/box-plan" runtime core
-      - name: 完整回读机器元数据
-        id: verify_metadata
-        env:
-          MIZAR_BOX_REPO_TOKEN: ${{ secrets.MIZAR_BOX_REPO_TOKEN }}
-        run: node scripts/qualification/box-phases.mjs verify "$RUNNER_TEMP/box-plan" runtime metadata
-      - name: 完整回读 Core 安装包并生成回执
-        id: verify
-        env:
-          MIZAR_BOX_REPO_TOKEN: ${{ secrets.MIZAR_BOX_REPO_TOKEN }}
-        run: node scripts/qualification/box-phases.mjs verify "$RUNNER_TEMP/box-plan" runtime core
+        run: node scripts/qualification/box-phases.mjs transfer-verified-runtime "$RUNNER_TEMP/box-plan" runtime core
       - name: 保存 Core 与机器元数据阶段回执
         id: receipt
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
