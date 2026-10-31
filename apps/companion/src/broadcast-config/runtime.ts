@@ -55,7 +55,6 @@ export function createBroadcastRuntime(input: {
   let pendingLegacyCamera: PendingLegacyCamera | undefined;
   let ready = false;
   let builtinMusicAvailable = false;
-  let syncError: Error | undefined;
   let cameraUnavailable = false;
   let programUnavailable = false;
   let cameraAvailable = () => true;
@@ -109,25 +108,26 @@ export function createBroadcastRuntime(input: {
     onDraftChanged: async (kind) => {
       if (kind === 'hud') await hud.synchronizeFromPersistence(hudDocument());
     },
-    onApplied: async (_active, _previous, kind) => {
-      ready = false;
-      const results = await Promise.allSettled([
-        ...(!kind || kind === 'hud'
-          ? [Promise.resolve().then(() => hud.synchronizeFromPersistence(hudDocument()))]
-          : []),
-        ...(!kind || kind === 'music'
-          ? [Promise.resolve().then(() => music.synchronizeFromPersistence())]
-          : []),
-        ...(!kind || kind === 'camera'
-          ? [Promise.resolve().then(() => camera.synchronizeFromPersistence())]
-          : []),
-      ]);
-      const failed = results.find((result) => result.status === 'rejected');
-      if (failed?.status === 'rejected') {
-        status = { state: 'pending', reason: 'dependency_unavailable' };
-        input.diagnostic(failed.reason);
-        syncError = new Error('broadcast_owner_sync_failed', { cause: failed.reason });
-        throw syncError;
+    onApplied: async (active, _previous, kind) => {
+      const operations = {
+        hud: () => hud.synchronizeFromPersistence(hudDocument()),
+        music: () => music.synchronizeFromPersistence(),
+        camera: () => camera.synchronizeFromPersistence(),
+        program: async () => {},
+      };
+      const kinds = (['hud', 'music', 'camera', 'program'] as const).filter(
+        (item) => !kind || kind === item,
+      );
+      let failure: unknown;
+      for (const item of kinds) {
+        try {
+          await operations[item]();
+          await store.recordConsumer(item, active, null);
+        } catch (error) {
+          failure ??= error;
+          input.diagnostic(error);
+          await store.recordConsumer(item, active, 'dependency_unavailable');
+        }
       }
       if (!kind || kind === 'camera') cameraUnavailable = !cameraAvailable();
       try {
@@ -139,9 +139,8 @@ export function createBroadcastRuntime(input: {
       } catch {
         programUnavailable = true;
       }
-      syncError = undefined;
-      ready = true;
       status = readyStatus();
+      if (failure) throw new Error('broadcast_owner_sync_failed', { cause: failure });
     },
   });
   function hudDocument() {
@@ -261,6 +260,21 @@ export function createBroadcastRuntime(input: {
     if (camera.ready) await camera.adoptPersistence(cameraPersistence);
     else await camera.loadWithPersistence(cameraPersistence);
     cameraUnavailable ||= !cameraPersistence.available && !store.pendingLegacyCamera;
+    const initialActive = store.snapshot.active;
+    await store.recordConsumer('hud', initialActive, null);
+    await store.recordConsumer('music', initialActive, null);
+    await store.recordConsumer(
+      'camera',
+      initialActive,
+      cameraUnavailable ? 'dependency_unavailable' : null,
+      true,
+    );
+    await store.recordConsumer(
+      'program',
+      initialActive,
+      programUnavailable ? 'dependency_unavailable' : null,
+      true,
+    );
     if (input.builtinMusicPack) {
       try {
         const config = await music.prepareImport(await readFile(input.builtinMusicPack));
@@ -299,7 +313,6 @@ export function createBroadcastRuntime(input: {
     },
     async waitForApply() {
       await store.waitForApply();
-      if (syncError) throw syncError;
     },
     async reconcileCameraSelection(): Promise<boolean> {
       try {

@@ -38,6 +38,8 @@ interface Receipt {
   fingerprint: string;
   active: ActiveBroadcastSnapshot;
 }
+type ConsumerKind = 'hud' | 'music' | 'camera' | 'program';
+type ConsumerState = { applied: ActiveBroadcastSnapshot | null; error: string | null };
 const importEntry = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/);
 const importMappingSchema = z.strictObject({
   source: resourceRefSchema,
@@ -59,6 +61,7 @@ interface Envelope {
   document: BroadcastConfigDocument;
   receipts: Record<string, Receipt>;
   imports: BroadcastImportMapping[];
+  consumers?: Partial<Record<ConsumerKind, ConsumerState>>;
   builtinsNormalized?: boolean | undefined;
   pendingLegacyCamera?: PendingLegacyCamera | undefined;
   restoredLegacyCamera?:
@@ -133,6 +136,7 @@ export class BroadcastConfigStore {
             'document',
             'receipts',
             'imports',
+            'consumers',
             'builtinsNormalized',
             'pendingLegacyCamera',
             'restoredLegacyCamera',
@@ -141,6 +145,24 @@ export class BroadcastConfigStore {
     )
       throw new Error('broadcast_config_invalid');
     const document = parseBroadcastConfigDocument(value.document);
+    const consumers: Partial<Record<ConsumerKind, ConsumerState>> = {};
+    if (value.consumers !== undefined) {
+      const entries = z.record(z.string(), z.unknown()).parse(value.consumers);
+      for (const [key, raw] of Object.entries(entries)) {
+        if (!['hud', 'music', 'camera', 'program'].includes(key))
+          throw new Error('broadcast_config_invalid');
+        const entry = z
+          .strictObject({ applied: z.unknown(), error: z.string().nullable() })
+          .parse(raw);
+        consumers[key as ConsumerKind] = {
+          applied:
+            entry.applied === null
+              ? null
+              : parseBroadcastConfigDocument({ ...document, active: entry.applied }).active,
+          error: entry.error,
+        };
+      }
+    }
     const receipts: Record<string, Receipt> = Object.create(null) as Record<string, Receipt>;
     for (const [id, raw] of Object.entries(value.receipts)) {
       if (!raw || typeof raw !== 'object' || Array.isArray(raw))
@@ -214,6 +236,7 @@ export class BroadcastConfigStore {
       document,
       receipts,
       imports,
+      consumers,
       ...(builtinsNormalized !== undefined ? { builtinsNormalized } : {}),
       ...(pendingLegacyCamera ? { pendingLegacyCamera } : {}),
       ...(restoredLegacyCamera ? { restoredLegacyCamera } : {}),
@@ -270,6 +293,55 @@ export class BroadcastConfigStore {
     if (!this.envelope) throw new Error('broadcast_config_unavailable');
     return structuredClone(this.envelope.document);
   }
+  get consumerStatus() {
+    if (!this.envelope) throw new Error('broadcast_config_unavailable');
+    const active = this.envelope.document.active;
+    return Object.fromEntries(
+      (['hud', 'program', 'music', 'camera'] as const).map((kind) => {
+        const state = this.envelope!.consumers?.[kind];
+        return [
+          kind,
+          {
+            desired: active.moduleRevisions[kind],
+            applied: state?.applied?.moduleRevisions[kind] ?? null,
+            error: state?.error ?? null,
+          },
+        ];
+      }),
+    );
+  }
+  get appliedDisplay(): ActiveBroadcastSnapshot {
+    if (!this.envelope) throw new Error('broadcast_config_unavailable');
+    const active = structuredClone(this.envelope.document.active);
+    for (const kind of ['hud', 'program'] as const) {
+      const applied = this.envelope.consumers?.[kind]?.applied;
+      if (applied) {
+        active.resolved[kind] = structuredClone(applied.resolved[kind]) as never;
+        active.moduleRevisions[kind] = applied.moduleRevisions[kind];
+      }
+    }
+    return active;
+  }
+  async recordConsumer(
+    kind: ConsumerKind,
+    active: ActiveBroadcastSnapshot,
+    error: string | null,
+    reset = false,
+  ) {
+    await this.queue.run(async () => {
+      if (!this.envelope) throw new Error('broadcast_config_unavailable');
+      if (this.envelope.document.active.moduleRevisions[kind] !== active.moduleRevisions[kind])
+        throw new Error('revision_conflict');
+      const next = structuredClone(this.envelope);
+      next.consumers ??= {};
+      const previous = next.consumers[kind];
+      next.consumers[kind] = {
+        applied: error ? (reset ? null : (previous?.applied ?? null)) : active,
+        error,
+      };
+      await this.commit(next);
+    });
+  }
   /** Include resources exposed by durable apply receipts as well as the current document. */
   referencedResources(): ResourceRef[] {
     if (!this.envelope) throw new Error('broadcast_config_unavailable');
@@ -278,6 +350,8 @@ export class BroadcastConfigStore {
     );
     for (const receipt of Object.values(this.envelope.receipts))
       for (const ref of receipt.active.lock.resources) refs.set(canonicalJson(ref), ref);
+    for (const state of Object.values(this.envelope.consumers ?? {}))
+      for (const ref of state.applied?.lock.resources ?? []) refs.set(canonicalJson(ref), ref);
     return structuredClone([...refs.values()]);
   }
   get pendingLegacyCamera(): PendingLegacyCamera | undefined {
@@ -773,6 +847,8 @@ export class BroadcastConfigStore {
           const receipt = this.envelope.receipts[input.requestId];
           if (receipt) {
             if (receipt.fingerprint !== fingerprint) throw new Error('request_conflict');
+            if (receipt.active.revision !== this.envelope.document.active.revision)
+              throw new Error('revision_conflict');
             const module = this.envelope.document.modules.find(
               (item) => item.id === input.moduleId,
             );
@@ -977,6 +1053,8 @@ export class BroadcastConfigStore {
           const receipt = this.envelope.receipts[request.requestId];
           if (receipt) {
             if (receipt.fingerprint !== fingerprint) throw new Error('request_conflict');
+            if (receipt.active.revision !== this.envelope.document.active.revision)
+              throw new Error('revision_conflict');
             return {
               active: structuredClone(receipt.active),
               previous: structuredClone(this.envelope.document.previousActive ?? receipt.active),

@@ -81,7 +81,7 @@ export function registerBroadcastConfigRoutes(
   app.get('/local/v1/broadcast-display-config', (_request, reply) => {
     if (!isReady()) return reply.code(503).send({ error: 'broadcast_config_unavailable' });
     if (!displayAvailable()) reply.header('x-mizar-program-status', 'dependency_missing');
-    const display = displayConfig(store.snapshot.active);
+    const display = displayConfig(store.appliedDisplay);
     const fallback = fallbackHudPauseVisual(display.hud);
     if (fallback.reason) reply.header('x-mizar-hud-fallback', fallback.reason);
     return reply.header('cache-control', 'no-store').send({ ...display, hud: fallback.hud });
@@ -107,6 +107,7 @@ export function registerBroadcastConfigRoutes(
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
     if (!isReady()) return reply.code(503).send({ error: 'broadcast_config_unavailable' });
     return reply.header('cache-control', 'no-store').send({
+      consumers: store.consumerStatus,
       ...(builtinMusicAvailable ? { builtinMusicAvailable: builtinMusicAvailable() } : {}),
       modules: await Promise.all(
         store.snapshot.modules.map(async (module) => ({
