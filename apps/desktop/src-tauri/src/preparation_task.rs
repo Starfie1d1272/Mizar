@@ -22,6 +22,8 @@ struct Task {
     message: String,
 }
 static TASK: Mutex<Option<Task>> = Mutex::new(None);
+// Only the in-flight OBS ensure request is cancellable; cleanup requests must finish.
+static OBS_REQUEST: Mutex<Option<(String, TcpStream)>> = Mutex::new(None);
 
 fn snapshot() -> Result<Option<Task>, String> {
     TASK.lock()
@@ -36,6 +38,9 @@ fn update(id: &str, f: impl FnOnce(&mut Task)) {
     }
 }
 fn publish(app: &tauri::AppHandle, id: &str, message: String) {
+    if !snapshot().ok().flatten().is_some_and(|task| task.id == id) {
+        return;
+    }
     update(id, |t| t.message = message.clone());
     if let Ok(mut status) = app.state::<HostState>().entry_message.lock() {
         *status = message.clone();
@@ -93,6 +98,52 @@ async fn http(
     tauri::async_runtime::spawn_blocking(move || request(&app, method, path, body))
         .await
         .map_err(|_| "准备请求未完成。".to_string())?
+}
+async fn controlled_post(
+    app: &tauri::AppHandle,
+    id: &str,
+    path: &'static str,
+    body: Value,
+) -> Result<Value, String> {
+    let app = app.clone();
+    let id = id.to_owned();
+    let body = body.to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = production_exit::request_with_stream(
+            &app.state::<DesktopLog>(),
+            "POST",
+            path,
+            &body,
+            Instant::now() + Duration::from_secs(40),
+            None,
+            |stream| {
+                let mut active = OBS_REQUEST.lock().map_err(|_| "准备状态不可用。")?;
+                if !snapshot()?.is_some_and(|task| task.id == id && !task.cancelled) {
+                    return Err("准备已取消。".into());
+                }
+                *active = Some((
+                    id.clone(),
+                    stream.try_clone().map_err(|_| "准备连接不可用。")?,
+                ));
+                Ok(())
+            },
+        );
+        if let Ok(mut active) = OBS_REQUEST.lock() {
+            if active.as_ref().is_some_and(|(saved, _)| saved == &id) {
+                *active = None;
+            }
+        }
+        let (status, value) = result?;
+        if !(200..300).contains(&status) {
+            return Err(value["message"]
+                .as_str()
+                .unwrap_or("OBS 自动准备未完成。")
+                .into());
+        }
+        Ok(value)
+    })
+    .await
+    .map_err(|_| "准备请求未完成。".to_string())?
 }
 fn main_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, String> {
     app.get_webview_window("main")
@@ -200,9 +251,9 @@ async fn run(app: tauri::AppHandle, id: String) -> Result<(), String> {
             }
             let prepared = async {
                 check(&app, &id)?;
-                http(
+                controlled_post(
                     &app,
-                    "POST",
+                    &id,
                     "/operator/obs/ensure",
                     json!({"expectedRevision":revision,"preparationId":id}),
                 )
@@ -389,11 +440,11 @@ async fn run(app: tauri::AppHandle, id: String) -> Result<(), String> {
     }
     check(&app, &id)?;
     if !task.entered {
-        http(
+        controlled_post(
             &app,
-            "POST",
+            &id,
             "/operator/production",
-            json!({"action":"enter","expectedRevision":revision}),
+            json!({"action":"enter","expectedRevision":revision,"preparationId":id}),
         )
         .await?;
         update(&id, |t| t.entered = true);
@@ -432,6 +483,17 @@ fn spawn(app: tauri::AppHandle, id: String) {
         update(&id, |t| t.running = false);
     });
 }
+/// A successful native workspace exit retires its preparation owner for every caller.
+pub(crate) fn retire_after_exit() {
+    if let Ok(mut state) = TASK.lock() {
+        *state = None;
+    }
+    if let Ok(mut active) = OBS_REQUEST.lock() {
+        if let Some((_, stream)) = active.take() {
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+        }
+    }
+}
 #[tauri::command]
 pub(crate) fn preparation_start(
     window: tauri::WebviewWindow,
@@ -462,7 +524,8 @@ pub(crate) fn preparation_start(
     if let Some(existing) = state.as_mut() {
         if !existing.cancelled {
             if existing.revision != expected_revision
-                || existing.preserve != preserve_settings
+                || (existing.preserve != preserve_settings
+                    && !(preserve_settings && !existing.entered && !existing.running))
                 || existing.external != external
             {
                 return Err("已有准备任务，请重试或取消原任务。".into());
@@ -470,6 +533,7 @@ pub(crate) fn preparation_start(
             if existing.running {
                 return Ok(());
             }
+            existing.preserve = preserve_settings;
             existing.running = true;
             let id = existing.id.clone();
             drop(state);
@@ -539,6 +603,20 @@ pub(crate) async fn preparation_cancel(
             .ok_or("本次准备任务不可用。")?;
         task.cancelled = true;
     }
+    if let Ok(mut active) = OBS_REQUEST.lock() {
+        if active.as_ref().is_some_and(|(id, _)| id == &preparation_id) {
+            if let Some((_, stream)) = active.take() {
+                let _ = stream.shutdown(std::net::Shutdown::Both);
+            }
+        }
+    }
+    let cancellation = http(
+        &app,
+        "POST",
+        "/operator/preparation-cancel",
+        json!({"preparationId":preparation_id}),
+    )
+    .await;
     let host = app.clone();
     let id = preparation_id.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -549,6 +627,23 @@ pub(crate) async fn preparation_cancel(
     if let Ok(window) = main_window(&app) {
         cancel_managed_camera(window, app.clone()).await?;
     }
-    publish(&app, &preparation_id, "准备已取消。".into());
-    Ok(())
+    match cancellation {
+        Ok(value) if value["entered"] == true => {
+            update(&preparation_id, |task| task.entered = true);
+            publish(&app, &preparation_id, "制作已进入，请退出工作台。".into());
+            Err("制作已进入，请退出工作台。".into())
+        }
+        Ok(_) => {
+            publish(&app, &preparation_id, "准备已取消。".into());
+            Ok(())
+        }
+        Err(error) => {
+            publish(
+                &app,
+                &preparation_id,
+                "取消结果未确认，请核对制作状态。".into(),
+            );
+            Err(error)
+        }
+    }
 }

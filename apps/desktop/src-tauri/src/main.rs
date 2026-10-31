@@ -1693,6 +1693,7 @@ async fn finish_workspace(
         production_exit::set_exit_intent(&intent_host.state::<DesktopLog>(), "cancel-exit")
     }).await.unwrap_or_else(|_| Err("制作退出状态未能恢复，请重试。".into()));
     let result = production_exit::cleanup_results(result, intent_result);
+    if result.is_ok() { preparation_task::retire_after_exit(); }
     if let Err(error) = &result {
         app.state::<DesktopLog>().event(
             "production_finish",

@@ -1,5 +1,4 @@
 import { ControlTask } from '../debug/control-task';
-import { controlEvidence } from '../debug/control-journal';
 import type { DemoTestView } from './demo-test';
 import { useEffect, useState } from 'react';
 import { desktopInvoke } from '../workspace/client';

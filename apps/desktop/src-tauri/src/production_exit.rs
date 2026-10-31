@@ -188,6 +188,18 @@ pub(crate) fn request_with_identity(
     deadline: Instant,
     token: Option<&str>,
 ) -> Result<(u16, serde_json::Value), String> {
+    request_with_stream(log, method, path, body, deadline, token, |_| Ok(()))
+}
+
+pub(crate) fn request_with_stream(
+    log: &DesktopLog,
+    method: &str,
+    path: &str,
+    body: &str,
+    deadline: Instant,
+    token: Option<&str>,
+    connected: impl FnOnce(&TcpStream) -> Result<(), String>,
+) -> Result<(u16, serde_json::Value), String> {
     let timeout = deadline
         .checked_duration_since(Instant::now())
         .ok_or(request_failure(token, "制作收尾超时，请重试。"))?;
@@ -201,6 +213,7 @@ pub(crate) fn request_with_identity(
                 request_failure(token, "无法连接制作服务，游戏与备份仍保留。"),
             )
         })?;
+    connected(&stream)?;
     stream.set_write_timeout(Some(timeout)).map_err(|error| {
         io_failure(
             log,

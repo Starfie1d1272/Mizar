@@ -1,3 +1,4 @@
+import { cancelPreparation, preparationCancelled } from './preparation-cancellation.js';
 import { diagnosticValue } from '../support/session-journal.js';
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
@@ -31,6 +32,7 @@ export function registerProductionRoutes(
   let trialPending = false;
   let preparationGeneration = 0;
   let sessionGeneration = 0;
+  let lastEnteredId: string | null = null;
   const view = () => ({
     mode,
     revision,
@@ -39,7 +41,12 @@ export function registerProductionRoutes(
   app.get('/local/v1/production', (_request, reply) =>
     reply.header('cache-control', 'no-store').send(view()),
   );
-  async function change(body: { action?: unknown; expectedRevision?: unknown } | null) {
+  async function change(
+    body: { action?: unknown; expectedRevision?: unknown; preparationId?: unknown } | null,
+  ) {
+    const entryId = typeof body?.preparationId === 'string' ? body.preparationId : null;
+    if (entryId && preparationCancelled(entryId))
+      return { code: 409, value: { message: '准备已取消。' } };
     if (body?.action === 'enter') {
       try {
         await options.waitForBroadcast?.();
@@ -48,6 +55,8 @@ export function registerProductionRoutes(
         return { code: 409, value: { message: '播出配置同步失败，请重试使用方案。' } };
       }
     }
+    if (entryId && preparationCancelled(entryId))
+      return { code: 409, value: { message: '准备已取消。' } };
     if (
       body?.expectedRevision === revision &&
       ['finish', 'shutdown', 'begin-exit'].includes(String(body.action))
@@ -89,6 +98,7 @@ export function registerProductionRoutes(
         options.beforeEnter?.();
         if (mode === 'preparation') options.onEnter?.();
         mode = 'live';
+        if (entering) lastEnteredId = entryId;
       } else if (body?.action === 'hide') {
         if (mode === 'live') mode = 'hidden';
       } else {
@@ -167,6 +177,18 @@ export function registerProductionRoutes(
       busy = false;
     }
   }
+  app.post('/operator/preparation-cancel', { bodyLimit: 1024 }, async (request, reply) => {
+    if (
+      options.originPolicy.mode !== 'loopback' ||
+      !checkLocalWebOrigin(options.originPolicy, request.headers.origin).allowed
+    )
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    const id = (request.body as { preparationId?: unknown } | null)?.preparationId;
+    if (typeof id !== 'string' || !/^[a-zA-Z0-9-]{1,64}$/.test(id))
+      return reply.code(400).send({ message: '启动事务标识无效。' });
+    cancelPreparation(id);
+    return reply.send({ entered: lastEnteredId === id && mode !== 'preparation' });
+  });
   app.post('/operator/production', { bodyLimit: 1024 }, async (request, reply) => {
     if (
       options.originPolicy.mode !== 'loopback' ||
@@ -174,7 +196,11 @@ export function registerProductionRoutes(
     )
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
     const result = await change(
-      request.body as { action?: unknown; expectedRevision?: unknown } | null,
+      request.body as {
+        action?: unknown;
+        expectedRevision?: unknown;
+        preparationId?: unknown;
+      } | null,
     );
     return reply.code(result.code).send(result.value);
   });
