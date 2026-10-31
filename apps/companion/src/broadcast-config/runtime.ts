@@ -326,6 +326,7 @@ export function createBroadcastRuntime(input: {
     try {
       if (camera.ready) await camera.adoptPersistence(cameraPersistence);
       else await camera.loadWithPersistence(cameraPersistence);
+      cameraUnavailable = false;
     } catch (error) {
       cameraUnavailable = true;
       input.diagnostic(error);
@@ -336,7 +337,6 @@ export function createBroadcastRuntime(input: {
         input.diagnostic(restoreError);
       }
     }
-    cameraUnavailable ||= !cameraPersistence.available && !store.pendingLegacyCamera;
     const initialActive = store.snapshot.active;
     const previousStatus = store.consumerStatus;
     const startupError = (kind: 'hud' | 'music' | 'camera' | 'program', unavailable: boolean) =>
@@ -424,8 +424,14 @@ export function createBroadcastRuntime(input: {
       await store.waitForApply();
     },
     async reconcileCameraSelection(): Promise<boolean> {
+      const current = store.snapshot.active;
+      const state = store.consumerStatus.camera;
+      if (state?.error && state.desired !== current.moduleRevisions.camera) return false;
       try {
-        await camera.synchronizeFromPersistence();
+        await camera.synchronizeFromPersistence(
+          () => store.snapshot.active.moduleRevisions.camera === current.moduleRevisions.camera,
+        );
+        await store.recordConsumer('camera', current, null);
       } catch (error) {
         cameraUnavailable = true;
         input.diagnostic(error);

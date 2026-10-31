@@ -34,7 +34,6 @@ export function createCameraConfigPersistence(
   store: BroadcastConfigStore,
   dependencies: CameraFacadeDependencies,
 ): CameraConfigPersistence & { readonly available: boolean } {
-  let unavailable = false;
   async function toLocal(value: CameraModuleV2): Promise<OrchestrationPreset> {
     return orchestrationPresetSchema.parse({
       format: 'mizar.orchestration',
@@ -52,7 +51,7 @@ export function createCameraConfigPersistence(
       ),
     });
   }
-  async function read(requireAvailable = false, applied?: ActiveBroadcastSnapshot) {
+  async function read(applied?: ActiveBroadcastSnapshot) {
     const document = store.snapshot;
     if (applied) document.active = applied;
     const active = document.active.resolved.camera;
@@ -61,13 +60,11 @@ export function createCameraConfigPersistence(
     // Resolve only the active snapshot. Legacy draft rows reuse already resolved identities;
     // drafts needing other dependencies remain in the coordinator for the new editor.
     let activePreset: OrchestrationPreset | null = null;
-    unavailable = false;
     if (active) {
       try {
         activePreset = await toLocal(active);
       } catch (error) {
-        unavailable = true;
-        if (requireAvailable) throw new Error('camera_dependency_unavailable', { cause: error });
+        throw new Error('camera_dependency_unavailable', { cause: error });
       }
     }
     const packs = new Map<string, string>();
@@ -143,22 +140,21 @@ export function createCameraConfigPersistence(
   }
   return {
     get available() {
-      return !unavailable && !store.pendingLegacyCamera;
+      return !store.pendingLegacyCamera && !store.consumerStatus.camera?.error;
     },
     initialize: () => read(),
     read: () => read(),
-    readForApply: () => read(true),
+    readForApply: () => read(),
     readApplied: () => {
       const active = store.appliedSnapshot('camera');
       if (!active) throw new Error('camera_storage_unavailable');
-      return read(true, active);
+      return read(active);
     },
     async commit(catalog, automaticEnabled, previous, previousAutomaticEnabled) {
       const beforeDocument = store.snapshot;
       const before = beforeDocument.active;
       const current = await read();
-      if (unavailable || store.pendingLegacyCamera)
-        throw new Error('camera_dependency_unavailable');
+      if (store.pendingLegacyCamera) throw new Error('camera_dependency_unavailable');
       if (
         canonicalJson(current.catalog) !== canonicalJson(previous) ||
         current.automaticEnabled !== previousAutomaticEnabled
@@ -235,7 +231,7 @@ export function createCameraConfigPersistence(
           ? { active: { value, lock, moduleId: committedId === disabledId ? null : committedId } }
           : {}),
       });
-      const result = await read(true);
+      const result = await read();
       return activeChanged
         ? {
             ...result,
