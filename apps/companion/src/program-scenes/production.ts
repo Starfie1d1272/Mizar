@@ -28,6 +28,8 @@ export function registerProductionRoutes(
     afterSafeScene?: (valid?: () => boolean) => void | Promise<void>;
     beforeExit?: () => void;
     finishTrial?: () => Promise<void>;
+    previousObsExitUnconfirmed?: boolean;
+    recordObsExit?: ((state: 'pending' | 'confirmed' | 'unconfirmed') => Promise<void>) | undefined;
   },
 ) {
   let mode: 'preparation' | 'live' | 'hidden' = 'preparation';
@@ -38,12 +40,14 @@ export function registerProductionRoutes(
   let trialPending = false;
   let preparationGeneration = 0;
   let sessionGeneration = 0;
+  let sessionId = randomUUID();
   let lastEnteredId: string | null = null;
   let releaseHandoffState: 'idle' | 'pending' | 'recorded' | 'confirmed' | 'unconfirmed' = 'idle';
   let releaseGeneration = 0;
   let handoffStarted = false;
   let handoffPromise: Promise<void> | undefined;
-  let obsExitState: 'idle' | 'pending' | 'confirmed' | 'unconfirmed' = 'idle';
+  let obsExitState: 'idle' | 'pending' | 'confirmed' | 'unconfirmed' =
+    options.previousObsExitUnconfirmed ? 'unconfirmed' : 'idle';
   let obsExitGeneration = 0;
   function startHandoff(): Promise<void> {
     if (!options.handoffRelease) return Promise.resolve();
@@ -79,7 +83,7 @@ export function registerProductionRoutes(
   function scheduleObsExit(controlValid: () => boolean, sceneRequired: boolean) {
     const generation = ++obsExitGeneration;
     const valid = () => generation === obsExitGeneration && controlValid();
-    obsExitState = sceneRequired ? 'pending' : 'idle';
+    if (sceneRequired) obsExitState = 'pending';
     void (async () => {
       await options.beforeFinish?.();
       if (!valid()) throw new Error('OBS 播出状态已变化。');
@@ -94,10 +98,22 @@ export function registerProductionRoutes(
       await options.afterSafeScene?.(valid);
     })().then(
       () => {
-        if (valid()) obsExitState = sceneRequired ? 'confirmed' : 'idle';
+        if (valid()) {
+          if (sceneRequired) obsExitState = 'confirmed';
+          if (sceneRequired)
+            void options
+              .recordObsExit?.('confirmed')
+              .catch((error: unknown) => app.log.warn({ err: error }, 'OBS exit status not saved'));
+        }
       },
       (error: unknown) => {
-        if (generation === obsExitGeneration) obsExitState = 'unconfirmed';
+        if (generation === obsExitGeneration) {
+          obsExitState = 'unconfirmed';
+          if (sceneRequired)
+            void options
+              .recordObsExit?.('unconfirmed')
+              .catch((error: unknown) => app.log.warn({ err: error }, 'OBS exit status not saved'));
+        }
         app.log.warn({ stage: 'production_safe_scene', err: error }, 'OBS exit state unconfirmed');
       },
     );
@@ -116,6 +132,18 @@ export function registerProductionRoutes(
   app.get('/local/v1/production', (_request, reply) =>
     reply.header('cache-control', 'no-store').send(view()),
   );
+  app.get('/local/v1/preparation-status', (request, reply) => {
+    const id = (request.query as { preparationId?: unknown }).preparationId;
+    if (typeof id !== 'string' || !/^[a-zA-Z0-9-]{1,64}$/.test(id))
+      return reply
+        .code(lifecycleErrors.preparationIdInvalid.status)
+        .send(lifecycleErrors.preparationIdInvalid);
+    return reply.header('cache-control', 'no-store').send(
+      cancellationResponseSchema.parse({
+        entered: lastEnteredId === id && mode !== 'preparation',
+      }),
+    );
+  });
   async function change(
     body: { action?: unknown; expectedRevision?: unknown; preparationId?: unknown } | null,
   ) {
@@ -125,6 +153,9 @@ export function registerProductionRoutes(
         code: lifecycleErrors.preparationCancelled.status,
         value: { ...lifecycleErrors.preparationCancelled, message: '准备已取消。' },
       };
+    // A lost response must not turn an already committed entry into a new entry.
+    if (body?.action === 'enter' && entryId && lastEnteredId === entryId && mode !== 'preparation')
+      return { code: 200, value: view() };
     if (body?.action === 'enter') {
       try {
         await options.waitForBroadcast?.();
@@ -207,6 +238,7 @@ export function registerProductionRoutes(
         options.beforeEnter?.();
         obsExitGeneration++;
         if (mode === 'preparation') {
+          sessionId = randomUUID();
           handoffStarted = false;
           handoffPromise = undefined;
           releaseGeneration++;
@@ -217,8 +249,28 @@ export function registerProductionRoutes(
       } else if (body?.action === 'hide') {
         if (mode === 'live') mode = 'hidden';
       } else {
-        if (!shutdown) void startHandoff().catch(() => {});
-        if (!shutdown && !trialPending && options.handoffRelease) {
+        if (shutdown && options.handoffRelease) {
+          stage = 'production_release';
+          await startHandoff();
+        } else if (!shutdown) void startHandoff().catch(() => {});
+        if (!trialPending && options.handoffRelease) {
+          if (mode !== 'preparation') {
+            try {
+              let timer: ReturnType<typeof setTimeout> | undefined;
+              try {
+                await Promise.race([
+                  options.recordObsExit?.('pending'),
+                  new Promise<never>((_, reject) => {
+                    timer = setTimeout(() => reject(new Error('OBS exit status timeout')), 2000);
+                  }),
+                ]);
+              } finally {
+                if (timer) clearTimeout(timer);
+              }
+            } catch (error) {
+              app.log.warn({ err: error }, 'OBS exit status not saved');
+            }
+          }
           scheduleObsExit(controlValid, mode !== 'preparation');
           mode = 'preparation';
           options.onFinish?.();
@@ -292,7 +344,9 @@ export function registerProductionRoutes(
         }
       }
       committed = true;
-      revision = randomUUID();
+      // Hiding the workspace while preparing changes no production state and
+      // must not invalidate the preparation owner's in-flight operations.
+      if (body?.action !== 'hide' || mode !== 'preparation') revision = randomUUID();
       if (entering) {
         sessionGeneration++;
         options.onEntered?.();
@@ -370,6 +424,7 @@ export function registerProductionRoutes(
   });
   return {
     get: view,
+    sessionId: () => sessionId,
     sessionValid: () => {
       const generation = sessionGeneration;
       return () => generation === sessionGeneration && mode !== 'preparation' && !shuttingDown;
@@ -415,6 +470,7 @@ export function registerProductionRoutes(
       busy = false;
     },
     setTrialPlaying: () => {
+      sessionId = randomUUID();
       mode = 'live';
       revision = randomUUID();
     },

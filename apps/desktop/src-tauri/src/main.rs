@@ -4713,11 +4713,23 @@ fn run_desktop(
                             }
                         },
                         || {
-                            cs2.finish_with_service_stopped(
-                                cleanup_host
-                                    .state::<production_exit::VerifiedStop>()
-                                    .complete(),
-                            )
+                            let service_stopped = cleanup_host
+                                .state::<production_exit::VerifiedStop>()
+                                .complete();
+                            if service_stopped || cs2.has_external() {
+                                cs2.finish_with_service_stopped(service_stopped)
+                            } else {
+                                production_exit::finish_managed_game(
+                                    &cleanup_host.state::<DesktopLog>(),
+                                    |requires_proof| {
+                                        cs2.finish_with_service_stopped(false)?;
+                                        if requires_proof {
+                                            cs2.confirm_game_stopped()?;
+                                        }
+                                        Ok(())
+                                    },
+                                )
+                            }
                         },
                     );
                     let production = production_task

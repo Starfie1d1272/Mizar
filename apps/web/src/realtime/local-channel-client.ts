@@ -12,7 +12,7 @@ import {
   type LocalChannelStoreListener,
   type LocalChannelStoreSnapshot,
 } from './local-channel-store';
-import { recoverChannelVersion } from './version-recovery';
+import { recoverChannelVersion, reserveReload } from './version-recovery';
 
 export const RECONNECT_BACKOFF_MS = [250, 500, 1_000, 2_000, 5_000] as const;
 
@@ -243,14 +243,33 @@ export class LocalChannelClient<C extends LocalSnapshotChannel> {
     } catch {
       // A closed socket needs no further cleanup.
     }
-    void recoverChannelVersion(this.channel).then((result) => {
+    this.checkVersion(checkingGeneration, reason);
+  }
+
+  private checkVersion(checkingGeneration: number, reason: string, knownMismatch = false): void {
+    void recoverChannelVersion(this.channel, knownMismatch).then((result) => {
       if (this.disposed || checkingGeneration !== this.connectionGeneration) return;
       this.checkingVersion = false;
       if (result === 'retry') {
         this.handleRetry(checkingGeneration, reason);
+      } else if (result === 'recheck') {
+        const delay =
+          RECONNECT_BACKOFF_MS[Math.min(this.reconnectIndex, RECONNECT_BACKOFF_MS.length - 1)]!;
+        this.reconnectIndex = Math.min(this.reconnectIndex + 1, RECONNECT_BACKOFF_MS.length - 1);
+        this.reconnectTimer = this.scheduler.setTimeout(() => {
+          this.reconnectTimer = undefined;
+          this.checkingVersion = true;
+          this.checkVersion(checkingGeneration, reason, true);
+        }, delay);
       } else {
         this.store.setState('protocol-error', 'local channel version incompatible');
-        if (result === 'reload') window.location.reload();
+        if (
+          !this.disposed &&
+          checkingGeneration === this.connectionGeneration &&
+          typeof result === 'object' &&
+          reserveReload(result.reload)
+        )
+          window.location.reload();
       }
     });
   }

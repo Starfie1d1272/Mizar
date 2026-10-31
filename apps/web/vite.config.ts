@@ -2,7 +2,7 @@ import { defineConfig } from 'vite';
 import { cp, readFile, writeFile } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
 import react from '@vitejs/plugin-react';
-import { LOCAL_PROTOCOL_SUBPROTOCOL, LOCAL_SNAPSHOT_VERSIONS } from '@mizar/protocol/version';
+import { LOCAL_PROTOCOL_SUBPROTOCOL, LOCAL_CHANNEL_VERSIONS } from '@mizar/protocol/version';
 
 const resourceMode = process.env.MIZAR_WEB_RESOURCE_MODE ?? 'full';
 if (!['full', 'core-only'].includes(resourceMode)) {
@@ -334,7 +334,7 @@ export default defineConfig({
               name: 'mizar-local-protocol',
               content: JSON.stringify({
                 subprotocol: LOCAL_PROTOCOL_SUBPROTOCOL,
-                channels: LOCAL_SNAPSHOT_VERSIONS,
+                channels: LOCAL_CHANNEL_VERSIONS,
               }),
             },
             injectTo: 'head',
