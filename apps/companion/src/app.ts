@@ -2485,10 +2485,15 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       }
     }
     if (failures.length > 0) throw new AggregateError(failures, 'Companion 本地收尾未全部完成');
-    if (options.productRuntime) {
+    if (options.productRuntime && process.env.MIZAR_PRODUCT_INSTANCE) {
       const stateRoot = process.env.MIZAR_STATE_ROOT;
       const { instanceId, artifactSha256 } = options.productRuntime;
-      if (!stateRoot || !isAbsolute(stateRoot) || !/^[a-f0-9-]{36}$/.test(instanceId))
+      if (
+        !stateRoot ||
+        !isAbsolute(stateRoot) ||
+        !/^[a-f0-9-]{36}$/.test(instanceId) ||
+        process.env.MIZAR_PRODUCT_INSTANCE !== instanceId
+      )
         throw new Error('本地收尾实例身份无效');
       await replaceDurableJson(join(stateRoot, 'data', `runtime-flush-${instanceId}.json`), {
         instanceId,
