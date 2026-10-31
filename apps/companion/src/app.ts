@@ -1546,7 +1546,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         })
       : undefined;
     if (broadcastRuntime) {
-      getExportBroadcastDocument = () => broadcastRuntime.store.snapshot;
+      getExportBroadcastDocument = () => {
+        const document = broadcastRuntime.store.snapshot;
+        document.active = broadcastRuntime.store.appliedDisplay;
+        return document;
+      };
       waitForBroadcast = () => broadcastRuntime.waitForApply();
       isExportBroadcastReady = () => broadcastRuntime.ready;
       getBroadcastReferences = () => {
