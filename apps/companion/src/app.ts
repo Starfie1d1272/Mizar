@@ -2425,16 +2425,21 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     await closeStep(() => cameraDirector?.close());
     await closeStep(() => musicDirector?.close());
     await closeStep(() => gameAudio?.close());
-    // The production owner retains and retries its OBS task independently.
-    // Give the existing task a bounded opportunity before closing its adapter.
+    // Both waits share one deadline; adapter closure may itself enqueue a new
+    // unconfirmed status after the first wait has already finished.
     const obsExit = production as typeof production & { waitForObsExit?: () => Promise<unknown> };
-    if (obsExit.waitForObsExit) {
+    const obsExitDeadline = performance.now() + 4000;
+    const waitForObsExit = async () => {
+      if (!obsExit.waitForObsExit) return;
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         await Promise.race([
           obsExit.waitForObsExit(),
           new Promise<never>((_resolve, reject) => {
-            timer = setTimeout(() => reject(new Error('OBS 收尾尚未确认')), 4000);
+            timer = setTimeout(
+              () => reject(new Error('OBS 收尾尚未确认')),
+              Math.max(0, obsExitDeadline - performance.now()),
+            );
           }),
         ]);
       } catch (error) {
@@ -2442,8 +2447,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       } finally {
         if (timer) clearTimeout(timer);
       }
-    }
+    };
+    await waitForObsExit();
     await closeStep(() => obsAdapter?.close());
+    await waitForObsExit();
     for (const result of await Promise.allSettled([
       Promise.resolve().then(() => cstvSources.program.stop()),
       Promise.resolve().then(() => cstvSources.lookahead.stop()),
