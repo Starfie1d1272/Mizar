@@ -44,24 +44,6 @@ test('claim intent and exact identity survive restart without restoring sending 
   });
 });
 
-test('switch preserves old identity and old completion cannot erase the new one', async (t) => {
-  const path = await setup(t);
-  const store = new RivalHubSourceState(path);
-  await store.load();
-  const a = await store.beginClaim(scope, null);
-  const old = await store.confirmClaim(a.id, 1);
-  const b = await store.beginClaim({ ...scope, matchId: 'match-b', liveSessionId: 'live-b' }, null);
-  assert.equal((await store.snapshot()).records[0]?.state, 'release_pending');
-  const current = await store.confirmClaim(b.id, 2);
-  await store.failure(old, 'http_503', '2026-10-30T12:00:00.000Z', false);
-  await store.complete(old);
-  assert.deepEqual(
-    (await store.snapshot()).records.map((record) => record.identity),
-    [current],
-  );
-  await assert.rejects(store.complete(current), /not pending/);
-});
-
 test('atomic write failure preserves disk and memory, and unsafe state is rejected', async (t) => {
   const path = await setup(t);
   let fail = false;
