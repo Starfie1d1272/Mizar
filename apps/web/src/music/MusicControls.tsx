@@ -90,7 +90,7 @@ export function MusicControls({
     </Button>
   );
   const resume =
-    status.held || (!compact && status.intent === 'manual') ? (
+    status.held || status.intent === 'manual' ? (
       <Button
         aria-label="恢复自动音乐"
         className={compact ? undefined : 'music-player__resume'}
@@ -220,7 +220,7 @@ export function MusicControls({
         >
           <option value="">选择已保存曲目</option>
           {Object.entries(view.config.groups).flatMap(([group, spec]) =>
-            group !== 'opening' && spec.enabled
+            group !== 'opening'
               ? spec.tracks
                   .filter((track) => track.entryId)
                   .map((track) => (

@@ -1,70 +1,51 @@
+#[path = "ipc_commands.rs"]
+mod ipc_commands;
+
+use std::{collections::HashSet, env, fs, path::PathBuf};
+
 fn main() {
-    tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
-        tauri_build::AppManifest::new().commands(&[
-            "restore_layout",
-            "recover_program_overlay",
-            "program_overlay_ready",
-            "restore_cs2_focus",
-            "set_program_overlay_enabled",
-            "cs2_host_status",
-            "select_obs_executable",
-            "launch_obs",
-            "begin_obs_configuration",
-            "finish_obs_configuration",
-            "read_obs_configuration_context",
-            "cs2_config_status",
-            "cs2_console_status",
-            "set_cs2_console_capture",
-            "mulnx_handoff_status",
-            "open_mulnx_browser",
-            "launch_mulnx",
-            "mulnx_control",
-            "observer_command",
-            "start_managed_cs2",
-            "preflight_cs2_replacement",
-            "replace_external_cs2",
-            "cancel_cs2_preparation",
-            "begin_managed_camera",
-            "cancel_managed_camera",
-            "attach_external_cs2",
-            "finish_managed_cs2",
-            "finish_workspace",
-            "workspace_exit_status",
-            "select_demo_file",
-            "start_demo_test",
-            "enter_demo_test",
-            "resume_demo_test",
-            "present_demo_test",
-            "begin_demo_entry",
-            "cancel_demo_entry",
-            "finish_demo_test",
-            "restore_cs2_backup",
-            "open_cs2_backup",
-            "set_cs2_preferences",
-            "get_full_spectator_preference",
-            "set_full_spectator_preference",
-            "open_main",
-            "present_production",
-            "present_workbench_panels",
-            "workbench_message",
-            "workbench_status",
-            "open_tool",
-            "close_review",
-            "open_rivalhub_authorization",
-            "open_rivalhub_workbench",
-            "open_steam_api_key",
-            "open_issue_report",
-            "install_update",
-            "open_update_page",
-            "open_music_downloads",
-            "open_update_recovery",
-            "save_support_bundle",
-            "gsi_status",
-            "ensure_gsi",
-            "configure_gsi",
-            "select_cs2_installation",
-            "open_cs2_config_directory",
-        ]),
-    ))
+    println!("cargo:rerun-if-changed=ipc_commands.rs");
+    let out = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"));
+    let capability_dir = out.join("ipc-capabilities");
+    fs::create_dir_all(&capability_dir).expect("create capability directory");
+    // Remove stale generated capabilities when commands are removed.
+    for entry in fs::read_dir(&capability_dir).expect("read capability directory") {
+        fs::remove_file(entry.expect("capability entry").path()).expect("remove old capability");
+    }
+    let mut names = Vec::new();
+    let mut seen = HashSet::new();
+    let mut handler = String::from("tauri::generate_handler![\n");
+    for &(path, windows) in ipc_commands::COMMANDS {
+        let name = path.rsplit("::").next().expect("command name");
+        assert!(seen.insert(name), "duplicate IPC command: {name}");
+        assert!(!windows.is_empty(), "IPC command without windows: {name}");
+        assert!(name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'));
+        let id = name.replace('_', "-");
+        let labels = windows
+            .iter()
+            .map(|label| format!("\"{label}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let capability = format!("{{\"identifier\":\"ipc-{id}\",\"windows\":[{labels}],\"remote\":{{\"urls\":[\"http://127.0.0.1:3000/*\"]}},\"permissions\":[\"allow-{id}\"]}}");
+        fs::write(capability_dir.join(format!("{id}.json")), capability).expect("write capability");
+        handler.push_str(&format!("    {path},\n"));
+        names.push(name);
+    }
+    handler.push(']');
+    fs::write(out.join("ipc_handler.rs"), handler).expect("write handler");
+    let frontend_path = PathBuf::from("../../web/src/workspace/desktop-commands.generated.ts");
+    println!("cargo:rerun-if-changed={}", frontend_path.display());
+    assert_eq!(fs::read_to_string(&frontend_path).expect("read generated frontend commands"), ipc_commands::frontend_commands(),
+        "frontend IPC commands are stale; run rustc ipc_generate.rs -o <temporary-path> and execute it from src-tauri");
+    let pattern = format!("{}/*.json", capability_dir.display()).replace('\\', "/");
+    tauri_build::try_build(
+        tauri_build::Attributes::new()
+            .capabilities_path_pattern(Box::leak(pattern.into_boxed_str()))
+            .app_manifest(
+                tauri_build::AppManifest::new().commands(Box::leak(names.into_boxed_slice())),
+            ),
+    )
     .expect("Tauri build metadata");
 }

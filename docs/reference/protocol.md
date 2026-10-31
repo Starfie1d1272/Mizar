@@ -226,7 +226,7 @@ WebSocket 校验 Origin、子协议和消息大小，通道仅服务端向客户
 
 ### Gameplay 手动门槛与结束提示
 
-`program-scenes` 的 available.gameplay 由新鲜正式输入决定，手动选择不建立赛事绑定；自动编排和非 Gameplay 场景仍受既有可信证据门槛约束。Director 的可选 gg 为 `{ mapEpoch, remainingMs }` 或 null，表示当前自动 Gameplay 的可信单图结束过渡。消费者只在当前场景/执行匹配时显示 GG，不自行推导获胜事实或启动 3 秒倒计时。
+`program-scenes` 的手动 Gameplay 选择不要求新鲜遥测；OBS 确认实际切场，不建立赛事绑定。手动对阵使用已有比赛资料，不要求地图绑定或身份匹配；自动编排仍受可信证据门槛约束。Director 的可选 gg 为 `{ mapEpoch, remainingMs }` 或 null，表示当前自动 Gameplay 的可信单图结束过渡。消费者只在当前场景/执行匹配时显示 GG，不自行推导获胜事实或启动 3 秒倒计时。
 
 Host 私有 `POST /operator/runtime/local-match-exit` 仅允许回环监听、无 Origin 和有效 `x-runtime-token`。`prepare` 为处于准备状态、等待画面的本地独立比赛生成 `{ticket, matchId, contextRevision}`，非适用绑定返回空资格；Host 完成游戏收尾并确认全机没有 CS2 后，以 `settle` 原样回传资格，核对比赛、制作修订和来源代际未变化后接纳关闭期间的接收游标推进，再以 `confirm` 确认该游标。`settle` 每张票据只能成功一次；其后再有新数据、身份变化或重复确认均拒绝。`invalidate` 在新的托管游戏启动前撤销资格。票据与令牌不进入普通本机视图。资格不持久化，恢复的当前选择需通过 Host 重新确认。普通删除确认仍要求本机 Origin，并在最终持久化提交前重新验证活动引用和退出资格。
 
@@ -270,7 +270,7 @@ RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对�
 
 ## 本机节目音乐
 
-`GET /local/v1/music` 提供本机曲库配置和播放摘要；`POST /operator/music` 保存配置、调整本组音量、停止、下一首或恢复自动；`POST /operator/music/preview` 接收有期限的试听开始、音量更新、续租和停止，核对窗口身份、会话令牌与递增操作编号；不写持久配置或正式播放记录。`POST /operator/music/track` 接收本机选曲，`POST /operator/music/import` 验证并原子应用本地音乐 ZIP。写操作只允许本机可信 Origin，读取检查回环 Host 和浏览器跨站来源；局域网模式拒绝。只返回内容 ID、曲名、策略与必要状态，不返回绝对路径或音频下载地址。比赛、节目、雷达和外部 LIVE 不添加音乐路径或曲库字段；本机私下交付的诊断包保留音乐操作与相关配置，音频正文不进入支持包。格式与限制见[节目音乐](music.md)。
+手动播放、暂停、继续和定位不依赖比赛阶段或遥测；人工播放保持到明确停止、恢复自动或 OBS 控制变化。自动阶段策略仍独立执行。`GET /local/v1/music` 提供本机曲库配置和播放摘要；`POST /operator/music` 保存配置、调整本组音量、停止、下一首或恢复自动；`POST /operator/music/preview` 接收有期限的试听开始、音量更新、续租和停止，核对窗口身份、会话令牌与递增操作编号；不写持久配置或正式播放记录。`POST /operator/music/track` 接收本机选曲，`POST /operator/music/import` 验证并原子应用本地音乐 ZIP。写操作只允许本机可信 Origin，读取检查回环 Host 和浏览器跨站来源；局域网模式拒绝。只返回内容 ID、曲名、策略与必要状态，不返回绝对路径或音频下载地址。比赛、节目、雷达和外部 LIVE 不添加音乐路径或曲库字段；本机私下交付的诊断包保留音乐操作与相关配置，音频正文不进入支持包。格式与限制见[节目音乐](music.md)。
 
 本机诊断导出 `POST /debug/support-bundle` 接受可选 ISO 时间 `from/to` 与可选索引焦点 `focusSessionId`，默认全保留范围；完整日志、压缩分卷、预算和完整性语义统一见[架构](architecture.md)。`POST /debug/control-event` 只允许本机可信 Origin，最多 64 KiB，接收 Mizar 浏览器操作证据，不具备控制或文件读取能力。
 

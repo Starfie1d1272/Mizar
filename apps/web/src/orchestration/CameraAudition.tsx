@@ -45,7 +45,6 @@ export function CameraAudition() {
     !current.status.connected ||
     !current.status.isolated ||
     !selectedShot ||
-    Boolean(current.status.current) ||
     current.status.preparation === 'preparing';
   const action = async (run: () => Promise<void>) => {
     if (busy) return;
@@ -147,7 +146,7 @@ export function CameraAudition() {
         {current?.status.preparation === 'error' ? (
           <p>运镜准备失败，请检查预设和游戏状态后重试。</p>
         ) : null}
-        {current?.status.current ? <p>镜头请求处理中，请先停止后继续。</p> : null}
+        {current?.status.current ? <p>切换镜头时会先请求停止当前镜头。</p> : null}
       </section>
       {message ? <StatusBanner tone={failed ? 'danger' : 'info'}>{message}</StatusBanner> : null}
     </>

@@ -8,7 +8,6 @@ import type {
 import type { ObsRpc } from '../obs/reconcile.js';
 import type { AudioMonitorChange } from '../obs/audio-migration.js';
 import type { MonitorOriginals } from '../obs/audio-routing.js';
-import { isRegulationHalftime } from '../program-scenes/presentation.js';
 import {
   musicCue,
   musicMapKey,
@@ -58,26 +57,6 @@ function observedPlayback(state: unknown): MusicStatus['playback'] {
   if (state === 'OBS_MEDIA_STATE_PAUSED') return 'paused';
   if (state === 'OBS_MEDIA_STATE_STOPPED' || state === 'OBS_MEDIA_STATE_ENDED') return 'stopped';
   return 'unknown';
-}
-
-function manualSafe(truth: MusicTruth) {
-  const p = truth.program;
-  if (p.status.telemetry === 'stale' || (p.map.name !== null && p.status.telemetry !== 'fresh'))
-    return false;
-  if (p.map.phase !== 'live') return true;
-  if (p.status.telemetry !== 'fresh') return false;
-  if (!musicSafe(p)) return false;
-  if (musicPause(p)) return true;
-  const halftime =
-    isRegulationHalftime(p) ||
-    (truth.active === 'halftime' && p.map.roundNumber === 12 && p.clock?.phase === 'freezetime');
-  if (!halftime) return false;
-  return !(
-    p.clock?.phase === 'freezetime' &&
-    p.clock.endsInSeconds !== null &&
-    p.clock.endsInSeconds !== undefined &&
-    p.clock.endsInSeconds <= 5
-  );
 }
 
 function mediaMillis(value: unknown): number | null {
@@ -227,7 +206,7 @@ export class MusicDirector {
     if (action === 'next' && this.manual) {
       const group = this.manual.cue.group;
       if (!looping(group)) throw new Error('music_next_invalid');
-      const track = this.choose(group, this.manual.cue.key, this.manual.cue.track);
+      const track = this.choose(group, this.manual.cue.key, this.manual.cue.track, true);
       if (!track) throw new Error('music_track_invalid');
       if (this.manual.paused) {
         const stopRevision = this.commandRevision + 1;
@@ -296,9 +275,7 @@ export class MusicDirector {
         : item.entryId === entryId && (trackId === undefined || item.id === trackId),
     );
     const track = matches.length === 1 ? matches[0] : undefined;
-    if (!track || !this.store.state.config.groups[group].enabled || group === 'opening')
-      throw new Error('music_track_invalid');
-    if (!manualSafe(this.truth())) throw new Error('music_program_unsafe');
+    if (!track || group === 'opening') throw new Error('music_track_invalid');
     const revision = ++this.commandRevision;
     this.unknownControl = false;
     this.invalidate();
@@ -333,11 +310,6 @@ export class MusicDirector {
     const current = () =>
       !this.closed && revision === this.commandRevision && this.manual === manual;
     if (!current()) return;
-    if (!manualSafe(this.truth())) {
-      this.manual = null;
-      await this.tick();
-      throw new Error('music_program_unsafe');
-    }
     this.inFlight = true;
     try {
       await this.provider.session(async (obs, epoch) => {
@@ -369,7 +341,6 @@ export class MusicDirector {
           before.mediaState !== (paused ? 'OBS_MEDIA_STATE_PLAYING' : 'OBS_MEDIA_STATE_PAUSED')
         )
           throw new Error('music_state_changed');
-        if (!manualSafe(this.truth())) throw new Error('music_program_unsafe');
         const actionAt = this.now();
         manual.paused = paused;
         await obs.call('TriggerMediaInputAction', {
@@ -385,7 +356,6 @@ export class MusicDirector {
         // never resend the command or overwrite another observed state.
         for (let attempt = 0; attempt < 10 && after.mediaState === before.mediaState; attempt++) {
           if (!current()) return;
-          if (!manualSafe(this.truth())) throw new Error('music_program_unsafe');
           await new Promise((resolve) => setTimeout(resolve, 50));
           if (!current()) return;
           after = await obs.call('GetMediaInputStatus', { inputUuid: uuid });
@@ -439,10 +409,7 @@ export class MusicDirector {
     while (this.inFlight && revision === this.commandRevision && !this.closed)
       await new Promise((resolve) => setTimeout(resolve, 10));
     const current = () =>
-      !this.closed &&
-      revision === this.commandRevision &&
-      this.store.state.bgm?.key === saved.key &&
-      manualSafe(this.truth());
+      !this.closed && revision === this.commandRevision && this.store.state.bgm?.key === saved.key;
     if (!current()) throw new Error('music_cancelled');
     this.inFlight = true;
     let writing = false;
@@ -844,6 +811,7 @@ export class MusicDirector {
     if (
       this.closed ||
       this.isHeld() ||
+      this.manual ||
       !t.production ||
       !musicSafe(t.program) ||
       t.program.status.telemetry !== 'fresh'
@@ -858,10 +826,10 @@ export class MusicDirector {
       ...(track ? { track } : {}),
     };
   }
-  private choose(group: MusicGroup, key: string, previous?: MusicTrack) {
+  private choose(group: MusicGroup, key: string, previous?: MusicTrack, manual = false) {
     const spec = this.store.state.config.groups[group];
     const tracks = spec.tracks.filter((t) => !this.failed.get(key)?.has(t.id));
-    if (!spec.enabled || !tracks.length) return null;
+    if ((!manual && !spec.enabled) || !tracks.length) return null;
     if (!looping(group)) return tracks[0]!;
     if (spec.order === 'shuffle') {
       const candidates =
@@ -973,15 +941,14 @@ export class MusicDirector {
             ? { group: 'waiting', key: `waiting:${truth.program.match!.matchId}` }
             : null;
       if (!this.store.automaticEnabled) cue = null;
-      const manualUnsafe = Boolean(this.manual && !manualSafe(truth));
-      if (this.manual && !manualUnsafe) cue = this.manual.cue;
+      if (this.manual) cue = this.manual.cue;
       if (this.isHeld()) cue = null;
       const opening = this.store.automaticEnabled ? this.pendingOpening : null;
       this.pendingOpening = null;
       const hasSources = Object.values(this.store.state.sources).some(Boolean);
       const configured =
         cue &&
-        this.store.state.config.groups[cue.group].enabled &&
+        (this.manual || this.store.state.config.groups[cue.group].enabled) &&
         this.store.state.config.groups[cue.group].tracks.length;
       if (!hasSources && !configured && !opening && !this.preview.busy) {
         this.status.connection = 'idle';
@@ -1028,7 +995,7 @@ export class MusicDirector {
         await this.configureDefaultMonitor(obs, valid, monitorRecheck);
         if (valid() && this.preview.busy) await this.readMonitor(obs, valid);
         if (!valid() || this.preview.busy) return;
-        if (this.unknownControl && manualSafe(this.truth())) {
+        if (this.unknownControl) {
           const name = await ownedMusicInput(obs, this.store, 'bgm', false, valid, false);
           if (name && valid()) {
             const media = await obs.call('GetMediaInputStatus', {
@@ -1043,7 +1010,6 @@ export class MusicDirector {
         if (await this.observeManualControls(obs, valid, previewOwned)) return;
         await this.layer(obs, 'bgm', cue, valid, configChanged, reconnect);
         await this.configureDefaultMonitor(obs, valid);
-        if (manualUnsafe && valid()) this.manual = null;
         if (this.store.state.sources.bgm || this.store.state.sources.stinger)
           await this.readMonitor(obs, valid);
         if (
@@ -1070,6 +1036,7 @@ export class MusicDirector {
         } else if (!previewOwned) {
           const stinger = this.store.state.stinger;
           const safe =
+            !this.manual &&
             truth.production &&
             musicSafe(truth.program) &&
             truth.program.status.telemetry === 'fresh' &&
@@ -1235,7 +1202,9 @@ export class MusicDirector {
     };
     let saved = this.store.state[layer];
     const spec = cue ? this.store.state.config.groups[cue.group] : null;
-    const enabled = Boolean(cue && spec?.enabled && (cue.track || spec.tracks.length));
+    const enabled = Boolean(
+      cue && (this.manual?.cue === cue || spec?.enabled) && (cue.track || spec?.tracks.length),
+    );
     const previousUuid = this.store.state.sources[layer];
     const name = await ownedMusicInput(obs, this.store, layer, enabled, valid, reconnect);
     if (cue && previousUuid !== this.store.state.sources[layer]) this.failed.delete(cue.key);

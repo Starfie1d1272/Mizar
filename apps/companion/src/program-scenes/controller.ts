@@ -102,17 +102,15 @@ export class ProgramSceneController {
     const bound = series?.bindingState === 'bound' || isRehearsal;
     const identitySafe = operator.identity.state !== 'mismatch';
     if (id === 'waiting') return null;
-    // A manual Gameplay Take can broadcast an observed demo without claiming
-    // that it belongs to the selected event. Automatic choreography still uses
-    // the Director's stricter context / binding / identity gate.
     if (id === 'gameplay')
-      return fresh || isRehearsal ? null : '比赛数据未就绪，当前播出场景保持不变。';
+      return !automatic || fresh || isRehearsal ? null : '比赛数据未就绪，当前播出场景保持不变。';
     if (id === 'bp') {
       return this.projections.getBpAssessment().readiness === 'ready' &&
         this.bpSession.get().projection !== null
         ? null
         : 'BP 数据尚未就绪，请先在 BP 制作中检查。';
     }
+    if (!automatic && id === 'matchup' && program.match) return null;
     if (!contextReady) return '请先选择并保存比赛资料；资料过期时请刷新。';
     if (
       !automatic &&
