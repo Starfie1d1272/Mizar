@@ -62,6 +62,13 @@ export function createBroadcastRuntime(input: {
   let programUnavailable = false;
   let musicUnavailable = false;
   let cameraAvailable = () => true;
+  function canSynchronizeCamera(active: ActiveBroadcastSnapshot): boolean {
+    if (store.snapshot.active.revision !== active.revision) return false;
+    const applied = store.appliedSnapshot('camera');
+    const changed =
+      !applied || !sameEffectiveModule('camera', applied.resolved.camera, active.resolved.camera);
+    return !changed || !input.canApplyCamera || input.canApplyCamera();
+  }
   async function verifyUnchanged(
     active: ActiveBroadcastSnapshot,
     skipProgram: boolean,
@@ -134,16 +141,7 @@ export function createBroadcastRuntime(input: {
       const operations = {
         hud: () => hud.synchronizeFromPersistence(hudDocument(), current('hud')),
         music: () => music.synchronizeFromPersistence(current('music')),
-        camera: () =>
-          camera.synchronizeFromPersistence(() => {
-            const applied = store.appliedSnapshot('camera');
-            const changed =
-              !applied ||
-              !sameEffectiveModule('camera', applied.resolved.camera, active.resolved.camera);
-            return (
-              current('camera')() && (!changed || !input.canApplyCamera || input.canApplyCamera())
-            );
-          }),
+        camera: () => camera.synchronizeFromPersistence(() => canSynchronizeCamera(active)),
         program: async () => {
           await resolver.resolveModule({
             kind: 'program',
@@ -157,7 +155,12 @@ export function createBroadcastRuntime(input: {
       let failure: unknown;
       for (const item of kinds) {
         const current = store.consumerStatus[item];
-        if (current?.applied === active.moduleRevisions[item] && !current.error) continue;
+        if (
+          item !== 'camera' &&
+          current?.applied === active.moduleRevisions[item] &&
+          !current.error
+        )
+          continue;
         try {
           await operations[item]();
           if (item === 'program') programUnavailable = false;
@@ -467,9 +470,7 @@ export function createBroadcastRuntime(input: {
       const state = store.consumerStatus.camera;
       if (state?.error && state.desired !== current.moduleRevisions.camera) return false;
       try {
-        await camera.synchronizeFromPersistence(
-          () => store.snapshot.active.moduleRevisions.camera === current.moduleRevisions.camera,
-        );
+        await camera.synchronizeFromPersistence(() => canSynchronizeCamera(current));
         await store.recordConsumer('camera', current, null);
       } catch (error) {
         cameraUnavailable = true;
