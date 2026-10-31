@@ -999,7 +999,9 @@ export class RivalHubConnection {
     source.draining = true;
     await this.sourceState.handoff(identity, cause);
     await this.updateCleanupSummary();
-    if (!(await this.settle(identity))) throw new Error('可靠事件仍待确认，数据源释放待重试。');
+    // Durable handoff owns the old scope. Pending network delivery does not block a new match.
+    // Cleanup still requires settlement before issuing the exact release.
+    void this.settle(identity).catch((error: unknown) => this.onDiagnostic('source_settle', error));
     if (this.source === source) this.source = null;
   }
 
@@ -1957,6 +1959,7 @@ export class RivalHubConnection {
     matchId: string,
     signal?: AbortSignal,
     isCurrent: () => boolean = () => true,
+    retainedSource?: ExactSource,
   ): Promise<ReliableDeliveryResult> {
     const event = (body as { event: ReliableEventV1 }).event;
     const evidence = (fields: Record<string, unknown>) =>
@@ -1964,14 +1967,21 @@ export class RivalHubConnection {
         idempotencyKey: event.idempotencyKey,
         eventKind: event.kind,
         originalObservedAt: event.observedAt,
+        authorityRevision: source?.authorityRevision,
         ...fields,
       });
-    if (!this.source) {
+    const source =
+      retainedSource &&
+      (!this.source ||
+        !this.scopeMatches(retainedSource) ||
+        JSON.stringify(this.exactSource(this.source)) !== JSON.stringify(retainedSource))
+        ? retainedSource
+        : this.source;
+    if (!source) {
       evidence({ reason: 'source_unavailable' });
       return 'retry';
     }
-    if (this.source.matchId !== matchId) return 'rejected';
-    const source = this.source;
+    if (source.matchId !== matchId) return 'retry';
     try {
       if (signal?.aborted || !isCurrent()) return 'retry';
       evidence({ reason: 'request_started', sentAt: new Date().toISOString() });
@@ -2008,7 +2018,11 @@ export class RivalHubConnection {
       });
       if (response.ok)
         return needsAttention ? { status: 'accepted', outcome: 'needs_attention' } : 'accepted';
-      if (event.kind === 'map_started' && source.deliveryExecution === executionKey(event.cursor)) {
+      if (
+        event.kind === 'map_started' &&
+        this.source === source &&
+        this.source?.deliveryExecution === executionKey(event.cursor)
+      ) {
         this.controlFailureScope = this.failureScope(event);
         this.controlFailure =
           rejection?.reason ??
@@ -2020,11 +2034,10 @@ export class RivalHubConnection {
                 ? 'context_conflict'
                 : `http_${response.status}`);
       }
+      if (retainedSource && response.status === 401) return 'retry';
       if (response.status === 403) {
-        if (this.source === source) {
-          source.paused = true;
-        }
-        return 'rejected';
+        if (this.source === source && this.source) this.source.paused = true;
+        return retainedSource ? 'retry' : 'rejected';
       }
       return response.status === 408 || response.status === 429 || response.status >= 500
         ? 'retry'
@@ -2034,7 +2047,8 @@ export class RivalHubConnection {
         isCurrent() &&
         !signal?.aborted &&
         event.kind === 'map_started' &&
-        source.deliveryExecution === executionKey(event.cursor)
+        this.source === source &&
+        this.source?.deliveryExecution === executionKey(event.cursor)
       ) {
         this.controlFailureScope = this.failureScope(event);
         this.controlFailure = requestFailureReason(error);
@@ -2316,11 +2330,58 @@ export class RivalHubConnection {
     if (lostAuthority || newlyNotified) throw new Error('rivalhub_live_unavailable');
   }
 
+  /** Deliver accepted work with its original durable authority, independent of the selected match. */
+  async sendRetainedReliable(
+    event: ReliableEventV1,
+    identity: ExactSource,
+    current: LiveSnapshotV1 | null,
+    signal?: AbortSignal,
+    retainedLineup?: readonly string[],
+  ): Promise<ReliableDeliveryResult> {
+    if (
+      identity.matchId !== event.matchId ||
+      identity.competitionId !== event.competitionId ||
+      identity.producerInstanceId !== event.cursor.producerInstanceId ||
+      identity.liveSessionId !== event.cursor.liveSessionId ||
+      !this.scopeMatches(identity)
+    )
+      return 'retry';
+    const installation = this.installation;
+    const state = await this.sourceState.snapshot();
+    const key = JSON.stringify(identity);
+    const record = state.records.find((item) => JSON.stringify(item.identity) === key);
+    if (
+      !record ||
+      !['owned', 'release_pending'].includes(record.state) ||
+      record.installationRevoked ||
+      record.quarantineUncertain ||
+      this.confirmedSourcesAwaitingPersistence.has(key)
+    )
+      return 'retry';
+    if (this.source && JSON.stringify(this.exactSource(this.source)) === key)
+      return this.sendReliable(event, current, signal, retainedLineup, identity);
+    const valid = () =>
+      this.installation === installation &&
+      this.scopeMatches(identity) &&
+      !this.isolatedRevokedSources.has(key) &&
+      !this.confirmedSourcesAwaitingPersistence.has(key);
+    if (!valid()) return 'retry';
+    return this.upload(
+      'reliable',
+      { event, lineupSteam64: retainedLineup ?? [] },
+      event.matchId,
+      signal,
+      valid,
+      identity,
+    );
+  }
+
   async sendReliable(
     event: ReliableEventV1,
     current: LiveSnapshotV1 | null,
     signal: AbortSignal = AbortSignal.timeout(RELIABLE_SEND_TIMEOUT_MS),
     retainedLineup?: readonly string[],
+    retainedIdentity?: ExactSource,
   ): Promise<ReliableDeliveryResult> {
     if (
       (this.stoppedMatchId === event.matchId || this.source?.paused) &&
@@ -2373,6 +2434,7 @@ export class RivalHubConnection {
       event.matchId,
       signal,
       isCurrent,
+      retainedIdentity,
     );
     if (
       typeof result === 'object' &&

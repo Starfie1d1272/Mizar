@@ -996,25 +996,24 @@ export class OutputService {
           if (start?.recovery === this.approvedRecovery?.key) this.approvedRecovery = undefined;
         })
         .catch(() => {
-          if (boundary) this.quarantined = true;
+          if (boundary && !this.outbox?.hasPendingEnqueue(event.idempotencyKey))
+            this.quarantined = true;
           this.onDiagnostic?.('outbox_enqueue_failed');
         })
         .finally(() => {
           if (boundary) this.boundaryEnqueues.delete(event);
-          if (start !== undefined && this.pendingMapStart === start)
+          if (
+            start !== undefined &&
+            this.pendingMapStart === start &&
+            !this.outbox?.hasPendingEnqueue(start.key)
+          )
             this.pendingMapStart = undefined;
         });
     }
   }
 
   async retry(): Promise<void> {
-    if (
-      this.closed ||
-      this.quarantined ||
-      this.outbox === undefined ||
-      this.retryPending ||
-      this.binding?.origin === 'fixture'
-    ) {
+    if (this.closed || this.outbox === undefined || this.retryPending) {
       return;
     }
     if (this.bundle !== undefined) this.updateMapStartScope(this.bundle, this.binding);
@@ -1024,6 +1023,18 @@ export class OutputService {
       finishRetry = resolve;
     });
     try {
+      await this.outbox.retryPendingEnqueues();
+      const start = this.pendingMapStart;
+      if (
+        start &&
+        !this.outbox.hasPendingEnqueue(start.key) &&
+        this.outbox.getRecords().some((record) => record.event.idempotencyKey === start.key)
+      ) {
+        if (start.revision === this.mapStartRevision) this.publishedMapStart = start;
+        if (start.recovery === this.approvedRecovery?.key) this.approvedRecovery = undefined;
+        this.pendingMapStart = undefined;
+      }
+      if (this.quarantined || this.binding?.origin === 'fixture') return;
       await this.outbox.expireBoundaryIntents(this.now());
       if (this.closed) return;
       await this.materializeIntents();
@@ -1229,7 +1240,9 @@ export class OutputService {
     await this.retry();
     await this.retryCompletion;
     await this.outbox.flushPending();
-    return this.outbox.getScopeDisposition(scope).pending === 0;
+    return (
+      !this.outbox.hasPendingEnqueues(scope) && this.outbox.getScopeDisposition(scope).pending === 0
+    );
   }
 
   resumeSource(scope: ReliableDeliveryScope): void {
@@ -1246,6 +1259,16 @@ export class OutputService {
     const bundle = this.bundle;
     const binding = this.binding;
     if (bundle === undefined || binding === undefined) return true;
+    const retained = this.outbox
+      ?.getRecords()
+      .find((record) => record.event.idempotencyKey === event.idempotencyKey);
+    if (
+      retained &&
+      (binding.context.matchId !== event.matchId ||
+        bundle.program.cursor.producerInstanceId !== event.cursor.producerInstanceId ||
+        bundle.program.cursor.liveSessionId !== event.cursor.liveSessionId)
+    )
+      return true;
     if (
       event.kind === 'map_started' &&
       bundle.program.cursor.mapEpoch !== event.cursor.mapEpoch &&
@@ -1311,17 +1334,39 @@ export class OutputService {
 
   private canSend(event: ReliableEventV1, lineup?: readonly string[]): boolean {
     const bundle = this.bundle;
-    if (this.binding?.context.matchId === event.matchId && !this.executionEligible(this.binding))
-      return false;
     const recorded = this.outbox
       ?.getRecords()
       .find((record) => record.event.idempotencyKey === event.idempotencyKey);
     if (recorded?.awaitingSource) return false;
     const recordedSource = recorded?.source;
+    const detached =
+      recorded &&
+      (this.binding?.context.matchId !== event.matchId ||
+        bundle?.program.cursor.producerInstanceId !== event.cursor.producerInstanceId ||
+        bundle?.program.cursor.liveSessionId !== event.cursor.liveSessionId);
+    if (detached && this.options.exactSource && !recordedSource) return false;
     if (
-      recordedSource &&
-      JSON.stringify(recordedSource) !== JSON.stringify(this.sourceFor(event.matchId, event.cursor))
-    )
+      (recordedSource &&
+        JSON.stringify(recordedSource) !==
+          JSON.stringify(this.sourceFor(event.matchId, event.cursor))) ||
+      (detached && !this.options.exactSource)
+    ) {
+      // The sink revalidates this exact durable authority, never the current selection's claim.
+      // Missing authority pauses delivery; changing selection does not cancel accepted work.
+      return (
+        !this.quarantined &&
+        (event.kind !== 'map_started' || recorded.lineupSteam64?.length === 10) &&
+        !this.outbox?.hasUnconfirmedBoundary(event) &&
+        !this.outbox
+          ?.getBoundaryIntents()
+          .some(
+            (intent) =>
+              intent.event.matchId === event.matchId &&
+              sameSourceSession(intent.event.cursor, event.cursor),
+          )
+      );
+    }
+    if (this.binding?.context.matchId === event.matchId && !this.executionEligible(this.binding))
       return false;
     const scope = this.boundaryScope(event.matchId, event.cursor);
     if (this.boundaryCommitIsPending(scope) || this.outbox?.hasBoundaryGap(scope)) return false;
