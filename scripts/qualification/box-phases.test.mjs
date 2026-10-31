@@ -14,6 +14,7 @@ import { digest } from './box-sync.mjs';
 import {
   downloadLane,
   transferLane,
+  transferVerifiedRuntime,
   verifyLane,
   finalCheck,
   updatePointer,
@@ -68,10 +69,12 @@ function fakeBox() {
   ]);
   const files = new Map();
   const writes = [];
+  const reads = [];
   return {
     directories,
     files,
     writes,
+    reads,
     async initialize() {},
     async list(path) {
       return [
@@ -97,6 +100,7 @@ function fakeBox() {
       writes.push(`${path}/${name}`);
     },
     async hash(path) {
+      reads.push(path);
       const bytes = files.get(path);
       assert.ok(bytes, path);
       return { size: bytes.length, sha256: digest(bytes) };
@@ -189,8 +193,20 @@ test('separate lanes reuse verified files and publish only after receipts and fu
   await assert.rejects(transferLane(root, 'downloads', undefined, box), /原字节不一致/);
   assert.equal(box.writes.length, 0);
   await writeFile(bootstrapPath, Buffer.from('web'));
-  await transferLane(root, 'runtime', 'metadata', box);
-  await transferLane(root, 'runtime', 'core', box);
+  const uncertainBox = fakeBox();
+  uncertainBox.upload = async () => {
+    throw Object.assign(new Error('uncertain write'), { uploadOutcomeUnknown: true });
+  };
+  await assert.rejects(transferVerifiedRuntime(root, 'metadata', uncertainBox), /uncertain write/);
+  await assert.rejects(readFile(join(root, 'verified', 'metadata.json')), { code: 'ENOENT' });
+  await assert.rejects(readFile(join(root, 'receipt', 'runtime.json')), { code: 'ENOENT' });
+  await transferVerifiedRuntime(root, 'metadata', box);
+  const runtimeMetadata = `/Runtime/v1.10.0/${assets.runtime[0].name}`;
+  assert.ok(box.reads.includes(runtimeMetadata));
+  await transferVerifiedRuntime(root, 'core', box);
+  const runtimeCore = `/Runtime/v1.10.0/${assets.runtime[1].name}`;
+  assert.ok(box.reads.includes(runtimeCore));
+  assert.ok(await readFile(join(root, 'receipt', 'runtime.json')));
   await transferLane(root, 'resources', undefined, box);
   await transferLane(root, 'downloads', undefined, box);
   const beforeRetry = box.writes.length;
@@ -201,6 +217,35 @@ test('separate lanes reuse verified files and publish only after receipts and fu
   await assert.rejects(transferLane(root, 'runtime', 'core', box), /内容冲突/);
   assert.equal(box.writes.length, beforeRetry);
   box.files.set(corePath, Buffer.from('core'));
+  await rm(join(root, 'receipt', 'runtime.json'));
+  await rm(join(root, 'verified', 'metadata.json'));
+  await rm(join(root, 'verified', 'core.json'));
+  box.reads.length = 0;
+  await transferVerifiedRuntime(root, 'metadata', box);
+  await transferVerifiedRuntime(root, 'core', box);
+  assert.equal(box.writes.length, beforeRetry);
+  assert.ok(box.reads.includes(runtimeMetadata));
+  assert.ok(box.reads.includes(runtimeCore));
+  assert.ok(await readFile(join(root, 'receipt', 'runtime.json')));
+  await rm(join(root, 'receipt', 'runtime.json'));
+  const metadataMarker = join(root, 'verified', 'metadata.json');
+  const originalMarker = await readFile(metadataMarker, 'utf8');
+  const staleMarker = JSON.parse(originalMarker);
+  staleMarker.attempt = 2;
+  await writeFile(metadataMarker, JSON.stringify(staleMarker));
+  await rm(join(root, 'verified', 'core.json'));
+  await assert.rejects(transferVerifiedRuntime(root, 'core', box), /机器元数据回读记录不一致/);
+  await assert.rejects(readFile(join(root, 'receipt', 'runtime.json')), { code: 'ENOENT' });
+  await rm(join(root, 'verified', 'core.json'));
+  await writeFile(metadataMarker, originalMarker);
+  box.files.set(corePath, Buffer.from('conflict'));
+  await assert.rejects(transferVerifiedRuntime(root, 'core', box), /内容冲突/);
+  await assert.rejects(readFile(join(root, 'receipt', 'runtime.json')), { code: 'ENOENT' });
+  box.files.set(corePath, Buffer.from('core'));
+  await rm(join(root, 'verified', 'metadata.json'));
+  await assert.rejects(transferVerifiedRuntime(root, 'core', box), { code: 'ENOENT' });
+  await assert.rejects(readFile(join(root, 'receipt', 'runtime.json')), { code: 'ENOENT' });
+  await rm(join(root, 'verified', 'core.json'));
   await assert.rejects(
     verifyLane(root, 'runtime', 'core', box, async () => {}),
     { code: 'ENOENT' },
