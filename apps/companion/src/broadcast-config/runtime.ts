@@ -55,7 +55,6 @@ export function createBroadcastRuntime(input: {
   let pendingLegacyCamera: PendingLegacyCamera | undefined;
   let ready = false;
   let builtinMusicAvailable = false;
-  let syncError: Error | undefined;
   let cameraUnavailable = false;
   let programUnavailable = false;
   let cameraAvailable = () => true;
@@ -110,7 +109,6 @@ export function createBroadcastRuntime(input: {
       if (kind === 'hud') await hud.synchronizeFromPersistence(hudDocument());
     },
     onApplied: async (_active, _previous, kind) => {
-      ready = false;
       const results = await Promise.allSettled([
         ...(!kind || kind === 'hud'
           ? [Promise.resolve().then(() => hud.synchronizeFromPersistence(hudDocument()))]
@@ -124,10 +122,8 @@ export function createBroadcastRuntime(input: {
       ]);
       const failed = results.find((result) => result.status === 'rejected');
       if (failed?.status === 'rejected') {
-        status = { state: 'pending', reason: 'dependency_unavailable' };
         input.diagnostic(failed.reason);
-        syncError = new Error('broadcast_owner_sync_failed', { cause: failed.reason });
-        throw syncError;
+        throw new Error('broadcast_owner_sync_failed', { cause: failed.reason });
       }
       if (!kind || kind === 'camera') cameraUnavailable = !cameraAvailable();
       try {
@@ -139,8 +135,6 @@ export function createBroadcastRuntime(input: {
       } catch {
         programUnavailable = true;
       }
-      syncError = undefined;
-      ready = true;
       status = readyStatus();
     },
   });
@@ -299,7 +293,6 @@ export function createBroadcastRuntime(input: {
     },
     async waitForApply() {
       await store.waitForApply();
-      if (syncError) throw syncError;
     },
     async reconcileCameraSelection(): Promise<boolean> {
       await camera.synchronizeFromPersistence();
