@@ -14,14 +14,35 @@ export type CameraExecutionScope = Scope<'camera-execution'>;
 export type CameraControlScope = Scope<'camera-control'>;
 
 type MatchParticipants = readonly [string | undefined, string | undefined, string | undefined];
-type SourceSession = readonly [
+type SourceSessionTuple = readonly [
   ProgramProjection['cursor']['producerInstanceId'],
   ProgramProjection['cursor']['liveSessionId'],
 ];
 type SourceGeneration = ProgramProjection['cursor']['programSourceGeneration'];
 
-function sourceSession(p: ProgramProjection): SourceSession {
+function sourceSession(p: ProgramProjection): SourceSessionTuple {
   return [p.cursor.producerInstanceId, p.cursor.liveSessionId];
+}
+
+/** Comparison of shared facts only; these identities do not grant source authority. */
+export interface MatchIdentity {
+  readonly matchId: string;
+}
+export interface SourceSession {
+  readonly producerInstanceId: string;
+  readonly liveSessionId: string | null;
+}
+export interface MapExecution extends SourceSession {
+  readonly mapEpoch: number;
+}
+export function sameMatchIdentity(a: MatchIdentity, b: MatchIdentity): boolean {
+  return a.matchId === b.matchId;
+}
+export function sameSourceSession(a: SourceSession, b: SourceSession): boolean {
+  return a.producerInstanceId === b.producerInstanceId && a.liveSessionId === b.liveSessionId;
+}
+export function sameMapExecution(a: MapExecution, b: MapExecution): boolean {
+  return sameSourceSession(a, b) && a.mapEpoch === b.mapEpoch;
 }
 function sourceGeneration(p: ProgramProjection): SourceGeneration {
   return p.cursor.programSourceGeneration;
