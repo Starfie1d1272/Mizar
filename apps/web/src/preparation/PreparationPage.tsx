@@ -216,6 +216,9 @@ export function PreparationPage() {
       <main className="preparation" data-page={path}>
         <AutomaticPreparation />
         <UpdateNotification />
+        {production?.mode === 'preparation' && production.obsExitState === 'pending' ? (
+          <StatusBanner tone="info">正在确认 OBS 等待画面。</StatusBanner>
+        ) : null}
         {production?.mode === 'preparation' && production.obsExitState === 'unconfirmed' ? (
           <StatusBanner tone="warning">OBS 等待画面尚未确认，请检查 OBS。</StatusBanner>
         ) : null}

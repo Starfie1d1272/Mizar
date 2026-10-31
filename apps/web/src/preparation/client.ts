@@ -141,7 +141,7 @@ export interface Production {
   revision: string;
   canEnter: boolean;
   releaseHandoffState?: 'idle' | 'pending' | 'recorded' | 'confirmed' | 'unconfirmed';
-  obsExitState?: 'idle' | 'confirmed' | 'unconfirmed';
+  obsExitState?: 'idle' | 'pending' | 'confirmed' | 'unconfirmed';
 }
 export async function checkObsBeforeLaunch(
   requireStoppedOutput = false,

@@ -1158,7 +1158,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       observerSettings.endProduction();
     },
     beforeFinish: () => obsAdapter?.settleAutomatic(),
-    afterSafeScene: () => obsAdapter?.restoreVideo(),
+    afterSafeScene: (valid) => obsAdapter?.restoreVideo(undefined, valid),
     finishTrial: async () => {
       await demoTest?.finish();
     },
