@@ -1396,6 +1396,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
               throw error;
             },
           );
+        if (broadcastConfig && !(await missing(broadcastConfig.path))) return;
         const fresh =
           options.builtinMusicPack &&
           broadcastConfig &&
@@ -1632,14 +1633,21 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           app.log.error({ stage: 'mulnx_load', err: error }, 'MulNX 加载失败');
         }
       }
-      await cameraStore
-        .load()
-        .catch((error) =>
-          app.log.error(
-            { stage: 'camera_load', err: error, result: 'failure' },
-            '运镜预设加载失败',
-          ),
-        );
+      const broadcastStoreExists =
+        broadcastConfig &&
+        (await lstat(broadcastConfig.path).then(
+          () => true,
+          (error: NodeJS.ErrnoException) => error.code !== 'ENOENT',
+        ));
+      if (!broadcastStoreExists)
+        await cameraStore
+          .load()
+          .catch((error) =>
+            app.log.error(
+              { stage: 'camera_load', err: error, result: 'failure' },
+              '运镜预设加载失败',
+            ),
+          );
       if (musicStore.ready && !musicStore.failure && cameraStore.ready && hudConfigStore.isLoaded) {
         const hasCameraSources =
           cameraStore.preset.maps.length > 0 ||

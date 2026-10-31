@@ -262,16 +262,7 @@ export class MusicStore {
       runtime = await this.readRuntime();
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      try {
-        const path = await safePath(this.directory, 'state.json');
-        const stat = await lstat(path);
-        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 512 * 1024)
-          throw new Error('music_state_invalid', { cause: error });
-        runtime = runtimeState(stateSchema.parse(JSON.parse(await readFile(path, 'utf8'))));
-      } catch (legacyError) {
-        if ((legacyError as NodeJS.ErrnoException).code !== 'ENOENT') throw legacyError;
-        runtime = runtimeState(this.state);
-      }
+      runtime = runtimeState(this.state);
       await atomicJson(join(this.directory, 'runtime.json'), runtime);
     }
     const current = await persistence.read();
@@ -392,6 +383,10 @@ export class MusicStore {
   }
   async add(name: string, bytes: Buffer) {
     if (this.failure || !this.ready) throw new Error('music_state_invalid');
+    return this.installTrackAsset(name, bytes);
+  }
+  /** Install a validated package asset without requiring music playback to be initialized. */
+  async installTrackAsset(name: string, bytes: Buffer) {
     await this.stage('music_validate', { name, bytes: bytes.length }, () => {
       if (!audioBytes(name, bytes)) throw new Error('music_track_invalid');
     });
@@ -399,6 +394,7 @@ export class MusicStore {
     const track = musicTrackSchema.parse({ id, name: basename(name) });
     const target = join(this.directory, 'tracks', id);
     const temporary = join(this.directory, 'tracks', `tmp-${randomUUID()}`);
+    await ensureDirectory(join(this.directory, 'tracks'));
     await safePath(join(this.directory, 'tracks'));
     try {
       // OBS may hold the existing media file open on Windows. Reuse it only
