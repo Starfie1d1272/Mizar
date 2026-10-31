@@ -49,8 +49,9 @@ function signalGroup(pid, signal) {
     process.kill(-pid, signal);
     return true;
   } catch (error) {
-    if (error.code !== 'ESRCH') throw error;
-    return false;
+    if (error.code === 'ESRCH') return false;
+    console.error('A process group could not be signalled or checked; termination is unknown.');
+    return true;
   }
 }
 function child(lane, root, result, control) {
