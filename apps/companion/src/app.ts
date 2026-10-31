@@ -1130,9 +1130,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       if (statSync(obsExitPath).size <= 4096) {
         const saved: unknown = JSON.parse(readFileSync(obsExitPath, 'utf8'));
         previousObsExitUnconfirmed =
-          typeof saved === 'object' &&
-          saved !== null &&
-          ['pending', 'unconfirmed'].includes(String((saved as { state?: unknown }).state));
+          typeof saved !== 'object' ||
+          saved === null ||
+          (saved as { state?: unknown }).state !== 'confirmed';
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') previousObsExitUnconfirmed = false;
