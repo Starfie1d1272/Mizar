@@ -216,10 +216,8 @@ pub fn resume(app: &tauri::AppHandle, log: &DesktopLog) -> Result<Value, String>
     app.state::<production_exit::ExitGate>().check()?;
     app.state::<updates::PendingUpdate>().check()?;
     let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
-    Ok(
-        resume_pending_launch(log, &managed, None)?
-            .unwrap_or_else(|| json!({"result":"not-found"})),
-    )
+    Ok(resume_pending_launch(log, &managed, None, None)?
+        .unwrap_or_else(|| json!({"result":"not-found"})))
 }
 
 pub fn resume_demo(
@@ -231,8 +229,10 @@ pub fn resume_demo(
     app.state::<production_exit::ExitGate>().check()?;
     app.state::<updates::PendingUpdate>().check()?;
     let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
-    Ok(resume_pending_launch(log, &managed, Some(request_id))?
-        .unwrap_or_else(|| json!({"result":"not-found"})))
+    Ok(
+        resume_pending_launch(log, &managed, Some(request_id), None)?
+            .unwrap_or_else(|| json!({"result":"not-found"})),
+    )
 }
 
 pub fn update(app: &tauri::AppHandle, log: &DesktopLog) -> Result<Value, String> {
@@ -321,7 +321,7 @@ fn launch_operation(
         no_game()?;
     }
     if automatic && demo.is_none() {
-        if let Some(receipt) = resume_pending_launch(log, &managed, None)? {
+        if let Some(receipt) = resume_pending_launch(log, &managed, None, Some(&guard))? {
             return Ok(receipt);
         }
     }
@@ -705,6 +705,7 @@ fn resume_pending_launch(
     log: &DesktopLog,
     managed: &Mutex<managed_cs2::ManagedCs2>,
     demo_id: Option<&str>,
+    guard: Option<&crate::preparation_gate::PreparationGuard<'_>>,
 ) -> Result<Option<Value>, String> {
     let results = log.state_root.join("data/mulnx-launch");
     let pending = results.join("pending.json");
@@ -761,12 +762,21 @@ fn resume_pending_launch(
     if managed_cs2::process_parent(game_pid, log)? != Some(pid) || !cs2.owns_mulnx_launcher(pid)? {
         return Err("无法确认本次启动，请关闭游戏和 MulNX 后恢复设置。".into());
     }
-    cs2.bind_managed_mulnx(game_pid, created, &executable)?;
-    crate::cs2_session::atomic_write(&results.join("current.json"), result.to_string().as_bytes())?;
-    production_exit::prepare_mulnx(log, &executable, false, false)?;
-    std::fs::remove_file(&pending).map_err(|e| e.to_string())?;
-    log.event("mulnx_launch_reuse", "success", Some(&result.to_string()));
-    Ok(Some(result))
+    let commit = || {
+        cs2.bind_managed_mulnx(game_pid, created, &executable)?;
+        crate::cs2_session::atomic_write(
+            &results.join("current.json"),
+            result.to_string().as_bytes(),
+        )?;
+        production_exit::prepare_mulnx(log, &executable, false, false)?;
+        std::fs::remove_file(&pending).map_err(|e| e.to_string())?;
+        log.event("mulnx_launch_reuse", "success", Some(&result.to_string()));
+        Ok(Some(result))
+    };
+    match guard {
+        Some(guard) => guard.commit(commit),
+        None => commit(),
+    }
 }
 
 /// Persist clean only after the launcher configuration is restored.
