@@ -7,7 +7,12 @@ import { verifyPayload } from './product-runtime.mjs';
 import { validateReleaseTag, windowsBundleName } from './app-version.mjs';
 
 export async function verifyPromotion({
-  product, extracted, tag, sourceSha, binaryVersion, manifestOnly = false,
+  product,
+  extracted,
+  tag,
+  sourceSha,
+  binaryVersion,
+  manifestOnly = false,
 }) {
   const manifest = JSON.parse(await readFile(join(product, 'release-manifest.json'), 'utf8'));
   validateReleaseTag(tag, manifest.appVersion);
@@ -106,7 +111,11 @@ export async function verifyPromotion({
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const [, , product, extracted, tag, sourceSha, output] = process.argv;
   const identity = await verifyPromotion({
-    product, extracted, tag, sourceSha, manifestOnly: extracted === '--manifest-only',
+    product,
+    extracted,
+    tag,
+    sourceSha,
+    manifestOnly: extracted === '--manifest-only',
   });
   await writeFile(output, `${JSON.stringify(identity, null, 2)}\n`);
   console.log(JSON.stringify(identity));
