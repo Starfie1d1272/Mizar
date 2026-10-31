@@ -206,7 +206,7 @@ function ContextPanel({
           <Button
             onClick={() => {
               setIssueError(null);
-              void openPreparation('/matches?tab=details#series-binding').catch((error: unknown) =>
+              void openPreparation('/matches#series-binding').catch((error: unknown) =>
                 setIssueError({
                   key: issueKey,
                   message: error instanceof Error ? error.message : '处理页面无法打开，请重试。',
