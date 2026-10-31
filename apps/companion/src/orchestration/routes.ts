@@ -120,12 +120,14 @@ export function registerOrchestrationRoutes(
       !timingSafeEqual(expected, supplied)
     )
       return reply.code(403).send({ error: 'runtime-control-denied' });
+    let beginAttempted = false;
     try {
       const body = nativeSchema.parse(request.body);
       let lease: string | undefined;
       if (body.action === 'host-start') director.hostStarted(body.host);
       else if (body.action === 'begin')
         session!.configure(body.expectedRevision, () => {
+          beginAttempted = true;
           lease = director.beginNative(body.host);
         });
       else if (body.action === 'begin-demo') {
@@ -141,7 +143,9 @@ export function registerOrchestrationRoutes(
         { stage: 'camera_host_session', err: error, result: 'failure' },
         '原生运镜会话未确认',
       );
-      return reply.code(409).send({ error: 'camera_native_session_invalid' });
+      return reply
+        .code(409)
+        .send({ error: 'camera_native_session_invalid', notStarted: !beginAttempted });
     }
   });
   app.post(

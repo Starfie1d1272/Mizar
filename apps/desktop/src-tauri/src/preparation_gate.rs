@@ -36,6 +36,7 @@ pub struct PreparationGuard<'a> {
     pub gate: Option<&'a PreparationGate>,
     pub id: Option<&'a str>,
     pub verify: Option<&'a dyn Fn() -> Result<(), String>>,
+    pub exit: Option<(&'a crate::production_exit::ExitGate, u64)>,
 }
 
 impl PreparationGuard<'_> {
@@ -55,13 +56,19 @@ impl PreparationGuard<'_> {
                 if let Some(verify) = self.verify {
                     verify()?;
                 }
-                action()
+                match self.exit {
+                    Some((exit, ticket)) => exit.commit(ticket, action),
+                    None => action(),
+                }
             }),
             None => {
                 if let Some(verify) = self.verify {
                     verify()?;
                 }
-                action()
+                match self.exit {
+                    Some((exit, ticket)) => exit.commit(ticket, action),
+                    None => action(),
+                }
             }
         }
     }
@@ -135,6 +142,7 @@ mod tests {
             gate: Some(&gate),
             id: Some("entry"),
             verify: Some(&verify),
+            exit: None,
         };
         guard.check().unwrap();
         active.set(true);

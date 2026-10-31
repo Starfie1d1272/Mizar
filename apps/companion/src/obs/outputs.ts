@@ -90,6 +90,7 @@ export class ObsOutputController {
   private client: OBSWebSocket | undefined;
   private generation = 0;
   private events = { stream: 0, record: 0 };
+  private unconfirmedStart = { stream: false, record: false };
   private transitionAt = { stream: 0, record: 0 };
   private connecting: Promise<void> | undefined;
   private reading: Promise<void> | undefined;
@@ -228,6 +229,11 @@ export class ObsOutputController {
   }
 
   private event(kind: ObsOutputKind, event: { outputState: string; outputActive: boolean }): void {
+    if (
+      event.outputState === 'OBS_WEBSOCKET_OUTPUT_STARTED' ||
+      event.outputState === 'OBS_WEBSOCKET_OUTPUT_STOPPED'
+    )
+      this.unconfirmedStart[kind] = false;
     this.preparationOutputGeneration++;
     this.warmupGeneration++;
     this.events[kind]++;
@@ -429,6 +435,63 @@ export class ObsOutputController {
   async command(command: ObsOutputCommand): Promise<ObsOutputsStatus> {
     const { output, action, expectedRevision } = command;
     const state = this.values[output];
+    if (action === 'start' && this.unconfirmedStart[output]) {
+      await this.read().catch(() => undefined);
+      if (this.values[output].active === true) {
+        this.unconfirmedStart[output] = false;
+        return this.snapshot();
+      }
+      throw new ObsOutputError(
+        'obs_output_unconfirmed',
+        '已重新查询 OBS；上一次输出操作尚未确认，请勿重复操作。',
+      );
+    }
+    if (expectedRevision === null) {
+      if (action !== 'start' || state.pending || this.unconfirmedStart[output])
+        throw new ObsOutputError(
+          'obs_output_unconfirmed',
+          '上一次输出操作尚未确认，请等待 OBS 状态更新。',
+        );
+      this.values[output] = { ...state, pending: 'start' };
+      this.preparationOutputGeneration++;
+      this.warmupGeneration++;
+      const client = new OBSWebSocket();
+      let submitted = false;
+      try {
+        const config = await this.config.read();
+        await bounded(client.connect(`ws://${config.host}:${config.port}`, config.password));
+        const observed = await bounded(
+          client.call(output === 'stream' ? 'GetStreamStatus' : 'GetRecordStatus'),
+        ).catch(() => null);
+        if (!observed)
+          throw new ObsOutputError('obs_output_unconfirmed', '无法确认 OBS 输出状态，请稍后重试。');
+        if (observed.outputActive === true) {
+          await this.read().catch(() => undefined);
+          return this.snapshot();
+        }
+        submitted = true;
+        this.unconfirmedStart[output] = true;
+        await bounded(client.call(requests[output].start));
+        await this.read();
+        if (this.values[output].active !== true)
+          throw new ObsOutputError('obs_output_unconfirmed', '输出请求已提交，结果尚未确认。');
+        this.unconfirmedStart[output] = false;
+        return this.snapshot();
+      } catch (error) {
+        const code = (error as { code?: unknown } | undefined)?.code;
+        if (!submitted || (typeof code === 'number' && code >= 200 && code < 800))
+          this.unconfirmedStart[output] = false;
+        if (error instanceof ObsOutputError) throw error;
+        throw new ObsOutputError(
+          'obs_output_unconfirmed',
+          submitted ? '输出请求结果尚未确认，请勿重复操作。' : '无法连接 OBS，请检查连接后重试。',
+          { cause: error },
+        );
+      } finally {
+        this.values[output] = { ...this.values[output], pending: null };
+        await client.disconnect().catch(() => undefined);
+      }
+    }
     if (state.pending || state.phase === 'starting' || state.phase === 'stopping')
       throw new ObsOutputError('obs_output_busy', 'OBS 正在处理此输出，请等待状态确认。');
     if (state.revision !== expectedRevision)
@@ -453,6 +516,7 @@ export class ObsOutputController {
       if (reached()) return this.snapshot();
       let failure: unknown;
       try {
+        if (action === 'start') this.unconfirmedStart[output] = true;
         await bounded(client.call(requests[output][action]));
       } catch (error) {
         failure = error;
@@ -462,14 +526,22 @@ export class ObsOutputController {
       // A successful RPC only acknowledges the request. Confirm the actual output.
       const deadline = Date.now() + CONFIRM_MS;
       while (this.generation === generation && Date.now() < deadline) {
-        if (reached()) return this.snapshot();
+        if (reached()) {
+          if (action === 'start') this.unconfirmedStart[output] = false;
+          return this.snapshot();
+        }
         await this.read().catch(() => undefined);
         if (this.generation !== generation) break;
-        if (reached()) return this.snapshot();
+        if (reached()) {
+          if (action === 'start') this.unconfirmedStart[output] = false;
+          return this.snapshot();
+        }
         // A server rejection is definite; timeout/network failure may have executed.
         const failureCode = (failure as { code?: unknown } | undefined)?.code;
-        if (typeof failureCode === 'number' && failureCode >= 200 && failureCode < 800)
+        if (typeof failureCode === 'number' && failureCode >= 200 && failureCode < 800) {
+          if (action === 'start') this.unconfirmedStart[output] = false;
           throw rejectedOutput(failure);
+        }
         await new Promise((resolve) => setTimeout(resolve, 200));
       }
       if (this.generation === generation && this.values[output].phase !== 'starting')

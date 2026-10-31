@@ -45,6 +45,22 @@ impl ExitGate {
         self.check()?;
         Ok(self.generation.load(Ordering::Acquire))
     }
+    pub fn check_ticket(&self, ticket: u64) -> Result<(), String> {
+        self.check()?;
+        if self.generation.load(Ordering::Acquire) != ticket {
+            return Err("此前的进入操作已因退出而取消，请重新进入工作台。".into());
+        }
+        Ok(())
+    }
+    pub fn commit<T>(
+        &self,
+        ticket: u64,
+        action: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        let _publication = self.publication.lock().unwrap_or_else(|e| e.into_inner());
+        self.check_ticket(ticket)?;
+        action()
+    }
     /// Serialize the actual main-thread window publication with starting an exit.
     pub fn publish(&self, ticket: u64, present: impl FnOnce()) -> Result<(), String> {
         let _publication = self.publication.lock().unwrap_or_else(|e| e.into_inner());
@@ -567,6 +583,9 @@ pub fn camera_session(
         Some(&token),
     )?;
     if code != 200 || value["ok"] != true {
+        if action == "begin" && code == 409 && value["notStarted"] == true {
+            return Err("camera_not_started:运镜准备条件已变化，请重试。".into());
+        }
         return Err("原生运镜会话已失效；请结束制作后重新借用。".into());
     }
     Ok(value)

@@ -415,6 +415,22 @@ function WorkspaceDockContent() {
   const obs = useObsStatus();
   const [message, setMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
+  const [entryNotice, setEntryNotice] = useState('');
+  useEffect(() => {
+    let changed = false;
+    const status = (event: Event) => {
+      changed = true;
+      setEntryNotice(String((event as CustomEvent).detail ?? ''));
+    };
+    window.addEventListener('mizar-entry-status', status);
+    if (window.__TAURI_INTERNALS__)
+      void desktopInvoke<string>('workbench_status')
+        .then((message) => {
+          if (!changed) setEntryNotice(message);
+        })
+        .catch(() => {});
+    return () => window.removeEventListener('mizar-entry-status', status);
+  }, []);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [overlayRecovering, setOverlayRecovering] = useState(false);
@@ -619,6 +635,17 @@ function WorkspaceDockContent() {
         </details>
       </section>
       <section className="workspace-production" aria-label="制作工具">
+        {entryNotice ? (
+          <StatusBanner tone="warning">
+            {entryNotice} <Button onClick={() => setEntryNotice('')}>关闭</Button>{' '}
+            <Button onClick={() => void desktopInvoke('workbench_message', { action: 'retry' })}>
+              重试准备
+            </Button>{' '}
+            <Button onClick={() => void desktopInvoke('workbench_message', { action: 'cancel' })}>
+              取消准备
+            </Button>
+          </StatusBanner>
+        ) : null}
         <div className="workspace-section-heading">
           <span data-tone={connected ? 'success' : 'warning'}>
             {connected
@@ -728,7 +755,11 @@ function WorkspaceDockContent() {
             disabled={!production || busy || Boolean(exit?.busy)}
             aria-busy={busy || Boolean(exit?.busy)}
             onClick={() =>
-              production && void action(() => productionAction('finish', production), true)
+              production &&
+              void action(async () => {
+                await desktopInvoke('workbench_message', { action: 'cancel' }).catch(() => {});
+                await productionAction('finish', production);
+              }, true)
             }
           >
             {exit?.busy ? '正在退出…' : '退出工作台'}

@@ -423,6 +423,7 @@ fn align_cs2(window: Cs2Window, target: Rect) -> Result<(), AlignmentFailure> {
 
 #[derive(Default)]
 pub struct GameTracker {
+    owner: Option<crate::managed_cs2::WorkspaceProcess>,
     pub window: Option<Cs2Window>,
     pub generation: u64,
     monitor: Monitor,
@@ -442,6 +443,19 @@ pub struct GameTracker {
 }
 
 impl GameTracker {
+    pub fn owned_window(&self) -> Option<Cs2Window> {
+        let window = self.window?;
+        let owner = self.owner.as_ref()?;
+        let mut pid = 0;
+        unsafe {
+            GetWindowThreadProcessId(window.hwnd, &mut pid);
+        }
+        (owner.owned && owner.is_running() && owner.pid == window.pid && pid == window.pid)
+            .then_some(window)
+    }
+    pub fn set_owner(&mut self, owner: Option<crate::managed_cs2::WorkspaceProcess>) {
+        self.owner = owner.filter(|process| process.owned && process.is_running());
+    }
     pub fn finish_session_feedback(
         &mut self,
         cs2: &crate::managed_cs2::ManagedCs2,
@@ -526,14 +540,23 @@ impl GameTracker {
     fn refresh_target(&mut self) -> bool {
         // Minimization is not a game/window replacement. Keep the measured
         // monitor and frame lease until the same HWND is restored or destroyed.
-        if self.window.is_some_and(|window| unsafe {
-            let mut pid = 0;
-            GetWindowThreadProcessId(window.hwnd, &mut pid);
-            pid == window.pid && IsIconic(window.hwnd) != 0
+        if self.window.is_some_and(|window| {
+            self.owner
+                .as_ref()
+                .is_some_and(|owner| owner.is_running() && owner.pid == window.pid)
+                && unsafe {
+                    let mut pid = 0;
+                    GetWindowThreadProcessId(window.hwnd, &mut pid);
+                    pid == window.pid && IsIconic(window.hwnd) != 0
+                }
         }) {
             return false;
         }
-        let found = find_cs2();
+        let found = find_cs2().filter(|window| {
+            self.owner
+                .as_ref()
+                .is_some_and(|owner| owner.is_running() && owner.pid == window.pid)
+        });
         self.observe_target(found, choose_monitor(found))
     }
     pub fn restore_layout(&mut self) -> Option<Layout> {
@@ -645,7 +668,7 @@ impl GameTracker {
     }
     pub fn overlay_rect(&self, workspace_windows: &[isize]) -> Option<Rect> {
         let _coordinates = PhysicalCoordinates::enter();
-        let window = self.window?;
+        let window = self.owned_window()?;
         let client = client_rect(window.hwnd)?;
         let foreground = unsafe { GetForegroundWindow() };
         let foreground_allowed =
@@ -659,7 +682,7 @@ impl GameTracker {
         .then_some(client)
     }
     pub fn restore_focus(&self, source: isize) -> bool {
-        self.window.is_some_and(|window| unsafe {
+        self.owned_window().is_some_and(|window| unsafe {
             let mut pid = 0;
             GetWindowThreadProcessId(window.hwnd, &mut pid);
             pid == window.pid

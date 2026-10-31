@@ -51,7 +51,7 @@ export const obsOutputCommandSchema = z
   .object({
     output: z.enum(['stream', 'record']),
     action: z.enum(['start', 'stop']),
-    expectedRevision: z.string().uuid(),
+    expectedRevision: z.string().uuid().nullable(),
   })
   .strict();
 export type ObsOutputCommand = z.infer<typeof obsOutputCommandSchema>;
