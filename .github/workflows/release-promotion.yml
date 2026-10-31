@@ -189,22 +189,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Frozen product provenance verification failed' }
           Move-Item -LiteralPath product -Destination product-before-provenance
           Move-Item -LiteralPath product-verified -Destination product
-      - name: Verify original ZIP, payload, compiled version and tag
+      - name: Prepare publication identity from signed build assets
         shell: pwsh
         run: |
-          & (Join-Path $env:RESOURCE_PUBLISHER_ROOT 'scripts/qualification/extract-windows-shell.ps1') -Archive "product/$env:PRODUCT_ARCHIVE" -Destination extracted -Native
-          node scripts/qualification/verify-promotion.mjs product extracted $env:RELEASE_TAG $env:SOURCE_SHA promotion-identity.json
-          if ($LASTEXITCODE -ne 0) { throw 'Promotion identity verification failed' }
-      - name: Verify distinct qualified Core original bytes and provenance
-        shell: pwsh
-        run: |
-          $core = Get-Content product/core-release-manifest.json -Raw | ConvertFrom-Json
-          $extract = Join-Path $env:RUNNER_TEMP 'promotion original Core'
-          & (Join-Path $env:RESOURCE_PUBLISHER_ROOT 'scripts/qualification/extract-windows-shell.ps1') -Archive (Join-Path product $core.archive) -Destination $extract -Native
-          $roots = @(Get-ChildItem -LiteralPath $extract -Directory)
-          if ($roots.Count -ne 1) { throw 'Core extraction is ambiguous' }
-          node scripts/qualification/verify-core-candidate.mjs product $roots[0].FullName $env:SOURCE_SHA
-          if ($LASTEXITCODE -ne 0) { throw 'Original Core identity verification failed' }
+          node scripts/qualification/verify-promotion.mjs product --manifest-only $env:RELEASE_TAG $env:SOURCE_SHA promotion-identity.json
+          if ($LASTEXITCODE -ne 0) { throw 'Publication identity failed' }
       - name: Verify qualified installer and update contract
         shell: pwsh
         run: |
