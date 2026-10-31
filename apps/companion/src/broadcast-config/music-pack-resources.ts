@@ -225,6 +225,6 @@ export class MusicPackResources {
   }
   async materialize(ref: AssetRef, music: MusicStore): Promise<string> {
     const asset = await this.read(ref);
-    return (await music.add(asset.name, asset.bytes)).id;
+    return (await music.installTrackAsset(asset.name, asset.bytes)).id;
   }
 }

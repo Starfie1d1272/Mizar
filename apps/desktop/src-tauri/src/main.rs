@@ -1623,9 +1623,15 @@ async fn finish_workspace(
         command_log.with_task(native_task_id.as_deref(), native_operation_id.as_deref(), native_trigger.as_deref(), || {
         let feedback = host.state::<production_exit::WorkspaceExit>();
         let log = host.state::<DesktopLog>();
-        production_exit::set_exit_intent(&log, "begin-exit")?;
         let managed = host.state::<Mutex<managed_cs2::ManagedCs2>>();
         let mut cs2 = log.step("workspace_exit_lock", || managed.lock().map_err(|error| command_log.preserve_error("finish_workspace", native_operation_id.as_deref(), &error, "CS2 配置状态不可用。")))?;
+        // Companion freeze and scene/remote work have their own owner. Never
+        // serialize the exact local process cleanup behind their HTTP response.
+        let exit_intent = production_exit::set_exit_intent(&log, "begin-exit");
+        let production_log = log.inner().clone();
+        let production_task = std::thread::spawn(move || {
+            production_exit::finish_workspace_production(&production_log)
+        });
         let activity = host.state::<cs2_activity::Activity>();
         // Open the visible recovery owner before any potentially slow cleanup.
         // A presentation failure cannot skip safe production or game cleanup.
@@ -1636,8 +1642,7 @@ async fn finish_workspace(
                 Some(&format!("phase=workspace_recovery_window; cause={error}")),
             );
         }
-        feedback.stage("production");
-        log.step("workspace_exit_production", || production_exit::finish_workspace_production(&log))?;
+        feedback.stage("restoration");
         let game = production_exit::restore_then_cleanup(
         || log.step("workspace_exit_observer", || observer_workspace::finish(&log)),
         || -> Result<(), String> {
@@ -1676,7 +1681,8 @@ async fn finish_workspace(
         // Retry presentation after cleanup; an earlier transient window failure
         // must not prevent returning to preparation once the game is finished.
         let presentation = log.step("workspace_exit_presentation", || present_production_inner(&host, false));
-        production_exit::cleanup_results(game, presentation)
+        let production = production_task.join().unwrap_or_else(|_| Err("制作收尾结果未确认。".into()));
+        production_exit::cleanup_results(production_exit::cleanup_results(exit_intent, production), production_exit::cleanup_results(game, presentation))
         })
     } })
     .await
@@ -4667,59 +4673,58 @@ fn run_desktop(
             tauri::async_runtime::spawn(async move {
                 let cleanup_host = host.clone();
                 let result = tauri::async_runtime::spawn_blocking(move || {
-                    if !cleanup_host
-                        .state::<production_exit::VerifiedStop>()
-                        .complete()
-                    {
-                        production_exit::set_exit_intent(
-                            &cleanup_host.state::<DesktopLog>(),
-                            "begin-exit",
-                        )?;
-                    }
                     // The gate is already closed; wait for an accepted launch,
                     // then keep its lock through safe production and game cleanup.
                     let state = cleanup_host.state::<Mutex<managed_cs2::ManagedCs2>>();
                     let mut cs2 = state.lock().map_err(|_| "CS2 配置状态不可用。")?;
+                    let service_stopped = cleanup_host
+                        .state::<production_exit::VerifiedStop>()
+                        .complete();
+                    let exit_intent = if service_stopped {
+                        Ok(())
+                    } else {
+                        production_exit::set_exit_intent(
+                            &cleanup_host.state::<DesktopLog>(),
+                            "begin-exit",
+                        )
+                    };
+                    let production_host = cleanup_host.clone();
+                    let production_task = std::thread::spawn(move || {
+                        if service_stopped {
+                            Ok(())
+                        } else {
+                            production_exit::finish_companion(
+                                &production_host.state::<DesktopLog>(),
+                            )
+                        }
+                    });
                     let activity = cleanup_host.state::<cs2_activity::Activity>();
                     let _activity = activity.begin(if cs2.has_external() { 3 } else { 2 });
-                    production_exit::finish_then_restore(
+                    let cleanup = production_exit::restore_then_cleanup(
                         || {
-                            // --stop already completed the same safe transaction before
-                            // stopping the verified service; no HTTP request can follow it.
                             if cleanup_host
                                 .state::<production_exit::VerifiedStop>()
                                 .complete()
                             {
-                                Ok(())
+                                observer_hud::restore(&cleanup_host.state::<DesktopLog>())
                             } else {
-                                production_exit::finish_companion(
-                                    &cleanup_host.state::<DesktopLog>(),
-                                )
+                                observer_workspace::finish(&cleanup_host.state::<DesktopLog>())
                             }
                         },
                         || {
-                            production_exit::restore_then_cleanup(
-                                || {
-                                    if cleanup_host
-                                        .state::<production_exit::VerifiedStop>()
-                                        .complete()
-                                    {
-                                        observer_hud::restore(&cleanup_host.state::<DesktopLog>())
-                                    } else {
-                                        observer_workspace::finish(
-                                            &cleanup_host.state::<DesktopLog>(),
-                                        )
-                                    }
-                                },
-                                || {
-                                    cs2.finish_with_service_stopped(
-                                        cleanup_host
-                                            .state::<production_exit::VerifiedStop>()
-                                            .complete(),
-                                    )
-                                },
+                            cs2.finish_with_service_stopped(
+                                cleanup_host
+                                    .state::<production_exit::VerifiedStop>()
+                                    .complete(),
                             )
                         },
+                    );
+                    let production = production_task
+                        .join()
+                        .unwrap_or_else(|_| Err("制作收尾结果未确认。".into()));
+                    production_exit::cleanup_results(
+                        production_exit::cleanup_results(exit_intent, production),
+                        cleanup,
                     )
                 })
                 .await

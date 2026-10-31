@@ -102,9 +102,16 @@ export function PreparationPage() {
   const local = envelope?.source === 'local' && view?.activeLocalMatchId === match?.matchId;
   const exit = useWorkspaceExitStatus();
   const production = useLocalRead<Production>('/local/v1/production');
-  const rivalhub = useLocalRead<{ paired: boolean; displayName?: string | null }>(
-    '/local/v1/rivalhub-connection',
-  );
+  const rivalhub = useLocalRead<{
+    paired: boolean;
+    displayName?: string | null;
+    sourceCleanup?: {
+      pending: number;
+      blocked: number;
+      claimIntent: boolean;
+      handoffPending?: number;
+    };
+  }>('/local/v1/rivalhub-connection');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [entering, setEntering] = useState(false);
@@ -209,6 +216,21 @@ export function PreparationPage() {
       <main className="preparation" data-page={path}>
         <AutomaticPreparation />
         <UpdateNotification />
+        {production?.mode === 'preparation' && production.obsExitState === 'pending' ? (
+          <StatusBanner tone="info">正在确认 OBS 等待画面。</StatusBanner>
+        ) : null}
+        {production?.mode === 'preparation' && production.obsExitState === 'unconfirmed' ? (
+          <StatusBanner tone="warning">OBS 等待画面尚未确认，请检查 OBS。</StatusBanner>
+        ) : null}
+        {production?.mode === 'preparation' &&
+        (production.releaseHandoffState === 'pending' ||
+          (production.releaseHandoffState === 'unconfirmed' && !rivalhub?.sourceCleanup) ||
+          (rivalhub?.sourceCleanup?.handoffPending ?? 0) > 0 ||
+          (rivalhub?.sourceCleanup?.pending ?? 0) > 0 ||
+          (rivalhub?.sourceCleanup?.blocked ?? 0) > 0 ||
+          rivalhub?.sourceCleanup?.claimIntent) ? (
+          <StatusBanner tone="warning">网站数据源收尾尚未确认，请查看连接状态。</StatusBanner>
+        ) : null}
         <header className="preparation-heading">
           <div>
             <h1>

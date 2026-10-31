@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { lstat, readFile } from 'node:fs/promises';
-import { canonicalJson } from '@mizar/hud-config';
+import {
+  canonicalJson,
+  getBuiltinLayouts,
+  getBuiltinPresets,
+  getBuiltinThemes,
+  type HudConfigDocument,
+} from '@mizar/hud-config';
 import { z } from 'zod';
 import { MUSIC_GROUPS } from '@mizar/protocol/music';
 import {
@@ -23,21 +29,32 @@ import {
   type ResourceRef,
   type ModuleKind,
   type CameraModuleV2,
+  type PortableMusicConfigV1,
+  type HudModule,
 } from '@mizar/broadcast-config';
 import { durableJsonByteLength, replaceDurableJson } from '../match-context/durable-json.js';
 import { SerialCommitQueue } from '../match-context/serial-commit.js';
 import {
   addMissingBuiltinModules,
   BUILTIN_MODULE_IDS,
+  createBuiltinModules,
   isBuiltinModuleId,
 } from './builtin-modules.js';
 import { broadcastResourceReferences } from './reference-queue.js';
 import { cameraCatalogSchema } from '../orchestration/store.js';
+import { hudDocumentFromBroadcast } from './hud-facade.js';
 
 interface Receipt {
   fingerprint: string;
   active: ActiveBroadcastSnapshot;
+  failed?: ModuleKind[];
 }
+type ConsumerKind = 'hud' | 'music' | 'camera' | 'program';
+type ConsumerState = {
+  applied: ActiveBroadcastSnapshot | null;
+  error: string | null;
+  desired?: string;
+};
 const importEntry = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/);
 const importMappingSchema = z.strictObject({
   source: resourceRefSchema,
@@ -59,6 +76,7 @@ interface Envelope {
   document: BroadcastConfigDocument;
   receipts: Record<string, Receipt>;
   imports: BroadcastImportMapping[];
+  consumers?: Partial<Record<ConsumerKind, ConsumerState>>;
   builtinsNormalized?: boolean | undefined;
   pendingLegacyCamera?: PendingLegacyCamera | undefined;
   restoredLegacyCamera?:
@@ -95,12 +113,16 @@ export interface BroadcastConfigStoreOptions {
     active: ActiveBroadcastSnapshot,
     previous: ActiveBroadcastSnapshot,
     kind?: ModuleKind,
+    failed?: ModuleKind[],
   ): void | Promise<void>;
   resolveModule?(module: ModuleRecord): Promise<{
     value: ActiveBroadcastSnapshot['resolved'][ModuleKind];
     lock: ActiveBroadcastSnapshot['lock'];
   }>;
-  onDraftChanged?(kind: ModuleKind): Promise<void>;
+  canApplyModule?(
+    kind: ModuleKind,
+    value: ActiveBroadcastSnapshot['resolved'][ModuleKind],
+  ): boolean;
   validateHudDraft?(document: BroadcastConfigDocument): void;
 }
 
@@ -133,6 +155,7 @@ export class BroadcastConfigStore {
             'document',
             'receipts',
             'imports',
+            'consumers',
             'builtinsNormalized',
             'pendingLegacyCamera',
             'restoredLegacyCamera',
@@ -141,6 +164,29 @@ export class BroadcastConfigStore {
     )
       throw new Error('broadcast_config_invalid');
     const document = parseBroadcastConfigDocument(value.document);
+    const consumers: Partial<Record<ConsumerKind, ConsumerState>> = {};
+    if (value.consumers !== undefined) {
+      const entries = z.record(z.string(), z.unknown()).parse(value.consumers);
+      for (const [key, raw] of Object.entries(entries)) {
+        if (!['hud', 'music', 'camera', 'program'].includes(key))
+          throw new Error('broadcast_config_invalid');
+        const entry = z
+          .strictObject({
+            applied: z.unknown(),
+            error: z.string().nullable(),
+            desired: z.string().optional(),
+          })
+          .parse(raw);
+        consumers[key as ConsumerKind] = {
+          applied:
+            entry.applied === null
+              ? null
+              : parseBroadcastConfigDocument({ ...document, active: entry.applied }).active,
+          error: entry.error,
+          ...(entry.desired ? { desired: entry.desired } : {}),
+        };
+      }
+    }
     const receipts: Record<string, Receipt> = Object.create(null) as Record<string, Receipt>;
     for (const [id, raw] of Object.entries(value.receipts)) {
       if (!raw || typeof raw !== 'object' || Array.isArray(raw))
@@ -148,12 +194,20 @@ export class BroadcastConfigStore {
       const receipt = raw as Record<string, unknown>;
       if (
         typeof receipt.fingerprint !== 'string' ||
-        Object.keys(receipt).some((key) => !['fingerprint', 'active'].includes(key))
+        Object.keys(receipt).some((key) => !['fingerprint', 'active', 'failed'].includes(key))
       )
         throw new Error('broadcast_config_invalid');
       // Reuse the same domain parser for the persisted receipt's resolved snapshot.
       const checked = parseBroadcastConfigDocument({ ...document, active: receipt.active });
-      receipts[id] = { fingerprint: receipt.fingerprint, active: checked.active };
+      const failed = z
+        .array(z.enum(['hud', 'program', 'music', 'camera']))
+        .optional()
+        .parse(receipt.failed);
+      receipts[id] = {
+        fingerprint: receipt.fingerprint,
+        active: checked.active,
+        ...(failed?.length ? { failed } : {}),
+      };
     }
     const imports = z
       .array(importMappingSchema)
@@ -214,6 +268,7 @@ export class BroadcastConfigStore {
       document,
       receipts,
       imports,
+      consumers,
       ...(builtinsNormalized !== undefined ? { builtinsNormalized } : {}),
       ...(pendingLegacyCamera ? { pendingLegacyCamera } : {}),
       ...(restoredLegacyCamera ? { restoredLegacyCamera } : {}),
@@ -266,9 +321,74 @@ export class BroadcastConfigStore {
   hasReceipt(requestId: string): boolean {
     return Object.hasOwn(this.envelope?.receipts ?? {}, requestId);
   }
+  receiptFailures(requestId: string): ModuleKind[] {
+    return [...(this.envelope?.receipts[requestId]?.failed ?? [])];
+  }
   get snapshot(): BroadcastConfigDocument {
     if (!this.envelope) throw new Error('broadcast_config_unavailable');
     return structuredClone(this.envelope.document);
+  }
+  get consumerStatus() {
+    if (!this.envelope) throw new Error('broadcast_config_unavailable');
+    const active = this.envelope.document.active;
+    return Object.fromEntries(
+      (['hud', 'program', 'music', 'camera'] as const).map((kind) => {
+        const state = this.envelope!.consumers?.[kind];
+        return [
+          kind,
+          {
+            desired: state?.desired ?? active.moduleRevisions[kind],
+            applied: state?.applied?.moduleRevisions[kind] ?? null,
+            error: state?.error ?? null,
+          },
+        ];
+      }),
+    );
+  }
+  appliedSnapshot(kind: ConsumerKind): ActiveBroadcastSnapshot | null {
+    if (!this.envelope) throw new Error('broadcast_config_unavailable');
+    return structuredClone(this.envelope.consumers?.[kind]?.applied ?? null);
+  }
+  get appliedDisplay(): ActiveBroadcastSnapshot {
+    if (!this.envelope) throw new Error('broadcast_config_unavailable');
+    const active = structuredClone(this.envelope.document.active);
+    for (const kind of ['hud', 'program'] as const) {
+      const state = this.envelope.consumers?.[kind];
+      const applied = state?.applied;
+      if (applied) {
+        active.resolved[kind] = structuredClone(applied.resolved[kind]) as never;
+        active.moduleRevisions[kind] = applied.moduleRevisions[kind];
+      } else if (state?.error && kind === 'program') {
+        const fallback = createBuiltinModules().find(
+          (module) => module.id === BUILTIN_MODULE_IDS.pulse,
+        );
+        if (!fallback || fallback.kind !== 'program')
+          throw new Error('broadcast_config_unavailable');
+        active.resolved.program = fallback.value;
+      } else if (state?.error && kind === 'hud') throw new Error('broadcast_config_unavailable');
+    }
+    return active;
+  }
+  async recordConsumer(
+    kind: ConsumerKind,
+    active: ActiveBroadcastSnapshot,
+    error: string | null,
+    reset = false,
+  ) {
+    await this.queue.run(async () => {
+      if (!this.envelope) throw new Error('broadcast_config_unavailable');
+      if (this.envelope.document.active.moduleRevisions[kind] !== active.moduleRevisions[kind])
+        throw new Error('revision_conflict');
+      const next = structuredClone(this.envelope);
+      next.consumers ??= {};
+      const previous = next.consumers[kind];
+      next.consumers[kind] = {
+        applied: error ? (reset ? null : (previous?.applied ?? null)) : active,
+        error,
+        ...(error && previous?.desired ? { desired: previous.desired } : {}),
+      };
+      await this.commit(next);
+    });
   }
   /** Include resources exposed by durable apply receipts as well as the current document. */
   referencedResources(): ResourceRef[] {
@@ -278,6 +398,8 @@ export class BroadcastConfigStore {
     );
     for (const receipt of Object.values(this.envelope.receipts))
       for (const ref of receipt.active.lock.resources) refs.set(canonicalJson(ref), ref);
+    for (const state of Object.values(this.envelope.consumers ?? {}))
+      for (const ref of state.applied?.lock.resources ?? []) refs.set(canonicalJson(ref), ref);
     return structuredClone([...refs.values()]);
   }
   get pendingLegacyCamera(): PendingLegacyCamera | undefined {
@@ -423,7 +545,6 @@ export class BroadcastConfigStore {
         };
       }),
     );
-    if (result.hasHud) await this.options.onDraftChanged?.('hud');
     return { presetId: result.presetId };
   }
   /** Atomically installs drafts and their entry mapping without changing active configuration. */
@@ -560,8 +681,6 @@ export class BroadcastConfigStore {
         return { mapping: structuredClone(result), reused: false };
       }),
     );
-    if (input.modules.some((item) => item.kind === 'hud'))
-      await this.options.onDraftChanged?.('hud');
     return result;
   }
   /** Saves the preset and its edited modules in one draft-only commit. */
@@ -617,8 +736,6 @@ export class BroadcastConfigStore {
         return this.snapshot;
       }),
     );
-    if (input.modules.some((item) => item.value.kind === 'hud'))
-      await this.options.onDraftChanged?.('hud');
     return result;
   }
   async saveModule(value: ModuleRecord, expectedRevision: Revision | null): Promise<ModuleRecord> {
@@ -646,7 +763,6 @@ export class BroadcastConfigStore {
         return structuredClone(saved);
       }),
     );
-    await this.options.onDraftChanged?.(saved.kind);
     return saved;
   }
   async cloneModule(id: string, expectedRevision: Revision, name: string): Promise<ModuleRecord> {
@@ -679,7 +795,6 @@ export class BroadcastConfigStore {
         return structuredClone(copy);
       }),
     );
-    await this.options.onDraftChanged?.(copy.kind);
     return copy;
   }
   async deleteModule(
@@ -687,7 +802,7 @@ export class BroadcastConfigStore {
     expectedRevision: Revision,
     replacement?: { moduleId: string | null; expectedPresetRevisions: Record<string, Revision> },
   ): Promise<void> {
-    const kind = await this.queue.run(() =>
+    await this.queue.run(() =>
       this.options.withReferenceGuard(async () => {
         if (!this.envelope) throw new Error('broadcast_config_unavailable');
         if (isBuiltinModuleId(id)) throw new Error('builtin_immutable');
@@ -740,7 +855,6 @@ export class BroadcastConfigStore {
         return item.kind;
       }),
     );
-    await this.options.onDraftChanged?.(kind);
   }
   async deletePreset(id: string, expectedRevision: Revision): Promise<void> {
     return this.queue.run(() =>
@@ -773,6 +887,8 @@ export class BroadcastConfigStore {
           const receipt = this.envelope.receipts[input.requestId];
           if (receipt) {
             if (receipt.fingerprint !== fingerprint) throw new Error('request_conflict');
+            if (receipt.active.revision !== this.envelope.document.active.revision)
+              throw new Error('revision_conflict');
             const module = this.envelope.document.modules.find(
               (item) => item.id === input.moduleId,
             );
@@ -802,6 +918,11 @@ export class BroadcastConfigStore {
                 throw new Error('broadcast_config_unavailable');
               const previous = structuredClone(this.envelope.document.active);
               const prepared = await this.options.resolveModule(module);
+              if (
+                this.options.canApplyModule &&
+                !this.options.canApplyModule(module.kind, prepared.value)
+              )
+                throw new Error('camera_busy');
               const active = structuredClone(previous);
               const kind = module.kind;
               const keep = new Set<string>();
@@ -870,8 +991,168 @@ export class BroadcastConfigStore {
       }
     });
   }
-  /** Internal facade transaction; the legacy owner validates its edit before submitting it. */
-  async updateFromLegacy<K extends ModuleKind>(input: {
+  /** Commit a music edit through the broadcast configuration owner. */
+  async applyMusicEdit(input: {
+    expectedActiveRevision: Revision;
+    value: PortableMusicConfigV1;
+    lock: ActiveBroadcastSnapshot['lock'];
+  }): Promise<BroadcastConfigDocument> {
+    const document = this.snapshot;
+    const active = document.active;
+    if (active.revision !== input.expectedActiveRevision) throw new Error('revision_conflict');
+    const captured = document.modules.find(
+      (item) => item.id === active.sourceModuleIds?.music && item.kind === 'music',
+    );
+    const usages = captured
+      ? document.presets.filter((preset) =>
+          preset.bindings.some(
+            (binding) => binding.mode === 'use' && binding.moduleId === captured.id,
+          ),
+        ).length
+      : 0;
+    const reusable =
+      captured?.kind === 'music' &&
+      !isBuiltinModuleId(captured.id) &&
+      usages <= 1 &&
+      canonicalJson(captured.value) === canonicalJson(active.resolved.music);
+    const moduleId = reusable ? captured.id : randomUUID();
+    return this.commitEdit({
+      updateDraft(next) {
+        if (next.active.revision !== input.expectedActiveRevision)
+          throw new Error('revision_conflict');
+        const existing = next.modules.find((item) => item.id === moduleId);
+        if (reusable) {
+          if (!existing || existing.kind !== 'music' || existing.revision !== captured.revision)
+            throw new Error('revision_conflict');
+          existing.value = input.value;
+        } else {
+          if (existing) throw new Error('revision_conflict');
+          next.modules.push({
+            id: moduleId,
+            kind: 'music',
+            schemaVersion: 1,
+            revision: randomUUID(),
+            name: '音乐',
+            value: input.value,
+            origin: null,
+          });
+        }
+      },
+      active: { kind: 'music', value: input.value, lock: input.lock, moduleId },
+    });
+  }
+  /** Commit camera drafts and an optional active selection as one store transaction. */
+  async applyCameraEdit(input: {
+    expectedActiveRevision: Revision;
+    drafts: Array<{ id: string; value: CameraModuleV2; expectedRevision: Revision | null }>;
+    active?: {
+      value: CameraModuleV2 | null;
+      lock: ActiveBroadcastSnapshot['lock'];
+      moduleId: string | null;
+    };
+  }): Promise<BroadcastConfigDocument> {
+    return this.commitEdit({
+      updateDraft(document) {
+        if (document.active.revision !== input.expectedActiveRevision)
+          throw new Error('revision_conflict');
+        for (const draft of input.drafts) {
+          const module = document.modules.find((item) => item.id === draft.id);
+          if (
+            (module?.revision ?? null) !== draft.expectedRevision ||
+            (module && module.kind !== 'camera')
+          )
+            throw new Error('revision_conflict');
+          if (module?.kind === 'camera') {
+            module.value = draft.value;
+            module.name = draft.value.name;
+          } else {
+            document.modules.push({
+              id: draft.id,
+              kind: 'camera',
+              schemaVersion: 2,
+              revision: draft.id,
+              name: draft.value.name,
+              value: draft.value,
+              origin: null,
+            });
+          }
+        }
+      },
+      ...(input.active ? { active: { kind: 'camera' as const, ...input.active } } : {}),
+    });
+  }
+  async applyHudEdit(input: {
+    candidate: HudConfigDocument;
+    previous: HudConfigDocument;
+    activeChanged: boolean;
+    oldHud: Extract<ActiveBroadcastSnapshot['resolved']['hud'], { renderer: 'native' }>;
+    nextHud: Extract<ActiveBroadcastSnapshot['resolved']['hud'], { renderer: 'native' }>;
+    lock: ActiveBroadcastSnapshot['lock'];
+    moduleId?: string | undefined;
+  }): Promise<BroadcastConfigDocument> {
+    const { candidate, previous, activeChanged, oldHud, nextHud, lock } = input;
+    return this.commitEdit({
+      updateDraft(document) {
+        const currentDocument = hudDocumentFromBroadcast(document);
+        if (
+          canonicalJson({ ...currentDocument, activePreset: previous.activePreset }) !==
+            canonicalJson(previous) ||
+          (activeChanged &&
+            canonicalJson(currentDocument.activePreset) !== canonicalJson(previous.activePreset))
+        )
+          throw new Error('revision_conflict');
+        const layouts = [...getBuiltinLayouts(), ...candidate.customLayouts];
+        const themes = [...getBuiltinThemes(), ...candidate.customThemes];
+        for (const preset of [...getBuiltinPresets(), ...candidate.customPresets]) {
+          const layout = layouts.find((item) => item.id === preset.layoutId);
+          const theme = themes.find((item) => item.id === preset.themeId);
+          if (!layout || !theme) throw new Error('hud_resource_missing');
+          const old = document.modules.find(
+            (item) =>
+              item.kind === 'hud' && 'preset' in item.value && item.value.preset.id === preset.id,
+          ) as ModuleRecord<'hud'> | undefined;
+          if (old && isBuiltinModuleId(old.id)) continue;
+          const template = old?.value ?? oldHud;
+          if (!('preset' in template) && !('overlays' in template))
+            throw new Error('hud_renderer_unsupported');
+          const value: HudModule = {
+            renderer: { kind: 'native', id: 'mizar.hud', apiVersion: 1 },
+            preset: structuredClone(preset),
+            layout: structuredClone(layout),
+            theme: structuredClone(theme),
+            overlays: structuredClone(template.overlays),
+            accent: structuredClone(template.accent),
+          };
+          if (old) {
+            old.name = preset.name;
+            old.value = value;
+          } else
+            document.modules.push({
+              id: randomUUID(),
+              revision: randomUUID(),
+              kind: 'hud',
+              schemaVersion: 1,
+              name: preset.name,
+              value,
+              origin: null,
+            });
+        }
+        document.unboundHudResources = {
+          layouts: candidate.customLayouts.filter(
+            (item) => !candidate.customPresets.some((preset) => preset.layoutId === item.id),
+          ),
+          themes: candidate.customThemes.filter(
+            (item) => !candidate.customPresets.some((preset) => preset.themeId === item.id),
+          ),
+        };
+      },
+      ...(activeChanged
+        ? { active: { kind: 'hud' as const, moduleId: input.moduleId, value: nextHud, lock } }
+        : {}),
+    });
+  }
+  /** Apply a validated consumer edit within the shared configuration transaction. */
+  private async commitEdit<K extends ModuleKind>(input: {
     updateDraft(document: BroadcastConfigDocument): void;
     active?: {
       moduleId?: string | null | undefined;
@@ -977,25 +1258,150 @@ export class BroadcastConfigStore {
           const receipt = this.envelope.receipts[request.requestId];
           if (receipt) {
             if (receipt.fingerprint !== fingerprint) throw new Error('request_conflict');
-            return {
-              active: structuredClone(receipt.active),
-              previous: structuredClone(this.envelope.document.previousActive ?? receipt.active),
-            };
+            if (receipt.active.revision !== this.envelope.document.active.revision)
+              throw new Error('revision_conflict');
+            if (!receipt.failed?.length)
+              return {
+                active: structuredClone(receipt.active),
+                previous: structuredClone(this.envelope.document.previousActive ?? receipt.active),
+                failed: [] as ModuleKind[],
+              };
           }
           return this.options.withApplyGuard((canCommit) =>
             this.options.withReferenceGuard(async () => {
               if (!this.envelope) throw new Error('broadcast_config_unavailable');
               const previous = this.envelope.document.active;
-              const active = await preparePreset(
-                this.snapshot,
-                request,
-                this.options.resolver,
-                randomUUID,
-              );
+              const failed: ModuleKind[] = [];
+              const failedDesired: Partial<Record<ModuleKind, string>> = {};
+              const failedReasons: Partial<Record<ModuleKind, string>> = {};
+              const partialResolver: PresetResolver = {
+                resolve: async (modules) => {
+                  if (!this.options.resolveModule) return this.options.resolver.resolve(modules);
+                  const resolved = structuredClone(previous.resolved);
+                  const resources = new Map(
+                    previous.lock.resources.map((ref) => [canonicalJson(ref), ref]),
+                  );
+                  let cameraTools = previous.lock.tools;
+                  for (const kind of ['hud', 'program', 'music', 'camera'] as const) {
+                    const module = modules.get(kind);
+                    if (!module) {
+                      if (kind === 'hud' || kind === 'program') throw new Error('module_missing');
+                      if (this.options.canApplyModule && !this.options.canApplyModule(kind, null)) {
+                        failed.push(kind);
+                        failedDesired[kind] = 'off';
+                        failedReasons[kind] = 'camera_busy';
+                        continue;
+                      }
+                      resolved[kind] = null;
+                      if (kind === 'camera') cameraTools = [];
+                      continue;
+                    }
+                    try {
+                      const result = await this.options.resolveModule(module);
+                      if (
+                        this.options.canApplyModule &&
+                        !this.options.canApplyModule(kind, result.value)
+                      )
+                        throw new Error('camera_busy');
+                      (
+                        resolved as Record<
+                          ModuleKind,
+                          ActiveBroadcastSnapshot['resolved'][ModuleKind]
+                        >
+                      )[kind] = result.value;
+                      for (const ref of result.lock.resources)
+                        resources.set(canonicalJson(ref), ref);
+                      if (kind === 'camera') cameraTools = result.lock.tools;
+                    } catch (error) {
+                      failed.push(kind);
+                      failedDesired[kind] = module.revision;
+                      failedReasons[kind] =
+                        error instanceof Error && error.message === 'camera_busy'
+                          ? 'camera_busy'
+                          : 'dependency_unavailable';
+                    }
+                  }
+                  const used = new Set<string>();
+                  const add = (ref: ResourceRef) => used.add(canonicalJson(ref));
+                  if (resolved.hud.renderer === 'web-hud') {
+                    add(resolved.hud.config.renderer.resource);
+                    for (const asset of Object.values(resolved.hud.config.panelAssets))
+                      add(asset.resource);
+                  }
+                  for (const scene of Object.values(resolved.program.scenes))
+                    if (scene.kind === 'declarative') add(scene.resource);
+                  for (const asset of Object.values(resolved.program.assets)) add(asset.resource);
+                  if (resolved.music)
+                    for (const group of MUSIC_GROUPS)
+                      for (const track of resolved.music.groups[group].tracks)
+                        add(track.asset.resource);
+                  if (resolved.camera)
+                    for (const map of resolved.camera.maps)
+                      if (map.openingSound) add(map.openingSound.asset.resource);
+                  return {
+                    resolved,
+                    lock: {
+                      resources: [...resources.entries()]
+                        .filter(([key]) => used.has(key))
+                        .map(([, ref]) => ref),
+                      tools: cameraTools,
+                    },
+                  };
+                },
+              };
+              const document = this.snapshot;
+              const preset = document.presets.find((item) => item.id === request.presetId);
+              if (!preset) throw new Error('preset_missing');
+              if (!receipt && previous.revision !== request.expectedActiveRevision)
+                throw new Error('revision_conflict');
+              const modules = boundModules(preset, document.modules);
+              if (preset.revision !== request.expectedRevision)
+                throw new Error('revision_conflict');
+              for (const [kind, module] of modules)
+                if (module && request.expectedModuleRevisions[kind] !== module.revision)
+                  throw new Error('revision_conflict');
+              const prepared = await partialResolver.resolve(modules);
+              const moduleRevisions = { ...previous.moduleRevisions };
+              for (const kind of ['hud', 'program', 'music', 'camera'] as const)
+                if (!sameEffectiveModule(kind, previous.resolved[kind], prepared.resolved[kind]))
+                  moduleRevisions[kind] = randomUUID();
+              const active: ActiveBroadcastSnapshot = {
+                schemaVersion: 1,
+                revision: randomUUID(),
+                sourcePreset: { id: preset.id, revision: preset.revision },
+                adjusted: false,
+                moduleRevisions,
+                sourceModuleIds: Object.fromEntries(
+                  [...modules].map(([kind, module]) => [kind, module?.id ?? null]),
+                ),
+                sourceModuleRevisions: Object.fromEntries(
+                  [...modules].map(([kind, module]) => [kind, module?.revision ?? null]),
+                ),
+                resolved: prepared.resolved,
+                lock: prepared.lock,
+              };
+              if (failed.length) active.adjusted = true;
+              for (const kind of failed) {
+                active.sourceModuleIds![kind] = previous.sourceModuleIds?.[kind] ?? null;
+                active.sourceModuleRevisions![kind] =
+                  previous.sourceModuleRevisions?.[kind] ?? null;
+              }
               const next = structuredClone(this.envelope);
               next.document.previousActive = structuredClone(previous);
               next.document.active = active;
-              next.receipts[request.requestId] = { fingerprint, active };
+              next.receipts[request.requestId] = {
+                fingerprint,
+                active,
+                ...(failed.length ? { failed } : {}),
+              };
+              next.consumers ??= {};
+              for (const kind of failed) {
+                next.consumers[kind] = {
+                  applied: next.consumers[kind]?.applied ?? null,
+                  error: failedReasons[kind] ?? 'dependency_unavailable',
+                  ...(failedDesired[kind] ? { desired: failedDesired[kind] } : {}),
+                };
+              }
               await this.options.assertReferenceCommitAllowed(
                 this.envelope.document,
                 next.document,
@@ -1005,15 +1411,25 @@ export class BroadcastConfigStore {
               } catch (error) {
                 const disk = await this.read().catch(() => null);
                 const committed = disk?.receipts[request.requestId];
-                if (!disk || !committed || committed.fingerprint !== fingerprint) throw error;
+                if (
+                  !disk ||
+                  !committed ||
+                  committed.fingerprint !== fingerprint ||
+                  committed.active.revision !== active.revision
+                )
+                  throw error;
                 this.envelope = disk;
               }
-              return { active: structuredClone(active), previous: structuredClone(previous) };
+              return {
+                active: structuredClone(active),
+                previous: structuredClone(previous),
+                failed,
+              };
             }),
           );
         });
         // Owner queues may themselves be waiting for the coordinator; wait only after releasing it.
-        await this.options.onApplied?.(result.active, result.previous);
+        await this.options.onApplied?.(result.active, result.previous, undefined, result.failed);
         return result.active;
       } finally {
         this.applying = false;

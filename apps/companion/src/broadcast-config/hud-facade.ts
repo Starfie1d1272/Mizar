@@ -1,10 +1,6 @@
-import { randomUUID } from 'node:crypto';
 import {
   BUILTIN_PRESET_IDS,
   canonicalJson,
-  getBuiltinLayouts,
-  getBuiltinPresets,
-  getBuiltinThemes,
   parseHudConfigDocument,
   resolveActiveHudPreset,
   type HudConfigDocument,
@@ -13,15 +9,9 @@ import {
   type HudTheme,
 } from '@mizar/hud-config';
 import { assertSupportedHudModule, isSupportedHudPauseVisual } from '@mizar/broadcast-config';
-import type {
-  ActiveBroadcastSnapshot,
-  BroadcastConfigDocument,
-  HudModule,
-  ModuleRecord,
-} from '@mizar/broadcast-config';
+import type { ActiveBroadcastSnapshot, BroadcastConfigDocument } from '@mizar/broadcast-config';
 import type { HudConfigPersistence } from '../hud-config/store.js';
 import type { BroadcastConfigStore } from './store.js';
-import { isBuiltinModuleId } from './builtin-modules.js';
 
 /** Reconstruct the existing HUD editor view from the coordinator's native modules. */
 export function hudDocumentFromBroadcast(document: BroadcastConfigDocument): HudConfigDocument {
@@ -68,6 +58,18 @@ export function createHudConfigPersistence(
 ): HudConfigPersistence {
   return {
     initialize: () => Promise.resolve(hudDocumentFromBroadcast(store.snapshot)),
+    readDraft: (current) => {
+      const applied = store.appliedSnapshot('hud');
+      const document = store.snapshot;
+      if (applied) document.active = applied;
+      const result = hudDocumentFromBroadcast(document);
+      return parseHudConfigDocument({ ...result, activePreset: current.activePreset });
+    },
+    readApplied: () => {
+      const active = store.appliedSnapshot('hud');
+      if (!active) throw new Error('hud_persistence_unavailable');
+      return Promise.resolve(hudDocumentFromBroadcast({ ...store.snapshot, active }));
+    },
     async commit(candidate, previous, command) {
       const current = store.snapshot;
       const activeChanged =
@@ -96,59 +98,16 @@ export function createHudConfigPersistence(
           throw new Error('capability_unsupported');
       }
       const lock = activeChanged ? await lockFor(nextHud, current.active) : current.active.lock;
-      await store.updateFromLegacy({
-        updateDraft(document) {
-          if (canonicalJson(hudDocumentFromBroadcast(document)) !== canonicalJson(previous))
-            throw new Error('revision_conflict');
-          const layouts = [...getBuiltinLayouts(), ...candidate.customLayouts];
-          const themes = [...getBuiltinThemes(), ...candidate.customThemes];
-          for (const preset of [...getBuiltinPresets(), ...candidate.customPresets]) {
-            const layout = layouts.find((item) => item.id === preset.layoutId);
-            const theme = themes.find((item) => item.id === preset.themeId);
-            if (!layout || !theme) throw new Error('hud_resource_missing');
-            const old = document.modules.find(
-              (item) =>
-                item.kind === 'hud' && 'preset' in item.value && item.value.preset.id === preset.id,
-            ) as ModuleRecord<'hud'> | undefined;
-            if (old && isBuiltinModuleId(old.id)) continue;
-            const template = old?.value ?? oldHud;
-            if (!('preset' in template) && !('overlays' in template))
-              throw new Error('hud_renderer_unsupported');
-            const value: HudModule = {
-              renderer: { kind: 'native', id: 'mizar.hud', apiVersion: 1 },
-              preset: structuredClone(preset),
-              layout: structuredClone(layout),
-              theme: structuredClone(theme),
-              overlays: structuredClone(template.overlays),
-              accent: structuredClone(template.accent),
-            };
-            if (old) {
-              old.name = preset.name;
-              old.value = value;
-            } else
-              document.modules.push({
-                id: randomUUID(),
-                revision: randomUUID(),
-                kind: 'hud',
-                schemaVersion: 1,
-                name: preset.name,
-                value,
-                origin: null,
-              });
-          }
-          document.unboundHudResources = {
-            layouts: candidate.customLayouts.filter(
-              (item) => !candidate.customPresets.some((preset) => preset.layoutId === item.id),
-            ),
-            themes: candidate.customThemes.filter(
-              (item) => !candidate.customPresets.some((preset) => preset.themeId === item.id),
-            ),
-          };
-        },
-        ...(activeChanged
-          ? { active: { kind: 'hud' as const, moduleId: target?.id, value: nextHud, lock } }
-          : {}),
+      const committed = await store.applyHudEdit({
+        candidate,
+        previous,
+        activeChanged,
+        oldHud,
+        nextHud,
+        lock,
+        moduleId: target?.id,
       });
+      if (activeChanged) return () => store.recordConsumer('hud', committed.active, null);
     },
   };
 }

@@ -31,10 +31,12 @@ interface CameraPersistenceState {
   catalog: CameraCatalog;
   automaticEnabled: boolean;
   revision?: string | undefined;
+  confirmApplied?: (() => Promise<void>) | undefined;
 }
 export interface CameraConfigPersistence {
   initialize(catalog: CameraCatalog, automaticEnabled: boolean): Promise<CameraPersistenceState>;
   read(): Promise<CameraPersistenceState>;
+  readApplied?(): Promise<CameraPersistenceState>;
   commit(
     catalog: CameraCatalog,
     automaticEnabled: boolean,
@@ -136,31 +138,35 @@ export class OrchestrationStore {
   async loadWithPersistence(persistence: CameraConfigPersistence): Promise<void> {
     if (this.ready || this.persistence) throw new Error('camera_storage_unavailable');
     await ensureDirectory(this.directory);
+    this.persistence = persistence;
     const state = await persistence.read();
     this.usePersisted(state);
-    this.persistence = persistence;
     this.ready = true;
   }
   async adoptPersistence(persistence: CameraConfigPersistence): Promise<void> {
     const result = this.queue.then(async () => {
       if (!this.ready || this.persistence) throw new Error('camera_storage_unavailable');
+      this.persistence = persistence;
       const value = await persistence.initialize(
         structuredClone(this.catalog()),
         this.automaticEnabled,
       );
       this.usePersisted(value);
-      this.persistence = persistence;
     });
     this.queue = result.catch(() => undefined);
     return result;
   }
-  async synchronizeFromPersistence(): Promise<void> {
+  async synchronizeFromPersistence(canApply: () => boolean = () => true): Promise<void> {
+    this.pendingWrites++;
     const result = this.queue.then(async () => {
-      if (!this.ready || !this.persistence) throw new Error('camera_storage_unavailable');
+      if (!this.persistence) throw new Error('camera_storage_unavailable');
       const before = JSON.stringify({ ...this.preset, name: '' });
       const automatic = this.automaticEnabled;
       const revision = this.persistedRevision;
-      this.usePersisted(await this.persistence.read());
+      const current = await this.persistence.read();
+      if (!canApply()) throw new Error('revision_conflict');
+      this.usePersisted(current);
+      this.ready = true;
       if (
         this.persistedRevision !== undefined
           ? revision !== this.persistedRevision
@@ -170,7 +176,14 @@ export class OrchestrationStore {
         this.revision++;
     });
     this.queue = result.catch(() => undefined);
-    return result;
+    return result.finally(() => {
+      this.pendingWrites--;
+    });
+  }
+  async restoreAppliedFromPersistence(): Promise<void> {
+    if (!this.persistence?.readApplied) throw new Error('camera_storage_unavailable');
+    this.usePersisted(await this.persistence.readApplied());
+    this.ready = true;
   }
   private async persistCatalog(
     next: CameraCatalog,
@@ -192,7 +205,9 @@ export class OrchestrationStore {
       const next = catalogSchema.parse(change(this.catalog()));
       const previousRevision = this.persistedRevision;
       const previousPreset = JSON.stringify({ ...this.preset, name: '' });
-      this.usePersisted(await this.persistCatalog(next, this.automaticEnabled));
+      const committed = await this.persistCatalog(next, this.automaticEnabled);
+      this.usePersisted(committed);
+      await committed.confirmApplied?.();
       if (activate) {
         if (
           !this.persistence ||
@@ -266,7 +281,9 @@ export class OrchestrationStore {
       const next = { ...this.catalog(), activePresetId: id, preset: item.preset };
       const previousRevision = this.persistedRevision;
       const previousPreset = JSON.stringify({ ...this.preset, name: '' });
-      this.usePersisted(await this.persistCatalog(next, this.automaticEnabled));
+      const committed = await this.persistCatalog(next, this.automaticEnabled);
+      this.usePersisted(committed);
+      await committed.confirmApplied?.();
       if (
         !this.persistence ||
         (this.persistedRevision !== undefined
@@ -294,7 +311,9 @@ export class OrchestrationStore {
       if (this.persistence) {
         const previousRevision = this.persistedRevision;
         const previousAutomatic = this.automaticEnabled;
-        this.usePersisted(await this.persistCatalog(this.catalog(), automaticEnabled));
+        const committed = await this.persistCatalog(this.catalog(), automaticEnabled);
+        this.usePersisted(committed);
+        await committed.confirmApplied?.();
         if (
           this.persistedRevision !== undefined
             ? previousRevision !== this.persistedRevision

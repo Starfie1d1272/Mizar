@@ -2004,8 +2004,9 @@ export class ObsAdapter {
     );
   }
 
-  restoreVideo(id?: string): Promise<void> {
+  restoreVideo(id?: string, valid: () => boolean = () => true): Promise<void> {
     return this.configurationMutation(async () => {
+      if (!valid()) throw new ObsVideoError('preparation_changed', 'OBS 视频恢复已取消。');
       if (!this.videoTransaction || !(await this.videoTransaction.pending())) return;
       const lease = await this.captureWarmupGuard();
       await this.withObs(
@@ -2014,7 +2015,7 @@ export class ObsAdapter {
             {
               ...obs,
               call: (type, data) => {
-                if (/^(Create|Set|Remove)/.test(type) && !lease())
+                if (/^(Create|Set|Remove)/.test(type) && (!valid() || !lease()))
                   throw new ObsPreparationWriteBlocked(
                     new ObsVideoError(
                       'preparation_output_changed',

@@ -1159,12 +1159,15 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       observerSettings.endProduction();
     },
     beforeFinish: () => obsAdapter?.settleAutomatic(),
-    afterSafeScene: () => obsAdapter?.restoreVideo(),
+    afterSafeScene: (valid) => obsAdapter?.restoreVideo(undefined, valid),
     finishTrial: async () => {
       await demoTest?.finish();
     },
     release: async () => {
       await options.rivalhubConnection?.release();
+    },
+    handoffRelease: async () => {
+      await options.rivalhubConnection?.handoffForExit();
     },
   });
   const localMatchExit =
@@ -1408,6 +1411,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
               throw error;
             },
           );
+        if (broadcastConfig && !(await missing(broadcastConfig.path))) return;
         const fresh =
           options.builtinMusicPack &&
           broadcastConfig &&
@@ -1553,12 +1557,25 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             },
           },
           withApplyGuard: (operation) => production.configureBroadcast(operation),
+          canApplyCamera: () => {
+            const state = cameraDirector?.get();
+            return (
+              !state ||
+              (state.current === null &&
+                state.request !== 'submitted' &&
+                state.preparation !== 'preparing')
+            );
+          },
           diagnostic: (error) =>
             app.log.error({ stage: 'broadcast_owner_sync', err: error }, '播出配置同步失败'),
         })
       : undefined;
     if (broadcastRuntime) {
-      getExportBroadcastDocument = () => broadcastRuntime.store.snapshot;
+      getExportBroadcastDocument = () => {
+        const document = broadcastRuntime.store.snapshot;
+        document.active = broadcastRuntime.store.appliedDisplay;
+        return document;
+      };
       waitForBroadcast = () => broadcastRuntime.waitForApply();
       isExportBroadcastReady = () => broadcastRuntime.ready;
       getBroadcastReferences = () => {
@@ -1640,14 +1657,21 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           app.log.error({ stage: 'mulnx_load', err: error }, 'MulNX 加载失败');
         }
       }
-      await cameraStore
-        .load()
-        .catch((error) =>
-          app.log.error(
-            { stage: 'camera_load', err: error, result: 'failure' },
-            '运镜预设加载失败',
-          ),
-        );
+      const broadcastStoreExists =
+        broadcastConfig &&
+        (await lstat(broadcastConfig.path).then(
+          () => true,
+          (error: NodeJS.ErrnoException) => error.code !== 'ENOENT',
+        ));
+      if (!broadcastStoreExists)
+        await cameraStore
+          .load()
+          .catch((error) =>
+            app.log.error(
+              { stage: 'camera_load', err: error, result: 'failure' },
+              '运镜预设加载失败',
+            ),
+          );
       if (musicStore.ready && !musicStore.failure && cameraStore.ready && hudConfigStore.isLoaded) {
         const hasCameraSources =
           cameraStore.preset.maps.length > 0 ||

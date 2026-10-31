@@ -81,7 +81,12 @@ export function registerBroadcastConfigRoutes(
   app.get('/local/v1/broadcast-display-config', (_request, reply) => {
     if (!isReady()) return reply.code(503).send({ error: 'broadcast_config_unavailable' });
     if (!displayAvailable()) reply.header('x-mizar-program-status', 'dependency_missing');
-    const display = displayConfig(store.snapshot.active);
+    let display;
+    try {
+      display = displayConfig(store.appliedDisplay);
+    } catch {
+      return reply.code(503).send({ error: 'broadcast_display_unavailable' });
+    }
     const fallback = fallbackHudPauseVisual(display.hud);
     if (fallback.reason) reply.header('x-mizar-hud-fallback', fallback.reason);
     return reply.header('cache-control', 'no-store').send({ ...display, hud: fallback.hud });
@@ -107,6 +112,7 @@ export function registerBroadcastConfigRoutes(
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
     if (!isReady()) return reply.code(503).send({ error: 'broadcast_config_unavailable' });
     return reply.header('cache-control', 'no-store').send({
+      consumers: store.consumerStatus,
       ...(builtinMusicAvailable ? { builtinMusicAvailable: builtinMusicAvailable() } : {}),
       modules: await Promise.all(
         store.snapshot.modules.map(async (module) => ({
@@ -168,6 +174,7 @@ export function registerBroadcastConfigRoutes(
         'revision_conflict',
         'request_conflict',
         'production_busy',
+        'camera_busy',
         'builtin_immutable',
         'module_active',
         'module_referenced',
@@ -236,9 +243,11 @@ export function registerBroadcastConfigRoutes(
               message:
                 code === 'capability_unsupported'
                   ? '该配置包含尚不支持的场景槽位或素材类型，请修改后重试。'
-                  : status === 409
-                    ? '配置正在使用或已变化，请先替换引用后重试。'
-                    : '配置暂时不可用。',
+                  : code === 'camera_busy'
+                    ? '当前镜头操作尚未结束，请稍后重试。'
+                    : status === 409
+                      ? '配置正在使用或已变化，请先替换引用后重试。'
+                      : '配置暂时不可用。',
               requestId: request.id,
             },
           });
@@ -288,7 +297,11 @@ export function registerBroadcastConfigRoutes(
         try {
           if (action === 'clone') return await store.clone(clone.parse(request.body));
           if (action === 'preview') return await store.preview(apply.parse(request.body));
-          if (action === 'apply') return await store.apply(apply.parse(request.body));
+          if (action === 'apply') {
+            const input = apply.parse(request.body);
+            const active = await store.apply(input);
+            return { ...active, failedModules: store.receiptFailures(input.requestId) };
+          }
           const input = save.parse(request.body);
           return await store.save({
             preset: parseBroadcastPreset(input.preset),
