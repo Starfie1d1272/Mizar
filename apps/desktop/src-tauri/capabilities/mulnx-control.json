@@ -1,9 +1,0 @@
-{
-  "identifier": "mulnx-control",
-  "description": "Only the preparation window may update or explicitly stop MulNX.",
-  "windows": ["main"],
-  "remote": {
-    "urls": ["http://127.0.0.1:3000/*"]
-  },
-  "permissions": ["allow-mulnx-control"]
-}
