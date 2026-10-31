@@ -1165,6 +1165,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     release: async () => {
       await options.rivalhubConnection?.release();
     },
+    handoffRelease: async () => {
+      await options.rivalhubConnection?.handoffForExit();
+    },
   });
   const localMatchExit =
     matchContextController === null

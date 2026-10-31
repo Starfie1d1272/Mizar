@@ -535,6 +535,7 @@ export class RivalHubConnection {
   private readonly liveInFlight = new Map<Source, Set<Promise<void>>>();
   private readonly sourceSettlements = new Map<string, Promise<boolean>>();
   private readonly cleanupAttempts = new Map<string, { count: number; nextCycleAt: number }>();
+  private readonly exitHandoffs = new Map<string, ExactSource>();
   private readonly sourceCommands = new SerialCommitQueue();
   private readonly sourceState: RivalHubSourceState;
   private cleanupTimer: ReturnType<typeof setInterval> | undefined;
@@ -1052,7 +1053,55 @@ export class RivalHubConnection {
     }
   }
 
+  /** Freeze this exact source now; persist its handoff without waiting for delivery. */
+  handoffForExit(): Promise<void> {
+    this.bindingGeneration++;
+    const source = this.source;
+    if (source) {
+      source.draining = true;
+      source.paused = true;
+      const identity = this.exactSource(source);
+      // settle() enters the output owner's fence synchronously; false remains pending.
+      void this.settle(identity);
+      this.exitHandoffs.set(JSON.stringify(identity), identity);
+    }
+    const handoff = this.sourceCommands.run(async () => {
+      await this.persistExitHandoffs();
+      await this.updateCleanupSummary();
+    });
+    void handoff
+      .then(
+        () => this.sourceCommands.run(() => this.cleanup(false)),
+        () => undefined,
+      )
+      .catch((error: unknown) => this.onDiagnostic('source_cleanup', error));
+    return handoff;
+  }
+
+  private async persistExitHandoffs(): Promise<void> {
+    for (const [key, identity] of this.exitHandoffs) {
+      const state = await this.sourceState.snapshot();
+      const record = state.records.find((item) => JSON.stringify(item.identity) === key);
+      if (record) await this.sourceState.handoff(identity, 'finish');
+      else if (
+        !state.watermarks.some(
+          (item) =>
+            item.baseUrl === identity.baseUrl &&
+            item.competitionId === identity.competitionId &&
+            item.installationId === identity.installationId &&
+            item.matchId === identity.matchId &&
+            item.producerInstanceId === identity.producerInstanceId &&
+            item.liveSessionId === identity.liveSessionId &&
+            item.authorityRevision >= identity.authorityRevision,
+        )
+      )
+        throw new Error('数据源交接未确认。');
+      this.exitHandoffs.delete(key);
+    }
+  }
+
   private async cleanup(force: boolean, deadline = Date.now() + 7000): Promise<void> {
+    await this.persistExitHandoffs();
     try {
       await this.reconcileIntent(deadline);
     } catch (error) {

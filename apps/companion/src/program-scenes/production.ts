@@ -13,6 +13,7 @@ export function registerProductionRoutes(
     hasContext: () => boolean;
     scenes: ProgramSceneController;
     release: () => Promise<void>;
+    handoffRelease?: () => Promise<void>;
     beforeEnter?: () => void;
     waitForBroadcast?: () => Promise<void>;
     onEnter?: () => void;
@@ -33,9 +34,35 @@ export function registerProductionRoutes(
   let preparationGeneration = 0;
   let sessionGeneration = 0;
   let lastEnteredId: string | null = null;
+  let releaseState: 'idle' | 'pending' | 'recorded' | 'confirmed' | 'unconfirmed' = 'idle';
+  let releaseGeneration = 0;
+  let handoffStarted = false;
+  let obsExitState: 'idle' | 'confirmed' | 'unconfirmed' = 'idle';
+  function startHandoff() {
+    if (!options.handoffRelease || handoffStarted) return;
+    handoffStarted = true;
+    releaseState = 'pending';
+    const generation = ++releaseGeneration;
+    try {
+      void options.handoffRelease().then(
+        () => {
+          if (generation === releaseGeneration) releaseState = 'recorded';
+        },
+        (error: unknown) => {
+          if (generation === releaseGeneration) releaseState = 'unconfirmed';
+          app.log.warn({ stage: 'production_release', err: error }, 'Source release deferred');
+        },
+      );
+    } catch (error) {
+      releaseState = 'unconfirmed';
+      app.log.warn({ stage: 'production_release', err: error }, 'Source release deferred');
+    }
+  }
   const view = () => ({
     mode,
     revision,
+    releaseState,
+    obsExitState,
     canEnter: !trialPending && !shuttingDown && !updatePending && options.hasContext(),
   });
   app.get('/local/v1/production', (_request, reply) =>
@@ -67,6 +94,7 @@ export function registerProductionRoutes(
       options.beforeExit?.();
     }
     if (body?.expectedRevision === revision && body.action === 'begin-exit') {
+      startHandoff();
       shuttingDown = true;
       return { code: 200, value: view() };
     }
@@ -96,50 +124,67 @@ export function registerProductionRoutes(
       if (body?.action === 'enter') {
         if (!options.hasContext()) return { code: 409, value: { message: '请先选择或创建比赛。' } };
         options.beforeEnter?.();
-        if (mode === 'preparation') options.onEnter?.();
+        if (mode === 'preparation') {
+          handoffStarted = false;
+          options.onEnter?.();
+        }
         mode = 'live';
         if (entering) lastEnteredId = entryId;
       } else if (body?.action === 'hide') {
         if (mode === 'live') mode = 'hidden';
       } else {
-        await options.beforeFinish?.();
-        if (!controlValid())
-          return { code: 409, value: { message: 'OBS 播出状态已变化，请核对后重试。' } };
-        if (trialPending) {
-          stage = 'production_safe_scene';
-          await options.finishTrial?.();
-        }
-        // Both normal exit paths use this same safe-scene/release transaction.
-        // An idle Host can quit without requiring an OBS connection.
-        if (mode !== 'preparation') {
-          stage = 'production_safe_scene';
-          const result = await options.scenes.selectWaitingForExit(
-            options.scenes.get().revision,
-            controlValid,
-          );
-          if (!result.ok) return { code: 409, value: { message: result.message } };
-        }
-        stage = 'production_video_restore';
+        if (!shutdown) startHandoff();
+        // Local cleanup must continue if an OBS operation cannot be confirmed.
+        // Shutdown keeps its synchronous contract because the service is about to stop.
+        let safeScene = true;
         try {
-          await options.afterSafeScene?.();
+          await options.beforeFinish?.();
+          if (!controlValid()) throw new Error('OBS 播出状态已变化。');
+          if (trialPending) {
+            stage = 'production_safe_scene';
+            await options.finishTrial?.();
+          }
+          if (mode !== 'preparation') {
+            stage = 'production_safe_scene';
+            const result = await options.scenes.selectWaitingForExit(
+              options.scenes.get().revision,
+              controlValid,
+            );
+            if (!result.ok) throw new Error(result.message);
+          }
         } catch (error) {
-          // The safe-scene/absence proof has already passed. Video restoration keeps
-          // its own journal for a later retry and must not prevent releasing control.
-          app.log.warn(
-            {
-              event: 'production',
-              stage,
-              diagnostic: { operationId, error: diagnosticValue(error) },
-            },
-            'OBS video restoration deferred',
-          );
+          if (shutdown || trialPending) throw error;
+          safeScene = false;
+          app.log.warn({ stage, err: error }, 'OBS exit state unconfirmed');
+        }
+        obsExitState = safeScene ? 'confirmed' : 'unconfirmed';
+        if (safeScene) {
+          stage = 'production_video_restore';
+          try {
+            await options.afterSafeScene?.();
+          } catch (error) {
+            app.log.warn(
+              {
+                event: 'production',
+                stage,
+                diagnostic: { operationId, error: diagnosticValue(error) },
+              },
+              'OBS video restoration deferred',
+            );
+          }
         }
         stage = 'production_release';
-        if (!controlValid())
-          return { code: 409, value: { message: 'OBS 播出状态已变化，请核对后重试。' } };
-        await options.release();
-        if (!controlValid())
-          return { code: 409, value: { message: 'OBS 播出状态已变化，请核对后重试。' } };
+        if (shutdown) {
+          if (!controlValid())
+            return { code: 409, value: { message: 'OBS 播出状态已变化，请核对后重试。' } };
+          await options.release();
+          if (!controlValid())
+            return { code: 409, value: { message: 'OBS 播出状态已变化，请核对后重试。' } };
+          releaseState = 'confirmed';
+        } else if (!options.handoffRelease) {
+          await options.release();
+          releaseState = 'confirmed';
+        }
         mode = 'preparation';
         options.onFinish?.();
       }
