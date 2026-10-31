@@ -1600,6 +1600,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           production.automaticAllowed() &&
           !waitingObserverMap &&
           projectionCoordinator.getCurrent().operator.matchContext.origin !== 'fixture',
+        mapConfirmed: !waitingObserverMap,
         demoAudition: demoTest.get().active ? demoTest.canUseCamera('audition') : undefined,
       }),
       cameraEvidence,
