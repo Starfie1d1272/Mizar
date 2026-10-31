@@ -1691,6 +1691,8 @@ export class MusicDirector {
     this.invalidate();
     // Wait only for the bounded active RPC, then stop owned sources without changing manual hold.
     while (this.inFlight) await new Promise((resolve) => setTimeout(resolve, 10));
+    let localWriteFailure: unknown;
+    let localWriteFailed = false;
     if (!this.isExternalHold() && Object.values(this.store.state.sources).some(Boolean))
       await this.provider
         .session(async (obs) => {
@@ -1705,22 +1707,30 @@ export class MusicDirector {
                 inputUuid: this.store.state.sources[layer]!,
                 mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP',
               });
-              await this.store.update((s) => {
-                const saved = s[layer];
-                if (saved)
-                  s[layer] = {
-                    ...saved,
-                    suspended: true,
-                    finished: saved.finished || layer === 'stinger',
-                    cursorMs: saved.suspended
-                      ? saved.cursorMs
-                      : Math.max(0, Number(media.mediaCursor) || 0),
-                  };
-              });
+              try {
+                await this.store.update((s) => {
+                  const saved = s[layer];
+                  if (saved)
+                    s[layer] = {
+                      ...saved,
+                      suspended: true,
+                      finished: saved.finished || layer === 'stinger',
+                      cursorMs: saved.suspended
+                        ? saved.cursorMs
+                        : Math.max(0, Number(media.mediaCursor) || 0),
+                    };
+                });
+              } catch (error) {
+                localWriteFailed = true;
+                localWriteFailure = error;
+                throw error;
+              }
             }
           }
         })
         .catch(() => undefined);
     await this.provider.close();
+    if (localWriteFailed)
+      throw new Error('music_local_close_unconfirmed', { cause: localWriteFailure });
   }
 }
