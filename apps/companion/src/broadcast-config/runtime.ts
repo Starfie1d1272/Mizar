@@ -204,9 +204,6 @@ export function createBroadcastRuntime(input: {
       if (failure) throw new Error('broadcast_owner_sync_failed', { cause: failure });
     },
   });
-  function hudDocument() {
-    return hudDocumentFromBroadcast(store.snapshot);
-  }
   async function lockForEdit<K extends 'hud' | 'music' | 'camera'>(
     kind: K,
     value: ActiveBroadcastSnapshot['resolved'][K],
