@@ -1,4 +1,6 @@
 import { lstat, readFile } from 'node:fs/promises';
+import { readFileSync, statSync } from 'node:fs';
+import { replaceDurableJson } from './match-context/durable-json.js';
 import { CameraConfigResolver } from './broadcast-config/camera.js';
 import { MusicPackResources } from './broadcast-config/music-pack-resources.js';
 import {
@@ -1118,7 +1120,36 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         : reply.header('cache-control', 'no-store').send(envelope);
     });
   }
+  const obsExitPath = options.obsConfigPath
+    ? `${options.obsConfigPath}.exit-status.json`
+    : undefined;
+  let previousObsExitUnconfirmed = false;
+  if (obsExitPath) {
+    try {
+      previousObsExitUnconfirmed = true;
+      if (statSync(obsExitPath).size <= 4096) {
+        const saved: unknown = JSON.parse(readFileSync(obsExitPath, 'utf8'));
+        previousObsExitUnconfirmed =
+          typeof saved !== 'object' ||
+          saved === null ||
+          (saved as { state?: unknown }).state !== 'confirmed';
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') previousObsExitUnconfirmed = false;
+    }
+  }
+  let obsExitWrites = Promise.resolve();
   const production = registerProductionRoutes(app, {
+    previousObsExitUnconfirmed,
+    recordObsExit: obsExitPath
+      ? (state) => {
+          const pending = obsExitWrites.then(async () => {
+            await replaceDurableJson(obsExitPath, { state });
+          });
+          obsExitWrites = pending.catch(() => {});
+          return pending;
+        }
+      : undefined,
     originPolicy: localWebTransport.getOriginPolicy(),
     hasContext: () =>
       matchContextController?.getActiveBinding() !== undefined &&
@@ -1178,13 +1209,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           loopback: localWebTransport.getOriginPolicy().mode === 'loopback',
           controller: matchContextController,
           runtime: programRuntime,
-          isPreparationWaiting: () =>
-            !production.isTrialPending() &&
-            !matchContextController.isTemporary() &&
-            production.get().mode === 'preparation' &&
-            sceneController.get().active === 'waiting' &&
-            sceneController.get().preparing === undefined,
-          productionRevision: () => production.get().revision,
+          eligibleSession: () =>
+            !production.isTrialPending() && !matchContextController.isTemporary(),
+          isPreparation: () => production.get().mode === 'preparation',
+          productionSession: production.sessionId,
         });
   if (localTournamentStore !== null && matchContextController !== null) {
     registerLocalTournamentRoutes(app, {
