@@ -1967,6 +1967,7 @@ export class RivalHubConnection {
         idempotencyKey: event.idempotencyKey,
         eventKind: event.kind,
         originalObservedAt: event.observedAt,
+        authorityRevision: source?.authorityRevision,
         ...fields,
       });
     const source =
