@@ -146,6 +146,14 @@ export class MusicPreview {
       this.request = null;
     }
   }
+  confirmStopped(uuid: string): void {
+    if (!this.stopping || this.uuid !== uuid) return;
+    this.event('stopped', 'obs_stopped');
+    this.uuid = null;
+    this.request = null;
+    this.stopping = false;
+    this.status = { ...this.status!, phase: 'stopped', message: '试听已停止。' };
+  }
   unavailable() {
     if (
       !this.request ||
