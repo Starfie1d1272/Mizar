@@ -1058,6 +1058,7 @@ export class RivalHubConnection {
     this.bindingGeneration++;
     const source = this.source;
     if (source) {
+      this.stopSync(source.matchId);
       source.draining = true;
       source.paused = true;
       const identity = this.exactSource(source);
@@ -1068,6 +1069,7 @@ export class RivalHubConnection {
     const handoff = this.sourceCommands.run(async () => {
       await this.persistExitHandoffs();
       await this.updateCleanupSummary();
+      if (this.cleanupSummary.claimIntent) throw new Error('数据源认领结果待核对。');
     });
     void handoff
       .then(

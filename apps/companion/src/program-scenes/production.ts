@@ -34,34 +34,34 @@ export function registerProductionRoutes(
   let preparationGeneration = 0;
   let sessionGeneration = 0;
   let lastEnteredId: string | null = null;
-  let releaseState: 'idle' | 'pending' | 'recorded' | 'confirmed' | 'unconfirmed' = 'idle';
+  let releaseHandoffState: 'idle' | 'pending' | 'recorded' | 'confirmed' | 'unconfirmed' = 'idle';
   let releaseGeneration = 0;
   let handoffStarted = false;
   let obsExitState: 'idle' | 'confirmed' | 'unconfirmed' = 'idle';
   function startHandoff() {
     if (!options.handoffRelease || handoffStarted) return;
     handoffStarted = true;
-    releaseState = 'pending';
+    releaseHandoffState = 'pending';
     const generation = ++releaseGeneration;
     try {
       void options.handoffRelease().then(
         () => {
-          if (generation === releaseGeneration) releaseState = 'recorded';
+          if (generation === releaseGeneration) releaseHandoffState = 'recorded';
         },
         (error: unknown) => {
-          if (generation === releaseGeneration) releaseState = 'unconfirmed';
+          if (generation === releaseGeneration) releaseHandoffState = 'unconfirmed';
           app.log.warn({ stage: 'production_release', err: error }, 'Source release deferred');
         },
       );
     } catch (error) {
-      releaseState = 'unconfirmed';
+      releaseHandoffState = 'unconfirmed';
       app.log.warn({ stage: 'production_release', err: error }, 'Source release deferred');
     }
   }
   const view = () => ({
     mode,
     revision,
-    releaseState,
+    releaseHandoffState,
     obsExitState,
     canEnter: !trialPending && !shuttingDown && !updatePending && options.hasContext(),
   });
@@ -180,10 +180,10 @@ export function registerProductionRoutes(
           await options.release();
           if (!controlValid())
             return { code: 409, value: { message: 'OBS 播出状态已变化，请核对后重试。' } };
-          releaseState = 'confirmed';
+          releaseHandoffState = 'confirmed';
         } else if (!options.handoffRelease) {
           await options.release();
-          releaseState = 'confirmed';
+          releaseHandoffState = 'confirmed';
         }
         mode = 'preparation';
         options.onFinish?.();
