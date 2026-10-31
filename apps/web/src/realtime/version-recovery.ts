@@ -76,10 +76,10 @@ export async function recoverChannelVersion(
   let page: string;
   try {
     const response = await fetchNoCache(window.location.pathname + window.location.search);
-    if (!response.ok) return 'retry';
+    if (!response.ok) return 'incompatible';
     page = await response.text();
   } catch {
-    return 'retry';
+    return 'incompatible';
   }
   try {
     const html = new DOMParser().parseFromString(page, 'text/html');
