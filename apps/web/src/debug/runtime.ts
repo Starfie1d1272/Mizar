@@ -116,6 +116,10 @@ export function stringValue(value: unknown, key: string): string | undefined {
 }
 
 export function explainRuntimeDiagnostic(code: string): string | undefined {
+  if (code === 'output-outbox_boundary_overflow')
+    return '发送队列的连续性记录已满，本次运行的相关同步已暂停；请保留诊断并核对接收端。';
+  if (code === 'output-outbox_boundary_capture_failed')
+    return '连续性边界未能持久保存，本次运行的同步已暂停；请检查磁盘并保留诊断。';
   if (code === 'output-outbox_recovered')
     return '发送队列读取异常，已核对同一提交并恢复完整副本，原文件已保留。发送仍受身份与时效检查保护；请核对接收端结果，可导出诊断包反馈。';
   if (code === 'output-outbox_preserved_without_records')

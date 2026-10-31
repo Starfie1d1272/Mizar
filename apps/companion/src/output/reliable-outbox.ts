@@ -96,6 +96,11 @@ export interface ReliableOutboxRecord {
   readonly event: ReliableEventV1;
   readonly lineupSteam64?: readonly string[];
   readonly rejection?: ReliableRejection;
+  readonly dispositionReason?: 'boundary_unconfirmed_result';
+  readonly boundaryQualification?: {
+    readonly planFingerprint: string;
+    readonly authorityFingerprint: string;
+  };
   readonly receiverOutcome?: 'needs_attention';
   readonly recoveryBoundaryKey?: string;
   readonly recoveryState?:
@@ -136,9 +141,32 @@ export interface DeliveryContinuity {
   readonly savedAt: string;
 }
 
+export interface BoundaryScope {
+  readonly matchId?: string;
+  readonly producerInstanceId: string;
+  readonly liveSessionId?: string;
+  readonly ownerFingerprint?: string;
+  readonly overflow?: true;
+  readonly authorityFingerprint?: string;
+  readonly runtimeSeq?: number;
+  readonly programSourceGeneration?: number;
+  readonly mapEpoch?: number;
+}
+
+export interface BoundaryIntent {
+  readonly event: ReliableEventV1;
+  readonly planFingerprint: string;
+  readonly authorityFingerprint: string;
+  readonly expired?: true;
+}
+
 interface OutboxFile {
   readonly version: typeof RELIABLE_OUTBOX_VERSION;
   readonly records: readonly ReliableOutboxRecord[];
+  readonly boundaryIntents?: readonly BoundaryIntent[];
+  readonly boundaryGap?: true;
+  readonly boundaryGaps?: readonly BoundaryScope[];
+  readonly boundaryOverflowOwners?: readonly string[];
   readonly continuity?: DeliveryContinuity;
   readonly commit?: { readonly id: string; readonly sha256: string };
   readonly unconfirmedRecovery?: true;
@@ -165,6 +193,11 @@ function parseRecord(input: unknown): ReliableOutboxRecord {
     !Number.isFinite(Date.parse(item.updatedAt))
   )
     throw new Error('outbox_record_invalid');
+  if (
+    item.dispositionReason !== undefined &&
+    (item.dispositionReason !== 'boundary_unconfirmed_result' || item.status !== 'superseded')
+  )
+    throw new Error('outbox_disposition_invalid');
   if (
     item.receiverOutcome !== undefined &&
     (item.receiverOutcome !== 'needs_attention' || item.status !== 'accepted')
@@ -195,11 +228,38 @@ function parseRecord(input: unknown): ReliableOutboxRecord {
       !['generation_fence', 'epoch_fence'].includes(rejection?.reason ?? ''))
   )
     throw new Error('outbox_recovery_boundary_invalid');
+  let boundaryQualification: ReliableOutboxRecord['boundaryQualification'];
+  if (item.boundaryQualification !== undefined) {
+    if (
+      !item.boundaryQualification ||
+      typeof item.boundaryQualification !== 'object' ||
+      Array.isArray(item.boundaryQualification)
+    )
+      throw new Error('boundary_qualification_invalid');
+    const q = item.boundaryQualification as Record<string, unknown>;
+    if (
+      typeof q.planFingerprint !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(q.planFingerprint) ||
+      typeof q.authorityFingerprint !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(q.authorityFingerprint)
+    )
+      throw new Error('boundary_qualification_invalid');
+    boundaryQualification = {
+      planFingerprint: q.planFingerprint,
+      authorityFingerprint: q.authorityFingerprint,
+    };
+  }
   const event = parseReliableEventV1(item.event);
+  if (boundaryQualification && (!isContinuityBoundary(event) || event.evidence.contextFresh))
+    throw new Error('boundary_qualification_invalid');
   if (item.lineupSteam64 !== undefined && event.kind !== 'map_started')
     throw new Error('outbox_lineup_invalid');
   return {
     event,
+    ...(boundaryQualification ? { boundaryQualification } : {}),
+    ...(item.dispositionReason === 'boundary_unconfirmed_result'
+      ? { dispositionReason: 'boundary_unconfirmed_result' as const }
+      : {}),
     ...(rejection === undefined ? {} : { rejection }),
     ...(typeof item.recoveryBoundaryKey === 'string'
       ? { recoveryBoundaryKey: item.recoveryBoundaryKey }
@@ -233,6 +293,10 @@ function payloadDigest(value: Record<string, unknown> | OutboxFile): string {
     .update(
       JSON.stringify({
         records: value.records,
+        boundaryIntents: value.boundaryIntents,
+        boundaryGap: value.boundaryGap,
+        boundaryGaps: value.boundaryGaps,
+        boundaryOverflowOwners: value.boundaryOverflowOwners,
         continuity: value.continuity,
         unconfirmedRecovery: value.unconfirmedRecovery,
       }),
@@ -264,18 +328,113 @@ function parseOutbox(bytes: Buffer): OutboxFile {
     ![RELIABLE_OUTBOX_VERSION, 'mizar.reliable-outbox.v1'].includes(value.version as string) ||
     !Array.isArray(value.records) ||
     value.records.length > RELIABLE_OUTBOX_MAX_RECORDS ||
-    (value.unconfirmedRecovery !== undefined && value.unconfirmedRecovery !== true)
+    (value.unconfirmedRecovery !== undefined && value.unconfirmedRecovery !== true) ||
+    (value.boundaryGap !== undefined && value.boundaryGap !== true) ||
+    (value.boundaryOverflowOwners !== undefined &&
+      (!Array.isArray(value.boundaryOverflowOwners) ||
+        value.boundaryOverflowOwners.length > RELIABLE_OUTBOX_MAX_RECORDS ||
+        value.boundaryOverflowOwners.some(
+          (owner: unknown) => typeof owner !== 'string' || !/^[a-f0-9]{64}$/.test(owner),
+        ))) ||
+    (value.boundaryGaps !== undefined &&
+      (!Array.isArray(value.boundaryGaps) ||
+        value.boundaryGaps.length > RELIABLE_OUTBOX_MAX_RECORDS)) ||
+    (value.boundaryIntents !== undefined &&
+      (!Array.isArray(value.boundaryIntents) ||
+        value.boundaryIntents.length > RELIABLE_OUTBOX_MAX_PENDING))
   )
     throw new Error('outbox_invalid');
   if (
     value.version === 'mizar.reliable-outbox.v1' &&
-    (value.commit !== undefined || value.unconfirmedRecovery !== undefined)
+    (value.commit !== undefined ||
+      value.unconfirmedRecovery !== undefined ||
+      value.boundaryIntents !== undefined ||
+      value.boundaryGap !== undefined ||
+      value.boundaryGaps !== undefined ||
+      value.boundaryOverflowOwners !== undefined)
   )
     throw new Error('outbox_legacy_metadata_invalid');
   const commit = value.version === RELIABLE_OUTBOX_VERSION ? parseCommit(value.commit) : undefined;
   if (commit !== undefined && commit.sha256 !== payloadDigest(value))
     throw new Error('outbox_checksum_mismatch');
   const records = value.records.map(parseRecord);
+  const boundaryGaps = (value.boundaryGaps as unknown[] | undefined)?.map((raw): BoundaryScope => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw))
+      throw new Error('boundary_gap_invalid');
+    const item = raw as Record<string, unknown>;
+    if (
+      (item.matchId !== undefined &&
+        (typeof item.matchId !== 'string' || !item.matchId || item.matchId.length > 256)) ||
+      typeof item.producerInstanceId !== 'string' ||
+      !item.producerInstanceId ||
+      item.producerInstanceId.length > 256 ||
+      (item.liveSessionId !== undefined &&
+        (typeof item.liveSessionId !== 'string' ||
+          !item.liveSessionId ||
+          item.liveSessionId.length > 256)) ||
+      (item.overflow !== undefined && item.overflow !== true) ||
+      (item.ownerFingerprint !== undefined &&
+        (typeof item.ownerFingerprint !== 'string' ||
+          !/^[a-f0-9]{64}$/.test(item.ownerFingerprint))) ||
+      (item.authorityFingerprint !== undefined &&
+        (typeof item.authorityFingerprint !== 'string' ||
+          !/^[a-f0-9]{64}$/.test(item.authorityFingerprint))) ||
+      ['runtimeSeq', 'programSourceGeneration', 'mapEpoch'].some(
+        (key) =>
+          item[key] !== undefined &&
+          (typeof item[key] !== 'number' ||
+            !Number.isSafeInteger(item[key]) ||
+            (item[key] as number) < 0),
+      )
+    )
+      throw new Error('boundary_gap_invalid');
+    return {
+      ...(typeof item.matchId === 'string' ? { matchId: item.matchId } : {}),
+      producerInstanceId: item.producerInstanceId,
+      ...(typeof item.liveSessionId === 'string' ? { liveSessionId: item.liveSessionId } : {}),
+      ...(typeof item.ownerFingerprint === 'string'
+        ? { ownerFingerprint: item.ownerFingerprint }
+        : {}),
+      ...(item.overflow === true ? { overflow: true as const } : {}),
+      ...(typeof item.runtimeSeq === 'number' ? { runtimeSeq: item.runtimeSeq } : {}),
+      ...(typeof item.programSourceGeneration === 'number'
+        ? { programSourceGeneration: item.programSourceGeneration }
+        : {}),
+      ...(typeof item.mapEpoch === 'number' ? { mapEpoch: item.mapEpoch } : {}),
+      ...(typeof item.authorityFingerprint === 'string'
+        ? { authorityFingerprint: item.authorityFingerprint }
+        : {}),
+    };
+  });
+  const boundaryIntents = (value.boundaryIntents as unknown[] | undefined)?.map(
+    (raw): BoundaryIntent => {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw))
+        throw new Error('boundary_intent_invalid');
+      const item = raw as Record<string, unknown>;
+      if (
+        (item.expired !== undefined && item.expired !== true) ||
+        typeof item.planFingerprint !== 'string' ||
+        !/^[a-f0-9]{64}$/.test(item.planFingerprint) ||
+        typeof item.authorityFingerprint !== 'string' ||
+        !/^[a-f0-9]{64}$/.test(item.authorityFingerprint)
+      )
+        throw new Error('boundary_intent_invalid');
+      const event = parseReliableEventV1(item.event);
+      if (
+        !isContinuityBoundary(event) ||
+        event.evidence.contextFresh ||
+        !event.cursor.liveSessionId
+      )
+        throw new Error('boundary_intent_invalid');
+      return {
+        event,
+        planFingerprint: item.planFingerprint,
+        authorityFingerprint: item.authorityFingerprint,
+        ...(item.expired === true ? { expired: true as const } : {}),
+      };
+    },
+  );
+
   let continuity: DeliveryContinuity | undefined;
   if (value.continuity !== undefined) {
     const checkpoint = value.continuity as DeliveryContinuity;
@@ -285,7 +444,7 @@ function parseOutbox(bytes: Buffer): OutboxFile {
       Object.keys(checkpoint).sort().join(',') !== 'contextRevision,cursor,mapName,matchId,savedAt'
     )
       throw new Error('outbox_continuity_invalid');
-    const reference = records.at(-1)?.event;
+    const reference = records.at(-1)?.event ?? boundaryIntents?.at(-1)?.event;
     if (reference === undefined || !Number.isFinite(Date.parse(checkpoint.savedAt)))
       throw new Error('outbox_continuity_invalid');
     parseReliableEventV1({
@@ -301,6 +460,12 @@ function parseOutbox(bytes: Buffer): OutboxFile {
   return {
     version: RELIABLE_OUTBOX_VERSION,
     records,
+    ...(boundaryIntents === undefined ? {} : { boundaryIntents }),
+    ...(value.boundaryGap === true ? { boundaryGap: true } : {}),
+    ...(boundaryGaps === undefined ? {} : { boundaryGaps }),
+    ...(value.boundaryOverflowOwners === undefined
+      ? {}
+      : { boundaryOverflowOwners: value.boundaryOverflowOwners as string[] }),
     ...(continuity === undefined ? {} : { continuity }),
     ...(commit === undefined ? {} : { commit }),
     ...(value.unconfirmedRecovery === true ? { unconfirmedRecovery: true } : {}),
@@ -354,6 +519,11 @@ export function outboxLocalError(error: unknown, depth = 0): unknown {
 
 export class ReliableOutbox {
   private records: readonly ReliableOutboxRecord[] = [];
+  private boundaryIntents: readonly BoundaryIntent[] = [];
+  private boundaryGap: true | undefined;
+  private boundaryGaps: readonly BoundaryScope[] = [];
+  private boundaryOverflowOwners: readonly string[] = [];
+  private boundaryCaptureFailed = false;
   private readonly queue = new SerialCommitQueue();
   private continuity: DeliveryContinuity | undefined;
   private requestedScope: string | undefined;
@@ -396,6 +566,10 @@ export class ReliableOutbox {
       }
       if (file !== undefined) {
         this.records = file.records;
+        this.boundaryIntents = file.boundaryIntents ?? [];
+        this.boundaryGap = file.boundaryGap;
+        this.boundaryGaps = file.boundaryGaps ?? [];
+        this.boundaryOverflowOwners = file.boundaryOverflowOwners ?? [];
         this.continuity = file.continuity;
         this.unconfirmedRecovery = file.unconfirmedRecovery;
         if (file.unconfirmedRecovery) {
@@ -469,6 +643,10 @@ export class ReliableOutbox {
     }
     if (file === undefined) throw new Error('outbox_recovery_missing');
     this.records = file.records;
+    this.boundaryIntents = file.boundaryIntents ?? [];
+    this.boundaryGap = file.boundaryGap;
+    this.boundaryGaps = file.boundaryGaps ?? [];
+    this.boundaryOverflowOwners = file.boundaryOverflowOwners ?? [];
     this.continuity = file.continuity;
     this.unconfirmedRecovery = file.unconfirmedRecovery;
     this.recovery = recoveryReport(file);
@@ -577,23 +755,267 @@ export class ReliableOutbox {
     });
   }
 
+  getBoundaryIntents(scope?: BoundaryScope): readonly BoundaryIntent[] {
+    return scope
+      ? this.boundaryIntents.filter((intent) =>
+          this.matchesBoundaryScope(intent.event, intent.authorityFingerprint, scope),
+        )
+      : this.boundaryIntents;
+  }
+
+  private matchesBoundaryScope(
+    event: ReliableEventV1,
+    authority: string | undefined,
+    scope: BoundaryScope,
+  ): boolean {
+    return (
+      (!scope.matchId || event.matchId === scope.matchId) &&
+      event.cursor.producerInstanceId === scope.producerInstanceId &&
+      (!scope.liveSessionId || event.cursor.liveSessionId === scope.liveSessionId) &&
+      (scope.runtimeSeq === undefined || event.cursor.runtimeSeq <= scope.runtimeSeq) &&
+      (scope.programSourceGeneration === undefined ||
+        event.cursor.programSourceGeneration <= scope.programSourceGeneration) &&
+      (scope.mapEpoch === undefined || event.cursor.mapEpoch <= scope.mapEpoch) &&
+      (!authority || !scope.authorityFingerprint || authority === scope.authorityFingerprint)
+    );
+  }
+
+  hasBoundaryGap(scope?: BoundaryScope): boolean {
+    return (
+      this.boundaryCaptureFailed ||
+      this.boundaryGap === true ||
+      (scope
+        ? scope.ownerFingerprint
+          ? this.boundaryOverflowOwners.includes(scope.ownerFingerprint)
+          : this.boundaryOverflowOwners.length > 0
+        : this.boundaryOverflowOwners.length > 0) ||
+      (scope
+        ? this.boundaryGaps.some(
+            (gap) =>
+              (!gap.matchId || !scope.matchId || gap.matchId === scope.matchId) &&
+              gap.producerInstanceId === scope.producerInstanceId &&
+              (!gap.liveSessionId ||
+                !scope.liveSessionId ||
+                gap.liveSessionId === scope.liveSessionId) &&
+              (!gap.ownerFingerprint ||
+                !scope.ownerFingerprint ||
+                gap.ownerFingerprint === scope.ownerFingerprint) &&
+              (gap.runtimeSeq === undefined ||
+                scope.runtimeSeq === undefined ||
+                gap.runtimeSeq <= scope.runtimeSeq) &&
+              (gap.programSourceGeneration === undefined ||
+                scope.programSourceGeneration === undefined ||
+                gap.programSourceGeneration <= scope.programSourceGeneration) &&
+              (gap.mapEpoch === undefined ||
+                scope.mapEpoch === undefined ||
+                gap.mapEpoch <= scope.mapEpoch) &&
+              (!gap.authorityFingerprint ||
+                !scope.authorityFingerprint ||
+                gap.authorityFingerprint === scope.authorityFingerprint),
+          )
+        : this.boundaryGaps.length > 0)
+    );
+  }
+
+  hasBoundaryOverflow(scope: BoundaryScope | undefined): boolean {
+    if (!scope)
+      return (
+        this.boundaryOverflowOwners.length > 0 || this.boundaryGaps.some((gap) => gap.overflow)
+      );
+    return Boolean(
+      (scope.ownerFingerprint && this.boundaryOverflowOwners.includes(scope.ownerFingerprint)) ||
+      this.boundaryGaps.some(
+        (gap) =>
+          gap.overflow &&
+          gap.producerInstanceId === scope.producerInstanceId &&
+          (!gap.ownerFingerprint ||
+            !scope.ownerFingerprint ||
+            gap.ownerFingerprint === scope.ownerFingerprint) &&
+          (!gap.matchId || !scope.matchId || gap.matchId === scope.matchId) &&
+          (!gap.liveSessionId || !scope.liveSessionId || gap.liveSessionId === scope.liveSessionId),
+      ),
+    );
+  }
+
+  /** Capture every boundary from one runtime mutation in the same durable commit as its cursor. */
+  captureBoundaries(
+    events: readonly ReliableEventV1[],
+    intents: readonly BoundaryIntent[],
+    continuity: DeliveryContinuity | undefined,
+    missing: boolean,
+    now = new Date(),
+    scope?: BoundaryScope,
+  ): Promise<void> {
+    return this.queue.run(async () => {
+      try {
+        if (this.boundaryCaptureFailed) throw new Error('boundary_capture_blocked');
+        const at = now.toISOString();
+        const added = events.map((event) =>
+          parseRecord({ event, status: 'pending', attempts: 0, nextAttemptAt: at, updatedAt: at }),
+        );
+        if (added.some((record) => !isContinuityBoundary(record.event)))
+          throw new Error('boundary_capture_invalid');
+        const allIntents = [...this.boundaryIntents, ...intents];
+        const overflow =
+          allIntents.length > RELIABLE_OUTBOX_MAX_PENDING ||
+          this.records.filter((r) => r.status === 'pending').length +
+            added.length +
+            allIntents.length >
+            RELIABLE_OUTBOX_MAX_PENDING;
+        const boundaries = intents.map((intent) => intent.event);
+        const previous = this.records.map((record): ReliableOutboxRecord =>
+          record.status === 'pending' &&
+          ['map_ended', 'map_player_snapshot', 'series_ended'].includes(record.event.kind) &&
+          boundaries.some((boundary) => dependsOnBoundary(record.event, boundary))
+            ? {
+                ...record,
+                status: 'superseded',
+                dispositionReason: 'boundary_unconfirmed_result',
+                updatedAt: at,
+              }
+            : record,
+        );
+        const records = this.trim([...previous, ...(overflow ? [] : added)]);
+        const gap = missing || overflow || records.length > RELIABLE_OUTBOX_MAX_RECORDS;
+        // Retain the old checkpoint if the boundary cannot be recorded.
+        const gaps =
+          gap && scope && this.boundaryGaps.length < RELIABLE_OUTBOX_MAX_RECORDS
+            ? [
+                ...this.boundaryGaps,
+                ...(overflow || records.length > RELIABLE_OUTBOX_MAX_RECORDS
+                  ? [{ ...scope, overflow: true as const }]
+                  : [scope]),
+              ]
+            : this.boundaryGaps;
+        let overflowOwners = this.boundaryOverflowOwners;
+        if (gap && scope && gaps === this.boundaryGaps) {
+          if (
+            !scope.ownerFingerprint ||
+            (overflowOwners.length >= RELIABLE_OUTBOX_MAX_RECORDS &&
+              !overflowOwners.includes(scope.ownerFingerprint))
+          )
+            throw new Error('boundary_gap_capacity_exhausted');
+          if (!overflowOwners.includes(scope.ownerFingerprint))
+            overflowOwners = [...overflowOwners, scope.ownerFingerprint];
+        }
+        if (gap && !scope) throw new Error('boundary_gap_scope_unavailable');
+        const frozen = gap || this.hasBoundaryGap(scope);
+        await this.commit(
+          overflow || records.length > RELIABLE_OUTBOX_MAX_RECORDS ? this.records : records,
+          frozen ? this.continuity : continuity,
+          overflow ? this.boundaryIntents : allIntents,
+          this.boundaryGap,
+          gaps,
+          overflowOwners,
+        );
+      } catch (error) {
+        this.boundaryCaptureFailed = true;
+        throw error;
+      }
+    });
+  }
+
+  expireBoundaryIntents(now = new Date()): Promise<void> {
+    return this.queue.run(async () => {
+      const intents = this.boundaryIntents.map((intent) =>
+        !intent.expired &&
+        now.getTime() - Date.parse(intent.event.observedAt) >= RELIABLE_OUTBOX_RETENTION_MS
+          ? { ...intent, expired: true as const }
+          : intent,
+      );
+      if (intents.some((intent, index) => intent !== this.boundaryIntents[index]))
+        await this.commit(this.records, this.continuity, intents);
+    });
+  }
+
+  materializeBoundary(
+    intent: BoundaryIntent,
+    event: ReliableEventV1,
+    now = new Date(),
+  ): Promise<boolean> {
+    return this.queue.run(async () => {
+      if (
+        this.boundaryCaptureFailed ||
+        this.boundaryGap ||
+        intent.expired ||
+        !this.boundaryIntents.includes(intent)
+      )
+        return false;
+      if (now.getTime() - Date.parse(intent.event.observedAt) >= RELIABLE_OUTBOX_RETENTION_MS) {
+        return false;
+      }
+      const valid = parseReliableEventV1(event);
+      const original = intent.event;
+      if (
+        !isContinuityBoundary(valid) ||
+        valid.kind !== original.kind ||
+        JSON.stringify(valid.cursor) !== JSON.stringify(original.cursor) ||
+        JSON.stringify(valid.payload) !== JSON.stringify(original.payload) ||
+        JSON.stringify(valid.evidence) !== JSON.stringify(original.evidence) ||
+        valid.observedAt !== original.observedAt ||
+        valid.mapName !== original.mapName ||
+        valid.matchId !== original.matchId ||
+        valid.competitionId !== original.competitionId ||
+        valid.entryAId !== original.entryAId ||
+        valid.entryBId !== original.entryBId ||
+        valid.mapId !== original.mapId
+      )
+        throw new Error('boundary_materialization_invalid');
+      if (this.records.some((record) => record.event.idempotencyKey === valid.idempotencyKey))
+        throw new Error('boundary_duplicate');
+      const at = now.toISOString();
+      const next = parseRecord({
+        event: valid,
+        boundaryQualification: {
+          planFingerprint: intent.planFingerprint,
+          authorityFingerprint: intent.authorityFingerprint,
+        },
+        status: 'pending',
+        attempts: 0,
+        nextAttemptAt: at,
+        updatedAt: at,
+      });
+      const ordered = [...this.records];
+      const position = ordered.findIndex(
+        (item) => item.status === 'pending' && dependsOnBoundary(item.event, valid),
+      );
+      ordered.splice(position < 0 ? ordered.length : position, 0, next);
+      const records = this.trim(ordered);
+      if (records.length > RELIABLE_OUTBOX_MAX_RECORDS) throw new Error('reliable_outbox_full');
+      await this.commit(
+        records,
+        this.continuity,
+        this.boundaryIntents.filter((item) => item !== intent),
+      );
+      return true;
+    });
+  }
+
   getContinuity(): DeliveryContinuity | undefined {
     return this.continuity;
   }
 
-  updateContinuity(checkpoint: DeliveryContinuity): Promise<void> {
+  updateContinuity(checkpoint: DeliveryContinuity, scope?: BoundaryScope): Promise<void> {
     const { cursor } = checkpoint;
-    const scope = JSON.stringify([
+    const requested = JSON.stringify([
       checkpoint.matchId,
       checkpoint.contextRevision,
+      cursor.producerInstanceId,
       cursor.liveSessionId,
       cursor.programSourceGeneration,
       cursor.mapEpoch,
+      scope?.authorityFingerprint,
     ]);
-    if (scope === this.requestedScope) return Promise.resolve();
-    this.requestedScope = scope;
     return this.queue.run(async () => {
-      if (this.records.length > 0) await this.commit(this.records, checkpoint);
+      if (requested === this.requestedScope) return;
+      if (
+        this.records.length > 0 &&
+        !this.hasBoundaryGap(scope) &&
+        !this.getBoundaryIntents(scope).length
+      ) {
+        await this.commit(this.records, checkpoint);
+        this.requestedScope = requested;
+      }
     });
   }
 
@@ -603,21 +1025,35 @@ export class ReliableOutbox {
     continuity?: DeliveryContinuity,
     lineupSteam64?: readonly string[],
     recoveryKey?: string,
+    scope?: BoundaryScope,
   ): Promise<boolean> {
     return this.queue.run(async () => {
       const valid = parseReliableEventV1(event);
       if (this.records.some((record) => record.event.idempotencyKey === valid.idempotencyKey))
         return false;
       if (
-        this.records.filter((record) => record.status === 'pending').length >=
+        this.records.filter((record) => record.status === 'pending').length +
+          this.boundaryIntents.length >=
         RELIABLE_OUTBOX_MAX_PENDING
       )
         throw new Error('reliable_outbox_full');
       const at = now.toISOString();
+      const unsafeResult =
+        ['map_ended', 'map_player_snapshot', 'series_ended'].includes(valid.kind) &&
+        (this.hasBoundaryGap(scope) ||
+          this.getBoundaryIntents(scope).some((intent) => dependsOnBoundary(valid, intent.event)) ||
+          this.records.some(
+            (record) =>
+              isContinuityBoundary(record.event) &&
+              (['rejected', 'expired', 'superseded'].includes(record.status) ||
+                record.receiverOutcome === 'needs_attention') &&
+              dependsOnBoundary(valid, record.event),
+          ));
       const next = parseRecord({
         event: valid,
         ...(lineupSteam64 === undefined ? {} : { lineupSteam64 }),
-        status: 'pending',
+        ...(unsafeResult ? { dispositionReason: 'boundary_unconfirmed_result' } : {}),
+        status: unsafeResult ? 'superseded' : 'pending',
         attempts: 0,
         nextAttemptAt: at,
         updatedAt: at,
@@ -642,13 +1078,15 @@ export class ReliableOutbox {
       if (records.length > RELIABLE_OUTBOX_MAX_RECORDS) throw new Error('reliable_outbox_full');
       await this.commit(
         records,
-        continuity ?? {
-          matchId: valid.matchId,
-          contextRevision: valid.contextRevision,
-          cursor: valid.cursor,
-          mapName: valid.mapName,
-          savedAt: at,
-        },
+        this.hasBoundaryGap(scope) || this.getBoundaryIntents(scope).length
+          ? this.continuity
+          : (continuity ?? {
+              matchId: valid.matchId,
+              contextRevision: valid.contextRevision,
+              cursor: valid.cursor,
+              mapName: valid.mapName,
+              savedAt: at,
+            }),
       );
       return true;
     });
@@ -661,6 +1099,7 @@ export class ReliableOutbox {
     readonly now?: Date;
   }): Promise<readonly string[]> {
     return this.queue.run(async () => {
+      if (this.boundaryCaptureFailed) throw new Error('boundary_capture_blocked');
       const now = input.now ?? new Date();
       let changed = false;
       const invalidatedStarts: string[] = [];
@@ -906,10 +1345,19 @@ export class ReliableOutbox {
   private async commit(
     records: readonly ReliableOutboxRecord[],
     continuity = this.continuity,
+    boundaryIntents = this.boundaryIntents,
+    boundaryGap = this.boundaryGap,
+    boundaryGaps = this.boundaryGaps,
+    boundaryOverflowOwners = this.boundaryOverflowOwners,
   ): Promise<void> {
+    if (this.boundaryCaptureFailed) throw new Error('boundary_capture_blocked');
     const file: OutboxFile = sealOutbox({
       version: RELIABLE_OUTBOX_VERSION,
       records,
+      ...(boundaryIntents.length ? { boundaryIntents } : {}),
+      ...(boundaryGap ? { boundaryGap } : {}),
+      ...(boundaryGaps.length ? { boundaryGaps } : {}),
+      ...(boundaryOverflowOwners.length ? { boundaryOverflowOwners } : {}),
       ...(continuity === undefined ? {} : { continuity }),
       ...(this.unconfirmedRecovery ? { unconfirmedRecovery: true } : {}),
     });
@@ -919,6 +1367,10 @@ export class ReliableOutbox {
     await replaceDurableJson(this.filePath, file);
     const previous = this.records;
     this.records = records;
+    this.boundaryIntents = boundaryIntents;
+    this.boundaryGap = boundaryGap;
+    this.boundaryGaps = boundaryGaps;
+    this.boundaryOverflowOwners = boundaryOverflowOwners;
     this.continuity = continuity;
     for (const record of records) {
       if (previous.includes(record)) continue;
@@ -928,7 +1380,7 @@ export class ReliableOutbox {
           accepted: 'receiver_accepted',
           rejected: 'delivery_rejected_unknown',
           expired: 'retention_expired',
-          superseded: 'current_scope_failed',
+          superseded: record.dispositionReason ?? 'current_scope_failed',
           pending: record.attempts === 0 ? 'queued' : 'retry_unknown',
         }[record.status],
       );

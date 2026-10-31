@@ -13,6 +13,7 @@ import { parseMatchDocumentV1 } from '@mizar/protocol/context';
 import { localDocumentBindingManifest } from './local-document-adapter.js';
 
 import { SerialCommitQueue } from './serial-commit.js';
+import { sameManifestPlan } from './manifest-plan.js';
 import { SourceLoadError, sourceErrorEvidence, type SourceFailureCode } from './source-error.js';
 import {
   type ContextFreshness,
@@ -621,17 +622,7 @@ export class MatchContextController {
     )
       return result;
     // Results are mutable website evidence, not changes to the execution plan.
-    const planMaps = (manifest: BroadcastManifest) =>
-      manifest.maps.map((map) => ({
-        mapId: map.mapId,
-        mapOrder: map.mapOrder,
-        mapName: map.mapName,
-        pickedByEntryId: map.pickedByEntryId,
-        teamAStartSide: map.teamAStartSide,
-      }));
-    const samePlan =
-      isDeepStrictEqual(planMaps(current), planMaps(next)) &&
-      isDeepStrictEqual(current.veto, next.veto);
+    const samePlan = sameManifestPlan(current, next);
     const canActivate = () => samePlan || (!isLocalBinding(active) && allowPlanUpdate());
     if (canActivate())
       return this.activatePendingOnlineMatch(revision, pending.revision, canActivate);

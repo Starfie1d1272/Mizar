@@ -561,6 +561,13 @@ export class RivalHubConnection {
     incidentId: string | null;
   } | null = null;
   private lastAcceptedAt = 0;
+  private boundaryStatus:
+    (() => 'continuity_chain_missing' | 'continuity_waiting' | null) | undefined;
+  setBoundaryStatusProvider(
+    provider: () => 'continuity_chain_missing' | 'continuity_waiting' | null,
+  ): void {
+    this.boundaryStatus = provider;
+  }
 
   /** Operator-only projection. A claim or a reliable ACK is never LIVE acceptance. */
   syncHealth(
@@ -616,12 +623,19 @@ export class RivalHubConnection {
       this.liveDelivery.cursor &&
       executionKey(this.liveDelivery.cursor) === executionKey(snapshot.cursor);
     const now = this.monotonicNow();
-    if (current && this.liveDelivery.status === 'accepted' && now - this.lastAcceptedAt < 15_000) {
+    const boundaryStatus = this.boundaryStatus?.() ?? null;
+    if (
+      !boundaryStatus &&
+      current &&
+      this.liveDelivery.status === 'accepted' &&
+      now - this.lastAcceptedAt < 15_000
+    ) {
       watch.since = now;
       watch.incidentId = null;
       return result('healthy');
     }
     const reason =
+      boundaryStatus ??
       (snapshot && this.controlFailureScope === this.failureScope(snapshot)
         ? this.controlFailure
         : null) ??
