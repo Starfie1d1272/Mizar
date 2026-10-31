@@ -2,6 +2,7 @@ import { lstat, readFile } from 'node:fs/promises';
 import { BUILTIN_MODULE_IDS, BUILTIN_REVISION } from './builtin-modules.js';
 import { portableMusicConfig } from './music-assets.js';
 import { join } from 'node:path';
+import { MUSIC_GROUPS } from '@mizar/protocol/music';
 import type {
   ActiveBroadcastSnapshot,
   AssetRef,
@@ -102,8 +103,8 @@ export function createBroadcastRuntime(input: {
       assertReferenceCommitAllowed(previous, next, (ref) => deps.isDeleting(ref)),
     withApplyGuard: (operation) => input.withApplyGuard(operation),
     verifyLegacyActive: async (active, kind) => {
-      if (kind === 'hud' || kind === 'program') await verifyUnchanged(active, kind === 'hud', true);
-      else await deps.verifyActive(active);
+      if (!kind) return deps.verifyActive(active);
+      await verifyUnchanged(active, kind !== 'program', kind !== 'camera', kind !== 'music');
     },
     validateHudDraft: (document) => {
       hudDocumentFromBroadcast(document);
@@ -153,6 +154,38 @@ export function createBroadcastRuntime(input: {
   });
   function hudDocument() {
     return hudDocumentFromBroadcast(store.snapshot);
+  }
+  async function lockForEdit<K extends 'hud' | 'music' | 'camera'>(
+    kind: K,
+    value: ActiveBroadcastSnapshot['resolved'][K],
+    current: ActiveBroadcastSnapshot,
+  ): Promise<ActiveBroadcastSnapshot['lock']> {
+    const resolved = {
+      ...current.resolved,
+      hud:
+        kind === 'hud'
+          ? (value as ActiveBroadcastSnapshot['resolved']['hud'])
+          : current.resolved.hud,
+      music: kind === 'music' ? (value as ActiveBroadcastSnapshot['resolved']['music']) : null,
+      camera: kind === 'camera' ? (value as ActiveBroadcastSnapshot['resolved']['camera']) : null,
+      program: { ...current.resolved.program, assets: {}, tokens: {} },
+    };
+    const lock = await deps.lockForActive(resolved);
+    const refs = new Map(lock.resources.map((ref) => [JSON.stringify(ref), ref]));
+    const add = (ref: ResourceRef) => refs.set(JSON.stringify(ref), ref);
+    for (const scene of Object.values(current.resolved.program.scenes))
+      if (scene.kind === 'declarative') add(scene.resource);
+    for (const ref of Object.values(current.resolved.program.assets)) add(ref.resource);
+    if (kind !== 'music' && current.resolved.music)
+      for (const group of MUSIC_GROUPS)
+        for (const track of current.resolved.music.groups[group].tracks) add(track.asset.resource);
+    if (kind !== 'camera' && current.resolved.camera)
+      for (const map of current.resolved.camera.maps)
+        if (map.openingSound) add(map.openingSound.asset.resource);
+    return {
+      resources: [...refs.values()],
+      tools: kind === 'camera' ? lock.tools : current.lock.tools,
+    };
   }
   const lockFor = (resolved: ActiveBroadcastSnapshot['resolved']) => deps.lockForActive(resolved);
   async function initialize(): Promise<void> {
@@ -245,31 +278,19 @@ export function createBroadcastRuntime(input: {
       for (const ref of store.referencedResources())
         if (await deps.isDeleting(ref)) throw new Error('resource_deleting');
     }
-    const hudPersistence = createHudConfigPersistence(store, async (value, current) => {
-      const lock = await lockFor({
-        ...current.resolved,
-        hud: value,
-        camera: null,
-        program: { ...current.resolved.program, assets: {}, tokens: {} },
-      });
-      const refs = new Map(lock.resources.map((ref) => [JSON.stringify(ref), ref]));
-      for (const ref of Object.values(current.resolved.program.assets))
-        refs.set(JSON.stringify(ref.resource), ref.resource);
-      for (const map of current.resolved.camera?.maps ?? [])
-        if (map.openingSound)
-          refs.set(
-            JSON.stringify(map.openingSound.asset.resource),
-            map.openingSound.asset.resource,
-          );
-      return { resources: [...refs.values()], tools: current.lock.tools };
-    });
+    const hudPersistence = createHudConfigPersistence(store, (value, current) =>
+      lockForEdit('hud', value, current),
+    );
     const musicPersistence = createMusicConfigPersistence(
       store,
       music,
-      (value, current) => lockFor({ ...current.resolved, music: value }),
+      (value, current) => lockForEdit('music', value, current),
       (ref) => deps.localTrackId(ref),
     );
-    const cameraPersistence = createCameraConfigPersistence(store, deps.camera);
+    const cameraPersistence = createCameraConfigPersistence(store, {
+      ...deps.camera,
+      lock: (value, current) => lockForEdit('camera', value, current),
+    });
     cameraAvailable = () => cameraPersistence.available;
     let hudUnavailable = false;
     let hudRestored = false;
