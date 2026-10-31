@@ -129,16 +129,16 @@ export function registerProductionRoutes(
       .then(
         async () => {
           if (valid()) {
-            current.completed = true;
-            if (sceneRequired) obsExitState = 'confirmed';
-            if (sceneRequired)
-              await options.recordObsExit?.('confirmed', valid).catch((error: unknown) => {
-                if (valid()) {
-                  current.completed = false;
-                  obsExitState = 'unconfirmed';
-                }
-                app.log.warn({ err: error }, 'OBS exit status not saved');
-              });
+            try {
+              if (sceneRequired) await options.recordObsExit?.('confirmed', valid);
+              if (valid()) {
+                current.completed = true;
+                if (sceneRequired) obsExitState = 'confirmed';
+              }
+            } catch (error) {
+              if (valid()) obsExitState = 'unconfirmed';
+              app.log.warn({ err: error }, 'OBS exit status not saved');
+            }
           }
         },
         async (error: unknown) => {
@@ -199,6 +199,8 @@ export function registerProductionRoutes(
   async function change(
     body: { action?: unknown; expectedRevision?: unknown; preparationId?: unknown } | null,
   ) {
+    const obsOnlyRetry =
+      body?.action === 'finish' && mode === 'preparation' && obsExitState === 'unconfirmed';
     const entryId = typeof body?.preparationId === 'string' ? body.preparationId : null;
     if (entryId && preparationCancelled(entryId))
       return {
@@ -230,6 +232,7 @@ export function registerProductionRoutes(
     if (
       body?.expectedRevision === revision &&
       !exitFrozen &&
+      !obsOnlyRetry &&
       ['finish', 'shutdown', 'begin-exit'].includes(String(body.action))
     ) {
       exitFrozen = true;
@@ -308,7 +311,7 @@ export function registerProductionRoutes(
         if (shutdown && options.handoffRelease) {
           stage = 'production_release';
           await startHandoff();
-        } else if (!shutdown) void startHandoff().catch(() => {});
+        } else if (!shutdown && !obsOnlyRetry) void startHandoff().catch(() => {});
         if (!trialPending && options.handoffRelease) {
           if (obsExitTask && !obsExitTask.valid()) {
             if (body?.action === 'finish') {
@@ -352,7 +355,7 @@ export function registerProductionRoutes(
           }
           scheduleObsExit(controlValid, sceneRequired);
           mode = 'preparation';
-          options.onFinish?.();
+          if (!obsOnlyRetry) options.onFinish?.();
         } else {
           // Local cleanup must continue if an OBS operation cannot be confirmed.
           // Shutdown keeps its synchronous contract because the service is about to stop.
