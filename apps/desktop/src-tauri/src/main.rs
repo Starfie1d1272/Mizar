@@ -289,9 +289,20 @@ fn stop_runtime(root: &Path, log: Option<&DesktopLog>) -> Result<(), String> {
             Ok(())
         }
         outcome => {
-            let _ = child.kill();
-            let _ = child.wait();
-            let error = format!("停止制播服务未完成：{outcome:?}");
+            let timed_out = matches!(&outcome, Err(error) if error == "等待进程退出超时。")
+                || matches!(&outcome, Ok(status) if status.code() == Some(2));
+            if outcome.is_err() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            let error = format!(
+                "{}：{outcome:?}",
+                if timed_out {
+                    "runtime_stop_timeout: 制播服务退出未完成"
+                } else {
+                    "runtime_stop_failed: 制播服务退出未完成"
+                }
+            );
             if let Some(log) = log {
                 log.event("runtime_stop", "failure", Some(&error));
             }
@@ -4843,36 +4854,44 @@ fn start_gui(root: &Path, log: &DesktopLog) -> Result<(), String> {
     log.event(cleanup_stage, "begin", None);
     // Failure cannot stop a same-artifact runtime borrowed from another session.
     // A successful desktop session's explicit exit may stop its verified local runtime.
-    if runtime_owned(log, child.id()) || (outcome.is_ok() && health_matches(root)) {
-        let stopped = log.step("runtime_stop", || stop_runtime(root, Some(log)));
-        if stopped.is_err() {
-            if let Ok(mut pending) = update_stage.lock() {
-                if let Some(stage) = pending.take() {
-                    let _ = fs::remove_dir_all(stage);
-                }
-            }
-        }
+    let stop_result = if runtime_owned(log, child.id()) || (outcome.is_ok() && health_matches(root))
+    {
+        log.step("runtime_stop", || stop_runtime(root, Some(log)))
     } else {
         log.event(
             "runtime_stop",
             "skipped",
             Some("No runtime owned by this startup session."),
         );
-    }
-    // Only our wrapper and descendants belong to this job. After Ready, handle
-    // closure alone preserves Companion on an unexpected Host process exit.
-    let job_cleanup = log.step("runtime_job_cleanup", || job.terminate());
-    drop(job);
-    if wait_child(&mut child, Duration::from_secs(5)).is_err() {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-    if let Err(error) = job_cleanup {
+        Ok(())
+    };
+    if let Err(error) = stop_result {
+        if let Ok(mut pending) = update_stage.lock() {
+            if let Some(stage) = pending.take() {
+                let _ = fs::remove_dir_all(stage);
+            }
+        }
+        if error.starts_with("runtime_stop_timeout:") {
+            // Explicit timeout is an abnormal recovery path, never a successful flush.
+            let _ = job.terminate();
+            let _ = wait_child(&mut child, Duration::from_secs(5));
+        } else {
+            // A rejected or uncertain stop must not kill a still-flushing runtime.
+            job.kill_on_close(false).map_err(|e| e.to_string())?;
+        }
         log.event(cleanup_stage, "failure", Some(&error));
-        return Err(format!(
-            "startup_rollback_failed: {error}\nOriginal startup outcome: {outcome:?}"
-        ));
+        return Err(error);
     }
+    // The matching Companion has exited. Its wrapper may take a moment to
+    // finish recording its result; terminate only after an explicit timeout.
+    if wait_child(&mut child, Duration::from_secs(5)).is_err() {
+        let _ = job.terminate();
+        let _ = child.wait();
+        let error = "runtime_stop_timeout: 制播监督进程未退出";
+        log.event(cleanup_stage, "failure", Some(error));
+        return Err(error.into());
+    }
+    drop(job);
     log.event(cleanup_stage, "success", None);
     if outcome.is_ok() {
         if let Some(stage) = update_stage
@@ -4925,19 +4944,20 @@ fn main() {
             if !ExitRequest::exists(&scope).map_err(|error| error.to_string())? {
                 return Ok(false);
             }
-            // Never stop the child before the Host has restored the managed game.
-            if !health_matches(&root) {
-                return Err("无法核对此目录的制播服务，未提交退出请求。".into());
-            }
+            // The scoped Host owns the game transaction. Repeated requests can
+            // join an exit even after its HTTP listener has closed.
+            let stopped = ExitSignal::new(&scope).map_err(|error| error.to_string())?;
             if !ExitRequest::notify(&scope).map_err(|error| error.to_string())? {
                 return Ok(false);
             }
             let deadline = Instant::now() + Duration::from_secs(40);
             while Instant::now() < deadline {
-                if !ExitRequest::exists(&scope).map_err(|error| error.to_string())?
-                    && !health_matches(&root)
-                {
-                    return Ok(true);
+                if !ExitRequest::exists(&scope).map_err(|error| error.to_string())? {
+                    return if stopped.requested() {
+                        Ok(true)
+                    } else {
+                        Err("桌面退出未确认完成，请查看运行日志。".into())
+                    };
                 }
                 thread::sleep(Duration::from_millis(100));
             }

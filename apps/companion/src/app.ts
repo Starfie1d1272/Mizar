@@ -2408,42 +2408,65 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   });
 
   app.addHook('onClose', async () => {
+    const failures: unknown[] = [];
+    const closeStep = async (action: () => unknown | Promise<unknown>) => {
+      try {
+        await action();
+      } catch (error) {
+        failures.push(error);
+      }
+    };
     clearInterval(performanceTimer);
     clearInterval(contextTimer);
-    recordPerformanceWindow('close');
     clearInterval(directorTimer);
-    presentationUnsubscribe();
-    objectiveReferenceUnsubscribe?.();
-    cameraDirector?.close();
-    await musicDirector?.close();
-    gameAudio?.close();
-    await obsAdapter?.close();
-    const sourceCleanup = await Promise.allSettled([
-      cstvSources.program.stop(),
-      cstvSources.lookahead.stop(),
-      ...deliveryConsumers.map((consumer) => consumer.close()),
-    ]);
-    const releaseCleanup = await Promise.allSettled([
-      options.rivalhubConnection?.shutdownSource?.(),
-    ]);
-    sourceCleanup.push(...releaseCleanup);
-    sourceCleanup.push(...(await Promise.allSettled([outputService.close()])));
-    await Promise.all([projectionCoordinator.close(), programCueCoordinator.close()]);
-    await programRuntime.close();
-    await localWebTransport.close();
-    await hudConfigStore.flush();
-    await currentRecorder().finalize();
-    await businessJournal?.close();
-    await nativeSource?.close();
-    await performanceContext?.close();
-    unsubscribeObserverEvidence?.();
-    await sessionJournal?.close();
-    await diagnosticDelivery.close();
-    const sourceFailures = sourceCleanup
-      .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
-      .map((result) => result.reason as unknown);
-    if (sourceFailures.length > 0)
-      throw new AggregateError(sourceFailures, 'Companion source or consumer shutdown failed');
+    await closeStep(() => recordPerformanceWindow('close'));
+    await closeStep(() => presentationUnsubscribe());
+    await closeStep(() => objectiveReferenceUnsubscribe?.());
+    await closeStep(() => cameraDirector?.close());
+    await closeStep(() => musicDirector?.close());
+    await closeStep(() => gameAudio?.close());
+    await closeStep(() => obsAdapter?.close());
+    for (const result of await Promise.allSettled([
+      Promise.resolve().then(() => cstvSources.program.stop()),
+      Promise.resolve().then(() => cstvSources.lookahead.stop()),
+      ...deliveryConsumers.map((consumer) => Promise.resolve().then(() => consumer.close())),
+    ])) {
+      if (result.status === 'rejected') failures.push(result.reason);
+    }
+    // Stop producers before flushing each local owner. One failed close must
+    // not prevent the remaining owners from attempting their own flush.
+    await closeStep(() => outputService.close());
+    await closeStep(() => projectionCoordinator.close());
+    await closeStep(() => programCueCoordinator.close());
+    await closeStep(() => programRuntime.close());
+    await closeStep(() => localWebTransport.close());
+    await closeStep(() => hudConfigStore.flush());
+    await closeStep(() => currentRecorder().finalize());
+    await closeStep(() => businessJournal?.close());
+    await closeStep(() => nativeSource?.close());
+    await closeStep(() => performanceContext?.close());
+    await closeStep(() => unsubscribeObserverEvidence?.());
+    await closeStep(() => sessionJournal?.close());
+    await closeStep(() => diagnosticDelivery.close());
+
+    // Remote release is best effort after local persistence; its uncertainty is
+    // retained by the connection for reconciliation on the next start.
+    if (options.rivalhubConnection?.shutdownSource) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          options.rivalhubConnection.shutdownSource(),
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(() => reject(new Error('数据源远端收尾超时')), 9000);
+          }),
+        ]);
+      } catch (error) {
+        app.log.warn({ err: error }, '远端数据源收尾待重试');
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    }
+    if (failures.length > 0) throw new AggregateError(failures, 'Companion 本地收尾未全部完成');
   });
 
   return app;
