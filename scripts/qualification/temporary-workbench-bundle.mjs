@@ -1,4 +1,5 @@
 import { copyFile, readFile, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { contentDigest, writeShaSums } from './build.mjs';
 import { verifyPayload } from './product-runtime.mjs';
@@ -7,6 +8,11 @@ const [directory, executable, head] = process.argv.slice(2);
 if (!directory || !executable || !/^[a-f0-9]{40}$/.test(head ?? ''))
   throw new Error('Invalid temporary bundle input');
 const root = resolve(directory);
+if (
+  execFileSync(executable, ['--app-version'], { encoding: 'utf8', windowsHide: true }).trim() !==
+  '1.10.2'
+)
+  throw new Error('Temporary executable version differs');
 const original = await verifyPayload(root);
 if (
   original.appVersion !== '1.10.2' ||

@@ -136,8 +136,6 @@ jobs:
           if ((Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant() -ne 'ee3ba3879c424e25a8cde28bbd4badd8cfea51cef29a22bcda81c6d25e092ea0') { throw 'Original release digest differs' }
           Expand-Archive -LiteralPath $zip -DestinationPath (Join-Path $dir 'extracted')
           $bundle = Join-Path $dir 'extracted/Mizar-v1.10.2-Windows-x64'
-          $version = & $exe --app-version
-          if ($LASTEXITCODE -ne 0 -or $version.Trim() -ne '1.10.2') { throw 'Temporary executable version differs' }
           node scripts/qualification/temporary-workbench-bundle.mjs $bundle $exe $env:GITHUB_SHA
           if ($LASTEXITCODE -ne 0) { throw 'Temporary bundle integrity verification failed' }
           $out = Join-Path $env:RUNNER_TEMP 'temporary-output'
