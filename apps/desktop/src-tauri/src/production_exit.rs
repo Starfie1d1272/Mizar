@@ -52,6 +52,15 @@ impl ExitGate {
         }
         Ok(())
     }
+    pub fn commit<T>(
+        &self,
+        ticket: u64,
+        action: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        let _publication = self.publication.lock().unwrap_or_else(|e| e.into_inner());
+        self.check_ticket(ticket)?;
+        action()
+    }
     /// Serialize the actual main-thread window publication with starting an exit.
     pub fn publish(&self, ticket: u64, present: impl FnOnce()) -> Result<(), String> {
         let _publication = self.publication.lock().unwrap_or_else(|e| e.into_inner());

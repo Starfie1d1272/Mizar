@@ -290,6 +290,12 @@ fn launch_operation(
         gate: Some(gate.inner()),
         id: preparation_id,
         verify: preparation_id.map(|_| &verify_exit as &dyn Fn() -> Result<(), String>),
+        exit: preparation_id.map(|_| {
+            (
+                app.state::<production_exit::ExitGate>().inner(),
+                exit_ticket,
+            )
+        }),
     };
     guard.check()?;
     let _launch = if guarded {

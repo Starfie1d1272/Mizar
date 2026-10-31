@@ -1025,6 +1025,10 @@ async fn replace_external_cs2(
             gate: Some(gate.inner()),
             id: Some(&preparation_id),
             verify: Some(&verify_exit),
+            exit: Some((
+                app.state::<production_exit::ExitGate>().inner(),
+                exit_ticket,
+            )),
         };
         guard.check()?;
         let activity = app.state::<cs2_activity::Activity>();
@@ -1307,6 +1311,12 @@ async fn start_managed_cs2(
                             verify: preparation_id
                                 .as_ref()
                                 .map(|_| &verify_exit as &dyn Fn() -> Result<(), String>),
+                            exit: preparation_id.as_ref().map(|_| {
+                                (
+                                    app.state::<production_exit::ExitGate>().inner(),
+                                    exit_ticket,
+                                )
+                            }),
                         };
                         guard.check()?;
                         let result = cs2.start_preparation(
@@ -1382,26 +1392,23 @@ async fn begin_managed_camera(
             return Err("受管游戏身份不唯一，未建立运镜会话。".into());
         }
         let log = app.state::<DesktopLog>();
-        let value = production_exit::camera_session(&log, "begin", None, Some(&expected_revision))?;
-        let lease = value["lease"]
-            .as_str()
-            .ok_or("原生运镜会话未确认。")?
-            .to_owned();
-        if let Err(error) = app
-            .state::<production_exit::ExitGate>()
-            .check_ticket(ticket)
-            .and_then(|_| {
-                app.state::<preparation_gate::PreparationGate>()
-                    .check(Some(&preparation_id))
+        let gate = app.state::<preparation_gate::PreparationGate>();
+        let exit = app.state::<production_exit::ExitGate>();
+        gate.commit(Some(&preparation_id), || {
+            exit.commit(ticket, || {
+                let value =
+                    production_exit::camera_session(&log, "begin", None, Some(&expected_revision))?;
+                let lease = value["lease"]
+                    .as_str()
+                    .ok_or("原生运镜会话未确认。")?
+                    .to_owned();
+                if let Err(error) = cs2.bind_managed_camera(game, lease.clone()) {
+                    let _ = production_exit::camera_session(&log, "invalidate", Some(&lease), None);
+                    return Err(error);
+                }
+                Ok(())
             })
-        {
-            let _ = production_exit::camera_session(&log, "invalidate", Some(&lease), None);
-            return Err(error);
-        }
-        if let Err(error) = cs2.bind_managed_camera(game, lease.clone()) {
-            let _ = production_exit::camera_session(&log, "invalidate", Some(&lease), None);
-            return Err(error);
-        }
+        })?;
         Ok(())
     })
     .await
@@ -2735,7 +2742,14 @@ async fn present_production(
                             }
                             None => None,
                         };
-                        present_production_inner_checked(&app, live, None, ticket)
+                        match preparation_id.as_deref() {
+                            Some(id) => app
+                                .state::<preparation_gate::PreparationGate>()
+                                .commit(Some(id), || {
+                                    present_production_inner_checked(&app, live, None, ticket)
+                                }),
+                            None => present_production_inner_checked(&app, live, None, ticket),
+                        }
                     },
                 )
             }
@@ -4096,6 +4110,12 @@ async fn ensure_gsi(
                     verify: preparation_id
                         .as_ref()
                         .map(|_| &verify_exit as &dyn Fn() -> Result<(), String>),
+                    exit: preparation_id.as_ref().map(|_| {
+                        (
+                            app.state::<production_exit::ExitGate>().inner(),
+                            exit_ticket,
+                        )
+                    }),
                 };
                 if preparation_id.is_some() {
                     guard.commit(|| {

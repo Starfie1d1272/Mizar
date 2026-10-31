@@ -1452,6 +1452,7 @@ impl ManagedCs2 {
                 gate: None,
                 id: None,
                 verify: None,
+                exit: None,
             },
         )
     }
@@ -1519,6 +1520,7 @@ impl ManagedCs2 {
                 gate: None,
                 id: None,
                 verify: None,
+                exit: None,
             },
         )? {
             return Err("请先结束现有游戏并恢复配置。".into());
@@ -1614,6 +1616,7 @@ impl ManagedCs2 {
                 gate: None,
                 id: None,
                 verify: None,
+                exit: None,
             },
         )
     }
@@ -2309,6 +2312,7 @@ impl ManagedCs2 {
                 gate: None,
                 id: None,
                 verify: None,
+                exit: None,
             },
         )
     }

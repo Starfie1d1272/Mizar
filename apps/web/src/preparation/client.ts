@@ -820,41 +820,50 @@ async function performProductionAction(
   let newlyStarted = false;
   let borrowed = false;
   let launchedMulnx = false;
+  let mulnxFailed = false;
   if (action === 'enter' && window.__TAURI_INTERNALS__) {
-    if (launch?.mulnxLaunchResumable) {
-      const result = await desktopInvoke<{ result?: string }>(
-        'launch_mulnx',
-        { resumeOnly: true, preparationId: entry?.id },
-        task,
-      );
-      if (result?.result === 'not-found')
-        throw new Error('启动请求已结束，请检查游戏状态后重新进入工作台。');
-      launchedMulnx = true;
-      if (cancelled() || window.location.href !== entryLocation) {
-        task.finish('cancelled', { reason: 'navigation_changed' });
-        return;
+    try {
+      if (launch?.mulnxLaunchResumable) {
+        const result = await desktopInvoke<{ result?: string }>(
+          'launch_mulnx',
+          { resumeOnly: true, preparationId: entry?.id },
+          task,
+        );
+        if (result?.result === 'not-found')
+          throw new Error('启动请求已结束，请检查游戏状态后重新进入工作台。');
+        launchedMulnx = true;
+        if (cancelled() || window.location.href !== entryLocation) {
+          task.finish('cancelled', { reason: 'navigation_changed' });
+          return;
+        }
+      } else if (launch?.preferMulnx && !launch.running && !launch.pending) {
+        await desktopInvoke<ExternalGameIdentity>(
+          'launch_mulnx',
+          {
+            automatic: true,
+            preparationId: entry?.id,
+            ...(preserveSettings ? { preserveSettings: true } : {}),
+          },
+          task,
+        );
+        launchedMulnx = true;
+        if (cancelled() || window.location.href !== entryLocation) {
+          task.finish('cancelled', { reason: 'navigation_changed' });
+          return;
+        }
       }
-    } else if (launch?.preferMulnx && !launch.running && !launch.pending) {
-      await desktopInvoke<ExternalGameIdentity>(
-        'launch_mulnx',
-        {
-          automatic: true,
-          preparationId: entry?.id,
-          ...(preserveSettings ? { preserveSettings: true } : {}),
-        },
-        task,
+    } catch (error) {
+      if (cancelled() || entrySignal.aborted) throw error;
+      mulnxFailed = true;
+      onWarning?.(
+        `MulNX 启动未确认：${error instanceof Error ? error.message : '操作未完成。'} 请核对游戏状态后重试。`,
       );
-      launchedMulnx = true;
-      if (cancelled() || window.location.href !== entryLocation) {
-        task.finish('cancelled', { reason: 'navigation_changed' });
-        return;
-      }
     }
     if (launchedMulnx && !(await entryStillCurrent())) {
       task.finish('cancelled', { reason: 'production_changed' });
       return;
     }
-    if ((!launch?.running && !launch?.pending) || launchedMulnx)
+    if (!mulnxFailed && ((!launch?.running && !launch?.pending) || launchedMulnx))
       newlyStarted = await desktopInvoke<boolean>(
         'start_managed_cs2',
         {
@@ -868,7 +877,7 @@ async function performProductionAction(
     // Preserve this one entry intent while the native command lock is free.
     // Recovery/cancel remains available; navigation cancels only entry intent.
     const waitStarted = Date.now();
-    while (!gameStatus.running) {
+    while (!mulnxFailed && !gameStatus.running) {
       if (Date.now() - waitStarted >= 60000)
         throw new Error('CS2 启动尚未确认，请检查游戏状态后重试。');
       if (
@@ -901,7 +910,12 @@ async function performProductionAction(
     task.finish('cancelled', { reason: 'navigation_changed' });
     return;
   }
-  if (action === 'enter' && window.__TAURI_INTERNALS__ && state.mode === 'preparation') {
+  if (
+    action === 'enter' &&
+    window.__TAURI_INTERNALS__ &&
+    state.mode === 'preparation' &&
+    !mulnxFailed
+  ) {
     try {
       if (!entry?.since) throw new Error('本次游戏启动时间未确认，请结束本次游戏后重试。');
       const warmup = await entryCommand<{ transactionId: string; startedAt: number }>(
@@ -970,7 +984,12 @@ async function performProductionAction(
     task.finish('cancelled', { reason: 'navigation_changed' });
     return;
   }
-  if (action === 'enter' && window.__TAURI_INTERNALS__ && state.mode === 'preparation') {
+  if (
+    action === 'enter' &&
+    window.__TAURI_INTERNALS__ &&
+    state.mode === 'preparation' &&
+    !mulnxFailed
+  ) {
     await desktopInvoke(
       'begin_managed_camera',
       { expectedRevision: state.revision, preparationId: entry?.id },
