@@ -49,7 +49,8 @@ const causeSchema = z.enum(['finish', 'switch', 'shutdown', 'recovery', 'authori
 const recordSchema = z
   .object({
     identity: exactSchema,
-    state: z.enum(['owned', 'release_pending', 'blocked']),
+    state: z.enum(['owned', 'release_pending', 'blocked', 'archive_pending']),
+    installationRevoked: z.literal(true).optional(),
     cause: causeSchema,
     attempts: z.number().int().nonnegative().safe(),
     nextAttemptAt: z.string().datetime().nullable(),
@@ -75,6 +76,7 @@ const envelopeSchema = z
     version: z.literal(1),
     records: z.array(recordSchema).max(MAX_RECORDS),
     intent: intentSchema.nullable(),
+    revokedIntents: z.array(intentSchema).max(MAX_RECORDS).default([]),
     watermarks: z.array(exactSchema).max(MAX_RECORDS).default([]),
   })
   .strict()
@@ -141,7 +143,7 @@ export class RivalHubSourceState {
         }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-        this.state = { version: 1, records: [], intent: null, watermarks: [] };
+        this.state = { version: 1, records: [], intent: null, revokedIntents: [], watermarks: [] };
         return structuredClone(this.state);
       }
       this.state = envelopeSchema.parse(JSON.parse(bytes.toString('utf8')) as unknown);
@@ -255,6 +257,7 @@ export class RivalHubSourceState {
       const existing = state.records.find((record) => exactKey(record.identity) === key);
       if (existing) {
         existing.state = 'owned';
+        delete existing.installationRevoked;
         existing.cause = 'recovery';
         existing.attempts = 0;
         existing.nextAttemptAt = null;
@@ -315,12 +318,24 @@ export class RivalHubSourceState {
   ): Promise<void> {
     await this.change((state) => {
       const record = state.records.find((item) => exactKey(item.identity) === exactKey(identity));
-      if (!record || record.state === 'owned') throw new Error('source is not pending');
+      if (!record || record.state === 'owned' || record.state === 'archive_pending')
+        throw new Error('source is not pending');
       record.state = blocked ? 'blocked' : 'release_pending';
       record.attempts += 1;
       record.lastFailureCode = code;
       record.nextAttemptAt = nextAttemptAt;
       record.retryAfterAt = retryAfterAt;
+    });
+  }
+
+  /** Persist an exact remote release/closed confirmation before local archiving. */
+  async confirmReleased(identity: ExactSource): Promise<void> {
+    await this.change((state) => {
+      const record = state.records.find((item) => exactKey(item.identity) === exactKey(identity));
+      if (!record || record.state === 'owned') throw new Error('source is not pending');
+      record.state = 'archive_pending';
+      record.nextAttemptAt = null;
+      record.retryAfterAt = null;
     });
   }
 
@@ -330,8 +345,8 @@ export class RivalHubSourceState {
       const index = state.records.findIndex(
         (item) => exactKey(item.identity) === exactKey(identity),
       );
-      if (index < 0 || state.records[index]?.state === 'owned')
-        throw new Error('source is not pending');
+      if (index < 0 || state.records[index]?.state !== 'archive_pending')
+        throw new Error('source is not archive pending');
       // Upgrade legacy in-flight intents before removing their only durable
       // proof that the equal revision was held when the claim began.
       if (
@@ -360,8 +375,8 @@ export class RivalHubSourceState {
     });
   }
 
-  /** Explicit user disconnect succeeded: the server revoked this installation and its sources. */
-  async completeRevokedInstallation(
+  /** Revocation is not an exact per-source release confirmation. */
+  async confirmRevokedInstallation(
     scope: Pick<SourceScope, 'baseUrl' | 'competitionId' | 'installationId'>,
   ): Promise<void> {
     await this.change((state) => {
@@ -369,9 +384,21 @@ export class RivalHubSourceState {
         value.baseUrl === scope.baseUrl &&
         value.competitionId === scope.competitionId &&
         value.installationId === scope.installationId;
-      state.records = state.records.filter((record) => !matches(record.identity));
-      state.watermarks = state.watermarks.filter((item) => !matches(item));
-      if (state.intent && matches(state.intent.scope)) state.intent = null;
+      for (const record of state.records) {
+        if (!matches(record.identity)) continue;
+        record.installationRevoked = true;
+        if (record.state === 'archive_pending') continue;
+        record.state = 'blocked';
+        record.nextAttemptAt = null;
+        record.retryAfterAt = null;
+        record.lastFailureCode ??= 'installation_revoked';
+      }
+      if (state.intent && matches(state.intent.scope)) {
+        if (state.revokedIntents.length >= MAX_RECORDS)
+          throw new Error('source state capacity exceeded');
+        state.revokedIntents.push(state.intent);
+        state.intent = null;
+      }
     });
   }
 }
