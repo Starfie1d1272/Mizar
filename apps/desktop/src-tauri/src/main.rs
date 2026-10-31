@@ -1623,6 +1623,8 @@ async fn finish_workspace(
         command_log.with_task(native_task_id.as_deref(), native_operation_id.as_deref(), native_trigger.as_deref(), || {
         let feedback = host.state::<production_exit::WorkspaceExit>();
         let log = host.state::<DesktopLog>();
+        let managed = host.state::<Mutex<managed_cs2::ManagedCs2>>();
+        let mut cs2 = log.step("workspace_exit_lock", || managed.lock().map_err(|error| command_log.preserve_error("finish_workspace", native_operation_id.as_deref(), &error, "CS2 配置状态不可用。")))?;
         // Companion freeze and scene/remote work have their own owner. Never
         // serialize the exact local process cleanup behind their HTTP response.
         let production_log = log.inner().clone();
@@ -1631,8 +1633,6 @@ async fn finish_workspace(
             let production = production_exit::finish_workspace_production(&production_log);
             production_exit::cleanup_results(intent, production)
         });
-        let managed = host.state::<Mutex<managed_cs2::ManagedCs2>>();
-        let mut cs2 = log.step("workspace_exit_lock", || managed.lock().map_err(|error| command_log.preserve_error("finish_workspace", native_operation_id.as_deref(), &error, "CS2 配置状态不可用。")))?;
         let activity = host.state::<cs2_activity::Activity>();
         // Open the visible recovery owner before any potentially slow cleanup.
         // A presentation failure cannot skip safe production or game cleanup.
@@ -4674,6 +4674,10 @@ fn run_desktop(
             tauri::async_runtime::spawn(async move {
                 let cleanup_host = host.clone();
                 let result = tauri::async_runtime::spawn_blocking(move || {
+                    // The gate is already closed; wait for an accepted launch,
+                    // then keep its lock through safe production and game cleanup.
+                    let state = cleanup_host.state::<Mutex<managed_cs2::ManagedCs2>>();
+                    let mut cs2 = state.lock().map_err(|_| "CS2 配置状态不可用。")?;
                     let production_host = cleanup_host.clone();
                     let production_task = std::thread::spawn(move || {
                         if production_host
@@ -4687,10 +4691,6 @@ fn run_desktop(
                         let production = production_exit::finish_companion(&log);
                         production_exit::cleanup_results(intent, production)
                     });
-                    // The gate is already closed; wait for an accepted launch,
-                    // then keep its lock through safe production and game cleanup.
-                    let state = cleanup_host.state::<Mutex<managed_cs2::ManagedCs2>>();
-                    let mut cs2 = state.lock().map_err(|_| "CS2 配置状态不可用。")?;
                     let activity = cleanup_host.state::<cs2_activity::Activity>();
                     let _activity = activity.begin(if cs2.has_external() { 3 } else { 2 });
                     let cleanup = production_exit::restore_then_cleanup(
