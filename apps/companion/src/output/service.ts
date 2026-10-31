@@ -1380,9 +1380,25 @@ export class OutputService {
     this.closed = true;
     if (this.timer !== undefined) clearInterval(this.timer);
     if (this.outboundTimer !== undefined) clearInterval(this.outboundTimer);
-    await this.outboundUnsubscribe?.();
-    await Promise.all([...this.consumers.keys()].map((consumer) => consumer.close()));
+    const results = await Promise.allSettled([
+      Promise.resolve().then(() => this.outboundUnsubscribe?.()),
+    ]);
+    results.push(
+      ...(await Promise.allSettled(
+        [...this.consumers.keys()].map((consumer) =>
+          Promise.resolve().then(() => consumer.close()),
+        ),
+      )),
+    );
     this.consumers.clear();
-    await this.outbox?.flushPending();
+    try {
+      await this.outbox?.flushForShutdown();
+    } catch (error) {
+      results.push({ status: 'rejected', reason: error });
+    }
+    const failures = results.flatMap((result) =>
+      result.status === 'rejected' ? [result.reason] : [],
+    );
+    if (failures.length) throw new AggregateError(failures, 'output_local_shutdown_failed');
   }
 }

@@ -696,6 +696,20 @@ export class ReliableOutbox {
   private boundaryOverflowOwners: readonly string[] = [];
   private boundaryCaptureFailed = false;
   private readonly queue = new SerialCommitQueue();
+  private durabilityFailure = false;
+
+  private async trackDurability<T>(write: () => Promise<T>): Promise<T> {
+    try {
+      return await write();
+    } catch (error) {
+      this.durabilityFailure = true;
+      throw error;
+    }
+  }
+
+  private persist(...args: Parameters<typeof replaceDurableJson>): Promise<boolean> {
+    return this.trackDurability(() => replaceDurableJson(...args));
+  }
   private continuity: DeliveryContinuity | undefined;
   private continuityReference: ReliableEventV1 | undefined;
   private requestedScope: string | undefined;
@@ -851,7 +865,7 @@ export class ReliableOutbox {
       if (prior) continue;
       const key = createHash('sha256').update(record.event.idempotencyKey).digest('hex');
       try {
-        await replaceDurableJson(join(`${this.filePath}.archives`, `legacy-${scope}-${key}.json`), {
+        await this.persist(join(`${this.filePath}.archives`, `legacy-${scope}-${key}.json`), {
           record,
           sha256: createHash('sha256').update(JSON.stringify(record)).digest('hex'),
         });
@@ -886,7 +900,7 @@ export class ReliableOutbox {
         archive.identity.liveSessionId,
       );
       if (this.damagedArchiveScopes.has(scope)) throw new Error('outbox_archive_unreadable');
-      await replaceDurableJson(join(`${this.filePath}.archives`, archiveName(archive.identity)), {
+      await this.persist(join(`${this.filePath}.archives`, archiveName(archive.identity)), {
         ...archive,
         sha256: archiveDigest(archive),
       });
@@ -943,11 +957,13 @@ export class ReliableOutbox {
       if (bytes === undefined && mirror === undefined) return;
       // Preserve exact bytes before replacing anything. Failure remains a startup error.
       const preserve = async (path: string, contents: Buffer): Promise<void> => {
-        await writeFile(`${path}.corrupt-${randomUUID()}`, contents, {
-          flag: 'wx',
-          mode: 0o600,
-          flush: true,
-        });
+        await this.trackDurability(() =>
+          writeFile(`${path}.corrupt-${randomUUID()}`, contents, {
+            flag: 'wx',
+            mode: 0o600,
+            flush: true,
+          }),
+        );
       };
       recoveryPhase = '另存原始文件';
       if (mirror !== undefined) await preserve(mirrorPath, mirror);
@@ -980,8 +996,8 @@ export class ReliableOutbox {
       });
       parseOutbox(Buffer.from(JSON.stringify(file)));
       recoveryPhase = '保存恢复队列';
-      await replaceDurableJson(mirrorPath, file);
-      await replaceDurableJson(this.filePath, file);
+      await this.persist(mirrorPath, file);
+      await this.persist(this.filePath, file);
     } catch (error) {
       this.onRecovery?.(
         undefined,
@@ -1175,10 +1191,7 @@ export class ReliableOutbox {
           throw new Error('outbox_archive_too_large');
         // Publish immutable evidence first. If the active commit fails, the archive
         // still fences this scope; a retry removes the duplicate active records.
-        await replaceDurableJson(
-          join(`${this.filePath}.archives`, archiveName(identity)),
-          document,
-        );
+        await this.persist(join(`${this.filePath}.archives`, archiveName(identity)), document);
         this.archivedSources = [...this.archivedSources, saved];
       }
       if (
@@ -1231,7 +1244,7 @@ export class ReliableOutbox {
         if (durableJsonByteLength(document) > 4_000_000)
           throw new Error('outbox_revoked_too_large');
         // Publish the fence and its full evidence before releasing any active slot.
-        await replaceDurableJson(join(`${this.filePath}.revoked`, archiveName(identity)), document);
+        await this.persist(join(`${this.filePath}.revoked`, archiveName(identity)), document);
         this.revokedSources = [...this.revokedSources, saved];
       }
       if (
@@ -2077,6 +2090,12 @@ export class ReliableOutbox {
     await this.queue.flush();
   }
 
+  async flushForShutdown(): Promise<void> {
+    await this.queue.flush();
+    if (this.durabilityFailure || this.boundaryCaptureFailed)
+      throw new Error('outbox_durable_write_unconfirmed');
+  }
+
   private trim(records: readonly ReliableOutboxRecord[]): readonly ReliableOutboxRecord[] {
     const pending = records.filter((record) => record.status === 'pending');
     // A failed boundary is a durable fence, even after ordinary receipt history
@@ -2130,9 +2149,12 @@ export class ReliableOutbox {
     });
     // Persist a validated recovery copy before publishing the authoritative file.
     // A failed commit never advances the in-memory queue or reports success.
-    if (durableJsonByteLength(file) > 4_000_000) throw new Error('outbox_too_large');
-    await replaceDurableJson(`${this.filePath}.last-good`, file);
-    await replaceDurableJson(this.filePath, file);
+    if (durableJsonByteLength(file) > 4_000_000) {
+      this.durabilityFailure = true;
+      throw new Error('outbox_too_large');
+    }
+    await this.persist(`${this.filePath}.last-good`, file);
+    await this.persist(this.filePath, file);
     const previous = this.records;
     this.records = records;
     this.boundaryIntents = boundaryIntents;

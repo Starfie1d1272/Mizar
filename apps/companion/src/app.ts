@@ -2458,13 +2458,43 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     await closeStep(() => programCueCoordinator.close());
     await closeStep(() => programRuntime.close());
     await closeStep(() => localWebTransport.close());
-    await closeStep(() => hudConfigStore.flush());
-    await closeStep(() => currentRecorder().finalize());
-    await closeStep(() => businessJournal?.close());
+    await closeStep(async () => {
+      await hudConfigStore.flush();
+      if (hudConfigStore.getState().persistenceError)
+        throw new Error('hud_config_close_unconfirmed');
+    });
+    await closeStep(async () => {
+      const recorder = currentRecorder();
+      await recorder.finalize();
+      recorder.assertDurableFinalized?.();
+    });
+    await closeStep(async () => {
+      await businessJournal?.close();
+      if (
+        businessJournal &&
+        (businessJournal.getStatus() === 'write_failed' ||
+          businessJournal.getHealth().uncommittedChanges)
+      )
+        throw new Error('business_journal_close_unconfirmed');
+    });
     await closeStep(() => nativeSource?.close());
-    await closeStep(() => performanceContext?.close());
+    await closeStep(async () => {
+      await performanceContext?.close();
+      if (performanceContext) {
+        const health = performanceContext.health();
+        if (health.pendingRecords > 0 || health.writeError !== null)
+          throw new Error('performance_context_close_unconfirmed');
+      }
+    });
     await closeStep(() => unsubscribeObserverEvidence?.());
-    await closeStep(() => sessionJournal?.close());
+    await closeStep(async () => {
+      await sessionJournal?.close();
+      if (sessionJournal) {
+        const health = sessionJournal.health();
+        if (health.pendingRecords > 0 || health.writeError !== null)
+          throw new Error('session_journal_close_unconfirmed');
+      }
+    });
     await closeStep(() => diagnosticDelivery.close());
 
     // Remote release is best effort after local persistence; its uncertainty is

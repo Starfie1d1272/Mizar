@@ -281,7 +281,7 @@ fn wait_child(child: &mut Child, timeout: Duration) -> Result<std::process::Exit
 
 fn stop_runtime(root: &Path, log: Option<&DesktopLog>) -> Result<(), String> {
     let mut child = supervisor(root, "--stop", None)?;
-    match wait_child(&mut child, Duration::from_secs(40)) {
+    match wait_child(&mut child, Duration::from_secs(300)) {
         Ok(status) if status.success() => {
             if let Ok(scope) = shutdown_scope(root) {
                 ExitSignal::notify_stopped(&scope);
@@ -289,8 +289,9 @@ fn stop_runtime(root: &Path, log: Option<&DesktopLog>) -> Result<(), String> {
             Ok(())
         }
         outcome => {
-            let timed_out = matches!(&outcome, Err(error) if error == "等待进程退出超时。")
-                || matches!(&outcome, Ok(status) if status.code() == Some(2));
+            // An outer timeout could be payload verification, not Companion
+            // shutdown. Only the stop helper's own exit code proves the latter.
+            let timed_out = matches!(&outcome, Ok(status) if status.code() == Some(2));
             if outcome.is_err() {
                 let _ = child.kill();
                 let _ = child.wait();
@@ -4950,7 +4951,7 @@ fn main() {
             if !ExitRequest::notify(&scope).map_err(|error| error.to_string())? {
                 return Ok(false);
             }
-            let deadline = Instant::now() + Duration::from_secs(40);
+            let deadline = Instant::now() + Duration::from_secs(310);
             while Instant::now() < deadline {
                 // The request handle disappears when the GUI closes, before
                 // its outer Host has finished waiting for Companion cleanup.
