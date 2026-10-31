@@ -322,6 +322,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     ...(options.rivalhubConnection !== undefined
       ? {
           authorityScope: () => options.rivalhubConnection!.reliableAuthorityScope(),
+          exactSource: () => options.rivalhubConnection!.reliableExactSource(),
           sink: {
             send: (
               event: Parameters<NonNullable<OutputServiceOptions['sink']>['send']>[0],
@@ -1909,6 +1910,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     options.rivalhubConnection?.setSourceSettlement?.(
       (scope) => outputService.settleSourceForRelease(scope),
       (scope) => outputService.resumeSource(scope),
+      (identity) => outputService.archiveConfirmedSource(identity),
     );
     options.rivalhubConnection?.startSourceCleanup?.();
     businessJournal?.runtime(

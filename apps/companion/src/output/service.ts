@@ -3,6 +3,7 @@ import type { RuntimeReduceResult } from '@mizar/core/runtime';
 import type { LiveSnapshotV1, ReliableEventV1 } from '@mizar/protocol/output';
 
 import type { MatchContextBinding } from '../match-context/index.js';
+import type { ExactSource } from '../match-context/rivalhub-source-state.js';
 import { manifestPlanFingerprint } from '../match-context/manifest-plan.js';
 import { hasLineupMismatchOnly } from './lineup-mismatch.js';
 import type { ProjectionBundle } from '../projections/projection-coordinator.js';
@@ -34,6 +35,7 @@ export interface OutputServiceOptions {
   readonly liveSink?: LiveSnapshotConsumer;
   readonly now?: () => Date;
   readonly authorityScope?: () => string | null;
+  readonly exactSource?: () => ExactSource | undefined;
   readonly isActiveOnlineBinding?: (binding: MatchContextBinding) => boolean;
   readonly onDiagnostic?: (code: string) => void;
   readonly onBusinessEvidence?: (stage: string, evidence: unknown) => void;
@@ -118,6 +120,20 @@ export class OutputService {
           .update(JSON.stringify([this.boundaryOwner, scope]))
           .digest('hex')
       : undefined;
+  }
+
+  private sourceFor(
+    matchId: string | undefined,
+    cursor: ReliableEventV1['cursor'],
+  ): ExactSource | null | undefined {
+    if (!this.options.exactSource) return undefined;
+    const source = this.options.exactSource?.();
+    return source &&
+      source.matchId === matchId &&
+      source.producerInstanceId === cursor.producerInstanceId &&
+      source.liveSessionId === cursor.liveSessionId
+      ? source
+      : null;
   }
 
   private async materializeIntents(): Promise<void> {
@@ -777,7 +793,15 @@ export class OutputService {
       const pendingKey = this.boundaryScopeKey(outputScope);
       this.boundaryCommits.set(pendingKey, (this.boundaryCommits.get(pendingKey) ?? 0) + 1);
       void this.outbox
-        .captureBoundaries(events, intents, continuity, missing, this.now(), outputScope)
+        .captureBoundaries(
+          events,
+          intents,
+          continuity,
+          missing,
+          this.now(),
+          outputScope,
+          this.sourceFor(binding?.context.matchId, cursor),
+        )
         .then(() => {
           if (this.outbox?.hasBoundaryOverflow(outputScope))
             this.onDiagnostic?.('outbox_boundary_overflow');
@@ -926,6 +950,7 @@ export class OutputService {
           event.kind === 'map_started' ? retainedLineup : undefined,
           start?.recovery,
           this.boundaryScope(event.matchId, event.cursor),
+          this.sourceFor(event.matchId, event.cursor),
         )
         .then(() => {
           if (start !== undefined && start.revision === this.mapStartRevision)
@@ -970,6 +995,8 @@ export class OutputService {
           this.now(),
         );
       else {
+        const source = this.options.exactSource?.();
+        if (source) await this.outbox.bindUnsentSource(source);
         const invalidatedStarts = await this.outbox.flush({
           sink: this.sink,
           now: this.now(),
@@ -1105,6 +1132,10 @@ export class OutputService {
     return this.outbox?.getScopeDisposition(scope);
   }
 
+  async archiveConfirmedSource(identity: ExactSource): Promise<void> {
+    await this.outbox?.archiveConfirmedSource(identity);
+  }
+
   /** Stop producing this scope, then wait for the existing owner to settle its queue. */
   async settleSourceForRelease(scope: ReliableDeliveryScope): Promise<boolean> {
     this.retiringScopes.add(
@@ -1220,6 +1251,16 @@ export class OutputService {
 
   private canSend(event: ReliableEventV1, lineup?: readonly string[]): boolean {
     const bundle = this.bundle;
+    const recorded = this.outbox
+      ?.getRecords()
+      .find((record) => record.event.idempotencyKey === event.idempotencyKey);
+    if (recorded?.awaitingSource) return false;
+    const recordedSource = recorded?.source;
+    if (
+      recordedSource &&
+      JSON.stringify(recordedSource) !== JSON.stringify(this.sourceFor(event.matchId, event.cursor))
+    )
+      return false;
     const scope = this.boundaryScope(event.matchId, event.cursor);
     if (this.boundaryCommitIsPending(scope) || this.outbox?.hasBoundaryGap(scope)) return false;
     if (
