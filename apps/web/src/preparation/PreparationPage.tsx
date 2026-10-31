@@ -699,10 +699,7 @@ export function PreparationPage() {
                   canWrite={libraryStatus === 'ready'}
                 />
               ) : null}
-              <details
-                id="series-binding"
-                open={window.location.hash === '#series-binding' || undefined}
-              >
+              <details>
                 <summary>回收站与本地管理</summary>
                 <LocalMatchControls mode="select" action={action} />
               </details>
@@ -788,7 +785,14 @@ export function PreparationPage() {
               />
             ) : null}
             {tab === 'details' && match ? (
-              <details>
+              <details
+                id="series-binding"
+                open={
+                  window.location.hash === '#series-binding' ||
+                  query.get('tab') === 'maps' ||
+                  undefined
+                }
+              >
                 <summary>现场地图对应（异常时处理）</summary>
                 <SeriesBindingControls />
               </details>
