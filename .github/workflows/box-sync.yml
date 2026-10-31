@@ -97,6 +97,18 @@ jobs:
           MIZAR_BOX_REPO_TOKEN: ${{ secrets.MIZAR_BOX_REPO_TOKEN }}
           BOX_PLAN_SHA256: ${{ steps.plan.outputs.plan_sha256 }}
         run: node scripts/qualification/box-phases.mjs anonymous "$RUNNER_TEMP/box-plan" "$RUNNER_TEMP/box-receipts"
+      - name: 保留本次计划与通道证据
+        if: ${{ always() && env.BOX_SYNC_MODE == 'sync' && steps.read_release.outputs.sync == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: box-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/box-plan/plan.json
+            ${{ runner.temp }}/box-lanes/orchestration.json
+            ${{ runner.temp }}/box-lanes/*-result.json
+            ${{ runner.temp }}/box-receipts/*.json
+          if-no-files-found: warn
+          retention-days: 7
       - name: Record complete qualification trigger through Box verification timing
         if: ${{ always() && env.BOX_SYNC_MODE == 'sync' && (steps.read_release.outputs.prerelease == 'false' || steps.read_release.outcome != 'success') }}
         env:
