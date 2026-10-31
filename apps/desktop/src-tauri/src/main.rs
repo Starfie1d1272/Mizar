@@ -4952,12 +4952,10 @@ fn main() {
             }
             let deadline = Instant::now() + Duration::from_secs(40);
             while Instant::now() < deadline {
-                if !ExitRequest::exists(&scope).map_err(|error| error.to_string())? {
-                    return if stopped.requested() {
-                        Ok(true)
-                    } else {
-                        Err("桌面退出未确认完成，请查看运行日志。".into())
-                    };
+                // The request handle disappears when the GUI closes, before
+                // its outer Host has finished waiting for Companion cleanup.
+                if stopped.requested() {
+                    return Ok(true);
                 }
                 thread::sleep(Duration::from_millis(100));
             }
