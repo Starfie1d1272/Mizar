@@ -1954,7 +1954,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     options.rivalhubConnection?.setSourceSettlement?.(
       (scope) => outputService.settleSourceForRelease(scope),
       (scope) => outputService.resumeSource(scope),
-      (identity) => outputService.archiveConfirmedSource(identity),
+      (identity, disposition) =>
+        disposition === 'revoked'
+          ? outputService.isolateRevokedSource(identity)
+          : outputService.archiveConfirmedSource(identity),
+      () => outputService.getReliableActiveSources(),
     );
     options.rivalhubConnection?.startSourceCleanup?.();
     businessJournal?.runtime(
@@ -1986,6 +1990,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   app.get('/local/v1/reliable-output-status', (_request, reply) =>
     reply.header('cache-control', 'no-store').send({
       recovery: outputService.getReliableRecovery() ?? null,
+      revokedIsolation: outputService.getRevokedIsolationSummary() ?? null,
       records: outputService.getReliableRecords().map((record) => ({
         idempotencyKey: record.event.idempotencyKey,
         kind: record.event.kind,

@@ -1125,8 +1125,20 @@ export class OutputService {
     return this.outbox?.getScopeDisposition(scope);
   }
 
+  getRevokedIsolationSummary() {
+    return this.outbox?.getRevokedIsolationSummary();
+  }
+
+  getReliableActiveSources(): readonly ExactSource[] {
+    return this.outbox?.getActiveSources() ?? [];
+  }
+
   async archiveConfirmedSource(identity: ExactSource): Promise<void> {
     await this.outbox?.archiveConfirmedSource(identity);
+  }
+
+  async isolateRevokedSource(identity: ExactSource): Promise<void> {
+    await this.outbox?.isolateRevokedSource(identity);
   }
 
   /** Stop producing this scope, then wait for the existing owner to settle its queue. */

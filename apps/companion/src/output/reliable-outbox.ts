@@ -129,11 +129,14 @@ export interface ReliableScopeDisposition {
   readonly rejected: number;
   readonly superseded: number;
   readonly expired: number;
+  readonly isolated: number;
+  readonly isolatedIntents: number;
   readonly records: readonly {
     readonly kind: ReliableEventV1['kind'];
     readonly idempotencyKey: string;
     readonly status: ReliableDeliveryStatus;
     readonly needsAttention: boolean;
+    readonly isolation?: 'revoked_unconfirmed';
   }[];
 }
 
@@ -183,6 +186,13 @@ interface OutboxFile {
 interface ArchivedSource {
   readonly identity: ExactSource;
   readonly records: readonly ReliableOutboxRecord[];
+}
+
+interface RevokedSource {
+  readonly disposition: 'revoked_unconfirmed';
+  readonly identity: ExactSource;
+  readonly records: readonly ReliableOutboxRecord[];
+  readonly intents: readonly BoundaryIntent[];
 }
 
 function parseSource(input: unknown): ExactSource {
@@ -431,6 +441,35 @@ function parseCommit(value: unknown): NonNullable<OutboxFile['commit']> {
   return { id: commit.id, sha256: commit.sha256 };
 }
 
+function parseBoundaryIntent(raw: unknown): BoundaryIntent {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw))
+    throw new Error('boundary_intent_invalid');
+  const item = raw as Record<string, unknown>;
+  if (
+    (item.expired !== undefined && item.expired !== true) ||
+    typeof item.planFingerprint !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(item.planFingerprint) ||
+    typeof item.authorityFingerprint !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(item.authorityFingerprint)
+  )
+    throw new Error('boundary_intent_invalid');
+  const event = parseReliableEventV1(item.event);
+  const source = item.source === undefined ? undefined : parseSource(item.source);
+  if (item.awaitingSource !== undefined && (item.awaitingSource !== true || source))
+    throw new Error('outbox_source_invalid');
+  if (source && !sourceMatchesEvent(source, event)) throw new Error('outbox_source_mismatch');
+  if (!isContinuityBoundary(event) || event.evidence.contextFresh || !event.cursor.liveSessionId)
+    throw new Error('boundary_intent_invalid');
+  return {
+    event,
+    ...(source === undefined ? {} : { source }),
+    ...(item.awaitingSource === true ? { awaitingSource: true as const } : {}),
+    planFingerprint: item.planFingerprint,
+    authorityFingerprint: item.authorityFingerprint,
+    ...(item.expired === true ? { expired: true as const } : {}),
+  };
+}
+
 function parseOutbox(bytes: Buffer): OutboxFile {
   if (bytes.length > 4_000_000) throw new Error('outbox_too_large');
   const raw: unknown = JSON.parse(bytes.toString('utf8'));
@@ -548,38 +587,7 @@ function parseOutbox(bytes: Buffer): OutboxFile {
     };
   });
   const boundaryIntents = (value.boundaryIntents as unknown[] | undefined)?.map(
-    (raw): BoundaryIntent => {
-      if (!raw || typeof raw !== 'object' || Array.isArray(raw))
-        throw new Error('boundary_intent_invalid');
-      const item = raw as Record<string, unknown>;
-      if (
-        (item.expired !== undefined && item.expired !== true) ||
-        typeof item.planFingerprint !== 'string' ||
-        !/^[a-f0-9]{64}$/.test(item.planFingerprint) ||
-        typeof item.authorityFingerprint !== 'string' ||
-        !/^[a-f0-9]{64}$/.test(item.authorityFingerprint)
-      )
-        throw new Error('boundary_intent_invalid');
-      const event = parseReliableEventV1(item.event);
-      const source = item.source === undefined ? undefined : parseSource(item.source);
-      if (item.awaitingSource !== undefined && (item.awaitingSource !== true || source))
-        throw new Error('outbox_source_invalid');
-      if (source && !sourceMatchesEvent(source, event)) throw new Error('outbox_source_mismatch');
-      if (
-        !isContinuityBoundary(event) ||
-        event.evidence.contextFresh ||
-        !event.cursor.liveSessionId
-      )
-        throw new Error('boundary_intent_invalid');
-      return {
-        event,
-        ...(source === undefined ? {} : { source }),
-        ...(item.awaitingSource === true ? { awaitingSource: true as const } : {}),
-        planFingerprint: item.planFingerprint,
-        authorityFingerprint: item.authorityFingerprint,
-        ...(item.expired === true ? { expired: true as const } : {}),
-      };
-    },
+    parseBoundaryIntent,
   );
 
   let continuity: DeliveryContinuity | undefined;
@@ -679,6 +687,7 @@ export function outboxLocalError(error: unknown, depth = 0): unknown {
 export class ReliableOutbox {
   private records: readonly ReliableOutboxRecord[] = [];
   private archivedSources: readonly ArchivedSource[] = [];
+  private revokedSources: readonly RevokedSource[] = [];
   private legacyRecords: readonly ReliableOutboxRecord[] = [];
   private damagedArchiveScopes = new Set<string>();
   private boundaryIntents: readonly BoundaryIntent[] = [];
@@ -702,6 +711,60 @@ export class ReliableOutbox {
 
   getRecovery(): OutboxRecovery | undefined {
     return this.recovery;
+  }
+
+  private async loadRevokedSources(): Promise<void> {
+    let names: string[];
+    try {
+      names = await readdir(`${this.filePath}.revoked`);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw error;
+    }
+    for (const name of names) {
+      if (!/^[a-f0-9]{64}-[a-f0-9]{64}\.json$/.test(name)) continue;
+      try {
+        const bytes = await readFile(join(`${this.filePath}.revoked`, name));
+        if (bytes.length > 4_000_000) throw new Error('outbox_revoked_too_large');
+        const value = JSON.parse(bytes.toString('utf8')) as Record<string, unknown>;
+        const identity = parseSource(value.identity);
+        if (
+          value.disposition !== 'revoked_unconfirmed' ||
+          !Array.isArray(value.records) ||
+          !Array.isArray(value.intents)
+        )
+          throw new Error('outbox_revoked_invalid');
+        const records = value.records.map(parseRecord);
+        const intents = value.intents.map(parseBoundaryIntent);
+        const archive: RevokedSource = {
+          disposition: 'revoked_unconfirmed',
+          identity,
+          records,
+          intents,
+        };
+        const storedPayload = {
+          disposition: value.disposition,
+          identity: value.identity,
+          records: value.records,
+          intents: value.intents,
+        };
+        if (
+          name !== archiveName(identity) ||
+          value.sha256 !==
+            createHash('sha256').update(JSON.stringify(storedPayload)).digest('hex') ||
+          records.some(
+            (record) => !record.source || sourceKey(record.source) !== sourceKey(identity),
+          ) ||
+          intents.some(
+            (intent) => !intent.source || sourceKey(intent.source) !== sourceKey(identity),
+          )
+        )
+          throw new Error('outbox_revoked_invalid');
+        this.revokedSources = [...this.revokedSources, archive];
+      } catch {
+        this.damagedArchiveScopes.add(name.slice(0, 64));
+      }
+    }
   }
 
   private async loadArchives(): Promise<void> {
@@ -833,6 +896,7 @@ export class ReliableOutbox {
 
   async load(): Promise<void> {
     await this.loadArchives();
+    await this.loadRevokedSources();
     // I/O errors are not evidence of damaged contents and must stay actionable.
     let bytes: Buffer | undefined;
     try {
@@ -951,6 +1015,14 @@ export class ReliableOutbox {
   getRecords(): readonly ReliableOutboxRecord[] {
     const keys = new Set(this.records.map((record) => record.event.idempotencyKey));
     return [
+      ...this.revokedSources
+        .flatMap((archive) => archive.records)
+        .filter(
+          (record) =>
+            record.status === 'rejected' &&
+            record.event.kind === 'map_started' &&
+            !keys.has(record.event.idempotencyKey),
+        ),
       ...this.legacyRecords.filter(
         (record) =>
           record.status === 'rejected' &&
@@ -969,11 +1041,14 @@ export class ReliableOutbox {
       rejected: 0,
       superseded: 0,
       expired: 0,
+      isolated: 0,
+      isolatedIntents: 0,
       records: [] as {
         kind: ReliableEventV1['kind'];
         idempotencyKey: string;
         status: ReliableDeliveryStatus;
         needsAttention: boolean;
+        isolation?: 'revoked_unconfirmed';
       }[],
     };
     const seen = new Set<string>();
@@ -1000,7 +1075,59 @@ export class ReliableOutbox {
         needsAttention: record.receiverOutcome === 'needs_attention',
       });
     }
+    for (const archive of this.revokedSources) {
+      if (
+        archive.identity.matchId !== scope.matchId ||
+        archive.identity.producerInstanceId !== scope.producerInstanceId ||
+        archive.identity.liveSessionId !== scope.liveSessionId
+      )
+        continue;
+      result.isolatedIntents += archive.intents.length;
+      for (const record of archive.records) {
+        if (seen.has(record.event.idempotencyKey)) {
+          // A file-first commit can leave the active copy present after a crash.
+          const item = result.records.find(
+            (entry) => entry.idempotencyKey === record.event.idempotencyKey,
+          );
+          if (item) item.isolation = 'revoked_unconfirmed';
+        } else {
+          seen.add(record.event.idempotencyKey);
+          result[record.status]++;
+          if (record.receiverOutcome === 'needs_attention') result.needsAttention++;
+          result.records.push({
+            kind: record.event.kind,
+            idempotencyKey: record.event.idempotencyKey,
+            status: record.status,
+            needsAttention: record.receiverOutcome === 'needs_attention',
+            isolation: 'revoked_unconfirmed',
+          });
+        }
+        result.isolated++;
+      }
+    }
     return result;
+  }
+
+  getRevokedIsolationSummary() {
+    return {
+      disposition: 'revoked_unconfirmed' as const,
+      scopes: this.revokedSources.length,
+      records: this.revokedSources.reduce((count, archive) => count + archive.records.length, 0),
+      pending: this.revokedSources.reduce(
+        (count, archive) =>
+          count + archive.records.filter((record) => record.status === 'pending').length,
+        0,
+      ),
+      intents: this.revokedSources.reduce((count, archive) => count + archive.intents.length, 0),
+    };
+  }
+
+  getActiveSources(): readonly ExactSource[] {
+    const sources = new Map<string, ExactSource>();
+    for (const item of [...this.records, ...this.boundaryIntents]) {
+      if (item.source) sources.set(sourceKey(item.source), item.source);
+    }
+    return [...sources.values()];
   }
 
   /** Called only after the release owner has confirmed this exact authority ended. */
@@ -1072,6 +1199,68 @@ export class ReliableOutbox {
     });
   }
 
+  /** Preserve every exact-source item without claiming remote closure or delivery. */
+  isolateRevokedSource(input: ExactSource): Promise<void> {
+    return this.queue.run(async () => {
+      const identity = parseSource(input);
+      const key = sourceKey(identity);
+      const affected = this.records.filter(
+        (record) => record.source && sourceKey(record.source) === key,
+      );
+      const intents = this.boundaryIntents.filter(
+        (intent) => intent.source && sourceKey(intent.source) === key,
+      );
+      if (
+        this.damagedArchiveScopes.has(
+          scopeDigest(
+            identity.competitionId,
+            identity.matchId,
+            identity.producerInstanceId,
+            identity.liveSessionId,
+          ),
+        )
+      )
+        throw new Error('outbox_archive_unreadable');
+      let saved = this.revokedSources.find((archive) => sourceKey(archive.identity) === key);
+      if (!saved) {
+        saved = { disposition: 'revoked_unconfirmed', identity, records: affected, intents };
+        const document = {
+          ...saved,
+          sha256: createHash('sha256').update(JSON.stringify(saved)).digest('hex'),
+        };
+        if (durableJsonByteLength(document) > 4_000_000)
+          throw new Error('outbox_revoked_too_large');
+        // Publish the fence and its full evidence before releasing any active slot.
+        await replaceDurableJson(join(`${this.filePath}.revoked`, archiveName(identity)), document);
+        this.revokedSources = [...this.revokedSources, saved];
+      }
+      if (
+        affected.some(
+          (record) =>
+            !saved!.records.some((item) => JSON.stringify(item) === JSON.stringify(record)),
+        ) ||
+        intents.some(
+          (intent) =>
+            !saved!.intents.some((item) => JSON.stringify(item) === JSON.stringify(intent)),
+        )
+      )
+        throw new Error('outbox_revoked_conflict');
+      await this.commit(
+        this.records.filter((record) => !record.source || sourceKey(record.source) !== key),
+        this.continuity,
+        this.boundaryIntents.filter((intent) => !intent.source || sourceKey(intent.source) !== key),
+      );
+    });
+  }
+
+  private isRevokedEvent(event: ReliableEventV1, source?: ExactSource): boolean {
+    return this.revokedSources.some((archive) =>
+      source
+        ? sourceKey(archive.identity) === sourceKey(source)
+        : sourceMatchesEvent(archive.identity, event),
+    );
+  }
+
   private assertSourceOpen(event: ReliableEventV1, source?: ExactSource): void {
     if (
       this.damagedArchiveScopes.has(
@@ -1085,6 +1274,7 @@ export class ReliableOutbox {
     )
       throw new Error('outbox_archive_unreadable');
     if (source && !sourceMatchesEvent(source, event)) throw new Error('outbox_source_mismatch');
+    if (this.isRevokedEvent(event, source)) throw new Error('outbox_source_revoked');
     if (
       this.archivedSources.some((archive) =>
         source
@@ -1118,7 +1308,11 @@ export class ReliableOutbox {
   }
 
   hasUnconfirmedBoundary(event: ReliableEventV1): boolean {
-    return [...this.records, ...this.legacyRecords].some(
+    return [
+      ...this.records,
+      ...this.legacyRecords,
+      ...this.revokedSources.flatMap((archive) => archive.records),
+    ].some(
       (record) =>
         (record.status !== 'accepted' || record.receiverOutcome === 'needs_attention') &&
         isContinuityBoundary(record.event) &&
@@ -1156,6 +1350,7 @@ export class ReliableOutbox {
       const record = this.getRecords().find((item) => item.event.idempotencyKey === key);
       if (
         !record ||
+        this.isRevokedEvent(record.event, record.source) ||
         record.status !== 'rejected' ||
         record.event.kind !== 'map_started' ||
         !['context_stale', 'generation_fence', 'epoch_fence'].includes(
@@ -1183,11 +1378,20 @@ export class ReliableOutbox {
   }
 
   getBoundaryIntents(scope?: BoundaryScope): readonly BoundaryIntent[] {
-    return scope
-      ? this.boundaryIntents.filter((intent) =>
-          this.matchesBoundaryScope(intent.event, intent.authorityFingerprint, scope),
-        )
-      : this.boundaryIntents;
+    if (!scope) return this.boundaryIntents;
+    const seen = new Set<string>();
+    return [
+      ...this.boundaryIntents,
+      ...this.revokedSources.flatMap((archive) => archive.intents),
+    ].filter((intent) => {
+      if (
+        !this.matchesBoundaryScope(intent.event, intent.authorityFingerprint, scope) ||
+        seen.has(intent.event.idempotencyKey)
+      )
+        return false;
+      seen.add(intent.event.idempotencyKey);
+      return true;
+    });
   }
 
   private matchesBoundaryScope(
@@ -1283,6 +1487,12 @@ export class ReliableOutbox {
           this.legacyRecords.some(
             (record) => record.event.idempotencyKey === event.idempotencyKey,
           ) ||
+          this.revokedSources.some((archive) =>
+            archive.records.some((record) => record.event.idempotencyKey === event.idempotencyKey),
+          ) ||
+          this.revokedSources.some((archive) =>
+            archive.intents.some((intent) => intent.event.idempotencyKey === event.idempotencyKey),
+          ) ||
           this.archivedSources.some((archive) =>
             archive.records.some((record) => record.event.idempotencyKey === event.idempotencyKey),
           )
@@ -1325,6 +1535,7 @@ export class ReliableOutbox {
         const boundaries = intents.map((intent) => intent.event);
         const previous = this.records.map((record): ReliableOutboxRecord =>
           record.status === 'pending' &&
+          !this.isRevokedEvent(record.event, record.source) &&
           ['map_ended', 'map_player_snapshot', 'series_ended'].includes(record.event.kind) &&
           boundaries.some((boundary) => dependsOnBoundary(record.event, boundary))
             ? {
@@ -1379,6 +1590,7 @@ export class ReliableOutbox {
     return this.queue.run(async () => {
       const intents = this.boundaryIntents.map((intent) =>
         !intent.expired &&
+        !this.isRevokedEvent(intent.event, intent.source) &&
         now.getTime() - Date.parse(intent.event.observedAt) >= RELIABLE_OUTBOX_RETENTION_MS
           ? { ...intent, expired: true as const }
           : intent,
@@ -1399,6 +1611,7 @@ export class ReliableOutbox {
         this.boundaryCaptureFailed ||
         this.boundaryGap ||
         intent.expired ||
+        this.isRevokedEvent(intent.event, intent.source) ||
         !this.boundaryIntents.includes(intent)
       )
         return false;
@@ -1427,8 +1640,12 @@ export class ReliableOutbox {
         [
           ...this.records,
           ...this.legacyRecords,
+          ...this.revokedSources.flatMap((archive) => archive.records),
           ...this.archivedSources.flatMap((archive) => archive.records),
-        ].some((record) => record.event.idempotencyKey === valid.idempotencyKey)
+        ].some((record) => record.event.idempotencyKey === valid.idempotencyKey) ||
+        this.revokedSources.some((archive) =>
+          archive.intents.some((intent) => intent.event.idempotencyKey === valid.idempotencyKey),
+        )
       )
         throw new Error('boundary_duplicate');
       const at = now.toISOString();
@@ -1507,8 +1724,12 @@ export class ReliableOutbox {
         [
           ...this.records,
           ...this.legacyRecords,
+          ...this.revokedSources.flatMap((archive) => archive.records),
           ...this.archivedSources.flatMap((archive) => archive.records),
-        ].some((record) => record.event.idempotencyKey === valid.idempotencyKey)
+        ].some((record) => record.event.idempotencyKey === valid.idempotencyKey) ||
+        this.revokedSources.some((archive) =>
+          archive.intents.some((intent) => intent.event.idempotencyKey === valid.idempotencyKey),
+        )
       )
         return false;
       if (
@@ -1522,7 +1743,11 @@ export class ReliableOutbox {
         ['map_ended', 'map_player_snapshot', 'series_ended'].includes(valid.kind) &&
         (this.hasBoundaryGap(scope) ||
           this.getBoundaryIntents(scope).some((intent) => dependsOnBoundary(valid, intent.event)) ||
-          [...this.records, ...this.legacyRecords].some(
+          [
+            ...this.records,
+            ...this.legacyRecords,
+            ...this.revokedSources.flatMap((archive) => archive.records),
+          ].some(
             (record) =>
               isContinuityBoundary(record.event) &&
               (['rejected', 'expired', 'superseded'].includes(record.status) ||
@@ -1546,6 +1771,8 @@ export class ReliableOutbox {
         if (
           valid.kind !== 'map_started' ||
           rejected.length !== 1 ||
+          rejected[0] === undefined ||
+          this.isRevokedEvent(rejected[0].event, rejected[0].source) ||
           rejected[0]?.event.idempotencyKey !== recoveryKey ||
           rejected[0].recoveryState !== 'awaiting_observation'
         )
@@ -1588,7 +1815,11 @@ export class ReliableOutbox {
       const now = input.now ?? new Date();
       let changed = false;
       const invalidatedStarts: string[] = [];
-      const unconfirmedBoundaries = [...this.records, ...this.legacyRecords].filter(
+      const unconfirmedBoundaries = [
+        ...this.records,
+        ...this.legacyRecords,
+        ...this.revokedSources.flatMap((archive) => archive.records),
+      ].filter(
         (record) =>
           isContinuityBoundary(record.event) &&
           (record.status !== 'accepted' || record.receiverOutcome === 'needs_attention'),
@@ -1600,7 +1831,11 @@ export class ReliableOutbox {
       let blockedByMapEnd = false;
       // Terminal failures remain fences: a later event cannot turn a rejected or
       // expired continuity transition into an implicit acknowledgement.
-      const blockedBoundaries = [...this.records, ...this.legacyRecords]
+      const blockedBoundaries = [
+        ...this.records,
+        ...this.legacyRecords,
+        ...this.revokedSources.flatMap((archive) => archive.records),
+      ]
         .filter(
           (record) =>
             isContinuityBoundary(record.event) &&
@@ -1608,8 +1843,19 @@ export class ReliableOutbox {
               record.receiverOutcome === 'needs_attention'),
         )
         .map((record) => record.event);
+      blockedBoundaries.push(
+        ...this.revokedSources
+          .flatMap((archive) => archive.records)
+          .filter((record) => record.status === 'pending' && isContinuityBoundary(record.event))
+          .map((record) => record.event),
+      );
       for (const record of this.records) {
         if (record.status !== 'pending') {
+          next.push(record);
+          continue;
+        }
+        if (this.isRevokedEvent(record.event, record.source)) {
+          if (isContinuityBoundary(record.event)) blockedBoundaries.push(record.event);
           next.push(record);
           continue;
         }
@@ -1642,7 +1888,12 @@ export class ReliableOutbox {
               a.programSourceGeneration === b.programSourceGeneration &&
               a.mapEpoch === b.mapEpoch &&
               a.runtimeSeq >= b.runtimeSeq &&
-              ![...next, ...this.records, ...this.legacyRecords].some((proof) => {
+              ![
+                ...next,
+                ...this.records,
+                ...this.legacyRecords,
+                ...this.revokedSources.flatMap((archive) => archive.records),
+              ].some((proof) => {
                 const c = proof.event.cursor;
                 return (
                   proof.status === 'accepted' &&
@@ -1697,9 +1948,12 @@ export class ReliableOutbox {
         }
         if (record.event.kind === 'map_player_snapshot') {
           const mapEndedKey = record.event.payload.mapEndedKey;
-          const parent = [...next, ...this.records, ...this.legacyRecords].find(
-            (r) => r.event.idempotencyKey === mapEndedKey,
-          );
+          const parent = [
+            ...next,
+            ...this.records,
+            ...this.legacyRecords,
+            ...this.revokedSources.flatMap((archive) => archive.records),
+          ].find((r) => r.event.idempotencyKey === mapEndedKey);
           if (!parent || ['rejected', 'expired', 'superseded'].includes(parent.status)) {
             next.push({ ...record, status: 'superseded', updatedAt: now.toISOString() });
             changed = true;
@@ -1789,7 +2043,8 @@ export class ReliableOutbox {
   ): Promise<void> {
     return this.queue.run(async () => {
       const next = this.records.map((record): ReliableOutboxRecord => {
-        if (record.status !== 'pending') return record;
+        if (record.status !== 'pending' || this.isRevokedEvent(record.event, record.source))
+          return record;
         const expired =
           now.getTime() - Date.parse(record.event.observedAt) >= RELIABLE_OUTBOX_RETENTION_MS;
         if (!expired && isCurrent(record.event, record.lineupSteam64)) return record;
@@ -1807,7 +2062,9 @@ export class ReliableOutbox {
   supersedeWhere(selected: (event: ReliableEventV1) => boolean, now = new Date()): Promise<void> {
     return this.queue.run(async () => {
       const records = this.records.map((record) =>
-        record.status === 'pending' && selected(record.event)
+        record.status === 'pending' &&
+        !this.isRevokedEvent(record.event, record.source) &&
+        selected(record.event)
           ? { ...record, status: 'superseded' as const, updatedAt: now.toISOString() }
           : record,
       );
@@ -1855,6 +2112,8 @@ export class ReliableOutbox {
       boundaryIntents.at(-1)?.event ??
       this.continuityReference ??
       this.archivedSources.flatMap((archive) => archive.records).at(-1)?.event ??
+      this.revokedSources.flatMap((archive) => [...archive.records, ...archive.intents]).at(-1)
+        ?.event ??
       this.legacyRecords.at(-1)?.event;
     const file: OutboxFile = sealOutbox({
       version: RELIABLE_OUTBOX_VERSION,

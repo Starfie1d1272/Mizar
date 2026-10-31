@@ -145,6 +145,7 @@ function sameScope(a: SourceScope, b: SourceScope): boolean {
 export class RivalHubSourceState {
   private readonly queue = new SerialCommitQueue();
   private state: SourceState | undefined;
+  private revokedScanCursor = 0;
   constructor(
     private readonly path: string,
     private readonly faultInjector?: DurableJsonFaultInjector,
@@ -234,6 +235,59 @@ export class RivalHubSourceState {
 
   async getQuarantined(scope: SourceScope): Promise<readonly QuarantineEvidence[]> {
     return this.evidenceForScope(scopeSchema.parse(scope));
+  }
+
+  /** Durable revocation evidence is also the retry queue for the output owner. */
+  async getRevokedSources(
+    excluded: readonly ExactSource[] = [],
+    limit = 8,
+    priority: readonly ExactSource[] = [],
+  ): Promise<readonly ExactSource[]> {
+    const result = new Map<string, ExactSource>();
+    const excludedKeys = new Set(excluded.map(exactKey));
+    const excludedTokens = new Set(
+      excluded.map((identity) => digest(`source:${exactKey(identity)}`)),
+    );
+    const state = await this.snapshot();
+    for (const record of state.records) {
+      const key = exactKey(record.identity);
+      if (
+        record.installationRevoked &&
+        record.state === 'archive_pending' &&
+        !excludedKeys.has(key)
+      )
+        result.set(key, record.identity);
+      if (result.size >= limit) return [...result.values()];
+    }
+    const names = (await this.quarantineNames()).filter(
+      (name) => name[65] === 's' && !excludedTokens.has(name.slice(67, 131)),
+    );
+    const priorityTokens = new Set(
+      priority.map((identity) => digest(`source:${exactKey(identity)}`)),
+    );
+    const prioritized = names.filter((name) => priorityTokens.has(name.slice(67, 131)));
+    const other = names.filter((name) => !priorityTokens.has(name.slice(67, 131)));
+    const rotating = prioritized.length ? prioritized : other;
+    const start = rotating.length ? this.revokedScanCursor % rotating.length : 0;
+    const ordered = [
+      ...rotating.slice(start),
+      ...rotating.slice(0, start),
+      ...(prioritized.length ? other : []),
+    ];
+    let examined = 0;
+    while (examined < Math.min(ordered.length, 32) && result.size < limit) {
+      const name = ordered[examined]!;
+      examined++;
+      try {
+        const item = await this.readQuarantine(name);
+        if (item.kind === 'source' && item.record.installationRevoked)
+          result.set(exactKey(item.record.identity), item.record.identity);
+      } catch {
+        // The unreadable scope remains blocked; other source jobs can continue.
+      }
+    }
+    this.revokedScanCursor = rotating.length ? (start + examined) % rotating.length : 0;
+    return [...result.values()];
   }
 
   /** Complete a previously interrupted file-first transfer before permitting new work. */
@@ -613,18 +667,20 @@ export class RivalHubSourceState {
   /** Revocation is not an exact per-source release confirmation. */
   async confirmRevokedInstallation(
     scope: Pick<SourceScope, 'baseUrl' | 'competitionId' | 'installationId'>,
-  ): Promise<void> {
-    await this.change(async (state) => {
+  ): Promise<readonly ExactSource[]> {
+    return this.change(async (state) => {
       const matches = (value: SourceScope) =>
         value.baseUrl === scope.baseUrl &&
         value.competitionId === scope.competitionId &&
         value.installationId === scope.installationId;
       const remaining: SourceRecord[] = [];
+      const revoked: ExactSource[] = [];
       for (const record of state.records) {
         if (!matches(record.identity)) {
           remaining.push(record);
           continue;
         }
+        revoked.push(record.identity);
         if (record.state === 'archive_pending') {
           remaining.push({ ...record, installationRevoked: true });
           continue;
@@ -652,6 +708,7 @@ export class RivalHubSourceState {
         await this.quarantine({ kind: 'intent', intent: state.intent });
         state.intent = null;
       }
+      return revoked;
     });
   }
 }
