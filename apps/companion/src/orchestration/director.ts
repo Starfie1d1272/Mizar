@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import type { CameraShot, OrchestrationStatus } from '@mizar/protocol/orchestration';
-import { musicCue, musicMapKey, musicPause, musicSafe, type MusicTruth } from '../music/cues.js';
+import { musicCue, musicPause, musicSafe, type MusicTruth } from '../music/cues.js';
+import {
+  cameraControlScope,
+  cameraExecutionScope,
+  type CameraControlScope,
+  type CameraExecutionScope,
+} from '../scope/identities.js';
 import type { GatewayResult, MulnxProvider } from './provider.js';
 import type { OrchestrationStore } from './store.js';
 
@@ -15,13 +21,13 @@ export class CameraDirector {
   private host = '';
   private controlEpoch = 0;
   private native: { lease: string; host: string; until: number; blocked: boolean } | null = null;
-  private context = '';
-  private execution = '';
+  private context: CameraControlScope | '' = '';
+  private execution: CameraExecutionScope | '' = '';
   private connection = -1;
   private held = true;
   private intentRevision = 0;
   private preparation: OrchestrationStatus['preparation'] = 'waiting';
-  private preparationKey = '';
+  private preparationKey: CameraControlScope | '' = '';
   private preparationEpoch = 0;
   private preparing: Promise<void> | null = null;
   private closed = false;
@@ -124,17 +130,8 @@ export class CameraDirector {
       this.invalidateNative();
     return Boolean(this.native && !this.native.blocked);
   }
-  private executionIdentity(t: CameraTruth) {
-    const c = t.program.cursor;
-    return JSON.stringify([musicMapKey(t.program), c.producerInstanceId, c.liveSessionId]);
-  }
   private identity(t: CameraTruth) {
-    return JSON.stringify([
-      this.executionIdentity(t),
-      t.program.cursor.programSourceGeneration,
-      this.store.revision,
-      this.controlEpoch,
-    ]);
+    return cameraControlScope(t.program, this.store.revision, this.controlEpoch);
   }
   private safe(t: CameraTruth, audition = false) {
     return (
@@ -193,7 +190,7 @@ export class CameraDirector {
     const t = this.truth();
     const context = this.identity(t);
     if (context !== this.context || this.connection !== this.provider.generation) {
-      const execution = this.executionIdentity(t);
+      const execution = cameraExecutionScope(t.program);
       const mapChanged = execution !== this.execution;
       this.execution = execution;
       this.invalidatePreparation('地图或连接已变化，正在准备运镜。');
