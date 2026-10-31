@@ -243,11 +243,24 @@ export class LocalChannelClient<C extends LocalSnapshotChannel> {
     } catch {
       // A closed socket needs no further cleanup.
     }
-    void recoverChannelVersion(this.channel).then((result) => {
+    this.checkVersion(checkingGeneration, reason);
+  }
+
+  private checkVersion(checkingGeneration: number, reason: string, knownMismatch = false): void {
+    void recoverChannelVersion(this.channel, knownMismatch).then((result) => {
       if (this.disposed || checkingGeneration !== this.connectionGeneration) return;
       this.checkingVersion = false;
       if (result === 'retry') {
         this.handleRetry(checkingGeneration, reason);
+      } else if (result === 'recheck') {
+        const delay =
+          RECONNECT_BACKOFF_MS[Math.min(this.reconnectIndex, RECONNECT_BACKOFF_MS.length - 1)]!;
+        this.reconnectIndex = Math.min(this.reconnectIndex + 1, RECONNECT_BACKOFF_MS.length - 1);
+        this.reconnectTimer = this.scheduler.setTimeout(() => {
+          this.reconnectTimer = undefined;
+          this.checkingVersion = true;
+          this.checkVersion(checkingGeneration, reason, true);
+        }, delay);
       } else {
         this.store.setState('protocol-error', 'local channel version incompatible');
         if (result === 'reload') window.location.reload();

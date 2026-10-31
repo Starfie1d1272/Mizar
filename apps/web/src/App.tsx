@@ -12,7 +12,7 @@ import { PreparationPage } from './preparation/PreparationPage';
 import { ResourceLibraryPage } from './resource-library/ResourceLibraryPage';
 import { BpPage } from './bp/BpPage';
 import { OperatorShell } from './operator/OperatorShell';
-import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
 import {
   explainRuntimeDiagnostic,
@@ -189,7 +189,12 @@ function ProgramRoute() {
       }),
     [programClient],
   );
+  const cueDisposal = useRef<{ client: typeof cueClient; timer: number } | null>(null);
   useEffect(() => {
+    if (cueDisposal.current?.client === cueClient) {
+      window.clearTimeout(cueDisposal.current.timer);
+      cueDisposal.current = null;
+    }
     const observeProgramSnapshot = () =>
       cueClient.observeProgramSnapshot(programClient.getSnapshot().current);
     observeProgramSnapshot();
@@ -197,7 +202,11 @@ function ProgramRoute() {
     cueClient.start();
     return () => {
       unsubscribe();
-      cueClient.dispose();
+      const timer = window.setTimeout(() => {
+        cueClient.dispose();
+        if (cueDisposal.current?.client === cueClient) cueDisposal.current = null;
+      }, 0);
+      cueDisposal.current = { client: cueClient, timer };
     };
   }, [cueClient, programClient]);
 

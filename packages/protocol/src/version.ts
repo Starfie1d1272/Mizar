@@ -13,6 +13,10 @@ export const LOCAL_SNAPSHOT_VERSIONS = {
   operator: OPERATOR_SCHEMA_VERSION,
   assist: ASSIST_SCHEMA_VERSION,
 } as const;
+export const LOCAL_CHANNEL_VERSIONS = {
+  ...LOCAL_SNAPSHOT_VERSIONS,
+  'program-cue': PROGRAM_CUE_SCHEMA_VERSION,
+} as const;
 
 export const LOCAL_SNAPSHOT_CHANNELS = ['program', 'radar', 'operator', 'assist'] as const;
 export const LOCAL_TRANSIENT_CHANNELS = ['program-cue'] as const;
