@@ -1192,9 +1192,14 @@ export async function verifyStableReadbacks({ box, identity, bootstrap, resource
   // A pointer is published only after upload/hash verification and complete
   // archival. Failed cleanup never advertises a new update to clients.
   const readbacks = [
+    ...(runtime ?? [])
+      .filter((file) => file.name === `Mizar-v${identity.version}-Windows-x64-Core-Setup.exe`)
+      .map((file) => [`/Runtime/v${identity.version}/${file.name}`, file]),
     [`${downloadsFolder}/${bootstrap.identity.name}`, bootstrap.identity],
     ...(resources ?? []).map((file) => [`/Resources/v${identity.version}/${file.name}`, file]),
-    ...(runtime ?? []).map((file) => [`/Runtime/v${identity.version}/${file.name}`, file]),
+    ...(runtime ?? [])
+      .filter((file) => file.name !== `Mizar-v${identity.version}-Windows-x64-Core-Setup.exe`)
+      .map((file) => [`/Runtime/v${identity.version}/${file.name}`, file]),
   ];
   // Complete every post-write full hash before publishing. Bound only independent
   // reads; a failed batch joins its active siblings and starts no further batch.
