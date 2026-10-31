@@ -3367,34 +3367,6 @@ async fn present_workbench_panels(
 }
 
 #[tauri::command]
-fn workbench_message(
-    window: tauri::WebviewWindow,
-    app: tauri::AppHandle,
-    action: String,
-    message: Option<String>,
-) -> Result<(), String> {
-    if window.label() == "main" && action == "status" {
-        *app.state::<HostState>()
-            .entry_message
-            .lock()
-            .map_err(|_| "工作台状态不可用。")? = message.clone().unwrap_or_default();
-    }
-    let (target, event) = match (window.label(), action.as_str()) {
-        ("main", "status") => ("workspace-dock", "mizar-entry-status"),
-        ("workspace-dock", "retry") => ("main", "mizar-entry-retry"),
-        ("workspace-dock", "cancel") => ("main", "mizar-entry-cancel"),
-        _ => return Err("工作台请求无效。".into()),
-    };
-    let target = app.get_webview_window(target).ok_or("工作台窗口不可用。")?;
-    let data = serde_json::to_string(&message).map_err(|e| e.to_string())?;
-    target
-        .eval(&format!(
-            "window.dispatchEvent(new CustomEvent({event:?}, {{detail: {data}}}))"
-        ))
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
 fn workbench_status(app: tauri::AppHandle) -> Result<String, String> {
     app.state::<HostState>()
         .entry_message
