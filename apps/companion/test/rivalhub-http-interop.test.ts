@@ -259,7 +259,6 @@ test(
         let restorationAttempts = 0;
         const production = registerProductionRoutes(app, {
           originPolicy: createLocalWebOriginPolicy(),
-          hasContext: () => true,
           scenes,
           afterSafeScene: () => {
             restorationAttempts++;

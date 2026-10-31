@@ -1799,8 +1799,8 @@ async fn finish_workspace(
         let game = production_exit::restore_then_cleanup(
         || log.step("workspace_exit_observer", || observer_workspace::finish(&log)),
         || -> Result<(), String> {
-        let trial = log.step("workspace_exit_trial_status", || demo_test::status(&log))?;
-        if trial["active"] == true || cs2.has_demo_journal()? {
+        // Host-owned recovery evidence determines local work even when Companion is offline.
+        if cs2.has_demo_journal()? || demo_test::requires_recovery(&log, None) {
             feedback.stage("restoration");
             let _activity = activity.begin(2);
             if confirm_steam_cancelled == Some(true) {
@@ -2339,7 +2339,11 @@ async fn finish_demo_test(
                         })?;
                         let activity = host.state::<cs2_activity::Activity>();
                         let _activity = activity.begin(2);
-                        let state = demo_test::status(&host.state::<DesktopLog>())?;
+                        let state = match demo_test::status(&host.state::<DesktopLog>()) {
+                            Ok(state) => state,
+                            Err(_) if cs2.has_demo_journal()? => serde_json::Value::Null,
+                            Err(error) => return Err(error),
+                        };
                         if state["active"] != true && !cs2.has_demo_journal()? {
                             // A retry after completion must not finish a later normal game.
                             return Ok(());
@@ -2354,9 +2358,10 @@ async fn finish_demo_test(
                         {
                             return Err("Demo 试播状态已变化，请刷新后重试。".into());
                         }
-                        cs2.finish()?;
+                        let cleanup = cs2.finish();
                         refresh_finished_window_feedback(&host, &cs2);
-                        present_production_inner(&host, false)
+                        let presentation = present_production_inner(&host, false);
+                        production_exit::cleanup_results(cleanup, presentation)
                     },
                 )
             }

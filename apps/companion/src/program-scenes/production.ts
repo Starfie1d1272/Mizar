@@ -15,7 +15,6 @@ export function registerProductionRoutes(
   app: FastifyInstance,
   options: {
     originPolicy: LocalWebOriginPolicy;
-    hasContext: () => boolean;
     scenes: ProgramSceneController;
     release: () => Promise<void>;
     handoffRelease?: () => Promise<void>;
@@ -179,7 +178,7 @@ export function registerProductionRoutes(
       sessionId,
       releaseHandoffState,
       obsExitState,
-      canEnter: !trialPending && !shuttingDown && !updatePending && options.hasContext(),
+      canEnter: !trialPending && !shuttingDown && !updatePending,
     };
     productionViewSchema.parse(current);
     return current;
@@ -290,11 +289,6 @@ export function registerProductionRoutes(
     const controlValid = options.scenes.controlValid();
     try {
       if (body?.action === 'enter') {
-        if (!options.hasContext())
-          return {
-            code: lifecycleErrors.contextMissing.status,
-            value: { ...lifecycleErrors.contextMissing, message: '请先选择或创建比赛。' },
-          };
         options.beforeEnter?.();
         obsExitGeneration++;
         obsExitTask = undefined;

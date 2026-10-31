@@ -93,7 +93,6 @@ for (const condition of ['external output', 'OBS closed'] as const) {
       } as unknown as ProgramSceneController;
       const production = registerProductionRoutes(app, {
         originPolicy: createLocalWebOriginPolicy(),
-        hasContext: () => true,
         scenes,
         afterSafeScene: () =>
           condition === 'OBS closed'

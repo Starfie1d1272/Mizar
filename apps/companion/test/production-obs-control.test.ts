@@ -49,7 +49,6 @@ test('browser recovery is granted after entering and revoked on exit intent', as
   } as unknown as ProgramSceneController;
   const production = registerProductionRoutes(app, {
     originPolicy: createLocalWebOriginPolicy(),
-    hasContext: () => true,
     scenes,
     release: async () => undefined,
     onEntered: () => {
