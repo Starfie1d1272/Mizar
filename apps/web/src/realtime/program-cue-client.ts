@@ -8,7 +8,11 @@ import type {
   ProgramCueWire,
 } from '@mizar/protocol/program-cue';
 import type { ProgramSnapshot } from '@mizar/protocol/program';
-import { LOCAL_PROTOCOL_SUBPROTOCOL } from '@mizar/protocol/version';
+import {
+  LOCAL_PROTOCOL_SUBPROTOCOL,
+  LOCAL_PROTOCOL_VERSION,
+  PROGRAM_CUE_SCHEMA_VERSION,
+} from '@mizar/protocol/version';
 
 import {
   localWebSocketUrl,
@@ -16,7 +20,7 @@ import {
   type BrowserWebSocketLike,
   type WebSocketFactory,
 } from './local-channel-client';
-import { recoverChannelVersion } from './version-recovery';
+import { recoverChannelVersion, reserveReload } from './version-recovery';
 
 export const PROGRAM_CUE_RECONNECT_BACKOFF_MS = [250, 500, 1_000, 2_000, 5_000] as const;
 
@@ -307,7 +311,21 @@ export class ProgramCueClient {
     }
     if (result.kind === 'rejected') {
       if (result.reason === 'schema-invalid') {
-        this.checkVersionAndRetry(generation, socket, `cue ${result.reason}`);
+        const envelope =
+          typeof parsed === 'object' && parsed !== null
+            ? (parsed as Record<string, unknown>)
+            : null;
+        if (
+          this.snapshot.baseline !== null &&
+          envelope?.type === 'cue' &&
+          envelope.channel === 'program-cue' &&
+          envelope.protocolVersion === LOCAL_PROTOCOL_VERSION &&
+          envelope.schemaVersion === PROGRAM_CUE_SCHEMA_VERSION
+        ) {
+          this.update({ error: 'invalid cue message' });
+        } else {
+          this.checkVersionAndRetry(generation, socket, `cue ${result.reason}`);
+        }
       } else {
         this.handleRetry(generation, `cue ${result.reason}`);
         try {
@@ -390,7 +408,13 @@ export class ProgramCueClient {
           baseline: null,
           error: 'local channel version incompatible',
         });
-        if (result === 'reload') window.location.reload();
+        if (
+          !this.disposed &&
+          generation === this.connectionGeneration &&
+          typeof result === 'object' &&
+          reserveReload(result.reload)
+        )
+          window.location.reload();
       }
     });
   }

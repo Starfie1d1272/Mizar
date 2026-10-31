@@ -62,33 +62,37 @@ async function fetchBody(url: string): Promise<string> {
   }
 }
 
-function reserveReload(target: string): boolean {
-  const key = 'mizar.local.protocol.reload-attempts';
-  const raw = sessionStorage.getItem(key);
-  const attempts: unknown = raw === null ? [] : JSON.parse(raw);
-  if (!Array.isArray(attempts) || attempts.length >= 64) return false;
-  if (
-    !attempts.every(
-      (item) =>
-        typeof item === 'object' &&
-        item !== null &&
-        typeof item.target === 'string' &&
-        typeof item.at === 'number',
+export function reserveReload(target: string): boolean {
+  try {
+    const key = 'mizar.local.protocol.reload-attempts';
+    const raw = sessionStorage.getItem(key);
+    const attempts: unknown = raw === null ? [] : JSON.parse(raw);
+    if (!Array.isArray(attempts) || attempts.length >= 64) return false;
+    if (
+      !attempts.every(
+        (item) =>
+          typeof item === 'object' &&
+          item !== null &&
+          typeof item.target === 'string' &&
+          typeof item.at === 'number',
+      )
     )
-  )
+      return false;
+    const now = Date.now();
+    if (attempts.some((item) => item.target === target)) return false;
+    if (attempts.filter((item) => now - item.at < 60_000).length >= 3) return false;
+    sessionStorage.setItem(key, JSON.stringify([...attempts, { target, at: now }]));
+    return true;
+  } catch {
     return false;
-  const now = Date.now();
-  if (attempts.some((item) => item.target === target)) return false;
-  if (attempts.filter((item) => now - item.at < 60_000).length >= 3) return false;
-  sessionStorage.setItem(key, JSON.stringify([...attempts, { target, at: now }]));
-  return true;
+  }
 }
 
 /** Recheck a known mismatch without reconnecting while its page is unavailable. */
 export async function recoverChannelVersion(
   channel: LocalChannel,
   knownMismatch = false,
-): Promise<'retry' | 'recheck' | 'incompatible' | 'reload'> {
+): Promise<'retry' | 'recheck' | 'incompatible' | { readonly reload: string }> {
   if (typeof window === 'undefined') return 'retry';
   let server: ProtocolIdentity | null;
   try {
@@ -131,7 +135,7 @@ export async function recoverChannelVersion(
       nextUrl.href === currentUrl.href
     )
       return 'incompatible';
-    return reserveReload(nextUrl.href) ? 'reload' : 'incompatible';
+    return { reload: nextUrl.href };
   } catch {
     // A reload without a durable budget risks a loop.
     return 'incompatible';

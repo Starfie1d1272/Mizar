@@ -12,7 +12,7 @@ import {
   type LocalChannelStoreListener,
   type LocalChannelStoreSnapshot,
 } from './local-channel-store';
-import { recoverChannelVersion } from './version-recovery';
+import { recoverChannelVersion, reserveReload } from './version-recovery';
 
 export const RECONNECT_BACKOFF_MS = [250, 500, 1_000, 2_000, 5_000] as const;
 
@@ -263,7 +263,13 @@ export class LocalChannelClient<C extends LocalSnapshotChannel> {
         }, delay);
       } else {
         this.store.setState('protocol-error', 'local channel version incompatible');
-        if (result === 'reload') window.location.reload();
+        if (
+          !this.disposed &&
+          checkingGeneration === this.connectionGeneration &&
+          typeof result === 'object' &&
+          reserveReload(result.reload)
+        )
+          window.location.reload();
       }
     });
   }
