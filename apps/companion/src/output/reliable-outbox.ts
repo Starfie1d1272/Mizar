@@ -735,7 +735,23 @@ export class ReliableOutbox {
   }
 
   private persist(...args: Parameters<typeof replaceDurableJson>): Promise<boolean> {
-    const key = createHash('sha256').update(args[0]).update(JSON.stringify(args[1])).digest('hex');
+    let identity = args[1];
+    if (args[0] === this.filePath || args[0] === `${this.filePath}.last-good`) {
+      const file = args[1] as OutboxFile;
+      // Commit IDs and retry clocks change on a semantic retry. Preserve every
+      // event, disposition and source in the identity, but not those clocks.
+      identity = {
+        ...file,
+        commit: undefined,
+        records: file.records.map((record) => ({
+          ...record,
+          updatedAt: undefined,
+          nextAttemptAt: undefined,
+        })),
+        ...(file.continuity ? { continuity: { ...file.continuity, savedAt: undefined } } : {}),
+      };
+    }
+    const key = createHash('sha256').update(args[0]).update(JSON.stringify(identity)).digest('hex');
     return this.trackDurability(`write:${key}`, () => replaceDurableJson(...args));
   }
   private continuity: DeliveryContinuity | undefined;

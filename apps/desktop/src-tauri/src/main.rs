@@ -312,6 +312,77 @@ fn stop_runtime(root: &Path, log: Option<&DesktopLog>) -> Result<(), String> {
     }
 }
 
+struct RuntimeStopTarget {
+    receipt: PathBuf,
+    instance: String,
+    artifact: String,
+    pid: u64,
+}
+
+fn runtime_stop_target(root: &Path) -> Result<RuntimeStopTarget, String> {
+    let state_root = startup_log::writable_root(
+        root,
+        std::env::var_os("MIZAR_STATE_ROOT").map(PathBuf::from),
+    )
+    .map_err(|error| error.to_string())?;
+    let state: serde_json::Value = serde_json::from_slice(
+        &fs::read(state_root.join("data/runtime.json")).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    let artifact: serde_json::Value = serde_json::from_slice(
+        &fs::read(root.join("resources/metadata/artifact.json"))
+            .map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    let instance = state["instanceId"]
+        .as_str()
+        .filter(|id| id.len() == 36 && id.bytes().all(|c| c.is_ascii_hexdigit() || c == b'-'))
+        .ok_or("运行实例身份无效。")?;
+    let digest = state["artifactSha256"]
+        .as_str()
+        .filter(|digest| digest.len() == 64 && digest.bytes().all(|c| c.is_ascii_hexdigit()))
+        .ok_or("运行资源身份无效。")?;
+    if state["repository"] != "Starfie1d1272/Mizar" || artifact["artifactSha256"] != digest {
+        return Err("运行实例与此程序不匹配。".into());
+    }
+    let pid = state["pid"]
+        .as_u64()
+        .filter(|pid| *pid > 0)
+        .ok_or("运行进程身份无效。")?;
+    let receipt = state_root
+        .join("data")
+        .join(format!("runtime-exit-{instance}.json"));
+    if receipt.exists() {
+        return Err("运行实例已退出，请等待桌面状态更新后重试。".into());
+    }
+    Ok(RuntimeStopTarget {
+        receipt,
+        instance: instance.into(),
+        artifact: digest.into(),
+        pid,
+    })
+}
+
+fn runtime_stop_receipt(target: &RuntimeStopTarget) -> Result<bool, String> {
+    let bytes = match fs::read(&target.receipt) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(format!("退出记录读取失败：{error}")),
+    };
+    let receipt: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    if receipt["instanceId"] != target.instance
+        || receipt["pid"].as_u64() != Some(target.pid)
+        || receipt["artifactSha256"] != target.artifact
+        || receipt["code"].as_i64() != Some(0)
+        || !receipt["signal"].is_null()
+        || receipt["error"] != false
+        || receipt["localComplete"] != true
+    {
+        return Err("运行实例退出或本地收尾未确认。".into());
+    }
+    Ok(true)
+}
+
 fn shutdown_scope(root: &Path) -> Result<String, String> {
     let state = startup_log::writable_root(
         root,
@@ -4947,15 +5018,18 @@ fn main() {
             }
             // The scoped Host owns the game transaction. Repeated requests can
             // join an exit even after its HTTP listener has closed.
-            let stopped = ExitSignal::new(&scope).map_err(|error| error.to_string())?;
+            let target = runtime_stop_target(&root)?;
             if !ExitRequest::notify(&scope).map_err(|error| error.to_string())? {
                 return Ok(false);
             }
             let deadline = Instant::now() + Duration::from_secs(310);
             while Instant::now() < deadline {
-                // The request handle disappears when the GUI closes, before
-                // its outer Host has finished waiting for Companion cleanup.
-                if stopped.requested() {
+                // The GUI request handle may disappear before Companion exits.
+                // Match the original instance receipt without retaining an event
+                // that a later Host session could accidentally inherit.
+                if !ExitRequest::exists(&scope).map_err(|error| error.to_string())?
+                    && runtime_stop_receipt(&target)?
+                {
                     return Ok(true);
                 }
                 thread::sleep(Duration::from_millis(100));
