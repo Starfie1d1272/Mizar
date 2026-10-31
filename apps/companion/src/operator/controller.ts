@@ -14,6 +14,7 @@ export interface OperatorCommandControllerOptions {
   readonly getBindingState?: () => {
     readonly contextRevision: string;
     readonly operator: OperatorProjection;
+    readonly ownership: SeriesBindingView['ownership'];
   } | null;
 }
 
@@ -71,13 +72,17 @@ export function registerOperatorCommandRoutes(
     const blockedReason =
       progress.score.a >= progress.requiredWins || progress.score.b >= progress.requiredWins
         ? ('series_completed' as const)
-        : operator.runtime.telemetryFreshness !== 'fresh' || mapName === null
-          ? ('awaiting_data' as const)
-          : operator.identity.state !== 'matched'
-            ? ('identity_unverified' as const)
-            : targets.length === 0
-              ? ('no_matching_map' as const)
-              : null;
+        : state.ownership.status === 'attention' && !state.ownership.canConfirm
+          ? state.ownership.reason === 'previous_execution'
+            ? 'execution_owned_elsewhere'
+            : 'execution_unverified'
+          : operator.runtime.telemetryFreshness !== 'fresh' || mapName === null
+            ? ('awaiting_data' as const)
+            : operator.identity.state !== 'matched'
+              ? ('identity_unverified' as const)
+              : targets.length === 0
+                ? ('no_matching_map' as const)
+                : null;
     // The review token changes with context, execution, target availability and proof,
     // not with every receive frame. No second state owner is introduced.
     const revision = createHash('sha256')
@@ -92,6 +97,7 @@ export function registerOperatorCommandRoutes(
           score: progress.score,
           maps: progress.maps,
           blockedReason,
+          ownership: state.ownership,
         }),
       )
       .digest('hex');
@@ -100,7 +106,11 @@ export function registerOperatorCommandRoutes(
       matchId,
       mapName,
       bindingState: progress.bindingState,
-      canBind: blockedReason === null && progress.bindingState === 'needs_operator',
+      ownership: state.ownership,
+      canBind:
+        blockedReason === null &&
+        (state.ownership.canConfirm ||
+          (state.ownership.status === 'associated' && progress.bindingState === 'needs_operator')),
       blockedReason,
       targets,
     };

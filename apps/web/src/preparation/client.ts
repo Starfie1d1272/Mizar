@@ -261,6 +261,23 @@ export async function retryPendingPreparation() {
   await desktopInvoke('preparation_retry', { preparationId: status.id });
 }
 
+/** Enter the existing production view without starting a managed game or preparing OBS. */
+export async function enterProductionManually(state: Production) {
+  if (window.__TAURI_INTERNALS__) {
+    const status = await desktopInvoke<PreparationStatus | null>('preparation_status');
+    if (status?.running) await cancelProductionEntry();
+    else if (status && !status.cancelled) {
+      const cancellation = (await command('/operator/preparation-cancel', {
+        preparationId: status.id,
+      })) as { entered?: boolean };
+      if (cancellation.entered !== false) throw new Error('制作状态已变化，请刷新后重试。');
+    }
+  }
+  await command('/operator/production', { action: 'enter', expectedRevision: state.revision });
+  if (window.__TAURI_INTERNALS__) await desktopInvoke('present_production', { live: true });
+  else window.location.assign('/workspace');
+}
+
 export async function productionAction(
   action: 'enter' | 'hide' | 'finish',
   state: Production,

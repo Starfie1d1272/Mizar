@@ -478,6 +478,26 @@ export class ProgramRuntime {
     return this.seriesProgress ?? null;
   }
 
+  getExecutionOwnership(matchId: string): {
+    status: 'associated' | 'waiting' | 'attention';
+    reason: 'previous_execution' | 'new_execution_unverified' | 'recovery_unverified' | null;
+    canConfirm: boolean;
+  } {
+    if (this.executionOwner && this.executionOwner.matchId !== matchId)
+      return { status: 'attention', reason: 'previous_execution', canConfirm: false };
+    if (this.executionOwnerUnknown)
+      return {
+        status: 'attention',
+        reason: this.unknownNewExecution ? 'new_execution_unverified' : 'recovery_unverified',
+        canConfirm: this.unknownNewExecution && !this.executionAwaitingObservation,
+      };
+    if (this.executionConflict)
+      return { status: 'attention', reason: 'recovery_unverified', canConfirm: false };
+    if (this.executionOwner?.matchId === matchId && !this.executionAwaitingObservation)
+      return { status: 'associated', reason: null, canConfirm: false };
+    return { status: 'waiting', reason: null, canConfirm: false };
+  }
+
   async flushSeriesProgressCheckpoint(strict = false): Promise<void> {
     if (this.seriesProgressCheckpointStore === undefined) return;
     try {

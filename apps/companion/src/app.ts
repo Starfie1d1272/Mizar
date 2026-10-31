@@ -2480,6 +2480,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         ? {
             contextRevision: matchContextController.getActiveRevision(),
             operator: projectionCoordinator.getCurrent().operator,
+            ownership: programRuntime.getExecutionOwnership(
+              matchContextController.getActiveBinding()!.context.matchId,
+            ),
           }
         : null,
   });

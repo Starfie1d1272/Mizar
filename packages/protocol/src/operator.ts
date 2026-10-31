@@ -263,8 +263,20 @@ export interface SeriesBindingView {
   readonly matchId: string;
   readonly mapName: string | null;
   readonly bindingState: 'bound' | 'unbound' | 'needs_operator';
+  readonly ownership: {
+    readonly status: 'associated' | 'waiting' | 'attention';
+    readonly reason:
+      'previous_execution' | 'new_execution_unverified' | 'recovery_unverified' | null;
+    readonly canConfirm: boolean;
+  };
   readonly canBind: boolean;
   readonly blockedReason:
-    'awaiting_data' | 'identity_unverified' | 'no_matching_map' | 'series_completed' | null;
+    | 'awaiting_data'
+    | 'identity_unverified'
+    | 'no_matching_map'
+    | 'series_completed'
+    | 'execution_owned_elsewhere'
+    | 'execution_unverified'
+    | null;
   readonly targets: readonly { readonly mapOrder: number; readonly mapName: string }[];
 }
