@@ -2137,22 +2137,17 @@ export class ReliableOutbox {
         });
         changed = true;
       }
-      if (changed) await this.commit(this.trim(next));
+      if (changed) {
+        const changedRecords = next.filter((record, index) => record !== this.records[index]);
+        await this.commitStatusChanges(changedRecords, this.trim(next));
+      }
       return invalidatedStarts;
     });
   }
 
   private statusWriteKey(record: ReliableOutboxRecord): string {
     return `status:${createHash('sha256')
-      .update(
-        JSON.stringify([
-          record.event,
-          record.source,
-          record.awaitingSource,
-          record.lineupSteam64,
-          record.status,
-        ]),
-      )
+      .update(JSON.stringify({ ...record, updatedAt: undefined, nextAttemptAt: undefined }))
       .digest('hex')}`;
   }
 
