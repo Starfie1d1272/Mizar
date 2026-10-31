@@ -156,7 +156,7 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 10
     permissions:
-      contents: write
+      contents: read
       actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -201,24 +201,19 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $installer)) { throw 'Temporary installer compilation failed' }
           $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToLowerInvariant()
           "TEMP_INSTALLER_SHA256=$digest" >> $env:GITHUB_ENV
-      - name: Publish temporary installer on GitHub
+      - name: Record temporary installer identity
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          $ErrorActionPreference = 'Stop'
-          $tag = "temporary-workbench-$env:GITHUB_RUN_ID"
-          $installer = Join-Path $env:RUNNER_TEMP 'Mizar-1.10.2-workbench-temporary-Setup.exe'
-          $notes = Join-Path $env:RUNNER_TEMP 'temporary-notes.txt'
-          @"
-          临时现场修复，非正式版本。基于 1.10.2 原资源与工作台权限修复，CI 构建，未经正式发行签名或 Windows/CS2/OBS 实机验收。
-          使用前正常退出 Mizar 并备份 %LOCALAPPDATA%\Mizar；直播或录制进行中不要安装。
-          安装包 SHA-256: $env:TEMP_INSTALLER_SHA256
-          "@ | Set-Content -Encoding utf8 $notes
-          gh release create $tag $installer --repo Starfie1d1272/Mizar --target 3152bc32eda533dab56add5d01a35229db47d7f7 --title 'Mizar 工作台临时修复' --notes-file $notes --prerelease --latest=false
-          if ($LASTEXITCODE -ne 0) { throw 'Temporary publication failed; reconcile before retry' }
-          gh release view $tag --repo Starfie1d1272/Mizar
-          if ($LASTEXITCODE -ne 0) { throw 'Temporary publication readback failed' }
+          "SHA256=$env:TEMP_INSTALLER_SHA256`nSOURCE_PR_HEAD=3152bc32eda533dab56add5d01a35229db47d7f7`nUNSIGNED_TEMPORARY_BUILD=true" | Set-Content -Encoding utf8 (Join-Path $env:RUNNER_TEMP 'temporary-installer-identity.txt')
+      - name: Preserve complete temporary installer
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Mizar-1.10.2-workbench-temporary-Setup
+          path: |
+            ${{ runner.temp }}/Mizar-1.10.2-workbench-temporary-Setup.exe
+            ${{ runner.temp }}/temporary-installer-identity.txt
+          if-no-files-found: error
+          retention-days: 7
   ci-gate:
     name: ci-gate
     if: always()
