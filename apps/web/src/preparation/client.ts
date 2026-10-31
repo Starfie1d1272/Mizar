@@ -140,6 +140,8 @@ export interface Production {
   mode: 'preparation' | 'live' | 'hidden';
   revision: string;
   canEnter: boolean;
+  releaseHandoffState?: 'idle' | 'pending' | 'recorded' | 'confirmed' | 'unconfirmed';
+  obsExitState?: 'idle' | 'pending' | 'confirmed' | 'unconfirmed';
 }
 export async function checkObsBeforeLaunch(
   requireStoppedOutput = false,
@@ -235,6 +237,45 @@ export async function productionAction(
   try {
     if (window.__TAURI_INTERNALS__ && action === 'finish') {
       await desktopInvoke('finish_workspace', undefined, task);
+      const [production, source] = await Promise.all([
+        fetch('/local/v1/production', { cache: 'no-store', signal: AbortSignal.timeout(5000) })
+          .then((response) => (response.ok ? (response.json() as Promise<Production>) : null))
+          .catch(() => null),
+        fetch('/local/v1/rivalhub-connection', {
+          cache: 'no-store',
+          signal: AbortSignal.timeout(5000),
+        })
+          .then((response) =>
+            response.ok
+              ? (response.json() as Promise<{
+                  sourceCleanup?: {
+                    pending: number;
+                    blocked: number;
+                    claimIntent: boolean;
+                    handoffPending?: number;
+                  };
+                }>)
+              : null,
+          )
+          .catch(() => null),
+      ]);
+      const cleanup = source?.sourceCleanup;
+      if (
+        !production ||
+        !source ||
+        production.obsExitState === 'pending' ||
+        production.obsExitState === 'unconfirmed' ||
+        production.releaseHandoffState === 'pending' ||
+        production.releaseHandoffState === 'unconfirmed' ||
+        !cleanup ||
+        cleanup.pending > 0 ||
+        cleanup.blocked > 0 ||
+        cleanup.claimIntent ||
+        (cleanup.handoffPending ?? 0) > 0
+      ) {
+        task.finish('unconfirmed', { reason: 'local_cleanup_complete_remote_or_obs_pending' });
+        return task.result;
+      }
     } else if (window.__TAURI_INTERNALS__ && action === 'enter' && state.mode === 'preparation') {
       onChecking?.(true);
       try {

@@ -13,13 +13,14 @@ export function registerProductionRoutes(
     hasContext: () => boolean;
     scenes: ProgramSceneController;
     release: () => Promise<void>;
+    handoffRelease?: () => Promise<void>;
     beforeEnter?: () => void;
     waitForBroadcast?: () => Promise<void>;
     onEnter?: () => void;
     onEntered?: () => void;
     onFinish?: () => void;
     beforeFinish?: () => void | Promise<void>;
-    afterSafeScene?: () => void | Promise<void>;
+    afterSafeScene?: (valid?: () => boolean) => void | Promise<void>;
     beforeExit?: () => void;
     finishTrial?: () => Promise<void>;
   },
@@ -33,9 +34,74 @@ export function registerProductionRoutes(
   let preparationGeneration = 0;
   let sessionGeneration = 0;
   let lastEnteredId: string | null = null;
+  let releaseHandoffState: 'idle' | 'pending' | 'recorded' | 'confirmed' | 'unconfirmed' = 'idle';
+  let releaseGeneration = 0;
+  let handoffStarted = false;
+  let handoffPromise: Promise<void> | undefined;
+  let obsExitState: 'idle' | 'pending' | 'confirmed' | 'unconfirmed' = 'idle';
+  let obsExitGeneration = 0;
+  function startHandoff(): Promise<void> {
+    if (!options.handoffRelease) return Promise.resolve();
+    if (handoffPromise) return handoffPromise;
+    if (handoffStarted) return Promise.resolve();
+    handoffStarted = true;
+    releaseHandoffState = 'pending';
+    const generation = ++releaseGeneration;
+    try {
+      const pending = options.handoffRelease();
+      handoffPromise = pending.then(
+        () => {
+          if (generation === releaseGeneration) releaseHandoffState = 'recorded';
+        },
+        (error: unknown) => {
+          if (generation === releaseGeneration) {
+            releaseHandoffState = 'unconfirmed';
+            handoffStarted = false;
+            handoffPromise = undefined;
+          }
+          app.log.warn({ stage: 'production_release', err: error }, 'Source handoff unconfirmed');
+          throw error;
+        },
+      );
+      return handoffPromise;
+    } catch (error) {
+      handoffStarted = false;
+      releaseHandoffState = 'unconfirmed';
+      app.log.warn({ stage: 'production_release', err: error }, 'Source handoff unconfirmed');
+      return Promise.reject(error);
+    }
+  }
+  function scheduleObsExit(controlValid: () => boolean, sceneRequired: boolean) {
+    const generation = ++obsExitGeneration;
+    const valid = () => generation === obsExitGeneration && controlValid();
+    obsExitState = sceneRequired ? 'pending' : 'idle';
+    void (async () => {
+      await options.beforeFinish?.();
+      if (!valid()) throw new Error('OBS 播出状态已变化。');
+      if (sceneRequired) {
+        const result = await options.scenes.selectWaitingForExit(
+          options.scenes.get().revision,
+          valid,
+        );
+        if (!result.ok) throw new Error(result.message);
+      }
+      if (!valid()) throw new Error('OBS 播出状态已变化。');
+      await options.afterSafeScene?.(valid);
+    })().then(
+      () => {
+        if (valid()) obsExitState = sceneRequired ? 'confirmed' : 'idle';
+      },
+      (error: unknown) => {
+        if (generation === obsExitGeneration) obsExitState = 'unconfirmed';
+        app.log.warn({ stage: 'production_safe_scene', err: error }, 'OBS exit state unconfirmed');
+      },
+    );
+  }
   const view = () => ({
     mode,
     revision,
+    releaseHandoffState,
+    obsExitState,
     canEnter: !trialPending && !shuttingDown && !updatePending && options.hasContext(),
   });
   app.get('/local/v1/production', (_request, reply) =>
@@ -68,7 +134,12 @@ export function registerProductionRoutes(
     }
     if (body?.expectedRevision === revision && body.action === 'begin-exit') {
       shuttingDown = true;
-      return { code: 200, value: view() };
+      try {
+        await startHandoff();
+        return { code: 200, value: view() };
+      } catch {
+        return { code: 503, value: { ...view(), message: '数据源本地交接未确认。' } };
+      }
     }
     if (body?.expectedRevision === revision && body.action === 'cancel-exit') {
       shuttingDown = false;
@@ -96,52 +167,79 @@ export function registerProductionRoutes(
       if (body?.action === 'enter') {
         if (!options.hasContext()) return { code: 409, value: { message: '请先选择或创建比赛。' } };
         options.beforeEnter?.();
-        if (mode === 'preparation') options.onEnter?.();
+        obsExitGeneration++;
+        if (mode === 'preparation') {
+          handoffStarted = false;
+          handoffPromise = undefined;
+          releaseGeneration++;
+          options.onEnter?.();
+        }
         mode = 'live';
         if (entering) lastEnteredId = entryId;
       } else if (body?.action === 'hide') {
         if (mode === 'live') mode = 'hidden';
       } else {
-        await options.beforeFinish?.();
-        if (!controlValid())
-          return { code: 409, value: { message: 'OBS 播出状态已变化，请核对后重试。' } };
-        if (trialPending) {
-          stage = 'production_safe_scene';
-          await options.finishTrial?.();
+        if (!shutdown) void startHandoff().catch(() => {});
+        if (!shutdown && !trialPending && options.handoffRelease) {
+          scheduleObsExit(controlValid, mode !== 'preparation');
+          mode = 'preparation';
+          options.onFinish?.();
+        } else {
+          // Local cleanup must continue if an OBS operation cannot be confirmed.
+          // Shutdown keeps its synchronous contract because the service is about to stop.
+          let safeScene = true;
+          const sceneRequired = mode !== 'preparation';
+          try {
+            await options.beforeFinish?.();
+            if (!controlValid()) throw new Error('OBS 播出状态已变化。');
+            if (trialPending) {
+              stage = 'production_safe_scene';
+              await options.finishTrial?.();
+            }
+            if (mode !== 'preparation') {
+              stage = 'production_safe_scene';
+              const result = await options.scenes.selectWaitingForExit(
+                options.scenes.get().revision,
+                controlValid,
+              );
+              if (!result.ok) throw new Error(result.message);
+            }
+          } catch (error) {
+            if (shutdown || trialPending) throw error;
+            safeScene = false;
+            app.log.warn({ stage, err: error }, 'OBS exit state unconfirmed');
+          }
+          obsExitState = safeScene ? (sceneRequired ? 'confirmed' : 'idle') : 'unconfirmed';
+          if (safeScene) {
+            stage = 'production_video_restore';
+            try {
+              await options.afterSafeScene?.();
+            } catch (error) {
+              app.log.warn(
+                {
+                  event: 'production',
+                  stage,
+                  diagnostic: { operationId, error: diagnosticValue(error) },
+                },
+                'OBS video restoration deferred',
+              );
+            }
+          }
+          stage = 'production_release';
+          if (shutdown) {
+            if (!controlValid())
+              return { code: 409, value: { message: 'OBS 播出状态已变化，请核对后重试。' } };
+            await options.release();
+            if (!controlValid())
+              return { code: 409, value: { message: 'OBS 播出状态已变化，请核对后重试。' } };
+            releaseHandoffState = 'confirmed';
+          } else if (!options.handoffRelease) {
+            await options.release();
+            releaseHandoffState = 'confirmed';
+          }
+          mode = 'preparation';
+          options.onFinish?.();
         }
-        // Both normal exit paths use this same safe-scene/release transaction.
-        // An idle Host can quit without requiring an OBS connection.
-        if (mode !== 'preparation') {
-          stage = 'production_safe_scene';
-          const result = await options.scenes.selectWaitingForExit(
-            options.scenes.get().revision,
-            controlValid,
-          );
-          if (!result.ok) return { code: 409, value: { message: result.message } };
-        }
-        stage = 'production_video_restore';
-        try {
-          await options.afterSafeScene?.();
-        } catch (error) {
-          // The safe-scene/absence proof has already passed. Video restoration keeps
-          // its own journal for a later retry and must not prevent releasing control.
-          app.log.warn(
-            {
-              event: 'production',
-              stage,
-              diagnostic: { operationId, error: diagnosticValue(error) },
-            },
-            'OBS video restoration deferred',
-          );
-        }
-        stage = 'production_release';
-        if (!controlValid())
-          return { code: 409, value: { message: 'OBS 播出状态已变化，请核对后重试。' } };
-        await options.release();
-        if (!controlValid())
-          return { code: 409, value: { message: 'OBS 播出状态已变化，请核对后重试。' } };
-        mode = 'preparation';
-        options.onFinish?.();
       }
       committed = true;
       revision = randomUUID();

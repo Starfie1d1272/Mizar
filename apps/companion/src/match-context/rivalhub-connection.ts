@@ -535,6 +535,7 @@ export class RivalHubConnection {
   private readonly liveInFlight = new Map<Source, Set<Promise<void>>>();
   private readonly sourceSettlements = new Map<string, Promise<boolean>>();
   private readonly cleanupAttempts = new Map<string, { count: number; nextCycleAt: number }>();
+  private readonly exitHandoffs = new Map<string, ExactSource>();
   private readonly sourceCommands = new SerialCommitQueue();
   private readonly sourceState: RivalHubSourceState;
   private cleanupTimer: ReturnType<typeof setInterval> | undefined;
@@ -792,7 +793,7 @@ export class RivalHubConnection {
       activeDeviceMatchId: this.activeDeviceMatchId,
       pairing: this.pendingPairing === null ? 'idle' : 'pending',
       stoppedMatchId: this.stoppedMatchId,
-      sourceCleanup: this.cleanupSummary,
+      sourceCleanup: { ...this.cleanupSummary, handoffPending: this.exitHandoffs.size },
       liveDelivery:
         this.source === null
           ? { status: 'idle', cursor: null, reason: null, consecutiveUnaccepted: 0, durationMs: 0 }
@@ -1052,7 +1053,60 @@ export class RivalHubConnection {
     }
   }
 
+  /** Freeze this exact source now; persist its handoff without waiting for delivery. */
+  handoffForExit(): Promise<void> {
+    this.bindingGeneration++;
+    const source = this.source;
+    if (source) {
+      this.stopSync(source.matchId);
+      source.draining = true;
+      source.paused = true;
+      const identity = this.exactSource(source);
+      this.exitHandoffs.set(JSON.stringify(identity), identity);
+      if (!this.settleSource) return Promise.reject(new Error('可靠事件范围尚未冻结。'));
+      // settle() enters the output owner's fence synchronously; false remains pending.
+      void this.settle(identity);
+    }
+    // The source-state owner serializes its own durable writes. Do not queue
+    // this local handoff behind claim/release HTTP operations.
+    const handoff = (async () => {
+      await this.persistExitHandoffs();
+      await this.updateCleanupSummary();
+      if (this.cleanupSummary.claimIntent) throw new Error('数据源认领结果待核对。');
+    })();
+    void handoff
+      .then(
+        () => this.sourceCommands.run(() => this.cleanup(false)),
+        () => undefined,
+      )
+      .catch((error: unknown) => this.onDiagnostic('source_cleanup', error));
+    return handoff;
+  }
+
+  private async persistExitHandoffs(): Promise<void> {
+    for (const [key, identity] of this.exitHandoffs) {
+      const state = await this.sourceState.snapshot();
+      const record = state.records.find((item) => JSON.stringify(item.identity) === key);
+      if (record) await this.sourceState.handoff(identity, 'finish');
+      else if (
+        !state.watermarks.some(
+          (item) =>
+            item.baseUrl === identity.baseUrl &&
+            item.competitionId === identity.competitionId &&
+            item.installationId === identity.installationId &&
+            item.matchId === identity.matchId &&
+            item.producerInstanceId === identity.producerInstanceId &&
+            item.liveSessionId === identity.liveSessionId &&
+            item.authorityRevision >= identity.authorityRevision,
+        )
+      )
+        throw new Error('数据源交接未确认。');
+      this.exitHandoffs.delete(key);
+    }
+  }
+
   private async cleanup(force: boolean, deadline = Date.now() + 7000): Promise<void> {
+    await this.persistExitHandoffs();
     try {
       await this.reconcileIntent(deadline);
     } catch (error) {
@@ -1714,7 +1768,12 @@ export class RivalHubConnection {
         const identity = await this.sourceState.confirmClaim(intent.id, result.authorityRevision);
         if (generation !== this.bindingGeneration) {
           await this.sourceState.handoff(identity, 'switch');
-          this.source = null;
+          // The previous source may still own an unsettled tail. Keep its
+          // exact identity fenced until its own cleanup has confirmed release.
+          if (this.source) {
+            this.source.draining = true;
+            this.source.paused = true;
+          }
           await this.updateCleanupSummary();
           throw new Error('比赛已变化，原数据源待释放。');
         }
