@@ -206,6 +206,7 @@ export async function stopProduct(
     port = PRODUCT_PORT,
     stateRoot = writableRoot(root, process.env.MIZAR_STATE_ROOT),
     artifact,
+    expectedInstance,
   } = {},
 ) {
   const state = JSON.parse(await readFile(join(stateRoot, 'data/runtime.json'), 'utf8'));
@@ -215,7 +216,8 @@ export async function stopProduct(
     !/^[a-f0-9]{64}$/.test(state.controlToken) ||
     !Number.isSafeInteger(state.pid) ||
     state.pid <= 0 ||
-    (artifact && state.artifactSha256 !== artifact.artifactSha256)
+    (artifact && state.artifactSha256 !== artifact.artifactSha256) ||
+    (expectedInstance && state.instanceId !== expectedInstance)
   )
     throw new Error('本地运行记录无效，未停止任何进程');
   exitReceiptPath(stateRoot, state.instanceId);
@@ -319,10 +321,14 @@ export async function runProduct({
   // old instances at the next start so normal use does not grow indefinitely.
   const dataDir = join(stateRoot, 'data');
   for (const name of await readdir(dataDir)) {
-    if (!/^runtime-(?:exit|flush)-[a-f0-9-]{36}\.json$/.test(name)) continue;
+    if (
+      !/^runtime-(?:exit|host-exit|flush)-[a-f0-9-]{36}\.json$/.test(name) &&
+      !/^runtime-host-exit-[a-f0-9-]{36}\.\d+-\d+\.tmp$/.test(name)
+    )
+      continue;
     const path = join(dataDir, name);
     try {
-      if (Date.now() - (await stat(path)).mtimeMs > 60000) await rm(path, { force: true });
+      if (Date.now() - (await stat(path)).mtimeMs > 600000) await rm(path, { force: true });
     } catch (error) {
       if (error.code !== 'ENOENT') log('runtime_receipt_cleanup_failed', { code: error.code });
     }
@@ -480,7 +486,11 @@ async function main() {
     log('artifact_verified', { gitSha: artifact.gitSha, artifactSha256: artifact.artifactSha256 });
     if (args.has('--stop')) {
       log('product_stop_begin');
-      await stopProduct(bundleRoot, { stateRoot, artifact });
+      await stopProduct(bundleRoot, {
+        stateRoot,
+        artifact,
+        expectedInstance: process.env.MIZAR_EXPECTED_RUNTIME_INSTANCE,
+      });
       log('product_stopped');
       return;
     }
