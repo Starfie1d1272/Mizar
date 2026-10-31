@@ -44,6 +44,19 @@ export const PRODUCTION_RUNTIME_CONTINUITY_POLICY: RuntimeContinuityPolicy = Obj
   objectiveClockLeaseMs: DEFAULT_OBJECTIVE_CLOCK_LEASE_MS,
 });
 
+function hasSeriesFacts(progress: SeriesProgress): boolean {
+  return (
+    progress.currentMapOrder !== null ||
+    progress.maps.some(
+      (map) =>
+        map.executionMapEpoch !== null ||
+        map.status !== 'pending' ||
+        map.finalScore !== null ||
+        map.roundHistory.rounds.length > 0,
+    )
+  );
+}
+
 export interface ProgramRuntimeOptions {
   readonly producerInstanceId: string;
   readonly liveSession?: LiveSessionBinding;
@@ -91,6 +104,9 @@ export class ProgramRuntime {
   private executionOwner: { matchId: string; fixture: boolean } | undefined;
   private executionAwaitingObservation = false;
   private executionOwnerUnknown = false;
+  private managedSourceId: string | undefined;
+  private restoredManagedSourceId: string | undefined;
+  private explicitSourceOwner: { sourceId?: string; matchId: string; mapEpoch: number } | undefined;
   private executionConflict = false;
   private unknownNewExecution = false;
   private suspendedProduction:
@@ -144,6 +160,9 @@ export class ProgramRuntime {
     this.executionOwner = undefined;
     this.executionAwaitingObservation = false;
     this.executionOwnerUnknown = false;
+    this.managedSourceId = undefined;
+    this.restoredManagedSourceId = undefined;
+    this.explicitSourceOwner = undefined;
     this.executionConflict = false;
     this.unknownNewExecution = false;
     if (!transient && wasTransient) {
@@ -170,12 +189,14 @@ export class ProgramRuntime {
     readonly programSourceGeneration: number;
     readonly mapEpoch: number;
     readonly mapName: string | null;
+    readonly managedSourceId?: string;
   }): void {
     if (this.state.runtimeSeq !== 0) throw new Error('runtime_already_started');
     this.deliveryRestoreAwaitingTelemetry = true;
     this.executionAwaitingObservation = true;
     // Legacy continuity records carry no proof of map-execution ownership.
     this.executionOwnerUnknown = true;
+    this.restoredManagedSourceId = input.managedSourceId;
     this.unknownNewExecution = false;
     this.state = {
       ...this.state,
@@ -303,18 +324,10 @@ export class ProgramRuntime {
             this.unverifiedSeriesProgress = checkpoint.unverifiedProgress;
             if (!this.executionOwner) this.executionOwnerUnknown = true;
           } else {
-            this.unverifiedSeriesProgress = checkpoint.unverifiedProgress ?? checkpoint.progress;
+            const unverified = checkpoint.unverifiedProgress ?? checkpoint.progress;
+            this.unverifiedSeriesProgress = hasSeriesFacts(unverified) ? unverified : undefined;
             this.restorePending = false;
-            if (
-              checkpoint.progress.currentMapOrder !== null ||
-              checkpoint.progress.maps.some(
-                (map) =>
-                  map.executionMapEpoch !== null ||
-                  map.status !== 'pending' ||
-                  map.finalScore !== null ||
-                  map.roundHistory.rounds.length > 0,
-              )
-            ) {
+            if (hasSeriesFacts(checkpoint.progress)) {
               this.executionOwnerUnknown = true;
               this.unknownNewExecution = false;
             }
@@ -322,6 +335,10 @@ export class ProgramRuntime {
           this.restoredExecutionProof = checkpoint.executionOwner;
           this.restoredExecutionMatchId = checkpoint.identity.matchId;
         } else {
+          if (checkpoint.executionOwner || hasSeriesFacts(checkpoint.progress)) {
+            this.executionOwnerUnknown = true;
+            this.unknownNewExecution = false;
+          }
           initial = addSeriesProgressIssue(initial, {
             code: 'checkpoint_incompatible',
             severity: 'warning',
@@ -391,7 +408,9 @@ export class ProgramRuntime {
       proof.programSourceGeneration === this.state.programSource.generation &&
       proof.mapEpoch === this.state.map.epoch &&
       proof.mapName === this.state.map.name &&
-      proof.mapName === this.state.programTelemetry?.telemetry.map?.name
+      proof.mapName === this.state.programTelemetry?.telemetry.map?.name &&
+      proof.managedSourceId !== undefined &&
+      proof.managedSourceId === this.managedSourceId
     ) {
       this.executionOwner = { matchId: context.matchId, fixture: false };
       this.executionOwnerUnknown = false;
@@ -522,6 +541,11 @@ export class ProgramRuntime {
       this.unknownNewExecution = false;
       this.executionConflict = false;
       this.pendingSeriesEvents.length = 0;
+      this.explicitSourceOwner = {
+        ...(this.managedSourceId ? { sourceId: this.managedSourceId } : {}),
+        matchId: this.seriesContext.matchId,
+        mapEpoch: this.state.map.epoch,
+      };
     }
     if (reduced.changed && !this.fixtureSeriesProgressActive && this.seriesOrigin !== 'fixture') {
       this.persistSeriesProgress();
@@ -588,11 +612,96 @@ export class ProgramRuntime {
     );
   }
 
+  getManagedSourceId(): string | undefined {
+    return this.managedSourceId;
+  }
+
   getExecutionOwnerMatchId(runtimeSeq: number): string | undefined {
     if (this.executionOwner && !this.executionOwner.fixture) return this.executionOwner.matchId;
     return this.previousBoundaryOwner?.runtimeSeq === runtimeSeq
       ? this.previousBoundaryOwner.matchId
       : undefined;
+  }
+
+  /** Called only for the first frame of a committed Host-verified managed source. */
+  activateManagedSource(
+    matchId: string,
+    sourceId: string,
+    observation: TelemetryObservation,
+  ): { boundary?: RuntimeReduceResult } | undefined {
+    const preview = reduceRuntime(
+      this.state,
+      {
+        kind: 'program-telemetry',
+        sourceGeneration: this.state.programSource.generation,
+        observation,
+      },
+      this.continuityPolicy,
+    );
+    if (preview.disposition.kind !== 'accepted') return undefined;
+    this.pendingSeriesEvents.length = 0;
+    const boundary =
+      this.state.map.epoch > 0 &&
+      this.state.map.name === observation.telemetry.map?.name &&
+      !preview.transitions.some((transition) => transition.kind === 'map_execution_changed')
+        ? this.resetMapExecution('restore', {
+            utc: observation.receive.receivedAt,
+            monotonicMs: observation.receive.receivedMonotonicMs,
+          })
+        : undefined;
+    this.executionOwner = { matchId, fixture: false };
+    this.executionConflict = false;
+    this.executionOwnerUnknown = false;
+    this.unknownNewExecution = false;
+    this.executionAwaitingObservation = true;
+    this.managedSourceId = sourceId;
+    return boundary ? { boundary } : {};
+  }
+
+  markSourceUnverified(): void {
+    if (this.executionOwner) this.executionConflict = true;
+    else this.executionOwnerUnknown = true;
+  }
+
+  retireManagedSource(): void {
+    this.markSourceUnverified();
+    this.managedSourceId = undefined;
+    this.explicitSourceOwner = undefined;
+  }
+
+  isExplicitSourceOwner(sourceId: string, matchId: string): boolean {
+    return (
+      this.explicitSourceOwner?.sourceId === sourceId &&
+      this.explicitSourceOwner.matchId === matchId &&
+      this.explicitSourceOwner.mapEpoch === this.state.map.epoch
+    );
+  }
+
+  markUnverifiedNewExecution(): void {
+    this.executionOwner = undefined;
+    this.executionOwnerUnknown = true;
+    this.executionConflict = true;
+    this.unknownNewExecution = true;
+  }
+
+  resumeManagedSource(sourceId: string, matchId: string): boolean {
+    const proof = this.restoredExecutionProof;
+    if (
+      !this.executionOwnerUnknown ||
+      this.executionConflict ||
+      this.restoredExecutionMatchId !== matchId ||
+      !proof ||
+      proof.managedSourceId !== sourceId ||
+      this.restoredManagedSourceId !== sourceId ||
+      this.state.liveSession.kind !== 'bound' ||
+      proof.liveSessionId !== this.state.liveSession.liveSessionId ||
+      proof.programSourceGeneration !== this.state.programSource.generation ||
+      proof.mapEpoch !== this.state.map.epoch ||
+      proof.mapName !== this.state.map.name
+    )
+      return false;
+    this.managedSourceId = sourceId;
+    return true;
   }
 
   getSnapshot(): ProgramRuntimeSnapshot {
@@ -611,6 +720,8 @@ export class ProgramRuntime {
     const result = reduceRuntime(this.state, input, this.continuityPolicy);
     this.state = result.state;
     if (result.transitions.some((transition) => transition.kind === 'map_execution_changed')) {
+      if (this.explicitSourceOwner) this.executionConflict = true;
+      this.explicitSourceOwner = undefined;
       this.previousBoundaryOwner =
         this.executionOwner && !this.executionOwner.fixture
           ? { runtimeSeq: result.state.runtimeSeq, matchId: this.executionOwner.matchId }
@@ -748,6 +859,7 @@ export class ProgramRuntime {
               programSourceGeneration: this.state.programSource.generation,
               mapEpoch: this.state.map.epoch,
               mapName: this.state.map.name,
+              ...(this.managedSourceId ? { managedSourceId: this.managedSourceId } : {}),
             }
           : !this.executionConflict &&
               !this.unknownNewExecution &&

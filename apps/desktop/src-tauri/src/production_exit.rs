@@ -393,6 +393,30 @@ fn exit_request(log: &DesktopLog, body: serde_json::Value) -> Result<serde_json:
     Ok(response)
 }
 
+pub(crate) fn managed_source_request(
+    log: &DesktopLog,
+    body: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let token = runtime_token(log)?;
+    let (status, response) = request_with_identity(
+        log,
+        "POST",
+        "/operator/runtime/managed-source",
+        &body.to_string(),
+        Instant::now() + Duration::from_secs(5),
+        Some(&token),
+    )?;
+    if status != 200 {
+        log.event(
+            "managed_source",
+            "failure",
+            Some(&format!("status={status}")),
+        );
+        return Err("受管游戏来源未能确认，请重试。".into());
+    }
+    Ok(response)
+}
+
 fn prepare_local_match_exit(
     log: &DesktopLog,
 ) -> Result<Option<crate::lifecycle_contract::Qualification>, String> {
@@ -466,12 +490,38 @@ pub fn finish_managed_game(
     log: &DesktopLog,
     finish: impl FnOnce(bool) -> Result<(), String>,
 ) -> Result<(), String> {
-    finish_with_qualification(
+    let retirement = managed_source_request(
+        log,
+        serde_json::json!({"action":"retire","phase":"prepare"}),
+    );
+    let mut stopped = false;
+    let local = finish_with_qualification(
         || prepare_local_match_exit(log),
-        finish,
+        |_| {
+            let result = finish(true);
+            stopped = result.is_ok();
+            result
+        },
         |qualification| settle_local_match_exit(log, qualification),
         |qualification| confirm_local_match_exit(log, qualification),
-    )
+    );
+    if !stopped {
+        return local;
+    }
+    let source = (|| -> Result<(), String> {
+        let retirement = retirement?;
+        let ticket = retirement["ticket"].as_str().ok_or("来源退出资格无效。")?;
+        managed_source_request(
+            log,
+            serde_json::json!({"action":"retire","phase":"settle","ticket":ticket}),
+        )?;
+        managed_source_request(
+            log,
+            serde_json::json!({"action":"retire","phase":"confirm","ticket":ticket}),
+        )?;
+        Ok(())
+    })();
+    cleanup_results(local, source)
 }
 
 /// Switching to an external instance is explicit, preparation-only and disconnects old camera intent.

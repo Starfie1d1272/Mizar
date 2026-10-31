@@ -60,6 +60,32 @@ export class JsonSeriesProgressCheckpointStore implements SeriesProgressCheckpoi
   save(checkpoint: SeriesProgressCheckpoint): Promise<void> {
     return this.commitQueue.run(async () => {
       try {
+        const previous = this.load();
+        if (
+          previous &&
+          previous.identity.matchId !== checkpoint.identity.matchId &&
+          (previous.unverifiedProgress ||
+            (!previous.executionOwner &&
+              (previous.progress.currentMapOrder !== null ||
+                previous.progress.maps.some(
+                  (map) =>
+                    map.executionMapEpoch !== null ||
+                    map.status !== 'pending' ||
+                    map.finalScore !== null ||
+                    map.roundHistory.rounds.length > 0,
+                ))))
+        ) {
+          const archivePath = `${this.filePath}.unverified`;
+          let archived: string | undefined;
+          try {
+            archived = readFileSync(archivePath, 'utf8');
+          } catch (error) {
+            if (!isNodeError(error) || error.code !== 'ENOENT') throw error;
+          }
+          if (archived === undefined) await replaceDurableJson(archivePath, previous);
+          else if (JSON.stringify(JSON.parse(archived) as unknown) !== JSON.stringify(previous))
+            throw new Error('series_unverified_history_slot_occupied');
+        }
         await replaceDurableJson(this.filePath, checkpoint);
         this.lastWriteFailure = undefined;
         this.writeFailed = false;

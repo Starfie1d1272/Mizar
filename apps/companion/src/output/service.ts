@@ -40,6 +40,7 @@ export interface OutputServiceOptions {
   readonly isActiveOnlineBinding?: (binding: MatchContextBinding) => boolean;
   readonly isExecutionOwnedBy?: (binding: MatchContextBinding) => boolean;
   readonly executionOwnerMatchId?: (runtimeSeq: number) => string | undefined;
+  readonly managedSourceId?: () => string | undefined;
   readonly onDiagnostic?: (code: string) => void;
   readonly onBusinessEvidence?: (stage: string, evidence: unknown) => void;
   readonly onRecoveryProgress?: (
@@ -698,6 +699,7 @@ export class OutputService {
     )
       return;
 
+    const managedSourceId = this.options.managedSourceId?.();
     const continuity: DeliveryContinuity | undefined =
       binding === undefined
         ? undefined
@@ -707,6 +709,7 @@ export class OutputService {
             cursor: bundle.program.cursor,
             mapName: result.state.map.name ?? null,
             savedAt: now,
+            ...(managedSourceId ? { managedSourceId } : {}),
           };
     const transitions = result.transitions.filter(
       (transition) => transition.kind === 'map_execution_changed',

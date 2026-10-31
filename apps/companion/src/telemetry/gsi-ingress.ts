@@ -28,7 +28,7 @@ export interface GsiClock {
 }
 
 /** Synchronous local handoff only; the callback must not perform I/O or return a Promise. */
-export type ObservationSink = (observation: TelemetryObservation) => void;
+export type ObservationSink = (observation: TelemetryObservation, sourceId?: string) => void;
 /** Synchronous local handoff only; the callback must not perform I/O or return a Promise. */
 export type GsiDiagnosticsSink = (diagnostics: GsiDiagnosticBatch) => void;
 /** Synchronous local handoff of the accepted, shallow-auth-sanitized source payload. */
@@ -54,6 +54,7 @@ export interface GsiIngressOptions {
   readonly gsiToken: string;
   readonly canAccept?: () => boolean;
   readonly canRecord?: () => boolean;
+  readonly classifySource?: (sourceId: string | undefined) => 'managed' | 'external' | 'drop';
   readonly recorder: CaptureRecorderSource;
   readonly sequenceSource?: GsiSequenceSource;
   readonly onAcceptedRaw?: AcceptedRawSink;
@@ -143,6 +144,18 @@ export function registerGsiIngress(app: FastifyInstance, options: GsiIngressOpti
         return;
       }
 
+      const query = new URL(request.raw.url ?? '/gsi', 'http://localhost').searchParams;
+      const sourceIds = query.getAll('source');
+      if (sourceIds.length > 1) {
+        sendNoContent(reply);
+        return;
+      }
+      const sourceId = sourceIds[0];
+      if (options.classifySource?.(sourceId) === 'drop') {
+        sendNoContent(reply);
+        return;
+      }
+
       if (options.canAccept?.() === false) {
         sendNoContent(reply);
         return;
@@ -201,7 +214,7 @@ export function registerGsiIngress(app: FastifyInstance, options: GsiIngressOpti
       }
 
       try {
-        options.onObservation?.(adapted.observation);
+        options.onObservation?.(adapted.observation, sourceId);
       } catch (error) {
         reportRuntimeDiagnostic(options, 'observation_sink_failed', error, receiveContext);
       }

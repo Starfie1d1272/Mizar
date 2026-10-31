@@ -146,6 +146,7 @@ export interface DeliveryContinuity {
   readonly cursor: ReliableEventV1['cursor'];
   readonly mapName: string | null;
   readonly savedAt: string;
+  readonly managedSourceId?: string;
 }
 
 export interface BoundaryScope {
@@ -596,7 +597,13 @@ function parseOutbox(bytes: Buffer): OutboxFile {
     if (
       checkpoint === null ||
       typeof checkpoint !== 'object' ||
-      Object.keys(checkpoint).sort().join(',') !== 'contextRevision,cursor,mapName,matchId,savedAt'
+      ![
+        'contextRevision,cursor,mapName,matchId,savedAt',
+        'contextRevision,cursor,managedSourceId,mapName,matchId,savedAt',
+      ].includes(Object.keys(checkpoint).sort().join(',')) ||
+      (checkpoint.managedSourceId !== undefined &&
+        (typeof checkpoint.managedSourceId !== 'string' ||
+          !/^[0-9a-f-]{36}$/i.test(checkpoint.managedSourceId)))
     )
       throw new Error('outbox_continuity_invalid');
     const storedReference =

@@ -177,6 +177,7 @@ export interface SeriesProgressCheckpoint {
     readonly programSourceGeneration: number;
     readonly mapEpoch: number;
     readonly mapName: string;
+    readonly managedSourceId?: string;
   };
 }
 
@@ -209,7 +210,9 @@ export function isSeriesProgressCheckpoint(value: unknown): value is SeriesProgr
         isNonEmptyString(value.executionOwner.liveSessionId) &&
         isNonNegativeInteger(value.executionOwner.programSourceGeneration) &&
         isPositiveInteger(value.executionOwner.mapEpoch) &&
-        isNonEmptyString(value.executionOwner.mapName))) &&
+        isNonEmptyString(value.executionOwner.mapName) &&
+        (value.executionOwner.managedSourceId === undefined ||
+          isNonEmptyString(value.executionOwner.managedSourceId)))) &&
     isNonEmptyString(identity.matchId) &&
     isMatchFormat(identity.format) &&
     isNonEmptyString(identity.entryAId) &&
