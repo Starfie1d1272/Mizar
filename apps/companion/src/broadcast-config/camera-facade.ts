@@ -224,42 +224,15 @@ export function createCameraConfigPersistence(
           : catalog.activePresetId;
       if (value && committedId !== catalog.activePresetId)
         changedDrafts.push({ id: committedId, value });
-      const committed = await store.updateFromLegacy({
-        updateDraft(document) {
-          if (document.active.revision !== before.revision) throw new Error('revision_conflict');
-          for (const draft of changedDrafts) {
-            const module = document.modules.find((item) => item.id === draft.id);
-            const beforeModule = beforeDocument.modules.find((item) => item.id === draft.id);
-            if (
-              (beforeModule && (!module || module.revision !== beforeModule.revision)) ||
-              (!beforeModule && module)
-            )
-              throw new Error('revision_conflict');
-            if (module && module.kind !== 'camera') throw new Error('revision_conflict');
-            if (module?.kind === 'camera') {
-              module.value = draft.value;
-              module.name = draft.value.name;
-            } else
-              document.modules.push({
-                id: draft.id,
-                kind: 'camera',
-                schemaVersion: 2,
-                revision: draft.id,
-                name: draft.value.name,
-                value: draft.value,
-                origin: null,
-              });
-          }
-        },
+      const committed = await store.applyCameraEdit({
+        expectedActiveRevision: before.revision,
+        drafts: changedDrafts.map((draft) => ({
+          ...draft,
+          expectedRevision:
+            beforeDocument.modules.find((module) => module.id === draft.id)?.revision ?? null,
+        })),
         ...(activeChanged
-          ? {
-              active: {
-                kind: 'camera' as const,
-                value,
-                lock,
-                moduleId: committedId === disabledId ? null : committedId,
-              },
-            }
+          ? { active: { value, lock, moduleId: committedId === disabledId ? null : committedId } }
           : {}),
       });
       const result = await read(true);

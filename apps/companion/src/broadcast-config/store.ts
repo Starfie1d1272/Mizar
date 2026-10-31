@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { lstat, readFile } from 'node:fs/promises';
-import { canonicalJson } from '@mizar/hud-config';
+import {
+  canonicalJson,
+  getBuiltinLayouts,
+  getBuiltinPresets,
+  getBuiltinThemes,
+  type HudConfigDocument,
+} from '@mizar/hud-config';
 import { z } from 'zod';
 import { MUSIC_GROUPS } from '@mizar/protocol/music';
 import {
@@ -23,6 +29,8 @@ import {
   type ResourceRef,
   type ModuleKind,
   type CameraModuleV2,
+  type PortableMusicConfigV1,
+  type HudModule,
 } from '@mizar/broadcast-config';
 import { durableJsonByteLength, replaceDurableJson } from '../match-context/durable-json.js';
 import { SerialCommitQueue } from '../match-context/serial-commit.js';
@@ -34,6 +42,7 @@ import {
 } from './builtin-modules.js';
 import { broadcastResourceReferences } from './reference-queue.js';
 import { cameraCatalogSchema } from '../orchestration/store.js';
+import { hudDocumentFromBroadcast } from './hud-facade.js';
 
 interface Receipt {
   fingerprint: string;
@@ -972,8 +981,168 @@ export class BroadcastConfigStore {
       }
     });
   }
-  /** Internal facade transaction; the legacy owner validates its edit before submitting it. */
-  async updateFromLegacy<K extends ModuleKind>(input: {
+  /** Commit a music edit through the broadcast configuration owner. */
+  async applyMusicEdit(input: {
+    expectedActiveRevision: Revision;
+    value: PortableMusicConfigV1;
+    lock: ActiveBroadcastSnapshot['lock'];
+  }): Promise<BroadcastConfigDocument> {
+    const document = this.snapshot;
+    const active = document.active;
+    if (active.revision !== input.expectedActiveRevision) throw new Error('revision_conflict');
+    const captured = document.modules.find(
+      (item) => item.id === active.sourceModuleIds?.music && item.kind === 'music',
+    );
+    const usages = captured
+      ? document.presets.filter((preset) =>
+          preset.bindings.some(
+            (binding) => binding.mode === 'use' && binding.moduleId === captured.id,
+          ),
+        ).length
+      : 0;
+    const reusable =
+      captured?.kind === 'music' &&
+      !isBuiltinModuleId(captured.id) &&
+      usages <= 1 &&
+      canonicalJson(captured.value) === canonicalJson(active.resolved.music);
+    const moduleId = reusable ? captured.id : randomUUID();
+    return this.commitEdit({
+      updateDraft(next) {
+        if (next.active.revision !== input.expectedActiveRevision)
+          throw new Error('revision_conflict');
+        const existing = next.modules.find((item) => item.id === moduleId);
+        if (reusable) {
+          if (!existing || existing.kind !== 'music' || existing.revision !== captured.revision)
+            throw new Error('revision_conflict');
+          existing.value = input.value;
+        } else {
+          if (existing) throw new Error('revision_conflict');
+          next.modules.push({
+            id: moduleId,
+            kind: 'music',
+            schemaVersion: 1,
+            revision: randomUUID(),
+            name: '音乐',
+            value: input.value,
+            origin: null,
+          });
+        }
+      },
+      active: { kind: 'music', value: input.value, lock: input.lock, moduleId },
+    });
+  }
+  /** Commit camera drafts and an optional active selection as one store transaction. */
+  async applyCameraEdit(input: {
+    expectedActiveRevision: Revision;
+    drafts: Array<{ id: string; value: CameraModuleV2; expectedRevision: Revision | null }>;
+    active?: {
+      value: CameraModuleV2 | null;
+      lock: ActiveBroadcastSnapshot['lock'];
+      moduleId: string | null;
+    };
+  }): Promise<BroadcastConfigDocument> {
+    return this.commitEdit({
+      updateDraft(document) {
+        if (document.active.revision !== input.expectedActiveRevision)
+          throw new Error('revision_conflict');
+        for (const draft of input.drafts) {
+          const module = document.modules.find((item) => item.id === draft.id);
+          if (
+            (module?.revision ?? null) !== draft.expectedRevision ||
+            (module && module.kind !== 'camera')
+          )
+            throw new Error('revision_conflict');
+          if (module?.kind === 'camera') {
+            module.value = draft.value;
+            module.name = draft.value.name;
+          } else {
+            document.modules.push({
+              id: draft.id,
+              kind: 'camera',
+              schemaVersion: 2,
+              revision: draft.id,
+              name: draft.value.name,
+              value: draft.value,
+              origin: null,
+            });
+          }
+        }
+      },
+      ...(input.active ? { active: { kind: 'camera' as const, ...input.active } } : {}),
+    });
+  }
+  async applyHudEdit(input: {
+    candidate: HudConfigDocument;
+    previous: HudConfigDocument;
+    activeChanged: boolean;
+    oldHud: Extract<ActiveBroadcastSnapshot['resolved']['hud'], { renderer: 'native' }>;
+    nextHud: Extract<ActiveBroadcastSnapshot['resolved']['hud'], { renderer: 'native' }>;
+    lock: ActiveBroadcastSnapshot['lock'];
+    moduleId?: string | undefined;
+  }): Promise<BroadcastConfigDocument> {
+    const { candidate, previous, activeChanged, oldHud, nextHud, lock } = input;
+    return this.commitEdit({
+      updateDraft(document) {
+        const currentDocument = hudDocumentFromBroadcast(document);
+        if (
+          canonicalJson({ ...currentDocument, activePreset: previous.activePreset }) !==
+            canonicalJson(previous) ||
+          (activeChanged &&
+            canonicalJson(currentDocument.activePreset) !== canonicalJson(previous.activePreset))
+        )
+          throw new Error('revision_conflict');
+        const layouts = [...getBuiltinLayouts(), ...candidate.customLayouts];
+        const themes = [...getBuiltinThemes(), ...candidate.customThemes];
+        for (const preset of [...getBuiltinPresets(), ...candidate.customPresets]) {
+          const layout = layouts.find((item) => item.id === preset.layoutId);
+          const theme = themes.find((item) => item.id === preset.themeId);
+          if (!layout || !theme) throw new Error('hud_resource_missing');
+          const old = document.modules.find(
+            (item) =>
+              item.kind === 'hud' && 'preset' in item.value && item.value.preset.id === preset.id,
+          ) as ModuleRecord<'hud'> | undefined;
+          if (old && isBuiltinModuleId(old.id)) continue;
+          const template = old?.value ?? oldHud;
+          if (!('preset' in template) && !('overlays' in template))
+            throw new Error('hud_renderer_unsupported');
+          const value: HudModule = {
+            renderer: { kind: 'native', id: 'mizar.hud', apiVersion: 1 },
+            preset: structuredClone(preset),
+            layout: structuredClone(layout),
+            theme: structuredClone(theme),
+            overlays: structuredClone(template.overlays),
+            accent: structuredClone(template.accent),
+          };
+          if (old) {
+            old.name = preset.name;
+            old.value = value;
+          } else
+            document.modules.push({
+              id: randomUUID(),
+              revision: randomUUID(),
+              kind: 'hud',
+              schemaVersion: 1,
+              name: preset.name,
+              value,
+              origin: null,
+            });
+        }
+        document.unboundHudResources = {
+          layouts: candidate.customLayouts.filter(
+            (item) => !candidate.customPresets.some((preset) => preset.layoutId === item.id),
+          ),
+          themes: candidate.customThemes.filter(
+            (item) => !candidate.customPresets.some((preset) => preset.themeId === item.id),
+          ),
+        };
+      },
+      ...(activeChanged
+        ? { active: { kind: 'hud' as const, moduleId: input.moduleId, value: nextHud, lock } }
+        : {}),
+    });
+  }
+  /** Apply a validated consumer edit within the shared configuration transaction. */
+  private async commitEdit<K extends ModuleKind>(input: {
     updateDraft(document: BroadcastConfigDocument): void;
     active?: {
       moduleId?: string | null | undefined;

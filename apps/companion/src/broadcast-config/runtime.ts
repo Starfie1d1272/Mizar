@@ -139,7 +139,11 @@ export function createBroadcastRuntime(input: {
           if (item === 'camera') cameraUnavailable = true;
           failure ??= error;
           input.diagnostic(error);
-          await store.recordConsumer(item, active, 'dependency_unavailable');
+          try {
+            await store.recordConsumer(item, active, 'dependency_unavailable');
+          } catch (recordError) {
+            input.diagnostic(recordError);
+          }
         }
       }
       if (!kind || kind === 'camera') cameraUnavailable = !cameraAvailable();
