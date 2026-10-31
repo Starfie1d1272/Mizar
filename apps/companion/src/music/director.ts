@@ -5,6 +5,7 @@ import type {
   MusicTrack,
   MusicPreviewRequest,
 } from '@mizar/protocol/music';
+import { musicOpeningScope, type MusicOpeningScope } from '../scope/identities.js';
 import type { ObsRpc } from '../obs/reconcile.js';
 import type { AudioMonitorChange } from '../obs/audio-migration.js';
 import type { MonitorOriginals } from '../obs/audio-routing.js';
@@ -103,7 +104,7 @@ export class MusicDirector {
   private pendingOpening: {
     key: string;
     expires: number;
-    scope: string;
+    scope: MusicOpeningScope;
     track?: MusicTrack;
   } | null = null;
   private fades: Partial<Record<MusicLayer, Fade>> = {};
@@ -796,15 +797,6 @@ export class MusicDirector {
       this.inFlight = false;
     }
   }
-  private openingScope() {
-    const p = this.truth().program;
-    return JSON.stringify([
-      musicMapKey(p),
-      p.cursor.producerInstanceId,
-      p.cursor.liveSessionId,
-      p.cursor.programSourceGeneration,
-    ]);
-  }
   /** Only called by an actual, current Take start. Never reconstructed from scene snapshots. */
   opening(key: string, track?: MusicTrack) {
     const t = this.truth();
@@ -822,7 +814,7 @@ export class MusicDirector {
     this.pendingOpening = {
       key,
       expires: this.now() + 1000,
-      scope: this.openingScope(),
+      scope: musicOpeningScope(this.truth().program),
       ...(track ? { track } : {}),
     };
   }
@@ -868,7 +860,7 @@ export class MusicDirector {
     // Invalidate synchronously even while an OBS request is awaiting its reply.
     const preliminary = JSON.stringify([
       truth.production,
-      this.openingScope(),
+      musicOpeningScope(this.truth().program),
       musicSafe(truth.program),
       truth.program.status.telemetry,
       map,
@@ -1014,7 +1006,7 @@ export class MusicDirector {
           await this.readMonitor(obs, valid);
         if (
           opening &&
-          opening.scope === this.openingScope() &&
+          opening.scope === musicOpeningScope(this.truth().program) &&
           opening.expires >= this.now() &&
           valid() &&
           !this.isHeld()
@@ -1047,7 +1039,7 @@ export class MusicDirector {
             safe &&
               stinger &&
               !stinger.finished &&
-              (!stinger.scope || stinger.scope === this.openingScope())
+              (!stinger.scope || stinger.scope === musicOpeningScope(this.truth().program))
               ? { group: 'opening', key: stinger.key, track: stinger.track }
               : null,
             valid,
