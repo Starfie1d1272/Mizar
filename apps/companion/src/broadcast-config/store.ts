@@ -29,6 +29,7 @@ import { SerialCommitQueue } from '../match-context/serial-commit.js';
 import {
   addMissingBuiltinModules,
   BUILTIN_MODULE_IDS,
+  createBuiltinModules,
   isBuiltinModuleId,
 } from './builtin-modules.js';
 import { broadcastResourceReferences } from './reference-queue.js';
@@ -314,11 +315,19 @@ export class BroadcastConfigStore {
     if (!this.envelope) throw new Error('broadcast_config_unavailable');
     const active = structuredClone(this.envelope.document.active);
     for (const kind of ['hud', 'program'] as const) {
-      const applied = this.envelope.consumers?.[kind]?.applied;
+      const state = this.envelope.consumers?.[kind];
+      const applied = state?.applied;
       if (applied) {
         active.resolved[kind] = structuredClone(applied.resolved[kind]) as never;
         active.moduleRevisions[kind] = applied.moduleRevisions[kind];
-      }
+      } else if (state?.error && kind === 'program') {
+        const fallback = createBuiltinModules().find(
+          (module) => module.id === BUILTIN_MODULE_IDS.pulse,
+        );
+        if (!fallback || fallback.kind !== 'program')
+          throw new Error('broadcast_config_unavailable');
+        active.resolved.program = fallback.value;
+      } else if (state?.error && kind === 'hud') throw new Error('broadcast_config_unavailable');
     }
     return active;
   }

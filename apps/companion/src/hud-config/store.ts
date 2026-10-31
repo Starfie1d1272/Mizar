@@ -229,9 +229,9 @@ export class HudConfigStore {
     await this.commits.run(async () => {
       if (!this.loaded || this.loadFailure || this.persistence)
         throw new Error('hud_persistence_unavailable');
+      this.persistence = persistence;
       const document = parseHudConfigDocument(await persistence.initialize(clone(this.document)));
       this.document = document;
-      this.persistence = persistence;
     });
   }
 
@@ -239,12 +239,12 @@ export class HudConfigStore {
   async restorePersistence(persistence: HudConfigPersistence): Promise<void> {
     await this.commits.run(async () => {
       if (this.persistence) throw new Error('hud_persistence_unavailable');
+      this.persistence = persistence;
       const document = parseHudConfigDocument(await persistence.initialize(clone(this.document)));
       this.document = document;
       this.persistenceError = null;
       this.loadFailure = false;
       this.loaded = true;
-      this.persistence = persistence;
     });
   }
 

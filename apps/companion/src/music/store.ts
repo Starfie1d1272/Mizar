@@ -288,7 +288,6 @@ export class MusicStore {
     try {
       await this.loadDelegatedState();
     } catch (error) {
-      this.persistence = undefined;
       this.failure = true;
       this.ready = false;
       throw error;
@@ -298,6 +297,7 @@ export class MusicStore {
   async adoptPersistence(persistence: MusicConfigPersistence): Promise<void> {
     const result = this.queue.then(async () => {
       if (!this.ready || this.failure || this.persistence) throw new Error('music_state_invalid');
+      this.persistence = persistence;
       let runtime = runtimeState(this.state);
       try {
         runtime = await this.readRuntime();
@@ -317,7 +317,6 @@ export class MusicStore {
       await atomicJson(join(this.directory, 'runtime.json'), runtimeState(next));
       this.state = next;
       this.automaticEnabled = automaticEnabled;
-      this.persistence = persistence;
     });
     this.queue = result.catch(() => undefined);
     return result;
@@ -325,7 +324,7 @@ export class MusicStore {
   /** Refresh the in-memory configuration after the coordinator commits a preset. */
   async synchronizeFromPersistence(): Promise<void> {
     const result = this.queue.then(async () => {
-      if (!this.persistence || !this.ready || this.failure) throw new Error('music_state_invalid');
+      if (!this.persistence) throw new Error('music_state_invalid');
       const current = await this.persistence.read();
       const automaticEnabled = z.boolean().parse(current.automaticEnabled);
       this.state = stateSchema.parse({
@@ -334,6 +333,8 @@ export class MusicStore {
         configRevision: current.revision,
       });
       this.automaticEnabled = automaticEnabled;
+      this.failure = false;
+      this.ready = true;
     });
     this.queue = result.catch(() => undefined);
     return result;

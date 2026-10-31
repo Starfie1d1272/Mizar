@@ -137,31 +137,30 @@ export class OrchestrationStore {
   async loadWithPersistence(persistence: CameraConfigPersistence): Promise<void> {
     if (this.ready || this.persistence) throw new Error('camera_storage_unavailable');
     await ensureDirectory(this.directory);
-    const state = await persistence.read();
-    this.usePersisted(state);
     this.persistence = persistence;
+    const state = await (persistence.readForApply?.() ?? persistence.read());
+    this.usePersisted(state);
     this.ready = true;
   }
   async adoptPersistence(persistence: CameraConfigPersistence): Promise<void> {
     const result = this.queue.then(async () => {
       if (!this.ready || this.persistence) throw new Error('camera_storage_unavailable');
-      const value = await persistence.initialize(
-        structuredClone(this.catalog()),
-        this.automaticEnabled,
-      );
-      this.usePersisted(value);
       this.persistence = persistence;
+      const value = await (persistence.readForApply?.() ??
+        persistence.initialize(structuredClone(this.catalog()), this.automaticEnabled));
+      this.usePersisted(value);
     });
     this.queue = result.catch(() => undefined);
     return result;
   }
   async synchronizeFromPersistence(): Promise<void> {
     const result = this.queue.then(async () => {
-      if (!this.ready || !this.persistence) throw new Error('camera_storage_unavailable');
+      if (!this.persistence) throw new Error('camera_storage_unavailable');
       const before = JSON.stringify({ ...this.preset, name: '' });
       const automatic = this.automaticEnabled;
       const revision = this.persistedRevision;
       this.usePersisted(await (this.persistence.readForApply?.() ?? this.persistence.read()));
+      this.ready = true;
       if (
         this.persistedRevision !== undefined
           ? revision !== this.persistedRevision

@@ -81,7 +81,12 @@ export function registerBroadcastConfigRoutes(
   app.get('/local/v1/broadcast-display-config', (_request, reply) => {
     if (!isReady()) return reply.code(503).send({ error: 'broadcast_config_unavailable' });
     if (!displayAvailable()) reply.header('x-mizar-program-status', 'dependency_missing');
-    const display = displayConfig(store.appliedDisplay);
+    let display;
+    try {
+      display = displayConfig(store.appliedDisplay);
+    } catch {
+      return reply.code(503).send({ error: 'broadcast_display_unavailable' });
+    }
     const fallback = fallbackHudPauseVisual(display.hud);
     if (fallback.reason) reply.header('x-mizar-hud-fallback', fallback.reason);
     return reply.header('cache-control', 'no-store').send({ ...display, hud: fallback.hud });
