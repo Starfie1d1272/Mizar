@@ -263,19 +263,43 @@ export async function retryPendingPreparation() {
 
 /** Enter the existing production view without starting a managed game or preparing OBS. */
 export async function enterProductionManually(state: Production) {
+  const read = async (): Promise<Production> => {
+    const response = await fetch('/local/v1/production', {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) throw new Error('制作状态未确认，请重试。');
+    return (await response.json()) as Production;
+  };
+  const present = async () => {
+    if (window.__TAURI_INTERNALS__) await desktopInvoke('present_production', { live: true });
+    else window.location.assign('/workspace');
+  };
+  let current = await read();
+  // Reopening an already entered workspace does not start another preparation.
+  if (current.mode !== 'preparation') return present();
+  if (state.sessionId && current.sessionId !== state.sessionId)
+    throw new Error('制作状态已变化，请刷新后重试。');
   if (window.__TAURI_INTERNALS__) {
     const status = await desktopInvoke<PreparationStatus | null>('preparation_status');
-    if (status?.running) await cancelProductionEntry();
-    else if (status && !status.cancelled) {
-      const cancellation = (await command('/operator/preparation-cancel', {
-        preparationId: status.id,
-      })) as { entered?: boolean };
-      if (cancellation.entered !== false) throw new Error('制作状态已变化，请刷新后重试。');
+    try {
+      if (status?.running) await cancelProductionEntry();
+      else if (status && !status.cancelled) {
+        await command('/operator/preparation-cancel', { preparationId: status.id });
+      }
+    } catch (error) {
+      // Cancellation can race with a committed enter. Only display its actual result.
+      current = await read();
+      if (current.mode !== 'preparation') return present();
+      throw error;
     }
   }
-  await command('/operator/production', { action: 'enter', expectedRevision: state.revision });
-  if (window.__TAURI_INTERNALS__) await desktopInvoke('present_production', { live: true });
-  else window.location.assign('/workspace');
+  current = await read();
+  if (current.mode !== 'preparation') return present();
+  if (state.sessionId && current.sessionId !== state.sessionId)
+    throw new Error('制作状态已变化，请刷新后重试。');
+  await command('/operator/production', { action: 'enter', expectedRevision: current.revision });
+  await present();
 }
 
 export async function productionAction(
