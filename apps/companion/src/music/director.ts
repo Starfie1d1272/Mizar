@@ -101,6 +101,7 @@ export class MusicDirector {
   private inFlight = false;
   private closed = false;
   private heldOverride: boolean | null = null;
+  private holdReasonOverride: 'external' | 'stop' | null = null;
   private pendingOpening: {
     key: string;
     expires: number;
@@ -154,6 +155,12 @@ export class MusicDirector {
   private isHeld() {
     return this.heldOverride ?? this.store.state.held;
   }
+  private isExternalHold() {
+    return (
+      this.isHeld() &&
+      (this.holdReasonOverride ?? this.store.state.holdReason ?? 'external') === 'external'
+    );
+  }
   private effectiveVolume(group: MusicGroup, track: MusicTrack) {
     const state = this.store.state;
     const spec = state.config.groups[group];
@@ -188,6 +195,8 @@ export class MusicDirector {
   }
   async previewRequest(request: MusicPreviewRequest) {
     if (this.closed) throw new Error('music_preview_closed');
+    if (request.action === 'start' && this.isExternalHold())
+      throw new Error('music_preview_channel_busy');
     if (
       request.action === 'start' &&
       (this.pendingOpening || (this.store.state.stinger && !this.store.state.stinger.finished))
@@ -233,8 +242,9 @@ export class MusicDirector {
     if (action !== 'next') {
       // Resume stays quiet until both persistence steps confirm this is still the newest command.
       this.heldOverride = true;
+      this.holdReasonOverride = action === 'stop' ? 'stop' : 'external';
       try {
-        await this.store.hold(action === 'stop');
+        await this.store.hold(action === 'stop', 'stop');
         if (!current()) return;
         if (action === 'resume') {
           await this.store.update((s) => {
@@ -249,6 +259,7 @@ export class MusicDirector {
           this.failed.clear();
           this.appliedVolumes.clear();
           this.heldOverride = false;
+          this.holdReasonOverride = null;
         }
       } catch (error) {
         if (!current()) return;
@@ -287,6 +298,8 @@ export class MusicDirector {
     await this.store.hold(false);
     if (revision !== this.commandRevision || this.closed) return;
     this.heldOverride = false;
+    this.holdReasonOverride = null;
+    this.resumeLayers = new Set(this.store.state.sources.bgm ? ['bgm'] : []);
     this.manual = {
       cue: { group, key: `manual:${randomUUID()}`, track },
       paused: false,
@@ -391,6 +404,7 @@ export class MusicDirector {
           this.manual = null;
           this.unknownControl = true;
           this.heldOverride = true;
+          this.holdReasonOverride = 'external';
           await this.store.hold(true).catch(() => undefined);
         }
       }
@@ -502,6 +516,7 @@ export class MusicDirector {
           this.manual = null;
           this.unknownControl = true;
           this.heldOverride = true;
+          this.holdReasonOverride = 'external';
           await this.store.hold(true).catch(() => undefined);
         }
       }
@@ -959,12 +974,21 @@ export class MusicDirector {
           this.manual = null;
           this.unknownControl = true;
           this.heldOverride = true;
+          this.holdReasonOverride = 'external';
+          await this.store.hold(true);
           cue = null;
         }
+        if (!valid()) return;
         if (this.manual) this.manual.epoch = epoch;
         this.epoch = epoch;
         this.status.connection = 'connected';
         this.status.message = null;
+        if (this.isExternalHold()) {
+          await this.observeHeldPlayback(obs, valid);
+          if (this.unknownControl && valid())
+            this.status.message = '音乐控制未确认，请在 OBS 核对后停止音乐或恢复自动。';
+          return;
+        }
         const previewOwned = this.preview.busy;
         if (configured || opening) this.preview.programPriority();
         const p = this.truth().program;
@@ -1059,7 +1083,10 @@ export class MusicDirector {
           this.manual = null;
           this.unknownControl = true;
           this.heldOverride = true;
+          this.holdReasonOverride = 'external';
+          await this.store.hold(true).catch(() => undefined);
         }
+        if (!valid()) return;
         this.status.playback = 'unknown';
         this.status.cursorMs = null;
         this.status.durationMs = null;
@@ -1108,12 +1135,52 @@ export class MusicDirector {
     this.manual = null;
     this.preview.cancel('manual_control');
     this.heldOverride = true;
+    this.holdReasonOverride = 'external';
     this.pendingOpening = null;
     this.fades = {};
     this.nextRequested = false;
     this.resumeLayers.clear();
     this.invalidate();
     await this.store.hold(true);
+  }
+  private async observeHeldPlayback(obs: ObsRpc, valid: () => boolean) {
+    const name = await ownedMusicInput(obs, this.store, 'bgm', false, valid, false, false, false);
+    if (!name || !valid()) {
+      this.status.playback = 'unknown';
+      this.status.bgm = null;
+      return;
+    }
+    const args = { inputUuid: this.store.state.sources.bgm };
+    const [media, volume, mute, settings] = await Promise.all([
+      obs.call('GetMediaInputStatus', args),
+      obs.call('GetInputVolume', args),
+      obs.call('GetInputMute', args),
+      obs.call('GetInputSettings', args),
+    ]);
+    if (!valid()) return;
+    this.status.playback = observedPlayback(media.mediaState);
+    this.status.cursorMs = mediaMillis(media.mediaCursor);
+    this.status.durationMs = mediaMillis(media.mediaDuration);
+    const saved = this.store.state.bgm;
+    const path = saved ? await this.store.trackPath(saved.track.id).catch(() => null) : null;
+    if (!valid()) return;
+    const matches =
+      path && (settings.inputSettings as Record<string, unknown>)?.local_file === path;
+    this.status.bgm =
+      saved && matches && !saved.finished
+        ? {
+            group: saved.group,
+            track: saved.track.name,
+            playbackId: saved.key,
+            volume:
+              mute.inputMuted === true
+                ? 0
+                : typeof volume.inputVolumeMul === 'number' &&
+                    Number.isFinite(volume.inputVolumeMul)
+                  ? Math.min(1, Math.max(0, volume.inputVolumeMul))
+                  : this.effectiveVolume(saved.group, saved.track),
+          }
+        : null;
   }
   private async observeManualControls(obs: ObsRpc, valid: () => boolean, skipStinger = false) {
     if (this.isHeld()) return false;
@@ -1565,7 +1632,7 @@ export class MusicDirector {
     this.invalidate();
     // Wait only for the bounded active RPC, then stop owned sources without changing manual hold.
     while (this.inFlight) await new Promise((resolve) => setTimeout(resolve, 10));
-    if (Object.values(this.store.state.sources).some(Boolean))
+    if (!this.isExternalHold() && Object.values(this.store.state.sources).some(Boolean))
       await this.provider
         .session(async (obs) => {
           for (const layer of ['bgm', 'stinger'] as const) {

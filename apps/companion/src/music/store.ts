@@ -80,6 +80,7 @@ const stateSchema = z
       .strict()
       .default({ bgm: null, stinger: null }),
     held: z.boolean(),
+    holdReason: z.enum(['external', 'stop']).optional(),
     owner: z.string().uuid(),
     sources: z.object({ bgm: z.string().nullable(), stinger: z.string().nullable() }).strict(),
     bgm: playbackSchema.nullable(),
@@ -121,6 +122,7 @@ export class MusicStore {
   automaticEnabled = true;
   private importing = false;
   private persistence: MusicConfigPersistence | undefined;
+  private runtimeAvailable = false;
   state: MusicState = {
     version: 1,
     config: defaultMusicConfig(),
@@ -267,6 +269,7 @@ export class MusicStore {
   private async loadDelegatedState(): Promise<void> {
     const persistence = this.persistence;
     if (!persistence) throw new Error('music_state_invalid');
+    this.runtimeAvailable = false;
     let runtime;
     try {
       runtime = await this.readRuntime();
@@ -275,6 +278,12 @@ export class MusicStore {
       runtime = runtimeState(this.state);
       await atomicJson(join(this.directory, 'runtime.json'), runtime);
     }
+    this.state = stateSchema.parse({
+      ...runtime,
+      config: this.state.config,
+      configRevision: this.state.configRevision,
+    });
+    this.runtimeAvailable = true;
     const current = await persistence.read();
     const automaticEnabled = z.boolean().parse(current.automaticEnabled);
     this.state = stateSchema.parse({
@@ -305,12 +314,23 @@ export class MusicStore {
     const result = this.queue.then(async () => {
       if (!this.ready || this.failure || this.persistence) throw new Error('music_state_invalid');
       this.persistence = persistence;
+      this.runtimeAvailable = false;
       let runtime = runtimeState(this.state);
       try {
         runtime = await this.readRuntime();
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          this.failure = true;
+          this.ready = false;
+          throw error;
+        }
       }
+      this.state = stateSchema.parse({
+        ...runtime,
+        config: this.state.config,
+        configRevision: this.state.configRevision,
+      });
+      this.runtimeAvailable = true;
       const current = await persistence.initialize(
         structuredClone(this.state.config),
         this.state.configRevision,
@@ -331,7 +351,7 @@ export class MusicStore {
   /** Refresh the in-memory configuration after the coordinator commits a preset. */
   async synchronizeFromPersistence(canApply: () => boolean = () => true): Promise<void> {
     const result = this.queue.then(async () => {
-      if (!this.persistence) throw new Error('music_state_invalid');
+      if (!this.persistence || !this.runtimeAvailable) throw new Error('music_state_invalid');
       const current = await this.persistence.read();
       const automaticEnabled = z.boolean().parse(current.automaticEnabled);
       if (!canApply()) throw new Error('revision_conflict');
@@ -348,7 +368,8 @@ export class MusicStore {
     return result;
   }
   async restoreAppliedFromPersistence(): Promise<void> {
-    if (!this.persistence?.readApplied) throw new Error('music_state_invalid');
+    if (!this.persistence?.readApplied || !this.runtimeAvailable)
+      throw new Error('music_state_invalid');
     const current = await this.persistence.readApplied();
     this.state = stateSchema.parse({
       ...this.state,
@@ -528,9 +549,11 @@ export class MusicStore {
       this.importing = false;
     }
   }
-  async hold(held: boolean) {
+  async hold(held: boolean, reason: 'external' | 'stop' = 'external') {
     await this.update((s) => {
       s.held = held;
+      if (held) s.holdReason = reason;
+      else delete s.holdReason;
     });
   }
   async consume(key: string) {
