@@ -541,6 +541,7 @@ export class RivalHubConnection {
   private cleanupTimer: ReturnType<typeof setInterval> | undefined;
   private cleanupSummary = { pending: 0, blocked: 0, claimIntent: false };
   private settleSource: ((scope: SourceScope) => Promise<boolean>) | undefined;
+  private archiveSource: ((identity: ExactSource) => Promise<void>) | undefined;
   private resumeSource: ((scope: SourceScope) => void) | undefined;
   private bindingGeneration = 0;
   private activeDeviceName: string | null = null;
@@ -715,6 +716,10 @@ export class RivalHubConnection {
         ]);
   }
 
+  reliableExactSource(): ExactSource | undefined {
+    return this.source && this.installation ? this.exactSource(this.source) : undefined;
+  }
+
   constructor(
     private readonly path: string,
     private readonly fetchImpl: typeof fetch = fetch,
@@ -814,9 +819,11 @@ export class RivalHubConnection {
   setSourceSettlement(
     settle: (scope: SourceScope) => Promise<boolean>,
     resume: (scope: SourceScope) => void,
+    archive?: (identity: ExactSource) => Promise<void>,
   ): void {
     this.settleSource = settle;
     this.resumeSource = resume;
+    this.archiveSource = archive;
   }
 
   startSourceCleanup(): void {
@@ -1151,8 +1158,10 @@ export class RivalHubConnection {
             found.producerInstanceId === identity.producerInstanceId &&
             found.liveSessionId === identity.liveSessionId &&
             found.authorityRevision === identity.authorityRevision
-          )
+          ) {
+            await this.archiveSource?.(identity);
             await this.sourceState.complete(identity);
+          }
         } catch (error) {
           this.onDiagnostic('source_status', error);
         }
@@ -1201,6 +1210,7 @@ export class RivalHubConnection {
             JSON.stringify(this.exactSource(this.source)) === JSON.stringify(identity)
           )
             this.source = null;
+          await this.archiveSource?.(identity);
           await this.sourceState.complete(identity);
           this.cleanupAttempts.delete(attemptKey);
           this.cleanupEvidence(identity, 'release_confirmed', record.attempts + 1);
