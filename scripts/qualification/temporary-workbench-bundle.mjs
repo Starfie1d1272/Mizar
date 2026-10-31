@@ -9,8 +9,11 @@ if (!directory || !executable || !/^[a-f0-9]{40}$/.test(head ?? ''))
   throw new Error('Invalid temporary bundle input');
 const root = resolve(directory);
 if (
-  execFileSync(executable, ['--app-version'], { encoding: 'utf8', windowsHide: true }).trim() !==
-  '1.10.2'
+  execFileSync(executable, ['--app-version'], {
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: 20000,
+  }).trim() !== '1.10.2'
 )
   throw new Error('Temporary executable version differs');
 const original = await verifyPayload(root);
