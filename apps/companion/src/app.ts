@@ -76,7 +76,7 @@ import { LocalTournamentStore } from './match-context/local-tournament-store.js'
 import { registerLocalTournamentRoutes } from './match-context/local-tournament-routes.js';
 import { registerLocalMatchExitRoutes } from './match-context/local-match-exit.js';
 import { registerLocalAssetRoutes } from './match-context/local-assets.js';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { toMatchDocumentV1 } from '@mizar/rivalhub';
 import { isStandaloneLocalMatch } from './match-context/lkg-store.js';
 import { OutputService, type OutputServiceOptions } from './output/service.js';
@@ -2425,6 +2425,24 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     await closeStep(() => cameraDirector?.close());
     await closeStep(() => musicDirector?.close());
     await closeStep(() => gameAudio?.close());
+    // The production owner retains and retries its OBS task independently.
+    // Give the existing task a bounded opportunity before closing its adapter.
+    const obsExit = production as typeof production & { waitForObsExit?: () => Promise<unknown> };
+    if (obsExit.waitForObsExit) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          obsExit.waitForObsExit(),
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(() => reject(new Error('OBS 收尾尚未确认')), 4000);
+          }),
+        ]);
+      } catch (error) {
+        app.log.warn({ err: error }, 'OBS 收尾未确认');
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    }
     await closeStep(() => obsAdapter?.close());
     for (const result of await Promise.allSettled([
       Promise.resolve().then(() => cstvSources.program.stop()),
@@ -2467,6 +2485,17 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       }
     }
     if (failures.length > 0) throw new AggregateError(failures, 'Companion 本地收尾未全部完成');
+    if (options.productRuntime) {
+      const stateRoot = process.env.MIZAR_STATE_ROOT;
+      const { instanceId, artifactSha256 } = options.productRuntime;
+      if (!stateRoot || !isAbsolute(stateRoot) || !/^[a-f0-9-]{36}$/.test(instanceId))
+        throw new Error('本地收尾实例身份无效');
+      await replaceDurableJson(join(stateRoot, 'data', `runtime-flush-${instanceId}.json`), {
+        instanceId,
+        artifactSha256,
+        pid: process.pid,
+      });
+    }
   });
 
   return app;

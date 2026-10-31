@@ -247,7 +247,7 @@ export async function stopProduct(
     error.code = 'RUNTIME_STOP_TIMEOUT';
     throw error;
   }
-  if (receipt.code !== 0 || receipt.signal !== null || receipt.error)
+  if (receipt.code !== 0 || receipt.signal !== null || receipt.error || !receipt.localComplete)
     throw new Error('制播进程异常退出，本地收尾未确认，请检查运行日志');
 }
 
@@ -319,7 +319,7 @@ export async function runProduct({
   // old instances at the next start so normal use does not grow indefinitely.
   const dataDir = join(stateRoot, 'data');
   for (const name of await readdir(dataDir)) {
-    if (!/^runtime-exit-[a-f0-9-]{36}\.json$/.test(name)) continue;
+    if (!/^runtime-(?:exit|flush)-[a-f0-9-]{36}\.json$/.test(name)) continue;
     const path = join(dataDir, name);
     try {
       if (Date.now() - (await stat(path)).mtimeMs > 60000) await rm(path, { force: true });
@@ -390,6 +390,18 @@ export async function runProduct({
         try {
           const receipt = exitReceiptPath(stateRoot, instanceId);
           const temporary = `${receipt}.${process.pid}.tmp`;
+          let localComplete = false;
+          try {
+            const marker = JSON.parse(
+              await readFile(join(stateRoot, 'data', `runtime-flush-${instanceId}.json`), 'utf8'),
+            );
+            localComplete =
+              marker.instanceId === instanceId &&
+              marker.pid === child.pid &&
+              marker.artifactSha256 === artifact.artifactSha256;
+          } catch (error) {
+            if (error.code !== 'ENOENT') log('runtime_flush_marker_invalid', { code: error.code });
+          }
           await writeJson(temporary, {
             instanceId,
             pid: child.pid,
@@ -397,9 +409,10 @@ export async function runProduct({
             code: code ?? null,
             signal: signal ?? null,
             error: false,
+            localComplete,
           });
           await rename(temporary, receipt);
-          done({ code, signal });
+          done({ code, signal, localComplete });
         } catch (error) {
           done({ error });
         }
@@ -430,7 +443,7 @@ export async function runProduct({
     log('runtime_ready', { instanceId });
     await open();
     const result = await completion;
-    if (result.error || result.code !== 0)
+    if (result.error || result.code !== 0 || !result.localComplete)
       throw new Error('本地制播服务意外退出，请查看 state/logs 后重新启动');
     return { reused: false };
   } catch (error) {
