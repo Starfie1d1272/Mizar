@@ -1062,15 +1062,18 @@ export class RivalHubConnection {
       source.draining = true;
       source.paused = true;
       const identity = this.exactSource(source);
+      this.exitHandoffs.set(JSON.stringify(identity), identity);
+      if (!this.settleSource) return Promise.reject(new Error('可靠事件范围尚未冻结。'));
       // settle() enters the output owner's fence synchronously; false remains pending.
       void this.settle(identity);
-      this.exitHandoffs.set(JSON.stringify(identity), identity);
     }
-    const handoff = this.sourceCommands.run(async () => {
+    // The source-state owner serializes its own durable writes. Do not queue
+    // this local handoff behind claim/release HTTP operations.
+    const handoff = (async () => {
       await this.persistExitHandoffs();
       await this.updateCleanupSummary();
       if (this.cleanupSummary.claimIntent) throw new Error('数据源认领结果待核对。');
-    });
+    })();
     void handoff
       .then(
         () => this.sourceCommands.run(() => this.cleanup(false)),

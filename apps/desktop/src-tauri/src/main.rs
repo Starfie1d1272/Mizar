@@ -1627,11 +1627,10 @@ async fn finish_workspace(
         let mut cs2 = log.step("workspace_exit_lock", || managed.lock().map_err(|error| command_log.preserve_error("finish_workspace", native_operation_id.as_deref(), &error, "CS2 配置状态不可用。")))?;
         // Companion freeze and scene/remote work have their own owner. Never
         // serialize the exact local process cleanup behind their HTTP response.
+        let exit_intent = production_exit::set_exit_intent(&log, "begin-exit");
         let production_log = log.inner().clone();
         let production_task = std::thread::spawn(move || {
-            let intent = production_exit::set_exit_intent(&production_log, "begin-exit");
-            let production = production_exit::finish_workspace_production(&production_log);
-            production_exit::cleanup_results(intent, production)
+            production_exit::finish_workspace_production(&production_log)
         });
         let activity = host.state::<cs2_activity::Activity>();
         // Open the visible recovery owner before any potentially slow cleanup.
@@ -1683,7 +1682,7 @@ async fn finish_workspace(
         // must not prevent returning to preparation once the game is finished.
         let presentation = log.step("workspace_exit_presentation", || present_production_inner(&host, false));
         let production = production_task.join().unwrap_or_else(|_| Err("制作收尾结果未确认。".into()));
-        production_exit::cleanup_results(production, production_exit::cleanup_results(game, presentation))
+        production_exit::cleanup_results(production_exit::cleanup_results(exit_intent, production), production_exit::cleanup_results(game, presentation))
         })
     } })
     .await
@@ -4678,18 +4677,26 @@ fn run_desktop(
                     // then keep its lock through safe production and game cleanup.
                     let state = cleanup_host.state::<Mutex<managed_cs2::ManagedCs2>>();
                     let mut cs2 = state.lock().map_err(|_| "CS2 配置状态不可用。")?;
+                    let service_stopped = cleanup_host
+                        .state::<production_exit::VerifiedStop>()
+                        .complete();
+                    let exit_intent = if service_stopped {
+                        Ok(())
+                    } else {
+                        production_exit::set_exit_intent(
+                            &cleanup_host.state::<DesktopLog>(),
+                            "begin-exit",
+                        )
+                    };
                     let production_host = cleanup_host.clone();
                     let production_task = std::thread::spawn(move || {
-                        if production_host
-                            .state::<production_exit::VerifiedStop>()
-                            .complete()
-                        {
-                            return Ok(());
+                        if service_stopped {
+                            Ok(())
+                        } else {
+                            production_exit::finish_companion(
+                                &production_host.state::<DesktopLog>(),
+                            )
                         }
-                        let log = production_host.state::<DesktopLog>();
-                        let intent = production_exit::set_exit_intent(&log, "begin-exit");
-                        let production = production_exit::finish_companion(&log);
-                        production_exit::cleanup_results(intent, production)
                     });
                     let activity = cleanup_host.state::<cs2_activity::Activity>();
                     let _activity = activity.begin(if cs2.has_external() { 3 } else { 2 });
@@ -4715,7 +4722,10 @@ fn run_desktop(
                     let production = production_task
                         .join()
                         .unwrap_or_else(|_| Err("制作收尾结果未确认。".into()));
-                    production_exit::cleanup_results(production, cleanup)
+                    production_exit::cleanup_results(
+                        production_exit::cleanup_results(exit_intent, production),
+                        cleanup,
+                    )
                 })
                 .await
                 .unwrap_or_else(|_| Err("退出收尾未完成，请重试。".into()));

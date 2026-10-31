@@ -37,26 +37,38 @@ export function registerProductionRoutes(
   let releaseHandoffState: 'idle' | 'pending' | 'recorded' | 'confirmed' | 'unconfirmed' = 'idle';
   let releaseGeneration = 0;
   let handoffStarted = false;
+  let handoffPromise: Promise<void> | undefined;
   let obsExitState: 'idle' | 'pending' | 'confirmed' | 'unconfirmed' = 'idle';
   let obsExitGeneration = 0;
-  function startHandoff() {
-    if (!options.handoffRelease || handoffStarted) return;
+  function startHandoff(): Promise<void> {
+    if (!options.handoffRelease) return Promise.resolve();
+    if (handoffPromise) return handoffPromise;
+    if (handoffStarted) return Promise.resolve();
     handoffStarted = true;
     releaseHandoffState = 'pending';
     const generation = ++releaseGeneration;
     try {
-      void options.handoffRelease().then(
+      const pending = options.handoffRelease();
+      handoffPromise = pending.then(
         () => {
           if (generation === releaseGeneration) releaseHandoffState = 'recorded';
         },
         (error: unknown) => {
-          if (generation === releaseGeneration) releaseHandoffState = 'unconfirmed';
-          app.log.warn({ stage: 'production_release', err: error }, 'Source release deferred');
+          if (generation === releaseGeneration) {
+            releaseHandoffState = 'unconfirmed';
+            handoffStarted = false;
+            handoffPromise = undefined;
+          }
+          app.log.warn({ stage: 'production_release', err: error }, 'Source handoff unconfirmed');
+          throw error;
         },
       );
+      return handoffPromise;
     } catch (error) {
+      handoffStarted = false;
       releaseHandoffState = 'unconfirmed';
-      app.log.warn({ stage: 'production_release', err: error }, 'Source release deferred');
+      app.log.warn({ stage: 'production_release', err: error }, 'Source handoff unconfirmed');
+      return Promise.reject(error);
     }
   }
   function scheduleObsExit(controlValid: () => boolean, sceneRequired: boolean) {
@@ -121,9 +133,13 @@ export function registerProductionRoutes(
       options.beforeExit?.();
     }
     if (body?.expectedRevision === revision && body.action === 'begin-exit') {
-      startHandoff();
       shuttingDown = true;
-      return { code: 200, value: view() };
+      try {
+        await startHandoff();
+        return { code: 200, value: view() };
+      } catch {
+        return { code: 503, value: { ...view(), message: '数据源本地交接未确认。' } };
+      }
     }
     if (body?.expectedRevision === revision && body.action === 'cancel-exit') {
       shuttingDown = false;
@@ -154,6 +170,8 @@ export function registerProductionRoutes(
         obsExitGeneration++;
         if (mode === 'preparation') {
           handoffStarted = false;
+          handoffPromise = undefined;
+          releaseGeneration++;
           options.onEnter?.();
         }
         mode = 'live';
@@ -161,7 +179,7 @@ export function registerProductionRoutes(
       } else if (body?.action === 'hide') {
         if (mode === 'live') mode = 'hidden';
       } else {
-        if (!shutdown) startHandoff();
+        if (!shutdown) void startHandoff().catch(() => {});
         if (!shutdown && !trialPending && options.handoffRelease) {
           scheduleObsExit(controlValid, mode !== 'preparation');
           mode = 'preparation';
