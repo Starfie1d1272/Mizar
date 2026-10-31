@@ -3,5 +3,9 @@
   "description": "The preparation window may show the workbench and forward preparation status.",
   "windows": ["main"],
   "remote": { "urls": ["http://127.0.0.1:3000/*"] },
-  "permissions": ["allow-present-workbench-panels", "allow-workbench-message"]
+  "permissions": [
+    "allow-present-workbench-panels",
+    "allow-workbench-message",
+    "allow-manage-cs2-backup"
+  ]
 }
