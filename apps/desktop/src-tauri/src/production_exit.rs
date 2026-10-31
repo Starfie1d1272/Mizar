@@ -393,36 +393,20 @@ fn exit_request(log: &DesktopLog, body: serde_json::Value) -> Result<serde_json:
     Ok(response)
 }
 
-fn prepare_local_match_exit(log: &DesktopLog) -> Result<Option<serde_json::Value>, String> {
+fn prepare_local_match_exit(
+    log: &DesktopLog,
+) -> Result<Option<crate::lifecycle_contract::Qualification>, String> {
     let response = exit_request(log, serde_json::json!({"action": "prepare"}))?;
-    match response.get("qualification") {
-        Some(serde_json::Value::Null) => Ok(None),
-        Some(value)
-            if value.as_object().is_some_and(|fields| {
-                fields.len() == 3
-                    && ["ticket", "matchId", "contextRevision"]
-                        .iter()
-                        .all(|field| {
-                            fields
-                                .get(*field)
-                                .and_then(serde_json::Value::as_str)
-                                .is_some_and(|value| !value.is_empty())
-                        })
-            }) =>
-        {
-            Ok(Some(value.clone()))
-        }
-        _ => Err("本场回收资格响应无效。请重试；再次失败时查看诊断。".into()),
-    }
+    crate::lifecycle_contract::Qualification::from_response(&response)
 }
 
 fn confirm_local_match_exit(
     log: &DesktopLog,
-    qualification: serde_json::Value,
+    qualification: crate::lifecycle_contract::Qualification,
 ) -> Result<(), String> {
     let response = exit_request(
         log,
-        serde_json::json!({"action": "confirm", "qualification": qualification}),
+        serde_json::json!({"action": "confirm", "qualification": qualification.as_value()}),
     )?;
     if response["ok"] == true {
         Ok(())
@@ -433,11 +417,11 @@ fn confirm_local_match_exit(
 
 fn settle_local_match_exit(
     log: &DesktopLog,
-    qualification: &serde_json::Value,
+    qualification: &crate::lifecycle_contract::Qualification,
 ) -> Result<(), String> {
     let response = exit_request(
         log,
-        serde_json::json!({"action": "settle", "qualification": qualification}),
+        serde_json::json!({"action": "settle", "qualification": qualification.as_value()}),
     )?;
     if response["ok"] == true {
         Ok(())
@@ -459,10 +443,10 @@ pub fn invalidate_local_match_exit(log: &DesktopLog) -> Result<(), String> {
 }
 
 fn finish_with_qualification(
-    prepare: impl FnOnce() -> Result<Option<serde_json::Value>, String>,
+    prepare: impl FnOnce() -> Result<Option<crate::lifecycle_contract::Qualification>, String>,
     finish: impl FnOnce(bool) -> Result<(), String>,
-    settle: impl FnOnce(&serde_json::Value) -> Result<(), String>,
-    confirm: impl FnOnce(serde_json::Value) -> Result<(), String>,
+    settle: impl FnOnce(&crate::lifecycle_contract::Qualification) -> Result<(), String>,
+    confirm: impl FnOnce(crate::lifecycle_contract::Qualification) -> Result<(), String>,
 ) -> Result<(), String> {
     let qualification = prepare();
     // Cleanup is required even if the private Companion handshake is unavailable.
@@ -494,10 +478,8 @@ pub fn finish_managed_game(
 pub fn prepare_external_entry(log: &DesktopLog, expected_revision: &str) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_secs(5);
     let (code, view) = request(log, "GET", "/local/v1/production", "", deadline)?;
-    if code != 200
-        || view["mode"] != "preparation"
-        || view["revision"].as_str() != Some(expected_revision)
-    {
+    let view = crate::lifecycle_contract::production_view(&view)?;
+    if code != 200 || view.mode != "preparation" || view.revision != expected_revision {
         return Err("制作状态已变化，请回到准备中心重新选择外部游戏。".into());
     }
     disconnect_camera(log)?;
@@ -632,10 +614,14 @@ pub fn set_exit_intent(log: &DesktopLog, action: &str) -> Result<(), String> {
     if status != 200 {
         return Err("无法读取制作状态，游戏仍保留。".into());
     }
-    let revision = state["revision"].as_str().ok_or("制作状态无效。")?;
-    let body = serde_json::json!({"action": action, "expectedRevision": revision}).to_string();
-    let (status, _) = request(log, "POST", "/operator/production", &body, deadline)?;
+    let view = crate::lifecycle_contract::production_view(&state)?;
+    let body = serde_json::json!({"action": action, "expectedRevision": view.revision}).to_string();
+    let (status, response) = request(log, "POST", "/operator/production", &body, deadline)?;
     if status != 200 {
+        return Err("无法确认退出准备，请重试。".into());
+    }
+    let actual = crate::lifecycle_contract::production_view(&response)?;
+    if actual.revision != view.revision || actual.mode != view.mode {
         return Err("无法确认退出准备，请重试。".into());
     }
     Ok(())
@@ -653,13 +639,16 @@ fn finish_production(log: &DesktopLog, action: &str) -> Result<(), String> {
             );
             return Err("无法读取制作状态，游戏仍保留。".into());
         }
-        let revision = state["revision"].as_str().ok_or("制作状态无效。")?;
-        let body = serde_json::json!({"action": action, "expectedRevision": revision}).to_string();
+        let view = crate::lifecycle_contract::production_view(&state)?;
+        let body =
+            serde_json::json!({"action": action, "expectedRevision": view.revision}).to_string();
         let (status, result) = request(log, "POST", "/operator/production", &body, deadline)?;
-        if status == 200 && result["mode"] == "preparation" {
+        if status == 200
+            && crate::lifecycle_contract::production_view(&result)?.mode == "preparation"
+        {
             return Ok(());
         }
-        if status == 409 && result["message"] == "制作状态已变化，请刷新后重试。" {
+        if crate::lifecycle_contract::is_retryable(status, &result, "productionConflict") {
             std::thread::sleep(Duration::from_millis(100));
             continue;
         }

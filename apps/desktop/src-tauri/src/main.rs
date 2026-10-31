@@ -14,6 +14,7 @@ mod default_resource_vpk;
 mod demo_test;
 mod desktop_worker;
 mod geometry;
+mod lifecycle_contract;
 mod managed_cs2;
 mod mulnx_launch;
 mod mulnx_stop;

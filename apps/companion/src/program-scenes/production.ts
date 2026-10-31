@@ -1,3 +1,8 @@
+import {
+  cancellationResponseSchema,
+  lifecycleErrors,
+  productionViewSchema,
+} from '../match-context/lifecycle-contract.js';
 import { cancelPreparation, preparationCancelled } from './preparation-cancellation.js';
 import { diagnosticValue } from '../support/session-journal.js';
 import { randomUUID } from 'node:crypto';
@@ -97,13 +102,17 @@ export function registerProductionRoutes(
       },
     );
   }
-  const view = () => ({
-    mode,
-    revision,
-    releaseHandoffState,
-    obsExitState,
-    canEnter: !trialPending && !shuttingDown && !updatePending && options.hasContext(),
-  });
+  const view = () => {
+    const current = {
+      mode,
+      revision,
+      releaseHandoffState,
+      obsExitState,
+      canEnter: !trialPending && !shuttingDown && !updatePending && options.hasContext(),
+    };
+    productionViewSchema.parse(current);
+    return current;
+  };
   app.get('/local/v1/production', (_request, reply) =>
     reply.header('cache-control', 'no-store').send(view()),
   );
@@ -112,17 +121,29 @@ export function registerProductionRoutes(
   ) {
     const entryId = typeof body?.preparationId === 'string' ? body.preparationId : null;
     if (entryId && preparationCancelled(entryId))
-      return { code: 409, value: { message: '准备已取消。' } };
+      return {
+        code: lifecycleErrors.preparationCancelled.status,
+        value: { ...lifecycleErrors.preparationCancelled, message: '准备已取消。' },
+      };
     if (body?.action === 'enter') {
       try {
         await options.waitForBroadcast?.();
       } catch (error) {
         app.log.error({ stage: 'broadcast_owner_sync', err: error }, '播出配置同步失败');
-        return { code: 409, value: { message: '播出配置同步失败，请重试使用方案。' } };
+        return {
+          code: lifecycleErrors.broadcastSyncFailure.status,
+          value: {
+            ...lifecycleErrors.broadcastSyncFailure,
+            message: '播出配置同步失败，请重试使用方案。',
+          },
+        };
       }
     }
     if (entryId && preparationCancelled(entryId))
-      return { code: 409, value: { message: '准备已取消。' } };
+      return {
+        code: lifecycleErrors.preparationCancelled.status,
+        value: { ...lifecycleErrors.preparationCancelled, message: '准备已取消。' },
+      };
     if (
       body?.expectedRevision === revision &&
       ['finish', 'shutdown', 'begin-exit'].includes(String(body.action))
@@ -138,7 +159,14 @@ export function registerProductionRoutes(
         await startHandoff();
         return { code: 200, value: view() };
       } catch {
-        return { code: 503, value: { ...view(), message: '数据源本地交接未确认。' } };
+        return {
+          code: lifecycleErrors.handoffUnconfirmed.status,
+          value: {
+            ...view(),
+            ...lifecycleErrors.handoffUnconfirmed,
+            message: '数据源本地交接未确认。',
+          },
+        };
       }
     }
     if (body?.expectedRevision === revision && body.action === 'cancel-exit') {
@@ -152,9 +180,15 @@ export function registerProductionRoutes(
       (shuttingDown && !['shutdown', 'finish'].includes(String(body?.action))) ||
       body?.expectedRevision !== revision
     )
-      return { code: 409, value: { message: '制作状态已变化，请刷新后重试。' } };
+      return {
+        code: lifecycleErrors.productionConflict.status,
+        value: { ...lifecycleErrors.productionConflict, message: '制作状态已变化，请刷新后重试。' },
+      };
     if (!['enter', 'hide', 'finish', 'shutdown'].includes(String(body?.action)))
-      return { code: 400, value: { message: '制作操作无法识别。' } };
+      return {
+        code: lifecycleErrors.productionActionInvalid.status,
+        value: { ...lifecycleErrors.productionActionInvalid, message: '制作操作无法识别。' },
+      };
     busy = true;
     const shutdown = body?.action === 'shutdown';
     if (shutdown) shuttingDown = true;
@@ -165,7 +199,11 @@ export function registerProductionRoutes(
     const controlValid = options.scenes.controlValid();
     try {
       if (body?.action === 'enter') {
-        if (!options.hasContext()) return { code: 409, value: { message: '请先选择或创建比赛。' } };
+        if (!options.hasContext())
+          return {
+            code: lifecycleErrors.contextMissing.status,
+            value: { ...lifecycleErrors.contextMissing, message: '请先选择或创建比赛。' },
+          };
         options.beforeEnter?.();
         obsExitGeneration++;
         if (mode === 'preparation') {
@@ -228,10 +266,22 @@ export function registerProductionRoutes(
           stage = 'production_release';
           if (shutdown) {
             if (!controlValid())
-              return { code: 409, value: { message: 'OBS 播出状态已变化，请核对后重试。' } };
+              return {
+                code: lifecycleErrors.obsStateChanged.status,
+                value: {
+                  ...lifecycleErrors.obsStateChanged,
+                  message: 'OBS 播出状态已变化，请核对后重试。',
+                },
+              };
             await options.release();
             if (!controlValid())
-              return { code: 409, value: { message: 'OBS 播出状态已变化，请核对后重试。' } };
+              return {
+                code: lifecycleErrors.obsStateChanged.status,
+                value: {
+                  ...lifecycleErrors.obsStateChanged,
+                  message: 'OBS 播出状态已变化，请核对后重试。',
+                },
+              };
             releaseHandoffState = 'confirmed';
           } else if (!options.handoffRelease) {
             await options.release();
@@ -269,7 +319,15 @@ export function registerProductionRoutes(
             : stage === 'production_safe_scene'
               ? '切换等待画面失败，制作尚未结束。请查看诊断，处理记录的问题后再结束制作。'
               : '比赛状态读取失败，当前状态和具体原因未确认。请复制诊断信息后排查。';
-      return { code: 409, value: { message } };
+      const failure =
+        error instanceof Error && error.message === 'camera_settings_saving'
+          ? lifecycleErrors.cameraSettingsBusy
+          : stage === 'production_release'
+            ? lifecycleErrors.releaseUnconfirmed
+            : stage === 'production_safe_scene'
+              ? lifecycleErrors.safeSceneUnconfirmed
+              : lifecycleErrors.productionFailure;
+      return { code: failure.status, value: { ...failure, message } };
     } finally {
       if (shutdown && !committed) shuttingDown = false;
       busy = false;
@@ -280,19 +338,27 @@ export function registerProductionRoutes(
       options.originPolicy.mode !== 'loopback' ||
       !checkLocalWebOrigin(options.originPolicy, request.headers.origin).allowed
     )
-      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+      return reply
+        .code(lifecycleErrors.operatorForbidden.status)
+        .send(lifecycleErrors.operatorForbidden);
     const id = (request.body as { preparationId?: unknown } | null)?.preparationId;
     if (typeof id !== 'string' || !/^[a-zA-Z0-9-]{1,64}$/.test(id))
-      return reply.code(400).send({ message: '启动事务标识无效。' });
+      return reply
+        .code(lifecycleErrors.preparationIdInvalid.status)
+        .send({ ...lifecycleErrors.preparationIdInvalid, message: '启动事务标识无效。' });
     cancelPreparation(id);
-    return reply.send({ entered: lastEnteredId === id && mode !== 'preparation' });
+    return reply.send(
+      cancellationResponseSchema.parse({ entered: lastEnteredId === id && mode !== 'preparation' }),
+    );
   });
   app.post('/operator/production', { bodyLimit: 1024 }, async (request, reply) => {
     if (
       options.originPolicy.mode !== 'loopback' ||
       !checkLocalWebOrigin(options.originPolicy, request.headers.origin).allowed
     )
-      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+      return reply
+        .code(lifecycleErrors.operatorForbidden.status)
+        .send(lifecycleErrors.operatorForbidden);
     const result = await change(
       request.body as {
         action?: unknown;

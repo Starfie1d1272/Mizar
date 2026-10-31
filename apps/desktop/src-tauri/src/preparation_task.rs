@@ -61,10 +61,11 @@ fn check(app: &tauri::AppHandle, id: &str) -> Result<(), String> {
     app.state::<production_exit::ExitGate>()
         .check_ticket(preparation_ticket(app, id)?)?;
     let production = request(app, "GET", "/local/v1/production", json!({}))?;
+    let production = crate::lifecycle_contract::production_view(&production)?;
     let valid = if t.entered {
-        production["mode"] == "live" || production["mode"] == "hidden"
+        production.mode == "live" || production.mode == "hidden"
     } else {
-        production["mode"] == "preparation" && production["revision"] == t.revision
+        production.mode == "preparation" && production.revision == t.revision
     };
     if !valid {
         return Err("制作状态已变化，请重试。".into());
@@ -140,6 +141,11 @@ async fn controlled_post(
                 .unwrap_or("OBS 自动准备未完成。")
                 .into());
         }
+        if path == "/operator/production"
+            && crate::lifecycle_contract::production_view(&value)?.mode != "live"
+        {
+            return Err("制作进入状态未确认。".into());
+        }
         Ok(value)
     })
     .await
@@ -150,10 +156,8 @@ fn main_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, String> {
         .ok_or_else(|| "准备中心窗口不可用。".into())
 }
 fn current_revision(app: &tauri::AppHandle) -> Result<String, String> {
-    request(app, "GET", "/local/v1/production", json!({}))?["revision"]
-        .as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| "制作状态未确认。".into())
+    let value = request(app, "GET", "/local/v1/production", json!({}))?;
+    Ok(crate::lifecycle_contract::production_view(&value)?.revision)
 }
 async fn run(app: tauri::AppHandle, id: String) -> Result<(), String> {
     let task = snapshot()?
@@ -627,13 +631,13 @@ pub(crate) async fn preparation_cancel(
     if let Ok(window) = main_window(&app) {
         cancel_managed_camera(window, app.clone()).await?;
     }
-    match cancellation {
-        Ok(value) if value["entered"] == true => {
+    match cancellation.and_then(|value| crate::lifecycle_contract::cancellation_entered(&value)) {
+        Ok(true) => {
             update(&preparation_id, |task| task.entered = true);
             publish(&app, &preparation_id, "制作已进入，请退出工作台。".into());
             Err("制作已进入，请退出工作台。".into())
         }
-        Ok(_) => {
+        Ok(false) => {
             publish(&app, &preparation_id, "准备已取消。".into());
             Ok(())
         }
