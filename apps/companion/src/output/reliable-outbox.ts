@@ -679,6 +679,7 @@ export function outboxLocalError(error: unknown, depth = 0): unknown {
 export class ReliableOutbox {
   private records: readonly ReliableOutboxRecord[] = [];
   private archivedSources: readonly ArchivedSource[] = [];
+  private legacyRecords: readonly ReliableOutboxRecord[] = [];
   private damagedArchiveScopes = new Set<string>();
   private boundaryIntents: readonly BoundaryIntent[] = [];
   private boundaryGap: true | undefined;
@@ -712,6 +713,33 @@ export class ReliableOutbox {
       throw error;
     }
     for (const name of names) {
+      if (/^legacy-[a-f0-9]{64}-[a-f0-9]{64}\.json$/.test(name)) {
+        try {
+          const bytes = await readFile(join(`${this.filePath}.archives`, name));
+          if (bytes.length > 4_000_000) throw new Error('outbox_archive_too_large');
+          const value = JSON.parse(bytes.toString('utf8')) as Record<string, unknown>;
+          const record = parseRecord(value.record);
+          const scope = scopeDigest(
+            record.event.competitionId,
+            record.event.matchId,
+            record.event.cursor.producerInstanceId,
+            record.event.cursor.liveSessionId,
+          );
+          const key = createHash('sha256').update(record.event.idempotencyKey).digest('hex');
+          if (
+            name !== `legacy-${scope}-${key}.json` ||
+            record.source ||
+            record.awaitingSource ||
+            record.status === 'pending' ||
+            value.sha256 !== createHash('sha256').update(JSON.stringify(record)).digest('hex')
+          )
+            throw new Error('outbox_archive_invalid');
+          this.legacyRecords = [...this.legacyRecords, record];
+        } catch {
+          this.damagedArchiveScopes.add(name.slice(7, 71));
+        }
+        continue;
+      }
       if (!/^[a-f0-9]{64}-[a-f0-9]{64}\.json$/.test(name)) continue;
       try {
         const bytes = await readFile(join(`${this.filePath}.archives`, name));
@@ -738,6 +766,44 @@ export class ReliableOutbox {
         this.damagedArchiveScopes.add(name.slice(0, 64));
       }
     }
+  }
+
+  /** Preserve old terminal evidence without claiming which authority produced it. */
+  private async archiveLegacyTerminals(): Promise<void> {
+    const legacy = this.records.filter(
+      (record) => !record.source && !record.awaitingSource && record.status !== 'pending',
+    );
+    if (!legacy.length) return;
+    for (const record of legacy) {
+      const scope = scopeDigest(
+        record.event.competitionId,
+        record.event.matchId,
+        record.event.cursor.producerInstanceId,
+        record.event.cursor.liveSessionId,
+      );
+      if (this.damagedArchiveScopes.has(scope)) continue;
+      const prior = this.legacyRecords.find(
+        (item) => item.event.idempotencyKey === record.event.idempotencyKey,
+      );
+      if (prior) continue;
+      const key = createHash('sha256').update(record.event.idempotencyKey).digest('hex');
+      try {
+        await replaceDurableJson(join(`${this.filePath}.archives`, `legacy-${scope}-${key}.json`), {
+          record,
+          sha256: createHash('sha256').update(JSON.stringify(record)).digest('hex'),
+        });
+        this.legacyRecords = [...this.legacyRecords, record];
+      } catch {
+        // Keep this evidence active; independent scopes can still be archived.
+        this.evidence(record, 'legacy_archive_failed');
+      }
+    }
+    const remaining = this.records.filter(
+      (record) =>
+        !legacy.includes(record) ||
+        !this.legacyRecords.some((saved) => JSON.stringify(saved) === JSON.stringify(record)),
+    );
+    if (remaining.length !== this.records.length) await this.commit(remaining);
   }
 
   private async migrateInlineArchives(archives: readonly ArchivedSource[]): Promise<void> {
@@ -883,7 +949,16 @@ export class ReliableOutbox {
   }
 
   getRecords(): readonly ReliableOutboxRecord[] {
-    return this.records;
+    const keys = new Set(this.records.map((record) => record.event.idempotencyKey));
+    return [
+      ...this.legacyRecords.filter(
+        (record) =>
+          record.status === 'rejected' &&
+          record.event.kind === 'map_started' &&
+          !keys.has(record.event.idempotencyKey),
+      ),
+      ...this.records,
+    ];
   }
 
   getScopeDisposition(scope: ReliableDeliveryScope): ReliableScopeDisposition {
@@ -904,6 +979,7 @@ export class ReliableOutbox {
     const seen = new Set<string>();
     for (const record of [
       ...this.records,
+      ...this.legacyRecords,
       ...this.archivedSources.flatMap((item) => item.records),
     ]) {
       const c = record.event.cursor;
@@ -1042,7 +1118,7 @@ export class ReliableOutbox {
   }
 
   hasUnconfirmedBoundary(event: ReliableEventV1): boolean {
-    return this.records.some(
+    return [...this.records, ...this.legacyRecords].some(
       (record) =>
         (record.status !== 'accepted' || record.receiverOutcome === 'needs_attention') &&
         isContinuityBoundary(record.event) &&
@@ -1053,7 +1129,7 @@ export class ReliableOutbox {
   /** Refusals remain authoritative for the original execution, even if context changes. */
   startRejections(event: ReliableEventV1): readonly ReliableOutboxRecord[] {
     const c = event.cursor;
-    return this.records.filter((record) => {
+    return this.getRecords().filter((record) => {
       const previous = record.event;
       const p = previous.cursor;
       return (
@@ -1077,7 +1153,7 @@ export class ReliableOutbox {
     boundaryKey?: string,
   ): Promise<boolean> {
     return this.queue.run(async () => {
-      const record = this.records.find((item) => item.event.idempotencyKey === key);
+      const record = this.getRecords().find((item) => item.event.idempotencyKey === key);
       if (
         !record ||
         record.status !== 'rejected' ||
@@ -1088,17 +1164,19 @@ export class ReliableOutbox {
         record.recoveryState !== from
       )
         return false;
+      const updated = {
+        ...record,
+        recoveryState: to,
+        ...(boundaryKey === undefined ? {} : { recoveryBoundaryKey: boundaryKey }),
+        updatedAt: new Date().toISOString(),
+      };
+      const active = this.records.includes(record);
+      if (!active && this.records.length >= RELIABLE_OUTBOX_MAX_RECORDS)
+        throw new Error('reliable_outbox_full');
       await this.commit(
-        this.records.map((item) =>
-          item === record
-            ? {
-                ...item,
-                recoveryState: to,
-                ...(boundaryKey === undefined ? {} : { recoveryBoundaryKey: boundaryKey }),
-                updatedAt: new Date().toISOString(),
-              }
-            : item,
-        ),
+        active
+          ? this.records.map((item) => (item === record ? updated : item))
+          : [...this.records, updated],
       );
       return true;
     });
@@ -1197,10 +1275,14 @@ export class ReliableOutbox {
     source?: ExactSource | null,
   ): Promise<void> {
     return this.queue.run(async () => {
+      await this.archiveLegacyTerminals();
       if (source) source = parseSource(source);
       for (const event of [...events, ...intents.map((intent) => intent.event)]) {
         if (source !== null) this.assertSourceOpen(event, source);
         if (
+          this.legacyRecords.some(
+            (record) => record.event.idempotencyKey === event.idempotencyKey,
+          ) ||
           this.archivedSources.some((archive) =>
             archive.records.some((record) => record.event.idempotencyKey === event.idempotencyKey),
           )
@@ -1312,6 +1394,7 @@ export class ReliableOutbox {
     now = new Date(),
   ): Promise<boolean> {
     return this.queue.run(async () => {
+      await this.archiveLegacyTerminals();
       if (
         this.boundaryCaptureFailed ||
         this.boundaryGap ||
@@ -1341,9 +1424,11 @@ export class ReliableOutbox {
       )
         throw new Error('boundary_materialization_invalid');
       if (
-        [...this.records, ...this.archivedSources.flatMap((archive) => archive.records)].some(
-          (record) => record.event.idempotencyKey === valid.idempotencyKey,
-        )
+        [
+          ...this.records,
+          ...this.legacyRecords,
+          ...this.archivedSources.flatMap((archive) => archive.records),
+        ].some((record) => record.event.idempotencyKey === valid.idempotencyKey)
       )
         throw new Error('boundary_duplicate');
       const at = now.toISOString();
@@ -1414,13 +1499,16 @@ export class ReliableOutbox {
     source?: ExactSource | null,
   ): Promise<boolean> {
     return this.queue.run(async () => {
+      await this.archiveLegacyTerminals();
       const valid = parseReliableEventV1(event);
       if (source) source = parseSource(source);
       if (source !== null) this.assertSourceOpen(valid, source);
       if (
-        [...this.records, ...this.archivedSources.flatMap((archive) => archive.records)].some(
-          (record) => record.event.idempotencyKey === valid.idempotencyKey,
-        )
+        [
+          ...this.records,
+          ...this.legacyRecords,
+          ...this.archivedSources.flatMap((archive) => archive.records),
+        ].some((record) => record.event.idempotencyKey === valid.idempotencyKey)
       )
         return false;
       if (
@@ -1434,7 +1522,7 @@ export class ReliableOutbox {
         ['map_ended', 'map_player_snapshot', 'series_ended'].includes(valid.kind) &&
         (this.hasBoundaryGap(scope) ||
           this.getBoundaryIntents(scope).some((intent) => dependsOnBoundary(valid, intent.event)) ||
-          this.records.some(
+          [...this.records, ...this.legacyRecords].some(
             (record) =>
               isContinuityBoundary(record.event) &&
               (['rejected', 'expired', 'superseded'].includes(record.status) ||
@@ -1462,11 +1550,14 @@ export class ReliableOutbox {
           rejected[0].recoveryState !== 'awaiting_observation'
         )
           throw new Error('recovery_scope_invalid');
-        existing = this.records.map((item) =>
-          item === rejected[0]
-            ? { ...item, recoveryState: 'proof_queued' as const, updatedAt: at }
-            : item,
-        );
+        const proofQueued = {
+          ...rejected[0],
+          recoveryState: 'proof_queued' as const,
+          updatedAt: at,
+        };
+        existing = this.records.includes(rejected[0])
+          ? this.records.map((item) => (item === rejected[0] ? proofQueued : item))
+          : [...this.records, proofQueued];
       }
       const records = this.trim([...existing, next]);
       if (records.length > RELIABLE_OUTBOX_MAX_RECORDS) throw new Error('reliable_outbox_full');
@@ -1497,19 +1588,19 @@ export class ReliableOutbox {
       const now = input.now ?? new Date();
       let changed = false;
       const invalidatedStarts: string[] = [];
-      const unconfirmedBoundaries = this.records.filter(
+      const unconfirmedBoundaries = [...this.records, ...this.legacyRecords].filter(
         (record) =>
           isContinuityBoundary(record.event) &&
           (record.status !== 'accepted' || record.receiverOutcome === 'needs_attention'),
       );
-      const rejectedStarts = this.records
+      const rejectedStarts = this.getRecords()
         .filter((record) => record.status === 'rejected' && record.event.kind === 'map_started')
         .map((record) => record.event);
       const next: ReliableOutboxRecord[] = [];
       let blockedByMapEnd = false;
       // Terminal failures remain fences: a later event cannot turn a rejected or
       // expired continuity transition into an implicit acknowledgement.
-      const blockedBoundaries = this.records
+      const blockedBoundaries = [...this.records, ...this.legacyRecords]
         .filter(
           (record) =>
             isContinuityBoundary(record.event) &&
@@ -1519,6 +1610,20 @@ export class ReliableOutbox {
         .map((record) => record.event);
       for (const record of this.records) {
         if (record.status !== 'pending') {
+          next.push(record);
+          continue;
+        }
+        if (
+          this.damagedArchiveScopes.has(
+            scopeDigest(
+              record.event.competitionId,
+              record.event.matchId,
+              record.event.cursor.producerInstanceId,
+              record.event.cursor.liveSessionId,
+            ),
+          )
+        ) {
+          if (isContinuityBoundary(record.event)) blockedBoundaries.push(record.event);
           next.push(record);
           continue;
         }
@@ -1537,7 +1642,7 @@ export class ReliableOutbox {
               a.programSourceGeneration === b.programSourceGeneration &&
               a.mapEpoch === b.mapEpoch &&
               a.runtimeSeq >= b.runtimeSeq &&
-              ![...next, ...this.records].some((proof) => {
+              ![...next, ...this.records, ...this.legacyRecords].some((proof) => {
                 const c = proof.event.cursor;
                 return (
                   proof.status === 'accepted' &&
@@ -1592,7 +1697,7 @@ export class ReliableOutbox {
         }
         if (record.event.kind === 'map_player_snapshot') {
           const mapEndedKey = record.event.payload.mapEndedKey;
-          const parent = [...next, ...this.records].find(
+          const parent = [...next, ...this.records, ...this.legacyRecords].find(
             (r) => r.event.idempotencyKey === mapEndedKey,
           );
           if (!parent || ['rejected', 'expired', 'superseded'].includes(parent.status)) {
@@ -1749,7 +1854,8 @@ export class ReliableOutbox {
       records.at(-1)?.event ??
       boundaryIntents.at(-1)?.event ??
       this.continuityReference ??
-      this.archivedSources.flatMap((archive) => archive.records).at(-1)?.event;
+      this.archivedSources.flatMap((archive) => archive.records).at(-1)?.event ??
+      this.legacyRecords.at(-1)?.event;
     const file: OutboxFile = sealOutbox({
       version: RELIABLE_OUTBOX_VERSION,
       records,
