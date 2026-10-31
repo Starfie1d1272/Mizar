@@ -91,9 +91,14 @@ export class ProgramRuntime {
   private executionOwner: { matchId: string; fixture: boolean } | undefined;
   private executionAwaitingObservation = false;
   private executionOwnerUnknown = false;
+  private executionConflict = false;
+  private unknownNewExecution = false;
+  private suspendedProduction:
+    { owner: { matchId: string; fixture: boolean } | undefined; unknown: boolean } | undefined;
   private previousBoundaryOwner: { runtimeSeq: number; matchId: string } | undefined;
   private restoredExecutionProof: SeriesProgressCheckpoint['executionOwner'];
   private restoredExecutionMatchId: string | undefined;
+  private unverifiedSeriesProgress: SeriesProgress | undefined;
 
   constructor(options: ProgramRuntimeOptions | string) {
     const normalizedOptions: ProgramRuntimeOptions =
@@ -111,6 +116,16 @@ export class ProgramRuntime {
   /** Switch the sole runtime to a fresh isolated session; no telemetry survives. */
   resetSession(transient: boolean): void {
     const previous = this.state;
+    const wasTransient = this.transientSession;
+    const priorOwner = this.executionOwner;
+    const priorConflict = this.executionConflict;
+    const priorUnknown = this.executionOwnerUnknown;
+    if (transient && !wasTransient)
+      this.suspendedProduction = {
+        owner: this.executionOwner,
+        unknown: this.executionOwnerUnknown,
+      };
+    const suspended = !transient && wasTransient ? this.suspendedProduction : undefined;
     this.transientSession = transient;
     this.state = {
       ...createInitialRuntimeState(previous.producerInstanceId, {
@@ -129,9 +144,24 @@ export class ProgramRuntime {
     this.executionOwner = undefined;
     this.executionAwaitingObservation = false;
     this.executionOwnerUnknown = false;
+    this.executionConflict = false;
+    this.unknownNewExecution = false;
+    if (!transient && wasTransient) {
+      this.executionOwner = suspended?.owner;
+      this.executionConflict = Boolean(suspended?.owner);
+      this.executionOwnerUnknown = Boolean(
+        suspended?.unknown || (!suspended?.owner && previous.programTelemetry),
+      );
+      this.suspendedProduction = undefined;
+    } else if (!transient) {
+      this.executionOwner = priorOwner;
+      this.executionConflict = priorConflict;
+      this.executionOwnerUnknown = priorUnknown;
+    }
     this.previousBoundaryOwner = undefined;
     this.restoredExecutionProof = undefined;
     this.restoredExecutionMatchId = undefined;
+    this.unverifiedSeriesProgress = undefined;
   }
 
   /** Restore identities only before the first observation; never restore telemetry or clocks. */
@@ -146,6 +176,7 @@ export class ProgramRuntime {
     this.executionAwaitingObservation = true;
     // Legacy continuity records carry no proof of map-execution ownership.
     this.executionOwnerUnknown = true;
+    this.unknownNewExecution = false;
     this.state = {
       ...this.state,
       liveSession:
@@ -227,6 +258,12 @@ export class ProgramRuntime {
     const matchChanged =
       this.seriesContext !== undefined &&
       (this.seriesContext.matchId !== context.matchId || this.seriesOrigin !== effectiveOrigin);
+    if (
+      this.executionOwner &&
+      (this.executionOwner.matchId !== context.matchId ||
+        this.executionOwner.fixture !== (effectiveOrigin === 'fixture'))
+    )
+      this.executionConflict = true;
     if (matchChanged) {
       this.pendingSeriesEvents.length = 0;
       if (
@@ -247,6 +284,9 @@ export class ProgramRuntime {
     let shouldPersist = false;
     if (this.seriesProgress === undefined || matchChanged) {
       let initial = createSeriesProgress(context);
+      this.unverifiedSeriesProgress = undefined;
+      this.restoredExecutionProof = undefined;
+      this.restoredExecutionMatchId = undefined;
       let checkpoint;
       if (!this.transientSession && effectiveOrigin !== 'fixture') {
         try {
@@ -257,8 +297,14 @@ export class ProgramRuntime {
       }
       if (checkpoint !== undefined) {
         if (isSeriesProgressCheckpointCompatible(checkpoint, context)) {
-          initial = checkpoint.progress;
-          this.restorePending = true;
+          if (checkpoint.executionOwner) {
+            initial = checkpoint.progress;
+            this.restorePending = true;
+            this.unverifiedSeriesProgress = checkpoint.unverifiedProgress;
+          } else {
+            this.unverifiedSeriesProgress = checkpoint.unverifiedProgress ?? checkpoint.progress;
+            this.restorePending = false;
+          }
           this.restoredExecutionProof = checkpoint.executionOwner;
           this.restoredExecutionMatchId = checkpoint.identity.matchId;
         } else {
@@ -321,6 +367,7 @@ export class ProgramRuntime {
     const proof = this.restoredExecutionProof;
     if (
       this.executionOwnerUnknown &&
+      !this.executionConflict &&
       !this.executionAwaitingObservation &&
       proof &&
       this.restoredExecutionMatchId === context.matchId &&
@@ -334,6 +381,7 @@ export class ProgramRuntime {
     ) {
       this.executionOwner = { matchId: context.matchId, fixture: false };
       this.executionOwnerUnknown = false;
+      this.executionConflict = false;
     }
     if (
       this.executionAwaitingObservation ||
@@ -345,6 +393,7 @@ export class ProgramRuntime {
       return this.seriesProgress;
     }
     const executionMatches =
+      !this.executionConflict &&
       this.executionOwner?.matchId === context.matchId &&
       this.executionOwner.fixture === (effectiveOrigin === 'fixture');
     if (!this.executionOwner && this.state.programTelemetry?.telemetry.map?.name) {
@@ -396,12 +445,13 @@ export class ProgramRuntime {
     return this.seriesProgress ?? null;
   }
 
-  async flushSeriesProgressCheckpoint(): Promise<void> {
+  async flushSeriesProgressCheckpoint(strict = false): Promise<void> {
     if (this.seriesProgressCheckpointStore === undefined) return;
     try {
       await this.seriesProgressCheckpointStore.flush();
-    } catch {
+    } catch (error) {
       this.reportSeriesDiagnostic('checkpoint_write_failed');
+      if (strict) throw error;
     }
   }
 
@@ -421,9 +471,10 @@ export class ProgramRuntime {
 
     if (
       this.executionAwaitingObservation ||
-      this.executionOwnerUnknown ||
-      this.executionOwner?.matchId !== this.seriesContext.matchId ||
-      this.executionOwner.fixture !== (this.seriesOrigin === 'fixture')
+      (this.executionOwnerUnknown && !this.unknownNewExecution) ||
+      (!this.executionOwnerUnknown &&
+        (this.executionOwner?.matchId !== this.seriesContext.matchId ||
+          this.executionOwner.fixture !== (this.seriesOrigin === 'fixture')))
     ) {
       return { ok: false, progress: this.seriesProgress, code: 'operator_bind_rejected' };
     }
@@ -442,16 +493,25 @@ export class ProgramRuntime {
       sideProof: this.seriesSideProof,
     });
     this.seriesProgress = reduced.progress;
-    if (reduced.changed && !this.fixtureSeriesProgressActive && this.seriesOrigin !== 'fixture') {
-      this.persistSeriesProgress();
-    }
-
     const target = this.seriesProgress.maps.find((map) => map.mapOrder === command.mapOrder);
     const ok =
       target?.status === 'current' &&
       target.executionMapEpoch === this.state.map.epoch &&
       this.seriesProgress.currentMapOrder === command.mapOrder &&
       this.seriesProgress.bindingState === 'bound';
+    if (ok && this.executionOwnerUnknown && this.unknownNewExecution) {
+      this.executionOwner = {
+        matchId: this.seriesContext.matchId,
+        fixture: this.seriesOrigin === 'fixture',
+      };
+      this.executionOwnerUnknown = false;
+      this.unknownNewExecution = false;
+      this.executionConflict = false;
+      this.pendingSeriesEvents.length = 0;
+    }
+    if (reduced.changed && !this.fixtureSeriesProgressActive && this.seriesOrigin !== 'fixture') {
+      this.persistSeriesProgress();
+    }
     return {
       ok,
       progress: this.seriesProgress,
@@ -476,6 +536,7 @@ export class ProgramRuntime {
     this.pendingSeriesEvents.length = 0;
     // Preserve fixture ownership even if the fixture exits before another frame.
     this.executionOwner = { matchId: context.matchId, fixture: true };
+    this.executionConflict = false;
     this.executionAwaitingObservation = true;
     this.executionOwnerUnknown = false;
     return this.seriesProgress;
@@ -495,7 +556,7 @@ export class ProgramRuntime {
   }
 
   async close(): Promise<void> {
-    await this.flushSeriesProgressCheckpoint();
+    await this.flushSeriesProgressCheckpoint(true);
   }
 
   getSourceFreshness(nowMonotonicMs: number): ProgramSourceFreshness {
@@ -506,6 +567,7 @@ export class ProgramRuntime {
     return (
       !this.executionAwaitingObservation &&
       !this.executionOwnerUnknown &&
+      !this.executionConflict &&
       !this.fixtureTelemetrySuppressed &&
       this.executionOwner?.matchId === matchId &&
       this.executionOwner.fixture === (origin === 'fixture')
@@ -539,11 +601,18 @@ export class ProgramRuntime {
         this.executionOwner && !this.executionOwner.fixture
           ? { runtimeSeq: result.state.runtimeSeq, matchId: this.executionOwner.matchId }
           : undefined;
-      this.executionOwner = undefined;
-      this.executionOwnerUnknown = false;
+      if (this.executionConflict || this.executionOwnerUnknown) {
+        this.executionOwner = undefined;
+        this.executionOwnerUnknown = true;
+        this.unknownNewExecution = true;
+      }
       this.executionAwaitingObservation = input.kind !== 'program-telemetry';
     }
-    if (input.kind === 'program-telemetry' && result.disposition.kind === 'accepted')
+    if (
+      input.kind === 'program-telemetry' &&
+      result.disposition.kind === 'accepted' &&
+      input.observation.telemetry.map?.name
+    )
       this.executionAwaitingObservation = false;
     if (input.kind === 'program-telemetry' && result.disposition.kind === 'accepted')
       this.deliveryRestoreAwaitingTelemetry = false;
@@ -655,6 +724,7 @@ export class ProgramRuntime {
         this.executionOwner?.matchId === this.seriesProgress.matchId &&
         !this.executionOwner.fixture &&
         !this.executionOwnerUnknown &&
+        !this.executionConflict &&
         !this.executionAwaitingObservation &&
         this.state.liveSession.kind === 'bound' &&
         this.state.map.epoch > 0 &&
@@ -665,7 +735,9 @@ export class ProgramRuntime {
               mapEpoch: this.state.map.epoch,
               mapName: this.state.map.name,
             }
-          : (this.executionOwnerUnknown ||
+          : !this.executionConflict &&
+              !this.unknownNewExecution &&
+              (this.executionOwnerUnknown ||
                 (this.state.runtimeSeq === 0 && !this.state.programTelemetry)) &&
               this.restoredExecutionMatchId === this.seriesProgress.matchId
             ? this.restoredExecutionProof
@@ -673,6 +745,9 @@ export class ProgramRuntime {
       const result = this.seriesProgressCheckpointStore.save({
         ...makeSeriesProgressCheckpoint(this.seriesProgress),
         ...(executionOwner ? { executionOwner } : {}),
+        ...(this.unverifiedSeriesProgress
+          ? { unverifiedProgress: this.unverifiedSeriesProgress }
+          : {}),
       });
       if (result instanceof Promise) {
         void result.catch(() => this.reportSeriesDiagnostic('checkpoint_write_failed'));

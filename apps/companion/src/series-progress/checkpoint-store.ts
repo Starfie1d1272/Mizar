@@ -22,6 +22,8 @@ export class JsonSeriesProgressCheckpointStore implements SeriesProgressCheckpoi
   private readonly filePath: string;
   private readonly onDiagnostic: SeriesProgressCheckpointStoreOptions['onDiagnostic'];
   private readonly commitQueue = new SerialCommitQueue();
+  private lastWriteFailure: unknown;
+  private writeFailed = false;
 
   constructor(options: SeriesProgressCheckpointStoreOptions) {
     this.filePath = options.filePath;
@@ -59,7 +61,11 @@ export class JsonSeriesProgressCheckpointStore implements SeriesProgressCheckpoi
     return this.commitQueue.run(async () => {
       try {
         await replaceDurableJson(this.filePath, checkpoint);
+        this.lastWriteFailure = undefined;
+        this.writeFailed = false;
       } catch (error: unknown) {
+        this.lastWriteFailure = error;
+        this.writeFailed = true;
         this.onDiagnostic?.('checkpoint_write_failed', error);
       }
     });
@@ -67,6 +73,8 @@ export class JsonSeriesProgressCheckpointStore implements SeriesProgressCheckpoi
 
   async flush(): Promise<void> {
     await this.commitQueue.flush();
+    if (this.writeFailed)
+      throw this.lastWriteFailure ?? new Error('series_checkpoint_write_failed');
   }
 }
 

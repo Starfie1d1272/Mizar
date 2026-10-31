@@ -170,6 +170,8 @@ export interface SeriesProgressCheckpoint {
     readonly mapPlanFingerprint: string;
   };
   readonly progress: SeriesProgress;
+  /** Legacy local facts without execution ownership proof; never used as active results. */
+  readonly unverifiedProgress?: SeriesProgress;
   readonly executionOwner?: {
     readonly liveSessionId: string;
     readonly programSourceGeneration: number;
@@ -196,6 +198,12 @@ export function isSeriesProgressCheckpoint(value: unknown): value is SeriesProgr
   const maps = progress.maps;
   const currentMapOrder = progress.currentMapOrder;
   return (
+    (value.unverifiedProgress === undefined ||
+      isSeriesProgressCheckpoint({
+        checkpointVersion: value.checkpointVersion,
+        identity: value.identity,
+        progress: value.unverifiedProgress,
+      })) &&
     (value.executionOwner === undefined ||
       (isRecord(value.executionOwner) &&
         isNonEmptyString(value.executionOwner.liveSessionId) &&
