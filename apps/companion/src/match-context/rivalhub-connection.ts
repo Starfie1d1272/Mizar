@@ -536,12 +536,14 @@ export class RivalHubConnection {
   private readonly sourceSettlements = new Map<string, Promise<boolean>>();
   private readonly cleanupAttempts = new Map<string, { count: number; nextCycleAt: number }>();
   private readonly exitHandoffs = new Map<string, ExactSource>();
+  private readonly confirmedReleases = new Map<string, ExactSource>();
   private readonly sourceCommands = new SerialCommitQueue();
   private readonly sourceState: RivalHubSourceState;
   private cleanupTimer: ReturnType<typeof setInterval> | undefined;
   private cleanupSummary = { pending: 0, blocked: 0, claimIntent: false };
   private settleSource: ((scope: SourceScope) => Promise<boolean>) | undefined;
   private resumeSource: ((scope: SourceScope) => void) | undefined;
+  private archiveConfirmedSource: ((identity: ExactSource) => Promise<void>) | undefined;
   private bindingGeneration = 0;
   private activeDeviceName: string | null = null;
   private activeDeviceMatchId: string | null = null;
@@ -817,6 +819,30 @@ export class RivalHubConnection {
   ): void {
     this.settleSource = settle;
     this.resumeSource = resume;
+  }
+
+  /** Archive is an idempotent durable operation for this exact remote authority. */
+  setConfirmedSourceArchive(archive: (identity: ExactSource) => Promise<void>): void {
+    this.archiveConfirmedSource = archive;
+  }
+
+  private async completeConfirmedSource(identity: ExactSource): Promise<void> {
+    if (!this.archiveConfirmedSource) throw new Error('可靠事件归档尚未连接。');
+    await this.archiveConfirmedSource(identity);
+    await this.sourceState.complete(identity);
+    if (this.source && JSON.stringify(this.exactSource(this.source)) === JSON.stringify(identity))
+      this.source = null;
+  }
+
+  private async markConfirmedSource(identity: ExactSource): Promise<void> {
+    // Persist the remote confirmation before the archive attempt. A restart can
+    // retry archive without confusing local settlement with remote release.
+    await this.sourceState.failure(
+      identity,
+      'archive_pending',
+      new Date(Date.now() + 5000).toISOString(),
+      false,
+    );
   }
 
   startSourceCleanup(): void {
@@ -1113,14 +1139,43 @@ export class RivalHubConnection {
     for (const record of state.records) {
       if (Date.now() >= deadline) break;
       if (record.state === 'owned') continue;
+      const attemptKey = JSON.stringify(record.identity);
+      const identity = record.identity;
+      if (this.confirmedReleases.has(attemptKey)) {
+        try {
+          await this.markConfirmedSource(identity);
+          this.confirmedReleases.delete(attemptKey);
+          this.cleanupAttempts.delete(attemptKey);
+          await this.completeConfirmedSource(identity);
+        } catch (error) {
+          this.onDiagnostic('source_archive', error);
+        }
+        continue;
+      }
+      if (record.lastFailureCode === 'archive_pending') {
+        try {
+          await this.completeConfirmedSource(identity);
+          this.cleanupAttempts.delete(attemptKey);
+          this.cleanupEvidence(identity, 'release_confirmed', record.attempts);
+        } catch (error) {
+          this.onDiagnostic('source_archive', error);
+        }
+        continue;
+      }
       if (!this.scopeMatches(record.identity)) {
         if (record.state === 'release_pending')
           await this.sourceState.failure(record.identity, 'installation_mismatch', null, true);
         continue;
       }
       if (record.state === 'blocked') {
-        if (!force) continue;
         const identity = record.identity;
+        const cycle = this.cleanupAttempts.get(attemptKey);
+        if (!force && cycle && cycle.count >= 8 && Date.now() < cycle.nextCycleAt) continue;
+        const count = !cycle || cycle.count >= 8 ? 1 : cycle.count + 1;
+        this.cleanupAttempts.set(attemptKey, {
+          count,
+          nextCycleAt: count >= 8 ? Date.now() + 600_000 : 0,
+        });
         const query = new URLSearchParams({
           matchId: identity.matchId,
           producerInstanceId: identity.producerInstanceId,
@@ -1148,20 +1203,23 @@ export class RivalHubConnection {
             found.producerInstanceId === identity.producerInstanceId &&
             found.liveSessionId === identity.liveSessionId &&
             found.authorityRevision === identity.authorityRevision
-          )
-            await this.sourceState.complete(identity);
+          ) {
+            this.confirmedReleases.set(attemptKey, identity);
+            await this.markConfirmedSource(identity);
+            this.confirmedReleases.delete(attemptKey);
+            this.cleanupAttempts.delete(attemptKey);
+            await this.completeConfirmedSource(identity);
+          }
         } catch (error) {
           this.onDiagnostic('source_status', error);
         }
         continue;
       }
-      const attemptKey = JSON.stringify(record.identity);
       if (record.retryAfterAt && Date.parse(record.retryAfterAt) > Date.now()) continue;
       const cycle = this.cleanupAttempts.get(attemptKey);
       if (!force && cycle && cycle.count >= 8 && Date.now() < cycle.nextCycleAt) continue;
       if (force || (cycle && cycle.count >= 8)) this.cleanupAttempts.delete(attemptKey);
       if (!force && record.nextAttemptAt && Date.parse(record.nextAttemptAt) > Date.now()) continue;
-      const identity = record.identity;
       if (!(await this.settle(identity, Math.min(2500, deadline - Date.now())))) continue;
       if (Date.now() >= deadline) break;
       const count = (this.cleanupAttempts.get(attemptKey)?.count ?? 0) + 1;
@@ -1193,14 +1251,17 @@ export class RivalHubConnection {
           'released' in result &&
           result.released === true
         ) {
-          if (
-            this.source &&
-            JSON.stringify(this.exactSource(this.source)) === JSON.stringify(identity)
-          )
-            this.source = null;
-          await this.sourceState.complete(identity);
+          this.confirmedReleases.set(attemptKey, identity);
+          await this.markConfirmedSource(identity);
+          this.confirmedReleases.delete(attemptKey);
           this.cleanupAttempts.delete(attemptKey);
-          this.cleanupEvidence(identity, 'release_confirmed', record.attempts + 1);
+          try {
+            await this.completeConfirmedSource(identity);
+            this.cleanupAttempts.delete(attemptKey);
+            this.cleanupEvidence(identity, 'release_confirmed', record.attempts + 1);
+          } catch (error) {
+            this.onDiagnostic('source_archive', error);
+          }
           continue;
         }
         if (response.ok) {
