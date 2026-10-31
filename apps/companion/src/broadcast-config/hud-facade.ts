@@ -68,6 +68,18 @@ export function createHudConfigPersistence(
 ): HudConfigPersistence {
   return {
     initialize: () => Promise.resolve(hudDocumentFromBroadcast(store.snapshot)),
+    readDraft: (current) => {
+      const applied = store.appliedSnapshot('hud');
+      const document = store.snapshot;
+      if (applied) document.active = applied;
+      const result = hudDocumentFromBroadcast(document);
+      return parseHudConfigDocument({ ...result, activePreset: current.activePreset });
+    },
+    readApplied: () => {
+      const active = store.appliedSnapshot('hud');
+      if (!active) throw new Error('hud_persistence_unavailable');
+      return Promise.resolve(hudDocumentFromBroadcast({ ...store.snapshot, active }));
+    },
     async commit(candidate, previous, command) {
       const current = store.snapshot;
       const activeChanged =
@@ -98,7 +110,13 @@ export function createHudConfigPersistence(
       const lock = activeChanged ? await lockFor(nextHud, current.active) : current.active.lock;
       const committed = await store.updateFromLegacy({
         updateDraft(document) {
-          if (canonicalJson(hudDocumentFromBroadcast(document)) !== canonicalJson(previous))
+          const currentDocument = hudDocumentFromBroadcast(document);
+          if (
+            canonicalJson({ ...currentDocument, activePreset: previous.activePreset }) !==
+              canonicalJson(previous) ||
+            (activeChanged &&
+              canonicalJson(currentDocument.activePreset) !== canonicalJson(previous.activePreset))
+          )
             throw new Error('revision_conflict');
           const layouts = [...getBuiltinLayouts(), ...candidate.customLayouts];
           const themes = [...getBuiltinThemes(), ...candidate.customThemes];

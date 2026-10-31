@@ -35,6 +35,8 @@ export interface HudConfigStoreOptions {
 /** A coordinator becomes the only writer after initialize succeeds. */
 export interface HudConfigPersistence {
   initialize(document: HudConfigDocument): Promise<HudConfigDocument>;
+  readApplied?(): Promise<HudConfigDocument>;
+  readDraft?(current: HudConfigDocument): HudConfigDocument;
   commit(
     candidate: HudConfigDocument,
     previous: HudConfigDocument,
@@ -249,16 +251,33 @@ export class HudConfigStore {
   }
 
   /** Refresh the facade after the coordinator has committed an active configuration. */
-  async synchronizeFromPersistence(document: HudConfigDocument): Promise<void> {
+  async synchronizeFromPersistence(
+    document: HudConfigDocument,
+    canApply: () => boolean = () => true,
+  ): Promise<void> {
     await this.commits.run(() => {
       if (!this.persistence) throw new Error('hud_persistence_unavailable');
+      if (!canApply()) throw new Error('revision_conflict');
       this.document = parseHudConfigDocument(document);
       this.persistenceError = null;
     });
   }
 
+  async restoreAppliedFromPersistence(): Promise<void> {
+    await this.commits.run(async () => {
+      if (!this.persistence?.readApplied) throw new Error('hud_persistence_unavailable');
+      this.document = parseHudConfigDocument(await this.persistence.readApplied());
+      this.persistenceError = null;
+      this.loadFailure = false;
+      this.loaded = true;
+    });
+  }
+
   getState(): HudConfigState {
-    return createState(this.document, this.persistenceError);
+    return createState(
+      this.persistence?.readDraft?.(this.document) ?? this.document,
+      this.persistenceError,
+    );
   }
 
   async importPresetPack(
@@ -375,6 +394,7 @@ export class HudConfigStore {
     expectedEditorRevision?: string,
   ): Promise<HudConfigMutationState> {
     return this.commits.run(async () => {
+      if (this.persistence?.readDraft) this.document = this.persistence.readDraft(this.document);
       if (expectedEditorRevision !== undefined) {
         const actualRevision = createState(this.document, this.persistenceError).editorRevision;
         if (actualRevision !== expectedEditorRevision) {

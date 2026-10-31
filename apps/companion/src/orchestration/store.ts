@@ -155,13 +155,15 @@ export class OrchestrationStore {
     this.queue = result.catch(() => undefined);
     return result;
   }
-  async synchronizeFromPersistence(): Promise<void> {
+  async synchronizeFromPersistence(canApply: () => boolean = () => true): Promise<void> {
     const result = this.queue.then(async () => {
       if (!this.persistence) throw new Error('camera_storage_unavailable');
       const before = JSON.stringify({ ...this.preset, name: '' });
       const automatic = this.automaticEnabled;
       const revision = this.persistedRevision;
-      this.usePersisted(await (this.persistence.readForApply?.() ?? this.persistence.read()));
+      const current = await (this.persistence.readForApply?.() ?? this.persistence.read());
+      if (!canApply()) throw new Error('revision_conflict');
+      this.usePersisted(current);
       this.ready = true;
       if (
         this.persistedRevision !== undefined

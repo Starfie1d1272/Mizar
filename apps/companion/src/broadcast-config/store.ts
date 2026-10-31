@@ -104,7 +104,6 @@ export interface BroadcastConfigStoreOptions {
     value: ActiveBroadcastSnapshot['resolved'][ModuleKind];
     lock: ActiveBroadcastSnapshot['lock'];
   }>;
-  onDraftChanged?(kind: ModuleKind): Promise<void>;
   validateHudDraft?(document: BroadcastConfigDocument): void;
 }
 
@@ -510,7 +509,6 @@ export class BroadcastConfigStore {
         };
       }),
     );
-    if (result.hasHud) await this.options.onDraftChanged?.('hud');
     return { presetId: result.presetId };
   }
   /** Atomically installs drafts and their entry mapping without changing active configuration. */
@@ -647,8 +645,6 @@ export class BroadcastConfigStore {
         return { mapping: structuredClone(result), reused: false };
       }),
     );
-    if (input.modules.some((item) => item.kind === 'hud'))
-      await this.options.onDraftChanged?.('hud');
     return result;
   }
   /** Saves the preset and its edited modules in one draft-only commit. */
@@ -704,8 +700,6 @@ export class BroadcastConfigStore {
         return this.snapshot;
       }),
     );
-    if (input.modules.some((item) => item.value.kind === 'hud'))
-      await this.options.onDraftChanged?.('hud');
     return result;
   }
   async saveModule(value: ModuleRecord, expectedRevision: Revision | null): Promise<ModuleRecord> {
@@ -733,7 +727,6 @@ export class BroadcastConfigStore {
         return structuredClone(saved);
       }),
     );
-    await this.options.onDraftChanged?.(saved.kind);
     return saved;
   }
   async cloneModule(id: string, expectedRevision: Revision, name: string): Promise<ModuleRecord> {
@@ -766,7 +759,6 @@ export class BroadcastConfigStore {
         return structuredClone(copy);
       }),
     );
-    await this.options.onDraftChanged?.(copy.kind);
     return copy;
   }
   async deleteModule(
@@ -774,7 +766,7 @@ export class BroadcastConfigStore {
     expectedRevision: Revision,
     replacement?: { moduleId: string | null; expectedPresetRevisions: Record<string, Revision> },
   ): Promise<void> {
-    const kind = await this.queue.run(() =>
+    await this.queue.run(() =>
       this.options.withReferenceGuard(async () => {
         if (!this.envelope) throw new Error('broadcast_config_unavailable');
         if (isBuiltinModuleId(id)) throw new Error('builtin_immutable');
@@ -827,7 +819,6 @@ export class BroadcastConfigStore {
         return item.kind;
       }),
     );
-    await this.options.onDraftChanged?.(kind);
   }
   async deletePreset(id: string, expectedRevision: Revision): Promise<void> {
     return this.queue.run(() =>

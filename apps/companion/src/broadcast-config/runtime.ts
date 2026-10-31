@@ -108,14 +108,13 @@ export function createBroadcastRuntime(input: {
     validateHudDraft: (document) => {
       hudDocumentFromBroadcast(document);
     },
-    onDraftChanged: async (kind) => {
-      if (kind === 'hud') await hud.synchronizeFromPersistence(hudDocument());
-    },
     onApplied: async (active, _previous, kind) => {
+      const current = (item: 'hud' | 'music' | 'camera') => () =>
+        store.snapshot.active.moduleRevisions[item] === active.moduleRevisions[item];
       const operations = {
-        hud: () => hud.synchronizeFromPersistence(hudDocument()),
-        music: () => music.synchronizeFromPersistence(),
-        camera: () => camera.synchronizeFromPersistence(),
+        hud: () => hud.synchronizeFromPersistence(hudDocument(), current('hud')),
+        music: () => music.synchronizeFromPersistence(current('music')),
+        camera: () => camera.synchronizeFromPersistence(current('camera')),
         program: async () => {
           await resolver.resolveModule({
             kind: 'program',
@@ -128,6 +127,8 @@ export function createBroadcastRuntime(input: {
       );
       let failure: unknown;
       for (const item of kinds) {
+        const current = store.consumerStatus[item];
+        if (current?.applied === active.moduleRevisions[item] && !current.error) continue;
         try {
           await operations[item]();
           if (item === 'program') programUnavailable = false;
@@ -267,12 +268,19 @@ export function createBroadcastRuntime(input: {
     const cameraPersistence = createCameraConfigPersistence(store, deps.camera);
     cameraAvailable = () => cameraPersistence.available;
     let hudUnavailable = false;
+    let hudRestored = false;
     try {
       if (existing) await hud.restorePersistence(hudPersistence);
       else await hud.adoptPersistence(hudPersistence);
     } catch (error) {
       hudUnavailable = true;
       input.diagnostic(error);
+      try {
+        await hud.restoreAppliedFromPersistence();
+        hudRestored = true;
+      } catch (restoreError) {
+        input.diagnostic(restoreError);
+      }
     }
     let musicRestored = false;
     try {
@@ -324,7 +332,7 @@ export function createBroadcastRuntime(input: {
       'hud',
       initialActive,
       hudUnavailable ? 'dependency_unavailable' : null,
-      true,
+      !hudRestored,
     );
     await store.recordConsumer(
       'music',
