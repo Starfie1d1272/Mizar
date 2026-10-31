@@ -52,7 +52,7 @@ export function createCameraConfigPersistence(
       ),
     });
   }
-  async function read() {
+  async function read(requireAvailable = false) {
     const document = store.snapshot;
     const active = document.active.resolved.camera;
     const modules = document.modules.filter((item) => item.kind === 'camera');
@@ -64,8 +64,9 @@ export function createCameraConfigPersistence(
     if (active) {
       try {
         activePreset = await toLocal(active);
-      } catch {
+      } catch (error) {
         unavailable = true;
+        if (requireAvailable) throw new Error('camera_dependency_unavailable', { cause: error });
       }
     }
     const packs = new Map<string, string>();
@@ -144,7 +145,8 @@ export function createCameraConfigPersistence(
       return !unavailable && !store.pendingLegacyCamera;
     },
     initialize: () => read(),
-    read,
+    read: () => read(),
+    readForApply: () => read(true),
     async commit(catalog, automaticEnabled, previous, previousAutomaticEnabled) {
       const beforeDocument = store.snapshot;
       const before = beforeDocument.active;

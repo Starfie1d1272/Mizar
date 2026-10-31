@@ -35,6 +35,7 @@ interface CameraPersistenceState {
 export interface CameraConfigPersistence {
   initialize(catalog: CameraCatalog, automaticEnabled: boolean): Promise<CameraPersistenceState>;
   read(): Promise<CameraPersistenceState>;
+  readForApply?(): Promise<CameraPersistenceState>;
   commit(
     catalog: CameraCatalog,
     automaticEnabled: boolean,
@@ -160,7 +161,7 @@ export class OrchestrationStore {
       const before = JSON.stringify({ ...this.preset, name: '' });
       const automatic = this.automaticEnabled;
       const revision = this.persistedRevision;
-      this.usePersisted(await this.persistence.read());
+      this.usePersisted(await (this.persistence.readForApply?.() ?? this.persistence.read()));
       if (
         this.persistedRevision !== undefined
           ? revision !== this.persistedRevision

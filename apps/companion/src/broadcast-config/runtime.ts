@@ -302,7 +302,13 @@ export function createBroadcastRuntime(input: {
       if (syncError) throw syncError;
     },
     async reconcileCameraSelection(): Promise<boolean> {
-      await camera.synchronizeFromPersistence();
+      try {
+        await camera.synchronizeFromPersistence();
+      } catch (error) {
+        cameraUnavailable = true;
+        input.diagnostic(error);
+        return false;
+      }
       cameraUnavailable = !cameraAvailable() && !store.pendingLegacyCamera;
       return cameraAvailable();
     },
