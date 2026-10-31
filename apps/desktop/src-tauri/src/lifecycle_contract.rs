@@ -59,7 +59,9 @@ impl Qualification {
     pub fn from_response(response: &Value) -> Result<Option<Self>, String> {
         match response.get("qualification") {
             Some(Value::Null) => Ok(None),
-            Some(value) => fields("qualification", value).map(|value| Some(Self(value))),
+            Some(value) => fields("qualification", value)
+                .map(|value| Some(Self(value)))
+                .map_err(|_| "本场回收资格响应无效。请重试；再次失败时查看诊断。".into()),
             None => Err("本场回收资格响应无效。请重试；再次失败时查看诊断。".into()),
         }
     }
@@ -73,7 +75,7 @@ pub struct ProductionView {
     pub revision: String,
 }
 pub fn production_view(value: &Value) -> Result<ProductionView, String> {
-    let value = fields("productionView", value)?;
+    let value = fields("productionView", value).map_err(|_| "制作状态无效。")?;
     Ok(ProductionView {
         mode: value["mode"].as_str().expect("validated mode").into(),
         revision: value["revision"]
@@ -84,7 +86,8 @@ pub fn production_view(value: &Value) -> Result<ProductionView, String> {
 }
 
 pub fn cancellation_entered(value: &Value) -> Result<bool, String> {
-    let value = fields("cancellationResponse", value)?;
+    let value =
+        fields("cancellationResponse", value).map_err(|_| "取消结果未确认，请核对制作状态。")?;
     Ok(value["entered"].as_bool().expect("validated cancellation"))
 }
 
