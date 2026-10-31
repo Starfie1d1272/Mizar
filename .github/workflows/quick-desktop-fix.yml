@@ -39,7 +39,7 @@ jobs:
           $baseSha = (git rev-parse "$env:BASE_TAG^{commit}").Trim()
           if ($LASTEXITCODE -ne 0 -or $baseSha -notmatch '^[a-f0-9]{40}$') { throw 'Base tag unavailable' }
           $changed = @(git diff --name-only $baseSha $env:GITHUB_SHA)
-          if ($LASTEXITCODE -ne 0 -or @($changed | Where-Object { $_ -notmatch '^apps/desktop/src-tauri/' -and $_ -notmatch '^\.github/workflows/' -and $_ -ne 'scripts/qualification/temporary-workbench-bundle.mjs' }).Count) { throw 'Quick desktop build supports desktop-only changes' }
+          if ($LASTEXITCODE -ne 0 -or @($changed | Where-Object { $_ -notmatch '^apps/desktop/src-tauri/' -and $_ -notmatch '^\.github/workflows/' -and $_ -ne 'scripts/qualification/temporary-workbench-bundle.mjs' -and $_ -ne 'docs/development/release-readiness.md' }).Count) { throw 'Quick desktop build supports desktop-only changes' }
           $dir = Join-Path $env:RUNNER_TEMP 'quick-desktop'
           New-Item -ItemType Directory -Path $dir | Out-Null
           gh release download $env:BASE_TAG --repo Starfie1d1272/Mizar --pattern 'machine-metadata.json' --dir $dir
