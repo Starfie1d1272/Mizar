@@ -9,12 +9,7 @@ import {
   type HudTheme,
 } from '@mizar/hud-config';
 import { assertSupportedHudModule, isSupportedHudPauseVisual } from '@mizar/broadcast-config';
-import type {
-  ActiveBroadcastSnapshot,
-  BroadcastConfigDocument,
-  HudModule,
-  ModuleRecord,
-} from '@mizar/broadcast-config';
+import type { ActiveBroadcastSnapshot, BroadcastConfigDocument } from '@mizar/broadcast-config';
 import type { HudConfigPersistence } from '../hud-config/store.js';
 import type { BroadcastConfigStore } from './store.js';
 
