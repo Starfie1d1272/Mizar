@@ -2453,9 +2453,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     }
     // Stop producers before flushing each local owner. One failed close must
     // not prevent the remaining owners from attempting their own flush.
-    await closeStep(() => outputService.close());
     await closeStep(() => projectionCoordinator.close());
     await closeStep(() => programCueCoordinator.close());
+    await closeStep(() => outputService.close());
     await closeStep(() => programRuntime.close());
     await closeStep(() => localWebTransport.close());
     await closeStep(async () => {

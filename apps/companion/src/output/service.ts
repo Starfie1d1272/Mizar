@@ -980,8 +980,11 @@ export class OutputService {
     });
     try {
       await this.outbox.expireBoundaryIntents(this.now());
+      if (this.closed) return;
       await this.materializeIntents();
+      if (this.closed) return;
       await this.reconcileFence();
+      if (this.closed) return;
       if (this.sink === undefined)
         await this.outbox.sweep(
           (event, lineup) => this.isCurrentForRetry(event, lineup),
@@ -990,11 +993,13 @@ export class OutputService {
       else {
         const source = this.options.exactSource?.();
         if (source) await this.outbox.bindUnsentSource(source);
+        if (this.closed) return;
         const invalidatedStarts = await this.outbox.flush({
           sink: this.sink,
           now: this.now(),
           isCurrent: (event, lineup) => this.quarantined || this.isCurrentForRetry(event, lineup),
           canSend: (event, lineup) => {
+            if (this.closed) return false;
             const allowed = this.canSend(event, lineup);
             if (!allowed) {
               try {
@@ -1071,9 +1076,11 @@ export class OutputService {
             return allowed;
           },
         });
+        if (this.closed) return;
         if (this.publishedMapStart && invalidatedStarts.includes(this.publishedMapStart.key))
           this.publishedMapStart = undefined;
         await this.reconcileFence();
+        if (this.closed) return;
         await this.recoverRejectedStart();
       }
     } catch {
@@ -1391,6 +1398,9 @@ export class OutputService {
       )),
     );
     this.consumers.clear();
+    // retry() can enqueue more durable work after its current queue operation.
+    // closed prevents a new retry, but an already running retry must settle.
+    await this.retryCompletion;
     try {
       await this.outbox?.flushForShutdown();
     } catch (error) {
