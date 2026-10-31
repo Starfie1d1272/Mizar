@@ -193,11 +193,11 @@ export function MusicSettings({ active = true }: { active?: boolean }) {
                     if (!matches) throw new Error('保存后的音量与当前设置不一致，请重新核对。');
                     setConfig(saved);
                     setDirty(false);
-                    setMessage('音乐配置已保存。');
+                    setMessage('音乐配置已保存并应用。');
                   }, 'save')
                 }
               >
-                保存音乐配置
+                保存并应用音乐配置
               </Button>
             </div>
           </div>
@@ -339,7 +339,7 @@ export function MusicSettings({ active = true }: { active?: boolean }) {
                             });
                           }
                           change(group, { tracks });
-                          setMessage('曲目已选，请保存音乐配置。');
+                          setMessage('曲目已选，请保存并应用音乐配置。');
                         }, group);
                     }}
                   />

@@ -150,7 +150,7 @@ export class CameraDirector {
       this.nativeReady() &&
       (audition ? t.mapConfirmed : t.production) &&
       (t.demoAudition === undefined ? audition || musicSafe(t.program) : t.demoAudition) &&
-      t.program.status.telemetry === 'fresh'
+      (audition ? Boolean(t.program.map.name) : t.program.status.telemetry === 'fresh')
     );
   }
   private edge(t: CameraTruth) {
