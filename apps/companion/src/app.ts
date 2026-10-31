@@ -916,6 +916,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   obsAdapter?.onBpDisconnect(() => sceneController.compactDisconnected());
   obsAdapter?.onProgramChanged(() => {
     sceneController.holdAutomatic();
+    production.invalidateObsExit();
   });
   if (options.steamAvatars) {
     options.steamAvatars.onChanged(() => projectionCoordinator.refresh());
@@ -1141,12 +1142,21 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   let obsExitWrites = Promise.resolve();
   const production = registerProductionRoutes(app, {
     previousObsExitUnconfirmed,
+    waitForObsExitWrites: async () => {
+      while (true) {
+        const pending = obsExitWrites;
+        await pending;
+        if (pending === obsExitWrites) return;
+      }
+    },
     recordObsExit: obsExitPath
-      ? (state) => {
+      ? (state, valid) => {
           const pending = obsExitWrites.then(async () => {
-            await replaceDurableJson(obsExitPath, { state });
+            await replaceDurableJson(obsExitPath, { state }, valid ? { canCommit: valid } : {});
           });
-          obsExitWrites = pending.catch(() => {});
+          obsExitWrites = pending.catch((error: unknown) => {
+            app.log.warn({ err: error }, 'OBS exit status not saved');
+          });
           return pending;
         }
       : undefined,

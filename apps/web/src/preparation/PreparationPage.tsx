@@ -28,6 +28,7 @@ import {
   cancelProductionEntry,
   openTool,
   productionAction,
+  retryObsExit,
   useLocalRead,
   type Production,
 } from './client';
@@ -114,6 +115,10 @@ export function PreparationPage() {
   }>('/local/v1/rivalhub-connection');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const [obsRetrying, setObsRetrying] = useState(false);
+  const [obsRetryMessage, setObsRetryMessage] = useState<{ ok: boolean; text: string } | null>(
+    null,
+  );
   const [entering, setEntering] = useState(false);
   const [checkingEntry, setCheckingEntry] = useState(false);
   const [demoOpen, setDemoOpen] = useState(() =>
@@ -220,7 +225,33 @@ export function PreparationPage() {
           <StatusBanner tone="info">正在确认 OBS 等待画面。</StatusBanner>
         ) : null}
         {production?.mode === 'preparation' && production.obsExitState === 'unconfirmed' ? (
-          <StatusBanner tone="warning">OBS 等待画面尚未确认，请检查 OBS。</StatusBanner>
+          <StatusBanner tone="warning">
+            <span>OBS 等待画面尚未确认，请检查 OBS。</span>{' '}
+            <Button
+              disabled={obsRetrying || Boolean(exit?.busy)}
+              onClick={() => {
+                setObsRetrying(true);
+                setObsRetryMessage(null);
+                void retryObsExit(production)
+                  .then(
+                    () => setObsRetryMessage({ ok: true, text: 'OBS 等待画面已确认。' }),
+                    (error: unknown) =>
+                      setObsRetryMessage({
+                        ok: false,
+                        text: error instanceof Error ? error.message : 'OBS 收尾重试未完成。',
+                      }),
+                  )
+                  .finally(() => setObsRetrying(false));
+              }}
+            >
+              {obsRetrying ? '正在重试…' : '重试 OBS 收尾'}
+            </Button>
+          </StatusBanner>
+        ) : null}
+        {obsRetryMessage && (!obsRetryMessage.ok || production?.obsExitState === 'confirmed') ? (
+          <StatusBanner tone={obsRetryMessage.ok ? 'success' : 'danger'}>
+            {obsRetryMessage.text}
+          </StatusBanner>
         ) : null}
         {production?.mode === 'preparation' &&
         (production.releaseHandoffState === 'pending' ||
