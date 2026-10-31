@@ -172,3 +172,40 @@ test(
     assert.equal(summary.lanes.runtime.status, 'unknown');
   },
 );
+
+test(
+  'a zero or failed worker exit cannot leave signal-resistant descendants running',
+  { skip: process.platform === 'win32' },
+  async (t) => {
+    const root = await mkdtemp(join(tmpdir(), 'box-lanes-orphan-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    await Promise.all(
+      [0, 1].map(async (exitCode) => {
+        const work = join(root, String(exitCode)),
+          plan = join(work, 'plan');
+        await mkdir(plan, { recursive: true });
+        await writeFile(join(plan, 'plan.json'), 'plan');
+        const descendant = `process.on('SIGTERM',()=>{});require('fs').writeFileSync(process.argv[1]+'/ready-'+process.argv[2],'ready');setTimeout(()=>require('fs').writeFileSync(process.argv[1]+'/late-'+process.argv[2],'bad'),3500);`;
+        const worker = `const fs=require('fs');require('child_process').spawn(process.execPath,['-e',${JSON.stringify(descendant)},process.argv[1],process.argv[2]],{stdio:'ignore'});const p=setInterval(()=>{if(fs.existsSync(process.argv[1]+'/ready-'+process.argv[2])){clearInterval(p);process.exit(${exitCode});}},10);`;
+        await assert.rejects(
+          runLanes(
+            plan,
+            join(work, 'lanes'),
+            join(work, 'receipts'),
+            (lane, dir, result, control) =>
+              control.start(process.execPath, ['-e', worker, work, lane]),
+          ),
+          /all lanes have settled/,
+        );
+        for (const lane of ['runtime', 'resources', 'downloads']) {
+          await assert.rejects(readFile(join(work, `late-${lane}`)), { code: 'ENOENT' });
+          await assert.rejects(readFile(join(work, 'receipts', `${lane}.json`)), {
+            code: 'ENOENT',
+          });
+        }
+        const summary = JSON.parse(await readFile(join(work, 'lanes', 'orchestration.json')));
+        assert.equal(summary.lanes.runtime.status, 'unknown');
+      }),
+    );
+  },
+);

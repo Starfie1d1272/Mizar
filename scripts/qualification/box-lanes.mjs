@@ -54,6 +54,16 @@ function signalGroup(pid, signal) {
     return true;
   }
 }
+async function stopRemainingGroup(pid) {
+  signalGroup(pid, 'SIGTERM');
+  await delay(2000);
+  signalGroup(pid, 'SIGKILL');
+  for (let attempt = 0; attempt < 30; attempt++) {
+    if (!signalGroup(pid, 0)) return;
+    await delay(100);
+  }
+  console.error('A terminated process group remains observable; termination cannot be confirmed.');
+}
 function child(lane, root, result, control) {
   return control.start(process.execPath, [
     fileURLToPath(import.meta.url),
@@ -74,10 +84,21 @@ export async function runLanes(planRoot, workRoot, receiptsRoot, run = child) {
         const worker = spawn(command, args, { stdio: 'inherit', env: process.env, detached: true });
         if (worker.pid) groups.add(worker.pid);
         worker.once('error', reject);
-        worker.once('close', (code) => {
-          if (!cancelled) groups.delete(worker.pid);
-          if (code === 0) resolvePromise();
-          else reject(new Error('Box lane failed'));
+        worker.once('close', async (code) => {
+          try {
+            const remaining = worker.pid && signalGroup(worker.pid, 0);
+            if (remaining && !cancelled) {
+              console.error(
+                'A lane exited with remaining processes; remote writes require reconciliation.',
+              );
+              await stopRemainingGroup(worker.pid);
+            }
+            if (!cancelled) groups.delete(worker.pid);
+            if (code === 0 && !remaining && !cancelled) resolvePromise();
+            else reject(new Error('Box lane failed or left remaining processes'));
+          } catch (error) {
+            reject(error);
+          }
         });
       });
     },
