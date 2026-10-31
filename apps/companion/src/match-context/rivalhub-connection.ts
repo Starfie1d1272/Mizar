@@ -535,6 +535,7 @@ export class RivalHubConnection {
   private readonly liveInFlight = new Map<Source, Set<Promise<void>>>();
   private readonly sourceSettlements = new Map<string, Promise<boolean>>();
   private readonly cleanupAttempts = new Map<string, { count: number; nextCycleAt: number }>();
+  private readonly confirmedSourcesAwaitingPersistence = new Map<string, ExactSource>();
   private readonly exitHandoffs = new Map<string, ExactSource>();
   private readonly sourceCommands = new SerialCommitQueue();
   private readonly sourceState: RivalHubSourceState;
@@ -863,22 +864,34 @@ export class RivalHubConnection {
       const deadline = Date.now() + 8000;
       await this.retireCurrent('shutdown');
       await this.cleanup(true, deadline);
-      if (
-        this.cleanupSummary.pending ||
-        this.cleanupSummary.blocked ||
-        this.cleanupSummary.claimIntent
-      )
-        throw new Error('数据源释放待重试或核对。');
+      if (await this.hasCurrentCleanup()) throw new Error('数据源释放待重试或核对。');
     });
   }
 
   private async updateCleanupSummary(): Promise<void> {
     const state = await this.sourceState.snapshot();
     this.cleanupSummary = {
-      pending: state.records.filter((item) => item.state === 'release_pending').length,
-      blocked: state.records.filter((item) => item.state === 'blocked').length,
+      pending: state.records.filter((item) =>
+        ['release_pending', 'archive_pending'].includes(item.state),
+      ).length,
+      blocked:
+        state.records.filter((item) => item.state === 'blocked').length +
+        state.revokedIntents.length +
+        (await this.sourceState.quarantineCount()),
       claimIntent: state.intent !== null,
     };
+  }
+
+  private async hasCurrentCleanup(): Promise<boolean> {
+    const state = await this.sourceState.snapshot();
+    return (
+      state.records.some(
+        (item) =>
+          item.state !== 'owned' &&
+          (this.scopeMatches(item.identity) ||
+            (item.state !== 'archive_pending' && !item.installationRevoked)),
+      ) || state.intent !== null
+    );
   }
 
   private cleanupEvidence(identity: ExactSource, reason: string, attempts: number): void {
@@ -1014,6 +1027,7 @@ export class RivalHubConnection {
     )
       return;
     const revision = found.authorityRevision as number;
+    const quarantined = await this.sourceState.getQuarantined(intent.scope);
     // An equal revision is conclusive only when this claim started while that
     // exact authority was held. A watermark by itself proves no such thing.
     const legacyHeld = state.records.some(
@@ -1025,6 +1039,9 @@ export class RivalHubConnection {
         identity.producerInstanceId === intent.scope.producerInstanceId &&
         identity.liveSessionId === intent.scope.liveSessionId &&
         identity.authorityRevision === revision &&
+        !quarantined.some(
+          (item) => item.kind === 'watermark' && item.identity.authorityRevision >= revision,
+        ) &&
         !state.watermarks.some(
           (item) =>
             item.baseUrl === identity.baseUrl &&
@@ -1105,7 +1122,8 @@ export class RivalHubConnection {
             item.producerInstanceId === identity.producerInstanceId &&
             item.liveSessionId === identity.liveSessionId &&
             item.authorityRevision >= identity.authorityRevision,
-        )
+        ) &&
+        !(await this.sourceState.hasQuarantinedSource(identity))
       )
         throw new Error('数据源交接未确认。');
       this.exitHandoffs.delete(key);
@@ -1114,15 +1132,25 @@ export class RivalHubConnection {
 
   private async cleanup(force: boolean, deadline = Date.now() + 7000): Promise<void> {
     await this.persistExitHandoffs();
+    for (const identity of this.confirmedSourcesAwaitingPersistence.values()) {
+      if (await this.persistConfirmedSource(identity)) await this.archiveConfirmedSource(identity);
+    }
     try {
       await this.reconcileIntent(deadline);
     } catch (error) {
       this.onDiagnostic('source_status', error);
     }
     const state = await this.sourceState.snapshot();
+    // A confirmed remote close needs only local work, even after disconnect or
+    // switching installations. Never repeat release just to retry archiving.
+    for (const record of state.records) {
+      if (record.state !== 'archive_pending') continue;
+      await this.archiveConfirmedSource(record.identity);
+    }
     for (const record of state.records) {
       if (Date.now() >= deadline) break;
-      if (record.state === 'owned') continue;
+      if (record.state === 'owned' || record.state === 'archive_pending') continue;
+      if (this.confirmedSourcesAwaitingPersistence.has(JSON.stringify(record.identity))) continue;
       if (!this.scopeMatches(record.identity)) {
         if (record.state === 'release_pending')
           await this.sourceState.failure(record.identity, 'installation_mismatch', null, true);
@@ -1159,8 +1187,8 @@ export class RivalHubConnection {
             found.liveSessionId === identity.liveSessionId &&
             found.authorityRevision === identity.authorityRevision
           ) {
-            await this.archiveSource?.(identity);
-            await this.sourceState.complete(identity);
+            if (await this.persistConfirmedSource(identity))
+              await this.archiveConfirmedSource(identity);
           }
         } catch (error) {
           this.onDiagnostic('source_status', error);
@@ -1210,10 +1238,11 @@ export class RivalHubConnection {
             JSON.stringify(this.exactSource(this.source)) === JSON.stringify(identity)
           )
             this.source = null;
-          await this.archiveSource?.(identity);
-          await this.sourceState.complete(identity);
-          this.cleanupAttempts.delete(attemptKey);
-          this.cleanupEvidence(identity, 'release_confirmed', record.attempts + 1);
+          if (!(await this.persistConfirmedSource(identity))) continue;
+          if (await this.archiveConfirmedSource(identity)) {
+            this.cleanupAttempts.delete(attemptKey);
+            this.cleanupEvidence(identity, 'release_confirmed', record.attempts + 1);
+          }
           continue;
         }
         if (response.ok) {
@@ -1267,6 +1296,31 @@ export class RivalHubConnection {
     await this.updateCleanupSummary();
   }
 
+  private async persistConfirmedSource(identity: ExactSource): Promise<boolean> {
+    const key = JSON.stringify(identity);
+    this.confirmedSourcesAwaitingPersistence.set(key, identity);
+    try {
+      await this.sourceState.confirmReleased(identity);
+      this.confirmedSourcesAwaitingPersistence.delete(key);
+      return true;
+    } catch (error) {
+      this.onDiagnostic('source_release_confirmation', error);
+      return false;
+    }
+  }
+
+  private async archiveConfirmedSource(identity: ExactSource): Promise<boolean> {
+    try {
+      await this.archiveSource?.(identity);
+      await this.sourceState.complete(identity);
+      return true;
+    } catch (error) {
+      // Keep archive_pending durable and retry locally on the next cleanup.
+      this.onDiagnostic('source_archive', error);
+      return false;
+    }
+  }
+
   async disconnect(): Promise<void> {
     return this.sourceCommands.run(() => this.disconnectLocked());
   }
@@ -1292,7 +1346,7 @@ export class RivalHubConnection {
       ) {
         throw new Error('断开连接失败，请稍后重试。');
       }
-      await this.sourceState.completeRevokedInstallation(installation);
+      await this.sourceState.confirmRevokedInstallation(installation);
       await this.updateCleanupSummary();
     }
     await unlink(this.path).catch((error: NodeJS.ErrnoException) => {
@@ -1846,12 +1900,7 @@ export class RivalHubConnection {
     const deadline = Date.now() + 8000;
     await this.retireCurrent('finish');
     await this.cleanup(true, deadline);
-    if (
-      this.cleanupSummary.pending ||
-      this.cleanupSummary.blocked ||
-      this.cleanupSummary.claimIntent
-    )
-      throw new Error('数据源释放待重试或核对。');
+    if (await this.hasCurrentCleanup()) throw new Error('数据源释放待重试或核对。');
   }
 
   private async upload(
