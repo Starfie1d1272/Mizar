@@ -1,5 +1,6 @@
-import { randomUUID } from 'node:crypto';
-import { open } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { open, readFile, readdir } from 'node:fs/promises';
+import { join } from 'node:path';
 import { z } from 'zod';
 import {
   durableJsonByteLength,
@@ -51,6 +52,7 @@ const recordSchema = z
     identity: exactSchema,
     state: z.enum(['owned', 'release_pending', 'blocked', 'archive_pending']),
     installationRevoked: z.literal(true).optional(),
+    quarantineUncertain: z.literal(true).optional(),
     cause: causeSchema,
     attempts: z.number().int().nonnegative().safe(),
     nextAttemptAt: z.string().datetime().nullable(),
@@ -66,11 +68,16 @@ const intentSchema = z
     id: z.string().uuid(),
     scope: scopeSchema,
     previousAuthorityRevision: z.number().int().positive().safe().nullable(),
+    quarantineUncertain: z.literal(true).optional(),
     // Proof that this intent re-claimed an exact authority already held before
     // the request. Older durable files may not have this field.
     idempotentAuthorityRevision: z.number().int().positive().safe().optional(),
   })
   .strict();
+const quarantineSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('source'), record: recordSchema }).strict(),
+  z.object({ kind: z.literal('intent'), intent: intentSchema }).strict(),
+]);
 const envelopeSchema = z
   .object({
     version: z.literal(1),
@@ -95,6 +102,21 @@ export type SourceRecord = z.infer<typeof recordSchema>;
 export type ClaimIntent = z.infer<typeof intentSchema>;
 export type SourceState = z.infer<typeof envelopeSchema>;
 export type SourceCause = z.infer<typeof causeSchema>;
+type QuarantineEvidence = z.infer<typeof quarantineSchema>;
+
+function scopeKey(scope: SourceScope): string {
+  return JSON.stringify([
+    scope.baseUrl,
+    scope.competitionId,
+    scope.installationId,
+    scope.matchId,
+    scope.producerInstanceId,
+    scope.liveSessionId,
+  ]);
+}
+function digest(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
 
 function exactKey(identity: ExactSource): string {
   return JSON.stringify([
@@ -127,6 +149,155 @@ export class RivalHubSourceState {
     private readonly faultInjector?: DurableJsonFaultInjector,
   ) {}
 
+  private async quarantineNames(): Promise<string[]> {
+    try {
+      return (await readdir(`${this.path}.revoked`)).filter((name) =>
+        /^[a-f0-9]{64}-[a-f0-9]{64}-[a-f0-9]{64}\.json$/.test(name),
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
+  }
+
+  private async readQuarantine(name: string): Promise<QuarantineEvidence> {
+    const bytes = await readFile(join(`${this.path}.revoked`, name));
+    if (bytes.length > MAX_BYTES) throw new Error('revoked evidence too large');
+    const evidence = quarantineSchema.parse(JSON.parse(bytes.toString('utf8')) as unknown);
+    const scope = evidence.kind === 'source' ? evidence.record.identity : evidence.intent.scope;
+    const itemKey =
+      evidence.kind === 'source'
+        ? `source:${exactKey(evidence.record.identity)}`
+        : `intent:${evidence.intent.id}`;
+    if (
+      name !==
+      `${digest(scopeKey(scope))}-${digest(itemKey)}-${digest(JSON.stringify(evidence))}.json`
+    )
+      throw new Error('revoked evidence invalid');
+    return evidence;
+  }
+
+  private async quarantine(evidence: QuarantineEvidence): Promise<void> {
+    const valid = quarantineSchema.parse(evidence);
+    const scope = valid.kind === 'source' ? valid.record.identity : valid.intent.scope;
+    const itemKey =
+      valid.kind === 'source'
+        ? `source:${exactKey(valid.record.identity)}`
+        : `intent:${valid.intent.id}`;
+    const name = `${digest(scopeKey(scope))}-${digest(itemKey)}-${digest(JSON.stringify(valid))}.json`;
+    try {
+      const existing = await this.readQuarantine(name);
+      if (JSON.stringify(existing) !== JSON.stringify(valid))
+        throw new Error('revoked evidence conflict');
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    await replaceDurableJson(join(`${this.path}.revoked`, name), valid);
+  }
+
+  private async evidenceForScope(scope: SourceScope): Promise<QuarantineEvidence[]> {
+    const prefix = `${digest(scopeKey(scope))}-`;
+    const names = (await this.quarantineNames()).filter((name) => name.startsWith(prefix));
+    return Promise.all(names.map((name) => this.readQuarantine(name)));
+  }
+
+  /** Retained unknown sources/claims never count toward the active source limit. */
+  async quarantineCount(): Promise<number> {
+    const names = await this.quarantineNames();
+    return new Set(names.map((name) => name.slice(0, 129))).size;
+  }
+
+  async hasQuarantinedSource(identity: ExactSource): Promise<boolean> {
+    return (await this.evidenceForScope(identity)).some(
+      (evidence) =>
+        evidence.kind === 'source' && exactKey(evidence.record.identity) === exactKey(identity),
+    );
+  }
+
+  async getQuarantined(scope: SourceScope): Promise<readonly QuarantineEvidence[]> {
+    return this.evidenceForScope(scopeSchema.parse(scope));
+  }
+
+  /** Complete a previously interrupted file-first transfer before permitting new work. */
+  private async reconcileQuarantine(state: SourceState): Promise<boolean> {
+    let changed = false;
+    const records: SourceRecord[] = [];
+    for (const record of state.records) {
+      if (record.state === 'archive_pending') {
+        records.push(record);
+        continue;
+      }
+      let evidence: QuarantineEvidence[];
+      try {
+        evidence = await this.evidenceForScope(record.identity);
+      } catch {
+        // Preserve both the unreadable file and the active record; isolate only
+        // this scope without interpreting the damaged file as a release.
+        await this.quarantine({
+          kind: 'source',
+          record: { ...record, state: 'blocked', quarantineUncertain: true },
+        });
+        changed = true;
+        continue;
+      }
+      if (
+        !evidence.some(
+          (item) =>
+            item.kind === 'source' && exactKey(item.record.identity) === exactKey(record.identity),
+        )
+      ) {
+        records.push(record);
+        continue;
+      }
+      await this.quarantine({
+        kind: 'source',
+        record: {
+          ...record,
+          state: 'blocked',
+          installationRevoked: true,
+          nextAttemptAt: null,
+          retryAfterAt: null,
+          lastFailureCode: record.lastFailureCode ?? 'installation_revoked',
+        },
+      });
+      changed = true;
+    }
+    state.records = records;
+    if (state.intent) {
+      let evidence: QuarantineEvidence[];
+      try {
+        evidence = await this.evidenceForScope(state.intent.scope);
+      } catch {
+        await this.quarantine({
+          kind: 'intent',
+          intent: { ...state.intent, quarantineUncertain: true },
+        });
+        state.intent = null;
+        changed = true;
+        evidence = [];
+      }
+      if (
+        state.intent &&
+        evidence.some((item) => item.kind === 'intent' && item.intent.id === state.intent?.id)
+      ) {
+        await this.quarantine({ kind: 'intent', intent: state.intent });
+        state.intent = null;
+        changed = true;
+      }
+    }
+    for (const intent of state.revokedIntents) {
+      try {
+        await this.quarantine({ kind: 'intent', intent });
+      } catch {
+        await this.quarantine({ kind: 'intent', intent: { ...intent, quarantineUncertain: true } });
+      }
+      changed = true;
+    }
+    state.revokedIntents = [];
+    return changed;
+  }
+
   async load(): Promise<SourceState> {
     return this.queue.run(async () => {
       if (this.state) return structuredClone(this.state);
@@ -146,16 +317,27 @@ export class RivalHubSourceState {
         this.state = { version: 1, records: [], intent: null, revokedIntents: [], watermarks: [] };
         return structuredClone(this.state);
       }
-      this.state = envelopeSchema.parse(JSON.parse(bytes.toString('utf8')) as unknown);
+      const loaded = envelopeSchema.parse(JSON.parse(bytes.toString('utf8')) as unknown);
+      if (await this.reconcileQuarantine(loaded)) {
+        const validated = envelopeSchema.parse(loaded);
+        if (durableJsonByteLength(validated) > MAX_BYTES)
+          throw new Error('source state capacity exceeded');
+        await replaceDurableJson(
+          this.path,
+          validated,
+          this.faultInjector ? { faultInjector: this.faultInjector } : {},
+        );
+      }
+      this.state = loaded;
       return structuredClone(this.state);
     });
   }
 
-  private async change<T>(update: (state: SourceState) => T): Promise<T> {
+  private async change<T>(update: (state: SourceState) => T | Promise<T>): Promise<T> {
     return this.queue.run(async () => {
       if (!this.state) throw new Error('source state not loaded');
       const next = structuredClone(this.state);
-      const result = update(next);
+      const result = await update(next);
       const validated = envelopeSchema.parse(next);
       if (durableJsonByteLength(validated) > MAX_BYTES)
         throw new Error('source state capacity exceeded');
@@ -181,9 +363,12 @@ export class RivalHubSourceState {
     scope: SourceScope,
     previousAuthorityRevision: number | null,
   ): Promise<ClaimIntent> {
-    return this.change((state) => {
+    return this.change(async (state) => {
+      await this.reconcileQuarantine(state);
       if (state.intent) throw new Error('source claim requires reconciliation');
       const validScope = scopeSchema.parse(scope);
+      if ((await this.evidenceForScope(validScope)).length)
+        throw new Error('source requires cleanup before claim');
       if (
         state.records.some(
           (record) => sameScope(record.identity, validScope) && record.state !== 'owned',
@@ -379,24 +564,36 @@ export class RivalHubSourceState {
   async confirmRevokedInstallation(
     scope: Pick<SourceScope, 'baseUrl' | 'competitionId' | 'installationId'>,
   ): Promise<void> {
-    await this.change((state) => {
+    await this.change(async (state) => {
       const matches = (value: SourceScope) =>
         value.baseUrl === scope.baseUrl &&
         value.competitionId === scope.competitionId &&
         value.installationId === scope.installationId;
+      const remaining: SourceRecord[] = [];
       for (const record of state.records) {
-        if (!matches(record.identity)) continue;
-        record.installationRevoked = true;
-        if (record.state === 'archive_pending') continue;
-        record.state = 'blocked';
-        record.nextAttemptAt = null;
-        record.retryAfterAt = null;
-        record.lastFailureCode ??= 'installation_revoked';
+        if (!matches(record.identity)) {
+          remaining.push(record);
+          continue;
+        }
+        if (record.state === 'archive_pending') {
+          remaining.push({ ...record, installationRevoked: true });
+          continue;
+        }
+        await this.quarantine({
+          kind: 'source',
+          record: {
+            ...record,
+            state: 'blocked',
+            installationRevoked: true,
+            nextAttemptAt: null,
+            retryAfterAt: null,
+            lastFailureCode: record.lastFailureCode ?? 'installation_revoked',
+          },
+        });
       }
+      state.records = remaining;
       if (state.intent && matches(state.intent.scope)) {
-        if (state.revokedIntents.length >= MAX_RECORDS)
-          throw new Error('source state capacity exceeded');
-        state.revokedIntents.push(state.intent);
+        await this.quarantine({ kind: 'intent', intent: state.intent });
         state.intent = null;
       }
     });

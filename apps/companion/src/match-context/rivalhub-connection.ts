@@ -876,7 +876,8 @@ export class RivalHubConnection {
       ).length,
       blocked:
         state.records.filter((item) => item.state === 'blocked').length +
-        state.revokedIntents.length,
+        state.revokedIntents.length +
+        (await this.sourceState.quarantineCount()),
       claimIntent: state.intent !== null,
     };
   }
@@ -1117,7 +1118,8 @@ export class RivalHubConnection {
             item.producerInstanceId === identity.producerInstanceId &&
             item.liveSessionId === identity.liveSessionId &&
             item.authorityRevision >= identity.authorityRevision,
-        )
+        ) &&
+        !(await this.sourceState.hasQuarantinedSource(identity))
       )
         throw new Error('数据源交接未确认。');
       this.exitHandoffs.delete(key);
