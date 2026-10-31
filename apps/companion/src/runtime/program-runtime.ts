@@ -301,9 +301,23 @@ export class ProgramRuntime {
             initial = checkpoint.progress;
             this.restorePending = true;
             this.unverifiedSeriesProgress = checkpoint.unverifiedProgress;
+            if (!this.executionOwner) this.executionOwnerUnknown = true;
           } else {
             this.unverifiedSeriesProgress = checkpoint.unverifiedProgress ?? checkpoint.progress;
             this.restorePending = false;
+            if (
+              checkpoint.progress.currentMapOrder !== null ||
+              checkpoint.progress.maps.some(
+                (map) =>
+                  map.executionMapEpoch !== null ||
+                  map.status !== 'pending' ||
+                  map.finalScore !== null ||
+                  map.roundHistory.rounds.length > 0,
+              )
+            ) {
+              this.executionOwnerUnknown = true;
+              this.unknownNewExecution = false;
+            }
           }
           this.restoredExecutionProof = checkpoint.executionOwner;
           this.restoredExecutionMatchId = checkpoint.identity.matchId;
