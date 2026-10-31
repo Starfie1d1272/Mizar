@@ -8,6 +8,7 @@ import { manifestPlanFingerprint } from '../match-context/manifest-plan.js';
 import { hasLineupMismatchOnly } from './lineup-mismatch.js';
 import type { ProjectionBundle } from '../projections/projection-coordinator.js';
 import { createLatestWinsConsumer, type LatestWinsConsumer } from '../runtime/latest-wins.js';
+import { sameMapExecution, sameMatchIdentity, sameSourceSession } from '../scope/identities.js';
 import {
   ReliableOutbox,
   type DeliveryContinuity,
@@ -128,10 +129,7 @@ export class OutputService {
   ): ExactSource | null | undefined {
     if (!this.options.exactSource) return undefined;
     const source = this.options.exactSource?.();
-    return source &&
-      source.matchId === matchId &&
-      source.producerInstanceId === cursor.producerInstanceId &&
-      source.liveSessionId === cursor.liveSessionId
+    return source && source.matchId === matchId && sameSourceSession(source, cursor)
       ? source
       : null;
   }
@@ -161,12 +159,11 @@ export class OutputService {
         intent.expired ||
         intent.authorityFingerprint !== authority ||
         intent.planFingerprint !== manifestPlanFingerprint(binding.manifest) ||
-        binding.context.matchId !== intent.event.matchId ||
+        !sameMatchIdentity(binding.context, intent.event) ||
         binding.context.competition?.competitionId !== intent.event.competitionId ||
         binding.context.entrants.a.entryId !== intent.event.entryAId ||
         binding.context.entrants.b.entryId !== intent.event.entryBId ||
-        c.producerInstanceId !== e.producerInstanceId ||
-        c.liveSessionId !== e.liveSessionId ||
+        !sameSourceSession(c, e) ||
         c.programSourceGeneration !== e.programSourceGeneration ||
         c.mapEpoch < e.mapEpoch
       )
@@ -208,7 +205,7 @@ export class OutputService {
       bundle.program.status.identity !== 'matched' ||
       bundle.program.map.phase !== 'live' ||
       bundle.program.match?.matchId !== event.matchId ||
-      binding.context.matchId !== event.matchId ||
+      !sameMatchIdentity(binding.context, event) ||
       bundle.program.map.name !== event.mapName ||
       !this.mapStartScope
     )
@@ -217,10 +214,8 @@ export class OutputService {
     const e = event.cursor;
     if (
       !e.liveSessionId ||
-      c.producerInstanceId !== e.producerInstanceId ||
-      c.liveSessionId !== e.liveSessionId ||
-      c.programSourceGeneration !== e.programSourceGeneration ||
-      c.mapEpoch !== e.mapEpoch
+      !sameMapExecution(c, e) ||
+      c.programSourceGeneration !== e.programSourceGeneration
     )
       return undefined;
     const current = bundle.program.players
@@ -297,11 +292,9 @@ export class OutputService {
       const c = e.cursor;
       if (
         item.status !== 'pending' ||
-        e.matchId !== record.event.matchId ||
-        c.producerInstanceId !== target.producerInstanceId ||
-        c.liveSessionId !== target.liveSessionId ||
+        !sameMatchIdentity(e, record.event) ||
+        !sameMapExecution(c, target) ||
         c.programSourceGeneration !== target.programSourceGeneration ||
-        c.mapEpoch !== target.mapEpoch ||
         c.runtimeSeq > target.runtimeSeq
       )
         return false;
